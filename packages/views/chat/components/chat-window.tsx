@@ -769,6 +769,7 @@ export function ChatWindow() {
       ) : hasMessages ? (
         <ChatMessageList
           key={activeSessionId}
+          sessionId={activeSessionId ?? ""}
           messages={messages}
           pendingTask={pendingTask}
           availability={availability}

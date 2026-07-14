@@ -13,19 +13,19 @@ name: Deploy
 #
 # Test gate: the CI workflow runs on every PR into `dev`. The team's workflow is
 # feature branch → PR → merge to `dev`, which builds images and deploys to s89.
-# `main` deploys through .github/workflows/deploy-main.yml as a separate stack.
+# `main` is left as the upstream-tracking branch and never deploys.
 #
 # One-time server + repo setup is documented in docs/deploy-s89.md.
 
 on:
-  # Deploy only when a PR is MERGED into `dev`.
-  # Direct pushes do NOT deploy — the disciplined flow is
-  # feature branch → PR → merge to dev → deploy.
-  # Docs-only PRs (#354 bug) are excluded — they don't change any code, so
+  # Deploy only from the `dev` integration branch, after a PR has already been
+  # merged. PR events must not deploy to the shared s89 environment; they can
+  # build/test in CI, but s89 must always represent dev or an explicit manual
+  # dispatch from dev. Rollback dispatches must name an existing image tag.
+  # Docs-only changes (#354 bug) are excluded — they don't change any code, so
   # triggering a backend rebuild/restart would disconnect all WS connections
   # for zero benefit.
-  pull_request:
-    types: [closed]
+  push:
     branches: [dev]
     paths-ignore:
       - "docs/**"
@@ -38,7 +38,7 @@ on:
         required: false
         default: ""
 
-# Never run two dev deploys at once; never cancel an in-flight restart.
+# Never run two deploys at once; never cancel an in-flight one mid-restart.
 concurrency:
   group: deploy-s89
   cancel-in-progress: false
@@ -47,10 +47,13 @@ jobs:
   build:
     # Only build/deploy from the team fork — never upstream or other forks.
     # On manual dispatch with an image_tag we skip building and redeploy that tag.
+    # Empty-tag manual builds must also target dev; s89 never builds a feature ref.
     if: >-
       github.repository_owner == 'LRM-Teams' &&
-      ((github.event_name == 'pull_request' && github.event.pull_request.merged == true) ||
-       (github.event_name == 'workflow_dispatch' && github.event.inputs.image_tag == ''))
+      ((github.event_name == 'push' && github.ref == 'refs/heads/dev') ||
+       (github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/dev' &&
+        github.event.inputs.image_tag == ''))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -61,15 +64,12 @@ jobs:
       backend_image: ${{ steps.prep.outputs.backend_image }}
       web_image: ${{ steps.prep.outputs.web_image }}
     steps:
-      # On a merged PR, build the actual merge commit on the target branch; on
-      # manual dispatch, build whatever ref was dispatched.
+      # On dev push or manual dev dispatch, build the committed dev head.
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.merge_commit_sha || github.ref }}
 
       # GHCR paths must be lowercase, but github.repository_owner preserves the
       # org's display case (e.g. "LRM-Teams"). Lowercase it here. The tag is the
-      # short SHA of the checked-out commit — the real target commit being deployed.
+      # short SHA of the checked-out commit — the real dev commit being deployed.
       - name: Compute image refs + tag
         id: prep
         run: |
@@ -106,7 +106,7 @@ jobs:
             VERSION=${{ steps.prep.outputs.tag }}
             COMMIT=${{ github.sha }}
           cache-from: type=gha,scope=deploy-backend
-          cache-to: type=gha,mode=max,scope=deploy-backend,ignore-error=true
+          cache-to: type=gha,mode=max,scope=deploy-backend
 
       - name: Build & push web
         uses: docker/build-push-action@v6
@@ -122,7 +122,7 @@ jobs:
             REMOTE_API_URL=http://backend:8080
             NEXT_PUBLIC_APP_VERSION=${{ steps.prep.outputs.tag }}
           cache-from: type=gha,scope=deploy-web
-          cache-to: type=gha,mode=max,scope=deploy-web,ignore-error=true
+          cache-to: type=gha,mode=max,scope=deploy-web
 
   deploy:
     needs: build
@@ -133,25 +133,26 @@ jobs:
     # the backend on every deploy.
     environment: s89
     # Run after a successful build (push / dispatch-without-tag), OR straight
-    # away on a dispatch that names an existing tag to roll back to.
+    # away on a dev dispatch that names an existing tag to roll back to.
     if: >-
       always() &&
       github.repository_owner == 'LRM-Teams' &&
       (needs.build.result == 'success' ||
-       (github.event_name == 'workflow_dispatch' && github.event.inputs.image_tag != ''))
+       (github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/dev' &&
+        github.event.inputs.image_tag != ''))
     runs-on: [self-hosted, s89]
     timeout-minutes: 15
     permissions:
       contents: read
       packages: read
     env:
+      DEPLOY_DIR: /data/multica
       # The tag to deploy: a rollback input if given, otherwise the freshly built one.
       IMAGE_TAG: >-
         ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.image_tag != '')
             && github.event.inputs.image_tag
             || needs.build.outputs.tag }}
-      DEPLOY_DIR: /data/multica
-      COMPOSE_PROJECT: multica
     steps:
       # Pull only the compose file from the deployed commit, so the running
       # topology always matches the repo. Non-secret config comes from the
@@ -160,7 +161,6 @@ jobs:
       # /data/multica/.env holds, so it can never drift.
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.merge_commit_sha || github.ref }}
           sparse-checkout: docker-compose.selfhost.yml
           sparse-checkout-cone-mode: false
 
@@ -190,10 +190,9 @@ jobs:
             echo "::error::POSTGRES_PASSWORD secret is empty — s89 Environment secret not wired. Aborting to avoid deploying with the wrong DB password."
             exit 1
           fi
-          echo "Deploying ${MULTICA_BACKEND_IMAGE}:${MULTICA_IMAGE_TAG} (+ web) to dev on $(hostname)"
+          echo "Deploying ${MULTICA_BACKEND_IMAGE}:${MULTICA_IMAGE_TAG} (+ web) on $(hostname)"
           compose() {
             docker compose \
-              -p "${COMPOSE_PROJECT}" \
               --project-directory "${DEPLOY_DIR}" \
               --env-file "${DEPLOY_DIR}/.env" \
               -f "${GITHUB_WORKSPACE}/docker-compose.selfhost.yml" "$@"
@@ -209,14 +208,11 @@ jobs:
           # Prune unused Docker images to prevent disk from filling up (#327).
           docker image prune -af
 
-
       - name: Health check (/readyz)
         run: |
           set -euo pipefail
-          HEALTH_URL=http://127.0.0.1:8080/readyz
-          BACKEND_CONTAINER=multica-backend-1
           for i in $(seq 1 30); do
-            if curl -fsS "${HEALTH_URL}" >/dev/null 2>&1; then
+            if curl -fsS http://127.0.0.1:8080/readyz >/dev/null 2>&1; then
               echo "Backend healthy after $((i * 2))s."
               exit 0
             fi
@@ -224,5 +220,5 @@ jobs:
             sleep 2
           done
           echo "::error::Backend did not pass /readyz within 60s — deploy likely broken."
-          docker logs --tail 80 "${BACKEND_CONTAINER}" || true
+          docker logs --tail 80 multica-backend-1 || true
           exit 1

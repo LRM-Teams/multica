@@ -677,7 +677,7 @@ func (h *Handler) queryAgentActivityEventRows(ctx context.Context, reqCtx agentA
 			aae.message,
 			aae.details,
 			aae.visibility,
-			NULL::text AS status,
+			NULLIF(aae.details->>'status', '')::text AS status,
 			NULL::text AS trigger_summary,
 			NULL::jsonb AS result,
 			NULL::text AS failure_reason,
@@ -697,7 +697,8 @@ func (h *Handler) queryAgentActivityEventRows(ctx context.Context, reqCtx agentA
 		    OR (
 		      aae.event_kind = 'custom'
 		      AND (
-		        aae.event_type LIKE '%subagent%'
+		        aae.event_type = 'agent_status_changed'
+		        OR aae.event_type LIKE '%subagent%'
 		        OR (
 		          aae.event_type IN ('radar_action_executed', 'radar_action_failed')
 		          AND COALESCE(aae.reason_code, '') <> 'radar_untrusted_target'
@@ -808,7 +809,7 @@ func (h *Handler) hydrateAgentActivityTimelineEvent(ctx context.Context, workspa
 			aae.message,
 			aae.details,
 			aae.visibility,
-			NULL::text AS status,
+			NULLIF(aae.details->>'status', '')::text AS status,
 			NULL::text AS trigger_summary,
 			NULL::jsonb AS result,
 			NULL::text AS failure_reason,
@@ -936,7 +937,7 @@ const agentActivityListSQL = `
 			aae.message,
 			aae.details,
 			aae.visibility,
-			NULL::text AS status,
+			NULLIF(aae.details->>'status', '')::text AS status,
 			NULL::text AS trigger_summary,
 			NULL::jsonb AS result,
 			NULL::text AS failure_reason,
@@ -1033,7 +1034,7 @@ const agentActivityUnionSQL = `
 			aae.message,
 			aae.details,
 			aae.visibility,
-			NULL::text AS status,
+			NULLIF(aae.details->>'status', '')::text AS status,
 			NULL::text AS trigger_summary,
 			NULL::jsonb AS result,
 			NULL::text AS failure_reason,
@@ -1603,6 +1604,7 @@ func (h *Handler) taskMessageActivityTimelineEvent(ctx context.Context, workspac
 		if canonicalTool != rawTool {
 			details["raw_tool"] = rawTool
 		}
+		agentActivityApplyToolSourceFacts(details, rawTool, canonicalTool, input)
 	}
 	if target, summaryKind := taskMessageActivityToolTarget(message); target != "" {
 		details["tool_target"] = target
@@ -1674,10 +1676,13 @@ func taskMessageActivityText(message db.TaskMessage) pgtype.Text {
 
 func agentActivityTimelineEvent(row agentActivityRawRow, targetRef AgentActivityTargetRef) AgentActivityTimelineEvent {
 	details := jsonObject(row.Details)
+	input := mapFromMap(details, "input")
 	tool := stringPtrFromMap(details, "tool")
+	cliResolved := false
 	if tool != nil {
 		canonical := agentActivityCanonicalToolName(*tool)
-		if cli, ok := resolveRaftCLIInvocation(canonical, mapFromMap(details, "input")); ok {
+		if cli, ok := resolveRaftCLIInvocation(canonical, input); ok {
+			cliResolved = true
 			canonical = cli.Tool
 			for key, value := range cli.Details {
 				details[key] = value
@@ -1685,11 +1690,14 @@ func agentActivityTimelineEvent(row agentActivityRawRow, targetRef AgentActivity
 		}
 		tool = &canonical
 	}
-	if command := redactedCommandFromInput(mapFromMap(details, "input")); command != "" && details["command"] == nil {
+	if command := redactedCommandFromInput(input); command != "" && details["command"] == nil {
 		details["command"] = command
 	}
 	if tool != nil {
-		agentActivityApplyToolInputSummary(details, *tool, mapFromMap(details, "input"), true)
+		agentActivityApplyToolInputSummary(details, *tool, agentActivityToolSummaryInput(details, input), true)
+		if isFileActivityTool(*tool) && !cliResolved && !hasShellCommandInput(input) {
+			delete(details, "command")
+		}
 	}
 	detailKind := agentActivityDetailKind(row.EventType)
 	return AgentActivityTimelineEvent{
@@ -1773,6 +1781,50 @@ func agentActivityApplyToolInputSummary(details map[string]any, canonicalTool st
 		delete(details, "tool_target")
 		delete(details, "summary_kind")
 	}
+}
+
+func agentActivityApplyToolSourceFacts(details map[string]any, rawTool, canonicalTool string, input map[string]any) {
+	if details == nil {
+		return
+	}
+	if command := redactedCommandFromInput(input); command != "" && details["command"] == nil {
+		details["command"] = command
+	}
+	tool := agentActivityCanonicalToolName(canonicalTool)
+	if tool != "read_file" && tool != "write_file" && tool != "edit_file" && tool != "glob" && tool != "grep" {
+		return
+	}
+	if path := activityPathFactFromInput(input); path != "" && details["path"] == nil {
+		details["path"] = path
+	}
+	if query := activityQueryFactFromInput(input); query != "" && details["query"] == nil {
+		details["query"] = query
+	}
+	if pattern := activityPatternFactFromInput(input); pattern != "" && details["pattern"] == nil {
+		details["pattern"] = pattern
+	}
+	if scope := activityScopeFactFromInput(input); scope != "" && details["scope"] == nil {
+		details["scope"] = scope
+	}
+}
+
+func agentActivityToolSummaryInput(details, input map[string]any) map[string]any {
+	if len(details) == 0 {
+		return input
+	}
+	merged := make(map[string]any, len(input)+4)
+	for key, value := range input {
+		merged[key] = value
+	}
+	for _, key := range []string{"path", "file_path", "filePath", "filepath", "query", "pattern", "scope", "cwd", "basePath"} {
+		if _, ok := merged[key]; ok {
+			continue
+		}
+		if value, ok := details[key]; ok {
+			merged[key] = value
+		}
+	}
+	return merged
 }
 
 func agentActivityToolInputSummaryForTool(canonicalTool string, input map[string]any) agentActivityToolInputSummary {
@@ -2256,10 +2308,13 @@ var agentActivityToolAliases = map[string]string{
 	"open":      "read_file",
 	"cat":       "read_file",
 
-	"write":      "write_file",
-	"writefile":  "write_file",
-	"write_file": "write_file",
-	"file_write": "write_file",
+	"write":       "write_file",
+	"writefile":   "write_file",
+	"write_file":  "write_file",
+	"file_write":  "write_file",
+	"create":      "write_file",
+	"createfile":  "write_file",
+	"create_file": "write_file",
 
 	"edit":           "edit_file",
 	"editfile":       "edit_file",
@@ -2457,7 +2512,7 @@ func sourcePathFromMap(m map[string]any, key string) string {
 }
 
 func activityPathFactFromInput(input map[string]any) string {
-	for _, key := range []string{"path", "file_path", "filepath", "file", "filename", "absolute_path", "relative_path"} {
+	for _, key := range []string{"path", "file_path", "filepath", "filePath", "file", "filename", "absolute_path", "absolutePath", "relative_path", "relativePath"} {
 		if value := sourcePathFromMap(input, key); value != "" {
 			return value
 		}
@@ -2484,7 +2539,7 @@ func activityPatternFactFromInput(input map[string]any) string {
 }
 
 func activityScopeFactFromInput(input map[string]any) string {
-	for _, key := range []string{"scope", "cwd", "dir", "directory", "root", "base_path"} {
+	for _, key := range []string{"scope", "cwd", "dir", "directory", "root", "base_path", "basePath"} {
 		if value := sourcePathFromMap(input, key); value != "" {
 			return value
 		}

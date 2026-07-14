@@ -60,10 +60,9 @@ func runThreadUnfollow(cmd *cobra.Command, _ []string) error {
 	}
 
 	messageID := parts[len(parts)-1]
-	path := fmt.Sprintf("/api/channels/%s/messages/%s/unfollow", channelID, messageID)
+	path := fmt.Sprintf("/api/channels/%s/messages/%s/thread/follow", channelID, messageID)
 
-	var resp map[string]any
-	if err := client.PostJSON(ctx, path, map[string]string{}, &resp); err != nil {
+	if err := client.DeleteJSON(ctx, path); err != nil {
 		return fmt.Errorf("unfollow thread: %w", err)
 	}
 

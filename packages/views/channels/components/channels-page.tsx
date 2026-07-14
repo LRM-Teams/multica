@@ -2217,6 +2217,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
             pending={threadPending.pending}
             onRemove={threadPending.remove}
             onRetry={threadPending.retry}
+            isMobile={isMobile}
           />
         }
         composerLeadingActions={
@@ -2581,6 +2582,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                         pending={channelPending.pending}
                         onRemove={channelPending.remove}
                         onRetry={channelPending.retry}
+                        isMobile={isMobile}
                       />
                     }
                     editor={

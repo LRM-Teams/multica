@@ -341,6 +341,66 @@ func TestAgentActivityEvents_UsesRaftKindsAndTaskMessageRows(t *testing.T) {
 	}
 }
 
+func TestAgentActivityEvents_FileToolUsesTopLevelPathFacts(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	agentID := createWorkspaceVisibleActivityAgent(t, "activity-file-tool-agent")
+	const filePath = "/Users/frank/multica_workspaces/ws/.multica/agents/agent/hello_world_2.txt"
+	ctx := context.Background()
+
+	var eventID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_activity_event (
+			workspace_id, agent_id, event_kind, event_type, severity,
+			target_kind, target_id, message, details
+		)
+		VALUES (
+			$1, $2, 'tool_call', 'tool_use', 'info',
+			'agent', $2, '', $3::jsonb
+		)
+		RETURNING id
+	`, testWorkspaceID, agentID, fmt.Sprintf(`{
+		"tool": "write_file",
+		"command": "create",
+		"path": %q,
+		"tool_target": %q,
+		"summary_kind": "file_path"
+	}`, filePath, filePath)).Scan(&eventID); err != nil {
+		t.Fatalf("insert file tool activity event: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_activity_event WHERE id = $1`, eventID) })
+
+	events := listAgentActivityEventsForUser(t, testUserID, agentID, "")
+	event := requireActivityTimelineEvent(t, events, eventID)
+	if event.Tool == nil || *event.Tool != "write_file" {
+		t.Fatalf("file tool canonical tool = %+v, want write_file", event.Tool)
+	}
+	if event.ToolTarget == nil || *event.ToolTarget != filePath {
+		t.Fatalf("file tool target = %+v, want %q", event.ToolTarget, filePath)
+	}
+	if len(event.Entries) != 1 {
+		t.Fatalf("file tool entries = %+v, want one entry", event.Entries)
+	}
+	entry := event.Entries[0]
+	if entry.Tool == nil || *entry.Tool != "write_file" {
+		t.Fatalf("file tool entry tool = %+v, want write_file", entry.Tool)
+	}
+	if entry.ToolTarget == nil || *entry.ToolTarget != filePath {
+		t.Fatalf("file tool entry target = %+v, want %q", entry.ToolTarget, filePath)
+	}
+	if entry.SummaryKind == nil || *entry.SummaryKind != "file_path" {
+		t.Fatalf("file tool entry summary kind = %+v, want file_path", entry.SummaryKind)
+	}
+	if entry.Command != nil {
+		t.Fatalf("file tool entry command = %+v, want omitted native operation verb", entry.Command)
+	}
+	if strings.Contains(events.raw, `"command":"create"`) {
+		t.Fatalf("native file tool create verb must not be exposed as a command: %s", events.raw)
+	}
+}
+
 func TestAgentActivityEvents_DefaultPageSkipsDiagnosticNoise(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
@@ -376,6 +436,14 @@ func TestAgentActivityEvents_DefaultPageSkipsDiagnosticNoise(t *testing.T) {
 	if !ok {
 		t.Fatal("insert failed Radar activity event")
 	}
+	statusID, ok := insertAgentActivityEvent(
+		ctx, testPool, parseUUID(testWorkspaceID), parseUUID(agentID), pgtype.UUID{}, pgtype.UUID{},
+		activityKindCustom, agentInboxStatusChangedEventType, "info",
+		"agent", parseUUID(agentID), "", "", "Idle", map[string]any{"status": agentInboxStatusActivityIdle},
+	)
+	if !ok {
+		t.Fatal("insert agent status activity event")
+	}
 	noActionID, ok := insertAgentActivityEvent(
 		ctx, testPool, parseUUID(testWorkspaceID), parseUUID(agentID), pgtype.UUID{}, pgtype.UUID{},
 		activityKindCustom, "radar_action_executed", "info",
@@ -403,6 +471,13 @@ func TestAgentActivityEvents_DefaultPageSkipsDiagnosticNoise(t *testing.T) {
 	requireActivityTimelineEvent(t, events, thinkingID)
 	requireActivityTimelineEvent(t, events, uuidToString(executedID))
 	requireActivityTimelineEvent(t, events, uuidToString(failedID))
+	statusEvent := requireActivityTimelineEvent(t, events, uuidToString(statusID))
+	if statusEvent.Status == nil || *statusEvent.Status != agentInboxStatusActivityIdle {
+		t.Fatalf("status event status = %+v, want %q", statusEvent.Status, agentInboxStatusActivityIdle)
+	}
+	if len(statusEvent.Entries) != 1 || statusEvent.Entries[0].Status == nil || *statusEvent.Entries[0].Status != agentInboxStatusActivityIdle {
+		t.Fatalf("status event entries = %+v, want idle status entry", statusEvent.Entries)
+	}
 	if got := findActivityTimelineEvent(events, uuidToString(noActionID)); got != nil {
 		t.Fatalf("no_action Radar event leaked into user narrative: %+v", *got)
 	}
@@ -460,6 +535,16 @@ func TestActivityVisibilityFor_SourceBackedLifecycle(t *testing.T) {
 	if got := activityVisibilityFor(activityKindCustom, "subagent_started", "info", "auto_retry"); got != "user_facing" {
 		t.Fatalf("subagent custom visibility = %q, want user_facing", got)
 	}
+	if got := activityVisibilityFor(activityKindCustom, agentInboxStatusChangedEventType, "info", ""); got != "user_facing" {
+		t.Fatalf("agent status visibility = %q, want user_facing", got)
+	}
+	statusRow := agentActivityRawRow{
+		Kind:      activityKindCustom,
+		EventType: pgtype.Text{String: agentInboxStatusChangedEventType, Valid: true},
+	}
+	if !agentActivityTimelineRowIsNarrative(statusRow) {
+		t.Fatalf("agent status changes must be included in the activity narrative")
+	}
 	for _, eventType := range []string{"radar_action_executed", "radar_action_failed"} {
 		if got := activityVisibilityFor(activityKindCustom, eventType, "info", "create_issue"); got != "user_facing" {
 			t.Fatalf("%s visibility = %q, want user_facing", eventType, got)
@@ -498,6 +583,7 @@ func TestAgentActivityCanonicalToolName_UsesRaftAliases(t *testing.T) {
 		"ReadFile":                  "read_file",
 		"file_read":                 "read_file",
 		"Write":                     "write_file",
+		"create_file":               "write_file",
 		"StrReplaceFile":            "edit_file",
 		"mcp__chat__send_message":   "send_message",
 		"mcp_chat_search_messages":  "search_messages",
@@ -591,6 +677,13 @@ func TestAgentActivitySafeToolTargetForTool_FileToolsUseSourceBackedPath(t *test
 			path: "/tmp/activity-event.ts",
 			want: "/tmp/activity-event.ts",
 		},
+		{
+			name: "read file path from runtime camel case key",
+			tool: "read_file",
+			key:  "filePath",
+			path: "/tmp/activity-event.ts",
+			want: "/tmp/activity-event.ts",
+		},
 	}
 
 	for _, tt := range tests {
@@ -667,6 +760,35 @@ func TestAgentActivityToolInputSummaryForTool_UsesRaftLikeToolInputWithoutInvent
 	})
 	if bashSummary.ToolTarget != "cat /tmp/secret.txt" || bashSummary.SummaryKind != "command" {
 		t.Fatalf("bash summary = %+v, want command target", bashSummary)
+	}
+}
+
+func TestAgentActivityApplyToolSourceFacts_PreservesSourceFactsWithoutInventingCommands(t *testing.T) {
+	readDetails := map[string]any{}
+	agentActivityApplyToolSourceFacts(readDetails, "read", "read_file", map[string]any{
+		"filePath": "/tmp/test.go",
+		"basePath": "/repo",
+	})
+	if readDetails["command"] != nil || readDetails["path"] != "/tmp/test.go" || readDetails["scope"] != "/repo" {
+		t.Fatalf("read source facts = %+v, want path/scope without invented command", readDetails)
+	}
+
+	globDetails := map[string]any{}
+	agentActivityApplyToolSourceFacts(globDetails, "glob", "glob", map[string]any{
+		"pattern": "server/internal/**/*.go",
+		"cwd":     "/Users/frank/Code/multica",
+	})
+	if globDetails["command"] != nil || globDetails["pattern"] != "server/internal/**/*.go" || globDetails["scope"] != "/Users/frank/Code/multica" {
+		t.Fatalf("glob source facts = %+v, want pattern/scope without invented command", globDetails)
+	}
+
+	bashDetails := map[string]any{}
+	agentActivityApplyToolSourceFacts(bashDetails, "terminal", "bash", map[string]any{
+		"command": "cat /tmp/secret.txt",
+		"path":    "/tmp/secret.txt",
+	})
+	if bashDetails["command"] != "cat /tmp/secret.txt" || bashDetails["path"] != nil {
+		t.Fatalf("bash source facts = %+v, want explicit command without path-backed shell target", bashDetails)
 	}
 }
 

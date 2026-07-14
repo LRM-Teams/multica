@@ -18,6 +18,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/mention"
 	"github.com/multica-ai/multica/server/internal/messageparts"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
+	"github.com/multica-ai/multica/server/internal/radar"
 	"github.com/multica-ai/multica/server/internal/realtime"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -105,10 +106,14 @@ const (
 // the comment is missing (deleted / wrong workspace / etc) so the column
 // stays NULL — front-end falls back to a structural label in that case.
 func (s *TaskService) buildCommentTriggerSummary(ctx context.Context, commentID pgtype.UUID) pgtype.Text {
+	return s.buildCommentTriggerSummaryWithQueries(ctx, s.Queries, commentID)
+}
+
+func (s *TaskService) buildCommentTriggerSummaryWithQueries(ctx context.Context, q *db.Queries, commentID pgtype.UUID) pgtype.Text {
 	if !commentID.Valid {
 		return pgtype.Text{}
 	}
-	comment, err := s.Queries.GetComment(ctx, commentID)
+	comment, err := q.GetComment(ctx, commentID)
 	if err != nil {
 		return pgtype.Text{}
 	}
@@ -117,6 +122,13 @@ func (s *TaskService) buildCommentTriggerSummary(ctx context.Context, commentID 
 		return pgtype.Text{}
 	}
 	return pgtype.Text{String: summary, Valid: true}
+}
+
+// BuildCommentTriggerSummaryForTask is the transactional counterpart used by
+// callers that create a visible comment and retarget an already-queued task in
+// the same transaction.
+func (s *TaskService) BuildCommentTriggerSummaryForTask(ctx context.Context, q *db.Queries, commentID pgtype.UUID) pgtype.Text {
+	return s.buildCommentTriggerSummaryWithQueries(ctx, q, commentID)
 }
 
 func NewTaskService(q *db.Queries, tx TxStarter, hub *realtime.Hub, bus *events.Bus, wakeups ...TaskWakeupNotifier) *TaskService {
@@ -243,6 +255,15 @@ func (s *TaskService) syncAgentRadarRunTerminal(ctx context.Context, task db.Age
 	}
 	if rows > 0 {
 		slog.Info("agent radar run finalized from task", "task_id", util.UUIDToString(task.ID), "status", status)
+		if status == "failed" {
+			if _, stateErr := s.Queries.MarkWorkspaceRadarFailedByTaskID(ctx, task.ID); stateErr != nil {
+				slog.Warn("update workspace radar failure backoff failed", "task_id", util.UUIDToString(task.ID), "error", stateErr)
+			}
+		} else if status == "cancelled" {
+			if _, stateErr := s.Queries.MarkWorkspaceRadarCancelledByTaskID(ctx, task.ID); stateErr != nil {
+				slog.Warn("update workspace radar cancellation cadence failed", "task_id", util.UUIDToString(task.ID), "error", stateErr)
+			}
+		}
 	}
 }
 
@@ -602,6 +623,14 @@ func (s *TaskService) EnqueueTaskForMention(ctx context.Context, issue db.Issue,
 	return s.enqueueMentionTask(ctx, issue, agentID, triggerCommentID, false, false)
 }
 
+// CreateMentionTaskRow validates the target agent and inserts a normal mention
+// task through q without publishing realtime, training, cancellation, or daemon
+// wake side effects. Transactional callers must invoke PublishMentionTaskQueued
+// only after the transaction commits.
+func (s *TaskService) CreateMentionTaskRow(ctx context.Context, q *db.Queries, issue db.Issue, agentID pgtype.UUID, triggerCommentID pgtype.UUID) (db.AgentTaskQueue, error) {
+	return s.createMentionTaskRow(ctx, q, issue, agentID, triggerCommentID, false, false)
+}
+
 // EnqueueTaskForSquadLeader is the leader-role variant of EnqueueTaskForMention.
 // The resulting task carries is_leader_task=true so that downstream
 // self-trigger guards can distinguish a comment posted while the agent was
@@ -613,7 +642,15 @@ func (s *TaskService) EnqueueTaskForSquadLeader(ctx context.Context, issue db.Is
 }
 
 func (s *TaskService) enqueueMentionTask(ctx context.Context, issue db.Issue, agentID pgtype.UUID, triggerCommentID pgtype.UUID, isLeader bool, forceFreshSession bool) (db.AgentTaskQueue, error) {
-	agent, err := s.Queries.GetAgent(ctx, agentID)
+	task, err := s.createMentionTaskRow(ctx, s.Queries, issue, agentID, triggerCommentID, isLeader, forceFreshSession)
+	if err != nil {
+		return db.AgentTaskQueue{}, err
+	}
+	return s.publishMentionTaskQueued(ctx, task, issue, triggerCommentID), nil
+}
+
+func (s *TaskService) createMentionTaskRow(ctx context.Context, q *db.Queries, issue db.Issue, agentID pgtype.UUID, triggerCommentID pgtype.UUID, isLeader bool, forceFreshSession bool) (db.AgentTaskQueue, error) {
+	agent, err := q.GetAgent(ctx, agentID)
 	if err != nil {
 		slog.Error("mention task enqueue failed: agent not found", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID), "error", err)
 		return db.AgentTaskQueue{}, fmt.Errorf("load agent: %w", err)
@@ -627,13 +664,13 @@ func (s *TaskService) enqueueMentionTask(ctx context.Context, issue db.Issue, ag
 		return db.AgentTaskQueue{}, fmt.Errorf("agent has no runtime")
 	}
 
-	task, err := s.Queries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
+	task, err := q.CreateAgentTask(ctx, db.CreateAgentTaskParams{
 		AgentID:           agentID,
 		RuntimeID:         agent.RuntimeID,
 		IssueID:           issue.ID,
 		Priority:          priorityToInt(issue.Priority),
 		TriggerCommentID:  triggerCommentID,
-		TriggerSummary:    s.buildCommentTriggerSummary(ctx, triggerCommentID),
+		TriggerSummary:    s.buildCommentTriggerSummaryWithQueries(ctx, q, triggerCommentID),
 		IsLeaderTask:      pgtype.Bool{Bool: isLeader, Valid: isLeader},
 		ForceFreshSession: pgtype.Bool{Bool: forceFreshSession, Valid: forceFreshSession},
 	})
@@ -641,8 +678,31 @@ func (s *TaskService) enqueueMentionTask(ctx context.Context, issue db.Issue, ag
 		slog.Error("mention task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID), "error", err)
 		return db.AgentTaskQueue{}, fmt.Errorf("create task: %w", err)
 	}
+	return task, nil
+}
 
-	slog.Info("mention task enqueued", "task_id", util.UUIDToString(task.ID), "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID), "is_leader_task", isLeader)
+// PublishMentionTaskQueued emits all post-commit effects for a task inserted by
+// CreateMentionTaskRow. It must never be called before the creating transaction
+// commits, because it can wake the daemon and cancel older in-flight work.
+func (s *TaskService) PublishMentionTaskQueued(ctx context.Context, task db.AgentTaskQueue, issue db.Issue, triggerCommentID pgtype.UUID) {
+	s.publishMentionTaskQueuedWithInterruptPolicy(ctx, task, issue, triggerCommentID, true)
+}
+
+func (s *TaskService) publishMentionTaskQueued(ctx context.Context, task db.AgentTaskQueue, issue db.Issue, triggerCommentID pgtype.UUID) db.AgentTaskQueue {
+	return s.publishMentionTaskQueuedWithInterruptPolicy(ctx, task, issue, triggerCommentID, true)
+}
+
+// PublishMentionTaskQueuedPreservingInFlight publishes a visible supervisory
+// follow-up without cancelling work the target agent has already started. The
+// new task remains queued behind the running task and carries the new comment
+// as its trigger.
+func (s *TaskService) PublishMentionTaskQueuedPreservingInFlight(ctx context.Context, task db.AgentTaskQueue, issue db.Issue, triggerCommentID pgtype.UUID) {
+	s.publishMentionTaskQueuedWithInterruptPolicy(ctx, task, issue, triggerCommentID, false)
+}
+
+func (s *TaskService) publishMentionTaskQueuedWithInterruptPolicy(ctx context.Context, task db.AgentTaskQueue, issue db.Issue, triggerCommentID pgtype.UUID, interruptInFlight bool) db.AgentTaskQueue {
+	isLeader := task.IsLeaderTask
+	slog.Info("mention task enqueued", "task_id", util.UUIDToString(task.ID), "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(task.AgentID), "is_leader_task", isLeader)
 	// Training session-open chokepoint (spec §4.3): leader @mention delegation
 	// of a teammate — the trained member's task is typically created here.
 	s.tryOpenTrainingSession(ctx, task, issue.ProjectID, "")
@@ -665,9 +725,11 @@ func (s *TaskService) enqueueMentionTask(ctx context.Context, issue db.Issue, ag
 	}
 	// See EnqueueTaskForIssue for ordering rationale.
 	s.broadcastTaskEvent(ctx, protocol.EventTaskQueued, task)
-	s.interruptInFlightIssueTasksForFollowup(ctx, task)
+	if interruptInFlight {
+		s.interruptInFlightIssueTasksForFollowup(ctx, task)
+	}
 	s.NotifyTaskEnqueued(ctx, task)
-	return task, nil
+	return task
 }
 
 // QuickCreateContext is the JSON payload stored on a quick-create task's
@@ -833,6 +895,7 @@ type EnqueueAgentRadarRunParams struct {
 	ContextSummary string
 	ScheduledFor   time.Time
 	Prompt         string
+	Scan           *radar.WorkspaceScanMetadata
 }
 
 // EnqueueAgentRadarRun atomically creates a radar run, its queue task, and the
@@ -841,7 +904,7 @@ type EnqueueAgentRadarRunParams struct {
 func (s *TaskService) EnqueueAgentRadarRun(ctx context.Context, in EnqueueAgentRadarRunParams) (db.AgentRadarRun, db.AgentTaskQueue, error) {
 	var run db.AgentRadarRun
 	var task db.AgentTaskQueue
-	err := s.runInTx(ctx, func(qtx *db.Queries) error {
+	enqueue := func(qtx *db.Queries) error {
 		agent, err := qtx.GetAgent(ctx, in.AgentID)
 		if err != nil {
 			return fmt.Errorf("load agent: %w", err)
@@ -892,6 +955,13 @@ func (s *TaskService) EnqueueAgentRadarRun(ctx context.Context, in EnqueueAgentR
 		if err != nil {
 			return fmt.Errorf("create radar task: %w", err)
 		}
+		if err := qtx.SetAgentTaskMaxAttempts(ctx, db.SetAgentTaskMaxAttemptsParams{
+			ID:          task.ID,
+			MaxAttempts: 1,
+		}); err != nil {
+			return fmt.Errorf("set radar retry budget: %w", err)
+		}
+		task.MaxAttempts = 1
 		run, err = qtx.UpdateAgentRadarRunStatus(ctx, db.UpdateAgentRadarRunStatusParams{
 			ID:     run.ID,
 			Status: "queued",
@@ -901,7 +971,71 @@ func (s *TaskService) EnqueueAgentRadarRun(ctx context.Context, in EnqueueAgentR
 			return fmt.Errorf("link radar task: %w", err)
 		}
 		return nil
-	})
+	}
+
+	var err error
+	if in.TriggerKind == "scheduled" {
+		if in.CooldownKey != radar.WorkspaceSupervisorCooldownKey {
+			return db.AgentRadarRun{}, db.AgentTaskQueue{}, errors.New("scheduled Radar is reserved for the workspace supervisor")
+		}
+		if s.TxStarter == nil {
+			return db.AgentRadarRun{}, db.AgentTaskQueue{}, errors.New("scheduled Radar transaction starter unavailable")
+		}
+		tx, beginErr := s.TxStarter.Begin(ctx)
+		if beginErr != nil {
+			return db.AgentRadarRun{}, db.AgentTaskQueue{}, fmt.Errorf("begin scheduled Radar enqueue: %w", beginErr)
+		}
+		defer tx.Rollback(ctx)
+		if authErr := lockAuthorizedWorkspaceRadarSupervisor(ctx, tx, in.WorkspaceID, in.AgentID); authErr != nil {
+			return db.AgentRadarRun{}, db.AgentTaskQueue{}, authErr
+		}
+		if enqueueErr := enqueue(s.Queries.WithTx(tx)); enqueueErr != nil {
+			return db.AgentRadarRun{}, db.AgentTaskQueue{}, enqueueErr
+		}
+		if in.Scan != nil {
+			nextCursors, marshalErr := json.Marshal(in.Scan.StaticNextCursors)
+			if marshalErr != nil {
+				return db.AgentRadarRun{}, db.AgentTaskQueue{}, fmt.Errorf("marshal Radar static cursors: %w", marshalErr)
+			}
+			wrappedSections, marshalErr := json.Marshal(in.Scan.StaticWrappedSections)
+			if marshalErr != nil {
+				return db.AgentRadarRun{}, db.AgentTaskQueue{}, fmt.Errorf("marshal Radar wrapped sections: %w", marshalErr)
+			}
+			if _, scanErr := tx.Exec(ctx, `
+				INSERT INTO workspace_radar_run_scan (
+				  radar_run_id, workspace_id, observed_at, observed_change_version,
+				  change_cursor_through_version, changes_has_more,
+				  static_next_cursors, static_wrapped_sections
+				) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb)
+			`, run.ID, in.WorkspaceID, in.Scan.ObservedAt,
+				in.Scan.ObservedChangeVersion, in.Scan.ChangeCursorThroughVersion,
+				in.Scan.ChangesHasMore, nextCursors, wrappedSections); scanErr != nil {
+				return db.AgentRadarRun{}, db.AgentTaskQueue{}, fmt.Errorf("persist Radar scan receipt: %w", scanErr)
+			}
+		} else {
+			// Non-scheduler callers may enqueue an explicit scheduled fixture/run.
+			// Persist a conservative receipt that consumes no unseen change; the
+			// workspace remains due until a real context page is reviewed.
+			if _, scanErr := tx.Exec(ctx, `
+				INSERT INTO workspace_radar_run_scan (
+				  radar_run_id, workspace_id, observed_at, observed_change_version,
+				  change_cursor_through_version, changes_has_more,
+				  static_next_cursors, static_wrapped_sections
+				)
+				SELECT $1, state.workspace_id, $3, state.change_version,
+				       state.change_cursor_version,
+				       state.change_version > state.change_cursor_version,
+				       state.static_scan_cursors, '{}'::jsonb
+				FROM workspace_radar_state state
+				WHERE state.workspace_id = $2
+			`, run.ID, in.WorkspaceID, in.ScheduledFor); scanErr != nil {
+				return db.AgentRadarRun{}, db.AgentTaskQueue{}, fmt.Errorf("persist conservative Radar scan receipt: %w", scanErr)
+			}
+		}
+		err = tx.Commit(ctx)
+	} else {
+		err = s.runInTx(ctx, enqueue)
+	}
 	if err != nil {
 		return db.AgentRadarRun{}, db.AgentTaskQueue{}, err
 	}
@@ -913,6 +1047,42 @@ func (s *TaskService) EnqueueAgentRadarRun(ctx context.Context, in EnqueueAgentR
 	)
 	s.NotifyTaskEnqueued(ctx, task)
 	return run, task, nil
+}
+
+func lockAuthorizedWorkspaceRadarSupervisor(ctx context.Context, tx pgx.Tx, workspaceID, agentID pgtype.UUID) error {
+	var lockedWorkspaceID pgtype.UUID
+	if err := tx.QueryRow(ctx, `
+		SELECT id
+		FROM workspace
+		WHERE id = $1
+		FOR SHARE
+	`, workspaceID).Scan(&lockedWorkspaceID); err != nil {
+		return fmt.Errorf("lock scheduled Radar workspace: %w", err)
+	}
+
+	var supervisorID pgtype.UUID
+	if err := tx.QueryRow(ctx, `
+		SELECT state.supervisor_agent_id
+		FROM workspace_radar_state state
+		JOIN agent supervisor
+		  ON supervisor.workspace_id = state.workspace_id
+		 AND supervisor.id = state.supervisor_agent_id
+		JOIN member owner_member
+		  ON owner_member.workspace_id = state.workspace_id
+		 AND owner_member.user_id = supervisor.owner_id
+		 AND owner_member.role = 'owner'
+		WHERE state.workspace_id = $1
+		  AND state.supervisor_agent_id = $2
+		  AND state.enabled
+		  AND supervisor.archived_at IS NULL
+		FOR SHARE OF state, supervisor, owner_member
+	`, workspaceID, agentID).Scan(&supervisorID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errors.New("scheduled Radar supervisor is no longer authorized")
+		}
+		return fmt.Errorf("lock scheduled Radar supervisor: %w", err)
+	}
+	return nil
 }
 
 // ErrChatTaskAgentArchived signals that EnqueueChatTask refused to
@@ -1515,7 +1685,32 @@ func (s *TaskService) MarkTaskWaitingLocalDirectory(ctx context.Context, taskID 
 	return &task, nil
 }
 
-// CompleteTask marks a task as completed.
+type CompleteTaskOutcome struct {
+	Task         db.AgentTaskQueue
+	CompletedNow bool
+	RadarRun     *db.AgentRadarRun
+}
+
+// CompleteTask marks a task as completed. Callers that execute Radar output
+// must use CompleteDaemonTask so completing the task and claiming its Radar
+// run are one atomic transition.
+func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, result []byte, sessionID, workDir string) (*db.AgentTaskQueue, error) {
+	outcome, err := s.completeTask(ctx, taskID, result, sessionID, workDir, false)
+	if err != nil {
+		return nil, err
+	}
+	return &outcome.Task, nil
+}
+
+// CompleteDaemonTask atomically completes a daemon task and, when the task is
+// an Agent Radar run, claims the linked run for action execution. A duplicate
+// or late completion returns CompletedNow=false and never carries execution
+// authority.
+func (s *TaskService) CompleteDaemonTask(ctx context.Context, taskID pgtype.UUID, result []byte, sessionID, workDir string) (*CompleteTaskOutcome, error) {
+	return s.completeTask(ctx, taskID, result, sessionID, workDir, true)
+}
+
+// completeTask marks a task as completed.
 // Issue status is NOT changed here — the agent manages it via the CLI.
 //
 // For chat tasks, CompleteAgentTask and the chat_session resume-pointer
@@ -1523,8 +1718,10 @@ func (s *TaskService) MarkTaskWaitingLocalDirectory(ctx context.Context, taskID 
 // queued chat message could be claimed in the window between the task
 // flipping to 'completed' and chat_session.session_id being refreshed,
 // causing the new task to resume against a stale (or NULL) session.
-func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, result []byte, sessionID, workDir string) (*db.AgentTaskQueue, error) {
+func (s *TaskService) completeTask(ctx context.Context, taskID pgtype.UUID, result []byte, sessionID, workDir string, claimRadar bool) (*CompleteTaskOutcome, error) {
 	var task db.AgentTaskQueue
+	var radarRun *db.AgentRadarRun
+	completeAgentTaskUpdated := false
 	if err := s.runInTx(ctx, func(qtx *db.Queries) error {
 		t, err := qtx.CompleteAgentTask(ctx, db.CompleteAgentTaskParams{
 			ID:        taskID,
@@ -1535,7 +1732,26 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 		if err != nil {
 			return err
 		}
+		completeAgentTaskUpdated = true
 		task = t
+
+		if claimRadar && len(t.Context) > 0 {
+			var radarCtx AgentRadarContext
+			if json.Unmarshal(t.Context, &radarCtx) == nil && radarCtx.Type == AgentRadarContextType {
+				runID, err := util.ParseUUID(radarCtx.RadarRunID)
+				if err != nil {
+					return fmt.Errorf("parse radar run id: %w", err)
+				}
+				run, err := qtx.ClaimAgentRadarRunForCompletedTask(ctx, db.ClaimAgentRadarRunForCompletedTaskParams{
+					RunID:  runID,
+					TaskID: t.ID,
+				})
+				if err != nil {
+					return fmt.Errorf("claim completed radar run: %w", err)
+				}
+				radarRun = &run
+			}
+		}
 
 		if t.ChatSessionID.Valid {
 			// Pin the chat_session's runtime_id alongside the session_id so the
@@ -1564,13 +1780,18 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 		// … WHERE status = 'running' returns no rows in that case.
 		// Treat it as an idempotent success — same pattern as CancelTask.
 		if existing, lookupErr := s.Queries.GetAgentTask(ctx, taskID); lookupErr == nil {
-			if errors.Is(err, pgx.ErrNoRows) {
+			// CompleteAgentTask returning no rows is idempotent only when that
+			// first update lost a race to another terminal transition. If the
+			// task update succeeded and a later Radar claim returned no rows, the
+			// transaction rolled back and the daemon must receive an error so it
+			// retries instead of acknowledging an uncompleted running task.
+			if errors.Is(err, pgx.ErrNoRows) && !completeAgentTaskUpdated && isTerminalAgentTaskStatus(existing.Status) {
 				slog.Info("complete task: already finalized",
 					"task_id", util.UUIDToString(taskID),
 					"current_status", existing.Status,
 					"agent_id", util.UUIDToString(existing.AgentID),
 				)
-				return &existing, nil
+				return &CompleteTaskOutcome{Task: existing}, nil
 			}
 			slog.Warn("complete task failed",
 				"task_id", util.UUIDToString(taskID),
@@ -1745,7 +1966,20 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 	// Broadcast
 	s.broadcastTaskEvent(ctx, protocol.EventTaskCompleted, task)
 
-	return &task, nil
+	return &CompleteTaskOutcome{
+		Task:         task,
+		CompletedNow: true,
+		RadarRun:     radarRun,
+	}, nil
+}
+
+func isTerminalAgentTaskStatus(status string) bool {
+	switch status {
+	case "completed", "failed", "cancelled":
+		return true
+	default:
+		return false
+	}
 }
 
 // FailTask marks a task as failed.
@@ -2346,8 +2580,23 @@ func (s *TaskService) runInTx(ctx context.Context, fn func(*db.Queries) error) e
 	return tx.Commit(ctx)
 }
 
-// ReportProgress broadcasts a progress update via the event bus.
+// ReportProgress persists the latest task progress before broadcasting it, so
+// supervisors and reconnecting clients do not depend on catching an ephemeral
+// websocket event.
 func (s *TaskService) ReportProgress(ctx context.Context, taskID string, workspaceID string, summary string, step, total int) {
+	taskUUID, err := util.ParseUUID(taskID)
+	if err != nil {
+		slog.Warn("persist task progress skipped: invalid task id", "task_id", taskID, "error", err)
+	} else {
+		if err := s.Queries.UpsertAgentTaskProgressSnapshot(ctx, db.UpsertAgentTaskProgressSnapshotParams{
+			TaskID:  taskUUID,
+			Summary: summary,
+			Step:    int32(step),
+			Total:   int32(total),
+		}); err != nil {
+			slog.Warn("persist task progress failed", "task_id", taskID, "error", err)
+		}
+	}
 	s.Bus.Publish(events.Event{
 		Type:        protocol.EventTaskProgress,
 		WorkspaceID: workspaceID,

@@ -10,6 +10,11 @@ export type ComposerAttachmentTrayProps = {
   pending: PendingAttachment[];
   onRemove: (localId: string) => void;
   onRetry: (localId: string) => void;
+  /**
+   * Web responsive “mobile” (useIsMobile / coarse pointer layout), not Expo.
+   * Enlarges touch targets and always shows remove (no hover-only chrome).
+   */
+  isMobile?: boolean;
   className?: string;
 };
 
@@ -18,27 +23,47 @@ function isImagePending(item: PendingAttachment): boolean {
 }
 
 /**
- * Slack-style attachment tray: image thumbs + file chips above the editor.
- * Fills the Composer `tray` slot; does not own upload state.
+ * Slack-style composer tray: a **single horizontal strip** of pending
+ * thumbs/chips above the editor. Never stacks as a vertical list.
+ *
+ * Mobile web: same one-row model + horizontal pan; larger hit targets; remove
+ * always visible (no hover-gated controls).
+ *
+ * Spec: docs/superpowers/specs/2026-07-13-chat-attachment-presentation-design.md
  */
 export function ComposerAttachmentTray({
   pending,
   onRemove,
   onRetry,
+  isMobile = false,
   className,
 }: ComposerAttachmentTrayProps) {
   const { t } = useT("channels");
 
   if (pending.length === 0) return null;
 
+  // Image thumbs and file chip outer height stay aligned.
+  const thumb = isMobile ? "size-14" : "size-12";
+  const chipH = isMobile ? "h-14" : "h-12";
+  // ≥44px hit target on mobile web; desktop can stay compact.
+  const iconBtn = isMobile ? "size-9" : "size-6";
+  const iconGlyph = isMobile ? "size-3.5" : "size-2.5";
+
   return (
+    // Native list semantics (prefer-tag-over-role). list-none keeps layout
+    // as a horizontal strip, not a document bullet list.
     <ul
       className={cn(
-        "flex max-h-36 flex-wrap gap-2 overflow-y-auto overscroll-contain",
+        // One row only + horizontal scroll. flex-wrap was wrapping full-width
+        // chips into a vertical stack — that is explicitly forbidden here.
+        "m-0 flex list-none flex-row flex-nowrap items-center gap-2 overflow-x-auto overflow-y-hidden overscroll-x-contain p-0 pb-0.5",
+        // Touch: allow horizontal pan without fighting vertical page scroll.
+        "touch-pan-x [-webkit-overflow-scrolling:touch] [scrollbar-width:thin]",
         className,
       )}
       data-slot="composer-attachment-tray"
       data-testid="composer-attachment-tray"
+      data-mobile={isMobile ? "true" : undefined}
     >
       {pending.map((item) => {
         const removeLabel = t(($) => $.composer.tray_remove_aria, {
@@ -54,9 +79,11 @@ export function ComposerAttachmentTray({
             key={item.localId}
             data-testid={`composer-tray-item-${item.localId}`}
             data-status={item.status}
+            data-kind={showImage ? "image" : "file"}
             className={cn(
-              "group relative flex shrink-0 items-center gap-2 rounded-md border border-border/50 bg-muted/30",
-              showImage ? "size-[7.5rem] flex-col justify-end p-0" : "max-w-[14rem] px-2 py-1.5",
+              "group relative flex w-fit max-w-[11rem] shrink-0 list-none flex-row items-center gap-1.5 rounded-lg border border-border/50 bg-muted/35",
+              chipH,
+              showImage ? cn(thumb, "max-w-none p-0") : "min-w-0 px-2",
               item.status === "error" && "border-destructive/50 bg-destructive/5",
             )}
           >
@@ -66,21 +93,30 @@ export function ComposerAttachmentTray({
               <img
                 src={item.previewUrl}
                 alt={item.filename}
-                className="absolute inset-0 size-full rounded-[5px] object-cover"
+                className={cn(thumb, "rounded-[7px] object-cover")}
+                draggable={false}
               />
             ) : (
-              <FileIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+              <FileIcon
+                className="size-3.5 shrink-0 text-muted-foreground"
+                aria-hidden
+              />
             )}
 
             {!showImage ? (
               <div className="min-w-0 flex-1">
-                <p className="truncate text-xs font-medium text-foreground">{item.filename}</p>
+                <p
+                  className="truncate text-xs font-medium leading-tight text-foreground"
+                  title={item.filename}
+                >
+                  {item.filename}
+                </p>
                 {item.status === "error" ? (
-                  <p className="truncate text-[10px] text-destructive">
+                  <p className="truncate text-[10px] leading-tight text-destructive">
                     {item.errorMessage || t(($) => $.composer.tray_upload_failed)}
                   </p>
                 ) : item.status === "uploading" ? (
-                  <p className="truncate text-[10px] text-muted-foreground">
+                  <p className="truncate text-[10px] leading-tight text-muted-foreground">
                     {t(($) => $.composer.tray_uploading)}
                   </p>
                 ) : null}
@@ -92,25 +128,25 @@ export function ComposerAttachmentTray({
                 className={cn(
                   "pointer-events-none flex items-center justify-center",
                   showImage
-                    ? "absolute inset-0 rounded-[5px] bg-background/50"
+                    ? "absolute inset-0 rounded-lg bg-background/55"
                     : "shrink-0",
                 )}
                 aria-hidden
               >
-                <Loader2 className="size-4 animate-spin text-muted-foreground" />
+                <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
               </div>
             ) : null}
 
             {showImage && item.status === "error" ? (
-              <div className="absolute inset-x-0 bottom-0 rounded-b-[5px] bg-destructive/90 px-1 py-0.5 text-center text-[10px] text-destructive-foreground">
+              <div className="absolute inset-x-0 bottom-0 rounded-b-lg bg-destructive/90 px-0.5 py-0.5 text-center text-[9px] leading-none text-destructive-foreground">
                 {t(($) => $.composer.tray_upload_failed)}
               </div>
             ) : null}
 
             <div
               className={cn(
-                "flex items-center gap-0.5",
-                showImage && "absolute right-1 top-1 z-10",
+                "flex shrink-0 items-center gap-0.5",
+                showImage && "absolute right-0.5 top-0.5 z-10",
               )}
             >
               {item.status === "error" ? (
@@ -118,11 +154,11 @@ export function ComposerAttachmentTray({
                   type="button"
                   variant="secondary"
                   size="icon"
-                  className="size-6 bg-background/90 shadow-sm"
+                  className={cn(iconBtn, "bg-background/95 shadow-sm")}
                   aria-label={retryLabel}
                   onClick={() => onRetry(item.localId)}
                 >
-                  <RotateCcw className="size-3" />
+                  <RotateCcw className={iconGlyph} />
                 </Button>
               ) : null}
               <Button
@@ -130,13 +166,20 @@ export function ComposerAttachmentTray({
                 variant="secondary"
                 size="icon"
                 className={cn(
-                  "size-6 shadow-sm",
-                  showImage ? "bg-background/90 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100" : "bg-transparent",
+                  iconBtn,
+                  "shadow-sm",
+                  showImage
+                    ? // Desktop: reveal on hover. Mobile web: always visible
+                      // (no hover) so remove stays tappable.
+                      isMobile
+                      ? "bg-background/95 opacity-100"
+                      : "bg-background/95 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+                    : "bg-transparent hover:bg-background/80",
                 )}
                 aria-label={removeLabel}
                 onClick={() => onRemove(item.localId)}
               >
-                <X className="size-3" />
+                <X className={iconGlyph} />
               </Button>
             </div>
           </li>

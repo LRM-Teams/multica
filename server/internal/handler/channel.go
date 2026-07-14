@@ -2665,6 +2665,27 @@ func (h *Handler) followChannelThreadAgent(ctx context.Context, channelID, rootI
 	}
 }
 
+func (h *Handler) ensureChannelThreadAgentWakeParticipant(ctx context.Context, channelID, rootID, agentID pgtype.UUID) {
+	if _, err := h.DB.Exec(ctx, `
+		WITH root AS (
+		  SELECT conversation_id
+		  FROM channel_message
+		  WHERE id = $2 AND channel_id = $1
+		)
+		INSERT INTO thread_participant (conversation_id, root_message_id, member_type, member_id, wake_state, updated_at)
+		SELECT root.conversation_id, $2, 'agent', $3, 'no_wake', now()
+		FROM root
+		ON CONFLICT (root_message_id, member_type, member_id) DO UPDATE
+		SET wake_state = CASE
+		      WHEN thread_participant.followed_at IS NULL AND thread_participant.wake_state <> 'removed' THEN 'no_wake'
+		      ELSE thread_participant.wake_state
+		    END,
+		    updated_at = now()`,
+		channelID, rootID, agentID); err != nil {
+		slog.Warn("channel thread agent wake participant failed", "root", uuidToString(rootID), "agent", uuidToString(agentID), "error", err)
+	}
+}
+
 func (h *Handler) followChannelThreadMentionedUsers(ctx context.Context, ch ChannelResponse, msg ChannelMessageResponse) {
 	if msg.ThreadRootMessageID == nil {
 		return
@@ -3128,7 +3149,25 @@ func (h *Handler) dispatchChannelThreadReplyMentions(ctx context.Context, ch Cha
 		}
 		return
 	}
-	h.dispatchChannelAmbientDelivery(ctx, ch, trigger)
+	if trigger.ThreadRootMessageID == nil {
+		h.dispatchChannelAmbientDelivery(ctx, ch, trigger)
+		return
+	}
+	threadAgents := h.channelThreadFollowerAgents(ctx, ch.WorkspaceID, ch.ID, *trigger.ThreadRootMessageID)
+	if len(threadAgents) == 0 {
+		h.dispatchChannelAmbientDelivery(ctx, ch, trigger)
+		return
+	}
+	targetAgentIDs := make(map[string]struct{}, len(threadAgents))
+	for _, agent := range threadAgents {
+		agentID := uuidToString(agent.ID)
+		targetAgentIDs[agentID] = struct{}{}
+		if h.isChannelAgentMuted(ctx, parseUUID(ch.ID), parseUUID(ch.WorkspaceID), agent.ID) {
+			continue
+		}
+		h.dispatchChannelAgentReplyWithReason(ctx, ch, agent, trigger, initiatorUserID, "thread_reply")
+	}
+	h.dispatchChannelAmbientDeliveryExcept(ctx, ch, trigger, targetAgentIDs)
 }
 
 // dispatchChannelAgentReply runs one agent's reply to a triggering message:
@@ -3143,26 +3182,37 @@ func (h *Handler) dispatchChannelThreadReplyMentions(ctx context.Context, ch Cha
 //   - self-trigger skip: an agent's own message never re-triggers that same agent
 //     (otherwise a 1-on-1 agent DM would loop on the agent's own replies forever).
 func (h *Handler) dispatchChannelAgentReply(ctx context.Context, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
+	_, _ = h.dispatchChannelAgentReplyWithReason(ctx, ch, agent, trigger, initiatorUserID, "")
+}
+
+func (h *Handler) dispatchChannelAgentReplyWithReason(ctx context.Context, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, reason string) (db.AgentInboxEvent, error) {
 	if trigger.TriggerDepth >= channelRunTriggerLimit {
 		slog.Warn("channel agent reply: trigger limit reached", "channel", ch.ID, "thread_id", ptrString(trigger.ThreadID), "depth", trigger.TriggerDepth)
-		return
+		return db.AgentInboxEvent{}, errors.New("channel agent reply trigger limit reached")
 	}
 	if trigger.Type == "agent" && trigger.AuthorID != nil && *trigger.AuthorID == uuidToString(agent.ID) {
-		return
+		return db.AgentInboxEvent{}, errors.New("agent cannot trigger itself")
 	}
 	rootID := h.channelThreadRootForTrigger(ch, trigger)
 	facilitatorState := h.loadChannelFacilitatorState(ctx, rootID, agent.ID, trigger)
 	if trigger.ThreadRootMessageID != nil {
-		h.followChannelThreadAgent(ctx, parseUUID(ch.ID), parseUUID(*trigger.ThreadRootMessageID), agent.ID)
+		h.ensureChannelThreadAgentWakeParticipant(ctx, parseUUID(ch.ID), parseUUID(*trigger.ThreadRootMessageID), agent.ID)
 	}
-	reason := "mention"
-	if ch.Kind == "dm" {
-		reason = "dm"
+	if strings.TrimSpace(reason) == "" {
+		reason = "mention"
+		if ch.Kind == "dm" {
+			reason = "dm"
+		}
 	}
-	h.enqueueChannelAgentPrompt(ctx, ch, agent, trigger, initiatorUserID, h.buildChannelMentionPrompt(ctx, ch, trigger, facilitatorState), "channel agent reply", true, reason, 10)
+	return h.enqueueChannelAgentPrompt(ctx, ch, agent, trigger, initiatorUserID, h.buildChannelMentionPrompt(ctx, ch, trigger, facilitatorState), "channel agent reply", true, reason, 10)
 }
 
-func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, prompt, logScope string, showTyping bool, reason string, priority int32) {
+type channelAgentPromptTxResult struct {
+	Event        db.AgentInboxEvent
+	AgentSession db.AgentSession
+}
+
+func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, prompt, logScope string, showTyping bool, reason string, priority int32) (db.AgentInboxEvent, error) {
 	typingActive := false
 	if showTyping {
 		h.publishChannelAgentTyping(ctx, ch, agent, true)
@@ -3175,30 +3225,45 @@ func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelRespo
 	}()
 	if h.TxStarter == nil {
 		slog.Warn(logScope+": transaction starter missing", "channel", ch.ID, "agent", uuidToString(agent.ID))
-		return
+		return db.AgentInboxEvent{}, errors.New("channel transaction starter missing")
 	}
 	tx, err := h.TxStarter.Begin(ctx)
 	if err != nil {
 		slog.Warn(logScope+": begin transaction failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
-		return
+		return db.AgentInboxEvent{}, fmt.Errorf("begin channel agent prompt transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
 	qtx := h.Queries.WithTx(tx)
+	txResult, err := h.enqueueChannelAgentPromptWithTx(ctx, qtx, tx, ch, agent, trigger, initiatorUserID, prompt, reason, priority)
+	if err != nil {
+		slog.Warn(logScope+": persist prompt and inbox event failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		return db.AgentInboxEvent{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		slog.Warn(logScope+": commit failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "inbox_event", uuidToString(txResult.Event.ID), "error", err)
+		return db.AgentInboxEvent{}, fmt.Errorf("commit channel agent prompt: %w", err)
+	}
+	typingActive = false
+	h.recordChannelAgentPromptWake(ctx, ch, agent, trigger, reason, txResult)
+	return txResult.Event, nil
+}
 
-	session, err := h.ensureChannelAgentSessionWithDB(ctx, qtx, tx, ch, agent.ID, initiatorUserID)
+// enqueueChannelAgentPromptWithTx writes the prompt and directed inbox event
+// using the caller's transaction. It deliberately emits no realtime or daemon
+// side effects; the caller must commit first and then call
+// recordChannelAgentPromptWake.
+func (h *Handler) enqueueChannelAgentPromptWithTx(ctx context.Context, qtx *db.Queries, exec db.DBTX, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, prompt, reason string, priority int32) (channelAgentPromptTxResult, error) {
+	session, err := h.ensureChannelAgentSessionWithDB(ctx, qtx, exec, ch, agent.ID, initiatorUserID)
 	if err != nil {
-		slog.Warn(logScope+": ensure chat session failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
-		return
+		return channelAgentPromptTxResult{}, fmt.Errorf("ensure channel agent session: %w", err)
 	}
-	promptMsg, err := h.createChannelAgentPromptMessageWithDB(ctx, tx, session.ID, prompt, ch.Kind, trigger)
+	promptMsg, err := h.createChannelAgentPromptMessageWithDB(ctx, exec, session.ID, prompt, ch.Kind, trigger)
 	if err != nil {
-		slog.Warn(logScope+": create chat message failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
-		return
+		return channelAgentPromptTxResult{}, fmt.Errorf("create channel agent prompt: %w", err)
 	}
-	conversationID, err := h.channelConversationIDWithDB(ctx, tx, parseUUID(ch.ID))
+	conversationID, err := h.channelConversationIDWithDB(ctx, exec, parseUUID(ch.ID))
 	if err != nil {
-		slog.Warn(logScope+": load conversation failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
-		return
+		return channelAgentPromptTxResult{}, fmt.Errorf("load channel conversation: %w", err)
 	}
 	agentSession, err := qtx.UpsertAgentSession(ctx, db.UpsertAgentSessionParams{
 		WorkspaceID:    parseUUID(ch.WorkspaceID),
@@ -3209,8 +3274,7 @@ func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelRespo
 		ChatSessionID:  session.ID,
 	})
 	if err != nil {
-		slog.Warn(logScope+": upsert agent session failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
-		return
+		return channelAgentPromptTxResult{}, fmt.Errorf("upsert channel agent session: %w", err)
 	}
 	seq := trigger.Seq
 	event, err := qtx.CreateAgentInboxEvent(ctx, db.CreateAgentInboxEventParams{
@@ -3228,19 +3292,16 @@ func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelRespo
 		SourceMessageID: channelAmbientTriggerID(trigger),
 	})
 	if err != nil {
-		slog.Warn(logScope+": create inbox event failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
-		return
+		return channelAgentPromptTxResult{}, fmt.Errorf("create channel agent inbox event: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `UPDATE chat_message SET task_id = $1 WHERE id = $2`, event.ID, promptMsg.ID); err != nil {
-		slog.Warn(logScope+": tag prompt with inbox event failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "inbox_event", uuidToString(event.ID), "error", err)
-		return
+	if _, err := exec.Exec(ctx, `UPDATE chat_message SET task_id = $1 WHERE id = $2`, event.ID, promptMsg.ID); err != nil {
+		return channelAgentPromptTxResult{}, fmt.Errorf("tag channel prompt with inbox event: %w", err)
 	}
-	if err := tx.Commit(ctx); err != nil {
-		slog.Warn(logScope+": commit failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "inbox_event", uuidToString(event.ID), "error", err)
-		return
-	}
-	typingActive = false
+	return channelAgentPromptTxResult{Event: event, AgentSession: agentSession}, nil
+}
 
+func (h *Handler) recordChannelAgentPromptWake(ctx context.Context, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, reason string, result channelAgentPromptTxResult) {
+	h.publishAgentInboxTaskLifecycle(protocol.EventTaskQueued, result.Event, agent.RuntimeID, "queued")
 	// Record a wake-trigger activity event so the agent's Activity timeline
 	// shows why this session needs to drain.
 	h.recordAgentActivityEvent(ctx, h.DB,
@@ -3254,8 +3315,8 @@ func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelRespo
 			"trigger_content":    truncateForActivity(trigger.Content, 100),
 			"thread_root":        trigger.ThreadRootMessageID,
 			"message_seq":        trigger.Seq,
-			"agent_session_id":   uuidToString(agentSession.ID),
-			"inbox_event_id":     uuidToString(event.ID),
+			"agent_session_id":   uuidToString(result.AgentSession.ID),
+			"inbox_event_id":     uuidToString(result.Event.ID),
 		},
 	)
 }
@@ -3528,83 +3589,22 @@ func (h *Handler) channelMentionedAgents(ctx context.Context, workspaceID, chann
 	return out
 }
 
-func (h *Handler) channelThreadTargetAgents(ctx context.Context, workspaceID, channelID, rootMessageID string) []db.Agent {
-	agents := h.channelThreadAgentsFromQuery(ctx, `
-		SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.visibility, a.status,
-		       a.max_concurrent_tasks, a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id,
-		       a.instructions, a.archived_at, a.display_name
-		FROM thread_participant tp
-		JOIN agent a ON tp.member_type = 'agent' AND a.id = tp.member_id
-		JOIN channel_member cm ON cm.channel_id = $1 AND cm.workspace_id = $2 AND cm.member_type = 'agent' AND cm.member_id = a.id
-		WHERE tp.root_message_id = $3
-		  AND tp.role = 'facilitator'
-		  AND tp.wake_state = 'active'
-		  AND a.archived_at IS NULL
-		ORDER BY tp.updated_at DESC
-		LIMIT 1`, parseUUID(channelID), parseUUID(workspaceID), parseUUID(rootMessageID))
-	if len(agents) > 0 {
-		return agents
-	}
-	agents = h.channelThreadAgentsFromQuery(ctx, `
-		SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.visibility, a.status,
-		       a.max_concurrent_tasks, a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id,
-		       a.instructions, a.archived_at, a.display_name
-		FROM channel_message m
-		JOIN agent a ON m.author_type = 'agent' AND a.id = m.author_id
-		JOIN channel_member cm ON cm.channel_id = m.channel_id AND cm.workspace_id = m.workspace_id AND cm.member_type = 'agent' AND cm.member_id = a.id
-		WHERE m.id = $3
-		  AND m.channel_id = $1
-		  AND m.workspace_id = $2
-		  AND a.archived_at IS NULL
-		LIMIT 1`, parseUUID(channelID), parseUUID(workspaceID), parseUUID(rootMessageID))
-	if len(agents) > 0 {
-		return agents
-	}
-	agents = h.channelThreadAgentsFromQuery(ctx, `
-		SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.visibility, a.status,
-		       a.max_concurrent_tasks, a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id,
-		       a.instructions, a.archived_at, a.display_name
-		FROM channel_message m
-		JOIN agent a ON m.author_type = 'agent' AND a.id = m.author_id
-		JOIN channel_member cm ON cm.channel_id = m.channel_id AND cm.workspace_id = m.workspace_id AND cm.member_type = 'agent' AND cm.member_id = a.id
-		WHERE m.channel_id = $1
-		  AND m.workspace_id = $2
-		  AND m.thread_root_message_id = $3
-		  AND a.archived_at IS NULL
-		ORDER BY m.seq DESC
-		LIMIT 1`, parseUUID(channelID), parseUUID(workspaceID), parseUUID(rootMessageID))
-	if len(agents) > 0 {
-		return agents
-	}
-	agents = h.channelThreadRootMentionedAgents(ctx, workspaceID, channelID, rootMessageID)
-	if len(agents) > 0 {
-		return agents
-	}
+func (h *Handler) channelThreadFollowerAgents(ctx context.Context, workspaceID, channelID, rootMessageID string) []db.Agent {
 	return h.channelThreadAgentsFromQuery(ctx, `
 		SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.visibility, a.status,
 		       a.max_concurrent_tasks, a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id,
 		       a.instructions, a.archived_at, a.display_name
-		FROM chat_message cmg
-		JOIN channel_agent_session cas ON cas.chat_session_id = cmg.chat_session_id
-		JOIN agent a ON a.id = cas.agent_id
-		JOIN channel_member cm ON cm.channel_id = cas.channel_id AND cm.workspace_id = a.workspace_id AND cm.member_type = 'agent' AND cm.member_id = a.id
-		WHERE cas.channel_id = $1
-		  AND a.workspace_id = $2
-		  AND cmg.channel_thread_root_message_id = $3
+		FROM thread_participant tp
+		JOIN channel_message root ON root.id = tp.root_message_id
+		JOIN agent a ON tp.member_type = 'agent' AND a.id = tp.member_id
+		JOIN channel_member cm ON cm.channel_id = root.channel_id AND cm.workspace_id = root.workspace_id AND cm.member_type = 'agent' AND cm.member_id = a.id
+		WHERE tp.root_message_id = $3
+		  AND root.channel_id = $1
+		  AND root.workspace_id = $2
+		  AND tp.followed_at IS NOT NULL
+		  AND tp.wake_state = 'active'
 		  AND a.archived_at IS NULL
-		ORDER BY cmg.created_at DESC, cmg.id DESC
-		LIMIT 1`, parseUUID(channelID), parseUUID(workspaceID), parseUUID(rootMessageID))
-}
-
-func (h *Handler) channelThreadRootMentionedAgents(ctx context.Context, workspaceID, channelID, rootMessageID string) []db.Agent {
-	var content string
-	if err := h.DB.QueryRow(ctx, `
-		SELECT content
-		FROM channel_message
-		WHERE id = $3 AND channel_id = $1 AND workspace_id = $2`, parseUUID(channelID), parseUUID(workspaceID), parseUUID(rootMessageID)).Scan(&content); err != nil {
-		return nil
-	}
-	return h.channelMentionedAgents(ctx, workspaceID, channelID, content)
+		ORDER BY tp.updated_at DESC, a.id ASC`, parseUUID(channelID), parseUUID(workspaceID), parseUUID(rootMessageID))
 }
 
 func (h *Handler) channelThreadAgentsFromQuery(ctx context.Context, query string, args ...any) []db.Agent {
@@ -3790,10 +3790,17 @@ func (h *Handler) dispatchChannelAmbientObservation(ctx context.Context, ch Chan
 }
 
 func (h *Handler) dispatchChannelAmbientDelivery(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse) {
+	h.dispatchChannelAmbientDeliveryExcept(ctx, ch, trigger, nil)
+}
+
+func (h *Handler) dispatchChannelAmbientDeliveryExcept(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, skipAgentIDs map[string]struct{}) {
 	if trigger.Type == "agent" {
 		return
 	}
 	for _, agent := range h.channelAgentMembers(ctx, ch.WorkspaceID, ch.ID) {
+		if _, skip := skipAgentIDs[uuidToString(agent.ID)]; skip {
+			continue
+		}
 		if h.isChannelAgentMuted(ctx, parseUUID(ch.ID), parseUUID(ch.WorkspaceID), agent.ID) {
 			continue
 		}
@@ -4197,12 +4204,31 @@ func (h *Handler) ensureChannelAgentSessionWithDB(ctx context.Context, q *db.Que
 	if err != nil {
 		return db.ChatSession{}, err
 	}
-	_, err = exec.Exec(ctx, `
+	tag, err := exec.Exec(ctx, `
 		INSERT INTO channel_agent_session (channel_id, agent_id, chat_session_id)
 		VALUES ($1, $2, $3)
 		ON CONFLICT (channel_id, agent_id) DO NOTHING`, parseUUID(ch.ID), agentID, session.ID)
 	if err != nil {
 		return db.ChatSession{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		// A concurrent transaction won the unique (channel_id, agent_id)
+		// insert. Do not return the orphan session we just created: callers
+		// would attach prompts to a session that is not linked to the channel.
+		if err := q.DeleteChatSession(ctx, db.DeleteChatSessionParams{
+			ID:          session.ID,
+			WorkspaceID: parseUUID(ch.WorkspaceID),
+		}); err != nil {
+			return db.ChatSession{}, fmt.Errorf("delete losing channel session: %w", err)
+		}
+		if err := exec.QueryRow(ctx, `
+			SELECT chat_session_id
+			FROM channel_agent_session
+			WHERE channel_id = $1 AND agent_id = $2
+		`, parseUUID(ch.ID), agentID).Scan(&sessionID); err != nil {
+			return db.ChatSession{}, fmt.Errorf("load winning channel session: %w", err)
+		}
+		return q.GetChatSession(ctx, sessionID)
 	}
 	return session, nil
 }
@@ -4295,6 +4321,9 @@ func (h *Handler) handleChannelChatDone(e events.Event) {
 	if err != nil {
 		slog.Warn("channel bridge: insert agent reply failed", "chat_session_id", payload.ChatSessionID, "error", err)
 		return
+	}
+	if threadRootMessageID.Valid {
+		h.followChannelThreadAgent(ctx, channelID, threadRootMessageID, agentID)
 	}
 	_, _ = h.DB.Exec(ctx, `UPDATE channel SET updated_at = now() WHERE id = $1`, channelID)
 	h.clearDMHiddenForChannelMembers(ctx, uuidToString(workspaceID), channelID)

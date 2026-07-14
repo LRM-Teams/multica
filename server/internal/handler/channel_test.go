@@ -731,6 +731,14 @@ func TestChannelAgentInboxDrainAckDirectedMention(t *testing.T) {
 	if !found {
 		t.Fatal("channel not found after seed")
 	}
+	var queuedLifecycleEvents []events.Event
+	var dispatchedLifecycleEvents []events.Event
+	testHandler.Bus.Subscribe(protocol.EventTaskQueued, func(e events.Event) {
+		queuedLifecycleEvents = append(queuedLifecycleEvents, e)
+	})
+	testHandler.Bus.Subscribe(protocol.EventTaskDispatch, func(e events.Event) {
+		dispatchedLifecycleEvents = append(dispatchedLifecycleEvents, e)
+	})
 
 	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "setup context before mention", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-drain"), 0); err != nil {
 		t.Fatalf("insert setup message: %v", err)
@@ -759,6 +767,70 @@ func TestChannelAgentInboxDrainAckDirectedMention(t *testing.T) {
 	if got.AgentID != agentID || got.Reason != "mention" || !got.RequiresWake || got.SeqTo != trigger.Seq {
 		t.Fatalf("drained event = %+v, want mention wake for agent %s seq %d", got, agentID, trigger.Seq)
 	}
+	inboxStatuses := func() []string {
+		t.Helper()
+		rows, err := testPool.Query(ctx, `
+			SELECT COALESCE(details->>'status', '')
+			FROM agent_activity_event
+			WHERE workspace_id = $1
+			  AND agent_id = $2
+			  AND event_type = $3
+			  AND details->>'inbox_event_id' = $4
+			ORDER BY created_at ASC, id ASC`, testWorkspaceID, agentID, agentInboxStatusChangedEventType, got.ID)
+		if err != nil {
+			t.Fatalf("query inbox status activity: %v", err)
+		}
+		defer rows.Close()
+		var out []string
+		for rows.Next() {
+			var status string
+			if err := rows.Scan(&status); err != nil {
+				t.Fatalf("scan inbox status activity: %v", err)
+			}
+			out = append(out, status)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("inbox status rows: %v", err)
+		}
+		return out
+	}
+	assertAgentInboxTaskLifecycleEvent := func(eventType string, lifecycleEvents []events.Event, status string) {
+		t.Helper()
+		for _, event := range lifecycleEvents {
+			if event.TaskID != got.ID {
+				continue
+			}
+			if event.WorkspaceID != testWorkspaceID || event.ActorType != "system" {
+				t.Fatalf("%s lifecycle event = %+v, want workspace %s system actor", eventType, event, testWorkspaceID)
+			}
+			payload, ok := event.Payload.(map[string]any)
+			if !ok {
+				t.Fatalf("%s lifecycle payload type = %T, want map", eventType, event.Payload)
+			}
+			if payload["task_id"] != got.ID || payload["inbox_event_id"] != got.ID || payload["agent_id"] != agentID || payload["status"] != status || payload["chat_session_id"] != got.ChatSessionID {
+				t.Fatalf("%s lifecycle payload = %#v, want inbox event %s agent %s status %s chat %s", eventType, payload, got.ID, agentID, status, got.ChatSessionID)
+			}
+			return
+		}
+		t.Fatalf("missing %s lifecycle event for inbox event %s; got queued=%d dispatched=%d", eventType, got.ID, len(queuedLifecycleEvents), len(dispatchedLifecycleEvents))
+	}
+	assertAgentInboxTaskLifecycleEvent(protocol.EventTaskQueued, queuedLifecycleEvents, "queued")
+	assertAgentInboxTaskLifecycleEvent(protocol.EventTaskDispatch, dispatchedLifecycleEvents, "running")
+	statusEvent := db.AgentInboxEvent{
+		ID:              parseUUID(got.ID),
+		WorkspaceID:     parseUUID(testWorkspaceID),
+		AgentID:         parseUUID(agentID),
+		ChannelID:       parseUUID(channelID),
+		SourceMessageID: parseUUID(trigger.ID),
+		RequiresWake:    true,
+	}
+	if statuses := inboxStatuses(); len(statuses) != 0 {
+		t.Fatalf("status activity after drain = %+v, want no generic working row", statuses)
+	}
+	testHandler.recordAgentInboxStatusActivity(ctx, statusEvent, parseUUID(runtimeID), parseUUID(got.DeliveryID), agentInboxStatusActivityWorking)
+	if statuses := inboxStatuses(); len(statuses) != 0 {
+		t.Fatalf("manual working status activity = %+v, want no generic working row", statuses)
+	}
 
 	partialAckReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+got.ID+"/ack", AckAgentInboxEventRequest{
 		DeliveryID:  got.DeliveryID,
@@ -782,6 +854,13 @@ func TestChannelAgentInboxDrainAckDirectedMention(t *testing.T) {
 	testHandler.AckAgentInboxEvent(ackRec, ackReq)
 	if ackRec.Code != http.StatusOK {
 		t.Fatalf("ack inbox event: status=%d body=%s", ackRec.Code, ackRec.Body.String())
+	}
+	if statuses := inboxStatuses(); len(statuses) != 1 || statuses[0] != agentInboxStatusActivityIdle {
+		t.Fatalf("status activity after ack = %+v, want [idle]", statuses)
+	}
+	testHandler.recordAgentInboxStatusActivity(ctx, statusEvent, parseUUID(runtimeID), parseUUID(got.DeliveryID), agentInboxStatusActivityIdle)
+	if statuses := inboxStatuses(); len(statuses) != 1 || statuses[0] != agentInboxStatusActivityIdle {
+		t.Fatalf("duplicate idle status activity = %+v, want one idle transition", statuses)
 	}
 
 	var eventStatus string
@@ -963,6 +1042,33 @@ func TestChannelAgentInboxCompleteDirectedMentionWritesReply(t *testing.T) {
 	if terminalOutcome != "replied" || terminalDeliveryID != got.DeliveryID || retryable || !terminalAt.Valid {
 		t.Fatalf("inbox completion terminal projection = outcome:%q delivery:%q retryable:%v terminal_at:%v, want replied/%s/non-retryable/timestamp", terminalOutcome, terminalDeliveryID, retryable, terminalAt.Valid, got.DeliveryID)
 	}
+
+	statusRows, err := testPool.Query(ctx, `
+		SELECT COALESCE(details->>'status', '')
+		FROM agent_activity_event
+		WHERE workspace_id = $1
+		  AND agent_id = $2
+		  AND event_type = $3
+		  AND details->>'inbox_event_id' = $4
+		ORDER BY created_at ASC, id ASC`, testWorkspaceID, agentID, agentInboxStatusChangedEventType, got.ID)
+	if err != nil {
+		t.Fatalf("query completion status activity: %v", err)
+	}
+	defer statusRows.Close()
+	var statuses []string
+	for statusRows.Next() {
+		var status string
+		if err := statusRows.Scan(&status); err != nil {
+			t.Fatalf("scan completion status activity: %v", err)
+		}
+		statuses = append(statuses, status)
+	}
+	if err := statusRows.Err(); err != nil {
+		t.Fatalf("completion status activity rows: %v", err)
+	}
+	if len(statuses) != 1 || statuses[0] != agentInboxStatusActivityIdle {
+		t.Fatalf("completion status activity = %+v, want [idle]", statuses)
+	}
 }
 
 func TestChannelAgentInboxMessagesRecordRuntimeTrajectory(t *testing.T) {
@@ -1005,6 +1111,13 @@ func TestChannelAgentInboxMessagesRecordRuntimeTrajectory(t *testing.T) {
 		t.Fatalf("drain returned %d events, want 1: %s", len(drainResp.Events), drainRec.Body.String())
 	}
 	got := drainResp.Events[0]
+	var liveTaskMessages []protocol.TaskMessagePayload
+	testHandler.Bus.Subscribe(protocol.EventTaskMessage, func(e events.Event) {
+		payload, ok := e.Payload.(protocol.TaskMessagePayload)
+		if ok && payload.TaskID == got.ID {
+			liveTaskMessages = append(liveTaskMessages, payload)
+		}
+	})
 
 	messagesReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+got.ID+"/messages", ReportAgentInboxMessagesRequest{
 		DeliveryID: got.DeliveryID,
@@ -1017,6 +1130,7 @@ func TestChannelAgentInboxMessagesRecordRuntimeTrajectory(t *testing.T) {
 			{Seq: 5, Type: "text", Content: "runtime stdout fallback should be diagnostic"},
 			{Seq: 6, Type: "tool_use", Tool: "running", Input: map[string]any{"path": "/tmp/status_only.txt"}},
 			{Seq: 7, Type: "tool_use", Tool: "write_file", Input: map[string]any{"path": "/Users/frank/Code/multica/server/internal/handler/channel_test.go"}},
+			{Seq: 8, Type: "tool_use", Tool: "read", Input: map[string]any{"filePath": "/tmp/test.go", "basePath": "/repo"}},
 		},
 	}, testWorkspaceID, "agent-inbox-activity-daemon")
 	messagesReq = withURLParam(messagesReq, "eventId", got.ID)
@@ -1024,6 +1138,18 @@ func TestChannelAgentInboxMessagesRecordRuntimeTrajectory(t *testing.T) {
 	testHandler.ReportAgentInboxMessages(messagesRec, messagesReq)
 	if messagesRec.Code != http.StatusOK {
 		t.Fatalf("report inbox messages: status=%d body=%s", messagesRec.Code, messagesRec.Body.String())
+	}
+	if len(liveTaskMessages) != 4 {
+		t.Fatalf("live task messages = %+v, want four user-facing mapped messages", liveTaskMessages)
+	}
+	if liveTaskMessages[0].Seq != 1 || liveTaskMessages[0].Type != "thinking" || liveTaskMessages[0].Content != "I should create the requested file." {
+		t.Fatalf("live thinking payload = %+v", liveTaskMessages[0])
+	}
+	if liveTaskMessages[1].Seq != 2 || liveTaskMessages[1].Type != "tool_use" || liveTaskMessages[1].Tool != "bash" {
+		t.Fatalf("live terminal payload = %+v, want canonical bash tool_use", liveTaskMessages[1])
+	}
+	if liveTaskMessages[2].Seq != 7 || liveTaskMessages[2].Tool != "write_file" || liveTaskMessages[3].Seq != 8 || liveTaskMessages[3].Tool != "read_file" {
+		t.Fatalf("live file tool payloads = %+v, want write/read file without unmapped status tool", liveTaskMessages)
 	}
 
 	rows, err := testPool.Query(ctx, `
@@ -1062,8 +1188,8 @@ func TestChannelAgentInboxMessagesRecordRuntimeTrajectory(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatalf("activity rows error: %v", err)
 	}
-	if len(activity) != 7 {
-		t.Fatalf("activity rows = %+v, want 7", activity)
+	if len(activity) != 8 {
+		t.Fatalf("activity rows = %+v, want 8", activity)
 	}
 	if activity[0].kind != activityKindThinking || activity[0].visibility != "user_facing" {
 		t.Fatalf("thinking row = %+v, want user-facing thinking", activity[0])
@@ -1101,6 +1227,12 @@ func TestChannelAgentInboxMessagesRecordRuntimeTrajectory(t *testing.T) {
 	writeTarget, _ := activity[6].details["tool_target"].(string)
 	if activity[6].details["tool"] != "write_file" || !strings.HasSuffix(writeTarget, "/Code/multica/server/internal/handler/channel_test.go") || activity[6].details["summary_kind"] != "file_path" {
 		t.Fatalf("write file details = %+v, want redacted source-backed file path", activity[6].details)
+	}
+	if activity[7].kind != activityKindToolCall || activity[7].eventType != "tool_use" || activity[7].visibility != "user_facing" {
+		t.Fatalf("read file row = %+v, want user-facing tool_use", activity[7])
+	}
+	if activity[7].details["tool"] != "read_file" || activity[7].details["raw_tool"] != "read" || activity[7].details["tool_target"] != "/tmp/test.go" || activity[7].details["summary_kind"] != "file_path" || activity[7].details["command"] != nil || activity[7].details["path"] != "/tmp/test.go" || activity[7].details["scope"] != "/repo" {
+		t.Fatalf("read file details = %+v, want read source facts without invented command", activity[7].details)
 	}
 }
 
@@ -4033,8 +4165,8 @@ func TestChannelThreadReadModelExposesParticipantsAndPendingWake(t *testing.T) {
 		t.Fatalf("participants missing root user: %+v", gotRoot.ThreadParticipants)
 	}
 	agentParticipant, ok := participants["agent:"+agentID]
-	if !ok || !agentParticipant.Followed {
-		t.Fatalf("participants missing followed agent: %+v", gotRoot.ThreadParticipants)
+	if !ok || agentParticipant.Followed {
+		t.Fatalf("participants missing pierced non-following agent: %+v", gotRoot.ThreadParticipants)
 	}
 	if len(gotRoot.ThreadWakeAnnotations) != 1 {
 		t.Fatalf("wake annotations = %+v, want one pending agent", gotRoot.ThreadWakeAnnotations)
@@ -4229,6 +4361,31 @@ func TestChannelActiveTasksSurfacesInboxTerminalOutcomes(t *testing.T) {
 		t.Fatalf("active inbox metadata = %+v, want inbox/source ids without terminal outcome", got)
 	}
 
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_inbox_event
+		SET status = 'acked', acked_at = now(), updated_at = now()
+		WHERE id = $1`, noReplyEventID); err != nil {
+		t.Fatalf("ack inbox event without terminal outcome: %v", err)
+	}
+	rec = httptest.NewRecorder()
+	testHandler.ListChannelActiveTasks(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list active tasks after legacy ack: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	resp = ChannelActiveTasksResponse{}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode active tasks after legacy ack: %v", err)
+	}
+	if len(resp.Tasks) != 0 {
+		t.Fatalf("active tasks after legacy ack = %+v, want no stale working row", resp.Tasks)
+	}
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_inbox_event
+		SET status = 'pending', acked_at = NULL, updated_at = now()
+		WHERE id = $1`, noReplyEventID); err != nil {
+		t.Fatalf("restore pending inbox event: %v", err)
+	}
+
 	noReplyDeliveryID := setAgentInboxTerminalOutcomeForTest(t, noReplyEventID, "no_reply", false)
 	rec = httptest.NewRecorder()
 	testHandler.ListChannelActiveTasks(rec, req)
@@ -4347,7 +4504,7 @@ func TestChannelThreadReplyWithoutMentionCreatesAmbientInboxOnly(t *testing.T) {
 	}
 }
 
-func TestChannelThreadPlainReplyCreatesAmbientForChannelAgents(t *testing.T) {
+func TestChannelThreadPlainReplyWakesAgentFollower(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -4368,6 +4525,7 @@ func TestChannelThreadPlainReplyCreatesAmbientForChannelAgents(t *testing.T) {
 	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "agent", parseUUID(participantID), "Thread Fullstack", "agent answer", "multica", nil, pgtype.UUID{}, parseUUID(root.ID), strPtr("followup-agent-root"), 1); err != nil {
 		t.Fatalf("insert agent reply: %v", err)
 	}
+	testHandler.followChannelThreadAgent(ctx, parseUUID(channelID), parseUUID(root.ID), parseUUID(participantID))
 	followup, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "hi", "multica", nil, pgtype.UUID{}, parseUUID(root.ID), strPtr("followup-agent-root"), 0)
 	if err != nil {
 		t.Fatalf("insert follow-up: %v", err)
@@ -4379,11 +4537,13 @@ func TestChannelThreadPlainReplyCreatesAmbientForChannelAgents(t *testing.T) {
 
 	testHandler.dispatchChannelThreadReplyMentions(ctx, ch, followup, parseUUID(testUserID))
 
-	assertChannelAgentInboxEventCounts(t, channelID, participantID, 1, 0)
+	assertChannelAgentInboxEventCounts(t, channelID, participantID, 0, 1)
+	assertChannelAgentWakeReason(t, channelID, participantID, followup.ID, "thread_reply")
+	assertChannelAgentWakeActivity(t, participantID, followup.ID, "thread_reply")
 	assertChannelAgentInboxEventCounts(t, channelID, bystanderID, 1, 0)
 }
 
-func TestChannelThreadPlainReplyAfterRootMentionCreatesAmbientOnly(t *testing.T) {
+func TestChannelThreadPlainReplyAfterRootMentionWithoutFollowCreatesAmbientOnly(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -4473,6 +4633,44 @@ func assertChannelAgentInboxEventCounts(t *testing.T, channelID, agentID string,
 	}
 	if ambientEvents != wantAmbient || wakeEvents != wantWake {
 		t.Fatalf("channel agent inbox events for %s = ambient:%d wake:%d, want %d/%d", agentID, ambientEvents, wakeEvents, wantAmbient, wantWake)
+	}
+}
+
+func assertChannelAgentWakeReason(t *testing.T, channelID, agentID, sourceMessageID, wantReason string) {
+	t.Helper()
+	ctx := context.Background()
+	var reason string
+	var requiresWake bool
+	var priority int32
+	if err := testPool.QueryRow(ctx, `
+		SELECT reason, requires_wake, priority
+		FROM agent_inbox_event
+		WHERE channel_id = $1 AND agent_id = $2 AND source_message_id = $3
+		ORDER BY created_at DESC
+		LIMIT 1`, channelID, agentID, sourceMessageID).Scan(&reason, &requiresWake, &priority); err != nil {
+		t.Fatalf("load wake inbox event: %v", err)
+	}
+	if reason != wantReason || !requiresWake || priority != 10 {
+		t.Fatalf("wake inbox event = reason:%q requires_wake:%v priority:%d, want %q/true/10", reason, requiresWake, priority, wantReason)
+	}
+}
+
+func assertChannelAgentWakeActivity(t *testing.T, agentID, sourceMessageID, wantReason string) {
+	t.Helper()
+	ctx := context.Background()
+	var eventKind, eventType, reasonCode string
+	if err := testPool.QueryRow(ctx, `
+		SELECT event_kind, event_type, reason_code
+		FROM agent_activity_event
+		WHERE agent_id = $1
+		  AND reason_code = $2
+		  AND details->>'trigger_message_id' = $3
+		ORDER BY created_at DESC
+		LIMIT 1`, agentID, wantReason, sourceMessageID).Scan(&eventKind, &eventType, &reasonCode); err != nil {
+		t.Fatalf("load wake activity event: %v", err)
+	}
+	if eventKind != activityKindWakeAttempt || eventType != "task_dispatched" || reasonCode != wantReason {
+		t.Fatalf("wake activity = kind:%q type:%q reason:%q, want wake_attempt/task_dispatched/%q", eventKind, eventType, reasonCode, wantReason)
 	}
 }
 
@@ -5036,8 +5234,8 @@ func TestChannelThreadMentionedAgentReplyStaysInThread(t *testing.T) {
 		  AND wake_state = 'active'`, root.ID, agentID).Scan(&agentParticipants); err != nil {
 		t.Fatalf("count agent thread participant: %v", err)
 	}
-	if agentParticipants != 1 {
-		t.Fatalf("agent thread participant count=%d, want 1", agentParticipants)
+	if agentParticipants != 0 {
+		t.Fatalf("agent thread participant after mention count=%d, want 0", agentParticipants)
 	}
 
 	var sessionID string
@@ -5073,6 +5271,19 @@ func TestChannelThreadMentionedAgentReplyStaysInThread(t *testing.T) {
 	}
 	if replyRoot != root.ID {
 		t.Fatalf("agent reply thread root = %q, want %s", replyRoot, root.ID)
+	}
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM thread_participant
+		WHERE root_message_id = $1
+		  AND member_type = 'agent'
+		  AND member_id = $2
+		  AND followed_at IS NOT NULL
+		  AND wake_state = 'active'`, root.ID, agentID).Scan(&agentParticipants); err != nil {
+		t.Fatalf("count agent thread participant after post: %v", err)
+	}
+	if agentParticipants != 1 {
+		t.Fatalf("agent thread participant after post count=%d, want 1", agentParticipants)
 	}
 }
 

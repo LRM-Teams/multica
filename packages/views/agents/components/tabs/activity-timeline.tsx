@@ -14,9 +14,17 @@ import {
   isNarrativeActivityEvent,
 } from "./activity-event";
 
+// All dots are STATIC — no `animate-pulse` (#404 follow-up). A perpetually
+// pulsing dot made settled/historical rows look like they were still loading
+// live; real "is it live" now comes from the header/hover latest-state (#521),
+// not a blinking dot. Command rows use raft's solid amber; others by tone.
 const TONE_DOT: Record<ActivityDotTone, string> = {
   neutral: "bg-muted-foreground/40",
-  active: "bg-brand animate-pulse",
+  active: "bg-brand",
+  // Command rows (any `Running command`) get raft's solid amber dot — type-based,
+  // NOT status-based: a settled/idle command still shows amber (raft parity,
+  // #404), so it never reads as a grey "idle" row.
+  running: "bg-[#F5B301]",
   waiting: "bg-warning",
   failure: "bg-destructive",
 };
@@ -46,17 +54,20 @@ function ToolTargetPath({ value }: { value: string }) {
   );
 }
 
-// A shell command's subtext (#v0 照实显示 · Frank "命令看不全"). The BE clip
-// (`tool_target`) renders as a plain single-line truncation — NEVER the path
-// treatment, which middle-ellipsises on the last `/` and mangles a command that
-// merely contains a slash. The full redacted command (`entries[].command`, via
-// `presentation.subtextFull`) is reachable on hover (`title`) and copyable. The
-// compact Profile Recent surface stays non-interactive (title only, no copy).
-function CommandSubtext({
+// A command row (#404): the `Running command` label + the real command render as
+// ONE full-width hanging block. The label opens the first line; the command
+// follows and WRAPS to the full content-column width — its wrapped lines align to
+// the block's left edge (hanging), not squished into the narrow column right of
+// the label (which left a big empty gap, Frank's "空位"). Two lines then ellipsis
+// (raft parity); full redacted command on hover (`title`) + copy. The compact
+// Profile Recent surface stays non-interactive (title only, no copy).
+function CommandRow({
+  label,
   inline,
   full,
   compact,
 }: {
+  label: string;
   inline: string;
   full?: string;
   compact: boolean;
@@ -71,10 +82,14 @@ function CommandSubtext({
     }
   };
   return (
-    <span className="group/cmd flex min-w-0 items-baseline gap-1.5">
-      <span title={complete} className="truncate font-mono text-xs text-muted-foreground">
-        {inline}
-      </span>
+    <div className="group/cmd relative min-w-0 flex-1">
+      <div
+        title={complete}
+        className="line-clamp-2 break-all pr-5 text-sm leading-[1.45] text-foreground"
+      >
+        <span>{label} </span>
+        <span className="font-mono text-xs text-muted-foreground">{inline}</span>
+      </div>
       {!compact && (
         <button
           type="button"
@@ -82,12 +97,12 @@ function CommandSubtext({
           aria-label={t(($) =>
             copied ? $.tab_body.activity.command_copied : $.tab_body.activity.copy_command,
           )}
-          className="shrink-0 text-muted-foreground/50 opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover/cmd:opacity-100"
+          className="absolute right-0 top-0 text-muted-foreground/50 opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover/cmd:opacity-100"
         >
           {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
         </button>
       )}
-    </span>
+    </div>
   );
 }
 
@@ -122,16 +137,13 @@ function ActivityRow({
     !!subtext &&
     !presentation.subtextKey &&
     (event.activity_kind === "thinking" || event.activity_kind === "text");
-  // Route the tool subtext by its kind (#v0 照实显示, `activity-event.ts`
-  // classifies): a file tool's target is a PATH (basename-preserving
-  // middle-ellipsis, #484/#385); a shell tool's target is a COMMAND (plain clip
-  // + full redacted command on hover/copy — never the path treatment, which
-  // mangled commands containing `/`); everything else is a plain truncate.
+  // Route the non-command tool subtext by its kind (#v0 照实显示): a file tool's
+  // target is a PATH (basename-preserving middle-ellipsis, #484/#385); everything
+  // else is a plain truncate. The COMMAND kind is handled by `CommandRow` in the
+  // render below (its own full-width hanging layout, #404).
   const subtextNode = subtext ? (
     presentation.subtextKind === "path" ? (
       <ToolTargetPath value={subtext} />
-    ) : presentation.subtextKind === "command" ? (
-      <CommandSubtext inline={subtext} full={presentation.subtextFull} compact={compact} />
     ) : (
       <span className="truncate text-xs text-muted-foreground">{subtext}</span>
     )
@@ -166,6 +178,14 @@ function ActivityRow({
             </button>
           )}
         </div>
+      ) : presentation.subtextKind === "command" && subtext ? (
+        // Command: label + command as one full-width hanging block (#404).
+        <CommandRow
+          label={label}
+          inline={subtext}
+          full={presentation.subtextFull}
+          compact={compact}
+        />
       ) : (
         <div className="flex min-w-0 items-baseline gap-2">
           <span className="shrink-0 text-sm text-foreground">{label}</span>

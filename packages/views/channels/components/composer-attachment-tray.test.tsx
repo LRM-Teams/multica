@@ -120,4 +120,86 @@ describe("ComposerAttachmentTray", () => {
       "uploading",
     );
   });
+
+  it("is a single horizontal strip (no column stack, no wrap)", () => {
+    const pending: PendingAttachment[] = [
+      item({
+        localId: "f1",
+        status: "ready",
+        filename: "cleanup-grok-xy-bridge.sh",
+        contentType: "application/x-sh",
+        attachmentId: "a1",
+        previewUrl: undefined,
+      }),
+      item({
+        localId: "f2",
+        status: "ready",
+        filename: "cleanup-grok-xy-bridge-2.sh",
+        contentType: "text/x-shellscript",
+        attachmentId: "a2",
+        previewUrl: undefined,
+      }),
+      item({
+        localId: "img-1",
+        status: "ready",
+        filename: "shot.png",
+        contentType: "image/png",
+        attachmentId: "a3",
+        previewUrl: "https://cdn.example/shot.png",
+      }),
+    ];
+
+    render(
+      <ComposerAttachmentTray pending={pending} onRemove={vi.fn()} onRetry={vi.fn()} />,
+    );
+
+    const tray = screen.getByTestId("composer-attachment-tray");
+    expect(tray.className).toMatch(/\bflex-row\b/);
+    expect(tray.className).toMatch(/\bflex-nowrap\b/);
+    expect(tray.className).toMatch(/\boverflow-x-auto\b/);
+    // Must not use column layout or wrap (both produce vertical stacks).
+    expect(tray.className).not.toMatch(/\bflex-col\b/);
+    expect(tray.className).not.toMatch(/\bflex-wrap\b/);
+
+    for (const id of ["f1", "f2", "img-1"]) {
+      const el = screen.getByTestId(`composer-tray-item-${id}`);
+      expect(el.className).toMatch(/\bshrink-0\b/);
+      expect(el.className).not.toMatch(/\bw-full\b/);
+    }
+
+    expect(screen.getByTestId("composer-tray-item-f1")).toHaveAttribute(
+      "data-kind",
+      "file",
+    );
+    expect(screen.getByTestId("composer-tray-item-img-1")).toHaveAttribute(
+      "data-kind",
+      "image",
+    );
+  });
+
+  it("on mobile web keeps remove visible without hover (touch)", () => {
+    render(
+      <ComposerAttachmentTray
+        isMobile
+        pending={[
+          item({
+            localId: "img-m",
+            status: "ready",
+            filename: "phone.png",
+            attachmentId: "am",
+            previewUrl: "https://cdn.example/phone.png",
+          }),
+        ]}
+        onRemove={vi.fn()}
+        onRetry={vi.fn()}
+      />,
+    );
+
+    const tray = screen.getByTestId("composer-attachment-tray");
+    expect(tray).toHaveAttribute("data-mobile", "true");
+    const remove = screen.getByRole("button", { name: "Remove phone.png" });
+    // Must not rely on group-hover opacity-0 for the only remove control.
+    expect(remove.className).toMatch(/\bopacity-100\b/);
+    expect(remove.className).not.toMatch(/\bopacity-0\b/);
+  });
 });

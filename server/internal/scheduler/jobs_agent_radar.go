@@ -104,6 +104,24 @@ func makeAgentRadarScheduleHandler(pool *pgxpool.Pool, taskSvc *service.TaskServ
 		if err != nil {
 			return HandlerResult{}, err
 		}
+		// Work-graph handoffs are the workspace supervisor's speech path.
+		// Keep identity binding and repair work above, but never spend tokens on
+		// the legacy whole-workspace scheduled Radar prompt.
+		slog.Info("workspace radar: skipping scheduled LLM enqueue; workgraph handoffs are active")
+		return HandlerResult{
+			Result: map[string]any{
+				"skipped":                      true,
+				"reason":                       "workgraph_handoffs",
+				"repaired":                     unauthorizedRuns + repairedBindings + terminalRepaired + staleDispatchRepaired,
+				"repaired_unauthorized":        unauthorizedRuns,
+				"repaired_bindings":            repairedBindings,
+				"cancelled_unauthorized_tasks": len(unauthorizedTasks),
+				"replayed_completed":           replayedCompleted,
+				"replay_failed":                replayFailed,
+				"repaired_terminal":            terminalRepaired,
+				"repaired_stale_dispatched":    staleDispatchRepaired,
+			},
+		}, nil
 		candidates, err := listRadarCandidates(ctx, pool)
 		if err != nil {
 			return HandlerResult{}, err

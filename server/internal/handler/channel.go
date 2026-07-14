@@ -3061,10 +3061,59 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 		// without an @-mention. Human↔human DMs have no agent member → no-op.
 		h.dispatchDMAgentReply(r.Context(), ch, msg, parseUUID(userID))
 	} else {
+		h.ingestWendyHumanGroupMessage(r.Context(), ch, msg)
 		h.dispatchChannelMessageToAgents(r.Context(), ch, msg, parseUUID(userID))
 	}
 	h.sendChannelMessageToFeishu(r.Context(), ch, authorName, content)
 	writeJSON(w, http.StatusCreated, msg)
+}
+
+func (h *Handler) ingestWendyHumanGroupMessage(ctx context.Context, ch ChannelResponse, msg ChannelMessageResponse) {
+	if h.WorkGraph == nil || ch.Kind != "group" {
+		return
+	}
+	mentions := util.ParseMentions(msg.Content)
+	agentIDs := make([]pgtype.UUID, 0, len(mentions))
+	for _, mention := range mentions {
+		if mention.Type == "agent" {
+			agentIDs = append(agentIDs, parseUUID(mention.ID))
+		}
+	}
+	if len(agentIDs) == 0 {
+		return
+	}
+	content := strings.ToLower(msg.Content)
+	if channelMessageSignalsRework(content) {
+		if err := h.WorkGraph.HandleHumanRework(ctx, parseUUID(ch.WorkspaceID), parseUUID(ch.ID), agentIDs); err != nil {
+			slog.Warn("ingest Wendy rework signal failed", "channel_id", ch.ID, "message_id", msg.ID, "error", err)
+		}
+		return
+	}
+	if channelMessageSignalsCommitment(content) {
+		for _, agentID := range agentIDs {
+			if err := h.WorkGraph.UpsertChatCommitment(ctx, parseUUID(ch.WorkspaceID), parseUUID(ch.ID), agentID, strings.TrimSpace(msg.Content)); err != nil {
+				slog.Warn("ingest Wendy chat commitment failed", "channel_id", ch.ID, "message_id", msg.ID, "error", err)
+			}
+		}
+	}
+}
+
+func channelMessageSignalsRework(content string) bool {
+	for _, signal := range []string{"修改", "返工", "重做", "不对", "先别做", "停下", "stop", "rework", "fix"} {
+		if strings.Contains(content, signal) {
+			return true
+		}
+	}
+	return false
+}
+
+func channelMessageSignalsCommitment(content string) bool {
+	for _, signal := range []string{"去做", "负责", "你来", "please handle"} {
+		if strings.Contains(content, signal) {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *Handler) ImportLarkChannelMessage(w http.ResponseWriter, r *http.Request) {

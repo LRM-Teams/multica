@@ -5,12 +5,12 @@ import { ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { useViewingTimezone } from "../../../common/use-viewing-timezone";
-import { useT } from "../../../i18n";
 import {
   type ActivityEvent,
   type ActivityDotTone,
   ACTIVITY_LABEL_EN,
   ACTIVITY_SUBTEXT_EN,
+  ACTIVITY_CHROME_EN,
   activityPresentation,
   formatActivityTime,
   isNarrativeActivityEvent,
@@ -65,7 +65,6 @@ function ActivityRow({
   time: string;
   compact?: boolean;
 }) {
-  const { t } = useT("agents");
   // Per-row expand — shared by thinking/text (§2.1) and command rows (entries[].command).
   // Branches are mutually exclusive so one boolean is enough.
   const [expanded, setExpanded] = useState(false);
@@ -118,9 +117,10 @@ function ActivityRow({
     )
   ) : null;
 
-  const copyLabel = t(($) =>
-    copied ? $.tab_body.activity.command_copied : $.tab_body.activity.copy_command,
-  );
+  // Activity chrome is English-only (canonical map, not i18n) — see ACTIVITY_CHROME_EN.
+  const copyLabel = copied
+    ? ACTIVITY_CHROME_EN.command_copied
+    : ACTIVITY_CHROME_EN.copy_command;
 
   return (
     <div
@@ -249,7 +249,6 @@ export function ActivityTimeline({
   /** Profile "Recent activity" compact mode: last N narrative rows, no expand. */
   compact?: boolean;
 }) {
-  const { t } = useT("agents");
   const tz = useViewingTimezone();
 
   const shown = useMemo(() => {
@@ -260,7 +259,7 @@ export function ActivityTimeline({
   if (shown.length === 0) {
     return (
       <p className="text-xs italic text-muted-foreground/60">
-        {t(($) => $.tab_body.activity.timeline_empty)}
+        {ACTIVITY_CHROME_EN.timeline_empty}
       </p>
     );
   }

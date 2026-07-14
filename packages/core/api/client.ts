@@ -1520,6 +1520,23 @@ export class ApiClient {
     return this.fetch(`/api/tasks/${taskId}/messages`);
   }
 
+  /**
+   * Chat execution transcript for a chat session's inbox-event round (#414).
+   * Replaces the `listTaskMessages` inbox-event-id compat: the session-scoped
+   * endpoint validates the event belongs to this session server-side (permission
+   * + bounded history), returning the same `TaskMessagePayload[]` shape so the
+   * timeline builder is unchanged. `eventId` is the pending inbox-event id (live)
+   * or the persisted assistant `message.task_id` (completed).
+   */
+  async listChatAgentInboxEventTimeline(
+    sessionId: string,
+    eventId: string,
+  ): Promise<TaskMessagePayload[]> {
+    return this.fetch(
+      `/api/chat/sessions/${sessionId}/agent-inbox-events/${eventId}/timeline`,
+    );
+  }
+
   async listTasksByIssue(issueId: string): Promise<AgentTask[]> {
     return this.fetch(`/api/issues/${issueId}/task-runs`);
   }

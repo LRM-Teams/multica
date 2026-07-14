@@ -3389,12 +3389,14 @@ func TestInjectRuntimeConfigMentionLoopHardening(t *testing.T) {
 		t.Parallel()
 		s := readClaudeMD(t, assignmentCtx)
 		for _, want := range []string{
-			"side-effecting actions",
+			"plain `@handle` / `@display name` text",
+			"server resolution",
 			"enqueues a new run for that agent",
-			"When NOT to use a mention link",
+			"When NOT to use an @mention",
 			"When a mention IS appropriate",
 			"end with no mention at all",
 			"Silence ends conversations",
+			"do not invent raw mention links",
 		} {
 			if !strings.Contains(s, want) {
 				t.Errorf("Mentions section missing %q\n---\n%s", want, s)

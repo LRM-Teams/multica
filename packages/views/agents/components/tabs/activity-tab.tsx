@@ -98,7 +98,10 @@ export function ActivityTab({ agent }: ActivityTabProps) {
 
   // Land on the newest row when the first page arrives; afterwards append-follow
   // only while the reader is already at the bottom (so scrolling up to read
-  // history is never yanked back down).
+  // history is never yanked back down). `agent.id` is a dependency (alongside the
+  // prev-prop `landedRef` reset) so switching to another agent always re-lands —
+  // even when the new agent happens to have the SAME event count (cached, no
+  // empty→fill transition), where `events.length` alone would not re-run this.
   useEffect(() => {
     if (events.length === 0) return;
     if (!landedRef.current) {
@@ -107,7 +110,7 @@ export function ActivityTab({ agent }: ActivityTabProps) {
     } else if (atBottomRef.current) {
       bottomRef.current?.scrollIntoView({ block: "end" });
     }
-  }, [events.length]);
+  }, [events.length, agent.id]);
 
   const handleReachedChange = (reached: boolean) => {
     atBottomRef.current = reached;

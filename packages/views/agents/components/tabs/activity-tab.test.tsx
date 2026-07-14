@@ -103,4 +103,16 @@ describe("ActivityTab scroll-to-latest (#421)", () => {
 
     expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ block: "end" });
   });
+
+  it("re-lands on the newest row when switching agents, even with the same event count", () => {
+    mockEvents.current = [ev(1), ev(2)];
+    const { rerender } = render(<ActivityTab agent={agent} />);
+    (Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>).mockClear();
+
+    // Switch to a different agent whose cached page has the SAME number of events
+    // (events.length unchanged) — landing must still fire, keyed on agent.id.
+    rerender(<ActivityTab agent={{ id: "a2" } as never} />);
+
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ block: "end" });
+  });
 });

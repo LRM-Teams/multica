@@ -2,8 +2,11 @@ package handler
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -21,6 +24,8 @@ const (
 	agentTransportActionRead           = "message_read"
 	agentTransportActionSearch         = "message_search"
 	agentTransportActionThreadUnfollow = "thread_unfollow"
+
+	agentTransportFreshnessHoldLimit = 5
 )
 
 type AgentTransportSendRequest struct {
@@ -29,6 +34,8 @@ type AgentTransportSendRequest struct {
 	Parts           []protocol.MessagePart      `json:"parts"`
 	Options         *protocol.ChatOutputOptions `json:"options,omitempty"`
 	ClientMessageID string                      `json:"client_message_id"`
+	SeenUpToSeq     int64                       `json:"seen_up_to_seq,omitempty"`
+	SendDraft       bool                        `json:"send_draft,omitempty"`
 }
 
 type AgentTransportSendResponse struct {
@@ -37,6 +44,25 @@ type AgentTransportSendResponse struct {
 	Message     ChannelMessageResponse `json:"message"`
 	Created     bool                   `json:"created"`
 	TransportID string                 `json:"transport_id"`
+}
+
+type AgentTransportSendHeldResponse struct {
+	Action              string                   `json:"action"`
+	Target              string                   `json:"target"`
+	State               string                   `json:"state"`
+	Outcome             string                   `json:"outcome"`
+	Subtype             string                   `json:"subtype"`
+	Reason              string                   `json:"reason"`
+	Decision            string                   `json:"decision"`
+	ProducerFactID      string                   `json:"producerFactId"`
+	AvailableActions    []string                 `json:"availableActions"`
+	HeldMessages        []ChannelMessageResponse `json:"heldMessages"`
+	NewMessageCount     int64                    `json:"newMessageCount"`
+	ShownMessageCount   int64                    `json:"shownMessageCount"`
+	OmittedMessageCount int64                    `json:"omittedMessageCount"`
+	SeenUpToSeq         int64                    `json:"seenUpToSeq"`
+	LatestSeq           int64                    `json:"latestSeq"`
+	TransportID         string                   `json:"transport_id"`
 }
 
 type AgentTransportReactRequest struct {
@@ -64,7 +90,32 @@ type AgentTransportReadResponse struct {
 	ChannelID   string                   `json:"channel_id"`
 	Messages    []ChannelMessageResponse `json:"messages"`
 	Limit       int                      `json:"limit"`
+	SeenUpToSeq int64                    `json:"seenUpToSeq"`
 	TransportID string                   `json:"transport_id"`
+}
+
+type agentTransportDraft struct {
+	ID              pgtype.UUID
+	Target          string
+	ChannelID       pgtype.UUID
+	ThreadRootID    pgtype.UUID
+	Content         string
+	Parts           []protocol.MessagePart
+	Options         *protocol.ChatOutputOptions
+	ClientMessageID string
+	SeenUpToSeq     int64
+	HeldFromSeq     int64
+	HeldToSeq       int64
+}
+
+type agentTransportFreshnessDecision struct {
+	Hold        bool
+	SeenUpToSeq int64
+	LatestSeq   int64
+	TotalNewer  int64
+	Messages    []ChannelMessageResponse
+	Omitted     int64
+	ProducerID  string
 }
 
 type AgentTransportSearchRequest struct {
@@ -122,6 +173,10 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	if req.SendDraft {
+		h.agentTransportSendDraft(w, r, source, req)
+		return
+	}
 	content, parts, err := messageparts.Normalize(req.Content, req.Parts)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid message parts: "+err.Error())
@@ -157,6 +212,59 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	initiatorID := h.channelInitiatorForChatSession(r.Context(), source.task.ChatSessionID)
+	input := channelMessageInsertInput{
+		ChannelID:           parseUUID(target.channel.ID),
+		WorkspaceID:         source.origin.workspaceID,
+		AuthorID:            source.origin.agentID,
+		Content:             content,
+		Parts:               parts,
+		ThreadRootMessageID: target.threadRootMessageID,
+		ThreadID:            target.threadID,
+		TriggerDepth:        target.triggerDepth,
+		ClientMessageID:     &clientMessageID,
+		MainTimelineVisible: target.mainTimelineVisible,
+	}
+	if existing, found, err := h.findAgentChannelMessageByClientID(r.Context(), input.WorkspaceID, input.ChannelID, input.AuthorID, clientMessageID); err != nil {
+		slog.Warn("agent transport idempotency lookup failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to send message")
+		return
+	} else if found {
+		h.respondWithDuplicateAgentTransportMessage(w, r.Context(), source, target, input, attachmentIDs, existing, clientMessageID)
+		return
+	}
+	freshness, err := h.agentTransportFreshnessDecision(r.Context(), source, target, req.SeenUpToSeq)
+	if err != nil {
+		slog.Warn("agent transport freshness check failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to send message")
+		return
+	}
+	if freshness.Hold {
+		transportID, err := h.holdAgentTransportSend(r.Context(), source, target, content, parts, req.Options, clientMessageID, freshness)
+		if err != nil {
+			slog.Warn("agent transport freshness hold failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to hold message")
+			return
+		}
+		writeJSON(w, http.StatusOK, AgentTransportSendHeldResponse{
+			Action:              agentTransportActionSend,
+			Target:              target.raw,
+			State:               "held",
+			Outcome:             "held",
+			Subtype:             "freshness",
+			Reason:              "newer_messages_available",
+			Decision:            "local_hold",
+			ProducerFactID:      freshness.ProducerID,
+			AvailableActions:    []string{"read_newer_messages", "send_draft", "revise_message"},
+			HeldMessages:        freshness.Messages,
+			NewMessageCount:     freshness.TotalNewer,
+			ShownMessageCount:   int64(len(freshness.Messages)),
+			OmittedMessageCount: freshness.Omitted,
+			SeenUpToSeq:         freshness.SeenUpToSeq,
+			LatestSeq:           freshness.LatestSeq,
+			TransportID:         transportID,
+		})
+		return
+	}
 	msg, created, transportID, err := h.createAgentTransportMessage(r.Context(), source, target, content, parts, attachmentIDs, clientMessageID, initiatorID)
 	if err != nil {
 		if errors.Is(err, errChannelClientMessageConflict) {
@@ -174,6 +282,7 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		Created:     created,
 		TransportID: transportID,
 	})
+	h.deleteAgentTransportDraft(r.Context(), source, target.raw)
 
 	// Record a message-sent activity event (agent replied via multica send).
 	if !created {
@@ -286,10 +395,14 @@ func (h *Handler) AgentTransportReadMessages(w http.ResponseWriter, r *http.Requ
 	messages := h.readAgentTransportMessages(r.Context(), target, limit)
 	h.decorateAgentTransportMessages(r.Context(), target.channel.WorkspaceID, messages)
 	messageIDs := channelMessageIDs(messages)
+	seenUpToSeq := maxChannelMessageSeq(messages)
 	transportID, err := h.recordAgentTransportAudit(r.Context(), source, agentTransportActionRead, target.raw, parseUUID(target.channel.ID), pgtype.UUID{}, "", map[string]any{
-		"channel_id":  target.channel.ID,
-		"message_ids": messageIDs,
-		"limit":       limit,
+		"channel_id":      target.channel.ID,
+		"message_ids":     messageIDs,
+		"limit":           limit,
+		"seen_up_to_seq":  seenUpToSeq,
+		"thread_root_id":  target.threadRootMessageID,
+		"target_snapshot": target.raw,
 	})
 	if err != nil {
 		slog.Warn("agent transport read audit failed", "task_id", uuidToString(source.task.ID), "error", err)
@@ -302,8 +415,74 @@ func (h *Handler) AgentTransportReadMessages(w http.ResponseWriter, r *http.Requ
 		ChannelID:   target.channel.ID,
 		Messages:    messages,
 		Limit:       limit,
+		SeenUpToSeq: seenUpToSeq,
 		TransportID: transportID,
 	})
+}
+
+func (h *Handler) agentTransportSendDraft(w http.ResponseWriter, r *http.Request, source agentTransportSource, req AgentTransportSendRequest) {
+	if strings.TrimSpace(req.Content) != "" || len(req.Parts) > 0 || req.Options != nil || strings.TrimSpace(req.ClientMessageID) != "" || req.SeenUpToSeq > 0 {
+		writeError(w, http.StatusBadRequest, "send_draft cannot be combined with content, parts, options, client_message_id, or seen_up_to_seq")
+		return
+	}
+	draft, found, err := h.loadAgentTransportDraft(r.Context(), source, req.Target)
+	if err != nil {
+		slog.Warn("agent transport draft lookup failed", "agent_id", uuidToString(source.task.AgentID), "target", req.Target, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to send draft")
+		return
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, "saved draft not found")
+		return
+	}
+	target, err := h.resolveAgentTransportTarget(r.Context(), source.task, source.origin, draft.Target, draft.Options, true)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid target")
+		return
+	}
+	content, parts, err := messageparts.Normalize(draft.Content, draft.Parts)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid saved draft: "+err.Error())
+		return
+	}
+	attachmentIDs, ok := parseUUIDSliceOrBadRequest(w, attachmentIDsFromParts(parts), "attachment_id")
+	if !ok {
+		return
+	}
+	initiatorID := h.channelInitiatorForChatSession(r.Context(), source.task.ChatSessionID)
+	msg, created, transportID, err := h.createAgentTransportMessage(r.Context(), source, target, content, parts, attachmentIDs, draft.ClientMessageID, initiatorID)
+	if err != nil {
+		if errors.Is(err, errChannelClientMessageConflict) {
+			writeError(w, http.StatusConflict, "client_message_id conflicts with an existing channel message")
+			return
+		}
+		slog.Warn("agent transport draft send failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to send draft")
+		return
+	}
+	h.deleteAgentTransportDraft(r.Context(), source, draft.Target)
+	writeJSON(w, http.StatusCreated, AgentTransportSendResponse{
+		Action:      agentTransportActionSend,
+		Target:      target.raw,
+		Message:     msg,
+		Created:     created,
+		TransportID: transportID,
+	})
+	if !created {
+		return
+	}
+	h.recordAgentActivityEvent(r.Context(), h.DB,
+		source.origin.workspaceID, source.task.AgentID, source.task.RuntimeID, nullableTaskIDForTransportSource(source),
+		activityKindText, "message_sent", "info",
+		"channel", parseUUID(target.channel.ID), target.raw,
+		"", agentVisibleOutputActivityText(content, parts, msg.Attachments),
+		map[string]any{
+			"message_id":   msg.ID,
+			"created":      created,
+			"from_draft":   true,
+			"draft_target": draft.Target,
+		},
+	)
 }
 
 func (h *Handler) AgentTransportSearchMessages(w http.ResponseWriter, r *http.Request) {
@@ -859,6 +1038,326 @@ func (h *Handler) searchAgentTransportMessages(ctx context.Context, target agent
 	return total, results, rows.Err()
 }
 
+func (h *Handler) respondWithDuplicateAgentTransportMessage(w http.ResponseWriter, ctx context.Context, source agentTransportSource, target agentTransportTarget, input channelMessageInsertInput, attachmentIDs []pgtype.UUID, existing ChannelMessageResponse, clientMessageID string) {
+	ok, err := h.matchesChannelMessageIdempotencyPayload(ctx, existing, input, attachmentIDs)
+	if err != nil {
+		slog.Warn("agent transport idempotency comparison failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to send message")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusConflict, "client_message_id conflicts with an existing channel message")
+		return
+	}
+	transportID, err := h.recordAgentTransportAudit(ctx, source, agentTransportActionSend, target.raw, input.ChannelID, parseUUID(existing.ID), clientMessageID, map[string]any{
+		"channel_id":        target.channel.ID,
+		"message_id":        existing.ID,
+		"client_message_id": clientMessageID,
+		"created":           false,
+		"seq":               existing.Seq,
+		"thread_root_id":    existing.ThreadRootMessageID,
+	})
+	if err != nil {
+		slog.Warn("agent transport idempotency audit failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to send message")
+		return
+	}
+	h.deleteAgentTransportDraft(ctx, source, target.raw)
+	writeJSON(w, http.StatusCreated, AgentTransportSendResponse{
+		Action:      agentTransportActionSend,
+		Target:      target.raw,
+		Message:     existing,
+		Created:     false,
+		TransportID: transportID,
+	})
+}
+
+func (h *Handler) agentTransportFreshnessDecision(ctx context.Context, source agentTransportSource, target agentTransportTarget, requestedSeenUpToSeq int64) (agentTransportFreshnessDecision, error) {
+	seenUpToSeq, err := h.agentTransportSeenUpToSeq(ctx, source, target.raw, requestedSeenUpToSeq)
+	if err != nil || seenUpToSeq <= 0 {
+		return agentTransportFreshnessDecision{SeenUpToSeq: seenUpToSeq}, err
+	}
+	latestSeq, totalNewer, err := h.agentTransportNewerMessageStats(ctx, target, seenUpToSeq)
+	if err != nil || totalNewer <= 0 {
+		return agentTransportFreshnessDecision{SeenUpToSeq: seenUpToSeq, LatestSeq: latestSeq}, err
+	}
+	showAfterSeq := seenUpToSeq
+	if draft, found, err := h.loadAgentTransportDraft(ctx, source, target.raw); err != nil {
+		return agentTransportFreshnessDecision{}, err
+	} else if found && draft.HeldToSeq > showAfterSeq {
+		showAfterSeq = draft.HeldToSeq
+	}
+	messages, err := h.readAgentTransportMessagesAfterSeq(ctx, target, showAfterSeq, agentTransportFreshnessHoldLimit)
+	if err != nil {
+		return agentTransportFreshnessDecision{}, err
+	}
+	h.decorateAgentTransportMessages(ctx, target.channel.WorkspaceID, messages)
+	omitted := totalNewer - int64(len(messages))
+	if omitted < 0 {
+		omitted = 0
+	}
+	return agentTransportFreshnessDecision{
+		Hold:        true,
+		SeenUpToSeq: seenUpToSeq,
+		LatestSeq:   latestSeq,
+		TotalNewer:  totalNewer,
+		Messages:    messages,
+		Omitted:     omitted,
+		ProducerID:  agentTransportFreshnessProducerID(source, target, seenUpToSeq, latestSeq),
+	}, nil
+}
+
+func (h *Handler) agentTransportSeenUpToSeq(ctx context.Context, source agentTransportSource, target string, requested int64) (int64, error) {
+	if requested > 0 {
+		return requested, nil
+	}
+	if seq, ok, err := h.latestAgentTransportReadSeenSeq(ctx, source, target); err != nil {
+		return 0, err
+	} else if ok && seq > 0 {
+		return seq, nil
+	}
+	if !source.inboxEventID.Valid {
+		return 0, nil
+	}
+	var seq int64
+	if err := h.DB.QueryRow(ctx, `
+		SELECT seq_to
+		FROM agent_inbox_event
+		WHERE id = $1 AND workspace_id = $2 AND agent_id = $3`,
+		source.inboxEventID, source.origin.workspaceID, source.origin.agentID).Scan(&seq); err != nil {
+		if errorsIsNoRows(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return seq, nil
+}
+
+func (h *Handler) latestAgentTransportReadSeenSeq(ctx context.Context, source agentTransportSource, target string) (int64, bool, error) {
+	var seq int64
+	err := h.DB.QueryRow(ctx, `
+		SELECT COALESCE(NULLIF(context_pack->>'seen_up_to_seq', '')::bigint, 0)
+		FROM agent_task_transport_audit
+		WHERE workspace_id = $1
+		  AND agent_id = $2
+		  AND action = $3
+		  AND target = $4
+		  AND (($5::uuid IS NOT NULL AND task_id = $5) OR ($6::uuid IS NOT NULL AND inbox_event_id = $6))
+		ORDER BY created_at DESC
+		LIMIT 1`,
+		source.origin.workspaceID, source.origin.agentID, agentTransportActionRead, strings.TrimSpace(target), nullableTaskIDForTransportSource(source), nullableInboxEventIDForTransportSource(source)).Scan(&seq)
+	if err != nil {
+		if errorsIsNoRows(err) {
+			return 0, false, nil
+		}
+		return 0, false, err
+	}
+	return seq, true, nil
+}
+
+func (h *Handler) agentTransportNewerMessageStats(ctx context.Context, target agentTransportTarget, seenUpToSeq int64) (int64, int64, error) {
+	var latestSeq, count int64
+	err := h.DB.QueryRow(ctx, `
+		SELECT COALESCE(MAX(seq), 0), COUNT(*)
+		FROM channel_message
+		WHERE channel_id = $1
+		  AND workspace_id = $2
+		  AND deleted_at IS NULL
+		  AND seq > $3
+		  AND (
+		    ($4::uuid IS NOT NULL AND (id = $4 OR thread_root_message_id = $4))
+		    OR ($4::uuid IS NULL AND (thread_root_message_id IS NULL OR main_timeline_visible))
+		  )`,
+		parseUUID(target.channel.ID), parseUUID(target.channel.WorkspaceID), seenUpToSeq, nullableUUID(target.threadRootMessageID)).Scan(&latestSeq, &count)
+	return latestSeq, count, err
+}
+
+func (h *Handler) readAgentTransportMessagesAfterSeq(ctx context.Context, target agentTransportTarget, afterSeq int64, limit int) ([]ChannelMessageResponse, error) {
+	rows, err := h.DB.Query(ctx, `
+		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
+		FROM (
+			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
+			FROM channel_message
+			WHERE channel_id = $1
+			  AND workspace_id = $2
+			  AND deleted_at IS NULL
+			  AND seq > $3
+			  AND (
+			    ($4::uuid IS NOT NULL AND (id = $4 OR thread_root_message_id = $4))
+			    OR ($4::uuid IS NULL AND (thread_root_message_id IS NULL OR main_timeline_visible))
+			  )
+			ORDER BY seq DESC
+			LIMIT $5
+		) newer
+		ORDER BY seq ASC`,
+		parseUUID(target.channel.ID), parseUUID(target.channel.WorkspaceID), afterSeq, nullableUUID(target.threadRootMessageID), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ChannelMessageResponse
+	for rows.Next() {
+		msg, err := scanChannelMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, msg)
+	}
+	return out, rows.Err()
+}
+
+func (h *Handler) holdAgentTransportSend(ctx context.Context, source agentTransportSource, target agentTransportTarget, content string, parts []protocol.MessagePart, options *protocol.ChatOutputOptions, clientMessageID string, decision agentTransportFreshnessDecision) (string, error) {
+	if err := h.saveAgentTransportDraft(ctx, source, target, content, parts, options, clientMessageID, decision); err != nil {
+		return "", err
+	}
+	transportID, err := h.recordAgentTransportAudit(ctx, source, agentTransportActionSend, target.raw, parseUUID(target.channel.ID), pgtype.UUID{}, clientMessageID, map[string]any{
+		"held":                  true,
+		"subtype":               "freshness",
+		"reason":                "newer_messages_available",
+		"decision":              "local_hold",
+		"producer_fact_id":      decision.ProducerID,
+		"channel_id":            target.channel.ID,
+		"client_message_id":     clientMessageID,
+		"seen_up_to_seq":        decision.SeenUpToSeq,
+		"latest_seq":            decision.LatestSeq,
+		"new_message_count":     decision.TotalNewer,
+		"shown_message_count":   len(decision.Messages),
+		"omitted_message_count": decision.Omitted,
+		"thread_root_id":        target.threadRootMessageID,
+	})
+	if err != nil {
+		return "", err
+	}
+	h.recordAgentTransportFreshnessHoldActivity(ctx, source, target, decision, transportID)
+	return transportID, nil
+}
+
+func (h *Handler) recordAgentTransportFreshnessHoldActivity(ctx context.Context, source agentTransportSource, target agentTransportTarget, decision agentTransportFreshnessDecision, transportID string) {
+	details := map[string]any{
+		"reason":                "newer_messages_available",
+		"decision":              "local_hold",
+		"producer_fact_id":      decision.ProducerID,
+		"transport_id":          transportID,
+		"seen_up_to_seq":        decision.SeenUpToSeq,
+		"latest_seq":            decision.LatestSeq,
+		"new_message_count":     decision.TotalNewer,
+		"shown_message_count":   len(decision.Messages),
+		"omitted_message_count": decision.Omitted,
+		"target":                target.raw,
+	}
+	h.recordAgentActivityEvent(ctx, h.DB,
+		source.origin.workspaceID, source.task.AgentID, source.task.RuntimeID, nullableTaskIDForTransportSource(source),
+		activityKindBlocked, "send_freshness_hold", "info",
+		"channel", parseUUID(target.channel.ID), target.raw,
+		"", "Send held by freshness check",
+		details,
+	)
+	h.recordAgentActivityEvent(ctx, h.DB,
+		source.origin.workspaceID, source.task.AgentID, source.task.RuntimeID, nullableTaskIDForTransportSource(source),
+		activityKindText, "send_freshness_hold_detail", "info",
+		"channel", parseUUID(target.channel.ID), target.raw,
+		"", fmt.Sprintf("target: %s / new messages: %d newer / decision: local hold; review the newer context before retrying", target.raw, decision.TotalNewer),
+		details,
+	)
+}
+
+func (h *Handler) saveAgentTransportDraft(ctx context.Context, source agentTransportSource, target agentTransportTarget, content string, parts []protocol.MessagePart, options *protocol.ChatOutputOptions, clientMessageID string, decision agentTransportFreshnessDecision) error {
+	partsJSON, err := json.Marshal(parts)
+	if err != nil {
+		return err
+	}
+	optionsJSON, err := marshalAgentTransportOptions(options)
+	if err != nil {
+		return err
+	}
+	_, err = h.DB.Exec(ctx, `
+		INSERT INTO agent_transport_draft (
+			workspace_id, agent_id, target, channel_id, thread_root_message_id,
+			content, parts, options, client_message_id,
+			seen_up_to_seq, held_from_seq, held_to_seq, shown_from_seq, shown_to_seq
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, $11, $12, $13, $14)
+		ON CONFLICT (workspace_id, agent_id, target)
+		DO UPDATE SET
+			channel_id = EXCLUDED.channel_id,
+			thread_root_message_id = EXCLUDED.thread_root_message_id,
+			content = EXCLUDED.content,
+			parts = EXCLUDED.parts,
+			options = EXCLUDED.options,
+			client_message_id = EXCLUDED.client_message_id,
+			seen_up_to_seq = EXCLUDED.seen_up_to_seq,
+			held_from_seq = EXCLUDED.held_from_seq,
+			held_to_seq = EXCLUDED.held_to_seq,
+			shown_from_seq = EXCLUDED.shown_from_seq,
+			shown_to_seq = EXCLUDED.shown_to_seq,
+			updated_at = now()`,
+		source.origin.workspaceID, source.origin.agentID, strings.TrimSpace(target.raw), parseUUID(target.channel.ID), nullableUUID(target.threadRootMessageID),
+		content, partsJSON, optionsJSON, clientMessageID,
+		decision.SeenUpToSeq, decision.SeenUpToSeq+1, decision.LatestSeq, firstChannelMessageSeq(decision.Messages), maxChannelMessageSeq(decision.Messages))
+	return err
+}
+
+func (h *Handler) loadAgentTransportDraft(ctx context.Context, source agentTransportSource, target string) (agentTransportDraft, bool, error) {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return agentTransportDraft{}, false, nil
+	}
+	var draft agentTransportDraft
+	var partsRaw, optionsRaw []byte
+	err := h.DB.QueryRow(ctx, `
+		SELECT id, target, channel_id, thread_root_message_id, content, parts, options, client_message_id, seen_up_to_seq, held_from_seq, held_to_seq
+		FROM agent_transport_draft
+		WHERE workspace_id = $1 AND agent_id = $2 AND target = $3`,
+		source.origin.workspaceID, source.origin.agentID, target).Scan(&draft.ID, &draft.Target, &draft.ChannelID, &draft.ThreadRootID, &draft.Content, &partsRaw, &optionsRaw, &draft.ClientMessageID, &draft.SeenUpToSeq, &draft.HeldFromSeq, &draft.HeldToSeq)
+	if err != nil {
+		if errorsIsNoRows(err) {
+			return agentTransportDraft{}, false, nil
+		}
+		return agentTransportDraft{}, false, err
+	}
+	if len(partsRaw) > 0 {
+		if err := json.Unmarshal(partsRaw, &draft.Parts); err != nil {
+			return agentTransportDraft{}, false, err
+		}
+	}
+	options, err := unmarshalAgentTransportOptions(optionsRaw)
+	if err != nil {
+		return agentTransportDraft{}, false, err
+	}
+	draft.Options = options
+	return draft, true, nil
+}
+
+func (h *Handler) deleteAgentTransportDraft(ctx context.Context, source agentTransportSource, target string) {
+	_, _ = h.DB.Exec(ctx, `
+		DELETE FROM agent_transport_draft
+		WHERE workspace_id = $1 AND agent_id = $2 AND target = $3`,
+		source.origin.workspaceID, source.origin.agentID, strings.TrimSpace(target))
+}
+
+func marshalAgentTransportOptions(options *protocol.ChatOutputOptions) ([]byte, error) {
+	if options == nil {
+		return []byte("{}"), nil
+	}
+	return json.Marshal(options)
+}
+
+func unmarshalAgentTransportOptions(raw []byte) (*protocol.ChatOutputOptions, error) {
+	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "{}" || strings.TrimSpace(string(raw)) == "null" {
+		return nil, nil
+	}
+	var options protocol.ChatOutputOptions
+	if err := json.Unmarshal(raw, &options); err != nil {
+		return nil, err
+	}
+	return &options, nil
+}
+
+func agentTransportFreshnessProducerID(source agentTransportSource, target agentTransportTarget, seenUpToSeq, latestSeq int64) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s:%s:%s:%d:%d", uuidToString(source.origin.workspaceID), uuidToString(source.origin.agentID), target.raw, seenUpToSeq, latestSeq)))
+	return "freshness_decision_fact:" + hex.EncodeToString(sum[:8])
+}
+
 func (h *Handler) recordAgentTransportAudit(ctx context.Context, source agentTransportSource, action, target string, channelID, messageID pgtype.UUID, clientMessageID string, contextPack map[string]any) (string, error) {
 	return h.recordAgentTransportAuditExec(ctx, h.DB, source, action, target, channelID, messageID, clientMessageID, contextPack)
 }
@@ -905,6 +1404,7 @@ func (h *Handler) taskHasAgentTransportVisibleOutput(ctx context.Context, taskID
 			SELECT 1
 			FROM agent_task_transport_audit
 			WHERE task_id = $1 AND action IN ('message_send', 'message_react')
+			  AND channel_message_id IS NOT NULL
 		)`, taskID).Scan(&exists)
 	return err == nil && exists
 }
@@ -916,6 +1416,7 @@ func (h *Handler) inboxEventHasAgentTransportVisibleOutput(ctx context.Context, 
 			SELECT 1
 			FROM agent_task_transport_audit
 			WHERE inbox_event_id = $1 AND action IN ('message_send', 'message_react')
+			  AND channel_message_id IS NOT NULL
 		)`, eventID).Scan(&exists)
 	return err == nil && exists
 }
@@ -924,6 +1425,23 @@ func channelMessageIDs(messages []ChannelMessageResponse) []string {
 	out := make([]string, 0, len(messages))
 	for _, msg := range messages {
 		out = append(out, msg.ID)
+	}
+	return out
+}
+
+func firstChannelMessageSeq(messages []ChannelMessageResponse) any {
+	if len(messages) == 0 {
+		return nil
+	}
+	return messages[0].Seq
+}
+
+func maxChannelMessageSeq(messages []ChannelMessageResponse) int64 {
+	var out int64
+	for _, msg := range messages {
+		if msg.Seq > out {
+			out = msg.Seq
+		}
 	}
 	return out
 }

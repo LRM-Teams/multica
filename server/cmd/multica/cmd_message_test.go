@@ -95,6 +95,101 @@ func TestRunAgentMessageSendPostsAttachmentPartsNotIDs(t *testing.T) {
 	assertPartMap(t, rawParts[2], map[string]any{"type": "attachment", "attachment_id": "att-b"})
 }
 
+func TestRunAgentMessageSendIncludesSeenUpToSeqFromInboxEnv(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/agent/messages/send" {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"action":  "message_send",
+			"created": true,
+			"message": map[string]any{"id": "msg-1"},
+		})
+	}))
+	defer srv.Close()
+
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+	t.Setenv("MULTICA_TOKEN", "test-token")
+	t.Setenv("MULTICA_AGENT_INBOX_SEQ_TO", "42")
+
+	cmd := newMessageSendCmd()
+	_ = cmd.Flags().Set("target", "#multica")
+	_ = cmd.Flags().Set("message", "fresh send")
+	_ = cmd.Flags().Set("client-message-id", "cli-msg-1")
+	if err := runAgentMessageSend(cmd, nil); err != nil {
+		t.Fatalf("runAgentMessageSend: %v", err)
+	}
+	if body["seen_up_to_seq"] != float64(42) {
+		t.Fatalf("seen_up_to_seq = %#v, want 42", body["seen_up_to_seq"])
+	}
+}
+
+func TestRunAgentMessageSendDraftPostsSendDraftOnly(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/agent/messages/send" {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"action":  "message_send",
+			"created": true,
+			"message": map[string]any{"id": "msg-1"},
+		})
+	}))
+	defer srv.Close()
+
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+	t.Setenv("MULTICA_TOKEN", "test-token")
+
+	cmd := newMessageSendCmd()
+	_ = cmd.Flags().Set("target", "#multica")
+	_ = cmd.Flags().Set("send-draft", "true")
+	if err := runAgentMessageSend(cmd, nil); err != nil {
+		t.Fatalf("runAgentMessageSend send-draft: %v", err)
+	}
+	if body["target"] != "#multica" || body["send_draft"] != true {
+		t.Fatalf("draft body target/send_draft = %#v", body)
+	}
+	for _, field := range []string{"content", "parts", "client_message_id", "seen_up_to_seq"} {
+		if _, ok := body[field]; ok {
+			t.Fatalf("draft body unexpectedly includes %s: %#v", field, body)
+		}
+	}
+}
+
+func TestRunAgentMessageSendDraftRejectsContentFlags(t *testing.T) {
+	cmd := newMessageSendCmd()
+	_ = cmd.Flags().Set("target", "#multica")
+	_ = cmd.Flags().Set("send-draft", "true")
+	_ = cmd.Flags().Set("message", "do not combine")
+	err := runAgentMessageSend(cmd, nil)
+	if err == nil || !strings.Contains(err.Error(), "--send-draft cannot be combined") {
+		t.Fatalf("error = %v, want send-draft combination rejection", err)
+	}
+}
+
+func TestAgentMessageSendTextFallbackReportsHeld(t *testing.T) {
+	got := agentMessageSendTextFallback(map[string]any{"state": "held"})
+	if !strings.Contains(got, "Message held by freshness check") {
+		t.Fatalf("fallback = %q, want held freshness text", got)
+	}
+	got = agentMessageSendTextFallback(map[string]any{"created": true})
+	if got != "Message sent." {
+		t.Fatalf("fallback = %q, want sent text", got)
+	}
+}
+
 func TestRunAgentMessageCommandsRequireTarget(t *testing.T) {
 	tests := []struct {
 		name string

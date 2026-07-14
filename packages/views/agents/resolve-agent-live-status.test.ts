@@ -145,10 +145,16 @@ describe("resolveAgentLiveStatus (header = Activity latest-row projection)", () 
       tChat,
     });
     expect(view?.label).toBe("Thinking");
-    expect(view?.dotClass).toBe("bg-brand");
+    // Thinking projects the neutral tone the timeline opens a round with — grey
+    // dot + neutral text, never a blue "Working" dot.
+    expect(view?.dotClass).toBe("bg-muted-foreground/40");
+    expect(view?.textClass).toBe("text-foreground");
   });
 
-  it("shows Queued for a queued task while online", () => {
+  it("never invents 'Queued' — a queued task with no Activity row reads Thinking", () => {
+    // Frank: the Activity timeline has no "queued" row, so the header must not
+    // project one from the task snapshot status. A queued task with nothing
+    // streamed falls back to the neutral Thinking word, never "Queued".
     const view = resolveAgentLiveStatus({
       presence: presence({ availability: "online", workload: "queued", queuedCount: 1 }),
       activeTask: task({ id: "task-1", status: "queued" }),
@@ -156,7 +162,8 @@ describe("resolveAgentLiveStatus (header = Activity latest-row projection)", () 
       tAgents,
       tChat,
     });
-    expect(view?.label).toBe("Queued");
+    expect(view?.label).toBe("Thinking");
+    expect(view?.label).not.toBe("Queued");
   });
 
   it("projects a command row as 'Running command' with the AMBER command dot (word+colour agree)", () => {
@@ -168,9 +175,12 @@ describe("resolveAgentLiveStatus (header = Activity latest-row projection)", () 
       tChat,
     });
     expect(view?.label).toContain("Running command");
-    // The key fix (Miles): a command header must carry the amber command dot,
-    // never a blue "Working" dot — the colour is projected from the row's tone.
+    // The command dot is amber (kind colour lives on the dot)…
     expect(view?.dotClass).toBe("bg-[#F5B301]");
+    // …but the LABEL text stays neutral, exactly like the timeline row — never
+    // blue or amber. Frank's fix ("Running command 字体还是蓝色的"): the kind
+    // colour must stay on the dot only and never bleed onto the word.
+    expect(view?.textClass).toBe("text-foreground");
   });
 
   it("projects a read tool row as 'Reading file'", () => {

@@ -11,14 +11,12 @@ import {
   formatPresenceStatus,
   presenceStatusDotClass,
   presenceStatusVisual,
-  workloadConfig,
 } from "./presence";
 
 // One-to-one with the Activity timeline's dot tone → colour map (TONE_DOT in
-// activity-timeline.tsx). The header projects the SAME latest Activity row, so it
-// must use the SAME type-based colours — command rows read amber, active work
-// brand, etc. — never a separately-maintained stage palette (Parker: "字和点色
-// 一起投影，复用行的 type 色表").
+// activity-timeline.tsx). The header projects the SAME latest Activity row, so
+// the DOT uses the SAME type-based colour — command rows read amber, active work
+// brand, etc. — never a separately-maintained stage palette.
 const TONE_DOT_CLASS: Record<ActivityDotTone, string> = {
   neutral: "bg-muted-foreground/40",
   active: "bg-brand",
@@ -27,21 +25,24 @@ const TONE_DOT_CLASS: Record<ActivityDotTone, string> = {
   failure: "bg-destructive",
 };
 
-function toneTextClass(tone: ActivityDotTone): string {
-  if (tone === "waiting") return workloadConfig.queued.textClass;
-  if (tone === "failure") return availabilityConfig.offline.textClass;
-  if (tone === "neutral") return workloadConfig.idle.textClass;
-  return workloadConfig.working.textClass; // active / running
-}
+// The kind colour lives on the DOT only. The timeline paints every label —
+// whatever the tone — in neutral foreground (activity-timeline.tsx renders the
+// label as `text-foreground` for all rows). The header mirrors that row, so its
+// label text is neutral too; the kind colour never bleeds onto the word. (Iris:
+// "kind 色只上 dot、label 文字恒中性、header == 时间线同款" — a command label
+// tinted amber, or Working tinted blue, would diverge from the very timeline the
+// header is meant to match.)
+const ACTIVITY_LABEL_TEXT = "text-foreground";
 
 /**
  * Name-row live status for agent profile peeks.
  *
- * Prefer the chat-style stage word (Thinking / Running a command / Queued)
- * when the agent has an active task and a live task-message stream. Fall
- * back to the coarse presence word (Idle / Offline / …) only when nothing
- * is on the plate — so the header never says bare "Working" while a tool
- * is visibly running.
+ * When the agent has an active task, project the latest Activity row verbatim
+ * (Thinking / Running a command / …) — the SAME label the timeline shows, kind
+ * colour on the dot only. Fall back to the coarse presence word (Idle / Offline
+ * / …) when nothing is on the plate, so the header never says bare "Working"
+ * while a tool is visibly running. Never an invented word — no "Queued": the
+ * Activity timeline has no such row.
  */
 export type AgentLiveStatusView = {
   label: string;
@@ -117,10 +118,11 @@ export function resolveAgentLiveStatus(args: {
         dotClass: availabilityConfig.unstable.dotClass,
       };
     }
-    // Working with a live Activity row → project it VERBATIM: the same word and
-    // the same type-based dot colour the Activity timeline shows (Parker: header
-    // = Activity latest-row projection, reuse the row's type colour table). No
-    // separate chat-pill stage vocabulary — word and colour can never disagree.
+    // Working with a live Activity row → project it VERBATIM: the same word the
+    // Activity timeline shows, with the kind colour on the dot only and the label
+    // in neutral text (Parker: header = Activity latest-row projection; Iris:
+    // kind 色只上 dot、文字恒中性). No separate chat-pill stage vocabulary or
+    // stage palette — word and colour can never disagree with the timeline.
     if (latestActivity) {
       const p = activityPresentation(latestActivity);
       const rawLabel = tAgents(($) => $.tab_body.activity.labels[p.labelKey]);
@@ -129,25 +131,21 @@ export function resolveAgentLiveStatus(args: {
         latestActivity.activity_kind === "tool_call" && p.tone === "active"
           ? `${rawLabel}…`
           : rawLabel;
-      return { label, textClass: toneTextClass(p.tone), dotClass: TONE_DOT_CLASS[p.tone] };
-    }
-    // Task on the plate but nothing streamed yet: a queued task reads Queued; a
-    // running/starting one reads Thinking (it's working, just hasn't emitted a
-    // row yet) — the same word the timeline opens a round with.
-    if (
-      activeTask.status === "queued" ||
-      activeTask.status === "waiting_local_directory"
-    ) {
       return {
-        label: tChat(($) => $.status_pill.stages.queued),
-        textClass: workloadConfig.queued.textClass,
-        dotClass: "bg-warning",
+        label,
+        textClass: ACTIVITY_LABEL_TEXT,
+        dotClass: TONE_DOT_CLASS[p.tone],
       };
     }
+    // Task on the plate but no Activity row streamed yet → read Thinking, the
+    // neutral word the timeline opens a round with (activityPresentation maps
+    // the thinking kind to the neutral tone). NOT "Queued": the timeline has no
+    // queued row, so the header must never invent one from the task's snapshot
+    // status (Frank: header = Activity projection only, Activity 里没有 queued).
     return {
       label: tAgents(($) => $.tab_body.activity.labels.thinking),
-      textClass: workloadConfig.working.textClass,
-      dotClass: "bg-brand",
+      textClass: ACTIVITY_LABEL_TEXT,
+      dotClass: TONE_DOT_CLASS.neutral,
     };
   }
 

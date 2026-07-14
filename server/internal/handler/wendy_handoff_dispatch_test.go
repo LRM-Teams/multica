@@ -377,16 +377,7 @@ func (f wendyUnlockDispatchFixture) makeUnlockDue(t *testing.T) {
 
 func (f wendyUnlockDispatchFixture) bindWendy(t *testing.T) {
 	t.Helper()
-	if _, err := testPool.Exec(context.Background(), `
-		INSERT INTO workspace_radar_state (workspace_id, supervisor_agent_id, enabled, next_due_at)
-		VALUES ($1, $2, true, now())
-		ON CONFLICT (workspace_id) DO UPDATE
-		SET supervisor_agent_id = EXCLUDED.supervisor_agent_id,
-		    enabled = true,
-		    updated_at = now()
-	`, testWorkspaceID, f.wendyID); err != nil {
-		t.Fatalf("bind Wendy supervisor: %v", err)
-	}
+	bindWendySupervisorForHandoffTest(t, f.wendyID)
 }
 
 func dispatchWendyUnlockHandoffsForTest(t *testing.T) int {

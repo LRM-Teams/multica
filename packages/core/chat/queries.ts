@@ -96,6 +96,26 @@ export function taskMessagesOptions(taskId: string) {
 }
 
 /**
+ * Chat execution transcript for a session's inbox-event round (#414) — the
+ * session-scoped replacement for `taskMessagesOptions` at the chat call sites
+ * (live pending round + completed AssistantMessage). It keeps the SAME
+ * `chatKeys.taskMessages(eventId)` cache key on purpose, so the existing
+ * `task:message` WS seeding (useRealtimeSync) keeps the live timeline current
+ * with zero WS change — only the fetch source moves off the `/api/tasks/{id}/
+ * messages` inbox-event compat onto the session-scoped endpoint. `eventId` is
+ * the pending inbox-event id (live) or the assistant `message.task_id`
+ * (completed); both are the same inbox-event UUID.
+ */
+export function chatTranscriptOptions(sessionId: string, eventId: string) {
+  return queryOptions({
+    queryKey: chatKeys.taskMessages(eventId),
+    queryFn: () => api.listChatAgentInboxEventTimeline(sessionId, eventId),
+    enabled: !!sessionId && isTaskMessageTaskId(eventId),
+    staleTime: Infinity,
+  });
+}
+
+/**
  * Aggregate of in-flight chat tasks for the current user in this workspace.
  * Drives the FAB "running" indicator while the chat window is minimised —
  * no per-session query is active then, so we need this roll-up.

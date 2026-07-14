@@ -19,7 +19,7 @@ import {
 } from "@multica/ui/components/ui/tooltip";
 import { ChevronRight, ChevronDown, ChevronUp, Brain, AlertCircle, AlertTriangle, Copy } from "lucide-react";
 import { useScrollFade } from "@multica/ui/hooks/use-scroll-fade";
-import { isTaskMessageTaskId, taskMessagesOptions } from "@multica/core/chat/queries";
+import { chatTranscriptOptions, isTaskMessageTaskId } from "@multica/core/chat/queries";
 import { Markdown } from "@multica/views/common/markdown";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { AttachmentList } from "../../issues/components/comment-card";
@@ -38,6 +38,8 @@ import { useT } from "../../i18n";
 // ─── Public component ────────────────────────────────────────────────────
 
 interface ChatMessageListProps {
+  /** Chat session id — scopes the execution-transcript fetch (#414). */
+  sessionId: string;
   messages: ChatMessage[];
   /**
    * Server-authoritative pending-task snapshot. `null` / undefined means
@@ -53,6 +55,7 @@ interface ChatMessageListProps {
 }
 
 export function ChatMessageList({
+  sessionId,
   messages,
   pendingTask,
   availability,
@@ -85,9 +88,10 @@ export function ChatMessageList({
   // Live timeline for the in-flight task. useRealtimeSync keeps this cache
   // current via setQueryData on task:message events.
   const showLiveTimeline = !!pendingTaskId && !pendingAlreadyPersisted;
-  const canFetchLiveTimeline = isTaskMessageTaskId(pendingTaskId) && !pendingAlreadyPersisted;
+  const canFetchLiveTimeline =
+    !!sessionId && isTaskMessageTaskId(pendingTaskId) && !pendingAlreadyPersisted;
   const { data: liveTaskMessages } = useQuery({
-    ...taskMessagesOptions(pendingTaskId ?? ""),
+    ...chatTranscriptOptions(sessionId, pendingTaskId ?? ""),
     enabled: canFetchLiveTimeline,
   });
   const liveTimeline: ChatTimelineItem[] = buildTimeline(liveTaskMessages ?? []);
@@ -178,6 +182,7 @@ export function ChatMessageList({
             itemContent={(_, msg) => (
               <div className="mx-auto w-full max-w-4xl px-5 py-2">
                 <MessageBubble
+                  sessionId={sessionId}
                   message={msg}
                   isPending={!!pendingTaskId && msg.task_id === pendingTaskId}
                 />
@@ -255,7 +260,15 @@ export function ChatMessageSkeleton() {
 
 const selectableMessageTextClass = "select-text [-webkit-user-select:text] [-webkit-touch-callout:default]";
 
-function MessageBubble({ message, isPending }: { message: ChatMessage; isPending: boolean }) {
+function MessageBubble({
+  sessionId,
+  message,
+  isPending,
+}: {
+  sessionId: string;
+  message: ChatMessage;
+  isPending: boolean;
+}) {
   if (message.role === "user") {
     return (
       <div className="flex justify-end">
@@ -282,24 +295,26 @@ function MessageBubble({ message, isPending }: { message: ChatMessage; isPending
     );
   }
 
-  return <AssistantMessage message={message} isPending={isPending} />;
+  return <AssistantMessage sessionId={sessionId} message={message} isPending={isPending} />;
 }
 
 function AssistantMessage({
+  sessionId,
   message,
   isPending,
 }: {
+  sessionId: string;
   message: ChatMessage;
   isPending: boolean;
 }) {
   const taskId = message.task_id;
-  const canFetchTaskMessages = isTaskMessageTaskId(taskId);
+  const canFetchTaskMessages = !!sessionId && isTaskMessageTaskId(taskId);
 
-  // Use the shared taskMessagesOptions so this cache entry is the same one
-  // seeded by useRealtimeSync during task execution — zero refetch when the
-  // task finishes, since WS already populated it.
+  // Session-scoped execution transcript (#414) — same cache key as the live
+  // timeline, so this reads the entry WS already seeded during execution (zero
+  // refetch when the task finishes) while fetching off the new endpoint.
   const { data: taskMessages } = useQuery({
-    ...taskMessagesOptions(taskId ?? ""),
+    ...chatTranscriptOptions(sessionId, taskId ?? ""),
     enabled: canFetchTaskMessages,
   });
 

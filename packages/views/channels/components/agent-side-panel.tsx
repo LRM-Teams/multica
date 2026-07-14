@@ -10,7 +10,6 @@ import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import { ActivityTab } from "../../agents/components/tabs/activity-tab";
 import { AgentPresenceStatusLine } from "../../agents/components/agent-presence-status-line";
-import { agentColor } from "../../common/agent-color";
 import { initialsOf } from "../../common/initials";
 import { AgentFilesPanel } from "./agent-files-panel";
 import { useT } from "../../i18n/use-t";
@@ -57,7 +56,6 @@ export function AgentSidePanel({ agent, currentUserId, members, onClose }: Agent
             avatarUrl={resolvePublicFileUrl(agent.avatar_url)}
             isAgent
             size={32}
-            tint={agentColor(agent.id)}
           />
           {/* #371: name + live presence tight together (matches DM header /
               profile hover card). Visible before opening the Activity tab. */}

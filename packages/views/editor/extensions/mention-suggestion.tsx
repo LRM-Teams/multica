@@ -512,7 +512,6 @@ function MentionRow({
         actorId={item.id}
         size={20}
         showStatusDot
-        tint={agentColor(item.id)}
       />
       <span className="min-w-0 flex-1">
         <span

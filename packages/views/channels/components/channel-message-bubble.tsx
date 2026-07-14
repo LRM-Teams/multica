@@ -22,7 +22,6 @@ import {
 } from "@multica/ui/components/ui/context-menu";
 import { useActorName } from "@multica/core/workspace/hooks";
 import type { ChannelMessage } from "@multica/core/types";
-import { agentColor } from "../../common/agent-color";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { AgentPresenceOverlay } from "../../common/actor-avatar";
 import { initialsOf } from "../../common/initials";
@@ -312,9 +311,6 @@ export function ChannelMessageBubble({
     message.author_id === currentUserId;
   const isAgent = message.type === "agent";
   const isExternal = message.source === "lark";
-  const tint = isAgent
-    ? agentColor(message.author_id ?? message.author_name)
-    : undefined;
   // Resolve the avatar from the live members/agents cache (keyed by id) rather
   // than a value snapshotted into the message — so a settings avatar change
   // shows up here too. Falls back to the tinted/initials avatar when the author
@@ -353,7 +349,6 @@ export function ChannelMessageBubble({
       isSystem={false}
       size={28}
       className="select-none"
-      tint={tint}
     />
   );
   // Overlay the shared presence dot (breathing when the agent is actively

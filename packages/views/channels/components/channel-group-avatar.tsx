@@ -3,7 +3,6 @@
 import { Hash } from "lucide-react";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import type { ChannelMemberBrief } from "@multica/core/types";
-import { agentColor } from "../../common/agent-color";
 
 /**
  * WeChat-style composite group avatar: member tiles packed into a single round
@@ -51,7 +50,6 @@ export function ChannelGroupAvatar({
       className="flex shrink-0 flex-wrap content-center items-center justify-center overflow-hidden rounded-full bg-background"
     >
       {shown.map((m) => {
-        const color = m.member_type === "agent" ? agentColor(m.member_id) : undefined;
         const label = memberLabel(m);
         return (
           <span
@@ -61,14 +59,10 @@ export function ChannelGroupAvatar({
               width: tile,
               height: tile,
               fontSize: Math.max(7, Math.round(tile * 0.42)),
-              backgroundColor: color?.bg,
-              color: color?.fg,
             }}
-            className={
-              color
-                ? "flex items-center justify-center font-medium"
-                : "flex items-center justify-center bg-muted font-medium text-muted-foreground"
-            }
+            // #451: uniform muted tiles — no per-agent hash color, matching the
+            // single-avatar fallback (Frank: "bot 头像不要五颜六色").
+            className="flex items-center justify-center bg-muted font-medium text-muted-foreground"
           >
             {firstLetter(label)}
           </span>

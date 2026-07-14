@@ -150,7 +150,6 @@ import { SidebarTrigger, useSidebarSafe } from "@multica/ui/components/ui/sideba
 import { MobileListDetailLayout } from "../../common/mobile-list-detail-layout";
 import { ContentEditor, type ContentEditorRef } from "../../editor/content-editor";
 import { useNavigation } from "../../navigation/context";
-import { agentColor } from "../../common/agent-color";
 import { ProjectPickerButton } from "../../common/project-picker-button";
 import { initialsOf } from "../../common/initials";
 import { useT } from "../../i18n/use-t";
@@ -252,7 +251,6 @@ function MemberStack({
                 initials={initialsOf(name || "?")}
                 isAgent={m.member_type === "agent"}
                 size={size}
-                tint={m.member_type === "agent" ? agentColor(m.member_id) : undefined}
               />
             );
           })()}
@@ -1603,7 +1601,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                     initials={initialsOf(c.presentation.displayName || "?")}
                     isAgent={c.type === "agent"}
                     size={26}
-                    tint={c.type === "agent" ? agentColor(c.id) : undefined}
                   />
                   <ActorIdentityRow
                     displayName={c.presentation.displayName}
@@ -1655,7 +1652,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                     initials={initialsOf(presentation.displayName || "?")}
                     isAgent={isAgent}
                     size={26}
-                    tint={isAgent ? agentColor(m.member_id) : undefined}
                   />
                   <ActorIdentityRow
                     displayName={presentation.displayName}

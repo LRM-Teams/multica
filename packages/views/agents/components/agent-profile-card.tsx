@@ -23,7 +23,6 @@ import {
   HealthIcon,
   useRuntimeHealthStateLabel,
 } from "../../runtimes/components/shared";
-import { agentColor } from "../../common/agent-color";
 import { VisibilityBadge } from "./visibility-badge";
 import { AgentPresenceStatusLine } from "./agent-presence-status-line";
 import { useT } from "../../i18n/use-t";
@@ -90,7 +89,6 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
           avatarUrl={resolvePublicFileUrl(agent.avatar_url)}
           isAgent
           size={40}
-          tint={agentColor(agent.id)}
         />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">

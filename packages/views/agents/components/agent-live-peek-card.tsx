@@ -15,7 +15,6 @@ import type { AgentTask } from "@multica/core/types";
 import { AlertTriangle } from "lucide-react";
 import { AppLink } from "../../navigation";
 import { useT, useTimeAgo } from "../../i18n";
-import { agentColor } from "../../common/agent-color";
 import { AgentPresenceStatusLine } from "./agent-presence-status-line";
 
 interface AgentLivePeekCardProps {
@@ -84,7 +83,6 @@ export function AgentLivePeekCard({ agentId }: AgentLivePeekCardProps) {
           avatarUrl={resolvePublicFileUrl(agent.avatar_url)}
           isAgent
           size={40}
-          tint={agentColor(agent.id)}
         />
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-1.5">

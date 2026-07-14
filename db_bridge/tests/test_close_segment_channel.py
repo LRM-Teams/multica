@@ -13,7 +13,6 @@ import contextlib
 
 import httpx
 
-from db_bridge.channels import CHANNELS_BY_NAME
 from db_bridge.config import BridgeConfig
 from db_bridge.db import BridgeDB
 from db_bridge.executor import Executor

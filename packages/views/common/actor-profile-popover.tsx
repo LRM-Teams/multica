@@ -166,13 +166,21 @@ function ActorProfileContent({
 export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile }) {
   const { t } = useT("channels");
   const wsId = useWorkspaceId();
-  // Agents: stage-detail live status (Thinking / Running command… / …)
-  // when a task is active; coarse presence word (Idle / Offline) when idle.
-  // Same snapshot + task-messages caches as the chat status pill / avatar
-  // presence dot, so the three surfaces stay in lockstep via WS.
+  // #2 identity-only card: when the server returns just basic identity
+  // (`profile_access=identity_only` — a private agent surfaced via a message you
+  // can read, or a removed/deactivated one), render name/handle/avatar/description
+  // but HIDE the live-status mark + Recent activity — those are the protected
+  // panels the BE still gates (`canAccessPrivateAgent`). `full` keeps everything.
+  // Never a blank "Agent unavailable" card again.
+  const isIdentityOnly = profile.profile_access === "identity_only";
+  // Agents (full access only): stage-detail live status (Thinking / Running
+  // command… / …) when a task is active; coarse presence word (Idle / Offline)
+  // when idle. Same snapshot + activity caches as the chat status pill / avatar
+  // presence dot, so the three surfaces stay in lockstep via WS. Passing
+  // `undefined` for identity_only skips the fetch entirely (no access anyway).
   const liveStatus = useAgentLiveStatus(
     wsId,
-    profile.member_type === "agent" ? profile.member_id : undefined,
+    profile.member_type === "agent" && !isIdentityOnly ? profile.member_id : undefined,
   );
   const identity = {
     name: profile.name,
@@ -227,7 +235,9 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
             <span className="min-w-0 truncate text-sm font-semibold text-foreground">
               {displayName}
             </span>
-            <AgentLiveStatusMark status={liveStatus} className="shrink-0" />
+            {isIdentityOnly ? null : (
+              <AgentLiveStatusMark status={liveStatus} className="shrink-0" />
+            )}
             {memberRole ? (
               <span className="shrink-0 text-xs text-muted-foreground">
                 {memberRole}
@@ -251,7 +261,7 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
           </p>
         </section>
       ) : null}
-      {profile.member_type === "agent" ? (
+      {profile.member_type === "agent" && !isIdentityOnly ? (
         <ProfileSection title={t(($) => $.profile_popover.recent_activity)}>
           <AgentRecentActivity agentId={profile.member_id} />
         </ProfileSection>

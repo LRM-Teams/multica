@@ -497,6 +497,8 @@
     "close_aria": "Close agent panel",
     "no_description": "No description yet",
     "model_label": "Model",
+    "runtime_label": "Runtime",
+    "runtime_cloud": "Cloud",
     "reasoning_label": "Reasoning",
     "created_label": "Created",
     "owner_label": "Owner",

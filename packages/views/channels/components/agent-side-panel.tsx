@@ -141,6 +141,15 @@ function AgentProfileTabContent({
   members: readonly MemberWithUser[];
 }) {
   const { t } = useT("agents");
+  // Which runtime this agent runs on (Frank: raft shows it, so show it here too).
+  // Read straight off the aggregated agent payload — the BE denormalizes
+  // `runtime_name` alongside `runtime_health`/`runtime_mode` (#534), so no
+  // separate runtime-list lookup. Cloud agents show the localized "Cloud" label;
+  // a local runtime with no resolved name reads as "—".
+  const runtimeValue =
+    agent.runtime_mode === "cloud"
+      ? t(($) => $.side_panel.runtime_cloud)
+      : agent.runtime_name?.trim() || "—";
   return (
     <div className="flex flex-col">
       <div className="border-b p-4">
@@ -154,6 +163,7 @@ function AgentProfileTabContent({
           label={t(($) => $.side_panel.reasoning_label)}
           value={agent.thinking_level?.trim() || t(($) => $.side_panel.reasoning_default)}
         />
+        <InfoRow label={t(($) => $.side_panel.runtime_label)} value={runtimeValue} />
         <InfoRow label={t(($) => $.side_panel.created_label)} value={formatDate(agent.created_at)} />
         <InfoRow label={t(($) => $.side_panel.owner_label)} value={ownerName(agent, members)} />
       </div>

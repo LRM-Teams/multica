@@ -479,6 +479,8 @@
     "close_aria": "エージェントパネルを閉じる",
     "no_description": "説明はまだありません",
     "model_label": "モデル",
+    "runtime_label": "ランタイム",
+    "runtime_cloud": "クラウド",
     "reasoning_label": "推論",
     "created_label": "作成日",
     "owner_label": "オーナー",

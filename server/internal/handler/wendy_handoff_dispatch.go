@@ -258,7 +258,14 @@ func (h *Handler) dispatchClaimedWendyMemberHandoff(ctx context.Context, handoff
 
 func (h *Handler) channelHasMember(ctx context.Context, workspaceID, channelID, memberID pgtype.UUID) bool {
 	var exists bool
-	return h.DB.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM channel_member WHERE workspace_id = $1 AND channel_id = $2 AND member_type = 'member' AND member_id = $3)`, workspaceID, channelID, memberID).Scan(&exists) == nil && exists
+	return h.DB.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM channel_member cm
+			JOIN member m ON m.user_id = cm.member_id AND m.workspace_id = cm.workspace_id
+			WHERE cm.workspace_id = $1 AND cm.channel_id = $2
+			  AND cm.member_type = 'user' AND m.id = $3
+		)`, workspaceID, channelID, memberID).Scan(&exists) == nil && exists
 }
 
 func (h *Handler) cancelWendyUnlockHandoff(ctx context.Context, handoff db.PendingHandoff, claimToken pgtype.UUID, reason string) error {

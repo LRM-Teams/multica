@@ -10,6 +10,7 @@ export const evolutionKeys = {
     ["evolution", wsId, "review-submissions", submissionId] as const,
   metrics: (wsId: string) => ["evolution", wsId, "metrics"] as const,
   memoryCurationStatus: (wsId: string) => ["evolution", wsId, "memory-curation-status"] as const,
+  memoryCuratorProfile: (wsId: string) => ["evolution", wsId, "memory-curator-profile"] as const,
 };
 
 export function evolutionReviewSubmissionListOptions(
@@ -35,6 +36,14 @@ export function workspaceMemoryCurationStatusOptions(wsId: string) {
   return queryOptions({
     queryKey: evolutionKeys.memoryCurationStatus(wsId),
     queryFn: () => api.getWorkspaceMemoryCurationStatus(wsId),
+    enabled: !!wsId,
+  });
+}
+
+export function memoryCuratorProfileOptions(wsId: string) {
+  return queryOptions({
+    queryKey: evolutionKeys.memoryCuratorProfile(wsId),
+    queryFn: () => api.getMemoryCuratorProfile(wsId),
     enabled: !!wsId,
   });
 }

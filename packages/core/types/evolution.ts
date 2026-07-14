@@ -143,6 +143,59 @@ export interface WorkspaceMemoryCurationStatus {
   stages: MemoryCurationStageStatus[];
 }
 
+export type MemoryCuratorMode = "observe" | "review" | "auto_safe" | "auto";
+export type MemoryCuratorTargetScope = "owned_all" | "selected";
+
+export interface MemoryCuratorProfile {
+  id: string;
+  workspace_id: string;
+  user_id: string;
+  enabled: boolean;
+  mode: MemoryCuratorMode;
+  runtime_id: string;
+  curator_agent_id: string;
+  model_override: string;
+  target_scope: MemoryCuratorTargetScope;
+  target_agent_ids: string[];
+  timezone: string;
+  schedule_hour: number;
+  catch_up_enabled: boolean;
+  confidence_threshold: number;
+  config_version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UpdateMemoryCuratorProfileRequest {
+  enabled: boolean;
+  mode: MemoryCuratorMode;
+  runtime_id: string;
+  curator_agent_id: string;
+  model_override?: string;
+  target_scope: MemoryCuratorTargetScope;
+  target_agent_ids: string[];
+  timezone: string;
+  schedule_hour: number;
+  catch_up_enabled: boolean;
+  confidence_threshold: number;
+}
+
+export interface StartMemoryCurationRunRequest {
+  agent_ids?: string[];
+  all_agents?: boolean;
+  stage: "l1" | "l2" | "l3" | "l4" | "all";
+  since?: string;
+  until?: string;
+  include_history?: boolean;
+  dry_run?: boolean;
+  force?: boolean;
+}
+
+export interface StartMemoryCurationRunResponse {
+  id: string;
+  status: string;
+}
+
 export interface EvolutionReviewDecisionRequest {
   reason?: string;
   apply_review_suggestions?: boolean;

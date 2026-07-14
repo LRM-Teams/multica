@@ -579,6 +579,16 @@ func (h *Handler) mergeLegacyRuntimes(r *http.Request, registered db.AgentRuntim
 			}); err != nil {
 				slog.Warn("legacy runtime merge: record legacy daemon_id failed", "legacy_daemon_id", legacyID, "error", err)
 			}
+			// Fail incomplete memory curation runs on the old runtime before it is
+			// deleted (runtime_id FK is ON DELETE SET NULL and would otherwise
+			// strand queued runs). Best-effort to match the surrounding merge path.
+			if _, err := h.DB.Exec(r.Context(), `
+				UPDATE memory_curation_run
+				   SET status = 'failed', error = 'runtime merged', finished_at = now()
+				 WHERE runtime_id = $1 AND status IN ('queued', 'waiting_runtime', 'running')
+			`, old.ID); err != nil {
+				slog.Warn("legacy runtime merge: fail curation runs failed", "old_runtime_id", oldID, "error", err)
+			}
 			if err := h.Queries.DeleteAgentRuntime(r.Context(), old.ID); err != nil {
 				slog.Warn("legacy runtime merge: delete old runtime failed", "old_runtime_id", oldID, "error", err)
 				continue
@@ -677,8 +687,10 @@ func (h *Handler) DaemonDeregister(w http.ResponseWriter, r *http.Request) {
 }
 
 type DaemonHeartbeatRequest struct {
-	RuntimeID           string `json:"runtime_id"`
-	SupportsBatchImport bool   `json:"supports_batch_import,omitempty"`
+	RuntimeID                 string `json:"runtime_id"`
+	SupportsBatchImport       bool   `json:"supports_batch_import,omitempty"`
+	SupportsMemoryCuration    bool   `json:"supports_memory_curation,omitempty"`
+	ActiveMemoryCurationRunID string `json:"active_memory_curation_run_id,omitempty"`
 }
 
 // heartbeatHasPendingTimeout bounds the cheap HasPending probe on the
@@ -809,7 +821,7 @@ func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 	authMs = time.Since(start).Milliseconds()
 
-	ack, m, err := h.processHeartbeat(r.Context(), rt, req.SupportsBatchImport)
+	ack, m, err := h.processHeartbeat(r.Context(), rt, req.SupportsBatchImport, req.SupportsMemoryCuration, req.ActiveMemoryCurationRunID)
 	updateMs = m.UpdateMs
 	probeModelMs = m.ProbeModelMs
 	popModelMs = m.PopModelMs
@@ -846,6 +858,9 @@ func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
 	if len(ack.PendingLocalSkillImports) > 0 {
 		resp["pending_local_skill_imports"] = ack.PendingLocalSkillImports
 	}
+	if ack.PendingMemoryCuration != nil {
+		resp["pending_memory_curation"] = ack.PendingMemoryCuration
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -863,7 +878,8 @@ func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
 // and tells the daemon to drop the stale runtime and re-register. Other DB
 // errors still propagate as errors so they keep their existing Warn logging
 // and the daemon does not mistake a hiccup for a deletion.
-func (h *Handler) HandleDaemonWSHeartbeat(ctx context.Context, identity daemonws.ClientIdentity, runtimeID string, supportsBatchImport bool) (*protocol.DaemonHeartbeatAckPayload, error) {
+func (h *Handler) HandleDaemonWSHeartbeat(ctx context.Context, identity daemonws.ClientIdentity, payload protocol.DaemonHeartbeatRequestPayload) (*protocol.DaemonHeartbeatAckPayload, error) {
+	runtimeID := payload.RuntimeID
 	runtimeUUID, err := util.ParseUUID(runtimeID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid runtime_id: %w", err)
@@ -882,7 +898,7 @@ func (h *Handler) HandleDaemonWSHeartbeat(ctx context.Context, identity daemonws
 	if identity.WorkspaceID != "" && identity.WorkspaceID != uuidToString(rt.WorkspaceID) {
 		return nil, fmt.Errorf("runtime not in connection workspace")
 	}
-	ack, _, err := h.processHeartbeat(ctx, rt, supportsBatchImport)
+	ack, _, err := h.processHeartbeat(ctx, rt, payload.SupportsBatchImport, payload.SupportsMemoryCuration, payload.ActiveMemoryCurationRunID)
 	return ack, err
 }
 
@@ -955,7 +971,7 @@ type heartbeatMetrics struct {
 // the WebSocket daemon:heartbeat path: records liveness and pulls any pending
 // actions queued for the runtime. Auth and request decoding live in the
 // caller because they differ between transports.
-func (h *Handler) processHeartbeat(ctx context.Context, rt db.AgentRuntime, supportsBatchImport bool) (*protocol.DaemonHeartbeatAckPayload, heartbeatMetrics, error) {
+func (h *Handler) processHeartbeat(ctx context.Context, rt db.AgentRuntime, supportsBatchImport, supportsMemoryCuration bool, activeMemoryCurationRunID string) (*protocol.DaemonHeartbeatAckPayload, heartbeatMetrics, error) {
 	var m heartbeatMetrics
 	runtimeID := uuidToString(rt.ID)
 
@@ -971,6 +987,14 @@ func (h *Handler) processHeartbeat(ctx context.Context, rt db.AgentRuntime, supp
 	ack := &protocol.DaemonHeartbeatAckPayload{
 		RuntimeID: runtimeID,
 		Status:    "ok",
+	}
+	if supportsMemoryCuration && agentRuntimeHasCapability(rt, protocol.DaemonCapabilityMemoryCuration) {
+		pendingCuration, err := h.claimPendingMemoryCurationRun(ctx, rt, activeMemoryCurationRunID)
+		if err != nil {
+			slog.Warn("memory curation heartbeat claim failed", "runtime_id", runtimeID, "error", err)
+			return nil, m, err
+		}
+		ack.PendingMemoryCuration = pendingCuration
 	}
 
 	probeUpdateCtx, cancelProbeUpdate := context.WithTimeout(ctx, heartbeatHasPendingTimeout)

@@ -977,6 +977,19 @@ func (h *Handler) DeleteAgentRuntime(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Fail incomplete memory curation runs before deleting the runtime row.
+	// The runtime_id FK is ON DELETE SET NULL, so without this cleanup any
+	// queued/waiting_runtime/running run would have its runtime_id nulled and
+	// linger forever — no daemon can claim a run whose runtime_id is NULL.
+	if _, err := tx.Exec(r.Context(), `
+		UPDATE memory_curation_run
+		   SET status = 'failed', error = 'runtime deleted', finished_at = now()
+		 WHERE runtime_id = $1 AND status IN ('queued', 'waiting_runtime', 'running')
+	`, rt.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to clean up memory curation runs")
+		return
+	}
+
 	if err := qtx.DeleteAgentRuntime(r.Context(), rt.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete runtime")
 		return
@@ -1194,6 +1207,19 @@ func (h *Handler) ArchiveAgentsAndDeleteRuntime(w http.ResponseWriter, r *http.R
 	//    (ON DELETE RESTRICT) no longer keeps the runtime alive.
 	if err := qtx.DeleteArchivedAgentsByRuntime(r.Context(), rt.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to clean up archived agents")
+		return
+	}
+
+	// Fail incomplete memory curation runs before deleting the runtime row.
+	// The runtime_id FK is ON DELETE SET NULL, so without this cleanup any
+	// queued/waiting_runtime/running run would have its runtime_id nulled and
+	// linger forever — no daemon can claim a run whose runtime_id is NULL.
+	if _, err := tx.Exec(r.Context(), `
+		UPDATE memory_curation_run
+		   SET status = 'failed', error = 'runtime deleted', finished_at = now()
+		 WHERE runtime_id = $1 AND status IN ('queued', 'waiting_runtime', 'running')
+	`, rt.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to clean up memory curation runs")
 		return
 	}
 

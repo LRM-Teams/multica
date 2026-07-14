@@ -96,6 +96,12 @@ export type {
   MemoryCurationRunStats,
   MemoryCurationStageStatus,
   WorkspaceMemoryCurationStatus,
+  MemoryCuratorMode,
+  MemoryCuratorTargetScope,
+  MemoryCuratorProfile,
+  UpdateMemoryCuratorProfileRequest,
+  StartMemoryCurationRunRequest,
+  StartMemoryCurationRunResponse,
   PromoteEvolutionReviewSubmissionResponse,
 } from "./evolution";
 export type {

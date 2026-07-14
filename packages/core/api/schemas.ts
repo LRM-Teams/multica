@@ -397,6 +397,51 @@ export const EMPTY_WORKSPACE_MEMORY_CURATION_STATUS: WorkspaceMemoryCurationStat
   stages: [],
 };
 
+export const MemoryCuratorProfileSchema = z.object({
+  id: z.string().default(""),
+  workspace_id: z.string().default(""),
+  user_id: z.string().default(""),
+  enabled: z.boolean().default(false),
+  mode: z.enum(["observe", "review", "auto_safe", "auto"]).catch("review"),
+  runtime_id: z.string().default(""),
+  curator_agent_id: z.string().default(""),
+  model_override: z.string().default(""),
+  target_scope: z.enum(["owned_all", "selected"]).catch("owned_all"),
+  target_agent_ids: z.array(z.string()).default([]),
+  timezone: z.string().default("Asia/Shanghai"),
+  schedule_hour: z.number().int().min(0).max(23).default(1),
+  catch_up_enabled: z.boolean().default(true),
+  confidence_threshold: z.number().min(0).max(1).default(0.8),
+  config_version: z.number().default(0),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+}).loose();
+
+export const EMPTY_MEMORY_CURATOR_PROFILE = {
+  id: "",
+  workspace_id: "",
+  user_id: "",
+  enabled: false,
+  mode: "review" as const,
+  runtime_id: "",
+  curator_agent_id: "",
+  model_override: "",
+  target_scope: "owned_all" as const,
+  target_agent_ids: [],
+  timezone: "Asia/Shanghai",
+  schedule_hour: 1,
+  catch_up_enabled: true,
+  confidence_threshold: 0.8,
+  config_version: 0,
+  created_at: "",
+  updated_at: "",
+};
+
+export const StartMemoryCurationRunResponseSchema = z.object({
+  id: z.string(),
+  status: z.string().default("queued"),
+}).loose();
+
 const ChannelMessageSearchResultSchema = z.object({
   message_id: z.string().default(""),
   channel_id: z.string().default(""),

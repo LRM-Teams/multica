@@ -315,6 +315,7 @@ func (h *Handler) insertAgentChatOutputMessage(ctx context.Context, ch ChannelRe
 	}
 	h.publishChannelToMembers(ctx, protocol.EventChannelMessage, ch.WorkspaceID, "agent", uuidToString(agentID), channelID, msg)
 	if ch.Kind == "group" {
+		h.ingestWendyAgentGroupMessage(ctx, ch, msg, agentID)
 		if threadRootMessageID.Valid {
 			h.dispatchChannelThreadReplyMentions(ctx, ch, msg, initiatorID)
 		} else {

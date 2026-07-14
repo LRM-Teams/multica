@@ -3104,6 +3104,23 @@ func (h *Handler) ingestWendyHumanGroupMessage(ctx context.Context, ch ChannelRe
 	}
 }
 
+// ingestWendyAgentGroupMessage re-arms ambient debounce when a non-Wendy agent
+// posts in a group. Agent completions otherwise leave the chain stuck until the
+// next human message. Wendy's own posts are skipped to avoid review loops.
+func (h *Handler) ingestWendyAgentGroupMessage(ctx context.Context, ch ChannelResponse, msg ChannelMessageResponse, agentID pgtype.UUID) {
+	if h.WorkGraph == nil || ch.Kind != "group" || !agentID.Valid {
+		return
+	}
+	wendyID, ok := h.resolveWendyAmbientAgentForChannel(ctx, parseUUID(ch.WorkspaceID), parseUUID(ch.ID))
+	if !ok {
+		return
+	}
+	if uuidToString(agentID) == uuidToString(wendyID) {
+		return
+	}
+	h.touchWendyChannelAmbient(ctx, ch, msg)
+}
+
 func channelMessageSignalsRework(content string) bool {
 	for _, signal := range []string{"修改", "返工", "重做", "不对", "先别做", "停下", "stop", "rework", "fix"} {
 		if strings.Contains(content, signal) {
@@ -4641,6 +4658,9 @@ func (h *Handler) handleChannelChatDone(e events.Event) {
 	h.publishChannelToMembers(ctx, protocol.EventChannelMessage, uuidToString(workspaceID), "agent", uuidToString(agentID), channelID, msg)
 	ch, found := h.getChannel(ctx, uuidToString(workspaceID), channelID)
 	if found {
+		if ch.Kind == "group" {
+			h.ingestWendyAgentGroupMessage(ctx, ch, msg, agentID)
+		}
 		if threadRootMessageID.Valid {
 			h.dispatchChannelThreadReplyMentions(ctx, ch, msg, initiatorID)
 		} else {

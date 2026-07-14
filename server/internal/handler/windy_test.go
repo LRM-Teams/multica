@@ -20,6 +20,7 @@ func TestWindyInstructionsDescribeAmbientGroupMonitoring(t *testing.T) {
 		"do not need to configure",
 		"autopilot",
 		"add you to that group",
+		"Your own posts do not re-arm",
 	} {
 		if !strings.Contains(windyInstructions, phrase) {
 			t.Fatalf("Wendy instructions must contain %q", phrase)

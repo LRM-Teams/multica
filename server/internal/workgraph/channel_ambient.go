@@ -10,8 +10,8 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// AmbientDebounce is how long Wendy waits after the latest human message
-// before reviewing a group channel. Tests may shorten it.
+// AmbientDebounce is how long Wendy waits after the latest triggering group
+// message (human or non-Wendy agent) before reviewing. Tests may shorten it.
 var AmbientDebounce = 10 * time.Minute
 
 type ChannelAmbientWatch struct {
@@ -27,7 +27,7 @@ type ChannelAmbientWatch struct {
 }
 
 // TouchChannelAmbient marks a Wendy-watched group as dirty and pushes the
-// review deadline to now+debounce. Repeated chatter resets the timer.
+// review deadline to now+debounce. Repeated human/agent chatter resets the timer.
 func (s *Store) TouchChannelAmbient(ctx context.Context, workspaceID, channelID, wendyAgentID, messageID pgtype.UUID, messageAt time.Time) error {
 	if messageAt.IsZero() {
 		messageAt = time.Now()
@@ -76,8 +76,8 @@ func nullableUUID(id pgtype.UUID) any {
 	return id
 }
 
-// ClaimDueChannelAmbient claims channels that have new human chatter past the
-// debounce window and have not been reviewed since that chatter.
+// ClaimDueChannelAmbient claims channels that have new triggering chatter past
+// the debounce window and have not been reviewed since that chatter.
 func (s *Store) ClaimDueChannelAmbient(ctx context.Context, limit int32) ([]ChannelAmbientWatch, pgtype.UUID, error) {
 	if limit <= 0 {
 		return nil, pgtype.UUID{}, nil

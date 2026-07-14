@@ -2850,6 +2850,89 @@ func TestSendChannelMessagePublishesOnlyChannelMemberRecipients(t *testing.T) {
 	}
 }
 
+func TestChannelPayloadsIncludeAgentAvatarURL(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "Avatar Payload Bot", nil)
+	avatarURL := "/files/agent-avatar.png"
+	if _, err := testPool.Exec(ctx, `UPDATE agent SET avatar_url = $1 WHERE id = $2`, avatarURL, agentID); err != nil {
+		t.Fatalf("seed agent avatar: %v", err)
+	}
+	viewerID := createChannelPlainMember(t)
+	channelID := seedChannelForTest(t, "avatar-payload-"+uuid.NewString(), testUserID, viewerID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent channel member: %v", err)
+	}
+	content := "agent avatar payload " + uuid.NewString()
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "agent", parseUUID(agentID), "Avatar Payload Bot", content, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
+		t.Fatalf("insert agent message: %v", err)
+	}
+
+	messages := listedMessagesForUser(t, channelID, viewerID)
+	var listed *ChannelMessageResponse
+	for i := range messages {
+		if messages[i].Content == content {
+			listed = &messages[i]
+			break
+		}
+	}
+	if listed == nil {
+		t.Fatalf("agent message %q not listed in %+v", content, messages)
+	}
+	if listed.AuthorAvatarURL == nil || *listed.AuthorAvatarURL != avatarURL {
+		t.Fatalf("message author_avatar_url = %v, want %q", listed.AuthorAvatarURL, avatarURL)
+	}
+
+	req := newRequestAs(viewerID, http.MethodGet, "/api/channels/"+channelID+"/members", nil)
+	req = withChannelTestWorkspaceCtx(t, req, viewerID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.ListChannelMembers(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list channel members: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var members []ChannelMemberResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &members); err != nil {
+		t.Fatalf("decode channel members: %v", err)
+	}
+	var agentMember *ChannelMemberResponse
+	for i := range members {
+		if members[i].MemberType == "agent" && members[i].MemberID == agentID {
+			agentMember = &members[i]
+			break
+		}
+	}
+	if agentMember == nil {
+		t.Fatalf("agent member %s not listed in %+v", agentID, members)
+	}
+	if agentMember.AvatarURL == nil || *agentMember.AvatarURL != avatarURL {
+		t.Fatalf("member avatar_url = %v, want %q", agentMember.AvatarURL, avatarURL)
+	}
+
+	channel := listedChannelForUser(t, channelID, viewerID)
+	if channel == nil {
+		t.Fatalf("channel %s not listed for viewer", channelID)
+	}
+	var brief *ChannelMemberBrief
+	for i := range channel.Members {
+		if channel.Members[i].MemberType == "agent" && channel.Members[i].MemberID == agentID {
+			brief = &channel.Members[i]
+			break
+		}
+	}
+	if brief == nil {
+		t.Fatalf("agent member brief %s not listed in %+v", agentID, channel.Members)
+	}
+	if brief.AvatarURL == nil || *brief.AvatarURL != avatarURL {
+		t.Fatalf("member brief avatar_url = %v, want %q", brief.AvatarURL, avatarURL)
+	}
+}
+
 func TestSendChannelMessageClientMessageIDDedupesTopLevelWithSideEffects(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

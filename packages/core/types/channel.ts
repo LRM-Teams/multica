@@ -15,6 +15,7 @@ export interface ChannelMemberBrief {
   name: string;
   /** Human-facing member label. */
   display_name: string;
+  avatar_url?: string | null;
 }
 
 export interface Channel {
@@ -55,6 +56,7 @@ export interface ChannelMember {
   name: string;
   /** Human-facing member label. */
   display_name: string;
+  avatar_url?: string | null;
   created_at: string;
 }
 
@@ -105,6 +107,7 @@ export interface ChannelMessage {
   type: "user" | "agent" | "lark" | "system";
   author_id: string | null;
   author_name: string;
+  author_avatar_url?: string | null;
   content: string;
   parts?: MessagePart[];
   source: "multica" | "lark";
@@ -205,6 +208,7 @@ export interface ChannelMessageReply {
   type: "user" | "agent" | "lark" | "system";
   author_id: string | null;
   author_name: string;
+  author_avatar_url?: string | null;
   content: string;
   parts?: MessagePart[];
   created_at: string;
@@ -214,6 +218,7 @@ export interface ChannelMessageQuoteSnapshot {
   type: "user" | "agent" | "lark" | "system";
   authorId?: string | null;
   authorName: string;
+  authorAvatarUrl?: string | null;
   content: string;
   parts?: MessagePart[];
   createdAt: string;
@@ -232,6 +237,7 @@ export interface ChannelMessageSearchResult {
   type: "user" | "agent" | "lark" | "system";
   author_id: string | null;
   author_name: string;
+  author_avatar_url?: string | null;
   content: string;
   parts?: MessagePart[];
   created_at: string;

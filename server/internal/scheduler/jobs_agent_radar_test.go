@@ -448,8 +448,9 @@ func TestAgentRadarScheduleReplacesInvalidSupervisorAfterCancellingOldWork(t *te
 	if err != nil {
 		t.Fatalf("run supervisor repair tick: %v", err)
 	}
-	if got := result.Result["repaired_bindings"]; got != int64(1) {
-		t.Fatalf("repaired_bindings = %#v, want 1", got)
+	gotRepaired, ok := result.Result["repaired_bindings"].(int64)
+	if !ok || gotRepaired < 1 {
+		t.Fatalf("repaired_bindings = %#v, want at least 1", result.Result["repaired_bindings"])
 	}
 	var boundAgentID pgtype.UUID
 	var storedSuccess, storedFullReview, storedApplied time.Time

@@ -160,6 +160,15 @@ function mentionItemKey(item: MentionItem): string {
   return `${item.type}:${item.id}`;
 }
 
+// Keep the picker friendly (display name + handle), but store the unique
+// handle in newly created actor mentions so the visible message is unambiguous.
+function mentionInsertionItem(item: MentionItem): MentionItem {
+  if ((item.type === "member" || item.type === "agent") && item.handle?.trim()) {
+    return { ...item, label: item.handle.trim().replace(/^@+/, "") };
+  }
+  return item;
+}
+
 function mergeMentionItems(
   ...itemGroups: MentionItem[][]
 ): MentionItem[] {
@@ -277,7 +286,7 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
         if (!item) return;
         const wsId = getCurrentWsId();
         if (wsId) recordMentionUsage(wsId, item);
-        command(item);
+        command(mentionInsertionItem(item));
       },
       [displayItems, command],
     );

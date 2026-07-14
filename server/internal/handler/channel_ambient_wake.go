@@ -205,7 +205,6 @@ func (h *Handler) channelAmbientUnreadMessages(ctx context.Context, exec db.DBTX
 		  WHERE channel_id = $1
 		    AND workspace_id = $2
 		    AND thread_root_message_id IS NULL
-		    AND author_type <> 'system'
 		    AND seq > $3
 		    AND seq <= $4
 		  ORDER BY seq DESC

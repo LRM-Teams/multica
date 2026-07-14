@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createRef, type ReactNode } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { workspaceKeys } from "@multica/core/workspace/queries";
@@ -184,6 +184,30 @@ describe("createMentionSuggestion", () => {
     expect(screen.getByText("Aegis")).toBeInTheDocument();
     expect(screen.queryByText("All")).not.toBeInTheDocument();
     expect(screen.queryByText("Users")).not.toBeInTheDocument();
+  });
+
+  it("inserts the stable handle when selecting an actor with a duplicate display name", () => {
+    const command = vi.fn();
+    render(
+      <I18nWrapper>
+        <MentionList
+          items={[
+            { id: "a-wendy-1", label: "Wendy", type: "agent", handle: "wendy", secondaryLabel: "@wendy" },
+            { id: "a-wendy-2", label: "Wendy", type: "agent", handle: "wendy_2", secondaryLabel: "@wendy_2" },
+          ]}
+          query="wendy"
+          command={command}
+        />
+      </I18nWrapper>,
+    );
+
+    expect(screen.getByText("@wendy")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("@wendy_2").closest("button")!);
+    expect(command).toHaveBeenCalledWith(expect.objectContaining({
+      id: "a-wendy-2",
+      label: "wendy_2",
+      type: "agent",
+    }));
   });
 
   it("does not attach profile hover cards to member and agent picker rows", () => {

@@ -319,6 +319,11 @@ func TestAgentTransportReadSearchAndReactAudit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed channel message: %v", err)
 	}
+	systemNotice := "system transport notice " + uuid.NewString()
+	systemMsg, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "system", pgtype.UUID{}, "system", systemNotice, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("seed system channel message: %v", err)
+	}
 
 	readRec := agentTransportReadForTest(t, taskID, agentID, map[string]any{"target": target, "limit": 5})
 	if readRec.Code != http.StatusOK {
@@ -330,6 +335,9 @@ func TestAgentTransportReadSearchAndReactAudit(t *testing.T) {
 	}
 	if !transportMessagesContain(readBody.Messages, seeded.ID, needle) {
 		t.Fatalf("read messages did not include seeded message %s: %+v", seeded.ID, readBody.Messages)
+	}
+	if !transportMessagesContainType(readBody.Messages, systemMsg.ID, systemNotice, "system") {
+		t.Fatalf("read messages did not include system message %s: %+v", systemMsg.ID, readBody.Messages)
 	}
 
 	searchRec := agentTransportSearchForTest(t, taskID, agentID, map[string]any{
@@ -486,6 +494,45 @@ func TestAgentTransportRejectsNonRaftTargetForms(t *testing.T) {
 			}
 			assertNoChannelMessageContent(t, channelID, content)
 		})
+	}
+}
+
+func TestAgentTransportReadThreadIncludesSystemReplies(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	threadID := "thread-system-" + uuid.NewString()
+	root, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "thread root for system read", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr(threadID), 0)
+	if err != nil {
+		t.Fatalf("seed thread root: %v", err)
+	}
+	systemNotice := "thread system notice " + uuid.NewString()
+	systemReply, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "system", pgtype.UUID{}, "system", systemNotice, "multica", nil, parseUUID(root.ID), parseUUID(root.ID), strPtr(threadID), 0)
+	if err != nil {
+		t.Fatalf("seed thread system reply: %v", err)
+	}
+	var channelName string
+	if err := testPool.QueryRow(ctx, `SELECT name FROM channel WHERE id = $1`, channelID).Scan(&channelName); err != nil {
+		t.Fatalf("load channel name: %v", err)
+	}
+
+	readRec := agentTransportReadForTest(t, taskID, agentID, map[string]any{
+		"target": "#" + channelName + ":" + root.ID,
+		"limit":  5,
+	})
+	if readRec.Code != http.StatusOK {
+		t.Fatalf("transport thread read: status=%d body=%s", readRec.Code, readRec.Body.String())
+	}
+	var readBody AgentTransportReadResponse
+	if err := json.Unmarshal(readRec.Body.Bytes(), &readBody); err != nil {
+		t.Fatalf("decode transport thread read: %v", err)
+	}
+	if !transportMessagesContainType(readBody.Messages, systemReply.ID, systemNotice, "system") {
+		t.Fatalf("thread read messages did not include system reply %s: %+v", systemReply.ID, readBody.Messages)
 	}
 }
 
@@ -850,6 +897,15 @@ func assertAgentMessageSentActivityCount(t *testing.T, messageID string, want in
 func transportMessagesContain(messages []ChannelMessageResponse, id, content string) bool {
 	for _, msg := range messages {
 		if msg.ID == id && msg.Content == content {
+			return true
+		}
+	}
+	return false
+}
+
+func transportMessagesContainType(messages []ChannelMessageResponse, id, content, typ string) bool {
+	for _, msg := range messages {
+		if msg.ID == id && msg.Content == content && msg.Type == typ {
 			return true
 		}
 	}

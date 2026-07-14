@@ -1,7 +1,11 @@
 import type { TFunction } from "i18next";
 import type { AgentPresenceDetail } from "@multica/core/agents";
-import type { AgentTask, TaskMessagePayload } from "@multica/core/types";
-import { pickStageKeys } from "../chat/components/task-status-pill";
+import type { AgentTask } from "@multica/core/types";
+import {
+  activityPresentation,
+  type ActivityDotTone,
+  type ActivityEvent,
+} from "./components/tabs/activity-event";
 import {
   availabilityConfig,
   formatPresenceStatus,
@@ -9,6 +13,26 @@ import {
   presenceStatusVisual,
   workloadConfig,
 } from "./presence";
+
+// One-to-one with the Activity timeline's dot tone → colour map (TONE_DOT in
+// activity-timeline.tsx). The header projects the SAME latest Activity row, so it
+// must use the SAME type-based colours — command rows read amber, active work
+// brand, etc. — never a separately-maintained stage palette (Parker: "字和点色
+// 一起投影，复用行的 type 色表").
+const TONE_DOT_CLASS: Record<ActivityDotTone, string> = {
+  neutral: "bg-muted-foreground/40",
+  active: "bg-brand",
+  running: "bg-[#F5B301]",
+  waiting: "bg-warning",
+  failure: "bg-destructive",
+};
+
+function toneTextClass(tone: ActivityDotTone): string {
+  if (tone === "waiting") return workloadConfig.queued.textClass;
+  if (tone === "failure") return availabilityConfig.offline.textClass;
+  if (tone === "neutral") return workloadConfig.idle.textClass;
+  return workloadConfig.working.textClass; // active / running
+}
 
 /**
  * Name-row live status for agent profile peeks.
@@ -66,34 +90,64 @@ export function pickPrimaryActiveTask(
 export function resolveAgentLiveStatus(args: {
   presence: AgentPresenceDetail | "loading" | null | undefined;
   activeTask: AgentTask | null;
-  taskMessages: readonly TaskMessagePayload[];
+  latestActivity: ActivityEvent | null;
   tAgents: TFunction<"agents">;
   tChat: TFunction<"chat">;
 }): AgentLiveStatusView | null {
-  const { presence, activeTask, taskMessages, tAgents, tChat } = args;
+  const { presence, activeTask, latestActivity, tAgents, tChat } = args;
   if (!presence || presence === "loading") return null;
+  const availability =
+    presence.availability === "archived" ? "offline" : presence.availability;
 
   if (activeTask) {
-    // Mirror TaskStatusPill: any streamed message means the daemon has
-    // started work, even if the snapshot status is still lagging.
-    const effectiveStatus =
-      taskMessages.length > 0 ? "running" : activeTask.status;
-    const availability =
-      presence.availability === "archived"
-        ? "offline"
-        : presence.availability;
-    const decision = pickStageKeys(
-      effectiveStatus,
-      taskMessages,
-      availability,
-    );
-    const label = decision.toolKey
-      ? tChat(($) => $.status_pill.tools[decision.toolKey!])
-      : tChat(($) => $.status_pill.stages[decision.stageKey]);
+    // Connection state wins over any (possibly stale) activity row: a task queued
+    // on an offline/unstable runtime reads Offline / Unstable, not a projected
+    // stage.
+    if (availability === "offline") {
+      return {
+        label: tChat(($) => $.status_pill.stages.offline),
+        textClass: availabilityConfig.offline.textClass,
+        dotClass: availabilityConfig.offline.dotClass,
+      };
+    }
+    if (availability === "unstable") {
+      return {
+        label: tChat(($) => $.status_pill.stages.reconnecting),
+        textClass: availabilityConfig.unstable.textClass,
+        dotClass: availabilityConfig.unstable.dotClass,
+      };
+    }
+    // Working with a live Activity row → project it VERBATIM: the same word and
+    // the same type-based dot colour the Activity timeline shows (Parker: header
+    // = Activity latest-row projection, reuse the row's type colour table). No
+    // separate chat-pill stage vocabulary — word and colour can never disagree.
+    if (latestActivity) {
+      const p = activityPresentation(latestActivity);
+      const rawLabel = tAgents(($) => $.tab_body.activity.labels[p.labelKey]);
+      // Match the timeline's in-progress "…" on an active tool row.
+      const label =
+        latestActivity.activity_kind === "tool_call" && p.tone === "active"
+          ? `${rawLabel}…`
+          : rawLabel;
+      return { label, textClass: toneTextClass(p.tone), dotClass: TONE_DOT_CLASS[p.tone] };
+    }
+    // Task on the plate but nothing streamed yet: a queued task reads Queued; a
+    // running/starting one reads Thinking (it's working, just hasn't emitted a
+    // row yet) — the same word the timeline opens a round with.
+    if (
+      activeTask.status === "queued" ||
+      activeTask.status === "waiting_local_directory"
+    ) {
+      return {
+        label: tChat(($) => $.status_pill.stages.queued),
+        textClass: workloadConfig.queued.textClass,
+        dotClass: "bg-warning",
+      };
+    }
     return {
-      label,
-      textClass: stageTextClass(decision.stageKey, !!decision.toolKey),
-      dotClass: stageDotClass(decision.stageKey, !!decision.toolKey),
+      label: tAgents(($) => $.tab_body.activity.labels.thinking),
+      textClass: workloadConfig.working.textClass,
+      dotClass: "bg-brand",
     };
   }
 
@@ -102,34 +156,5 @@ export function resolveAgentLiveStatus(args: {
   const visual = presenceStatusVisual(presence);
   const dotClass = presenceStatusDotClass(presence);
   if (!label || !visual || !dotClass) return null;
-  return {
-    label,
-    textClass: visual.textClass,
-    dotClass,
-  };
-}
-
-function stageTextClass(stageKey: string, hasTool: boolean): string {
-  if (stageKey === "offline") return availabilityConfig.offline.textClass;
-  if (stageKey === "reconnecting") return availabilityConfig.unstable.textClass;
-  if (stageKey === "queued" || stageKey === "waiting_local_directory") {
-    return workloadConfig.queued.textClass;
-  }
-  // starting_up / thinking / typing / tool_use — active work.
-  if (hasTool || stageKey === "thinking" || stageKey === "typing" || stageKey === "starting_up") {
-    return workloadConfig.working.textClass;
-  }
-  return workloadConfig.working.textClass;
-}
-
-function stageDotClass(stageKey: string, hasTool: boolean): string {
-  if (stageKey === "offline") return availabilityConfig.offline.dotClass;
-  if (stageKey === "reconnecting") return availabilityConfig.unstable.dotClass;
-  if (stageKey === "queued" || stageKey === "waiting_local_directory") {
-    return "bg-warning";
-  }
-  if (hasTool || stageKey === "thinking" || stageKey === "typing" || stageKey === "starting_up") {
-    return "bg-brand";
-  }
-  return "bg-brand";
+  return { label, textClass: visual.textClass, dotClass };
 }

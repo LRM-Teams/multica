@@ -107,22 +107,7 @@ func seedWendyUnlockDispatchFixture(t *testing.T) wendyUnlockDispatchFixture {
 	channelID := seedChannelForTest(t, "wendy-unlock-"+uuid.NewString(), testUserID)
 	addRadarAgentMembersForExecutorTest(t, channelID, supervisor.ID.String(), targetC, targetD)
 
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO workspace_radar_state (workspace_id, supervisor_agent_id, enabled, next_due_at)
-		VALUES ($1, $2, true, now())
-		ON CONFLICT (workspace_id) DO UPDATE
-		SET supervisor_agent_id = EXCLUDED.supervisor_agent_id,
-		    enabled = true,
-		    updated_at = now()
-	`, testWorkspaceID, supervisor.ID); err != nil {
-		t.Fatalf("bind Wendy supervisor: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `
-			DELETE FROM workspace_radar_state
-			WHERE workspace_id = $1 AND supervisor_agent_id = $2
-		`, testWorkspaceID, supervisor.ID)
-	})
+	bindWendySupervisorForHandoffTest(t, supervisor.ID.String())
 
 	fixture := wendyUnlockDispatchFixture{
 		wendyID:   supervisor.ID.String(),
@@ -148,6 +133,40 @@ func seedWendyUnlockDispatchFixture(t *testing.T) wendyUnlockDispatchFixture {
 	}
 	fixture.setPrimaryChannel(t, fixture.issueC)
 	return fixture
+}
+
+func bindWendySupervisorForHandoffTest(t *testing.T, supervisorID string) {
+	t.Helper()
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO workspace_radar_state (
+			workspace_id, supervisor_agent_id, enabled, next_due_at, change_version
+		)
+		VALUES (
+			$1, $2, true, now(),
+			COALESCE((
+				SELECT max(change_version)
+				FROM workspace_radar_change
+				WHERE workspace_id = $1
+			), 0)
+		)
+		ON CONFLICT (workspace_id) DO UPDATE
+		SET supervisor_agent_id = EXCLUDED.supervisor_agent_id,
+		    enabled = true,
+		    next_due_at = now(),
+		    change_version = GREATEST(
+		        workspace_radar_state.change_version,
+		        EXCLUDED.change_version
+		    ),
+		    updated_at = now()
+	`, testWorkspaceID, supervisorID); err != nil {
+		t.Fatalf("bind Wendy supervisor: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `
+			DELETE FROM workspace_radar_state
+			WHERE workspace_id = $1 AND supervisor_agent_id = $2
+		`, testWorkspaceID, supervisorID)
+	})
 }
 
 func (f *wendyUnlockDispatchFixture) createWaitingD(t *testing.T) {

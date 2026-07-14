@@ -105,6 +105,7 @@ function makeProfile(): MemberProfile {
     // stream, #383); kept only to satisfy the MemberProfile type until the BE
     // retires the server projection.
     recent_activity: [],
+    profile_access: "full",
   };
 }
 
@@ -206,5 +207,29 @@ describe("ActorProfileContentLoaded", () => {
     render(<ActorProfileContentLoaded profile={makeProfile()} />);
 
     expect(screen.getByText("Builds and reviews changes.")).toBeInTheDocument();
+  });
+
+  it("identity_only: keeps name + description, hides live status and recent activity", () => {
+    // #2: a private/removed agent surfaced via a readable message returns only
+    // basic identity (profile_access=identity_only). Show the identity card —
+    // never a blank "Agent unavailable" — but hide the panels the BE still gates.
+    const profile = makeProfile();
+    profile.profile_access = "identity_only";
+    mockActivity.current = {
+      events: [makeEvent(1), makeEvent(2)],
+      latest: null,
+      isLoading: false,
+    };
+
+    render(<ActorProfileContentLoaded profile={profile} />);
+
+    // Identity stays visible.
+    expect(screen.getByText("Aegis")).toBeInTheDocument();
+    expect(screen.getByText("Builds and reviews changes.")).toBeInTheDocument();
+    // Protected live panels are gone (not just empty) — no live mark, no Recent
+    // activity timeline, even though the activity stub has events.
+    expect(screen.queryByTestId("agent-live-status")).toBeNull();
+    expect(screen.queryByTestId("activity-timeline")).toBeNull();
+    expect(screen.queryByText("Recent activity")).toBeNull();
   });
 });

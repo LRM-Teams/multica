@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { TFunction } from "i18next";
 import type { AgentPresenceDetail } from "@multica/core/agents";
-import type { AgentTask, TaskMessagePayload } from "@multica/core/types";
+import type { AgentTask } from "@multica/core/types";
+import type { ActivityEvent } from "./components/tabs/activity-event";
 import {
   pickPrimaryActiveTask,
   resolveAgentLiveStatus,
@@ -34,23 +35,35 @@ function task(over: Partial<AgentTask> & Pick<AgentTask, "id" | "status">): Agen
   };
 }
 
-function msg(
-  over: Partial<TaskMessagePayload> & Pick<TaskMessagePayload, "type" | "seq">,
-): TaskMessagePayload {
+function evt(
+  over: Partial<ActivityEvent> & Pick<ActivityEvent, "activity_kind">,
+): ActivityEvent {
   return {
-    task_id: "task-1",
-    issue_id: "",
+    id: "e1",
+    agent_id: "agent-1",
+    occurred_at: "2026-07-09T10:00:00Z",
+    detail_kind: "tool_use",
     ...over,
-  };
+  } as ActivityEvent;
 }
 
+// The header now projects the Activity row's OWN presentation, so the label
+// mock is the `agents` activity-labels table (same one the timeline resolves).
 const AGENTS = {
   workload: { working: "Working", queued: "Queued", idle: "Idle" },
-  availability: {
-    online: "Online",
-    unstable: "Unstable",
-    offline: "Offline",
-    archived: "Archived",
+  availability: { online: "Online", unstable: "Unstable", offline: "Offline", archived: "Archived" },
+  tab_body: {
+    activity: {
+      labels: {
+        thinking: "Thinking",
+        output: "Output",
+        running_command: "Running command",
+        reading_file: "Reading file",
+        writing_file: "Writing file",
+        idle: "Idle",
+        working: "Working",
+      },
+    },
   },
 } as const;
 
@@ -60,26 +73,14 @@ const CHAT = {
       offline: "Offline",
       reconnecting: "Reconnecting",
       queued: "Queued",
-      waiting_local_directory: "Waiting for local directory",
-      starting_up: "Working",
-      thinking: "Thinking",
-      typing: "Output",
-    },
-    tools: {
-      running_command: "Running command…",
-      reading_files: "Reading file…",
-      searching_code: "Searching code…",
-      making_edits: "Editing file…",
-      searching_web: "Searching web…",
-      fallback: "Working",
     },
   },
 } as const;
 
 const tAgents = ((selector: (r: typeof AGENTS) => string) =>
-  selector(AGENTS)) as TFunction<"agents">;
+  selector(AGENTS)) as unknown as TFunction<"agents">;
 const tChat = ((selector: (r: typeof CHAT) => string) =>
-  selector(CHAT)) as TFunction<"chat">;
+  selector(CHAT)) as unknown as TFunction<"chat">;
 
 describe("pickPrimaryActiveTask", () => {
   it("prefers running over queued", () => {
@@ -104,16 +105,12 @@ describe("pickPrimaryActiveTask", () => {
   });
 });
 
-describe("resolveAgentLiveStatus", () => {
+describe("resolveAgentLiveStatus (header = Activity latest-row projection)", () => {
+  const online = presence({ availability: "online", workload: "working", runningCount: 1 });
+
   it("returns null while presence is loading", () => {
     expect(
-      resolveAgentLiveStatus({
-        presence: "loading",
-        activeTask: null,
-        taskMessages: [],
-        tAgents,
-        tChat,
-      }),
+      resolveAgentLiveStatus({ presence: "loading", activeTask: null, latestActivity: null, tAgents, tChat }),
     ).toBeNull();
   });
 
@@ -121,7 +118,7 @@ describe("resolveAgentLiveStatus", () => {
     const view = resolveAgentLiveStatus({
       presence: presence({ availability: "online", workload: "idle" }),
       activeTask: null,
-      taskMessages: [],
+      latestActivity: null,
       tAgents,
       tChat,
     });
@@ -132,81 +129,70 @@ describe("resolveAgentLiveStatus", () => {
     const view = resolveAgentLiveStatus({
       presence: presence({ availability: "offline", workload: "idle" }),
       activeTask: null,
-      taskMessages: [],
+      latestActivity: null,
       tAgents,
       tChat,
     });
     expect(view?.label).toBe("Offline");
   });
 
-  it("shows Thinking for a running task with no stream yet", () => {
+  it("shows Thinking for a running task with no activity row yet", () => {
     const view = resolveAgentLiveStatus({
-      presence: presence({ availability: "online", workload: "working", runningCount: 1 }),
+      presence: online,
       activeTask: task({ id: "task-1", status: "running" }),
-      taskMessages: [],
+      latestActivity: null,
       tAgents,
       tChat,
     });
     expect(view?.label).toBe("Thinking");
-    expect(view?.textClass).toBe("text-brand");
-  });
-
-  it("shows Running command from the latest tool_use stream event", () => {
-    const view = resolveAgentLiveStatus({
-      presence: presence({ availability: "online", workload: "working", runningCount: 1 }),
-      activeTask: task({ id: "task-1", status: "running" }),
-      taskMessages: [
-        msg({ type: "thinking", seq: 1 }),
-        msg({ type: "tool_use", seq: 2, tool: "bash" }),
-      ],
-      tAgents,
-      tChat,
-    });
-    expect(view?.label).toBe("Running command…");
-  });
-
-  it("shows Reading file for read tool", () => {
-    const view = resolveAgentLiveStatus({
-      presence: presence({ availability: "online", workload: "working", runningCount: 1 }),
-      activeTask: task({ id: "task-1", status: "running" }),
-      taskMessages: [msg({ type: "tool_use", seq: 1, tool: "read" })],
-      tAgents,
-      tChat,
-    });
-    expect(view?.label).toBe("Reading file…");
-  });
-
-  it("shows Output when the latest stream is text", () => {
-    const view = resolveAgentLiveStatus({
-      presence: presence({ availability: "online", workload: "working", runningCount: 1 }),
-      activeTask: task({ id: "task-1", status: "running" }),
-      taskMessages: [msg({ type: "text", seq: 1, content: "hello" })],
-      tAgents,
-      tChat,
-    });
-    expect(view?.label).toBe("Output");
+    expect(view?.dotClass).toBe("bg-brand");
   });
 
   it("shows Queued for a queued task while online", () => {
     const view = resolveAgentLiveStatus({
       presence: presence({ availability: "online", workload: "queued", queuedCount: 1 }),
       activeTask: task({ id: "task-1", status: "queued" }),
-      taskMessages: [],
+      latestActivity: null,
       tAgents,
       tChat,
     });
     expect(view?.label).toBe("Queued");
   });
 
-  it("does not surface bare Working when a tool is running", () => {
+  it("projects a command row as 'Running command' with the AMBER command dot (word+colour agree)", () => {
     const view = resolveAgentLiveStatus({
-      presence: presence({ availability: "online", workload: "working", runningCount: 1 }),
+      presence: online,
       activeTask: task({ id: "task-1", status: "running" }),
-      taskMessages: [msg({ type: "tool_use", seq: 1, tool: "bash" })],
+      latestActivity: evt({ activity_kind: "tool_call", tool: "bash" }),
       tAgents,
       tChat,
     });
+    expect(view?.label).toContain("Running command");
+    // The key fix (Miles): a command header must carry the amber command dot,
+    // never a blue "Working" dot — the colour is projected from the row's tone.
+    expect(view?.dotClass).toBe("bg-[#F5B301]");
+  });
+
+  it("projects a read tool row as 'Reading file'", () => {
+    const view = resolveAgentLiveStatus({
+      presence: online,
+      activeTask: task({ id: "task-1", status: "running" }),
+      latestActivity: evt({ activity_kind: "tool_call", tool: "read_file" }),
+      tAgents,
+      tChat,
+    });
+    expect(view?.label).toContain("Reading file");
+  });
+
+  it("projects a text row as 'Output', never a bare 'Working'", () => {
+    const view = resolveAgentLiveStatus({
+      presence: online,
+      activeTask: task({ id: "task-1", status: "running" }),
+      latestActivity: evt({ activity_kind: "text", text: "hello" }),
+      tAgents,
+      tChat,
+    });
+    expect(view?.label).toBe("Output");
     expect(view?.label).not.toBe("Working");
-    expect(view?.label).toBe("Running command…");
   });
 });

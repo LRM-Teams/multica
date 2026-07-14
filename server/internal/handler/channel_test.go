@@ -656,6 +656,42 @@ func TestChannelAmbientUnreadPromptKeepsLatestTriggerWhenCursorIsStale(t *testin
 	}
 }
 
+func TestChannelAmbientUnreadPromptIncludesSystemRows(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "Ambient System Reader "+uuid.NewString()[:8], nil)
+	channelID := seedChannelForTest(t, "ambient-system-read-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+	agent, err := testHandler.Queries.GetAgent(ctx, parseUUID(agentID))
+	if err != nil {
+		t.Fatalf("load agent: %v", err)
+	}
+	systemNotice := "member event visible to runtime " + uuid.NewString()
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "system", pgtype.UUID{}, "system", systemNotice, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
+		t.Fatalf("insert system message: %v", err)
+	}
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "ordinary ambient after system row", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("insert ambient trigger: %v", err)
+	}
+
+	prompt := testHandler.buildChannelAmbientUnreadPromptWithDB(ctx, testHandler.DB, ch, agent, trigger, 0, trigger.Seq)
+	if !strings.Contains(prompt, systemNotice) || !strings.Contains(prompt, "system (system): "+systemNotice) {
+		t.Fatalf("ambient prompt omitted labeled system row:\n%s", prompt)
+	}
+}
+
 func TestChannelAmbientGateSerializesConcurrentSameAgentAmbient(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -2287,29 +2323,54 @@ func TestChannelAmbientGreetingPromptUsesReactionOnlyForLargerChannel(t *testing
 	}
 }
 
-func TestChannelMentionedAgentsMatchesHandleDisplayAndStructuredID(t *testing.T) {
+func TestContentMentionsAgentRequiresAnExactBareHandle(t *testing.T) {
+	const handle = "wendy"
+	const mentionID = "11111111-1111-1111-1111-111111111111"
+
+	cases := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{"exact handle", "please @wendy review this", true},
+		{"handle suffix", "please @wendy_2 review this", false},
+		{"handle prefix", "please @wendy-review review this", false},
+		{"email address", "wendy@wendy.example.com", false},
+		{"canonical mention label", fmt.Sprintf("please [@Wendy](mention://agent/%s) review this", mentionID), false},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			bareContent := util.MentionRe.ReplaceAllString(tt.content, " ")
+			if got := contentMentionsAgent(bareContent, handle); got != tt.want {
+				t.Fatalf("contentMentionsAgent(%q, %q) = %t, want %t", tt.content, handle, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestChannelMentionedAgentsUsesHandlesOrStructuredIDs(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 
 	ctx := context.Background()
 	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
-	handle := "identity_handle_" + suffix
-	displayName := "Identity Display " + suffix
+	handle := "wendy_" + suffix
+	secondHandle := handle + "_2"
+	displayName := "Wendy"
 	agentID := createHandlerTestAgent(t, handle, nil)
-	decoyID := createHandlerTestAgent(t, "identity_decoy_"+suffix, nil)
-	if _, err := testPool.Exec(ctx, `UPDATE agent SET display_name = $2 WHERE id = $1`, agentID, displayName); err != nil {
-		t.Fatalf("set agent display_name: %v", err)
-	}
-	if _, err := testPool.Exec(ctx, `UPDATE agent SET display_name = $2 WHERE id = $1`, decoyID, "Identity Decoy "+suffix); err != nil {
-		t.Fatalf("set decoy display_name: %v", err)
+	secondAgentID := createHandlerTestAgent(t, secondHandle, nil)
+	for _, id := range []string{agentID, secondAgentID} {
+		if _, err := testPool.Exec(ctx, `UPDATE agent SET display_name = $2 WHERE id = $1`, id, displayName); err != nil {
+			t.Fatalf("set duplicate display_name: %v", err)
+		}
 	}
 
 	channelID := seedChannelForTest(t, "identity-mentions-"+suffix, testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'agent', $3), ($1, $2, 'agent', $4)`,
-		channelID, testWorkspaceID, agentID, decoyID,
+		channelID, testWorkspaceID, agentID, secondAgentID,
 	); err != nil {
 		t.Fatalf("seed agent members: %v", err)
 	}
@@ -2317,25 +2378,28 @@ func TestChannelMentionedAgentsMatchesHandleDisplayAndStructuredID(t *testing.T)
 	cases := []struct {
 		name    string
 		content string
+		wantID  string
 	}{
-		{"bare handle", "please @" + handle + " jump in"},
-		{"bare display", "please @" + displayName + " jump in"},
-		{"structured id", fmt.Sprintf("please [@Old Label](mention://agent/%s) jump in", agentID)},
+		{"bare unique handle", "please @" + handle + " jump in", agentID},
+		{"bare display name is not routable", "please @Wendy jump in", ""},
+		{"structured mention targets first duplicate", fmt.Sprintf("please [@Wendy](mention://agent/%s) jump in", agentID), agentID},
+		{"structured mention targets second duplicate", fmt.Sprintf("please [@Wendy](mention://agent/%s) jump in", secondAgentID), secondAgentID},
+		{"handle prefix does not match", "please @" + secondHandle + " jump in", secondAgentID},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
 			agents := testHandler.channelMentionedAgents(ctx, testWorkspaceID, channelID, tt.content)
+			if tt.wantID == "" {
+				if len(agents) != 0 {
+					t.Fatalf("channelMentionedAgents returned %d agents, want none: %+v", len(agents), agents)
+				}
+				return
+			}
 			if len(agents) != 1 {
 				t.Fatalf("channelMentionedAgents returned %d agents, want 1: %+v", len(agents), agents)
 			}
-			if got := uuidToString(agents[0].ID); got != agentID {
-				t.Fatalf("mentioned agent = %s, want %s", got, agentID)
-			}
-			if agents[0].Name != handle {
-				t.Fatalf("mentioned handle = %q, want %q", agents[0].Name, handle)
-			}
-			if agents[0].DisplayName != displayName {
-				t.Fatalf("mentioned display_name = %q, want %q", agents[0].DisplayName, displayName)
+			if got := uuidToString(agents[0].ID); got != tt.wantID {
+				t.Fatalf("mentioned agent = %s, want %s", got, tt.wantID)
 			}
 		})
 	}
@@ -5485,8 +5549,15 @@ func TestAddChannelMemberSystemEventIncludesAgentTargetRef(t *testing.T) {
 		t.Skip("database not available")
 	}
 
+	ctx := context.Background()
+	readerAgentID := createHandlerTestAgent(t, "channel_event_reader_"+strings.ReplaceAll(uuid.NewString(), "-", ""), nil)
 	agentID := createHandlerTestAgent(t, "channel_event_agent_"+strings.ReplaceAll(uuid.NewString(), "-", ""), nil)
 	channelID := seedChannelForTest(t, "member-add-agent-event-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, readerAgentID); err != nil {
+		t.Fatalf("seed reader agent member: %v", err)
+	}
 
 	req := newRequestAs(testUserID, http.MethodPost, "/api/channels/"+channelID+"/members", AddChannelMemberRequest{MemberType: "agent", MemberID: agentID})
 	req = withChannelTestWorkspaceCtx(t, req, testUserID)
@@ -5499,6 +5570,17 @@ func TestAddChannelMemberSystemEventIncludesAgentTargetRef(t *testing.T) {
 
 	event := latestChannelSystemEventForTest(t, channelID)
 	assertChannelMemberSystemEvent(t, event, channelMemberAddedEvent, testUserID, "human", agentID, "agent")
+
+	var inboxEvents int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM agent_inbox_event
+		WHERE channel_id = $1`, channelID).Scan(&inboxEvents); err != nil {
+		t.Fatalf("count system-only inbox events: %v", err)
+	}
+	if inboxEvents != 0 {
+		t.Fatalf("system-only member event created agent inbox events = %d, want 0", inboxEvents)
+	}
 }
 
 func TestRemoveChannelMemberEmitsRemovedSystemEventForRemainingMembers(t *testing.T) {

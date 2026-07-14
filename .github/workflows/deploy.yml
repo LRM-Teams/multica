@@ -63,6 +63,7 @@ jobs:
       tag: ${{ steps.prep.outputs.tag }}
       backend_image: ${{ steps.prep.outputs.backend_image }}
       web_image: ${{ steps.prep.outputs.web_image }}
+      db_bridge_image: ${{ steps.prep.outputs.db_bridge_image }}
     steps:
       # On dev push or manual dev dispatch, build the committed dev head.
       - uses: actions/checkout@v4
@@ -78,6 +79,7 @@ jobs:
           {
             echo "backend_image=ghcr.io/${owner_lc}/multica-backend"
             echo "web_image=ghcr.io/${owner_lc}/multica-web"
+            echo "db_bridge_image=ghcr.io/${owner_lc}/multica-db-bridge"
             echo "tag=sha-${sha}"
           } >> "$GITHUB_OUTPUT"
 
@@ -123,6 +125,22 @@ jobs:
             NEXT_PUBLIC_APP_VERSION=${{ steps.prep.outputs.tag }}
           cache-from: type=gha,scope=deploy-web
           cache-to: type=gha,mode=max,scope=deploy-web
+
+      - name: Build & push db-bridge
+        # The multica-side bridge server image. Context is the db_bridge/
+        # subproject (own pyproject + Dockerfile); file defaults to
+        # db_bridge/Dockerfile. The Dockerfile's default CMD (run_stub) is
+        # overridden to run_multica by the compose service at deploy time.
+        uses: docker/build-push-action@v6
+        with:
+          context: db_bridge
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.prep.outputs.db_bridge_image }}:latest
+            ${{ steps.prep.outputs.db_bridge_image }}:${{ steps.prep.outputs.tag }}
+          cache-from: type=gha,scope=deploy-db-bridge
+          cache-to: type=gha,mode=max,scope=deploy-db-bridge
 
   deploy:
     needs: build
@@ -185,6 +203,7 @@ jobs:
           owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
           export MULTICA_BACKEND_IMAGE="ghcr.io/${owner_lc}/multica-backend"
           export MULTICA_WEB_IMAGE="ghcr.io/${owner_lc}/multica-web"
+          export MULTICA_DB_BRIDGE_IMAGE="ghcr.io/${owner_lc}/multica-db-bridge"
           export MULTICA_IMAGE_TAG="${IMAGE_TAG}"
           if [ -z "${POSTGRES_PASSWORD:-}" ]; then
             echo "::error::POSTGRES_PASSWORD secret is empty — s89 Environment secret not wired. Aborting to avoid deploying with the wrong DB password."
@@ -205,6 +224,16 @@ jobs:
           # DNS race that caused intermittent 'no such host' errors (#324).
           compose up -d frontend
           compose up -d backend
+          # db-bridge (multica-side bridge server) is profile-gated in the
+          # compose file, so naming it explicitly is what starts it. The pull
+          # is best-effort: a rollback dispatch that names a tag predating the
+          # db-bridge image must NOT abort the backend/frontend roll, so warn
+          # and leave any existing db-bridge container running.
+          if compose pull db-bridge; then
+            compose up -d db-bridge
+          else
+            echo "::warning::db-bridge image not found at tag ${MULTICA_IMAGE_TAG}; skipping db-bridge roll (existing container, if any, keeps running). Use a tag built with the db-bridge CD change for a full db-bridge rollback."
+          fi
           # Prune unused Docker images to prevent disk from filling up (#327).
           docker image prune -af
 
@@ -222,3 +251,31 @@ jobs:
           echo "::error::Backend did not pass /readyz within 60s — deploy likely broken."
           docker logs --tail 80 multica-backend-1 || true
           exit 1
+
+      - name: Health check (db-bridge /healthz)
+        # db-bridge is an auxiliary bridge service, not part of the core
+        # multica app, so a db-bridge health failure is surfaced as a warning
+        # rather than failing the whole deploy (which would mark backend/
+        # frontend rolls red for a service unrelated to them). Skipped when no
+        # db-bridge container is running (e.g. rollback to a tag that predates
+        # the db-bridge image). Flip the ::warning to ::error + exit 1 to make
+        # this strict once the bridge is stable in production.
+        if: always()
+        run: |
+          set -uo pipefail
+          if ! docker ps --format '{{.Names}}' | grep -q '^multica-db-bridge-1$'; then
+            echo "db-bridge container not running - skipping /healthz check."
+            exit 0
+          fi
+          set -a; . "${DEPLOY_DIR}/.env" 2>/dev/null || true; set +a
+          port="${MULTICA_PORT:-9200}"
+          for i in $(seq 1 30); do
+            if curl -fsS "http://127.0.0.1:${port}/healthz" >/dev/null 2>&1; then
+              echo "db-bridge healthy after $((i * 2))s."
+              exit 0
+            fi
+            echo "waiting for db-bridge readiness... ($i/30)"
+            sleep 2
+          done
+          echo "::warning::db-bridge did not pass /healthz within 60s - investigate the bridge container."
+          docker logs --tail 80 multica-db-bridge-1 || true

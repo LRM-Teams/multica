@@ -19,7 +19,7 @@ SET
     finished_at = COALESCE(finished_at, now()),
     updated_at = now()
 WHERE task_id = $1
-  AND status IN ('planned', 'queued', 'running')
+  AND status IN ('planned', 'queued', 'running', 'executing')
 `
 
 type CancelAgentRadarRunByTaskIDParams struct {
@@ -35,13 +35,103 @@ func (q *Queries) CancelAgentRadarRunByTaskID(ctx context.Context, arg CancelAge
 	return result.RowsAffected(), nil
 }
 
-const countRecentAgentRadarRuns = `-- name: CountRecentAgentRadarRuns :one
+const claimAgentRadarRunForCompletedTask = `-- name: ClaimAgentRadarRunForCompletedTask :one
+UPDATE agent_radar_run run
+SET
+    status = 'executing',
+    started_at = COALESCE(run.started_at, now()),
+    updated_at = now()
+FROM agent_task_queue task
+WHERE run.id = $1
+  AND run.task_id = $2
+  AND task.id = $2
+  AND task.agent_id = run.agent_id
+  AND task.status = 'completed'
+  AND task.context->>'type' = 'agent_radar'
+  AND task.context->>'radar_run_id' = run.id::text
+  AND run.status IN ('queued', 'running')
+RETURNING run.id, run.workspace_id, run.agent_id, run.runtime_id, run.task_id, run.trigger_kind, run.trigger_ref, run.status, run.cooldown_key, run.context_summary, run.action_plan, run.error, run.scheduled_for, run.started_at, run.finished_at, run.created_at, run.updated_at
+`
+
+type ClaimAgentRadarRunForCompletedTaskParams struct {
+	RunID  pgtype.UUID `json:"run_id"`
+	TaskID pgtype.UUID `json:"task_id"`
+}
+
+// CompleteAgentTask and this claim run in the same transaction. Other
+// transactions therefore observe either running+queued/running or
+// completed+executing, never the crash window completed+unclaimed.
+func (q *Queries) ClaimAgentRadarRunForCompletedTask(ctx context.Context, arg ClaimAgentRadarRunForCompletedTaskParams) (AgentRadarRun, error) {
+	row := q.db.QueryRow(ctx, claimAgentRadarRunForCompletedTask, arg.RunID, arg.TaskID)
+	var i AgentRadarRun
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.AgentID,
+		&i.RuntimeID,
+		&i.TaskID,
+		&i.TriggerKind,
+		&i.TriggerRef,
+		&i.Status,
+		&i.CooldownKey,
+		&i.ContextSummary,
+		&i.ActionPlan,
+		&i.Error,
+		&i.ScheduledFor,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const claimAgentRadarRunForExecution = `-- name: ClaimAgentRadarRunForExecution :one
+UPDATE agent_radar_run
+SET
+    status = 'executing',
+    started_at = COALESCE(started_at, now()),
+    updated_at = now()
+WHERE id = $1
+  AND status IN ('queued', 'running')
+RETURNING id, workspace_id, agent_id, runtime_id, task_id, trigger_kind, trigger_ref, status, cooldown_key, context_summary, action_plan, error, scheduled_for, started_at, finished_at, created_at, updated_at
+`
+
+// Completion requests are retryable at the HTTP layer. Only one request may
+// cross this state boundary and execute the action plan.
+func (q *Queries) ClaimAgentRadarRunForExecution(ctx context.Context, id pgtype.UUID) (AgentRadarRun, error) {
+	row := q.db.QueryRow(ctx, claimAgentRadarRunForExecution, id)
+	var i AgentRadarRun
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.AgentID,
+		&i.RuntimeID,
+		&i.TaskID,
+		&i.TriggerKind,
+		&i.TriggerRef,
+		&i.Status,
+		&i.CooldownKey,
+		&i.ContextSummary,
+		&i.ActionPlan,
+		&i.Error,
+		&i.ScheduledFor,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const countRecentWorkspaceScheduledRadarRuns = `-- name: CountRecentWorkspaceScheduledRadarRuns :one
 SELECT count(*)::bigint
 FROM agent_radar_run rr
 LEFT JOIN agent_task_queue atq ON atq.id = rr.task_id
 WHERE rr.workspace_id = $1
-  AND rr.agent_id = $2
-  AND rr.created_at >= $3
+  AND rr.trigger_kind = 'scheduled'
+  AND rr.cooldown_key = 'workspace_supervisor_radar'
+  AND rr.created_at >= $2
   -- Migration 167 closed invalid pre-existing runs so the active-run unique
   -- guard could be installed. Those rows never represented a new Radar
   -- attempt and must not consume the retry-storm budget.
@@ -58,14 +148,13 @@ WHERE rr.workspace_id = $1
   )
 `
 
-type CountRecentAgentRadarRunsParams struct {
+type CountRecentWorkspaceScheduledRadarRunsParams struct {
 	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	AgentID     pgtype.UUID        `json:"agent_id"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
-func (q *Queries) CountRecentAgentRadarRuns(ctx context.Context, arg CountRecentAgentRadarRunsParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countRecentAgentRadarRuns, arg.WorkspaceID, arg.AgentID, arg.CreatedAt)
+func (q *Queries) CountRecentWorkspaceScheduledRadarRuns(ctx context.Context, arg CountRecentWorkspaceScheduledRadarRunsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countRecentWorkspaceScheduledRadarRuns, arg.WorkspaceID, arg.CreatedAt)
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
@@ -79,9 +168,7 @@ INSERT INTO agent_radar_action (
     $1, $2, $3, $4, COALESCE($12, 'proposed'), $5,
     $6, $7, $8, $13, $9, $10, $11
 )
-ON CONFLICT (workspace_id, agent_id, dedupe_key)
-WHERE dedupe_key <> '' AND status IN ('proposed', 'approved', 'executing', 'executed')
-DO NOTHING
+ON CONFLICT DO NOTHING
 RETURNING id, radar_run_id, workspace_id, agent_id, action_type, status, risk_level, confidence, dedupe_key, target_kind, target_id, reason, evidence, payload, result, error, created_at, updated_at
 `
 
@@ -101,6 +188,8 @@ type CreateAgentRadarActionParams struct {
 	TargetID    pgtype.UUID `json:"target_id"`
 }
 
+// Handle both the historical per-agent dedupe index and the workspace-wide
+// scheduled-Wendy index installed by migration 169.
 func (q *Queries) CreateAgentRadarAction(ctx context.Context, arg CreateAgentRadarActionParams) (AgentRadarAction, error) {
 	row := q.db.QueryRow(ctx, createAgentRadarAction,
 		arg.RadarRunID,
@@ -149,9 +238,7 @@ INSERT INTO agent_radar_run (
     $1, $2, $7, $3, $4,
     COALESCE($8, 'planned'), $5, $6, COALESCE($9, now())
 )
-ON CONFLICT (workspace_id, agent_id)
-WHERE status IN ('planned', 'queued', 'running')
-DO NOTHING
+ON CONFLICT DO NOTHING
 RETURNING id, workspace_id, agent_id, runtime_id, task_id, trigger_kind, trigger_ref, status, cooldown_key, context_summary, action_plan, error, scheduled_for, started_at, finished_at, created_at, updated_at
 `
 
@@ -167,6 +254,8 @@ type CreateAgentRadarRunParams struct {
 	ScheduledFor   interface{} `json:"scheduled_for"`
 }
 
+// Handle both the per-agent active guard and the workspace-supervisor active
+// guard installed by migration 169.
 func (q *Queries) CreateAgentRadarRun(ctx context.Context, arg CreateAgentRadarRunParams) (AgentRadarRun, error) {
 	row := q.db.QueryRow(ctx, createAgentRadarRun,
 		arg.WorkspaceID,
@@ -210,7 +299,7 @@ SET
     finished_at = COALESCE(finished_at, now()),
     updated_at = now()
 WHERE task_id = $1
-  AND status IN ('planned', 'queued', 'running')
+  AND status IN ('planned', 'queued', 'running', 'executing')
 `
 
 type FailAgentRadarRunByTaskIDParams struct {
@@ -245,7 +334,9 @@ WITH victims AS MATERIALIZED (
       AND atq.context->>'radar_run_id' = rr.id::text
     ORDER BY atq.created_at ASC, atq.id ASC
     LIMIT $2::int
-    FOR UPDATE OF rr, atq SKIP LOCKED
+    -- Completion locks task then run. This repair only mutates the task, so lock
+    -- only that row and let HandleFailedTasks terminalize the run afterwards.
+    FOR UPDATE OF atq SKIP LOCKED
 )
 UPDATE agent_task_queue atq
 SET
@@ -347,6 +438,39 @@ func (q *Queries) GetAgentRadarRun(ctx context.Context, id pgtype.UUID) (AgentRa
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const isWorkspaceRadarSupervisorAuthorized = `-- name: IsWorkspaceRadarSupervisorAuthorized :one
+SELECT EXISTS (
+    SELECT 1
+    FROM workspace_radar_state state
+    JOIN agent supervisor
+      ON supervisor.workspace_id = state.workspace_id
+     AND supervisor.id = state.supervisor_agent_id
+    JOIN member owner_member
+      ON owner_member.workspace_id = state.workspace_id
+     AND owner_member.user_id = supervisor.owner_id
+     AND owner_member.role = 'owner'
+    WHERE state.workspace_id = $1
+      AND state.supervisor_agent_id = $2
+      AND state.enabled
+      AND supervisor.archived_at IS NULL
+)
+`
+
+type IsWorkspaceRadarSupervisorAuthorizedParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	AgentID     pgtype.UUID `json:"agent_id"`
+}
+
+// A Wendy binding remains valid only while its owner still owns the workspace.
+// Scheduler and executor both use this check so an ownership transfer cannot
+// leave the former owner's private agent supervising workspace data.
+func (q *Queries) IsWorkspaceRadarSupervisorAuthorized(ctx context.Context, arg IsWorkspaceRadarSupervisorAuthorizedParams) (bool, error) {
+	row := q.db.QueryRow(ctx, isWorkspaceRadarSupervisorAuthorized, arg.WorkspaceID, arg.AgentID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
 const listAgentRadarActionsByRun = `-- name: ListAgentRadarActionsByRun :many
@@ -508,6 +632,402 @@ func (q *Queries) MarkAgentRadarRunRunningByTaskID(ctx context.Context, taskID p
 	return result.RowsAffected(), nil
 }
 
+const markWorkspaceRadarCancelledByRunID = `-- name: MarkWorkspaceRadarCancelledByRunID :execrows
+WITH eligible AS MATERIALIZED (
+    SELECT run.id, run.workspace_id, run.agent_id, run.runtime_id, run.task_id, run.trigger_kind, run.trigger_ref, run.status, run.cooldown_key, run.context_summary, run.action_plan, run.error, run.scheduled_for, run.started_at, run.finished_at, run.created_at, run.updated_at
+    FROM agent_radar_run run
+    WHERE run.id = $1
+      AND run.trigger_kind = 'scheduled'
+      AND run.cooldown_key = 'workspace_supervisor_radar'
+      AND run.status = 'cancelled'
+), claimed AS (
+    INSERT INTO workspace_radar_run_state_ack (radar_run_id, outcome)
+    SELECT eligible.id, 'cancelled'
+    FROM eligible
+    ON CONFLICT (radar_run_id) DO NOTHING
+    RETURNING radar_run_id
+)
+UPDATE workspace_radar_state state
+SET
+    next_due_at = now() + interval '30 minutes',
+    last_applied_scheduled_for = GREATEST(COALESCE(state.last_applied_scheduled_for, run.scheduled_for), run.scheduled_for),
+    updated_at = now()
+FROM eligible run
+JOIN claimed ON claimed.radar_run_id = run.id
+WHERE run.workspace_id = state.workspace_id
+  AND run.agent_id = state.supervisor_agent_id
+  AND (
+    state.last_applied_scheduled_for IS NULL
+    OR run.scheduled_for >= state.last_applied_scheduled_for
+  )
+`
+
+func (q *Queries) MarkWorkspaceRadarCancelledByRunID(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, markWorkspaceRadarCancelledByRunID, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const markWorkspaceRadarCancelledByTaskID = `-- name: MarkWorkspaceRadarCancelledByTaskID :execrows
+WITH eligible AS MATERIALIZED (
+    SELECT run.id, run.workspace_id, run.agent_id, run.runtime_id, run.task_id, run.trigger_kind, run.trigger_ref, run.status, run.cooldown_key, run.context_summary, run.action_plan, run.error, run.scheduled_for, run.started_at, run.finished_at, run.created_at, run.updated_at
+    FROM agent_radar_run run
+    WHERE run.task_id = $1
+      AND run.trigger_kind = 'scheduled'
+      AND run.cooldown_key = 'workspace_supervisor_radar'
+      AND run.status = 'cancelled'
+), claimed AS (
+    INSERT INTO workspace_radar_run_state_ack (radar_run_id, outcome)
+    SELECT eligible.id, 'cancelled'
+    FROM eligible
+    ON CONFLICT (radar_run_id) DO NOTHING
+    RETURNING radar_run_id
+)
+UPDATE workspace_radar_state state
+SET
+    next_due_at = now() + interval '30 minutes',
+    last_applied_scheduled_for = GREATEST(COALESCE(state.last_applied_scheduled_for, run.scheduled_for), run.scheduled_for),
+    updated_at = now()
+FROM eligible run
+JOIN claimed ON claimed.radar_run_id = run.id
+WHERE run.workspace_id = state.workspace_id
+  AND run.agent_id = state.supervisor_agent_id
+  AND (
+    state.last_applied_scheduled_for IS NULL
+    OR run.scheduled_for >= state.last_applied_scheduled_for
+  )
+`
+
+func (q *Queries) MarkWorkspaceRadarCancelledByTaskID(ctx context.Context, taskID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, markWorkspaceRadarCancelledByTaskID, taskID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const markWorkspaceRadarFailedByRunID = `-- name: MarkWorkspaceRadarFailedByRunID :execrows
+WITH eligible AS MATERIALIZED (
+    SELECT run.id, run.workspace_id, run.agent_id, run.runtime_id, run.task_id, run.trigger_kind, run.trigger_ref, run.status, run.cooldown_key, run.context_summary, run.action_plan, run.error, run.scheduled_for, run.started_at, run.finished_at, run.created_at, run.updated_at
+    FROM agent_radar_run run
+    WHERE run.id = $1
+      AND run.trigger_kind = 'scheduled'
+      AND run.cooldown_key = 'workspace_supervisor_radar'
+      AND run.status = 'failed'
+), claimed AS (
+    INSERT INTO workspace_radar_run_state_ack (radar_run_id, outcome)
+    SELECT eligible.id, 'failed'
+    FROM eligible
+    ON CONFLICT (radar_run_id) DO NOTHING
+    RETURNING radar_run_id
+)
+UPDATE workspace_radar_state state
+SET
+    consecutive_failures = state.consecutive_failures + 1,
+    next_due_at = now() + CASE
+      WHEN state.consecutive_failures = 0 THEN interval '15 minutes'
+      WHEN state.consecutive_failures = 1 THEN interval '30 minutes'
+      WHEN state.consecutive_failures = 2 THEN interval '1 hour'
+      ELSE interval '2 hours'
+    END,
+    last_applied_scheduled_for = GREATEST(COALESCE(state.last_applied_scheduled_for, run.scheduled_for), run.scheduled_for),
+    updated_at = now()
+FROM eligible run
+JOIN claimed ON claimed.radar_run_id = run.id
+WHERE run.workspace_id = state.workspace_id
+  AND run.agent_id = state.supervisor_agent_id
+  AND (
+    state.last_applied_scheduled_for IS NULL
+    OR run.scheduled_for >= state.last_applied_scheduled_for
+  )
+`
+
+func (q *Queries) MarkWorkspaceRadarFailedByRunID(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, markWorkspaceRadarFailedByRunID, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const markWorkspaceRadarFailedByTaskID = `-- name: MarkWorkspaceRadarFailedByTaskID :execrows
+WITH eligible AS MATERIALIZED (
+    SELECT run.id, run.workspace_id, run.agent_id, run.runtime_id, run.task_id, run.trigger_kind, run.trigger_ref, run.status, run.cooldown_key, run.context_summary, run.action_plan, run.error, run.scheduled_for, run.started_at, run.finished_at, run.created_at, run.updated_at
+    FROM agent_radar_run run
+    WHERE run.task_id = $1
+      AND run.trigger_kind = 'scheduled'
+      AND run.cooldown_key = 'workspace_supervisor_radar'
+      AND run.status = 'failed'
+), claimed AS (
+    INSERT INTO workspace_radar_run_state_ack (radar_run_id, outcome)
+    SELECT eligible.id, 'failed'
+    FROM eligible
+    ON CONFLICT (radar_run_id) DO NOTHING
+    RETURNING radar_run_id
+)
+UPDATE workspace_radar_state state
+SET
+    consecutive_failures = state.consecutive_failures + 1,
+    next_due_at = now() + CASE
+      WHEN state.consecutive_failures = 0 THEN interval '15 minutes'
+      WHEN state.consecutive_failures = 1 THEN interval '30 minutes'
+      WHEN state.consecutive_failures = 2 THEN interval '1 hour'
+      ELSE interval '2 hours'
+    END,
+    last_applied_scheduled_for = GREATEST(COALESCE(state.last_applied_scheduled_for, run.scheduled_for), run.scheduled_for),
+    updated_at = now()
+FROM eligible run
+JOIN claimed ON claimed.radar_run_id = run.id
+WHERE run.workspace_id = state.workspace_id
+  AND run.agent_id = state.supervisor_agent_id
+  AND (
+    state.last_applied_scheduled_for IS NULL
+    OR run.scheduled_for >= state.last_applied_scheduled_for
+  )
+`
+
+func (q *Queries) MarkWorkspaceRadarFailedByTaskID(ctx context.Context, taskID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, markWorkspaceRadarFailedByTaskID, taskID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const markWorkspaceRadarSucceeded = `-- name: MarkWorkspaceRadarSucceeded :execrows
+WITH eligible AS MATERIALIZED (
+    SELECT run.id, run.workspace_id, run.agent_id, run.runtime_id, run.task_id, run.trigger_kind, run.trigger_ref, run.status, run.cooldown_key, run.context_summary, run.action_plan, run.error, run.scheduled_for, run.started_at, run.finished_at, run.created_at, run.updated_at, scan.change_cursor_through_version, scan.changes_has_more,
+           COALESCE((scan.static_wrapped_sections->>'all')::boolean, false) AS static_cycle_complete
+    FROM agent_radar_run run
+    JOIN workspace_radar_run_scan scan ON scan.radar_run_id = run.id
+    WHERE run.id = $1
+      AND run.trigger_kind = 'scheduled'
+      AND run.cooldown_key = 'workspace_supervisor_radar'
+      AND run.status IN ('succeeded', 'no_action')
+), claimed AS (
+    INSERT INTO workspace_radar_run_state_ack (radar_run_id, outcome)
+    SELECT eligible.id, 'succeeded'
+    FROM eligible
+    ON CONFLICT (radar_run_id) DO NOTHING
+    RETURNING radar_run_id
+)
+UPDATE workspace_radar_state state
+SET
+    last_success_at = GREATEST(COALESCE(state.last_success_at, run.scheduled_for), run.scheduled_for),
+    last_full_review_at = CASE
+      WHEN run.static_cycle_complete
+      THEN GREATEST(COALESCE(state.last_full_review_at, run.scheduled_for), run.scheduled_for)
+      ELSE state.last_full_review_at
+    END,
+    change_cursor_version = GREATEST(state.change_cursor_version, run.change_cursor_through_version),
+    last_applied_scheduled_for = GREATEST(COALESCE(state.last_applied_scheduled_for, run.scheduled_for), run.scheduled_for),
+    consecutive_failures = 0,
+    next_due_at = CASE
+      WHEN run.changes_has_more
+        OR state.change_version > run.change_cursor_through_version
+        OR NOT run.static_cycle_complete
+      THEN now()
+      ELSE now() + interval '30 minutes'
+    END,
+    updated_at = now()
+FROM eligible run
+JOIN claimed ON claimed.radar_run_id = run.id
+WHERE run.workspace_id = state.workspace_id
+  AND run.agent_id = state.supervisor_agent_id
+  AND (
+    state.last_applied_scheduled_for IS NULL
+    OR run.scheduled_for >= state.last_applied_scheduled_for
+  )
+`
+
+// Use the run's scheduled_for timestamp as the observation watermark. Changes
+// committed while the model was running therefore remain visible to the next
+// sweep instead of being skipped by a completion-time watermark.
+//
+// The receipt CTE makes this state transition idempotent. last_full_review_at
+// advances only when this run was due for the six-hour full review; ordinary
+// change-driven runs no longer postpone that review indefinitely.
+func (q *Queries) MarkWorkspaceRadarSucceeded(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, markWorkspaceRadarSucceeded, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const reconcileTerminalWorkspaceRadarRuns = `-- name: ReconcileTerminalWorkspaceRadarRuns :one
+WITH terminalized AS MATERIALIZED (
+    UPDATE agent_radar_run run
+    SET status = CASE WHEN task.status = 'cancelled' THEN 'cancelled' ELSE 'failed' END,
+        error = CASE
+          WHEN run.error <> '' THEN run.error
+          WHEN task.status = 'completed' THEN 'Radar completion processing was interrupted'
+          ELSE COALESCE(task.error, task.failure_reason, 'Radar task terminated')
+        END,
+        finished_at = COALESCE(run.finished_at, now()),
+        updated_at = now()
+    FROM agent_task_queue task
+    WHERE run.task_id = task.id
+      AND (
+        (
+          task.status IN ('failed', 'cancelled')
+          AND run.status IN ('planned', 'queued', 'running', 'executing')
+        )
+        OR (
+          task.status = 'completed'
+          AND (
+            (
+              run.status IN ('planned', 'queued', 'running')
+              AND COALESCE(task.completed_at, task.created_at) < now() - interval '5 minutes'
+            )
+            OR (
+              run.status = 'executing'
+              AND run.updated_at < now() - interval '5 minutes'
+            )
+          )
+        )
+      )
+    RETURNING run.id, run.workspace_id, run.agent_id, run.trigger_kind,
+              run.cooldown_key, run.status, run.scheduled_for
+), outcomes AS MATERIALIZED (
+    SELECT terminalized.id, terminalized.workspace_id, terminalized.agent_id,
+           terminalized.status, terminalized.scheduled_for,
+           CASE
+             WHEN terminalized.status IN ('succeeded', 'no_action') THEN 'succeeded'
+             ELSE terminalized.status
+           END AS outcome
+    FROM terminalized
+    WHERE terminalized.trigger_kind = 'scheduled'
+      AND terminalized.cooldown_key = 'workspace_supervisor_radar'
+
+    UNION ALL
+
+    SELECT pending.id, pending.workspace_id, pending.agent_id,
+           pending.status, pending.scheduled_for,
+           CASE
+             WHEN pending.status IN ('succeeded', 'no_action') THEN 'succeeded'
+             ELSE pending.status
+           END AS outcome
+    FROM (
+      SELECT run.id, run.workspace_id, run.agent_id, run.status, run.scheduled_for
+      FROM agent_radar_run run
+      WHERE run.trigger_kind = 'scheduled'
+        AND run.cooldown_key = 'workspace_supervisor_radar'
+        AND run.status IN ('succeeded', 'no_action', 'failed', 'cancelled')
+        AND NOT EXISTS (
+          SELECT 1
+          FROM workspace_radar_run_state_ack ack
+          WHERE ack.radar_run_id = run.id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM terminalized WHERE terminalized.id = run.id
+        )
+      ORDER BY run.finished_at ASC NULLS FIRST, run.created_at ASC, run.id ASC
+      LIMIT 500
+    ) pending
+), latest_current_outcomes AS MATERIALIZED (
+    SELECT DISTINCT ON (outcomes.workspace_id)
+           outcomes.id, outcomes.workspace_id, outcomes.agent_id,
+           outcomes.status, outcomes.scheduled_for, outcomes.outcome
+    FROM outcomes
+    JOIN workspace_radar_state state
+      ON state.workspace_id = outcomes.workspace_id
+     AND state.supervisor_agent_id = outcomes.agent_id
+    WHERE state.last_applied_scheduled_for IS NULL
+       OR outcomes.scheduled_for > state.last_applied_scheduled_for
+    ORDER BY outcomes.workspace_id, outcomes.scheduled_for DESC, outcomes.id DESC
+), state_updates AS (
+    UPDATE workspace_radar_state state
+    SET last_success_at = CASE
+          WHEN latest_current_outcomes.outcome = 'succeeded'
+          THEN GREATEST(COALESCE(state.last_success_at, latest_current_outcomes.scheduled_for), latest_current_outcomes.scheduled_for)
+          ELSE state.last_success_at
+        END,
+        last_full_review_at = CASE
+          WHEN latest_current_outcomes.outcome = 'succeeded'
+            AND (
+              state.last_full_review_at IS NULL
+              OR latest_current_outcomes.scheduled_for >= state.last_full_review_at + interval '6 hours'
+            )
+          THEN GREATEST(COALESCE(state.last_full_review_at, latest_current_outcomes.scheduled_for), latest_current_outcomes.scheduled_for)
+          ELSE state.last_full_review_at
+        END,
+        consecutive_failures = CASE
+          WHEN latest_current_outcomes.outcome = 'succeeded' THEN 0
+          WHEN latest_current_outcomes.outcome = 'failed' THEN state.consecutive_failures + 1
+          ELSE state.consecutive_failures
+        END,
+        next_due_at = CASE
+          WHEN latest_current_outcomes.outcome IN ('succeeded', 'cancelled') THEN now() + interval '30 minutes'
+          ELSE now() + CASE
+            WHEN state.consecutive_failures = 0 THEN interval '15 minutes'
+            WHEN state.consecutive_failures = 1 THEN interval '30 minutes'
+            WHEN state.consecutive_failures = 2 THEN interval '1 hour'
+            ELSE interval '2 hours'
+          END
+        END,
+        last_applied_scheduled_for = GREATEST(
+          COALESCE(state.last_applied_scheduled_for, latest_current_outcomes.scheduled_for),
+          latest_current_outcomes.scheduled_for
+        ),
+        updated_at = now()
+    FROM latest_current_outcomes
+    WHERE latest_current_outcomes.workspace_id = state.workspace_id
+      AND latest_current_outcomes.agent_id = state.supervisor_agent_id
+      AND (
+        state.last_applied_scheduled_for IS NULL
+        OR latest_current_outcomes.scheduled_for > state.last_applied_scheduled_for
+      )
+    RETURNING state.workspace_id,
+              latest_current_outcomes.id AS radar_run_id,
+              latest_current_outcomes.outcome
+), claimable AS MATERIALIZED (
+    -- Outcomes that are obsolete for the current binding can be acknowledged
+    -- immediately. The selected current-Wendy outcome is acknowledged only if
+    -- its state update actually happened, so a concurrent rebind cannot make
+    -- reconciliation permanently discard unapplied work.
+    SELECT outcomes.id AS radar_run_id, outcomes.outcome
+    FROM outcomes
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM latest_current_outcomes current_outcome
+      WHERE current_outcome.id = outcomes.id
+    )
+
+    UNION ALL
+
+    SELECT state_updates.radar_run_id, state_updates.outcome
+    FROM state_updates
+), claimed AS (
+    INSERT INTO workspace_radar_run_state_ack (radar_run_id, outcome)
+    SELECT claimable.radar_run_id, claimable.outcome
+    FROM claimable
+    ON CONFLICT (radar_run_id) DO NOTHING
+    RETURNING radar_run_id
+)
+SELECT
+  (SELECT count(*)::bigint FROM terminalized) AS terminalized_count,
+  (SELECT count(*)::bigint FROM state_updates) AS state_updated_count
+`
+
+type ReconcileTerminalWorkspaceRadarRunsRow struct {
+	TerminalizedCount int64 `json:"terminalized_count"`
+	StateUpdatedCount int64 `json:"state_updated_count"`
+}
+
+// Atomic crash-window repair. Cancelled tasks defer the next check without
+// increasing the failure counter; completed/failed tasks count as one failure.
+// A normally executing completion owns a terminal task, so reclaim it only
+// after its execution claim has been stale for five minutes.
+func (q *Queries) ReconcileTerminalWorkspaceRadarRuns(ctx context.Context) (ReconcileTerminalWorkspaceRadarRunsRow, error) {
+	row := q.db.QueryRow(ctx, reconcileTerminalWorkspaceRadarRuns)
+	var i ReconcileTerminalWorkspaceRadarRunsRow
+	err := row.Scan(&i.TerminalizedCount, &i.StateUpdatedCount)
+	return i, err
+}
+
 const updateAgentRadarActionStatus = `-- name: UpdateAgentRadarActionStatus :one
 UPDATE agent_radar_action
 SET
@@ -568,6 +1088,10 @@ SET
     finished_at = CASE WHEN $2 IN ('succeeded', 'no_action', 'failed', 'cancelled') THEN now() ELSE finished_at END,
     updated_at = now()
 WHERE id = $1
+  AND (
+    $2 NOT IN ('succeeded', 'no_action', 'failed', 'cancelled')
+    OR status = 'executing'
+  )
 RETURNING id, workspace_id, agent_id, runtime_id, task_id, trigger_kind, trigger_ref, status, cooldown_key, context_summary, action_plan, error, scheduled_for, started_at, finished_at, created_at, updated_at
 `
 

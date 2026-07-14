@@ -411,8 +411,8 @@ func main() {
 			schedulerRegistered = true
 		}
 	}
-	if envBoolDefault("AGENT_RADAR_SCHEDULER_ENABLED", false) {
-		if err := schedulerMgr.Register(scheduler.AgentRadarScheduleJob(pool, h.TaskService)); err != nil {
+	if envBoolDefault("AGENT_RADAR_SCHEDULER_ENABLED", true) {
+		if err := schedulerMgr.Register(scheduler.AgentRadarScheduleJob(pool, h.TaskService, h)); err != nil {
 			slog.Warn("scheduler: failed to register agent radar job", "error", err)
 		} else {
 			schedulerRegistered = true

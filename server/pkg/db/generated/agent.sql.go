@@ -1912,6 +1912,49 @@ func (q *Queries) LinkTaskToIssue(ctx context.Context, arg LinkTaskToIssueParams
 	return err
 }
 
+const setAgentTaskMaxAttempts = `-- name: SetAgentTaskMaxAttempts :exec
+UPDATE agent_task_queue
+SET max_attempts = $2
+WHERE id = $1
+`
+
+type SetAgentTaskMaxAttemptsParams struct {
+	ID          pgtype.UUID `json:"id"`
+	MaxAttempts int32       `json:"max_attempts"`
+}
+
+func (q *Queries) SetAgentTaskMaxAttempts(ctx context.Context, arg SetAgentTaskMaxAttemptsParams) error {
+	_, err := q.db.Exec(ctx, setAgentTaskMaxAttempts, arg.ID, arg.MaxAttempts)
+	return err
+}
+
+const upsertAgentTaskProgressSnapshot = `-- name: UpsertAgentTaskProgressSnapshot :exec
+INSERT INTO agent_task_progress_snapshot (task_id, summary, step, total, updated_at)
+VALUES ($1, $2, $3, $4, now())
+ON CONFLICT (task_id) DO UPDATE
+SET summary = EXCLUDED.summary,
+    step = EXCLUDED.step,
+    total = EXCLUDED.total,
+    updated_at = now()
+`
+
+type UpsertAgentTaskProgressSnapshotParams struct {
+	TaskID  pgtype.UUID `json:"task_id"`
+	Summary string      `json:"summary"`
+	Step    int32       `json:"step"`
+	Total   int32       `json:"total"`
+}
+
+func (q *Queries) UpsertAgentTaskProgressSnapshot(ctx context.Context, arg UpsertAgentTaskProgressSnapshotParams) error {
+	_, err := q.db.Exec(ctx, upsertAgentTaskProgressSnapshot,
+		arg.TaskID,
+		arg.Summary,
+		arg.Step,
+		arg.Total,
+	)
+	return err
+}
+
 const listActiveAgentsByRuntime = `-- name: ListActiveAgentsByRuntime :many
 SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name FROM agent
 WHERE runtime_id = $1 AND archived_at IS NULL

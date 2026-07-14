@@ -2225,7 +2225,7 @@ func TestRadarTaskLifecycle_ResolvesWorkspaceFromLinkedRun(t *testing.T) {
 	run, task, err := testHandler.TaskService.EnqueueAgentRadarRun(ctx, service.EnqueueAgentRadarRunParams{
 		WorkspaceID:    parseUUID(testWorkspaceID),
 		AgentID:        parseUUID(agentID),
-		TriggerKind:    "scheduled",
+		TriggerKind:    "manual",
 		TriggerRef:     "daemon-lifecycle-regression",
 		CooldownKey:    "daemon-lifecycle-regression",
 		ContextSummary: "daemon lifecycle regression",

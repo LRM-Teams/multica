@@ -4126,7 +4126,6 @@ func (h *Handler) recentChannelMessages(ctx context.Context, workspaceID, channe
 			WHERE channel_id = $1
 			  AND workspace_id = $2
 			  AND (thread_root_message_id IS NULL OR main_timeline_visible)
-			  AND author_type <> 'system'
 			ORDER BY seq DESC
 			LIMIT $3
 		) recent
@@ -4154,7 +4153,7 @@ func (h *Handler) channelThreadContextMessages(ctx context.Context, workspaceID,
 		WITH replies AS (
 			SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
 			FROM channel_message
-			WHERE channel_id = $1 AND workspace_id = $2 AND thread_root_message_id = $3 AND author_type <> 'system'
+			WHERE channel_id = $1 AND workspace_id = $2 AND thread_root_message_id = $3
 			ORDER BY seq DESC
 			LIMIT $4
 		)

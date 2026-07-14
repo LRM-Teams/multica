@@ -506,7 +506,8 @@ func TestSendChannelMessageDM_BypassesAmbientGateWithActiveAmbient(t *testing.T)
 		t.Fatalf("insert ambient trigger: %v", err)
 	}
 	testHandler.dispatchChannelMessageToAgents(ctx, ch, ambient, parseUUID(testUserID))
-	assertChannelAgentInboxEventCounts(t, ambientChannelID, agentID, 1, 0)
+	assertChannelAgentInboxEventCounts(t, ambientChannelID, agentID, 0, 1)
+	assertChannelAgentWakeReasonPriority(t, ambientChannelID, agentID, ambient.ID, channelMessageWakeReason, channelMessageWakePriority)
 
 	dmChannelID := seedAgentDMChannel(t, agentID)
 	req := newRequest("POST", "/api/channels/"+dmChannelID+"/messages", map[string]string{"content": "hey, still direct"})

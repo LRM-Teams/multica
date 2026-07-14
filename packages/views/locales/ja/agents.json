@@ -352,6 +352,7 @@
     },
     "activity": {
       "timeline_empty": "アクティビティはまだありません",
+      "jump_to_latest": "最新へ移動",
       "labels": {
         "thinking": "思考中",
         "output": "出力",

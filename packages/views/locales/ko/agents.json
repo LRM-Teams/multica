@@ -368,6 +368,7 @@
     },
     "activity": {
       "timeline_empty": "아직 활동이 없습니다",
+      "jump_to_latest": "최신으로 이동",
       "labels": {
         "thinking": "생각 중",
         "output": "출력",

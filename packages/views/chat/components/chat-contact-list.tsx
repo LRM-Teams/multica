@@ -6,7 +6,6 @@ import { resolveActorDisplayName } from "@multica/core/identity";
 import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { cn } from "@multica/ui/lib/utils";
-import { agentColor } from "../../common/agent-color";
 import { initialsOf } from "../../common/initials";
 import { useT, useTimeAgo } from "../../i18n";
 
@@ -92,7 +91,6 @@ export function ChatContactList({
                     avatarUrl={agent.avatar_url}
                     isAgent
                     size={28}
-                    tint={agentColor(agent.id)}
                   />
                   {hasUnread && (
                     <span className="absolute -right-0.5 -top-0.5 size-2.5 rounded-full bg-brand ring-2 ring-sidebar" />

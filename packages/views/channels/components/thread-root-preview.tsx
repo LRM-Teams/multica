@@ -6,7 +6,6 @@ import { useActorName } from "@multica/core/workspace/hooks";
 import type { ChannelMessage } from "@multica/core/types";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
-import { agentColor } from "../../common/agent-color";
 import { initialsOf } from "../../common/initials";
 import { useT } from "../../i18n/use-t";
 import { useMessageTime } from "../../i18n/use-message-time";
@@ -46,7 +45,6 @@ export function ThreadRootPreview({
       actorType={avatarActorType}
       actorId={profileActorId}
       size={30}
-      tint={isAgent ? agentColor(message.author_id ?? message.author_name) : undefined}
       profileLink={false}
     />
   ) : (

@@ -169,6 +169,7 @@
     "processing_single": "{{name}} 正在准备回复...",
     "processing_pair": "{{a}}、{{b}} 正在准备回复...",
     "processing_overflow": "{{a}}、{{b}} 等 {{count}} 位正在准备回复...",
+    "processing_count": "{{count}} 位 agent 正在准备回复...",
     "no_reply": "已收到 · 无需回复",
     "failed": "回复失败",
     "retry": "重试",

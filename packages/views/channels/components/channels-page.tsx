@@ -22,7 +22,6 @@ import {
   Pin,
   PinOff,
   Plus,
-  RotateCcw,
   Search,
   Share2,
   Smartphone,
@@ -378,18 +377,15 @@ export function ConversationActivityStrip({
   typingActors = EMPTY_TYPING_ACTORS,
   tasks = EMPTY_ACTIVE_TASKS,
   stoppingTaskId = null,
-  retryingTaskId = null,
   onStopTask,
-  onRetryTask,
 }: {
   typingActors?: TypingActor[];
   tasks?: ChannelActiveTask[];
   stoppingTaskId?: string | null;
-  retryingTaskId?: string | null;
   onStopTask?: (task: ChannelActiveTask) => void;
-  onRetryTask?: (task: ChannelActiveTask) => void;
 }) {
   const { t } = useT("channels");
+  const [expanded, setExpanded] = useState(false);
   const typingNames = useMemo(
     () => typingActors.flatMap((a) => {
       const name = a.actorName.trim();
@@ -397,9 +393,15 @@ export function ConversationActivityStrip({
     }),
     [typingActors],
   );
-  // Split the poll result: active rows drive the "preparing…"/Stop UI; terminal
-  // rows (new-chain outcome, #388) drive the #277 no_reply/failed+Retry states.
-  // `replied` is never returned by the server (the real reply is the evidence).
+  // The strip is the "in progress" control surface ONLY — who is running now +
+  // Stop. Terminal outcomes (#388 no_reply / failed) stay visible as Activity
+  // fact rows ("what happened"); the strip is not a history review surface. The
+  // Retry action is removed per product decision (Frank 2026-07-14) — not a
+  // pending follow-up: to have an agent try again you re-@ it, so a dedicated
+  // Retry button isn't needed; failure remains visible as an Activity fact.
+  // Terminal rows are excluded here — multiple agents used to stack the Stop
+  // buttons horizontally (`overflow-x-auto`, no wrap) and garble; now they
+  // collapse behind a single count + chevron.
   const stoppableTasks = useMemo(() => {
     const next: ChannelActiveTask[] = [];
     for (const task of tasks) {
@@ -408,25 +410,6 @@ export function ConversationActivityStrip({
     }
     return next;
   }, [tasks]);
-  const terminalTasks = useMemo(
-    () => tasks.filter((task) => task.outcome === "no_reply" || task.outcome === "failed"),
-    [tasks],
-  );
-  const retryableCount = useMemo(
-    () => terminalTasks.filter((task) => task.outcome === "failed" && task.retryable).length,
-    [terminalTasks],
-  );
-  const agentNames = useMemo(() => {
-    const seen = new Set<string>();
-    const unique: string[] = [];
-    for (const task of stoppableTasks) {
-      const name = task.agent_name.trim();
-      if (!name || seen.has(name)) continue;
-      seen.add(name);
-      unique.push(name);
-    }
-    return unique;
-  }, [stoppableTasks]);
   const typingLabel =
     typingNames.length === 0
       ? null
@@ -436,106 +419,106 @@ export function ConversationActivityStrip({
           ? t(($) => $.typing.pair, { a: typingNames[0]!, b: typingNames[1]! })
           : t(($) => $.typing.overflow, { a: typingNames[0]!, b: typingNames[1]!, count: typingNames.length });
 
-  const agentLabel =
-    agentNames.length === 0
-      ? null
-      : agentNames.length === 1
-        ? t(($) => $.agent_status.processing_single, { name: agentNames[0]! })
-        : agentNames.length === 2
-          ? t(($) => $.agent_status.processing_pair, { a: agentNames[0]!, b: agentNames[1]! })
-          : t(($) => $.agent_status.processing_overflow, {
-              a: agentNames[0]!,
-              b: agentNames[1]!,
-              count: agentNames.length,
-            });
-
-  if (!typingLabel && !agentLabel && terminalTasks.length === 0) return null;
+  if (!typingLabel && stoppableTasks.length === 0) return null;
 
   return (
     <div
-      className="flex min-h-6 items-center justify-between gap-2 px-5 pb-2 text-xs text-muted-foreground"
+      className="flex min-h-6 flex-col gap-1 px-5 pb-2 text-xs text-muted-foreground"
       aria-live="polite"
       data-testid="conversation-activity-strip"
     >
-      <div className="flex min-w-0 items-center gap-1.5">
-        {typingLabel ? (
-          <span className="flex min-w-0 items-center gap-1 truncate">
-            <span className="truncate">{typingLabel}</span>
-            <TypingDots />
-          </span>
-        ) : null}
-        {typingLabel && agentLabel ? (
-          <span className="shrink-0 text-muted-foreground/50" aria-hidden="true">
-            ·
-          </span>
-        ) : null}
-        {agentLabel ? (
+      {typingLabel ? (
+        <span className="flex min-w-0 items-center gap-1 truncate">
+          <span className="truncate">{typingLabel}</span>
+          <TypingDots />
+        </span>
+      ) : null}
+      {stoppableTasks.length === 1 ? (
+        <div className="flex min-w-0 items-center justify-between gap-2">
           <span className="flex min-w-0 items-center gap-1.5 truncate">
             <UnicodeSpinner className="shrink-0 text-muted-foreground/60" />
-            <span className="truncate">{agentLabel}</span>
-          </span>
-        ) : null}
-        {(typingLabel || agentLabel) && terminalTasks.length > 0 ? (
-          <span className="shrink-0 text-muted-foreground/50" aria-hidden="true">
-            ·
-          </span>
-        ) : null}
-        {terminalTasks.map((task) => {
-          const key = task.inbox_event_id ?? task.task_id;
-          const failed = task.outcome === "failed";
-          const canRetry = failed && task.retryable === true && !!task.inbox_event_id;
-          return (
-            <span key={key} className="flex min-w-0 shrink-0 items-center gap-1.5">
-              <span
-                className={cn(
-                  "size-1.5 shrink-0 rounded-full",
-                  failed ? "bg-amber-500" : "bg-muted-foreground/40",
-                )}
-                aria-hidden="true"
-              />
-              <span className={cn("truncate", failed && "text-amber-600 dark:text-amber-500")}>
-                {failed ? t(($) => $.agent_status.failed) : t(($) => $.agent_status.no_reply)}
-              </span>
-              {canRetry && onRetryTask ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-6 gap-1 px-2 text-[11px] text-amber-600 hover:text-amber-700 dark:text-amber-500 dark:hover:text-amber-400"
-                  disabled={retryingTaskId === key}
-                  onClick={() => onRetryTask(task)}
-                  aria-label={t(($) => $.agent_status.retry_aria, { name: task.agent_name })}
-                >
-                  <RotateCcw className="size-2.5" />
-                  {retryableCount === 1
-                    ? t(($) => $.agent_status.retry)
-                    : t(($) => $.agent_status.retry_named, { name: task.agent_name })}
-                </Button>
-              ) : null}
+            <span className="truncate">
+              {t(($) => $.agent_status.processing_single, { name: stoppableTasks[0]!.agent_name })}
             </span>
-          );
-        })}
-      </div>
-      {onStopTask && stoppableTasks.length > 0 ? (
-        <div className="flex shrink-0 items-center gap-1 overflow-x-auto">
-          {stoppableTasks.map((task) => (
-            <Button
-              key={task.task_id}
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="h-6 gap-1 px-2 text-[11px] text-muted-foreground hover:text-foreground"
-              disabled={stoppingTaskId === task.task_id}
-              onClick={() => onStopTask(task)}
-              aria-label={t(($) => $.agent_status.stop_aria, { name: task.agent_name })}
-            >
-              <Square className="size-2.5 fill-current" />
-              {tasks.length === 1 ? t(($) => $.agent_status.stop) : t(($) => $.agent_status.stop_named, { name: task.agent_name })}
-            </Button>
-          ))}
+          </span>
+          {onStopTask ? (
+            <StopTaskButton
+              task={stoppableTasks[0]!}
+              stoppingTaskId={stoppingTaskId}
+              onStopTask={onStopTask}
+              t={t}
+            />
+          ) : null}
+        </div>
+      ) : stoppableTasks.length > 1 ? (
+        <div className="flex flex-col gap-1">
+          {/* Multiple agents → collapse to a single count + chevron. Whole row
+              is one toggle; the chevron is a fixed state indicator at the right
+              end (never drifts). Expand → one row per agent with its own Stop. */}
+          <button
+            type="button"
+            onClick={() => setExpanded((value) => !value)}
+            aria-expanded={expanded}
+            className="flex w-full min-w-0 items-center justify-between gap-2 text-left hover:text-foreground"
+          >
+            <span className="flex min-w-0 items-center gap-1.5 truncate">
+              <UnicodeSpinner className="shrink-0 text-muted-foreground/60" />
+              <span className="truncate">
+                {t(($) => $.agent_status.processing_count, { count: stoppableTasks.length })}
+              </span>
+            </span>
+            <ChevronDown
+              className={cn("size-3.5 shrink-0 transition-transform", expanded && "rotate-180")}
+              aria-hidden="true"
+            />
+          </button>
+          {expanded ? (
+            <div className="flex flex-col gap-1 pl-5">
+              {stoppableTasks.map((task) => (
+                <div key={task.task_id} className="flex min-w-0 items-center justify-between gap-2">
+                  <span className="min-w-0 flex-1 truncate">{task.agent_name}</span>
+                  {onStopTask ? (
+                    <StopTaskButton
+                      task={task}
+                      stoppingTaskId={stoppingTaskId}
+                      onStopTask={onStopTask}
+                      t={t}
+                    />
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>
+  );
+}
+
+function StopTaskButton({
+  task,
+  stoppingTaskId,
+  onStopTask,
+  t,
+}: {
+  task: ChannelActiveTask;
+  stoppingTaskId: string | null;
+  onStopTask: (task: ChannelActiveTask) => void;
+  t: ReturnType<typeof useT<"channels">>["t"];
+}) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      className="h-6 shrink-0 gap-1 px-2 text-[11px] text-muted-foreground hover:text-foreground"
+      disabled={stoppingTaskId === task.task_id}
+      onClick={() => onStopTask(task)}
+      aria-label={t(($) => $.agent_status.stop_aria, { name: task.agent_name })}
+    >
+      <Square className="size-2.5 fill-current" />
+      {t(($) => $.agent_status.stop)}
+    </Button>
   );
 }
 
@@ -825,7 +808,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const { data: channelProjectId = "" } = useQuery(channelProjectOptions(wsId, active?.id ?? ""));
   const { data: activeTasks = [] } = useQuery(activeChannelTasksOptions(active?.id ?? ""));
   const [stoppingChannelTaskId, setStoppingChannelTaskId] = useState<string | null>(null);
-  const [retryingChannelTaskId, setRetryingChannelTaskId] = useState<string | null>(null);
   const setChannelProject = useSetChannelProject(wsId, active?.id ?? "");
   const createChannel = useCreateChannel();
   const deleteChannel = useDeleteChannel();
@@ -1356,23 +1338,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       setStoppingChannelTaskId((current) => (current === task.task_id ? null : current));
     }
   }, [active?.id, qc, t, wsId]);
-
-  const handleRetryChannelTask = useCallback(async (task: ChannelActiveTask) => {
-    // Retry re-dispatches the failed reply via a fresh inbox event (#388/#277).
-    // Keyed by `inbox_event_id` (the new-chain id), not `task_id`.
-    if (!active?.id || !task.inbox_event_id) return;
-    const key = task.inbox_event_id;
-    setRetryingChannelTaskId(key);
-    try {
-      await api.retryChannelInboxEvent(active.id, key);
-      toast.success(t(($) => $.agent_status.retry_success, { name: task.agent_name }));
-      qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(active.id) });
-    } catch {
-      toast.error(t(($) => $.agent_status.retry_failed));
-    } finally {
-      setRetryingChannelTaskId((current) => (current === key ? null : current));
-    }
-  }, [active?.id, qc, t]);
 
   const handleToggleChannelPin = (channel: Channel) => {
     setChannelPin.mutate(
@@ -2254,9 +2219,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
           <ConversationActivityStrip
             tasks={activeTasks}
             stoppingTaskId={stoppingChannelTaskId}
-            retryingTaskId={retryingChannelTaskId}
             onStopTask={handleStopChannelTask}
-            onRetryTask={handleRetryChannelTask}
           />
         }
       />
@@ -2555,9 +2518,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                     typingActors={activeTypingActors}
                     tasks={activeTasks}
                     stoppingTaskId={stoppingChannelTaskId}
-                    retryingTaskId={retryingChannelTaskId}
                     onStopTask={handleStopChannelTask}
-                    onRetryTask={handleRetryChannelTask}
                   />
                   <Composer
                     surface="channel"

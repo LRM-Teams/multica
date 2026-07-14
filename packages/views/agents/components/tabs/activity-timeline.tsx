@@ -9,6 +9,8 @@ import { useT } from "../../../i18n";
 import {
   type ActivityEvent,
   type ActivityDotTone,
+  ACTIVITY_LABEL_EN,
+  ACTIVITY_SUBTEXT_EN,
   activityPresentation,
   formatActivityTime,
   isNarrativeActivityEvent,
@@ -69,14 +71,16 @@ function ActivityRow({
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
   const presentation = activityPresentation(event);
-  const rawLabel = t(($) => $.tab_body.activity.labels[presentation.labelKey]);
-  // Locale values are base form (no ellipsis). The trailing "…" is raft's
+  // Activity is English-only (Frank 2026-07-14): the label/fixed-subtext come
+  // from the canonical English maps, not a locale lookup.
+  const rawLabel = ACTIVITY_LABEL_EN[presentation.labelKey];
+  // Canonical values are base form (no ellipsis). The trailing "…" is raft's
   // in-progress signal, appended at render for an active tool action only —
   // never on settled rows or non-tool states (wake / compaction / reply).
   const label =
     event.activity_kind === "tool_call" && presentation.tone === "active" ? `${rawLabel}…` : rawLabel;
   const subtext = presentation.subtextKey
-    ? t(($) => $.tab_body.activity.subtexts[presentation.subtextKey!])
+    ? ACTIVITY_SUBTEXT_EN[presentation.subtextKey]
     : presentation.subtext;
   // Thinking and reply Output carry the model's full text (§2.1: collapse to the
   // first line, click to expand the full content block). Fixed / short subtexts

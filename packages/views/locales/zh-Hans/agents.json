@@ -383,7 +383,7 @@
         "compaction_finished": "压缩完成",
         "subagent_activity": "子智能体活动"
       },
-      "copy_command": "复制命令",
+      "copy_command": "复制",
       "command_copied": "已复制",
       "view_diagnostics": "查看诊断详情",
       "hide_diagnostics": "收起诊断详情",

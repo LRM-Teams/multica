@@ -200,6 +200,10 @@ func FallbackContent(parts []protocol.MessagePart) string {
 		case protocol.MessagePartTypeAttachment:
 			// Attachment-only messages may have empty content. Do not invent
 			// markdown URLs or synthetic labels from attachment metadata.
+		case protocol.MessagePartTypeReference:
+			// Reference parts are routing/link metadata. Visible text remains in
+			// content/text so clients that do not render refs yet still show what
+			// the sender wrote.
 		}
 	}
 	return strings.TrimSpace(strings.Join(values, " "))
@@ -213,6 +217,54 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 		if part.Text == "" {
 			return protocol.MessagePart{}, fmt.Errorf("text is required")
 		}
+		part.RefType = ""
+		part.RefSubType = ""
+		part.RefID = ""
+		part.Label = ""
+		part.PackID = ""
+		part.StickerID = ""
+		part.Alt = ""
+		part.AttachmentID = ""
+		part.Filename = ""
+		part.ContentType = ""
+		part.SizeBytes = 0
+		return part, nil
+	case protocol.MessagePartTypeReference:
+		part.RefType = strings.TrimSpace(part.RefType)
+		part.RefSubType = strings.TrimSpace(part.RefSubType)
+		part.RefID = strings.TrimSpace(part.RefID)
+		part.Label = strings.TrimSpace(part.Label)
+		if part.RefType == "" {
+			return protocol.MessagePart{}, fmt.Errorf("ref_type is required")
+		}
+		if part.RefID == "" {
+			return protocol.MessagePart{}, fmt.Errorf("ref_id is required")
+		}
+		switch part.RefType {
+		case "mention":
+			if part.RefSubType == "" {
+				return protocol.MessagePart{}, fmt.Errorf("ref_subtype is required for mention reference")
+			}
+			switch part.RefSubType {
+			case "member", "agent", "squad":
+			case "all":
+				if part.RefID != "all" {
+					return protocol.MessagePart{}, fmt.Errorf("ref_id must be all for @all")
+				}
+			default:
+				return protocol.MessagePart{}, fmt.Errorf("unsupported mention ref_subtype %q", part.RefSubType)
+			}
+		case "issue-ref":
+			if part.RefSubType == "" {
+				part.RefSubType = "issue"
+			}
+			if part.RefSubType != "issue" {
+				return protocol.MessagePart{}, fmt.Errorf("unsupported issue-ref ref_subtype %q", part.RefSubType)
+			}
+		default:
+			return protocol.MessagePart{}, fmt.Errorf("unsupported ref_type %q", part.RefType)
+		}
+		part.Text = ""
 		part.PackID = ""
 		part.StickerID = ""
 		part.Alt = ""
@@ -223,6 +275,10 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 		return part, nil
 	case protocol.MessagePartTypeSticker:
 		part.Text = ""
+		part.RefType = ""
+		part.RefSubType = ""
+		part.RefID = ""
+		part.Label = ""
 		part.AttachmentID = ""
 		part.Filename = ""
 		part.ContentType = ""
@@ -251,6 +307,10 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 			return protocol.MessagePart{}, fmt.Errorf("attachment_id is required")
 		}
 		part.Text = ""
+		part.RefType = ""
+		part.RefSubType = ""
+		part.RefID = ""
+		part.Label = ""
 		part.PackID = ""
 		part.StickerID = ""
 		part.Alt = ""

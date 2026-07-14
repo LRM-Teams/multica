@@ -2,6 +2,8 @@ package util
 
 import (
 	"testing"
+
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 func TestParseMentions(t *testing.T) {
@@ -97,5 +99,37 @@ func TestHasMentionAll(t *testing.T) {
 				t.Errorf("HasMentionAll() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestParseMentionsFromContentAndPartsUsesOnlyMentionReferences(t *testing.T) {
+	got := ParseMentionsFromContentAndParts(
+		"[@Legacy](mention://member/11111111-1111-1111-1111-111111111111)",
+		[]protocol.MessagePart{
+			{
+				Type:       protocol.MessagePartTypeReference,
+				RefType:    "mention",
+				RefSubType: "agent",
+				RefID:      "agent-1",
+			},
+			{
+				Type:       protocol.MessagePartTypeReference,
+				RefType:    "issue-ref",
+				RefSubType: "issue",
+				RefID:      "MUL-123",
+			},
+		},
+	)
+	want := []Mention{
+		{Type: "member", ID: "11111111-1111-1111-1111-111111111111"},
+		{Type: "agent", ID: "agent-1"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ParseMentionsFromContentAndParts returned %d mentions, want %d\ngot:  %+v\nwant: %+v", len(got), len(want), got, want)
+	}
+	for i := range got {
+		if got[i].Type != want[i].Type || got[i].ID != want[i].ID {
+			t.Fatalf("mention[%d] = %+v, want %+v", i, got[i], want[i])
+		}
 	}
 }

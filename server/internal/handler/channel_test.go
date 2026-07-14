@@ -2458,6 +2458,72 @@ func TestChannelMentionedAgentsUsesHandlesOrStructuredIDs(t *testing.T) {
 	}
 }
 
+func TestChannelBareMentionsBecomeStructuredMessageParts(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+	agentName := "mention_agent_" + suffix
+	agentID := createHandlerTestAgent(t, agentName, nil)
+	memberID := createChannelPlainMember(t)
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM inbox_item WHERE recipient_id = $1 AND type = 'mentioned'`, memberID)
+	})
+	if _, err := testPool.Exec(ctx, `UPDATE "user" SET display_name = $2 WHERE id = $1`, memberID, "Plain Person "+suffix); err != nil {
+		t.Fatalf("set member display_name: %v", err)
+	}
+	channelID := seedChannelForTest(t, "structured-mentions-"+suffix, testUserID, memberID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+
+	content := "ping @" + agentName + " and @Plain Person " + suffix + " plus @all"
+	parts := testHandler.enrichChannelMessageMentionParts(ctx, ch, content, nil)
+	want := map[string]bool{
+		"agent:" + agentID:   true,
+		"member:" + memberID: true,
+		"all:all":            true,
+	}
+	for _, part := range parts {
+		if part.Type == protocol.MessagePartTypeReference && part.RefType == "mention" {
+			delete(want, part.RefSubType+":"+part.RefID)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing structured mentions: %+v; parts=%+v", want, parts)
+	}
+
+	agents := testHandler.channelMentionedAgents(ctx, testWorkspaceID, channelID, content, parts)
+	if len(agents) != 1 || uuidToString(agents[0].ID) != agentID {
+		t.Fatalf("channelMentionedAgents = %+v, want %s", agents, agentID)
+	}
+
+	msg, err := testHandler.insertChannelMessageWithParts(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", content, parts, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("insert structured mention message: %v", err)
+	}
+	testHandler.notifyChannelMemberMentions(ctx, ch, msg)
+
+	var count int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM inbox_item
+		WHERE recipient_id = $1 AND type = 'mentioned' AND details->>'message_id' = $2`, memberID, msg.ID).Scan(&count); err != nil {
+		t.Fatalf("count mention inbox: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("mention inbox count = %d, want 1", count)
+	}
+}
+
 func TestChannelMentionNotifiesHumanMember(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

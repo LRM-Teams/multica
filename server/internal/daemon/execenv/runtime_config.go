@@ -508,7 +508,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	b.WriteString("- Use `--output json` for structured data. Human table output may use routable issue keys and short UUID prefixes; use `--full-id` on list commands when canonical UUIDs matter.\n")
 	b.WriteString("- For issue writes, operate only within your Agent Identity and the workflow below; do not self-approve `in_review -> done`.\n")
 	b.WriteString("- For agent-authored issue comments, never inline `--content`; use the platform-correct non-inline mode in ## Comment Formatting.\n")
-	b.WriteString("- Mention links can notify humans or enqueue agents. Use them only for intentional notification, escalation, or delegation.\n\n")
+	b.WriteString("- @mentions can notify humans or enqueue agents after server resolution. Use them only for intentional notification, escalation, or delegation.\n\n")
 
 	b.WriteString("## Available Commands\n\n")
 	b.WriteString("The default brief includes only always-needed command forms for the core agent loop and common issue create/update tasks. For less common operations, progressively load the exact syntax with `multica --help`, `multica <command> --help`, or `multica <command> <subcommand> --help`; prefer `--output json` when the command supports it.\n\n")
@@ -721,20 +721,20 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	renderSkillIndex(&b, provider, ctx.AgentSkills)
 
 	b.WriteString("## Mentions\n\n")
-	b.WriteString("Mention links are **side-effecting actions**, not just formatting:\n\n")
-	b.WriteString("- `[MUL-123](mention://issue/<issue-id>)` — clickable link to an issue (safe, no side effect)\n")
-	b.WriteString("- `[@Name](mention://member/<user-id>)` — **sends a notification to a human**\n")
-	b.WriteString("- `[@Name](mention://agent/<agent-id>)` — **enqueues a new run for that agent**\n\n")
-	b.WriteString("### When NOT to use a mention link\n\n")
-	b.WriteString("- Referring to someone in prose (e.g. \"GPT-Boy is right\") — write the plain name, no link.\n")
-	b.WriteString("- **Replying to another agent that just spoke to you.** By default, do NOT put a `mention://agent/...` link anywhere in your reply. The platform already shows your comment to everyone on the issue; re-mentioning the other agent will make them run again, and if they reply with a mention back, you will be triggered again. That is a loop and it costs the user money.\n")
+	b.WriteString("Use plain `@handle` / `@display name` text only when you intentionally want the platform to create a structured mention action:\n\n")
+	b.WriteString("- `@human` notifies that human when it resolves to a unique channel/workspace member.\n")
+	b.WriteString("- `@agent` enqueues a new run for that agent when it resolves to a unique channel/workspace agent.\n")
+	b.WriteString("- Refer to issues by their visible key or URL; do not invent raw mention links.\n\n")
+	b.WriteString("### When NOT to use an @mention\n\n")
+	b.WriteString("- Referring to someone in prose (e.g. \"GPT-Boy is right\") — write the plain name, no `@`.\n")
+	b.WriteString("- **Replying to another agent that just spoke to you.** By default, do NOT @mention the other agent in your reply. The platform already shows your comment to everyone on the issue; re-mentioning the other agent will make them run again, and if they reply with a mention back, you will be triggered again. That is a loop and it costs the user money.\n")
 	b.WriteString("- Thanking, acknowledging, wrapping up, or signing off. These are exactly the moments where an accidental `@mention` causes the other agent to reply \"you're welcome\" and restart the loop. If the work is done, **end with no mention at all**.\n\n")
 	b.WriteString("### When a mention IS appropriate\n\n")
 	b.WriteString("- Escalating to a human owner who is not yet involved.\n")
 	b.WriteString("- Delegating a concrete sub-task to another agent for the first time, with a clear request.\n")
 	b.WriteString("- The user explicitly asked you to loop someone in.\n\n")
 	b.WriteString("If you are unsure whether a mention is warranted, **don't mention**. Silence ends conversations; `@` restarts them.\n\n")
-	b.WriteString("If you need IDs for mention links, inspect the relevant CLI help path and request JSON output when available.\n\n")
+	b.WriteString("If you need the exact handle, inspect the relevant CLI help path and request JSON output when available.\n\n")
 
 	b.WriteString("## Attachments\n\n")
 	b.WriteString("Issues and comments may include file attachments (images, documents, etc.).\n")
@@ -771,7 +771,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("\n")
 		b.WriteString("Good: \"Fixed the login redirect. PR: https://...\"\n")
 		b.WriteString("Bad: \"1. Read the issue 2. Found the bug in auth.go 3. Created branch 4. ...\"\n")
-		b.WriteString("When referencing an issue in a comment, use the issue mention format `[MUL-123](mention://issue/<issue-id>)` so it renders as a clickable link. (Issue mentions have no side effect; only member/agent mentions do — see the Mentions section above.)\n")
+		b.WriteString("When referencing an issue in a comment, use the visible issue key/title or URL from the CLI output; do not invent raw mention links.\n")
 	}
 
 	return b.String()
@@ -813,7 +813,7 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 	b.WriteString("- Treat injected conversation context as scoped to the current DM/channel/thread; fetch broader history only when the request needs it.\n")
 	b.WriteString("- Use the `multica` CLI for Multica platform reads/writes; never bypass it with raw HTTP clients.\n")
 	b.WriteString("- Issue writes from chat are incidental only when explicitly requested or required; follow claim-first and do not self-approve `in_review -> done`.\n")
-	b.WriteString("- Mention links can notify humans or enqueue agents. Use them only for intentional notification, escalation, or delegation.\n\n")
+	b.WriteString("- @mentions can notify humans or enqueue agents after server resolution. Use them only for intentional notification, escalation, or delegation.\n\n")
 
 	b.WriteString("## Available Commands\n\n")
 	b.WriteString("Use `multica --help`, `multica <command> --help`, or `multica <command> <subcommand> --help` to progressively load exact flags. Prefer `--output json` when reading data.\n\n")
@@ -836,7 +836,7 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 	renderSkillIndex(b, provider, chatRuntimeSkills(ctx))
 
 	b.WriteString("## Mention Safety\n\n")
-	b.WriteString("Mention links are side-effecting actions, not just formatting: `mention://member/...` notifies a human and `mention://agent/...` enqueues a new agent run. Use plain names in prose. Only include a mention link when you are intentionally notifying, escalating, or delegating.\n\n")
+	b.WriteString("@mentions are side-effecting actions, not just formatting: `@human` can notify a person and `@agent` can enqueue a new agent run after the server resolves it. Use plain names in prose. Only include `@` when you are intentionally notifying, escalating, or delegating.\n\n")
 
 	b.WriteString("## Attachments\n\n")
 	b.WriteString("When a message includes attachment IDs and you need the files, use the authenticated CLI path: `multica attachment view <id> --output <path>` (or inspect `multica attachment view --help`). Do not open Multica resource URLs directly.\n\n")

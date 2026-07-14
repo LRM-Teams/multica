@@ -44,6 +44,9 @@ export function MessagePartsRenderer({
         if (part.type === "sticker") {
           return <StickerPart key={key} part={part} />;
         }
+        if (part.type === "reference") {
+          return null;
+        }
         return null;
       })}
     </div>
@@ -96,6 +99,8 @@ function createMessagePartKey(part: MessagePart, counts: Map<string, number>): s
     base = `text-${hashString(part.text)}`;
   } else if (part.type === "sticker") {
     base = `sticker-${part.pack_id ?? "default"}-${part.sticker_id}-${hashString(part.alt ?? "")}`;
+  } else if (part.type === "reference") {
+    base = `reference-${part.ref_type}-${part.ref_subtype ?? "none"}-${part.ref_id}`;
   } else {
     base = `attachment-${part.attachment_id}`;
   }

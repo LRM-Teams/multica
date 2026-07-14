@@ -101,6 +101,48 @@ func TestNormalizeTextPlusAttachments(t *testing.T) {
 	}
 }
 
+func TestNormalizeReferenceParts(t *testing.T) {
+	content, parts, err := Normalize("refs", []protocol.MessagePart{
+		{
+			Type:       protocol.MessagePartTypeReference,
+			RefType:    "mention",
+			RefSubType: "agent",
+			RefID:      "11111111-1111-1111-1111-111111111111",
+			Label:      "Backend",
+			Text:       "should-clear",
+			StickerID:  "should-clear",
+		},
+		{
+			Type:         protocol.MessagePartTypeReference,
+			RefType:      "issue-ref",
+			RefID:        "MUL-123",
+			Label:        "MUL-123",
+			AttachmentID: "should-clear",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+	if content != "refs" {
+		t.Fatalf("content = %q, want refs", content)
+	}
+	if len(parts) != 2 {
+		t.Fatalf("parts len = %d, want 2", len(parts))
+	}
+	if parts[0].RefType != "mention" || parts[0].RefSubType != "agent" || parts[0].RefID == "" {
+		t.Fatalf("mention reference = %+v", parts[0])
+	}
+	if parts[0].Text != "" || parts[0].StickerID != "" {
+		t.Fatalf("mention reference retained non-reference fields: %+v", parts[0])
+	}
+	if parts[1].RefType != "issue-ref" || parts[1].RefSubType != "issue" || parts[1].RefID != "MUL-123" {
+		t.Fatalf("issue reference = %+v, want default issue subtype", parts[1])
+	}
+	if parts[1].AttachmentID != "" {
+		t.Fatalf("issue reference retained attachment fields: %+v", parts[1])
+	}
+}
+
 func TestUnwrapStructuredMessageSendTextParts(t *testing.T) {
 	content, parts, unwrapped, err := UnwrapStructuredMessageSend(
 		`{"action":"message_send","output":"Hello","parts":[{"type":"text","text":"Hello"}]}`,

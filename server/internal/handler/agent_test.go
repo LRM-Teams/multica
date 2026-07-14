@@ -1705,7 +1705,7 @@ func TestEnsureWindyPreservesAuthorizedSupervisorAcrossWorkspaceOwners(t *testin
 		return agent
 	}
 	first := createWendy(0)
-	createWendy(1)
+	second := createWendy(1)
 	ensureForOwner := func(ownerID pgtype.UUID) {
 		t.Helper()
 		req := newRequestAs(uuidToString(ownerID), http.MethodPost, "/api/agents/windy?runtime_id="+uuidToString(runtimeID), nil)
@@ -1738,6 +1738,13 @@ func TestEnsureWindyPreservesAuthorizedSupervisorAcrossWorkspaceOwners(t *testin
 	}
 
 	ensureForOwner(ownerIDs[1])
+	refreshedSecond, err := q.GetAgent(ctx, second.ID)
+	if err != nil {
+		t.Fatalf("load second owner Wendy: %v", err)
+	}
+	if refreshedSecond.Description != windyDescription || !strings.Contains(refreshedSecond.Instructions, windyInstructionsCapabilityMarker) {
+		t.Fatalf("second owner Wendy was not refreshed: description=%q instructions=%q", refreshedSecond.Description, refreshedSecond.Instructions)
+	}
 	var boundAgentID pgtype.UUID
 	var storedNextDue, storedWatermark time.Time
 	var failures int

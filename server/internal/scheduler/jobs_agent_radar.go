@@ -196,7 +196,8 @@ func deferWorkspaceRadarForBudget(ctx context.Context, pool *pgxpool.Pool, candi
 // EnsureWindy and scheduled enqueue/execution, while the conditional upsert
 // rechecks the invariant for concurrent scheduler replicas.
 func repairWorkspaceRadarSupervisorBindings(ctx context.Context, pool *pgxpool.Pool) (int64, error) {
-	command, err := pool.Exec(ctx, `
+	var repaired int64
+	if err := pool.QueryRow(ctx, `
 		WITH repairable_workspaces AS MATERIALIZED (
 		  SELECT workspace.id AS workspace_id
 		  FROM workspace
@@ -273,37 +274,40 @@ func repairWorkspaceRadarSupervisorBindings(ctx context.Context, pool *pgxpool.P
 		  SELECT workspace_id, agent_id
 		  FROM ranked_candidates
 		  WHERE candidate_rank = 1
-		)
-		INSERT INTO workspace_radar_state (
-		  workspace_id,
-		  supervisor_agent_id,
-		  enabled,
-		  next_due_at
-		)
-		SELECT selected.workspace_id, selected.agent_id, true, now()
-		FROM selected
-		ON CONFLICT (workspace_id) DO UPDATE
-		SET supervisor_agent_id = EXCLUDED.supervisor_agent_id,
-		    next_due_at = LEAST(workspace_radar_state.next_due_at, now()),
-		    consecutive_failures = 0,
-		    updated_at = now()
-		WHERE workspace_radar_state.enabled
-		  AND NOT EXISTS (
-		    SELECT 1
-		    FROM agent current_supervisor
-		    JOIN member current_owner
-		      ON current_owner.workspace_id = current_supervisor.workspace_id
-		     AND current_owner.user_id = current_supervisor.owner_id
-		     AND current_owner.role = 'owner'
-		    WHERE current_supervisor.workspace_id = workspace_radar_state.workspace_id
-		      AND current_supervisor.id = workspace_radar_state.supervisor_agent_id
-		      AND current_supervisor.archived_at IS NULL
+		), repaired AS (
+		  INSERT INTO workspace_radar_state (
+		    workspace_id,
+		    supervisor_agent_id,
+		    enabled,
+		    next_due_at
 		  )
-	`, agentRadarBindingRepairLimit)
-	if err != nil {
+		  SELECT selected.workspace_id, selected.agent_id, true, now()
+		  FROM selected
+		  ON CONFLICT (workspace_id) DO UPDATE
+		  SET supervisor_agent_id = EXCLUDED.supervisor_agent_id,
+		      next_due_at = LEAST(workspace_radar_state.next_due_at, now()),
+		      consecutive_failures = 0,
+		      updated_at = now()
+		  WHERE workspace_radar_state.enabled
+		    AND workspace_radar_state.supervisor_agent_id IS DISTINCT FROM EXCLUDED.supervisor_agent_id
+		    AND NOT EXISTS (
+		      SELECT 1
+		      FROM agent current_supervisor
+		      JOIN member current_owner
+		        ON current_owner.workspace_id = current_supervisor.workspace_id
+		       AND current_owner.user_id = current_supervisor.owner_id
+		       AND current_owner.role = 'owner'
+		      WHERE current_supervisor.workspace_id = workspace_radar_state.workspace_id
+		        AND current_supervisor.id = workspace_radar_state.supervisor_agent_id
+		        AND current_supervisor.archived_at IS NULL
+		    )
+		  RETURNING workspace_id
+		)
+		SELECT count(*) FROM repaired
+	`, agentRadarBindingRepairLimit).Scan(&repaired); err != nil {
 		return 0, err
 	}
-	return command.RowsAffected(), nil
+	return repaired, nil
 }
 
 // cancelUnauthorizedWorkspaceRadar is the repair arm of the database dispatch

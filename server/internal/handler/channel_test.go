@@ -1411,6 +1411,7 @@ func TestChannelAgentInboxTransportCanSendStickerAndSuppressesFinalOutput(t *tes
 
 	clientID := "inbox-sticker-" + uuid.NewString()
 	sendReq := newRequest(http.MethodPost, "/api/agent/messages/send", map[string]any{
+		"target": "#" + channelNameForTransportTest(t, channelID),
 		"parts": []protocol.MessagePart{{
 			Type:      protocol.MessagePartTypeSticker,
 			StickerID: "huaji",
@@ -1522,6 +1523,7 @@ func TestChannelAgentInboxTransportBearerTokenThroughMiddleware(t *testing.T) {
 
 	clientID := "inbox-bearer-" + uuid.NewString()
 	body := map[string]any{
+		"target": "#" + channelNameForTransportTest(t, channelID),
 		"parts": []protocol.MessagePart{{
 			Type:      protocol.MessagePartTypeSticker,
 			StickerID: "huaji",

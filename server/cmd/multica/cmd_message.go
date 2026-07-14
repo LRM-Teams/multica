@@ -17,16 +17,15 @@ func newMessageSendCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "send",
 		Short: "Send a visible chat message from the running agent task",
-		Long: "Send a visible message from the running agent task to the current " +
-			"chat surface or an explicit target. Targets are parsed server-side and " +
-			"may be omitted for the current channel/thread, set to #channel, " +
-			"#channel:<message-id>, or dm:@handle. Use --sticker for a sticker-only " +
+		Long: "Send a visible message from the running agent task to an explicit " +
+			"target. Target syntax matches Raft: #channel, #channel:<threadId>, " +
+			"dm:@handle, or dm:@handle:<threadId>. Use --sticker for a sticker-only " +
 			"reply, or combine --sticker with --message for an acknowledgement sticker " +
 			"followed by explanatory text in one message. Attach files with " +
 			"--attachment-id from `multica attachment upload` (repeatable).",
 		RunE: runAgentMessageSend,
 	}
-	cmd.Flags().String("target", "", "Target: omit for current surface, #channel, #channel:<message-id>, or dm:@handle")
+	cmd.Flags().String("target", "", messageTargetFlagUsage())
 	cmd.Flags().String("message", "", "Message to send (decodes \\n, \\r, \\t, \\\\; use --message-stdin to preserve literal backslashes)")
 	cmd.Flags().Bool("message-stdin", false, "Read the message from stdin (preserves multi-line content verbatim)")
 	cmd.Flags().String("message-file", "", "Read the message from a UTF-8 file")
@@ -42,12 +41,13 @@ func newMessageReactCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "react",
 		Short: "React to a channel or thread message from the running agent task",
-		Long: "Add a reaction from the running agent task. Omit --message-id to " +
-			"react to the message that triggered the task when the task context " +
-			"provides one.",
+		Long: "Add a reaction from the running agent task to an explicit target. " +
+			"Target syntax matches Raft: #channel, #channel:<threadId>, dm:@handle, " +
+			"or dm:@handle:<threadId>. Omit --message-id to react to the message " +
+			"that triggered the task when the task context provides one.",
 		RunE: runAgentMessageReact,
 	}
-	cmd.Flags().String("target", "", "Target: omit for current surface, #channel, #channel:<message-id>, or dm:@handle")
+	cmd.Flags().String("target", "", messageTargetFlagUsage())
 	cmd.Flags().String("message-id", "", "Message UUID to react to; omit to use the triggering message when available")
 	cmd.Flags().String("emoji", "", "Emoji reaction to add")
 	cmd.Flags().String("client-message-id", "", "Idempotency/audit key; generated automatically when omitted")
@@ -76,35 +76,58 @@ var messageCmd = &cobra.Command{
 	Short: "Send, react to, read, and search chat messages for the running agent task",
 }
 
-var messageReadCmd = &cobra.Command{
-	Use:   "read",
-	Short: "Read recent messages from the current or targeted chat surface",
-	RunE:  runAgentMessageRead,
-}
-
-var messageSearchCmd = &cobra.Command{
-	Use:   "search <query>",
-	Short: "Search messages in the current or targeted chat surface",
-	Args:  exactArgs(1),
-	RunE:  runAgentMessageSearch,
-}
+var messageReadCmd = newMessageReadCmd()
+var messageSearchCmd = newMessageSearchCmd()
 
 func init() {
-	messageReadCmd.Flags().String("target", "", "Target: omit for current surface, #channel, #channel:<message-id>, or dm:@handle")
-	messageReadCmd.Flags().Int("limit", 20, "Maximum messages to return")
-	messageReadCmd.Flags().String("output", "json", "Output format: json or text")
-
-	messageSearchCmd.Flags().String("target", "", "Target: omit for current surface, #channel, #channel:<message-id>, or dm:@handle")
-	messageSearchCmd.Flags().Int("limit", 50, "Maximum matches to return")
-	messageSearchCmd.Flags().String("output", "json", "Output format: json or text")
-
 	messageCmd.AddCommand(messageSendCmd)
 	messageCmd.AddCommand(messageReactCmd)
 	messageCmd.AddCommand(messageReadCmd)
 	messageCmd.AddCommand(messageSearchCmd)
 }
 
+func newMessageReadCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "read",
+		Short: "Read recent messages from a targeted chat surface",
+		RunE:  runAgentMessageRead,
+	}
+	cmd.Flags().String("target", "", messageTargetFlagUsage())
+	cmd.Flags().Int("limit", 20, "Maximum messages to return")
+	cmd.Flags().String("output", "json", "Output format: json or text")
+	return cmd
+}
+
+func newMessageSearchCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "search <query>",
+		Short: "Search messages in a targeted chat surface",
+		Args:  exactArgs(1),
+		RunE:  runAgentMessageSearch,
+	}
+	cmd.Flags().String("target", "", messageTargetFlagUsage())
+	cmd.Flags().Int("limit", 50, "Maximum matches to return")
+	cmd.Flags().String("output", "json", "Output format: json or text")
+	return cmd
+}
+
+func messageTargetFlagUsage() string {
+	return "Required target: #channel, #channel:<threadId>, dm:@handle, or dm:@handle:<threadId>"
+}
+
+func requiredMessageTarget(cmd *cobra.Command) (string, error) {
+	target := strings.TrimSpace(flagString(cmd, "target"))
+	if target == "" {
+		return "", fmt.Errorf("target is required; pass --target as #channel, #channel:<threadId>, dm:@handle, or dm:@handle:<threadId>")
+	}
+	return target, nil
+}
+
 func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
+	target, err := requiredMessageTarget(cmd)
+	if err != nil {
+		return err
+	}
 	content, contentOK, err := resolveTextFlag(cmd, "message")
 	if err != nil {
 		return err
@@ -129,7 +152,7 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 	defer cancel()
 
 	body := map[string]any{
-		"target":            flagString(cmd, "target"),
+		"target":            target,
 		"client_message_id": clientMessageIDFlag(cmd),
 	}
 	if text != "" {
@@ -183,12 +206,16 @@ func buildAgentSendParts(stickerID, text string, attachmentIDs []string) []proto
 }
 
 func runAgentMessageReact(cmd *cobra.Command, _ []string) error {
+	target, err := requiredMessageTarget(cmd)
+	if err != nil {
+		return err
+	}
 	emoji := strings.TrimSpace(flagString(cmd, "emoji"))
 	if emoji == "" {
 		return fmt.Errorf("emoji is required; pass --emoji")
 	}
 	body := map[string]any{
-		"target":            flagString(cmd, "target"),
+		"target":            target,
 		"message_id":        flagString(cmd, "message-id"),
 		"emoji":             emoji,
 		"client_message_id": clientMessageIDFlag(cmd),
@@ -201,9 +228,13 @@ func runAgentMessageReact(cmd *cobra.Command, _ []string) error {
 }
 
 func runAgentMessageRead(cmd *cobra.Command, _ []string) error {
+	target, err := requiredMessageTarget(cmd)
+	if err != nil {
+		return err
+	}
 	limit, _ := cmd.Flags().GetInt("limit")
 	body := map[string]any{
-		"target": flagString(cmd, "target"),
+		"target": target,
 		"limit":  limit,
 	}
 	var out map[string]any
@@ -214,9 +245,13 @@ func runAgentMessageRead(cmd *cobra.Command, _ []string) error {
 }
 
 func runAgentMessageSearch(cmd *cobra.Command, args []string) error {
+	target, err := requiredMessageTarget(cmd)
+	if err != nil {
+		return err
+	}
 	limit, _ := cmd.Flags().GetInt("limit")
 	body := map[string]any{
-		"target": flagString(cmd, "target"),
+		"target": target,
 		"query":  args[0],
 		"limit":  limit,
 	}

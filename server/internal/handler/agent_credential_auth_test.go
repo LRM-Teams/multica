@@ -372,6 +372,7 @@ func TestAgentCredentialTransportAllowsActiveInboxDeliveryThroughMiddleware(t *t
 
 	clientID := "agent-credential-transport-" + uuid.NewString()
 	body := map[string]any{
+		"target": "#" + channelNameForTransportTest(t, fixture.channelID),
 		"parts": []protocol.MessagePart{{
 			Type:      protocol.MessagePartTypeSticker,
 			StickerID: "huaji",

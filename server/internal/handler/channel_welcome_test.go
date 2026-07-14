@@ -105,6 +105,10 @@ func TestBuildChannelMentionPromptUsesCLITransportContract(t *testing.T) {
 
 	for _, trigger := range triggers {
 		p := h.buildChannelMentionPrompt(context.Background(), ch, trigger, channelFacilitatorState{})
+		wantTarget := "#产品讨论"
+		if trigger.ThreadRootMessageID != nil {
+			wantTarget += ":" + *trigger.ThreadRootMessageID
+		}
 		for _, want := range []string{
 			"Multica group chat #产品讨论",
 			"directly addressed to you",
@@ -121,6 +125,7 @@ func TestBuildChannelMentionPromptUsesCLITransportContract(t *testing.T) {
 			"requested completion/blocker delivery",
 			"Never print JSON envelopes",
 			"Current message to respond to",
+			"Message target for chat transport: " + wantTarget,
 			trigger.Content,
 		} {
 			if !strings.Contains(p, want) {
@@ -307,6 +312,7 @@ func TestBuildChannelMentionPromptIncludesCurrentReplyAndQuoteTargets(t *testing
 		"[2026-07-09T10:00:00Z] 用户 (user): 继续",
 		"treat the current message text as the user's question/request",
 		"direct reply/quote target as the referenced message content",
+		"Message target for chat transport: #multica-dev:55555555-5555-5555-5555-555555555555",
 		"Current message to respond to:",
 		"用户 (user): 这条我说了什么",
 	} {

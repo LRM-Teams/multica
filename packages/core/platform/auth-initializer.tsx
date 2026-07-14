@@ -61,6 +61,9 @@ export function AuthInitializer({
           daemonServerUrl: cfg.daemon_server_url,
           daemonAppUrl: cfg.daemon_app_url,
         });
+        configStore.getState().setAgentProfileConfig({
+          devAccessEnabled: cfg.dev_agent_profile_access_enabled === true,
+        });
         if (cfg.posthog_key) {
           initAnalytics({
             key: cfg.posthog_key,

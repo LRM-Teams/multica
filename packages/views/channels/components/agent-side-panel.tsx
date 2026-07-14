@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Activity, FileText, User, X } from "lucide-react";
+import { useConfigStore } from "@multica/core/config";
 import type { Agent, MemberWithUser } from "@multica/core/types";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { resolveActorDisplayName } from "@multica/core/identity";
@@ -34,15 +35,15 @@ interface AgentSidePanelProps {
  * Right-pane surface opened by clicking an agent's avatar/name in the
  * conversation — mutually exclusive with the thread panel (same slot,
  * per Frank's direction 2026-07-09: inline panel, not a route jump).
- * Per Frank's follow-up correction: owner sees Profile/Activity/Files
- * (Profile first + default — the one tab that's always present, identity
- * before observation), non-owner sees Profile only (Files was always
- * owner-gated; Activity follows the same gate here per his explicit call,
- * not a generic observability surface for this panel).
+ * Production keeps Frank's original privacy correction: owner sees
+ * Profile/Activity/Files, non-owner sees Profile only. Dev deployments can
+ * open Activity/Files read surfaces for workspace members via /api/config.
  */
 export function AgentSidePanel({ agent, currentUserId, members, onClose }: AgentSidePanelProps) {
   const { t } = useT("agents");
   const isOwner = !!currentUserId && agent.owner_id === currentUserId;
+  const devProfileAccess = useConfigStore((state) => state.agentProfileDevAccessEnabled);
+  const canInspectAgent = isOwner || (!!currentUserId && devProfileAccess);
   const [tab, setTab] = useState<OwnerTab>("profile");
   const displayName = resolveActorDisplayName(agent, agent.id);
   const initials = initialsOf(displayName);
@@ -77,7 +78,7 @@ export function AgentSidePanel({ agent, currentUserId, members, onClose }: Agent
         </Button>
       </div>
 
-      {isOwner ? (
+      {canInspectAgent ? (
         <>
           <div className="flex shrink-0 items-center gap-0 border-b px-2">
             {OWNER_TABS.map((tabDef) => (
@@ -105,6 +106,8 @@ export function AgentSidePanel({ agent, currentUserId, members, onClose }: Agent
                 agent={agent}
                 currentUserId={currentUserId}
                 members={members}
+                canReadFiles={canInspectAgent}
+                canEditFiles={isOwner}
                 onClose={onClose}
                 hideHeader
               />

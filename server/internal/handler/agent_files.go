@@ -18,6 +18,13 @@ import (
 
 const agentFileRPCTimeout = 12 * time.Second
 
+type agentFileAccessMode string
+
+const (
+	agentFileAccessRead  agentFileAccessMode = "read"
+	agentFileAccessWrite agentFileAccessMode = "write"
+)
+
 type AgentFilesResponse struct {
 	AgentID   string                     `json:"agent_id"`
 	Status    string                     `json:"status"`
@@ -46,7 +53,7 @@ type UpdateAgentFileContentResponse struct {
 	Conflict    bool   `json:"conflict"`
 }
 
-func (h *Handler) authorizeAgentFiles(w http.ResponseWriter, r *http.Request) (db.Agent, bool) {
+func (h *Handler) authorizeAgentFiles(w http.ResponseWriter, r *http.Request, mode agentFileAccessMode) (db.Agent, bool) {
 	agent, ok := h.loadAgentForUser(w, r, chi.URLParam(r, "id"))
 	if !ok {
 		return db.Agent{}, false
@@ -58,7 +65,8 @@ func (h *Handler) authorizeAgentFiles(w http.ResponseWriter, r *http.Request) (d
 		writeError(w, http.StatusForbidden, "agents may not access agent files")
 		return db.Agent{}, false
 	}
-	if userID == "" || !agent.OwnerID.Valid || uuidToString(agent.OwnerID) != userID {
+	isOwner := userID != "" && agent.OwnerID.Valid && uuidToString(agent.OwnerID) == userID
+	if !isOwner && !(mode == agentFileAccessRead && userID != "" && devAgentProfileAccessEnabled()) {
 		writeError(w, http.StatusForbidden, "only the agent creator can access these files")
 		return db.Agent{}, false
 	}
@@ -87,7 +95,7 @@ func includeHiddenAgentFiles(r *http.Request) bool {
 }
 
 func (h *Handler) ListAgentFiles(w http.ResponseWriter, r *http.Request) {
-	agent, ok := h.authorizeAgentFiles(w, r)
+	agent, ok := h.authorizeAgentFiles(w, r, agentFileAccessRead)
 	if !ok {
 		return
 	}
@@ -136,7 +144,7 @@ func (h *Handler) ListAgentFiles(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) GetAgentFileContent(w http.ResponseWriter, r *http.Request) {
-	agent, ok := h.authorizeAgentFiles(w, r)
+	agent, ok := h.authorizeAgentFiles(w, r, agentFileAccessRead)
 	if !ok {
 		return
 	}
@@ -186,7 +194,7 @@ func (h *Handler) GetAgentFileContent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) UpdateAgentFileContent(w http.ResponseWriter, r *http.Request) {
-	agent, ok := h.authorizeAgentFiles(w, r)
+	agent, ok := h.authorizeAgentFiles(w, r, agentFileAccessWrite)
 	if !ok {
 		return
 	}

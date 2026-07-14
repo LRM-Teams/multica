@@ -380,6 +380,9 @@ func TestAgentActivityEvents_FileToolUsesTopLevelPathFacts(t *testing.T) {
 	if event.ToolTarget == nil || *event.ToolTarget != filePath {
 		t.Fatalf("file tool target = %+v, want %q", event.ToolTarget, filePath)
 	}
+	if event.Details != nil {
+		t.Fatalf("file tool timeline details = %+v, want omitted outside held-freshness contract", event.Details)
+	}
 	if len(event.Entries) != 1 {
 		t.Fatalf("file tool entries = %+v, want one entry", event.Entries)
 	}
@@ -398,6 +401,85 @@ func TestAgentActivityEvents_FileToolUsesTopLevelPathFacts(t *testing.T) {
 	}
 	if strings.Contains(events.raw, `"command":"create"`) {
 		t.Fatalf("native file tool create verb must not be exposed as a command: %s", events.raw)
+	}
+}
+
+func TestAgentActivityEvents_ExposesHeldFreshnessDetails(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	agentID := createWorkspaceVisibleActivityAgent(t, "activity-freshness-details-agent")
+	channelID, _ := createActivityChannelSession(t, agentID, testUserID)
+	ctx := context.Background()
+	details := `{
+		"reason": "newer_messages_available",
+		"decision": "local_hold",
+		"producer_fact_id": "freshness:producer:1",
+		"transport_id": "transport-1",
+		"seen_up_to_seq": 9,
+		"latest_seq": 12,
+		"new_message_count": 3,
+		"shown_message_count": 2,
+		"omitted_message_count": 1,
+		"target": "#multica:test",
+		"input": {"secret": "sk_agent_should_not_leak"}
+	}`
+	var statusID, detailID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_activity_event (
+			workspace_id, agent_id, event_kind, event_type, severity,
+			target_kind, target_id, target_slug, message, details, visibility, created_at
+		)
+		VALUES (
+			$1, $2, 'blocked', 'send_freshness_hold', 'info',
+			'channel', $3, '#multica:test', 'Send held by freshness check', $4::jsonb, 'user_facing', now() - interval '2 seconds'
+		)
+		RETURNING id
+	`, testWorkspaceID, agentID, channelID, details).Scan(&statusID); err != nil {
+		t.Fatalf("insert freshness hold status event: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_activity_event (
+			workspace_id, agent_id, event_kind, event_type, severity,
+			target_kind, target_id, target_slug, message, details, visibility, created_at
+		)
+		VALUES (
+			$1, $2, 'text', 'send_freshness_hold_detail', 'info',
+			'channel', $3, '#multica:test', 'target: #multica:test / new messages: 3 newer / decision: local hold; review the newer context before retrying', $4::jsonb, 'user_facing', now() - interval '1 second'
+		)
+		RETURNING id
+	`, testWorkspaceID, agentID, channelID, details).Scan(&detailID); err != nil {
+		t.Fatalf("insert freshness hold detail event: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM agent_activity_event WHERE id IN ($1, $2)`, statusID, detailID)
+	})
+
+	events := listAgentActivityEventsForUser(t, testUserID, agentID, "")
+	for _, event := range []AgentActivityTimelineEvent{
+		requireActivityTimelineEvent(t, events, statusID),
+		requireActivityTimelineEvent(t, events, detailID),
+	} {
+		if event.Details == nil {
+			t.Fatalf("%s details missing from timeline event: %+v", event.DetailKind, event)
+		}
+		assertActivityTimelineDetail(t, event, "reason", "newer_messages_available")
+		assertActivityTimelineDetail(t, event, "decision", "local_hold")
+		assertActivityTimelineDetail(t, event, "producer_fact_id", "freshness:producer:1")
+		assertActivityTimelineDetail(t, event, "transport_id", "transport-1")
+		assertActivityTimelineDetail(t, event, "seen_up_to_seq", float64(9))
+		assertActivityTimelineDetail(t, event, "latest_seq", float64(12))
+		assertActivityTimelineDetail(t, event, "new_message_count", float64(3))
+		assertActivityTimelineDetail(t, event, "shown_message_count", float64(2))
+		assertActivityTimelineDetail(t, event, "omitted_message_count", float64(1))
+		assertActivityTimelineDetail(t, event, "target", "#multica:test")
+		if _, ok := event.Details["input"]; ok {
+			t.Fatalf("%s leaked raw input details: %+v", event.DetailKind, event.Details)
+		}
+	}
+	if strings.Contains(events.raw, "sk_agent_should_not_leak") {
+		t.Fatalf("activity details leaked raw input secret: %s", events.raw)
 	}
 }
 
@@ -1065,6 +1147,17 @@ func findActivityTimelineEvent(list agentActivityEventsResult, id string) *Agent
 		}
 	}
 	return nil
+}
+
+func assertActivityTimelineDetail(t *testing.T, event AgentActivityTimelineEvent, key string, want any) {
+	t.Helper()
+	got, ok := event.Details[key]
+	if !ok {
+		t.Fatalf("%s details missing %q: %+v", event.DetailKind, key, event.Details)
+	}
+	if got != want {
+		t.Fatalf("%s details[%q] = %#v, want %#v; all details=%+v", event.DetailKind, key, got, want, event.Details)
+	}
 }
 
 func hasSourceID(refs []AgentActivitySourceRef, kind, id string) bool {

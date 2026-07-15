@@ -20,6 +20,28 @@ func TestNormalizeTreatsStickerTokenAsPlainText(t *testing.T) {
 	}
 }
 
+func TestNormalizeTreatsEditorBreakPlaceholderAsEmpty(t *testing.T) {
+	for _, input := range []string{"<br/>", " <br> ", "<br />&nbsp;<br/>"} {
+		content, parts, err := Normalize(input, nil)
+		if err != nil {
+			t.Fatalf("Normalize(%q) returned error: %v", input, err)
+		}
+		if content != "" || len(parts) != 0 {
+			t.Fatalf("Normalize(%q) = %q %+v, want empty", input, content, parts)
+		}
+	}
+}
+
+func TestNormalizeKeepsInlineBreakText(t *testing.T) {
+	content, parts, err := Normalize("hello<br/>world", nil)
+	if err != nil {
+		t.Fatalf("Normalize returned error: %v", err)
+	}
+	if content != "hello<br/>world" || len(parts) != 0 {
+		t.Fatalf("Normalize = %q %+v, want original content", content, parts)
+	}
+}
+
 func TestNormalizeBuildsFallbackContentFromParts(t *testing.T) {
 	content, parts, err := Normalize("", []protocol.MessagePart{
 		{Type: protocol.MessagePartTypeText, Text: "hello"},

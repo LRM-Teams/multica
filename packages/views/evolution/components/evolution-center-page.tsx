@@ -200,6 +200,7 @@ const COPY = {
   dryRun: "Dry run",
   queueRun: "Queue run",
   runQueued: "Curation run queued",
+  selfReviewLabel: "Agent self-review",
 };
 
 const STATUSES = [
@@ -1009,7 +1010,7 @@ function CuratorProfileCard({
           </div>
         )}
         <div className="flex flex-wrap items-center gap-4">
-          <Label htmlFor="self-review-enabled" className="flex items-center gap-2 text-xs"><Checkbox id="self-review-enabled" checked={draft.selfReviewEnabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, selfReviewEnabled: checked === true }))} />Agent self-review</Label>
+          <Label htmlFor="self-review-enabled" className="flex items-center gap-2 text-xs"><Checkbox id="self-review-enabled" checked={draft.selfReviewEnabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, selfReviewEnabled: checked === true }))} />{COPY.selfReviewLabel}</Label>
           <Label htmlFor="curator-catch-up" className="flex items-center gap-2 text-xs"><Checkbox id="curator-catch-up" checked={draft.catchUpEnabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, catchUpEnabled: checked === true }))} />{COPY.catchUp}</Label>
           <Button onClick={() => save.mutate()} disabled={save.isPending || !draft.runtimeId || !draft.curatorAgentId || !draftTargetsValid} className="gap-2"><Save className="h-4 w-4" />{COPY.saveProfile}</Button>
         </div>

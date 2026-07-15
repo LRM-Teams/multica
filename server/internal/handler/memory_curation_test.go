@@ -181,10 +181,20 @@ func TestMemoryCuratorProfileQueuesAndCompletesDaemonRun(t *testing.T) {
 		t.Fatalf("profile = %+v", profile)
 	}
 
+	// Allocate a unique per-workspace issue number, mirroring the production
+	// IncrementIssueCounter path, so this issue never collides on
+	// uq_issue_workspace_number with the many other raw test inserts across
+	// the handler suite that default `number` to 0. Also clean up the task
+	// and issue so they do not leak into the shared test workspace.
 	var issueID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id)
-		VALUES ($1, 'memory curation active target', 'todo', 'none', 'member', $2)
+		WITH bumped AS (
+			UPDATE workspace SET issue_counter = issue_counter + 1
+			WHERE id = $1 RETURNING issue_counter
+		)
+		INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id, number)
+		SELECT $1, 'memory curation active target', 'todo', 'none', 'member', $2, bumped.issue_counter
+		FROM bumped
 		RETURNING id::text
 	`, testWorkspaceID, testUserID).Scan(&issueID); err != nil {
 		t.Fatal(err)
@@ -195,6 +205,10 @@ func TestMemoryCuratorProfileQueuesAndCompletesDaemonRun(t *testing.T) {
 	`, targetAgentID, issueID, runtimeID); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE issue_id = $1`, issueID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID)
+	})
 
 	w = httptest.NewRecorder()
 	runReq := withURLParam(newRequest(http.MethodPost, "/api/workspaces/"+testWorkspaceID+"/memory-curation/runs", map[string]any{

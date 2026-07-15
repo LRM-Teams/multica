@@ -84,6 +84,43 @@ func TestChatResumeSafetyHelpers(t *testing.T) {
 	}
 }
 
+func TestChatNativeResumeBudgetReason(t *testing.T) {
+	if chatNativeResumeTokenLimit != 60_000 {
+		t.Fatalf("chatNativeResumeTokenLimit = %d, want 60000", chatNativeResumeTokenLimit)
+	}
+	if got := chatNativeResumeBudgetReason(chatNativeResumeTokenLimit - 1); got != "" {
+		t.Fatalf("below budget reason = %q, want empty", got)
+	}
+	got := chatNativeResumeBudgetReason(chatNativeResumeTokenLimit)
+	for _, want := range []string{"recorded token usage", "native resume budget"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("budget reason missing %q: %q", want, got)
+		}
+	}
+}
+
+func TestChatContextSummaryCompactsLargeBlocks(t *testing.T) {
+	largeLog := strings.Join([]string{
+		"go test ./internal/handler",
+		"--- FAIL: TestExample (0.01s)",
+		"handler_test.go:12: expected ok",
+		"stack trace line 1",
+		"stack trace line 2",
+		strings.Repeat("x", 900),
+	}, "\n")
+	msgs := []db.ChatMessage{msg("user", largeLog), msg("user", "fresh question")}
+	surface := buildConversationSurface("ws-1", "agent-1", pgtype.UUID{}, "", nil, "")
+	summary := buildChatContextSummary(msgs, 0, "budget", "ws-1", "agent-1", surface)
+	for _, want := range []string{"go test ./internal/handler", "--- FAIL: TestExample", "omitted large log/code/json block", "fresh question"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary missing %q:\n%s", want, summary)
+		}
+	}
+	if strings.Contains(summary, strings.Repeat("x", 200)) {
+		t.Fatalf("summary kept oversized log tail:\n%s", summary)
+	}
+}
+
 func TestShortConfirmationHandoffSummaryIncludesPreviousAgentQuestion(t *testing.T) {
 	msgs := []db.ChatMessage{
 		msg("user", "帮我把 feature 分支合到 dev"),

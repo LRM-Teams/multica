@@ -2565,17 +2565,18 @@ func TestChannelMentionedAgentsUsesHandlesOrStructuredIDs(t *testing.T) {
 	cases := []struct {
 		name    string
 		content string
+		parts   []protocol.MessagePart
 		wantID  string
 	}{
-		{"bare unique handle", "please @" + handle + " jump in", agentID},
-		{"bare display name is not routable", "please @Wendy jump in", ""},
-		{"structured mention targets first duplicate", fmt.Sprintf("please [@Wendy](mention://agent/%s) jump in", agentID), agentID},
-		{"structured mention targets second duplicate", fmt.Sprintf("please [@Wendy](mention://agent/%s) jump in", secondAgentID), secondAgentID},
-		{"handle prefix does not match", "please @" + secondHandle + " jump in", secondAgentID},
+		{"bare unique handle", "please @" + handle + " jump in", nil, agentID},
+		{"bare display name is not routable", "please @Wendy jump in", nil, ""},
+		{"structured mention targets first duplicate", "please @Wendy jump in", []protocol.MessagePart{{Type: protocol.MessagePartTypeReference, RefType: "mention", RefSubType: "agent", RefID: agentID}}, agentID},
+		{"structured mention targets second duplicate", "please @Wendy jump in", []protocol.MessagePart{{Type: protocol.MessagePartTypeReference, RefType: "mention", RefSubType: "agent", RefID: secondAgentID}}, secondAgentID},
+		{"handle prefix does not match", "please @" + secondHandle + " jump in", nil, secondAgentID},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			agents := testHandler.channelMentionedAgents(ctx, testWorkspaceID, channelID, tt.content)
+			agents := testHandler.channelMentionedAgents(ctx, testWorkspaceID, channelID, tt.content, tt.parts)
 			if tt.wantID == "" {
 				if len(agents) != 0 {
 					t.Fatalf("channelMentionedAgents returned %d agents, want none: %+v", len(agents), agents)
@@ -2620,11 +2621,13 @@ func TestChannelBareMentionsBecomeStructuredMessageParts(t *testing.T) {
 	}
 
 	content := "ping @" + agentName + " and @Plain Person " + suffix + " plus @all"
-	content, parts := testHandler.enrichChannelMessageMentions(ctx, ch, content, nil)
+	content, parts, err := testHandler.enrichChannelMessageMentions(ctx, ch, content, nil)
+	if err != nil {
+		t.Fatalf("enrich bare mentions: %v", err)
+	}
 	want := map[string]bool{
 		"agent:" + agentID:   true,
 		"member:" + memberID: true,
-		"all:all":            true,
 	}
 	for _, part := range parts {
 		if part.Type == protocol.MessagePartTypeReference && part.RefType == "mention" {
@@ -2688,7 +2691,10 @@ func TestChannelBareIssueReferencesBecomeStructuredMessageParts(t *testing.T) {
 		Type: protocol.MessagePartTypeText,
 		Text: "also see " + identifier,
 	}}
-	gotContent, gotParts := testHandler.enrichChannelMessageMentions(ctx, ch, content, parts)
+	gotContent, gotParts, err := testHandler.enrichChannelMessageMentions(ctx, ch, content, parts)
+	if err != nil {
+		t.Fatalf("enrich issue references: %v", err)
+	}
 	if gotContent != content {
 		t.Fatalf("content = %q, want bare identifier text unchanged %q", gotContent, content)
 	}
@@ -2699,16 +2705,25 @@ func TestChannelBareIssueReferencesBecomeStructuredMessageParts(t *testing.T) {
 			references = append(references, part)
 		}
 	}
-	if len(references) != 1 {
-		t.Fatalf("issue references = %+v, want one deduplicated typed ref", references)
+	if len(references) != 2 {
+		t.Fatalf("issue references = %+v, want one anchored typed ref per visible occurrence", references)
 	}
 	ref := references[0]
 	if ref.RefSubType != "issue" || ref.RefID != issueID || ref.Label != identifier || ref.RefTitle != issue.Title || ref.RefStatus != issue.Status {
 		t.Fatalf("issue reference = %+v, want canonical issue entity %s / %q / %q / %q", ref, issueID, identifier, issue.Title, issue.Status)
 	}
+	if ref.ContentStartUTF16 == nil || ref.ContentEndUTF16 == nil || *ref.ContentStartUTF16 >= *ref.ContentEndUTF16 {
+		t.Fatalf("issue reference is missing a content UTF-16 span: %+v", ref)
+	}
+	if references[1].ContentStartUTF16 == nil || *references[1].ContentStartUTF16 <= *ref.ContentStartUTF16 {
+		t.Fatalf("issue references should retain both source occurrences in order: %+v", references)
+	}
 
 	codeOnly := "`" + identifier + "` [" + identifier + "](mention://issue/" + issueID + ")"
-	_, noRefs := testHandler.enrichChannelMessageMentions(ctx, ch, codeOnly, nil)
+	_, noRefs, err := testHandler.enrichChannelMessageMentions(ctx, ch, codeOnly, nil)
+	if err != nil {
+		t.Fatalf("enrich issue markdown: %v", err)
+	}
 	for _, part := range noRefs {
 		if part.Type == protocol.MessagePartTypeReference && part.RefType == "issue-ref" {
 			t.Fatalf("code/legacy markdown text unexpectedly produced typed issue ref: %+v", part)
@@ -2716,7 +2731,7 @@ func TestChannelBareIssueReferencesBecomeStructuredMessageParts(t *testing.T) {
 	}
 }
 
-func TestChannelLegacyMentionMarkdownNormalizesToStructuredReference(t *testing.T) {
+func TestChannelLegacyActorMentionMarkdownIsRejected(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -2743,36 +2758,9 @@ func TestChannelLegacyMentionMarkdownNormalizesToStructuredReference(t *testing.
 		Text: "cc [@Legacy Member](mention://member/" + memberID + ")",
 	}}
 
-	content, parts = testHandler.enrichChannelMessageMentions(ctx, ch, content, parts)
-	if strings.Contains(content, "mention://agent/") {
-		t.Fatalf("content still leaks agent mention markdown: %q", content)
-	}
-	if !strings.Contains(content, "@Legacy Agent") {
-		t.Fatalf("content = %q, want readable @ label", content)
-	}
-	if !strings.Contains(content, "mention://issue/"+issueID) {
-		t.Fatalf("content = %q, want issue mention markdown preserved", content)
-	}
-	if len(parts) == 0 || parts[0].Type != protocol.MessagePartTypeText || strings.Contains(parts[0].Text, "mention://member/") {
-		t.Fatalf("text part not normalized: %+v", parts)
-	}
-
-	want := map[string]bool{
-		"agent:" + agentID:   true,
-		"member:" + memberID: true,
-	}
-	for _, part := range parts {
-		if part.Type == protocol.MessagePartTypeReference && part.RefType == "mention" {
-			delete(want, part.RefSubType+":"+part.RefID)
-		}
-	}
-	if len(want) != 0 {
-		t.Fatalf("missing structured mentions after normalization: %+v; parts=%+v", want, parts)
-	}
-
-	agents := testHandler.channelMentionedAgents(ctx, testWorkspaceID, channelID, content, parts)
-	if len(agents) != 1 || uuidToString(agents[0].ID) != agentID {
-		t.Fatalf("channelMentionedAgents = %+v, want %s", agents, agentID)
+	_, _, err := testHandler.enrichChannelMessageMentions(ctx, ch, content, parts)
+	if err == nil || !strings.Contains(err.Error(), "legacy actor mention syntax") {
+		t.Fatalf("legacy actor mention error = %v, want explicit rejection", err)
 	}
 }
 
@@ -2805,9 +2793,14 @@ func TestChannelMentionNotifiesHumanMember(t *testing.T) {
 		t.Fatal("channel not found after seed")
 	}
 
-	// Agent posts a message that @-mentions the human member.
-	content := fmt.Sprintf("On it [@Tester](mention://member/%s) — taking a look now.", testUserID)
-	msg, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "agent", parseUUID(agentID), "Mention Bot", content, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("t1"), 1)
+	// Agent posts a message that @-mentions the human member through a
+	// structured reference, never a legacy actor URI.
+	content := "On it @Tester — taking a look now."
+	start := strings.Index(content, "@Tester")
+	end := start + len("@Tester")
+	startUTF16, endUTF16 := contentUTF16Span(content, start, end)
+	parts := []protocol.MessagePart{{Type: protocol.MessagePartTypeReference, RefType: "mention", RefSubType: "member", RefID: testUserID, Label: "@Tester", ContentStartUTF16: &startUTF16, ContentEndUTF16: &endUTF16}}
+	msg, err := testHandler.insertChannelMessageWithParts(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "agent", parseUUID(agentID), "Mention Bot", content, parts, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("t1"), 1)
 	if err != nil {
 		t.Fatalf("insert agent message: %v", err)
 	}
@@ -3487,7 +3480,7 @@ func TestSendChannelMessageThreadReplyShowInChannelProjectsSameMessageWithoutWak
 	if err != nil {
 		t.Fatalf("insert root: %v", err)
 	}
-	content := "please [@Thread Projection Agent](mention://agent/" + agentID + ") review from the thread"
+	content := "please @Thread Projection Agent review from the thread"
 	clientID := "client-" + uuid.NewString()
 
 	first := sendChannelThreadReplyForTest(t, channelID, root.ID, testUserID, map[string]any{
@@ -4775,7 +4768,7 @@ func TestChannelThreadReadModelExposesParticipantsAndPendingWake(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert root: %v", err)
 	}
-	rec := sendChannelThreadReplyForTest(t, channelID, root.ID, testUserID, map[string]any{"content": "[@Thread Contract Helper](mention://agent/" + agentID + ") can you take this?"})
+	rec := sendChannelThreadReplyForTest(t, channelID, root.ID, testUserID, map[string]any{"content": "@Thread Contract Helper can you take this?"})
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("send thread mention: status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -4840,7 +4833,7 @@ func TestChannelThreadReadModelSurfacesReplyAndAckStates(t *testing.T) {
 		t.Fatalf("reply wake state = %+v, want replied", got)
 	}
 
-	rec := sendChannelThreadReplyForTest(t, channelID, replyRoot.ID, testUserID, map[string]any{"content": "[@Thread State Helper](mention://agent/" + agentID + ") react if done"})
+	rec := sendChannelThreadReplyForTest(t, channelID, replyRoot.ID, testUserID, map[string]any{"content": "@Thread State Helper react if done"})
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("send follow-up thread mention: status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -6637,11 +6630,15 @@ func listedThreadForUser(t *testing.T, channelID, rootID, userID string) (Channe
 func dispatchThreadMentionForTest(t *testing.T, channelID, agentID, threadID string) ChannelMessageResponse {
 	t.Helper()
 	ctx := context.Background()
+	var agentName string
+	if err := testPool.QueryRow(ctx, `SELECT name FROM agent WHERE id = $1`, agentID).Scan(&agentName); err != nil {
+		t.Fatalf("load thread mention agent name: %v", err)
+	}
 	root, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "root "+threadID, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr(threadID), 0)
 	if err != nil {
 		t.Fatalf("insert root: %v", err)
 	}
-	rec := sendChannelThreadReplyForTest(t, channelID, root.ID, testUserID, map[string]any{"content": "[@Thread State Helper](mention://agent/" + agentID + ") please check"})
+	rec := sendChannelThreadReplyForTest(t, channelID, root.ID, testUserID, map[string]any{"content": "@" + agentName + " please check"})
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("send thread mention: status=%d body=%s", rec.Code, rec.Body.String())
 	}

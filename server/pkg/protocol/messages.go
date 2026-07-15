@@ -15,23 +15,28 @@ const (
 )
 
 type MessagePart struct {
-	Type         string          `json:"type"`
-	Text         string          `json:"text,omitempty"`
-	RefType      string          `json:"ref_type,omitempty"`
-	RefSubType   string          `json:"ref_subtype,omitempty"`
-	RefID        string          `json:"ref_id,omitempty"`
-	Label        string          `json:"label,omitempty"`
-	RefTitle     string          `json:"ref_title,omitempty"`
-	RefStatus    string          `json:"ref_status,omitempty"`
-	Event        string          `json:"event,omitempty"`
-	EventParams  json.RawMessage `json:"event_params,omitempty"`
-	PackID       string          `json:"pack_id,omitempty"`
-	StickerID    string          `json:"sticker_id,omitempty"`
-	Alt          string          `json:"alt,omitempty"`
-	AttachmentID string          `json:"attachment_id,omitempty"`
-	Filename     string          `json:"filename,omitempty"`
-	ContentType  string          `json:"content_type,omitempty"`
-	SizeBytes    int64           `json:"size_bytes,omitempty"`
+	Type       string `json:"type"`
+	Text       string `json:"text,omitempty"`
+	RefType    string `json:"ref_type,omitempty"`
+	RefSubType string `json:"ref_subtype,omitempty"`
+	RefID      string `json:"ref_id,omitempty"`
+	Label      string `json:"label,omitempty"`
+	RefTitle   string `json:"ref_title,omitempty"`
+	RefStatus  string `json:"ref_status,omitempty"`
+	// ContentStartUTF16 and ContentEndUTF16 anchor a reference to the exact
+	// UTF-16 code-unit range in the message's canonical content. They are
+	// pointers so zero is representable and a missing pair is unambiguous.
+	ContentStartUTF16 *int            `json:"content_start_utf16,omitempty"`
+	ContentEndUTF16   *int            `json:"content_end_utf16,omitempty"`
+	Event             string          `json:"event,omitempty"`
+	EventParams       json.RawMessage `json:"event_params,omitempty"`
+	PackID            string          `json:"pack_id,omitempty"`
+	StickerID         string          `json:"sticker_id,omitempty"`
+	Alt               string          `json:"alt,omitempty"`
+	AttachmentID      string          `json:"attachment_id,omitempty"`
+	Filename          string          `json:"filename,omitempty"`
+	ContentType       string          `json:"content_type,omitempty"`
+	SizeBytes         int64           `json:"size_bytes,omitempty"`
 }
 
 // Message is the envelope for all WebSocket messages.

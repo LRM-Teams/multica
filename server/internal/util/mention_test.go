@@ -121,7 +121,6 @@ func TestParseMentionsFromContentAndPartsUsesOnlyMentionReferences(t *testing.T)
 		},
 	)
 	want := []Mention{
-		{Type: "member", ID: "11111111-1111-1111-1111-111111111111"},
 		{Type: "agent", ID: "agent-1"},
 	}
 	if len(got) != len(want) {

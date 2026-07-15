@@ -1,4 +1,5 @@
 import type { Label } from "./label";
+import type { MessagePart } from "./message-part";
 
 export type IssueStatus =
   | "backlog"
@@ -54,6 +55,8 @@ export interface IssueSourceMessageRef {
   message_id: string;
   thread_root_message_id: string;
   excerpt: string;
+  /** Reference parts whose UTF-16 spans are anchored to `excerpt`. */
+  excerpt_parts?: MessagePart[];
 }
 
 export interface IssueSourceRefs {

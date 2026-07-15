@@ -76,6 +76,10 @@ type IssueSourceMessageRefResponse struct {
 	MessageID           string  `json:"message_id"`
 	ThreadRootMessageID string  `json:"thread_root_message_id"`
 	Excerpt             string  `json:"excerpt"`
+	// ExcerptParts are structured references whose UTF-16 spans are valid for
+	// Excerpt itself (not the full source message). This lets a compact source
+	// preview retain safe display semantics without exposing legacy markup.
+	ExcerptParts []protocol.MessagePart `json:"excerpt_parts,omitempty"`
 }
 
 func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {

@@ -211,7 +211,11 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid target")
 		return
 	}
-	content, parts = h.enrichChannelMessageMentions(r.Context(), target.channel, content, parts)
+	content, parts, err = h.enrichChannelMessageMentions(r.Context(), target.channel, content, parts)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	initiatorID := h.channelInitiatorForChatSession(r.Context(), source.task.ChatSessionID)
 	input := channelMessageInsertInput{
 		ChannelID:           parseUUID(target.channel.ID),

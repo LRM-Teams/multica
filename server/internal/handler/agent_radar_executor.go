@@ -52,6 +52,7 @@ type radarAgentMentionDirective struct {
 	Target      radarChannelExecutionTarget
 	Channel     ChannelResponse
 	Content     string
+	Parts       []protocol.MessagePart
 }
 
 type radarIssueCreatePayload struct {
@@ -693,14 +694,13 @@ func (h *Handler) prepareRadarAgentMention(ctx context.Context, run db.AgentRada
 	if !found {
 		return radarAgentMentionDirective{}, errors.New("channel does not belong to the run workspace")
 	}
-	content := formatRadarDirectiveMention(targetAgent.Name, "agent", uuidToString(targetAgent.ID)) + " " + strings.TrimSpace(payload.Content)
-	return radarAgentMentionDirective{TargetAgent: targetAgent, Target: target, Channel: ch, Content: content}, nil
+	content, parts := directedAgentMentionContent(targetAgent, payload.Content)
+	return radarAgentMentionDirective{TargetAgent: targetAgent, Target: target, Channel: ch, Content: content, Parts: parts}, nil
 }
 
-func formatRadarDirectiveMention(handle, mentionType, id string) string {
+func directedAgentMentionLabel(handle string) string {
 	// Stable handles are unique, but still neutralise Markdown delimiters before
-	// constructing the canonical link so malformed legacy data cannot smuggle a
-	// second mention that the dispatcher will parse.
+	// placing the visible label into canonical content.
 	replacer := strings.NewReplacer(
 		"[", "［", "]", "］", "(", "（", ")", "）",
 		"\r", " ", "\n", " ", "\t", " ",
@@ -709,7 +709,30 @@ func formatRadarDirectiveMention(handle, mentionType, id string) string {
 	if safeHandle == "" {
 		safeHandle = "agent"
 	}
-	return "[@" + safeHandle + "](mention://" + mentionType + "/" + id + ")"
+	return "@" + safeHandle
+}
+
+func directedAgentMentionContent(target db.Agent, body string) (string, []protocol.MessagePart) {
+	label := directedAgentMentionLabel(target.Name)
+	content := label + " " + strings.TrimSpace(body)
+	start, end := contentUTF16Span(content, 0, len(label))
+	return content, []protocol.MessagePart{{
+		Type:              protocol.MessagePartTypeReference,
+		RefType:           "mention",
+		RefSubType:        "agent",
+		RefID:             uuidToString(target.ID),
+		Label:             label,
+		ContentStartUTF16: &start,
+		ContentEndUTF16:   &end,
+	}}
+}
+
+// Issue comments do not yet carry MessagePart metadata. Keep their historical
+// comment-local representation until that surface has the structured contract;
+// channel directives above never use this legacy form.
+func formatRadarIssueDirectiveMention(handle, id string) string {
+	label := directedAgentMentionLabel(handle)
+	return "[" + label + "](mention://agent/" + id + ")"
 }
 
 func (h *Handler) executeRadarAgentMentionAtomic(ctx context.Context, run db.AgentRadarRun, supervisor db.Agent, directive radarAgentMentionDirective) (map[string]any, radarActivityTarget, error) {
@@ -757,7 +780,7 @@ func (h *Handler) executePreparedRadarAgentMentionInTx(ctx context.Context, qtx 
 
 	msg, err := insertChannelMessageWithPartsExec(
 		ctx, exec, directive.Target.ChannelID, run.WorkspaceID,
-		"agent", supervisor.ID, agentDisplayName(supervisor), directive.Content, nil,
+		"agent", supervisor.ID, agentDisplayName(supervisor), directive.Content, directive.Parts,
 		"multica", nil, nil, pgtype.UUID{}, pgtype.UUID{}, nil,
 		directive.Target.ThreadRoot, directive.Target.ThreadID, 0, false,
 	)
@@ -1035,7 +1058,7 @@ func (h *Handler) prepareRadarIssueDirective(ctx context.Context, run db.AgentRa
 	if issue.Status == "done" || issue.Status == "cancelled" {
 		return radarIssueDirective{}, errors.New("cannot direct work on a terminal issue")
 	}
-	content := formatRadarDirectiveMention(targetAgent.Name, "agent", uuidToString(targetAgent.ID)) + " " + strings.TrimSpace(payload.Content)
+	content := formatRadarIssueDirectiveMention(targetAgent.Name, uuidToString(targetAgent.ID)) + " " + strings.TrimSpace(payload.Content)
 	return radarIssueDirective{TargetAgent: targetAgent, Issue: issue, Content: content}, nil
 }
 

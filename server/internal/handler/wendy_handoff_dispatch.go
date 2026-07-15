@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 func (h *Handler) DispatchDueWendyHandoffs(ctx context.Context, limit int32) (int, error) {
@@ -114,7 +116,8 @@ func (h *Handler) dispatchClaimedWendyUnlockHandoff(ctx context.Context, handoff
 	if err != nil {
 		return false, h.retryWendyUnlockHandoff(ctx, handoff, claimToken, fmt.Errorf("compose Wendy unlock: %w", err))
 	}
-	if err := validateWendyHandoffContent(content, "agent", uuidToString(target.ID)); err != nil {
+	content, parts := ensureWendyHandoffReference(content, "agent", uuidToString(target.ID), agentDisplayName(target))
+	if err := validateWendyHandoffContent(content, parts, "agent", uuidToString(target.ID)); err != nil {
 		return false, h.retryWendyUnlockHandoff(ctx, handoff, claimToken, fmt.Errorf("validate Wendy handoff content: %w", err))
 	}
 
@@ -150,6 +153,7 @@ func (h *Handler) dispatchClaimedWendyUnlockHandoff(ctx context.Context, handoff
 		},
 		Channel: channel,
 		Content: content,
+		Parts:   parts,
 	}
 	execution, err := h.executePreparedRadarAgentMentionInTx(ctx, qtx, tx, run, supervisor, directive)
 	if err != nil {
@@ -248,10 +252,11 @@ func (h *Handler) dispatchClaimedWendyMemberHandoff(ctx context.Context, handoff
 		return false, h.cancelWendyUnlockHandoff(ctx, handoff, claimToken, "member work node is unavailable")
 	}
 	content := templateWendyHandoff(handoff.ReasonCode, "member", uuidToString(handoff.TargetActorID), name, node.Title)
-	if err := validateWendyHandoffContent(content, "member", uuidToString(handoff.TargetActorID)); err != nil {
+	content, parts := ensureWendyHandoffReference(content, "member", uuidToString(handoff.TargetActorID), name)
+	if err := validateWendyHandoffContent(content, parts, "member", uuidToString(handoff.TargetActorID)); err != nil {
 		return false, h.retryWendyUnlockHandoff(ctx, handoff, claimToken, err)
 	}
-	if _, err := h.insertChannelMessage(ctx, handoff.ChannelID, handoff.WorkspaceID, "agent", supervisor.ID, agentDisplayName(supervisor), content, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
+	if _, err := h.insertChannelMessageWithParts(ctx, handoff.ChannelID, handoff.WorkspaceID, "agent", supervisor.ID, agentDisplayName(supervisor), content, parts, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
 		return false, h.retryWendyUnlockHandoff(ctx, handoff, claimToken, err)
 	}
 	if _, err := h.Queries.MarkPendingHandoffDone(ctx, db.MarkPendingHandoffDoneParams{ID: handoff.ID, ClaimToken: claimToken}); err != nil {
@@ -294,13 +299,33 @@ func (h *Handler) retryWendyUnlockHandoff(ctx context.Context, handoff db.Pendin
 }
 
 func validateWendyUnlockContent(content, targetAgentID string) error {
-	return validateWendyHandoffContent(content, "agent", targetAgentID)
+	return validateWendyHandoffContent(content, nil, "agent", targetAgentID)
 }
 
-func validateWendyHandoffContent(content, targetType, targetID string) error {
-	mentions := util.ParseMentions(content)
+func validateWendyHandoffContent(content string, parts []protocol.MessagePart, targetType, targetID string) error {
+	if containsLegacyChannelActorMention(content) {
+		return errors.New("handoff content must not contain legacy actor mention syntax")
+	}
+	mentions := util.ParseMentionsFromContentAndParts(content, parts)
 	if len(mentions) != 1 || mentions[0].Type != targetType || mentions[0].ID != targetID {
 		return errors.New("handoff content must contain only the target mention")
 	}
 	return nil
+}
+
+func ensureWendyHandoffReference(content, targetType, targetID, actorName string) (string, []protocol.MessagePart) {
+	label := directedAgentMentionLabel(actorName)
+	if !strings.HasPrefix(content, label) {
+		return content, nil
+	}
+	start, end := contentUTF16Span(content, 0, len(label))
+	return content, []protocol.MessagePart{{
+		Type:              protocol.MessagePartTypeReference,
+		RefType:           "mention",
+		RefSubType:        targetType,
+		RefID:             targetID,
+		Label:             label,
+		ContentStartUTF16: &start,
+		ContentEndUTF16:   &end,
+	}}
 }

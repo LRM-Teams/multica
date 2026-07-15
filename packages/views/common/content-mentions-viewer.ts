@@ -43,9 +43,6 @@ export function messageMentionsViewer(
     if (part.type === "text" && contentMentionsViewer(part.text, viewerUserId)) {
       return true;
     }
-    if (part.type === "reference" && part.ref_type === "mention" && part.ref_subtype === "all") {
-      return true;
-    }
     if (
       part.type === "reference" &&
       part.ref_type === "mention" &&

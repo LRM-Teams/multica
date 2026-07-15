@@ -11,9 +11,9 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronUp,
-  CircleDot,
   FileText,
   Hash,
+  ListTodo,
   Mail,
   MessageCircle,
   MessageSquare,
@@ -2327,7 +2327,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                       push(wsPaths.issues());
                     }}
                   >
-                    <CircleDot className="size-4" />
+                    <ListTodo className="size-4" />
                   </Button>
                   <Button
                     variant="ghost"

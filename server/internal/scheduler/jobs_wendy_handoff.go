@@ -48,11 +48,25 @@ func WendyHandoffDispatchJob(h *handler.Handler, pool *pgxpool.Pool) JobSpec {
 					},
 				}, ambientErr
 			}
+			// Idle nudge: never let a team go fully idle while its goal is
+			// unfinished — trigger Beckham to look and get someone working.
+			idle, idleErr := h.DispatchIdleNudges(ctx, wendyHandoffDispatchLimit)
+			if idleErr != nil {
+				return HandlerResult{
+					RowsAffected: int64(dispatched + ambient),
+					Result: map[string]any{
+						"dispatched": dispatched,
+						"ambient":    ambient,
+						"idle_nudged": idle,
+					},
+				}, idleErr
+			}
 			return HandlerResult{
-				RowsAffected: int64(dispatched + ambient),
+				RowsAffected: int64(dispatched + ambient + idle),
 				Result: map[string]any{
-					"dispatched": dispatched,
-					"ambient":    ambient,
+					"dispatched":  dispatched,
+					"ambient":     ambient,
+					"idle_nudged": idle,
 				},
 			}, nil
 		},

@@ -34,15 +34,19 @@ func NormalizeStage(raw string) (Stage, error) {
 		return StageAll, nil
 	}
 	switch s {
-	case StageL1, StageL2, StageL3, StageL4, StageAll:
+	case StageAgentSelfReview, StageTeamCuration, StageL1, StageL2, StageL3, StageL4, StageAll:
 		return s, nil
+	case "self_review", "agent_review", "daily_self_review":
+		return StageAgentSelfReview, nil
+	case "team", "curator", "workspace_curation":
+		return StageTeamCuration, nil
 	case "l1_daily", "daily":
 		return StageL1, nil
 	case "l2_review", "review":
 		return StageL2, nil
 	case "l3_promote", "promote":
 		return StageL3, nil
-	case "l4_curator", "curator":
+	case "l4_curator":
 		return StageL4, nil
 	default:
 		return "", fmt.Errorf("unknown memory curation stage %q", raw)

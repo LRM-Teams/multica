@@ -77,6 +77,18 @@ func (e *Engine) Run(opts Options) (Result, error) {
 	if err != nil {
 		return res, err
 	}
+	if stage == StageTeamCuration {
+		ar, runErr := e.runTeamCuration(roots, opts)
+		res.AgentsScanned = len(roots)
+		res.EvidenceCollected = ar.EvidenceCollected
+		res.SharedCandidatesAdded = ar.SharedCandidatesAdded
+		res.ConflictsFound = ar.ConflictsFound
+		res.AgentResults = append(res.AgentResults, ar)
+		if runErr != nil {
+			res.Errors = append(res.Errors, AgentError{WorkspaceID: opts.WorkspaceID, Stage: StageTeamCuration, Error: runErr.Error()})
+		}
+		return res, nil
+	}
 	for _, root := range roots {
 		ar := AgentRunResult{WorkspaceID: root.WorkspaceID, AgentID: root.AgentID, Root: root.Root}
 		res.AgentsScanned++
@@ -97,12 +109,14 @@ func (e *Engine) Run(opts Options) (Result, error) {
 		}
 		stages := []Stage{stage}
 		if stage == StageAll {
-			stages = []Stage{StageL1, StageL2, StageL3, StageL4}
+			stages = []Stage{StageAgentSelfReview}
 		}
 		for _, st := range stages {
 			var sr AgentRunResult
 			var err error
 			switch st {
+			case StageAgentSelfReview:
+				sr, err = e.runAgentSelfReview(root, opts)
 			case StageL1:
 				sr, err = e.runL1(root, opts)
 			case StageL2:
@@ -144,6 +158,16 @@ func (e *Engine) Run(opts Options) (Result, error) {
 		res.ReviewTraces = appendBoundedReviewTraces(res.ReviewTraces, ar.ReviewTraces, defaultL3ReviewMaxEntries)
 		res.AgentResults = append(res.AgentResults, ar)
 	}
+	if stage == StageAll {
+		teamResult, teamErr := e.runTeamCuration(roots, opts)
+		res.EvidenceCollected += teamResult.EvidenceCollected
+		res.SharedCandidatesAdded += teamResult.SharedCandidatesAdded
+		res.ConflictsFound += teamResult.ConflictsFound
+		res.AgentResults = append(res.AgentResults, teamResult)
+		if teamErr != nil {
+			res.Errors = append(res.Errors, AgentError{WorkspaceID: opts.WorkspaceID, Stage: StageTeamCuration, Error: teamErr.Error()})
+		}
+	}
 	return res, nil
 }
 
@@ -177,6 +201,9 @@ func mergeAgentRunResult(dst *AgentRunResult, src AgentRunResult) {
 	dst.DuplicatesMerged += src.DuplicatesMerged
 	dst.ConflictsFound += src.ConflictsFound
 	dst.EvidenceCollected += src.EvidenceCollected
+	if strings.TrimSpace(src.CuratorOutput) != "" {
+		dst.CuratorOutput = truncateUTF8(strings.TrimSpace(src.CuratorOutput), maxL3ReviewOutputBytes)
+	}
 }
 
 func stageLocalFiles(root string, names ...string) map[string]string {
@@ -206,6 +233,75 @@ func runStageAgent(opts Options, root agentRoot, stage Stage, localFiles map[str
 		DateFrom: formatDate(opts.Since), DateTo: formatDate(opts.Until), Timezone: opts.Timezone,
 		Mode: opts.Mode, DryRun: opts.DryRun, LocalFiles: localFiles, DBEvidence: evidence, ReviewEntries: reviewEntries,
 	})
+}
+
+func (e *Engine) runAgentSelfReview(root agentRoot, opts Options) (AgentRunResult, error) {
+	ar := AgentRunResult{WorkspaceID: root.WorkspaceID, AgentID: root.AgentID, Root: root.Root}
+	if opts.StageAgent == nil {
+		return ar, fmt.Errorf("agent self-review requires a selected curator runtime")
+	}
+	evidence, err := evidenceForAgent(opts, root.WorkspaceID, root.AgentID, opts.Since, opts.Until)
+	if err != nil {
+		return ar, err
+	}
+	ar.EvidenceCollected += len(evidence)
+	files := stageLocalFiles(root.Root,
+		"memory/daily/"+formatDate(opts.Until)+".md",
+		"memory/REVIEW.md",
+		"memory/MEMORY.md",
+		"memory/USER.md",
+		"memory/STATE.md",
+		"memory/SCRATCHPAD.md",
+		"sync_queue/memory-candidates.jsonl",
+		"sync_queue/skill-candidates.jsonl",
+	)
+	out, err := runStageAgent(opts, root, StageAgentSelfReview, files, evidence, nil)
+	if err != nil {
+		return ar, err
+	}
+	ar.CuratorOutput = out.Content
+	if strings.TrimSpace(out.Content) != "" {
+		ar.Changed = true
+		ar.DailyFilesWritten = 1
+		ar.ReviewCandidatesAdded = strings.Count(out.Content, "candidate")
+		ar.SkillCandidatesAdded = strings.Count(out.Content, "skill")
+	}
+	return ar, nil
+}
+
+func (e *Engine) runTeamCuration(roots []agentRoot, opts Options) (AgentRunResult, error) {
+	ar := AgentRunResult{WorkspaceID: opts.WorkspaceID, AgentID: "team", Root: filepath.Join(opts.WorkspacesRoot, opts.WorkspaceID, ".multica", "agents")}
+	if opts.StageAgent == nil {
+		return ar, fmt.Errorf("team curation requires a selected curator runtime and agent")
+	}
+	localFiles := make(map[string]string)
+	var evidence []EvidenceItem
+	for _, root := range roots {
+		files := stageLocalFiles(root.Root, "memory/REVIEW.md", "memory/MEMORY.md", "memory/USER.md", "memory/STATE.md", "sync_queue/memory-candidates.jsonl", "sync_queue/skill-candidates.jsonl")
+		for name, content := range files {
+			localFiles[root.AgentID+"/"+name] = content
+		}
+		items, err := evidenceForAgent(opts, root.WorkspaceID, root.AgentID, opts.Since, opts.Until)
+		if err != nil {
+			return ar, err
+		}
+		evidence = append(evidence, items...)
+	}
+	ar.EvidenceCollected = len(evidence)
+	out, err := opts.StageAgent.RunStage(opts.Context, StageAgentInput{
+		Stage: StageTeamCuration, WorkspaceID: opts.WorkspaceID, AgentID: "team", AgentRoot: ar.Root,
+		DateFrom: formatDate(opts.Since), DateTo: formatDate(opts.Until), Timezone: opts.Timezone,
+		Mode: opts.Mode, DryRun: opts.DryRun, LocalFiles: localFiles, DBEvidence: evidence,
+	})
+	if err != nil {
+		return ar, err
+	}
+	ar.CuratorOutput = out.Content
+	if strings.TrimSpace(out.Content) != "" {
+		ar.SharedCandidatesAdded = strings.Count(out.Content, "team")
+		ar.ConflictsFound = strings.Count(out.Content, "conflict")
+	}
+	return ar, nil
 }
 
 type l2AgentEnvelope struct {

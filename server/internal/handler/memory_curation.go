@@ -124,7 +124,7 @@ func (h *Handler) StartMemoryCurationRun(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	now := time.Now().UTC()
-	until := now.AddDate(0, 0, -1)
+	until := now
 	if req.Until != "" {
 		until, err = time.Parse("2006-01-02", req.Until)
 		if err != nil {
@@ -142,6 +142,10 @@ func (h *Handler) StartMemoryCurationRun(w http.ResponseWriter, r *http.Request)
 	}
 	member, ok := h.workspaceMember(w, r, workspaceID)
 	if !ok {
+		return
+	}
+	if !roleAllowed(member.Role, "owner", "admin") {
+		writeError(w, http.StatusForbidden, "only workspace owner/admin can run team curation")
 		return
 	}
 	profile, err := h.loadMemoryCuratorProfile(r, workspaceID, uuidToString(member.UserID))
@@ -162,19 +166,27 @@ func (h *Handler) StartMemoryCurationRun(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "failed to validate memory curator profile")
 		return
 	}
-	profileAgentIDs, err := h.resolveMemoryCuratorTargetAgentIDs(r.Context(), profile)
+	if (stage == memorycuration.StageAgentSelfReview || stage == memorycuration.StageAll) && !profile.SelfReviewEnabled {
+		writeError(w, http.StatusConflict, "agent self-review is disabled for this workspace")
+		return
+	}
+	if (stage == memorycuration.StageTeamCuration || stage == memorycuration.StageAll) && !profile.TeamCurationEnabled {
+		writeError(w, http.StatusConflict, "team curation is disabled for this workspace")
+		return
+	}
+	profileAgentIDs, err := h.resolveActiveMemoryCurationTargetAgentIDs(r.Context(), profile, since)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to resolve curator targets")
+		writeError(w, http.StatusInternalServerError, "failed to resolve active curator targets")
 		return
 	}
 	if req.AllAgents {
 		agentIDs = profileAgentIDs
 	} else if !agentIDsSubset(agentIDs, profileAgentIDs) {
-		writeError(w, http.StatusForbidden, "selected agents are outside the curator profile target scope")
+		writeError(w, http.StatusForbidden, "selected agents are outside the active online curator targets")
 		return
 	}
 	if len(agentIDs) == 0 {
-		writeError(w, http.StatusConflict, "curator profile has no target agents")
+		writeError(w, http.StatusConflict, "no active online target agents for this date")
 		return
 	}
 	dbStage := memorycuration.DBStageName(stage)
@@ -249,7 +261,7 @@ func (h *Handler) GetWorkspaceMemoryCurationStatus(w http.ResponseWriter, r *htt
 		       id::text, stage, trigger_kind, status, stats, created_at, started_at, finished_at
 		  FROM memory_curation_run
 		 WHERE workspace_id = $1
-		   AND stage IN ('l1_daily', 'l2_review', 'l3_promote', 'l4_curator', 'all')
+		   AND stage IN ('agent_self_review', 'team_curation', 'all')
 		 ORDER BY stage, created_at DESC
 	`, workspaceID)
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -132,7 +133,7 @@ func TestMemoryCuratorProfileQueuesAndCompletesDaemonRun(t *testing.T) {
 		INSERT INTO agent_runtime (
 		  workspace_id, daemon_id, name, runtime_mode, provider, status,
 		  device_info, metadata, owner_id, visibility, last_seen_at
-		) VALUES ($1, 'memory-curator-test-daemon', 'Memory Curator Test Runtime', 'local', 'pi', 'online',
+		) VALUES ($1, 'memory-curator-test-daemon', 'Memory Curator Test Runtime', 'local', 'codex', 'online',
 		          'memory curator test', jsonb_build_object('capabilities', jsonb_build_array($2::text)), $3, 'private', now())
 		RETURNING id::text
 	`, testWorkspaceID, protocol.DaemonCapabilityMemoryCuration, testUserID).Scan(&runtimeID); err != nil {
@@ -162,7 +163,8 @@ func TestMemoryCuratorProfileQueuesAndCompletesDaemonRun(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	profileReq := withURLParam(newRequest(http.MethodPut, "/api/workspaces/"+testWorkspaceID+"/memory-curation/profile", map[string]any{
-		"enabled": true, "mode": "auto_safe", "runtime_id": runtimeID,
+		"enabled": true, "self_review_enabled": true, "team_curation_enabled": true,
+		"mode": "auto_safe", "runtime_id": runtimeID,
 		"curator_agent_id": curatorAgentID, "target_scope": "selected",
 		"target_agent_ids": []string{targetAgentID}, "timezone": "Asia/Shanghai",
 		"schedule_hour": 1, "catch_up_enabled": true, "confidence_threshold": 0.9,
@@ -179,9 +181,24 @@ func TestMemoryCuratorProfileQueuesAndCompletesDaemonRun(t *testing.T) {
 		t.Fatalf("profile = %+v", profile)
 	}
 
+	var issueID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id)
+		VALUES ($1, 'memory curation active target', 'todo', 'none', 'member', $2)
+		RETURNING id::text
+	`, testWorkspaceID, testUserID).Scan(&issueID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_task_queue (agent_id, issue_id, runtime_id, status, created_at)
+		VALUES ($1, $2, $3, 'completed', now())
+	`, targetAgentID, issueID, runtimeID); err != nil {
+		t.Fatal(err)
+	}
+
 	w = httptest.NewRecorder()
 	runReq := withURLParam(newRequest(http.MethodPost, "/api/workspaces/"+testWorkspaceID+"/memory-curation/runs", map[string]any{
-		"agent_ids": []string{targetAgentID}, "stage": "l3", "dry_run": true,
+		"agent_ids": []string{targetAgentID}, "stage": "agent_self_review", "until": time.Now().UTC().Format("2006-01-02"), "dry_run": true,
 	}), "id", testWorkspaceID)
 	testHandler.StartMemoryCurationRun(w, runReq)
 	if w.Code != http.StatusAccepted {

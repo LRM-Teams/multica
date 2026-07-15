@@ -1054,6 +1054,8 @@ describe("ApiClient", () => {
     await client.getMemoryCuratorProfile("ws-1");
     await client.updateMemoryCuratorProfile("ws-1", {
       enabled: true,
+      self_review_enabled: true,
+      team_curation_enabled: true,
       mode: "review",
       runtime_id: "runtime-1",
       curator_agent_id: "agent-1",
@@ -1079,12 +1081,12 @@ describe("ApiClient", () => {
     vi.stubGlobal("fetch", fetchMock);
     const client = new ApiClient("https://api.example.test");
 
-    await client.startMemoryCurationRun("ws-1", { all_agents: true, stage: "l3", dry_run: true });
+    await client.startMemoryCurationRun("ws-1", { all_agents: true, stage: "team_curation", dry_run: true });
 
     expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.example.test/api/workspaces/ws-1/memory-curation/runs");
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
       all_agents: true,
-      stage: "l3",
+      stage: "team_curation",
       dry_run: true,
     });
   });

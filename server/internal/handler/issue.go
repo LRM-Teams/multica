@@ -765,6 +765,21 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 		}
 		projectFilter = id
 	}
+	var sourceChannelFilter pgtype.UUID
+	if c := r.URL.Query().Get("source_channel_id"); c != "" {
+		id, ok := parseUUIDOrBadRequest(w, c, "source_channel_id")
+		if !ok {
+			return
+		}
+		userID, ok := requireUserID(w, r)
+		if !ok {
+			return
+		}
+		if !h.requireChannelUserMember(w, ctx, workspaceID, id, parseUUID(userID)) {
+			return
+		}
+		sourceChannelFilter = id
+	}
 	// involves_user_id widens the assignee filter to surface issues where the
 	// user is the indirect assignee (their owned agent, or a squad they belong
 	// to / lead / have an agent inside). Direct member-assignment is excluded
@@ -784,8 +799,11 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// open_only=true returns all non-done/cancelled issues (no limit).
-	if r.URL.Query().Get("open_only") == "true" {
+	// Preserve the existing sqlc path for unfiltered open-only requests. A
+	// source-channel-filtered open-only request uses the dynamic path below so
+	// its source predicate is applied to both the rows and total.
+	openOnly := r.URL.Query().Get("open_only") == "true"
+	if openOnly && !sourceChannelFilter.Valid {
 		issues, err := h.Queries.ListOpenIssues(ctx, db.ListOpenIssuesParams{
 			WorkspaceID:    wsUUID,
 			Priority:       priorityFilter,
@@ -916,6 +934,19 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 	if metadataFilter != nil {
 		where = append(where, fmt.Sprintf("i.metadata @> %s::jsonb", addArg(string(metadataFilter))))
 	}
+	if sourceChannelFilter.Valid {
+		ref := addArg(sourceChannelFilter)
+		where = append(where, fmt.Sprintf(`EXISTS (
+    SELECT 1
+    FROM issue_source_message src
+    WHERE src.issue_id = i.id
+      AND src.workspace_id = i.workspace_id
+      AND src.channel_id = %s::uuid
+)`, ref))
+	}
+	if openOnly {
+		where = append(where, "i.status NOT IN ('done', 'cancelled')")
+	}
 	if involvesUserFilter.Valid {
 		ref := addArg(involvesUserFilter)
 		where = append(where, fmt.Sprintf(`(
@@ -964,16 +995,17 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 	}
 	orderBy += ", i.created_at DESC"
 
-	offsetRef := addArg(int64(offset))
-	limitRef := addArg(int64(limit))
-
 	query := fmt.Sprintf(`SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority,
        i.assignee_type, i.assignee_id, i.creator_type, i.creator_id,
        i.parent_issue_id, i.position, i.start_date, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.metadata
 FROM issue i
 WHERE %s
-ORDER BY %s
-LIMIT %s OFFSET %s`, whereSql, orderBy, limitRef, offsetRef)
+ORDER BY %s`, whereSql, orderBy)
+	if !openOnly {
+		offsetRef := addArg(int64(offset))
+		limitRef := addArg(int64(limit))
+		query += fmt.Sprintf("\nLIMIT %s OFFSET %s", limitRef, offsetRef)
+	}
 
 	rows, err := h.DB.Query(ctx, query, args...)
 	if err != nil {
@@ -1021,8 +1053,11 @@ LIMIT %s OFFSET %s`, whereSql, orderBy, limitRef, offsetRef)
 
 	// Get the true total count for pagination awareness.
 	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM issue i WHERE %s`, whereSql)
-	// Count query uses the same args minus the OFFSET and LIMIT params (last two added).
-	countArgs := args[:len(args)-2]
+	countArgs := args
+	if !openOnly {
+		// Count query uses the same args minus the OFFSET and LIMIT params.
+		countArgs = args[:len(args)-2]
+	}
 	var total int64
 	if err := h.DB.QueryRow(ctx, countQuery, countArgs...).Scan(&total); err != nil {
 		total = int64(len(issues))

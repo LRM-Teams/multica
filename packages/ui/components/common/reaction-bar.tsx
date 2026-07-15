@@ -95,6 +95,9 @@ function ReactionBar({
             name: actorDisplayName(a, currentUserId, getActorName),
           }));
         const actorSummary = actors.map((actor) => actor.name).join(", ");
+        // Attribution lives only in HoverCardContent. Do not also set
+        // `title` — the native browser tooltip would stack under the card
+        // and show the same actor names twice.
         return (
           <HoverCard key={g.emoji}>
             <HoverCardTrigger
@@ -102,7 +105,6 @@ function ReactionBar({
                 <button
                   type="button"
                   onClick={() => onToggle(g.emoji)}
-                  title={actorSummary}
                   className={`inline-flex h-8 touch-manipulation items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors hover:bg-brand/15 active:scale-95 md:h-6 ${
                     g.reacted
                       ? "border-brand/30 bg-brand/8 text-brand"

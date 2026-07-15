@@ -910,7 +910,8 @@ describe("ChannelMessageBubble", () => {
     expect(footer?.children[1]).toHaveTextContent("👍1");
   });
 
-  it("labels the current user as You in reaction attribution", () => {
+  it("labels the current user as You in reaction attribution via HoverCard only", async () => {
+    const user = userEvent.setup();
     render(
       <ChannelMessageBubble
         message={makeMessage({
@@ -940,10 +941,12 @@ describe("ChannelMessageBubble", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "👍2" })).toHaveAttribute(
-      "title",
-      "You, Bob Display",
-    );
+    const pill = screen.getByRole("button", { name: "👍2" });
+    // No native title — that double-rendered the same name under HoverCard.
+    expect(pill).not.toHaveAttribute("title");
+
+    await user.hover(pill);
+    expect(await screen.findByText("You, Bob Display")).toBeInTheDocument();
   });
 
   // B4 (#242) — reaction 4-carrier consistency. Channel / dm_channel / thread

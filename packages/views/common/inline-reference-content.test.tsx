@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MessagePart } from "@multica/core/types";
 import { InlineReferenceContent } from "./inline-reference-content";
 
@@ -29,6 +29,22 @@ vi.mock("@multica/ui/components/ui/hover-card", () => ({
   HoverCardTrigger: ({ children }: { children: ReactNode }) => <span>{children}</span>,
   HoverCardContent: ({ children }: { children: ReactNode }) => (
     <span data-testid="issue-hover-content">{children}</span>
+  ),
+}));
+
+// The peek's data source: the LIVE issue, not the part's snapshot (#504).
+// Tests set this per-case; beforeEach resets it so an unresolved issue is the
+// default (otherwise a leftover would make the verbatim tests see the identifier
+// twice — once as the token, once inside the peek).
+let resolvedIssue: { id: string; title: string; status: string } | undefined;
+
+vi.mock("../issues/components/issue-chip", () => ({
+  useResolvedIssue: () => resolvedIssue,
+}));
+
+vi.mock("../issues/components/status-icon", () => ({
+  StatusIcon: ({ status }: { status: string }) => (
+    <svg data-testid="status-icon" data-status={status} />
   ),
 }));
 
@@ -95,6 +111,10 @@ function issueRef(start: number, end: number): MessagePart {
 }
 
 describe("InlineReferenceContent (#463 projector consumer)", () => {
+  beforeEach(() => {
+    resolvedIssue = undefined;
+  });
+
   it("renders a structured mention as the hover-card token — restores the hover the bare-@ window dropped", () => {
     // "hey @Alice now" — @Alice at [4,10)
     render(<InlineReferenceContent content="hey @Alice now" parts={[mention(4, 10)]} />);
@@ -118,14 +138,9 @@ describe("InlineReferenceContent (#463 projector consumer)", () => {
     expect(screen.queryByText("#MUL-123")).toBeNull();
   });
 
-  it("shows a server-fed peek with the issue title + status (#469)", () => {
-    // "see #MUL-9 pls" — the anchored part carries title/status from the server.
-    const part = {
-      ...issueRef(4, 10),
-      ref_title: "Fix the login bug",
-      ref_status: "in_progress",
-    } as MessagePart;
-    render(<InlineReferenceContent content="see #MUL-9 pls" parts={[part]} />);
+  it("peeks with the LIVE issue title + status (#469)", () => {
+    resolvedIssue = { id: "issue-uuid", title: "Fix the login bug", status: "in_progress" };
+    render(<InlineReferenceContent content="see #MUL-9 pls" parts={[issueRef(4, 10)]} />);
 
     expect(screen.getByTestId("issue-hover-content")).toBeInTheDocument();
     expect(screen.getByText("Fix the login bug")).toBeInTheDocument();
@@ -134,40 +149,58 @@ describe("InlineReferenceContent (#463 projector consumer)", () => {
     expect(screen.getAllByText("#MUL-9").some((el) => el.closest("a"))).toBe(true);
   });
 
-  it("degrades to a plain clickable token when the server sends no title/status (#469)", () => {
-    // No ref_title/ref_status → never fake a peek or derive state client-side.
+  // THE regression for #504. The persisted part is a snapshot taken when the
+  // message was written; if the issue moves on, the peek must follow the issue,
+  // never the snapshot. (This ordering — write message, THEN mutate issue — is the
+  // only shape that exposes staleness; fixtures built the other way always pass.)
+  it("renders the LIVE status, never the stale snapshot on the part (#504)", () => {
+    const stalePart = {
+      ...issueRef(4, 10),
+      ref_title: "OLD title from write time",
+      ref_status: "todo",
+    } as MessagePart;
+    resolvedIssue = { id: "issue-uuid", title: "Current title", status: "in_progress" };
+
+    render(<InlineReferenceContent content="see #MUL-9 pls" parts={[stalePart]} />);
+
+    expect(screen.getByText("Current title")).toBeInTheDocument();
+    expect(screen.queryByText("OLD title from write time")).toBeNull();
+    // in_progress renderer, not the snapshot's todo.
+    expect(screen.getByTestId("status-icon")).toHaveAttribute("data-status", "in_progress");
+  });
+
+  it("degrades to a plain clickable token while the issue is unresolved (#469)", () => {
+    // Loading / deleted / other workspace / no permission → no card, and we do
+    // NOT fall back to the part's snapshot.
+    resolvedIssue = undefined;
+    const partWithSnapshot = {
+      ...issueRef(4, 10),
+      ref_title: "Snapshot title",
+      ref_status: "done",
+    } as MessagePart;
+    render(<InlineReferenceContent content="see #MUL-9 pls" parts={[partWithSnapshot]} />);
+
+    expect(screen.queryByTestId("issue-hover-card")).toBeNull();
+    expect(screen.queryByText("Snapshot title")).toBeNull();
+    expect(screen.getByText("#MUL-9").closest("a")).not.toBeNull();
+  });
+
+  it("peeks with title only when the live issue has no drawable status (#469 partial)", () => {
+    resolvedIssue = { id: "issue-uuid", title: "Fix the login bug", status: "not_a_real_status" };
     render(<InlineReferenceContent content="see #MUL-9 pls" parts={[issueRef(4, 10)]} />);
 
-    expect(screen.queryByTestId("issue-hover-card")).toBeNull();
-    expect(screen.getByText("#MUL-9").closest("a")).not.toBeNull();
-  });
-
-  it("peeks with title only when the server sends no status (#469 partial)", () => {
-    const part = { ...issueRef(4, 10), ref_title: "Fix the login bug" } as MessagePart;
-    render(<InlineReferenceContent content="see #MUL-9 pls" parts={[part]} />);
-
+    // Unknown status is ignored (no bogus icon) but the title still peeks.
     expect(screen.getByTestId("issue-hover-content")).toBeInTheDocument();
     expect(screen.getByText("Fix the login bug")).toBeInTheDocument();
+    expect(screen.queryByTestId("status-icon")).toBeNull();
   });
 
-  it("peeks with status only when the server sends no title (#469 partial)", () => {
-    const part = { ...issueRef(4, 10), ref_status: "done" } as MessagePart;
-    const { container } = render(
-      <InlineReferenceContent content="see #MUL-9 pls" parts={[part]} />,
-    );
+  it("peeks with status only when the live issue has no title (#469 partial)", () => {
+    resolvedIssue = { id: "issue-uuid", title: "", status: "done" };
+    render(<InlineReferenceContent content="see #MUL-9 pls" parts={[issueRef(4, 10)]} />);
 
-    // Card still opens (status alone is worth peeking at) — icon, no title line.
     expect(screen.getByTestId("issue-hover-content")).toBeInTheDocument();
-    expect(container.querySelector("svg")).not.toBeNull();
-  });
-
-  it("ignores an unknown ref_status rather than drawing a bogus state (#469)", () => {
-    const part = { ...issueRef(4, 10), ref_status: "not_a_real_status" } as MessagePart;
-    render(<InlineReferenceContent content="see #MUL-9 pls" parts={[part]} />);
-
-    // Unknown status + no title → nothing to peek at, so plain token.
-    expect(screen.queryByTestId("issue-hover-card")).toBeNull();
-    expect(screen.getByText("#MUL-9").closest("a")).not.toBeNull();
+    expect(screen.getByTestId("status-icon")).toHaveAttribute("data-status", "done");
   });
 
   it("non-interactive mode: mention is styled text, no hover card / nested link", () => {

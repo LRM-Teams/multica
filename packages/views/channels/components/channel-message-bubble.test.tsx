@@ -77,6 +77,13 @@ vi.mock("@multica/core/paths", () => ({
   }),
 }));
 
+// A projected issue token resolves the LIVE issue for its peek (#504), which would
+// drag a QueryClient into these layout tests. Unresolved → plain link token, which
+// is exactly what the system-row projection test below asserts.
+vi.mock("../../issues/components/issue-chip", () => ({
+  useResolvedIssue: () => undefined,
+}));
+
 // Projected issue tokens render through AppLink, which needs a NavigationProvider.
 vi.mock("../../navigation/app-link", () => ({
   AppLink: ({

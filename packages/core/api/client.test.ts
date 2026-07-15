@@ -318,6 +318,26 @@ describe("ApiClient", () => {
     expect(headers["X-Client-OS"]).toBeUndefined();
   });
 
+  it("sends source_channel_id as a query param on listIssues, and omits it when unset (#476)", async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ issues: [], total: 0 }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new ApiClient("https://api.example.test");
+    await client.listIssues({ status: "todo", source_channel_id: "chan-9" });
+    expect(String(fetchMock.mock.calls[0]![0])).toContain("source_channel_id=chan-9");
+
+    fetchMock.mockClear();
+    await client.listIssues({ status: "todo" });
+    expect(String(fetchMock.mock.calls[0]![0])).not.toContain("source_channel_id");
+  });
+
   it("uses the expected HTTP contract for comment trigger preview and suppress", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(

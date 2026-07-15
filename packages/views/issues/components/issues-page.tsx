@@ -47,6 +47,7 @@ export function IssuesPage() {
   const sortBy = useIssueViewStore((s) => s.sortBy);
   const sortDirection = useIssueViewStore((s) => s.sortDirection);
   const agentRunningFilter = useIssueViewStore((s) => s.agentRunningFilter);
+  const sourceChannelId = useIssueViewStore((s) => s.sourceChannelId);
   const usesAssigneeBoard = viewMode === "board" && grouping === "assignee";
 
   const sort = useMemo(
@@ -89,8 +90,12 @@ export function IssuesPage() {
   }, [assigneeFilters, creatorFilters, includeNoAssignee, includeNoProject, labelFilters, priorityFilters, projectFilters, scope, statusFilters]);
 
   const assigneeGroupsOptions = issueAssigneeGroupsOptions(wsId, assigneeGroupFilter, sort);
+  // Source-channel filter (#476) is server-side — the list response has no
+  // anchor data to filter on the client, so it threads into the query itself.
+  // v0 covers the status board + list + gantt + swimlane (all use this query);
+  // the assignee-grouped board hits a separate endpoint and is a follow-up.
   const statusIssuesQuery = useQuery({
-    ...issueListOptions(wsId, sort),
+    ...issueListOptions(wsId, sort, sourceChannelId ?? undefined),
     enabled: !usesAssigneeBoard,
   });
   const assigneeGroupsQuery = useQuery({

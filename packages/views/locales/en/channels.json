@@ -61,6 +61,7 @@
     "share_aria": "Share",
     "stats_aria": "Stats",
     "files_aria": "Files",
+    "issues_aria": "Issues from this channel",
     "back": "Back",
     "more_aria": "More",
     "roster_summary": "{{members}} members · {{agents}} agents"

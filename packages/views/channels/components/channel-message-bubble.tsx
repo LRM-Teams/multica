@@ -25,6 +25,7 @@ import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import type { ChannelMessage } from "@multica/core/types";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { initialsOf } from "../../common/initials";
+import { InlineReferenceContent } from "../../common/inline-reference-content";
 import { useT } from "../../i18n/use-t";
 import { useMessageTime } from "../../i18n/use-message-time";
 import { resolveChannelAuthorDisplayName } from "./message-preview";
@@ -92,6 +93,10 @@ function ChannelSystemMessageRow({
   // Raft/Slack-style row with clickable @username tokens; everything else falls
   // back to the plain canonical text.
   const memberEvent = parseMemberSystemEvent(message);
+  // Issue backflow rows ("MUL-7 assigned to …", #497) carry anchored `reference`
+  // parts, so project them into tokens instead of dumping the raw string — the
+  // system row is otherwise the one surface the projector never reached (#469).
+  const hasReferenceParts = message.parts?.some((part) => part.type === "reference") ?? false;
   return (
     <div
       id={`message-${message.id}`}
@@ -114,7 +119,15 @@ function ChannelSystemMessageRow({
       )}
     >
       <span className="min-w-0 break-words">
-        {memberEvent ? <MemberSystemEventContent event={memberEvent} /> : systemText}
+        {memberEvent ? (
+          <MemberSystemEventContent event={memberEvent} />
+        ) : hasReferenceParts ? (
+          // Spans are anchored to the RAW `message.content`; feeding the trimmed
+          // `systemText` would shift every offset and misplace the tokens.
+          <InlineReferenceContent content={message.content} parts={message.parts} />
+        ) : (
+          systemText
+        )}
       </span>
       <span
         aria-hidden

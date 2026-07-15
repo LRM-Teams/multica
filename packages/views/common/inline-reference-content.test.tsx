@@ -142,6 +142,25 @@ describe("InlineReferenceContent (#463 projector consumer)", () => {
     expect(screen.getByText("#MUL-9").closest("a")).not.toBeNull();
   });
 
+  it("peeks with title only when the server sends no status (#469 partial)", () => {
+    const part = { ...issueRef(4, 10), ref_title: "Fix the login bug" } as MessagePart;
+    render(<InlineReferenceContent content="see #MUL-9 pls" parts={[part]} />);
+
+    expect(screen.getByTestId("issue-hover-content")).toBeInTheDocument();
+    expect(screen.getByText("Fix the login bug")).toBeInTheDocument();
+  });
+
+  it("peeks with status only when the server sends no title (#469 partial)", () => {
+    const part = { ...issueRef(4, 10), ref_status: "done" } as MessagePart;
+    const { container } = render(
+      <InlineReferenceContent content="see #MUL-9 pls" parts={[part]} />,
+    );
+
+    // Card still opens (status alone is worth peeking at) — icon, no title line.
+    expect(screen.getByTestId("issue-hover-content")).toBeInTheDocument();
+    expect(container.querySelector("svg")).not.toBeNull();
+  });
+
   it("ignores an unknown ref_status rather than drawing a bogus state (#469)", () => {
     const part = { ...issueRef(4, 10), ref_status: "not_a_real_status" } as MessagePart;
     render(<InlineReferenceContent content="see #MUL-9 pls" parts={[part]} />);

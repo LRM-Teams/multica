@@ -1,12 +1,18 @@
 "use client";
 
 import * as React from "react";
-import type { MessagePart } from "@multica/core/types";
+import type { IssueStatus, MessagePart } from "@multica/core/types";
 import { MemoizedMarkdown, ActorMention } from "./markdown";
 import { AppLink } from "../navigation/app-link";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { cn } from "@multica/ui/lib/utils";
+import {
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from "@multica/ui/components/ui/hover-card";
 import { mentionTokenClassName } from "./mention-token";
+import { StatusIcon } from "../issues/components/status-icon";
 import { projectInlineReferences, type ReferencePart } from "./inline-references";
 
 /**
@@ -131,8 +137,25 @@ function ReferenceToken({
   }
 
   // issue-ref (#469): raft-style lightweight inline link — uniform link color,
-  // no status decoration inline; hover/detail land in the follow-up wiring.
+  // no inline status decoration; the status lives in the hover card.
   return <IssueRefToken reference={reference} text={text} interactive={interactive} />;
+}
+
+type IssueRefPart = Extract<ReferencePart, { ref_type: "issue-ref" }>;
+
+const ISSUE_STATUSES: readonly string[] = [
+  "backlog",
+  "todo",
+  "in_progress",
+  "in_review",
+  "done",
+  "blocked",
+  "cancelled",
+];
+
+/** Narrow the server's free-form `ref_status` to a status we can actually draw. */
+function toIssueStatus(value: string | undefined): IssueStatus | null {
+  return value && ISSUE_STATUSES.includes(value) ? (value as IssueStatus) : null;
 }
 
 function IssueRefToken({
@@ -140,7 +163,7 @@ function IssueRefToken({
   text,
   interactive,
 }: {
-  reference: ReferencePart;
+  reference: IssueRefPart;
   text: string;
   interactive: boolean;
 }): React.JSX.Element {
@@ -152,9 +175,37 @@ function IssueRefToken({
   if (!interactive) {
     return <span className="text-brand">{text}</span>;
   }
-  return (
+
+  const link = (
     <AppLink href={paths.issueDetail(reference.ref_id)} className="text-brand hover:underline">
       {text}
     </AppLink>
+  );
+
+  // The peek is SERVER-FED: it renders only what the anchored part carries
+  // (`ref_title` / `ref_status`). When the server sends neither, degrade to the
+  // plain clickable token rather than faking a card or deriving state client-side
+  // (#469 / Iris's issue-ref spec).
+  const title = reference.ref_title;
+  const status = toIssueStatus(reference.ref_status);
+  if (!title && !status) return link;
+
+  return (
+    <HoverCard>
+      <HoverCardTrigger render={<span />} className="inline">
+        {link}
+      </HoverCardTrigger>
+      <HoverCardContent side="top" sideOffset={8} className="w-[300px] p-3">
+        <div className="flex items-start gap-2">
+          {status ? <StatusIcon status={status} className="mt-0.5 h-4 w-4" /> : null}
+          <div className="min-w-0 flex-1">
+            <div className="text-[11px] leading-none text-muted-foreground">{text}</div>
+            {title ? (
+              <div className="mt-1 text-sm font-medium leading-snug text-foreground">{title}</div>
+            ) : null}
+          </div>
+        </div>
+      </HoverCardContent>
+    </HoverCard>
   );
 }

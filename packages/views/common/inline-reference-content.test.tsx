@@ -18,6 +18,20 @@ vi.mock("@multica/core/workspace/hooks", () => ({
     getActorName: (_type: string, _id: string, fallback?: string) => fallback ?? "Alice",
   }),
 }));
+// The real hover popup only opens on a true pointer hover (verified on a real
+// machine, not jsdom). Mocking the primitive keeps these tests on what this
+// component actually decides: WHETHER to wrap the token in a peek, and what the
+// peek renders from the server-fed part.
+vi.mock("@multica/ui/components/ui/hover-card", () => ({
+  HoverCard: ({ children }: { children: ReactNode }) => (
+    <span data-testid="issue-hover-card">{children}</span>
+  ),
+  HoverCardTrigger: ({ children }: { children: ReactNode }) => <span>{children}</span>,
+  HoverCardContent: ({ children }: { children: ReactNode }) => (
+    <span data-testid="issue-hover-content">{children}</span>
+  ),
+}));
+
 vi.mock("../issues/components/issue-mention-card", () => ({
   IssueMentionCard: ({ issueId }: { issueId: string }) => <span>{issueId}</span>,
 }));
@@ -102,6 +116,39 @@ describe("InlineReferenceContent (#463 projector consumer)", () => {
     render(<InlineReferenceContent content="fix MUL-123 now" parts={[issueRef(4, 11)]} />);
     expect(screen.getByText("MUL-123")).toBeInTheDocument();
     expect(screen.queryByText("#MUL-123")).toBeNull();
+  });
+
+  it("shows a server-fed peek with the issue title + status (#469)", () => {
+    // "see #MUL-9 pls" — the anchored part carries title/status from the server.
+    const part = {
+      ...issueRef(4, 10),
+      ref_title: "Fix the login bug",
+      ref_status: "in_progress",
+    } as MessagePart;
+    render(<InlineReferenceContent content="see #MUL-9 pls" parts={[part]} />);
+
+    expect(screen.getByTestId("issue-hover-content")).toBeInTheDocument();
+    expect(screen.getByText("Fix the login bug")).toBeInTheDocument();
+    // The token itself stays a plain clickable link — status lives in the peek.
+    // (The identifier appears twice: once as the token, once inside the peek.)
+    expect(screen.getAllByText("#MUL-9").some((el) => el.closest("a"))).toBe(true);
+  });
+
+  it("degrades to a plain clickable token when the server sends no title/status (#469)", () => {
+    // No ref_title/ref_status → never fake a peek or derive state client-side.
+    render(<InlineReferenceContent content="see #MUL-9 pls" parts={[issueRef(4, 10)]} />);
+
+    expect(screen.queryByTestId("issue-hover-card")).toBeNull();
+    expect(screen.getByText("#MUL-9").closest("a")).not.toBeNull();
+  });
+
+  it("ignores an unknown ref_status rather than drawing a bogus state (#469)", () => {
+    const part = { ...issueRef(4, 10), ref_status: "not_a_real_status" } as MessagePart;
+    render(<InlineReferenceContent content="see #MUL-9 pls" parts={[part]} />);
+
+    // Unknown status + no title → nothing to peek at, so plain token.
+    expect(screen.queryByTestId("issue-hover-card")).toBeNull();
+    expect(screen.getByText("#MUL-9").closest("a")).not.toBeNull();
   });
 
   it("non-interactive mode: mention is styled text, no hover card / nested link", () => {

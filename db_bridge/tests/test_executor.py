@@ -184,11 +184,8 @@ async def test_no_duplicate_processing_under_concurrency():
     assert len(complete_calls) == n_rows
 
 
-async def test_multica_api_forwarded_to_multica_upstream_with_key_inject():
-    cfg = _config(
-        BRIDGE_MULTICA_UPSTREAM_URL="http://127.0.0.1:9999",
-        BRIDGE_MULTICA_UPSTREAM_API_KEY="upstream-secret",
-    )
+async def test_multica_api_forwards_caller_authorization_only():
+    cfg = _config(BRIDGE_MULTICA_UPSTREAM_URL="http://127.0.0.1:9999")
     db = BridgeDB(cfg, client=FakeSupabaseClient())
     captured: dict = {}
 
@@ -200,15 +197,15 @@ async def test_multica_api_forwarded_to_multica_upstream_with_key_inject():
         return httpx.Response(200, json={"segments": []})
 
     ex = Executor(db, "multica", config=cfg, client=_exec_client(handler))
-    await db.insert_request(
+    row_id = await db.insert_request(
         ENV_DISPATCH_DAG,
         user_id=USER_ID,
         method="GET",
         path="/api/v1/env-dispatch/proj-1/dag",
         headers={
-            "authorization": "Bearer caller-token",
-            "x-api-key": "caller-api-key",
-            "x-admin-api-key": "caller-admin",
+            "authorization": "Bearer mul_caller",
+            "x-api-key": "alternate",
+            "x-admin-api-key": "admin",
             "content-type": "application/json",
         },
         content_type="application/json",
@@ -219,24 +216,22 @@ async def test_multica_api_forwarded_to_multica_upstream_with_key_inject():
     # Forwarded to the multica upstream, not the gateway / leagent upstream.
     assert "127.0.0.1:9999" in captured["url"]
     assert captured["url"].endswith("/api/v1/env-dispatch/proj-1/dag")
-    # The bridge injects its own upstream key; caller credentials are stripped.
-    assert captured["auth"] == "Bearer upstream-secret"
+    assert captured["auth"] == "Bearer mul_caller"
     assert captured["x_api_key"] is None
     assert captured["x_admin"] is None
+    row = db.client.tables[ENV_DISPATCH_DAG.table][row_id]
+    assert row["request_headers"]["authorization"] == "REDACTED"
 
 
-async def test_multica_api_strips_caller_auth_even_without_upstream_key():
+async def test_multica_api_redacts_authorization_after_transport_failure():
     cfg = _config(BRIDGE_MULTICA_UPSTREAM_URL="http://127.0.0.1:9999")
-    # No BRIDGE_MULTICA_UPSTREAM_API_KEY configured.
     db = BridgeDB(cfg, client=FakeSupabaseClient())
-    captured: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        captured["auth"] = request.headers.get("authorization")
-        return httpx.Response(200, json={"segments": []})
+        raise httpx.ConnectError("upstream unavailable", request=request)
 
     ex = Executor(db, "multica", config=cfg, client=_exec_client(handler))
-    await db.insert_request(
+    row_id = await db.insert_request(
         ENV_DISPATCH_DAG,
         user_id=USER_ID,
         method="GET",
@@ -246,6 +241,6 @@ async def test_multica_api_strips_caller_auth_even_without_upstream_key():
         body=b"",
     )
     assert await ex.process_one(ENV_DISPATCH_DAG, "w0") is True
-    # No upstream key -> no Authorization injected, but caller auth is still
-    # stripped (never leaked to the multica Go server).
-    assert captured["auth"] is None
+    row = db.client.tables[ENV_DISPATCH_DAG.table][row_id]
+    assert row["status"] == "error"
+    assert row["request_headers"]["authorization"] == "REDACTED"

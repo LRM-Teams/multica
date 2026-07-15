@@ -57,17 +57,16 @@ def filter_request_headers(headers: Mapping[str, str]) -> dict[str, str]:
     return {k: v for k, v in _normalize(headers) if k not in _DROP_REQUEST_HEADERS}
 
 
-# Caller-supplied credential headers stripped when the bridge re-authenticates
-# to an upstream with its own injected key (the multica_api group). These survive
-# filter_request_headers -- which keeps Authorization for pass-through groups --
-# and must be removed before the bridge injects its own upstream token so a
-# caller's token can never leak to the multica Go server.
-_CRED_HEADERS: Final = frozenset({"authorization", "x-api-key", "x-admin-api-key"})
+# Alternate credential headers are never forwarded alongside the caller's
+# canonical Authorization bearer token.
+_ALTERNATE_CRED_HEADERS: Final = frozenset({"x-api-key", "x-admin-api-key"})
 
 
-def strip_credentials(headers: Mapping[str, str]) -> dict[str, str]:
-    """Drop caller-supplied auth headers before the bridge injects its own."""
-    return {k: v for k, v in _normalize(headers) if k not in _CRED_HEADERS}
+def strip_alternate_credentials(headers: Mapping[str, str]) -> dict[str, str]:
+    """Drop alternate credentials while preserving caller Authorization."""
+    return {
+        k: v for k, v in _normalize(headers) if k not in _ALTERNATE_CRED_HEADERS
+    }
 
 
 def filter_response_headers(headers: Mapping[str, str]) -> dict[str, str]:

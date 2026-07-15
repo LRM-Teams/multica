@@ -95,14 +95,7 @@ class Executor:
             if self._config.bridge_user_id:
                 headers["x-bridge-user-id"] = self._config.bridge_user_id
         elif channel.group == "multica_api":
-            # The bridge re-authenticates to the multica Go server with its own
-            # key: strip caller-supplied credentials so they do not leak upstream,
-            # then inject the configured upstream token.
-            headers = relay.strip_credentials(headers)
-            if self._config.multica_upstream_api_key:
-                headers["authorization"] = (
-                    f"Bearer {self._config.multica_upstream_api_key}"
-                )
+            headers = relay.strip_alternate_credentials(headers)
         return await self._client.request(
             req.method,
             url,
@@ -110,6 +103,24 @@ class Executor:
             content=req.body,
             timeout=self._config.timeout_for(channel),
         )
+
+    def _must_redact(self, channel: Channel) -> bool:
+        return (
+            channel.group == "multica_api"
+            or self._config.redact_tokens_after_complete
+        )
+
+    async def _redact_if_required(self, channel: Channel, row_id: str) -> None:
+        if not self._must_redact(channel):
+            return
+        try:
+            await self._db.redact_headers(channel, row_id)
+        except Exception:  # noqa: BLE001 -- redaction cannot replace relay outcome
+            logger.warning(
+                "executor token redaction failed channel=%s id=%s",
+                channel.name,
+                row_id,
+            )
 
     async def process_one(self, channel: Channel, worker_id: str) -> bool:
         """Claim and relay a single request. Returns False if nothing to do."""
@@ -144,6 +155,8 @@ class Executor:
                     req.id,
                     req.worker_id,
                 )
+            if completed:
+                await self._redact_if_required(channel, req.id)
             return True
 
         completed = await self._db.complete(
@@ -165,18 +178,7 @@ class Executor:
         self._metrics.record_forward(
             channel.name, ok=True, latency_s=time.monotonic() - started
         )
-        # Optional post-completion hardening: scrub the stored token now that the
-        # response has been relayed and the row is retained for audit.
-        if self._config.redact_tokens_after_complete:
-            try:
-                await self._db.redact_headers(channel, req.id)
-            except Exception as exc:  # noqa: BLE001 -- redaction must never break relay
-                logger.warning(
-                    "executor token redaction failed channel=%s id=%s: %s",
-                    channel.name,
-                    req.id,
-                    exc,
-                )
+        await self._redact_if_required(channel, req.id)
         logger.info(
             "executor relayed response channel=%s id=%s status=%s bytes=%d",
             channel.name,

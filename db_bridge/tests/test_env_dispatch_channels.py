@@ -31,9 +31,6 @@ def _config(**overrides: str) -> BridgeConfig:
         "SUPABASE_SERVICE_ROLE_KEY": "k",
         "BRIDGE_POLL_INTERVAL": "0.01",
         "BRIDGE_USER_ID": USER_ID,
-        # multica_api channels inject this key when forwarding to the multica
-        # upstream; the caller's own Authorization is stripped.
-        "BRIDGE_MULTICA_UPSTREAM_API_KEY": "multica-upstream-key",
         **overrides,
     }
     return BridgeConfig.from_env(env)
@@ -78,7 +75,7 @@ def test_channels_registered_in_multica_api_group():
     assert dele.executor_side == "multica"
 
 
-def test_env_dispatch_post_relays_rollouts_and_injects_upstream_key():
+def test_env_dispatch_post_relays_caller_authorization():
     seen = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -110,9 +107,7 @@ def test_env_dispatch_post_relays_rollouts_and_injects_upstream_key():
     resp = asyncio.run(run())
     assert resp.status_code == 201
     assert resp.json()["rollouts"][0]["agent_run_id"] == "r1"
-    # multica_api: the caller's token is stripped and the bridge injects its own
-    # upstream key (not the caller's "Bearer multica-key").
-    assert seen["auth"] == "Bearer multica-upstream-key"
+    assert seen["auth"] == "Bearer multica-key"
     assert seen["path"] == "/api/v1/env-dispatch"
     assert seen["body"]["mode"] == "scratch"
 

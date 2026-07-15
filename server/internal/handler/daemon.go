@@ -2915,6 +2915,7 @@ type TaskMessageRequest struct {
 	Type    string         `json:"type"`
 	Tool    string         `json:"tool,omitempty"`
 	Content string         `json:"content,omitempty"`
+	Lineage string         `json:"lineage,omitempty"`
 	Input   map[string]any `json:"input,omitempty"`
 	Output  string         `json:"output,omitempty"`
 }
@@ -2983,10 +2984,14 @@ func (h *Handler) ReportTaskMessages(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if workspaceID != "" {
-			h.publishTask(protocol.EventTaskMessage, workspaceID, "system", "", taskID,
-				taskMessageToPayload(created, taskID, uuidToString(task.IssueID)))
-			event := h.taskMessageActivityTimelineEvent(r.Context(), workspaceID, task, created)
-			h.publishAgentActivityRealtimeEvent(r.Context(), workspaceID, uuidToString(task.AgentID), uuidToString(created.ID), event, AgentActivityTargetRef{Kind: "none"})
+			if visibility == "user_facing" {
+				h.publishTask(protocol.EventTaskMessage, workspaceID, "system", "", taskID,
+					taskMessageToPayload(created, taskID, uuidToString(task.IssueID)))
+				if !taskMessageIsPhaseStatus(created.Type, created.Content.String) {
+					event := h.taskMessageActivityTimelineEvent(r.Context(), workspaceID, task, created)
+					h.publishAgentActivityRealtimeEvent(r.Context(), workspaceID, uuidToString(task.AgentID), uuidToString(created.ID), event, AgentActivityTargetRef{Kind: "none"})
+				}
+			}
 			if msg.Type == "tool_use" && strings.TrimSpace(msg.Tool) != "" && !taskMessageToolIsMapped(msg.Type, msg.Tool, msg.Input) {
 				targetKind, targetID, targetSlug := h.taskActivityTarget(r.Context(), task)
 				h.recordAgentActivityEvent(r.Context(), h.DB,
@@ -3077,11 +3082,28 @@ func taskMessageVisibility(msgType string) string {
 }
 
 func taskMessageRequestVisibility(msg TaskMessageRequest) string {
+	if taskMessageIsPhaseStatus(msg.Type, msg.Content) {
+		return "user_facing"
+	}
 	return taskMessageVisibilityForMessage(msg.Type, msg.Tool, msg.Input)
 }
 
+func taskMessageIsPhaseStatus(messageType, content string) bool {
+	return messageType == "thinking" && strings.TrimSpace(content) == ""
+}
+
+func taskMessageVisibleToUser(messageType, content, visibility string) bool {
+	if strings.TrimSpace(visibility) != "user_facing" {
+		return false
+	}
+	// Legacy raw thought rows were incorrectly marked user-facing. Keep the
+	// phase transition wire (an empty thinking row) while never returning raw
+	// thinking text to an authenticated user client.
+	return messageType != "thinking" || taskMessageIsPhaseStatus(messageType, content)
+}
+
 func taskMessageVisibilityForMessage(msgType, tool string, input map[string]any) string {
-	if msgType == "tool_result" || msgType == "log" {
+	if msgType == "thinking" || msgType == "tool_result" || msgType == "log" {
 		return "diagnostic_only"
 	}
 	if !taskMessageToolIsMapped(msgType, tool, input) {
@@ -3279,9 +3301,12 @@ func (h *Handler) ListTaskMessagesByUser(w http.ResponseWriter, r *http.Request)
 
 	issueID := uuidToString(task.IssueID)
 
-	resp := make([]protocol.TaskMessagePayload, len(messages))
-	for i, m := range messages {
-		resp[i] = taskMessageToPayload(m, taskID, issueID)
+	resp := make([]protocol.TaskMessagePayload, 0, len(messages))
+	for _, m := range messages {
+		if !taskMessageVisibleToUser(m.Type, m.Content.String, m.Visibility) {
+			continue
+		}
+		resp = append(resp, taskMessageToPayload(m, taskID, issueID))
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -3342,6 +3367,11 @@ func (h *Handler) projectInboxEventTaskMessages(ctx context.Context, eventID pgt
 			WHERE aae.workspace_id = $2
 			  AND aae.details->>'inbox_event_id' = $1::text
 			  AND aae.event_kind IN ('thinking', 'text', 'tool_call', 'error')
+			  AND COALESCE(NULLIF(aae.visibility, ''), 'user_facing') = 'user_facing'
+			  AND (
+					aae.event_kind <> 'thinking'
+					OR COALESCE(aae.message, '') = ''
+			  )
 		),
 		numbered AS (
 			SELECT

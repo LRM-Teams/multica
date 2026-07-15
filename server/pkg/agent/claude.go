@@ -271,16 +271,17 @@ func (b *claudeBackend) handleAssistant(msg claudeSDKMessage, ch chan<- Message,
 		usage[content.Model] = u
 	}
 
+	lineage := msg.nativeLineage()
 	for _, block := range content.Content {
 		switch block.Type {
 		case "text":
 			if block.Text != "" {
 				output.WriteString(block.Text)
-				trySend(ch, Message{Type: MessageText, Content: block.Text})
+				trySend(ch, Message{Type: MessageText, Content: block.Text, Lineage: lineage})
 			}
 		case "thinking":
 			if block.Text != "" {
-				trySend(ch, Message{Type: MessageThinking, Content: block.Text})
+				trySend(ch, Message{Type: MessageThinking, Content: block.Text, Lineage: lineage})
 			}
 		case "tool_use":
 			var input map[string]any
@@ -288,10 +289,11 @@ func (b *claudeBackend) handleAssistant(msg claudeSDKMessage, ch chan<- Message,
 				_ = json.Unmarshal(block.Input, &input)
 			}
 			trySend(ch, Message{
-				Type:   MessageToolUse,
-				Tool:   block.Name,
-				CallID: block.ID,
-				Input:  input,
+				Type:    MessageToolUse,
+				Tool:    block.Name,
+				CallID:  block.ID,
+				Input:   input,
+				Lineage: lineage,
 			})
 		}
 	}
@@ -303,6 +305,7 @@ func (b *claudeBackend) handleUser(msg claudeSDKMessage, ch chan<- Message) {
 		return
 	}
 
+	lineage := msg.nativeLineage()
 	for _, block := range content.Content {
 		if block.Type == "tool_result" {
 			resultStr := ""
@@ -310,9 +313,10 @@ func (b *claudeBackend) handleUser(msg claudeSDKMessage, ch chan<- Message) {
 				resultStr = string(block.Content)
 			}
 			trySend(ch, Message{
-				Type:   MessageToolResult,
-				CallID: block.ToolUseID,
-				Output: resultStr,
+				Type:    MessageToolResult,
+				CallID:  block.ToolUseID,
+				Output:  resultStr,
+				Lineage: lineage,
 			})
 		}
 	}
@@ -359,11 +363,13 @@ func (b *claudeBackend) handleControlRequest(msg claudeSDKMessage, stdin interfa
 // ── Claude SDK JSON types ──
 
 type claudeSDKMessage struct {
-	Type      string          `json:"type"`
-	Message   json.RawMessage `json:"message,omitempty"`
-	Subtype   string          `json:"subtype,omitempty"`
-	SessionID string          `json:"session_id,omitempty"`
-	Model     string          `json:"model,omitempty"`
+	Type            string          `json:"type"`
+	Message         json.RawMessage `json:"message,omitempty"`
+	Subtype         string          `json:"subtype,omitempty"`
+	SessionID       string          `json:"session_id,omitempty"`
+	Model           string          `json:"model,omitempty"`
+	ParentToolUseID string          `json:"parent_tool_use_id,omitempty"`
+	SubagentType    string          `json:"subagent_type,omitempty"`
 
 	// result fields
 	ResultText string                            `json:"result,omitempty"`
@@ -379,6 +385,26 @@ type claudeSDKMessage struct {
 	// control request fields
 	RequestID string          `json:"request_id,omitempty"`
 	Request   json.RawMessage `json:"request,omitempty"`
+}
+
+// nativeLineage preserves the explicit Claude SDK envelope lineage in a
+// canonical JSON form. Empty means the main trajectory; never infer lineage
+// from text, tool labels, or unrelated parent fields.
+func (m claudeSDKMessage) nativeLineage() string {
+	if m.ParentToolUseID == "" && m.SubagentType == "" {
+		return ""
+	}
+	lineage, err := json.Marshal(struct {
+		ParentToolUseID string `json:"parent_tool_use_id,omitempty"`
+		SubagentType    string `json:"subagent_type,omitempty"`
+	}{
+		ParentToolUseID: m.ParentToolUseID,
+		SubagentType:    m.SubagentType,
+	})
+	if err != nil {
+		return ""
+	}
+	return string(lineage)
 }
 
 type claudeLogEntry struct {

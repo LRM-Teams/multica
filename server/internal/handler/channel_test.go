@@ -1229,6 +1229,7 @@ func TestChannelAgentInboxMessagesRecordRuntimeTrajectory(t *testing.T) {
 			{Seq: 6, Type: "tool_use", Tool: "running", Input: map[string]any{"path": "/tmp/status_only.txt"}},
 			{Seq: 7, Type: "tool_use", Tool: "write_file", Input: map[string]any{"path": "/Users/frank/Code/multica/server/internal/handler/channel_test.go"}},
 			{Seq: 8, Type: "tool_use", Tool: "read", Input: map[string]any{"filePath": "/tmp/test.go", "basePath": "/repo"}},
+			{Seq: 9, Type: "thinking"},
 		},
 	}, testWorkspaceID, "agent-inbox-activity-daemon")
 	messagesReq = withURLParam(messagesReq, "eventId", got.ID)
@@ -1238,16 +1239,16 @@ func TestChannelAgentInboxMessagesRecordRuntimeTrajectory(t *testing.T) {
 		t.Fatalf("report inbox messages: status=%d body=%s", messagesRec.Code, messagesRec.Body.String())
 	}
 	if len(liveTaskMessages) != 4 {
-		t.Fatalf("live task messages = %+v, want four user-facing mapped messages", liveTaskMessages)
+		t.Fatalf("live task messages = %+v, want mapped messages plus one phase status", liveTaskMessages)
 	}
-	if liveTaskMessages[0].Seq != 1 || liveTaskMessages[0].Type != "thinking" || liveTaskMessages[0].Content != "I should create the requested file." {
-		t.Fatalf("live thinking payload = %+v", liveTaskMessages[0])
+	if liveTaskMessages[0].Seq != 2 || liveTaskMessages[0].Type != "tool_use" || liveTaskMessages[0].Tool != "bash" {
+		t.Fatalf("live terminal payload = %+v, want canonical bash tool_use", liveTaskMessages[0])
 	}
-	if liveTaskMessages[1].Seq != 2 || liveTaskMessages[1].Type != "tool_use" || liveTaskMessages[1].Tool != "bash" {
-		t.Fatalf("live terminal payload = %+v, want canonical bash tool_use", liveTaskMessages[1])
-	}
-	if liveTaskMessages[2].Seq != 7 || liveTaskMessages[2].Tool != "write_file" || liveTaskMessages[3].Seq != 8 || liveTaskMessages[3].Tool != "read_file" {
+	if liveTaskMessages[1].Seq != 7 || liveTaskMessages[1].Tool != "write_file" || liveTaskMessages[2].Seq != 8 || liveTaskMessages[2].Tool != "read_file" {
 		t.Fatalf("live file tool payloads = %+v, want write/read file without unmapped status tool", liveTaskMessages)
+	}
+	if liveTaskMessages[3].Seq != 9 || liveTaskMessages[3].Type != "thinking" || liveTaskMessages[3].Content != "" {
+		t.Fatalf("live phase status = %+v, want bare thinking wire", liveTaskMessages[3])
 	}
 
 	rows, err := testPool.Query(ctx, `
@@ -1286,11 +1287,11 @@ func TestChannelAgentInboxMessagesRecordRuntimeTrajectory(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatalf("activity rows error: %v", err)
 	}
-	if len(activity) != 8 {
-		t.Fatalf("activity rows = %+v, want 8", activity)
+	if len(activity) != 9 {
+		t.Fatalf("activity rows = %+v, want 9", activity)
 	}
-	if activity[0].kind != activityKindThinking || activity[0].visibility != "user_facing" {
-		t.Fatalf("thinking row = %+v, want user-facing thinking", activity[0])
+	if activity[0].kind != activityKindCustom || activity[0].eventType != "runtime_thinking" || activity[0].visibility != "diagnostic_only" {
+		t.Fatalf("thinking row = %+v, want diagnostic runtime_thinking", activity[0])
 	}
 	if activity[1].kind != activityKindToolCall || activity[1].eventType != "tool_use" || activity[1].visibility != "user_facing" {
 		t.Fatalf("tool row = %+v, want user-facing tool_use", activity[1])
@@ -1331,6 +1332,9 @@ func TestChannelAgentInboxMessagesRecordRuntimeTrajectory(t *testing.T) {
 	}
 	if activity[7].details["tool"] != "read_file" || activity[7].details["raw_tool"] != "read" || activity[7].details["tool_target"] != "/tmp/test.go" || activity[7].details["summary_kind"] != "file_path" || activity[7].details["command"] != nil || activity[7].details["path"] != "/tmp/test.go" || activity[7].details["scope"] != "/repo" {
 		t.Fatalf("read file details = %+v, want read source facts without invented command", activity[7].details)
+	}
+	if activity[8].kind != activityKindThinking || activity[8].eventType != "runtime_phase" || activity[8].visibility != "user_facing" || activity[8].message != "" || activity[8].details["phase_status"] != true {
+		t.Fatalf("phase status row = %+v, want bare user-facing phase transition", activity[8])
 	}
 }
 

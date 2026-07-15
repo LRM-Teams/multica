@@ -720,7 +720,7 @@ func (h *Handler) queryAgentActivityEventRows(ctx context.Context, reqCtx agentA
 		WHERE aae.workspace_id = $1
 		  AND aae.agent_id = $2
 		  AND (
-		    aae.event_kind IN ('thinking', 'text', 'wake_attempt', 'error', 'blocked', 'compaction_started', 'compaction_finished')
+		    aae.event_kind IN ('text', 'wake_attempt', 'error', 'blocked', 'compaction_started', 'compaction_finished')
 		    OR (aae.event_kind = 'tool_call' AND COALESCE(aae.details->>'tool', '') <> '')
 		    OR (
 		      aae.event_kind = 'custom'
@@ -792,7 +792,8 @@ func (h *Handler) queryAgentActivityEventRows(ctx context.Context, reqCtx agentA
 		LEFT JOIN chat_session cs ON cs.id = atq.chat_session_id
 		WHERE atq.agent_id = $2
 		  AND (i.workspace_id = $1 OR cs.workspace_id = $1)
-		  AND tm.type IN ('thinking', 'text', 'error', 'tool_use')
+		  AND tm.type IN ('text', 'error', 'tool_use')
+		  AND COALESCE(tm.visibility, 'user_facing') = 'user_facing'
 		)
 		SELECT *
 		FROM timeline
@@ -2301,8 +2302,7 @@ func agentActivityTimelineEntries(row agentActivityRawRow, details map[string]an
 
 func agentActivityTimelineRowIsNarrative(row agentActivityRawRow) bool {
 	switch row.Kind {
-	case activityKindThinking,
-		activityKindText,
+	case activityKindText,
 		activityKindWakeAttempt,
 		activityKindError,
 		activityKindBlocked,

@@ -27,6 +27,19 @@ describe("task transcript timeline", () => {
     ]);
   });
 
+  it("keeps an empty thinking phase wire out of the transcript", () => {
+    const items = buildTimeline([
+      message(1, "tool_use"),
+      message(2, "thinking"),
+      message(3, "text", "answer"),
+    ]);
+
+    expect(items).toEqual([
+      expect.objectContaining({ seq: 1, type: "tool_use" }),
+      expect.objectContaining({ seq: 3, type: "text", content: "answer" }),
+    ]);
+  });
+
   it("does not merge across tool or error boundaries", () => {
     const items = coalesceTimelineItems([
       { seq: 1, type: "text", content: "before" },

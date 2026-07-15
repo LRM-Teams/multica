@@ -3967,14 +3967,26 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 		var trajectory taskMessageTrajectoryBuffer
 		var batch []TaskMessageData
 		callIDToTool := map[string]string{}
+		var phase taskMessagePhaseTracker
 
-		emitTrajectory := func(kind, content string) {
+		emitTrajectory := func(kind, content, lineage string) {
 			s := seq.Add(1)
 			batch = append(batch, TaskMessageData{
 				Seq:     int(s),
 				Type:    kind,
 				Content: content,
+				Lineage: lineage,
 			})
+		}
+		emitPhaseStatus := func() {
+			if !phase.enter() {
+				return
+			}
+			s := seq.Add(1)
+			// A blank thinking row is a status transition, not raw thought
+			// content. The client uses it to leave a stale tool label while the
+			// transcript intentionally renders no timeline row for empty text.
+			batch = append(batch, TaskMessageData{Seq: int(s), Type: "thinking"})
 		}
 		flush := func(force bool) {
 			mu.Lock()
@@ -4056,6 +4068,7 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 					}
 					mu.Lock()
 					trajectory.flush(time.Now(), true, emitTrajectory)
+					phase.leave()
 					s := seq.Add(1)
 					batch = append(batch, TaskMessageData{
 						Seq:   int(s),
@@ -4091,6 +4104,7 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 					}
 					mu.Lock()
 					trajectory.flush(time.Now(), true, emitTrajectory)
+					phase.leave()
 					s := seq.Add(1)
 					taskLog.Info("tool_result observed", "seq", s, "tool", toolName, "call_id", msg.CallID)
 					batch = append(batch, TaskMessageData{
@@ -4103,20 +4117,23 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 				case agent.MessageThinking:
 					if msg.Content != "" {
 						mu.Lock()
-						trajectory.append("thinking", msg.Content, time.Now(), emitTrajectory)
+						emitPhaseStatus()
+						trajectory.append("thinking", msg.Content, msg.Lineage, time.Now(), emitTrajectory)
 						mu.Unlock()
 					}
 				case agent.MessageText:
 					if msg.Content != "" {
 						taskLog.Debug("agent", "text", truncateLog(msg.Content, 200))
 						mu.Lock()
-						trajectory.append("text", msg.Content, time.Now(), emitTrajectory)
+						emitPhaseStatus()
+						trajectory.append("text", msg.Content, msg.Lineage, time.Now(), emitTrajectory)
 						mu.Unlock()
 					}
 				case agent.MessageError:
 					taskLog.Error("agent error", "content", msg.Content)
 					mu.Lock()
 					trajectory.flush(time.Now(), true, emitTrajectory)
+					phase.leave()
 					s := seq.Add(1)
 					batch = append(batch, TaskMessageData{
 						Seq:     int(s),
@@ -4129,6 +4146,7 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 						taskLog.Debug("agent log", "level", msg.Level, "content", truncateLog(msg.Content, 200))
 						mu.Lock()
 						trajectory.flush(time.Now(), true, emitTrajectory)
+						phase.leave()
 						s := seq.Add(1)
 						batch = append(batch, TaskMessageData{
 							Seq:     int(s),

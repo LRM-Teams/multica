@@ -287,14 +287,33 @@ func (h *Handler) ReportAgentInboxMessages(w http.ResponseWriter, r *http.Reques
 		msg.Content = redact.Text(msg.Content)
 		msg.Output = redact.Text(msg.Output)
 		msg.Input = redact.InputMap(msg.Input)
-		kind, eventType, severity := agentInboxActivityMessageKind(msg.Type)
-		message := agentInboxActivityMessageText(msg)
 		details := map[string]any{
 			"inbox_event_id":    uuidToString(event.ID),
 			"delivery_id":       uuidToString(deliveryID),
 			"source_message_id": uuidToString(event.SourceMessageID),
 			"seq":               msg.Seq,
 		}
+		if lineage := strings.TrimSpace(msg.Lineage); lineage != "" {
+			details["lineage"] = lineage
+		}
+		if taskMessageIsPhaseStatus(msg.Type, msg.Content) {
+			// Match Raft's bare thinking phase entry. It is a user-facing task
+			// status wire only; do not publish it as an Activity event because
+			// the main timeline deliberately has no Thinking line.
+			details["phase_status"] = true
+			insertAgentActivityEvent(r.Context(), h.DB,
+				event.WorkspaceID, event.AgentID, runtimeID, pgtype.UUID{},
+				activityKindThinking, "runtime_phase", "info",
+				targetKind, targetID, "",
+				"", "", details,
+			)
+			if payload, ok := agentInboxTaskMessagePayload(event, msg, activityKindThinking, details); ok && h.Bus != nil {
+				h.publishTask(protocol.EventTaskMessage, uuidToString(event.WorkspaceID), "system", "", uuidToString(event.ID), payload)
+			}
+			continue
+		}
+		kind, eventType, severity := agentInboxActivityMessageKind(msg.Type)
+		message := agentInboxActivityMessageText(msg)
 		if msg.Type == "tool_use" {
 			rawTool := strings.TrimSpace(msg.Tool)
 			canonicalTool, known := taskMessageCanonicalToolName(rawTool, msg.Input)
@@ -1022,10 +1041,11 @@ func agentInboxTaskMessagePayload(event db.AgentInboxEvent, msg TaskMessageReque
 		Visibility: "user_facing",
 		CreatedAt:  time.Now().UTC().Format(time.RFC3339Nano),
 	}
-	switch kind {
-	case activityKindThinking:
+	if taskMessageIsPhaseStatus(msg.Type, msg.Content) {
 		payload.Type = "thinking"
-		payload.Content = agentInboxActivityMessageText(msg)
+		return payload, true
+	}
+	switch kind {
 	case activityKindToolCall:
 		payload.Type = "tool_use"
 		payload.Tool = stringFromMap(details, "tool")
@@ -1045,7 +1065,11 @@ func agentInboxTaskMessagePayload(event db.AgentInboxEvent, msg TaskMessageReque
 func agentInboxActivityMessageKind(messageType string) (kind, eventType, severity string) {
 	switch messageType {
 	case "thinking":
-		return activityKindThinking, "thinking", "info"
+		// Raft's thought stream is useful for diagnostics, but it is not a
+		// user-facing Activity narrative. Keeping it custom also prevents a
+		// future timeline consumer from mistaking each coalesced chunk for a
+		// phase transition.
+		return activityKindCustom, "runtime_thinking", "info"
 	case "tool_use":
 		return activityKindToolCall, "tool_use", "info"
 	case "tool_result":

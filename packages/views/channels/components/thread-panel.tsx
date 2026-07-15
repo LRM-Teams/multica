@@ -57,6 +57,10 @@ export interface ThreadPanelProps {
   onRetry?: () => void;
   onReact?: (message: ChannelMessage, emoji: string) => void;
   onQuoteMessage?: (message: ChannelMessage) => void;
+  /** Click an agent author's avatar/name → open the agent side panel (parity
+   *  with the main channel list, which passes the same handler). Without it,
+   *  thread avatars only show the hover card, never open the panel (#488). */
+  onOpenAgent?: (agentId: string) => void;
   quoteTarget?: QuoteTarget | null;
   onClearQuote?: () => void;
   // Composer (surface="thread") wiring — the surface owns the editor + send.
@@ -97,6 +101,7 @@ export function ThreadPanel({
   onRetry,
   onReact,
   onQuoteMessage,
+  onOpenAgent,
   quoteTarget,
   onClearQuote,
   editor,
@@ -198,6 +203,7 @@ export function ThreadPanel({
             currentUserId={currentUserId}
             ownName={currentUserName}
             onViewParent={onViewParent}
+            onOpenAgent={onOpenAgent}
           />
         }
         loading={loading}
@@ -205,6 +211,7 @@ export function ThreadPanel({
         onRetry={onRetry}
         onReact={onReact}
         onQuoteMessage={onQuoteMessage}
+        onOpenAgent={onOpenAgent}
       />
 
       {readOnly ? (

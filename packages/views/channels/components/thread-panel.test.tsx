@@ -155,6 +155,16 @@ describe("ThreadPanel", () => {
     expect(messageListProps.mock.calls.at(-1)?.[0].onOpenThread).toBeUndefined();
   });
 
+  it("forwards onOpenAgent to the reply list so agent avatars open the panel (#488)", () => {
+    messageListProps.mockClear();
+    const onOpenAgent = vi.fn();
+    render(<ThreadPanel {...baseProps()} onOpenAgent={onOpenAgent} />);
+
+    // Without this forward, thread reply avatars only show the hover card and
+    // never open the agent side panel (the main channel passes the same handler).
+    expect(messageListProps.mock.calls.at(-1)?.[0].onOpenAgent).toBe(onOpenAgent);
+  });
+
   it("defaults show-in-channel off and reports explicit toggles; the main-timeline surface is marked from-thread", () => {
     const onShowInChannelChange = vi.fn();
     render(<ThreadPanel {...baseProps()} onShowInChannelChange={onShowInChannelChange} />);

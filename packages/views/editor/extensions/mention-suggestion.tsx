@@ -23,7 +23,6 @@ import type {
   ListIssuesCache,
   MemberWithUser,
   Agent,
-  Squad,
 } from "@multica/core/types";
 import { ListTodo } from "lucide-react";
 import { ActorAvatar } from "../../common/actor-avatar";
@@ -625,7 +624,6 @@ export function createMentionSuggestion(
 
     const members: MemberWithUser[] = qc.getQueryData(workspaceKeys.members(wsId)) ?? [];
     const agents: Agent[] = qc.getQueryData(workspaceKeys.agents(wsId)) ?? [];
-    const squads: Squad[] = qc.getQueryData(workspaceKeys.squads(wsId)) ?? [];
     const listQueries = qc.getQueriesData<ListIssuesCache>({ queryKey: issueKeys.list(wsId) });
     const cachedResponse = listQueries[0]?.[1];
     const cachedIssues: Issue[] = cachedResponse ? flattenIssueBuckets(cachedResponse) : [];
@@ -694,21 +692,18 @@ export function createMentionSuggestion(
         };
       });
 
-    const squadItems: MentionItem[] = squads
-      .filter(
-        (s) =>
-          !s.archived_at &&
-          (s.name.toLowerCase().includes(q) || matchesPinyin(s.name, q)) &&
-          (!allow || allow.has(s.id)),
-      )
-      .map((s) => ({ id: s.id, label: s.name, type: "squad" as const }));
+    // Squads are no longer offered in the composer @ picker: the bare-mention
+    // cutover (#600/#446) has no server-side squad parse contract, so a picked
+    // squad would serialize to bare `@name` the server never resolves into a
+    // structured/routing ref — a silent no-op (Barry's #605 gate). Restore when
+    // a BE squad bare-token contract exists.
 
     // Members and agents share a single ranked list — recently mentioned
     // targets come first regardless of type, with an alphabetical fallback
     // for everyone the user hasn't mentioned yet on this device.
     const recency = getRecencyMap(wsId);
     const userItems = sortActorItems(
-      [...memberItems, ...agentItems, ...squadItems],
+      [...memberItems, ...agentItems],
       recency,
       query,
     );

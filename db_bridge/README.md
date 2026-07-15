@@ -415,7 +415,7 @@ curl -sS -X POST https://multica.example.com/shell/commands/<id>/cancel \
 | `BRIDGE_TIMEOUT_<CHANNEL>` | per-channel | Override stub wait timeout (e.g. `BRIDGE_TIMEOUT_CHAT_COMPLETIONS=180`) |
 | `BRIDGE_CONCURRENCY_<CHANNEL>` | per-channel | Override executor worker count |
 | `BRIDGE_REDACT_TOKENS_AFTER_COMPLETE` | `false` | Redact `Authorization` from rows after completion |
-| `BRIDGE_HEADER_ENCRYPTION_KEY` | — | Optional Fernet key to encrypt captured tokens at rest |
+| `BRIDGE_HEADER_ENCRYPTION_KEY` | — | Required shared Fernet key for encrypted `multica_api` credentials |
 | `BRIDGE_STATS_INTERVAL` | `0` | Seconds between metrics/queue-depth log lines (`0` disables) |
 | `BRIDGE_CLEANUP_INTERVAL` | `300` | Seconds between executor cleanup passes (`0` disables) |
 | `BRIDGE_ROW_RETENTION_SECONDS` | `86400` | Keep terminal bridge rows for this many seconds |
@@ -457,15 +457,22 @@ If neither source is present, the stub returns `400` and does not enqueue a row.
 
 ## Security hardening
 
-- **Token encryption at rest** — set `BRIDGE_HEADER_ENCRYPTION_KEY` (a
-  `Fernet.generate_key()` value, identical on both hosts) to encrypt the
-  `Authorization` header before it is stored; the executor decrypts it only in
-  memory just before replaying upstream. Requires the optional `cryptography`
-  package (`uv sync --extra crypto`); if a key is set but the package is
-  missing, the process fails fast.
+- **Token encryption at rest** — `BRIDGE_HEADER_ENCRYPTION_KEY` is mandatory for
+  `multica_api` channels. Both the AReaL-side stub and Multica-side executor use
+  the same Fernet key. Generate one with:
+
+  ```bash
+  python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
+  ```
+
+  The stub encrypts caller `Authorization` before the request reaches the
+  database; the executor decrypts it in memory immediately before forwarding.
+  This requires the `cryptography` package (`uv sync --extra crypto`). A missing
+  or invalid key makes the relevant bridge process fail fast.
 - **Post-completion redaction** — set `BRIDGE_REDACT_TOKENS_AFTER_COMPLETE=true`
   to scrub the stored `Authorization` value (to `REDACTED`) after the response
-  has been relayed, keeping audit rows free of live tokens.
+  has been relayed for other channel groups. `multica_api` rows are always
+  redacted after terminal success or failure.
 - **Payload limits** — bodies above `BRIDGE_MAX_BODY_BYTES` are rejected. On
   self-hosted Supabase, also raise the PostgREST/proxy request-body limit
   (Kong/nginx) so large chat payloads and base64 files are not truncated; gzip

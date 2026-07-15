@@ -162,15 +162,13 @@ def test_multica_upstream_url_default_and_env():
     cfg = BridgeConfig.from_env(_MINIMAL)
     # Defaults to the multica Go server's loopback $PORT (8080).
     assert cfg.multica_upstream_url == "http://127.0.0.1:8080"
-    assert cfg.multica_upstream_api_key is None  # no key injected by default
+    assert not hasattr(cfg, "multica_upstream_api_key")
     env = {
         **_MINIMAL,
         "BRIDGE_MULTICA_UPSTREAM_URL": "http://127.0.0.1:9999",
-        "BRIDGE_MULTICA_UPSTREAM_API_KEY": "secret-key",
     }
     cfg2 = BridgeConfig.from_env(env)
     assert cfg2.multica_upstream_url == "http://127.0.0.1:9999"
-    assert cfg2.multica_upstream_api_key == "secret-key"
     assert cfg2.upstream_for_group("multica_api") == "http://127.0.0.1:9999"
     # Trailing slash is stripped, mirroring the other upstreams.
     cfg3 = BridgeConfig.from_env(

@@ -38,10 +38,6 @@ ENV_STUB_HOST: Final = "BRIDGE_STUB_HOST"
 ENV_GATEWAY_UPSTREAM: Final = "BRIDGE_GATEWAY_UPSTREAM_URL"
 ENV_LEAGENT_UPSTREAM: Final = "BRIDGE_LEAGENT_UPSTREAM_URL"
 ENV_MULTICA_UPSTREAM: Final = "BRIDGE_MULTICA_UPSTREAM_URL"
-# Distinct from MulticaConfig's MULTICA_UPSTREAM_API_KEY (which authenticates
-# the multica_server LLM relay to the AReaL gateway): this key authenticates the
-# bridge executor to the multica Go server for multica_api channels.
-ENV_BRIDGE_MULTICA_UPSTREAM_API_KEY: Final = "BRIDGE_MULTICA_UPSTREAM_API_KEY"
 
 # Security hardening
 ENV_REDACT_TOKENS: Final = "BRIDGE_REDACT_TOKENS_AFTER_COMPLETE"
@@ -141,9 +137,6 @@ class BridgeConfig:
     gateway_upstream_url: str = _DEFAULT_GATEWAY_UPSTREAM
     leagent_upstream_url: str = _DEFAULT_LEAGENT_UPSTREAM
     multica_upstream_url: str = _DEFAULT_MULTICA_UPSTREAM
-    # Token injected as Authorization when forwarding multica_api channels to
-    # the multica Go server (env-dispatch / DAG fetch). None -> no auth injected.
-    multica_upstream_api_key: str | None = None
     redact_tokens_after_complete: bool = False
     header_encryption_key: str | None = None
     admin_api_key: str | None = None
@@ -238,7 +231,6 @@ class BridgeConfig:
             multica_upstream_url=(
                 _get(src, ENV_MULTICA_UPSTREAM) or _DEFAULT_MULTICA_UPSTREAM
             ).rstrip("/"),
-            multica_upstream_api_key=_get(src, ENV_BRIDGE_MULTICA_UPSTREAM_API_KEY),
             redact_tokens_after_complete=_env_bool(src, ENV_REDACT_TOKENS, False),
             header_encryption_key=_get(src, ENV_HEADER_ENCRYPTION_KEY),
             admin_api_key=_get(src, ENV_ADMIN_API_KEY),

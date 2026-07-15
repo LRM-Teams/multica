@@ -29,6 +29,9 @@ def _config(**overrides: str) -> BridgeConfig:
     env = {
         "SUPABASE_URL": "https://example.supabase.co",
         "SUPABASE_SERVICE_ROLE_KEY": "k",
+        "BRIDGE_HEADER_ENCRYPTION_KEY": (
+            "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
+        ),
         "BRIDGE_POLL_INTERVAL": "0.01",
         "BRIDGE_USER_ID": USER_ID,
         **overrides,
@@ -169,3 +172,40 @@ def test_env_dispatch_dag_404_passes_through():
     # 404 (unknown project) must survive the relay for the client to map to
     # DagNotFound, not be turned into a 502.
     assert resp.status_code == 404
+
+
+async def test_env_dispatch_authorization_is_encrypted_before_enqueue():
+    cfg = _config()
+    db = BridgeDB(cfg, client=FakeSupabaseClient())
+    stub = create_stub_app(db, "areal", cfg)
+    channel = CHANNELS_BY_NAME["env_dispatch"]
+
+    async def complete_after_inspection():
+        while not db.client.tables.get(channel.table):
+            await asyncio.sleep(0.001)
+        row = next(iter(db.client.tables[channel.table].values()))
+        stored_auth = row["request_headers"]["authorization"]
+        assert stored_auth.startswith("enc:v1:")
+        assert "multica-key" not in stored_auth
+        request = await db.claim_next(channel, "test-executor")
+        assert request is not None
+        await db.complete(
+            channel,
+            request.id,
+            worker_id=request.worker_id,
+            response_status=201,
+            response_headers={},
+            body=b'{"project_id":"p1"}',
+        )
+
+    responder = asyncio.create_task(complete_after_inspection())
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=stub), base_url="http://stub"
+    ) as client:
+        response = await client.post(
+            "/api/v1/env-dispatch",
+            headers={"Authorization": "Bearer multica-key"},
+            json={"mode": "scratch", "dispatch_type": "issue"},
+        )
+    await responder
+    assert response.status_code == 201

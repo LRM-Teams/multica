@@ -269,12 +269,16 @@ class BridgeConfig:
             return self.multica_upstream_url
         return self.leagent_upstream_url
 
-    def build_cipher(self):
+    def build_cipher(self, *, required: bool = False):
         """Build a header cipher when an encryption key is configured.
 
         Returns ``None`` when no key is set. Raises if a key is set but the
         optional ``cryptography`` package is unavailable.
         """
+        if required and not self.header_encryption_key:
+            raise RuntimeError(
+                "BRIDGE_HEADER_ENCRYPTION_KEY must be set for multica_api channels"
+            )
         from . import crypto
 
         return crypto.build_cipher(self.header_encryption_key)

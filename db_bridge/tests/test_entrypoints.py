@@ -14,6 +14,7 @@ from db_bridge.config import BridgeConfig
 from db_bridge.db import BridgeDB
 from db_bridge.entrypoints import _configure_logging, _parse_side
 from db_bridge.executor import Executor
+from db_bridge.stub_server import create_stub_app
 
 from _fakes import FakeSupabaseClient
 
@@ -56,6 +57,20 @@ def test_multica_side_selects_multica_api_channels():
         "chat_completions",
         "rl_close_segment",
     }
+
+
+def test_areal_stub_requires_header_encryption_key():
+    cfg = _config()
+    db = BridgeDB(cfg, client=FakeSupabaseClient())
+    with pytest.raises(RuntimeError, match="BRIDGE_HEADER_ENCRYPTION_KEY"):
+        create_stub_app(db, "areal", cfg)
+
+
+def test_multica_executor_requires_header_encryption_key():
+    cfg = _config()
+    db = BridgeDB(cfg, client=FakeSupabaseClient())
+    with pytest.raises(RuntimeError, match="BRIDGE_HEADER_ENCRYPTION_KEY"):
+        Executor(db, "multica", config=cfg)
 
 
 def test_parse_side_rejects_missing_or_invalid():

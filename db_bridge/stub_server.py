@@ -315,7 +315,11 @@ def create_stub_app(
     client is already present.
     """
     config = config or db.config
-    cipher = config.build_cipher()  # raises early if key set but crypto missing
+    cipher = config.build_cipher(
+        required=any(
+            channel.group == "multica_api" for channel in stub_channels(side)
+        )
+    )
 
     @contextlib.asynccontextmanager
     async def lifespan(_app: FastAPI):

@@ -36,6 +36,9 @@ def _config() -> BridgeConfig:
         "SUPABASE_URL": "https://example.supabase.co",
         "SUPABASE_SERVICE_ROLE_KEY": "k",
         "BRIDGE_POLL_INTERVAL": "0.01",
+        "BRIDGE_HEADER_ENCRYPTION_KEY": (
+            "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
+        ),
         "BRIDGE_USER_ID": USER_ID,
         # Keep the worker pools tiny for the test.
         "BRIDGE_CONCURRENCY_CHAT_COMPLETIONS": "2",

@@ -23,6 +23,9 @@ def _config(**overrides: str) -> BridgeConfig:
     env = {
         "SUPABASE_URL": "https://example.supabase.co",
         "SUPABASE_SERVICE_ROLE_KEY": "k",
+        "BRIDGE_HEADER_ENCRYPTION_KEY": (
+            "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
+        ),
         "BRIDGE_POLL_INTERVAL": "0.01",
         "BRIDGE_USER_ID": USER_ID,
         # Keep the pool small so tests spawn few workers.

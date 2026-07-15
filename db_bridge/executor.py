@@ -56,7 +56,12 @@ class Executor:
         self._owns_client = client is None
         self._worker_prefix = worker_prefix
         self._stop = asyncio.Event()
-        self._cipher = self._config.build_cipher()
+        self._cipher = self._config.build_cipher(
+            required=any(
+                channel.group == "multica_api"
+                for channel in executor_channels(side)
+            )
+        )
         self._metrics = get_metrics()
 
     async def connect(self) -> "Executor":

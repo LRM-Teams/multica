@@ -144,6 +144,12 @@ def test_bool_flags():
     assert cfg.redact_tokens_after_complete is True
 
 
+def test_build_cipher_required_rejects_missing_key():
+    cfg = BridgeConfig.from_env(_MINIMAL)
+    with pytest.raises(RuntimeError, match="BRIDGE_HEADER_ENCRYPTION_KEY"):
+        cfg.build_cipher(required=True)
+
+
 def test_stub_port_and_upstream_dispatch():
     cfg = BridgeConfig.from_env(_MINIMAL)
     assert cfg.stub_port("multica") == cfg.gateway_stub_port

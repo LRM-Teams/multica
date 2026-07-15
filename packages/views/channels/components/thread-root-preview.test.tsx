@@ -32,7 +32,26 @@ vi.mock("../../common/actor-avatar", () => ({
 }));
 
 vi.mock("../../common/actor-profile-popover", () => ({
-  ActorProfileTrigger: ({ children }: { children: ReactNode }) => children,
+  ActorProfileTrigger: ({
+    children,
+    onClickCapture,
+    memberType,
+    memberId,
+  }: {
+    children: ReactNode;
+    onClickCapture?: () => void;
+    memberType?: string;
+    memberId?: string;
+  }) => (
+    <span
+      data-testid="actor-profile-trigger"
+      data-member-type={memberType}
+      data-member-id={memberId}
+      onClickCapture={onClickCapture}
+    >
+      {children}
+    </span>
+  ),
 }));
 
 vi.mock("@multica/core/workspace/hooks", () => ({
@@ -115,6 +134,37 @@ describe("ThreadRootPreview", () => {
     expect(container.querySelector(".line-clamp-3")).not.toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Back to main chat" }));
     expect(onViewParent).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the agent side panel when the root agent author's avatar/name is clicked (#488)", () => {
+    const onOpenAgent = vi.fn();
+    render(
+      <ThreadRootPreview
+        message={makeMessage({ type: "agent", author_id: "agent-1" })}
+        currentUserId="user-1"
+        onOpenAgent={onOpenAgent}
+      />,
+    );
+
+    // Both the avatar and the name are wrapped in a trigger; clicking either
+    // fires the capture handler with the agent id (parity with the channel bubble).
+    const [firstTrigger] = screen.getAllByTestId("actor-profile-trigger");
+    fireEvent.click(firstTrigger!);
+    expect(onOpenAgent).toHaveBeenCalledWith("agent-1");
+  });
+
+  it("does NOT open a panel for a human (member) root author — hover card only (#488)", () => {
+    const onOpenAgent = vi.fn();
+    render(
+      <ThreadRootPreview
+        message={makeMessage({ type: "user", author_id: "user-1", author_name: "andong3" })}
+        currentUserId="user-2"
+        onOpenAgent={onOpenAgent}
+      />,
+    );
+
+    screen.getAllByTestId("actor-profile-trigger").forEach((el) => fireEvent.click(el));
+    expect(onOpenAgent).not.toHaveBeenCalled();
   });
 
   it("uses the live display name for the root author label", () => {

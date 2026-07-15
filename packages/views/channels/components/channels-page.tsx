@@ -2152,6 +2152,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         onRetry={() => refetchThread()}
         onReact={handleReactToMessage}
         onQuoteMessage={setThreadQuoteTarget}
+        onOpenAgent={handleOpenAgentPanel}
         quoteTarget={threadQuoteTarget}
         onClearQuote={() => setThreadQuoteTarget(null)}
         editor={

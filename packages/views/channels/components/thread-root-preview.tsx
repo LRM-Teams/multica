@@ -17,11 +17,13 @@ export function ThreadRootPreview({
   currentUserId,
   ownName,
   onViewParent,
+  onOpenAgent,
 }: {
   message: ChannelMessage;
   currentUserId: string | null;
   ownName?: string;
   onViewParent?: () => void;
+  onOpenAgent?: (agentId: string) => void;
 }) {
   const { t } = useT("channels");
   const messageTime = useMessageTime();
@@ -39,6 +41,12 @@ export function ThreadRootPreview({
         ? "user"
         : null;
   const profileActorId = message.author_id ?? null;
+  // Agent author → clicking the avatar/name opens the agent side panel, same as
+  // the main channel bubble. Members keep the hover card only. (#488)
+  const handleOpenAgentCapture =
+    isAgent && onOpenAgent && profileActorId
+      ? () => onOpenAgent(profileActorId)
+      : undefined;
   const avatarActorType = isAgent ? "agent" : "member";
   const avatar = profileActorId ? (
     <ActorAvatar
@@ -64,6 +72,7 @@ export function ThreadRootPreview({
         memberId={profileActorId}
         side="top"
         sideOffset={8}
+        onClickCapture={handleOpenAgentCapture}
       >
         {avatar}
       </ActorProfileTrigger>
@@ -84,6 +93,7 @@ export function ThreadRootPreview({
                 memberId={profileActorId}
                 side="top"
                 sideOffset={8}
+                onClickCapture={handleOpenAgentCapture}
               >
                 {nameNode}
               </ActorProfileTrigger>

@@ -676,6 +676,11 @@ func runIssueCreate(cmd *cobra.Command, _ []string) error {
 	if title == "" {
 		return fmt.Errorf("--title is required")
 	}
+	sourceChannel, _ := cmd.Flags().GetString("source-channel")
+	sourceMessage, _ := cmd.Flags().GetString("source-message")
+	if (sourceChannel == "") != (sourceMessage == "") {
+		return fmt.Errorf("--source-channel and --source-message must be provided together")
+	}
 
 	client, err := newAPIClient(cmd)
 	if err != nil {
@@ -718,11 +723,6 @@ func runIssueCreate(cmd *cobra.Command, _ []string) error {
 	}
 	if v, _ := cmd.Flags().GetString("due-date"); v != "" {
 		body["due_date"] = v
-	}
-	sourceChannel, _ := cmd.Flags().GetString("source-channel")
-	sourceMessage, _ := cmd.Flags().GetString("source-message")
-	if (sourceChannel == "") != (sourceMessage == "") {
-		return fmt.Errorf("--source-channel and --source-message must be provided together")
 	}
 	if sourceChannel != "" {
 		body["source"] = map[string]string{

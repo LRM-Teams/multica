@@ -217,7 +217,7 @@ describe("AgentLivePeekCard", () => {
     expect(link.textContent).toContain("Wire up live peek");
   });
 
-  it("renders Idle + empty issue copy when nothing is running", () => {
+  it("renders Online + empty issue copy when nothing is running", () => {
     mockPresence.current = {
       availability: "online",
       workload: "idle",
@@ -235,7 +235,7 @@ describe("AgentLivePeekCard", () => {
 
     renderCard();
 
-    expect(screen.getByText("Idle")).toBeInTheDocument();
+    expect(screen.getByText("Online")).toBeInTheDocument();
     expect(screen.getByText(enAgents.live_peek.no_current_issue)).toBeInTheDocument();
     // "5m ago" — proves last activity falls back to the most recent terminal
     // task in the snapshot.
@@ -282,7 +282,7 @@ describe("AgentLivePeekCard", () => {
 
     renderCard();
 
-    expect(screen.getByText("Idle")).toBeInTheDocument();
+    expect(screen.getByText("Online")).toBeInTheDocument();
     expect(screen.getByText(enAgents.live_peek.failed_indicator)).toBeInTheDocument();
   });
 });

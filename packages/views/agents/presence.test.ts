@@ -42,13 +42,16 @@ describe("formatPresenceStatus", () => {
     expect(formatPresenceStatus(undefined, t)).toBeNull();
   });
 
-  it("localizes workload while online", () => {
+  it("shows the workload word for active states, but Online for an idle plate", () => {
     expect(
       formatPresenceStatus(presence({ availability: "online", workload: "working" }), t),
     ).toBe("Working");
+    // Online + idle (nothing on the plate) surfaces the availability word
+    // "Online", not the workload word "Idle" — a ready agent reads as
+    // available, not away/inactive (Frank/Miles 2026-07-15).
     expect(
       formatPresenceStatus(presence({ availability: "online", workload: "idle" }), t),
-    ).toBe("Idle");
+    ).toBe("Online");
   });
 
   it("localizes availability when not online (never a workload word)", () => {
@@ -98,9 +101,11 @@ describe("presenceStatusDotClass", () => {
     expect(
       presenceStatusDotClass(presence({ availability: "online", workload: "queued" })),
     ).toBe("bg-warning");
+    // Online + idle now resolves to the availability word "Online" → green dot
+    // (bg-success), agreeing with the presence word (Frank/Miles 2026-07-15).
     expect(
       presenceStatusDotClass(presence({ availability: "online", workload: "idle" })),
-    ).toBe("bg-muted-foreground/40");
+    ).toBe("bg-success");
   });
 
   it("reuses availabilityConfig.dotClass when offline", () => {

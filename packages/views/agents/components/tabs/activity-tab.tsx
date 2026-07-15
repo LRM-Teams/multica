@@ -5,7 +5,7 @@ import { ArrowDown } from "lucide-react";
 import type { Agent } from "@multica/core/types";
 import { ActivityTimeline } from "./activity-timeline";
 import { useAgentActivityEvents } from "./use-agent-activity-events";
-import { useT } from "../../../i18n";
+import { ACTIVITY_CHROME_EN } from "./activity-event";
 
 interface ActivityTabProps {
   agent: Agent;
@@ -71,7 +71,6 @@ function StreamBottomAnchor({
  * scroll container of our own (and without touching the row render).
  */
 export function ActivityTab({ agent }: ActivityTabProps) {
-  const { t } = useT("agents");
   const { events } = useAgentActivityEvents(agent.id);
   const bottomRef = useRef<HTMLDivElement>(null);
   // Whether the bottom sentinel is on screen = the reader is at the latest row
@@ -132,7 +131,7 @@ export function ActivityTab({ agent }: ActivityTabProps) {
             className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full border bg-background/95 px-3 py-1.5 text-xs font-medium text-foreground shadow-sm backdrop-blur transition-colors hover:bg-accent"
           >
             <ArrowDown className="size-3.5" />
-            {t(($) => $.tab_body.activity.jump_to_latest)}
+            {ACTIVITY_CHROME_EN.jump_to_latest}
           </button>
         </div>
       )}

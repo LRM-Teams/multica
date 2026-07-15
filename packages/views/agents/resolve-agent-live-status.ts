@@ -2,6 +2,7 @@ import type { TFunction } from "i18next";
 import type { AgentPresenceDetail } from "@multica/core/agents";
 import type { AgentTask } from "@multica/core/types";
 import {
+  ACTIVITY_LABEL_EN,
   activityPresentation,
   type ActivityDotTone,
   type ActivityEvent,
@@ -125,7 +126,8 @@ export function resolveAgentLiveStatus(args: {
     // stage palette — word and colour can never disagree with the timeline.
     if (latestActivity) {
       const p = activityPresentation(latestActivity);
-      const rawLabel = tAgents(($) => $.tab_body.activity.labels[p.labelKey]);
+      // Activity is English-only (Frank 2026-07-14) — canonical map, not i18n.
+      const rawLabel = ACTIVITY_LABEL_EN[p.labelKey];
       // Match the timeline's in-progress "…" on an active tool row.
       const label =
         latestActivity.activity_kind === "tool_call" && p.tone === "active"
@@ -143,7 +145,7 @@ export function resolveAgentLiveStatus(args: {
     // queued row, so the header must never invent one from the task's snapshot
     // status (Frank: header = Activity projection only, Activity 里没有 queued).
     return {
-      label: tAgents(($) => $.tab_body.activity.labels.thinking),
+      label: ACTIVITY_LABEL_EN.thinking,
       textClass: ACTIVITY_LABEL_TEXT,
       dotClass: TONE_DOT_CLASS.neutral,
     };

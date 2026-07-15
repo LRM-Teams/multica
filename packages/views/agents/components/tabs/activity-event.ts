@@ -46,6 +46,52 @@ export type ActivitySubtextKey =
   | "compaction_finished"
   | "subagent_activity";
 
+// Activity is ENGLISH-ONLY for now (Frank 2026-07-14): labels/subtexts render
+// from these canonical maps — the raft-exact source strings — instead of a
+// locale i18n lookup. The `tab_body.activity.*` locale keys are intentionally
+// kept so a locale layer can be re-added later over the SAME semantic keys
+// without touching this projection (Parker).
+export const ACTIVITY_LABEL_EN: Record<ActivityLabelKey, string> = {
+  thinking: "Thinking",
+  output: "Output",
+  completed: "Completed",
+  working: "Working",
+  idle: "Idle",
+  failed: "Failed",
+  waiting: "Waiting",
+  running_command: "Running command",
+  writing_file: "Writing file",
+  editing_file: "Editing file",
+  reading_file: "Reading file",
+  searching_files: "Searching files",
+  searching_code: "Searching code",
+  searching_web: "Searching web",
+  sending_message: "Sending message",
+};
+
+export const ACTIVITY_SUBTEXT_EN: Record<ActivitySubtextKey, string> = {
+  message_received: "Message received",
+  compacting_context: "Compacting context",
+  compaction_finished: "Compaction finished",
+  subagent_activity: "Subagent activity",
+};
+
+// Activity chrome (non-event UI: empty state, command Copy, jump-to-latest,
+// diagnostics toggle) is English-only too (Frank 2026-07-14 "整条 Activity 全英文"),
+// so a zh/ja/ko viewer never sees English event rows framed by localized controls.
+// One canonical map, shared by every Activity chrome render site (timeline empty +
+// command Copy here, jump-to-latest / diagnostics toggle in their own components).
+// The `locales/*/agents.json` chrome keys stay in place for a future one-layer
+// re-localize of the whole timeline — same "先" (for-now) posture as the labels.
+export const ACTIVITY_CHROME_EN = {
+  copy_command: "Copy",
+  command_copied: "Copied",
+  timeline_empty: "No activity yet",
+  jump_to_latest: "Jump to latest",
+  view_diagnostics: "View diagnostic details",
+  hide_diagnostics: "Hide diagnostic details",
+} as const;
+
 export interface ActivityPresentation {
   labelKey: ActivityLabelKey;
   /** Fixed subtext, resolved via i18n (Message received, Compacting context…). */

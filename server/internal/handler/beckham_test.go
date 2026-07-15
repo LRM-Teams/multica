@@ -109,3 +109,41 @@ func TestGroupWithoutBeckhamHasNoAmbientWatch(t *testing.T) {
 		t.Fatalf("ambient watches = %d, want 0 (no Beckham bound → nobody watches)", n)
 	}
 }
+
+// Regression: the display name "贝克汉姆" collides on the derived handle, so
+// provisioning a second group in the same workspace must still succeed (the fix
+// creates the agent outside a transaction so identity retry-on-collision works).
+func TestEnsureGroupManagerAcrossTwoChannelsSucceeds(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	var rtID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (workspace_id, owner_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
+		VALUES ($1, $2, $3, 'cloud', 'beckham_test', 'online', '', '{}'::jsonb, now())
+		RETURNING id
+	`, testWorkspaceID, testUserID, "beckham-rt2-"+uuid.NewString()).Scan(&rtID); err != nil {
+		t.Fatalf("seed runtime: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, rtID) })
+
+	chA := seedChannelForTest(t, "beckham-a-"+uuid.NewString(), testUserID)
+	chB := seedChannelForTest(t, "beckham-b-"+uuid.NewString(), testUserID)
+
+	agentA, createdA, err := testHandler.EnsureGroupManagerForChannel(ctx, parseUUID(testWorkspaceID), parseUUID(chA), parseUUID(testUserID))
+	if err != nil || !createdA {
+		t.Fatalf("channel A: created=%v err=%v", createdA, err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agentA.ID) })
+
+	agentB, createdB, err := testHandler.EnsureGroupManagerForChannel(ctx, parseUUID(testWorkspaceID), parseUUID(chB), parseUUID(testUserID))
+	if err != nil || !createdB {
+		t.Fatalf("channel B (collision path): created=%v err=%v", createdB, err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agentB.ID) })
+
+	if uuidToString(agentA.ID) == uuidToString(agentB.ID) {
+		t.Fatal("two channels must get distinct group managers")
+	}
+}

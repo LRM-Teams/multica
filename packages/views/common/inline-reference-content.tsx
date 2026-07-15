@@ -13,6 +13,7 @@ import {
 } from "@multica/ui/components/ui/hover-card";
 import { mentionTokenClassName } from "./mention-token";
 import { StatusIcon } from "../issues/components/status-icon";
+import { useResolvedIssue } from "../issues/components/issue-chip";
 import { projectInlineReferences, type ReferencePart } from "./inline-references";
 
 /**
@@ -138,7 +139,13 @@ function ReferenceToken({
 
   // issue-ref (#469): raft-style lightweight inline link — uniform link color,
   // no inline status decoration; the status lives in the hover card.
-  return <IssueRefToken reference={reference} text={text} interactive={interactive} />;
+  // Non-interactive surfaces (the excerpt) render the span substring as styled
+  // text and must NOT resolve the issue — returning here keeps the live-issue
+  // query out of those rows entirely.
+  if (!interactive) {
+    return <span className="text-brand">{text}</span>;
+  }
+  return <IssueRefToken reference={reference} text={text} />;
 }
 
 type IssueRefPart = Extract<ReferencePart, { ref_type: "issue-ref" }>;
@@ -153,7 +160,7 @@ const ISSUE_STATUSES: readonly string[] = [
   "cancelled",
 ];
 
-/** Narrow the server's free-form `ref_status` to a status we can actually draw. */
+/** Guard against a status we have no renderer for (StatusIcon would blow up). */
 function toIssueStatus(value: string | undefined): IssueStatus | null {
   return value && ISSUE_STATUSES.includes(value) ? (value as IssueStatus) : null;
 }
@@ -161,33 +168,30 @@ function toIssueStatus(value: string | undefined): IssueStatus | null {
 function IssueRefToken({
   reference,
   text,
-  interactive,
 }: {
   reference: IssueRefPart;
   text: string;
-  interactive: boolean;
 }): React.JSX.Element {
   const paths = useWorkspacePaths();
-  // Render the author's exact span substring (`MUL-123` or `#MUL-123`) — the
-  // projector links it, it NEVER rewrites the content or synthesizes a prefix
-  // (#467/#600: content preserved as-is, span only decorates; metadata label is
-  // not the render source).
-  if (!interactive) {
-    return <span className="text-brand">{text}</span>;
-  }
+  // LIVE issue state — NOT the part's `ref_title`/`ref_status` (#504). Those are
+  // a snapshot frozen when the message was written, so they go stale the moment
+  // the issue changes afterwards (the peek showed `todo` while the issue was
+  // already `in_progress`). The part stays anchor/identity only (ref_id + span);
+  // state is resolved live, same as the @actor hover card fetching a live profile.
+  const issue = useResolvedIssue(reference.ref_id);
 
+  // The token text itself is still the author's exact span substring — the
+  // projector links it, never rewrites it or synthesizes a prefix (#467/#600).
   const link = (
     <AppLink href={paths.issueDetail(reference.ref_id)} className="text-brand hover:underline">
       {text}
     </AppLink>
   );
 
-  // The peek is SERVER-FED: it renders only what the anchored part carries
-  // (`ref_title` / `ref_status`). When the server sends neither, degrade to the
-  // plain clickable token rather than faking a card or deriving state client-side
-  // (#469 / Iris's issue-ref spec).
-  const title = reference.ref_title;
-  const status = toIssueStatus(reference.ref_status);
+  // Nothing resolved yet (loading / deleted / other workspace / no permission) →
+  // plain clickable token. Never fake a card or fall back to the stale snapshot.
+  const title = issue?.title;
+  const status = toIssueStatus(issue?.status);
   if (!title && !status) return link;
 
   return (

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -13,6 +14,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
+	"github.com/multica-ai/multica/server/internal/util/stackerr"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -45,6 +47,33 @@ func TestEnvDispatch_RequiresAuth(t *testing.T) {
 // validUUID is a syntactically valid UUID used by handler tests that need to
 // pass the handler's UUID-shape gate and exercise deeper (service) validation.
 const validUUID = "11111111-1111-1111-1111-111111111111"
+
+// TestWriteEnvDispatchError_TracebackFromAdapterStack verifies that an
+// adapter-origin error (stackerr-wrapped, as envDispatchDepsAdapter produces)
+// surfaces its origin goroutine stack in a response "traceback" field, plus the
+// wrapped message chain. Exercises the default 503 (internal) branch.
+func TestWriteEnvDispatchError_TracebackFromAdapterStack(t *testing.T) {
+	err := stackerr.Wrap(errors.New("connection refused"), "get env")
+	w := httptest.NewRecorder()
+	writeEnvDispatchError(w, err, service.EnvDispatchResult{})
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", w.Code)
+	}
+	var body map[string]any
+	if decErr := json.NewDecoder(w.Body).Decode(&body); decErr != nil {
+		t.Fatalf("decode body: %v", decErr)
+	}
+	if body["error"] != "internal" {
+		t.Fatalf("error = %v, want internal", body["error"])
+	}
+	if msg, _ := body["message"].(string); !strings.Contains(msg, "get env") || !strings.Contains(msg, "connection refused") {
+		t.Fatalf("message = %q, want the wrapped chain", msg)
+	}
+	tb, _ := body["traceback"].(string)
+	if !strings.Contains(tb, "TestWriteEnvDispatchError_TracebackFromAdapterStack") {
+		t.Fatalf("traceback missing the capturing test frame:\n%s", tb)
+	}
+}
 
 func TestEnvDispatch_RejectsMissingMode(t *testing.T) {
 	h := newTestHandler(Config{})

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+
+	"github.com/multica-ai/multica/server/internal/util/stackerr"
 )
 
 // EnvMode enumerates the reset modes (spec §4.2).
@@ -99,6 +101,10 @@ type EnvRollout struct {
 	ChatSessionID string // empty iff dispatch_type=issue
 	AgentRunID    string // empty if dispatch failed (partial rollout)
 	Error         string // empty if rollout succeeded
+	// Stack is the origin goroutine stack (stackerr.StackOf) for the error in
+	// Error, when the failure came from an adapter call. Surfaced per-rollout in
+	// the 500 (all-failed) response. Empty on success or for leaf logic errors.
+	Stack []byte
 
 	// SandboxRefs carries structured sandbox_instance refs for save/resume-capable
 	// (sandbox_instance-backed) rollouts. Empty for Fleet-backed rollouts.
@@ -341,15 +347,18 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 	wg.Wait()
 
 	if len(resetErrs) > 0 {
-		// Reset failed for ≥1 rollout → roll back every rollout and return a
-		// reset_failed error (handler → 503). Reset is all-or-nothing.
+		// Reset failed for >=1 rollout -> roll back every rollout and return a
+		// reset_failed error (handler -> 503). Reset is all-or-nothing. %w (not %v)
+		// so the adapter-origin StackError survives Unwrap and the handler can render
+		// its traceback; the literal "reset_failed:" prefix still drives the
+		// handler's strings.Contains classification.
 		for i, r := range rollouts {
 			if r.ProjectID != "" || r.EnvID != "" {
 				s.rollbackRollout(ctx, in.WorkspaceID, r)
 			}
 			rollouts[i] = EnvRollout{}
 		}
-		return EnvDispatchResult{}, fmt.Errorf("reset_failed: %v", resetErrs[0])
+		return EnvDispatchResult{}, fmt.Errorf("reset_failed: %w", resetErrs[0])
 	}
 
 	// Persist training intent per rollout project (spec §4.1) BEFORE dispatch:
@@ -713,6 +722,7 @@ func (s *EnvDispatchService) dispatchOne(ctx context.Context, in EnvDispatchInpu
 			newID, err := s.deps.CreateIssue(ctx, r.ProjectID, in.WorkspaceID, in.UserID, ii.Title, ii.Description, ii.AcceptanceCriteria, ii.FailToPass, ii.PassToPass)
 			if err != nil {
 				r.Error = fmt.Sprintf("create issue: %v", err)
+				r.Stack = stackerr.StackOf(err)
 				return
 			}
 			issueID = newID
@@ -721,6 +731,7 @@ func (s *EnvDispatchService) dispatchOne(ctx context.Context, in EnvDispatchInpu
 		runID, err := s.deps.EnqueueAgentRun(ctx, in.WorkspaceID, in.AgentID, in.SquadID, issueID, "", "", r.EnvID, idx)
 		if err != nil {
 			r.Error = fmt.Sprintf("enqueue agent run: %v", err)
+			r.Stack = stackerr.StackOf(err)
 			return
 		}
 		r.AgentRunID = runID
@@ -733,6 +744,7 @@ func (s *EnvDispatchService) dispatchOne(ctx context.Context, in EnvDispatchInpu
 		newID, err := s.deps.CreateChatSession(ctx, r.ProjectID, in.WorkspaceID, in.AgentID, in.UserID)
 		if err != nil {
 			r.Error = fmt.Sprintf("create chat session: %v", err)
+			r.Stack = stackerr.StackOf(err)
 			return
 		}
 		sessionID = newID
@@ -741,11 +753,13 @@ func (s *EnvDispatchService) dispatchOne(ctx context.Context, in EnvDispatchInpu
 	// branch continues the copied conversation by appending; scratch starts fresh (spec §7.3).
 	if _, err := s.deps.CreateChatMessage(ctx, sessionID, "user", in.Message.Content); err != nil {
 		r.Error = fmt.Sprintf("create chat message: %v", err)
+		r.Stack = stackerr.StackOf(err)
 		return
 	}
 	runID, err := s.deps.EnqueueAgentRun(ctx, in.WorkspaceID, in.AgentID, in.SquadID, "", sessionID, "", r.EnvID, idx)
 	if err != nil {
 		r.Error = fmt.Sprintf("enqueue agent run: %v", err)
+		r.Stack = stackerr.StackOf(err)
 		return
 	}
 	r.AgentRunID = runID

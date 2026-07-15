@@ -17,6 +17,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/cloudruntime"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
+	"github.com/multica-ai/multica/server/internal/util/stackerr"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -56,10 +57,13 @@ type MessageDispatchInput struct {
 	Content string `json:"content"`
 }
 
-// EnvDispatchResponse is the 201 response (spec §6.3).
+// EnvDispatchResponse is the 201 response (spec §6.3). On 500 (all rollouts
+// failed) it is reused with Message set and each rollout carrying its Error +
+// Traceback (origin goroutine stack from the failing adapter call).
 type EnvDispatchResponse struct {
 	ProjectID string               `json:"project_id"`
 	Rollouts  []EnvRolloutResponse `json:"rollouts"`
+	Message   string               `json:"message,omitempty"`
 }
 
 type EnvRolloutResponse struct {
@@ -69,6 +73,7 @@ type EnvRolloutResponse struct {
 	ChatSessionID    string                                `json:"chat_session_id,omitempty"`
 	AgentRunID       string                                `json:"agent_run_id,omitempty"`
 	Error            string                                `json:"error,omitempty"`
+	Traceback        string                                `json:"traceback,omitempty"`
 	SandboxRefs      []service.SandboxInstanceRef          `json:"sandbox_refs,omitempty"`
 	AgentSandboxRefs map[string]service.SandboxInstanceRef `json:"agent_sandbox_refs,omitempty"`
 }
@@ -318,22 +323,38 @@ func denseCover(dag service.AssembledDag) bool {
 
 func writeEnvDispatchError(w http.ResponseWriter, err error, res service.EnvDispatchResult) {
 	msg := err.Error()
+	tb := string(stackerr.StackOf(err))
+	// Always log the full chain + origin stack server-side (gap #3): the
+	// traceback also rides in the response body, but the log survives even when
+	// the caller discards the body.
+	slog.Error("env_dispatch failed",
+		"error", msg,
+		"traceback", tb,
+		"project_id", res.ProjectID,
+	)
 	switch {
 	case errors.Is(err, service.ErrAllDispatchFailed):
-		writeJSON(w, http.StatusInternalServerError, EnvDispatchResponse{ProjectID: res.ProjectID, Rollouts: mapRollouts(res.Rollouts)})
+		// Top-level error is a bare sentinel (no single origin); each rollout
+		// carries its own origin Traceback. Add a top-level message (gap #1) so a
+		// caller that only inspects the top level sees why the dispatch failed.
+		writeJSON(w, http.StatusInternalServerError, EnvDispatchResponse{
+			ProjectID: res.ProjectID,
+			Rollouts:  mapRollouts(res.Rollouts),
+			Message:   "all rollouts failed",
+		})
 	case strings.Contains(msg, "validation_failed"):
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "validation_failed", "message": msg})
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "validation_failed", "message": msg, "traceback": tb})
 	case strings.Contains(msg, "not_implemented"):
-		writeJSON(w, http.StatusNotImplemented, map[string]any{"error": "not_implemented", "message": msg})
+		writeJSON(w, http.StatusNotImplemented, map[string]any{"error": "not_implemented", "message": msg, "traceback": tb})
 	case errors.Is(err, pgx.ErrNoRows):
 		// A bare GetEnv miss: env_id does not exist / not in workspace. (The
 		// source-project-resolve path wraps its ErrNoRows in "validation_failed"
 		// and is handled above, so this only fires for the top-level env lookup.)
-		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not_found", "message": msg})
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not_found", "message": msg, "traceback": tb})
 	case strings.Contains(msg, "reset_failed"):
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "reset_failed", "message": msg})
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "reset_failed", "message": msg, "traceback": tb})
 	default:
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "internal", "message": msg})
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "internal", "message": msg, "traceback": tb})
 	}
 }
 
@@ -383,6 +404,7 @@ func mapRollouts(rs []service.EnvRollout) []EnvRolloutResponse {
 		out = append(out, EnvRolloutResponse{
 			EnvID: r.EnvID, ProjectID: r.ProjectID, IssueID: r.IssueID,
 			ChatSessionID: r.ChatSessionID, AgentRunID: r.AgentRunID, Error: r.Error,
+			Traceback:        string(r.Stack),
 			SandboxRefs:      r.SandboxRefs,
 			AgentSandboxRefs: r.AgentSandboxRefs,
 		})
@@ -451,7 +473,7 @@ func (a *envDispatchDepsAdapter) GetEnv(ctx context.Context, envID, workspaceID 
 		WorkspaceID: parseUUID(workspaceID),
 	})
 	if err != nil {
-		return service.Env{}, fmt.Errorf("get env: %w", err)
+		return service.Env{}, stackerr.Wrap(err, "get env")
 	}
 	return envRowToService(row), nil
 }
@@ -472,7 +494,7 @@ func (a *envDispatchDepsAdapter) CreateEnv(ctx context.Context, workspaceID stri
 	}
 	row, err := a.h.Queries.CreateEnvironment(ctx, params)
 	if err != nil {
-		return "", fmt.Errorf("create env: %w", err)
+		return "", stackerr.Wrap(err, "create env")
 	}
 	return util.UUIDToString(row.ID), nil
 }
@@ -495,7 +517,7 @@ func (a *envDispatchDepsAdapter) DeleteEnv(ctx context.Context, envID, workspace
 	if fkViolation23503(err) {
 		return service.ErrEnvInUse
 	}
-	return fmt.Errorf("delete env: %w", err)
+	return stackerr.Wrap(err, "delete env")
 }
 
 // ForkSandbox calls POST /api/v1/sandboxes/fork with the source sandbox id.
@@ -507,7 +529,7 @@ func (a *envDispatchDepsAdapter) ForkSandbox(ctx context.Context, sourceSandboxI
 		"idx":               idx,
 	})
 	if err != nil {
-		return "", fmt.Errorf("marshal fork body: %w", err)
+		return "", stackerr.Wrap(err, "marshal fork body")
 	}
 	resp, err := a.h.CloudRuntime.Do(ctx, cloudruntime.Request{
 		Method: http.MethodPost,
@@ -516,19 +538,19 @@ func (a *envDispatchDepsAdapter) ForkSandbox(ctx context.Context, sourceSandboxI
 		Op:     "provision",
 	})
 	if err != nil {
-		return "", fmt.Errorf("fork sandbox: %w", err)
+		return "", stackerr.Wrap(err, "fork sandbox")
 	}
 	if resp.StatusCode >= 400 {
-		return "", fmt.Errorf("fork sandbox: status %d: %s", resp.StatusCode, string(resp.Body))
+		return "", stackerr.New(fmt.Sprintf("fork sandbox: status %d: %s", resp.StatusCode, string(resp.Body)))
 	}
 	var out struct {
 		SandboxID string `json:"sandbox_id"`
 	}
 	if err := json.Unmarshal(resp.Body, &out); err != nil {
-		return "", fmt.Errorf("fork sandbox: decode: %w", err)
+		return "", stackerr.Wrap(err, "fork sandbox: decode")
 	}
 	if out.SandboxID == "" {
-		return "", fmt.Errorf("fork sandbox: empty sandbox_id in response")
+		return "", stackerr.New("fork sandbox: empty sandbox_id in response")
 	}
 	return out.SandboxID, nil
 }
@@ -542,13 +564,13 @@ func (a *envDispatchDepsAdapter) DeleteSandbox(ctx context.Context, sandboxID st
 		Op:     "terminate",
 	})
 	if err != nil {
-		return fmt.Errorf("delete sandbox: %w", err)
+		return stackerr.Wrap(err, "delete sandbox")
 	}
 	if resp.StatusCode == http.StatusNotFound {
 		return nil
 	}
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("delete sandbox: status %d: %s", resp.StatusCode, string(resp.Body))
+		return stackerr.New(fmt.Sprintf("delete sandbox: status %d: %s", resp.StatusCode, string(resp.Body)))
 	}
 	return nil
 }
@@ -558,7 +580,7 @@ func (a *envDispatchDepsAdapter) DeleteSandbox(ctx context.Context, sandboxID st
 func (a *envDispatchDepsAdapter) BootSandbox(ctx context.Context, imageRef string) (string, error) {
 	body, err := json.Marshal(map[string]string{"image_ref": imageRef})
 	if err != nil {
-		return "", fmt.Errorf("marshal boot body: %w", err)
+		return "", stackerr.Wrap(err, "marshal boot body")
 	}
 	resp, err := a.h.CloudRuntime.Do(ctx, cloudruntime.Request{
 		Method: http.MethodPost,
@@ -567,19 +589,19 @@ func (a *envDispatchDepsAdapter) BootSandbox(ctx context.Context, imageRef strin
 		Op:     "provision",
 	})
 	if err != nil {
-		return "", fmt.Errorf("boot sandbox: %w", err)
+		return "", stackerr.Wrap(err, "boot sandbox")
 	}
 	if resp.StatusCode >= 400 {
-		return "", fmt.Errorf("boot sandbox: status %d: %s", resp.StatusCode, string(resp.Body))
+		return "", stackerr.New(fmt.Sprintf("boot sandbox: status %d: %s", resp.StatusCode, string(resp.Body)))
 	}
 	var out struct {
 		SandboxID string `json:"sandbox_id"`
 	}
 	if err := json.Unmarshal(resp.Body, &out); err != nil {
-		return "", fmt.Errorf("boot sandbox: decode: %w", err)
+		return "", stackerr.Wrap(err, "boot sandbox: decode")
 	}
 	if out.SandboxID == "" {
-		return "", fmt.Errorf("boot sandbox: empty sandbox_id in response")
+		return "", stackerr.New("boot sandbox: empty sandbox_id in response")
 	}
 	return out.SandboxID, nil
 }
@@ -595,7 +617,7 @@ func (a *envDispatchDepsAdapter) CreateProject(ctx context.Context, workspaceID,
 		EnvID:       parseUUID(envID),
 	})
 	if err != nil {
-		return "", fmt.Errorf("create project: %w", err)
+		return "", stackerr.Wrap(err, "create project")
 	}
 	return util.UUIDToString(row.ID), nil
 }
@@ -609,7 +631,7 @@ func (a *envDispatchDepsAdapter) GetProjectByEnvID(ctx context.Context, envID, w
 		WorkspaceID: parseUUID(workspaceID),
 	})
 	if err != nil {
-		return "", fmt.Errorf("get project by env: %w", err)
+		return "", stackerr.Wrap(err, "get project by env")
 	}
 	return util.UUIDToString(row.ID), nil
 }
@@ -624,7 +646,7 @@ func (a *envDispatchDepsAdapter) DeleteProject(ctx context.Context, projectID, w
 	if err == nil || errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
-	return fmt.Errorf("delete project: %w", err)
+	return stackerr.Wrap(err, "delete project")
 }
 
 // ListIssuesByProject returns all issues under a project. Used during
@@ -635,7 +657,7 @@ func (a *envDispatchDepsAdapter) ListIssuesByProject(ctx context.Context, projec
 		WorkspaceID: parseUUID(workspaceID),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("list issues by project: %w", err)
+		return nil, stackerr.Wrap(err, "list issues by project")
 	}
 	out := make([]service.IssueRow, 0, len(rows))
 	for _, r := range rows {
@@ -665,7 +687,7 @@ func (a *envDispatchDepsAdapter) ListChatSessionsByProject(ctx context.Context, 
 		WorkspaceID: parseUUID(workspaceID),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("list chat sessions by project: %w", err)
+		return nil, stackerr.Wrap(err, "list chat sessions by project")
 	}
 	out := make([]string, 0, len(rows))
 	for _, r := range rows {
@@ -683,7 +705,7 @@ func (a *envDispatchDepsAdapter) CreateIssue(ctx context.Context, projectID, wor
 	wsUUID := parseUUID(workspaceID)
 	number, err := a.h.Queries.IncrementIssueCounter(ctx, wsUUID)
 	if err != nil {
-		return "", fmt.Errorf("increment issue counter: %w", err)
+		return "", stackerr.Wrap(err, "increment issue counter")
 	}
 	metaJSON, err := buildIssueMetadata(acceptanceCriteria, failToPass, passToPass)
 	if err != nil {
@@ -707,7 +729,7 @@ func (a *envDispatchDepsAdapter) CreateIssue(ctx context.Context, projectID, wor
 		Metadata:    metaJSON,
 	})
 	if err != nil {
-		return "", fmt.Errorf("create issue: %w", err)
+		return "", stackerr.Wrap(err, "create issue")
 	}
 	return util.UUIDToString(row.ID), nil
 }
@@ -732,7 +754,7 @@ func buildIssueMetadata(acceptanceCriteria, failToPass, passToPass []string) ([]
 	}
 	b, err := json.Marshal(m)
 	if err != nil {
-		return nil, fmt.Errorf("marshal issue metadata: %w", err)
+		return nil, stackerr.Wrap(err, "marshal issue metadata")
 	}
 	return b, nil
 }
@@ -749,7 +771,7 @@ func (a *envDispatchDepsAdapter) CreateChatSession(ctx context.Context, projectI
 		Title:       "env-dispatch",
 	})
 	if err != nil {
-		return "", fmt.Errorf("create chat session: %w", err)
+		return "", stackerr.Wrap(err, "create chat session")
 	}
 	return util.UUIDToString(row.ID), nil
 }
@@ -765,7 +787,7 @@ func (a *envDispatchDepsAdapter) CreateChatMessage(ctx context.Context, sessionI
 		Content:       content,
 	})
 	if err != nil {
-		return "", fmt.Errorf("create chat message: %w", err)
+		return "", stackerr.Wrap(err, "create chat message")
 	}
 	return util.UUIDToString(row.ID), nil
 }
@@ -777,7 +799,7 @@ func (a *envDispatchDepsAdapter) CreateChatMessage(ctx context.Context, sessionI
 func (a *envDispatchDepsAdapter) GetDefaultSelfPlayEnv(ctx context.Context, workspaceID string) (string, error) {
 	v, err := a.h.Queries.GetDefaultSelfPlayEnv(ctx, parseUUID(workspaceID))
 	if err != nil {
-		return "", fmt.Errorf("get default self_play env: %w", err)
+		return "", stackerr.Wrap(err, "get default self_play env")
 	}
 	if !v.Valid {
 		return "", nil // not configured; service maps to 400
@@ -819,7 +841,7 @@ func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, workspaceI
 				WorkspaceID: parseUUID(workspaceID),
 			})
 			if err != nil {
-				return "", fmt.Errorf("get squad: %w", err)
+				return "", stackerr.Wrap(err, "get squad")
 			}
 			if err := a.h.Queries.SetIssueAssignee(ctx, db.SetIssueAssigneeParams{
 				ID:           parseUUID(issueID),
@@ -827,7 +849,7 @@ func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, workspaceI
 				AssigneeID:   parseUUID(squadID),
 				WorkspaceID:  parseUUID(workspaceID),
 			}); err != nil {
-				return "", fmt.Errorf("set issue assignee to squad: %w", err)
+				return "", stackerr.Wrap(err, "set issue assignee to squad")
 			}
 			agentUUID = squad.LeaderID
 			isLeaderTask = pgtype.Bool{Bool: true, Valid: true}
@@ -837,7 +859,7 @@ func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, workspaceI
 			WorkspaceID: parseUUID(workspaceID),
 		})
 		if err != nil {
-			return "", fmt.Errorf("get agent for run: %w", err)
+			return "", stackerr.Wrap(err, "get agent for run")
 		}
 		task, err := a.h.Queries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
 			AgentID:      agentUUID,
@@ -847,7 +869,7 @@ func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, workspaceI
 			IsLeaderTask: isLeaderTask,
 		})
 		if err != nil {
-			return "", fmt.Errorf("create agent task: %w", err)
+			return "", stackerr.Wrap(err, "create agent task")
 		}
 		// Training session-open chokepoint (spec §4.3): a single-agent training
 		// dispatch (train_agent_id == agent_id) creates the trained task HERE,
@@ -857,7 +879,7 @@ func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, workspaceI
 	case chatSessionID != "":
 		session, err := a.h.Queries.GetChatSession(ctx, parseUUID(chatSessionID))
 		if err != nil {
-			return "", fmt.Errorf("get chat session for run: %w", err)
+			return "", stackerr.Wrap(err, "get chat session for run")
 		}
 		params := db.CreateChatTaskParams{
 			RuntimeID:     session.RuntimeID,
@@ -875,18 +897,18 @@ func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, workspaceI
 				WorkspaceID: parseUUID(workspaceID),
 			})
 			if err != nil {
-				return "", fmt.Errorf("get squad: %w", err)
+				return "", stackerr.Wrap(err, "get squad")
 			}
 			leader, err := a.h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
 				ID:          squad.LeaderID,
 				WorkspaceID: parseUUID(workspaceID),
 			})
 			if err != nil {
-				return "", fmt.Errorf("get squad leader: %w", err)
+				return "", stackerr.Wrap(err, "get squad leader")
 			}
 			contextJSON, err := json.Marshal(map[string]string{"squad_id": squadID})
 			if err != nil {
-				return "", fmt.Errorf("marshal squad chat context: %w", err)
+				return "", stackerr.Wrap(err, "marshal squad chat context")
 			}
 			params.AgentID = squad.LeaderID
 			params.RuntimeID = leader.RuntimeID
@@ -896,14 +918,14 @@ func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, workspaceI
 		}
 		task, err := a.h.Queries.CreateChatTask(ctx, params)
 		if err != nil {
-			return "", fmt.Errorf("create chat task: %w", err)
+			return "", stackerr.Wrap(err, "create chat task")
 		}
 		// Training session-open chokepoint (spec §4.3): chat-bound dispatch.
 		// Project resolves via the chat session (seam 1e).
 		a.maybeOpenTrainingSession(ctx, util.UUIDToString(task.ID), util.UUIDToString(params.AgentID), util.UUIDToString(session.ProjectID), envID)
 		return util.UUIDToString(task.ID), nil
 	default:
-		return "", fmt.Errorf("enqueue agent run: issueID or chatSessionID required")
+		return "", stackerr.New("enqueue agent run: issueID or chatSessionID required")
 	}
 }
 
@@ -932,7 +954,7 @@ func (a *envDispatchDepsAdapter) CopyProjectSubtree(ctx context.Context, sourceP
 		WorkspaceID: wsUUID,
 	})
 	if err != nil {
-		return "", nil, nil, fmt.Errorf("get source project: %w", err)
+		return "", nil, nil, stackerr.Wrap(err, "get source project")
 	}
 
 	newProject, err := a.h.Queries.CreateProjectWithEnv(ctx, db.CreateProjectWithEnvParams{
@@ -943,7 +965,7 @@ func (a *envDispatchDepsAdapter) CopyProjectSubtree(ctx context.Context, sourceP
 		EnvID:       parseUUID(envID),
 	})
 	if err != nil {
-		return "", nil, nil, fmt.Errorf("create forked project: %w", err)
+		return "", nil, nil, stackerr.Wrap(err, "create forked project")
 	}
 	newProjectID := util.UUIDToString(newProject.ID)
 
@@ -969,13 +991,13 @@ func (a *envDispatchDepsAdapter) copyProjectIssues(ctx context.Context, wsUUID, 
 		WorkspaceID: wsUUID,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("list source issues: %w", err)
+		return nil, stackerr.Wrap(err, "list source issues")
 	}
 	issueIDMap := make(map[string]string, len(srcs))
 	for _, src := range srcs {
 		number, err := a.h.Queries.IncrementIssueCounter(ctx, wsUUID)
 		if err != nil {
-			return nil, fmt.Errorf("increment issue counter: %w", err)
+			return nil, stackerr.Wrap(err, "increment issue counter")
 		}
 		forked, err := a.h.Queries.CreateForkedIssue(ctx, db.CreateForkedIssueParams{
 			WorkspaceID:        src.WorkspaceID,
@@ -1001,7 +1023,7 @@ func (a *envDispatchDepsAdapter) copyProjectIssues(ctx context.Context, wsUUID, 
 			// this is a project-level fork, not a task-message branch point.
 		})
 		if err != nil {
-			return nil, fmt.Errorf("create forked issue: %w", err)
+			return nil, stackerr.Wrap(err, "create forked issue")
 		}
 		issueIDMap[util.UUIDToString(src.ID)] = util.UUIDToString(forked.ID)
 	}
@@ -1019,7 +1041,7 @@ func (a *envDispatchDepsAdapter) copyProjectChatSessions(ctx context.Context, ws
 		WorkspaceID: wsUUID,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("list source chat sessions: %w", err)
+		return nil, stackerr.Wrap(err, "list source chat sessions")
 	}
 	chatSessionIDMap := make(map[string]string, len(srcs))
 	for _, src := range srcs {
@@ -1031,7 +1053,7 @@ func (a *envDispatchDepsAdapter) copyProjectChatSessions(ctx context.Context, ws
 			Title:       src.Title,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("create forked chat session: %w", err)
+			return nil, stackerr.Wrap(err, "create forked chat session")
 		}
 		if err := a.copyChatMessages(ctx, src.ID, newSession.ID); err != nil {
 			return nil, err
@@ -1048,7 +1070,7 @@ func (a *envDispatchDepsAdapter) copyProjectChatSessions(ctx context.Context, ws
 func (a *envDispatchDepsAdapter) copyChatMessages(ctx context.Context, srcSessionID, newSessionID pgtype.UUID) error {
 	msgs, err := a.h.Queries.ListChatMessages(ctx, srcSessionID)
 	if err != nil {
-		return fmt.Errorf("list source chat messages: %w", err)
+		return stackerr.Wrap(err, "list source chat messages")
 	}
 	for _, m := range msgs {
 		if _, err := a.h.Queries.CreateChatMessage(ctx, db.CreateChatMessageParams{
@@ -1056,7 +1078,7 @@ func (a *envDispatchDepsAdapter) copyChatMessages(ctx context.Context, srcSessio
 			Role:          m.Role,
 			Content:       m.Content,
 		}); err != nil {
-			return fmt.Errorf("create forked chat message: %w", err)
+			return stackerr.Wrap(err, "create forked chat message")
 		}
 	}
 	return nil
@@ -1077,11 +1099,11 @@ func (a *envDispatchDepsAdapter) GetIdempotentResponse(ctx context.Context, work
 		if errors.Is(err, pgx.ErrNoRows) {
 			return service.EnvDispatchResult{}, false, nil
 		}
-		return service.EnvDispatchResult{}, false, fmt.Errorf("get idempotent response: %w", err)
+		return service.EnvDispatchResult{}, false, stackerr.Wrap(err, "get idempotent response")
 	}
 	var res service.EnvDispatchResult
 	if err := json.Unmarshal(row.Response, &res); err != nil {
-		return service.EnvDispatchResult{}, false, fmt.Errorf("decode idempotent response: %w", err)
+		return service.EnvDispatchResult{}, false, stackerr.Wrap(err, "decode idempotent response")
 	}
 	return res, true, nil
 }
@@ -1093,14 +1115,14 @@ func (a *envDispatchDepsAdapter) GetIdempotentResponse(ctx context.Context, work
 func (a *envDispatchDepsAdapter) SaveIdempotentResponse(ctx context.Context, workspaceID, key string, res service.EnvDispatchResult) error {
 	body, err := json.Marshal(res)
 	if err != nil {
-		return fmt.Errorf("marshal idempotent response: %w", err)
+		return stackerr.Wrap(err, "marshal idempotent response")
 	}
 	if err := a.h.Queries.CreateEnvDispatchRequest(ctx, db.CreateEnvDispatchRequestParams{
 		WorkspaceID:    parseUUID(workspaceID),
 		IdempotencyKey: parseUUID(key),
 		Response:       body,
 	}); err != nil {
-		return fmt.Errorf("save idempotent response: %w", err)
+		return stackerr.Wrap(err, "save idempotent response")
 	}
 	return nil
 }
@@ -1120,7 +1142,7 @@ func (a *envDispatchDepsAdapter) SaveTrainingDispatch(ctx context.Context, proje
 		params.CriticAgentID = parseUUID(criticAgentID)
 	}
 	if err := a.h.Queries.CreateTrainingDispatch(ctx, params); err != nil {
-		return fmt.Errorf("save training dispatch: %w", err)
+		return stackerr.Wrap(err, "save training dispatch")
 	}
 	return nil
 }
@@ -1131,12 +1153,12 @@ func (a *envDispatchDepsAdapter) SaveTrainingDispatch(ctx context.Context, proje
 func (a *envDispatchDepsAdapter) ValidateAgentInWorkspaceOrSquad(ctx context.Context, workspaceID, squadID, agentID string) error {
 	agentUUID, err := util.ParseUUID(agentID)
 	if err != nil {
-		return fmt.Errorf("parse agent_id: %w", err)
+		return stackerr.Wrap(err, "parse agent_id")
 	}
 	if squadID != "" {
 		squadUUID, err := util.ParseUUID(squadID)
 		if err != nil {
-			return fmt.Errorf("parse squad_id: %w", err)
+			return stackerr.Wrap(err, "parse squad_id")
 		}
 		ok, err := a.h.Queries.IsSquadMember(ctx, db.IsSquadMemberParams{
 			SquadID:    squadUUID,
@@ -1144,23 +1166,23 @@ func (a *envDispatchDepsAdapter) ValidateAgentInWorkspaceOrSquad(ctx context.Con
 			MemberID:   agentUUID,
 		})
 		if err != nil {
-			return fmt.Errorf("check squad membership: %w", err)
+			return stackerr.Wrap(err, "check squad membership")
 		}
 		if !ok {
-			return fmt.Errorf("agent %s is not a member of squad %s", agentID, squadID)
+			return stackerr.New(fmt.Sprintf("agent %s is not a member of squad %s", agentID, squadID))
 		}
 		return nil
 	}
 	// No squad: validate the agent belongs to the workspace.
 	wsUUID, err := util.ParseUUID(workspaceID)
 	if err != nil {
-		return fmt.Errorf("parse workspace_id: %w", err)
+		return stackerr.Wrap(err, "parse workspace_id")
 	}
 	if _, err := a.h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
 		ID:          agentUUID,
 		WorkspaceID: wsUUID,
 	}); err != nil {
-		return fmt.Errorf("agent %s is not a member of workspace %s", agentID, workspaceID)
+		return stackerr.New(fmt.Sprintf("agent %s is not a member of workspace %s", agentID, workspaceID))
 	}
 	return nil
 }
@@ -1175,7 +1197,7 @@ func (a *envDispatchDepsAdapter) ResolvePerAgentEnvSpec(ctx context.Context, wor
 	if spec.BaseEnvID != "" {
 		env, err := a.GetEnv(ctx, spec.BaseEnvID, workspaceID)
 		if err != nil {
-			return service.SandboxInstanceRef{}, fmt.Errorf("resolve base env %s: %w", spec.BaseEnvID, err)
+			return service.SandboxInstanceRef{}, stackerr.Wrap(err, fmt.Sprintf("resolve base env %s", spec.BaseEnvID))
 		}
 		// Resolve the template from the base env's first sandbox_instance, if
 		// any; otherwise fall back to "default".

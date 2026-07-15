@@ -8,14 +8,16 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/multica-ai/multica/server/internal/util/stackerr"
 )
 
 type fakeSandboxInstanceCreator struct {
-	calls   []createSandboxCall
-	ref     SandboxInstanceRef
-	err     error
-	refs    map[string]SandboxInstanceRef // instanceID -> ref for GetSandboxInstanceRef
-	getErr  error
+	calls  []createSandboxCall
+	ref    SandboxInstanceRef
+	err    error
+	refs   map[string]SandboxInstanceRef // instanceID -> ref for GetSandboxInstanceRef
+	getErr error
 }
 
 func (c *fakeSandboxInstanceCreator) GetSandboxInstanceRef(_ context.Context, _, instanceID string) (SandboxInstanceRef, error) {
@@ -564,6 +566,72 @@ func TestDispatch_AllDispatchFail_KeepsEnvReturnsSentinel(t *testing.T) {
 	}
 }
 
+// fakeAdapterErr mirrors the production adapter: it wraps a raw error with a
+// stackerr stack captured at the call site. This helper stands in for an
+// adapter method so Dispatch's stack propagation can be exercised end-to-end
+// without a real DB / cloud-runtime.
+func fakeAdapterErr(label, msg string) error {
+	return stackerr.Wrap(errors.New(msg), label)
+}
+
+// TestDispatch_ResetFailedPreservesAdapterStack guards the reset_failed %w seam
+// (service/env_dispatch.go): the adapter-origin StackError must survive Unwrap
+// through "rollout N reset" and "reset_failed" so the handler can render its
+// traceback. With the prior %v the stack was flattened away and StackOf -> nil.
+func TestDispatch_ResetFailedPreservesAdapterStack(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	f.forkErr = fakeAdapterErr("fork sandbox", "fork crashed")
+	svc := NewEnvDispatchService(f, 8)
+	_, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue, GroupSize: 2,
+		AgentID: "ag", Issue: &IssueInput{Title: "t"},
+	})
+	if err == nil {
+		t.Fatal("want reset_failed error")
+	}
+	if !strings.Contains(err.Error(), "reset_failed") {
+		t.Fatalf("want reset_failed in error, got %q", err.Error())
+	}
+	st := stackerr.StackOf(err)
+	if st == nil {
+		t.Fatalf("StackOf returned nil; reset_failed seam lost the adapter stack: %v", err)
+	}
+	if !strings.Contains(string(st), "fakeAdapterErr") {
+		t.Fatalf("captured stack missing the adapter-origin frame:\n%s", st)
+	}
+}
+
+// TestDispatch_AllDispatchFail_RolloutsCarryStack verifies the 500 path: each
+// failed rollout captures the adapter-origin stack (dispatchOne -> StackOf) so
+// the handler can surface a per-rollout traceback.
+func TestDispatch_AllDispatchFail_RolloutsCarryStack(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	f.enqueueErr = fakeAdapterErr("create agent task", "enqueue crashed")
+	svc := NewEnvDispatchService(f, 8)
+	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue, GroupSize: 2,
+		AgentID: "ag", Issue: &IssueInput{Title: "t"},
+	})
+	if !errors.Is(err, ErrAllDispatchFailed) {
+		t.Fatalf("want ErrAllDispatchFailed, got %v", err)
+	}
+	if len(res.Rollouts) != 2 {
+		t.Fatalf("want 2 rollouts, got %d", len(res.Rollouts))
+	}
+	for i, r := range res.Rollouts {
+		if r.Stack == nil {
+			t.Fatalf("rollout %d: expected origin stack, got nil", i)
+		}
+		if !strings.Contains(string(r.Stack), "fakeAdapterErr") {
+			t.Fatalf("rollout %d: stack missing adapter-origin frame", i)
+		}
+	}
+}
+
 func TestDispatch_IdempotencyReplay(t *testing.T) {
 	f := newFakeEnvDispatchDeps()
 	baseEnv := f.seedBaseEnv()
@@ -983,7 +1051,7 @@ func TestEnvDispatchSandboxInstanceBranchCreatesFreshFromTemplate(t *testing.T) 
 	f.envs[sourceEnvID] = Env{
 		ID: sourceEnvID, WorkspaceID: "ws",
 		SandboxIDs: []string{"src-inst-1"},
-		Mode:        EnvModeBranch, Domain: EnvDomainSweLego,
+		Mode:       EnvModeBranch, Domain: EnvDomainSweLego,
 	}
 	f.projects["src-proj-1"] = sourceEnvID
 	f.issues["src-proj-1"] = []IssueRow{{ID: "src-issue-1", ProjectID: "src-proj-1"}}
@@ -1160,7 +1228,7 @@ func TestEnvDispatchPerAgentEnvSpecsAssignDistinctSandboxRefs(t *testing.T) {
 		WorkspaceID: "ws", UserID: "u", SquadID: "sq", Mode: EnvModeScratch, EnvID: baseEnv,
 		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
 		TrainAgentID: "train",
-		Message: &MessageInput{Content: "hi"},
+		Message:      &MessageInput{Content: "hi"},
 		PerAgentEnvSpecs: []PerAgentEnvSpec{
 			{AgentID: "a1", Template: "python"},
 			{AgentID: "a2", Template: "node"},
@@ -1203,7 +1271,7 @@ func TestEnvDispatchPerAgentEnvSpecsPartialSquadUsesDefaults(t *testing.T) {
 		WorkspaceID: "ws", UserID: "u", SquadID: "sq", Mode: EnvModeScratch, EnvID: baseEnv,
 		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
 		TrainAgentID: "train",
-		Message: &MessageInput{Content: "hi"},
+		Message:      &MessageInput{Content: "hi"},
 		PerAgentEnvSpecs: []PerAgentEnvSpec{
 			{AgentID: "a1", Template: "python"},
 		},

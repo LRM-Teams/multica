@@ -342,12 +342,13 @@ func TestAgentInboxDrainIncludesSourceChannelMessageAttachment(t *testing.T) {
 		t.Fatalf("seed source attachment: %v", err)
 	}
 
+	content := "@" + agentName + " inspect the attached brief"
 	sendRec := sendChannelMessageForTest(t, channelID, testUserID, map[string]any{
-		"content": "[@" + agentName + "](mention://agent/" + agentID + ") inspect the attached brief",
+		"content": content,
 		"parts": []map[string]any{
 			{
 				"type": "text",
-				"text": "[@" + agentName + "](mention://agent/" + agentID + ") inspect the attached brief",
+				"text": content,
 			},
 			{"type": "attachment", "attachment_id": attachmentID},
 		},
@@ -402,12 +403,13 @@ func TestAgentInboxDrainDeduplicatesSourceAndPromptAttachment(t *testing.T) {
 		t.Fatalf("seed attachment: %v", err)
 	}
 
+	content := "@" + agentName + " inspect the dedupe file"
 	sendRec := sendChannelMessageForTest(t, channelID, testUserID, map[string]any{
-		"content": "[@" + agentName + "](mention://agent/" + agentID + ") inspect the dedupe file",
+		"content": content,
 		"parts": []map[string]any{
 			{
 				"type": "text",
-				"text": "[@" + agentName + "](mention://agent/" + agentID + ") inspect the dedupe file",
+				"text": content,
 			},
 			{"type": "attachment", "attachment_id": attachmentID},
 		},

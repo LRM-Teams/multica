@@ -9,6 +9,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/internal/workgraph"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 func TestWendyUnlockSilentParallelWait(t *testing.T) {
@@ -103,11 +104,16 @@ func TestWendyHumanReworkInterruptsActiveDownstream(t *testing.T) {
 	previous := testHandler.WorkGraph
 	testHandler.WorkGraph = fixture.store
 	t.Cleanup(func() { testHandler.WorkGraph = previous })
+	mentionStart, mentionEnd := 0, 2
 	testHandler.ingestWendyHumanGroupMessage(context.Background(), ChannelResponse{
 		ID: fixture.channelID, WorkspaceID: testWorkspaceID, Kind: "group",
 	}, ChannelMessageResponse{
 		ID:      "rework-" + uuid.NewString(),
-		Content: mentionMarkdown("agent", fixture.cID, "C") + " 这个不对，先修改返工",
+		Content: "@C 这个不对，先修改返工",
+		Parts: []protocol.MessagePart{{
+			Type: protocol.MessagePartTypeReference, RefType: "mention", RefSubType: "agent", RefID: fixture.cID, Label: "@C",
+			ContentStartUTF16: &mentionStart, ContentEndUTF16: &mentionEnd,
+		}},
 	})
 
 	var cStatus string

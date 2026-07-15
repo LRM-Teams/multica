@@ -7,28 +7,31 @@ import (
 )
 
 const (
-	MessagePartTypeText       = "text"
-	MessagePartTypeSticker    = "sticker"
-	MessagePartTypeAttachment = "attachment"
-	MessagePartTypeReference  = "reference"
+	MessagePartTypeText        = "text"
+	MessagePartTypeSticker     = "sticker"
+	MessagePartTypeAttachment  = "attachment"
+	MessagePartTypeReference   = "reference"
+	MessagePartTypeSystemEvent = "system_event"
 )
 
 type MessagePart struct {
-	Type         string `json:"type"`
-	Text         string `json:"text,omitempty"`
-	RefType      string `json:"ref_type,omitempty"`
-	RefSubType   string `json:"ref_subtype,omitempty"`
-	RefID        string `json:"ref_id,omitempty"`
-	Label        string `json:"label,omitempty"`
-	RefTitle     string `json:"ref_title,omitempty"`
-	RefStatus    string `json:"ref_status,omitempty"`
-	PackID       string `json:"pack_id,omitempty"`
-	StickerID    string `json:"sticker_id,omitempty"`
-	Alt          string `json:"alt,omitempty"`
-	AttachmentID string `json:"attachment_id,omitempty"`
-	Filename     string `json:"filename,omitempty"`
-	ContentType  string `json:"content_type,omitempty"`
-	SizeBytes    int64  `json:"size_bytes,omitempty"`
+	Type         string          `json:"type"`
+	Text         string          `json:"text,omitempty"`
+	RefType      string          `json:"ref_type,omitempty"`
+	RefSubType   string          `json:"ref_subtype,omitempty"`
+	RefID        string          `json:"ref_id,omitempty"`
+	Label        string          `json:"label,omitempty"`
+	RefTitle     string          `json:"ref_title,omitempty"`
+	RefStatus    string          `json:"ref_status,omitempty"`
+	Event        string          `json:"event,omitempty"`
+	EventParams  json.RawMessage `json:"event_params,omitempty"`
+	PackID       string          `json:"pack_id,omitempty"`
+	StickerID    string          `json:"sticker_id,omitempty"`
+	Alt          string          `json:"alt,omitempty"`
+	AttachmentID string          `json:"attachment_id,omitempty"`
+	Filename     string          `json:"filename,omitempty"`
+	ContentType  string          `json:"content_type,omitempty"`
+	SizeBytes    int64           `json:"size_bytes,omitempty"`
 }
 
 // Message is the envelope for all WebSocket messages.

@@ -4684,23 +4684,22 @@ func TestAgentUnfollowChannelThreadUpdatesAgentStateAndEmitsLinkedSystemEvent(t 
 		LIMIT 1`, channelID, root.ID).Scan(&content, &rawParts); err != nil {
 		t.Fatalf("load thread unfollow system message: %v", err)
 	}
-	wantMention := fmt.Sprintf("](mention://agent/%s)", agentID)
-	if !strings.Contains(content, wantMention) {
-		t.Fatalf("system content = %q, want linked agent mention containing %q", content, wantMention)
+	if strings.Contains(content, "mention://") {
+		t.Fatalf("system content leaked legacy mention markdown: %q", content)
 	}
-	if strings.Contains(content, "@Frank") || strings.Contains(content, "@Tester") {
-		t.Fatalf("system content attributed to human/plain @ text: %q", content)
+	if !strings.Contains(content, "@"+agentName) || !strings.Contains(content, "unfollowed this thread") {
+		t.Fatalf("system content = %q, want readable @handle fallback", content)
 	}
 	var parts []protocol.MessagePart
 	if err := json.Unmarshal(rawParts, &parts); err != nil {
 		t.Fatalf("decode system parts: %v", err)
 	}
-	if len(parts) != 1 || strings.TrimSpace(parts[0].Text) == "" {
-		t.Fatalf("system parts = %+v, want one structured part", parts)
+	if len(parts) != 2 || parts[0].Type != protocol.MessagePartTypeSystemEvent || parts[0].Event != "thread_unfollowed" {
+		t.Fatalf("system parts = %+v, want event and mention reference parts", parts)
 	}
-	var event threadUnfollowedSystemEventPart
-	if err := json.Unmarshal([]byte(parts[0].Text), &event); err != nil {
-		t.Fatalf("decode thread unfollow event part %q: %v", parts[0].Text, err)
+	event := threadUnfollowedSystemEventPart{Event: parts[0].Event}
+	if err := json.Unmarshal(parts[0].EventParams, &event.Params); err != nil {
+		t.Fatalf("decode thread unfollow event params %q: %v", parts[0].EventParams, err)
 	}
 	if event.Event != "thread_unfollowed" {
 		t.Fatalf("event = %q, want thread_unfollowed", event.Event)
@@ -4710,6 +4709,9 @@ func TestAgentUnfollowChannelThreadUpdatesAgentStateAndEmitsLinkedSystemEvent(t 
 	}
 	if event.Params.AgentName != agentName || event.Params.ActorDisplayName != agentName || event.Params.ActorName != agentName {
 		t.Fatalf("event agent names = %+v, want %q", event.Params, agentName)
+	}
+	if mention := parts[1]; mention.Type != protocol.MessagePartTypeReference || mention.RefType != "mention" || mention.RefSubType != "agent" || mention.RefID != agentID || mention.Label != "@"+agentName {
+		t.Fatalf("mention part = %+v, want structured agent @handle", mention)
 	}
 }
 
@@ -6462,12 +6464,12 @@ func latestChannelSystemEventForTest(t *testing.T, channelID string) channelMemb
 	if err := json.Unmarshal(rawParts, &parts); err != nil {
 		t.Fatalf("decode system message parts: %v", err)
 	}
-	if len(parts) != 1 || strings.TrimSpace(parts[0].Text) == "" {
-		t.Fatalf("system message parts = %+v, want one structured text part", parts)
+	if len(parts) != 1 || parts[0].Type != protocol.MessagePartTypeSystemEvent || strings.TrimSpace(parts[0].Event) == "" {
+		t.Fatalf("system message parts = %+v, want one typed event part", parts)
 	}
-	var event channelMemberSystemEventPart
-	if err := json.Unmarshal([]byte(parts[0].Text), &event); err != nil {
-		t.Fatalf("decode system event part %q: %v", parts[0].Text, err)
+	event := channelMemberSystemEventPart{Event: parts[0].Event}
+	if err := json.Unmarshal(parts[0].EventParams, &event.Params); err != nil {
+		t.Fatalf("decode system event params %q: %v", parts[0].EventParams, err)
 	}
 	return event
 }

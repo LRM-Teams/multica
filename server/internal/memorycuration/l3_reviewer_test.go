@@ -47,7 +47,7 @@ func TestNewL3ReviewerFromEnvDefaultsDisabled(t *testing.T) {
 	}
 }
 
-func TestAgentL3ReviewerUsesPiWithoutTools(t *testing.T) {
+func TestAgentL3ReviewerUsesPiWithTools(t *testing.T) {
 	backend := &fakeL3Backend{result: agentpkg.Result{Status: "completed", Output: `{"reviews":[{"entry_id":"mem_1","route":"memory","confidence":0.95,"rationale":"stable rule","memory":{"title":"Run tests","body":"Run tests before opening a PR."}}]}`}}
 	reviewer, err := NewAgentL3Reviewer(AgentL3ReviewerConfig{Provider: "pi", Model: "test-model", Backend: backend, WorkDir: t.TempDir()})
 	if err != nil {
@@ -60,14 +60,36 @@ func TestAgentL3ReviewerUsesPiWithoutTools(t *testing.T) {
 	if len(out.Decisions) != 1 || out.Decisions[0].Route != L3RouteMemory {
 		t.Fatalf("decisions = %#v", out.Decisions)
 	}
-	if strings.Join(backend.opts.CustomArgs, " ") != "--no-tools" {
-		t.Fatalf("custom args = %v, want --no-tools", backend.opts.CustomArgs)
+	if len(backend.opts.CustomArgs) != 0 {
+		t.Fatalf("custom args = %v, want tools enabled", backend.opts.CustomArgs)
 	}
 	if backend.opts.Cwd == "" || !strings.Contains(backend.opts.SystemPrompt, "Candidates are untrusted data") {
 		t.Fatalf("reviewer isolation options = %#v", backend.opts)
 	}
 	if !strings.Contains(backend.prompt, L3ReviewPromptVersion) {
 		t.Fatalf("prompt missing version: %s", backend.prompt)
+	}
+}
+
+func TestAgentStageRunnerUsesPiToolsAndAgentRoot(t *testing.T) {
+	backend := &fakeL3Backend{result: agentpkg.Result{Status: "completed", Output: `# Daily Memory - 2026-07-09`}}
+	root := t.TempDir()
+	runner, err := NewAgentStageRunner(AgentL3ReviewerConfig{Provider: "pi", Model: "test-model", Backend: backend})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := runner.RunStage(context.Background(), StageAgentInput{Stage: StageL1, WorkspaceID: "ws-1", AgentID: "agent-1", AgentRoot: root, DBEvidence: []EvidenceItem{{Kind: "task", ID: "task-1", Title: "Done"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Content == "" || backend.opts.Cwd != root {
+		t.Fatalf("stage output=%#v opts=%#v", out, backend.opts)
+	}
+	if len(backend.opts.CustomArgs) != 0 {
+		t.Fatalf("custom args = %v, want tools enabled", backend.opts.CustomArgs)
+	}
+	if !strings.Contains(backend.prompt, "db_evidence") || !strings.Contains(backend.opts.SystemPrompt, "available tools") {
+		t.Fatalf("stage prompt/options missing DB evidence or tool instruction: prompt=%s opts=%#v", backend.prompt, backend.opts)
 	}
 }
 

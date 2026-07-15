@@ -482,20 +482,41 @@ type DaemonHeartbeatPendingLocalSkillImport struct {
 // the explicitly configured runtime. The daemon executes it against local
 // agent roots and reports the structured engine result back to the server.
 type DaemonHeartbeatPendingMemoryCuration struct {
-	ID                  string   `json:"id"`
-	WorkspaceID         string   `json:"workspace_id"`
-	Stage               string   `json:"stage"`
-	DateFrom            string   `json:"date_from"`
-	DateTo              string   `json:"date_to"`
-	AgentIDs            []string `json:"agent_ids"`
-	CuratorAgentID      string   `json:"curator_agent_id"`
-	CuratorModel        string   `json:"curator_model,omitempty"`
-	CuratorInstructions string   `json:"curator_instructions,omitempty"`
-	Timezone            string   `json:"timezone"`
-	IncludeHistory      bool     `json:"include_history"`
-	DryRun              bool     `json:"dry_run"`
-	Force               bool     `json:"force"`
-	ClaimToken          string   `json:"claim_token"`
-	Mode                string   `json:"mode"`
-	ConfidenceThreshold float64  `json:"confidence_threshold"`
+	ID                   string                               `json:"id"`
+	WorkspaceID          string                               `json:"workspace_id"`
+	Stage                string                               `json:"stage"`
+	DateFrom             string                               `json:"date_from"`
+	DateTo               string                               `json:"date_to"`
+	AgentIDs             []string                             `json:"agent_ids"`
+	CuratorAgentID       string                               `json:"curator_agent_id"`
+	CuratorAgentRoot     string                               `json:"curator_agent_root,omitempty"`
+	CuratorModel         string                               `json:"curator_model,omitempty"`
+	CuratorThinkingLevel string                               `json:"curator_thinking_level,omitempty"`
+	CuratorCustomArgs    []string                             `json:"curator_custom_args,omitempty"`
+	CuratorMcpConfig     json.RawMessage                      `json:"curator_mcp_config,omitempty"`
+	CuratorInstructions  string                               `json:"curator_instructions,omitempty"`
+	Timezone             string                               `json:"timezone"`
+	IncludeHistory       bool                                 `json:"include_history"`
+	DryRun               bool                                 `json:"dry_run"`
+	Force                bool                                 `json:"force"`
+	ClaimToken           string                               `json:"claim_token"`
+	Mode                 string                               `json:"mode"`
+	ConfidenceThreshold  float64                              `json:"confidence_threshold"`
+	DBEvidence           []DaemonMemoryCurationEvidenceBundle `json:"db_evidence,omitempty"`
+}
+
+// DaemonMemoryCurationEvidenceBundle carries bounded server-side evidence for
+// one agent. The daemon cannot safely connect to the server database directly,
+// so the server includes relevant evidence in the claimed run intent.
+type DaemonMemoryCurationEvidenceBundle struct {
+	AgentID string                             `json:"agent_id"`
+	Items   []DaemonMemoryCurationEvidenceItem `json:"items"`
+}
+
+type DaemonMemoryCurationEvidenceItem struct {
+	Kind      string `json:"kind"`
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	Snippet   string `json:"snippet"`
+	CreatedAt string `json:"created_at"`
 }

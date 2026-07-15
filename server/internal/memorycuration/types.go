@@ -18,6 +18,8 @@ const (
 type Options struct {
 	Context             context.Context
 	DB                  EvidenceDB
+	DBEvidence          map[string][]EvidenceItem
+	StageAgent          StageAgent
 	WorkspacesRoot      string
 	WorkspaceID         string
 	AgentIDs            []string
@@ -32,6 +34,32 @@ type Options struct {
 	Timezone            string
 	Mode                string
 	ConfidenceThreshold float64
+}
+
+type StageAgent interface {
+	RunStage(context.Context, StageAgentInput) (StageAgentOutput, error)
+}
+
+type StageAgentInput struct {
+	Stage         Stage             `json:"stage"`
+	WorkspaceID   string            `json:"workspace_id"`
+	AgentID       string            `json:"agent_id"`
+	AgentRoot     string            `json:"agent_root"`
+	DateFrom      string            `json:"date_from"`
+	DateTo        string            `json:"date_to"`
+	Timezone      string            `json:"timezone"`
+	Mode          string            `json:"mode,omitempty"`
+	DryRun        bool              `json:"dry_run"`
+	LocalFiles    map[string]string `json:"local_files"`
+	DBEvidence    []EvidenceItem    `json:"db_evidence"`
+	ReviewEntries []L3ReviewEntry   `json:"review_entries,omitempty"`
+}
+
+type StageAgentOutput struct {
+	Provider string        `json:"provider,omitempty"`
+	Model    string        `json:"model,omitempty"`
+	Duration time.Duration `json:"duration,omitempty"`
+	Content  string        `json:"content,omitempty"`
 }
 
 type Result struct {

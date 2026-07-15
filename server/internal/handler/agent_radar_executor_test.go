@@ -266,6 +266,89 @@ func TestExecuteRadarMentionAgentCreatesVisibleGroupDirectiveAndExactWake(t *tes
 	}
 }
 
+func TestExecuteRadarMentionAgentFinalizesEveryTargetOccurrence(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	supervisor := createRadarSupervisorForExecutorTest(t)
+	handle := "actor_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+	targetID := createHandlerTestAgent(t, handle, nil)
+	if _, err := testPool.Exec(ctx, `UPDATE agent SET display_name = '阿策' WHERE id = $1`, targetID); err != nil {
+		t.Fatalf("set target display name: %v", err)
+	}
+	channelID := seedChannelForTest(t, "radar-finalizer-occurrence-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3), ($1, $2, 'agent', $4)
+	`, channelID, testWorkspaceID, targetID, supervisor.ID); err != nil {
+		t.Fatalf("add agents to channel: %v", err)
+	}
+	payload, err := json.Marshal(map[string]string{
+		"channel_id":      channelID,
+		"target_agent_id": targetID,
+		// Reproduce the live failure shape: Radar prepends the canonical target
+		// handle, while model content repeats the same handle later.
+		"content": "@" + handle + " 请复核并推进",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := testHandler.executeApprovedRadarActionWithTarget(ctx, db.AgentRadarRun{
+		WorkspaceID: supervisor.WorkspaceID,
+		AgentID:     supervisor.ID,
+	}, supervisor, radar.RadarAction{Type: radar.ActionMentionAgent, Payload: payload}); err != nil {
+		t.Fatalf("execute repeated-target radar directive: %v", err)
+	}
+
+	var content string
+	var rawParts []byte
+	if err := testPool.QueryRow(ctx, `
+		SELECT content, parts
+		FROM channel_message
+		WHERE channel_id = $1 AND author_type = 'agent' AND author_id = $2
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, channelID, supervisor.ID).Scan(&content, &rawParts); err != nil {
+		t.Fatalf("load repeated-target radar directive: %v", err)
+	}
+	var occurrences []protocol.MessagePart
+	for _, part := range messageparts.Decode(rawParts) {
+		if part.Type == protocol.MessagePartTypeReference && part.RefType == "mention" && part.RefSubType == "agent" && part.RefID == targetID {
+			occurrences = append(occurrences, part)
+		}
+	}
+	if len(occurrences) != 2 {
+		t.Fatalf("target reference occurrences = %d, want 2; content=%q parts=%s", len(occurrences), content, rawParts)
+	}
+	if occurrences[0].ContentStartUTF16 == nil || occurrences[1].ContentStartUTF16 == nil || *occurrences[0].ContentStartUTF16 == *occurrences[1].ContentStartUTF16 {
+		t.Fatalf("target occurrence spans are not distinct: %+v", occurrences)
+	}
+	if occurrences[0].Label != "@"+handle || occurrences[1].Label != "@"+handle {
+		t.Fatalf("target occurrence labels = %q/%q, want @%s", occurrences[0].Label, occurrences[1].Label, handle)
+	}
+}
+
+func TestValidateFinalizedRadarDirectiveMentionsRejectsNonTarget(t *testing.T) {
+	targetID := parseUUID(uuid.NewString())
+	otherID := uuid.NewString()
+	start, end := 0, 8
+	err := validateFinalizedRadarDirectiveMentions([]protocol.MessagePart{{
+		Type:              protocol.MessagePartTypeReference,
+		RefType:           "mention",
+		RefSubType:        "agent",
+		RefID:             otherID,
+		Label:             "@someone",
+		ContentStartUTF16: &start,
+		ContentEndUTF16:   &end,
+	}}, targetID)
+	if err == nil {
+		t.Fatal("finalized radar directive accepted a non-target mention")
+	}
+}
+
 func TestExecuteRadarMentionAgentRejectsManualAndEventSupervisorOutsideGroup(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -1343,6 +1426,52 @@ func TestExecuteRadarChannelPostPublishesMessageToChannelMembers(t *testing.T) {
 		}
 	default:
 		t.Fatal("radar message was persisted but no realtime channel event was published")
+	}
+}
+
+func TestExecuteRadarChannelPostFinalizesDestinationReferences(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	publisherID := createHandlerTestAgent(t, "Radar Ref Publisher "+uuid.NewString(), nil)
+	publisher, err := testHandler.Queries.GetAgent(ctx, parseUUID(publisherID))
+	if err != nil {
+		t.Fatalf("load publisher: %v", err)
+	}
+	targetHandle := "radar_ref_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+	targetID := createHandlerTestAgent(t, targetHandle, nil)
+	channelID := seedChannelForTest(t, "radar-reference-finalizer-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3), ($1, $2, 'agent', $4)
+	`, channelID, testWorkspaceID, publisherID, targetID); err != nil {
+		t.Fatalf("add radar agents to channel: %v", err)
+	}
+	payload, err := json.Marshal(radarChannelPayload{
+		ChannelID: channelID,
+		Content:   "请 @" + targetHandle + " 查看这个发现",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := testHandler.executeRadarChannelPost(ctx, db.AgentRadarRun{
+		WorkspaceID: parseUUID(testWorkspaceID),
+	}, publisher, radar.RadarAction{Type: radar.ActionPostChannelMessage, Payload: payload})
+	if err != nil {
+		t.Fatalf("execute radar channel post: %v", err)
+	}
+	messageID, _ := result["channel_message_id"].(string)
+	var content string
+	var rawParts []byte
+	if err := testPool.QueryRow(ctx, `SELECT content, parts FROM channel_message WHERE id = $1`, messageID).Scan(&content, &rawParts); err != nil {
+		t.Fatalf("load finalized radar post parts: %v", err)
+	}
+	mentions := util.ParseMentionsFromContentAndParts(content, messageparts.Decode(rawParts))
+	if len(mentions) != 1 || mentions[0].Type != "agent" || mentions[0].ID != targetID {
+		t.Fatalf("finalized radar post mentions = %+v, want agent/%s; parts=%s", mentions, targetID, rawParts)
 	}
 }
 

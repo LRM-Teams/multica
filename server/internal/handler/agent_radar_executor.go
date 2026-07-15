@@ -42,6 +42,7 @@ type radarTransactionalExecution struct {
 
 type radarChannelExecutionTarget struct {
 	ChannelID  pgtype.UUID
+	Channel    ChannelResponse
 	ThreadRoot pgtype.UUID
 	ThreadID   *string
 	Activity   radarActivityTarget
@@ -655,7 +656,11 @@ func (h *Handler) executeRadarChannelPostWithTarget(ctx context.Context, run db.
 		return nil, radarActivityTarget{}, err
 	}
 	content := "主动发现：" + strings.TrimSpace(payload.Content)
-	msg, err := h.insertChannelMessage(ctx, target.ChannelID, run.WorkspaceID, "agent", agent.ID, agentDisplayName(agent), content, "multica", nil, pgtype.UUID{}, target.ThreadRoot, target.ThreadID, 0)
+	content, parts, err := h.finalizeAgentChannelMessage(ctx, target.Channel, content, nil)
+	if err != nil {
+		return nil, target.Activity, fmt.Errorf("finalize radar channel post: %w", err)
+	}
+	msg, err := h.insertChannelMessageWithParts(ctx, target.ChannelID, run.WorkspaceID, "agent", agent.ID, agentDisplayName(agent), content, parts, "multica", nil, pgtype.UUID{}, target.ThreadRoot, target.ThreadID, 0)
 	if err != nil {
 		return nil, target.Activity, err
 	}
@@ -782,6 +787,15 @@ func (h *Handler) executePreparedRadarAgentMentionInTx(ctx context.Context, qtx 
 	if err := h.lockRadarChannelDirectiveTarget(ctx, exec, run.WorkspaceID, directive.Target.ChannelID, directive.TargetAgent.ID, directive.Target.ThreadRoot); err != nil {
 		return execution, err
 	}
+	content, parts, err := h.finalizeAgentChannelMessage(ctx, directive.Channel, directive.Content, directive.Parts)
+	if err != nil {
+		return execution, fmt.Errorf("finalize radar directive: %w", err)
+	}
+	if err := validateFinalizedRadarDirectiveMentions(parts, directive.TargetAgent.ID); err != nil {
+		return execution, err
+	}
+	directive.Content = content
+	directive.Parts = parts
 
 	msg, err := insertChannelMessageWithPartsExec(
 		ctx, exec, directive.Target.ChannelID, run.WorkspaceID,
@@ -907,6 +921,7 @@ func (h *Handler) resolveRadarChannelExecutionTarget(ctx context.Context, run db
 
 	target := radarChannelExecutionTarget{
 		ChannelID: channelID,
+		Channel:   channel,
 		Activity: radarActivityTarget{
 			Kind:    "channel",
 			ID:      channelID,
@@ -968,6 +983,24 @@ func validateRadarDirectiveContent(content string) error {
 	}
 	if strings.Contains(strings.ToLower(trimmed), "mention://") {
 		return errors.New("directive content must not contain mention links")
+	}
+	return nil
+}
+
+func validateFinalizedRadarDirectiveMentions(parts []protocol.MessagePart, targetAgentID pgtype.UUID) error {
+	wantID := uuidToString(targetAgentID)
+	mentionCount := 0
+	for _, part := range parts {
+		if part.Type != protocol.MessagePartTypeReference || part.RefType != "mention" {
+			continue
+		}
+		mentionCount++
+		if part.RefSubType != "agent" || part.RefID != wantID {
+			return errors.New("radar directive may only mention its target agent")
+		}
+	}
+	if mentionCount == 0 {
+		return errors.New("radar directive target mention is required")
 	}
 	return nil
 }

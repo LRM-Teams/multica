@@ -148,9 +148,17 @@ func TestWendyDispatchMentionsMemberWithoutAgentWake(t *testing.T) {
 	}
 	fixture := seedWendyUnlockDispatchFixture(t)
 	node := fixture.nodeForIssue(t, fixture.issueC)
-	var memberID string
-	if err := testPool.QueryRow(context.Background(), `SELECT id FROM member WHERE workspace_id = $1 AND user_id = $2`, testWorkspaceID, testUserID).Scan(&memberID); err != nil {
+	var memberID, memberName string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT m.id, COALESCE(NULLIF(u.display_name, ''), NULLIF(u.name, ''), '成员')
+		FROM member m
+		JOIN "user" u ON u.id = m.user_id
+		WHERE m.workspace_id = $1 AND m.user_id = $2
+	`, testWorkspaceID, testUserID).Scan(&memberID, &memberName); err != nil {
 		t.Fatalf("load member target: %v", err)
+	}
+	if memberID == testUserID {
+		t.Fatalf("fixture member.id unexpectedly equals user.id: %s", memberID)
 	}
 	if _, err := testPool.Exec(context.Background(), `
 		INSERT INTO pending_handoff (
@@ -173,6 +181,35 @@ func TestWendyDispatchMentionsMemberWithoutAgentWake(t *testing.T) {
 	}
 	if status != "done" {
 		t.Fatalf("member handoff status = %q, want done", status)
+	}
+	var content string
+	var rawParts []byte
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT content, parts
+		FROM channel_message
+		WHERE channel_id = $1 AND author_type = 'agent' AND author_id = $2
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, fixture.channelID, fixture.wendyID).Scan(&content, &rawParts); err != nil {
+		t.Fatalf("load Wendy member handoff message: %v", err)
+	}
+	parts := messageparts.Decode(rawParts)
+	if len(parts) != 1 {
+		t.Fatalf("member handoff parts = %+v, want one destination-scoped reference", parts)
+	}
+	label := directedAgentMentionLabel(memberName)
+	start, end := contentUTF16Span(content, 0, len(label))
+	part := parts[0]
+	if part.Type != protocol.MessagePartTypeReference || part.RefType != "mention" || part.RefSubType != "member" || part.RefID != testUserID || part.Label != label || part.ContentStartUTF16 == nil || *part.ContentStartUTF16 != start || part.ContentEndUTF16 == nil || *part.ContentEndUTF16 != end {
+		t.Fatalf("member handoff reference = %+v, want member/%s label %q span [%d,%d)", part, testUserID, label, start, end)
+	}
+	if err := validateWendyHandoffContent(content, parts, "member", testUserID); err != nil {
+		t.Fatalf("validate persisted member handoff: %v", err)
+	}
+	foreignParts := append([]protocol.MessagePart(nil), parts...)
+	foreignParts[0].RefID = uuid.NewString()
+	if err := validateWendyHandoffContent(content, foreignParts, "member", testUserID); err == nil {
+		t.Fatal("validate Wendy member handoff accepted a non-target member reference")
 	}
 	var wakeCount int
 	if err := testPool.QueryRow(context.Background(), `SELECT count(*) FROM agent_inbox_event WHERE channel_id = $1`, fixture.channelID).Scan(&wakeCount); err != nil {

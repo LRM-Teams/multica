@@ -11,7 +11,7 @@ import (
 const JobNameWendyHandoffDispatch = "wendy_handoff_dispatch"
 
 const (
-	wendyHandoffDispatchCadence = 15 * time.Second
+	wendyHandoffDispatchCadence = 5 * time.Minute
 	wendyHandoffDispatchLimit   = int32(10)
 )
 
@@ -55,8 +55,8 @@ func WendyHandoffDispatchJob(h *handler.Handler, pool *pgxpool.Pool) JobSpec {
 				return HandlerResult{
 					RowsAffected: int64(dispatched + ambient),
 					Result: map[string]any{
-						"dispatched": dispatched,
-						"ambient":    ambient,
+						"dispatched":  dispatched,
+						"ambient":     ambient,
 						"idle_nudged": idle,
 					},
 				}, idleErr

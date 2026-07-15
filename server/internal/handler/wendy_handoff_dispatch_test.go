@@ -157,6 +157,9 @@ func TestWendyDispatchMentionsMemberWithoutAgentWake(t *testing.T) {
 	`, testWorkspaceID, testUserID).Scan(&memberID, &memberName); err != nil {
 		t.Fatalf("load member target: %v", err)
 	}
+	if memberID == testUserID {
+		t.Fatalf("fixture member.id unexpectedly equals user.id: %s", memberID)
+	}
 	if _, err := testPool.Exec(context.Background(), `
 		INSERT INTO pending_handoff (
 			workspace_id, urgency, reason_code, target_actor_type, target_actor_id,

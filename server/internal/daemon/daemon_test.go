@@ -1229,6 +1229,7 @@ func TestHandleTask_InboxCompleteUsesInboxEndpoint(t *testing.T) {
 	})
 	d.handleTask(context.Background(), Task{
 		ID:            "event-123",
+		AgentID:       "agent-123",
 		RuntimeID:     "rt-1",
 		WorkspaceID:   "ws-1",
 		ChatSessionID: "chat-123",
@@ -1314,6 +1315,7 @@ func TestHandleTask_InboxFailureUsesInboxEndpointWithClassifier(t *testing.T) {
 	})
 	d.handleTask(context.Background(), Task{
 		ID:            "event-123",
+		AgentID:       "agent-123",
 		RuntimeID:     "rt-1",
 		WorkspaceID:   "ws-1",
 		ChatSessionID: "chat-123",
@@ -1330,6 +1332,223 @@ func TestHandleTask_InboxFailureUsesInboxEndpointWithClassifier(t *testing.T) {
 	}
 	if !renewSeen.Load() {
 		t.Fatal("inbox renew endpoint was not called")
+	}
+}
+
+func TestAcquireInboxAgentSlotSerializesSameAgentAndAllowsDifferentAgents(t *testing.T) {
+	t.Parallel()
+
+	d := &Daemon{}
+	firstRelease, err := d.acquireInboxAgentSlot(context.Background(), "agent-a")
+	if err != nil {
+		t.Fatalf("acquire first agent-a slot: %v", err)
+	}
+
+	secondAcquired := make(chan func(), 1)
+	go func() {
+		release, acquireErr := d.acquireInboxAgentSlot(context.Background(), "agent-a")
+		if acquireErr == nil {
+			secondAcquired <- release
+		}
+	}()
+	select {
+	case release := <-secondAcquired:
+		release()
+		t.Fatal("second execution for the same agent acquired before the first released")
+	case <-time.After(30 * time.Millisecond):
+	}
+
+	differentRelease, err := d.acquireInboxAgentSlot(context.Background(), "agent-b")
+	if err != nil {
+		t.Fatalf("different agent should acquire concurrently: %v", err)
+	}
+	differentRelease()
+
+	firstRelease()
+	select {
+	case release := <-secondAcquired:
+		release()
+	case <-time.After(time.Second):
+		t.Fatal("second same-agent execution did not acquire after release")
+	}
+}
+
+func TestHandleTask_InboxLeaseRejectionStopsBeforeRunner(t *testing.T) {
+	t.Parallel()
+
+	var terminalSeen atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/renew") {
+			http.Error(w, `{"error":"delivery lease is no longer active"}`, http.StatusConflict)
+			return
+		}
+		terminalSeen.Store(true)
+		http.Error(w, `{"error":"unexpected terminal callback"}`, http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+
+	var runnerCalled atomic.Bool
+	d := &Daemon{
+		client:             NewClient(srv.URL),
+		logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+		workspaces:         make(map[string]*workspaceState),
+		runtimeIndex:       map[string]Runtime{"rt-1": {ID: "rt-1", Provider: "claude"}},
+		cancelPollInterval: 10 * time.Millisecond,
+	}
+	d.runner = taskRunnerFunc(func(context.Context, Task, string, int, *slog.Logger) (TaskResult, error) {
+		runnerCalled.Store(true)
+		return TaskResult{Status: "completed", Comment: "must not publish"}, nil
+	})
+
+	d.handleTask(context.Background(), Task{
+		ID:            "event-stale",
+		AgentID:       "agent-123",
+		RuntimeID:     "rt-1",
+		WorkspaceID:   "ws-1",
+		ChatSessionID: "chat-123",
+		Agent:         &AgentData{ID: "agent-123", Name: "inbox-agent"},
+		InboxEvent: &AgentInboxLease{
+			ID:         "event-stale",
+			DeliveryID: "delivery-stale",
+			LeaseToken: "lease-stale",
+			SeqTo:      42,
+		},
+	}, 0)
+
+	if runnerCalled.Load() {
+		t.Fatal("runner started after the inbox lease was permanently rejected")
+	}
+	if terminalSeen.Load() {
+		t.Fatal("stale inbox execution attempted a terminal callback")
+	}
+}
+
+func TestHandleTask_InboxLeaseLossAfterRunnerDoesNotCancelTerminalReport(t *testing.T) {
+	t.Parallel()
+
+	var renewCount atomic.Int32
+	secondRenew := make(chan struct{})
+	var secondRenewOnce sync.Once
+	var completeSeen atomic.Bool
+	var failSeen atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/renew"):
+			if renewCount.Add(1) == 1 {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"ok":true}`))
+				return
+			}
+			secondRenewOnce.Do(func() { close(secondRenew) })
+			http.Error(w, `{"error":"delivery lease is no longer active"}`, http.StatusConflict)
+		case strings.HasSuffix(r.URL.Path, "/complete"):
+			select {
+			case <-secondRenew:
+			case <-time.After(time.Second):
+				t.Error("second renew did not race with terminal report")
+			}
+			completeSeen.Store(true)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		case strings.HasSuffix(r.URL.Path, "/fail"):
+			failSeen.Store(true)
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	d := &Daemon{
+		client:             NewClient(srv.URL),
+		logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+		workspaces:         make(map[string]*workspaceState),
+		runtimeIndex:       map[string]Runtime{"rt-1": {ID: "rt-1", Provider: "claude"}},
+		cancelPollInterval: 10 * time.Millisecond,
+	}
+	d.runner = taskRunnerFunc(func(context.Context, Task, string, int, *slog.Logger) (TaskResult, error) {
+		return TaskResult{Status: "completed", Comment: "reply"}, nil
+	})
+	d.handleTask(context.Background(), Task{
+		ID:            "event-terminal-race",
+		AgentID:       "agent-123",
+		RuntimeID:     "rt-1",
+		WorkspaceID:   "ws-1",
+		ChatSessionID: "chat-123",
+		Agent:         &AgentData{ID: "agent-123", Name: "inbox-agent"},
+		InboxEvent: &AgentInboxLease{
+			ID:         "event-terminal-race",
+			DeliveryID: "delivery-terminal-race",
+			LeaseToken: "lease-terminal-race",
+			SeqTo:      42,
+		},
+	}, 0)
+
+	if !completeSeen.Load() {
+		t.Fatal("terminal report was cancelled by a racing lease rejection")
+	}
+	if failSeen.Load() {
+		t.Fatal("successful terminal report fell back to fail")
+	}
+}
+
+func TestHandleTask_InboxLeaseLossCancelsRunningExecutor(t *testing.T) {
+	t.Parallel()
+
+	var renewCount atomic.Int32
+	var terminalSeen atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/renew") {
+			if renewCount.Add(1) == 1 {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"ok":true}`))
+				return
+			}
+			http.Error(w, `{"error":"delivery lease is no longer active"}`, http.StatusConflict)
+			return
+		}
+		terminalSeen.Store(true)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	var runnerCancelled atomic.Bool
+	d := &Daemon{
+		client:             NewClient(srv.URL),
+		logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+		workspaces:         make(map[string]*workspaceState),
+		runtimeIndex:       map[string]Runtime{"rt-1": {ID: "rt-1", Provider: "claude"}},
+		cancelPollInterval: 10 * time.Millisecond,
+	}
+	d.runner = taskRunnerFunc(func(ctx context.Context, _ Task, _ string, _ int, _ *slog.Logger) (TaskResult, error) {
+		select {
+		case <-ctx.Done():
+			runnerCancelled.Store(true)
+			return TaskResult{}, ctx.Err()
+		case <-time.After(time.Second):
+			return TaskResult{}, errors.New("runner was not cancelled after lease loss")
+		}
+	})
+	d.handleTask(context.Background(), Task{
+		ID:            "event-running-stale",
+		AgentID:       "agent-123",
+		RuntimeID:     "rt-1",
+		WorkspaceID:   "ws-1",
+		ChatSessionID: "chat-123",
+		Agent:         &AgentData{ID: "agent-123", Name: "inbox-agent"},
+		InboxEvent: &AgentInboxLease{
+			ID:         "event-running-stale",
+			DeliveryID: "delivery-running-stale",
+			LeaseToken: "lease-running-stale",
+			SeqTo:      42,
+		},
+	}, 0)
+
+	if !runnerCancelled.Load() {
+		t.Fatal("running executor was not cancelled after lease loss")
+	}
+	if terminalSeen.Load() {
+		t.Fatal("stale running executor attempted a terminal callback")
 	}
 }
 

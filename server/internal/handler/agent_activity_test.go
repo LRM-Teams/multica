@@ -572,7 +572,7 @@ func TestAgentActivityEvents_CursorUsesOccurredAt(t *testing.T) {
 			workspace_id, agent_id, event_kind, event_type, severity,
 			target_kind, target_id, message, details, visibility, created_at
 		)
-		SELECT $1, $2, 'thinking', 'thinking', 'info', 'dm', $3, 'cursor event ' || g, '{}'::jsonb, 'user_facing', now() - (g || ' seconds')::interval
+		SELECT $1, $2, 'text', 'text', 'info', 'dm', $3, 'cursor event ' || g, '{}'::jsonb, 'user_facing', now() - (g || ' seconds')::interval
 		FROM generate_series(1, 2) AS g
 	`, testWorkspaceID, agentID, dmSessionID); err != nil {
 		t.Fatalf("insert cursor events: %v", err)

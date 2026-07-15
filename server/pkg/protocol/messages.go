@@ -21,8 +21,6 @@ type MessagePart struct {
 	RefSubType string `json:"ref_subtype,omitempty"`
 	RefID      string `json:"ref_id,omitempty"`
 	Label      string `json:"label,omitempty"`
-	RefTitle   string `json:"ref_title,omitempty"`
-	RefStatus  string `json:"ref_status,omitempty"`
 	// ContentStartUTF16 and ContentEndUTF16 anchor a reference to the exact
 	// UTF-16 code-unit range in the message's canonical content. They are
 	// pointers so zero is representable and a missing pair is unambiguous.

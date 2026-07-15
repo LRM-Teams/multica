@@ -101,8 +101,6 @@ func (h *Handler) resolveBareChannelIssueReferences(ctx context.Context, workspa
 			RefSubType:        "issue",
 			RefID:             uuidToString(issue.ID),
 			Label:             identifier.Label,
-			RefTitle:          issue.Title,
-			RefStatus:         issue.Status,
 			ContentStartUTF16: &start,
 			ContentEndUTF16:   &end,
 		})

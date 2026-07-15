@@ -221,8 +221,6 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 		part.RefSubType = ""
 		part.RefID = ""
 		part.Label = ""
-		part.RefTitle = ""
-		part.RefStatus = ""
 		part.Event = ""
 		part.EventParams = nil
 		part.ContentStartUTF16 = nil
@@ -240,8 +238,6 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 		part.RefSubType = strings.TrimSpace(part.RefSubType)
 		part.RefID = strings.TrimSpace(part.RefID)
 		part.Label = strings.TrimSpace(part.Label)
-		part.RefTitle = strings.TrimSpace(part.RefTitle)
-		part.RefStatus = strings.TrimSpace(part.RefStatus)
 		part.Event = ""
 		part.EventParams = nil
 		// Source ranges are server-authored enrichment facts. Callers can submit
@@ -257,8 +253,6 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 		}
 		switch part.RefType {
 		case "mention":
-			part.RefTitle = ""
-			part.RefStatus = ""
 			if part.RefSubType == "" {
 				return protocol.MessagePart{}, fmt.Errorf("ref_subtype is required for mention reference")
 			}
@@ -292,8 +286,6 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 		part.RefSubType = ""
 		part.RefID = ""
 		part.Label = ""
-		part.RefTitle = ""
-		part.RefStatus = ""
 		part.Event = ""
 		part.EventParams = nil
 		part.ContentStartUTF16 = nil
@@ -334,8 +326,6 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 		part.RefSubType = ""
 		part.RefID = ""
 		part.Label = ""
-		part.RefTitle = ""
-		part.RefStatus = ""
 		part.ContentStartUTF16 = nil
 		part.ContentEndUTF16 = nil
 		part.PackID = ""
@@ -356,8 +346,6 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 		part.RefSubType = ""
 		part.RefID = ""
 		part.Label = ""
-		part.RefTitle = ""
-		part.RefStatus = ""
 		part.Event = ""
 		part.EventParams = nil
 		part.ContentStartUTF16 = nil

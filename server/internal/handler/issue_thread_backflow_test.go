@@ -59,9 +59,9 @@ func TestIssueThreadBackflowWritesTargetedEventsWithoutWakingOtherAgents(t *test
 	assertIssueThreadBackflowEvent(t, events[0], issueThreadAssignedEvent, assigneeID)
 	assertIssueThreadBackflowEvent(t, events[1], issueThreadStatusChangedEvent, assigneeID)
 	assertIssueThreadBackflowEvent(t, events[2], issueThreadCompletedEvent, creatorID)
-	assertIssueThreadBackflowReference(t, events[0], issueID, "Issue backflow target", "todo")
-	assertIssueThreadBackflowReference(t, events[1], issueID, "Issue backflow target", "in_progress")
-	assertIssueThreadBackflowReference(t, events[2], issueID, "Issue backflow target", "done")
+	assertIssueThreadBackflowReference(t, events[0], issueID)
+	assertIssueThreadBackflowReference(t, events[1], issueID)
+	assertIssueThreadBackflowReference(t, events[2], issueID)
 
 	for _, agentID := range []string{creatorID, assigneeID} {
 		var count int
@@ -116,7 +116,7 @@ func TestIssueThreadBackflowLeavesNonMembersUntargeted(t *testing.T) {
 	if len(events) != 3 {
 		t.Fatalf("system event count = %d, want 3 (%+v)", len(events), events)
 	}
-	for i, event := range events {
+	for _, event := range events {
 		if event.Params.TargetID != "" || event.Params.TargetType != "" || event.Params.TargetHandle != "" || event.Params.TargetName != "" {
 			t.Fatalf("non-member event retained a target: %#v", event.Params)
 		}
@@ -126,8 +126,7 @@ func TestIssueThreadBackflowLeavesNonMembersUntargeted(t *testing.T) {
 		if strings.Contains(event.Content, "@") {
 			t.Fatalf("non-member event content = %q, want no directed mention", event.Content)
 		}
-		wantStatus := []string{"todo", "in_progress", "done"}[i]
-		assertIssueThreadBackflowReference(t, event, issueID, "Issue backflow external target", wantStatus)
+		assertIssueThreadBackflowReference(t, event, issueID)
 	}
 	for _, agentID := range []string{creatorID, assigneeID} {
 		var count int
@@ -211,7 +210,7 @@ func assertIssueThreadBackflowEvent(t *testing.T, got issueThreadBackflowEventFo
 	}
 }
 
-func assertIssueThreadBackflowReference(t *testing.T, got issueThreadBackflowEventForTest, wantIssueID, wantTitle, wantStatus string) {
+func assertIssueThreadBackflowReference(t *testing.T, got issueThreadBackflowEventForTest, wantIssueID string) {
 	t.Helper()
 	if len(got.Parts) < 2 {
 		t.Fatalf("parts = %+v, want anchored issue reference", got.Parts)
@@ -220,8 +219,8 @@ func assertIssueThreadBackflowReference(t *testing.T, got issueThreadBackflowEve
 	if ref.Type != protocol.MessagePartTypeReference || ref.RefType != "issue-ref" || ref.RefSubType != "issue" {
 		t.Fatalf("issue reference part = %+v, want typed issue-ref", ref)
 	}
-	if ref.RefID != wantIssueID || ref.Label != got.Params.IssueIdentifier || ref.RefTitle != wantTitle || ref.RefStatus != wantStatus {
-		t.Fatalf("issue reference part = %+v, want id=%s label=%s title=%q status=%q", ref, wantIssueID, got.Params.IssueIdentifier, wantTitle, wantStatus)
+	if ref.RefID != wantIssueID || ref.Label != got.Params.IssueIdentifier {
+		t.Fatalf("issue reference part = %+v, want id=%s label=%s", ref, wantIssueID, got.Params.IssueIdentifier)
 	}
 	if ref.ContentStartUTF16 == nil || ref.ContentEndUTF16 == nil || *ref.ContentStartUTF16 != 0 || *ref.ContentEndUTF16 != len(got.Params.IssueIdentifier) {
 		t.Fatalf("issue reference span = %+v, want exact leading identifier span [0,%d)", ref, len(got.Params.IssueIdentifier))

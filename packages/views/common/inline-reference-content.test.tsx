@@ -149,39 +149,23 @@ describe("InlineReferenceContent (#463 projector consumer)", () => {
     expect(screen.getAllByText("#MUL-9").some((el) => el.closest("a"))).toBe(true);
   });
 
-  // THE regression for #504. The persisted part is a snapshot taken when the
-  // message was written; if the issue moves on, the peek must follow the issue,
-  // never the snapshot. (This ordering — write message, THEN mutate issue — is the
-  // only shape that exposes staleness; fixtures built the other way always pass.)
-  it("renders the LIVE status, never the stale snapshot on the part (#504)", () => {
-    const stalePart = {
-      ...issueRef(4, 10),
-      ref_title: "OLD title from write time",
-      ref_status: "todo",
-    } as MessagePart;
+  // THE regression for #504. The persisted part is anchor/identity only; all
+  // mutable entity state comes from the live issue query.
+  it("renders the LIVE issue state from the entity query (#504)", () => {
     resolvedIssue = { id: "issue-uuid", title: "Current title", status: "in_progress" };
 
-    render(<InlineReferenceContent content="see #MUL-9 pls" parts={[stalePart]} />);
+    render(<InlineReferenceContent content="see #MUL-9 pls" parts={[issueRef(4, 10)]} />);
 
     expect(screen.getByText("Current title")).toBeInTheDocument();
-    expect(screen.queryByText("OLD title from write time")).toBeNull();
-    // in_progress renderer, not the snapshot's todo.
     expect(screen.getByTestId("status-icon")).toHaveAttribute("data-status", "in_progress");
   });
 
   it("degrades to a plain clickable token while the issue is unresolved (#469)", () => {
-    // Loading / deleted / other workspace / no permission → no card, and we do
-    // NOT fall back to the part's snapshot.
+    // Loading / deleted / other workspace / no permission → no card.
     resolvedIssue = undefined;
-    const partWithSnapshot = {
-      ...issueRef(4, 10),
-      ref_title: "Snapshot title",
-      ref_status: "done",
-    } as MessagePart;
-    render(<InlineReferenceContent content="see #MUL-9 pls" parts={[partWithSnapshot]} />);
+    render(<InlineReferenceContent content="see #MUL-9 pls" parts={[issueRef(4, 10)]} />);
 
     expect(screen.queryByTestId("issue-hover-card")).toBeNull();
-    expect(screen.queryByText("Snapshot title")).toBeNull();
     expect(screen.getByText("#MUL-9").closest("a")).not.toBeNull();
   });
 

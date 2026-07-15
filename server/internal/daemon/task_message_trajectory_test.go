@@ -8,14 +8,14 @@ import (
 
 func TestTaskMessageTrajectoryBufferCoalescesUntilQuiet(t *testing.T) {
 	var got []TaskMessageData
-	emit := func(kind, text string) {
-		got = append(got, TaskMessageData{Type: kind, Content: text})
+	emit := func(kind, text, lineage string) {
+		got = append(got, TaskMessageData{Type: kind, Content: text, Lineage: lineage})
 	}
 
 	var buffer taskMessageTrajectoryBuffer
 	start := time.Unix(100, 0)
-	buffer.append("thinking", "Frank ", start, emit)
-	buffer.append("thinking", "said hi.", start.Add(100*time.Millisecond), emit)
+	buffer.append("thinking", "Frank ", "main", start, emit)
+	buffer.append("thinking", "said hi.", "main", start.Add(100*time.Millisecond), emit)
 	buffer.flush(start.Add(300*time.Millisecond), false, emit)
 	if len(got) != 0 {
 		t.Fatalf("flush before quiet window emitted %+v", got)
@@ -32,14 +32,14 @@ func TestTaskMessageTrajectoryBufferCoalescesUntilQuiet(t *testing.T) {
 
 func TestTaskMessageTrajectoryBufferFlushesOnKindSwitch(t *testing.T) {
 	var got []TaskMessageData
-	emit := func(kind, text string) {
-		got = append(got, TaskMessageData{Type: kind, Content: text})
+	emit := func(kind, text, lineage string) {
+		got = append(got, TaskMessageData{Type: kind, Content: text, Lineage: lineage})
 	}
 
 	var buffer taskMessageTrajectoryBuffer
 	start := time.Unix(100, 0)
-	buffer.append("thinking", "thinking", start, emit)
-	buffer.append("text", "answer", start.Add(10*time.Millisecond), emit)
+	buffer.append("thinking", "thinking", "main", start, emit)
+	buffer.append("text", "answer", "main", start.Add(10*time.Millisecond), emit)
 	buffer.flush(start.Add(20*time.Millisecond), true, emit)
 
 	if len(got) != 2 {
@@ -55,12 +55,12 @@ func TestTaskMessageTrajectoryBufferFlushesOnKindSwitch(t *testing.T) {
 
 func TestTaskMessageTrajectoryBufferTruncatesLikeRaft(t *testing.T) {
 	var got []TaskMessageData
-	emit := func(kind, text string) {
-		got = append(got, TaskMessageData{Type: kind, Content: text})
+	emit := func(kind, text, lineage string) {
+		got = append(got, TaskMessageData{Type: kind, Content: text, Lineage: lineage})
 	}
 
 	var buffer taskMessageTrajectoryBuffer
-	buffer.append("thinking", strings.Repeat("你", taskMessageTrajectoryMaxChars+5), time.Unix(100, 0), emit)
+	buffer.append("thinking", strings.Repeat("你", taskMessageTrajectoryMaxChars+5), "main", time.Unix(100, 0), emit)
 	buffer.flush(time.Unix(101, 0), true, emit)
 
 	if len(got) != 1 {
@@ -71,5 +71,43 @@ func TestTaskMessageTrajectoryBufferTruncatesLikeRaft(t *testing.T) {
 	}
 	if !strings.HasSuffix(got[0].Content, "…") {
 		t.Fatalf("truncated content missing ellipsis suffix")
+	}
+}
+
+func TestTaskMessageTrajectoryBufferFlushesOnLineageSwitch(t *testing.T) {
+	var got []TaskMessageData
+	emit := func(kind, text, lineage string) {
+		got = append(got, TaskMessageData{Type: kind, Content: text, Lineage: lineage})
+	}
+
+	var buffer taskMessageTrajectoryBuffer
+	start := time.Unix(100, 0)
+	buffer.append("thinking", "main plan", "main", start, emit)
+	buffer.append("thinking", "child plan", "subagent:review", start.Add(10*time.Millisecond), emit)
+	buffer.flush(start.Add(20*time.Millisecond), true, emit)
+
+	if len(got) != 2 {
+		t.Fatalf("expected lineage boundary to flush, got %+v", got)
+	}
+	if got[0].Content != "main plan" || got[0].Lineage != "main" {
+		t.Fatalf("unexpected first lineage row: %+v", got[0])
+	}
+	if got[1].Content != "child plan" || got[1].Lineage != "subagent:review" {
+		t.Fatalf("unexpected second lineage row: %+v", got[1])
+	}
+}
+
+func TestTaskMessagePhaseTrackerEmitsOnceUntilBoundary(t *testing.T) {
+	var phase taskMessagePhaseTracker
+	if !phase.enter() {
+		t.Fatal("first trajectory message must enter the thinking phase")
+	}
+	if phase.enter() {
+		t.Fatal("same phase must not emit another bare thinking status")
+	}
+
+	phase.leave() // tool or terminal boundary
+	if !phase.enter() {
+		t.Fatal("first trajectory message after a boundary must restore Thinking")
 	}
 }

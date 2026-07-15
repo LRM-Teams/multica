@@ -106,6 +106,7 @@ type Message struct {
 	Output    string         // tool output (ToolResult)
 	Status    string         // agent status string (Status)
 	Level     string         // log level (Log)
+	Lineage   string         // runtime subagent lineage (Thinking, Text)
 	SessionID string         // backend session id (Status), for early resume-pointer pinning
 }
 

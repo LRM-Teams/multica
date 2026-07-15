@@ -2675,6 +2675,160 @@ func TestCompleteTask_GroupChannelSendActionWritesMessage(t *testing.T) {
 	}
 }
 
+func TestCompleteTask_CrossChannelTargetFinalizesMentionsInDestination(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	for _, targetKind := range []string{"channel", "thread"} {
+		t.Run(targetKind, func(t *testing.T) {
+			taskID, sourceChannelID := createChannelCompletionTask(t, "group")
+			senderID := agentIDForTask(t, taskID)
+			sharedDisplayName := "Cross Destination " + uuid.NewString()
+			sourceOnlyID := createHandlerTestAgent(t, "source-only-"+uuid.NewString(), nil)
+			targetOnlyID := createHandlerTestAgent(t, "target-only-"+uuid.NewString(), nil)
+			if _, err := testPool.Exec(ctx, `
+				UPDATE agent
+				SET display_name = $2
+				WHERE id = ANY($1::uuid[])
+			`, []string{sourceOnlyID, targetOnlyID}, sharedDisplayName); err != nil {
+				t.Fatalf("set duplicate display names: %v", err)
+			}
+			if _, err := testPool.Exec(ctx, `
+				INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+				VALUES ($1, $2, 'agent', $3)
+			`, sourceChannelID, testWorkspaceID, sourceOnlyID); err != nil {
+				t.Fatalf("add source-only agent: %v", err)
+			}
+
+			targetChannelID := seedChannelForTest(t, "chat-done-destination-"+uuid.NewString(), testUserID)
+			if _, err := testPool.Exec(ctx, `
+				INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+				VALUES
+					($1, $2, 'agent', $3),
+					($1, $2, 'agent', $4)
+			`, targetChannelID, testWorkspaceID, senderID, targetOnlyID); err != nil {
+				t.Fatalf("seed destination agents: %v", err)
+			}
+
+			target := "#" + channelNameForTransportTest(t, targetChannelID)
+			var rootID string
+			if targetKind == "thread" {
+				root, err := testHandler.insertChannelMessage(ctx, parseUUID(targetChannelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "destination thread root", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("destination-thread"), 0)
+				if err != nil {
+					t.Fatalf("create destination thread root: %v", err)
+				}
+				rootID = root.ID
+				target += ":" + rootID
+			}
+
+			content := "please @" + sharedDisplayName + " review " + targetKind
+			w := completeTaskForTest(t, taskID, map[string]any{
+				"action": "send",
+				"target": target,
+				"output": content,
+			})
+			if w.Code != http.StatusOK {
+				t.Fatalf("CompleteTask status=%d body=%s", w.Code, w.Body.String())
+			}
+
+			var rawParts []byte
+			var gotRoot *string
+			if err := testPool.QueryRow(ctx, `
+				SELECT parts, thread_root_message_id::text
+				FROM channel_message
+				WHERE channel_id = $1 AND author_type = 'agent' AND author_id = $2 AND content = $3
+				LIMIT 1
+			`, targetChannelID, senderID, content).Scan(&rawParts, &gotRoot); err != nil {
+				t.Fatalf("load destination output: %v", err)
+			}
+			if targetKind == "thread" && (gotRoot == nil || *gotRoot != rootID) {
+				t.Fatalf("destination thread root = %v, want %s", gotRoot, rootID)
+			}
+			if targetKind == "channel" && gotRoot != nil {
+				t.Fatalf("destination channel output unexpectedly threaded to %s", *gotRoot)
+			}
+			var parts []protocol.MessagePart
+			if err := json.Unmarshal(rawParts, &parts); err != nil {
+				t.Fatalf("decode destination parts: %v", err)
+			}
+			start, end := contentUTF16Span(content, strings.Index(content, "@"), strings.Index(content, "@")+len("@"+sharedDisplayName))
+			assertSingleMentionReferenceForTest(t, parts, targetOnlyID, start, end)
+		})
+	}
+}
+
+func TestCompleteTask_CrossChannelTargetDoesNotLeakSourceOnlyMention(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, sourceChannelID := createChannelCompletionTask(t, "group")
+	senderID := agentIDForTask(t, taskID)
+	sourceOnlyName := "source-only-" + uuid.NewString()
+	sourceOnlyID := createHandlerTestAgent(t, sourceOnlyName, nil)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)
+	`, sourceChannelID, testWorkspaceID, sourceOnlyID); err != nil {
+		t.Fatalf("add source-only agent: %v", err)
+	}
+	targetChannelID := seedChannelForTest(t, "chat-done-no-source-leak-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)
+	`, targetChannelID, testWorkspaceID, senderID); err != nil {
+		t.Fatalf("add sender to destination: %v", err)
+	}
+
+	content := "do not resolve @" + sourceOnlyName + " outside the source channel"
+	w := completeTaskForTest(t, taskID, map[string]any{
+		"action": "send",
+		"target": "#" + channelNameForTransportTest(t, targetChannelID),
+		"output": content,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("CompleteTask status=%d body=%s", w.Code, w.Body.String())
+	}
+	var rawParts []byte
+	if err := testPool.QueryRow(ctx, `
+		SELECT parts
+		FROM channel_message
+		WHERE channel_id = $1 AND author_type = 'agent' AND author_id = $2 AND content = $3
+		LIMIT 1
+	`, targetChannelID, senderID, content).Scan(&rawParts); err != nil {
+		t.Fatalf("load destination output: %v", err)
+	}
+	var parts []protocol.MessagePart
+	if err := json.Unmarshal(rawParts, &parts); err != nil {
+		t.Fatalf("decode destination parts: %v", err)
+	}
+	for _, part := range parts {
+		if part.Type == protocol.MessagePartTypeReference && part.RefType == "mention" {
+			t.Fatalf("source-only mention leaked into destination: %+v", part)
+		}
+	}
+}
+
+func assertSingleMentionReferenceForTest(t *testing.T, parts []protocol.MessagePart, wantID string, wantStart, wantEnd int) {
+	t.Helper()
+	count := 0
+	for _, part := range parts {
+		if part.Type != protocol.MessagePartTypeReference || part.RefType != "mention" {
+			continue
+		}
+		if part.RefID != wantID || part.ContentStartUTF16 == nil || part.ContentEndUTF16 == nil || *part.ContentStartUTF16 != wantStart || *part.ContentEndUTF16 != wantEnd {
+			t.Fatalf("mention reference = %+v, want agent %s at [%d,%d)", part, wantID, wantStart, wantEnd)
+		}
+		count++
+	}
+	if count != 1 {
+		t.Fatalf("mention references = %d, want one destination-scoped reference: %+v", count, parts)
+	}
+}
+
 func TestCompleteTask_GroupChannelSendActionWithoutDaemonCapabilityIsSuppressed(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

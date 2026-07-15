@@ -211,24 +211,12 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid target")
 		return
 	}
-	content, parts, err = h.enrichChannelMessageMentions(r.Context(), target.channel, content, parts)
+	input, err := h.finalizedAgentTransportInsertInput(r.Context(), source, target, content, parts, clientMessageID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	initiatorID := h.channelInitiatorForChatSession(r.Context(), source.task.ChatSessionID)
-	input := channelMessageInsertInput{
-		ChannelID:           parseUUID(target.channel.ID),
-		WorkspaceID:         source.origin.workspaceID,
-		AuthorID:            source.origin.agentID,
-		Content:             content,
-		Parts:               parts,
-		ThreadRootMessageID: target.threadRootMessageID,
-		ThreadID:            target.threadID,
-		TriggerDepth:        target.triggerDepth,
-		ClientMessageID:     &clientMessageID,
-		MainTimelineVisible: target.mainTimelineVisible,
-	}
 	if existing, found, err := h.findAgentChannelMessageByClientID(r.Context(), input.WorkspaceID, input.ChannelID, input.AuthorID, clientMessageID); err != nil {
 		slog.Warn("agent transport idempotency lookup failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to send message")
@@ -448,6 +436,10 @@ func (h *Handler) agentTransportSendDraft(w http.ResponseWriter, r *http.Request
 	content, parts, err := messageparts.Normalize(draft.Content, draft.Parts)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid saved draft: "+err.Error())
+		return
+	}
+	if _, err := h.finalizedAgentTransportInsertInput(r.Context(), source, target, content, parts, draft.ClientMessageID); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	attachmentIDs, ok := parseUUIDSliceOrBadRequest(w, attachmentIDsFromParts(parts), "attachment_id")
@@ -806,24 +798,16 @@ func (h *Handler) agentHumanDMChannel(ctx context.Context, workspaceID, agentID,
 }
 
 func (h *Handler) createAgentTransportMessage(ctx context.Context, source agentTransportSource, target agentTransportTarget, content string, parts []protocol.MessagePart, attachmentIDs []pgtype.UUID, clientMessageID string, initiatorID pgtype.UUID) (ChannelMessageResponse, bool, string, error) {
-	agentName := h.agentName(ctx, source.origin.agentID)
-	input := channelMessageInsertInput{
-		ChannelID:           parseUUID(target.channel.ID),
-		WorkspaceID:         source.origin.workspaceID,
-		AuthorID:            source.origin.agentID,
-		AuthorName:          agentName,
-		Content:             content,
-		Parts:               parts,
-		ThreadRootMessageID: target.threadRootMessageID,
-		ThreadID:            target.threadID,
-		TriggerDepth:        target.triggerDepth,
-		ClientMessageID:     &clientMessageID,
-		MainTimelineVisible: target.mainTimelineVisible,
+	input, err := h.finalizedAgentTransportInsertInput(ctx, source, target, content, parts, clientMessageID)
+	if err != nil {
+		return ChannelMessageResponse{}, false, "", err
 	}
 	msg, created, transportID, err := h.insertAgentTransportMessageWithAudit(ctx, source, target, input, attachmentIDs, clientMessageID)
 	if err != nil {
 		return ChannelMessageResponse{}, false, "", err
 	}
+	content = input.Content
+	parts = input.Parts
 	if len(attachmentIDs) > 0 {
 		msg.Attachments = h.groupChannelMessageAttachments(ctx, uuidToString(source.origin.workspaceID), []pgtype.UUID{parseUUID(msg.ID)})[msg.ID]
 	}
@@ -849,10 +833,34 @@ func (h *Handler) createAgentTransportMessage(ctx context.Context, source agentT
 			} else {
 				h.dispatchChannelMentions(ctx, target.channel, msg, initiatorID)
 			}
-			h.sendChannelMessageToFeishu(ctx, target.channel, agentName, content)
+			h.sendChannelMessageToFeishu(ctx, target.channel, input.AuthorName, content)
 		}
 	}
 	return msg, created, transportID, nil
+}
+
+// finalizedAgentTransportInsertInput is the write boundary for every visible
+// agent-transport message. Drafts keep raw author intent; both immediate sends
+// and send_draft rebuild destination-scoped reference anchors here immediately
+// before persistence.
+func (h *Handler) finalizedAgentTransportInsertInput(ctx context.Context, source agentTransportSource, target agentTransportTarget, content string, parts []protocol.MessagePart, clientMessageID string) (channelMessageInsertInput, error) {
+	content, parts, err := h.finalizeAgentChannelMessage(ctx, target.channel, content, parts)
+	if err != nil {
+		return channelMessageInsertInput{}, err
+	}
+	return channelMessageInsertInput{
+		ChannelID:           parseUUID(target.channel.ID),
+		WorkspaceID:         source.origin.workspaceID,
+		AuthorID:            source.origin.agentID,
+		AuthorName:          h.agentName(ctx, source.origin.agentID),
+		Content:             content,
+		Parts:               parts,
+		ThreadRootMessageID: target.threadRootMessageID,
+		ThreadID:            target.threadID,
+		TriggerDepth:        target.triggerDepth,
+		ClientMessageID:     &clientMessageID,
+		MainTimelineVisible: target.mainTimelineVisible,
+	}, nil
 }
 
 func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, source agentTransportSource, target agentTransportTarget, input channelMessageInsertInput, attachmentIDs []pgtype.UUID, clientMessageID string) (ChannelMessageResponse, bool, string, error) {

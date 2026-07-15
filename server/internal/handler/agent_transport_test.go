@@ -199,6 +199,86 @@ func TestAgentTransportSendDraftSendsSavedDraftAndClearsDraft(t *testing.T) {
 	assertAgentTransportVisibleOutputAuditCount(t, taskID, 1)
 }
 
+func TestAgentTransportSendDraftRebuildsMentionForCurrentDestinationMembers(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, _ := createChannelCompletionTask(t, "group")
+	senderID := agentIDForTask(t, taskID)
+	targetChannelID := seedChannelForTest(t, "transport-draft-destination-"+uuid.NewString(), testUserID)
+	sharedDisplayName := "Draft Destination " + uuid.NewString()
+	oldTargetID := createHandlerTestAgent(t, "draft-old-"+uuid.NewString(), nil)
+	newTargetID := createHandlerTestAgent(t, "draft-new-"+uuid.NewString(), nil)
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent
+		SET display_name = $2
+		WHERE id = ANY($1::uuid[])
+	`, []string{oldTargetID, newTargetID}, sharedDisplayName); err != nil {
+		t.Fatalf("set duplicate display names: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES
+			($1, $2, 'agent', $3),
+			($1, $2, 'agent', $4)
+	`, targetChannelID, testWorkspaceID, senderID, oldTargetID); err != nil {
+		t.Fatalf("seed destination members: %v", err)
+	}
+	seen, err := testHandler.insertChannelMessage(ctx, parseUUID(targetChannelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "seen before held destination draft", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("seed seen destination message: %v", err)
+	}
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(targetChannelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "newer destination message", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
+		t.Fatalf("seed newer destination message: %v", err)
+	}
+	target := "#" + channelNameForTransportTest(t, targetChannelID)
+	content := "please @" + sharedDisplayName + " review the held draft"
+	clientID := "transport-draft-members-" + uuid.NewString()
+	held := agentTransportSendForTest(t, taskID, senderID, map[string]any{
+		"target":            target,
+		"content":           content,
+		"client_message_id": clientID,
+		"seen_up_to_seq":    seen.Seq,
+	})
+	if held.Code != http.StatusOK {
+		t.Fatalf("hold destination draft: status=%d body=%s", held.Code, held.Body.String())
+	}
+	if _, err := testPool.Exec(ctx, `
+		DELETE FROM channel_member
+		WHERE channel_id = $1 AND workspace_id = $2 AND member_type = 'agent' AND member_id = $3
+	`, targetChannelID, testWorkspaceID, oldTargetID); err != nil {
+		t.Fatalf("remove original destination member: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)
+	`, targetChannelID, testWorkspaceID, newTargetID); err != nil {
+		t.Fatalf("add current destination member: %v", err)
+	}
+
+	sent := agentTransportSendForTest(t, taskID, senderID, map[string]any{
+		"target":     target,
+		"send_draft": true,
+	})
+	if sent.Code != http.StatusCreated {
+		t.Fatalf("send held destination draft: status=%d body=%s", sent.Code, sent.Body.String())
+	}
+	var body AgentTransportSendResponse
+	if err := json.Unmarshal(sent.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode held draft response: %v", err)
+	}
+	start := strings.Index(content, "@")
+	startUTF16, endUTF16 := contentUTF16Span(content, start, start+len("@"+sharedDisplayName))
+	assertSingleMentionReferenceForTest(t, body.Message.Parts, newTargetID, startUTF16, endUTF16)
+	for _, part := range body.Message.Parts {
+		if part.Type == protocol.MessagePartTypeReference && part.RefType == "mention" && part.RefID == oldTargetID {
+			t.Fatalf("draft retained removed destination member: %+v", part)
+		}
+	}
+}
+
 func TestAgentTransportSendMessageStickerOnlyAndWithText(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

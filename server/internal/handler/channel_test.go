@@ -48,6 +48,25 @@ func TestChannelMessageResponseUsesRaftTypeField(t *testing.T) {
 	}
 }
 
+func TestFinalizeAgentChannelMessageDMDropsUnanchoredReferences(t *testing.T) {
+	content, parts, err := (&Handler{}).finalizeAgentChannelMessage(context.Background(), ChannelResponse{Kind: "dm"}, "hello @untrusted", []protocol.MessagePart{{
+		Type:       protocol.MessagePartTypeReference,
+		RefType:    "mention",
+		RefSubType: "agent",
+		RefID:      uuid.NewString(),
+		Label:      "@untrusted",
+	}})
+	if err != nil {
+		t.Fatalf("finalize dm message: %v", err)
+	}
+	if content != "hello @untrusted" {
+		t.Fatalf("content = %q", content)
+	}
+	if len(parts) != 0 {
+		t.Fatalf("dm finalizer retained unanchored caller reference: %+v", parts)
+	}
+}
+
 func TestCreateChannelDuplicateNameReturnsCodedConflict(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

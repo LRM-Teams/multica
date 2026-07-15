@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
+	"github.com/multica-ai/multica/server/internal/messageparts"
 	"github.com/multica-ai/multica/server/internal/radar"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -204,13 +205,14 @@ func TestExecuteRadarMentionAgentCreatesVisibleGroupDirectiveAndExactWake(t *tes
 	}
 
 	var messageID, authorID, content string
+	var rawParts []byte
 	var messageCount int
 	if err := testPool.QueryRow(ctx, `
-		SELECT id, author_id, content, count(*) OVER ()
+		SELECT id, author_id, content, parts, count(*) OVER ()
 		FROM channel_message
 		WHERE channel_id = $1 AND author_type = 'agent' AND author_id = $2
 		ORDER BY created_at, id
-	`, channelID, supervisor.ID).Scan(&messageID, &authorID, &content, &messageCount); err != nil {
+	`, channelID, supervisor.ID).Scan(&messageID, &authorID, &content, &rawParts, &messageCount); err != nil {
 		t.Fatalf("load visible radar directive: %v", err)
 	}
 	if messageCount != 1 {
@@ -219,7 +221,7 @@ func TestExecuteRadarMentionAgentCreatesVisibleGroupDirectiveAndExactWake(t *tes
 	if authorID != uuidToString(supervisor.ID) || !strings.Contains(content, directive) {
 		t.Fatalf("visible directive author/content = %s/%q, want Wendy/%q", authorID, content, directive)
 	}
-	mentions := util.ParseMentions(content)
+	mentions := util.ParseMentionsFromContentAndParts(content, messageparts.Decode(rawParts))
 	if len(mentions) != 1 || mentions[0].Type != "agent" || mentions[0].ID != targetID {
 		t.Fatalf("parsed channel mentions = %+v, want only agent/%s; content=%q", mentions, targetID, content)
 	}

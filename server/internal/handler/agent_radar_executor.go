@@ -727,6 +727,14 @@ func directedAgentMentionContent(target db.Agent, body string) (string, []protoc
 	}}
 }
 
+// Issue comments do not yet carry MessagePart metadata. Keep their historical
+// comment-local representation until that surface has the structured contract;
+// channel directives above never use this legacy form.
+func formatRadarIssueDirectiveMention(handle, id string) string {
+	label := directedAgentMentionLabel(handle)
+	return "[" + label + "](mention://agent/" + id + ")"
+}
+
 func (h *Handler) executeRadarAgentMentionAtomic(ctx context.Context, run db.AgentRadarRun, supervisor db.Agent, directive radarAgentMentionDirective) (map[string]any, radarActivityTarget, error) {
 	if h.TxStarter == nil {
 		return nil, directive.Target.Activity, errors.New("channel transaction starter unavailable")
@@ -1050,7 +1058,7 @@ func (h *Handler) prepareRadarIssueDirective(ctx context.Context, run db.AgentRa
 	if issue.Status == "done" || issue.Status == "cancelled" {
 		return radarIssueDirective{}, errors.New("cannot direct work on a terminal issue")
 	}
-	content := directedAgentMentionLabel(targetAgent.Name) + " " + strings.TrimSpace(payload.Content)
+	content := formatRadarIssueDirectiveMention(targetAgent.Name, uuidToString(targetAgent.ID)) + " " + strings.TrimSpace(payload.Content)
 	return radarIssueDirective{TargetAgent: targetAgent, Issue: issue, Content: content}, nil
 }
 

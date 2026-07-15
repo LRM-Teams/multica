@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/messageparts"
 	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/internal/workgraph"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -443,16 +444,17 @@ func assertWendyUnlockWakeCount(t *testing.T, channelID, targetID string, want i
 func assertWendyUnlockMessageMentions(t *testing.T, channelID, targetID string) {
 	t.Helper()
 	var content string
+	var rawParts []byte
 	if err := testPool.QueryRow(context.Background(), `
-		SELECT content
+		SELECT content, parts
 		FROM channel_message
 		WHERE channel_id = $1
 		ORDER BY created_at DESC, id DESC
 		LIMIT 1
-	`, channelID).Scan(&content); err != nil {
+	`, channelID).Scan(&content, &rawParts); err != nil {
 		t.Fatalf("load Wendy unlock message: %v", err)
 	}
-	mentions := util.ParseMentions(content)
+	mentions := util.ParseMentionsFromContentAndParts(content, messageparts.Decode(rawParts))
 	if len(mentions) != 1 || mentions[0].Type != "agent" || mentions[0].ID != targetID {
 		t.Fatalf("unlock message mentions = %+v, want only agent/%s", mentions, targetID)
 	}

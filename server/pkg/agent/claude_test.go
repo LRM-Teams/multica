@@ -45,6 +45,73 @@ func TestClaudeHandleAssistantText(t *testing.T) {
 	}
 }
 
+func TestClaudeEnvelopeNativeLineageSeparatesMainAndSubagentTrajectories(t *testing.T) {
+	t.Parallel()
+
+	b := &claudeBackend{cfg: Config{Logger: slog.Default()}}
+	content := claudeMessageContent{
+		Role: "assistant",
+		Content: []claudeContentBlock{
+			{Type: "thinking", Text: "plan"},
+			{Type: "text", Text: "answer"},
+			{Type: "tool_use", ID: "call-1", Name: "Read"},
+		},
+	}
+	main := claudeSDKMessage{Type: "assistant", Message: mustMarshal(t, content)}
+	subagent := claudeSDKMessage{}
+	if err := json.Unmarshal([]byte(`{
+		"type":"assistant",
+		"message":{"role":"assistant","content":[
+			{"type":"thinking","text":"plan"},
+			{"type":"text","text":"answer"},
+			{"type":"tool_use","id":"call-1","name":"Read"}
+		]},
+		"parent_tool_use_id":"toolu_parent",
+		"subagent_type":"Explore"
+	}`), &subagent); err != nil {
+		t.Fatalf("unmarshal Claude SDK envelope: %v", err)
+	}
+
+	assertLineage := func(msg claudeSDKMessage, want string) {
+		t.Helper()
+		ch := make(chan Message, 3)
+		var output strings.Builder
+		b.handleAssistant(msg, ch, &output, make(map[string]TokenUsage))
+		if output.String() != "answer" {
+			t.Fatalf("assistant output = %q, want answer", output.String())
+		}
+		for i := 0; i < 3; i++ {
+			got := <-ch
+			if got.Lineage != want {
+				t.Fatalf("message %d lineage = %q, want %q (%+v)", i, got.Lineage, want, got)
+			}
+		}
+	}
+
+	assertLineage(main, "")
+	assertLineage(subagent, `{"parent_tool_use_id":"toolu_parent","subagent_type":"Explore"}`)
+}
+
+func TestClaudeUserToolResultPreservesEnvelopeNativeLineage(t *testing.T) {
+	t.Parallel()
+
+	b := &claudeBackend{cfg: Config{Logger: slog.Default()}}
+	ch := make(chan Message, 1)
+	b.handleUser(claudeSDKMessage{
+		Type:            "user",
+		ParentToolUseID: "toolu_parent",
+		SubagentType:    "Explore",
+		Message: mustMarshal(t, claudeMessageContent{Role: "user", Content: []claudeContentBlock{{
+			Type: "tool_result", ToolUseID: "call-1", Content: mustMarshal(t, "result"),
+		}}}),
+	}, ch)
+
+	got := <-ch
+	if got.Lineage != `{"parent_tool_use_id":"toolu_parent","subagent_type":"Explore"}` {
+		t.Fatalf("tool result lineage = %q", got.Lineage)
+	}
+}
+
 func TestClaudeHandleAssistantToolUse(t *testing.T) {
 	t.Parallel()
 

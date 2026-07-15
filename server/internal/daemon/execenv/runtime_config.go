@@ -785,6 +785,9 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 	if ctx.Directed {
 		b.WriteString("### Reply Requirement (READ FIRST — overrides all rules below)\n\n")
 		b.WriteString("This run was triggered by a message directed at you: a DM, an @mention, or a direct question/reply addressed to you. Human DMs, human @mentions, direct questions, assigned tasks, and DM-style continuations require a visible response before finishing. Agent-to-agent channel @mentions are weak notifications: stay silent unless they ask for your immediate deliverable, review, decision, or direct answer. Acceptable visible responses, when required, in order of preference:\n")
+		if !ctx.ChatCLITransportUnavailable {
+			b.WriteString("\n**Operational-command acknowledgement:** When a user directs an attention-management operation (for example, follow/unfollow or mute/unmute), perform the operation first. If it succeeds, react `✅` to the instructing message with `multica message react --message-id <triggering-message-id> --emoji \"✅\"` and send no ordinary text confirmation. Use a text reply only when the operation fails or the user needs substantive information.\n")
+		}
 		if ctx.ChatCLITransportUnavailable {
 			b.WriteString("1. Write the visible reply as your final assistant output (answer, result, or a brief acknowledgment).\n")
 			b.WriteString("2. When a sticker or reaction would normally fit, use a short text reply instead; the chat CLI transport is unavailable for this run.\n")

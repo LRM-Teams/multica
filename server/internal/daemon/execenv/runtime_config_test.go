@@ -765,6 +765,63 @@ func TestMulticaMemoryScopeRenderedForPiProvider(t *testing.T) {
 	}
 }
 
+func TestMemoryOperatingGuideUsesMediumStrengthAutoWrite(t *testing.T) {
+	t.Parallel()
+	ctx := TaskContextForEnv{
+		ChatSessionID:  "chat-1",
+		AgentRoot:      "/tmp/multica/workspace-1/.multica/agents/agent-1",
+		AgentMemoryDir: "/tmp/multica/workspace-1/.multica/agents/agent-1/memory",
+	}
+	out := buildMetaSkillContent("codex", ctx)
+
+	for _, want := range []string{
+		"### Memory Operating Guide (v0.1)",
+		"Use medium-strength auto-write",
+		"likely to matter in a future run",
+		"memory/MEMORY.md",
+		"memory/USER.md",
+		"Attribute them to the identified user",
+		"memory/STATE.md",
+		"status, TTL/expiry, or reset date",
+		"memory/REVIEW.md",
+		"MULTICA_AGENT_SYNC_QUEUE_DIR/memory-candidates.jsonl",
+		"remember this",
+		"record it immediately in the requested agent-local destination",
+		"current task remain authoritative",
+		"Do not record guesses",
+		"never to copy private memory across agents directly",
+		"never silently rewrite instructions",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("memory operating guide missing %q\n%s", want, out)
+		}
+	}
+}
+
+func TestMemoryOperatingGuideRequiresAgentLocalScope(t *testing.T) {
+	t.Parallel()
+	withoutScope := buildMetaSkillContent("codex", TaskContextForEnv{ChatSessionID: "chat-1"})
+	if strings.Contains(withoutScope, "Memory Operating Guide") {
+		t.Fatalf("memory operating guide must not render without an agent-local root:\n%s", withoutScope)
+	}
+
+	withRoot := buildMetaSkillContent("codex", TaskContextForEnv{
+		ChatSessionID: "chat-1",
+		AgentRoot:     "/tmp/multica/workspace-1/.multica/agents/agent-1",
+	})
+	if !strings.Contains(withRoot, "### Memory Operating Guide (v0.1)") {
+		t.Fatalf("memory operating guide missing when an agent-local root exists:\n%s", withRoot)
+	}
+
+	skillsOnly := buildMetaSkillContent("codex", TaskContextForEnv{
+		ChatSessionID: "chat-1",
+		AgentSkillDir: "/tmp/multica/workspace-1/.multica/agents/agent-1/skills",
+	})
+	if strings.Contains(skillsOnly, "Memory Operating Guide") {
+		t.Fatalf("memory operating guide must not render for a skills-only scope:\n%s", skillsOnly)
+	}
+}
+
 func TestMulticaMemoryScopeRenderedForNonPiProvider(t *testing.T) {
 	t.Parallel()
 	ctx := TaskContextForEnv{

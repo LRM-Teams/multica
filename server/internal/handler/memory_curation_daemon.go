@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/multica-ai/multica/server/internal/memorycuration"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -20,6 +21,7 @@ func (h *Handler) claimPendingMemoryCurationRun(ctx context.Context, rt db.Agent
 	var pending protocol.DaemonHeartbeatPendingMemoryCuration
 	var targetAgentIDs []string
 	var instructions string
+	var customArgsRaw, mcpConfigRaw []byte
 	if strings.TrimSpace(activeRunID) != "" {
 		if _, err := h.DB.Exec(ctx, `
 			UPDATE memory_curation_run
@@ -62,7 +64,9 @@ func (h *Handler) claimPendingMemoryCurationRun(ctx context.Context, rt db.Agent
 		SELECT c.id::text, c.workspace_id::text, c.stage,
 		       COALESCE(c.date_from::text, ''), COALESCE(c.date_to::text, ''),
 		       c.target_agent_ids::text[], COALESCE(c.curator_agent_id::text, ''),
-		       c.curator_model, COALESCE(a.instructions, ''),
+		       COALESCE(NULLIF(c.curator_model, ''), a.model, ''), COALESCE(a.thinking_level, ''),
+		       COALESCE(a.custom_args, '[]'::jsonb), COALESCE(a.mcp_config, 'null'::jsonb),
+		       COALESCE(a.instructions, ''),
 		       COALESCE(p.timezone, 'Asia/Shanghai'),
 		       c.trigger_kind = 'backfill', c.dry_run, c.force,
 		       c.claim_token::text, c.curator_mode, c.confidence_threshold
@@ -71,7 +75,8 @@ func (h *Handler) claimPendingMemoryCurationRun(ctx context.Context, rt db.Agent
 		  LEFT JOIN agent a ON a.id = c.curator_agent_id
 	`, rt.ID, rt.WorkspaceID, memoryCurationClaimTimeout.Seconds()).Scan(
 		&pending.ID, &pending.WorkspaceID, &pending.Stage, &pending.DateFrom, &pending.DateTo,
-		&targetAgentIDs, &pending.CuratorAgentID, &pending.CuratorModel, &instructions,
+		&targetAgentIDs, &pending.CuratorAgentID, &pending.CuratorModel, &pending.CuratorThinkingLevel,
+		&customArgsRaw, &mcpConfigRaw, &instructions,
 		&pending.Timezone, &pending.IncludeHistory, &pending.DryRun, &pending.Force,
 		&pending.ClaimToken, &pending.Mode, &pending.ConfidenceThreshold,
 	)
@@ -83,7 +88,36 @@ func (h *Handler) claimPendingMemoryCurationRun(ctx context.Context, rt db.Agent
 	}
 	pending.AgentIDs = targetAgentIDs
 	pending.CuratorInstructions = strings.TrimSpace(instructions)
+	_ = json.Unmarshal(customArgsRaw, &pending.CuratorCustomArgs)
+	if string(mcpConfigRaw) != "null" {
+		pending.CuratorMcpConfig = append([]byte(nil), mcpConfigRaw...)
+	}
+	pending.DBEvidence = h.memoryCurationEvidenceBundles(ctx, pending.WorkspaceID, pending.AgentIDs, pending.DateFrom, pending.DateTo)
 	return &pending, nil
+}
+
+func (h *Handler) memoryCurationEvidenceBundles(ctx context.Context, workspaceID string, agentIDs []string, dateFrom, dateTo string) []protocol.DaemonMemoryCurationEvidenceBundle {
+	since, err := time.Parse("2006-01-02", dateFrom)
+	if err != nil {
+		return nil
+	}
+	until, err := time.Parse("2006-01-02", dateTo)
+	if err != nil {
+		return nil
+	}
+	bundles := make([]protocol.DaemonMemoryCurationEvidenceBundle, 0, len(agentIDs))
+	for _, agentID := range agentIDs {
+		items, err := memorycuration.CollectDBEvidence(ctx, h.DB, workspaceID, agentID, since, until)
+		if err != nil || len(items) == 0 {
+			continue
+		}
+		bundle := protocol.DaemonMemoryCurationEvidenceBundle{AgentID: agentID, Items: make([]protocol.DaemonMemoryCurationEvidenceItem, 0, len(items))}
+		for _, item := range items {
+			bundle.Items = append(bundle.Items, protocol.DaemonMemoryCurationEvidenceItem{Kind: item.Kind, ID: item.ID, Title: item.Title, Snippet: item.Snippet, CreatedAt: item.CreatedAt.UTC().Format(time.RFC3339)})
+		}
+		bundles = append(bundles, bundle)
+	}
+	return bundles
 }
 
 type memoryCurationDaemonResultRequest struct {

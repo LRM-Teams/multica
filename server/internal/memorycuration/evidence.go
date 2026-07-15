@@ -14,11 +14,11 @@ type EvidenceDB interface {
 }
 
 type EvidenceItem struct {
-	Kind      string
-	ID        string
-	Title     string
-	Snippet   string
-	CreatedAt time.Time
+	Kind      string    `json:"kind"`
+	ID        string    `json:"id"`
+	Title     string    `json:"title"`
+	Snippet   string    `json:"snippet"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 func (i EvidenceItem) Reference() string {

@@ -102,11 +102,16 @@ func (d *Daemon) runLocalMemoryCuration(ctx context.Context, rt Runtime) error {
 		if localNow.Hour() < scheduled.hour || !d.claimLocalMemoryCurationRun(rt.WorkspaceID, scheduled.stage, localNow) {
 			continue
 		}
-		reviewer := memorycuration.NewConfiguredL3Reviewer(d.cfg.MemoryCurationL3ReviewEnabled, memorycuration.AgentL3ReviewerConfig{
+		reviewerCfg := memorycuration.AgentL3ReviewerConfig{
 			Provider: "pi", Path: piEntry.Path, Model: piEntry.Model, Timeout: d.cfg.MemoryCurationL3ReviewTimeout,
-		})
+		}
+		reviewer := memorycuration.NewConfiguredL3Reviewer(d.cfg.MemoryCurationL3ReviewEnabled, reviewerCfg)
+		var stageAgent memorycuration.StageAgent
+		if d.cfg.MemoryCurationL3ReviewEnabled {
+			stageAgent, _ = memorycuration.NewAgentStageRunner(reviewerCfg)
+		}
 		res, runErr := memorycuration.NewEngine(reviewer).Run(memorycuration.Options{
-			Context: ctx, WorkspacesRoot: d.cfg.WorkspacesRoot, WorkspaceID: rt.WorkspaceID,
+			Context: ctx, WorkspacesRoot: d.cfg.WorkspacesRoot, WorkspaceID: rt.WorkspaceID, StageAgent: stageAgent,
 			AllAgents: true, Stage: scheduled.stage, Since: planDate, Until: planDate,
 			Now: now, Timezone: memorycuration.DefaultTimezone,
 		})

@@ -145,13 +145,14 @@ func (h *Handler) UpdateMemoryCuratorProfile(w http.ResponseWriter, r *http.Requ
 		SELECT count(*)
 		  FROM agent_runtime
 		 WHERE id = $1 AND workspace_id = $2
+		   AND provider = 'pi'
 		   AND (owner_id = $3 OR visibility = 'public')
 	`, runtimeUUID, workspaceID, userID).Scan(&runtimeCount); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to validate runtime")
 		return
 	}
 	if runtimeCount != 1 {
-		writeError(w, http.StatusNotFound, "runtime not found")
+		writeError(w, http.StatusNotFound, "Pi runtime not found")
 		return
 	}
 
@@ -308,6 +309,7 @@ func (h *Handler) memoryCuratorRunStatus(ctx context.Context, profile memoryCura
 		  FROM agent_runtime rt
 		  JOIN agent curator ON curator.id = $2
 		 WHERE rt.id = $1 AND rt.workspace_id = $3
+		   AND rt.provider = 'pi'
 		   AND (rt.owner_id = $4 OR rt.visibility = 'public')
 		   AND curator.workspace_id = $3 AND curator.owner_id = $4
 		   AND curator.runtime_id = rt.id AND curator.archived_at IS NULL

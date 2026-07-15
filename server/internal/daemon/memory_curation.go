@@ -43,19 +43,44 @@ func (d *Daemon) handleMemoryCuration(ctx context.Context, rt Runtime, pending P
 	if model == "" {
 		model = entry.Model
 	}
-	reviewer := memorycuration.NewConfiguredL3Reviewer(
-		d.cfg.MemoryCurationL3ReviewEnabled,
-		memorycuration.AgentL3ReviewerConfig{
-			Provider:     rt.Provider,
-			Path:         entry.Path,
-			Model:        model,
-			Timeout:      d.cfg.MemoryCurationL3ReviewTimeout,
-			Instructions: pending.CuratorInstructions,
-		},
-	)
+	curatorRoot := multicaAgentRoot(d.cfg, pending.WorkspaceID, pending.CuratorAgentID)
+	reviewerCfg := memorycuration.AgentL3ReviewerConfig{
+		Provider:       rt.Provider,
+		Path:           entry.Path,
+		Model:          model,
+		ThinkingLevel:  pending.CuratorThinkingLevel,
+		CustomArgs:     pending.CuratorCustomArgs,
+		McpConfig:      pending.CuratorMcpConfig,
+		Timeout:        d.cfg.MemoryCurationL3ReviewTimeout,
+		CuratorAgentID: pending.CuratorAgentID,
+		CuratorRoot:    curatorRoot,
+		Instructions:   pending.CuratorInstructions,
+	}
+	reviewer := memorycuration.NewConfiguredL3Reviewer(d.cfg.MemoryCurationL3ReviewEnabled, reviewerCfg)
+	var stageAgent memorycuration.StageAgent
+	if d.cfg.MemoryCurationL3ReviewEnabled {
+		created, err := memorycuration.NewAgentStageRunner(reviewerCfg)
+		if err != nil {
+			payload["error"] = err.Error()
+			d.reportMemoryCurationResult(ctx, rt, pending.ID, payload)
+			return
+		}
+		stageAgent = created
+	}
+	dbEvidence := make(map[string][]memorycuration.EvidenceItem, len(pending.DBEvidence))
+	for _, bundle := range pending.DBEvidence {
+		items := make([]memorycuration.EvidenceItem, 0, len(bundle.Items))
+		for _, item := range bundle.Items {
+			createdAt, _ := time.Parse(time.RFC3339, item.CreatedAt)
+			items = append(items, memorycuration.EvidenceItem{Kind: item.Kind, ID: item.ID, Title: item.Title, Snippet: item.Snippet, CreatedAt: createdAt})
+		}
+		dbEvidence[bundle.AgentID] = items
+	}
 	effectiveDryRun := pending.DryRun || strings.EqualFold(strings.TrimSpace(pending.Mode), "observe")
 	res, runErr := memorycuration.NewEngine(reviewer).Run(memorycuration.Options{
 		Context:             ctx,
+		DBEvidence:          dbEvidence,
+		StageAgent:          stageAgent,
 		WorkspacesRoot:      d.cfg.WorkspacesRoot,
 		WorkspaceID:         pending.WorkspaceID,
 		AgentIDs:            pending.AgentIDs,

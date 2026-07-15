@@ -179,6 +179,98 @@ func mergeAgentRunResult(dst *AgentRunResult, src AgentRunResult) {
 	dst.EvidenceCollected += src.EvidenceCollected
 }
 
+func stageLocalFiles(root string, names ...string) map[string]string {
+	out := make(map[string]string, len(names))
+	for _, name := range names {
+		b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
+		if err == nil {
+			out[name] = truncateUTF8(string(b), maxL3ReviewInputBodyBytes)
+		}
+	}
+	return out
+}
+
+func evidenceForAgent(opts Options, workspaceID, agentID string, since, until time.Time) ([]EvidenceItem, error) {
+	if opts.DBEvidence != nil {
+		return opts.DBEvidence[agentID], nil
+	}
+	return CollectDBEvidence(opts.Context, opts.DB, workspaceID, agentID, since, until)
+}
+
+func runStageAgent(opts Options, root agentRoot, stage Stage, localFiles map[string]string, evidence []EvidenceItem, reviewEntries []L3ReviewEntry) (StageAgentOutput, error) {
+	if opts.StageAgent == nil {
+		return StageAgentOutput{}, nil
+	}
+	return opts.StageAgent.RunStage(opts.Context, StageAgentInput{
+		Stage: stage, WorkspaceID: root.WorkspaceID, AgentID: root.AgentID, AgentRoot: root.Root,
+		DateFrom: formatDate(opts.Since), DateTo: formatDate(opts.Until), Timezone: opts.Timezone,
+		Mode: opts.Mode, DryRun: opts.DryRun, LocalFiles: localFiles, DBEvidence: evidence, ReviewEntries: reviewEntries,
+	})
+}
+
+type l2AgentEnvelope struct {
+	Candidates []struct {
+		Type                string   `json:"type"`
+		Title               string   `json:"title"`
+		Body                string   `json:"body"`
+		ProposedDestination string   `json:"proposed_destination"`
+		Sensitivity         string   `json:"sensitivity"`
+		Confidence          string   `json:"confidence"`
+		Evidence            []string `json:"evidence"`
+	} `json:"candidates"`
+}
+
+func parseAgentL2Candidates(content string, sourceDate time.Time) []reviewEntry {
+	trimmed := strings.TrimSpace(content)
+	start := strings.Index(trimmed, "{")
+	end := strings.LastIndex(trimmed, "}")
+	if start < 0 || end < start {
+		return nil
+	}
+	var env l2AgentEnvelope
+	if err := json.Unmarshal([]byte(trimmed[start:end+1]), &env); err != nil {
+		return nil
+	}
+	out := make([]reviewEntry, 0, len(env.Candidates))
+	for _, c := range env.Candidates {
+		body := strings.TrimSpace(c.Body)
+		if body == "" {
+			continue
+		}
+		kind := strings.TrimSpace(c.Type)
+		if kind == "" {
+			kind = "stable_fact"
+		}
+		dest := strings.TrimSpace(c.ProposedDestination)
+		if dest == "" {
+			dest = "MEMORY.md"
+		}
+		confidence := strings.TrimSpace(c.Confidence)
+		if confidence == "" {
+			confidence = "high"
+		}
+		sensitivity := normalizeL3Sensitivity(c.Sensitivity)
+		if sensitivity == "" {
+			sensitivity = "unknown"
+		}
+		evidence := c.Evidence
+		if len(evidence) == 0 {
+			evidence = []string{"daily:" + formatDate(sourceDate)}
+		}
+		out = append(out, reviewEntry{ID: "mem_" + strings.ReplaceAll(formatDate(sourceDate), "-", "") + "_" + hashShort(kind, dest, body, strings.Join(evidence, ",")), Type: kind, Status: "candidate", Confidence: confidence, Sensitivity: sensitivity, Scope: "agent", SourceDate: formatDate(sourceDate), Evidence: evidence, ProposedDestination: dest, Title: sentenceTitle(firstNonEmpty(c.Title, body)), Body: body})
+	}
+	return out
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
 func (e *Engine) runL1(root agentRoot, opts Options) (AgentRunResult, error) {
 	ar := AgentRunResult{WorkspaceID: root.WorkspaceID, AgentID: root.AgentID, Root: root.Root}
 	workLog, err := fileContentWithoutTemplate(filepath.Join(root.Root, "notes", "work-log.md"))
@@ -196,18 +288,17 @@ func (e *Engine) runL1(root agentRoot, opts Options) (AgentRunResult, error) {
 				continue
 			}
 		}
-		evidence, err := CollectDBEvidence(opts.Context, opts.DB, root.WorkspaceID, root.AgentID, d, d)
+		evidence, err := evidenceForAgent(opts, root.WorkspaceID, root.AgentID, d, d)
 		if err != nil {
 			return ar, err
 		}
 		ar.EvidenceCollected += len(evidence)
-		if workLog == "" && scratch == "" && len(evidence) == 0 {
-			if err := appendAudit(root.Root, "l1", d, map[string]any{"outcome": "no_relevant_activity", "timezone": opts.Timezone}, opts.DryRun); err != nil {
-				return ar, err
-			}
-			continue
-		}
 		content := dailyContent(root, d, workLog, scratch, evidence, opts.Now, opts.Timezone)
+		if out, agentErr := runStageAgent(opts, root, StageL1, stageLocalFiles(root.Root, "notes/work-log.md", "memory/SCRATCHPAD.md", "memory/MEMORY.md", "memory/USER.md", "memory/STATE.md"), evidence, nil); agentErr != nil {
+			return ar, agentErr
+		} else if strings.HasPrefix(strings.TrimSpace(out.Content), "#") {
+			content = strings.TrimSpace(out.Content) + "\n"
+		}
 		changed, err := writeIfChanged(path, content, opts.DryRun)
 		if err != nil {
 			return ar, err
@@ -320,17 +411,24 @@ func (e *Engine) runL2(root agentRoot, opts Options) (AgentRunResult, error) {
 	for _, d := range dateRange(opts.Since, opts.Until) {
 		path := filepath.Join(root.Root, "memory", "daily", formatDate(d)+".md")
 		b, err := os.ReadFile(path)
+		dailyExists := true
 		if err != nil {
 			if os.IsNotExist(err) {
-				continue
+				dailyExists = false
+			} else {
+				return ar, err
 			}
-			return ar, err
 		}
 		content := string(b)
-		if !opts.Force && statusHasValue(content, "l2_extracted_at") {
+		if dailyExists && !opts.Force && statusHasValue(content, "l2_extracted_at") {
 			continue
 		}
 		candidates := candidatesFromDaily(content, d)
+		if out, agentErr := runStageAgent(opts, root, StageL2, stageLocalFiles(root.Root, "memory/daily/"+formatDate(d)+".md", "notes/work-log.md", "memory/SCRATCHPAD.md", "memory/REVIEW.md", "memory/MEMORY.md", "memory/USER.md", "memory/STATE.md"), nil, nil); agentErr != nil {
+			return ar, agentErr
+		} else if agentCandidates := parseAgentL2Candidates(out.Content, d); len(agentCandidates) > 0 {
+			candidates = agentCandidates
+		}
 		for _, c := range candidates {
 			if seen[c.HashKey()] || hasSemanticDuplicate(entries, c) || hasSemanticDuplicate(newEntries, c) {
 				ar.DuplicatesMerged++
@@ -339,9 +437,11 @@ func (e *Engine) runL2(root agentRoot, opts Options) (AgentRunResult, error) {
 			newEntries = append(newEntries, c)
 			seen[c.HashKey()] = true
 		}
-		updated := setStatusTime(content, "l2_extracted_at", opts.Now)
-		if _, err := writeIfChanged(path, updated, opts.DryRun); err != nil {
-			return ar, err
+		if dailyExists {
+			updated := setStatusTime(content, "l2_extracted_at", opts.Now)
+			if _, err := writeIfChanged(path, updated, opts.DryRun); err != nil {
+				return ar, err
+			}
 		}
 	}
 	if len(newEntries) > 0 {
@@ -424,6 +524,10 @@ func (e *Engine) runL3(root agentRoot, opts Options) (AgentRunResult, error) {
 	reviewBytes, err := os.ReadFile(reviewPath)
 	if err != nil {
 		if os.IsNotExist(err) {
+			evidence, _ := evidenceForAgent(opts, root.WorkspaceID, root.AgentID, opts.Since, opts.Until)
+			if _, agentErr := runStageAgent(opts, root, StageL3, stageLocalFiles(root.Root, "memory/MEMORY.md", "memory/USER.md", "memory/STATE.md", "notes/decisions.md"), evidence, nil); agentErr != nil {
+				return ar, agentErr
+			}
 			return ar, nil
 		}
 		return ar, err
@@ -463,7 +567,7 @@ func (e *Engine) runL3(root agentRoot, opts Options) (AgentRunResult, error) {
 	if len(reviewable) == 0 {
 		return e.finishL3(root, opts, reviewPath, remaining, ar)
 	}
-	if e.l3Reviewer == nil {
+	if e.l3Reviewer == nil && opts.StageAgent == nil {
 		for _, entry := range reviewable {
 			ar.ReviewDeferred++
 			trace := deferredL3Trace(entry, "reviewer_unavailable")
@@ -480,7 +584,24 @@ func (e *Engine) runL3(root agentRoot, opts Options) (AgentRunResult, error) {
 	for _, entry := range reviewable {
 		inputs = append(inputs, l3InputFromEntry(entry))
 	}
-	output, reviewErr := e.l3Reviewer.Review(opts.Context, L3ReviewInput{WorkspaceID: root.WorkspaceID, AgentID: root.AgentID, Entries: inputs})
+	var output L3ReviewOutput
+	var reviewErr error
+	if opts.StageAgent != nil {
+		evidence, _ := evidenceForAgent(opts, root.WorkspaceID, root.AgentID, opts.Since, opts.Until)
+		stageOut, err := runStageAgent(opts, root, StageL3, stageLocalFiles(root.Root, "memory/REVIEW.md", "memory/MEMORY.md", "memory/USER.md", "memory/STATE.md", "notes/decisions.md"), evidence, inputs)
+		if err != nil {
+			reviewErr = err
+		} else {
+			decisions, err := parseL3ReviewDecisions(stageOut.Content, inputs)
+			if err != nil {
+				reviewErr = err
+			} else {
+				output = L3ReviewOutput{Decisions: decisions, Provider: stageOut.Provider, Model: stageOut.Model, Duration: stageOut.Duration}
+			}
+		}
+	} else {
+		output, reviewErr = e.l3Reviewer.Review(opts.Context, L3ReviewInput{WorkspaceID: root.WorkspaceID, AgentID: root.AgentID, Entries: inputs})
+	}
 	if reviewErr != nil {
 		for _, entry := range reviewable {
 			ar.ReviewDeferred++
@@ -876,6 +997,10 @@ func inferExpiresAt(body, sourceDate string) string {
 
 func (e *Engine) runL4(root agentRoot, opts Options) (AgentRunResult, error) {
 	ar := AgentRunResult{WorkspaceID: root.WorkspaceID, AgentID: root.AgentID, Root: root.Root}
+	evidence, _ := evidenceForAgent(opts, root.WorkspaceID, root.AgentID, opts.Since, opts.Until)
+	if _, agentErr := runStageAgent(opts, root, StageL4, stageLocalFiles(root.Root, "memory/REVIEW.md", "memory/MEMORY.md", "memory/USER.md", "memory/STATE.md", "notes/decisions.md"), evidence, nil); agentErr != nil {
+		return ar, agentErr
+	}
 	reviewChanged, archived, err := sweepReview(filepath.Join(root.Root, "memory", "REVIEW.md"), opts.Now, opts.DryRun)
 	if err != nil {
 		return ar, err

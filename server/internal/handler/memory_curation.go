@@ -360,17 +360,19 @@ func (h *Handler) loadMemoryCurationRun(r *http.Request, workspaceID string, run
 	var resp memoryCurationRunResponse
 	var stats []byte
 	var agentID, dateFrom, dateTo string
+	var createdAt time.Time
 	var startedAt, finishedAt *time.Time
 	err := h.DB.QueryRow(r.Context(), `
 		SELECT id::text, workspace_id::text, COALESCE(agent_id::text, ''), stage, trigger_kind, status,
 		       COALESCE(date_from::text, ''), COALESCE(date_to::text, ''), dry_run, force, stats, error, created_at, started_at, finished_at
 		  FROM memory_curation_run
 		 WHERE workspace_id = $1 AND id = $2
-	`, workspaceID, runID).Scan(&resp.ID, &resp.WorkspaceID, &agentID, &resp.Stage, &resp.TriggerKind, &resp.Status, &dateFrom, &dateTo, &resp.DryRun, &resp.Force, &stats, &resp.Error, &resp.CreatedAt, &startedAt, &finishedAt)
+	`, workspaceID, runID).Scan(&resp.ID, &resp.WorkspaceID, &agentID, &resp.Stage, &resp.TriggerKind, &resp.Status, &dateFrom, &dateTo, &resp.DryRun, &resp.Force, &stats, &resp.Error, &createdAt, &startedAt, &finishedAt)
 	if err != nil {
 		return resp, err
 	}
 	resp.Stats = json.RawMessage(stats)
+	resp.CreatedAt = createdAt.UTC().Format(time.RFC3339)
 	if agentID != "" {
 		resp.AgentID = &agentID
 	}

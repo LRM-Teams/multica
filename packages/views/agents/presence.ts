@@ -137,9 +137,20 @@ export function presenceStatusToken(
   presence: AgentPresenceDetail | "loading" | null | undefined,
 ): PresenceStatusToken | null {
   if (!presence || presence === "loading") return null;
-  return presence.availability === "online"
-    ? { kind: "workload", value: presence.workload }
-    : { kind: "availability", value: presence.availability };
+  if (presence.availability !== "online") {
+    return { kind: "availability", value: presence.availability };
+  }
+  // Online: surface the workload word only for the active / anomalous states
+  // (Working / Queued). A plain idle plate — connected, nothing on the plate —
+  // reads as the availability word "Online" (green dot), NOT the workload word
+  // "Idle" (gray): a connected, ready agent is available, not away/inactive
+  // (Frank/Miles 2026-07-15). Green also re-aligns with raft (idle = green).
+  // Scope: this is the presence STATUS word only. The Activity timeline's
+  // historical "Idle" rows are a separate label set (ACTIVITY_LABEL_EN) and
+  // stay unchanged — they record "went idle at time X", not live availability.
+  return presence.workload === "idle"
+    ? { kind: "availability", value: "online" }
+    : { kind: "workload", value: presence.workload };
 }
 
 /**

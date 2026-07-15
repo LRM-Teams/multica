@@ -114,7 +114,7 @@ describe("resolveAgentLiveStatus (header = Activity latest-row projection)", () 
     ).toBeNull();
   });
 
-  it("falls back to Idle when online with no active task", () => {
+  it("shows Online (not Idle) when online with no active task", () => {
     const view = resolveAgentLiveStatus({
       presence: presence({ availability: "online", workload: "idle" }),
       activeTask: null,
@@ -122,7 +122,7 @@ describe("resolveAgentLiveStatus (header = Activity latest-row projection)", () 
       tAgents,
       tChat,
     });
-    expect(view?.label).toBe("Idle");
+    expect(view?.label).toBe("Online");
   });
 
   it("shows Offline from presence when offline with no active task", () => {

@@ -2498,6 +2498,11 @@ func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.Agent
 		h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
 		return nil
 	}
+	if channelTask && !explicitAction && outputType == protocol.ChatOutputKindMessage && h.shouldSuppressWeakAgentThreadPlainText(ctx, task, output) {
+		slog.Warn("complete task: suppressing weak agent thread plain-text fallback", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "output_suppressed_reason", protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
+		h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
+		return nil
+	}
 	if channelTask && explicitAction && (outputType == protocol.ChatOutputKindMessage || outputType == protocol.ChatOutputKindReaction) && !h.taskRuntimeHasCapability(ctx, task, protocol.DaemonCapabilityChannelOutputActions) {
 		slog.Warn("complete task: suppressing channel output action from outdated daemon", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "action", req.Action, "output_suppressed_reason", protocol.ChannelOutputSuppressedReasonDaemonOutdated)
 		h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonDaemonOutdated)
@@ -2639,13 +2644,28 @@ func isNoReplyRationaleFinalText(output string, parts []protocol.MessagePart) bo
 	}
 	for _, phrase := range []string{
 		"no visible reply needed",
+		"not posting",
+		"silence - no action",
 		"not directed at me - no visible reply needed",
 		"not directed at me - this is a general greeting, not a task or request. no visible reply needed",
 		"not directed at me - frank's \"hi\" is a general greeting following my own earlier message, not a new task or all-hands request. no visible reply needed",
+		"已进入静默状态，不再执行任何操作",
+		"已保持静默，无需额外操作",
+		"静默 - 无操作",
 	} {
 		if normalized == phrase {
 			return true
 		}
+	}
+	return isNoReplyRationalePrefix(normalized)
+}
+
+func isNoReplyRationalePrefix(normalized string) bool {
+	if strings.HasPrefix(normalized, "not posting -") {
+		return true
+	}
+	if strings.HasPrefix(normalized, "不发布-") || strings.HasPrefix(normalized, "不发布，") || strings.HasPrefix(normalized, "不发布,") {
+		return true
 	}
 	return false
 }
@@ -2654,10 +2674,17 @@ func normalizeNoReplyRationaleCandidate(output string) string {
 	normalized := strings.ToLower(strings.TrimSpace(output))
 	normalized = strings.ReplaceAll(normalized, "—", "-")
 	normalized = strings.ReplaceAll(normalized, "–", "-")
+	for strings.Contains(normalized, "--") {
+		normalized = strings.ReplaceAll(normalized, "--", "-")
+	}
 	normalized = strings.Join(strings.Fields(normalized), " ")
 	normalized = strings.TrimSpace(normalized)
-	for strings.HasSuffix(normalized, ".") {
-		normalized = strings.TrimSpace(strings.TrimSuffix(normalized, "."))
+	for {
+		trimmed := strings.TrimSpace(strings.TrimRight(normalized, ".。！!"))
+		if trimmed == normalized {
+			break
+		}
+		normalized = trimmed
 	}
 	return normalized
 }

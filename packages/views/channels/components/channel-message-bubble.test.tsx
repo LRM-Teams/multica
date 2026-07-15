@@ -71,6 +71,27 @@ vi.mock("@multica/core/agents", () => ({
 
 vi.mock("@multica/core/paths", () => ({
   useCurrentWorkspace: () => ({ id: "ws-1" }),
+  // Needed once a system row projects anchored issue refs into linked tokens.
+  useWorkspacePaths: () => ({
+    issueDetail: (issueId: string) => `/acme/issues/${issueId}`,
+  }),
+}));
+
+// Projected issue tokens render through AppLink, which needs a NavigationProvider.
+vi.mock("../../navigation/app-link", () => ({
+  AppLink: ({
+    href,
+    children,
+    className,
+  }: {
+    href: string;
+    children: React.ReactNode;
+    className?: string;
+  }) => (
+    <a href={href} className={className}>
+      {children}
+    </a>
+  ),
 }));
 
 // The bubble resolves the author's live avatar from the members/agents cache.
@@ -1096,6 +1117,39 @@ describe("ChannelMessageBubble", () => {
     await waitFor(() =>
       expect(screen.queryByRole("dialog", { name: "Message actions" })).not.toBeInTheDocument(),
     );
+  });
+
+  it("projects anchored issue refs in a backflow system row instead of dumping raw text (#469/#497)", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          type: "system",
+          author_id: null,
+          author_name: "System",
+          content: "MUL-7 assigned to Felix",
+          parts: [
+            {
+              type: "reference",
+              ref_type: "issue-ref",
+              ref_subtype: "issue",
+              ref_id: "issue-uuid",
+              label: "MUL-7",
+              content_start_utf16: 0,
+              content_end_utf16: 5,
+            },
+          ],
+        } as never)}
+        currentUserId="user-1"
+        onOpenThread={vi.fn()}
+        onReact={vi.fn()}
+      />,
+    );
+
+    // Pre-fix the system row rendered `message.content` as a bare string, so a
+    // backflow "MUL-7 assigned to …" could never become a token even once the
+    // server anchored it.
+    const systemRow = screen.getByTestId("system-message-row");
+    expect(within(systemRow).getByText("MUL-7").closest("a")).not.toBeNull();
   });
 
   it("renders system messages as notice rows without chat bubble actions", () => {

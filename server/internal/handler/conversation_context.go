@@ -14,6 +14,7 @@ const conversationContextVersion = "ctx_v1"
 const (
 	channelHistoryMessageMaxChars = 800
 	channelHistoryMessageMaxLines = 20
+	chatSummaryLargeBlockLines    = 4
 )
 
 type conversationSurface struct {
@@ -86,7 +87,7 @@ func buildChatContextSummary(msgs []db.ChatMessage, totalTokens int64, reason, w
 	}
 	b.WriteString("Recent surface messages:\n")
 	for _, m := range recentChatMessages(msgs, chatResumeRecentMessageLimit) {
-		fmt.Fprintf(&b, "- %s: %s\n", m.Role, compactChatLine(m.Content))
+		fmt.Fprintf(&b, "- %s: %s\n", m.Role, compactChatSummaryContent(m.Content))
 	}
 	b.WriteString("Older tool outputs/log dumps are not included. If exact older details matter, re-read the referenced files/logs instead of assuming they are in context.\n")
 	return b.String()
@@ -133,6 +134,61 @@ func channelContextMessagesExcludingTrigger(messages []ChannelMessageResponse, t
 		out = append(out, msg)
 	}
 	return out
+}
+
+func compactChatSummaryContent(content string) string {
+	if !isLargeChatSummaryBlock(content) {
+		return compactChatLine(content)
+	}
+	preview := firstCompactLines(content, chatSummaryLargeBlockLines)
+	if preview == "" {
+		preview = compactChatLine(content)
+	}
+	if preview != "" {
+		preview += " "
+	}
+	return preview + "[omitted large log/code/json block; if exact details matter, fetch the original chat message, task log, attachment, or referenced file via Multica CLI before relying on it.]"
+}
+
+func isLargeChatSummaryBlock(content string) bool {
+	text := strings.TrimSpace(content)
+	if text == "" {
+		return false
+	}
+	lines := strings.Count(text, "\n") + 1
+	if lines > chatSummaryLargeBlockLines || len([]rune(text)) > 1200 {
+		return true
+	}
+	lower := strings.ToLower(text)
+	for _, marker := range []string{"```", "traceback", "exception", "error:", "failed", "panic:", "stack trace", "npm err", "pnpm ", "go test", "diff --git", "@@ ", "{\"", "[{"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func firstCompactLines(content string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	content = strings.ReplaceAll(content, "\r", "\n")
+	parts := make([]string, 0, limit)
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.Join(strings.Fields(line), " ")
+		if line == "" {
+			continue
+		}
+		if len([]rune(line)) > 180 {
+			line = string([]rune(line)[:180]) + "..."
+		}
+		parts = append(parts, line)
+		if len(parts) >= limit {
+			break
+		}
+	}
+	return strings.Join(parts, " / ")
 }
 
 func formatChannelMessageLine(msg ChannelMessageResponse) string {

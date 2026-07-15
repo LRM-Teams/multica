@@ -4084,6 +4084,7 @@ type claimRuntimeGuardTask struct {
 	PriorSessionID           string   `json:"prior_session_id"`
 	PriorWorkDir             string   `json:"prior_work_dir"`
 	ChatMessage              string   `json:"chat_message"`
+	ChatContextSummary       string   `json:"chat_context_summary"`
 	ThreadName               string   `json:"thread_name"`
 	QuickCreateAttachmentIDs []string `json:"quick_create_attachment_ids"`
 }
@@ -4574,6 +4575,78 @@ func TestClaimTask_ChatPriorSessionRuntimeGuard(t *testing.T) {
 	}
 	if task.PriorWorkDir != "/tmp/same-chat-workdir" {
 		t.Fatalf("chat runtime match: expected PriorWorkDir='/tmp/same-chat-workdir', got %q", task.PriorWorkDir)
+	}
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_task_queue
+		SET status = 'completed', completed_at = now()
+		WHERE chat_session_id = $1 AND status IN ('dispatched', 'running')
+	`, resumeSessionID); err != nil {
+		t.Fatalf("setup: complete claimed resume chat task: %v", err)
+	}
+
+	var budgetSessionID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO chat_session (
+			workspace_id, agent_id, creator_id, title,
+			session_id, work_dir, runtime_id
+		)
+		VALUES ($1, $2, $3, 'token budget chat', 'budget-native-session', '/tmp/budget-chat-workdir', $4)
+		RETURNING id
+	`, testWorkspaceID, agentID, testUserID, runtimeID).Scan(&budgetSessionID); err != nil {
+		t.Fatalf("setup: create token budget chat session: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM chat_session WHERE id = $1`, budgetSessionID) })
+
+	var priorBudgetTaskID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (
+			agent_id, runtime_id, chat_session_id,
+			status, priority, started_at, completed_at,
+			session_id, work_dir
+		)
+		VALUES ($1, $2, $3, 'completed', 0, now(), now(), 'budget-native-session', '/tmp/budget-chat-workdir')
+		RETURNING id
+	`, agentID, runtimeID, budgetSessionID).Scan(&priorBudgetTaskID); err != nil {
+		t.Fatalf("setup: create token budget prior chat task: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO task_usage (task_id, provider, model, input_tokens)
+		VALUES ($1, 'claude', 'test-model', $2)
+	`, priorBudgetTaskID, chatNativeResumeTokenLimit); err != nil {
+		t.Fatalf("setup: create token budget usage: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO chat_message (chat_session_id, role, content, created_at) VALUES
+			($1, 'user', 'old long-running context', now()),
+			($1, 'assistant', 'previous answer', now() + interval '1 second'),
+			($1, 'user', 'fresh follow-up', now() + interval '2 second')
+	`, budgetSessionID); err != nil {
+		t.Fatalf("setup: insert token budget messages: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_task_queue (
+			agent_id, runtime_id, chat_session_id,
+			status, priority
+		)
+		VALUES ($1, $2, $3, 'queued', 0)
+	`, agentID, runtimeID, budgetSessionID); err != nil {
+		t.Fatalf("setup: create token budget chat task: %v", err)
+	}
+
+	task = claimTaskForRuntimeGuard(t, runtimeID, daemonID)
+	if task.PriorSessionID != "" {
+		t.Fatalf("token budget: expected empty PriorSessionID, got %q", task.PriorSessionID)
+	}
+	if task.PriorWorkDir != "/tmp/budget-chat-workdir" {
+		t.Fatalf("token budget: expected PriorWorkDir='/tmp/budget-chat-workdir', got %q", task.PriorWorkDir)
+	}
+	if task.ChatMessage != "fresh follow-up" {
+		t.Fatalf("token budget: expected current chat message, got %q", task.ChatMessage)
+	}
+	for _, want := range []string{"Native session resume was intentionally skipped", "native resume budget", "Recent surface messages", "fresh follow-up"} {
+		if !strings.Contains(task.ChatContextSummary, want) {
+			t.Fatalf("token budget summary missing %q:\n%s", want, task.ChatContextSummary)
+		}
 	}
 }
 

@@ -229,7 +229,18 @@ func normalizeMentionCandidateLabel(label string) string {
 // occurrence. Notification/routing consumers remain responsible for deduping by
 // actor or entity ID; display needs the per-occurrence anchor.
 func appendReferenceOccurrences(parts []protocol.MessagePart, references []protocol.MessagePart) []protocol.MessagePart {
-	out := append([]protocol.MessagePart{}, parts...)
+	// Normalization intentionally clears caller-supplied source ranges: a
+	// reference becomes displayable only after this server-side resolver has
+	// verified both its target and its exact source occurrence. Drop those
+	// unanchored sidecars rather than persisting a stale duplicate next to the
+	// verified reference below.
+	out := make([]protocol.MessagePart, 0, len(parts)+len(references))
+	for _, part := range parts {
+		if part.Type == protocol.MessagePartTypeReference && (part.ContentStartUTF16 == nil || part.ContentEndUTF16 == nil) {
+			continue
+		}
+		out = append(out, part)
+	}
 	for _, reference := range references {
 		if reference.ContentStartUTF16 == nil || reference.ContentEndUTF16 == nil {
 			continue

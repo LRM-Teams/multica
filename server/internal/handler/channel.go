@@ -4768,6 +4768,15 @@ func (h *Handler) handleChannelChatDone(e events.Event) {
 	if strings.TrimSpace(content) == "" {
 		return
 	}
+	ch, found := h.getChannel(ctx, uuidToString(workspaceID), channelID)
+	if !found {
+		return
+	}
+	content, parts, err = h.enrichChannelMessageMentions(ctx, ch, content, parts)
+	if err != nil {
+		slog.Warn("channel bridge: invalid actor mention output", "chat_session_id", payload.ChatSessionID, "error", err)
+		return
+	}
 	initiatorID := h.channelInitiatorForChatSession(ctx, parseUUID(payload.ChatSessionID))
 	if h.handleTargetedChannelChatDone(ctx, chatOutputOrigin{channelID: channelID, workspaceID: workspaceID, agentID: agentID}, payload, content, parts, initiatorID) {
 		return
@@ -4788,18 +4797,15 @@ func (h *Handler) handleChannelChatDone(e events.Event) {
 	_, _ = h.DB.Exec(ctx, `UPDATE channel SET updated_at = now() WHERE id = $1`, channelID)
 	h.clearDMHiddenForChannelMembers(ctx, uuidToString(workspaceID), channelID)
 	h.publishChannelToMembers(ctx, protocol.EventChannelMessage, uuidToString(workspaceID), "agent", uuidToString(agentID), channelID, msg)
-	ch, found := h.getChannel(ctx, uuidToString(workspaceID), channelID)
-	if found {
-		if ch.Kind == "group" {
-			h.ingestWendyAgentGroupMessage(ctx, ch, msg, agentID)
-		}
-		if threadRootMessageID.Valid {
-			h.dispatchChannelThreadReplyMentions(ctx, ch, msg, initiatorID)
-		} else {
-			h.dispatchChannelMentions(ctx, ch, msg, initiatorID)
-		}
-		h.sendChannelMessageToFeishu(ctx, ch, agentName, content)
+	if ch.Kind == "group" {
+		h.ingestWendyAgentGroupMessage(ctx, ch, msg, agentID)
 	}
+	if threadRootMessageID.Valid {
+		h.dispatchChannelThreadReplyMentions(ctx, ch, msg, initiatorID)
+	} else {
+		h.dispatchChannelMentions(ctx, ch, msg, initiatorID)
+	}
+	h.sendChannelMessageToFeishu(ctx, ch, agentName, content)
 }
 
 func (h *Handler) channelReactionTargetFromPrompt(ctx context.Context, chatSessionID, taskID pgtype.UUID) pgtype.UUID {

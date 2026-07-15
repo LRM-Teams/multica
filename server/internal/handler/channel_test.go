@@ -145,7 +145,17 @@ func TestChannelMentionStoresThreadContextAndBridgesAgentReply(t *testing.T) {
 		t.Fatalf("current trigger should appear exactly once, got %d:\n%s", count, prompt)
 	}
 
-	testHandler.handleChannelChatDone(events.Event{Payload: protocol.ChatDonePayload{ChatSessionID: sessionID, Content: "@Channel Helper says hi"}})
+	testHandler.handleChannelChatDone(events.Event{Payload: protocol.ChatDonePayload{
+		ChatSessionID: sessionID,
+		Content:       "@Channel Helper says hi",
+		Parts: []protocol.MessagePart{{
+			Type:       protocol.MessagePartTypeReference,
+			RefType:    "mention",
+			RefSubType: "agent",
+			RefID:      agentID,
+			Label:      "@Channel Helper",
+		}},
+	}})
 	var authorType, replyThread string
 	var replyDepth int
 	if err := testPool.QueryRow(ctx, `
@@ -156,15 +166,33 @@ func TestChannelMentionStoresThreadContextAndBridgesAgentReply(t *testing.T) {
 		t.Fatalf("unexpected bracketed reply row: %s %s %d", authorType, replyThread, replyDepth)
 	}
 	var replyRoot string
+	var rawReplyParts []byte
 	if err := testPool.QueryRow(ctx, `
-		SELECT author_type, thread_id, thread_root_message_id, trigger_depth
+		SELECT author_type, thread_id, thread_root_message_id, trigger_depth, parts
 		FROM channel_message
 		WHERE channel_id = $1 AND content = '@Channel Helper says hi'
-		LIMIT 1`, channelID).Scan(&authorType, &replyThread, &replyRoot, &replyDepth); err != nil {
+		LIMIT 1`, channelID).Scan(&authorType, &replyThread, &replyRoot, &replyDepth, &rawReplyParts); err != nil {
 		t.Fatalf("load bridged reply: %v", err)
 	}
 	if authorType != "agent" || replyThread != "debate-thread" || replyRoot != trigger.ID || replyDepth != 3 {
 		t.Fatalf("bridged reply = %s/%q/%q/%d, want agent/debate-thread/%s/3", authorType, replyThread, replyRoot, replyDepth, trigger.ID)
+	}
+	var replyParts []protocol.MessagePart
+	if err := json.Unmarshal(rawReplyParts, &replyParts); err != nil {
+		t.Fatalf("decode bridged reply parts: %v", err)
+	}
+	start, end := contentUTF16Span("@Channel Helper says hi", 0, len("@Channel Helper"))
+	anchoredMentions := 0
+	for _, part := range replyParts {
+		if part.Type == protocol.MessagePartTypeReference && part.RefType == "mention" && part.RefSubType == "agent" && part.RefID == agentID {
+			if part.ContentStartUTF16 == nil || part.ContentEndUTF16 == nil || *part.ContentStartUTF16 != start || *part.ContentEndUTF16 != end {
+				t.Fatalf("bridged reply mention span = %+v, want [%d,%d)", part, start, end)
+			}
+			anchoredMentions++
+		}
+	}
+	if anchoredMentions != 1 {
+		t.Fatalf("bridged reply agent references = %d, want exactly one anchored reference: %+v", anchoredMentions, replyParts)
 	}
 }
 

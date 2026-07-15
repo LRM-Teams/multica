@@ -2973,7 +2973,9 @@ func TestCompleteTask_GroupChannelThreadTargetShowInChannelProjectsSameMessage(t
 	if err := testPool.QueryRow(ctx, `SELECT name FROM channel WHERE id = $1`, channelID).Scan(&channelName); err != nil {
 		t.Fatalf("load channel name: %v", err)
 	}
-	visibleReply := "please [@Thread Projection Completion Target](mention://agent/" + targetAgentID + ") review from the thread"
+	// Agent output now writes bare visible handles; channel enrichment resolves
+	// this member to the anchored structured reference used for display/routing.
+	visibleReply := "please @Thread Projection Completion Target review from the thread"
 
 	w := completeTaskForTest(t, taskID, map[string]any{
 		"action":  "send",

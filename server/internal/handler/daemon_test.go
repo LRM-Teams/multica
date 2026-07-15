@@ -1326,6 +1326,9 @@ func TestTaskMessageVisibility_ToolResultIsDiagnostic(t *testing.T) {
 	if got := taskMessageVisibility("log"); got != "diagnostic_only" {
 		t.Fatalf("log visibility = %q, want diagnostic_only", got)
 	}
+	if got := taskMessageVisibility("thinking"); got != "diagnostic_only" {
+		t.Fatalf("thinking visibility = %q, want diagnostic_only", got)
+	}
 }
 
 func TestTaskMessageRequestVisibility_UnmappedToolIsDiagnostic(t *testing.T) {

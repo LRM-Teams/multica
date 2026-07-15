@@ -1023,9 +1023,6 @@ func agentInboxTaskMessagePayload(event db.AgentInboxEvent, msg TaskMessageReque
 		CreatedAt:  time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	switch kind {
-	case activityKindThinking:
-		payload.Type = "thinking"
-		payload.Content = agentInboxActivityMessageText(msg)
 	case activityKindToolCall:
 		payload.Type = "tool_use"
 		payload.Tool = stringFromMap(details, "tool")
@@ -1045,7 +1042,11 @@ func agentInboxTaskMessagePayload(event db.AgentInboxEvent, msg TaskMessageReque
 func agentInboxActivityMessageKind(messageType string) (kind, eventType, severity string) {
 	switch messageType {
 	case "thinking":
-		return activityKindThinking, "thinking", "info"
+		// Raft's thought stream is useful for diagnostics, but it is not a
+		// user-facing Activity narrative. Keeping it custom also prevents a
+		// future timeline consumer from mistaking each coalesced chunk for a
+		// phase transition.
+		return activityKindCustom, "runtime_thinking", "info"
 	case "tool_use":
 		return activityKindToolCall, "tool_use", "info"
 	case "tool_result":

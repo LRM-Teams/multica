@@ -2956,10 +2956,12 @@ func (h *Handler) ReportTaskMessages(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if workspaceID != "" {
-			h.publishTask(protocol.EventTaskMessage, workspaceID, "system", "", taskID,
-				taskMessageToPayload(created, taskID, uuidToString(task.IssueID)))
-			event := h.taskMessageActivityTimelineEvent(r.Context(), workspaceID, task, created)
-			h.publishAgentActivityRealtimeEvent(r.Context(), workspaceID, uuidToString(task.AgentID), uuidToString(created.ID), event, AgentActivityTargetRef{Kind: "none"})
+			if visibility == "user_facing" {
+				h.publishTask(protocol.EventTaskMessage, workspaceID, "system", "", taskID,
+					taskMessageToPayload(created, taskID, uuidToString(task.IssueID)))
+				event := h.taskMessageActivityTimelineEvent(r.Context(), workspaceID, task, created)
+				h.publishAgentActivityRealtimeEvent(r.Context(), workspaceID, uuidToString(task.AgentID), uuidToString(created.ID), event, AgentActivityTargetRef{Kind: "none"})
+			}
 			if msg.Type == "tool_use" && strings.TrimSpace(msg.Tool) != "" && !taskMessageToolIsMapped(msg.Type, msg.Tool, msg.Input) {
 				targetKind, targetID, targetSlug := h.taskActivityTarget(r.Context(), task)
 				h.recordAgentActivityEvent(r.Context(), h.DB,
@@ -3054,7 +3056,7 @@ func taskMessageRequestVisibility(msg TaskMessageRequest) string {
 }
 
 func taskMessageVisibilityForMessage(msgType, tool string, input map[string]any) string {
-	if msgType == "tool_result" || msgType == "log" {
+	if msgType == "thinking" || msgType == "tool_result" || msgType == "log" {
 		return "diagnostic_only"
 	}
 	if !taskMessageToolIsMapped(msgType, tool, input) {

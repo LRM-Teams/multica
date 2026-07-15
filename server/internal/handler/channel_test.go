@@ -1237,16 +1237,13 @@ func TestChannelAgentInboxMessagesRecordRuntimeTrajectory(t *testing.T) {
 	if messagesRec.Code != http.StatusOK {
 		t.Fatalf("report inbox messages: status=%d body=%s", messagesRec.Code, messagesRec.Body.String())
 	}
-	if len(liveTaskMessages) != 4 {
-		t.Fatalf("live task messages = %+v, want four user-facing mapped messages", liveTaskMessages)
+	if len(liveTaskMessages) != 3 {
+		t.Fatalf("live task messages = %+v, want three user-facing mapped messages", liveTaskMessages)
 	}
-	if liveTaskMessages[0].Seq != 1 || liveTaskMessages[0].Type != "thinking" || liveTaskMessages[0].Content != "I should create the requested file." {
-		t.Fatalf("live thinking payload = %+v", liveTaskMessages[0])
+	if liveTaskMessages[0].Seq != 2 || liveTaskMessages[0].Type != "tool_use" || liveTaskMessages[0].Tool != "bash" {
+		t.Fatalf("live terminal payload = %+v, want canonical bash tool_use", liveTaskMessages[0])
 	}
-	if liveTaskMessages[1].Seq != 2 || liveTaskMessages[1].Type != "tool_use" || liveTaskMessages[1].Tool != "bash" {
-		t.Fatalf("live terminal payload = %+v, want canonical bash tool_use", liveTaskMessages[1])
-	}
-	if liveTaskMessages[2].Seq != 7 || liveTaskMessages[2].Tool != "write_file" || liveTaskMessages[3].Seq != 8 || liveTaskMessages[3].Tool != "read_file" {
+	if liveTaskMessages[1].Seq != 7 || liveTaskMessages[1].Tool != "write_file" || liveTaskMessages[2].Seq != 8 || liveTaskMessages[2].Tool != "read_file" {
 		t.Fatalf("live file tool payloads = %+v, want write/read file without unmapped status tool", liveTaskMessages)
 	}
 
@@ -1289,8 +1286,8 @@ func TestChannelAgentInboxMessagesRecordRuntimeTrajectory(t *testing.T) {
 	if len(activity) != 8 {
 		t.Fatalf("activity rows = %+v, want 8", activity)
 	}
-	if activity[0].kind != activityKindThinking || activity[0].visibility != "user_facing" {
-		t.Fatalf("thinking row = %+v, want user-facing thinking", activity[0])
+	if activity[0].kind != activityKindCustom || activity[0].eventType != "runtime_thinking" || activity[0].visibility != "diagnostic_only" {
+		t.Fatalf("thinking row = %+v, want diagnostic runtime_thinking", activity[0])
 	}
 	if activity[1].kind != activityKindToolCall || activity[1].eventType != "tool_use" || activity[1].visibility != "user_facing" {
 		t.Fatalf("tool row = %+v, want user-facing tool_use", activity[1])

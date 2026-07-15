@@ -290,21 +290,8 @@ func TestAgentActivityEvents_UsesRaftKindsAndTaskMessageRows(t *testing.T) {
 			t.Fatalf("activity events must not expose presentation field %s: %s", removedField, ownerEvents.raw)
 		}
 	}
-	thinking := requireActivityTimelineEvent(t, ownerEvents, thinkingID)
-	if thinking.ActivityKind != activityKindThinking || thinking.DetailKind != "thinking" {
-		t.Fatalf("thinking event activity/detail kind = %q/%q", thinking.ActivityKind, thinking.DetailKind)
-	}
-	if thinking.Text == nil || *thinking.Text != "thinking aggregate text" {
-		t.Fatalf("thinking text not surfaced as ordered aggregate text: %+v", thinking)
-	}
-	if len(thinking.Entries) != 1 || thinking.Entries[0].Kind != activityKindThinking || thinking.Entries[0].Text == nil || *thinking.Entries[0].Text != "thinking aggregate text" {
-		t.Fatalf("thinking entries missing raft-style text entry: %+v", thinking.Entries)
-	}
-	if thinking.TaskID != nil {
-		t.Fatalf("chat task must not expose issue task_id deep link: %+v", thinking.TaskID)
-	}
-	if !hasSourceSeq(thinking.SourceRefs, "seq", 1) || !hasSourceID(thinking.SourceRefs, "task_message", thinkingID) {
-		t.Fatalf("thinking source refs missing task message/seq: %+v", thinking.SourceRefs)
+	if thinking := findActivityTimelineEvent(ownerEvents, thinkingID); thinking != nil {
+		t.Fatalf("thinking must not enter the main Activity timeline: %+v", *thinking)
 	}
 	tool := requireActivityTimelineEvent(t, ownerEvents, toolID)
 	if tool.ActivityKind != activityKindToolCall || tool.DetailKind != "tool_use" {
@@ -337,7 +324,7 @@ func TestAgentActivityEvents_UsesRaftKindsAndTaskMessageRows(t *testing.T) {
 
 	outsiderEvents := listAgentActivityEventsForUser(t, outsiderID, agentID, "")
 	if got := findActivityTimelineEvent(outsiderEvents, thinkingID); got != nil {
-		t.Fatalf("non-creator must not see owner DM task-message event: %+v", *got)
+		t.Fatalf("thinking must not enter a non-owner Activity timeline: %+v", *got)
 	}
 }
 
@@ -550,7 +537,9 @@ func TestAgentActivityEvents_DefaultPageSkipsDiagnosticNoise(t *testing.T) {
 	if events.resp.Limit != agentActivityEventDefaultLimit {
 		t.Fatalf("default events limit = %d, want %d", events.resp.Limit, agentActivityEventDefaultLimit)
 	}
-	requireActivityTimelineEvent(t, events, thinkingID)
+	if got := findActivityTimelineEvent(events, thinkingID); got != nil {
+		t.Fatalf("default events page included thinking row: %+v", *got)
+	}
 	requireActivityTimelineEvent(t, events, uuidToString(executedID))
 	requireActivityTimelineEvent(t, events, uuidToString(failedID))
 	statusEvent := requireActivityTimelineEvent(t, events, uuidToString(statusID))
@@ -881,7 +870,7 @@ func TestReportTaskMessagesPublishesHydratedScopedActivityEvent(t *testing.T) {
 
 	memberID := createWorkspaceMemberUser(t, "Activity Realtime Member", "activity-realtime-"+randomID()+"@multica.test")
 	agentID := createWorkspaceVisibleActivityAgent(t, "activity-realtime-agent")
-	channelID, channelSessionID := createActivityChannelSession(t, agentID, memberID)
+	_, channelSessionID := createActivityChannelSession(t, agentID, memberID)
 	taskID := createActivityRunTask(t, agentID, channelSessionID, "running", "channel realtime work")
 
 	var captured *events.Event
@@ -908,27 +897,8 @@ func TestReportTaskMessagesPublishesHydratedScopedActivityEvent(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("ReportTaskMessages: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	if captured == nil {
-		t.Fatal("agent_activity:event was not published with a hydrated thinking event")
-	}
-	payload := captured.Payload.(AgentActivityEventRealtimePayload)
-	if payload.EventID == "" || payload.Event.ID != payload.EventID {
-		t.Fatalf("payload event id mismatch: %+v", payload)
-	}
-	if payload.Event.Kind != activityKindThinking || payload.Event.Text == nil || *payload.Event.Text != "Realtime aggregate thinking" {
-		t.Fatalf("hydrated event missing thinking payload: %+v", payload.Event)
-	}
-	if payload.Event.TargetRef.Kind != "channel" || payload.Event.TargetRef.ID == nil || *payload.Event.TargetRef.ID != channelID {
-		t.Fatalf("hydrated event target ref = %+v, want channel %s", payload.Event.TargetRef, channelID)
-	}
-	if len(captured.RecipientUserIDs) != 1 || captured.RecipientUserIDs[0] != memberID {
-		t.Fatalf("channel activity realtime must be recipient-scoped to channel users, got %+v want [%s]", captured.RecipientUserIDs, memberID)
-	}
-	if payload.Event.TaskID != nil {
-		t.Fatalf("chat/channel task-message event must not expose issue task_id deep link: %+v", payload.Event.TaskID)
-	}
-	if !hasSourceSeq(payload.Event.SourceRefs, "seq", 7) || !hasSourceID(payload.Event.SourceRefs, "task_message", payload.EventID) {
-		t.Fatalf("hydrated event source refs missing task_message/seq: %+v", payload.Event.SourceRefs)
+	if captured != nil {
+		t.Fatalf("thinking must not publish an Activity realtime event: %+v", captured.Payload)
 	}
 }
 

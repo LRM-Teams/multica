@@ -154,7 +154,6 @@ func runChannelUnmute(cmd *cobra.Command, _ []string) error {
 
 func setChannelMute(cmd *cobra.Command, mute bool) error {
 	target, _ := cmd.Flags().GetString("target")
-	target = strings.TrimPrefix(target, "#")
 
 	client, err := newAPIClient(cmd)
 	if err != nil {
@@ -164,15 +163,27 @@ func setChannelMute(cmd *cobra.Command, mute bool) error {
 	ctx, cancel := cli.APIContext(context.Background())
 	defer cancel()
 
+	channelID, err := resolveChannelIDFromUploadTarget(ctx, client, target)
+	if err != nil {
+		return fmt.Errorf("resolve channel target: %w", err)
+	}
+	if channelID == "" {
+		return fmt.Errorf("--target is required")
+	}
+
 	action := "mute"
-	path := fmt.Sprintf("/api/channels/%s/mute", url.PathEscape(target))
+	path := fmt.Sprintf("/api/channels/%s/agent-mute", url.PathEscape(channelID))
 	if !mute {
-		path = fmt.Sprintf("/api/channels/%s/unmute", url.PathEscape(target))
 		action = "unmute"
 	}
 
 	var resp map[string]any
-	if err := client.PostJSON(ctx, path, map[string]string{}, &resp); err != nil {
+	if mute {
+		err = client.PutJSON(ctx, path, map[string]string{}, &resp)
+	} else {
+		err = client.DeleteJSON(ctx, path)
+	}
+	if err != nil {
 		return fmt.Errorf("%s channel: %w", action, err)
 	}
 

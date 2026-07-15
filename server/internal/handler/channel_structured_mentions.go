@@ -24,6 +24,25 @@ type channelMentionOccurrence struct {
 	End       int
 }
 
+// finalizeAgentChannelMessage resolves the server-authored structured facts for
+// an agent's visible message in its final destination. Callers must resolve a
+// destination before calling this helper: mention eligibility is a property of
+// the receiving channel, never of the channel that woke the agent.
+//
+// messageparts.Normalize clears caller-provided source ranges before this point,
+// and enrichChannelMessageMentions only appends verified destination-scoped
+// anchors. This keeps persistence, dispatch, realtime, and Feishu on one
+// canonical set of parts.
+func (h *Handler) finalizeAgentChannelMessage(ctx context.Context, ch ChannelResponse, content string, parts []protocol.MessagePart) (string, []protocol.MessagePart, error) {
+	if ch.Kind != "group" {
+		// Direct messages have no group-member resolver. Keep ordinary parts, but
+		// never persist a caller-supplied reference sidecar without a server
+		// verified source anchor.
+		return content, appendReferenceOccurrences(parts, nil), nil
+	}
+	return h.enrichChannelMessageMentions(ctx, ch, content, parts)
+}
+
 func (h *Handler) enrichChannelMessageMentions(ctx context.Context, ch ChannelResponse, content string, parts []protocol.MessagePart) (string, []protocol.MessagePart, error) {
 	if ch.Kind != "group" {
 		return content, parts, nil

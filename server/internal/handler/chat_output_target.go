@@ -261,23 +261,30 @@ func (h *Handler) ensureAgentHumanDMChannel(ctx context.Context, workspaceID, ag
 	return ch, true
 }
 
-func (h *Handler) handleTargetedChannelChatDone(ctx context.Context, origin chatOutputOrigin, payload protocol.ChatDonePayload, content string, parts []protocol.MessagePart, initiatorID pgtype.UUID) bool {
-	if strings.TrimSpace(payload.Target) == "" && !chatOutputOptionsPresent(payload.Options) {
-		return false
-	}
+// handleResolvedChannelChatDone is the sole visible-message path for a channel
+// chat completion. It resolves the final destination before deriving any
+// message facts, so a cross-channel output cannot borrow mention candidates
+// from the channel that originally woke the agent.
+func (h *Handler) handleResolvedChannelChatDone(ctx context.Context, origin chatOutputOrigin, payload protocol.ChatDonePayload, content string, parts []protocol.MessagePart, initiatorID, defaultThreadRootMessageID pgtype.UUID, defaultThreadID *string, defaultTriggerDepth int) {
 	target, err := h.resolveChatOutputTarget(ctx, origin, payload.Target, payload.Options)
 	if err != nil {
-		slog.Warn("channel bridge: suppressing invalid targeted chat output", "chat_session_id", payload.ChatSessionID, "target", payload.Target, "error", err)
-		return true
+		slog.Warn("channel bridge: suppressing invalid chat output target", "chat_session_id", payload.ChatSessionID, "target", payload.Target, "error", err)
+		return
 	}
-	switch target.kind {
-	case chatOutputTargetDM:
+	if archived, found := h.channelIsArchived(ctx, uuidToString(origin.workspaceID), origin.channelID); !found || archived {
+		return
+	}
+	if target.kind == chatOutputTargetDM {
 		ch, ok := h.ensureAgentHumanDMChannel(ctx, origin.workspaceID, origin.agentID, target.recipientID)
 		if !ok {
 			slog.Warn("channel bridge: create targeted dm failed", "chat_session_id", payload.ChatSessionID, "target", payload.Target)
-			return true
+			return
 		}
-		h.insertAgentChatOutputMessage(ctx, ch, origin.agentID, content, parts, pgtype.UUID{}, nil, 0, initiatorID, false)
+		target.channel = ch
+	}
+	switch target.kind {
+	case chatOutputTargetDM:
+		h.insertAgentChatOutputMessage(ctx, target.channel, origin.agentID, content, parts, pgtype.UUID{}, nil, 0, initiatorID, false)
 	case chatOutputTargetThread:
 		threadID := target.threadRoot.ThreadID
 		if threadID == nil || strings.TrimSpace(*threadID) == "" {
@@ -287,12 +294,24 @@ func (h *Handler) handleTargetedChannelChatDone(ctx context.Context, origin chat
 		mainTimelineVisible := payload.Options.ShowInChannelValue()
 		h.insertAgentChatOutputMessage(ctx, target.channel, origin.agentID, content, parts, parseUUID(target.threadRoot.ID), threadID, target.threadRoot.TriggerDepth+1, initiatorID, mainTimelineVisible)
 	case chatOutputTargetChannel:
-		h.insertAgentChatOutputMessage(ctx, target.channel, origin.agentID, content, parts, pgtype.UUID{}, nil, 0, initiatorID, false)
+		threadRootMessageID := pgtype.UUID{}
+		threadID := (*string)(nil)
+		triggerDepth := 0
+		if strings.TrimSpace(payload.Target) == "" && !chatOutputOptionsPresent(payload.Options) {
+			threadRootMessageID = defaultThreadRootMessageID
+			threadID = defaultThreadID
+			triggerDepth = defaultTriggerDepth + 1
+		}
+		h.insertAgentChatOutputMessage(ctx, target.channel, origin.agentID, content, parts, threadRootMessageID, threadID, triggerDepth, initiatorID, false)
 	}
-	return true
 }
 
 func (h *Handler) insertAgentChatOutputMessage(ctx context.Context, ch ChannelResponse, agentID pgtype.UUID, content string, parts []protocol.MessagePart, threadRootMessageID pgtype.UUID, threadID *string, triggerDepth int, initiatorID pgtype.UUID, mainTimelineVisible bool) (ChannelMessageResponse, bool) {
+	content, parts, err := h.finalizeAgentChannelMessage(ctx, ch, content, parts)
+	if err != nil {
+		slog.Warn("channel bridge: invalid agent message output", "channel_id", ch.ID, "agent_id", uuidToString(agentID), "error", err)
+		return ChannelMessageResponse{}, false
+	}
 	channelID := parseUUID(ch.ID)
 	workspaceID := parseUUID(ch.WorkspaceID)
 	agentName := h.agentName(ctx, agentID)
@@ -304,15 +323,14 @@ func (h *Handler) insertAgentChatOutputMessage(ctx context.Context, ch ChannelRe
 	if threadRootMessageID.Valid {
 		h.followChannelThreadAgent(ctx, channelID, threadRootMessageID, agentID)
 	}
+	messages := []ChannelMessageResponse{msg}
+	h.attachChannelMessageAuthorAvatars(ctx, ch.WorkspaceID, messages)
 	if mainTimelineVisible {
-		messages := []ChannelMessageResponse{msg}
 		h.attachChannelMessageThreadRootSummaries(ctx, ch.WorkspaceID, messages)
-		msg = messages[0]
 	}
+	msg = messages[0]
 	_, _ = h.DB.Exec(ctx, `UPDATE channel SET updated_at = now() WHERE id = $1`, channelID)
-	if ch.Kind == "dm" {
-		h.clearDMHiddenForChannelMembers(ctx, ch.WorkspaceID, channelID)
-	}
+	h.clearDMHiddenForChannelMembers(ctx, ch.WorkspaceID, channelID)
 	h.publishChannelToMembers(ctx, protocol.EventChannelMessage, ch.WorkspaceID, "agent", uuidToString(agentID), channelID, msg)
 	if ch.Kind == "group" {
 		h.ingestWendyAgentGroupMessage(ctx, ch, msg, agentID)

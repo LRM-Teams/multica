@@ -89,27 +89,15 @@ func (h *Handler) pickGroupManagerRuntime(ctx context.Context, workspaceID, user
 
 // EnsureGroupManagerForChannel provisions (idempotently) the single Beckham for a
 // group channel: create the agent, mark managed_role, bind the channel, and add
-// it as a member. Serialized per channel via an advisory lock so concurrent
-// calls cannot create two managers for one group. Returns (agent, created, err).
+// it as a member. The agent is created OUTSIDE a transaction (createAgentWithIdentity
+// retries on handle collisions, which would poison a surrounding tx); the
+// one-per-group guarantee comes from a conditional bind that only sets the manager
+// when the channel has none. Returns (agent, created, err).
 func (h *Handler) EnsureGroupManagerForChannel(ctx context.Context, workspaceID, channelID, creatorUserID pgtype.UUID) (db.Agent, bool, error) {
-	if h.TxStarter == nil {
-		return db.Agent{}, false, errors.New("group manager transaction starter unavailable")
-	}
-	tx, err := h.TxStarter.Begin(ctx)
-	if err != nil {
-		return db.Agent{}, false, err
-	}
-	defer tx.Rollback(ctx)
-
-	// Serialize provisioning for this channel (one-and-only-one guarantee).
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('group_manager'), hashtext($1))`, uuidToString(channelID)); err != nil {
-		return db.Agent{}, false, err
-	}
-
 	// Group channel that still has a live bound manager? Reuse it.
 	var kind string
 	var existingID pgtype.UUID
-	if err := tx.QueryRow(ctx, `
+	if err := h.DB.QueryRow(ctx, `
 		SELECT kind, group_manager_agent_id FROM channel WHERE id = $1 AND workspace_id = $2
 	`, channelID, workspaceID).Scan(&kind, &existingID); err != nil {
 		return db.Agent{}, false, err
@@ -118,17 +106,8 @@ func (h *Handler) EnsureGroupManagerForChannel(ctx context.Context, workspaceID,
 		return db.Agent{}, false, errors.New("group manager is only for group channels")
 	}
 	if existingID.Valid {
-		agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: existingID, WorkspaceID: workspaceID})
-		if err == nil && !agent.ArchivedAt.Valid {
-			if _, err := tx.Exec(ctx, `
-				INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-				VALUES ($1, $2, 'agent', $3) ON CONFLICT DO NOTHING
-			`, channelID, workspaceID, agent.ID); err != nil {
-				return db.Agent{}, false, err
-			}
-			if err := tx.Commit(ctx); err != nil {
-				return db.Agent{}, false, err
-			}
+		if agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: existingID, WorkspaceID: workspaceID}); err == nil && !agent.ArchivedAt.Valid {
+			h.ensureChannelAgentMember(ctx, workspaceID, channelID, agent.ID)
 			return agent, false, nil
 		}
 	}
@@ -138,8 +117,9 @@ func (h *Handler) EnsureGroupManagerForChannel(ctx context.Context, workspaceID,
 		return db.Agent{}, false, errGroupManagerNoRuntime
 	}
 
-	qtx := h.Queries.WithTx(tx)
-	agent, err := h.createAgentWithIdentity(ctx, qtx, db.CreateAgentParams{
+	// Create the agent outside any transaction so the identity retry-on-collision
+	// loop works (the Chinese display name collides on the derived handle).
+	agent, err := h.createAgentWithIdentity(ctx, h.Queries, db.CreateAgentParams{
 		WorkspaceID:        workspaceID,
 		Description:        beckhamDescription,
 		Instructions:       beckhamInstructions,
@@ -159,25 +139,51 @@ func (h *Handler) EnsureGroupManagerForChannel(ctx context.Context, workspaceID,
 	if err != nil {
 		return db.Agent{}, false, err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE agent SET managed_role = $2 WHERE id = $1`, agent.ID, managedRoleGroupManager); err != nil {
+	if _, err := h.DB.Exec(ctx, `UPDATE agent SET managed_role = $2 WHERE id = $1`, agent.ID, managedRoleGroupManager); err != nil {
 		return db.Agent{}, false, err
 	}
-	if _, err := tx.Exec(ctx, `
+
+	// Conditional bind: only claim the channel if it still has no manager. This is
+	// the one-per-group guarantee without holding a long transaction.
+	var boundID pgtype.UUID
+	err = h.DB.QueryRow(ctx, `
 		UPDATE channel SET group_manager_agent_id = $2, updated_at = now()
-		WHERE id = $1 AND workspace_id = $3
-	`, channelID, agent.ID, workspaceID); err != nil {
+		WHERE id = $1 AND workspace_id = $3 AND group_manager_agent_id IS NULL
+		RETURNING group_manager_agent_id
+	`, channelID, agent.ID, workspaceID).Scan(&boundID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Lost the race (or channel vanished): don't leave an orphan agent.
+		_, _ = h.DB.Exec(ctx, `UPDATE agent SET archived_at = now() WHERE id = $1`, agent.ID)
+		if existing, rerr := h.currentGroupManagerAgent(ctx, workspaceID, channelID); rerr == nil {
+			h.ensureChannelAgentMember(ctx, workspaceID, channelID, existing.ID)
+			return existing, false, nil
+		}
+		return db.Agent{}, false, errors.New("group manager binding lost and no live manager present")
+	}
+	if err != nil {
 		return db.Agent{}, false, err
 	}
-	if _, err := tx.Exec(ctx, `
+	h.ensureChannelAgentMember(ctx, workspaceID, channelID, agent.ID)
+	return agent, true, nil
+}
+
+// currentGroupManagerAgent loads the channel's currently bound, live manager.
+func (h *Handler) currentGroupManagerAgent(ctx context.Context, workspaceID, channelID pgtype.UUID) (db.Agent, error) {
+	managerID, ok := h.resolveGroupManagerForChannel(ctx, workspaceID, channelID)
+	if !ok {
+		return db.Agent{}, errors.New("channel has no group manager")
+	}
+	return h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: managerID, WorkspaceID: workspaceID})
+}
+
+// ensureChannelAgentMember adds the agent as a channel member if not already one.
+func (h *Handler) ensureChannelAgentMember(ctx context.Context, workspaceID, channelID, agentID pgtype.UUID) {
+	if _, err := h.DB.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'agent', $3) ON CONFLICT DO NOTHING
-	`, channelID, workspaceID, agent.ID); err != nil {
-		return db.Agent{}, false, err
+	`, channelID, workspaceID, agentID); err != nil {
+		slog.Warn("ensure channel agent member failed", "channel_id", uuidToString(channelID), "agent_id", uuidToString(agentID), "error", err)
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return db.Agent{}, false, err
-	}
-	return agent, true, nil
 }
 
 // provisionGroupManagerForNewChannel is the fire-and-forget hook for new group

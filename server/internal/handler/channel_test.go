@@ -2486,7 +2486,7 @@ func TestChannelBareMentionsBecomeStructuredMessageParts(t *testing.T) {
 	}
 
 	content := "ping @" + agentName + " and @Plain Person " + suffix + " plus @all"
-	parts := testHandler.enrichChannelMessageMentionParts(ctx, ch, content, nil)
+	content, parts := testHandler.enrichChannelMessageMentions(ctx, ch, content, nil)
 	want := map[string]bool{
 		"agent:" + agentID:   true,
 		"member:" + memberID: true,
@@ -2521,6 +2521,66 @@ func TestChannelBareMentionsBecomeStructuredMessageParts(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("mention inbox count = %d, want 1", count)
+	}
+}
+
+func TestChannelLegacyMentionMarkdownNormalizesToStructuredReference(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+	agentID := createHandlerTestAgent(t, "markdown_mention_agent_"+suffix, nil)
+	memberID := createChannelPlainMember(t)
+	channelID := seedChannelForTest(t, "structured-mention-normalize-"+suffix, testUserID, memberID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+
+	issueID := uuid.NewString()
+	content := "ping [@Legacy Agent](mention://agent/" + agentID + ") and [MUL-123](mention://issue/" + issueID + ")"
+	parts := []protocol.MessagePart{{
+		Type: protocol.MessagePartTypeText,
+		Text: "cc [@Legacy Member](mention://member/" + memberID + ")",
+	}}
+
+	content, parts = testHandler.enrichChannelMessageMentions(ctx, ch, content, parts)
+	if strings.Contains(content, "mention://agent/") {
+		t.Fatalf("content still leaks agent mention markdown: %q", content)
+	}
+	if !strings.Contains(content, "@Legacy Agent") {
+		t.Fatalf("content = %q, want readable @ label", content)
+	}
+	if !strings.Contains(content, "mention://issue/"+issueID) {
+		t.Fatalf("content = %q, want issue mention markdown preserved", content)
+	}
+	if len(parts) == 0 || parts[0].Type != protocol.MessagePartTypeText || strings.Contains(parts[0].Text, "mention://member/") {
+		t.Fatalf("text part not normalized: %+v", parts)
+	}
+
+	want := map[string]bool{
+		"agent:" + agentID:   true,
+		"member:" + memberID: true,
+	}
+	for _, part := range parts {
+		if part.Type == protocol.MessagePartTypeReference && part.RefType == "mention" {
+			delete(want, part.RefSubType+":"+part.RefID)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing structured mentions after normalization: %+v; parts=%+v", want, parts)
+	}
+
+	agents := testHandler.channelMentionedAgents(ctx, testWorkspaceID, channelID, content, parts)
+	if len(agents) != 1 || uuidToString(agents[0].ID) != agentID {
+		t.Fatalf("channelMentionedAgents = %+v, want %s", agents, agentID)
 	}
 }
 
@@ -3281,8 +3341,22 @@ func TestSendChannelMessageThreadReplyShowInChannelProjectsSameMessageWithoutWak
 	if projected.ID != reply.ID {
 		t.Fatalf("projected message id = %s, want thread reply %s", projected.ID, reply.ID)
 	}
-	if projected.Content != content {
-		t.Fatalf("projected content = %q, want %q", projected.Content, content)
+	wantProjectedContent := "please @Thread Projection Agent review from the thread"
+	if projected.Content != wantProjectedContent {
+		t.Fatalf("projected content = %q, want %q", projected.Content, wantProjectedContent)
+	}
+	if strings.Contains(projected.Content, "mention://agent/") {
+		t.Fatalf("projected content still leaks legacy mention markdown: %q", projected.Content)
+	}
+	foundMentionPart := false
+	for _, part := range projected.Parts {
+		if part.Type == protocol.MessagePartTypeReference && part.RefType == "mention" && part.RefSubType == "agent" && part.RefID == agentID {
+			foundMentionPart = true
+			break
+		}
+	}
+	if !foundMentionPart {
+		t.Fatalf("projected parts missing structured agent mention for %s: %+v", agentID, projected.Parts)
 	}
 	if projected.ThreadRootMessageID == nil || *projected.ThreadRootMessageID != root.ID {
 		t.Fatalf("projected thread_root_message_id = %v, want %s", projected.ThreadRootMessageID, root.ID)

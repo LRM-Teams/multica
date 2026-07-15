@@ -16,19 +16,17 @@ type channelMentionCandidate struct {
 	Label string
 }
 
-func (h *Handler) enrichChannelMessageMentionParts(ctx context.Context, ch ChannelResponse, content string, parts []protocol.MessagePart) []protocol.MessagePart {
+func (h *Handler) enrichChannelMessageMentions(ctx context.Context, ch ChannelResponse, content string, parts []protocol.MessagePart) (string, []protocol.MessagePart) {
 	if ch.Kind != "group" {
-		return parts
+		return content, parts
 	}
+	parts = appendMissingMentionParts(parts, legacyChannelMentionMarkdownReferenceParts(content, parts))
 	candidates := h.channelMentionCandidates(ctx, ch.WorkspaceID, ch.ID)
-	if len(candidates) == 0 {
-		return parts
+	if len(candidates) > 0 {
+		mentions := h.resolveBareChannelMentions(content, parts, candidates)
+		parts = appendMissingMentionParts(parts, mentions)
 	}
-	mentions := h.resolveBareChannelMentions(content, parts, candidates)
-	if len(mentions) == 0 {
-		return parts
-	}
-	return appendMissingMentionParts(parts, mentions)
+	return normalizeChannelMentionMarkdownText(content), normalizeChannelMentionMarkdownParts(parts)
 }
 
 func (h *Handler) channelMentionCandidates(ctx context.Context, workspaceID, channelID string) map[string]channelMentionCandidate {
@@ -194,4 +192,76 @@ func appendMissingMentionParts(parts []protocol.MessagePart, mentions []protocol
 		out = append(out, mention)
 	}
 	return out
+}
+
+func legacyChannelMentionMarkdownReferenceParts(content string, parts []protocol.MessagePart) []protocol.MessagePart {
+	seen := map[string]bool{}
+	out := make([]protocol.MessagePart, 0)
+	for _, text := range mentionSourceTexts(content, parts) {
+		for _, match := range util.MentionRe.FindAllStringSubmatch(text, -1) {
+			if len(match) < 4 || match[2] == "issue" {
+				continue
+			}
+			key := match[2] + ":" + match[3]
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			label := strings.ReplaceAll(match[1], `\[`, `[`)
+			label = strings.ReplaceAll(label, `\]`, `]`)
+			if !strings.HasPrefix(label, "@") {
+				label = "@" + label
+			}
+			out = append(out, protocol.MessagePart{
+				Type:       protocol.MessagePartTypeReference,
+				RefType:    "mention",
+				RefSubType: match[2],
+				RefID:      match[3],
+				Label:      label,
+			})
+		}
+	}
+	return out
+}
+
+func normalizeChannelMentionMarkdownParts(parts []protocol.MessagePart) []protocol.MessagePart {
+	if len(parts) == 0 {
+		return parts
+	}
+	var out []protocol.MessagePart
+	for i, part := range parts {
+		if part.Type != protocol.MessagePartTypeText || !strings.Contains(part.Text, "mention://") {
+			continue
+		}
+		if out == nil {
+			out = append([]protocol.MessagePart{}, parts...)
+		}
+		out[i].Text = normalizeChannelMentionMarkdownText(part.Text)
+	}
+	if out != nil {
+		return out
+	}
+	return parts
+}
+
+func normalizeChannelMentionMarkdownText(text string) string {
+	if !strings.Contains(text, "mention://") {
+		return text
+	}
+	return util.MentionRe.ReplaceAllStringFunc(text, func(match string) string {
+		parsed := util.MentionRe.FindStringSubmatch(match)
+		if len(parsed) < 4 {
+			return match
+		}
+		mentionType := parsed[2]
+		if mentionType == "issue" {
+			return match
+		}
+		label := strings.ReplaceAll(parsed[1], `\[`, `[`)
+		label = strings.ReplaceAll(label, `\]`, `]`)
+		if !strings.HasPrefix(label, "@") {
+			label = "@" + label
+		}
+		return label
+	})
 }

@@ -2534,7 +2534,7 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 	if !h.requireDMChannelAgentAccess(w, r, workspaceID, userID, ch) {
 		return
 	}
-	parts = h.enrichChannelMessageMentionParts(r.Context(), ch, content, parts)
+	content, parts = h.enrichChannelMessageMentions(r.Context(), ch, content, parts)
 	showInChannel := false
 	if req.ShowInChannel != nil {
 		showInChannel = *req.ShowInChannel
@@ -3131,7 +3131,7 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 	if !h.requireDMChannelAgentAccess(w, r, workspaceID, userID, ch) {
 		return
 	}
-	parts = h.enrichChannelMessageMentionParts(r.Context(), ch, content, parts)
+	content, parts = h.enrichChannelMessageMentions(r.Context(), ch, content, parts)
 	replyToMessageID, ok := h.validateChannelReplyTarget(w, r.Context(), workspaceID, channelID, req.ReplyToMessageID)
 	if !ok {
 		return

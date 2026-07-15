@@ -59,14 +59,15 @@ func TestDispatchIdleNudgesSkipsWhenAgentWorking(t *testing.T) {
 	addRadarAgentMembersForExecutorTest(t, channelID, manager.ID.String(), worker)
 	bindChannelGroupManagerForTest(t, channelID, manager.ID.String())
 
-	// Worker is actively working.
+	// Worker is doing REAL work: an active ISSUE-linked task (chat tasks do not count).
+	issueID := createIssueForTimeline(t, "Idle busy issue "+uuid.NewString())
 	var taskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, status, context)
-		SELECT id, runtime_id, 'running', '{"type":"chat"}'::jsonb FROM agent WHERE id = $1
+		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, context)
+		SELECT id, runtime_id, $2, 'running', '{"type":"issue"}'::jsonb FROM agent WHERE id = $1
 		RETURNING id
-	`, worker).Scan(&taskID); err != nil {
-		t.Fatalf("seed active task: %v", err)
+	`, worker, issueID).Scan(&taskID); err != nil {
+		t.Fatalf("seed active issue task: %v", err)
 	}
 	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
 
@@ -74,7 +75,82 @@ func TestDispatchIdleNudgesSkipsWhenAgentWorking(t *testing.T) {
 		t.Fatalf("dispatch idle nudges: %v", err)
 	}
 	if idleNudgeRunExists(t, channelID, manager.ID.String()) {
-		t.Fatal("idle-nudge was dispatched even though an agent is working")
+		t.Fatal("idle-nudge was dispatched even though an agent is doing real work")
+	}
+}
+
+// #1 progress: a chat reply (task with no issue_id) is NOT real work, so a group
+// where agents only chatted still gets idle-nudged.
+func TestDispatchIdleNudgesChatIsNotWork(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	prev := IdleNudgeDebounce
+	IdleNudgeDebounce = time.Minute
+	t.Cleanup(func() { IdleNudgeDebounce = prev })
+
+	manager := createRadarSupervisorForExecutorTest(t)
+	worker := createHandlerTestAgent(t, "Chatty Worker "+uuid.NewString(), nil)
+	channelID := seedChannelForTest(t, "idle-chat-"+uuid.NewString(), testUserID)
+	addRadarAgentMembersForExecutorTest(t, channelID, manager.ID.String(), worker)
+	bindChannelGroupManagerForTest(t, channelID, manager.ID.String())
+
+	// An active CHAT task (no issue_id) — this is acknowledgment, not work.
+	var taskID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (agent_id, runtime_id, status, context)
+		SELECT id, runtime_id, 'running', '{"type":"chat"}'::jsonb FROM agent WHERE id = $1
+		RETURNING id
+	`, worker).Scan(&taskID); err != nil {
+		t.Fatalf("seed active chat task: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+
+	if _, err := testHandler.DispatchIdleNudges(ctx, 10); err != nil {
+		t.Fatalf("dispatch idle nudges: %v", err)
+	}
+	if !idleNudgeRunExists(t, channelID, manager.ID.String()) {
+		t.Fatal("expected an idle-nudge: a chat task is not real work, so the group is stalled")
+	}
+}
+
+// #1 progress: recent REAL progress (a completed issue-linked task) suppresses the
+// idle nudge even though nothing is currently in flight.
+func TestDispatchIdleNudgesSkipsWhenRecentProgress(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	prev := IdleNudgeDebounce
+	IdleNudgeDebounce = time.Minute
+	t.Cleanup(func() { IdleNudgeDebounce = prev })
+	prevW := IdleProgressWindow
+	IdleProgressWindow = 15 * time.Minute
+	t.Cleanup(func() { IdleProgressWindow = prevW })
+
+	manager := createRadarSupervisorForExecutorTest(t)
+	worker := createHandlerTestAgent(t, "Progressing Worker "+uuid.NewString(), nil)
+	channelID := seedChannelForTest(t, "idle-progress-"+uuid.NewString(), testUserID)
+	addRadarAgentMembersForExecutorTest(t, channelID, manager.ID.String(), worker)
+	bindChannelGroupManagerForTest(t, channelID, manager.ID.String())
+
+	issueID := createIssueForTimeline(t, "Progressing issue "+uuid.NewString())
+	var taskID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, completed_at, context)
+		SELECT id, runtime_id, $2, 'completed', now(), '{"type":"issue"}'::jsonb FROM agent WHERE id = $1
+		RETURNING id
+	`, worker, issueID).Scan(&taskID); err != nil {
+		t.Fatalf("seed completed issue task: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+
+	if _, err := testHandler.DispatchIdleNudges(ctx, 10); err != nil {
+		t.Fatalf("dispatch idle nudges: %v", err)
+	}
+	if idleNudgeRunExists(t, channelID, manager.ID.String()) {
+		t.Fatal("idle-nudge fired despite recent real progress (completed issue task)")
 	}
 }
 

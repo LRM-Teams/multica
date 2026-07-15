@@ -4329,7 +4329,7 @@ func (h *Handler) buildChannelMentionPrompt(ctx context.Context, ch ChannelRespo
 	// worker must respond and act. Overrides the weak-notification default above.
 	if trigger.Type == "agent" && trigger.AuthorID != nil {
 		if mgrID, ok := h.resolveGroupManagerForChannel(ctx, parseUUID(ch.WorkspaceID), parseUUID(ch.ID)); ok && uuidToString(mgrID) == *trigger.AuthorID {
-			b.WriteString("- This @mention is from 贝克汉姆, the group manager coordinating this channel. Treat it as a DIRECTED request (not a weak agent-to-agent notification): reply with your current progress or the concrete next step you are taking now, and start/continue that work. Do not finish silently.\n")
+			b.WriteString("- This @mention is from 贝克汉姆, the group manager coordinating this channel. Treat it as a DIRECTED request (not a weak agent-to-agent notification): do the work now and produce a concrete deliverable — make the change / run it / advance the referenced issue and update its status — then report the result. A bare acknowledgment (\"收到\"/\"我这就做\") without actually progressing the work does not satisfy this; if you are blocked, say the specific blocker and who can unblock you.\n")
 		}
 	}
 	fmt.Fprintf(&b, "To prevent runaway loops, this channel run is limited to %d automatic agent turns; current trigger depth is %d. As you near the limit, steer the discussion toward a concrete conclusion.\n\n", channelRunTriggerLimit, trigger.TriggerDepth)

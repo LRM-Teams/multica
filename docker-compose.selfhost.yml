@@ -177,7 +177,9 @@ services:
   # no ports are published.
   #
   # BRIDGE_HEADER_ENCRYPTION_KEY MUST match the AReaL-side stub's Fernet key;
-  # the executor fails fast when it is unset or invalid. BRIDGE_USER_ID MUST
+  # Compose permits it to be empty so a default self-host config can render
+  # without this optional profile, but the executor fails fast when it starts
+  # with an unset or invalid key. BRIDGE_USER_ID MUST
   # match the AReaL-side stub's
   # (it enqueues the DAG-fetch rows under that user); a DIFFERENT non-NULL value
   # leaves them unclaimed (areal sees 202 until 504). Defaults to the same UUID
@@ -194,7 +196,7 @@ services:
       # Loopback 127.0.0.1:8080 would NOT reach it from a separate container.
       BRIDGE_MULTICA_UPSTREAM_URL: ${BRIDGE_MULTICA_UPSTREAM_URL:-http://backend:8080}
       # Shared Fernet key used to decrypt caller Authorization headers.
-      BRIDGE_HEADER_ENCRYPTION_KEY: ${BRIDGE_HEADER_ENCRYPTION_KEY:?BRIDGE_HEADER_ENCRYPTION_KEY must be set for db-bridge}
+      BRIDGE_HEADER_ENCRYPTION_KEY: ${BRIDGE_HEADER_ENCRYPTION_KEY:-}
       BRIDGE_USER_ID: ${BRIDGE_USER_ID:-c88b46a8-a8b5-4414-82fb-91398bd063b4}
       BRIDGE_POLL_INTERVAL: ${BRIDGE_POLL_INTERVAL:-1}
       BRIDGE_MAX_BODY_BYTES: ${BRIDGE_MAX_BODY_BYTES:-67108864}

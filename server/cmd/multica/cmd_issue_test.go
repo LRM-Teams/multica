@@ -238,11 +238,48 @@ func newIssueCreateTestCmd() *cobra.Command {
 	cmd.Flags().String("assignee-id", "", "")
 	cmd.Flags().String("parent", "", "")
 	cmd.Flags().String("project", "", "")
+	cmd.Flags().String("source-channel", "", "")
+	cmd.Flags().String("source-message", "", "")
 	cmd.Flags().String("due-date", "", "")
 	cmd.Flags().Bool("allow-duplicate", false, "")
 	cmd.Flags().String("output", "json", "")
 	cmd.Flags().StringSlice("attachment-id", nil, "")
 	return cmd
+}
+
+func TestRunIssueCreateSendsSourceMessageAnchor(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		json.NewEncoder(w).Encode(map[string]any{"id": "issue-1", "identifier": "MUL-1", "title": "Anchored", "status": "todo", "priority": "none"})
+	}))
+	defer srv.Close()
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+	t.Setenv("MULTICA_TOKEN", "test-token")
+
+	cmd := newIssueCreateTestCmd()
+	_ = cmd.Flags().Set("title", "Anchored")
+	_ = cmd.Flags().Set("source-channel", "channel-1")
+	_ = cmd.Flags().Set("source-message", "message-1")
+	if err := runIssueCreate(cmd, nil); err != nil {
+		t.Fatalf("runIssueCreate: %v", err)
+	}
+	source, ok := body["source"].(map[string]any)
+	if !ok || source["channel_id"] != "channel-1" || source["message_id"] != "message-1" {
+		t.Fatalf("source = %#v, want channel/message anchor", body["source"])
+	}
+}
+
+func TestRunIssueCreateRejectsPartialSourceMessageAnchor(t *testing.T) {
+	cmd := newIssueCreateTestCmd()
+	_ = cmd.Flags().Set("title", "Partial anchor")
+	_ = cmd.Flags().Set("source-channel", "channel-1")
+	if err := runIssueCreate(cmd, nil); err == nil || !strings.Contains(err.Error(), "--source-channel and --source-message") {
+		t.Fatalf("runIssueCreate partial source error = %v", err)
+	}
 }
 
 func newIssueListTestCmd() *cobra.Command {

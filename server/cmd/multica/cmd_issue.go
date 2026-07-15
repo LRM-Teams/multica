@@ -293,6 +293,8 @@ func init() {
 	issueCreateCmd.Flags().String("project", "", "Project ID")
 	issueCreateCmd.Flags().String("start-date", "", "Start date (calendar day, YYYY-MM-DD)")
 	issueCreateCmd.Flags().String("due-date", "", "Due date (calendar day, YYYY-MM-DD)")
+	issueCreateCmd.Flags().String("source-channel", "", "Channel UUID containing the message that originated this issue (requires --source-message)")
+	issueCreateCmd.Flags().String("source-message", "", "Message UUID that originated this issue; a thread reply is anchored to its root (requires --source-channel)")
 	issueCreateCmd.Flags().Bool("allow-duplicate", false, "Allow creating an issue even when an active duplicate exists")
 	issueCreateCmd.Flags().String("output", "json", "Output format: table or json")
 	issueCreateCmd.Flags().StringSlice("attachment-id", nil, "Existing attachment UUID(s) from `multica attachment upload` to bind to the created issue (repeatable)")
@@ -716,6 +718,17 @@ func runIssueCreate(cmd *cobra.Command, _ []string) error {
 	}
 	if v, _ := cmd.Flags().GetString("due-date"); v != "" {
 		body["due_date"] = v
+	}
+	sourceChannel, _ := cmd.Flags().GetString("source-channel")
+	sourceMessage, _ := cmd.Flags().GetString("source-message")
+	if (sourceChannel == "") != (sourceMessage == "") {
+		return fmt.Errorf("--source-channel and --source-message must be provided together")
+	}
+	if sourceChannel != "" {
+		body["source"] = map[string]string{
+			"channel_id": sourceChannel,
+			"message_id": sourceMessage,
+		}
 	}
 	if v, _ := cmd.Flags().GetBool("allow-duplicate"); v {
 		body["allow_duplicate"] = true

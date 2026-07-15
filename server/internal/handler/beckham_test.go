@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -145,5 +146,51 @@ func TestEnsureGroupManagerAcrossTwoChannelsSucceeds(t *testing.T) {
 
 	if uuidToString(agentA.ID) == uuidToString(agentB.ID) {
 		t.Fatal("two channels must get distinct group managers")
+	}
+}
+
+// Existing Beckhams must pick up persona + avatar changes: a stale one is
+// refreshed in place when provisioning is invoked again for its channel.
+func TestEnsureGroupManagerRefreshesStalePersona(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	var rtID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (workspace_id, owner_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
+		VALUES ($1, $2, $3, 'cloud', 'beckham_test', 'online', '', '{}'::jsonb, now())
+		RETURNING id
+	`, testWorkspaceID, testUserID, "beckham-rt3-"+uuid.NewString()).Scan(&rtID); err != nil {
+		t.Fatalf("seed runtime: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, rtID) })
+	channelID := seedChannelForTest(t, "beckham-refresh-"+uuid.NewString(), testUserID)
+
+	agent, _, err := testHandler.EnsureGroupManagerForChannel(ctx, parseUUID(testWorkspaceID), parseUUID(channelID), parseUUID(testUserID))
+	if err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agent.ID) })
+
+	// Make it stale (old English persona + old avatar).
+	if _, err := testPool.Exec(ctx, `UPDATE agent SET instructions = 'You are Beckham (old english persona)', avatar_url = '/agent-avatars/human-04.jpg' WHERE id = $1`, agent.ID); err != nil {
+		t.Fatalf("make stale: %v", err)
+	}
+
+	again, created, err := testHandler.EnsureGroupManagerForChannel(ctx, parseUUID(testWorkspaceID), parseUUID(channelID), parseUUID(testUserID))
+	if err != nil || created || uuidToString(again.ID) != uuidToString(agent.ID) {
+		t.Fatalf("reuse ensure: created=%v id=%s err=%v", created, uuidToString(again.ID), err)
+	}
+
+	var instr, avatar string
+	if err := testPool.QueryRow(ctx, `SELECT instructions, avatar_url FROM agent WHERE id = $1`, agent.ID).Scan(&instr, &avatar); err != nil {
+		t.Fatalf("reload agent: %v", err)
+	}
+	if !strings.Contains(instr, beckhamInstructionsMarker) {
+		t.Fatalf("instructions not refreshed to Chinese persona:\n%s", instr)
+	}
+	if avatar != beckhamAvatarURL {
+		t.Fatalf("avatar = %q, want %q", avatar, beckhamAvatarURL)
 	}
 }

@@ -24,7 +24,6 @@ import { useActorName } from "@multica/core/workspace/hooks";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import type { ChannelMessage } from "@multica/core/types";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
-import { AgentPresenceOverlay } from "../../common/actor-avatar";
 import { initialsOf } from "../../common/initials";
 import { useT } from "../../i18n/use-t";
 import { useMessageTime } from "../../i18n/use-message-time";
@@ -346,19 +345,12 @@ export function ChannelMessageBubble({
       className="select-none"
     />
   );
-  // Overlay the shared presence dot (breathing when the agent is actively
-  // running a task, static otherwise) on agent authors only — members have no
-  // presence backbone, system/lark authors aren't resolvable actors. Routed
-  // through the single, stretch-proof `AgentPresenceOverlay` so the dot can't
-  // detach in this CSS-grid row (root cause of the detached-dot bug).
-  const avatar =
-    isAgent && message.author_id != null ? (
-      <AgentPresenceOverlay agentId={message.author_id} size={28} className="mt-0.5">
-        {avatarNode}
-      </AgentPresenceOverlay>
-    ) : (
-      <span className="mt-0.5 inline-flex shrink-0">{avatarNode}</span>
-    );
+  // Message rows carry NO live presence dot. A message is history, so pinning
+  // "online right now" onto a historical row is both the noisiest column in the
+  // view (Frank's screenshot) and semantically wrong (#477 principle: "presence
+  // 每视图只一次、且不进消息历史" — Parker/Iris). Live presence lives on directory
+  // surfaces (sidebar / member list) and the header status word, not the stream.
+  const avatar = <span className="mt-0.5 inline-flex shrink-0">{avatarNode}</span>;
   const nameLabel = (
     <span className="truncate font-medium text-foreground">{displayName}</span>
   );

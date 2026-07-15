@@ -431,11 +431,15 @@ describe("ChannelMessageBubble", () => {
     expect(bubble.className).toContain("ring-primary/25");
   });
 
-  it("shows a presence status dot on agent message avatars only", () => {
+  it("never shows a live presence dot on message avatars (presence 不进消息历史, #477)", () => {
+    // A message is history — pinning "online right now" onto a historical row is
+    // both the noisiest column in the view and semantically wrong. Presence now
+    // lives only on directory surfaces (sidebar / member list) and the header
+    // status word, never the message stream (Parker/Iris final principle).
     const { rerender } = render(
       <ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />,
     );
-    expect(screen.getByLabelText(/^Status:/)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Status:/)).not.toBeInTheDocument();
 
     rerender(
       <ChannelMessageBubble
@@ -444,24 +448,6 @@ describe("ChannelMessageBubble", () => {
       />,
     );
     expect(screen.queryByLabelText(/^Status:/)).not.toBeInTheDocument();
-  });
-
-  // Root-cause guard: the bubble is a CSS grid (`align-items: stretch`), which
-  // used to stretch the hand-rolled `relative inline-flex` presence wrapper to
-  // the full message height and detach the dot to the row's bottom-left. The
-  // dot must now route through the single, fixed-size, stretch-proof
-  // AgentPresenceOverlay box — no manual wrapper — so it can't detach.
-  it("anchors the agent presence dot in a fixed-size, stretch-proof box (no manual wrapper)", () => {
-    render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
-
-    const dot = screen.getByLabelText(/^Status:/);
-    const box = dot.closest('[data-slot="agent-presence"]');
-    expect(box).not.toBeNull();
-    expect(box).toContainElement(dot);
-    // Non-stretchable: an explicit box size (immune to align-items: stretch)
-    // plus shrink-0 keeps the dot on the avatar's bottom-right.
-    expect(box).toHaveClass("shrink-0");
-    expect(box).toHaveStyle({ width: "28px", height: "28px" });
   });
 
   it("resolves quoted snapshot author names through live identity", () => {

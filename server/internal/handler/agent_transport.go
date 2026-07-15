@@ -211,7 +211,11 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid target")
 		return
 	}
-	parts = h.enrichChannelMessageMentionParts(r.Context(), target.channel, content, parts)
+	content, parts, err = h.enrichChannelMessageMentions(r.Context(), target.channel, content, parts)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	initiatorID := h.channelInitiatorForChatSession(r.Context(), source.task.ChatSessionID)
 	input := channelMessageInsertInput{
 		ChannelID:           parseUUID(target.channel.ID),
@@ -825,6 +829,7 @@ func (h *Handler) createAgentTransportMessage(ctx context.Context, source agentT
 	}
 	if target.mainTimelineVisible {
 		messages := []ChannelMessageResponse{msg}
+		h.attachChannelMessageAuthorAvatars(ctx, target.channel.WorkspaceID, messages)
 		h.attachChannelMessageThreadRootSummaries(ctx, target.channel.WorkspaceID, messages)
 		msg = messages[0]
 	}
@@ -984,6 +989,7 @@ func (h *Handler) decorateAgentTransportMessages(ctx context.Context, workspaceI
 	for i, msg := range messages {
 		messageIDs[i] = parseUUID(msg.ID)
 	}
+	h.attachChannelMessageAuthorAvatars(ctx, workspaceID, messages)
 	grouped := h.groupChannelMessageAttachments(ctx, workspaceID, messageIDs)
 	for i := range messages {
 		messages[i].Attachments = grouped[messages[i].ID]
@@ -1007,11 +1013,15 @@ func (h *Handler) searchAgentTransportMessages(ctx context.Context, target agent
 		return 0, nil, err
 	}
 	rows, err := h.DB.Query(ctx, `
-		SELECT id, channel_id, thread_root_message_id, author_type, author_id, author_name, content, created_at
-		FROM channel_message
-		WHERE channel_id = $1 AND workspace_id = $2 AND author_type <> 'system' AND deleted_at IS NULL AND content ILIKE $3 ESCAPE '\'
-		  AND ($4::uuid IS NULL OR id = $4 OR thread_root_message_id = $4)
-		ORDER BY seq ASC
+		SELECT m.id, m.channel_id, m.thread_root_message_id, m.author_type, m.author_id, m.author_name,
+		       CASE WHEN m.author_type = 'user' THEN u.avatar_url ELSE a.avatar_url END,
+		       m.content, m.created_at
+		FROM channel_message m
+		LEFT JOIN "user" u ON m.author_type = 'user' AND u.id = m.author_id
+		LEFT JOIN agent a ON m.author_type = 'agent' AND a.id = m.author_id AND a.workspace_id = m.workspace_id
+		WHERE m.channel_id = $1 AND m.workspace_id = $2 AND m.author_type <> 'system' AND m.deleted_at IS NULL AND m.content ILIKE $3 ESCAPE '\'
+		  AND ($4::uuid IS NULL OR m.id = $4 OR m.thread_root_message_id = $4)
+		ORDER BY m.seq ASC
 		LIMIT $5`, parseUUID(target.channel.ID), parseUUID(target.channel.WorkspaceID), pattern, threadRootID, limit)
 	if err != nil {
 		return 0, nil, err
@@ -1021,8 +1031,9 @@ func (h *Handler) searchAgentTransportMessages(ctx context.Context, target agent
 	for rows.Next() {
 		var id, chID, rootID, authorID pgtype.UUID
 		var authorType, authorName, content string
+		var avatarURL pgtype.Text
 		var createdAt pgtype.Timestamptz
-		if err := rows.Scan(&id, &chID, &rootID, &authorType, &authorID, &authorName, &content, &createdAt); err != nil {
+		if err := rows.Scan(&id, &chID, &rootID, &authorType, &authorID, &authorName, &avatarURL, &content, &createdAt); err != nil {
 			return 0, nil, err
 		}
 		results = append(results, ChannelMessageSearchResult{
@@ -1032,6 +1043,7 @@ func (h *Handler) searchAgentTransportMessages(ctx context.Context, target agent
 			Type:                authorType,
 			AuthorID:            uuidToPtr(authorID),
 			AuthorName:          authorName,
+			AuthorAvatarURL:     textToPtr(avatarURL),
 			Content:             content,
 			CreatedAt:           timestampToString(createdAt),
 		})

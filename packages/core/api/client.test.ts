@@ -318,6 +318,26 @@ describe("ApiClient", () => {
     expect(headers["X-Client-OS"]).toBeUndefined();
   });
 
+  it("sends source_channel_id as a query param on listIssues, and omits it when unset (#476)", async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ issues: [], total: 0 }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new ApiClient("https://api.example.test");
+    await client.listIssues({ status: "todo", source_channel_id: "chan-9" });
+    expect(String(fetchMock.mock.calls[0]![0])).toContain("source_channel_id=chan-9");
+
+    fetchMock.mockClear();
+    await client.listIssues({ status: "todo" });
+    expect(String(fetchMock.mock.calls[0]![0])).not.toContain("source_channel_id");
+  });
+
   it("uses the expected HTTP contract for comment trigger preview and suppress", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(
@@ -1014,6 +1034,58 @@ describe("ApiClient", () => {
       expect(fetchMock.mock.calls[0]![0]).toEqual(
         expect.stringContaining("/api/agents/a1/activity/events"),
       );
+    });
+  });
+
+  it("reads and updates the memory curator profile through workspace routes", async () => {
+    const profile = {
+      id: "profile-1",
+      workspace_id: "ws-1",
+      user_id: "user-1",
+      runtime_id: "runtime-1",
+      curator_agent_id: "agent-1",
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(profile), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(profile), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await client.getMemoryCuratorProfile("ws-1");
+    await client.updateMemoryCuratorProfile("ws-1", {
+      enabled: true,
+      mode: "review",
+      runtime_id: "runtime-1",
+      curator_agent_id: "agent-1",
+      target_scope: "owned_all",
+      target_agent_ids: [],
+      timezone: "Asia/Shanghai",
+      schedule_hour: 1,
+      catch_up_enabled: true,
+      confidence_threshold: 0.8,
+    });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.example.test/api/workspaces/ws-1/memory-curation/profile");
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "PUT" });
+  });
+
+  it("queues a staged memory curation run with dry-run preserved", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: "run-1", status: "queued" }), {
+        status: 202,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await client.startMemoryCurationRun("ws-1", { all_agents: true, stage: "l3", dry_run: true });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.example.test/api/workspaces/ws-1/memory-curation/runs");
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      all_agents: true,
+      stage: "l3",
+      dry_run: true,
     });
   });
 });

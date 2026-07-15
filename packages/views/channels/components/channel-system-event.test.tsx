@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelMessage } from "@multica/core/types";
+import type { ChannelMessage, MessagePart } from "@multica/core/types";
 import { parseMemberSystemEvent } from "./channel-system-event";
 import { MemberSystemEventContent } from "./channel-system-event-content";
 
@@ -81,10 +81,22 @@ vi.mock("../../i18n/use-t", () => ({
   }),
 }));
 
-function systemMessage(part: unknown, overrides: Partial<ChannelMessage> = {}): ChannelMessage {
+function systemMessage(
+  part: { event: string; params?: Record<string, unknown> } | undefined,
+  overrides: Partial<ChannelMessage> = {},
+): ChannelMessage {
   return {
     type: "system",
-    parts: part === undefined ? undefined : [{ type: "text", text: JSON.stringify(part) }],
+    parts:
+      part === undefined
+        ? undefined
+        : [
+            {
+              type: "system_event",
+              event: part.event,
+              event_params: part.params ?? {},
+            },
+          ],
     content: "fallback content",
     ...overrides,
   } as ChannelMessage;
@@ -139,6 +151,23 @@ describe("parseMemberSystemEvent", () => {
 
   it("returns null when there is no structured part", () => {
     expect(parseMemberSystemEvent(systemMessage(undefined))).toBeNull();
+  });
+
+  it("does not retain a text-JSON compatibility reader after migration", () => {
+    const legacyPart: MessagePart = {
+      type: "text",
+      text: JSON.stringify({
+        event: "channel_member_added",
+        params: { target_id: "user-2" },
+      }),
+    };
+    expect(
+      parseMemberSystemEvent({
+        type: "system",
+        parts: [legacyPart],
+        content: "fallback content",
+      } as ChannelMessage),
+    ).toBeNull();
   });
 
   it("ignores parts that are not a known member event", () => {

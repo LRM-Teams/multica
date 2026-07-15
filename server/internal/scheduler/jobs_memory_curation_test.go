@@ -1,9 +1,11 @@
 package scheduler
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/memorycuration"
 )
 
@@ -31,27 +33,26 @@ func TestMemoryCurationJobsUseStableNames(t *testing.T) {
 	}
 }
 
-func TestMemoryCurationJobsUseBeijingHours(t *testing.T) {
+func TestMemoryCurationJobsRequireDatabaseForProfileScheduling(t *testing.T) {
 	jobs := MemoryCurationJobs(nil)
+	res, err := jobs[0].Handler(t.Context(), HandlerInput{PlanTime: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Result["reason"] != "database_unavailable" {
+		t.Fatalf("handler result = %#v, want database_unavailable", res.Result)
+	}
+}
+
+func TestMemoryCurationStageCycleHandlesMidnight(t *testing.T) {
 	loc, err := time.LoadLocation(memorycuration.DefaultTimezone)
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan := time.Date(2026, 7, 9, 1, 0, 0, 0, loc).UTC()
-	res, err := jobs[0].Handler(t.Context(), HandlerInput{PlanTime: plan})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Result["reason"] == "outside_stage_hour" {
-		t.Fatalf("handler result = %#v, want Beijing 01:00 to pass hour gate", res.Result)
-	}
-	plan = time.Date(2026, 7, 9, 0, 0, 0, 0, loc).UTC()
-	res, err = jobs[0].Handler(t.Context(), HandlerInput{PlanTime: plan})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Result["reason"] != "outside_stage_hour" {
-		t.Fatalf("handler result = %#v, want outside_stage_hour", res.Result)
+	localPlan := time.Date(2026, 7, 10, 0, 0, 0, 0, loc)
+	cycleLocal := localPlan.Add(-3 * time.Hour)
+	if cycleLocal.Hour() != 21 || cycleLocal.Format("2006-01-02") != "2026-07-09" {
+		t.Fatalf("cycleLocal = %s, want 2026-07-09 21:00", cycleLocal)
 	}
 }
 
@@ -64,6 +65,85 @@ func TestMemoryCurationPlanDateUsesBeijingYesterday(t *testing.T) {
 	planDate := time.Date(planLocal.Year(), planLocal.Month(), planLocal.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, -1)
 	if got := planDate.Format("2006-01-02"); got != "2026-07-09" {
 		t.Fatalf("planDate = %s, want 2026-07-09", got)
+	}
+}
+
+func TestMemoryCurationSchedulerCreatesProfileRunIntent(t *testing.T) {
+	pool := integrationPool(t)
+	ctx := t.Context()
+	suffix := uuid.NewString()[:8]
+	var userID, workspaceID, runtimeID, curatorAgentID, targetAgentID, profileID string
+	if err := pool.QueryRow(ctx, `INSERT INTO "user" (name, email) VALUES ($1, $2) RETURNING id::text`, "Curator Scheduler "+suffix, "curator-scheduler-"+suffix+"@example.test").Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `INSERT INTO workspace (name, slug) VALUES ($1, $2) RETURNING id::text`, "Curator Scheduler "+suffix, "curator-scheduler-"+suffix).Scan(&workspaceID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1`, workspaceID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1`, userID)
+	})
+	if _, err := pool.Exec(ctx, `INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'owner')`, workspaceID, userID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, owner_id)
+		VALUES ($1, $2, 'Curator Scheduler Runtime', 'local', 'pi', 'offline', 'test', $3)
+		RETURNING id::text
+	`, workspaceID, "curator-scheduler-"+suffix, userID).Scan(&runtimeID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO agent (workspace_id, name, runtime_mode, runtime_id, owner_id)
+		VALUES ($1, $2, 'local', $3, $4) RETURNING id::text
+	`, workspaceID, "curator_scheduler_"+suffix, runtimeID, userID).Scan(&curatorAgentID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO agent (workspace_id, name, runtime_mode, runtime_id, owner_id)
+		VALUES ($1, $2, 'local', $3, $4) RETURNING id::text
+	`, workspaceID, "curator_target_"+suffix, runtimeID, userID).Scan(&targetAgentID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO memory_curator_profile (
+		  workspace_id, user_id, enabled, mode, runtime_id, curator_agent_id,
+		  target_scope, timezone, schedule_hour, catch_up_enabled, confidence_threshold
+		) VALUES ($1,$2,true,'auto_safe',$3,$4,'selected','Asia/Shanghai',23,true,0.9)
+		RETURNING id::text
+	`, workspaceID, userID, runtimeID, curatorAgentID).Scan(&profileID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO memory_curator_target (profile_id, agent_id) VALUES ($1, $2)`, profileID, targetAgentID); err != nil {
+		t.Fatal(err)
+	}
+
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := time.Date(2026, 7, 11, 0, 0, 0, 0, loc).UTC()
+	res, err := makeMemoryCurationIntentHandler(pool, memorycuration.StageL2, 1)(ctx, HandlerInput{PlanTime: plan})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.RowsAffected != 1 {
+		t.Fatalf("RowsAffected = %d, want 1 (%#v)", res.RowsAffected, res.Result)
+	}
+	var status, planDate, mode string
+	var confidence float64
+	var targets []string
+	if err := pool.QueryRow(ctx, `
+		SELECT status, date_from::text, curator_mode, confidence_threshold, target_agent_ids::text[]
+		  FROM memory_curation_run WHERE profile_id = $1 AND stage = 'l2_review'
+	`, profileID).Scan(&status, &planDate, &mode, &confidence, &targets); err != nil {
+		t.Fatal(err)
+	}
+	if status != "waiting_runtime" || planDate != "2026-07-09" || mode != "auto_safe" || confidence != 0.9 {
+		t.Fatalf("run = status:%s date:%s mode:%s confidence:%v", status, planDate, mode, confidence)
+	}
+	if len(targets) != 1 || targets[0] != targetAgentID {
+		t.Fatalf("targets = %v, want [%s]", targets, targetAgentID)
 	}
 }
 

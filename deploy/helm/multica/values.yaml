@@ -92,6 +92,7 @@ backend:
   # All non-secret backend env. Secret values come from `existingSecret`.
   config:
     appEnv: production
+    devAgentProfileAccess: false
     appUrl: http://multica.dev.lan
     frontendOrigin: http://multica.dev.lan
     corsAllowedOrigins: ""

@@ -367,3 +367,70 @@ describe("agent status transitions — Working ↔ Idle rows (#411/#525)", () =>
     expect(activityPresentation(statusEvent("working")).subtext).toBeUndefined();
   });
 });
+
+describe("activityPresentation — held-freshness projection (#441)", () => {
+  function holdStatus(): ActivityEvent {
+    return { ...evtBase("blocked"), reason_code: "send_freshness_hold" };
+  }
+  function holdDetail(details?: Record<string, unknown>): ActivityEvent {
+    return { ...evtBase("text"), reason_code: "send_freshness_hold_detail", details };
+  }
+
+  it("status row (blocked) → canonical label, waiting tone, no subtext", () => {
+    const p = activityPresentation(holdStatus());
+    expect(p.labelKey).toBe("send_held_by_freshness");
+    expect(p.tone).toBe("waiting");
+    expect(p.subtext).toBeUndefined();
+    // The paired detail row, not the status row, carries the specifics.
+    expect(p.subtextKey).toBeUndefined();
+  });
+
+  it("detail row (text) → same label + English subtext composed from details", () => {
+    const p = activityPresentation(
+      holdDetail({
+        target: "#general",
+        new_message_count: 3,
+        shown_message_count: 2,
+        omitted_message_count: 1,
+        // internal keys that must NOT leak into the reader-facing subtext:
+        seen_up_to_seq: 41,
+        latest_seq: 44,
+        producer_fact_id: "freshness_decision_fact:abc",
+        transport_id: "t-9",
+        decision: "local_hold",
+        reason: "newer_messages_available",
+      }),
+    );
+    expect(p.labelKey).toBe("send_held_by_freshness");
+    expect(p.tone).toBe("waiting");
+    expect(p.subtext).toBe(
+      "3 newer messages in #general (2 shown, 1 not yet shown) — send held until the newer context is reviewed.",
+    );
+    // No internal ids / seqs / codes bleed into the visible string.
+    expect(p.subtext).not.toContain("freshness_decision_fact");
+    expect(p.subtext).not.toContain("local_hold");
+    expect(p.subtext).not.toContain("44");
+  });
+
+  it("singular new_message_count reads 'message', not 'messages'", () => {
+    expect(activityPresentation(holdDetail({ target: "dm:@ann", new_message_count: 1 })).subtext).toBe(
+      "1 newer message in dm:@ann — send held until the newer context is reviewed.",
+    );
+  });
+
+  it("degrades gracefully when details are partial or absent", () => {
+    // Only a target, no counts.
+    expect(activityPresentation(holdDetail({ target: "#general" })).subtext).toBe(
+      "Newer messages in #general — send held until the newer context is reviewed.",
+    );
+    // No details at all → status label only, no subtext (never a fabricated one).
+    const bare = activityPresentation(holdDetail(undefined));
+    expect(bare.labelKey).toBe("send_held_by_freshness");
+    expect(bare.subtext).toBeUndefined();
+  });
+
+  it("does not hijack ordinary blocked / text events", () => {
+    expect(activityPresentation(evtBase("blocked")).labelKey).toBe("waiting");
+    expect(activityPresentation({ ...evtBase("text"), text: "Hello" }).labelKey).toBe("output");
+  });
+});

@@ -73,11 +73,21 @@ function makeAgent(ownerId = "user-owner"): Agent {
   };
 }
 
-function renderPanel(agent: Agent, currentUserId = "user-owner") {
+function renderPanel(
+  agent: Agent,
+  currentUserId = "user-owner",
+  access?: { canReadFiles?: boolean; canEditFiles?: boolean },
+) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
-      <AgentFilesPanel agent={agent} currentUserId={currentUserId} members={members} onClose={() => {}} />
+      <AgentFilesPanel
+        agent={agent}
+        currentUserId={currentUserId}
+        members={members}
+        onClose={() => {}}
+        {...access}
+      />
     </QueryClientProvider>,
   );
 }
@@ -121,6 +131,20 @@ describe("AgentFilesPanel", () => {
     expect(screen.getByText("Atlas")).toBeInTheDocument();
     expect(screen.getByText(/only the creator can view/i)).toBeInTheDocument();
     await waitFor(() => expect(api.listAgentFiles).not.toHaveBeenCalled());
+  });
+
+  it("allows dev read-only access for a non-owner", async () => {
+    renderPanel(makeAgent("user-owner"), "user-other", {
+      canReadFiles: true,
+      canEditFiles: false,
+    });
+    expect(await screen.findByText("MEMORY.md")).toBeInTheDocument();
+    expect(api.listAgentFiles).toHaveBeenCalledWith("agent-1", { include_hidden: false });
+
+    fireEvent.click(screen.getByText("MEMORY.md"));
+    expect(await screen.findByLabelText("File content")).toHaveValue("{\"ok\":true}");
+    expect(screen.queryByRole("button", { name: /save/i })).not.toBeInTheDocument();
+    expect(api.updateAgentFileContent).not.toHaveBeenCalled();
   });
 
   it("opens a file editor and saves text content", async () => {

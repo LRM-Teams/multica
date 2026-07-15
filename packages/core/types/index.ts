@@ -1,4 +1,4 @@
-export type { Issue, IssueStatus, IssuePriority, IssueAssigneeType, IssueMetadata, IssueMetadataValue, IssueReaction, IssueReviewStats } from "./issue";
+export type { Issue, IssueStatus, IssuePriority, IssueAssigneeType, IssueMetadata, IssueMetadataValue, IssueReaction, IssueReviewStats, IssueSourceMessageRef, IssueSourceRefs } from "./issue";
 export type {
   Agent,
   AgentStatus,
@@ -96,6 +96,12 @@ export type {
   MemoryCurationRunStats,
   MemoryCurationStageStatus,
   WorkspaceMemoryCurationStatus,
+  MemoryCuratorMode,
+  MemoryCuratorTargetScope,
+  MemoryCuratorProfile,
+  UpdateMemoryCuratorProfileRequest,
+  StartMemoryCurationRunRequest,
+  StartMemoryCurationRunResponse,
   PromoteEvolutionReviewSubmissionResponse,
 } from "./evolution";
 export type {

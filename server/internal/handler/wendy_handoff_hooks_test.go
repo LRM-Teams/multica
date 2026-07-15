@@ -40,6 +40,7 @@ func TestWendyCreateIssueEnqueuesStartWorkHandoff(t *testing.T) {
 	channelID := seedChannelForTest(t, "wendy-create-"+uuid.NewString(), testUserID)
 	addRadarAgentMembersForExecutorTest(t, channelID, supervisor.ID.String(), target)
 	bindWendySupervisorForHandoffTest(t, supervisor.ID.String())
+	bindChannelGroupManagerForTest(t, channelID, supervisor.ID.String())
 
 	w := httptest.NewRecorder()
 	req := newRequest("POST", "/api/issues", map[string]any{
@@ -90,6 +91,7 @@ func TestWendyGroupMessageTouchesAmbientWatch(t *testing.T) {
 	channelID := seedChannelForTest(t, "wendy-ambient-"+uuid.NewString(), testUserID)
 	addRadarAgentMembersForExecutorTest(t, channelID, supervisor.ID.String())
 	bindWendySupervisorForHandoffTest(t, supervisor.ID.String())
+	bindChannelGroupManagerForTest(t, channelID, supervisor.ID.String())
 
 	prev := workgraph.AmbientDebounce
 	workgraph.AmbientDebounce = time.Minute
@@ -132,6 +134,7 @@ func TestWendyGroupMessageTouchesAmbientForPersonalWendyWithoutSupervisor(t *tes
 	}
 	channelID := seedChannelForTest(t, "wendy-personal-ambient-"+uuid.NewString(), testUserID)
 	addRadarAgentMembersForExecutorTest(t, channelID, personalWendy)
+	bindChannelGroupManagerForTest(t, channelID, personalWendy)
 
 	// Ensure workspace supervisor is someone else not in this channel.
 	otherSupervisor := createRadarSupervisorForExecutorTest(t)
@@ -174,6 +177,7 @@ func TestWendyAgentGroupMessageTouchesAmbientWatch(t *testing.T) {
 	channelID := seedChannelForTest(t, "wendy-agent-ambient-"+uuid.NewString(), testUserID)
 	addRadarAgentMembersForExecutorTest(t, channelID, supervisor.ID.String(), worker)
 	bindWendySupervisorForHandoffTest(t, supervisor.ID.String())
+	bindChannelGroupManagerForTest(t, channelID, supervisor.ID.String())
 
 	prev := workgraph.AmbientDebounce
 	workgraph.AmbientDebounce = time.Minute
@@ -213,6 +217,7 @@ func TestWendyOwnGroupMessageDoesNotTouchAmbientWatch(t *testing.T) {
 	channelID := seedChannelForTest(t, "wendy-self-ambient-"+uuid.NewString(), testUserID)
 	addRadarAgentMembersForExecutorTest(t, channelID, supervisor.ID.String())
 	bindWendySupervisorForHandoffTest(t, supervisor.ID.String())
+	bindChannelGroupManagerForTest(t, channelID, supervisor.ID.String())
 
 	prev := workgraph.AmbientDebounce
 	workgraph.AmbientDebounce = time.Minute
@@ -267,6 +272,7 @@ func TestWendyAmbientDispatchEnqueuesEventRadarRun(t *testing.T) {
 	channelID := seedChannelForTest(t, "wendy-ambient-dispatch-"+uuid.NewString(), testUserID)
 	addRadarAgentMembersForExecutorTest(t, channelID, supervisor.ID.String())
 	bindWendySupervisorForHandoffTest(t, supervisor.ID.String())
+	bindChannelGroupManagerForTest(t, channelID, supervisor.ID.String())
 
 	prev := workgraph.AmbientDebounce
 	workgraph.AmbientDebounce = time.Second
@@ -383,6 +389,7 @@ func seedWendyHandoffHookFixture(t *testing.T) wendyUnlockDispatchFixture {
 	addRadarAgentMembersForExecutorTest(t, channelID, supervisor.ID.String(), target)
 
 	bindWendySupervisorForHandoffTest(t, supervisor.ID.String())
+	bindChannelGroupManagerForTest(t, channelID, supervisor.ID.String())
 
 	fixture := wendyUnlockDispatchFixture{
 		wendyID:   supervisor.ID.String(),

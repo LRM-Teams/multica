@@ -69,6 +69,8 @@ func (h *Handler) dispatchClaimedWendyAmbient(ctx context.Context, watch workgra
 	if err != nil || supervisor.ArchivedAt.Valid || !supervisor.RuntimeID.Valid {
 		return false, h.WorkGraph.CancelChannelAmbientClaim(ctx, watch.ChannelID, claimToken, "Wendy unavailable")
 	}
+	// Opportunistically bring an existing Beckham's persona/avatar up to date.
+	supervisor = h.refreshGroupManagerIfStale(ctx, supervisor)
 
 	markdown, err := h.buildWendyAmbientChannelMarkdown(ctx, watch, channel)
 	if err != nil {
@@ -266,7 +268,7 @@ func (h *Handler) touchWendyChannelAmbient(ctx context.Context, ch ChannelRespon
 	if h.WorkGraph == nil || ch.Kind != "group" {
 		return
 	}
-	wendyID, ok := h.resolveWendyAmbientAgentForChannel(ctx, parseUUID(ch.WorkspaceID), parseUUID(ch.ID))
+	managerID, ok := h.resolveGroupManagerForChannel(ctx, parseUUID(ch.WorkspaceID), parseUUID(ch.ID))
 	if !ok {
 		return
 	}
@@ -284,51 +286,10 @@ func (h *Handler) touchWendyChannelAmbient(ctx context.Context, ch ChannelRespon
 			messageID = parsed
 		}
 	}
-	if err := h.WorkGraph.TouchChannelAmbient(ctx, parseUUID(ch.WorkspaceID), parseUUID(ch.ID), wendyID, messageID, messageAt); err != nil {
-		slog.Warn("touch Wendy channel ambient failed", "channel_id", ch.ID, "message_id", msg.ID, "error", err)
+	if err := h.WorkGraph.TouchChannelAmbient(ctx, parseUUID(ch.WorkspaceID), parseUUID(ch.ID), managerID, messageID, messageAt); err != nil {
+		slog.Warn("touch group manager channel ambient failed", "channel_id", ch.ID, "message_id", msg.ID, "error", err)
 	}
 }
 
-// resolveWendyAmbientAgentForChannel picks which Wendy watches this group.
-// Prefer the workspace supervisor (the canonical signal from
-// workspace_radar_state) when she is a member; otherwise fall back to a named
-// Wendy already in the channel (personal Wendy clones in multi-owner
-// workspaces). The fallback is deterministic — prefer a runtime-ready,
-// non-archived agent with a stable (created_at, id) tie-break — so a channel
-// with several clones always resolves to the same watcher instead of racing on
-// insert order. Name matching remains a transitional signal until a managed
-// group-manager agent role lands.
-func (h *Handler) resolveWendyAmbientAgentForChannel(ctx context.Context, workspaceID, channelID pgtype.UUID) (pgtype.UUID, bool) {
-	if supervisorID, err := h.Queries.GetWorkspaceSupervisorAgentID(ctx, workspaceID); err == nil {
-		if h.channelHasAgentMember(ctx, workspaceID, channelID, supervisorID) {
-			return supervisorID, true
-		}
-	}
-	rows, err := h.DB.Query(ctx, `
-		SELECT a.id, COALESCE(NULLIF(a.display_name, ''), a.name) AS display_name
-		FROM channel_member cm
-		JOIN agent a
-		  ON a.id = cm.member_id
-		 AND a.workspace_id = cm.workspace_id
-		WHERE cm.workspace_id = $1
-		  AND cm.channel_id = $2
-		  AND cm.member_type = 'agent'
-		  AND a.archived_at IS NULL
-		ORDER BY (a.runtime_id IS NOT NULL) DESC, a.created_at ASC, a.id ASC
-	`, workspaceID, channelID)
-	if err != nil {
-		return pgtype.UUID{}, false
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var agentID pgtype.UUID
-		var displayName string
-		if err := rows.Scan(&agentID, &displayName); err != nil {
-			return pgtype.UUID{}, false
-		}
-		if isWindyAgentName(displayName) {
-			return agentID, true
-		}
-	}
-	return pgtype.UUID{}, false
-}
+// resolveWendyAmbientAgentForChannel was removed: ambient watching now belongs to
+// the per-group manager (Beckham) resolved via resolveGroupManagerForChannel.

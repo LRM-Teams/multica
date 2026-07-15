@@ -46,6 +46,7 @@ export interface AppConfigResponse {
   daemon_server_url?: string;
   daemon_app_url?: string;
   workspace_creation_disabled?: boolean;
+  dev_agent_profile_access_enabled?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -184,6 +185,7 @@ export const AppConfigSchema = z.object({
   daemon_server_url: OptionalStringSchema,
   daemon_app_url: OptionalStringSchema,
   workspace_creation_disabled: BooleanWithDefaultSchema(false).optional(),
+  dev_agent_profile_access_enabled: BooleanWithDefaultSchema(false).optional(),
 }).loose();
 
 export const EMPTY_APP_CONFIG: AppConfigResponse = {
@@ -193,6 +195,7 @@ export const EMPTY_APP_CONFIG: AppConfigResponse = {
   daemon_server_url: "",
   daemon_app_url: "",
   workspace_creation_disabled: false,
+  dev_agent_profile_access_enabled: false,
 };
 
 export const CommentSchema = z.object({
@@ -397,6 +400,51 @@ export const EMPTY_WORKSPACE_MEMORY_CURATION_STATUS: WorkspaceMemoryCurationStat
   stages: [],
 };
 
+export const MemoryCuratorProfileSchema = z.object({
+  id: z.string().default(""),
+  workspace_id: z.string().default(""),
+  user_id: z.string().default(""),
+  enabled: z.boolean().default(false),
+  mode: z.enum(["observe", "review", "auto_safe", "auto"]).catch("review"),
+  runtime_id: z.string().default(""),
+  curator_agent_id: z.string().default(""),
+  model_override: z.string().default(""),
+  target_scope: z.enum(["owned_all", "selected"]).catch("owned_all"),
+  target_agent_ids: z.array(z.string()).default([]),
+  timezone: z.string().default("Asia/Shanghai"),
+  schedule_hour: z.number().int().min(0).max(23).default(1),
+  catch_up_enabled: z.boolean().default(true),
+  confidence_threshold: z.number().min(0).max(1).default(0.8),
+  config_version: z.number().default(0),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+}).loose();
+
+export const EMPTY_MEMORY_CURATOR_PROFILE = {
+  id: "",
+  workspace_id: "",
+  user_id: "",
+  enabled: false,
+  mode: "review" as const,
+  runtime_id: "",
+  curator_agent_id: "",
+  model_override: "",
+  target_scope: "owned_all" as const,
+  target_agent_ids: [],
+  timezone: "Asia/Shanghai",
+  schedule_hour: 1,
+  catch_up_enabled: true,
+  confidence_threshold: 0.8,
+  config_version: 0,
+  created_at: "",
+  updated_at: "",
+};
+
+export const StartMemoryCurationRunResponseSchema = z.object({
+  id: z.string(),
+  status: z.string().default("queued"),
+}).loose();
+
 const ChannelMessageSearchResultSchema = z.object({
   message_id: z.string().default(""),
   channel_id: z.string().default(""),
@@ -404,6 +452,7 @@ const ChannelMessageSearchResultSchema = z.object({
   type: z.string().default(""),
   author_id: z.string().nullable().default(null),
   author_name: z.string().default(""),
+  author_avatar_url: z.string().nullable().optional(),
   content: z.string().default(""),
   parts: z.array(z.unknown()).optional(),
   created_at: z.string().default(""),
@@ -424,6 +473,7 @@ const ChannelMessageReplySchema = z.object({
   type: z.string().default(""),
   author_id: z.string().nullable().default(null),
   author_name: z.string().default(""),
+  author_avatar_url: z.string().nullable().optional(),
   content: z.string().default(""),
   parts: z.array(z.unknown()).optional(),
   created_at: z.string().default(""),
@@ -433,6 +483,7 @@ const ChannelMessageQuoteSnapshotSchema = z.object({
   type: z.string().default(""),
   authorId: z.string().nullable().optional(),
   authorName: z.string().default(""),
+  authorAvatarUrl: z.string().nullable().optional(),
   content: z.string().default(""),
   parts: z.array(z.unknown()).optional(),
   createdAt: z.string().default(""),
@@ -469,6 +520,7 @@ const ChannelMessageSchema = z.object({
   type: z.string().default(""),
   author_id: z.string().nullable().default(null),
   author_name: z.string().default(""),
+  author_avatar_url: z.string().nullable().optional(),
   content: z.string().default(""),
   parts: z.array(z.unknown()).optional(),
   source: z.string().default(""),

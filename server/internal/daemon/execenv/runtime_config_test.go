@@ -393,6 +393,11 @@ func TestChatRuntimeBriefRendersReplyRequirementForDirectedRun(t *testing.T) {
 		"### Reply Requirement (READ FIRST",
 		"Human DMs, human @mentions, direct questions, assigned tasks",
 		"Agent-to-agent channel @mentions are weak notifications",
+		"**Operational-command acknowledgement:**",
+		"follow/unfollow or mute/unmute",
+		"react `✅` to the instructing message",
+		"--message-id <triggering-message-id> --emoji \"✅\"",
+		"send no ordinary text confirmation",
 		"Not responding is **not** an option when a human or explicit task is waiting on you",
 		"Reply Requirement",
 	} {
@@ -757,6 +762,63 @@ func TestMulticaMemoryScopeRenderedForPiProvider(t *testing.T) {
 	cmdsIdx := strings.Index(out, "## Available Commands")
 	if scopeIdx == -1 || cmdsIdx == -1 || scopeIdx > cmdsIdx {
 		t.Errorf("Multica memory scope must appear above Available Commands (scope=%d, cmds=%d)", scopeIdx, cmdsIdx)
+	}
+}
+
+func TestMemoryOperatingGuideUsesMediumStrengthAutoWrite(t *testing.T) {
+	t.Parallel()
+	ctx := TaskContextForEnv{
+		ChatSessionID:  "chat-1",
+		AgentRoot:      "/tmp/multica/workspace-1/.multica/agents/agent-1",
+		AgentMemoryDir: "/tmp/multica/workspace-1/.multica/agents/agent-1/memory",
+	}
+	out := buildMetaSkillContent("codex", ctx)
+
+	for _, want := range []string{
+		"### Memory Operating Guide (v0.1)",
+		"Use medium-strength auto-write",
+		"likely to matter in a future run",
+		"memory/MEMORY.md",
+		"memory/USER.md",
+		"Attribute them to the identified user",
+		"memory/STATE.md",
+		"status, TTL/expiry, or reset date",
+		"memory/REVIEW.md",
+		"MULTICA_AGENT_SYNC_QUEUE_DIR/memory-candidates.jsonl",
+		"remember this",
+		"record it immediately in the requested agent-local destination",
+		"current task remain authoritative",
+		"Do not record guesses",
+		"never to copy private memory across agents directly",
+		"never silently rewrite instructions",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("memory operating guide missing %q\n%s", want, out)
+		}
+	}
+}
+
+func TestMemoryOperatingGuideRequiresAgentLocalScope(t *testing.T) {
+	t.Parallel()
+	withoutScope := buildMetaSkillContent("codex", TaskContextForEnv{ChatSessionID: "chat-1"})
+	if strings.Contains(withoutScope, "Memory Operating Guide") {
+		t.Fatalf("memory operating guide must not render without an agent-local root:\n%s", withoutScope)
+	}
+
+	withRoot := buildMetaSkillContent("codex", TaskContextForEnv{
+		ChatSessionID: "chat-1",
+		AgentRoot:     "/tmp/multica/workspace-1/.multica/agents/agent-1",
+	})
+	if !strings.Contains(withRoot, "### Memory Operating Guide (v0.1)") {
+		t.Fatalf("memory operating guide missing when an agent-local root exists:\n%s", withRoot)
+	}
+
+	skillsOnly := buildMetaSkillContent("codex", TaskContextForEnv{
+		ChatSessionID: "chat-1",
+		AgentSkillDir: "/tmp/multica/workspace-1/.multica/agents/agent-1/skills",
+	})
+	if strings.Contains(skillsOnly, "Memory Operating Guide") {
+		t.Fatalf("memory operating guide must not render for a skills-only scope:\n%s", skillsOnly)
 	}
 }
 

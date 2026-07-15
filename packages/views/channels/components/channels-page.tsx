@@ -13,6 +13,7 @@ import {
   ChevronUp,
   FileText,
   Hash,
+  ListTodo,
   Mail,
   MessageCircle,
   MessageSquare,
@@ -72,6 +73,7 @@ import { api } from "@multica/core/api";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
+import { useIssueViewStore } from "@multica/core/issues/stores/view-store";
 import { useWSEvent } from "@multica/core/realtime";
 import { toast } from "sonner";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
@@ -150,7 +152,6 @@ import { SidebarTrigger, useSidebarSafe } from "@multica/ui/components/ui/sideba
 import { MobileListDetailLayout } from "../../common/mobile-list-detail-layout";
 import { ContentEditor, type ContentEditorRef } from "../../editor/content-editor";
 import { useNavigation } from "../../navigation/context";
-import { agentColor } from "../../common/agent-color";
 import { ProjectPickerButton } from "../../common/project-picker-button";
 import { initialsOf } from "../../common/initials";
 import { useT } from "../../i18n/use-t";
@@ -252,7 +253,6 @@ function MemberStack({
                 initials={initialsOf(name || "?")}
                 isAgent={m.member_type === "agent"}
                 size={size}
-                tint={m.member_type === "agent" ? agentColor(m.member_id) : undefined}
               />
             );
           })()}
@@ -552,7 +552,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
   const wsPaths = useWorkspacePaths();
-  const { searchParams, replace, getShareableUrl } = useNavigation();
+  const { searchParams, replace, push, getShareableUrl } = useNavigation();
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const currentUserName = useAuthStore((s) => s.user?.name ?? null);
   const { mutate: markChannelRead } = useMarkChannelRead();
@@ -1603,7 +1603,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                     initials={initialsOf(c.presentation.displayName || "?")}
                     isAgent={c.type === "agent"}
                     size={26}
-                    tint={c.type === "agent" ? agentColor(c.id) : undefined}
                   />
                   <ActorIdentityRow
                     displayName={c.presentation.displayName}
@@ -1655,7 +1654,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                     initials={initialsOf(presentation.displayName || "?")}
                     isAgent={isAgent}
                     size={26}
-                    tint={isAgent ? agentColor(m.member_id) : undefined}
                   />
                   <ActorIdentityRow
                     displayName={presentation.displayName}
@@ -2315,6 +2313,22 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                   </PopoverContent>
                 </Popover>
                 <div className="flex items-center gap-1">
+                  {/* #476 — open the Issues list pre-filtered to issues that
+                      originated in this channel. Sets the shared view-store
+                      filter, then navigates; the issues page reads it on mount
+                      and the Group dropdown shows this channel as active. */}
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-8"
+                    aria-label={t(($) => $.header.issues_aria)}
+                    onClick={() => {
+                      useIssueViewStore.getState().setSourceChannel(active.id);
+                      push(wsPaths.issues());
+                    }}
+                  >
+                    <ListTodo className="size-4" />
+                  </Button>
                   <Button
                     variant="ghost"
                     size="icon"

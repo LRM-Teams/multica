@@ -186,7 +186,7 @@ describe("createMentionSuggestion", () => {
     expect(screen.queryByText("Users")).not.toBeInTheDocument();
   });
 
-  it("inserts the stable handle when selecting an actor with a duplicate display name", () => {
+  it("keeps the display label when selecting an actor with a duplicate display name", () => {
     const command = vi.fn();
     render(
       <I18nWrapper>
@@ -205,7 +205,8 @@ describe("createMentionSuggestion", () => {
     fireEvent.click(screen.getByText("@wendy_2").closest("button")!);
     expect(command).toHaveBeenCalledWith(expect.objectContaining({
       id: "a-wendy-2",
-      label: "wendy_2",
+      label: "Wendy",
+      handle: "wendy_2",
       type: "agent",
     }));
   });

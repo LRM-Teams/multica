@@ -34,6 +34,7 @@ func TestListAgentFilesOwnerOnly(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
+	t.Setenv("MULTICA_DEV_AGENT_PROFILE_ACCESS", "false")
 	agentID := createHandlerTestAgent(t, "agent-files-owner-only", nil)
 
 	for _, tc := range []struct {
@@ -68,10 +69,36 @@ func TestListAgentFilesOwnerOnly(t *testing.T) {
 	}
 }
 
+func TestListAgentFilesDevProfileAccessAllowsWorkspaceMembers(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	t.Setenv("MULTICA_DEV_AGENT_PROFILE_ACCESS", "true")
+	agentID := createHandlerTestAgent(t, "agent-files-dev-profile-access", nil)
+
+	for _, tc := range []struct {
+		name   string
+		userID string
+	}{
+		{name: "member", userID: createAgentFilesTestMember(t, "member")},
+		{name: "admin", userID: createAgentFilesTestMember(t, "admin")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := withURLParam(newRequestAs(tc.userID, http.MethodGet, "/api/agents/"+agentID+"/files", nil), "id", agentID)
+			w := httptest.NewRecorder()
+			testHandler.ListAgentFiles(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("expected dev member read 200, got %d: %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
 func TestAgentFileContentOwnerOnly(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
+	t.Setenv("MULTICA_DEV_AGENT_PROFILE_ACCESS", "false")
 	agentID := createHandlerTestAgent(t, "agent-files-content-owner-only", nil)
 	memberID := createAgentFilesTestMember(t, "member")
 
@@ -91,5 +118,32 @@ func TestAgentFileContentOwnerOnly(t *testing.T) {
 	testHandler.UpdateAgentFileContent(w, req)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("expected non-owner write 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAgentFileContentDevProfileAccessAllowsReadNotWrite(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	t.Setenv("MULTICA_DEV_AGENT_PROFILE_ACCESS", "true")
+	agentID := createHandlerTestAgent(t, "agent-files-content-dev-profile-access", nil)
+	memberID := createAgentFilesTestMember(t, "member")
+
+	req := withURLParam(newRequestAs(memberID, http.MethodGet, "/api/agents/"+agentID+"/files/content?path=memory/MEMORY.md", nil), "id", agentID)
+	w := httptest.NewRecorder()
+	testHandler.GetAgentFileContent(w, req)
+	if w.Code == http.StatusForbidden {
+		t.Fatalf("expected dev member read to pass auth, got 403: %s", w.Body.String())
+	}
+
+	req = withURLParam(newRequestAs(memberID, http.MethodPut, "/api/agents/"+agentID+"/files/content", map[string]any{
+		"path":                  "memory/MEMORY.md",
+		"content":               "updated",
+		"expected_content_hash": "old",
+	}), "id", agentID)
+	w = httptest.NewRecorder()
+	testHandler.UpdateAgentFileContent(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected dev member write 403, got %d: %s", w.Code, w.Body.String())
 	}
 }

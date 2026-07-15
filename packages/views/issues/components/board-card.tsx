@@ -11,7 +11,6 @@ import { formatDateOnly, isPastDateOnly } from "@multica/core/issues/date";
 import { CalendarClock, CalendarDays } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { ActorAvatar } from "../../common/actor-avatar";
-import { agentColor } from "../../common/agent-color";
 import { agentTaskSnapshotOptions } from "@multica/core/agents";
 import { PRIORITY_CONFIG } from "@multica/core/issues/config";
 import { cn } from "@multica/ui/lib/utils";
@@ -191,7 +190,6 @@ export const BoardCardContent = memo(function BoardCardContent({
         size={20}
         enableHoverCard
         className="shrink-0"
-        tint={issue.assignee_type === "agent" ? agentColor(issue.assignee_id!) : undefined}
       />
       {assigneeName && (
         <span className="min-w-0 truncate text-xs text-foreground">{assigneeName}</span>

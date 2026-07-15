@@ -3,7 +3,7 @@ import type { ChannelMessage } from "@multica/core/types";
 /**
  * Member-change system events emitted by the backend (#450). The BE writes a
  * `type=system` message carrying BOTH a canonical fallback `content` string and
- * a structured `parts:[{event, params}]` payload. The FE composes its own copy
+ * a typed `parts:[{type:"system_event", event, event_params}]` payload. The FE composes its own copy
  * from the structured params (see channel-system-event-content.tsx) so it can
  * render Raft/Slack-style quiet inline rows with clickable @username tokens.
  *
@@ -44,27 +44,18 @@ function optString(params: Record<string, unknown>, key: string): string | undef
 
 /**
  * Extract the structured member-change event from a system message's parts.
- * Returns null for any message that isn't a member-change system event (older
- * messages without the part, channel archive/rename notices, etc.) so the caller
- * renders the plain canonical `content` instead. Lenient about the part's `type`
- * discriminator: matches on a JSON-parseable `text` field carrying a known
- * `event`, so a backend that omits/renames the part type still resolves.
+ * Returns null for any message that isn't a member-change system event (channel
+ * archive/rename notices, etc.) so the caller renders the plain canonical
+ * `content` instead. System events have a single durable wire shape; migration
+ * 178 converts historical text-JSON payloads rather than retaining a legacy
+ * reader here.
  */
 export function parseMemberSystemEvent(message: ChannelMessage): MemberSystemEvent | null {
   if (message.type !== "system" || !Array.isArray(message.parts)) return null;
   for (const part of message.parts) {
-    const text = (part as { text?: unknown }).text;
-    if (typeof text !== "string" || !text) continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      continue;
-    }
-    if (!parsed || typeof parsed !== "object") continue;
-    const event = (parsed as { event?: unknown }).event;
-    if (typeof event !== "string" || !MEMBER_EVENT_KINDS.has(event)) continue;
-    const params = ((parsed as { params?: unknown }).params ?? {}) as Record<string, unknown>;
+    if (part.type !== "system_event" || !MEMBER_EVENT_KINDS.has(part.event)) continue;
+    const event = part.event;
+    const params = part.event_params;
     const targetId = optString(params, "target_id");
     if (!targetId) continue;
     return {

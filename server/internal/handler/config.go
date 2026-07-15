@@ -36,6 +36,11 @@ type AppConfig struct {
 	PosthogKey           string `json:"posthog_key"`
 	PosthogHost          string `json:"posthog_host"`
 	AnalyticsEnvironment string `json:"analytics_environment"`
+
+	// DevAgentProfileAccessEnabled opens other agents' side-panel Activity
+	// and Files read surfaces in development environments only. Production
+	// keeps the owner-only profile gate by default.
+	DevAgentProfileAccessEnabled bool `json:"dev_agent_profile_access_enabled"`
 }
 
 // GetConfig is mounted on the public (unauthenticated) route group because
@@ -44,9 +49,10 @@ type AppConfig struct {
 // to anonymous callers — never user- or tenant-scoped data.
 func (h *Handler) GetConfig(w http.ResponseWriter, r *http.Request) {
 	config := AppConfig{
-		AllowSignup:               os.Getenv("ALLOW_SIGNUP") != "false",
-		GoogleClientID:            os.Getenv("GOOGLE_CLIENT_ID"),
-		WorkspaceCreationDisabled: os.Getenv("DISABLE_WORKSPACE_CREATION") == "true",
+		AllowSignup:                  os.Getenv("ALLOW_SIGNUP") != "false",
+		GoogleClientID:               os.Getenv("GOOGLE_CLIENT_ID"),
+		WorkspaceCreationDisabled:    os.Getenv("DISABLE_WORKSPACE_CREATION") == "true",
+		DevAgentProfileAccessEnabled: devAgentProfileAccessEnabled(),
 	}
 	if h.Storage != nil {
 		config.CdnDomain = h.Storage.CdnDomain()
@@ -65,6 +71,34 @@ func (h *Handler) GetConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, config)
+}
+
+func devAgentProfileAccessEnabled() bool {
+	if enabled, ok := boolEnv("MULTICA_DEV_AGENT_PROFILE_ACCESS"); ok {
+		return enabled
+	}
+	return isExplicitDevEnvironment(os.Getenv("APP_ENV")) ||
+		isExplicitDevEnvironment(os.Getenv("ANALYTICS_ENVIRONMENT"))
+}
+
+func boolEnv(name string) (bool, bool) {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "1", "true", "yes", "on":
+		return true, true
+	case "0", "false", "no", "off":
+		return false, true
+	default:
+		return false, false
+	}
+}
+
+func isExplicitDevEnvironment(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "dev", "development", "local", "test":
+		return true
+	default:
+		return false
+	}
 }
 
 func daemonSetupURLsFromEnv() (string, string) {

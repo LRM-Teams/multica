@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   Activity,
   ArrowUpRight,
@@ -11,45 +11,68 @@ import {
   GitBranch,
   Lightbulb,
   LineChart,
+  Play,
   Radio,
   RefreshCw,
+  Save,
   ShieldCheck,
   Sparkles,
   TrendingUp,
   WandSparkles,
 } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { api } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { agentListOptions } from "@multica/core/workspace/queries";
+import { runtimeListOptions } from "@multica/core/runtimes";
+import { useCurrentMember } from "@multica/core/permissions";
 import {
   dashboardAgentRunTimeOptions,
   dashboardUsageByAgentOptions,
 } from "@multica/core/dashboard";
 import {
+  evolutionKeys,
   evolutionMetricsOptions,
   evolutionReviewSubmissionListOptions,
+  memoryCuratorProfileOptions,
   workspaceMemoryCurationStatusOptions,
 } from "@multica/core/evolution";
 import type {
   Agent,
+  AgentRuntime,
   DashboardAgentRunTime,
   DashboardUsageByAgent,
   EvolutionReviewSubmission,
   EvolutionReviewSubmissionStatus,
   EvolutionUnitMetric,
   MemoryCurationStageStatus,
+  MemoryCuratorMode,
+  MemoryCuratorProfile,
+  MemoryCuratorTargetScope,
   WorkspaceMemoryCurationStatus,
 } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
-import { buttonVariants } from "@multica/ui/components/ui/button";
+import { Button, buttonVariants } from "@multica/ui/components/ui/button";
+import { Checkbox } from "@multica/ui/components/ui/checkbox";
 import {
   Card,
   CardContent,
   CardHeader,
   CardTitle,
 } from "@multica/ui/components/ui/card";
+import { Input } from "@multica/ui/components/ui/input";
+import { Label } from "@multica/ui/components/ui/label";
 import { Progress } from "@multica/ui/components/ui/progress";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@multica/ui/components/ui/select";
+import { Switch } from "@multica/ui/components/ui/switch";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@multica/ui/components/ui/tabs";
 import { cn } from "@multica/ui/lib/utils";
@@ -152,6 +175,31 @@ const COPY = {
   candidatesAdded: "candidates",
   archived: "archived",
   merged: "merged",
+  curatorProfile: "Curator profile",
+  curatorProfileHint: "Choose the Pi runtime and curator agent that govern your agents. Nothing runs automatically until this profile is enabled.",
+  curatorAgent: "Curator agent",
+  targetAgents: "Target agents",
+  allMyAgents: "All my agents",
+  selectedAgents: "Selected agents",
+  mode: "Promotion mode",
+  observeOnly: "Observe only",
+  manualReview: "Manual review",
+  autoSafe: "Auto-safe",
+  fullAuto: "Full auto",
+  schedule: "Daily start",
+  timezone: "Timezone",
+  automatic: "Automatic curation",
+  catchUp: "Catch up missed schedules",
+  saveProfile: "Save profile",
+  profileSaved: "Curator profile saved",
+  configureProfile: "Select a Pi runtime and curator agent first.",
+  manualRun: "Manual run",
+  manualRunHint: "Queue the selected stage on your configured runtime. Dry runs keep memory files unchanged.",
+  allStages: "All stages",
+  stage: "Stage",
+  dryRun: "Dry run",
+  queueRun: "Queue run",
+  runQueued: "Curation run queued",
 };
 
 const STATUSES = [
@@ -174,11 +222,17 @@ const EMPTY_RUNTIME: DashboardAgentRunTime[] = [];
 const EMPTY_USAGE_BY_AGENT: DashboardUsageByAgent[] = [];
 const EMPTY_SUBMISSIONS: EvolutionReviewSubmission[] = [];
 const EMPTY_UNIT_METRICS: EvolutionUnitMetric[] = [];
+const MEMORY_CURATION_STAGE_LABELS = {
+  l1: "L1",
+  l2: "L2",
+  l3: "L3",
+  l4: "L4",
+} as const;
 const MEMORY_CURATION_STAGES = [
-  ["l1_daily", "L1", "01:00", "Evidence intake", COPY.dbEvidence],
-  ["l2_review", "L2", "02:00", "Candidate extraction", COPY.semanticDedupe],
-  ["l3_promote", "L3", "03:00", "Local + shared promotion", COPY.sharedPromotion],
-  ["l4_curator", "L4", "04:00", "Curator maintenance", COPY.curated],
+  ["l1_daily", MEMORY_CURATION_STAGE_LABELS.l1, "01:00", "Evidence intake", COPY.dbEvidence],
+  ["l2_review", MEMORY_CURATION_STAGE_LABELS.l2, "02:00", "Candidate extraction", COPY.semanticDedupe],
+  ["l3_promote", MEMORY_CURATION_STAGE_LABELS.l3, "03:00", "Local + shared promotion", COPY.sharedPromotion],
+  ["l4_curator", MEMORY_CURATION_STAGE_LABELS.l4, "04:00", "Curator maintenance", COPY.curated],
 ] as const;
 
 type AgentEvolutionRow = {
@@ -333,15 +387,18 @@ function buildAgentRows(
 export function EvolutionCenterPage() {
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
+  const { userId } = useCurrentMember(wsId);
   const [learningFilter, setLearningFilter] = useState<"all" | "memory" | "skill">("all");
 
-  const agentsQuery = useQuery(agentListOptions(wsId));
-  const usageQuery = useQuery(dashboardUsageByAgentOptions(wsId, DAYS, null, VIEW_TZ));
-  const runtimeQuery = useQuery(dashboardAgentRunTimeOptions(wsId, DAYS, null, VIEW_TZ));
-  const needsReviewQuery = useQuery(evolutionReviewSubmissionListOptions(wsId, "needs_review"));
-  const candidateQuery = useQuery(evolutionReviewSubmissionListOptions(wsId, "candidate"));
-  const promotedQuery = useQuery(evolutionReviewSubmissionListOptions(wsId, "promoted"));
-  const rejectedQuery = useQuery(evolutionReviewSubmissionListOptions(wsId, "rejected"));
+  const { data: agentsData, isLoading: agentsLoading } = useQuery(agentListOptions(wsId));
+  const { data: runtimesData } = useQuery(runtimeListOptions(wsId));
+  const { data: profileData } = useQuery(memoryCuratorProfileOptions(wsId));
+  const { data: usageData, isLoading: usageLoading } = useQuery(dashboardUsageByAgentOptions(wsId, DAYS, null, VIEW_TZ));
+  const { data: runtimeData, isLoading: runtimeLoading } = useQuery(dashboardAgentRunTimeOptions(wsId, DAYS, null, VIEW_TZ));
+  const { data: needsReviewData } = useQuery(evolutionReviewSubmissionListOptions(wsId, "needs_review"));
+  const { data: candidateData } = useQuery(evolutionReviewSubmissionListOptions(wsId, "candidate"));
+  const { data: promotedData } = useQuery(evolutionReviewSubmissionListOptions(wsId, "promoted"));
+  const { data: rejectedData } = useQuery(evolutionReviewSubmissionListOptions(wsId, "rejected"));
   const { data: metricsData } = useQuery(evolutionMetricsOptions(wsId));
   const {
     data: curationStatus,
@@ -349,13 +406,14 @@ export function EvolutionCenterPage() {
     isError: curationStatusUnavailable,
   } = useQuery(workspaceMemoryCurationStatusOptions(wsId));
 
-  const agents = agentsQuery.data ?? EMPTY_AGENTS;
-  const usageRows = usageQuery.data ?? EMPTY_USAGE_BY_AGENT;
-  const runtimeRows = runtimeQuery.data ?? EMPTY_RUNTIME;
-  const needsReviewSubmissions = needsReviewQuery.data ?? EMPTY_SUBMISSIONS;
-  const candidateSubmissions = candidateQuery.data ?? EMPTY_SUBMISSIONS;
-  const promotedSubmissions = promotedQuery.data ?? EMPTY_SUBMISSIONS;
-  const rejectedSubmissions = rejectedQuery.data ?? EMPTY_SUBMISSIONS;
+  const agents = agentsData ?? EMPTY_AGENTS;
+  const runtimes = runtimesData ?? [];
+  const usageRows = usageData ?? EMPTY_USAGE_BY_AGENT;
+  const runtimeRows = runtimeData ?? EMPTY_RUNTIME;
+  const needsReviewSubmissions = needsReviewData ?? EMPTY_SUBMISSIONS;
+  const candidateSubmissions = candidateData ?? EMPTY_SUBMISSIONS;
+  const promotedSubmissions = promotedData ?? EMPTY_SUBMISSIONS;
+  const rejectedSubmissions = rejectedData ?? EMPTY_SUBMISSIONS;
   const unitMetrics = metricsData?.unit_metrics ?? EMPTY_UNIT_METRICS;
   const submissionsByStatus = useMemo(
     () => ({
@@ -404,7 +462,7 @@ export function EvolutionCenterPage() {
     return true;
   });
 
-  const loading = agentsQuery.isLoading || usageQuery.isLoading || runtimeQuery.isLoading;
+  const loading = agentsLoading || usageLoading || runtimeLoading;
   const topAgents = rows.slice(0, 5);
   const coachingRows = [...rows]
     .filter((row) => row.taskCount > 0 || row.failedCount > 0)
@@ -510,13 +568,23 @@ export function EvolutionCenterPage() {
               />
             </TabsContent>
 
-            <TabsContent value="memory" className="grid gap-4 xl:grid-cols-[.8fr_1.2fr]">
-              <MemoryCurationCard
-                submissions={submissions}
-                status={curationStatus}
-                loading={curationStatusLoading}
-                unavailable={curationStatusUnavailable}
-              />
+            <TabsContent value="memory" className="grid gap-4 xl:grid-cols-[.9fr_1.1fr]">
+              <div className="grid gap-4">
+                <CuratorProfileCard
+                  key={`${profileData?.id ?? "new"}-${profileData?.config_version ?? 0}`}
+                  wsId={wsId}
+                  userId={userId}
+                  profile={profileData}
+                  agents={agents}
+                  runtimes={runtimes}
+                />
+                <MemoryCurationCard
+                  submissions={submissions}
+                  status={curationStatus}
+                  loading={curationStatusLoading}
+                  unavailable={curationStatusUnavailable}
+                />
+              </div>
               <UnitMetricsCard metrics={unitMetrics} />
             </TabsContent>
 
@@ -772,6 +840,193 @@ function SubmissionCard({ submission }: { submission: EvolutionReviewSubmission 
       </div>
     </div>
   );
+}
+
+type CuratorProfileDraft = {
+  enabled: boolean;
+  mode: MemoryCuratorMode;
+  runtimeId: string;
+  curatorAgentId: string;
+  targetScope: MemoryCuratorTargetScope;
+  targetAgentIds: string[];
+  timezone: string;
+  scheduleHour: number;
+  modelOverride: string;
+  catchUpEnabled: boolean;
+  confidenceThreshold: number;
+};
+
+function draftFromProfile(profile: MemoryCuratorProfile | undefined): CuratorProfileDraft {
+  return {
+    enabled: profile?.enabled === true,
+    mode: profile?.mode ?? "review",
+    runtimeId: profile?.runtime_id ?? "",
+    curatorAgentId: profile?.curator_agent_id ?? "",
+    targetScope: profile?.target_scope ?? "owned_all",
+    targetAgentIds: profile?.target_agent_ids ?? [],
+    timezone: profile?.timezone || "Asia/Shanghai",
+    scheduleHour: profile?.schedule_hour ?? 1,
+    modelOverride: profile?.model_override ?? "",
+    catchUpEnabled: profile?.catch_up_enabled ?? true,
+    confidenceThreshold: profile?.confidence_threshold ?? 0.8,
+  };
+}
+
+function CuratorProfileCard({
+  wsId,
+  userId,
+  profile,
+  agents,
+  runtimes,
+}: {
+  wsId: string;
+  userId: string | null;
+  profile: MemoryCuratorProfile | undefined;
+  agents: Agent[];
+  runtimes: AgentRuntime[];
+}) {
+  const queryClient = useQueryClient();
+  const [draft, setDraft] = useState<CuratorProfileDraft>(() => draftFromProfile(profile));
+  const [runStage, setRunStage] = useState<"l1" | "l2" | "l3" | "l4" | "all">("all");
+  const [dryRun, setDryRun] = useState(false);
+
+  const availableRuntimes = runtimes.filter(
+    (runtime) => runtime.owner_id === userId || runtime.visibility === "public",
+  );
+  const ownedAgents = agents.filter((agent) => agent.owner_id === userId);
+  const curatorAgents = ownedAgents.filter((agent) => agent.runtime_id === draft.runtimeId);
+  const configured = !!profile?.id && !!profile.runtime_id && !!profile.curator_agent_id;
+  const draftTargetsValid = draft.targetScope !== "selected" || draft.targetAgentIds.length > 0;
+  const configuredTargetsValid = profile?.target_scope !== "selected" || (profile.target_agent_ids?.length ?? 0) > 0;
+
+  const save = useMutation({
+    mutationFn: () => api.updateMemoryCuratorProfile(wsId, {
+      enabled: draft.enabled,
+      mode: draft.mode,
+      runtime_id: draft.runtimeId,
+      curator_agent_id: draft.curatorAgentId,
+      target_scope: draft.targetScope,
+      model_override: draft.modelOverride,
+      target_agent_ids: draft.targetScope === "selected" ? draft.targetAgentIds : [],
+      timezone: draft.timezone,
+      schedule_hour: draft.scheduleHour,
+      catch_up_enabled: draft.catchUpEnabled,
+      confidence_threshold: draft.confidenceThreshold,
+    }),
+    onSuccess: async () => {
+      toast.success(COPY.profileSaved);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: evolutionKeys.memoryCuratorProfile(wsId) }),
+        queryClient.invalidateQueries({ queryKey: evolutionKeys.memoryCurationStatus(wsId) }),
+      ]);
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : COPY.configureProfile),
+  });
+  const run = useMutation({
+    mutationFn: () => api.startMemoryCurationRun(wsId, {
+      all_agents: profile?.target_scope !== "selected",
+      agent_ids: profile?.target_scope === "selected" ? profile.target_agent_ids : undefined,
+      stage: runStage,
+      dry_run: dryRun,
+    }),
+    onSuccess: async () => {
+      toast.success(COPY.runQueued);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: evolutionKeys.memoryCuratorProfile(wsId) }),
+        queryClient.invalidateQueries({ queryKey: evolutionKeys.memoryCurationStatus(wsId) }),
+      ]);
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : COPY.configureProfile),
+  });
+
+  const toggleTarget = (agentId: string, checked: boolean) => {
+    setDraft((current) => ({
+      ...current,
+      targetAgentIds: checked
+        ? [...new Set([...current.targetAgentIds, agentId])]
+        : current.targetAgentIds.filter((id) => id !== agentId),
+    }));
+  };
+
+  return (
+    <Card className="overflow-hidden border-brand/20 bg-background/90 backdrop-blur">
+      <div className="h-1 bg-gradient-to-r from-emerald-500 via-cyan-500 to-amber-400" />
+      <CardHeader>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <CardTitle className="flex items-center gap-2"><BrainCircuit className="h-4 w-4 text-brand" />{COPY.curatorProfile}</CardTitle>
+            <p className="mt-1 text-sm text-muted-foreground">{COPY.curatorProfileHint}</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Label htmlFor="curator-enabled" className="text-xs">{COPY.automatic}</Label>
+            <Switch id="curator-enabled" checked={draft.enabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, enabled: checked }))} />
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label={COPY.runtime}>
+            <Select value={draft.runtimeId} onValueChange={(value) => setDraft((current) => ({ ...current, runtimeId: value ?? "", curatorAgentId: "" }))}>
+              <SelectTrigger className="w-full"><SelectValue placeholder="Select Pi runtime" /></SelectTrigger>
+              <SelectContent>{availableRuntimes.map((runtime) => <SelectItem key={runtime.id} value={runtime.id}>{runtime.name} · {runtime.status}</SelectItem>)}</SelectContent>
+            </Select>
+          </Field>
+          <Field label={COPY.curatorAgent}>
+            <Select value={draft.curatorAgentId} onValueChange={(value) => setDraft((current) => ({ ...current, curatorAgentId: value ?? "" }))}>
+              <SelectTrigger className="w-full"><SelectValue placeholder="Select curator agent" /></SelectTrigger>
+              <SelectContent>{curatorAgents.map((agent) => <SelectItem key={agent.id} value={agent.id}>{agent.display_name || agent.name}</SelectItem>)}</SelectContent>
+            </Select>
+          </Field>
+          <Field label={COPY.mode}>
+            <Select value={draft.mode} onValueChange={(value) => value && setDraft((current) => ({ ...current, mode: value as MemoryCuratorMode }))}>
+              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="observe">{COPY.observeOnly}</SelectItem><SelectItem value="review">{COPY.manualReview}</SelectItem><SelectItem value="auto_safe">{COPY.autoSafe}</SelectItem><SelectItem value="auto">{COPY.fullAuto}</SelectItem>
+              </SelectContent>
+            </Select>
+          </Field>
+          <Field label={COPY.targetAgents}>
+            <Select value={draft.targetScope} onValueChange={(value) => value && setDraft((current) => ({ ...current, targetScope: value as MemoryCuratorTargetScope }))}>
+              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+              <SelectContent><SelectItem value="owned_all">{COPY.allMyAgents}</SelectItem><SelectItem value="selected">{COPY.selectedAgents}</SelectItem></SelectContent>
+            </Select>
+          </Field>
+          <Field label={COPY.timezone}><Input value={draft.timezone} onChange={(event) => setDraft((current) => ({ ...current, timezone: event.target.value }))} /></Field>
+          <Field label={COPY.schedule}><Input type="number" min={0} max={23} value={draft.scheduleHour} onChange={(event) => setDraft((current) => ({ ...current, scheduleHour: Number(event.target.value) }))} /></Field>
+          <Field label="Model override"><Input value={draft.modelOverride} placeholder="Runtime default" onChange={(event) => setDraft((current) => ({ ...current, modelOverride: event.target.value }))} /></Field>
+          <Field label="Confidence threshold"><Input type="number" min={0} max={1} step={0.05} value={draft.confidenceThreshold} onChange={(event) => setDraft((current) => ({ ...current, confidenceThreshold: Number(event.target.value) }))} /></Field>
+        </div>
+        {draft.targetScope === "selected" && (
+          <div className="grid gap-2 rounded-2xl border bg-muted/20 p-3 sm:grid-cols-2">
+            {ownedAgents.map((agent) => (
+              <label key={agent.id} className="flex items-center gap-2 text-sm">
+                <Checkbox checked={draft.targetAgentIds.includes(agent.id)} onCheckedChange={(checked) => toggleTarget(agent.id, checked === true)} />
+                <span className="truncate">{agent.display_name || agent.name}</span>
+              </label>
+            ))}
+          </div>
+        )}
+        <div className="flex flex-wrap items-center gap-4">
+          <Label htmlFor="curator-catch-up" className="flex items-center gap-2 text-xs"><Checkbox id="curator-catch-up" checked={draft.catchUpEnabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, catchUpEnabled: checked === true }))} />{COPY.catchUp}</Label>
+          <Button onClick={() => save.mutate()} disabled={save.isPending || !draft.runtimeId || !draft.curatorAgentId || !draftTargetsValid} className="gap-2"><Save className="h-4 w-4" />{COPY.saveProfile}</Button>
+        </div>
+        <div className="rounded-2xl border bg-muted/20 p-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <div><div className="text-sm font-medium">{COPY.manualRun}</div><p className="mt-1 text-xs text-muted-foreground">{COPY.manualRunHint}</p></div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Select value={runStage} onValueChange={(value) => value && setRunStage(value as typeof runStage)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">{COPY.allStages}</SelectItem><SelectItem value="l1">{MEMORY_CURATION_STAGE_LABELS.l1}</SelectItem><SelectItem value="l2">{MEMORY_CURATION_STAGE_LABELS.l2}</SelectItem><SelectItem value="l3">{MEMORY_CURATION_STAGE_LABELS.l3}</SelectItem><SelectItem value="l4">{MEMORY_CURATION_STAGE_LABELS.l4}</SelectItem></SelectContent></Select>
+              <label className="flex items-center gap-2 text-xs"><Checkbox checked={dryRun} onCheckedChange={(checked) => setDryRun(checked === true)} />{COPY.dryRun}</label>
+              <Button variant="outline" onClick={() => run.mutate()} disabled={!configured || !configuredTargetsValid || run.isPending || save.isPending} className="gap-2"><Play className="h-4 w-4" />{COPY.queueRun}</Button>
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return <div className="space-y-1.5"><div className="text-xs text-muted-foreground">{label}</div>{children}</div>;
 }
 
 function MemoryCurationCard({

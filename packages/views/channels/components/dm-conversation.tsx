@@ -290,7 +290,12 @@ function DmHeader({
       // 28px matches the message-row avatar so the header avatar and every
       // message avatar share one size + left edge (see ConversationHeader).
       size={28}
-      showStatusDot={dm.peer.type === "agent"}
+      // Presence lives in the header's status word (● Online / Idle …) for an
+      // agent peer, so the avatar's own presence dot would double-encode the
+      // same state on one line. Drop it here ("presence 冗余合并": show presence
+      // once per view — Frank/Iris/Miles 2026-07-15); the avatar dot stays on
+      // message rows / member lists, where there is no status word.
+      showStatusDot={false}
       profileLink={false}
     />
   );

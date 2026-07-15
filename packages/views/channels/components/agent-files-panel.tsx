@@ -113,10 +113,12 @@ function prettyInitialContent(path: string, data: AgentFileContentResponse | und
 function AgentFileEditorDialog({
   agentId,
   path,
+  canEdit,
   onClose,
 }: {
   agentId: string;
   path: string | null;
+  canEdit: boolean;
   onClose: () => void;
 }) {
   const { data, isPending, isError } = useQuery({
@@ -155,6 +157,7 @@ function AgentFileEditorDialog({
             agentId={agentId}
             path={path}
             data={data}
+            canEdit={canEdit}
           />
         ) : null}
       </DialogContent>
@@ -166,10 +169,12 @@ function AgentFileEditorForm({
   agentId,
   path,
   data,
+  canEdit,
 }: {
   agentId: string;
   path: string;
   data: AgentFileContentResponse;
+  canEdit: boolean;
 }) {
   const qc = useQueryClient();
   const name = path.slice(path.lastIndexOf("/") + 1);
@@ -217,21 +222,25 @@ function AgentFileEditorForm({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <div className="flex items-center justify-end border-b px-4 py-2">
-        <Button
-          type="button"
-          size="sm"
-          onClick={() => save.mutate()}
-          disabled={save.isPending || draft === initialContent}
-        >
-          <Save className="mr-1.5 size-3.5" />
-          {SAVE_FILE_LABEL}
-        </Button>
-      </div>
+      {canEdit && (
+        <div className="flex items-center justify-end border-b px-4 py-2">
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => save.mutate()}
+            disabled={save.isPending || draft === initialContent}
+          >
+            <Save className="mr-1.5 size-3.5" />
+            {SAVE_FILE_LABEL}
+          </Button>
+        </div>
+      )}
       <div className="min-h-0 flex-1 overflow-hidden">
         <CodeMirror
           value={draft}
           height="100%"
+          editable={canEdit}
+          readOnly={!canEdit}
           basicSetup={{
             foldGutter: true,
             highlightActiveLine: true,
@@ -251,12 +260,16 @@ export function AgentFilesPanel({
   agent,
   currentUserId,
   members,
+  canReadFiles,
+  canEditFiles,
   onClose,
   hideHeader = false,
 }: {
   agent: Agent;
   currentUserId: string | null;
   members: readonly MemberWithUser[];
+  canReadFiles?: boolean;
+  canEditFiles?: boolean;
   onClose: () => void;
   /**
    * Skips the identity/info header and the outer `<aside>` chrome — used
@@ -266,13 +279,15 @@ export function AgentFilesPanel({
   hideHeader?: boolean;
 }) {
   const isOwner = !!currentUserId && agent.owner_id === currentUserId;
+  const canRead = canReadFiles ?? isOwner;
+  const canEdit = canEditFiles ?? isOwner;
   const [includeHidden, setIncludeHidden] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const { data, isPending } = useQuery({
     queryKey: agentFilesQueryKey(agent.id, includeHidden),
     queryFn: () => api.listAgentFiles(agent.id, { include_hidden: includeHidden }),
-    enabled: isOwner,
+    enabled: canRead,
   });
   const { data: radarData } = useQuery({
     queryKey: ["agent-radar-runs", agent.id],
@@ -300,7 +315,7 @@ export function AgentFilesPanel({
           <InfoRow label="Status" value={agent.status} />
         </div>
       )}
-      {!isOwner ? (
+      {!canRead ? (
         <CenteredNote>{OWNER_ONLY_FILES_MESSAGE}</CenteredNote>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col">
@@ -372,7 +387,14 @@ export function AgentFilesPanel({
           ) : null}
         </div>
       )}
-      {isOwner && <AgentFileEditorDialog agentId={agent.id} path={selectedPath} onClose={() => setSelectedPath(null)} />}
+      {canRead && (
+        <AgentFileEditorDialog
+          agentId={agent.id}
+          path={selectedPath}
+          canEdit={canEdit}
+          onClose={() => setSelectedPath(null)}
+        />
+      )}
     </>
   );
 

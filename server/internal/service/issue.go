@@ -50,23 +50,25 @@ func NewIssueService(q *db.Queries, tx TxStarter, bus *events.Bus, ac analytics.
 // to IssueService.Create. The handler owns the parsing step that turns its
 // request payload into this struct; the service stays transport-agnostic.
 type IssueCreateParams struct {
-	WorkspaceID    pgtype.UUID
-	Title          string
-	Description    pgtype.Text
-	Status         string
-	Priority       string
-	AssigneeType   pgtype.Text
-	AssigneeID     pgtype.UUID
-	CreatorType    string // "agent" or "member"
-	CreatorID      pgtype.UUID
-	ParentIssueID  pgtype.UUID
-	ProjectID      pgtype.UUID
-	StartDate      pgtype.Date
-	DueDate        pgtype.Date
-	OriginType     pgtype.Text
-	OriginID       pgtype.UUID
-	AttachmentIDs  []pgtype.UUID
-	AllowDuplicate bool
+	WorkspaceID     pgtype.UUID
+	Title           string
+	Description     pgtype.Text
+	Status          string
+	Priority        string
+	AssigneeType    pgtype.Text
+	AssigneeID      pgtype.UUID
+	CreatorType     string // "agent" or "member"
+	CreatorID       pgtype.UUID
+	ParentIssueID   pgtype.UUID
+	ProjectID       pgtype.UUID
+	StartDate       pgtype.Date
+	DueDate         pgtype.Date
+	OriginType      pgtype.Text
+	OriginID        pgtype.UUID
+	SourceChannelID pgtype.UUID
+	SourceMessageID pgtype.UUID
+	AttachmentIDs   []pgtype.UUID
+	AllowDuplicate  bool
 }
 
 // IssueCreateOpts groups optional knobs for IssueService.Create. Most
@@ -145,7 +147,7 @@ type IssueCreateResult struct {
 //  8. Publish EventIssueCreated to the bus (payload via opts.BroadcastPayload).
 //  9. Capture the IssueCreated analytics event.
 //  10. Enqueue an agent task or trigger the squad leader when the issue is
-//      assigned and not in `backlog`.
+//     assigned and not in `backlog`.
 //
 // Validation that lives in the service (parent existence, project
 // workspace membership, parent → project back-fill) is enforced here so
@@ -261,6 +263,13 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 	}
 	if err != nil {
 		return IssueCreateResult{}, fmt.Errorf("create issue: %w", err)
+	}
+	if p.SourceMessageID.Valid {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO issue_source_message (issue_id, workspace_id, channel_id, message_id)
+			VALUES ($1, $2, $3, $4)`, issue.ID, p.WorkspaceID, p.SourceChannelID, p.SourceMessageID); err != nil {
+			return IssueCreateResult{}, fmt.Errorf("persist issue source message: %w", err)
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {

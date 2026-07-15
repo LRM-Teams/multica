@@ -26,5 +26,7 @@ func (templateWendyComposer) ComposeUnlock(_ context.Context, in UnlockComposeIn
 }
 
 func mentionMarkdown(mentionType, id, name string) string {
-	return formatRadarDirectiveMention(name, mentionType, id)
+	_ = mentionType
+	_ = id
+	return directedAgentMentionLabel(name)
 }

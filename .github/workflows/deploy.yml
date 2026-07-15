@@ -208,6 +208,9 @@ jobs:
           export MULTICA_WEB_IMAGE="ghcr.io/${owner_lc}/multica-web"
           export MULTICA_DB_BRIDGE_IMAGE="ghcr.io/${owner_lc}/multica-db-bridge"
           export MULTICA_IMAGE_TAG="${IMAGE_TAG}"
+          # s89 is the shared dev environment; keep this off by default in
+          # docker-compose.selfhost.yml and opt in only for this deploy lane.
+          export MULTICA_DEV_AGENT_PROFILE_ACCESS=true
           if [ -z "${POSTGRES_PASSWORD:-}" ]; then
             echo "::error::POSTGRES_PASSWORD secret is empty — s89 Environment secret not wired. Aborting to avoid deploying with the wrong DB password."
             exit 1

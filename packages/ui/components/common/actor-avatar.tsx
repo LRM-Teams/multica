@@ -14,13 +14,6 @@ interface ActorAvatarProps {
   isSquad?: boolean;
   size?: number;
   className?: string;
-  /**
-   * Optional identity color for the icon/initials fallback (no effect when an
-   * avatar image renders). Used by multi-agent surfaces (group chat) to give
-   * each agent a stable, distinguishable color via inline style instead of the
-   * uniform muted fill. `bg` tints the circle, `fg` colors the glyph.
-   */
-  tint?: { fg: string; bg: string };
 }
 
 function ActorAvatar({
@@ -32,7 +25,6 @@ function ActorAvatar({
   isSquad,
   size = 20,
   className,
-  tint,
 }: ActorAvatarProps) {
   const [imgError, setImgError] = useState(false);
 
@@ -41,7 +33,6 @@ function ActorAvatar({
   }, [avatarUrl]);
 
   const showFallback = !avatarUrl || imgError;
-  const tinted = showFallback && tint;
 
   return (
     <div
@@ -51,16 +42,16 @@ function ActorAvatar({
         // Squads (a group, non-human) get a square tile so they don't read as
         // a single person; everyone else stays round.
         isSquad ? "rounded-md" : "rounded-full",
-        // Uniform muted fill is the default fallback; a `tint` overrides it via
-        // inline style for per-actor identity colors.
-        showFallback && !tint && "bg-muted text-muted-foreground",
+        // One restrained, uniform fallback for everyone — no per-actor hash
+        // colors (#451, Frank: "bot 头像不要五颜六色"; Iris: color is info, not
+        // decoration — distinguish agents by name/handle or a custom avatar).
+        showFallback && "bg-muted text-muted-foreground",
         className
       )}
       style={{
         width: size,
         height: size,
         fontSize: size * 0.45,
-        ...(tinted ? { backgroundColor: tint.bg, color: tint.fg } : null),
       }}
       title={name}
     >

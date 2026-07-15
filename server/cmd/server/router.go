@@ -530,6 +530,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/runtimes/{runtimeId}/local-skills/import/{requestId}/result", h.ReportLocalSkillImportResult)
 		r.Post("/runtimes/{runtimeId}/shared-skills/sync", h.SyncRuntimeSharedSkills)
 		r.Post("/runtimes/{runtimeId}/evolution/submissions", h.SyncEvolutionSubmissions)
+		r.Post("/runtimes/{runtimeId}/memory-curation/{runId}/result", h.ReportMemoryCurationRunResult)
 
 		r.Get("/tasks/{taskId}/status", h.GetTaskStatus)
 		r.Post("/tasks/{taskId}/start", h.StartTask)
@@ -618,6 +619,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/", h.GetWorkspace)
 					r.Get("/members", h.ListMembersWithUser)
 					r.Get("/memory-curation/status", h.GetWorkspaceMemoryCurationStatus)
+					r.Get("/memory-curation/profile", h.GetMemoryCuratorProfile)
+					r.Put("/memory-curation/profile", h.UpdateMemoryCuratorProfile)
 					r.Post("/leave", h.LeaveWorkspace)
 					r.Get("/invitations", h.ListWorkspaceInvitations)
 					// Listing GitHub installations is member-visible so the
@@ -1163,6 +1166,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/members", h.AddChannelMember)
 					r.Post("/members/batch", h.AddChannelMembers)
 					r.Delete("/members/{memberType}/{memberId}", h.RemoveChannelMember)
+					r.Post("/group-manager", h.InviteGroupManager)
 					r.Get("/messages", h.ListChannelMessages)
 					r.Get("/messages/search", h.SearchChannelMessages)
 					r.Post("/messages", h.SendChannelMessage)

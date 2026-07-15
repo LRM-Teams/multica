@@ -2,6 +2,7 @@
 
 import type { ChannelMessage } from "@multica/core/types";
 import { MemoizedMarkdown } from "../../common/markdown";
+import { InlineReferenceContent } from "../../common/inline-reference-content";
 import { MessagePartsRenderer } from "./message-parts-renderer";
 import { MessageAttachmentZone } from "./message-attachment-zone";
 import { collectAttachmentParts } from "./message-attachment-zone-items";
@@ -83,6 +84,26 @@ export function MessageBody({
           (part.type === "text" && part.text.trim()) || part.type === "sticker",
       );
       if (!hasBodyContent) return null;
+      // Structured mention / issue-ref parts (#463): the canonical `content` now
+      // carries bare `@Label` / `MUL-123` text with the refs anchored to spans,
+      // so render the text body through the shared inline-reference projector —
+      // that's what turns those bare tokens back into hover-card mentions +
+      // issue links (the bare-text migration window dropped them). Stickers still
+      // render as images alongside. No refs → the existing parts renderer.
+      const hasReferenceParts = bodyParts.some((part) => part.type === "reference");
+      if (hasReferenceParts) {
+        const stickerParts = bodyParts.filter((part) => part.type === "sticker");
+        return (
+          <>
+            <InlineReferenceContent
+              content={content}
+              parts={effectiveParts}
+              highlightQuery={highlightQuery}
+            />
+            {stickerParts.length > 0 && <MessagePartsRenderer parts={stickerParts} />}
+          </>
+        );
+      }
       return <MessagePartsRenderer parts={bodyParts} highlightQuery={highlightQuery} />;
     }
 

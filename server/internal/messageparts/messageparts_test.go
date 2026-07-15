@@ -1,6 +1,7 @@
 package messageparts
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -117,6 +118,8 @@ func TestNormalizeReferenceParts(t *testing.T) {
 			RefType:      "issue-ref",
 			RefID:        "MUL-123",
 			Label:        "MUL-123",
+			RefTitle:     "Structured issue reference",
+			RefStatus:    "in_progress",
 			AttachmentID: "should-clear",
 		},
 	})
@@ -140,6 +143,55 @@ func TestNormalizeReferenceParts(t *testing.T) {
 	}
 	if parts[1].AttachmentID != "" {
 		t.Fatalf("issue reference retained attachment fields: %+v", parts[1])
+	}
+	if parts[1].RefTitle != "Structured issue reference" || parts[1].RefStatus != "in_progress" {
+		t.Fatalf("issue reference lost typed metadata: %+v", parts[1])
+	}
+}
+
+func TestNormalizeReferencePartsRejectsAllMention(t *testing.T) {
+	_, _, err := Normalize("@all", []protocol.MessagePart{{
+		Type:       protocol.MessagePartTypeReference,
+		RefType:    "mention",
+		RefSubType: "all",
+		RefID:      "all",
+	}})
+	if err == nil || !strings.Contains(err.Error(), "unsupported mention ref_subtype") {
+		t.Fatalf("Normalize @all error = %v, want unsupported mention subtype", err)
+	}
+}
+
+func TestNormalizeSystemEventPart(t *testing.T) {
+	content, parts, err := Normalize("", []protocol.MessagePart{{
+		Type:        protocol.MessagePartTypeSystemEvent,
+		Event:       "thread_unfollowed",
+		EventParams: []byte(`{"actor_id":"agent-1"}`),
+		Text:        "should-clear",
+		RefID:       "should-clear",
+	}})
+	if err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+	if content != "" || len(parts) != 1 {
+		t.Fatalf("Normalize = %q %+v, want one event part and empty fallback content", content, parts)
+	}
+	part := parts[0]
+	if part.Type != protocol.MessagePartTypeSystemEvent || part.Event != "thread_unfollowed" || string(part.EventParams) != `{"actor_id":"agent-1"}` {
+		t.Fatalf("event part = %+v", part)
+	}
+	if part.Text != "" || part.RefID != "" {
+		t.Fatalf("event part retained non-event fields: %+v", part)
+	}
+}
+
+func TestNormalizeSystemEventPartRejectsMalformedParams(t *testing.T) {
+	_, _, err := Normalize("", []protocol.MessagePart{{
+		Type:        protocol.MessagePartTypeSystemEvent,
+		Event:       "thread_unfollowed",
+		EventParams: []byte(`[]`),
+	}})
+	if err == nil {
+		t.Fatal("Normalize accepted a non-object event_params value")
 	}
 }
 

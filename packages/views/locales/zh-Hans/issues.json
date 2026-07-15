@@ -32,6 +32,10 @@
     "agents_label": "智能体",
     "agents_description": "分配给智能体的 issue"
   },
+  "group_filter": {
+    "all": "所有群组",
+    "aria": "按来源频道筛选"
+  },
   "filters": {
     "tooltip": "筛选",
     "placeholder": "筛选...",
@@ -151,6 +155,7 @@
     "desc_placeholder": "添加描述...",
     "sub_issues_label": "子 issue",
     "sub_issue_of": "属于父 issue",
+    "from_discussion": "源自讨论",
     "add_sub_issues": "添加子 issue",
     "add_sub_issue_tooltip": "添加子 issue",
     "add_sub_issue_aria": "添加子 issue",

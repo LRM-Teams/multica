@@ -33,6 +33,19 @@ export const BaseMentionExtension = Mention.extend({
           el.getAttribute("data-mention-type") ?? "member",
         renderHTML: () => ({}),
       },
+      // The actor's unique routing handle (#42, = actor `name`). The picker
+      // sets it on member/agent items; it is what we serialize as bare `@handle`
+      // on send (#600 rejects the legacy `mention://` syntax, so the wire form
+      // is plain `@handle` that the server parses into a structured ref + span).
+      // Declared here so ProseMirror keeps it on the node — otherwise the
+      // default Mention command drops it as an undeclared attribute.
+      handle: {
+        default: null,
+        parseHTML: (el: HTMLElement) =>
+          el.getAttribute("data-mention-handle") ?? null,
+        renderHTML: (attrs: { handle?: string | null }) =>
+          attrs.handle ? { "data-mention-handle": attrs.handle } : {},
+      },
     };
   },
   markdownTokenizer: {
@@ -65,16 +78,25 @@ export const BaseMentionExtension = Mention.extend({
     return helpers.createNode("mention", token.attributes);
   },
   renderMarkdown: (node: any) => {
-    const { id, label, type = "member" } = node.attrs || {};
-    // Broadcast token is a fixed protocol string — never serialize the picker
-    // description ("All members") into the message body.
-    if (type === "all") {
-      return "[@all](mention://all/all)";
+    const { id, label, handle, type = "member" } = node.attrs || {};
+    if (type === "project" || type === "issue") {
+      // Non-actor references are out of the #600 channel-actor cutover (Barry:
+      // the issue-comment surface has no MessagePart contract yet), so they keep
+      // the legacy link form. In practice the `@` picker no longer produces
+      // these (task #57 routes issues/projects through the `#` picker).
+      const prefix = type === "project" ? "" : "@";
+      const safeLabel = (label ?? id).replace(/\[/g, "\\[").replace(/\]/g, "\\]");
+      return `[${prefix}${safeLabel}](mention://${type}/${id})`;
     }
-    const prefix = type === "project" ? "" : "@";
-    // Escape square brackets in the label so the markdown link syntax
-    // is not broken when the name contains [ or ] (e.g. "David[TF]").
-    const safeLabel = (label ?? id).replace(/\[/g, "\\[").replace(/\]/g, "\\]");
-    return `[${prefix}${safeLabel}](mention://${type}/${id})`;
+    // Actor mentions (member/agent/squad/all) serialize as bare `@handle` plain
+    // text — #600 hard-rejects the legacy `mention://` actor syntax, and the
+    // server (#446/#463) parses the bare `@<name>` into a structured reference
+    // anchored to a UTF-16 span. `handle` is the actor's unique routing name
+    // (#42); the label fallback only covers legacy nodes (e.g. parsed from an
+    // old `mention://` draft) that predate the handle attribute. `@all` no
+    // longer broadcasts (server drops it, picker no longer offers it) so a
+    // legacy @all node degrades to the literal word; squad isn't parsed
+    // server-side yet either — both emit as plain text, never `mention://`.
+    return `@${handle ?? label ?? id}`;
   },
 });

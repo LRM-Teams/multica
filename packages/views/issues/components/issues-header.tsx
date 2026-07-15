@@ -12,6 +12,7 @@ import {
   Filter,
   FolderKanban,
   FolderMinus,
+  Hash,
   List,
   SignalHigh,
   SlidersHorizontal,
@@ -53,6 +54,7 @@ import { StatusIcon, PriorityIcon } from ".";
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { memberListOptions, agentListOptions, squadListOptions } from "@multica/core/workspace/queries";
+import { channelsOptions } from "@multica/core/channels/queries";
 import { projectListOptions } from "@multica/core/projects/queries";
 import { labelListOptions } from "@multica/core/labels/queries";
 import { ProjectIcon } from "../../projects/components/project-icon";
@@ -499,6 +501,62 @@ function LabelSubContent({
 // IssuesHeader
 // ---------------------------------------------------------------------------
 
+// Radio value can't be null; channel ids are UUIDs, so this sentinel is safe.
+const GROUP_FILTER_ALL = "__all__";
+
+/**
+ * #476 — filter the issue list to issues anchored to a chat channel (created
+ * from a message there). Server-side (see `issueListOptions`); offers only the
+ * group channels the viewer can see and hides itself when there are none, so it
+ * adds no noise on DM-only workspaces. Also driven by the channel header's
+ * "Issues" entry, which sets `sourceChannelId` before navigating here.
+ */
+function GroupFilterDropdown() {
+  const { t } = useT("issues");
+  const wsId = useWorkspaceId();
+  const sourceChannelId = useViewStore((s) => s.sourceChannelId);
+  const setSourceChannel = useViewStore((s) => s.setSourceChannel);
+  const { data: channels = [] } = useQuery(channelsOptions(wsId));
+  const groups = useMemo(() => channels.filter((c) => c.kind === "group"), [channels]);
+  if (groups.length === 0) return null;
+  const activeName = sourceChannelId
+    ? groups.find((c) => c.id === sourceChannelId)?.name
+    : undefined;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            variant="outline"
+            size="sm"
+            aria-label={t(($) => $.group_filter.aria)}
+            className={cn("shrink-0 gap-1", activeName ? "text-foreground" : "text-muted-foreground")}
+          >
+            <Hash className="size-3.5 shrink-0" />
+            <span className="max-w-[8rem] truncate">{activeName ?? t(($) => $.group_filter.all)}</span>
+            <ChevronDown className="size-3 shrink-0 text-muted-foreground" />
+          </Button>
+        }
+      />
+      <DropdownMenuContent align="end" className="max-h-72 w-52 overflow-y-auto">
+        <DropdownMenuRadioGroup
+          value={sourceChannelId ?? GROUP_FILTER_ALL}
+          onValueChange={(v) => setSourceChannel(v === GROUP_FILTER_ALL ? null : v)}
+        >
+          <DropdownMenuRadioItem value={GROUP_FILTER_ALL}>
+            {t(($) => $.group_filter.all)}
+          </DropdownMenuRadioItem>
+          {groups.map((c) => (
+            <DropdownMenuRadioItem key={c.id} value={c.id}>
+              <span className="truncate">{`#${c.name}`}</span>
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 export function IssuesHeader({
   scopedIssues,
   allowGantt = false,
@@ -598,6 +656,7 @@ export function IssuesHeader({
         </DropdownMenu>
 
         <div className="flex shrink-0 items-center gap-1">
+          <GroupFilterDropdown />
           {agentRunningFilter && (
             <span className="mr-1 hidden text-xs text-muted-foreground md:inline">
               {t(($) => $.agent_activity.filter_active_label)}

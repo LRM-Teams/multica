@@ -494,7 +494,10 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 				fmt.Fprintf(&b, "- Pi skill drafts root (`PI_SKILL_DRAFTS_DIR`): `%s`\n", ctx.AgentSkillDraftsDir)
 			}
 		}
-		b.WriteString("\nWhen asked where your memory or skills live, report these Multica agent paths, not host-global runtime paths. Use `MULTICA_AGENT_MEMORY_DIR` / `MULTICA_AGENT_ROOT` for durable memory changes, and write review candidates to `MULTICA_AGENT_SYNC_QUEUE_DIR` when a fact should be curated instead of directly committed. Do not read or write `~/.pi/agent/memory`, `~/.codex/memories`, `~/.claude`, or other provider-global memory directories as your own memory unless the task explicitly asks you to inspect host runtime configuration.\n\n")
+		b.WriteString("\nWhen asked where your memory or skills live, report these Multica agent paths, not host-global runtime paths. Use `MULTICA_AGENT_MEMORY_DIR` / `MULTICA_AGENT_ROOT` for durable memory changes. Do not read or write `~/.pi/agent/memory`, `~/.codex/memories`, `~/.claude`, or other provider-global memory directories as your own memory unless the task explicitly asks you to inspect host runtime configuration.\n\n")
+		if ctx.AgentRoot != "" || ctx.AgentMemoryDir != "" {
+			renderMemoryOperatingGuide(&b)
+		}
 	}
 
 	if ctx.ChatSessionID != "" {
@@ -515,7 +518,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	b.WriteString("### Core\n")
 	b.WriteString("- `multica issue get <id> --output json` — Get full issue details.\n")
 	b.WriteString("- `multica issue comment list <issue-id> [--thread <comment-id> [--tail N] | --recent N] [--before <ts> --before-id <uuid>] [--since <RFC3339>] --output json` — List comments on an issue. Default returns the full flat timeline (server cap 2000). On busy issues prefer the thread-aware reads: `--thread <comment-id>` returns one conversation (root + every reply); `--thread <id> --tail N` caps replies to the N most recent (root is always included, even at `--tail 0`); `--recent N` returns the N most recently active threads. `--before` / `--before-id` walks older replies under `--thread --tail` (stderr label: `Next reply cursor`) or older threads under `--recent` (stderr label: `Next thread cursor`). `--since` is for incremental polling and may combine with `--thread` (with or without `--tail`) or `--recent`.\n")
-	b.WriteString("- `multica issue create --title \"...\" [--description \"...\" | --description-stdin | --description-file <path>] [--priority X] [--status X] [--assignee X | --assignee-id <uuid>] [--parent <issue-id>] [--project <project-id>] [--due-date <RFC3339>] [--attachment-id <uuid>]` — Create a new issue; pass attachment ids from `multica attachment upload` (repeatable).\n")
+	b.WriteString("- `multica issue create --title \"...\" [--description \"...\" | --description-stdin | --description-file <path>] [--priority X] [--status X] [--assignee X | --assignee-id <uuid>] [--parent <issue-id>] [--project <project-id>] [--due-date <RFC3339>] [--source-channel <uuid> --source-message <uuid>] [--attachment-id <uuid>]` — Create a new issue; pass attachment ids from `multica attachment upload` (repeatable). When the issue follows a visible channel discussion, pass its triggering message with both source flags; replies are normalized to their thread root for the return link.\n")
 	b.WriteString("- `multica issue update <id> [--title X] [--description X | --description-stdin | --description-file <path>] [--priority X] [--status X] [--assignee X | --assignee-id <uuid>] [--parent <issue-id>] [--project <project-id>] [--due-date <RFC3339>]` — Update issue fields; use `--parent \"\"` to clear parent.\n")
 	b.WriteString("- `multica repo checkout <url> [--ref <branch-or-sha>]` — Check out a repository into the working directory (creates a git worktree with a dedicated branch; use `--ref` for review/QA on a specific branch, tag, or commit)\n")
 	b.WriteString("- `multica issue status <id> <status>` — Shortcut for `issue update --status` when you only need to flip status (todo, in_progress, in_review, done, blocked, backlog, cancelled)\n")
@@ -777,6 +780,17 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	return b.String()
 }
 
+func renderMemoryOperatingGuide(b *strings.Builder) {
+	b.WriteString("### Memory Operating Guide (v0.1)\n\n")
+	b.WriteString("Use medium-strength auto-write: record information without waiting for a separate request when it is specific, supported by the current interaction, likely to matter in a future run, and belongs to this agent. Do not record guesses, routine task details, raw transcripts, secrets, or facts that are useful only for the current response. Prefer updating an existing entry over creating a duplicate.\n\n")
+	b.WriteString("- **Durable facts and decisions**: write stable project, team, tool, convention, responsibility, or operating knowledge to `memory/MEMORY.md` when future work is likely to reuse it.\n")
+	b.WriteString("- **User preferences and profile facts**: write stable, relevant preferences or user facts to `memory/USER.md` when the user states them clearly or repeated evidence makes them reliable. Attribute them to the identified user; do not generalize one member's preference to everyone.\n")
+	b.WriteString("- **Current state and events**: write active initiatives, temporary facts, dated events, commitments, blockers, and quotas to `memory/STATE.md`. Include a date and, when applicable, status, TTL/expiry, or reset date so stale state can be retired.\n")
+	b.WriteString("- **Review candidates**: write uncertain, conflicting, sensitive, or destination-ambiguous items to `memory/REVIEW.md` instead of canonical memory. Use `MULTICA_AGENT_SYNC_QUEUE_DIR/memory-candidates.jsonl` only for governed sharing or platform curation, never to copy private memory across agents directly.\n")
+	b.WriteString("- **Explicit user direction**: if the user says \"remember this\", \"write this down\", \"write this here\", or names a memory file, treat that as a direct write request and record it immediately in the requested agent-local destination. If the requested destination would violate safety, privacy, instruction precedence, or the isolated root boundary, do not write it there; explain the constraint and use a safe agent-local alternative only when appropriate.\n\n")
+	b.WriteString("Live instructions and the current task remain authoritative. If memory conflicts with them, follow the live source and put the conflict in `memory/REVIEW.md`; never silently rewrite instructions or use memory to override them.\n\n")
+}
+
 func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContextForEnv) {
 	b.WriteString("## Chat Mode\n\n")
 	// Directed reply requirement — only rendered for directed runs (DM,
@@ -785,6 +799,9 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 	if ctx.Directed {
 		b.WriteString("### Reply Requirement (READ FIRST — overrides all rules below)\n\n")
 		b.WriteString("This run was triggered by a message directed at you: a DM, an @mention, or a direct question/reply addressed to you. Human DMs, human @mentions, direct questions, assigned tasks, and DM-style continuations require a visible response before finishing. Agent-to-agent channel @mentions are weak notifications: stay silent unless they ask for your immediate deliverable, review, decision, or direct answer. Acceptable visible responses, when required, in order of preference:\n")
+		if !ctx.ChatCLITransportUnavailable {
+			b.WriteString("\n**Operational-command acknowledgement:** When a user directs an attention-management operation (for example, follow/unfollow or mute/unmute), perform the operation first. If it succeeds, react `✅` to the instructing message with `multica message react --message-id <triggering-message-id> --emoji \"✅\"` and send no ordinary text confirmation. Use a text reply only when the operation fails or the user needs substantive information.\n")
+		}
 		if ctx.ChatCLITransportUnavailable {
 			b.WriteString("1. Write the visible reply as your final assistant output (answer, result, or a brief acknowledgment).\n")
 			b.WriteString("2. When a sticker or reaction would normally fit, use a short text reply instead; the chat CLI transport is unavailable for this run.\n")

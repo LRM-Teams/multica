@@ -40,14 +40,12 @@ func ParseMentions(content string) []Mention {
 	return result
 }
 
-// ParseMentionsFromContentAndParts extracts deduplicated mentions from legacy
-// markdown content and from structured reference message parts.
-func ParseMentionsFromContentAndParts(content string, parts []protocol.MessagePart) []Mention {
+// ParseMentionsFromContentAndParts extracts deduplicated channel mentions
+// exclusively from structured reference message parts. Legacy markdown is
+// migrated once at persistence time and is never reinterpreted by readers.
+func ParseMentionsFromContentAndParts(_ string, parts []protocol.MessagePart) []Mention {
 	seen := make(map[string]bool)
 	var result []Mention
-	for _, mention := range ParseMentions(content) {
-		result = appendMention(result, seen, mention)
-	}
 	for _, part := range parts {
 		if part.Type != protocol.MessagePartTypeReference {
 			continue
@@ -55,7 +53,7 @@ func ParseMentionsFromContentAndParts(content string, parts []protocol.MessagePa
 		if part.RefType != "mention" {
 			continue
 		}
-		if part.RefSubType == "" || part.RefID == "" {
+		if part.RefSubType == "" || part.RefID == "" || part.RefSubType == "all" {
 			continue
 		}
 		result = appendMention(result, seen, Mention{Type: part.RefSubType, ID: part.RefID})

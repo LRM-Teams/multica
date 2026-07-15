@@ -65,7 +65,15 @@ function ProjectMentionCard({ projectId }: { projectId: string }): React.ReactNo
  * Member/agent use the full profile popover (same surface as message author
  * avatars/names). @all is a broadcast keyword: token only, no profile card.
  */
-function ActorMention({
+/**
+ * Member / agent / @all / squad mention token — brand-ink prose text, with the
+ * hover profile card + click-to-open for person mentions. Exported so the shared
+ * inline-reference projector (#463) renders structured `reference` mentions the
+ * SAME way as legacy `mention://` markdown links — one mention look + one hover
+ * card everywhere, no second implementation (restores the hover the bare-`@Label`
+ * migration window dropped).
+ */
+export function ActorMention({
   type,
   id,
   label,

@@ -6,9 +6,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/messageparts"
 	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/internal/workgraph"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 func TestWendyUnlockSilentParallelWait(t *testing.T) {
@@ -103,11 +105,16 @@ func TestWendyHumanReworkInterruptsActiveDownstream(t *testing.T) {
 	previous := testHandler.WorkGraph
 	testHandler.WorkGraph = fixture.store
 	t.Cleanup(func() { testHandler.WorkGraph = previous })
+	mentionStart, mentionEnd := 0, 2
 	testHandler.ingestWendyHumanGroupMessage(context.Background(), ChannelResponse{
 		ID: fixture.channelID, WorkspaceID: testWorkspaceID, Kind: "group",
 	}, ChannelMessageResponse{
 		ID:      "rework-" + uuid.NewString(),
-		Content: mentionMarkdown("agent", fixture.cID, "C") + " 这个不对，先修改返工",
+		Content: "@C 这个不对，先修改返工",
+		Parts: []protocol.MessagePart{{
+			Type: protocol.MessagePartTypeReference, RefType: "mention", RefSubType: "agent", RefID: fixture.cID, Label: "@C",
+			ContentStartUTF16: &mentionStart, ContentEndUTF16: &mentionEnd,
+		}},
 	})
 
 	var cStatus string
@@ -198,6 +205,8 @@ func seedWendyUnlockDispatchFixture(t *testing.T) wendyUnlockDispatchFixture {
 	addRadarAgentMembersForExecutorTest(t, channelID, supervisor.ID.String(), targetC, targetD)
 
 	bindWendySupervisorForHandoffTest(t, supervisor.ID.String())
+	// Beckham owns group handoffs now: the channel's group manager is the speaker.
+	bindChannelGroupManagerForTest(t, channelID, supervisor.ID.String())
 
 	fixture := wendyUnlockDispatchFixture{
 		wendyID:   supervisor.ID.String(),
@@ -223,6 +232,19 @@ func seedWendyUnlockDispatchFixture(t *testing.T) wendyUnlockDispatchFixture {
 	}
 	fixture.setPrimaryChannel(t, fixture.issueC)
 	return fixture
+}
+
+// bindChannelGroupManagerForTest binds an agent as a channel's Beckham (group
+// manager) — the per-channel role that now owns ambient review and handoffs.
+func bindChannelGroupManagerForTest(t *testing.T, channelID, agentID string) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := testPool.Exec(ctx, `UPDATE channel SET group_manager_agent_id = $2 WHERE id = $1`, channelID, agentID); err != nil {
+		t.Fatalf("bind channel group manager: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `UPDATE agent SET managed_role = 'group_manager' WHERE id = $1`, agentID); err != nil {
+		t.Fatalf("mark group manager role: %v", err)
+	}
 }
 
 func bindWendySupervisorForHandoffTest(t *testing.T, supervisorID string) {
@@ -422,16 +444,17 @@ func assertWendyUnlockWakeCount(t *testing.T, channelID, targetID string, want i
 func assertWendyUnlockMessageMentions(t *testing.T, channelID, targetID string) {
 	t.Helper()
 	var content string
+	var rawParts []byte
 	if err := testPool.QueryRow(context.Background(), `
-		SELECT content
+		SELECT content, parts
 		FROM channel_message
 		WHERE channel_id = $1
 		ORDER BY created_at DESC, id DESC
 		LIMIT 1
-	`, channelID).Scan(&content); err != nil {
+	`, channelID).Scan(&content, &rawParts); err != nil {
 		t.Fatalf("load Wendy unlock message: %v", err)
 	}
-	mentions := util.ParseMentions(content)
+	mentions := util.ParseMentionsFromContentAndParts(content, messageparts.Decode(rawParts))
 	if len(mentions) != 1 || mentions[0].Type != "agent" || mentions[0].ID != targetID {
 		t.Fatalf("unlock message mentions = %+v, want only agent/%s", mentions, targetID)
 	}

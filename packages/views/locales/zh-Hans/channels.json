@@ -61,6 +61,7 @@
     "share_aria": "分享",
     "stats_aria": "统计",
     "files_aria": "文件",
+    "issues_aria": "本频道的 issue",
     "back": "返回",
     "more_aria": "更多",
     "roster_summary": "{{members}} 人 · {{agents}} 个智能体"

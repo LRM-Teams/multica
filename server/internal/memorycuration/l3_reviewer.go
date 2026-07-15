@@ -65,13 +65,14 @@ type L3ReviewOutput struct {
 }
 
 type L3ReviewDecision struct {
-	EntryID    string
-	Route      L3Route
-	Confidence float64
-	Rationale  string
-	Memory     L3MemoryDraft
-	Skill      L3SkillDraft
-	Error      string
+	EntryID     string
+	Route       L3Route
+	Confidence  float64
+	Sensitivity string
+	Rationale   string
+	Memory      L3MemoryDraft
+	Skill       L3SkillDraft
+	Error       string
 }
 
 type L3MemoryDraft struct {
@@ -89,20 +90,22 @@ type L3SkillDraft struct {
 }
 
 type AgentL3ReviewerConfig struct {
-	Provider string
-	Path     string
-	Model    string
-	Timeout  time.Duration
-	Backend  agentpkg.Backend
-	WorkDir  string
+	Provider     string
+	Path         string
+	Model        string
+	Timeout      time.Duration
+	Backend      agentpkg.Backend
+	WorkDir      string
+	Instructions string
 }
 
 type AgentL3Reviewer struct {
-	provider string
-	model    string
-	timeout  time.Duration
-	backend  agentpkg.Backend
-	workDir  string
+	provider     string
+	model        string
+	timeout      time.Duration
+	backend      agentpkg.Backend
+	workDir      string
+	instructions string
 }
 
 type unavailableL3Reviewer struct{ reason string }
@@ -115,9 +118,10 @@ Classify each candidate exactly once as:
 - skill: a repeatable multi-step capability with triggers, procedure, tool constraints, and acceptance criteria.
 - split: contains both durable context and a reusable multi-step capability.
 - discard: duplicate, transient, unsupported, unsafe, or not useful.
+Classify sensitivity separately as none, sensitive, or unknown. Use none only when the candidate contains no credentials, private personal data, confidential business data, or other restricted content. When uncertain, return unknown.
 For skill or split, provide a complete skill draft. Do not generate scripts, file paths, or markdown frontmatter.
 Return strict JSON only, with no markdown, in this shape:
-{"reviews":[{"entry_id":"string","route":"memory|skill|split|discard","confidence":0.0,"rationale":"string","memory":{"title":"string","body":"string"},"skill":{"name":"kebab-case-name","description":"string","instructions":"markdown body","tags":[],"tools":[],"task_types":[]}}]}`
+{"reviews":[{"entry_id":"string","route":"memory|skill|split|discard","confidence":0.0,"sensitivity":"none|sensitive|unknown","rationale":"string","memory":{"title":"string","body":"string"},"skill":{"name":"kebab-case-name","description":"string","instructions":"markdown body","tags":[],"tools":[],"task_types":[]}}]}`
 
 func NewL3ReviewerFromEnv() L3Reviewer {
 	enabled := envBoolDefault("MEMORY_CURATION_L3_REVIEW_ENABLED", false)
@@ -150,7 +154,7 @@ func NewAgentL3Reviewer(cfg AgentL3ReviewerConfig) (*AgentL3Reviewer, error) {
 		provider = "pi"
 	}
 	if provider != "pi" {
-		return nil, fmt.Errorf("unsupported L3 reviewer provider %q: only pi enforces no-tools isolation", provider)
+		return nil, fmt.Errorf("unsupported L3 reviewer provider %q: select a Pi runtime for no-tools isolation", provider)
 	}
 	backend := cfg.Backend
 	if backend == nil {
@@ -168,7 +172,7 @@ func NewAgentL3Reviewer(cfg AgentL3ReviewerConfig) (*AgentL3Reviewer, error) {
 	if workDir == "" {
 		workDir = os.TempDir()
 	}
-	return &AgentL3Reviewer{provider: provider, model: strings.TrimSpace(cfg.Model), timeout: timeout, backend: backend, workDir: workDir}, nil
+	return &AgentL3Reviewer{provider: provider, model: strings.TrimSpace(cfg.Model), timeout: timeout, backend: backend, workDir: workDir, instructions: truncateUTF8(strings.TrimSpace(cfg.Instructions), maxL3ReviewInputBodyBytes)}, nil
 }
 
 func (r unavailableL3Reviewer) Review(context.Context, L3ReviewInput) (L3ReviewOutput, error) {
@@ -182,6 +186,9 @@ func (r *AgentL3Reviewer) Review(ctx context.Context, input L3ReviewInput) (L3Re
 		"workspace_id":   input.WorkspaceID,
 		"agent_id":       input.AgentID,
 		"candidates":     boundedL3Entries(input.Entries),
+	}
+	if r.instructions != "" {
+		payload["curator_instructions"] = r.instructions
 	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
@@ -223,12 +230,13 @@ func (r *AgentL3Reviewer) Review(ctx context.Context, input L3ReviewInput) (L3Re
 
 type l3ReviewEnvelope struct {
 	Reviews []struct {
-		EntryID    string        `json:"entry_id"`
-		Route      string        `json:"route"`
-		Confidence float64       `json:"confidence"`
-		Rationale  string        `json:"rationale"`
-		Memory     L3MemoryDraft `json:"memory"`
-		Skill      L3SkillDraft  `json:"skill"`
+		EntryID     string        `json:"entry_id"`
+		Route       string        `json:"route"`
+		Confidence  float64       `json:"confidence"`
+		Sensitivity string        `json:"sensitivity"`
+		Rationale   string        `json:"rationale"`
+		Memory      L3MemoryDraft `json:"memory"`
+		Skill       L3SkillDraft  `json:"skill"`
 	} `json:"reviews"`
 }
 
@@ -241,15 +249,16 @@ func parseL3ReviewDecisions(content string, requested []L3ReviewEntry) ([]L3Revi
 	if err := json.Unmarshal([]byte(trimmed), &envelope); err != nil {
 		return nil, fmt.Errorf("parse L3 reviewer response: %w", err)
 	}
-	allowed := make(map[string]struct{}, len(requested))
+	allowed := make(map[string]L3ReviewEntry, len(requested))
 	for _, entry := range requested {
-		allowed[entry.ID] = struct{}{}
+		allowed[entry.ID] = entry
 	}
 	seen := map[string]struct{}{}
 	decisions := make([]L3ReviewDecision, 0, len(envelope.Reviews))
 	for _, raw := range envelope.Reviews {
-		decision := L3ReviewDecision{EntryID: strings.TrimSpace(raw.EntryID), Confidence: raw.Confidence, Rationale: truncateUTF8(strings.TrimSpace(raw.Rationale), maxL3ReviewRationaleBytes), Memory: raw.Memory, Skill: raw.Skill}
-		if _, ok := allowed[decision.EntryID]; !ok {
+		decision := L3ReviewDecision{EntryID: strings.TrimSpace(raw.EntryID), Confidence: raw.Confidence, Sensitivity: normalizeL3Sensitivity(raw.Sensitivity), Rationale: truncateUTF8(strings.TrimSpace(raw.Rationale), maxL3ReviewRationaleBytes), Memory: raw.Memory, Skill: raw.Skill}
+		requestedEntry, ok := allowed[decision.EntryID]
+		if !ok {
 			continue
 		}
 		if _, duplicate := seen[decision.EntryID]; duplicate {
@@ -257,6 +266,9 @@ func parseL3ReviewDecisions(content string, requested []L3ReviewEntry) ([]L3Revi
 		}
 		seen[decision.EntryID] = struct{}{}
 		decision.Route = normalizeL3Route(raw.Route)
+		if decision.Sensitivity == "" {
+			decision.Sensitivity = normalizeL3Sensitivity(requestedEntry.Sensitivity)
+		}
 		if decision.Route == "" {
 			decision.Error = "unknown route"
 		} else if math.IsNaN(decision.Confidence) || math.IsInf(decision.Confidence, 0) || decision.Confidence < 0 || decision.Confidence > 1 {
@@ -277,6 +289,21 @@ func parseL3ReviewDecisions(content string, requested []L3ReviewEntry) ([]L3Revi
 		decisions = append(decisions, decision)
 	}
 	return decisions, nil
+}
+
+func normalizeL3Sensitivity(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "none":
+		return "none"
+	case "sensitive", "secret", "private", "restricted":
+		return "sensitive"
+	case "unknown":
+		return "unknown"
+	case "":
+		return ""
+	default:
+		return "unknown"
+	}
 }
 
 func normalizeL3Route(value string) L3Route {

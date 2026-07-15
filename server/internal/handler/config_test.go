@@ -245,3 +245,68 @@ func TestGetConfigExposesWorkspaceCreationDisabled(t *testing.T) {
 		t.Fatalf("workspace_creation_disabled: want true with env on, got false (body=%s)", w.Body.String())
 	}
 }
+
+func TestGetConfigExposesDevAgentProfileAccess(t *testing.T) {
+	t.Setenv("MULTICA_DEV_AGENT_PROFILE_ACCESS", "true")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	w := httptest.NewRecorder()
+
+	testHandler.GetConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetConfig: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var cfg AppConfig
+	if err := json.Unmarshal(w.Body.Bytes(), &cfg); err != nil {
+		t.Fatalf("decode config: %v", err)
+	}
+	if !cfg.DevAgentProfileAccessEnabled {
+		t.Fatalf("dev_agent_profile_access_enabled: want true with env on, got false")
+	}
+}
+
+func TestGetConfigExposesDevAgentProfileAccessFalse(t *testing.T) {
+	t.Setenv("APP_ENV", "")
+	t.Setenv("ANALYTICS_ENVIRONMENT", "")
+	t.Setenv("MULTICA_DEV_AGENT_PROFILE_ACCESS", "false")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	w := httptest.NewRecorder()
+
+	testHandler.GetConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetConfig: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode config map: %v", err)
+	}
+	got, ok := raw["dev_agent_profile_access_enabled"]
+	if !ok {
+		t.Fatalf("dev_agent_profile_access_enabled: want explicit false, field omitted (body=%s)", w.Body.String())
+	}
+	if got != false {
+		t.Fatalf("dev_agent_profile_access_enabled: want false, got %#v", got)
+	}
+}
+
+func TestDevAgentProfileAccessRequiresExplicitDevEnv(t *testing.T) {
+	t.Setenv("APP_ENV", "")
+	t.Setenv("ANALYTICS_ENVIRONMENT", "")
+	t.Setenv("MULTICA_DEV_AGENT_PROFILE_ACCESS", "")
+	if devAgentProfileAccessEnabled() {
+		t.Fatalf("dev profile access should stay false when env is unset")
+	}
+
+	t.Setenv("APP_ENV", "dev")
+	if !devAgentProfileAccessEnabled() {
+		t.Fatalf("dev profile access should enable for explicit dev APP_ENV")
+	}
+
+	t.Setenv("MULTICA_DEV_AGENT_PROFILE_ACCESS", "false")
+	if devAgentProfileAccessEnabled() {
+		t.Fatalf("explicit false flag should override dev APP_ENV")
+	}
+}

@@ -7,26 +7,36 @@ import (
 )
 
 const (
-	MessagePartTypeText       = "text"
-	MessagePartTypeSticker    = "sticker"
-	MessagePartTypeAttachment = "attachment"
-	MessagePartTypeReference  = "reference"
+	MessagePartTypeText        = "text"
+	MessagePartTypeSticker     = "sticker"
+	MessagePartTypeAttachment  = "attachment"
+	MessagePartTypeReference   = "reference"
+	MessagePartTypeSystemEvent = "system_event"
 )
 
 type MessagePart struct {
-	Type         string `json:"type"`
-	Text         string `json:"text,omitempty"`
-	RefType      string `json:"ref_type,omitempty"`
-	RefSubType   string `json:"ref_subtype,omitempty"`
-	RefID        string `json:"ref_id,omitempty"`
-	Label        string `json:"label,omitempty"`
-	PackID       string `json:"pack_id,omitempty"`
-	StickerID    string `json:"sticker_id,omitempty"`
-	Alt          string `json:"alt,omitempty"`
-	AttachmentID string `json:"attachment_id,omitempty"`
-	Filename     string `json:"filename,omitempty"`
-	ContentType  string `json:"content_type,omitempty"`
-	SizeBytes    int64  `json:"size_bytes,omitempty"`
+	Type       string `json:"type"`
+	Text       string `json:"text,omitempty"`
+	RefType    string `json:"ref_type,omitempty"`
+	RefSubType string `json:"ref_subtype,omitempty"`
+	RefID      string `json:"ref_id,omitempty"`
+	Label      string `json:"label,omitempty"`
+	RefTitle   string `json:"ref_title,omitempty"`
+	RefStatus  string `json:"ref_status,omitempty"`
+	// ContentStartUTF16 and ContentEndUTF16 anchor a reference to the exact
+	// UTF-16 code-unit range in the message's canonical content. They are
+	// pointers so zero is representable and a missing pair is unambiguous.
+	ContentStartUTF16 *int            `json:"content_start_utf16,omitempty"`
+	ContentEndUTF16   *int            `json:"content_end_utf16,omitempty"`
+	Event             string          `json:"event,omitempty"`
+	EventParams       json.RawMessage `json:"event_params,omitempty"`
+	PackID            string          `json:"pack_id,omitempty"`
+	StickerID         string          `json:"sticker_id,omitempty"`
+	Alt               string          `json:"alt,omitempty"`
+	AttachmentID      string          `json:"attachment_id,omitempty"`
+	Filename          string          `json:"filename,omitempty"`
+	ContentType       string          `json:"content_type,omitempty"`
+	SizeBytes         int64           `json:"size_bytes,omitempty"`
 }
 
 // Message is the envelope for all WebSocket messages.
@@ -210,6 +220,7 @@ const (
 	DaemonCapabilityChannelOutputActions     = "channel_output_actions"
 	DaemonCapabilityAgentCLITransport        = "agent_cli_transport"
 	DaemonCapabilityAgentCredentialTransport = "agent_credential_transport_v1"
+	DaemonCapabilityMemoryCuration           = "memory_curation_v1"
 )
 
 const (
@@ -406,8 +417,10 @@ type ChannelTypingPayload struct {
 // Mirrors the body of POST /api/daemon/heartbeat so both transports share
 // identical semantics.
 type DaemonHeartbeatRequestPayload struct {
-	RuntimeID           string `json:"runtime_id"`
-	SupportsBatchImport bool   `json:"supports_batch_import,omitempty"`
+	RuntimeID                 string `json:"runtime_id"`
+	SupportsBatchImport       bool   `json:"supports_batch_import,omitempty"`
+	SupportsMemoryCuration    bool   `json:"supports_memory_curation,omitempty"`
+	ActiveMemoryCurationRunID string `json:"active_memory_curation_run_id,omitempty"`
 }
 
 // DaemonHeartbeatAckPayload is the server's reply to DaemonHeartbeatRequestPayload.
@@ -433,6 +446,7 @@ type DaemonHeartbeatAckPayload struct {
 	// that don't know this field silently ignore it (standard JSON behavior)
 	// and fall back to the singular PendingLocalSkillImport above.
 	PendingLocalSkillImports []DaemonHeartbeatPendingLocalSkillImport `json:"pending_local_skill_imports,omitempty"`
+	PendingMemoryCuration    *DaemonHeartbeatPendingMemoryCuration    `json:"pending_memory_curation,omitempty"`
 }
 
 // HeartbeatStatusRuntimeGone is the ack Status used when the runtime row no
@@ -464,4 +478,26 @@ type DaemonHeartbeatPendingLocalSkills struct {
 type DaemonHeartbeatPendingLocalSkillImport struct {
 	ID       string `json:"id"`
 	SkillKey string `json:"skill_key"`
+}
+
+// DaemonHeartbeatPendingMemoryCuration is a server-owned run intent claimed by
+// the explicitly configured runtime. The daemon executes it against local
+// agent roots and reports the structured engine result back to the server.
+type DaemonHeartbeatPendingMemoryCuration struct {
+	ID                  string   `json:"id"`
+	WorkspaceID         string   `json:"workspace_id"`
+	Stage               string   `json:"stage"`
+	DateFrom            string   `json:"date_from"`
+	DateTo              string   `json:"date_to"`
+	AgentIDs            []string `json:"agent_ids"`
+	CuratorAgentID      string   `json:"curator_agent_id"`
+	CuratorModel        string   `json:"curator_model,omitempty"`
+	CuratorInstructions string   `json:"curator_instructions,omitempty"`
+	Timezone            string   `json:"timezone"`
+	IncludeHistory      bool     `json:"include_history"`
+	DryRun              bool     `json:"dry_run"`
+	Force               bool     `json:"force"`
+	ClaimToken          string   `json:"claim_token"`
+	Mode                string   `json:"mode"`
+	ConfidenceThreshold float64  `json:"confidence_threshold"`
 }

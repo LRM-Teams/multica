@@ -52,6 +52,10 @@ type IssueResponse struct {
 	Metadata    map[string]any          `json:"metadata"`
 	Reactions   []IssueReactionResponse `json:"reactions,omitempty"`
 	Attachments []AttachmentResponse    `json:"attachments,omitempty"`
+	// SourceRefs holds user-visible navigation back to the discussion that
+	// produced this issue. It is deliberately detail-only: board/list payloads
+	// stay small and must not leak a private source channel.
+	SourceRefs *IssueSourceRefsResponse `json:"source_refs,omitempty"`
 	// Labels are bulk-attached by list/detail endpoints so the client can render
 	// chips without an N+1 round-trip per row. Pointer + omitempty so paths that
 	// don't load labels (e.g. UpdateIssue, batch UpdateIssues, the issue:updated
@@ -59,6 +63,23 @@ type IssueResponse struct {
 	// preserves whatever labels are already in cache. nil pointer = "field
 	// absent, do not touch"; non-nil (incl. empty slice) = authoritative list.
 	Labels *[]LabelResponse `json:"labels,omitempty"`
+}
+
+type IssueSourceRefsResponse struct {
+	Message *IssueSourceMessageRefResponse `json:"message,omitempty"`
+}
+
+type IssueSourceMessageRefResponse struct {
+	ChannelID           string  `json:"channel_id"`
+	ChannelName         *string `json:"channel_name,omitempty"`
+	ChannelKind         string  `json:"channel_kind"`
+	MessageID           string  `json:"message_id"`
+	ThreadRootMessageID string  `json:"thread_root_message_id"`
+	Excerpt             string  `json:"excerpt"`
+	// ExcerptParts are structured references whose UTF-16 spans are valid for
+	// Excerpt itself (not the full source message). This lets a compact source
+	// preview retain safe display semantics without exposing legacy markup.
+	ExcerptParts []protocol.MessagePart `json:"excerpt_parts,omitempty"`
 }
 
 func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
@@ -748,6 +769,21 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 		}
 		projectFilter = id
 	}
+	var sourceChannelFilter pgtype.UUID
+	if c := r.URL.Query().Get("source_channel_id"); c != "" {
+		id, ok := parseUUIDOrBadRequest(w, c, "source_channel_id")
+		if !ok {
+			return
+		}
+		userID, ok := requireUserID(w, r)
+		if !ok {
+			return
+		}
+		if !h.requireChannelUserMember(w, ctx, workspaceID, id, parseUUID(userID)) {
+			return
+		}
+		sourceChannelFilter = id
+	}
 	// involves_user_id widens the assignee filter to surface issues where the
 	// user is the indirect assignee (their owned agent, or a squad they belong
 	// to / lead / have an agent inside). Direct member-assignment is excluded
@@ -767,8 +803,11 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// open_only=true returns all non-done/cancelled issues (no limit).
-	if r.URL.Query().Get("open_only") == "true" {
+	// Preserve the existing sqlc path for unfiltered open-only requests. A
+	// source-channel-filtered open-only request uses the dynamic path below so
+	// its source predicate is applied to both the rows and total.
+	openOnly := r.URL.Query().Get("open_only") == "true"
+	if openOnly && !sourceChannelFilter.Valid {
 		issues, err := h.Queries.ListOpenIssues(ctx, db.ListOpenIssuesParams{
 			WorkspaceID:    wsUUID,
 			Priority:       priorityFilter,
@@ -899,6 +938,19 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 	if metadataFilter != nil {
 		where = append(where, fmt.Sprintf("i.metadata @> %s::jsonb", addArg(string(metadataFilter))))
 	}
+	if sourceChannelFilter.Valid {
+		ref := addArg(sourceChannelFilter)
+		where = append(where, fmt.Sprintf(`EXISTS (
+    SELECT 1
+    FROM issue_source_message src
+    WHERE src.issue_id = i.id
+      AND src.workspace_id = i.workspace_id
+      AND src.channel_id = %s::uuid
+)`, ref))
+	}
+	if openOnly {
+		where = append(where, "i.status NOT IN ('done', 'cancelled')")
+	}
 	if involvesUserFilter.Valid {
 		ref := addArg(involvesUserFilter)
 		where = append(where, fmt.Sprintf(`(
@@ -947,16 +999,17 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 	}
 	orderBy += ", i.created_at DESC"
 
-	offsetRef := addArg(int64(offset))
-	limitRef := addArg(int64(limit))
-
 	query := fmt.Sprintf(`SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority,
        i.assignee_type, i.assignee_id, i.creator_type, i.creator_id,
        i.parent_issue_id, i.position, i.start_date, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.metadata
 FROM issue i
 WHERE %s
-ORDER BY %s
-LIMIT %s OFFSET %s`, whereSql, orderBy, limitRef, offsetRef)
+ORDER BY %s`, whereSql, orderBy)
+	if !openOnly {
+		offsetRef := addArg(int64(offset))
+		limitRef := addArg(int64(limit))
+		query += fmt.Sprintf("\nLIMIT %s OFFSET %s", limitRef, offsetRef)
+	}
 
 	rows, err := h.DB.Query(ctx, query, args...)
 	if err != nil {
@@ -1004,8 +1057,11 @@ LIMIT %s OFFSET %s`, whereSql, orderBy, limitRef, offsetRef)
 
 	// Get the true total count for pagination awareness.
 	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM issue i WHERE %s`, whereSql)
-	// Count query uses the same args minus the OFFSET and LIMIT params (last two added).
-	countArgs := args[:len(args)-2]
+	countArgs := args
+	if !openOnly {
+		// Count query uses the same args minus the OFFSET and LIMIT params.
+		countArgs = args[:len(args)-2]
+	}
 	var total int64
 	if err := h.DB.QueryRow(ctx, countQuery, countArgs...).Scan(&total); err != nil {
 		total = int64(len(issues))
@@ -1501,6 +1557,11 @@ func (h *Handler) GetIssue(w http.ResponseWriter, r *http.Request) {
 		detailLabels = []LabelResponse{}
 	}
 	resp.Labels = &detailLabels
+	if requesterID, ok := requireUserID(w, r); ok {
+		if source := h.issueSourceRefsForUser(r.Context(), issue, parseUUID(requesterID)); source != nil {
+			resp.SourceRefs = &IssueSourceRefsResponse{Message: source}
+		}
+	}
 
 	// Fetch issue reactions.
 	reactions, err := h.Queries.ListIssueReactions(r.Context(), issue.ID)
@@ -1982,6 +2043,11 @@ type CreateIssueRequest struct {
 	// origin_id=agent_task_queue.id).
 	OriginType *string `json:"origin_type,omitempty"`
 	OriginID   *string `json:"origin_id,omitempty"`
+	// Source records the visible message that triggered a chat-originated
+	// issue. The handler resolves thread replies to their root, validates the
+	// caller can see it, and persists the canonical anchor separately from
+	// origin_type/origin_id (which are internal producer provenance).
+	Source *IssueSourceMessageRequest `json:"source,omitempty"`
 
 	AllowDuplicate bool `json:"allow_duplicate,omitempty"`
 }
@@ -2090,6 +2156,11 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	// Determine creator identity: agent (via X-Agent-ID header) or member.
 	creatorType, actualCreatorID := h.resolveActor(r, creatorID, workspaceID)
 
+	sourceAnchor, ok := h.resolveIssueSourceMessageAnchor(w, r, workspaceID, creatorID, req.Source)
+	if !ok {
+		return
+	}
+
 	// Optional origin stamping (quick-create / autopilot). Only the
 	// allowed origin types are accepted; anything else is rejected so a
 	// rogue caller can't mint arbitrary origin labels. Both fields must
@@ -2143,23 +2214,25 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	res, err := h.IssueService.Create(r.Context(), service.IssueCreateParams{
-		WorkspaceID:    wsUUID,
-		Title:          req.Title,
-		Description:    ptrToText(req.Description),
-		Status:         status,
-		Priority:       priority,
-		AssigneeType:   assigneeType,
-		AssigneeID:     assigneeID,
-		CreatorType:    creatorType,
-		CreatorID:      parseUUID(actualCreatorID),
-		ParentIssueID:  parentIssueID,
-		ProjectID:      projectID,
-		StartDate:      startDate,
-		DueDate:        dueDate,
-		OriginType:     originType,
-		OriginID:       originID,
-		AttachmentIDs:  attachmentIDs,
-		AllowDuplicate: req.AllowDuplicate,
+		WorkspaceID:     wsUUID,
+		Title:           req.Title,
+		Description:     ptrToText(req.Description),
+		Status:          status,
+		Priority:        priority,
+		AssigneeType:    assigneeType,
+		AssigneeID:      assigneeID,
+		CreatorType:     creatorType,
+		CreatorID:       parseUUID(actualCreatorID),
+		ParentIssueID:   parentIssueID,
+		ProjectID:       projectID,
+		StartDate:       startDate,
+		DueDate:         dueDate,
+		OriginType:      originType,
+		OriginID:        originID,
+		SourceChannelID: sourceAnchor.ChannelID,
+		SourceMessageID: sourceAnchor.MessageID,
+		AttachmentIDs:   attachmentIDs,
+		AllowDuplicate:  req.AllowDuplicate,
 	}, service.IssueCreateOpts{
 		ActorID:          actualCreatorID,
 		AnalyticsAgentID: analyticsAgentID,
@@ -2489,6 +2562,18 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	// fails best-effort.
 	if statusChanged {
 		h.notifyParentOfChildDone(r.Context(), prevIssue, issue, actorType, actorID)
+	}
+	if assigneeChanged {
+		h.emitIssueThreadBackflow(r.Context(), issue, actorType, actorID, issueThreadAssignedEvent, "", issueThreadStatusTarget(issue))
+	}
+	if statusChanged {
+		event := issueThreadStatusChangedEvent
+		target := issueThreadStatusTarget(issue)
+		if issue.Status == "done" {
+			event = issueThreadCompletedEvent
+			target = issueThreadCompletionTarget(issue)
+		}
+		h.emitIssueThreadBackflow(r.Context(), issue, actorType, actorID, event, prevIssue.Status, target)
 	}
 	if statusChanged || assigneeChanged {
 		h.syncWendyWorkGraphAfterIssueUpdate(r.Context(), issue)
@@ -2976,6 +3061,18 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		// (MUL-2538). Best-effort; failure does not abort the batch.
 		if statusChanged {
 			h.notifyParentOfChildDone(r.Context(), prevIssue, issue, actorType, actorID)
+		}
+		if assigneeChanged {
+			h.emitIssueThreadBackflow(r.Context(), issue, actorType, actorID, issueThreadAssignedEvent, "", issueThreadStatusTarget(issue))
+		}
+		if statusChanged {
+			event := issueThreadStatusChangedEvent
+			target := issueThreadStatusTarget(issue)
+			if issue.Status == "done" {
+				event = issueThreadCompletedEvent
+				target = issueThreadCompletionTarget(issue)
+			}
+			h.emitIssueThreadBackflow(r.Context(), issue, actorType, actorID, event, prevIssue.Status, target)
 		}
 		if statusChanged || assigneeChanged {
 			h.syncWendyWorkGraphAfterIssueUpdate(r.Context(), issue)

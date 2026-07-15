@@ -1,4 +1,5 @@
 import type { Label } from "./label";
+import type { MessagePart } from "./message-part";
 
 export type IssueStatus =
   | "backlog"
@@ -39,6 +40,29 @@ export interface IssueReviewStats {
   longest_wait_seconds: number;
 }
 
+/**
+ * Detail-only navigation back to the chat message that caused an agent to
+ * create this issue (#466/#470). The server owns every display field, gates
+ * visibility on the requester's channel membership, and canonicalizes a
+ * reply-triggered anchor to its thread root — so `message_id` is always the
+ * message to deep-link to. `channel_name` is present for group channels only.
+ * Omitted entirely when there is no source or the caller can't see the channel.
+ */
+export interface IssueSourceMessageRef {
+  channel_id: string;
+  channel_name?: string;
+  channel_kind: string;
+  message_id: string;
+  thread_root_message_id: string;
+  excerpt: string;
+  /** Reference parts whose UTF-16 spans are anchored to `excerpt`. */
+  excerpt_parts?: MessagePart[];
+}
+
+export interface IssueSourceRefs {
+  message?: IssueSourceMessageRef;
+}
+
 export interface Issue {
   id: string;
   workspace_id: string;
@@ -63,6 +87,10 @@ export interface Issue {
   metadata: IssueMetadata;
   reactions?: IssueReaction[];
   labels?: Label[];
+  // Present only on the single-issue GET (`api.getIssue`), never on list/search
+  // responses. Absent when the issue has no chat origin or the viewer can't see
+  // the source channel.
+  source_refs?: IssueSourceRefs;
   created_at: string;
   updated_at: string;
 }

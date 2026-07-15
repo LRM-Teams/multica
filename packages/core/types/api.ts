@@ -46,6 +46,14 @@ export interface ListIssuesParams {
   creator_id?: string;
   project_id?: string;
   /**
+   * Filter to issues anchored to this chat channel — i.e. created from a
+   * message in that channel (`issue_source_message.source_channel_id`, #474).
+   * Server-side because the list response carries no anchor data, so the FE
+   * can't filter by source channel on the client. Omit for "All"; issues with
+   * no chat origin only appear when this is unset.
+   */
+  source_channel_id?: string;
+  /**
    * Widen the assignee filter to issues where the user is the *indirect*
    * assignee — assignee is one of the user's owned agents, or a squad that
    * involves the user (human member / leader-via-owned-agent / agent member

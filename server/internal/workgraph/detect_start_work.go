@@ -101,9 +101,10 @@ func (s *Store) DetectStartWorkForNode(ctx context.Context, nodeID pgtype.UUID) 
 	return nil
 }
 
-// ResolveSharedGroupChannel finds a group channel where Wendy and the assignee
-// are both members. Prefer the most recently updated channel.
-func (s *Store) ResolveSharedGroupChannel(ctx context.Context, workspaceID, wendyAgentID pgtype.UUID, ownerType string, ownerID pgtype.UUID) (pgtype.UUID, error) {
+// ResolveSharedGroupChannel finds a group channel that has a bound group manager
+// (Beckham) and where the assignee is a member — i.e. a channel where Beckham can
+// speak the handoff. Prefer the most recently updated channel.
+func (s *Store) ResolveSharedGroupChannel(ctx context.Context, workspaceID pgtype.UUID, ownerType string, ownerID pgtype.UUID) (pgtype.UUID, error) {
 	var channelID pgtype.UUID
 	var err error
 	switch ownerType {
@@ -111,31 +112,30 @@ func (s *Store) ResolveSharedGroupChannel(ctx context.Context, workspaceID, wend
 		err = s.pool.QueryRow(ctx, `
 			SELECT ch.id
 			FROM channel ch
-			JOIN channel_member wendy
-			  ON wendy.channel_id = ch.id
-			 AND wendy.workspace_id = ch.workspace_id
-			 AND wendy.member_type = 'agent'
-			 AND wendy.member_id = $2
+			JOIN agent mgr
+			  ON mgr.id = ch.group_manager_agent_id
+			 AND mgr.workspace_id = ch.workspace_id
+			 AND mgr.archived_at IS NULL
 			JOIN channel_member assignee
 			  ON assignee.channel_id = ch.id
 			 AND assignee.workspace_id = ch.workspace_id
 			 AND assignee.member_type = 'agent'
-			 AND assignee.member_id = $3
+			 AND assignee.member_id = $2
 			WHERE ch.workspace_id = $1
 			  AND ch.kind = 'group'
 			  AND ch.archived_at IS NULL
+			  AND ch.group_manager_agent_id IS NOT NULL
 			ORDER BY ch.updated_at DESC
 			LIMIT 1
-		`, workspaceID, wendyAgentID, ownerID).Scan(&channelID)
+		`, workspaceID, ownerID).Scan(&channelID)
 	case ownerTypeMember:
 		err = s.pool.QueryRow(ctx, `
 			SELECT ch.id
 			FROM channel ch
-			JOIN channel_member wendy
-			  ON wendy.channel_id = ch.id
-			 AND wendy.workspace_id = ch.workspace_id
-			 AND wendy.member_type = 'agent'
-			 AND wendy.member_id = $2
+			JOIN agent mgr
+			  ON mgr.id = ch.group_manager_agent_id
+			 AND mgr.workspace_id = ch.workspace_id
+			 AND mgr.archived_at IS NULL
 			JOIN channel_member cm
 			  ON cm.channel_id = ch.id
 			 AND cm.workspace_id = ch.workspace_id
@@ -143,13 +143,14 @@ func (s *Store) ResolveSharedGroupChannel(ctx context.Context, workspaceID, wend
 			JOIN member m
 			  ON m.user_id = cm.member_id
 			 AND m.workspace_id = ch.workspace_id
-			 AND m.id = $3
+			 AND m.id = $2
 			WHERE ch.workspace_id = $1
 			  AND ch.kind = 'group'
 			  AND ch.archived_at IS NULL
+			  AND ch.group_manager_agent_id IS NOT NULL
 			ORDER BY ch.updated_at DESC
 			LIMIT 1
-		`, workspaceID, wendyAgentID, ownerID).Scan(&channelID)
+		`, workspaceID, ownerID).Scan(&channelID)
 	default:
 		return pgtype.UUID{}, nil
 	}

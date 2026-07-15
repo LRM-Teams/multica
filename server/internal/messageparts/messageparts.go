@@ -221,6 +221,8 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 		part.RefSubType = ""
 		part.RefID = ""
 		part.Label = ""
+		part.RefTitle = ""
+		part.RefStatus = ""
 		part.PackID = ""
 		part.StickerID = ""
 		part.Alt = ""
@@ -234,6 +236,8 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 		part.RefSubType = strings.TrimSpace(part.RefSubType)
 		part.RefID = strings.TrimSpace(part.RefID)
 		part.Label = strings.TrimSpace(part.Label)
+		part.RefTitle = strings.TrimSpace(part.RefTitle)
+		part.RefStatus = strings.TrimSpace(part.RefStatus)
 		if part.RefType == "" {
 			return protocol.MessagePart{}, fmt.Errorf("ref_type is required")
 		}
@@ -242,6 +246,8 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 		}
 		switch part.RefType {
 		case "mention":
+			part.RefTitle = ""
+			part.RefStatus = ""
 			if part.RefSubType == "" {
 				return protocol.MessagePart{}, fmt.Errorf("ref_subtype is required for mention reference")
 			}
@@ -279,6 +285,8 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 		part.RefSubType = ""
 		part.RefID = ""
 		part.Label = ""
+		part.RefTitle = ""
+		part.RefStatus = ""
 		part.AttachmentID = ""
 		part.Filename = ""
 		part.ContentType = ""
@@ -311,6 +319,8 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 		part.RefSubType = ""
 		part.RefID = ""
 		part.Label = ""
+		part.RefTitle = ""
+		part.RefStatus = ""
 		part.PackID = ""
 		part.StickerID = ""
 		part.Alt = ""

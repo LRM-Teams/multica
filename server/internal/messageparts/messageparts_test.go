@@ -117,6 +117,8 @@ func TestNormalizeReferenceParts(t *testing.T) {
 			RefType:      "issue-ref",
 			RefID:        "MUL-123",
 			Label:        "MUL-123",
+			RefTitle:     "Structured issue reference",
+			RefStatus:    "in_progress",
 			AttachmentID: "should-clear",
 		},
 	})
@@ -140,6 +142,9 @@ func TestNormalizeReferenceParts(t *testing.T) {
 	}
 	if parts[1].AttachmentID != "" {
 		t.Fatalf("issue reference retained attachment fields: %+v", parts[1])
+	}
+	if parts[1].RefTitle != "Structured issue reference" || parts[1].RefStatus != "in_progress" {
+		t.Fatalf("issue reference lost typed metadata: %+v", parts[1])
 	}
 }
 

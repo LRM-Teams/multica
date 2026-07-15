@@ -6,7 +6,9 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/mention"
 	"github.com/multica-ai/multica/server/internal/util"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -26,7 +28,61 @@ func (h *Handler) enrichChannelMessageMentions(ctx context.Context, ch ChannelRe
 		mentions := h.resolveBareChannelMentions(content, parts, candidates)
 		parts = appendMissingMentionParts(parts, mentions)
 	}
+	parts = appendMissingIssueReferenceParts(parts, h.resolveBareChannelIssueReferences(ctx, ch.WorkspaceID, content, parts))
 	return normalizeChannelMentionMarkdownText(content), normalizeChannelMentionMarkdownParts(parts)
+}
+
+// resolveBareChannelIssueReferences attaches durable issue IDs to bare issue
+// identifiers in group messages. The visible text stays exactly as authored;
+// clients render the typed issue-ref rather than trying to decorate prose.
+func (h *Handler) resolveBareChannelIssueReferences(ctx context.Context, workspaceID, content string, parts []protocol.MessagePart) []protocol.MessagePart {
+	workspaceUUID := parseUUID(workspaceID)
+	workspace, err := h.Queries.GetWorkspace(ctx, workspaceUUID)
+	if err != nil {
+		return nil
+	}
+
+	seen := map[string]bool{}
+	for _, part := range parts {
+		if part.Type != protocol.MessagePartTypeReference || part.RefType != "issue-ref" {
+			continue
+		}
+		seen[part.RefID] = true
+		if part.Label != "" {
+			seen[part.Label] = true
+		}
+	}
+	out := make([]protocol.MessagePart, 0)
+	for _, text := range mentionSourceTexts(content, parts) {
+		for _, identifier := range mention.FindBareIssueIdentifiers(workspace.IssuePrefix, text) {
+			if seen[identifier.Label] {
+				continue
+			}
+			issue, err := h.Queries.GetIssueByNumber(ctx, db.GetIssueByNumberParams{
+				WorkspaceID: workspaceUUID,
+				Number:      identifier.Number,
+			})
+			if err != nil {
+				continue
+			}
+			issueID := uuidToString(issue.ID)
+			if seen[issueID] {
+				continue
+			}
+			seen[identifier.Label] = true
+			seen[issueID] = true
+			out = append(out, protocol.MessagePart{
+				Type:       protocol.MessagePartTypeReference,
+				RefType:    "issue-ref",
+				RefSubType: "issue",
+				RefID:      issueID,
+				Label:      identifier.Label,
+				RefTitle:   issue.Title,
+				RefStatus:  issue.Status,
+			})
+		}
+	}
+	return out
 }
 
 func (h *Handler) channelMentionCandidates(ctx context.Context, workspaceID, channelID string) map[string]channelMentionCandidate {
@@ -190,6 +246,26 @@ func appendMissingMentionParts(parts []protocol.MessagePart, mentions []protocol
 		}
 		seen[key] = true
 		out = append(out, mention)
+	}
+	return out
+}
+
+func appendMissingIssueReferenceParts(parts []protocol.MessagePart, references []protocol.MessagePart) []protocol.MessagePart {
+	seen := map[string]bool{}
+	for _, part := range parts {
+		if part.Type != protocol.MessagePartTypeReference || part.RefType != "issue-ref" {
+			continue
+		}
+		seen[part.RefSubType+":"+part.RefID] = true
+	}
+	out := append([]protocol.MessagePart{}, parts...)
+	for _, reference := range references {
+		key := reference.RefSubType + ":" + reference.RefID
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, reference)
 	}
 	return out
 }

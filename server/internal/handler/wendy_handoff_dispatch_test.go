@@ -197,15 +197,15 @@ func TestWendyDispatchMentionsMemberWithoutAgentWake(t *testing.T) {
 	label := directedAgentMentionLabel(memberName)
 	start, end := contentUTF16Span(content, 0, len(label))
 	part := parts[0]
-	if part.Type != protocol.MessagePartTypeReference || part.RefType != "mention" || part.RefSubType != "member" || part.RefID != memberID || part.Label != label || part.ContentStartUTF16 == nil || *part.ContentStartUTF16 != start || part.ContentEndUTF16 == nil || *part.ContentEndUTF16 != end {
-		t.Fatalf("member handoff reference = %+v, want member/%s label %q span [%d,%d)", part, memberID, label, start, end)
+	if part.Type != protocol.MessagePartTypeReference || part.RefType != "mention" || part.RefSubType != "member" || part.RefID != testUserID || part.Label != label || part.ContentStartUTF16 == nil || *part.ContentStartUTF16 != start || part.ContentEndUTF16 == nil || *part.ContentEndUTF16 != end {
+		t.Fatalf("member handoff reference = %+v, want member/%s label %q span [%d,%d)", part, testUserID, label, start, end)
 	}
-	if err := validateWendyHandoffContent(content, parts, "member", memberID); err != nil {
+	if err := validateWendyHandoffContent(content, parts, "member", testUserID); err != nil {
 		t.Fatalf("validate persisted member handoff: %v", err)
 	}
 	foreignParts := append([]protocol.MessagePart(nil), parts...)
 	foreignParts[0].RefID = uuid.NewString()
-	if err := validateWendyHandoffContent(content, foreignParts, "member", memberID); err == nil {
+	if err := validateWendyHandoffContent(content, foreignParts, "member", testUserID); err == nil {
 		t.Fatal("validate Wendy member handoff accepted a non-target member reference")
 	}
 	var wakeCount int

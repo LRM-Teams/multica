@@ -243,8 +243,9 @@ func (h *Handler) dispatchClaimedWendyMemberHandoff(ctx context.Context, handoff
 	if !h.channelHasAgentMember(ctx, handoff.WorkspaceID, handoff.ChannelID, supervisor.ID) || !h.channelHasMember(ctx, handoff.WorkspaceID, handoff.ChannelID, handoff.TargetActorID) {
 		return false, h.cancelWendyUnlockHandoff(ctx, handoff, claimToken, "Wendy or member target is not a channel member")
 	}
+	var targetUserID pgtype.UUID
 	var name string
-	if err := h.DB.QueryRow(ctx, `SELECT COALESCE(NULLIF(u.display_name, ''), NULLIF(u.name, ''), '成员') FROM member m JOIN "user" u ON u.id = m.user_id WHERE m.id = $1 AND m.workspace_id = $2`, handoff.TargetActorID, handoff.WorkspaceID).Scan(&name); err != nil {
+	if err := h.DB.QueryRow(ctx, `SELECT u.id, COALESCE(NULLIF(u.display_name, ''), NULLIF(u.name, ''), '成员') FROM member m JOIN "user" u ON u.id = m.user_id WHERE m.id = $1 AND m.workspace_id = $2`, handoff.TargetActorID, handoff.WorkspaceID).Scan(&targetUserID, &name); err != nil {
 		return false, h.cancelWendyUnlockHandoff(ctx, handoff, claimToken, "member target is unavailable")
 	}
 	node, err := h.Queries.GetWorkNodeByID(ctx, handoff.RelatedNodeIds[0])
@@ -255,13 +256,16 @@ func (h *Handler) dispatchClaimedWendyMemberHandoff(ctx context.Context, handoff
 	if !found || channel.Kind != "group" || channel.ArchivedAt != nil {
 		return false, h.cancelWendyUnlockHandoff(ctx, handoff, claimToken, "unlock channel is unavailable")
 	}
-	content := templateWendyHandoff(handoff.ReasonCode, "member", uuidToString(handoff.TargetActorID), name, node.Title)
-	content, parts := ensureWendyHandoffReference(content, "member", uuidToString(handoff.TargetActorID), name)
+	// pending_handoff targets the workspace member row, while channel mention
+	// references use the backing user ID stored in channel_member.member_id.
+	targetMentionID := uuidToString(targetUserID)
+	content := templateWendyHandoff(handoff.ReasonCode, "member", targetMentionID, name, node.Title)
+	content, parts := ensureWendyHandoffReference(content, "member", targetMentionID, name)
 	content, parts, err = h.finalizeAgentChannelMessage(ctx, channel, content, parts)
 	if err != nil {
 		return false, h.retryWendyUnlockHandoff(ctx, handoff, claimToken, fmt.Errorf("finalize Wendy member handoff: %w", err))
 	}
-	if err := validateWendyHandoffContent(content, parts, "member", uuidToString(handoff.TargetActorID)); err != nil {
+	if err := validateWendyHandoffContent(content, parts, "member", targetMentionID); err != nil {
 		return false, h.retryWendyUnlockHandoff(ctx, handoff, claimToken, err)
 	}
 	if _, err := h.insertChannelMessageWithParts(ctx, handoff.ChannelID, handoff.WorkspaceID, "agent", supervisor.ID, agentDisplayName(supervisor), content, parts, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {

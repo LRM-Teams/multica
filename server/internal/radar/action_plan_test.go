@@ -54,7 +54,7 @@ func TestBuildIdleNudgeChannelPromptDrivesWork(t *testing.T) {
 		"NO agent in this group is working",
 		"mention_agent",         // must use mention_agent to wake
 		"产品经理",                  // fall back to the product manager
-		"break the final goal down into concrete tasks",
+		"break the final goal into concrete issues",
 		// silence only when the whole goal is genuinely complete
 		"no_action ONLY if the entire goal is genuinely complete",
 	} {

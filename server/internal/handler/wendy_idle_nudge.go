@@ -17,19 +17,24 @@ import (
 // re-checked periodically without spamming. Tests may shorten it.
 var IdleNudgeDebounce = 15 * time.Minute
 
+// IdleProgressWindow is how far back "real progress" is looked for. If a group
+// has no in-flight real work AND no progress event within this window, it counts
+// as stalled — even if agents chatted (chat is not progress). Tests may shorten it.
+var IdleProgressWindow = 15 * time.Minute
+
 const idleNudgeDispatchLimit = int32(10)
 
-// activeAgentTaskStatuses are the agent_task_queue statuses that count as "an
-// agent is currently working".
 const idleNudgeActiveTaskStatusList = "'queued','dispatched','running','waiting_local_directory'"
 
-// DispatchIdleNudges wakes Beckham for every managed group where NO agent is
-// currently working, so the goal keeps moving. The rule: at least one agent
-// should be working unless the whole goal is genuinely complete — so whenever a
-// group with a team goes fully idle, Beckham is triggered to look and decide
-// whether to nudge (or, if it truly is done, stay silent). Beckham itself picks
-// who to nudge (or the product manager, to decompose+assign); this sweep only
-// guarantees Beckham gets the chance.
+// DispatchIdleNudges wakes Beckham for every managed group that has STALLED —
+// meaning no member is doing real work (an active issue-linked task) AND there
+// has been no measurable progress recently (a completed issue task, an issue
+// status change / task-completion in activity_log, or a new agent issue comment).
+// A chat reply is NOT progress, so a group where agents only acknowledge without
+// advancing an issue still counts as stalled and gets nudged. The rule: at least
+// one agent should be doing real work unless the goal is genuinely complete;
+// Beckham decides who to nudge (or @the product manager to decompose+assign), or
+// stays silent only if everything is truly done.
 func (h *Handler) DispatchIdleNudges(ctx context.Context, limit int32) (int, error) {
 	if h.WorkGraph == nil || h.TaskService == nil || limit <= 0 {
 		return 0, nil
@@ -55,12 +60,38 @@ func (h *Handler) DispatchIdleNudges(ctx context.Context, limit int32) (int, err
 		    JOIN agent a ON a.id = cm.member_id AND a.workspace_id = cm.workspace_id AND a.archived_at IS NULL
 		    WHERE cm.channel_id = c.id AND cm.member_type = 'agent' AND cm.member_id <> c.group_manager_agent_id
 		  )
-		  -- nobody is working: no active task for any non-manager agent member
+		  -- no real work in flight: no ACTIVE issue-linked task for a non-manager
+		  -- member (a chat reply has no issue_id, so chatting does not count).
 		  AND NOT EXISTS (
 		    SELECT 1 FROM channel_member cm
 		    JOIN agent_task_queue t ON t.agent_id = cm.member_id
 		    WHERE cm.channel_id = c.id AND cm.member_type = 'agent' AND cm.member_id <> c.group_manager_agent_id
+		      AND t.issue_id IS NOT NULL
 		      AND t.status IN (`+idleNudgeActiveTaskStatusList+`)
+		  )
+		  -- no recent PROGRESS: no completed issue task by a member in the window
+		  AND NOT EXISTS (
+		    SELECT 1 FROM channel_member cm
+		    JOIN agent_task_queue t ON t.agent_id = cm.member_id
+		    WHERE cm.channel_id = c.id AND cm.member_type = 'agent' AND cm.member_id <> c.group_manager_agent_id
+		      AND t.issue_id IS NOT NULL AND t.status = 'completed'
+		      AND t.completed_at > now() - make_interval(secs => $1)
+		  )
+		  -- ... and no issue activity (status change / task completed / created) by a member
+		  AND NOT EXISTS (
+		    SELECT 1 FROM channel_member cm
+		    JOIN activity_log al ON al.actor_id = cm.member_id AND al.actor_type = 'agent'
+		    WHERE cm.channel_id = c.id AND cm.member_type = 'agent' AND cm.member_id <> c.group_manager_agent_id
+		      AND al.workspace_id = c.workspace_id
+		      AND al.created_at > now() - make_interval(secs => $1)
+		  )
+		  -- ... and no new issue comment by a member
+		  AND NOT EXISTS (
+		    SELECT 1 FROM channel_member cm
+		    JOIN comment cmt ON cmt.author_id = cm.member_id AND cmt.author_type = 'agent'
+		    WHERE cm.channel_id = c.id AND cm.member_type = 'agent' AND cm.member_id <> c.group_manager_agent_id
+		      AND cmt.workspace_id = c.workspace_id
+		      AND cmt.created_at > now() - make_interval(secs => $1)
 		  )
 		  -- debounce: not idle-nudged for this channel recently
 		  AND NOT EXISTS (
@@ -68,11 +99,11 @@ func (h *Handler) DispatchIdleNudges(ctx context.Context, limit int32) (int, err
 		    WHERE r.workspace_id = c.workspace_id
 		      AND r.agent_id = c.group_manager_agent_id
 		      AND r.trigger_ref LIKE 'idle_nudge:' || c.id::text || ':%'
-		      AND r.created_at > now() - make_interval(secs => $1)
+		      AND r.created_at > now() - make_interval(secs => $2)
 		  )
 		ORDER BY c.updated_at ASC
-		LIMIT $2
-	`, IdleNudgeDebounce.Seconds(), limit)
+		LIMIT $3
+	`, IdleProgressWindow.Seconds(), IdleNudgeDebounce.Seconds(), limit)
 	if err != nil {
 		return 0, fmt.Errorf("list idle-nudge candidates: %w", err)
 	}

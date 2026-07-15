@@ -679,18 +679,30 @@ export function Markdown({
     [children, cdnDomain, enableStickerShortcodes, issueRefPrefix]
   )
 
-  return (
-    <div className={cn('markdown-content break-words', className)}>
-      <ReactMarkdown
-        remarkPlugins={[remarkMath, remarkBreaks, [remarkGfm, { singleTilde: false }]]}
-        rehypePlugins={[rehypeRaw, [rehypeSanitize, sanitizeSchema], rehypeKatex]}
-        urlTransform={urlTransform}
-        components={components}
-      >
-        {processedContent}
-      </ReactMarkdown>
-    </div>
+  const tree = (
+    <ReactMarkdown
+      remarkPlugins={[remarkMath, remarkBreaks, [remarkGfm, { singleTilde: false }]]}
+      rehypePlugins={[rehypeRaw, [rehypeSanitize, sanitizeSchema], rehypeKatex]}
+      urlTransform={urlTransform}
+      components={components}
+    >
+      {processedContent}
+    </ReactMarkdown>
   )
+
+  // Inline mode renders into a <span> (not a block <div>) so its only consumer —
+  // the inline-reference projector, which renders one Markdown per text run
+  // between reference tokens — flows every run + token on the SAME line instead
+  // of forcing each run onto its own row (the #601 block-break regression).
+  if (mode === 'inline') {
+    return (
+      <span className={cn('markdown-content markdown-content-inline break-words', className)}>
+        {tree}
+      </span>
+    )
+  }
+
+  return <div className={cn('markdown-content break-words', className)}>{tree}</div>
 }
 
 /**

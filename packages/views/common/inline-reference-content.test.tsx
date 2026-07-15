@@ -116,4 +116,17 @@ describe("InlineReferenceContent (#463 projector consumer)", () => {
     expect(screen.getByText("just text")).toBeInTheDocument();
     expect(screen.queryByTestId("actor-profile-trigger")).toBeNull();
   });
+
+  it("renders text runs inline so a mention never breaks the line (#601 block regression)", () => {
+    // "hey @Alice check" — @Alice at [4,10); runs "hey " + token + " check".
+    // Pre-fix each text run rendered as a block <div class="markdown-content">,
+    // forcing the inline mention onto its own line. The `inline` render mode must
+    // put text runs in an inline <span class="markdown-content-inline"> instead.
+    const { container } = render(
+      <InlineReferenceContent content="hey @Alice check" parts={[mention(4, 10)]} />,
+    );
+    expect(container.querySelector("div.markdown-content")).toBeNull();
+    expect(container.querySelector("span.markdown-content-inline")).not.toBeNull();
+    expect(container).toHaveTextContent("hey @Alice check");
+  });
 });

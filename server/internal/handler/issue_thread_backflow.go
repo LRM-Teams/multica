@@ -110,10 +110,27 @@ func (h *Handler) emitIssueThreadBackflow(ctx context.Context, issue db.Issue, a
 		return
 	}
 	content := issueThreadBackflowContent(event, identifier, issue.Status, previousStatus, params.TargetHandle)
+	// Every backflow sentence starts with the canonical issue identifier (see
+	// issueThreadBackflowContent). Persist the issue entity as an anchored
+	// reference alongside the system event so the channel projector can render
+	// the same inline issue token/hover contract as an authored group message.
+	// The system event remains the factual transition source; the reference only
+	// decorates the exact visible identifier span and never changes wake routing.
+	issueRefStart, issueRefEnd := contentUTF16Span(content, 0, len(identifier))
 	parts := []protocol.MessagePart{{
 		Type:        protocol.MessagePartTypeSystemEvent,
 		Event:       event,
 		EventParams: paramsJSON,
+	}, {
+		Type:              protocol.MessagePartTypeReference,
+		RefType:           "issue-ref",
+		RefSubType:        "issue",
+		RefID:             uuidToString(issue.ID),
+		Label:             identifier,
+		RefTitle:          issue.Title,
+		RefStatus:         issue.Status,
+		ContentStartUTF16: &issueRefStart,
+		ContentEndUTF16:   &issueRefEnd,
 	}}
 	if params.TargetID != "" {
 		parts = append(parts, protocol.MessagePart{

@@ -251,8 +251,16 @@ func (h *Handler) dispatchClaimedWendyMemberHandoff(ctx context.Context, handoff
 	if err != nil || !radarUUIDsMatch(node.WorkspaceID, handoff.WorkspaceID) {
 		return false, h.cancelWendyUnlockHandoff(ctx, handoff, claimToken, "member work node is unavailable")
 	}
+	channel, found := h.getChannel(ctx, uuidToString(handoff.WorkspaceID), handoff.ChannelID)
+	if !found || channel.Kind != "group" || channel.ArchivedAt != nil {
+		return false, h.cancelWendyUnlockHandoff(ctx, handoff, claimToken, "unlock channel is unavailable")
+	}
 	content := templateWendyHandoff(handoff.ReasonCode, "member", uuidToString(handoff.TargetActorID), name, node.Title)
 	content, parts := ensureWendyHandoffReference(content, "member", uuidToString(handoff.TargetActorID), name)
+	content, parts, err = h.finalizeAgentChannelMessage(ctx, channel, content, parts)
+	if err != nil {
+		return false, h.retryWendyUnlockHandoff(ctx, handoff, claimToken, fmt.Errorf("finalize Wendy member handoff: %w", err))
+	}
 	if err := validateWendyHandoffContent(content, parts, "member", uuidToString(handoff.TargetActorID)); err != nil {
 		return false, h.retryWendyUnlockHandoff(ctx, handoff, claimToken, err)
 	}

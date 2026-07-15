@@ -38,7 +38,7 @@ import type { AnyExtension } from "@tiptap/core";
 import type { UploadResult } from "@multica/core/hooks/use-file-upload";
 import { escapeMarkdownLabel } from "../utils/escape-markdown-label";
 import { BaseMentionExtension } from "./mention-extension";
-import { createMentionSuggestion, type MentionItem } from "./mention-suggestion";
+import { createMentionSuggestion, type MentionAgentCandidate, type MentionItem } from "./mention-suggestion";
 import { IssueReferenceExtension } from "./issue-reference";
 import { createIssueReferenceSuggestion } from "./issue-reference-suggestion";
 import { SlashCommandExtension } from "./slash-command-extension";
@@ -148,6 +148,11 @@ export interface EditorExtensionsOptions {
   /** When it returns a set, the @ picker restricts member/agent candidates to
    *  those actor ids (e.g. a channel's members). */
   getMentionAllowedActorIds?: () => ReadonlySet<string> | null | undefined;
+  /** Channel-scoped agent candidates (e.g. a channel's agent members) merged
+   *  into the @ picker when `getMentionAllowedActorIds` is active, so a member
+   *  can @mention a channel co-member agent they couldn't assign (e.g. a
+   *  teammate's private Wendy). Ignored outside channel scope. */
+  getMentionScopedAgents?: () => readonly MentionAgentCandidate[] | null | undefined;
   /** When true, attach the `/` picker. Default false. */
   enableSlashCommands?: boolean;
   /** When true, attach an issue reference `#` picker. Default false. */
@@ -217,7 +222,7 @@ export function createEditorExtensions(
       ...(options.disableMentions
         ? { suggestion: { allow: () => false } }
         : options.queryClient
-          ? { suggestion: createMentionSuggestion(options.queryClient, { mode: options.mentionMode, getContextItems: options.getMentionContextItems, getAllowedActorIds: options.getMentionAllowedActorIds }) }
+          ? { suggestion: createMentionSuggestion(options.queryClient, { mode: options.mentionMode, getContextItems: options.getMentionContextItems, getAllowedActorIds: options.getMentionAllowedActorIds, getScopedAgents: options.getMentionScopedAgents }) }
           : {}),
     }),
     IssueReferenceExtension.configure({

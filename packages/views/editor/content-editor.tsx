@@ -50,7 +50,7 @@ import {
   MARKDOWN_CHUNK_THRESHOLD,
   type MarkdownManagerLike,
 } from "./utils/parse-markdown-chunked";
-import type { MentionItem } from "./extensions/mention-suggestion";
+import type { MentionAgentCandidate, MentionItem } from "./extensions/mention-suggestion";
 import { createEditorExtensions } from "./extensions";
 import { uploadAndInsertFile } from "./extensions/file-upload";
 import { preprocessMarkdown } from "./utils/preprocess";
@@ -112,6 +112,10 @@ interface ContentEditorProps {
   /** Restrict the @ picker's member/agent candidates to these actor ids
    *  (e.g. a channel's members). Omit for the full workspace. */
   mentionAllowedActorIds?: ReadonlySet<string> | null;
+  /** Channel-member agents to surface in the @ picker even when they aren't in
+   *  the member's personal agent list (e.g. a teammate's private Wendy). Only
+   *  used when `mentionAllowedActorIds` is active (channel scope). */
+  scopedMentionAgents?: readonly MentionAgentCandidate[] | null;
   /** Enable the `/` command picker. Defaults false. */
   enableSlashCommands?: boolean;
   /**
@@ -181,6 +185,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       mentionContextItems,
       enableIssueReferences = false,
       mentionAllowedActorIds,
+      scopedMentionAgents,
       enableSlashCommands = false,
       slashCommandMode = "skill",
       attachments,
@@ -202,6 +207,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
     );
     const mentionContextItemsRef = useRef<MentionItem[]>(mentionContextItems ?? []);
     const mentionAllowedActorIdsRef = useRef<ReadonlySet<string> | null>(mentionAllowedActorIds ?? null);
+    const scopedMentionAgentsRef = useRef<readonly MentionAgentCandidate[] | null>(scopedMentionAgents ?? null);
     const lastEmittedRef = useRef<string | null>(null);
 
     // In-session record of attachments freshly uploaded through this editor.
@@ -274,6 +280,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
     onExternalFilesRef.current = onExternalFiles;
     mentionContextItemsRef.current = mentionContextItems ?? [];
     mentionAllowedActorIdsRef.current = mentionAllowedActorIds ?? null;
+    scopedMentionAgentsRef.current = scopedMentionAgents ?? null;
 
     const queryClient = useQueryClient();
 
@@ -326,6 +333,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
           mentionMode,
           getMentionContextItems: () => mentionContextItemsRef.current,
           getMentionAllowedActorIds: () => mentionAllowedActorIdsRef.current,
+          getMentionScopedAgents: () => scopedMentionAgentsRef.current,
           enableIssueReferences,
           enableSlashCommands,
         slashCommandMode,

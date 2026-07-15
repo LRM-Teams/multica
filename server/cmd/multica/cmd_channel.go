@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
 	"github.com/multica-ai/multica/server/internal/cli"
@@ -58,13 +59,34 @@ var channelUnmuteCmd = &cobra.Command{
 	RunE: runChannelUnmute,
 }
 
+var channelMemberCmd = &cobra.Command{
+	Use:   "member",
+	Short: "Manage channel members",
+}
+
+var channelMemberAddCmd = &cobra.Command{
+	Use:   "add --target <channel> <agent> [<agent>...]",
+	Short: "Add agent(s) to a group channel",
+	Long: "Add one or more agents to a group channel in one call. Each <agent> " +
+		"may be an agent UUID or display name (resolved against the workspace " +
+		"agent list). Only agents can be added this way — to invite people, add " +
+		"them from the channel UI. <channel> is the --target channel UUID or #name.",	Args: cobra.MinimumNArgs(1),
+	RunE:  runChannelMemberAdd,
+}
+
 func init() {
 	channelCmd.AddCommand(channelListCmd)
 	channelCmd.AddCommand(channelMembersCmd)
 	channelCmd.AddCommand(channelMuteCmd)
 	channelCmd.AddCommand(channelUnmuteCmd)
+	channelCmd.AddCommand(channelMemberCmd)
+	channelMemberCmd.AddCommand(channelMemberAddCmd)
 
 	channelListCmd.Flags().String("output", "table", "Output format: table or json")
+
+	channelMemberAddCmd.Flags().String("target", "", "Channel to add into (id or #channel-name)")
+	channelMemberAddCmd.Flags().String("output", "table", "Output format: table or json")
+	_ = channelMemberAddCmd.MarkFlagRequired("target")
 	channelMembersCmd.Flags().String("target", "", "Channel to inspect (#channel-name)")
 	channelMembersCmd.Flags().String("output", "table", "Output format: table or json")
 	_ = channelMembersCmd.MarkFlagRequired("target")
@@ -189,4 +211,144 @@ func setChannelMute(cmd *cobra.Command, mute bool) error {
 
 	fmt.Printf("Channel %sd successfully\n", action)
 	return nil
+}
+
+// runChannelMemberAdd adds one or more agents to a group channel. Agents are
+// resolved by UUID or display name; only agents are accepted (no humans). The
+// whole batch is sent to /channels/{id}/members/batch in one request, so the
+// auth (the task initiator user) needs to be a channel member — the same gate
+// as a manual add.
+func runChannelMemberAdd(cmd *cobra.Command, args []string) error {
+	target, _ := cmd.Flags().GetString("target")
+	target = strings.TrimPrefix(strings.TrimSpace(target), "#")
+	if target == "" {
+		return fmt.Errorf("--target is required (channel id or #name)")
+	}
+
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+
+	channelID, err := resolveChannelRef(ctx, client, target)
+	if err != nil {
+		return fmt.Errorf("resolve channel %q: %w", target, err)
+	}
+
+	members := make([]map[string]string, 0, len(args))
+	labels := make([]string, 0, len(args))
+	for _, ref := range args {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			continue
+		}
+		agent, err := resolveAgentRef(ctx, client, ref)
+		if err != nil {
+			return fmt.Errorf("resolve agent %q: %w", ref, err)
+		}
+		members = append(members, map[string]string{"member_type": "agent", "member_id": agent.ID})
+		labels = append(labels, agent.Display)
+	}
+	if len(members) == 0 {
+		return fmt.Errorf("no agents to add")
+	}
+
+	path := fmt.Sprintf("/api/channels/%s/members/batch", url.PathEscape(channelID))
+	var resp map[string]any
+	if err := client.PostJSON(ctx, path, map[string]any{"members": members}, &resp); err != nil {
+		return fmt.Errorf("add channel members: %w", err)
+	}
+
+	output, _ := cmd.Flags().GetString("output")
+	if output == "json" {
+		b, _ := json.MarshalIndent(map[string]any{"channel_id": channelID, "added": labels, "count": len(labels)}, "", "  ")
+		fmt.Println(string(b))
+		return nil
+	}
+	fmt.Printf("Added %d agent(s) to channel %s: %s\n", len(labels), channelID, strings.Join(labels, ", "))
+	return nil
+}
+
+// resolveChannelRef resolves a channel target (UUID or name) to a channel id
+// via the workspace channel list. Ambiguous or missing names are errors.
+func resolveChannelRef(ctx context.Context, client *cli.APIClient, target string) (string, error) {
+	if _, err := uuid.Parse(target); err == nil {
+		return target, nil
+	}
+	var channels []map[string]any
+	path := "/api/channels"
+	if client.WorkspaceID != "" {
+		path += "?" + url.Values{"workspace_id": {client.WorkspaceID}}.Encode()
+	}
+	if err := client.GetJSON(ctx, path, &channels); err != nil {
+		return "", fmt.Errorf("list channels: %w", err)
+	}
+	var matches []string
+	available := []string{}
+	for _, ch := range channels {
+		id, name := strVal(ch, "id"), strVal(ch, "name")
+		if id == "" {
+			continue
+		}
+		if name != "" {
+			available = append(available, name)
+		}
+		if nameMatches(name, target) {
+			matches = append(matches, id)
+		}
+	}
+	switch len(matches) {
+	case 1:
+		return matches[0], nil
+	case 0:
+		return "", fmt.Errorf("no channel named %q (available: %s)", target, strings.Join(available, ", "))
+	default:
+		return "", fmt.Errorf("channel name %q is ambiguous (%d matches)", target, len(matches))
+	}
+}
+
+// resolveAgentRef resolves an agent ref (UUID or display name) to an agent id
+// via the workspace agent list. Ambiguous or missing names are errors.
+func resolveAgentRef(ctx context.Context, client *cli.APIClient, ref string) (resolvedID, error) {
+	if _, err := uuid.Parse(ref); err == nil {
+		return resolvedID{ID: ref, Display: ref}, nil
+	}
+	var agents []map[string]any
+	path := "/api/agents"
+	if client.WorkspaceID != "" {
+		path += "?" + url.Values{"workspace_id": {client.WorkspaceID}}.Encode()
+	}
+	if err := client.GetJSON(ctx, path, &agents); err != nil {
+		return resolvedID{}, fmt.Errorf("list agents: %w", err)
+	}
+	var matches []resolvedID
+	available := []string{}
+	for _, a := range agents {
+		id := strVal(a, "id")
+		if id == "" {
+			continue
+		}
+		label := firstNonEmpty(strVal(a, "display_name"), strVal(a, "name"))
+		if label != "" {
+			available = append(available, label)
+		}
+		if nameMatches(strVal(a, "display_name"), ref) || nameMatches(strVal(a, "name"), ref) {
+			matches = append(matches, resolvedID{ID: id, Display: firstNonEmpty(label, id)})
+		}
+	}
+	switch len(matches) {
+	case 1:
+		return matches[0], nil
+	case 0:
+		return resolvedID{}, fmt.Errorf("no agent named %q (available: %s)", ref, strings.Join(available, ", "))
+	default:
+		return resolvedID{}, fmt.Errorf("agent name %q is ambiguous (%d matches)", ref, len(matches))
+	}
+}
+
+// nameMatches is a trimmed, case-insensitive comparison for display-name lookup.
+func nameMatches(name, target string) bool {
+	return strings.EqualFold(strings.TrimSpace(name), strings.TrimSpace(target))
 }

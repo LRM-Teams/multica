@@ -596,6 +596,18 @@ function matchesMentionQuery(item: MentionItem, query: string): boolean {
   );
 }
 
+/** Lightweight agent shape for channel-scoped @ candidates.
+ *  Carries just enough identity (id, name, display_name) for the picker and
+ *  the resulting mention chip. Used to surface channel-member agents that
+ *  aren't in the member's personal agent list (e.g. a teammate's private
+ *  Wendy) — channel membership authorizes the mention, not assignability. */
+export interface MentionAgentCandidate {
+  id: string;
+  name: string;
+  display_name?: string | null;
+  archived_at?: string | null;
+}
+
 interface MentionSuggestionOptions {
   mode?: "default" | "context";
   getContextItems?: () => MentionItem[];
@@ -603,6 +615,11 @@ interface MentionSuggestionOptions {
    *  those actor ids (e.g. a channel's members) and issues / @all are omitted.
    *  Returns null/undefined to fall back to the full workspace. */
   getAllowedActorIds?: () => ReadonlySet<string> | null | undefined;
+  /** Channel-scoped agent candidates (e.g. a channel's agent members) merged
+   *  into the @ picker when `getAllowedActorIds` is active. Lets a member @mention
+   *  a channel co-member agent they couldn't assign (e.g. a teammate's private
+   *  Wendy). Ignored outside channel scope. */
+  getScopedAgents?: () => readonly MentionAgentCandidate[] | null | undefined;
 }
 
 export function createMentionSuggestion(
@@ -670,29 +687,54 @@ export function createMentionSuggestion(
         };
       });
 
-    const agentItems: MentionItem[] = agents
-      .filter(
-        (a) =>
-          !a.archived_at &&
-          matchesActorIdentitySearch(
-            resolveActorDisplayName(a, a.name),
-            resolveActorHandle(a),
-            query,
-            identitySearchOptions,
-          ) &&
-          canAssignAgentToIssue(a, { userId, role: myRole }).allowed &&
-          (!allow || allow.has(a.id)),
-      )
-      .map((a) => {
-        const presentation = resolveActorIdentityPresentation(a, a.name);
-        return {
-          id: a.id,
-          label: presentation.displayName,
-          handle: presentation.handle,
-          secondaryLabel: presentation.handleLabel ?? undefined,
-          type: "agent" as const,
-        };
-      });
+    const agentItems: MentionItem[] = (() => {
+      // Channel scope: membership authorizes the mention, not assignability.
+      // Inject scoped channel-member agents (e.g. a teammate's private Wendy)
+      // that aren't in the member's personal agent list, and skip the
+      // assignability gate so co-members are @mentionable.
+      const channelScoped = !!allow;
+      const scoped = channelScoped ? (options.getScopedAgents?.() ?? null) : null;
+      const seen = new Set<string>();
+      const candidates: Array<Agent | MentionAgentCandidate> = [];
+      for (const a of agents) {
+        if (!seen.has(a.id)) {
+          seen.add(a.id);
+          candidates.push(a);
+        }
+      }
+      if (scoped) {
+        for (const a of scoped) {
+          if (a.id && !seen.has(a.id)) {
+            seen.add(a.id);
+            candidates.push(a);
+          }
+        }
+      }
+      return candidates
+        .filter(
+          (a) =>
+            !a.archived_at &&
+            matchesActorIdentitySearch(
+              resolveActorDisplayName(a, a.name),
+              resolveActorHandle(a),
+              query,
+              identitySearchOptions,
+            ) &&
+            (!allow || allow.has(a.id)) &&
+            (channelScoped ||
+              canAssignAgentToIssue(a as Agent, { userId, role: myRole }).allowed),
+        )
+        .map((a) => {
+          const presentation = resolveActorIdentityPresentation(a, a.name);
+          return {
+            id: a.id,
+            label: presentation.displayName,
+            handle: presentation.handle,
+            secondaryLabel: presentation.handleLabel ?? undefined,
+            type: "agent" as const,
+          };
+        });
+    })();
 
     const squadItems: MentionItem[] = squads
       .filter(

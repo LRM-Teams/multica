@@ -627,12 +627,19 @@ func (h *Handler) completeFailedAgentInboxEvent(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusInternalServerError, "failed to record inbox failure")
 		return
 	}
+	alreadyReplied := h.inboxEventHasAgentTransportVisibleOutput(r.Context(), event.ID)
+	terminalOutcome := "failed"
+	retryable := true
+	if alreadyReplied {
+		terminalOutcome = "replied"
+		retryable = false
+	}
 	if _, err := qtx.SetAgentInboxTerminalOutcome(r.Context(), db.SetAgentInboxTerminalOutcomeParams{
 		ID:                 event.ID,
 		WorkspaceID:        event.WorkspaceID,
-		TerminalOutcome:    strToText("failed"),
+		TerminalOutcome:    strToText(terminalOutcome),
 		TerminalDeliveryID: deliveryID,
-		Retryable:          true,
+		Retryable:          retryable,
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to record inbox failure outcome")
 		return
@@ -671,8 +678,13 @@ func (h *Handler) completeFailedAgentInboxEvent(w http.ResponseWriter, r *http.R
 		return
 	}
 	runtimeID := h.runtimeIDForAgentInboxDelivery(r.Context(), deliveryID)
-	h.publishAgentInboxTaskLifecycle(protocol.EventTaskFailed, event, runtimeID, "failed")
-	h.recordAgentInboxFailureActivity(r.Context(), event, deliveryID, errText, failureReason, reasonCode)
+	if alreadyReplied {
+		h.TaskService.RecordEvolutionSkillOutcome(r.Context(), event.ID, "success", "success")
+		h.publishAgentInboxTaskLifecycle(protocol.EventTaskCompleted, event, runtimeID, "completed")
+	} else {
+		h.publishAgentInboxTaskLifecycle(protocol.EventTaskFailed, event, runtimeID, "failed")
+		h.recordAgentInboxFailureActivity(r.Context(), event, deliveryID, errText, failureReason, reasonCode)
+	}
 	h.recordAgentInboxStatusActivity(r.Context(), event, runtimeID, deliveryID, agentInboxStatusActivityIdle)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "acked_seq": acked.SeqTo})
 }

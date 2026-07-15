@@ -1518,6 +1518,140 @@ func TestChannelAgentInboxTransportCanSendStickerAndSuppressesFinalOutput(t *tes
 	assertNoChannelMessageContent(t, channelID, finalText)
 }
 
+func TestChannelAgentInboxFailureAfterVisibleTransportSendSettlesAsReplied(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentName := "Inbox Post Send Failure Agent " + uuid.NewString()[:8]
+	agentID := createHandlerTestAgent(t, agentName, nil)
+	runtimeID := handlerTestRuntimeID(t)
+	if _, err := testPool.Exec(ctx, `UPDATE agent_runtime SET owner_id = $1 WHERE id = $2`, testUserID, runtimeID); err != nil {
+		t.Fatalf("seed runtime owner: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `UPDATE agent_runtime SET owner_id = NULL WHERE id = $1`, runtimeID)
+	})
+	channelID := seedChannelForTest(t, "agent-inbox-post-send-fail-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "[@"+agentName+"](mention://agent/"+agentID+") reply before failing", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("post-send-fail"), 0)
+	if err != nil {
+		t.Fatalf("insert mention trigger: %v", err)
+	}
+	testHandler.dispatchChannelMessageToAgents(ctx, ch, trigger, parseUUID(testUserID))
+
+	drainReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "agent-inbox-post-send-fail-daemon")
+	drainReq = withURLParam(drainReq, "runtimeId", runtimeID)
+	drainRec := httptest.NewRecorder()
+	testHandler.DrainAgentInboxByRuntime(drainRec, drainReq)
+	if drainRec.Code != http.StatusOK {
+		t.Fatalf("drain inbox: status=%d body=%s", drainRec.Code, drainRec.Body.String())
+	}
+	var drainResp DrainAgentInboxResponse
+	if err := json.Unmarshal(drainRec.Body.Bytes(), &drainResp); err != nil {
+		t.Fatalf("decode drain response: %v", err)
+	}
+	if len(drainResp.Events) != 1 || drainResp.Events[0].Task == nil {
+		t.Fatalf("drain response missing inbox task: %s", drainRec.Body.String())
+	}
+	got := drainResp.Events[0]
+
+	visibleReply := "visible reply before kiro post-send failure " + uuid.NewString()
+	sendReq := newRequest(http.MethodPost, "/api/agent/messages/send", map[string]any{
+		"target":            "#" + channelNameForTransportTest(t, channelID),
+		"content":           visibleReply,
+		"client_message_id": "post-send-fail-" + uuid.NewString(),
+	})
+	sendReq = withChatTestWorkspaceCtx(t, sendReq)
+	sendReq.Header.Set("X-Actor-Source", "agent_inbox_token")
+	sendReq.Header.Set("X-Agent-ID", agentID)
+	sendReq.Header.Set("X-Agent-Inbox-Event-ID", got.ID)
+	sendReq.Header.Set("X-Agent-Inbox-Delivery-ID", got.DeliveryID)
+	sendReq.Header.Set("X-Task-ID", got.ID)
+	sendRec := httptest.NewRecorder()
+	testHandler.AgentTransportSendMessage(sendRec, sendReq)
+	if sendRec.Code != http.StatusCreated {
+		t.Fatalf("inbox transport send: status=%d body=%s", sendRec.Code, sendRec.Body.String())
+	}
+
+	failReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+got.ID+"/fail", FailAgentInboxEventRequest{
+		DeliveryID:    got.DeliveryID,
+		LeaseToken:    got.LeaseToken,
+		Error:         "kiro session/prompt failed: session/prompt: Internal error (code=-32603, data=Kiro failed to generate a response)",
+		FailureReason: "agent_error.provider_server_error",
+		ReasonCode:    "agent_error.provider_server_error",
+	}, testWorkspaceID, "agent-inbox-post-send-fail-daemon")
+	failReq = withURLParam(failReq, "eventId", got.ID)
+	failRec := httptest.NewRecorder()
+	testHandler.FailAgentInboxEvent(failRec, failReq)
+	if failRec.Code != http.StatusOK {
+		t.Fatalf("fail inbox after send: status=%d body=%s", failRec.Code, failRec.Body.String())
+	}
+
+	var eventStatus, deliveryStatus, terminalOutcome, terminalDeliveryID, lastError string
+	var retryable bool
+	var terminalAt pgtype.Timestamptz
+	if err := testPool.QueryRow(ctx, `
+		SELECT e.status,
+		       d.status,
+		       COALESCE(e.terminal_outcome, ''),
+		       COALESCE(e.terminal_delivery_id::text, ''),
+		       COALESCE(e.last_error, ''),
+		       e.retryable,
+		       e.terminal_at
+		FROM agent_inbox_event e
+		JOIN agent_event_delivery d ON d.inbox_event_id = e.id
+		WHERE e.id = $1 AND d.id = $2`, got.ID, got.DeliveryID).Scan(&eventStatus, &deliveryStatus, &terminalOutcome, &terminalDeliveryID, &lastError, &retryable, &terminalAt); err != nil {
+		t.Fatalf("load inbox event: %v", err)
+	}
+	if eventStatus != "acked" || deliveryStatus != "acked" {
+		t.Fatalf("terminal inbox states = event:%q delivery:%q, want acked/acked", eventStatus, deliveryStatus)
+	}
+	if terminalOutcome != "replied" || terminalDeliveryID != got.DeliveryID || retryable || !terminalAt.Valid {
+		t.Fatalf("terminal projection = outcome:%q delivery:%q retryable:%v terminal_at:%v, want replied/%s/not-retryable/timestamp", terminalOutcome, terminalDeliveryID, retryable, terminalAt.Valid, got.DeliveryID)
+	}
+	if !strings.Contains(lastError, "Kiro failed to generate a response") {
+		t.Fatalf("last_error = %q, want retained post-send failure text", lastError)
+	}
+
+	var visibleAgentMessages int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_message
+		WHERE channel_id = $1
+		  AND author_type = 'agent'
+		  AND author_id = $2
+		  AND content = $3`, channelID, agentID, visibleReply).Scan(&visibleAgentMessages); err != nil {
+		t.Fatalf("count visible agent messages: %v", err)
+	}
+	if visibleAgentMessages != 1 {
+		t.Fatalf("visible agent channel messages = %d, want 1", visibleAgentMessages)
+	}
+
+	var failureActivity int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM agent_activity_event
+		WHERE workspace_id = $1
+		  AND agent_id = $2
+		  AND event_type = 'agent_inbox_failed'
+		  AND details->>'inbox_event_id' = $3`, testWorkspaceID, agentID, got.ID).Scan(&failureActivity); err != nil {
+		t.Fatalf("count failure activity: %v", err)
+	}
+	if failureActivity != 0 {
+		t.Fatalf("agent_inbox_failed activity rows = %d, want 0 after visible reply", failureActivity)
+	}
+}
+
 func TestChannelAgentInboxTransportBearerTokenThroughMiddleware(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

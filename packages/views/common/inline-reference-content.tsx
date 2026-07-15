@@ -49,11 +49,7 @@ export function InlineReferenceContent({
     <span className={cn("min-w-0", className)}>
       {keyed.map(({ seg, key }) =>
         seg.kind === "text" ? (
-          // Inline markdown so **emphasis** and bare-issue auto-linking survive
-          // in the runs between tokens, while flowing inline with the tokens.
-          <MemoizedMarkdown key={key} mode="inline" highlightQuery={highlightQuery}>
-            {seg.text}
-          </MemoizedMarkdown>
+          <TextRun key={key} text={seg.text} highlightQuery={highlightQuery} />
         ) : (
           <ReferenceToken
             key={key}
@@ -65,6 +61,35 @@ export function InlineReferenceContent({
         ),
       )}
     </span>
+  );
+}
+
+/**
+ * A run of plain text between reference tokens, rendered as inline markdown so
+ * **emphasis**, links, and bare-issue auto-linking survive. remark trims each
+ * run's LEADING whitespace, which would collapse the space between a token and
+ * the next word ("@alice check" → "@alicecheck"); we re-emit that leading
+ * whitespace as a literal text node so the word break is preserved. (The
+ * trailing side is kept by the inline renderer's block-flatten spacing.)
+ */
+function TextRun({
+  text,
+  highlightQuery,
+}: {
+  text: string;
+  highlightQuery?: string;
+}): React.JSX.Element {
+  const leading = text.match(/^\s+/)?.[0] ?? "";
+  const rest = leading ? text.slice(leading.length) : text;
+  return (
+    <>
+      {leading}
+      {rest && (
+        <MemoizedMarkdown mode="inline" highlightQuery={highlightQuery}>
+          {rest}
+        </MemoizedMarkdown>
+      )}
+    </>
   );
 }
 

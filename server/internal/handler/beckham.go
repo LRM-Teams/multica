@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -63,6 +64,35 @@ const beckhamInstructions = `角色
 - 你只管本群，不对整个工作区发号施令。`
 
 var errGroupManagerNoRuntime = errors.New("no runtime available to run the group manager")
+
+// beckhamInstructionsMarker is a phrase unique to the current (detailed Chinese)
+// persona. Existing Beckham agents whose instructions lack it — or whose avatar
+// is out of date — are refreshed in place so persona/avatar changes reach agents
+// that were created earlier.
+const beckhamInstructionsMarker = "把控本群的任务进度"
+
+// refreshGroupManagerIfStale updates an existing Beckham's instructions,
+// description, and avatar to the current values when they are out of date.
+func (h *Handler) refreshGroupManagerIfStale(ctx context.Context, agent db.Agent) db.Agent {
+	fresh := strings.Contains(agent.Instructions, beckhamInstructionsMarker) &&
+		agent.AvatarUrl.Valid && agent.AvatarUrl.String == beckhamAvatarURL
+	if fresh {
+		return agent
+	}
+	updated, err := h.Queries.UpdateAgent(ctx, db.UpdateAgentParams{
+		ID:           agent.ID,
+		Instructions: pgtype.Text{String: beckhamInstructions, Valid: true},
+		Description:  pgtype.Text{String: beckhamDescription, Valid: true},
+		AvatarUrl:    pgtype.Text{String: beckhamAvatarURL, Valid: true},
+	})
+	if err != nil {
+		slog.Warn("refresh group manager persona failed", "agent_id", uuidToString(agent.ID), "error", err)
+		return agent
+	}
+	resp := agentToResponse(updated)
+	h.publishAgentVisibilityEvent(protocol.EventAgentStatus, uuidToString(updated.WorkspaceID), "member", "", updated, map[string]any{"agent": broadcastAgentResponse(resp)})
+	return updated
+}
 
 // resolveGroupManagerForChannel returns the channel's bound Beckham (one per
 // group), independent of display name. Empty when the group has none.
@@ -123,6 +153,7 @@ func (h *Handler) EnsureGroupManagerForChannel(ctx context.Context, workspaceID,
 	}
 	if existingID.Valid {
 		if agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: existingID, WorkspaceID: workspaceID}); err == nil && !agent.ArchivedAt.Valid {
+			agent = h.refreshGroupManagerIfStale(ctx, agent)
 			h.ensureChannelAgentMember(ctx, workspaceID, channelID, agent.ID)
 			return agent, false, nil
 		}

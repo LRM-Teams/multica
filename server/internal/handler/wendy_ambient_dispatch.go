@@ -69,6 +69,8 @@ func (h *Handler) dispatchClaimedWendyAmbient(ctx context.Context, watch workgra
 	if err != nil || supervisor.ArchivedAt.Valid || !supervisor.RuntimeID.Valid {
 		return false, h.WorkGraph.CancelChannelAmbientClaim(ctx, watch.ChannelID, claimToken, "Wendy unavailable")
 	}
+	// Opportunistically bring an existing Beckham's persona/avatar up to date.
+	supervisor = h.refreshGroupManagerIfStale(ctx, supervisor)
 
 	markdown, err := h.buildWendyAmbientChannelMarkdown(ctx, watch, channel)
 	if err != nil {

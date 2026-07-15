@@ -3747,6 +3747,19 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 				Usage:     usageEntries,
 			}, nil
 		}
+		if len(parts) == 0 && reaction == nil && isSilentNoReplyOutput(output) {
+			taskLog.Info("agent produced silent no-reply status output; completing as structured no_reply")
+			return TaskResult{
+				Status:    "completed",
+				Comment:   "",
+				Action:    protocol.ChatOutputActionNoReply,
+				Type:      protocol.ChatOutputKindNoReply,
+				SessionID: result.SessionID,
+				WorkDir:   env.WorkDir,
+				EnvRoot:   env.RootDir,
+				Usage:     usageEntries,
+			}, nil
+		}
 		// Detect "poisoned" terminal output: the agent didn't reach a real
 		// conclusion but emitted a known fallback marker (iteration limit,
 		// fallback meta message). Route through the blocked path with a

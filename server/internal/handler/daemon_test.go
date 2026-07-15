@@ -3343,6 +3343,22 @@ func TestCompleteTask_GroupChannelNoReplyRationaleOutputIsSuppressed(t *testing.
 	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonNoReplyRationale)
 }
 
+func TestNoReplyRationaleSuppressesSilenceStatusPhrases(t *testing.T) {
+	for _, output := range []string{
+		"Not posting.",
+		"Silence — no action.",
+		"已进入静默状态，不再执行任何操作。",
+		"静默 — 无操作。",
+		"已保持静默，无需额外操作。",
+		"Not posting — the server review has passed and there are no immediate actions.",
+		"不发布——老胡的服务器端审核已通过，确认我交付的内容无误，且没有其他需要立即处理的事项。 LRM-126 现在等待 阿策 的推进/搁置决定。",
+	} {
+		if !isNoReplyRationaleFinalText(output, nil) {
+			t.Fatalf("isNoReplyRationaleFinalText(%q) = false, want true", output)
+		}
+	}
+}
+
 func TestCompleteTask_GroupChannelNoReplyRationaleOutputIsSuppressedWithCLITransport(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

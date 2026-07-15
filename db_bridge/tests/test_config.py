@@ -146,7 +146,7 @@ def test_bool_flags():
 
 def test_stub_port_and_upstream_dispatch():
     cfg = BridgeConfig.from_env(_MINIMAL)
-    assert cfg.stub_port("leagent") == cfg.gateway_stub_port
+    assert cfg.stub_port("multica") == cfg.gateway_stub_port
     assert cfg.stub_port("areal") == cfg.leagent_stub_port
     assert cfg.upstream_for_group("gateway") == cfg.gateway_upstream_url
     assert cfg.upstream_for_group("leagent_api") == cfg.leagent_upstream_url
@@ -186,7 +186,7 @@ def test_stub_and_executor_sides_are_opposite():
     for c in channels.CHANNELS:
         assert c.stub_side != c.executor_side
         if c.group == "gateway":
-            assert c.stub_side == "leagent" and c.executor_side == "areal"
+            assert c.stub_side == "multica" and c.executor_side == "areal"
         elif c.group == "multica_api":
             assert c.stub_side == "areal" and c.executor_side == "multica"
         else:  # leagent_api
@@ -194,19 +194,19 @@ def test_stub_and_executor_sides_are_opposite():
 
 
 def test_side_channel_partition_is_complete():
-    # Every channel is stubbed on exactly one host and executed on exactly one
-    # (different) host. multica hosts no stub -- it only executes multica_api
+    # Every channel is stubbed on exactly one side and executed on exactly one
+    # (different) side. leagent hosts no stub -- it only executes leagent_api
     # channels forwarded from the areal-side stub.
     leagent_stub = set(channels.stub_channels("leagent"))
     areal_stub = set(channels.stub_channels("areal"))
     multica_stub = set(channels.stub_channels("multica"))
     all_channels = set(channels.CHANNELS)
-    assert multica_stub == set()  # multica hosts no stub
-    assert leagent_stub | areal_stub == all_channels
-    assert not (leagent_stub & areal_stub)
+    assert leagent_stub == set()  # leagent hosts no stub
+    assert multica_stub | areal_stub == all_channels
+    assert not (multica_stub & areal_stub)
     # Stub/executor sides are complementary within each group:
-    # gateway -> stub leagent, executor areal.
-    assert set(channels.executor_channels("areal")) == leagent_stub
+    # gateway -> stub multica, executor areal.
+    assert set(channels.executor_channels("areal")) == multica_stub
     # leagent_api + multica_api -> stub areal, executor leagent|multica.
     leagent_exec = set(channels.executor_channels("leagent"))
     multica_exec = set(channels.executor_channels("multica"))

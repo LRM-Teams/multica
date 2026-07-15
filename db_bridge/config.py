@@ -260,7 +260,7 @@ class BridgeConfig:
         return self.concurrency_overrides.get(channel.name, channel.default_concurrency)
 
     def stub_port(self, side: Side) -> int:
-        return self.gateway_stub_port if side == "leagent" else self.leagent_stub_port
+        return self.gateway_stub_port if side == "multica" else self.leagent_stub_port
 
     def upstream_for_group(self, group: Group) -> str:
         if group == "gateway":

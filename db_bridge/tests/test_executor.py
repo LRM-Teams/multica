@@ -124,7 +124,7 @@ async def test_end_to_end_stub_db_executor_roundtrip():
     ex = Executor(db, "areal", config=cfg, client=_exec_client(handler))
     run_task = asyncio.create_task(ex.run())
     try:
-        stub = create_stub_app(db, "leagent", cfg)
+        stub = create_stub_app(db, "multica", cfg)
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=stub), base_url="http://stub"
         ) as client:

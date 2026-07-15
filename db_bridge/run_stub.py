@@ -2,7 +2,7 @@
 """Entrypoint: run the DB-bridge stub server for one side.
 
 Usage:
-    python -m db_bridge.run_stub --side leagent
+    python -m db_bridge.run_stub --side multica
     python -m db_bridge.run_stub --side areal
 """
 

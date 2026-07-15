@@ -45,7 +45,7 @@ async def gateway_harness(handler, **cfg_overrides):
         client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
     run_task = asyncio.create_task(ex.run())
-    stub = create_stub_app(db, "leagent", cfg)
+    stub = create_stub_app(db, "multica", cfg)
     try:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=stub), base_url="http://stub"

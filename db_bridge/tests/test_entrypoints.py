@@ -45,11 +45,17 @@ def test_parse_side_valid():
 
 def test_multica_side_selects_multica_api_channels():
     # --side multica drives the executor for the multica_api group (env-dispatch
-    # + DAG fetch). multica hosts no stub, so stub_channels("multica") is empty
-    # and the multica host runs an executor only.
+    # + DAG fetch) AND the stub for the gateway group (multica -> AReaL RL).
     executed = {c.name for c in executor_channels("multica")}
     assert executed == {"env_dispatch", "env_dispatch_delete", "env_dispatch_dag"}
-    assert stub_channels("multica") == ()
+    stubbed = {c.name for c in stub_channels("multica")}
+    assert stubbed == {
+        "rl_start_session",
+        "rl_set_reward",
+        "rl_end_session",
+        "chat_completions",
+        "rl_close_segment",
+    }
 
 
 def test_parse_side_rejects_missing_or_invalid():

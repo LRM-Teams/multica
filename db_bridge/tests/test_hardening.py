@@ -50,7 +50,7 @@ async def gateway_harness(cfg, handler):
         client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
     run_task = asyncio.create_task(ex.run())
-    stub = create_stub_app(db, "leagent", cfg)
+    stub = create_stub_app(db, "multica", cfg)
     try:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=stub), base_url="http://stub"
@@ -218,7 +218,7 @@ async def test_stub_stats_interval_zero_does_not_start_stats_task(monkeypatch):
         raise AssertionError("stats task should not be created")
 
     monkeypatch.setattr(stub_server.asyncio, "create_task", fake_create_task)
-    app = create_stub_app(db, "leagent", cfg)
+    app = create_stub_app(db, "multica", cfg)
     async with app.router.lifespan_context(app):
         pass
     assert created == []

@@ -56,7 +56,7 @@ async def gateway_harness(handler, **cfg_overrides):
         client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
     run_task = asyncio.create_task(ex.run())
-    stub = create_stub_app(db, "leagent", cfg)
+    stub = create_stub_app(db, "multica", cfg)
     try:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=stub), base_url="http://stub"
@@ -211,7 +211,7 @@ async def test_non_areal_chat_completion_forwards_directly_without_db_bridge(
     monkeypatch.setattr(stub_server, "_build_direct_client", DirectClient)
     cfg = _config()
     db = BridgeDB(cfg, client=FakeSupabaseClient())
-    stub = create_stub_app(db, "leagent", cfg)
+    stub = create_stub_app(db, "multica", cfg)
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=stub), base_url="https://received.example"

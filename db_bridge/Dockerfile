@@ -12,5 +12,5 @@ COPY . .
 
 ENV PYTHONPATH=/app
 
-# Default: run stub (override via docker-compose command)
-CMD ["python", "-m", "db_bridge.run_stub", "--side", "leagent"]
+# Default: run the multica-side gateway stub (override via docker-compose command).
+CMD ["python", "-m", "db_bridge.run_stub", "--side", "multica"]

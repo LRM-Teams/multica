@@ -135,9 +135,9 @@ services:
   # backend is pointed at this stub via AREAL_BRIDGE_STUB_URL (see backend env
   # above); the stub enqueues each call into rpc_rl_* / rpc_chat_completions,
   # and the AReaL-side executor (--side areal) drains them and forwards to the
-  # real AReaL gateway. Same profile + image as the public db-bridge server
-  # above; the Dockerfile's default CMD already runs run_stub --side leagent,
-  # restated explicitly here.
+  # real AReaL gateway. gateway is a multica-side group (stub_side=multica), so
+  # this stub runs --side multica - matching the multica_api executor below;
+  # the Dockerfile's default CMD is the same, restated explicitly here.
   #
   # BRIDGE_USER_ID MUST equal the AReaL-side executor's BRIDGE_USER_ID - the
   # rows this stub enqueues are claimed on the AReaL host under that user, so a
@@ -149,7 +149,7 @@ services:
   db-bridge-stub-multica:
     profiles: ["db-bridge"]
     image: ${MULTICA_DB_BRIDGE_IMAGE:-ghcr.io/lrm-teams/multica-db-bridge}:${MULTICA_IMAGE_TAG:-latest}
-    command: ["python", "-m", "db_bridge.run_stub", "--side", "leagent"]
+    command: ["python", "-m", "db_bridge.run_stub", "--side", "multica"]
     ports:
       - "127.0.0.1:${BRIDGE_GATEWAY_STUB_PORT:-9100}:${BRIDGE_GATEWAY_STUB_PORT:-9100}"
     environment:

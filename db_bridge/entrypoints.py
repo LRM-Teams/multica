@@ -2,12 +2,13 @@
 
 Each host runs two standalone processes per side:
 
-  le-agent host:
-    * stub     (--side leagent)  serves the AReaL gateway endpoints locally
+  le-agent (multica) host:
+    * stub     (--side multica)  serves the AReaL gateway endpoints locally
+    * executor (--side multica)  forwards multica API calls to the real API
     * executor (--side leagent)  forwards le-agent API calls to the real API
 
   AReaL host:
-    * stub     (--side areal)    serves the le-agent API endpoints locally
+    * stub     (--side areal)    serves the le-agent + multica API endpoints locally
     * executor (--side areal)    forwards gateway calls to the real gateway
 
 The stub's stale-claim recovery is built into ``bridge_claim_next`` (it reclaims

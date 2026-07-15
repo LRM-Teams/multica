@@ -10,12 +10,16 @@
 #   ./bridge.sh status  <side>   # show session/windows + /healthz
 #   ./bridge.sh attach  <side>   # attach to the tmux session
 #
-#   <side> is "areal" or "leagent" (default: areal).
+#   <side> is "areal", "multica", or "leagent" (default: areal).
 #
 # Each process runs in `while true; do ...; sleep $RESTART_DELAY; done`, so a
 # crash of either the stub or executor is restarted independently without
 # taking the other down. Stale `claimed` rows are reclaimed automatically by
 # bridge_claim_next (see README "Crash recovery"), so restarts are safe.
+#
+# Sides: areal and multica each run a stub + executor; leagent hosts no stub
+# (the gateway group moved to the multica side), so `start leagent` runs the
+# executor window only.
 set -euo pipefail
 
 # Resolve the directory this script lives in (the db_bridge package dir).
@@ -25,20 +29,21 @@ CMD="${1:-start}"
 SIDE="${2:-areal}"
 RESTART_DELAY="${BRIDGE_RESTART_DELAY:-3}"
 
-if [[ "$SIDE" != "areal" && "$SIDE" != "leagent" ]]; then
-  echo "error: side must be 'areal' or 'leagent' (got '$SIDE')" >&2
+if [[ "$SIDE" != "areal" && "$SIDE" != "leagent" && "$SIDE" != "multica" ]]; then
+  echo "error: side must be 'areal', 'multica', or 'leagent' (got '$SIDE')" >&2
   exit 2
 fi
 
 SESSION="db_bridge_${SIDE}"
 ENV_FILE="${SCRIPT_DIR}/.env.${SIDE}"
 
-# Stub port differs per side (see README configuration table).
-if [[ "$SIDE" == "areal" ]]; then
-  HEALTH_PORT="${BRIDGE_LEAGENT_STUB_PORT:-9101}"
-else
-  HEALTH_PORT="${BRIDGE_GATEWAY_STUB_PORT:-9100}"
-fi
+# Stub port differs per side (see README configuration table). leagent hosts no
+# stub, so it has no health port.
+case "$SIDE" in
+  areal)   HEALTH_PORT="${BRIDGE_LEAGENT_STUB_PORT:-9101}" ;;
+  multica) HEALTH_PORT="${BRIDGE_GATEWAY_STUB_PORT:-9100}" ;;
+  leagent) HEALTH_PORT="" ;;
+esac
 
 require_tmux() {
   command -v tmux >/dev/null 2>&1 || { echo "error: tmux is not installed" >&2; exit 1; }
@@ -67,10 +72,15 @@ start() {
     return 0
   fi
 
-  tmux new-session -d -s "$SESSION" -n stub     "$(respawn_cmd db_bridge.run_stub     stub)"
-  tmux new-window  -t "$SESSION"   -n executor  "$(respawn_cmd db_bridge.run_executor executor)"
-
-  echo "started tmux session '$SESSION' (windows: stub, executor)"
+  if [[ "$SIDE" == "leagent" ]]; then
+    # leagent hosts no stub (gateway moved to the multica side); executor only.
+    tmux new-session -d -s "$SESSION" -n executor "$(respawn_cmd db_bridge.run_executor executor)"
+    echo "started tmux session '$SESSION' (window: executor; leagent has no stub)"
+  else
+    tmux new-session -d -s "$SESSION" -n stub     "$(respawn_cmd db_bridge.run_stub     stub)"
+    tmux new-window  -t "$SESSION"   -n executor  "$(respawn_cmd db_bridge.run_executor executor)"
+    echo "started tmux session '$SESSION' (windows: stub, executor)"
+  fi
   echo "  attach: ./bridge.sh attach $SIDE   |   status: ./bridge.sh status $SIDE"
 }
 
@@ -92,12 +102,16 @@ status() {
   else
     echo "session '$SESSION' is NOT running"
   fi
-  echo -n "healthz (127.0.0.1:${HEALTH_PORT}): "
-  if command -v curl >/dev/null 2>&1; then
-    curl -s --max-time 3 "http://127.0.0.1:${HEALTH_PORT}/healthz" || echo "unreachable"
-    echo
+  if [[ -n "$HEALTH_PORT" ]]; then
+    echo -n "healthz (127.0.0.1:${HEALTH_PORT}): "
+    if command -v curl >/dev/null 2>&1; then
+      curl -s --max-time 3 "http://127.0.0.1:${HEALTH_PORT}/healthz" || echo "unreachable"
+      echo
+    else
+      echo "curl not installed; skipping"
+    fi
   else
-    echo "curl not installed; skipping"
+    echo "healthz: n/a (side '$SIDE' hosts no stub)"
   fi
 }
 
@@ -108,7 +122,7 @@ case "$CMD" in
   status)  status ;;
   attach)  require_tmux; tmux attach -t "$SESSION" ;;
   *)
-    echo "usage: $0 {start|stop|restart|status|attach} {areal|leagent}" >&2
+    echo "usage: $0 {start|stop|restart|status|attach} {areal|multica|leagent}" >&2
     exit 2
     ;;
 esac

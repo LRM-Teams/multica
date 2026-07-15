@@ -53,7 +53,7 @@ async def _executor_complete_one(db: BridgeDB, channel, *, status, headers, body
 async def test_set_reward_roundtrip_passthrough():
     cfg = _config()
     db = BridgeDB(cfg, client=FakeSupabaseClient())
-    app = create_stub_app(db, "leagent", cfg)
+    app = create_stub_app(db, "multica", cfg)
 
     exec_task = asyncio.create_task(
         _executor_complete_one(
@@ -88,7 +88,7 @@ async def test_set_reward_roundtrip_passthrough():
 async def test_missing_user_id_returns_400_and_does_not_enqueue():
     cfg = _config()
     db = BridgeDB(cfg, client=FakeSupabaseClient())
-    app = create_stub_app(db, "leagent", cfg)
+    app = create_stub_app(db, "multica", cfg)
 
     async with _client(app) as client:
         resp = await client.post("/rl/set_reward", json={"reward": 1.0})
@@ -101,7 +101,7 @@ async def test_missing_user_id_returns_400_and_does_not_enqueue():
 async def test_user_id_header_is_stored_but_not_forwarded():
     cfg = _config()
     db = BridgeDB(cfg, client=FakeSupabaseClient())
-    app = create_stub_app(db, "leagent", cfg)
+    app = create_stub_app(db, "multica", cfg)
 
     exec_task = asyncio.create_task(
         _executor_complete_one(
@@ -129,7 +129,7 @@ async def test_user_id_header_is_stored_but_not_forwarded():
 async def test_timeout_returns_504():
     cfg = _config(BRIDGE_TIMEOUT_RL_SET_REWARD="0.05")
     db = BridgeDB(cfg, client=FakeSupabaseClient())
-    app = create_stub_app(db, "leagent", cfg)
+    app = create_stub_app(db, "multica", cfg)
     async with _client(app) as client:
         resp = await client.post(
             "/rl/set_reward",
@@ -143,7 +143,7 @@ async def test_timeout_returns_504():
 async def test_timeout_abandons_request_so_executor_does_not_process_later():
     cfg = _config(BRIDGE_TIMEOUT_RL_SET_REWARD="0.05")
     db = BridgeDB(cfg, client=FakeSupabaseClient())
-    app = create_stub_app(db, "leagent", cfg)
+    app = create_stub_app(db, "multica", cfg)
 
     async with _client(app) as client:
         resp = await client.post(
@@ -162,7 +162,7 @@ async def test_timeout_abandons_request_so_executor_does_not_process_later():
 async def test_oversized_body_returns_413():
     cfg = _config(BRIDGE_MAX_BODY_BYTES="16")
     db = BridgeDB(cfg, client=FakeSupabaseClient())
-    app = create_stub_app(db, "leagent", cfg)
+    app = create_stub_app(db, "multica", cfg)
     async with _client(app) as client:
         resp = await client.post(
             "/rl/set_reward",
@@ -177,7 +177,7 @@ async def test_oversized_body_returns_413():
 async def test_relay_error_returns_502():
     cfg = _config()
     db = BridgeDB(cfg, client=FakeSupabaseClient())
-    app = create_stub_app(db, "leagent", cfg)
+    app = create_stub_app(db, "multica", cfg)
 
     async def fail_one():
         while True:
@@ -207,11 +207,11 @@ async def test_relay_error_returns_502():
 async def test_healthz_lists_channels():
     cfg = _config()
     db = BridgeDB(cfg, client=FakeSupabaseClient())
-    app = create_stub_app(db, "leagent", cfg)
+    app = create_stub_app(db, "multica", cfg)
     async with _client(app) as client:
         resp = await client.get("/healthz")
     assert resp.status_code == 200
     payload = resp.json()
-    assert payload["side"] == "leagent"
+    assert payload["side"] == "multica"
     assert "rl_set_reward" in payload["channels"]
     assert "chat_completions" in payload["channels"]

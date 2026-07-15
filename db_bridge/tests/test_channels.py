@@ -49,7 +49,7 @@ def test_rl_close_segment_in_gateway():
     assert ch.group == "gateway"
     assert ch.method == "POST"
     assert ch.path == "/rl/close_segment"
-    assert ch.stub_side == "leagent"
+    assert ch.stub_side == "multica"
     assert ch.executor_side == "areal"
     assert ch.table == "rpc_rl_close_segment"
 

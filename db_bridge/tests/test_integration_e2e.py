@@ -142,7 +142,7 @@ async def two_isolated_sides():
         asyncio.create_task(leagent_executor.run()),
     ]
 
-    gateway_stub = create_stub_app(db, "leagent", cfg)  # le-agent app calls this
+    gateway_stub = create_stub_app(db, "multica", cfg)  # le-agent app calls this
     leagent_api_stub = create_stub_app(db, "areal", cfg)  # AReaL backend calls this
     try:
         async with (

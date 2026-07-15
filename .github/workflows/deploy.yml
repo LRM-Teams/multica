@@ -130,9 +130,10 @@ jobs:
         # The multica-side bridge server image. Context is the db_bridge/
         # subproject (own pyproject + Dockerfile); file defaults to
         # db_bridge/Dockerfile. The Dockerfile's default CMD (run_stub --side
-        # leagent) is the gateway stub; the executor service overrides it to
-        # run_executor --side multica at deploy time. (The public run_multica
-        # server is no longer deployed - no external LLM relay is needed.)
+        # multica) is the multica-side gateway stub; the executor service
+        # overrides it to run_executor --side multica at deploy time. (The
+        # public run_multica server is no longer deployed - no external LLM
+        # relay is needed.)
         uses: docker/build-push-action@v6
         with:
           context: db_bridge
@@ -237,7 +238,7 @@ jobs:
           if compose pull db-bridge-stub-multica db-bridge-executor-multica; then
             # Gateway stub for multica -> AReaL RL calls (start_session /
             # set_reward / close_segment / chat_completions); run_stub --side
-            # leagent. Best-effort: a stub failure must not roll back the
+            # multica. Best-effort: a stub failure must not roll back the
             # backend/frontend that already succeeded - warn and leave any
             # existing stub container running.
             compose up -d db-bridge-stub-multica || echo "::warning::db-bridge-stub-multica failed to start; multica -> AReaL RL calls will fail until it runs."

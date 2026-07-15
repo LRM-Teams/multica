@@ -181,7 +181,9 @@ cleanup() {
 }
 trap cleanup INT TERM EXIT
 
-uv run python -m db_bridge.run_stub     --side leagent & pids+=("$!")
+# gateway stub (multica -> AReaL RL): gateway is a multica-side group -> --side multica
+uv run python -m db_bridge.run_stub     --side multica & pids+=("$!")
+# leagent_api executor (AReaL -> le-agent API /api/agent/*)
 uv run python -m db_bridge.run_executor --side leagent & pids+=("$!")
 
 wait -n "${pids[@]}"
@@ -222,7 +224,7 @@ contains `db_bridge/`. These commands start one tmux session with separate
 **le-agent host**
 ```bash
 tmux new-session -d -s db_bridge_leagent -n stub \
-  'cd db_bridge && set -a && source .env.leagent && set +a && uv run python -m db_bridge.run_stub --side leagent'
+  'cd db_bridge && set -a && source .env.leagent && set +a && uv run python -m db_bridge.run_stub --side multica'
 
 tmux new-window -t db_bridge_leagent -n executor \
   'cd db_bridge && set -a && source .env.leagent && set +a && uv run python -m db_bridge.run_executor --side leagent'

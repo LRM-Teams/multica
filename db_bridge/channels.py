@@ -16,13 +16,13 @@ Three groups:
                       Stub runs on the AReaL host; executor runs on the multica
                       host and forwards to the real multica Go server.
 
-Per host:
+Per side:
 
-* ``leagent`` side -- stub serves ``gateway`` channels; executor runs
-                      ``leagent_api`` channels.
+* ``multica`` side -- stub serves ``gateway`` channels; executor runs
+                      ``multica_api`` channels.
 * ``areal`` side   -- stub serves ``leagent_api`` + ``multica_api`` channels;
                       executor runs ``gateway`` channels.
-* ``multica`` side -- executor runs ``multica_api`` channels (hosts no stub).
+* ``leagent`` side -- executor runs ``leagent_api`` channels (hosts no stub).
 """
 
 from __future__ import annotations
@@ -68,7 +68,7 @@ class Channel:
     @property
     def stub_side(self) -> Side:
         """Host whose stub server serves this channel."""
-        return "leagent" if self.group == "gateway" else "areal"
+        return "multica" if self.group == "gateway" else "areal"
 
     @property
     def executor_side(self) -> Side:

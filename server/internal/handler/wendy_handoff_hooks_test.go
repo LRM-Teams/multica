@@ -40,6 +40,7 @@ func TestWendyCreateIssueEnqueuesStartWorkHandoff(t *testing.T) {
 	channelID := seedChannelForTest(t, "wendy-create-"+uuid.NewString(), testUserID)
 	addRadarAgentMembersForExecutorTest(t, channelID, supervisor.ID.String(), target)
 	bindWendySupervisorForHandoffTest(t, supervisor.ID.String())
+	bindChannelGroupManagerForTest(t, channelID, supervisor.ID.String())
 
 	w := httptest.NewRecorder()
 	req := newRequest("POST", "/api/issues", map[string]any{

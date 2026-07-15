@@ -12,14 +12,14 @@ import (
 
 // AmbientDebounce is how long Wendy waits after the latest triggering group
 // message (human or non-Wendy agent) before reviewing. Tests may shorten it.
-var AmbientDebounce = 10 * time.Minute
+var AmbientDebounce = 30 * time.Minute
 
 // AmbientMaxWait caps debounce starvation (#1): under continuous chatter the
 // per-message debounce would keep pushing review_not_before forward forever, so
 // the busiest channels — the ones most likely to need coordination — would never
 // be reviewed. A dirty channel is reviewed at most this long after its first
 // unreviewed message, regardless of ongoing chatter. Tests may shorten it.
-var AmbientMaxWait = 30 * time.Minute
+var AmbientMaxWait = 90 * time.Minute
 
 // AmbientClaimStaleAfter re-arms ambient rows stuck in claimed/running (e.g. the
 // radar run never completed because the daemon went away) so a review is not

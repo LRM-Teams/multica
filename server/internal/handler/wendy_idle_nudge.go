@@ -15,12 +15,12 @@ import (
 
 // IdleNudgeDebounce rate-limits idle nudges per channel so a stuck group is
 // re-checked periodically without spamming. Tests may shorten it.
-var IdleNudgeDebounce = 15 * time.Minute
+var IdleNudgeDebounce = time.Hour
 
 // IdleProgressWindow is how far back "real progress" is looked for. If a group
 // has no in-flight real work AND no progress event within this window, it counts
 // as stalled — even if agents chatted (chat is not progress). Tests may shorten it.
-var IdleProgressWindow = 15 * time.Minute
+var IdleProgressWindow = time.Hour
 
 const idleNudgeDispatchLimit = int32(10)
 

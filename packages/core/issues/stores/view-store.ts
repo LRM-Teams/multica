@@ -76,6 +76,14 @@ export interface IssueViewState {
   // running state changes second-to-second, a persisted toggle would let
   // users return to an empty list with no obvious cause.
   agentRunningFilter: boolean;
+  /**
+   * Filter the list to issues anchored to this chat channel (#476). Server-side
+   * (see `issueListOptions`) — the list response carries no anchor data to
+   * filter on the client. `null` = "All". Intentionally NOT persisted: a stored
+   * channel filter would drop users back into an unexplained narrow list on
+   * reload (same reasoning as `agentRunningFilter`).
+   */
+  sourceChannelId: string | null;
   sortBy: SortField;
   sortDirection: SortDirection;
   cardProperties: CardProperties;
@@ -104,6 +112,7 @@ export interface IssueViewState {
   toggleNoProject: () => void;
   toggleLabelFilter: (labelId: string) => void;
   toggleAgentRunningFilter: () => void;
+  setSourceChannel: (channelId: string | null) => void;
   hideStatus: (status: IssueStatus) => void;
   showStatus: (status: IssueStatus) => void;
   clearFilters: () => void;
@@ -130,6 +139,7 @@ export const viewStoreSlice = (set: StoreApi<IssueViewState>["setState"]): Issue
   includeNoProject: false,
   labelFilters: [],
   agentRunningFilter: false,
+  sourceChannelId: null,
   sortBy: "position",
   sortDirection: "asc",
   cardProperties: {
@@ -210,6 +220,7 @@ export const viewStoreSlice = (set: StoreApi<IssueViewState>["setState"]): Issue
     })),
   toggleAgentRunningFilter: () =>
     set((state) => ({ agentRunningFilter: !state.agentRunningFilter })),
+  setSourceChannel: (channelId) => set({ sourceChannelId: channelId }),
   hideStatus: (status) =>
     set((state) => {
       // If no filter active, activate filter with all EXCEPT this one
@@ -237,6 +248,7 @@ export const viewStoreSlice = (set: StoreApi<IssueViewState>["setState"]): Issue
       includeNoProject: false,
       labelFilters: [],
       agentRunningFilter: false,
+      sourceChannelId: null,
     }),
   setSortBy: (field) => set({ sortBy: field }),
   setSortDirection: (dir) => set({ sortDirection: dir }),

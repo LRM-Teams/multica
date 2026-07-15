@@ -32,6 +32,10 @@
     "agents_label": "エージェント",
     "agents_description": "AI エージェントに割り当てられたイシュー"
   },
+  "group_filter": {
+    "all": "すべてのグループ",
+    "aria": "ソースチャンネルで絞り込み"
+  },
   "filters": {
     "tooltip": "フィルター",
     "placeholder": "フィルター...",

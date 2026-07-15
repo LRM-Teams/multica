@@ -10,6 +10,7 @@ import {
   PROJECT_GANTT_PAGE_LIMIT,
   childrenByParentsOptions,
   issueKeys,
+  issueListOptions,
   projectGanttIssuesOptions,
 } from "./queries";
 
@@ -211,5 +212,51 @@ describe("childrenByParentsOptions chunking", () => {
 
     expect(grouped.get("p-0")).toHaveLength(1);
     expect(grouped.get(lastId)).toHaveLength(1);
+  });
+});
+
+describe("issueListOptions source-channel filter (#476)", () => {
+  let qc: QueryClient;
+
+  beforeEach(() => {
+    qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  });
+
+  afterEach(() => {
+    qc.clear();
+    vi.restoreAllMocks();
+  });
+
+  it("keeps the cache key unchanged when no channel filter is active (backward compat)", () => {
+    // Existing cache writers (mutations, ws-updaters) key by
+    // listSorted(wsId, sort). The unfiltered key must NOT gain a segment or
+    // those writers would miss the bucket the list query reads from.
+    expect(issueListOptions(WS_ID).queryKey).toEqual([...issueKeys.list(WS_ID), {}]);
+    expect(issueListOptions(WS_ID).queryKey).toEqual(issueKeys.listSorted(WS_ID));
+  });
+
+  it("appends the channel id as a distinct key segment when filtering", () => {
+    const key = issueListOptions(WS_ID, undefined, "chan-9").queryKey;
+    expect(key).toEqual([...issueKeys.list(WS_ID), {}, "chan-9"]);
+    // A filtered view must not share the unfiltered bucket.
+    expect(key).not.toEqual(issueListOptions(WS_ID).queryKey);
+  });
+
+  it("passes source_channel_id to every status request, and omits it when unset", async () => {
+    const seen: (string | undefined)[] = [];
+    installFakeApi(async (params) => {
+      seen.push(params?.source_channel_id);
+      return { issues: [], total: 0 };
+    });
+
+    await qc.fetchQuery(issueListOptions(WS_ID, undefined, "chan-9"));
+    // One request per paginated status column, each carrying the channel id.
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((c) => c === "chan-9")).toBe(true);
+
+    seen.length = 0;
+    qc.clear();
+    await qc.fetchQuery(issueListOptions(WS_ID));
+    expect(seen.every((c) => c === undefined)).toBe(true);
   });
 });

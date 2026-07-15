@@ -32,6 +32,10 @@
     "agents_label": "에이전트",
     "agents_description": "AI 에이전트에게 할당된 이슈"
   },
+  "group_filter": {
+    "all": "모든 그룹",
+    "aria": "소스 채널로 필터링"
+  },
   "filters": {
     "tooltip": "필터",
     "placeholder": "필터...",

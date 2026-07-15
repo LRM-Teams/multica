@@ -19,9 +19,18 @@ export const issueKeys = {
   all: (wsId: string) => ["issues", wsId] as const,
   /** PREFIX for invalidation — no sort. */
   list: (wsId: string) => [...issueKeys.all(wsId), "list"] as const,
-  /** FULL KEY for queryOptions — includes sort. */
-  listSorted: (wsId: string, sort?: IssueSortParam) =>
-    [...issueKeys.list(wsId), sort ?? {}] as const,
+  /**
+   * FULL KEY for queryOptions — includes sort, and the source-channel filter
+   * when one is active. The channel segment is appended ONLY when set, so the
+   * unfiltered key is byte-for-byte what it was before #476 — every existing
+   * cache writer (mutations, ws-updaters) keeps hitting the same bucket. A
+   * channel-filtered view gets its own key but still refetches on any
+   * `issueKeys.list(wsId)`-prefixed invalidation.
+   */
+  listSorted: (wsId: string, sort?: IssueSortParam, sourceChannelId?: string) =>
+    sourceChannelId
+      ? ([...issueKeys.list(wsId), sort ?? {}, sourceChannelId] as const)
+      : ([...issueKeys.list(wsId), sort ?? {}] as const),
   assigneeGroupsAll: (wsId: string) =>
     [...issueKeys.all(wsId), "assignee-groups"] as const,
   assigneeGroups: (wsId: string, filter: AssigneeGroupedIssuesFilter) =>
@@ -104,7 +113,7 @@ export const issueKeys = {
 
 export type MyIssuesFilter = Pick<
   ListIssuesParams,
-  "assignee_id" | "assignee_ids" | "creator_id" | "project_id" | "involves_user_id"
+  "assignee_id" | "assignee_ids" | "creator_id" | "project_id" | "involves_user_id" | "source_channel_id"
 >;
 
 export type AssigneeGroupedIssuesFilter = Omit<
@@ -249,10 +258,10 @@ async function fetchAllMyAssigneeGroups(
  * Fetches the first page of each paginated status in parallel. Use
  * {@link useLoadMoreByStatus} to paginate a specific status into the cache.
  */
-export function issueListOptions(wsId: string, sort?: IssueSortParam) {
+export function issueListOptions(wsId: string, sort?: IssueSortParam, sourceChannelId?: string) {
   return queryOptions({
-    queryKey: issueKeys.listSorted(wsId, sort),
-    queryFn: () => fetchFirstPages({}, sort),
+    queryKey: issueKeys.listSorted(wsId, sort, sourceChannelId),
+    queryFn: () => fetchFirstPages(sourceChannelId ? { source_channel_id: sourceChannelId } : {}, sort),
     select: flattenIssueBuckets,
     placeholderData: keepPreviousData,
   });

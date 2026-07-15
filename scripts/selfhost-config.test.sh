@@ -28,6 +28,24 @@ require_env() {
   fi
 }
 
+compose_source="$(<docker-compose.selfhost.yml)"
+require_config "$compose_source" 'db-bridge-stub-multica:'
+
+for obsolete in \
+  db-bridge-executor-multica \
+  BRIDGE_MULTICA_UPSTREAM_URL \
+  BRIDGE_MULTICA_UPSTREAM_API_KEY; do
+  if grep -Fq "$obsolete" <<<"$compose_source"; then
+    echo "Obsolete AReaL-to-MultiCA bridge setting remains: $obsolete"
+    exit 1
+  fi
+done
+
+if [[ ${SELFHOST_CONFIG_STATIC_ONLY:-false} == true ]]; then
+  echo "self-host static topology ok"
+  exit 0
+fi
+
 config="$(
   FRONTEND_PORT=3100 BACKEND_PORT=9100 docker compose \
     --env-file .env.example \

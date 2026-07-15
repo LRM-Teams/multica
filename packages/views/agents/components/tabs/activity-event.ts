@@ -38,7 +38,8 @@ export type ActivityLabelKey =
   | "searching_files"
   | "searching_code"
   | "searching_web"
-  | "sending_message";
+  | "sending_message"
+  | "send_held_by_freshness";
 
 export type ActivitySubtextKey =
   | "message_received"
@@ -67,6 +68,7 @@ export const ACTIVITY_LABEL_EN: Record<ActivityLabelKey, string> = {
   searching_code: "Searching code",
   searching_web: "Searching web",
   sending_message: "Sending message",
+  send_held_by_freshness: "Send held by freshness check",
 };
 
 export const ACTIVITY_SUBTEXT_EN: Record<ActivitySubtextKey, string> = {
@@ -350,11 +352,62 @@ function toolPresentation(event: ActivityEvent): ActivityPresentation {
   return { labelKey, subtext, subtextKind, tone: isCommand ? "running" : statusTone(event) };
 }
 
+/**
+ * Compose the held-freshness detail subtext (#441) from the BE's structured
+ * `details` — the 10 allowlist scalar keys only, never raw payload (BE #580
+ * narrow contract). English-only like the rest of Activity; we STATE the facts
+ * (how many newer messages, where, the shown/omitted split) rather than parse or
+ * invent prose. Every key is optional — the BE may omit any — so degrade
+ * gracefully to whatever facts are present, and return undefined when `details`
+ * is absent (the status row's label alone still conveys the hold). Internal ids /
+ * seqs / decision codes are not surfaced: they're diagnostic, not reader-facing.
+ */
+function freshnessHoldDetail(event: ActivityEvent): string | undefined {
+  const d = event.details;
+  if (!d) return undefined;
+  const asString = (key: string): string | undefined => {
+    const v = d[key];
+    return typeof v === "string" && v.trim() ? v.trim() : undefined;
+  };
+  const asCount = (key: string): number | undefined => {
+    const v = d[key];
+    return typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : undefined;
+  };
+  const target = asString("target");
+  const newCount = asCount("new_message_count");
+  const shown = asCount("shown_message_count");
+  const omitted = asCount("omitted_message_count");
+
+  const lead =
+    newCount != null
+      ? `${newCount} newer message${newCount === 1 ? "" : "s"}${target ? ` in ${target}` : ""}`
+      : target
+        ? `Newer messages in ${target}`
+        : "Newer messages arrived";
+
+  const breakdown: string[] = [];
+  if (shown != null) breakdown.push(`${shown} shown`);
+  if (omitted != null) breakdown.push(`${omitted} not yet shown`);
+  const detail = breakdown.length ? ` (${breakdown.join(", ")})` : "";
+
+  return `${lead}${detail} — send held until the newer context is reviewed.`;
+}
+
 export function activityPresentation(event: ActivityEvent): ActivityPresentation {
   switch (event.activity_kind) {
     case "thinking":
       return { labelKey: "thinking", subtext: narrativeText(event.text), tone: "neutral" };
     case "text":
+      // #441 held-freshness detail row: same label as the status row, plus the
+      // structured English detail composed from `details` (waiting tone — Iris:
+      // 暖色, not red/blue). Falls through to plain Output for any other text.
+      if (event.reason_code?.trim() === "send_freshness_hold_detail") {
+        return {
+          labelKey: "send_held_by_freshness",
+          subtext: freshnessHoldDetail(event),
+          tone: "waiting",
+        };
+      }
       return { labelKey: "output", subtext: narrativeText(event.text), tone: "neutral" };
     case "tool_call":
       return toolPresentation(event);
@@ -374,6 +427,11 @@ export function activityPresentation(event: ActivityEvent): ActivityPresentation
         tone: "failure",
       };
     case "blocked":
+      // #441 held-freshness status row: canonical label, no subtext (the paired
+      // detail `text` row carries the specifics). Any other block → generic wait.
+      if (event.reason_code?.trim() === "send_freshness_hold") {
+        return { labelKey: "send_held_by_freshness", tone: "waiting" };
+      }
       return { labelKey: "waiting", subtext: reasonText(event) || narrativeText(event.text), tone: "waiting" };
     case "custom":
       if (event.detail_kind === "agent_status_changed") {

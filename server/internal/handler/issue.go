@@ -2559,6 +2559,18 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	if statusChanged {
 		h.notifyParentOfChildDone(r.Context(), prevIssue, issue, actorType, actorID)
 	}
+	if assigneeChanged {
+		h.emitIssueThreadBackflow(r.Context(), issue, actorType, actorID, issueThreadAssignedEvent, "", issueThreadStatusTarget(issue))
+	}
+	if statusChanged {
+		event := issueThreadStatusChangedEvent
+		target := issueThreadStatusTarget(issue)
+		if issue.Status == "done" {
+			event = issueThreadCompletedEvent
+			target = issueThreadCompletionTarget(issue)
+		}
+		h.emitIssueThreadBackflow(r.Context(), issue, actorType, actorID, event, prevIssue.Status, target)
+	}
 	if statusChanged || assigneeChanged {
 		h.syncWendyWorkGraphAfterIssueUpdate(r.Context(), issue)
 	}
@@ -3045,6 +3057,18 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		// (MUL-2538). Best-effort; failure does not abort the batch.
 		if statusChanged {
 			h.notifyParentOfChildDone(r.Context(), prevIssue, issue, actorType, actorID)
+		}
+		if assigneeChanged {
+			h.emitIssueThreadBackflow(r.Context(), issue, actorType, actorID, issueThreadAssignedEvent, "", issueThreadStatusTarget(issue))
+		}
+		if statusChanged {
+			event := issueThreadStatusChangedEvent
+			target := issueThreadStatusTarget(issue)
+			if issue.Status == "done" {
+				event = issueThreadCompletedEvent
+				target = issueThreadCompletionTarget(issue)
+			}
+			h.emitIssueThreadBackflow(r.Context(), issue, actorType, actorID, event, prevIssue.Status, target)
 		}
 		if statusChanged || assigneeChanged {
 			h.syncWendyWorkGraphAfterIssueUpdate(r.Context(), issue)

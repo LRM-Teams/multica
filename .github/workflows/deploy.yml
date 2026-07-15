@@ -129,8 +129,10 @@ jobs:
       - name: Build & push db-bridge
         # The multica-side bridge server image. Context is the db_bridge/
         # subproject (own pyproject + Dockerfile); file defaults to
-        # db_bridge/Dockerfile. The Dockerfile's default CMD (run_stub) is
-        # overridden to run_multica by the compose service at deploy time.
+        # db_bridge/Dockerfile. The Dockerfile's default CMD (run_stub --side
+        # leagent) is the gateway stub; the executor service overrides it to
+        # run_executor --side multica at deploy time. (The public run_multica
+        # server is no longer deployed - no external LLM relay is needed.)
         uses: docker/build-push-action@v6
         with:
           context: db_bridge
@@ -224,26 +226,26 @@ jobs:
           # DNS race that caused intermittent 'no such host' errors (#324).
           compose up -d frontend
           compose up -d backend
-          # db-bridge (multica-side bridge server) is profile-gated in the
-          # compose file, so naming it explicitly is what starts it. The pull
-          # is best-effort: a rollback dispatch that names a tag predating the
-          # db-bridge image must NOT abort the backend/frontend roll, so warn
-          # and leave any existing db-bridge container running.
-          if compose pull db-bridge; then
-            compose up -d db-bridge
+          # db-bridge-stub-multica + db-bridge-executor-multica are profile-gated
+          # in the compose file, so naming them explicitly is what starts them.
+          # They share the multica-db-bridge image (the public run_multica server
+          # was dropped - no external LLM relay is needed; only the internal stub
+          # + executor remain). The pull is best-effort: a rollback dispatch that
+          # names a tag predating the db-bridge image must NOT abort the
+          # backend/frontend roll, so warn and leave any existing containers
+          # running.
+          if compose pull db-bridge-stub-multica db-bridge-executor-multica; then
             # Gateway stub for multica -> AReaL RL calls (start_session /
-            # set_reward / close_segment / chat_completions). Same image as
-            # db-bridge, different CMD (run_stub --side leagent); the pull
-            # above already fetched the image, so this only needs to start it.
-            # Best-effort: a stub failure must not roll back the backend/
-            # frontend that already succeeded - warn and leave any existing
-            # stub container running.
+            # set_reward / close_segment / chat_completions); run_stub --side
+            # leagent. Best-effort: a stub failure must not roll back the
+            # backend/frontend that already succeeded - warn and leave any
+            # existing stub container running.
             compose up -d db-bridge-stub-multica || echo "::warning::db-bridge-stub-multica failed to start; multica -> AReaL RL calls will fail until it runs."
-            # Executor for areal -> multica env-dispatch / DAG fetch (same
-            # image, run_executor --side multica). Best-effort, same as above.
+            # Executor for areal -> multica env-dispatch / DAG fetch;
+            # run_executor --side multica. Best-effort, same as above.
             compose up -d db-bridge-executor-multica || echo "::warning::db-bridge-executor-multica failed to start; areal -> multica DAG fetch will not be drained."
           else
-            echo "::warning::db-bridge image not found at tag ${MULTICA_IMAGE_TAG}; skipping db-bridge roll (existing container, if any, keeps running). Use a tag built with the db-bridge CD change for a full db-bridge rollback."
+            echo "::warning::db-bridge image not found at tag ${MULTICA_IMAGE_TAG}; skipping bridge roll (existing containers, if any, keep running). Use a tag built with the db-bridge CD change for a full bridge rollback."
           fi
           # Prune unused Docker images to prevent disk from filling up (#327).
           docker image prune -af
@@ -263,39 +265,12 @@ jobs:
           docker logs --tail 80 multica-backend-1 || true
           exit 1
 
-      - name: Health check (db-bridge /healthz)
-        # db-bridge is an auxiliary bridge service, not part of the core
-        # multica app, so a db-bridge health failure is surfaced as a warning
-        # rather than failing the whole deploy (which would mark backend/
-        # frontend rolls red for a service unrelated to them). Skipped when no
-        # db-bridge container is running (e.g. rollback to a tag that predates
-        # the db-bridge image). Flip the ::warning to ::error + exit 1 to make
-        # this strict once the bridge is stable in production.
-        if: always()
-        run: |
-          set -uo pipefail
-          if ! docker ps --format '{{.Names}}' | grep -q '^multica-db-bridge-1$'; then
-            echo "db-bridge container not running - skipping /healthz check."
-            exit 0
-          fi
-          set -a; . "${DEPLOY_DIR}/.env" 2>/dev/null || true; set +a
-          port="${MULTICA_PORT:-9200}"
-          for i in $(seq 1 30); do
-            if curl -fsS "http://127.0.0.1:${port}/healthz" >/dev/null 2>&1; then
-              echo "db-bridge healthy after $((i * 2))s."
-              exit 0
-            fi
-            echo "waiting for db-bridge readiness... ($i/30)"
-            sleep 2
-          done
-          echo "::warning::db-bridge did not pass /healthz within 60s - investigate the bridge container."
-          docker logs --tail 80 multica-db-bridge-1 || true
-
       - name: Health check (db-bridge-stub-multica /healthz)
-        # The multica-side gateway stub (multica -> AReaL RL direction). Same
-        # warning-not-error treatment as the db-bridge server above: it is an
-        # auxiliary bridge service, and a stub health failure must not mark the
-        # backend/frontend roll red. Skipped when no stub container is running.
+        # The multica-side gateway stub (multica -> AReaL RL direction). It is
+        # an auxiliary bridge service, so a stub health failure is surfaced as a
+        # warning rather than failing the whole deploy (which would mark
+        # backend/frontend rolls red for a service unrelated to them). Skipped
+        # when no stub container is running.
         if: always()
         run: |
           set -uo pipefail

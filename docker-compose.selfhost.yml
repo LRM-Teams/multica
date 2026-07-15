@@ -129,40 +129,6 @@ services:
       HOSTNAME: "0.0.0.0"
     restart: unless-stopped
 
-  # multica-side db_bridge server: relays OpenAI-compatible LLM calls from
-  # external callers through the shared Supabase DB to the AReaL host (multica
-  # never connects to AReaL directly). The remote-shell enqueue surface is
-  # intentionally left unconfigured (no MULTICA_SHELL_API_KEYS) - fail-closed.
-  # Gated behind the `db-bridge` profile so a plain `compose up -d` (self-host
-  # quickstart) never starts it; the s89 deploy rolls it by explicit service
-  # name. All bridge secrets come from /data/multica/.env on the host (same
-  # place JWT_SECRET etc. live) - never in git. The host port binds 127.0.0.1
-  # only: the server's sole caller auth is its static API keys, so it MUST sit
-  # behind the s89 Caddy reverse proxy (TLS) and must NOT be exposed raw.
-  db-bridge:
-    profiles: ["db-bridge"]
-    image: ${MULTICA_DB_BRIDGE_IMAGE:-ghcr.io/lrm-teams/multica-db-bridge}:${MULTICA_IMAGE_TAG:-latest}
-    # The db_bridge Dockerfile's default CMD runs the loopback stub
-    # (run_stub --side leagent); for the multica side we run the public server.
-    command: ["python", "-m", "db_bridge.run_multica"]
-    ports:
-      - "127.0.0.1:${MULTICA_PORT:-9200}:${MULTICA_PORT:-9200}"
-    environment:
-      SUPABASE_URL: ${SUPABASE_URL:-}
-      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
-      MULTICA_BRIDGE_USER_ID: ${MULTICA_BRIDGE_USER_ID:-c88b46a8-a8b5-4414-82fb-91398bd063b4}
-      MULTICA_LLM_API_KEYS: ${MULTICA_LLM_API_KEYS:-}
-      MULTICA_BIND_HOST: ${MULTICA_BIND_HOST:-0.0.0.0}
-      MULTICA_PORT: ${MULTICA_PORT:-9200}
-      MULTICA_CHAT_TIMEOUT: ${MULTICA_CHAT_TIMEOUT:-180}
-      MULTICA_UPSTREAM_API_KEY: ${MULTICA_UPSTREAM_API_KEY:-}
-      # Poll the shared DB every 1s for the LLM response (upstream default
-      # 0.075s is too aggressive against a REMOTE Supabase; LLM latency
-      # dominates, so 1s cuts DB load ~13x with negligible added latency).
-      BRIDGE_POLL_INTERVAL: ${BRIDGE_POLL_INTERVAL:-1}
-      BRIDGE_MAX_BODY_BYTES: ${BRIDGE_MAX_BODY_BYTES:-67108864}
-    restart: unless-stopped
-
   # multica-side gateway stub: serves /rl/start_session, /rl/set_reward,
   # /rl/end_session, /rl/close_segment, and /chat/completions on loopback for
   # multica's OWN arealrl client (the multica -> AReaL RL direction). The

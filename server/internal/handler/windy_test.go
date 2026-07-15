@@ -5,22 +5,26 @@ import (
 	"testing"
 )
 
-func TestWindyInstructionsDescribeWorkspaceSupervisorWorkGraph(t *testing.T) {
-	for _, phrase := range []string{"workspace supervisor", "work graph", "automatically"} {
-		if !strings.Contains(strings.ToLower(windyInstructions), phrase) {
-			t.Fatalf("Wendy instructions must contain %q", phrase)
+func TestWindyInstructionsAreHROnly(t *testing.T) {
+	// Wendy is HR-only now: she must NOT claim to supervise/monitor groups.
+	lower := strings.ToLower(windyInstructions)
+	for _, banned := range []string{"workspace supervisor", "work graph", "ambient review", "10 minutes"} {
+		if strings.Contains(lower, banned) {
+			t.Fatalf("Wendy instructions must not contain supervision phrase %q (that is Beckham's job now)", banned)
+		}
+	}
+	for _, phrase := range []string{"HR", "team", "recruiting"} {
+		if !strings.Contains(windyInstructions, phrase) {
+			t.Fatalf("Wendy instructions must describe HR role, missing %q", phrase)
 		}
 	}
 }
 
-func TestWindyInstructionsDescribeAmbientGroupMonitoring(t *testing.T) {
+func TestWindyInstructionsDelegateGroupWorkToBeckham(t *testing.T) {
 	for _, phrase := range []string{
 		windyInstructionsCapabilityMarker,
-		"10 minutes",
-		"do not need to configure",
-		"autopilot",
-		"add you to that group",
-		"Your own posts do not re-arm",
+		"贝克汉姆",
+		"do not monitor or coordinate work inside group channels",
 	} {
 		if !strings.Contains(windyInstructions, phrase) {
 			t.Fatalf("Wendy instructions must contain %q", phrase)

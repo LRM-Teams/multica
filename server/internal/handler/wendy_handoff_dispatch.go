@@ -50,24 +50,26 @@ func (h *Handler) dispatchClaimedWendyUnlockHandoff(ctx context.Context, handoff
 		return false, h.cancelWendyUnlockHandoff(ctx, handoff, claimToken, "handoff is missing a valid target, channel, or work node")
 	}
 
-	supervisorID, err := h.Queries.GetWorkspaceSupervisorAgentID(ctx, handoff.WorkspaceID)
-	if err != nil {
-		return false, h.cancelWendyUnlockHandoff(ctx, handoff, claimToken, "workspace has no Wendy supervisor binding")
+	managerID, ok := h.resolveGroupManagerForChannel(ctx, handoff.WorkspaceID, handoff.ChannelID)
+	if !ok {
+		return false, h.cancelWendyUnlockHandoff(ctx, handoff, claimToken, "channel has no group manager (Beckham) to speak the handoff")
 	}
+	// supervisor holds the channel's group manager (Beckham) — the speaker for
+	// this handoff. Kept named supervisor for continuity with the downstream
+	// posting/lock helpers.
 	supervisor, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
-		ID:          supervisorID,
+		ID:          managerID,
 		WorkspaceID: handoff.WorkspaceID,
 	})
-	if err != nil {
-		return false, h.cancelWendyUnlockHandoff(ctx, handoff, claimToken, "workspace Wendy supervisor is unavailable")
+	if err != nil || supervisor.ArchivedAt.Valid || !supervisor.RuntimeID.Valid {
+		return false, h.cancelWendyUnlockHandoff(ctx, handoff, claimToken, "channel group manager is unavailable")
 	}
+	// Synthetic run for mention attribution/activity only (not persisted, not a
+	// scheduled supervisor radar run).
 	run := db.AgentRadarRun{
 		WorkspaceID: handoff.WorkspaceID,
 		AgentID:     supervisor.ID,
-		TriggerKind: "scheduled",
-	}
-	if err := h.validateScheduledRadarSupervisor(ctx, run, supervisor); err != nil {
-		return false, h.cancelWendyUnlockHandoff(ctx, handoff, claimToken, "workspace Wendy supervisor binding is invalid")
+		TriggerKind: "event",
 	}
 	if handoff.TargetActorType == "member" {
 		return h.dispatchClaimedWendyMemberHandoff(ctx, handoff, claimToken, supervisor)

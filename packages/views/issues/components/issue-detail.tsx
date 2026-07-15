@@ -14,6 +14,7 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleCheck,
+  MessageSquare,
   MoreHorizontal,
   PanelRight,
   Pin,
@@ -58,6 +59,7 @@ import { ResolvedThreadBar } from "./resolved-thread-bar";
 import { collectThreadReplies, deriveThreadResolution } from "./thread-utils";
 import { isActivityLaneEntry, isReactableComment, activityRunPointer } from "./timeline-isolation";
 import { IssueAgentHeaderChip } from "./issue-agent-header-chip";
+import { issueSourceMessageHref } from "./issue-source-link";
 import { ExecutionLogSection } from "./execution-log-section";
 import { PullRequestList } from "./pull-request-list";
 import { useGitHubSettings } from "@multica/core/github";
@@ -1888,6 +1890,34 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               })()}
             </AppLink>
           )}
+
+          {(() => {
+            // "From discussion" back-jump (#470): a lightweight provenance row
+            // linking to the chat message that spawned this issue. The server
+            // sends `source_refs.message` only on the detail GET, only when the
+            // viewer can see the source channel — so a present ref is always
+            // safe to link. Hidden entirely otherwise.
+            const source = issue.source_refs?.message;
+            const sourceHref = issueSourceMessageHref(source, paths.channelDetail);
+            if (!source || !sourceHref) return null;
+            return (
+              <AppLink
+                href={sourceHref}
+                className="mt-2 flex w-fit max-w-full items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground group/source"
+              >
+                <MessageSquare className="h-3.5 w-3.5 shrink-0" />
+                <span className="font-medium shrink-0">{t(($) => $.detail.from_discussion)}</span>
+                {source.channel_name && (
+                  <span className="shrink-0">{`#${source.channel_name}`}</span>
+                )}
+                {source.excerpt && (
+                  <span className="truncate group-hover/source:text-foreground">
+                    {source.excerpt}
+                  </span>
+                )}
+              </AppLink>
+            );
+          })()}
 
           <div {...descDropZoneProps} className="relative mt-5 rounded-lg">
             <ContentEditor

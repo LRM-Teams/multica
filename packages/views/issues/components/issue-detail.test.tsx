@@ -1207,4 +1207,70 @@ describe("IssueDetail (shared)", () => {
       );
     });
   });
+
+  // #470 — "From discussion" back-jump: a chat-originated issue shows a
+  // lightweight provenance row linking to the source message. The server sends
+  // `source_refs.message` only when the viewer can see the channel, so a present
+  // ref is always safe to render + link.
+  describe("from-discussion source row (#470)", () => {
+    const sourceRef = {
+      channel_id: "chan-9",
+      channel_name: "product",
+      channel_kind: "group",
+      message_id: "msg-42",
+      thread_root_message_id: "msg-42",
+      excerpt: "we should file an issue for the login bug",
+    };
+
+    it("links 'From discussion' to the source channel message with the excerpt + channel name", async () => {
+      mockApiObj.getIssue.mockResolvedValue({
+        ...mockIssue,
+        source_refs: { message: sourceRef },
+      });
+
+      renderIssueDetail();
+
+      const label = await screen.findByText("From discussion");
+      expect(label.closest("a")).toHaveAttribute(
+        "href",
+        "/test/channels/chan-9?message=msg-42",
+      );
+      // Channel name (group channels only) + excerpt read as provenance context.
+      expect(screen.getByText("#product")).toBeInTheDocument();
+      expect(
+        screen.getByText("we should file an issue for the login bug"),
+      ).toBeInTheDocument();
+    });
+
+    it("omits the channel name for a source without one (dm) but still links + shows excerpt", async () => {
+      mockApiObj.getIssue.mockResolvedValue({
+        ...mockIssue,
+        source_refs: {
+          message: { ...sourceRef, channel_kind: "dm", channel_name: undefined },
+        },
+      });
+
+      renderIssueDetail();
+
+      const label = await screen.findByText("From discussion");
+      expect(label.closest("a")).toHaveAttribute(
+        "href",
+        "/test/channels/chan-9?message=msg-42",
+      );
+      expect(screen.queryByText("#product")).not.toBeInTheDocument();
+      expect(
+        screen.getByText("we should file an issue for the login bug"),
+      ).toBeInTheDocument();
+    });
+
+    it("hides the row entirely when the issue has no source ref", async () => {
+      // Default fixture carries no source_refs.
+      renderIssueDetail();
+
+      await waitFor(() => {
+        expect(screen.getByDisplayValue("Implement authentication")).toBeInTheDocument();
+      });
+      expect(screen.queryByText("From discussion")).not.toBeInTheDocument();
+    });
+  });
 });

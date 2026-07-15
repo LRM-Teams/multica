@@ -157,6 +157,7 @@
     "desc_placeholder": "설명 추가...",
     "sub_issues_label": "하위 이슈",
     "sub_issue_of": "상위 이슈",
+    "from_discussion": "토론에서",
     "add_sub_issues": "하위 이슈 추가",
     "add_sub_issue_tooltip": "하위 이슈 추가",
     "add_sub_issue_aria": "하위 이슈 추가",

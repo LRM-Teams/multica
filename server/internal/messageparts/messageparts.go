@@ -264,10 +264,6 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 			}
 			switch part.RefSubType {
 			case "member", "agent", "squad":
-			case "all":
-				if part.RefID != "all" {
-					return protocol.MessagePart{}, fmt.Errorf("ref_id must be all for @all")
-				}
 			default:
 				return protocol.MessagePart{}, fmt.Errorf("unsupported mention ref_subtype %q", part.RefSubType)
 			}

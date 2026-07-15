@@ -2,12 +2,12 @@ package handler
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/mention"
-	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -24,22 +24,36 @@ type channelMentionOccurrence struct {
 	End       int
 }
 
-func (h *Handler) enrichChannelMessageMentions(ctx context.Context, ch ChannelResponse, content string, parts []protocol.MessagePart) (string, []protocol.MessagePart) {
+func (h *Handler) enrichChannelMessageMentions(ctx context.Context, ch ChannelResponse, content string, parts []protocol.MessagePart) (string, []protocol.MessagePart, error) {
 	if ch.Kind != "group" {
-		return content, parts
+		return content, parts, nil
 	}
-	// Normalize legacy actor markdown before resolving source spans. A range is
-	// always anchored to the final canonical content persisted with the message.
-	parts = appendMissingMentionParts(parts, legacyChannelMentionMarkdownReferenceParts(content, parts))
-	content = normalizeChannelMentionMarkdownText(content)
-	parts = normalizeChannelMentionMarkdownParts(parts)
+	if containsLegacyChannelActorMention(content) || channelPartsContainLegacyActorMention(parts) {
+		return "", nil, fmt.Errorf("legacy actor mention syntax is unsupported; use @handle")
+	}
 	candidates := h.channelMentionCandidates(ctx, ch.WorkspaceID, ch.ID)
 	if len(candidates) > 0 {
 		mentions := h.resolveBareChannelMentions(content, parts, candidates)
 		parts = appendReferenceOccurrences(parts, mentions)
 	}
 	parts = appendReferenceOccurrences(parts, h.resolveBareChannelIssueReferences(ctx, ch.WorkspaceID, content, parts))
-	return content, parts
+	return content, parts, nil
+}
+
+func containsLegacyChannelActorMention(text string) bool {
+	return strings.Contains(text, "mention://member/") ||
+		strings.Contains(text, "mention://agent/") ||
+		strings.Contains(text, "mention://squad/") ||
+		strings.Contains(text, "mention://all/")
+}
+
+func channelPartsContainLegacyActorMention(parts []protocol.MessagePart) bool {
+	for _, part := range parts {
+		if part.Type == protocol.MessagePartTypeText && containsLegacyChannelActorMention(part.Text) {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveBareChannelIssueReferences attaches durable issue IDs to bare issue
@@ -93,9 +107,7 @@ func (h *Handler) channelMentionCandidates(ctx context.Context, workspaceID, cha
 	}
 	defer rows.Close()
 
-	candidates := map[string]channelMentionCandidate{
-		"all": {Type: "all", ID: "all", Label: "all"},
-	}
+	candidates := map[string]channelMentionCandidate{}
 	ambiguous := map[string]bool{}
 	for rows.Next() {
 		var memberType, name, displayName string
@@ -145,19 +157,6 @@ func (h *Handler) resolveBareChannelMentions(content string, parts []protocol.Me
 		})
 	}
 	return out
-}
-
-func mentionSourceTexts(content string, parts []protocol.MessagePart) []string {
-	texts := make([]string, 0, len(parts)+1)
-	if strings.TrimSpace(content) != "" {
-		texts = append(texts, content)
-	}
-	for _, part := range parts {
-		if part.Type == protocol.MessagePartTypeText && strings.TrimSpace(part.Text) != "" {
-			texts = append(texts, part.Text)
-		}
-	}
-	return texts
 }
 
 func findBareMentionCandidates(content string, candidates map[string]channelMentionCandidate) []channelMentionOccurrence {
@@ -226,46 +225,6 @@ func normalizeMentionCandidateLabel(label string) string {
 	return strings.ToLower(strings.TrimSpace(label))
 }
 
-func appendMissingMentionParts(parts []protocol.MessagePart, mentions []protocol.MessagePart) []protocol.MessagePart {
-	seen := map[string]bool{}
-	for _, part := range parts {
-		if part.Type != protocol.MessagePartTypeReference || part.RefType != "mention" {
-			continue
-		}
-		seen["mention:"+part.RefSubType+":"+part.RefID] = true
-	}
-	out := append([]protocol.MessagePart{}, parts...)
-	for _, mention := range mentions {
-		key := mention.RefType + ":" + mention.RefSubType + ":" + mention.RefID
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		out = append(out, mention)
-	}
-	return out
-}
-
-func appendMissingIssueReferenceParts(parts []protocol.MessagePart, references []protocol.MessagePart) []protocol.MessagePart {
-	seen := map[string]bool{}
-	for _, part := range parts {
-		if part.Type != protocol.MessagePartTypeReference || part.RefType != "issue-ref" {
-			continue
-		}
-		seen[part.RefSubType+":"+part.RefID] = true
-	}
-	out := append([]protocol.MessagePart{}, parts...)
-	for _, reference := range references {
-		key := reference.RefSubType + ":" + reference.RefID
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		out = append(out, reference)
-	}
-	return out
-}
-
 // appendReferenceOccurrences keeps one reference for every verified source
 // occurrence. Notification/routing consumers remain responsible for deduping by
 // actor or entity ID; display needs the per-occurrence anchor.
@@ -291,76 +250,4 @@ func appendReferenceOccurrences(parts []protocol.MessagePart, references []proto
 		}
 	}
 	return out
-}
-
-func legacyChannelMentionMarkdownReferenceParts(content string, parts []protocol.MessagePart) []protocol.MessagePart {
-	seen := map[string]bool{}
-	out := make([]protocol.MessagePart, 0)
-	for _, text := range mentionSourceTexts(content, parts) {
-		for _, match := range util.MentionRe.FindAllStringSubmatch(text, -1) {
-			if len(match) < 4 || match[2] == "issue" {
-				continue
-			}
-			key := match[2] + ":" + match[3]
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
-			label := strings.ReplaceAll(match[1], `\[`, `[`)
-			label = strings.ReplaceAll(label, `\]`, `]`)
-			if !strings.HasPrefix(label, "@") {
-				label = "@" + label
-			}
-			out = append(out, protocol.MessagePart{
-				Type:       protocol.MessagePartTypeReference,
-				RefType:    "mention",
-				RefSubType: match[2],
-				RefID:      match[3],
-				Label:      label,
-			})
-		}
-	}
-	return out
-}
-
-func normalizeChannelMentionMarkdownParts(parts []protocol.MessagePart) []protocol.MessagePart {
-	if len(parts) == 0 {
-		return parts
-	}
-	var out []protocol.MessagePart
-	for i, part := range parts {
-		if part.Type != protocol.MessagePartTypeText || !strings.Contains(part.Text, "mention://") {
-			continue
-		}
-		if out == nil {
-			out = append([]protocol.MessagePart{}, parts...)
-		}
-		out[i].Text = normalizeChannelMentionMarkdownText(part.Text)
-	}
-	if out != nil {
-		return out
-	}
-	return parts
-}
-
-func normalizeChannelMentionMarkdownText(text string) string {
-	if !strings.Contains(text, "mention://") {
-		return text
-	}
-	return util.MentionRe.ReplaceAllStringFunc(text, func(match string) string {
-		parsed := util.MentionRe.FindStringSubmatch(match)
-		if len(parsed) < 4 {
-			return match
-		}
-		mentionType := parsed[2]
-		if mentionType == "issue" {
-			return match
-		}
-		label := strings.ReplaceAll(parsed[1], `\[`, `[`)
-		label = strings.ReplaceAll(label, `\]`, `]`)
-		if !strings.HasPrefix(label, "@") {
-			label = "@" + label
-		}
-		return label
-	})
 }

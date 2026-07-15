@@ -1,6 +1,7 @@
 package messageparts
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -145,6 +146,18 @@ func TestNormalizeReferenceParts(t *testing.T) {
 	}
 	if parts[1].RefTitle != "Structured issue reference" || parts[1].RefStatus != "in_progress" {
 		t.Fatalf("issue reference lost typed metadata: %+v", parts[1])
+	}
+}
+
+func TestNormalizeReferencePartsRejectsAllMention(t *testing.T) {
+	_, _, err := Normalize("@all", []protocol.MessagePart{{
+		Type:       protocol.MessagePartTypeReference,
+		RefType:    "mention",
+		RefSubType: "all",
+		RefID:      "all",
+	}})
+	if err == nil || !strings.Contains(err.Error(), "unsupported mention ref_subtype") {
+		t.Fatalf("Normalize @all error = %v, want unsupported mention subtype", err)
 	}
 }
 

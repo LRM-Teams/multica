@@ -19,7 +19,7 @@ export type MessagePart =
   | {
       type: "reference";
       ref_type: "mention";
-      ref_subtype: "member" | "agent" | "squad" | "all";
+      ref_subtype: "member" | "agent" | "squad";
       ref_id: string;
       label?: string;
       /** Exact UTF-16 range in the message content; emitted by the server. */

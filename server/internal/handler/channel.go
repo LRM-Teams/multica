@@ -2534,7 +2534,11 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 	if !h.requireDMChannelAgentAccess(w, r, workspaceID, userID, ch) {
 		return
 	}
-	content, parts = h.enrichChannelMessageMentions(r.Context(), ch, content, parts)
+	content, parts, err = h.enrichChannelMessageMentions(r.Context(), ch, content, parts)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	showInChannel := false
 	if req.ShowInChannel != nil {
 		showInChannel = *req.ShowInChannel
@@ -2855,10 +2859,6 @@ func (h *Handler) followChannelThreadMentionedUsers(ctx context.Context, ch Chan
 	recipients := map[string]bool{}
 	for _, m := range mentions {
 		switch m.Type {
-		case "all":
-			for id := range members {
-				recipients[id] = true
-			}
 		case "member":
 			if members[m.ID] {
 				recipients[m.ID] = true
@@ -3131,7 +3131,11 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 	if !h.requireDMChannelAgentAccess(w, r, workspaceID, userID, ch) {
 		return
 	}
-	content, parts = h.enrichChannelMessageMentions(r.Context(), ch, content, parts)
+	content, parts, err = h.enrichChannelMessageMentions(r.Context(), ch, content, parts)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	replyToMessageID, ok := h.validateChannelReplyTarget(w, r.Context(), workspaceID, channelID, req.ReplyToMessageID)
 	if !ok {
 		return
@@ -3741,7 +3745,7 @@ func buildChannelWelcomePrompt(channelName, joinedName string) string {
 
 // notifyChannelMemberMentions creates a "mentioned" inbox item for every human
 // channel member @-mentioned in a channel message (by an agent, another member,
-// or via @all), so the mention surfaces in the recipient's overview "for me"
+// or another member), so the mention surfaces in the recipient's overview "for me"
 // list with a deep link back to the message. The message author is never
 // notified about their own mention.
 func (h *Handler) notifyChannelMemberMentions(ctx context.Context, ch ChannelResponse, msg ChannelMessageResponse) {
@@ -3757,10 +3761,6 @@ func (h *Handler) notifyChannelMemberMentions(ctx context.Context, ch ChannelRes
 	recipients := map[string]bool{}
 	for _, m := range mentions {
 		switch m.Type {
-		case "all":
-			for id := range members {
-				recipients[id] = true
-			}
 		case "member":
 			if members[m.ID] {
 				recipients[m.ID] = true
@@ -3918,10 +3918,9 @@ func (h *Handler) channelMentionedAgents(ctx context.Context, workspaceID, chann
 			mentionedAgents[mention.ID] = struct{}{}
 		}
 	}
-	// Canonical mention links are already resolved by immutable IDs above. Remove
-	// them before evaluating legacy bare @handle syntax so a visible label such
-	// as "@Wendy" cannot wake another agent with the same display name.
-	bareContent := util.MentionRe.ReplaceAllString(content, " ")
+	// Structured references above carry explicit actor identity. Bare @handle
+	// parsing only resolves the remaining visible source text.
+	bareContent := content
 	rows, err := h.DB.Query(ctx, `
 		SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.visibility, a.status,
 		       a.max_concurrent_tasks, a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id,
@@ -4581,7 +4580,7 @@ func shouldDefaultChannelAgentReplyToThread(channelKind string, trigger ChannelM
 }
 
 func channelMessageWithoutLeadingMentions(content string) string {
-	text := strings.ToLower(util.MentionRe.ReplaceAllString(content, " "))
+	text := strings.ToLower(content)
 	fields := strings.Fields(text)
 	for len(fields) > 0 && strings.HasPrefix(fields[0], "@") {
 		fields = fields[1:]

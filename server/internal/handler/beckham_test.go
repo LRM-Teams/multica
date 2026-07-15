@@ -3,9 +3,11 @@ package handler
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/workgraph"
 )
 
 // Phase 0+1: a group channel provisions exactly one Beckham group manager, and
@@ -76,5 +78,34 @@ func TestEnsureGroupManagerForChannelProvisionsOne(t *testing.T) {
 	resolved, ok := testHandler.resolveGroupManagerForChannel(ctx, parseUUID(testWorkspaceID), parseUUID(channelID))
 	if !ok || uuidToString(resolved) != uuidToString(agent.ID) {
 		t.Fatalf("resolve returned (%s, %v), want %s", uuidToString(resolved), ok, uuidToString(agent.ID))
+	}
+}
+
+// Phase 3: a group with no bound Beckham gets NO ambient watch — even if a
+// Wendy-named agent is a member. Wendy no longer auto-watches groups; only the
+// channel's group manager does.
+func TestGroupWithoutBeckhamHasNoAmbientWatch(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	wendyLike := createHandlerTestAgent(t, "Wendy", nil)
+	channelID := seedChannelForTest(t, "no-beckham-"+uuid.NewString(), testUserID)
+	addRadarAgentMembersForExecutorTest(t, channelID, wendyLike) // member, but NOT the group manager
+
+	prev := workgraph.AmbientDebounce
+	workgraph.AmbientDebounce = time.Minute
+	t.Cleanup(func() { workgraph.AmbientDebounce = prev })
+
+	testHandler.ingestWendyHumanGroupMessage(ctx, ChannelResponse{
+		ID: channelID, WorkspaceID: testWorkspaceID, Kind: "group", Name: "no-beckham",
+	}, ChannelMessageResponse{Content: "群里聊两句，看看有没有人来监控"})
+
+	var n int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM wendy_channel_ambient WHERE channel_id = $1`, channelID).Scan(&n); err != nil {
+		t.Fatalf("count ambient watch: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("ambient watches = %d, want 0 (no Beckham bound → nobody watches)", n)
 	}
 }

@@ -198,6 +198,8 @@ func seedWendyUnlockDispatchFixture(t *testing.T) wendyUnlockDispatchFixture {
 	addRadarAgentMembersForExecutorTest(t, channelID, supervisor.ID.String(), targetC, targetD)
 
 	bindWendySupervisorForHandoffTest(t, supervisor.ID.String())
+	// Beckham owns group handoffs now: the channel's group manager is the speaker.
+	bindChannelGroupManagerForTest(t, channelID, supervisor.ID.String())
 
 	fixture := wendyUnlockDispatchFixture{
 		wendyID:   supervisor.ID.String(),
@@ -223,6 +225,19 @@ func seedWendyUnlockDispatchFixture(t *testing.T) wendyUnlockDispatchFixture {
 	}
 	fixture.setPrimaryChannel(t, fixture.issueC)
 	return fixture
+}
+
+// bindChannelGroupManagerForTest binds an agent as a channel's Beckham (group
+// manager) — the per-channel role that now owns ambient review and handoffs.
+func bindChannelGroupManagerForTest(t *testing.T, channelID, agentID string) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := testPool.Exec(ctx, `UPDATE channel SET group_manager_agent_id = $2 WHERE id = $1`, channelID, agentID); err != nil {
+		t.Fatalf("bind channel group manager: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `UPDATE agent SET managed_role = 'group_manager' WHERE id = $1`, agentID); err != nil {
+		t.Fatalf("mark group manager role: %v", err)
+	}
 }
 
 func bindWendySupervisorForHandoffTest(t *testing.T, supervisorID string) {

@@ -32,7 +32,7 @@ func TestParseActionPlanRejectsUnknownAction(t *testing.T) {
 func TestBuildAmbientChannelPromptCoversCoordinationActions(t *testing.T) {
 	prompt := BuildAmbientChannelPrompt("## Channel\n\n- channel_id=abc")
 	for _, want := range []string{
-		"monitoring ONE group channel",
+		"manager of ONE group channel",
 		"no_action",
 		"mention_agent",
 		"create_issue",

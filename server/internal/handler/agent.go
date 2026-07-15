@@ -622,20 +622,6 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Group managers (贝克汉姆) are per-group, auto-managed agents. Hide them from
-	// the general agent directory / member-invite picker so other groups' managers
-	// don't clutter the list or get invited by mistake. They stay visible in their
-	// own group's member list and profile.
-	if managerIDs, mErr := h.groupManagerAgentIDs(r.Context(), parseUUID(workspaceID)); mErr == nil && len(managerIDs) > 0 {
-		kept := agents[:0]
-		for _, a := range agents {
-			if !managerIDs[uuidToString(a.ID)] {
-				kept = append(kept, a)
-			}
-		}
-		agents = kept
-	}
-
 	// Batch-load skills for all agents to avoid N+1.
 	skillRows, err := h.Queries.ListAgentSkillsByWorkspace(r.Context(), parseUUID(workspaceID))
 	if err != nil {

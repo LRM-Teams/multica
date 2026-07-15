@@ -138,6 +138,15 @@ const TURN_END: ActivityEvent = {
   detail_kind: "task_completed",
   target_ref: { kind: "agent", id: "agent-1" },
 };
+const IDLE_STATUS: ActivityEvent = {
+  id: "idle1",
+  agent_id: "agent-1",
+  occurred_at: "2026-07-06T09:36:14Z",
+  activity_kind: "custom",
+  detail_kind: "agent_status_changed",
+  status: "idle",
+  target_ref: { kind: "agent", id: "agent-1" },
+};
 
 describe("ActivityTimeline", () => {
   beforeEach(() => cleanup());
@@ -155,6 +164,16 @@ describe("ActivityTimeline", () => {
     expect(screen.getByText("Thinking")).toBeInTheDocument();
     expect(screen.queryByText("Waiting · freshness check")).toBeNull();
     expect(screen.queryByText("View diagnostic details")).toBeNull();
+  });
+
+  it("compact mode drops settled Idle status rows; full timeline keeps them (#465②)", () => {
+    // Compact peek: the action row shows, the settled Idle status row is noise → dropped.
+    const { rerender } = render(<ActivityTimeline events={[TEXT, IDLE_STATUS]} compact />);
+    expect(screen.getByText("Output")).toBeInTheDocument();
+    expect(screen.queryByText("Idle")).toBeNull();
+    // Full timeline keeps the historical "went idle" fact.
+    rerender(<ActivityTimeline events={[TEXT, IDLE_STATUS]} />);
+    expect(screen.getByText("Idle")).toBeInTheDocument();
   });
 
   it("shows the empty state when there are no mainline events", () => {

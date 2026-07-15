@@ -253,7 +253,15 @@ export function ActivityTimeline({
 
   const shown = useMemo(() => {
     const narrative = events.filter(isNarrativeActivityEvent);
-    return compact ? narrative.slice(-COMPACT_RECENT_LIMIT) : narrative;
+    if (!compact) return narrative;
+    // Compact peek surface drops settled "Idle" status rows — in a recent-activity
+    // glance they read as status noise, not an action/result (#465②,
+    // Barry/Ronan/Iris 2026-07-15). The full timeline keeps them (the historical
+    // "went idle" fact). Filter via the shared presentation, not a duplicated
+    // status check.
+    return narrative
+      .filter((event) => activityPresentation(event).labelKey !== "idle")
+      .slice(-COMPACT_RECENT_LIMIT);
   }, [events, compact]);
 
   if (shown.length === 0) {

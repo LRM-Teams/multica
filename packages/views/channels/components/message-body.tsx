@@ -79,10 +79,16 @@ export function MessageBody({
       // Text + sticker only in the body stream; attachment parts are rendered
       // exclusively by MessageAttachmentZone under the body.
       const bodyParts = effectiveParts.filter((part) => part.type !== "attachment");
-      const hasBodyContent = bodyParts.some(
-        (part) =>
-          (part.type === "text" && part.text.trim()) || part.type === "sticker",
-      );
+      const hasReferenceParts = bodyParts.some((part) => part.type === "reference");
+      // Reference parts (#463 structured mentions / issue-refs) are overlays on
+      // the canonical `content`, so a message can have reference-only `parts` yet
+      // carry its full text in `content` (e.g. agent/radar @mentions). Treat that
+      // as body content so it renders through InlineReferenceContent below instead
+      // of collapsing to an empty bubble.
+      const hasBodyContent =
+        bodyParts.some(
+          (part) => (part.type === "text" && part.text.trim()) || part.type === "sticker",
+        ) || (hasReferenceParts && content.trim() !== "");
       if (!hasBodyContent) return null;
       // Structured mention / issue-ref parts (#463): the canonical `content` now
       // carries bare `@Label` / `MUL-123` text with the refs anchored to spans,
@@ -90,7 +96,6 @@ export function MessageBody({
       // that's what turns those bare tokens back into hover-card mentions +
       // issue links (the bare-text migration window dropped them). Stickers still
       // render as images alongside. No refs → the existing parts renderer.
-      const hasReferenceParts = bodyParts.some((part) => part.type === "reference");
       if (hasReferenceParts) {
         const stickerParts = bodyParts.filter((part) => part.type === "sticker");
         return (

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -41,6 +40,7 @@ type threadUnfollowedSystemEventParams struct {
 func (h *Handler) emitAgentThreadUnfollowedEvent(w http.ResponseWriter, ctx context.Context, workspaceID string, channelID pgtype.UUID, rootID pgtype.UUID, agentID pgtype.UUID) {
 	actorRef := h.channelMemberSystemEventActorRef(ctx, workspaceID, "agent", agentID)
 	displayName := firstNonEmpty(actorRef.DisplayName, "Agent")
+	handle := firstNonEmpty(actorRef.Handle, displayName)
 	agentIDText := uuidToString(agentID)
 	params := threadUnfollowedSystemEventParams{
 		AgentID:          agentIDText,
@@ -51,16 +51,16 @@ func (h *Handler) emitAgentThreadUnfollowedEvent(w http.ResponseWriter, ctx cont
 		ActorDisplayName: displayName,
 		ActorName:        displayName,
 	}
-	rawPart, err := json.Marshal(threadUnfollowedSystemEventPart{
-		Event:  "thread_unfollowed",
-		Params: params,
-	})
+	paramsJSON, err := json.Marshal(params)
 	if err != nil {
-		slog.Warn("emitAgentThreadUnfollowedEvent: failed to marshal system part", "thread", rootID.String(), "agent", agentIDText, "error", err)
+		slog.Warn("emitAgentThreadUnfollowedEvent: failed to marshal event params", "thread", rootID.String(), "agent", agentIDText, "error", err)
 		return
 	}
 
-	canonical := fmt.Sprintf("%s unfollowed this thread", mentionLink("agent", agentIDText, displayName))
+	// Content is only the readable fallback for older clients. Identity and the
+	// event verb are both carried by structured parts; never put mention://
+	// markdown into a system message.
+	canonical := fmt.Sprintf("@%s unfollowed this thread", handle)
 
 	msg, err := h.insertChannelMessageWithParts(
 		ctx,
@@ -70,7 +70,16 @@ func (h *Handler) emitAgentThreadUnfollowedEvent(w http.ResponseWriter, ctx cont
 		pgtype.UUID{},
 		"system",
 		canonical,
-		[]protocol.MessagePart{{Text: string(rawPart)}},
+		[]protocol.MessagePart{
+			{Type: protocol.MessagePartTypeSystemEvent, Event: "thread_unfollowed", EventParams: paramsJSON},
+			{
+				Type:       protocol.MessagePartTypeReference,
+				RefType:    "mention",
+				RefSubType: "agent",
+				RefID:      agentIDText,
+				Label:      "@" + handle,
+			},
+		},
 		"multica",
 		nil,
 		pgtype.UUID{},
@@ -83,13 +92,4 @@ func (h *Handler) emitAgentThreadUnfollowedEvent(w http.ResponseWriter, ctx cont
 		return
 	}
 	h.publishChannelToMembers(ctx, protocol.EventChannelMessage, workspaceID, "system", "", channelID, msg)
-}
-
-func mentionLink(mentionType, id, label string) string {
-	label = strings.ReplaceAll(label, "]", "")
-	label = strings.TrimSpace(label)
-	if label == "" {
-		label = mentionType
-	}
-	return fmt.Sprintf("[%s](mention://%s/%s)", label, mentionType, id)
 }

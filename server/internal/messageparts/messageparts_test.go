@@ -148,6 +148,40 @@ func TestNormalizeReferenceParts(t *testing.T) {
 	}
 }
 
+func TestNormalizeSystemEventPart(t *testing.T) {
+	content, parts, err := Normalize("", []protocol.MessagePart{{
+		Type:        protocol.MessagePartTypeSystemEvent,
+		Event:       "thread_unfollowed",
+		EventParams: []byte(`{"actor_id":"agent-1"}`),
+		Text:        "should-clear",
+		RefID:       "should-clear",
+	}})
+	if err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+	if content != "" || len(parts) != 1 {
+		t.Fatalf("Normalize = %q %+v, want one event part and empty fallback content", content, parts)
+	}
+	part := parts[0]
+	if part.Type != protocol.MessagePartTypeSystemEvent || part.Event != "thread_unfollowed" || string(part.EventParams) != `{"actor_id":"agent-1"}` {
+		t.Fatalf("event part = %+v", part)
+	}
+	if part.Text != "" || part.RefID != "" {
+		t.Fatalf("event part retained non-event fields: %+v", part)
+	}
+}
+
+func TestNormalizeSystemEventPartRejectsMalformedParams(t *testing.T) {
+	_, _, err := Normalize("", []protocol.MessagePart{{
+		Type:        protocol.MessagePartTypeSystemEvent,
+		Event:       "thread_unfollowed",
+		EventParams: []byte(`[]`),
+	}})
+	if err == nil {
+		t.Fatal("Normalize accepted a non-object event_params value")
+	}
+}
+
 func TestUnwrapStructuredMessageSendTextParts(t *testing.T) {
 	content, parts, unwrapped, err := UnwrapStructuredMessageSend(
 		`{"action":"message_send","output":"Hello","parts":[{"type":"text","text":"Hello"}]}`,

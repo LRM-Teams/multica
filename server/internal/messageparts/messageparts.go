@@ -223,6 +223,8 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 		part.Label = ""
 		part.RefTitle = ""
 		part.RefStatus = ""
+		part.Event = ""
+		part.EventParams = nil
 		part.PackID = ""
 		part.StickerID = ""
 		part.Alt = ""
@@ -238,6 +240,8 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 		part.Label = strings.TrimSpace(part.Label)
 		part.RefTitle = strings.TrimSpace(part.RefTitle)
 		part.RefStatus = strings.TrimSpace(part.RefStatus)
+		part.Event = ""
+		part.EventParams = nil
 		if part.RefType == "" {
 			return protocol.MessagePart{}, fmt.Errorf("ref_type is required")
 		}
@@ -287,6 +291,8 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 		part.Label = ""
 		part.RefTitle = ""
 		part.RefStatus = ""
+		part.Event = ""
+		part.EventParams = nil
 		part.AttachmentID = ""
 		part.Filename = ""
 		part.ContentType = ""
@@ -309,6 +315,28 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 			part.Alt = strings.TrimSpace(part.Alt)
 		}
 		return part, nil
+	case protocol.MessagePartTypeSystemEvent:
+		part.Event = strings.TrimSpace(part.Event)
+		if part.Event == "" {
+			return protocol.MessagePart{}, fmt.Errorf("event is required")
+		}
+		var params map[string]any
+		if len(part.EventParams) == 0 || json.Unmarshal(part.EventParams, &params) != nil {
+			return protocol.MessagePart{}, fmt.Errorf("event_params must be an object")
+		}
+		part.Text = ""
+		part.RefType = ""
+		part.RefSubType = ""
+		part.RefID = ""
+		part.Label = ""
+		part.PackID = ""
+		part.StickerID = ""
+		part.Alt = ""
+		part.AttachmentID = ""
+		part.Filename = ""
+		part.ContentType = ""
+		part.SizeBytes = 0
+		return part, nil
 	case protocol.MessagePartTypeAttachment:
 		part.AttachmentID = strings.TrimSpace(part.AttachmentID)
 		if part.AttachmentID == "" {
@@ -321,6 +349,8 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 		part.Label = ""
 		part.RefTitle = ""
 		part.RefStatus = ""
+		part.Event = ""
+		part.EventParams = nil
 		part.PackID = ""
 		part.StickerID = ""
 		part.Alt = ""

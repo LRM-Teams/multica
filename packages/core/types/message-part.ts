@@ -31,6 +31,11 @@ export type MessagePart =
       label?: string;
       ref_title?: string;
       ref_status?: string;
+    }
+  | {
+      type: "system_event";
+      event: string;
+      event_params: Record<string, unknown>;
     };
 
 /**

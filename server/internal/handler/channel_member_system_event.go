@@ -50,9 +50,9 @@ func (h *Handler) emitChannelMemberSystemEvent(ctx context.Context, workspaceID 
 		TargetName:        targetRef.DisplayName,
 	}
 	content := channelMemberSystemEventCanonicalContent(event, actorRef.DisplayName, targetRef.DisplayName)
-	rawPart, err := json.Marshal(channelMemberSystemEventPart{Event: event, Params: params})
+	paramsJSON, err := json.Marshal(params)
 	if err != nil {
-		slog.Warn("channel member system event: marshal part failed", "event", event, "channel", channelID.String(), "error", err)
+		slog.Warn("channel member system event: marshal event params failed", "event", event, "channel", channelID.String(), "error", err)
 		return
 	}
 	msg, err := h.insertChannelMessageWithParts(
@@ -63,7 +63,7 @@ func (h *Handler) emitChannelMemberSystemEvent(ctx context.Context, workspaceID 
 		pgtype.UUID{},
 		"system",
 		content,
-		[]protocol.MessagePart{{Text: string(rawPart)}},
+		[]protocol.MessagePart{{Type: protocol.MessagePartTypeSystemEvent, Event: event, EventParams: paramsJSON}},
 		"multica",
 		nil,
 		pgtype.UUID{},

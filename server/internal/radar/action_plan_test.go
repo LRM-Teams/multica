@@ -57,6 +57,10 @@ func TestBuildIdleNudgeChannelPromptDrivesWork(t *testing.T) {
 		"break the final goal into concrete issues",
 		// silence only when the whole goal is genuinely complete
 		"no_action ONLY if the entire goal is genuinely complete",
+		"nudged_without_progress",
+		"ask the specific blocker",
+		"reassign the work",
+		"escalate to a human",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("idle-nudge prompt missing %q:\n%s", want, prompt)

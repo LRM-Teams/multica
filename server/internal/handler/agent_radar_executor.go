@@ -815,6 +815,11 @@ func (h *Handler) executePreparedRadarAgentMentionInTx(ctx context.Context, qtx 
 		if msg.ThreadRootMessageID != nil {
 			h.followChannelThreadAgent(ctx, directive.Target.ChannelID, parseUUID(*msg.ThreadRootMessageID), directive.TargetAgent.ID)
 		}
+		// Escalation ladder: if this directive came from the channel's group
+		// manager (Beckham), raise the nudged agent's escalation level.
+		if mgrID, ok := h.resolveGroupManagerForChannel(ctx, run.WorkspaceID, directive.Target.ChannelID); ok && uuidToString(mgrID) == uuidToString(supervisor.ID) {
+			h.incrementNudgeLadder(ctx, run.WorkspaceID, directive.Target.ChannelID, directive.TargetAgent.ID)
+		}
 	}
 	return execution, nil
 }

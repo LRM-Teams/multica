@@ -53,6 +53,10 @@ function redactTimelineItems(items: TimelineItem[]): TimelineItem[] {
 export function buildTimeline(msgs: TaskMessagePayload[]): TimelineItem[] {
   const items: TimelineItem[] = [];
   for (const msg of msgs) {
+    // The daemon's empty thinking message is a phase-status wire for the
+    // running-status pill. It intentionally has no transcript representation:
+    // raw thinking is diagnostic-only, and a status transition is not a step.
+    if (msg.type === "thinking" && !(msg.content ?? "").trim()) continue;
     items.push({
       seq: msg.seq,
       type: msg.type,

@@ -32,8 +32,6 @@ export type MessagePart =
       ref_subtype?: "issue";
       ref_id: string;
       label?: string;
-      ref_title?: string;
-      ref_status?: string;
       /** Exact UTF-16 range in the message content; emitted by the server. */
       content_start_utf16?: number;
       content_end_utf16?: number;

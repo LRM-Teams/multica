@@ -173,11 +173,9 @@ function IssueRefToken({
   text: string;
 }): React.JSX.Element {
   const paths = useWorkspacePaths();
-  // LIVE issue state — NOT the part's `ref_title`/`ref_status` (#504). Those are
-  // a snapshot frozen when the message was written, so they go stale the moment
-  // the issue changes afterwards (the peek showed `todo` while the issue was
-  // already `in_progress`). The part stays anchor/identity only (ref_id + span);
-  // state is resolved live, same as the @actor hover card fetching a live profile.
+  // Mutable issue state is resolved live (#504), just like an @actor hover card
+  // fetches a live profile. The persisted part stays anchor/identity only
+  // (ref_id + span), so later issue changes cannot leave the peek stale.
   const issue = useResolvedIssue(reference.ref_id);
 
   // The token text itself is still the author's exact span substring — the

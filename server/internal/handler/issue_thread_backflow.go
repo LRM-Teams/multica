@@ -127,8 +127,6 @@ func (h *Handler) emitIssueThreadBackflow(ctx context.Context, issue db.Issue, a
 		RefSubType:        "issue",
 		RefID:             uuidToString(issue.ID),
 		Label:             identifier,
-		RefTitle:          issue.Title,
-		RefStatus:         issue.Status,
 		ContentStartUTF16: &issueRefStart,
 		ContentEndUTF16:   &issueRefEnd,
 	}}

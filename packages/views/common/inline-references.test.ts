@@ -22,8 +22,6 @@ function issueRef(start: number, end: number): MessagePart {
     ref_subtype: "issue",
     ref_id: "issue-uuid",
     label: "MUL-123",
-    ref_title: "Inbox slow",
-    ref_status: "in_progress",
     content_start_utf16: start,
     content_end_utf16: end,
   } as MessagePart;

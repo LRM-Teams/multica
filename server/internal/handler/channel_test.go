@@ -2760,8 +2760,8 @@ func TestChannelBareIssueReferencesBecomeStructuredMessageParts(t *testing.T) {
 		t.Fatalf("issue references = %+v, want one anchored typed ref per visible occurrence", references)
 	}
 	ref := references[0]
-	if ref.RefSubType != "issue" || ref.RefID != issueID || ref.Label != identifier || ref.RefTitle != issue.Title || ref.RefStatus != issue.Status {
-		t.Fatalf("issue reference = %+v, want canonical issue entity %s / %q / %q / %q", ref, issueID, identifier, issue.Title, issue.Status)
+	if ref.RefSubType != "issue" || ref.RefID != issueID || ref.Label != identifier {
+		t.Fatalf("issue reference = %+v, want canonical issue anchor %s / %q", ref, issueID, identifier)
 	}
 	if ref.ContentStartUTF16 == nil || ref.ContentEndUTF16 == nil || *ref.ContentStartUTF16 >= *ref.ContentEndUTF16 {
 		t.Fatalf("issue reference is missing a content UTF-16 span: %+v", ref)

@@ -28,6 +28,49 @@ require_env() {
   fi
 }
 
+compose_source="$(<docker-compose.selfhost.yml)"
+require_config "$compose_source" 'db-bridge-stub-multica:'
+
+for obsolete in \
+  db-bridge-executor-multica \
+  BRIDGE_MULTICA_UPSTREAM_URL \
+  BRIDGE_MULTICA_UPSTREAM_API_KEY; do
+  if grep -Fq "$obsolete" <<<"$compose_source"; then
+    echo "Obsolete AReaL-to-MultiCA bridge setting remains: $obsolete"
+    exit 1
+  fi
+done
+
+areal_env_example="$(<db_bridge/.env.areal.example)"
+require_config "$areal_env_example" 'MULTICA_BASE_URL=https://multica.example.com'
+require_config "$areal_env_example" 'MULTICA_API_KEY=mul_your-multica-personal-access-token'
+
+for obsolete in \
+  AREAL_BRIDGE_STUB_URL \
+  'MULTICA_BASE_URL=http://127.0.0.1:9101' \
+  BRIDGE_HEADER_ENCRYPTION_KEY; do
+  if grep -Fq "$obsolete" <<<"$areal_env_example"; then
+    echo "Obsolete direct-call setting remains in .env.areal.example: $obsolete"
+    exit 1
+  fi
+done
+
+multica_env_example="$(<db_bridge/.env.multica.example)"
+for obsolete in \
+  'run_executor --side multica' \
+  BRIDGE_MULTICA_UPSTREAM_URL \
+  BRIDGE_HEADER_ENCRYPTION_KEY; do
+  if grep -Fq "$obsolete" <<<"$multica_env_example"; then
+    echo "Obsolete executor setting remains in .env.multica.example: $obsolete"
+    exit 1
+  fi
+done
+
+if [[ ${SELFHOST_CONFIG_STATIC_ONLY:-false} == true ]]; then
+  echo "self-host static topology ok"
+  exit 0
+fi
+
 config="$(
   FRONTEND_PORT=3100 BACKEND_PORT=9100 docker compose \
     --env-file .env.example \

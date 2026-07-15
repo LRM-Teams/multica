@@ -393,6 +393,11 @@ func TestChatRuntimeBriefRendersReplyRequirementForDirectedRun(t *testing.T) {
 		"### Reply Requirement (READ FIRST",
 		"Human DMs, human @mentions, direct questions, assigned tasks",
 		"Agent-to-agent channel @mentions are weak notifications",
+		"**Operational-command acknowledgement:**",
+		"follow/unfollow or mute/unmute",
+		"react `✅` to the instructing message",
+		"--message-id <triggering-message-id> --emoji \"✅\"",
+		"send no ordinary text confirmation",
 		"Not responding is **not** an option when a human or explicit task is waiting on you",
 		"Reply Requirement",
 	} {

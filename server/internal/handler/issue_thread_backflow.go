@@ -80,22 +80,27 @@ func (h *Handler) emitIssueThreadBackflow(ctx context.Context, issue db.Issue, a
 
 	var targetAgent db.Agent
 	if target.Type == "agent" && target.ID.Valid {
-		ref := h.channelMemberSystemEventActorRef(ctx, uuidToString(issue.WorkspaceID), "agent", target.ID)
-		params.TargetID = uuidToString(target.ID)
-		params.TargetType = "agent"
-		params.TargetHandle = ref.Handle
-		params.TargetName = ref.DisplayName
+		// A target only becomes a directed mention after membership is confirmed.
+		// Otherwise this remains a factual source-thread event: persisting an
+		// unresolvable reference would falsely advertise a targeted notification.
+		targetID := uuidToString(target.ID)
 		for _, agent := range h.channelMentionedAgents(ctx, ch.WorkspaceID, ch.ID, "", []protocol.MessagePart{{
 			Type:       protocol.MessagePartTypeReference,
 			RefType:    "mention",
 			RefSubType: "agent",
-			RefID:      params.TargetID,
-			Label:      "@" + firstNonEmpty(ref.Handle, ref.DisplayName),
+			RefID:      targetID,
 		}}) {
 			if agent.ID == target.ID {
 				targetAgent = agent
 				break
 			}
+		}
+		if targetAgent.ID.Valid {
+			ref := h.channelMemberSystemEventActorRef(ctx, uuidToString(issue.WorkspaceID), "agent", target.ID)
+			params.TargetID = targetID
+			params.TargetType = "agent"
+			params.TargetHandle = ref.Handle
+			params.TargetName = ref.DisplayName
 		}
 	}
 

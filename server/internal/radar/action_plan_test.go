@@ -41,6 +41,8 @@ func TestBuildAmbientChannelPromptCoversCoordinationActions(t *testing.T) {
 		"Return at most 5 actions",
 		// Naming in prose does not wake an agent — must use mention_agent.
 		"mention_agent action targeting that agent",
+		"server adds the one target mention",
+		"must not repeat that target by @handle or display name",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("ambient prompt missing %q:\n%s", want, prompt)
@@ -52,8 +54,8 @@ func TestBuildIdleNudgeChannelPromptDrivesWork(t *testing.T) {
 	prompt := BuildIdleNudgeChannelPrompt("## Channel\n\n- channel_id=abc")
 	for _, want := range []string{
 		"NO agent in this group is working",
-		"mention_agent",         // must use mention_agent to wake
-		"产品经理",                  // fall back to the product manager
+		"mention_agent", // must use mention_agent to wake
+		"产品经理",          // fall back to the product manager
 		"break the final goal into concrete issues",
 		// silence only when the whole goal is genuinely complete
 		"no_action ONLY if the entire goal is genuinely complete",
@@ -61,9 +63,16 @@ func TestBuildIdleNudgeChannelPromptDrivesWork(t *testing.T) {
 		"ask the specific blocker",
 		"reassign the work",
 		"escalate to a human",
+		"full identifier from its current Open Issues row",
+		"dynamically supplied for this review",
+		"bare `#number`",
+		"Keep mention_agent payload content to the instruction only",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("idle-nudge prompt missing %q:\n%s", want, prompt)
 		}
+	}
+	if strings.Contains(prompt, "Reference the issue by #number") {
+		t.Fatalf("idle-nudge prompt still teaches bare issue numbers:\n%s", prompt)
 	}
 }

@@ -710,30 +710,32 @@ export function createMentionSuggestion(
           }
         }
       }
-      return candidates
-        .filter(
-          (a) =>
-            !a.archived_at &&
-            matchesActorIdentitySearch(
-              resolveActorDisplayName(a, a.name),
-              resolveActorHandle(a),
-              query,
-              identitySearchOptions,
-            ) &&
-            (!allow || allow.has(a.id)) &&
-            (channelScoped ||
-              canAssignAgentToIssue(a as Agent, { userId, role: myRole }).allowed),
-        )
-        .map((a) => {
-          const presentation = resolveActorIdentityPresentation(a, a.name);
-          return {
-            id: a.id,
-            label: presentation.displayName,
-            handle: presentation.handle,
-            secondaryLabel: presentation.handleLabel ?? undefined,
-            type: "agent" as const,
-          };
+      const items: MentionItem[] = [];
+      for (const a of candidates) {
+        if (
+          a.archived_at ||
+          !matchesActorIdentitySearch(
+            resolveActorDisplayName(a, a.name),
+            resolveActorHandle(a),
+            query,
+            identitySearchOptions,
+          ) ||
+          (allow && !allow.has(a.id)) ||
+          (!channelScoped &&
+            !canAssignAgentToIssue(a as Agent, { userId, role: myRole }).allowed)
+        ) {
+          continue;
+        }
+        const presentation = resolveActorIdentityPresentation(a, a.name);
+        items.push({
+          id: a.id,
+          label: presentation.displayName,
+          handle: presentation.handle,
+          secondaryLabel: presentation.handleLabel ?? undefined,
+          type: "agent" as const,
         });
+      }
+      return items;
     })();
 
     const squadItems: MentionItem[] = squads

@@ -944,10 +944,15 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   // the member's personal agent list (e.g. a teammate's private Wendy). Channel
   // membership — not assignability — authorizes the mention.
   const channelAgentCandidates = useMemo<ContentEditorProps["scopedMentionAgents"]>(
-    () =>
-      channelMembers
-        .filter((m) => m.member_type === "agent")
-        .map((m) => ({ id: m.member_id, name: m.name, display_name: m.display_name })),
+    () => {
+      const out: Array<{ id: string; name: string; display_name?: string | null }> = [];
+      for (const m of channelMembers) {
+        if (m.member_type === "agent") {
+          out.push({ id: m.member_id, name: m.name, display_name: m.display_name });
+        }
+      }
+      return out;
+    },
     [channelMembers],
   );
   // Agents surface their lifecycle stage via the query-driven working indicator

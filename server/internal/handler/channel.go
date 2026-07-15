@@ -688,6 +688,12 @@ func (h *Handler) CreateChannel(w http.ResponseWriter, r *http.Request) {
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'user', $3)
 		ON CONFLICT DO NOTHING`, parseUUID(ch.ID), parseUUID(workspaceID), parseUUID(userID))
+	// New groups automatically get their single 贝克汉姆 (Beckham) group manager.
+	// Old groups are untouched (users invite one on demand). Best-effort: never
+	// fail channel creation if provisioning is not possible (e.g. no runtime).
+	if ch.Kind == "group" {
+		h.provisionGroupManagerForNewChannel(r.Context(), workspaceID, parseUUID(ch.ID), parseUUID(userID))
+	}
 	h.publish(protocol.EventChannelUpdated, workspaceID, "member", userID, ch)
 	writeJSON(w, http.StatusCreated, ch)
 }

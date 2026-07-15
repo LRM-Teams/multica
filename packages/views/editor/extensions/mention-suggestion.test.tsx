@@ -578,39 +578,25 @@ describe("createMentionSuggestion", () => {
     expect(screen.getByText("Roadmap")).toBeInTheDocument();
   });
 
-  it("includes all non-archived squads in the mention list", () => {
+  it("never offers squads in the composer @ picker — candidates are member/agent only (bare-mention cutover, Barry #605 gate)", () => {
+    // Even with squads cached, they must not appear: the server has no bare-squad
+    // parse contract, so a picked squad would serialize to bare `@name` that never
+    // resolves into a structured/routing ref — a silent no-op. Restore when a BE
+    // squad bare-token contract exists.
     const qc = fakeQc({
       members: [{ user_id: "u1", name: "Alice", role: "member" }],
       squads: [
         { id: "s1", name: "Jiayuan's Coding Team", archived_at: null },
         { id: "s2", name: "独立团", archived_at: null },
-        { id: "s3", name: "Archived Squad", archived_at: "2026-01-01T00:00:00Z" },
       ],
     });
     searchIssuesMock.mockReturnValue(new Promise(() => {}));
 
     const config = createMentionSuggestion(qc);
-    const result = config.items!({ query: "", editor: {} as never });
+    const items = config.items!({ query: "", editor: {} as never }) as MentionItem[];
 
-    const items = result as MentionItem[];
-    expect(items.filter((i) => i.type === "squad")).toHaveLength(2);
-    expect(items.some((i) => i.type === "squad" && i.label === "Jiayuan's Coding Team")).toBe(true);
-    expect(items.some((i) => i.type === "squad" && i.label === "独立团")).toBe(true);
-    expect(items.some((i) => i.type === "squad" && i.label === "Archived Squad")).toBe(false);
-  });
-
-  it("returns no squads when the squads cache is empty (not yet fetched)", () => {
-    const qc = fakeQc({
-      members: [{ user_id: "u1", name: "Alice", role: "member" }],
-      // squads not provided — simulates cache miss
-    });
-    searchIssuesMock.mockReturnValue(new Promise(() => {}));
-
-    const config = createMentionSuggestion(qc);
-    const result = config.items!({ query: "", editor: {} as never });
-
-    const items = result as MentionItem[];
     expect(items.filter((i) => i.type === "squad")).toHaveLength(0);
+    expect(items.some((i) => i.type === "member" && i.label === "Alice")).toBe(true);
   });
 
   it("matches Chinese names by full pinyin", () => {

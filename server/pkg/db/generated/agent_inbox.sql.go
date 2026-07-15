@@ -450,12 +450,26 @@ WITH next_event AS (
   SELECT e.id
   FROM agent_inbox_event e
   JOIN agent_session s ON s.id = e.agent_session_id
+  JOIN agent a ON a.id = e.agent_id
   WHERE s.runtime_id = $1
     AND s.status = 'active'
     AND e.status IN ('pending', 'failed')
+    -- Chat inbox execution is globally serial per agent. This is deliberately
+    -- independent of agent.max_concurrent_tasks, which only controls the
+    -- issue/task scheduler. Locking the agent row makes the exclusion safe
+    -- when multiple drain requests race on different inbox-event rows.
+    AND NOT EXISTS (
+      SELECT 1
+      FROM agent_event_delivery active_delivery
+      JOIN agent_session active_session
+        ON active_session.id = active_delivery.agent_session_id
+      WHERE active_session.agent_id = e.agent_id
+        AND active_delivery.status IN ('leased', 'processing')
+        AND active_delivery.lease_expires_at > now()
+    )
   ORDER BY e.priority DESC, e.requires_wake DESC, e.created_at ASC, e.id ASC
   LIMIT 1
-  FOR UPDATE SKIP LOCKED
+  FOR UPDATE OF a, e SKIP LOCKED
 ),
 leased_event AS (
   UPDATE agent_inbox_event e

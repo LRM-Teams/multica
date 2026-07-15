@@ -145,6 +145,15 @@ type Daemon struct {
 	activeEnvRootsMu sync.Mutex
 	activeEnvRoots   map[string]int // env root path -> reference count (handles reuse paths marked twice)
 
+	// inboxAgentSlots is a daemon-side fail-safe for the server's authoritative
+	// one-active-delivery-per-agent lease rule. Chat inbox execution is globally
+	// serial per agent and intentionally does not read agent.max_concurrent_tasks,
+	// which belongs to the issue/task scheduler. The server gate prevents normal
+	// duplicate leasing; this local gate also fences a stale delivery that is
+	// still unwinding after its lease is lost.
+	inboxAgentSlotsMu sync.Mutex
+	inboxAgentSlots   map[string]chan struct{}
+
 	// localPathLocks serialises agent tasks whose project resource is a
 	// local_directory pinned to this daemon. Two tasks targeting the same
 	// on-disk path run sequentially; the second blocks on the lock and is
@@ -195,6 +204,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		agentVersions:             make(map[string]string),
 		wsHBLastAck:               make(map[string]time.Time),
 		activeEnvRoots:            make(map[string]int),
+		inboxAgentSlots:           make(map[string]chan struct{}),
 		localPathLocks:            NewLocalPathLocker(),
 		runtimeGoneInflight:       make(map[string]struct{}),
 		reregisterNextAttempt:     make(map[string]time.Time),
@@ -2450,6 +2460,39 @@ func newTaskSlotSemaphore(maxConcurrentTasks int) chan int {
 	return sem
 }
 
+// acquireInboxAgentSlot serializes raft-like chat inbox executions for one
+// agent inside this daemon. The returned release function is idempotent.
+// Different agents use different slots and remain fully concurrent.
+func (d *Daemon) acquireInboxAgentSlot(ctx context.Context, agentID string) (func(), error) {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return nil, errors.New("agent inbox execution requires agent_id")
+	}
+
+	d.inboxAgentSlotsMu.Lock()
+	if d.inboxAgentSlots == nil {
+		d.inboxAgentSlots = make(map[string]chan struct{})
+	}
+	slot := d.inboxAgentSlots[agentID]
+	if slot == nil {
+		slot = make(chan struct{}, 1)
+		slot <- struct{}{}
+		d.inboxAgentSlots[agentID] = slot
+	}
+	d.inboxAgentSlotsMu.Unlock()
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-slot:
+	}
+
+	var once sync.Once
+	return func() {
+		once.Do(func() { slot <- struct{}{} })
+	}, nil
+}
+
 // shouldInterruptAgent decides whether the running agent should be cancelled
 // based on the latest GetTaskStatus call. Pure function so the decision is
 // trivially testable; the polling goroutine in watchTaskCancellation is just
@@ -2512,6 +2555,7 @@ func (d *Daemon) watchTaskCancellation(ctx context.Context, taskID string, pollI
 }
 
 func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
+	reportCtx := ctx
 	d.mu.Lock()
 	rt := d.runtimeIndex[task.RuntimeID]
 	d.mu.Unlock()
@@ -2539,6 +2583,44 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 		"resume_session", task.PriorSessionID != "",
 		"reuse_workdir", task.PriorWorkDir != "",
 	)
+
+	// The server lease query is the source-of-truth serialization gate, but a
+	// stale local executor may still be unwinding when its lease is rejected.
+	// Renew the lease while waiting, cancel immediately on a permanent lease
+	// loss, and do not let another inbox execution for this agent touch the
+	// provider session or filesystem until the prior one has fully returned.
+	var inboxLeaseLost <-chan struct{}
+	if task.isInboxTask() {
+		executionCtx, executionCancel := context.WithCancel(ctx)
+		defer executionCancel()
+		inboxLeaseLost = d.watchInboxLease(executionCtx, *task.InboxEvent, d.cancelPollInterval, taskLog)
+		select {
+		case <-inboxLeaseLost:
+			taskLog.Info("agent inbox lease lost before execution; discarding delivery")
+			return
+		default:
+		}
+		go func() {
+			select {
+			case <-inboxLeaseLost:
+				executionCancel()
+			case <-executionCtx.Done():
+			}
+		}()
+
+		release, err := d.acquireInboxAgentSlot(executionCtx, task.AgentID)
+		if err != nil {
+			select {
+			case <-inboxLeaseLost:
+				taskLog.Info("agent inbox lease lost before execution; discarding delivery")
+			default:
+				taskLog.Info("agent inbox execution cancelled while waiting for agent slot", "error", err)
+			}
+			return
+		}
+		defer release()
+		ctx = executionCtx
+	}
 
 	// Managed project workdir: when the server flags a project that has no
 	// resource yet, lazily create the shared directory under WorkspacesRoot,
@@ -2633,11 +2715,23 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 			case <-runCtx.Done():
 			}
 		}()
-	} else {
-		d.renewInboxLeaseUntil(runCtx, *task.InboxEvent, pollInterval, taskLog)
 	}
 
 	result, err := d.runner.run(runCtx, task, provider, slot, taskLog)
+
+	if inboxLeaseLost != nil {
+		select {
+		case <-inboxLeaseLost:
+			taskLog.Info("agent inbox lease lost during execution; discarding result")
+			return
+		default:
+		}
+	}
+	// Lease-loss cancellation owns only the provider execution context. Keep
+	// terminal reporting on the daemon's parent context so a renew request that
+	// races with a successful complete/fail transition cannot cancel the HTTP
+	// callback that is committing that transition.
+	ctx = reportCtx
 
 	// Report usage before any early return — the agent accumulates tokens
 	// whether the task completes, errors, or is cancelled mid-run by the poll
@@ -2926,22 +3020,33 @@ func (d *Daemon) reportTaskResultForTask(ctx context.Context, task Task, result 
 	}
 }
 
-func (d *Daemon) renewInboxLeaseUntil(ctx context.Context, lease AgentInboxLease, interval time.Duration, taskLog *slog.Logger) {
+// watchInboxLease renews an inbox delivery and closes the returned channel on
+// a permanent rejection. A permanent rejection means this executor no longer
+// owns the delivery, so the caller must cancel the provider immediately and
+// discard its result. Transient transport failures keep retrying: they do not
+// prove that ownership has changed.
+func (d *Daemon) watchInboxLease(ctx context.Context, lease AgentInboxLease, interval time.Duration, taskLog *slog.Logger) <-chan struct{} {
 	if interval <= 0 {
 		interval = 5 * time.Second
 	}
-	renew := func() {
+	lost := make(chan struct{})
+	renew := func() bool {
 		if err := d.client.RenewAgentInboxEvent(ctx, lease); err != nil {
 			if isTransientError(err) {
 				taskLog.Debug("agent inbox lease renew transient failure", "event", shortID(lease.ID), "error", err)
+				return true
 			} else {
-				taskLog.Warn("agent inbox lease renew rejected; terminal callback will decide stale vs recoverable", "event", shortID(lease.ID), "error", err)
+				taskLog.Warn("agent inbox lease renew rejected; cancelling stale executor", "event", shortID(lease.ID), "error", err)
+				close(lost)
+				return false
 			}
-			return
 		}
 		taskLog.Debug("agent inbox lease renewed", "event", shortID(lease.ID))
+		return true
 	}
-	renew()
+	if !renew() {
+		return lost
+	}
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
@@ -2950,10 +3055,13 @@ func (d *Daemon) renewInboxLeaseUntil(ctx context.Context, lease AgentInboxLease
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				renew()
+				if !renew() {
+					return
+				}
 			}
 		}
 	}()
+	return lost
 }
 
 func (d *Daemon) reportTaskFailure(ctx context.Context, task Task, errMsg, sessionID, workDir, failureReason string, taskLog *slog.Logger) {

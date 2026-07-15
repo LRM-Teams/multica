@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +12,152 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 )
+
+func TestAgentInboxDrainSerializesSameAgentAndKeepsDifferentAgentsConcurrent(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	runtimeID := handlerTestRuntimeID(t)
+	firstAgentName := "Inbox Serial Agent A " + uuid.NewString()[:8]
+	firstAgentID := createHandlerTestAgent(t, firstAgentName, nil)
+	firstChannelID := seedChannelForTest(t, "inbox-serial-a-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, firstChannelID, testWorkspaceID, firstAgentID); err != nil {
+		t.Fatalf("seed first agent member: %v", err)
+	}
+	firstChannel, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(firstChannelID))
+	if !found {
+		t.Fatal("first channel not found after seed")
+	}
+	for i := 0; i < 2; i++ {
+		trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(firstChannelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "[@"+firstAgentName+"](mention://agent/"+firstAgentID+") serial prompt", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-serial-a-"+uuid.NewString()), 0)
+		if err != nil {
+			t.Fatalf("insert first-agent trigger %d: %v", i, err)
+		}
+		testHandler.dispatchChannelMessageToAgents(ctx, firstChannel, trigger, parseUUID(testUserID))
+	}
+
+	drain := func(daemonID string) (DrainAgentInboxResponse, error) {
+		req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, daemonID)
+		req = withURLParam(req, "runtimeId", runtimeID)
+		rec := httptest.NewRecorder()
+		testHandler.DrainAgentInboxByRuntime(rec, req)
+		if rec.Code != http.StatusOK {
+			return DrainAgentInboxResponse{}, fmt.Errorf("status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		var resp DrainAgentInboxResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			return DrainAgentInboxResponse{}, err
+		}
+		return resp, nil
+	}
+
+	start := make(chan struct{})
+	results := make(chan DrainAgentInboxResponse, 2)
+	errs := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func(i int) {
+			<-start
+			resp, err := drain(fmt.Sprintf("inbox-serial-racer-%d", i))
+			if err != nil {
+				errs <- err
+				return
+			}
+			results <- resp
+		}(i)
+	}
+	close(start)
+
+	var firstDelivery AgentInboxEventResponse
+	leased := 0
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-errs:
+			t.Fatalf("concurrent drain failed: %v", err)
+		case resp := <-results:
+			if len(resp.Events) > 1 {
+				t.Fatalf("drain returned %d events, want at most 1", len(resp.Events))
+			}
+			if len(resp.Events) == 1 {
+				leased++
+				firstDelivery = resp.Events[0]
+			}
+		}
+	}
+	if leased != 1 || firstDelivery.AgentID != firstAgentID {
+		t.Fatalf("same-agent concurrent drains leased %d events, want exactly 1 for %s", leased, firstAgentID)
+	}
+
+	var draining, pending, activeDeliveries int
+	if err := testPool.QueryRow(ctx, `
+		SELECT
+			count(*) FILTER (WHERE e.status = 'draining'),
+			count(*) FILTER (WHERE e.status = 'pending'),
+			count(*) FILTER (
+				WHERE d.status IN ('leased', 'processing') AND d.lease_expires_at > now()
+			)
+		FROM agent_inbox_event e
+		LEFT JOIN agent_event_delivery d ON d.inbox_event_id = e.id
+		WHERE e.agent_id = $1`, firstAgentID).Scan(&draining, &pending, &activeDeliveries); err != nil {
+		t.Fatalf("load first-agent lease states: %v", err)
+	}
+	if draining != 1 || pending != 1 || activeDeliveries != 1 {
+		t.Fatalf("first-agent states draining=%d pending=%d active=%d, want 1/1/1", draining, pending, activeDeliveries)
+	}
+
+	secondAgentName := "Inbox Serial Agent B " + uuid.NewString()[:8]
+	secondAgentID := createHandlerTestAgent(t, secondAgentName, nil)
+	secondChannelID := seedChannelForTest(t, "inbox-serial-b-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, secondChannelID, testWorkspaceID, secondAgentID); err != nil {
+		t.Fatalf("seed second agent member: %v", err)
+	}
+	secondChannel, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(secondChannelID))
+	if !found {
+		t.Fatal("second channel not found after seed")
+	}
+	secondTrigger, err := testHandler.insertChannelMessage(ctx, parseUUID(secondChannelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "[@"+secondAgentName+"](mention://agent/"+secondAgentID+") concurrent other agent", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-serial-b-"+uuid.NewString()), 0)
+	if err != nil {
+		t.Fatalf("insert second-agent trigger: %v", err)
+	}
+	testHandler.dispatchChannelMessageToAgents(ctx, secondChannel, secondTrigger, parseUUID(testUserID))
+
+	secondResp, err := drain("inbox-serial-other-agent")
+	if err != nil {
+		t.Fatalf("drain different agent: %v", err)
+	}
+	if len(secondResp.Events) != 1 || secondResp.Events[0].AgentID != secondAgentID {
+		t.Fatalf("different-agent drain = %+v, want one event for %s while first agent is active", secondResp.Events, secondAgentID)
+	}
+
+	ack := func(event AgentInboxEventResponse) {
+		req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+event.ID+"/ack", AckAgentInboxEventRequest{
+			DeliveryID:  event.DeliveryID,
+			LeaseToken:  event.LeaseToken,
+			SeenUpToSeq: event.SeqTo,
+		}, testWorkspaceID, "inbox-serial-ack")
+		req = withURLParam(req, "eventId", event.ID)
+		rec := httptest.NewRecorder()
+		testHandler.AckAgentInboxEvent(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("ack event %s: status=%d body=%s", event.ID, rec.Code, rec.Body.String())
+		}
+	}
+	ack(secondResp.Events[0])
+	ack(firstDelivery)
+
+	nextResp, err := drain("inbox-serial-next")
+	if err != nil {
+		t.Fatalf("drain queued first-agent event: %v", err)
+	}
+	if len(nextResp.Events) != 1 || nextResp.Events[0].AgentID != firstAgentID || nextResp.Events[0].ID == firstDelivery.ID {
+		t.Fatalf("queued first-agent drain = %+v, want the second event after release", nextResp.Events)
+	}
+}
 
 func TestRetryAgentInboxEventReplaysOriginalPromptAfterNewerCompletion(t *testing.T) {
 	if testHandler == nil || testPool == nil {

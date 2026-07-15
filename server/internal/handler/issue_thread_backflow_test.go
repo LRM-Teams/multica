@@ -59,6 +59,9 @@ func TestIssueThreadBackflowWritesTargetedEventsWithoutWakingOtherAgents(t *test
 	assertIssueThreadBackflowEvent(t, events[0], issueThreadAssignedEvent, assigneeID)
 	assertIssueThreadBackflowEvent(t, events[1], issueThreadStatusChangedEvent, assigneeID)
 	assertIssueThreadBackflowEvent(t, events[2], issueThreadCompletedEvent, creatorID)
+	assertIssueThreadBackflowReference(t, events[0], issueID, "Issue backflow target", "todo")
+	assertIssueThreadBackflowReference(t, events[1], issueID, "Issue backflow target", "in_progress")
+	assertIssueThreadBackflowReference(t, events[2], issueID, "Issue backflow target", "done")
 
 	for _, agentID := range []string{creatorID, assigneeID} {
 		var count int
@@ -113,16 +116,18 @@ func TestIssueThreadBackflowLeavesNonMembersUntargeted(t *testing.T) {
 	if len(events) != 3 {
 		t.Fatalf("system event count = %d, want 3 (%+v)", len(events), events)
 	}
-	for _, event := range events {
+	for i, event := range events {
 		if event.Params.TargetID != "" || event.Params.TargetType != "" || event.Params.TargetHandle != "" || event.Params.TargetName != "" {
 			t.Fatalf("non-member event retained a target: %#v", event.Params)
 		}
-		if len(event.Parts) != 1 || event.Parts[0].Type != protocol.MessagePartTypeSystemEvent {
-			t.Fatalf("non-member event parts = %+v, want only system event", event.Parts)
+		if len(event.Parts) != 2 || event.Parts[0].Type != protocol.MessagePartTypeSystemEvent {
+			t.Fatalf("non-member event parts = %+v, want system event plus issue reference", event.Parts)
 		}
 		if strings.Contains(event.Content, "@") {
 			t.Fatalf("non-member event content = %q, want no directed mention", event.Content)
 		}
+		wantStatus := []string{"todo", "in_progress", "done"}[i]
+		assertIssueThreadBackflowReference(t, event, issueID, "Issue backflow external target", wantStatus)
 	}
 	for _, agentID := range []string{creatorID, assigneeID} {
 		var count int
@@ -197,11 +202,31 @@ func assertIssueThreadBackflowEvent(t *testing.T, got issueThreadBackflowEventFo
 	if got.Params.TargetID != wantAgentID || got.Params.TargetType != "agent" {
 		t.Fatalf("event target = %#v, want agent %s", got.Params, wantAgentID)
 	}
-	if len(got.Parts) != 2 {
-		t.Fatalf("parts = %+v, want system event plus targeted mention", got.Parts)
+	if len(got.Parts) != 3 {
+		t.Fatalf("parts = %+v, want system event, issue reference, and targeted mention", got.Parts)
 	}
-	mention := got.Parts[1]
+	mention := got.Parts[2]
 	if mention.Type != protocol.MessagePartTypeReference || mention.RefType != "mention" || mention.RefSubType != "agent" || mention.RefID != wantAgentID {
 		t.Fatalf("mention part = %+v, want targeted agent %s", mention, wantAgentID)
+	}
+}
+
+func assertIssueThreadBackflowReference(t *testing.T, got issueThreadBackflowEventForTest, wantIssueID, wantTitle, wantStatus string) {
+	t.Helper()
+	if len(got.Parts) < 2 {
+		t.Fatalf("parts = %+v, want anchored issue reference", got.Parts)
+	}
+	ref := got.Parts[1]
+	if ref.Type != protocol.MessagePartTypeReference || ref.RefType != "issue-ref" || ref.RefSubType != "issue" {
+		t.Fatalf("issue reference part = %+v, want typed issue-ref", ref)
+	}
+	if ref.RefID != wantIssueID || ref.Label != got.Params.IssueIdentifier || ref.RefTitle != wantTitle || ref.RefStatus != wantStatus {
+		t.Fatalf("issue reference part = %+v, want id=%s label=%s title=%q status=%q", ref, wantIssueID, got.Params.IssueIdentifier, wantTitle, wantStatus)
+	}
+	if ref.ContentStartUTF16 == nil || ref.ContentEndUTF16 == nil || *ref.ContentStartUTF16 != 0 || *ref.ContentEndUTF16 != len(got.Params.IssueIdentifier) {
+		t.Fatalf("issue reference span = %+v, want exact leading identifier span [0,%d)", ref, len(got.Params.IssueIdentifier))
+	}
+	if !strings.HasPrefix(got.Content, got.Params.IssueIdentifier) {
+		t.Fatalf("backflow content = %q, want issue identifier %q at anchored prefix", got.Content, got.Params.IssueIdentifier)
 	}
 }

@@ -452,6 +452,69 @@ describe("createMentionSuggestion", () => {
     expect(items.some((i) => i.type === "agent" && i.label === "Atlas")).toBe(true);
   });
 
+  it("surfaces a channel co-member's private agent in channel scope", () => {
+    // Bob's private Wendy is a member of the channel but not in Alice's
+    // personal agent list. In a channel, membership — not assignability —
+    // authorizes the mention, so scoped channel-member agents must appear.
+    const qc = fakeQc({
+      members: [
+        { user_id: "u1", name: "Alice", role: "member" },
+        { user_id: "u2", name: "Bob", role: "member" },
+      ],
+      agents: [
+        // Alice's own agent — visible as usual.
+        {
+          id: "a-personal-alice",
+          name: "Athena",
+          archived_at: null,
+          visibility: "private",
+          owner_id: "u1",
+        },
+      ],
+    });
+    searchIssuesMock.mockReturnValue(new Promise(() => {}));
+
+    const config = createMentionSuggestion(qc, {
+      getAllowedActorIds: () => new Set(["u1", "u2", "a-personal-alice", "wendy-bob"]),
+      getScopedAgents: () => [
+        // Bob's private Wendy — injected as a channel-member candidate.
+        { id: "wendy-bob", name: "wendy", display_name: "Wendy" },
+      ],
+    });
+    const result = config.items!({ query: "", editor: {} as never }) as MentionItem[];
+
+    expect(result.some((i) => i.type === "agent" && i.label === "Wendy")).toBe(true);
+    // Alice's own agent is still reachable in channel scope too.
+    expect(result.some((i) => i.type === "agent" && i.label === "Athena")).toBe(true);
+  });
+
+  it("does not surface scoped agents outside channel scope", () => {
+    // Without getAllowedActorIds (e.g. issue comment composer), scoped agents
+    // are ignored and the assignability gate still hides others' private agents.
+    const qc = fakeQc({
+      members: [
+        { user_id: "u1", name: "Alice", role: "member" },
+      ],
+      agents: [
+        {
+          id: "a-personal-alice",
+          name: "Athena",
+          archived_at: null,
+          visibility: "private",
+          owner_id: "u1",
+        },
+      ],
+    });
+    searchIssuesMock.mockReturnValue(new Promise(() => {}));
+
+    const config = createMentionSuggestion(qc, {
+      getScopedAgents: () => [{ id: "wendy-bob", name: "wendy", display_name: "Wendy" }],
+    });
+    const result = config.items!({ query: "wen", editor: {} as never }) as MentionItem[];
+
+    expect(result.some((i) => i.type === "agent" && i.label === "Wendy")).toBe(false);
+  });
+
   it("excludes cached issues from the normal @ response", () => {
     const qc = fakeQc({
       issues: [

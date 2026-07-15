@@ -150,7 +150,7 @@ import {
 import { cn } from "@multica/ui/lib/utils";
 import { SidebarTrigger, useSidebarSafe } from "@multica/ui/components/ui/sidebar";
 import { MobileListDetailLayout } from "../../common/mobile-list-detail-layout";
-import { ContentEditor, type ContentEditorRef } from "../../editor/content-editor";
+import { ContentEditor, type ContentEditorRef, type ContentEditorProps } from "../../editor/content-editor";
 import { useNavigation } from "../../navigation/context";
 import { ProjectPickerButton } from "../../common/project-picker-button";
 import { initialsOf } from "../../common/initials";
@@ -938,6 +938,21 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   // Scope the composer's @ picker to this channel's members only.
   const channelMemberIds = useMemo(
     () => new Set(channelMembers.map((m) => m.member_id)),
+    [channelMembers],
+  );
+  // Channel-member agents to surface in the @ picker even when they aren't in
+  // the member's personal agent list (e.g. a teammate's private Wendy). Channel
+  // membership — not assignability — authorizes the mention.
+  const channelAgentCandidates = useMemo<ContentEditorProps["scopedMentionAgents"]>(
+    () => {
+      const out: Array<{ id: string; name: string; display_name?: string | null }> = [];
+      for (const m of channelMembers) {
+        if (m.member_type === "agent") {
+          out.push({ id: m.member_id, name: m.name, display_name: m.display_name });
+        }
+      }
+      return out;
+    },
     [channelMembers],
   );
   // Agents surface their lifecycle stage via the query-driven working indicator
@@ -2167,6 +2182,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
             submitOnEnter
             showBubbleMenu={false}
             mentionAllowedActorIds={channelMemberIds}
+            scopedMentionAgents={channelAgentCandidates}
           />
         }
         onSend={handleThreadSend}
@@ -2576,6 +2592,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                         showBubbleMenu={false}
                         enableIssueReferences
                         mentionAllowedActorIds={channelMemberIds}
+                        scopedMentionAgents={channelAgentCandidates}
                       />
                     }
                     leadingActions={

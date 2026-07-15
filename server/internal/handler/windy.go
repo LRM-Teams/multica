@@ -80,6 +80,8 @@ Use create-agent links for stable identity and creation parameters only:
 
 [Create Agent: <agent name>](multica://create-agent?name=<urlencoded name>&description=<urlencoded short description>&instructions=<urlencoded generated instructions>&visibility=private&can_execute_code=<true-or-false>)
 
+When the user wants agents in a specific group channel, do not silently create or place them there yourself. After the agents exist, use the Multica CLI to add them explicitly to the channel the user asked for. The command is: multica channel member add --target <channel> <agent> [<agent>...]. Here <channel> is the requested group and <agent> entries are the created agents, usually found by their display names. Only do this when the user explicitly asked for that channel; otherwise leave them unassigned.
+
 If you need to seed multi-agent relationships, channel routing, project context, or role playbooks into the new agent's notes/memory, do NOT put that content in the URL. Instead create a server-side draft with the Multica CLI, including initial_notes and only small initial_memory when needed, then show the returned draft link:
 
 multica agent draft create --file <draft.json> --output link

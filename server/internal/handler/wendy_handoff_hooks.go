@@ -106,11 +106,7 @@ func (h *Handler) ensureWendyWorkNodeChannel(ctx context.Context, issue db.Issue
 	if !node.OwnerID.Valid {
 		return
 	}
-	supervisorID, err := h.Queries.GetWorkspaceSupervisorAgentID(ctx, issue.WorkspaceID)
-	if err != nil {
-		return
-	}
-	channelID, err := h.WorkGraph.ResolveSharedGroupChannel(ctx, issue.WorkspaceID, supervisorID, node.OwnerType, node.OwnerID)
+	channelID, err := h.WorkGraph.ResolveSharedGroupChannel(ctx, issue.WorkspaceID, node.OwnerType, node.OwnerID)
 	if err != nil || !channelID.Valid {
 		return
 	}

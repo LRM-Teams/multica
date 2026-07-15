@@ -23,7 +23,7 @@ const (
 	beckhamAgentName        = "贝克汉姆"
 	managedRoleGroupManager = "group_manager"
 	beckhamDescription      = "群管理：把控本群的任务进度，监控群聊，在需要协调时主动 @ 相关的人或 agent 推进工作。自己不下场做具体执行，只负责协调与推进。"
-	beckhamAvatarURL        = "/agent-avatars/beckham.jpg"
+	beckhamAvatarURL        = "/agent-avatars/beckham.png"
 )
 
 // beckhamInstructions is the group-manager persona (Chinese, operational). Kept

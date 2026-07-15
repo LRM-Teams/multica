@@ -225,6 +225,8 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 		part.RefStatus = ""
 		part.Event = ""
 		part.EventParams = nil
+		part.ContentStartUTF16 = nil
+		part.ContentEndUTF16 = nil
 		part.PackID = ""
 		part.StickerID = ""
 		part.Alt = ""
@@ -242,6 +244,11 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 		part.RefStatus = strings.TrimSpace(part.RefStatus)
 		part.Event = ""
 		part.EventParams = nil
+		// Source ranges are server-authored enrichment facts. Callers can submit
+		// reference metadata, but may not choose an arbitrary position in the
+		// visible content; channel enrichment attaches verified spans later.
+		part.ContentStartUTF16 = nil
+		part.ContentEndUTF16 = nil
 		if part.RefType == "" {
 			return protocol.MessagePart{}, fmt.Errorf("ref_type is required")
 		}
@@ -293,6 +300,8 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 		part.RefStatus = ""
 		part.Event = ""
 		part.EventParams = nil
+		part.ContentStartUTF16 = nil
+		part.ContentEndUTF16 = nil
 		part.AttachmentID = ""
 		part.Filename = ""
 		part.ContentType = ""
@@ -329,6 +338,10 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 		part.RefSubType = ""
 		part.RefID = ""
 		part.Label = ""
+		part.RefTitle = ""
+		part.RefStatus = ""
+		part.ContentStartUTF16 = nil
+		part.ContentEndUTF16 = nil
 		part.PackID = ""
 		part.StickerID = ""
 		part.Alt = ""
@@ -351,6 +364,8 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 		part.RefStatus = ""
 		part.Event = ""
 		part.EventParams = nil
+		part.ContentStartUTF16 = nil
+		part.ContentEndUTF16 = nil
 		part.PackID = ""
 		part.StickerID = ""
 		part.Alt = ""

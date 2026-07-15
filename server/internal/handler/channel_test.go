@@ -2699,12 +2699,18 @@ func TestChannelBareIssueReferencesBecomeStructuredMessageParts(t *testing.T) {
 			references = append(references, part)
 		}
 	}
-	if len(references) != 1 {
-		t.Fatalf("issue references = %+v, want one deduplicated typed ref", references)
+	if len(references) != 2 {
+		t.Fatalf("issue references = %+v, want one anchored typed ref per visible occurrence", references)
 	}
 	ref := references[0]
 	if ref.RefSubType != "issue" || ref.RefID != issueID || ref.Label != identifier || ref.RefTitle != issue.Title || ref.RefStatus != issue.Status {
 		t.Fatalf("issue reference = %+v, want canonical issue entity %s / %q / %q / %q", ref, issueID, identifier, issue.Title, issue.Status)
+	}
+	if ref.ContentStartUTF16 == nil || ref.ContentEndUTF16 == nil || *ref.ContentStartUTF16 >= *ref.ContentEndUTF16 {
+		t.Fatalf("issue reference is missing a content UTF-16 span: %+v", ref)
+	}
+	if references[1].ContentStartUTF16 == nil || *references[1].ContentStartUTF16 <= *ref.ContentStartUTF16 {
+		t.Fatalf("issue references should retain both source occurrences in order: %+v", references)
 	}
 
 	codeOnly := "`" + identifier + "` [" + identifier + "](mention://issue/" + issueID + ")"

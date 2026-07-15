@@ -18,18 +18,28 @@ type channelMentionCandidate struct {
 	Label string
 }
 
+type channelMentionOccurrence struct {
+	Candidate channelMentionCandidate
+	Start     int
+	End       int
+}
+
 func (h *Handler) enrichChannelMessageMentions(ctx context.Context, ch ChannelResponse, content string, parts []protocol.MessagePart) (string, []protocol.MessagePart) {
 	if ch.Kind != "group" {
 		return content, parts
 	}
+	// Normalize legacy actor markdown before resolving source spans. A range is
+	// always anchored to the final canonical content persisted with the message.
 	parts = appendMissingMentionParts(parts, legacyChannelMentionMarkdownReferenceParts(content, parts))
+	content = normalizeChannelMentionMarkdownText(content)
+	parts = normalizeChannelMentionMarkdownParts(parts)
 	candidates := h.channelMentionCandidates(ctx, ch.WorkspaceID, ch.ID)
 	if len(candidates) > 0 {
 		mentions := h.resolveBareChannelMentions(content, parts, candidates)
-		parts = appendMissingMentionParts(parts, mentions)
+		parts = appendReferenceOccurrences(parts, mentions)
 	}
-	parts = appendMissingIssueReferenceParts(parts, h.resolveBareChannelIssueReferences(ctx, ch.WorkspaceID, content, parts))
-	return normalizeChannelMentionMarkdownText(content), normalizeChannelMentionMarkdownParts(parts)
+	parts = appendReferenceOccurrences(parts, h.resolveBareChannelIssueReferences(ctx, ch.WorkspaceID, content, parts))
+	return content, parts
 }
 
 // resolveBareChannelIssueReferences attaches durable issue IDs to bare issue
@@ -42,45 +52,27 @@ func (h *Handler) resolveBareChannelIssueReferences(ctx context.Context, workspa
 		return nil
 	}
 
-	seen := map[string]bool{}
-	for _, part := range parts {
-		if part.Type != protocol.MessagePartTypeReference || part.RefType != "issue-ref" {
+	out := make([]protocol.MessagePart, 0)
+	for _, identifier := range mention.FindBareIssueIdentifiers(workspace.IssuePrefix, content) {
+		issue, err := h.Queries.GetIssueByNumber(ctx, db.GetIssueByNumberParams{
+			WorkspaceID: workspaceUUID,
+			Number:      identifier.Number,
+		})
+		if err != nil {
 			continue
 		}
-		seen[part.RefID] = true
-		if part.Label != "" {
-			seen[part.Label] = true
-		}
-	}
-	out := make([]protocol.MessagePart, 0)
-	for _, text := range mentionSourceTexts(content, parts) {
-		for _, identifier := range mention.FindBareIssueIdentifiers(workspace.IssuePrefix, text) {
-			if seen[identifier.Label] {
-				continue
-			}
-			issue, err := h.Queries.GetIssueByNumber(ctx, db.GetIssueByNumberParams{
-				WorkspaceID: workspaceUUID,
-				Number:      identifier.Number,
-			})
-			if err != nil {
-				continue
-			}
-			issueID := uuidToString(issue.ID)
-			if seen[issueID] {
-				continue
-			}
-			seen[identifier.Label] = true
-			seen[issueID] = true
-			out = append(out, protocol.MessagePart{
-				Type:       protocol.MessagePartTypeReference,
-				RefType:    "issue-ref",
-				RefSubType: "issue",
-				RefID:      issueID,
-				Label:      identifier.Label,
-				RefTitle:   issue.Title,
-				RefStatus:  issue.Status,
-			})
-		}
+		start, end := contentUTF16Span(content, identifier.Start, identifier.End)
+		out = append(out, protocol.MessagePart{
+			Type:              protocol.MessagePartTypeReference,
+			RefType:           "issue-ref",
+			RefSubType:        "issue",
+			RefID:             uuidToString(issue.ID),
+			Label:             identifier.Label,
+			RefTitle:          issue.Title,
+			RefStatus:         issue.Status,
+			ContentStartUTF16: &start,
+			ContentEndUTF16:   &end,
+		})
 	}
 	return out
 }
@@ -139,27 +131,18 @@ func (h *Handler) channelMentionCandidates(ctx context.Context, workspaceID, cha
 }
 
 func (h *Handler) resolveBareChannelMentions(content string, parts []protocol.MessagePart, candidates map[string]channelMentionCandidate) []protocol.MessagePart {
-	seen := map[string]bool{}
 	out := make([]protocol.MessagePart, 0)
-	for _, mention := range util.ParseMentionsFromContentAndParts(content, parts) {
-		key := mention.Type + ":" + mention.ID
-		seen[key] = true
-	}
-	for _, text := range mentionSourceTexts(content, parts) {
-		for _, candidate := range findBareMentionCandidates(text, candidates) {
-			key := candidate.Type + ":" + candidate.ID
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
-			out = append(out, protocol.MessagePart{
-				Type:       protocol.MessagePartTypeReference,
-				RefType:    "mention",
-				RefSubType: candidate.Type,
-				RefID:      candidate.ID,
-				Label:      candidate.Label,
-			})
-		}
+	for _, occurrence := range findBareMentionCandidates(content, candidates) {
+		start, end := contentUTF16Span(content, occurrence.Start, occurrence.End)
+		out = append(out, protocol.MessagePart{
+			Type:              protocol.MessagePartTypeReference,
+			RefType:           "mention",
+			RefSubType:        occurrence.Candidate.Type,
+			RefID:             occurrence.Candidate.ID,
+			Label:             content[occurrence.Start:occurrence.End],
+			ContentStartUTF16: &start,
+			ContentEndUTF16:   &end,
+		})
 	}
 	return out
 }
@@ -177,7 +160,7 @@ func mentionSourceTexts(content string, parts []protocol.MessagePart) []string {
 	return texts
 }
 
-func findBareMentionCandidates(content string, candidates map[string]channelMentionCandidate) []channelMentionCandidate {
+func findBareMentionCandidates(content string, candidates map[string]channelMentionCandidate) []channelMentionOccurrence {
 	if !strings.Contains(content, "@") {
 		return nil
 	}
@@ -190,8 +173,7 @@ func findBareMentionCandidates(content string, candidates map[string]channelMent
 	})
 
 	lowerContent := strings.ToLower(content)
-	seen := map[string]bool{}
-	out := make([]channelMentionCandidate, 0)
+	out := make([]channelMentionOccurrence, 0)
 	for start := 0; start < len(lowerContent); {
 		at := strings.IndexByte(lowerContent[start:], '@')
 		if at < 0 {
@@ -212,18 +194,32 @@ func findBareMentionCandidates(content string, candidates map[string]channelMent
 			if !mentionHandleBoundaryAfter(lowerContent, end) {
 				continue
 			}
-			candidate := candidates[label]
-			key := candidate.Type + ":" + candidate.ID
-			if !seen[key] {
-				seen[key] = true
-				out = append(out, candidate)
-			}
+			out = append(out, channelMentionOccurrence{Candidate: candidates[label], Start: at, End: end})
 			matchEnd = end
 			break
 		}
 		start = matchEnd
 	}
 	return out
+}
+
+func contentUTF16Span(content string, start, end int) (int, int) {
+	return contentUTF16Offset(content, start), contentUTF16Offset(content, end)
+}
+
+func contentUTF16Offset(content string, byteOffset int) int {
+	units := 0
+	for offset, r := range content {
+		if offset >= byteOffset {
+			break
+		}
+		if r > 0xFFFF {
+			units += 2
+		} else {
+			units++
+		}
+	}
+	return units
 }
 
 func normalizeMentionCandidateLabel(label string) string {
@@ -266,6 +262,33 @@ func appendMissingIssueReferenceParts(parts []protocol.MessagePart, references [
 		}
 		seen[key] = true
 		out = append(out, reference)
+	}
+	return out
+}
+
+// appendReferenceOccurrences keeps one reference for every verified source
+// occurrence. Notification/routing consumers remain responsible for deduping by
+// actor or entity ID; display needs the per-occurrence anchor.
+func appendReferenceOccurrences(parts []protocol.MessagePart, references []protocol.MessagePart) []protocol.MessagePart {
+	out := append([]protocol.MessagePart{}, parts...)
+	for _, reference := range references {
+		if reference.ContentStartUTF16 == nil || reference.ContentEndUTF16 == nil {
+			continue
+		}
+		duplicate := false
+		for _, existing := range out {
+			if existing.Type != protocol.MessagePartTypeReference || existing.RefType != reference.RefType || existing.RefSubType != reference.RefSubType || existing.RefID != reference.RefID {
+				continue
+			}
+			if existing.ContentStartUTF16 != nil && existing.ContentEndUTF16 != nil &&
+				*existing.ContentStartUTF16 == *reference.ContentStartUTF16 && *existing.ContentEndUTF16 == *reference.ContentEndUTF16 {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			out = append(out, reference)
+		}
 	}
 	return out
 }

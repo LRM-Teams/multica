@@ -52,6 +52,10 @@ type IssueResponse struct {
 	Metadata    map[string]any          `json:"metadata"`
 	Reactions   []IssueReactionResponse `json:"reactions,omitempty"`
 	Attachments []AttachmentResponse    `json:"attachments,omitempty"`
+	// SourceRefs holds user-visible navigation back to the discussion that
+	// produced this issue. It is deliberately detail-only: board/list payloads
+	// stay small and must not leak a private source channel.
+	SourceRefs *IssueSourceRefsResponse `json:"source_refs,omitempty"`
 	// Labels are bulk-attached by list/detail endpoints so the client can render
 	// chips without an N+1 round-trip per row. Pointer + omitempty so paths that
 	// don't load labels (e.g. UpdateIssue, batch UpdateIssues, the issue:updated
@@ -59,6 +63,19 @@ type IssueResponse struct {
 	// preserves whatever labels are already in cache. nil pointer = "field
 	// absent, do not touch"; non-nil (incl. empty slice) = authoritative list.
 	Labels *[]LabelResponse `json:"labels,omitempty"`
+}
+
+type IssueSourceRefsResponse struct {
+	Message *IssueSourceMessageRefResponse `json:"message,omitempty"`
+}
+
+type IssueSourceMessageRefResponse struct {
+	ChannelID           string  `json:"channel_id"`
+	ChannelName         *string `json:"channel_name,omitempty"`
+	ChannelKind         string  `json:"channel_kind"`
+	MessageID           string  `json:"message_id"`
+	ThreadRootMessageID string  `json:"thread_root_message_id"`
+	Excerpt             string  `json:"excerpt"`
 }
 
 func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
@@ -1501,6 +1518,11 @@ func (h *Handler) GetIssue(w http.ResponseWriter, r *http.Request) {
 		detailLabels = []LabelResponse{}
 	}
 	resp.Labels = &detailLabels
+	if requesterID, ok := requireUserID(w, r); ok {
+		if source := h.issueSourceRefsForUser(r.Context(), issue, parseUUID(requesterID)); source != nil {
+			resp.SourceRefs = &IssueSourceRefsResponse{Message: source}
+		}
+	}
 
 	// Fetch issue reactions.
 	reactions, err := h.Queries.ListIssueReactions(r.Context(), issue.ID)
@@ -1982,6 +2004,11 @@ type CreateIssueRequest struct {
 	// origin_id=agent_task_queue.id).
 	OriginType *string `json:"origin_type,omitempty"`
 	OriginID   *string `json:"origin_id,omitempty"`
+	// Source records the visible message that triggered a chat-originated
+	// issue. The handler resolves thread replies to their root, validates the
+	// caller can see it, and persists the canonical anchor separately from
+	// origin_type/origin_id (which are internal producer provenance).
+	Source *IssueSourceMessageRequest `json:"source,omitempty"`
 
 	AllowDuplicate bool `json:"allow_duplicate,omitempty"`
 }
@@ -2090,6 +2117,11 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	// Determine creator identity: agent (via X-Agent-ID header) or member.
 	creatorType, actualCreatorID := h.resolveActor(r, creatorID, workspaceID)
 
+	sourceAnchor, ok := h.resolveIssueSourceMessageAnchor(w, r, workspaceID, creatorID, req.Source)
+	if !ok {
+		return
+	}
+
 	// Optional origin stamping (quick-create / autopilot). Only the
 	// allowed origin types are accepted; anything else is rejected so a
 	// rogue caller can't mint arbitrary origin labels. Both fields must
@@ -2143,23 +2175,25 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	res, err := h.IssueService.Create(r.Context(), service.IssueCreateParams{
-		WorkspaceID:    wsUUID,
-		Title:          req.Title,
-		Description:    ptrToText(req.Description),
-		Status:         status,
-		Priority:       priority,
-		AssigneeType:   assigneeType,
-		AssigneeID:     assigneeID,
-		CreatorType:    creatorType,
-		CreatorID:      parseUUID(actualCreatorID),
-		ParentIssueID:  parentIssueID,
-		ProjectID:      projectID,
-		StartDate:      startDate,
-		DueDate:        dueDate,
-		OriginType:     originType,
-		OriginID:       originID,
-		AttachmentIDs:  attachmentIDs,
-		AllowDuplicate: req.AllowDuplicate,
+		WorkspaceID:     wsUUID,
+		Title:           req.Title,
+		Description:     ptrToText(req.Description),
+		Status:          status,
+		Priority:        priority,
+		AssigneeType:    assigneeType,
+		AssigneeID:      assigneeID,
+		CreatorType:     creatorType,
+		CreatorID:       parseUUID(actualCreatorID),
+		ParentIssueID:   parentIssueID,
+		ProjectID:       projectID,
+		StartDate:       startDate,
+		DueDate:         dueDate,
+		OriginType:      originType,
+		OriginID:        originID,
+		SourceChannelID: sourceAnchor.ChannelID,
+		SourceMessageID: sourceAnchor.MessageID,
+		AttachmentIDs:   attachmentIDs,
+		AllowDuplicate:  req.AllowDuplicate,
 	}, service.IssueCreateOpts{
 		ActorID:          actualCreatorID,
 		AnalyticsAgentID: analyticsAgentID,

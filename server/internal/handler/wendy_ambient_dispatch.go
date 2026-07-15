@@ -152,6 +152,7 @@ func (h *Handler) buildWendyAmbientChannelMarkdown(ctx context.Context, watch wo
 	if err != nil {
 		return "", fmt.Errorf("list ambient channel agents: %w", err)
 	}
+	ladder := h.channelNudgeLadder(ctx, watch.ChannelID)
 	for agentRows.Next() {
 		var id pgtype.UUID
 		var name string
@@ -159,11 +160,48 @@ func (h *Handler) buildWendyAmbientChannelMarkdown(ctx context.Context, watch wo
 			agentRows.Close()
 			return "", err
 		}
-		fmt.Fprintf(&b, "- agent_id=%s name=%q\n", uuidToString(id), name)
+		if n := ladder[uuidToString(id)]; n > 0 {
+			fmt.Fprintf(&b, "- agent_id=%s name=%q nudged_without_progress=%d\n", uuidToString(id), name, n)
+		} else {
+			fmt.Fprintf(&b, "- agent_id=%s name=%q\n", uuidToString(id), name)
+		}
 	}
 	agentRows.Close()
 	if err := agentRows.Err(); err != nil {
 		return "", err
+	}
+
+	// Human members — so escalation to a person (@a human owner) can target a real
+	// member when an agent has been nudged repeatedly without progress.
+	b.WriteString("\n## Human Members\n\n")
+	humanRows, err := h.DB.Query(ctx, `
+		SELECT u.id, COALESCE(NULLIF(u.display_name, ''), u.name, u.email, '')
+		FROM channel_member cm
+		JOIN "user" u ON u.id = cm.member_id
+		WHERE cm.workspace_id = $1 AND cm.channel_id = $2 AND cm.member_type = 'user'
+		ORDER BY u.created_at ASC
+		LIMIT 50
+	`, watch.WorkspaceID, watch.ChannelID)
+	if err != nil {
+		return "", fmt.Errorf("list ambient channel humans: %w", err)
+	}
+	humanCount := 0
+	for humanRows.Next() {
+		var id pgtype.UUID
+		var name string
+		if err := humanRows.Scan(&id, &name); err != nil {
+			humanRows.Close()
+			return "", err
+		}
+		fmt.Fprintf(&b, "- member_id=%s name=%q\n", uuidToString(id), name)
+		humanCount++
+	}
+	humanRows.Close()
+	if err := humanRows.Err(); err != nil {
+		return "", err
+	}
+	if humanCount == 0 {
+		b.WriteString("- (none)\n")
 	}
 
 	b.WriteString("\n## Open Workspace Issues\n\n")

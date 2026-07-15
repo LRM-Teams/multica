@@ -127,6 +127,10 @@ func (h *Handler) syncWendyWorkGraphAfterTaskSuccess(ctx context.Context, task d
 	if err := h.WorkGraph.TouchIssueProgress(ctx, issue.WorkspaceID, issue.ID); err != nil {
 		slog.Warn("touch Wendy issue progress failed", "task_id", task.ID.String(), "issue_id", issue.ID.String(), "error", err)
 	}
+	// Real progress clears this agent's escalation level (it did the work).
+	if task.AgentID.Valid {
+		h.resetNudgeLadderForAgent(ctx, issue.WorkspaceID, task.AgentID)
+	}
 	h.syncWendyWorkGraphAfterIssueUpdate(ctx, issue)
 }
 

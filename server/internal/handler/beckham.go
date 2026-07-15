@@ -94,6 +94,25 @@ func (h *Handler) refreshGroupManagerIfStale(ctx context.Context, agent db.Agent
 	return updated
 }
 
+// groupManagerAgentIDs returns the set of group-manager (Beckham) agent IDs in a
+// workspace, used to hide them from the general agent directory / invite picker.
+func (h *Handler) groupManagerAgentIDs(ctx context.Context, workspaceID pgtype.UUID) (map[string]bool, error) {
+	rows, err := h.DB.Query(ctx, `SELECT id FROM agent WHERE workspace_id = $1 AND managed_role = $2`, workspaceID, managedRoleGroupManager)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := map[string]bool{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids[uuidToString(id)] = true
+	}
+	return ids, rows.Err()
+}
+
 // resolveGroupManagerForChannel returns the channel's bound Beckham (one per
 // group), independent of display name. Empty when the group has none.
 func (h *Handler) resolveGroupManagerForChannel(ctx context.Context, workspaceID, channelID pgtype.UUID) (pgtype.UUID, bool) {

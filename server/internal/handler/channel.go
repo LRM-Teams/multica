@@ -3333,6 +3333,14 @@ func (h *Handler) validateChannelMemberTarget(w http.ResponseWriter, r *http.Req
 			writeError(w, http.StatusForbidden, "you do not have access to this agent")
 			return false
 		}
+		// Group managers (贝克汉姆) are one-per-group and auto-managed; they must
+		// not be manually invited into a channel (that is how foreign groups'
+		// managers used to leak in as duplicates).
+		var managedRole pgtype.Text
+		if err := h.DB.QueryRow(r.Context(), `SELECT managed_role FROM agent WHERE id = $1`, memberID).Scan(&managedRole); err == nil && managedRole.Valid && managedRole.String == managedRoleGroupManager {
+			writeError(w, http.StatusBadRequest, "群管理（贝克汉姆）由系统按群自动管理，不能手动加入频道")
+			return false
+		}
 		return true
 	default:
 		writeError(w, http.StatusBadRequest, "member_type must be user or agent")

@@ -2,6 +2,8 @@ package handler
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -192,5 +194,55 @@ func TestEnsureGroupManagerRefreshesStalePersona(t *testing.T) {
 	}
 	if avatar != beckhamAvatarURL {
 		t.Fatalf("avatar = %q, want %q", avatar, beckhamAvatarURL)
+	}
+}
+
+// A group manager (Beckham) must not be manually invitable into another channel
+// — that is how other groups' Beckhams used to appear as duplicates.
+func TestAddChannelMemberRejectsGroupManager(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	var rtID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (workspace_id, owner_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
+		VALUES ($1, $2, $3, 'cloud', 'beckham_test', 'online', '', '{}'::jsonb, now())
+		RETURNING id
+	`, testWorkspaceID, testUserID, "beckham-rt4-"+uuid.NewString()).Scan(&rtID); err != nil {
+		t.Fatalf("seed runtime: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, rtID) })
+
+	chA := seedChannelForTest(t, "beckham-src-"+uuid.NewString(), testUserID)
+	beckham, _, err := testHandler.EnsureGroupManagerForChannel(ctx, parseUUID(testWorkspaceID), parseUUID(chA), parseUUID(testUserID))
+	if err != nil {
+		t.Fatalf("provision beckham: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, beckham.ID) })
+
+	// It must be hidden from the agent directory / invite picker.
+	ids, err := testHandler.groupManagerAgentIDs(ctx, parseUUID(testWorkspaceID))
+	if err != nil || !ids[uuidToString(beckham.ID)] {
+		t.Fatalf("group manager not in managed set: err=%v", err)
+	}
+
+	// And it must not be addable to a different channel.
+	chB := seedChannelForTest(t, "beckham-dst-"+uuid.NewString(), testUserID)
+	req := newRequestAs(testUserID, http.MethodPost, "/api/channels/"+chB+"/members", AddChannelMemberRequest{MemberType: "agent", MemberID: beckham.ID.String()})
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", chB)
+	rec := httptest.NewRecorder()
+	testHandler.AddChannelMember(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("add group manager to channel B: status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	}
+
+	var n int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM channel_member WHERE channel_id = $1 AND member_id = $2`, parseUUID(chB), beckham.ID).Scan(&n); err != nil {
+		t.Fatalf("count membership: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("group manager was added to channel B (%d rows), want 0", n)
 	}
 }

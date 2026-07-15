@@ -3,7 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"net/http"
 	"time"
 
@@ -140,9 +140,41 @@ func (h *Handler) StartMemoryCurationRun(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
-	root := memorycuration.DefaultWorkspacesRoot()
-	if root == "" {
-		writeError(w, http.StatusInternalServerError, "workspaces root is not configured")
+	member, ok := h.workspaceMember(w, r, workspaceID)
+	if !ok {
+		return
+	}
+	profile, err := h.loadMemoryCuratorProfile(r, workspaceID, uuidToString(member.UserID))
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			writeError(w, http.StatusConflict, "configure a memory curator profile before running curation")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load memory curator profile")
+		return
+	}
+	runStatus, err := h.memoryCuratorRunStatus(r.Context(), profile)
+	if err != nil {
+		if errors.Is(err, errInvalidMemoryCuratorProfile) {
+			writeError(w, http.StatusConflict, "memory curator profile is no longer valid; choose a runtime and curator agent again")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to validate memory curator profile")
+		return
+	}
+	profileAgentIDs, err := h.resolveMemoryCuratorTargetAgentIDs(r.Context(), profile)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to resolve curator targets")
+		return
+	}
+	if req.AllAgents {
+		agentIDs = profileAgentIDs
+	} else if !agentIDsSubset(agentIDs, profileAgentIDs) {
+		writeError(w, http.StatusForbidden, "selected agents are outside the curator profile target scope")
+		return
+	}
+	if len(agentIDs) == 0 {
+		writeError(w, http.StatusConflict, "curator profile has no target agents")
 		return
 	}
 	dbStage := memorycuration.DBStageName(stage)
@@ -151,64 +183,26 @@ func (h *Handler) StartMemoryCurationRun(w http.ResponseWriter, r *http.Request)
 		trigger = "backfill"
 	}
 	var agentForRun any
-	if len(agentIDs) == 1 && !req.AllAgents {
+	if len(agentIDs) == 1 {
 		agentForRun = parseUUID(agentIDs[0])
-	}
-	var requestedBy any
-	if m, ok := ctxMember(r.Context()); ok {
-		requestedBy = uuidToString(m.ID)
 	}
 	var runID string
 	if err := h.DB.QueryRow(r.Context(), `
-		INSERT INTO memory_curation_run (workspace_id, agent_id, stage, trigger_kind, status, date_from, date_to, dry_run, force, requested_by, started_at)
-		VALUES ($1, $2, $3, $4, 'running', $5, $6, $7, $8, $9, now())
-		RETURNING id
-	`, workspaceID, agentForRun, dbStage, trigger, since, until, req.DryRun, req.Force, requestedBy).Scan(&runID); err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("create curation run: %v", err))
+		INSERT INTO memory_curation_run (
+		  workspace_id, agent_id, stage, trigger_kind, status, date_from, date_to,
+		  dry_run, force, requested_by, profile_id, owner_user_id, runtime_id,
+		  curator_agent_id, curator_model, curator_mode, confidence_threshold,
+		  config_version, target_agent_ids, execution_owner
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19::uuid[],'daemon')
+		RETURNING id::text
+	`, workspaceID, agentForRun, dbStage, trigger, runStatus, since, until, req.DryRun, req.Force,
+		uuidToString(member.ID), profile.ID, profile.UserID, profile.RuntimeID,
+		profile.CuratorAgentID, profile.ModelOverride, profile.Mode, profile.ConfidenceThreshold,
+		profile.ConfigVersion, agentIDs).Scan(&runID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create curation run")
 		return
 	}
-	res, runErr := memorycuration.NewEngine(memorycuration.NewL3ReviewerFromEnv()).Run(memorycuration.Options{
-		Context:        r.Context(),
-		DB:             h.DB,
-		WorkspacesRoot: root,
-		WorkspaceID:    workspaceID,
-		AgentIDs:       agentIDs,
-		AllAgents:      req.AllAgents,
-		Stage:          stage,
-		Since:          since,
-		Until:          until,
-		IncludeHistory: req.IncludeHistory,
-		DryRun:         req.DryRun,
-		Force:          req.Force,
-		Now:            now,
-		Timezone:       memorycuration.DefaultTimezone,
-	})
-	statsJSON, _ := json.Marshal(res)
-	status := "succeeded"
-	errText := ""
-	if runErr != nil || len(res.Errors) > 0 {
-		status = "failed"
-		if runErr != nil {
-			errText = runErr.Error()
-		} else {
-			errText = "one or more agents failed"
-		}
-	}
-	finishCtx, cancelFinish := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Second)
-	defer cancelFinish()
-	if _, err := h.DB.Exec(finishCtx, `
-		UPDATE memory_curation_run
-		   SET status = $2, stats = $3::jsonb, error = $4, finished_at = now()
-		 WHERE id = $1
-	`, runID, status, string(statsJSON), errText); err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("finish curation run: %v", err))
-		return
-	}
-	if runErr != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"id": runID, "result": res, "error": runErr.Error()})
-		return
-	}
-	writeJSON(w, http.StatusCreated, map[string]any{"id": runID, "result": res})
+	writeJSON(w, http.StatusAccepted, map[string]any{"id": runID, "status": runStatus})
 }
 
 func (h *Handler) GetMemoryCurationRun(w http.ResponseWriter, r *http.Request) {
@@ -241,7 +235,7 @@ func (h *Handler) GetWorkspaceMemoryCurationStatus(w http.ResponseWriter, r *htt
 		Stages:      []memoryCurationStageStatusResponse{},
 	}
 	if err := h.DB.QueryRow(r.Context(), `
-		SELECT count(*) FILTER (WHERE status IN ('queued', 'running')),
+		SELECT count(*) FILTER (WHERE status IN ('queued', 'waiting_runtime', 'running')),
 		       count(*) FILTER (WHERE status = 'failed' AND created_at >= now() - interval '24 hours')
 		  FROM memory_curation_run
 		 WHERE workspace_id = $1

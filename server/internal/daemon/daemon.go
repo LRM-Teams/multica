@@ -174,6 +174,7 @@ type Daemon struct {
 	sharedSkillScanCache map[string]string // scanRoot\x00skillKey -> fingerprint
 	memoryCurationMu     sync.Mutex
 	memoryCurationRuns   map[string]string // workspace\x00stage -> Beijing plan date
+	activeCurationRuns   map[string]string // runtime id -> claimed run id
 }
 
 // New creates a new Daemon instance.
@@ -201,6 +202,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		cancelPollInterval:        5 * time.Second,
 		sharedSkillScanCache:      make(map[string]string),
 		memoryCurationRuns:        make(map[string]string),
+		activeCurationRuns:        make(map[string]string),
 	}
 	d.runner = taskRunnerFunc(d.runTask)
 	d.runUpdateFn = d.runUpdate
@@ -680,7 +682,6 @@ func (d *Daemon) Run(ctx context.Context) error {
 	go d.autoUpdateLoop(ctx)
 	go d.tokenRenewalLoop(ctx)
 	go d.sharedSkillsSyncLoop(ctx)
-	go d.localMemoryCurationLoop(ctx)
 
 	// Preflight succeeded and the background loops are up: the daemon has
 	// registered its runtimes and can now claim and run tasks. Flip /health
@@ -764,6 +765,7 @@ func daemonRegistrationCapabilities(includeCredentialTransport bool) []string {
 	capabilities := []string{
 		protocol.DaemonCapabilityChannelOutputActions,
 		protocol.DaemonCapabilityAgentCLITransport,
+		protocol.DaemonCapabilityMemoryCuration,
 	}
 	if includeCredentialTransport {
 		capabilities = append(capabilities, protocol.DaemonCapabilityAgentCredentialTransport)
@@ -1460,7 +1462,7 @@ func (d *Daemon) runHeartbeatTick(ctx context.Context, rid string) {
 		return
 	}
 	d.logger.Debug("heartbeat: HTTP tick", "runtime_id", rid)
-	resp, err := d.client.SendHeartbeat(ctx, rid)
+	resp, err := d.client.SendHeartbeat(ctx, rid, d.activeMemoryCurationRun(rid))
 	if err != nil {
 		if ctx.Err() == nil {
 			if isRuntimeNotFoundError(err) {
@@ -1494,13 +1496,14 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 	if resp == nil {
 		return
 	}
-	if resp.PendingUpdate != nil || resp.PendingModelList != nil || resp.PendingLocalSkills != nil || resp.PendingLocalSkillImport != nil {
+	if resp.PendingUpdate != nil || resp.PendingModelList != nil || resp.PendingLocalSkills != nil || resp.PendingLocalSkillImport != nil || resp.PendingMemoryCuration != nil {
 		d.logger.Debug("heartbeat: pending actions",
 			"runtime_id", runtimeID,
 			"update", resp.PendingUpdate != nil,
 			"model_list", resp.PendingModelList != nil,
 			"local_skills", resp.PendingLocalSkills != nil,
 			"local_skill_import", resp.PendingLocalSkillImport != nil,
+			"memory_curation", resp.PendingMemoryCuration != nil,
 		)
 	}
 	if resp.PendingUpdate != nil {
@@ -1526,6 +1529,11 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 	} else if resp.PendingLocalSkillImport != nil {
 		if rt := d.findRuntime(runtimeID); rt != nil {
 			go d.handleLocalSkillImport(ctx, *rt, *resp.PendingLocalSkillImport)
+		}
+	}
+	if resp.PendingMemoryCuration != nil {
+		if rt := d.findRuntime(runtimeID); rt != nil && d.beginMemoryCurationRun(runtimeID, resp.PendingMemoryCuration.ID) {
+			go d.handleMemoryCuration(ctx, *rt, *resp.PendingMemoryCuration)
 		}
 	}
 }

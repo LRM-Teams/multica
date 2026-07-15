@@ -74,7 +74,7 @@ func TestAgentL3ReviewerUsesPiWithoutTools(t *testing.T) {
 func TestParseL3ReviewDecisionsValidatesRoutesAndPayloads(t *testing.T) {
 	requested := []L3ReviewEntry{{ID: "memory"}, {ID: "skill"}, {ID: "split"}, {ID: "discard"}, {ID: "unknown"}}
 	content := `{"reviews":[
-		{"entry_id":"memory","route":"memory","confidence":0.9,"rationale":"fact","memory":{"body":"Stable fact."}},
+		{"entry_id":"memory","route":"memory","confidence":0.9,"sensitivity":"none","rationale":"fact","memory":{"body":"Stable fact."}},
 		{"entry_id":"skill","route":"skill","confidence":0.9,"rationale":"workflow","skill":{"name":"Review PRs","description":"Review pull requests safely.","instructions":"## Steps\n1. Inspect the diff."}},
 		{"entry_id":"split","route":"split","confidence":0.9,"rationale":"both","memory":{"body":"Use the repo checklist."},"skill":{"name":"Repo Checklist","description":"Apply a repository checklist.","instructions":"## Steps\n1. Read the checklist."}},
 		{"entry_id":"discard","route":"discard","confidence":0.95,"rationale":"duplicate"},
@@ -86,6 +86,9 @@ func TestParseL3ReviewDecisionsValidatesRoutesAndPayloads(t *testing.T) {
 	}
 	if len(decisions) != 5 {
 		t.Fatalf("len(decisions) = %d", len(decisions))
+	}
+	if decisions[0].Sensitivity != "none" {
+		t.Fatalf("memory sensitivity = %q", decisions[0].Sensitivity)
 	}
 	if decisions[1].Skill.Name != "review-prs" {
 		t.Fatalf("skill name = %q", decisions[1].Skill.Name)
@@ -167,8 +170,8 @@ func TestL3DryRunProducesTraceWithoutWrites(t *testing.T) {
 	}
 }
 
-func TestL3OnlyReviewsExplicitlyNonSensitiveCandidates(t *testing.T) {
-	for _, sensitivity := range []string{"", "secret", "private", "restricted", "unknown", "NONE-typo"} {
+func TestL3NeverSendsExplicitlySensitiveCandidatesToReviewer(t *testing.T) {
+	for _, sensitivity := range []string{"secret", "private", "restricted", "sensitive"} {
 		t.Run(defaultString(sensitivity, "empty"), func(t *testing.T) {
 			root, agentRoot := prepareL3ReviewRoot(t, []reviewEntry{{ID: "mem_sensitive", Type: "stable_fact", Status: "candidate", Confidence: "high", Sensitivity: sensitivity, Scope: "agent", Title: "Keep local", Body: "Potentially sensitive fact."}})
 			res, err := NewEngine(fixedL3Reviewer{err: errors.New("must not be called")}).Run(l3Options(root))
@@ -179,6 +182,37 @@ func TestL3OnlyReviewsExplicitlyNonSensitiveCandidates(t *testing.T) {
 				t.Fatalf("result = %#v", res)
 			}
 			assertContains(t, filepath.Join(agentRoot, "memory", "REVIEW.md"), "Keep local")
+		})
+	}
+}
+
+func TestL3ReviewerMustClearUnknownSensitivityBeforePromotion(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		sensitivity    string
+		wantPromoted   int
+		wantReasonCode string
+	}{
+		{name: "cleared", sensitivity: "none", wantPromoted: 1},
+		{name: "sensitive", sensitivity: "sensitive", wantReasonCode: "sensitive_candidate"},
+		{name: "unknown", sensitivity: "unknown", wantReasonCode: "sensitivity_unknown"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, agentRoot := prepareL3ReviewRoot(t, []reviewEntry{{ID: "mem_unknown", Type: "stable_fact", Status: "candidate", Confidence: "high", Sensitivity: "unknown", Scope: "agent", ProposedDestination: "MEMORY.md", Title: "Classify me", Body: "A candidate that needs sensitivity classification."}})
+			reviewer := fixedL3Reviewer{output: L3ReviewOutput{Provider: "test", Decisions: []L3ReviewDecision{{EntryID: "mem_unknown", Route: L3RouteMemory, Confidence: 0.95, Sensitivity: tc.sensitivity, Rationale: "classified", Memory: L3MemoryDraft{Body: "A candidate that needs sensitivity classification."}}}}}
+			res, err := NewEngine(reviewer).Run(l3Options(root))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.EntriesPromoted != tc.wantPromoted {
+				t.Fatalf("result = %#v", res)
+			}
+			if tc.wantReasonCode != "" {
+				if len(res.ReviewTraces) != 1 || res.ReviewTraces[0].ReasonCode != tc.wantReasonCode {
+					t.Fatalf("traces = %#v", res.ReviewTraces)
+				}
+				assertContains(t, filepath.Join(agentRoot, "memory", "REVIEW.md"), "Classify me")
+			}
 		})
 	}
 }
@@ -298,6 +332,31 @@ func TestRecordSkillCandidateIsIdempotent(t *testing.T) {
 	}
 	if strings.Count(strings.TrimSpace(string(b)), "\n") != 0 {
 		t.Fatalf("manifest has duplicate rows: %s", b)
+	}
+}
+
+func TestCuratorModeAllowsOnlyGovernedAutomaticDecisions(t *testing.T) {
+	memory := L3ReviewDecision{Route: L3RouteMemory, Confidence: 0.95}
+	skill := L3ReviewDecision{Route: L3RouteSkill, Confidence: 0.95}
+	discard := L3ReviewDecision{Route: L3RouteDiscard, Confidence: 0.95}
+	cases := []struct {
+		mode     string
+		decision L3ReviewDecision
+		want     bool
+	}{
+		{"observe", memory, false},
+		{"review", memory, false},
+		{"auto_safe", memory, true},
+		{"auto_safe", skill, false},
+		{"auto_safe", discard, false},
+		{"auto", skill, true},
+		{"auto", discard, true},
+		{"unknown", memory, false},
+	}
+	for _, tc := range cases {
+		if got := curatorModeAllowsDecision(tc.mode, tc.decision); got != tc.want {
+			t.Fatalf("curatorModeAllowsDecision(%q, %q) = %v, want %v", tc.mode, tc.decision.Route, got, tc.want)
+		}
 	}
 }
 

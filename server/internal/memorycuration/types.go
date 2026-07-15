@@ -16,20 +16,22 @@ const (
 )
 
 type Options struct {
-	Context        context.Context
-	DB             EvidenceDB
-	WorkspacesRoot string
-	WorkspaceID    string
-	AgentIDs       []string
-	AllAgents      bool
-	Stage          Stage
-	Since          time.Time
-	Until          time.Time
-	IncludeHistory bool
-	DryRun         bool
-	Force          bool
-	Now            time.Time
-	Timezone       string
+	Context             context.Context
+	DB                  EvidenceDB
+	WorkspacesRoot      string
+	WorkspaceID         string
+	AgentIDs            []string
+	AllAgents           bool
+	Stage               Stage
+	Since               time.Time
+	Until               time.Time
+	IncludeHistory      bool
+	DryRun              bool
+	Force               bool
+	Now                 time.Time
+	Timezone            string
+	Mode                string
+	ConfidenceThreshold float64
 }
 
 type Result struct {
@@ -101,6 +103,7 @@ type L3ReviewTrace struct {
 	Route         L3Route `json:"route,omitempty"`
 	Outcome       string  `json:"outcome"`
 	Confidence    float64 `json:"confidence,omitempty"`
+	Sensitivity   string  `json:"sensitivity,omitempty"`
 	Provider      string  `json:"provider,omitempty"`
 	Model         string  `json:"model,omitempty"`
 	PromptVersion string  `json:"prompt_version"`

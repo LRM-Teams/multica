@@ -28,6 +28,10 @@ import type {
   EvolutionReviewSubmission,
   EvolutionReviewSubmissionStatus,
   WorkspaceMemoryCurationStatus,
+  MemoryCuratorProfile,
+  UpdateMemoryCuratorProfileRequest,
+  StartMemoryCurationRunRequest,
+  StartMemoryCurationRunResponse,
   PromoteEvolutionReviewSubmissionResponse,
   UpdateAgentRequest,
   AgentEnvResponse,
@@ -258,11 +262,14 @@ import {
   EMPTY_EVOLUTION_REVIEW_SUBMISSION_LIST,
   EMPTY_UPDATE_AGENT_FILE_CONTENT_RESPONSE,
   EMPTY_WORKSPACE_MEMORY_CURATION_STATUS,
+  EMPTY_MEMORY_CURATOR_PROFILE,
   EvolutionMetricsSchema,
   EvolutionReviewSubmissionListSchema,
   EvolutionReviewSubmissionSchema,
   UpdateAgentFileContentResponseSchema,
   WorkspaceMemoryCurationStatusSchema,
+  MemoryCuratorProfileSchema,
+  StartMemoryCurationRunResponseSchema,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -1906,6 +1913,41 @@ export class ApiClient {
       EMPTY_WORKSPACE_MEMORY_CURATION_STATUS,
       { endpoint: "GET /api/workspaces/{id}/memory-curation/status" },
     );
+  }
+
+  async getMemoryCuratorProfile(workspaceId: string): Promise<MemoryCuratorProfile> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/memory-curation/profile`,
+    );
+    return parseWithFallback(raw, MemoryCuratorProfileSchema, EMPTY_MEMORY_CURATOR_PROFILE, {
+      endpoint: "GET /api/workspaces/{id}/memory-curation/profile",
+    });
+  }
+
+  async updateMemoryCuratorProfile(
+    workspaceId: string,
+    data: UpdateMemoryCuratorProfileRequest,
+  ): Promise<MemoryCuratorProfile> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/memory-curation/profile`,
+      { method: "PUT", body: JSON.stringify(data) },
+    );
+    return parseWithFallback(raw, MemoryCuratorProfileSchema, EMPTY_MEMORY_CURATOR_PROFILE, {
+      endpoint: "PUT /api/workspaces/{id}/memory-curation/profile",
+    });
+  }
+
+  async startMemoryCurationRun(
+    workspaceId: string,
+    data: StartMemoryCurationRunRequest,
+  ): Promise<StartMemoryCurationRunResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/memory-curation/runs`,
+      { method: "POST", body: JSON.stringify(data) },
+    );
+    return parseWithFallback(raw, StartMemoryCurationRunResponseSchema, { id: "", status: "failed" }, {
+      endpoint: "POST /api/workspaces/{id}/memory-curation/runs",
+    });
   }
 
   async getEvolutionReviewSubmission(id: string): Promise<EvolutionReviewSubmission | null> {

@@ -17,6 +17,8 @@ import {
   EMPTY_USER,
   EvolutionReviewSubmissionListSchema,
   WorkspaceMemoryCurationStatusSchema,
+  MemoryCuratorProfileSchema,
+  StartMemoryCurationRunResponseSchema,
   ListIssuesResponseSchema,
   RuntimeHourlyActivityListSchema,
   RuntimeUsageByAgentListSchema,
@@ -333,6 +335,29 @@ describe("WorkspaceMemoryCurationStatusSchema drift", () => {
       { endpoint: "GET /api/workspaces/{id}/memory-curation/status" },
     );
     expect(parsed).toBe(EMPTY_WORKSPACE_MEMORY_CURATION_STATUS);
+  });
+});
+
+describe("MemoryCuratorProfileSchema drift", () => {
+  it("fills safe defaults for a profile returned by an older backend", () => {
+    const parsed = MemoryCuratorProfileSchema.parse({
+      id: "profile-1",
+      workspace_id: "ws-1",
+      user_id: "user-1",
+    });
+    expect(parsed).toMatchObject({
+      enabled: false,
+      mode: "review",
+      target_scope: "owned_all",
+      target_agent_ids: [],
+      timezone: "Asia/Shanghai",
+      confidence_threshold: 0.8,
+    });
+  });
+
+  it("preserves waiting_runtime manual-run responses", () => {
+    expect(StartMemoryCurationRunResponseSchema.parse({ id: "run-1", status: "waiting_runtime" }))
+      .toEqual({ id: "run-1", status: "waiting_runtime" });
   });
 });
 

@@ -48,6 +48,12 @@ func (e *Engine) Run(opts Options) (Result, error) {
 	if opts.Timezone == "" {
 		opts.Timezone = DefaultTimezone
 	}
+	if opts.Mode == "" {
+		opts.Mode = "auto"
+	}
+	if opts.ConfidenceThreshold <= 0 {
+		opts.ConfidenceThreshold = minL3ActionConfidence
+	}
 	if opts.Until.IsZero() {
 		opts.Until = opts.Now.AddDate(0, 0, -1)
 	}
@@ -504,13 +510,50 @@ func (e *Engine) runL3(root agentRoot, opts Options) (AgentRunResult, error) {
 			continue
 		}
 		trace := L3ReviewTrace{EntryID: entry.ID, EntryHash: entry.HashKey(), Route: decision.Route, Confidence: decision.Confidence, Provider: output.Provider, Model: output.Model, PromptVersion: L3ReviewPromptVersion, DurationMS: output.Duration.Milliseconds()}
-		if decision.Error != "" || decision.Confidence < minL3ActionConfidence || (decision.Route == L3RouteDiscard && decision.Confidence < minL3DiscardConfidence) {
+		sensitivity := normalizeL3Sensitivity(decision.Sensitivity)
+		if sensitivity == "" {
+			sensitivity = normalizeL3Sensitivity(entry.Sensitivity)
+		}
+		trace.Sensitivity = sensitivity
+		if sensitivity != "none" {
+			trace.Outcome = "deferred"
+			if sensitivity == "sensitive" {
+				trace.ReasonCode = "sensitive_candidate"
+			} else {
+				trace.ReasonCode = "sensitivity_unknown"
+			}
+			ar.ReviewDeferred++
+			ar.ReviewTraces = appendBoundedReviewTraces(ar.ReviewTraces, []L3ReviewTrace{trace}, defaultL3ReviewMaxEntries)
+			if err := appendL3TraceAudit(root.Root, opts.Until, trace, opts.DryRun); err != nil {
+				return ar, err
+			}
+			remaining = append(remaining, entry)
+			continue
+		}
+		decision.Sensitivity = sensitivity
+		threshold := opts.ConfidenceThreshold
+		if decision.Route == L3RouteDiscard && threshold < minL3DiscardConfidence {
+			threshold = minL3DiscardConfidence
+		}
+		if decision.Error != "" || decision.Confidence < threshold {
 			trace.Outcome = "deferred"
 			if decision.Error != "" {
 				trace.ReasonCode = "invalid_decision"
 			} else {
 				trace.ReasonCode = "low_confidence"
 			}
+			ar.ReviewDeferred++
+			ar.ReviewTraces = appendBoundedReviewTraces(ar.ReviewTraces, []L3ReviewTrace{trace}, defaultL3ReviewMaxEntries)
+			if err := appendL3TraceAudit(root.Root, opts.Until, trace, opts.DryRun); err != nil {
+				return ar, err
+			}
+			remaining = append(remaining, entry)
+			continue
+		}
+
+		if !curatorModeAllowsDecision(opts.Mode, decision) {
+			trace.Outcome = "deferred"
+			trace.ReasonCode = "profile_review_required"
 			ar.ReviewDeferred++
 			ar.ReviewTraces = appendBoundedReviewTraces(ar.ReviewTraces, []L3ReviewTrace{trace}, defaultL3ReviewMaxEntries)
 			if err := appendL3TraceAudit(root.Root, opts.Until, trace, opts.DryRun); err != nil {
@@ -590,8 +633,25 @@ func (e *Engine) runL3(root agentRoot, opts Options) (AgentRunResult, error) {
 	return e.finishL3(root, opts, reviewPath, remaining, ar)
 }
 
+func curatorModeAllowsDecision(mode string, decision L3ReviewDecision) bool {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "auto":
+		return true
+	case "auto_safe":
+		return decision.Route == L3RouteMemory && decision.Confidence >= minL3DiscardConfidence
+	case "observe", "review":
+		return false
+	default:
+		return false
+	}
+}
+
 func entryEligibleForL3Review(entry reviewEntry) bool {
-	return strings.EqualFold(strings.TrimSpace(entry.Status), "candidate") && strings.EqualFold(strings.TrimSpace(entry.Confidence), "high") && strings.EqualFold(strings.TrimSpace(entry.Sensitivity), "none") && strings.TrimSpace(entry.Body) != ""
+	sensitivity := normalizeL3Sensitivity(entry.Sensitivity)
+	return strings.EqualFold(strings.TrimSpace(entry.Status), "candidate") &&
+		strings.EqualFold(strings.TrimSpace(entry.Confidence), "high") &&
+		(sensitivity == "none" || sensitivity == "unknown" || sensitivity == "") &&
+		strings.TrimSpace(entry.Body) != ""
 }
 
 func l3InputFromEntry(entry reviewEntry) L3ReviewEntry {
@@ -613,7 +673,7 @@ func deferredL3TraceWithOutput(entry reviewEntry, output L3ReviewOutput, reasonC
 func l3TraceAuditPayload(trace L3ReviewTrace) map[string]any {
 	return map[string]any{
 		"entry_id": trace.EntryID, "entry_hash": trace.EntryHash, "route": trace.Route,
-		"outcome": trace.Outcome, "confidence": trace.Confidence, "provider": trace.Provider,
+		"outcome": trace.Outcome, "confidence": trace.Confidence, "sensitivity": trace.Sensitivity, "provider": trace.Provider,
 		"model": trace.Model, "prompt_version": trace.PromptVersion, "duration_ms": trace.DurationMS,
 		"reason_code": trace.ReasonCode,
 	}
@@ -641,6 +701,7 @@ func prepareL3TraceAuditMutation(root string, planDate time.Time, trace L3Review
 }
 
 func (e *Engine) applyL3Decision(root agentRoot, opts Options, original reviewEntry, decision L3ReviewDecision, ar *AgentRunResult, tx *fileMutationTransaction) (bool, bool, error) {
+	original.Sensitivity = decision.Sensitivity
 	var mutations []fileMutation
 	var memoryPromoted, memoryDuplicate bool
 	var sharedCandidate sharedMemoryCandidate

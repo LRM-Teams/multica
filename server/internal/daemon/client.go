@@ -566,13 +566,16 @@ type (
 	PendingModelList        = protocol.DaemonHeartbeatPendingModelList
 	PendingLocalSkills      = protocol.DaemonHeartbeatPendingLocalSkills
 	PendingLocalSkillImport = protocol.DaemonHeartbeatPendingLocalSkillImport
+	PendingMemoryCuration   = protocol.DaemonHeartbeatPendingMemoryCuration
 )
 
-func (c *Client) SendHeartbeat(ctx context.Context, runtimeID string) (*HeartbeatResponse, error) {
+func (c *Client) SendHeartbeat(ctx context.Context, runtimeID, activeMemoryCurationRunID string) (*HeartbeatResponse, error) {
 	var resp HeartbeatResponse
 	if err := c.postJSONWithToken(ctx, "/api/daemon/heartbeat", map[string]any{
-		"runtime_id":            runtimeID,
-		"supports_batch_import": true,
+		"runtime_id":                    runtimeID,
+		"supports_batch_import":         true,
+		"supports_memory_curation":      true,
+		"active_memory_curation_run_id": activeMemoryCurationRunID,
 	}, &resp, c.tokenForRuntime(runtimeID)); err != nil {
 		return nil, err
 	}
@@ -597,6 +600,10 @@ func (c *Client) ReportLocalSkillListResult(ctx context.Context, runtimeID, requ
 // ReportLocalSkillImportResult sends a runtime-local-skill bundle back to the server.
 func (c *Client) ReportLocalSkillImportResult(ctx context.Context, runtimeID, requestID string, result map[string]any) error {
 	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/local-skills/import/%s/result", runtimeID, requestID), result, nil, c.tokenForRuntime(runtimeID))
+}
+
+func (c *Client) ReportMemoryCurationResult(ctx context.Context, runtimeID, runID string, result map[string]any) error {
+	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/memory-curation/%s/result", runtimeID, runID), result, nil, c.tokenForRuntime(runtimeID))
 }
 
 func (c *Client) SyncSharedSkills(ctx context.Context, runtimeID string, payload SharedSkillSyncPayload) (*SharedSkillSyncResult, error) {

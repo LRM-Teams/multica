@@ -643,15 +643,10 @@ export function createMentionSuggestion(
     // When set (e.g. a channel's members), candidates are scoped to these ids.
     const allow = options.getAllowedActorIds?.();
 
-    // @all is offered in channel-scoped mode too (allow set): in a group chat
-    // it means "everyone in this channel", which the backend honors by
-    // triggering every agent member (contentMentionsAll). Stored chip label is
-    // the fixed protocol token "all" (composer + message body both show
-    // `@all`); the picker row localizes the human description separately.
-    const allItem: MentionItem[] =
-      "all members".includes(q) || "all".includes(q)
-        ? [{ id: "all", label: "all", type: "all" as const }]
-        : [];
+    // @all is no longer offered: the bare-mention cutover (#600/#446) dropped
+    // the broadcast token — the server neither parses nor triggers `@all`, so
+    // surfacing it would be a silent no-op. Notifying everyone is done by
+    // @-ing the specific members/agents (Frank's product call).
 
     const memberItems: MentionItem[] = members
       .filter(
@@ -730,7 +725,7 @@ export function createMentionSuggestion(
           )
           .map(issueToMention);
 
-    return [...allItem, ...userItems, ...issueItems];
+    return [...userItems, ...issueItems];
   }
 
   return {

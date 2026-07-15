@@ -11,7 +11,7 @@ const tokenizeFn = tokenizer.tokenize as (
   src: string,
 ) => { type: string; raw: string; attributes: Record<string, string> } | undefined;
 const renderMarkdown = BaseMentionExtension.config.renderMarkdown as (
-  node: { attrs: Record<string, string> },
+  node: { attrs: Record<string, string | null | undefined> },
 ) => string;
 
 function tokenize(src: string) {
@@ -20,7 +20,10 @@ function tokenize(src: string) {
   return tokenizeFn(src.slice(start));
 }
 
-describe("mention tokenizer", () => {
+// The tokenizer parses the LEGACY `mention://` syntax so the editor can still
+// load / edit historical messages stored before the bare-`@handle` cutover
+// (#600). New content is serialized bare by renderMarkdown (see below).
+describe("mention tokenizer (legacy mention:// reads)", () => {
   it("parses a plain mention", () => {
     const token = tokenize("[@Alice](mention://member/aaa-bbb)");
     expect(token).toBeDefined();
@@ -29,14 +32,8 @@ describe("mention tokenizer", () => {
     expect(token!.attributes.id).toBe("aaa-bbb");
   });
 
-  it("parses a mention with escaped brackets (round-trip from renderMarkdown)", () => {
-    // renderMarkdown escapes brackets: David[TF] → David\[TF\]
-    const md = renderMarkdown({
-      attrs: { id: "aaa-bbb", label: "David[TF]", type: "agent" },
-    });
-    expect(md).toBe("[@David\\[TF\\]](mention://agent/aaa-bbb)");
-
-    const token = tokenize(md);
+  it("parses a legacy mention with escaped brackets", () => {
+    const token = tokenize("[@David\\[TF\\]](mention://agent/aaa-bbb)");
     expect(token).toBeDefined();
     expect(token!.attributes.label).toBe("David[TF]");
     expect(token!.attributes.type).toBe("agent");
@@ -66,15 +63,6 @@ describe("mention tokenizer", () => {
     expect(token!.attributes.label).toBe("Bot");
   });
 
-  it("round-trips an agent label with nested brackets", () => {
-    const md = renderMarkdown({
-      attrs: { id: "x-y-z", label: "Bot[v2][beta]", type: "agent" },
-    });
-    const token = tokenize(md);
-    expect(token).toBeDefined();
-    expect(token!.attributes.label).toBe("Bot[v2][beta]");
-  });
-
   it("does not parse issue references as actor mentions", () => {
     const token = tokenize("[MUL-123](mention://issue/aaa-bbb)");
     expect(token).toBeUndefined();
@@ -84,18 +72,57 @@ describe("mention tokenizer", () => {
     const token = tokenize("- [ ] [MUL-123](mention://issue/aaa-bbb)");
     expect(token).toBeUndefined();
   });
+});
 
-  it("serializes @all as the fixed protocol token regardless of node label", () => {
-    // Picker descriptions must not leak into the wire format / message body.
+// #600: the server hard-rejects the legacy `mention://` actor syntax. Actor
+// mentions serialize as bare `@handle` plain text, which the server parses into
+// a structured reference anchored to a UTF-16 span.
+describe("mention renderMarkdown (bare @handle cutover)", () => {
+  it("serializes a member mention as its bare @handle, not mention://", () => {
     expect(
       renderMarkdown({
-        attrs: { id: "all", label: "All members", type: "all" },
+        attrs: { id: "aaa-bbb", label: "Alice Wong", handle: "alice", type: "member" },
       }),
-    ).toBe("[@all](mention://all/all)");
+    ).toBe("@alice");
+  });
+
+  it("serializes an agent mention as its bare @handle", () => {
     expect(
       renderMarkdown({
-        attrs: { id: "all", label: "所有成员", type: "all" },
+        attrs: { id: "x-y-z", label: "David Thompson", handle: "david", type: "agent" },
       }),
-    ).toBe("[@all](mention://all/all)");
+    ).toBe("@david");
+  });
+
+  it("never emits mention:// or bracket-wrapping for an actor", () => {
+    const md = renderMarkdown({
+      attrs: { id: "aaa-bbb", label: "David[TF]", handle: "david-tf", type: "agent" },
+    });
+    expect(md).toBe("@david-tf");
+    expect(md).not.toContain("mention://");
+    expect(md).not.toContain("[");
+  });
+
+  it("falls back to the label for a legacy node with no handle", () => {
+    // Nodes parsed from old `mention://` content carry a label but no handle;
+    // they degrade to `@label` rather than re-emitting the rejected syntax.
+    expect(
+      renderMarkdown({ attrs: { id: "aaa-bbb", label: "alice", type: "member" } }),
+    ).toBe("@alice");
+  });
+
+  it("serializes @all as the literal word (no broadcast, no ref)", () => {
+    // The broadcast token was dropped in the cutover: the server neither parses
+    // nor triggers @all, so it is plain text, never `mention://all/all`.
+    expect(
+      renderMarkdown({ attrs: { id: "all", label: "all", type: "all" } }),
+    ).toBe("@all");
+  });
+
+  it("keeps non-actor references (project) on the legacy link form", () => {
+    // Projects/issues are out of the #600 channel-actor cutover.
+    expect(
+      renderMarkdown({ attrs: { id: "proj-1", label: "Roadmap", type: "project" } }),
+    ).toBe("[Roadmap](mention://project/proj-1)");
   });
 });

@@ -8,7 +8,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/messageparts"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // IssueSourceMessageRequest is the minimal, caller-supplied locator for the
@@ -86,8 +88,10 @@ func (h *Handler) issueSourceRefsForUser(ctx context.Context, issue db.Issue, re
 	var channelID pgtype.UUID
 	var messageID pgtype.UUID
 	var threadRoot pgtype.UUID
+	var content string
+	var rawParts []byte
 	err := h.DB.QueryRow(ctx, `
-		SELECT c.id, c.kind, c.name, m.id, COALESCE(m.thread_root_message_id, m.id), m.content
+		SELECT c.id, c.kind, c.name, m.id, COALESCE(m.thread_root_message_id, m.id), m.content, m.parts
 		FROM issue_source_message src
 		JOIN channel_message m ON m.id = src.message_id
 		  AND m.channel_id = src.channel_id
@@ -98,16 +102,69 @@ func (h *Handler) issueSourceRefsForUser(ctx context.Context, issue db.Issue, re
 		  AND cm.member_type = 'user' AND cm.member_id = $2
 		WHERE src.issue_id = $1 AND src.workspace_id = $3 AND m.deleted_at IS NULL`,
 		issue.ID, requesterID, issue.WorkspaceID,
-	).Scan(&channelID, &ref.ChannelKind, &channelName, &messageID, &threadRoot, &ref.Excerpt)
+	).Scan(&channelID, &ref.ChannelKind, &channelName, &messageID, &threadRoot, &content, &rawParts)
 	if err != nil {
 		return nil
 	}
 	ref.ChannelID = uuidToString(channelID)
 	ref.MessageID = uuidToString(messageID)
 	ref.ThreadRootMessageID = uuidToString(threadRoot)
-	ref.Excerpt = truncateChannelHistoryContent(ref.Excerpt)
+	ref.Excerpt = truncateChannelHistoryContent(content)
+	ref.ExcerptParts = sourceExcerptReferenceParts(content, ref.Excerpt, messageparts.Decode(rawParts))
 	if ref.ChannelKind == "group" && strings.TrimSpace(channelName) != "" {
 		ref.ChannelName = &channelName
 	}
 	return &ref
+}
+
+// sourceExcerptReferenceParts returns only references that remain wholly in
+// the visible canonical-content prefix used by an excerpt. The spans therefore
+// remain valid for the excerpt without asking a client to search text or to
+// reinterpret a reference that was cut in half. Content with CR normalization
+// is deliberately omitted: it is rare, and a wrong anchor is worse than an
+// unstyled readable fallback.
+func sourceExcerptReferenceParts(content, excerpt string, parts []protocol.MessagePart) []protocol.MessagePart {
+	if strings.Contains(content, "\r") || len(parts) == 0 {
+		return nil
+	}
+
+	prefix, truncated := sourceExcerptPrefix(content)
+	expectedExcerpt := prefix
+	if truncated {
+		expectedExcerpt += "\n...[truncated]"
+	}
+	if excerpt != expectedExcerpt {
+		return nil
+	}
+
+	prefixEnd := contentUTF16Offset(content, len(prefix))
+	out := make([]protocol.MessagePart, 0, len(parts))
+	for _, part := range parts {
+		if part.Type != protocol.MessagePartTypeReference || part.ContentStartUTF16 == nil || part.ContentEndUTF16 == nil {
+			continue
+		}
+		if *part.ContentStartUTF16 < 0 || *part.ContentEndUTF16 < *part.ContentStartUTF16 || *part.ContentEndUTF16 > prefixEnd {
+			continue
+		}
+		out = append(out, part)
+	}
+	return out
+}
+
+// sourceExcerptPrefix mirrors truncateChannelHistoryContent while retaining
+// the canonical-content prefix that its UTF-16 anchors refer to.
+func sourceExcerptPrefix(content string) (string, bool) {
+	truncated := false
+	lines := strings.Split(content, "\n")
+	if len(lines) > channelHistoryMessageMaxLines {
+		lines = lines[:channelHistoryMessageMaxLines]
+		truncated = true
+	}
+	prefix := strings.Join(lines, "\n")
+	runes := []rune(prefix)
+	if len(runes) > channelHistoryMessageMaxChars {
+		prefix = string(runes[:channelHistoryMessageMaxChars])
+		truncated = true
+	}
+	return strings.TrimRight(prefix, " \t\n"), truncated
 }

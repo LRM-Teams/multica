@@ -2667,6 +2667,9 @@ func isNoReplyRationalePrefix(normalized string) bool {
 	if strings.HasPrefix(normalized, "不发布-") || strings.HasPrefix(normalized, "不发布，") || strings.HasPrefix(normalized, "不发布,") {
 		return true
 	}
+	if strings.Contains(normalized, "不发送频道消息") || strings.Contains(normalized, "无频道消息") {
+		return true
+	}
 	return false
 }
 

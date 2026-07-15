@@ -3,6 +3,7 @@ package messageparts
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/multica-ai/multica/server/internal/stickers"
@@ -10,6 +11,8 @@ import (
 )
 
 const BuiltinStickerPackID = "builtin"
+
+var emptyHTMLPlaceholderRE = regexp.MustCompile(`(?i)^(?:\s|&nbsp;|&#160;|\x{00a0}|\x{200b}|<br\s*/?>)+$`)
 
 type structuredVisibleMessage struct {
 	Action   string                 `json:"action"`
@@ -22,6 +25,9 @@ type structuredVisibleMessage struct {
 
 func Normalize(content string, parts []protocol.MessagePart) (string, []protocol.MessagePart, error) {
 	normalizedContent := strings.TrimSpace(content)
+	if emptyHTMLPlaceholderRE.MatchString(normalizedContent) {
+		normalizedContent = ""
+	}
 	if len(parts) == 0 {
 		return normalizedContent, nil, nil
 	}

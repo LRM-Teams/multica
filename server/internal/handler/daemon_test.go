@@ -3379,6 +3379,23 @@ func TestCompleteTask_GroupChannelNoReplyRationaleOutputIsSuppressedWithCLITrans
 	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonNoReplyRationale)
 }
 
+func TestCompleteTask_GroupChannelChineseNoReplyRationaleOutputIsSuppressed(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	rawOutput := `空的 <br/> 回声，深度 4 —— 话题已结束。没有实质性内容需要回复；不发送频道消息。`
+
+	w := completeTaskForTest(t, taskID, map[string]any{"output": rawOutput})
+	if w.Code != http.StatusOK {
+		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	assertNoChannelMessageContent(t, channelID, rawOutput)
+	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonNoReplyRationale)
+}
+
 func TestCompleteTask_DirectedRuntimeDiagnosticOutputIsSanitized(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

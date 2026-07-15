@@ -2658,6 +2658,64 @@ func TestChannelBareMentionsBecomeStructuredMessageParts(t *testing.T) {
 	}
 }
 
+func TestChannelBareIssueReferencesBecomeStructuredMessageParts(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	issueID := createTestIssue(t, "Structured issue reference", "todo", "medium")
+	t.Cleanup(func() { deleteTestIssue(t, issueID) })
+
+	issue, err := testHandler.Queries.GetIssue(ctx, parseUUID(issueID))
+	if err != nil {
+		t.Fatalf("load issue: %v", err)
+	}
+	workspace, err := testHandler.Queries.GetWorkspace(ctx, parseUUID(testWorkspaceID))
+	if err != nil {
+		t.Fatalf("load workspace: %v", err)
+	}
+	identifier := workspace.IssuePrefix + "-" + strconv.Itoa(int(issue.Number))
+
+	channelID := seedChannelForTest(t, "structured-issue-references-"+uuid.NewString()[:8], testUserID)
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+
+	content := "please track " + identifier + " and " + identifier
+	parts := []protocol.MessagePart{{
+		Type: protocol.MessagePartTypeText,
+		Text: "also see " + identifier,
+	}}
+	gotContent, gotParts := testHandler.enrichChannelMessageMentions(ctx, ch, content, parts)
+	if gotContent != content {
+		t.Fatalf("content = %q, want bare identifier text unchanged %q", gotContent, content)
+	}
+
+	var references []protocol.MessagePart
+	for _, part := range gotParts {
+		if part.Type == protocol.MessagePartTypeReference && part.RefType == "issue-ref" {
+			references = append(references, part)
+		}
+	}
+	if len(references) != 1 {
+		t.Fatalf("issue references = %+v, want one deduplicated typed ref", references)
+	}
+	ref := references[0]
+	if ref.RefSubType != "issue" || ref.RefID != issueID || ref.Label != identifier || ref.RefTitle != issue.Title || ref.RefStatus != issue.Status {
+		t.Fatalf("issue reference = %+v, want canonical issue entity %s / %q / %q / %q", ref, issueID, identifier, issue.Title, issue.Status)
+	}
+
+	codeOnly := "`" + identifier + "` [" + identifier + "](mention://issue/" + issueID + ")"
+	_, noRefs := testHandler.enrichChannelMessageMentions(ctx, ch, codeOnly, nil)
+	for _, part := range noRefs {
+		if part.Type == protocol.MessagePartTypeReference && part.RefType == "issue-ref" {
+			t.Fatalf("code/legacy markdown text unexpectedly produced typed issue ref: %+v", part)
+		}
+	}
+}
+
 func TestChannelLegacyMentionMarkdownNormalizesToStructuredReference(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

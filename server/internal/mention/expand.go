@@ -44,19 +44,8 @@ func ExpandIssueIdentifiers(ctx context.Context, resolver Resolver, workspaceID 
 	if err != nil || ws.IssuePrefix == "" {
 		return content
 	}
-	prefix := ws.IssuePrefix
-
-	// Build a regex that matches the workspace prefix followed by a hyphen and number.
-	// Use word boundaries to avoid matching inside longer strings.
-	// The prefix is escaped in case it contains regex-special characters.
-	pattern := regexp.MustCompile(`(?:^|(?:\W))` + `(` + regexp.QuoteMeta(prefix) + `-(\d+))` + `(?:\W|$)`)
-
-	// First, identify regions to skip: fenced code blocks and inline code.
-	skipRegions := findSkipRegions(content)
-
-	// Find all matches and process from right to left (to preserve offsets).
-	allMatches := pattern.FindAllStringSubmatchIndex(content, -1)
-	if len(allMatches) == 0 {
+	identifiers := FindBareIssueIdentifiers(ws.IssuePrefix, content)
+	if len(identifiers) == 0 {
 		return content
 	}
 
@@ -67,44 +56,22 @@ func ExpandIssueIdentifiers(ctx context.Context, resolver Resolver, workspaceID 
 	}
 	var replacements []replacement
 
-	for _, match := range allMatches {
-		// match[2:4] is the full identifier (e.g. "MUL-117")
-		// match[4:6] is the number part (e.g. "117")
-		identStart, identEnd := match[2], match[3]
-		numStr := content[match[4]:match[5]]
-
-		// Skip if inside a code region.
-		if inSkipRegion(identStart, skipRegions) {
-			continue
-		}
-
-		// Skip if already inside a markdown link: check if preceded by [
-		// or followed by ](...).
-		if isInsideMarkdownLink(content, identStart, identEnd) {
-			continue
-		}
-
-		num, err := strconv.Atoi(numStr)
-		if err != nil || num <= 0 {
-			continue
-		}
-
+	for _, identifier := range identifiers {
 		// Look up the issue.
 		issue, err := resolver.GetIssueByNumber(ctx, db.GetIssueByNumberParams{
 			WorkspaceID: workspaceID,
-			Number:      int32(num),
+			Number:      identifier.Number,
 		})
 		if err != nil {
 			continue // Issue doesn't exist — leave as-is.
 		}
 
-		identifier := content[identStart:identEnd]
 		issueID := uuidToString(issue.ID)
-		mentionLink := fmt.Sprintf("[%s](mention://issue/%s)", identifier, issueID)
+		mentionLink := fmt.Sprintf("[%s](mention://issue/%s)", identifier.Label, issueID)
 
 		replacements = append(replacements, replacement{
-			start: identStart,
-			end:   identEnd,
+			start: identifier.Start,
+			end:   identifier.End,
 			text:  mentionLink,
 		})
 	}
@@ -121,6 +88,50 @@ func ExpandIssueIdentifiers(ctx context.Context, resolver Resolver, workspaceID 
 	}
 
 	return result
+}
+
+// BareIssueIdentifier is a workspace-scoped human issue key in visible text.
+// Its byte offsets address the original content so callers can either replace
+// legacy markdown or attach a structured reference without changing text.
+type BareIssueIdentifier struct {
+	Start  int
+	End    int
+	Label  string
+	Number int32
+}
+
+// FindBareIssueIdentifiers finds plain workspace issue keys such as MUL-117.
+// It intentionally leaves markdown untouched: callers that persist structured
+// message parts use the result to attach typed issue-ref metadata, while the
+// legacy comment path may still choose to replace text with a markdown link.
+// Inline code, fenced code, and existing markdown links are never references.
+func FindBareIssueIdentifiers(prefix, content string) []BareIssueIdentifier {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" || content == "" {
+		return nil
+	}
+	pattern := regexp.MustCompile(`(?:^|(?:\W))` + `(` + regexp.QuoteMeta(prefix) + `-(\d+))` + `(?:\W|$)`)
+	skipRegions := findSkipRegions(content)
+	matches := pattern.FindAllStringSubmatchIndex(content, -1)
+	out := make([]BareIssueIdentifier, 0, len(matches))
+	for _, match := range matches {
+		// match[2:4] is the full identifier and match[4:6] its number.
+		start, end := match[2], match[3]
+		if inSkipRegion(start, skipRegions) || isInsideMarkdownLink(content, start, end) {
+			continue
+		}
+		number, err := strconv.ParseInt(content[match[4]:match[5]], 10, 32)
+		if err != nil || number <= 0 {
+			continue
+		}
+		out = append(out, BareIssueIdentifier{
+			Start:  start,
+			End:    end,
+			Label:  content[start:end],
+			Number: int32(number),
+		})
+	}
+	return out
 }
 
 // skipRegion represents a region of text that should not be modified.

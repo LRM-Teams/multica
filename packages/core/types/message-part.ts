@@ -29,6 +29,8 @@ export type MessagePart =
       ref_subtype?: "issue";
       ref_id: string;
       label?: string;
+      ref_title?: string;
+      ref_status?: string;
     };
 
 /**

@@ -20,6 +20,8 @@ type MessagePart struct {
 	RefSubType   string `json:"ref_subtype,omitempty"`
 	RefID        string `json:"ref_id,omitempty"`
 	Label        string `json:"label,omitempty"`
+	RefTitle     string `json:"ref_title,omitempty"`
+	RefStatus    string `json:"ref_status,omitempty"`
 	PackID       string `json:"pack_id,omitempty"`
 	StickerID    string `json:"sticker_id,omitempty"`
 	Alt          string `json:"alt,omitempty"`

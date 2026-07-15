@@ -714,8 +714,13 @@ func directedAgentMentionLabel(handle string) string {
 
 func directedAgentMentionContent(target db.Agent, body string) (string, []protocol.MessagePart) {
 	label := directedAgentMentionLabel(target.Name)
-	content := label + " " + strings.TrimSpace(body)
-	start, end := contentUTF16Span(content, 0, len(label))
+	// Prefix with the proactive marker so Beckham's directed nudges (a) render as
+	// a normal main-timeline message with leading text rather than a bare mention,
+	// and (b) get the "主动发现" pill like post_channel_message proactive posts.
+	const proactivePrefix = "主动发现："
+	content := proactivePrefix + label + " " + strings.TrimSpace(body)
+	prefixLen := len(proactivePrefix)
+	start, end := contentUTF16Span(content, prefixLen, prefixLen+len(label))
 	return content, []protocol.MessagePart{{
 		Type:              protocol.MessagePartTypeReference,
 		RefType:           "mention",
@@ -782,7 +787,7 @@ func (h *Handler) executePreparedRadarAgentMentionInTx(ctx context.Context, qtx 
 		ctx, exec, directive.Target.ChannelID, run.WorkspaceID,
 		"agent", supervisor.ID, agentDisplayName(supervisor), directive.Content, directive.Parts,
 		"multica", nil, nil, pgtype.UUID{}, pgtype.UUID{}, nil,
-		directive.Target.ThreadRoot, directive.Target.ThreadID, 0, false,
+		directive.Target.ThreadRoot, directive.Target.ThreadID, 0, true,
 	)
 	if err != nil {
 		return execution, fmt.Errorf("create visible radar directive: %w", err)

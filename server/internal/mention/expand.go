@@ -110,17 +110,17 @@ func FindBareIssueIdentifiers(prefix, content string) []BareIssueIdentifier {
 	if prefix == "" || content == "" {
 		return nil
 	}
-	pattern := regexp.MustCompile(`(?:^|(?:\W))` + `(` + regexp.QuoteMeta(prefix) + `-(\d+))` + `(?:\W|$)`)
+	pattern := regexp.MustCompile(regexp.QuoteMeta(prefix) + `-(\d+)`)
 	skipRegions := findSkipRegions(content)
 	matches := pattern.FindAllStringSubmatchIndex(content, -1)
 	out := make([]BareIssueIdentifier, 0, len(matches))
 	for _, match := range matches {
-		// match[2:4] is the full identifier and match[4:6] its number.
-		start, end := match[2], match[3]
-		if inSkipRegion(start, skipRegions) || isInsideMarkdownLink(content, start, end) {
+		start, end := match[0], match[1]
+		if !hasBareIssueIdentifierBoundaries(content, start, end) ||
+			inSkipRegion(start, skipRegions) || isInsideMarkdownLink(content, start, end) {
 			continue
 		}
-		number, err := strconv.ParseInt(content[match[4]:match[5]], 10, 32)
+		number, err := strconv.ParseInt(content[match[2]:match[3]], 10, 32)
 		if err != nil || number <= 0 {
 			continue
 		}
@@ -132,6 +132,22 @@ func FindBareIssueIdentifiers(prefix, content string) []BareIssueIdentifier {
 		})
 	}
 	return out
+}
+
+// hasBareIssueIdentifierBoundaries keeps identifier discovery from matching a
+// word fragment without consuming punctuation around a match. Consuming the
+// trailing boundary makes RE2's non-overlapping matcher skip a second
+// identifier immediately after that punctuation (for example, LRM-126。LRM-126).
+func hasBareIssueIdentifierBoundaries(content string, start, end int) bool {
+	return (start == 0 || !isASCIIWordByte(content[start-1])) &&
+		(end == len(content) || !isASCIIWordByte(content[end]))
+}
+
+func isASCIIWordByte(b byte) bool {
+	return b >= 'a' && b <= 'z' ||
+		b >= 'A' && b <= 'Z' ||
+		b >= '0' && b <= '9' ||
+		b == '_'
 }
 
 // skipRegion represents a region of text that should not be modified.

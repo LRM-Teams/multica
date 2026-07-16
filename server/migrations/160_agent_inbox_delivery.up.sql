@@ -51,9 +51,17 @@ CREATE TABLE IF NOT EXISTS agent_inbox_event (
   CHECK (seq_to >= seq_from)
 );
 
-ALTER TABLE agent_session
-  ADD CONSTRAINT agent_session_last_acked_event_fk
-  FOREIGN KEY (last_acked_event_id) REFERENCES agent_inbox_event(id) ON DELETE SET NULL;
+-- The migration runner records a version only after the full file succeeds.
+-- Keep this constraint idempotent so a local database that was interrupted
+-- after creating it can resume the rest of this migration on the next run.
+DO $$
+BEGIN
+  ALTER TABLE agent_session
+    ADD CONSTRAINT agent_session_last_acked_event_fk
+    FOREIGN KEY (last_acked_event_id) REFERENCES agent_inbox_event(id) ON DELETE SET NULL;
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_agent_inbox_event_pending
   ON agent_inbox_event(workspace_id, agent_id, status, priority DESC, created_at ASC, id ASC)

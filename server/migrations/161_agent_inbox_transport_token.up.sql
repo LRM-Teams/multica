@@ -22,9 +22,16 @@ ALTER TABLE agent_task_transport_audit
 ALTER TABLE agent_task_transport_audit
   ALTER COLUMN task_id DROP NOT NULL;
 
-ALTER TABLE agent_task_transport_audit
-  ADD CONSTRAINT agent_task_transport_audit_source_check
-  CHECK ((task_id IS NOT NULL) <> (inbox_event_id IS NOT NULL));
+-- See 160_agent_inbox_delivery: a locally interrupted migration can have
+-- applied this constraint before its schema_migrations record was written.
+DO $$
+BEGIN
+  ALTER TABLE agent_task_transport_audit
+    ADD CONSTRAINT agent_task_transport_audit_source_check
+    CHECK ((task_id IS NOT NULL) <> (inbox_event_id IS NOT NULL));
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_agent_task_transport_audit_inbox_event
   ON agent_task_transport_audit(inbox_event_id, created_at DESC)

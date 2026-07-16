@@ -18,8 +18,12 @@ var candidateLeaves = []string{
 // ResolveDir returns the first migrations directory that exists from the
 // current working directory.
 func ResolveDir() (string, error) {
+	return resolveDir(searchRoots())
+}
+
+func resolveDir(roots []string) (string, error) {
 	seen := make(map[string]bool)
-	for _, root := range searchRoots() {
+	for _, root := range roots {
 		base := root
 		for range maxSearchDepth + 1 {
 			for _, leaf := range candidateLeaves {
@@ -29,7 +33,7 @@ func ResolveDir() (string, error) {
 				}
 				seen[dir] = true
 				info, err := os.Stat(dir)
-				if err == nil && info.IsDir() {
+				if err == nil && info.IsDir() && hasUpMigration(dir) {
 					return dir, nil
 				}
 			}
@@ -37,6 +41,11 @@ func ResolveDir() (string, error) {
 		}
 	}
 	return "", fmt.Errorf("migrations directory not found")
+}
+
+func hasUpMigration(dir string) bool {
+	files, err := filepath.Glob(filepath.Join(dir, "*.up.sql"))
+	return err == nil && len(files) > 0
 }
 
 func searchRoots() []string {

@@ -293,6 +293,7 @@ func init() {
 	issueCreateCmd.Flags().String("project", "", "Project ID")
 	issueCreateCmd.Flags().String("start-date", "", "Start date (calendar day, YYYY-MM-DD)")
 	issueCreateCmd.Flags().String("due-date", "", "Due date (calendar day, YYYY-MM-DD)")
+	issueCreateCmd.Flags().StringArray("acceptance-criteria", nil, "One acceptance criterion / definition-of-done item (repeatable). Each is a testable, measurable condition the implementer must meet and the reviewer diffs against — e.g. --acceptance-criteria \"bomb play shows screen-shake + sound + doubling indicator\"")
 	issueCreateCmd.Flags().String("source-channel", "", "Channel UUID containing the message that originated this issue (requires --source-message)")
 	issueCreateCmd.Flags().String("source-message", "", "Message UUID that originated this issue; a thread reply is anchored to its root (requires --source-channel)")
 	issueCreateCmd.Flags().Bool("allow-duplicate", false, "Allow creating an issue even when an active duplicate exists")
@@ -311,6 +312,7 @@ func init() {
 	issueUpdateCmd.Flags().String("project", "", "Project ID")
 	issueUpdateCmd.Flags().String("start-date", "", "New start date (calendar day, YYYY-MM-DD; pass empty string to clear)")
 	issueUpdateCmd.Flags().String("due-date", "", "New due date (calendar day, YYYY-MM-DD)")
+	issueUpdateCmd.Flags().StringArray("acceptance-criteria", nil, "Replace the issue's acceptance criteria / definition of done (repeatable; pass none of the flag to leave unchanged). Spec-owner action — implementers propose changes, they do not lower the bar to pass their own work.")
 	issueUpdateCmd.Flags().String("parent", "", "Parent issue ID (use --parent \"\" to clear)")
 	issueUpdateCmd.Flags().String("output", "json", "Output format: table or json")
 
@@ -724,6 +726,9 @@ func runIssueCreate(cmd *cobra.Command, _ []string) error {
 	if v, _ := cmd.Flags().GetString("due-date"); v != "" {
 		body["due_date"] = v
 	}
+	if ac, _ := cmd.Flags().GetStringArray("acceptance-criteria"); len(ac) > 0 {
+		body["acceptance_criteria"] = ac
+	}
 	if sourceChannel != "" {
 		body["source"] = map[string]string{
 			"channel_id": sourceChannel,
@@ -858,6 +863,13 @@ func runIssueUpdate(cmd *cobra.Command, args []string) error {
 	if cmd.Flags().Changed("due-date") {
 		v, _ := cmd.Flags().GetString("due-date")
 		body["due_date"] = v
+	}
+	if cmd.Flags().Changed("acceptance-criteria") {
+		ac, _ := cmd.Flags().GetStringArray("acceptance-criteria")
+		if ac == nil {
+			ac = []string{}
+		}
+		body["acceptance_criteria"] = ac
 	}
 	if cmd.Flags().Changed("assignee") || cmd.Flags().Changed("assignee-id") {
 		aType, aID, hasAssignee, resolveErr := pickAssigneeFromFlags(ctx, client, cmd, "assignee", "assignee-id", issueAssigneeKinds)

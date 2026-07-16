@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/events"
+	"github.com/multica-ai/multica/server/internal/migrations"
 	"github.com/multica-ai/multica/server/internal/realtime"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -51,6 +54,11 @@ func TestMain(m *testing.M) {
 		fmt.Printf("Skipping tests: database not reachable: %v\n", err)
 		pool.Close()
 		os.Exit(0)
+	}
+	if err := ensureHandlerTestSchema(ctx, pool, dbURL); err != nil {
+		fmt.Printf("Failed to bootstrap handler test database: %v\n", err)
+		pool.Close()
+		os.Exit(1)
 	}
 
 	queries := db.New(pool)
@@ -87,6 +95,88 @@ func TestMain(m *testing.M) {
 	}
 	pool.Close()
 	os.Exit(code)
+}
+
+// ensureHandlerTestSchema keeps direct `go test ./internal/handler` runs on
+// the same migration path as `make test` and CI. Handler tests exercise a
+// broad set of tables, so an older local database otherwise surfaces as an
+// unrelated missing-table failure deep inside a test.
+func ensureHandlerTestSchema(ctx context.Context, pool *pgxpool.Pool, dbURL string) error {
+	missing, err := handlerTestMissingMigration(ctx, pool)
+	if err == nil && missing == "" {
+		return nil
+	}
+
+	if err != nil {
+		fmt.Printf("Handler test database migration state is unavailable (%v); applying migrations...\n", err)
+	} else {
+		fmt.Printf("Handler test database is missing migration %s; applying migrations...\n", missing)
+	}
+
+	moduleDir, err := handlerTestModuleDir()
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command("go", "run", "./cmd/migrate", "up")
+	cmd.Dir = moduleDir
+	cmd.Env = append(os.Environ(), "DATABASE_URL="+dbURL)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("apply migrations: %w", err)
+	}
+
+	missing, err = handlerTestMissingMigration(ctx, pool)
+	if err != nil {
+		return fmt.Errorf("verify migrations after bootstrap: %w", err)
+	}
+	if missing != "" {
+		return fmt.Errorf("migration bootstrap completed without applying migration %s", missing)
+	}
+	return nil
+}
+
+func handlerTestMissingMigration(ctx context.Context, pool *pgxpool.Pool) (string, error) {
+	files, err := migrations.Files("up")
+	if err != nil {
+		return "", fmt.Errorf("find migrations: %w", err)
+	}
+
+	for _, file := range files {
+		version := migrations.ExtractVersion(file)
+		var applied bool
+		if err := pool.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = $1)`,
+			version,
+		).Scan(&applied); err != nil {
+			return "", err
+		}
+		if !applied {
+			return version, nil
+		}
+	}
+	return "", nil
+}
+
+func handlerTestModuleDir() (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("determine handler test working directory: %w", err)
+	}
+
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir, nil
+		} else if !os.IsNotExist(err) {
+			return "", fmt.Errorf("inspect %s for go.mod: %w", dir, err)
+		}
+
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", fmt.Errorf("find server module root from handler test working directory")
+		}
+		dir = parent
+	}
 }
 
 func setupHandlerTestFixture(ctx context.Context, pool *pgxpool.Pool) (string, string, error) {

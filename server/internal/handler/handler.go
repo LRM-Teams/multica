@@ -87,6 +87,12 @@ type Config struct {
 	// return 503 instead of attempting to dial a hard-coded private service.
 	CloudRuntimeFleetURL     string
 	CloudRuntimeFleetTimeout time.Duration
+	// DefaultSelfPlayTemplate is the sandbox template used when env-dispatch
+	// auto-creates a workspace's default self_play base env (scratch self_play
+	// with an empty env_id and no default configured). Read from
+	// MULTICA_DEFAULT_SELF_PLAY_TEMPLATE; empty ⇒ "default". A request may
+	// override it per-dispatch via EnvDispatchRequest.Template.
+	DefaultSelfPlayTemplate string
 	AttachmentDownloadMode   string
 	AttachmentDownloadURLTTL time.Duration
 	// ChannelAmbientGateMode controls the Phase 0 ambient stopgap. Empty and

@@ -74,6 +74,28 @@ func (q *Queries) GetDefaultSelfPlayEnv(ctx context.Context, id pgtype.UUID) (pg
 	return default_self_play_env_id, err
 }
 
+const setDefaultSelfPlayEnv = `-- name: SetDefaultSelfPlayEnv :exec
+UPDATE workspace
+   SET default_self_play_env_id = $2,
+       updated_at = now()
+ WHERE id = $1
+   AND default_self_play_env_id IS NULL
+`
+
+type SetDefaultSelfPlayEnvParams struct {
+	ID                   pgtype.UUID `json:"id"`
+	DefaultSelfPlayEnvID pgtype.UUID `json:"default_self_play_env_id"`
+}
+
+// SetDefaultSelfPlayEnv conditionally persists envID as the workspace default
+// self_play base env (only when still NULL), so the first of N concurrent
+// auto-create writers wins and the rest are no-ops. The service re-reads
+// GetDefaultSelfPlayEnv to pick up the canonical winner.
+func (q *Queries) SetDefaultSelfPlayEnv(ctx context.Context, arg SetDefaultSelfPlayEnvParams) error {
+	_, err := q.db.Exec(ctx, setDefaultSelfPlayEnv, arg.ID, arg.DefaultSelfPlayEnvID)
+	return err
+}
+
 const getWorkspace = `-- name: GetWorkspace :one
 SELECT id, name, slug, description, settings, created_at, updated_at, context, repos, issue_prefix, issue_counter, avatar_url, default_self_play_env_id FROM workspace
 WHERE id = $1

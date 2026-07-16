@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -63,6 +64,29 @@ func (a *envSandboxLifecycleDepsAdapter) GetSandboxInstanceRef(ctx context.Conte
 		return service.SandboxInstanceRef{}, fmt.Errorf("get sandbox instance: %w", err)
 	}
 	return sandboxInstanceRowToRef(row), nil
+}
+
+// MintSandboxRuntimeEnv satisfies EnvSandboxLifecycleDeps. It mints the daemon
+// bootstrap env (server URL + PAT + workspace + MULTICA_DAEMON_ENABLED=1 +
+// profile) for an env-dispatch-created sandbox so the in-sandbox daemon can
+// reach multica on boot. Unlike the UI create path, server-side dispatch has no
+// inbound request, so the server URL must come from the configured public URL
+// env vars; an unconfigured URL is a hard error (the daemon needs a reachable
+// server to register + claim tasks).
+func (a *envSandboxLifecycleDepsAdapter) MintSandboxRuntimeEnv(ctx context.Context, workspaceID, actorUserID, instanceID string) (map[string]string, error) {
+	wsUUID, err := util.ParseUUID(workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("parse workspace_id: %w", err)
+	}
+	userUUID, err := util.ParseUUID(actorUserID)
+	if err != nil {
+		return nil, fmt.Errorf("parse actor_user_id: %w", err)
+	}
+	serverURL := firstNonEmptyString(os.Getenv("MULTICA_PUBLIC_URL"), os.Getenv("MULTICA_APP_URL"), os.Getenv("MULTICA_SERVER_URL"))
+	if serverURL == "" {
+		return nil, fmt.Errorf("sandbox runtime env: server URL not configured (set MULTICA_PUBLIC_URL/MULTICA_APP_URL/MULTICA_SERVER_URL)")
+	}
+	return a.h.mintSandboxRuntimeEnv(ctx, wsUUID, userUUID, instanceID, serverURL)
 }
 
 func (a *envSandboxLifecycleDepsAdapter) InsertSandboxInstance(ctx context.Context, in service.CreateSandboxInstanceInput, actorUserID string) (service.SandboxInstanceRef, error) {

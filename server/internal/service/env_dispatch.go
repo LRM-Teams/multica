@@ -71,6 +71,21 @@ type EnvDispatchInput struct {
 
 	// Message dispatch (required for self_play).
 	Message *MessageInput
+
+	// DefaultBaseTemplate is the sandbox template used when the service
+	// auto-creates the workspace default self_play base env (empty env_id, no
+	// default configured). Resolved by the handler from the request's optional
+	// template override or the server's MULTICA_DEFAULT_SELF_PLAY_TEMPLATE
+	// default. Empty ⇒ "default". Unused when env_id is explicit or a default is
+	// already configured.
+	DefaultBaseTemplate string
+
+	// InstanceBackedBase is resolved by Dispatch after GetEnv: true when the base
+	// env's sandbox is a sandbox_instance (e.g. an auto-created default env), so
+	// forking uses the sandbox_instance backend instead of the Fleet fork path.
+	// Probed once per dispatch via the lifecycle creator; false for Fleet-booted
+	// base envs and when no lifecycle is injected.
+	InstanceBackedBase bool
 }
 
 // PerAgentEnvSpec assigns one squad agent to a sandbox template or base
@@ -161,6 +176,13 @@ type EnvDispatchDeps interface {
 	// env_id. Returns ("", nil) or an error when unconfigured (spec D2/D3).
 	GetDefaultSelfPlayEnv(ctx context.Context, workspaceID string) (envID string, err error)
 
+	// SetDefaultSelfPlayEnv persists envID as the workspace's default self_play
+	// base env, but only when the column is still NULL - the first of N
+	// concurrent auto-create writers wins, the rest are no-ops. The caller
+	// re-reads GetDefaultSelfPlayEnv to pick up the canonical winner and clean
+	// up any env it created but did not win the race for.
+	SetDefaultSelfPlayEnv(ctx context.Context, workspaceID, envID string) error
+
 	// Idempotency ledger (spec §7.7). GetIdempotentResponse returns ok=false
 	// when the key is unseen; SaveIdempotentResponse persists the response for
 	// replay. Both are workspace-scoped.
@@ -226,6 +248,10 @@ type SandboxInstanceCreator interface {
 	// for an existing sandbox_instance. Used by branch-from-template to derive
 	// the source env's template when creating fresh sandbox_instances.
 	GetSandboxInstanceRef(ctx context.Context, workspaceID, instanceID string) (SandboxInstanceRef, error)
+	// DeleteSandboxInstance reclaims a sandbox_instance. Used by the auto-create
+	// default-env path to clean up an instance when env creation fails or when a
+	// concurrent writer lost the race to set the workspace default.
+	DeleteSandboxInstance(ctx context.Context, ref SandboxInstanceRef, actorUserID string) error
 }
 
 func NewEnvDispatchService(deps EnvDispatchDeps, concurrency int) *EnvDispatchService {
@@ -278,11 +304,13 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 	}
 
 	// Resolve the per-workspace default self_play base env when env_id is empty.
-	// validate() guarantees this is only reachable for scratch+self_play.
+	// validate() guarantees this is only reachable for scratch+self_play. If a
+	// default is configured, reuse it; otherwise auto-create one (D2) when a
+	// sandbox lifecycle is available, so subsequent dispatches can fork it.
 	if in.EnvID == "" {
-		envID, err := s.deps.GetDefaultSelfPlayEnv(ctx, in.WorkspaceID)
-		if err != nil || envID == "" {
-			return EnvDispatchResult{}, fmt.Errorf("validation_failed: default self-play env not configured")
+		envID, err := s.ensureDefaultSelfPlayEnv(ctx, in)
+		if err != nil {
+			return EnvDispatchResult{}, err
 		}
 		in.EnvID = envID
 	}
@@ -290,6 +318,16 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 	env, err := s.deps.GetEnv(ctx, in.EnvID, in.WorkspaceID)
 	if err != nil {
 		return EnvDispatchResult{}, fmt.Errorf("get env: %w", err)
+	}
+
+	// Detect whether the base env's sandbox is a sandbox_instance (D3): an
+	// auto-created default env (and any explicitly-passed instance-backed env_id)
+	// must fork via the sandbox_instance backend, not the Fleet fork path. Probed
+	// once per dispatch; a lookup miss means Fleet-backed (existing behavior).
+	if s.lifecycle != nil && len(env.SandboxIDs) > 0 {
+		if _, ierr := s.lifecycle.GetSandboxInstanceRef(ctx, in.WorkspaceID, env.SandboxIDs[0]); ierr == nil {
+			in.InstanceBackedBase = true
+		}
 	}
 
 	// Mode ↔ env kind cross-check (spec §6.3): scratch forks a base env;
@@ -421,6 +459,58 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 		return result, ErrAllDispatchFailed
 	}
 	return result, nil
+}
+
+// ensureDefaultSelfPlayEnv resolves the base env to fork for a scratch+self_play
+// dispatch with an empty env_id. If the workspace already has a configured
+// default self_play base env, it is reused. Otherwise the service auto-creates
+// one: it creates a sandbox_instance from the configured template, inserts a
+// mode='base' env row, and persists it as the workspace default. The set is
+// conditional (only-if-NULL) so the first of N concurrent writers wins; the
+// service re-reads the canonical default and cleans up its own env when it lost
+// the race. Requires an injected sandbox lifecycle creator; without one (test
+// fixtures / no DB) it returns the legacy "not configured" validation error so
+// behavior is unchanged there.
+func (s *EnvDispatchService) ensureDefaultSelfPlayEnv(ctx context.Context, in EnvDispatchInput) (string, error) {
+	if envID, err := s.deps.GetDefaultSelfPlayEnv(ctx, in.WorkspaceID); err == nil && envID != "" {
+		return envID, nil
+	}
+	if s.lifecycle == nil {
+		return "", fmt.Errorf("validation_failed: default self-play env not configured")
+	}
+	template := in.DefaultBaseTemplate
+	if template == "" {
+		template = "default"
+	}
+	ref, err := s.lifecycle.CreateSandboxInstance(ctx, CreateSandboxInstanceInput{
+		WorkspaceID: in.WorkspaceID,
+		Template:    template,
+	}, in.UserID)
+	if err != nil {
+		return "", fmt.Errorf("auto-create default env: boot sandbox: %w", err)
+	}
+	envID, err := s.deps.CreateEnv(ctx, in.WorkspaceID, []string{ref.InstanceID}, "", EnvModeBase, EnvDomainSelfPlay)
+	if err != nil {
+		_ = s.lifecycle.DeleteSandboxInstance(ctx, ref, in.UserID) // best-effort: reclaim the pending instance
+		return "", fmt.Errorf("auto-create default env: create env: %w", err)
+	}
+	// Conditional set: first concurrent writer wins. Ignore the error (best-
+	// effort) and re-read to pick up the canonical default.
+	_ = s.deps.SetDefaultSelfPlayEnv(ctx, in.WorkspaceID, envID)
+	winner, err := s.deps.GetDefaultSelfPlayEnv(ctx, in.WorkspaceID)
+	if err != nil || winner == "" {
+		// Nothing persisted as the default; still proceed with the env we created
+		// so this dispatch can fork it (a later dispatch will retry the set).
+		return envID, nil
+	}
+	if winner != envID {
+		// Lost the race: another writer's env became the default. Clean up ours
+		// (env row + the sandbox_instance we created) and fork the winner instead.
+		_ = s.deps.DeleteEnv(ctx, envID, in.WorkspaceID)
+		_ = s.lifecycle.DeleteSandboxInstance(ctx, ref, in.UserID)
+		return winner, nil
+	}
+	return envID, nil
 }
 
 // validate implements the §6.3 validation table (the subset that's
@@ -649,7 +739,11 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 // trained rollouts are the checkpointing target). Non-trained rollouts keep
 // the Fleet fork path.
 func (s *EnvDispatchService) useSandboxInstanceBackend(in EnvDispatchInput) bool {
-	return s.lifecycle != nil && in.TrainAgentID != ""
+	// train_agent_id keeps the existing D7 trained-rollout path. InstanceBackedBase
+	// extends it to any dispatch forking a sandbox_instance-backed base env (e.g.
+	// an auto-created default self_play env), so the non-trained self_play case
+	// forks via the sandbox_instance backend instead of the Fleet fork path.
+	return s.lifecycle != nil && (in.TrainAgentID != "" || in.InstanceBackedBase)
 }
 
 // createSandboxInstanceRefs creates one sandbox_instance per per-agent env
@@ -668,8 +762,9 @@ func (s *EnvDispatchService) createSandboxInstanceRefs(ctx context.Context, in E
 			// deferred to Step 6c (production adapter wiring). Shape validation
 			// guarantees exactly one of Template/BaseEnvID is set.
 			ref, err := s.lifecycle.CreateSandboxInstance(ctx, CreateSandboxInstanceInput{
-				WorkspaceID: in.WorkspaceID,
-				Template:    spec.Template,
+				WorkspaceID:   in.WorkspaceID,
+				Template:      spec.Template,
+				DaemonEnabled: true,
 			}, in.UserID)
 			if err != nil {
 				return nil, nil, err
@@ -681,11 +776,13 @@ func (s *EnvDispatchService) createSandboxInstanceRefs(ctx context.Context, in E
 	}
 	// No per-agent specs: create one default sandbox_instance for the rollout.
 	template := "default"
-	if in.Mode == EnvModeBranch && len(sourceEnv.SandboxIDs) > 0 {
-		// Branch-from-template (D7): derive the template from the source env's
-		// first sandbox_instance rather than a live fork. The source DB subtree
-		// is still copied by CopyProjectSubtree, so the child continues the
-		// copied conversation in a fresh sandbox.
+	if len(sourceEnv.SandboxIDs) > 0 && (in.Mode == EnvModeBranch || in.InstanceBackedBase) {
+		// Derive the template from the source env's first sandbox_instance
+		// rather than a live fork. Branch (D7) does this to continue the copied
+		// conversation in a fresh sandbox; an instance-backed scratch base env
+		// (e.g. auto-created default) does it so rollouts reuse the default's
+		// configured template. The source DB subtree is still copied by
+		// CopyProjectSubtree for branch.
 		sourceRef, err := s.lifecycle.GetSandboxInstanceRef(ctx, in.WorkspaceID, sourceEnv.SandboxIDs[0])
 		if err != nil {
 			return nil, nil, fmt.Errorf("resolve source sandbox template: %w", err)
@@ -695,8 +792,9 @@ func (s *EnvDispatchService) createSandboxInstanceRefs(ctx context.Context, in E
 		}
 	}
 	ref, err := s.lifecycle.CreateSandboxInstance(ctx, CreateSandboxInstanceInput{
-		WorkspaceID: in.WorkspaceID,
-		Template:    template,
+		WorkspaceID:   in.WorkspaceID,
+		Template:      template,
+		DaemonEnabled: true,
 	}, in.UserID)
 	if err != nil {
 		return nil, nil, err

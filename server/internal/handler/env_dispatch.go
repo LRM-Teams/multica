@@ -33,6 +33,11 @@ type EnvDispatchRequest struct {
 	TrainAgentID   string                        `json:"train_agent_id,omitempty"`
 	CriticAgentID  string                        `json:"critic_agent_id,omitempty"`
 	IdempotencyKey string                        `json:"idempotency_key,omitempty"`
+	// Template optionally overrides the server's default self_play sandbox
+	// template (MULTICA_DEFAULT_SELF_PLAY_TEMPLATE) for the auto-created default
+	// base env. Only consulted when env_id is empty and no default is configured
+	// (scratch self_play). 1..64 chars when set.
+	Template       string                        `json:"template,omitempty"`
 	Issue          *IssueDispatchInput           `json:"issue,omitempty"`
 	Message        *MessageDispatchInput         `json:"message,omitempty"`
 	PerAgentEnv    map[string]PerAgentEnvRequest `json:"per_agent_env,omitempty"`
@@ -132,6 +137,18 @@ func (h *Handler) EnvDispatch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Template (optional override for the auto-created default self_play base
+	// env). Validate length when present; 1..64 chars. Empty defers to the
+	// server default (h.cfg.DefaultSelfPlayTemplate, itself defaulting to
+	// "default") which the service fills in.
+	template := strings.TrimSpace(req.Template)
+	if template != "" && len(template) > 64 {
+		writeError(w, http.StatusBadRequest, "template must be 1..64 chars")
+		return
+	}
+	if template == "" {
+		template = h.cfg.DefaultSelfPlayTemplate
+	}
 
 	svc := service.NewEnvDispatchService(newEnvDispatchDepsAdapter(h), envDispatchConcurrency())
 	if lc := newEnvSandboxLifecycleService(h); lc != nil {
@@ -143,13 +160,14 @@ func (h *Handler) EnvDispatch(w http.ResponseWriter, r *http.Request) {
 		Domain:       service.EnvDomain(req.Domain),
 		DispatchType: service.EnvDispatchType(req.DispatchType),
 		GroupSize:    req.GroupSize, AgentID: req.AgentID,
-		SquadID:          req.SquadID,
-		TrainAgentID:     req.TrainAgentID,
-		CriticAgentID:    req.CriticAgentID,
-		IdempotencyKey:   req.IdempotencyKey,
-		Issue:            mapIssueInput(req.Issue),
-		Message:          mapMessageInput(req.Message),
-		PerAgentEnvSpecs: mapPerAgentEnvSpecs(req.PerAgentEnv),
+		SquadID:           req.SquadID,
+		TrainAgentID:      req.TrainAgentID,
+		CriticAgentID:     req.CriticAgentID,
+		IdempotencyKey:    req.IdempotencyKey,
+		DefaultBaseTemplate: template,
+		Issue:             mapIssueInput(req.Issue),
+		Message:           mapMessageInput(req.Message),
+		PerAgentEnvSpecs:  mapPerAgentEnvSpecs(req.PerAgentEnv),
 	})
 	if err != nil {
 		writeEnvDispatchError(w, err, res)
@@ -346,6 +364,13 @@ func writeEnvDispatchError(w http.ResponseWriter, err error, res service.EnvDisp
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "validation_failed", "message": msg, "traceback": tb})
 	case strings.Contains(msg, "not_implemented"):
 		writeJSON(w, http.StatusNotImplemented, map[string]any{"error": "not_implemented", "message": msg, "traceback": tb})
+	case strings.Contains(msg, "auto-create default env"):
+		// Auto-creating the default self_play base env failed (e.g. no online
+		// sandbox node bound to the workspace, or the sandbox create job failed).
+		// The error chain may wrap pgx.ErrNoRows from the node pick, but that is a
+		// resource-availability issue, not a "not found" env - map to 503 ahead of
+		// the generic ErrNoRows -> 404 rule.
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "auto_create_default_env_failed", "message": msg, "traceback": tb})
 	case errors.Is(err, pgx.ErrNoRows):
 		// A bare GetEnv miss: env_id does not exist / not in workspace. (The
 		// source-project-resolve path wraps its ErrNoRows in "validation_failed"
@@ -805,6 +830,21 @@ func (a *envDispatchDepsAdapter) GetDefaultSelfPlayEnv(ctx context.Context, work
 		return "", nil // not configured; service maps to 400
 	}
 	return util.UUIDToString(v), nil
+}
+
+// SetDefaultSelfPlayEnv conditionally persists envID as the workspace default
+// self_play base env (only when still NULL). The query is a no-op when another
+// concurrent writer already set the default; the service re-reads
+// GetDefaultSelfPlayEnv to pick up the canonical winner. A real query error is
+// surfaced; "updated 0 rows" is not an error here.
+func (a *envDispatchDepsAdapter) SetDefaultSelfPlayEnv(ctx context.Context, workspaceID, envID string) error {
+	if err := a.h.Queries.SetDefaultSelfPlayEnv(ctx, db.SetDefaultSelfPlayEnvParams{
+		ID:                   parseUUID(workspaceID),
+		DefaultSelfPlayEnvID: parseUUID(envID),
+	}); err != nil {
+		return stackerr.Wrap(err, "set default self_play env")
+	}
+	return nil
 }
 
 // EnqueueAgentRun enqueues an agent task. issueID set → CreateAgentTask
@@ -1297,6 +1337,9 @@ func (s *stubEnvDispatchDeps) EnqueueAgentRun(context.Context, string, string, s
 }
 func (s *stubEnvDispatchDeps) GetDefaultSelfPlayEnv(context.Context, string) (string, error) {
 	return "stub-env", nil
+}
+func (s *stubEnvDispatchDeps) SetDefaultSelfPlayEnv(context.Context, string, string) error {
+	return nil
 }
 func (s *stubEnvDispatchDeps) SaveTrainingDispatch(context.Context, string, string, string, string, float64) error {
 	return nil

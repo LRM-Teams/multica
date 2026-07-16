@@ -13,11 +13,13 @@ import (
 )
 
 type fakeSandboxInstanceCreator struct {
-	calls  []createSandboxCall
-	ref    SandboxInstanceRef
-	err    error
-	refs   map[string]SandboxInstanceRef // instanceID -> ref for GetSandboxInstanceRef
-	getErr error
+	calls      []createSandboxCall
+	ref        SandboxInstanceRef
+	err        error
+	refs       map[string]SandboxInstanceRef // instanceID -> ref for GetSandboxInstanceRef
+	getErr     error
+	deleteCalls []string                     // instanceIDs passed to DeleteSandboxInstance
+	deleteErr  error
 }
 
 func (c *fakeSandboxInstanceCreator) GetSandboxInstanceRef(_ context.Context, _, instanceID string) (SandboxInstanceRef, error) {
@@ -33,25 +35,40 @@ func (c *fakeSandboxInstanceCreator) GetSandboxInstanceRef(_ context.Context, _,
 }
 
 type createSandboxCall struct {
-	WorkspaceID string
-	ActorUserID string
-	Template    string
-	BaseEnvID   string
+	WorkspaceID   string
+	ActorUserID   string
+	Template      string
+	BaseEnvID     string
+	DaemonEnabled bool
 }
 
 func (c *fakeSandboxInstanceCreator) CreateSandboxInstance(_ context.Context, in CreateSandboxInstanceInput, actorUserID string) (SandboxInstanceRef, error) {
-	c.calls = append(c.calls, createSandboxCall{WorkspaceID: in.WorkspaceID, ActorUserID: actorUserID, Template: in.Template, BaseEnvID: ""})
+	c.calls = append(c.calls, createSandboxCall{WorkspaceID: in.WorkspaceID, ActorUserID: actorUserID, Template: in.Template, BaseEnvID: "", DaemonEnabled: in.DaemonEnabled})
 	if c.err != nil {
 		return SandboxInstanceRef{}, c.err
 	}
+	var ref SandboxInstanceRef
 	if c.ref.InstanceID != "" {
-		return c.ref, nil
+		ref = c.ref
+	} else {
+		ref = SandboxInstanceRef{
+			InstanceID:  fmt.Sprintf("inst-%d", len(c.calls)),
+			WorkspaceID: in.WorkspaceID,
+			Template:    in.Template,
+		}
 	}
-	return SandboxInstanceRef{
-		InstanceID:  fmt.Sprintf("inst-%d", len(c.calls)),
-		WorkspaceID: in.WorkspaceID,
-		Template:    in.Template,
-	}, nil
+	// Record the ref so GetSandboxInstanceRef (the instance-backed probe + the
+	// scratch template derivation) can resolve the instance we just created.
+	if c.refs == nil {
+		c.refs = map[string]SandboxInstanceRef{}
+	}
+	c.refs[ref.InstanceID] = ref
+	return ref, nil
+}
+
+func (c *fakeSandboxInstanceCreator) DeleteSandboxInstance(_ context.Context, ref SandboxInstanceRef, _ string) error {
+	c.deleteCalls = append(c.deleteCalls, ref.InstanceID)
+	return c.deleteErr
 }
 
 var _ SandboxInstanceCreator = (*fakeSandboxInstanceCreator)(nil)
@@ -69,6 +86,13 @@ type fakeEnvDispatchDeps struct {
 	idem       map[string]EnvDispatchResult // idempotency ledger
 
 	defaultSelfPlayEnv string // per-workspace default self_play base env ("" = unconfigured)
+
+	defaultSelfPlayEnvSetCalls int // number of SetDefaultSelfPlayEnv invocations (race assertions)
+
+	// simulateRaceWinner, when non-empty, is forced as defaultSelfPlayEnv inside
+	// SetDefaultSelfPlayEnv so the service's re-read sees a different winner than
+	// the env it just created - driving the loser-cleanup path deterministically.
+	simulateRaceWinner string
 
 	trainingSaves []trainingSaveCall // every SaveTrainingDispatch call, in order
 
@@ -233,10 +257,24 @@ func (f *fakeEnvDispatchDeps) EnqueueAgentRun(_ context.Context, _, _, _, _, _, 
 func (f *fakeEnvDispatchDeps) GetDefaultSelfPlayEnv(_ context.Context, _ string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.defaultSelfPlayEnv == "" {
-		return "", fmt.Errorf("not configured")
-	}
+	// Mirrors the real adapter: ("", nil) when unconfigured so the service can
+	// distinguish "not configured" (auto-create) from a real query error.
 	return f.defaultSelfPlayEnv, nil
+}
+func (f *fakeEnvDispatchDeps) SetDefaultSelfPlayEnv(_ context.Context, _, envID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.defaultSelfPlayEnvSetCalls++
+	// Conditional, only-if-empty: first concurrent writer wins.
+	if f.defaultSelfPlayEnv == "" {
+		f.defaultSelfPlayEnv = envID
+	}
+	// Optionally simulate a concurrent writer that already set a different
+	// default, so the service's re-read picks up a winner != envID.
+	if f.simulateRaceWinner != "" {
+		f.defaultSelfPlayEnv = f.simulateRaceWinner
+	}
+	return nil
 }
 
 // trainingSaveCall records the arguments of one SaveTrainingDispatch call.
@@ -845,7 +883,9 @@ func TestDispatch_EmptyEnvIDResolvesDefaultForSelfPlay(t *testing.T) {
 
 // TestValidate_EmptyEnvIDRejectedForSweLegoAndUnconfigured verifies empty
 // env_id is rejected for swe_lego, and for self_play when no default is
-// configured (spec D2/D3).
+// configured AND no sandbox lifecycle is injected (so auto-create cannot run).
+// With a lifecycle, the self_play case auto-creates a default instead - see
+// TestDispatch_AutoCreatesDefaultSelfPlayEnvAndReuses.
 func TestValidate_EmptyEnvIDRejectedForSweLegoAndUnconfigured(t *testing.T) {
 	f := newFakeEnvDispatchDeps() // defaultSelfPlayEnv == "" (unconfigured)
 	svc := NewEnvDispatchService(f, 1)
@@ -863,7 +903,125 @@ func TestValidate_EmptyEnvIDRejectedForSweLegoAndUnconfigured(t *testing.T) {
 		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage,
 		GroupSize: 1, AgentID: "ag", Message: &MessageInput{Content: "hi"},
 	}); err == nil {
-		t.Error("self_play with empty env_id and no default must be rejected")
+		t.Error("self_play with empty env_id, no default, and no lifecycle must be rejected")
+	}
+}
+
+// TestDispatch_AutoCreatesDefaultSelfPlayEnvAndReuses verifies that a
+// scratch+self_play dispatch with an empty env_id and no configured default
+// auto-creates a base env (sandbox_instance-backed), persists it as the
+// workspace default, forks it via the sandbox_instance backend, and that a
+// second dispatch reuses the now-configured default (no second auto-create).
+func TestDispatch_AutoCreatesDefaultSelfPlayEnvAndReuses(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	lc := &fakeSandboxInstanceCreator{}
+	svc := NewEnvDispatchService(f, 1).WithSandboxLifecycle(lc)
+
+	in := EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", Mode: EnvModeScratch, EnvID: "",
+		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage,
+		GroupSize: 1, AgentID: "ag", Message: &MessageInput{Content: "hi"},
+		DefaultBaseTemplate: "py312",
+	}
+
+	// Dispatch 1: auto-creates the default.
+	res1, err := svc.Dispatch(context.Background(), in)
+	if err != nil {
+		t.Fatalf("dispatch 1 (auto-create): %v", err)
+	}
+	if res1.Rollouts[0].EnvID == "" {
+		t.Fatal("dispatch 1: expected a forked rollout env_id")
+	}
+	if f.defaultSelfPlayEnv == "" {
+		t.Fatal("dispatch 1: expected the default self_play env to be persisted")
+	}
+	if f.defaultSelfPlayEnvSetCalls != 1 {
+		t.Fatalf("dispatch 1: want 1 SetDefaultSelfPlayEnv call, got %d", f.defaultSelfPlayEnvSetCalls)
+	}
+	// The auto-created base env's sandbox is a sandbox_instance (inst-1 from the
+	// first CreateSandboxInstance call), and the rollout fork creates a second
+	// instance (inst-2) reusing the base's template.
+	if len(lc.calls) != 2 {
+		t.Fatalf("want 2 sandbox_instance creates (base + rollout fork), got %d", len(lc.calls))
+	}
+	if lc.calls[0].Template != "py312" {
+		t.Fatalf("auto-created base template = %q, want %q", lc.calls[0].Template, "py312")
+	}
+	if lc.calls[1].Template != "py312" {
+		t.Fatalf("rollout fork template = %q, want %q (should reuse base template)", lc.calls[1].Template, "py312")
+	}
+	// The auto-created base env is a forkable template holder - it must NOT boot
+	// a daemon (no DaemonEnabled). The rollout fork is the per-agent execution
+	// sandbox - it MUST be daemon-enabled so the in-sandbox daemon can reach
+	// multica. This is the Phase 1 daemon-runtime-env wiring contract.
+	if lc.calls[0].DaemonEnabled {
+		t.Fatalf("auto-created base env sandbox must not be daemon-enabled, got %+v", lc.calls[0])
+	}
+	if !lc.calls[1].DaemonEnabled {
+		t.Fatalf("rollout fork sandbox must be daemon-enabled, got %+v", lc.calls[1])
+	}
+
+	// Dispatch 2: reuses the configured default; no second auto-create.
+	setCallsBefore := f.defaultSelfPlayEnvSetCalls
+	createsBefore := len(lc.calls)
+	res2, err := svc.Dispatch(context.Background(), in)
+	if err != nil {
+		t.Fatalf("dispatch 2 (reuse): %v", err)
+	}
+	if res2.Rollouts[0].EnvID == "" {
+		t.Fatal("dispatch 2: expected a forked rollout env_id")
+	}
+	if f.defaultSelfPlayEnvSetCalls != setCallsBefore {
+		t.Fatalf("dispatch 2: default already configured; want 0 additional SetDefaultSelfPlayEnv calls, got %d", f.defaultSelfPlayEnvSetCalls-setCallsBefore)
+	}
+	// Only the rollout fork creates a new instance (no base auto-create).
+	if len(lc.calls) != createsBefore+1 {
+		t.Fatalf("dispatch 2: want 1 additional sandbox_instance create (rollout fork), got %d", len(lc.calls)-createsBefore)
+	}
+}
+
+// TestDispatch_AutoCreateDefaultEnvRaceLoserCleanup verifies the loser path of
+// the auto-create race: when the re-read of the default returns a different
+// winner (a concurrent writer already set one), the dispatch cleans up its own
+// auto-created sandbox_instance and proceeds to fork the winner.
+func TestDispatch_AutoCreateDefaultEnvRaceLoserCleanup(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	lc := &fakeSandboxInstanceCreator{}
+	// Pre-seed the race winner: a base env whose sandbox is a sandbox_instance
+	// the lifecycle can resolve (so the instance-backend probe succeeds).
+	const winnerEnv = "winner-base"
+	const winnerInst = "winner-inst"
+	f.envs[winnerEnv] = Env{ID: winnerEnv, Mode: EnvModeBase, SandboxIDs: []string{winnerInst}}
+	lc.refs = map[string]SandboxInstanceRef{winnerInst: {InstanceID: winnerInst, Template: "default"}}
+	// Force the re-read after SetDefaultSelfPlayEnv to return the winner, so the
+	// env this dispatch auto-creates is treated as the loser.
+	f.simulateRaceWinner = winnerEnv
+
+	svc := NewEnvDispatchService(f, 1).WithSandboxLifecycle(lc)
+	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", Mode: EnvModeScratch, EnvID: "",
+		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage,
+		GroupSize: 1, AgentID: "ag", Message: &MessageInput{Content: "hi"},
+	})
+	if err != nil {
+		t.Fatalf("loser-cleanup dispatch: %v", err)
+	}
+	if res.Rollouts[0].EnvID == "" {
+		t.Fatal("expected the dispatch to fork the winner base env")
+	}
+	// The loser's auto-created sandbox_instance must have been reclaimed.
+	if len(lc.deleteCalls) != 1 {
+		t.Fatalf("want 1 DeleteSandboxInstance (loser cleanup), got %d: %v", len(lc.deleteCalls), lc.deleteCalls)
+	}
+	if lc.deleteCalls[0] == winnerInst {
+		t.Fatalf("loser cleanup deleted the winner instance %q; should delete its own auto-created instance", winnerInst)
+	}
+	// The persisted default is the winner, and the winner base env still exists.
+	if f.defaultSelfPlayEnv != winnerEnv {
+		t.Fatalf("default = %q, want %q", f.defaultSelfPlayEnv, winnerEnv)
+	}
+	if _, ok := f.envs[winnerEnv]; !ok {
+		t.Fatal("winner base env must not be deleted")
 	}
 }
 
@@ -1239,6 +1397,13 @@ func TestEnvDispatchPerAgentEnvSpecsAssignDistinctSandboxRefs(t *testing.T) {
 	}
 	if len(creator.calls) != 2 {
 		t.Fatalf("want 2 sandbox_instance creates, got %d", len(creator.calls))
+	}
+	// Each per-agent execution sandbox must be daemon-enabled so the in-sandbox
+	// daemon can reach multica (Phase 1 daemon-runtime-env wiring contract).
+	for i, c := range creator.calls {
+		if !c.DaemonEnabled {
+			t.Fatalf("per-agent sandbox call %d must be daemon-enabled, got %+v", i, c)
+		}
 	}
 	if len(res.Rollouts) != 1 {
 		t.Fatalf("want 1 rollout, got %d", len(res.Rollouts))

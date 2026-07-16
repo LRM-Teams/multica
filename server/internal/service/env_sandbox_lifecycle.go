@@ -36,6 +36,14 @@ type SandboxLifecycleJobResult struct {
 type EnvSandboxLifecycleDeps interface {
 	GetSandboxInstanceRef(ctx context.Context, workspaceID, instanceID string) (SandboxInstanceRef, error)
 	InsertSandboxInstance(ctx context.Context, in CreateSandboxInstanceInput, actorUserID string) (SandboxInstanceRef, error)
+	// MintSandboxRuntimeEnv mints the daemon bootstrap env for a sandbox: a
+	// server URL + a personal access token (for the actor) + workspace id +
+	// MULTICA_DAEMON_ENABLED=1 + a per-instance profile. Used by Create when a
+	// sandbox is flagged DaemonEnabled and no RuntimeEnv was supplied, so the
+	// in-sandbox daemon can reach multica on boot. The minted env (which carries
+	// the token) must stay within the create path - it is never returned on the
+	// SandboxInstanceRef, so it cannot leak into dispatch responses/ledger.
+	MintSandboxRuntimeEnv(ctx context.Context, workspaceID, actorUserID, instanceID string) (map[string]string, error)
 	EnqueueSandboxJob(ctx context.Context, workspaceID, actorUserID, nodeID, instanceID, jobType string, payload json.RawMessage) (SandboxLifecycleJobResult, error)
 	NotifySandboxJobAvailable(ctx context.Context, nodeID, jobID string) error
 	ForceDeleteSandboxInstance(ctx context.Context, workspaceID, instanceID string) error
@@ -51,6 +59,13 @@ type CreateSandboxInstanceInput struct {
 	Limits      json.RawMessage
 	Runtime     json.RawMessage
 	RuntimeEnv  map[string]string
+	// DaemonEnabled requests that Create mint a daemon bootstrap runtime_env
+	// (server URL + PAT + workspace + MULTICA_DAEMON_ENABLED=1 + profile) via
+	// MintSandboxRuntimeEnv when RuntimeEnv is not supplied, so the in-sandbox
+	// daemon can reach multica on boot. False (the zero value) leaves the
+	// sandbox without a daemon env - used for base/template sandboxes that only
+	// need to hold an image (e.g. the auto-created default self_play base env).
+	DaemonEnabled bool
 }
 
 type EnvSandboxLifecycleService struct {
@@ -87,20 +102,42 @@ func (s *EnvSandboxLifecycleService) GetSandboxInstanceRef(ctx context.Context, 
 	return s.deps.GetSandboxInstanceRef(ctx, workspaceID, instanceID)
 }
 
+// DeleteSandboxInstance satisfies the SandboxInstanceCreator interface, letting
+// env-dispatch reclaim an instance created by the auto-create default-env path
+// when env creation fails or when a concurrent writer lost the race.
+func (s *EnvSandboxLifecycleService) DeleteSandboxInstance(ctx context.Context, ref SandboxInstanceRef, actorUserID string) error {
+	return s.Delete(ctx, ref, actorUserID)
+}
+
 // Create inserts a pending sandbox_instance row, enqueues the existing
 // sandboxd create job, and notifies the owning node — mirroring the existing
 // CreateSandboxInstance handler. It returns the structured ref checkpointing
 // and env-dispatch use to track the new environment handle.
 func (s *EnvSandboxLifecycleService) Create(ctx context.Context, in CreateSandboxInstanceInput, actorUserID string) (SandboxInstanceRef, error) {
-	if in.WorkspaceID == "" || in.NodeID == "" {
-		return SandboxInstanceRef{}, fmt.Errorf("validation_failed: workspace_id and node_id are required for sandbox create")
+	if in.WorkspaceID == "" {
+		return SandboxInstanceRef{}, fmt.Errorf("validation_failed: workspace_id is required for sandbox create")
 	}
 	if in.Template == "" {
 		in.Template = "default"
 	}
+	// NodeID is optional: when empty, InsertSandboxInstance picks an available
+	// node bound to the workspace (mirroring the CreateSandboxInstance handler).
+	// A workspace with no online node surfaces a clear error from that pick.
 	ref, err := s.deps.InsertSandboxInstance(ctx, in, actorUserID)
 	if err != nil {
 		return SandboxInstanceRef{}, fmt.Errorf("insert sandbox instance: %w", err)
+	}
+	// Daemon-enabled sandbox with no caller-supplied bootstrap env: mint one
+	// (server URL + PAT + workspace + MULTICA_DAEMON_ENABLED=1 + profile) so the
+	// in-sandbox daemon can reach multica on boot. The env stays local to Create
+	// (folded into the create job payload below) and is never placed on the ref,
+	// so the token cannot leak into dispatch responses or the idempotency ledger.
+	if in.DaemonEnabled && len(in.RuntimeEnv) == 0 {
+		env, err := s.deps.MintSandboxRuntimeEnv(ctx, in.WorkspaceID, actorUserID, ref.InstanceID)
+		if err != nil {
+			return SandboxInstanceRef{}, fmt.Errorf("mint sandbox runtime env: %w", err)
+		}
+		in.RuntimeEnv = env
 	}
 	payload, err := sandboxCreatePayload(in)
 	if err != nil {

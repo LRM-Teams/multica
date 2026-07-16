@@ -695,6 +695,25 @@ func (h *Handler) CreateSandboxInstance(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *Handler) sandboxRuntimeEnv(r *http.Request, workspaceID, userID pgtype.UUID, instanceID string) (map[string]string, error) {
+	serverURL := firstNonEmptyString(os.Getenv("MULTICA_PUBLIC_URL"), os.Getenv("MULTICA_APP_URL"), os.Getenv("MULTICA_SERVER_URL"))
+	if serverURL == "" {
+		scheme := "http"
+		if r.TLS != nil {
+			scheme = "https"
+		}
+		serverURL = scheme + "://" + r.Host
+	}
+	return h.mintSandboxRuntimeEnv(r.Context(), workspaceID, userID, instanceID, serverURL)
+}
+
+// mintSandboxRuntimeEnv builds the daemon bootstrap env for a sandbox: it mints
+// a personal access token for the actor and returns the env map the in-sandbox
+// daemon reads on boot (server URL + token + workspace id +
+// MULTICA_DAEMON_ENABLED=1 + a per-instance profile). The caller resolves the
+// server URL: the UI create path (sandboxRuntimeEnv) falls back to the request
+// host; server-side dispatch (env-dispatch) uses the configured public URL only.
+// The returned map carries the raw token - keep it within the create path.
+func (h *Handler) mintSandboxRuntimeEnv(ctx context.Context, workspaceID, userID pgtype.UUID, instanceID, serverURL string) (map[string]string, error) {
 	profile := "sandbox-" + instanceID
 	rawToken, err := auth.GeneratePATToken()
 	if err != nil {
@@ -705,7 +724,7 @@ func (h *Handler) sandboxRuntimeEnv(r *http.Request, workspaceID, userID pgtype.
 	if len(prefix) > 12 {
 		prefix = prefix[:12]
 	}
-	_, err = h.Queries.CreatePersonalAccessToken(r.Context(), db.CreatePersonalAccessTokenParams{
+	_, err = h.Queries.CreatePersonalAccessToken(ctx, db.CreatePersonalAccessTokenParams{
 		UserID:      userID,
 		Name:        "sandbox runtime " + instanceID,
 		TokenHash:   auth.HashToken(rawToken),
@@ -714,14 +733,6 @@ func (h *Handler) sandboxRuntimeEnv(r *http.Request, workspaceID, userID pgtype.
 	})
 	if err != nil {
 		return nil, err
-	}
-	serverURL := firstNonEmptyString(os.Getenv("MULTICA_PUBLIC_URL"), os.Getenv("MULTICA_APP_URL"), os.Getenv("MULTICA_SERVER_URL"))
-	if serverURL == "" {
-		scheme := "http"
-		if r.TLS != nil {
-			scheme = "https"
-		}
-		serverURL = scheme + "://" + r.Host
 	}
 	return map[string]string{
 		"MULTICA_SERVER_URL":     serverURL,

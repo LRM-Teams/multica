@@ -158,6 +158,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		TrustedProxies:                        parseTrustedProxies(os.Getenv("MULTICA_TRUSTED_PROXIES")),
 		CloudRuntimeFleetURL:                  cloudRuntimeFleetURLFromEnv(),
 		CloudRuntimeFleetTimeout:              envDuration("MULTICA_CLOUD_FLEET_TIMEOUT", 35*time.Second),
+		DefaultSelfPlayTemplate:               defaultSelfPlayTemplateFromEnv(),
 		AttachmentDownloadMode:                os.Getenv("ATTACHMENT_DOWNLOAD_MODE"),
 		AttachmentDownloadURLTTL:              envDuration("ATTACHMENT_DOWNLOAD_URL_TTL", 30*time.Minute),
 		ChannelAmbientGateMode:                strings.TrimSpace(os.Getenv("MULTICA_AMBIENT_QUEUE_GATE_MODE")),
@@ -1365,4 +1366,15 @@ func cloudRuntimeFleetURLFromEnv() string {
 		return url
 	}
 	return strings.TrimSpace(os.Getenv("MULTICA_FLEET_URL"))
+}
+
+// defaultSelfPlayTemplateFromEnv returns the sandbox template env-dispatch uses
+// when auto-creating a workspace's default self_play base env. Defaults to
+// "default" when MULTICA_DEFAULT_SELF_PLAY_TEMPLATE is unset/blank; a request
+// may still override it per-dispatch.
+func defaultSelfPlayTemplateFromEnv() string {
+	if t := strings.TrimSpace(os.Getenv("MULTICA_DEFAULT_SELF_PLAY_TEMPLATE")); t != "" {
+		return t
+	}
+	return "default"
 }

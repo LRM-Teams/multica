@@ -149,11 +149,13 @@ const personalNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] 
   { key: "myIssues", labelKey: "my_issues", icon: CircleUser },
 ];
 
+// Order is by how often you reach for it, not by module hierarchy: chat is the
+// highest-frequency surface here, so it sits directly under Overview (Frank).
 const workspaceNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] = [
   { key: "overview", labelKey: "overview", icon: LayoutDashboard },
+  { key: "channels", labelKey: "channels", icon: MessageCircle },
   { key: "issues", labelKey: "issues", icon: ListTodo },
   { key: "projects", labelKey: "projects", icon: FolderKanban },
-  { key: "channels", labelKey: "channels", icon: MessageCircle },
   { key: "autopilots", labelKey: "autopilots", icon: Zap },
   { key: "agents", labelKey: "agents", icon: Bot },
   { key: "squads", labelKey: "squads", icon: Users },

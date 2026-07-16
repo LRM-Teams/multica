@@ -19,6 +19,7 @@ var (
 type SandboxInstanceRef struct {
 	InstanceID      string          `json:"instance_id"`
 	WorkspaceID     string          `json:"workspace_id"`
+	CreatorUserID   string          `json:"creator_user_id,omitempty"`
 	NodeID          string          `json:"node_id"`
 	LocalRef        string          `json:"local_ref,omitempty"`
 	Template        string          `json:"template,omitempty"`

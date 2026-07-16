@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -42,6 +43,29 @@ type retryTestEnv struct {
 	project  db.Project
 	issue    db.Issue
 	agent    db.Agent
+}
+
+type fakeEphemeralSandboxManager struct {
+	prepared   *EphemeralRetryResources
+	prepareErr error
+	reclaims   int
+}
+
+func (f *fakeEphemeralSandboxManager) PrepareRetry(context.Context, db.AgentTaskQueue) (*EphemeralRetryResources, error) {
+	return f.prepared, f.prepareErr
+}
+
+func (f *fakeEphemeralSandboxManager) Reclaim(context.Context, *EphemeralRetryResources) error {
+	f.reclaims++
+	return nil
+}
+
+func (f *fakeEphemeralSandboxManager) Cleanup(context.Context, db.AgentTaskQueue) error {
+	return nil
+}
+
+func ephemeralRetryMarker(instanceID string) json.RawMessage {
+	return json.RawMessage(fmt.Sprintf(`{"ephemeral_sandbox":{"sandbox_instance_id":%q,"actor_user_id":"cccccccc-0000-0000-0000-000000000001"}}`, instanceID))
 }
 
 // setupRetryTestDB builds a real-Postgres, tx-backed fixture exercising the
@@ -203,6 +227,49 @@ func TestCreateRetryTaskOverridesRuntimeAndContext(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, replacement.ID, child.RuntimeID)
 	assert.JSONEq(t, string(replacementContext), string(child.Context))
+}
+
+func TestMaybeRetryOfflineEphemeralTaskUsesFreshResources(t *testing.T) {
+	env := setupRetryTestDB(t, "runtime_offline")
+	ctx := context.Background()
+	replacement, err := env.svc.Queries.PrecreateAgentRuntime(ctx, db.PrecreateAgentRuntimeParams{
+		WorkspaceID: env.agent.WorkspaceID,
+		DaemonID:    pgtype.Text{String: "daemon-fresh-retry", Valid: true},
+		Name:        "fresh retry runtime",
+		Provider:    "pi",
+	})
+	require.NoError(t, err)
+	resources := &EphemeralRetryResources{
+		RuntimeID: replacement.ID,
+		Context:   ephemeralRetryMarker("sandbox-fresh"),
+	}
+	manager := &fakeEphemeralSandboxManager{prepared: resources}
+	env.svc.EphemeralSandboxManager = manager
+	env.parent.Context = ephemeralRetryMarker("sandbox-old")
+
+	child, err := env.svc.MaybeRetryFailedTask(ctx, env.parent)
+	require.NoError(t, err)
+	require.NotNil(t, child)
+	assert.Equal(t, resources.RuntimeID, child.RuntimeID)
+	assert.JSONEq(t, string(resources.Context), string(child.Context))
+	assert.Equal(t, 0, manager.reclaims)
+}
+
+func TestMaybeRetryOfflineEphemeralTaskReclaimsFreshResourcesWhenChildInsertFails(t *testing.T) {
+	env := setupRetryTestDB(t, "runtime_offline")
+	ctx := context.Background()
+	resources := &EphemeralRetryResources{
+		RuntimeID: util.MustParseUUID("eeeeeeee-0000-0000-0000-000000000098"),
+		Context:   ephemeralRetryMarker("sandbox-fresh-invalid-runtime"),
+	}
+	manager := &fakeEphemeralSandboxManager{prepared: resources}
+	env.svc.EphemeralSandboxManager = manager
+	env.parent.Context = ephemeralRetryMarker("sandbox-old")
+
+	child, err := env.svc.MaybeRetryFailedTask(ctx, env.parent)
+	require.Error(t, err)
+	assert.Nil(t, child)
+	assert.Equal(t, 1, manager.reclaims)
 }
 
 // TestMaybeRetryFailedTask_ChildOpensFreshSessionBeforeNotify verifies the D9

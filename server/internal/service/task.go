@@ -40,6 +40,20 @@ type EphemeralSandboxCleaner interface {
 	DeleteSandboxInstance(ctx context.Context, workspaceID, instanceID string) error
 }
 
+type EphemeralRetryResources struct {
+	RuntimeID   pgtype.UUID
+	Context     []byte
+	WorkspaceID string
+	SandboxRef  SandboxInstanceRef
+	ActorUserID string
+}
+
+type EphemeralSandboxManager interface {
+	PrepareRetry(context.Context, db.AgentTaskQueue) (*EphemeralRetryResources, error)
+	Reclaim(context.Context, *EphemeralRetryResources) error
+	Cleanup(context.Context, db.AgentTaskQueue) error
+}
+
 type TaskService struct {
 	Queries   *db.Queries
 	TxStarter TxStarter
@@ -73,6 +87,7 @@ type TaskService struct {
 	// cleanup hook at task terminal. Nil = no-op (sandbox cleanup not
 	// configured). Wired by the handler to the env-sandbox-lifecycle adapter.
 	EphemeralSandboxCleaner EphemeralSandboxCleaner
+	EphemeralSandboxManager EphemeralSandboxManager
 
 	analyticsContextMu    sync.Mutex
 	analyticsContextCache map[string]analytics.TaskContext
@@ -2228,8 +2243,27 @@ func (s *TaskService) MaybeRetryFailedTask(ctx context.Context, parent db.AgentT
 		return nil, nil
 	}
 
-	child, err := s.createRetryTaskWithPendingWakeTransfer(ctx, parent.ID)
+	var retryResources *EphemeralRetryResources
+	var err error
+	if reason == "runtime_offline" {
+		if _, ephemeral := extractEphemeralSandbox(parent.Context); ephemeral && s.EphemeralSandboxManager != nil {
+			retryResources, err = s.EphemeralSandboxManager.PrepareRetry(ctx, parent)
+			if err != nil {
+				return nil, fmt.Errorf("prepare ephemeral sandbox retry: %w", err)
+			}
+			if retryResources == nil {
+				return nil, fmt.Errorf("prepare ephemeral sandbox retry: empty resources")
+			}
+		}
+	}
+
+	child, err := s.createRetryTaskWithPendingWakeTransfer(ctx, parent.ID, retryResources)
 	if err != nil {
+		if retryResources != nil {
+			if reclaimErr := s.EphemeralSandboxManager.Reclaim(context.WithoutCancel(ctx), retryResources); reclaimErr != nil {
+				err = errors.Join(err, fmt.Errorf("reclaim ephemeral retry resources: %w", reclaimErr))
+			}
+		}
 		slog.Warn("task auto-retry failed",
 			"parent_task_id", util.UUIDToString(parent.ID),
 			"reason", reason,
@@ -2307,9 +2341,14 @@ func (s *TaskService) openFreshSessionForRetryChild(ctx context.Context, child d
 	s.tryOpenTrainingSession(ctx, child, issue.ProjectID, envID)
 }
 
-func (s *TaskService) createRetryTaskWithPendingWakeTransfer(ctx context.Context, parentID pgtype.UUID) (db.AgentTaskQueue, error) {
+func (s *TaskService) createRetryTaskWithPendingWakeTransfer(ctx context.Context, parentID pgtype.UUID, resources *EphemeralRetryResources) (db.AgentTaskQueue, error) {
+	params := db.CreateRetryTaskParams{ID: parentID}
+	if resources != nil {
+		params.RuntimeID = resources.RuntimeID
+		params.Context = resources.Context
+	}
 	if s.TxStarter == nil {
-		child, err := s.Queries.CreateRetryTask(ctx, db.CreateRetryTaskParams{ID: parentID})
+		child, err := s.Queries.CreateRetryTask(ctx, params)
 		if err != nil {
 			return db.AgentTaskQueue{}, fmt.Errorf("create retry task: %w", err)
 		}
@@ -2329,7 +2368,7 @@ func (s *TaskService) createRetryTaskWithPendingWakeTransfer(ctx context.Context
 	defer tx.Rollback(ctx)
 
 	qtx := s.Queries.WithTx(tx)
-	child, err := qtx.CreateRetryTask(ctx, db.CreateRetryTaskParams{ID: parentID})
+	child, err := qtx.CreateRetryTask(ctx, params)
 	if err != nil {
 		return db.AgentTaskQueue{}, fmt.Errorf("create retry task: %w", err)
 	}
@@ -2512,27 +2551,34 @@ func (s *TaskService) enqueueRerunTask(ctx context.Context, issue db.Issue, agen
 // the terminal cleanup hook reads to reclaim the ephemeral Cube sandbox.
 const ephemeralSandboxContextKey = "ephemeral_sandbox"
 
-// ephemeralSandboxCtx holds the Phase 5 sandbox-instance marker stored at
+// EphemeralSandboxMarker holds the Phase 5 sandbox-instance marker stored at
 // context.ephemeral_sandbox on an env-dispatch ephemeral rollout task.
-type ephemeralSandboxCtx struct {
+type EphemeralSandboxMarker struct {
 	SandboxInstanceID string `json:"sandbox_instance_id"`
+	ActorUserID       string `json:"actor_user_id"`
 }
 
-// extractEphemeralSandbox reads the Phase 5 ephemeral_sandbox marker from a
+// ExtractEphemeralSandbox reads the Phase 5 ephemeral_sandbox marker from a
 // task's context. Returns the marker and true when the task is an ephemeral
 // rollout, or (nil, false) when it's not.
-func extractEphemeralSandbox(raw []byte) (*ephemeralSandboxCtx, bool) {
+func ExtractEphemeralSandbox(raw []byte) (*EphemeralSandboxMarker, bool) {
 	if len(raw) == 0 {
 		return nil, false
 	}
 	var envelope struct {
-		EphemeralSandbox *ephemeralSandboxCtx `json:"ephemeral_sandbox"`
+		EphemeralSandbox *EphemeralSandboxMarker `json:"ephemeral_sandbox"`
 	}
 	if err := json.Unmarshal(raw, &envelope); err != nil {
 		return nil, false
 	}
 	p := envelope.EphemeralSandbox
 	return p, p != nil && p.SandboxInstanceID != ""
+}
+
+// extractEphemeralSandbox preserves the package-local helper used by existing
+// cleanup code and tests while the handler consumes the exported parser.
+func extractEphemeralSandbox(raw []byte) (*EphemeralSandboxMarker, bool) {
+	return ExtractEphemeralSandbox(raw)
 }
 
 // maybeCleanupEphemeralSandbox is the Phase 5 terminal hook: if this task was

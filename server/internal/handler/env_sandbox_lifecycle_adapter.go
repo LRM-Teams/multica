@@ -226,6 +226,7 @@ func sandboxInstanceRowToRef(row db.ListSandboxInstancesByWorkspaceRow) service.
 	return service.SandboxInstanceRef{
 		InstanceID:      util.UUIDToString(row.ID),
 		WorkspaceID:     util.UUIDToString(row.WorkspaceID),
+		CreatorUserID:   util.UUIDToString(row.CreatorUserID),
 		NodeID:          util.UUIDToString(row.NodeID),
 		Template:        row.Template,
 		Status:          row.Status,

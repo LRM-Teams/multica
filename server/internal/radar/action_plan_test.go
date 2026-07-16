@@ -48,6 +48,8 @@ func TestBuildAmbientChannelPromptCoversCoordinationActions(t *testing.T) {
 		"not a playable demo",
 		"acceptance criteria",
 		"based on evidence",
+		// Visual/UI审 leverages image reading: review the screenshot vs reference.
+		"review the actual screenshot",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("ambient prompt missing %q:\n%s", want, prompt)

@@ -2174,6 +2174,8 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
           <ContentEditor
             key={`thread-editor:${threadRoot.id}`}
             ref={threadEditorRef}
+            // Bare URLs stay plain text in the composer (#531/#542).
+            plainUrls
             placeholder={t(($) => $.thread.composer_placeholder)}
             onUpdate={handleThreadEditorUpdate}
             onSubmit={handleThreadSend}
@@ -2581,6 +2583,9 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                       <ContentEditor
                         key={active.id}
                         ref={editorRef}
+                        // Chat composer: typed/loaded bare URLs stay plain text
+                        // (#531/#542) — made clickable on the read side, not here.
+                        plainUrls
                         defaultValue={activeDraft}
                         placeholder={t(($) => $.composer.placeholder)}
                         onUpdate={handleEditorUpdate}

@@ -49,7 +49,10 @@ export function wordHref(word: string): string | null {
  * or the textblock start. Returns [from, wordEnd) or null if empty.
  */
 function wordRangeEndingAt(state: EditorState, wordEnd: number): { from: number; to: number } | null {
-  const blockStart = state.doc.resolve(wordEnd).start();
+  if (wordEnd <= 0) return null;
+  // Resolve a position INSIDE the word (wordEnd - 1). wordEnd may sit on a block
+  // boundary (Enter case), where resolve(wordEnd) is ambiguous between blocks.
+  const blockStart = state.doc.resolve(wordEnd - 1).start();
   let from = wordEnd;
   while (from > blockStart) {
     const ch = state.doc.textBetween(from - 1, from, undefined, "￼");
@@ -60,16 +63,32 @@ function wordRangeEndingAt(state: EditorState, wordEnd: number): { from: number;
   return { from, to: wordEnd };
 }
 
-/** Apply a link mark over [from, to) if it is a whole bare URL. */
-function markBareUrl(state: EditorState, from: number, to: number): Transaction | null {
+/**
+ * Apply a link mark over the URL inside the word [wordFrom, wordTo). Uses the
+ * detector's real `[start, end)` span (post-#650, host boundaries are clean),
+ * NOT a whole-word requirement — so trailing punctuation (`https://x.com,`) or
+ * a glued CJK particle (`https://x.com吗`) that the detector correctly excludes
+ * stays outside the link instead of dropping the whole match.
+ */
+function markBareUrl(state: EditorState, wordFrom: number, wordTo: number): Transaction | null {
   const linkType = state.schema.marks.link;
   if (!linkType) return null;
-  // Don't re-link an already-linked range or code.
-  if (state.doc.rangeHasMark(from, to, linkType)) return null;
-  if (state.doc.resolve(from).parent.type.spec.code) return null;
+  if (state.doc.resolve(wordFrom).parent.type.spec.code) return null;
 
-  const href = wordHref(state.doc.textBetween(from, to));
-  if (!href) return null;
+  const word = state.doc.textBetween(wordFrom, wordTo);
+  const urls = detectLinks(word).filter((l) => l.type === "url");
+  if (urls.length !== 1) return null;
+  const link = urls[0]!;
+  // The word is a contiguous text run (walk-back stopped at any inline atom),
+  // so document position = wordFrom + string offset — no text search.
+  const from = wordFrom + link.start;
+  const to = wordFrom + link.end;
+  if (from >= to) return null;
+  if (state.doc.rangeHasMark(from, to, linkType)) return null;
+
+  // Writer-only scheme normalization: explicit scheme preserved (http stays
+  // http), scheme-less host gets https (never the linkify default of http).
+  const href = SCHEME_RE.test(link.text) ? link.text : `https://${link.text}`;
   return state.tr.addMark(from, to, linkType.create({ href }));
 }
 
@@ -116,7 +135,39 @@ export function createWordBoundaryAutolink() {
             if (transactions.some((tr) => tr.getMeta("preventAutolink"))) return null;
             const sel = newState.selection;
             if (!sel.empty) return null;
-            return autolinkWordAt(newState, sel.from);
+
+            // Case A: a whitespace boundary was just typed at the cursor.
+            const byWhitespace = autolinkWordAt(newState, sel.from);
+            if (byWhitespace) return byWhitespace;
+
+            // Case B: a block boundary (Enter / paragraph split) — the previous
+            // block's trailing word just ended. The cursor now sits at the
+            // start of the new block, so link the word ending at the prior
+            // block boundary.
+            const $cursor = sel.$from;
+            if ($cursor.parentOffset === 0 && $cursor.depth > 0) {
+              // The previous block's content ends one position before the new
+              // block's boundary ($cursor.before() points past its close token).
+              const range = wordRangeEndingAt(newState, $cursor.before() - 1);
+              if (range) return markBareUrl(newState, range.from, range.to);
+            }
+            return null;
+          },
+          props: {
+            handleDOMEvents: {
+              // IME recovery: when composition ends, a URL that was skipped
+              // while composing (we never fire mid-composition) gets linked
+              // now. Deferred to a microtask so ProseMirror has committed the
+              // composed text into the document first.
+              compositionend: (view) => {
+                queueMicrotask(() => {
+                  if (view.isDestroyed) return;
+                  const tr = autolinkFinalWord(view.state);
+                  if (tr) view.dispatch(tr);
+                });
+                return false;
+              },
+            },
           },
         }),
       ];

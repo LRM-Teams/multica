@@ -146,6 +146,61 @@ describe("word-boundary autolink (#531)", () => {
     expect(marks[0]!.href).toBe("https://ok.com/a");
   });
 
+  it("trailing punctuation stays outside the link (https://x.com, )", () => {
+    const ed = makeEditor();
+    type(ed, "see https://x.com, ");
+    const marks = linkMarks(ed);
+    expect(marks).toHaveLength(1);
+    expect(marks[0]).toEqual({ text: "https://x.com", href: "https://x.com" });
+  });
+
+  it("glued CJK particle stays outside the link (https://x.com吗 )", () => {
+    const ed = makeEditor();
+    type(ed, "见 https://x.com吗 ");
+    const marks = linkMarks(ed);
+    expect(marks).toHaveLength(1);
+    expect(marks[0]).toEqual({ text: "https://x.com", href: "https://x.com" });
+  });
+
+  it("parenthesized URL links the URL, parens outside", () => {
+    const ed = makeEditor();
+    type(ed, "(https://x.com) ");
+    const marks = linkMarks(ed);
+    expect(marks).toHaveLength(1);
+    expect(marks[0]!.text).toBe("https://x.com");
+  });
+
+  it("Enter / paragraph boundary links the previous block's URL", () => {
+    const ed = makeEditor();
+    type(ed, "https://x.com");
+    expect(linkMarks(ed)).toHaveLength(0); // nothing until the boundary
+    ed.commands.splitBlock(); // Enter
+    const marks = linkMarks(ed);
+    expect(marks).toHaveLength(1);
+    expect(marks[0]!.text).toBe("https://x.com");
+  });
+
+  it("undo removes the autolink mark with the typed boundary", () => {
+    const ed = makeEditor();
+    type(ed, "https://x.com/w ");
+    expect(linkMarks(ed)).toHaveLength(1);
+    ed.commands.undo();
+    expect(linkMarks(ed)).toHaveLength(0);
+  });
+
+  it("IME recovery: compositionend links a URL left unmarked while composing", async () => {
+    const ed = makeEditor();
+    // A URL sitting at the cursor with no boundary (as if composition just
+    // committed the surrounding text) — not linked yet.
+    type(ed, "https://x.com");
+    expect(linkMarks(ed)).toHaveLength(0);
+    ed.view.dom.dispatchEvent(new CompositionEvent("compositionend"));
+    await Promise.resolve(); // flush the queued microtask
+    const marks = linkMarks(ed);
+    expect(marks).toHaveLength(1);
+    expect(marks[0]!.text).toBe("https://x.com");
+  });
+
   it("mention atom before the URL: word range stops at the atom, URL clean", () => {
     const element = document.createElement("div");
     document.body.appendChild(element);

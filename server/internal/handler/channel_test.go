@@ -2940,6 +2940,47 @@ func TestChannelMutedMemberDoesNotReceiveMentionInbox(t *testing.T) {
 	}
 }
 
+func TestListChannelsMentionUnreadCountTracksReadCursor(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	memberID := createChannelPlainMember(t)
+	channelID := seedChannelForTest(t, "mention-unread-count-"+uuid.NewString(), testUserID, memberID)
+	var memberName string
+	if err := testPool.QueryRow(ctx, `SELECT name FROM "user" WHERE id = $1`, memberID).Scan(&memberName); err != nil {
+		t.Fatalf("load mentioned member: %v", err)
+	}
+
+	for _, content := range []string{
+		"@" + memberName + " first",
+		"ordinary unread message",
+		"@" + memberName + " second",
+	} {
+		if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", content, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
+			t.Fatalf("insert message %q: %v", content, err)
+		}
+	}
+
+	listed := listedChannelForUser(t, channelID, memberID)
+	if listed == nil {
+		t.Fatal("mentioned member cannot see channel")
+	}
+	if !listed.HasMention || listed.MentionUnreadCount != 2 {
+		t.Fatalf("mention state = has:%t count:%d, want has:true count:2", listed.HasMention, listed.MentionUnreadCount)
+	}
+
+	markChannelReadForTest(t, channelID, memberID)
+	listed = listedChannelForUser(t, channelID, memberID)
+	if listed == nil {
+		t.Fatal("mentioned member cannot see channel after marking read")
+	}
+	if listed.HasMention || listed.MentionUnreadCount != 0 {
+		t.Fatalf("mention state after read = has:%t count:%d, want has:false count:0", listed.HasMention, listed.MentionUnreadCount)
+	}
+}
+
 func TestSendChannelMessageReplyReturnsSummary(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

@@ -39,6 +39,8 @@ export interface Channel {
   /** An unread message in this conversation @-mentions the viewer (BE #301);
    *  drives the independent @-mention red dot (coexists with the count). */
   has_mention?: boolean;
+  /** Number of unread messages in this channel that @-mention the viewer. */
+  mention_unread_count?: number;
   /** Viewer's read cursor for this conversation (`conversation_member.last_read_seq`).
    *  List/detail enrichment; drives the "N new messages" divider pinned on entry. */
   last_read_seq?: number;

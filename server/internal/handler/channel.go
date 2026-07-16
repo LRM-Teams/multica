@@ -63,16 +63,17 @@ type ChannelResponse struct {
 	ArchivedAt  *string `json:"archived_at,omitempty"`
 	ArchivedBy  *string `json:"archived_by,omitempty"`
 	// List-only enrichments (zero/omitted on create/update/get responses).
-	UnreadCount     int                  `json:"unread_count"`
-	RealUnreadCount int                  `json:"real_unread_count"`
-	ManuallyUnread  bool                 `json:"manually_unread,omitempty"`
-	PinnedAt        *string              `json:"pinned_at,omitempty"`
-	MutedAt         *string              `json:"muted_at,omitempty"`
-	Muted           bool                 `json:"muted,omitempty"`
-	HasMention      bool                 `json:"has_mention,omitempty"`
-	LastReadSeq     *int64               `json:"last_read_seq,omitempty"`
-	LastMessage     *ChannelLastMessage  `json:"last_message,omitempty"`
-	Members         []ChannelMemberBrief `json:"members,omitempty"`
+	UnreadCount        int                  `json:"unread_count"`
+	RealUnreadCount    int                  `json:"real_unread_count"`
+	ManuallyUnread     bool                 `json:"manually_unread,omitempty"`
+	PinnedAt           *string              `json:"pinned_at,omitempty"`
+	MutedAt            *string              `json:"muted_at,omitempty"`
+	Muted              bool                 `json:"muted,omitempty"`
+	HasMention         bool                 `json:"has_mention,omitempty"`
+	MentionUnreadCount int                  `json:"mention_unread_count,omitempty"`
+	LastReadSeq        *int64               `json:"last_read_seq,omitempty"`
+	LastMessage        *ChannelLastMessage  `json:"last_message,omitempty"`
+	Members            []ChannelMemberBrief `json:"members,omitempty"`
 }
 
 type ChannelLastMessage struct {
@@ -321,7 +322,7 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 		       lm.author_type, lm.author_name, lm.content, lm.parts, lm.created_at,
 		       COALESCE(uc.cnt, 0),
 		       GREATEST(COALESCE(uc.cnt, 0), CASE WHEN cm.manual_unread_at IS NOT NULL THEN 1 ELSE 0 END),
-		       COALESCE(hm.has_mention, false),
+		       COALESCE(hm.mention_unread_count, 0),
 		       COALESCE(vcm.last_read_seq, cr.last_read_seq, 0)::bigint
 		FROM channel ch
 		JOIN channel_member cm ON cm.channel_id = ch.id AND cm.member_type = 'user' AND cm.member_id = $2
@@ -349,8 +350,8 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 			  AND m.deleted_at IS NULL
 		) uc ON true
 		LEFT JOIN LATERAL (
-			SELECT EXISTS (
-				SELECT 1 FROM channel_message m
+			SELECT count(*) AS mention_unread_count
+			FROM channel_message m
 				WHERE m.channel_id = ch.id
 				  AND m.seq > COALESCE(vcm.last_read_seq, cr.last_read_seq, 0)
 				  AND NOT (m.author_type = 'user' AND m.author_id = $2)
@@ -358,7 +359,6 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 				  AND (m.content ILIKE '%@' || (
 				    SELECT name FROM "user" WHERE id = $2
 				  ) || '%' OR m.parts::text ILIKE '%mention://' || $2::text || '%')
-			) AS has_mention
 		) hm ON true
 		WHERE ch.workspace_id = $1 AND ch.kind = 'group'
 		  AND (($3 AND ch.archived_at IS NOT NULL) OR (NOT $3 AND ch.archived_at IS NULL))
@@ -377,11 +377,11 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 		var lastParts []byte
 		var createdAt, updatedAt, archivedAt, pinnedAt, manualUnreadAt, mutedAt, lastAt pgtype.Timestamptz
 		var realUnread, unread int
-		var hasMention bool
+		var mentionUnreadCount int
 		var kind string
 		var lastReadSeq int64
 		if err := rows.Scan(&id, &wsID, &name, &desc, &lark, &createdBy, &createdAt, &updatedAt, &kind,
-			&archivedAt, &archivedBy, &pinnedAt, &manualUnreadAt, &mutedAt, &lastType, &lastName, &lastContent, &lastParts, &lastAt, &realUnread, &unread, &hasMention, &lastReadSeq); err != nil {
+			&archivedAt, &archivedBy, &pinnedAt, &manualUnreadAt, &mutedAt, &lastType, &lastName, &lastContent, &lastParts, &lastAt, &realUnread, &unread, &mentionUnreadCount, &lastReadSeq); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read channels")
 			return
 		}
@@ -391,7 +391,7 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 			CreatedAt: timestampToString(createdAt), UpdatedAt: timestampToString(updatedAt),
 			ArchivedAt: timestampToPtr(archivedAt), ArchivedBy: uuidToPtr(archivedBy),
 			Kind: kind, UnreadCount: unread, RealUnreadCount: realUnread, ManuallyUnread: manualUnreadAt.Valid,
-			PinnedAt: timestampToPtr(pinnedAt), MutedAt: timestampToPtr(mutedAt), Muted: mutedAt.Valid, HasMention: hasMention, LastReadSeq: &lastReadSeq, Members: []ChannelMemberBrief{},
+			PinnedAt: timestampToPtr(pinnedAt), MutedAt: timestampToPtr(mutedAt), Muted: mutedAt.Valid, HasMention: mentionUnreadCount > 0, MentionUnreadCount: mentionUnreadCount, LastReadSeq: &lastReadSeq, Members: []ChannelMemberBrief{},
 		}
 		if lastContent.Valid {
 			ch.LastMessage = channelLastMessage(lastType.String, lastName.String, lastContent.String, lastParts, lastAt)

@@ -1716,31 +1716,26 @@ func scanCodexSessionUsage(startTime time.Time, threadID string) *codexSessionUs
 		return nil
 	}
 
-	// Look in today's session directory.
-	dateDir := filepath.Join(root,
-		fmt.Sprintf("%04d", startTime.Year()),
-		fmt.Sprintf("%02d", int(startTime.Month())),
-		fmt.Sprintf("%02d", startTime.Day()),
-	)
-
-	files, err := filepath.Glob(filepath.Join(dateDir, "*.jsonl"))
-	if err != nil || len(files) == 0 {
-		return nil
-	}
-
-	// Only scan files modified after startTime (this task's session).
+	// A resumed Codex thread continues appending to the JSONL under the date it
+	// was first created, which can predate this execution. Walk the date tree to
+	// find the exact thread file, then retain the modification-time and event
+	// timestamp execution boundary below.
 	var result codexSessionUsage
-	for _, f := range files {
-		info, err := os.Stat(f)
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil || entry.IsDir() || filepath.Ext(path) != ".jsonl" || !codexSessionFileMatchesThread(path, threadID) {
+			return nil
+		}
+		info, err := entry.Info()
 		if err != nil || info.ModTime().Before(startTime) {
-			continue
+			return nil
 		}
-		if !codexSessionFileMatchesThread(f, threadID) {
-			continue
-		}
-		if u := parseCodexSessionFile(f, startTime); u != nil {
+		if u := parseCodexSessionFile(path, startTime); u != nil {
 			result = *u
 		}
+		return nil
+	})
+	if err != nil {
+		return nil
 	}
 
 	if result.usage.InputTokens == 0 && result.usage.OutputTokens == 0 {

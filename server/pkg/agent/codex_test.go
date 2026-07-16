@@ -181,17 +181,16 @@ func TestScanCodexSessionUsageSelectsOnlyCurrentThread(t *testing.T) {
 	start := time.Now().UTC().Add(-time.Minute)
 	codexHome := t.TempDir()
 	t.Setenv("CODEX_HOME", codexHome)
-	dateDir := filepath.Join(codexHome, "sessions",
-		fmt.Sprintf("%04d", start.Year()),
-		fmt.Sprintf("%02d", int(start.Month())),
-		fmt.Sprintf("%02d", start.Day()),
-	)
-	if err := os.MkdirAll(dateDir, 0o755); err != nil {
-		t.Fatalf("make session dir: %v", err)
-	}
-
-	writeSession := func(name, content string, modTime time.Time) {
+	writeSession := func(sessionDate time.Time, name, content string, modTime time.Time) {
 		t.Helper()
+		dateDir := filepath.Join(codexHome, "sessions",
+			fmt.Sprintf("%04d", sessionDate.Year()),
+			fmt.Sprintf("%02d", int(sessionDate.Month())),
+			fmt.Sprintf("%02d", sessionDate.Day()),
+		)
+		if err := os.MkdirAll(dateDir, 0o755); err != nil {
+			t.Fatalf("make session dir: %v", err)
+		}
 		path := filepath.Join(dateDir, name)
 		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 			t.Fatalf("write session %s: %v", name, err)
@@ -201,11 +200,13 @@ func TestScanCodexSessionUsageSelectsOnlyCurrentThread(t *testing.T) {
 		}
 	}
 
-	writeSession("rollout-target-thread.jsonl", `{"timestamp":"`+start.Add(time.Second).Format(time.RFC3339Nano)+`","type":"event_msg","payload":{"type":"token_count","info":{"model":"target","last_token_usage":{"input_tokens":123,"output_tokens":45}}}}
+	// Resumed Codex threads keep their original date directory even when a
+	// later execution appends new events today.
+	writeSession(start.AddDate(0, 0, -1), "rollout-target-thread.jsonl", `{"timestamp":"`+start.Add(time.Second).Format(time.RFC3339Nano)+`","type":"event_msg","payload":{"type":"token_count","info":{"model":"target","last_token_usage":{"input_tokens":123,"output_tokens":45}}}}
 `, start.Add(2*time.Second))
 	// This one is newer and sorts later, which previously overwrote the target
 	// result merely because every shared-session file was scanned.
-	writeSession("rollout-unrelated-thread.jsonl", `{"timestamp":"`+start.Add(2*time.Second).Format(time.RFC3339Nano)+`","type":"event_msg","payload":{"type":"token_count","info":{"model":"unrelated","last_token_usage":{"input_tokens":999,"output_tokens":999}}}}
+	writeSession(start, "rollout-unrelated-thread.jsonl", `{"timestamp":"`+start.Add(2*time.Second).Format(time.RFC3339Nano)+`","type":"event_msg","payload":{"type":"token_count","info":{"model":"unrelated","last_token_usage":{"input_tokens":999,"output_tokens":999}}}}
 `, start.Add(3*time.Second))
 
 	usage := scanCodexSessionUsage(start, "target-thread")

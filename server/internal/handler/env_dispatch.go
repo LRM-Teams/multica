@@ -909,13 +909,18 @@ func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, workspaceI
 		if runtimeID != "" {
 			taskRuntimeID = parseUUID(runtimeID)
 		}
+		taskContext := mergeEphemeralSandboxContext(nil, sandboxInstanceID, actorUserID)
+		taskContext, err = service.WithTaskExecutionConfig(taskContext, agent.Model.String, agent.ThinkingLevel.String)
+		if err != nil {
+			return "", stackerr.Wrap(err, "snapshot agent task execution config")
+		}
 		task, err := a.h.Queries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
 			AgentID:      agentUUID,
 			RuntimeID:    taskRuntimeID,
 			IssueID:      parseUUID(issueID),
 			Priority:     envDispatchTaskPriority,
 			IsLeaderTask: isLeaderTask,
-			Context:      mergeEphemeralSandboxContext(nil, sandboxInstanceID, actorUserID),
+			Context:      taskContext,
 		})
 		if err != nil {
 			return "", stackerr.Wrap(err, "create agent task")
@@ -977,6 +982,17 @@ func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, workspaceI
 		// terminal cleanup hook can reclaim the sandbox. No-op for squad dispatch
 		// (sandboxInstanceID is empty); merges alongside any squad_id context.
 		params.Context = mergeEphemeralSandboxContext(params.Context, sandboxInstanceID, actorUserID)
+		targetAgent, err := a.h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
+			ID:          params.AgentID,
+			WorkspaceID: parseUUID(workspaceID),
+		})
+		if err != nil {
+			return "", stackerr.Wrap(err, "get chat task agent")
+		}
+		params.Context, err = service.WithTaskExecutionConfig(params.Context, targetAgent.Model.String, targetAgent.ThinkingLevel.String)
+		if err != nil {
+			return "", stackerr.Wrap(err, "snapshot chat task execution config")
+		}
 		task, err := a.h.Queries.CreateChatTask(ctx, params)
 		if err != nil {
 			return "", stackerr.Wrap(err, "create chat task")

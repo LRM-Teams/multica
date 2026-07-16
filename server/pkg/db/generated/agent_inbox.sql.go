@@ -49,7 +49,7 @@ acked_event AS (
   WHERE e.id = d.inbox_event_id
     AND e.agent_session_id = d.agent_session_id
     AND e.status IN ('pending', 'draining', 'failed')
-  RETURNING e.id, e.workspace_id, e.agent_session_id, e.conversation_id, e.channel_id, e.chat_session_id, e.agent_id, e.source_message_id, e.reason, e.requires_wake, e.status, e.priority, e.seq_from, e.seq_to, e.attempt, e.last_error, e.claimed_at, e.acked_at, e.created_at, e.updated_at, e.terminal_outcome, e.terminal_delivery_id, e.retryable, e.terminal_at
+  RETURNING e.id, e.workspace_id, e.agent_session_id, e.conversation_id, e.channel_id, e.chat_session_id, e.agent_id, e.source_message_id, e.reason, e.requires_wake, e.status, e.priority, e.seq_from, e.seq_to, e.attempt, e.last_error, e.claimed_at, e.acked_at, e.created_at, e.updated_at, e.terminal_outcome, e.terminal_delivery_id, e.retryable, e.terminal_at, e.runtime_id, e.execution_config
 ),
 acked_session AS (
 UPDATE agent_session s
@@ -60,7 +60,7 @@ FROM acked_event
 WHERE s.id = acked_event.agent_session_id
 RETURNING s.id
 )
-SELECT acked_event.id, acked_event.workspace_id, acked_event.agent_session_id, acked_event.conversation_id, acked_event.channel_id, acked_event.chat_session_id, acked_event.agent_id, acked_event.source_message_id, acked_event.reason, acked_event.requires_wake, acked_event.status, acked_event.priority, acked_event.seq_from, acked_event.seq_to, acked_event.attempt, acked_event.last_error, acked_event.claimed_at, acked_event.acked_at, acked_event.created_at, acked_event.updated_at, acked_event.terminal_outcome, acked_event.terminal_delivery_id, acked_event.retryable, acked_event.terminal_at
+SELECT acked_event.id, acked_event.workspace_id, acked_event.agent_session_id, acked_event.conversation_id, acked_event.channel_id, acked_event.chat_session_id, acked_event.agent_id, acked_event.source_message_id, acked_event.reason, acked_event.requires_wake, acked_event.status, acked_event.priority, acked_event.seq_from, acked_event.seq_to, acked_event.attempt, acked_event.last_error, acked_event.claimed_at, acked_event.acked_at, acked_event.created_at, acked_event.updated_at, acked_event.terminal_outcome, acked_event.terminal_delivery_id, acked_event.retryable, acked_event.terminal_at, acked_event.runtime_id, acked_event.execution_config
 FROM acked_event
 JOIN acked_session ON acked_session.id = acked_event.agent_session_id
 `
@@ -96,6 +96,8 @@ type AckAgentInboxDeliveryRow struct {
 	TerminalDeliveryID pgtype.UUID        `json:"terminal_delivery_id"`
 	Retryable          bool               `json:"retryable"`
 	TerminalAt         pgtype.Timestamptz `json:"terminal_at"`
+	RuntimeID          pgtype.UUID        `json:"runtime_id"`
+	ExecutionConfig    []byte             `json:"execution_config"`
 }
 
 func (q *Queries) AckAgentInboxDelivery(ctx context.Context, arg AckAgentInboxDeliveryParams) (AckAgentInboxDeliveryRow, error) {
@@ -126,6 +128,8 @@ func (q *Queries) AckAgentInboxDelivery(ctx context.Context, arg AckAgentInboxDe
 		&i.TerminalDeliveryID,
 		&i.Retryable,
 		&i.TerminalAt,
+		&i.RuntimeID,
+		&i.ExecutionConfig,
 	)
 	return i, err
 }
@@ -134,7 +138,7 @@ const countPendingAgentInboxEventsForRuntime = `-- name: CountPendingAgentInboxE
 SELECT count(*)
 FROM agent_inbox_event e
 JOIN agent_session s ON s.id = e.agent_session_id
-WHERE s.runtime_id = $1
+WHERE COALESCE(e.runtime_id, s.runtime_id) = $1
   AND s.status = 'active'
   AND e.status IN ('pending', 'failed')
 `
@@ -154,6 +158,8 @@ INSERT INTO agent_inbox_event (
   channel_id,
   chat_session_id,
   agent_id,
+  runtime_id,
+  execution_config,
   source_message_id,
   reason,
   requires_wake,
@@ -169,6 +175,12 @@ VALUES (
   $10,
   $11,
   $4,
+  (SELECT runtime_id FROM agent WHERE id = $4),
+  (SELECT jsonb_build_object(
+      'model', COALESCE(model, ''),
+      'thinking_level', COALESCE(thinking_level, ''),
+      'snapshotted', true
+    ) FROM agent WHERE id = $4),
   $12,
   $5,
   $6,
@@ -177,7 +189,7 @@ VALUES (
   $8,
   $9
 )
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config
 `
 
 type CreateAgentInboxEventParams struct {
@@ -236,6 +248,8 @@ func (q *Queries) CreateAgentInboxEvent(ctx context.Context, arg CreateAgentInbo
 		&i.TerminalDeliveryID,
 		&i.Retryable,
 		&i.TerminalAt,
+		&i.RuntimeID,
+		&i.ExecutionConfig,
 	)
 	return i, err
 }
@@ -278,9 +292,9 @@ failed_event AS (
   WHERE e.id = d.inbox_event_id
     AND e.agent_session_id = d.agent_session_id
     AND e.status IN ('pending', 'draining')
-  RETURNING e.id, e.workspace_id, e.agent_session_id, e.conversation_id, e.channel_id, e.chat_session_id, e.agent_id, e.source_message_id, e.reason, e.requires_wake, e.status, e.priority, e.seq_from, e.seq_to, e.attempt, e.last_error, e.claimed_at, e.acked_at, e.created_at, e.updated_at, e.terminal_outcome, e.terminal_delivery_id, e.retryable, e.terminal_at
+  RETURNING e.id, e.workspace_id, e.agent_session_id, e.conversation_id, e.channel_id, e.chat_session_id, e.agent_id, e.source_message_id, e.reason, e.requires_wake, e.status, e.priority, e.seq_from, e.seq_to, e.attempt, e.last_error, e.claimed_at, e.acked_at, e.created_at, e.updated_at, e.terminal_outcome, e.terminal_delivery_id, e.retryable, e.terminal_at, e.runtime_id, e.execution_config
 )
-SELECT id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at FROM failed_event
+SELECT id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config FROM failed_event
 `
 
 type FailAgentInboxDeliveryParams struct {
@@ -315,6 +329,8 @@ type FailAgentInboxDeliveryRow struct {
 	TerminalDeliveryID pgtype.UUID        `json:"terminal_delivery_id"`
 	Retryable          bool               `json:"retryable"`
 	TerminalAt         pgtype.Timestamptz `json:"terminal_at"`
+	RuntimeID          pgtype.UUID        `json:"runtime_id"`
+	ExecutionConfig    []byte             `json:"execution_config"`
 }
 
 func (q *Queries) FailAgentInboxDelivery(ctx context.Context, arg FailAgentInboxDeliveryParams) (FailAgentInboxDeliveryRow, error) {
@@ -350,6 +366,8 @@ func (q *Queries) FailAgentInboxDelivery(ctx context.Context, arg FailAgentInbox
 		&i.TerminalDeliveryID,
 		&i.Retryable,
 		&i.TerminalAt,
+		&i.RuntimeID,
+		&i.ExecutionConfig,
 	)
 	return i, err
 }
@@ -381,7 +399,7 @@ func (q *Queries) GetAgentEventDelivery(ctx context.Context, id pgtype.UUID) (Ag
 }
 
 const getAgentInboxEvent = `-- name: GetAgentInboxEvent :one
-SELECT id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at FROM agent_inbox_event
+SELECT id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config FROM agent_inbox_event
 WHERE id = $1
 `
 
@@ -413,6 +431,8 @@ func (q *Queries) GetAgentInboxEvent(ctx context.Context, id pgtype.UUID) (Agent
 		&i.TerminalDeliveryID,
 		&i.Retryable,
 		&i.TerminalAt,
+		&i.RuntimeID,
+		&i.ExecutionConfig,
 	)
 	return i, err
 }
@@ -451,7 +471,7 @@ WITH next_event AS (
   FROM agent_inbox_event e
   JOIN agent_session s ON s.id = e.agent_session_id
   JOIN agent a ON a.id = e.agent_id
-  WHERE s.runtime_id = $1
+  WHERE COALESCE(e.runtime_id, s.runtime_id) = $1
     AND s.status = 'active'
     AND e.status IN ('pending', 'failed')
     -- Chat inbox execution is globally serial per agent. This is deliberately
@@ -479,7 +499,7 @@ leased_event AS (
       updated_at = now()
   FROM next_event
   WHERE e.id = next_event.id
-  RETURNING e.id, e.workspace_id, e.agent_session_id, e.conversation_id, e.channel_id, e.chat_session_id, e.agent_id, e.source_message_id, e.reason, e.requires_wake, e.status, e.priority, e.seq_from, e.seq_to, e.attempt, e.last_error, e.claimed_at, e.acked_at, e.created_at, e.updated_at, e.terminal_outcome, e.terminal_delivery_id, e.retryable, e.terminal_at
+  RETURNING e.id, e.workspace_id, e.agent_session_id, e.conversation_id, e.channel_id, e.chat_session_id, e.agent_id, e.source_message_id, e.reason, e.requires_wake, e.status, e.priority, e.seq_from, e.seq_to, e.attempt, e.last_error, e.claimed_at, e.acked_at, e.created_at, e.updated_at, e.terminal_outcome, e.terminal_delivery_id, e.retryable, e.terminal_at, e.runtime_id, e.execution_config
 )
 INSERT INTO agent_event_delivery (
   workspace_id,
@@ -528,7 +548,7 @@ WITH expired_delivery AS (
   FROM agent_session s, agent_inbox_event e
   WHERE d.agent_session_id = s.id
     AND d.inbox_event_id = e.id
-    AND s.runtime_id = $1
+    AND COALESCE(e.runtime_id, s.runtime_id) = $1
     AND s.status = 'active'
     AND e.status = 'draining'
     AND d.status IN ('leased', 'processing')
@@ -609,7 +629,7 @@ func (q *Queries) RenewAgentInboxDelivery(ctx context.Context, arg RenewAgentInb
 
 const retryAgentInboxEvent = `-- name: RetryAgentInboxEvent :one
 WITH original AS (
-  SELECT e.id, e.workspace_id, e.agent_session_id, e.conversation_id, e.channel_id, e.chat_session_id, e.agent_id, e.source_message_id, e.reason, e.requires_wake, e.status, e.priority, e.seq_from, e.seq_to, e.attempt, e.last_error, e.claimed_at, e.acked_at, e.created_at, e.updated_at, e.terminal_outcome, e.terminal_delivery_id, e.retryable, e.terminal_at
+  SELECT e.id, e.workspace_id, e.agent_session_id, e.conversation_id, e.channel_id, e.chat_session_id, e.agent_id, e.source_message_id, e.reason, e.requires_wake, e.status, e.priority, e.seq_from, e.seq_to, e.attempt, e.last_error, e.claimed_at, e.acked_at, e.created_at, e.updated_at, e.terminal_outcome, e.terminal_delivery_id, e.retryable, e.terminal_at, e.runtime_id, e.execution_config
   FROM agent_inbox_event e
   WHERE e.id = $1
     AND e.workspace_id = $2
@@ -620,7 +640,7 @@ WITH original AS (
   FOR UPDATE
 ),
 guarded AS (
-  SELECT original.id, original.workspace_id, original.agent_session_id, original.conversation_id, original.channel_id, original.chat_session_id, original.agent_id, original.source_message_id, original.reason, original.requires_wake, original.status, original.priority, original.seq_from, original.seq_to, original.attempt, original.last_error, original.claimed_at, original.acked_at, original.created_at, original.updated_at, original.terminal_outcome, original.terminal_delivery_id, original.retryable, original.terminal_at
+  SELECT original.id, original.workspace_id, original.agent_session_id, original.conversation_id, original.channel_id, original.chat_session_id, original.agent_id, original.source_message_id, original.reason, original.requires_wake, original.status, original.priority, original.seq_from, original.seq_to, original.attempt, original.last_error, original.claimed_at, original.acked_at, original.created_at, original.updated_at, original.terminal_outcome, original.terminal_delivery_id, original.retryable, original.terminal_at, original.runtime_id, original.execution_config
   FROM original
   WHERE EXISTS (
     SELECT 1
@@ -660,6 +680,8 @@ retried_event AS (
     channel_id,
     chat_session_id,
     agent_id,
+    runtime_id,
+    execution_config,
     source_message_id,
     reason,
     requires_wake,
@@ -675,6 +697,12 @@ retried_event AS (
     guarded.channel_id,
     guarded.chat_session_id,
     guarded.agent_id,
+    a.runtime_id,
+    jsonb_build_object(
+      'model', COALESCE(a.model, ''),
+      'thinking_level', COALESCE(a.thinking_level, ''),
+      'snapshotted', true
+    ),
     guarded.source_message_id,
     guarded.reason,
     true,
@@ -683,8 +711,9 @@ retried_event AS (
     guarded.seq_from,
     guarded.seq_to
   FROM guarded
+  JOIN agent a ON a.id = guarded.agent_id
   JOIN refreshed_session ON refreshed_session.id = guarded.agent_session_id
-  RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at
+  RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config
 ),
 copied_prompt AS (
   INSERT INTO chat_message (
@@ -712,7 +741,7 @@ copied_prompt AS (
   WHERE prompt.role = 'user'
   RETURNING id
 )
-SELECT retried_event.id, retried_event.workspace_id, retried_event.agent_session_id, retried_event.conversation_id, retried_event.channel_id, retried_event.chat_session_id, retried_event.agent_id, retried_event.source_message_id, retried_event.reason, retried_event.requires_wake, retried_event.status, retried_event.priority, retried_event.seq_from, retried_event.seq_to, retried_event.attempt, retried_event.last_error, retried_event.claimed_at, retried_event.acked_at, retried_event.created_at, retried_event.updated_at, retried_event.terminal_outcome, retried_event.terminal_delivery_id, retried_event.retryable, retried_event.terminal_at
+SELECT retried_event.id, retried_event.workspace_id, retried_event.agent_session_id, retried_event.conversation_id, retried_event.channel_id, retried_event.chat_session_id, retried_event.agent_id, retried_event.source_message_id, retried_event.reason, retried_event.requires_wake, retried_event.status, retried_event.priority, retried_event.seq_from, retried_event.seq_to, retried_event.attempt, retried_event.last_error, retried_event.claimed_at, retried_event.acked_at, retried_event.created_at, retried_event.updated_at, retried_event.terminal_outcome, retried_event.terminal_delivery_id, retried_event.retryable, retried_event.terminal_at, retried_event.runtime_id, retried_event.execution_config
 FROM retried_event
 WHERE EXISTS (SELECT 1 FROM copied_prompt)
 `
@@ -748,6 +777,8 @@ type RetryAgentInboxEventRow struct {
 	TerminalDeliveryID pgtype.UUID        `json:"terminal_delivery_id"`
 	Retryable          bool               `json:"retryable"`
 	TerminalAt         pgtype.Timestamptz `json:"terminal_at"`
+	RuntimeID          pgtype.UUID        `json:"runtime_id"`
+	ExecutionConfig    []byte             `json:"execution_config"`
 }
 
 func (q *Queries) RetryAgentInboxEvent(ctx context.Context, arg RetryAgentInboxEventParams) (RetryAgentInboxEventRow, error) {
@@ -778,6 +809,8 @@ func (q *Queries) RetryAgentInboxEvent(ctx context.Context, arg RetryAgentInboxE
 		&i.TerminalDeliveryID,
 		&i.Retryable,
 		&i.TerminalAt,
+		&i.RuntimeID,
+		&i.ExecutionConfig,
 	)
 	return i, err
 }
@@ -791,7 +824,7 @@ SET terminal_outcome = $3,
     updated_at = now()
 WHERE id = $1
   AND workspace_id = $2
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config
 `
 
 type SetAgentInboxTerminalOutcomeParams struct {
@@ -836,6 +869,8 @@ func (q *Queries) SetAgentInboxTerminalOutcome(ctx context.Context, arg SetAgent
 		&i.TerminalDeliveryID,
 		&i.Retryable,
 		&i.TerminalAt,
+		&i.RuntimeID,
+		&i.ExecutionConfig,
 	)
 	return i, err
 }
@@ -919,6 +954,8 @@ INSERT INTO agent_inbox_event (
   conversation_id,
   channel_id,
   agent_id,
+  runtime_id,
+  execution_config,
   source_message_id,
   reason,
   requires_wake,
@@ -933,6 +970,12 @@ VALUES (
   $3,
   $4,
   $5,
+  (SELECT runtime_id FROM agent WHERE id = $5),
+  (SELECT jsonb_build_object(
+      'model', COALESCE(model, ''),
+      'thinking_level', COALESCE(thinking_level, ''),
+      'snapshotted', true
+    ) FROM agent WHERE id = $5),
   $8,
   'ambient',
   false,
@@ -951,7 +994,7 @@ DO UPDATE SET
   seq_from = LEAST(agent_inbox_event.seq_from, EXCLUDED.seq_from),
   seq_to = GREATEST(agent_inbox_event.seq_to, EXCLUDED.seq_to),
   updated_at = now()
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at
+RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config
 `
 
 type UpsertAmbientAgentInboxEventParams struct {
@@ -1002,6 +1045,8 @@ func (q *Queries) UpsertAmbientAgentInboxEvent(ctx context.Context, arg UpsertAm
 		&i.TerminalDeliveryID,
 		&i.Retryable,
 		&i.TerminalAt,
+		&i.RuntimeID,
+		&i.ExecutionConfig,
 	)
 	return i, err
 }

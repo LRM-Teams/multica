@@ -6,6 +6,7 @@
   "sidebar": {
     "heading": "Messages",
     "mention_indicator": "You were mentioned",
+    "mention_tooltip": "{{unread}} unread · {{count}} @ you",
     "search": "Search conversations...",
     "no_conversation_matches": "No matching conversations",
     "search_scope_hint": "This filters the conversation list only. Open a conversation and use the top-right message search to search message text.",

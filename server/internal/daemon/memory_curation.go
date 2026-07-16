@@ -56,16 +56,12 @@ func (d *Daemon) handleMemoryCuration(ctx context.Context, rt Runtime, pending P
 		CuratorRoot:    curatorRoot,
 		Instructions:   pending.CuratorInstructions,
 	}
-	reviewer := memorycuration.NewConfiguredL3Reviewer(d.cfg.MemoryCurationL3ReviewEnabled, reviewerCfg)
-	var stageAgent memorycuration.StageAgent
-	if d.cfg.MemoryCurationL3ReviewEnabled {
-		created, err := memorycuration.NewAgentStageRunner(reviewerCfg)
-		if err != nil {
-			payload["error"] = err.Error()
-			d.reportMemoryCurationResult(ctx, rt, pending.ID, payload)
-			return
-		}
-		stageAgent = created
+	reviewer := memorycuration.NewConfiguredL3Reviewer(false, reviewerCfg)
+	stageAgent, err := memorycuration.NewAgentStageRunner(reviewerCfg)
+	if err != nil {
+		payload["error"] = err.Error()
+		d.reportMemoryCurationResult(ctx, rt, pending.ID, payload)
+		return
 	}
 	dbEvidence := make(map[string][]memorycuration.EvidenceItem, len(pending.DBEvidence))
 	for _, bundle := range pending.DBEvidence {

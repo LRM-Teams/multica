@@ -12,10 +12,8 @@ import (
 func TestMemoryCurationJobsUseStableNames(t *testing.T) {
 	jobs := MemoryCurationJobs(nil)
 	want := []string{
-		JobNameMemoryL1DailyRecord,
-		JobNameMemoryL2ReviewExtract,
-		JobNameMemoryL3Promote,
-		JobNameMemoryL4Curator,
+		JobNameAgentMemorySelfReview,
+		JobNameTeamMemoryCuration,
 	}
 	if len(jobs) != len(want) {
 		t.Fatalf("len(jobs) = %d, want %d", len(jobs), len(want))
@@ -88,7 +86,7 @@ func TestMemoryCurationSchedulerCreatesProfileRunIntent(t *testing.T) {
 	}
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, owner_id)
-		VALUES ($1, $2, 'Curator Scheduler Runtime', 'local', 'pi', 'offline', 'test', $3)
+		VALUES ($1, $2, 'Curator Scheduler Runtime', 'local', 'codex', 'online', 'test', $3)
 		RETURNING id::text
 	`, workspaceID, "curator-scheduler-"+suffix, userID).Scan(&runtimeID); err != nil {
 		t.Fatal(err)
@@ -107,9 +105,10 @@ func TestMemoryCurationSchedulerCreatesProfileRunIntent(t *testing.T) {
 	}
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO memory_curator_profile (
-		  workspace_id, user_id, enabled, mode, runtime_id, curator_agent_id,
-		  target_scope, timezone, schedule_hour, catch_up_enabled, confidence_threshold
-		) VALUES ($1,$2,true,'auto_safe',$3,$4,'selected','Asia/Shanghai',23,true,0.9)
+		  workspace_id, user_id, enabled, self_review_enabled, team_curation_enabled,
+		  mode, runtime_id, curator_agent_id, target_scope, timezone,
+		  schedule_hour, catch_up_enabled, confidence_threshold
+		) VALUES ($1,$2,true,true,true,'auto_safe',$3,$4,'selected','Asia/Shanghai',23,true,0.9)
 		RETURNING id::text
 	`, workspaceID, userID, runtimeID, curatorAgentID).Scan(&profileID); err != nil {
 		t.Fatal(err)
@@ -122,8 +121,24 @@ func TestMemoryCurationSchedulerCreatesProfileRunIntent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id)
+		VALUES ($1, 'Memory curation activity', 'todo', 'none', 'member', $2)
+	`, workspaceID, userID); err != nil {
+		t.Fatal(err)
+	}
+	var issueID string
+	if err := pool.QueryRow(ctx, `SELECT id::text FROM issue WHERE workspace_id = $1 ORDER BY created_at DESC LIMIT 1`, workspaceID).Scan(&issueID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO agent_task_queue (agent_id, issue_id, runtime_id, status, created_at)
+		VALUES ($1, $2, $3, 'completed', '2026-07-09 12:00:00+00')
+	`, targetAgentID, issueID, runtimeID); err != nil {
+		t.Fatal(err)
+	}
 	plan := time.Date(2026, 7, 11, 0, 0, 0, 0, loc).UTC()
-	res, err := makeMemoryCurationIntentHandler(pool, memorycuration.StageL2, 1)(ctx, HandlerInput{PlanTime: plan})
+	res, err := makeMemoryCurationIntentHandler(pool, memorycuration.StageAgentSelfReview, 1)(ctx, HandlerInput{PlanTime: plan})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,11 +150,11 @@ func TestMemoryCurationSchedulerCreatesProfileRunIntent(t *testing.T) {
 	var targets []string
 	if err := pool.QueryRow(ctx, `
 		SELECT status, date_from::text, curator_mode, confidence_threshold, target_agent_ids::text[]
-		  FROM memory_curation_run WHERE profile_id = $1 AND stage = 'l2_review'
+		  FROM memory_curation_run WHERE profile_id = $1 AND stage = 'agent_self_review'
 	`, profileID).Scan(&status, &planDate, &mode, &confidence, &targets); err != nil {
 		t.Fatal(err)
 	}
-	if status != "waiting_runtime" || planDate != "2026-07-09" || mode != "auto_safe" || confidence != 0.9 {
+	if status != "queued" || planDate != "2026-07-09" || mode != "auto_safe" || confidence != 0.9 {
 		t.Fatalf("run = status:%s date:%s mode:%s confidence:%v", status, planDate, mode, confidence)
 	}
 	if len(targets) != 1 || targets[0] != targetAgentID {
@@ -149,11 +164,11 @@ func TestMemoryCurationSchedulerCreatesProfileRunIntent(t *testing.T) {
 
 func TestMemoryCurationStageNormalization(t *testing.T) {
 	cases := map[string]memorycuration.Stage{
-		"l1_daily":   memorycuration.StageL1,
-		"review":     memorycuration.StageL2,
-		"promote":    memorycuration.StageL3,
-		"l4_curator": memorycuration.StageL4,
-		"all":        memorycuration.StageAll,
+		"agent_self_review": memorycuration.StageAgentSelfReview,
+		"self_review":       memorycuration.StageAgentSelfReview,
+		"team_curation":     memorycuration.StageTeamCuration,
+		"curator":           memorycuration.StageTeamCuration,
+		"all":               memorycuration.StageAll,
 	}
 	for input, want := range cases {
 		got, err := memorycuration.NormalizeStage(input)

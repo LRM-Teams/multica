@@ -26,6 +26,8 @@ type memoryCuratorProfileResponse struct {
 	WorkspaceID         string   `json:"workspace_id"`
 	UserID              string   `json:"user_id"`
 	Enabled             bool     `json:"enabled"`
+	SelfReviewEnabled   bool     `json:"self_review_enabled"`
+	TeamCurationEnabled bool     `json:"team_curation_enabled"`
 	Mode                string   `json:"mode"`
 	RuntimeID           string   `json:"runtime_id"`
 	CuratorAgentID      string   `json:"curator_agent_id"`
@@ -43,6 +45,8 @@ type memoryCuratorProfileResponse struct {
 
 type updateMemoryCuratorProfileRequest struct {
 	Enabled             bool     `json:"enabled"`
+	SelfReviewEnabled   bool     `json:"self_review_enabled"`
+	TeamCurationEnabled bool     `json:"team_curation_enabled"`
 	Mode                string   `json:"mode"`
 	RuntimeID           string   `json:"runtime_id"`
 	CuratorAgentID      string   `json:"curator_agent_id"`
@@ -77,6 +81,10 @@ func (h *Handler) UpdateMemoryCuratorProfile(w http.ResponseWriter, r *http.Requ
 	workspaceID := workspaceIDFromURL(r, "id")
 	member, ok := h.workspaceMember(w, r, workspaceID)
 	if !ok {
+		return
+	}
+	if !roleAllowed(member.Role, "owner", "admin") {
+		writeError(w, http.StatusForbidden, "only workspace owner/admin can configure team curation")
 		return
 	}
 	userID := uuidToString(member.UserID)
@@ -145,14 +153,13 @@ func (h *Handler) UpdateMemoryCuratorProfile(w http.ResponseWriter, r *http.Requ
 		SELECT count(*)
 		  FROM agent_runtime
 		 WHERE id = $1 AND workspace_id = $2
-		   AND provider = 'pi'
 		   AND (owner_id = $3 OR visibility = 'public')
 	`, runtimeUUID, workspaceID, userID).Scan(&runtimeCount); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to validate runtime")
 		return
 	}
 	if runtimeCount != 1 {
-		writeError(w, http.StatusNotFound, "Pi runtime not found")
+		writeError(w, http.StatusNotFound, "runtime not found")
 		return
 	}
 
@@ -191,12 +198,14 @@ func (h *Handler) UpdateMemoryCuratorProfile(w http.ResponseWriter, r *http.Requ
 	var profileID string
 	if err := tx.QueryRow(r.Context(), `
 		INSERT INTO memory_curator_profile (
-		  workspace_id, user_id, enabled, mode, runtime_id, curator_agent_id,
-		  model_override, target_scope, timezone, schedule_hour, catch_up_enabled,
-		  confidence_threshold
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		  workspace_id, user_id, enabled, self_review_enabled, team_curation_enabled,
+		  mode, runtime_id, curator_agent_id, model_override, target_scope,
+		  timezone, schedule_hour, catch_up_enabled, confidence_threshold
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
 		ON CONFLICT (workspace_id, user_id) DO UPDATE SET
 		  enabled = EXCLUDED.enabled,
+		  self_review_enabled = EXCLUDED.self_review_enabled,
+		  team_curation_enabled = EXCLUDED.team_curation_enabled,
 		  mode = EXCLUDED.mode,
 		  runtime_id = EXCLUDED.runtime_id,
 		  curator_agent_id = EXCLUDED.curator_agent_id,
@@ -209,7 +218,7 @@ func (h *Handler) UpdateMemoryCuratorProfile(w http.ResponseWriter, r *http.Requ
 		  config_version = memory_curator_profile.config_version + 1,
 		  updated_at = now()
 		RETURNING id::text
-	`, workspaceID, userID, req.Enabled, req.Mode, runtimeUUID, curatorAgentUUID, req.ModelOverride, req.TargetScope, req.Timezone, req.ScheduleHour, req.CatchUpEnabled, req.ConfidenceThreshold).Scan(&profileID); err != nil {
+	`, workspaceID, userID, req.TeamCurationEnabled, req.SelfReviewEnabled, req.TeamCurationEnabled, req.Mode, runtimeUUID, curatorAgentUUID, req.ModelOverride, req.TargetScope, req.Timezone, req.ScheduleHour, req.CatchUpEnabled, req.ConfidenceThreshold).Scan(&profileID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save memory curator profile")
 		return
 	}
@@ -240,7 +249,8 @@ func (h *Handler) loadMemoryCuratorProfile(r *http.Request, workspaceID, userID 
 	var targetIDs []string
 	var createdAt, updatedAt time.Time
 	err := h.DB.QueryRow(r.Context(), `
-		SELECT p.id::text, p.workspace_id::text, p.user_id::text, p.enabled, p.mode,
+		SELECT p.id::text, p.workspace_id::text, p.user_id::text, p.enabled,
+		       COALESCE(p.self_review_enabled, false), COALESCE(p.team_curation_enabled, p.enabled), p.mode,
 		       COALESCE(p.runtime_id::text, ''), COALESCE(p.curator_agent_id::text, ''),
 		       p.model_override, p.target_scope, p.timezone, p.schedule_hour,
 		       p.catch_up_enabled, p.confidence_threshold, p.config_version,
@@ -251,7 +261,8 @@ func (h *Handler) loadMemoryCuratorProfile(r *http.Request, workspaceID, userID 
 		 WHERE p.workspace_id = $1 AND p.user_id = $2
 		 GROUP BY p.id
 	`, workspaceID, userID).Scan(
-		&profile.ID, &profile.WorkspaceID, &profile.UserID, &profile.Enabled, &profile.Mode,
+		&profile.ID, &profile.WorkspaceID, &profile.UserID, &profile.Enabled,
+		&profile.SelfReviewEnabled, &profile.TeamCurationEnabled, &profile.Mode,
 		&profile.RuntimeID, &profile.CuratorAgentID, &profile.ModelOverride, &profile.TargetScope,
 		&profile.Timezone, &profile.ScheduleHour, &profile.CatchUpEnabled,
 		&profile.ConfidenceThreshold, &profile.ConfigVersion, &createdAt, &updatedAt, &targetIDs,
@@ -309,7 +320,6 @@ func (h *Handler) memoryCuratorRunStatus(ctx context.Context, profile memoryCura
 		  FROM agent_runtime rt
 		  JOIN agent curator ON curator.id = $2
 		 WHERE rt.id = $1 AND rt.workspace_id = $3
-		   AND rt.provider = 'pi'
 		   AND (rt.owner_id = $4 OR rt.visibility = 'public')
 		   AND curator.workspace_id = $3 AND curator.owner_id = $4
 		   AND curator.runtime_id = rt.id AND curator.archived_at IS NULL
@@ -336,6 +346,45 @@ func (h *Handler) resolveMemoryCuratorTargetAgentIDs(ctx context.Context, profil
 		 WHERE workspace_id = $1 AND owner_id = $2 AND archived_at IS NULL
 		 ORDER BY created_at, id
 	`, profile.WorkspaceID, profile.UserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+func (h *Handler) resolveActiveMemoryCurationTargetAgentIDs(ctx context.Context, profile memoryCuratorProfileResponse, day time.Time) ([]string, error) {
+	rows, err := h.DB.Query(ctx, `
+		WITH targets AS (
+		  SELECT a.id, a.runtime_id
+		    FROM agent a
+		   WHERE a.workspace_id = $1
+		     AND a.archived_at IS NULL
+		     AND (($4 <> 'selected' AND a.owner_id = $2) OR ($4 = 'selected' AND a.id::text = ANY($5)))
+		), active AS (
+		  SELECT DISTINCT agent_id
+		    FROM agent_task_queue
+		   WHERE COALESCE(completed_at, started_at, dispatched_at, created_at) >= $3::date
+		     AND COALESCE(completed_at, started_at, dispatched_at, created_at) < ($3::date + interval '1 day')
+		  UNION
+		  SELECT DISTINCT agent_id
+		    FROM agent_inbox_event
+		   WHERE created_at >= $3::date AND created_at < ($3::date + interval '1 day')
+		)
+		SELECT t.id::text
+		  FROM targets t
+		  JOIN active act ON act.agent_id = t.id
+		  JOIN agent_runtime rt ON rt.id = t.runtime_id AND rt.status = 'online'
+		 ORDER BY t.id
+	`, profile.WorkspaceID, profile.UserID, day, profile.TargetScope, profile.TargetAgentIDs)
 	if err != nil {
 		return nil, err
 	}

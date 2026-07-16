@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func TestRunAllKeepsDeterministicCandidatesUntilSensitivityIsExplicit(t *testing.T) {
+func TestLegacyL2KeepsDeterministicCandidatesUntilSensitivityIsExplicit(t *testing.T) {
 	root := t.TempDir()
 	agentRoot := filepath.Join(root, "ws-1", ".multica", "agents", "agent-1")
 	if err := ensureMemoryRoot(agentRoot); err != nil {
@@ -45,7 +45,7 @@ func TestRunAllKeepsDeterministicCandidatesUntilSensitivityIsExplicit(t *testing
 		WorkspacesRoot: root,
 		WorkspaceID:    "ws-1",
 		AgentIDs:       []string{"agent-1"},
-		Stage:          StageAll,
+		Stage:          StageL2,
 		Since:          mustDate("2026-07-08"),
 		Until:          mustDate("2026-07-08"),
 		Now:            mustDateTime("2026-07-09T05:00:00Z"),
@@ -66,7 +66,7 @@ func TestRunAllKeepsDeterministicCandidatesUntilSensitivityIsExplicit(t *testing
 	assertNotContains(t, filepath.Join(agentRoot, "memory", "STATE.md"), "Follow up on 2026-07-10")
 }
 
-func TestRunAllInvokesStageAgentForEveryStageWithDBEvidence(t *testing.T) {
+func TestRunAllInvokesSelfReviewThenTeamCurationWithDBEvidence(t *testing.T) {
 	root := t.TempDir()
 	agentRoot := filepath.Join(root, "ws-1", ".multica", "agents", "agent-1")
 	if err := ensureMemoryRoot(agentRoot); err != nil {
@@ -88,17 +88,16 @@ func TestRunAllInvokesStageAgentForEveryStageWithDBEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []Stage{StageL1, StageL2, StageL3, StageL4}
+	want := []Stage{StageAgentSelfReview, StageTeamCuration}
 	if strings.Join(stageNames(agent.calls), ",") != strings.Join(stageNames(want), ",") {
 		t.Fatalf("stage calls = %v, want %v", agent.calls, want)
 	}
 	if len(agent.evidenceCounts) == 0 || agent.evidenceCounts[0] != 1 {
 		t.Fatalf("agent did not receive DB evidence: %#v", agent.evidenceCounts)
 	}
-	if res.DailyFilesWritten != 1 || res.ReviewCandidatesAdded != 1 || res.EntriesReviewed != 1 || res.EntriesPromoted != 1 {
+	if res.DailyFilesWritten != 1 || res.ReviewCandidatesAdded != 1 || res.SharedCandidatesAdded != 1 {
 		t.Fatalf("agentic run stats = %#v", res)
 	}
-	assertContains(t, filepath.Join(agentRoot, "memory", "MEMORY.md"), "User likes direct updates.")
 }
 
 type recordingStageAgent struct {
@@ -110,36 +109,10 @@ func (r *recordingStageAgent) RunStage(_ context.Context, input StageAgentInput)
 	r.calls = append(r.calls, input.Stage)
 	r.evidenceCounts = append(r.evidenceCounts, len(input.DBEvidence))
 	switch input.Stage {
-	case StageL1:
-		return StageAgentOutput{Provider: "test", Model: "stage", Content: `# Daily Memory - 2026-07-08
-
-## Activity Summary
-- channel_message:msg-1 - User likes direct updates.
-
-## Decisions And Stable Facts
-- User likes direct updates.
-
-## User / Teammate Preferences Observed
-- No user preference extracted.
-
-## Temporary State And Follow-ups
-- No temporary follow-ups extracted.
-
-## Evidence Index
-- channel_message:msg-1 - User likes direct updates.
-
-## Curation Status
-- l1_recorded_at: 2026-07-09T05:00:00Z
-- l2_extracted_at:
-- l3_promoted_at:
-- l4_curated_at:
-`}, nil
-	case StageL2:
-		return StageAgentOutput{Provider: "test", Model: "stage", Content: `{"candidates":[{"type":"stable_fact","title":"Direct updates","body":"User likes direct updates.","proposed_destination":"MEMORY.md","sensitivity":"none","confidence":"high","evidence":["channel_message:msg-1"]}]}`}, nil
-	case StageL3:
-		return StageAgentOutput{Provider: "test", Model: "stage", Content: `{"reviews":[{"entry_id":"` + input.ReviewEntries[0].ID + `","route":"memory","confidence":0.95,"sensitivity":"none","rationale":"stable preference","memory":{"title":"Direct updates","body":"User likes direct updates."}}]}`}, nil
-	case StageL4:
-		return StageAgentOutput{Provider: "test", Model: "stage", Content: `{"archive_review_ids":[],"archive_state_contains":[],"dedupe_hints":[],"notes":"ok"}`}, nil
+	case StageAgentSelfReview:
+		return StageAgentOutput{Provider: "test", Model: "stage", Content: `{"summary":"wrote daily","candidates":[{"type":"memory","scope":"agent","title":"Direct updates","content":"User likes direct updates.","confidence":0.95,"evidence_refs":["channel_message:msg-1"]}]}`}, nil
+	case StageTeamCuration:
+		return StageAgentOutput{Provider: "test", Model: "stage", Content: `{"team_knowledge":[{"kind":"memory","title":"Direct updates","content":"User likes direct updates.","source_candidate_ids":[]}]}`}, nil
 	default:
 		return StageAgentOutput{}, nil
 	}

@@ -8,11 +8,13 @@ import (
 type Stage string
 
 const (
-	StageL1  Stage = "l1"
-	StageL2  Stage = "l2"
-	StageL3  Stage = "l3"
-	StageL4  Stage = "l4"
-	StageAll Stage = "all"
+	StageAgentSelfReview Stage = "agent_self_review"
+	StageTeamCuration    Stage = "team_curation"
+	StageL1              Stage = "l1"
+	StageL2              Stage = "l2"
+	StageL3              Stage = "l3"
+	StageL4              Stage = "l4"
+	StageAll             Stage = "all"
 )
 
 type Options struct {
@@ -123,6 +125,7 @@ type AgentRunResult struct {
 	DuplicatesMerged       int             `json:"duplicates_merged"`
 	ConflictsFound         int             `json:"conflicts_found"`
 	EvidenceCollected      int             `json:"evidence_collected"`
+	CuratorOutput          string          `json:"curator_output,omitempty"`
 }
 
 type L3ReviewTrace struct {

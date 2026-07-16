@@ -2,30 +2,31 @@ package scheduler
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"github.com/multica-ai/multica/server/internal/memorycuration"
 )
 
 const (
-	JobNameMemoryL1DailyRecord   = "memory_l1_daily_record"
-	JobNameMemoryL2ReviewExtract = "memory_l2_review_extract"
-	JobNameMemoryL3Promote       = "memory_l3_promote"
-	JobNameMemoryL4Curator       = "memory_l4_curator"
+	JobNameAgentMemorySelfReview = "agent_memory_self_review"
+	JobNameTeamMemoryCuration    = "team_memory_curation"
+
+	// Backward-compatible names for older scheduler tests and deployments.
+	JobNameMemoryL1DailyRecord   = JobNameAgentMemorySelfReview
+	JobNameMemoryL2ReviewExtract = JobNameAgentMemorySelfReview
+	JobNameMemoryL3Promote       = JobNameTeamMemoryCuration
+	JobNameMemoryL4Curator       = JobNameTeamMemoryCuration
 )
 
 func MemoryCurationJobs(pool *pgxpool.Pool) []JobSpec {
 	return []JobSpec{
-		memoryCurationJob(pool, JobNameMemoryL1DailyRecord, memorycuration.StageL1, 0),
-		memoryCurationJob(pool, JobNameMemoryL2ReviewExtract, memorycuration.StageL2, 1),
-		memoryCurationJob(pool, JobNameMemoryL3Promote, memorycuration.StageL3, 2),
-		memoryCurationJob(pool, JobNameMemoryL4Curator, memorycuration.StageL4, 3),
+		memoryCurationJob(pool, JobNameAgentMemorySelfReview, "agent_self_review", 0),
+		memoryCurationJob(pool, JobNameTeamMemoryCuration, "team_curation", 1),
 	}
 }
 
-func memoryCurationJob(pool *pgxpool.Pool, name string, stage memorycuration.Stage, hourOffset int) JobSpec {
+func memoryCurationJob(pool *pgxpool.Pool, name, stage string, hourOffset int) JobSpec {
 	return JobSpec{
 		Name:              name,
 		Cadence:           time.Hour,
@@ -44,13 +45,19 @@ func memoryCurationJob(pool *pgxpool.Pool, name string, stage memorycuration.Sta
 	}
 }
 
-// makeMemoryCurationIntentHandler creates durable per-user run intents. The
-// selected daemon owns all filesystem and reviewer execution; the server never
-// assumes it can see a user's local agent roots.
-func makeMemoryCurationIntentHandler(pool *pgxpool.Pool, stage memorycuration.Stage, hourOffset int) Handler {
+// makeMemoryCurationIntentHandler creates one nightly run intent per enabled
+// profile. The run is claimed by the selected online runtime and executed by
+// the selected curator agent. Self-review only targets agents that were active
+// during the day and whose own runtime is online.
+func makeMemoryCurationIntentHandler(pool *pgxpool.Pool, stage any, hourOffset int) Handler {
+	stageName := normalizeScheduledMemoryCurationStage(stage)
 	return func(ctx context.Context, in HandlerInput) (HandlerResult, error) {
 		if pool == nil {
-			return HandlerResult{Result: map[string]any{"skipped": true, "reason": "database_unavailable", "stage": stage}}, nil
+			return HandlerResult{Result: map[string]any{"skipped": true, "reason": "database_unavailable", "stage": stageName}}, nil
+		}
+		enabledColumn := "team_curation_enabled"
+		if stageName == "agent_self_review" {
+			enabledColumn = "self_review_enabled"
 		}
 		rows, err := pool.Query(ctx, `
 			SELECT p.id::text, p.workspace_id::text, p.user_id::text,
@@ -60,9 +67,11 @@ func makeMemoryCurationIntentHandler(pool *pgxpool.Pool, stage memorycuration.St
 			  FROM memory_curator_profile p
 			  JOIN agent_runtime rt ON rt.id = p.runtime_id
 			  JOIN agent curator ON curator.id = p.curator_agent_id
-			 WHERE p.enabled = true
+			 WHERE CASE WHEN $1 = 'self_review_enabled' THEN p.self_review_enabled ELSE p.team_curation_enabled END = true
+			   AND p.runtime_id IS NOT NULL
+			   AND p.curator_agent_id IS NOT NULL
 			   AND curator.archived_at IS NULL
-		`)
+		`, enabledColumn)
 		if err != nil {
 			return HandlerResult{}, err
 		}
@@ -93,43 +102,9 @@ func makeMemoryCurationIntentHandler(pool *pgxpool.Pool, stage memorycuration.St
 				}
 			}
 			planDate := time.Date(cycleLocal.Year(), cycleLocal.Month(), cycleLocal.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, -1)
-			var agentIDs []string
-			if targetScope == "selected" {
-				targetRows, err := pool.Query(ctx, `SELECT agent_id::text FROM memory_curator_target WHERE profile_id = $1 ORDER BY agent_id`, profileID)
-				if err != nil {
-					return HandlerResult{}, err
-				}
-				for targetRows.Next() {
-					var agentID string
-					if err := targetRows.Scan(&agentID); err != nil {
-						targetRows.Close()
-						return HandlerResult{}, err
-					}
-					agentIDs = append(agentIDs, agentID)
-				}
-				if err := targetRows.Err(); err != nil {
-					targetRows.Close()
-					return HandlerResult{}, err
-				}
-				targetRows.Close()
-			} else {
-				targetRows, err := pool.Query(ctx, `SELECT id::text FROM agent WHERE workspace_id = $1 AND owner_id = $2 AND archived_at IS NULL ORDER BY created_at, id`, workspaceID, userID)
-				if err != nil {
-					return HandlerResult{}, err
-				}
-				for targetRows.Next() {
-					var agentID string
-					if err := targetRows.Scan(&agentID); err != nil {
-						targetRows.Close()
-						return HandlerResult{}, err
-					}
-					agentIDs = append(agentIDs, agentID)
-				}
-				if err := targetRows.Err(); err != nil {
-					targetRows.Close()
-					return HandlerResult{}, err
-				}
-				targetRows.Close()
+			agentIDs, err := activeMemoryCurationAgentIDs(ctx, pool, workspaceID, userID, targetScope, profileID, planDate)
+			if err != nil {
+				return HandlerResult{}, err
 			}
 			if len(agentIDs) == 0 {
 				continue
@@ -146,7 +121,7 @@ func makeMemoryCurationIntentHandler(pool *pgxpool.Pool, stage memorycuration.St
 				  execution_owner
 				) VALUES ($1,$2,'scheduled',$3,$4,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::uuid[],'daemon')
 				ON CONFLICT DO NOTHING
-			`, workspaceID, memorycuration.DBStageName(stage), runStatus, planDate, profileID, userID, runtimeID, curatorAgentID, model, mode, confidenceThreshold, configVersion, agentIDs)
+			`, workspaceID, stageName, runStatus, planDate, profileID, userID, runtimeID, curatorAgentID, model, mode, confidenceThreshold, configVersion, agentIDs)
 			if err != nil {
 				return HandlerResult{}, err
 			}
@@ -158,6 +133,58 @@ func makeMemoryCurationIntentHandler(pool *pgxpool.Pool, stage memorycuration.St
 		if in.Heartbeat != nil {
 			_ = in.Heartbeat(ctx)
 		}
-		return HandlerResult{RowsAffected: created, Result: map[string]any{"stage": stage, "run_intents_created": created}}, nil
+		return HandlerResult{RowsAffected: created, Result: map[string]any{"stage": stageName, "run_intents_created": created}}, nil
 	}
+}
+
+func normalizeScheduledMemoryCurationStage(stage any) string {
+	switch fmt.Sprint(stage) {
+	case "l1", "l2", "l1_daily", "l2_review", "agent_self_review":
+		return "agent_self_review"
+	case "l3", "l4", "l3_promote", "l4_curator", "team_curation":
+		return "team_curation"
+	default:
+		return "team_curation"
+	}
+}
+
+func activeMemoryCurationAgentIDs(ctx context.Context, pool *pgxpool.Pool, workspaceID, userID, targetScope, profileID string, day time.Time) ([]string, error) {
+	rows, err := pool.Query(ctx, `
+		WITH targets AS (
+		  SELECT a.id, a.runtime_id
+		    FROM agent a
+		   WHERE a.workspace_id = $1
+		     AND a.archived_at IS NULL
+		     AND (($4 <> 'selected' AND a.owner_id = $2) OR ($4 = 'selected' AND EXISTS (
+		       SELECT 1 FROM memory_curator_target t WHERE t.profile_id = $5 AND t.agent_id = a.id
+		     )))
+		), active AS (
+		  SELECT DISTINCT agent_id
+		    FROM agent_task_queue
+		   WHERE COALESCE(completed_at, started_at, dispatched_at, created_at) >= $3::date
+		     AND COALESCE(completed_at, started_at, dispatched_at, created_at) < ($3::date + interval '1 day')
+		  UNION
+		  SELECT DISTINCT agent_id
+		    FROM agent_inbox_event
+		   WHERE created_at >= $3::date AND created_at < ($3::date + interval '1 day')
+		)
+		SELECT t.id::text
+		  FROM targets t
+		  JOIN active act ON act.agent_id = t.id
+		  JOIN agent_runtime rt ON rt.id = t.runtime_id AND rt.status = 'online'
+		 ORDER BY t.id
+	`, workspaceID, userID, day, targetScope, profileID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }

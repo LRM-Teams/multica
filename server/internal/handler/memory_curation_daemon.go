@@ -177,5 +177,11 @@ func (h *Handler) ReportMemoryCurationRunResult(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusConflict, "curation run is not claimable by this runtime")
 		return
 	}
+	if status == "succeeded" {
+		if err := h.persistAgenticCurationOutputs(r.Context(), runID, result); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to persist curation outputs")
+			return
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": runID, "status": status})
 }

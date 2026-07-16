@@ -151,6 +151,8 @@ export interface MemoryCuratorProfile {
   workspace_id: string;
   user_id: string;
   enabled: boolean;
+  self_review_enabled: boolean;
+  team_curation_enabled: boolean;
   mode: MemoryCuratorMode;
   runtime_id: string;
   curator_agent_id: string;
@@ -168,6 +170,8 @@ export interface MemoryCuratorProfile {
 
 export interface UpdateMemoryCuratorProfileRequest {
   enabled: boolean;
+  self_review_enabled: boolean;
+  team_curation_enabled: boolean;
   mode: MemoryCuratorMode;
   runtime_id: string;
   curator_agent_id: string;
@@ -183,7 +187,7 @@ export interface UpdateMemoryCuratorProfileRequest {
 export interface StartMemoryCurationRunRequest {
   agent_ids?: string[];
   all_agents?: boolean;
-  stage: "l1" | "l2" | "l3" | "l4" | "all";
+  stage: "agent_self_review" | "team_curation" | "all";
   since?: string;
   until?: string;
   include_history?: boolean;

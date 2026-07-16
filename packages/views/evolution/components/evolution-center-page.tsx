@@ -100,7 +100,7 @@ const COPY = {
   learningQueue: "Learning queue",
   learningQueueHint: "Review-first memory and skill candidates waiting for a human decision.",
   memoryOps: "Memory curation",
-  memoryOpsHint: "Three organizer stages plus one daily curator, scheduled on Beijing time.",
+  memoryOpsHint: "Active agents self-review first; team curation then promotes clean shared knowledge.",
   curatorOps: "Curator operations",
   curatorOpsHint: "Multi-agent curation, promotion, sharing, and safety checks.",
   starAgents: "Star agents",
@@ -144,7 +144,7 @@ const COPY = {
   curated: "Curated",
   sharedMemory: "Promoted shared memory",
   sharedCandidates: "Awaiting shared review",
-  localPromotion: "Latest L3 local promotion",
+  localPromotion: "Agent self-review proposals",
   sharedPromotion: "Shared proposal",
   ingestion: "Ingestion",
   review: "Review",
@@ -159,7 +159,7 @@ const COPY = {
   insight1: "High-signal candidates become proposals, not silent memories.",
   insight2: "Skill drafts stay disabled until explicitly enabled for an agent.",
   insight3: "Shared knowledge is queued with provenance, scope, and safety metadata.",
-  insight4: "L3 now writes local memory and opens workspace shared-memory proposals for review.",
+  insight4: "Active agents write local daily/review/proposals; team curation promotes clean shared knowledge.",
   lastRun: "Latest curation run",
   projected: "Applied feedback",
   running: "Running",
@@ -176,7 +176,7 @@ const COPY = {
   archived: "archived",
   merged: "merged",
   curatorProfile: "Curator profile",
-  curatorProfileHint: "Choose the Pi runtime and curator agent that govern your agents. Nothing runs automatically until this profile is enabled.",
+  curatorProfileHint: "Admins choose the runtime and curator agent. Self-review and team curation stay off until explicitly enabled.",
   curatorAgent: "Curator agent",
   targetAgents: "Target agents",
   allMyAgents: "All my agents",
@@ -188,18 +188,19 @@ const COPY = {
   fullAuto: "Full auto",
   schedule: "Daily start",
   timezone: "Timezone",
-  automatic: "Automatic curation",
+  automatic: "Nightly team curation",
   catchUp: "Catch up missed schedules",
   saveProfile: "Save profile",
   profileSaved: "Curator profile saved",
-  configureProfile: "Select a Pi runtime and curator agent first.",
+  configureProfile: "Select a runtime and curator agent first, then enable self-review or team curation.",
   manualRun: "Manual run",
-  manualRunHint: "Queue the selected stage on your configured runtime. Dry runs keep memory files unchanged.",
-  allStages: "All stages",
+  manualRunHint: "Queue agent self-review or team curation for active online agents on the configured runtime.",
+  allStages: "Self-review + team curation",
   stage: "Stage",
   dryRun: "Dry run",
   queueRun: "Queue run",
   runQueued: "Curation run queued",
+  selfReviewLabel: "Agent self-review",
 };
 
 const STATUSES = [
@@ -223,16 +224,12 @@ const EMPTY_USAGE_BY_AGENT: DashboardUsageByAgent[] = [];
 const EMPTY_SUBMISSIONS: EvolutionReviewSubmission[] = [];
 const EMPTY_UNIT_METRICS: EvolutionUnitMetric[] = [];
 const MEMORY_CURATION_STAGE_LABELS = {
-  l1: "L1",
-  l2: "L2",
-  l3: "L3",
-  l4: "L4",
+  selfReview: "Self-review",
+  teamCuration: "Team curation",
 } as const;
 const MEMORY_CURATION_STAGES = [
-  ["l1_daily", MEMORY_CURATION_STAGE_LABELS.l1, "01:00", "Evidence intake", COPY.dbEvidence],
-  ["l2_review", MEMORY_CURATION_STAGE_LABELS.l2, "02:00", "Candidate extraction", COPY.semanticDedupe],
-  ["l3_promote", MEMORY_CURATION_STAGE_LABELS.l3, "03:00", "Local + shared promotion", COPY.sharedPromotion],
-  ["l4_curator", MEMORY_CURATION_STAGE_LABELS.l4, "04:00", "Curator maintenance", COPY.curated],
+  ["agent_self_review", MEMORY_CURATION_STAGE_LABELS.selfReview, "01:00", "Active agent self-review", "Daily, review, and proposal files"],
+  ["team_curation", MEMORY_CURATION_STAGE_LABELS.teamCuration, "02:00", "Team promotion", "Deduped team knowledge and shared skills"],
 ] as const;
 
 type AgentEvolutionRow = {
@@ -844,6 +841,8 @@ function SubmissionCard({ submission }: { submission: EvolutionReviewSubmission 
 
 type CuratorProfileDraft = {
   enabled: boolean;
+  selfReviewEnabled: boolean;
+  teamCurationEnabled: boolean;
   mode: MemoryCuratorMode;
   runtimeId: string;
   curatorAgentId: string;
@@ -859,6 +858,8 @@ type CuratorProfileDraft = {
 function draftFromProfile(profile: MemoryCuratorProfile | undefined): CuratorProfileDraft {
   return {
     enabled: profile?.enabled === true,
+    selfReviewEnabled: profile?.self_review_enabled === true,
+    teamCurationEnabled: profile?.team_curation_enabled === true,
     mode: profile?.mode ?? "review",
     runtimeId: profile?.runtime_id ?? "",
     curatorAgentId: profile?.curator_agent_id ?? "",
@@ -887,7 +888,7 @@ function CuratorProfileCard({
 }) {
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState<CuratorProfileDraft>(() => draftFromProfile(profile));
-  const [runStage, setRunStage] = useState<"l1" | "l2" | "l3" | "l4" | "all">("all");
+  const [runStage, setRunStage] = useState<"agent_self_review" | "team_curation" | "all">("agent_self_review");
   const [dryRun, setDryRun] = useState(false);
 
   const availableRuntimes = runtimes.filter(
@@ -901,7 +902,9 @@ function CuratorProfileCard({
 
   const save = useMutation({
     mutationFn: () => api.updateMemoryCuratorProfile(wsId, {
-      enabled: draft.enabled,
+      enabled: draft.teamCurationEnabled,
+      self_review_enabled: draft.selfReviewEnabled,
+      team_curation_enabled: draft.teamCurationEnabled,
       mode: draft.mode,
       runtime_id: draft.runtimeId,
       curator_agent_id: draft.curatorAgentId,
@@ -959,7 +962,7 @@ function CuratorProfileCard({
           </div>
           <div className="flex items-center gap-2">
             <Label htmlFor="curator-enabled" className="text-xs">{COPY.automatic}</Label>
-            <Switch id="curator-enabled" checked={draft.enabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, enabled: checked }))} />
+            <Switch id="curator-enabled" checked={draft.teamCurationEnabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, teamCurationEnabled: checked, enabled: checked }))} />
           </div>
         </div>
       </CardHeader>
@@ -967,7 +970,7 @@ function CuratorProfileCard({
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label={COPY.runtime}>
             <Select value={draft.runtimeId} onValueChange={(value) => setDraft((current) => ({ ...current, runtimeId: value ?? "", curatorAgentId: "" }))}>
-              <SelectTrigger className="w-full"><SelectValue placeholder="Select Pi runtime" /></SelectTrigger>
+              <SelectTrigger className="w-full"><SelectValue placeholder="Select runtime" /></SelectTrigger>
               <SelectContent>{availableRuntimes.map((runtime) => <SelectItem key={runtime.id} value={runtime.id}>{runtime.name} · {runtime.status}</SelectItem>)}</SelectContent>
             </Select>
           </Field>
@@ -1007,6 +1010,7 @@ function CuratorProfileCard({
           </div>
         )}
         <div className="flex flex-wrap items-center gap-4">
+          <Label htmlFor="self-review-enabled" className="flex items-center gap-2 text-xs"><Checkbox id="self-review-enabled" checked={draft.selfReviewEnabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, selfReviewEnabled: checked === true }))} />{COPY.selfReviewLabel}</Label>
           <Label htmlFor="curator-catch-up" className="flex items-center gap-2 text-xs"><Checkbox id="curator-catch-up" checked={draft.catchUpEnabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, catchUpEnabled: checked === true }))} />{COPY.catchUp}</Label>
           <Button onClick={() => save.mutate()} disabled={save.isPending || !draft.runtimeId || !draft.curatorAgentId || !draftTargetsValid} className="gap-2"><Save className="h-4 w-4" />{COPY.saveProfile}</Button>
         </div>
@@ -1014,7 +1018,7 @@ function CuratorProfileCard({
           <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
             <div><div className="text-sm font-medium">{COPY.manualRun}</div><p className="mt-1 text-xs text-muted-foreground">{COPY.manualRunHint}</p></div>
             <div className="flex flex-wrap items-center gap-2">
-              <Select value={runStage} onValueChange={(value) => value && setRunStage(value as typeof runStage)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">{COPY.allStages}</SelectItem><SelectItem value="l1">{MEMORY_CURATION_STAGE_LABELS.l1}</SelectItem><SelectItem value="l2">{MEMORY_CURATION_STAGE_LABELS.l2}</SelectItem><SelectItem value="l3">{MEMORY_CURATION_STAGE_LABELS.l3}</SelectItem><SelectItem value="l4">{MEMORY_CURATION_STAGE_LABELS.l4}</SelectItem></SelectContent></Select>
+              <Select value={runStage} onValueChange={(value) => value && setRunStage(value as typeof runStage)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="agent_self_review">{MEMORY_CURATION_STAGE_LABELS.selfReview}</SelectItem><SelectItem value="team_curation">{MEMORY_CURATION_STAGE_LABELS.teamCuration}</SelectItem><SelectItem value="all">{COPY.allStages}</SelectItem></SelectContent></Select>
               <label className="flex items-center gap-2 text-xs"><Checkbox checked={dryRun} onCheckedChange={(checked) => setDryRun(checked === true)} />{COPY.dryRun}</label>
               <Button variant="outline" onClick={() => run.mutate()} disabled={!configured || !configuredTargetsValid || run.isPending || save.isPending} className="gap-2"><Play className="h-4 w-4" />{COPY.queueRun}</Button>
             </div>
@@ -1044,10 +1048,7 @@ function MemoryCurationCard({
   const sharedCandidates = memorySubmissions.filter((item) => item.status === "candidate" || item.status === "needs_review").length;
   const promotedSharedMemory = memorySubmissions.filter((item) => item.status === "promoted").length;
   const runs = new Map((status?.stages ?? []).map((run) => [run.stage, run] as const));
-  const promotionRun = [runs.get("l3_promote"), runs.get("all")]
-    .filter((run): run is MemoryCurationStageStatus => run !== undefined)
-    .toSorted((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
-  const localPromotions = promotionRun?.stats.entries_promoted ?? 0;
+  const localPromotions = runs.get("agent_self_review")?.stats.review_candidates_added ?? 0;
 
   return (
     <Card className="bg-background/85 backdrop-blur">
@@ -1068,13 +1069,9 @@ function MemoryCurationCard({
         {MEMORY_CURATION_STAGES.map(([stageName, stageLabel, time, title, detail]) => {
           const run = runs.get(stageName);
           const duration = formatRunDuration(run);
-          const stageMetric = stageName === "l1_daily"
-            ? `${run?.stats.evidence_collected ?? 0} ${COPY.evidenceCollected}`
-            : stageName === "l2_review"
-              ? `${run?.stats.review_candidates_added ?? 0} ${COPY.candidatesAdded}`
-              : stageName === "l3_promote"
-                ? `${run?.stats.entries_promoted ?? 0} ${COPY.localPromotion.toLowerCase()} · ${run?.stats.shared_candidates_synced ?? 0} synced`
-                : `${run?.stats.entries_archived ?? 0} ${COPY.archived} · ${run?.stats.duplicates_merged ?? 0} ${COPY.merged}`;
+          const stageMetric = stageName === "agent_self_review"
+            ? `${run?.stats.review_candidates_added ?? 0} ${COPY.candidatesAdded} · ${run?.stats.evidence_collected ?? 0} ${COPY.evidenceCollected}`
+            : `${run?.stats.shared_candidates_added ?? 0} team items · ${run?.stats.conflicts_found ?? 0} conflicts`;
           const isRunning = run?.status === "running" || run?.status === "queued";
           return (
             <div key={stageName} className={cn("relative flex items-center gap-3 overflow-hidden rounded-2xl border bg-muted/20 p-3", isRunning && "border-brand/40 bg-brand/5")}>
@@ -1169,16 +1166,16 @@ function ProcessCard({
   promotedSharedMemory: number;
   feedbackCount: number;
 }) {
-  const l1 = stageByName.get("l1_daily");
-  const l2 = stageByName.get("l2_review");
-  const l3 = [stageByName.get("l3_promote"), stageByName.get("all")]
+  const selfReview = stageByName.get("agent_self_review");
+  const teamCuration = [stageByName.get("team_curation"), stageByName.get("all")]
     .filter((run): run is MemoryCurationStageStatus => run !== undefined)
     .toSorted((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
   const steps = [
-    { label: COPY.ingestion, detail: "Evidence collected", value: l1?.stats.evidence_collected ?? 0, run: l1 },
-    { label: COPY.candidates, detail: "Review candidates", value: l2?.stats.review_candidates_added ?? 0, run: l2 },
-    { label: COPY.localPromotion, detail: "Agent-private memory", value: l3?.stats.entries_promoted ?? 0, run: l3 },
-    { label: COPY.sharedPromotion, detail: "Awaiting human review", value: sharedCandidates, run: l3 },
+    { label: "Active agents", detail: "Self-reviewed", value: selfReview?.stats.agents_scanned ?? 0, run: selfReview },
+    { label: COPY.candidates, detail: "Agent proposals", value: selfReview?.stats.review_candidates_added ?? 0, run: selfReview },
+    { label: COPY.sharedPromotion, detail: "Team curation items", value: teamCuration?.stats.shared_candidates_added ?? 0, run: teamCuration },
+    { label: COPY.attention, detail: "Conflicts found", value: teamCuration?.stats.conflicts_found ?? 0, run: teamCuration },
+    { label: COPY.sharedCandidates, detail: "Awaiting human review", value: sharedCandidates, run: teamCuration },
     { label: COPY.workspaceUnit, detail: "Promoted shared units", value: promotedSharedMemory },
     { label: COPY.feedback, detail: "Observed uses", value: feedbackCount },
   ];

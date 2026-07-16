@@ -43,6 +43,11 @@ func TestBuildAmbientChannelPromptCoversCoordinationActions(t *testing.T) {
 		"mention_agent action targeting that agent",
 		"server adds the one target mention",
 		"must not repeat that target by @handle or display name",
+		// Spec-driven review (审): production standard, evidence-based, playable≠done.
+		"spec-driven review",
+		"not a playable demo",
+		"acceptance criteria",
+		"based on evidence",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("ambient prompt missing %q:\n%s", want, prompt)

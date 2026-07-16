@@ -25,31 +25,45 @@ export default [
   // this is an import boundary, NOT a global ban (Barry's precise form).
   //
   // #520 removed the last chip from a message body; this stops the next one coming
-  // back. A rule that only lives in a doc is a rule that gets re-broken: prefer
-  // making the wrong thing impossible over writing it down (Iris's §0 standard).
+  // back. Prefer making the wrong thing impossible over writing it down (Iris's §0).
+  //
+  // ⚠️ DENY BY DEFAULT, AND THAT DIRECTION IS THE WHOLE POINT (Iris's catch).
+  // The first cut allow-listed the reading surfaces — which silently fails the day
+  // someone adds a new one: not on the list, so not linted, so unprotected, and
+  // nothing says so. That is the same disease as a fixture whose ordering makes it
+  // untestable — the rule looks green while covering nothing, except this version
+  // starts covering nothing on a FUTURE day nobody witnesses. You can see a lint go
+  // red; you cannot see it "not go red for a file that doesn't exist yet".
+  //
+  // The asymmetry decides it: the exceptions below (the editor, the chip's own
+  // definition, the barrel that re-exports it) are FINITE and KNOWN. Reading
+  // surfaces are UNBOUNDED and grow. Allow-listing the growing side guarantees
+  // drift; allow-listing the fixed side is stable. So a new reading surface is
+  // protected by default, and opening a hole is an explicit edit that shows up in
+  // review.
   {
-    files: [
-      "common/**/*.tsx",
-      "issues/components/issue-ref-link.tsx",
-      "issues/components/issue-mention-card.tsx",
+    files: ["**/*.ts", "**/*.tsx"],
+    ignores: [
+      // Operating state: you act on the reference here, so the chip is correct.
+      "editor/**",
+      // Defines and re-exports the chip — not a consumer.
+      "issues/components/issue-chip.tsx",
+      "issues/components/index.ts",
+      "**/*.test.ts",
+      "**/*.test.tsx",
     ],
-    ignores: ["**/*.test.tsx"],
     rules: {
       "no-restricted-imports": [
         "error",
         {
-          paths: [
+          // A pattern, not a path list: it must hold at any relative depth, from a
+          // file that does not exist yet.
+          patterns: [
             {
-              name: "../issues/components/issue-chip",
+              group: ["**/issue-chip"],
               importNames: ["IssueChip"],
               message:
-                "Reading surfaces must render IssueRefLink, not IssueChip — the chip is the editor's operating-state form (#520). useResolvedIssue/isIssueUuid from this module are fine.",
-            },
-            {
-              name: "./issue-chip",
-              importNames: ["IssueChip"],
-              message:
-                "Reading surfaces must render IssueRefLink, not IssueChip — the chip is the editor's operating-state form (#520). useResolvedIssue/isIssueUuid from this module are fine.",
+                "Reading surfaces must render IssueRefLink, not IssueChip — the chip is the editor's operating-state form (#520). useResolvedIssue/isIssueUuid from this module are fine. If you genuinely need the chip outside the editor, add the file to the ignores in eslint.config.mjs so the exception is reviewed rather than assumed.",
             },
           ],
         },

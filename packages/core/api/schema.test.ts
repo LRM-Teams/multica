@@ -118,6 +118,25 @@ describe("ApiClient schema fallback", () => {
       const res = await client.listGroupedIssues({ group_by: "assignee" });
       expect(res).toEqual({ groups: [] });
     });
+
+    it("parses project groups and preserves the nullable No Project identity", async () => {
+      stubFetchJson({
+        groups: [
+          { id: "project:none", project_id: null, project_title: null, issues: [], total: 3 },
+        ],
+      });
+      const client = new ApiClient("https://api.example.test");
+      const res = await client.listGroupedIssues({ group_by: "project", group_project_id: "none" });
+      expect(res).toEqual({
+        groups: [
+          { id: "project:none", project_id: null, project_title: null, issues: [], total: 3 },
+        ],
+      });
+      expect(fetch).toHaveBeenCalledWith(
+        "https://api.example.test/api/issues/grouped?group_by=project&group_project_id=none",
+        expect.any(Object),
+      );
+    });
   });
 
   describe("listComments", () => {

@@ -118,7 +118,7 @@ export type MyIssuesFilter = Pick<
 
 export type AssigneeGroupedIssuesFilter = Omit<
   ListGroupedIssuesParams,
-  "group_by" | "limit" | "offset" | "group_assignee_type" | "group_assignee_id"
+  "group_by" | "limit" | "offset" | "group_assignee_type" | "group_assignee_id" | "group_project_id"
 >;
 
 /** Page size per status column. */

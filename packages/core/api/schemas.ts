@@ -21,6 +21,7 @@ import type {
   CreateBillingCheckoutSessionResponse,
   CreateBillingPortalSessionResponse,
   GroupedIssuesResponse,
+  ProjectGroupedIssuesResponse,
   ChannelMessageSearchResponse,
   ChannelMessagesPage,
   ChannelThreadMessagesPage,
@@ -697,6 +698,22 @@ export const GroupedIssuesResponseSchema = z.object({
 }).loose();
 
 export const EMPTY_GROUPED_ISSUES_RESPONSE: GroupedIssuesResponse = {
+  groups: [],
+};
+
+const IssueProjectGroupSchema = z.object({
+  id: z.string(),
+  project_id: z.string().nullable(),
+  project_title: z.string().nullable(),
+  issues: z.array(IssueSchema).default([]),
+  total: z.number().default(0),
+}).loose();
+
+export const ProjectGroupedIssuesResponseSchema = z.object({
+  groups: z.array(IssueProjectGroupSchema).default([]),
+}).loose();
+
+export const EMPTY_PROJECT_GROUPED_ISSUES_RESPONSE: ProjectGroupedIssuesResponse = {
   groups: [],
 };
 

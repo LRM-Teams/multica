@@ -3,6 +3,7 @@ import type {
   CreateIssueRequest,
   UpdateIssueRequest,
   GroupedIssuesResponse,
+  ProjectGroupedIssuesResponse,
   ListIssuesResponse,
   SearchIssuesResponse,
   SearchProjectsResponse,
@@ -228,6 +229,8 @@ import {
   StickerCatalogResponseSchema,
   type AppConfigResponse,
   GroupedIssuesResponseSchema,
+  ProjectGroupedIssuesResponseSchema,
+  EMPTY_PROJECT_GROUPED_ISSUES_RESPONSE,
   ListIssuesResponseSchema,
   ListWebhookDeliveriesResponseSchema,
   RuntimeHourlyActivityListSchema,
@@ -582,7 +585,10 @@ export class ApiClient {
     });
   }
 
-  async listGroupedIssues(params: ListGroupedIssuesParams): Promise<GroupedIssuesResponse> {
+  async listGroupedIssues(params: ListGroupedIssuesParams & { group_by: "assignee" }): Promise<GroupedIssuesResponse>;
+  async listGroupedIssues(params: ListGroupedIssuesParams & { group_by: "project" }): Promise<ProjectGroupedIssuesResponse>;
+  async listGroupedIssues(params: ListGroupedIssuesParams): Promise<GroupedIssuesResponse | ProjectGroupedIssuesResponse>;
+  async listGroupedIssues(params: ListGroupedIssuesParams): Promise<GroupedIssuesResponse | ProjectGroupedIssuesResponse> {
     const search = new URLSearchParams({ group_by: params.group_by });
     if (params.limit) search.set("limit", String(params.limit));
     if (params.offset) search.set("offset", String(params.offset));
@@ -610,9 +616,15 @@ export class ApiClient {
     if (params.label_ids?.length) search.set("label_ids", params.label_ids.join(","));
     if (params.group_assignee_type) search.set("group_assignee_type", params.group_assignee_type);
     if (params.group_assignee_id) search.set("group_assignee_id", params.group_assignee_id);
+    if (params.group_project_id) search.set("group_project_id", params.group_project_id);
     if (params.sort_by) search.set("sort", params.sort_by);
     if (params.sort_direction) search.set("direction", params.sort_direction);
     const raw = await this.fetch<unknown>(`/api/issues/grouped?${search}`);
+    if (params.group_by === "project") {
+      return parseWithFallback(raw, ProjectGroupedIssuesResponseSchema, EMPTY_PROJECT_GROUPED_ISSUES_RESPONSE, {
+        endpoint: "GET /api/issues/grouped?group_by=project",
+      });
+    }
     return parseWithFallback(raw, GroupedIssuesResponseSchema, EMPTY_GROUPED_ISSUES_RESPONSE, {
       endpoint: "GET /api/issues/grouped",
     });

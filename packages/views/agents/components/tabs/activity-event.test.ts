@@ -319,10 +319,10 @@ describe("isNarrativeActivityEvent — Radar actions", () => {
     ).toBe(false);
   });
 
-  it("presents an executed action as settled and a failed action as a failure", () => {
+  it("presents an executed radar action with its own radar label/tone, and a failed action as a failure", () => {
     expect(activityPresentation(radarEvent("radar_action_executed"))).toMatchObject({
-      labelKey: "completed",
-      tone: "neutral",
+      labelKey: "radar_executed",
+      tone: "radar",
     });
     expect(activityPresentation(radarEvent("radar_action_failed"))).toMatchObject({
       labelKey: "failed",

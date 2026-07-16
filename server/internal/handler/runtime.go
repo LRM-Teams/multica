@@ -455,7 +455,7 @@ func (h *Handler) GetRuntimeUsage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// listRuntimeUsage reads the daily-bucketed trend from task_usage_hourly,
+// listRuntimeUsage reads the daily-bucketed trend from agent_usage_hourly,
 // applying the viewer's tz to project bucket_hour into local days.
 func (h *Handler) listRuntimeUsage(ctx context.Context, runtimeID pgtype.UUID, tz string, since pgtype.Timestamptz) ([]RuntimeUsageResponse, error) {
 	resolvedRuntimeID := uuidToString(runtimeID)

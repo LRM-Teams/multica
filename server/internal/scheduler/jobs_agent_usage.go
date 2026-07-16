@@ -12,13 +12,13 @@ import (
 	"github.com/multica-ai/multica/server/internal/taskusagebackfill"
 )
 
-// JobNameRollupTaskUsageHourly is the canonical name used in audit
+// JobNameRollupAgentUsageHourly is the canonical name used in audit
 // rows. Stable across releases — do not rename without a migration.
-const JobNameRollupTaskUsageHourly = "rollup_task_usage_hourly"
+const JobNameRollupAgentUsageHourly = "rollup_agent_usage_hourly"
 
-// TaskUsageHourlyJob returns the JobSpec that drives the
-// task_usage_hourly rollup. The handler calls the existing
-// `rollup_task_usage_hourly()` SQL function, which already holds
+// AgentUsageHourlyJob returns the JobSpec that drives the
+// agent_usage_hourly rollup. The handler calls the existing
+// `rollup_agent_usage_hourly()` SQL function, which already holds
 // advisory lock 4246 internally so a concurrent legacy pg_cron tick or
 // manual call is safe (RFC §11.3).
 //
@@ -33,9 +33,9 @@ const JobNameRollupTaskUsageHourly = "rollup_task_usage_hourly"
 //	max_attempts:          3
 //	retry_backoff:         1m, 5m, 15m
 //	allow_stale_reentry:   true
-func TaskUsageHourlyJob(pool *pgxpool.Pool) JobSpec {
+func AgentUsageHourlyJob(pool *pgxpool.Pool) JobSpec {
 	return JobSpec{
-		Name:              JobNameRollupTaskUsageHourly,
+		Name:              JobNameRollupAgentUsageHourly,
 		Cadence:           5 * time.Minute,
 		ScheduleDelay:     5 * time.Minute,
 		CatchUpMode:       CatchUpLatestOnly,
@@ -51,29 +51,29 @@ func TaskUsageHourlyJob(pool *pgxpool.Pool) JobSpec {
 			15 * time.Minute,
 		},
 		Scopes:  StaticScopes(ScopeGlobal),
-		Handler: makeTaskUsageHourlyHandler(pool),
+		Handler: makeAgentUsageHourlyHandler(pool),
 	}
 }
 
-// makeTaskUsageHourlyHandler reads the watermark before/after the SQL
+// makeAgentUsageHourlyHandler reads the watermark before/after the SQL
 // function so the audit row records whether business state advanced.
 // The function call itself acquires advisory lock 4246 inside SQL — if
 // another writer holds the lock the function returns 0 immediately and
 // this attempt completes as SUCCESS with rows_affected=0, which is the
 // correct "lost the inner race, no work to do" outcome.
-func makeTaskUsageHourlyHandler(pool *pgxpool.Pool) Handler {
+func makeAgentUsageHourlyHandler(pool *pgxpool.Pool) Handler {
 	return func(ctx context.Context, in HandlerInput) (HandlerResult, error) {
-		watermarkBefore, err := readTaskUsageWatermark(ctx, pool)
+		watermarkBefore, err := readAgentUsageWatermark(ctx, pool)
 		if err != nil {
 			return HandlerResult{}, fmt.Errorf("read watermark before: %w", err)
 		}
 
 		var rows int64
-		if err := pool.QueryRow(ctx, `SELECT rollup_task_usage_hourly()`).Scan(&rows); err != nil {
-			return HandlerResult{}, fmt.Errorf("rollup_task_usage_hourly: %w", err)
+		if err := pool.QueryRow(ctx, `SELECT rollup_agent_usage_hourly()`).Scan(&rows); err != nil {
+			return HandlerResult{}, fmt.Errorf("rollup_agent_usage_hourly: %w", err)
 		}
 
-		watermarkAfter, err := readTaskUsageWatermark(ctx, pool)
+		watermarkAfter, err := readAgentUsageWatermark(ctx, pool)
 		if err != nil {
 			return HandlerResult{}, fmt.Errorf("read watermark after: %w", err)
 		}
@@ -100,14 +100,14 @@ func makeTaskUsageHourlyHandler(pool *pgxpool.Pool) Handler {
 	}
 }
 
-// readTaskUsageWatermark reads the current watermark; returns zero
+// readAgentUsageWatermark reads the current watermark; returns zero
 // time.Time if the row is missing (shouldn't happen post-101, but the
 // handler should not panic in that case).
-func readTaskUsageWatermark(ctx context.Context, pool *pgxpool.Pool) (time.Time, error) {
+func readAgentUsageWatermark(ctx context.Context, pool *pgxpool.Pool) (time.Time, error) {
 	var t time.Time
 	err := pool.QueryRow(ctx, `
 		SELECT watermark_at
-		  FROM task_usage_hourly_rollup_state
+		  FROM agent_usage_hourly_rollup_state
 		 WHERE id = 1
 	`).Scan(&t)
 	if err != nil {

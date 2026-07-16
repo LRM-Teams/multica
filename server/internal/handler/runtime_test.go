@@ -133,10 +133,10 @@ func TestGetRuntimeUsage_BucketsByUsageTime(t *testing.T) {
 			t.Fatalf("insert task: %v", err)
 		}
 		if _, err := testPool.Exec(ctx, `
-			INSERT INTO task_usage (task_id, provider, model, input_tokens, output_tokens, created_at)
+			INSERT INTO agent_usage (execution_id, provider, model, input_tokens, output_tokens, created_at)
 			VALUES ($1, 'claude', 'claude-3-5-sonnet', $2, 0, $3)
 		`, taskID, inputTokens, usageAt); err != nil {
-			t.Fatalf("insert task_usage: %v", err)
+			t.Fatalf("insert agent_usage: %v", err)
 		}
 		t.Cleanup(func() {
 			testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID)
@@ -147,12 +147,12 @@ func TestGetRuntimeUsage_BucketsByUsageTime(t *testing.T) {
 	insertTaskWithUsage(yesterdayLate, todayEarly, 1000)          // cross-midnight
 	insertTaskWithUsage(yesterdayMorning, yesterdayMorning, 2000) // full-day yesterday
 
-	// ListRuntimeUsage reads from task_usage_hourly,
+	// ListRuntimeUsage reads from agent_usage_hourly,
 	// aggregated to per-(date, provider, model) at query time. The
 	// window function is idempotent, so re-running this test rewrites
 	// the same totals.
 	if _, err := testPool.Exec(ctx, `
-		SELECT rollup_task_usage_hourly_window('-infinity'::timestamptz, 'infinity'::timestamptz)
+		SELECT rollup_agent_usage_hourly_window('-infinity'::timestamptz, 'infinity'::timestamptz)
 	`); err != nil {
 		t.Fatalf("rollup window: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestGetRuntimeUsage_BucketsByUsageTime(t *testing.T) {
 		// days in fixture data (today and yesterday in UTC, which is
 		// what the test uses for `today` / `yesterday` mocks).
 		testPool.Exec(ctx, `
-			DELETE FROM task_usage_hourly
+			DELETE FROM agent_usage_hourly
 			 WHERE runtime_id = $1
 			   AND DATE(bucket_hour AT TIME ZONE 'UTC') IN ($2::date, $3::date)
 		`, runtimeID, today, today.Add(-24*time.Hour))
@@ -222,10 +222,10 @@ func TestListRuntimeUsageBucketsByViewerTimezone(t *testing.T) {
 	extraDate := cutoff.AddDate(0, 0, -1).Format("2006-01-02")
 
 	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM task_usage_hourly WHERE runtime_id = $1 AND provider = 'cutoff-test'`, runtimeID)
+		testPool.Exec(ctx, `DELETE FROM agent_usage_hourly WHERE runtime_id = $1 AND provider = 'cutoff-test'`, runtimeID)
 	})
 
-	// Seed task_usage_hourly directly with one bucket per Shanghai calendar
+	// Seed agent_usage_hourly directly with one bucket per Shanghai calendar
 	// day. Pick 04:00 local (= 20:00 UTC the previous day) to catch
 	// off-by-one tz-cutoff bugs.
 	var agentID pgtype.UUID
@@ -235,7 +235,7 @@ func TestListRuntimeUsageBucketsByViewerTimezone(t *testing.T) {
 		t.Fatalf("pick fixture agent: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO task_usage_hourly (
+		INSERT INTO agent_usage_hourly (
 			bucket_hour, workspace_id, runtime_id, agent_id, project_id,
 			provider, model,
 			input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, event_count
@@ -245,7 +245,7 @@ func TestListRuntimeUsageBucketsByViewerTimezone(t *testing.T) {
 				'cutoff-test', 'old-day',    111, 0, 0, 0, 1),
 			(($2::date + interval '4 hours') AT TIME ZONE 'Asia/Shanghai', $3, $4, $5, NULL,
 				'cutoff-test', 'cutoff-day', 222, 0, 0, 0, 1)
-		ON CONFLICT ON CONSTRAINT uq_task_usage_hourly_key DO UPDATE
+		ON CONFLICT ON CONSTRAINT uq_agent_usage_hourly_key DO UPDATE
 			SET input_tokens = EXCLUDED.input_tokens,
 			    output_tokens = EXCLUDED.output_tokens,
 			    cache_read_tokens = EXCLUDED.cache_read_tokens,

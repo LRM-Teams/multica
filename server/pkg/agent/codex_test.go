@@ -74,6 +74,157 @@ func splitLines(s string) []string {
 	return lines
 }
 
+func TestParseCodexSessionFilePrefersLastTurnUsageOverCumulativeSessionUsage(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	content := `{"type":"turn_context","payload":{"model":"gpt-5.5"}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5.5","total_token_usage":{"input_tokens":1000,"output_tokens":200,"cached_input_tokens":8000},"last_token_usage":{"input_tokens":100,"output_tokens":20,"cached_input_tokens":800}}}}
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+
+	usage := parseCodexSessionFile(path, time.Time{})
+	if usage == nil {
+		t.Fatal("expected usage")
+	}
+	if usage.model != "gpt-5.5" {
+		t.Fatalf("model = %q, want gpt-5.5", usage.model)
+	}
+	if got, want := usage.usage.InputTokens, int64(100); got != want {
+		t.Fatalf("input tokens = %d, want last-turn %d", got, want)
+	}
+	if got, want := usage.usage.OutputTokens, int64(20); got != want {
+		t.Fatalf("output tokens = %d, want last-turn %d", got, want)
+	}
+	if got, want := usage.usage.CacheReadTokens, int64(800); got != want {
+		t.Fatalf("cache-read tokens = %d, want last-turn %d", got, want)
+	}
+}
+
+func TestParseCodexSessionFileFallsBackToCumulativeUsage(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	content := `{"type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5.5","total_token_usage":{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":800}}}}
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+
+	usage := parseCodexSessionFile(path, time.Time{})
+	if usage == nil {
+		t.Fatal("expected usage")
+	}
+	if got, want := usage.usage.CacheReadTokens, int64(800); got != want {
+		t.Fatalf("cache-read tokens = %d, want fallback %d", got, want)
+	}
+}
+
+func TestParseCodexSessionFileAggregatesLastUsageAfterExecutionStart(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	start := time.Date(2026, time.July, 16, 7, 0, 0, 0, time.UTC)
+	content := `{"timestamp":"2026-07-16T06:59:59Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"output_tokens":100,"cached_input_tokens":100}}}}
+{"timestamp":"2026-07-16T07:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5.5","total_token_usage":{"input_tokens":1100,"output_tokens":120,"cached_input_tokens":130},"last_token_usage":{"input_tokens":100,"output_tokens":20,"cached_input_tokens":30}}}}
+{"timestamp":"2026-07-16T07:00:02Z","type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5.5","total_token_usage":{"input_tokens":1300,"output_tokens":150,"cached_input_tokens":170},"last_token_usage":{"input_tokens":200,"output_tokens":30,"cached_input_tokens":40}}}}
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+
+	usage := parseCodexSessionFile(path, start)
+	if usage == nil {
+		t.Fatal("expected usage")
+	}
+	if got, want := usage.usage.InputTokens, int64(300); got != want {
+		t.Fatalf("input tokens = %d, want aggregated %d", got, want)
+	}
+	if got, want := usage.usage.OutputTokens, int64(50); got != want {
+		t.Fatalf("output tokens = %d, want aggregated %d", got, want)
+	}
+	if got, want := usage.usage.CacheReadTokens, int64(70); got != want {
+		t.Fatalf("cache-read tokens = %d, want aggregated %d", got, want)
+	}
+}
+
+func TestParseCodexSessionFileFallsBackToCumulativeDeltaAtExecutionBoundary(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	start := time.Date(2026, time.July, 16, 7, 0, 0, 0, time.UTC)
+	content := `{"timestamp":"2026-07-16T06:59:59Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"output_tokens":100,"cached_input_tokens":100}}}}
+{"timestamp":"2026-07-16T07:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1300,"output_tokens":150,"cached_input_tokens":170}}}}
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+
+	usage := parseCodexSessionFile(path, start)
+	if usage == nil {
+		t.Fatal("expected usage")
+	}
+	if got, want := usage.usage.InputTokens, int64(300); got != want {
+		t.Fatalf("input tokens = %d, want cumulative delta %d", got, want)
+	}
+	if got, want := usage.usage.OutputTokens, int64(50); got != want {
+		t.Fatalf("output tokens = %d, want cumulative delta %d", got, want)
+	}
+	if got, want := usage.usage.CacheReadTokens, int64(70); got != want {
+		t.Fatalf("cache-read tokens = %d, want cumulative delta %d", got, want)
+	}
+}
+
+func TestScanCodexSessionUsageSelectsOnlyCurrentThread(t *testing.T) {
+	start := time.Now().UTC().Add(-time.Minute)
+	codexHome := t.TempDir()
+	t.Setenv("CODEX_HOME", codexHome)
+	sharedSessions := t.TempDir()
+	if err := os.Symlink(sharedSessions, filepath.Join(codexHome, "sessions")); err != nil {
+		t.Fatalf("symlink shared Codex sessions: %v", err)
+	}
+	writeSession := func(sessionDate time.Time, name, content string, modTime time.Time) {
+		t.Helper()
+		dateDir := filepath.Join(sharedSessions,
+			fmt.Sprintf("%04d", sessionDate.Year()),
+			fmt.Sprintf("%02d", int(sessionDate.Month())),
+			fmt.Sprintf("%02d", sessionDate.Day()),
+		)
+		if err := os.MkdirAll(dateDir, 0o755); err != nil {
+			t.Fatalf("make session dir: %v", err)
+		}
+		path := filepath.Join(dateDir, name)
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatalf("write session %s: %v", name, err)
+		}
+		if err := os.Chtimes(path, modTime, modTime); err != nil {
+			t.Fatalf("set session mtime %s: %v", name, err)
+		}
+	}
+
+	// Resumed Codex threads keep their original date directory even when a
+	// later execution appends new events today.
+	writeSession(start.AddDate(0, 0, -1), "rollout-target-thread.jsonl", `{"timestamp":"`+start.Add(time.Second).Format(time.RFC3339Nano)+`","type":"event_msg","payload":{"type":"token_count","info":{"model":"target","last_token_usage":{"input_tokens":123,"output_tokens":45}}}}
+`, start.Add(2*time.Second))
+	// This one is newer and sorts later, which previously overwrote the target
+	// result merely because every shared-session file was scanned.
+	writeSession(start, "rollout-unrelated-thread.jsonl", `{"timestamp":"`+start.Add(2*time.Second).Format(time.RFC3339Nano)+`","type":"event_msg","payload":{"type":"token_count","info":{"model":"unrelated","last_token_usage":{"input_tokens":999,"output_tokens":999}}}}
+`, start.Add(3*time.Second))
+
+	usage := scanCodexSessionUsage(start, "target-thread")
+	if usage == nil {
+		t.Fatal("expected usage")
+	}
+	if got, want := usage.model, "target"; got != want {
+		t.Fatalf("model = %q, want %q", got, want)
+	}
+	if got, want := usage.usage.InputTokens, int64(123); got != want {
+		t.Fatalf("input tokens = %d, want target usage %d", got, want)
+	}
+}
+
 func TestCodexHandleResponseSuccess(t *testing.T) {
 	t.Parallel()
 

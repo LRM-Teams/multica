@@ -35,7 +35,7 @@ func TestAgentActivity_RoleGatesStepAndDiagnosticPayloads(t *testing.T) {
 		t.Fatalf("update activity task: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO task_usage (task_id, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens)
+		INSERT INTO agent_usage (execution_id, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens)
 		VALUES ($1, 'openai', 'gpt-test', 11, 7, 3, 2)
 	`, taskID); err != nil {
 		t.Fatalf("insert task usage: %v", err)

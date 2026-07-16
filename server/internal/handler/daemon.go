@@ -2108,10 +2108,11 @@ func (h *Handler) latestChatTaskFailureReason(ctx context.Context, chatSessionID
 func (h *Handler) chatSessionTokenTotal(ctx context.Context, chatSessionID pgtype.UUID) int64 {
 	var total int64
 	err := h.DB.QueryRow(ctx, `
-		SELECT COALESCE(SUM(tu.input_tokens + tu.output_tokens + tu.cache_read_tokens + tu.cache_write_tokens), 0)::bigint
-		FROM task_usage tu
-		JOIN agent_task_queue atq ON atq.id = tu.task_id
-		WHERE atq.chat_session_id = $1`, chatSessionID).Scan(&total)
+		SELECT COALESCE(SUM(au.input_tokens + au.output_tokens + au.cache_read_tokens + au.cache_write_tokens), 0)::bigint
+		FROM agent_usage au
+		JOIN agent_task_queue atq ON atq.id = au.execution_id
+		WHERE atq.chat_session_id = $1
+		  AND au.source = 'chat'`, chatSessionID).Scan(&total)
 	if err != nil {
 		return 0
 	}
@@ -2816,9 +2817,11 @@ func (h *Handler) emitIssueExecutedOnFirstCompletion(r *http.Request, task *db.A
 	))
 }
 
-// ReportTaskUsage stores per-task token usage. Called independently of
-// complete/fail so usage is captured even when tasks fail or are blocked.
-type TaskUsagePayload struct {
+// AgentUsagePayload is the token ledger payload reported by a daemon after an
+// execution. The daemon endpoint intentionally remains task-addressed because
+// agent_task_queue is the execution lease contract; the stored ledger is
+// agent_usage and covers both issue and chat executions.
+type AgentUsagePayload struct {
 	Provider         string `json:"provider"`
 	Model            string `json:"model"`
 	InputTokens      int64  `json:"input_tokens"`
@@ -2837,16 +2840,22 @@ func (h *Handler) ReportTaskUsage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Usage []TaskUsagePayload `json:"usage"`
+		Usage []AgentUsagePayload `json:"usage"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
+	source := "issue"
+	if task.ChatSessionID.Valid {
+		source = "chat"
+	}
+
 	for _, u := range req.Usage {
-		if err := h.Queries.UpsertTaskUsage(r.Context(), db.UpsertTaskUsageParams{
-			TaskID:           parseUUID(taskID),
+		if err := h.Queries.UpsertAgentUsage(r.Context(), db.UpsertAgentUsageParams{
+			ExecutionID:      parseUUID(taskID),
+			Source:           source,
 			Provider:         u.Provider,
 			Model:            u.Model,
 			InputTokens:      u.InputTokens,
@@ -2854,7 +2863,7 @@ func (h *Handler) ReportTaskUsage(w http.ResponseWriter, r *http.Request) {
 			CacheReadTokens:  u.CacheReadTokens,
 			CacheWriteTokens: u.CacheWriteTokens,
 		}); err != nil {
-			slog.Warn("upsert task usage failed", "task_id", taskID, "model", u.Model, "error", err)
+			slog.Warn("upsert agent usage failed", "execution_id", taskID, "model", u.Model, "error", err)
 			continue
 		}
 		h.TaskService.CaptureTaskUsage(r.Context(), task, u.Provider, u.Model, u.InputTokens, u.OutputTokens, u.CacheReadTokens, u.CacheWriteTokens)

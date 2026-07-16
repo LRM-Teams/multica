@@ -1,39 +1,26 @@
-// Backfill_task_usage_hourly seeds the unified hourly rollup table
-// (`task_usage_hourly`) from historical `task_usage`
-// rows. Run once after the hourly-pipeline migrations ship, BEFORE registering
-// the pg_cron job for rollup_task_usage_hourly().
+// backfill_agent_usage_hourly rebuilds the unified hourly rollup from the
+// current agent_usage ledger. It is an operator recovery command, useful
+// after a repaired projection or when the rollup watermark must be rebuilt.
+// The legacy pre-103 upgrade hook stays inside cmd/migrate because it runs
+// against the historical schema before this ledger exists.
 //
-// SELF-HOST UPGRADE ORDER — migrations 100–104 are one group, but they
-// must NOT be applied in a single `make migrate-up`:
-//
-//  1. Apply 101+102 (creates task_usage_hourly + installs the triggers).
-//  2. Run THIS backfill to seed historical buckets.
-//  3. Apply 103+104 (drops the legacy daily rollups + runtime.timezone)
-//     and register the pg_cron job.
-//
-// If you run `migrate-up` straight through to 103/104 before this
-// backfill, the legacy daily pipelines are gone while task_usage_hourly
-// only holds buckets the triggers wrote since 102 — dashboards will show
-// empty history until backfill + cron catch up (tens to hundreds of
-// ticks on a DB with years of data, given the per-tick 1-day cap).
-//
-// Mirrors backfill_task_usage_dashboard_daily: walk task_usage's time
+// Walk agent_usage's time
 // range in monthly slices and call the same idempotent window
 // primitive the cron path uses. Then stamp the rollup-state watermark
 // so the first cron tick after backfill does not reprocess history.
 //
-// Re-running is safe — rollup_task_usage_hourly_window is idempotent
+// Re-running is safe — rollup_agent_usage_hourly_window is idempotent
 // (recomputes each dirty key from raw and REPLACES the bucket), so a
 // partially completed backfill can be resumed without TRUNCATEing
-// task_usage_hourly first.
+// agent_usage_hourly first.
 //
-// Read pressure: each slice scans task_usage / agent_task_queue / agent
+// Read pressure: each slice scans agent_usage / agent_task_queue / agent
 // / issue. On a database with years of history that is sustained heavy
 // load. Use --sleep-between-slices to throttle on a busy production DB,
 // and coordinate a maintenance window with the DB team before a
 // full-history run (see docs/timezone-architecture-rfc.md §7.1).
 //
-// Operator note: this command does NOT call prune_task_usage_hourly_dirty.
+// Operator note: this command does NOT call prune_agent_usage_hourly_dirty.
 // The dirty queue starts empty during backfill (triggers fire only on
 // future writes), so there is nothing to prune until the rollup worker
 // has been running for a while.
@@ -64,7 +51,7 @@ func main() {
 
 func run() error {
 	var (
-		dryRun       = flag.Bool("dry-run", false, "log slices that would be processed without touching task_usage_hourly")
+		dryRun       = flag.Bool("dry-run", false, "log slices that would be processed without touching agent_usage_hourly")
 		monthsBack   = flag.Int("months-back", 0, "limit backfill to the last N months (0 = all available history)")
 		forcePartial = flag.Bool("force-partial", false, "acknowledge that --months-back permanently abandons buckets older than the cutoff (the watermark still advances past them)")
 		sleep        = flag.Duration("sleep-between-slices", 0, "pause this long between monthly slices to throttle source-table read pressure on a busy DB (e.g. 2s)")
@@ -96,7 +83,7 @@ func run() error {
 	// Serialise against the cron rollup and any other backfill run via
 	// advisory lock 4246 — the same id the cron entry checks with
 	// pg_try_advisory_lock. While this backfill holds it, the cron tick
-	// no-ops instead of racing on task_usage_hourly row locks; a second
+	// no-ops instead of racing on agent_usage_hourly row locks; a second
 	// concurrent backfill blocks here until this one finishes. The lock
 	// is held on a dedicated session connection for the whole run.
 	lockConn, err := pool.Acquire(ctx)
@@ -115,11 +102,11 @@ func run() error {
 	}()
 
 	var minTS, maxTS pgtype.Timestamptz
-	if err := pool.QueryRow(ctx, `SELECT MIN(created_at), MAX(created_at) FROM task_usage`).Scan(&minTS, &maxTS); err != nil {
-		return fmt.Errorf("scan task_usage time range: %w", err)
+	if err := pool.QueryRow(ctx, `SELECT MIN(created_at), MAX(created_at) FROM agent_usage`).Scan(&minTS, &maxTS); err != nil {
+		return fmt.Errorf("scan agent_usage time range: %w", err)
 	}
 	if !minTS.Valid {
-		slog.Info("task_usage is empty; nothing to backfill")
+		slog.Info("agent_usage is empty; nothing to backfill")
 		if *dryRun {
 			return nil
 		}
@@ -161,7 +148,7 @@ func run() error {
 		var rows int64
 		err := pool.QueryRow(
 			ctx,
-			`SELECT rollup_task_usage_hourly_window($1::timestamptz, $2::timestamptz)`,
+			`SELECT rollup_agent_usage_hourly_window($1::timestamptz, $2::timestamptz)`,
 			cursor, next,
 		).Scan(&rows)
 		if err != nil {
@@ -199,7 +186,7 @@ func run() error {
 // backfill horizon and does not redo work the backfill already did.
 func stampWatermark(ctx context.Context, pool *pgxpool.Pool) error {
 	tag, err := pool.Exec(ctx, `
-		UPDATE task_usage_hourly_rollup_state
+		UPDATE agent_usage_hourly_rollup_state
 		   SET watermark_at = now() - INTERVAL '5 minutes'
 		 WHERE id = 1
 	`)
@@ -207,7 +194,7 @@ func stampWatermark(ctx context.Context, pool *pgxpool.Pool) error {
 		return fmt.Errorf("stamp watermark: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		slog.Warn("no rollup state row to stamp; was the task_usage_hourly schema migration applied?")
+		slog.Warn("no rollup state row to stamp; was the agent_usage_hourly schema migration applied?")
 		return nil
 	}
 	fmt.Println("watermark stamped to now() - 5 minutes")

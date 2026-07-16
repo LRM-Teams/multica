@@ -12,13 +12,13 @@ import (
 // TestPgCronConcurrentNoDoubleWrite covers张大彪's blocker #4:
 //
 //	"`pg_cron` 并跑那条覆盖要真打——scheduler handler 跟直接
-//	 `SELECT rollup_task_usage_hourly()` / 旧 cron 入口并发，验证
+//	 `SELECT rollup_agent_usage_hourly()` / 旧 cron 入口并发，验证
 //	 advisory lock 4246 下不双写。"
 //
-// The test seeds historical `task_usage` rows under a freshly created
+// The test seeds historical `agent_usage` rows under a freshly created
 // agent / runtime / agent_task_queue fixture, advances the rollup
 // watermark backwards so a single tick has real work to do, then
-// invokes `rollup_task_usage_hourly()` directly from N concurrent
+// invokes `rollup_agent_usage_hourly()` directly from N concurrent
 // goroutines. This is the same SQL entrypoint the in-process
 // scheduler handler calls AND the same one any leftover `pg_cron`
 // job or operator would call by hand. Advisory lock 4246 inside the
@@ -33,15 +33,15 @@ import (
 //   - The watermark advanced exactly once — specifically, the resulting
 //     watermark equals what the winning caller computed, and not any
 //     multiple of it.
-//   - The post-rollup `task_usage_hourly` rows match what we expect
-//     from the seeded `task_usage` data (token sums + bucket count).
+//   - The post-rollup `agent_usage_hourly` rows match what we expect
+//     from the seeded `agent_usage` data (token sums + bucket count).
 func TestPgCronConcurrentNoDoubleWrite(t *testing.T) {
 	pool := integrationPool(t)
 	ctx := context.Background()
 
 	// Seed an isolated workspace/runtime/agent/task and a handful of
-	// task_usage rows landing in the same UTC hour bucket. The bucket
-	// math is the SQL helper task_usage_hour_bucket(...).
+	// agent_usage rows landing in the same UTC hour bucket. The bucket
+	// math is the SQL helper agent_usage_hour_bucket(...).
 	ws, _, _, task := seedRollupFixture(t, pool)
 	t.Cleanup(func() { cleanupRollupFixture(t, pool, ws) })
 
@@ -52,15 +52,15 @@ func TestPgCronConcurrentNoDoubleWrite(t *testing.T) {
 	const rowsToSeed = 4
 	for i := 0; i < rowsToSeed; i++ {
 		_, err := pool.Exec(ctx, `
-			INSERT INTO task_usage (
-				task_id, provider, model,
+			INSERT INTO agent_usage (
+				execution_id, provider, model,
 				input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
 				created_at, updated_at
 			)
 			VALUES ($1, 'openai', $2, $3, $4, 0, 0, $5, $5)
 		`, task, "model-"+string(rune('A'+i)), int64(100+i), int64(200+i), bucketTS)
 		if err != nil {
-			t.Fatalf("seed task_usage row %d: %v", i, err)
+			t.Fatalf("seed agent_usage row %d: %v", i, err)
 		}
 	}
 
@@ -68,7 +68,7 @@ func TestPgCronConcurrentNoDoubleWrite(t *testing.T) {
 	// rollup function caps at 1 day per call, which is plenty for our
 	// 30-minute-old fixture.
 	if _, err := pool.Exec(ctx, `
-		UPDATE task_usage_hourly_rollup_state
+		UPDATE agent_usage_hourly_rollup_state
 		   SET watermark_at = $1
 		 WHERE id = 1
 	`, bucketTS.Add(-1*time.Hour)); err != nil {
@@ -78,7 +78,7 @@ func TestPgCronConcurrentNoDoubleWrite(t *testing.T) {
 	// Wipe any pre-existing hourly rows for this fixture so we can
 	// assert exactly what the rollup wrote.
 	if _, err := pool.Exec(ctx, `
-		DELETE FROM task_usage_hourly WHERE workspace_id = $1
+		DELETE FROM agent_usage_hourly WHERE workspace_id = $1
 	`, ws); err != nil {
 		t.Fatalf("clear hourly rows: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestPgCronConcurrentNoDoubleWrite(t *testing.T) {
 	// Capture the winning watermark by snapshotting before/after.
 	var watermarkBefore time.Time
 	if err := pool.QueryRow(ctx, `
-		SELECT watermark_at FROM task_usage_hourly_rollup_state WHERE id = 1
+		SELECT watermark_at FROM agent_usage_hourly_rollup_state WHERE id = 1
 	`).Scan(&watermarkBefore); err != nil {
 		t.Fatalf("read watermark before: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestPgCronConcurrentNoDoubleWrite(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-gate
-			err := pool.QueryRow(ctx, `SELECT rollup_task_usage_hourly()`).Scan(&results[i])
+			err := pool.QueryRow(ctx, `SELECT rollup_agent_usage_hourly()`).Scan(&results[i])
 			errs[i] = err
 		}()
 	}
@@ -146,7 +146,7 @@ func TestPgCronConcurrentNoDoubleWrite(t *testing.T) {
 
 	// Run rollup again and assert no double-write.
 	var followupRows int64
-	if err := pool.QueryRow(ctx, `SELECT rollup_task_usage_hourly()`).Scan(&followupRows); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT rollup_agent_usage_hourly()`).Scan(&followupRows); err != nil {
 		t.Fatalf("followup rollup: %v", err)
 	}
 	if followupRows != 0 {
@@ -161,7 +161,7 @@ func TestPgCronConcurrentNoDoubleWrite(t *testing.T) {
 	// watermark must be > watermarkBefore but not duplicated.
 	var watermarkAfter time.Time
 	if err := pool.QueryRow(ctx, `
-		SELECT watermark_at FROM task_usage_hourly_rollup_state WHERE id = 1
+		SELECT watermark_at FROM agent_usage_hourly_rollup_state WHERE id = 1
 	`).Scan(&watermarkAfter); err != nil {
 		t.Fatalf("read watermark after: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestPgCronConcurrentNoDoubleWrite(t *testing.T) {
 }
 
 // seedRollupFixture creates the smallest viable
-// (workspace, runtime, agent, task) graph required for task_usage rows
+// (workspace, runtime, agent, task) graph required for agent_usage rows
 // to participate in the hourly rollup — the rollup window joins on
 // agent + runtime + (optional) issue, so all four parents must exist.
 // Returns the four IDs.
@@ -230,7 +230,7 @@ func countHourlyRowsForWorkspace(t *testing.T, pool *pgxpool.Pool, wsID string) 
 	t.Helper()
 	var n int
 	if err := pool.QueryRow(context.Background(), `
-		SELECT COUNT(*) FROM task_usage_hourly WHERE workspace_id = $1
+		SELECT COUNT(*) FROM agent_usage_hourly WHERE workspace_id = $1
 	`, wsID).Scan(&n); err != nil {
 		t.Fatalf("count hourly: %v", err)
 	}

@@ -4,8 +4,13 @@ import { I18nProvider } from "@multica/core/i18n/react";
 import type { Agent, ChatSession } from "@multica/core/types";
 import enChat from "../../locales/en/chat.json";
 
-vi.mock("@multica/ui/components/common/actor-avatar", () => ({
-  ActorAvatar: ({ name }: { name: string }) => <span data-testid={`avatar-${name}`} />,
+vi.mock("../../common/actor-avatar", () => ({
+  ActorAvatar: ({ actorId, showStatusDot }: { actorId: string; showStatusDot?: boolean }) => (
+    <span
+      data-testid={`avatar-${actorId}`}
+      data-status-dot={showStatusDot ? "true" : "false"}
+    />
+  ),
 }));
 
 import { ChatContactList } from "./chat-contact-list";
@@ -106,5 +111,21 @@ describe("ChatContactList", () => {
   it("renders the empty state when there are no usable sessions", () => {
     renderList([]);
     expect(screen.getByText(enChat.contacts.empty)).toBeInTheDocument();
+  });
+
+  it("uses the shared presence dot and keeps unread separate from the avatar", () => {
+    renderList([
+      makeSession({
+        id: "s-alpha",
+        agent_id: "a-alpha",
+        updated_at: "2026-06-01T00:00:00Z",
+        has_unread: true,
+      }),
+    ]);
+
+    expect(screen.getByTestId("avatar-a-alpha")).toHaveAttribute("data-status-dot", "true");
+    const unread = screen.getByTestId("contact-unread-a-alpha");
+    expect(unread).toHaveAccessibleName(enChat.window.unread);
+    expect(unread.parentElement).not.toContainElement(screen.getByTestId("avatar-a-alpha"));
   });
 });

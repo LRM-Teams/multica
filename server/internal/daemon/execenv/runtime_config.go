@@ -743,7 +743,8 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 
 	b.WriteString("## Attachments\n\n")
 	b.WriteString("Issues and comments may include file attachments (images, documents, etc.).\n")
-	b.WriteString("When a task includes attachment IDs and you need the files, inspect `multica attachment --help` and use the authenticated CLI path. Do not open Multica resource URLs directly.\n\n")
+	b.WriteString("When a task includes attachment IDs and you need the files, inspect `multica attachment --help` and use the authenticated CLI path. Do not open Multica resource URLs directly.\n")
+	b.WriteString("If the issue carries image attachments — especially UI references, mockups, or design targets — fetch and actually look at them before doing UI/visual work: build to match the reference and diff your result against it. If you CANNOT render or interpret images, do NOT silently ignore the reference and guess from a text summary — say so explicitly and ask for the visual intent to be captured as concrete text acceptance criteria on the issue, then build to those. Dropping a provided visual reference and shipping a blind approximation is a defect.\n\n")
 
 	renderLazyReferences(&b, false, false, ctx.ProjectID != "" || len(ctx.ProjectResources) > 0, len(ctx.AgentSkills) > 0)
 

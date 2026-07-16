@@ -50,6 +50,9 @@ func TestSubIssueCreationSectionPresentForIssueRuns(t *testing.T) {
 				"`multica issue status <child-id> todo`",
 				"all `--status todo`",
 				"`--status backlog` from the start",
+				// Reference images must be viewed (or flagged), not silently guessed.
+				"fetch and actually look at them before doing UI/visual work",
+				"Dropping a provided visual reference and shipping a blind approximation is a defect",
 			} {
 				if !strings.Contains(out, want) {
 					t.Errorf("[%s] section missing %q", tc.name, want)

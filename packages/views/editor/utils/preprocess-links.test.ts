@@ -240,16 +240,17 @@ describe("preprocessLinks — CJK host overrun (#537) DOCUMENTED COSTS (flip whe
     );
   });
 
-  // Cost 4 — the ORIGINAL #537 report shape and the ONLY real-corpus sample:
-  // Han glued onto a PATH (`https://github.com/a/b吗`). This PR is host-only and
-  // does NOT fix it. Unlike the host, a path has no validity oracle: legitimate
-  // path content (`/wiki/中国`) and a glued trailing particle (`/a/b吗`) are
-  // character-identical, so it needs its own product/contract decision (tracked
-  // under the still-open task #537). This is not a regression — baseline
-  // behavior is identical. Uses the verbatim triggering input, per #640.
-  it("cost 4: Han glued onto a PATH (github.com/a/b吗) is NOT handled (host-only PR)", () => {
-    expect(preprocessLinks("看这个 https://github.com/a/b吗")).toBe(
-      "看这个 [https://github.com/a/b吗](https://github.com/a/b吗)",
+  // Cost 4 — the ORIGINAL #537 report shape and the ONLY real-corpus sample
+  // (s89 canonical row e6c14d53, 2026-07-03): Han glued onto a PATH. This PR is
+  // host-only and does NOT fix it. Unlike the host, a path has no validity
+  // oracle: legitimate path content (`/wiki/中国`) and a glued trailing particle
+  // are character-identical, so it needs its own product/contract decision
+  // (tracked under the still-open task #537). Not a regression — baseline
+  // behavior is identical. Uses the VERBATIM canonical URL, per #640 (a
+  // simplified shape must not stand in for the real triggering input).
+  it("cost 4: Han glued onto a PATH (canonical github.com/…吗) is NOT handled", () => {
+    expect(preprocessLinks("https://github.com/LRM-Teams/multica吗")).toBe(
+      "[https://github.com/LRM-Teams/multica吗](https://github.com/LRM-Teams/multica吗)",
     );
   });
 });

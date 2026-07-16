@@ -2030,8 +2030,18 @@ func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg, 
 		task = t
 
 		// Keep resume-unsafe sessions on the task row for observability, but
-		// do not promote them to the chat-level resume pointer.
-		if t.ChatSessionID.Valid && !resumeUnsafeFailureReason(failureReason) {
+		// do not promote them to the chat-level resume pointer. If the existing
+		// pointer is the same poisoned session, clear it instead: merely not
+		// promoting the failed session leaves an older pointer intact, causing
+		// every subsequent chat turn to resume the same stuck conversation.
+		if t.ChatSessionID.Valid && resumeUnsafeFailureReason(failureReason) && sessionID != "" {
+			if err := qtx.ClearChatSessionResumeIfMatch(ctx, db.ClearChatSessionResumeIfMatchParams{
+				ID:        t.ChatSessionID,
+				SessionID: pgtype.Text{String: sessionID, Valid: true},
+			}); err != nil {
+				return fmt.Errorf("clear poisoned chat session resume pointer: %w", err)
+			}
+		} else if t.ChatSessionID.Valid {
 			// Pin the chat_session's runtime_id alongside the session_id so the
 			// next claim can apply the runtime-guard. Both fields move together:
 			// when there's no session_id to record, leave runtime_id untouched

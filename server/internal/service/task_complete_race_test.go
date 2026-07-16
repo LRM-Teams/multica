@@ -56,10 +56,15 @@ func (r *mockRow) Scan(dest ...any) error {
 // mockDBTX routes QueryRow calls: complete/fail queries return ErrNoRows,
 // getAgentTask returns the stored task.
 type mockDBTX struct {
-	task db.AgentTaskQueue
+	task       db.AgentTaskQueue
+	failedTask *db.AgentTaskQueue
+	executed   []string
+	execArgs   [][]interface{}
 }
 
-func (m *mockDBTX) Exec(_ context.Context, _ string, _ ...interface{}) (pgconn.CommandTag, error) {
+func (m *mockDBTX) Exec(_ context.Context, sql string, args ...interface{}) (pgconn.CommandTag, error) {
+	m.executed = append(m.executed, sql)
+	m.execArgs = append(m.execArgs, args)
 	return pgconn.NewCommandTag(""), nil
 }
 
@@ -68,8 +73,14 @@ func (m *mockDBTX) Query(_ context.Context, _ string, _ ...interface{}) (pgx.Row
 }
 
 func (m *mockDBTX) QueryRow(_ context.Context, sql string, _ ...interface{}) pgx.Row {
+	if strings.Contains(sql, "INSERT INTO chat_message") || strings.Contains(sql, "RefreshAgentStatusFromTasks") || strings.Contains(sql, "FROM chat_session") {
+		return &mockRow{err: pgx.ErrNoRows}
+	}
 	// CompleteAgentTask and FailAgentTask SQL contain "SET status ="
 	if strings.Contains(sql, "SET status =") {
+		if m.failedTask != nil {
+			return &mockRow{task: m.failedTask}
+		}
 		return &mockRow{err: pgx.ErrNoRows}
 	}
 	// GetAgentTask — return the existing task
@@ -196,5 +207,37 @@ func TestTaskFailureClassifiers(t *testing.T) {
 				t.Fatalf("retryableReasons[%q] = %v, want %v", tc.reason, got, tc.wantRetry)
 			}
 		})
+	}
+}
+
+func TestFailTask_ClearsMatchingChatResumeAfterGrokNoProgress(t *testing.T) {
+	taskID := testUUID(1)
+	chatSessionID := testUUID(2)
+	agentID := testUUID(3)
+	failed := db.AgentTaskQueue{
+		ID:            taskID,
+		AgentID:       agentID,
+		ChatSessionID: chatSessionID,
+		Status:        "failed",
+	}
+	mock := &mockDBTX{failedTask: &failed}
+	svc := &TaskService{Queries: db.New(mock), Bus: events.New()}
+
+	if _, err := svc.FailTask(context.Background(), taskID, "grok first stream event timeout", "stuck-session", "/tmp/work", "grok_first_turn_no_progress"); err != nil {
+		t.Fatalf("FailTask() error = %v", err)
+	}
+
+	var cleared bool
+	for i, sql := range mock.executed {
+		if strings.Contains(sql, "SET session_id = NULL") && strings.Contains(sql, "AND session_id = $2") {
+			if got, ok := mock.execArgs[i][1].(pgtype.Text); !ok || !got.Valid || got.String != "stuck-session" {
+				t.Fatalf("clear pointer session argument = %#v, want stuck-session", mock.execArgs[i][1])
+			}
+			cleared = true
+			break
+		}
+	}
+	if !cleared {
+		t.Fatal("expected matching chat resume pointer to be cleared for a Grok no-progress failure")
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 )
 
@@ -134,6 +135,14 @@ func (s *EnvSandboxLifecycleService) Create(ctx context.Context, in CreateSandbo
 	if err != nil {
 		return SandboxInstanceRef{}, fmt.Errorf("insert sandbox instance: %w", err)
 	}
+	compensate := func(cause error) (SandboxInstanceRef, error) {
+		if cleanupErr := s.deps.ForceDeleteSandboxInstance(
+			context.WithoutCancel(ctx), ref.WorkspaceID, ref.InstanceID,
+		); cleanupErr != nil {
+			return SandboxInstanceRef{}, errors.Join(cause, fmt.Errorf("compensate sandbox instance: %w", cleanupErr))
+		}
+		return SandboxInstanceRef{}, cause
+	}
 	// Daemon-enabled sandbox: mint the bootstrap env (server URL + PAT +
 	// workspace + MULTICA_DAEMON_ENABLED=1 + profile) so the in-sandbox daemon
 	// can reach multica on boot, then overlay any caller-supplied extras (e.g.
@@ -145,7 +154,7 @@ func (s *EnvSandboxLifecycleService) Create(ctx context.Context, in CreateSandbo
 	if in.DaemonEnabled {
 		env, err := s.deps.MintSandboxRuntimeEnv(ctx, in.WorkspaceID, actorUserID, ref.InstanceID)
 		if err != nil {
-			return SandboxInstanceRef{}, fmt.Errorf("mint sandbox runtime env: %w", err)
+			return compensate(fmt.Errorf("mint sandbox runtime env: %w", err))
 		}
 		for k, v := range in.RuntimeEnv {
 			env[k] = v
@@ -154,14 +163,19 @@ func (s *EnvSandboxLifecycleService) Create(ctx context.Context, in CreateSandbo
 	}
 	payload, err := sandboxCreatePayload(in)
 	if err != nil {
-		return SandboxInstanceRef{}, fmt.Errorf("build sandbox create payload: %w", err)
+		return compensate(fmt.Errorf("build sandbox create payload: %w", err))
 	}
 	job, err := s.deps.EnqueueSandboxJob(ctx, ref.WorkspaceID, actorUserID, ref.NodeID, ref.InstanceID, "create", payload)
 	if err != nil {
-		return SandboxInstanceRef{}, err
+		return compensate(err)
 	}
 	if err := s.deps.NotifySandboxJobAvailable(ctx, ref.NodeID, job.JobID); err != nil {
-		return SandboxInstanceRef{}, err
+		slog.Warn("sandbox create: failed to notify job available",
+			"workspace_id", ref.WorkspaceID,
+			"instance_id", ref.InstanceID,
+			"node_id", ref.NodeID,
+			"job_id", job.JobID,
+			"error", err)
 	}
 	return ref, nil
 }

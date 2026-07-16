@@ -417,3 +417,47 @@ func TestEnvSandboxLifecycleCreateMergesCallerSuppliedEnv(t *testing.T) {
 		t.Fatalf("MULTICA_DAEMON_ID = %v", env["MULTICA_DAEMON_ID"])
 	}
 }
+
+func TestEnvSandboxLifecycleCreateCompensatesPostInsertFailures(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(*fakeEnvSandboxLifecycleDeps)
+	}{
+		{"mint failure", func(f *fakeEnvSandboxLifecycleDeps) { f.mintErr = errors.New("mint") }},
+		{"enqueue failure", func(f *fakeEnvSandboxLifecycleDeps) { f.enqueueErr = errors.New("enqueue") }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := &fakeEnvSandboxLifecycleDeps{}
+			tt.configure(f)
+			svc := NewEnvSandboxLifecycleService(f, time.Second)
+			_, err := svc.Create(context.Background(), CreateSandboxInstanceInput{
+				WorkspaceID: "ws", Template: "default", DaemonEnabled: true,
+			}, "user")
+			if err == nil {
+				t.Fatal("expected create failure")
+			}
+			if len(f.forceDeletes) != 1 || f.forceDeletes[0] != "ws:inst-created" {
+				t.Fatalf("force deletes = %v, want [ws:inst-created]", f.forceDeletes)
+			}
+		})
+	}
+}
+
+func TestEnvSandboxLifecycleCreateNotificationFailureKeepsDurableJob(t *testing.T) {
+	f := &fakeEnvSandboxLifecycleDeps{}
+	f.notifyErr = errors.New("websocket unavailable")
+	svc := NewEnvSandboxLifecycleService(f, time.Second)
+	ref, err := svc.Create(context.Background(), CreateSandboxInstanceInput{
+		WorkspaceID: "ws", Template: "default",
+	}, "user")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if ref.InstanceID != "inst-created" {
+		t.Fatalf("instance = %q", ref.InstanceID)
+	}
+	if len(f.forceDeletes) != 0 {
+		t.Fatalf("unexpected compensation: %v", f.forceDeletes)
+	}
+}

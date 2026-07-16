@@ -1735,7 +1735,7 @@ func scanCodexSessionUsage(startTime time.Time) *codexSessionUsage {
 		if err != nil || info.ModTime().Before(startTime) {
 			continue
 		}
-		if u := parseCodexSessionFile(f); u != nil {
+		if u := parseCodexSessionFile(f, startTime); u != nil {
 			// Take the last matching file's data (usually there's only one per task).
 			result = *u
 		}
@@ -1770,32 +1770,31 @@ func codexSessionRoot() string {
 
 // codexSessionTokenCount represents a token_count event in Codex JSONL.
 type codexSessionTokenCount struct {
-	Type    string `json:"type"`
-	Payload *struct {
+	Timestamp string `json:"timestamp"`
+	Type      string `json:"type"`
+	Payload   *struct {
 		Type string `json:"type"`
 		Info *struct {
-			TotalTokenUsage *struct {
-				InputTokens           int64 `json:"input_tokens"`
-				OutputTokens          int64 `json:"output_tokens"`
-				CachedInputTokens     int64 `json:"cached_input_tokens"`
-				CacheReadInputTokens  int64 `json:"cache_read_input_tokens"`
-				ReasoningOutputTokens int64 `json:"reasoning_output_tokens"`
-			} `json:"total_token_usage"`
-			LastTokenUsage *struct {
-				InputTokens           int64 `json:"input_tokens"`
-				OutputTokens          int64 `json:"output_tokens"`
-				CachedInputTokens     int64 `json:"cached_input_tokens"`
-				CacheReadInputTokens  int64 `json:"cache_read_input_tokens"`
-				ReasoningOutputTokens int64 `json:"reasoning_output_tokens"`
-			} `json:"last_token_usage"`
-			Model string `json:"model"`
+			TotalTokenUsage *codexTokenUsage `json:"total_token_usage"`
+			LastTokenUsage  *codexTokenUsage `json:"last_token_usage"`
+			Model           string           `json:"model"`
 		} `json:"info"`
 		Model string `json:"model"`
 	} `json:"payload"`
 }
 
-// parseCodexSessionFile extracts the final token_count from a Codex session file.
-func parseCodexSessionFile(path string) *codexSessionUsage {
+type codexTokenUsage struct {
+	InputTokens           int64 `json:"input_tokens"`
+	OutputTokens          int64 `json:"output_tokens"`
+	CachedInputTokens     int64 `json:"cached_input_tokens"`
+	CacheReadInputTokens  int64 `json:"cache_read_input_tokens"`
+	ReasoningOutputTokens int64 `json:"reasoning_output_tokens"`
+}
+
+// parseCodexSessionFile extracts usage for the execution that began at startTime.
+// Codex appends each model response to a resumed session, so a token_count's
+// last_token_usage is one response delta, not the complete execution total.
+func parseCodexSessionFile(path string, startTime time.Time) *codexSessionUsage {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil
@@ -1803,7 +1802,10 @@ func parseCodexSessionFile(path string) *codexSessionUsage {
 	defer f.Close()
 
 	var result codexSessionUsage
+	var baselineTotal, finalTotal *codexTokenUsage
+	var lastUsage TokenUsage
 	found := false
+	allPostBoundaryUsageHasLast := true
 
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
@@ -1827,30 +1829,34 @@ func parseCodexSessionFile(path string) *codexSessionUsage {
 			continue
 		}
 
-		// Extract token usage from token_count events.
+		// Extract token usage from token_count events. Events before startTime
+		// establish the cumulative-session baseline; only later records belong
+		// to this Multica execution.
 		if evt.Payload.Type == "token_count" && evt.Payload.Info != nil {
-			// A persisted Codex session keeps TotalTokenUsage cumulative across
-			// resumed turns. Each Multica execution writes its own ledger row, so
-			// use the final turn delta when Codex provides it; falling back to the
-			// cumulative number would bill earlier chat executions again.
-			usage := evt.Payload.Info.LastTokenUsage
-			if usage == nil {
-				usage = evt.Payload.Info.TotalTokenUsage
+			eventTime, err := time.Parse(time.RFC3339Nano, evt.Timestamp)
+			if err == nil && !startTime.IsZero() && eventTime.Before(startTime) {
+				if evt.Payload.Info.TotalTokenUsage != nil {
+					baselineTotal = evt.Payload.Info.TotalTokenUsage
+				}
+				continue
 			}
-			if usage != nil {
-				cachedTokens := usage.CachedInputTokens
-				if cachedTokens == 0 {
-					cachedTokens = usage.CacheReadInputTokens
-				}
-				result.usage = TokenUsage{
-					InputTokens:     usage.InputTokens,
-					OutputTokens:    usage.OutputTokens + usage.ReasoningOutputTokens,
-					CacheReadTokens: cachedTokens,
-				}
-				if evt.Payload.Info.Model != "" {
-					result.model = evt.Payload.Info.Model
-				}
-				found = true
+
+			last := evt.Payload.Info.LastTokenUsage
+			total := evt.Payload.Info.TotalTokenUsage
+			if last == nil && total == nil {
+				continue
+			}
+			found = true
+			if last == nil {
+				allPostBoundaryUsageHasLast = false
+			} else {
+				lastUsage = addCodexTokenUsage(lastUsage, tokenUsageFromCodex(last))
+			}
+			if total != nil {
+				finalTotal = total
+			}
+			if evt.Payload.Info.Model != "" {
+				result.model = evt.Payload.Info.Model
 			}
 		}
 	}
@@ -1858,7 +1864,53 @@ func parseCodexSessionFile(path string) *codexSessionUsage {
 	if !found {
 		return nil
 	}
+	if allPostBoundaryUsageHasLast {
+		result.usage = lastUsage
+	} else if finalTotal != nil {
+		result.usage = subtractCodexTokenUsage(tokenUsageFromCodex(finalTotal), tokenUsageFromCodex(baselineTotal))
+	} else {
+		return nil
+	}
 	return &result
+}
+
+func tokenUsageFromCodex(usage *codexTokenUsage) TokenUsage {
+	if usage == nil {
+		return TokenUsage{}
+	}
+	cachedTokens := usage.CachedInputTokens
+	if cachedTokens == 0 {
+		cachedTokens = usage.CacheReadInputTokens
+	}
+	return TokenUsage{
+		InputTokens:     usage.InputTokens,
+		OutputTokens:    usage.OutputTokens + usage.ReasoningOutputTokens,
+		CacheReadTokens: cachedTokens,
+	}
+}
+
+func addCodexTokenUsage(a, b TokenUsage) TokenUsage {
+	return TokenUsage{
+		InputTokens:      a.InputTokens + b.InputTokens,
+		OutputTokens:     a.OutputTokens + b.OutputTokens,
+		CacheReadTokens:  a.CacheReadTokens + b.CacheReadTokens,
+		CacheWriteTokens: a.CacheWriteTokens + b.CacheWriteTokens,
+	}
+}
+
+func subtractCodexTokenUsage(total, baseline TokenUsage) TokenUsage {
+	subtract := func(value, prior int64) int64 {
+		if value <= prior {
+			return 0
+		}
+		return value - prior
+	}
+	return TokenUsage{
+		InputTokens:      subtract(total.InputTokens, baseline.InputTokens),
+		OutputTokens:     subtract(total.OutputTokens, baseline.OutputTokens),
+		CacheReadTokens:  subtract(total.CacheReadTokens, baseline.CacheReadTokens),
+		CacheWriteTokens: subtract(total.CacheWriteTokens, baseline.CacheWriteTokens),
+	}
 }
 
 // bytesContainsStr checks if b contains the string s (without allocating).

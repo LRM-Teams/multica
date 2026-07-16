@@ -329,69 +329,6 @@ function collectLinkifyMatches(text: string, offset: number, out: DetectedLink[]
   }
 }
 
-// Explicit-scheme authority up to the first path/query/fragment delimiter or
-// whitespace. Used only by the recovery pass below — NOT a general URL matcher.
-const SCHEMED_AUTHORITY_REGEX = /https?:\/\/[^\s/?#]*/gi
-
-/**
- * Recover from a *failure* mode of linkify-it (distinct from the host overrun
- * handled in collectLinkifyMatches): when Han is glued directly onto a port
- * (`https://x.com:8080吗`), the port token becomes invalid and linkify-it fails
- * the WHOLE match — it emits nothing rather than over-matching, so the user
- * loses the clickable `https://x.com:8080` entirely.
- *
- * This strict, explicit-scheme-only pass finds such authorities, strips the
- * trailing Han run, and re-validates the prefix as a whole URL with linkify-it
- * itself (same oracle — no broad URL regex takes over detection). Ranges that
- * linkify-it already matched are skipped, so it never double-emits.
- */
-function recoverSchemedHanOverrun(text: string, out: DetectedLink[]): void {
-  SCHEMED_AUTHORITY_REGEX.lastIndex = 0
-  let m: RegExpExecArray | null
-  while ((m = SCHEMED_AUTHORITY_REGEX.exec(text)) !== null) {
-    const candidate = m[0]
-    const start = m.index
-    // Only the overrun shape: an authority ending in a Han run.
-    if (!HAN_LETTER_REGEX.test(candidate.charAt(candidate.length - 1))) continue
-
-    let cut = candidate.length
-    while (cut > 0 && HAN_LETTER_REGEX.test(candidate.charAt(cut - 1))) cut--
-    if (cut === 0) continue
-    const recoveredEnd = start + cut
-    const candidateEnd = start + candidate.length
-
-    // If linkify-it already matched into the trailing Han region, it handled
-    // this authority as a whole match (the Han stays inside — documented cost
-    // 1, e.g. `x.zzz吗`); this recovery is only for authorities linkify-it
-    // *failed* to parse (a glued port), so don't second-guess a real match.
-    if (out.some((l) => rangesOverlap({ start: recoveredEnd, end: candidateEnd }, l))) continue
-
-    const prefix = candidate.slice(0, cut)
-    const pm = linkify.match(prefix)
-    const whole =
-      pm && pm.length === 1 && pm[0] && pm[0].index === 0 && pm[0].lastIndex === prefix.length
-        ? pm[0]
-        : undefined
-    if (!whole) continue
-
-    // linkify-it may have emitted a shorter *fragment* of this authority (e.g.
-    // `https://user` out of `https://user@x.com:8080吗`); drop fragments fully
-    // contained in the recovered span, then add the validated whole URL.
-    for (let i = out.length - 1; i >= 0; i--) {
-      const l = out[i]
-      if (l && l.start >= start && l.end <= recoveredEnd) out.splice(i, 1)
-    }
-
-    out.push({
-      type: whole.schema === 'mailto:' ? 'email' : 'url',
-      text: prefix,
-      url: whole.url,
-      start,
-      end: recoveredEnd
-    })
-  }
-}
-
 /**
  * Detect all links (URLs, emails, file paths) in text
  */
@@ -400,10 +337,6 @@ export function detectLinks(text: string): DetectedLink[] {
 
   // 1. Detect URLs and emails with linkify-it, applying CJK boundary handling.
   collectLinkifyMatches(text, 0, links)
-
-  // 1b. Recover schemed URLs that linkify-it dropped entirely because Han was
-  // glued onto the port (e.g. `https://x.com:8080吗`).
-  recoverSchemedHanOverrun(text, links)
 
   // 2. Detect file paths with custom regex
   // Reset regex state

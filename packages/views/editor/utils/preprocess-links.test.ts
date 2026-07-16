@@ -157,26 +157,6 @@ describe("preprocessLinks — CJK letter host overrun (#537)", () => {
     );
   });
 
-  it("recovers a port-then-Han authority: links host:port, Han outside", () => {
-    // linkify-it fails the WHOLE match on `:8080吗` (invalid port), so the
-    // recovery pass strips the Han and re-validates `https://x.com:8080`.
-    expect(preprocessLinks("a https://x.com:8080吗 b")).toBe(
-      "a [https://x.com:8080](https://x.com:8080)吗 b",
-    );
-  });
-
-  it("recovers userinfo + port + trailing Han", () => {
-    expect(preprocessLinks("a https://user@x.com:8080吗 b")).toBe(
-      "a [https://user@x.com:8080](https://user@x.com:8080)吗 b",
-    );
-  });
-
-  it("leaves a normal port (no Han) untouched", () => {
-    expect(preprocessLinks("a https://x.com:8080/p b")).toBe(
-      "a [https://x.com:8080/p](https://x.com:8080/p) b",
-    );
-  });
-
   it("truncates when the URL is at index 0", () => {
     expect(preprocessLinks("https://x.com吗 后文")).toBe(
       "[https://x.com](https://x.com)吗 后文",
@@ -246,6 +226,17 @@ describe("preprocessLinks — CJK host overrun (#537) DOCUMENTED COSTS (flip whe
   it("cost 2: raw-Unicode IDN TLD + Han (x.中国吗) is left untouched", () => {
     expect(preprocessLinks("a https://x.中国吗 b")).toBe(
       "a [https://x.中国吗](https://x.中国吗) b",
+    );
+  });
+
+  // Cost 3 (baseline, not a new regression): Han glued onto a PORT makes
+  // linkify-it fail the whole match, so the string stays plain text — no link
+  // at all. We deliberately do NOT build a recovery mechanism for this rare
+  // shape; the add-a-space workaround applies. (Documented so a future reader
+  // knows it was a decision, not an oversight.)
+  it("cost 3: Han glued onto a port (x.com:8080吗) stays plain text", () => {
+    expect(preprocessLinks("a https://x.com:8080吗 b")).toBe(
+      "a https://x.com:8080吗 b",
     );
   });
 });

@@ -45,9 +45,10 @@
 - **已知例外（欠债）**：`service/quick_create_return.go` 仍直插且写 legacy `mention://`（task #510，#463 前置）。
 - **身份边界**：handoff 内部 actor identity（`member.id`）≠ 频道 human mention identity（`user.id`）；回归必须显式构造两者不等（#624 教训）。
 
-### 1.2 所有可见 occurrence 都要锚 — `可执行`（已落地）
-- 同一 actor/issue 在正文出现 N 次 → N 个独立 span 锚；解析器不许吞边界字符（#521：regex 只匹配 identifier、边界独立校验）。
-- **物**：#624 mention 契约回归；#637 issue-ref 相邻/N>2 回归；FE `data-ref-source` 断言（§2.4）。
+### 1.2 所有可见 occurrence 都要锚 — `可执行`（owner: @Barry ✅ 已签）
+- 同一 actor/issue 在正文出现 N 次 → N 个独立、server-verified span 锚；解析器不许吞边界字符（#521：regex 只匹配 identifier、边界独立校验）。这不是展示层兜底的职责：没有 part 的 occurrence 就是写入契约破损。
+- **#521 已见失败与修复**：真实消息 `a9d90909` 的第三个 `LRM-126` 紧邻前一个引用（`LRM-126。LRM-126`）而未锚定；旧 RE2 模式把 `。` 一并消费，非重叠匹配无法把它再用作下一个引用的左边界。#637 改为 identifier-only match + 独立 boundary 校验，保留精确 UTF-16 span。
+- **物**：#624 mention 契约回归；#637（已合并）`TestFindBareIssueIdentifiersFindsAdjacentRepeatedOccurrences`（N>2、相邻）与 `TestChannelBareIssueReferencesBecomeStructuredMessageParts`（真实写入链、顺序和精确 UTF-16 span）；FE `data-ref-source` 断言（§2.4）。
 
 ### 1.3 写读不拆部署 / reader-first 删除 — `可执行`（流程门禁）
 - 格式迁移三端（写边界/读渲染/输入端）同批上；删字段先停读后删写（#622→#507 顺序），**永不反向**。
@@ -123,7 +124,7 @@
 |---|---|---|---|
 | 快照陈旧 | 类型（删字段）+测试 | #507/#625/#622 | ✅ |
 | 写手绕管道 | 结构约束测试 | #613/#624 | ✅（#510 欠） |
-| 漏锚/吞边界 | parser+回归 | #637 | review 中 |
+| 漏锚/吞边界 | parser+回归 | #637 | ✅ owner @Barry 已签；已合并，仍待 live deploy proof |
 | 漏锚可观测 | `data-ref-source` 断言 | #520 | 进行中 |
 | chip 第二面孔 | 共享组件+restricted-import lint | #520 | 进行中 |
 | 属性语法孤儿 | 共享组件 API | #518/#636 | #636 review 中 |

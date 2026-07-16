@@ -120,8 +120,13 @@ vi.mock("../../navigation/context", () => ({
   }),
 }));
 
+// Expose `plainUrls` so a test can assert the channel composer opts into
+// plain-text URLs (#542) — the miss-surface root cause was this prop never
+// reaching the web channel composer.
 vi.mock("../../editor/content-editor", () => ({
-  ContentEditor: () => <div data-testid="content-editor" />,
+  ContentEditor: (props: { plainUrls?: boolean }) => (
+    <div data-testid="content-editor" data-plain-urls={String(!!props.plainUrls)} />
+  ),
 }));
 
 vi.mock("../../common/project-picker-button", () => ({
@@ -237,5 +242,16 @@ describe("ChannelsPage message edit / delete wiring (#241 B3)", () => {
 
     await waitFor(() => expect(apiMock.deleteChannelMessage).toHaveBeenCalledWith("chan-1", "m-1"));
     expect(apiMock.sendChannelMessage).not.toHaveBeenCalled();
+  });
+
+  // #542 — the channel composer must opt into plain-text URLs so a typed URL
+  // isn't auto-linkified in the input. Regression guard for the miss-surface
+  // bug where `plainUrls` shipped to the desktop ChatInput but not the web
+  // channel composer. (The thread composer, channels-page.tsx:2174, uses the
+  // identical inline `plainUrls` at the same call site.)
+  it("channel main composer passes plainUrls (#542)", async () => {
+    renderPage();
+    const composer = await screen.findByTestId("content-editor");
+    expect(composer.getAttribute("data-plain-urls")).toBe("true");
   });
 });

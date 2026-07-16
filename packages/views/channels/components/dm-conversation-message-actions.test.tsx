@@ -157,8 +157,12 @@ vi.mock("@multica/core/paths", async (importOriginal) => ({
 
 vi.mock("@multica/ui/hooks/use-mobile", () => ({ useIsMobile: () => false }));
 
+// Expose `plainUrls` so a test can assert the DM composer opts into plain-text
+// URLs (#542) — same miss-surface regression guard as the channel composer.
 vi.mock("../../editor/content-editor", () => ({
-  ContentEditor: () => <div data-testid="content-editor" />,
+  ContentEditor: (props: { plainUrls?: boolean }) => (
+    <div data-testid="content-editor" data-plain-urls={String(!!props.plainUrls)} />
+  ),
 }));
 vi.mock("../../common/markdown", () => ({
   MemoizedMarkdown: ({ children }: { children: string }) => <span>{children}</span>,
@@ -289,5 +293,13 @@ describe.sequential("DmConversation message edit / delete wiring (#241 B3)", () 
     await waitFor(() => expect(apiMock.deleteChannelMessage).toHaveBeenCalledWith("dm-chan-1", "m-1"));
     expect(apiMock.sendChannelMessage).not.toHaveBeenCalled();
     expect(await screen.findByTestId("message-tombstone")).toBeInTheDocument();
+  });
+
+  // #542 — the DM composer must opt into plain-text URLs so a typed URL isn't
+  // auto-linkified in the input (same miss-surface regression guard).
+  it("DM main composer passes plainUrls (#542)", async () => {
+    renderDm();
+    const composer = await screen.findByTestId("content-editor");
+    expect(composer.getAttribute("data-plain-urls")).toBe("true");
   });
 });

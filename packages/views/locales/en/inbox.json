@@ -67,5 +67,15 @@
     "archive_all_failed": "Failed to archive all",
     "archive_all_read_failed": "Failed to archive read items",
     "archive_completed_failed": "Failed to archive completed"
+  },
+  "mention_popup": {
+    "title": "You were mentioned",
+    "title_in": "Mentioned in #{{channel}}",
+    "continue": "OK, go ahead",
+    "delegate": "@{{name}}",
+    "later": "Later",
+    "manual": "Reply manually",
+    "send_failed": "Failed to send",
+    "no_manager": "This group has no manager yet"
   }
 }

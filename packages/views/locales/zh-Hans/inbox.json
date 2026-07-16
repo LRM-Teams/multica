@@ -67,5 +67,15 @@
     "archive_all_failed": "归档全部失败",
     "archive_all_read_failed": "归档已读失败",
     "archive_completed_failed": "归档已完成失败"
+  },
+  "mention_popup": {
+    "title": "有人@了你",
+    "title_in": "在 #{{channel}} 里@了你",
+    "continue": "可以，继续吧",
+    "delegate": "@{{name}}",
+    "later": "稍后处理",
+    "manual": "手动回复",
+    "send_failed": "发送失败",
+    "no_manager": "本群还没有群管理"
   }
 }

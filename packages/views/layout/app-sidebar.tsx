@@ -6,6 +6,7 @@ import { useScrollFade } from "@multica/ui/hooks/use-scroll-fade";
 import { AppLink } from "../navigation/app-link";
 import { useNavigation } from "../navigation/context";
 import { HelpLauncher } from "./help-launcher";
+import { InboxNavIcon } from "./inbox-nav-icon";
 import {
   DndContext,
   PointerSensor,
@@ -648,7 +649,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                         render={<AppLink href={href} />}
                         className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground"
                       >
-                        <item.icon />
+                        {item.key === "inbox" ? <InboxNavIcon icon={item.icon} /> : <item.icon />}
                         <span>{t(($) => $.nav[item.labelKey])}</span>
                         {item.key === "inbox" && unreadCount > 0 && (
                           <span className="ml-auto text-xs">

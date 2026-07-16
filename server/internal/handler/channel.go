@@ -3804,11 +3804,24 @@ func (h *Handler) notifyChannelMemberMentions(ctx context.Context, ch ChannelRes
 		}
 	}
 
+	// Stamp the channel's group manager (Beckham) so the client-side mention
+	// quick-reply popup can offer a one-click "hand it to Beckham" action
+	// without a separate lookup. Empty when the group has no manager.
+	gmID, gmName := "", ""
+	if mgr, ok := h.resolveGroupManagerForChannel(ctx, parseUUID(ch.WorkspaceID), parseUUID(ch.ID)); ok {
+		gmID = uuidToString(mgr)
+		var n string
+		if err := h.DB.QueryRow(ctx, `SELECT COALESCE(NULLIF(display_name, ''), name) FROM agent WHERE id = $1`, mgr).Scan(&n); err == nil {
+			gmName = n
+		}
+	}
 	details, _ := json.Marshal(map[string]string{
-		"channel_id":   ch.ID,
-		"channel_name": ch.Name,
-		"message_id":   msg.ID,
-		"actor_name":   msg.AuthorName,
+		"channel_id":             ch.ID,
+		"channel_name":           ch.Name,
+		"message_id":             msg.ID,
+		"actor_name":             msg.AuthorName,
+		"group_manager_agent_id": gmID,
+		"group_manager_name":     gmName,
 	})
 	body := strings.TrimSpace(msg.Content)
 	if runes := []rune(body); len(runes) > 280 {

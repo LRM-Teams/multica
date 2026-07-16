@@ -67,5 +67,15 @@
     "archive_all_failed": "すべてアーカイブできませんでした",
     "archive_all_read_failed": "既読の項目をアーカイブできませんでした",
     "archive_completed_failed": "完了した項目をアーカイブできませんでした"
+  },
+  "mention_popup": {
+    "title": "メンションされました",
+    "title_in": "#{{channel}} でメンションされました",
+    "continue": "OK、進めて",
+    "delegate": "@{{name}}",
+    "later": "後で",
+    "manual": "手動で返信",
+    "send_failed": "送信に失敗しました",
+    "no_manager": "このグループにはまだ管理者がいません"
   }
 }

@@ -195,7 +195,7 @@ func TestListGroupedIssuesProjectPaginatesPerGroup(t *testing.T) {
 	alphaProjectID := createProject("Alpha project group")
 	zuluProjectID := createProject("Zulu project group")
 
-	createIssue := func(title string, projectID *string, position float64) {
+	createIssue := func(title, status string, projectID *string, position float64) {
 		t.Helper()
 		var number int32
 		if err := testPool.QueryRow(ctx, `
@@ -216,9 +216,9 @@ func TestListGroupedIssuesProjectPaginatesPerGroup(t *testing.T) {
 				workspace_id, title, description, status, priority,
 				creator_type, creator_id, position, number, project_id
 			)
-			VALUES ($1, $2, NULL, 'todo', 'none', 'member', $3, $4, $5, $6)
+			VALUES ($1, $2, NULL, $3, 'none', 'member', $4, $5, $6, $7)
 			RETURNING id
-		`, testWorkspaceID, title, creatorID, position, number, projectID).Scan(&id); err != nil {
+		`, testWorkspaceID, title, status, creatorID, position, number, projectID).Scan(&id); err != nil {
 			t.Fatalf("create issue %q: %v", title, err)
 		}
 		t.Cleanup(func() {
@@ -226,15 +226,19 @@ func TestListGroupedIssuesProjectPaginatesPerGroup(t *testing.T) {
 		})
 	}
 
-	createIssue("Alpha one", &alphaProjectID, 1)
-	createIssue("Alpha two", &alphaProjectID, 2)
-	createIssue("Alpha three", &alphaProjectID, 3)
-	createIssue("Zulu one", &zuluProjectID, 1)
-	createIssue("No project one", nil, 1)
-	createIssue("No project two", nil, 2)
+	createIssue("Alpha cancelled", "cancelled", &alphaProjectID, 1)
+	createIssue("Alpha backlog", "backlog", &alphaProjectID, 2)
+	createIssue("Alpha done", "done", &alphaProjectID, 3)
+	createIssue("Alpha todo", "todo", &alphaProjectID, 4)
+	createIssue("Alpha blocked", "blocked", &alphaProjectID, 5)
+	createIssue("Alpha in progress", "in_progress", &alphaProjectID, 6)
+	createIssue("Alpha in review", "in_review", &alphaProjectID, 7)
+	createIssue("Zulu one", "todo", &zuluProjectID, 1)
+	createIssue("No project one", "todo", nil, 1)
+	createIssue("No project two", "todo", nil, 2)
 
 	path := fmt.Sprintf(
-		"/api/issues/grouped?workspace_id=%s&group_by=project&statuses=todo&limit=2&creator_id=%s",
+		"/api/issues/grouped?workspace_id=%s&group_by=project&sort=status&limit=2&creator_id=%s",
 		testWorkspaceID,
 		creatorID,
 	)
@@ -258,10 +262,10 @@ func TestListGroupedIssuesProjectPaginatesPerGroup(t *testing.T) {
 	if alphaGroup.ProjectID == nil || *alphaGroup.ProjectID != alphaProjectID || alphaGroup.ProjectTitle == nil || *alphaGroup.ProjectTitle != "Alpha project group" {
 		t.Fatalf("alpha group identity mismatch: %#v", alphaGroup)
 	}
-	if alphaGroup.Total != 3 || len(alphaGroup.Issues) != 2 {
+	if alphaGroup.Total != 7 || len(alphaGroup.Issues) != 2 {
 		t.Fatalf("alpha group total/page mismatch: total=%d len=%d", alphaGroup.Total, len(alphaGroup.Issues))
 	}
-	if alphaGroup.Issues[0].Title != "Alpha one" || alphaGroup.Issues[1].Title != "Alpha two" {
+	if alphaGroup.Issues[0].Title != "Alpha in review" || alphaGroup.Issues[1].Title != "Alpha in progress" {
 		t.Fatalf("alpha group issue order mismatch: %#v", alphaGroup.Issues)
 	}
 	noProjectGroup := resp.Groups[2]
@@ -270,7 +274,7 @@ func TestListGroupedIssuesProjectPaginatesPerGroup(t *testing.T) {
 	}
 
 	nextPath := fmt.Sprintf(
-		"/api/issues/grouped?workspace_id=%s&group_by=project&statuses=todo&limit=2&offset=2&creator_id=%s&group_project_id=%s",
+		"/api/issues/grouped?workspace_id=%s&group_by=project&sort=status&limit=2&offset=2&creator_id=%s&group_project_id=%s",
 		testWorkspaceID,
 		creatorID,
 		alphaProjectID,
@@ -284,8 +288,63 @@ func TestListGroupedIssuesProjectPaginatesPerGroup(t *testing.T) {
 	if err := json.NewDecoder(next.Body).Decode(&nextResp); err != nil {
 		t.Fatalf("decode project next page: %v", err)
 	}
-	if len(nextResp.Groups) != 1 || nextResp.Groups[0].ID != "project:"+alphaProjectID || nextResp.Groups[0].Total != 3 || len(nextResp.Groups[0].Issues) != 1 || nextResp.Groups[0].Issues[0].Title != "Alpha three" {
+	if len(nextResp.Groups) != 1 || nextResp.Groups[0].ID != "project:"+alphaProjectID || nextResp.Groups[0].Total != 7 || len(nextResp.Groups[0].Issues) != 2 || nextResp.Groups[0].Issues[0].Title != "Alpha blocked" || nextResp.Groups[0].Issues[1].Title != "Alpha todo" {
 		t.Fatalf("unexpected project next-page response: %#v", nextResp.Groups)
+	}
+
+	tailPath := fmt.Sprintf(
+		"/api/issues/grouped?workspace_id=%s&group_by=project&sort=status&limit=3&offset=4&creator_id=%s&group_project_id=%s",
+		testWorkspaceID,
+		creatorID,
+		alphaProjectID,
+	)
+	tail := httptest.NewRecorder()
+	testHandler.ListGroupedIssues(tail, newRequest("GET", tailPath, nil))
+	if tail.Code != http.StatusOK {
+		t.Fatalf("ListGroupedIssues project tail page: expected 200, got %d: %s", tail.Code, tail.Body.String())
+	}
+	var tailResp ProjectGroupedIssuesResponse
+	if err := json.NewDecoder(tail.Body).Decode(&tailResp); err != nil {
+		t.Fatalf("decode project tail page: %v", err)
+	}
+	if len(tailResp.Groups) != 1 || tailResp.Groups[0].Total != 7 || len(tailResp.Groups[0].Issues) != 3 || tailResp.Groups[0].Issues[0].Title != "Alpha backlog" || tailResp.Groups[0].Issues[1].Title != "Alpha done" || tailResp.Groups[0].Issues[2].Title != "Alpha cancelled" {
+		t.Fatalf("unexpected project tail-page response: %#v", tailResp.Groups)
+	}
+
+	flatPath := fmt.Sprintf(
+		"/api/issues?workspace_id=%s&project_id=%s&creator_id=%s&sort=status&limit=7",
+		testWorkspaceID,
+		alphaProjectID,
+		creatorID,
+	)
+	flat := httptest.NewRecorder()
+	testHandler.ListIssues(flat, newRequest("GET", flatPath, nil))
+	if flat.Code != http.StatusOK {
+		t.Fatalf("ListIssues status order: expected 200, got %d: %s", flat.Code, flat.Body.String())
+	}
+	var flatResp struct {
+		Issues []IssueResponse `json:"issues"`
+		Total  int             `json:"total"`
+	}
+	if err := json.NewDecoder(flat.Body).Decode(&flatResp); err != nil {
+		t.Fatalf("decode flat status order: %v", err)
+	}
+	wantFlatTitles := []string{
+		"Alpha in review",
+		"Alpha in progress",
+		"Alpha blocked",
+		"Alpha todo",
+		"Alpha backlog",
+		"Alpha done",
+		"Alpha cancelled",
+	}
+	if flatResp.Total != len(wantFlatTitles) || len(flatResp.Issues) != len(wantFlatTitles) {
+		t.Fatalf("flat status order count mismatch: total=%d len=%d", flatResp.Total, len(flatResp.Issues))
+	}
+	for i, want := range wantFlatTitles {
+		if flatResp.Issues[i].Title != want {
+			t.Fatalf("flat status order at %d = %q, want %q", i, flatResp.Issues[i].Title, want)
+		}
 	}
 
 	nonePath := fmt.Sprintf(

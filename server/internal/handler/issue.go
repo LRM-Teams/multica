@@ -236,6 +236,8 @@ func projectGroupID(projectID pgtype.UUID) string {
 	return "project:none"
 }
 
+const issueStatusSortExpression = "CASE i.status WHEN 'in_review' THEN 0 WHEN 'in_progress' THEN 1 WHEN 'blocked' THEN 2 WHEN 'todo' THEN 3 WHEN 'backlog' THEN 4 WHEN 'done' THEN 5 WHEN 'cancelled' THEN 6 ELSE 7 END"
+
 // SearchIssueResponse extends IssueResponse with search metadata.
 type SearchIssueResponse struct {
 	IssueResponse
@@ -906,6 +908,8 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 			sortCol = s
 		case "priority":
 			sortCol = "CASE i.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END"
+		case "status":
+			sortCol = issueStatusSortExpression
 		default:
 			writeError(w, http.StatusBadRequest, "invalid sort value")
 			return
@@ -1432,6 +1436,8 @@ func (h *Handler) ListGroupedIssues(w http.ResponseWriter, r *http.Request) {
 			sortCol = s
 		case "priority":
 			sortCol = "CASE i.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END"
+		case "status":
+			sortCol = issueStatusSortExpression
 		default:
 			writeError(w, http.StatusBadRequest, "invalid sort value")
 			return

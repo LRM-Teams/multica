@@ -72,7 +72,7 @@ export interface ListIssuesParams {
    * majority on the client.
    */
   scheduled?: boolean;
-  sort_by?: "position" | "priority" | "title" | "created_at" | "start_date" | "due_date";
+  sort_by?: "position" | "priority" | "status" | "title" | "created_at" | "start_date" | "due_date";
   sort_direction?: "asc" | "desc";
 }
 
@@ -107,7 +107,7 @@ export interface ListGroupedIssuesParams {
   group_assignee_id?: string;
   /** Project UUID, or `none` for the nullable No Project group. */
   group_project_id?: string;
-  sort_by?: "position" | "priority" | "title" | "created_at" | "start_date" | "due_date";
+  sort_by?: "position" | "priority" | "status" | "title" | "created_at" | "start_date" | "due_date";
   sort_direction?: "asc" | "desc";
 }
 

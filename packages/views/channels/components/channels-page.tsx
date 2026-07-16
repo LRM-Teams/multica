@@ -1816,8 +1816,12 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                   realUnread={realUnread}
                   isManualDot={isManualDot}
                   isMuted={isMuted}
-                  hasMention={(channel.mention_unread_count ?? 0) > 0}
+                  mentionCount={channel.mention_unread_count ?? 0}
                   mentionLabel={t(($) => $.sidebar.mention_indicator)}
+                  mentionTooltip={t(($) => $.sidebar.mention_tooltip, {
+                    count: channel.mention_unread_count ?? 0,
+                    unread: realUnread,
+                  })}
                 />
               </div>
             </div>

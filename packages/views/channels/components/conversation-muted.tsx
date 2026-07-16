@@ -46,16 +46,21 @@ export function ConversationUnreadAffordance({
   realUnread,
   isManualDot,
   isMuted,
-  hasMention = false,
+  mentionCount = 0,
   mentionLabel,
+  mentionTooltip,
 }: {
   realUnread: number;
   isManualDot: boolean;
   isMuted: boolean;
-  /** An unread message in this conversation @-mentions the viewer (#303). */
-  hasMention?: boolean;
-  /** Accessible label for the @-mention dot. */
+  /** How many unread messages in this conversation @-mention the viewer.
+   *  Server-cursor driven (#557) — cleared to 0 only when the viewer reads the
+   *  mentioning message; the FE never zeroes it on click/render. */
+  mentionCount?: number;
+  /** Accessible (sr-only) label for the @-mention pill. */
   mentionLabel?: string;
+  /** Visible tooltip text, e.g. "共 N 未读 · M 条 @ 你". */
+  mentionTooltip?: string;
 }) {
   const countBadge =
     realUnread > 0 ? (
@@ -78,17 +83,31 @@ export function ConversationUnreadAffordance({
       />
     ) : null;
 
-  // An @-mention outranks the plain count and shows a distinct red dot alongside
-  // it (both coexist — Parker's spec). Suppressed when muted: mute stays silent
-  // (no attention-grabbing red), while the count still renders so the
-  // conversation isn't lost.
-  if (hasMention && !isMuted) {
+  // An @-mention outranks the plain count: the row shows a single `@N` pill
+  // instead of stacking a mention marker on top of the unread badge (#556, Iris).
+  // The literal `@` glyph is the primary cue so it stays distinguishable without
+  // relying on color (A6 — colour-blind safe); the emphasis colour is secondary.
+  // The plain-unread `countBadge` path below is deliberately untouched — only the
+  // @-present slot changes. Suppressed when muted: mute stays silent, so the row
+  // falls back to the dimmed count (muted @-pierce is a separate follow-up).
+  if (mentionCount > 0 && !isMuted) {
+    const mentionText = `@${mentionCount > 99 ? "99+" : mentionCount}`;
     return (
-      <span className="flex shrink-0 items-center gap-1">
-        <span className="size-2 shrink-0 rounded-full bg-destructive" aria-hidden="true" />
-        {mentionLabel ? <span className="sr-only">{mentionLabel}</span> : null}
-        {countBadge}
-      </span>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <span
+              aria-label={mentionLabel}
+              className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-semibold text-destructive-foreground"
+            />
+          }
+        >
+          {mentionText}
+        </TooltipTrigger>
+        {mentionTooltip ? (
+          <TooltipContent side="top">{mentionTooltip}</TooltipContent>
+        ) : null}
+      </Tooltip>
     );
   }
   return countBadge;

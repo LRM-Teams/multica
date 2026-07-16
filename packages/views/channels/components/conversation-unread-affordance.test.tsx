@@ -63,36 +63,67 @@ describe("ConversationUnreadAffordance", () => {
     expect(dot).not.toHaveClass("bg-primary");
   });
 
-  it("shows an @-mention red dot alongside the count — they coexist (Parker)", () => {
+  it("shows a single @N pill (glyph + colour), replacing the plain count (#556 — no stacked pills)", () => {
     const { getByText, container } = render(
       <ConversationUnreadAffordance
-        realUnread={2}
+        realUnread={5}
         isManualDot={false}
         isMuted={false}
-        hasMention
+        mentionCount={2}
+        mentionLabel="You were mentioned"
+        mentionTooltip="5 unread · 2 @ you"
+      />,
+    );
+    // The `@` glyph is the primary, colour-blind-safe cue (A6); emphasis colour secondary.
+    const pill = getByText("@2");
+    expect(pill).toHaveClass("bg-destructive");
+    expect(pill).toHaveAttribute("aria-label", "You were mentioned");
+    // Only @N shows — the plain unread count (5) is NOT stacked alongside it.
+    expect(container).not.toHaveTextContent("5");
+  });
+
+  it("caps the @N pill at @99+", () => {
+    const { getByText } = render(
+      <ConversationUnreadAffordance
+        realUnread={200}
+        isManualDot={false}
+        isMuted={false}
+        mentionCount={150}
         mentionLabel="You were mentioned"
       />,
     );
-    // The dot is decorative (aria-hidden); its meaning is exposed via sr-only text.
-    expect(container.querySelector(".bg-destructive")).not.toBeNull();
-    expect(getByText("You were mentioned")).toHaveClass("sr-only");
-    // The count still renders next to the mention dot.
-    expect(container).toHaveTextContent("2");
+    expect(getByText("@99+")).toBeTruthy();
   });
 
-  it("suppresses the @-mention dot for muted conversations — silent (count remains)", () => {
-    const { queryByText, container } = render(
+  it("does not show the @N pill for muted conversations — falls back to the dimmed count (muted @-pierce is follow-up)", () => {
+    const { container } = render(
       <ConversationUnreadAffordance
-        realUnread={2}
+        realUnread={3}
         isManualDot={false}
         isMuted
-        hasMention
+        mentionCount={2}
         mentionLabel="You were mentioned"
       />,
     );
     expect(container.querySelector(".bg-destructive")).toBeNull();
-    expect(queryByText("You were mentioned")).toBeNull();
-    expect(container).toHaveTextContent("2");
+    // The dimmed unread count still renders so the conversation isn't lost.
+    expect(container).toHaveTextContent("3");
+    expect(container.querySelector(".bg-muted-foreground\\/25")).not.toBeNull();
+  });
+
+  it("leaves a no-@ unread row unchanged — plain primary count, no @N (Iris regression guard)", () => {
+    const { container } = render(
+      <ConversationUnreadAffordance
+        realUnread={4}
+        isManualDot={false}
+        isMuted={false}
+        mentionCount={0}
+      />,
+    );
+    const badge = container.querySelector("span");
+    expect(badge).toHaveTextContent("4");
+    expect(badge).toHaveClass("bg-primary");
+    expect(container.querySelector(".bg-destructive")).toBeNull();
   });
 
   it("renders nothing when there is neither real unread nor a manual dot", () => {

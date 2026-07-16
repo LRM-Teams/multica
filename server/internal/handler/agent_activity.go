@@ -934,8 +934,8 @@ const agentActivityListSQL = `
 				       'cache_read_tokens', cache_read_tokens,
 				       'cache_write_tokens', cache_write_tokens
 			       ) ORDER BY provider, model) AS usage_json
-			FROM task_usage tu
-			WHERE tu.task_id = atq.id
+			FROM agent_usage tu
+			WHERE tu.execution_id = atq.id
 		) usage ON true
 		LEFT JOIN LATERAL (
 			SELECT cm.id, 'chat_message'::text AS kind
@@ -1021,7 +1021,7 @@ const agentActivityUnionSQL = `
 			GROUP BY task_id
 		) steps ON steps.task_id = atq.id
 		LEFT JOIN (
-			SELECT task_id,
+			SELECT execution_id,
 			       jsonb_agg(jsonb_build_object(
 				       'provider', provider,
 				       'model', model,
@@ -1030,9 +1030,9 @@ const agentActivityUnionSQL = `
 				       'cache_read_tokens', cache_read_tokens,
 				       'cache_write_tokens', cache_write_tokens
 			       ) ORDER BY provider, model) AS usage_json
-			FROM task_usage
-			GROUP BY task_id
-		) usage ON usage.task_id = atq.id
+			FROM agent_usage
+			GROUP BY execution_id
+		) usage ON usage.execution_id = atq.id
 		LEFT JOIN LATERAL (
 			SELECT cm.id, 'chat_message'::text AS kind
 			FROM chat_message cm

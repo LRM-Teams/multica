@@ -65,7 +65,7 @@ type DashboardUsageDailyResponse struct {
 }
 
 // GetDashboardUsageDaily returns per-(date, model) token rows for the
-// workspace, optionally scoped to a project. Backed by task_usage_hourly,
+// workspace, optionally scoped to a project. Backed by agent_usage_hourly,
 // sliced into calendar days under the viewer's tz.
 func (h *Handler) GetDashboardUsageDaily(w http.ResponseWriter, r *http.Request) {
 	workspaceID := h.resolveWorkspaceID(r)
@@ -131,7 +131,7 @@ type DashboardUsageByAgentResponse struct {
 
 // GetDashboardUsageByAgent returns per-(agent, model) token aggregates
 // for the workspace, optionally scoped to a project. Backed by
-// task_usage_hourly with the viewer's tz applied to the `?days=` cutoff.
+// agent_usage_hourly with the viewer's tz applied to the `?days=` cutoff.
 func (h *Handler) GetDashboardUsageByAgent(w http.ResponseWriter, r *http.Request) {
 	workspaceID := h.resolveWorkspaceID(r)
 	if _, ok := h.workspaceMember(w, r, workspaceID); !ok {

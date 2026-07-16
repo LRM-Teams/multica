@@ -184,7 +184,7 @@ var (
 		"heartbeat":     "heartbeat",
 		"task_claim":    "task_claim",
 		"task_complete": "task_complete",
-		"task_usage":    "task_usage",
+		"agent_usage":   "agent_usage",
 		"task_progress": "task_progress",
 		"task_messages": "task_messages",
 		"log":           "log",

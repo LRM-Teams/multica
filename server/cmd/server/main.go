@@ -386,7 +386,7 @@ func main() {
 	// MUL-2957: DB-backed execution scheduler. The scheduler turns the
 	// `sys_cron_executions` table into the distributed lease + audit
 	// log for internal periodic jobs. The first job is
-	// `rollup_task_usage_hourly`, which replaces the previously
+	// `rollup_agent_usage_hourly`, which replaces the previously
 	// operator-registered `pg_cron` entry (still safe to run
 	// concurrently — the SQL function holds advisory lock 4246).
 	//
@@ -399,8 +399,8 @@ func main() {
 	// cycle, so a temporary outage does not crash the server.
 	schedulerMgr := scheduler.NewManager(pool, scheduler.Options{})
 	schedulerRegistered := false
-	if err := schedulerMgr.Register(scheduler.TaskUsageHourlyJob(pool)); err != nil {
-		slog.Warn("scheduler: failed to register task_usage_hourly rollup job", "error", err)
+	if err := schedulerMgr.Register(scheduler.AgentUsageHourlyJob(pool)); err != nil {
+		slog.Warn("scheduler: failed to register agent_usage_hourly rollup job", "error", err)
 	} else {
 		schedulerRegistered = true
 	}

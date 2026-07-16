@@ -4721,8 +4721,8 @@ func TestClaimTask_ChatPriorSessionRuntimeGuard(t *testing.T) {
 		t.Fatalf("setup: create token budget prior chat task: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO task_usage (task_id, provider, model, input_tokens)
-		VALUES ($1, 'claude', 'test-model', $2)
+		INSERT INTO agent_usage (execution_id, source, provider, model, input_tokens)
+		VALUES ($1, 'chat', 'claude', 'test-model', $2)
 	`, priorBudgetTaskID, chatNativeResumeTokenLimit); err != nil {
 		t.Fatalf("setup: create token budget usage: %v", err)
 	}

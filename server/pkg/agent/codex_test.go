@@ -74,6 +74,54 @@ func splitLines(s string) []string {
 	return lines
 }
 
+func TestParseCodexSessionFilePrefersLastTurnUsageOverCumulativeSessionUsage(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	content := `{"type":"turn_context","payload":{"model":"gpt-5.5"}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5.5","total_token_usage":{"input_tokens":1000,"output_tokens":200,"cached_input_tokens":8000},"last_token_usage":{"input_tokens":100,"output_tokens":20,"cached_input_tokens":800}}}}
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+
+	usage := parseCodexSessionFile(path)
+	if usage == nil {
+		t.Fatal("expected usage")
+	}
+	if usage.model != "gpt-5.5" {
+		t.Fatalf("model = %q, want gpt-5.5", usage.model)
+	}
+	if got, want := usage.usage.InputTokens, int64(100); got != want {
+		t.Fatalf("input tokens = %d, want last-turn %d", got, want)
+	}
+	if got, want := usage.usage.OutputTokens, int64(20); got != want {
+		t.Fatalf("output tokens = %d, want last-turn %d", got, want)
+	}
+	if got, want := usage.usage.CacheReadTokens, int64(800); got != want {
+		t.Fatalf("cache-read tokens = %d, want last-turn %d", got, want)
+	}
+}
+
+func TestParseCodexSessionFileFallsBackToCumulativeUsage(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	content := `{"type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5.5","total_token_usage":{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":800}}}}
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+
+	usage := parseCodexSessionFile(path)
+	if usage == nil {
+		t.Fatal("expected usage")
+	}
+	if got, want := usage.usage.CacheReadTokens, int64(800); got != want {
+		t.Fatalf("cache-read tokens = %d, want fallback %d", got, want)
+	}
+}
+
 func TestCodexHandleResponseSuccess(t *testing.T) {
 	t.Parallel()
 

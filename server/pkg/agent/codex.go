@@ -1829,9 +1829,13 @@ func parseCodexSessionFile(path string) *codexSessionUsage {
 
 		// Extract token usage from token_count events.
 		if evt.Payload.Type == "token_count" && evt.Payload.Info != nil {
-			usage := evt.Payload.Info.TotalTokenUsage
+			// A persisted Codex session keeps TotalTokenUsage cumulative across
+			// resumed turns. Each Multica execution writes its own ledger row, so
+			// use the final turn delta when Codex provides it; falling back to the
+			// cumulative number would bill earlier chat executions again.
+			usage := evt.Payload.Info.LastTokenUsage
 			if usage == nil {
-				usage = evt.Payload.Info.LastTokenUsage
+				usage = evt.Payload.Info.TotalTokenUsage
 			}
 			if usage != nil {
 				cachedTokens := usage.CachedInputTokens

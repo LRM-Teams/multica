@@ -1027,9 +1027,9 @@ type TaskToken struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
-type TaskUsage struct {
+type AgentUsage struct {
 	ID               pgtype.UUID        `json:"id"`
-	TaskID           pgtype.UUID        `json:"task_id"`
+	ExecutionID      pgtype.UUID        `json:"execution_id"`
 	Provider         string             `json:"provider"`
 	Model            string             `json:"model"`
 	InputTokens      int64              `json:"input_tokens"`
@@ -1038,9 +1038,10 @@ type TaskUsage struct {
 	CacheWriteTokens int64              `json:"cache_write_tokens"`
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	Source           string             `json:"source"`
 }
 
-type TaskUsageHourly struct {
+type AgentUsageHourly struct {
 	BucketHour       pgtype.Timestamptz `json:"bucket_hour"`
 	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
 	RuntimeID        pgtype.UUID        `json:"runtime_id"`
@@ -1057,7 +1058,7 @@ type TaskUsageHourly struct {
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 }
 
-type TaskUsageHourlyDirty struct {
+type AgentUsageHourlyDirty struct {
 	BucketHour  pgtype.Timestamptz `json:"bucket_hour"`
 	WorkspaceID pgtype.UUID        `json:"workspace_id"`
 	RuntimeID   pgtype.UUID        `json:"runtime_id"`
@@ -1068,7 +1069,7 @@ type TaskUsageHourlyDirty struct {
 	EnqueuedAt  pgtype.Timestamptz `json:"enqueued_at"`
 }
 
-type TaskUsageHourlyRollupState struct {
+type AgentUsageHourlyRollupState struct {
 	ID                int16              `json:"id"`
 	WatermarkAt       pgtype.Timestamptz `json:"watermark_at"`
 	LastRunStartedAt  pgtype.Timestamptz `json:"last_run_started_at"`

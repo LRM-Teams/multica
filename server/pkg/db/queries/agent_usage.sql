@@ -1,21 +1,22 @@
--- name: UpsertTaskUsage :exec
+-- name: UpsertAgentUsage :exec
 -- Bumps `updated_at` on INSERT and on conflict so the hourly-rollup worker
 -- detects the row as dirty and re-aggregates its bucket.
 -- Without the conflict-side bump, a correction to historical token counts
 -- would never propagate to the rollup.
-INSERT INTO task_usage (task_id, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, now())
-ON CONFLICT (task_id, provider, model)
+INSERT INTO agent_usage (execution_id, source, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+ON CONFLICT (execution_id, provider, model)
 DO UPDATE SET
+    source = EXCLUDED.source,
     input_tokens = EXCLUDED.input_tokens,
     output_tokens = EXCLUDED.output_tokens,
     cache_read_tokens = EXCLUDED.cache_read_tokens,
     cache_write_tokens = EXCLUDED.cache_write_tokens,
     updated_at = now();
 
--- name: GetTaskUsage :many
-SELECT * FROM task_usage
-WHERE task_id = $1
+-- name: GetAgentUsage :many
+SELECT * FROM agent_usage
+WHERE execution_id = $1
 ORDER BY model;
 
 -- name: GetIssueUsageSummary :one
@@ -24,14 +25,14 @@ SELECT
     COALESCE(SUM(tu.output_tokens), 0)::bigint AS total_output_tokens,
     COALESCE(SUM(tu.cache_read_tokens), 0)::bigint AS total_cache_read_tokens,
     COALESCE(SUM(tu.cache_write_tokens), 0)::bigint AS total_cache_write_tokens,
-    COUNT(DISTINCT tu.task_id)::int AS task_count
-FROM task_usage tu
-JOIN agent_task_queue atq ON atq.id = tu.task_id
+    COUNT(DISTINCT tu.execution_id)::int AS task_count
+FROM agent_usage tu
+JOIN agent_task_queue atq ON atq.id = tu.execution_id
 WHERE atq.issue_id = $1;
 
 -- name: ListDashboardUsageDaily :many
 -- Daily per-(date, model) token aggregates for the workspace, served
--- from the UTC-bucketed `task_usage_hourly` table and
+-- from the UTC-bucketed `agent_usage_hourly` table and
 -- sliced to calendar days under the caller-supplied @tz. Optionally
 -- scoped to a single project via sqlc.narg('project_id'). Powers the
 -- workspace dashboard's daily cost chart.
@@ -52,7 +53,7 @@ SELECT
     SUM(cache_read_tokens)::bigint   AS cache_read_tokens,
     SUM(cache_write_tokens)::bigint  AS cache_write_tokens,
     SUM(task_count)::int             AS task_count
-FROM task_usage_hourly
+FROM agent_usage_hourly
 WHERE workspace_id = $1
   AND bucket_hour >= sqlc.arg('since')::timestamptz
   AND (sqlc.narg('project_id')::uuid IS NULL OR project_id = sqlc.narg('project_id'))
@@ -60,7 +61,7 @@ GROUP BY DATE(bucket_hour AT TIME ZONE sqlc.arg('tz')::text), model
 ORDER BY DATE(bucket_hour AT TIME ZONE sqlc.arg('tz')::text) DESC, model;
 
 -- name: ListDashboardUsageByAgent :many
--- Per-(agent, model) token aggregates from `task_usage_hourly`. No
+-- Per-(agent, model) token aggregates from `agent_usage_hourly`. No
 -- date grouping in the result, so this query takes no `@tz` — the
 -- @since cutoff is a raw timestamptz the Go layer has already computed
 -- in the viewer's tz. Model dimension is preserved so the client can
@@ -80,7 +81,7 @@ SELECT
     SUM(cache_read_tokens)::bigint   AS cache_read_tokens,
     SUM(cache_write_tokens)::bigint  AS cache_write_tokens,
     SUM(task_count)::int             AS task_count
-FROM task_usage_hourly
+FROM agent_usage_hourly
 WHERE workspace_id = $1
   AND bucket_hour >= @since::timestamptz
   AND (sqlc.narg('project_id')::uuid IS NULL OR project_id = sqlc.narg('project_id'))

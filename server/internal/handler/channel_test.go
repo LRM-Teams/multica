@@ -2896,7 +2896,7 @@ func TestChannelMentionNotifiesHumanMember(t *testing.T) {
 	}
 }
 
-func TestChannelMutedMemberDoesNotReceiveMentionInbox(t *testing.T) {
+func TestChannelMutedMemberMentionPiercesMute(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -2921,8 +2921,12 @@ func TestChannelMutedMemberDoesNotReceiveMentionInbox(t *testing.T) {
 	if !found {
 		t.Fatal("channel not found after seed")
 	}
-	content := fmt.Sprintf("ping [@Channel Plain Member](mention://member/%s)", memberID)
-	msg, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", content, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("muted"), 0)
+	content := "ping @Channel Plain Member"
+	start := strings.Index(content, "@Channel Plain Member")
+	end := start + len("@Channel Plain Member")
+	startUTF16, endUTF16 := contentUTF16Span(content, start, end)
+	parts := []protocol.MessagePart{{Type: protocol.MessagePartTypeReference, RefType: "mention", RefSubType: "member", RefID: memberID, Label: "@Channel Plain Member", ContentStartUTF16: &startUTF16, ContentEndUTF16: &endUTF16}}
+	msg, err := testHandler.insertChannelMessageWithParts(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", content, parts, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("muted"), 0)
 	if err != nil {
 		t.Fatalf("insert mention message: %v", err)
 	}
@@ -2935,8 +2939,16 @@ func TestChannelMutedMemberDoesNotReceiveMentionInbox(t *testing.T) {
 		WHERE recipient_id = $1 AND type = 'mentioned'`, memberID).Scan(&count); err != nil {
 		t.Fatalf("count inbox items: %v", err)
 	}
-	if count != 0 {
-		t.Fatalf("muted member received %d mention inbox item(s), want 0", count)
+	if count != 1 {
+		t.Fatalf("muted member received %d mention inbox item(s), want 1", count)
+	}
+
+	listed := listedChannelForUser(t, channelID, memberID)
+	if listed == nil {
+		t.Fatal("muted mentioned member cannot see channel")
+	}
+	if !listed.Muted || !listed.HasMention || listed.MentionUnreadCount != 1 {
+		t.Fatalf("muted mention channel state = muted:%t has:%t count:%d, want muted:true has:true count:1", listed.Muted, listed.HasMention, listed.MentionUnreadCount)
 	}
 }
 

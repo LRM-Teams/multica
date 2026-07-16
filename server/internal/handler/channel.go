@@ -356,9 +356,20 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 				  AND m.seq > COALESCE(vcm.last_read_seq, cr.last_read_seq, 0)
 				  AND NOT (m.author_type = 'user' AND m.author_id = $2)
 				  AND m.deleted_at IS NULL
-				  AND (m.content ILIKE '%@' || (
-				    SELECT name FROM "user" WHERE id = $2
-				  ) || '%' OR m.parts::text ILIKE '%mention://' || $2::text || '%')
+				  AND (
+				    EXISTS (
+				      SELECT 1
+				      FROM jsonb_array_elements(m.parts) part
+				      WHERE part->>'type' = 'reference'
+				        AND part->>'ref_type' = 'mention'
+				        AND part->>'ref_subtype' = 'member'
+				        AND part->>'ref_id' = $2::text
+				    )
+				    OR m.content ILIKE '%@' || (
+				      SELECT name FROM "user" WHERE id = $2
+				    ) || '%'
+				    OR m.parts::text ILIKE '%mention://' || $2::text || '%'
+				  )
 		) hm ON true
 		WHERE ch.workspace_id = $1 AND ch.kind = 'group'
 		  AND (($3 AND ch.archived_at IS NOT NULL) OR (NOT $3 AND ch.archived_at IS NULL))
@@ -3830,9 +3841,6 @@ func (h *Handler) notifyChannelMemberMentions(ctx context.Context, ch ChannelRes
 	title := fmt.Sprintf("%s mentioned you in #%s", msg.AuthorName, ch.Name)
 
 	for id := range recipients {
-		if h.channelMentionRecipientMuted(ctx, ch, id) {
-			continue
-		}
 		item, err := h.Queries.CreateInboxItem(ctx, db.CreateInboxItemParams{
 			WorkspaceID:   parseUUID(ch.WorkspaceID),
 			RecipientType: "member",
@@ -3850,42 +3858,6 @@ func (h *Handler) notifyChannelMemberMentions(ctx context.Context, ch ChannelRes
 			continue
 		}
 		h.publish(protocol.EventInboxNew, ch.WorkspaceID, actorType, uuidToString(actorID), map[string]any{"item": inboxToResponse(item)})
-	}
-}
-
-func (h *Handler) channelMentionRecipientMuted(ctx context.Context, ch ChannelResponse, recipientID string) bool {
-	switch ch.Kind {
-	case "group":
-		var muted bool
-		err := h.DB.QueryRow(ctx, `
-			SELECT muted_at IS NOT NULL
-			FROM channel_member
-			WHERE channel_id = $1 AND workspace_id = $2 AND member_type = 'user' AND member_id = $3`,
-			parseUUID(ch.ID), parseUUID(ch.WorkspaceID), parseUUID(recipientID)).Scan(&muted)
-		return err == nil && muted
-	case "dm":
-		var peerType string
-		var peerID pgtype.UUID
-		err := h.DB.QueryRow(ctx, `
-			SELECT member_type, member_id
-			FROM channel_member
-			WHERE channel_id = $1
-			  AND NOT (member_type = 'user' AND member_id = $2)
-			ORDER BY created_at ASC
-			LIMIT 1`, parseUUID(ch.ID), parseUUID(recipientID)).Scan(&peerType, &peerID)
-		if err != nil {
-			return false
-		}
-		var muted bool
-		err = h.DB.QueryRow(ctx, `
-			SELECT COALESCE((
-				SELECT muted_at IS NOT NULL
-				FROM dm_peer_state
-				WHERE workspace_id = $1 AND user_id = $2 AND peer_type = $3 AND peer_id = $4
-			), false)`, parseUUID(ch.WorkspaceID), parseUUID(recipientID), peerType, peerID).Scan(&muted)
-		return err == nil && muted
-	default:
-		return false
 	}
 }
 

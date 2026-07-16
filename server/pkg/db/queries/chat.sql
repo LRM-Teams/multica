@@ -46,6 +46,18 @@ SET session_id = COALESCE(sqlc.narg('session_id'), session_id),
     updated_at = now()
 WHERE id = sqlc.arg('id');
 
+-- name: ClearChatSessionResumeIfMatch :exec
+-- Clears a poisoned chat resume pointer only when it still identifies the
+-- failed task's session. The match guard preserves a newer pointer written by
+-- another completed task while this failure was being finalized.
+UPDATE chat_session
+SET session_id = NULL,
+    work_dir = NULL,
+    runtime_id = NULL,
+    updated_at = now()
+WHERE id = sqlc.arg('id')
+  AND session_id = sqlc.arg('session_id');
+
 -- name: LockChatSessionForDelete :one
 -- Acquires an exclusive (FOR UPDATE) row lock on chat_session(id). Used by
 -- the delete path so that a concurrent SendChatMessage cannot enqueue a new

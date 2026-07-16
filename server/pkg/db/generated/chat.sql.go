@@ -11,6 +11,29 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const clearChatSessionResumeIfMatch = `-- name: ClearChatSessionResumeIfMatch :exec
+UPDATE chat_session
+SET session_id = NULL,
+    work_dir = NULL,
+    runtime_id = NULL,
+    updated_at = now()
+WHERE id = $1
+  AND session_id = $2
+`
+
+type ClearChatSessionResumeIfMatchParams struct {
+	ID        pgtype.UUID `json:"id"`
+	SessionID pgtype.Text `json:"session_id"`
+}
+
+// Clears a poisoned chat resume pointer only when it still identifies the
+// failed task's session. The match guard preserves a newer pointer written by
+// another completed task while this failure was being finalized.
+func (q *Queries) ClearChatSessionResumeIfMatch(ctx context.Context, arg ClearChatSessionResumeIfMatchParams) error {
+	_, err := q.db.Exec(ctx, clearChatSessionResumeIfMatch, arg.ID, arg.SessionID)
+	return err
+}
+
 const createChatMessage = `-- name: CreateChatMessage :one
 INSERT INTO chat_message (chat_session_id, role, content, parts, task_id, failure_reason, elapsed_ms)
 VALUES ($1, $2, $3, COALESCE($4::jsonb, '[]'::jsonb), $5, $6, $7)

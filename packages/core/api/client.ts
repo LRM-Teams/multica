@@ -1693,7 +1693,10 @@ export class ApiClient {
     });
   }
 
-  async updateSandboxNode(nodeId: string, data: { name: string }): Promise<SandboxNode> {
+  async updateSandboxNode(
+    nodeId: string,
+    data: { name?: string; default_template_id?: string },
+  ): Promise<SandboxNode> {
     return this.fetch(`/api/sandbox/nodes/${nodeId}`, {
       method: "PATCH",
       body: JSON.stringify(data),

@@ -44,3 +44,27 @@ func TestSandboxNodeTemplatesFromMetadataEmpty(t *testing.T) {
 		t.Fatalf("expected empty non-nil templates, got %#v", resp.Templates)
 	}
 }
+
+func TestMergeSandboxNodeHeartbeatMetadataPreservesDefaultTemplate(t *testing.T) {
+	existing := json.RawMessage(`{"cube_template_id":"tpl-user","cube_domain":"old.app"}`)
+	incoming := json.RawMessage(`{
+		"cube_template_id":"tpl-from-sandboxd",
+		"cube_domain":"cube.app",
+		"templates":[{"templateID":"tpl-a","status":"READY"}],
+		"templates_synced_at":"2026-07-16T09:00:00Z"
+	}`)
+	merged := mergeSandboxNodeHeartbeatMetadata(existing, incoming)
+	var meta map[string]any
+	if err := json.Unmarshal(merged, &meta); err != nil {
+		t.Fatal(err)
+	}
+	if meta["cube_template_id"] != "tpl-user" {
+		t.Fatalf("cube_template_id = %v, want tpl-user", meta["cube_template_id"])
+	}
+	if meta["cube_domain"] != "cube.app" {
+		t.Fatalf("cube_domain = %v", meta["cube_domain"])
+	}
+	if meta["templates_synced_at"] != "2026-07-16T09:00:00Z" {
+		t.Fatalf("templates_synced_at = %v", meta["templates_synced_at"])
+	}
+}

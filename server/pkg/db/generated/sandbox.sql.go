@@ -197,6 +197,30 @@ func (q *Queries) UpdateSandboxNodeNameForOwner(ctx context.Context, arg UpdateS
 	return scanSandboxNode(row)
 }
 
+const updateSandboxNodeDefaultTemplateForOwner = `-- name: UpdateSandboxNodeDefaultTemplateForOwner :one
+UPDATE sandbox_node
+SET metadata = jsonb_set(
+        COALESCE(metadata, '{}'::jsonb),
+        '{cube_template_id}',
+        to_jsonb($3::text),
+        true
+    ),
+    updated_at = now()
+WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL
+RETURNING id, node_key, owner_user_id, name, status, capabilities, max_concurrency, metadata, last_seen_at, deleted_at, created_at, updated_at
+`
+
+type UpdateSandboxNodeDefaultTemplateForOwnerParams struct {
+	ID             pgtype.UUID `json:"id"`
+	OwnerUserID    pgtype.UUID `json:"owner_user_id"`
+	CubeTemplateID string      `json:"cube_template_id"`
+}
+
+func (q *Queries) UpdateSandboxNodeDefaultTemplateForOwner(ctx context.Context, arg UpdateSandboxNodeDefaultTemplateForOwnerParams) (SandboxNode, error) {
+	row := q.db.QueryRow(ctx, updateSandboxNodeDefaultTemplateForOwner, arg.ID, arg.OwnerUserID, arg.CubeTemplateID)
+	return scanSandboxNode(row)
+}
+
 const deleteSandboxNodeForOwner = `-- name: DeleteSandboxNodeForOwner :exec
 WITH deleted AS (
     UPDATE sandbox_node

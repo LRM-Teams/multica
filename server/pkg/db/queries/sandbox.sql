@@ -56,6 +56,18 @@ SET name = @name, updated_at = now()
 WHERE id = @id AND owner_user_id = @owner_user_id AND deleted_at IS NULL
 RETURNING id, node_key, owner_user_id, name, status, capabilities, max_concurrency, metadata, last_seen_at, deleted_at, created_at, updated_at;
 
+-- name: UpdateSandboxNodeDefaultTemplateForOwner :one
+UPDATE sandbox_node
+SET metadata = jsonb_set(
+        COALESCE(metadata, '{}'::jsonb),
+        '{cube_template_id}',
+        to_jsonb(@cube_template_id::text),
+        true
+    ),
+    updated_at = now()
+WHERE id = @id AND owner_user_id = @owner_user_id AND deleted_at IS NULL
+RETURNING id, node_key, owner_user_id, name, status, capabilities, max_concurrency, metadata, last_seen_at, deleted_at, created_at, updated_at;
+
 -- name: DeleteSandboxNodeForOwner :exec
 WITH deleted AS (
     UPDATE sandbox_node

@@ -402,26 +402,64 @@ func (h *Handler) UpdateSandboxNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Name string `json:"name"`
+		Name                *string `json:"name"`
+		DefaultTemplateID   *string `json:"default_template_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	req.Name = strings.TrimSpace(req.Name)
-	if req.Name == "" {
-		writeError(w, http.StatusBadRequest, "name is required")
+	if req.Name == nil && req.DefaultTemplateID == nil {
+		writeError(w, http.StatusBadRequest, "name or default_template_id is required")
 		return
 	}
-	node, err := h.Queries.UpdateSandboxNodeNameForOwner(r.Context(), db.UpdateSandboxNodeNameForOwnerParams{ID: nodeID, OwnerUserID: parseUUID(userID), Name: req.Name})
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "sandbox node not found")
+
+	ownerUUID := parseUUID(userID)
+	var node db.SandboxNode
+	var err error
+
+	if req.Name != nil {
+		name := strings.TrimSpace(*req.Name)
+		if name == "" {
+			writeError(w, http.StatusBadRequest, "name is required")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "failed to update sandbox node")
-		return
+		node, err = h.Queries.UpdateSandboxNodeNameForOwner(r.Context(), db.UpdateSandboxNodeNameForOwnerParams{
+			ID:          nodeID,
+			OwnerUserID: ownerUUID,
+			Name:        name,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeError(w, http.StatusNotFound, "sandbox node not found")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "failed to update sandbox node")
+			return
+		}
 	}
+
+	if req.DefaultTemplateID != nil {
+		templateID := strings.TrimSpace(*req.DefaultTemplateID)
+		if templateID == "" {
+			writeError(w, http.StatusBadRequest, "default_template_id is required")
+			return
+		}
+		node, err = h.Queries.UpdateSandboxNodeDefaultTemplateForOwner(r.Context(), db.UpdateSandboxNodeDefaultTemplateForOwnerParams{
+			ID:             nodeID,
+			OwnerUserID:    ownerUUID,
+			CubeTemplateID: templateID,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeError(w, http.StatusNotFound, "sandbox node not found")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "failed to update sandbox node default template")
+			return
+		}
+	}
+
 	writeJSON(w, http.StatusOK, sandboxNodeToResponse(node, 0))
 }
 
@@ -1160,12 +1198,64 @@ func (h *Handler) SandboxNodeHeartbeat(w http.ResponseWriter, r *http.Request) {
 		Metadata json.RawMessage `json:"metadata"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
-	node, err := h.Queries.TouchSandboxNodeHeartbeat(r.Context(), db.TouchSandboxNodeHeartbeatParams{ID: nodeUUID, Metadata: jsonBytesOrDefault(req.Metadata, "{}")})
+
+	current, err := h.Queries.GetSandboxNode(r.Context(), nodeUUID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "sandbox node not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load sandbox node")
+		return
+	}
+
+	// Merge so sandboxd can refresh templates/cube URLs without clobbering a
+	// default template the owner set via the control plane.
+	merged := mergeSandboxNodeHeartbeatMetadata(current.Metadata, req.Metadata)
+	node, err := h.Queries.TouchSandboxNodeHeartbeat(r.Context(), db.TouchSandboxNodeHeartbeatParams{
+		ID:       nodeUUID,
+		Metadata: merged,
+	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to record sandbox node heartbeat")
 		return
 	}
 	writeJSON(w, http.StatusOK, sandboxNodeToResponse(node, 0))
+}
+
+func mergeSandboxNodeHeartbeatMetadata(existing, incoming json.RawMessage) json.RawMessage {
+	base := map[string]any{}
+	if len(existing) > 0 {
+		_ = json.Unmarshal(existing, &base)
+	}
+	in := map[string]any{}
+	if len(incoming) > 0 {
+		_ = json.Unmarshal(incoming, &in)
+	}
+
+	existingDefault := strings.TrimSpace(stringFromAny(base["cube_template_id"]))
+	for _, key := range []string{
+		"cube_api_url",
+		"cube_proxy_http",
+		"cube_domain",
+		"templates",
+		"templates_synced_at",
+	} {
+		if v, ok := in[key]; ok {
+			base[key] = v
+		}
+	}
+	if existingDefault != "" {
+		base["cube_template_id"] = existingDefault
+	} else if v := strings.TrimSpace(stringFromAny(in["cube_template_id"])); v != "" {
+		base["cube_template_id"] = v
+	}
+
+	raw, err := json.Marshal(base)
+	if err != nil {
+		return jsonBytesOrDefault(incoming, "{}")
+	}
+	return raw
 }
 
 func (h *Handler) SandboxNodeWebSocket(w http.ResponseWriter, r *http.Request) {

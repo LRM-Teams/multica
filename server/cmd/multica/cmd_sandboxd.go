@@ -46,9 +46,10 @@ type sandboxdConfig struct {
 }
 
 type sandboxdClient struct {
-	cfg    sandboxdConfig
-	http   *http.Client
-	logger *slog.Logger
+	cfg        sandboxdConfig
+	configPath string
+	http       *http.Client
+	logger     *slog.Logger
 
 	templatesMu        sync.Mutex
 	cachedTemplates    []cubeTemplateSummary
@@ -116,7 +117,7 @@ func init() {
 }
 
 func runSandboxd(cmd *cobra.Command, _ []string) error {
-	cfg, err := loadSandboxdConfig(flagString(cmd, "config"))
+	cfg, configPath, err := loadSandboxdConfig(flagString(cmd, "config"))
 	if err != nil {
 		return err
 	}
@@ -163,7 +164,12 @@ func runSandboxd(cmd *cobra.Command, _ []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	c := &sandboxdClient{cfg: cfg, http: &http.Client{Timeout: 120 * time.Second}, logger: slog.Default()}
+	c := &sandboxdClient{
+		cfg:        cfg,
+		configPath: configPath,
+		http:       &http.Client{Timeout: 120 * time.Second},
+		logger:     slog.Default(),
+	}
 	if err := c.register(ctx); err != nil {
 		return err
 	}
@@ -225,9 +231,60 @@ func (c *sandboxdClient) pollLoop(ctx context.Context) error {
 func (c *sandboxdClient) heartbeat(ctx context.Context) error {
 	// Fast path only: publish whatever templates are already cached. Refreshing
 	// Cube here previously blocked claimAndRun and made nodes flap offline.
-	return c.postJSON(ctx, "/api/sandbox/node/heartbeat", c.cfg.NodeToken, map[string]any{
+	var resp struct {
+		Metadata json.RawMessage `json:"metadata"`
+	}
+	if err := c.postJSON(ctx, "/api/sandbox/node/heartbeat", c.cfg.NodeToken, map[string]any{
 		"metadata": c.nodeMetadata(),
-	}, nil)
+	}, &resp); err != nil {
+		return err
+	}
+	// Control-plane default template wins: owners can change it in the UI;
+	// sandboxd applies it in-memory and persists to the local config file.
+	if desired := stringFromRawObject(resp.Metadata, "cube_template_id"); desired != "" && desired != c.cfg.TemplateID {
+		previous := c.cfg.TemplateID
+		c.cfg.TemplateID = desired
+		if err := c.persistCubeTemplateID(desired); err != nil {
+			c.logger.Warn("failed to persist default cube template to config", "error", err, "path", c.configPath, "cube_template_id", desired)
+		} else {
+			c.logger.Info("applied default cube template from control plane", "cube_template_id", desired, "previous", previous, "path", c.configPath)
+		}
+	}
+	return nil
+}
+
+// persistCubeTemplateID updates only cube_template_id in the on-disk config so
+// restarts keep the control-plane choice. Other fields are preserved as-is.
+func (c *sandboxdClient) persistCubeTemplateID(templateID string) error {
+	if strings.TrimSpace(c.configPath) == "" {
+		return fmt.Errorf("sandboxd config path is empty")
+	}
+	raw, err := os.ReadFile(c.configPath)
+	if err != nil {
+		return err
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return fmt.Errorf("parse sandboxd config %s: %w", c.configPath, err)
+	}
+	if obj == nil {
+		obj = map[string]any{}
+	}
+	obj["cube_template_id"] = templateID
+	out, err := json.MarshalIndent(obj, "", "  ")
+	if err != nil {
+		return err
+	}
+	out = append(out, '\n')
+	tmp := c.configPath + ".tmp"
+	if err := os.WriteFile(tmp, out, 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, c.configPath); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 func (c *sandboxdClient) templateRefreshLoop(ctx context.Context) {
@@ -756,7 +813,7 @@ func intValueFromRaw(raw json.RawMessage, key string, fallback int) int {
 	return fallback
 }
 
-func loadSandboxdConfig(path string) (sandboxdConfig, error) {
+func loadSandboxdConfig(path string) (sandboxdConfig, string, error) {
 	candidates := []string{}
 	if strings.TrimSpace(path) != "" {
 		candidates = append(candidates, strings.TrimSpace(path))
@@ -772,15 +829,19 @@ func loadSandboxdConfig(path string) (sandboxdConfig, error) {
 			if os.IsNotExist(err) {
 				continue
 			}
-			return sandboxdConfig{}, err
+			return sandboxdConfig{}, "", err
 		}
 		var cfg sandboxdConfig
 		if err := json.Unmarshal(raw, &cfg); err != nil {
-			return sandboxdConfig{}, fmt.Errorf("parse sandboxd config %s: %w", candidate, err)
+			return sandboxdConfig{}, "", fmt.Errorf("parse sandboxd config %s: %w", candidate, err)
 		}
-		return cfg, nil
+		abs, err := filepath.Abs(candidate)
+		if err != nil {
+			abs = candidate
+		}
+		return cfg, abs, nil
 	}
-	return sandboxdConfig{}, fmt.Errorf("sandboxd config not found; create .multica/sandboxd.json or pass --config")
+	return sandboxdConfig{}, "", fmt.Errorf("sandboxd config not found; create .multica/sandboxd.json or pass --config")
 }
 
 func overrideStringFlag(cmd *cobra.Command, name string, target *string) {

@@ -295,11 +295,27 @@ describe.sequential("DmConversation message edit / delete wiring (#241 B3)", () 
     expect(await screen.findByTestId("message-tombstone")).toBeInTheDocument();
   });
 
-  // #542 — the DM composer must opt into plain-text URLs so a typed URL isn't
-  // auto-linkified in the input (same miss-surface regression guard).
-  it("DM main composer passes plainUrls (#542)", async () => {
+  // #542 — both DM composers (main + thread) must opt into plain-text URLs so a
+  // typed URL isn't auto-linkified in the input. Per-call-site regression guard
+  // for the miss-surface bug (fix reached one surface but not another).
+  it("DM main + thread composers each pass plainUrls (#542)", async () => {
+    const user = userEvent.setup();
     renderDm();
-    const composer = await screen.findByTestId("content-editor");
-    expect(composer.getAttribute("data-plain-urls")).toBe("true");
+    await screen.findByTestId("message-bubble");
+
+    const main = await screen.findByTestId("content-editor");
+    expect(main.getAttribute("data-plain-urls")).toBe("true");
+
+    // Open a thread → the DM thread composer (dm-conversation.tsx:928) renders,
+    // a distinct call site.
+    const replyButtons = await screen.findAllByRole("button", { name: "Reply in thread" });
+    await user.click(replyButtons[0]!);
+
+    await waitFor(() =>
+      expect(screen.getAllByTestId("content-editor").length).toBeGreaterThanOrEqual(2),
+    );
+    for (const composer of screen.getAllByTestId("content-editor")) {
+      expect(composer.getAttribute("data-plain-urls")).toBe("true");
+    }
   });
 });

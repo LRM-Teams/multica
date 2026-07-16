@@ -928,6 +928,8 @@ function DmChannelConversation({
             <ContentEditor
               key={`dm-thread-editor:${threadRoot.id}`}
               ref={threadEditorRef}
+              // Bare URLs stay plain text in the composer (#531/#542).
+              plainUrls
               placeholder={t(($) => $.thread.composer_placeholder)}
               onUpdate={handleThreadEditorUpdate}
               onSubmit={handleThreadSend}
@@ -1112,6 +1114,9 @@ function DmChannelConversation({
             <ContentEditor
               key={channelId}
               ref={editorRef}
+              // Chat composer: typed/loaded bare URLs stay plain text
+              // (#531/#542) — made clickable on the read side, not here.
+              plainUrls
               defaultValue={draft}
               placeholder={t(($) => $.dm.composer_placeholder, { name: dm.peer.name })}
               onUpdate={handleEditorUpdate}

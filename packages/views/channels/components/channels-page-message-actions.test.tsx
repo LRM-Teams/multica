@@ -65,7 +65,10 @@ vi.mock("@multica/core/channels", async (importOriginal) => {
     channelMessageThreadOptions: () => options(["channel-thread"], { messages: [] }),
     channelMessagesPageOptions: () => ({
       queryKey: ["channel-messages"],
-      queryFn: async () => ({ items: [], next_cursor: null }),
+      // `messages` is the shape flattenChannelMessagePages reads; an empty
+      // array (not the wrong `items` key) keeps the flattened list a valid
+      // `[]` so opening a thread resolves threadRoot without crashing.
+      queryFn: async () => ({ messages: [], next_cursor: null }),
       initialPageParam: null,
       getNextPageParam: () => undefined,
     }),
@@ -120,8 +123,13 @@ vi.mock("../../navigation/context", () => ({
   }),
 }));
 
+// Expose `plainUrls` so a test can assert the channel composer opts into
+// plain-text URLs (#542) — the miss-surface root cause was this prop never
+// reaching the web channel composer.
 vi.mock("../../editor/content-editor", () => ({
-  ContentEditor: () => <div data-testid="content-editor" />,
+  ContentEditor: (props: { plainUrls?: boolean }) => (
+    <div data-testid="content-editor" data-plain-urls={String(!!props.plainUrls)} />
+  ),
 }));
 
 vi.mock("../../common/project-picker-button", () => ({
@@ -138,16 +146,27 @@ const listProps = vi.hoisted(() => ({
   current: null as {
     onEditMessage?: (m: ChannelMessage, content: string) => void;
     onDeleteMessage?: (m: ChannelMessage) => void;
+    onOpenThread?: (m: ChannelMessage) => void;
   } | null,
 }));
 vi.mock("./channel-message-list", () => ({
   ChannelMessageList: (props: {
     onEditMessage?: (m: ChannelMessage, content: string) => void;
     onDeleteMessage?: (m: ChannelMessage) => void;
+    onOpenThread?: (m: ChannelMessage) => void;
   }) => {
     listProps.current = props;
     return <div data-testid="message-list" />;
   },
+}));
+
+// Render only the composer the page hands ThreadPanel via `editor`, so opening
+// a thread exercises the thread composer's `plainUrls` wiring without pulling
+// in ThreadPanel's own render dependencies (zero-flaky, per review).
+vi.mock("./thread-panel", () => ({
+  ThreadPanel: (props: { editor?: React.ReactNode }) => (
+    <div data-testid="thread-panel">{props.editor}</div>
+  ),
 }));
 
 function ownMessage(): ChannelMessage {
@@ -237,5 +256,31 @@ describe("ChannelsPage message edit / delete wiring (#241 B3)", () => {
 
     await waitFor(() => expect(apiMock.deleteChannelMessage).toHaveBeenCalledWith("chan-1", "m-1"));
     expect(apiMock.sendChannelMessage).not.toHaveBeenCalled();
+  });
+
+  // #542 — both channel composers (main + thread) must opt into plain-text
+  // URLs so a typed URL isn't auto-linkified in the input. Per-call-site
+  // regression guard: the miss-surface bug was `plainUrls` reaching one
+  // surface but not another, which exact-head review alone can't keep out.
+  it("channel main + thread composers each pass plainUrls (#542)", async () => {
+    renderPage();
+    await screen.findByTestId("message-list");
+
+    const main = await screen.findByTestId("content-editor");
+    expect(main.getAttribute("data-plain-urls")).toBe("true");
+
+    // Open a thread → the thread composer (channels-page.tsx:2174) renders via
+    // ThreadPanel's `editor` prop, a distinct call site.
+    await waitFor(() => expect(listProps.current?.onOpenThread).toBeTypeOf("function"));
+    await act(async () => {
+      listProps.current?.onOpenThread?.(ownMessage());
+    });
+    await screen.findByTestId("thread-panel");
+
+    const composers = screen.getAllByTestId("content-editor");
+    expect(composers).toHaveLength(2);
+    for (const composer of composers) {
+      expect(composer.getAttribute("data-plain-urls")).toBe("true");
+    }
   });
 });

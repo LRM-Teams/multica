@@ -609,14 +609,28 @@ func resolveSessionID(requestedResume, emitted string, failed bool) string {
 }
 
 func buildEnv(extra map[string]string) []string {
-	return mergeEnv(os.Environ(), extra)
+	return buildProviderEnv(extra, nil)
+}
+
+// buildProviderEnv builds the child environment at the shared provider
+// boundary. Providers may block host-private inherited keys, while explicit
+// agent custom_env stays an intentional final override.
+func buildProviderEnv(extra map[string]string, inheritedBlocklist map[string]struct{}) []string {
+	return mergeEnvWithInheritedBlocklist(os.Environ(), extra, inheritedBlocklist)
 }
 
 func mergeEnv(base []string, extra map[string]string) []string {
+	return mergeEnvWithInheritedBlocklist(base, extra, nil)
+}
+
+func mergeEnvWithInheritedBlocklist(base []string, extra map[string]string, inheritedBlocklist map[string]struct{}) []string {
 	env := make([]string, 0, len(base)+len(extra))
 	for _, entry := range base {
 		key, _, _ := strings.Cut(entry, "=")
 		if isFilteredChildEnvKey(key) {
+			continue
+		}
+		if _, blocked := inheritedBlocklist[key]; blocked {
 			continue
 		}
 		env = append(env, entry)

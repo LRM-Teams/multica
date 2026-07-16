@@ -22,6 +22,53 @@ func TestBuildPiArgsNoToolAllowlist(t *testing.T) {
 	}
 }
 
+func TestBuildPiEnvFiltersInheritedPackageDir(t *testing.T) {
+	t.Parallel()
+
+	env := mergeEnvWithInheritedBlocklist([]string{
+		"PATH=/usr/bin",
+		"PI_PACKAGE_DIR=/Users/frank/.slock/runtime-pkg",
+		"MULTICA_TOKEN=must-not-leak",
+	}, nil, piInheritedEnvBlocklist)
+
+	for _, entry := range env {
+		if strings.HasPrefix(entry, piPackageDirEnvKey+"=") {
+			t.Fatalf("inherited %s leaked to Pi: %v", piPackageDirEnvKey, env)
+		}
+	}
+	if !containsEnvEntry(env, "PATH=/usr/bin") {
+		t.Fatalf("PATH was not preserved: %v", env)
+	}
+	if containsEnvEntry(env, "MULTICA_TOKEN=must-not-leak") {
+		t.Fatalf("ordinary child env filtering regressed: %v", env)
+	}
+}
+
+func TestBuildPiEnvPreservesExplicitPackageDirOverride(t *testing.T) {
+	t.Parallel()
+
+	env := mergeEnvWithInheritedBlocklist([]string{
+		"PATH=/usr/bin",
+		"PI_PACKAGE_DIR=/Users/frank/.slock/runtime-pkg",
+	}, map[string]string{piPackageDirEnvKey: "/opt/pi-package"}, piInheritedEnvBlocklist)
+
+	if !containsEnvEntry(env, "PI_PACKAGE_DIR=/opt/pi-package") {
+		t.Fatalf("explicit Pi package dir override was not preserved: %v", env)
+	}
+	if containsEnvEntry(env, "PI_PACKAGE_DIR=/Users/frank/.slock/runtime-pkg") {
+		t.Fatalf("inherited Pi package dir leaked alongside override: %v", env)
+	}
+}
+
+func containsEnvEntry(env []string, want string) bool {
+	for _, entry := range env {
+		if entry == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestBuildPiArgsBasicFlags(t *testing.T) {
 	args := buildPiArgs("hello world", "/tmp/s.jsonl", ExecOptions{
 		Model:         "anthropic/claude-sonnet-4-20250514",

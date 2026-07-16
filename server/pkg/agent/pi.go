@@ -26,6 +26,22 @@ var (
 	piControlTokenRE = regexp.MustCompile(`<\|[A-Za-z0-9_-]+>[A-Za-z0-9_-]*|<[A-Za-z0-9_-]+\|>`)
 )
 
+const piPackageDirEnvKey = "PI_PACKAGE_DIR"
+
+var piInheritedEnvBlocklist = map[string]struct{}{
+	// Raft's SEA launcher uses this name for its own resource root. Pi treats it
+	// as an override for Pi's package root, so a host value makes Pi search the
+	// Raft stub for its bundled themes instead of Pi's installed package.
+	piPackageDirEnvKey: {},
+}
+
+// buildPiEnv applies Pi's provider-specific inherited-environment policy at
+// the shared child-environment boundary. A runtime custom_env value is
+// deliberate Pi configuration and must still win.
+func buildPiEnv(extra map[string]string) []string {
+	return buildProviderEnv(extra, piInheritedEnvBlocklist)
+}
+
 func stripPiToolCallMarkup(s string) string {
 	s = stripPiStructuredToolMarkup(s)
 	return piControlTokenRE.ReplaceAllString(s, "")
@@ -224,7 +240,7 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 	if opts.Cwd != "" {
 		cmd.Dir = opts.Cwd
 	}
-	cmd.Env = buildEnv(b.cfg.Env)
+	cmd.Env = buildPiEnv(b.cfg.Env)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

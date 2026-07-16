@@ -180,6 +180,7 @@ export interface MemoryCurationTargetAgent {
 
 export interface MemoryCurationRunTimelineItem {
   key: string;
+  agent_id?: string;
   label: string;
   status: string;
   timestamp?: string;

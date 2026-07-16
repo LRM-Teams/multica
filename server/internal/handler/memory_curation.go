@@ -75,6 +75,7 @@ type memoryCurationTargetAgent struct {
 
 type memoryCurationRunTimelineItem struct {
 	Key       string `json:"key"`
+	AgentID   string `json:"agent_id,omitempty"`
 	Label     string `json:"label"`
 	Status    string `json:"status"`
 	Timestamp string `json:"timestamp,omitempty"`
@@ -533,7 +534,7 @@ func buildMemoryCurationTimeline(resp memoryCurationRunResponse, raw []byte, cre
 			items = append(items, memoryCurationRunTimelineItem{Key: "claimed", Label: "Claimed by runtime", Status: "done", Timestamp: startedAt.UTC().Format(time.RFC3339), Detail: resp.RuntimeName})
 		}
 		for _, ev := range result.Events {
-			items = append(items, memoryCurationRunTimelineItem{Key: ev.Key, Label: curationEventLabel(ev.Key), Status: ev.Status, Timestamp: ev.CreatedAt, Detail: ev.Message})
+			items = append(items, memoryCurationRunTimelineItem{Key: ev.Key, AgentID: ev.AgentID, Label: curationEventLabel(ev.Key), Status: ev.Status, Timestamp: ev.CreatedAt, Detail: ev.Message})
 		}
 		if finishedAt != nil {
 			finalStatus := "done"

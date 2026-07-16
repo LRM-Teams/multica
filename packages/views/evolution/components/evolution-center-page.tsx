@@ -1182,8 +1182,8 @@ function CurationRunDetailCard({ run, selectedRunId }: { run: MemoryCurationRunD
         <div>
           <div className="mb-2 text-sm font-medium">{COPY.timeline}</div>
           <div className="space-y-2">
-            {run.timeline.map((item) => (
-              <div key={item.key} className="flex items-start gap-3 rounded-2xl border bg-muted/20 p-3">
+            {run.timeline.map((item, index) => (
+              <div key={`${item.key}:${item.agent_id ?? "run"}:${item.timestamp ?? index}`} className="flex items-start gap-3 rounded-2xl border bg-muted/20 p-3">
                 <Badge variant={item.status === "failed" ? "destructive" : item.status === "done" ? "secondary" : "outline"}>{item.status}</Badge>
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-medium">{item.label}</div>

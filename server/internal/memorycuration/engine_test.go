@@ -98,6 +98,23 @@ func TestRunAllInvokesSelfReviewThenTeamCurationWithDBEvidence(t *testing.T) {
 	if res.DailyFilesWritten != 1 || res.ReviewCandidatesAdded != 1 || res.SharedCandidatesAdded != 1 {
 		t.Fatalf("agentic run stats = %#v", res)
 	}
+	for _, ev := range res.Events {
+		if ev.Status == "running" {
+			t.Fatalf("completed run left event running: %#v", res.Events)
+		}
+	}
+	if !hasRunEvent(res.Events, "read_local_files", "agent-1", "done") || !hasRunEvent(res.Events, "invoked_curator", "agent-1", "done") || !hasRunEvent(res.Events, "invoked_curator", "team", "done") {
+		t.Fatalf("missing fine-grained completion events: %#v", res.Events)
+	}
+}
+
+func hasRunEvent(events []RunEvent, key, agentID, status string) bool {
+	for _, ev := range events {
+		if ev.Key == key && ev.AgentID == agentID && ev.Status == status {
+			return true
+		}
+	}
+	return false
 }
 
 type recordingStageAgent struct {

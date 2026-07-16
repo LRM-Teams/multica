@@ -448,6 +448,7 @@ const MemoryCurationTargetAgentSchema = z.object({
 
 const MemoryCurationRunTimelineItemSchema = z.object({
   key: z.string().default(""),
+  agent_id: z.string().optional(),
   label: z.string().default(""),
   status: z.string().default(""),
   timestamp: z.string().optional(),

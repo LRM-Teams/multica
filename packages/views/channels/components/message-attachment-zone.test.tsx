@@ -4,6 +4,13 @@ import type { Attachment, MessagePart } from "@multica/core/types";
 import { MessageAttachmentZone } from "./message-attachment-zone";
 import { MessageBody } from "./message-body";
 
+// MessageBody resolves mentions for its compact preview (#530) — that goes through
+// useActorName, which needs a QueryClient. These tests are about layout/parts, so
+// stub the lookup rather than standing up a provider.
+vi.mock("@multica/core/workspace/hooks", () => ({
+  useActorName: () => ({ getActorName: (_t: string, _i: string, fb?: string) => fb ?? "Alice" }),
+}));
+
 vi.mock("../../editor", () => ({
   Attachment: ({
     attachment,

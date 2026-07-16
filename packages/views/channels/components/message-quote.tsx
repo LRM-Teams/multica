@@ -5,7 +5,12 @@ import type { Attachment, ChannelMessage, ChannelMessageQuote, ChannelMessageRep
 import { cn } from "@multica/ui/lib/utils";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { useT } from "../../i18n/use-t";
-import { resolveChannelAuthorDisplayName } from "./message-preview";
+import {
+  mentionResolverFrom,
+  projectReferencesToText,
+  resolveChannelAuthorDisplayName,
+  type MentionPreviewResolver,
+} from "./message-preview";
 import {
   formatMessagePartsPreview,
   unwrapStructuredPreviewContent,
@@ -95,9 +100,15 @@ function quoteSummary(
     images: (count: number) => string;
     empty: string;
   },
+  resolveMention: MentionPreviewResolver,
 ): string {
   const text = normalizePreview(
-    formatMessagePartsPreview(message.parts) ??
+    // Project the reference spans first (#530). Without this, a quoted message
+    // whose mention lives in `parts` (post-#463) produces nothing here and falls
+    // through to raw `content` — quoting a message that @'d someone would show
+    // `@actor_14` while the message itself reads `@小雅`.
+    projectReferencesToText(message.content, message.parts, resolveMention) ??
+      formatMessagePartsPreview(message.parts) ??
       unwrapStructuredPreviewContent(message.content) ??
       message.content,
   );
@@ -148,13 +159,17 @@ function useQuotePresentation(
     system: t(($) => $.quote.type_system),
     unknown: t(($) => $.quote.type_unknown),
   });
-  const summary = quoteSummary(message, {
-    attachment: t(($) => $.quote.attachment_summary),
-    attachments: (count) => t(($) => $.quote.attachments_summary, { count }),
-    image: t(($) => $.quote.image_summary),
-    images: (count) => t(($) => $.quote.images_summary, { count }),
-    empty: t(($) => $.quote.empty_summary),
-  });
+  const summary = quoteSummary(
+    message,
+    {
+      attachment: t(($) => $.quote.attachment_summary),
+      attachments: (count) => t(($) => $.quote.attachments_summary, { count }),
+      image: t(($) => $.quote.image_summary),
+      images: (count) => t(($) => $.quote.images_summary, { count }),
+      empty: t(($) => $.quote.empty_summary),
+    },
+    mentionResolverFrom(getActorName),
+  );
   return { author, typeLabel, summary };
 }
 
@@ -181,6 +196,7 @@ export function ComposerQuotePreview({
   cancelLabel: string;
 }) {
   const { t } = useT("channels");
+  const { getActorName } = useActorName();
 
   return (
     <div
@@ -190,13 +206,17 @@ export function ComposerQuotePreview({
       <div className="min-w-0 flex-1 border-l-2 border-primary/45 pl-2">
         <p className="truncate text-xs font-medium text-foreground/80">{quote.author_name}</p>
         <p className="line-clamp-2 text-xs leading-5 text-muted-foreground">
-          {quoteSummary(quote, {
-            attachment: t(($) => $.quote.attachment_summary),
-            attachments: (count) => t(($) => $.quote.attachments_summary, { count }),
-            image: t(($) => $.quote.image_summary),
-            images: (count) => t(($) => $.quote.images_summary, { count }),
-            empty: t(($) => $.quote.empty_summary),
-          })}
+          {quoteSummary(
+            quote,
+            {
+              attachment: t(($) => $.quote.attachment_summary),
+              attachments: (count) => t(($) => $.quote.attachments_summary, { count }),
+              image: t(($) => $.quote.image_summary),
+              images: (count) => t(($) => $.quote.images_summary, { count }),
+              empty: t(($) => $.quote.empty_summary),
+            },
+            mentionResolverFrom(getActorName),
+          )}
         </p>
       </div>
       <button

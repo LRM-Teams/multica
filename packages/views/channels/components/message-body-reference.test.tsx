@@ -5,6 +5,13 @@ import { MessageBody } from "./message-body";
 
 // InlineReferenceContent does the real content+overlay projection (API/hovercards);
 // mock it to a simple node that echoes the content it was asked to render.
+// MessageBody resolves mentions for its compact preview (#530) — that goes through
+// useActorName, which needs a QueryClient. These tests are about layout/parts, so
+// stub the lookup rather than standing up a provider.
+vi.mock("@multica/core/workspace/hooks", () => ({
+  useActorName: () => ({ getActorName: (_t: string, _i: string, fb?: string) => fb ?? "Alice" }),
+}));
+
 vi.mock("../../common/inline-reference-content", () => ({
   InlineReferenceContent: ({ content }: { content: string }) => (
     <div data-testid="inline-reference-content">{content}</div>

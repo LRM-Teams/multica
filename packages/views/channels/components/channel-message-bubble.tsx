@@ -28,7 +28,11 @@ import { initialsOf } from "../../common/initials";
 import { InlineReferenceContent } from "../../common/inline-reference-content";
 import { useT } from "../../i18n/use-t";
 import { useMessageTime } from "../../i18n/use-message-time";
-import { resolveChannelAuthorDisplayName } from "./message-preview";
+import {
+  mentionResolverFrom,
+  projectReferencesToText,
+  resolveChannelAuthorDisplayName,
+} from "./message-preview";
 import {
   formatMessagePartsCopyText,
   resolveMessageParts,
@@ -259,6 +263,7 @@ export function ChannelMessageBubble({
 }) {
   const { t } = useT("channels");
   const { getActorName } = useActorName();
+  const resolveMentionPreview = mentionResolverFrom(getActorName);
   const messageTime = useMessageTime();
   const [editDraft, setEditDraft] = useState<string | null>(null);
   const [mobileActionsOpen, setMobileActionsOpen] = useState(false);
@@ -379,7 +384,13 @@ export function ChannelMessageBubble({
   // Non-null for real parts / historical envelopes, null for ordinary content.
   const effectiveParts = resolveMessageParts(message.content, message.parts);
   const handleCopy = async () => {
+    // Copy = take away what I can see (#530, Iris's ruling). The screen says
+    // `@小雅`; a clipboard holding `@actor_14` disagrees with it, and that is its
+    // own kind of lying. Round-trip fidelity is not a counter-argument: pasting
+    // back into our own composer should go through the mention picker, and
+    // anywhere else the internal handle is just noise.
     const copyPayload =
+      projectReferencesToText(message.content, message.parts, resolveMentionPreview) ??
       formatMessagePartsCopyText(effectiveParts) ??
       unwrapStructuredPreviewContent(message.content) ??
       message.content;
@@ -409,6 +420,7 @@ export function ChannelMessageBubble({
   const canDelete = isOwn && !!onDelete;
   const isEdited = !!message.edited_at;
   const collapseText =
+    projectReferencesToText(message.content, message.parts, resolveMentionPreview) ??
     formatMessagePartsCopyText(effectiveParts) ??
     unwrapStructuredPreviewContent(message.content) ??
     message.content;

@@ -214,7 +214,8 @@
     "discard_dialog_description": "当前 tab 有未保存的修改，离开会丢弃这些修改。",
     "discard_keep": "继续编辑",
     "discard_confirm": "放弃修改",
-    "memory": "记忆"
+    "memory": "记忆",
+    "config": "配置"
   },
   "create_dialog": {
     "title_create": "创建智能体",
@@ -493,7 +494,8 @@
     "reasoning_label": "推理强度",
     "created_label": "创建时间",
     "owner_label": "所有者",
-    "reasoning_default": "默认"
+    "reasoning_default": "默认",
+    "config_shared_hint": "任何工作区成员都可以修改该群管理（贝克汉姆）的运行时设置。"
   },
   "live_peek": {
     "current_issue_label": "正在处理",

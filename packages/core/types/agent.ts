@@ -313,6 +313,14 @@ export interface Agent {
   mcp_config_redacted?: boolean;
   visibility: AgentVisibility;
   status: AgentStatus;
+  /**
+   * Platform-managed role marker. Empty/absent for ordinary agents;
+   * "group_manager" for a per-group Beckham. When set, the channel-side
+   * agent panel exposes a runtime config tab that ANY workspace member can
+   * edit (group managers are shared team infrastructure, not owned by one
+   * person). Older backends omit the field — treat undefined as "ordinary".
+   */
+  managed_role?: "group_manager";
   max_concurrent_tasks: number;
   model: string;
   /**

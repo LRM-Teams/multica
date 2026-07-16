@@ -219,7 +219,8 @@
     "discard_dialog_description": "You have unsaved changes in this tab. Leaving now will discard them.",
     "discard_keep": "Keep editing",
     "discard_confirm": "Discard changes",
-    "memory": "Memory"
+    "memory": "Memory",
+    "config": "Config"
   },
   "create_dialog": {
     "title_create": "Create Agent",
@@ -503,7 +504,8 @@
     "reasoning_label": "Reasoning",
     "created_label": "Created",
     "owner_label": "Owner",
-    "reasoning_default": "Default"
+    "reasoning_default": "Default",
+    "config_shared_hint": "Any workspace member can adjust this group manager's runtime settings."
   },
   "live_peek": {
     "current_issue_label": "Now on",

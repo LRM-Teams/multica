@@ -1,9 +1,14 @@
 "use client";
 
-import { useState } from "react";
-import { Activity, FileText, User, X } from "lucide-react";
+import { type ReactNode, useState } from "react";
+import { Activity, FileText, Settings, User, X } from "lucide-react";
+import { toast } from "sonner";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useConfigStore } from "@multica/core/config";
-import type { Agent, MemberWithUser } from "@multica/core/types";
+import type { Agent, MemberWithUser, UpdateAgentRequest } from "@multica/core/types";
+import { api } from "@multica/core/api";
+import { runtimeListOptions } from "@multica/core/runtimes";
+import { workspaceKeys } from "@multica/core/workspace/queries";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
@@ -11,17 +16,24 @@ import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import { ActivityTab } from "../../agents/components/tabs/activity-tab";
 import { AgentPresenceStatusLine } from "../../agents/components/agent-presence-status-line";
+import { ConcurrencyPicker } from "../../agents/components/inspector/concurrency-picker";
+import { ModelPicker } from "../../agents/components/inspector/model-picker";
+import { RuntimePicker } from "../../agents/components/inspector/runtime-picker";
+import { ThinkingPropRow } from "../../agents/components/inspector/thinking-prop-row";
+import { VisibilityPicker } from "../../agents/components/inspector/visibility-picker";
+import { PropRow } from "../../common/prop-row";
 import { initialsOf } from "../../common/initials";
 import { AgentFilesPanel } from "./agent-files-panel";
 import { useT } from "../../i18n/use-t";
 
-type OwnerTab = "activity" | "profile" | "files";
+type OwnerTab = "activity" | "profile" | "files" | "config";
 
-const OWNER_TABS: { id: OwnerTab; icon: typeof Activity }[] = [
-  { id: "profile", icon: User },
-  { id: "activity", icon: Activity },
-  { id: "files", icon: FileText },
-];
+const TAB_ICONS: Record<OwnerTab, typeof Activity> = {
+  profile: User,
+  activity: Activity,
+  files: FileText,
+  config: Settings,
+};
 
 interface AgentSidePanelProps {
   agent: Agent;
@@ -43,6 +55,14 @@ export function AgentSidePanel({ agent, currentUserId, members, onClose }: Agent
   const isOwner = !!currentUserId && agent.owner_id === currentUserId;
   const devProfileAccess = useConfigStore((state) => state.agentProfileDevAccessEnabled);
   const canInspectAgent = isOwner || (!!currentUserId && devProfileAccess);
+  // Beckham (per-group manager) is shared team infrastructure: expose a
+  // runtime config tab that ANY workspace member can edit, regardless of the
+  // owner-only inspect gate above.
+  const isGroupManager = agent.managed_role === "group_manager";
+  const availableTabs: OwnerTab[] = ["profile"];
+  if (canInspectAgent) availableTabs.push("activity", "files");
+  if (isGroupManager) availableTabs.push("config");
+  const showTabBar = availableTabs.length > 1;
   const [tab, setTab] = useState<OwnerTab>("profile");
   const displayName = resolveActorDisplayName(agent, agent.id);
   const initials = initialsOf(displayName);
@@ -76,30 +96,33 @@ export function AgentSidePanel({ agent, currentUserId, members, onClose }: Agent
         </Button>
       </div>
 
-      {canInspectAgent ? (
+      {showTabBar ? (
         <>
           <div className="flex shrink-0 items-center gap-0 border-b px-2">
-            {OWNER_TABS.map((tabDef) => (
-              <button
-                key={tabDef.id}
-                type="button"
-                onClick={() => setTab(tabDef.id)}
-                className={cn(
-                  "flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-2.5 text-xs font-medium transition-colors",
-                  tab === tabDef.id
-                    ? "border-foreground text-foreground"
-                    : "border-transparent text-muted-foreground hover:text-foreground",
-                )}
-              >
-                <tabDef.icon className="size-3.5" />
-                {t(($) => $.tabs[tabDef.id])}
-              </button>
-            ))}
+            {availableTabs.map((tabId) => {
+              const Icon = TAB_ICONS[tabId];
+              return (
+                <button
+                  key={tabId}
+                  type="button"
+                  onClick={() => setTab(tabId)}
+                  className={cn(
+                    "flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-2.5 text-xs font-medium transition-colors",
+                    tab === tabId
+                      ? "border-foreground text-foreground"
+                      : "border-transparent text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <Icon className="size-3.5" />
+                  {t(($) => $.tabs[tabId])}
+                </button>
+              );
+            })}
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto">
-            {tab === "activity" && <ActivityTab agent={agent} />}
+            {tab === "activity" && canInspectAgent && <ActivityTab agent={agent} />}
             {tab === "profile" && <AgentProfileTabContent agent={agent} members={members} />}
-            {tab === "files" && (
+            {tab === "files" && canInspectAgent && (
               <AgentFilesPanel
                 agent={agent}
                 currentUserId={currentUserId}
@@ -108,6 +131,13 @@ export function AgentSidePanel({ agent, currentUserId, members, onClose }: Agent
                 canEditFiles={isOwner}
                 onClose={onClose}
                 hideHeader
+              />
+            )}
+            {tab === "config" && isGroupManager && (
+              <GroupManagerConfigTab
+                agent={agent}
+                members={members}
+                currentUserId={currentUserId}
               />
             )}
           </div>
@@ -179,6 +209,126 @@ function InfoRow({ label, value, mono = false }: { label: string; value: string;
       <span className={cn("truncate text-foreground", mono && "font-mono")} title={value}>
         {value}
       </span>
+    </div>
+  );
+}
+
+/**
+ * Runtime config surface for a per-group manager (Beckham), shown as a tab in
+ * the channel-side agent panel. Reuses the agent-detail inspector pickers.
+ * Editable by ANY workspace member — group managers are shared infrastructure
+ * (the backend gate at canManageAgent allows any member for group_manager
+ * agents), so `canEdit` is always true here. Ordinary agents never render
+ * this tab (the parent only mounts it for managed_role === "group_manager").
+ */
+function GroupManagerConfigTab({
+  agent,
+  members,
+  currentUserId,
+}: {
+  agent: Agent;
+  members: readonly MemberWithUser[];
+  currentUserId: string | null;
+}) {
+  const { t } = useT("agents");
+  const qc = useQueryClient();
+  const wsId = agent.workspace_id;
+  const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
+  const selectedRuntime = runtimes.find((r) => r.id === agent.runtime_id) ?? null;
+  const isOnline = selectedRuntime?.status === "online";
+
+  // Optimistic patch of the cached agents list (mirrors the detail page's
+  // handleUpdate) so picker chips flip immediately; rollback only the fields
+  // this call wrote on failure, then invalidate to reconcile with the server.
+  const handleUpdate = async (data: Record<string, unknown>) => {
+    const queryKey = workspaceKeys.agents(wsId);
+    const prevAgents = qc.getQueryData<Agent[]>(queryKey);
+    const prevAgent = prevAgents?.find((a) => a.id === agent.id);
+    const prevFields: Record<string, unknown> = {};
+    if (prevAgent) {
+      for (const key of Object.keys(data)) {
+        prevFields[key] = (prevAgent as unknown as Record<string, unknown>)[key];
+      }
+    }
+    qc.setQueryData<Agent[]>(queryKey, (old) =>
+      old?.map((a) => (a.id === agent.id ? ({ ...a, ...data } as Agent) : a)),
+    );
+    try {
+      await api.updateAgent(agent.id, data as UpdateAgentRequest);
+      qc.invalidateQueries({ queryKey });
+    } catch (e) {
+      if (prevAgent) {
+        qc.setQueryData<Agent[]>(queryKey, (old) =>
+          old?.map((a) => (a.id === agent.id ? ({ ...a, ...prevFields } as Agent) : a)),
+        );
+      }
+      qc.invalidateQueries({ queryKey });
+      toast.error(e instanceof Error ? e.message : t(($) => $.detail.update_failed_toast));
+      throw e;
+    }
+  };
+
+  return (
+    <div className="flex flex-col">
+      <div className="border-b p-4">
+        <p className="text-xs leading-5 text-muted-foreground">
+          {t(($) => $.side_panel.config_shared_hint)}
+        </p>
+      </div>
+      <ConfigSection label={t(($) => $.inspector.section_properties)}>
+        <PropRow label={t(($) => $.inspector.prop_runtime)} interactive={false}>
+          <RuntimePicker
+            value={agent.runtime_id}
+            runtimes={runtimes}
+            members={[...members]}
+            currentUserId={currentUserId}
+            canEdit
+            onChange={(id) => handleUpdate({ runtime_id: id })}
+          />
+        </PropRow>
+        <PropRow label={t(($) => $.inspector.prop_model)} interactive={false}>
+          <ModelPicker
+            runtimeId={agent.runtime_id}
+            runtimeOnline={!!isOnline}
+            value={agent.model ?? ""}
+            canEdit
+            onChange={(m) => handleUpdate({ model: m })}
+          />
+        </PropRow>
+        <ThinkingPropRow
+          runtimeId={agent.runtime_id}
+          runtimeOnline={!!isOnline}
+          model={agent.model ?? ""}
+          value={agent.thinking_level ?? ""}
+          canEdit
+          onChange={(v) => handleUpdate({ thinking_level: v })}
+        />
+        <PropRow label={t(($) => $.inspector.prop_visibility)} interactive={false}>
+          <VisibilityPicker
+            value={agent.visibility}
+            canEdit
+            onChange={(v) => handleUpdate({ visibility: v })}
+          />
+        </PropRow>
+        <PropRow label={t(($) => $.inspector.prop_concurrency)} interactive={false}>
+          <ConcurrencyPicker
+            value={agent.max_concurrent_tasks}
+            canEdit
+            onChange={(n) => handleUpdate({ max_concurrent_tasks: n })}
+          />
+        </PropRow>
+      </ConfigSection>
+    </div>
+  );
+}
+
+function ConfigSection({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="border-b px-4 py-4">
+      <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+        {label}
+      </div>
+      <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">{children}</div>
     </div>
   );
 }

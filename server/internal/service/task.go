@@ -574,6 +574,10 @@ func (s *TaskService) enqueueIssueTask(ctx context.Context, issue db.Issue, trig
 		slog.Error("task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "error", "agent has no runtime")
 		return db.AgentTaskQueue{}, fmt.Errorf("agent has no runtime")
 	}
+	taskContext, err := WithTaskExecutionConfig(nil, agent.Model.String, agent.ThinkingLevel.String)
+	if err != nil {
+		return db.AgentTaskQueue{}, fmt.Errorf("snapshot issue task execution config: %w", err)
+	}
 
 	task, err := s.Queries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
 		AgentID:           issue.AssigneeID,
@@ -583,6 +587,7 @@ func (s *TaskService) enqueueIssueTask(ctx context.Context, issue db.Issue, trig
 		TriggerCommentID:  triggerCommentID,
 		TriggerSummary:    s.buildCommentTriggerSummary(ctx, triggerCommentID),
 		ForceFreshSession: pgtype.Bool{Bool: forceFreshSession, Valid: forceFreshSession},
+		Context:           taskContext,
 	})
 	if err != nil {
 		slog.Error("task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "error", err)
@@ -699,6 +704,10 @@ func (s *TaskService) createMentionTaskRow(ctx context.Context, q *db.Queries, i
 		slog.Error("mention task enqueue failed: agent has no runtime", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID))
 		return db.AgentTaskQueue{}, fmt.Errorf("agent has no runtime")
 	}
+	taskContext, err := WithTaskExecutionConfig(nil, agent.Model.String, agent.ThinkingLevel.String)
+	if err != nil {
+		return db.AgentTaskQueue{}, fmt.Errorf("snapshot mention task execution config: %w", err)
+	}
 
 	task, err := q.CreateAgentTask(ctx, db.CreateAgentTaskParams{
 		AgentID:           agentID,
@@ -709,6 +718,7 @@ func (s *TaskService) createMentionTaskRow(ctx context.Context, q *db.Queries, i
 		TriggerSummary:    s.buildCommentTriggerSummaryWithQueries(ctx, q, triggerCommentID),
 		IsLeaderTask:      pgtype.Bool{Bool: isLeader, Valid: isLeader},
 		ForceFreshSession: pgtype.Bool{Bool: forceFreshSession, Valid: forceFreshSession},
+		Context:           taskContext,
 	})
 	if err != nil {
 		slog.Error("mention task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID), "error", err)
@@ -884,6 +894,10 @@ func (s *TaskService) EnqueueQuickCreateTask(ctx context.Context, workspaceID, r
 	if err != nil {
 		return db.AgentTaskQueue{}, fmt.Errorf("marshal quick-create context: %w", err)
 	}
+	contextJSON, err = WithTaskExecutionConfig(contextJSON, agent.Model.String, agent.ThinkingLevel.String)
+	if err != nil {
+		return db.AgentTaskQueue{}, fmt.Errorf("snapshot quick-create execution config: %w", err)
+	}
 
 	task, err := s.Queries.CreateQuickCreateTask(ctx, db.CreateQuickCreateTaskParams{
 		AgentID:   agentID,
@@ -981,6 +995,10 @@ func (s *TaskService) EnqueueAgentRadarRun(ctx context.Context, in EnqueueAgentR
 		})
 		if err != nil {
 			return fmt.Errorf("marshal radar context: %w", err)
+		}
+		contextJSON, err = WithTaskExecutionConfig(contextJSON, agent.Model.String, agent.ThinkingLevel.String)
+		if err != nil {
+			return fmt.Errorf("snapshot radar task execution config: %w", err)
 		}
 		task, err = qtx.CreateQuickCreateTask(ctx, db.CreateQuickCreateTaskParams{
 			AgentID:   in.AgentID,
@@ -1213,6 +1231,10 @@ func (s *TaskService) createChatTaskRow(ctx context.Context, q *db.Queries, chat
 		slog.Info("chat task enqueue refused: agent has no runtime", "chat_session_id", util.UUIDToString(chatSession.ID), "agent_id", util.UUIDToString(chatSession.AgentID))
 		return db.AgentTaskQueue{}, ErrChatTaskAgentNoRuntime
 	}
+	taskContext, err := WithTaskExecutionConfig(nil, agent.Model.String, agent.ThinkingLevel.String)
+	if err != nil {
+		return db.AgentTaskQueue{}, fmt.Errorf("snapshot chat task execution config: %w", err)
+	}
 
 	task, err := q.CreateChatTask(ctx, db.CreateChatTaskParams{
 		AgentID:           chatSession.AgentID,
@@ -1221,6 +1243,7 @@ func (s *TaskService) createChatTaskRow(ctx context.Context, q *db.Queries, chat
 		ChatSessionID:     chatSession.ID,
 		InitiatorUserID:   initiatorUserID,
 		ForceFreshSession: pgtype.Bool{Bool: forceFreshSession, Valid: forceFreshSession},
+		Context:           taskContext,
 	})
 	if err != nil {
 		slog.Error("chat task enqueue failed", "chat_session_id", util.UUIDToString(chatSession.ID), "error", err)

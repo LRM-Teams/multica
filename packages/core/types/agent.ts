@@ -198,6 +198,12 @@ export interface AgentTask {
   completed_at: string | null;
   result: unknown;
   error: string | null;
+  /** Immutable model/reasoning choice captured when this run was created. */
+  execution_config?: {
+    model: string;
+    thinking_level: string;
+    snapshotted: boolean;
+  };
   // Empty string when the task is not in a failed state (the backend uses
   // `omitempty`, so the field may also be missing on non-failed tasks).
   failure_reason?: TaskFailureReason | "";
@@ -533,6 +539,8 @@ export interface UpdateAgentRequest {
   status?: AgentStatus;
   max_concurrent_tasks?: number;
   model?: string;
+	/** Completed runtime-model discovery request backing an execution-config save. */
+	model_catalog_request_id?: string;
   /**
    * Runtime-native reasoning/effort token. Tri-state semantics (MUL-2339):
    *   - field omitted → no change

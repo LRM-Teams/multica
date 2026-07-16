@@ -71,6 +71,8 @@ type AgentInboxEvent struct {
 	ChannelID          pgtype.UUID        `json:"channel_id"`
 	ChatSessionID      pgtype.UUID        `json:"chat_session_id"`
 	AgentID            pgtype.UUID        `json:"agent_id"`
+	RuntimeID          pgtype.UUID        `json:"runtime_id"`
+	ExecutionConfig    []byte             `json:"execution_config"`
 	SourceMessageID    pgtype.UUID        `json:"source_message_id"`
 	Reason             string             `json:"reason"`
 	RequiresWake       bool               `json:"requires_wake"`

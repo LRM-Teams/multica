@@ -769,21 +769,6 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 		}
 		projectFilter = id
 	}
-	var sourceChannelFilter pgtype.UUID
-	if c := r.URL.Query().Get("source_channel_id"); c != "" {
-		id, ok := parseUUIDOrBadRequest(w, c, "source_channel_id")
-		if !ok {
-			return
-		}
-		userID, ok := requireUserID(w, r)
-		if !ok {
-			return
-		}
-		if !h.requireChannelUserMember(w, ctx, workspaceID, id, parseUUID(userID)) {
-			return
-		}
-		sourceChannelFilter = id
-	}
 	// involves_user_id widens the assignee filter to surface issues where the
 	// user is the indirect assignee (their owned agent, or a squad they belong
 	// to / lead / have an agent inside). Direct member-assignment is excluded
@@ -803,11 +788,9 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Preserve the existing sqlc path for unfiltered open-only requests. A
-	// source-channel-filtered open-only request uses the dynamic path below so
-	// its source predicate is applied to both the rows and total.
+	// Preserve the existing sqlc path for open-only requests.
 	openOnly := r.URL.Query().Get("open_only") == "true"
-	if openOnly && !sourceChannelFilter.Valid {
+	if openOnly {
 		issues, err := h.Queries.ListOpenIssues(ctx, db.ListOpenIssuesParams{
 			WorkspaceID:    wsUUID,
 			Priority:       priorityFilter,
@@ -937,16 +920,6 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 	}
 	if metadataFilter != nil {
 		where = append(where, fmt.Sprintf("i.metadata @> %s::jsonb", addArg(string(metadataFilter))))
-	}
-	if sourceChannelFilter.Valid {
-		ref := addArg(sourceChannelFilter)
-		where = append(where, fmt.Sprintf(`EXISTS (
-    SELECT 1
-    FROM issue_source_message src
-    WHERE src.issue_id = i.id
-      AND src.workspace_id = i.workspace_id
-      AND src.channel_id = %s::uuid
-)`, ref))
 	}
 	if openOnly {
 		where = append(where, "i.status NOT IN ('done', 'cancelled')")
@@ -2437,6 +2410,13 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
+			if _, err := h.Queries.GetProjectInWorkspace(r.Context(), db.GetProjectInWorkspaceParams{
+				ID:          projectUUID,
+				WorkspaceID: prevIssue.WorkspaceID,
+			}); err != nil {
+				writeError(w, http.StatusBadRequest, "project not found in this workspace")
+				return
+			}
 			params.ProjectID = projectUUID
 		} else {
 			params.ProjectID = pgtype.UUID{Valid: false}
@@ -2985,6 +2965,12 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			if req.Updates.ProjectID != nil {
 				projectUUID, err := util.ParseUUID(*req.Updates.ProjectID)
 				if err != nil {
+					continue
+				}
+				if _, err := h.Queries.GetProjectInWorkspace(r.Context(), db.GetProjectInWorkspaceParams{
+					ID:          projectUUID,
+					WorkspaceID: prevIssue.WorkspaceID,
+				}); err != nil {
 					continue
 				}
 				params.ProjectID = projectUUID

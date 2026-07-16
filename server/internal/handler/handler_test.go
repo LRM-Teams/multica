@@ -641,6 +641,83 @@ func TestCreateIssueRejectsCrossWorkspaceProject(t *testing.T) {
 	}
 }
 
+func TestUpdateIssueProjectWorkspaceBoundary(t *testing.T) {
+	ctx := context.Background()
+
+	var localProjectID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO project (workspace_id, title, status, priority)
+		VALUES ($1, $2, 'planned', 'none')
+		RETURNING id
+	`, testWorkspaceID, "Local update project").Scan(&localProjectID); err != nil {
+		t.Fatalf("insert local project: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM project WHERE id = $1`, localProjectID) })
+
+	var otherWorkspaceID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO workspace (name, slug, description, issue_prefix)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id
+	`, "Update project boundary", "update-project-boundary", "Foreign workspace", "UPB").Scan(&otherWorkspaceID); err != nil {
+		t.Fatalf("insert foreign workspace: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM workspace WHERE id = $1`, otherWorkspaceID) })
+
+	var foreignProjectID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO project (workspace_id, title, status, priority)
+		VALUES ($1, $2, 'planned', 'none')
+		RETURNING id
+	`, otherWorkspaceID, "Foreign update project").Scan(&foreignProjectID); err != nil {
+		t.Fatalf("insert foreign project: %v", err)
+	}
+
+	var issueID string
+	createRecorder := httptest.NewRecorder()
+	testHandler.CreateIssue(createRecorder, newRequest("POST", "/api/issues?workspace_id="+testWorkspaceID, map[string]any{
+		"title": "Project update boundary",
+	}))
+	if createRecorder.Code != http.StatusCreated {
+		t.Fatalf("create issue: %d: %s", createRecorder.Code, createRecorder.Body.String())
+	}
+	var created IssueResponse
+	if err := json.NewDecoder(createRecorder.Body).Decode(&created); err != nil {
+		t.Fatalf("decode created issue: %v", err)
+	}
+	issueID = created.ID
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID) })
+
+	update := func(projectID any) *httptest.ResponseRecorder {
+		t.Helper()
+		w := httptest.NewRecorder()
+		req := newRequest("PATCH", "/api/issues/"+issueID, map[string]any{"project_id": projectID})
+		req = withURLParam(req, "id", issueID)
+		testHandler.UpdateIssue(w, req)
+		return w
+	}
+
+	if w := update(localProjectID); w.Code != http.StatusOK {
+		t.Fatalf("UpdateIssue with local project: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if w := update(nil); w.Code != http.StatusOK {
+		t.Fatalf("UpdateIssue clearing project: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if w := update(foreignProjectID); w.Code != http.StatusBadRequest {
+		t.Fatalf("UpdateIssue with foreign project: expected 400, got %d: %s", w.Code, w.Body.String())
+	} else if !strings.Contains(w.Body.String(), "project not found in this workspace") {
+		t.Fatalf("UpdateIssue with foreign project: expected boundary error, got %s", w.Body.String())
+	}
+
+	var persistedProjectID *string
+	if err := testPool.QueryRow(ctx, `SELECT project_id FROM issue WHERE id = $1`, issueID).Scan(&persistedProjectID); err != nil {
+		t.Fatalf("read issue project: %v", err)
+	}
+	if persistedProjectID != nil {
+		t.Fatalf("foreign project update changed issue project_id to %q", *persistedProjectID)
+	}
+}
+
 func TestCreateSubIssueInheritsParentProject(t *testing.T) {
 	var projectID, parentID, childID string
 	defer func() {

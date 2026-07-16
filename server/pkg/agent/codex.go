@@ -856,7 +856,7 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 		// Fallback: if no usage from JSON-RPC, scan Codex session JSONL logs.
 		// Codex writes token_count events to ~/.codex/sessions/YYYY/MM/DD/*.jsonl.
 		if u.InputTokens == 0 && u.OutputTokens == 0 {
-			if scanned := scanCodexSessionUsage(startTime); scanned != nil {
+			if scanned := scanCodexSessionUsage(startTime, threadID); scanned != nil {
 				u = scanned.usage
 				if scanned.model != "" && opts.Model == "" {
 					opts.Model = scanned.model
@@ -1707,10 +1707,10 @@ type codexSessionUsage struct {
 	model string
 }
 
-// scanCodexSessionUsage scans Codex session JSONL files written after startTime
-// to extract token usage. Codex writes token_count events to
+// scanCodexSessionUsage scans this execution's Codex session JSONL file written
+// after startTime to extract token usage. Codex writes token_count events to
 // ~/.codex/sessions/YYYY/MM/DD/*.jsonl.
-func scanCodexSessionUsage(startTime time.Time) *codexSessionUsage {
+func scanCodexSessionUsage(startTime time.Time, threadID string) *codexSessionUsage {
 	root := codexSessionRoot()
 	if root == "" {
 		return nil
@@ -1735,8 +1735,10 @@ func scanCodexSessionUsage(startTime time.Time) *codexSessionUsage {
 		if err != nil || info.ModTime().Before(startTime) {
 			continue
 		}
+		if !codexSessionFileMatchesThread(f, threadID) {
+			continue
+		}
 		if u := parseCodexSessionFile(f, startTime); u != nil {
-			// Take the last matching file's data (usually there's only one per task).
 			result = *u
 		}
 	}
@@ -1745,6 +1747,18 @@ func scanCodexSessionUsage(startTime time.Time) *codexSessionUsage {
 		return nil
 	}
 	return &result
+}
+
+// codexSessionFileMatchesThread selects the session file belonging to this
+// execution. Codex names each JSONL file with the thread ID as its exact suffix.
+// CODEX_HOME/sessions is shared across daemon tasks, so modification time alone
+// cannot attribute usage when two Codex threads execute concurrently.
+func codexSessionFileMatchesThread(path, threadID string) bool {
+	if threadID == "" {
+		return false
+	}
+	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	return strings.HasSuffix(name, threadID)
 }
 
 // codexSessionRoot returns the Codex sessions directory.

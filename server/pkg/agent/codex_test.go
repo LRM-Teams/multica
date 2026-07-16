@@ -177,6 +177,49 @@ func TestParseCodexSessionFileFallsBackToCumulativeDeltaAtExecutionBoundary(t *t
 	}
 }
 
+func TestScanCodexSessionUsageSelectsOnlyCurrentThread(t *testing.T) {
+	start := time.Now().UTC().Add(-time.Minute)
+	codexHome := t.TempDir()
+	t.Setenv("CODEX_HOME", codexHome)
+	dateDir := filepath.Join(codexHome, "sessions",
+		fmt.Sprintf("%04d", start.Year()),
+		fmt.Sprintf("%02d", int(start.Month())),
+		fmt.Sprintf("%02d", start.Day()),
+	)
+	if err := os.MkdirAll(dateDir, 0o755); err != nil {
+		t.Fatalf("make session dir: %v", err)
+	}
+
+	writeSession := func(name, content string, modTime time.Time) {
+		t.Helper()
+		path := filepath.Join(dateDir, name)
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatalf("write session %s: %v", name, err)
+		}
+		if err := os.Chtimes(path, modTime, modTime); err != nil {
+			t.Fatalf("set session mtime %s: %v", name, err)
+		}
+	}
+
+	writeSession("rollout-target-thread.jsonl", `{"timestamp":"`+start.Add(time.Second).Format(time.RFC3339Nano)+`","type":"event_msg","payload":{"type":"token_count","info":{"model":"target","last_token_usage":{"input_tokens":123,"output_tokens":45}}}}
+`, start.Add(2*time.Second))
+	// This one is newer and sorts later, which previously overwrote the target
+	// result merely because every shared-session file was scanned.
+	writeSession("rollout-unrelated-thread.jsonl", `{"timestamp":"`+start.Add(2*time.Second).Format(time.RFC3339Nano)+`","type":"event_msg","payload":{"type":"token_count","info":{"model":"unrelated","last_token_usage":{"input_tokens":999,"output_tokens":999}}}}
+`, start.Add(3*time.Second))
+
+	usage := scanCodexSessionUsage(start, "target-thread")
+	if usage == nil {
+		t.Fatal("expected usage")
+	}
+	if got, want := usage.model, "target"; got != want {
+		t.Fatalf("model = %q, want %q", got, want)
+	}
+	if got, want := usage.usage.InputTokens, int64(123); got != want {
+		t.Fatalf("input tokens = %d, want target usage %d", got, want)
+	}
+}
+
 func TestCodexHandleResponseSuccess(t *testing.T) {
 	t.Parallel()
 

@@ -121,6 +121,18 @@ function SandboxDetailEditor({
               <p className="text-xs text-muted-foreground">{t(($) => $.sandboxes_page.node_readonly_hint)}</p>
             </div>
 
+            <div className="space-y-2">
+              <Label>{t(($) => $.sandboxes_page.create_template_label)}</Label>
+              <div className="rounded-md border bg-muted/30 px-3 py-2 font-mono text-sm break-all">
+                {instance.template === "default"
+                  ? t(($) => $.sandboxes_page.detail_template_default)
+                  : instance.template}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {t(($) => $.sandboxes_page.template_readonly_hint)}
+              </p>
+            </div>
+
             <div className="space-y-3">
               <div className="text-sm font-medium">{t(($) => $.sandboxes_page.runtime_model_title)}</div>
               <Input

@@ -45,6 +45,21 @@ export function defaultSandboxName(): string {
   return `sandbox-${suffix}`;
 }
 
+/**
+ * Resolve the `template` field for POST /api/sandboxes.
+ *
+ * - Empty / `"default"` → `"default"` (sandboxd uses the node's configured cube_template_id).
+ * - Any other non-empty value → pass through as an explicit Cube template ID override
+ *   (higher priority than the node default, even when it equals the current default).
+ */
+export function resolveCreateSandboxTemplate(selected: string | undefined | null): string {
+  const trimmed = (selected ?? "").trim();
+  if (!trimmed || trimmed === "default") {
+    return "default";
+  }
+  return trimmed;
+}
+
 /** Sanitize a segment for use in a sandboxd config filename. */
 export function sanitizeSandboxdConfigSegment(value: string): string {
   const cleaned = value

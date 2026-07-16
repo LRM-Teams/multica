@@ -490,7 +490,9 @@ func (c *sandboxdClient) callCube(ctx context.Context, job sandboxJob) (map[stri
 }
 
 func (c *sandboxdClient) createCubeSandbox(ctx context.Context, job sandboxJob, payload sandboxJobPayload) (map[string]any, error) {
-	templateID := payload.Template
+	// Explicit job template wins over the node default (cube_template_id).
+	// Only empty / "default" fall back to the configured TemplateID.
+	templateID := strings.TrimSpace(payload.Template)
 	if templateID == "" || templateID == "default" {
 		templateID = c.cfg.TemplateID
 	}

@@ -10,10 +10,16 @@ import {
   useResumeSandboxMutation,
   useStopSandboxMutation,
 } from "@multica/core/sandboxes/mutations";
-import { sandboxBindingListOptions, sandboxKeys, sandboxListOptions } from "@multica/core/sandboxes/queries";
+import {
+  sandboxBindingListOptions,
+  sandboxKeys,
+  sandboxListOptions,
+  sandboxNodeTemplatesOptions,
+} from "@multica/core/sandboxes/queries";
 import {
   defaultSandboxName,
   effectiveSandboxNodeStatus,
+  resolveCreateSandboxTemplate,
   sandboxDisplayName,
 } from "@multica/core/sandboxes/utils";
 import type { SandboxBinding, SandboxInstance } from "@multica/core/types";
@@ -62,6 +68,8 @@ type NodeDetailTab = "sandboxes" | "templates";
 type CreateFormState = {
   name: string;
   nodeId: string;
+  /** "default" = node configured template; otherwise an explicit Cube template id. */
+  templateId: string;
   apiKey: string;
   baseUrl: string;
   model: string;
@@ -71,6 +79,7 @@ function buildDefaultCreateForm(nodeId: string): CreateFormState {
   return {
     name: defaultSandboxName(),
     nodeId,
+    templateId: "default",
     apiKey: "",
     baseUrl: "",
     model: "",
@@ -184,6 +193,17 @@ export function SandboxesPage() {
   const resume = useResumeSandboxMutation(wsId);
   const del = useDeleteSandboxMutation(wsId);
 
+  const createTemplatesQuery = useQuery({
+    ...sandboxNodeTemplatesOptions(createForm.nodeId),
+    enabled: createDialogOpen && !!createForm.nodeId,
+  });
+  const createDefaultTemplateId = createTemplatesQuery.data?.default_template_id?.trim() ?? "";
+  const createTemplateOptions = useMemo(() => {
+    const templates = createTemplatesQuery.data?.templates ?? [];
+    if (!createDefaultTemplateId) return templates;
+    return templates.filter((item) => item.template_id !== createDefaultTemplateId);
+  }, [createTemplatesQuery.data?.templates, createDefaultTemplateId]);
+
   const openCreateDialog = () => {
     setCreateForm(buildDefaultCreateForm(selectedBinding?.node_id ?? connectedBindings[0]?.node_id ?? ""));
     setCreateDialogOpen(true);
@@ -212,7 +232,7 @@ export function SandboxesPage() {
       await create.mutateAsync({
         name: createForm.name.trim(),
         node_id: createForm.nodeId,
-        template: "default",
+        template: resolveCreateSandboxTemplate(createForm.templateId),
         ...(Object.keys(runtime).length > 0 ? { runtime } : {}),
       });
       setCreateDialogOpen(false);
@@ -343,12 +363,18 @@ export function SandboxesPage() {
               <Label>{t(($) => $.sandboxes_page.node_label)}</Label>
               <Select
                 value={createForm.nodeId}
-                onValueChange={(value) => setCreateForm((current) => ({ ...current, nodeId: value ?? "" }))}
+                onValueChange={(value) =>
+                  setCreateForm((current) => ({
+                    ...current,
+                    nodeId: value ?? "",
+                    templateId: "default",
+                  }))
+                }
               >
-                <SelectTrigger>
+                <SelectTrigger className="h-9 w-full min-w-0">
                   <SelectValue placeholder={t(($) => $.sandboxes_page.select_node_placeholder)} />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent alignItemWithTrigger className="min-w-(--anchor-width)">
                   {connectedBindings.map((binding) => (
                     <SelectItem key={binding.id} value={binding.node_id}>
                       {binding.node_name} ({binding.node_status})
@@ -356,6 +382,47 @@ export function SandboxesPage() {
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>{t(($) => $.sandboxes_page.create_template_label)}</Label>
+              {createTemplatesQuery.isLoading ? (
+                <Skeleton className="h-9 w-full" />
+              ) : (
+                <Select
+                  value={createForm.templateId}
+                  onValueChange={(value) =>
+                    setCreateForm((current) => ({ ...current, templateId: value ?? "default" }))
+                  }
+                >
+                  <SelectTrigger className="h-9 w-full min-w-0">
+                    <SelectValue placeholder={t(($) => $.sandboxes_page.create_template_placeholder)} />
+                  </SelectTrigger>
+                  <SelectContent alignItemWithTrigger className="min-w-(--anchor-width)">
+                    <SelectItem value="default">
+                      {createDefaultTemplateId
+                        ? t(($) => $.sandboxes_page.create_template_default_option, {
+                            id: createDefaultTemplateId,
+                          })
+                        : t(($) => $.sandboxes_page.create_template_default_option_unset)}
+                    </SelectItem>
+                    {createTemplateOptions.map((template) => (
+                      <SelectItem key={template.template_id} value={template.template_id}>
+                        <span className="font-mono text-xs">{template.template_id}</span>
+                        {template.status ? (
+                          <span className="ml-2 text-muted-foreground">({template.status})</span>
+                        ) : null}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+              {createTemplatesQuery.error ? (
+                <p className="text-xs text-destructive">
+                  {createTemplatesQuery.error instanceof Error
+                    ? createTemplatesQuery.error.message
+                    : t(($) => $.sandboxes_page.templates_load_failed)}
+                </p>
+              ) : null}
             </div>
             <div className="space-y-3">
               <div className="text-sm font-medium">{t(($) => $.sandboxes_page.runtime_model_title)}</div>

@@ -21,6 +21,7 @@ import {
   WandSparkles,
 } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import i18next from "i18next";
 import { toast } from "sonner";
 import { api } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -82,6 +83,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@multica/ui/components
 import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { PageHeader } from "../../layout/page-header";
+import { useT } from "../../i18n";
 import { AppLink } from "../../navigation";
 import {
   aggregateAgentTokens,
@@ -114,6 +116,7 @@ const COPY = {
   costEfficiency: "Cost efficiency",
   successRate: "Success rate",
   tasks: "Tasks",
+  issues: "Issues",
   cost: "Cost",
   costPerSuccess: "Cost / success",
   learned: "Learned",
@@ -204,7 +207,24 @@ const COPY = {
   dryRun: "Dry run",
   queueRun: "Queue run",
   runQueued: "Curation run queued",
+  saveProfileForStage: "Save the profile to enable this run stage.",
   selfReviewLabel: "Agent self-review",
+  teamCurationLabel: "Team curation",
+  selectRuntime: "Select runtime",
+  selectCuratorAgent: "Select curator agent",
+  modelOverride: "Model override",
+  runtimeDefault: "Runtime default",
+  confidenceThresholdLabel: "Confidence threshold",
+  activeAgentSelfReview: "Active agent self-review",
+  dailyReviewProposalFiles: "Daily, review, and proposal files",
+  teamPromotion: "Team promotion",
+  dedupedTeamKnowledge: "Deduped team knowledge and shared skills",
+  stageStatus: "Status",
+  curator: "Curator",
+  threshold: "Threshold",
+  promotedSharedUnits: "Promoted shared units",
+  teamItems: "team items",
+  conflicts: "conflicts",
   curationRunSelectHint: "Select a curation run to inspect runtime, timeline, per-agent results, and artifacts.",
   curationRunDetail: "Curation run detail",
   diagnosticAction: "Action",
@@ -229,6 +249,11 @@ const COPY = {
   skills: "Skills",
 };
 
+function copy(key: keyof typeof COPY): string {
+  const translate = i18next.t.bind(i18next) as (key: string, options: { defaultValue: string }) => string;
+  return translate(`evolution:${key}`, { defaultValue: COPY[key] });
+}
+
 const STATUSES = [
   "needs_review",
   "candidate",
@@ -250,12 +275,12 @@ const EMPTY_USAGE_BY_AGENT: DashboardUsageByAgent[] = [];
 const EMPTY_SUBMISSIONS: EvolutionReviewSubmission[] = [];
 const EMPTY_UNIT_METRICS: EvolutionUnitMetric[] = [];
 const MEMORY_CURATION_STAGE_LABELS = {
-  selfReview: "Self-review",
-  teamCuration: "Team curation",
+  selfReview: "selfReviewLabel",
+  teamCuration: "teamCurationLabel",
 } as const;
 const MEMORY_CURATION_STAGES = [
-  ["agent_self_review", MEMORY_CURATION_STAGE_LABELS.selfReview, "01:00", "Active agent self-review", "Daily, review, and proposal files"],
-  ["team_curation", MEMORY_CURATION_STAGE_LABELS.teamCuration, "02:00", "Team promotion", "Deduped team knowledge and shared skills"],
+  ["agent_self_review", MEMORY_CURATION_STAGE_LABELS.selfReview, "01:00", "activeAgentSelfReview", "dailyReviewProposalFiles"],
+  ["team_curation", MEMORY_CURATION_STAGE_LABELS.teamCuration, "02:00", "teamPromotion", "dedupedTeamKnowledge"],
 ] as const;
 
 type AgentEvolutionRow = {
@@ -313,36 +338,37 @@ function isMemoryLikeUnitType(value: string): boolean {
 
 function unitLabel(value: string): string {
   const normalized = normalizeUnitType(value);
-  if (normalized === "memory") return COPY.memory;
-  if (normalized === "skill") return COPY.skill;
-  if (normalized === "workflow") return COPY.workflow;
-  if (normalized === "preference") return COPY.preference;
-  return value || COPY.all;
+  if (normalized === "memory") return copy("memory");
+  if (normalized === "skill") return copy("skill");
+  if (normalized === "workflow") return copy("workflow");
+  if (normalized === "preference") return copy("preference");
+  return value || copy("all");
 }
 
 function statusLabel(value: string): string {
-  if (value === "promoted") return COPY.promoted;
-  if (value === "rejected") return COPY.rejected;
-  if (value === "candidate") return COPY.candidates;
-  return COPY.pending;
+  if (value === "promoted") return copy("promoted");
+  if (value === "rejected") return copy("rejected");
+  if (value === "candidate") return copy("candidates");
+  return copy("pending");
 }
 
 function curationStatusLabel(value: string | undefined): string {
-  if (value === "running" || value === "queued") return COPY.running;
-  if (value === "succeeded") return COPY.succeeded;
-  if (value === "failed") return COPY.failed;
-  return COPY.notRun;
+  if (value === "running" || value === "queued") return copy("running");
+  if (value === "succeeded") return copy("succeeded");
+  if (value === "failed") return copy("failed");
+  return copy("notRun");
 }
 
 function curationStageLabel(value: string): string {
   if (value === "all") return "ALL";
-  return MEMORY_CURATION_STAGES.find(([stage]) => stage === value)?.[1] ?? value;
+  const stageKey = MEMORY_CURATION_STAGES.find(([stage]) => stage === value)?.[1];
+  return stageKey ? copy(stageKey) : value;
 }
 
 function formatRunTime(value: string | null | undefined): string {
-  if (!value) return COPY.notRun;
+  if (!value) return copy("notRun");
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return COPY.notRun;
+  if (Number.isNaN(date.getTime())) return copy("notRun");
   return RUN_TIME_FORMATTER.format(date);
 }
 
@@ -415,6 +441,7 @@ function buildAgentRows(
 }
 
 export function EvolutionCenterPage() {
+  useT("evolution");
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
   const { userId } = useCurrentMember(wsId);
@@ -514,29 +541,29 @@ export function EvolutionCenterPage() {
   ).length;
   const promotedSharedMemory = memorySubmissions.filter((item) => item.status === "promoted").length;
   const curationHealth = curationStatusUnavailable
-    ? COPY.unavailable
+    ? copy("unavailable")
     : (curationStatus?.pending_runs ?? 0) > 0
-      ? COPY.running
+      ? copy("running")
       : (curationStatus?.failed_runs_24h ?? 0) > 0
-        ? COPY.attention
+        ? copy("attention")
         : latestStage
-          ? COPY.healthy
-          : COPY.notRun;
+          ? copy("healthy")
+          : copy("notRun");
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-[radial-gradient(circle_at_top_left,hsl(var(--brand)/0.18),transparent_28rem),linear-gradient(135deg,hsl(var(--background)),hsl(var(--muted)/0.35))]">
       <PageHeader className="justify-between border-border/60 bg-background/70 backdrop-blur-xl">
         <div className="flex items-center gap-2">
           <Sparkles className="h-4 w-4 text-brand" />
-          <h1 className="text-sm font-medium">{COPY.title}</h1>
-          <Badge variant="secondary" className="hidden md:inline-flex">{COPY.liveSystem}</Badge>
+          <h1 className="text-sm font-medium">{copy("title")}</h1>
+          <Badge variant="secondary" className="hidden md:inline-flex">{copy("liveSystem")}</Badge>
         </div>
         <div className="hidden items-center gap-2 sm:flex">
           <AppLink href={paths.agents()} className={buttonVariants({ variant: "outline", size: "sm" })}>
-            {COPY.openAgents}
+            {copy("openAgents")}
           </AppLink>
           <AppLink href={paths.skills()} className={buttonVariants({ size: "sm", className: "gap-1.5" })}>
-            {COPY.runReview}<ArrowUpRight className="h-3.5 w-3.5" />
+            {copy("runReview")}<ArrowUpRight className="h-3.5 w-3.5" />
           </AppLink>
         </div>
       </PageHeader>
@@ -549,39 +576,39 @@ export function EvolutionCenterPage() {
             <div className="absolute bottom-0 left-1/2 h-40 w-[32rem] -translate-x-1/2 rounded-t-full bg-white/10 blur-3xl" />
             <div className="relative grid gap-8 p-6 md:grid-cols-[1.2fr_.8fr] md:p-8">
               <div className="space-y-5">
-                <Badge className="bg-white/15 text-white ring-1 ring-white/20">{COPY.eyebrow}</Badge>
+                <Badge className="bg-white/15 text-white ring-1 ring-white/20">{copy("eyebrow")}</Badge>
                 <div className="max-w-3xl space-y-3">
-                  <h2 className="text-3xl font-semibold tracking-tight text-white md:text-5xl">{COPY.heroTitle}</h2>
-                  <p className="max-w-2xl text-sm leading-6 text-white/72 md:text-base">{COPY.heroBody}</p>
+                  <h2 className="text-3xl font-semibold tracking-tight text-white md:text-5xl">{copy("heroTitle")}</h2>
+                  <p className="max-w-2xl text-sm leading-6 text-white/72 md:text-base">{copy("heroBody")}</p>
                 </div>
                 <div className="grid max-w-3xl gap-3 sm:grid-cols-3">
-                  <SignalPill icon={ShieldCheck} label={COPY.protected} value={COPY.review} />
-                  <SignalPill icon={WandSparkles} label={COPY.autoDrafts} value={COPY.skillDrafts} />
-                  <SignalPill icon={GitBranch} label={COPY.privateScope} value={COPY.curated} />
+                  <SignalPill icon={ShieldCheck} label={copy("protected")} value={copy("review")} />
+                  <SignalPill icon={WandSparkles} label={copy("autoDrafts")} value={copy("skillDrafts")} />
+                  <SignalPill icon={GitBranch} label={copy("privateScope")} value={copy("curated")} />
                 </div>
               </div>
               <div className="grid content-end gap-3">
-                <HeroMetric label={COPY.tasks} value={String(totals.taskCount)} detail={COPY.thirtyDays} />
-                <HeroMetric label={COPY.successRate} value={pct(totals.successRate)} detail={`${totals.failedCount} ${COPY.failures.toLowerCase()}`} />
-                <HeroMetric label={COPY.cost} value={money(totals.cost)} detail={`${totals.pending} ${COPY.pending.toLowerCase()}`} />
+                <HeroMetric label={copy("tasks")} value={String(totals.taskCount)} detail={copy("thirtyDays")} />
+                <HeroMetric label={copy("successRate")} value={pct(totals.successRate)} detail={`${totals.failedCount} ${copy("failures").toLowerCase()}`} />
+                <HeroMetric label={copy("cost")} value={money(totals.cost)} detail={`${totals.pending} ${copy("pending").toLowerCase()}`} />
               </div>
             </div>
           </section>
 
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <MetricCard icon={Bot} label={COPY.starAgents} value={String(topAgents.length)} detail={topAgents[0]?.agent.display_name ?? topAgents[0]?.agent.name ?? COPY.noAgents} tone="emerald" />
-            <MetricCard icon={BrainCircuit} label={COPY.memoryReview} value={String(totals.memoryItems)} detail={`${totals.pending} ${COPY.pending.toLowerCase()}`} tone="blue" />
-            <MetricCard icon={Lightbulb} label={COPY.skillDrafts} value={String(totals.skillDrafts)} detail={COPY.autoDrafts} tone="amber" />
-            <MetricCard icon={CircleDollarSign} label={COPY.costEfficiency} value={money(totals.cost / Math.max(1, totals.taskCount - totals.failedCount))} detail={COPY.costPerSuccess} tone="rose" />
+            <MetricCard icon={Bot} label={copy("starAgents")} value={String(topAgents.length)} detail={topAgents[0]?.agent.display_name ?? topAgents[0]?.agent.name ?? copy("noAgents")} tone="emerald" />
+            <MetricCard icon={BrainCircuit} label={copy("memoryReview")} value={String(totals.memoryItems)} detail={`${totals.pending} ${copy("pending").toLowerCase()}`} tone="blue" />
+            <MetricCard icon={Lightbulb} label={copy("skillDrafts")} value={String(totals.skillDrafts)} detail={copy("autoDrafts")} tone="amber" />
+            <MetricCard icon={CircleDollarSign} label={copy("costEfficiency")} value={money(totals.cost / Math.max(1, totals.taskCount - totals.failedCount))} detail={copy("costPerSuccess")} tone="rose" />
           </div>
 
           <Tabs defaultValue="overview" className="gap-4">
             <TabsList className="w-full justify-start overflow-x-auto bg-background/70 p-1 shadow-sm backdrop-blur md:w-fit">
-              <TabsTrigger value="overview" className="px-3">{COPY.tabOverview}</TabsTrigger>
-              <TabsTrigger value="agents" className="px-3">{COPY.tabAgents}</TabsTrigger>
-              <TabsTrigger value="learning" className="px-3">{COPY.tabLearning}</TabsTrigger>
-              <TabsTrigger value="memory" className="px-3">{COPY.tabMemory}</TabsTrigger>
-              <TabsTrigger value="ops" className="px-3">{COPY.tabOps}</TabsTrigger>
+              <TabsTrigger value="overview" className="px-3">{copy("tabOverview")}</TabsTrigger>
+              <TabsTrigger value="agents" className="px-3">{copy("tabAgents")}</TabsTrigger>
+              <TabsTrigger value="learning" className="px-3">{copy("tabLearning")}</TabsTrigger>
+              <TabsTrigger value="memory" className="px-3">{copy("tabMemory")}</TabsTrigger>
+              <TabsTrigger value="ops" className="px-3">{copy("tabOps")}</TabsTrigger>
             </TabsList>
 
             <TabsContent value="overview" className="grid gap-4 md:grid-cols-2">
@@ -631,19 +658,19 @@ export function EvolutionCenterPage() {
             <TabsContent value="ops" className="grid gap-4 lg:grid-cols-3">
               <OpsCard
                 icon={RefreshCw}
-                title={COPY.lastRun}
-                value={latestStage ? `${curationStageLabel(latestStage.stage)} · ${formatRunTime(latestStage.finished_at ?? latestStage.created_at)}` : COPY.notRun}
-                detail={latestStage ? `${latestStage.stats.agents_scanned} ${COPY.agentsProcessed} · ${latestStage.stats.agents_changed} ${COPY.agentsChanged}` : COPY.memoryOpsHint}
+                title={copy("lastRun")}
+                value={latestStage ? `${curationStageLabel(latestStage.stage)} · ${formatRunTime(latestStage.finished_at ?? latestStage.created_at)}` : copy("notRun")}
+                detail={latestStage ? `${latestStage.stats.agents_scanned} ${copy("agentsProcessed")} · ${latestStage.stats.agents_changed} ${copy("agentsChanged")}` : copy("memoryOpsHint")}
                 status={curationHealth}
               />
               <OpsCard
                 icon={ShieldCheck}
-                title={COPY.review}
-                value={COPY.protected}
-                detail={`${sharedMemoryCandidates} ${COPY.sharedCandidates.toLowerCase()} · ${curationStatus?.failed_runs_24h ?? 0} ${COPY.failures.toLowerCase()}`}
-                status={(curationStatus?.failed_runs_24h ?? 0) > 0 ? COPY.attention : COPY.healthy}
+                title={copy("review")}
+                value={copy("protected")}
+                detail={`${sharedMemoryCandidates} ${copy("sharedCandidates").toLowerCase()} · ${curationStatus?.failed_runs_24h ?? 0} ${copy("failures").toLowerCase()}`}
+                status={(curationStatus?.failed_runs_24h ?? 0) > 0 ? copy("attention") : copy("healthy")}
               />
-              <OpsCard icon={LineChart} title={COPY.projected} value={`${totals.memoryUsed}/${totals.skillUsed}`} detail={COPY.successSignals} status={totals.memoryUsed + totals.skillUsed > 0 ? COPY.healthy : COPY.attention} />
+              <OpsCard icon={LineChart} title={copy("projected")} value={`${totals.memoryUsed}/${totals.skillUsed}`} detail={copy("successSignals")} status={totals.memoryUsed + totals.skillUsed > 0 ? copy("healthy") : copy("attention")} />
               <ProcessCard
                 stageByName={stageByName}
                 sharedCandidates={sharedMemoryCandidates}
@@ -718,14 +745,14 @@ function LearningPulseCard({ submissions }: { submissions: EvolutionReviewSubmis
   return (
     <Card className="bg-background/85 backdrop-blur">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2"><BrainCircuit className="h-4 w-4 text-brand" />{COPY.learningQueue}</CardTitle>
-        <p className="text-sm text-muted-foreground">{COPY.learningQueueHint}</p>
+        <CardTitle className="flex items-center gap-2"><BrainCircuit className="h-4 w-4 text-brand" />{copy("learningQueue")}</CardTitle>
+        <p className="text-sm text-muted-foreground">{copy("learningQueueHint")}</p>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid grid-cols-3 gap-2">
-          <MiniStat label={COPY.memory} value={String(memory)} />
-          <MiniStat label={COPY.skill} value={String(skill)} />
-          <MiniStat label={COPY.promoted} value={String(promoted)} />
+          <MiniStat label={copy("memory")} value={String(memory)} />
+          <MiniStat label={copy("skill")} value={String(skill)} />
+          <MiniStat label={copy("promoted")} value={String(promoted)} />
         </div>
         <div className="space-y-2">
           <Progress value={(memory / total) * 100} className="h-2" />
@@ -733,8 +760,8 @@ function LearningPulseCard({ submissions }: { submissions: EvolutionReviewSubmis
           <Progress value={(promoted / total) * 100} className="h-2 opacity-40" />
         </div>
         <div className="space-y-2 text-sm text-muted-foreground">
-          <InsightLine icon={CheckCircle2} text={COPY.insight1} />
-          <InsightLine icon={ShieldCheck} text={COPY.insight2} />
+          <InsightLine icon={CheckCircle2} text={copy("insight1")} />
+          <InsightLine icon={ShieldCheck} text={copy("insight2")} />
         </div>
       </CardContent>
     </Card>
@@ -745,15 +772,15 @@ function CoachingCard({ rows }: { rows: AgentEvolutionRow[] }) {
   return (
     <Card className="bg-background/85 backdrop-blur">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2"><Activity className="h-4 w-4 text-rose-500" />{COPY.needsCoaching}</CardTitle>
+        <CardTitle className="flex items-center gap-2"><Activity className="h-4 w-4 text-rose-500" />{copy("needsCoaching")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
-        {rows.length === 0 ? <EmptyState text={COPY.noAgents} /> : rows.map((row) => (
+        {rows.length === 0 ? <EmptyState text={copy("noAgents")} /> : rows.map((row) => (
           <div key={row.agent.id} className="flex items-center gap-3 rounded-2xl border bg-muted/20 p-3">
             <ActorAvatar actorType="agent" actorId={row.agent.id} size={30} showStatusDot />
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-medium">{row.agent.display_name || row.agent.name}</div>
-              <div className="text-xs text-muted-foreground">{row.failedCount} {COPY.failures.toLowerCase()} {"·"} {money(row.cost)} {COPY.cost.toLowerCase()}</div>
+              <div className="text-xs text-muted-foreground">{row.failedCount} {copy("failures").toLowerCase()} {"·"} {money(row.cost)} {copy("cost").toLowerCase()}</div>
             </div>
             <Badge variant={row.failedCount > 0 ? "destructive" : "outline"}>{pct(row.successRate)}</Badge>
           </div>
@@ -767,20 +794,20 @@ function AgentTable({ rows, loading }: { rows: AgentEvolutionRow[]; loading: boo
   return (
     <Card className="bg-background/85 backdrop-blur">
       <CardHeader>
-        <CardTitle>{COPY.agentTable}</CardTitle>
+        <CardTitle>{copy("agentTable")}</CardTitle>
       </CardHeader>
       <CardContent className="overflow-x-auto">
         {loading ? <LeaderboardSkeleton /> : (
           <table className="w-full min-w-[920px] text-sm">
             <thead className="text-left text-xs uppercase tracking-wider text-muted-foreground">
               <tr className="border-b">
-                <th className="pb-3 font-medium">{COPY.agentColumn}</th>
-                <th className="pb-3 font-medium">{COPY.tasks}</th>
-                <th className="pb-3 font-medium">{COPY.successRate}</th>
-                <th className="pb-3 font-medium">{COPY.cost}</th>
-                <th className="pb-3 font-medium">{COPY.costPerSuccess}</th>
-                <th className="pb-3 font-medium">{COPY.learned}</th>
-                <th className="pb-3 font-medium">{COPY.runtime}</th>
+                <th className="pb-3 font-medium">{copy("agentColumn")}</th>
+                <th className="pb-3 font-medium">{copy("tasks")}</th>
+                <th className="pb-3 font-medium">{copy("successRate")}</th>
+                <th className="pb-3 font-medium">{copy("cost")}</th>
+                <th className="pb-3 font-medium">{copy("costPerSuccess")}</th>
+                <th className="pb-3 font-medium">{copy("learned")}</th>
+                <th className="pb-3 font-medium">{copy("runtime")}</th>
               </tr>
             </thead>
             <tbody>
@@ -815,17 +842,17 @@ function LearningSummaryCard({ totals }: { totals: { pending: number; promoted: 
   return (
     <Card className="bg-background/85 backdrop-blur">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2"><Lightbulb className="h-4 w-4 text-amber-500" />{COPY.learningQueue}</CardTitle>
+        <CardTitle className="flex items-center gap-2"><Lightbulb className="h-4 w-4 text-amber-500" />{copy("learningQueue")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid grid-cols-2 gap-3">
-          <MiniStat label={COPY.pending} value={String(totals.pending)} />
-          <MiniStat label={COPY.promoted} value={String(totals.promoted)} />
-          <MiniStat label={COPY.memory} value={String(totals.memoryItems)} />
-          <MiniStat label={COPY.skill} value={String(totals.skillDrafts)} />
+          <MiniStat label={copy("pending")} value={String(totals.pending)} />
+          <MiniStat label={copy("promoted")} value={String(totals.promoted)} />
+          <MiniStat label={copy("memory")} value={String(totals.memoryItems)} />
+          <MiniStat label={copy("skill")} value={String(totals.skillDrafts)} />
         </div>
         <div className="rounded-2xl border bg-muted/30 p-4 text-sm text-muted-foreground">
-          {COPY.insight1}
+          {copy("insight1")}
         </div>
       </CardContent>
     </Card>
@@ -838,18 +865,18 @@ function LearningQueueCard({ submissions, filter, onFilterChange }: { submission
       <CardHeader>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <CardTitle className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-brand" />{COPY.learningQueue}</CardTitle>
-            <p className="mt-1 text-sm text-muted-foreground">{COPY.learningQueueHint}</p>
+            <CardTitle className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-brand" />{copy("learningQueue")}</CardTitle>
+            <p className="mt-1 text-sm text-muted-foreground">{copy("learningQueueHint")}</p>
           </div>
           <div className="inline-flex rounded-lg bg-muted p-1">
             {(["all", "memory", "skill"] as const).map((value) => (
-              <button key={value} type="button" onClick={() => onFilterChange(value)} className={cn("rounded-md px-3 py-1 text-xs font-medium", filter === value ? "bg-background shadow-sm" : "text-muted-foreground")}>{value === "all" ? COPY.all : value === "memory" ? COPY.memory : COPY.skill}</button>
+              <button key={value} type="button" onClick={() => onFilterChange(value)} className={cn("rounded-md px-3 py-1 text-xs font-medium", filter === value ? "bg-background shadow-sm" : "text-muted-foreground")}>{value === "all" ? copy("all") : value === "memory" ? copy("memory") : copy("skill")}</button>
             ))}
           </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
-        {submissions.length === 0 ? <EmptyState text={COPY.noCandidates} /> : submissions.slice(0, 8).map((submission) => <SubmissionCard key={submission.id} submission={submission} />)}
+        {submissions.length === 0 ? <EmptyState text={copy("noCandidates")} /> : submissions.slice(0, 8).map((submission) => <SubmissionCard key={submission.id} submission={submission} />)}
       </CardContent>
     </Card>
   );
@@ -874,9 +901,9 @@ function SubmissionCard({ submission }: { submission: EvolutionReviewSubmission 
         </div>
       </div>
       <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
-        <span>{COPY.sensitivity}: {submission.sensitivity || "—"}</span>
+        <span>{copy("sensitivity")}: {submission.sensitivity || "—"}</span>
         <span>{"·"}</span>
-        <span>{COPY.source}: {submission.bundle_ref || shortId(submission.local_unit_id)}</span>
+        <span>{copy("source")}: {submission.bundle_ref || shortId(submission.local_unit_id)}</span>
       </div>
     </div>
   );
@@ -942,6 +969,16 @@ function CuratorProfileCard({
   const configured = !!profile?.id && !!profile.runtime_id && !!profile.curator_agent_id;
   const draftTargetsValid = draft.targetScope !== "selected" || draft.targetAgentIds.length > 0;
   const configuredTargetsValid = profile?.target_scope !== "selected" || (profile.target_agent_ids?.length ?? 0) > 0;
+  const selfReviewRunnable = profile?.self_review_enabled === true;
+  const teamCurationRunnable = profile?.team_curation_enabled === true;
+  const effectiveRunStage = runStage === "all" && !(selfReviewRunnable && teamCurationRunnable)
+    ? selfReviewRunnable ? "agent_self_review" : teamCurationRunnable ? "team_curation" : runStage
+    : runStage === "team_curation" && !teamCurationRunnable && selfReviewRunnable
+      ? "agent_self_review"
+      : runStage === "agent_self_review" && !selfReviewRunnable && teamCurationRunnable
+        ? "team_curation"
+        : runStage;
+  const runStageEnabled = effectiveRunStage === "agent_self_review" ? selfReviewRunnable : effectiveRunStage === "team_curation" ? teamCurationRunnable : selfReviewRunnable && teamCurationRunnable;
 
   const save = useMutation({
     mutationFn: () => api.updateMemoryCuratorProfile(wsId, {
@@ -960,29 +997,29 @@ function CuratorProfileCard({
       confidence_threshold: draft.confidenceThreshold,
     }),
     onSuccess: async () => {
-      toast.success(COPY.profileSaved);
+      toast.success(copy("profileSaved"));
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: evolutionKeys.memoryCuratorProfile(wsId) }),
         queryClient.invalidateQueries({ queryKey: evolutionKeys.memoryCurationStatus(wsId) }),
       ]);
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : COPY.configureProfile),
+    onError: (error) => toast.error(error instanceof Error ? error.message : copy("configureProfile")),
   });
   const run = useMutation({
     mutationFn: () => api.startMemoryCurationRun(wsId, {
       all_agents: profile?.target_scope !== "selected",
       agent_ids: profile?.target_scope === "selected" ? profile.target_agent_ids : undefined,
-      stage: runStage,
+      stage: effectiveRunStage,
       dry_run: dryRun,
     }),
     onSuccess: async () => {
-      toast.success(COPY.runQueued);
+      toast.success(copy("runQueued"));
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: evolutionKeys.memoryCuratorProfile(wsId) }),
         queryClient.invalidateQueries({ queryKey: evolutionKeys.memoryCurationStatus(wsId) }),
       ]);
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : COPY.configureProfile),
+    onError: (error) => toast.error(error instanceof Error ? error.message : copy("configureProfile")),
   });
 
   const toggleTarget = (agentId: string, checked: boolean) => {
@@ -1000,47 +1037,47 @@ function CuratorProfileCard({
       <CardHeader>
         <div className="flex items-start justify-between gap-3">
           <div>
-            <CardTitle className="flex items-center gap-2"><BrainCircuit className="h-4 w-4 text-brand" />{COPY.curatorProfile}</CardTitle>
-            <p className="mt-1 text-sm text-muted-foreground">{COPY.curatorProfileHint}</p>
+            <CardTitle className="flex items-center gap-2"><BrainCircuit className="h-4 w-4 text-brand" />{copy("curatorProfile")}</CardTitle>
+            <p className="mt-1 text-sm text-muted-foreground">{copy("curatorProfileHint")}</p>
           </div>
           <div className="flex items-center gap-2">
-            <Label htmlFor="curator-enabled" className="text-xs">{COPY.automatic}</Label>
+            <Label htmlFor="curator-enabled" className="text-xs">{copy("automatic")}</Label>
             <Switch id="curator-enabled" checked={draft.teamCurationEnabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, teamCurationEnabled: checked, enabled: checked }))} />
           </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-5">
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label={COPY.runtime}>
+          <Field label={copy("runtime")}>
             <Select value={draft.runtimeId} onValueChange={(value) => setDraft((current) => ({ ...current, runtimeId: value ?? "", curatorAgentId: "" }))}>
-              <SelectTrigger className="w-full"><SelectValue placeholder="Select runtime" /></SelectTrigger>
+              <SelectTrigger className="w-full"><SelectValue placeholder={copy("selectRuntime")} /></SelectTrigger>
               <SelectContent>{availableRuntimes.map((runtime) => <SelectItem key={runtime.id} value={runtime.id}>{runtime.name} · {runtime.status}</SelectItem>)}</SelectContent>
             </Select>
           </Field>
-          <Field label={COPY.curatorAgent}>
+          <Field label={copy("curatorAgent")}>
             <Select value={draft.curatorAgentId} onValueChange={(value) => setDraft((current) => ({ ...current, curatorAgentId: value ?? "" }))}>
-              <SelectTrigger className="w-full"><SelectValue placeholder="Select curator agent" /></SelectTrigger>
+              <SelectTrigger className="w-full"><SelectValue placeholder={copy("selectCuratorAgent")} /></SelectTrigger>
               <SelectContent>{curatorAgents.map((agent) => <SelectItem key={agent.id} value={agent.id}>{agent.display_name || agent.name}</SelectItem>)}</SelectContent>
             </Select>
           </Field>
-          <Field label={COPY.mode}>
+          <Field label={copy("mode")}>
             <Select value={draft.mode} onValueChange={(value) => value && setDraft((current) => ({ ...current, mode: value as MemoryCuratorMode }))}>
               <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="observe">{COPY.observeOnly}</SelectItem><SelectItem value="review">{COPY.manualReview}</SelectItem><SelectItem value="auto_safe">{COPY.autoSafe}</SelectItem><SelectItem value="auto">{COPY.fullAuto}</SelectItem>
+                <SelectItem value="observe">{copy("observeOnly")}</SelectItem><SelectItem value="review">{copy("manualReview")}</SelectItem><SelectItem value="auto_safe">{copy("autoSafe")}</SelectItem><SelectItem value="auto">{copy("fullAuto")}</SelectItem>
               </SelectContent>
             </Select>
           </Field>
-          <Field label={COPY.targetAgents}>
+          <Field label={copy("targetAgents")}>
             <Select value={draft.targetScope} onValueChange={(value) => value && setDraft((current) => ({ ...current, targetScope: value as MemoryCuratorTargetScope }))}>
               <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-              <SelectContent><SelectItem value="owned_all">{COPY.allMyAgents}</SelectItem><SelectItem value="selected">{COPY.selectedAgents}</SelectItem></SelectContent>
+              <SelectContent><SelectItem value="owned_all">{copy("allMyAgents")}</SelectItem><SelectItem value="selected">{copy("selectedAgents")}</SelectItem></SelectContent>
             </Select>
           </Field>
-          <Field label={COPY.timezone}><Input value={draft.timezone} onChange={(event) => setDraft((current) => ({ ...current, timezone: event.target.value }))} /></Field>
-          <Field label={COPY.schedule}><Input type="number" min={0} max={23} value={draft.scheduleHour} onChange={(event) => setDraft((current) => ({ ...current, scheduleHour: Number(event.target.value) }))} /></Field>
-          <Field label="Model override"><Input value={draft.modelOverride} placeholder="Runtime default" onChange={(event) => setDraft((current) => ({ ...current, modelOverride: event.target.value }))} /></Field>
-          <Field label="Confidence threshold"><Input type="number" min={0} max={1} step={0.05} value={draft.confidenceThreshold} onChange={(event) => setDraft((current) => ({ ...current, confidenceThreshold: Number(event.target.value) }))} /></Field>
+          <Field label={copy("timezone")}><Input value={draft.timezone} onChange={(event) => setDraft((current) => ({ ...current, timezone: event.target.value }))} /></Field>
+          <Field label={copy("schedule")}><Input type="number" min={0} max={23} value={draft.scheduleHour} onChange={(event) => setDraft((current) => ({ ...current, scheduleHour: Number(event.target.value) }))} /></Field>
+          <Field label={copy("modelOverride")}><Input value={draft.modelOverride} placeholder={copy("runtimeDefault")} onChange={(event) => setDraft((current) => ({ ...current, modelOverride: event.target.value }))} /></Field>
+          <Field label={copy("confidenceThresholdLabel")}><Input type="number" min={0} max={1} step={0.05} value={draft.confidenceThreshold} onChange={(event) => setDraft((current) => ({ ...current, confidenceThreshold: Number(event.target.value) }))} /></Field>
         </div>
         {draft.targetScope === "selected" && (
           <div className="grid gap-2 rounded-2xl border bg-muted/20 p-3 sm:grid-cols-2">
@@ -1053,17 +1090,17 @@ function CuratorProfileCard({
           </div>
         )}
         <div className="flex flex-wrap items-center gap-4">
-          <Label htmlFor="self-review-enabled" className="flex items-center gap-2 text-xs"><Checkbox id="self-review-enabled" checked={draft.selfReviewEnabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, selfReviewEnabled: checked === true }))} />{COPY.selfReviewLabel}</Label>
-          <Label htmlFor="curator-catch-up" className="flex items-center gap-2 text-xs"><Checkbox id="curator-catch-up" checked={draft.catchUpEnabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, catchUpEnabled: checked === true }))} />{COPY.catchUp}</Label>
-          <Button onClick={() => save.mutate()} disabled={save.isPending || !draft.runtimeId || !draft.curatorAgentId || !draftTargetsValid} className="gap-2"><Save className="h-4 w-4" />{COPY.saveProfile}</Button>
+          <Label htmlFor="self-review-enabled" className="flex items-center gap-2 text-xs"><Checkbox id="self-review-enabled" checked={draft.selfReviewEnabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, selfReviewEnabled: checked === true }))} />{copy("selfReviewLabel")}</Label>
+          <Label htmlFor="curator-catch-up" className="flex items-center gap-2 text-xs"><Checkbox id="curator-catch-up" checked={draft.catchUpEnabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, catchUpEnabled: checked === true }))} />{copy("catchUp")}</Label>
+          <Button onClick={() => save.mutate()} disabled={save.isPending || !draft.runtimeId || !draft.curatorAgentId || !draftTargetsValid} className="gap-2"><Save className="h-4 w-4" />{copy("saveProfile")}</Button>
         </div>
         <div className="rounded-2xl border bg-muted/20 p-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-            <div><div className="text-sm font-medium">{COPY.manualRun}</div><p className="mt-1 text-xs text-muted-foreground">{COPY.manualRunHint}</p></div>
+            <div><div className="text-sm font-medium">{copy("manualRun")}</div><p className="mt-1 text-xs text-muted-foreground">{copy("manualRunHint")}</p></div>
             <div className="flex flex-wrap items-center gap-2">
-              <Select value={runStage} onValueChange={(value) => value && setRunStage(value as typeof runStage)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="agent_self_review">{MEMORY_CURATION_STAGE_LABELS.selfReview}</SelectItem><SelectItem value="team_curation">{MEMORY_CURATION_STAGE_LABELS.teamCuration}</SelectItem><SelectItem value="all">{COPY.allStages}</SelectItem></SelectContent></Select>
-              <label className="flex items-center gap-2 text-xs"><Checkbox checked={dryRun} onCheckedChange={(checked) => setDryRun(checked === true)} />{COPY.dryRun}</label>
-              <Button variant="outline" onClick={() => run.mutate()} disabled={!configured || !configuredTargetsValid || run.isPending || save.isPending} className="gap-2"><Play className="h-4 w-4" />{COPY.queueRun}</Button>
+              <Select value={effectiveRunStage} onValueChange={(value) => value && setRunStage(value as typeof runStage)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="agent_self_review" disabled={!selfReviewRunnable}>{copy(MEMORY_CURATION_STAGE_LABELS.selfReview)}</SelectItem><SelectItem value="team_curation" disabled={!teamCurationRunnable}>{copy(MEMORY_CURATION_STAGE_LABELS.teamCuration)}</SelectItem><SelectItem value="all" disabled={!selfReviewRunnable || !teamCurationRunnable}>{copy("allStages")}</SelectItem></SelectContent></Select>
+              <label className="flex items-center gap-2 text-xs"><Checkbox checked={dryRun} onCheckedChange={(checked) => setDryRun(checked === true)} />{copy("dryRun")}</label>
+              <Button variant="outline" onClick={() => run.mutate()} disabled={!configured || !configuredTargetsValid || !runStageEnabled || run.isPending || save.isPending} title={runStageEnabled ? undefined : copy("saveProfileForStage")} className="gap-2"><Play className="h-4 w-4" />{copy("queueRun")}</Button>
             </div>
           </div>
         </div>
@@ -1098,40 +1135,40 @@ function MemoryCurationCard({
   return (
     <Card className="bg-background/85 backdrop-blur">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2"><RefreshCw className={cn("h-4 w-4 text-brand", (status?.pending_runs ?? 0) > 0 && "animate-spin")} />{COPY.memoryOps}</CardTitle>
-        <p className="text-sm text-muted-foreground">{COPY.memoryOpsHint}</p>
+        <CardTitle className="flex items-center gap-2"><RefreshCw className={cn("h-4 w-4 text-brand", (status?.pending_runs ?? 0) > 0 && "animate-spin")} />{copy("memoryOps")}</CardTitle>
+        <p className="text-sm text-muted-foreground">{copy("memoryOpsHint")}</p>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="grid grid-cols-3 gap-2">
-          <MiniStat label={COPY.localPromotion} value={loading ? "…" : String(localPromotions)} />
-          <MiniStat label={COPY.sharedCandidates} value={String(sharedCandidates)} />
-          <MiniStat label={COPY.sharedMemory} value={String(promotedSharedMemory)} />
+          <MiniStat label={copy("localPromotion")} value={loading ? "…" : String(localPromotions)} />
+          <MiniStat label={copy("sharedCandidates")} value={String(sharedCandidates)} />
+          <MiniStat label={copy("sharedMemory")} value={String(promotedSharedMemory)} />
         </div>
         <div className="rounded-2xl border bg-muted/30 p-3 text-sm text-muted-foreground">
-          <div>{COPY.insight4}</div>
-          <div className="mt-2 flex items-start gap-2 text-xs"><ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brand" />{COPY.notBroadcast}</div>
+          <div>{copy("insight4")}</div>
+          <div className="mt-2 flex items-start gap-2 text-xs"><ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brand" />{copy("notBroadcast")}</div>
         </div>
         {MEMORY_CURATION_STAGES.map(([stageName, stageLabel, time, title, detail]) => {
           const run = runs.get(stageName);
           const duration = formatRunDuration(run);
           const stageMetric = stageName === "agent_self_review"
-            ? `${run?.stats.review_candidates_added ?? 0} ${COPY.candidatesAdded} · ${run?.stats.evidence_collected ?? 0} ${COPY.evidenceCollected}`
-            : `${run?.stats.shared_candidates_added ?? 0} team items · ${run?.stats.conflicts_found ?? 0} conflicts`;
+            ? `${run?.stats.review_candidates_added ?? 0} ${copy("candidatesAdded")} · ${run?.stats.evidence_collected ?? 0} ${copy("evidenceCollected")}`
+            : `${run?.stats.shared_candidates_added ?? 0} ${copy("teamItems")} · ${run?.stats.conflicts_found ?? 0} ${copy("conflicts")}`;
           const isRunning = run?.status === "running" || run?.status === "queued";
           return (
             <button key={stageName} type="button" onClick={() => run?.id && onSelectRun(run.id)} className={cn("relative flex w-full items-center gap-3 overflow-hidden rounded-2xl border bg-muted/20 p-3 text-left transition-colors hover:border-brand/40", isRunning && "border-brand/40 bg-brand/5")}>
               {isRunning && <div className="absolute inset-y-0 left-0 w-1 animate-pulse bg-brand" />}
-              <div className={cn("flex h-10 w-10 items-center justify-center rounded-full text-xs font-semibold", run ? "bg-foreground text-background" : "bg-muted text-muted-foreground", isRunning && "ring-4 ring-brand/15")}>{stageLabel}</div>
+              <div className={cn("flex h-10 w-10 items-center justify-center rounded-full text-xs font-semibold", run ? "bg-foreground text-background" : "bg-muted text-muted-foreground", isRunning && "ring-4 ring-brand/15")}>{copy(stageLabel)}</div>
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                  <span className="text-sm font-medium">{title}</span>
+                  <span className="text-sm font-medium">{copy(title)}</span>
                   <span className="text-[11px] text-muted-foreground">{stageMetric}</span>
                 </div>
-                <div className="mt-0.5 text-xs text-muted-foreground">{time} {COPY.beijingTime} {"·"} {detail}</div>
-                <div className="mt-1 text-[11px] text-muted-foreground">{run ? formatRunTime(run.finished_at ?? run.created_at) : unavailable ? COPY.unavailable : COPY.notRun}{duration ? ` · ${duration}` : ""}</div>
+                <div className="mt-0.5 text-xs text-muted-foreground">{time} {copy("beijingTime")} {"·"} {copy(detail)}</div>
+                <div className="mt-1 text-[11px] text-muted-foreground">{run ? formatRunTime(run.finished_at ?? run.created_at) : unavailable ? copy("unavailable") : copy("notRun")}{duration ? ` · ${duration}` : ""}</div>
                 {run?.error && <div className="mt-1 line-clamp-2 text-[11px] text-destructive">{run.error}</div>}
               </div>
-              <Badge variant={run?.status === "failed" ? "destructive" : isRunning ? "default" : run ? "secondary" : "outline"} className={cn(isRunning && "animate-pulse")}>{unavailable && !run ? COPY.unavailable : curationStatusLabel(run?.status)}</Badge>
+              <Badge variant={run?.status === "failed" ? "destructive" : isRunning ? "default" : run ? "secondary" : "outline"} className={cn(isRunning && "animate-pulse")}>{unavailable && !run ? copy("unavailable") : curationStatusLabel(run?.status)}</Badge>
             </button>
           );
         })}
@@ -1142,7 +1179,7 @@ function MemoryCurationCard({
 
 function CurationRunDetailCard({ run, selectedRunId }: { run: MemoryCurationRunDetail | undefined; selectedRunId: string }) {
   if (!selectedRunId) {
-    return <Card className="bg-background/85 backdrop-blur"><CardContent className="pt-6"><EmptyState text={COPY.curationRunSelectHint} /></CardContent></Card>;
+    return <Card className="bg-background/85 backdrop-blur"><CardContent className="pt-6"><EmptyState text={copy("curationRunSelectHint")} /></CardContent></Card>;
   }
   if (!run || !run.id) {
     return <Card className="bg-background/85 backdrop-blur"><CardContent className="pt-6"><Skeleton className="h-32 rounded-2xl" /></CardContent></Card>;
@@ -1150,17 +1187,17 @@ function CurationRunDetailCard({ run, selectedRunId }: { run: MemoryCurationRunD
   return (
     <Card className="bg-background/85 backdrop-blur">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2"><Activity className="h-4 w-4 text-brand" />{COPY.curationRunDetail}</CardTitle>
+        <CardTitle className="flex items-center gap-2"><Activity className="h-4 w-4 text-brand" />{copy("curationRunDetail")}</CardTitle>
         <p className="text-xs text-muted-foreground">{run.id}</p>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid gap-2 sm:grid-cols-2">
-          <MiniStat label="Stage" value={curationStageLabel(run.stage)} />
-          <MiniStat label="Status" value={curationStatusLabel(run.status)} />
-          <MiniStat label="Runtime" value={run.runtime_name || shortId(run.runtime_id)} />
-          <MiniStat label="Curator" value={run.curator_agent_name || shortId(run.curator_agent_id)} />
-          <MiniStat label="Mode" value={run.curator_mode || "-"} />
-          <MiniStat label="Threshold" value={run.confidence_threshold == null ? "-" : String(run.confidence_threshold)} />
+          <MiniStat label={copy("stage")} value={curationStageLabel(run.stage)} />
+          <MiniStat label={copy("stageStatus")} value={curationStatusLabel(run.status)} />
+          <MiniStat label={copy("runtime")} value={run.runtime_name || shortId(run.runtime_id)} />
+          <MiniStat label={copy("curator")} value={run.curator_agent_name || shortId(run.curator_agent_id)} />
+          <MiniStat label={copy("mode")} value={run.curator_mode || "-"} />
+          <MiniStat label={copy("threshold")} value={run.confidence_threshold == null ? "-" : String(run.confidence_threshold)} />
         </div>
         {run.error && <div className="rounded-2xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{run.error}</div>}
         {run.diagnostics.length > 0 && (
@@ -1168,19 +1205,19 @@ function CurationRunDetailCard({ run, selectedRunId }: { run: MemoryCurationRunD
             {run.diagnostics.map((item) => (
               <div key={`${item.code}:${item.message}`} className="rounded-2xl border bg-muted/25 p-3 text-sm">
                 <div className="font-medium">{item.message}</div>
-                {item.action && <div className="mt-1 text-xs text-muted-foreground">{COPY.diagnosticAction}: {item.action}</div>}
+                {item.action && <div className="mt-1 text-xs text-muted-foreground">{copy("diagnosticAction")}: {item.action}</div>}
               </div>
             ))}
           </div>
         )}
         <div>
-          <div className="mb-2 text-sm font-medium">{COPY.targetAgents}</div>
+          <div className="mb-2 text-sm font-medium">{copy("targetAgents")}</div>
           <div className="flex flex-wrap gap-2">
-            {run.target_agents.length === 0 ? <Badge variant="outline">{COPY.noneRecorded}</Badge> : run.target_agents.map((agent) => <Badge key={agent.id} variant="secondary">{agent.name || shortId(agent.id)}</Badge>)}
+            {run.target_agents.length === 0 ? <Badge variant="outline">{copy("noneRecorded")}</Badge> : run.target_agents.map((agent) => <Badge key={agent.id} variant="secondary">{agent.name || shortId(agent.id)}</Badge>)}
           </div>
         </div>
         <div>
-          <div className="mb-2 text-sm font-medium">{COPY.timeline}</div>
+          <div className="mb-2 text-sm font-medium">{copy("timeline")}</div>
           <div className="space-y-2">
             {run.timeline.map((item, index) => (
               <div key={`${item.key}:${item.agent_id ?? "run"}:${item.timestamp ?? index}`} className="flex items-start gap-3 rounded-2xl border bg-muted/20 p-3">
@@ -1194,19 +1231,19 @@ function CurationRunDetailCard({ run, selectedRunId }: { run: MemoryCurationRunD
           </div>
         </div>
         <div>
-          <div className="mb-2 text-sm font-medium">{COPY.perAgentResults}</div>
+          <div className="mb-2 text-sm font-medium">{copy("perAgentResults")}</div>
           <div className="space-y-2">
-            {run.agent_results.length === 0 ? <EmptyState text={COPY.noPerAgentDetails} /> : run.agent_results.map((agent) => (
+            {run.agent_results.length === 0 ? <EmptyState text={copy("noPerAgentDetails")} /> : run.agent_results.map((agent) => (
               <div key={`${agent.agent_id}:${agent.root}`} className="rounded-2xl border bg-card/70 p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="font-medium">{agent.agent_name || shortId(agent.agent_id)}</div>
-                  <Badge variant={agent.error ? "destructive" : agent.changed ? "secondary" : "outline"}>{agent.error ? COPY.statusError : agent.changed ? COPY.statusChanged : COPY.statusUnchanged}</Badge>
+                  <Badge variant={agent.error ? "destructive" : agent.changed ? "secondary" : "outline"}>{agent.error ? copy("statusError") : agent.changed ? copy("statusChanged") : copy("statusUnchanged")}</Badge>
                 </div>
                 <div className="mt-1 truncate text-xs text-muted-foreground">{agent.root}</div>
                 <div className="mt-3 grid grid-cols-3 gap-2">
-                  <MiniStat label="Evidence" value={String(agent.evidence_collected)} />
-                  <MiniStat label="Memory" value={String(agent.review_candidates_added)} />
-                  <MiniStat label={COPY.skills} value={String(agent.skill_candidates_added)} />
+                  <MiniStat label={copy("evidence")} value={String(agent.evidence_collected)} />
+                  <MiniStat label={copy("memory")} value={String(agent.review_candidates_added)} />
+                  <MiniStat label={copy("skills")} value={String(agent.skill_candidates_added)} />
                 </div>
                 {agent.error && <div className="mt-2 text-xs text-destructive">{agent.error}</div>}
                 {agent.curator_output_excerpt && <pre className="mt-3 max-h-40 overflow-auto rounded-xl bg-muted p-3 text-xs text-muted-foreground">{agent.curator_output_excerpt}</pre>}
@@ -1216,7 +1253,7 @@ function CurationRunDetailCard({ run, selectedRunId }: { run: MemoryCurationRunD
         </div>
         {run.artifacts.length > 0 && (
           <div>
-            <div className="mb-2 text-sm font-medium">{COPY.artifacts}</div>
+            <div className="mb-2 text-sm font-medium">{copy("artifacts")}</div>
             <div className="space-y-2">
               {run.artifacts.map((artifact, index) => (
                 <div key={`${artifact.kind}:${artifact.agent_id ?? "team"}:${index}`} className="rounded-2xl border bg-muted/20 p-3 text-sm">
@@ -1245,18 +1282,18 @@ function EvolutionTrendCard({ dailyMetrics }: { dailyMetrics: EvolutionDailyMetr
   return (
     <Card className="bg-background/85 backdrop-blur">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2"><TrendingUp className="h-4 w-4 text-emerald-500" />{COPY.evolutionOutputTrend}</CardTitle>
-        <p className="text-sm text-muted-foreground">{COPY.evolutionOutputTrendHint}</p>
+        <CardTitle className="flex items-center gap-2"><TrendingUp className="h-4 w-4 text-emerald-500" />{copy("evolutionOutputTrend")}</CardTitle>
+        <p className="text-sm text-muted-foreground">{copy("evolutionOutputTrendHint")}</p>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid grid-cols-4 gap-2">
-          <MiniStat label="Memory" value={String(totals.memory)} />
+          <MiniStat label={copy("memory")} value={String(totals.memory)} />
           <MiniStat label="Skills" value={String(totals.skill)} />
           <MiniStat label="Promoted" value={String(totals.promoted)} />
           <MiniStat label="Archived" value={String(totals.archived)} />
         </div>
         <div className="flex h-36 items-end gap-1 rounded-2xl border bg-muted/20 p-3">
-          {recent.length === 0 ? <EmptyState text={COPY.noTrendData} /> : recent.map((item) => {
+          {recent.length === 0 ? <EmptyState text={copy("noTrendData")} /> : recent.map((item) => {
             const total = item.memory_candidates + item.skill_candidates + item.promoted_memory + item.promoted_skill;
             return <div key={item.date} className="flex min-w-0 flex-1 flex-col items-center gap-1"><div className="w-full rounded-t bg-brand/70" style={{ height: `${Math.max(4, (total / maxValue) * 110)}px` }} title={`${item.date}: ${total}`} /><div className="w-full truncate text-center text-[10px] text-muted-foreground">{item.date.slice(5)}</div></div>;
           })}
@@ -1270,16 +1307,16 @@ function TaskEfficiencyCard({ efficiency }: { efficiency: EvolutionTaskEfficienc
   return (
     <Card className="bg-background/85 backdrop-blur">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2"><CircleDollarSign className="h-4 w-4 text-amber-500" />{COPY.taskEfficiency}</CardTitle>
-        <p className="text-sm text-muted-foreground">{COPY.taskEfficiencyHint}</p>
+        <CardTitle className="flex items-center gap-2"><CircleDollarSign className="h-4 w-4 text-amber-500" />{copy("taskEfficiency")}</CardTitle>
+        <p className="text-sm text-muted-foreground">{copy("taskEfficiencyHint")}</p>
       </CardHeader>
       <CardContent className="grid grid-cols-2 gap-2">
-        <MiniStat label="Issues" value={String(efficiency?.issue_count ?? 0)} />
-        <MiniStat label={COPY.avgDuration} value={formatDuration(efficiency?.average_duration_seconds ?? 0, "<1s")} />
-        <MiniStat label={COPY.inputTokensShort} value={compactNumber(efficiency?.average_input_tokens ?? 0)} />
-        <MiniStat label={COPY.outputTokensShort} value={compactNumber(efficiency?.average_output_tokens ?? 0)} />
-        <MiniStat label={COPY.withLearnedUnits} value={String(efficiency?.with_evolved_units_issue_count ?? 0)} />
-        <MiniStat label={COPY.avgUnitsUsed} value={(efficiency?.average_evolved_units_used ?? 0).toFixed(1)} />
+        <MiniStat label={copy("issues")} value={String(efficiency?.issue_count ?? 0)} />
+        <MiniStat label={copy("avgDuration")} value={formatDuration(efficiency?.average_duration_seconds ?? 0, "<1s")} />
+        <MiniStat label={copy("inputTokensShort")} value={compactNumber(efficiency?.average_input_tokens ?? 0)} />
+        <MiniStat label={copy("outputTokensShort")} value={compactNumber(efficiency?.average_output_tokens ?? 0)} />
+        <MiniStat label={copy("withLearnedUnits")} value={String(efficiency?.with_evolved_units_issue_count ?? 0)} />
+        <MiniStat label={copy("avgUnitsUsed")} value={(efficiency?.average_evolved_units_used ?? 0).toFixed(1)} />
       </CardContent>
     </Card>
   );
@@ -1290,11 +1327,11 @@ function UnitMetricsCard({ metrics }: { metrics: EvolutionUnitMetric[] }) {
   return (
     <Card className="bg-background/85 backdrop-blur">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2"><LineChart className="h-4 w-4 text-emerald-500" />{COPY.successSignals}</CardTitle>
-        <p className="text-sm text-muted-foreground">{COPY.insight3}</p>
+        <CardTitle className="flex items-center gap-2"><LineChart className="h-4 w-4 text-emerald-500" />{copy("successSignals")}</CardTitle>
+        <p className="text-sm text-muted-foreground">{copy("insight3")}</p>
       </CardHeader>
       <CardContent className="space-y-3">
-        {top.length === 0 ? <EmptyState text={COPY.noCandidates} /> : top.map((item) => (
+        {top.length === 0 ? <EmptyState text={copy("noCandidates")} /> : top.map((item) => (
           <div key={`${item.unit_type}:${item.unit_id ?? item.local_unit_id}`} className="rounded-2xl border bg-card/70 p-4">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
@@ -1306,13 +1343,13 @@ function UnitMetricsCard({ metrics }: { metrics: EvolutionUnitMetric[] }) {
               </div>
               <div className="text-right text-sm tabular-nums">
                 <div className="font-semibold">{item.used_count}</div>
-                <div className="text-xs text-muted-foreground">{COPY.used}</div>
+                <div className="text-xs text-muted-foreground">{copy("used")}</div>
               </div>
             </div>
             <div className="mt-3 grid grid-cols-3 gap-2">
-              <MiniStat label={COPY.successRate} value={String(item.success_count)} />
-              <MiniStat label={COPY.failures} value={String(item.failure_count)} />
-              <MiniStat label={COPY.attention} value={String(item.conflict_count)} />
+              <MiniStat label={copy("successRate")} value={String(item.success_count)} />
+              <MiniStat label={copy("failures")} value={String(item.failure_count)} />
+              <MiniStat label={copy("attention")} value={String(item.conflict_count)} />
             </div>
           </div>
         ))}
@@ -1322,19 +1359,19 @@ function UnitMetricsCard({ metrics }: { metrics: EvolutionUnitMetric[] }) {
 }
 
 function OpsCard({ icon: Icon, title, value, detail, status }: { icon: typeof RefreshCw; title: string; value: string; detail: string; status: string }) {
-  const badgeVariant: "secondary" | "default" | "destructive" | "outline" = status === COPY.healthy || status === COPY.succeeded
+  const badgeVariant: "secondary" | "default" | "destructive" | "outline" = status === copy("healthy") || status === copy("succeeded")
     ? "secondary"
-    : status === COPY.running
+    : status === copy("running")
       ? "default"
-      : status === COPY.attention || status === COPY.failed
+      : status === copy("attention") || status === copy("failed")
         ? "destructive"
         : "outline";
   return (
     <Card className="bg-background/85 backdrop-blur">
       <CardContent className="space-y-4 pt-1">
         <div className="flex items-start justify-between gap-3">
-          <div className="rounded-2xl bg-brand/10 p-3 text-brand"><Icon className={cn("h-5 w-5", status === COPY.running && "animate-pulse")} /></div>
-          <Badge variant={badgeVariant} className={cn(status === COPY.running && "animate-pulse")}>{status}</Badge>
+          <div className="rounded-2xl bg-brand/10 p-3 text-brand"><Icon className={cn("h-5 w-5", status === copy("running") && "animate-pulse")} /></div>
+          <Badge variant={badgeVariant} className={cn(status === copy("running") && "animate-pulse")}>{status}</Badge>
         </div>
         <div>
           <div className="text-sm text-muted-foreground">{title}</div>
@@ -1363,18 +1400,18 @@ function ProcessCard({
     .toSorted((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
   const steps = [
     { label: "Active agents", detail: "Self-reviewed", value: selfReview?.stats.agents_scanned ?? 0, run: selfReview },
-    { label: COPY.candidates, detail: "Agent proposals", value: selfReview?.stats.review_candidates_added ?? 0, run: selfReview },
-    { label: COPY.sharedPromotion, detail: "Team curation items", value: teamCuration?.stats.shared_candidates_added ?? 0, run: teamCuration },
-    { label: COPY.attention, detail: "Conflicts found", value: teamCuration?.stats.conflicts_found ?? 0, run: teamCuration },
-    { label: COPY.sharedCandidates, detail: "Awaiting human review", value: sharedCandidates, run: teamCuration },
-    { label: COPY.workspaceUnit, detail: "Promoted shared units", value: promotedSharedMemory },
-    { label: COPY.feedback, detail: "Observed uses", value: feedbackCount },
+    { label: copy("candidates"), detail: "Agent proposals", value: selfReview?.stats.review_candidates_added ?? 0, run: selfReview },
+    { label: copy("sharedPromotion"), detail: "Team curation items", value: teamCuration?.stats.shared_candidates_added ?? 0, run: teamCuration },
+    { label: copy("attention"), detail: "Conflicts found", value: teamCuration?.stats.conflicts_found ?? 0, run: teamCuration },
+    { label: copy("sharedCandidates"), detail: "Awaiting human review", value: sharedCandidates, run: teamCuration },
+    { label: copy("workspaceUnit"), detail: copy("promotedSharedUnits"), value: promotedSharedMemory },
+    { label: copy("feedback"), detail: "Observed uses", value: feedbackCount },
   ];
   return (
     <Card className="overflow-hidden bg-background/85 backdrop-blur lg:col-span-3">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2"><TrendingUp className="h-4 w-4 text-emerald-500" />{COPY.curatorOps}</CardTitle>
-        <p className="text-sm text-muted-foreground">{COPY.curatorOpsHint}</p>
+        <CardTitle className="flex items-center gap-2"><TrendingUp className="h-4 w-4 text-emerald-500" />{copy("curatorOps")}</CardTitle>
+        <p className="text-sm text-muted-foreground">{copy("curatorOpsHint")}</p>
       </CardHeader>
       <CardContent>
         <div className="relative grid gap-3 md:grid-cols-3 xl:grid-cols-6">

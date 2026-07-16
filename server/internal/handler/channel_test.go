@@ -2965,15 +2965,21 @@ func TestListChannelsMentionUnreadCountTracksReadCursor(t *testing.T) {
 		t.Fatalf("load mentioned member: %v", err)
 	}
 
-	for _, content := range []string{
-		"@" + memberName + " first",
-		"ordinary unread message",
-		"@" + memberName + " second",
-	} {
-		if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", content, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
-			t.Fatalf("insert message %q: %v", content, err)
+	insertMention := func(content string) {
+		t.Helper()
+		start := strings.Index(content, "@"+memberName)
+		end := start + len("@"+memberName)
+		startUTF16, endUTF16 := contentUTF16Span(content, start, end)
+		parts := []protocol.MessagePart{{Type: protocol.MessagePartTypeReference, RefType: "mention", RefSubType: "member", RefID: memberID, Label: "@" + memberName, ContentStartUTF16: &startUTF16, ContentEndUTF16: &endUTF16}}
+		if _, err := testHandler.insertChannelMessageWithParts(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", content, parts, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
+			t.Fatalf("insert structured mention %q: %v", content, err)
 		}
 	}
+	insertMention("@" + memberName + " first")
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "ordinary unread message", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
+		t.Fatalf("insert ordinary message: %v", err)
+	}
+	insertMention("@" + memberName + " second")
 
 	listed := listedChannelForUser(t, channelID, memberID)
 	if listed == nil {

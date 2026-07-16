@@ -365,10 +365,6 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 				        AND part->>'ref_subtype' = 'member'
 				        AND part->>'ref_id' = $2::text
 				    )
-				    OR m.content ILIKE '%@' || (
-				      SELECT name FROM "user" WHERE id = $2
-				    ) || '%'
-				    OR m.parts::text ILIKE '%mention://' || $2::text || '%'
 				  )
 		) hm ON true
 		WHERE ch.workspace_id = $1 AND ch.kind = 'group'

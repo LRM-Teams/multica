@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useReducer, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useDefaultLayout } from "react-resizable-panels";
-import { Box, Check, Copy, FileCode2, Loader2, Monitor, Plus, RotateCcw, Search, Server, Square, Trash2 } from "lucide-react";
+import { Box, FileCode2, Loader2, Monitor, Plus, RotateCcw, Search, Server, Square, Trash2 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   useCreateSandboxMutation,
@@ -12,14 +12,12 @@ import {
 } from "@multica/core/sandboxes/mutations";
 import { sandboxBindingListOptions, sandboxKeys, sandboxListOptions } from "@multica/core/sandboxes/queries";
 import {
-  buildSandboxdConfigPath,
-  buildSandboxdSetupCommand,
   defaultSandboxName,
   effectiveSandboxNodeStatus,
   sandboxDisplayName,
 } from "@multica/core/sandboxes/utils";
 import type { SandboxBinding, SandboxInstance } from "@multica/core/types";
-import { useRequiredWorkspaceSlug, useWorkspacePaths } from "@multica/core/paths";
+import { useWorkspacePaths } from "@multica/core/paths";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
@@ -50,70 +48,13 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@multica/ui/components/ui/select";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
-import { copyText } from "@multica/ui/lib/clipboard";
 import { cn } from "@multica/ui/lib/utils";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { useAuthStore } from "@multica/core/auth";
 import { api } from "@multica/core/api";
 import { toast } from "sonner";
 import { PageHeader } from "../../layout/page-header";
 import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n/use-t";
-
-type AddNodeState = {
-  dialogOpen: boolean;
-  setupCommand: string;
-  setupConfigPath: string;
-  setupCopied: boolean;
-  creating: boolean;
-  viewingSetupNodeId: string | null;
-};
-
-type AddNodeAction =
-  | { type: "startCreating" }
-  | { type: "startViewing"; nodeId: string }
-  | { type: "setupReady"; command: string; configPath: string }
-  | { type: "setupFailed" }
-  | { type: "setDialogOpen"; open: boolean }
-  | { type: "copySuccess" }
-  | { type: "copyReset" };
-
-const initialAddNodeState: AddNodeState = {
-  dialogOpen: false,
-  setupCommand: "",
-  setupConfigPath: "",
-  setupCopied: false,
-  creating: false,
-  viewingSetupNodeId: null,
-};
-
-function addNodeReducer(state: AddNodeState, action: AddNodeAction): AddNodeState {
-  switch (action.type) {
-    case "startCreating":
-      return { ...state, creating: true, viewingSetupNodeId: null, setupCopied: false };
-    case "startViewing":
-      return { ...state, creating: false, viewingSetupNodeId: action.nodeId, setupCopied: false };
-    case "setupReady":
-      return {
-        ...state,
-        creating: false,
-        viewingSetupNodeId: null,
-        setupCommand: action.command,
-        setupConfigPath: action.configPath,
-        dialogOpen: true,
-      };
-    case "setupFailed":
-      return { ...state, creating: false, viewingSetupNodeId: null };
-    case "setDialogOpen":
-      return { ...state, dialogOpen: action.open };
-    case "copySuccess":
-      return { ...state, setupCopied: true };
-    case "copyReset":
-      return { ...state, setupCopied: false };
-    default:
-      return state;
-  }
-}
 
 type CreateFormState = {
   name: string;
@@ -162,8 +103,6 @@ function bindingWithEffectiveStatus(binding: SandboxBinding, now: number): Sandb
 
 export function SandboxesPage() {
   const wsId = useWorkspaceId();
-  const workspaceSlug = useRequiredWorkspaceSlug();
-  const user = useAuthStore((s) => s.user);
   const paths = useWorkspacePaths();
   const navigation = useNavigation();
   const { t } = useT("layout");
@@ -178,8 +117,7 @@ export function SandboxesPage() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [createForm, setCreateForm] = useState<CreateFormState>(() => buildDefaultCreateForm(""));
   const [deleteConfirmInstance, setDeleteConfirmInstance] = useState<SandboxInstance | null>(null);
-  const [addNode, dispatchAddNode] = useReducer(addNodeReducer, initialAddNodeState);
-  const { dialogOpen: addDialogOpen, setupCommand, setupConfigPath, setupCopied, creating: creatingNode, viewingSetupNodeId } = addNode;
+  const [creatingNode, setCreatingNode] = useState(false);
 
   const now = useNowTick();
 
@@ -249,65 +187,18 @@ export function SandboxesPage() {
   };
 
   const handleAddNode = async () => {
-    dispatchAddNode({ type: "startCreating" });
+    setCreatingNode(true);
     try {
       const suffix = Math.random().toString(36).slice(2, 8);
       const node = await api.createSandboxNode({ name: `sandboxd-${suffix}` });
-      const token = await api.createSandboxNodeToken(node.id, { name: "sandboxd setup" });
       await api.bindSandboxNode(wsId, { node_id: node.id });
       await queryClient.invalidateQueries({ queryKey: sandboxKeys.bindings(wsId) });
-      const serverUrl = api.getBaseUrl?.() || window.location.origin;
-      const { command, configPath } = buildSandboxdSetupCommand({
-        serverUrl,
-        nodeToken: token.token,
-        nodeKey: node.node_key,
-        name: node.name,
-        ownerUserId: node.owner_user_id || node.node_key,
-        workspaceSlug,
-        userName: user?.name,
-        userEmail: user?.email,
-        userId: user?.id,
-      });
-      dispatchAddNode({ type: "setupReady", command, configPath });
+      await queryClient.invalidateQueries({ queryKey: sandboxKeys.nodes() });
+      navigation.push(paths.sandboxNodeSetup(node.id));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : t(($) => $.sandboxes_page.add_node_failed));
-      dispatchAddNode({ type: "setupFailed" });
-    }
-  };
-
-  const handleViewNodeSetup = async (nodeId: string) => {
-    dispatchAddNode({ type: "startViewing", nodeId });
-    try {
-      const nodes = await api.listSandboxNodes();
-      const node = nodes.find((item) => item.id === nodeId);
-      if (!node) {
-        throw new Error(t(($) => $.sandboxes_page.view_setup_not_found));
-      }
-      const token = await api.createSandboxNodeToken(node.id, { name: "sandboxd setup" });
-      const serverUrl = api.getBaseUrl?.() || window.location.origin;
-      const { command, configPath } = buildSandboxdSetupCommand({
-        serverUrl,
-        nodeToken: token.token,
-        nodeKey: node.node_key,
-        name: node.name,
-        ownerUserId: node.owner_user_id || node.node_key,
-        workspaceSlug,
-        userName: user?.name,
-        userEmail: user?.email,
-        userId: user?.id,
-        metadata: node.metadata,
-      });
-      dispatchAddNode({ type: "setupReady", command, configPath });
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : t(($) => $.sandboxes_page.view_setup_failed));
-      dispatchAddNode({ type: "setupFailed" });
-    }
-  };
-
-  const handleCopySetup = async () => {
-    if (await copyText(setupCommand)) {
-      dispatchAddNode({ type: "copySuccess" });
-      setTimeout(() => dispatchAddNode({ type: "copyReset" }), 2000);
+    } finally {
+      setCreatingNode(false);
     }
   };
 
@@ -372,9 +263,8 @@ export function SandboxesPage() {
             instances={selectedInstances}
             onCreate={openCreateDialog}
             onViewSetup={() => {
-              if (selectedBinding) void handleViewNodeSetup(selectedBinding.node_id);
+              if (selectedBinding) navigation.push(paths.sandboxNodeSetup(selectedBinding.node_id));
             }}
-            viewingSetup={viewingSetupNodeId === selectedBinding?.node_id}
             stoppingId={stop.isPending ? stop.variables : undefined}
             resumingId={resume.isPending ? resume.variables : undefined}
             deletingId={del.isPending ? del.variables : undefined}
@@ -416,9 +306,8 @@ export function SandboxesPage() {
                 instances={selectedInstances}
                 onCreate={openCreateDialog}
                 onViewSetup={() => {
-                  if (selectedBinding) void handleViewNodeSetup(selectedBinding.node_id);
+                  if (selectedBinding) navigation.push(paths.sandboxNodeSetup(selectedBinding.node_id));
                 }}
-                viewingSetup={viewingSetupNodeId === selectedBinding?.node_id}
                 stoppingId={stop.isPending ? stop.variables : undefined}
                 resumingId={resume.isPending ? resume.variables : undefined}
                 deletingId={del.isPending ? del.variables : undefined}
@@ -492,32 +381,6 @@ export function SandboxesPage() {
             <Button onClick={handleCreateSandbox} disabled={!canCreate || create.isPending}>
               {create.isPending ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
               {t(($) => $.sandboxes_page.create_action)}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={addDialogOpen} onOpenChange={(open) => dispatchAddNode({ type: "setDialogOpen", open })}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{t(($) => $.sandboxes_page.add_node_dialog_title)}</DialogTitle>
-            <DialogDescription>
-              {t(($) => $.sandboxes_page.add_node_dialog_description, {
-                file: setupConfigPath || buildSandboxdConfigPath({
-                  workspaceSlug,
-                  userName: user?.name,
-                  userEmail: user?.email,
-                  userId: user?.id,
-                  serverUrl: api.getBaseUrl?.() || window.location.origin,
-                }),
-              })}
-            </DialogDescription>
-          </DialogHeader>
-          <code className="max-h-64 overflow-auto rounded-md border bg-muted/50 p-3 text-xs break-all select-all">{setupCommand}</code>
-          <DialogFooter>
-            <Button variant="outline" onClick={handleCopySetup}>
-              {setupCopied ? <Check className="mr-2 size-4" /> : <Copy className="mr-2 size-4" />}
-              {setupCopied ? t(($) => $.sandboxes_page.copied_action) : t(($) => $.sandboxes_page.copy_command_action)}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -659,7 +522,6 @@ function NodeDetail({
   instances,
   onCreate,
   onViewSetup,
-  viewingSetup,
   stoppingId,
   resumingId,
   deletingId,
@@ -672,7 +534,6 @@ function NodeDetail({
   instances: SandboxInstance[];
   onCreate: () => void;
   onViewSetup: () => void;
-  viewingSetup: boolean;
   stoppingId?: string;
   resumingId?: string;
   deletingId?: string;
@@ -727,8 +588,8 @@ function NodeDetail({
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <Button type="button" size="sm" variant="outline" onClick={onViewSetup} disabled={viewingSetup}>
-              {viewingSetup ? <Loader2 className="h-3 w-3 animate-spin" /> : <FileCode2 className="h-3 w-3" />}
+            <Button type="button" size="sm" variant="outline" onClick={onViewSetup}>
+              <FileCode2 className="h-3 w-3" />
               {t(($) => $.sandboxes_page.view_setup_action)}
             </Button>
             <Button type="button" size="sm" onClick={onCreate}>

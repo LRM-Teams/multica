@@ -1160,17 +1160,23 @@ INSERT INTO agent_task_queue (
     attempt, max_attempts, parent_task_id, force_fresh_session, is_leader_task
 )
 SELECT
-    p.agent_id, p.runtime_id, p.issue_id, p.chat_session_id, p.autopilot_run_id,
-    'queued', p.priority, p.trigger_comment_id, p.trigger_summary, p.context,
+    p.agent_id, COALESCE($1::uuid, p.runtime_id), p.issue_id, p.chat_session_id, p.autopilot_run_id,
+    'queued', p.priority, p.trigger_comment_id, p.trigger_summary, COALESCE($2::jsonb, p.context),
     CASE WHEN p.failure_reason IN ('codex_semantic_inactivity', 'grok_first_turn_no_progress', 'agent_error.context_overflow') THEN NULL ELSE p.session_id END,
     CASE WHEN p.failure_reason IN ('codex_semantic_inactivity', 'grok_first_turn_no_progress', 'agent_error.context_overflow') THEN NULL ELSE p.work_dir END,
     p.attempt + 1, p.max_attempts, p.id,
     COALESCE(p.failure_reason IN ('codex_semantic_inactivity', 'grok_first_turn_no_progress', 'agent_error.context_overflow'), false),
     p.is_leader_task
 FROM agent_task_queue p
-WHERE p.id = $1
+WHERE p.id = $3
 RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
 `
+
+type CreateRetryTaskParams struct {
+	RuntimeID pgtype.UUID `json:"runtime_id"`
+	Context   []byte      `json:"context"`
+	ID        pgtype.UUID `json:"id"`
+}
 
 // Clones a parent task into a fresh queued attempt. Carries forward the
 // agent's resume context (session_id/work_dir) so the child can continue
@@ -1182,8 +1188,8 @@ RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, c
 // inherited so the retried task keeps the same squad-role provenance as its
 // parent and the self-trigger guard in shouldEnqueueSquadLeaderOnComment
 // continues to recognise it as a leader task.
-func (q *Queries) CreateRetryTask(ctx context.Context, id pgtype.UUID) (AgentTaskQueue, error) {
-	row := q.db.QueryRow(ctx, createRetryTask, id)
+func (q *Queries) CreateRetryTask(ctx context.Context, arg CreateRetryTaskParams) (AgentTaskQueue, error) {
+	row := q.db.QueryRow(ctx, createRetryTask, arg.RuntimeID, arg.Context, arg.ID)
 	var i AgentTaskQueue
 	err := row.Scan(
 		&i.ID,
@@ -1321,6 +1327,7 @@ WITH victims AS (
     JOIN agent_runtime r ON r.id = t.runtime_id
     WHERE t.status = 'queued'
       AND r.status = 'offline'
+      AND NULLIF(t.context->'ephemeral_sandbox'->>'sandbox_instance_id', '') IS NOT NULL
       AND t.created_at < now() - make_interval(secs => $1::double precision)
     ORDER BY t.created_at ASC
     LIMIT $2::int
@@ -1334,6 +1341,7 @@ SET status = 'failed',
 FROM victims v
 WHERE t.id = v.id
   AND t.status = 'queued'
+  AND NULLIF(t.context->'ephemeral_sandbox'->>'sandbox_instance_id', '') IS NOT NULL
   AND t.created_at < now() - make_interval(secs => $1::double precision)
   AND EXISTS (SELECT 1 FROM agent_runtime r WHERE r.id = t.runtime_id AND r.status = 'offline')
 RETURNING t.id, t.agent_id, t.issue_id, t.status, t.priority, t.dispatched_at, t.started_at, t.completed_at, t.result, t.error, t.created_at, t.context, t.runtime_id, t.session_id, t.work_dir, t.trigger_comment_id, t.chat_session_id, t.autopilot_run_id, t.attempt, t.max_attempts, t.parent_task_id, t.failure_reason, t.trigger_summary, t.force_fresh_session, t.is_leader_task, t.wait_reason, t.initiator_user_id

@@ -2309,7 +2309,7 @@ func (s *TaskService) openFreshSessionForRetryChild(ctx context.Context, child d
 
 func (s *TaskService) createRetryTaskWithPendingWakeTransfer(ctx context.Context, parentID pgtype.UUID) (db.AgentTaskQueue, error) {
 	if s.TxStarter == nil {
-		child, err := s.Queries.CreateRetryTask(ctx, parentID)
+		child, err := s.Queries.CreateRetryTask(ctx, db.CreateRetryTaskParams{ID: parentID})
 		if err != nil {
 			return db.AgentTaskQueue{}, fmt.Errorf("create retry task: %w", err)
 		}
@@ -2329,7 +2329,7 @@ func (s *TaskService) createRetryTaskWithPendingWakeTransfer(ctx context.Context
 	defer tx.Rollback(ctx)
 
 	qtx := s.Queries.WithTx(tx)
-	child, err := qtx.CreateRetryTask(ctx, parentID)
+	child, err := qtx.CreateRetryTask(ctx, db.CreateRetryTaskParams{ID: parentID})
 	if err != nil {
 		return db.AgentTaskQueue{}, fmt.Errorf("create retry task: %w", err)
 	}
@@ -2693,7 +2693,7 @@ func (s *TaskService) HandleFailedTasks(ctx context.Context, tasks []db.AgentTas
 
 		s.maybeCleanupEphemeralSandbox(ctx, t)
 
-	affectedAgents[util.UUIDToString(t.AgentID)] = t.AgentID
+		affectedAgents[util.UUIDToString(t.AgentID)] = t.AgentID
 	}
 
 	for _, agentID := range affectedAgents {

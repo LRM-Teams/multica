@@ -200,15 +200,15 @@ INSERT INTO agent_task_queue (
     attempt, max_attempts, parent_task_id, force_fresh_session, is_leader_task
 )
 SELECT
-    p.agent_id, p.runtime_id, p.issue_id, p.chat_session_id, p.autopilot_run_id,
-    'queued', p.priority, p.trigger_comment_id, p.trigger_summary, p.context,
+    p.agent_id, COALESCE(sqlc.narg('runtime_id')::uuid, p.runtime_id), p.issue_id, p.chat_session_id, p.autopilot_run_id,
+    'queued', p.priority, p.trigger_comment_id, p.trigger_summary, COALESCE(sqlc.narg('context')::jsonb, p.context),
     CASE WHEN p.failure_reason IN ('codex_semantic_inactivity', 'grok_first_turn_no_progress', 'agent_error.context_overflow') THEN NULL ELSE p.session_id END,
     CASE WHEN p.failure_reason IN ('codex_semantic_inactivity', 'grok_first_turn_no_progress', 'agent_error.context_overflow') THEN NULL ELSE p.work_dir END,
     p.attempt + 1, p.max_attempts, p.id,
     COALESCE(p.failure_reason IN ('codex_semantic_inactivity', 'grok_first_turn_no_progress', 'agent_error.context_overflow'), false),
     p.is_leader_task
 FROM agent_task_queue p
-WHERE p.id = $1
+WHERE p.id = @id
 RETURNING *;
 
 -- name: CancelAgentTasksByIssue :many
@@ -648,6 +648,7 @@ WITH victims AS (
     JOIN agent_runtime r ON r.id = t.runtime_id
     WHERE t.status = 'queued'
       AND r.status = 'offline'
+      AND NULLIF(t.context->'ephemeral_sandbox'->>'sandbox_instance_id', '') IS NOT NULL
       AND t.created_at < now() - make_interval(secs => @ttl_secs::double precision)
     ORDER BY t.created_at ASC
     LIMIT @max_per_tick::int
@@ -661,6 +662,7 @@ SET status = 'failed',
 FROM victims v
 WHERE t.id = v.id
   AND t.status = 'queued'
+  AND NULLIF(t.context->'ephemeral_sandbox'->>'sandbox_instance_id', '') IS NOT NULL
   AND t.created_at < now() - make_interval(secs => @ttl_secs::double precision)
   AND EXISTS (SELECT 1 FROM agent_runtime r WHERE r.id = t.runtime_id AND r.status = 'offline')
 RETURNING t.*;

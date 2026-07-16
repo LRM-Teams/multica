@@ -615,9 +615,9 @@ func TestExpireStaleQueuedTasks(t *testing.T) {
 
 // TestExpireQueuedTasksOnOfflineRuntimes verifies the Phase 2b env-dispatch
 // liveness backstop: a 'queued' task whose runtime is still 'offline' past the
-// TTL is failed with failure_reason='runtime_offline', while a fresh queued
-// task on the same offline runtime and an old queued task on an ONLINE runtime
-// are both left alone (the offline-runtime filter + the TTL predicate).
+// TTL and carrying an ephemeral sandbox marker is failed with
+// failure_reason='runtime_offline', while an ordinary old queued task, a fresh
+// ephemeral task, and an old task on an ONLINE runtime are left alone.
 func TestExpireQueuedTasksOnOfflineRuntimes(t *testing.T) {
 	if testPool == nil {
 		t.Skip("no database connection")
@@ -673,24 +673,33 @@ func TestExpireQueuedTasksOnOfflineRuntimes(t *testing.T) {
 		return issueID
 	}
 	oldOfflineIssue := mkIssue("Offline-runtime sweep test (old)")
+	ordinaryOfflineIssue := mkIssue("Offline-runtime sweep test (ordinary)")
 	freshOfflineIssue := mkIssue("Offline-runtime sweep test (fresh)")
 	oldOnlineIssue := mkIssue("Offline-runtime sweep test (online control)")
 	t.Cleanup(func() {
 		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE runtime_id IN ($1, $2)`, offlineRT, onlineRT)
-		testPool.Exec(ctx, `DELETE FROM issue WHERE id IN ($1, $2, $3)`, oldOfflineIssue, freshOfflineIssue, oldOnlineIssue)
+		testPool.Exec(ctx, `DELETE FROM issue WHERE id IN ($1, $2, $3, $4)`, oldOfflineIssue, ordinaryOfflineIssue, freshOfflineIssue, oldOnlineIssue)
 		testPool.Exec(ctx, `DELETE FROM agent_runtime WHERE id IN ($1, $2)`, offlineRT, onlineRT)
 	})
 
 	// old-offline: 10 min old, offline runtime -> should fail.
 	// fresh-offline: 0s old, offline runtime -> should stay (under TTL).
 	// old-online: 10 min old, ONLINE runtime -> should stay (runtime not offline).
-	var oldOfflineTask, freshOfflineTask, oldOnlineTask string
+	var oldOfflineTask, ordinaryOfflineTask, freshOfflineTask, oldOnlineTask string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, created_at, context)
+		VALUES ($1, $2, $3, 'queued', 0, now() - interval '10 minutes',
+		        '{"ephemeral_sandbox":{"sandbox_instance_id":"sandbox-old"}}'::jsonb)
+		RETURNING id
+	`, agentID, offlineRT, oldOfflineIssue).Scan(&oldOfflineTask); err != nil {
+		t.Fatalf("failed to insert old offline queued task: %v", err)
+	}
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, created_at)
 		VALUES ($1, $2, $3, 'queued', 0, now() - interval '10 minutes')
 		RETURNING id
-	`, agentID, offlineRT, oldOfflineIssue).Scan(&oldOfflineTask); err != nil {
-		t.Fatalf("failed to insert old offline queued task: %v", err)
+	`, agentID, offlineRT, ordinaryOfflineIssue).Scan(&ordinaryOfflineTask); err != nil {
+		t.Fatalf("failed to insert ordinary old offline queued task: %v", err)
 	}
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, created_at)
@@ -738,6 +747,14 @@ func TestExpireQueuedTasksOnOfflineRuntimes(t *testing.T) {
 	}
 	if !strings.Contains(errMsg, "did not register") {
 		t.Fatalf("old-offline task: expected error to mention daemon not registering, got %q", errMsg)
+	}
+
+	// Ordinary tasks on offline runtimes are outside the sandbox liveness sweep.
+	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, ordinaryOfflineTask).Scan(&status); err != nil {
+		t.Fatalf("failed to read ordinary offline task: %v", err)
+	}
+	if status != "queued" {
+		t.Fatalf("ordinary offline task: expected status=queued, got %q", status)
 	}
 
 	// fresh-offline -> still queued (under TTL).

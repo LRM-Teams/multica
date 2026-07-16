@@ -182,6 +182,29 @@ func callOrderIndex(rl *fakeRLClient, name string) int {
 	return -1
 }
 
+func TestCreateRetryTaskOverridesRuntimeAndContext(t *testing.T) {
+	env := setupRetryTestDB(t, "runtime_offline")
+	ctx := context.Background()
+
+	replacement, err := env.svc.Queries.PrecreateAgentRuntime(ctx, db.PrecreateAgentRuntimeParams{
+		WorkspaceID: env.agent.WorkspaceID,
+		DaemonID:    pgtype.Text{String: "daemon-retry-replacement", Valid: true},
+		Name:        "replacement retry runtime",
+		Provider:    "pi",
+	})
+	require.NoError(t, err)
+	replacementContext := json.RawMessage(`{"ephemeral_sandbox":{"sandbox_instance_id":"sandbox-replacement","actor_user_id":"cccccccc-0000-0000-0000-000000000001"}}`)
+
+	child, err := env.svc.Queries.CreateRetryTask(ctx, db.CreateRetryTaskParams{
+		ID:        env.parent.ID,
+		RuntimeID: replacement.ID,
+		Context:   replacementContext,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, replacement.ID, child.RuntimeID)
+	assert.JSONEq(t, string(replacementContext), string(child.Context))
+}
+
 // TestMaybeRetryFailedTask_ChildOpensFreshSessionBeforeNotify verifies the D9
 // ordering: a trained parent fails with a retryable reason; RouteTerminalTrainingTask
 // closes the parent's session (S_A EndSession) BEFORE MaybeRetryFailedTask opens

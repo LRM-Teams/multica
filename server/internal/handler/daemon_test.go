@@ -3402,7 +3402,7 @@ func TestCompleteTask_DirectedRuntimeDiagnosticOutputIsSanitized(t *testing.T) {
 	}
 
 	taskID, channelID := createChannelCompletionTask(t, "dm")
-	rawOutput := `“？” 是在确认我是否在线。先修好 multica send 的鉴权，再发一条可见回复。改用任务态 token 的 multica 包装器发送回复。在The background search finished after the reply was already sent; nothing else needed for this turn.`
+	rawOutput := `“？” 是在确认我是否在线。先修好 multica message send 的鉴权，再发一条可见回复。改用任务态 token 的 multica 包装器发送回复。在The background search finished after the reply was already sent; nothing else needed for this turn.`
 	sanitized := `“？” 是在确认我是否在线。`
 
 	w := completeTaskForTest(t, taskID, map[string]any{"output": rawOutput})
@@ -3474,9 +3474,9 @@ func TestCompleteTask_AmbientCLICapableRunSuppressesNormalFinalText(t *testing.T
 		protocol.DaemonCapabilityAgentCLITransport,
 	})
 	setTaskPriority(t, taskID, 1)
-	// Ambient fan-out remains opt-in via multica send/react so unrelated agents
+	// Ambient fan-out remains opt-in via multica message send/react so unrelated agents
 	// can observe a channel without turning final text into visible chatter.
-	const visibleReply = "Here is a perfectly normal ambient observation that should stay hidden unless sent via multica send."
+	const visibleReply = "Here is a perfectly normal ambient observation that should stay hidden unless sent via multica message send."
 
 	w := completeTaskForTest(t, taskID, map[string]any{"output": visibleReply})
 	if w.Code != http.StatusOK {
@@ -3517,7 +3517,7 @@ func TestCompleteTask_DirectedCLICapableRunBridgesFinalTextFallback(t *testing.T
 	}
 
 	// Directed task (priority=2, @mention/DM) on a CLI-capable run.
-	// If multica send was not used successfully, non-empty final text is a
+	// If multica message send was not used successfully, non-empty final text is a
 	// visible fallback so must-reply runs do not complete silently.
 	taskID, channelID := createChannelCompletionTaskWithCapabilities(t, "group", []string{
 		protocol.DaemonCapabilityChannelOutputActions,

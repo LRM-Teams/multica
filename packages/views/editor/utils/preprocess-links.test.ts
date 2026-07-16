@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { preprocessLinks } from "@multica/ui/markdown/linkify";
+import { preprocessLinks, detectLinks } from "@multica/ui/markdown/linkify";
 
 // The bug: linkify-it does not treat CJK full-width punctuation as a URL
 // boundary, so the href can swallow trailing punctuation and the Chinese
@@ -91,5 +91,131 @@ describe("preprocessLinks — CJK punctuation boundary", () => {
     expect(preprocessLinks(input)).toBe(
       "数据来源：[NBA.com Schedule](https://www.nba.com/schedule)，官网 [NBA.com](http://NBA.com)",
     );
+  });
+});
+
+// task #537 — CJK *letters* (not punctuation) glued onto a host. linkify-it
+// treats CJK letters as valid domain-label chars (needed for IDN), so a URL
+// typed with no separator before a Chinese word (`https://x.com吗`) swallows the
+// word into the host. The five signed output contracts + two documented
+// consequences below define the boundary; the fix uses linkify-it's own fuzzy
+// matcher as the host-validity oracle (no TLD table), so real IDN hosts stay
+// whole. This is a product heuristic, not IRI/IDNA truth.
+describe("preprocessLinks — CJK letter host overrun (#537)", () => {
+  // Contract 1 (the bug): trailing CJK after a complete host is excluded.
+  it("contract 1: excludes trailing CJK glued onto host (吗 outside link)", () => {
+    expect(preprocessLinks("参见 https://x.com吗")).toBe(
+      "参见 [https://x.com](https://x.com)吗",
+    );
+  });
+
+  // Contract 5 + IDN: CJK that forms a real IDN label stays inside the link.
+  it("contract 5: preserves IDN host with CJK label 中国.cn", () => {
+    expect(preprocessLinks("看 https://中国.cn/x 参考")).toBe(
+      "看 [https://中国.cn/x](https://中国.cn/x) 参考",
+    );
+  });
+
+  it("preserves numeric+CJK IDN labels 123中国.cn / 中国123.cn", () => {
+    expect(preprocessLinks("a https://123中国.cn b")).toBe(
+      "a [https://123中国.cn](https://123中国.cn) b",
+    );
+    expect(preprocessLinks("a https://中国123.cn b")).toBe(
+      "a [https://中国123.cn](https://中国123.cn) b",
+    );
+  });
+
+  // Reverse contract: don't degrade into "all CJK terminates the URL".
+  it("contract 3: keeps CJK in the path (x.com/吗 stays whole)", () => {
+    expect(preprocessLinks("a https://x.com/吗 b")).toBe(
+      "a [https://x.com/吗](https://x.com/吗) b",
+    );
+  });
+
+  it("contract 4: keeps CJK in the query (x.com?q=中 stays whole)", () => {
+    expect(preprocessLinks("a https://x.com?q=中 b")).toBe(
+      "a [https://x.com?q=中](https://x.com?q=中) b",
+    );
+  });
+
+  // Only the trailing glued run is stripped; a real IDN label earlier stays.
+  it("strips only the glued tail on 中国.cn吗 (keeps 中国.cn)", () => {
+    expect(preprocessLinks("a https://中国.cn吗 b")).toBe(
+      "a [https://中国.cn](https://中国.cn)吗 b",
+    );
+  });
+
+  it("preserves a mixed ASCII+CJK non-trailing label abc中.cn (no regression)", () => {
+    expect(preprocessLinks("a https://abc中.cn b")).toBe(
+      "a [https://abc中.cn](https://abc中.cn) b",
+    );
+  });
+
+  it("handles userinfo in the authority before the glued CJK", () => {
+    expect(preprocessLinks("a https://user@x.com吗 b")).toBe(
+      "a [https://user@x.com](https://user@x.com)吗 b",
+    );
+  });
+
+  it("leaves a port-then-CJK authority as plain text (safe: no leaked link)", () => {
+    // linkify-it rejects a port followed by CJK (`:8080吗`) and matches nothing
+    // at all, so the string stays plain text. That is safe — the goal is "no
+    // link with CJK glued into the host", and here there is simply no link.
+    expect(preprocessLinks("a https://x.com:8080吗 b")).toBe(
+      "a https://x.com:8080吗 b",
+    );
+  });
+
+  // Documented cost 1 (product heuristic, not IRI truth): an invalid host + CJK
+  // (never a real host) is left untouched — the trailing CJK stays in the link.
+  it("documented cost 1: invalid host + CJK (x.zzz吗) is left untouched", () => {
+    expect(preprocessLinks("a https://x.zzz吗 b")).toBe(
+      "a [https://x.zzz吗](https://x.zzz吗) b",
+    );
+  });
+
+  // Documented cost 2: the validity oracle is linkify-it's own fuzzy matcher,
+  // which does not recognize several raw-Unicode IDN TLDs (verified: 中国 公司
+  // 网络 みんな 한국). Han glued after such a TLD is NOT stripped. This is not a
+  // regression (today's behavior is identical) and fixing it would require a
+  // self-maintained IDN-TLD table — the very "unbounded list" this design avoids.
+  it("documented cost 2: raw-Unicode IDN TLD + Han (x.中国吗) is left untouched", () => {
+    expect(preprocessLinks("a https://x.中国吗 b")).toBe(
+      "a [https://x.中国吗](https://x.中国吗) b",
+    );
+  });
+
+  // ...but the boundary is "suffix the fuzzy oracle CAN confirm", not
+  // ASCII-only: IDN TLDs the oracle DOES recognize (Cyrillic .рф, punycode
+  // roots) truncate the glued Han correctly.
+  it("recognized IDN TLD .рф + Han (x.рф吗) truncates correctly", () => {
+    expect(preprocessLinks("a https://x.рф吗 b")).toBe(
+      "a [https://x.рф](https://x.рф)吗 b",
+    );
+  });
+
+  it("punycode TLD + Han (x.xn--p1ai吗) truncates correctly", () => {
+    expect(preprocessLinks("a https://x.xn--p1ai吗 b")).toBe(
+      "a [https://x.xn--p1ai](https://x.xn--p1ai)吗 b",
+    );
+  });
+
+  // The punctuation boundary still fires alongside the letter rule.
+  it("still truncates at CJK punctuation after the host (no regression)", () => {
+    expect(preprocessLinks("见 https://x.com。后文")).toBe(
+      "见 [https://x.com](https://x.com)。后文",
+    );
+  });
+
+  it("detectLinks reports the truncated span for contract 1", () => {
+    const links = detectLinks("参见 https://x.com吗");
+    expect(links).toHaveLength(1);
+    expect(links[0]).toMatchObject({
+      type: "url",
+      text: "https://x.com",
+      url: "https://x.com",
+      start: 3,
+      end: 16,
+    });
   });
 });

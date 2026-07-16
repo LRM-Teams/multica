@@ -24,6 +24,15 @@ const FILE_PATH_REGEX =
 const CJK_URL_TERMINATOR_REGEX =
   /[！-／：-＠［-｀｛-～、。「-】]/
 
+// CJK *letters* (ideographs, kana, hangul, CJK-compat ideographs). Distinct
+// from CJK_URL_TERMINATOR_REGEX above, which is full-width *punctuation*.
+// linkify-it's strict (schemed) host parser treats these as valid domain-label
+// characters — correct for IDN hosts like `中国.cn`, but it means a URL typed
+// immediately followed by a CJK word with no separator (`https://x.com吗`)
+// swallows the trailing word into the host. See hostCjkOverrunIdx.
+const CJK_LETTER_REGEX =
+  /[㐀-鿿぀-ヿ가-힯豈-﫿]/
+
 interface DetectedLink {
   type: 'url' | 'email' | 'file'
   text: string
@@ -208,26 +217,96 @@ function rangesOverlap(
 }
 
 /**
+ * Oracle for "is `s` a complete host on its own?" — reuses linkify-it's own
+ * fuzzy (scheme-less) matcher so we don't maintain a parallel TLD list (the
+ * library exposes no queryable TLD API; `.tlds()` is a setter and only affects
+ * fuzzy matching). True iff the whole string is matched as a single fuzzy link.
+ */
+function isFuzzyWholeHost(s: string): boolean {
+  const m = linkify.match(s)
+  const only = m && m.length === 1 ? m[0] : undefined
+  return !!only && only.index === 0 && only.lastIndex === s.length
+}
+
+/**
+ * Detect a "trailing-CJK host overrun": a schemed URL whose authority ends with
+ * a run of CJK *letters* that linkify-it swallowed into the host because it
+ * treats them as valid domain-label chars (e.g. typing "https://x.com吗" with
+ * no space glues "吗" onto "x.com"). Returns the index in `matchText` at which
+ * to truncate, or -1 when there is no overrun.
+ *
+ * The host-validity check is done with linkify-it's OWN fuzzy matcher
+ * (isFuzzyWholeHost), not a TLD table: we truncate only when the whole
+ * authority is NOT itself a valid host but the authority minus its trailing CJK
+ * run IS. This preserves real IDN hosts whose labels are CJK — `中国.cn`,
+ * `x.中国`, `abc中.cn` all stay whole — and only strips CJK glued past a
+ * complete host.
+ *
+ * This is a product heuristic, not IRI/IDNA truth. Documented cost: an invalid
+ * host followed by CJK (e.g. `x.zzz吗`, which was never a real host) is left
+ * untouched, so its trailing `吗` stays inside the link.
+ */
+function hostCjkOverrunIdx(matchText: string): number {
+  const schemeMatch = matchText.match(/^[a-z][a-z0-9+.-]*:\/\//i)
+  if (!schemeMatch) return -1 // only the strict (schemed) host path overruns
+  const hostStart = schemeMatch[0].length
+  let hostEnd = matchText.length
+  for (let i = hostStart; i < matchText.length; i++) {
+    const c = matchText[i]
+    if (c === '/' || c === '?' || c === '#') {
+      hostEnd = i
+      break
+    }
+  }
+  const authority = matchText.slice(hostStart, hostEnd)
+  if (!authority || !CJK_LETTER_REGEX.test(authority.charAt(authority.length - 1))) return -1
+
+  let cut = authority.length
+  while (cut > 0 && CJK_LETTER_REGEX.test(authority.charAt(cut - 1))) cut--
+  if (cut === 0) return -1
+
+  const prefix = authority.slice(0, cut)
+  if (!isFuzzyWholeHost(authority) && isFuzzyWholeHost(prefix)) {
+    return hostStart + cut
+  }
+  return -1
+}
+
+/**
  * Run linkify-it on `text` and push normalized link records into `out`,
- * shifted by `offset`. When linkify-it merges multiple URLs into one match
- * because they are separated only by CJK punctuation (which it doesn't treat
- * as a URL boundary), we truncate at that punctuation and re-scan the tail.
+ * shifted by `offset`. linkify-it treats neither CJK punctuation nor CJK
+ * letters as URL boundaries, so it can over-extend a match in two ways we
+ * correct here:
+ * - CJK punctuation swallowed into the href (`…com。后文`) → truncate at it;
+ * - CJK letters glued onto the host (`https://x.com吗`) → truncate via
+ *   hostCjkOverrunIdx.
+ * We truncate at whichever comes first and re-scan the tail.
  */
 function collectLinkifyMatches(text: string, offset: number, out: DetectedLink[]): void {
   const matches = linkify.match(text)
   if (!matches) return
 
   for (const match of matches) {
-    const cjkIdx = match.text.search(CJK_URL_TERMINATOR_REGEX)
-    if (cjkIdx === 0) continue // match starts with CJK punct — skip
+    const cjkPunctIdx = match.text.search(CJK_URL_TERMINATOR_REGEX)
+    if (cjkPunctIdx === 0) continue // match starts with CJK punct — skip
 
-    const truncate = cjkIdx > 0
-    const matchText = truncate ? match.text.slice(0, cjkIdx) : match.text
+    const hostCjkIdx = hostCjkOverrunIdx(match.text)
+
+    // Truncate at the earliest of the two boundaries, if any.
+    const truncIdx = [cjkPunctIdx, hostCjkIdx]
+      .filter((i) => i > 0)
+      .reduce((min, i) => (min < 0 || i < min ? i : min), -1)
+    const truncate = truncIdx > 0
+    // The CJK punct is a delimiter to skip when re-scanning; the glued CJK
+    // letters are text to preserve, so only advance past a punctuation cut.
+    const cutIsPunct = truncate && truncIdx === cjkPunctIdx
+
+    const matchText = truncate ? match.text.slice(0, truncIdx) : match.text
     // linkify-it may prepend a scheme (e.g. "http://" or "mailto:") to url
     // while leaving text as the raw substring. Preserve that prefix.
     const schemePrefix = match.url.slice(0, match.url.length - match.text.length)
     const matchUrl = truncate ? schemePrefix + matchText : match.url
-    const matchEnd = truncate ? match.index + cjkIdx : match.lastIndex
+    const matchEnd = truncate ? match.index + truncIdx : match.lastIndex
 
     out.push({
       type: match.schema === 'mailto:' ? 'email' : 'url',
@@ -238,9 +317,10 @@ function collectLinkifyMatches(text: string, offset: number, out: DetectedLink[]
     })
 
     if (truncate) {
-      // Rescan the tail after the CJK punct — linkify-it had greedily swallowed
-      // it, so any additional URLs after the punct were never emitted.
-      const tailStart = matchEnd + 1
+      // Rescan the tail — linkify-it had greedily swallowed past the boundary,
+      // so any additional URLs after it were never emitted. Skip the single
+      // punctuation delimiter; keep glued CJK letters as re-scannable text.
+      const tailStart = matchEnd + (cutIsPunct ? 1 : 0)
       collectLinkifyMatches(text.slice(tailStart), offset + tailStart, out)
       return
     }

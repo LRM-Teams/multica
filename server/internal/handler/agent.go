@@ -53,11 +53,11 @@ type AgentResponse struct {
 	// across the API surface. Reading values requires the dedicated, audited
 	// `GET /api/agents/{id}/env` endpoint; writing requires `PUT` to the
 	// same path. agent-actor tokens are denied there. See MUL-2600.
-	HasCustomEnv       bool   `json:"has_custom_env"`
-	CustomEnvKeyCount  int    `json:"custom_env_key_count"`
-	McpConfigRedacted  bool   `json:"mcp_config_redacted"`
-	Visibility         string `json:"visibility"`
-	Status             string `json:"status"`
+	HasCustomEnv      bool   `json:"has_custom_env"`
+	CustomEnvKeyCount int    `json:"custom_env_key_count"`
+	McpConfigRedacted bool   `json:"mcp_config_redacted"`
+	Visibility        string `json:"visibility"`
+	Status            string `json:"status"`
 	// ManagedRole marks agents the platform manages specially. Empty for
 	// ordinary agents; "group_manager" for a per-group Beckham. The UI keys
 	// the channel-panel config tab (and its any-member editability) off this.
@@ -293,6 +293,10 @@ type AgentTaskResponse struct {
 	MaxAttempts      int32          `json:"max_attempts"`
 	ParentTaskID     *string        `json:"parent_task_id,omitempty"`
 	Agent            *TaskAgentData `json:"agent,omitempty"`
+	// ExecutionConfig is the immutable runtime configuration captured when this
+	// execution was created. It is distinct from the agent Profile defaults,
+	// which only govern later work.
+	ExecutionConfig *service.TaskExecutionConfig `json:"execution_config,omitempty"`
 	// ArealProxy carries the AReaL RL proxy provider config extracted from the
 	// task's context.areal_proxy at claim time (written by the session-open
 	// hook, Task 5). When present the daemon launches the runtime against the
@@ -509,6 +513,9 @@ func taskToResponse(t db.AgentTaskQueue, workspaceID string) AgentTaskResponse {
 		ChatSessionID:  uuidToString(t.ChatSessionID),
 		AutopilotRunID: uuidToString(t.AutopilotRunID),
 		Kind:           computeTaskKind(t),
+	}
+	if config, ok := service.TaskExecutionConfigFromContext(t.Context); ok {
+		resp.ExecutionConfig = &config
 	}
 	// Trained-task RL proxy override (§4.4): surface context.areal_proxy on the
 	// claim response so the daemon can route the runtime through the bridge.
@@ -1039,6 +1046,13 @@ type UpdateAgentRequest struct {
 	// Distinguishing those modes is why this is a pointer; the raw-fields
 	// map captured at decode time tells us whether the key was sent.
 	ThinkingLevel *string `json:"thinking_level"`
+	// ModelCatalogRequestID binds a Profile execution-config save to the
+	// completed runtime model discovery that populated its picker. It is not
+	// persisted on the agent: it is proof for this mutation that the selected
+	// model/reasoning combination is actually advertised by the target runtime.
+	// Legacy callers that do not send it retain provider-level validation while
+	// they migrate to the Profile contract.
+	ModelCatalogRequestID *string `json:"model_catalog_request_id"`
 }
 
 // workspaceAlwaysRedactSecrets reports whether the workspace has opted
@@ -1282,6 +1296,27 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		params.Model = pgtype.Text{String: *req.Model, Valid: true}
 	}
 
+	// Profile saves carry the completed discovery request that backed the
+	// picker. Validate the exact runtime/model/thinking combination before any
+	// write, rather than accepting a provider-shaped token that this runtime
+	// does not advertise. The request is intentionally transient: it proves
+	// fresh runtime capability without turning daemon-discovered catalog data
+	// into a stale agent setting.
+	if req.ModelCatalogRequestID != nil {
+		targetModel := existing.Model.String
+		if req.Model != nil {
+			targetModel = *req.Model
+		}
+		targetThinkingLevel := existing.ThinkingLevel.String
+		if req.ThinkingLevel != nil {
+			targetThinkingLevel = *req.ThinkingLevel
+		}
+		if err := h.validateAgentModelCatalog(r.Context(), *req.ModelCatalogRequestID, targetRuntimeID, targetModel, targetThinkingLevel); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+
 	// thinking_level handling (MUL-2339). Tri-state semantics:
 	//   - field omitted  → leave column alone (COALESCE narg), but if a
 	//     runtime change in this same request would make the *existing*
@@ -1423,6 +1458,58 @@ func (h *Handler) resolveAgentProvider(r *http.Request, workspaceID pgtype.UUID,
 		return "", false
 	}
 	return rt.Provider, true
+}
+
+// validateAgentModelCatalog verifies the exact execution-config tuple against
+// a completed daemon model-discovery response. A model-list request is bound
+// to one runtime and expires with the store's normal retention window, so it
+// cannot be replayed for a different runtime or indefinitely after capability
+// changes.
+func (h *Handler) validateAgentModelCatalog(ctx context.Context, requestID string, runtimeID pgtype.UUID, model, thinkingLevel string) error {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return fmt.Errorf("model_catalog_request_id is required for execution configuration")
+	}
+	request, err := h.ModelListStore.Get(ctx, requestID)
+	if err != nil {
+		return fmt.Errorf("failed to load model catalog")
+	}
+	if request == nil || request.Status != ModelListCompleted {
+		return fmt.Errorf("model catalog is unavailable or expired; refresh runtime models and try again")
+	}
+	if request.RuntimeID != uuidToString(runtimeID) {
+		return fmt.Errorf("model catalog does not belong to the selected runtime")
+	}
+	if !request.Supported {
+		if model != "" || thinkingLevel != "" {
+			return fmt.Errorf("the selected runtime does not support per-agent model or thinking configuration")
+		}
+		return nil
+	}
+	if model == "" {
+		if thinkingLevel != "" {
+			return fmt.Errorf("select a model before selecting a thinking level")
+		}
+		return nil
+	}
+	for _, entry := range request.Models {
+		if entry.ID != model {
+			continue
+		}
+		if thinkingLevel == "" {
+			return nil
+		}
+		if entry.Thinking == nil {
+			return fmt.Errorf("the selected model does not support thinking configuration")
+		}
+		for _, level := range entry.Thinking.SupportedLevels {
+			if level.Value == thinkingLevel {
+				return nil
+			}
+		}
+		return fmt.Errorf("thinking_level %q is not advertised for model %q", thinkingLevel, model)
+	}
+	return fmt.Errorf("model %q is not advertised by the selected runtime", model)
 }
 
 func (h *Handler) ArchiveAgent(w http.ResponseWriter, r *http.Request) {
@@ -1613,7 +1700,8 @@ func (h *Handler) listAgentInboxTaskResponses(ctx context.Context, agentID, work
 	rows, err := h.DB.Query(ctx, `
 		SELECT e.id,
 		       e.agent_id,
-		       COALESCE(latest_delivery.runtime_id, s.runtime_id) AS runtime_id,
+		       COALESCE(latest_delivery.runtime_id, e.runtime_id, s.runtime_id) AS runtime_id,
+		       e.execution_config,
 		       e.status,
 		       COALESCE(e.terminal_outcome, '') AS terminal_outcome,
 		       e.priority,
@@ -1650,10 +1738,11 @@ func (h *Handler) listAgentInboxTaskResponses(ctx context.Context, agentID, work
 	for rows.Next() {
 		var id, rowAgentID, runtimeID, chatSessionID pgtype.UUID
 		var status, terminalOutcome, reason, sourceContent, deliveryStatus string
+		var executionConfig []byte
 		var priority int32
 		var lastError pgtype.Text
 		var claimedAt, terminalAt, createdAt, leasedAt pgtype.Timestamptz
-		if err := rows.Scan(&id, &rowAgentID, &runtimeID, &status, &terminalOutcome, &priority, &lastError, &claimedAt, &terminalAt, &createdAt, &chatSessionID, &reason, &sourceContent, &deliveryStatus, &leasedAt); err != nil {
+		if err := rows.Scan(&id, &rowAgentID, &runtimeID, &executionConfig, &status, &terminalOutcome, &priority, &lastError, &claimedAt, &terminalAt, &createdAt, &chatSessionID, &reason, &sourceContent, &deliveryStatus, &leasedAt); err != nil {
 			return nil, err
 		}
 		resp := AgentTaskResponse{
@@ -1674,6 +1763,9 @@ func (h *Handler) listAgentInboxTaskResponses(ctx context.Context, agentID, work
 		}
 		if summary := inboxEventTaskSummary(reason, sourceContent); summary != "" {
 			resp.TriggerSummary = &summary
+		}
+		if config, ok := service.TaskExecutionConfigFromContext(executionConfig); ok {
+			resp.ExecutionConfig = &config
 		}
 		items = append(items, agentTaskSortItem{Task: resp, SortAt: timestampToTime(createdAt)})
 	}
@@ -1922,7 +2014,8 @@ func (h *Handler) listWorkspaceActiveAgentInboxTaskResponses(ctx context.Context
 	rows, err := h.DB.Query(ctx, `
 		SELECT e.id,
 		       e.agent_id,
-		       COALESCE(latest_delivery.runtime_id, s.runtime_id) AS runtime_id,
+		       COALESCE(latest_delivery.runtime_id, e.runtime_id, s.runtime_id) AS runtime_id,
+		       e.execution_config,
 		       e.status,
 		       e.priority,
 		       e.last_error,
@@ -1957,10 +2050,11 @@ func (h *Handler) listWorkspaceActiveAgentInboxTaskResponses(ctx context.Context
 	for rows.Next() {
 		var id, rowAgentID, runtimeID, chatSessionID pgtype.UUID
 		var status, reason, sourceContent, deliveryStatus string
+		var executionConfig []byte
 		var priority int32
 		var lastError pgtype.Text
 		var claimedAt, createdAt, leasedAt pgtype.Timestamptz
-		if err := rows.Scan(&id, &rowAgentID, &runtimeID, &status, &priority, &lastError, &claimedAt, &createdAt, &chatSessionID, &reason, &sourceContent, &deliveryStatus, &leasedAt); err != nil {
+		if err := rows.Scan(&id, &rowAgentID, &runtimeID, &executionConfig, &status, &priority, &lastError, &claimedAt, &createdAt, &chatSessionID, &reason, &sourceContent, &deliveryStatus, &leasedAt); err != nil {
 			return nil, err
 		}
 		resp := AgentTaskResponse{
@@ -1980,6 +2074,9 @@ func (h *Handler) listWorkspaceActiveAgentInboxTaskResponses(ctx context.Context
 		}
 		if summary := inboxEventTaskSummary(reason, sourceContent); summary != "" {
 			resp.TriggerSummary = &summary
+		}
+		if config, ok := service.TaskExecutionConfigFromContext(executionConfig); ok {
+			resp.ExecutionConfig = &config
 		}
 		items = append(items, agentTaskSortItem{Task: resp, SortAt: timestampToTime(createdAt)})
 	}

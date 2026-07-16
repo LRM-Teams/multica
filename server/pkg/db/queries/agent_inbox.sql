@@ -42,6 +42,8 @@ INSERT INTO agent_inbox_event (
   channel_id,
   chat_session_id,
   agent_id,
+  runtime_id,
+  execution_config,
   source_message_id,
   reason,
   requires_wake,
@@ -57,6 +59,12 @@ VALUES (
   sqlc.narg('channel_id'),
   sqlc.narg('chat_session_id'),
   $4,
+  (SELECT runtime_id FROM agent WHERE id = $4),
+  (SELECT jsonb_build_object(
+      'model', COALESCE(model, ''),
+      'thinking_level', COALESCE(thinking_level, ''),
+      'snapshotted', true
+    ) FROM agent WHERE id = $4),
   sqlc.narg('source_message_id'),
   $5,
   $6,
@@ -74,6 +82,8 @@ INSERT INTO agent_inbox_event (
   conversation_id,
   channel_id,
   agent_id,
+  runtime_id,
+  execution_config,
   source_message_id,
   reason,
   requires_wake,
@@ -88,6 +98,12 @@ VALUES (
   $3,
   $4,
   $5,
+  (SELECT runtime_id FROM agent WHERE id = $5),
+  (SELECT jsonb_build_object(
+      'model', COALESCE(model, ''),
+      'thinking_level', COALESCE(thinking_level, ''),
+      'snapshotted', true
+    ) FROM agent WHERE id = $5),
   sqlc.narg('source_message_id'),
   'ambient',
   false,
@@ -120,7 +136,7 @@ WHERE id = $1;
 SELECT count(*)
 FROM agent_inbox_event e
 JOIN agent_session s ON s.id = e.agent_session_id
-WHERE s.runtime_id = $1
+WHERE COALESCE(e.runtime_id, s.runtime_id) = $1
   AND s.status = 'active'
   AND e.status IN ('pending', 'failed');
 
@@ -133,7 +149,7 @@ WITH expired_delivery AS (
   FROM agent_session s, agent_inbox_event e
   WHERE d.agent_session_id = s.id
     AND d.inbox_event_id = e.id
-    AND s.runtime_id = $1
+    AND COALESCE(e.runtime_id, s.runtime_id) = $1
     AND s.status = 'active'
     AND e.status = 'draining'
     AND d.status IN ('leased', 'processing')
@@ -160,7 +176,7 @@ WITH next_event AS (
   FROM agent_inbox_event e
   JOIN agent_session s ON s.id = e.agent_session_id
   JOIN agent a ON a.id = e.agent_id
-  WHERE s.runtime_id = $1
+  WHERE COALESCE(e.runtime_id, s.runtime_id) = $1
     AND s.status = 'active'
     AND e.status IN ('pending', 'failed')
     -- Chat inbox execution is globally serial per agent. This is deliberately
@@ -347,6 +363,8 @@ retried_event AS (
     channel_id,
     chat_session_id,
     agent_id,
+    runtime_id,
+    execution_config,
     source_message_id,
     reason,
     requires_wake,
@@ -362,6 +380,12 @@ retried_event AS (
     guarded.channel_id,
     guarded.chat_session_id,
     guarded.agent_id,
+    a.runtime_id,
+    jsonb_build_object(
+      'model', COALESCE(a.model, ''),
+      'thinking_level', COALESCE(a.thinking_level, ''),
+      'snapshotted', true
+    ),
     guarded.source_message_id,
     guarded.reason,
     true,
@@ -370,6 +394,7 @@ retried_event AS (
     guarded.seq_from,
     guarded.seq_to
   FROM guarded
+  JOIN agent a ON a.id = guarded.agent_id
   JOIN refreshed_session ON refreshed_session.id = guarded.agent_session_id
   RETURNING *
 ),

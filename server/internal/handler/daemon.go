@@ -1274,6 +1274,12 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		if agent.McpConfig != nil {
 			mcpConfig = json.RawMessage(agent.McpConfig)
 		}
+		model := agent.Model.String
+		thinkingLevel := agent.ThinkingLevel.String
+		if config, ok := service.TaskExecutionConfigFromContext(task.Context); ok {
+			model = config.Model
+			thinkingLevel = config.ThinkingLevel
+		}
 		resp.Agent = &TaskAgentData{
 			ID:            uuidToString(agent.ID),
 			Name:          agentDisplayName(agent),
@@ -1282,8 +1288,8 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			CustomEnv:     customEnv,
 			CustomArgs:    customArgs,
 			McpConfig:     mcpConfig,
-			Model:         agent.Model.String,
-			ThinkingLevel: agent.ThinkingLevel.String,
+			Model:         model,
+			ThinkingLevel: thinkingLevel,
 		}
 	}
 

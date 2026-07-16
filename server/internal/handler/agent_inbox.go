@@ -17,6 +17,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/messageparts"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -824,6 +825,12 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 		if agent.McpConfig != nil {
 			mcpConfig = json.RawMessage(agent.McpConfig)
 		}
+		model := agent.Model.String
+		thinkingLevel := agent.ThinkingLevel.String
+		if config, ok := service.TaskExecutionConfigFromContext(event.ExecutionConfig); ok {
+			model = config.Model
+			thinkingLevel = config.ThinkingLevel
+		}
 		resp.Agent = &TaskAgentData{
 			ID:            uuidToString(agent.ID),
 			Name:          agentDisplayName(agent),
@@ -832,8 +839,8 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 			CustomEnv:     customEnv,
 			CustomArgs:    customArgs,
 			McpConfig:     mcpConfig,
-			Model:         agent.Model.String,
-			ThinkingLevel: agent.ThinkingLevel.String,
+			Model:         model,
+			ThinkingLevel: thinkingLevel,
 		}
 	}
 	usesAgentCredentialTransport := runtime.OwnerID.Valid && agentRuntimeHasCapability(runtime, protocol.DaemonCapabilityAgentCredentialTransport)
@@ -886,10 +893,14 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 }
 
 func agentInboxSyntheticTask(event db.AgentInboxEvent, runtimeID pgtype.UUID) db.AgentTaskQueue {
+	if event.RuntimeID.Valid {
+		runtimeID = event.RuntimeID
+	}
 	return db.AgentTaskQueue{
 		ID:            event.ID,
 		AgentID:       event.AgentID,
 		RuntimeID:     runtimeID,
+		Context:       event.ExecutionConfig,
 		ChatSessionID: event.ChatSessionID,
 		Status:        "dispatched",
 		Priority:      event.Priority,
@@ -939,7 +950,7 @@ func (h *Handler) runtimeIDForAgentInboxDelivery(ctx context.Context, deliveryID
 func (h *Handler) runtimeIDForAgentInboxEvent(ctx context.Context, event db.AgentInboxEvent) pgtype.UUID {
 	var runtimeID pgtype.UUID
 	_ = h.DB.QueryRow(ctx, `
-		SELECT COALESCE(latest_delivery.runtime_id, s.runtime_id, a.runtime_id)
+		SELECT COALESCE(latest_delivery.runtime_id, e.runtime_id, s.runtime_id, a.runtime_id)
 		FROM agent_inbox_event e
 		JOIN agent a ON a.id = e.agent_id
 		LEFT JOIN agent_session s ON s.id = e.agent_session_id

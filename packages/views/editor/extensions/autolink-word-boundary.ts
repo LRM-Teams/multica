@@ -153,22 +153,6 @@ export function createWordBoundaryAutolink() {
             }
             return null;
           },
-          props: {
-            handleDOMEvents: {
-              // IME recovery: when composition ends, a URL that was skipped
-              // while composing (we never fire mid-composition) gets linked
-              // now. Deferred to a microtask so ProseMirror has committed the
-              // composed text into the document first.
-              compositionend: (view) => {
-                queueMicrotask(() => {
-                  if (view.isDestroyed) return;
-                  const tr = autolinkFinalWord(view.state);
-                  if (tr) view.dispatch(tr);
-                });
-                return false;
-              },
-            },
-          },
         }),
       ];
     },

@@ -188,19 +188,6 @@ describe("word-boundary autolink (#531)", () => {
     expect(linkMarks(ed)).toHaveLength(0);
   });
 
-  it("IME recovery: compositionend links a URL left unmarked while composing", async () => {
-    const ed = makeEditor();
-    // A URL sitting at the cursor with no boundary (as if composition just
-    // committed the surrounding text) — not linked yet.
-    type(ed, "https://x.com");
-    expect(linkMarks(ed)).toHaveLength(0);
-    ed.view.dom.dispatchEvent(new CompositionEvent("compositionend"));
-    await Promise.resolve(); // flush the queued microtask
-    const marks = linkMarks(ed);
-    expect(marks).toHaveLength(1);
-    expect(marks[0]!.text).toBe("https://x.com");
-  });
-
   it("mention atom before the URL: word range stops at the atom, URL clean", () => {
     const element = document.createElement("div");
     document.body.appendChild(element);

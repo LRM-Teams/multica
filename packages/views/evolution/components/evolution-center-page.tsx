@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   Activity,
   ArrowUpRight,
@@ -971,17 +971,14 @@ function CuratorProfileCard({
   const configuredTargetsValid = profile?.target_scope !== "selected" || (profile.target_agent_ids?.length ?? 0) > 0;
   const selfReviewRunnable = profile?.self_review_enabled === true;
   const teamCurationRunnable = profile?.team_curation_enabled === true;
-  const runStageEnabled = runStage === "agent_self_review" ? selfReviewRunnable : runStage === "team_curation" ? teamCurationRunnable : selfReviewRunnable && teamCurationRunnable;
-
-  useEffect(() => {
-    if (runStage === "all" && !(selfReviewRunnable && teamCurationRunnable)) {
-      setRunStage(selfReviewRunnable ? "agent_self_review" : "team_curation");
-    } else if (runStage === "team_curation" && !teamCurationRunnable && selfReviewRunnable) {
-      setRunStage("agent_self_review");
-    } else if (runStage === "agent_self_review" && !selfReviewRunnable && teamCurationRunnable) {
-      setRunStage("team_curation");
-    }
-  }, [runStage, selfReviewRunnable, teamCurationRunnable]);
+  const effectiveRunStage = runStage === "all" && !(selfReviewRunnable && teamCurationRunnable)
+    ? selfReviewRunnable ? "agent_self_review" : teamCurationRunnable ? "team_curation" : runStage
+    : runStage === "team_curation" && !teamCurationRunnable && selfReviewRunnable
+      ? "agent_self_review"
+      : runStage === "agent_self_review" && !selfReviewRunnable && teamCurationRunnable
+        ? "team_curation"
+        : runStage;
+  const runStageEnabled = effectiveRunStage === "agent_self_review" ? selfReviewRunnable : effectiveRunStage === "team_curation" ? teamCurationRunnable : selfReviewRunnable && teamCurationRunnable;
 
   const save = useMutation({
     mutationFn: () => api.updateMemoryCuratorProfile(wsId, {
@@ -1012,7 +1009,7 @@ function CuratorProfileCard({
     mutationFn: () => api.startMemoryCurationRun(wsId, {
       all_agents: profile?.target_scope !== "selected",
       agent_ids: profile?.target_scope === "selected" ? profile.target_agent_ids : undefined,
-      stage: runStage,
+      stage: effectiveRunStage,
       dry_run: dryRun,
     }),
     onSuccess: async () => {
@@ -1101,7 +1098,7 @@ function CuratorProfileCard({
           <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
             <div><div className="text-sm font-medium">{copy("manualRun")}</div><p className="mt-1 text-xs text-muted-foreground">{copy("manualRunHint")}</p></div>
             <div className="flex flex-wrap items-center gap-2">
-              <Select value={runStage} onValueChange={(value) => value && setRunStage(value as typeof runStage)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="agent_self_review" disabled={!selfReviewRunnable}>{copy(MEMORY_CURATION_STAGE_LABELS.selfReview)}</SelectItem><SelectItem value="team_curation" disabled={!teamCurationRunnable}>{copy(MEMORY_CURATION_STAGE_LABELS.teamCuration)}</SelectItem><SelectItem value="all" disabled={!selfReviewRunnable || !teamCurationRunnable}>{copy("allStages")}</SelectItem></SelectContent></Select>
+              <Select value={effectiveRunStage} onValueChange={(value) => value && setRunStage(value as typeof runStage)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="agent_self_review" disabled={!selfReviewRunnable}>{copy(MEMORY_CURATION_STAGE_LABELS.selfReview)}</SelectItem><SelectItem value="team_curation" disabled={!teamCurationRunnable}>{copy(MEMORY_CURATION_STAGE_LABELS.teamCuration)}</SelectItem><SelectItem value="all" disabled={!selfReviewRunnable || !teamCurationRunnable}>{copy("allStages")}</SelectItem></SelectContent></Select>
               <label className="flex items-center gap-2 text-xs"><Checkbox checked={dryRun} onCheckedChange={(checked) => setDryRun(checked === true)} />{copy("dryRun")}</label>
               <Button variant="outline" onClick={() => run.mutate()} disabled={!configured || !configuredTargetsValid || !runStageEnabled || run.isPending || save.isPending} title={runStageEnabled ? undefined : copy("saveProfileForStage")} className="gap-2"><Play className="h-4 w-4" />{copy("queueRun")}</Button>
             </div>

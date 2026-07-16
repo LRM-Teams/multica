@@ -166,28 +166,9 @@ describe("preprocessLinks — CJK letter host overrun (#537)", () => {
     );
   });
 
-  // Documented cost 1 (product heuristic, not IRI truth): an invalid host + CJK
-  // (never a real host) is left untouched — the trailing CJK stays in the link.
-  it("documented cost 1: invalid host + CJK (x.zzz吗) is left untouched", () => {
-    expect(preprocessLinks("a https://x.zzz吗 b")).toBe(
-      "a [https://x.zzz吗](https://x.zzz吗) b",
-    );
-  });
-
-  // Documented cost 2: the validity oracle is linkify-it's own fuzzy matcher,
-  // which does not recognize several raw-Unicode IDN TLDs (verified: 中国 公司
-  // 网络 みんな 한국). Han glued after such a TLD is NOT stripped. This is not a
-  // regression (today's behavior is identical) and fixing it would require a
-  // self-maintained IDN-TLD table — the very "unbounded list" this design avoids.
-  it("documented cost 2: raw-Unicode IDN TLD + Han (x.中国吗) is left untouched", () => {
-    expect(preprocessLinks("a https://x.中国吗 b")).toBe(
-      "a [https://x.中国吗](https://x.中国吗) b",
-    );
-  });
-
-  // ...but the boundary is "suffix the fuzzy oracle CAN confirm", not
-  // ASCII-only: IDN TLDs the oracle DOES recognize (Cyrillic .рф, punycode
-  // roots) truncate the glued Han correctly.
+  // Boundary control (a requirement, and it bounds documented cost 2 below):
+  // the fix is NOT "ASCII-only". IDN TLDs the fuzzy oracle DOES recognize
+  // (Cyrillic .рф, punycode roots) truncate the glued Han correctly.
   it("recognized IDN TLD .рф + Han (x.рф吗) truncates correctly", () => {
     expect(preprocessLinks("a https://x.рф吗 b")).toBe(
       "a [https://x.рф](https://x.рф)吗 b",
@@ -217,5 +198,31 @@ describe("preprocessLinks — CJK letter host overrun (#537)", () => {
       start: 3,
       end: 16,
     });
+  });
+});
+
+// ⚠️ These are NOT contracts. They pin KNOWN LIMITATIONS of the heuristic so a
+// change to them is a visible, deliberate act (not a silent regression). When a
+// limitation below is genuinely fixed, FLIP the expectation here — do not read
+// these as "the required behaviour". (This separation exists because a
+// casually-written `expect(...).toBe(...)` in three months reads as a spec.)
+describe("preprocessLinks — CJK host overrun (#537) DOCUMENTED COSTS (flip when fixed)", () => {
+  // Cost 1 (product heuristic, not IRI truth): an invalid host + CJK — never a
+  // real host — is left untouched, so the trailing CJK stays in the link.
+  it("cost 1: invalid host + CJK (x.zzz吗) is left untouched", () => {
+    expect(preprocessLinks("a https://x.zzz吗 b")).toBe(
+      "a [https://x.zzz吗](https://x.zzz吗) b",
+    );
+  });
+
+  // Cost 2: the fuzzy oracle does not recognize the raw-Unicode IDN TLDs tested
+  // (中国 公司 网络 みんな 한국), so Han glued after one is not stripped. NOT all
+  // IDN — see the .рф / punycode contracts above, which DO truncate. Not a
+  // regression; fixing needs a self-maintained IDN-TLD table (the "unbounded
+  // list" this design avoids).
+  it("cost 2: raw-Unicode IDN TLD + Han (x.中国吗) is left untouched", () => {
+    expect(preprocessLinks("a https://x.中国吗 b")).toBe(
+      "a [https://x.中国吗](https://x.中国吗) b",
+    );
   });
 });

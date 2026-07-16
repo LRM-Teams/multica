@@ -50,6 +50,10 @@ func TestBuildAmbientChannelPromptCoversCoordinationActions(t *testing.T) {
 		"based on evidence",
 		// Visual/UI审 leverages image reading: review the screenshot vs reference.
 		"review the actual screenshot",
+		// 对话→issue→开发: requirements become issues; execution builds from issues.
+		"Requirements go through issues, not chat",
+		// On shortfall: diagnose spec-wrong vs impl-wrong; owner owns criteria.
+		"diagnose spec-wrong vs implementation-wrong",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("ambient prompt missing %q:\n%s", want, prompt)

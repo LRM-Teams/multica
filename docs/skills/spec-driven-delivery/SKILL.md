@@ -29,6 +29,35 @@ done until it meets the standard, verified by evidence.**
 Core inversion (from Spec Kit's SDD): **the spec is the source of truth; code is
 its expression.** "Playable / it runs" is not "meets the spec".
 
+## The pipeline: conversation → issue → development
+Requirements enter through chat but are **built from issues, never from loose chat**:
+- Any requirement from anyone (a human, the manager, another agent) is first
+  **converted into a concrete issue** — amend an existing one or create a new one —
+  with acceptance criteria, reference material attached, and a link back to the
+  source message. A single owner (the manager / PM) does the conversion so the
+  board does not fill with duplicate issues. Until a requirement is in an issue,
+  it is not "accepted".
+- **Execution reads the issue** (description + acceptance criteria + attachments)
+  as its only source of truth. Chat and comment cross-talk are background and
+  coordination, not the spec — agents do not build straight from scrollback.
+- Plain social chatter (hi / 你好 / weather) needs no issue and is answered directly.
+
+## Two gates, and diagnosing failure
+- **Spec gate**: is the issue itself right — objective and acceptance criteria
+  correct, complete, unambiguous?
+- **Delivery gate**: does the implementation meet the (already-correct) criteria,
+  verified by evidence?
+
+When a deliverable falls short, **diagnose spec-wrong vs implementation-wrong first**:
+- If the acceptance criteria were wrong / missing / ambiguous → fix the **spec**
+  first, then rebuild. Acceptance-criteria changes are owned by the manager / PM;
+  an implementer may *propose* a correction but must **not** lower the bar to make
+  its own work pass (that would make the gate gameable). The human owner has final
+  say on the standard; the loop is for real errors/ambiguity, not for negotiating
+  the bar down.
+- If the criteria were right but unmet → bounce to the implementer to redo against
+  the issue.
+
 ## The loop: 审 (Review) → 派 (Assign) → 催 (Nudge)
 Review is the engine. Assign is what review produces. Nudge is the fallback when
 execution stalls.

@@ -275,6 +275,8 @@ func TestAssignmentTriggeredProtocolHonorsAgentIdentity(t *testing.T) {
 		"Complete the task **to its acceptance criteria / definition of done** within your Agent Identity boundaries",
 		"self-verify before you treat it as done",
 		"Deliver to the issue's acceptance criteria / definition of done, NOT a shallow pass",
+		"is your single source of truth",
+		"propose the correction to the issue owner",
 		"Do not investigate, implement, create issues, update issues, or delegate if your Agent Identity forbids that action",
 		"When done, run `multica issue status " + issueID + " in_review` unless your Agent Identity forbids issue status changes; if it does, skip this step.",
 		"If blocked, run `multica issue status " + issueID + " blocked` unless your Agent Identity forbids issue status changes.",

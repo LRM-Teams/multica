@@ -41,12 +41,6 @@ const OWNER_ONLY_FILES_MESSAGE =
 const FILES_LABEL = "Files";
 const NO_FILES_FOUND = "No files found.";
 const FILE_LIST_TRUNCATED = "File list truncated.";
-const RECENT_RADAR_LABEL = "Recent Radar";
-
-function radarActionCountLabel(count: number): string {
-  return `${count} action${count === 1 ? "" : "s"}`;
-}
-
 function ownerName(agent: Agent, members: readonly MemberWithUser[]): string {
   if (!agent.owner_id) return "Unknown";
   const member = members.find((m) => m.user_id === agent.owner_id);
@@ -289,11 +283,6 @@ export function AgentFilesPanel({
     queryFn: () => api.listAgentFiles(agent.id, { include_hidden: includeHidden }),
     enabled: canRead,
   });
-  const { data: radarData } = useQuery({
-    queryKey: ["agent-radar-runs", agent.id],
-    queryFn: () => api.listAgentRadarRuns(agent.id),
-    enabled: isOwner,
-  });
   const tree = useMemo(() => buildFileTree(data?.nodes ?? []), [data?.nodes]);
   const toggle = (path: string) =>
     setCollapsed((prev) => {
@@ -362,29 +351,6 @@ export function AgentFilesPanel({
               </>
             )}
           </div>
-          {radarData?.runs?.length ? (
-            <div className="border-t p-3">
-              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                {RECENT_RADAR_LABEL}
-              </p>
-              <div className="space-y-2">
-                {radarData.runs.slice(0, 3).map((run) => (
-                  <div key={run.id} className="rounded-md border bg-muted/30 p-2 text-xs">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-medium">{run.status}</span>
-                      <span className="text-muted-foreground">{run.trigger_kind}</span>
-                    </div>
-                    {run.context_summary && (
-                      <p className="mt-1 line-clamp-2 text-muted-foreground">{run.context_summary}</p>
-                    )}
-                    {run.actions.length > 0 && (
-                      <p className="mt-1 text-muted-foreground">{radarActionCountLabel(run.actions.length)}</p>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : null}
         </div>
       )}
       {canRead && (

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useReducer, useState } from "react";
 import { useDefaultLayout } from "react-resizable-panels";
-import { Box, Check, Copy, Loader2, Monitor, Plus, RotateCcw, Search, Server, Square, Trash2 } from "lucide-react";
+import { Box, Check, Copy, FileCode2, Loader2, Monitor, Plus, RotateCcw, Search, Server, Square, Trash2 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   useCreateSandboxMutation,
@@ -11,9 +11,15 @@ import {
   useStopSandboxMutation,
 } from "@multica/core/sandboxes/mutations";
 import { sandboxBindingListOptions, sandboxKeys, sandboxListOptions } from "@multica/core/sandboxes/queries";
-import { defaultSandboxName, effectiveSandboxNodeStatus, sandboxDisplayName } from "@multica/core/sandboxes/utils";
+import {
+  buildSandboxdConfigPath,
+  buildSandboxdSetupCommand,
+  defaultSandboxName,
+  effectiveSandboxNodeStatus,
+  sandboxDisplayName,
+} from "@multica/core/sandboxes/utils";
 import type { SandboxBinding, SandboxInstance } from "@multica/core/types";
-import { useWorkspacePaths } from "@multica/core/paths";
+import { useRequiredWorkspaceSlug, useWorkspacePaths } from "@multica/core/paths";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
@@ -37,6 +43,7 @@ import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { cn } from "@multica/ui/lib/utils";
 import { useWorkspaceId } from "@multica/core/hooks";
+import { useAuthStore } from "@multica/core/auth";
 import { api } from "@multica/core/api";
 import { toast } from "sonner";
 import { PageHeader } from "../../layout/page-header";
@@ -46,14 +53,17 @@ import { useT } from "../../i18n/use-t";
 type AddNodeState = {
   dialogOpen: boolean;
   setupCommand: string;
+  setupConfigPath: string;
   setupCopied: boolean;
   creating: boolean;
+  viewingSetupNodeId: string | null;
 };
 
 type AddNodeAction =
   | { type: "startCreating" }
-  | { type: "setupReady"; command: string }
-  | { type: "createFinished" }
+  | { type: "startViewing"; nodeId: string }
+  | { type: "setupReady"; command: string; configPath: string }
+  | { type: "setupFailed" }
   | { type: "setDialogOpen"; open: boolean }
   | { type: "copySuccess" }
   | { type: "copyReset" };
@@ -61,18 +71,29 @@ type AddNodeAction =
 const initialAddNodeState: AddNodeState = {
   dialogOpen: false,
   setupCommand: "",
+  setupConfigPath: "",
   setupCopied: false,
   creating: false,
+  viewingSetupNodeId: null,
 };
 
 function addNodeReducer(state: AddNodeState, action: AddNodeAction): AddNodeState {
   switch (action.type) {
     case "startCreating":
-      return { ...state, creating: true, setupCopied: false };
+      return { ...state, creating: true, viewingSetupNodeId: null, setupCopied: false };
+    case "startViewing":
+      return { ...state, creating: false, viewingSetupNodeId: action.nodeId, setupCopied: false };
     case "setupReady":
-      return { ...state, creating: false, setupCommand: action.command, dialogOpen: true };
-    case "createFinished":
-      return { ...state, creating: false };
+      return {
+        ...state,
+        creating: false,
+        viewingSetupNodeId: null,
+        setupCommand: action.command,
+        setupConfigPath: action.configPath,
+        dialogOpen: true,
+      };
+    case "setupFailed":
+      return { ...state, creating: false, viewingSetupNodeId: null };
     case "setDialogOpen":
       return { ...state, dialogOpen: action.open };
     case "copySuccess":
@@ -131,6 +152,8 @@ function bindingWithEffectiveStatus(binding: SandboxBinding, now: number): Sandb
 
 export function SandboxesPage() {
   const wsId = useWorkspaceId();
+  const workspaceSlug = useRequiredWorkspaceSlug();
+  const user = useAuthStore((s) => s.user);
   const paths = useWorkspacePaths();
   const navigation = useNavigation();
   const { t } = useT("layout");
@@ -145,7 +168,7 @@ export function SandboxesPage() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [createForm, setCreateForm] = useState<CreateFormState>(() => buildDefaultCreateForm(""));
   const [addNode, dispatchAddNode] = useReducer(addNodeReducer, initialAddNodeState);
-  const { dialogOpen: addDialogOpen, setupCommand, setupCopied, creating: creatingNode } = addNode;
+  const { dialogOpen: addDialogOpen, setupCommand, setupConfigPath, setupCopied, creating: creatingNode, viewingSetupNodeId } = addNode;
 
   const now = useNowTick();
 
@@ -222,29 +245,51 @@ export function SandboxesPage() {
       const token = await api.createSandboxNodeToken(node.id, { name: "sandboxd setup" });
       await api.bindSandboxNode(wsId, { node_id: node.id });
       await queryClient.invalidateQueries({ queryKey: sandboxKeys.bindings(wsId) });
-      const config = {
-        server_url: api.getBaseUrl?.() || window.location.origin,
-        node_token: token.token,
-        node_key: node.node_key,
+      const serverUrl = api.getBaseUrl?.() || window.location.origin;
+      const { command, configPath } = buildSandboxdSetupCommand({
+        serverUrl,
+        nodeToken: token.token,
+        nodeKey: node.node_key,
         name: node.name,
-        owner_user_id: node.owner_user_id || node.node_key,
-        sandbox_server: "http://127.0.0.1:3000",
-        cube_proxy_http: "http://127.0.0.1",
-        cube_domain: "cube.app",
-        cube_template_id: "YOUR_CUBE_TEMPLATE_ID",
-        concurrency: 1,
-        poll_interval: "5s",
-      };
-      dispatchAddNode({
-        type: "setupReady",
-        command: `mkdir -p .multica && cat > .multica/sandboxd.json <<'EOF'
-${JSON.stringify(config, null, 2)}
-EOF
-multica sandboxd`,
+        ownerUserId: node.owner_user_id || node.node_key,
+        workspaceSlug,
+        userName: user?.name,
+        userEmail: user?.email,
+        userId: user?.id,
       });
+      dispatchAddNode({ type: "setupReady", command, configPath });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : t(($) => $.sandboxes_page.add_node_failed));
-      dispatchAddNode({ type: "createFinished" });
+      dispatchAddNode({ type: "setupFailed" });
+    }
+  };
+
+  const handleViewNodeSetup = async (nodeId: string) => {
+    dispatchAddNode({ type: "startViewing", nodeId });
+    try {
+      const nodes = await api.listSandboxNodes();
+      const node = nodes.find((item) => item.id === nodeId);
+      if (!node) {
+        throw new Error(t(($) => $.sandboxes_page.view_setup_not_found));
+      }
+      const token = await api.createSandboxNodeToken(node.id, { name: "sandboxd setup" });
+      const serverUrl = api.getBaseUrl?.() || window.location.origin;
+      const { command, configPath } = buildSandboxdSetupCommand({
+        serverUrl,
+        nodeToken: token.token,
+        nodeKey: node.node_key,
+        name: node.name,
+        ownerUserId: node.owner_user_id || node.node_key,
+        workspaceSlug,
+        userName: user?.name,
+        userEmail: user?.email,
+        userId: user?.id,
+        metadata: node.metadata,
+      });
+      dispatchAddNode({ type: "setupReady", command, configPath });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : t(($) => $.sandboxes_page.view_setup_failed));
+      dispatchAddNode({ type: "setupFailed" });
     }
   };
 
@@ -315,6 +360,10 @@ multica sandboxd`,
             binding={selectedBinding}
             instances={selectedInstances}
             onCreate={openCreateDialog}
+            onViewSetup={() => {
+              if (selectedBinding) void handleViewNodeSetup(selectedBinding.node_id);
+            }}
+            viewingSetup={viewingSetupNodeId === selectedBinding?.node_id}
             stoppingId={stop.isPending ? stop.variables : undefined}
             resumingId={resume.isPending ? resume.variables : undefined}
             deletingId={del.isPending ? del.variables : undefined}
@@ -355,6 +404,10 @@ multica sandboxd`,
                 binding={selectedBinding}
                 instances={selectedInstances}
                 onCreate={openCreateDialog}
+                onViewSetup={() => {
+                  if (selectedBinding) void handleViewNodeSetup(selectedBinding.node_id);
+                }}
+                viewingSetup={viewingSetupNodeId === selectedBinding?.node_id}
                 stoppingId={stop.isPending ? stop.variables : undefined}
                 resumingId={resume.isPending ? resume.variables : undefined}
                 deletingId={del.isPending ? del.variables : undefined}
@@ -437,7 +490,17 @@ multica sandboxd`,
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{t(($) => $.sandboxes_page.add_node_dialog_title)}</DialogTitle>
-            <DialogDescription>{t(($) => $.sandboxes_page.add_node_dialog_description)}</DialogDescription>
+            <DialogDescription>
+              {t(($) => $.sandboxes_page.add_node_dialog_description, {
+                file: setupConfigPath || buildSandboxdConfigPath({
+                  workspaceSlug,
+                  userName: user?.name,
+                  userEmail: user?.email,
+                  userId: user?.id,
+                  serverUrl: api.getBaseUrl?.() || window.location.origin,
+                }),
+              })}
+            </DialogDescription>
           </DialogHeader>
           <code className="max-h-64 overflow-auto rounded-md border bg-muted/50 p-3 text-xs break-all select-all">{setupCommand}</code>
           <DialogFooter>
@@ -554,6 +617,8 @@ function NodeDetail({
   binding,
   instances,
   onCreate,
+  onViewSetup,
+  viewingSetup,
   stoppingId,
   resumingId,
   deletingId,
@@ -565,6 +630,8 @@ function NodeDetail({
   binding: SandboxBinding | null;
   instances: SandboxInstance[];
   onCreate: () => void;
+  onViewSetup: () => void;
+  viewingSetup: boolean;
   stoppingId?: string;
   resumingId?: string;
   deletingId?: string;
@@ -618,10 +685,16 @@ function NodeDetail({
               )}
             </div>
           </div>
-          <Button type="button" size="sm" onClick={onCreate}>
-            <Plus className="h-3 w-3" />
-            {t(($) => $.sandboxes_page.create_action)}
-          </Button>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button type="button" size="sm" variant="outline" onClick={onViewSetup} disabled={viewingSetup}>
+              {viewingSetup ? <Loader2 className="h-3 w-3 animate-spin" /> : <FileCode2 className="h-3 w-3" />}
+              {t(($) => $.sandboxes_page.view_setup_action)}
+            </Button>
+            <Button type="button" size="sm" onClick={onCreate}>
+              <Plus className="h-3 w-3" />
+              {t(($) => $.sandboxes_page.create_action)}
+            </Button>
+          </div>
         </div>
       </div>
 

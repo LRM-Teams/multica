@@ -90,9 +90,12 @@
     "delete_action": "删除",
     "add_node_action": "添加节点",
     "add_node_failed": "添加沙箱节点失败",
+    "view_setup_action": "查看配置",
+    "view_setup_failed": "获取节点配置失败",
+    "view_setup_not_found": "未找到该沙箱节点",
     "select_node_placeholder": "选择沙箱节点",
     "add_node_dialog_title": "在沙箱服务器上运行此命令",
-    "add_node_dialog_description": "该命令会写入 .multica/sandboxd.json，并使用新的节点密钥启动 sandboxd。",
+    "add_node_dialog_description": "该命令会写入 {{file}}，并使用新的节点密钥启动 sandboxd。",
     "copy_command_action": "复制命令",
     "copied_action": "已复制"
   }

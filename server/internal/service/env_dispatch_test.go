@@ -260,7 +260,7 @@ type precreateRuntimeCall struct {
 	AgentID     string
 }
 
-func (f *fakeEnvDispatchDeps) EnqueueAgentRun(_ context.Context, _, _, _, _, _, _, _, runtimeID string, idx int) (string, error) {
+func (f *fakeEnvDispatchDeps) EnqueueAgentRun(_ context.Context, _, _, _, _, _, _, _, _, runtimeID string, idx int) (string, error) {
 	if f.enqueueErr != nil {
 		return "", f.enqueueErr
 	}

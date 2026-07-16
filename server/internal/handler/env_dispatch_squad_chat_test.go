@@ -48,10 +48,10 @@ func setupSquadChatFixture(t *testing.T) (leaderAgentID, squadID, chatSessionID 
 	return leaderAgentID, squadID, chatSessionID
 }
 
-// TestEnqueueAgentRun_ChatSquad_StampsSquadHint verifies that a chat-path
+// TestDispatch_EnqueueAgentRunChatSquadStampsSquadHintAndActor verifies that a chat-path
 // dispatch with a squad_id (a) stamps the created chat task's context JSONB
 // with {"squad_id": <squad>} and (b) enqueues the squad LEADER's task.
-func TestEnqueueAgentRun_ChatSquad_StampsSquadHint(t *testing.T) {
+func TestDispatch_EnqueueAgentRunChatSquadStampsSquadHintAndActor(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -59,7 +59,7 @@ func TestEnqueueAgentRun_ChatSquad_StampsSquadHint(t *testing.T) {
 	leaderAgentID, squadID, chatSessionID := setupSquadChatFixture(t)
 
 	a := &envDispatchDepsAdapter{h: testHandler}
-	runID, err := a.EnqueueAgentRun(ctx, testWorkspaceID, "", squadID, "", chatSessionID, "", "", "", 0)
+	runID, err := a.EnqueueAgentRun(ctx, testWorkspaceID, testUserID, "", squadID, "", chatSessionID, "sandbox-chat", "", "", 0)
 	if err != nil {
 		t.Fatalf("EnqueueAgentRun squad chat: %v", err)
 	}
@@ -76,13 +76,23 @@ func TestEnqueueAgentRun_ChatSquad_StampsSquadHint(t *testing.T) {
 		t.Fatalf("read chat task: %v", err)
 	}
 	var c struct {
-		SquadID string `json:"squad_id"`
+		SquadID          string `json:"squad_id"`
+		EphemeralSandbox struct {
+			SandboxInstanceID string `json:"sandbox_instance_id"`
+			ActorUserID       string `json:"actor_user_id"`
+		} `json:"ephemeral_sandbox"`
 	}
 	if err := json.Unmarshal(ctxJSON, &c); err != nil {
 		t.Fatalf("unmarshal chat task context %q: %v", string(ctxJSON), err)
 	}
 	if c.SquadID != squadID {
 		t.Errorf("chat task context squad_id = %q, want %q", c.SquadID, squadID)
+	}
+	if c.EphemeralSandbox.SandboxInstanceID != "sandbox-chat" {
+		t.Errorf("sandbox_instance_id = %q, want sandbox-chat", c.EphemeralSandbox.SandboxInstanceID)
+	}
+	if c.EphemeralSandbox.ActorUserID != testUserID {
+		t.Errorf("actor_user_id = %q, want %q", c.EphemeralSandbox.ActorUserID, testUserID)
 	}
 	if taskAgent != leaderAgentID {
 		t.Errorf("chat task agent = %s, want leader %s", taskAgent, leaderAgentID)

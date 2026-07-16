@@ -870,7 +870,7 @@ func (a *envDispatchDepsAdapter) SetDefaultSelfPlayEnv(ctx context.Context, work
 // (assignee=squad + leader task) and the chat-path squad branch (leader
 // resolution + {"squad_id"} context hint) are implemented below. When
 // squadID == "" both paths behave exactly as the current single-agent path.
-func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, workspaceID, agentID, squadID, issueID, chatSessionID, sandboxInstanceID, envID, runtimeID string, idx int) (string, error) {
+func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, workspaceID, actorUserID, agentID, squadID, issueID, chatSessionID, sandboxInstanceID, envID, runtimeID string, idx int) (string, error) {
 	switch {
 	case issueID != "":
 		var agentUUID pgtype.UUID
@@ -921,7 +921,7 @@ func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, workspaceI
 			IssueID:      parseUUID(issueID),
 			Priority:     envDispatchTaskPriority,
 			IsLeaderTask: isLeaderTask,
-			Context:      mergeEphemeralSandboxContext(nil, sandboxInstanceID),
+			Context:      mergeEphemeralSandboxContext(nil, sandboxInstanceID, actorUserID),
 		})
 		if err != nil {
 			return "", stackerr.Wrap(err, "create agent task")
@@ -982,7 +982,7 @@ func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, workspaceI
 		// Phase 5: stamp the ephemeral_sandbox marker (sandbox_instance_id) so the
 		// terminal cleanup hook can reclaim the sandbox. No-op for squad dispatch
 		// (sandboxInstanceID is empty); merges alongside any squad_id context.
-		params.Context = mergeEphemeralSandboxContext(params.Context, sandboxInstanceID)
+		params.Context = mergeEphemeralSandboxContext(params.Context, sandboxInstanceID, actorUserID)
 		task, err := a.h.Queries.CreateChatTask(ctx, params)
 		if err != nil {
 			return "", stackerr.Wrap(err, "create chat task")
@@ -1001,10 +1001,8 @@ func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, workspaceI
 // agent's provider, owned by ownerUserID. The in-sandbox daemon booted with
 // MULTICA_DAEMON_ID=<daemon_id> adopts R' on register (UpsertAgentRuntime ON
 // CONFLICT). Returns the runtime id (R') and the daemon_id. The provider is
-// read from the agent's runtime_config - the same value the in-sandbox daemon
-// registers with for the pi-in-sandbox topology, so the pre-created row's
-// (workspace_id, daemon_id, provider) matches on register. An agent with no
-// provider is rejected.
+// read from the agent's authoritative bound runtime. Only pi runtimes support
+// the pi-in-sandbox topology.
 func (a *envDispatchDepsAdapter) PrecreateAgentRuntime(ctx context.Context, workspaceID, ownerUserID, agentID string) (string, string, error) {
 	wsUUID, err := util.ParseUUID(workspaceID)
 	if err != nil {
@@ -1025,35 +1023,27 @@ func (a *envDispatchDepsAdapter) PrecreateAgentRuntime(ctx context.Context, work
 	if err != nil {
 		return "", "", stackerr.Wrap(err, "get agent for runtime precreate")
 	}
-	provider := agentProvider(agent)
-	if provider == "" {
-		return "", "", stackerr.New(fmt.Sprintf("agent %s has no provider in runtime_config; cannot precreate sandbox runtime", agentID))
+	bound, err := a.h.Queries.GetAgentBoundRuntimeForWorkspace(ctx, db.GetAgentBoundRuntimeForWorkspaceParams{
+		AgentID: agentUUID, WorkspaceID: wsUUID,
+	})
+	if err != nil {
+		return "", "", stackerr.Wrap(err, "get bound runtime")
+	}
+	if bound.Provider != "pi" {
+		return "", "", fmt.Errorf("pi-in-sandbox requires pi runtime, got %q", bound.Provider)
 	}
 	daemonID := uuid.NewString()
 	row, err := a.h.Queries.PrecreateAgentRuntime(ctx, db.PrecreateAgentRuntimeParams{
 		WorkspaceID: wsUUID,
 		DaemonID:    util.StrToText(daemonID),
 		Name:        fmt.Sprintf("%s sandbox runtime", agent.Name),
-		Provider:    provider,
+		Provider:    bound.Provider,
 		OwnerID:     ownerUUID,
 	})
 	if err != nil {
 		return "", "", stackerr.Wrap(err, "precreate agent runtime")
 	}
 	return util.UUIDToString(row.ID), daemonID, nil
-}
-
-// agentProvider extracts the provider from an agent's runtime_config JSONB
-// (runtime_config->>'provider'). For the pi-in-sandbox topology this is the
-// provider the in-sandbox daemon registers with, so the pre-created runtime
-// row matches on register and is adopted.
-func agentProvider(agent db.Agent) string {
-	var cfg map[string]any
-	if len(agent.RuntimeConfig) > 0 {
-		_ = json.Unmarshal(agent.RuntimeConfig, &cfg)
-	}
-	p, _ := cfg["provider"].(string)
-	return strings.TrimSpace(p)
 }
 
 // mergeEphemeralSandboxContext stamps the Phase 5 ephemeral_sandbox marker into a
@@ -1063,7 +1053,7 @@ func agentProvider(agent db.Agent) string {
 // empty (not an ephemeral rollout). A malformed existing context is left intact
 // (the marker is skipped - cleanup then no-ops for that task) rather than risk
 // clobbering a context the task relies on.
-func mergeEphemeralSandboxContext(existing []byte, instanceID string) []byte {
+func mergeEphemeralSandboxContext(existing []byte, instanceID, actorUserID string) []byte {
 	if instanceID == "" {
 		return existing
 	}
@@ -1073,7 +1063,10 @@ func mergeEphemeralSandboxContext(existing []byte, instanceID string) []byte {
 			return existing
 		}
 	}
-	marker, _ := json.Marshal(map[string]string{"sandbox_instance_id": instanceID})
+	marker, _ := json.Marshal(map[string]string{
+		"sandbox_instance_id": instanceID,
+		"actor_user_id":       actorUserID,
+	})
 	obj["ephemeral_sandbox"] = marker
 	merged, _ := json.Marshal(obj)
 	return merged
@@ -1463,7 +1456,7 @@ func (s *stubEnvDispatchDeps) CreateChatSession(context.Context, string, string,
 func (s *stubEnvDispatchDeps) CreateChatMessage(context.Context, string, string, string) (string, error) {
 	return "stub-msg", nil
 }
-func (s *stubEnvDispatchDeps) EnqueueAgentRun(context.Context, string, string, string, string, string, string, string, string, int) (string, error) {
+func (s *stubEnvDispatchDeps) EnqueueAgentRun(context.Context, string, string, string, string, string, string, string, string, string, int) (string, error) {
 	return "stub-run", nil
 }
 func (s *stubEnvDispatchDeps) PrecreateAgentRuntime(context.Context, string, string, string) (string, string, error) {

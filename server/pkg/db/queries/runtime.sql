@@ -38,6 +38,13 @@ FOR UPDATE;
 SELECT * FROM agent_runtime
 WHERE id = $1 AND workspace_id = $2;
 
+-- name: GetAgentBoundRuntimeForWorkspace :one
+SELECT r.*
+FROM agent a
+JOIN agent_runtime r ON r.id = a.runtime_id
+WHERE a.id = @agent_id AND a.workspace_id = @workspace_id
+  AND r.workspace_id = @workspace_id;
+
 -- name: UpsertAgentRuntime :one
 -- (xmax = 0) AS inserted distinguishes a fresh insert (true) from an upsert
 -- that updated an existing row (false). Analytics reads this to fire

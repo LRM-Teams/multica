@@ -172,7 +172,7 @@ type EnvDispatchDeps interface {
 	// runtimeID, when non-empty, overrides the task's runtime_id: routes the
 	// task to a pre-created sandbox runtime R' (Phase 2) instead of the
 	// agent/session/leader runtime. Empty preserves the current behavior.
-	EnqueueAgentRun(ctx context.Context, workspaceID, agentID, squadID, issueID, chatSessionID, sandboxInstanceID, envID, runtimeID string, idx int) (runID string, err error)
+	EnqueueAgentRun(ctx context.Context, workspaceID, actorUserID, agentID, squadID, issueID, chatSessionID, sandboxInstanceID, envID, runtimeID string, idx int) (runID string, err error)
 
 	// GetDefaultSelfPlayEnv resolves the per-workspace default self_play base
 	// env used when a scratch+self_play dispatch is called with an empty
@@ -921,7 +921,7 @@ func (s *EnvDispatchService) dispatchOne(ctx context.Context, in EnvDispatchInpu
 			issueID = newID
 			r.IssueID = newID
 		}
-		runID, err := s.deps.EnqueueAgentRun(ctx, in.WorkspaceID, in.AgentID, in.SquadID, issueID, "", sandboxInstanceID, r.EnvID, runtimeID, idx)
+		runID, err := s.deps.EnqueueAgentRun(ctx, in.WorkspaceID, in.UserID, in.AgentID, in.SquadID, issueID, "", sandboxInstanceID, r.EnvID, runtimeID, idx)
 		if err != nil {
 			r.Error = fmt.Sprintf("enqueue agent run: %v", err)
 			r.Stack = stackerr.StackOf(err)
@@ -949,7 +949,7 @@ func (s *EnvDispatchService) dispatchOne(ctx context.Context, in EnvDispatchInpu
 		r.Stack = stackerr.StackOf(err)
 		return
 	}
-	runID, err := s.deps.EnqueueAgentRun(ctx, in.WorkspaceID, in.AgentID, in.SquadID, "", sessionID, sandboxInstanceID, r.EnvID, runtimeID, idx)
+	runID, err := s.deps.EnqueueAgentRun(ctx, in.WorkspaceID, in.UserID, in.AgentID, in.SquadID, "", sessionID, sandboxInstanceID, r.EnvID, runtimeID, idx)
 	if err != nil {
 		r.Error = fmt.Sprintf("enqueue agent run: %v", err)
 		r.Stack = stackerr.StackOf(err)

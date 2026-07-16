@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -48,6 +49,21 @@ type sandboxdClient struct {
 	cfg    sandboxdConfig
 	http   *http.Client
 	logger *slog.Logger
+
+	templatesMu        sync.Mutex
+	cachedTemplates    []cubeTemplateSummary
+	templatesFetchedAt time.Time
+}
+
+type cubeTemplateSummary struct {
+	TemplateID   string `json:"templateID"`
+	Status       string `json:"status"`
+	CreatedAt    string `json:"createdAt,omitempty"`
+	ImageInfo    string `json:"imageInfo,omitempty"`
+	InstanceType string `json:"instanceType,omitempty"`
+	LastError    string `json:"lastError,omitempty"`
+	Version      string `json:"version,omitempty"`
+	JobID        string `json:"jobID,omitempty"`
 }
 
 type sandboxClaimResponse struct {
@@ -156,28 +172,35 @@ func runSandboxd(cmd *cobra.Command, _ []string) error {
 }
 
 func (c *sandboxdClient) register(ctx context.Context) error {
-	body := map[string]any{
+	_ = c.refreshTemplates(ctx, true)
+	return c.postJSON(ctx, "/api/sandbox/node/register", c.cfg.NodeToken, map[string]any{
 		"node_key":        c.cfg.NodeKey,
 		"name":            c.cfg.Name,
 		"owner_user_id":   c.cfg.OwnerUserID,
 		"max_concurrency": c.cfg.Concurrency,
 		"capabilities":    []string{"create", "stop", "resume", "delete", "reconfigure"},
-		"metadata": map[string]any{
-			"cube_api_url":     c.cfg.SandboxServer,
-			"cube_proxy_http":  c.cfg.CubeProxyHTTP,
-			"cube_domain":      c.cfg.CubeDomain,
-			"cube_template_id": c.cfg.TemplateID,
-		},
-	}
-	return c.postJSON(ctx, "/api/sandbox/node/register", c.cfg.NodeToken, body, nil)
+		"metadata":        c.nodeMetadata(),
+	}, nil)
 }
 
 func (c *sandboxdClient) pollLoop(ctx context.Context) error {
 	ticker := time.NewTicker(c.cfg.PollInterval)
 	defer ticker.Stop()
+	heartbeatEvery := c.cfg.PollInterval * 6
+	if heartbeatEvery < 30*time.Second {
+		heartbeatEvery = 30 * time.Second
+	}
+	lastHeartbeat := time.Time{}
 	for {
 		if err := c.claimAndRun(ctx); err != nil && ctx.Err() == nil {
 			c.logger.Warn("sandboxd claim failed", "error", err)
+		}
+		if time.Since(lastHeartbeat) >= heartbeatEvery {
+			if err := c.heartbeat(ctx); err != nil && ctx.Err() == nil {
+				c.logger.Warn("sandboxd heartbeat failed", "error", err)
+			} else {
+				lastHeartbeat = time.Now()
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -185,6 +208,94 @@ func (c *sandboxdClient) pollLoop(ctx context.Context) error {
 		case <-ticker.C:
 		}
 	}
+}
+
+func (c *sandboxdClient) heartbeat(ctx context.Context) error {
+	_ = c.refreshTemplates(ctx, false)
+	return c.postJSON(ctx, "/api/sandbox/node/heartbeat", c.cfg.NodeToken, map[string]any{
+		"metadata": c.nodeMetadata(),
+	}, nil)
+}
+
+func (c *sandboxdClient) nodeMetadata() map[string]any {
+	c.templatesMu.Lock()
+	templates := append([]cubeTemplateSummary(nil), c.cachedTemplates...)
+	syncedAt := c.templatesFetchedAt
+	c.templatesMu.Unlock()
+
+	meta := map[string]any{
+		"cube_api_url":     c.cfg.SandboxServer,
+		"cube_proxy_http":  c.cfg.CubeProxyHTTP,
+		"cube_domain":      c.cfg.CubeDomain,
+		"cube_template_id": c.cfg.TemplateID,
+		"templates":        templates,
+	}
+	if !syncedAt.IsZero() {
+		meta["templates_synced_at"] = syncedAt.UTC().Format(time.RFC3339)
+	}
+	return meta
+}
+
+// refreshTemplates loads Cube GET /templates into the in-memory cache.
+// force=true bypasses the refresh interval (used on register).
+func (c *sandboxdClient) refreshTemplates(ctx context.Context, force bool) error {
+	const refreshInterval = 30 * time.Second
+	c.templatesMu.Lock()
+	if !force && !c.templatesFetchedAt.IsZero() && time.Since(c.templatesFetchedAt) < refreshInterval {
+		c.templatesMu.Unlock()
+		return nil
+	}
+	c.templatesMu.Unlock()
+
+	templates, err := c.listCubeTemplates(ctx)
+	if err != nil {
+		c.logger.Warn("list cube templates failed", "error", err)
+		return err
+	}
+	c.templatesMu.Lock()
+	c.cachedTemplates = templates
+	c.templatesFetchedAt = time.Now()
+	c.templatesMu.Unlock()
+	return nil
+}
+
+func (c *sandboxdClient) listCubeTemplates(ctx context.Context) ([]cubeTemplateSummary, error) {
+	var raw []map[string]any
+	if err := c.cubeJSON(ctx, http.MethodGet, "/templates", nil, "", &raw); err != nil {
+		return nil, err
+	}
+	out := make([]cubeTemplateSummary, 0, len(raw))
+	for _, item := range raw {
+		id := firstNonEmpty(
+			stringFromMap(item, "templateID"),
+			stringFromMap(item, "template_id"),
+			stringFromMap(item, "id"),
+		)
+		if id == "" {
+			continue
+		}
+		out = append(out, cubeTemplateSummary{
+			TemplateID:   id,
+			Status:       firstNonEmpty(stringFromMap(item, "status"), "unknown"),
+			CreatedAt:    stringFromMap(item, "createdAt"),
+			ImageInfo:    stringFromMap(item, "imageInfo"),
+			InstanceType: stringFromMap(item, "instanceType"),
+			LastError:    stringFromMap(item, "lastError"),
+			Version:      stringFromMap(item, "version"),
+			JobID:        firstNonEmpty(stringFromMap(item, "jobID"), stringFromMap(item, "job_id")),
+		})
+	}
+	return out, nil
+}
+
+func stringFromMap(obj map[string]any, key string) string {
+	if obj == nil {
+		return ""
+	}
+	if s, ok := obj[key].(string); ok {
+		return s
+	}
+	return ""
 }
 
 func (c *sandboxdClient) wsLoop(ctx context.Context) {

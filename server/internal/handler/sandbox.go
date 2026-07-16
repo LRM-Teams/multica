@@ -290,6 +290,108 @@ func (h *Handler) ListSandboxNodes(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+type SandboxTemplateResponse struct {
+	TemplateID   string `json:"template_id"`
+	Status       string `json:"status"`
+	CreatedAt    string `json:"created_at,omitempty"`
+	ImageInfo    string `json:"image_info,omitempty"`
+	InstanceType string `json:"instance_type,omitempty"`
+	LastError    string `json:"last_error,omitempty"`
+	Version      string `json:"version,omitempty"`
+	JobID        string `json:"job_id,omitempty"`
+	IsDefault    bool   `json:"is_default"`
+}
+
+type SandboxNodeTemplatesResponse struct {
+	Templates         []SandboxTemplateResponse `json:"templates"`
+	DefaultTemplateID string                    `json:"default_template_id,omitempty"`
+	SyncedAt          string                    `json:"synced_at,omitempty"`
+	NodeOnline        bool                      `json:"node_online"`
+}
+
+// ListSandboxNodeTemplates returns Cube templates last reported by sandboxd
+// for a node the caller owns. Templates are cached in node metadata (not a
+// live proxy) so the list is available even briefly after the node goes offline.
+func (h *Handler) ListSandboxNodeTemplates(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	nodeID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "nodeId"), "node_id")
+	if !ok {
+		return
+	}
+	node, err := h.Queries.GetSandboxNodeForOwner(r.Context(), db.GetSandboxNodeForOwnerParams{
+		ID:          nodeID,
+		OwnerUserID: parseUUID(userID),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "sandbox node not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load sandbox node")
+		return
+	}
+	writeJSON(w, http.StatusOK, sandboxNodeTemplatesFromMetadata(node.Metadata, effectiveSandboxNodeStatus(node.Status, node.LastSeenAt) == "online"))
+}
+
+func sandboxNodeTemplatesFromMetadata(raw []byte, nodeOnline bool) SandboxNodeTemplatesResponse {
+	resp := SandboxNodeTemplatesResponse{
+		Templates:  []SandboxTemplateResponse{},
+		NodeOnline: nodeOnline,
+	}
+	var meta map[string]any
+	if len(raw) == 0 || json.Unmarshal(raw, &meta) != nil {
+		return resp
+	}
+	resp.DefaultTemplateID = strings.TrimSpace(stringFromAny(meta["cube_template_id"]))
+	resp.SyncedAt = strings.TrimSpace(stringFromAny(meta["templates_synced_at"]))
+
+	items, _ := meta["templates"].([]any)
+	for _, item := range items {
+		obj, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		id := firstNonEmptyTrimmed(
+			stringFromAny(obj["templateID"]),
+			stringFromAny(obj["template_id"]),
+			stringFromAny(obj["id"]),
+		)
+		if id == "" {
+			continue
+		}
+		status := firstNonEmptyTrimmed(stringFromAny(obj["status"]), "unknown")
+		resp.Templates = append(resp.Templates, SandboxTemplateResponse{
+			TemplateID:   id,
+			Status:       status,
+			CreatedAt:    stringFromAny(obj["createdAt"]),
+			ImageInfo:    firstNonEmptyTrimmed(stringFromAny(obj["imageInfo"]), stringFromAny(obj["image_info"])),
+			InstanceType: firstNonEmptyTrimmed(stringFromAny(obj["instanceType"]), stringFromAny(obj["instance_type"])),
+			LastError:    firstNonEmptyTrimmed(stringFromAny(obj["lastError"]), stringFromAny(obj["last_error"])),
+			Version:      stringFromAny(obj["version"]),
+			JobID:        firstNonEmptyTrimmed(stringFromAny(obj["jobID"]), stringFromAny(obj["job_id"])),
+			IsDefault:    resp.DefaultTemplateID != "" && id == resp.DefaultTemplateID,
+		})
+	}
+	return resp
+}
+
+func stringFromAny(v any) string {
+	s, _ := v.(string)
+	return s
+}
+
+func firstNonEmptyTrimmed(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
 func (h *Handler) UpdateSandboxNode(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {

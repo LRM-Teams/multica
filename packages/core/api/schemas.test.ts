@@ -28,6 +28,8 @@ import {
   SquadSchema,
   StickerCatalogResponseSchema,
   UserSchema,
+  SandboxNodeTemplatesResponseSchema,
+  EMPTY_SANDBOX_NODE_TEMPLATES_RESPONSE,
 } from "./schemas";
 import { parseWithFallback } from "./schema";
 
@@ -603,5 +605,40 @@ describe("dashboard + runtime usage schema drift", () => {
       { date: "2026-05-19", region: "us-east" },
     ]);
     expect((parsed[0] as Record<string, unknown>).region).toBe("us-east");
+  });
+});
+
+describe("SandboxNodeTemplatesResponseSchema", () => {
+  it("parses a well-formed templates payload", () => {
+    const parsed = SandboxNodeTemplatesResponseSchema.parse({
+      templates: [
+        { template_id: "tpl-1", status: "READY", is_default: true },
+        { template_id: "tpl-2", status: "BUILDING", image_info: "img" },
+      ],
+      default_template_id: "tpl-1",
+      synced_at: "2026-07-16T08:00:00Z",
+      node_online: true,
+    });
+    expect(parsed.templates).toHaveLength(2);
+    expect(parsed.templates[0]?.template_id).toBe("tpl-1");
+    expect(parsed.node_online).toBe(true);
+  });
+
+  it("falls back when templates is missing or wrong-typed", () => {
+    const missing = parseWithFallback(
+      { node_online: true },
+      SandboxNodeTemplatesResponseSchema,
+      EMPTY_SANDBOX_NODE_TEMPLATES_RESPONSE,
+      { endpoint: "GET /api/sandbox/nodes/x/templates" },
+    );
+    expect(missing.templates).toEqual([]);
+
+    const malformed = parseWithFallback(
+      { templates: null },
+      SandboxNodeTemplatesResponseSchema,
+      EMPTY_SANDBOX_NODE_TEMPLATES_RESPONSE,
+      { endpoint: "GET /api/sandbox/nodes/x/templates" },
+    );
+    expect(malformed).toEqual(EMPTY_SANDBOX_NODE_TEMPLATES_RESPONSE);
   });
 });

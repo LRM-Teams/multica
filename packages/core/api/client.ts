@@ -166,6 +166,7 @@ import type {
   SandboxBinding,
   SandboxInstance,
   SandboxJob,
+  SandboxNodeTemplatesResponse,
   CreateSandboxRequest,
   UpdateSandboxRequest,
 } from "../types";
@@ -261,6 +262,7 @@ import {
   EMPTY_CREATE_BILLING_CHECKOUT_SESSION_RESPONSE,
   EMPTY_BILLING_CHECKOUT_SESSION_STATUS,
   EMPTY_CREATE_BILLING_PORTAL_SESSION_RESPONSE,
+  EMPTY_SANDBOX_NODE_TEMPLATES_RESPONSE,
   EMPTY_CANCEL_TASK_RESPONSE,
   EMPTY_EVOLUTION_METRICS,
   EMPTY_EVOLUTION_REVIEW_SUBMISSION_LIST,
@@ -276,6 +278,7 @@ import {
   MemoryCurationRunDetailSchema,
   MemoryCuratorProfileSchema,
   StartMemoryCurationRunResponseSchema,
+  SandboxNodeTemplatesResponseSchema,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -1706,6 +1709,16 @@ export class ApiClient {
       method: "POST",
       body: JSON.stringify(data),
     });
+  }
+
+  async listSandboxNodeTemplates(nodeId: string): Promise<SandboxNodeTemplatesResponse> {
+    const raw = await this.fetch(`/api/sandbox/nodes/${nodeId}/templates`);
+    return parseWithFallback(
+      raw,
+      SandboxNodeTemplatesResponseSchema,
+      EMPTY_SANDBOX_NODE_TEMPLATES_RESPONSE,
+      { endpoint: `GET /api/sandbox/nodes/${nodeId}/templates` },
+    );
   }
 
   async listSandboxBindings(workspaceId: string): Promise<SandboxBinding[]> {

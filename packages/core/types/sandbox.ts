@@ -31,6 +31,25 @@ export interface SandboxNode {
   updated_at: string;
 }
 
+export interface SandboxTemplate {
+  template_id: string;
+  status: string;
+  created_at?: string;
+  image_info?: string;
+  instance_type?: string;
+  last_error?: string;
+  version?: string;
+  job_id?: string;
+  is_default?: boolean;
+}
+
+export interface SandboxNodeTemplatesResponse {
+  templates: SandboxTemplate[];
+  default_template_id?: string;
+  synced_at?: string;
+  node_online?: boolean;
+}
+
 export interface SandboxBinding {
   id: string;
   workspace_id: string;

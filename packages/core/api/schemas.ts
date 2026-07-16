@@ -35,6 +35,7 @@ import type {
   User,
   UpdateAgentFileContentResponse,
   WebhookDelivery,
+  SandboxNodeTemplatesResponse,
 } from "../types";
 import type { CloudRuntimeNode } from "../runtimes/cloud-runtime";
 
@@ -1692,4 +1693,30 @@ export const CreateBillingPortalSessionResponseSchema = z.object({
 
 export const EMPTY_CREATE_BILLING_PORTAL_SESSION_RESPONSE: CreateBillingPortalSessionResponse = {
   url: "",
+};
+
+export const SandboxTemplateSchema = z.object({
+  template_id: z.string(),
+  status: z.string().default("unknown"),
+  created_at: z.string().optional(),
+  image_info: z.string().optional(),
+  instance_type: z.string().optional(),
+  last_error: z.string().optional(),
+  version: z.string().optional(),
+  job_id: z.string().optional(),
+  is_default: z.boolean().optional(),
+}).loose();
+
+export const SandboxNodeTemplatesResponseSchema = z.object({
+  templates: z.array(SandboxTemplateSchema).default([]),
+  default_template_id: z.string().optional(),
+  synced_at: z.string().optional(),
+  node_online: z.boolean().optional(),
+}).loose();
+
+export const EMPTY_SANDBOX_NODE_TEMPLATES_RESPONSE: SandboxNodeTemplatesResponse = {
+  templates: [],
+  default_template_id: "",
+  synced_at: "",
+  node_online: false,
 };

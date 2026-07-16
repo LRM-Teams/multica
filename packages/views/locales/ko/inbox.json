@@ -67,5 +67,15 @@
     "archive_all_failed": "모두 보관하지 못했습니다",
     "archive_all_read_failed": "읽은 항목을 보관하지 못했습니다",
     "archive_completed_failed": "완료된 항목을 보관하지 못했습니다"
+  },
+  "mention_popup": {
+    "title": "멘션되었습니다",
+    "title_in": "#{{channel}}에서 멘션됨",
+    "continue": "좋아요, 진행하세요",
+    "delegate": "@{{name}}",
+    "later": "나중에",
+    "manual": "직접 답장",
+    "send_failed": "전송 실패",
+    "no_manager": "이 그룹에는 아직 관리자가 없습니다"
   }
 }

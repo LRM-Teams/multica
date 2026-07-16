@@ -143,6 +143,15 @@ interface ContentEditorProps {
   mediaMode?: "inline" | "external";
   /** Called with deduped files when `mediaMode === "external"`. */
   onExternalFiles?: (files: File[]) => void;
+  /**
+   * When true, bare URLs stay PLAIN TEXT in this editable surface — they are
+   * not auto-linkified on load or through the setContent round-trip. Used by
+   * the chat composer (#531/#542) so a typed URL isn't turned into a link in
+   * the input. The read/display side still renders bare URLs clickable via its
+   * own preprocessLinks, so sent messages are unaffected. Defaults false, so
+   * every other editor (issue/comment/description) keeps its current behavior.
+   */
+  plainUrls?: boolean;
 }
 
 interface ContentEditorRef {
@@ -191,6 +200,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       attachments,
       mediaMode = "inline",
       onExternalFiles,
+      plainUrls = false,
     },
     ref,
   ) {
@@ -284,7 +294,9 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
 
     const queryClient = useQueryClient();
 
-    const initialContent = defaultValue ? preprocessMarkdown(defaultValue) : "";
+    const initialContent = defaultValue
+      ? preprocessMarkdown(defaultValue, { linkify: !plainUrls })
+      : "";
     // Large markdown is parsed in chunks to dodge marked's O(n²) tokenizer (see
     // parseMarkdownChunked). Small docs stay on the single-parse fast path.
     const mountChunked = initialContent.length > MARKDOWN_CHUNK_THRESHOLD;
@@ -414,7 +426,9 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       // here avoids overwriting unsaved local edits.
       if (isDirty) return;
 
-      const incoming = defaultValue ? preprocessMarkdown(defaultValue) : "";
+      const incoming = defaultValue
+        ? preprocessMarkdown(defaultValue, { linkify: !plainUrls })
+        : "";
       const incomingNormalized = stripBlobUrls(incoming).trimEnd();
       // Guard 3: normalized-equal short-circuit. Avoids a no-op transaction
       // when the cache reflects a write this same editor just emitted.
@@ -450,7 +464,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       });
 
       lastEmittedRef.current = stripBlobUrls(editor.getMarkdown()).trimEnd();
-    }, [defaultValue, editor]);
+    }, [defaultValue, editor, plainUrls]);
 
     useImperativeHandle(ref, () => ({
       getMarkdown: () => stripBlobUrls(editor?.getMarkdown() ?? ""),

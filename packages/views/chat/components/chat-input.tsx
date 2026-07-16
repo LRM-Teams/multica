@@ -286,6 +286,9 @@ export function ChatInput({
             key={editorKey}
             ref={editorRef}
             defaultValue={activeRestore?.content ?? inputDraft}
+            // Chat keeps typed/loaded bare URLs as PLAIN TEXT in the input
+            // (#531/#542) — they are made clickable on the read side, not here.
+            plainUrls
             placeholder={placeholder}
             onUpdate={(md) => {
               setIsEmpty(!md.trim());

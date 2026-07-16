@@ -128,6 +128,31 @@ multica issue metadata delete <issue-id> --key <stale-key>
 `--value` is JSON-parsed by default (bool/number are sniffed); pass `--type
 string|number|bool` to force a type.
 
+## Project is optional ownership; source is discussion provenance
+
+An issue may belong to a project, but it is not required to. Use `--project`
+when the request names a project or the current workflow is explicitly scoped
+to one. Without project context, leave the flag out; the issue remains visible
+as an unprojected issue instead of guessing a destination.
+
+```bash
+multica issue create --title "..." --project <project-id-or-title>
+multica issue update <issue-id> --project <project-id-or-title>
+multica issue update <issue-id> --project ""   # clear the project
+multica issue list --project <project-id-or-title>
+```
+
+The CLI resolves a project ID or title inside the active workspace before it
+sends `project_id`. The server also rejects a project from another workspace on
+create or update. A child created without an explicit project inherits its
+parent's project.
+
+Project ownership and discussion provenance are orthogonal. For an issue
+created from chat, still pass `--source-channel` and `--source-message` so the
+issue can link back and status changes can flow to the source discussion. Do
+not use the source channel as the issue's project, and do not drop the source
+anchor merely because `--project` is present.
+
 ## Status changes have server side effects
 
 A status change is not cosmetic — the server enqueues or skips agent work based

@@ -111,6 +111,24 @@ issue fires the agent immediately; `--status backlog` parks it with the assignee
 set but no trigger. Promoting `backlog → todo` later fires it then (update path,
 line 2537).
 
+## Optional project ownership and source provenance
+
+| Behavior | File:line |
+|---|---|
+| CLI `issue create --project` flag | `server/cmd/multica/cmd_issue.go:293` |
+| CLI create resolves project ID/title and sends `project_id` | `server/cmd/multica/cmd_issue.go:714-720` |
+| CLI update resolves/clears project | `server/cmd/multica/cmd_issue.go:842-853` |
+| CLI list resolves project and sends `project_id` | `server/cmd/multica/cmd_issue.go:418-424` |
+| HTTP create accepts nullable `project_id` | `server/internal/handler/issue.go:2000-2009` |
+| Service validates project belongs to the issue workspace | `server/internal/service/issue.go:171-193` |
+| Child without explicit project inherits the parent's project | `server/internal/service/issue.go:171-185` |
+| HTTP update validates project belongs to the issue workspace | `server/internal/handler/issue.go:2407-2424` |
+| CLI source flags remain independent of `--project` | `server/cmd/multica/cmd_issue.go:680-731` |
+| Create persists project and source anchor as separate fields | `server/internal/handler/issue.go:2189-2208` |
+
+An omitted project stays NULL. Source provenance remains in
+`issue_source_message`; it is not an issue-list ownership dimension.
+
 ## Metadata CLI
 
 | Behavior | File:line |
@@ -134,4 +152,6 @@ grep -n 'func issuePullRequestRowToResponse\|type GitHubPullRequestResponse stru
 grep -n 'extractIdentifiers(\|extractClosingIdentifiers(\|derivePRState(' internal/handler/github.go
 grep -n 'prevIssue.Status == "backlog"\|func (h \*Handler) shouldEnqueueAgentTask' internal/handler/issue.go
 grep -n 'func notifyParentOfChildDone'       internal/handler/issue_child_done.go
+grep -n 'Flags().String("project"\|body\["project_id"\]\|body\["source"\]' cmd/multica/cmd_issue.go
+grep -n 'GetProjectInWorkspace\|SourceChannelID\|SourceMessageID' internal/handler/issue.go internal/service/issue.go
 ```

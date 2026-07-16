@@ -1,10 +1,13 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 // TestBatchUpdateNoMutationReturnsZero — regression for #1660.
@@ -118,6 +121,92 @@ func TestBatchUpdateValidUpdatesPersistAndCount(t *testing.T) {
 		if got.Status != "in_progress" {
 			t.Errorf("issue %s: expected status=in_progress, got %q", id, got.Status)
 		}
+	}
+}
+
+func TestBatchUpdateProjectWorkspaceBoundary(t *testing.T) {
+	ctx := context.Background()
+	issueID := createTestIssue(t, "BU-project-boundary", "todo", "low")
+	t.Cleanup(func() { deleteTestIssue(t, issueID) })
+
+	var localProjectID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO project (workspace_id, title, status, priority)
+		VALUES ($1, $2, 'planned', 'none')
+		RETURNING id
+	`, testWorkspaceID, "Batch local project").Scan(&localProjectID); err != nil {
+		t.Fatalf("insert local project: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(ctx, `DELETE FROM project WHERE id = $1`, localProjectID) })
+
+	var foreignWorkspaceID string
+	suffix := time.Now().UnixNano()
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO workspace (name, slug, description, issue_prefix)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id
+	`, "Batch project boundary", fmt.Sprintf("batch-project-boundary-%d", suffix), "Foreign workspace", "BPB").Scan(&foreignWorkspaceID); err != nil {
+		t.Fatalf("insert foreign workspace: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(ctx, `DELETE FROM workspace WHERE id = $1`, foreignWorkspaceID) })
+
+	var foreignProjectID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO project (workspace_id, title, status, priority)
+		VALUES ($1, $2, 'planned', 'none')
+		RETURNING id
+	`, foreignWorkspaceID, "Batch foreign project").Scan(&foreignProjectID); err != nil {
+		t.Fatalf("insert foreign project: %v", err)
+	}
+
+	batchUpdate := func(projectID any) int {
+		t.Helper()
+		w := httptest.NewRecorder()
+		req := newRequest("POST", "/api/issues/batch-update", map[string]any{
+			"issue_ids": []string{issueID},
+			"updates":   map[string]any{"project_id": projectID},
+		})
+		testHandler.BatchUpdateIssues(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("BatchUpdateIssues: expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		var resp struct {
+			Updated int `json:"updated"`
+		}
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode BatchUpdateIssues response: %v", err)
+		}
+		return resp.Updated
+	}
+	readProjectID := func() *string {
+		t.Helper()
+		var projectID *string
+		if err := testPool.QueryRow(ctx, `SELECT project_id FROM issue WHERE id = $1`, issueID).Scan(&projectID); err != nil {
+			t.Fatalf("read issue project_id: %v", err)
+		}
+		return projectID
+	}
+
+	if updated := batchUpdate(localProjectID); updated != 1 {
+		t.Fatalf("local project update count = %d, want 1", updated)
+	}
+	if got := readProjectID(); got == nil || *got != localProjectID {
+		t.Fatalf("local project update persisted %v, want %q", got, localProjectID)
+	}
+	if updated := batchUpdate(nil); updated != 1 {
+		t.Fatalf("clear project update count = %d, want 1", updated)
+	}
+	if got := readProjectID(); got != nil {
+		t.Fatalf("clear project persisted %q, want NULL", *got)
+	}
+	if updated := batchUpdate(localProjectID); updated != 1 {
+		t.Fatalf("restore local project update count = %d, want 1", updated)
+	}
+	if updated := batchUpdate(foreignProjectID); updated != 0 {
+		t.Fatalf("foreign project update count = %d, want 0", updated)
+	}
+	if got := readProjectID(); got == nil || *got != localProjectID {
+		t.Fatalf("foreign project update persisted %v, want unchanged %q", got, localProjectID)
 	}
 }
 

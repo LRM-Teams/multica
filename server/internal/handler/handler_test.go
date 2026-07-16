@@ -2693,6 +2693,59 @@ func TestVerifyCodeAcceptsConfiguredDevCodeOutsideProduction(t *testing.T) {
 	}
 }
 
+func TestVerifyCodeDevCodeReturnsExistingNormalizedEmailUser(t *testing.T) {
+	t.Setenv(devVerificationCodeEnv, "888888")
+	t.Setenv("APP_ENV", "development")
+
+	ctx := context.Background()
+	email := "dev-code-existing-" + randomID() + "@multica.ai"
+	var existingUserID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO "user" (name, email)
+		VALUES ($1, $2)
+		RETURNING id
+	`, "dev-code-existing-"+randomID(), email).Scan(&existingUserID); err != nil {
+		t.Fatalf("create existing user: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM verification_code WHERE email = $1`, email)
+		testPool.Exec(ctx, `DELETE FROM "user" WHERE id = $1`, existingUserID)
+	})
+	createVerificationCodeForTest(t, email, "123456")
+
+	w := httptest.NewRecorder()
+	var buf bytes.Buffer
+	json.NewEncoder(&buf).Encode(map[string]string{
+		"email": strings.ToUpper(email),
+		"code":  "888888",
+	})
+	req := httptest.NewRequest("POST", "/auth/verify-code", &buf)
+	req.Header.Set("Content-Type", "application/json")
+	testHandler.VerifyCode(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("VerifyCode (existing dev-code user): expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp LoginResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode VerifyCode response: %v", err)
+	}
+	if resp.User.ID != existingUserID {
+		t.Fatalf("VerifyCode returned user %q, want existing %q", resp.User.ID, existingUserID)
+	}
+	var matchedUsers int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM "user"
+		WHERE lower(email) = $1
+	`, email).Scan(&matchedUsers); err != nil {
+		t.Fatalf("count normalized email users: %v", err)
+	}
+	if matchedUsers != 1 {
+		t.Fatalf("normalized email user count = %d, want 1", matchedUsers)
+	}
+}
+
 func TestVerifyCodeRejectsConfiguredDevCodeInProduction(t *testing.T) {
 	t.Setenv(devVerificationCodeEnv, "888888")
 	t.Setenv("APP_ENV", "production")

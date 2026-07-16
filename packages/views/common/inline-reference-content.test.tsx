@@ -123,9 +123,21 @@ vi.mock("@multica/core/paths", async (importOriginal) => {
     }),
   };
 });
+// Mirror the real AppLink, which extends AnchorHTMLAttributes and spreads {...props}
+// onto the anchor — otherwise this mock would silently swallow `data-ref-source` and
+// the assertions below would be testing the mock rather than the component.
 vi.mock("../navigation/app-link", () => ({
-  AppLink: ({ href, children, className }: { href: string; children: ReactNode; className?: string }) => (
-    <a href={href} className={className}>
+  AppLink: ({
+    href,
+    children,
+    className,
+    ...rest
+  }: {
+    href: string;
+    children: ReactNode;
+    className?: string;
+  }) => (
+    <a href={href} className={className} {...rest}>
       {children}
     </a>
   ),
@@ -240,6 +252,24 @@ describe("InlineReferenceContent (#463 projector consumer)", () => {
     expect(screen.getByText("Alice")).toBeInTheDocument(); // assignee resolved live by id
     expect(screen.getByTestId("project-icon")).toBeInTheDocument();
     expect(screen.getByText("Doudizhu")).toBeInTheDocument();
+  });
+
+  it("marks an anchored reference as provenance `anchor` (#520/#521)", () => {
+    // Users must not be able to tell an anchored reference from the linkify
+    // fallback — that is the point of #520. So the ONLY thing left that can catch a
+    // parser miss (#521) is this attribute: assert every occurrence in a message is
+    // `anchor`; a `fallback` means the server skipped one. Invisible to readers,
+    // visible to tests — see IssueRefLink's IssueRefSource docs.
+    resolvedIssue = { id: "issue-uuid", title: "Fix the login bug", status: "todo" };
+    // The identifier appears twice — the link and the peek's eyebrow — so select the
+    // anchor itself rather than by text.
+    const { container } = render(
+      <InlineReferenceContent content="see #MUL-9 pls" parts={[issueRef(4, 10)]} />,
+    );
+
+    const link = container.querySelector("a[data-ref-source]");
+    expect(link).toHaveTextContent("#MUL-9");
+    expect(link).toHaveAttribute("data-ref-source", "anchor");
   });
 
   it("gives every property the same grammar: marker + label, no chip (#517)", () => {

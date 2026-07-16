@@ -69,7 +69,6 @@ type ChannelResponse struct {
 	PinnedAt           *string              `json:"pinned_at,omitempty"`
 	MutedAt            *string              `json:"muted_at,omitempty"`
 	Muted              bool                 `json:"muted,omitempty"`
-	HasMention         bool                 `json:"has_mention,omitempty"`
 	MentionUnreadCount int                  `json:"mention_unread_count,omitempty"`
 	LastReadSeq        *int64               `json:"last_read_seq,omitempty"`
 	LastMessage        *ChannelLastMessage  `json:"last_message,omitempty"`
@@ -398,7 +397,7 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 			CreatedAt: timestampToString(createdAt), UpdatedAt: timestampToString(updatedAt),
 			ArchivedAt: timestampToPtr(archivedAt), ArchivedBy: uuidToPtr(archivedBy),
 			Kind: kind, UnreadCount: unread, RealUnreadCount: realUnread, ManuallyUnread: manualUnreadAt.Valid,
-			PinnedAt: timestampToPtr(pinnedAt), MutedAt: timestampToPtr(mutedAt), Muted: mutedAt.Valid, HasMention: mentionUnreadCount > 0, MentionUnreadCount: mentionUnreadCount, LastReadSeq: &lastReadSeq, Members: []ChannelMemberBrief{},
+			PinnedAt: timestampToPtr(pinnedAt), MutedAt: timestampToPtr(mutedAt), Muted: mutedAt.Valid, MentionUnreadCount: mentionUnreadCount, LastReadSeq: &lastReadSeq, Members: []ChannelMemberBrief{},
 		}
 		if lastContent.Valid {
 			ch.LastMessage = channelLastMessage(lastType.String, lastName.String, lastContent.String, lastParts, lastAt)

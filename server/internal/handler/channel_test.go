@@ -2947,8 +2947,8 @@ func TestChannelMutedMemberMentionPiercesMute(t *testing.T) {
 	if listed == nil {
 		t.Fatal("muted mentioned member cannot see channel")
 	}
-	if !listed.Muted || !listed.HasMention || listed.MentionUnreadCount != 1 {
-		t.Fatalf("muted mention channel state = muted:%t has:%t count:%d, want muted:true has:true count:1", listed.Muted, listed.HasMention, listed.MentionUnreadCount)
+	if !listed.Muted || listed.MentionUnreadCount != 1 {
+		t.Fatalf("muted mention channel state = muted:%t count:%d, want muted:true count:1", listed.Muted, listed.MentionUnreadCount)
 	}
 }
 
@@ -2985,8 +2985,8 @@ func TestListChannelsMentionUnreadCountTracksReadCursor(t *testing.T) {
 	if listed == nil {
 		t.Fatal("mentioned member cannot see channel")
 	}
-	if !listed.HasMention || listed.MentionUnreadCount != 2 {
-		t.Fatalf("mention state = has:%t count:%d, want has:true count:2", listed.HasMention, listed.MentionUnreadCount)
+	if listed.MentionUnreadCount != 2 {
+		t.Fatalf("mention count = %d, want 2", listed.MentionUnreadCount)
 	}
 
 	markChannelReadForTest(t, channelID, memberID)
@@ -2994,8 +2994,8 @@ func TestListChannelsMentionUnreadCountTracksReadCursor(t *testing.T) {
 	if listed == nil {
 		t.Fatal("mentioned member cannot see channel after marking read")
 	}
-	if listed.HasMention || listed.MentionUnreadCount != 0 {
-		t.Fatalf("mention state after read = has:%t count:%d, want has:false count:0", listed.HasMention, listed.MentionUnreadCount)
+	if listed.MentionUnreadCount != 0 {
+		t.Fatalf("mention count after read = %d, want 0", listed.MentionUnreadCount)
 	}
 }
 

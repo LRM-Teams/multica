@@ -9,7 +9,6 @@ import { DashboardGuard } from "./dashboard-guard";
 import { NavigationProgress } from "./navigation-progress";
 import { WorkspacePresencePrefetch } from "./workspace-presence-prefetch";
 import { GlobalAgentPanel } from "./global-agent-panel";
-import { MentionQuickReplyPopup } from "./mention-quick-reply-popup";
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -44,7 +43,6 @@ export function DashboardLayout({
           <ModalRegistry />
           <SourceBackfillModal />
           <GlobalAgentPanel />
-          <MentionQuickReplyPopup />
           {extra}
         </SidebarInset>
       </SidebarProvider>

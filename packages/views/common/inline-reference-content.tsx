@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import type { Issue, IssueStatus, MessagePart } from "@multica/core/types";
+import type { Issue, IssuePriority, IssueStatus, MessagePart } from "@multica/core/types";
 import { STATUS_CONFIG, PRIORITY_CONFIG } from "@multica/core/issues/config";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { MemoizedMarkdown, ActorMention } from "./markdown";
@@ -164,9 +164,21 @@ const ISSUE_STATUSES: readonly string[] = [
   "cancelled",
 ];
 
+const ISSUE_PRIORITIES: readonly string[] = ["urgent", "high", "medium", "low", "none"];
+
 /** Guard against a status we have no renderer for (StatusIcon would blow up). */
 function toIssueStatus(value: string | undefined): IssueStatus | null {
   return value && ISSUE_STATUSES.includes(value) ? (value as IssueStatus) : null;
+}
+
+/**
+ * Same guard for priority. `Issue.priority` is *typed* `IssuePriority`, but it
+ * arrives from an unvalidated API cast — a value we've never seen (contract drift,
+ * a future priority) would make `PRIORITY_CONFIG[value]` undefined and throw on
+ * `.label`, taking the whole card down. Unknown → hidden, exactly like status.
+ */
+function toIssuePriority(value: string | undefined): IssuePriority | null {
+  return value && ISSUE_PRIORITIES.includes(value) ? (value as IssuePriority) : null;
 }
 
 function IssueRefToken({
@@ -238,9 +250,10 @@ function IssuePeekProperties({
   const { getActorName } = useActorName();
   if (!issue) return null;
 
-  // `none` is the ABSENCE of a priority, not a value worth a row.
-  const priority =
-    issue.priority && issue.priority !== "none" ? issue.priority : null;
+  // `none` is the ABSENCE of a priority, not a value worth a row; anything we
+  // have no renderer for is dropped rather than risked (see toIssuePriority).
+  const rawPriority = toIssuePriority(issue.priority);
+  const priority = rawPriority && rawPriority !== "none" ? rawPriority : null;
   // Assignee resolves live by id, same rule as status: the name follows the
   // workspace, never a snapshot.
   const assignee =

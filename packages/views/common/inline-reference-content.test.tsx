@@ -214,6 +214,24 @@ describe("InlineReferenceContent (#463 projector consumer)", () => {
     expect(screen.queryByTestId("project-chip")).toBeNull();
   });
 
+  it("ignores an unknown priority instead of crashing the card (#504, Wren's catch)", () => {
+    // `Issue.priority` is TYPED IssuePriority but arrives via an unvalidated API
+    // cast: an unseen value would make PRIORITY_CONFIG[value] undefined and throw
+    // on `.label`, taking the whole peek down. Mirror the status whitelist.
+    resolvedIssue = {
+      id: "issue-uuid",
+      title: "Fix the login bug",
+      status: "todo",
+      priority: "catastrophic",
+    };
+    render(<InlineReferenceContent content="see #MUL-9 pls" parts={[issueRef(4, 10)]} />);
+
+    // Card still renders; the unknown priority is simply dropped.
+    expect(screen.getByText("Fix the login bug")).toBeInTheDocument();
+    expect(screen.getByText("Todo")).toBeInTheDocument();
+    expect(screen.queryByTestId("priority-icon")).toBeNull();
+  });
+
   it("treats priority 'none' as absent rather than drawing a 'None' row (#504)", () => {
     resolvedIssue = {
       id: "issue-uuid",

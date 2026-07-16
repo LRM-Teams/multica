@@ -1760,8 +1760,8 @@ func codexSessionFileMatchesThread(path, threadID string) bool {
 func codexSessionRoot() string {
 	if codexHome := os.Getenv("CODEX_HOME"); codexHome != "" {
 		dir := filepath.Join(codexHome, "sessions")
-		if info, err := os.Stat(dir); err == nil && info.IsDir() {
-			return dir
+		if resolved := resolveCodexSessionRoot(dir); resolved != "" {
+			return resolved
 		}
 	}
 
@@ -1771,10 +1771,23 @@ func codexSessionRoot() string {
 	}
 
 	dir := filepath.Join(home, ".codex", "sessions")
-	if info, err := os.Stat(dir); err == nil && info.IsDir() {
-		return dir
+	return resolveCodexSessionRoot(dir)
+}
+
+// resolveCodexSessionRoot follows the daemon's shared-sessions symlink before
+// scanning. os.Stat alone accepts a symlinked directory, but filepath.WalkDir
+// deliberately does not descend through it, which would silently report zero
+// usage for every daemon task using CODEX_HOME/sessions.
+func resolveCodexSessionRoot(dir string) string {
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return ""
 	}
-	return ""
+	info, err := os.Stat(resolved)
+	if err != nil || !info.IsDir() {
+		return ""
+	}
+	return resolved
 }
 
 // codexSessionTokenCount represents a token_count event in Codex JSONL.

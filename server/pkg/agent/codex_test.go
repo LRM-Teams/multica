@@ -181,9 +181,13 @@ func TestScanCodexSessionUsageSelectsOnlyCurrentThread(t *testing.T) {
 	start := time.Now().UTC().Add(-time.Minute)
 	codexHome := t.TempDir()
 	t.Setenv("CODEX_HOME", codexHome)
+	sharedSessions := t.TempDir()
+	if err := os.Symlink(sharedSessions, filepath.Join(codexHome, "sessions")); err != nil {
+		t.Fatalf("symlink shared Codex sessions: %v", err)
+	}
 	writeSession := func(sessionDate time.Time, name, content string, modTime time.Time) {
 		t.Helper()
-		dateDir := filepath.Join(codexHome, "sessions",
+		dateDir := filepath.Join(sharedSessions,
 			fmt.Sprintf("%04d", sessionDate.Year()),
 			fmt.Sprintf("%02d", int(sessionDate.Month())),
 			fmt.Sprintf("%02d", sessionDate.Day()),

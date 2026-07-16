@@ -103,6 +103,7 @@
     "setup_page_title": "Node setup",
     "setup_page_description": "Run this command on the sandbox server. It writes {{file}} and starts sandboxd with the node key.",
     "setup_page_loading": "Generating setup command…",
+    "sandboxes_tab": "Sandboxes",
     "setup_tab": "Setup",
     "templates_tab": "Templates",
     "setup_command_label": "Setup command",

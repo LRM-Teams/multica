@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useDefaultLayout } from "react-resizable-panels";
-import { Box, FileCode2, Loader2, Monitor, Plus, RotateCcw, Search, Server, Square, Trash2 } from "lucide-react";
+import { Box, FileCode2, Layers, Loader2, Monitor, Plus, RotateCcw, Search, Server, Square, Trash2 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   useCreateSandboxMutation,
@@ -55,6 +55,9 @@ import { toast } from "sonner";
 import { PageHeader } from "../../layout/page-header";
 import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n/use-t";
+import { NodeTemplatesPanel } from "./node-templates-panel";
+
+type NodeDetailTab = "sandboxes" | "templates";
 
 type CreateFormState = {
   name: string;
@@ -543,6 +546,11 @@ function NodeDetail({
   onDelete: (instance: SandboxInstance) => void;
 }) {
   const { t } = useT("layout");
+  const [activeTab, setActiveTab] = useState<NodeDetailTab>("sandboxes");
+
+  useEffect(() => {
+    setActiveTab("sandboxes");
+  }, [binding?.node_id]);
 
   if (!binding) {
     return (
@@ -555,6 +563,10 @@ function NodeDetail({
 
   const online = binding.node_status === "online";
   const runningCount = instances.filter((instance) => instance.status === "running").length;
+  const tabs: { id: NodeDetailTab; icon: typeof Box; label: string }[] = [
+    { id: "sandboxes", icon: Box, label: t(($) => $.sandboxes_page.sandboxes_tab) },
+    { id: "templates", icon: Layers, label: t(($) => $.sandboxes_page.templates_tab) },
+  ];
 
   return (
     <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -592,16 +604,39 @@ function NodeDetail({
               <FileCode2 className="h-3 w-3" />
               {t(($) => $.sandboxes_page.view_setup_action)}
             </Button>
-            <Button type="button" size="sm" onClick={onCreate}>
-              <Plus className="h-3 w-3" />
-              {t(($) => $.sandboxes_page.create_action)}
-            </Button>
+            {activeTab === "sandboxes" && (
+              <Button type="button" size="sm" onClick={onCreate}>
+                <Plus className="h-3 w-3" />
+                {t(($) => $.sandboxes_page.create_action)}
+              </Button>
+            )}
           </div>
         </div>
       </div>
 
+      <div className="flex shrink-0 items-center gap-0 overflow-x-auto border-b px-2 md:px-4">
+        {tabs.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => setActiveTab(tab.id)}
+            className={cn(
+              "flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-2.5 text-xs font-medium transition-colors",
+              activeTab === tab.id
+                ? "border-foreground text-foreground"
+                : "border-transparent text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <tab.icon className="h-3.5 w-3.5" />
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
       <div className="min-h-0 flex-1 overflow-auto">
-        {instances.length === 0 ? (
+        {activeTab === "templates" ? (
+          <NodeTemplatesPanel nodeId={binding.node_id} nodeOnline={online} />
+        ) : instances.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center px-6 py-16 text-center">
             <Box className="mb-3 size-8 text-muted-foreground/50" />
             <div className="font-medium">{t(($) => $.sandboxes_page.empty_title)}</div>

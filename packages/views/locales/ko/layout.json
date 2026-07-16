@@ -103,6 +103,7 @@
     "setup_page_title": "노드 설정",
     "setup_page_description": "샌드박스 서버에서 이 명령을 실행하세요. {{file}}을(를) 작성하고 노드 키로 sandboxd를 시작합니다.",
     "setup_page_loading": "설정 명령 생성 중…",
+    "sandboxes_tab": "샌드박스",
     "setup_tab": "설정",
     "templates_tab": "템플릿",
     "setup_command_label": "설정 명령",

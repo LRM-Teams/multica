@@ -103,6 +103,7 @@
     "setup_page_title": "ノードセットアップ",
     "setup_page_description": "サンドボックスサーバーでこのコマンドを実行してください。{{file}} を書き込み、ノードキーで sandboxd を起動します。",
     "setup_page_loading": "セットアップコマンドを生成中…",
+    "sandboxes_tab": "サンドボックス",
     "setup_tab": "セットアップ",
     "templates_tab": "テンプレート",
     "setup_command_label": "セットアップコマンド",

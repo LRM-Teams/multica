@@ -168,11 +168,18 @@ func runSandboxd(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	go c.wsLoop(ctx)
+	// Template listing hits the local Cube API and can be slow. Keep it off the
+	// claim/heartbeat path so a sluggish /templates call cannot starve liveness
+	// updates (frontend/server treat >30s without last_seen as offline).
+	go c.templateRefreshLoop(ctx)
 	return c.pollLoop(ctx)
 }
 
 func (c *sandboxdClient) register(ctx context.Context) error {
-	_ = c.refreshTemplates(ctx, true)
+	// Best-effort: don't block node registration on a slow Cube /templates.
+	refreshCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	_ = c.refreshTemplates(refreshCtx, true)
+	cancel()
 	return c.postJSON(ctx, "/api/sandbox/node/register", c.cfg.NodeToken, map[string]any{
 		"node_key":        c.cfg.NodeKey,
 		"name":            c.cfg.Name,
@@ -186,9 +193,14 @@ func (c *sandboxdClient) register(ctx context.Context) error {
 func (c *sandboxdClient) pollLoop(ctx context.Context) error {
 	ticker := time.NewTicker(c.cfg.PollInterval)
 	defer ticker.Stop()
-	heartbeatEvery := c.cfg.PollInterval * 6
-	if heartbeatEvery < 30*time.Second {
-		heartbeatEvery = 30 * time.Second
+	// Keep heartbeat comfortably inside the 30s online window even if a claim
+	// tick is delayed. Claim itself also touches liveness every poll.
+	heartbeatEvery := c.cfg.PollInterval * 3
+	if heartbeatEvery < 10*time.Second {
+		heartbeatEvery = 10 * time.Second
+	}
+	if heartbeatEvery > 15*time.Second {
+		heartbeatEvery = 15 * time.Second
 	}
 	lastHeartbeat := time.Time{}
 	for {
@@ -211,10 +223,25 @@ func (c *sandboxdClient) pollLoop(ctx context.Context) error {
 }
 
 func (c *sandboxdClient) heartbeat(ctx context.Context) error {
-	_ = c.refreshTemplates(ctx, false)
+	// Fast path only: publish whatever templates are already cached. Refreshing
+	// Cube here previously blocked claimAndRun and made nodes flap offline.
 	return c.postJSON(ctx, "/api/sandbox/node/heartbeat", c.cfg.NodeToken, map[string]any{
 		"metadata": c.nodeMetadata(),
 	}, nil)
+}
+
+func (c *sandboxdClient) templateRefreshLoop(ctx context.Context) {
+	_ = c.refreshTemplates(ctx, true)
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			_ = c.refreshTemplates(ctx, true)
+		}
+	}
 }
 
 func (c *sandboxdClient) nodeMetadata() map[string]any {
@@ -237,7 +264,7 @@ func (c *sandboxdClient) nodeMetadata() map[string]any {
 }
 
 // refreshTemplates loads Cube GET /templates into the in-memory cache.
-// force=true bypasses the refresh interval (used on register).
+// force=true bypasses the refresh interval (used on register / background loop).
 func (c *sandboxdClient) refreshTemplates(ctx context.Context, force bool) error {
 	const refreshInterval = 30 * time.Second
 	c.templatesMu.Lock()
@@ -247,7 +274,11 @@ func (c *sandboxdClient) refreshTemplates(ctx context.Context, force bool) error
 	}
 	c.templatesMu.Unlock()
 
-	templates, err := c.listCubeTemplates(ctx)
+	// Bound Cube listing so a hung templates endpoint cannot pin a goroutine
+	// forever (the shared HTTP client timeout is 120s for sandbox jobs).
+	listCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	templates, err := c.listCubeTemplates(listCtx)
 	if err != nil {
 		c.logger.Warn("list cube templates failed", "error", err)
 		return err

@@ -103,6 +103,7 @@
     "setup_page_title": "节点配置",
     "setup_page_description": "在沙箱服务器上运行此命令。它会写入 {{file}}，并使用节点密钥启动 sandboxd。",
     "setup_page_loading": "正在生成配置命令…",
+    "sandboxes_tab": "沙箱",
     "setup_tab": "配置",
     "templates_tab": "模板",
     "setup_command_label": "配置命令",

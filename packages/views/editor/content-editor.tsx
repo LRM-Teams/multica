@@ -52,7 +52,6 @@ import {
 } from "./utils/parse-markdown-chunked";
 import type { MentionAgentCandidate, MentionItem } from "./extensions/mention-suggestion";
 import { createEditorExtensions } from "./extensions";
-import { autolinkFinalWord } from "./extensions/autolink-word-boundary";
 import { uploadAndInsertFile } from "./extensions/file-upload";
 import { preprocessMarkdown } from "./utils/preprocess";
 import { openLink, isMentionHref } from "./utils/link-handler";
@@ -454,21 +453,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
     }, [defaultValue, editor]);
 
     useImperativeHandle(ref, () => ({
-      getMarkdown: () => {
-        // Finalize autolink on the way out: a URL typed as the very last thing
-        // with no trailing space ("参见 https://x.com" then send) must still
-        // become a link. wordBoundaryAutolink (#531) only fires on a typed
-        // whitespace boundary, and input-end is itself a boundary. This runs on
-        // the read every submit/send path uses (Enter AND the send button both
-        // go through getMarkdown) and only there — never on draft `onUpdate`,
-        // which uses the editor's own getMarkdown, so an incomplete URL is never
-        // linked mid-typing.
-        if (editor?.view) {
-          const tr = autolinkFinalWord(editor.state);
-          if (tr) editor.view.dispatch(tr);
-        }
-        return stripBlobUrls(editor?.getMarkdown() ?? "");
-      },
+      getMarkdown: () => stripBlobUrls(editor?.getMarkdown() ?? ""),
       clearContent: () => {
         editor?.commands.clearContent();
       },

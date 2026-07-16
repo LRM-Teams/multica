@@ -10,8 +10,8 @@
  * - Edit only: Typography, Placeholder, markdownPaste, submitShortcut,
  *   fileUpload, Mention suggestion popup
  *
- * Link config differs: edit mode has autolink (detects URLs while typing),
- * readonly does not (prevents false positives on display).
+ * Link config: the composer never auto-links typed or pasted URLs (they stay
+ * plain text; #531). Bare URLs are made clickable on the read side.
  *
  * Mention suggestion is only attached in edit mode — readonly doesn't need
  * the autocomplete popup.
@@ -46,7 +46,6 @@ import { createSlashCommandSuggestion, createBuiltinCommandSuggestion } from "./
 import { CodeBlockView } from "./code-block-view";
 import { PatchedListItem, PatchedTaskItem } from "./list-item";
 import { createMarkdownPasteExtension } from "./markdown-paste";
-import { createWordBoundaryAutolink } from "./autolink-word-boundary";
 import { createMarkdownCopyExtension } from "./markdown-copy";
 import { createSubmitExtension } from "./submit-shortcut";
 import { createBlurShortcutExtension } from "./blur-shortcut";
@@ -58,16 +57,16 @@ import { HighlightExtension } from "./highlight";
 
 const lowlight = createLowlight(common);
 
-// autolink is DISABLED: the built-in one maps matched URLs back to document
-// positions with a text search (String.lastIndexOf), which desyncs from real
-// positions under char-by-char typing and produced split, phishing-shaped
-// links (#531). We replace it with wordBoundaryAutolink below, which linkifies
-// one-shot at a word boundary using real document positions. `inclusive: false`
-// and `linkOnPaste` stay — they are correct and not the cause.
+// The composer does NOT turn typed or pasted URLs into links (#531, Frank's
+// call): a bare URL stays plain text in the editor. `autolink` (types URLs as
+// you type) and `linkOnPaste` (links a pasted URL) are both OFF. The link mark
+// itself is kept in the schema — historical messages that already contain
+// `[text](url)` links must still render/edit. Bare URLs become clickable on the
+// READ side (`preprocessLinks` in Markdown.tsx), not in the input.
 const LinkExtension = Link.extend({ inclusive: false }).configure({
   openOnClick: false,
   autolink: false,
-  linkOnPaste: true,
+  linkOnPaste: false,
   defaultProtocol: "https",
 });
 
@@ -205,9 +204,6 @@ export function createEditorExtensions(
     // linkOnPaste relies on Link's handlePaste plugin firing first;
     // markdownPaste's handlePaste is a catch-all that returns true.
     LinkExtension,
-    // One-shot autolink at word boundaries — replaces LinkExtension's disabled
-    // built-in autolink (see the LinkExtension config above). #531.
-    createWordBoundaryAutolink(),
     ImageExtension,
     // renderWrapper wraps the table in `<div class="tableWrapper">` (the same
     // wrapper the resizable NodeView emits), which prose.css styles with

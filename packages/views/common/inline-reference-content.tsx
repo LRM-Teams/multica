@@ -1,7 +1,9 @@
 "use client";
 
 import * as React from "react";
-import type { IssueStatus, MessagePart } from "@multica/core/types";
+import type { Issue, IssueStatus, MessagePart } from "@multica/core/types";
+import { STATUS_CONFIG, PRIORITY_CONFIG } from "@multica/core/issues/config";
+import { useActorName } from "@multica/core/workspace/hooks";
 import { MemoizedMarkdown, ActorMention } from "./markdown";
 import { AppLink } from "../navigation/app-link";
 import { useWorkspacePaths } from "@multica/core/paths";
@@ -13,6 +15,8 @@ import {
 } from "@multica/ui/components/ui/hover-card";
 import { mentionTokenClassName } from "./mention-token";
 import { StatusIcon } from "../issues/components/status-icon";
+import { PriorityIcon } from "../issues/components/priority-icon";
+import { ProjectChip } from "../projects/components/project-chip";
 import { useResolvedIssue } from "../issues/components/issue-chip";
 import { projectInlineReferences, type ReferencePart } from "./inline-references";
 
@@ -187,7 +191,10 @@ function IssueRefToken({
   );
 
   // Nothing resolved yet (loading / deleted / other workspace / no permission) →
-  // plain clickable token. Never fake a card or fall back to the stale snapshot.
+  // plain clickable token, and we render NOTHING rather than an empty shell: an
+  // inline hover is a high-frequency, low-intent gesture (the pointer just sweeps
+  // across), so a skeleton that flashes and refills is worse than a card that
+  // opens 100ms later (Iris's #504 spec §3.3).
   const title = issue?.title;
   const status = toIssueStatus(issue?.status);
   if (!title && !status) return link;
@@ -197,17 +204,69 @@ function IssueRefToken({
       <HoverCardTrigger render={<span />} className="inline">
         {link}
       </HoverCardTrigger>
-      <HoverCardContent side="top" sideOffset={8} className="w-[300px] p-3">
-        <div className="flex items-start gap-2">
-          {status ? <StatusIcon status={status} className="mt-0.5 h-4 w-4" /> : null}
-          <div className="min-w-0 flex-1">
-            <div className="text-[11px] leading-none text-muted-foreground">{text}</div>
-            {title ? (
-              <div className="mt-1 text-sm font-medium leading-snug text-foreground">{title}</div>
-            ) : null}
-          </div>
+      <HoverCardContent side="top" sideOffset={8} className="w-[320px] p-3">
+        <div className="min-w-0">
+          <div className="text-[11px] leading-none text-muted-foreground">{text}</div>
+          {title ? (
+            <div className="mt-1 text-sm font-medium leading-snug text-foreground">{title}</div>
+          ) : null}
+          <IssuePeekProperties issue={issue} status={status} />
         </div>
       </HoverCardContent>
     </HoverCard>
+  );
+}
+
+/**
+ * The peek's property row: status · priority · assignee · project (#504 — the four
+ * Frank named; Linear's peek field list backs the first three).
+ *
+ * Deliberately NOT description/labels/estimate/dates: those fit Linear's full-screen
+ * quicklook, not an inline hover — the card's job is "judge without opening it", not
+ * to become a second detail page (Iris's spec §3.1).
+ *
+ * Every field is independently omitted when absent — we never draw a placeholder or
+ * a guessed value.
+ */
+function IssuePeekProperties({
+  issue,
+  status,
+}: {
+  issue: Issue | undefined;
+  status: IssueStatus | null;
+}): React.JSX.Element | null {
+  const { getActorName } = useActorName();
+  if (!issue) return null;
+
+  // `none` is the ABSENCE of a priority, not a value worth a row.
+  const priority =
+    issue.priority && issue.priority !== "none" ? issue.priority : null;
+  // Assignee resolves live by id, same rule as status: the name follows the
+  // workspace, never a snapshot.
+  const assignee =
+    issue.assignee_type && issue.assignee_id
+      ? getActorName(issue.assignee_type, issue.assignee_id) || null
+      : null;
+  const projectId = issue.project_id ?? null;
+
+  if (!status && !priority && !assignee && !projectId) return null;
+
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+      {status ? (
+        <span className="inline-flex items-center gap-1">
+          <StatusIcon status={status} className="h-3.5 w-3.5" />
+          {STATUS_CONFIG[status].label}
+        </span>
+      ) : null}
+      {priority ? (
+        <span className="inline-flex items-center gap-1">
+          <PriorityIcon priority={priority} className="h-3.5 w-3.5" />
+          {PRIORITY_CONFIG[priority].label}
+        </span>
+      ) : null}
+      {assignee ? <span className="truncate">{assignee}</span> : null}
+      {projectId ? <ProjectChip projectId={projectId} /> : null}
+    </div>
   );
 }

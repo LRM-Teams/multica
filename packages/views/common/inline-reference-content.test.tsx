@@ -36,10 +36,34 @@ vi.mock("@multica/ui/components/ui/hover-card", () => ({
 // Tests set this per-case; beforeEach resets it so an unresolved issue is the
 // default (otherwise a leftover would make the verbatim tests see the identifier
 // twice — once as the token, once inside the peek).
-let resolvedIssue: { id: string; title: string; status: string } | undefined;
+let resolvedIssue:
+  | {
+      id: string;
+      title: string;
+      status: string;
+      priority?: string;
+      assignee_type?: string | null;
+      assignee_id?: string | null;
+      project_id?: string | null;
+    }
+  | undefined;
 
 vi.mock("../issues/components/issue-chip", () => ({
   useResolvedIssue: () => resolvedIssue,
+}));
+
+// ProjectChip resolves the project name itself via TanStack; stub it so these
+// tests stay on what the peek decides rather than dragging in a QueryClient.
+vi.mock("../projects/components/project-chip", () => ({
+  ProjectChip: ({ projectId }: { projectId: string }) => (
+    <span data-testid="project-chip">{projectId}</span>
+  ),
+}));
+
+vi.mock("../issues/components/priority-icon", () => ({
+  PriorityIcon: ({ priority }: { priority: string }) => (
+    <svg data-testid="priority-icon" data-priority={priority} />
+  ),
 }));
 
 vi.mock("../issues/components/status-icon", () => ({
@@ -158,6 +182,49 @@ describe("InlineReferenceContent (#463 projector consumer)", () => {
 
     expect(screen.getByText("Current title")).toBeInTheDocument();
     expect(screen.getByTestId("status-icon")).toHaveAttribute("data-status", "in_progress");
+  });
+
+  it("peeks the four properties Frank named: status · priority · assignee · project (#504)", () => {
+    resolvedIssue = {
+      id: "issue-uuid",
+      title: "Fix the login bug",
+      status: "in_progress",
+      priority: "high",
+      assignee_type: "member",
+      assignee_id: "user-1",
+      project_id: "proj-7",
+    };
+    render(<InlineReferenceContent content="see #MUL-9 pls" parts={[issueRef(4, 10)]} />);
+
+    expect(screen.getByTestId("status-icon")).toHaveAttribute("data-status", "in_progress");
+    expect(screen.getByText("In Progress")).toBeInTheDocument();
+    expect(screen.getByTestId("priority-icon")).toHaveAttribute("data-priority", "high");
+    expect(screen.getByText("High")).toBeInTheDocument();
+    expect(screen.getByText("Alice")).toBeInTheDocument(); // assignee resolved live by id
+    expect(screen.getByTestId("project-chip")).toHaveTextContent("proj-7");
+  });
+
+  it("omits each property independently when absent — never a placeholder (#504)", () => {
+    // Title + status only: no priority, unassigned, no project.
+    resolvedIssue = { id: "issue-uuid", title: "Fix the login bug", status: "todo" };
+    render(<InlineReferenceContent content="see #MUL-9 pls" parts={[issueRef(4, 10)]} />);
+
+    expect(screen.getByText("Todo")).toBeInTheDocument();
+    expect(screen.queryByTestId("priority-icon")).toBeNull();
+    expect(screen.queryByTestId("project-chip")).toBeNull();
+  });
+
+  it("treats priority 'none' as absent rather than drawing a 'None' row (#504)", () => {
+    resolvedIssue = {
+      id: "issue-uuid",
+      title: "Fix the login bug",
+      status: "todo",
+      priority: "none",
+    };
+    render(<InlineReferenceContent content="see #MUL-9 pls" parts={[issueRef(4, 10)]} />);
+
+    expect(screen.queryByTestId("priority-icon")).toBeNull();
+    expect(screen.queryByText("None")).toBeNull();
   });
 
   it("degrades to a plain clickable token while the issue is unresolved (#469)", () => {

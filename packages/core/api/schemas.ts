@@ -17,6 +17,7 @@ import type {
   CreateAgentFromTemplateResponse,
   EvolutionMetricsResponse,
   EvolutionReviewSubmission,
+  MemoryCurationRunDetail,
   WorkspaceMemoryCurationStatus,
   CreateBillingCheckoutSessionResponse,
   CreateBillingPortalSessionResponse,
@@ -340,11 +341,56 @@ const EvolutionUnitMetricSchema = z.object({
   last_used_at: z.string().nullable().optional(),
 }).loose();
 
-export const EvolutionMetricsSchema = z.object({
-  unit_metrics: z.array(EvolutionUnitMetricSchema).default([]),
+const EvolutionDailyMetricSchema = z.object({
+  date: z.string().default(""),
+  memory_candidates: z.number().default(0),
+  skill_candidates: z.number().default(0),
+  promoted_memory: z.number().default(0),
+  promoted_skill: z.number().default(0),
+  archived_or_deprecated: z.number().default(0),
+  feedback_injected: z.number().default(0),
+  feedback_used: z.number().default(0),
+  feedback_success: z.number().default(0),
+  feedback_failure: z.number().default(0),
+  memory_curation_run_count: z.number().default(0),
+  memory_curation_failed: z.number().default(0),
 }).loose();
 
-export const EMPTY_EVOLUTION_METRICS: EvolutionMetricsResponse = { unit_metrics: [] };
+const EvolutionTaskEfficiencySchema = z.object({
+  issue_count: z.number().default(0),
+  average_duration_seconds: z.number().default(0),
+  average_input_tokens: z.number().default(0),
+  average_output_tokens: z.number().default(0),
+  average_cache_read_tokens: z.number().default(0),
+  average_cache_write_tokens: z.number().default(0),
+  average_evolved_units_used: z.number().default(0),
+  with_evolved_units_issue_count: z.number().default(0),
+  without_evolved_units_issue_count: z.number().default(0),
+}).loose();
+
+const EMPTY_EVOLUTION_TASK_EFFICIENCY = {
+  issue_count: 0,
+  average_duration_seconds: 0,
+  average_input_tokens: 0,
+  average_output_tokens: 0,
+  average_cache_read_tokens: 0,
+  average_cache_write_tokens: 0,
+  average_evolved_units_used: 0,
+  with_evolved_units_issue_count: 0,
+  without_evolved_units_issue_count: 0,
+};
+
+export const EvolutionMetricsSchema = z.object({
+  unit_metrics: z.array(EvolutionUnitMetricSchema).default([]),
+  daily_metrics: z.array(EvolutionDailyMetricSchema).default([]),
+  task_efficiency: EvolutionTaskEfficiencySchema.default(EMPTY_EVOLUTION_TASK_EFFICIENCY),
+}).loose();
+
+export const EMPTY_EVOLUTION_METRICS: EvolutionMetricsResponse = {
+  unit_metrics: [],
+  daily_metrics: [],
+  task_efficiency: EMPTY_EVOLUTION_TASK_EFFICIENCY,
+};
 
 const EMPTY_MEMORY_CURATION_RUN_STATS = {
   agents_scanned: 0,
@@ -382,10 +428,97 @@ const MemoryCurationStageStatusSchema = z.object({
   trigger_kind: z.string().default(""),
   status: z.string().default(""),
   stats: MemoryCurationRunStatsSchema.default(EMPTY_MEMORY_CURATION_RUN_STATS),
+  error: z.string().optional(),
   created_at: z.string().default(""),
   started_at: z.string().nullable().optional(),
   finished_at: z.string().nullable().optional(),
 }).loose();
+
+const MemoryCurationRunDiagnosticSchema = z.object({
+  severity: z.string().default(""),
+  code: z.string().default(""),
+  message: z.string().default(""),
+  action: z.string().optional(),
+}).loose();
+
+const MemoryCurationTargetAgentSchema = z.object({
+  id: z.string().default(""),
+  name: z.string().default(""),
+}).loose();
+
+const MemoryCurationRunTimelineItemSchema = z.object({
+  key: z.string().default(""),
+  label: z.string().default(""),
+  status: z.string().default(""),
+  timestamp: z.string().optional(),
+  detail: z.string().optional(),
+}).loose();
+
+const MemoryCurationAgentRunSchema = z.object({
+  workspace_id: z.string().default(""),
+  agent_id: z.string().default(""),
+  agent_name: z.string().optional(),
+  root: z.string().default(""),
+  changed: z.boolean().default(false),
+  daily_files_written: z.number().default(0),
+  review_candidates_added: z.number().default(0),
+  skill_candidates_added: z.number().default(0),
+  evidence_collected: z.number().default(0),
+  conflicts_found: z.number().default(0),
+  error: z.string().optional(),
+  curator_output_excerpt: z.string().optional(),
+}).loose();
+
+const MemoryCurationRunArtifactSchema = z.object({
+  kind: z.string().default(""),
+  title: z.string().default(""),
+  agent_id: z.string().optional(),
+  detail: z.string().optional(),
+  content: z.string().optional(),
+}).loose();
+
+export const MemoryCurationRunDetailSchema: z.ZodType<MemoryCurationRunDetail> = MemoryCurationStageStatusSchema.extend({
+  workspace_id: z.string().default(""),
+  agent_id: z.string().nullable().optional(),
+  date_from: z.string().nullable().optional(),
+  date_to: z.string().nullable().optional(),
+  dry_run: z.boolean().default(false),
+  force: z.boolean().default(false),
+  stats_summary: MemoryCurationRunStatsSchema.default(EMPTY_MEMORY_CURATION_RUN_STATS),
+  diagnostics: z.array(MemoryCurationRunDiagnosticSchema).default([]),
+  runtime_id: z.string().optional(),
+  runtime_name: z.string().optional(),
+  runtime_device_info: z.string().optional(),
+  curator_agent_id: z.string().optional(),
+  curator_agent_name: z.string().optional(),
+  curator_model: z.string().optional(),
+  curator_mode: z.string().optional(),
+  confidence_threshold: z.number().optional(),
+  target_agent_ids: z.array(z.string()).default([]),
+  target_agents: z.array(MemoryCurationTargetAgentSchema).default([]),
+  timeline: z.array(MemoryCurationRunTimelineItemSchema).default([]),
+  agent_results: z.array(MemoryCurationAgentRunSchema).default([]),
+  artifacts: z.array(MemoryCurationRunArtifactSchema).default([]),
+}).loose();
+
+export const EMPTY_MEMORY_CURATION_RUN_DETAIL: MemoryCurationRunDetail = {
+  id: "",
+  workspace_id: "",
+  stage: "",
+  trigger_kind: "",
+  status: "",
+  stats: EMPTY_MEMORY_CURATION_RUN_STATS,
+  stats_summary: EMPTY_MEMORY_CURATION_RUN_STATS,
+  created_at: "",
+  dry_run: false,
+  force: false,
+  diagnostics: [],
+  target_agent_ids: [],
+  target_agents: [],
+  timeline: [],
+  agent_results: [],
+  artifacts: [],
+};
 
 export const WorkspaceMemoryCurationStatusSchema = z.object({
   workspace_id: z.string().default(""),

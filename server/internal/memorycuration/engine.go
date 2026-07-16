@@ -73,11 +73,15 @@ func (e *Engine) Run(opts Options) (Result, error) {
 		Force:          opts.Force,
 		Timezone:       opts.Timezone,
 	}
+	res.Events = append(res.Events, newRunEvent("validated_profile", "", "done", fmt.Sprintf("mode=%s dry_run=%t", opts.Mode, opts.DryRun), opts.Now))
 	roots, err := discoverAgentRoots(opts.WorkspacesRoot, opts.WorkspaceID, opts.AgentIDs, opts.AllAgents)
 	if err != nil {
+		res.Events = append(res.Events, newRunEvent("resolved_targets", "", "failed", err.Error(), opts.Now))
 		return res, err
 	}
+	res.Events = append(res.Events, newRunEvent("resolved_targets", "", "done", fmt.Sprintf("%d target agent(s)", len(roots)), opts.Now))
 	if stage == StageTeamCuration {
+		res.Events = append(res.Events, newRunEvent("invoked_curator", "team", "running", "team curation", time.Now().UTC()))
 		ar, runErr := e.runTeamCuration(roots, opts)
 		res.AgentsScanned = len(roots)
 		res.EvidenceCollected = ar.EvidenceCollected
@@ -85,12 +89,16 @@ func (e *Engine) Run(opts Options) (Result, error) {
 		res.ConflictsFound = ar.ConflictsFound
 		res.AgentResults = append(res.AgentResults, ar)
 		if runErr != nil {
+			res.Events = append(res.Events, newRunEvent("invoked_curator", "team", "failed", runErr.Error(), time.Now().UTC()))
 			res.Errors = append(res.Errors, AgentError{WorkspaceID: opts.WorkspaceID, Stage: StageTeamCuration, Error: runErr.Error()})
+		} else {
+			res.Events = append(res.Events, newRunEvent("persisted_candidates", "team", "done", fmt.Sprintf("%d team item(s)", ar.SharedCandidatesAdded), time.Now().UTC()))
 		}
 		return res, nil
 	}
 	for _, root := range roots {
 		ar := AgentRunResult{WorkspaceID: root.WorkspaceID, AgentID: root.AgentID, Root: root.Root}
+		res.Events = append(res.Events, newRunEvent("read_local_files", root.AgentID, "running", root.Root, time.Now().UTC()))
 		res.AgentsScanned++
 		if !opts.DryRun {
 			if err := ensureMemoryRoot(root.Root); err != nil {
@@ -112,6 +120,7 @@ func (e *Engine) Run(opts Options) (Result, error) {
 			stages = []Stage{StageAgentSelfReview}
 		}
 		for _, st := range stages {
+			res.Events = append(res.Events, newRunEvent("invoked_curator", root.AgentID, "running", string(st), time.Now().UTC()))
 			var sr AgentRunResult
 			var err error
 			switch st {
@@ -130,9 +139,11 @@ func (e *Engine) Run(opts Options) (Result, error) {
 			}
 			mergeAgentRunResult(&ar, sr)
 			if err != nil {
+				res.Events = append(res.Events, newRunEvent("invoked_curator", root.AgentID, "failed", err.Error(), time.Now().UTC()))
 				res.Errors = append(res.Errors, AgentError{WorkspaceID: root.WorkspaceID, AgentID: root.AgentID, Stage: st, Error: err.Error()})
 				continue
 			}
+			res.Events = append(res.Events, newRunEvent("parsed_output", root.AgentID, "done", string(st), time.Now().UTC()))
 		}
 		releaseFileLock()
 		unlock()
@@ -156,6 +167,7 @@ func (e *Engine) Run(opts Options) (Result, error) {
 		res.ConflictsFound += ar.ConflictsFound
 		res.EvidenceCollected += ar.EvidenceCollected
 		res.ReviewTraces = appendBoundedReviewTraces(res.ReviewTraces, ar.ReviewTraces, defaultL3ReviewMaxEntries)
+		res.Events = append(res.Events, newRunEvent("persisted_candidates", root.AgentID, "done", fmt.Sprintf("memory=%d skill=%d", ar.ReviewCandidatesAdded, ar.SkillCandidatesAdded), time.Now().UTC()))
 		res.AgentResults = append(res.AgentResults, ar)
 	}
 	if stage == StageAll {
@@ -169,6 +181,13 @@ func (e *Engine) Run(opts Options) (Result, error) {
 		}
 	}
 	return res, nil
+}
+
+func newRunEvent(key, agentID, status, message string, at time.Time) RunEvent {
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	return RunEvent{Key: key, AgentID: agentID, Status: status, Message: message, CreatedAt: at.UTC().Format(time.RFC3339)}
 }
 
 func appendBoundedReviewTraces(dst, src []L3ReviewTrace, limit int) []L3ReviewTrace {

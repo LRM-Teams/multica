@@ -106,8 +106,37 @@ export interface EvolutionUnitMetric {
   last_used_at?: string | null;
 }
 
+export interface EvolutionDailyMetric {
+  date: string;
+  memory_candidates: number;
+  skill_candidates: number;
+  promoted_memory: number;
+  promoted_skill: number;
+  archived_or_deprecated: number;
+  feedback_injected: number;
+  feedback_used: number;
+  feedback_success: number;
+  feedback_failure: number;
+  memory_curation_run_count: number;
+  memory_curation_failed: number;
+}
+
+export interface EvolutionTaskEfficiency {
+  issue_count: number;
+  average_duration_seconds: number;
+  average_input_tokens: number;
+  average_output_tokens: number;
+  average_cache_read_tokens: number;
+  average_cache_write_tokens: number;
+  average_evolved_units_used: number;
+  with_evolved_units_issue_count: number;
+  without_evolved_units_issue_count: number;
+}
+
 export interface EvolutionMetricsResponse {
   unit_metrics: EvolutionUnitMetric[];
+  daily_metrics: EvolutionDailyMetric[];
+  task_efficiency: EvolutionTaskEfficiency;
 }
 
 export interface MemoryCurationRunStats {
@@ -131,9 +160,77 @@ export interface MemoryCurationStageStatus {
   trigger_kind: string;
   status: string;
   stats: MemoryCurationRunStats;
+  error?: string;
   created_at: string;
   started_at?: string | null;
   finished_at?: string | null;
+}
+
+export interface MemoryCurationRunDiagnostic {
+  severity: string;
+  code: string;
+  message: string;
+  action?: string;
+}
+
+export interface MemoryCurationTargetAgent {
+  id: string;
+  name: string;
+}
+
+export interface MemoryCurationRunTimelineItem {
+  key: string;
+  label: string;
+  status: string;
+  timestamp?: string;
+  detail?: string;
+}
+
+export interface MemoryCurationAgentRun {
+  workspace_id: string;
+  agent_id: string;
+  agent_name?: string;
+  root: string;
+  changed: boolean;
+  daily_files_written: number;
+  review_candidates_added: number;
+  skill_candidates_added: number;
+  evidence_collected: number;
+  conflicts_found: number;
+  error?: string;
+  curator_output_excerpt?: string;
+}
+
+export interface MemoryCurationRunArtifact {
+  kind: string;
+  title: string;
+  agent_id?: string;
+  detail?: string;
+  content?: string;
+}
+
+export interface MemoryCurationRunDetail extends MemoryCurationStageStatus {
+  workspace_id: string;
+  agent_id?: string | null;
+  date_from?: string | null;
+  date_to?: string | null;
+  dry_run: boolean;
+  force: boolean;
+  stats_summary: MemoryCurationRunStats;
+  diagnostics: MemoryCurationRunDiagnostic[];
+  runtime_id?: string;
+  runtime_name?: string;
+  runtime_device_info?: string;
+  curator_agent_id?: string;
+  curator_agent_name?: string;
+  curator_model?: string;
+  curator_mode?: string;
+  confidence_threshold?: number;
+  target_agent_ids: string[];
+  target_agents: MemoryCurationTargetAgent[];
+  timeline: MemoryCurationRunTimelineItem[];
+  agent_results: MemoryCurationAgentRun[];
+  artifacts: MemoryCurationRunArtifact[];
 }
 
 export interface WorkspaceMemoryCurationStatus {

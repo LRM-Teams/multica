@@ -46,6 +46,7 @@ import { createSlashCommandSuggestion, createBuiltinCommandSuggestion } from "./
 import { CodeBlockView } from "./code-block-view";
 import { PatchedListItem, PatchedTaskItem } from "./list-item";
 import { createMarkdownPasteExtension } from "./markdown-paste";
+import { createWordBoundaryAutolink } from "./autolink-word-boundary";
 import { createMarkdownCopyExtension } from "./markdown-copy";
 import { createSubmitExtension } from "./submit-shortcut";
 import { createBlurShortcutExtension } from "./blur-shortcut";
@@ -57,9 +58,15 @@ import { HighlightExtension } from "./highlight";
 
 const lowlight = createLowlight(common);
 
+// autolink is DISABLED: the built-in one maps matched URLs back to document
+// positions with a text search (String.lastIndexOf), which desyncs from real
+// positions under char-by-char typing and produced split, phishing-shaped
+// links (#531). We replace it with wordBoundaryAutolink below, which linkifies
+// one-shot at a word boundary using real document positions. `inclusive: false`
+// and `linkOnPaste` stay — they are correct and not the cause.
 const LinkExtension = Link.extend({ inclusive: false }).configure({
   openOnClick: false,
-  autolink: true,
+  autolink: false,
   linkOnPaste: true,
   defaultProtocol: "https",
 });
@@ -198,6 +205,9 @@ export function createEditorExtensions(
     // linkOnPaste relies on Link's handlePaste plugin firing first;
     // markdownPaste's handlePaste is a catch-all that returns true.
     LinkExtension,
+    // One-shot autolink at word boundaries — replaces LinkExtension's disabled
+    // built-in autolink (see the LinkExtension config above). #531.
+    createWordBoundaryAutolink(),
     ImageExtension,
     // renderWrapper wraps the table in `<div class="tableWrapper">` (the same
     // wrapper the resizable NodeView emits), which prose.css styles with

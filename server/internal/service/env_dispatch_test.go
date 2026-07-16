@@ -40,10 +40,11 @@ type createSandboxCall struct {
 	Template      string
 	BaseEnvID     string
 	DaemonEnabled bool
+	RuntimeEnv    map[string]string
 }
 
 func (c *fakeSandboxInstanceCreator) CreateSandboxInstance(_ context.Context, in CreateSandboxInstanceInput, actorUserID string) (SandboxInstanceRef, error) {
-	c.calls = append(c.calls, createSandboxCall{WorkspaceID: in.WorkspaceID, ActorUserID: actorUserID, Template: in.Template, BaseEnvID: "", DaemonEnabled: in.DaemonEnabled})
+	c.calls = append(c.calls, createSandboxCall{WorkspaceID: in.WorkspaceID, ActorUserID: actorUserID, Template: in.Template, BaseEnvID: "", DaemonEnabled: in.DaemonEnabled, RuntimeEnv: in.RuntimeEnv})
 	if c.err != nil {
 		return SandboxInstanceRef{}, c.err
 	}
@@ -101,6 +102,16 @@ type fakeEnvDispatchDeps struct {
 	copyProjectErr error
 	createIssueErr error
 	enqueueErr     error
+
+	// Phase 2: PrecreateAgentRuntime recording + canned return, and the
+	// runtime_id passed to each EnqueueAgentRun call (the pre-created R').
+	precreateRuntimeCalls   []precreateRuntimeCall
+	precreateRuntimeID      string // canned runtime id; "" -> auto "rt-<n>"
+	precreateRuntimeCounter int
+	precreateRuntimeErr     error
+	enqueueRuntimeIDs       []string
+	deleteRuntimeCalls      []string
+	deleteRuntimeErr        error
 
 	// Per-agent env spec DB-backed validation seam (§5).
 	validateAgentErrs   map[string]error // agentID -> error; missing key = OK
@@ -243,7 +254,13 @@ func (f *fakeEnvDispatchDeps) CreateChatSession(_ context.Context, pid, _, _, _ 
 func (f *fakeEnvDispatchDeps) CreateChatMessage(_ context.Context, _, _, _ string) (string, error) {
 	return "msg-1", nil
 }
-func (f *fakeEnvDispatchDeps) EnqueueAgentRun(_ context.Context, _, _, _, _, _, _, _ string, idx int) (string, error) {
+type precreateRuntimeCall struct {
+	WorkspaceID string
+	OwnerUserID string
+	AgentID     string
+}
+
+func (f *fakeEnvDispatchDeps) EnqueueAgentRun(_ context.Context, _, _, _, _, _, _, _, runtimeID string, idx int) (string, error) {
 	if f.enqueueErr != nil {
 		return "", f.enqueueErr
 	}
@@ -252,7 +269,33 @@ func (f *fakeEnvDispatchDeps) EnqueueAgentRun(_ context.Context, _, _, _, _, _, 
 	f.runCounter++
 	id := fmt.Sprintf("run-%d", f.runCounter)
 	f.agentRuns = append(f.agentRuns, id)
+	f.enqueueRuntimeIDs = append(f.enqueueRuntimeIDs, runtimeID)
 	return id, nil
+}
+
+func (f *fakeEnvDispatchDeps) PrecreateAgentRuntime(_ context.Context, workspaceID, ownerUserID, agentID string) (string, string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.precreateRuntimeCalls = append(f.precreateRuntimeCalls, precreateRuntimeCall{WorkspaceID: workspaceID, OwnerUserID: ownerUserID, AgentID: agentID})
+	if f.precreateRuntimeErr != nil {
+		return "", "", f.precreateRuntimeErr
+	}
+	f.precreateRuntimeCounter++
+	rid := fmt.Sprintf("rt-%d", f.precreateRuntimeCounter)
+	if f.precreateRuntimeID != "" {
+		rid = f.precreateRuntimeID
+	}
+	return rid, "daemon-" + rid, nil
+}
+
+func (f *fakeEnvDispatchDeps) DeleteAgentRuntime(_ context.Context, _ string, runtimeID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deleteRuntimeCalls = append(f.deleteRuntimeCalls, runtimeID)
+	if f.deleteRuntimeErr != nil {
+		return f.deleteRuntimeErr
+	}
+	return nil
 }
 func (f *fakeEnvDispatchDeps) GetDefaultSelfPlayEnv(_ context.Context, _ string) (string, error) {
 	f.mu.Lock()
@@ -1419,6 +1462,207 @@ func TestEnvDispatchPerAgentEnvSpecsAssignDistinctSandboxRefs(t *testing.T) {
 	}
 	if r1.InstanceID == r2.InstanceID {
 		t.Fatalf("agent refs must be distinct: both %s", r1.InstanceID)
+	}
+}
+
+// TestDispatch_PrecreatesRuntimeAndRoutesTaskToSandboxRuntime verifies the
+// Phase 2 contract for a single-agent, instance-backed self_play rollout: the
+// service pre-creates an agent_runtime row R' (keyed by a daemon_id), injects
+// that daemon_id as MULTICA_DAEMON_ID into the sandbox runtime_env (so the
+// in-sandbox daemon adopts R' on register), and routes the task to R' instead
+// of the session's runtime. runtime_id is deterministic at dispatch time -
+// no NULL, no deferred binding.
+func TestDispatch_PrecreatesRuntimeAndRoutesTaskToSandboxRuntime(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv() // base-env-1, SandboxIDs=["base-sbx"], mode=base
+	// Seed the base env's sandbox as a resolvable sandbox_instance so
+	// InstanceBackedBase is probed true (-> sandbox_instance backend).
+	creator := &fakeSandboxInstanceCreator{
+		refs: map[string]SandboxInstanceRef{
+			"base-sbx": {InstanceID: "base-sbx", WorkspaceID: "ws", Template: "default"},
+		},
+	}
+	svc := NewEnvDispatchService(f, 1).WithSandboxLifecycle(creator)
+
+	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage,
+		GroupSize: 1, AgentID: "ag",
+		Message: &MessageInput{Content: "hi"},
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if len(res.Rollouts) != 1 {
+		t.Fatalf("want 1 rollout, got %d", len(res.Rollouts))
+	}
+
+	// PrecreateAgentRuntime was called once for the single agent.
+	if len(f.precreateRuntimeCalls) != 1 {
+		t.Fatalf("want 1 PrecreateAgentRuntime call, got %d", len(f.precreateRuntimeCalls))
+	}
+	pc := f.precreateRuntimeCalls[0]
+	if pc.WorkspaceID != "ws" || pc.OwnerUserID != "u" || pc.AgentID != "ag" {
+		t.Fatalf("unexpected precreate call: %+v", pc)
+	}
+
+	// The rollout sandbox is daemon-enabled AND carries the pre-assigned
+	// MULTICA_DAEMON_ID (the in-sandbox daemon adopts R' on register). The base
+	// env's sandbox was pre-seeded, so only the rollout fork creates an instance.
+	if len(creator.calls) != 1 {
+		t.Fatalf("want 1 sandbox_instance create (rollout fork), got %d", len(creator.calls))
+	}
+	sb := creator.calls[0]
+	if !sb.DaemonEnabled {
+		t.Fatalf("rollout sandbox must be daemon-enabled, got %+v", sb)
+	}
+	if sb.RuntimeEnv["MULTICA_DAEMON_ID"] != "daemon-rt-1" {
+		t.Fatalf("MULTICA_DAEMON_ID = %q, want daemon-rt-1", sb.RuntimeEnv["MULTICA_DAEMON_ID"])
+	}
+
+	// The rollout's sandbox ref carries R' (runtime_id + daemon_id).
+	if len(res.Rollouts[0].SandboxRefs) != 1 {
+		t.Fatalf("want 1 sandbox ref, got %d", len(res.Rollouts[0].SandboxRefs))
+	}
+	ref := res.Rollouts[0].SandboxRefs[0]
+	if ref.RuntimeID != "rt-1" || ref.DaemonID != "daemon-rt-1" {
+		t.Fatalf("sandbox ref runtime = %q/%q, want rt-1/daemon-rt-1", ref.RuntimeID, ref.DaemonID)
+	}
+
+	// The task was routed to R' (not the session runtime).
+	if len(f.enqueueRuntimeIDs) != 1 || f.enqueueRuntimeIDs[0] != "rt-1" {
+		t.Fatalf("enqueue runtime_id = %v, want [rt-1]", f.enqueueRuntimeIDs)
+	}
+}
+
+// TestDispatch_SquadDispatchDoesNotPrecreateRuntime verifies that squad
+// dispatch (no single agent) does NOT pre-create R' or route to it - the
+// sandbox boots a daemon that registers its own runtime and the task stays on
+// the leader's runtime. (Squad R' routing is deferred.)
+func TestDispatch_SquadDispatchDoesNotPrecreateRuntime(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	creator := &fakeSandboxInstanceCreator{
+		refs: map[string]SandboxInstanceRef{
+			"base-sbx": {InstanceID: "base-sbx", WorkspaceID: "ws", Template: "default"},
+		},
+	}
+	svc := NewEnvDispatchService(f, 1).WithSandboxLifecycle(creator)
+
+	if _, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", SquadID: "sq", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
+		Message: &MessageInput{Content: "hi"},
+	}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if len(f.precreateRuntimeCalls) != 0 {
+		t.Fatalf("squad dispatch must not precreate runtime, got %d calls", len(f.precreateRuntimeCalls))
+	}
+	if len(f.enqueueRuntimeIDs) != 1 || f.enqueueRuntimeIDs[0] != "" {
+		t.Fatalf("squad dispatch task must keep empty runtime_id (leader runtime), got %v", f.enqueueRuntimeIDs)
+	}
+}
+
+// TestDispatch_SandboxCreateFailureReclaimsPrecreatedRuntime verifies Phase 2b
+// concern 1: when the rollout sandbox_instance fork fails AFTER R' was
+// pre-created, the pre-created runtime row is reclaimed so an offline orphan
+// does not linger. (Reclaim happens inside createSandboxInstanceRefs, before
+// dispatchOne ever runs.)
+func TestDispatch_SandboxCreateFailureReclaimsPrecreatedRuntime(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	creator := &fakeSandboxInstanceCreator{
+		refs: map[string]SandboxInstanceRef{
+			"base-sbx": {InstanceID: "base-sbx", WorkspaceID: "ws", Template: "default"},
+		},
+		err: fmt.Errorf("sandbox create exploded"), // fork CreateSandboxInstance fails
+	}
+	svc := NewEnvDispatchService(f, 1).WithSandboxLifecycle(creator)
+
+	_, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage,
+		GroupSize: 1, AgentID: "ag",
+		Message: &MessageInput{Content: "hi"},
+	})
+	if err == nil {
+		t.Fatalf("dispatch must fail when sandbox_instance fork fails")
+	}
+	// R' was pre-created then reclaimed because the sandbox fork failed.
+	if len(f.precreateRuntimeCalls) != 1 {
+		t.Fatalf("want 1 precreate call, got %d", len(f.precreateRuntimeCalls))
+	}
+	if len(f.deleteRuntimeCalls) != 1 || f.deleteRuntimeCalls[0] != "rt-1" {
+		t.Fatalf("orphan R' must be reclaimed, deleteRuntimeCalls=%v", f.deleteRuntimeCalls)
+	}
+}
+
+// TestDispatch_EnqueueFailureReclaimsPrecreatedRuntime verifies Phase 2b
+// concern 1: when the sandbox fork succeeds but the task enqueue fails (so the
+// rollout's task is never created), dispatchOne's defer reclaims R'. Dispatch is
+// best-effort here - it returns no top-level error but the rollout records one.
+func TestDispatch_EnqueueFailureReclaimsPrecreatedRuntime(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	f.enqueueErr = fmt.Errorf("enqueue crashed")
+	baseEnv := f.seedBaseEnv()
+	creator := &fakeSandboxInstanceCreator{
+		refs: map[string]SandboxInstanceRef{
+			"base-sbx": {InstanceID: "base-sbx", WorkspaceID: "ws", Template: "default"},
+		},
+	}
+	svc := NewEnvDispatchService(f, 1).WithSandboxLifecycle(creator)
+
+	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage,
+		GroupSize: 1, AgentID: "ag",
+		Message: &MessageInput{Content: "hi"},
+	})
+	// Status rule (spec §6.3): 0 succeeded -> ErrAllDispatchFailed, but the
+	// rollouts[] are still returned in the body. The reclaim is independent of
+	// the top-level status - it fires from dispatchOne's defer because the
+	// rollout's task was never created.
+	if !errors.Is(err, ErrAllDispatchFailed) {
+		t.Fatalf("dispatch with 0 succeeded must return ErrAllDispatchFailed, got %v", err)
+	}
+	if len(res.Rollouts) != 1 || res.Rollouts[0].Error == "" {
+		t.Fatalf("rollout must record the enqueue error, got %+v", res.Rollouts)
+	}
+	if res.Rollouts[0].AgentRunID != "" {
+		t.Fatalf("rollout must have no agent run on enqueue failure, got %q", res.Rollouts[0].AgentRunID)
+	}
+	if len(f.deleteRuntimeCalls) != 1 || f.deleteRuntimeCalls[0] != "rt-1" {
+		t.Fatalf("orphan R' must be reclaimed on enqueue failure, deleteRuntimeCalls=%v", f.deleteRuntimeCalls)
+	}
+}
+
+// TestDispatch_SuccessKeepsPrecreatedRuntime verifies Phase 2b concern 1: on a
+// successful dispatch the pre-created R' is NOT reclaimed - the task is routed
+// to it and the in-sandbox daemon adopts it on register.
+func TestDispatch_SuccessKeepsPrecreatedRuntime(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	creator := &fakeSandboxInstanceCreator{
+		refs: map[string]SandboxInstanceRef{
+			"base-sbx": {InstanceID: "base-sbx", WorkspaceID: "ws", Template: "default"},
+		},
+	}
+	svc := NewEnvDispatchService(f, 1).WithSandboxLifecycle(creator)
+
+	if _, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage,
+		GroupSize: 1, AgentID: "ag",
+		Message: &MessageInput{Content: "hi"},
+	}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if len(f.precreateRuntimeCalls) != 1 {
+		t.Fatalf("want 1 precreate call, got %d", len(f.precreateRuntimeCalls))
+	}
+	if len(f.deleteRuntimeCalls) != 0 {
+		t.Fatalf("successful dispatch must NOT reclaim R', deleteRuntimeCalls=%v", f.deleteRuntimeCalls)
 	}
 }
 

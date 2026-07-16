@@ -199,6 +199,27 @@ func (a *envSandboxLifecycleDepsAdapter) ForceDeleteSandboxInstance(ctx context.
 	return a.h.Queries.DeleteSandboxInstance(ctx, instUUID)
 }
 
+// ephemeralSandboxCleanerAdapter implements service.EphemeralSandboxCleaner
+// by delegating to the env-sandbox lifecycle service's sandboxd delete job
+// path (stop+delete the Cube job, with a DB-level force-delete fallback
+// when no sandboxd node is available). Not-found = success (already deleted).
+type ephemeralSandboxCleanerAdapter struct {
+	lifecycle service.SandboxInstanceCreator
+}
+
+func newEphemeralSandboxCleaner(lc service.SandboxInstanceCreator) *ephemeralSandboxCleanerAdapter {
+	return &ephemeralSandboxCleanerAdapter{lifecycle: lc}
+}
+
+func (a *ephemeralSandboxCleanerAdapter) DeleteSandboxInstance(ctx context.Context, workspaceID, instanceID string) error {
+	ref, err := a.lifecycle.GetSandboxInstanceRef(ctx, workspaceID, instanceID)
+	if err != nil {
+		// Not-found or transient error: best-effort, treat as already gone.
+		return nil
+	}
+	return a.lifecycle.DeleteSandboxInstance(ctx, ref, "")
+}
+
 // sandboxInstanceRowToRef converts a joined sandbox_instance row to the
 // service-layer SandboxInstanceRef.
 func sandboxInstanceRowToRef(row db.ListSandboxInstancesByWorkspaceRow) service.SandboxInstanceRef {

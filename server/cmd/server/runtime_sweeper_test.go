@@ -613,6 +613,150 @@ func TestExpireStaleQueuedTasks(t *testing.T) {
 	}
 }
 
+// TestExpireQueuedTasksOnOfflineRuntimes verifies the Phase 2b env-dispatch
+// liveness backstop: a 'queued' task whose runtime is still 'offline' past the
+// TTL is failed with failure_reason='runtime_offline', while a fresh queued
+// task on the same offline runtime and an old queued task on an ONLINE runtime
+// are both left alone (the offline-runtime filter + the TTL predicate).
+func TestExpireQueuedTasksOnOfflineRuntimes(t *testing.T) {
+	if testPool == nil {
+		t.Skip("no database connection")
+	}
+
+	ctx := context.Background()
+
+	// Find the integration test agent + workspace + owner (for runtime owner_id).
+	var agentID, ownerID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT a.id, m.user_id FROM agent a
+		JOIN member m ON m.workspace_id = a.workspace_id
+		JOIN "user" u ON u.id = m.user_id
+		WHERE u.email = $1
+		LIMIT 1
+	`, integrationTestEmail).Scan(&agentID, &ownerID); err != nil {
+		t.Fatalf("failed to find test agent: %v", err)
+	}
+
+	// Insert two fresh runtimes: one offline (sweep target), one online (control).
+	// Distinct daemon_ids satisfy UNIQUE(workspace_id, daemon_id, provider).
+	var offlineRT, onlineRT string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, owner_id)
+		VALUES ($1, 'offline-daemon-sweep-test', 'sweep test offline', 'local', 'pi', 'offline', $2)
+		RETURNING id
+	`, testWorkspaceID, ownerID).Scan(&offlineRT); err != nil {
+		t.Fatalf("failed to insert offline runtime: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, owner_id)
+		VALUES ($1, 'online-daemon-sweep-test', 'sweep test online', 'local', 'pi', 'online', $2)
+		RETURNING id
+	`, testWorkspaceID, ownerID).Scan(&onlineRT); err != nil {
+		t.Fatalf("failed to insert online runtime: %v", err)
+	}
+
+	// Three distinct issues (idx_one_pending_task_per_issue_agent).
+	mkIssue := func(label string) string {
+		var issueID string
+		if err := testPool.QueryRow(ctx, `
+			WITH bumped AS (
+				UPDATE workspace SET issue_counter = issue_counter + 1
+				WHERE id = $1 RETURNING issue_counter
+			)
+			INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id, assignee_type, assignee_id, number)
+			SELECT $1, $3, 'todo', 'none', 'member', $2, 'agent', $4, (SELECT issue_counter FROM bumped)
+			FROM member m WHERE m.workspace_id = $1 LIMIT 1
+			RETURNING id
+		`, testWorkspaceID, ownerID, label, agentID).Scan(&issueID); err != nil {
+			t.Fatalf("failed to create %s issue: %v", label, err)
+		}
+		return issueID
+	}
+	oldOfflineIssue := mkIssue("Offline-runtime sweep test (old)")
+	freshOfflineIssue := mkIssue("Offline-runtime sweep test (fresh)")
+	oldOnlineIssue := mkIssue("Offline-runtime sweep test (online control)")
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE runtime_id IN ($1, $2)`, offlineRT, onlineRT)
+		testPool.Exec(ctx, `DELETE FROM issue WHERE id IN ($1, $2, $3)`, oldOfflineIssue, freshOfflineIssue, oldOnlineIssue)
+		testPool.Exec(ctx, `DELETE FROM agent_runtime WHERE id IN ($1, $2)`, offlineRT, onlineRT)
+	})
+
+	// old-offline: 10 min old, offline runtime -> should fail.
+	// fresh-offline: 0s old, offline runtime -> should stay (under TTL).
+	// old-online: 10 min old, ONLINE runtime -> should stay (runtime not offline).
+	var oldOfflineTask, freshOfflineTask, oldOnlineTask string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, created_at)
+		VALUES ($1, $2, $3, 'queued', 0, now() - interval '10 minutes')
+		RETURNING id
+	`, agentID, offlineRT, oldOfflineIssue).Scan(&oldOfflineTask); err != nil {
+		t.Fatalf("failed to insert old offline queued task: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, created_at)
+		VALUES ($1, $2, $3, 'queued', 0, now())
+		RETURNING id
+	`, agentID, offlineRT, freshOfflineIssue).Scan(&freshOfflineTask); err != nil {
+		t.Fatalf("failed to insert fresh offline queued task: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, created_at)
+		VALUES ($1, $2, $3, 'queued', 0, now() - interval '10 minutes')
+		RETURNING id
+	`, agentID, onlineRT, oldOnlineIssue).Scan(&oldOnlineTask); err != nil {
+		t.Fatalf("failed to insert old online queued task: %v", err)
+	}
+
+	queries := db.New(testPool)
+	failed, err := queries.ExpireQueuedTasksOnOfflineRuntimes(ctx, db.ExpireQueuedTasksOnOfflineRuntimesParams{
+		TtlSecs:    300.0, // 5 min TTL
+		MaxPerTick: 100,
+	})
+	if err != nil {
+		t.Fatalf("ExpireQueuedTasksOnOfflineRuntimes failed: %v", err)
+	}
+	if len(failed) != 1 {
+		t.Fatalf("expected exactly 1 expired task, got %d", len(failed))
+	}
+	if failed[0].ID.Bytes != parseUUIDBytes(oldOfflineTask) {
+		t.Fatalf("expired the wrong task: got %x", failed[0].ID.Bytes)
+	}
+
+	// old-offline -> failed/runtime_offline.
+	var status, reason, errMsg string
+	if err := testPool.QueryRow(ctx, `
+		SELECT status, COALESCE(failure_reason, ''), COALESCE(error, '')
+		FROM agent_task_queue WHERE id = $1
+	`, oldOfflineTask).Scan(&status, &reason, &errMsg); err != nil {
+		t.Fatalf("failed to read old-offline task: %v", err)
+	}
+	if status != "failed" {
+		t.Fatalf("old-offline task: expected status=failed, got %q", status)
+	}
+	if reason != "runtime_offline" {
+		t.Fatalf("old-offline task: expected failure_reason=runtime_offline, got %q", reason)
+	}
+	if !strings.Contains(errMsg, "did not register") {
+		t.Fatalf("old-offline task: expected error to mention daemon not registering, got %q", errMsg)
+	}
+
+	// fresh-offline -> still queued (under TTL).
+	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, freshOfflineTask).Scan(&status); err != nil {
+		t.Fatalf("failed to read fresh-offline task: %v", err)
+	}
+	if status != "queued" {
+		t.Fatalf("fresh-offline task: expected status=queued, got %q", status)
+	}
+
+	// old-online -> still queued (runtime is online, not a sweep target).
+	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, oldOnlineTask).Scan(&status); err != nil {
+		t.Fatalf("failed to read old-online task: %v", err)
+	}
+	if status != "queued" {
+		t.Fatalf("old-online task: expected status=queued, got %q", status)
+	}
+}
+
 // TestExpireStaleQueuedTasksRespectsBatchLimit verifies the per-tick cap so
 // that a large historical backlog cannot monopolise a single sweep.
 func TestExpireStaleQueuedTasksRespectsBatchLimit(t *testing.T) {

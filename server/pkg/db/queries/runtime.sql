@@ -66,6 +66,29 @@ DO UPDATE SET
     updated_at = now()
 RETURNING *, (xmax = 0) AS inserted;
 
+-- name: PrecreateAgentRuntime :one
+-- Inserts a pending (offline) agent_runtime row keyed by a caller-supplied
+-- daemon_id, so an in-sandbox daemon booted with MULTICA_DAEMON_ID=<daemon_id>
+-- adopts THIS row on register: UpsertAgentRuntime's ON CONFLICT
+-- (workspace_id, daemon_id, provider) DO UPDATE matches it, flips status to
+-- online, and reuses this id (R'). Used by env-dispatch to make a sandbox's
+-- runtime_id deterministic at dispatch time so the task can carry it
+-- immediately (no NULL, no deferred binding). runtime_mode='local',
+-- status='offline' until the daemon registers.
+INSERT INTO agent_runtime (
+    workspace_id,
+    daemon_id,
+    name,
+    runtime_mode,
+    provider,
+    status,
+    device_info,
+    metadata,
+    owner_id,
+    last_seen_at
+) VALUES ($1, $2, $3, 'local', $4, 'offline', '', '{}', $5, now())
+RETURNING id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility;
+
 -- name: UpdateAgentRuntimeVisibility :one
 -- Toggles a runtime between 'private' (only owner can bind agents) and
 -- 'public' (any workspace member can). Default for new rows is 'private'
@@ -204,6 +227,14 @@ RETURNING *;
 
 -- name: DeleteAgentRuntime :exec
 DELETE FROM agent_runtime WHERE id = $1;
+
+-- name: DeleteAgentRuntimeForWorkspace :exec
+-- Workspace-scoped delete used by env-dispatch to reclaim a pre-created
+-- runtime R' when its rollout fails before the task is created. Scoping on
+-- workspace_id is defense-in-depth: R' is server-generated, but this keeps the
+-- delete inside the dispatch's own workspace. The task FK is ON DELETE CASCADE,
+-- so callers must ensure no task references R' (the failure path creates none).
+DELETE FROM agent_runtime WHERE id = $1 AND workspace_id = $2;
 
 -- name: CountActiveAgentsByRuntime :one
 SELECT count(*) FROM agent WHERE runtime_id = $1 AND archived_at IS NULL;

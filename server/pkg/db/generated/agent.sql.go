@@ -1027,13 +1027,14 @@ func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent
 const createAgentTask = `-- name: CreateAgentTask :one
 INSERT INTO agent_task_queue (
     agent_id, runtime_id, issue_id, status, priority, trigger_comment_id,
-    trigger_summary, force_fresh_session, is_leader_task
+    trigger_summary, force_fresh_session, is_leader_task, context
 )
 VALUES (
     $1, $2, $3, 'queued', $4, $5,
     $6,
     COALESCE($7::boolean, FALSE),
-    COALESCE($8::boolean, FALSE)
+    COALESCE($8::boolean, FALSE),
+    $9
 )
 RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
 `
@@ -1047,6 +1048,7 @@ type CreateAgentTaskParams struct {
 	TriggerSummary    pgtype.Text `json:"trigger_summary"`
 	ForceFreshSession pgtype.Bool `json:"force_fresh_session"`
 	IsLeaderTask      pgtype.Bool `json:"is_leader_task"`
+	Context           []byte      `json:"context"`
 }
 
 func (q *Queries) CreateAgentTask(ctx context.Context, arg CreateAgentTaskParams) (AgentTaskQueue, error) {
@@ -1059,6 +1061,7 @@ func (q *Queries) CreateAgentTask(ctx context.Context, arg CreateAgentTaskParams
 		arg.TriggerSummary,
 		arg.ForceFreshSession,
 		arg.IsLeaderTask,
+		arg.Context,
 	)
 	var i AgentTaskQueue
 	err := row.Scan(
@@ -1265,6 +1268,103 @@ type ExpireStaleQueuedTasksParams struct {
 // subsequent ticks.
 func (q *Queries) ExpireStaleQueuedTasks(ctx context.Context, arg ExpireStaleQueuedTasksParams) ([]AgentTaskQueue, error) {
 	rows, err := q.db.Query(ctx, expireStaleQueuedTasks, arg.TtlSecs, arg.MaxPerTick)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AgentTaskQueue{}
+	for rows.Next() {
+		var i AgentTaskQueue
+		if err := rows.Scan(
+			&i.ID,
+			&i.AgentID,
+			&i.IssueID,
+			&i.Status,
+			&i.Priority,
+			&i.DispatchedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.Result,
+			&i.Error,
+			&i.CreatedAt,
+			&i.Context,
+			&i.RuntimeID,
+			&i.SessionID,
+			&i.WorkDir,
+			&i.TriggerCommentID,
+			&i.ChatSessionID,
+			&i.AutopilotRunID,
+			&i.Attempt,
+			&i.MaxAttempts,
+			&i.ParentTaskID,
+			&i.FailureReason,
+			&i.TriggerSummary,
+			&i.ForceFreshSession,
+			&i.IsLeaderTask,
+			&i.WaitReason,
+			&i.InitiatorUserID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const expireQueuedTasksOnOfflineRuntimes = `-- name: ExpireQueuedTasksOnOfflineRuntimes :many
+WITH victims AS (
+    SELECT t.id
+    FROM agent_task_queue t
+    JOIN agent_runtime r ON r.id = t.runtime_id
+    WHERE t.status = 'queued'
+      AND r.status = 'offline'
+      AND t.created_at < now() - make_interval(secs => $1::double precision)
+    ORDER BY t.created_at ASC
+    LIMIT $2::int
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE agent_task_queue t
+SET status = 'failed',
+    completed_at = now(),
+    error = 'runtime offline: sandbox daemon did not register in time',
+    failure_reason = 'runtime_offline'
+FROM victims v
+WHERE t.id = v.id
+  AND t.status = 'queued'
+  AND t.created_at < now() - make_interval(secs => $1::double precision)
+  AND EXISTS (SELECT 1 FROM agent_runtime r WHERE r.id = t.runtime_id AND r.status = 'offline')
+RETURNING t.id, t.agent_id, t.issue_id, t.status, t.priority, t.dispatched_at, t.started_at, t.completed_at, t.result, t.error, t.created_at, t.context, t.runtime_id, t.session_id, t.work_dir, t.trigger_comment_id, t.chat_session_id, t.autopilot_run_id, t.attempt, t.max_attempts, t.parent_task_id, t.failure_reason, t.trigger_summary, t.force_fresh_session, t.is_leader_task, t.wait_reason, t.initiator_user_id
+`
+
+type ExpireQueuedTasksOnOfflineRuntimesParams struct {
+	TtlSecs    float64 `json:"ttl_secs"`
+	MaxPerTick int32   `json:"max_per_tick"`
+}
+
+// Fails 'queued' tasks whose runtime is still 'offline' after the
+// offline-runtime TTL. This is the env-dispatch per-agent sandbox liveness
+// backstop (Phase 2b): env-dispatch pre-creates R' as offline, routes a queued
+// task to it, and relies on the in-sandbox daemon registering (-> R' online)
+// and claiming the task. If the sandbox/daemon never comes up, the task would
+// otherwise sit in 'queued' until the slow 2h queued-TTL sweep. This drains it
+// in ~5 min so the rollout fails promptly. FailTasksForOfflineRuntimes does NOT
+// cover this: it only touches dispatched/running/waiting_local_directory, so
+// 'queued' rows on offline runtimes are otherwise only caught by the 2h sweep.
+//
+// Same concurrency contract as ExpireStaleQueuedTasks: FOR UPDATE SKIP LOCKED
+// in the victim CTE + a status='queued' AND runtime-still-offline re-check in
+// the outer UPDATE. The re-check matters here because the daemon may bring R'
+// online and claim the task between selection and apply - in that case the row
+// is already 'dispatched' (filtered by status) or R' is now online (filtered by
+// the EXISTS), so we cannot clobber an in-flight or now-routable task.
+// failure_reason='runtime_offline' matches FailTasksForOfflineRuntimes so the
+// retry/metrics path in HandleFailedTasks treats it identically (retryable,
+// bounded by max_attempts).
+func (q *Queries) ExpireQueuedTasksOnOfflineRuntimes(ctx context.Context, arg ExpireQueuedTasksOnOfflineRuntimesParams) ([]AgentTaskQueue, error) {
+	rows, err := q.db.Query(ctx, expireQueuedTasksOnOfflineRuntimes, arg.TtlSecs, arg.MaxPerTick)
 	if err != nil {
 		return nil, err
 	}
@@ -1851,6 +1951,29 @@ WHERE issue_id = $1 AND status IN ('queued', 'dispatched', 'running', 'waiting_l
 // or running task for the issue.
 func (q *Queries) HasActiveTaskForIssue(ctx context.Context, issueID pgtype.UUID) (bool, error) {
 	row := q.db.QueryRow(ctx, hasActiveTaskForIssue, issueID)
+	var has_active bool
+	err := row.Scan(&has_active)
+	return has_active, err
+}
+
+const hasOtherActiveTaskForRuntime = `-- name: HasOtherActiveTaskForRuntime :one
+SELECT count(*) > 0 AS has_active FROM agent_task_queue
+WHERE runtime_id = $1 AND id <> $2
+  AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+`
+
+type HasOtherActiveTaskForRuntimeParams struct {
+	RuntimeID   pgtype.UUID `json:"runtime_id"`
+	ExcludeTask pgtype.UUID `json:"exclude_task"`
+}
+
+// Returns true if any queued/dispatched/running/waiting_local_directory task
+// OTHER than the given one is still bound to this runtime. Used by the Phase 5
+// ephemeral-sandbox cleanup guard: a retry child inherits the parent's runtime_id
+// (CreateRetryTask copies runtime_id), so the sandbox + runtime must not be
+// torn down while a sibling/child task is still active on R'.
+func (q *Queries) HasOtherActiveTaskForRuntime(ctx context.Context, arg HasOtherActiveTaskForRuntimeParams) (bool, error) {
+	row := q.db.QueryRow(ctx, hasOtherActiveTaskForRuntime, arg.RuntimeID, arg.ExcludeTask)
 	var has_active bool
 	err := row.Scan(&has_active)
 	return has_active, err

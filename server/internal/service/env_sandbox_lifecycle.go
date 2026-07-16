@@ -24,6 +24,13 @@ type SandboxInstanceRef struct {
 	Status          string          `json:"status,omitempty"`
 	RuntimeMetadata json.RawMessage `json:"runtime,omitempty"`
 	EndpointInfo    json.RawMessage `json:"endpoint_info,omitempty"`
+	// RuntimeID is the pre-created agent_runtime id (R') for a daemon-enabled
+	// sandbox: env-dispatch inserts an offline row keyed by a daemon_id, injects
+	// that daemon_id as MULTICA_DAEMON_ID into the sandbox runtime_env, and the
+	// in-sandbox daemon adopts this row on register. The task is routed to R'
+	// (not the agent's runtime). Empty when the sandbox is not daemon-bound.
+	RuntimeID string `json:"runtime_id,omitempty"`
+	DaemonID  string `json:"daemon_id,omitempty"`
 }
 
 type SandboxLifecycleJobResult struct {
@@ -127,15 +134,21 @@ func (s *EnvSandboxLifecycleService) Create(ctx context.Context, in CreateSandbo
 	if err != nil {
 		return SandboxInstanceRef{}, fmt.Errorf("insert sandbox instance: %w", err)
 	}
-	// Daemon-enabled sandbox with no caller-supplied bootstrap env: mint one
-	// (server URL + PAT + workspace + MULTICA_DAEMON_ENABLED=1 + profile) so the
-	// in-sandbox daemon can reach multica on boot. The env stays local to Create
-	// (folded into the create job payload below) and is never placed on the ref,
-	// so the token cannot leak into dispatch responses or the idempotency ledger.
-	if in.DaemonEnabled && len(in.RuntimeEnv) == 0 {
+	// Daemon-enabled sandbox: mint the bootstrap env (server URL + PAT +
+	// workspace + MULTICA_DAEMON_ENABLED=1 + profile) so the in-sandbox daemon
+	// can reach multica on boot, then overlay any caller-supplied extras (e.g.
+	// Phase 2's pre-assigned MULTICA_DAEMON_ID) on top - caller keys win on
+	// conflict, minted keys (MULTICA_TOKEN etc.) are kept when the caller does
+	// not supply them. The env stays local to Create (folded into the create job
+	// payload below) and is never placed on the ref, so the token cannot leak
+	// into dispatch responses or the idempotency ledger.
+	if in.DaemonEnabled {
 		env, err := s.deps.MintSandboxRuntimeEnv(ctx, in.WorkspaceID, actorUserID, ref.InstanceID)
 		if err != nil {
 			return SandboxInstanceRef{}, fmt.Errorf("mint sandbox runtime env: %w", err)
+		}
+		for k, v := range in.RuntimeEnv {
+			env[k] = v
 		}
 		in.RuntimeEnv = env
 	}

@@ -370,34 +370,50 @@ func TestEnvSandboxLifecycleCreateSkipsMintWhenDaemonDisabled(t *testing.T) {
 	}
 }
 
-// TestEnvSandboxLifecycleCreateSkipsMintWhenRuntimeEnvSupplied verifies that a
-// caller-supplied RuntimeEnv wins over minting even when DaemonEnabled is true
-// (Phase 2 will use this to inject a pre-assigned MULTICA_DAEMON_ID).
-func TestEnvSandboxLifecycleCreateSkipsMintWhenRuntimeEnvSupplied(t *testing.T) {
+// TestEnvSandboxLifecycleCreateMergesCallerSuppliedEnv verifies that a
+// DaemonEnabled sandbox mints the bootstrap env AND overlays caller-supplied
+// extras (Phase 2 injects MULTICA_DAEMON_ID this way): minted bootstrap keys +
+// token are kept, and the caller's extra is merged in.
+func TestEnvSandboxLifecycleCreateMergesCallerSuppliedEnv(t *testing.T) {
 	ctx := context.Background()
 	deps := &fakeEnvSandboxLifecycleDeps{}
 	svc := NewEnvSandboxLifecycleService(deps, 5*time.Second)
 
-	supplied := map[string]string{"MULTICA_TOKEN": "caller-tok", "MULTICA_DAEMON_ID": "preassigned"}
 	in := CreateSandboxInstanceInput{
 		WorkspaceID:   "ws-1",
 		NodeID:        "node-1",
 		Template:      "python",
 		DaemonEnabled: true,
-		RuntimeEnv:    supplied,
+		RuntimeEnv:    map[string]string{"MULTICA_DAEMON_ID": "preassigned-daemon"},
 	}
-	if _, err := svc.Create(ctx, in, "user-1"); err != nil {
+	ref, err := svc.Create(ctx, in, "user-1")
+	if err != nil {
 		t.Fatalf("Create returned error: %v", err)
 	}
-	if len(deps.mintCalls) != 0 {
-		t.Fatalf("caller-supplied env must skip minting, got %d calls", len(deps.mintCalls))
+	if len(deps.mintCalls) != 1 {
+		t.Fatalf("want 1 mint call (mint + merge, not skip), got %d", len(deps.mintCalls))
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(deps.jobs[0].Payload, &payload); err != nil {
 		t.Fatalf("payload invalid JSON: %v", err)
 	}
 	env, ok := payload["runtime_env"].(map[string]any)
-	if !ok || env["MULTICA_TOKEN"] != "caller-tok" || env["MULTICA_DAEMON_ID"] != "preassigned" {
-		t.Fatalf("payload must carry the caller-supplied env verbatim: %s", string(deps.jobs[0].Payload))
+	if !ok {
+		t.Fatalf("payload missing runtime_env: %s", string(deps.jobs[0].Payload))
+	}
+	// Minted bootstrap keys are present.
+	if env["MULTICA_DAEMON_ENABLED"] != "1" {
+		t.Fatalf("MULTICA_DAEMON_ENABLED = %v", env["MULTICA_DAEMON_ENABLED"])
+	}
+	if env["MULTICA_PROFILE"] != "sandbox-"+ref.InstanceID {
+		t.Fatalf("MULTICA_PROFILE = %v", env["MULTICA_PROFILE"])
+	}
+	// The minted token is kept (caller did not override it).
+	if env["MULTICA_TOKEN"] != "tok-"+ref.InstanceID {
+		t.Fatalf("MULTICA_TOKEN = %v", env["MULTICA_TOKEN"])
+	}
+	// The caller-supplied extra is merged in.
+	if env["MULTICA_DAEMON_ID"] != "preassigned-daemon" {
+		t.Fatalf("MULTICA_DAEMON_ID = %v", env["MULTICA_DAEMON_ID"])
 	}
 }

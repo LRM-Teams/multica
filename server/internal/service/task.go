@@ -27,6 +27,19 @@ import (
 	"github.com/multica-ai/multica/server/pkg/taskfailure"
 )
 
+// EphemeralSandboxCleaner is an optional seam injected into TaskService so the
+// terminal cleanup hook can reclaim an env-dispatch ephemeral sandbox instance
+// after the last task on its pre-created runtime R' has terminated. Nil = no-op
+// (sandbox cleanup not configured for this deployment). Wired by the handler to
+// the env-sandbox-lifecycle adapter's DeleteSandboxInstance.
+type EphemeralSandboxCleaner interface {
+	// DeleteSandboxInstance stops and deletes the Cube sandbox instance (via
+	// sandboxd delete job). It is safe to call on an already-deleted instance
+	// (not-found = success). Best-effort; errors are logged but never fail the
+	// terminal flow.
+	DeleteSandboxInstance(ctx context.Context, workspaceID, instanceID string) error
+}
+
 type TaskService struct {
 	Queries   *db.Queries
 	TxStarter TxStarter
@@ -55,6 +68,11 @@ type TaskService struct {
 	// creation (see maybeOpenTrainingSession). Nil = training not configured
 	// for this deployment; the hook is then a no-op. Wired in Task 8 (config).
 	Training *TrainingSessionDeps
+
+	// EphemeralSandboxCleaner, when non-nil, enables the Phase 5 sandbox
+	// cleanup hook at task terminal. Nil = no-op (sandbox cleanup not
+	// configured). Wired by the handler to the env-sandbox-lifecycle adapter.
+	EphemeralSandboxCleaner EphemeralSandboxCleaner
 
 	analyticsContextMu    sync.Mutex
 	analyticsContextCache map[string]analytics.TaskContext
@@ -1330,6 +1348,7 @@ func (s *TaskService) CancelTaskWithResult(ctx context.Context, taskID pgtype.UU
 	slog.Info("task cancelled", "task_id", util.UUIDToString(task.ID), "issue_id", util.UUIDToString(task.IssueID))
 	s.captureTaskCancelled(ctx, task)
 	s.RouteTerminalTrainingTask(ctx, task)
+	s.maybeCleanupEphemeralSandbox(ctx, task)
 	cancelledChatMessage := s.finalizeCancelledChatMessage(ctx, task)
 
 	// Reconcile agent status
@@ -1829,6 +1848,7 @@ func (s *TaskService) completeTask(ctx context.Context, taskID pgtype.UUID, resu
 		}
 	}
 	s.RouteTerminalTrainingTask(ctx, task)
+	s.maybeCleanupEphemeralSandbox(ctx, task)
 
 	// Invariant: every completed issue task must have at least one agent
 	// comment on the issue, so the user always sees something when a run
@@ -2086,6 +2106,7 @@ func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg, 
 	// runtime_recovery). The helper itself enforces attempt < max_attempts
 	// and only triggers for issue/chat tasks.
 	retried, _ := s.MaybeRetryFailedTask(ctx, task)
+	s.maybeCleanupEphemeralSandbox(ctx, task)
 
 	// Skip the per-failure system comment when we'll immediately retry —
 	// the new task will surface its own status to the user, and we don't
@@ -2475,6 +2496,107 @@ func (s *TaskService) enqueueRerunTask(ctx context.Context, issue db.Issue, agen
 	return s.enqueueMentionTask(ctx, issue, agentID, triggerCommentID, isLeader, true)
 }
 
+// ephemeralSandboxContextKey is the top-level key under which the Phase 5
+// ephemeral_sandbox marker is stored in a task's context JSONB (written at
+// dispatch by mergeEphemeralSandboxContext). It carries the sandbox_instance_id
+// the terminal cleanup hook reads to reclaim the ephemeral Cube sandbox.
+const ephemeralSandboxContextKey = "ephemeral_sandbox"
+
+// ephemeralSandboxCtx holds the Phase 5 sandbox-instance marker stored at
+// context.ephemeral_sandbox on an env-dispatch ephemeral rollout task.
+type ephemeralSandboxCtx struct {
+	SandboxInstanceID string `json:"sandbox_instance_id"`
+}
+
+// extractEphemeralSandbox reads the Phase 5 ephemeral_sandbox marker from a
+// task's context. Returns the marker and true when the task is an ephemeral
+// rollout, or (nil, false) when it's not.
+func extractEphemeralSandbox(raw []byte) (*ephemeralSandboxCtx, bool) {
+	if len(raw) == 0 {
+		return nil, false
+	}
+	var envelope struct {
+		EphemeralSandbox *ephemeralSandboxCtx `json:"ephemeral_sandbox"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return nil, false
+	}
+	p := envelope.EphemeralSandbox
+	return p, p != nil && p.SandboxInstanceID != ""
+}
+
+// maybeCleanupEphemeralSandbox is the Phase 5 terminal hook: if this task was
+// dispatched against an ephemeral env-dispatch sandbox, and no other active task
+// is still bound to the same pre-created runtime R', reclaim the sandbox
+// instance (stop+delete via sandboxd) and mark R' offline. Best-effort — errors
+// are logged but never fail the terminal flow.
+func (s *TaskService) maybeCleanupEphemeralSandbox(ctx context.Context, task db.AgentTaskQueue) {
+	if s.EphemeralSandboxCleaner == nil {
+		return
+	}
+	marker, ok := extractEphemeralSandbox(task.Context)
+	if !ok {
+		return // not an ephemeral rollout
+	}
+
+	// Guard: skip if another active task is still on R' (e.g. a retry child
+	// that inherited runtime_id via CreateRetryTask). Tearing down while a
+	// live task references R' would orphan that task.
+	if task.RuntimeID.Valid {
+		hasOther, err := s.Queries.HasOtherActiveTaskForRuntime(ctx, db.HasOtherActiveTaskForRuntimeParams{
+			RuntimeID:   task.RuntimeID,
+			ExcludeTask: task.ID,
+		})
+		if err != nil {
+			slog.Warn("ephemeral sandbox cleanup: check other active tasks failed",
+				"task_id", util.UUIDToString(task.ID),
+				"runtime_id", util.UUIDToString(task.RuntimeID),
+				"error", err,
+			)
+			return
+		}
+		if hasOther {
+			return // sibling/child still active on R'; skip
+		}
+	}
+
+	workspaceID := s.ResolveTaskWorkspaceID(ctx, task)
+	if workspaceID == "" {
+		slog.Warn("ephemeral sandbox cleanup: cannot resolve workspace",
+			"task_id", util.UUIDToString(task.ID),
+		)
+		return
+	}
+
+	// 1. Set R' offline immediately so the sweeper doesn't keep the runtime alive
+	//    (the sandbox deletion is async, so the daemon may briefly re-register).
+	if task.RuntimeID.Valid {
+		if err := s.Queries.SetAgentRuntimeOffline(ctx, task.RuntimeID); err != nil {
+			slog.Warn("ephemeral sandbox cleanup: set R' offline failed",
+				"task_id", util.UUIDToString(task.ID),
+				"runtime_id", util.UUIDToString(task.RuntimeID),
+				"error", err,
+			)
+		}
+	}
+
+	// 2. Reclaim the Cube sandbox instance (best-effort; the sandboxd delete job
+	//    is async — the stale-sweeper + 7d GC handle anything that slips through).
+	if err := s.EphemeralSandboxCleaner.DeleteSandboxInstance(ctx, workspaceID, marker.SandboxInstanceID); err != nil {
+		slog.Warn("ephemeral sandbox cleanup: delete sandbox instance failed",
+			"task_id", util.UUIDToString(task.ID),
+			"workspace_id", workspaceID,
+			"sandbox_instance_id", marker.SandboxInstanceID,
+			"error", err,
+		)
+	} else {
+		slog.Info("ephemeral sandbox cleanup: sandbox reclaimed",
+			"task_id", util.UUIDToString(task.ID),
+			"sandbox_instance_id", marker.SandboxInstanceID,
+		)
+	}
+}
+
 // HandleFailedTasks runs the post-failure side effects for a batch of
 // freshly-failed tasks: optional auto-retry, task:failed event broadcast,
 // agent status reconciliation, and (when an issue has no remaining active
@@ -2559,7 +2681,9 @@ func (s *TaskService) HandleFailedTasks(ctx context.Context, tasks []db.AgentTas
 			})
 		}
 
-		affectedAgents[util.UUIDToString(t.AgentID)] = t.AgentID
+		s.maybeCleanupEphemeralSandbox(ctx, t)
+
+	affectedAgents[util.UUIDToString(t.AgentID)] = t.AgentID
 	}
 
 	for _, agentID := range affectedAgents {

@@ -169,7 +169,10 @@ type EnvDispatchDeps interface {
 	ListChatSessionsByProject(ctx context.Context, projectID, workspaceID string) ([]string, error)
 
 	// Agent run
-	EnqueueAgentRun(ctx context.Context, workspaceID, agentID, squadID, issueID, chatSessionID, sandboxID, envID string, idx int) (runID string, err error)
+	// runtimeID, when non-empty, overrides the task's runtime_id: routes the
+	// task to a pre-created sandbox runtime R' (Phase 2) instead of the
+	// agent/session/leader runtime. Empty preserves the current behavior.
+	EnqueueAgentRun(ctx context.Context, workspaceID, agentID, squadID, issueID, chatSessionID, sandboxInstanceID, envID, runtimeID string, idx int) (runID string, err error)
 
 	// GetDefaultSelfPlayEnv resolves the per-workspace default self_play base
 	// env used when a scratch+self_play dispatch is called with an empty
@@ -182,6 +185,23 @@ type EnvDispatchDeps interface {
 	// re-reads GetDefaultSelfPlayEnv to pick up the canonical winner and clean
 	// up any env it created but did not win the race for.
 	SetDefaultSelfPlayEnv(ctx context.Context, workspaceID, envID string) error
+
+	// PrecreateAgentRuntime inserts an offline agent_runtime row (R') keyed by a
+	// freshly-generated daemon_id, for the given agent's provider, owned by
+	// ownerUserID. Returns the runtime id (R') and the daemon_id. The in-sandbox
+	// daemon booted with MULTICA_DAEMON_ID=<daemon_id> adopts R' on register
+	// (UpsertAgentRuntime ON CONFLICT (workspace_id, daemon_id, provider)). Used
+	// by daemon-enabled sandbox rollouts so the task can carry runtime_id=R'
+	// immediately - no deferred binding. agentID must be a real agent (the
+	// provider is resolved from it); empty agentID returns an error.
+	PrecreateAgentRuntime(ctx context.Context, workspaceID, ownerUserID, agentID string) (runtimeID, daemonID string, err error)
+
+	// DeleteAgentRuntime deletes a pre-created agent_runtime row (R'). Used to
+	// reclaim R' when a daemon-enabled rollout fails before its task is created
+	// (sandbox create failure, or any pre-enqueue/enqueue failure) so the offline
+	// row does not linger. Safe only when no task references R' (the task FK is
+	// ON DELETE CASCADE) - callers must ensure the task was never created.
+	DeleteAgentRuntime(ctx context.Context, workspaceID, runtimeID string) error
 
 	// Idempotency ledger (spec §7.7). GetIdempotentResponse returns ok=false
 	// when the key is unseen; SaveIdempotentResponse persists the response for
@@ -761,6 +781,9 @@ func (s *EnvDispatchService) createSandboxInstanceRefs(ctx context.Context, in E
 			// spec.Template is used directly; BaseEnvID → template resolution is
 			// deferred to Step 6c (production adapter wiring). Shape validation
 			// guarantees exactly one of Template/BaseEnvID is set.
+			// Per-agent sandbox (typically a squad). DaemonEnabled boots a daemon
+			// that registers its own runtime; pre-creating R' + routing is
+			// deferred (single-agent default path above handles R' for now).
 			ref, err := s.lifecycle.CreateSandboxInstance(ctx, CreateSandboxInstanceInput{
 				WorkspaceID:   in.WorkspaceID,
 				Template:      spec.Template,
@@ -791,20 +814,92 @@ func (s *EnvDispatchService) createSandboxInstanceRefs(ctx context.Context, in E
 			template = sourceRef.Template
 		}
 	}
+	// Phase 2: for a single-agent rollout, pre-create the agent_runtime row R'
+	// keyed by a fresh daemon_id and inject it as MULTICA_DAEMON_ID into the
+	// sandbox runtime_env. The in-sandbox daemon adopts R' on register, and the
+	// task is routed to R' (see dispatchOne) - runtime_id is deterministic at
+	// dispatch time, no deferred binding. Squad dispatch (no single agent)
+	// defers R' routing: the sandbox boots a daemon that registers its own
+	// runtime and the task stays on the leader's runtime.
+	runtimeEnv := map[string]string{}
+	var runtimeID, daemonID string
+	if in.AgentID != "" && in.SquadID == "" {
+		rid, did, err := s.deps.PrecreateAgentRuntime(ctx, in.WorkspaceID, in.UserID, in.AgentID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("precreate agent runtime: %w", err)
+		}
+		runtimeID, daemonID = rid, did
+		runtimeEnv["MULTICA_DAEMON_ID"] = daemonID
+	}
 	ref, err := s.lifecycle.CreateSandboxInstance(ctx, CreateSandboxInstanceInput{
 		WorkspaceID:   in.WorkspaceID,
 		Template:      template,
 		DaemonEnabled: true,
+		RuntimeEnv:    runtimeEnv,
 	}, in.UserID)
 	if err != nil {
+		// Sandbox create failed after R' was pre-created: reclaim R' so the
+		// offline row does not linger (best-effort; the runtime GC is backstop).
+		if runtimeID != "" {
+			_ = s.deps.DeleteAgentRuntime(ctx, in.WorkspaceID, runtimeID)
+		}
 		return nil, nil, err
 	}
+	ref.RuntimeID = runtimeID
+	ref.DaemonID = daemonID
 	return []SandboxInstanceRef{ref}, nil, nil
+}
+
+// rolloutRuntimeID resolves the pre-created sandbox runtime R' (Phase 2) for a
+// single-agent rollout, so the task is routed to the in-sandbox daemon's runtime
+// instead of the agent/session/leader runtime. Returns "" when the rollout is
+// not R'-bound (Fleet path, squad, per-agent specs, or no sandbox ref), which
+// preserves the current runtime routing in EnqueueAgentRun.
+func rolloutRuntimeID(in EnvDispatchInput, r EnvRollout) string {
+	if in.AgentID == "" || in.SquadID != "" {
+		return ""
+	}
+	if len(r.SandboxRefs) > 0 {
+		return r.SandboxRefs[0].RuntimeID
+	}
+	if ref, ok := r.AgentSandboxRefs[in.AgentID]; ok {
+		return ref.RuntimeID
+	}
+	return ""
+}
+
+// rolloutSandboxInstanceID resolves the ephemeral sandbox_instance id paired with
+// R' (Phase 5). It is carried into EnqueueAgentRun so the handler can stamp
+// context.ephemeral_sandbox on the task, which the terminal cleanup hook reads
+// to reclaim the sandbox. Same single-agent gating as rolloutRuntimeID; returns
+// "" when the rollout is not R'-bound.
+func rolloutSandboxInstanceID(in EnvDispatchInput, r EnvRollout) string {
+	if in.AgentID == "" || in.SquadID != "" {
+		return ""
+	}
+	if len(r.SandboxRefs) > 0 {
+		return r.SandboxRefs[0].InstanceID
+	}
+	if ref, ok := r.AgentSandboxRefs[in.AgentID]; ok {
+		return ref.InstanceID
+	}
+	return ""
 }
 
 // dispatchOne runs the dispatch phase for one rollout (§7.3). Best-effort:
 // failures recorded in r.Error, no rollback.
 func (s *EnvDispatchService) dispatchOne(ctx context.Context, in EnvDispatchInput, r *EnvRollout, idx int) {
+	runtimeID := rolloutRuntimeID(in, *r)
+	sandboxInstanceID := rolloutSandboxInstanceID(in, *r)
+	// If this rollout's task is never created (any pre-enqueue step fails, or
+	// enqueue itself fails), the pre-created runtime R' is orphaned - reclaim it
+	// so the offline row does not linger. On success r.AgentRunID is set and R'
+	// stays (the task is routed to it). Best-effort; the runtime GC is backstop.
+	defer func() {
+		if r.AgentRunID == "" && runtimeID != "" {
+			_ = s.deps.DeleteAgentRuntime(ctx, in.WorkspaceID, runtimeID)
+		}
+	}()
 	if in.DispatchType == EnvDispatchIssue {
 		issueID := r.IssueID // branch+swe_lego: copied issue id
 		if issueID == "" {
@@ -826,7 +921,7 @@ func (s *EnvDispatchService) dispatchOne(ctx context.Context, in EnvDispatchInpu
 			issueID = newID
 			r.IssueID = newID
 		}
-		runID, err := s.deps.EnqueueAgentRun(ctx, in.WorkspaceID, in.AgentID, in.SquadID, issueID, "", "", r.EnvID, idx)
+		runID, err := s.deps.EnqueueAgentRun(ctx, in.WorkspaceID, in.AgentID, in.SquadID, issueID, "", sandboxInstanceID, r.EnvID, runtimeID, idx)
 		if err != nil {
 			r.Error = fmt.Sprintf("enqueue agent run: %v", err)
 			r.Stack = stackerr.StackOf(err)
@@ -854,7 +949,7 @@ func (s *EnvDispatchService) dispatchOne(ctx context.Context, in EnvDispatchInpu
 		r.Stack = stackerr.StackOf(err)
 		return
 	}
-	runID, err := s.deps.EnqueueAgentRun(ctx, in.WorkspaceID, in.AgentID, in.SquadID, "", sessionID, "", r.EnvID, idx)
+	runID, err := s.deps.EnqueueAgentRun(ctx, in.WorkspaceID, in.AgentID, in.SquadID, "", sessionID, sandboxInstanceID, r.EnvID, runtimeID, idx)
 	if err != nil {
 		r.Error = fmt.Sprintf("enqueue agent run: %v", err)
 		r.Stack = stackerr.StackOf(err)

@@ -63,6 +63,22 @@ type AgentEventDelivery struct {
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
+type AgentExecution struct {
+	ID              pgtype.UUID        `json:"id"`
+	SourceKind      string             `json:"source_kind"`
+	SourceEventID   pgtype.UUID        `json:"source_event_id"`
+	Source          string             `json:"source"`
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
+	RuntimeID       pgtype.UUID        `json:"runtime_id"`
+	AgentID         pgtype.UUID        `json:"agent_id"`
+	ChatSessionID   pgtype.UUID        `json:"chat_session_id"`
+	IssueID         pgtype.UUID        `json:"issue_id"`
+	ProjectID       pgtype.UUID        `json:"project_id"`
+	ExecutionConfig []byte             `json:"execution_config"`
+	StartedAt       pgtype.Timestamptz `json:"started_at"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+}
+
 type AgentInboxEvent struct {
 	ID                 pgtype.UUID        `json:"id"`
 	WorkspaceID        pgtype.UUID        `json:"workspace_id"`

@@ -2116,8 +2116,8 @@ func (h *Handler) chatSessionTokenTotal(ctx context.Context, chatSessionID pgtyp
 	err := h.DB.QueryRow(ctx, `
 		SELECT COALESCE(SUM(au.input_tokens + au.output_tokens + au.cache_read_tokens + au.cache_write_tokens), 0)::bigint
 		FROM agent_usage au
-		JOIN agent_task_queue atq ON atq.id = au.execution_id
-		WHERE atq.chat_session_id = $1
+		JOIN agent_execution ae ON ae.id = au.execution_id
+		WHERE ae.chat_session_id = $1
 		  AND au.source = 'chat'`, chatSessionID).Scan(&total)
 	if err != nil {
 		return 0
@@ -2186,6 +2186,11 @@ func (h *Handler) StartTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := h.Queries.CreateAgentQueueExecution(r.Context(), parseUUID(taskID)); err != nil {
+		slog.Warn("create queue execution failed", "task_id", taskID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to create task execution")
+		return
+	}
 
 	slog.Info("task started", "task_id", taskID, "agent_id", uuidToString(task.AgentID))
 	writeJSON(w, http.StatusOK, taskToResponse(*task, workspaceID))
@@ -2246,7 +2251,6 @@ func (h *Handler) ReportTaskProgress(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-
 	// Verify ownership and resolve workspace ID.
 	task, ok := h.requireDaemonTaskAccess(w, r, taskID)
 	if !ok {
@@ -2850,6 +2854,13 @@ func (h *Handler) ReportTaskUsage(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	// The normal write boundary is StartTask. Repeat this idempotently only to
+	// cover tasks already running while a server is upgraded to this ledger.
+	if err := h.Queries.CreateAgentQueueExecution(r.Context(), parseUUID(taskID)); err != nil {
+		slog.Warn("ensure queue execution failed", "task_id", taskID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to load task execution")
 		return
 	}
 

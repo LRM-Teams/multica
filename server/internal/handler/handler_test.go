@@ -284,6 +284,32 @@ func handlerTestRuntimeID(t *testing.T) string {
 	return runtimeID
 }
 
+// seedQueueExecution gives a legacy queue fixture the same immutable
+// attribution snapshot that StartTask writes in production. Usage readers and
+// rollups intentionally join this ledger rather than mutable queue state.
+func seedQueueExecution(t *testing.T, taskID string) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_execution (
+			id, source_kind, source_event_id, source, workspace_id,
+			runtime_id, agent_id, chat_session_id, issue_id, project_id, started_at
+		)
+		SELECT
+			atq.id, 'queue', atq.id,
+			CASE WHEN atq.chat_session_id IS NULL THEN 'issue' ELSE 'chat' END,
+			a.workspace_id, atq.runtime_id, atq.agent_id, atq.chat_session_id,
+			atq.issue_id, i.project_id, COALESCE(atq.started_at, atq.created_at)
+		FROM agent_task_queue atq
+		JOIN agent a ON a.id = atq.agent_id
+		LEFT JOIN issue i ON i.id = atq.issue_id
+		WHERE atq.id = $1
+	`, taskID); err != nil {
+		t.Fatalf("seed queue execution: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_execution WHERE id = $1`, taskID) })
+}
+
 func createHandlerTestAgent(t *testing.T, name string, mcpConfig []byte) string {
 	t.Helper()
 

@@ -171,7 +171,7 @@ func TestPgCronConcurrentNoDoubleWrite(t *testing.T) {
 }
 
 // seedRollupFixture creates the smallest viable
-// (workspace, runtime, agent, task) graph required for agent_usage rows
+// (workspace, runtime, agent, execution) graph required for agent_usage rows
 // to participate in the hourly rollup — the rollup window joins on
 // agent + runtime + (optional) issue, so all four parents must exist.
 // Returns the four IDs.
@@ -180,7 +180,7 @@ func seedRollupFixture(t *testing.T, pool *pgxpool.Pool) (string, string, string
 	ctx := context.Background()
 	suffix := "rollup-" + uniqueSuffix()
 
-	var wsID, runtimeID, agentID, taskID string
+	var wsID, runtimeID, agentID, queueID, executionID string
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO workspace (name, slug)
 		VALUES ($1, $1)
@@ -212,10 +212,20 @@ func seedRollupFixture(t *testing.T, pool *pgxpool.Pool) (string, string, string
 		INSERT INTO agent_task_queue (agent_id, runtime_id)
 		VALUES ($1, $2)
 		RETURNING id
-	`, agentID, runtimeID).Scan(&taskID); err != nil {
+	`, agentID, runtimeID).Scan(&queueID); err != nil {
 		t.Fatalf("seed agent_task_queue: %v", err)
 	}
-	return wsID, runtimeID, agentID, taskID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO agent_execution (
+			id, source_kind, source_event_id, source, workspace_id, runtime_id,
+			agent_id, started_at, created_at
+		)
+		VALUES ($1, 'queue', $1, 'issue', $2, $3, $4, now(), now())
+		RETURNING id
+	`, queueID, wsID, runtimeID, agentID).Scan(&executionID); err != nil {
+		t.Fatalf("seed agent_execution: %v", err)
+	}
+	return wsID, runtimeID, agentID, executionID
 }
 
 func cleanupRollupFixture(t *testing.T, pool *pgxpool.Pool, wsID string) {

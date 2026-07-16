@@ -159,6 +159,119 @@ func TestAgentInboxDrainSerializesSameAgentAndKeepsDifferentAgentsConcurrent(t *
 	}
 }
 
+// A renewed delivery is still the same provider run, but a reclaimed delivery
+// starts a new run for the same source event. Usage replay must overwrite only
+// the same execution/model row and retain both true runs.
+func TestAgentInboxUsageExecutionIdentitySurvivesRenewAndReclaim(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	runtimeID := handlerTestRuntimeID(t)
+	agentName := "Inbox Ledger Agent " + uuid.NewString()[:8]
+	agentID := createHandlerTestAgent(t, agentName, nil)
+	channelID := seedChannelForTest(t, "inbox-ledger-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	channel, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "[@"+agentName+"](mention://agent/"+agentID+") ledger prompt", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-ledger-"+uuid.NewString()), 0)
+	if err != nil {
+		t.Fatalf("insert trigger: %v", err)
+	}
+	testHandler.dispatchChannelMessageToAgents(ctx, channel, trigger, parseUUID(testUserID))
+
+	drain := func() AgentInboxEventResponse {
+		req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "inbox-ledger-daemon")
+		req = withURLParam(req, "runtimeId", runtimeID)
+		rec := httptest.NewRecorder()
+		testHandler.DrainAgentInboxByRuntime(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("drain inbox: status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		var resp DrainAgentInboxResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || len(resp.Events) != 1 {
+			t.Fatalf("decode drain=%v events=%+v", err, resp.Events)
+		}
+		return resp.Events[0]
+	}
+	start := func(event AgentInboxEventResponse, executionID string) {
+		req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+event.ID+"/execution", AgentInboxExecutionRequest{
+			DeliveryID: event.DeliveryID, LeaseToken: event.LeaseToken, ExecutionID: executionID,
+		}, testWorkspaceID, "inbox-ledger-daemon")
+		req = withURLParam(req, "eventId", event.ID)
+		rec := httptest.NewRecorder()
+		testHandler.StartAgentInboxExecution(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("start execution: status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	}
+	report := func(event AgentInboxEventResponse, executionID string, tokens int64) {
+		req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+event.ID+"/usage", ReportAgentInboxUsageRequest{
+			DeliveryID: event.DeliveryID, LeaseToken: event.LeaseToken, ExecutionID: executionID,
+			Usage: []AgentUsagePayload{{Provider: "openrouter", Model: "deepseek-v4-flash", InputTokens: tokens}},
+		}, testWorkspaceID, "inbox-ledger-daemon")
+		req = withURLParam(req, "eventId", event.ID)
+		rec := httptest.NewRecorder()
+		testHandler.ReportAgentInboxUsage(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("report usage: status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	}
+
+	first := drain()
+	// Renewal retains delivery ownership but does not mint a new execution.
+	renewReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+first.ID+"/renew", RenewAgentInboxEventRequest{DeliveryID: first.DeliveryID, LeaseToken: first.LeaseToken}, testWorkspaceID, "inbox-ledger-daemon")
+	renewReq = withURLParam(renewReq, "eventId", first.ID)
+	renewRec := httptest.NewRecorder()
+	testHandler.RenewAgentInboxEvent(renewRec, renewReq)
+	if renewRec.Code != http.StatusOK {
+		t.Fatalf("renew: status=%d body=%s", renewRec.Code, renewRec.Body.String())
+	}
+	firstExecution := uuid.NewString()
+	start(first, firstExecution)
+	start(first, firstExecution) // start retry is idempotent for this run UUID.
+	report(first, firstExecution, 17)
+	report(first, firstExecution, 17) // usage report replay is idempotent.
+
+	if _, err := testPool.Exec(ctx, `UPDATE agent_event_delivery SET lease_expires_at = now() - interval '1 second' WHERE id = $1`, first.DeliveryID); err != nil {
+		t.Fatalf("expire first delivery: %v", err)
+	}
+	second := drain()
+	if second.ID != first.ID || second.DeliveryID == first.DeliveryID {
+		t.Fatalf("reclaim got event=%s delivery=%s, want same event/new delivery from %s", second.ID, second.DeliveryID, first.DeliveryID)
+	}
+	// The first provider run may finish after its lease has been reclaimed.
+	// Its already-persisted execution remains reportable and idempotent.
+	report(first, firstExecution, 17)
+	secondExecution := uuid.NewString()
+	start(second, secondExecution)
+	report(second, secondExecution, 23)
+
+	var executionCount, usageCount int
+	var tokens int64
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*), COALESCE(sum(input_tokens), 0)::bigint
+		FROM agent_usage
+		WHERE execution_id IN ($1, $2)`, firstExecution, secondExecution).Scan(&usageCount, &tokens); err != nil {
+		t.Fatalf("load usage rows: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM agent_execution
+		WHERE source_kind = 'inbox' AND source_event_id = $1`, first.ID).Scan(&executionCount); err != nil {
+		t.Fatalf("load execution rows: %v", err)
+	}
+	if executionCount != 2 || usageCount != 2 || tokens != 40 {
+		t.Fatalf("execution/usage state executions=%d usages=%d tokens=%d, want 2/2/40", executionCount, usageCount, tokens)
+	}
+}
+
 func TestRetryAgentInboxEventReplaysOriginalPromptAfterNewerCompletion(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

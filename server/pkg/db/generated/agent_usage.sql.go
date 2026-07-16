@@ -11,6 +11,106 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const createAgentInboxExecution = `-- name: CreateAgentInboxExecution :exec
+INSERT INTO agent_execution (
+    id, source_kind, source_event_id, source, workspace_id, runtime_id,
+    agent_id, chat_session_id, issue_id, project_id, execution_config
+)
+SELECT
+    $1,
+    'inbox',
+    e.id,
+    'chat',
+    e.workspace_id,
+    e.runtime_id,
+    e.agent_id,
+    e.chat_session_id,
+    NULL,
+    NULL,
+    e.execution_config
+FROM agent_inbox_event e
+WHERE e.id = $2
+ON CONFLICT (id) DO NOTHING
+`
+
+type CreateAgentInboxExecutionParams struct {
+	ExecutionID  pgtype.UUID `json:"execution_id"`
+	InboxEventID pgtype.UUID `json:"inbox_event_id"`
+}
+
+// The daemon calls this immediately before a real provider run. Delivery is
+// verified by the handler; the event snapshot is copied here exactly once so
+// a later lease, retry, or profile edit cannot rewrite ledger attribution.
+func (q *Queries) CreateAgentInboxExecution(ctx context.Context, arg CreateAgentInboxExecutionParams) error {
+	_, err := q.db.Exec(ctx, createAgentInboxExecution, arg.ExecutionID, arg.InboxEventID)
+	return err
+}
+
+const createAgentQueueExecution = `-- name: CreateAgentQueueExecution :exec
+INSERT INTO agent_execution (
+    id, source_kind, source_event_id, source, workspace_id, runtime_id,
+    agent_id, chat_session_id, issue_id, project_id, started_at
+)
+SELECT
+    atq.id,
+    'queue',
+    atq.id,
+    CASE WHEN atq.chat_session_id IS NULL THEN 'issue' ELSE 'chat' END,
+    a.workspace_id,
+    atq.runtime_id,
+    atq.agent_id,
+    atq.chat_session_id,
+    atq.issue_id,
+    i.project_id,
+    COALESCE(atq.started_at, now())
+FROM agent_task_queue atq
+JOIN agent a ON a.id = atq.agent_id
+LEFT JOIN issue i ON i.id = atq.issue_id
+WHERE atq.id = $1
+ON CONFLICT (id) DO NOTHING
+`
+
+// Queue executions retain their historical queue ID as execution ID. This is
+// called at the queue start boundary; the immutable dimensions are copied once
+// so later queue/issue reassignment cannot rewrite ledger reports.
+func (q *Queries) CreateAgentQueueExecution(ctx context.Context, taskID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, createAgentQueueExecution, taskID)
+	return err
+}
+
+const getAgentInboxExecution = `-- name: GetAgentInboxExecution :one
+SELECT id, source_kind, source_event_id, source, workspace_id, runtime_id, agent_id, chat_session_id, issue_id, project_id, execution_config, started_at, created_at FROM agent_execution
+WHERE id = $1
+  AND source_kind = 'inbox'
+  AND source_event_id = $2
+`
+
+type GetAgentInboxExecutionParams struct {
+	ExecutionID  pgtype.UUID `json:"execution_id"`
+	InboxEventID pgtype.UUID `json:"inbox_event_id"`
+}
+
+func (q *Queries) GetAgentInboxExecution(ctx context.Context, arg GetAgentInboxExecutionParams) (AgentExecution, error) {
+	row := q.db.QueryRow(ctx, getAgentInboxExecution, arg.ExecutionID, arg.InboxEventID)
+	var i AgentExecution
+	err := row.Scan(
+		&i.ID,
+		&i.SourceKind,
+		&i.SourceEventID,
+		&i.Source,
+		&i.WorkspaceID,
+		&i.RuntimeID,
+		&i.AgentID,
+		&i.ChatSessionID,
+		&i.IssueID,
+		&i.ProjectID,
+		&i.ExecutionConfig,
+		&i.StartedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getAgentUsage = `-- name: GetAgentUsage :many
 SELECT id, execution_id, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, created_at, updated_at, source FROM agent_usage
 WHERE execution_id = $1
@@ -57,8 +157,8 @@ SELECT
     COALESCE(SUM(tu.cache_write_tokens), 0)::bigint AS total_cache_write_tokens,
     COUNT(DISTINCT tu.execution_id)::int AS task_count
 FROM agent_usage tu
-JOIN agent_task_queue atq ON atq.id = tu.execution_id
-WHERE atq.issue_id = $1
+JOIN agent_execution ae ON ae.id = tu.execution_id
+WHERE ae.issue_id = $1
 `
 
 type GetIssueUsageSummaryRow struct {
@@ -388,6 +488,7 @@ INSERT INTO agent_usage (execution_id, source, provider, model, input_tokens, ou
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
 ON CONFLICT (execution_id, provider, model)
 DO UPDATE SET
+    source = EXCLUDED.source,
     input_tokens = EXCLUDED.input_tokens,
     output_tokens = EXCLUDED.output_tokens,
     cache_read_tokens = EXCLUDED.cache_read_tokens,

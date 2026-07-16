@@ -86,6 +86,7 @@ func TestGetRuntimeUsage_BucketsByUsageTime(t *testing.T) {
 		t.Skip("database not available")
 	}
 	ctx := context.Background()
+	const model = "runtime-buckets-by-usage-time"
 
 	// Pick a runtime bound to the fixture workspace.
 	var runtimeID string
@@ -133,12 +134,22 @@ func TestGetRuntimeUsage_BucketsByUsageTime(t *testing.T) {
 			t.Fatalf("insert task: %v", err)
 		}
 		if _, err := testPool.Exec(ctx, `
+			INSERT INTO agent_execution (
+				id, source_kind, source_event_id, source, workspace_id,
+				runtime_id, agent_id, issue_id, started_at
+			)
+			VALUES ($1, 'queue', $1, 'issue', $2, $3, $4, $5, $6)
+		`, taskID, testWorkspaceID, runtimeID, agentID, issueID, enqueueAt); err != nil {
+			t.Fatalf("insert task execution: %v", err)
+		}
+		if _, err := testPool.Exec(ctx, `
 			INSERT INTO agent_usage (execution_id, provider, model, input_tokens, output_tokens, created_at)
-			VALUES ($1, 'claude', 'claude-3-5-sonnet', $2, 0, $3)
-		`, taskID, inputTokens, usageAt); err != nil {
+			VALUES ($1, 'claude', $2, $3, 0, $4)
+		`, taskID, model, inputTokens, usageAt); err != nil {
 			t.Fatalf("insert agent_usage: %v", err)
 		}
 		t.Cleanup(func() {
+			testPool.Exec(ctx, `DELETE FROM agent_execution WHERE id = $1`, taskID)
 			testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID)
 		})
 		return taskID
@@ -157,14 +168,11 @@ func TestGetRuntimeUsage_BucketsByUsageTime(t *testing.T) {
 		t.Fatalf("rollup window: %v", err)
 	}
 	t.Cleanup(func() {
-		// Hourly buckets touched by this test cover the two calendar
-		// days in fixture data (today and yesterday in UTC, which is
-		// what the test uses for `today` / `yesterday` mocks).
 		testPool.Exec(ctx, `
 			DELETE FROM agent_usage_hourly
 			 WHERE runtime_id = $1
-			   AND DATE(bucket_hour AT TIME ZONE 'UTC') IN ($2::date, $3::date)
-		`, runtimeID, today, today.Add(-24*time.Hour))
+			   AND model = $2
+		`, runtimeID, model)
 	})
 
 	// Call the handler with ?days=1 at whatever "now" is. That should include
@@ -184,7 +192,9 @@ func TestGetRuntimeUsage_BucketsByUsageTime(t *testing.T) {
 
 	byDate := make(map[string]int64)
 	for _, r := range resp {
-		byDate[r.Date] += r.InputTokens
+		if r.Model == model {
+			byDate[r.Date] += r.InputTokens
+		}
 	}
 
 	todayKey := today.Format("2006-01-02")

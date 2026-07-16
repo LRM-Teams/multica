@@ -16,6 +16,18 @@ export type MentionPreviewResolver = (
   fallbackLabel: string,
 ) => string;
 
+/**
+ * Build a {@link MentionPreviewResolver} from an actor-name lookup — the small
+ * adapter every reading surface needs so a projected mention shows the live
+ * display name (`@小雅`) rather than the internal handle the author typed
+ * (`@actor_14`). Same rule the body's `ActorMention` follows.
+ */
+export function mentionResolverFrom(
+  getActorName: ActorNameResolver,
+): MentionPreviewResolver {
+  return (type, id, fallbackLabel) => getActorName(type, id, fallbackLabel) || fallbackLabel;
+}
+
 export type ActorNameResolver = (
   type: "member" | "agent",
   id: string,
@@ -94,7 +106,7 @@ export function resolveChannelAuthorDisplayName(
  * else (issue refs) renders its span substring verbatim: the projector decorates,
  * it never rewrites the author's words (#467/#600).
  */
-function projectReferencesToText(
+export function projectReferencesToText(
   content: string,
   parts: MessagePart[] | null | undefined,
   resolveMention: MentionPreviewResolver,

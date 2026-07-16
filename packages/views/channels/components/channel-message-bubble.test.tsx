@@ -41,6 +41,9 @@ vi.mock("../../common/markdown", () => ({
       {children}
     </span>
   ),
+  // A message carrying reference parts renders its body through the projector,
+  // which reaches for ActorMention — stub it so these tests stay on the bubble.
+  ActorMention: ({ label }: { label: string }) => <span>{label}</span>,
 }));
 
 
@@ -728,6 +731,46 @@ describe("ChannelMessageBubble", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Copy" }));
     await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith("just a plain message"));
+  });
+
+  it("copies the display name, not the internal handle (#530 — clipboard must match the screen)", async () => {
+    // Iris's ruling: copy = take away what I can see. The screen says "Alice
+    // Display"; a clipboard holding "@user_raw" disagrees with it, and that is its
+    // own kind of lying.
+    //
+    // This asserts the WIRING at this surface, not the projection —
+    // projectReferencesToText is covered in message-preview.test.ts. What can break
+    // here silently is the call itself: delete it and copy falls back to raw
+    // content, the leak returns, and CI stays green. (The preceding test is the
+    // control: an ordinary message must still copy verbatim.)
+    copyTextMock.mockResolvedValue(true);
+
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          content: "ping @user_raw now",
+          parts: [
+            {
+              type: "reference",
+              ref_type: "mention",
+              ref_subtype: "member",
+              ref_id: "user-1",
+              label: "@user_raw",
+              content_start_utf16: 5,
+              content_end_utf16: 14,
+            },
+          ],
+        } as never)}
+        currentUserId="user-2"
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Copy" }));
+
+    await waitFor(() => expect(copyTextMock).toHaveBeenCalled());
+    const copied = copyTextMock.mock.calls[0]?.[0] as string;
+    expect(copied).toBe("ping @Alice Display now");
+    expect(copied).not.toContain("user_raw");
   });
 
   // GAP 3 — legit user-pasted JSON with a `parts` array but no top-level

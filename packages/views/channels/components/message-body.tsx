@@ -1,7 +1,9 @@
 "use client";
 
 import type { ChannelMessage } from "@multica/core/types";
+import { useActorName } from "@multica/core/workspace/hooks";
 import { MemoizedMarkdown } from "../../common/markdown";
+import { mentionResolverFrom, projectReferencesToText } from "./message-preview";
 import { InlineReferenceContent } from "../../common/inline-reference-content";
 import { MessagePartsRenderer } from "./message-parts-renderer";
 import { MessageAttachmentZone } from "./message-attachment-zone";
@@ -41,6 +43,8 @@ export function MessageBody({
   highlightQuery?: string;
   compact?: boolean;
 }) {
+  const { getActorName } = useActorName();
+  const resolveMentionPreview = mentionResolverFrom(getActorName);
   const effectiveParts = resolveMessageParts(content, parts);
   const hasAttachmentParts = collectAttachmentParts(effectiveParts).length > 0;
 
@@ -56,8 +60,14 @@ export function MessageBody({
           </div>
         );
       }
+      // Project reference spans first (#530): post-#463 a mention lives in `parts`
+      // with a span into `content`, so formatMessagePartsPreview yields nothing and
+      // the raw `content` below would render the internal handle — a thread root or
+      // parent header would read `@actor_14` while the message itself reads `@小雅`.
       const compactBody =
-        formatMessagePartsPreview(effectiveParts) ?? unwrapStructuredPreviewContent(content);
+        projectReferencesToText(content, parts, resolveMentionPreview) ??
+        formatMessagePartsPreview(effectiveParts) ??
+        unwrapStructuredPreviewContent(content);
       // Attachment-only compact messages have no text body chrome.
       if (!compactBody && hasAttachmentParts) {
         return null;

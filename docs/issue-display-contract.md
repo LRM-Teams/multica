@@ -38,7 +38,7 @@ backlog · todo · in_progress · in_review · blocked · done · cancelled
   **理由**：①**起过头的活**（有上下文、比 todo 离 done 近）②**但不动**（所以排在 in_progress 之后）③**必须留在"活跃带"可见** —— **blocked 最需要人介入，埋到 backlog 底下 = 把最该被看见的问题藏起来**。
   > **可推翻**：若产品认为"blocked 该置顶抢注意力"，那是**按紧急度**的另一套语义、**就不是照 Linear 了、要明说**。
 
-### 2.3 ⚠️ 排序必须在服务端 —— **`可执行`**（见 §5.3）
+### 2.3 ⚠️ 排序必须在服务端 —— **服务端契约 `可执行`｜owner: @Ronan ✅ 已签；客户端禁重排仍 `仅文档`**（见 §5.3）
 **对分页返回的部分结果做客户端排序 = 假的全局顺序**（第 2 页一来就崩）。
 
 ### 2.4 priority 枚举
@@ -149,11 +149,12 @@ none · low · medium · high · urgent
 | **不显示"看着完整其实残缺"的列表** | **§5.3** |
 | **不按别处的开关瞒着这里的事实** | **§4.2（API 形状）** |
 
-### 5.3 分页顺序：**顺序归 API 契约** —— **`仅文档` → 加跨页回归才升 `可执行`**
+### 5.3 分页顺序：**顺序归 API 契约** —— **后端半 `可执行`｜owner: @Ronan ✅ 已签；前端半 `仅文档`**
 > **@Barry 的精确写法**：**「server-paginated issue 响应不得在客户端重排序/重分组；顺序归 API 契约，并以跨页 fixture 证明。」**
 - **⚠️ 不能写成泛化的「客户端不能排序」** —— **本地纯数组排序仍然合法**。
-- **可执行形态**：服务端 `group_by` / `order_by`（#500/#635）+ **跨页 fixture / query 回归**。
-- **当前档位 = `仅文档`**：**跨页回归落地之前，它就是一条纸上的规矩。别装。**
+- **后端半已可执行**：#635 的 `sort=status` + `TestListGroupedIssuesProjectPaginatesPerGroup` 用七个故意乱序状态，分别断言 grouped page 1（offset 0）、page 2（offset 2）、tail（offset 4）以及 flat list 的全局顺序；同一 fixture 还锁 `project:none` 定向分页。
+  - **已见红**（@Ronan，2026-07-16）：把服务端 CASE 暂时改回错误的 backlog-first 顺序后，该回归在 page 1 立即失败（实际 `backlog,todo`，期望 `in_review,in_progress`）；恢复锁定序后通过。
+- **前端半仍 `仅文档`**：#635 能保证 API 跨页顺序，**不能阻止客户端拿到响应后再次重排/重分组**；等 query/consumer 回归证明 server-paginated 响应原序透传后再升档。
   > **「code review 红线」不是 `可执行`** —— 它是"人在 review 时记得"，**就是散文**。
 
 ---

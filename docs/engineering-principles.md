@@ -54,10 +54,10 @@
 - **#521 已见失败与修复**：真实消息 `a9d90909` 的第三个 `LRM-126` 紧邻前一个引用（`LRM-126。LRM-126`）而未锚定；旧 RE2 模式把 `。` 一并消费，非重叠匹配无法把它再用作下一个引用的左边界。#637 改为 identifier-only match + 独立 boundary 校验，保留精确 UTF-16 span。
 - **物**：#624 mention 契约回归；#637（已合并）`TestFindBareIssueIdentifiersFindsAdjacentRepeatedOccurrences`（N>2、相邻）与 `TestChannelBareIssueReferencesBecomeStructuredMessageParts`（真实写入链、顺序和精确 UTF-16 span）；FE `data-ref-source` 断言（§2.4）。
 
-### 1.3 写读不拆部署 / reader-first 删除 — `可执行`（流程门禁）
+### 1.3 写读不拆部署 / reader-first 删除 — `仅文档`（门禁尚未落地）
 - 格式迁移三端（写边界/读渲染/输入端）同批上；删字段先停读后删写（#622→#507 顺序），**永不反向**。
 - 迁移 forward-only、不留兼容层（precedent：migration 178/179）；**兼容的是路径，不是外观**（§2.3）。
-- **物**：PR 模板"生效层：server / daemon / both"检查项（task #320，待落）。
+- **候选物**：PR 模板"生效层：server / daemon / both"检查项（task #320，待落）。在模板/CI 真能拦截且见过它红之前，不能把“流程门禁”当作已经存在。
 
 ## 2. 引用与渲染（FE）
 
@@ -81,8 +81,8 @@
 - jsdom 断言：N 次出现全 `anchor`（fallback 出现=漏锚 FAIL）；代码块/行内 code/URL 内不升级；兜底解析失败→纯文本（fallback+失败=正则误报，同一属性抓两类错）。
 - **物**：#520 测试套件。
 
-### 2.5 「别让界面撒谎」家族 — 主体 `可执行`
-**宁可不显示，也不显示看起来对的假东西。** 变体：不假渲 / 不露 URI / 不弹空卡 / 不拿旧快照兜底 / 不显示"看着完整其实残缺"的列表（server-paginated 响应禁止客户端重排/重分组——顺序归 API 契约、跨页 fixture 证明，#635）/ 不按别处开关瞒本处事实（§3.2）/ 未知枚举值（status/priority）白名单降级隐藏、不崩不猜（#632 `toIssueStatus`/`toIssuePriority`）。
+### 2.5 「别让界面撒谎」家族 — 分项标档，不能整族冒充 `可执行`
+**宁可不显示，也不显示看起来对的假东西。** 变体：不假渲 / 不露 URI / 不弹空卡 / 不拿旧快照兜底 / 不显示"看着完整其实残缺"的列表 / 不按别处开关瞒本处事实（§3.2）/ 未知枚举值白名单降级（#632）。其中 #635 已用 `TestListGroupedIssuesProjectPaginatesPerGroup` 锁住服务端 status 跨页顺序；**“客户端不得对 server-paginated 响应重排/重分组”仍只是 `仅文档`，直到 consumer/query 回归能让该行为见红。** 详细分档见 `docs/issue-display-contract.md` §5.3。
 
 ## 3. 属性显示（跨面）
 
@@ -132,7 +132,7 @@
 | 漏锚可观测 | `data-ref-source` 断言 | #520 | 进行中 |
 | chip 第二面孔 | 共享组件+restricted-import lint | #520 | 进行中 |
 | 属性语法孤儿 | 共享组件 API | #518/#636 | #636 review 中 |
-| 客户端假全局序 | 服务端 sort/group+跨页 fixture | #635 | review 完 |
+| 客户端假全局序 | 后端 sort/group+跨页 fixture；前端原序透传回归待补 | #635 / 待立 | 后端✅ owner @Ronan 已签；前端⛔仅文档 |
 | 未知枚举崩卡 | 白名单降级 | #632 | ✅ |
 | env 泄漏/PATH 漂移 | 中央 sanitizer+合同 | #627/#512 | 首刀✅/合同进行中 |
 | 同 agent 并发分身 | lease 排他+单槽 | #611 | ✅ |

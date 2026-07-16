@@ -204,9 +204,22 @@ type GroupedIssuesResponse struct {
 	Groups []IssueAssigneeGroupResponse `json:"groups"`
 }
 
+type IssueProjectGroupResponse struct {
+	ID           string          `json:"id"`
+	ProjectID    *string         `json:"project_id"`
+	ProjectTitle *string         `json:"project_title"`
+	Issues       []IssueResponse `json:"issues"`
+	Total        int64           `json:"total"`
+}
+
+type ProjectGroupedIssuesResponse struct {
+	Groups []IssueProjectGroupResponse `json:"groups"`
+}
+
 type groupedIssueRow struct {
 	db.ListIssuesRow
-	GroupTotal int64
+	ProjectTitle pgtype.Text
+	GroupTotal   int64
 }
 
 func assigneeGroupID(assigneeType pgtype.Text, assigneeID pgtype.UUID) string {
@@ -214,6 +227,13 @@ func assigneeGroupID(assigneeType pgtype.Text, assigneeID pgtype.UUID) string {
 		return "assignee:" + assigneeType.String + ":" + uuidToString(assigneeID)
 	}
 	return "assignee:unassigned"
+}
+
+func projectGroupID(projectID pgtype.UUID) string {
+	if projectID.Valid {
+		return "project:" + uuidToString(projectID)
+	}
+	return "project:none"
 }
 
 // SearchIssueResponse extends IssueResponse with search metadata.
@@ -1163,7 +1183,7 @@ func (h *Handler) ListGroupedIssues(w http.ResponseWriter, r *http.Request) {
 	if groupBy == "" {
 		groupBy = "assignee"
 	}
-	if groupBy != "assignee" {
+	if groupBy != "assignee" && groupBy != "project" {
 		writeError(w, http.StatusBadRequest, "unsupported group_by")
 		return
 	}
@@ -1367,28 +1387,41 @@ func (h *Handler) ListGroupedIssues(w http.ResponseWriter, r *http.Request) {
 		))
 	}
 
-	if groupAssigneeType := r.URL.Query().Get("group_assignee_type"); groupAssigneeType != "" {
-		if groupAssigneeType == "none" {
-			where = append(where, "(i.assignee_type IS NULL AND i.assignee_id IS NULL)")
+	if groupBy == "assignee" {
+		if groupAssigneeType := r.URL.Query().Get("group_assignee_type"); groupAssigneeType != "" {
+			if groupAssigneeType == "none" {
+				where = append(where, "(i.assignee_type IS NULL AND i.assignee_id IS NULL)")
+			} else {
+				if !isIssueActorType(groupAssigneeType) {
+					writeError(w, http.StatusBadRequest, "invalid group_assignee_type")
+					return
+				}
+				rawID := r.URL.Query().Get("group_assignee_id")
+				if rawID == "" {
+					writeError(w, http.StatusBadRequest, "invalid group_assignee_id")
+					return
+				}
+				assigneeID, ok := parseUUIDOrBadRequest(w, rawID, "group_assignee_id")
+				if !ok {
+					return
+				}
+				where = append(where, fmt.Sprintf(
+					"(i.assignee_type = %s::text AND i.assignee_id = %s::uuid)",
+					addArg(groupAssigneeType),
+					addArg(assigneeID),
+				))
+			}
+		}
+	} else if r.URL.Query().Has("group_project_id") {
+		groupProjectID := r.URL.Query().Get("group_project_id")
+		if groupProjectID == "none" {
+			where = append(where, "i.project_id IS NULL")
 		} else {
-			if !isIssueActorType(groupAssigneeType) {
-				writeError(w, http.StatusBadRequest, "invalid group_assignee_type")
-				return
-			}
-			rawID := r.URL.Query().Get("group_assignee_id")
-			if rawID == "" {
-				writeError(w, http.StatusBadRequest, "invalid group_assignee_id")
-				return
-			}
-			assigneeID, ok := parseUUIDOrBadRequest(w, rawID, "group_assignee_id")
+			projectID, ok := parseUUIDOrBadRequest(w, groupProjectID, "group_project_id")
 			if !ok {
 				return
 			}
-			where = append(where, fmt.Sprintf(
-				"(i.assignee_type = %s::text AND i.assignee_id = %s::uuid)",
-				addArg(groupAssigneeType),
-				addArg(assigneeID),
-			))
+			where = append(where, fmt.Sprintf("i.project_id = %s::uuid", addArg(projectID)))
 		}
 	}
 
@@ -1431,30 +1464,10 @@ func (h *Handler) ListGroupedIssues(w http.ResponseWriter, r *http.Request) {
 
 	offsetRef := addArg(int64(offset))
 	limitRef := addArg(int64(limit))
-	query := fmt.Sprintf(`
-WITH ranked AS (
-	SELECT
-		i.id, i.workspace_id, i.title, i.description, i.status, i.priority,
-		i.assignee_type, i.assignee_id, i.creator_type, i.creator_id,
-		i.parent_issue_id, i.position, i.due_date, i.created_at, i.updated_at,
-		i.number, i.project_id, i.metadata,
-		COUNT(*) OVER (PARTITION BY i.assignee_type, i.assignee_id) AS group_total,
-		ROW_NUMBER() OVER (
-			PARTITION BY i.assignee_type, i.assignee_id
-			ORDER BY %s
-		) AS rn
-	FROM issue i
-	WHERE %s
-)
-SELECT
-	id, workspace_id, title, description, status, priority,
-	assignee_type, assignee_id, creator_type, creator_id,
-	parent_issue_id, position, due_date, created_at, updated_at,
-	number, project_id, metadata, group_total
-FROM ranked
-WHERE rn > %s AND rn <= %s + %s
-ORDER BY
-	CASE assignee_type
+	groupPartition := "i.assignee_type, i.assignee_id"
+	projectTitleSelect := "NULL::text AS project_title"
+	projectJoin := ""
+	groupOrder := `CASE assignee_type
 		WHEN 'member' THEN 0
 		WHEN 'agent' THEN 1
 		WHEN 'squad' THEN 2
@@ -1462,7 +1475,41 @@ ORDER BY
 	END,
 	assignee_type NULLS LAST,
 	assignee_id NULLS LAST,
-	rn`, intraGroupOrder, strings.Join(where, " AND "), offsetRef, offsetRef, limitRef)
+	rn`
+	if groupBy == "project" {
+		groupPartition = "i.project_id"
+		projectTitleSelect = "p.title AS project_title"
+		projectJoin = "LEFT JOIN project p ON p.id = i.project_id AND p.workspace_id = i.workspace_id"
+		groupOrder = `CASE WHEN project_id IS NULL THEN 1 ELSE 0 END,
+	project_title ASC NULLS LAST,
+	project_id NULLS LAST,
+	rn`
+	}
+	query := fmt.Sprintf(`
+WITH ranked AS (
+	SELECT
+		i.id, i.workspace_id, i.title, i.description, i.status, i.priority,
+		i.assignee_type, i.assignee_id, i.creator_type, i.creator_id,
+		i.parent_issue_id, i.position, i.due_date, i.created_at, i.updated_at,
+		i.number, i.project_id, i.metadata, %s,
+		COUNT(*) OVER (PARTITION BY %s) AS group_total,
+		ROW_NUMBER() OVER (
+			PARTITION BY %s
+			ORDER BY %s
+		) AS rn
+	FROM issue i
+	%s
+	WHERE %s
+)
+SELECT
+	id, workspace_id, title, description, status, priority,
+	assignee_type, assignee_id, creator_type, creator_id,
+	parent_issue_id, position, due_date, created_at, updated_at,
+	number, project_id, metadata, project_title, group_total
+FROM ranked
+WHERE rn > %s AND rn <= %s + %s
+ORDER BY %s`, projectTitleSelect, groupPartition, groupPartition, intraGroupOrder, projectJoin,
+		strings.Join(where, " AND "), offsetRef, offsetRef, limitRef, groupOrder)
 
 	rows, err := h.DB.Query(ctx, query, args...)
 	if err != nil {
@@ -1494,6 +1541,7 @@ ORDER BY
 			&row.Number,
 			&row.ProjectID,
 			&row.Metadata,
+			&row.ProjectTitle,
 			&row.GroupTotal,
 		); err != nil {
 			slog.Warn("ListGroupedIssues scan failed", "error", err)
@@ -1514,6 +1562,36 @@ ORDER BY
 	}
 	labelsMap := h.labelsByIssue(ctx, wsUUID, ids)
 	prefix := h.getIssuePrefix(ctx, wsUUID)
+
+	if groupBy == "project" {
+		groups := []IssueProjectGroupResponse{}
+		groupIndex := map[string]int{}
+		for _, row := range groupedRows {
+			groupID := projectGroupID(row.ProjectID)
+			idx, exists := groupIndex[groupID]
+			if !exists {
+				idx = len(groups)
+				groupIndex[groupID] = idx
+				groups = append(groups, IssueProjectGroupResponse{
+					ID:           groupID,
+					ProjectID:    uuidToPtr(row.ProjectID),
+					ProjectTitle: textToPtr(row.ProjectTitle),
+					Issues:       []IssueResponse{},
+					Total:        row.GroupTotal,
+				})
+			}
+
+			issue := issueListRowToResponse(row.ListIssuesRow, prefix)
+			labels := labelsMap[issue.ID]
+			if labels == nil {
+				labels = []LabelResponse{}
+			}
+			issue.Labels = &labels
+			groups[idx].Issues = append(groups[idx].Issues, issue)
+		}
+		writeJSON(w, http.StatusOK, ProjectGroupedIssuesResponse{Groups: groups})
+		return
+	}
 
 	groups := []IssueAssigneeGroupResponse{}
 	groupIndex := map[string]int{}

@@ -82,7 +82,7 @@ export interface IssueActorRef {
 }
 
 export interface ListGroupedIssuesParams {
-  group_by: "assignee";
+  group_by: "assignee" | "project";
   limit?: number;
   offset?: number;
   workspace_id?: string;
@@ -105,6 +105,8 @@ export interface ListGroupedIssuesParams {
   label_ids?: string[];
   group_assignee_type?: IssueAssigneeType | "none";
   group_assignee_id?: string;
+  /** Project UUID, or `none` for the nullable No Project group. */
+  group_project_id?: string;
   sort_by?: "position" | "priority" | "title" | "created_at" | "start_date" | "due_date";
   sort_direction?: "asc" | "desc";
 }
@@ -126,6 +128,19 @@ export interface IssueAssigneeGroup {
 /** Raw backend response shape for `GET /api/issues/grouped?group_by=assignee`. */
 export interface GroupedIssuesResponse {
   groups: IssueAssigneeGroup[];
+}
+
+export interface IssueProjectGroup {
+  id: string;
+  project_id: string | null;
+  project_title: string | null;
+  issues: Issue[];
+  total: number;
+}
+
+/** Raw backend response shape for `GET /api/issues/grouped?group_by=project`. */
+export interface ProjectGroupedIssuesResponse {
+  groups: IssueProjectGroup[];
 }
 
 /** Per-status bucket in the paginated issue cache. `total` is the server count (all pages), not the length of `issues`. */

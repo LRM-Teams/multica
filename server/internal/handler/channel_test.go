@@ -2737,7 +2737,7 @@ func TestChannelBareIssueReferencesBecomeStructuredMessageParts(t *testing.T) {
 		t.Fatal("channel not found after seed")
 	}
 
-	content := "please track " + identifier + " and " + identifier
+	content := "现关闭 " + identifier + "。" + identifier + " 已按指示收尾，再次确认 " + identifier + "。"
 	parts := []protocol.MessagePart{{
 		Type: protocol.MessagePartTypeText,
 		Text: "also see " + identifier,
@@ -2756,18 +2756,27 @@ func TestChannelBareIssueReferencesBecomeStructuredMessageParts(t *testing.T) {
 			references = append(references, part)
 		}
 	}
-	if len(references) != 2 {
+	if len(references) != 3 {
 		t.Fatalf("issue references = %+v, want one anchored typed ref per visible occurrence", references)
 	}
-	ref := references[0]
-	if ref.RefSubType != "issue" || ref.RefID != issueID || ref.Label != identifier {
-		t.Fatalf("issue reference = %+v, want canonical issue anchor %s / %q", ref, issueID, identifier)
-	}
-	if ref.ContentStartUTF16 == nil || ref.ContentEndUTF16 == nil || *ref.ContentStartUTF16 >= *ref.ContentEndUTF16 {
-		t.Fatalf("issue reference is missing a content UTF-16 span: %+v", ref)
-	}
-	if references[1].ContentStartUTF16 == nil || *references[1].ContentStartUTF16 <= *ref.ContentStartUTF16 {
-		t.Fatalf("issue references should retain both source occurrences in order: %+v", references)
+	searchFrom := 0
+	for i, ref := range references {
+		if ref.RefSubType != "issue" || ref.RefID != issueID || ref.Label != identifier {
+			t.Fatalf("issue reference[%d] = %+v, want canonical issue anchor %s / %q", i, ref, issueID, identifier)
+		}
+		if ref.ContentStartUTF16 == nil || ref.ContentEndUTF16 == nil || *ref.ContentStartUTF16 >= *ref.ContentEndUTF16 {
+			t.Fatalf("issue reference[%d] is missing a content UTF-16 span: %+v", i, ref)
+		}
+		byteOffset := strings.Index(content[searchFrom:], identifier)
+		if byteOffset < 0 {
+			t.Fatalf("could not find visible identifier occurrence %d in %q", i, content)
+		}
+		byteStart := searchFrom + byteOffset
+		wantStart, wantEnd := contentUTF16Span(content, byteStart, byteStart+len(identifier))
+		if *ref.ContentStartUTF16 != wantStart || *ref.ContentEndUTF16 != wantEnd {
+			t.Fatalf("issue reference[%d] span = [%d,%d), want exact occurrence [%d,%d)", i, *ref.ContentStartUTF16, *ref.ContentEndUTF16, wantStart, wantEnd)
+		}
+		searchFrom = byteStart + len(identifier)
 	}
 
 	codeOnly := "`" + identifier + "` [" + identifier + "](mention://issue/" + issueID + ")"

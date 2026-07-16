@@ -47,9 +47,9 @@ func TestExpandIssueIdentifiers(t *testing.T) {
 	}
 
 	tests := []struct {
-		name    string
-		input   string
-		want    string
+		name  string
+		input string
+		want  string
 	}{
 		{
 			name:  "basic replacement",
@@ -115,5 +115,22 @@ func TestExpandIssueIdentifiers(t *testing.T) {
 				t.Errorf("ExpandIssueIdentifiers() =\n  %q\nwant:\n  %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestFindBareIssueIdentifiersFindsAdjacentRepeatedOccurrences(t *testing.T) {
+	content := "现关闭 LRM-126。LRM-126 已按指示收尾，之后再次确认 LRM-126。"
+	identifiers := FindBareIssueIdentifiers("LRM", content)
+
+	if len(identifiers) != 3 {
+		t.Fatalf("identifiers = %#v, want one result for each of three visible occurrences", identifiers)
+	}
+	for i, identifier := range identifiers {
+		if identifier.Label != "LRM-126" || identifier.Number != 126 {
+			t.Fatalf("identifier[%d] = %#v, want LRM-126", i, identifier)
+		}
+		if got := content[identifier.Start:identifier.End]; got != "LRM-126" {
+			t.Fatalf("identifier[%d] spans %q, want LRM-126", i, got)
+		}
 	}
 }

@@ -90,6 +90,50 @@ describe("ComposerQuotePreview", () => {
     expect(screen.getByText("Hello world")).toBeInTheDocument();
   });
 
+  it("resolves a quoted mention to the display name — no internal handle (#530)", () => {
+    // Wiring test, not a projection test: projectReferencesToText is covered in
+    // message-preview.test.ts. What can silently break HERE is the call itself —
+    // delete it and the quote falls back to raw content, the leak returns, and CI
+    // stays green. So assert this surface, not the helper.
+    render(
+      <ComposerQuotePreview
+        quote={message({
+          content: "cc @agent_123 pls",
+          parts: [
+            {
+              type: "reference",
+              ref_type: "mention",
+              ref_subtype: "agent",
+              ref_id: "agent-1",
+              label: "@agent_123",
+              content_start_utf16: 3,
+              content_end_utf16: 13,
+            },
+          ],
+        } as never)}
+        cancelLabel="Cancel quote"
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("cc @Helper Bot pls")).toBeInTheDocument();
+    expect(screen.queryByText(/agent_123/)).toBeNull();
+  });
+
+  it("still summarizes an ordinary quote — the control (#530)", () => {
+    // Without this, a projection returning "" would satisfy the leak assertion
+    // above while destroying every quote summary.
+    render(
+      <ComposerQuotePreview
+        quote={message({ content: "no mentions here" })}
+        cancelLabel="Cancel quote"
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("no mentions here")).toBeInTheDocument();
+  });
+
   it("summarizes image-only quotes without leaking empty content", () => {
     render(
       <ComposerQuotePreview

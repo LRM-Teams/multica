@@ -205,6 +205,28 @@ const COPY = {
   queueRun: "Queue run",
   runQueued: "Curation run queued",
   selfReviewLabel: "Agent self-review",
+  curationRunSelectHint: "Select a curation run to inspect runtime, timeline, per-agent results, and artifacts.",
+  curationRunDetail: "Curation run detail",
+  diagnosticAction: "Action",
+  noneRecorded: "None recorded",
+  timeline: "Timeline",
+  perAgentResults: "Per-agent results",
+  noPerAgentDetails: "No per-agent details were reported by this daemon.",
+  artifacts: "Artifacts",
+  evolutionOutputTrend: "Evolution output trend",
+  evolutionOutputTrendHint: "Daily memory/skill candidates, promotions, and lifecycle changes.",
+  noTrendData: "No trend data yet.",
+  taskEfficiency: "Task efficiency",
+  taskEfficiencyHint: "Issue-level duration and token averages with evolved-memory usage attribution.",
+  statusError: "error",
+  statusChanged: "changed",
+  statusUnchanged: "unchanged",
+  avgDuration: "Avg duration",
+  inputTokensShort: "Input tok",
+  outputTokensShort: "Output tok",
+  withLearnedUnits: "With learned units",
+  avgUnitsUsed: "Avg units used",
+  skills: "Skills",
 };
 
 const STATUSES = [
@@ -1120,7 +1142,7 @@ function MemoryCurationCard({
 
 function CurationRunDetailCard({ run, selectedRunId }: { run: MemoryCurationRunDetail | undefined; selectedRunId: string }) {
   if (!selectedRunId) {
-    return <Card className="bg-background/85 backdrop-blur"><CardContent className="pt-6"><EmptyState text="Select a curation run to inspect runtime, timeline, per-agent results, and artifacts." /></CardContent></Card>;
+    return <Card className="bg-background/85 backdrop-blur"><CardContent className="pt-6"><EmptyState text={COPY.curationRunSelectHint} /></CardContent></Card>;
   }
   if (!run || !run.id) {
     return <Card className="bg-background/85 backdrop-blur"><CardContent className="pt-6"><Skeleton className="h-32 rounded-2xl" /></CardContent></Card>;
@@ -1128,7 +1150,7 @@ function CurationRunDetailCard({ run, selectedRunId }: { run: MemoryCurationRunD
   return (
     <Card className="bg-background/85 backdrop-blur">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2"><Activity className="h-4 w-4 text-brand" />Curation run detail</CardTitle>
+        <CardTitle className="flex items-center gap-2"><Activity className="h-4 w-4 text-brand" />{COPY.curationRunDetail}</CardTitle>
         <p className="text-xs text-muted-foreground">{run.id}</p>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -1146,19 +1168,19 @@ function CurationRunDetailCard({ run, selectedRunId }: { run: MemoryCurationRunD
             {run.diagnostics.map((item) => (
               <div key={`${item.code}:${item.message}`} className="rounded-2xl border bg-muted/25 p-3 text-sm">
                 <div className="font-medium">{item.message}</div>
-                {item.action && <div className="mt-1 text-xs text-muted-foreground">Action: {item.action}</div>}
+                {item.action && <div className="mt-1 text-xs text-muted-foreground">{COPY.diagnosticAction}: {item.action}</div>}
               </div>
             ))}
           </div>
         )}
         <div>
-          <div className="mb-2 text-sm font-medium">Target agents</div>
+          <div className="mb-2 text-sm font-medium">{COPY.targetAgents}</div>
           <div className="flex flex-wrap gap-2">
-            {run.target_agents.length === 0 ? <Badge variant="outline">None recorded</Badge> : run.target_agents.map((agent) => <Badge key={agent.id} variant="secondary">{agent.name || shortId(agent.id)}</Badge>)}
+            {run.target_agents.length === 0 ? <Badge variant="outline">{COPY.noneRecorded}</Badge> : run.target_agents.map((agent) => <Badge key={agent.id} variant="secondary">{agent.name || shortId(agent.id)}</Badge>)}
           </div>
         </div>
         <div>
-          <div className="mb-2 text-sm font-medium">Timeline</div>
+          <div className="mb-2 text-sm font-medium">{COPY.timeline}</div>
           <div className="space-y-2">
             {run.timeline.map((item) => (
               <div key={item.key} className="flex items-start gap-3 rounded-2xl border bg-muted/20 p-3">
@@ -1172,19 +1194,19 @@ function CurationRunDetailCard({ run, selectedRunId }: { run: MemoryCurationRunD
           </div>
         </div>
         <div>
-          <div className="mb-2 text-sm font-medium">Per-agent results</div>
+          <div className="mb-2 text-sm font-medium">{COPY.perAgentResults}</div>
           <div className="space-y-2">
-            {run.agent_results.length === 0 ? <EmptyState text="No per-agent details were reported by this daemon." /> : run.agent_results.map((agent) => (
+            {run.agent_results.length === 0 ? <EmptyState text={COPY.noPerAgentDetails} /> : run.agent_results.map((agent) => (
               <div key={`${agent.agent_id}:${agent.root}`} className="rounded-2xl border bg-card/70 p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="font-medium">{agent.agent_name || shortId(agent.agent_id)}</div>
-                  <Badge variant={agent.error ? "destructive" : agent.changed ? "secondary" : "outline"}>{agent.error ? "error" : agent.changed ? "changed" : "unchanged"}</Badge>
+                  <Badge variant={agent.error ? "destructive" : agent.changed ? "secondary" : "outline"}>{agent.error ? COPY.statusError : agent.changed ? COPY.statusChanged : COPY.statusUnchanged}</Badge>
                 </div>
                 <div className="mt-1 truncate text-xs text-muted-foreground">{agent.root}</div>
                 <div className="mt-3 grid grid-cols-3 gap-2">
                   <MiniStat label="Evidence" value={String(agent.evidence_collected)} />
                   <MiniStat label="Memory" value={String(agent.review_candidates_added)} />
-                  <MiniStat label="Skills" value={String(agent.skill_candidates_added)} />
+                  <MiniStat label={COPY.skills} value={String(agent.skill_candidates_added)} />
                 </div>
                 {agent.error && <div className="mt-2 text-xs text-destructive">{agent.error}</div>}
                 {agent.curator_output_excerpt && <pre className="mt-3 max-h-40 overflow-auto rounded-xl bg-muted p-3 text-xs text-muted-foreground">{agent.curator_output_excerpt}</pre>}
@@ -1194,7 +1216,7 @@ function CurationRunDetailCard({ run, selectedRunId }: { run: MemoryCurationRunD
         </div>
         {run.artifacts.length > 0 && (
           <div>
-            <div className="mb-2 text-sm font-medium">Artifacts</div>
+            <div className="mb-2 text-sm font-medium">{COPY.artifacts}</div>
             <div className="space-y-2">
               {run.artifacts.map((artifact, index) => (
                 <div key={`${artifact.kind}:${artifact.agent_id ?? "team"}:${index}`} className="rounded-2xl border bg-muted/20 p-3 text-sm">
@@ -1223,8 +1245,8 @@ function EvolutionTrendCard({ dailyMetrics }: { dailyMetrics: EvolutionDailyMetr
   return (
     <Card className="bg-background/85 backdrop-blur">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2"><TrendingUp className="h-4 w-4 text-emerald-500" />Evolution output trend</CardTitle>
-        <p className="text-sm text-muted-foreground">Daily memory/skill candidates, promotions, and lifecycle changes.</p>
+        <CardTitle className="flex items-center gap-2"><TrendingUp className="h-4 w-4 text-emerald-500" />{COPY.evolutionOutputTrend}</CardTitle>
+        <p className="text-sm text-muted-foreground">{COPY.evolutionOutputTrendHint}</p>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid grid-cols-4 gap-2">
@@ -1234,7 +1256,7 @@ function EvolutionTrendCard({ dailyMetrics }: { dailyMetrics: EvolutionDailyMetr
           <MiniStat label="Archived" value={String(totals.archived)} />
         </div>
         <div className="flex h-36 items-end gap-1 rounded-2xl border bg-muted/20 p-3">
-          {recent.length === 0 ? <EmptyState text="No trend data yet." /> : recent.map((item) => {
+          {recent.length === 0 ? <EmptyState text={COPY.noTrendData} /> : recent.map((item) => {
             const total = item.memory_candidates + item.skill_candidates + item.promoted_memory + item.promoted_skill;
             return <div key={item.date} className="flex min-w-0 flex-1 flex-col items-center gap-1"><div className="w-full rounded-t bg-brand/70" style={{ height: `${Math.max(4, (total / maxValue) * 110)}px` }} title={`${item.date}: ${total}`} /><div className="w-full truncate text-center text-[10px] text-muted-foreground">{item.date.slice(5)}</div></div>;
           })}
@@ -1248,16 +1270,16 @@ function TaskEfficiencyCard({ efficiency }: { efficiency: EvolutionTaskEfficienc
   return (
     <Card className="bg-background/85 backdrop-blur">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2"><CircleDollarSign className="h-4 w-4 text-amber-500" />Task efficiency</CardTitle>
-        <p className="text-sm text-muted-foreground">Issue-level duration and token averages with evolved-memory usage attribution.</p>
+        <CardTitle className="flex items-center gap-2"><CircleDollarSign className="h-4 w-4 text-amber-500" />{COPY.taskEfficiency}</CardTitle>
+        <p className="text-sm text-muted-foreground">{COPY.taskEfficiencyHint}</p>
       </CardHeader>
       <CardContent className="grid grid-cols-2 gap-2">
         <MiniStat label="Issues" value={String(efficiency?.issue_count ?? 0)} />
-        <MiniStat label="Avg duration" value={formatDuration(efficiency?.average_duration_seconds ?? 0, "<1s")} />
-        <MiniStat label="Input tok" value={compactNumber(efficiency?.average_input_tokens ?? 0)} />
-        <MiniStat label="Output tok" value={compactNumber(efficiency?.average_output_tokens ?? 0)} />
-        <MiniStat label="With learned units" value={String(efficiency?.with_evolved_units_issue_count ?? 0)} />
-        <MiniStat label="Avg units used" value={(efficiency?.average_evolved_units_used ?? 0).toFixed(1)} />
+        <MiniStat label={COPY.avgDuration} value={formatDuration(efficiency?.average_duration_seconds ?? 0, "<1s")} />
+        <MiniStat label={COPY.inputTokensShort} value={compactNumber(efficiency?.average_input_tokens ?? 0)} />
+        <MiniStat label={COPY.outputTokensShort} value={compactNumber(efficiency?.average_output_tokens ?? 0)} />
+        <MiniStat label={COPY.withLearnedUnits} value={String(efficiency?.with_evolved_units_issue_count ?? 0)} />
+        <MiniStat label={COPY.avgUnitsUsed} value={(efficiency?.average_evolved_units_used ?? 0).toFixed(1)} />
       </CardContent>
     </Card>
   );

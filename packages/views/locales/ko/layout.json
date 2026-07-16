@@ -88,6 +88,12 @@
     "resume_action": "재개",
     "stop_action": "중지",
     "delete_action": "삭제",
+    "delete_dialog": {
+      "title": "샌드박스를 삭제할까요?",
+      "description": "\"{{name}}\"을(를) 삭제할까요? 이 작업은 되돌릴 수 없습니다.",
+      "cancel": "취소",
+      "confirm": "삭제"
+    },
     "add_node_action": "Add node",
     "add_node_failed": "Failed to add sandbox node",
     "view_setup_action": "View setup",

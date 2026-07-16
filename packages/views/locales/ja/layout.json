@@ -88,6 +88,12 @@
     "resume_action": "再開",
     "stop_action": "停止",
     "delete_action": "削除",
+    "delete_dialog": {
+      "title": "サンドボックスを削除しますか？",
+      "description": "「{{name}}」を削除しますか？この操作は元に戻せません。",
+      "cancel": "キャンセル",
+      "confirm": "削除"
+    },
     "add_node_action": "Add node",
     "add_node_failed": "Failed to add sandbox node",
     "view_setup_action": "View setup",

@@ -33,6 +33,16 @@ import {
   DialogTitle,
 } from "@multica/ui/components/ui/dialog";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@multica/ui/components/ui/alert-dialog";
+import {
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
@@ -167,6 +177,7 @@ export function SandboxesPage() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [createForm, setCreateForm] = useState<CreateFormState>(() => buildDefaultCreateForm(""));
+  const [deleteConfirmInstance, setDeleteConfirmInstance] = useState<SandboxInstance | null>(null);
   const [addNode, dispatchAddNode] = useReducer(addNodeReducer, initialAddNodeState);
   const { dialogOpen: addDialogOpen, setupCommand, setupConfigPath, setupCopied, creating: creatingNode, viewingSetupNodeId } = addNode;
 
@@ -370,7 +381,7 @@ export function SandboxesPage() {
             onOpen={(instanceId) => navigation.push(paths.sandboxDetail(instanceId))}
             onStop={(instanceId) => stop.mutate(instanceId)}
             onResume={(instanceId) => resume.mutate(instanceId)}
-            onDelete={(instanceId) => del.mutate(instanceId)}
+            onDelete={setDeleteConfirmInstance}
           />
         </div>
       ) : (
@@ -414,7 +425,7 @@ export function SandboxesPage() {
                 onOpen={(instanceId) => navigation.push(paths.sandboxDetail(instanceId))}
                 onStop={(instanceId) => stop.mutate(instanceId)}
                 onResume={(instanceId) => resume.mutate(instanceId)}
-                onDelete={(instanceId) => del.mutate(instanceId)}
+                onDelete={setDeleteConfirmInstance}
               />
             </ResizablePanel>
           </ResizablePanelGroup>
@@ -511,6 +522,36 @@ export function SandboxesPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog
+        open={!!deleteConfirmInstance}
+        onOpenChange={(open) => {
+          if (!open) setDeleteConfirmInstance(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t(($) => $.sandboxes_page.delete_dialog.title)}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t(($) => $.sandboxes_page.delete_dialog.description, {
+                name: deleteConfirmInstance ? sandboxDisplayName(deleteConfirmInstance) : "",
+              })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t(($) => $.sandboxes_page.delete_dialog.cancel)}</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                if (deleteConfirmInstance) del.mutate(deleteConfirmInstance.id);
+                setDeleteConfirmInstance(null);
+              }}
+            >
+              {t(($) => $.sandboxes_page.delete_dialog.confirm)}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -638,7 +679,7 @@ function NodeDetail({
   onOpen: (instanceId: string) => void;
   onStop: (instanceId: string) => void;
   onResume: (instanceId: string) => void;
-  onDelete: (instanceId: string) => void;
+  onDelete: (instance: SandboxInstance) => void;
 }) {
   const { t } = useT("layout");
 
@@ -723,7 +764,7 @@ function NodeDetail({
                 onOpen={() => onOpen(instance.id)}
                 onStop={() => onStop(instance.id)}
                 onResume={() => onResume(instance.id)}
-                onDelete={() => onDelete(instance.id)}
+                onDelete={() => onDelete(instance)}
               />
             ))}
           </div>

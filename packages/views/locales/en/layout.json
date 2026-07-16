@@ -88,6 +88,12 @@
     "resume_action": "Resume",
     "stop_action": "Stop",
     "delete_action": "Delete",
+    "delete_dialog": {
+      "title": "Delete sandbox?",
+      "description": "Are you sure you want to delete \"{{name}}\"? This cannot be undone.",
+      "cancel": "Cancel",
+      "confirm": "Delete"
+    },
     "add_node_action": "Add node",
     "add_node_failed": "Failed to add sandbox node",
     "view_setup_action": "View setup",

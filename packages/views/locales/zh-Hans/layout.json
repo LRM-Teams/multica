@@ -88,6 +88,12 @@
     "resume_action": "恢复",
     "stop_action": "停止",
     "delete_action": "删除",
+    "delete_dialog": {
+      "title": "删除沙箱？",
+      "description": "确定要删除「{{name}}」吗？此操作无法撤销。",
+      "cancel": "取消",
+      "confirm": "删除"
+    },
     "add_node_action": "添加节点",
     "add_node_failed": "添加沙箱节点失败",
     "view_setup_action": "查看配置",

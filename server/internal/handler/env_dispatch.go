@@ -24,24 +24,24 @@ import (
 
 // EnvDispatchRequest is the body of POST /api/v1/env-dispatch (spec §6.3).
 type EnvDispatchRequest struct {
-	Mode           string                        `json:"mode"`
-	EnvID          string                        `json:"env_id"`
-	Domain         string                        `json:"domain,omitempty"`
-	DispatchType   string                        `json:"dispatch_type"`
-	GroupSize      int                           `json:"group_size"`
-	AgentID        string                        `json:"agent_id"`
-	SquadID        string                        `json:"squad_id,omitempty"`
-	TrainAgentID   string                        `json:"train_agent_id,omitempty"`
-	CriticAgentID  string                        `json:"critic_agent_id,omitempty"`
-	IdempotencyKey string                        `json:"idempotency_key,omitempty"`
+	Mode           string `json:"mode"`
+	EnvID          string `json:"env_id"`
+	Domain         string `json:"domain,omitempty"`
+	DispatchType   string `json:"dispatch_type"`
+	GroupSize      int    `json:"group_size"`
+	AgentID        string `json:"agent_id"`
+	SquadID        string `json:"squad_id,omitempty"`
+	TrainAgentID   string `json:"train_agent_id,omitempty"`
+	CriticAgentID  string `json:"critic_agent_id,omitempty"`
+	IdempotencyKey string `json:"idempotency_key,omitempty"`
 	// Template optionally overrides the server's default self_play sandbox
 	// template (MULTICA_DEFAULT_SELF_PLAY_TEMPLATE) for the auto-created default
 	// base env. Only consulted when env_id is empty and no default is configured
 	// (scratch self_play). 1..64 chars when set.
-	Template       string                        `json:"template,omitempty"`
-	Issue          *IssueDispatchInput           `json:"issue,omitempty"`
-	Message        *MessageDispatchInput         `json:"message,omitempty"`
-	PerAgentEnv    map[string]PerAgentEnvRequest `json:"per_agent_env,omitempty"`
+	Template    string                        `json:"template,omitempty"`
+	Issue       *IssueDispatchInput           `json:"issue,omitempty"`
+	Message     *MessageDispatchInput         `json:"message,omitempty"`
+	PerAgentEnv map[string]PerAgentEnvRequest `json:"per_agent_env,omitempty"`
 }
 
 // PerAgentEnvRequest carries one squad member's sandbox template or base env
@@ -161,14 +161,14 @@ func (h *Handler) EnvDispatch(w http.ResponseWriter, r *http.Request) {
 		Domain:       service.EnvDomain(req.Domain),
 		DispatchType: service.EnvDispatchType(req.DispatchType),
 		GroupSize:    req.GroupSize, AgentID: req.AgentID,
-		SquadID:           req.SquadID,
-		TrainAgentID:      req.TrainAgentID,
-		CriticAgentID:     req.CriticAgentID,
-		IdempotencyKey:    req.IdempotencyKey,
+		SquadID:             req.SquadID,
+		TrainAgentID:        req.TrainAgentID,
+		CriticAgentID:       req.CriticAgentID,
+		IdempotencyKey:      req.IdempotencyKey,
 		DefaultBaseTemplate: template,
-		Issue:             mapIssueInput(req.Issue),
-		Message:           mapMessageInput(req.Message),
-		PerAgentEnvSpecs:  mapPerAgentEnvSpecs(req.PerAgentEnv),
+		Issue:               mapIssueInput(req.Issue),
+		Message:             mapMessageInput(req.Message),
+		PerAgentEnvSpecs:    mapPerAgentEnvSpecs(req.PerAgentEnv),
 	})
 	if err != nil {
 		writeEnvDispatchError(w, err, res)

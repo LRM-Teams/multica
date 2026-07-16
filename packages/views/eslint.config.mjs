@@ -46,9 +46,13 @@ export default [
     ignores: [
       // Operating state: you act on the reference here, so the chip is correct.
       "editor/**",
-      // Defines and re-exports the chip — not a consumer.
+      // Defines the chip — not a consumer.
       "issues/components/issue-chip.tsx",
-      "issues/components/index.ts",
+      // NOTE: the barrel is NOT listed, because it no longer re-exports IssueChip.
+      // Wren found that route bypassed this ban entirely (`{ IssueChip } from
+      // "../components"` never matches `**/issue-chip`). The fix was to delete the
+      // second entrance, not to add it here — one controlled entrance is structural,
+      // a longer ban list is another promise waiting to be outgrown.
       "**/*.test.ts",
       "**/*.test.tsx",
     ],

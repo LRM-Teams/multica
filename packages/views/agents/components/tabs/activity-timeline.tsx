@@ -29,6 +29,9 @@ const TONE_DOT: Record<ActivityDotTone, string> = {
   running: "bg-[#F5B301]",
   waiting: "bg-warning",
   failure: "bg-destructive",
+  // Radar sweeps (group-manager proactive runs) get their own indigo dot so
+  // they're visually distinct from a task "Completed" (neutral) row.
+  radar: "bg-[#6366F1]",
 };
 
 // A file tool's `tool_target` is now a source-backed path (absolute when the

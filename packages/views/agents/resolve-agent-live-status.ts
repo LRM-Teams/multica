@@ -24,6 +24,7 @@ const TONE_DOT_CLASS: Record<ActivityDotTone, string> = {
   running: "bg-[#F5B301]",
   waiting: "bg-warning",
   failure: "bg-destructive",
+  radar: "bg-[#6366F1]",
 };
 
 // The kind colour lives on the DOT only. The timeline paints every label —

@@ -9,7 +9,7 @@ import { stripMentionMarkdown } from "../../../common/strip-mention-markdown";
 
 // Keep the palette intentionally quiet: only failures and waiting states get
 // color; the normal narrative stream stays neutral.
-export type ActivityDotTone = "neutral" | "active" | "running" | "waiting" | "failure";
+export type ActivityDotTone = "neutral" | "active" | "running" | "waiting" | "failure" | "radar";
 
 // The FE Activity read-model IS the BE #302 timeline event
 // (`AgentActivityTimelineEvent`, packages/core/types/events.ts): id /
@@ -27,6 +27,7 @@ export type ActivityLabelKey =
   | "thinking"
   | "output"
   | "completed"
+  | "radar_executed"
   | "working"
   | "idle"
   | "failed"
@@ -56,6 +57,7 @@ export const ACTIVITY_LABEL_EN: Record<ActivityLabelKey, string> = {
   thinking: "Thinking",
   output: "Output",
   completed: "Completed",
+  radar_executed: "Radar",
   working: "Working",
   idle: "Idle",
   failed: "Failed",
@@ -452,7 +454,10 @@ export function activityPresentation(event: ActivityEvent): ActivityPresentation
         };
       }
       if (event.detail_kind === "radar_action_executed") {
-        return { labelKey: "completed", subtext: narrativeText(event.text), tone: "neutral" };
+        // Radar runs are the group manager's proactive sweeps, not task
+        // completions — give them their own label/tone so they don't read as a
+        // generic "Completed" row (#user-request).
+        return { labelKey: "radar_executed", subtext: narrativeText(event.text), tone: "radar" };
       }
       if (event.detail_kind.includes("subagent")) {
         // Prefer the daemon's own subagent detail text; fall back to a fixed label.

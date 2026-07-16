@@ -638,7 +638,7 @@ func (a *envDispatchDepsAdapter) CreateProject(ctx context.Context, workspaceID,
 	row, err := a.h.Queries.CreateProjectWithEnv(ctx, db.CreateProjectWithEnvParams{
 		WorkspaceID: parseUUID(workspaceID),
 		Title:       name,
-		Status:      "active",
+		Status:      "in_progress",
 		Priority:    "medium",
 		EnvID:       parseUUID(envID),
 	})

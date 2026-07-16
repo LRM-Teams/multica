@@ -1,32 +1,23 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { Editor } from "@tiptap/core";
-import StarterKit from "@tiptap/starter-kit";
-import Link from "@tiptap/extension-link";
-import { Markdown } from "@tiptap/markdown";
+import { createEditorExtensions } from "./index";
 
 // #531 (Frank's call): the composer never auto-links typed or pasted URLs —
 // they stay plain text in the editor. Bare URLs become clickable on the READ
-// side (preprocessLinks), not in the input. This test pins the LinkExtension
-// config (autolink:false + linkOnPaste:false, no word-boundary plugin) so a URL
-// typed into the composer produces no link mark.
-const LinkExtension = Link.extend({ inclusive: false }).configure({
-  openOnClick: false,
-  autolink: false,
-  linkOnPaste: false,
-  defaultProtocol: "https",
-});
-
+// side (preprocessLinks), not in the input.
+//
+// This builds the REAL composer via `createEditorExtensions({})` (the full
+// factory, 20+ extensions) rather than a hand-picked subset — so it also
+// guards against a *future* extension re-introducing autolinking into the
+// factory, not just someone flipping LinkExtension's `autolink` back to true.
+// (A subset harness missed exactly that class of factory-level regression.)
 let editor: Editor | null = null;
 function makeEditor(): Editor {
   const element = document.createElement("div");
   document.body.appendChild(element);
   editor = new Editor({
     element,
-    extensions: [
-      StarterKit.configure({ link: false }),
-      LinkExtension,
-      Markdown.configure({ indentation: { style: "space", size: 3 } }),
-    ],
+    extensions: createEditorExtensions({}),
   });
   return editor;
 }

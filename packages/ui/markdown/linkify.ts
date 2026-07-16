@@ -24,14 +24,16 @@ const FILE_PATH_REGEX =
 const CJK_URL_TERMINATOR_REGEX =
   /[！-／：-＠［-｀｛-～、。「-】]/
 
-// CJK *letters* (ideographs, kana, hangul, CJK-compat ideographs). Distinct
+// Han ideographs (CJK Unified incl. Extension A + CJK Compatibility, BMP).
+// Scoped to Han deliberately: the five signed #537 contracts are all Han and
+// none authorizes kana/hangul/other scripts. Distinct
 // from CJK_URL_TERMINATOR_REGEX above, which is full-width *punctuation*.
 // linkify-it's strict (schemed) host parser treats these as valid domain-label
 // characters — correct for IDN hosts like `中国.cn`, but it means a URL typed
 // immediately followed by a CJK word with no separator (`https://x.com吗`)
-// swallows the trailing word into the host. See hostCjkOverrunIdx.
-const CJK_LETTER_REGEX =
-  /[㐀-鿿぀-ヿ가-힯豈-﫿]/
+// swallows the trailing word into the host. See hostHanOverrunIdx.
+const HAN_LETTER_REGEX =
+  /[\u3400-\u9FFF\uF900-\uFAFF]/
 
 interface DetectedLink {
   type: 'url' | 'email' | 'file'
@@ -246,7 +248,7 @@ function isFuzzyWholeHost(s: string): boolean {
  * host followed by CJK (e.g. `x.zzz吗`, which was never a real host) is left
  * untouched, so its trailing `吗` stays inside the link.
  */
-function hostCjkOverrunIdx(matchText: string): number {
+function hostHanOverrunIdx(matchText: string): number {
   const schemeMatch = matchText.match(/^[a-z][a-z0-9+.-]*:\/\//i)
   if (!schemeMatch) return -1 // only the strict (schemed) host path overruns
   const hostStart = schemeMatch[0].length
@@ -259,10 +261,10 @@ function hostCjkOverrunIdx(matchText: string): number {
     }
   }
   const authority = matchText.slice(hostStart, hostEnd)
-  if (!authority || !CJK_LETTER_REGEX.test(authority.charAt(authority.length - 1))) return -1
+  if (!authority || !HAN_LETTER_REGEX.test(authority.charAt(authority.length - 1))) return -1
 
   let cut = authority.length
-  while (cut > 0 && CJK_LETTER_REGEX.test(authority.charAt(cut - 1))) cut--
+  while (cut > 0 && HAN_LETTER_REGEX.test(authority.charAt(cut - 1))) cut--
   if (cut === 0) return -1
 
   const prefix = authority.slice(0, cut)
@@ -279,7 +281,7 @@ function hostCjkOverrunIdx(matchText: string): number {
  * correct here:
  * - CJK punctuation swallowed into the href (`…com。后文`) → truncate at it;
  * - CJK letters glued onto the host (`https://x.com吗`) → truncate via
- *   hostCjkOverrunIdx.
+ *   hostHanOverrunIdx.
  * We truncate at whichever comes first and re-scan the tail.
  */
 function collectLinkifyMatches(text: string, offset: number, out: DetectedLink[]): void {
@@ -290,7 +292,7 @@ function collectLinkifyMatches(text: string, offset: number, out: DetectedLink[]
     const cjkPunctIdx = match.text.search(CJK_URL_TERMINATOR_REGEX)
     if (cjkPunctIdx === 0) continue // match starts with CJK punct — skip
 
-    const hostCjkIdx = hostCjkOverrunIdx(match.text)
+    const hostCjkIdx = hostHanOverrunIdx(match.text)
 
     // Truncate at the earliest of the two boundaries, if any.
     const truncIdx = [cjkPunctIdx, hostCjkIdx]
@@ -327,6 +329,69 @@ function collectLinkifyMatches(text: string, offset: number, out: DetectedLink[]
   }
 }
 
+// Explicit-scheme authority up to the first path/query/fragment delimiter or
+// whitespace. Used only by the recovery pass below — NOT a general URL matcher.
+const SCHEMED_AUTHORITY_REGEX = /https?:\/\/[^\s/?#]*/gi
+
+/**
+ * Recover from a *failure* mode of linkify-it (distinct from the host overrun
+ * handled in collectLinkifyMatches): when Han is glued directly onto a port
+ * (`https://x.com:8080吗`), the port token becomes invalid and linkify-it fails
+ * the WHOLE match — it emits nothing rather than over-matching, so the user
+ * loses the clickable `https://x.com:8080` entirely.
+ *
+ * This strict, explicit-scheme-only pass finds such authorities, strips the
+ * trailing Han run, and re-validates the prefix as a whole URL with linkify-it
+ * itself (same oracle — no broad URL regex takes over detection). Ranges that
+ * linkify-it already matched are skipped, so it never double-emits.
+ */
+function recoverSchemedHanOverrun(text: string, out: DetectedLink[]): void {
+  SCHEMED_AUTHORITY_REGEX.lastIndex = 0
+  let m: RegExpExecArray | null
+  while ((m = SCHEMED_AUTHORITY_REGEX.exec(text)) !== null) {
+    const candidate = m[0]
+    const start = m.index
+    // Only the overrun shape: an authority ending in a Han run.
+    if (!HAN_LETTER_REGEX.test(candidate.charAt(candidate.length - 1))) continue
+
+    let cut = candidate.length
+    while (cut > 0 && HAN_LETTER_REGEX.test(candidate.charAt(cut - 1))) cut--
+    if (cut === 0) continue
+    const recoveredEnd = start + cut
+    const candidateEnd = start + candidate.length
+
+    // If linkify-it already matched into the trailing Han region, it handled
+    // this authority as a whole match (the Han stays inside — documented cost
+    // 1, e.g. `x.zzz吗`); this recovery is only for authorities linkify-it
+    // *failed* to parse (a glued port), so don't second-guess a real match.
+    if (out.some((l) => rangesOverlap({ start: recoveredEnd, end: candidateEnd }, l))) continue
+
+    const prefix = candidate.slice(0, cut)
+    const pm = linkify.match(prefix)
+    const whole =
+      pm && pm.length === 1 && pm[0] && pm[0].index === 0 && pm[0].lastIndex === prefix.length
+        ? pm[0]
+        : undefined
+    if (!whole) continue
+
+    // linkify-it may have emitted a shorter *fragment* of this authority (e.g.
+    // `https://user` out of `https://user@x.com:8080吗`); drop fragments fully
+    // contained in the recovered span, then add the validated whole URL.
+    for (let i = out.length - 1; i >= 0; i--) {
+      const l = out[i]
+      if (l && l.start >= start && l.end <= recoveredEnd) out.splice(i, 1)
+    }
+
+    out.push({
+      type: whole.schema === 'mailto:' ? 'email' : 'url',
+      text: prefix,
+      url: whole.url,
+      start,
+      end: recoveredEnd
+    })
+  }
+}
+
 /**
  * Detect all links (URLs, emails, file paths) in text
  */
@@ -335,6 +400,10 @@ export function detectLinks(text: string): DetectedLink[] {
 
   // 1. Detect URLs and emails with linkify-it, applying CJK boundary handling.
   collectLinkifyMatches(text, 0, links)
+
+  // 1b. Recover schemed URLs that linkify-it dropped entirely because Han was
+  // glued onto the port (e.g. `https://x.com:8080吗`).
+  recoverSchemedHanOverrun(text, links)
 
   // 2. Detect file paths with custom regex
   // Reset regex state

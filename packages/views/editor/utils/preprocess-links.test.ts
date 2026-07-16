@@ -157,12 +157,35 @@ describe("preprocessLinks — CJK letter host overrun (#537)", () => {
     );
   });
 
-  it("leaves a port-then-CJK authority as plain text (safe: no leaked link)", () => {
-    // linkify-it rejects a port followed by CJK (`:8080吗`) and matches nothing
-    // at all, so the string stays plain text. That is safe — the goal is "no
-    // link with CJK glued into the host", and here there is simply no link.
+  it("recovers a port-then-Han authority: links host:port, Han outside", () => {
+    // linkify-it fails the WHOLE match on `:8080吗` (invalid port), so the
+    // recovery pass strips the Han and re-validates `https://x.com:8080`.
     expect(preprocessLinks("a https://x.com:8080吗 b")).toBe(
-      "a https://x.com:8080吗 b",
+      "a [https://x.com:8080](https://x.com:8080)吗 b",
+    );
+  });
+
+  it("recovers userinfo + port + trailing Han", () => {
+    expect(preprocessLinks("a https://user@x.com:8080吗 b")).toBe(
+      "a [https://user@x.com:8080](https://user@x.com:8080)吗 b",
+    );
+  });
+
+  it("leaves a normal port (no Han) untouched", () => {
+    expect(preprocessLinks("a https://x.com:8080/p b")).toBe(
+      "a [https://x.com:8080/p](https://x.com:8080/p) b",
+    );
+  });
+
+  it("truncates when the URL is at index 0", () => {
+    expect(preprocessLinks("https://x.com吗 后文")).toBe(
+      "[https://x.com](https://x.com)吗 后文",
+    );
+  });
+
+  it("two URLs in one text: first truncated, second still detected", () => {
+    expect(preprocessLinks("看 https://a.com吗 和 https://b.com/c 结束")).toBe(
+      "看 [https://a.com](https://a.com)吗 和 [https://b.com/c](https://b.com/c) 结束",
     );
   });
 

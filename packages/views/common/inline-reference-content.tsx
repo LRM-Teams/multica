@@ -16,7 +16,11 @@ import {
 import { mentionTokenClassName } from "./mention-token";
 import { StatusIcon } from "../issues/components/status-icon";
 import { PriorityIcon } from "../issues/components/priority-icon";
-import { ProjectChip } from "../projects/components/project-chip";
+import { ProjectIcon } from "../projects/components/project-icon";
+import { ActorAvatar } from "./actor-avatar";
+import { useQuery } from "@tanstack/react-query";
+import { projectListOptions, projectDetailOptions } from "@multica/core/projects/queries";
+import { useWorkspaceId } from "@multica/core/hooks";
 import { useResolvedIssue } from "../issues/components/issue-chip";
 import { projectInlineReferences, type ReferencePart } from "./inline-references";
 
@@ -220,7 +224,9 @@ function IssueRefToken({
         <div className="min-w-0">
           <div className="text-[11px] leading-none text-muted-foreground">{text}</div>
           {title ? (
-            <div className="mt-1 text-sm font-medium leading-snug text-foreground">{title}</div>
+            <div className="mt-1 line-clamp-2 text-sm font-semibold leading-snug text-foreground">
+              {title}
+            </div>
           ) : null}
           <IssuePeekProperties issue={issue} status={status} />
         </div>
@@ -237,8 +243,18 @@ function IssueRefToken({
  * quicklook, not an inline hover — the card's job is "judge without opening it", not
  * to become a second detail page (Iris's spec §3.1).
  *
+ * ONE grammar for every property (#517, Iris's property-display spec): each is a
+ * 14px marker + 4px + a 12px muted label, 10px between properties, and NOTHING wears
+ * a chip/pill/background. That grammar is not new — it is `list-row`'s house style
+ * (ActorAvatar / ProjectIcon+title / PriorityIcon), which is also what Linear does.
+ * Frank's "有点乱" was this card diverging from it: a bare-text assignee (an orphan
+ * next to two icon+label pairs) and a bordered ProjectChip made four grammars share
+ * one row.
+ *
  * Every field is independently omitted when absent — we never draw a placeholder or
- * a guessed value.
+ * a guessed value. Absence is decided ONLY by the issue's own data: the card must
+ * never inherit the list's `storeProperties` display toggles, or it would hide a
+ * fact because of an unrelated setting elsewhere (Iris's spec, hard rule for #518).
  */
 function IssuePeekProperties({
   issue,
@@ -247,39 +263,101 @@ function IssuePeekProperties({
   issue: Issue | undefined;
   status: IssueStatus | null;
 }): React.JSX.Element | null {
-  const { getActorName } = useActorName();
-  if (!issue) return null;
-
-  // `none` is the ABSENCE of a priority, not a value worth a row; anything we
+  // `none` is the ABSENCE of a priority, not a value worth showing; anything we
   // have no renderer for is dropped rather than risked (see toIssuePriority).
-  const rawPriority = toIssuePriority(issue.priority);
+  const rawPriority = toIssuePriority(issue?.priority);
   const priority = rawPriority && rawPriority !== "none" ? rawPriority : null;
-  // Assignee resolves live by id, same rule as status: the name follows the
-  // workspace, never a snapshot.
-  const assignee =
-    issue.assignee_type && issue.assignee_id
-      ? getActorName(issue.assignee_type, issue.assignee_id) || null
-      : null;
-  const projectId = issue.project_id ?? null;
+  const hasAssignee = Boolean(issue?.assignee_type && issue?.assignee_id);
+  const projectId = issue?.project_id ?? null;
 
-  if (!status && !priority && !assignee && !projectId) return null;
+  if (!issue) return null;
+  if (!status && !priority && !hasAssignee && !projectId) return null;
 
+  // Single line, and it truncates from the tail — project gives way first, then
+  // assignee; status never shrinks (it is the one property that must stay legible).
   return (
-    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+    <div className="mt-2 flex items-center gap-2.5 overflow-hidden text-xs text-muted-foreground">
       {status ? (
-        <span className="inline-flex items-center gap-1">
-          <StatusIcon status={status} className="h-3.5 w-3.5" />
+        <span className="inline-flex shrink-0 items-center gap-1">
+          <StatusIcon status={status} className="size-3.5" />
           {STATUS_CONFIG[status].label}
         </span>
       ) : null}
       {priority ? (
-        <span className="inline-flex items-center gap-1">
-          <PriorityIcon priority={priority} className="h-3.5 w-3.5" />
+        <span className="inline-flex shrink-0 items-center gap-1">
+          <PriorityIcon priority={priority} className="size-3.5" />
           {PRIORITY_CONFIG[priority].label}
         </span>
       ) : null}
-      {assignee ? <span className="truncate">{assignee}</span> : null}
-      {projectId ? <ProjectChip projectId={projectId} /> : null}
+      {hasAssignee ? (
+        <PeekAssignee actorType={issue.assignee_type!} actorId={issue.assignee_id!} />
+      ) : null}
+      {projectId ? <PeekProject projectId={projectId} /> : null}
     </div>
+  );
+}
+
+/**
+ * Assignee: avatar + display name — the avatar is the person's "icon", which is what
+ * put this property back in the row's rhythm (Iris's spec §1: 补头像, 病灶就没了).
+ *
+ * The avatar deliberately carries NO hover card of its own: this already lives inside
+ * the peek's HoverCardContent, and ActorAvatar's own docs warn against nesting a
+ * popover inside one. `profileLink` is off for the same reason — the peek is a
+ * read-only "judge it without opening it" surface, not a second navigation layer.
+ */
+function PeekAssignee({
+  actorType,
+  actorId,
+}: {
+  actorType: string;
+  actorId: string;
+}): React.JSX.Element | null {
+  const { getActorName } = useActorName();
+  // Resolved live by id, same rule as status — the name follows the workspace,
+  // never a write-time snapshot.
+  const name = getActorName(actorType, actorId);
+  if (!name) return null;
+  return (
+    <span className="inline-flex min-w-0 shrink items-center gap-1">
+      <ActorAvatar
+        actorType={actorType}
+        actorId={actorId}
+        size={14}
+        enableHoverCard={false}
+        profileLink={false}
+      />
+      <span className="truncate">{name}</span>
+    </span>
+  );
+}
+
+/**
+ * Project: icon + title, NO chip. The border/background a chip carries reads as
+ * "this value owns a container", which is exactly the weight that made the row look
+ * busy — a project is just another property here (Iris's spec §1: project 去 chip).
+ *
+ * Shrinks before every other property, so a long project title is what gives way
+ * when the row runs out of room.
+ */
+function PeekProject({ projectId }: { projectId: string }): React.JSX.Element | null {
+  const wsId = useWorkspaceId();
+  const { data: projects = [] } = useQuery(projectListOptions(wsId));
+  const listProject = projects.find((p) => p.id === projectId);
+  // A project outside the cached list (archived, or simply not fetched yet) still
+  // has to show — the issue genuinely belongs to it. Same fallback ProjectChip uses.
+  const { data: detailProject } = useQuery({
+    ...projectDetailOptions(wsId, projectId),
+    enabled: !listProject,
+  });
+  const project = listProject ?? detailProject;
+  // Unresolved → render nothing rather than a guessed name or an empty icon: the
+  // card degrades, it never fakes (#504).
+  if (!project) return null;
+  return (
+    <span className="inline-flex min-w-0 shrink-[2] items-center gap-1">
+      <ProjectIcon project={project} size="sm" />
+      <span className="truncate">{project.title}</span>
+    </span>
   );
 }

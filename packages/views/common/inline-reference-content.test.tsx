@@ -52,11 +52,46 @@ vi.mock("../issues/components/issue-chip", () => ({
   useResolvedIssue: () => resolvedIssue,
 }));
 
-// ProjectChip resolves the project name itself via TanStack; stub it so these
-// tests stay on what the peek decides rather than dragging in a QueryClient.
-vi.mock("../projects/components/project-chip", () => ({
-  ProjectChip: ({ projectId }: { projectId: string }) => (
-    <span data-testid="project-chip">{projectId}</span>
+// The project resolves via TanStack; stub the queries so these tests stay on what
+// the peek decides rather than dragging in a QueryClient.
+let resolvedProject: { id: string; title: string; icon?: string } | undefined;
+// The list query yields an array; the detail fallback yields one project or nothing.
+// Keep those shapes distinct — a mock that returns `[]` for the detail query would
+// make the "unresolved" case look resolved (an empty array is truthy).
+vi.mock("@tanstack/react-query", () => ({
+  useQuery: (opts: { queryKey: string[] }) =>
+    opts.queryKey[0] === "projects"
+      ? { data: resolvedProject ? [resolvedProject] : [] }
+      : { data: undefined },
+}));
+vi.mock("@multica/core/projects/queries", () => ({
+  projectListOptions: () => ({ queryKey: ["projects"] }),
+  projectDetailOptions: () => ({ queryKey: ["project"] }),
+}));
+vi.mock("@multica/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
+
+vi.mock("../projects/components/project-icon", () => ({
+  ProjectIcon: () => <span data-testid="project-icon" />,
+}));
+
+// #517: assignee is an avatar + name, not bare text — the avatar carries no hover
+// card of its own (it already lives inside the peek's hover card).
+vi.mock("./actor-avatar", () => ({
+  ActorAvatar: ({
+    actorId,
+    enableHoverCard,
+    profileLink,
+  }: {
+    actorId: string;
+    enableHoverCard?: boolean;
+    profileLink?: boolean;
+  }) => (
+    <span
+      data-testid="assignee-avatar"
+      data-actor={actorId}
+      data-hover-card={String(Boolean(enableHoverCard))}
+      data-profile-link={String(Boolean(profileLink))}
+    />
   ),
 }));
 
@@ -137,6 +172,7 @@ function issueRef(start: number, end: number): MessagePart {
 describe("InlineReferenceContent (#463 projector consumer)", () => {
   beforeEach(() => {
     resolvedIssue = undefined;
+    resolvedProject = undefined;
   });
 
   it("renders a structured mention as the hover-card token — restores the hover the bare-@ window dropped", () => {
@@ -194,6 +230,7 @@ describe("InlineReferenceContent (#463 projector consumer)", () => {
       assignee_id: "user-1",
       project_id: "proj-7",
     };
+    resolvedProject = { id: "proj-7", title: "Doudizhu", icon: "🃏" };
     render(<InlineReferenceContent content="see #MUL-9 pls" parts={[issueRef(4, 10)]} />);
 
     expect(screen.getByTestId("status-icon")).toHaveAttribute("data-status", "in_progress");
@@ -201,7 +238,51 @@ describe("InlineReferenceContent (#463 projector consumer)", () => {
     expect(screen.getByTestId("priority-icon")).toHaveAttribute("data-priority", "high");
     expect(screen.getByText("High")).toBeInTheDocument();
     expect(screen.getByText("Alice")).toBeInTheDocument(); // assignee resolved live by id
-    expect(screen.getByTestId("project-chip")).toHaveTextContent("proj-7");
+    expect(screen.getByTestId("project-icon")).toBeInTheDocument();
+    expect(screen.getByText("Doudizhu")).toBeInTheDocument();
+  });
+
+  it("gives every property the same grammar: marker + label, no chip (#517)", () => {
+    // Frank's "有点乱": a bare-text assignee orphaned next to two icon+label pairs,
+    // and a bordered ProjectChip — four grammars in one row. Each property must now
+    // carry a marker, and nothing may wear a chip/pill.
+    resolvedIssue = {
+      id: "issue-uuid",
+      title: "Fix the login bug",
+      status: "blocked",
+      priority: "high",
+      assignee_type: "member",
+      assignee_id: "user-1",
+      project_id: "proj-7",
+    };
+    resolvedProject = { id: "proj-7", title: "Doudizhu", icon: "🃏" };
+    const { container } = render(
+      <InlineReferenceContent content="see #MUL-9 pls" parts={[issueRef(4, 10)]} />,
+    );
+
+    // The assignee is an avatar + name, no longer bare text.
+    expect(screen.getByTestId("assignee-avatar")).toHaveAttribute("data-actor", "user-1");
+    expect(screen.getByText("Alice")).toBeInTheDocument();
+    // The project is icon + title, NOT a chip.
+    expect(screen.getByTestId("project-icon")).toBeInTheDocument();
+    expect(container.querySelector(".project-chip")).toBeNull();
+  });
+
+  it("never nests a hover card or link inside the peek (#517)", () => {
+    // The avatar already lives inside the peek's HoverCardContent — its own hover
+    // card would stack a popover on a popover, and the peek is read-only.
+    resolvedIssue = {
+      id: "issue-uuid",
+      title: "Fix the login bug",
+      status: "todo",
+      assignee_type: "agent",
+      assignee_id: "agent-9",
+    };
+    render(<InlineReferenceContent content="see #MUL-9 pls" parts={[issueRef(4, 10)]} />);
+
+    const avatar = screen.getByTestId("assignee-avatar");
+    expect(avatar).toHaveAttribute("data-hover-card", "false");
+    expect(avatar).toHaveAttribute("data-profile-link", "false");
   });
 
   it("omits each property independently when absent — never a placeholder (#504)", () => {
@@ -211,7 +292,19 @@ describe("InlineReferenceContent (#463 projector consumer)", () => {
 
     expect(screen.getByText("Todo")).toBeInTheDocument();
     expect(screen.queryByTestId("priority-icon")).toBeNull();
-    expect(screen.queryByTestId("project-chip")).toBeNull();
+    expect(screen.queryByTestId("assignee-avatar")).toBeNull();
+    expect(screen.queryByTestId("project-icon")).toBeNull();
+  });
+
+  it("shows a project the cached list has not got — degrades, never fakes (#517)", () => {
+    // project_id is set but nothing resolves it: render nothing rather than a
+    // guessed name or a lone icon.
+    resolvedIssue = { id: "issue-uuid", title: "Fix the login bug", status: "todo", project_id: "proj-x" };
+    resolvedProject = undefined;
+    render(<InlineReferenceContent content="see #MUL-9 pls" parts={[issueRef(4, 10)]} />);
+
+    expect(screen.getByText("Fix the login bug")).toBeInTheDocument();
+    expect(screen.queryByTestId("project-icon")).toBeNull();
   });
 
   it("ignores an unknown priority instead of crashing the card (#504, Wren's catch)", () => {

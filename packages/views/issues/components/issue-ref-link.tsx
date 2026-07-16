@@ -107,6 +107,18 @@ export function IssueRefLink({
     <AppLink
       href={paths.issueDetail(issue?.id ?? issueId)}
       className="text-brand hover:underline"
+      // Declares "this link is an issue reference and owns its own hover card", so
+      // generic link affordances (the editor's URL preview) stand down instead of
+      // stacking a second popup on the peek — see link-hover-card.tsx.
+      //
+      // This is an ATTRIBUTE, not the old `issue-mention` CLASS, deliberately.
+      // That class carried the suppression AND chip styling
+      // (`.rich-text-editor a.issue-mention { color: inherit; text-decoration: none }`),
+      // so reusing it would drag back the very decoration #520 removed. Behaviour
+      // riding on a styling class is exactly how this broke: #520 dropped the class
+      // as "chip styling", silently taking a behavioural contract with it, and my
+      // test even asserted the class was GONE — green, and wrong.
+      data-issue-ref=""
       data-ref-source={source}
     >
       {text}

@@ -68,9 +68,20 @@ function useLinkHover(containerRef: React.RefObject<HTMLElement | null>, disable
       if (!link) return;
       const href = link.getAttribute("href");
       if (!href || isMentionHref(href)) return;
-      // Issue mention cards render as <a class="issue-mention"> — they
-      // display their own rich info, a URL hover card is redundant.
-      if (link.classList.contains("issue-mention")) return;
+      // A link that carries its own rich hover must not also get a URL preview, or
+      // the reader gets two popups at once (Frank, #520 regression).
+      //
+      // Two markers, because there are two forms:
+      //   - `data-issue-ref` — IssueRefLink, the zero-decoration reading form. This
+      //     is the durable one: it says what the link IS, so it cannot be lost by a
+      //     restyle. #520 broke exactly that way — it dropped `issue-mention` as
+      //     "chip styling" and silently took this suppression with it.
+      //   - `.issue-mention` — the editor's own chip anchors (issue-reference /
+      //     mention-view), which still key off the class.
+      if (
+        link.hasAttribute("data-issue-ref") ||
+        link.classList.contains("issue-mention")
+      ) return;
 
       clearTimeout(hideTimer.current);
       showTimer.current = window.setTimeout(() => {

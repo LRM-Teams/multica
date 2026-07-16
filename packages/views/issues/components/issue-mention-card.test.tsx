@@ -83,7 +83,22 @@ describe("IssueMentionCard (#520 — the unanchored fallback)", () => {
     expect(link).toHaveClass("text-brand");
     // The chip's own class must not appear anywhere in a message body.
     expect(container.querySelector(".issue-chip")).toBeNull();
+    // NOTE: `.issue-mention` is deliberately absent here — inside `.rich-text-editor`
+    // that class forces `color: inherit; text-decoration: none`, i.e. the very
+    // decoration #520 removed. Its OTHER job (suppressing the generic URL hover) is
+    // carried by `data-issue-ref` below. Dropping the class without noticing it did
+    // two jobs is what shipped Frank's double-hover bug.
     expect(container.querySelector(".issue-mention")).toBeNull();
+  });
+
+  it("declares itself an issue ref so generic link affordances stand down", () => {
+    // Frank: hovering LRM-127 popped the peek AND a URL preview. The suppression is
+    // an attribute — it says what the link IS, so a restyle cannot silently take the
+    // behaviour with it (see link-hover-card.test.tsx for the other half).
+    resolvedIssue = { id: "issue-uuid", title: "Fix the login bug", status: "todo" };
+    const { container } = render(<IssueMentionCard issueId="LRM-126" fallbackLabel="LRM-126" />);
+
+    expect(container.querySelector("a[data-issue-ref]")).not.toBeNull();
   });
 
   it("carries the peek card, so the fallback is indistinguishable to a reader (#520)", () => {

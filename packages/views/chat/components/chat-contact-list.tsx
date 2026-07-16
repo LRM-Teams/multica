@@ -2,11 +2,9 @@
 
 import { useMemo } from "react";
 import type { Agent, ChatSession } from "@multica/core/types";
-import { resolveActorDisplayName } from "@multica/core/identity";
-import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
+import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { cn } from "@multica/ui/lib/utils";
-import { initialsOf } from "../../common/initials";
 import { useT, useTimeAgo } from "../../i18n";
 
 interface Contact {
@@ -20,8 +18,11 @@ interface Contact {
 /**
  * Left pane of the agent-DM panel: one contact row per agent the user has a
  * direct-message thread with. DMs are strictly 1:1 human ↔ agent; agent ↔ agent
- * talk happens in channels, never here. Rows are sorted most-recent first and
- * carry an unread dot so agent-initiated DMs surface immediately.
+ * talk happens in channels, never here. Rows are sorted most-recent first.
+ *
+ * Presence belongs on the avatar and uses the shared ActorAvatar projection,
+ * matching the open-chat header. Unread is an inbox signal, so it lives beside
+ * the conversation metadata rather than impersonating a presence dot.
  */
 export function ChatContactList({
   sessions,
@@ -73,7 +74,6 @@ export function ChatContactList({
         <div className="min-h-0 flex-1 overflow-y-auto py-1">
           {contacts.map(({ agent, sessionId, hasUnread, updatedAt }) => {
             const active = agent.id === activeAgentId;
-            const displayName = resolveActorDisplayName(agent, agent.id);
             return (
               <button
                 key={agent.id}
@@ -86,15 +86,12 @@ export function ChatContactList({
               >
                 <div className="relative shrink-0">
                   <ActorAvatar
-                    name={displayName}
-                    initials={initialsOf(displayName)}
-                    avatarUrl={agent.avatar_url}
-                    isAgent
+                    actorType="agent"
+                    actorId={agent.id}
                     size={28}
+                    showStatusDot
+                    profileLink={false}
                   />
-                  {hasUnread && (
-                    <span className="absolute -right-0.5 -top-0.5 size-2.5 rounded-full bg-brand ring-2 ring-sidebar" />
-                  )}
                 </div>
                 <div className="min-w-0 flex-1">
                   <ActorIdentityRow
@@ -104,8 +101,16 @@ export function ChatContactList({
                       hasUnread ? "font-semibold" : "font-normal",
                     )}
                   />
-                  <span className="text-[11px] text-muted-foreground">
+                  <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
                     {timeAgo(updatedAt)}
+                    {hasUnread && (
+                      <span
+                        aria-label={t(($) => $.window.unread)}
+                        title={t(($) => $.window.unread)}
+                        data-testid={`contact-unread-${agent.id}`}
+                        className="size-2 shrink-0 rounded-full bg-brand"
+                      />
+                    )}
                   </span>
                 </div>
               </button>

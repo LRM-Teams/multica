@@ -72,10 +72,12 @@ none · low · medium · high · urgent
 - **编辑器（操作面）= chip 是对的。** 你**正在操作它**（整体删 / 移动 / 光标跳过）→ **那个框是"这是一个原子 token"的功能信号、不是装饰**。（Slack / Linear / Notion 全这么分。）
 - **★ 这不违反"一处概念一个长相"** —— **"编辑中的引用"和"读到的引用"本来就是两个概念**。
   > **写下来免得以后有人当成不一致、又"统一"回去。**
-- **⚠️ `部分可执行`｜owner: @Felix｜`待收口`**（**2026-07-16 10:32 降档 —— 原标 `可执行`，是我标高了**）：**阅读态 projector 的 restricted-import lint**（**边界是阅读态 projector、不是全局禁 `IssueChip`** —— 全局禁会把上面那半自己否掉）+ 阅读态测试。
-  > **⛔ 为什么降档（@Wren 10:32 查出）**：**barrel `issues/components/index.ts` re-export 了 `IssueChip`** → `import { IssueChip } from "../components"` **绕过按 `./issue-chip` 写的 ban**。
-  > **→ 它现在给的是「部分保护 + 完整信心」。而"完整信心"比"没保护"更危险** —— 大家（包括本稿）已经在写「lint 把规矩钉进代码、防回流」了。
-  > **收口方式见 §7.2.1（把 `IssueChip` 从 barrel 摘掉 = 让入口只剩一条）。收口后升 `可执行`。**
+- **✅ `可执行`｜owner: @Felix `已签`｜档位 **①②**（见 §0.2 梯子）｜`15d143eaa`(#639) + #638**
+  - **形态（判据照 @Felix 原话，两半 scope 不同、必须分开写）**：
+    - **`barrel 入口` = 全仓不存在**（`IssueChip` 已从 `issues/components/index.ts` 摘掉 → **编译期拦截**：`has no exported member 'IssueChip'`，**含 apps/***）；
+    - **`深路径 ./issue-chip` = 唯一受控入口**，**仅 `packages/views` 内受 restricted-import lint 约束**（阅读态 projector 边界、**编辑器为显式例外**）；**apps/\* 直接深 import 不在覆盖内 —— 已知边界、非已知洞。**
+  - **⛔ 这条曾被我标高又降档（同日 10:32）**：@Wren 查出 **barrel re-export 可绕过按 `./issue-chip` 写的 ban** → 它当时给的是**「部分保护 + 完整信心」**。**@Felix 摘掉 barrel（选 B）后洞消失 → 恢复 `可执行`。**
+  - **⭐ 为什么 B 而不是"连 barrel 一起禁"**：见 §7.2.1 —— **A = 再列一遍路径（路径会长）；B = 让路只剩一条。** **升档代价 = 0**（barrel re-export 零消费者），**且 lint 例外清单反而更短了**。
 
 ### 3.4 兼容的是路径、不是外观
 > **「兼容路径可以留，但不能长出第二副面孔。」** — @Felix

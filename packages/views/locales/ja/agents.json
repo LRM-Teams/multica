@@ -206,7 +206,8 @@
     "discard_dialog_description": "このタブに保存していない変更があります。今移動すると変更は破棄されます。",
     "discard_keep": "編集を続ける",
     "discard_confirm": "変更を破棄",
-    "memory": "Memory"
+    "memory": "Memory",
+    "config": "設定"
   },
   "create_dialog": {
     "title_create": "エージェントを作成",
@@ -485,7 +486,8 @@
     "reasoning_label": "推論",
     "created_label": "作成日",
     "owner_label": "オーナー",
-    "reasoning_default": "デフォルト"
+    "reasoning_default": "デフォルト",
+    "config_shared_hint": "ワークスペースのどのメンバーもこのグループマネージャーのランタイム設定を変更できます。"
   },
   "live_peek": {
     "current_issue_label": "現在の作業",

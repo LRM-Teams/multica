@@ -58,6 +58,10 @@ type AgentResponse struct {
 	McpConfigRedacted  bool   `json:"mcp_config_redacted"`
 	Visibility         string `json:"visibility"`
 	Status             string `json:"status"`
+	// ManagedRole marks agents the platform manages specially. Empty for
+	// ordinary agents; "group_manager" for a per-group Beckham. The UI keys
+	// the channel-panel config tab (and its any-member editability) off this.
+	ManagedRole        string `json:"managed_role,omitempty"`
 	MaxConcurrentTasks int32  `json:"max_concurrent_tasks"`
 	Model              string `json:"model"`
 	// ThinkingLevel is the runtime-native reasoning/effort token persisted
@@ -202,6 +206,44 @@ func (h *Handler) attachAgentRuntimeNames(ctx context.Context, resps []AgentResp
 	}
 	if err := rows.Err(); err != nil {
 		slog.Warn("failed to iterate agent runtime names", "error", err)
+	}
+	h.attachAgentManagedRoles(ctx, resps)
+}
+
+// attachAgentManagedRoles stamps ManagedRole="group_manager" onto the
+// Beckham agents in each response set. Grouped by workspace so a list only
+// costs one lookup per workspace (there is at most a handful of group
+// managers per workspace). Ordinary agents keep an empty ManagedRole.
+func (h *Handler) attachAgentManagedRoles(ctx context.Context, resps []AgentResponse) {
+	if len(resps) == 0 {
+		return
+	}
+	byWorkspace := map[string][]int{}
+	for i := range resps {
+		ws := strings.TrimSpace(resps[i].WorkspaceID)
+		if ws == "" {
+			continue
+		}
+		byWorkspace[ws] = append(byWorkspace[ws], i)
+	}
+	for ws, idxs := range byWorkspace {
+		wsUUID := parseUUID(ws)
+		if !wsUUID.Valid {
+			continue
+		}
+		managers, err := h.groupManagerAgentIDs(ctx, wsUUID)
+		if err != nil {
+			slog.Warn("failed to load group-manager agent ids", "workspace_id", ws, "error", err)
+			continue
+		}
+		if len(managers) == 0 {
+			continue
+		}
+		for _, idx := range idxs {
+			if managers[resps[idx].ID] {
+				resps[idx].ManagedRole = managedRoleGroupManager
+			}
+		}
 	}
 }
 
@@ -1084,11 +1126,28 @@ func (h *Handler) canManageAgent(w http.ResponseWriter, r *http.Request, agent d
 	}
 	isAdmin := roleAllowed(member.Role, "owner", "admin")
 	isAgentOwner := uuidToString(agent.OwnerID) == requestUserID(r)
+	// Group-manager agents (Beckham) are shared team infrastructure, not owned
+	// by an individual — any workspace member may tune their runtime config.
+	// requireWorkspaceRole above already established the caller is at least a
+	// member of this workspace.
+	if !isAdmin && !isAgentOwner && h.isGroupManagerAgent(r.Context(), agent.ID) {
+		return true
+	}
 	if !isAdmin && !isAgentOwner {
 		writeError(w, http.StatusForbidden, "only the agent owner can manage this agent")
 		return false
 	}
 	return true
+}
+
+// isGroupManagerAgent reports whether the agent is a per-group Beckham. Reads
+// the managed_role column directly (it is not on the sqlc Agent model).
+func (h *Handler) isGroupManagerAgent(ctx context.Context, agentID pgtype.UUID) bool {
+	var managedRole pgtype.Text
+	if err := h.DB.QueryRow(ctx, `SELECT managed_role FROM agent WHERE id = $1`, agentID).Scan(&managedRole); err != nil {
+		return false
+	}
+	return managedRole.Valid && managedRole.String == managedRoleGroupManager
 }
 
 func agentUpdateAffectsEvolutionMatching(req UpdateAgentRequest) bool {

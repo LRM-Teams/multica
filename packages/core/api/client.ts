@@ -29,6 +29,7 @@ import type {
   EvolutionReviewSubmission,
   EvolutionReviewSubmissionStatus,
   WorkspaceMemoryCurationStatus,
+  MemoryCurationRunDetail,
   MemoryCuratorProfile,
   UpdateMemoryCuratorProfileRequest,
   StartMemoryCurationRunRequest,
@@ -265,12 +266,14 @@ import {
   EMPTY_EVOLUTION_REVIEW_SUBMISSION_LIST,
   EMPTY_UPDATE_AGENT_FILE_CONTENT_RESPONSE,
   EMPTY_WORKSPACE_MEMORY_CURATION_STATUS,
+  EMPTY_MEMORY_CURATION_RUN_DETAIL,
   EMPTY_MEMORY_CURATOR_PROFILE,
   EvolutionMetricsSchema,
   EvolutionReviewSubmissionListSchema,
   EvolutionReviewSubmissionSchema,
   UpdateAgentFileContentResponseSchema,
   WorkspaceMemoryCurationStatusSchema,
+  MemoryCurationRunDetailSchema,
   MemoryCuratorProfileSchema,
   StartMemoryCurationRunResponseSchema,
 } from "./schemas";
@@ -1934,6 +1937,15 @@ export class ApiClient {
     );
     return parseWithFallback(raw, MemoryCuratorProfileSchema, EMPTY_MEMORY_CURATOR_PROFILE, {
       endpoint: "GET /api/workspaces/{id}/memory-curation/profile",
+    });
+  }
+
+  async getMemoryCurationRun(workspaceId: string, runId: string): Promise<MemoryCurationRunDetail> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/memory-curation/runs/${encodeURIComponent(runId)}`,
+    );
+    return parseWithFallback(raw, MemoryCurationRunDetailSchema, EMPTY_MEMORY_CURATION_RUN_DETAIL, {
+      endpoint: "GET /api/workspaces/{id}/memory-curation/runs/{runId}",
     });
   }
 

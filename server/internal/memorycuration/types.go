@@ -92,8 +92,18 @@ type Result struct {
 	EvidenceCollected      int              `json:"evidence_collected"`
 	Timezone               string           `json:"timezone,omitempty"`
 	Errors                 []AgentError     `json:"errors,omitempty"`
+	Events                 []RunEvent       `json:"events,omitempty"`
 	ReviewTraces           []L3ReviewTrace  `json:"review_traces,omitempty"`
 	AgentResults           []AgentRunResult `json:"agent_results,omitempty"`
+}
+
+// RunEvent records coarse curation progress so UI can explain where a run spent time.
+type RunEvent struct {
+	Key       string `json:"key"`
+	AgentID   string `json:"agent_id,omitempty"`
+	Status    string `json:"status"`
+	Message   string `json:"message,omitempty"`
+	CreatedAt string `json:"created_at"`
 }
 
 type AgentError struct {

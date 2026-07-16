@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -27,21 +29,79 @@ type startMemoryCurationRequest struct {
 }
 
 type memoryCurationRunResponse struct {
-	ID          string          `json:"id"`
-	WorkspaceID string          `json:"workspace_id"`
-	AgentID     *string         `json:"agent_id,omitempty"`
-	Stage       string          `json:"stage"`
-	TriggerKind string          `json:"trigger_kind"`
-	Status      string          `json:"status"`
-	DateFrom    *string         `json:"date_from,omitempty"`
-	DateTo      *string         `json:"date_to,omitempty"`
-	DryRun      bool            `json:"dry_run"`
-	Force       bool            `json:"force"`
-	Stats       json.RawMessage `json:"stats"`
-	Error       string          `json:"error,omitempty"`
-	CreatedAt   string          `json:"created_at"`
-	StartedAt   *string         `json:"started_at,omitempty"`
-	FinishedAt  *string         `json:"finished_at,omitempty"`
+	ID                  string                           `json:"id"`
+	WorkspaceID         string                           `json:"workspace_id"`
+	AgentID             *string                          `json:"agent_id,omitempty"`
+	Stage               string                           `json:"stage"`
+	TriggerKind         string                           `json:"trigger_kind"`
+	Status              string                           `json:"status"`
+	DateFrom            *string                          `json:"date_from,omitempty"`
+	DateTo              *string                          `json:"date_to,omitempty"`
+	DryRun              bool                             `json:"dry_run"`
+	Force               bool                             `json:"force"`
+	Stats               json.RawMessage                  `json:"stats"`
+	StatsSummary        memoryCurationRunStatsResponse   `json:"stats_summary"`
+	Error               string                           `json:"error,omitempty"`
+	Diagnostics         []memoryCurationRunDiagnostic    `json:"diagnostics,omitempty"`
+	RuntimeID           string                           `json:"runtime_id,omitempty"`
+	RuntimeName         string                           `json:"runtime_name,omitempty"`
+	RuntimeDeviceInfo   string                           `json:"runtime_device_info,omitempty"`
+	CuratorAgentID      string                           `json:"curator_agent_id,omitempty"`
+	CuratorAgentName    string                           `json:"curator_agent_name,omitempty"`
+	CuratorModel        string                           `json:"curator_model,omitempty"`
+	CuratorMode         string                           `json:"curator_mode,omitempty"`
+	ConfidenceThreshold float64                          `json:"confidence_threshold,omitempty"`
+	TargetAgentIDs      []string                         `json:"target_agent_ids"`
+	TargetAgents        []memoryCurationTargetAgent      `json:"target_agents"`
+	Timeline            []memoryCurationRunTimelineItem  `json:"timeline"`
+	AgentResults        []memoryCurationAgentRunResponse `json:"agent_results"`
+	Artifacts           []memoryCurationRunArtifact      `json:"artifacts"`
+	CreatedAt           string                           `json:"created_at"`
+	StartedAt           *string                          `json:"started_at,omitempty"`
+	FinishedAt          *string                          `json:"finished_at,omitempty"`
+}
+
+type memoryCurationRunDiagnostic struct {
+	Severity string `json:"severity"`
+	Code     string `json:"code"`
+	Message  string `json:"message"`
+	Action   string `json:"action,omitempty"`
+}
+
+type memoryCurationTargetAgent struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type memoryCurationRunTimelineItem struct {
+	Key       string `json:"key"`
+	Label     string `json:"label"`
+	Status    string `json:"status"`
+	Timestamp string `json:"timestamp,omitempty"`
+	Detail    string `json:"detail,omitempty"`
+}
+
+type memoryCurationAgentRunResponse struct {
+	WorkspaceID           string `json:"workspace_id"`
+	AgentID               string `json:"agent_id"`
+	AgentName             string `json:"agent_name,omitempty"`
+	Root                  string `json:"root"`
+	Changed               bool   `json:"changed"`
+	DailyFilesWritten     int    `json:"daily_files_written"`
+	ReviewCandidatesAdded int    `json:"review_candidates_added"`
+	SkillCandidatesAdded  int    `json:"skill_candidates_added"`
+	EvidenceCollected     int    `json:"evidence_collected"`
+	ConflictsFound        int    `json:"conflicts_found"`
+	Error                 string `json:"error,omitempty"`
+	CuratorOutputExcerpt  string `json:"curator_output_excerpt,omitempty"`
+}
+
+type memoryCurationRunArtifact struct {
+	Kind    string `json:"kind"`
+	Title   string `json:"title"`
+	AgentID string `json:"agent_id,omitempty"`
+	Detail  string `json:"detail,omitempty"`
+	Content string `json:"content,omitempty"`
 }
 
 type memoryCurationRunStatsResponse struct {
@@ -72,6 +132,7 @@ type memoryCurationStageStatusResponse struct {
 	TriggerKind string                         `json:"trigger_kind"`
 	Status      string                         `json:"status"`
 	Stats       memoryCurationRunStatsResponse `json:"stats"`
+	Error       string                         `json:"error,omitempty"`
 	CreatedAt   string                         `json:"created_at"`
 	StartedAt   *string                        `json:"started_at,omitempty"`
 	FinishedAt  *string                        `json:"finished_at,omitempty"`
@@ -258,7 +319,7 @@ func (h *Handler) GetWorkspaceMemoryCurationStatus(w http.ResponseWriter, r *htt
 
 	rows, err := h.DB.Query(r.Context(), `
 		SELECT DISTINCT ON (stage)
-		       id::text, stage, trigger_kind, status, stats, created_at, started_at, finished_at
+		       id::text, stage, trigger_kind, status, stats, error, created_at, started_at, finished_at
 		  FROM memory_curation_run
 		 WHERE workspace_id = $1
 		   AND stage IN ('agent_self_review', 'team_curation', 'all')
@@ -275,7 +336,7 @@ func (h *Handler) GetWorkspaceMemoryCurationStatus(w http.ResponseWriter, r *htt
 		var stats []byte
 		var createdAt time.Time
 		var startedAt, finishedAt *time.Time
-		if err := rows.Scan(&stage.ID, &stage.Stage, &stage.TriggerKind, &stage.Status, &stats, &createdAt, &startedAt, &finishedAt); err != nil {
+		if err := rows.Scan(&stage.ID, &stage.Stage, &stage.TriggerKind, &stage.Status, &stats, &stage.Error, &createdAt, &startedAt, &finishedAt); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read memory curation stage")
 			return
 		}
@@ -375,15 +436,23 @@ func (h *Handler) loadMemoryCurationRun(r *http.Request, workspaceID string, run
 	var createdAt time.Time
 	var startedAt, finishedAt *time.Time
 	err := h.DB.QueryRow(r.Context(), `
-		SELECT id::text, workspace_id::text, COALESCE(agent_id::text, ''), stage, trigger_kind, status,
-		       COALESCE(date_from::text, ''), COALESCE(date_to::text, ''), dry_run, force, stats, error, created_at, started_at, finished_at
-		  FROM memory_curation_run
-		 WHERE workspace_id = $1 AND id = $2
-	`, workspaceID, runID).Scan(&resp.ID, &resp.WorkspaceID, &agentID, &resp.Stage, &resp.TriggerKind, &resp.Status, &dateFrom, &dateTo, &resp.DryRun, &resp.Force, &stats, &resp.Error, &createdAt, &startedAt, &finishedAt)
+		SELECT r.id::text, r.workspace_id::text, COALESCE(r.agent_id::text, ''), r.stage, r.trigger_kind, r.status,
+		       COALESCE(r.date_from::text, ''), COALESCE(r.date_to::text, ''), r.dry_run, r.force, r.stats, r.error,
+		       COALESCE(r.runtime_id::text, ''), COALESCE(rt.name, ''), COALESCE(rt.device_info, ''),
+		       COALESCE(r.curator_agent_id::text, ''), COALESCE(curator.name, ''), COALESCE(r.curator_model, ''),
+		       COALESCE(r.curator_mode, ''), r.confidence_threshold,
+		       COALESCE((SELECT array_agg(t.id::text ORDER BY t.id::text) FROM unnest(r.target_agent_ids) AS t(id)), '{}'::text[]),
+		       r.created_at, r.started_at, r.finished_at
+		  FROM memory_curation_run r
+		  LEFT JOIN agent_runtime rt ON rt.id = r.runtime_id
+		  LEFT JOIN agent curator ON curator.id = r.curator_agent_id
+		 WHERE r.workspace_id = $1 AND r.id = $2
+	`, workspaceID, runID).Scan(&resp.ID, &resp.WorkspaceID, &agentID, &resp.Stage, &resp.TriggerKind, &resp.Status, &dateFrom, &dateTo, &resp.DryRun, &resp.Force, &stats, &resp.Error, &resp.RuntimeID, &resp.RuntimeName, &resp.RuntimeDeviceInfo, &resp.CuratorAgentID, &resp.CuratorAgentName, &resp.CuratorModel, &resp.CuratorMode, &resp.ConfidenceThreshold, &resp.TargetAgentIDs, &createdAt, &startedAt, &finishedAt)
 	if err != nil {
 		return resp, err
 	}
 	resp.Stats = json.RawMessage(stats)
+	resp.StatsSummary = publicMemoryCurationStats(stats)
 	resp.CreatedAt = createdAt.UTC().Format(time.RFC3339)
 	if agentID != "" {
 		resp.AgentID = &agentID
@@ -402,7 +471,178 @@ func (h *Handler) loadMemoryCurationRun(r *http.Request, workspaceID string, run
 		s := finishedAt.UTC().Format(time.RFC3339)
 		resp.FinishedAt = &s
 	}
+	agentNames, _ := h.memoryCurationAgentNames(r.Context(), workspaceID, resp.TargetAgentIDs)
+	for _, id := range resp.TargetAgentIDs {
+		resp.TargetAgents = append(resp.TargetAgents, memoryCurationTargetAgent{ID: id, Name: agentNames[id]})
+	}
+	resp.Diagnostics = memoryCurationDiagnostics(resp.Error)
+	resp.Timeline = buildMemoryCurationTimeline(resp, stats, createdAt, startedAt, finishedAt)
+	resp.AgentResults, resp.Artifacts = buildMemoryCurationArtifacts(stats, agentNames)
 	return resp, nil
+}
+
+func (h *Handler) memoryCurationAgentNames(ctx context.Context, workspaceID string, agentIDs []string) (map[string]string, error) {
+	out := map[string]string{}
+	if len(agentIDs) == 0 {
+		return out, nil
+	}
+	rows, err := h.DB.Query(ctx, `
+		SELECT id::text, name
+		  FROM agent
+		 WHERE workspace_id = $1 AND id::text = ANY($2)
+	`, workspaceID, agentIDs)
+	if err != nil {
+		return out, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return out, err
+		}
+		out[id] = name
+	}
+	return out, rows.Err()
+}
+
+func memoryCurationDiagnostics(errText string) []memoryCurationRunDiagnostic {
+	errText = strings.TrimSpace(errText)
+	if errText == "" {
+		return nil
+	}
+	if strings.Contains(errText, "unknown memory curation stage") {
+		return []memoryCurationRunDiagnostic{{
+			Severity: "error",
+			Code:     "daemon_stage_unsupported",
+			Message:  "The selected daemon does not understand the curation stage sent by the server.",
+			Action:   "Update or rebuild the multica daemon, then restart it and rerun curation.",
+		}}
+	}
+	if strings.Contains(strings.ToLower(errText), "rate limit") || strings.Contains(errText, "429") {
+		return []memoryCurationRunDiagnostic{{Severity: "warning", Code: "provider_rate_limit", Message: "The curator model provider rate-limited the run.", Action: "Retry after the quota window resets or choose another model/runtime."}}
+	}
+	return []memoryCurationRunDiagnostic{{Severity: "error", Code: "run_failed", Message: errText}}
+}
+
+func buildMemoryCurationTimeline(resp memoryCurationRunResponse, raw []byte, createdAt time.Time, startedAt, finishedAt *time.Time) []memoryCurationRunTimelineItem {
+	created := createdAt.UTC().Format(time.RFC3339)
+	items := []memoryCurationRunTimelineItem{{Key: "queued", Label: "Queued", Status: "done", Timestamp: created, Detail: resp.TriggerKind}}
+	var result memorycuration.Result
+	if err := json.Unmarshal(raw, &result); err == nil && len(result.Events) > 0 {
+		if startedAt != nil {
+			items = append(items, memoryCurationRunTimelineItem{Key: "claimed", Label: "Claimed by runtime", Status: "done", Timestamp: startedAt.UTC().Format(time.RFC3339), Detail: resp.RuntimeName})
+		}
+		for _, ev := range result.Events {
+			items = append(items, memoryCurationRunTimelineItem{Key: ev.Key, Label: curationEventLabel(ev.Key), Status: ev.Status, Timestamp: ev.CreatedAt, Detail: ev.Message})
+		}
+		if finishedAt != nil {
+			finalStatus := "done"
+			if resp.Status == "failed" || resp.Status == "invalid_config" {
+				finalStatus = "failed"
+			}
+			items = append(items, memoryCurationRunTimelineItem{Key: "completed", Label: "Completed", Status: finalStatus, Timestamp: finishedAt.UTC().Format(time.RFC3339), Detail: resp.Error})
+		}
+		return items
+	}
+	if startedAt == nil {
+		items = append(items, memoryCurationRunTimelineItem{Key: "claimed", Label: "Claimed by runtime", Status: "pending", Detail: resp.RuntimeName})
+		return items
+	}
+	started := startedAt.UTC().Format(time.RFC3339)
+	items = append(items,
+		memoryCurationRunTimelineItem{Key: "claimed", Label: "Claimed by runtime", Status: "done", Timestamp: started, Detail: resp.RuntimeName},
+		memoryCurationRunTimelineItem{Key: "validated_profile", Label: "Validated profile", Status: "done", Timestamp: started, Detail: resp.CuratorMode},
+		memoryCurationRunTimelineItem{Key: "resolved_targets", Label: "Resolved target agents", Status: "done", Timestamp: started, Detail: strings.Join(resp.TargetAgentIDs, ", ")},
+	)
+	if resp.StatsSummary.EvidenceCollected > 0 {
+		items = append(items, memoryCurationRunTimelineItem{Key: "collected_evidence", Label: "Collected DB evidence", Status: "done", Timestamp: started, Detail: plural(resp.StatsSummary.EvidenceCollected, "evidence item")})
+	} else {
+		items = append(items, memoryCurationRunTimelineItem{Key: "collected_evidence", Label: "Collected DB evidence", Status: "skipped", Timestamp: started, Detail: "0 evidence items"})
+	}
+	if resp.StatsSummary.AgentsScanned > 0 {
+		items = append(items, memoryCurationRunTimelineItem{Key: "read_local_files", Label: "Read local memory files", Status: "done", Timestamp: started, Detail: plural(resp.StatsSummary.AgentsScanned, "agent")})
+	}
+	invokedStatus := "done"
+	if resp.Error != "" && resp.StatsSummary.AgentsScanned == 0 {
+		invokedStatus = "failed"
+	}
+	items = append(items, memoryCurationRunTimelineItem{Key: "invoked_curator", Label: "Invoked curator agent", Status: invokedStatus, Timestamp: started, Detail: resp.CuratorAgentName})
+	if finishedAt != nil {
+		finished := finishedAt.UTC().Format(time.RFC3339)
+		finalStatus := "done"
+		if resp.Status == "failed" || resp.Status == "invalid_config" {
+			finalStatus = "failed"
+		}
+		items = append(items, memoryCurationRunTimelineItem{Key: "completed", Label: "Completed", Status: finalStatus, Timestamp: finished, Detail: resp.Error})
+	}
+	return items
+}
+
+func curationEventLabel(key string) string {
+	switch key {
+	case "validated_profile":
+		return "Validated profile"
+	case "resolved_targets":
+		return "Resolved target agents"
+	case "read_local_files":
+		return "Read local memory files"
+	case "invoked_curator":
+		return "Invoked curator agent"
+	case "parsed_output":
+		return "Parsed curator output"
+	case "persisted_candidates":
+		return "Persisted candidates"
+	default:
+		return key
+	}
+}
+
+func buildMemoryCurationArtifacts(raw []byte, agentNames map[string]string) ([]memoryCurationAgentRunResponse, []memoryCurationRunArtifact) {
+	var result memorycuration.Result
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, nil
+	}
+	errs := map[string]string{}
+	for _, item := range result.Errors {
+		errs[item.AgentID] = item.Error
+	}
+	agentResults := make([]memoryCurationAgentRunResponse, 0, len(result.AgentResults))
+	artifacts := []memoryCurationRunArtifact{}
+	for _, ar := range result.AgentResults {
+		excerpt := truncateForAPI(strings.TrimSpace(ar.CuratorOutput), 1200)
+		agentResults = append(agentResults, memoryCurationAgentRunResponse{
+			WorkspaceID: ar.WorkspaceID, AgentID: ar.AgentID, AgentName: agentNames[ar.AgentID], Root: ar.Root, Changed: ar.Changed,
+			DailyFilesWritten: ar.DailyFilesWritten, ReviewCandidatesAdded: ar.ReviewCandidatesAdded, SkillCandidatesAdded: ar.SkillCandidatesAdded,
+			EvidenceCollected: ar.EvidenceCollected, ConflictsFound: ar.ConflictsFound, Error: errs[ar.AgentID], CuratorOutputExcerpt: excerpt,
+		})
+		if excerpt != "" {
+			artifacts = append(artifacts, memoryCurationRunArtifact{Kind: "curator_output", Title: "Curator raw output", AgentID: ar.AgentID, Content: excerpt})
+		}
+		if ar.DailyFilesWritten > 0 {
+			artifacts = append(artifacts, memoryCurationRunArtifact{Kind: "daily", Title: "Daily memory file", AgentID: ar.AgentID, Detail: plural(ar.DailyFilesWritten, "file written")})
+		}
+		if ar.ReviewCandidatesAdded > 0 || ar.SkillCandidatesAdded > 0 {
+			artifacts = append(artifacts, memoryCurationRunArtifact{Kind: "proposal", Title: "Review/proposal candidates", AgentID: ar.AgentID, Detail: plural(ar.ReviewCandidatesAdded, "memory candidate") + ", " + plural(ar.SkillCandidatesAdded, "skill candidate")})
+		}
+	}
+	if result.SharedCandidatesAdded > 0 {
+		artifacts = append(artifacts, memoryCurationRunArtifact{Kind: "team_knowledge", Title: "Team knowledge candidates", Detail: plural(result.SharedCandidatesAdded, "item")})
+	}
+	return agentResults, artifacts
+}
+
+func plural(n int, unit string) string {
+	if n == 1 {
+		return "1 " + unit
+	}
+	return strconv.Itoa(n) + " " + unit + "s"
+}
+
+func truncateForAPI(v string, max int) string {
+	if max <= 0 || len(v) <= max {
+		return v
+	}
+	return v[:max] + "..."
 }
 
 func parseUniqueAgentIDsOrBadRequest(w http.ResponseWriter, rawIDs []string) ([]string, bool) {

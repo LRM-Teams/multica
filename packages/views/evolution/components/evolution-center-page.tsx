@@ -36,6 +36,7 @@ import {
   evolutionKeys,
   evolutionMetricsOptions,
   evolutionReviewSubmissionListOptions,
+  memoryCurationRunOptions,
   memoryCuratorProfileOptions,
   workspaceMemoryCurationStatusOptions,
 } from "@multica/core/evolution";
@@ -46,7 +47,10 @@ import type {
   DashboardUsageByAgent,
   EvolutionReviewSubmission,
   EvolutionReviewSubmissionStatus,
+  EvolutionDailyMetric,
+  EvolutionTaskEfficiency,
   EvolutionUnitMetric,
+  MemoryCurationRunDetail,
   MemoryCurationStageStatus,
   MemoryCuratorMode,
   MemoryCuratorProfile,
@@ -201,6 +205,28 @@ const COPY = {
   queueRun: "Queue run",
   runQueued: "Curation run queued",
   selfReviewLabel: "Agent self-review",
+  curationRunSelectHint: "Select a curation run to inspect runtime, timeline, per-agent results, and artifacts.",
+  curationRunDetail: "Curation run detail",
+  diagnosticAction: "Action",
+  noneRecorded: "None recorded",
+  timeline: "Timeline",
+  perAgentResults: "Per-agent results",
+  noPerAgentDetails: "No per-agent details were reported by this daemon.",
+  artifacts: "Artifacts",
+  evolutionOutputTrend: "Evolution output trend",
+  evolutionOutputTrendHint: "Daily memory/skill candidates, promotions, and lifecycle changes.",
+  noTrendData: "No trend data yet.",
+  taskEfficiency: "Task efficiency",
+  taskEfficiencyHint: "Issue-level duration and token averages with evolved-memory usage attribution.",
+  statusError: "error",
+  statusChanged: "changed",
+  statusUnchanged: "unchanged",
+  avgDuration: "Avg duration",
+  inputTokensShort: "Input tok",
+  outputTokensShort: "Output tok",
+  withLearnedUnits: "With learned units",
+  avgUnitsUsed: "Avg units used",
+  skills: "Skills",
 };
 
 const STATUSES = [
@@ -257,6 +283,13 @@ function money(value: number): string {
 function pct(value: number): string {
   if (!Number.isFinite(value)) return "0%";
   return `${Math.round(value * 100)}%`;
+}
+
+function compactNumber(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return "0";
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+  return String(Math.round(value));
 }
 
 function shortId(value: string | null | undefined): string {
@@ -386,6 +419,7 @@ export function EvolutionCenterPage() {
   const paths = useWorkspacePaths();
   const { userId } = useCurrentMember(wsId);
   const [learningFilter, setLearningFilter] = useState<"all" | "memory" | "skill">("all");
+  const [selectedCurationRunId, setSelectedCurationRunId] = useState("");
 
   const { data: agentsData, isLoading: agentsLoading } = useQuery(agentListOptions(wsId));
   const { data: runtimesData } = useQuery(runtimeListOptions(wsId));
@@ -402,6 +436,7 @@ export function EvolutionCenterPage() {
     isLoading: curationStatusLoading,
     isError: curationStatusUnavailable,
   } = useQuery(workspaceMemoryCurationStatusOptions(wsId));
+  const { data: selectedCurationRun } = useQuery(memoryCurationRunOptions(wsId, selectedCurationRunId));
 
   const agents = agentsData ?? EMPTY_AGENTS;
   const runtimes = runtimesData ?? [];
@@ -412,6 +447,8 @@ export function EvolutionCenterPage() {
   const promotedSubmissions = promotedData ?? EMPTY_SUBMISSIONS;
   const rejectedSubmissions = rejectedData ?? EMPTY_SUBMISSIONS;
   const unitMetrics = metricsData?.unit_metrics ?? EMPTY_UNIT_METRICS;
+  const dailyMetrics = metricsData?.daily_metrics ?? [];
+  const taskEfficiency = metricsData?.task_efficiency;
   const submissionsByStatus = useMemo(
     () => ({
       needs_review: needsReviewSubmissions,
@@ -580,9 +617,15 @@ export function EvolutionCenterPage() {
                   status={curationStatus}
                   loading={curationStatusLoading}
                   unavailable={curationStatusUnavailable}
+                  onSelectRun={setSelectedCurationRunId}
                 />
+                <CurationRunDetailCard run={selectedCurationRun} selectedRunId={selectedCurationRunId} />
               </div>
-              <UnitMetricsCard metrics={unitMetrics} />
+              <div className="grid gap-4">
+                <EvolutionTrendCard dailyMetrics={dailyMetrics} />
+                <TaskEfficiencyCard efficiency={taskEfficiency} />
+                <UnitMetricsCard metrics={unitMetrics} />
+              </div>
             </TabsContent>
 
             <TabsContent value="ops" className="grid gap-4 lg:grid-cols-3">
@@ -1038,11 +1081,13 @@ function MemoryCurationCard({
   status,
   loading,
   unavailable,
+  onSelectRun,
 }: {
   submissions: EvolutionReviewSubmission[];
   status: WorkspaceMemoryCurationStatus | undefined;
   loading: boolean;
   unavailable: boolean;
+  onSelectRun: (runId: string) => void;
 }) {
   const memorySubmissions = submissions.filter((item) => isMemoryLikeUnitType(item.unit_type));
   const sharedCandidates = memorySubmissions.filter((item) => item.status === "candidate" || item.status === "needs_review").length;
@@ -1074,7 +1119,7 @@ function MemoryCurationCard({
             : `${run?.stats.shared_candidates_added ?? 0} team items · ${run?.stats.conflicts_found ?? 0} conflicts`;
           const isRunning = run?.status === "running" || run?.status === "queued";
           return (
-            <div key={stageName} className={cn("relative flex items-center gap-3 overflow-hidden rounded-2xl border bg-muted/20 p-3", isRunning && "border-brand/40 bg-brand/5")}>
+            <button key={stageName} type="button" onClick={() => run?.id && onSelectRun(run.id)} className={cn("relative flex w-full items-center gap-3 overflow-hidden rounded-2xl border bg-muted/20 p-3 text-left transition-colors hover:border-brand/40", isRunning && "border-brand/40 bg-brand/5")}>
               {isRunning && <div className="absolute inset-y-0 left-0 w-1 animate-pulse bg-brand" />}
               <div className={cn("flex h-10 w-10 items-center justify-center rounded-full text-xs font-semibold", run ? "bg-foreground text-background" : "bg-muted text-muted-foreground", isRunning && "ring-4 ring-brand/15")}>{stageLabel}</div>
               <div className="min-w-0 flex-1">
@@ -1084,11 +1129,157 @@ function MemoryCurationCard({
                 </div>
                 <div className="mt-0.5 text-xs text-muted-foreground">{time} {COPY.beijingTime} {"·"} {detail}</div>
                 <div className="mt-1 text-[11px] text-muted-foreground">{run ? formatRunTime(run.finished_at ?? run.created_at) : unavailable ? COPY.unavailable : COPY.notRun}{duration ? ` · ${duration}` : ""}</div>
+                {run?.error && <div className="mt-1 line-clamp-2 text-[11px] text-destructive">{run.error}</div>}
               </div>
               <Badge variant={run?.status === "failed" ? "destructive" : isRunning ? "default" : run ? "secondary" : "outline"} className={cn(isRunning && "animate-pulse")}>{unavailable && !run ? COPY.unavailable : curationStatusLabel(run?.status)}</Badge>
-            </div>
+            </button>
           );
         })}
+      </CardContent>
+    </Card>
+  );
+}
+
+function CurationRunDetailCard({ run, selectedRunId }: { run: MemoryCurationRunDetail | undefined; selectedRunId: string }) {
+  if (!selectedRunId) {
+    return <Card className="bg-background/85 backdrop-blur"><CardContent className="pt-6"><EmptyState text={COPY.curationRunSelectHint} /></CardContent></Card>;
+  }
+  if (!run || !run.id) {
+    return <Card className="bg-background/85 backdrop-blur"><CardContent className="pt-6"><Skeleton className="h-32 rounded-2xl" /></CardContent></Card>;
+  }
+  return (
+    <Card className="bg-background/85 backdrop-blur">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2"><Activity className="h-4 w-4 text-brand" />{COPY.curationRunDetail}</CardTitle>
+        <p className="text-xs text-muted-foreground">{run.id}</p>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid gap-2 sm:grid-cols-2">
+          <MiniStat label="Stage" value={curationStageLabel(run.stage)} />
+          <MiniStat label="Status" value={curationStatusLabel(run.status)} />
+          <MiniStat label="Runtime" value={run.runtime_name || shortId(run.runtime_id)} />
+          <MiniStat label="Curator" value={run.curator_agent_name || shortId(run.curator_agent_id)} />
+          <MiniStat label="Mode" value={run.curator_mode || "-"} />
+          <MiniStat label="Threshold" value={run.confidence_threshold == null ? "-" : String(run.confidence_threshold)} />
+        </div>
+        {run.error && <div className="rounded-2xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{run.error}</div>}
+        {run.diagnostics.length > 0 && (
+          <div className="space-y-2">
+            {run.diagnostics.map((item) => (
+              <div key={`${item.code}:${item.message}`} className="rounded-2xl border bg-muted/25 p-3 text-sm">
+                <div className="font-medium">{item.message}</div>
+                {item.action && <div className="mt-1 text-xs text-muted-foreground">{COPY.diagnosticAction}: {item.action}</div>}
+              </div>
+            ))}
+          </div>
+        )}
+        <div>
+          <div className="mb-2 text-sm font-medium">{COPY.targetAgents}</div>
+          <div className="flex flex-wrap gap-2">
+            {run.target_agents.length === 0 ? <Badge variant="outline">{COPY.noneRecorded}</Badge> : run.target_agents.map((agent) => <Badge key={agent.id} variant="secondary">{agent.name || shortId(agent.id)}</Badge>)}
+          </div>
+        </div>
+        <div>
+          <div className="mb-2 text-sm font-medium">{COPY.timeline}</div>
+          <div className="space-y-2">
+            {run.timeline.map((item) => (
+              <div key={item.key} className="flex items-start gap-3 rounded-2xl border bg-muted/20 p-3">
+                <Badge variant={item.status === "failed" ? "destructive" : item.status === "done" ? "secondary" : "outline"}>{item.status}</Badge>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium">{item.label}</div>
+                  <div className="mt-0.5 text-xs text-muted-foreground">{item.timestamp ? formatRunTime(item.timestamp) : "-"}{item.detail ? ` · ${item.detail}` : ""}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div>
+          <div className="mb-2 text-sm font-medium">{COPY.perAgentResults}</div>
+          <div className="space-y-2">
+            {run.agent_results.length === 0 ? <EmptyState text={COPY.noPerAgentDetails} /> : run.agent_results.map((agent) => (
+              <div key={`${agent.agent_id}:${agent.root}`} className="rounded-2xl border bg-card/70 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="font-medium">{agent.agent_name || shortId(agent.agent_id)}</div>
+                  <Badge variant={agent.error ? "destructive" : agent.changed ? "secondary" : "outline"}>{agent.error ? COPY.statusError : agent.changed ? COPY.statusChanged : COPY.statusUnchanged}</Badge>
+                </div>
+                <div className="mt-1 truncate text-xs text-muted-foreground">{agent.root}</div>
+                <div className="mt-3 grid grid-cols-3 gap-2">
+                  <MiniStat label="Evidence" value={String(agent.evidence_collected)} />
+                  <MiniStat label="Memory" value={String(agent.review_candidates_added)} />
+                  <MiniStat label={COPY.skills} value={String(agent.skill_candidates_added)} />
+                </div>
+                {agent.error && <div className="mt-2 text-xs text-destructive">{agent.error}</div>}
+                {agent.curator_output_excerpt && <pre className="mt-3 max-h-40 overflow-auto rounded-xl bg-muted p-3 text-xs text-muted-foreground">{agent.curator_output_excerpt}</pre>}
+              </div>
+            ))}
+          </div>
+        </div>
+        {run.artifacts.length > 0 && (
+          <div>
+            <div className="mb-2 text-sm font-medium">{COPY.artifacts}</div>
+            <div className="space-y-2">
+              {run.artifacts.map((artifact, index) => (
+                <div key={`${artifact.kind}:${artifact.agent_id ?? "team"}:${index}`} className="rounded-2xl border bg-muted/20 p-3 text-sm">
+                  <div className="flex flex-wrap items-center gap-2"><Badge variant="outline">{artifact.kind}</Badge><span className="font-medium">{artifact.title}</span></div>
+                  {artifact.detail && <div className="mt-1 text-xs text-muted-foreground">{artifact.detail}</div>}
+                  {artifact.content && <pre className="mt-3 max-h-40 overflow-auto rounded-xl bg-background p-3 text-xs text-muted-foreground">{artifact.content}</pre>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function EvolutionTrendCard({ dailyMetrics }: { dailyMetrics: EvolutionDailyMetric[] }) {
+  const recent = dailyMetrics.slice(-14);
+  const maxValue = Math.max(1, ...recent.map((item) => item.memory_candidates + item.skill_candidates + item.promoted_memory + item.promoted_skill));
+  const totals = dailyMetrics.reduce((acc, item) => ({
+    memory: acc.memory + item.memory_candidates,
+    skill: acc.skill + item.skill_candidates,
+    promoted: acc.promoted + item.promoted_memory + item.promoted_skill,
+    archived: acc.archived + item.archived_or_deprecated,
+  }), { memory: 0, skill: 0, promoted: 0, archived: 0 });
+  return (
+    <Card className="bg-background/85 backdrop-blur">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2"><TrendingUp className="h-4 w-4 text-emerald-500" />{COPY.evolutionOutputTrend}</CardTitle>
+        <p className="text-sm text-muted-foreground">{COPY.evolutionOutputTrendHint}</p>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid grid-cols-4 gap-2">
+          <MiniStat label="Memory" value={String(totals.memory)} />
+          <MiniStat label="Skills" value={String(totals.skill)} />
+          <MiniStat label="Promoted" value={String(totals.promoted)} />
+          <MiniStat label="Archived" value={String(totals.archived)} />
+        </div>
+        <div className="flex h-36 items-end gap-1 rounded-2xl border bg-muted/20 p-3">
+          {recent.length === 0 ? <EmptyState text={COPY.noTrendData} /> : recent.map((item) => {
+            const total = item.memory_candidates + item.skill_candidates + item.promoted_memory + item.promoted_skill;
+            return <div key={item.date} className="flex min-w-0 flex-1 flex-col items-center gap-1"><div className="w-full rounded-t bg-brand/70" style={{ height: `${Math.max(4, (total / maxValue) * 110)}px` }} title={`${item.date}: ${total}`} /><div className="w-full truncate text-center text-[10px] text-muted-foreground">{item.date.slice(5)}</div></div>;
+          })}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function TaskEfficiencyCard({ efficiency }: { efficiency: EvolutionTaskEfficiency | undefined }) {
+  return (
+    <Card className="bg-background/85 backdrop-blur">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2"><CircleDollarSign className="h-4 w-4 text-amber-500" />{COPY.taskEfficiency}</CardTitle>
+        <p className="text-sm text-muted-foreground">{COPY.taskEfficiencyHint}</p>
+      </CardHeader>
+      <CardContent className="grid grid-cols-2 gap-2">
+        <MiniStat label="Issues" value={String(efficiency?.issue_count ?? 0)} />
+        <MiniStat label={COPY.avgDuration} value={formatDuration(efficiency?.average_duration_seconds ?? 0, "<1s")} />
+        <MiniStat label={COPY.inputTokensShort} value={compactNumber(efficiency?.average_input_tokens ?? 0)} />
+        <MiniStat label={COPY.outputTokensShort} value={compactNumber(efficiency?.average_output_tokens ?? 0)} />
+        <MiniStat label={COPY.withLearnedUnits} value={String(efficiency?.with_evolved_units_issue_count ?? 0)} />
+        <MiniStat label={COPY.avgUnitsUsed} value={(efficiency?.average_evolved_units_used ?? 0).toFixed(1)} />
       </CardContent>
     </Card>
   );

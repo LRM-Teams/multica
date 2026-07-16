@@ -74,12 +74,12 @@
 ### 2.3 一处概念一个长相；兼容的是路径不是外观 — `可执行`
 - 正文（阅读面）：引用=零装饰纯链接+hover 卡；编辑器（操作面）：chip 正确（原子 token 的功能信号）。两语境是两个概念，不许互相"统一"。
 - 老数据兜底路径可留，**渲染必须与主路径共用同一组件**（`IssueRefLink`）——结构上没法长出第二副面孔。
-- **物**：#520 共享组件 + restricted-import lint（`IssueChip` 只准 editor 目录 import，阅读态渲染链出现=构建失败）。拆迁日：#521 落地后兜底与 `data-ref-source` 按 #463/#510 整体删。
+- **物（owner: @Felix ✅ 已签，已落 dev）**：①`IssueRefLink` 唯一组件（档位③；4 单测见红：no-chip/带卡/provenance/死链保护）②`IssueChip` 阅读面禁入=files-scoped `no-restricted-imports`（deny-by-default，档位④）+ **barrel re-export 已删（档位①②，编译错误）**；入口已穷举：唯一受控入口 `./issue-chip`、编辑器为显式例外。**已知边界（非洞）**：lint 仅覆盖 `packages/views`；`apps/*` 直接深 import 不在覆盖内（barrel 入口则全仓不存在）。拆迁日：#521 落地后兜底与 `data-ref-source` 按 #463/#510 整体删。
 
 ### 2.4 「猜」与「认」必须可分辨（对用户不撒谎；对自己必须说实话）— `可执行`
 - 外观并线后漏锚会隐形 → token 带 `data-ref-source="anchor"|"fallback"`（用户不可见、测试可见）。
 - jsdom 断言：N 次出现全 `anchor`（fallback 出现=漏锚 FAIL）；代码块/行内 code/URL 内不升级；兜底解析失败→纯文本（fallback+失败=正则误报，同一属性抓两类错）。
-- **物**：#520 测试套件。
+- **物（owner: @Felix ✅ 已签）**：#520 测试套件；`data-ref-source` **是脚手架不是家具**——兜底路径死掉时一起删。
 
 ### 2.5 「别让界面撒谎」家族 — 分项标档，不能整族冒充 `可执行`
 **宁可不显示，也不显示看起来对的假东西。** 变体：不假渲 / 不露 URI / 不弹空卡 / 不拿旧快照兜底 / 不显示"看着完整其实残缺"的列表 / 不按别处开关瞒本处事实（§3.2）/ 未知枚举值白名单降级（#632）。其中 #635 已用 `TestListGroupedIssuesProjectPaginatesPerGroup` 锁住服务端 status 跨页顺序；**“客户端不得对 server-paginated 响应重排/重分组”仍只是 `仅文档`，直到 consumer/query 回归能让该行为见红。** 详细分档见 `docs/issue-display-contract.md` §5.3。
@@ -90,8 +90,9 @@
 - 一个属性=一种语法=`[标记]+[文字]`（`ActorAvatar`/`ProjectIcon`+title/`PriorityIcon`，出处=已运行数月的 `list-row.tsx`）；assignee 必带头像；属性值不套 chip/pill/底色。
 - **物**：#518 共享组件（组件不提供"裸文字 assignee"选项）；mobile 已有先例（`attribute-chip/attribute-row`）。
 
-### 3.2 共享语法 ≠ 共享显示策略 — `可执行`（API 形状）
+### 3.2 共享语法 ≠ 共享显示策略 — `仅文档`（待 #518 落地升档，Felix 诚实降档）
 - 共享组件只接受"一项属性长什么样"，**不接受 `storeProperties` 等策略参数**；"哪些属性显示"归调用方。hover 卡永远"设了就显、没设不占位"。
+- **今天靠的是"写对了+注释"，没有物拦下一个人**；#518 的 API 形状（组件签名里没有策略参数）落地才是 `可执行`。同理："server-paginated 响应不得客户端重排"目前也只有 review（BE 侧跨页 fixture 已有 #635，FE 侧禁令无物）。
 
 ## 4. Provider / 环境（daemon）
 

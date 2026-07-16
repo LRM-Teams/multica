@@ -239,4 +239,17 @@ describe("preprocessLinks — CJK host overrun (#537) DOCUMENTED COSTS (flip whe
       "a https://x.com:8080吗 b",
     );
   });
+
+  // Cost 4 — the ORIGINAL #537 report shape and the ONLY real-corpus sample:
+  // Han glued onto a PATH (`https://github.com/a/b吗`). This PR is host-only and
+  // does NOT fix it. Unlike the host, a path has no validity oracle: legitimate
+  // path content (`/wiki/中国`) and a glued trailing particle (`/a/b吗`) are
+  // character-identical, so it needs its own product/contract decision (tracked
+  // under the still-open task #537). This is not a regression — baseline
+  // behavior is identical. Uses the verbatim triggering input, per #640.
+  it("cost 4: Han glued onto a PATH (github.com/a/b吗) is NOT handled (host-only PR)", () => {
+    expect(preprocessLinks("看这个 https://github.com/a/b吗")).toBe(
+      "看这个 [https://github.com/a/b吗](https://github.com/a/b吗)",
+    );
+  });
 });

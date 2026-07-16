@@ -154,12 +154,6 @@ func (h *Handler) EnvDispatch(w http.ResponseWriter, r *http.Request) {
 	svc := service.NewEnvDispatchService(newEnvDispatchDepsAdapter(h), envDispatchConcurrency())
 	if lc := newEnvSandboxLifecycleService(h); lc != nil {
 		svc = svc.WithSandboxLifecycle(lc)
-		// Phase 5: wire the ephemeral sandbox cleanup hook so terminal tasks
-		// can reclaim their sandbox instances. Once-only — TaskService is shared
-		// across handler methods, so subsequent env-dispatch calls are no-ops.
-		if h.TaskService != nil && h.TaskService.EphemeralSandboxCleaner == nil {
-			h.TaskService.EphemeralSandboxCleaner = newEphemeralSandboxCleaner(lc)
-		}
 	}
 	res, err := svc.Dispatch(r.Context(), service.EnvDispatchInput{
 		WorkspaceID: workspaceID, UserID: userID,

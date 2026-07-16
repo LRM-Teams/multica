@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -168,5 +169,71 @@ func TestEphemeralSandboxManagerCleanupPropagatesTransientLookupError(t *testing
 	})
 	if !errors.Is(err, lookupErr) || !strings.Contains(err.Error(), "lookup") {
 		t.Fatalf("Cleanup error = %v, want transient lookup error", err)
+	}
+}
+
+func TestSandboxDeleteJobIsIdempotent(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	q := testHandler.Queries
+	node, err := q.CreateSandboxNode(ctx, db.CreateSandboxNodeParams{
+		NodeKey:        "delete-idempotency-" + uuid.NewString(),
+		Name:           "delete idempotency",
+		OwnerUserID:    parseUUID(testUserID),
+		Capabilities:   []byte(`{}`),
+		MaxConcurrency: 1,
+		Metadata:       []byte(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create sandbox node: %v", err)
+	}
+	instance, err := q.CreateSandboxInstance(ctx, db.CreateSandboxInstanceParams{
+		WorkspaceID:   parseUUID(testWorkspaceID),
+		CreatorUserID: parseUUID(testUserID),
+		NodeID:        node.ID,
+		Status:        "running",
+		Template:      "default",
+		Limits:        []byte(`{}`),
+		Metadata:      []byte(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create sandbox instance: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM sandbox_instance WHERE id = $1`, instance.ID)
+		testPool.Exec(ctx, `DELETE FROM sandbox_node WHERE id = $1`, node.ID)
+	})
+	adapter := &envSandboxLifecycleDepsAdapter{h: testHandler}
+	first, err := adapter.EnqueueSandboxJob(
+		ctx, testWorkspaceID, testUserID,
+		util.UUIDToString(node.ID), util.UUIDToString(instance.ID),
+		"delete", []byte(`{}`),
+	)
+	if err != nil {
+		t.Fatalf("first delete job: %v", err)
+	}
+	second, err := adapter.EnqueueSandboxJob(
+		ctx, testWorkspaceID, testUserID,
+		util.UUIDToString(node.ID), util.UUIDToString(instance.ID),
+		"delete", []byte(`{}`),
+	)
+	if err != nil {
+		t.Fatalf("second delete job: %v", err)
+	}
+	if first.JobID != second.JobID {
+		t.Fatalf("delete job ids differ: first=%s second=%s", first.JobID, second.JobID)
+	}
+	var count int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM sandbox_job
+		WHERE instance_id = $1 AND type = 'delete'
+		  AND status IN ('queued', 'dispatched', 'running')
+	`, instance.ID).Scan(&count); err != nil {
+		t.Fatalf("count active delete jobs: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("active delete jobs = %d, want 1", count)
 	}
 }

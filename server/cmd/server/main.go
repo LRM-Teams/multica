@@ -345,7 +345,8 @@ func main() {
 	// Start background workers.
 	sweepCtx, sweepCancel := context.WithCancel(context.Background())
 	autopilotCtx, autopilotCancel := context.WithCancel(context.Background())
-	taskSvc := service.NewTaskService(queries, pool, hub, bus, daemonWakeup)
+	taskSvc := h.TaskService
+	taskSvc.Wakeup = daemonWakeup
 	taskSvc.Analytics = analyticsClient
 	taskSvc.Metrics = businessMetrics
 	if tc := service.LoadTrainingConfig(); tc.BridgeStubURL != "" {

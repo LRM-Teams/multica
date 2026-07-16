@@ -3,10 +3,12 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/service"
@@ -164,6 +166,27 @@ func (a *envSandboxLifecycleDepsAdapter) EnqueueSandboxJob(ctx context.Context, 
 	if err != nil {
 		return service.SandboxLifecycleJobResult{}, fmt.Errorf("parse instance_id: %w", err)
 	}
+	if jobType == "delete" {
+		job, err := a.h.Queries.CreateSandboxDeleteJob(ctx, db.CreateSandboxDeleteJobParams{
+			WorkspaceID:     wsUUID,
+			InitiatorUserID: userUUID,
+			NodeID:          nodeUUID,
+			InstanceID:      instUUID,
+			Payload:         payload,
+		})
+		if errors.Is(err, pgx.ErrNoRows) {
+			job, err = a.h.Queries.GetActiveSandboxDeleteJob(ctx, instUUID)
+		}
+		if err != nil {
+			return service.SandboxLifecycleJobResult{}, fmt.Errorf("create sandbox delete job: %w", err)
+		}
+		return service.SandboxLifecycleJobResult{
+			JobID:      util.UUIDToString(job.ID),
+			InstanceID: util.UUIDToString(job.InstanceID),
+			NodeID:     util.UUIDToString(job.NodeID),
+			JobType:    job.Type,
+		}, nil
+	}
 	job, err := a.h.Queries.CreateSandboxJob(ctx, db.CreateSandboxJobParams{
 		WorkspaceID:     wsUUID,
 		InitiatorUserID: userUUID,
@@ -197,6 +220,20 @@ func (a *envSandboxLifecycleDepsAdapter) ForceDeleteSandboxInstance(ctx context.
 		return fmt.Errorf("parse instance_id: %w", err)
 	}
 	return a.h.Queries.DeleteSandboxInstance(ctx, instUUID)
+}
+
+// ConfigureEphemeralSandboxManager wires the shared TaskService before any
+// request or background sweeper can reach a terminal task path.
+func ConfigureEphemeralSandboxManager(h *Handler) {
+	if h == nil || h.TaskService == nil {
+		return
+	}
+	lifecycle := newEnvSandboxLifecycleService(h)
+	if lifecycle == nil {
+		return
+	}
+	h.TaskService.EphemeralSandboxManager = newEphemeralSandboxManager(h, lifecycle)
+	h.TaskService.EphemeralSandboxCleaner = newEphemeralSandboxCleaner(lifecycle)
 }
 
 // ephemeralSandboxCleanerAdapter implements service.EphemeralSandboxCleaner

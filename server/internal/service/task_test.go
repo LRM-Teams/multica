@@ -49,6 +49,7 @@ type fakeEphemeralSandboxManager struct {
 	prepared   *EphemeralRetryResources
 	prepareErr error
 	reclaims   int
+	cleanups   int
 }
 
 func (f *fakeEphemeralSandboxManager) PrepareRetry(context.Context, db.AgentTaskQueue) (*EphemeralRetryResources, error) {
@@ -61,6 +62,7 @@ func (f *fakeEphemeralSandboxManager) Reclaim(context.Context, *EphemeralRetryRe
 }
 
 func (f *fakeEphemeralSandboxManager) Cleanup(context.Context, db.AgentTaskQueue) error {
+	f.cleanups++
 	return nil
 }
 
@@ -227,6 +229,17 @@ func TestCreateRetryTaskOverridesRuntimeAndContext(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, replacement.ID, child.RuntimeID)
 	assert.JSONEq(t, string(replacementContext), string(child.Context))
+}
+
+func TestCleanupCancelledTaskUsesEphemeralManager(t *testing.T) {
+	env := setupRetryTestDB(t, "runtime_offline")
+	manager := &fakeEphemeralSandboxManager{}
+	env.svc.EphemeralSandboxManager = manager
+	env.parent.Context = ephemeralRetryMarker("sandbox-cancelled")
+
+	env.svc.finalizeCancelledTask(context.Background(), env.parent)
+
+	assert.Equal(t, 1, manager.cleanups)
 }
 
 func TestMaybeRetryOfflineEphemeralTaskUsesFreshResources(t *testing.T) {

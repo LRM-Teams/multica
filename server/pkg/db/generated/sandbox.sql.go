@@ -388,6 +388,40 @@ func (q *Queries) ListSandboxWorkspaceBindings(ctx context.Context, workspaceID 
 	return items, rows.Err()
 }
 
+const getActiveSandboxDeleteJob = `-- name: GetActiveSandboxDeleteJob :one
+SELECT id, workspace_id, initiator_user_id, node_id, instance_id, type, status, payload, result, error, lease_until, started_at, completed_at, job_token_hash, job_token_expires_at, created_at, updated_at FROM sandbox_job
+WHERE instance_id = $1
+  AND type = 'delete'
+  AND status IN ('queued', 'dispatched', 'running')
+ORDER BY created_at ASC
+LIMIT 1
+`
+
+func (q *Queries) GetActiveSandboxDeleteJob(ctx context.Context, instanceID pgtype.UUID) (SandboxJob, error) {
+	row := q.db.QueryRow(ctx, getActiveSandboxDeleteJob, instanceID)
+	var i SandboxJob
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.InitiatorUserID,
+		&i.NodeID,
+		&i.InstanceID,
+		&i.Type,
+		&i.Status,
+		&i.Payload,
+		&i.Result,
+		&i.Error,
+		&i.LeaseUntil,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.JobTokenHash,
+		&i.JobTokenExpiresAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getEnabledSandboxBinding = `-- name: GetEnabledSandboxBinding :one
 SELECT id, workspace_id, node_id, enabled, policy, created_by, created_at, updated_at FROM sandbox_workspace_binding
 WHERE workspace_id = $1 AND node_id = $2 AND enabled = true
@@ -449,6 +483,52 @@ type PickSandboxNodeForWorkspaceParams struct {
 func (q *Queries) PickSandboxNodeForWorkspace(ctx context.Context, arg PickSandboxNodeForWorkspaceParams) (SandboxNode, error) {
 	row := q.db.QueryRow(ctx, pickSandboxNodeForWorkspace, arg.WorkspaceID, arg.NodeID)
 	return scanSandboxNode(row)
+}
+
+const createSandboxDeleteJob = `-- name: CreateSandboxDeleteJob :one
+INSERT INTO sandbox_job (workspace_id, initiator_user_id, node_id, instance_id, type, status, payload)
+VALUES ($1, $2, $3, $4, 'delete', 'queued', $5)
+ON CONFLICT DO NOTHING
+RETURNING id, workspace_id, initiator_user_id, node_id, instance_id, type, status, payload, result, error, lease_until, started_at, completed_at, job_token_hash, job_token_expires_at, created_at, updated_at
+`
+
+type CreateSandboxDeleteJobParams struct {
+	WorkspaceID     pgtype.UUID `json:"workspace_id"`
+	InitiatorUserID pgtype.UUID `json:"initiator_user_id"`
+	NodeID          pgtype.UUID `json:"node_id"`
+	InstanceID      pgtype.UUID `json:"instance_id"`
+	Payload         []byte      `json:"payload"`
+}
+
+func (q *Queries) CreateSandboxDeleteJob(ctx context.Context, arg CreateSandboxDeleteJobParams) (SandboxJob, error) {
+	row := q.db.QueryRow(ctx, createSandboxDeleteJob,
+		arg.WorkspaceID,
+		arg.InitiatorUserID,
+		arg.NodeID,
+		arg.InstanceID,
+		arg.Payload,
+	)
+	var i SandboxJob
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.InitiatorUserID,
+		&i.NodeID,
+		&i.InstanceID,
+		&i.Type,
+		&i.Status,
+		&i.Payload,
+		&i.Result,
+		&i.Error,
+		&i.LeaseUntil,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.JobTokenHash,
+		&i.JobTokenExpiresAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const createSandboxInstance = `-- name: CreateSandboxInstance :one

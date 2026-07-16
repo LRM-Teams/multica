@@ -646,7 +646,7 @@ func (s *TaskService) interruptInFlightChatTasksForFollowup(ctx context.Context,
 func (s *TaskService) broadcastFollowupInterruptedTasks(ctx context.Context, tasks []db.AgentTaskQueue) {
 	for _, t := range tasks {
 		slog.Info("task interrupted by newer guidance", "task_id", util.UUIDToString(t.ID), "issue_id", util.UUIDToString(t.IssueID), "chat_session_id", util.UUIDToString(t.ChatSessionID), "agent_id", util.UUIDToString(t.AgentID))
-		s.captureTaskCancelled(ctx, t)
+		s.finalizeCancelledTask(ctx, t)
 		s.ReconcileAgentStatus(ctx, t.AgentID)
 		s.broadcastTaskEvent(ctx, protocol.EventTaskCancelled, t)
 	}
@@ -1242,6 +1242,12 @@ func (s *TaskService) PublishChatTaskQueued(ctx context.Context, task db.AgentTa
 	s.NotifyTaskEnqueued(ctx, task)
 }
 
+func (s *TaskService) finalizeCancelledTask(ctx context.Context, task db.AgentTaskQueue) {
+	s.captureTaskCancelled(ctx, task)
+	s.RouteTerminalTrainingTask(ctx, task)
+	s.maybeCleanupEphemeralSandbox(ctx, task)
+}
+
 // CancelTasksForIssue cancels every active task on the issue, reconciles each
 // affected agent's status, and broadcasts task:cancelled events so frontends
 // clear their live cards.
@@ -1257,7 +1263,7 @@ func (s *TaskService) CancelTasksForIssue(ctx context.Context, issueID pgtype.UU
 		return err
 	}
 	for _, t := range cancelled {
-		s.captureTaskCancelled(ctx, t)
+		s.finalizeCancelledTask(ctx, t)
 		s.ReconcileAgentStatus(ctx, t.AgentID)
 		s.broadcastTaskEvent(ctx, protocol.EventTaskCancelled, t)
 	}
@@ -1276,7 +1282,7 @@ func (s *TaskService) CancelTasksForAgent(ctx context.Context, agentID pgtype.UU
 		return nil, err
 	}
 	for _, t := range cancelled {
-		s.captureTaskCancelled(ctx, t)
+		s.finalizeCancelledTask(ctx, t)
 		s.broadcastTaskEvent(ctx, protocol.EventTaskCancelled, t)
 	}
 	// Reconcile once after the loop — agent transitions from
@@ -1298,7 +1304,7 @@ func (s *TaskService) CancelTasksByTriggerComment(ctx context.Context, commentID
 		return err
 	}
 	for _, t := range cancelled {
-		s.captureTaskCancelled(ctx, t)
+		s.finalizeCancelledTask(ctx, t)
 		s.ReconcileAgentStatus(ctx, t.AgentID)
 		s.broadcastTaskEvent(ctx, protocol.EventTaskCancelled, t)
 	}
@@ -1311,7 +1317,7 @@ func (s *TaskService) CancelTasksByTriggerComment(ctx context.Context, commentID
 // that the tx might still roll back.
 func (s *TaskService) BroadcastCancelledTasks(ctx context.Context, cancelled []db.AgentTaskQueue) {
 	for _, t := range cancelled {
-		s.captureTaskCancelled(ctx, t)
+		s.finalizeCancelledTask(ctx, t)
 		s.ReconcileAgentStatus(ctx, t.AgentID)
 		s.broadcastTaskEvent(ctx, protocol.EventTaskCancelled, t)
 	}
@@ -1319,7 +1325,7 @@ func (s *TaskService) BroadcastCancelledTasks(ctx context.Context, cancelled []d
 
 func (s *TaskService) CaptureCancelledTasks(ctx context.Context, cancelled []db.AgentTaskQueue) {
 	for _, t := range cancelled {
-		s.captureTaskCancelled(ctx, t)
+		s.finalizeCancelledTask(ctx, t)
 	}
 }
 
@@ -1361,9 +1367,7 @@ func (s *TaskService) CancelTaskWithResult(ctx context.Context, taskID pgtype.UU
 	}
 
 	slog.Info("task cancelled", "task_id", util.UUIDToString(task.ID), "issue_id", util.UUIDToString(task.IssueID))
-	s.captureTaskCancelled(ctx, task)
-	s.RouteTerminalTrainingTask(ctx, task)
-	s.maybeCleanupEphemeralSandbox(ctx, task)
+	s.finalizeCancelledTask(ctx, task)
 	cancelledChatMessage := s.finalizeCancelledChatMessage(ctx, task)
 
 	// Reconcile agent status
@@ -2511,7 +2515,7 @@ func (s *TaskService) RerunIssue(ctx context.Context, issueID pgtype.UUID, sourc
 		)
 	}
 	for _, t := range cancelled {
-		s.captureTaskCancelled(ctx, t)
+		s.finalizeCancelledTask(ctx, t)
 		s.ReconcileAgentStatus(ctx, t.AgentID)
 		s.broadcastTaskEvent(ctx, protocol.EventTaskCancelled, t)
 	}
@@ -2587,6 +2591,15 @@ func extractEphemeralSandbox(raw []byte) (*EphemeralSandboxMarker, bool) {
 // instance (stop+delete via sandboxd) and mark R' offline. Best-effort — errors
 // are logged but never fail the terminal flow.
 func (s *TaskService) maybeCleanupEphemeralSandbox(ctx context.Context, task db.AgentTaskQueue) {
+	if s.EphemeralSandboxManager != nil {
+		if err := s.EphemeralSandboxManager.Cleanup(ctx, task); err != nil {
+			slog.Warn("ephemeral sandbox cleanup failed",
+				"task_id", util.UUIDToString(task.ID),
+				"error", err,
+			)
+		}
+		return
+	}
 	if s.EphemeralSandboxCleaner == nil {
 		return
 	}

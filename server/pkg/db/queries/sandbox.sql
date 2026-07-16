@@ -214,6 +214,20 @@ INSERT INTO sandbox_job (workspace_id, initiator_user_id, node_id, instance_id, 
 VALUES (@workspace_id, @initiator_user_id, @node_id, @instance_id, @type, 'queued', @payload)
 RETURNING *;
 
+-- name: CreateSandboxDeleteJob :one
+INSERT INTO sandbox_job (workspace_id, initiator_user_id, node_id, instance_id, type, status, payload)
+VALUES (@workspace_id, @initiator_user_id, @node_id, @instance_id, 'delete', 'queued', @payload)
+ON CONFLICT DO NOTHING
+RETURNING *;
+
+-- name: GetActiveSandboxDeleteJob :one
+SELECT * FROM sandbox_job
+WHERE instance_id = @instance_id
+  AND type = 'delete'
+  AND status IN ('queued', 'dispatched', 'running')
+ORDER BY created_at ASC
+LIMIT 1;
+
 -- name: ClaimSandboxJobsForNode :many
 WITH next_jobs AS (
     SELECT id

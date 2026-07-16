@@ -14,6 +14,62 @@ DO UPDATE SET
     cache_write_tokens = EXCLUDED.cache_write_tokens,
     updated_at = now();
 
+-- name: CreateAgentInboxExecution :exec
+-- The daemon calls this immediately before a real provider run. Delivery is
+-- verified by the handler; the event snapshot is copied here exactly once so
+-- a later lease, retry, or profile edit cannot rewrite ledger attribution.
+INSERT INTO agent_execution (
+    id, source_kind, source_event_id, source, workspace_id, runtime_id,
+    agent_id, chat_session_id, issue_id, project_id, execution_config
+)
+SELECT
+    @execution_id,
+    'inbox',
+    e.id,
+    'chat',
+    e.workspace_id,
+    e.runtime_id,
+    e.agent_id,
+    e.chat_session_id,
+    NULL,
+    NULL,
+    e.execution_config
+FROM agent_inbox_event e
+WHERE e.id = @inbox_event_id
+ON CONFLICT (id) DO NOTHING;
+
+-- name: CreateAgentQueueExecution :exec
+-- Queue executions retain their historical queue ID as execution ID. This is
+-- called at the queue start boundary; the immutable dimensions are copied once
+-- so later queue/issue reassignment cannot rewrite ledger reports.
+INSERT INTO agent_execution (
+    id, source_kind, source_event_id, source, workspace_id, runtime_id,
+    agent_id, chat_session_id, issue_id, project_id, started_at
+)
+SELECT
+    atq.id,
+    'queue',
+    atq.id,
+    CASE WHEN atq.chat_session_id IS NULL THEN 'issue' ELSE 'chat' END,
+    a.workspace_id,
+    atq.runtime_id,
+    atq.agent_id,
+    atq.chat_session_id,
+    atq.issue_id,
+    i.project_id,
+    COALESCE(atq.started_at, now())
+FROM agent_task_queue atq
+JOIN agent a ON a.id = atq.agent_id
+LEFT JOIN issue i ON i.id = atq.issue_id
+WHERE atq.id = @task_id
+ON CONFLICT (id) DO NOTHING;
+
+-- name: GetAgentInboxExecution :one
+SELECT * FROM agent_execution
+WHERE id = @execution_id
+  AND source_kind = 'inbox'
+  AND source_event_id = @inbox_event_id;
+
 -- name: GetAgentUsage :many
 SELECT * FROM agent_usage
 WHERE execution_id = $1
@@ -27,8 +83,8 @@ SELECT
     COALESCE(SUM(tu.cache_write_tokens), 0)::bigint AS total_cache_write_tokens,
     COUNT(DISTINCT tu.execution_id)::int AS task_count
 FROM agent_usage tu
-JOIN agent_task_queue atq ON atq.id = tu.execution_id
-WHERE atq.issue_id = $1;
+JOIN agent_execution ae ON ae.id = tu.execution_id
+WHERE ae.issue_id = $1;
 
 -- name: ListDashboardUsageDaily :many
 -- Daily per-(date, model) token aggregates for the workspace, served

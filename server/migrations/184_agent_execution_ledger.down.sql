@@ -1,0 +1,3 @@
+-- Irreversible by design: inbox execution IDs have no lossless queue-row
+-- representation. Preserve the ledger rather than deleting billing evidence
+-- during a rollback. The matching application rollout is forward-only.

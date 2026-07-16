@@ -1249,6 +1249,74 @@ func TestHandleTask_InboxCompleteUsesInboxEndpoint(t *testing.T) {
 	}
 }
 
+// A delivery lease can be renewed without beginning a new provider run. The
+// daemon must mint one run UUID before invoking the provider, then use that
+// same UUID for every usage-report retry from this run.
+func TestHandleTask_InboxUsageStartsExecutionBeforeProvider(t *testing.T) {
+	t.Parallel()
+
+	var mu sync.Mutex
+	var executionID string
+	startSeen := false
+	usageCalls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		switch r.URL.Path {
+		case "/api/daemon/agent-inbox/events/event-usage/renew":
+			w.WriteHeader(http.StatusOK)
+		case "/api/daemon/agent-inbox/events/event-usage/execution":
+			mu.Lock()
+			startSeen = true
+			executionID, _ = body["execution_id"].(string)
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+		case "/api/daemon/agent-inbox/events/event-usage/usage":
+			mu.Lock()
+			got, _ := body["execution_id"].(string)
+			if !startSeen || executionID == "" || got != executionID {
+				t.Errorf("usage execution_id=%q, started=%v start_id=%q", got, startSeen, executionID)
+			}
+			usageCalls++
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+		case "/api/daemon/agent-inbox/events/event-usage/complete":
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected inbox path: %s", r.URL.Path)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	d := &Daemon{
+		client:             NewClient(srv.URL),
+		logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+		workspaces:         make(map[string]*workspaceState),
+		runtimeIndex:       map[string]Runtime{"rt-usage": {ID: "rt-usage", Provider: "claude"}},
+		cancelPollInterval: time.Hour,
+	}
+	d.runner = taskRunnerFunc(func(_ context.Context, _ Task, _ string, _ int, _ *slog.Logger) (TaskResult, error) {
+		mu.Lock()
+		started := startSeen
+		mu.Unlock()
+		if !started {
+			t.Fatal("provider runner started before inbox execution was persisted")
+		}
+		return TaskResult{Status: "completed", Usage: []TaskUsageEntry{{Provider: "anthropic", Model: "claude-test", InputTokens: 7}}}, nil
+	})
+	d.handleTask(context.Background(), Task{
+		ID: "event-usage", AgentID: "agent-usage", RuntimeID: "rt-usage", WorkspaceID: "ws-usage", ChatSessionID: "chat-usage",
+		Agent:      &AgentData{Name: "inbox-agent"},
+		InboxEvent: &AgentInboxLease{ID: "event-usage", DeliveryID: "delivery-usage", LeaseToken: "lease-usage"},
+	}, 0)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if executionID == "" || usageCalls != 1 {
+		t.Fatalf("execution_id=%q usage_calls=%d, want one persisted execution and one usage report", executionID, usageCalls)
+	}
+}
+
 func TestHandleTask_InboxFailureUsesInboxEndpointWithClassifier(t *testing.T) {
 	t.Parallel()
 

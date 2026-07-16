@@ -63,8 +63,8 @@ SELECT
     SUM(tu.cache_write_tokens)::bigint AS cache_write_tokens,
     COUNT(DISTINCT tu.execution_id)::int AS task_count
 FROM agent_usage tu
-JOIN agent_task_queue atq ON atq.id = tu.execution_id
-WHERE atq.runtime_id = $1
+JOIN agent_execution ae ON ae.id = tu.execution_id
+WHERE ae.runtime_id = $1
   AND tu.created_at >= $3::timestamptz
 GROUP BY EXTRACT(HOUR FROM tu.created_at AT TIME ZONE $2::text), tu.model
 ORDER BY hour, tu.model
@@ -192,7 +192,7 @@ func (q *Queries) ListRuntimeUsage(ctx context.Context, arg ListRuntimeUsagePara
 
 const listRuntimeUsageByAgent = `-- name: ListRuntimeUsageByAgent :many
 SELECT
-    atq.agent_id,
+    ae.agent_id,
     tu.model,
     SUM(tu.input_tokens)::bigint AS input_tokens,
     SUM(tu.output_tokens)::bigint AS output_tokens,
@@ -200,11 +200,11 @@ SELECT
     SUM(tu.cache_write_tokens)::bigint AS cache_write_tokens,
     COUNT(DISTINCT tu.execution_id)::int AS task_count
 FROM agent_usage tu
-JOIN agent_task_queue atq ON atq.id = tu.execution_id
-WHERE atq.runtime_id = $1
+JOIN agent_execution ae ON ae.id = tu.execution_id
+WHERE ae.runtime_id = $1
   AND tu.created_at >= $2::timestamptz
-GROUP BY atq.agent_id, tu.model
-ORDER BY atq.agent_id, tu.model
+GROUP BY ae.agent_id, tu.model
+ORDER BY ae.agent_id, tu.model
 `
 
 type ListRuntimeUsageByAgentParams struct {
@@ -224,7 +224,7 @@ type ListRuntimeUsageByAgentRow struct {
 
 // Per-(agent, model) token aggregates for a runtime since a cutoff. Powers
 // the runtime-detail "Cost by agent" tab. agent_usage carries execution_id,
-// so we join the queue to expose agent_id. The model dimension is kept on
+// so we join its immutable execution record to expose agent_id. The model dimension is kept on
 // purpose: cost is computed client-side from a per-model pricing table, so
 // collapsing models server-side would erase the information needed to do
 // that arithmetic. The client groups by agent_id and sums cost per agent.

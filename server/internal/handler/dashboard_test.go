@@ -87,6 +87,7 @@ func TestDashboardEndpoints(t *testing.T) {
 		`, agentID, issueID, runtimeID, status, started, completed).Scan(&taskID); err != nil {
 			t.Fatalf("insert task: %v", err)
 		}
+		seedQueueExecution(t, taskID)
 		if _, err := testPool.Exec(ctx, `
 			INSERT INTO agent_usage (execution_id, provider, model, input_tokens, output_tokens, created_at)
 			VALUES ($1, 'claude', 'claude-3-5-sonnet', $2, 0, now())
@@ -459,6 +460,7 @@ func TestRollupAgentUsageHourlyIdempotentAndWatermark(t *testing.T) {
 	`, agentID, issueID, runtimeID).Scan(&taskID); err != nil {
 		t.Fatalf("insert task: %v", err)
 	}
+	seedQueueExecution(t, taskID)
 	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
 
 	if _, err := testPool.Exec(ctx, `
@@ -523,14 +525,10 @@ func TestRollupAgentUsageHourlyIdempotentAndWatermark(t *testing.T) {
 	}
 }
 
-// TestRollupAgentUsageHourlyReassignBetweenRuntimes ports the invalidation
-// coverage the deleted runtime_rollup_test.go held for the legacy daily
-// rollup. Reassigning a task between runtimes (the runtime-merge path) must
-// move its usage: the `trg_atq_dirty_hourly` trigger enqueues both the old
-// and new runtime buckets, and the next window run drains the queue,
-// empties the old bucket, and fills the new one. Without this the rollup
-// keeps attributing usage to the merged-away runtime.
-func TestRollupAgentUsageHourlyReassignBetweenRuntimes(t *testing.T) {
+// TestRollupAgentUsageHourlyPreservesRuntimeAfterQueueReassign proves a
+// queue mutation cannot rewrite a completed provider execution's ledger
+// attribution. Runtime reassignment only affects future provider starts.
+func TestRollupAgentUsageHourlyPreservesRuntimeAfterQueueReassign(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -572,6 +570,7 @@ func TestRollupAgentUsageHourlyReassignBetweenRuntimes(t *testing.T) {
 	`, agentID, issueID, oldRuntimeID, usageAt).Scan(&taskID); err != nil {
 		t.Fatalf("insert task: %v", err)
 	}
+	seedQueueExecution(t, taskID)
 	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO agent_usage (execution_id, provider, model, input_tokens, output_tokens, created_at, updated_at)
@@ -605,23 +604,20 @@ func TestRollupAgentUsageHourlyReassignBetweenRuntimes(t *testing.T) {
 		t.Fatalf("initial: expected old=700 new=0, got old=%d new=%d", old, new)
 	}
 
-	// Reassignment fires trg_atq_dirty_hourly, which enqueues the OLD and
-	// NEW runtime buckets (same bucket_hour, two runtime_ids).
+	// Queue reassignment must not enqueue or rewrite a completed execution.
 	if _, err := testPool.Exec(ctx, `UPDATE agent_task_queue SET runtime_id = $1 WHERE id = $2`, newRuntimeID, taskID); err != nil {
 		t.Fatalf("reassign task: %v", err)
 	}
 	var dirtyCount int
 	testPool.QueryRow(ctx, `SELECT COUNT(*) FROM agent_usage_hourly_dirty WHERE model = 'm-reassign-hourly'`).Scan(&dirtyCount)
-	if dirtyCount != 2 {
-		t.Fatalf("expected 2 dirty entries (old+new runtime), got %d", dirtyCount)
+	if dirtyCount != 0 {
+		t.Fatalf("expected no dirty entries for immutable execution, got %d", dirtyCount)
 	}
 
 	runWindow("rollup after reassign")
-	if old, new := runtimeTotal(oldRuntimeID), runtimeTotal(newRuntimeID); old != 0 || new != 700 {
-		t.Fatalf("after reassign: expected old=0 new=700, got old=%d new=%d", old, new)
+	if old, new := runtimeTotal(oldRuntimeID), runtimeTotal(newRuntimeID); old != 700 || new != 0 {
+		t.Fatalf("after reassign: expected immutable old=700 new=0, got old=%d new=%d", old, new)
 	}
-	// The window function must drain every queue row whose enqueued_at
-	// predates p_to — a regression on that DELETE pins recomputes forever.
 	testPool.QueryRow(ctx, `SELECT COUNT(*) FROM agent_usage_hourly_dirty WHERE model = 'm-reassign-hourly'`).Scan(&dirtyCount)
 	if dirtyCount != 0 {
 		t.Errorf("expected dirty queue drained, got %d entries", dirtyCount)
@@ -696,6 +692,7 @@ func TestRollupAgentUsageHourlyWorkspaceMismatch(t *testing.T) {
 	`, foreignAgentID, issueID, foreignRuntimeID, usageAt).Scan(&taskID); err != nil {
 		t.Fatalf("insert atq: %v", err)
 	}
+	seedQueueExecution(t, taskID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO agent_usage (execution_id, provider, model, input_tokens, output_tokens, created_at, updated_at)
 		VALUES ($1, 'claude', 'm-mismatch-hourly', 333, 33, $2, $2)
@@ -729,12 +726,9 @@ func TestRollupAgentUsageHourlyWorkspaceMismatch(t *testing.T) {
 	}
 }
 
-// TestDashboardRollupReattributesOnProjectChange verifies the trigger that
-// fires on `UPDATE issue SET project_id` enqueues both old + new project
-// buckets so the next rollup tick re-attributes the affected tokens.
-// Uses the rollup window function directly to drain the dirty queue,
-// then asserts the rollup table reflects the new project_id.
-func TestDashboardRollupReattributesOnProjectChange(t *testing.T) {
+// TestDashboardRollupPreservesProjectAfterIssueChange verifies an issue move
+// does not rewrite historical provider attribution.
+func TestDashboardRollupPreservesProjectAfterIssueChange(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -779,6 +773,7 @@ func TestDashboardRollupReattributesOnProjectChange(t *testing.T) {
 	`, agentID, issueID, runtimeID).Scan(&taskID); err != nil {
 		t.Fatalf("insert task: %v", err)
 	}
+	seedQueueExecution(t, taskID)
 	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
 
 	if _, err := testPool.Exec(ctx, `
@@ -805,12 +800,11 @@ func TestDashboardRollupReattributesOnProjectChange(t *testing.T) {
 		t.Fatalf("project A: expected >=7777 tokens after first rollup, got %d", aTokens)
 	}
 
-	// Move the issue to project B. Trigger enqueues both A and B buckets.
+	// Move the issue to project B. The completed execution remains in A.
 	if _, err := testPool.Exec(ctx, `UPDATE issue SET project_id = $1 WHERE id = $2`, projectB, issueID); err != nil {
 		t.Fatalf("reassign project: %v", err)
 	}
-	// Second rollup pass: A bucket drops to zero (deleted_empty), B
-	// bucket gets the tokens.
+	// A second rollup does not reattribute the immutable execution.
 	if _, err := testPool.Exec(ctx, `
 		SELECT rollup_agent_usage_hourly_window('1970-01-01'::timestamptz, now() + interval '1 hour')
 	`); err != nil {
@@ -830,21 +824,18 @@ func TestDashboardRollupReattributesOnProjectChange(t *testing.T) {
 	`, testWorkspaceID, projectA, agentID).Scan(&aTokensAfter); err != nil {
 		t.Fatalf("read A rollup after move: %v", err)
 	}
-	if bTokens < 7777 {
-		t.Errorf("project B: expected >=7777 tokens after reassign + rollup, got %d", bTokens)
+	if bTokens != 0 {
+		t.Errorf("project B: expected 0 historic tokens after issue move, got %d", bTokens)
 	}
-	if aTokensAfter != 0 {
-		t.Errorf("project A: expected 0 tokens after reassign + rollup, got %d", aTokensAfter)
+	if aTokensAfter < 7777 {
+		t.Errorf("project A: expected >=7777 immutable tokens after issue move, got %d", aTokensAfter)
 	}
 }
 
-// TestDashboardRollupClearsOnIssueDelete verifies that deleting an issue
-// (which cascades to its tasks and agent_usage rows) also clears the
-// dashboard rollup row attributed to that issue's project. The
-// `issue BEFORE DELETE` trigger has to fire ahead of the cascade so the
-// dirty queue captures the original project_id while the issue row is
-// still readable.
-func TestDashboardRollupClearsOnIssueDelete(t *testing.T) {
+// TestDashboardRollupPreservesUsageAfterIssueDelete verifies source deletion
+// cannot erase the agent-owned execution ledger or its historic dashboard
+// bucket.
+func TestDashboardRollupPreservesUsageAfterIssueDelete(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -884,6 +875,7 @@ func TestDashboardRollupClearsOnIssueDelete(t *testing.T) {
 	`, agentID, issueID, runtimeID).Scan(&taskID); err != nil {
 		t.Fatalf("insert task: %v", err)
 	}
+	seedQueueExecution(t, taskID)
 	// Don't bother cleaning up taskID either; cascade will take it.
 
 	if _, err := testPool.Exec(ctx, `
@@ -910,9 +902,7 @@ func TestDashboardRollupClearsOnIssueDelete(t *testing.T) {
 		t.Fatalf("project bucket: expected >=4242 tokens before delete, got %d", before)
 	}
 
-	// Delete the issue. Cascade removes atq + agent_usage. The issue
-	// BEFORE DELETE trigger should have enqueued the project bucket
-	// before the cascade started.
+	// Delete the source issue. The immutable execution and usage remain.
 	if _, err := testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID); err != nil {
 		t.Fatalf("delete issue: %v", err)
 	}
@@ -929,17 +919,14 @@ func TestDashboardRollupClearsOnIssueDelete(t *testing.T) {
 	`, testWorkspaceID, projectID).Scan(&after); err != nil {
 		t.Fatalf("read after: %v", err)
 	}
-	if after != 0 {
-		t.Errorf("project bucket: expected 0 tokens after issue delete, got %d", after)
+	if after < 4242 {
+		t.Errorf("project bucket: expected >=4242 historic tokens after issue delete, got %d", after)
 	}
 }
 
-// TestDashboardRollupReattributesOnLinkTaskToIssue verifies that
-// `LinkTaskToIssue` (which UPDATEs `agent_task_queue.issue_id` from NULL
-// to a real issue id) re-attributes existing rollup rows from the
-// no-project bucket to the linked issue's project bucket. Mirrors the
-// quick-create flow in `service.task.LinkTaskToIssue`.
-func TestDashboardRollupReattributesOnLinkTaskToIssue(t *testing.T) {
+// TestDashboardRollupPreservesNoProjectAfterTaskLink verifies linking an
+// already-completed quick-create task does not rewrite its ledger snapshot.
+func TestDashboardRollupPreservesNoProjectAfterTaskLink(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -961,6 +948,7 @@ func TestDashboardRollupReattributesOnLinkTaskToIssue(t *testing.T) {
 	`, agentID, runtimeID).Scan(&taskID); err != nil {
 		t.Fatalf("insert quick-create task: %v", err)
 	}
+	seedQueueExecution(t, taskID)
 	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
 
 	if _, err := testPool.Exec(ctx, `
@@ -987,10 +975,8 @@ func TestDashboardRollupReattributesOnLinkTaskToIssue(t *testing.T) {
 		t.Fatalf("NULL bucket: expected >=1234 tokens pre-link, got %d", nullBefore)
 	}
 
-	// Create a project + issue, then run the same UPDATE LinkTaskToIssue
-	// uses. The atq trigger should enqueue OLD (NULL project) AND NEW
-	// (the project's id) so the next rollup tick zeroes the NULL bucket
-	// and populates the project bucket.
+	// Link the source task after completion. Existing usage remains in the
+	// no-project bucket; a future execution would receive the new snapshot.
 	var projectID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO project (workspace_id, title) VALUES ($1, 'dashboard link test') RETURNING id
@@ -1036,11 +1022,11 @@ func TestDashboardRollupReattributesOnLinkTaskToIssue(t *testing.T) {
 	`, testWorkspaceID, agentID).Scan(&nullAfter); err != nil {
 		t.Fatalf("read NULL bucket post-link: %v", err)
 	}
-	if projectAfter < 1234 {
-		t.Errorf("project bucket: expected >=1234 tokens after link, got %d", projectAfter)
+	if projectAfter != 0 {
+		t.Errorf("project bucket: expected 0 historic tokens after link, got %d", projectAfter)
 	}
-	if nullAfter != 0 {
-		t.Errorf("NULL bucket: expected 0 tokens after link, got %d", nullAfter)
+	if nullAfter < 1234 {
+		t.Errorf("NULL bucket: expected >=1234 immutable tokens after link, got %d", nullAfter)
 	}
 }
 
@@ -1232,6 +1218,7 @@ func TestDashboardUsageDailyCrossMidnightFullPipeline(t *testing.T) {
 	`, agentID, issueID, runtimeID).Scan(&taskID); err != nil {
 		t.Fatalf("insert task: %v", err)
 	}
+	seedQueueExecution(t, taskID)
 	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
 
 	// Raw agent_usage at 00:30 UTC two days ago — genuinely near UTC
@@ -1343,6 +1330,7 @@ func TestRollupAgentUsageHourlyConvergesOnAgentUsageDelete(t *testing.T) {
 	`, agentID, issueID, runtimeID).Scan(&taskID); err != nil {
 		t.Fatalf("insert task: %v", err)
 	}
+	seedQueueExecution(t, taskID)
 	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
 
 	var usageID string

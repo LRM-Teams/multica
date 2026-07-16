@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/daemon/repocache"
@@ -2717,6 +2718,20 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 		}()
 	}
 
+	// A delivery only grants transport ownership and may renew many times. Mint
+	// and persist the provider-run identity at the actual run boundary so a
+	// report retry is idempotent while a true reclaim/restart receives a new
+	// immutable execution record.
+	executionID := ""
+	if task.isInboxTask() {
+		executionID = uuid.NewString()
+		if err := d.client.StartAgentInboxExecution(reportCtx, *task.InboxEvent, executionID); err != nil {
+			taskLog.Error("start inbox execution ledger record failed", "error", err)
+			d.reportTaskFailure(reportCtx, task, fmt.Sprintf("start inbox execution ledger record: %v", err), "", "", "execution_ledger_error", taskLog)
+			return
+		}
+	}
+
 	result, err := d.runner.run(runCtx, task, provider, slot, taskLog)
 
 	if inboxLeaseLost != nil {
@@ -2738,8 +2753,12 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 	// goroutine. Both claude.go and codex.go populate result.Usage even when
 	// runCtx is cancelled, so dropping this on the cancelled path silently
 	// under-reports billing.
-	if len(result.Usage) > 0 && !task.isInboxTask() {
-		if usageErr := d.client.ReportTaskUsage(ctx, task.ID, result.Usage); usageErr != nil {
+	if len(result.Usage) > 0 {
+		if task.isInboxTask() {
+			if usageErr := d.client.ReportAgentInboxUsage(ctx, *task.InboxEvent, executionID, result.Usage); usageErr != nil {
+				taskLog.Warn("report inbox usage failed", "execution_id", executionID, "error", usageErr)
+			}
+		} else if usageErr := d.client.ReportTaskUsage(ctx, task.ID, result.Usage); usageErr != nil {
 			taskLog.Warn("report task usage failed", "error", usageErr)
 		}
 	}

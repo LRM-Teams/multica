@@ -470,6 +470,28 @@ func (c *Client) ReportTaskUsage(ctx context.Context, taskID string, usage []Tas
 	}, nil)
 }
 
+// StartAgentInboxExecution persists the daemon-minted provider-run UUID before
+// calling the provider. delivery_id remains only the active transport lease.
+func (c *Client) StartAgentInboxExecution(ctx context.Context, lease AgentInboxLease, executionID string) error {
+	return c.postJSONWithRetryToken(ctx, fmt.Sprintf("/api/daemon/agent-inbox/events/%s/execution", lease.ID), map[string]any{
+		"delivery_id":  lease.DeliveryID,
+		"lease_token":  lease.LeaseToken,
+		"execution_id": executionID,
+	}, nil, defaultTerminalRetrySchedule, c.tokenForRuntime(lease.RuntimeID))
+}
+
+func (c *Client) ReportAgentInboxUsage(ctx context.Context, lease AgentInboxLease, executionID string, usage []TaskUsageEntry) error {
+	if len(usage) == 0 {
+		return nil
+	}
+	return c.postJSONWithRetryToken(ctx, fmt.Sprintf("/api/daemon/agent-inbox/events/%s/usage", lease.ID), map[string]any{
+		"delivery_id":  lease.DeliveryID,
+		"lease_token":  lease.LeaseToken,
+		"execution_id": executionID,
+		"usage":        usage,
+	}, nil, defaultTerminalRetrySchedule, c.tokenForRuntime(lease.RuntimeID))
+}
+
 func (c *Client) FailTask(ctx context.Context, taskID, errMsg, sessionID, workDir, failureReason string) error {
 	body := map[string]any{"error": errMsg}
 	if sessionID != "" {

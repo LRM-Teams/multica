@@ -4720,6 +4720,7 @@ func TestClaimTask_ChatPriorSessionRuntimeGuard(t *testing.T) {
 	`, agentID, runtimeID, budgetSessionID).Scan(&priorBudgetTaskID); err != nil {
 		t.Fatalf("setup: create token budget prior chat task: %v", err)
 	}
+	seedQueueExecution(t, priorBudgetTaskID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO agent_usage (execution_id, source, provider, model, input_tokens)
 		VALUES ($1, 'chat', 'claude', 'test-model', $2)

@@ -47,3 +47,14 @@ DELETE FROM workspace WHERE id = $1;
 SELECT default_self_play_env_id
   FROM workspace
  WHERE id = $1;
+
+-- name: SetDefaultSelfPlayEnv :exec
+-- Conditionally sets the per-workspace default self_play base env only when it
+-- is still NULL, so the first of N concurrent auto-create writers wins and the
+-- rest are no-ops (the service re-reads GetDefaultSelfPlayEnv to pick up the
+-- canonical winner and clean up any losing env). envID may be NULL to no-op.
+UPDATE workspace
+   SET default_self_play_env_id = $2,
+       updated_at = now()
+ WHERE id = $1
+   AND default_self_play_env_id IS NULL;

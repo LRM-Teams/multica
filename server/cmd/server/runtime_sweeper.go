@@ -54,6 +54,18 @@ const (
 	// don't expire legitimately-pending work, while still draining the historical
 	// 87k autopilot backlog within ~24h once enabled.
 	queuedTTLSeconds = 2 * 3600.0
+	// offlineRuntimeQueuedTTLSeconds fails 'queued' tasks whose runtime is still
+	// 'offline' after this duration. env-dispatch pre-creates the per-agent
+	// sandbox runtime R' as offline and routes a queued task to it; the in-sandbox
+	// daemon is expected to register (-> R' online) and claim the task within
+	// seconds. If the sandbox/daemon never comes up, this fails the task promptly
+	// instead of waiting for the 2h queuedTTLSeconds backstop. 5 min sits above
+	// staleThresholdSeconds (150s) so a runtime that is merely DB-lagging-but-
+	// alive (kept online by the liveness check) is never swept, and gives a
+	// genuinely-dead sandbox a bounded failure latency. failure_reason is
+	// 'runtime_offline' (retryable, bounded by max_attempts) so a transient
+	// sandbox boot failure can still auto-retry once the runtime is back.
+	offlineRuntimeQueuedTTLSeconds = 300.0
 	// queuedExpireBatchSize caps how many queued rows a single sweeper tick
 	// transitions to failed. Keeps the sweep transaction short even when
 	// the historical backlog is large (~89k at MUL-1899 baseline). At 30s
@@ -90,6 +102,7 @@ func runRuntimeSweeper(ctx context.Context, queries *db.Queries, healthEventExec
 			sweepStaleSandboxNodes(ctx, queries)
 			sweepStaleTasks(ctx, queries, taskSvc, bus)
 			sweepExpiredQueuedTasks(ctx, queries, taskSvc)
+			sweepQueuedTasksOnOfflineRuntimes(ctx, queries, taskSvc)
 			gcRuntimes(ctx, queries, bus)
 		}
 	}
@@ -301,6 +314,32 @@ func sweepExpiredQueuedTasks(ctx context.Context, queries *db.Queries, taskSvc *
 
 	slog.Info("task sweeper: expired stale queued tasks", "count", len(failedTasks))
 	taskSvc.CaptureQueuedExpiredTasks(ctx, failedTasks)
+	taskSvc.HandleFailedTasks(ctx, failedTasks)
+}
+
+// sweepQueuedTasksOnOfflineRuntimes fails 'queued' tasks whose runtime is still
+// 'offline' past offlineRuntimeQueuedTTLSeconds. This is the env-dispatch
+// per-agent sandbox liveness backstop (Phase 2b): when the in-sandbox daemon
+// never registers, R' stays offline and the routed task would otherwise linger
+// in 'queued' until the 2h sweep. R' is intentionally NOT deleted here - the
+// task row still references it (agent_task_queue.runtime_id ON DELETE CASCADE),
+// so deleting R' would cascade-delete the failure record. R' reclamation is
+// left to the dispatch-failure path and the 7d offline-runtime GC. The failed
+// task reuses the runtime_offline retry/metrics path via HandleFailedTasks.
+func sweepQueuedTasksOnOfflineRuntimes(ctx context.Context, queries *db.Queries, taskSvc *service.TaskService) {
+	failedTasks, err := queries.ExpireQueuedTasksOnOfflineRuntimes(ctx, db.ExpireQueuedTasksOnOfflineRuntimesParams{
+		TtlSecs:    offlineRuntimeQueuedTTLSeconds,
+		MaxPerTick: queuedExpireBatchSize,
+	})
+	if err != nil {
+		slog.Warn("task sweeper: failed to expire queued tasks on offline runtimes", "error", err)
+		return
+	}
+	if len(failedTasks) == 0 {
+		return
+	}
+
+	slog.Info("task sweeper: failed queued tasks on offline runtimes", "count", len(failedTasks))
 	taskSvc.HandleFailedTasks(ctx, failedTasks)
 }
 

@@ -494,6 +494,10 @@ create table if not exists public.areal_remote_commands (
     )
 );
 
+-- Existing installs may predate the metadata column; ensure it exists.
+alter table public.areal_remote_commands
+    add column if not exists metadata jsonb not null default '{}'::jsonb;
+
 -- Existing installs may have the older task/account-scoped remote-shell shape.
 -- Re-applying schema.sql migrates them to the tmux-scoped command shape.
 alter table public.areal_remote_commands

@@ -122,6 +122,20 @@ func (q *Queries) DeleteAgentRuntime(ctx context.Context, id pgtype.UUID) error 
 	return err
 }
 
+const deleteAgentRuntimeForWorkspace = `-- name: DeleteAgentRuntimeForWorkspace :exec
+DELETE FROM agent_runtime WHERE id = $1 AND workspace_id = $2
+`
+
+type DeleteAgentRuntimeForWorkspaceParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) DeleteAgentRuntimeForWorkspace(ctx context.Context, arg DeleteAgentRuntimeForWorkspaceParams) error {
+	_, err := q.db.Exec(ctx, deleteAgentRuntimeForWorkspace, arg.ID, arg.WorkspaceID)
+	return err
+}
+
 const deleteArchivedAgentsByRuntime = `-- name: DeleteArchivedAgentsByRuntime :exec
 DELETE FROM agent WHERE runtime_id = $1 AND archived_at IS NOT NULL
 `
@@ -1036,6 +1050,77 @@ func (q *Queries) UpsertAgentRuntime(ctx context.Context, arg UpsertAgentRuntime
 		&i.LegacyDaemonID,
 		&i.Visibility,
 		&i.Inserted,
+	)
+	return i, err
+}
+
+const precreateAgentRuntime = `-- name: PrecreateAgentRuntime :one
+INSERT INTO agent_runtime (
+    workspace_id,
+    daemon_id,
+    name,
+    runtime_mode,
+    provider,
+    status,
+    device_info,
+    metadata,
+    owner_id,
+    last_seen_at
+) VALUES ($1, $2, $3, 'local', $4, 'offline', '', '{}', $5, now())
+RETURNING id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility
+`
+
+type PrecreateAgentRuntimeParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	DaemonID    pgtype.Text `json:"daemon_id"`
+	Name        string      `json:"name"`
+	Provider    string      `json:"provider"`
+	OwnerID     pgtype.UUID `json:"owner_id"`
+}
+
+type PrecreateAgentRuntimeRow struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	DaemonID       pgtype.Text        `json:"daemon_id"`
+	Name           string             `json:"name"`
+	RuntimeMode    string             `json:"runtime_mode"`
+	Provider       string             `json:"provider"`
+	Status         string             `json:"status"`
+	DeviceInfo     string             `json:"device_info"`
+	Metadata       []byte             `json:"metadata"`
+	LastSeenAt     pgtype.Timestamptz `json:"last_seen_at"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	OwnerID        pgtype.UUID        `json:"owner_id"`
+	LegacyDaemonID pgtype.Text        `json:"legacy_daemon_id"`
+	Visibility     string             `json:"visibility"`
+}
+
+func (q *Queries) PrecreateAgentRuntime(ctx context.Context, arg PrecreateAgentRuntimeParams) (PrecreateAgentRuntimeRow, error) {
+	row := q.db.QueryRow(ctx, precreateAgentRuntime,
+		arg.WorkspaceID,
+		arg.DaemonID,
+		arg.Name,
+		arg.Provider,
+		arg.OwnerID,
+	)
+	var i PrecreateAgentRuntimeRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.DaemonID,
+		&i.Name,
+		&i.RuntimeMode,
+		&i.Provider,
+		&i.Status,
+		&i.DeviceInfo,
+		&i.Metadata,
+		&i.LastSeenAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.OwnerID,
+		&i.LegacyDaemonID,
+		&i.Visibility,
 	)
 	return i, err
 }

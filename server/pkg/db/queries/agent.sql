@@ -137,13 +137,14 @@ LIMIT 50;
 -- name: CreateAgentTask :one
 INSERT INTO agent_task_queue (
     agent_id, runtime_id, issue_id, status, priority, trigger_comment_id,
-    trigger_summary, force_fresh_session, is_leader_task
+    trigger_summary, force_fresh_session, is_leader_task, context
 )
 VALUES (
     $1, $2, $3, 'queued', $4, sqlc.narg(trigger_comment_id),
     sqlc.narg(trigger_summary),
     COALESCE(sqlc.narg('force_fresh_session')::boolean, FALSE),
-    COALESCE(sqlc.narg('is_leader_task')::boolean, FALSE)
+    COALESCE(sqlc.narg('is_leader_task')::boolean, FALSE),
+    sqlc.narg(context)
 )
 RETURNING *;
 
@@ -621,6 +622,49 @@ WHERE t.id = v.id
   AND t.created_at < now() - make_interval(secs => @ttl_secs::double precision)
 RETURNING t.*;
 
+-- name: ExpireQueuedTasksOnOfflineRuntimes :many
+-- Fails 'queued' tasks whose runtime is still 'offline' after the
+-- offline-runtime TTL. This is the env-dispatch per-agent sandbox liveness
+-- backstop (Phase 2b): env-dispatch pre-creates R' as offline, routes a queued
+-- task to it, and relies on the in-sandbox daemon registering (-> R' online)
+-- and claiming the task. If the sandbox/daemon never comes up, the task would
+-- otherwise sit in 'queued' until the slow 2h queued-TTL sweep. This drains it
+-- in ~5 min so the rollout fails promptly. FailTasksForOfflineRuntimes does NOT
+-- cover this: it only touches dispatched/running/waiting_local_directory, so
+-- 'queued' rows on offline runtimes are otherwise only caught by the 2h sweep.
+--
+-- Same concurrency contract as ExpireStaleQueuedTasks: FOR UPDATE SKIP LOCKED
+-- in the victim CTE + a status='queued' AND runtime-still-offline re-check in
+-- the outer UPDATE. The re-check matters here because the daemon may bring R'
+-- online and claim the task between selection and apply - in that case the row
+-- is already 'dispatched' (filtered by status) or R' is now online (filtered by
+-- the EXISTS), so we cannot clobber an in-flight or now-routable task.
+-- failure_reason='runtime_offline' matches FailTasksForOfflineRuntimes so the
+-- retry/metrics path in HandleFailedTasks treats it identically (retryable,
+-- bounded by max_attempts).
+WITH victims AS (
+    SELECT t.id
+    FROM agent_task_queue t
+    JOIN agent_runtime r ON r.id = t.runtime_id
+    WHERE t.status = 'queued'
+      AND r.status = 'offline'
+      AND t.created_at < now() - make_interval(secs => @ttl_secs::double precision)
+    ORDER BY t.created_at ASC
+    LIMIT @max_per_tick::int
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE agent_task_queue t
+SET status = 'failed',
+    completed_at = now(),
+    error = 'runtime offline: sandbox daemon did not register in time',
+    failure_reason = 'runtime_offline'
+FROM victims v
+WHERE t.id = v.id
+  AND t.status = 'queued'
+  AND t.created_at < now() - make_interval(secs => @ttl_secs::double precision)
+  AND EXISTS (SELECT 1 FROM agent_runtime r WHERE r.id = t.runtime_id AND r.status = 'offline')
+RETURNING t.*;
+
 -- name: CancelAgentTask :one
 UPDATE agent_task_queue
 SET status = 'cancelled', completed_at = now()
@@ -644,6 +688,16 @@ WHERE agent_id = $1
 -- or running task for the issue.
 SELECT count(*) > 0 AS has_active FROM agent_task_queue
 WHERE issue_id = $1 AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory');
+
+-- name: HasOtherActiveTaskForRuntime :one
+-- Returns true if any queued/dispatched/running/waiting_local_directory task
+-- OTHER than the given one is still bound to this runtime. Used by the Phase 5
+-- ephemeral-sandbox cleanup guard: a retry child inherits the parent's runtime_id
+-- (CreateRetryTask copies runtime_id), so the sandbox + runtime must not be
+-- torn down while a sibling/child task is still active on R'.
+SELECT count(*) > 0 AS has_active FROM agent_task_queue
+WHERE runtime_id = $1 AND id <> $2
+  AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory');
 
 -- name: HasPendingTaskForIssue :one
 -- Returns true if there is a queued or dispatched (but not yet running) task for the issue.

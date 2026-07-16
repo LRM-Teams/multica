@@ -4,6 +4,8 @@ package service
 
 import (
 	"context"
+	"encoding/json"
+	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -265,4 +267,276 @@ func TestMaybeRetryFailedTask_EnvIDFromProjectEnvID(t *testing.T) {
 	assert.NotEqual(t, "sess-child", env.rl.lastEnv)
 	// task id passed to StartSession is the child's, confirming a fresh session.
 	assert.Equal(t, util.UUIDToString(child.ID), env.rl.lastTask)
+}
+
+// TestExtractEphemeralSandbox verifies the Phase 5 context-marker extraction
+// helper for every edge case: valid marker, nil/empty context, missing key,
+// null value, and an empty sandbox_instance_id.
+func TestExtractEphemeralSandbox(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   []byte
+		wantOK  bool
+		wantSID string
+	}{
+		{name: "nil context", input: nil, wantOK: false},
+		{name: "empty json", input: []byte("{}"), wantOK: false},
+		{name: "no ephemeral_sandbox key", input: []byte(`{"other":1}`), wantOK: false},
+		{name: "null ephemeral_sandbox", input: []byte(`{"ephemeral_sandbox":null}`), wantOK: false},
+		{name: "empty string instance_id", input: []byte(`{"ephemeral_sandbox":{"sandbox_instance_id":""}}`), wantOK: false},
+		{name: "valid marker", input: []byte(`{"ephemeral_sandbox":{"sandbox_instance_id":"inst-42"}}`), wantOK: true, wantSID: "inst-42"},
+		{name: "valid marker alongside squad_id", input: []byte(`{"squad_id":"sq","ephemeral_sandbox":{"sandbox_instance_id":"inst-1"}}`), wantOK: true, wantSID: "inst-1"},
+		{name: "malformed json", input: []byte(`{notjson`), wantOK: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := extractEphemeralSandbox(tt.input)
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
+			}
+			if tt.wantOK {
+				if got == nil || got.SandboxInstanceID != tt.wantSID {
+					t.Fatalf("SandboxInstanceID = %q, want %q", got.SandboxInstanceID, tt.wantSID)
+				}
+			}
+		})
+	}
+}
+
+// fakeEphemeralSandboxCleaner records calls to DeleteSandboxInstance.
+type fakeEphemeralSandboxCleaner struct {
+	mu    sync.Mutex
+	calls []cleanerCall
+}
+
+type cleanerCall struct {
+	WorkspaceID       string
+	SandboxInstanceID string
+}
+
+func (f *fakeEphemeralSandboxCleaner) DeleteSandboxInstance(_ context.Context, workspaceID, instanceID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, cleanerCall{workspaceID, instanceID})
+	return nil
+}
+
+// TestMaybeCleanupEphemeralSandbox exercises the terminal cleanup hook with a
+// real DB (tx-backed, hermetic). It verifies:
+//   - Caller fires when the task carries a valid ephemeral_sandbox marker
+//     and no other active task is on R'.
+//   - R' is set offline.
+func TestMaybeCleanupEphemeralSandbox(t *testing.T) {
+	pool := interactionDAGTestPool(t)
+	t.Cleanup(pool.Close)
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tx.Rollback(ctx) })
+	q := db.New(tx)
+
+	ws, err := q.CreateWorkspace(ctx, db.CreateWorkspaceParams{
+		Name: "eph-cleanup", Slug: "eph-cleanup", IssuePrefix: "EC",
+	})
+	require.NoError(t, err)
+
+	var rtID pgtype.UUID
+	err = tx.QueryRow(ctx, `INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, visibility) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+		ws.ID, "daemon-eph1", "eph-runtime", "local", "pi", "online", "", []byte("{}"), "private",
+	).Scan(&rtID)
+	require.NoError(t, err)
+
+	var agentID pgtype.UUID
+	err = tx.QueryRow(ctx, `INSERT INTO agent (workspace_id, name, display_name, runtime_mode, runtime_config, runtime_id, visibility, max_concurrent_tasks) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+		ws.ID, "eph-agent", "Eph Agent", "local", []byte("{}"), rtID, "workspace", 1,
+	).Scan(&agentID)
+	require.NoError(t, err)
+
+	var projectID pgtype.UUID
+	err = tx.QueryRow(ctx, `INSERT INTO project (workspace_id, title) VALUES ($1, $2) RETURNING id`,
+		ws.ID, "eph-project",
+	).Scan(&projectID)
+	require.NoError(t, err)
+
+	withBump := `WITH bumped AS (UPDATE workspace SET issue_counter = issue_counter + 1 WHERE id = $1 RETURNING issue_counter)
+	INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id, assignee_type, assignee_id, project_id, number)
+	SELECT $1, $2, 'in_progress', 'none', 'member', u.id, 'agent', $3, $4, (SELECT issue_counter FROM bumped)
+	FROM "user" u LIMIT 1 RETURNING id`
+	var issueID pgtype.UUID
+	err = tx.QueryRow(ctx, withBump, ws.ID, "Eph Issue", agentID, projectID).Scan(&issueID)
+	require.NoError(t, err)
+
+	marker, _ := json.Marshal(map[string]any{
+		"ephemeral_sandbox": map[string]string{"sandbox_instance_id": "inst-99"},
+	})
+	task, err := q.CreateAgentTask(ctx, db.CreateAgentTaskParams{
+		AgentID:   agentID,
+		RuntimeID: rtID,
+		IssueID:   issueID,
+		Priority:  0,
+		Context:   marker,
+	})
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `UPDATE agent_task_queue SET status = 'completed', completed_at = now() WHERE id = $1`, task.ID)
+	require.NoError(t, err)
+	task, err = q.GetAgentTask(ctx, task.ID)
+	require.NoError(t, err)
+
+	cleaner := &fakeEphemeralSandboxCleaner{}
+	svc := &TaskService{
+		Queries:                 q,
+		Bus:                     &events.Bus{},
+		EphemeralSandboxCleaner: cleaner,
+	}
+
+	svc.maybeCleanupEphemeralSandbox(ctx, task)
+
+	cleaner.mu.Lock()
+	assert.Len(t, cleaner.calls, 1, "cleaner should have been called once")
+	assert.Equal(t, "inst-99", cleaner.calls[0].SandboxInstanceID)
+	assert.Equal(t, util.UUIDToString(ws.ID), cleaner.calls[0].WorkspaceID)
+	cleaner.mu.Unlock()
+
+	var rtStatus string
+	err = tx.QueryRow(ctx, `SELECT status FROM agent_runtime WHERE id = $1`, rtID).Scan(&rtStatus)
+	require.NoError(t, err)
+	assert.Equal(t, "offline", rtStatus)
+}
+
+// TestMaybeCleanupEphemeralSandbox_NoOpWithoutMarker verifies the cleanup is a
+// no-op when the task has no ephemeral_sandbox marker in its context.
+func TestMaybeCleanupEphemeralSandbox_NoOpWithoutMarker(t *testing.T) {
+	pool := interactionDAGTestPool(t)
+	t.Cleanup(pool.Close)
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tx.Rollback(ctx) })
+	q := db.New(tx)
+
+	ws, err := q.CreateWorkspace(ctx, db.CreateWorkspaceParams{
+		Name: "eph-nomarker", Slug: "eph-nomarker", IssuePrefix: "EN",
+	})
+	require.NoError(t, err)
+
+	var rtID pgtype.UUID
+	err = tx.QueryRow(ctx, `INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, visibility) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+		ws.ID, "daemon-nomarker", "nomarker-rt", "local", "pi", "online", "", []byte("{}"), "private",
+	).Scan(&rtID)
+	require.NoError(t, err)
+
+	var agentID pgtype.UUID
+	err = tx.QueryRow(ctx, `INSERT INTO agent (workspace_id, name, display_name, runtime_mode, runtime_config, runtime_id, visibility, max_concurrent_tasks) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+		ws.ID, "nm-agent", "NM", "local", []byte("{}"), rtID, "workspace", 1,
+	).Scan(&agentID)
+	require.NoError(t, err)
+
+	var projectID pgtype.UUID
+	err = tx.QueryRow(ctx, `INSERT INTO project (workspace_id, title) VALUES ($1, $2) RETURNING id`,
+		ws.ID, "nm-project",
+	).Scan(&projectID)
+	require.NoError(t, err)
+
+	withBump := `WITH bumped AS (UPDATE workspace SET issue_counter = issue_counter + 1 WHERE id = $1 RETURNING issue_counter)
+	INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id, assignee_type, assignee_id, project_id, number)
+	SELECT $1, $2, 'in_progress', 'none', 'member', u.id, 'agent', $3, $4, (SELECT issue_counter FROM bumped)
+	FROM "user" u LIMIT 1 RETURNING id`
+	var issueID pgtype.UUID
+	err = tx.QueryRow(ctx, withBump, ws.ID, "NM Issue", agentID, projectID).Scan(&issueID)
+	require.NoError(t, err)
+
+	task, err := q.CreateAgentTask(ctx, db.CreateAgentTaskParams{
+		AgentID: agentID, RuntimeID: rtID, IssueID: issueID, Priority: 0,
+		Context: []byte(`{"squad_id":"sq"}`),
+	})
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `UPDATE agent_task_queue SET status = 'completed', completed_at = now() WHERE id = $1`, task.ID)
+	require.NoError(t, err)
+	task, err = q.GetAgentTask(ctx, task.ID)
+	require.NoError(t, err)
+
+	cleaner := &fakeEphemeralSandboxCleaner{}
+	svc := &TaskService{
+		Queries: q, Bus: &events.Bus{}, EphemeralSandboxCleaner: cleaner,
+	}
+
+	svc.maybeCleanupEphemeralSandbox(ctx, task)
+
+	assert.Len(t, cleaner.calls, 0, "cleaner must not fire without the ephemeral marker")
+}
+
+// TestMaybeCleanupEphemeralSandbox_SkipsWhenSiblingActive verifies the retry-
+// safety guard: when another active task is still queued on the same R', the
+// cleanup must skip so it does not reclaim the sandbox out from under the sibling.
+func TestMaybeCleanupEphemeralSandbox_SkipsWhenSiblingActive(t *testing.T) {
+	pool := interactionDAGTestPool(t)
+	t.Cleanup(pool.Close)
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tx.Rollback(ctx) })
+	q := db.New(tx)
+
+	ws, err := q.CreateWorkspace(ctx, db.CreateWorkspaceParams{
+		Name: "eph-sibling", Slug: "eph-sibling", IssuePrefix: "ES",
+	})
+	require.NoError(t, err)
+
+	var rtID pgtype.UUID
+	err = tx.QueryRow(ctx, `INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, visibility) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+		ws.ID, "daemon-sib", "sib-rt", "local", "pi", "online", "", []byte("{}"), "private",
+	).Scan(&rtID)
+	require.NoError(t, err)
+
+	var agentID pgtype.UUID
+	err = tx.QueryRow(ctx, `INSERT INTO agent (workspace_id, name, display_name, runtime_mode, runtime_config, runtime_id, visibility, max_concurrent_tasks) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+		ws.ID, "sib-agent", "SA", "local", []byte("{}"), rtID, "workspace", 1,
+	).Scan(&agentID)
+	require.NoError(t, err)
+
+	var projectID pgtype.UUID
+	err = tx.QueryRow(ctx, `INSERT INTO project (workspace_id, title) VALUES ($1, $2) RETURNING id`,
+		ws.ID, "sib-project",
+	).Scan(&projectID)
+	require.NoError(t, err)
+
+	withBump := `WITH bumped AS (UPDATE workspace SET issue_counter = issue_counter + 1 WHERE id = $1 RETURNING issue_counter)
+	INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id, assignee_type, assignee_id, project_id, number)
+	SELECT $1, $2, 'in_progress', 'none', 'member', u.id, 'agent', $3, $4, (SELECT issue_counter FROM bumped)
+	FROM "user" u LIMIT 1 RETURNING id`
+	var issue1ID pgtype.UUID
+	err = tx.QueryRow(ctx, withBump, ws.ID, "Sib Issue 1", agentID, projectID).Scan(&issue1ID)
+	require.NoError(t, err)
+	var issue2ID pgtype.UUID
+	err = tx.QueryRow(ctx, withBump, ws.ID, "Sib Issue 2", agentID, projectID).Scan(&issue2ID)
+	require.NoError(t, err)
+
+	marker, _ := json.Marshal(map[string]any{
+		"ephemeral_sandbox": map[string]string{"sandbox_instance_id": "inst-1"},
+	})
+	parent, err := q.CreateAgentTask(ctx, db.CreateAgentTaskParams{
+		AgentID: agentID, RuntimeID: rtID, IssueID: issue1ID, Priority: 0, Context: marker,
+	})
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `UPDATE agent_task_queue SET status = 'completed', completed_at = now() WHERE id = $1`, parent.ID)
+	require.NoError(t, err)
+	parent, err = q.GetAgentTask(ctx, parent.ID)
+	require.NoError(t, err)
+
+	// Sibling: still queued on the same R'.
+	_, err = q.CreateAgentTask(ctx, db.CreateAgentTaskParams{
+		AgentID: agentID, RuntimeID: rtID, IssueID: issue2ID, Priority: 0, Context: marker,
+	})
+	require.NoError(t, err)
+
+	cleaner := &fakeEphemeralSandboxCleaner{}
+	svc := &TaskService{
+		Queries: q, Bus: &events.Bus{}, EphemeralSandboxCleaner: cleaner,
+	}
+
+	svc.maybeCleanupEphemeralSandbox(ctx, parent)
+
+	cleaner.mu.Lock()
+	assert.Len(t, cleaner.calls, 0, "cleanup must skip when a sibling task is still active on R'")
+	cleaner.mu.Unlock()
 }

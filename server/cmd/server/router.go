@@ -545,6 +545,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Get("/tasks/{taskId}/messages", h.ListTaskMessages)
 		r.Post("/agent-inbox/events/{eventId}/ack", h.AckAgentInboxEvent)
 		r.Post("/agent-inbox/events/{eventId}/renew", h.RenewAgentInboxEvent)
+		r.Post("/agent-inbox/events/{eventId}/execution", h.StartAgentInboxExecution)
+		r.Post("/agent-inbox/events/{eventId}/usage", h.ReportAgentInboxUsage)
 		r.Post("/agent-inbox/events/{eventId}/messages", h.ReportAgentInboxMessages)
 		r.Post("/agent-inbox/events/{eventId}/complete", h.CompleteAgentInboxEvent)
 		r.Post("/agent-inbox/events/{eventId}/fail", h.FailAgentInboxEvent)

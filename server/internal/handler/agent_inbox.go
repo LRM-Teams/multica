@@ -106,6 +106,22 @@ type ReportAgentInboxMessagesRequest struct {
 	Messages   []TaskMessageRequest `json:"messages"`
 }
 
+// AgentInboxExecutionRequest is deliberately separate from a delivery. A
+// delivery is a renewable transport lease; execution_id identifies one actual
+// provider run and is minted by the daemon immediately before that run starts.
+type AgentInboxExecutionRequest struct {
+	DeliveryID  string `json:"delivery_id"`
+	LeaseToken  string `json:"lease_token"`
+	ExecutionID string `json:"execution_id"`
+}
+
+type ReportAgentInboxUsageRequest struct {
+	DeliveryID  string              `json:"delivery_id"`
+	LeaseToken  string              `json:"lease_token"`
+	ExecutionID string              `json:"execution_id"`
+	Usage       []AgentUsagePayload `json:"usage"`
+}
+
 type FailAgentInboxEventRequest struct {
 	DeliveryID    string `json:"delivery_id"`
 	LeaseToken    string `json:"lease_token"`
@@ -367,6 +383,102 @@ func (h *Handler) ReportAgentInboxMessages(w http.ResponseWriter, r *http.Reques
 		)
 		if payload, ok := agentInboxTaskMessagePayload(event, msg, kind, details); ok && h.Bus != nil {
 			h.publishTask(protocol.EventTaskMessage, uuidToString(event.WorkspaceID), "system", "", uuidToString(event.ID), payload)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// StartAgentInboxExecution persists immutable attribution before the daemon
+// calls a provider. Reporting usage afterwards may be retried, but it cannot
+// manufacture a provider run or infer a runtime from the current session.
+func (h *Handler) StartAgentInboxExecution(w http.ResponseWriter, r *http.Request) {
+	eventID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "eventId"), "event_id")
+	if !ok {
+		return
+	}
+	event, ok := h.requireDaemonInboxEventAccess(w, r, eventID)
+	if !ok {
+		return
+	}
+	var req AgentInboxExecutionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	deliveryID, ok := parseUUIDOrBadRequest(w, req.DeliveryID, "delivery_id")
+	if !ok {
+		return
+	}
+	leaseToken, ok := parseUUIDOrBadRequest(w, req.LeaseToken, "lease_token")
+	if !ok {
+		return
+	}
+	if _, ok := h.requireActiveAgentInboxDelivery(w, r, event, deliveryID, leaseToken); !ok {
+		return
+	}
+	executionID, ok := parseUUIDOrBadRequest(w, req.ExecutionID, "execution_id")
+	if !ok {
+		return
+	}
+	if err := h.Queries.CreateAgentInboxExecution(r.Context(), db.CreateAgentInboxExecutionParams{
+		ExecutionID:  executionID,
+		InboxEventID: event.ID,
+	}); err != nil {
+		slog.Warn("create inbox execution failed", "execution_id", req.ExecutionID, "inbox_event_id", uuidToString(event.ID), "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to create inbox execution")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (h *Handler) ReportAgentInboxUsage(w http.ResponseWriter, r *http.Request) {
+	eventID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "eventId"), "event_id")
+	if !ok {
+		return
+	}
+	event, ok := h.requireDaemonInboxEventAccess(w, r, eventID)
+	if !ok {
+		return
+	}
+	var req ReportAgentInboxUsageRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	// The execution was authenticated and persisted while its delivery was
+	// active. A provider may finish after that delivery expires or is reclaimed,
+	// so retries are authorized by the immutable execution/event binding below,
+	// not by mutable transport ownership.
+	executionID, ok := parseUUIDOrBadRequest(w, req.ExecutionID, "execution_id")
+	if !ok {
+		return
+	}
+	if _, err := h.Queries.GetAgentInboxExecution(r.Context(), db.GetAgentInboxExecutionParams{
+		ExecutionID:  executionID,
+		InboxEventID: event.ID,
+	}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusConflict, "provider execution was not started")
+			return
+		}
+		slog.Warn("load inbox execution failed", "execution_id", req.ExecutionID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to load inbox execution")
+		return
+	}
+	for _, u := range req.Usage {
+		if err := h.Queries.UpsertAgentUsage(r.Context(), db.UpsertAgentUsageParams{
+			ExecutionID:      executionID,
+			Source:           "chat",
+			Provider:         u.Provider,
+			Model:            u.Model,
+			InputTokens:      u.InputTokens,
+			OutputTokens:     u.OutputTokens,
+			CacheReadTokens:  u.CacheReadTokens,
+			CacheWriteTokens: u.CacheWriteTokens,
+		}); err != nil {
+			slog.Warn("upsert inbox agent usage failed", "execution_id", req.ExecutionID, "model", u.Model, "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to record inbox usage")
+			return
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

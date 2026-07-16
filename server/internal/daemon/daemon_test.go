@@ -1201,6 +1201,10 @@ func TestHandleTask_InboxCompleteUsesInboxEndpoint(t *testing.T) {
 			_, _ = w.Write([]byte(`{"ok":true}`))
 			return
 		}
+		if r.URL.Path == "/api/daemon/agent-inbox/events/event-123/execution" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		if r.URL.Path != "/api/daemon/agent-inbox/events/event-123/complete" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
@@ -1249,6 +1253,74 @@ func TestHandleTask_InboxCompleteUsesInboxEndpoint(t *testing.T) {
 	}
 }
 
+// A delivery lease can be renewed without beginning a new provider run. The
+// daemon must mint one run UUID before invoking the provider, then use that
+// same UUID for every usage-report retry from this run.
+func TestHandleTask_InboxUsageStartsExecutionBeforeProvider(t *testing.T) {
+	t.Parallel()
+
+	var mu sync.Mutex
+	var executionID string
+	startSeen := false
+	usageCalls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		switch r.URL.Path {
+		case "/api/daemon/agent-inbox/events/event-usage/renew":
+			w.WriteHeader(http.StatusOK)
+		case "/api/daemon/agent-inbox/events/event-usage/execution":
+			mu.Lock()
+			startSeen = true
+			executionID, _ = body["execution_id"].(string)
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+		case "/api/daemon/agent-inbox/events/event-usage/usage":
+			mu.Lock()
+			got, _ := body["execution_id"].(string)
+			if !startSeen || executionID == "" || got != executionID {
+				t.Errorf("usage execution_id=%q, started=%v start_id=%q", got, startSeen, executionID)
+			}
+			usageCalls++
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+		case "/api/daemon/agent-inbox/events/event-usage/complete":
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected inbox path: %s", r.URL.Path)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	d := &Daemon{
+		client:             NewClient(srv.URL),
+		logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+		workspaces:         make(map[string]*workspaceState),
+		runtimeIndex:       map[string]Runtime{"rt-usage": {ID: "rt-usage", Provider: "claude"}},
+		cancelPollInterval: time.Hour,
+	}
+	d.runner = taskRunnerFunc(func(_ context.Context, _ Task, _ string, _ int, _ *slog.Logger) (TaskResult, error) {
+		mu.Lock()
+		started := startSeen
+		mu.Unlock()
+		if !started {
+			t.Fatal("provider runner started before inbox execution was persisted")
+		}
+		return TaskResult{Status: "completed", Usage: []TaskUsageEntry{{Provider: "anthropic", Model: "claude-test", InputTokens: 7}}}, nil
+	})
+	d.handleTask(context.Background(), Task{
+		ID: "event-usage", AgentID: "agent-usage", RuntimeID: "rt-usage", WorkspaceID: "ws-usage", ChatSessionID: "chat-usage",
+		Agent:      &AgentData{Name: "inbox-agent"},
+		InboxEvent: &AgentInboxLease{ID: "event-usage", DeliveryID: "delivery-usage", LeaseToken: "lease-usage"},
+	}, 0)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if executionID == "" || usageCalls != 1 {
+		t.Fatalf("execution_id=%q usage_calls=%d, want one persisted execution and one usage report", executionID, usageCalls)
+	}
+}
+
 func TestHandleTask_InboxFailureUsesInboxEndpointWithClassifier(t *testing.T) {
 	t.Parallel()
 
@@ -1269,6 +1341,10 @@ func TestHandleTask_InboxFailureUsesInboxEndpointWithClassifier(t *testing.T) {
 			renewSeen.Store(true)
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"ok":true}`))
+			return
+		}
+		if r.URL.Path == "/api/daemon/agent-inbox/events/event-123/execution" {
+			w.WriteHeader(http.StatusOK)
 			return
 		}
 		if r.URL.Path != "/api/daemon/agent-inbox/events/event-123/fail" {
@@ -1441,6 +1517,8 @@ func TestHandleTask_InboxLeaseLossAfterRunnerDoesNotCancelTerminalReport(t *test
 			}
 			secondRenewOnce.Do(func() { close(secondRenew) })
 			http.Error(w, `{"error":"delivery lease is no longer active"}`, http.StatusConflict)
+		case strings.HasSuffix(r.URL.Path, "/execution"):
+			w.WriteHeader(http.StatusOK)
 		case strings.HasSuffix(r.URL.Path, "/complete"):
 			select {
 			case <-secondRenew:
@@ -1497,6 +1575,7 @@ func TestHandleTask_InboxLeaseLossCancelsRunningExecutor(t *testing.T) {
 
 	var renewCount atomic.Int32
 	var terminalSeen atomic.Bool
+	var usageSeen atomic.Bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/renew") {
 			if renewCount.Add(1) == 1 {
@@ -1505,6 +1584,15 @@ func TestHandleTask_InboxLeaseLossCancelsRunningExecutor(t *testing.T) {
 				return
 			}
 			http.Error(w, `{"error":"delivery lease is no longer active"}`, http.StatusConflict)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/execution") {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/usage") {
+			usageSeen.Store(true)
+			w.WriteHeader(http.StatusOK)
 			return
 		}
 		terminalSeen.Store(true)
@@ -1524,7 +1612,7 @@ func TestHandleTask_InboxLeaseLossCancelsRunningExecutor(t *testing.T) {
 		select {
 		case <-ctx.Done():
 			runnerCancelled.Store(true)
-			return TaskResult{}, ctx.Err()
+			return TaskResult{Usage: []TaskUsageEntry{{Provider: "anthropic", Model: "claude-test", InputTokens: 11}}}, ctx.Err()
 		case <-time.After(time.Second):
 			return TaskResult{}, errors.New("runner was not cancelled after lease loss")
 		}
@@ -1549,6 +1637,9 @@ func TestHandleTask_InboxLeaseLossCancelsRunningExecutor(t *testing.T) {
 	}
 	if terminalSeen.Load() {
 		t.Fatal("stale running executor attempted a terminal callback")
+	}
+	if !usageSeen.Load() {
+		t.Fatal("lease-lost execution did not report its persisted usage")
 	}
 }
 

@@ -65,6 +65,11 @@ Do NOT start building from a one-liner. First turn it into a **verifiable spec**
 - **"Playable / it runs" ≠ meets the standard.** Incomplete, unpolished, missing
   edge/error/empty/loading states → name the gap and **bounce it back**. A
   scope-cut deliverable is re-opened, not counted as progress.
+- **Visual/UI deliverables get looked at, not just run.** When the manager can
+  read images, it reviews the actual screenshot against the reference/target
+  product — layout, hierarchy, icons, animation/feedback, responsive and
+  empty/error states — and bounces visual polish that falls short. Ask the owner
+  to attach a screenshot when none is available.
 - New gaps found in review feed back into Decompose/Assign as fresh
   acceptance-criteria issues.
 

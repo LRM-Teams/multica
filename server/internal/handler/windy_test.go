@@ -25,6 +25,9 @@ func TestWindyInstructionsDelegateGroupWorkToBeckham(t *testing.T) {
 		windyInstructionsCapabilityMarker,
 		"贝克汉姆",
 		"do not monitor or coordinate work inside group channels",
+		"reply only to HR/team-building needs",
+		"ordinary project execution",
+		"do not answer in the group",
 	} {
 		if !strings.Contains(windyInstructions, phrase) {
 			t.Fatalf("Wendy instructions must contain %q", phrase)

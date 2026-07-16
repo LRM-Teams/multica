@@ -277,7 +277,7 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 	})
 	h.deleteAgentTransportDraft(r.Context(), source, target.raw)
 
-	// Record a message-sent activity event (agent replied via multica send).
+	// Record a message-sent activity event (agent replied via multica message send).
 	if !created {
 		return
 	}

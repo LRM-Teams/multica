@@ -2704,6 +2704,7 @@ func sanitizeRuntimeDiagnosticFinalText(output string, parts []protocol.MessageP
 	markers := []string{
 		"background search finished after the reply was already sent",
 		"nothing else needed for this turn",
+		"先修好 multica message send 的鉴权",
 		"先修好 multica send 的鉴权",
 		"改用任务态 token",
 		"任务态 token 的 multica",

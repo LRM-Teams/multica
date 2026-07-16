@@ -81,7 +81,7 @@ func (e *Engine) Run(opts Options) (Result, error) {
 	}
 	res.Events = append(res.Events, newRunEvent("resolved_targets", "", "done", fmt.Sprintf("%d target agent(s)", len(roots)), opts.Now))
 	if stage == StageTeamCuration {
-		res.Events = append(res.Events, newRunEvent("invoked_curator", "team", "running", "team curation", time.Now().UTC()))
+		res.Events = append(res.Events, newRunEvent("invoked_curator", "team", "started", "team curation", time.Now().UTC()))
 		ar, runErr := e.runTeamCuration(roots, opts)
 		res.AgentsScanned = len(roots)
 		res.EvidenceCollected = ar.EvidenceCollected
@@ -92,16 +92,18 @@ func (e *Engine) Run(opts Options) (Result, error) {
 			res.Events = append(res.Events, newRunEvent("invoked_curator", "team", "failed", runErr.Error(), time.Now().UTC()))
 			res.Errors = append(res.Errors, AgentError{WorkspaceID: opts.WorkspaceID, Stage: StageTeamCuration, Error: runErr.Error()})
 		} else {
+			res.Events = append(res.Events, newRunEvent("invoked_curator", "team", "done", "team curation", time.Now().UTC()))
 			res.Events = append(res.Events, newRunEvent("persisted_candidates", "team", "done", fmt.Sprintf("%d team item(s)", ar.SharedCandidatesAdded), time.Now().UTC()))
 		}
 		return res, nil
 	}
 	for _, root := range roots {
 		ar := AgentRunResult{WorkspaceID: root.WorkspaceID, AgentID: root.AgentID, Root: root.Root}
-		res.Events = append(res.Events, newRunEvent("read_local_files", root.AgentID, "running", root.Root, time.Now().UTC()))
+		res.Events = append(res.Events, newRunEvent("read_local_files", root.AgentID, "started", root.Root, time.Now().UTC()))
 		res.AgentsScanned++
 		if !opts.DryRun {
 			if err := ensureMemoryRoot(root.Root); err != nil {
+				res.Events = append(res.Events, newRunEvent("read_local_files", root.AgentID, "failed", err.Error(), time.Now().UTC()))
 				res.Errors = append(res.Errors, AgentError{WorkspaceID: root.WorkspaceID, AgentID: root.AgentID, Stage: stage, Error: err.Error()})
 				res.AgentResults = append(res.AgentResults, ar)
 				continue
@@ -111,16 +113,18 @@ func (e *Engine) Run(opts Options) (Result, error) {
 		releaseFileLock, lockErr := AcquireAgentRootFileLock(root.Root, opts.DryRun, opts.Now)
 		if lockErr != nil {
 			unlock()
+			res.Events = append(res.Events, newRunEvent("read_local_files", root.AgentID, "failed", lockErr.Error(), time.Now().UTC()))
 			res.Errors = append(res.Errors, AgentError{WorkspaceID: root.WorkspaceID, AgentID: root.AgentID, Stage: stage, Error: lockErr.Error()})
 			res.AgentResults = append(res.AgentResults, ar)
 			continue
 		}
+		res.Events = append(res.Events, newRunEvent("read_local_files", root.AgentID, "done", root.Root, time.Now().UTC()))
 		stages := []Stage{stage}
 		if stage == StageAll {
 			stages = []Stage{StageAgentSelfReview}
 		}
 		for _, st := range stages {
-			res.Events = append(res.Events, newRunEvent("invoked_curator", root.AgentID, "running", string(st), time.Now().UTC()))
+			res.Events = append(res.Events, newRunEvent("invoked_curator", root.AgentID, "started", string(st), time.Now().UTC()))
 			var sr AgentRunResult
 			var err error
 			switch st {
@@ -143,6 +147,7 @@ func (e *Engine) Run(opts Options) (Result, error) {
 				res.Errors = append(res.Errors, AgentError{WorkspaceID: root.WorkspaceID, AgentID: root.AgentID, Stage: st, Error: err.Error()})
 				continue
 			}
+			res.Events = append(res.Events, newRunEvent("invoked_curator", root.AgentID, "done", string(st), time.Now().UTC()))
 			res.Events = append(res.Events, newRunEvent("parsed_output", root.AgentID, "done", string(st), time.Now().UTC()))
 		}
 		releaseFileLock()
@@ -171,13 +176,18 @@ func (e *Engine) Run(opts Options) (Result, error) {
 		res.AgentResults = append(res.AgentResults, ar)
 	}
 	if stage == StageAll {
+		res.Events = append(res.Events, newRunEvent("invoked_curator", "team", "started", "team curation", time.Now().UTC()))
 		teamResult, teamErr := e.runTeamCuration(roots, opts)
 		res.EvidenceCollected += teamResult.EvidenceCollected
 		res.SharedCandidatesAdded += teamResult.SharedCandidatesAdded
 		res.ConflictsFound += teamResult.ConflictsFound
 		res.AgentResults = append(res.AgentResults, teamResult)
 		if teamErr != nil {
+			res.Events = append(res.Events, newRunEvent("invoked_curator", "team", "failed", teamErr.Error(), time.Now().UTC()))
 			res.Errors = append(res.Errors, AgentError{WorkspaceID: opts.WorkspaceID, Stage: StageTeamCuration, Error: teamErr.Error()})
+		} else {
+			res.Events = append(res.Events, newRunEvent("invoked_curator", "team", "done", "team curation", time.Now().UTC()))
+			res.Events = append(res.Events, newRunEvent("persisted_candidates", "team", "done", fmt.Sprintf("%d team item(s)", teamResult.SharedCandidatesAdded), time.Now().UTC()))
 		}
 	}
 	return res, nil

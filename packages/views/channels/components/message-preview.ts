@@ -1,6 +1,7 @@
 import { preprocessMentionShortcodes } from "@multica/ui/markdown";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import type { Agent, MemberWithUser, MessagePart } from "@multica/core/types";
+import { projectInlineReferences } from "../../common/inline-references";
 import {
   formatMessagePartsPreview,
   unwrapStructuredPreviewContent,
@@ -74,6 +75,46 @@ export function resolveChannelAuthorDisplayName(
   return fallback;
 }
 
+/**
+ * Project the body's structured references into readable PLAIN TEXT (#530).
+ *
+ * The preview is a reading surface — you are skimming a list, not operating on
+ * anything — so a reference becomes text, never an interactive token. But it must
+ * go through the SAME span projection as the body, or the two disagree: Frank saw
+ * `@actor_14` in the channel-list preview while the body said `@小雅`.
+ *
+ * Why the old path leaked: `formatMessagePartsPreview` only understands `text` and
+ * `sticker` parts and drops everything else. Under #463 a normal mention message
+ * carries `parts: [reference]` with a SPAN into `content` and no text part at all —
+ * so it produced nothing, and the caller fell back to raw `content`, internal
+ * handle and all. That helper predates #463; the meaning of `parts` changed under it.
+ *
+ * A mention resolves to the actor's live display name — the same rule the body's
+ * `ActorMention` follows, which is exactly why the body reads `@小雅`. Everything
+ * else (issue refs) renders its span substring verbatim: the projector decorates,
+ * it never rewrites the author's words (#467/#600).
+ */
+function projectReferencesToText(
+  content: string,
+  parts: MessagePart[] | null | undefined,
+  resolveMention: MentionPreviewResolver,
+): string | null {
+  const segments = projectInlineReferences(content, parts);
+  // No anchored reference → let the caller's existing text path handle it.
+  if (!segments.some((seg) => seg.kind === "reference")) return null;
+  return segments
+    .map((seg) => {
+      if (seg.kind === "text") return seg.text;
+      const { ref } = seg;
+      if (ref.ref_type === "mention" && (ref.ref_subtype === "member" || ref.ref_subtype === "agent")) {
+        const resolved = resolveMention(ref.ref_subtype, ref.ref_id, ref.label ?? seg.text);
+        return `@${resolved.replace(/^@+/, "")}`;
+      }
+      return seg.text;
+    })
+    .join("");
+}
+
 export function formatChannelMessagePreview(
   authorName: string,
   content: string,
@@ -81,7 +122,10 @@ export function formatChannelMessagePreview(
   parts?: MessagePart[] | null,
 ) {
   const source =
-    formatMessagePartsPreview(parts) ?? unwrapStructuredPreviewContent(content) ?? content;
+    projectReferencesToText(content, parts, resolveMention) ??
+    formatMessagePartsPreview(parts) ??
+    unwrapStructuredPreviewContent(content) ??
+    content;
   const readableContent = preprocessMentionShortcodes(source)
     .replace(mentionLinkPattern, (_match: string, label: string, type: MentionType, id: string) => {
       const resolved = resolveMention(type, id, label);

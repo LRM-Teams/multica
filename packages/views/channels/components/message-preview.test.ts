@@ -33,6 +33,54 @@ describe("formatChannelMessagePreview", () => {
     ).toBe("Atlas: cc @Frank");
   });
 
+  it("resolves a bare @handle anchored by a reference span (#530)", () => {
+    // Frank: the channel-list preview showed `@actor_14` while the body said `@小雅`.
+    // Under #463 a mention message carries `parts: [reference]` with a SPAN into
+    // `content` and NO text part — `formatMessagePartsPreview` understands only
+    // text/sticker, so it produced nothing and the caller fell back to raw content,
+    // internal handle and all. That helper predates #463; `parts` changed meaning
+    // underneath it.
+    expect(
+      formatChannelMessagePreview("Atlas", "cc @agent_123 pls", resolveMention, [
+        {
+          type: "reference",
+          ref_type: "mention",
+          ref_subtype: "agent",
+          ref_id: "agent-1",
+          label: "@agent_123",
+          content_start_utf16: 3,
+          content_end_utf16: 13,
+        },
+      ] as never),
+    ).toBe("Atlas: cc @Frontend Engineer pls");
+  });
+
+  it("keeps an issue ref's span substring verbatim in the preview (#530)", () => {
+    // The projector decorates; it never rewrites the author's words (#467/#600).
+    // Only mentions resolve to a live display name — the same rule the body follows.
+    expect(
+      formatChannelMessagePreview("Atlas", "fix MUL-9 today", resolveMention, [
+        {
+          type: "reference",
+          ref_type: "issue-ref",
+          ref_subtype: "issue",
+          ref_id: "issue-uuid",
+          label: "MUL-9",
+          content_start_utf16: 4,
+          content_end_utf16: 9,
+        },
+      ] as never),
+    ).toBe("Atlas: fix MUL-9 today");
+  });
+
+  it("still renders plain text when nothing is anchored — the control (#530)", () => {
+    // Without this, a projection that returned "" for everything would make the
+    // leak tests pass while destroying every ordinary preview.
+    expect(formatChannelMessagePreview("Atlas", "just a normal line", resolveMention, [])).toBe(
+      "Atlas: just a normal line",
+    );
+  });
+
   it("collapses normal markdown links to labels so raw URLs do not leak", () => {
     expect(
       formatChannelMessagePreview(

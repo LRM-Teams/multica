@@ -9,13 +9,16 @@ CONFIG_DIR="${SANDBOXD_CONFIG_DIR:-$HOME/.multica/sandbox_daemon}"
 LOG_DIR="${SANDBOXD_LOG_DIR:-$CONFIG_DIR/logs}"
 INTERVAL_SEC="${SANDBOXD_WATCH_INTERVAL:-5}"
 
+declare -A CONFIG_FINGERPRINTS=()
+
 usage() {
   cat <<'EOF'
 Usage: scripts/watch-sandboxd.sh
 
 Scan ~/.multica/sandbox_daemon/*.json every 5s. For any config without a
 matching `multica sandboxd --config …` process, start one with
-./server/bin/multica from this checkout.
+./server/bin/multica from this checkout. When a config file's contents change,
+stop the matching sandboxd and start a fresh one.
 
 Environment:
   MULTICA_BIN              Override CLI binary (default: <repo>/server/bin/multica)
@@ -40,25 +43,76 @@ fi
 
 mkdir -p "$CONFIG_DIR" "$LOG_DIR"
 
-# True when a sandboxd process is already using this config path.
-is_running_for_config() {
+# SHA-256 of config contents; used to detect edits between scans.
+config_fingerprint() {
   local config_path="$1"
-  local line
-  while IFS= read -r line; do
-    case "$line" in
+  sha256sum "$config_path" | awk '{print $1}'
+}
+
+# Print PIDs of sandboxd processes bound to this config path.
+pids_for_config() {
+  local config_path="$1"
+  local pid args
+  while read -r pid args; do
+    case "$args" in
       *watch-sandboxd*) continue ;;
-    esac
-    case "$line" in
       *sandboxd*)
-        case "$line" in
+        case "$args" in
           *"--config ${config_path}"*|*"--config=${config_path}"*)
-            return 0
+            echo "$pid"
             ;;
         esac
         ;;
     esac
-  done < <(ps -eo args=)
+  done < <(ps -eo pid=,args=)
+}
+
+# True when a sandboxd process is already using this config path.
+is_running_for_config() {
+  local config_path="$1"
+  local pid
+  while IFS= read -r pid; do
+    if [ -n "$pid" ]; then
+      return 0
+    fi
+  done < <(pids_for_config "$config_path")
   return 1
+}
+
+stop_sandboxd() {
+  local config_path="$1"
+  local pid
+  local -a pids=()
+
+  while IFS= read -r pid; do
+    if [ -n "$pid" ]; then
+      pids+=("$pid")
+    fi
+  done < <(pids_for_config "$config_path")
+
+  if [ ${#pids[@]} -eq 0 ]; then
+    return 0
+  fi
+
+  echo "$(date -Is) stopping sandboxd for $config_path (pids: ${pids[*]})"
+  kill "${pids[@]}" 2>/dev/null || true
+
+  local attempt
+  for attempt in $(seq 1 10); do
+    pids=()
+    while IFS= read -r pid; do
+      if [ -n "$pid" ]; then
+        pids+=("$pid")
+      fi
+    done < <(pids_for_config "$config_path")
+    if [ ${#pids[@]} -eq 0 ]; then
+      return 0
+    fi
+    sleep 0.5
+  done
+
+  echo "$(date -Is) force killing sandboxd for $config_path (pids: ${pids[*]})"
+  kill -9 "${pids[@]}" 2>/dev/null || true
 }
 
 start_sandboxd() {
@@ -73,8 +127,14 @@ start_sandboxd() {
   setsid "$MULTICA_BIN" sandboxd --config "$config_path" >>"$log_file" 2>&1 < /dev/null &
 }
 
+restart_sandboxd() {
+  local config_path="$1"
+  stop_sandboxd "$config_path"
+  start_sandboxd "$config_path"
+}
+
 scan_once() {
-  local config_path
+  local config_path fingerprint previous
   shopt -s nullglob
   local configs=("$CONFIG_DIR"/*.json)
   shopt -u nullglob
@@ -84,10 +144,29 @@ scan_once() {
   fi
 
   for config_path in "${configs[@]}"; do
-    if is_running_for_config "$config_path"; then
+    fingerprint="$(config_fingerprint "$config_path")"
+    previous="${CONFIG_FINGERPRINTS["$config_path"]:-}"
+
+    if [ -z "$previous" ]; then
+      CONFIG_FINGERPRINTS["$config_path"]="$fingerprint"
+      if is_running_for_config "$config_path"; then
+        echo "$(date -Is) tracking existing sandboxd for $config_path"
+        continue
+      fi
+      start_sandboxd "$config_path"
       continue
     fi
-    start_sandboxd "$config_path"
+
+    if [ "$fingerprint" = "$previous" ]; then
+      if ! is_running_for_config "$config_path"; then
+        start_sandboxd "$config_path"
+      fi
+      continue
+    fi
+
+    echo "$(date -Is) config changed for $config_path, restarting sandboxd"
+    CONFIG_FINGERPRINTS["$config_path"]="$fingerprint"
+    restart_sandboxd "$config_path"
   done
 }
 
@@ -100,3 +179,6 @@ while true; do
   scan_once
   sleep "$INTERVAL_SEC"
 done
+
+
+#   nohup /home/jian40/multica/scripts/watch-sandboxd.sh   >> ~/.multica/sandbox_daemon/logs/watch-sandboxd.log 2>&1 &

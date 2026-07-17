@@ -220,14 +220,23 @@ export function IssueSystemEventContent({ event }: { event: IssueSystemEvent }):
     );
   }
 
+  // A status the FE recognizes → "marked as <localized status>". A status it
+  // does NOT recognize must NEVER echo the raw enum to the user face (Nash: no
+  // internal-enum leak) — degrade to a generic, status-less localized action.
   const statusKey: IssueStatusKey | null = ISSUE_STATUS_KEYS.has(event.issueStatus)
     ? (event.issueStatus as IssueStatusKey)
     : null;
-  const statusLabel = statusKey
-    ? t(($) => $.message.system_event.issue_status[statusKey])
-    : event.issueStatus;
+  if (!statusKey) {
+    return interpolateIssueSlot(
+      t(($) => $.message.system_event.issue.updated, { actor }),
+      issueToken,
+    );
+  }
   return interpolateIssueSlot(
-    t(($) => $.message.system_event.issue.status, { actor, status: statusLabel }),
+    t(($) => $.message.system_event.issue.status, {
+      actor,
+      status: t(($) => $.message.system_event.issue_status[statusKey]),
+    }),
     issueToken,
   );
 }

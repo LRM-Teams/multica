@@ -229,6 +229,7 @@
         "in_progress": "{{actor}}님이 {issue}을(를) 진행 중으로 표시했습니다",
         "in_review": "{{actor}}님이 {issue}을(를) 검토 요청했습니다",
         "done": "{{actor}}님이 {issue}을(를) 완료했습니다",
+        "updated": "{{actor}}님이 {issue}을(를) 업데이트했습니다",
         "status": "{{actor}}님이 {issue}을(를) {{status}}(으)로 표시했습니다"
       },
       "issue_status": {

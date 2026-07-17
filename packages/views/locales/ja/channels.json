@@ -229,6 +229,7 @@
         "in_progress": "{{actor}} がタスク {issue} を進行中にしました",
         "in_review": "{{actor}} がタスク {issue} をレビューに提出しました",
         "done": "{{actor}} がタスク {issue} を完了しました",
+        "updated": "{{actor}} がタスク {issue} を更新しました",
         "status": "{{actor}} がタスク {issue} を{{status}}にしました"
       },
       "issue_status": {

@@ -229,6 +229,7 @@
         "in_progress": "{{actor}} started {issue}",
         "in_review": "{{actor}} sent {issue} for review",
         "done": "{{actor}} completed {issue}",
+        "updated": "{{actor}} updated {issue}",
         "status": "{{actor}} marked {issue} as {{status}}"
       },
       "issue_status": {

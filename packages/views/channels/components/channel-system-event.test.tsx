@@ -109,6 +109,7 @@ vi.mock("../../i18n/use-t", () => ({
               in_progress: "{{actor}} 将任务 {issue} 标记为处理中",
               in_review: "{{actor}} 将任务 {issue} 提交审核",
               done: "{{actor}} 完成了任务 {issue}",
+              updated: "{{actor}} 更新了任务 {issue}",
               status: "{{actor}} 将任务 {issue} 标记为{{status}}",
             },
             issue_status: {
@@ -469,6 +470,19 @@ describe("IssueSystemEventContent", () => {
       expect(document.body.textContent).toBe(expected);
       unmount();
     }
+  });
+
+  it("degrades an UNKNOWN status to a generic action — never leaks the raw enum (Nash)", () => {
+    render(
+      <IssueSystemEventContent
+        event={{ ...inProgressEvent, event: "issue_status_changed", issueStatus: "triaging_v2" }}
+      />,
+    );
+    const text = document.body.textContent ?? "";
+    // Generic, status-less localized action…
+    expect(text).toBe("后端工程师 更新了任务 LRM-137");
+    // …and the raw enum never reaches the user face.
+    expect(text).not.toContain("triaging_v2");
   });
 
   it("names the assignee for an assignment, still with only the ref linked", () => {

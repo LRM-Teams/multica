@@ -408,7 +408,7 @@
     "state": {
       "running": "실행 중",
       "attention": "조치 필요",
-      "review": "검토 대기",
+      "review": "리뷰 중",
       "done": "완료 · {{time}}"
     }
   },

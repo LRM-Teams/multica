@@ -395,7 +395,7 @@
     "state": {
       "running": "执行中",
       "attention": "需介入",
-      "review": "待审核",
+      "review": "审核中",
       "done": "完成 · {{time}}"
     }
   },

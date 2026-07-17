@@ -390,7 +390,7 @@
     "state": {
       "running": "実行中",
       "attention": "対応が必要",
-      "review": "レビュー待ち",
+      "review": "レビュー中",
       "done": "完了 · {{time}}"
     }
   },

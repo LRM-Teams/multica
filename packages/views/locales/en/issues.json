@@ -409,7 +409,7 @@
     "state": {
       "running": "Working",
       "attention": "Needs attention",
-      "review": "Awaiting review",
+      "review": "In Review",
       "done": "Done {{time}}"
     }
   },

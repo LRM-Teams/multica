@@ -103,7 +103,11 @@ function TemplateRow({ template }: { template: SandboxTemplate }) {
         </div>
         <div className="mt-1 flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
           {template.instance_type ? <span>{template.instance_type}</span> : null}
-          {template.version ? <span>v{template.version}</span> : null}
+          {template.version ? (
+            <span>
+              {t(($) => $.sandboxes_page.templates_version, { version: template.version })}
+            </span>
+          ) : null}
           {template.image_info ? (
             <span className="truncate font-mono">{template.image_info}</span>
           ) : null}

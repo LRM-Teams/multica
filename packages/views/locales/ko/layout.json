@@ -161,6 +161,7 @@
     "templates_node_offline": "노드가 오프라인입니다 — 마지막 동기화 템플릿을 표시합니다.",
     "templates_synced_at": "동기화 {{time}}",
     "templates_default_badge": "기본",
+    "templates_version": "v{{version}}",
     "add_node_dialog_title": "Run this command on the sandbox server",
     "add_node_dialog_description": "The command writes {{file}} and starts sandboxd with the new node key.",
     "copy_command_action": "Copy command",

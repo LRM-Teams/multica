@@ -161,6 +161,7 @@
     "templates_node_offline": "ノードはオフラインです — 前回同期したテンプレートを表示しています。",
     "templates_synced_at": "同期: {{time}}",
     "templates_default_badge": "デフォルト",
+    "templates_version": "v{{version}}",
     "add_node_dialog_title": "Run this command on the sandbox server",
     "add_node_dialog_description": "The command writes {{file}} and starts sandboxd with the new node key.",
     "copy_command_action": "Copy command",

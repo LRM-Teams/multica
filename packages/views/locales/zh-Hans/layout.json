@@ -161,6 +161,7 @@
     "templates_node_offline": "节点离线 — 显示上次同步的模板。",
     "templates_synced_at": "同步于 {{time}}",
     "templates_default_badge": "默认",
+    "templates_version": "v{{version}}",
     "add_node_dialog_title": "在沙箱服务器上运行此命令",
     "add_node_dialog_description": "该命令会写入 {{file}}，并使用新的节点密钥启动 sandboxd。",
     "copy_command_action": "复制命令",

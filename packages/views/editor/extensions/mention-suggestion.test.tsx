@@ -712,4 +712,45 @@ describe("createMentionSuggestion", () => {
     const items = result as MentionItem[];
     expect(items.some((i) => i.type === "agent" && i.label === "魏和尚")).toBe(true);
   });
+
+  // #547 contract: `name` is the machine @handle (English/ASCII) and
+  // `display_name` is the human label (may be Chinese). The picker must show
+  // display_name and find the agent by EITHER field. The inserted node still
+  // carries the stable handle (`name`) — display changes never touch routing.
+  it("displays display_name and matches by both display_name and handle (#547)", () => {
+    const mkQc = () =>
+      fakeQc({
+        members: [{ user_id: "u1", name: "alice", display_name: "Alice", role: "member" }],
+        agents: [
+          {
+            id: "a1",
+            name: "beckham",
+            display_name: "贝克汉姆",
+            archived_at: null,
+            visibility: "workspace",
+            owner_id: null,
+          },
+        ],
+      });
+    searchIssuesMock.mockReturnValue(new Promise(() => {}));
+
+    // Chinese display_name substring finds the agent…
+    const byDisplay = createMentionSuggestion(mkQc()).items!({
+      query: "贝克",
+      editor: {} as never,
+    }) as MentionItem[];
+    const displayHit = byDisplay.find((i) => i.type === "agent" && i.id === "a1");
+    expect(displayHit).toBeDefined();
+    // …and the visible label is the display_name, while the inserted handle
+    // stays the stable English @handle.
+    expect(displayHit?.label).toBe("贝克汉姆");
+    expect(displayHit?.handle).toBe("beckham");
+
+    // English handle also finds the same agent.
+    const byHandle = createMentionSuggestion(mkQc()).items!({
+      query: "beckham",
+      editor: {} as never,
+    }) as MentionItem[];
+    expect(byHandle.some((i) => i.type === "agent" && i.id === "a1")).toBe(true);
+  });
 });

@@ -2628,7 +2628,10 @@ func TestChannelLegacyAgentHandleTextDoesNotRoute(t *testing.T) {
 	ctx := context.Background()
 	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
 	legacyHandle := "actor_" + suffix
-	agentID := createHandlerTestAgent(t, legacyHandle, nil)
+	agentID := createHandlerTestAgent(t, "Legacy Agent "+suffix, nil)
+	if _, err := testPool.Exec(ctx, `UPDATE agent SET name = $2 WHERE id = $1`, agentID, legacyHandle); err != nil {
+		t.Fatalf("seed legacy agent handle: %v", err)
+	}
 	channelID := seedChannelForTest(t, "legacy-agent-text-"+suffix, testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)

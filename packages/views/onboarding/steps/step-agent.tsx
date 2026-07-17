@@ -105,7 +105,7 @@ export function StepAgent({
     setCreating(true);
     try {
       const req: CreateAgentRequest = {
-        name: template.defaultName,
+        display_name: template.defaultName,
         description: template.blurb,
         instructions: template.instructions,
         runtime_id: runtime.id,

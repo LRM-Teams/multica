@@ -68,13 +68,14 @@ type RuntimeSharedSkillBundle struct {
 }
 
 type RuntimeSharedSkillSyncResponse struct {
-	Status    string                            `json:"status"`
-	Created   int                               `json:"created"`
-	Updated   int                               `json:"updated"`
-	Unchanged int                               `json:"unchanged"`
-	Deleted   int                               `json:"deleted"`
-	Conflicts []RuntimeSharedSkillSyncConflict  `json:"conflicts,omitempty"`
-	Errors    []RuntimeSharedSkillSyncItemError `json:"errors,omitempty"`
+	Status       string                            `json:"status"`
+	Created      int                               `json:"created"`
+	Updated      int                               `json:"updated"`
+	Unchanged    int                               `json:"unchanged"`
+	Deleted      int                               `json:"deleted"`
+	Acknowledged []string                          `json:"acknowledged,omitempty"`
+	Conflicts    []RuntimeSharedSkillSyncConflict  `json:"conflicts,omitempty"`
+	Errors       []RuntimeSharedSkillSyncItemError `json:"errors,omitempty"`
 }
 
 type RuntimeSharedSkillSyncConflict struct {

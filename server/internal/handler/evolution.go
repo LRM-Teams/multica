@@ -94,8 +94,13 @@ func (h *Handler) SyncEvolutionSubmissions(w http.ResponseWriter, r *http.Reques
 		case "unchanged":
 			resp.Unchanged++
 		}
+		resp.Acknowledged = append(resp.Acknowledged, evolutionSubmissionAckKey(incoming.AgentID, incoming.LocalUnitID))
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func evolutionSubmissionAckKey(agentID, localUnitID string) string {
+	return strings.TrimSpace(agentID) + "/" + strings.TrimSpace(localUnitID)
 }
 
 func (h *Handler) syncEvolutionSubmission(ctx context.Context, rt db.AgentRuntime, agent db.Agent, incoming EvolutionSubmissionRequest) (string, error) {

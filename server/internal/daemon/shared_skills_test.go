@@ -10,8 +10,12 @@ import (
 	"github.com/multica-ai/multica/server/internal/memorycuration"
 )
 
-func TestLocalMemoryCurationRuntimesPreferOnlinePi(t *testing.T) {
+func TestLocalMemoryCurationRuntimesSelectConfiguredOnlineProvider(t *testing.T) {
 	d := &Daemon{
+		cfg: Config{Agents: map[string]AgentEntry{
+			"codex": {Path: "/usr/bin/codex"},
+			"pi":    {Path: "/usr/bin/pi"},
+		}},
 		workspaces: map[string]*workspaceState{
 			"ws-1": {runtimeIDs: []string{"rt-codex", "rt-pi"}},
 			"ws-2": {runtimeIDs: []string{"rt-offline"}},
@@ -24,8 +28,78 @@ func TestLocalMemoryCurationRuntimesPreferOnlinePi(t *testing.T) {
 	}
 
 	runtimes := d.localMemoryCurationRuntimes()
-	if len(runtimes) != 1 || runtimes[0].ID != "rt-pi" {
-		t.Fatalf("runtimes = %#v, want only online Pi runtime", runtimes)
+	if len(runtimes) != 1 || runtimes[0].ID != "rt-codex" {
+		t.Fatalf("runtimes = %#v, want stable configured online runtime", runtimes)
+	}
+}
+
+func TestEvolutionCandidateJSONLQuarantinesMalformedLines(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory-candidates.jsonl")
+	content := "{\"local_unit_id\":\"one\"}\nnot-json\n{\"local_unit_id\":\"two\"}\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	items, issues, err := readEvolutionCandidateJSONL(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 || len(issues) != 1 || issues[0].Line != 2 {
+		t.Fatalf("items=%d issues=%#v", len(items), issues)
+	}
+	if err := quarantineEvolutionCandidateIssues(path, issues); err != nil {
+		t.Fatal(err)
+	}
+	if err := quarantineEvolutionCandidateIssues(path, issues); err != nil {
+		t.Fatal(err)
+	}
+	quarantined, err := os.ReadFile(path + ".invalid.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(quarantined), "\n") != 1 || !strings.Contains(string(quarantined), "not-json") {
+		t.Fatalf("unexpected quarantine: %s", quarantined)
+	}
+}
+
+func TestSecureSkillDraftBundleDirRejectsEscapes(t *testing.T) {
+	agentRoot := filepath.Join(t.TempDir(), "agent")
+	validDir := filepath.Join(agentRoot, "skills", "drafts", "candidate-1")
+	if err := os.MkdirAll(validDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(agentSyncQueueDir(agentRoot), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, err := secureSkillDraftBundleDir(agentRoot, "../skills/drafts/candidate-1")
+	if err != nil || got != validDir {
+		t.Fatalf("valid bundle got=%q err=%v", got, err)
+	}
+	if _, err := secureSkillDraftBundleDir(agentRoot, "../../../outside"); err == nil {
+		t.Fatal("expected traversal escape to be rejected")
+	}
+
+	outside := t.TempDir()
+	link := filepath.Join(agentRoot, "skills", "drafts", "linked")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := secureSkillDraftBundleDir(agentRoot, "../skills/drafts/linked"); err == nil {
+		t.Fatal("expected symlink escape to be rejected")
+	}
+}
+
+func TestEvolutionAcknowledgementsRoundTrip(t *testing.T) {
+	cfg := Config{WorkspacesRoot: t.TempDir()}
+	want := map[string]string{"agent-1/candidate-1": "sha256:abc"}
+	if err := saveEvolutionAcknowledgements(cfg, "workspace-1", want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadEvolutionAcknowledgements(cfg, "workspace-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["agent-1/candidate-1"] != "sha256:abc" {
+		t.Fatalf("acknowledgements = %#v", got)
 	}
 }
 

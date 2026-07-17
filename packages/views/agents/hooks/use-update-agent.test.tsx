@@ -1,0 +1,147 @@
+// @vitest-environment jsdom
+
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { ReactNode } from "react";
+import { renderHook } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { Agent } from "@multica/core/types";
+import { workspaceKeys } from "@multica/core/workspace/queries";
+
+// `api.updateAgent` is the single network call; the test controls whether it
+// resolves (with the server-persisted Agent) or rejects (e.g. a 409 conflict).
+const mockUpdateAgent = vi.hoisted(() => vi.fn());
+vi.mock("@multica/core/api", () => ({
+  api: { updateAgent: (...args: unknown[]) => mockUpdateAgent(...args) },
+}));
+
+vi.mock("sonner", () => ({
+  toast: { success: vi.fn(), error: vi.fn() },
+}));
+
+vi.mock("../../i18n", () => ({
+  useT: () => ({
+    t: (
+      select: (dict: {
+        detail: { agent_updated_toast: string; update_failed_toast: string };
+      }) => ReactNode,
+    ) =>
+      select({
+        detail: {
+          agent_updated_toast: "Agent updated",
+          update_failed_toast: "Update failed",
+        },
+      }),
+  }),
+}));
+
+import { useUpdateAgent } from "./use-update-agent";
+
+const WS = "ws-1";
+
+function makeAgent(overrides: Partial<Agent> = {}): Agent {
+  return {
+    id: "agent-1",
+    name: "old-handle",
+    display_name: "Old Handle",
+    model: "claude-sonnet-4-6",
+    runtime_id: "rt-1",
+    ...overrides,
+  } as unknown as Agent;
+}
+
+// A real QueryClient so assertions read the ACTUAL cache the UI renders,
+// rather than a stubbed setQueryData spy. Retries off so a rejected mutation
+// surfaces immediately.
+function setup(seed: Agent[]) {
+  const qc = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  qc.setQueryData(workspaceKeys.agents(WS), seed);
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+  );
+  const { result } = renderHook(() => useUpdateAgent(WS), { wrapper });
+  return { qc, result };
+}
+
+function cachedAgent(qc: QueryClient, id: string): Agent | undefined {
+  return qc
+    .getQueryData<Agent[]>(workspaceKeys.agents(WS))
+    ?.find((a) => a.id === id);
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+describe("useUpdateAgent — username → name mapping", () => {
+  it("optimistically writes the new @handle to agent.name (no stale flash, no stray username field)", async () => {
+    const { qc, result } = setup([makeAgent()]);
+    // Server echoes the persisted handle back under `name`.
+    mockUpdateAgent.mockResolvedValue(makeAgent({ name: "new-handle" }));
+
+    // Do NOT await yet: the optimistic cache write is synchronous, so the new
+    // handle must already be visible before the network round-trip resolves.
+    const pending = result.current("agent-1", { username: "new-handle" });
+
+    const optimistic = cachedAgent(qc, "agent-1")!;
+    expect(optimistic.name).toBe("new-handle");
+    // The bug wrote a stray `agent.username` that nothing reads; there must be
+    // none, and the payload key must map onto `name`.
+    expect((optimistic as unknown as Record<string, unknown>).username).toBeUndefined();
+
+    await pending;
+
+    // The request carries the API field name, unchanged.
+    expect(mockUpdateAgent).toHaveBeenCalledWith("agent-1", {
+      username: "new-handle",
+    });
+    // After success the server's canonical handle is written to `name`.
+    expect(cachedAgent(qc, "agent-1")!.name).toBe("new-handle");
+    expect(
+      (cachedAgent(qc, "agent-1") as unknown as Record<string, unknown>).username,
+    ).toBeUndefined();
+  });
+
+  it("writes the server's canonical handle, not the raw request value", async () => {
+    const { qc, result } = setup([makeAgent()]);
+    // Server normalizes the handle (e.g. lowercases) — the cache must reflect
+    // what the server stored, not what was typed.
+    mockUpdateAgent.mockResolvedValue(makeAgent({ name: "new-handle" }));
+
+    await result.current("agent-1", { username: "New-Handle" });
+
+    expect(cachedAgent(qc, "agent-1")!.name).toBe("new-handle");
+  });
+
+  it("rolls back agent.name to the previous handle when the update fails", async () => {
+    const { qc, result } = setup([makeAgent()]);
+    mockUpdateAgent.mockRejectedValue(new Error("409 handle taken"));
+
+    await expect(
+      result.current("agent-1", { username: "taken-handle" }),
+    ).rejects.toThrow();
+
+    // Rollback restores the PREVIOUS handle on `name` (the field the UI reads),
+    // and never leaves a stray `username` behind.
+    const rolledBack = cachedAgent(qc, "agent-1")!;
+    expect(rolledBack.name).toBe("old-handle");
+    expect((rolledBack as unknown as Record<string, unknown>).username).toBeUndefined();
+  });
+
+  it("still maps non-username fields 1:1 (e.g. model) and rolls them back on failure", async () => {
+    const { qc, result } = setup([makeAgent()]);
+
+    mockUpdateAgent.mockResolvedValueOnce(
+      makeAgent({ model: "claude-opus-4-8" }),
+    );
+    await result.current("agent-1", { model: "claude-opus-4-8" });
+    expect(cachedAgent(qc, "agent-1")!.model).toBe("claude-opus-4-8");
+
+    mockUpdateAgent.mockRejectedValueOnce(new Error("boom"));
+    await expect(
+      result.current("agent-1", { model: "claude-haiku" }),
+    ).rejects.toThrow();
+    expect(cachedAgent(qc, "agent-1")!.model).toBe("claude-opus-4-8");
+  });
+});

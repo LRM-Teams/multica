@@ -809,7 +809,19 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 
 	r := EnvRollout{EnvID: envID, ProjectID: projectID, SandboxRefs: sandboxRefs, AgentSandboxRefs: agentSandboxRefs}
 	if in.DispatchType == EnvDispatchMessage && in.Mode == EnvModeScratch {
-		channelID, err := s.deps.CreateEnvDispatchChannel(ctx, in.WorkspaceID, in.UserID, projectID, envID, roster, agentSandboxRefs)
+		bindingSpecs := agentSandboxRefs
+		if len(in.PerAgentEnvSpecs) > 0 && bindingSpecs == nil {
+			bindingSpecs = make(map[string]SandboxInstanceRef, len(in.PerAgentEnvSpecs))
+			for _, spec := range in.PerAgentEnvSpecs {
+				ref, err := s.deps.ResolvePerAgentEnvSpec(ctx, in.WorkspaceID, spec)
+				if err != nil {
+					s.rollbackRollout(ctx, in.WorkspaceID, r)
+					return EnvRollout{}, fmt.Errorf("resolve channel sandbox policy: %w", err)
+				}
+				bindingSpecs[spec.AgentID] = ref
+			}
+		}
+		channelID, err := s.deps.CreateEnvDispatchChannel(ctx, in.WorkspaceID, in.UserID, projectID, envID, roster, bindingSpecs)
 		if err != nil {
 			s.rollbackRollout(ctx, in.WorkspaceID, r)
 			return EnvRollout{}, fmt.Errorf("create env-dispatch channel: %w", err)

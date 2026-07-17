@@ -3550,7 +3550,13 @@ func (h *Handler) enqueueChannelAgentPromptWithTx(ctx context.Context, qtx *db.Q
 }
 
 func (h *Handler) enqueueChannelAgentPromptRangeWithTx(ctx context.Context, qtx *db.Queries, exec db.DBTX, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, prompt, reason string, priority int32, seqFrom, seqTo int64) (channelAgentPromptTxResult, error) {
-	session, err := h.ensureChannelAgentSessionWithDB(ctx, qtx, exec, ch, agent.ID, initiatorUserID)
+	session, binding, handled, err := h.routeEnvDispatchChannelAgent(ctx, qtx, exec, ch.ID, ch.WorkspaceID, agent.ID, initiatorUserID)
+	if err != nil {
+		return channelAgentPromptTxResult{}, fmt.Errorf("route env-dispatch channel agent: %w", err)
+	}
+	if !handled {
+		session, err = h.ensureChannelAgentSessionWithDB(ctx, qtx, exec, ch, agent.ID, initiatorUserID)
+	}
 	if err != nil {
 		return channelAgentPromptTxResult{}, fmt.Errorf("ensure channel agent session: %w", err)
 	}
@@ -3598,6 +3604,33 @@ func (h *Handler) enqueueChannelAgentPromptRangeWithTx(ctx context.Context, qtx 
 	}
 	if _, err := exec.Exec(ctx, `UPDATE chat_message SET task_id = $1 WHERE id = $2`, event.ID, promptMsg.ID); err != nil {
 		return channelAgentPromptTxResult{}, fmt.Errorf("tag channel prompt with inbox event: %w", err)
+	}
+	if handled {
+		if binding.RuntimeID == nil {
+			return channelAgentPromptTxResult{}, fmt.Errorf("ready env-dispatch binding has no runtime")
+		}
+		kind := "mention"
+		switch reason {
+		case channelMessageWakeReason:
+			kind = "channel_message"
+		case "handoff":
+			kind = "handoff"
+		case "continuation":
+			kind = "continuation"
+		}
+		if err := (envDispatchChannelStore{}).saveTrigger(ctx, exec, binding.EnvID, envCollaborationTrigger{
+			AgentID:             uuidToString(agent.ID),
+			Kind:                kind,
+			ChannelID:           ch.ID,
+			ProjectID:           uuidToString(session.ProjectID),
+			ChatSessionID:       uuidToString(session.ID),
+			SourceMessageID:     trigger.ID,
+			ThreadRootMessageID: trigger.ThreadRootMessageID,
+			TaskID:              uuidToString(event.ID),
+			RuntimeID:           *binding.RuntimeID,
+		}); err != nil {
+			return channelAgentPromptTxResult{}, fmt.Errorf("save env-dispatch collaboration trigger: %w", err)
+		}
 	}
 	return channelAgentPromptTxResult{Event: event, AgentSession: agentSession}, nil
 }

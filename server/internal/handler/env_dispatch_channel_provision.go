@@ -3,15 +3,90 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 type ProvisionEnvDispatchAgentInput struct {
 	WorkspaceID, UserID, EnvID, ProjectID, ChannelID, AgentID string
 	SourceSandboxInstanceID                                   string
 	SandboxConfig                                             json.RawMessage
+}
+
+// routeEnvDispatchChannelAgent returns handled=false only for ordinary
+// channels. A bound EnvDispatch agent always receives its binding session and
+// never reaches ensureChannelAgentSessionWithDB, which could select the shared
+// default runtime.
+func (h *Handler) routeEnvDispatchChannelAgent(ctx context.Context, qtx *db.Queries, exec db.DBTX, channelID, workspaceID string, agentID pgtype.UUID, userID pgtype.UUID) (db.ChatSession, envAgentSandboxBinding, bool, error) {
+	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	store := envDispatchChannelStore{}
+	binding, err := scanEnvAgentSandboxBinding(exec.QueryRow(ctx, bindingSelect+` WHERE channel_id = $1 AND agent_id = $2`, channelID, agentID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return db.ChatSession{}, envAgentSandboxBinding{}, false, nil
+	}
+	if err != nil {
+		return db.ChatSession{}, envAgentSandboxBinding{}, true, fmt.Errorf("load env-dispatch binding: %w", err)
+	}
+
+	for {
+		switch binding.Status {
+		case "ready":
+			var sessionID pgtype.UUID
+			if err := exec.QueryRow(ctx, `SELECT chat_session_id FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`, channelID, agentID).Scan(&sessionID); err != nil {
+				return db.ChatSession{}, binding, true, fmt.Errorf("load env-dispatch channel session: %w", err)
+			}
+			session, err := qtx.GetChatSession(ctx, sessionID)
+			if err != nil {
+				return db.ChatSession{}, binding, true, fmt.Errorf("load env-dispatch chat session: %w", err)
+			}
+			if binding.RuntimeID == nil || uuidToString(session.RuntimeID) != *binding.RuntimeID {
+				return db.ChatSession{}, binding, true, fmt.Errorf("env-dispatch channel session runtime does not match binding")
+			}
+			return session, binding, true, nil
+		case "pending", "failed":
+			var projectID string
+			if err := h.DB.QueryRow(ctx, `SELECT project_id::text FROM channel WHERE id = $1 AND workspace_id = $2`, channelID, workspaceID).Scan(&projectID); err != nil {
+				return db.ChatSession{}, binding, true, fmt.Errorf("load env-dispatch channel project: %w", err)
+			}
+			_, err := h.provisionEnvDispatchAgent(waitCtx, ProvisionEnvDispatchAgentInput{
+				WorkspaceID:   workspaceID,
+				UserID:        uuidToString(userID),
+				EnvID:         binding.EnvID,
+				ProjectID:     projectID,
+				ChannelID:     channelID,
+				AgentID:       uuidToString(agentID),
+				SandboxConfig: binding.SandboxConfig,
+			})
+			if err != nil {
+				return db.ChatSession{}, binding, true, err
+			}
+			binding, err = store.binding(ctx, h.DB, binding.EnvID, uuidToString(agentID))
+			if err != nil {
+				return db.ChatSession{}, envAgentSandboxBinding{}, true, err
+			}
+		case "provisioning":
+			select {
+			case <-waitCtx.Done():
+				return db.ChatSession{}, binding, true, waitCtx.Err()
+			case <-time.After(50 * time.Millisecond):
+			}
+			binding, err = store.binding(ctx, h.DB, binding.EnvID, uuidToString(agentID))
+			if err != nil {
+				return db.ChatSession{}, envAgentSandboxBinding{}, true, err
+			}
+		case "deleting":
+			return db.ChatSession{}, binding, true, fmt.Errorf("env-dispatch binding is deleting")
+		default:
+			return db.ChatSession{}, binding, true, fmt.Errorf("unexpected env-dispatch binding status %q", binding.Status)
+		}
+	}
 }
 
 type ProvisionEnvDispatchAgentResult struct {

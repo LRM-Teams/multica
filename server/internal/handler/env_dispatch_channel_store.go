@@ -62,6 +62,10 @@ func (s envDispatchChannelStore) listBindings(ctx context.Context, exec db.DBTX,
 	return bindings, rows.Err()
 }
 
+func (s envDispatchChannelStore) binding(ctx context.Context, exec db.DBTX, envID, agentID string) (envAgentSandboxBinding, error) {
+	return scanEnvAgentSandboxBinding(exec.QueryRow(ctx, bindingSelect+` WHERE env_id = $1 AND agent_id = $2`, envID, agentID))
+}
+
 func (s envDispatchChannelStore) claimProvisioning(ctx context.Context, exec db.DBTX, envID, agentID string) (bool, envAgentSandboxBinding, error) {
 	binding, err := scanEnvAgentSandboxBinding(exec.QueryRow(ctx, `
 		UPDATE environment_agent_sandbox

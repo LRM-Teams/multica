@@ -113,7 +113,8 @@ func TestChannelMentionStoresThreadContextAndBridgesAgentReply(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	agentID := createHandlerTestAgent(t, "Channel Helper", nil)
+	agentHandle := "channel-helper-" + uuid.NewString()[:8]
+	agentID := createHandlerTestAgent(t, agentHandle, nil)
 	var channelID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO channel (workspace_id, name, created_by)
@@ -132,7 +133,8 @@ func TestChannelMentionStoresThreadContextAndBridgesAgentReply(t *testing.T) {
 	if !found {
 		t.Fatal("channel not found after seed")
 	}
-	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "@Channel Helper please review this", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("debate-thread"), 2)
+	triggerContent := "@" + agentHandle + " please review this"
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", triggerContent, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("debate-thread"), 2)
 	if err != nil {
 		t.Fatalf("insert trigger: %v", err)
 	}
@@ -160,28 +162,29 @@ func TestChannelMentionStoresThreadContextAndBridgesAgentReply(t *testing.T) {
 	if strings.Contains(prompt, "Recent channel messages from this channel only (bounded window):") {
 		t.Fatalf("prompt should not repeat the trigger in recent channel context:\n%s", prompt)
 	}
-	if count := strings.Count(prompt, "@Channel Helper please review this"); count != 1 {
+	if count := strings.Count(prompt, triggerContent); count != 1 {
 		t.Fatalf("current trigger should appear exactly once, got %d:\n%s", count, prompt)
 	}
 
 	testHandler.handleChannelChatDone(events.Event{Payload: protocol.ChatDonePayload{
 		ChatSessionID: sessionID,
-		Content:       "@Channel Helper says hi",
+		Content:       "@" + agentHandle + " says hi",
 		Parts: []protocol.MessagePart{{
 			Type:       protocol.MessagePartTypeReference,
 			RefType:    "mention",
 			RefSubType: "agent",
 			RefID:      agentID,
-			Label:      "@Channel Helper",
+			Label:      "@" + agentHandle,
 		}},
 	}})
 	var authorType, replyThread string
 	var replyDepth int
+	replyContent := "@" + agentHandle + " says hi"
 	if err := testPool.QueryRow(ctx, `
 		SELECT author_type, thread_id, trigger_depth
 		FROM channel_message
-		WHERE channel_id = $1 AND content = '[@Channel Helper says hi]'
-		LIMIT 1`, channelID).Scan(&authorType, &replyThread, &replyDepth); err == nil {
+		WHERE channel_id = $1 AND content = $2
+		LIMIT 1`, channelID, "["+replyContent+"]").Scan(&authorType, &replyThread, &replyDepth); err == nil {
 		t.Fatalf("unexpected bracketed reply row: %s %s %d", authorType, replyThread, replyDepth)
 	}
 	var replyRoot string
@@ -189,8 +192,8 @@ func TestChannelMentionStoresThreadContextAndBridgesAgentReply(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `
 		SELECT author_type, thread_id, thread_root_message_id, trigger_depth, parts
 		FROM channel_message
-		WHERE channel_id = $1 AND content = '@Channel Helper says hi'
-		LIMIT 1`, channelID).Scan(&authorType, &replyThread, &replyRoot, &replyDepth, &rawReplyParts); err != nil {
+		WHERE channel_id = $1 AND content = $2
+		LIMIT 1`, channelID, replyContent).Scan(&authorType, &replyThread, &replyRoot, &replyDepth, &rawReplyParts); err != nil {
 		t.Fatalf("load bridged reply: %v", err)
 	}
 	if authorType != "agent" || replyThread != "debate-thread" || replyRoot != trigger.ID || replyDepth != 3 {
@@ -200,7 +203,7 @@ func TestChannelMentionStoresThreadContextAndBridgesAgentReply(t *testing.T) {
 	if err := json.Unmarshal(rawReplyParts, &replyParts); err != nil {
 		t.Fatalf("decode bridged reply parts: %v", err)
 	}
-	start, end := contentUTF16Span("@Channel Helper says hi", 0, len("@Channel Helper"))
+	start, end := contentUTF16Span(replyContent, 0, len("@"+agentHandle))
 	anchoredMentions := 0
 	for _, part := range replyParts {
 		if part.Type == protocol.MessagePartTypeReference && part.RefType == "mention" && part.RefSubType == "agent" && part.RefID == agentID {
@@ -816,7 +819,7 @@ func TestChannelAgentInboxDrainAckDirectedMention(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	agentName := "Inbox Drain Agent " + uuid.NewString()[:8]
+	agentName := "inbox-drain-agent-" + uuid.NewString()[:8]
 	agentID := createHandlerTestAgent(t, agentName, nil)
 	runtimeID := handlerTestRuntimeID(t)
 	channelID := seedChannelForTest(t, "agent-inbox-drain-"+uuid.NewString(), testUserID)
@@ -841,7 +844,7 @@ func TestChannelAgentInboxDrainAckDirectedMention(t *testing.T) {
 	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "setup context before mention", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-drain"), 0); err != nil {
 		t.Fatalf("insert setup message: %v", err)
 	}
-	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "[@"+agentName+"](mention://agent/"+agentID+") please answer", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-drain"), 0)
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "@"+agentName+" please answer", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-drain"), 0)
 	if err != nil {
 		t.Fatalf("insert mention trigger: %v", err)
 	}
@@ -2419,7 +2422,7 @@ func TestChannelAmbientGateDoesNotBlockDirectMention(t *testing.T) {
 
 	ctx := context.Background()
 	withChannelAmbientGateTestConfig(t)
-	agentName := "Ambient Direct Gate " + uuid.NewString()[:8]
+	agentName := "ambient-direct-gate-" + uuid.NewString()[:8]
 	agentID := createHandlerTestAgent(t, agentName, nil)
 	channelID := seedChannelForTest(t, "ambient-direct-gate-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
@@ -2453,7 +2456,7 @@ func TestChannelMessageWakeSkipsMutedAgentButMentionPierces(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	agentName := "Muted Direct Agent " + uuid.NewString()[:8]
+	agentName := "muted-direct-agent-" + uuid.NewString()[:8]
 	agentID := createHandlerTestAgent(t, agentName, nil)
 	channelID := seedChannelForTest(t, "muted-direct-agent-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
@@ -2472,7 +2475,7 @@ func TestChannelMessageWakeSkipsMutedAgentButMentionPierces(t *testing.T) {
 	}
 	testHandler.dispatchChannelMessageToAgents(ctx, ch, ordinary, parseUUID(testUserID))
 
-	directContent := fmt.Sprintf("[@%s](mention://agent/%s) please answer even while muted", agentName, agentID)
+	directContent := fmt.Sprintf("@%s please answer even while muted", agentName)
 	direct, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", directContent, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
 	if err != nil {
 		t.Fatalf("insert direct trigger: %v", err)
@@ -3606,7 +3609,8 @@ func TestSendChannelMessageThreadReplyShowInChannelProjectsSameMessageWithoutWak
 	}
 
 	ctx := context.Background()
-	agentID := createHandlerTestAgent(t, "Thread Projection Agent", nil)
+	agentHandle := "thread-projection-agent-" + uuid.NewString()[:8]
+	agentID := createHandlerTestAgent(t, agentHandle, nil)
 	channelID := seedChannelForTest(t, "thread-show-in-channel-true-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
@@ -3617,7 +3621,7 @@ func TestSendChannelMessageThreadReplyShowInChannelProjectsSameMessageWithoutWak
 	if err != nil {
 		t.Fatalf("insert root: %v", err)
 	}
-	content := "please @Thread Projection Agent review from the thread"
+	content := "please @" + agentHandle + " review from the thread"
 	clientID := "client-" + uuid.NewString()
 
 	first := sendChannelThreadReplyForTest(t, channelID, root.ID, testUserID, map[string]any{
@@ -3663,7 +3667,7 @@ func TestSendChannelMessageThreadReplyShowInChannelProjectsSameMessageWithoutWak
 	if projected.ID != reply.ID {
 		t.Fatalf("projected message id = %s, want thread reply %s", projected.ID, reply.ID)
 	}
-	wantProjectedContent := "please @Thread Projection Agent review from the thread"
+	wantProjectedContent := content
 	if projected.Content != wantProjectedContent {
 		t.Fatalf("projected content = %q, want %q", projected.Content, wantProjectedContent)
 	}
@@ -4894,7 +4898,8 @@ func TestChannelThreadReadModelExposesParticipantsAndPendingWake(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	agentID := createHandlerTestAgent(t, "Thread Contract Helper", nil)
+	agentHandle := "thread-contract-helper-" + uuid.NewString()[:8]
+	agentID := createHandlerTestAgent(t, agentHandle, nil)
 	channelID := seedChannelForTest(t, "thread-read-model-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
@@ -4905,7 +4910,7 @@ func TestChannelThreadReadModelExposesParticipantsAndPendingWake(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert root: %v", err)
 	}
-	rec := sendChannelThreadReplyForTest(t, channelID, root.ID, testUserID, map[string]any{"content": "@Thread Contract Helper can you take this?"})
+	rec := sendChannelThreadReplyForTest(t, channelID, root.ID, testUserID, map[string]any{"content": "@" + agentHandle + " can you take this?"})
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("send thread mention: status=%d body=%s", rec.Code, rec.Body.String())
 	}

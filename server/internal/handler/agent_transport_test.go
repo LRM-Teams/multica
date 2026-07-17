@@ -208,8 +208,8 @@ func TestAgentTransportSendDraftRebuildsMentionForCurrentDestinationMembers(t *t
 	taskID, _ := createChannelCompletionTask(t, "group")
 	senderID := agentIDForTask(t, taskID)
 	targetChannelID := seedChannelForTest(t, "transport-draft-destination-"+uuid.NewString(), testUserID)
-	oldTargetName := "draft-old-" + uuid.NewString()
-	newTargetName := "draft-new-" + uuid.NewString()
+	oldTargetName := "draft-old-" + uuid.NewString()[:8]
+	newTargetName := "draft-new-" + uuid.NewString()[:8]
 	oldTargetID := createHandlerTestAgent(t, oldTargetName, nil)
 	newTargetID := createHandlerTestAgent(t, newTargetName, nil)
 	if _, err := testPool.Exec(ctx, `

@@ -73,6 +73,7 @@ type TaskContextForEnv struct {
 	AgentSkillDir       string // Multica-scoped skill root ({PI_AGENT_ROOT}/skills), when available
 	AgentSkillDraftsDir string // Multica-scoped skill drafts root (PI_SKILL_DRAFTS_DIR), when available
 	AgentSkills         []SkillContextForEnv
+	AgentMemories       []MemoryContextForEnv
 	Repos               []RepoContextForEnv     // workspace repos available for checkout
 	ProjectID           string                  // issue's project, when present
 	ProjectTitle        string                  // human-readable project title
@@ -121,6 +122,14 @@ type TaskContextForEnv struct {
 	InitiatorID    string
 	InitiatorName  string
 	InitiatorEmail string
+}
+
+type MemoryContextForEnv struct {
+	Name        string
+	Content     string
+	Scope       string
+	SubjectType string
+	SubjectID   string
 }
 
 // SkillContextForEnv represents a skill to be written into the execution environment.

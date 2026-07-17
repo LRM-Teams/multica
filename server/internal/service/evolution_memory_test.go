@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -29,6 +30,13 @@ func TestCurateMemorySubmissionAssigns(t *testing.T) {
 	if mock.memories[0].Content != submission.Content {
 		t.Fatalf("memory content mismatch")
 	}
+	var delivery agentMemoryDeliveryConfig
+	if err := json.Unmarshal(mock.memories[0].Config, &delivery); err != nil {
+		t.Fatal(err)
+	}
+	if delivery.Scope != "workspace" {
+		t.Fatalf("memory delivery scope = %q, want workspace", delivery.Scope)
+	}
 }
 
 func TestCurateMemorySubmissionUpdatesExistingSyncKey(t *testing.T) {
@@ -55,6 +63,26 @@ func TestCurateMemorySubmissionUpdatesExistingSyncKey(t *testing.T) {
 	}
 	if mock.memories[0].Content != submission.Content {
 		t.Fatalf("memory content = %q, want updated content", mock.memories[0].Content)
+	}
+}
+
+func TestEvolutionMemoryDeliveryScopeRequiresStableMember(t *testing.T) {
+	submission := validMemorySubmission()
+	submission.UnitType = "preference"
+	submission.SuggestedScope = "user"
+	if _, _, _, err := evolutionMemoryDeliveryScope(submission); err == nil {
+		t.Fatal("user-scoped preference without member subject was accepted")
+	}
+	submission.Payload = json.RawMessage(`{"subject_type":"member","subject_id":"11111111-1111-1111-1111-111111111111"}`)
+	scope, subjectType, subjectID, err := evolutionMemoryDeliveryScope(submission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scope != "user" || subjectType != "member" || subjectID != "11111111-1111-1111-1111-111111111111" {
+		t.Fatalf("delivery = %q/%q/%q", scope, subjectType, subjectID)
+	}
+	if !evolutionSubmissionRequiresHumanReview(submission) {
+		t.Fatal("user-scoped preference must require human review")
 	}
 }
 

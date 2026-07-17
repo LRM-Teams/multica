@@ -815,6 +815,30 @@ func TestMemoryOperatingGuidePrioritizesExplicitUserPreferences(t *testing.T) {
 	}
 }
 
+func TestPromotedMemorySnapshotIncludesOnlyServerSelectedMemories(t *testing.T) {
+	t.Parallel()
+	out := buildMetaSkillContent("codex", TaskContextForEnv{
+		InitiatorType: "member",
+		InitiatorID:   "11111111-1111-1111-1111-111111111111",
+		InitiatorName: "Frank",
+		AgentMemories: []MemoryContextForEnv{{
+			Name: "Feedback before work", Content: "Acknowledge before substantive tool work.",
+			Scope: "user", SubjectType: "member", SubjectID: "11111111-1111-1111-1111-111111111111",
+		}},
+	})
+	for _, want := range []string{
+		"Stable member ID for preference attribution",
+		"## Effective Promoted Memory Snapshot",
+		"Feedback before work",
+		"subject: `member:11111111-1111-1111-1111-111111111111`",
+		"> Acknowledge before substantive tool work.",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("promoted memory snapshot missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestMemoryOperatingGuideRequiresAgentLocalScope(t *testing.T) {
 	t.Parallel()
 	withoutScope := buildMetaSkillContent("codex", TaskContextForEnv{ChatSessionID: "chat-1"})

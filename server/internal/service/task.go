@@ -2882,6 +2882,92 @@ func (s *TaskService) LoadAgentSkillsForInbox(ctx context.Context, agentID, inbo
 	return s.loadAgentSkills(ctx, agentID, pgtype.UUID{}, inboxEventID)
 }
 
+// AgentMemoryData is the bounded memory snapshot delivered with one execution.
+// User-scoped memories are filtered against the attested task initiator before
+// they leave the server; the daemon never receives another member's private
+// preferences for the current run.
+type AgentMemoryData struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Content     string `json:"content"`
+	Scope       string `json:"scope"`
+	SubjectType string `json:"subject_type,omitempty"`
+	SubjectID   string `json:"subject_id,omitempty"`
+	SyncKey     string `json:"sync_key"`
+	ContentHash string `json:"content_hash,omitempty"`
+}
+
+type agentMemoryDeliveryConfig struct {
+	Scope   string `json:"scope"`
+	Subject struct {
+		Type string `json:"type"`
+		ID   string `json:"id"`
+	} `json:"subject"`
+}
+
+// LoadAgentMemoriesForExecution returns only memories that apply to the
+// current execution. Legacy rows without delivery metadata remain agent-local.
+func (s *TaskService) LoadAgentMemoriesForExecution(ctx context.Context, agentID, workspaceID pgtype.UUID, initiatorType, initiatorID string) []AgentMemoryData {
+	memories, err := s.Queries.ListAgentMemoriesByAgent(ctx, agentID)
+	if err != nil {
+		memories = nil
+	}
+	initiatorType = strings.ToLower(strings.TrimSpace(initiatorType))
+	initiatorID = strings.TrimSpace(initiatorID)
+	result := make([]AgentMemoryData, 0, len(memories))
+	for _, memory := range memories {
+		scope, subjectType, subjectID, applies := agentMemoryDeliveryForExecution(memory.Config, initiatorType, initiatorID)
+		if !applies {
+			continue
+		}
+		result = append(result, AgentMemoryData{
+			ID:          util.UUIDToString(memory.ID),
+			Name:        memory.Name,
+			Content:     memory.Content,
+			Scope:       scope,
+			SubjectType: subjectType,
+			SubjectID:   subjectID,
+			SyncKey:     memory.SyncKey,
+			ContentHash: memory.ContentHash,
+		})
+	}
+	teamKnowledge, err := s.Queries.ListActiveTeamKnowledgeForExecution(ctx, workspaceID)
+	if err == nil {
+		for _, item := range teamKnowledge {
+			result = append(result, teamKnowledgeMemoryData(item))
+		}
+	}
+	return result
+}
+
+func teamKnowledgeMemoryData(item db.ActiveTeamKnowledgeForExecution) AgentMemoryData {
+	id := util.UUIDToString(item.ID)
+	return AgentMemoryData{
+		ID:      id,
+		Name:    "Team knowledge · " + strings.TrimSpace(item.Title),
+		Content: item.Content,
+		Scope:   "workspace",
+		SyncKey: "team_knowledge:" + id,
+	}
+}
+
+func agentMemoryDeliveryForExecution(config []byte, initiatorType, initiatorID string) (string, string, string, bool) {
+	cfg := agentMemoryDeliveryConfig{}
+	_ = json.Unmarshal(config, &cfg)
+	scope := strings.ToLower(strings.TrimSpace(cfg.Scope))
+	if scope == "" {
+		scope = "agent"
+	}
+	subjectType := strings.ToLower(strings.TrimSpace(cfg.Subject.Type))
+	subjectID := strings.TrimSpace(cfg.Subject.ID)
+	if scope == "user" || scope == "member" {
+		applies := strings.EqualFold(strings.TrimSpace(initiatorType), "member") &&
+			strings.TrimSpace(initiatorID) != "" && subjectType == "member" && subjectID == strings.TrimSpace(initiatorID)
+		return scope, subjectType, subjectID, applies
+	}
+	return scope, subjectType, subjectID, true
+}
+
 func (s *TaskService) loadAgentSkills(ctx context.Context, agentID, taskID, executionID pgtype.UUID) []AgentSkillData {
 	skills, err := s.Queries.ListAgentSkills(ctx, agentID)
 	if err != nil || len(skills) == 0 {

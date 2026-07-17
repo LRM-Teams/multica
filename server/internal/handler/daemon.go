@@ -1929,6 +1929,9 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			"error", err,
 		)
 	}
+	if resp.Agent != nil {
+		resp.Agent.Memories = h.TaskService.LoadAgentMemoriesForExecution(r.Context(), task.AgentID, parseUUID(resp.WorkspaceID), resp.InitiatorType, resp.InitiatorID)
+	}
 
 	// Mint a task-scoped `mat_` token bound to (agent, task, workspace,
 	// owner). The daemon will inject this as MULTICA_TOKEN into the agent

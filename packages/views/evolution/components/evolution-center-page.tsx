@@ -229,6 +229,12 @@ const COPY = {
   diagnosticAction: "Action",
   noneRecorded: "None recorded",
   timeline: "Timeline",
+  timelineDone: "Done",
+  timelineFailed: "Failed",
+  timelinePending: "Pending",
+  timelineSkipped: "Skipped",
+  timelineStarted: "Started",
+  timelineUnknown: "Processing",
   perAgentResults: "Per-agent results",
   noPerAgentDetails: "No per-agent details were reported by this daemon.",
   artifacts: "Artifacts",
@@ -358,6 +364,17 @@ function curationStatusLabel(value: string | undefined, copy: EvolutionCopy): st
   if (value === "succeeded") return copy("succeeded");
   if (value === "failed") return copy("failed");
   return copy("notRun");
+}
+
+function curationTimelineStatusLabel(value: string, copy: EvolutionCopy): string {
+  switch (value) {
+    case "done": return copy("timelineDone");
+    case "failed": return copy("timelineFailed");
+    case "pending": return copy("timelinePending");
+    case "skipped": return copy("timelineSkipped");
+    case "started": return copy("timelineStarted");
+    default: return copy("timelineUnknown"); // fail-closed, never raw
+  }
 }
 
 function curationStageLabel(value: string, copy: EvolutionCopy): string {
@@ -1231,7 +1248,7 @@ function CurationRunDetailCard({ run, selectedRunId }: { run: MemoryCurationRunD
           <div className="space-y-2">
             {run.timeline.map((item, index) => (
               <div key={`${item.key}:${item.agent_id ?? "run"}:${item.timestamp ?? index}`} className="flex items-start gap-3 rounded-2xl border bg-muted/20 p-3">
-                <Badge variant={item.status === "failed" ? "destructive" : item.status === "done" ? "secondary" : "outline"}>{item.status}</Badge>
+                <Badge variant={item.status === "failed" ? "destructive" : item.status === "done" ? "secondary" : "outline"}>{curationTimelineStatusLabel(item.status, copy)}</Badge>
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-medium">{item.label}</div>
                   <div className="mt-0.5 text-xs text-muted-foreground">{item.timestamp ? formatRunTime(item.timestamp, copy) : "-"}{item.detail ? ` · ${item.detail}` : ""}</div>

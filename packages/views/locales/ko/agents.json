@@ -527,6 +527,7 @@
     "status_dispatched": "시작됨",
     "status_waiting_local_directory": "대기 중",
     "status_cancelled": "취소됨",
+    "status_unknown": "처리 중",
     "filter": "필터",
     "clear_filters": "필터 지우기",
     "tool_calls_one": "도구 호출 {{count}}회",

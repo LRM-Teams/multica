@@ -509,6 +509,7 @@
     "status_dispatched": "起動中",
     "status_waiting_local_directory": "待機中",
     "status_cancelled": "キャンセル済み",
+    "status_unknown": "処理中",
     "filter": "フィルター",
     "clear_filters": "フィルターをクリア",
     "tool_calls_other": "ツール呼び出し {{count}} 回",

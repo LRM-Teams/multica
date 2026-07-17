@@ -517,6 +517,7 @@
     "status_dispatched": "已派发",
     "status_waiting_local_directory": "等待中",
     "status_cancelled": "已取消",
+    "status_unknown": "处理中",
     "filter": "筛选",
     "clear_filters": "清除筛选",
     "tool_calls_other": "{{count}} 次工具调用",

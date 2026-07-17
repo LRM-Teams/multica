@@ -527,6 +527,7 @@
     "status_dispatched": "Dispatched",
     "status_waiting_local_directory": "Waiting",
     "status_cancelled": "Cancelled",
+    "status_unknown": "Processing",
     "filter": "Filter",
     "clear_filters": "Clear filters",
     "tool_calls_one": "{{count}} tool call",

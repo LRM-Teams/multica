@@ -344,7 +344,7 @@ export function AgentTranscriptDialog({
       case "cancelled":
         return t(($) => $.transcript.status_cancelled);
       default:
-        return task.status;
+        return t(($) => $.transcript.status_unknown);
     }
   })();
 

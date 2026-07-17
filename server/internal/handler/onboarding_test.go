@@ -203,7 +203,7 @@ func resetOnboardingRuntimeArtifacts(ctx context.Context) {
 		 WHERE agent_id IN (
 		       SELECT id FROM agent
 		        WHERE workspace_id = $1
-		          AND (name = 'multica_helper' OR display_name = $2)
+		          AND (name = 'multica-helper' OR display_name = $2)
 		 )
 	`, testWorkspaceID, onboardingAssistantName)
 	testPool.Exec(ctx,
@@ -213,7 +213,7 @@ func resetOnboardingRuntimeArtifacts(ctx context.Context) {
 	testPool.Exec(ctx, `
 		DELETE FROM agent
 		 WHERE workspace_id = $1
-		   AND (name = 'multica_helper' OR display_name = $2)
+	   AND (name = 'multica-helper' OR display_name = $2)
 	`, testWorkspaceID, onboardingAssistantName)
 	testPool.Exec(ctx,
 		`UPDATE "user" SET onboarded_at = NULL, starter_content_state = NULL WHERE id = $1`,
@@ -262,8 +262,8 @@ func TestBootstrapOnboardingRuntimeCreatesSingleGuideIssue(t *testing.T) {
 	`, resp.AgentID).Scan(&agentName, &agentDisplayName, &agentRuntime, &instructions, &avatarURL); err != nil {
 		t.Fatalf("lookup assistant: %v", err)
 	}
-	if agentName != "multica_helper" {
-		t.Fatalf("agent handle = %q, want multica_helper", agentName)
+	if agentName != "multica-helper" {
+		t.Fatalf("agent handle = %q, want multica-helper", agentName)
 	}
 	if agentDisplayName != onboardingAssistantName {
 		t.Fatalf("agent display_name = %q, want %q", agentDisplayName, onboardingAssistantName)

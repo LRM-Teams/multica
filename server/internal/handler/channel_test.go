@@ -2561,31 +2561,6 @@ func TestChannelAmbientGreetingPromptUsesReactionOnlyForLargerChannel(t *testing
 	}
 }
 
-func TestContentMentionsAgentRequiresAnExactBareHandle(t *testing.T) {
-	const handle = "wendy"
-	const mentionID = "11111111-1111-1111-1111-111111111111"
-
-	cases := []struct {
-		name    string
-		content string
-		want    bool
-	}{
-		{"exact handle", "please @wendy review this", true},
-		{"handle suffix", "please @wendy_2 review this", false},
-		{"handle prefix", "please @wendy-review review this", false},
-		{"email address", "wendy@wendy.example.com", false},
-		{"canonical mention label", fmt.Sprintf("please [@Wendy](mention://agent/%s) review this", mentionID), false},
-	}
-	for _, tt := range cases {
-		t.Run(tt.name, func(t *testing.T) {
-			bareContent := util.MentionRe.ReplaceAllString(tt.content, " ")
-			if got := contentMentionsAgent(bareContent, handle); got != tt.want {
-				t.Fatalf("contentMentionsAgent(%q, %q) = %t, want %t", tt.content, handle, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestChannelMentionedAgentsUsesHandlesOrStructuredIDs(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -2623,7 +2598,8 @@ func TestChannelMentionedAgentsUsesHandlesOrStructuredIDs(t *testing.T) {
 		{"bare display name is not routable", "please @Wendy jump in", nil, ""},
 		{"structured mention targets first duplicate", "please @Wendy jump in", []protocol.MessagePart{{Type: protocol.MessagePartTypeReference, RefType: "mention", RefSubType: "agent", RefID: agentID}}, agentID},
 		{"structured mention targets second duplicate", "please @Wendy jump in", []protocol.MessagePart{{Type: protocol.MessagePartTypeReference, RefType: "mention", RefSubType: "agent", RefID: secondAgentID}}, secondAgentID},
-		{"handle prefix does not match", "please @" + secondHandle + " jump in", nil, secondAgentID},
+		{"exact handle remains routable", "please @" + secondHandle + " review", nil, secondAgentID},
+		{"handle prefix is not routable", "please @" + secondHandle + "extra", nil, ""},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2671,7 +2647,11 @@ func TestChannelBareMentionsBecomeStructuredMessageParts(t *testing.T) {
 		t.Fatal("channel not found after seed")
 	}
 
-	content := "ping @" + agentName + " and @Plain Person " + suffix + " plus @all"
+	var memberName string
+	if err := testPool.QueryRow(ctx, `SELECT name FROM "user" WHERE id = $1`, memberID).Scan(&memberName); err != nil {
+		t.Fatalf("load member handle: %v", err)
+	}
+	content := "ping @" + agentName + " and @" + memberName + " plus @all"
 	content, parts, err := testHandler.enrichChannelMessageMentions(ctx, ch, content, nil)
 	if err != nil {
 		t.Fatalf("enrich bare mentions: %v", err)

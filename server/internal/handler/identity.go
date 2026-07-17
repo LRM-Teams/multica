@@ -6,34 +6,89 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/mozillazg/go-pinyin"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"golang.org/x/text/unicode/norm"
 )
 
-var identityHandleInvalidChars = regexp.MustCompile(`[^a-z0-9]+`)
 var errIdentityHandleExhausted = errors.New("identity handle generation exhausted")
+var errIdentityHandleInvalid = errors.New("identity username is invalid")
+var identityHandlePattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+
+const maxIdentityHandleLength = 32
 
 func identityHandleBase(value, fallback string) string {
-	base := identityHandleInvalidChars.ReplaceAllString(strings.ToLower(strings.TrimSpace(value)), "_")
-	base = strings.Trim(base, "_")
-	if base != "" {
-		return base
+	for _, seed := range []string{value, fallback} {
+		if slug := identityHandleSlug(seed); slug != "" {
+			return truncateRunes(slug, maxIdentityHandleLength)
+		}
 	}
-	base = identityHandleInvalidChars.ReplaceAllString(strings.ToLower(strings.TrimSpace(fallback)), "_")
-	base = strings.Trim(base, "_")
-	if base != "" {
-		return base
+	return "agent"
+}
+
+func validateIdentityHandle(handle string) error {
+	if len(handle) > maxIdentityHandleLength || !identityHandlePattern.MatchString(handle) {
+		return errIdentityHandleInvalid
 	}
-	return "actor"
+	return nil
 }
 
 func identityHandleCandidate(base string, attempt int) string {
-	if attempt <= 1 {
-		return base
+	suffix := ""
+	if attempt > 1 {
+		suffix = "-" + strconv.Itoa(attempt)
 	}
-	return base + "_" + strconv.Itoa(attempt)
+	return truncateRunes(base, maxIdentityHandleLength-len(suffix)) + suffix
+}
+
+// identityHandleSlug makes a human-entered display label into the single ASCII
+// username grammar accepted by common IM clients. Han characters are
+// transliterated to tone-free pinyin; ASCII words and decomposed Latin letters
+// are preserved in lowercase. Every other separator collapses to one hyphen.
+func identityHandleSlug(value string) string {
+	args := pinyin.NewArgs()
+	parts := make([]string, 0, len(value))
+	var ascii strings.Builder
+	flushASCII := func() {
+		if ascii.Len() > 0 {
+			parts = append(parts, ascii.String())
+			ascii.Reset()
+		}
+	}
+	for _, r := range norm.NFD.String(value) {
+		switch {
+		case unicode.Is(unicode.Han, r):
+			flushASCII()
+			if readings := pinyin.SinglePinyin(r, args); len(readings) > 0 && readings[0] != "" {
+				parts = append(parts, readings[0])
+			}
+		case r <= unicode.MaxASCII && unicode.IsLetter(r):
+			ascii.WriteRune(unicode.ToLower(r))
+		case r <= unicode.MaxASCII && unicode.IsDigit(r):
+			ascii.WriteRune(r)
+		case unicode.Is(unicode.Mn, r):
+			// Ignore a combining mark after its Latin base character.
+		default:
+			flushASCII()
+		}
+	}
+	flushASCII()
+	return strings.Join(parts, "-")
+}
+
+func truncateRunes(value string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	if utf8.RuneCountInString(value) <= limit {
+		return value
+	}
+	return string([]rune(value)[:limit])
 }
 
 func identityUniqueViolation(err error, constraint string) bool {
@@ -79,6 +134,10 @@ func (h *Handler) createUserWithIdentity(ctx context.Context, email, displaySeed
 		displayName = strings.TrimSpace(email)
 	}
 	base := identityHandleBase(emailLocalPart(email), "user")
+	base = truncateRunes(base, maxIdentityHandleLength)
+	if err := validateIdentityHandle(base); err != nil {
+		return db.User{}, err
+	}
 	for attempt := 1; attempt <= 100; attempt++ {
 		created, err := h.Queries.CreateUser(ctx, db.CreateUserParams{
 			Name:        identityHandleCandidate(base, attempt),
@@ -105,6 +164,10 @@ func (h *Handler) createAgentWithIdentity(ctx context.Context, q *db.Queries, pa
 		displayName = "Agent"
 	}
 	base := identityHandleBase(handleSeed, displayName)
+	base = truncateRunes(base, maxIdentityHandleLength)
+	if err := validateIdentityHandle(base); err != nil {
+		return db.Agent{}, err
+	}
 	for attempt := 1; attempt <= 100; attempt++ {
 		params.Name = identityHandleCandidate(base, attempt)
 		params.DisplayName = displayName

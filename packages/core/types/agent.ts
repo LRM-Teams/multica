@@ -408,6 +408,9 @@ export interface EnsureWindyResponse {
 export interface CreateAgentRequest {
   /** Legacy display input; the server derives a stable handle from it. */
   name?: string;
+  /** Optional explicit stable username. Duplicate values are rejected; when
+   * omitted the server derives one from the display name and suffixes collisions. */
+  username?: string;
   /** Preferred human-facing label for new clients. */
   display_name?: string;
   description?: string;

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -781,7 +782,11 @@ func (h *Handler) GetAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 type CreateAgentRequest struct {
-	Name               string            `json:"name"`
+	Name string `json:"name"`
+	// Username is an explicit, stable handle chosen by the caller. When it is
+	// omitted, the server generates the username from display_name and applies
+	// numeric collision suffixes. The legacy name field remains a display seed.
+	Username           *string           `json:"username"`
 	DisplayName        string            `json:"display_name"`
 	Description        string            `json:"description"`
 	Instructions       string            `json:"instructions"`
@@ -843,7 +848,7 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 
 	nameSeed := strings.TrimSpace(req.Name)
 	displayName := strings.TrimSpace(req.DisplayName)
-	if nameSeed == "" && displayName == "" {
+	if nameSeed == "" && displayName == "" && req.Username == nil {
 		writeError(w, http.StatusBadRequest, "name or display_name is required")
 		return
 	}
@@ -938,7 +943,7 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	created, err := h.createAgentWithIdentity(r.Context(), h.Queries, db.CreateAgentParams{
+	createParams := db.CreateAgentParams{
 		WorkspaceID:        wsUUID,
 		Description:        req.Description,
 		Instructions:       req.Instructions,
@@ -954,8 +959,29 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		McpConfig:          mc,
 		Model:              pgtype.Text{String: req.Model, Valid: req.Model != ""},
 		ThinkingLevel:      pgtype.Text{String: req.ThinkingLevel, Valid: req.ThinkingLevel != ""},
-	}, nameSeed, firstNonEmpty(displayName, nameSeed))
+	}
+
+	var created db.Agent
+	if req.Username != nil {
+		if err := validateIdentityHandle(*req.Username); err != nil {
+			writeError(w, http.StatusBadRequest, "username must be 1-32 lowercase letters, digits, or hyphens")
+			return
+		}
+		createParams.Name = *req.Username
+		createParams.DisplayName = firstNonEmpty(displayName, nameSeed, *req.Username)
+		created, err = h.Queries.CreateAgent(r.Context(), createParams)
+		if identityUniqueViolation(err, "agent_workspace_name_unique") {
+			writeError(w, http.StatusConflict, "username is already in use")
+			return
+		}
+	} else {
+		created, err = h.createAgentWithIdentity(r.Context(), h.Queries, createParams, nameSeed, firstNonEmpty(displayName, nameSeed))
+	}
 	if err != nil {
+		if errors.Is(err, errIdentityHandleInvalid) {
+			writeError(w, http.StatusBadRequest, "username must be 1-32 lowercase letters, digits, or hyphens")
+			return
+		}
 		slog.Warn("create agent failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
 		writeError(w, http.StatusInternalServerError, "failed to create agent: "+err.Error())
 		return

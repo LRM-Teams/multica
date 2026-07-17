@@ -21,7 +21,6 @@ import {
   WandSparkles,
 } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import i18next from "i18next";
 import { toast } from "sonner";
 import { api } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -249,9 +248,11 @@ const COPY = {
   skills: "Skills",
 };
 
-function copy(key: keyof typeof COPY): string {
-  const translate = i18next.t.bind(i18next) as (key: string, options: { defaultValue: string }) => string;
-  return translate(`evolution:${key}`, { defaultValue: COPY[key] });
+type EvolutionCopy = (key: keyof typeof COPY) => string;
+
+export function useEvolutionCopy(): EvolutionCopy {
+  const { t } = useT("evolution");
+  return (key) => t(($) => $[key], { defaultValue: COPY[key] });
 }
 
 const STATUSES = [
@@ -336,7 +337,7 @@ function isMemoryLikeUnitType(value: string | null | undefined): boolean {
   return normalized === "memory" || normalized === "preference" || normalized === "workflow";
 }
 
-function unitLabel(value: string | null | undefined): string {
+function unitLabel(value: string | null | undefined, copy: EvolutionCopy): string {
   const normalized = normalizeUnitType(value);
   if (normalized === "memory") return copy("memory");
   if (normalized === "skill") return copy("skill");
@@ -345,27 +346,27 @@ function unitLabel(value: string | null | undefined): string {
   return value || copy("all");
 }
 
-function statusLabel(value: string): string {
+function statusLabel(value: string, copy: EvolutionCopy): string {
   if (value === "promoted") return copy("promoted");
   if (value === "rejected") return copy("rejected");
   if (value === "candidate") return copy("candidates");
   return copy("pending");
 }
 
-function curationStatusLabel(value: string | undefined): string {
+function curationStatusLabel(value: string | undefined, copy: EvolutionCopy): string {
   if (value === "running" || value === "queued") return copy("running");
   if (value === "succeeded") return copy("succeeded");
   if (value === "failed") return copy("failed");
   return copy("notRun");
 }
 
-function curationStageLabel(value: string): string {
+function curationStageLabel(value: string, copy: EvolutionCopy): string {
   if (value === "all") return "ALL";
   const stageKey = MEMORY_CURATION_STAGES.find(([stage]) => stage === value)?.[1];
   return stageKey ? copy(stageKey) : value;
 }
 
-function formatRunTime(value: string | null | undefined): string {
+function formatRunTime(value: string | null | undefined, copy: EvolutionCopy): string {
   if (!value) return copy("notRun");
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return copy("notRun");
@@ -441,7 +442,7 @@ function buildAgentRows(
 }
 
 export function EvolutionCenterPage() {
-  useT("evolution");
+  const copy = useEvolutionCopy();
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
   const { userId } = useCurrentMember(wsId);
@@ -659,7 +660,7 @@ export function EvolutionCenterPage() {
               <OpsCard
                 icon={RefreshCw}
                 title={copy("lastRun")}
-                value={latestStage ? `${curationStageLabel(latestStage.stage)} · ${formatRunTime(latestStage.finished_at ?? latestStage.created_at)}` : copy("notRun")}
+                value={latestStage ? `${curationStageLabel(latestStage.stage, copy)} · ${formatRunTime(latestStage.finished_at ?? latestStage.created_at, copy)}` : copy("notRun")}
                 detail={latestStage ? `${latestStage.stats.agents_scanned} ${copy("agentsProcessed")} · ${latestStage.stats.agents_changed} ${copy("agentsChanged")}` : copy("memoryOpsHint")}
                 status={curationHealth}
               />
@@ -738,6 +739,7 @@ function MiniStat({ label, value }: { label: string; value: string }) {
 }
 
 function LearningPulseCard({ submissions }: { submissions: EvolutionReviewSubmission[] }) {
+  const copy = useEvolutionCopy();
   const memory = submissions.filter((s) => isMemoryLikeUnitType(s.unit_type)).length;
   const skill = submissions.filter((s) => normalizeUnitType(s.unit_type) === "skill").length;
   const promoted = submissions.filter((s) => s.status === "promoted").length;
@@ -769,6 +771,7 @@ function LearningPulseCard({ submissions }: { submissions: EvolutionReviewSubmis
 }
 
 function CoachingCard({ rows }: { rows: AgentEvolutionRow[] }) {
+  const copy = useEvolutionCopy();
   return (
     <Card className="bg-background/85 backdrop-blur">
       <CardHeader>
@@ -791,6 +794,7 @@ function CoachingCard({ rows }: { rows: AgentEvolutionRow[] }) {
 }
 
 function AgentTable({ rows, loading }: { rows: AgentEvolutionRow[]; loading: boolean }) {
+  const copy = useEvolutionCopy();
   return (
     <Card className="bg-background/85 backdrop-blur">
       <CardHeader>
@@ -839,6 +843,7 @@ function AgentTable({ rows, loading }: { rows: AgentEvolutionRow[]; loading: boo
 }
 
 function LearningSummaryCard({ totals }: { totals: { pending: number; promoted: number; memoryItems: number; skillDrafts: number; learned: number } }) {
+  const copy = useEvolutionCopy();
   return (
     <Card className="bg-background/85 backdrop-blur">
       <CardHeader>
@@ -860,6 +865,7 @@ function LearningSummaryCard({ totals }: { totals: { pending: number; promoted: 
 }
 
 function LearningQueueCard({ submissions, filter, onFilterChange }: { submissions: EvolutionReviewSubmission[]; filter: "all" | "memory" | "skill"; onFilterChange: (filter: "all" | "memory" | "skill") => void }) {
+  const copy = useEvolutionCopy();
   return (
     <Card className="bg-background/85 backdrop-blur">
       <CardHeader>
@@ -883,13 +889,14 @@ function LearningQueueCard({ submissions, filter, onFilterChange }: { submission
 }
 
 function SubmissionCard({ submission }: { submission: EvolutionReviewSubmission }) {
+  const copy = useEvolutionCopy();
   return (
     <div className="rounded-2xl border bg-card/70 p-4 transition-colors hover:border-brand/30">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="secondary">{unitLabel(submission.unit_type)}</Badge>
-            <Badge variant={submission.status === "rejected" ? "destructive" : "outline"}>{statusLabel(submission.status)}</Badge>
+            <Badge variant="secondary">{unitLabel(submission.unit_type, copy)}</Badge>
+            <Badge variant={submission.status === "rejected" ? "destructive" : "outline"}>{statusLabel(submission.status, copy)}</Badge>
             {submission.confidence && <Badge variant="outline">{submission.confidence}</Badge>}
           </div>
           <div className="mt-2 font-medium">{submission.title || submission.summary || shortId(submission.id)}</div>
@@ -956,6 +963,7 @@ function CuratorProfileCard({
   agents: Agent[];
   runtimes: AgentRuntime[];
 }) {
+  const copy = useEvolutionCopy();
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState<CuratorProfileDraft>(() => draftFromProfile(profile));
   const [runStage, setRunStage] = useState<"agent_self_review" | "team_curation" | "all">("agent_self_review");
@@ -1126,6 +1134,7 @@ function MemoryCurationCard({
   unavailable: boolean;
   onSelectRun: (runId: string) => void;
 }) {
+  const copy = useEvolutionCopy();
   const memorySubmissions = submissions.filter((item) => isMemoryLikeUnitType(item.unit_type));
   const sharedCandidates = memorySubmissions.filter((item) => item.status === "candidate" || item.status === "needs_review").length;
   const promotedSharedMemory = memorySubmissions.filter((item) => item.status === "promoted").length;
@@ -1165,10 +1174,10 @@ function MemoryCurationCard({
                   <span className="text-[11px] text-muted-foreground">{stageMetric}</span>
                 </div>
                 <div className="mt-0.5 text-xs text-muted-foreground">{time} {copy("beijingTime")} {"·"} {copy(detail)}</div>
-                <div className="mt-1 text-[11px] text-muted-foreground">{run ? formatRunTime(run.finished_at ?? run.created_at) : unavailable ? copy("unavailable") : copy("notRun")}{duration ? ` · ${duration}` : ""}</div>
+                <div className="mt-1 text-[11px] text-muted-foreground">{run ? formatRunTime(run.finished_at ?? run.created_at, copy) : unavailable ? copy("unavailable") : copy("notRun")}{duration ? ` · ${duration}` : ""}</div>
                 {run?.error && <div className="mt-1 line-clamp-2 text-[11px] text-destructive">{run.error}</div>}
               </div>
-              <Badge variant={run?.status === "failed" ? "destructive" : isRunning ? "default" : run ? "secondary" : "outline"} className={cn(isRunning && "animate-pulse")}>{unavailable && !run ? copy("unavailable") : curationStatusLabel(run?.status)}</Badge>
+              <Badge variant={run?.status === "failed" ? "destructive" : isRunning ? "default" : run ? "secondary" : "outline"} className={cn(isRunning && "animate-pulse")}>{unavailable && !run ? copy("unavailable") : curationStatusLabel(run?.status, copy)}</Badge>
             </button>
           );
         })}
@@ -1178,6 +1187,7 @@ function MemoryCurationCard({
 }
 
 function CurationRunDetailCard({ run, selectedRunId }: { run: MemoryCurationRunDetail | undefined; selectedRunId: string }) {
+  const copy = useEvolutionCopy();
   if (!selectedRunId) {
     return <Card className="bg-background/85 backdrop-blur"><CardContent className="pt-6"><EmptyState text={copy("curationRunSelectHint")} /></CardContent></Card>;
   }
@@ -1192,8 +1202,8 @@ function CurationRunDetailCard({ run, selectedRunId }: { run: MemoryCurationRunD
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid gap-2 sm:grid-cols-2">
-          <MiniStat label={copy("stage")} value={curationStageLabel(run.stage)} />
-          <MiniStat label={copy("stageStatus")} value={curationStatusLabel(run.status)} />
+          <MiniStat label={copy("stage")} value={curationStageLabel(run.stage, copy)} />
+          <MiniStat label={copy("stageStatus")} value={curationStatusLabel(run.status, copy)} />
           <MiniStat label={copy("runtime")} value={run.runtime_name || shortId(run.runtime_id)} />
           <MiniStat label={copy("curator")} value={run.curator_agent_name || shortId(run.curator_agent_id)} />
           <MiniStat label={copy("mode")} value={run.curator_mode || "-"} />
@@ -1224,7 +1234,7 @@ function CurationRunDetailCard({ run, selectedRunId }: { run: MemoryCurationRunD
                 <Badge variant={item.status === "failed" ? "destructive" : item.status === "done" ? "secondary" : "outline"}>{item.status}</Badge>
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-medium">{item.label}</div>
-                  <div className="mt-0.5 text-xs text-muted-foreground">{item.timestamp ? formatRunTime(item.timestamp) : "-"}{item.detail ? ` · ${item.detail}` : ""}</div>
+                  <div className="mt-0.5 text-xs text-muted-foreground">{item.timestamp ? formatRunTime(item.timestamp, copy) : "-"}{item.detail ? ` · ${item.detail}` : ""}</div>
                 </div>
               </div>
             ))}
@@ -1271,6 +1281,7 @@ function CurationRunDetailCard({ run, selectedRunId }: { run: MemoryCurationRunD
 }
 
 function EvolutionTrendCard({ dailyMetrics }: { dailyMetrics: EvolutionDailyMetric[] }) {
+  const copy = useEvolutionCopy();
   const recent = dailyMetrics.slice(-14);
   const maxValue = Math.max(1, ...recent.map((item) => item.memory_candidates + item.skill_candidates + item.promoted_memory + item.promoted_skill));
   const totals = dailyMetrics.reduce((acc, item) => ({
@@ -1304,6 +1315,7 @@ function EvolutionTrendCard({ dailyMetrics }: { dailyMetrics: EvolutionDailyMetr
 }
 
 function TaskEfficiencyCard({ efficiency }: { efficiency: EvolutionTaskEfficiency | undefined }) {
+  const copy = useEvolutionCopy();
   return (
     <Card className="bg-background/85 backdrop-blur">
       <CardHeader>
@@ -1323,6 +1335,7 @@ function TaskEfficiencyCard({ efficiency }: { efficiency: EvolutionTaskEfficienc
 }
 
 function UnitMetricsCard({ metrics }: { metrics: EvolutionUnitMetric[] }) {
+  const copy = useEvolutionCopy();
   const top = metrics.toSorted((a, b) => b.used_count - a.used_count || b.success_count - a.success_count).slice(0, 8);
   return (
     <Card className="bg-background/85 backdrop-blur">
@@ -1336,7 +1349,7 @@ function UnitMetricsCard({ metrics }: { metrics: EvolutionUnitMetric[] }) {
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <Badge variant="secondary">{unitLabel(item.unit_type)}</Badge>
+                  <Badge variant="secondary">{unitLabel(item.unit_type, copy)}</Badge>
                   <Badge variant={item.success_rate >= 0.8 ? "secondary" : "outline"}>{pct(item.success_rate)}</Badge>
                 </div>
                 <div className="mt-2 truncate font-medium">{item.title || item.local_unit_id}</div>
@@ -1359,6 +1372,7 @@ function UnitMetricsCard({ metrics }: { metrics: EvolutionUnitMetric[] }) {
 }
 
 function OpsCard({ icon: Icon, title, value, detail, status }: { icon: typeof RefreshCw; title: string; value: string; detail: string; status: string }) {
+  const copy = useEvolutionCopy();
   const badgeVariant: "secondary" | "default" | "destructive" | "outline" = status === copy("healthy") || status === copy("succeeded")
     ? "secondary"
     : status === copy("running")
@@ -1394,6 +1408,7 @@ function ProcessCard({
   promotedSharedMemory: number;
   feedbackCount: number;
 }) {
+  const copy = useEvolutionCopy();
   const selfReview = stageByName.get("agent_self_review");
   const teamCuration = [stageByName.get("team_curation"), stageByName.get("all")]
     .filter((run): run is MemoryCurationStageStatus => run !== undefined)

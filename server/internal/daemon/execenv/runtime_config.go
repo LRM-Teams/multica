@@ -853,9 +853,7 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 			b.WriteString("\n**Operational-command acknowledgement:** When a user directs an attention-management operation (for example, follow/unfollow or mute/unmute), perform the operation first. If it succeeds, react `✅` to the instructing message with `multica message react --message-id <triggering-message-id> --emoji \"✅\"` and send no ordinary text confirmation. Use a text reply only when the operation fails or the user needs substantive information.\n")
 		}
 		if ctx.ChatCLITransportUnavailable {
-			b.WriteString("1. Write the visible reply as your final assistant output (answer, result, or a brief acknowledgment).\n")
-			b.WriteString("2. When a sticker or reaction would normally fit, use a short text reply instead; the chat CLI transport is unavailable for this run.\n")
-			b.WriteString("Producing empty final output is **not** an option for this run.\n")
+			b.WriteString("The chat CLI transport is unavailable for this run. Final assistant output is not delivered, so do not attempt a fallback chat reply. Finish without sending a message; a directed run will be recorded as a must-reply failure until a transport-capable runtime handles it.\n")
 		} else {
 			b.WriteString("1. A reply via `multica message send` (answer, result, or a brief acknowledgment).\n")
 			b.WriteString("2. Only when the message genuinely needs no words (pure greeting/thanks/sign-off): a reaction via `multica message react` or a sticker via `multica message send --sticker`.\n")
@@ -865,9 +863,9 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 	// Regular chat mode context (directed + ambient agents both see this;
 	// the Reply Requirement above tells them which parts apply).
 	if ctx.ChatCLITransportUnavailable {
-		b.WriteString("You are in chat mode. A user is messaging you in a Multica DM, channel, or thread. Reply conversationally and directly. This run is using compatibility chat output: write the visible reply as your final assistant output, and the platform will deliver it to the current conversation. Do not try to find, install, or discuss chat send/react commands, missing tools, tokens, transport, or runtime setup. Do not print JSON envelopes, action objects, no_reply/stay_silent tokens, protocol text, debugging notes, or explanations that no visible reply is needed as the final answer. Any permission to finish with empty output here applies **only** to ambient channel messages not addressed to you — never to DMs, @mentions, or direct questions. Do not mutate issues as an incidental side effect of browsing; issue writes follow the claim-first issue model described below.\n\n")
+		b.WriteString("You are in chat mode. A user is messaging you in a Multica DM, channel, or thread. This runtime has no chat CLI transport. Final assistant output is never delivered to the conversation, so do not attempt a fallback reply or print protocol/no-reply rationale text. Do not try to find, install, or discuss chat send/react commands, missing tools, tokens, transport, or runtime setup. Do not mutate issues as an incidental side effect of browsing; issue writes follow the claim-first issue model described below.\n\n")
 	} else {
-		b.WriteString("You are in chat mode. A user is messaging you in a Multica DM, channel, or thread. Reply conversationally and directly by using the task-scoped Multica CLI transport for visible chat output. If no visible reply is warranted, do not send a message and do not print a no-reply rationale as final output (this applies **only** to ambient channel messages not addressed to you — never to DMs, @mentions, or direct questions). Do not mutate issues as an incidental side effect of browsing; issue writes follow the claim-first issue model described below.\n\n")
+		b.WriteString("You are in chat mode. A user is messaging you in a Multica DM, channel, or thread. Visible chat output is delivered only by the task-scoped Multica CLI transport: use multica message send or multica message react. Text outside those commands, including final assistant output, is not delivered to the conversation. If no visible reply is warranted, finish without sending a message (this applies **only** to ambient channel messages not addressed to you — never to DMs, @mentions, or direct questions). Do not mutate issues as an incidental side effect of browsing; issue writes follow the claim-first issue model described below.\n\n")
 	}
 	b.WriteString("Context boundaries:\n")
 	b.WriteString("- Treat the injected conversation context as scoped to the current DM, channel, or thread surface. Do not use or infer other DMs, channels, issues, or threads unless the user explicitly references them and the CLI permits access.\n")
@@ -876,7 +874,7 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 
 	b.WriteString("## Pinned Rules\n\n")
 	b.WriteString("Pinned rules are high-frequency or safety-critical and must stay in mind for every chat run:\n\n")
-	b.WriteString("- Use the task-scoped Multica chat output path for visible replies; do not duplicate successfully sent content in final output.\n")
+	b.WriteString("- Use the task-scoped Multica chat output path for visible replies; command-external text, including final assistant output, is never delivered.\n")
 	b.WriteString("- Treat injected conversation context as scoped to the current DM/channel/thread; fetch broader history only when the request needs it.\n")
 	b.WriteString("- Use the `multica` CLI for Multica platform reads/writes; never bypass it with raw HTTP clients.\n")
 	b.WriteString("- Issue writes from chat are incidental only when explicitly requested or required; follow claim-first and do not self-approve `in_review -> done`.\n")
@@ -886,6 +884,7 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 	if !ctx.ChatCLITransportUnavailable {
 		b.WriteString("Common chat command forms are listed here so you can use them directly. Do NOT run `multica message send --help`, `multica message react --help`, or `multica sticker list` for ordinary replies, reactions, or common stickers. Use `multica --help`, `multica <command> --help`, or subcommand help only for unfamiliar, low-frequency, or destructive operations whose flags are not listed here. Prefer `--output json` when reading data.\n\n")
 		b.WriteString("Common capability index — use these forms directly when they fit; inspect help only when a needed flag is missing:\n")
+		b.WriteString("- Delivery boundary: only successful chat send/react commands deliver visible chat output. Text outside those commands, including final assistant output, is never delivered.\n")
 		b.WriteString("- Chat output: use `multica message send --target <target>` with an explicit Raft-style target (`#channel`, `#channel:<threadId>`, `dm:@handle`, or `dm:@handle:<threadId>`). Use `--message \"short text\"` for short plain text, `--message-stdin` with a single-quote heredoc or `--message-file <path>` for agent-authored multiline/shell-special text, and `--sticker <id>` for sticker replies. After a successful send, do not duplicate the reply in final output.\n")
 		b.WriteString("- Common sticker fast path: use stable ids directly without lookup — greeting `hi`, ok `ok`, received/understood `got-it`, agree `nod-yes`, praise `thumbs-up` or `impressive`, thanks `thanks`, on-it `on-it`, laughter `huaji`. Only for a rare, specific sticker, run one targeted `multica sticker search <query>`; do not list the whole sticker catalog.\n")
 		b.WriteString("- Freshness holds: if `multica message send` returns `state`/`outcome` = `held` or text saying \"Message held by freshness check\", the platform saved your attempted message as a server draft because newer chat context arrived while you were composing. Review the returned `heldMessages` (and use `multica message read` if you need more context), then choose exactly one path: rerun `multica message send --send-draft --target <target>` to send the saved draft unchanged, or run a normal `multica message send --target <target> ...` with revised content, which overwrites the saved draft. Do not claim you replied until the follow-up send succeeds.\n")
@@ -919,7 +918,7 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 
 	b.WriteString("## Output\n\n")
 	if ctx.ChatCLITransportUnavailable {
-		b.WriteString("For visible chat replies, write the user-facing message as your final assistant output. Keep it concise and natural, state the outcome rather than the process, and never mention compatibility mode, missing tools, tokens, CLI transport, or runtime setup.\n")
+		b.WriteString("No visible chat reply can be delivered without the task-scoped CLI transport. Do not use final assistant output as a fallback delivery path.\n")
 		b.WriteString(compactCloseoutStatusInstruction)
 		b.WriteString("\n")
 	} else {

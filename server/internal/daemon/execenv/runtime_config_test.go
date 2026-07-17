@@ -325,6 +325,8 @@ func TestChatRuntimeBriefIsLeanButKeepsFastChatPaths(t *testing.T) {
 		"Common chat command forms are listed here so you can use them directly",
 		"Do NOT run `multica message send --help`",
 		"Common capability index",
+		"Delivery boundary: only successful chat send/react commands deliver visible chat output.",
+		"Text outside those commands, including final assistant output, is never delivered.",
 		"Chat output: use `multica message send --target <target>`",
 		"explicit Raft-style target",
 		"#channel:<threadId>",
@@ -461,7 +463,7 @@ func TestChatRuntimeBriefOmitsReplyRequirementForAmbientRun(t *testing.T) {
 	}
 }
 
-func TestChatRuntimeBriefFallsBackWhenCLITransportUnavailable(t *testing.T) {
+func TestChatRuntimeBriefDoesNotFallbackWhenCLITransportUnavailable(t *testing.T) {
 	t.Parallel()
 	ctx := TaskContextForEnv{
 		ChatSessionID:                    "chat-1",
@@ -476,12 +478,13 @@ func TestChatRuntimeBriefFallsBackWhenCLITransportUnavailable(t *testing.T) {
 
 	for _, want := range []string{
 		"## Chat Mode",
-		"compatibility chat output",
-		"write the visible reply as your final assistant output",
-		"When a sticker or reaction would normally fit, use a short text reply instead",
-		"Producing empty final output is **not** an option",
+		"This runtime has no chat CLI transport.",
+		"Final assistant output is never delivered to the conversation",
+		"do not attempt a fallback chat reply",
+		"must-reply failure",
+		"No visible chat reply can be delivered without the task-scoped CLI transport.",
+		"Do not use final assistant output as a fallback delivery path.",
 		"Do not try to find, install, or discuss chat send/react commands",
-		"never mention compatibility mode, missing tools, tokens, CLI transport, or runtime setup",
 		"Issues/comments: `multica issue list|get|search|comment ...`",
 		"issue list --mine --output json",
 		"## Repositories",

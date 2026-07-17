@@ -192,7 +192,7 @@ func (r *AgentStageRunner) RunStage(ctx context.Context, input StageAgentInput) 
 		payload["curator_instructions"] = r.instructions
 	}
 	payload["stage_contract"] = stageAgentContract(input.Stage)
-	payload["workflow"] = "agent_self_review writes the target agent's daily/review/proposals from today's evidence; team_curation consumes proposed memories/skills from active agents and emits clean team knowledge, dedupe, merge, and conflict decisions."
+	payload["workflow"] = "agent_self_review writes the target agent's daily/review/proposals from today's evidence; team_curation consumes proposed memories/skills from active agents and emits clean team knowledge, dedupe, merge, and conflict decisions. Preserve explicit project/channel/task/expiry applicability; never infer stable IDs that are absent from evidence."
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return StageAgentOutput{}, err
@@ -229,9 +229,9 @@ func (r *AgentStageRunner) RunStage(ctx context.Context, input StageAgentInput) 
 func stageAgentContract(stage Stage) string {
 	switch stage {
 	case StageAgentSelfReview:
-		return "Run one background self-review for the target agent. Read the target agent root and DB evidence, then update memory/daily/YYYY-MM-DD.md first. Put uncertain or promotable items in memory/REVIEW.md and/or sync_queue proposal files. Output strict JSON {\"summary\":\"...\",\"candidates\":[{\"type\":\"memory|user_preference|state|skill|team_memory|follow_up\",\"scope\":\"agent|user|workspace|team\",\"title\":\"...\",\"content\":\"...\",\"confidence\":0.0,\"evidence_refs\":[\"kind:id\"]}]}. Be selective; no chat logs."
+		return "Run one background self-review for the target agent. Read the target agent root and DB evidence, then update memory/daily/YYYY-MM-DD.md first. Put uncertain or promotable items in memory/REVIEW.md and/or sync_queue proposal files. Output strict JSON {\"summary\":\"...\",\"candidates\":[{\"type\":\"memory|user_preference|state|skill|team_memory|follow_up\",\"scope\":\"agent|user|workspace|team\",\"title\":\"...\",\"content\":\"...\",\"confidence\":0.0,\"evidence_refs\":[\"kind:id\"],\"applies\":{\"project_ids\":[],\"channel_ids\":[],\"task_types\":[],\"expires_at\":\"RFC3339\"}}]}. Include applies only when exact stable IDs or expiry are supported by evidence; never guess IDs. Be selective; no chat logs."
 	case StageTeamCuration:
-		return "Run workspace team curation over active agents' REVIEW/proposal files. Do not reread all raw chat unless evidence is needed. Deduplicate, merge, find conflicts, and propose clean team knowledge/shared skills. Output strict JSON {\"team_knowledge\":[{\"kind\":\"memory|pattern|skill|policy|troubleshooting\",\"title\":\"...\",\"content\":\"...\",\"source_candidate_ids\":[]}],\"decisions\":[{\"candidate_id\":\"...\",\"status\":\"promoted|rejected|merged\",\"reason\":\"...\"}],\"conflicts\":[{\"title\":\"...\",\"content\":\"...\"}]}."
+		return "Run workspace team curation over active agents' REVIEW/proposal files. Do not reread all raw chat unless evidence is needed. Deduplicate, merge, find conflicts, and propose clean team knowledge/shared skills. Output strict JSON {\"team_knowledge\":[{\"kind\":\"memory|pattern|skill|policy|troubleshooting\",\"title\":\"...\",\"content\":\"...\",\"source_candidate_ids\":[],\"applies\":{\"project_ids\":[],\"channel_ids\":[],\"task_types\":[],\"expires_at\":\"RFC3339\"}}],\"decisions\":[{\"candidate_id\":\"...\",\"status\":\"promoted|rejected|merged\",\"reason\":\"...\"}],\"conflicts\":[{\"title\":\"...\",\"content\":\"...\"}]}. Preserve supported applicability from candidates and never guess stable IDs."
 	case StageL1:
 		return "Return a complete memory/daily/YYYY-MM-DD.md markdown document with Activity Summary, Decisions And Stable Facts, User / Teammate Preferences Observed, Temporary State And Follow-ups, Evidence Index, and Curation Status. Use DB evidence IDs and local file facts only."
 	case StageL2:

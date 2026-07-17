@@ -246,6 +246,76 @@ func stageLocalFiles(root string, names ...string) map[string]string {
 	return out
 }
 
+const (
+	maxScopedCurationFiles = 12
+	maxScopedCurationBytes = 16 * 1024
+	maxScopedCurationFile  = 2 * 1024
+)
+
+// stageFilesWithScoped adds only canonical, one-level scoped memory files.
+// It deliberately ignores daily history and notes indexes, and bounds the
+// additional payload so a workspace with many projects cannot flood context.
+func stageFilesWithScoped(root string, names ...string) map[string]string {
+	out := stageLocalFiles(root, names...)
+	type scopedGroup struct {
+		dir      string
+		files    []string
+		maxBytes int
+		maxFiles int
+	}
+	groups := []scopedGroup{
+		{dir: "users", files: []string{"USER.md", "RELATIONSHIP.md"}, maxBytes: 4 * 1024, maxFiles: 4},
+		{dir: "projects", files: []string{"STATE.md", "DECISIONS.md", "MEMORY.md"}, maxBytes: 8 * 1024, maxFiles: 6},
+		{dir: "channels", files: []string{"CONTEXT.md"}, maxBytes: 4 * 1024, maxFiles: 2},
+	}
+	remaining := maxScopedCurationBytes
+	added := 0
+	for _, group := range groups {
+		groupRemaining := group.maxBytes
+		groupAdded := 0
+		entries, err := os.ReadDir(filepath.Join(root, group.dir))
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if added >= maxScopedCurationFiles || remaining <= 0 {
+				return out
+			}
+			if groupRemaining <= 0 || groupAdded >= group.maxFiles {
+				break
+			}
+			if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+				continue
+			}
+			for _, filename := range group.files {
+				if added >= maxScopedCurationFiles || remaining <= 0 || groupRemaining <= 0 || groupAdded >= group.maxFiles {
+					break
+				}
+				rel := filepath.ToSlash(filepath.Join(group.dir, entry.Name(), filename))
+				path := filepath.Join(root, filepath.FromSlash(rel))
+				info, err := os.Lstat(path)
+				if err != nil || !info.Mode().IsRegular() {
+					continue
+				}
+				payload, err := os.ReadFile(path)
+				if err != nil {
+					continue
+				}
+				content := truncateUTF8(strings.TrimSpace(string(payload)), min(maxScopedCurationFile, remaining, groupRemaining))
+				if content == "" {
+					continue
+				}
+				out[rel] = content
+				remaining -= len(content)
+				groupRemaining -= len(content)
+				added++
+				groupAdded++
+			}
+		}
+	}
+	return out
+}
+
 func evidenceForAgent(opts Options, workspaceID, agentID string, since, until time.Time) ([]EvidenceItem, error) {
 	if opts.DBEvidence != nil {
 		return opts.DBEvidence[agentID], nil
@@ -274,7 +344,7 @@ func (e *Engine) runAgentSelfReview(root agentRoot, opts Options) (AgentRunResul
 		return ar, err
 	}
 	ar.EvidenceCollected += len(evidence)
-	files := stageLocalFiles(root.Root,
+	files := stageFilesWithScoped(root.Root,
 		"memory/daily/"+formatDate(opts.Until)+".md",
 		"memory/REVIEW.md",
 		"memory/MEMORY.md",
@@ -306,7 +376,7 @@ func (e *Engine) runTeamCuration(roots []agentRoot, opts Options) (AgentRunResul
 	localFiles := make(map[string]string)
 	var evidence []EvidenceItem
 	for _, root := range roots {
-		files := stageLocalFiles(root.Root, "memory/REVIEW.md", "memory/MEMORY.md", "memory/USER.md", "memory/STATE.md", "sync_queue/memory-candidates.jsonl", "sync_queue/skill-candidates.jsonl")
+		files := stageFilesWithScoped(root.Root, "memory/REVIEW.md", "memory/MEMORY.md", "memory/USER.md", "memory/STATE.md", "sync_queue/memory-candidates.jsonl", "sync_queue/skill-candidates.jsonl")
 		for name, content := range files {
 			localFiles[root.AgentID+"/"+name] = content
 		}
@@ -1123,7 +1193,7 @@ func inferExpiresAt(body, sourceDate string) string {
 func (e *Engine) runL4(root agentRoot, opts Options) (AgentRunResult, error) {
 	ar := AgentRunResult{WorkspaceID: root.WorkspaceID, AgentID: root.AgentID, Root: root.Root}
 	evidence, _ := evidenceForAgent(opts, root.WorkspaceID, root.AgentID, opts.Since, opts.Until)
-	if _, agentErr := runStageAgent(opts, root, StageL4, stageLocalFiles(root.Root, "memory/REVIEW.md", "memory/MEMORY.md", "memory/USER.md", "memory/STATE.md", "notes/decisions.md"), evidence, nil); agentErr != nil {
+	if _, agentErr := runStageAgent(opts, root, StageL4, stageFilesWithScoped(root.Root, "memory/REVIEW.md", "memory/MEMORY.md", "memory/USER.md", "memory/STATE.md", "notes/decisions.md"), evidence, nil); agentErr != nil {
 		return ar, agentErr
 	}
 	reviewChanged, archived, err := sweepReview(filepath.Join(root.Root, "memory", "REVIEW.md"), opts.Now, opts.DryRun)
@@ -1146,6 +1216,29 @@ func (e *Engine) runL4(root agentRoot, opts Options) (AgentRunResult, error) {
 		if merged > 0 {
 			ar.Changed = true
 			ar.DuplicatesMerged += merged
+		}
+	}
+	projectEntries, _ := os.ReadDir(filepath.Join(root.Root, "projects"))
+	for _, entry := range projectEntries {
+		if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		projectRoot := filepath.Join(root.Root, "projects", entry.Name())
+		stateChanged, stateArchived, err := sweepExpiredState(filepath.Join(projectRoot, "STATE.md"), opts.Now, opts.DryRun)
+		if err != nil {
+			return ar, err
+		}
+		ar.Changed = ar.Changed || stateChanged
+		ar.EntriesArchived += stateArchived
+		for _, name := range []string{"MEMORY.md", "STATE.md", "DECISIONS.md"} {
+			merged, err := dedupeBulletBlocks(filepath.Join(projectRoot, name), opts.DryRun)
+			if err != nil {
+				return ar, err
+			}
+			if merged > 0 {
+				ar.Changed = true
+				ar.DuplicatesMerged += merged
+			}
 		}
 	}
 	if err := appendAudit(root.Root, "l4", opts.Until, map[string]any{"entries_archived": ar.EntriesArchived, "duplicates_merged": ar.DuplicatesMerged}, opts.DryRun); err != nil {

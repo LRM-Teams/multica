@@ -26,6 +26,7 @@ type selfReviewOutput struct {
 		Content      string          `json:"content"`
 		Confidence   float64         `json:"confidence"`
 		EvidenceRefs json.RawMessage `json:"evidence_refs"`
+		Applies      json.RawMessage `json:"applies"`
 	} `json:"candidates"`
 }
 
@@ -36,6 +37,7 @@ type teamCurationOutput struct {
 		Content            string          `json:"content"`
 		SourceCandidateIDs []string        `json:"source_candidate_ids"`
 		Metadata           json.RawMessage `json:"metadata"`
+		Applies            json.RawMessage `json:"applies"`
 	} `json:"team_knowledge"`
 	Decisions []struct {
 		CandidateID string `json:"candidate_id"`
@@ -100,12 +102,13 @@ func (h *Handler) persistSelfReviewOutput(ctx context.Context, exec dbExecutor, 
 		if confidence <= 0 || confidence > 1 {
 			confidence = 0.5
 		}
+		metadata := curationOutputMetadata(nil, "agent_self_review", c.Applies)
 		if _, err := exec.Exec(ctx, `
 			INSERT INTO agent_memory_curation_candidate (
 			  workspace_id, source_agent_id, run_id, candidate_type, scope, title,
 			  content, evidence_refs, confidence, metadata
-			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,jsonb_build_object('source','agent_self_review'))
-		`, workspaceID, agentID, runID, kind, scope, strings.TrimSpace(c.Title), content, evidence, confidence); err != nil {
+			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10::jsonb)
+		`, workspaceID, agentID, runID, kind, scope, strings.TrimSpace(c.Title), content, evidence, confidence, metadata); err != nil {
 			return err
 		}
 	}
@@ -124,10 +127,7 @@ func (h *Handler) persistTeamCurationOutput(ctx context.Context, exec dbExecutor
 			continue
 		}
 		kind := normalizeTeamKnowledgeKind(item.Kind)
-		metadata := item.Metadata
-		if len(metadata) == 0 || string(metadata) == "null" {
-			metadata = json.RawMessage(`{}`)
-		}
+		metadata := curationOutputMetadata(item.Metadata, "team_curation", item.Applies)
 		if _, err := exec.Exec(ctx, `
 			INSERT INTO team_knowledge_item (
 			  workspace_id, kind, title, content, source_candidate_ids,
@@ -178,6 +178,23 @@ func (h *Handler) persistTeamCurationOutput(ctx context.Context, exec dbExecutor
 		}
 	}
 	return nil
+}
+
+func curationOutputMetadata(raw json.RawMessage, source string, appliesRaw json.RawMessage) json.RawMessage {
+	metadata := map[string]any{}
+	if len(raw) > 0 && string(raw) != "null" {
+		_ = json.Unmarshal(raw, &metadata)
+	}
+	metadata["source"] = source
+	var applies map[string]any
+	if len(appliesRaw) > 0 && string(appliesRaw) != "null" && json.Unmarshal(appliesRaw, &applies) == nil && len(applies) > 0 {
+		metadata["applies"] = applies
+	}
+	payload, err := json.Marshal(metadata)
+	if err != nil {
+		return json.RawMessage(`{"source":"` + source + `"}`)
+	}
+	return payload
 }
 
 func normalizeTeamCurationDecisionStatus(value string) string {

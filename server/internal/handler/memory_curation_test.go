@@ -297,6 +297,7 @@ func TestTeamCurationPersistsKnowledgeAndAppliesDecisionAtomically(t *testing.T)
 	}
 	ctx := context.Background()
 	suffix := randomID()
+	const applicabilityProjectID = "22222222-2222-2222-2222-222222222222"
 	var agentID, runID, candidateID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent (workspace_id,name,runtime_mode,runtime_id,owner_id)
@@ -342,6 +343,7 @@ func TestTeamCurationPersistsKnowledgeAndAppliesDecisionAtomically(t *testing.T)
 		"team_knowledge": []map[string]any{{
 			"kind": "policy", "title": "Release verification",
 			"content": "Run release tests before publishing.", "source_candidate_ids": []string{candidateID},
+			"applies": map[string]any{"project_ids": []string{applicabilityProjectID}, "task_types": []string{"issue"}, "expires_at": "2099-01-01T00:00:00Z"},
 		}},
 		"decisions": []map[string]any{{"candidate_id": candidateID, "status": "promoted", "reason": "workspace policy"}},
 	})
@@ -369,6 +371,19 @@ func TestTeamCurationPersistsKnowledgeAndAppliesDecisionAtomically(t *testing.T)
 	}
 	if knowledgeCount != 1 {
 		t.Fatalf("team knowledge count = %d, want 1", knowledgeCount)
+	}
+	var appliesProject, appliesTask, appliesExpiry string
+	if err := testPool.QueryRow(ctx, `
+		SELECT metadata->'applies'->'project_ids'->>0,
+		       metadata->'applies'->'task_types'->>0,
+		       metadata->'applies'->>'expires_at'
+		  FROM team_knowledge_item
+		 WHERE workspace_id=$1 AND title='Release verification'
+	`, testWorkspaceID).Scan(&appliesProject, &appliesTask, &appliesExpiry); err != nil {
+		t.Fatal(err)
+	}
+	if appliesProject != applicabilityProjectID || appliesTask != "issue" || appliesExpiry != "2099-01-01T00:00:00Z" {
+		t.Fatalf("team knowledge applies = %q/%q/%q", appliesProject, appliesTask, appliesExpiry)
 	}
 
 	rollbackTitle := "Rollback verification " + suffix

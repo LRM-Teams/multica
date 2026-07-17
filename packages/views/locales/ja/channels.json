@@ -221,7 +221,25 @@
     "system_event": {
       "member_added": "{target} が {actor} によってチャンネルに追加されました",
       "member_removed": "{target} が {actor} によってチャンネルから削除されました",
-      "member_left": "{target} がチャンネルから退出しました"
+      "member_left": "{target} がチャンネルから退出しました",
+      "issue": {
+        "actor_system": "Multica",
+        "assigned": "{{actor}} がタスク {issue} を {{target}} に割り当てました",
+        "assigned_unknown": "{{actor}} がタスク {issue} の担当者を変更しました",
+        "in_progress": "{{actor}} がタスク {issue} を進行中にしました",
+        "in_review": "{{actor}} がタスク {issue} をレビューに提出しました",
+        "done": "{{actor}} がタスク {issue} を完了しました",
+        "status": "{{actor}} がタスク {issue} を{{status}}にしました"
+      },
+      "issue_status": {
+        "backlog": "バックログ",
+        "todo": "未着手",
+        "in_progress": "進行中",
+        "in_review": "レビュー中",
+        "done": "完了",
+        "blocked": "ブロック中",
+        "cancelled": "キャンセル"
+      }
     }
   },
   "dm": {

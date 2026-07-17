@@ -221,7 +221,25 @@
     "system_event": {
       "member_added": "{target} was added to this channel by {actor}",
       "member_removed": "{target} was removed from this channel by {actor}",
-      "member_left": "{target} left this channel"
+      "member_left": "{target} left this channel",
+      "issue": {
+        "actor_system": "Multica",
+        "assigned": "{{actor}} assigned {issue} to {{target}}",
+        "assigned_unknown": "{{actor}} changed the assignee of {issue}",
+        "in_progress": "{{actor}} started {issue}",
+        "in_review": "{{actor}} sent {issue} for review",
+        "done": "{{actor}} completed {issue}",
+        "status": "{{actor}} marked {issue} as {{status}}"
+      },
+      "issue_status": {
+        "backlog": "Backlog",
+        "todo": "To do",
+        "in_progress": "In progress",
+        "in_review": "In review",
+        "done": "Done",
+        "blocked": "Blocked",
+        "cancelled": "Cancelled"
+      }
     }
   },
   "dm": {

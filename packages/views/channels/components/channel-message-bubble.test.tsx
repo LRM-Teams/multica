@@ -149,6 +149,26 @@ vi.mock("../../i18n/use-t", () => ({
           deleted_placeholder: string;
           save_edit: string;
           cancel_edit: string;
+          system_event: {
+            issue: {
+              actor_system: string;
+              assigned: string;
+              assigned_unknown: string;
+              in_progress: string;
+              in_review: string;
+              done: string;
+              status: string;
+            };
+            issue_status: {
+              backlog: string;
+              todo: string;
+              in_progress: string;
+              in_review: string;
+              done: string;
+              blocked: string;
+              cancelled: string;
+            };
+          };
         };
         quote: {
           action: string;
@@ -170,8 +190,9 @@ vi.mock("../../i18n/use-t", () => ({
         thread: { reply: string; reply_count: string };
         time: { today: string; yesterday: string };
       }) => string,
-    ) =>
-      selector({
+      options?: Record<string, unknown>,
+    ) => {
+      const raw = selector({
         message: {
           add_reaction: "Add reaction",
           agent_badge: "Agent",
@@ -192,6 +213,26 @@ vi.mock("../../i18n/use-t", () => ({
           deleted_placeholder: "This message was deleted",
           save_edit: "Save",
           cancel_edit: "Cancel",
+          system_event: {
+            issue: {
+              actor_system: "Multica",
+              assigned: "{{actor}} assigned {issue} to {{target}}",
+              assigned_unknown: "{{actor}} changed the assignee of {issue}",
+              in_progress: "{{actor}} started {issue}",
+              in_review: "{{actor}} sent {issue} for review",
+              done: "{{actor}} completed {issue}",
+              status: "{{actor}} marked {issue} as {{status}}",
+            },
+            issue_status: {
+              backlog: "Backlog",
+              todo: "To do",
+              in_progress: "In progress",
+              in_review: "In review",
+              done: "Done",
+              blocked: "Blocked",
+              cancelled: "Cancelled",
+            },
+          },
         },
         quote: {
           action: "Quote",
@@ -215,7 +256,11 @@ vi.mock("../../i18n/use-t", () => ({
           reply_count: "2 replies",
         },
         time: { today: "Today", yesterday: "Yesterday" },
-      }),
+      });
+      return options
+        ? raw.replace(/\{\{(\w+)\}\}/g, (_, key: string) => String(options[key] ?? ""))
+        : raw;
+    },
   }),
 }));
 
@@ -1200,6 +1245,61 @@ describe("ChannelMessageBubble", () => {
     // server anchored it.
     const systemRow = screen.getByTestId("system-message-row");
     expect(within(systemRow).getByText("MUL-7").closest("a")).not.toBeNull();
+  });
+
+  it("projects an issue-lifecycle status change into the item #7 row with a simple inline time (#497)", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          type: "system",
+          author_id: null,
+          author_name: "System",
+          created_at: "2026-06-17T09:15:00Z",
+          // Pre-#7 the backend fallback string leaked the internal enum wording.
+          content: "LRM-137 moved from Todo to In Progress",
+          parts: [
+            {
+              type: "system_event",
+              event: "issue_status_changed",
+              event_params: {
+                issue_id: "issue-uuid",
+                issue_identifier: "LRM-137",
+                issue_status: "in_progress",
+                previous_status: "todo",
+                actor_id: "user-1",
+                actor_type: "human",
+              },
+            },
+            {
+              type: "reference",
+              ref_type: "issue-ref",
+              ref_subtype: "issue",
+              ref_id: "issue-uuid",
+              label: "LRM-137",
+            },
+          ],
+        } as never)}
+        currentUserId="user-2"
+        onOpenThread={vi.fn()}
+        onReact={vi.fn()}
+      />,
+    );
+
+    const systemRow = screen.getByTestId("system-message-row");
+    // The projected action verb replaces the raw "moved from Todo to In Progress".
+    expect(systemRow).toHaveTextContent("Alice Display started");
+    expect(systemRow.textContent).not.toContain("moved");
+    expect(systemRow.textContent).not.toContain("in_progress");
+
+    // The issue identifier is the sole link in the row.
+    const links = within(systemRow).getAllByRole("link");
+    expect(links).toHaveLength(1);
+    expect(links[0]).toHaveTextContent("LRM-137");
+
+    // A simple inline time ("· <time>"), never the full hover timestamp (no title).
+    expect(systemRow).toHaveTextContent("·");
+    expect(systemRow).toHaveTextContent("09:15");
+    expect(systemRow.getAttribute("title")).toBeNull();
   });
 
   it("renders system messages as notice rows without chat bubble actions", () => {

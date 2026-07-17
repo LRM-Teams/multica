@@ -26,11 +26,14 @@ func TestDeriveSquadMemberStatus(t *testing.T) {
 		hasActiveTask bool
 		want          string
 	}{
-		{"active wins over offline runtime", false, offline, tsAgo(time.Hour), true, "working"},
-		{"active wins over missing runtime", false, missing, tsNone, true, "working"},
+		{"offline runtime wins over active task", false, offline, tsAgo(time.Hour), true, "offline"},
+		{"missing runtime wins over active task", false, missing, tsNone, true, "offline"},
 		{"online runtime, no task", false, online, tsAgo(2 * time.Second), false, "idle"},
-		{"offline runtime, recent heartbeat", false, offline, tsAgo(2 * time.Minute), false, "unstable"},
+		{"online runtime, active task", false, online, tsAgo(2 * time.Second), true, "working"},
+		{"offline runtime, recent heartbeat", false, offline, tsAgo(2 * time.Minute), false, "offline"},
 		{"offline runtime, stale heartbeat", false, offline, tsAgo(2 * time.Hour), false, "offline"},
+		{"online runtime, stale heartbeat in transient window", false, online, tsAgo(3 * time.Minute), false, "unstable"},
+		{"online runtime, stale heartbeat past reconnect window", false, online, tsAgo(6 * time.Minute), false, "offline"},
 		{"offline runtime, no heartbeat", false, offline, tsNone, false, "offline"},
 		{"no runtime row", false, missing, tsNone, false, "offline"},
 		// Archived agents always report archived regardless of any leftover

@@ -472,15 +472,11 @@ type SquadMemberStatusListResponse struct {
 }
 
 // deriveSquadMemberStatus collapses runtime + task signals into the five
-// status buckets used by the squad UI. Mirrors the workload+availability
-// split in packages/core/agents/derive-presence.ts: working wins over
-// runtime health (an agent that is in the middle of dispatched/running
-// work counts as working even if the runtime briefly drops), then
-// availability buckets decide between idle / unstable / offline.
-//
-// Thresholds match deriveRuntimeHealth: any offline runtime whose
-// last_seen_at is within the last 5 minutes is reported as "unstable" so
-// the squad UI surfaces transient drops the same way the agent dot does.
+// status buckets used by the squad UI. A runtime explicitly marked offline
+// always wins: the agent cannot execute work, so reporting "working" or
+// "unstable" would disagree with the runtime state. "unstable" is reserved
+// for the short interval where the DB row is still online but its heartbeat
+// has gone stale; that is the only genuinely ambiguous/flapping state.
 //
 // Archived agents always report `archived` regardless of any leftover
 // runtime row or task — they should appear in the list but never look
@@ -499,22 +495,26 @@ func deriveSquadMemberStatus(
 	if archived {
 		return "archived"
 	}
-	if hasActiveTask {
-		return "working"
-	}
 	if !runtimeStatus.Valid {
 		return "offline"
 	}
-	if runtimeStatus.String == "online" {
-		return "idle"
+	if runtimeStatus.String == "offline" {
+		return "offline"
 	}
 	if !lastSeen.Valid {
 		return "offline"
 	}
-	if now.Sub(lastSeen.Time) < 5*time.Minute {
+	staleFor := now.Sub(lastSeen.Time)
+	if staleFor >= agentHealthReconnectAfter {
+		return "offline"
+	}
+	if staleFor >= agentHealthStaleThreshold {
 		return "unstable"
 	}
-	return "offline"
+	if hasActiveTask {
+		return "working"
+	}
+	return "idle"
 }
 
 // ListSquadMemberStatus returns one entry per squad member with derived

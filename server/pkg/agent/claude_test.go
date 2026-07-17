@@ -45,6 +45,40 @@ func TestClaudeHandleAssistantText(t *testing.T) {
 	}
 }
 
+func TestClaudeCompactionLifecycleMessages(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		msg  claudeSDKMessage
+		want MessageType
+	}{
+		{
+			name: "started",
+			msg:  claudeSDKMessage{Type: "system", Subtype: "status", Status: "compacting"},
+			want: MessageCompactionStarted,
+		},
+		{
+			name: "finished",
+			msg:  claudeSDKMessage{Type: "system", Subtype: "compact_boundary"},
+			want: MessageCompactionFinished,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := claudeCompactionMessage(tc.msg)
+			if !ok || got.Type != tc.want {
+				t.Fatalf("claudeCompactionMessage(%+v) = %+v, %t; want %s, true", tc.msg, got, ok, tc.want)
+			}
+		})
+	}
+
+	if _, ok := claudeCompactionMessage(claudeSDKMessage{Type: "system", Subtype: "status", Status: "requesting"}); ok {
+		t.Fatal("non-compacting system status must not create a compaction event")
+	}
+}
+
 func TestClaudeEnvelopeNativeLineageSeparatesMainAndSubagentTrajectories(t *testing.T) {
 	t.Parallel()
 

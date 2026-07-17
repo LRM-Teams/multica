@@ -1392,6 +1392,31 @@ func TestTaskMessageRequestVisibility_EmptyThinkingIsPhaseStatus(t *testing.T) {
 	}
 }
 
+func TestTaskMessageCompactionActivityUsesRaftCanonicalLifecycle(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		messageType string
+		wantKind    string
+		wantMessage string
+	}{
+		{"compaction_started", activityKindCompactionStarted, "Compacting context"},
+		{"compaction_finished", activityKindCompactionFinished, "Context compaction finished"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.messageType, func(t *testing.T) {
+			kind, eventType, message, ok := taskMessageCompactionActivity(tc.messageType)
+			if !ok || kind != tc.wantKind || eventType != tc.messageType || message != tc.wantMessage {
+				t.Fatalf("taskMessageCompactionActivity(%q) = (%q, %q, %q, %t)", tc.messageType, kind, eventType, message, ok)
+			}
+			if got := taskMessageVisibilityForMessage(tc.messageType, "", nil); got != "diagnostic_only" {
+				t.Fatalf("compaction transcript visibility = %q, want diagnostic_only", got)
+			}
+		})
+	}
+}
+
 func TestAgentInboxTaskMessagePayload_EmitsOnlyEmptyThinkingPhaseStatus(t *testing.T) {
 	eventID := uuid.New()
 	event := db.AgentInboxEvent{ID: pgtype.UUID{Bytes: eventID, Valid: true}}

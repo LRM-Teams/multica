@@ -39,7 +39,7 @@ vi.mock("../../../i18n", () => ({
             subtexts: {
               message_received: "Message received",
               compacting_context: "Compacting context",
-              compaction_finished: "Compaction finished",
+              compaction_finished: "Context compaction finished",
               subagent_activity: "Subagent activity",
             },
           },

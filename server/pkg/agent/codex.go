@@ -1589,6 +1589,16 @@ func (c *codexClient) handleItemNotification(method string, params map[string]an
 	}
 
 	switch {
+	case method == "item/started" && itemType == "contextCompaction":
+		if c.onMessage != nil {
+			c.onMessage(Message{Type: MessageCompactionStarted})
+		}
+
+	case method == "item/completed" && itemType == "contextCompaction":
+		if c.onMessage != nil {
+			c.onMessage(Message{Type: MessageCompactionFinished})
+		}
+
 	case method == "item/started" && itemType == "commandExecution":
 		command, _ := item["command"].(string)
 		if c.onMessage != nil {

@@ -76,7 +76,7 @@ export const ACTIVITY_LABEL_EN: Record<ActivityLabelKey, string> = {
 export const ACTIVITY_SUBTEXT_EN: Record<ActivitySubtextKey, string> = {
   message_received: "Message received",
   compacting_context: "Compacting context",
-  compaction_finished: "Compaction finished",
+  compaction_finished: "Context compaction finished",
   subagent_activity: "Subagent activity",
 };
 

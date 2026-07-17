@@ -902,6 +902,54 @@ func TestReportTaskMessagesPublishesHydratedScopedActivityEvent(t *testing.T) {
 	}
 }
 
+func TestReportTaskMessagesRecordsCompactionAsActivityOnly(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	memberID := createWorkspaceMemberUser(t, "Compaction Activity Member", "compaction-activity-"+randomID()+"@multica.test")
+	agentID := createWorkspaceVisibleActivityAgent(t, "compaction-activity-agent")
+	_, channelSessionID := createActivityChannelSession(t, agentID, memberID)
+	taskID := createActivityRunTask(t, agentID, channelSessionID, "running", "compaction lifecycle work")
+
+	var captured *events.Event
+	testHandler.Bus.Subscribe(protocol.EventAgentActivityEvent, func(e events.Event) {
+		payload, ok := e.Payload.(AgentActivityEventRealtimePayload)
+		if !ok || payload.AgentID != agentID || payload.Event == nil || payload.Event.EventType != "compaction_started" {
+			return
+		}
+		copy := e
+		captured = &copy
+	})
+
+	req := newRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/messages", map[string]any{
+		"messages": []map[string]any{{"seq": 8, "type": "compaction_started"}},
+	})
+	req = withChatTestWorkspaceCtx(t, req)
+	req = withURLParam(req, "taskId", taskID)
+	w := httptest.NewRecorder()
+	testHandler.ReportTaskMessages(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ReportTaskMessages: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if captured == nil || captured.Payload.(AgentActivityEventRealtimePayload).Event.Text == nil || *captured.Payload.(AgentActivityEventRealtimePayload).Event.Text != "Compacting context" {
+		t.Fatalf("compaction realtime Activity = %+v, want canonical lifecycle event", captured)
+	}
+
+	var kind, eventType, message, visibility string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT event_kind, event_type, message, visibility
+		FROM agent_activity_event
+		WHERE task_id = $1 AND event_type = 'compaction_started'
+		ORDER BY created_at DESC
+		LIMIT 1`, taskID).Scan(&kind, &eventType, &message, &visibility); err != nil {
+		t.Fatalf("load compaction Activity event: %v", err)
+	}
+	if kind != activityKindCompactionStarted || eventType != "compaction_started" || message != "Compacting context" || visibility != "user_facing" {
+		t.Fatalf("compaction Activity row = kind=%q type=%q message=%q visibility=%q", kind, eventType, message, visibility)
+	}
+}
+
 func TestReportTaskMessagesUnmappedToolIsDiagnosticAndEmitsGap(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

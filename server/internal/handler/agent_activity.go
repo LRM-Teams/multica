@@ -1667,6 +1667,9 @@ func (h *Handler) taskMessageActivityTimelineEvent(ctx context.Context, workspac
 }
 
 func taskMessageActivityKind(messageType string) string {
+	if kind, _, _, ok := taskMessageCompactionActivity(messageType); ok {
+		return kind
+	}
 	switch messageType {
 	case "thinking":
 		return activityKindThinking

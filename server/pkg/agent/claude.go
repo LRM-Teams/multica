@@ -167,6 +167,9 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 				if msg.SessionID != "" {
 					sessionID = msg.SessionID
 				}
+				if compaction, ok := claudeCompactionMessage(msg); ok {
+					trySend(msgCh, compaction)
+				}
 				trySend(msgCh, Message{Type: MessageStatus, Status: "running", SessionID: sessionID})
 			case "result":
 				sessionID = msg.SessionID
@@ -366,6 +369,7 @@ type claudeSDKMessage struct {
 	Type            string          `json:"type"`
 	Message         json.RawMessage `json:"message,omitempty"`
 	Subtype         string          `json:"subtype,omitempty"`
+	Status          string          `json:"status,omitempty"`
 	SessionID       string          `json:"session_id,omitempty"`
 	Model           string          `json:"model,omitempty"`
 	ParentToolUseID string          `json:"parent_tool_use_id,omitempty"`
@@ -385,6 +389,22 @@ type claudeSDKMessage struct {
 	// control request fields
 	RequestID string          `json:"request_id,omitempty"`
 	Request   json.RawMessage `json:"request,omitempty"`
+}
+
+// claudeCompactionMessage mirrors the Claude stream-json lifecycle that Raft
+// consumes: `system/status=compacting` begins a compaction and
+// `system/compact_boundary` completes it.
+func claudeCompactionMessage(msg claudeSDKMessage) (Message, bool) {
+	if msg.Type != "system" {
+		return Message{}, false
+	}
+	if msg.Subtype == "status" && msg.Status == "compacting" {
+		return Message{Type: MessageCompactionStarted}, true
+	}
+	if msg.Subtype == "compact_boundary" {
+		return Message{Type: MessageCompactionFinished}, true
+	}
+	return Message{}, false
 }
 
 // nativeLineage preserves the explicit Claude SDK envelope lineage in a

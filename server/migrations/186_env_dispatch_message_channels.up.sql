@@ -1,7 +1,7 @@
 ALTER TABLE environment
-    ADD COLUMN collaboration_trigger JSONB;
+    ADD COLUMN IF NOT EXISTS collaboration_trigger JSONB;
 
-CREATE TABLE environment_agent_sandbox (
+CREATE TABLE IF NOT EXISTS environment_agent_sandbox (
     env_id UUID NOT NULL REFERENCES environment(id) ON DELETE CASCADE,
     channel_id UUID NOT NULL REFERENCES channel(id) ON DELETE CASCADE,
     agent_id UUID NOT NULL REFERENCES agent(id) ON DELETE CASCADE,
@@ -24,9 +24,11 @@ CREATE TABLE environment_agent_sandbox (
     )
 );
 
-CREATE INDEX environment_agent_sandbox_channel_idx
+CREATE INDEX IF NOT EXISTS environment_agent_sandbox_channel_idx
     ON environment_agent_sandbox(channel_id);
 
+-- Must include create_template/delete_template from 181/182; omitting them
+-- fails when those job rows already exist, and leaves 186 half-applied.
 ALTER TABLE sandbox_job
     DROP CONSTRAINT IF EXISTS sandbox_job_type_check,
     ADD CONSTRAINT sandbox_job_type_check CHECK (type IN (

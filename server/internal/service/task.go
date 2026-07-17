@@ -2907,10 +2907,10 @@ type agentMemoryDeliveryConfig struct {
 
 // LoadAgentMemoriesForExecution returns only memories that apply to the
 // current execution. Legacy rows without delivery metadata remain agent-local.
-func (s *TaskService) LoadAgentMemoriesForExecution(ctx context.Context, agentID pgtype.UUID, initiatorType, initiatorID string) []AgentMemoryData {
+func (s *TaskService) LoadAgentMemoriesForExecution(ctx context.Context, agentID, workspaceID pgtype.UUID, initiatorType, initiatorID string) []AgentMemoryData {
 	memories, err := s.Queries.ListAgentMemoriesByAgent(ctx, agentID)
-	if err != nil || len(memories) == 0 {
-		return nil
+	if err != nil {
+		memories = nil
 	}
 	initiatorType = strings.ToLower(strings.TrimSpace(initiatorType))
 	initiatorID = strings.TrimSpace(initiatorID)
@@ -2931,7 +2931,24 @@ func (s *TaskService) LoadAgentMemoriesForExecution(ctx context.Context, agentID
 			ContentHash: memory.ContentHash,
 		})
 	}
+	teamKnowledge, err := s.Queries.ListActiveTeamKnowledgeForExecution(ctx, workspaceID)
+	if err == nil {
+		for _, item := range teamKnowledge {
+			result = append(result, teamKnowledgeMemoryData(item))
+		}
+	}
 	return result
+}
+
+func teamKnowledgeMemoryData(item db.ActiveTeamKnowledgeForExecution) AgentMemoryData {
+	id := util.UUIDToString(item.ID)
+	return AgentMemoryData{
+		ID:      id,
+		Name:    "Team knowledge · " + strings.TrimSpace(item.Title),
+		Content: item.Content,
+		Scope:   "workspace",
+		SyncKey: "team_knowledge:" + id,
+	}
 }
 
 func agentMemoryDeliveryForExecution(config []byte, initiatorType, initiatorID string) (string, string, string, bool) {

@@ -993,7 +993,7 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 		resp.WorkspaceContext = ws.Context.String
 	}
 	if resp.Agent != nil {
-		resp.Agent.Memories = h.TaskService.LoadAgentMemoriesForExecution(ctx, event.AgentID, resp.InitiatorType, resp.InitiatorID)
+		resp.Agent.Memories = h.TaskService.LoadAgentMemoriesForExecution(ctx, event.AgentID, event.WorkspaceID, resp.InitiatorType, resp.InitiatorID)
 	}
 	if resp.WorkspaceID == "" || resp.WorkspaceID != runtimeWorkspaceID {
 		slog.Error("agent inbox claim: workspace isolation check failed",

@@ -1930,7 +1930,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 	if resp.Agent != nil {
-		resp.Agent.Memories = h.TaskService.LoadAgentMemoriesForExecution(r.Context(), task.AgentID, resp.InitiatorType, resp.InitiatorID)
+		resp.Agent.Memories = h.TaskService.LoadAgentMemoriesForExecution(r.Context(), task.AgentID, parseUUID(resp.WorkspaceID), resp.InitiatorType, resp.InitiatorID)
 	}
 
 	// Mint a task-scoped `mat_` token bound to (agent, task, workspace,

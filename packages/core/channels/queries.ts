@@ -1,6 +1,14 @@
 import { infiniteQueryOptions, queryOptions, type InfiniteData, type QueryClient } from "@tanstack/react-query";
 import { api } from "../api";
-import type { ChannelMessage, ChannelMessagesPage, ChannelThreadMessagesPage } from "../types";
+import type { ChannelMessage, ChannelMessagesPage, ChannelThreadMessagesPage, ListIssuesParams } from "../types";
+
+/**
+ * Query params for the group-local Tasks projection (#562). Mirrors the API
+ * method's accepted subset — the channel is a discussion context, not an issue
+ * owner, so this is a read-only projection over issues anchored to a source
+ * message here (1:1 — one issue has at most one source channel).
+ */
+export type ChannelIssuesParams = Pick<ListIssuesParams, "status" | "assignee_id" | "limit" | "offset">;
 
 export const channelKeys = {
   all: (wsId: string) => ["channels", wsId] as const,
@@ -14,6 +22,10 @@ export const channelKeys = {
   attachments: (channelId: string) => ["channel-attachments", channelId] as const,
   stats: (channelId: string) => ["channel-stats", channelId] as const,
   projectFiles: (channelId: string) => ["channel-project-files", channelId] as const,
+  issues: (channelId: string, params?: ChannelIssuesParams) =>
+    ["channel-issues", channelId, params ?? {}] as const,
+  issuesInfinite: (channelId: string, limit: number) =>
+    ["channel-issues", channelId, "infinite", limit] as const,
 };
 
 export function channelsOptions(wsId: string) {
@@ -230,6 +242,50 @@ export function channelProjectFilesOptions(channelId: string) {
   return queryOptions({
     queryKey: channelKeys.projectFiles(channelId),
     queryFn: () => api.listChannelProjectFiles(channelId),
+    enabled: !!channelId,
+  });
+}
+
+/**
+ * Group-local Tasks projection (#562): the issues created from a source message
+ * in THIS channel. Read-only — the channel doesn't own these issues, it's just
+ * the discussion context they came from, so this never restores a global
+ * channel filter or duplicates issue data. Single source of truth is the query.
+ */
+export function channelIssuesOptions(channelId: string, params?: ChannelIssuesParams) {
+  return queryOptions({
+    queryKey: channelKeys.issues(channelId, params),
+    queryFn: () => api.listChannelSourceIssues(channelId, params),
+    enabled: !!channelId,
+  });
+}
+
+/**
+ * The #684 endpoint caps a page at 100 issues and returns the `total`, so the
+ * group Tasks board must page rather than silently truncate. Offset pagination
+ * over the SAME single-source projection: each page fetches `limit`/`offset` of
+ * `channelIssuesOptions`' underlying method, and the caller flattens the pages
+ * into one loaded set to group by status client-side — never a parallel
+ * per-column query, never a restored global filter. `getNextPageParam` returns
+ * the next offset until the accumulated count reaches `total`.
+ */
+export const CHANNEL_ISSUES_PAGE_SIZE = 100;
+
+export function channelIssuesInfiniteOptions(
+  channelId: string,
+  options: { limit?: number } = {},
+) {
+  const limit = options.limit ?? CHANNEL_ISSUES_PAGE_SIZE;
+  return infiniteQueryOptions({
+    queryKey: channelKeys.issuesInfinite(channelId, limit),
+    queryFn: ({ pageParam }) =>
+      api.listChannelSourceIssues(channelId, { limit, offset: pageParam }),
+    initialPageParam: 0,
+    getNextPageParam: (_lastPage, allPages) => {
+      const loaded = allPages.reduce((sum, page) => sum + page.issues.length, 0);
+      const total = allPages[0]?.total ?? 0;
+      return loaded < total ? loaded : undefined;
+    },
     enabled: !!channelId,
   });
 }

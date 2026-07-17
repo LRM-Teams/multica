@@ -17,23 +17,10 @@ import {
 import { useModalStore } from "@multica/core/modals";
 import { useViewStoreApi } from "@multica/core/issues/stores/view-store-context";
 import { DraggableBoardCard } from "./board-card";
+import { BOARD_STATUS_DOT } from "./board-status-dot";
 import type { ChildProgress } from "./list-row";
 import { useT } from "../../i18n";
 import { ActorAvatar } from "../../common/actor-avatar";
-
-// Board column status dot — a flat filled (or hollow) circle in the status
-// color, matching the kanban design. Kept board-local so the list/swimlane
-// StatusIcon (detailed progress glyph) is unaffected. Uses semantic color
-// tokens only (no hardcoded Tailwind colors).
-const BOARD_STATUS_DOT: Record<IssueStatus, string> = {
-  backlog: "border-[1.5px] border-muted-foreground/40",
-  todo: "border-[1.5px] border-muted-foreground/40",
-  in_progress: "bg-brand",
-  in_review: "bg-warning",
-  done: "bg-muted-foreground/40",
-  blocked: "bg-destructive",
-  cancelled: "bg-muted-foreground/40",
-};
 
 // Insertion-position prediction intentionally omitted. The server's
 // ORDER BY uses PostgreSQL's en_US.utf8 collation (glibc), which

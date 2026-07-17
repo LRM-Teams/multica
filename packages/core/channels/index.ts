@@ -14,6 +14,10 @@ export {
   channelAttachmentsOptions,
   channelStatsOptions,
   channelProjectFilesOptions,
+  channelIssuesOptions,
+  channelIssuesInfiniteOptions,
+  CHANNEL_ISSUES_PAGE_SIZE,
+  type ChannelIssuesParams,
 } from "./queries";
 export {
   useEnsureMessageLoaded,

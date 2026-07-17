@@ -17,7 +17,6 @@ import type { Issue, IssueAssigneeGroup, IssueStatus } from "@multica/core/types
 import { useLoadMoreByAssigneeGroup, useLoadMoreByStatus } from "@multica/core/issues/mutations";
 import type { AssigneeGroupedIssuesFilter, IssueSortParam, MyIssuesFilter } from "@multica/core/issues/queries";
 import { useViewStore } from "@multica/core/issues/stores/view-store-context";
-import type { IssueGrouping } from "@multica/core/issues/stores/view-store";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { BoardColumn, BOARD_CARD_WIDTH, type BoardColumnGroup } from "./board-column";
 import { BoardCardContent } from "./board-card";
@@ -28,8 +27,7 @@ import { useT } from "../../i18n";
 import {
   type DragMoveUpdates,
   makeKanbanCollision,
-  statusGroupId,
-  assigneeGroupId,
+  buildBoardGroups,
   buildColumns,
   computePosition,
   findColumn,
@@ -41,68 +39,6 @@ function isStatusGroup(
   group: BoardColumnGroup,
 ): group is BoardColumnGroup & { status: IssueStatus } {
   return group.status !== undefined;
-}
-
-function buildGroups(
-  issues: Issue[],
-  visibleStatuses: IssueStatus[],
-  grouping: IssueGrouping,
-  getActorName: (type: string, id: string) => string,
-  noAssigneeLabel: string,
-): BoardColumnGroup[] {
-  if (grouping === "status") {
-    return visibleStatuses.map((status) => ({
-      id: statusGroupId(status),
-      title: status,
-      status,
-      createData: { status },
-    }));
-  }
-
-  const groups = new Map<string, BoardColumnGroup>();
-  for (const issue of issues) {
-    const id = assigneeGroupId(issue.assignee_type, issue.assignee_id);
-    if (groups.has(id)) continue;
-
-    if (issue.assignee_type && issue.assignee_id) {
-      groups.set(id, {
-        id,
-        title: getActorName(issue.assignee_type, issue.assignee_id),
-        assigneeType: issue.assignee_type,
-        assigneeId: issue.assignee_id,
-        createData: {
-          assignee_type: issue.assignee_type,
-          assignee_id: issue.assignee_id,
-        },
-      });
-      continue;
-    }
-
-    groups.set(id, {
-      id,
-      title: noAssigneeLabel,
-      assigneeType: null,
-      assigneeId: null,
-      createData: {
-        assignee_type: null,
-        assignee_id: null,
-      },
-    });
-  }
-
-  const order: Record<string, number> = {
-    member: 0,
-    agent: 1,
-    squad: 2,
-    none: 3,
-  };
-
-  return Array.from(groups.values()).toSorted((a, b) => {
-    const aOrder = order[a.assigneeType ?? "none"] ?? 99;
-    const bOrder = order[b.assigneeType ?? "none"] ?? 99;
-    if (aOrder !== bOrder) return aOrder - bOrder;
-    return a.title.localeCompare(b.title);
-  });
 }
 
 const EMPTY_PROGRESS_MAP = new Map<string, ChildProgress>();
@@ -189,7 +125,7 @@ export function BoardView({
   const groups = useMemo(
     () =>
       hydratedAssigneeGroups ??
-      buildGroups(
+      buildBoardGroups(
         issues,
         visibleStatuses,
         grouping,

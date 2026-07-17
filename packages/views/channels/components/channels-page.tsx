@@ -171,6 +171,7 @@ import { isChannelNameTakenError } from "../channel-create-error";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelStatsPanel } from "./channel-stats-panel";
+import { ChannelTasksBoard } from "./channel-tasks-board";
 import { ChannelGroupAvatar } from "./channel-group-avatar";
 import { ThreadPanel } from "./thread-panel";
 import { ComposerAttachmentTray } from "./composer-attachment-tray";
@@ -569,6 +570,17 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const [mobilePanel, setMobilePanel] = useState<
     "menu" | "members" | "stats" | "files" | null
   >(null);
+  // Channel main-content view switch (#562): the channel area is a top-level
+  // `Chat | Tasks` tab, same level as the message list. Tasks renders a
+  // channel-scoped board full-width in the main content area. Reset to Chat
+  // whenever the active channel changes so switching channels lands on chat.
+  const [channelView, setChannelView] = useState<"chat" | "tasks">("chat");
+  // Tracks the channel `channelView` currently belongs to, so a channel switch
+  // resets the tab to Chat via the render-time guard below (not an effect).
+  // A ref (not state): it's bookkeeping that gates the reset, never a render
+  // input (same convention as `reconciledRouteIdRef` below). `active` changing
+  // already re-renders, so the reset fires without state driving the render.
+  const channelViewChannelIdRef = useRef<string>("");
   // Selected channel. Resolved from the `channelId` route param below, since we
   // don't yet know (until channels/dms load) whether it's a channel or a DM.
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -816,6 +828,14 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     }),
   );
   const activeChannelId = active?.id ?? "";
+  // Land on the conversation whenever the active channel changes; the Tasks tab
+  // is a per-channel view, not a sticky global mode. Reset during render (the
+  // React "adjust state on prop change" pattern used elsewhere in this file for
+  // quoteState) rather than an effect, so there's no extra render / stale frame.
+  if (channelViewChannelIdRef.current !== activeChannelId) {
+    channelViewChannelIdRef.current = activeChannelId;
+    setChannelView("chat");
+  }
   const messages = useMemo(() => flattenChannelMessagePages(activeChannelId ? messagePages : undefined), [activeChannelId, messagePages]);
   const messagesFirstItemIndex = useMemo(
     () => channelMessagesFirstItemIndex(activeChannelId ? messagePages : undefined, messages.length > 0),
@@ -2472,6 +2492,29 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
               </>
             )}
           />
+              {/* #562 — channel main-content tab switch: Chat (message list) and
+                  Tasks (channel-scoped board), full-width in the main area. */}
+              <div className="flex shrink-0 items-center gap-1 border-b border-border/40 px-4">
+                {(["chat", "tasks"] as const).map((view) => (
+                  <button
+                    key={view}
+                    type="button"
+                    onClick={() => setChannelView(view)}
+                    className={cn(
+                      "relative -mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors",
+                      channelView === view
+                        ? "border-foreground text-foreground"
+                        : "border-transparent text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    {t(($) => $.view_tabs[view])}
+                  </button>
+                ))}
+              </div>
+              {channelView === "tasks" ? (
+                <ChannelTasksBoard channelId={active.id} />
+              ) : (
+                <>
               {convSearchOpen && (
                 <div
                   className={cn(
@@ -2719,6 +2762,8 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                       </>
                     }
                   />
+                </>
+              )}
                 </>
               )}
             </>

@@ -61,6 +61,7 @@
     "manage_members_aria": "メンバーを管理",
     "share_aria": "共有",
     "stats_aria": "統計",
+    "tasks_aria": "このチャンネルのタスク",
     "files_aria": "ファイル",
     "issues_aria": "このチャンネルのイシュー",
     "back": "戻る",
@@ -127,6 +128,14 @@
     "by_author": "メンバー別メッセージ数",
     "empty": "データがありません",
     "error": "読み込みに失敗しました"
+  },
+  "tasks": {
+    "title": "タスク",
+    "empty": "このチャンネルのタスクはありません",
+    "error": "読み込みに失敗しました",
+    "load_more": "さらに読み込む（残り {{count}} 件）",
+    "loading_more": "読み込み中…",
+    "column_empty": "タスクなし"
   },
   "share": {
     "copied": "チャンネルリンクをコピーしました",
@@ -306,5 +315,9 @@
     "close_aria": "検索を閉じる",
     "search_aria": "会話内を検索",
     "error": "検索に失敗しました"
+  },
+  "view_tabs": {
+    "chat": "チャット",
+    "tasks": "タスク"
   }
 }

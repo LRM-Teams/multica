@@ -1124,7 +1124,6 @@ func TestChannelAgentInboxCompleteDirectedMentionWritesReply(t *testing.T) {
 		t.Fatalf("complete inbox event: status=%d body=%s", completeRec.Code, completeRec.Body.String())
 	}
 	assertChannelMessageContentCount(t, channelID, reply, 0)
-	return
 
 	var status, terminalOutcome, terminalDeliveryID string
 	var retryable bool
@@ -1138,8 +1137,8 @@ func TestChannelAgentInboxCompleteDirectedMentionWritesReply(t *testing.T) {
 	if status != "acked" {
 		t.Fatalf("inbox event status = %q, want acked", status)
 	}
-	if terminalOutcome != "replied" || terminalDeliveryID != got.DeliveryID || retryable || !terminalAt.Valid {
-		t.Fatalf("inbox completion terminal projection = outcome:%q delivery:%q retryable:%v terminal_at:%v, want replied/%s/non-retryable/timestamp", terminalOutcome, terminalDeliveryID, retryable, terminalAt.Valid, got.DeliveryID)
+	if terminalOutcome != "failed" || terminalDeliveryID != got.DeliveryID || retryable || !terminalAt.Valid {
+		t.Fatalf("inbox completion terminal projection = outcome:%q delivery:%q retryable:%v terminal_at:%v, want failed/%s/non-retryable/timestamp", terminalOutcome, terminalDeliveryID, retryable, terminalAt.Valid, got.DeliveryID)
 	}
 
 	statusRows, err := testPool.Query(ctx, `
@@ -1167,6 +1166,21 @@ func TestChannelAgentInboxCompleteDirectedMentionWritesReply(t *testing.T) {
 	}
 	if len(statuses) != 1 || statuses[0] != agentInboxStatusActivityIdle {
 		t.Fatalf("completion status activity = %+v, want [idle]", statuses)
+	}
+
+	var failureCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM agent_activity_event
+		WHERE workspace_id = $1
+		  AND agent_id = $2
+		  AND event_type = 'agent_inbox_failed'
+		  AND details->>'inbox_event_id' = $3
+		  AND details->>'reason_code' = 'must_reply_failure'`, testWorkspaceID, agentID, got.ID).Scan(&failureCount); err != nil {
+		t.Fatalf("query must-reply failure activity: %v", err)
+	}
+	if failureCount != 1 {
+		t.Fatalf("must-reply failure activity count = %d, want 1", failureCount)
 	}
 }
 
@@ -1381,7 +1395,7 @@ func TestOutputClaimsFileDeliveryDetectsCreatedArtifacts(t *testing.T) {
 	}
 }
 
-func TestChannelAgentInboxFileClaimWithoutAttachmentRecordsBoundary(t *testing.T) {
+func TestChannelAgentInboxFileClaimWithoutTransportIsSuppressed(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -1435,20 +1449,20 @@ func TestChannelAgentInboxFileClaimWithoutAttachmentRecordsBoundary(t *testing.T
 	if completeRec.Code != http.StatusOK {
 		t.Fatalf("complete inbox event: status=%d body=%s", completeRec.Code, completeRec.Body.String())
 	}
-	return
+	assertChannelMessageContentCount(t, channelID, "给你，hello_world.txt", 0)
 
-	var kind, eventType, reason, message string
+	var artifactRows int
 	if err := testPool.QueryRow(ctx, `
-		SELECT event_kind, event_type, reason_code, message
+		SELECT count(*)
 		FROM agent_activity_event
 		WHERE workspace_id = $1
 		  AND agent_id = $2
 		  AND event_type = 'artifact_missing'
-		  AND details->>'inbox_event_id' = $3`, testWorkspaceID, agentID, got.ID).Scan(&kind, &eventType, &reason, &message); err != nil {
-		t.Fatalf("load artifact boundary activity: %v", err)
+		  AND details->>'inbox_event_id' = $3`, testWorkspaceID, agentID, got.ID).Scan(&artifactRows); err != nil {
+		t.Fatalf("count artifact boundary activity: %v", err)
 	}
-	if kind != activityKindError || eventType != "artifact_missing" || reason != "missing_file_attachment" {
-		t.Fatalf("artifact boundary = kind=%q event_type=%q reason=%q message=%q", kind, eventType, reason, message)
+	if artifactRows != 0 {
+		t.Fatalf("artifact_missing rows = %d, want 0 for suppressed final output", artifactRows)
 	}
 
 	var outputRows int

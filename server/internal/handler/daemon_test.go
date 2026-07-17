@@ -2849,30 +2849,6 @@ func TestCompleteTask_CrossChannelTargetFinalizesMentionsInDestination(t *testin
 			}
 			assertNoAgentChannelMessages(t, targetChannelID)
 			assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
-			return
-
-			var rawParts []byte
-			var gotRoot *string
-			if err := testPool.QueryRow(ctx, `
-				SELECT parts, thread_root_message_id::text
-				FROM channel_message
-				WHERE channel_id = $1 AND author_type = 'agent' AND author_id = $2 AND content = $3
-				LIMIT 1
-			`, targetChannelID, senderID, content).Scan(&rawParts, &gotRoot); err != nil {
-				t.Fatalf("load destination output: %v", err)
-			}
-			if targetKind == "thread" && (gotRoot == nil || *gotRoot != rootID) {
-				t.Fatalf("destination thread root = %v, want %s", gotRoot, rootID)
-			}
-			if targetKind == "channel" && gotRoot != nil {
-				t.Fatalf("destination channel output unexpectedly threaded to %s", *gotRoot)
-			}
-			var parts []protocol.MessagePart
-			if err := json.Unmarshal(rawParts, &parts); err != nil {
-				t.Fatalf("decode destination parts: %v", err)
-			}
-			start, end := contentUTF16Span(content, strings.Index(content, "@"), strings.Index(content, "@")+len("@"+sharedDisplayName))
-			assertSingleMentionReferenceForTest(t, parts, targetOnlyID, start, end)
 		})
 	}
 }
@@ -2912,25 +2888,6 @@ func TestCompleteTask_CrossChannelTargetDoesNotLeakSourceOnlyMention(t *testing.
 	}
 	assertNoAgentChannelMessages(t, targetChannelID)
 	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
-	return
-	var rawParts []byte
-	if err := testPool.QueryRow(ctx, `
-		SELECT parts
-		FROM channel_message
-		WHERE channel_id = $1 AND author_type = 'agent' AND author_id = $2 AND content = $3
-		LIMIT 1
-	`, targetChannelID, senderID, content).Scan(&rawParts); err != nil {
-		t.Fatalf("load destination output: %v", err)
-	}
-	var parts []protocol.MessagePart
-	if err := json.Unmarshal(rawParts, &parts); err != nil {
-		t.Fatalf("decode destination parts: %v", err)
-	}
-	for _, part := range parts {
-		if part.Type == protocol.MessagePartTypeReference && part.RefType == "mention" {
-			t.Fatalf("source-only mention leaked into destination: %+v", part)
-		}
-	}
 }
 
 func assertSingleMentionReferenceForTest(t *testing.T, parts []protocol.MessagePart, wantID string, wantStart, wantEnd int) {
@@ -3058,26 +3015,6 @@ func TestCompleteTask_GroupChannelSendAliasTargetHumanDMCreatesMessage(t *testin
 
 	assertNoChannelMessageContent(t, sourceChannelID, visibleReply)
 	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
-	return
-
-	var dmChannelID string
-	if err := testPool.QueryRow(ctx, `
-		SELECT id FROM channel
-		WHERE workspace_id = $1 AND kind = 'dm' AND name = $2
-	`, testWorkspaceID, canonical).Scan(&dmChannelID); err != nil {
-		t.Fatalf("load targeted dm channel: %v", err)
-	}
-	var dmMessageCount int
-	if err := testPool.QueryRow(ctx, `
-		SELECT count(*)
-		FROM channel_message
-		WHERE channel_id = $1 AND author_type = 'agent' AND author_id = $2 AND content = $3
-	`, dmChannelID, agentID, visibleReply).Scan(&dmMessageCount); err != nil {
-		t.Fatalf("count targeted dm message: %v", err)
-	}
-	if dmMessageCount != 1 {
-		t.Fatalf("targeted dm message count = %d, want 1", dmMessageCount)
-	}
 }
 
 func TestCompleteTask_GroupChannelSendTargetInvalidSuppressesNonLeaky(t *testing.T) {
@@ -3213,19 +3150,6 @@ func TestCompleteTask_GroupChannelThreadTargetAllowsFalseShowInChannelOption(t *
 	}
 	assertNoAgentChannelMessages(t, channelID)
 	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
-	return
-
-	var replyCount int
-	if err := testPool.QueryRow(ctx, `
-		SELECT count(*)
-		FROM channel_message
-		WHERE channel_id = $1 AND author_type = 'agent' AND content = $2 AND thread_root_message_id = $3
-	`, channelID, visibleReply, rootID).Scan(&replyCount); err != nil {
-		t.Fatalf("count targeted thread reply: %v", err)
-	}
-	if replyCount != 1 {
-		t.Fatalf("targeted thread reply count = %d, want 1", replyCount)
-	}
 }
 
 func TestCompleteTask_GroupChannelThreadTargetShowInChannelProjectsSameMessage(t *testing.T) {
@@ -3268,56 +3192,6 @@ func TestCompleteTask_GroupChannelThreadTargetShowInChannelProjectsSameMessage(t
 	}
 	assertNoAgentChannelMessages(t, channelID)
 	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
-	return
-
-	var replyID string
-	var projected bool
-	if err := testPool.QueryRow(ctx, `
-		SELECT id, main_timeline_visible
-		FROM channel_message
-		WHERE channel_id = $1 AND author_type = 'agent' AND content = $2 AND thread_root_message_id = $3
-	`, channelID, visibleReply, rootID).Scan(&replyID, &projected); err != nil {
-		t.Fatalf("load targeted thread reply: %v", err)
-	}
-	if !projected {
-		t.Fatalf("targeted thread reply main_timeline_visible = false, want true")
-	}
-	var carrierCount int
-	if err := testPool.QueryRow(ctx, `
-		SELECT count(*)
-		FROM channel_message
-		WHERE channel_id = $1
-		  AND author_type = 'agent'
-		  AND thread_root_message_id IS NULL
-		  AND reply_to_message_id = $2`, channelID, replyID).Scan(&carrierCount); err != nil {
-		t.Fatalf("count legacy thread mirror carriers: %v", err)
-	}
-	if carrierCount != 0 {
-		t.Fatalf("legacy thread mirror carrier count = %d, want 0", carrierCount)
-	}
-	mainTimeline := listedMessagesForUser(t, channelID, testUserID)
-	if len(mainTimeline) != 2 {
-		t.Fatalf("main timeline = %+v, want root + projected reply", mainTimeline)
-	}
-	if mainTimeline[1].ID != replyID {
-		t.Fatalf("projected message id = %s, want thread reply %s", mainTimeline[1].ID, replyID)
-	}
-	if mainTimeline[1].ThreadRootMessageID == nil || *mainTimeline[1].ThreadRootMessageID != rootID {
-		t.Fatalf("projected thread_root_message_id = %v, want %s", mainTimeline[1].ThreadRootMessageID, rootID)
-	}
-	if mainTimeline[1].ThreadRoot == nil || mainTimeline[1].ThreadRoot.ID != rootID {
-		t.Fatalf("projected thread root summary = %+v, want root %s", mainTimeline[1].ThreadRoot, rootID)
-	}
-	var targetWakeEvents int
-	if err := testPool.QueryRow(ctx, `
-		SELECT count(*)
-		FROM agent_inbox_event
-		WHERE channel_id = $1 AND agent_id = $2 AND requires_wake`, channelID, targetAgentID).Scan(&targetWakeEvents); err != nil {
-		t.Fatalf("count target agent inbox events: %v", err)
-	}
-	if targetWakeEvents != 1 {
-		t.Fatalf("target agent inbox event count = %d, want 1", targetWakeEvents)
-	}
 }
 
 func TestCompleteTask_GroupChannelSendActionWritesParts(t *testing.T) {
@@ -3338,24 +3212,6 @@ func TestCompleteTask_GroupChannelSendActionWritesParts(t *testing.T) {
 	}
 	assertNoAgentChannelMessages(t, channelID)
 	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
-	return
-
-	var storedParts []byte
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT parts FROM channel_message
-		WHERE channel_id = $1 AND author_type = 'agent'
-		ORDER BY created_at DESC
-		LIMIT 1
-	`, channelID).Scan(&storedParts); err != nil {
-		t.Fatalf("load bridged channel message parts: %v", err)
-	}
-	var decoded []protocol.MessagePart
-	if err := json.Unmarshal(storedParts, &decoded); err != nil {
-		t.Fatalf("decode stored parts: %v", err)
-	}
-	if len(decoded) != 1 || decoded[0].Type != protocol.MessagePartTypeSticker || decoded[0].StickerID != "hi" || decoded[0].PackID != "builtin" {
-		t.Fatalf("stored parts = %+v, want builtin hi sticker", decoded)
-	}
 }
 
 func TestCompleteTask_GroupChannelCommandSendOutputIsSuppressed(t *testing.T) {
@@ -3468,6 +3324,26 @@ func TestCompleteTask_DirectedCLICapableRunSuppressesFinalTextFallback(t *testin
 
 	assertNoChannelMessageContent(t, channelID, rawOutput)
 	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
+
+	var taskStatus string
+	if err := testPool.QueryRow(context.Background(), `SELECT status FROM agent_task_queue WHERE id = $1`, taskID).Scan(&taskStatus); err != nil {
+		t.Fatalf("load completed task status: %v", err)
+	}
+	if taskStatus != "completed" {
+		t.Fatalf("task status = %q, want completed", taskStatus)
+	}
+	var completionActivityCount int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT COUNT(*)
+		FROM agent_activity_event
+		WHERE task_id = $1
+		  AND event_type = 'task_completed'
+		  AND details->>'output_suppressed_reason' = $2`, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput).Scan(&completionActivityCount); err != nil {
+		t.Fatalf("count task completion activity: %v", err)
+	}
+	if completionActivityCount != 1 {
+		t.Fatalf("task_completed activity count = %d, want 1", completionActivityCount)
+	}
 
 	// Unsent directed output remains observable as a must-reply failure rather
 	// than becoming a fallback channel message.

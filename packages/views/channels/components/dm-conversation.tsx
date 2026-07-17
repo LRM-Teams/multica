@@ -47,6 +47,7 @@ import { toast } from "sonner";
 import { ContentEditor, type ContentEditorRef } from "../../editor/content-editor";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { AgentPresenceStatusLine } from "../../agents/components/agent-presence-status-line";
+import { ConversationAgentActivityLine } from "../../agents/components/conversation-agent-activity-line";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { AgentPanelProvider, useOpenAgentPanel } from "../../common/agent-panel-context";
 import { useT } from "../../i18n/use-t";
@@ -1082,6 +1083,14 @@ function DmChannelConversation({
         stoppingTaskId={stoppingTaskId}
         onStopTask={handleStopTask}
       />
+      {/* Current conversation agent's live Activity verb (Reading / Writing /
+          Running command… / Thinking) as one quiet line — reuses the Activity
+          latest-row projection and hides itself when the agent is idle. Only a
+          DM whose peer is an agent has a well-defined single conversation
+          agent; human DMs and multi-agent channels render nothing. */}
+      {dm.peer.type === "agent" ? (
+        <ConversationAgentActivityLine agentId={dm.peer.id} />
+      ) : null}
       <Composer
         surface="dm_channel"
         sendLabel={t(($) => $.composer.send)}

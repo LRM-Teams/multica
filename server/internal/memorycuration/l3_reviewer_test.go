@@ -91,6 +91,20 @@ func TestAgentStageRunnerUsesPiToolsAndAgentRoot(t *testing.T) {
 	if !strings.Contains(backend.prompt, "db_evidence") || !strings.Contains(backend.opts.SystemPrompt, "available tools") {
 		t.Fatalf("stage prompt/options missing DB evidence or tool instruction: prompt=%s opts=%#v", backend.prompt, backend.opts)
 	}
+	if !strings.Contains(backend.prompt, "都给我记住") || !strings.Contains(backend.prompt, "speaker as provenance") {
+		t.Fatalf("stage prompt missing collective memory semantics: %s", backend.prompt)
+	}
+}
+
+func TestStageAgentContractRecognizesCollectiveMemoryIntent(t *testing.T) {
+	for _, stage := range []Stage{StageAgentSelfReview, StageTeamCuration} {
+		contract := stageAgentContract(stage)
+		for _, want := range []string{"collective remember directives", "workspace/team", "speaker", "provenance"} {
+			if !strings.Contains(contract, want) {
+				t.Fatalf("%s contract missing %q: %s", stage, want, contract)
+			}
+		}
+	}
 }
 
 func TestParseL3ReviewDecisionsValidatesRoutesAndPayloads(t *testing.T) {

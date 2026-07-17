@@ -1052,7 +1052,7 @@ func TestChannelAgentInboxDrainDoesNotReplayFailedPromptBacklog(t *testing.T) {
 	}
 }
 
-func TestChannelAgentInboxCompleteDirectedMentionWritesReply(t *testing.T) {
+func TestChannelAgentInboxCompleteDirectedMentionWithoutTransportRecordsNoReply(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -1140,8 +1140,8 @@ func TestChannelAgentInboxCompleteDirectedMentionWritesReply(t *testing.T) {
 	if status != "acked" {
 		t.Fatalf("inbox event status = %q, want acked", status)
 	}
-	if terminalOutcome != "failed" || terminalDeliveryID != got.DeliveryID || retryable || !terminalAt.Valid {
-		t.Fatalf("inbox completion terminal projection = outcome:%q delivery:%q retryable:%v terminal_at:%v, want failed/%s/non-retryable/timestamp", terminalOutcome, terminalDeliveryID, retryable, terminalAt.Valid, got.DeliveryID)
+	if terminalOutcome != "no_reply" || terminalDeliveryID != got.DeliveryID || retryable || !terminalAt.Valid {
+		t.Fatalf("inbox completion terminal projection = outcome:%q delivery:%q retryable:%v terminal_at:%v, want no_reply/%s/non-retryable/timestamp", terminalOutcome, terminalDeliveryID, retryable, terminalAt.Valid, got.DeliveryID)
 	}
 
 	statusRows, err := testPool.Query(ctx, `
@@ -1178,12 +1178,11 @@ func TestChannelAgentInboxCompleteDirectedMentionWritesReply(t *testing.T) {
 		WHERE workspace_id = $1
 		  AND agent_id = $2
 		  AND event_type = 'agent_inbox_failed'
-		  AND details->>'inbox_event_id' = $3
-		  AND details->>'reason_code' = 'must_reply_failure'`, testWorkspaceID, agentID, got.ID).Scan(&failureCount); err != nil {
-		t.Fatalf("query must-reply failure activity: %v", err)
+		  AND details->>'inbox_event_id' = $3`, testWorkspaceID, agentID, got.ID).Scan(&failureCount); err != nil {
+		t.Fatalf("query inbox failure activity: %v", err)
 	}
-	if failureCount != 1 {
-		t.Fatalf("must-reply failure activity count = %d, want 1", failureCount)
+	if failureCount != 0 {
+		t.Fatalf("inbox failure activity count = %d, want 0 for no_reply", failureCount)
 	}
 }
 

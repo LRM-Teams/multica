@@ -2513,14 +2513,14 @@ func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.Agent
 	}
 	// Directed runs must use the transport for a visible reply. An explicit
 	// no_reply or empty completion without a transport message is observable as
-	// a must-reply failure; ordinary final text was already suppressed above.
+	// a no_reply terminal outcome; ordinary final text was already suppressed above.
 	if channelTask && task.Priority >= 2 && !req.MustReplyFailure {
 		hasCLIOutput := h.chatTaskHasAgentTransportVisibleOutput(ctx, task)
 		isNoReply := req.Action == protocol.ChatOutputActionNoReply
 		isEmptyMessage := req.Action == "" && outputType == protocol.ChatOutputKindMessage && strings.TrimSpace(output) == "" && len(parts) == 0
 		if !hasCLIOutput && (isNoReply || isEmptyMessage) {
 			req.MustReplyFailure = true
-			slog.Warn("complete task: directed run must-reply failure — no visible output",
+			slog.Warn("complete task: directed run completed without a visible transport reply",
 				"task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID),
 				"action", req.Action, "type", outputType, "priority", task.Priority)
 		}
@@ -2620,8 +2620,7 @@ func (h *Handler) suppressTaskCompleteOutput(req *TaskCompleteRequest, reason st
 // suppressChannelTaskCompleteOutput keeps directed channel tasks truthful even
 // when normalization returns early. A completion payload never creates visible
 // chat output; without a successful transport write, a directed task must
-// retain its must-reply failure signal regardless of why the payload was
-// suppressed.
+// retain its no-reply signal regardless of why the payload was suppressed.
 func (h *Handler) suppressChannelTaskCompleteOutput(ctx context.Context, task db.AgentTaskQueue, req *TaskCompleteRequest, reason string) {
 	if task.Priority >= 2 && !h.chatTaskHasAgentTransportVisibleOutput(ctx, task) {
 		req.MustReplyFailure = true

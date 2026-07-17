@@ -562,7 +562,11 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 	}
 	terminalOutcome := agentInboxCompletionTerminalOutcome(r.Context(), h, event, req.TaskCompleteRequest, chatDonePayload)
 	if req.MustReplyFailure {
-		terminalOutcome = "failed"
+		// MustReplyFailure is the legacy completion-normalization signal for a
+		// directed task that did not produce a transport reply. It records a
+		// truthful no_reply outcome; it is not a delivery failure. Actual
+		// transport failures continue through FailAgentInboxEvent.
+		terminalOutcome = "no_reply"
 	}
 	if _, err := qtx.SetAgentInboxTerminalOutcome(r.Context(), db.SetAgentInboxTerminalOutcomeParams{
 		ID:                 event.ID,
@@ -587,10 +591,10 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 	}
 	h.recordAgentInboxStatusActivity(r.Context(), event, task.RuntimeID, deliveryID, agentInboxStatusActivityIdle)
 	if req.MustReplyFailure {
-		h.publishAgentInboxTaskLifecycle(protocol.EventTaskFailed, event, task.RuntimeID, "failed")
-		h.recordAgentInboxFailureActivity(r.Context(), event, deliveryID,
-			"directed channel task completed without a successful agent transport reply",
-			"must_reply_failure", "must_reply_failure")
+		// A directed task that decides not to reply (including a freshness hold)
+		// must remain visible to the task ledger, but it must not emit the red
+		// agent_inbox_failed Activity event or affect delivery-failure metrics.
+		h.publishAgentInboxTaskLifecycle(protocol.EventTaskCompleted, event, task.RuntimeID, "no_reply")
 	} else {
 		h.publishAgentInboxTaskLifecycle(protocol.EventTaskCompleted, event, task.RuntimeID, "completed")
 	}

@@ -136,6 +136,23 @@ describe("resolveAgentLiveStatus (header = Activity latest-row projection)", () 
     expect(view?.label).toBe("Offline");
   });
 
+  it("offline availability overrides a residual active task + activity row → Offline (#571)", () => {
+    // #571 regression: when the runtime is offline, the header must read
+    // Offline even though a stale/residual task is still marked running AND an
+    // Activity row is present. Connection state wins over the projected stage —
+    // never a workload "Working" or a leftover activity word.
+    const view = resolveAgentLiveStatus({
+      presence: presence({ availability: "offline", workload: "working", runningCount: 1 }),
+      activeTask: task({ id: "task-1", status: "running" }),
+      latestActivity: evt({ activity_kind: "tool_call", tool: "bash" }),
+      tAgents,
+      tChat,
+    });
+    expect(view?.label).toBe("Offline");
+    expect(view?.label).not.toBe("Working");
+    expect(view?.label).not.toContain("Running command");
+  });
+
   it("shows Thinking for a running task with no activity row yet", () => {
     const view = resolveAgentLiveStatus({
       presence: online,

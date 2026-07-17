@@ -90,13 +90,27 @@ describe("deriveAgentAvailability", () => {
     expect(deriveAgentAvailability(makeRuntime(), NOW)).toBe("online");
   });
 
-  it("returns unstable when runtime just dropped (< 5 min)", () => {
+  it("returns unstable ONLY for an ONLINE runtime whose heartbeat lagged (150s–5min)", () => {
+    // Post-#571 unstable is reserved for a STALE ONLINE heartbeat — never an
+    // explicitly-offline runtime. Online + last_seen 3.5 min ago → recently_lost
+    // → unstable.
+    expect(
+      deriveAgentAvailability(
+        makeRuntime({ status: "online", last_seen_at: "2026-04-27T11:56:30Z" }),
+        NOW,
+      ),
+    ).toBe("unstable");
+  });
+
+  it("returns offline (NOT unstable) the moment a runtime is EXPLICITLY offline (#571)", () => {
+    // #571 core regression: status="offline" + last_seen 30s ago must read
+    // offline, not the old buggy "unstable" for the first 5 minutes.
     expect(
       deriveAgentAvailability(
         makeRuntime({ status: "offline", last_seen_at: "2026-04-27T11:59:30Z" }),
         NOW,
       ),
-    ).toBe("unstable");
+    ).toBe("offline");
   });
 
   it("returns offline when runtime has been gone > 5 min", () => {
@@ -282,20 +296,39 @@ describe("deriveAgentPresenceDetail", () => {
     expect(detail.queuedCount).toBe(2);
   });
 
-  it("composes unstable + working — runtime hiccup with tasks still in flight", () => {
-    // Recently-lost runtime, but a task is still recorded as running.
-    // Both signals surface independently — amber dot AND working chip —
-    // so the user sees "connection wobbling" alongside "agent is busy".
+  it("composes unstable + working — ONLINE runtime with a lagging heartbeat, task in flight", () => {
+    // A still-ONLINE runtime whose heartbeat lagged (last_seen 4 min ago →
+    // recently_lost), with a task recorded as running. Both signals surface
+    // independently — amber dot AND working chip — so the user sees
+    // "connection wobbling" alongside "agent is busy". (Explicit offline is
+    // NEVER unstable post-#571; only a stale online heartbeat is.)
     const detail = deriveAgentPresenceDetail({
       agent: makeAgent(),
       runtime: makeRuntime({
-        status: "offline",
-        last_seen_at: "2026-04-27T11:59:00Z",
+        status: "online",
+        last_seen_at: "2026-04-27T11:56:00Z",
       }),
       tasks: [makeTask({ status: "running" })],
       now: NOW,
     });
     expect(detail.availability).toBe("unstable");
+    expect(detail.workload).toBe("working");
+  });
+
+  it("composes offline + working for an EXPLICITLY offline runtime with a residual running task (#571)", () => {
+    // The exact #571 bug shape: the runtime just went offline (last_seen 30s
+    // ago) while a task is still recorded as running. Availability must read
+    // offline (NOT unstable) — offline overrides the residual active task.
+    const detail = deriveAgentPresenceDetail({
+      agent: makeAgent(),
+      runtime: makeRuntime({
+        status: "offline",
+        last_seen_at: "2026-04-27T11:59:30Z",
+      }),
+      tasks: [makeTask({ status: "running" })],
+      now: NOW,
+    });
+    expect(detail.availability).toBe("offline");
     expect(detail.workload).toBe("working");
   });
 
@@ -405,17 +438,18 @@ describe("buildPresenceMap", () => {
   });
 
   it("threads the same `now` so every agent on a shared runtime gets the same availability", () => {
-    // Multi-agent scenario: one local daemon backs N agents, daemon dies.
-    // All dependent agents should report unstable together — the shared
-    // `now` parameter is what guarantees consistent bucket boundaries.
+    // Multi-agent scenario: one local daemon backs N agents, its heartbeat
+    // lags (still ONLINE, last_seen 4 min ago → recently_lost). All dependent
+    // agents should report unstable together — the shared `now` parameter is
+    // what guarantees consistent bucket boundaries.
     const agentA = makeAgent({ id: "a", runtime_id: "rt-1" });
     const agentB = makeAgent({ id: "b", runtime_id: "rt-1" });
     const map = buildPresenceMap({
       agents: [agentA, agentB],
       runtimes: [
         makeRuntime({
-          status: "offline",
-          last_seen_at: "2026-04-27T11:59:00Z",
+          status: "online",
+          last_seen_at: "2026-04-27T11:56:00Z",
         }),
       ],
       snapshot: [

@@ -1194,6 +1194,10 @@ func TestChannelAgentInboxFreshnessHoldRemainsHeldDraftOutcome(t *testing.T) {
 	ctx := context.Background()
 	agentName := "Inbox Held Draft Agent " + uuid.NewString()[:8]
 	agentID := createHandlerTestAgent(t, agentName, nil)
+	var agentHandle string
+	if err := testPool.QueryRow(ctx, `SELECT name FROM agent WHERE id = $1`, agentID).Scan(&agentHandle); err != nil {
+		t.Fatalf("load agent handle: %v", err)
+	}
 	runtimeID := handlerTestRuntimeID(t)
 	channelID := seedChannelForTest(t, "agent-inbox-held-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
@@ -1205,7 +1209,7 @@ func TestChannelAgentInboxFreshnessHoldRemainsHeldDraftOutcome(t *testing.T) {
 	if !found {
 		t.Fatal("channel not found after seed")
 	}
-	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "[@"+agentName+"](mention://agent/"+agentID+") reply after reviewing newer context", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-held"), 0)
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "@"+agentHandle+" reply after reviewing newer context", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-held"), 0)
 	if err != nil {
 		t.Fatalf("insert mention trigger: %v", err)
 	}

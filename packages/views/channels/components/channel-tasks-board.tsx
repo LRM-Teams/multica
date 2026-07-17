@@ -177,16 +177,15 @@ export function ChannelTasksBoard({ channelId }: { channelId: string }) {
     );
   }
 
-  // Mobile segmented control: one pill per NON-EMPTY status (in BOARD_STATUSES
-  // order, since `columns` preserves it). The selected column below shows that
-  // status's cards; the default follows the loaded set (first non-empty status),
+  // Mobile segmented control: one pill per status the desktop board shows —
+  // ALL of them, in BOARD_STATUSES order (Iris ruling: pills mirror the desktop
+  // columns exactly, including empty statuses with a `0` count). The selected
+  // column below shows that status's cards (or its empty state). The default
+  // lands on the first status that HAS issues (better UX than an empty column),
   // and switching pills never refetches — it just re-slices the same loaded set.
-  const mobileColumns = columns.filter((column) => column.issues.length > 0);
   const activeStatus =
-    selectedStatus && mobileColumns.some((column) => column.status === selectedStatus)
-      ? selectedStatus
-      : mobileColumns[0]?.status;
-  const activeColumn = mobileColumns.find((column) => column.status === activeStatus);
+    selectedStatus ?? columns.find((column) => column.issues.length > 0)?.status ?? columns[0]?.status;
+  const activeColumn = columns.find((column) => column.status === activeStatus);
 
   return (
     <ViewStoreProvider store={channelTasksViewStore}>
@@ -194,9 +193,10 @@ export function ChannelTasksBoard({ channelId }: { channelId: string }) {
         {isMobile ? (
           <>
             {/* Horizontally-scrollable status selector — keeps the "board" model
-                on a phone (pick a column) instead of stacking all four. */}
+                on a phone (pick a column) instead of stacking all four. Mirrors
+                the desktop columns exactly: a pill for EVERY status, count and all. */}
             <div className="flex shrink-0 gap-1 overflow-x-auto border-b border-border/40 px-4 py-2">
-              {mobileColumns.map((column) => {
+              {columns.map((column) => {
                 const isActive = column.status === activeStatus;
                 return (
                   <button

@@ -155,7 +155,7 @@ describe("ChannelTasksBoard", () => {
     expect(screen.queryByRole("button", { name: /Todo/ })).not.toBeInTheDocument();
   });
 
-  it("mobile (<768px): a status segmented control shows one status at a time; switching pills swaps the visible column", async () => {
+  it("mobile (<768px): a pill per status (empty ones too); selecting an empty status shows its empty state; switching pills swaps the visible column", async () => {
     mockIsMobile = true;
     listSourceIssues.mockResolvedValue({
       issues: [
@@ -166,13 +166,19 @@ describe("ChannelTasksBoard", () => {
     });
     renderBoard();
 
-    // A pill per NON-EMPTY status (todo + in_progress here); empty statuses get none.
+    // A pill for EVERY status the desktop board shows (Iris ruling) — including
+    // the empty ones — in BOARD_STATUSES order, each with its count.
     const todoPill = await screen.findByRole("button", { name: /Todo/ });
     const inProgressPill = screen.getByRole("button", { name: /In Progress/ });
-    expect(todoPill).toBeInTheDocument();
-    expect(inProgressPill).toBeInTheDocument();
-    // The default selection is the first non-empty status in BOARD_STATUSES order
-    // (todo before in_progress), so only its card is visible.
+    const backlogPill = screen.getByRole("button", { name: /Backlog/ });
+    for (const label of ["Backlog", "Todo", "In Progress", "In Review", "Done", "Blocked"]) {
+      expect(screen.getByRole("button", { name: new RegExp(label) })).toBeInTheDocument();
+    }
+    // The empty statuses still get a pill, showing a `0` count.
+    expect(backlogPill).toHaveTextContent("0");
+
+    // The default selection is the first status that HAS issues in BOARD_STATUSES
+    // order (todo before in_progress), so only its card is visible.
     expect(screen.getByText("Add dark mode")).toBeInTheDocument();
     expect(screen.queryByText("Fix the login bug")).not.toBeInTheDocument();
     expect(todoPill).toHaveAttribute("aria-pressed", "true");
@@ -183,6 +189,13 @@ describe("ChannelTasksBoard", () => {
     expect(await screen.findByText("Fix the login bug")).toBeInTheDocument();
     expect(screen.queryByText("Add dark mode")).not.toBeInTheDocument();
     expect(inProgressPill).toHaveAttribute("aria-pressed", "true");
+
+    // Selecting an EMPTY status renders its empty state (no cards) below.
+    await userEvent.click(backlogPill);
+    expect(await screen.findByText("No tasks")).toBeInTheDocument();
+    expect(screen.queryByText("Fix the login bug")).not.toBeInTheDocument();
+    expect(screen.queryByText("Add dark mode")).not.toBeInTheDocument();
+    expect(backlogPill).toHaveAttribute("aria-pressed", "true");
   });
 
   it("groups the source tasks into status columns, each card linking to the task detail", async () => {

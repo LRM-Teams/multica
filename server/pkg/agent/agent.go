@@ -94,6 +94,11 @@ const (
 	MessageStatus     MessageType = "status"
 	MessageError      MessageType = "error"
 	MessageLog        MessageType = "log"
+	// MessageCompactionStarted and MessageCompactionFinished preserve the
+	// provider's explicit context-compaction lifecycle. They are Activity
+	// events, not generated assistant text.
+	MessageCompactionStarted  MessageType = "compaction-started"
+	MessageCompactionFinished MessageType = "compaction-finished"
 )
 
 // Message is a unified event emitted by an agent during execution.

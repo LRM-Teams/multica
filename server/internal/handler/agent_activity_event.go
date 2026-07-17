@@ -27,6 +27,9 @@ const (
 	activityKindTelemetry          = "telemetry"
 	activityKindBlocked            = "blocked"
 	activityKindCustom             = "custom"
+
+	activityCompactingContextMessage      = "Compacting context"
+	activityContextCompactionFinishedText = "Context compaction finished"
 )
 
 // activityEventExec is the minimal Exec interface shared by Handler.DB

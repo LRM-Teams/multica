@@ -4220,6 +4220,17 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 						trajectory.append("thinking", msg.Content, msg.Lineage, time.Now(), emitTrajectory)
 						mu.Unlock()
 					}
+				case agent.MessageCompactionStarted, agent.MessageCompactionFinished:
+					mu.Lock()
+					trajectory.flush(time.Now(), true, emitTrajectory)
+					phase.leave()
+					s := seq.Add(1)
+					messageType := "compaction_started"
+					if msg.Type == agent.MessageCompactionFinished {
+						messageType = "compaction_finished"
+					}
+					batch = append(batch, TaskMessageData{Seq: int(s), Type: messageType})
+					mu.Unlock()
 				case agent.MessageText:
 					if msg.Content != "" {
 						taskLog.Debug("agent", "text", truncateLog(msg.Content, 200))

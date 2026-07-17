@@ -1186,6 +1186,9 @@ func agentInboxTaskMessagePayload(event db.AgentInboxEvent, msg TaskMessageReque
 }
 
 func agentInboxActivityMessageKind(messageType string) (kind, eventType, severity string) {
+	if kind, eventType, _, ok := taskMessageCompactionActivity(messageType); ok {
+		return kind, eventType, "info"
+	}
 	switch messageType {
 	case "thinking":
 		// Raft's thought stream is useful for diagnostics, but it is not a
@@ -1213,6 +1216,9 @@ func agentInboxActivityMessageKind(messageType string) (kind, eventType, severit
 }
 
 func agentInboxActivityMessageText(msg TaskMessageRequest) string {
+	if _, _, message, ok := taskMessageCompactionActivity(msg.Type); ok {
+		return message
+	}
 	switch msg.Type {
 	case "thinking", "text", "error", "log":
 		text := strings.TrimSpace(msg.Content)

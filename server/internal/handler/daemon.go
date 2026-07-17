@@ -3041,6 +3041,17 @@ func (h *Handler) ReportTaskMessages(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if workspaceID != "" {
+			if eventKind, eventType, message, ok := taskMessageCompactionActivity(msg.Type); ok {
+				targetKind, targetID, targetSlug := h.taskActivityTarget(r.Context(), task)
+				h.recordAgentActivityEvent(r.Context(), h.DB,
+					parseUUID(workspaceID), task.AgentID, task.RuntimeID, task.ID,
+					eventKind, eventType, "info",
+					targetKind, targetID, targetSlug,
+					"", message,
+					map[string]any{"task_message_id": uuidToString(created.ID), "seq": msg.Seq},
+				)
+				continue
+			}
 			if visibility == "user_facing" {
 				h.publishTask(protocol.EventTaskMessage, workspaceID, "system", "", taskID,
 					taskMessageToPayload(created, taskID, uuidToString(task.IssueID)))
@@ -3160,6 +3171,11 @@ func taskMessageVisibleToUser(messageType, content, visibility string) bool {
 }
 
 func taskMessageVisibilityForMessage(msgType, tool string, input map[string]any) string {
+	if _, _, _, ok := taskMessageCompactionActivity(msgType); ok {
+		// Context compaction belongs to the Activity timeline, never the task
+		// transcript. ReportTaskMessages persists a dedicated Activity row.
+		return "diagnostic_only"
+	}
 	if msgType == "thinking" || msgType == "tool_result" || msgType == "log" {
 		return "diagnostic_only"
 	}
@@ -3167,6 +3183,17 @@ func taskMessageVisibilityForMessage(msgType, tool string, input map[string]any)
 		return "diagnostic_only"
 	}
 	return "user_facing"
+}
+
+func taskMessageCompactionActivity(messageType string) (eventKind, eventType, message string, ok bool) {
+	switch messageType {
+	case "compaction_started":
+		return activityKindCompactionStarted, "compaction_started", activityCompactingContextMessage, true
+	case "compaction_finished":
+		return activityKindCompactionFinished, "compaction_finished", activityContextCompactionFinishedText, true
+	default:
+		return "", "", "", false
+	}
 }
 
 // ListTaskMessages returns the persisted messages for a task (for catch-up after reconnect).

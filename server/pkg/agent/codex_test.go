@@ -511,6 +511,24 @@ func TestCodexRawTurnStarted(t *testing.T) {
 	}
 }
 
+func TestCodexRawContextCompactionLifecycle(t *testing.T) {
+	t.Parallel()
+
+	c, _, _ := newTestCodexClient(t)
+	c.notificationProtocol = "raw"
+	var messages []Message
+	c.onMessage = func(msg Message) {
+		messages = append(messages, msg)
+	}
+
+	c.handleLine(`{"jsonrpc":"2.0","method":"item/started","params":{"item":{"id":"cmp-1","type":"contextCompaction"}}}`)
+	c.handleLine(`{"jsonrpc":"2.0","method":"item/completed","params":{"item":{"id":"cmp-1","type":"contextCompaction"}}}`)
+
+	if len(messages) != 2 || messages[0].Type != MessageCompactionStarted || messages[1].Type != MessageCompactionFinished {
+		t.Fatalf("compaction messages = %+v, want [started finished]", messages)
+	}
+}
+
 func TestCodexRawTurnCompleted(t *testing.T) {
 	t.Parallel()
 

@@ -2602,6 +2602,9 @@ func TestPrepareCodexHomeAddsAgentMemoryWritableRoot(t *testing.T) {
 
 	workspacesRoot := t.TempDir()
 	agentMemoryDir := filepath.Join(workspacesRoot, "ws-codex-memory", ".multica", "agents", "agent-1", "memory")
+	userMemoryDir := filepath.Join(workspacesRoot, "ws-codex-memory", ".multica", "agents", "agent-1", "users", "member-1")
+	projectMemoryDir := filepath.Join(workspacesRoot, "ws-codex-memory", ".multica", "agents", "agent-1", "projects", "project-1")
+	channelMemoryDir := filepath.Join(workspacesRoot, "ws-codex-memory", ".multica", "agents", "agent-1", "channels", "channel-1")
 	env, err := Prepare(PrepareParams{
 		WorkspacesRoot: workspacesRoot,
 		WorkspaceID:    "ws-codex-memory",
@@ -2609,8 +2612,11 @@ func TestPrepareCodexHomeAddsAgentMemoryWritableRoot(t *testing.T) {
 		AgentName:      "Codex Agent",
 		Provider:       "codex",
 		Task: TaskContextForEnv{
-			IssueID:        "memory-test",
-			AgentMemoryDir: agentMemoryDir,
+			IssueID:          "memory-test",
+			AgentMemoryDir:   agentMemoryDir,
+			UserMemoryDir:    userMemoryDir,
+			ProjectMemoryDir: projectMemoryDir,
+			ChannelMemoryDir: channelMemoryDir,
 		},
 	}, testLogger())
 	if err != nil {
@@ -2637,6 +2643,11 @@ func TestPrepareCodexHomeAddsAgentMemoryWritableRoot(t *testing.T) {
 	}
 	if !strings.Contains(s, strconv.Quote(agentMemoryDir)) {
 		t.Fatalf("config.toml missing agent memory dir %q: %s", agentMemoryDir, s)
+	}
+	for _, scopedDir := range []string{userMemoryDir, projectMemoryDir, channelMemoryDir} {
+		if !strings.Contains(s, strconv.Quote(scopedDir)) {
+			t.Fatalf("config.toml missing scoped memory dir %q: %s", scopedDir, s)
+		}
 	}
 }
 

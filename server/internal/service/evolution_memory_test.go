@@ -11,6 +11,7 @@ import (
 
 func TestCurateMemorySubmissionAssigns(t *testing.T) {
 	submission := validMemorySubmission()
+	submission.Applies = json.RawMessage(`{"project_ids":["project-1"],"channel_ids":["channel-1"],"task_types":["chat"],"expires_at":"2099-01-01T00:00:00Z"}`)
 	mock := newEvolutionMockDB(submission)
 	service := NewEvolutionService(db.New(mock))
 
@@ -36,6 +37,18 @@ func TestCurateMemorySubmissionAssigns(t *testing.T) {
 	}
 	if delivery.Scope != "workspace" {
 		t.Fatalf("memory delivery scope = %q, want workspace", delivery.Scope)
+	}
+	if len(delivery.Applies.ProjectIDs) != 1 || delivery.Applies.ProjectIDs[0] != "project-1" {
+		t.Fatalf("memory delivery project applicability = %#v", delivery.Applies.ProjectIDs)
+	}
+	if len(delivery.Applies.ChannelIDs) != 1 || delivery.Applies.ChannelIDs[0] != "channel-1" {
+		t.Fatalf("memory delivery channel applicability = %#v", delivery.Applies.ChannelIDs)
+	}
+	if len(delivery.Applies.TaskTypes) != 1 || delivery.Applies.TaskTypes[0] != "chat" {
+		t.Fatalf("memory delivery task applicability = %#v", delivery.Applies.TaskTypes)
+	}
+	if delivery.Applies.ExpiresAt != "2099-01-01T00:00:00Z" {
+		t.Fatalf("memory delivery expiry = %q", delivery.Applies.ExpiresAt)
 	}
 }
 

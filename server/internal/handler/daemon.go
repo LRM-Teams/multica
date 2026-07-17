@@ -1546,13 +1546,16 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			// Resolve the effective project: a channel binding (when this chat
 			// session is a channel agent session) takes precedence over the
 			// session's own project_id, so the whole channel shares one project.
-			var chatProjectID pgtype.UUID
+			var chatChannelID, chatProjectID pgtype.UUID
 			_ = h.DB.QueryRow(r.Context(), `
-				SELECT COALESCE(ch.project_id, cs.project_id)
+				SELECT cas.channel_id, COALESCE(ch.project_id, cs.project_id)
 				FROM chat_session cs
 				LEFT JOIN channel_agent_session cas ON cas.chat_session_id = cs.id
 				LEFT JOIN channel ch ON ch.id = cas.channel_id
-				WHERE cs.id = $1`, cs.ID).Scan(&chatProjectID)
+				WHERE cs.id = $1`, cs.ID).Scan(&chatChannelID, &chatProjectID)
+			if chatChannelID.Valid {
+				resp.ChannelID = uuidToString(chatChannelID)
+			}
 			if chatProjectID.Valid {
 				resp.ProjectID = uuidToString(chatProjectID)
 				if proj, err := h.Queries.GetProject(r.Context(), chatProjectID); err == nil {
@@ -1930,7 +1933,14 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 	if resp.Agent != nil {
-		resp.Agent.Memories = h.TaskService.LoadAgentMemoriesForExecution(r.Context(), task.AgentID, parseUUID(resp.WorkspaceID), resp.InitiatorType, resp.InitiatorID)
+		resp.Agent.Memories = h.TaskService.LoadAgentMemoriesForExecution(r.Context(), task.AgentID, parseUUID(resp.WorkspaceID), service.MemoryExecutionScope{
+			InitiatorType: resp.InitiatorType,
+			InitiatorID:   resp.InitiatorID,
+			ProjectID:     resp.ProjectID,
+			ChannelID:     resp.ChannelID,
+			TaskType:      resp.Kind,
+			Now:           time.Now(),
+		})
 	}
 
 	// Mint a task-scoped `mat_` token bound to (agent, task, workspace,

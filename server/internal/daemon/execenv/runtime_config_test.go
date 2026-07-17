@@ -780,10 +780,13 @@ func TestMulticaMemoryScopeRenderedForPiProvider(t *testing.T) {
 func TestMemoryOperatingGuidePrioritizesExplicitUserPreferences(t *testing.T) {
 	t.Parallel()
 	ctx := TaskContextForEnv{
-		ChatSessionID:  "chat-1",
-		Directed:       true,
-		AgentRoot:      "/tmp/multica/workspace-1/.multica/agents/agent-1",
-		AgentMemoryDir: "/tmp/multica/workspace-1/.multica/agents/agent-1/memory",
+		ChatSessionID:    "chat-1",
+		Directed:         true,
+		AgentRoot:        "/tmp/multica/workspace-1/.multica/agents/agent-1",
+		AgentMemoryDir:   "/tmp/multica/workspace-1/.multica/agents/agent-1/memory",
+		UserMemoryDir:    "/tmp/multica/workspace-1/.multica/agents/agent-1/users/member-1",
+		ProjectMemoryDir: "/tmp/multica/workspace-1/.multica/agents/agent-1/projects/project-1",
+		ChannelMemoryDir: "/tmp/multica/workspace-1/.multica/agents/agent-1/channels/channel-1",
 	}
 	out := buildMetaSkillContent("codex", ctx)
 
@@ -791,11 +794,11 @@ func TestMemoryOperatingGuidePrioritizesExplicitUserPreferences(t *testing.T) {
 		"### Memory Operating Guide (v0.2)",
 		"Use high-strength auto-write for explicit user profile facts",
 		"A verbal acknowledgment such as \"got it\" does not count as remembering",
-		"read `memory/USER.md` before substantive work",
+		"current user's isolated `USER.md`",
 		"likely to matter in a future run",
 		"memory/MEMORY.md",
-		"memory/USER.md",
-		"Attribute them to the identified user",
+		"MULTICA_USER_MEMORY_DIR",
+		"current member's durable preferences",
 		"applies to all agents or the whole team",
 		"governed team curation",
 		"memory/STATE.md",

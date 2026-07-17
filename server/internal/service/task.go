@@ -2903,20 +2903,37 @@ type agentMemoryDeliveryConfig struct {
 		Type string `json:"type"`
 		ID   string `json:"id"`
 	} `json:"subject"`
+	Applies memoryApplicability `json:"applies"`
+}
+
+type memoryApplicability struct {
+	ProjectIDs []string `json:"project_ids"`
+	ProjectID  string   `json:"project_id"`
+	ChannelIDs []string `json:"channel_ids"`
+	ChannelID  string   `json:"channel_id"`
+	TaskTypes  []string `json:"task_types"`
+	ExpiresAt  string   `json:"expires_at"`
+}
+
+type MemoryExecutionScope struct {
+	InitiatorType string
+	InitiatorID   string
+	ProjectID     string
+	ChannelID     string
+	TaskType      string
+	Now           time.Time
 }
 
 // LoadAgentMemoriesForExecution returns only memories that apply to the
 // current execution. Legacy rows without delivery metadata remain agent-local.
-func (s *TaskService) LoadAgentMemoriesForExecution(ctx context.Context, agentID, workspaceID pgtype.UUID, initiatorType, initiatorID string) []AgentMemoryData {
+func (s *TaskService) LoadAgentMemoriesForExecution(ctx context.Context, agentID, workspaceID pgtype.UUID, execution MemoryExecutionScope) []AgentMemoryData {
 	memories, err := s.Queries.ListAgentMemoriesByAgent(ctx, agentID)
 	if err != nil {
 		memories = nil
 	}
-	initiatorType = strings.ToLower(strings.TrimSpace(initiatorType))
-	initiatorID = strings.TrimSpace(initiatorID)
 	result := make([]AgentMemoryData, 0, len(memories))
 	for _, memory := range memories {
-		scope, subjectType, subjectID, applies := agentMemoryDeliveryForExecution(memory.Config, initiatorType, initiatorID)
+		scope, subjectType, subjectID, applies := agentMemoryDeliveryForExecution(memory.Config, execution)
 		if !applies {
 			continue
 		}
@@ -2934,7 +2951,9 @@ func (s *TaskService) LoadAgentMemoriesForExecution(ctx context.Context, agentID
 	teamKnowledge, err := s.Queries.ListActiveTeamKnowledgeForExecution(ctx, workspaceID)
 	if err == nil {
 		for _, item := range teamKnowledge {
-			result = append(result, teamKnowledgeMemoryData(item))
+			if teamKnowledgeAppliesForExecution(item.Metadata, execution) {
+				result = append(result, teamKnowledgeMemoryData(item))
+			}
 		}
 	}
 	return result
@@ -2951,7 +2970,7 @@ func teamKnowledgeMemoryData(item db.ActiveTeamKnowledgeForExecution) AgentMemor
 	}
 }
 
-func agentMemoryDeliveryForExecution(config []byte, initiatorType, initiatorID string) (string, string, string, bool) {
+func agentMemoryDeliveryForExecution(config []byte, execution MemoryExecutionScope) (string, string, string, bool) {
 	cfg := agentMemoryDeliveryConfig{}
 	_ = json.Unmarshal(config, &cfg)
 	scope := strings.ToLower(strings.TrimSpace(cfg.Scope))
@@ -2961,11 +2980,66 @@ func agentMemoryDeliveryForExecution(config []byte, initiatorType, initiatorID s
 	subjectType := strings.ToLower(strings.TrimSpace(cfg.Subject.Type))
 	subjectID := strings.TrimSpace(cfg.Subject.ID)
 	if scope == "user" || scope == "member" {
-		applies := strings.EqualFold(strings.TrimSpace(initiatorType), "member") &&
-			strings.TrimSpace(initiatorID) != "" && subjectType == "member" && subjectID == strings.TrimSpace(initiatorID)
-		return scope, subjectType, subjectID, applies
+		matchesMember := strings.EqualFold(strings.TrimSpace(execution.InitiatorType), "member") &&
+			strings.TrimSpace(execution.InitiatorID) != "" && subjectType == "member" && subjectID == strings.TrimSpace(execution.InitiatorID)
+		return scope, subjectType, subjectID, matchesMember && memoryApplicabilityMatches(cfg.Applies, execution)
 	}
-	return scope, subjectType, subjectID, true
+	return scope, subjectType, subjectID, memoryApplicabilityMatches(cfg.Applies, execution)
+}
+
+func teamKnowledgeAppliesForExecution(metadata []byte, execution MemoryExecutionScope) bool {
+	container := struct {
+		Applies memoryApplicability `json:"applies"`
+	}{}
+	if json.Unmarshal(metadata, &container) != nil {
+		return true
+	}
+	return memoryApplicabilityMatches(container.Applies, execution)
+}
+
+func memoryApplicabilityMatches(applies memoryApplicability, execution MemoryExecutionScope) bool {
+	projectIDs := appendCleanApplicabilityValue(applies.ProjectIDs, applies.ProjectID)
+	channelIDs := appendCleanApplicabilityValue(applies.ChannelIDs, applies.ChannelID)
+	if !applicabilityListMatches(projectIDs, execution.ProjectID) || !applicabilityListMatches(channelIDs, execution.ChannelID) || !applicabilityListMatches(applies.TaskTypes, execution.TaskType) {
+		return false
+	}
+	if expiresAt := strings.TrimSpace(applies.ExpiresAt); expiresAt != "" {
+		expires, err := time.Parse(time.RFC3339, expiresAt)
+		if err != nil {
+			return false
+		}
+		now := execution.Now
+		if now.IsZero() {
+			now = time.Now()
+		}
+		if !now.Before(expires) {
+			return false
+		}
+	}
+	return true
+}
+
+func appendCleanApplicabilityValue(values []string, value string) []string {
+	if strings.TrimSpace(value) == "" {
+		return values
+	}
+	return append(append([]string(nil), values...), strings.TrimSpace(value))
+}
+
+func applicabilityListMatches(values []string, current string) bool {
+	if len(values) == 0 {
+		return true
+	}
+	current = strings.TrimSpace(current)
+	if current == "" {
+		return false
+	}
+	for _, value := range values {
+		if strings.EqualFold(strings.TrimSpace(value), current) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *TaskService) loadAgentSkills(ctx context.Context, agentID, taskID, executionID pgtype.UUID) []AgentSkillData {

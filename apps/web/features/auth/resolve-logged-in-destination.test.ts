@@ -52,18 +52,18 @@ describe("resolveLoggedInDestination (#223 — email/code login shares the auth 
   it("cookie missing → newest last_active_at (the logout→re-login recovery, not the [0] default)", async () => {
     // 'a' is created first (would be the deterministic default); 'b' is last-active.
     const dest = await resolveLoggedInDestination(qc, true, [ws("a", null), ws("b", "2026-01-05")]);
-    expect(dest).toBe(paths.workspace("b").issues());
+    expect(dest).toBe(paths.workspace("b").channels());
   });
 
   it("cookie accessible → the cookie wins over last_active_at", async () => {
     document.cookie = "last_workspace_slug=a; path=/";
     const dest = await resolveLoggedInDestination(qc, true, [ws("a", null), ws("b", "2026-01-05")]);
-    expect(dest).toBe(paths.workspace("a").issues());
+    expect(dest).toBe(paths.workspace("a").channels());
   });
 
   it("no cookie and no last_active → deterministic default (workspaces[0])", async () => {
     const dest = await resolveLoggedInDestination(qc, true, [ws("a"), ws("b")]);
-    expect(dest).toBe(paths.workspace("a").issues());
+    expect(dest).toBe(paths.workspace("a").channels());
   });
 
   it("un-onboarded with pending invites → /invitations", async () => {

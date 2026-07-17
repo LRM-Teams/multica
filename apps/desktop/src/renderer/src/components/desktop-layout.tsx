@@ -11,7 +11,7 @@ import {
 } from "@multica/ui/components/ui/sidebar";
 import { ModalRegistry } from "@multica/views/modals/registry";
 import { AppSidebar } from "@multica/views/layout";
-import { SearchCommand, SearchTrigger } from "@multica/views/search";
+import { SearchCommand } from "@multica/views/search";
 import { ChatFab, ChatWindow } from "@multica/views/chat";
 import { WorkspaceSlugProvider, paths, useCurrentWorkspace } from "@multica/core/paths";
 import { useNavigation } from "@multica/views/navigation";
@@ -183,7 +183,7 @@ export function DesktopShell() {
         <DesktopInboxBridge />
         <div className="flex h-screen">
           <SidebarProvider className="flex-1">
-            {slug && <AppSidebar topSlot={<SidebarTopBar />} searchSlot={<SearchTrigger />} />}
+            {slug && <AppSidebar topSlot={<SidebarTopBar />} />}
             {/* Right side: header + content container */}
             <div className="flex flex-1 min-w-0 flex-col">
               <MainTopBar />

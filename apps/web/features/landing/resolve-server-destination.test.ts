@@ -40,7 +40,7 @@ describe("resolveServerPostAuthDestination", () => {
     fetchMock
       .mockResolvedValueOnce(okJson({ id: "u1", onboarded_at: "2026-01-01" }))
       .mockResolvedValueOnce(okJson([{ slug: "acme" }, { slug: "beta" }]));
-    expect(await resolveServerPostAuthDestination()).toBe(paths.workspace("beta").issues());
+    expect(await resolveServerPostAuthDestination()).toBe(paths.workspace("beta").channels());
   });
 
   it("falls back to the default workspace when there is no last-active cookie", async () => {
@@ -48,7 +48,7 @@ describe("resolveServerPostAuthDestination", () => {
     fetchMock
       .mockResolvedValueOnce(okJson({ id: "u1", onboarded_at: "2026-01-01" }))
       .mockResolvedValueOnce(okJson([{ slug: "acme" }, { slug: "beta" }]));
-    expect(await resolveServerPostAuthDestination()).toBe(paths.workspace("acme").issues());
+    expect(await resolveServerPostAuthDestination()).toBe(paths.workspace("acme").channels());
   });
 
   it("returns null when the backend rejects the session (non-2xx) — treated as unauthenticated", async () => {
@@ -76,6 +76,6 @@ describe("resolveServerPostAuthDestination", () => {
     fetchMock
       .mockResolvedValueOnce(okJson({ id: "u1", onboarded_at: "2026-01-01" }))
       .mockResolvedValueOnce(okJson([{ slug: "acme" }, { slug: "beta" }]));
-    expect(await resolveServerPostAuthDestination()).toBe(paths.workspace("acme").issues());
+    expect(await resolveServerPostAuthDestination()).toBe(paths.workspace("acme").channels());
   });
 });

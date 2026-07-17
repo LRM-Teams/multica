@@ -5,7 +5,7 @@ import { paths } from "./paths";
 /**
  * Priority (onboarded-first):
  *   !hasOnboarded               → /onboarding
- *   hasOnboarded + workspace[0] → /<first.slug>/issues
+ *   hasOnboarded + workspace[0] → /<first.slug>/channels
  *   hasOnboarded + no workspace → /workspaces/new
  *
  * V3 invariant: `onboarded_at != null` is the single source of truth for
@@ -94,12 +94,12 @@ export function chooseWorkspaceDestination(
   if (preferredSlug) {
     const preferred = workspaces.find((w) => w.slug === preferredSlug);
     if (preferred) {
-      return paths.workspace(preferred.slug).issues();
+      return paths.workspace(preferred.slug).channels();
     }
   }
   const fallback = chooseDefaultWorkspace(workspaces);
   if (fallback) {
-    return paths.workspace(fallback.slug).issues();
+    return paths.workspace(fallback.slug).channels();
   }
   return paths.newWorkspace();
 }

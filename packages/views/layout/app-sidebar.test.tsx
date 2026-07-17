@@ -179,3 +179,24 @@ describe("PinRow", () => {
     expect(await screen.findByText("MUL-123 Keep this pin")).toBeInTheDocument();
   });
 });
+
+describe("AppSidebar workspace nav", () => {
+  beforeEach(() => {
+    detail.current = { isPending: false, isError: false, data: null, error: null };
+  });
+
+  it("renders Messages at the top of the workspace group, above Overview", () => {
+    renderSidebar();
+    const messages = screen.getByText("Messages");
+    const overview = screen.getByText("Overview");
+    // Messages must precede Overview in document order.
+    expect(
+      messages.compareDocumentPosition(overview) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("does not render the New Issue row (removed from the sidebar)", () => {
+    renderSidebar();
+    expect(screen.queryByText("New Issue")).toBeNull();
+  });
+});

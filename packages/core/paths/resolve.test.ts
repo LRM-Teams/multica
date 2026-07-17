@@ -37,10 +37,10 @@ describe("resolvePostAuthDestination", () => {
     expect(resolvePostAuthDestination([], false)).toBe(paths.onboarding());
   });
 
-  it("onboarded + workspace[0] → /<first.slug>/issues", () => {
+  it("onboarded + workspace[0] → /<first.slug>/channels", () => {
     const ws = [makeWs("acme"), makeWs("beta")];
     expect(resolvePostAuthDestination(ws, true)).toBe(
-      paths.workspace("acme").issues(),
+      paths.workspace("acme").channels(),
     );
   });
 
@@ -73,31 +73,31 @@ describe("chooseWorkspaceDestination", () => {
     // The #223 fix: land back where the user was, not whichever sorts first.
     const ws = [makeWs("acme"), makeWs("beta")];
     expect(chooseWorkspaceDestination(ws, true, "beta")).toBe(
-      paths.workspace("beta").issues(),
+      paths.workspace("beta").channels(),
     );
   });
 
   it("preferred wins even when a different workspace sorts first", () => {
     const ws = [makeWs("empty-first"), makeWs("mine")];
     expect(chooseWorkspaceDestination(ws, true, "mine")).toBe(
-      paths.workspace("mine").issues(),
+      paths.workspace("mine").channels(),
     );
   });
 
   it("preferred slug not in the accessible list → falls back to default", () => {
     const ws = [makeWs("acme"), makeWs("beta")];
     expect(chooseWorkspaceDestination(ws, true, "gone")).toBe(
-      paths.workspace("acme").issues(),
+      paths.workspace("acme").channels(),
     );
   });
 
   it("no preferred slug → default workspace", () => {
     const ws = [makeWs("acme"), makeWs("beta")];
     expect(chooseWorkspaceDestination(ws, true, null)).toBe(
-      paths.workspace("acme").issues(),
+      paths.workspace("acme").channels(),
     );
     expect(chooseWorkspaceDestination(ws, true)).toBe(
-      paths.workspace("acme").issues(),
+      paths.workspace("acme").channels(),
     );
   });
 

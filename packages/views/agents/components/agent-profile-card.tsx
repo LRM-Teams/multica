@@ -1,16 +1,12 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import type { Agent, AgentRuntime } from "@multica/core/types";
 import { useWorkspaceId } from "@multica/core/hooks";
-import {
-  deriveRuntimeHealth,
-  runtimeHealthState,
-  type RuntimeHealth,
-} from "@multica/core/runtimes";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { resolveActorDisplayName } from "@multica/core/identity";
+import { useAgentPermissions } from "@multica/core/permissions";
+import { useAuthStore } from "@multica/core/auth";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { runtimeListOptions } from "@multica/core/runtimes/queries";
 import { useWorkspacePaths } from "@multica/core/paths";
@@ -19,12 +15,15 @@ import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { MessageSquare } from "lucide-react";
 import { AppLink } from "../../navigation/app-link";
 import { useOpenDM } from "../../common/use-open-dm";
-import {
-  HealthIcon,
-  useRuntimeHealthStateLabel,
-} from "../../runtimes/components/shared";
+import { PropRow } from "../../common/prop-row";
 import { VisibilityBadge } from "./visibility-badge";
 import { AgentPresenceStatusLine } from "./agent-presence-status-line";
+import { runtimeHealthState } from "@multica/core/runtimes";
+import { useRuntimeHealthStateLabel } from "../../runtimes/components/shared";
+import { RuntimePicker } from "./inspector/runtime-picker";
+import { ModelPicker } from "./inspector/model-picker";
+import { ThinkingPropRow } from "./inspector/thinking-prop-row";
+import { useUpdateAgent } from "../hooks/use-update-agent";
 import { useT } from "../../i18n/use-t";
 
 interface AgentProfileCardProps {
@@ -39,8 +38,15 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
   const { data: agents = [], isLoading: agentsLoading } = useQuery(agentListOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
+  const handleUpdate = useUpdateAgent(wsId);
+  const currentUser = useAuthStore((s) => s.user);
+  const runtimeHealthLabel = useRuntimeHealthStateLabel();
 
   const agent = agents.find((a) => a.id === agentId);
+  // Same permission gate as the detail inspector — owner/admin only. Called
+  // unconditionally (its `agent | null` signature handles the loading case)
+  // so the early returns below don't violate the rules of hooks.
+  const { canEdit } = useAgentPermissions(agent ?? null, wsId);
 
   if (agentsLoading && !agent) {
     return (
@@ -65,6 +71,14 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
     : null;
   const runtime = runtimes.find((r) => r.id === agent.runtime_id) ?? null;
   const isArchived = !!agent.archived_at;
+  const update = (data: Record<string, unknown>) => handleUpdate(agent.id, data);
+  // Runtime "version outdated" is an INDEPENDENT axis from online/offline
+  // health (kept per Iris/Parker — it currently explains the billing gap).
+  // Cloud runtimes never report an outdated local binary.
+  const runtimeUpdateHealth =
+    agent.runtime_mode !== "cloud" && runtime
+      ? runtimeHealthState(runtime)
+      : "ok";
   const displayName = resolveActorDisplayName(agent, agent.id);
   const initials = displayName
     .split(" ")
@@ -131,15 +145,68 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
         </p>
       )}
 
-      {/* Meta rows — minimal set: runtime (where it lives), skills (what
-          it knows), owner (who manages it). Model is intentionally
-          omitted — power-user detail lives on the detail page. */}
-      <div className="flex flex-col gap-1.5 text-xs">
-        <RuntimeRow agent={agent} runtime={runtime} />
+      {/* Meta rows. Runtime / model / thinking are the SAME inline pickers
+          the detail inspector uses (reused, not reimplemented): editable for
+          owners/admins, static read-only displays for everyone else — so the
+          profile stays read-only for non-editors with no extra branching.
+          Model, previously omitted here, is now surfaced because it's part
+          of the unified execution-controls edit. Skills + owner round out
+          the "who/what it is" summary. */}
+      <div className="flex flex-col gap-2 text-xs">
+        <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+          <PropRow label={t(($) => $.inspector.prop_runtime)} interactive={false}>
+            <div className="flex min-w-0 items-center gap-1.5">
+              <RuntimePicker
+                value={agent.runtime_id}
+                runtimes={runtimes}
+                members={members}
+                currentUserId={currentUser?.id ?? null}
+                canEdit={canEdit.allowed}
+                onChange={(id) => update({ runtime_id: id })}
+              />
+              {runtimeUpdateHealth !== "ok" && (
+                <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                  {runtimeHealthLabel(runtimeUpdateHealth)}
+                </span>
+              )}
+            </div>
+          </PropRow>
+          <PropRow label={t(($) => $.inspector.prop_model)} interactive={false}>
+            <ModelPicker
+              runtimeId={agent.runtime_id}
+              runtimeOnline={runtime?.status === "online"}
+              value={agent.model ?? ""}
+              canEdit={canEdit.allowed}
+              onChange={(m) => update({ model: m })}
+            />
+          </PropRow>
+          <ThinkingPropRow
+            runtimeId={agent.runtime_id}
+            runtimeOnline={runtime?.status === "online"}
+            model={agent.model ?? ""}
+            value={agent.thinking_level ?? ""}
+            canEdit={canEdit.allowed}
+            onChange={(v) => update({ thinking_level: v })}
+          />
+          {owner && (
+            <PropRow label={t(($) => $.profile_card.owner_label)} interactive={false}>
+              <span className="min-w-0 truncate" title={owner.name}>
+                {owner.name}
+              </span>
+            </PropRow>
+          )}
+        </div>
+        {/* Truthfulness hint (#527, Iris): editing runtime/model/thinking here
+            configures the NEXT run — it does not retarget a task already
+            executing. Shown only to editors, since only they can change it. */}
+        {canEdit.allowed && (
+          <p className="text-[10px] leading-tight text-muted-foreground">
+            {t(($) => $.execution_config.applies_next_run)}
+          </p>
+        )}
         {agent.skills.length > 0 && (
           <SkillsRow skills={agent.skills.map((s) => s.name)} />
         )}
-        {owner && <MetaRow label={t(($) => $.profile_card.owner_label)} value={owner.name} />}
       </div>
     </div>
   );
@@ -152,69 +219,6 @@ function AgentAvailabilityLine({ agentId }: { agentId: string }) {
   return (
     <div className="mt-0.5">
       <AgentPresenceStatusLine agentId={agentId} className="max-w-[12rem]" />
-    </div>
-  );
-}
-
-// Compact runtime row — wifi-style health icon + runtime name. The icon
-// shape (Wifi / WifiOff) plus colour reflects the live runtime health
-// derived from runtime + clock; cloud runtimes always read as online.
-// This is duplicate signal with the availability dot above by design —
-// the dot is the agent's effective availability (which mostly tracks
-// runtime health), and seeing the same wifi icon next to the runtime
-// name confirms WHICH runtime is the one currently in the dot's state.
-function RuntimeRow({
-  agent,
-  runtime,
-}: {
-  agent: Agent;
-  runtime: AgentRuntime | null;
-}) {
-  const { t } = useT("agents");
-  const runtimeHealthLabel = useRuntimeHealthStateLabel();
-  const isCloud = agent.runtime_mode === "cloud";
-  const health: RuntimeHealth = isCloud
-    ? "online"
-    : runtime
-      ? deriveRuntimeHealth(runtime, Date.now())
-      : "offline";
-  const updateHealth = !isCloud && runtime ? runtimeHealthState(runtime) : "ok";
-  const label =
-    runtime?.name ??
-    (isCloud
-      ? t(($) => $.row.fallback_runtime_cloud)
-      : t(($) => $.profile_card.unknown_runtime));
-  return (
-    <div className="flex items-center gap-1.5">
-      <span className="w-12 shrink-0 text-muted-foreground">{t(($) => $.profile_card.runtime_label)}</span>
-      <HealthIcon health={health} className="h-3 w-3 shrink-0" />
-      <span className="min-w-0 truncate" title={label}>
-        {label}
-      </span>
-      {updateHealth !== "ok" && (
-        <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-          {runtimeHealthLabel(updateHealth)}
-        </span>
-      )}
-    </div>
-  );
-}
-
-function MetaRow({
-  label,
-  value,
-  mono,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-}) {
-  return (
-    <div className="flex items-center gap-1.5">
-      <span className="w-12 shrink-0 text-muted-foreground">{label}</span>
-      <span className={`truncate ${mono ? "font-mono text-[11px]" : ""}`} title={value}>
-        {value}
-      </span>
     </div>
   );
 }

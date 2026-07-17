@@ -477,6 +477,9 @@
     "owner_label": "オーナー",
     "unknown_runtime": "不明なランタイム"
   },
+  "execution_config": {
+    "applies_next_run": "変更は次回の実行から反映されます。実行中のセッションには影響しません。"
+  },
   "side_panel": {
     "close_aria": "エージェントパネルを閉じる",
     "no_description": "説明はまだありません",

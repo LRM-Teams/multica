@@ -495,6 +495,9 @@
     "owner_label": "Owner",
     "unknown_runtime": "Unknown runtime"
   },
+  "execution_config": {
+    "applies_next_run": "Changes take effect on the next run — the current run is unaffected."
+  },
   "side_panel": {
     "close_aria": "Close agent panel",
     "no_description": "No description yet",

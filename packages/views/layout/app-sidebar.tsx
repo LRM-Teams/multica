@@ -142,13 +142,12 @@ type NavLabelKey =
 
 const personalNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] = [
   { key: "inbox", labelKey: "inbox", icon: Inbox },
+  { key: "channels", labelKey: "channels", icon: MessageCircle },
 ];
 
-// Order is by how often you reach for it, not by module hierarchy: chat is the
-// highest-frequency surface here, so it sits at the very top of the group,
-// above Overview (Frank).
+// Workspace navigation starts with the workspace dashboard. Personal messaging
+// lives alongside Inbox above this group, rather than as a second entry here.
 const workspaceNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] = [
-  { key: "channels", labelKey: "channels", icon: MessageCircle },
   { key: "overview", labelKey: "overview", icon: LayoutDashboard },
   { key: "issues", labelKey: "issues", icon: ListTodo },
   { key: "projects", labelKey: "projects", icon: FolderKanban },

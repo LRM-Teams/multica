@@ -44,6 +44,8 @@ Closes #
 - [ ] If this PR touches Chinese product copy, I checked it against `apps/docs/content/docs/developers/conventions.zh.mdx` (terminology, mixed-rule for `task` / `issue` / `skill`)
 - [ ] I have considered and documented any risks above
 - [ ] **Change takes effect at:** server deploy / daemon release / both (pick one)
+- [ ] If this branch reintroduces or reverts prior work, I reviewed the final file/tree state, not only the diff
+- [ ] If this PR makes a structural refactor, verification directly proves the intended structure is present in the built surface, not only that behavior appears correct
 - [ ] I will address all reviewer comments before requesting merge
 
 ## AI Disclosure

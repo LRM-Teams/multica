@@ -194,6 +194,9 @@ export type {
   SandboxJobStatus,
   SandboxTemplate,
   SandboxNodeTemplatesResponse,
+  SandboxSnapshot,
+  SandboxSnapshotStatus,
+  CreateSandboxSnapshotRequest,
   CreateSandboxRequest,
   UpdateSandboxRequest,
 } from "./sandbox";

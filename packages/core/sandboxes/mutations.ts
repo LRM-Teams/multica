@@ -1,6 +1,10 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
-import type { CreateSandboxRequest, UpdateSandboxRequest } from "../types";
+import type {
+  CreateSandboxRequest,
+  CreateSandboxSnapshotRequest,
+  UpdateSandboxRequest,
+} from "../types";
 import { sandboxKeys } from "./queries";
 
 function useInvalidateSandboxes(wsId: string) {
@@ -53,10 +57,29 @@ export function useDeleteSandboxMutation(wsId: string) {
 export function useCreateSandboxTemplateMutation(wsId: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => api.createSandboxTemplate(id),
-    onSuccess: () => {
+    mutationFn: ({
+      instanceId,
+      ...data
+    }: CreateSandboxSnapshotRequest & { instanceId: string }) =>
+      api.createSandboxTemplate(instanceId, data),
+    onSuccess: (snap) => {
       void queryClient.invalidateQueries({ queryKey: sandboxKeys.all(wsId) });
       void queryClient.invalidateQueries({ queryKey: ["sandboxes", "nodes"] });
+      if (snap.node_id) {
+        void queryClient.invalidateQueries({ queryKey: sandboxKeys.nodeSnapshots(snap.node_id) });
+      }
+    },
+  });
+}
+
+export function useDeleteSandboxSnapshotMutation(wsId: string, nodeId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (snapshotId: string) => api.deleteSandboxSnapshot(snapshotId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: sandboxKeys.nodeSnapshots(nodeId) });
+      void queryClient.invalidateQueries({ queryKey: sandboxKeys.nodeTemplates(nodeId) });
+      void queryClient.invalidateQueries({ queryKey: sandboxKeys.all(wsId) });
     },
   });
 }

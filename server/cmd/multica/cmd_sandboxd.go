@@ -192,7 +192,7 @@ func (c *sandboxdClient) register(ctx context.Context) error {
 		"name":            c.cfg.Name,
 		"owner_user_id":   c.cfg.OwnerUserID,
 		"max_concurrency": c.cfg.Concurrency,
-		"capabilities":    []string{"create", "stop", "resume", "delete", "reconfigure", "create_template"},
+		"capabilities":    []string{"create", "stop", "resume", "delete", "reconfigure", "create_template", "delete_template"},
 		"metadata":        c.nodeMetadata(),
 	}, nil)
 }
@@ -487,6 +487,8 @@ func (c *sandboxdClient) callCube(ctx context.Context, job sandboxJob) (map[stri
 		return c.deleteCubeSandbox(ctx, sandboxID)
 	case "create_template":
 		return c.createCubeSnapshotTemplate(ctx, sandboxID, payload)
+	case "delete_template":
+		return c.deleteCubeSnapshotTemplate(ctx, payload)
 	default:
 		return nil, fmt.Errorf("unsupported sandbox job type %q", job.Type)
 	}
@@ -588,6 +590,34 @@ func (c *sandboxdClient) createCubeSnapshotTemplate(ctx context.Context, sandbox
 			"template_id": snapshotID,
 			"names":       raw["names"],
 			"cube":        raw,
+		},
+	}, nil
+}
+
+// deleteCubeSnapshotTemplate removes a Cube snapshot template
+// (DELETE /templates/{snapshotID}). Snapshots are stored as templates.
+func (c *sandboxdClient) deleteCubeSnapshotTemplate(ctx context.Context, payload sandboxJobPayload) (map[string]any, error) {
+	templateID := strings.TrimSpace(payload.LocalRef)
+	if templateID == "" {
+		return nil, fmt.Errorf("cube snapshot id is required")
+	}
+	if err := c.cubeJSON(ctx, http.MethodDelete, "/templates/"+url.PathEscape(templateID), nil, "", nil); err != nil {
+		// Already gone on Cube — treat as success so Multica can drop its row.
+		if strings.Contains(err.Error(), " returned 404") {
+			c.logger.Info("cube snapshot already absent; treating delete as success", "template_id", templateID)
+		} else {
+			return nil, err
+		}
+	}
+	refreshCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	_ = c.refreshTemplates(refreshCtx, true)
+	cancel()
+	return map[string]any{
+		"local_ref": templateID,
+		"result": map[string]any{
+			"deleted":     true,
+			"snapshot_id": templateID,
+			"template_id": templateID,
 		},
 	}, nil
 }

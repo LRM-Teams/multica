@@ -8,6 +8,7 @@ export const sandboxKeys = {
   bindings: (wsId: string) => [...sandboxKeys.all(wsId), "bindings"] as const,
   nodes: () => ["sandboxes", "nodes"] as const,
   nodeTemplates: (nodeId: string) => ["sandboxes", "nodes", nodeId, "templates"] as const,
+  nodeSnapshots: (nodeId: string) => ["sandboxes", "nodes", nodeId, "snapshots"] as const,
 };
 
 export function sandboxListOptions(wsId: string) {
@@ -50,5 +51,15 @@ export function sandboxNodeTemplatesOptions(nodeId: string) {
     queryFn: () => api.listSandboxNodeTemplates(nodeId),
     enabled: !!nodeId,
     refetchInterval: 10_000,
+  });
+}
+
+export function sandboxNodeSnapshotsOptions(nodeId: string) {
+  return queryOptions({
+    queryKey: sandboxKeys.nodeSnapshots(nodeId),
+    queryFn: () => api.listSandboxNodeSnapshots(nodeId),
+    enabled: !!nodeId,
+    // Only poll while healthy so a bad request does not spam the UI.
+    refetchInterval: (query) => (query.state.status === "success" ? 5_000 : false),
   });
 }

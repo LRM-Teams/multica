@@ -32,6 +32,7 @@ import {
 } from "@multica/core/sandboxes/queries";
 import {
   defaultSandboxName,
+  defaultSandboxSnapshotName,
   effectiveSandboxNodeStatus,
   resolveCreateSandboxTemplate,
   sandboxDisplayName,
@@ -41,6 +42,7 @@ import { useWorkspacePaths } from "@multica/core/paths";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
+import { Textarea } from "@multica/ui/components/ui/textarea";
 import { Badge } from "@multica/ui/components/ui/badge";
 import {
   Dialog,
@@ -76,8 +78,9 @@ import { PageHeader } from "../../layout/page-header";
 import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n/use-t";
 import { NodeTemplatesPanel } from "./node-templates-panel";
+import { NodeSnapshotsPanel } from "./node-snapshots-panel";
 
-type NodeDetailTab = "sandboxes" | "templates";
+type NodeDetailTab = "sandboxes" | "templates" | "snapshots";
 
 type CreateFormState = {
   name: string;
@@ -143,6 +146,9 @@ export function SandboxesPage() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [createForm, setCreateForm] = useState<CreateFormState>(() => buildDefaultCreateForm(""));
   const [deleteConfirmInstance, setDeleteConfirmInstance] = useState<SandboxInstance | null>(null);
+  const [snapshotInstance, setSnapshotInstance] = useState<SandboxInstance | null>(null);
+  const [snapshotName, setSnapshotName] = useState("");
+  const [snapshotDescription, setSnapshotDescription] = useState("");
   const [creatingNode, setCreatingNode] = useState(false);
 
   const now = useNowTick();
@@ -208,9 +214,23 @@ export function SandboxesPage() {
   const del = useDeleteSandboxMutation(wsId);
   const createTemplate = useCreateSandboxTemplateMutation(wsId);
 
-  const handleCreateTemplate = async (instanceId: string) => {
+  const openSnapshotDialog = (instance: SandboxInstance) => {
+    setSnapshotInstance(instance);
+    setSnapshotName(defaultSandboxSnapshotName(instance));
+    setSnapshotDescription("");
+  };
+
+  const handleCreateTemplate = async () => {
+    if (!snapshotInstance) return;
+    const name = snapshotName.trim();
+    if (!name) return;
     try {
-      await createTemplate.mutateAsync(instanceId);
+      await createTemplate.mutateAsync({
+        instanceId: snapshotInstance.id,
+        name,
+        description: snapshotDescription.trim(),
+      });
+      setSnapshotInstance(null);
       toast.success(t(($) => $.sandboxes_page.create_template_success));
     } catch (e) {
       toast.error(
@@ -317,11 +337,13 @@ export function SandboxesPage() {
             stoppingId={stop.isPending ? stop.variables : undefined}
             resumingId={resume.isPending ? resume.variables : undefined}
             deletingId={del.isPending ? del.variables : undefined}
-            creatingTemplateId={createTemplate.isPending ? createTemplate.variables : undefined}
+            creatingTemplateId={
+              createTemplate.isPending ? createTemplate.variables?.instanceId : undefined
+            }
             onOpen={(instanceId) => navigation.push(paths.sandboxDetail(instanceId))}
             onStop={(instanceId) => stop.mutate(instanceId)}
             onResume={(instanceId) => resume.mutate(instanceId)}
-            onCreateTemplate={handleCreateTemplate}
+            onCreateTemplate={openSnapshotDialog}
             onDelete={setDeleteConfirmInstance}
           />
         </div>
@@ -362,11 +384,13 @@ export function SandboxesPage() {
                 stoppingId={stop.isPending ? stop.variables : undefined}
                 resumingId={resume.isPending ? resume.variables : undefined}
                 deletingId={del.isPending ? del.variables : undefined}
-                creatingTemplateId={createTemplate.isPending ? createTemplate.variables : undefined}
+                creatingTemplateId={
+                  createTemplate.isPending ? createTemplate.variables?.instanceId : undefined
+                }
                 onOpen={(instanceId) => navigation.push(paths.sandboxDetail(instanceId))}
                 onStop={(instanceId) => stop.mutate(instanceId)}
                 onResume={(instanceId) => resume.mutate(instanceId)}
-                onCreateTemplate={handleCreateTemplate}
+                onCreateTemplate={openSnapshotDialog}
                 onDelete={setDeleteConfirmInstance}
               />
             </ResizablePanel>
@@ -481,6 +505,56 @@ export function SandboxesPage() {
             <Button onClick={handleCreateSandbox} disabled={!canCreate || create.isPending}>
               {create.isPending ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
               {t(($) => $.sandboxes_page.create_action)}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={!!snapshotInstance}
+        onOpenChange={(open) => {
+          if (!open) setSnapshotInstance(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{t(($) => $.sandboxes_page.snapshot_dialog_title)}</DialogTitle>
+            <DialogDescription>
+              {t(($) => $.sandboxes_page.snapshot_dialog_description)}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="snapshot-name">{t(($) => $.sandboxes_page.snapshot_name_label)}</Label>
+              <Input
+                id="snapshot-name"
+                value={snapshotName}
+                onChange={(e) => setSnapshotName(e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="snapshot-description">
+                {t(($) => $.sandboxes_page.snapshot_description_label)}
+              </Label>
+              <Textarea
+                id="snapshot-description"
+                value={snapshotDescription}
+                onChange={(e) => setSnapshotDescription(e.target.value)}
+                placeholder={t(($) => $.sandboxes_page.snapshot_description_placeholder)}
+                rows={3}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSnapshotInstance(null)}>
+              {t(($) => $.sandboxes_page.cancel_action)}
+            </Button>
+            <Button
+              onClick={() => void handleCreateTemplate()}
+              disabled={!snapshotName.trim() || createTemplate.isPending}
+            >
+              {createTemplate.isPending ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
+              {t(($) => $.sandboxes_page.create_template_action)}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -643,7 +717,7 @@ function NodeDetail({
   onOpen: (instanceId: string) => void;
   onStop: (instanceId: string) => void;
   onResume: (instanceId: string) => void;
-  onCreateTemplate: (instanceId: string) => void;
+  onCreateTemplate: (instance: SandboxInstance) => void;
   onDelete: (instance: SandboxInstance) => void;
 }) {
   const { t } = useT("layout");
@@ -667,6 +741,7 @@ function NodeDetail({
   const tabs: { id: NodeDetailTab; icon: typeof Box; label: string }[] = [
     { id: "sandboxes", icon: Box, label: t(($) => $.sandboxes_page.sandboxes_tab) },
     { id: "templates", icon: Layers, label: t(($) => $.sandboxes_page.templates_tab) },
+    { id: "snapshots", icon: Camera, label: t(($) => $.sandboxes_page.snapshots_tab) },
   ];
 
   return (
@@ -737,6 +812,8 @@ function NodeDetail({
       <div className="min-h-0 flex-1 overflow-auto">
         {activeTab === "templates" ? (
           <NodeTemplatesPanel nodeId={binding.node_id} nodeOnline={online} />
+        ) : activeTab === "snapshots" ? (
+          <NodeSnapshotsPanel nodeId={binding.node_id} />
         ) : instances.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center px-6 py-16 text-center">
             <Box className="mb-3 size-8 text-muted-foreground/50" />
@@ -762,7 +839,7 @@ function NodeDetail({
                 onOpen={() => onOpen(instance.id)}
                 onStop={() => onStop(instance.id)}
                 onResume={() => onResume(instance.id)}
-                onCreateTemplate={() => onCreateTemplate(instance.id)}
+                onCreateTemplate={() => onCreateTemplate(instance)}
                 onDelete={() => onDelete(instance)}
               />
             ))}

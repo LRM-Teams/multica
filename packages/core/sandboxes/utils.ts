@@ -45,6 +45,13 @@ export function defaultSandboxName(): string {
   return `sandbox-${suffix}`;
 }
 
+/** Default name offered when creating a Cube snapshot template from an instance. */
+export function defaultSandboxSnapshotName(instance: SandboxInstance): string {
+  const base = sandboxDisplayName(instance).trim() || "sandbox";
+  const stamp = new Date().toISOString().slice(0, 16).replace("T", "-").replace(":", "");
+  return `${base}-snap-${stamp}`;
+}
+
 /**
  * Resolve the `template` field for POST /api/sandboxes.
  *

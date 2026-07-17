@@ -90,7 +90,16 @@ export interface SandboxJob {
   initiator_user_id: string;
   node_id: string;
   instance_id: string;
-  type: "create" | "stop" | "resume" | "delete" | "reconfigure" | "create_template" | "exec" | "message";
+  type:
+    | "create"
+    | "stop"
+    | "resume"
+    | "delete"
+    | "reconfigure"
+    | "create_template"
+    | "delete_template"
+    | "exec"
+    | "message";
   status: SandboxJobStatus;
   payload: Record<string, unknown>;
   result: Record<string, unknown>;
@@ -98,6 +107,28 @@ export interface SandboxJob {
   task_token?: string;
   created_at: string;
   updated_at: string;
+}
+
+export type SandboxSnapshotStatus = "creating" | "ready" | "failed" | "deleting";
+
+export interface SandboxSnapshot {
+  id: string;
+  workspace_id: string;
+  node_id: string;
+  instance_id?: string;
+  creator_user_id?: string;
+  cube_snapshot_id: string;
+  name: string;
+  description: string;
+  status: SandboxSnapshotStatus | string;
+  error?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateSandboxSnapshotRequest {
+  name: string;
+  description?: string;
 }
 
 export interface CreateSandboxRequest {

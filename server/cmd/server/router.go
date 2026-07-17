@@ -805,6 +805,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Sandbox instances (workspace-facing control plane).
 			r.Get("/api/sandboxes", h.ListSandboxInstances)
 			r.Post("/api/sandboxes", h.CreateSandboxInstance)
+			r.Get("/api/sandbox/nodes/{nodeId}/snapshots", h.ListSandboxNodeSnapshots)
+			r.Delete("/api/sandbox/snapshots/{snapshotId}", h.DeleteSandboxSnapshot)
 			r.Route("/api/sandboxes/{instanceId}", func(r chi.Router) {
 				r.Get("/", h.GetSandboxInstance)
 				r.Patch("/", h.UpdateSandboxInstance)

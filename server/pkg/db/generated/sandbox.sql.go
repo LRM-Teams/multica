@@ -876,6 +876,179 @@ func (q *Queries) FailSandboxJob(ctx context.Context, arg FailSandboxJobParams) 
 	return scanSandboxJob(row)
 }
 
+const createSandboxSnapshot = `-- name: CreateSandboxSnapshot :one
+INSERT INTO sandbox_snapshot (
+    workspace_id, node_id, instance_id, creator_user_id,
+    cube_snapshot_id, name, description, status, metadata
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+RETURNING id, workspace_id, node_id, instance_id, creator_user_id, cube_snapshot_id, name, description, status, error, metadata, created_at, updated_at
+`
+
+type CreateSandboxSnapshotParams struct {
+	WorkspaceID    pgtype.UUID `json:"workspace_id"`
+	NodeID         pgtype.UUID `json:"node_id"`
+	InstanceID     pgtype.UUID `json:"instance_id"`
+	CreatorUserID  pgtype.UUID `json:"creator_user_id"`
+	CubeSnapshotID string      `json:"cube_snapshot_id"`
+	Name           string      `json:"name"`
+	Description    string      `json:"description"`
+	Status         string      `json:"status"`
+	Metadata       []byte      `json:"metadata"`
+}
+
+func (q *Queries) CreateSandboxSnapshot(ctx context.Context, arg CreateSandboxSnapshotParams) (SandboxSnapshot, error) {
+	row := q.db.QueryRow(ctx, createSandboxSnapshot,
+		arg.WorkspaceID, arg.NodeID, arg.InstanceID, arg.CreatorUserID,
+		arg.CubeSnapshotID, arg.Name, arg.Description, arg.Status, arg.Metadata,
+	)
+	return scanSandboxSnapshot(row)
+}
+
+const listSandboxSnapshotsByNode = `-- name: ListSandboxSnapshotsByNode :many
+SELECT id, workspace_id, node_id, instance_id, creator_user_id, cube_snapshot_id, name, description, status, error, metadata, created_at, updated_at
+FROM sandbox_snapshot
+WHERE workspace_id = $1 AND node_id = $2
+ORDER BY created_at DESC
+`
+
+type ListSandboxSnapshotsByNodeParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	NodeID      pgtype.UUID `json:"node_id"`
+}
+
+func (q *Queries) ListSandboxSnapshotsByNode(ctx context.Context, arg ListSandboxSnapshotsByNodeParams) ([]SandboxSnapshot, error) {
+	rows, err := q.db.Query(ctx, listSandboxSnapshotsByNode, arg.WorkspaceID, arg.NodeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SandboxSnapshot
+	for rows.Next() {
+		item, err := scanSandboxSnapshot(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getSandboxSnapshotForWorkspace = `-- name: GetSandboxSnapshotForWorkspace :one
+SELECT id, workspace_id, node_id, instance_id, creator_user_id, cube_snapshot_id, name, description, status, error, metadata, created_at, updated_at
+FROM sandbox_snapshot
+WHERE id = $1 AND workspace_id = $2
+`
+
+type GetSandboxSnapshotForWorkspaceParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) GetSandboxSnapshotForWorkspace(ctx context.Context, arg GetSandboxSnapshotForWorkspaceParams) (SandboxSnapshot, error) {
+	row := q.db.QueryRow(ctx, getSandboxSnapshotForWorkspace, arg.ID, arg.WorkspaceID)
+	return scanSandboxSnapshot(row)
+}
+
+const markSandboxSnapshotReady = `-- name: MarkSandboxSnapshotReady :one
+UPDATE sandbox_snapshot
+SET cube_snapshot_id = $1, status = 'ready', error = NULL, updated_at = now()
+WHERE id = $2 AND workspace_id = $3
+RETURNING id, workspace_id, node_id, instance_id, creator_user_id, cube_snapshot_id, name, description, status, error, metadata, created_at, updated_at
+`
+
+type MarkSandboxSnapshotReadyParams struct {
+	CubeSnapshotID string      `json:"cube_snapshot_id"`
+	ID             pgtype.UUID `json:"id"`
+	WorkspaceID    pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) MarkSandboxSnapshotReady(ctx context.Context, arg MarkSandboxSnapshotReadyParams) (SandboxSnapshot, error) {
+	row := q.db.QueryRow(ctx, markSandboxSnapshotReady, arg.CubeSnapshotID, arg.ID, arg.WorkspaceID)
+	return scanSandboxSnapshot(row)
+}
+
+const markSandboxSnapshotFailed = `-- name: MarkSandboxSnapshotFailed :one
+UPDATE sandbox_snapshot
+SET status = 'failed', error = $1, updated_at = now()
+WHERE id = $2 AND workspace_id = $3
+RETURNING id, workspace_id, node_id, instance_id, creator_user_id, cube_snapshot_id, name, description, status, error, metadata, created_at, updated_at
+`
+
+type MarkSandboxSnapshotFailedParams struct {
+	Error       pgtype.Text `json:"error"`
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) MarkSandboxSnapshotFailed(ctx context.Context, arg MarkSandboxSnapshotFailedParams) (SandboxSnapshot, error) {
+	row := q.db.QueryRow(ctx, markSandboxSnapshotFailed, arg.Error, arg.ID, arg.WorkspaceID)
+	return scanSandboxSnapshot(row)
+}
+
+const markSandboxSnapshotDeleting = `-- name: MarkSandboxSnapshotDeleting :one
+UPDATE sandbox_snapshot
+SET status = 'deleting', error = NULL, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, node_id, instance_id, creator_user_id, cube_snapshot_id, name, description, status, error, metadata, created_at, updated_at
+`
+
+type MarkSandboxSnapshotDeletingParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) MarkSandboxSnapshotDeleting(ctx context.Context, arg MarkSandboxSnapshotDeletingParams) (SandboxSnapshot, error) {
+	row := q.db.QueryRow(ctx, markSandboxSnapshotDeleting, arg.ID, arg.WorkspaceID)
+	return scanSandboxSnapshot(row)
+}
+
+const markSandboxSnapshotReadyAgain = `-- name: MarkSandboxSnapshotReadyAgain :one
+UPDATE sandbox_snapshot
+SET status = 'ready', error = $1, updated_at = now()
+WHERE id = $2 AND workspace_id = $3
+RETURNING id, workspace_id, node_id, instance_id, creator_user_id, cube_snapshot_id, name, description, status, error, metadata, created_at, updated_at
+`
+
+type MarkSandboxSnapshotReadyAgainParams struct {
+	Error       pgtype.Text `json:"error"`
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) MarkSandboxSnapshotReadyAgain(ctx context.Context, arg MarkSandboxSnapshotReadyAgainParams) (SandboxSnapshot, error) {
+	row := q.db.QueryRow(ctx, markSandboxSnapshotReadyAgain, arg.Error, arg.ID, arg.WorkspaceID)
+	return scanSandboxSnapshot(row)
+}
+
+const deleteSandboxSnapshot = `-- name: DeleteSandboxSnapshot :exec
+DELETE FROM sandbox_snapshot
+WHERE id = $1 AND workspace_id = $2
+`
+
+type DeleteSandboxSnapshotParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) DeleteSandboxSnapshot(ctx context.Context, arg DeleteSandboxSnapshotParams) error {
+	_, err := q.db.Exec(ctx, deleteSandboxSnapshot, arg.ID, arg.WorkspaceID)
+	return err
+}
+
+func scanSandboxSnapshot(row interface{ Scan(...interface{}) error }) (SandboxSnapshot, error) {
+	var i SandboxSnapshot
+	err := row.Scan(
+		&i.ID, &i.WorkspaceID, &i.NodeID, &i.InstanceID, &i.CreatorUserID,
+		&i.CubeSnapshotID, &i.Name, &i.Description, &i.Status, &i.Error,
+		&i.Metadata, &i.CreatedAt, &i.UpdatedAt,
+	)
+	return i, err
+}
+
 func scanSandboxNode(row interface{ Scan(...interface{}) error }) (SandboxNode, error) {
 	var i SandboxNode
 	err := row.Scan(&i.ID, &i.NodeKey, &i.OwnerUserID, &i.Name, &i.Status, &i.Capabilities, &i.MaxConcurrency, &i.Metadata, &i.LastSeenAt, &i.DeletedAt, &i.CreatedAt, &i.UpdatedAt)

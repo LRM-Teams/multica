@@ -338,6 +338,26 @@ describe("ApiClient", () => {
     expect(String(fetchMock.mock.calls[0]![0])).not.toContain("source_channel_id");
   });
 
+  it("uses the group-local source-issue projection endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ issues: [], total: 0 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new ApiClient("https://api.example.test");
+    await client.listChannelSourceIssues("group-9", { status: "todo", assignee_id: "member-7", limit: 20, offset: 40 });
+
+    const url = String(fetchMock.mock.calls[0]![0]);
+    expect(url).toContain("/api/channels/group-9/issues?");
+    expect(url).toContain("status=todo");
+    expect(url).toContain("assignee_id=member-7");
+    expect(url).toContain("limit=20");
+    expect(url).toContain("offset=40");
+  });
+
   it("uses the expected HTTP contract for comment trigger preview and suppress", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(

@@ -1166,6 +1166,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/project-files", h.ListChannelProjectFiles)
 					r.Get("/project-files/content", h.GetChannelProjectFile)
 					r.Get("/active-tasks", h.ListChannelActiveTasks)
+					r.Get("/issues", h.ListChannelSourceIssues)
 					r.Get("/members", h.ListChannelMembers)
 					r.Post("/members", h.AddChannelMember)
 					r.Post("/members/batch", h.AddChannelMembers)

@@ -200,7 +200,7 @@ describe("ChannelTasksBoard", () => {
 
     // Selecting an EMPTY status renders its empty state (no cards) below.
     await userEvent.click(backlogPill);
-    expect(await screen.findByText("No tasks")).toBeInTheDocument();
+    expect(await screen.findByText("No issues")).toBeInTheDocument();
     expect(screen.queryByText("Fix the login bug")).not.toBeInTheDocument();
     expect(screen.queryByText("Add dark mode")).not.toBeInTheDocument();
     expect(backlogPill).toHaveAttribute("aria-pressed", "true");
@@ -262,11 +262,11 @@ describe("ChannelTasksBoard", () => {
     expect(screen.getByText("Todo")).toBeInTheDocument();
   });
 
-  it("shows the empty state when the channel has no source tasks", async () => {
+  it("shows the empty state when the channel has no source issues", async () => {
     listSourceIssues.mockResolvedValue({ issues: [], total: 0 });
     renderBoard();
 
-    expect(await screen.findByText("No tasks from this channel")).toBeInTheDocument();
+    expect(await screen.findByText("No issues from this channel")).toBeInTheDocument();
   });
 
   it("pages beyond the first 100 without truncating: load-more appends the next offset page", async () => {

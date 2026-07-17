@@ -130,12 +130,12 @@
     "error": "加载失败"
   },
   "tasks": {
-    "title": "任务",
-    "empty": "本频道暂无任务",
+    "title": "Issues",
+    "empty": "本频道暂无 Issue",
     "error": "加载失败",
     "load_more": "加载更多（还剩 {{count}} 个）",
     "loading_more": "加载中…",
-    "column_empty": "暂无任务"
+    "column_empty": "暂无 Issue"
   },
   "share": {
     "copied": "已复制频道链接",
@@ -237,13 +237,13 @@
       "member_left": "{target} 退出了频道",
       "issue": {
         "actor_system": "Multica",
-        "assigned": "{{actor}} 将任务 {issue} 指派给 {{target}}",
-        "assigned_unknown": "{{actor}} 重新指派了任务 {issue}",
-        "in_progress": "{{actor}} 将任务 {issue} 标记为处理中",
-        "in_review": "{{actor}} 将任务 {issue} 提交审核",
-        "done": "{{actor}} 完成了任务 {issue}",
-        "updated": "{{actor}} 更新了任务 {issue}",
-        "status": "{{actor}} 将任务 {issue} 标记为{{status}}"
+        "assigned": "{{actor}} 将 Issue {issue} 指派给 {{target}}",
+        "assigned_unknown": "{{actor}} 重新指派了 Issue {issue}",
+        "in_progress": "{{actor}} 将 Issue {issue} 标记为处理中",
+        "in_review": "{{actor}} 将 Issue {issue} 提交审核",
+        "done": "{{actor}} 完成了 Issue {issue}",
+        "updated": "{{actor}} 更新了 Issue {issue}",
+        "status": "{{actor}} 将 Issue {issue} 标记为{{status}}"
       },
       "issue_status": {
         "backlog": "待办事项",
@@ -322,6 +322,6 @@
   },
   "view_tabs": {
     "chat": "对话",
-    "tasks": "任务"
+    "tasks": "Issues"
   }
 }

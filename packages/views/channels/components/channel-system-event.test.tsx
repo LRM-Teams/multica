@@ -104,13 +104,13 @@ vi.mock("../../i18n/use-t", () => ({
             member_left: "{target} left this channel",
             issue: {
               actor_system: "Multica",
-              assigned: "{{actor}} 将任务 {issue} 指派给 {{target}}",
-              assigned_unknown: "{{actor}} 重新指派了任务 {issue}",
-              in_progress: "{{actor}} 将任务 {issue} 标记为处理中",
-              in_review: "{{actor}} 将任务 {issue} 提交审核",
-              done: "{{actor}} 完成了任务 {issue}",
-              updated: "{{actor}} 更新了任务 {issue}",
-              status: "{{actor}} 将任务 {issue} 标记为{{status}}",
+              assigned: "{{actor}} 将 Issue {issue} 指派给 {{target}}",
+              assigned_unknown: "{{actor}} 重新指派了 Issue {issue}",
+              in_progress: "{{actor}} 将 Issue {issue} 标记为处理中",
+              in_review: "{{actor}} 将 Issue {issue} 提交审核",
+              done: "{{actor}} 完成了 Issue {issue}",
+              updated: "{{actor}} 更新了 Issue {issue}",
+              status: "{{actor}} 将 Issue {issue} 标记为{{status}}",
             },
             issue_status: {
               backlog: "待办事项",
@@ -437,11 +437,11 @@ describe("IssueSystemEventContent", () => {
     actorType: "agent",
   };
 
-  it("renders the frozen 任务 copy with the issue ref as the SOLE link (item #7)", () => {
+  it("renders the frozen Issue copy with the issue ref as the SOLE link (item #7)", () => {
     render(<IssueSystemEventContent event={inProgressEvent} />);
 
-    // Canonical example: "后端工程师 将任务 LRM-137 标记为处理中".
-    expect(document.body.textContent).toBe("后端工程师 将任务 LRM-137 标记为处理中");
+    // Canonical example: "后端工程师 将 Issue LRM-137 标记为处理中".
+    expect(document.body.textContent).toBe("后端工程师 将 Issue LRM-137 标记为处理中");
 
     // The issue identifier is the one and only clickable token.
     const links = document.querySelectorAll("a");
@@ -449,19 +449,18 @@ describe("IssueSystemEventContent", () => {
     expect(links[0]).toHaveTextContent("LRM-137");
     expect(links[0]).toHaveAttribute("data-issue-ref", "");
 
-    // Zero internal words / raw enums leak into the copy.
+    // No raw enums leak into the copy.
     const text = document.body.textContent ?? "";
-    expect(text).not.toMatch(/issue/i);
     expect(text).not.toContain("in_progress");
     expect(text).not.toContain("移到");
   });
 
   it("maps each transition to its frozen action verb", () => {
     const cases: Array<[Partial<IssueSystemEvent>, string]> = [
-      [{ event: "issue_status_changed", issueStatus: "in_review" }, "后端工程师 将任务 LRM-137 提交审核"],
-      [{ event: "issue_completed", issueStatus: "done" }, "后端工程师 完成了任务 LRM-137"],
-      [{ event: "issue_status_changed", issueStatus: "done" }, "后端工程师 完成了任务 LRM-137"],
-      [{ event: "issue_status_changed", issueStatus: "blocked" }, "后端工程师 将任务 LRM-137 标记为已阻塞"],
+      [{ event: "issue_status_changed", issueStatus: "in_review" }, "后端工程师 将 Issue LRM-137 提交审核"],
+      [{ event: "issue_completed", issueStatus: "done" }, "后端工程师 完成了 Issue LRM-137"],
+      [{ event: "issue_status_changed", issueStatus: "done" }, "后端工程师 完成了 Issue LRM-137"],
+      [{ event: "issue_status_changed", issueStatus: "blocked" }, "后端工程师 将 Issue LRM-137 标记为已阻塞"],
     ];
     for (const [patch, expected] of cases) {
       const { unmount } = render(
@@ -480,7 +479,7 @@ describe("IssueSystemEventContent", () => {
     );
     const text = document.body.textContent ?? "";
     // Generic, status-less localized action…
-    expect(text).toBe("后端工程师 更新了任务 LRM-137");
+    expect(text).toBe("后端工程师 更新了 Issue LRM-137");
     // …and the raw enum never reaches the user face.
     expect(text).not.toContain("triaging_v2");
   });
@@ -501,7 +500,7 @@ describe("IssueSystemEventContent", () => {
         }}
       />,
     );
-    expect(document.body.textContent).toBe("后端工程师 将任务 LRM-137 指派给 Wendy");
+    expect(document.body.textContent).toBe("后端工程师 将 Issue LRM-137 指派给 Wendy");
     const links = document.querySelectorAll("a");
     expect(links).toHaveLength(1);
     expect(links[0]).toHaveTextContent("LRM-137");

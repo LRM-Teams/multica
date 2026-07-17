@@ -148,6 +148,7 @@ import {
 } from "@multica/ui/components/ui/alert-dialog";
 import { cn } from "@multica/ui/lib/utils";
 import { SidebarTrigger, useSidebarSafe } from "@multica/ui/components/ui/sidebar";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@multica/ui/components/ui/tabs";
 import { MobileListDetailLayout } from "../../common/mobile-list-detail-layout";
 import { ContentEditor, type ContentEditorRef, type ContentEditorProps } from "../../editor/content-editor";
 import { useNavigation } from "../../navigation/context";
@@ -2479,28 +2480,29 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
             )}
           />
               {/* #562 — channel main-content tab switch: Chat (message list) and
-                  Tasks (channel-scoped board), full-width in the main area. */}
-              <div className="flex shrink-0 items-center gap-1 border-b border-border/40 px-4">
-                {(["chat", "tasks"] as const).map((view) => (
-                  <button
-                    key={view}
-                    type="button"
-                    onClick={() => setChannelView(view)}
-                    className={cn(
-                      "relative -mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors",
-                      channelView === view
-                        ? "border-foreground text-foreground"
-                        : "border-transparent text-muted-foreground hover:text-foreground",
-                    )}
-                  >
-                    {t(($) => $.view_tabs[view])}
-                  </button>
-                ))}
-              </div>
-              {channelView === "tasks" ? (
-                <ChannelTasksBoard channelId={active.id} />
-              ) : (
-                <>
+                  Tasks (channel-scoped board), full-width in the main area. Uses
+                  the shared Tabs primitive so tablist/tab/tabpanel ARIA roles and
+                  arrow-key navigation come for free; extend by adding a sibling
+                  TabsTrigger + TabsContent for a new view. */}
+              <Tabs
+                value={channelView}
+                onValueChange={(value) => setChannelView(value as "chat" | "tasks")}
+                className="flex flex-1 min-h-0 flex-col gap-0"
+              >
+                <div className="shrink-0 border-b border-border/40 px-4">
+                  <TabsList variant="line" className="h-auto">
+                    <TabsTrigger value="chat" className="flex-none px-3 py-2">
+                      {t(($) => $.view_tabs.chat)}
+                    </TabsTrigger>
+                    <TabsTrigger value="tasks" className="flex-none px-3 py-2">
+                      {t(($) => $.view_tabs.tasks)}
+                    </TabsTrigger>
+                  </TabsList>
+                </div>
+                <TabsContent value="tasks" className="flex flex-1 min-h-0 flex-col text-base">
+                  <ChannelTasksBoard channelId={active.id} />
+                </TabsContent>
+                <TabsContent value="chat" className="flex flex-1 min-h-0 flex-col text-base">
               {convSearchOpen && (
                 <div
                   className={cn(
@@ -2750,8 +2752,8 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                   />
                 </>
               )}
-                </>
-              )}
+                </TabsContent>
+              </Tabs>
             </>
           )}
         </main>

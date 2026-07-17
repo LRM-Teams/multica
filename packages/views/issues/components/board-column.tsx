@@ -76,11 +76,10 @@ export const BoardColumn = memo(function BoardColumn({
   );
 
   return (
-    <div style={{ width: BOARD_COL_WIDTH }} className="flex shrink-0 flex-col">
-      <div className="mb-2 flex items-center justify-between px-1.5">
-        <BoardGroupHeading group={group} count={totalCount ?? issueIds.length} />
-
-        {/* Right: add + menu */}
+    <BoardColumnShell
+      heading={<BoardGroupHeading group={group} count={totalCount ?? issueIds.length} />}
+      actions={
+        /* Right: add + menu */
         <div className="flex items-center gap-1">
           {status && (
             <DropdownMenu>
@@ -121,7 +120,8 @@ export const BoardColumn = memo(function BoardColumn({
             <TooltipContent>{t(($) => $.board.add_issue_tooltip)}</TooltipContent>
           </Tooltip>
         </div>
-      </div>
+      }
+    >
       <div className="relative min-h-[200px] flex-1 rounded-lg">
         {isOver && sortLabel && (
           <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-background/40">
@@ -153,11 +153,40 @@ export const BoardColumn = memo(function BoardColumn({
           {footer}
         </div>
       </div>
-    </div>
+    </BoardColumnShell>
   );
 });
 
-function BoardStatusHeading({ status, count }: { status: IssueStatus; count: number }) {
+/**
+ * The presentational shell shared by the editable issues board column and the
+ * read-only channel Tasks board column (#562): the fixed-width column container
+ * plus the header row (heading on the left, optional actions on the right). The
+ * body — a drag surface or a plain read-only card stack — is the child. One
+ * definition keeps the two boards from drifting on column width / header
+ * spacing; it carries NO drag / view-store wiring, so consumers add that around
+ * it (the editable column wraps a droppable body, the channel board a scroller).
+ */
+export function BoardColumnShell({
+  heading,
+  actions,
+  children,
+}: {
+  heading: ReactNode;
+  actions?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <div style={{ width: BOARD_COL_WIDTH }} className="flex shrink-0 flex-col">
+      <div className="mb-2 flex items-center justify-between px-1.5">
+        {heading}
+        {actions}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+export function BoardStatusHeading({ status, count }: { status: IssueStatus; count: number }) {
   const { t } = useT("issues");
   return (
     <div className="flex min-w-0 items-center gap-2">

@@ -26,7 +26,24 @@ export const channelKeys = {
     ["channel-issues", channelId, params ?? {}] as const,
   issuesInfinite: (channelId: string, limit: number) =>
     ["channel-issues", channelId, "infinite", limit] as const,
+  // Prefix covering every channel Tasks board query (`issues` + `issuesInfinite`,
+  // all channels / page params) — the invalidation target for the issues CRUD /
+  // WS-event / reconnect path so a task change refreshes the channel board.
+  issuesRoot: () => ["channel-issues"] as const,
 };
+
+/**
+ * Invalidate every channel Tasks board query (#562), regardless of channel or
+ * page params. Wired into the issues CRUD mutations, the issue WS-event
+ * updaters, and the reconnect resync so the read-only channel Tasks board
+ * refetches whenever a task it shows is created / updated / status-changed /
+ * assigned / deleted. The board reads a separate `channel-issues` key family
+ * that the workspace-scoped `issueKeys` invalidations never reach, so it needs
+ * this explicit hook to stay fresh.
+ */
+export function invalidateChannelIssues(qc: QueryClient): void {
+  qc.invalidateQueries({ queryKey: channelKeys.issuesRoot() });
+}
 
 export function channelsOptions(wsId: string) {
   return queryOptions({

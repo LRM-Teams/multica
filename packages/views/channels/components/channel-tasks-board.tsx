@@ -8,13 +8,11 @@ import { BOARD_STATUSES } from "@multica/core/issues/config";
 import { createIssueViewStore } from "@multica/core/issues/stores/view-store";
 import { ViewStoreProvider } from "@multica/core/issues/stores/view-store-context";
 import { useWorkspacePaths } from "@multica/core/paths";
-import { cn } from "@multica/ui/lib/utils";
 import { Button } from "@multica/ui/components/ui/button";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { AppLink } from "../../navigation";
 import { BoardCardContent } from "../../issues/components/board-card";
-import { BOARD_STATUS_DOT } from "../../issues/components/board-status-dot";
-import { BOARD_COL_WIDTH } from "../../issues/components/board-column";
+import { BOARD_COL_WIDTH, BoardColumnShell, BoardStatusHeading } from "../../issues/components/board-column";
 import { buildBoardGroups, buildColumns } from "../../issues/utils/drag-utils";
 import { useT } from "../../i18n";
 
@@ -51,22 +49,22 @@ function ChannelTaskCard({ issue }: { issue: Issue }) {
 }
 
 /**
- * One horizontal status column: the board's status header (dot + localized
- * status label + count) reused via `BOARD_STATUS_DOT` and the issues `status`
- * locale, with its task cards stacked below at the real board column width.
+ * One horizontal status column, read-only: the board's shared shell +
+ * `BoardStatusHeading` (dot + localized status label + count) reused verbatim
+ * from the editable issues board, with its task cards stacked below at the real
+ * board column width. No drag / view-store wiring — just the presentational
+ * shell around a plain scroller of read-only cards.
  */
 function ChannelBoardColumn({ status, issues }: { status: IssueStatus; issues: Issue[] }) {
-  const { t } = useT("issues");
   const { t: tc } = useT("channels");
+  // useMemo the heading element so it isn't a fresh JSX node on every render
+  // (react:doctor `jsx-no-jsx-as-prop`).
+  const heading = useMemo(
+    () => <BoardStatusHeading status={status} count={issues.length} />,
+    [status, issues.length],
+  );
   return (
-    <div style={{ width: BOARD_COL_WIDTH }} className="flex shrink-0 flex-col">
-      <div className="mb-2 flex items-center gap-2 px-1.5">
-        <span className={cn("size-2 shrink-0 rounded-full", BOARD_STATUS_DOT[status])} />
-        <span className="truncate text-sm font-semibold text-foreground">{t(($) => $.status[status])}</span>
-        <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-muted-foreground">
-          {issues.length}
-        </span>
-      </div>
+    <BoardColumnShell heading={heading}>
       <div className="min-h-[200px] flex-1 space-y-2 overflow-y-auto rounded-lg p-1">
         {issues.length === 0 ? (
           <p className="py-8 text-center text-xs text-muted-foreground">{tc(($) => $.tasks.column_empty)}</p>
@@ -74,7 +72,7 @@ function ChannelBoardColumn({ status, issues }: { status: IssueStatus; issues: I
           issues.map((issue) => <ChannelTaskCard key={issue.id} issue={issue} />)
         )}
       </div>
-    </div>
+    </BoardColumnShell>
   );
 }
 

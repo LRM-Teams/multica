@@ -14,6 +14,7 @@ import {
   onIssueUpdated,
 } from "./ws-updaters";
 import { issueKeys } from "./queries";
+import { channelKeys } from "../channels/queries";
 import { labelKeys } from "../labels/queries";
 import { projectKeys } from "../projects/queries";
 import type {
@@ -535,5 +536,55 @@ describe("project gantt cache invalidation", () => {
   it("invalidates the project Gantt cache on issue:deleted", () => {
     onIssueDeleted(qc, WS_ID, ISSUE_ID);
     expectInvalidated(qc, issueKeys.projectGantt(WS_ID, PROJECT_ID));
+  });
+});
+
+// #562: the channel Tasks board reads a `channel-issues` key family that the
+// workspace-scoped issue invalidations never reach, so every issue CRUD WS
+// event must invalidate it explicitly or the board goes stale (Parker真机:
+// change a task's status → the channel board must reflect it).
+describe("channel Tasks board invalidation", () => {
+  const CHANNEL_ID = "channel-1";
+  let qc: QueryClient;
+
+  beforeEach(() => {
+    qc = new QueryClient();
+    // Seed both the paged and non-paged channel-issues caches so we can assert
+    // the shared `channel-issues` prefix is invalidated.
+    qc.setQueryData(channelKeys.issues(CHANNEL_ID), { issues: [], total: 0 });
+    qc.setQueryData(channelKeys.issuesInfinite(CHANNEL_ID, 100), {
+      pages: [{ issues: [], total: 0 }],
+      pageParams: [0],
+    });
+  });
+
+  function expectChannelIssuesInvalidated() {
+    expectInvalidated(qc, channelKeys.issues(CHANNEL_ID));
+    expectInvalidated(qc, channelKeys.issuesInfinite(CHANNEL_ID, 100));
+  }
+
+  it("invalidates the channel board on issue:created", () => {
+    onIssueCreated(qc, WS_ID, otherIssue);
+    expectChannelIssuesInvalidated();
+  });
+
+  it("invalidates the channel board on issue:updated (status change)", () => {
+    onIssueUpdated(qc, WS_ID, { id: ISSUE_ID, status: "done" });
+    expectChannelIssuesInvalidated();
+  });
+
+  it("invalidates the channel board on issue:deleted", () => {
+    onIssueDeleted(qc, WS_ID, ISSUE_ID);
+    expectChannelIssuesInvalidated();
+  });
+
+  it("invalidates the channel board on issue labels change", () => {
+    onIssueLabelsChanged(qc, WS_ID, ISSUE_ID, [labelB]);
+    expectChannelIssuesInvalidated();
+  });
+
+  it("invalidates the channel board on issue metadata change", () => {
+    onIssueMetadataChanged(qc, WS_ID, ISSUE_ID, { pr_number: 2 });
+    expectChannelIssuesInvalidated();
   });
 });

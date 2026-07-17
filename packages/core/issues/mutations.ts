@@ -9,6 +9,7 @@ import {
   type MyIssuesFilter,
 } from "./queries";
 import { projectKeys } from "../projects/queries";
+import { invalidateChannelIssues } from "../channels/queries";
 import {
   addIssueToBuckets,
   findIssueLocation,
@@ -204,6 +205,8 @@ export function useCreateIssue() {
       qc.invalidateQueries({ queryKey: issueKeys.myAssigneeGroupsAll(wsId) });
       qc.invalidateQueries({ queryKey: issueKeys.projectGanttAll(wsId) });
       qc.invalidateQueries({ queryKey: projectKeys.all(wsId) });
+      // Refresh the channel Tasks board (#562) if the new issue belongs to it.
+      invalidateChannelIssues(qc);
     },
   });
 }
@@ -323,6 +326,9 @@ export function useUpdateIssue() {
       if (ctx?.parentId || newParentId) {
         qc.invalidateQueries({ queryKey: issueKeys.childrenByParentsAll(wsId) });
       }
+      // A status / assignee / title change must reflect on the channel Tasks
+      // board (#562) — Parker真机: change a task's status → board updates.
+      invalidateChannelIssues(qc);
     },
   });
 }
@@ -392,6 +398,8 @@ export function useDeleteIssue() {
       qc.invalidateQueries({ queryKey: issueKeys.projectGanttAll(wsId) });
       qc.invalidateQueries({ queryKey: projectKeys.all(wsId) });
       if (ctx?.metadata) invalidateDeletedIssueParentCaches(qc, wsId, ctx.metadata);
+      // A deleted issue must drop off the channel Tasks board (#562).
+      invalidateChannelIssues(qc);
     },
   });
 }
@@ -469,6 +477,8 @@ export function useBatchUpdateIssues() {
         }
         qc.invalidateQueries({ queryKey: issueKeys.childProgress(wsId) });
       }
+      // Batched status / assignee edits must reflect on the channel board (#562).
+      invalidateChannelIssues(qc);
     },
   });
 }
@@ -580,6 +590,8 @@ export function useBatchDeleteIssues() {
           parentIssueIds: Array.from(ctx.parentIssueIds),
         });
       }
+      // Batched deletes must drop off the channel Tasks board (#562).
+      invalidateChannelIssues(qc);
     },
   });
 }

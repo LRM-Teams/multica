@@ -41,7 +41,41 @@ vi.mock("@multica/core/issues/stores/view-store-context", () => ({
 vi.mock("../../issues/components/board-card", () => ({
   BoardCardContent: ({ issue }: { issue: Issue }) => <span>{issue.title}</span>,
 }));
-vi.mock("../../issues/components/board-column", () => ({ BOARD_COL_WIDTH: 300 }));
+// Lightweight stand-ins for the shared presentational pieces (#3b): the real
+// editable `BoardColumn` pulls in dnd-kit / view-store / modals, so we mock the
+// module. `BoardStatusHeading` still uses the real `useT` so the localized
+// status header ("In Progress" / "Todo") is exercised end-to-end, and
+// `BoardColumnShell` renders heading + body like the real shell.
+vi.mock("../../issues/components/board-column", async () => {
+  const { useT } = await import("../../i18n");
+  return {
+    BOARD_COL_WIDTH: 300,
+    BoardColumnShell: ({
+      heading,
+      actions,
+      children,
+    }: {
+      heading: React.ReactNode;
+      actions?: React.ReactNode;
+      children: React.ReactNode;
+    }) => (
+      <div>
+        {heading}
+        {actions}
+        {children}
+      </div>
+    ),
+    BoardStatusHeading: ({ status, count }: { status: string; count: number }) => {
+      const { t } = useT("issues");
+      return (
+        <div>
+          <span>{t(($) => ($.status as Record<string, string>)[status] ?? status)}</span>
+          <span>{count}</span>
+        </div>
+      );
+    },
+  };
+});
 vi.mock("../../issues/components/board-status-dot", () => ({
   BOARD_STATUS_DOT: new Proxy({}, { get: () => "" }),
 }));

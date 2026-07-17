@@ -222,6 +222,18 @@ func (a *envSandboxLifecycleDepsAdapter) ForceDeleteSandboxInstance(ctx context.
 	return a.h.Queries.DeleteSandboxInstance(ctx, instUUID)
 }
 
+func (a *envSandboxLifecycleDepsAdapter) ForceDeleteSandboxRuntime(ctx context.Context, workspaceID, runtimeID string) error {
+	wsUUID, err := util.ParseUUID(workspaceID)
+	if err != nil {
+		return fmt.Errorf("parse workspace_id: %w", err)
+	}
+	runtimeUUID, err := util.ParseUUID(runtimeID)
+	if err != nil {
+		return fmt.Errorf("parse runtime_id: %w", err)
+	}
+	return a.h.Queries.DeleteAgentRuntimeForWorkspace(ctx, db.DeleteAgentRuntimeForWorkspaceParams{ID: runtimeUUID, WorkspaceID: wsUUID})
+}
+
 // ConfigureEphemeralSandboxManager wires the shared TaskService before any
 // request or background sweeper can reach a terminal task path.
 func ConfigureEphemeralSandboxManager(h *Handler) {

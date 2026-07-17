@@ -66,13 +66,15 @@ type sandboxJob struct {
 }
 
 type sandboxJobPayload struct {
-	Template   string            `json:"template"`
-	Limits     json.RawMessage   `json:"limits"`
-	Metadata   json.RawMessage   `json:"metadata"`
-	Runtime    map[string]string `json:"runtime"`
-	RuntimeEnv map[string]string `json:"runtime_env"`
-	InstanceID string            `json:"instance_id"`
-	LocalRef   string            `json:"local_ref"`
+	Template         string            `json:"template"`
+	Limits           json.RawMessage   `json:"limits"`
+	Metadata         json.RawMessage   `json:"metadata"`
+	Runtime          map[string]string `json:"runtime"`
+	RuntimeEnv       map[string]string `json:"runtime_env"`
+	InstanceID       string            `json:"instance_id"`
+	LocalRef         string            `json:"local_ref"`
+	SourceExternalID string            `json:"source_external_id"`
+	CreatePayload    json.RawMessage   `json:"create_payload"`
 }
 
 type cubeSandbox struct {
@@ -161,7 +163,7 @@ func (c *sandboxdClient) register(ctx context.Context) error {
 		"name":            c.cfg.Name,
 		"owner_user_id":   c.cfg.OwnerUserID,
 		"max_concurrency": c.cfg.Concurrency,
-		"capabilities":    []string{"create", "stop", "resume", "delete", "reconfigure"},
+		"capabilities":    []string{"create", "stop", "resume", "delete", "reconfigure", "clone"},
 		"metadata": map[string]any{
 			"cube_api_url":     c.cfg.SandboxServer,
 			"cube_proxy_http":  c.cfg.CubeProxyHTTP,
@@ -277,6 +279,8 @@ func (c *sandboxdClient) callCube(ctx context.Context, job sandboxJob) (map[stri
 	switch job.Type {
 	case "create":
 		return c.createCubeSandbox(ctx, job, payload)
+	case "clone":
+		return c.cloneCubeSandbox(ctx, job, payload)
 	case "stop":
 		return c.cubeLifecycle(ctx, sandboxID, "/pause", true)
 	case "resume":
@@ -288,6 +292,26 @@ func (c *sandboxdClient) callCube(ctx context.Context, job sandboxJob) (map[stri
 	default:
 		return nil, fmt.Errorf("unsupported sandbox job type %q", job.Type)
 	}
+}
+
+func (c *sandboxdClient) cloneCubeSandbox(ctx context.Context, job sandboxJob, payload sandboxJobPayload) (map[string]any, error) {
+	if payload.SourceExternalID == "" {
+		return nil, fmt.Errorf("clone job missing source_external_id")
+	}
+	var snapshot map[string]any
+	if err := c.cubeJSON(ctx, http.MethodPost, "/sandboxes/"+url.PathEscape(payload.SourceExternalID)+"/snapshots", map[string]any{}, "", &snapshot); err != nil {
+		return nil, err
+	}
+	snapshotID := firstNonEmpty(stringAny(snapshot["templateID"]), stringAny(snapshot["id"]), stringAny(snapshot["snapshotID"]))
+	if snapshotID == "" {
+		return nil, fmt.Errorf("cube snapshot response missing template id")
+	}
+	defer func() {
+		_ = c.cubeJSON(context.WithoutCancel(ctx), http.MethodDelete, "/templates/"+url.PathEscape(snapshotID), nil, "", nil)
+	}()
+	create := parseSandboxJobPayload(payload.CreatePayload)
+	create.Template = snapshotID
+	return c.createCubeSandbox(ctx, job, create)
 }
 
 func (c *sandboxdClient) createCubeSandbox(ctx context.Context, job sandboxJob, payload sandboxJobPayload) (map[string]any, error) {
@@ -593,6 +617,11 @@ func stringFromRawObject(raw json.RawMessage, key string) string {
 		return s
 	}
 	return ""
+}
+
+func stringAny(v any) string {
+	s, _ := v.(string)
+	return s
 }
 
 func intValueFromRaw(raw json.RawMessage, key string, fallback int) int {

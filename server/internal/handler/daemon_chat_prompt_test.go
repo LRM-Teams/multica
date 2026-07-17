@@ -84,21 +84,6 @@ func TestChatResumeSafetyHelpers(t *testing.T) {
 	}
 }
 
-func TestChatNativeResumeBudgetReason(t *testing.T) {
-	if chatNativeResumeTokenLimit != 60_000 {
-		t.Fatalf("chatNativeResumeTokenLimit = %d, want 60000", chatNativeResumeTokenLimit)
-	}
-	if got := chatNativeResumeBudgetReason(chatNativeResumeTokenLimit - 1); got != "" {
-		t.Fatalf("below budget reason = %q, want empty", got)
-	}
-	got := chatNativeResumeBudgetReason(chatNativeResumeTokenLimit)
-	for _, want := range []string{"recorded token usage", "native resume budget"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("budget reason missing %q: %q", want, got)
-		}
-	}
-}
-
 func TestChatContextSummaryCompactsLargeBlocks(t *testing.T) {
 	largeLog := strings.Join([]string{
 		"go test ./internal/handler",

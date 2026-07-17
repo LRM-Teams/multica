@@ -56,6 +56,18 @@ SET name = @name, updated_at = now()
 WHERE id = @id AND owner_user_id = @owner_user_id AND deleted_at IS NULL
 RETURNING id, node_key, owner_user_id, name, status, capabilities, max_concurrency, metadata, last_seen_at, deleted_at, created_at, updated_at;
 
+-- name: UpdateSandboxNodeDefaultTemplateForOwner :one
+UPDATE sandbox_node
+SET metadata = jsonb_set(
+        COALESCE(metadata, '{}'::jsonb),
+        '{cube_template_id}',
+        to_jsonb(@cube_template_id::text),
+        true
+    ),
+    updated_at = now()
+WHERE id = @id AND owner_user_id = @owner_user_id AND deleted_at IS NULL
+RETURNING id, node_key, owner_user_id, name, status, capabilities, max_concurrency, metadata, last_seen_at, deleted_at, created_at, updated_at;
+
 -- name: DeleteSandboxNodeForOwner :exec
 WITH deleted AS (
     UPDATE sandbox_node
@@ -274,3 +286,62 @@ RETURNING *;
 SELECT * FROM sandbox_job
 WHERE instance_id = $1
 ORDER BY created_at DESC;
+
+-- name: CreateSandboxSnapshot :one
+INSERT INTO sandbox_snapshot (
+    workspace_id, node_id, instance_id, creator_user_id,
+    cube_snapshot_id, name, description, status, metadata
+)
+VALUES (
+    @workspace_id, @node_id, @instance_id, @creator_user_id,
+    @cube_snapshot_id, @name, @description, @status, @metadata
+)
+RETURNING *;
+
+-- name: ListSandboxSnapshotsByNode :many
+SELECT *
+FROM sandbox_snapshot
+WHERE workspace_id = @workspace_id AND node_id = @node_id
+ORDER BY created_at DESC;
+
+-- name: GetSandboxSnapshotForWorkspace :one
+SELECT *
+FROM sandbox_snapshot
+WHERE id = @id AND workspace_id = @workspace_id;
+
+-- name: MarkSandboxSnapshotReady :one
+UPDATE sandbox_snapshot
+SET cube_snapshot_id = @cube_snapshot_id,
+    status = 'ready',
+    error = NULL,
+    updated_at = now()
+WHERE id = @id AND workspace_id = @workspace_id
+RETURNING *;
+
+-- name: MarkSandboxSnapshotFailed :one
+UPDATE sandbox_snapshot
+SET status = 'failed',
+    error = @error,
+    updated_at = now()
+WHERE id = @id AND workspace_id = @workspace_id
+RETURNING *;
+
+-- name: MarkSandboxSnapshotDeleting :one
+UPDATE sandbox_snapshot
+SET status = 'deleting',
+    error = NULL,
+    updated_at = now()
+WHERE id = @id AND workspace_id = @workspace_id
+RETURNING *;
+
+-- name: MarkSandboxSnapshotReadyAgain :one
+UPDATE sandbox_snapshot
+SET status = 'ready',
+    error = @error,
+    updated_at = now()
+WHERE id = @id AND workspace_id = @workspace_id
+RETURNING *;
+
+-- name: DeleteSandboxSnapshot :exec
+DELETE FROM sandbox_snapshot
+WHERE id = @id AND workspace_id = @workspace_id;

@@ -3,11 +3,26 @@ import {
   buildSandboxdConfigPath,
   buildSandboxdSetupCommand,
   effectiveSandboxNodeStatus,
+  resolveCreateSandboxTemplate,
   resolveSandboxdCubeSettings,
   SANDBOX_NODE_STALE_MS,
   SANDBOXD_PLACEHOLDER_TEMPLATE_ID,
   sanitizeSandboxdConfigSegment,
 } from "./utils";
+
+describe("resolveCreateSandboxTemplate", () => {
+  it("maps empty and default to default", () => {
+    expect(resolveCreateSandboxTemplate(undefined)).toBe("default");
+    expect(resolveCreateSandboxTemplate(null)).toBe("default");
+    expect(resolveCreateSandboxTemplate("")).toBe("default");
+    expect(resolveCreateSandboxTemplate("  default  ")).toBe("default");
+  });
+
+  it("passes through an explicit template id (override)", () => {
+    expect(resolveCreateSandboxTemplate("tpl-other")).toBe("tpl-other");
+    expect(resolveCreateSandboxTemplate("  tpl-same-as-default  ")).toBe("tpl-same-as-default");
+  });
+});
 
 describe("effectiveSandboxNodeStatus", () => {
   const now = Date.parse("2026-07-03T12:00:00.000Z");

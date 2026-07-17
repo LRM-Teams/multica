@@ -73,9 +73,9 @@ const (
 	// of headroom for the documented backlog without monopolising DB CPU.
 	queuedExpireBatchSize = 500
 	// sandboxNodeStaleThresholdSeconds mirrors handler/sandbox.go
-	// sandboxNodeStaleThreshold. sandboxd polls jobs every 5s; 30s marks a
-	// node offline after several missed polls.
-	sandboxNodeStaleThresholdSeconds = 30.0
+	// sandboxNodeStaleThreshold. sandboxd claims every ~5s and heartbeats
+	// every ~10s; 60s marks a node offline after several missed polls.
+	sandboxNodeStaleThresholdSeconds = 60.0
 )
 
 // runRuntimeSweeper periodically marks runtimes as offline if their

@@ -35,6 +35,8 @@ import type {
   User,
   UpdateAgentFileContentResponse,
   WebhookDelivery,
+  SandboxNodeTemplatesResponse,
+  SandboxSnapshot,
 } from "../types";
 import type { CloudRuntimeNode } from "../runtimes/cloud-runtime";
 
@@ -1692,4 +1694,59 @@ export const CreateBillingPortalSessionResponseSchema = z.object({
 
 export const EMPTY_CREATE_BILLING_PORTAL_SESSION_RESPONSE: CreateBillingPortalSessionResponse = {
   url: "",
+};
+
+export const SandboxTemplateSchema = z.object({
+  template_id: z.string(),
+  status: z.string().default("unknown"),
+  created_at: z.string().optional(),
+  image_info: z.string().optional(),
+  instance_type: z.string().optional(),
+  last_error: z.string().optional(),
+  version: z.string().optional(),
+  job_id: z.string().optional(),
+  is_default: z.boolean().optional(),
+}).loose();
+
+export const SandboxNodeTemplatesResponseSchema = z.object({
+  templates: z.array(SandboxTemplateSchema).default([]),
+  default_template_id: z.string().optional(),
+  synced_at: z.string().optional(),
+  node_online: z.boolean().optional(),
+}).loose();
+
+export const EMPTY_SANDBOX_NODE_TEMPLATES_RESPONSE: SandboxNodeTemplatesResponse = {
+  templates: [],
+  default_template_id: "",
+  synced_at: "",
+  node_online: false,
+};
+
+export const SandboxSnapshotSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string().default(""),
+  node_id: z.string().default(""),
+  instance_id: z.string().optional(),
+  creator_user_id: z.string().optional(),
+  cube_snapshot_id: z.string().default(""),
+  name: z.string().default(""),
+  description: z.string().default(""),
+  status: z.string().default("creating"),
+  error: z.string().optional(),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+}).loose();
+
+export const SandboxSnapshotListSchema = z.array(SandboxSnapshotSchema);
+
+export const EMPTY_SANDBOX_SNAPSHOT: SandboxSnapshot = {
+  id: "",
+  workspace_id: "",
+  node_id: "",
+  cube_snapshot_id: "",
+  name: "",
+  description: "",
+  status: "creating",
+  created_at: "",
+  updated_at: "",
 };

@@ -1,7 +1,14 @@
 import type { SandboxInstance, SandboxNodeStatus } from "../types";
 
-/** Must stay in sync with sandboxNodeStaleThreshold in server/internal/handler/sandbox.go */
-export const SANDBOX_NODE_STALE_MS = 30_000;
+/**
+ * Server/job liveness window. Must stay in sync with
+ * sandboxNodeStaleThreshold in server/internal/handler/sandbox.go.
+ *
+ * UI code should prefer the API's already-computed status field. Re-applying
+ * this window against a cached last_seen_at (plus a local clock tick) falsely
+ * flips nodes offline between refetches.
+ */
+export const SANDBOX_NODE_STALE_MS = 60_000;
 
 export function effectiveSandboxNodeStatus(
   status: SandboxNodeStatus,
@@ -43,6 +50,28 @@ export function sandboxRuntime(instance: SandboxInstance): {
 export function defaultSandboxName(): string {
   const suffix = Math.random().toString(36).slice(2, 8);
   return `sandbox-${suffix}`;
+}
+
+/** Default name offered when creating a Cube snapshot template from an instance. */
+export function defaultSandboxSnapshotName(instance: SandboxInstance): string {
+  const base = sandboxDisplayName(instance).trim() || "sandbox";
+  const stamp = new Date().toISOString().slice(0, 16).replace("T", "-").replace(":", "");
+  return `${base}-snap-${stamp}`;
+}
+
+/**
+ * Resolve the `template` field for POST /api/sandboxes.
+ *
+ * - Empty / `"default"` → `"default"` (sandboxd uses the node's configured cube_template_id).
+ * - Any other non-empty value → pass through as an explicit Cube template ID override
+ *   (higher priority than the node default, even when it equals the current default).
+ */
+export function resolveCreateSandboxTemplate(selected: string | undefined | null): string {
+  const trimmed = (selected ?? "").trim();
+  if (!trimmed || trimmed === "default") {
+    return "default";
+  }
+  return trimmed;
 }
 
 /** Sanitize a segment for use in a sandboxd config filename. */

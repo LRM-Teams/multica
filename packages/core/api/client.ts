@@ -166,6 +166,9 @@ import type {
   SandboxBinding,
   SandboxInstance,
   SandboxJob,
+  SandboxNodeTemplatesResponse,
+  SandboxSnapshot,
+  CreateSandboxSnapshotRequest,
   CreateSandboxRequest,
   UpdateSandboxRequest,
 } from "../types";
@@ -261,6 +264,8 @@ import {
   EMPTY_CREATE_BILLING_CHECKOUT_SESSION_RESPONSE,
   EMPTY_BILLING_CHECKOUT_SESSION_STATUS,
   EMPTY_CREATE_BILLING_PORTAL_SESSION_RESPONSE,
+  EMPTY_SANDBOX_NODE_TEMPLATES_RESPONSE,
+  EMPTY_SANDBOX_SNAPSHOT,
   EMPTY_CANCEL_TASK_RESPONSE,
   EMPTY_EVOLUTION_METRICS,
   EMPTY_EVOLUTION_REVIEW_SUBMISSION_LIST,
@@ -276,6 +281,9 @@ import {
   MemoryCurationRunDetailSchema,
   MemoryCuratorProfileSchema,
   StartMemoryCurationRunResponseSchema,
+  SandboxNodeTemplatesResponseSchema,
+  SandboxSnapshotSchema,
+  SandboxSnapshotListSchema,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -1690,7 +1698,10 @@ export class ApiClient {
     });
   }
 
-  async updateSandboxNode(nodeId: string, data: { name: string }): Promise<SandboxNode> {
+  async updateSandboxNode(
+    nodeId: string,
+    data: { name?: string; default_template_id?: string },
+  ): Promise<SandboxNode> {
     return this.fetch(`/api/sandbox/nodes/${nodeId}`, {
       method: "PATCH",
       body: JSON.stringify(data),
@@ -1706,6 +1717,16 @@ export class ApiClient {
       method: "POST",
       body: JSON.stringify(data),
     });
+  }
+
+  async listSandboxNodeTemplates(nodeId: string): Promise<SandboxNodeTemplatesResponse> {
+    const raw = await this.fetch(`/api/sandbox/nodes/${nodeId}/templates`);
+    return parseWithFallback(
+      raw,
+      SandboxNodeTemplatesResponseSchema,
+      EMPTY_SANDBOX_NODE_TEMPLATES_RESPONSE,
+      { endpoint: `GET /api/sandbox/nodes/${nodeId}/templates` },
+    );
   }
 
   async listSandboxBindings(workspaceId: string): Promise<SandboxBinding[]> {
@@ -1751,6 +1772,30 @@ export class ApiClient {
 
   async deleteSandbox(instanceId: string): Promise<void> {
     await this.fetch(`/api/sandboxes/${instanceId}`, { method: "DELETE" });
+  }
+
+  async createSandboxTemplate(
+    instanceId: string,
+    data: CreateSandboxSnapshotRequest,
+  ): Promise<SandboxSnapshot> {
+    const raw = await this.fetch(`/api/sandboxes/${instanceId}/create-template`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, SandboxSnapshotSchema, EMPTY_SANDBOX_SNAPSHOT, {
+      endpoint: `POST /api/sandboxes/${instanceId}/create-template`,
+    });
+  }
+
+  async listSandboxNodeSnapshots(nodeId: string): Promise<SandboxSnapshot[]> {
+    const raw = await this.fetch(`/api/sandbox/nodes/${nodeId}/snapshots`);
+    return parseWithFallback(raw, SandboxSnapshotListSchema, [], {
+      endpoint: `GET /api/sandbox/nodes/${nodeId}/snapshots`,
+    });
+  }
+
+  async deleteSandboxSnapshot(snapshotId: string): Promise<void> {
+    await this.fetch(`/api/sandbox/snapshots/${snapshotId}`, { method: "DELETE" });
   }
 
   // Members

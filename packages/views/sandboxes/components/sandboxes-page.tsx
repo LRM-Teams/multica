@@ -1,28 +1,47 @@
 "use client";
 
-import { useEffect, useMemo, useReducer, useState } from "react";
+import { useMemo, useReducer, useState } from "react";
 import { useDefaultLayout } from "react-resizable-panels";
-import { Box, Check, Copy, FileCode2, Loader2, Monitor, Plus, RotateCcw, Search, Server, Square, Trash2 } from "lucide-react";
+import {
+  Box,
+  Camera,
+  FileCode2,
+  Layers,
+  Loader2,
+  Monitor,
+  Plus,
+  RotateCcw,
+  Search,
+  Server,
+  Square,
+  Trash2,
+} from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   useCreateSandboxMutation,
+  useCreateSandboxTemplateMutation,
   useDeleteSandboxMutation,
   useResumeSandboxMutation,
   useStopSandboxMutation,
 } from "@multica/core/sandboxes/mutations";
-import { sandboxBindingListOptions, sandboxKeys, sandboxListOptions } from "@multica/core/sandboxes/queries";
 import {
-  buildSandboxdConfigPath,
-  buildSandboxdSetupCommand,
+  sandboxBindingListOptions,
+  sandboxKeys,
+  sandboxListOptions,
+  sandboxNodeTemplatesOptions,
+} from "@multica/core/sandboxes/queries";
+import {
   defaultSandboxName,
-  effectiveSandboxNodeStatus,
+  defaultSandboxSnapshotName,
+  resolveCreateSandboxTemplate,
   sandboxDisplayName,
 } from "@multica/core/sandboxes/utils";
-import type { SandboxBinding, SandboxInstance } from "@multica/core/types";
-import { useRequiredWorkspaceSlug, useWorkspacePaths } from "@multica/core/paths";
+import type { SandboxBinding, SandboxInstance, SandboxSnapshot } from "@multica/core/types";
+import { useWorkspacePaths } from "@multica/core/paths";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
+import { Textarea } from "@multica/ui/components/ui/textarea";
 import { Badge } from "@multica/ui/components/ui/badge";
 import {
   Dialog,
@@ -33,6 +52,16 @@ import {
   DialogTitle,
 } from "@multica/ui/components/ui/dialog";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@multica/ui/components/ui/alert-dialog";
+import {
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
@@ -40,74 +69,26 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@multica/ui/components/ui/select";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
-import { copyText } from "@multica/ui/lib/clipboard";
 import { cn } from "@multica/ui/lib/utils";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { useAuthStore } from "@multica/core/auth";
 import { api } from "@multica/core/api";
 import { toast } from "sonner";
 import { PageHeader } from "../../layout/page-header";
 import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n/use-t";
+import { NodeTemplatesPanel } from "./node-templates-panel";
+import { NodeSnapshotsPanel } from "./node-snapshots-panel";
 
-type AddNodeState = {
-  dialogOpen: boolean;
-  setupCommand: string;
-  setupConfigPath: string;
-  setupCopied: boolean;
-  creating: boolean;
-  viewingSetupNodeId: string | null;
-};
-
-type AddNodeAction =
-  | { type: "startCreating" }
-  | { type: "startViewing"; nodeId: string }
-  | { type: "setupReady"; command: string; configPath: string }
-  | { type: "setupFailed" }
-  | { type: "setDialogOpen"; open: boolean }
-  | { type: "copySuccess" }
-  | { type: "copyReset" };
-
-const initialAddNodeState: AddNodeState = {
-  dialogOpen: false,
-  setupCommand: "",
-  setupConfigPath: "",
-  setupCopied: false,
-  creating: false,
-  viewingSetupNodeId: null,
-};
-
-function addNodeReducer(state: AddNodeState, action: AddNodeAction): AddNodeState {
-  switch (action.type) {
-    case "startCreating":
-      return { ...state, creating: true, viewingSetupNodeId: null, setupCopied: false };
-    case "startViewing":
-      return { ...state, creating: false, viewingSetupNodeId: action.nodeId, setupCopied: false };
-    case "setupReady":
-      return {
-        ...state,
-        creating: false,
-        viewingSetupNodeId: null,
-        setupCommand: action.command,
-        setupConfigPath: action.configPath,
-        dialogOpen: true,
-      };
-    case "setupFailed":
-      return { ...state, creating: false, viewingSetupNodeId: null };
-    case "setDialogOpen":
-      return { ...state, dialogOpen: action.open };
-    case "copySuccess":
-      return { ...state, setupCopied: true };
-    case "copyReset":
-      return { ...state, setupCopied: false };
-    default:
-      return state;
-  }
-}
+type NodeDetailTab = "sandboxes" | "templates" | "snapshots";
 
 type CreateFormState = {
   name: string;
   nodeId: string;
+  /** "default" = node configured template; otherwise an explicit Cube template id. */
+  templateId: string;
+  /** When true, template (and node) are fixed — e.g. create from a snapshot. */
+  templateLocked: boolean;
+  lockedTemplateLabel: string;
   apiKey: string;
   baseUrl: string;
   model: string;
@@ -117,6 +98,22 @@ function buildDefaultCreateForm(nodeId: string): CreateFormState {
   return {
     name: defaultSandboxName(),
     nodeId,
+    templateId: "default",
+    templateLocked: false,
+    lockedTemplateLabel: "",
+    apiKey: "",
+    baseUrl: "",
+    model: "",
+  };
+}
+
+function buildCreateFormFromSnapshot(snapshot: SandboxSnapshot): CreateFormState {
+  return {
+    name: defaultSandboxName(),
+    nodeId: snapshot.node_id,
+    templateId: snapshot.cube_snapshot_id.trim(),
+    templateLocked: true,
+    lockedTemplateLabel: snapshot.name.trim() || snapshot.cube_snapshot_id,
     apiKey: "",
     baseUrl: "",
     model: "",
@@ -134,26 +131,79 @@ function buildRuntimePayload(form: Pick<CreateFormState, "apiKey" | "baseUrl" | 
   return runtime;
 }
 
-function useNowTick(intervalMs = 10_000): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), intervalMs);
-    return () => clearInterval(id);
-  }, [intervalMs]);
-  return now;
+type PageUiState = {
+  nodeSearch: string;
+  selectedNodeId: string | null;
+  createDialogOpen: boolean;
+  createForm: CreateFormState;
+  deleteConfirmInstance: SandboxInstance | null;
+  snapshotInstance: SandboxInstance | null;
+  snapshotName: string;
+  snapshotDescription: string;
+  creatingNode: boolean;
+};
+
+type PageUiAction =
+  | { type: "set_node_search"; value: string }
+  | { type: "set_selected_node"; value: string | null }
+  | { type: "open_create"; form: CreateFormState }
+  | { type: "set_create_open"; open: boolean }
+  | { type: "patch_create_form"; patch: Partial<CreateFormState> }
+  | { type: "set_delete_confirm"; instance: SandboxInstance | null }
+  | { type: "open_snapshot"; instance: SandboxInstance }
+  | { type: "close_snapshot" }
+  | { type: "set_snapshot_name"; value: string }
+  | { type: "set_snapshot_description"; value: string }
+  | { type: "set_creating_node"; value: boolean };
+
+function pageUiReducer(state: PageUiState, action: PageUiAction): PageUiState {
+  switch (action.type) {
+    case "set_node_search":
+      return { ...state, nodeSearch: action.value };
+    case "set_selected_node":
+      return { ...state, selectedNodeId: action.value };
+    case "open_create":
+      return { ...state, createDialogOpen: true, createForm: action.form };
+    case "set_create_open":
+      return { ...state, createDialogOpen: action.open };
+    case "patch_create_form":
+      return { ...state, createForm: { ...state.createForm, ...action.patch } };
+    case "set_delete_confirm":
+      return { ...state, deleteConfirmInstance: action.instance };
+    case "open_snapshot":
+      return {
+        ...state,
+        snapshotInstance: action.instance,
+        snapshotName: defaultSandboxSnapshotName(action.instance),
+        snapshotDescription: "",
+      };
+    case "close_snapshot":
+      return { ...state, snapshotInstance: null };
+    case "set_snapshot_name":
+      return { ...state, snapshotName: action.value };
+    case "set_snapshot_description":
+      return { ...state, snapshotDescription: action.value };
+    case "set_creating_node":
+      return { ...state, creatingNode: action.value };
+    default:
+      return state;
+  }
 }
 
-function bindingWithEffectiveStatus(binding: SandboxBinding, now: number): SandboxBinding {
-  return {
-    ...binding,
-    node_status: effectiveSandboxNodeStatus(binding.node_status, binding.node_last_seen_at, now),
-  };
-}
+const initialPageUiState: PageUiState = {
+  nodeSearch: "",
+  selectedNodeId: null,
+  createDialogOpen: false,
+  createForm: buildDefaultCreateForm(""),
+  deleteConfirmInstance: null,
+  snapshotInstance: null,
+  snapshotName: "",
+  snapshotDescription: "",
+  creatingNode: false,
+};
 
 export function SandboxesPage() {
   const wsId = useWorkspaceId();
-  const workspaceSlug = useRequiredWorkspaceSlug();
-  const user = useAuthStore((s) => s.user);
   const paths = useWorkspacePaths();
   const navigation = useNavigation();
   const { t } = useT("layout");
@@ -163,26 +213,29 @@ export function SandboxesPage() {
     id: "multica_sandboxes_layout",
   });
 
-  const [nodeSearch, setNodeSearch] = useState("");
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [createDialogOpen, setCreateDialogOpen] = useState(false);
-  const [createForm, setCreateForm] = useState<CreateFormState>(() => buildDefaultCreateForm(""));
-  const [addNode, dispatchAddNode] = useReducer(addNodeReducer, initialAddNodeState);
-  const { dialogOpen: addDialogOpen, setupCommand, setupConfigPath, setupCopied, creating: creatingNode, viewingSetupNodeId } = addNode;
-
-  const now = useNowTick();
+  const [ui, dispatch] = useReducer(pageUiReducer, initialPageUiState);
+  const {
+    nodeSearch,
+    selectedNodeId,
+    createDialogOpen,
+    createForm,
+    deleteConfirmInstance,
+    snapshotInstance,
+    snapshotName,
+    snapshotDescription,
+    creatingNode,
+  } = ui;
 
   const { data: instances = [], isLoading } = useQuery(sandboxListOptions(wsId));
   const { data: bindings = [], isLoading: bindingsLoading } = useQuery(sandboxBindingListOptions(wsId));
 
-  const connectedBindings = useMemo(() => {
-    const result: SandboxBinding[] = [];
-    for (const binding of bindings) {
-      if (!binding.enabled) continue;
-      result.push(bindingWithEffectiveStatus(binding, now));
-    }
-    return result;
-  }, [bindings, now]);
+  // Trust the API's already-computed node_status. Re-deriving from cached
+  // last_seen_at with a local clock tick caused false offline flaps between
+  // refetches even while sandboxd kept heartbeating.
+  const connectedBindings = useMemo(
+    () => bindings.filter((binding) => binding.enabled),
+    [bindings],
+  );
   const hasConnectedNode = connectedBindings.length > 0;
 
   const instancesByNode = useMemo(() => {
@@ -225,78 +278,81 @@ export function SandboxesPage() {
     : [];
 
   const canCreate =
-    createForm.name.trim().length > 0 && createForm.nodeId.length > 0;
+    createForm.name.trim().length > 0 &&
+    createForm.nodeId.length > 0 &&
+    (!createForm.templateLocked || createForm.templateId.length > 0);
 
   const create = useCreateSandboxMutation(wsId);
   const stop = useStopSandboxMutation(wsId);
   const resume = useResumeSandboxMutation(wsId);
   const del = useDeleteSandboxMutation(wsId);
+  const createTemplate = useCreateSandboxTemplateMutation(wsId);
+
+  const openSnapshotDialog = (instance: SandboxInstance) => {
+    dispatch({ type: "open_snapshot", instance });
+  };
+
+  const handleCreateTemplate = async () => {
+    if (!snapshotInstance) return;
+    const name = snapshotName.trim();
+    if (!name) return;
+    try {
+      await createTemplate.mutateAsync({
+        instanceId: snapshotInstance.id,
+        name,
+        description: snapshotDescription.trim(),
+      });
+      dispatch({ type: "close_snapshot" });
+      toast.success(t(($) => $.sandboxes_page.create_template_success));
+    } catch (e) {
+      toast.error(
+        e instanceof Error ? e.message : t(($) => $.sandboxes_page.create_template_failed),
+      );
+    }
+  };
+
+  const {
+    data: createTemplatesData,
+    isLoading: createTemplatesLoading,
+    error: createTemplatesError,
+  } = useQuery({
+    ...sandboxNodeTemplatesOptions(createForm.nodeId),
+    enabled: createDialogOpen && !!createForm.nodeId,
+  });
+  const createDefaultTemplateId = createTemplatesData?.default_template_id?.trim() ?? "";
+  const createTemplateOptions = useMemo(() => {
+    const templates = createTemplatesData?.templates ?? [];
+    if (!createDefaultTemplateId) return templates;
+    return templates.filter((item) => item.template_id !== createDefaultTemplateId);
+  }, [createTemplatesData?.templates, createDefaultTemplateId]);
 
   const openCreateDialog = () => {
-    setCreateForm(buildDefaultCreateForm(selectedBinding?.node_id ?? connectedBindings[0]?.node_id ?? ""));
-    setCreateDialogOpen(true);
+    dispatch({
+      type: "open_create",
+      form: buildDefaultCreateForm(selectedBinding?.node_id ?? connectedBindings[0]?.node_id ?? ""),
+    });
+  };
+
+  const openCreateFromSnapshot = (snapshot: SandboxSnapshot) => {
+    dispatch({ type: "open_create", form: buildCreateFormFromSnapshot(snapshot) });
   };
 
   const handleAddNode = async () => {
-    dispatchAddNode({ type: "startCreating" });
+    dispatch({ type: "set_creating_node", value: true });
     try {
       const suffix = Math.random().toString(36).slice(2, 8);
       const node = await api.createSandboxNode({ name: `sandboxd-${suffix}` });
-      const token = await api.createSandboxNodeToken(node.id, { name: "sandboxd setup" });
       await api.bindSandboxNode(wsId, { node_id: node.id });
-      await queryClient.invalidateQueries({ queryKey: sandboxKeys.bindings(wsId) });
-      const serverUrl = api.getBaseUrl?.() || window.location.origin;
-      const { command, configPath } = buildSandboxdSetupCommand({
-        serverUrl,
-        nodeToken: token.token,
-        nodeKey: node.node_key,
-        name: node.name,
-        ownerUserId: node.owner_user_id || node.node_key,
-        workspaceSlug,
-        userName: user?.name,
-        userEmail: user?.email,
-        userId: user?.id,
-      });
-      dispatchAddNode({ type: "setupReady", command, configPath });
+      // Invalidate in the background; navigation does not need to wait.
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: sandboxKeys.bindings(wsId) }),
+        queryClient.invalidateQueries({ queryKey: sandboxKeys.nodes() }),
+      ]);
+      navigation.push(paths.sandboxNodeSetup(node.id));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : t(($) => $.sandboxes_page.add_node_failed));
-      dispatchAddNode({ type: "setupFailed" });
-    }
-  };
-
-  const handleViewNodeSetup = async (nodeId: string) => {
-    dispatchAddNode({ type: "startViewing", nodeId });
-    try {
-      const nodes = await api.listSandboxNodes();
-      const node = nodes.find((item) => item.id === nodeId);
-      if (!node) {
-        throw new Error(t(($) => $.sandboxes_page.view_setup_not_found));
-      }
-      const token = await api.createSandboxNodeToken(node.id, { name: "sandboxd setup" });
-      const serverUrl = api.getBaseUrl?.() || window.location.origin;
-      const { command, configPath } = buildSandboxdSetupCommand({
-        serverUrl,
-        nodeToken: token.token,
-        nodeKey: node.node_key,
-        name: node.name,
-        ownerUserId: node.owner_user_id || node.node_key,
-        workspaceSlug,
-        userName: user?.name,
-        userEmail: user?.email,
-        userId: user?.id,
-        metadata: node.metadata,
-      });
-      dispatchAddNode({ type: "setupReady", command, configPath });
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : t(($) => $.sandboxes_page.view_setup_failed));
-      dispatchAddNode({ type: "setupFailed" });
-    }
-  };
-
-  const handleCopySetup = async () => {
-    if (await copyText(setupCommand)) {
-      dispatchAddNode({ type: "copySuccess" });
-      setTimeout(() => dispatchAddNode({ type: "copyReset" }), 2000);
+    } finally {
+      dispatch({ type: "set_creating_node", value: false });
     }
   };
 
@@ -307,11 +363,11 @@ export function SandboxesPage() {
       await create.mutateAsync({
         name: createForm.name.trim(),
         node_id: createForm.nodeId,
-        template: "default",
+        template: resolveCreateSandboxTemplate(createForm.templateId),
         ...(Object.keys(runtime).length > 0 ? { runtime } : {}),
       });
-      setCreateDialogOpen(false);
-      setSelectedNodeId(createForm.nodeId);
+      dispatch({ type: "set_create_open", open: false });
+      dispatch({ type: "set_selected_node", value: createForm.nodeId });
       toast.success(t(($) => $.sandboxes_page.create_success));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : t(($) => $.sandboxes_page.create_failed));
@@ -352,25 +408,29 @@ export function SandboxesPage() {
             bindings={filteredBindings}
             selectedNodeId={resolvedNodeId}
             search={nodeSearch}
-            setSearch={setNodeSearch}
+            setSearch={(value) => dispatch({ type: "set_node_search", value })}
             instancesByNode={instancesByNode}
-            onSelect={setSelectedNodeId}
+            onSelect={(value) => dispatch({ type: "set_selected_node", value })}
           />
           <NodeDetail
             binding={selectedBinding}
             instances={selectedInstances}
             onCreate={openCreateDialog}
+            onCreateFromSnapshot={openCreateFromSnapshot}
             onViewSetup={() => {
-              if (selectedBinding) void handleViewNodeSetup(selectedBinding.node_id);
+              if (selectedBinding) navigation.push(paths.sandboxNodeSetup(selectedBinding.node_id));
             }}
-            viewingSetup={viewingSetupNodeId === selectedBinding?.node_id}
             stoppingId={stop.isPending ? stop.variables : undefined}
             resumingId={resume.isPending ? resume.variables : undefined}
             deletingId={del.isPending ? del.variables : undefined}
+            creatingTemplateId={
+              createTemplate.isPending ? createTemplate.variables?.instanceId : undefined
+            }
             onOpen={(instanceId) => navigation.push(paths.sandboxDetail(instanceId))}
             onStop={(instanceId) => stop.mutate(instanceId)}
             onResume={(instanceId) => resume.mutate(instanceId)}
-            onDelete={(instanceId) => del.mutate(instanceId)}
+            onCreateTemplate={openSnapshotDialog}
+            onDelete={(instance) => dispatch({ type: "set_delete_confirm", instance })}
           />
         </div>
       ) : (
@@ -392,9 +452,9 @@ export function SandboxesPage() {
                 bindings={filteredBindings}
                 selectedNodeId={resolvedNodeId}
                 search={nodeSearch}
-                setSearch={setNodeSearch}
+                setSearch={(value) => dispatch({ type: "set_node_search", value })}
                 instancesByNode={instancesByNode}
-                onSelect={setSelectedNodeId}
+                onSelect={(value) => dispatch({ type: "set_selected_node", value })}
                 className="h-full border-b-0 border-r"
               />
             </ResizablePanel>
@@ -404,28 +464,43 @@ export function SandboxesPage() {
                 binding={selectedBinding}
                 instances={selectedInstances}
                 onCreate={openCreateDialog}
+                onCreateFromSnapshot={openCreateFromSnapshot}
                 onViewSetup={() => {
-                  if (selectedBinding) void handleViewNodeSetup(selectedBinding.node_id);
+                  if (selectedBinding) navigation.push(paths.sandboxNodeSetup(selectedBinding.node_id));
                 }}
-                viewingSetup={viewingSetupNodeId === selectedBinding?.node_id}
                 stoppingId={stop.isPending ? stop.variables : undefined}
                 resumingId={resume.isPending ? resume.variables : undefined}
                 deletingId={del.isPending ? del.variables : undefined}
+                creatingTemplateId={
+                  createTemplate.isPending ? createTemplate.variables?.instanceId : undefined
+                }
                 onOpen={(instanceId) => navigation.push(paths.sandboxDetail(instanceId))}
                 onStop={(instanceId) => stop.mutate(instanceId)}
                 onResume={(instanceId) => resume.mutate(instanceId)}
-                onDelete={(instanceId) => del.mutate(instanceId)}
+                onCreateTemplate={openSnapshotDialog}
+                onDelete={(instance) => dispatch({ type: "set_delete_confirm", instance })}
               />
             </ResizablePanel>
           </ResizablePanelGroup>
         </div>
       )}
 
-      <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
+      <Dialog
+        open={createDialogOpen}
+        onOpenChange={(open) => dispatch({ type: "set_create_open", open })}
+      >
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>{t(($) => $.sandboxes_page.create_dialog_title)}</DialogTitle>
-            <DialogDescription>{t(($) => $.sandboxes_page.create_dialog_description)}</DialogDescription>
+            <DialogTitle>
+              {createForm.templateLocked
+                ? t(($) => $.sandboxes_page.create_from_snapshot_dialog_title)
+                : t(($) => $.sandboxes_page.create_dialog_title)}
+            </DialogTitle>
+            <DialogDescription>
+              {createForm.templateLocked
+                ? t(($) => $.sandboxes_page.create_from_snapshot_dialog_description)
+                : t(($) => $.sandboxes_page.create_dialog_description)}
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
@@ -433,26 +508,96 @@ export function SandboxesPage() {
               <Input
                 id="sandbox-name"
                 value={createForm.name}
-                onChange={(e) => setCreateForm((current) => ({ ...current, name: e.target.value }))}
+                onChange={(e) =>
+                  dispatch({ type: "patch_create_form", patch: { name: e.target.value } })
+                }
               />
             </div>
             <div className="space-y-2">
               <Label>{t(($) => $.sandboxes_page.node_label)}</Label>
-              <Select
-                value={createForm.nodeId}
-                onValueChange={(value) => setCreateForm((current) => ({ ...current, nodeId: value ?? "" }))}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder={t(($) => $.sandboxes_page.select_node_placeholder)} />
-                </SelectTrigger>
-                <SelectContent>
-                  {connectedBindings.map((binding) => (
-                    <SelectItem key={binding.id} value={binding.node_id}>
-                      {binding.node_name} ({binding.node_status})
+              {createForm.templateLocked ? (
+                <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
+                  {connectedBindings.find((b) => b.node_id === createForm.nodeId)?.node_name ??
+                    createForm.nodeId}
+                </div>
+              ) : (
+                <Select
+                  value={createForm.nodeId}
+                  onValueChange={(value) =>
+                    dispatch({
+                      type: "patch_create_form",
+                      patch: { nodeId: value ?? "", templateId: "default" },
+                    })
+                  }
+                >
+                  <SelectTrigger className="h-9 w-full min-w-0">
+                    <SelectValue placeholder={t(($) => $.sandboxes_page.select_node_placeholder)} />
+                  </SelectTrigger>
+                  <SelectContent alignItemWithTrigger className="min-w-(--anchor-width)">
+                    {connectedBindings.map((binding) => (
+                      <SelectItem key={binding.id} value={binding.node_id}>
+                        {binding.node_name} ({binding.node_status})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
+            <div className="space-y-2">
+              <Label>{t(($) => $.sandboxes_page.create_template_label)}</Label>
+              {createForm.templateLocked ? (
+                <div className="space-y-1">
+                  <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
+                    <div className="font-medium">{createForm.lockedTemplateLabel}</div>
+                    <div className="mt-0.5 break-all font-mono text-xs text-muted-foreground">
+                      {createForm.templateId}
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {t(($) => $.sandboxes_page.create_from_snapshot_template_hint)}
+                  </p>
+                </div>
+              ) : createTemplatesLoading ? (
+                <Skeleton className="h-9 w-full" />
+              ) : (
+                <Select
+                  value={createForm.templateId}
+                  onValueChange={(value) =>
+                    dispatch({
+                      type: "patch_create_form",
+                      patch: { templateId: value ?? "default" },
+                    })
+                  }
+                >
+                  <SelectTrigger className="h-9 w-full min-w-0">
+                    <SelectValue placeholder={t(($) => $.sandboxes_page.create_template_placeholder)} />
+                  </SelectTrigger>
+                  <SelectContent alignItemWithTrigger className="min-w-(--anchor-width)">
+                    <SelectItem value="default">
+                      {createDefaultTemplateId
+                        ? t(($) => $.sandboxes_page.create_template_default_option, {
+                            id: createDefaultTemplateId,
+                          })
+                        : t(($) => $.sandboxes_page.create_template_default_option_unset)}
                     </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                    {createTemplateOptions.map((template) => (
+                      <SelectItem key={template.template_id} value={template.template_id}>
+                        <span className="font-mono text-xs">{template.template_id}</span>
+                        {template.status ? (
+                          <span className="ml-2 text-muted-foreground">({template.status})</span>
+                        ) : null}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+              {!createForm.templateLocked && createTemplatesError ? (
+                <p className="text-xs text-destructive">
+                  {createTemplatesError instanceof Error
+                    ? createTemplatesError.message
+                    : t(($) => $.sandboxes_page.templates_load_failed)}
+                </p>
+              ) : null}
             </div>
             <div className="space-y-3">
               <div className="text-sm font-medium">{t(($) => $.sandboxes_page.runtime_model_title)}</div>
@@ -460,25 +605,34 @@ export function SandboxesPage() {
                 type="password"
                 placeholder={t(($) => $.sandboxes_page.api_key_placeholder)}
                 value={createForm.apiKey}
-                onChange={(e) => setCreateForm((current) => ({ ...current, apiKey: e.target.value }))}
+                onChange={(e) =>
+                  dispatch({ type: "patch_create_form", patch: { apiKey: e.target.value } })
+                }
               />
               <Input
                 placeholder={t(($) => $.sandboxes_page.base_url_placeholder)}
                 value={createForm.baseUrl}
-                onChange={(e) => setCreateForm((current) => ({ ...current, baseUrl: e.target.value }))}
+                onChange={(e) =>
+                  dispatch({ type: "patch_create_form", patch: { baseUrl: e.target.value } })
+                }
               />
               <Input
                 placeholder={t(($) => $.sandboxes_page.model_placeholder)}
                 value={createForm.model}
-                onChange={(e) => setCreateForm((current) => ({ ...current, model: e.target.value }))}
+                onChange={(e) =>
+                  dispatch({ type: "patch_create_form", patch: { model: e.target.value } })
+                }
               />
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setCreateDialogOpen(false)}>
+            <Button
+              variant="outline"
+              onClick={() => dispatch({ type: "set_create_open", open: false })}
+            >
               {t(($) => $.sandboxes_page.cancel_action)}
             </Button>
-            <Button onClick={handleCreateSandbox} disabled={!canCreate || create.isPending}>
+            <Button onClick={() => void handleCreateSandbox()} disabled={!canCreate || create.isPending}>
               {create.isPending ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
               {t(($) => $.sandboxes_page.create_action)}
             </Button>
@@ -486,31 +640,87 @@ export function SandboxesPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={addDialogOpen} onOpenChange={(open) => dispatchAddNode({ type: "setDialogOpen", open })}>
-        <DialogContent>
+      <Dialog
+        open={!!snapshotInstance}
+        onOpenChange={(open) => {
+          if (!open) dispatch({ type: "close_snapshot" });
+        }}
+      >
+        <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>{t(($) => $.sandboxes_page.add_node_dialog_title)}</DialogTitle>
+            <DialogTitle>{t(($) => $.sandboxes_page.snapshot_dialog_title)}</DialogTitle>
             <DialogDescription>
-              {t(($) => $.sandboxes_page.add_node_dialog_description, {
-                file: setupConfigPath || buildSandboxdConfigPath({
-                  workspaceSlug,
-                  userName: user?.name,
-                  userEmail: user?.email,
-                  userId: user?.id,
-                  serverUrl: api.getBaseUrl?.() || window.location.origin,
-                }),
-              })}
+              {t(($) => $.sandboxes_page.snapshot_dialog_description)}
             </DialogDescription>
           </DialogHeader>
-          <code className="max-h-64 overflow-auto rounded-md border bg-muted/50 p-3 text-xs break-all select-all">{setupCommand}</code>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="snapshot-name">{t(($) => $.sandboxes_page.snapshot_name_label)}</Label>
+              <Input
+                id="snapshot-name"
+                value={snapshotName}
+                onChange={(e) => dispatch({ type: "set_snapshot_name", value: e.target.value })}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="snapshot-description">
+                {t(($) => $.sandboxes_page.snapshot_description_label)}
+              </Label>
+              <Textarea
+                id="snapshot-description"
+                value={snapshotDescription}
+                onChange={(e) =>
+                  dispatch({ type: "set_snapshot_description", value: e.target.value })
+                }
+                placeholder={t(($) => $.sandboxes_page.snapshot_description_placeholder)}
+                rows={3}
+              />
+            </div>
+          </div>
           <DialogFooter>
-            <Button variant="outline" onClick={handleCopySetup}>
-              {setupCopied ? <Check className="mr-2 size-4" /> : <Copy className="mr-2 size-4" />}
-              {setupCopied ? t(($) => $.sandboxes_page.copied_action) : t(($) => $.sandboxes_page.copy_command_action)}
+            <Button variant="outline" onClick={() => dispatch({ type: "close_snapshot" })}>
+              {t(($) => $.sandboxes_page.cancel_action)}
+            </Button>
+            <Button
+              onClick={() => void handleCreateTemplate()}
+              disabled={!snapshotName.trim() || createTemplate.isPending}
+            >
+              {createTemplate.isPending ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
+              {t(($) => $.sandboxes_page.create_template_action)}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog
+        open={!!deleteConfirmInstance}
+        onOpenChange={(open) => {
+          if (!open) dispatch({ type: "set_delete_confirm", instance: null });
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t(($) => $.sandboxes_page.delete_dialog.title)}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t(($) => $.sandboxes_page.delete_dialog.description, {
+                name: deleteConfirmInstance ? sandboxDisplayName(deleteConfirmInstance) : "",
+              })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t(($) => $.sandboxes_page.delete_dialog.cancel)}</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                if (deleteConfirmInstance) del.mutate(deleteConfirmInstance.id);
+                dispatch({ type: "set_delete_confirm", instance: null });
+              }}
+            >
+              {t(($) => $.sandboxes_page.delete_dialog.confirm)}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -613,36 +823,24 @@ function NodeRow({
   );
 }
 
-function NodeDetail({
-  binding,
-  instances,
-  onCreate,
-  onViewSetup,
-  viewingSetup,
-  stoppingId,
-  resumingId,
-  deletingId,
-  onOpen,
-  onStop,
-  onResume,
-  onDelete,
-}: {
+function NodeDetail(props: {
   binding: SandboxBinding | null;
   instances: SandboxInstance[];
   onCreate: () => void;
+  onCreateFromSnapshot: (snapshot: SandboxSnapshot) => void;
   onViewSetup: () => void;
-  viewingSetup: boolean;
   stoppingId?: string;
   resumingId?: string;
   deletingId?: string;
+  creatingTemplateId?: string;
   onOpen: (instanceId: string) => void;
   onStop: (instanceId: string) => void;
   onResume: (instanceId: string) => void;
-  onDelete: (instanceId: string) => void;
+  onCreateTemplate: (instance: SandboxInstance) => void;
+  onDelete: (instance: SandboxInstance) => void;
 }) {
   const { t } = useT("layout");
-
-  if (!binding) {
+  if (!props.binding) {
     return (
       <main className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 text-center">
         <Server className="h-8 w-8 text-muted-foreground/40" />
@@ -651,8 +849,50 @@ function NodeDetail({
     );
   }
 
+  return <NodeDetailContent key={props.binding.node_id} {...props} binding={props.binding} />;
+}
+
+function NodeDetailContent({
+  binding,
+  instances,
+  onCreate,
+  onCreateFromSnapshot,
+  onViewSetup,
+  stoppingId,
+  resumingId,
+  deletingId,
+  creatingTemplateId,
+  onOpen,
+  onStop,
+  onResume,
+  onCreateTemplate,
+  onDelete,
+}: {
+  binding: SandboxBinding;
+  instances: SandboxInstance[];
+  onCreate: () => void;
+  onCreateFromSnapshot: (snapshot: SandboxSnapshot) => void;
+  onViewSetup: () => void;
+  stoppingId?: string;
+  resumingId?: string;
+  deletingId?: string;
+  creatingTemplateId?: string;
+  onOpen: (instanceId: string) => void;
+  onStop: (instanceId: string) => void;
+  onResume: (instanceId: string) => void;
+  onCreateTemplate: (instance: SandboxInstance) => void;
+  onDelete: (instance: SandboxInstance) => void;
+}) {
+  const { t } = useT("layout");
+  const [activeTab, setActiveTab] = useState<NodeDetailTab>("sandboxes");
+
   const online = binding.node_status === "online";
   const runningCount = instances.filter((instance) => instance.status === "running").length;
+  const tabs: { id: NodeDetailTab; icon: typeof Box; label: string }[] = [
+    { id: "sandboxes", icon: Box, label: t(($) => $.sandboxes_page.sandboxes_tab) },
+    { id: "templates", icon: Layers, label: t(($) => $.sandboxes_page.templates_tab) },
+    { id: "snapshots", icon: Camera, label: t(($) => $.sandboxes_page.snapshots_tab) },
+  ];
 
   return (
     <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -686,20 +926,48 @@ function NodeDetail({
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <Button type="button" size="sm" variant="outline" onClick={onViewSetup} disabled={viewingSetup}>
-              {viewingSetup ? <Loader2 className="h-3 w-3 animate-spin" /> : <FileCode2 className="h-3 w-3" />}
+            <Button type="button" size="sm" variant="outline" onClick={onViewSetup}>
+              <FileCode2 className="h-3 w-3" />
               {t(($) => $.sandboxes_page.view_setup_action)}
             </Button>
-            <Button type="button" size="sm" onClick={onCreate}>
-              <Plus className="h-3 w-3" />
-              {t(($) => $.sandboxes_page.create_action)}
-            </Button>
+            {activeTab === "sandboxes" && (
+              <Button type="button" size="sm" onClick={onCreate}>
+                <Plus className="h-3 w-3" />
+                {t(($) => $.sandboxes_page.create_action)}
+              </Button>
+            )}
           </div>
         </div>
       </div>
 
+      <div className="flex shrink-0 items-center gap-0 overflow-x-auto border-b px-2 md:px-4">
+        {tabs.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => setActiveTab(tab.id)}
+            className={cn(
+              "flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-2.5 text-xs font-medium transition-colors",
+              activeTab === tab.id
+                ? "border-foreground text-foreground"
+                : "border-transparent text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <tab.icon className="h-3.5 w-3.5" />
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
       <div className="min-h-0 flex-1 overflow-auto">
-        {instances.length === 0 ? (
+        {activeTab === "templates" ? (
+          <NodeTemplatesPanel nodeId={binding.node_id} nodeOnline={online} />
+        ) : activeTab === "snapshots" ? (
+          <NodeSnapshotsPanel
+            nodeId={binding.node_id}
+            onCreateSandbox={onCreateFromSnapshot}
+          />
+        ) : instances.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center px-6 py-16 text-center">
             <Box className="mb-3 size-8 text-muted-foreground/50" />
             <div className="font-medium">{t(($) => $.sandboxes_page.empty_title)}</div>
@@ -720,10 +988,12 @@ function NodeDetail({
                 stopping={stoppingId === instance.id}
                 resuming={resumingId === instance.id}
                 deleting={deletingId === instance.id}
+                creatingTemplate={creatingTemplateId === instance.id}
                 onOpen={() => onOpen(instance.id)}
                 onStop={() => onStop(instance.id)}
                 onResume={() => onResume(instance.id)}
-                onDelete={() => onDelete(instance.id)}
+                onCreateTemplate={() => onCreateTemplate(instance)}
+                onDelete={() => onDelete(instance)}
               />
             ))}
           </div>
@@ -738,25 +1008,34 @@ function SandboxRow({
   stopping,
   resuming,
   deleting,
+  creatingTemplate,
   onOpen,
   onStop,
   onResume,
+  onCreateTemplate,
   onDelete,
 }: {
   instance: SandboxInstance;
   stopping: boolean;
   resuming: boolean;
   deleting: boolean;
+  creatingTemplate: boolean;
   onOpen: () => void;
   onStop: () => void;
   onResume: () => void;
+  onCreateTemplate: () => void;
   onDelete: () => void;
 }) {
   const { t } = useT("layout");
   const canStop = instance.status === "running";
   const canResume = instance.status === "stopped";
-  const canDelete = instance.status !== "reconfiguring" && instance.status !== "resuming";
+  const canCreateTemplate = instance.status === "running" && !!instance.local_ref;
+  const canDelete =
+    instance.status !== "reconfiguring" &&
+    instance.status !== "resuming" &&
+    instance.status !== "snapshotting";
   const displayName = sandboxDisplayName(instance);
+  const snapshotBusy = creatingTemplate || instance.status === "snapshotting";
 
   return (
     <div className="flex items-center justify-between gap-4 px-5 py-3.5">
@@ -777,11 +1056,20 @@ function SandboxRow({
             {t(($) => $.sandboxes_page.resume_action)}
           </Button>
         ) : (
-          <Button size="sm" variant="outline" disabled={!canStop || stopping} onClick={onStop}>
+          <Button size="sm" variant="outline" disabled={!canStop || stopping || snapshotBusy} onClick={onStop}>
             {stopping ? <Loader2 className="mr-2 size-3.5 animate-spin" /> : <Square className="mr-2 size-3.5" />}
             {t(($) => $.sandboxes_page.stop_action)}
           </Button>
         )}
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!canCreateTemplate || snapshotBusy}
+          onClick={onCreateTemplate}
+        >
+          {snapshotBusy ? <Loader2 className="mr-2 size-3.5 animate-spin" /> : <Camera className="mr-2 size-3.5" />}
+          {t(($) => $.sandboxes_page.create_template_action)}
+        </Button>
         <Button size="sm" variant="ghost" disabled={!canDelete || deleting} onClick={onDelete}>
           <Trash2 className="mr-2 size-3.5" /> {t(($) => $.sandboxes_page.delete_action)}
         </Button>
@@ -850,7 +1138,11 @@ function StatusBadge({ status }: { status: string }) {
       ? "default"
       : status === "failed"
         ? "destructive"
-        : status === "reconfiguring" || status === "creating" || status === "resuming" || status === "stopping"
+        : status === "reconfiguring" ||
+            status === "creating" ||
+            status === "resuming" ||
+            status === "stopping" ||
+            status === "snapshotting"
           ? "secondary"
           : "secondary";
   return <Badge variant={variant}>{status}</Badge>;

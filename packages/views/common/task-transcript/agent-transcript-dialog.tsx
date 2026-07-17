@@ -327,6 +327,27 @@ export function AgentTranscriptDialog({
 
   const toolCount = items.filter((i) => i.type === "tool_use").length;
 
+  // Localized label for the states that fall through the badge branches below
+  // (queued / dispatched / waiting_local_directory / running / cancelled) — the
+  // badge otherwise renders live / completed / failed, so this covers the rest
+  // instead of leaking the raw enum token (e.g. "Waiting_local_directory").
+  const statusFallbackLabel = ((): string => {
+    switch (task.status) {
+      case "queued":
+        return t(($) => $.transcript.status_queued);
+      case "dispatched":
+        return t(($) => $.transcript.status_dispatched);
+      case "waiting_local_directory":
+        return t(($) => $.transcript.status_waiting_local_directory);
+      case "running":
+        return t(($) => $.transcript.status_running);
+      case "cancelled":
+        return t(($) => $.transcript.status_cancelled);
+      default:
+        return task.status;
+    }
+  })();
+
   // Status display
   const statusBadge = isLive ? (
     <span className="inline-flex items-center gap-1 rounded-full bg-brand/15 px-2 py-0.5 text-xs font-medium text-brand">
@@ -344,8 +365,8 @@ export function AgentTranscriptDialog({
       {t(($) => $.transcript.status_failed)}
     </span>
   ) : (
-    <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground capitalize">
-      {task.status}
+    <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+      {statusFallbackLabel}
     </span>
   );
 

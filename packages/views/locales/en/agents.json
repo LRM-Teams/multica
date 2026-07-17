@@ -523,6 +523,10 @@
     "status_running": "Running",
     "status_completed": "Completed",
     "status_failed": "Failed",
+    "status_queued": "Queued",
+    "status_dispatched": "Dispatched",
+    "status_waiting_local_directory": "Waiting",
+    "status_cancelled": "Cancelled",
     "filter": "Filter",
     "clear_filters": "Clear filters",
     "tool_calls_one": "{{count}} tool call",
@@ -538,6 +542,12 @@
     "sort_label": "Sort",
     "sort_chronological": "Oldest first",
     "sort_newest_first": "Newest first"
+  },
+  "files_panel": {
+    "info_id": "ID",
+    "info_created": "Created",
+    "info_creator": "Creator",
+    "info_status": "Status"
   },
   "task_failure": {
     "agent_error": "Agent execution error",

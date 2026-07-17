@@ -562,7 +562,15 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 	}
 	terminalOutcome := agentInboxCompletionTerminalOutcome(r.Context(), h, event, req.TaskCompleteRequest, chatDonePayload)
 	if req.MustReplyFailure {
-		terminalOutcome = "failed"
+		// A Raft freshness hold already persisted the attempted output as a
+		// server draft. Acknowledging this execution must not relabel that
+		// draft as an explicit no-reply decision. Actual transport failures
+		// continue through FailAgentInboxEvent.
+		if h.inboxEventHasAgentTransportFreshnessHold(r.Context(), event.ID) {
+			terminalOutcome = "held"
+		} else {
+			terminalOutcome = "no_reply"
+		}
 	}
 	if _, err := qtx.SetAgentInboxTerminalOutcome(r.Context(), db.SetAgentInboxTerminalOutcomeParams{
 		ID:                 event.ID,
@@ -586,20 +594,22 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		h.recordAgentInboxVisibleOutputActivity(r.Context(), event, task.RuntimeID, *chatDonePayload)
 	}
 	h.recordAgentInboxStatusActivity(r.Context(), event, task.RuntimeID, deliveryID, agentInboxStatusActivityIdle)
-	if req.MustReplyFailure {
-		h.publishAgentInboxTaskLifecycle(protocol.EventTaskFailed, event, task.RuntimeID, "failed")
-		h.recordAgentInboxFailureActivity(r.Context(), event, deliveryID,
-			"directed channel task completed without a successful agent transport reply",
-			"must_reply_failure", "must_reply_failure")
-	} else {
-		h.publishAgentInboxTaskLifecycle(protocol.EventTaskCompleted, event, task.RuntimeID, "completed")
+	// A held draft, an explicit no-reply decision, and a completed transport
+	// reply are separate observable outcomes. None is a delivery failure.
+	lifecycleStatus := "completed"
+	if terminalOutcome == "held" || terminalOutcome == "no_reply" {
+		lifecycleStatus = terminalOutcome
 	}
+	h.publishAgentInboxTaskLifecycle(protocol.EventTaskCompleted, event, task.RuntimeID, lifecycleStatus)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "acked_seq": acked.SeqTo})
 }
 
 func agentInboxCompletionTerminalOutcome(ctx context.Context, h *Handler, event db.AgentInboxEvent, req TaskCompleteRequest, payload *protocol.ChatDonePayload) string {
 	if h.inboxEventHasAgentTransportVisibleOutput(ctx, event.ID) {
 		return "replied"
+	}
+	if h.inboxEventHasAgentTransportFreshnessHold(ctx, event.ID) {
+		return "held"
 	}
 	if payload != nil {
 		switch payload.Type {

@@ -1430,6 +1430,14 @@ func (h *Handler) taskHasAgentTransportVisibleOutput(ctx context.Context, taskID
 	return err == nil && exists
 }
 
+// chatTaskHasAgentTransportVisibleOutput resolves the explicit transport write
+// for both ordinary daemon tasks and inbox-backed synthetic tasks. The latter
+// intentionally store their audit under inbox_event_id (rather than task_id),
+// even though their synthetic task ID is the inbox event ID.
+func (h *Handler) chatTaskHasAgentTransportVisibleOutput(ctx context.Context, task db.AgentTaskQueue) bool {
+	return h.taskHasAgentTransportVisibleOutput(ctx, task.ID) || h.inboxEventHasAgentTransportVisibleOutput(ctx, task.ID)
+}
+
 func (h *Handler) inboxEventHasAgentTransportVisibleOutput(ctx context.Context, eventID pgtype.UUID) bool {
 	var exists bool
 	err := h.DB.QueryRow(ctx, `
@@ -1438,6 +1446,24 @@ func (h *Handler) inboxEventHasAgentTransportVisibleOutput(ctx context.Context, 
 			FROM agent_task_transport_audit
 			WHERE inbox_event_id = $1 AND action IN ('message_send', 'message_react')
 			  AND channel_message_id IS NOT NULL
+		)`, eventID).Scan(&exists)
+	return err == nil && exists
+}
+
+// inboxEventHasAgentTransportFreshnessHold reports the Raft-compatible send
+// boundary: the attempted output was saved as a draft because newer context
+// arrived. It is deliberately distinct from a visible transport reply and
+// from an agent's explicit decision not to reply.
+func (h *Handler) inboxEventHasAgentTransportFreshnessHold(ctx context.Context, eventID pgtype.UUID) bool {
+	var exists bool
+	err := h.DB.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM agent_task_transport_audit
+			WHERE inbox_event_id = $1
+			  AND action = 'message_send'
+			  AND COALESCE(context_pack->>'held', 'false') = 'true'
+			  AND context_pack->>'subtype' = 'freshness'
 		)`, eventID).Scan(&exists)
 	return err == nil && exists
 }

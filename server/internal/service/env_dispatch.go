@@ -181,6 +181,10 @@ type EnvDispatchDeps interface {
 	// Environment operations
 	GetEnv(ctx context.Context, envID, workspaceID string) (Env, error)
 	CreateEnv(ctx context.Context, workspaceID string, sandboxIDs []string, parentEnvID string, mode EnvMode, domain EnvDomain) (envID string, err error)
+	// SetEnvSandboxes attaches the execution sandboxes after an EnvDispatch
+	// message environment has been reserved. The reservation is necessary
+	// because channel bindings need env_id before they can provision a sandbox.
+	SetEnvSandboxes(ctx context.Context, envID, workspaceID string, sandboxIDs []string) error
 	DeleteEnv(ctx context.Context, envID, workspaceID string) error
 
 	// Sandbox operations (proxy to cloud-runtime/Fleet)
@@ -748,7 +752,13 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 	var forked []string
 	var sandboxRefs []SandboxInstanceRef
 	var agentSandboxRefs map[string]SandboxInstanceRef
-	if s.useSandboxInstanceBackend(in) {
+	reserveMessageEnv := in.DispatchType == EnvDispatchMessage && in.Mode == EnvModeScratch
+	if reserveMessageEnv {
+		// The leader's sandbox belongs to its channel binding. Reserve the env
+		// first so provisioning can persist that binding, then attach the exact
+		// binding sandbox in dispatchScratchChannelMessage.
+		forked = []string{}
+	} else if s.useSandboxInstanceBackend(in) {
 		leaderID := in.AgentID
 		if in.DispatchType == EnvDispatchMessage && roster.LeaderID != "" {
 			leaderID = roster.LeaderID
@@ -1088,6 +1098,11 @@ func (s *EnvDispatchService) dispatchScratchChannelMessage(ctx context.Context, 
 			_ = s.deps.DeleteAgentRuntime(ctx, in.WorkspaceID, provisioned.RuntimeID)
 		}
 	}()
+	if err := s.deps.SetEnvSandboxes(ctx, r.EnvID, in.WorkspaceID, []string{provisioned.SandboxInstanceID}); err != nil {
+		r.Error = fmt.Sprintf("attach channel leader sandbox: %v", err)
+		r.Stack = stackerr.StackOf(err)
+		return
+	}
 	r.ChatSessionID = provisioned.ChatSessionID
 	r.AgentSandboxes = make(map[string]AgentSandboxStatus, len(in.MessageRoster.AgentIDs))
 	for _, agentID := range in.MessageRoster.AgentIDs {

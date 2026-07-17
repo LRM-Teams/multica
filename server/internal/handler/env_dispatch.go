@@ -531,6 +531,20 @@ func (a *envDispatchDepsAdapter) CreateEnv(ctx context.Context, workspaceID stri
 	return util.UUIDToString(row.ID), nil
 }
 
+func (a *envDispatchDepsAdapter) SetEnvSandboxes(ctx context.Context, envID, workspaceID string, sandboxIDs []string) error {
+	commandTag, err := a.h.DB.Exec(ctx, `
+		UPDATE environment
+		SET sandbox_ids = $3, updated_at = now()
+		WHERE id = $1 AND workspace_id = $2`, parseUUID(envID), parseUUID(workspaceID), sandboxIDs)
+	if err != nil {
+		return stackerr.Wrap(err, "attach environment sandboxes")
+	}
+	if commandTag.RowsAffected() != 1 {
+		return stackerr.New("attach environment sandboxes: environment not found")
+	}
+	return nil
+}
+
 // DeleteEnv deletes the env row. A FK violation (23503) is translated to
 // service.ErrEnvInUse so the handler can map it to 409; the service layer
 // also passes through ErrEnvInUse untouched. A missing row is treated as
@@ -1557,6 +1571,9 @@ func (s *stubEnvDispatchDeps) GetEnv(context.Context, string, string) (service.E
 }
 func (s *stubEnvDispatchDeps) CreateEnv(context.Context, string, []string, string, service.EnvMode, service.EnvDomain) (string, error) {
 	return "stub-env", nil
+}
+func (s *stubEnvDispatchDeps) SetEnvSandboxes(context.Context, string, string, []string) error {
+	return nil
 }
 func (s *stubEnvDispatchDeps) DeleteEnv(context.Context, string, string) error { return nil }
 func (s *stubEnvDispatchDeps) ForkSandbox(context.Context, string, int) (string, error) {

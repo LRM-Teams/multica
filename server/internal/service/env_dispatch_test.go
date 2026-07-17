@@ -208,6 +208,17 @@ func (f *fakeEnvDispatchDeps) CreateEnv(_ context.Context, _ string, sandboxIDs 
 	f.envs[id] = Env{ID: id, SandboxIDs: sandboxIDs, ParentEnvID: parentEnvID, Mode: mode, Domain: domain}
 	return id, nil
 }
+func (f *fakeEnvDispatchDeps) SetEnvSandboxes(_ context.Context, envID, _ string, sandboxIDs []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	env, ok := f.envs[envID]
+	if !ok {
+		return fmt.Errorf("environment %s not found", envID)
+	}
+	env.SandboxIDs = append([]string(nil), sandboxIDs...)
+	f.envs[envID] = env
+	return nil
+}
 func (f *fakeEnvDispatchDeps) DeleteEnv(_ context.Context, envID, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1613,6 +1624,10 @@ func TestScratchMessageProvisionsOnlyLeader(t *testing.T) {
 		t.Fatalf("leader run must use its bound runtime, got %+v", f.channelRuns)
 	}
 	r := res.Rollouts[0]
+	createdEnv, ok := f.envs[r.EnvID]
+	if !ok || len(createdEnv.SandboxIDs) != 1 || createdEnv.SandboxIDs[0] != "binding-sandbox-leader" {
+		t.Fatalf("message environment must own the leader binding sandbox, got %+v", createdEnv)
+	}
 	if r.LeaderRunID == "" || r.AgentRunID != r.LeaderRunID {
 		t.Fatalf("leader run compatibility fields not populated: %+v", r)
 	}

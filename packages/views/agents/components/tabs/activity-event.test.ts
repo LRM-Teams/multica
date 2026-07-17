@@ -370,10 +370,10 @@ describe("agent status transitions — Working ↔ Idle rows (#411/#525)", () =>
 
 describe("activityPresentation — held-freshness projection (#441)", () => {
   function holdStatus(): ActivityEvent {
-    return { ...evtBase("blocked"), reason_code: "send_freshness_hold" };
+    return { ...evtBase("blocked"), detail_kind: "send_freshness_hold", reason_code: "" };
   }
   function holdDetail(details?: Record<string, unknown>): ActivityEvent {
-    return { ...evtBase("text"), reason_code: "send_freshness_hold_detail", details };
+    return { ...evtBase("text"), detail_kind: "send_freshness_hold_detail", reason_code: "", details };
   }
 
   it("status row (blocked) → canonical label, waiting tone, no subtext", () => {
@@ -432,5 +432,9 @@ describe("activityPresentation — held-freshness projection (#441)", () => {
   it("does not hijack ordinary blocked / text events", () => {
     expect(activityPresentation(evtBase("blocked")).labelKey).toBe("waiting");
     expect(activityPresentation({ ...evtBase("text"), text: "Hello" }).labelKey).toBe("output");
+  });
+
+  it("uses the canonical detail kind, not the empty reason code from the transport event", () => {
+    expect(activityPresentation({ ...evtBase("text"), reason_code: "send_freshness_hold_detail" }).labelKey).toBe("output");
   });
 });

@@ -420,7 +420,7 @@ export function activityPresentation(event: ActivityEvent): ActivityPresentation
       // #441 held-freshness detail row: same label as the status row, plus the
       // structured English detail composed from `details` (waiting tone — Iris:
       // 暖色, not red/blue). Falls through to plain Output for any other text.
-      if (event.reason_code?.trim() === "send_freshness_hold_detail") {
+      if (event.detail_kind === "send_freshness_hold_detail") {
         return {
           labelKey: "send_held_by_freshness",
           subtext: freshnessHoldDetail(event),
@@ -448,7 +448,7 @@ export function activityPresentation(event: ActivityEvent): ActivityPresentation
     case "blocked":
       // #441 held-freshness status row: canonical label, no subtext (the paired
       // detail `text` row carries the specifics). Any other block → generic wait.
-      if (event.reason_code?.trim() === "send_freshness_hold") {
+      if (event.detail_kind === "send_freshness_hold") {
         return { labelKey: "send_held_by_freshness", tone: "waiting" };
       }
       return { labelKey: "waiting", subtext: reasonText(event) || narrativeText(event.text), tone: "waiting" };

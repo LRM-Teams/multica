@@ -8,15 +8,15 @@ import (
 	"testing"
 )
 
-func TestMigration183UpContainsBindingAndTriggerConstraints(t *testing.T) {
+func TestMigration186UpContainsBindingAndTriggerConstraints(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("resolve current test file")
 	}
-	path := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations", "183_env_dispatch_message_channels.up.sql")
+	path := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations", "186_env_dispatch_message_channels.up.sql")
 	body, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("read migration 183: %v", err)
+		t.Fatalf("read migration 186: %v", err)
 	}
 	contents := string(body)
 	for _, required := range []string{
@@ -29,7 +29,7 @@ func TestMigration183UpContainsBindingAndTriggerConstraints(t *testing.T) {
 		"'clone'",
 	} {
 		if !strings.Contains(contents, required) {
-			t.Errorf("migration 183 missing %q", required)
+			t.Errorf("migration 186 missing %q", required)
 		}
 	}
 }

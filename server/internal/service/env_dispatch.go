@@ -90,7 +90,8 @@ type EnvDispatchInput struct {
 
 	// MessageRoster is resolved once before reset fan-out. It is internal
 	// dispatch state, not an HTTP request field.
-	MessageRoster MessageRoster
+	MessageRoster       MessageRoster
+	BranchMessageSource *ValidatedBranchMessageSource
 }
 
 // PerAgentEnvSpec assigns one squad agent to a sandbox template or base
@@ -208,6 +209,7 @@ type EnvDispatchDeps interface {
 	EnqueueEnvDispatchChannelRun(ctx context.Context, workspaceID, userID string, in ChannelRunInput, idx int) (runID string, err error)
 	SaveCollaborationTrigger(ctx context.Context, envID string, trigger EnvCollaborationTrigger) error
 	ValidateBranchMessageSource(ctx context.Context, workspaceID, envID, projectID string, roster MessageRoster) (ValidatedBranchMessageSource, error)
+	CopyEnvDispatchChannel(ctx context.Context, workspaceID, sourceChannelID, destinationProjectID, destinationEnvID string) (ChannelCopyMap, error)
 
 	// Issue operations
 	ListIssuesByProject(ctx context.Context, projectID, workspaceID string) ([]IssueRow, error)
@@ -297,6 +299,11 @@ type ValidatedBranchMessageSource struct {
 	SourceEnvID, SourceProjectID, SourceChannelID string
 	Roster                                        MessageRoster
 	Trigger                                       EnvCollaborationTrigger
+}
+
+type ChannelCopyMap struct {
+	ChannelID  string
+	MessageIDs map[string]string
 }
 
 // Env is a snapshot of an environment row.
@@ -453,6 +460,7 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 		}
 		messageRoster = validated.Roster
 		in.MessageRoster = validated.Roster
+		in.BranchMessageSource = &validated
 	}
 
 	// Branch source shape (spec §7.4): v1 requires the source project to hold
@@ -836,6 +844,21 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 	}
 
 	r := EnvRollout{EnvID: envID, ProjectID: projectID, SandboxRefs: sandboxRefs, AgentSandboxRefs: agentSandboxRefs}
+	if in.DispatchType == EnvDispatchMessage && in.Mode == EnvModeBranch {
+		if in.BranchMessageSource == nil {
+			s.rollbackRollout(ctx, in.WorkspaceID, r)
+			return EnvRollout{}, fmt.Errorf("missing validated branch message source")
+		}
+		copyMap, err := s.deps.CopyEnvDispatchChannel(ctx, in.WorkspaceID, in.BranchMessageSource.SourceChannelID, projectID, envID)
+		if err != nil {
+			s.rollbackRollout(ctx, in.WorkspaceID, r)
+			return EnvRollout{}, fmt.Errorf("copy env-dispatch channel: %w", err)
+		}
+		r.ChannelID = copyMap.ChannelID
+		if sessionID := chatSessionIDMap[in.BranchMessageSource.Trigger.ChatSessionID]; sessionID != "" {
+			r.ChatSessionID = sessionID
+		}
+	}
 	if in.DispatchType == EnvDispatchMessage && in.Mode == EnvModeScratch {
 		bindingSpecs := agentSandboxRefs
 		if len(in.PerAgentEnvSpecs) > 0 && bindingSpecs == nil {

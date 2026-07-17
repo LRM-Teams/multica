@@ -868,6 +868,14 @@ func (a *envDispatchDepsAdapter) ValidateBranchMessageSource(ctx context.Context
 	}, nil
 }
 
+func (a *envDispatchDepsAdapter) CopyEnvDispatchChannel(ctx context.Context, workspaceID, sourceChannelID, destinationProjectID, destinationEnvID string) (service.ChannelCopyMap, error) {
+	copyMap, err := a.h.copyEnvDispatchChannel(ctx, workspaceID, sourceChannelID, destinationProjectID, destinationEnvID)
+	if err != nil {
+		return service.ChannelCopyMap{}, err
+	}
+	return service.ChannelCopyMap{ChannelID: copyMap.ChannelID, MessageIDs: copyMap.MessageIDs}, nil
+}
+
 func sameEnvDispatchRoster(left, right []string) bool {
 	if len(left) != len(right) {
 		return false
@@ -1689,6 +1697,9 @@ func (s *stubEnvDispatchDeps) SaveCollaborationTrigger(context.Context, string, 
 }
 func (s *stubEnvDispatchDeps) ValidateBranchMessageSource(context.Context, string, string, string, service.MessageRoster) (service.ValidatedBranchMessageSource, error) {
 	return service.ValidatedBranchMessageSource{}, nil
+}
+func (s *stubEnvDispatchDeps) CopyEnvDispatchChannel(context.Context, string, string, string, string) (service.ChannelCopyMap, error) {
+	return service.ChannelCopyMap{ChannelID: "stub-channel", MessageIDs: map[string]string{}}, nil
 }
 func (s *stubEnvDispatchDeps) ListIssuesByProject(context.Context, string, string) ([]service.IssueRow, error) {
 	return nil, nil

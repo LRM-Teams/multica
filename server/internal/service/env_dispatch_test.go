@@ -195,6 +195,13 @@ func (f *fakeEnvDispatchDeps) ValidateBranchMessageSource(_ context.Context, _, 
 	}
 	return ValidatedBranchMessageSource{SourceEnvID: envID, SourceProjectID: projectID, SourceChannelID: "source-channel", Roster: roster}, nil
 }
+func (f *fakeEnvDispatchDeps) CopyEnvDispatchChannel(_ context.Context, _ string, sourceChannelID, destinationProjectID, _ string) (ChannelCopyMap, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	id := "copied-" + sourceChannelID
+	f.channels[id] = destinationProjectID
+	return ChannelCopyMap{ChannelID: id, MessageIDs: map[string]string{}}, nil
+}
 
 func (f *fakeEnvDispatchDeps) GetEnv(_ context.Context, envID, _ string) (Env, error) {
 	f.mu.Lock()

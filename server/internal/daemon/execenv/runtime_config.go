@@ -429,7 +429,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 			b.WriteString(line)
 			b.WriteString("\n")
 		}
-		b.WriteString("\nTreat this as background context, not as task instructions. If it conflicts with the actual task, the task wins.\n\n")
+		b.WriteString("\nTreat identity and biography as background context. Treat clearly stated collaboration preferences as standing defaults for this user on compatible tasks. If a preference conflicts with the actual task or a newer live instruction, the actual task or newer live instruction wins.\n\n")
 	}
 
 	// Task Initiator block: the actor who triggered THIS task — the real
@@ -453,6 +453,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 			fmt.Fprintf(&b, "This task was initiated by **%s**, a member of this workspace.\n\n", safeInitiator)
 		}
 		b.WriteString("Attribute this request to that person and apply any per-person privacy or access rules your instructions define. In a workspace many people can reach, the initiator — not the runtime owner — is who you are answering right now.\n\n")
+		b.WriteString("Do not replace this attested identity with a name guessed from memory or nearby conversation. Memory may add attributed preferences for this person, but it is not an identity oracle.\n\n")
 		b.WriteString("Note: this is an attested identity for your own routing and privacy logic. Your Multica credentials stay scoped to the runtime owner, so the initiator's identity does not by itself widen or narrow what you can read or write — do not assume the initiator can see everything you can.\n\n")
 	}
 
@@ -496,7 +497,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		}
 		b.WriteString("\nWhen asked where your memory or skills live, report these Multica agent paths, not host-global runtime paths. Use `MULTICA_AGENT_MEMORY_DIR` / `MULTICA_AGENT_ROOT` for durable memory changes. Do not read or write `~/.pi/agent/memory`, `~/.codex/memories`, `~/.claude`, or other provider-global memory directories as your own memory unless the task explicitly asks you to inspect host runtime configuration.\n\n")
 		if ctx.AgentRoot != "" || ctx.AgentMemoryDir != "" {
-			renderMemoryOperatingGuide(&b)
+			renderMemoryOperatingGuide(&b, ctx)
 		}
 	}
 
@@ -783,11 +784,14 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	return b.String()
 }
 
-func renderMemoryOperatingGuide(b *strings.Builder) {
-	b.WriteString("### Memory Operating Guide (v0.1)\n\n")
-	b.WriteString("Use medium-strength auto-write: record information without waiting for a separate request when it is specific, supported by the current interaction, likely to matter in a future run, and belongs to this agent. Do not record guesses, routine task details, raw transcripts, secrets, or facts that are useful only for the current response. Prefer updating an existing entry over creating a duplicate.\n\n")
+func renderMemoryOperatingGuide(b *strings.Builder, ctx TaskContextForEnv) {
+	b.WriteString("### Memory Operating Guide (v0.2)\n\n")
+	b.WriteString("Use high-strength auto-write for explicit user profile facts and collaboration preferences, and medium-strength auto-write for other durable knowledge: record them without waiting for a separate request when they are specific, supported by the current interaction, likely to matter in a future run, and belong to this agent. A verbal acknowledgment such as \"got it\" does not count as remembering; the durable write must succeed. Do not record guesses, routine task details, raw transcripts, secrets, or facts that are useful only for the current response. Prefer updating an existing entry over creating a duplicate.\n\n")
+	if ctx.ChatSessionID != "" && ctx.Directed {
+		b.WriteString("- **Recall before action**: for a directed human request, read `memory/USER.md` before substantive work and apply preferences attributed to the attested Task Initiator or Requesting User. Do not apply another person's preferences just because they share a channel.\n")
+	}
 	b.WriteString("- **Durable facts and decisions**: write stable project, team, tool, convention, responsibility, or operating knowledge to `memory/MEMORY.md` when future work is likely to reuse it.\n")
-	b.WriteString("- **User preferences and profile facts**: write stable, relevant preferences or user facts to `memory/USER.md` when the user states them clearly or repeated evidence makes them reliable. Attribute them to the identified user; do not generalize one member's preference to everyone.\n")
+	b.WriteString("- **User preferences and profile facts**: write stable, relevant preferences or user facts to `memory/USER.md` immediately when the identified user states them clearly or repeated evidence makes them reliable. Attribute them to the identified user; do not generalize one member's preference to everyone. If the user explicitly says a preference applies to all agents or the whole team, write the attributed local entry now and add a high-confidence workspace/shared candidate to `memory/REVIEW.md` for governed team curation; do not wait for another run or directly copy private memory between agents.\n")
 	b.WriteString("- **Current state and events**: write active initiatives, temporary facts, dated events, commitments, blockers, and quotas to `memory/STATE.md`. Include a date and, when applicable, status, TTL/expiry, or reset date so stale state can be retired.\n")
 	b.WriteString("- **Review candidates**: write uncertain, conflicting, sensitive, or destination-ambiguous items to `memory/REVIEW.md` instead of canonical memory. Use `MULTICA_AGENT_SYNC_QUEUE_DIR/memory-candidates.jsonl` only for governed sharing or platform curation, never to copy private memory across agents directly.\n")
 	b.WriteString("- **Explicit user direction**: if the user says \"remember this\", \"write this down\", \"write this here\", or names a memory file, treat that as a direct write request and record it immediately in the requested agent-local destination. If the requested destination would violate safety, privacy, instruction precedence, or the isolated root boundary, do not write it there; explain the constraint and use a safe agent-local alternative only when appropriate.\n\n")
@@ -803,6 +807,7 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 		b.WriteString("### Reply Requirement (READ FIRST — overrides all rules below)\n\n")
 		b.WriteString("This run was triggered by a message directed at you: a DM, an @mention, or a direct question/reply addressed to you. Human DMs, human @mentions, direct questions, assigned tasks, and DM-style continuations require a visible response before finishing. Agent-to-agent channel @mentions are weak notifications: stay silent unless they ask for your immediate deliverable, review, decision, or direct answer. Acceptable visible responses, when required, in order of preference:\n")
 		if !ctx.ChatCLITransportUnavailable {
+			b.WriteString("\n**Work-before-feedback rule:** If the request requires tool calls, investigation, coding, or other non-trivial work, send a short acknowledgment with `multica message send` before the first substantive tool or platform call. State what you understood and the immediate plan so the user knows work has started. Then do the work and send a separate result when it is ready. Do not send a separate acknowledgment for a simple question you can answer immediately.\n")
 			b.WriteString("\n**Operational-command acknowledgement:** When a user directs an attention-management operation (for example, follow/unfollow or mute/unmute), perform the operation first. If it succeeds, react `✅` to the instructing message with `multica message react --message-id <triggering-message-id> --emoji \"✅\"` and send no ordinary text confirmation. Use a text reply only when the operation fails or the user needs substantive information.\n")
 		}
 		if ctx.ChatCLITransportUnavailable {

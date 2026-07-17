@@ -398,6 +398,10 @@ func TestChatRuntimeBriefRendersReplyRequirementForDirectedRun(t *testing.T) {
 
 	for _, want := range []string{
 		"### Reply Requirement (READ FIRST",
+		"**Work-before-feedback rule:**",
+		"before the first substantive tool or platform call",
+		"what you understood and the immediate plan",
+		"Then do the work and send a separate result",
 		"Human DMs, human @mentions, direct questions, assigned tasks",
 		"Agent-to-agent channel @mentions are weak notifications",
 		"**Operational-command acknowledgement:**",
@@ -436,6 +440,7 @@ func TestChatRuntimeBriefOmitsReplyRequirementForAmbientRun(t *testing.T) {
 	// Must NOT contain the Reply Requirement block.
 	for _, banned := range []string{
 		"Reply Requirement",
+		"Work-before-feedback rule",
 		"Human DMs, human @mentions, direct questions, assigned tasks",
 		"Not responding is **not** an option",
 	} {
@@ -772,22 +777,27 @@ func TestMulticaMemoryScopeRenderedForPiProvider(t *testing.T) {
 	}
 }
 
-func TestMemoryOperatingGuideUsesMediumStrengthAutoWrite(t *testing.T) {
+func TestMemoryOperatingGuidePrioritizesExplicitUserPreferences(t *testing.T) {
 	t.Parallel()
 	ctx := TaskContextForEnv{
 		ChatSessionID:  "chat-1",
+		Directed:       true,
 		AgentRoot:      "/tmp/multica/workspace-1/.multica/agents/agent-1",
 		AgentMemoryDir: "/tmp/multica/workspace-1/.multica/agents/agent-1/memory",
 	}
 	out := buildMetaSkillContent("codex", ctx)
 
 	for _, want := range []string{
-		"### Memory Operating Guide (v0.1)",
-		"Use medium-strength auto-write",
+		"### Memory Operating Guide (v0.2)",
+		"Use high-strength auto-write for explicit user profile facts",
+		"A verbal acknowledgment such as \"got it\" does not count as remembering",
+		"read `memory/USER.md` before substantive work",
 		"likely to matter in a future run",
 		"memory/MEMORY.md",
 		"memory/USER.md",
 		"Attribute them to the identified user",
+		"applies to all agents or the whole team",
+		"governed team curation",
 		"memory/STATE.md",
 		"status, TTL/expiry, or reset date",
 		"memory/REVIEW.md",
@@ -816,7 +826,7 @@ func TestMemoryOperatingGuideRequiresAgentLocalScope(t *testing.T) {
 		ChatSessionID: "chat-1",
 		AgentRoot:     "/tmp/multica/workspace-1/.multica/agents/agent-1",
 	})
-	if !strings.Contains(withRoot, "### Memory Operating Guide (v0.1)") {
+	if !strings.Contains(withRoot, "### Memory Operating Guide (v0.2)") {
 		t.Fatalf("memory operating guide missing when an agent-local root exists:\n%s", withRoot)
 	}
 

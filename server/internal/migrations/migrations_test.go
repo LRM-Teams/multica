@@ -3,8 +3,36 @@ package migrations
 import (
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
+
+func TestMigration183UpContainsBindingAndTriggerConstraints(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	path := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations", "183_env_dispatch_message_channels.up.sql")
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read migration 183: %v", err)
+	}
+	contents := string(body)
+	for _, required := range []string{
+		"ADD COLUMN collaboration_trigger JSONB",
+		"CREATE TABLE environment_agent_sandbox",
+		"PRIMARY KEY (env_id, agent_id)",
+		"UNIQUE (sandbox_instance_id)",
+		"UNIQUE (runtime_id)",
+		"status IN ('pending', 'provisioning', 'ready', 'failed', 'deleting')",
+		"'clone'",
+	} {
+		if !strings.Contains(contents, required) {
+			t.Errorf("migration 183 missing %q", required)
+		}
+	}
+}
 
 func TestResolveDirSkipsNonMigrationDirectory(t *testing.T) {
 	root := t.TempDir()

@@ -8,6 +8,11 @@ import { AgentSidePanel } from "./agent-side-panel";
 
 const filesPanelProps = vi.fn();
 
+// Per-test permission decision for the merged runtime-config section. Group
+// managers override this to always-editable inside the component, so leaving
+// it denied by default lets us assert the read-only path for ordinary agents.
+const { permission } = vi.hoisted(() => ({ permission: { allowed: false } }));
+
 vi.mock("@multica/core/workspace/avatar-url", () => ({
   resolvePublicFileUrl: () => null,
 }));
@@ -30,38 +35,52 @@ vi.mock("./agent-files-panel", () => ({
   },
 }));
 
-// The config tab reuses the agent-detail inspector pickers; stub them so the
-// panel test stays focused on tab visibility/gating, not picker internals.
+// The runtime-config section reuses the agent-detail inspector pickers; stub
+// them so the panel test stays focused on gating/visibility, not picker
+// internals. Each stub echoes `canEdit` so we can assert the permission split.
 vi.mock("../../agents/components/inspector/runtime-picker", () => ({
-  RuntimePicker: () => <div data-testid="runtime-picker" />,
+  RuntimePicker: (p: { canEdit?: boolean }) => (
+    <div data-testid="runtime-picker" data-can-edit={String(!!p.canEdit)} />
+  ),
 }));
 vi.mock("../../agents/components/inspector/model-picker", () => ({
-  ModelPicker: () => <div data-testid="model-picker" />,
+  ModelPicker: (p: { canEdit?: boolean }) => (
+    <div data-testid="model-picker" data-can-edit={String(!!p.canEdit)} />
+  ),
 }));
 vi.mock("../../agents/components/inspector/thinking-prop-row", () => ({
-  ThinkingPropRow: () => <div data-testid="thinking-picker" />,
+  ThinkingPropRow: (p: { canEdit?: boolean }) => (
+    <div data-testid="thinking-picker" data-can-edit={String(!!p.canEdit)} />
+  ),
 }));
 vi.mock("../../agents/components/inspector/concurrency-picker", () => ({
-  ConcurrencyPicker: () => <div data-testid="concurrency-picker" />,
+  ConcurrencyPicker: (p: { canEdit?: boolean }) => (
+    <div data-testid="concurrency-picker" data-can-edit={String(!!p.canEdit)} />
+  ),
 }));
 vi.mock("../../agents/components/inspector/visibility-picker", () => ({
-  VisibilityPicker: () => <div data-testid="visibility-picker" />,
+  VisibilityPicker: (p: { canEdit?: boolean }) => (
+    <div data-testid="visibility-picker" data-can-edit={String(!!p.canEdit)} />
+  ),
 }));
 vi.mock("../../common/prop-row", () => ({
   PropRow: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
+vi.mock("../../agents/hooks/use-update-agent", () => ({
+  useUpdateAgent: () => vi.fn(),
+}));
+vi.mock("@multica/core/permissions", () => ({
+  useAgentPermissions: () => ({ canEdit: permission }),
+}));
+vi.mock("../../runtimes/components/shared", () => ({
+  useRuntimeHealthStateLabel: () => (state: string) => state,
+}));
 vi.mock("@tanstack/react-query", () => ({
   useQuery: () => ({ data: [] }),
-  useQueryClient: () => ({
-    getQueryData: () => undefined,
-    setQueryData: () => undefined,
-    invalidateQueries: () => undefined,
-  }),
 }));
-vi.mock("@multica/core/api", () => ({ api: { updateAgent: vi.fn() } }));
-vi.mock("@multica/core/runtimes", () => ({ runtimeListOptions: () => ({ queryKey: ["runtimes"] }) }));
-vi.mock("@multica/core/workspace/queries", () => ({
-  workspaceKeys: { agents: (id: string) => ["agents", id] },
+vi.mock("@multica/core/runtimes", () => ({
+  runtimeListOptions: () => ({ queryKey: ["runtimes"] }),
+  runtimeHealthState: () => "ok",
 }));
 
 vi.mock("../../i18n/use-t", () => ({
@@ -80,14 +99,8 @@ const RESOURCES = {
   side_panel: {
     close_aria: "Close panel",
     no_description: "No description",
-    model_label: "Model",
-    reasoning_label: "Reasoning",
-    reasoning_default: "Default",
-    runtime_label: "Runtime",
-    runtime_cloud: "Cloud",
     created_label: "Created",
     owner_label: "Owner",
-    config_shared_hint: "Any member can edit this group manager.",
   },
   inspector: {
     section_properties: "Properties",
@@ -95,9 +108,6 @@ const RESOURCES = {
     prop_model: "Model",
     prop_visibility: "Visibility",
     prop_concurrency: "Concurrency",
-  },
-  detail: {
-    update_failed_toast: "Update failed",
   },
 };
 
@@ -158,6 +168,7 @@ describe("AgentSidePanel", () => {
   afterEach(() => {
     vi.clearAllMocks();
     configStore.setState({ agentProfileDevAccessEnabled: false });
+    permission.allowed = false;
   });
 
   it("keeps non-owner access to profile only by default", () => {
@@ -181,21 +192,38 @@ describe("AgentSidePanel", () => {
     }));
   });
 
-  it("does not show a Config tab for ordinary agents", () => {
-    renderPanel("user-owner");
+  it("never renders a separate Config tab (merged into Profile, #565)", () => {
+    renderPanel("user-owner", "group_manager");
     expect(screen.queryByRole("button", { name: "Config" })).not.toBeInTheDocument();
-  });
-
-  it("shows an editable Config tab for a group manager to any member (non-owner)", () => {
-    renderPanel("user-other", "group_manager");
-
-    const configTab = screen.getByRole("button", { name: "Config" });
-    expect(configTab).toBeInTheDocument();
-    fireEvent.click(configTab);
-
-    // The shared-edit hint + reused inspector pickers render for any member.
-    expect(screen.getByText("Any member can edit this group manager.")).toBeInTheDocument();
+    // Runtime config now lives inside the Profile view, not a separate tab.
     expect(screen.getByTestId("runtime-picker")).toBeInTheDocument();
     expect(screen.getByTestId("concurrency-picker")).toBeInTheDocument();
+    expect(screen.getByTestId("visibility-picker")).toBeInTheDocument();
+  });
+
+  it("renders EDITABLE runtime pickers in Profile for a group manager (any member)", () => {
+    // permission stays denied — the group_manager override is what grants edit.
+    renderPanel("user-other", "group_manager");
+
+    for (const id of ["runtime-picker", "model-picker", "thinking-picker", "visibility-picker", "concurrency-picker"]) {
+      expect(screen.getByTestId(id)).toHaveAttribute("data-can-edit", "true");
+    }
+  });
+
+  it("renders READ-ONLY runtime pickers in Profile for a non-owner, non-group-manager", () => {
+    permission.allowed = false;
+    renderPanel("user-other");
+
+    for (const id of ["runtime-picker", "model-picker", "thinking-picker", "visibility-picker", "concurrency-picker"]) {
+      expect(screen.getByTestId(id)).toHaveAttribute("data-can-edit", "false");
+    }
+  });
+
+  it("threads the owner/admin permission decision into the runtime pickers", () => {
+    // For an ordinary agent, editability comes straight from useAgentPermissions.
+    permission.allowed = true;
+    renderPanel("user-owner");
+
+    expect(screen.getByTestId("runtime-picker")).toHaveAttribute("data-can-edit", "true");
   });
 });

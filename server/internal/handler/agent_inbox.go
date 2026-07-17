@@ -903,6 +903,9 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 	task := agentInboxSyntheticTask(event, runtime.ID)
 	runtimeWorkspaceID := uuidToString(runtime.WorkspaceID)
 	resp := taskToResponse(task, runtimeWorkspaceID)
+	if event.ChannelID.Valid {
+		resp.ChannelID = uuidToString(event.ChannelID)
+	}
 	resp.InboxEvent = &AgentInboxLeaseResponse{
 		ID:             uuidToString(event.ID),
 		DeliveryID:     uuidToString(delivery.ID),
@@ -993,7 +996,14 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 		resp.WorkspaceContext = ws.Context.String
 	}
 	if resp.Agent != nil {
-		resp.Agent.Memories = h.TaskService.LoadAgentMemoriesForExecution(ctx, event.AgentID, event.WorkspaceID, resp.InitiatorType, resp.InitiatorID)
+		resp.Agent.Memories = h.TaskService.LoadAgentMemoriesForExecution(ctx, event.AgentID, event.WorkspaceID, service.MemoryExecutionScope{
+			InitiatorType: resp.InitiatorType,
+			InitiatorID:   resp.InitiatorID,
+			ProjectID:     resp.ProjectID,
+			ChannelID:     resp.ChannelID,
+			TaskType:      resp.Kind,
+			Now:           time.Now(),
+		})
 	}
 	if resp.WorkspaceID == "" || resp.WorkspaceID != runtimeWorkspaceID {
 		slog.Error("agent inbox claim: workspace isolation check failed",

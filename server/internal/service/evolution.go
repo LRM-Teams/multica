@@ -1698,6 +1698,8 @@ func (s *EvolutionService) assignEvolutionMemory(ctx context.Context, submission
 	if contentHash == "" {
 		contentHash = hashEvolutionContent(content)
 	}
+	applies := map[string]any{}
+	_ = json.Unmarshal(submission.Applies, &applies)
 	config, _ := json.Marshal(map[string]any{
 		"scope": scope,
 		"subject": map[string]any{
@@ -1710,6 +1712,7 @@ func (s *EvolutionService) assignEvolutionMemory(ctx context.Context, submission
 			"local_unit_id": submission.LocalUnitID,
 			"unit_type":     submission.UnitType,
 		},
+		"applies": applies,
 	})
 	createdBy, err := s.skillCreatedByFromSubmission(ctx, submission)
 	if err != nil {

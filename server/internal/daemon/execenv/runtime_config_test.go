@@ -780,30 +780,42 @@ func TestMulticaMemoryScopeRenderedForPiProvider(t *testing.T) {
 func TestMemoryOperatingGuidePrioritizesExplicitUserPreferences(t *testing.T) {
 	t.Parallel()
 	ctx := TaskContextForEnv{
-		ChatSessionID:  "chat-1",
-		Directed:       true,
-		AgentRoot:      "/tmp/multica/workspace-1/.multica/agents/agent-1",
-		AgentMemoryDir: "/tmp/multica/workspace-1/.multica/agents/agent-1/memory",
+		ChatSessionID:    "chat-1",
+		Directed:         true,
+		AgentRoot:        "/tmp/multica/workspace-1/.multica/agents/agent-1",
+		AgentMemoryDir:   "/tmp/multica/workspace-1/.multica/agents/agent-1/memory",
+		UserMemoryDir:    "/tmp/multica/workspace-1/.multica/agents/agent-1/users/member-1",
+		ProjectMemoryDir: "/tmp/multica/workspace-1/.multica/agents/agent-1/projects/project-1",
+		ChannelMemoryDir: "/tmp/multica/workspace-1/.multica/agents/agent-1/channels/channel-1",
 	}
 	out := buildMetaSkillContent("codex", ctx)
 
 	for _, want := range []string{
-		"### Memory Operating Guide (v0.2)",
+		"### Memory Operating Guide (v0.4)",
 		"Use high-strength auto-write for explicit user profile facts",
 		"A verbal acknowledgment such as \"got it\" does not count as remembering",
-		"read `memory/USER.md` before substantive work",
+		"current user's isolated `USER.md`",
 		"likely to matter in a future run",
 		"memory/MEMORY.md",
-		"memory/USER.md",
-		"Attribute them to the identified user",
-		"applies to all agents or the whole team",
-		"governed team curation",
+		"MULTICA_USER_MEMORY_DIR",
+		"current member's durable preferences",
+		"Source is not scope",
+		"who said a memory is provenance",
+		"agents addressed by the current message",
+		"Do not add a workspace/shared candidate merely to fan the preference out",
 		"memory/STATE.md",
 		"status, TTL/expiry, or reset date",
 		"memory/REVIEW.md",
 		"MULTICA_AGENT_SYNC_QUEUE_DIR/memory-candidates.jsonl",
 		"remember this",
-		"record it immediately in the requested agent-local destination",
+		"defaults to agent-global `memory/MEMORY.md`",
+		"Collective intent does not require the exact words \"all agents\"",
+		"都给我记住",
+		"separate inbox delivery for each eligible channel agent",
+		"including offline runtimes",
+		"do not create a workspace/shared candidate merely to redeliver",
+		"agents beyond the current message recipients",
+		"explicitly canonical workspace/team knowledge",
 		"current task remain authoritative",
 		"Do not record guesses",
 		"never to copy private memory across agents directly",
@@ -811,6 +823,14 @@ func TestMemoryOperatingGuidePrioritizesExplicitUserPreferences(t *testing.T) {
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("memory operating guide missing %q\n%s", want, out)
+		}
+	}
+	for _, old := range []string{
+		"agents that were absent can receive it",
+		"collective wording tells the addressed agents or team",
+	} {
+		if strings.Contains(out, old) {
+			t.Fatalf("memory guide retained obsolete collective fanout rule %q:\n%s", old, out)
 		}
 	}
 }
@@ -850,7 +870,7 @@ func TestMemoryOperatingGuideRequiresAgentLocalScope(t *testing.T) {
 		ChatSessionID: "chat-1",
 		AgentRoot:     "/tmp/multica/workspace-1/.multica/agents/agent-1",
 	})
-	if !strings.Contains(withRoot, "### Memory Operating Guide (v0.2)") {
+	if !strings.Contains(withRoot, "### Memory Operating Guide (v0.4)") {
 		t.Fatalf("memory operating guide missing when an agent-local root exists:\n%s", withRoot)
 	}
 

@@ -3232,6 +3232,10 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		agentSkillDir = filepath.Join(agentRootPath, "skills")
 		agentSkillDraftsPath = piAgentSkillDraftsDir(agentRootPath)
 	}
+	serverMemories := convertMemoriesForEnv(task.Agent)
+	memoryTask := task
+	memoryTask.AgentID = agentID
+	executionMemories, scopedMemory := prepareExecutionMemory(agentRootPath, memoryTask, serverMemories)
 
 	// Prepare isolated execution environment.
 	// Repos are passed as metadata only — the agent checks them out on demand
@@ -3248,12 +3252,16 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		AgentInstructions:                instructions,
 		AgentRoot:                        agentRootPath,
 		AgentMemoryDir:                   agentMemoryDir,
+		UserMemoryDir:                    scopedMemory.UserDir,
+		ProjectMemoryDir:                 scopedMemory.ProjectDir,
+		ChannelMemoryDir:                 scopedMemory.ChannelDir,
 		AgentSkillDir:                    agentSkillDir,
 		AgentSkillDraftsDir:              agentSkillDraftsPath,
 		AgentSkills:                      convertSkillsForEnv(skills),
-		AgentMemories:                    convertMemoriesForEnv(task.Agent),
+		AgentMemories:                    executionMemories,
 		Repos:                            convertReposForEnv(task.Repos),
 		ProjectID:                        task.ProjectID,
+		ChannelID:                        task.ChannelID,
 		ProjectTitle:                     task.ProjectTitle,
 		ProjectResources:                 convertProjectResourcesForEnv(task.ProjectResources),
 		ChatSessionID:                    task.ChatSessionID,
@@ -3488,6 +3496,21 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	}
 	if task.InitiatorType == "member" {
 		agentEnv["MULTICA_MEMBER_ID"] = task.InitiatorID
+	}
+	if task.ProjectID != "" {
+		agentEnv["MULTICA_PROJECT_ID"] = task.ProjectID
+	}
+	if task.ChannelID != "" {
+		agentEnv["MULTICA_CHANNEL_ID"] = task.ChannelID
+	}
+	if scopedMemory.UserDir != "" {
+		agentEnv["MULTICA_USER_MEMORY_DIR"] = scopedMemory.UserDir
+	}
+	if scopedMemory.ProjectDir != "" {
+		agentEnv["MULTICA_PROJECT_MEMORY_DIR"] = scopedMemory.ProjectDir
+	}
+	if scopedMemory.ChannelDir != "" {
+		agentEnv["MULTICA_CHANNEL_MEMORY_DIR"] = scopedMemory.ChannelDir
 	}
 	addMulticaAgentEnv(agentEnv, d.cfg, task.WorkspaceID, agentID, task.ProjectID)
 	if provider == "pi" {

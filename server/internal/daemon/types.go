@@ -54,6 +54,7 @@ type Task struct {
 	Agent            *AgentData            `json:"agent,omitempty"`
 	Repos            []RepoData            `json:"repos,omitempty"`
 	ProjectID        string                `json:"project_id,omitempty"`        // issue's project, when present
+	ChannelID        string                `json:"channel_id,omitempty"`        // exact DM/channel surface, when present
 	ProjectTitle     string                `json:"project_title,omitempty"`     // human-readable project title for context injection
 	ProjectResources []ProjectResourceData `json:"project_resources,omitempty"` // project-scoped resources to expose to the agent
 	// ProvisionManagedWorkdir / ManagedWorkdirRelPath: server asks the daemon to

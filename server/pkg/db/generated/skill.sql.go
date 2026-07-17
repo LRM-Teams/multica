@@ -454,7 +454,8 @@ const listAgentMemoriesByAgent = `-- name: ListAgentMemoriesByAgent :many
 
 SELECT id, workspace_id, agent_id, name, content, config, sync_key, content_hash, created_by, created_at, updated_at FROM agent_memory
 WHERE agent_id = $1
-ORDER BY name ASC
+ORDER BY updated_at DESC, id
+LIMIT 48
 `
 
 // Agent memory CRUD

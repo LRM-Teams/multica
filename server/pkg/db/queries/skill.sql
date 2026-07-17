@@ -168,7 +168,8 @@ RETURNING *;
 -- name: ListAgentMemoriesByAgent :many
 SELECT * FROM agent_memory
 WHERE agent_id = $1
-ORDER BY name ASC;
+ORDER BY updated_at DESC, id
+LIMIT 48;
 
 -- name: GetAgentMemoryByAgentAndSyncKey :one
 SELECT * FROM agent_memory

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -70,12 +71,16 @@ type TaskContextForEnv struct {
 	AgentInstructions   string // agent identity/persona instructions, injected into CLAUDE.md
 	AgentRoot           string // Multica-scoped local root for agent state (PI_AGENT_ROOT), when available
 	AgentMemoryDir      string // Multica-scoped memory root (PI_MEMORY_DIR), when available
+	UserMemoryDir       string // current attested member's isolated memory root
+	ProjectMemoryDir    string // current project's isolated memory root
+	ChannelMemoryDir    string // current channel/DM's isolated context root
 	AgentSkillDir       string // Multica-scoped skill root ({PI_AGENT_ROOT}/skills), when available
 	AgentSkillDraftsDir string // Multica-scoped skill drafts root (PI_SKILL_DRAFTS_DIR), when available
 	AgentSkills         []SkillContextForEnv
 	AgentMemories       []MemoryContextForEnv
 	Repos               []RepoContextForEnv     // workspace repos available for checkout
 	ProjectID           string                  // issue's project, when present
+	ChannelID           string                  // exact DM/channel surface, when present
 	ProjectTitle        string                  // human-readable project title
 	ProjectResources    []ProjectResourceForEnv // resources attached to the project
 	ChatSessionID       string                  // non-empty for chat tasks
@@ -446,10 +451,20 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 // user-level skills natively (see context.go for the workdir-local paths
 // they use for workspace skills).
 func codexWritableRoots(task TaskContextForEnv) []string {
-	if task.AgentMemoryDir == "" {
-		return nil
+	roots := []string{}
+	seen := map[string]struct{}{}
+	for _, root := range []string{task.AgentMemoryDir, task.UserMemoryDir, task.ProjectMemoryDir, task.ChannelMemoryDir} {
+		root = strings.TrimSpace(root)
+		if root == "" {
+			continue
+		}
+		if _, exists := seen[root]; exists {
+			continue
+		}
+		seen[root] = struct{}{}
+		roots = append(roots, root)
 	}
-	return []string{task.AgentMemoryDir}
+	return roots
 }
 
 func hydrateCodexSkills(codexHome string, workspaceSkills []SkillContextForEnv, logger *slog.Logger) error {

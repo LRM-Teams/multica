@@ -10,11 +10,11 @@ import (
 )
 
 const listActiveTeamKnowledgeForExecution = `-- name: ListActiveTeamKnowledgeForExecution :many
-SELECT id, kind, title, content, updated_at
+SELECT id, kind, title, content, metadata, updated_at
 FROM team_knowledge_item
 WHERE workspace_id = $1 AND status = 'active'
 ORDER BY updated_at DESC, id
-LIMIT 100
+LIMIT 24
 `
 
 type ActiveTeamKnowledgeForExecution struct {
@@ -22,6 +22,7 @@ type ActiveTeamKnowledgeForExecution struct {
 	Kind      string             `json:"kind"`
 	Title     string             `json:"title"`
 	Content   string             `json:"content"`
+	Metadata  []byte             `json:"metadata"`
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
@@ -34,7 +35,7 @@ func (q *Queries) ListActiveTeamKnowledgeForExecution(ctx context.Context, works
 	items := []ActiveTeamKnowledgeForExecution{}
 	for rows.Next() {
 		var item ActiveTeamKnowledgeForExecution
-		if err := rows.Scan(&item.ID, &item.Kind, &item.Title, &item.Content, &item.UpdatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Kind, &item.Title, &item.Content, &item.Metadata, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)

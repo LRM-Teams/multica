@@ -269,6 +269,8 @@ func ensureMulticaAgentRoot(root string) error {
 		filepath.Join(root, "memory", "audit"),
 		filepath.Join(root, "notes"),
 		filepath.Join(root, "projects"),
+		filepath.Join(root, "users"),
+		filepath.Join(root, "channels"),
 		filepath.Join(root, "runtime", "pi"),
 		filepath.Join(root, "runtime", "openclaw"),
 		filepath.Join(root, "runtime", "codex"),

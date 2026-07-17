@@ -95,7 +95,7 @@ describe("GET /auth/callback", () => {
     global.fetch = mockFetch({ workspaces: [{ slug: "acme", last_active_at: null }, { slug: "beta", last_active_at: "2026-01-05" }] }) as unknown as typeof fetch;
     const res = await GET(req("code=abc"));
     // No cookie slug → newest last_active_at (beta) wins over created-first acme.
-    expect(loc(res)).toBe(paths.workspace("beta").issues());
+    expect(loc(res)).toBe(paths.workspace("beta").channels());
     const cookies = res.headers.getSetCookie();
     expect(cookies.some((c) => c.startsWith("multica_auth="))).toBe(true);
     expect(cookies.some((c) => c.startsWith("multica_csrf="))).toBe(true);
@@ -110,7 +110,7 @@ describe("GET /auth/callback", () => {
   it("cookie slug wins over the server last_active_at when accessible", async () => {
     global.fetch = mockFetch() as unknown as typeof fetch;
     const res = await GET(req("code=abc", { last_workspace_slug: "acme" }));
-    expect(loc(res)).toBe(paths.workspace("acme").issues());
+    expect(loc(res)).toBe(paths.workspace("acme").channels());
   });
 
   it("next= always wins the OAuth round-trip", async () => {

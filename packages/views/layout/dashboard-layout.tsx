@@ -14,8 +14,6 @@ interface DashboardLayoutProps {
   children: ReactNode;
   /** Rendered inside SidebarInset (e.g. ChatWindow, ChatFab — absolute-positioned overlays) */
   extra?: ReactNode;
-  /** Rendered inside sidebar header as a search trigger */
-  searchSlot?: ReactNode;
   /** Loading indicator */
   loadingIndicator?: ReactNode;
 }
@@ -23,7 +21,6 @@ interface DashboardLayoutProps {
 export function DashboardLayout({
   children,
   extra,
-  searchSlot,
   loadingIndicator,
 }: DashboardLayoutProps) {
   return (
@@ -36,7 +33,7 @@ export function DashboardLayout({
     >
       <SidebarProvider className="h-svh">
         <WorkspacePresencePrefetch />
-        <AppSidebar searchSlot={searchSlot} />
+        <AppSidebar />
         <SidebarInset className="relative overflow-hidden">
           <NavigationProgress />
           {children}

@@ -17,7 +17,7 @@ const encode = (id: string) => encodeURIComponent(id);
 function workspaceScoped(slug: string) {
   const ws = `/${encode(slug)}`;
   return {
-    root: () => `${ws}/issues`,
+    root: () => `${ws}/channels`,
     overview: () => `${ws}/overview`,
     usage: () => `${ws}/usage`,
     evolution: () => `${ws}/evolution`,

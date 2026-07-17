@@ -31,7 +31,6 @@ import {
   Plus,
   Check,
   BookOpenText,
-  SquarePen,
   CircleUser,
   FolderKanban,
   BarChart3,
@@ -46,7 +45,6 @@ import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@multica/ui/components/ui/collapsible";
 import { StatusIcon } from "../issues/components/status-icon";
-import { useIssueDraftStore } from "@multica/core/issues/stores/draft-store";
 import { openCreateIssueWithPreference } from "@multica/core/issues/stores/create-mode-store";
 import {
   Sidebar,
@@ -151,10 +149,11 @@ const personalNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] 
 ];
 
 // Order is by how often you reach for it, not by module hierarchy: chat is the
-// highest-frequency surface here, so it sits directly under Overview (Frank).
+// highest-frequency surface here, so it sits at the very top of the group,
+// above Overview (Frank).
 const workspaceNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] = [
-  { key: "overview", labelKey: "overview", icon: LayoutDashboard },
   { key: "channels", labelKey: "channels", icon: MessageCircle },
+  { key: "overview", labelKey: "overview", icon: LayoutDashboard },
   { key: "issues", labelKey: "issues", icon: ListTodo },
   { key: "projects", labelKey: "projects", icon: FolderKanban },
   { key: "autopilots", labelKey: "autopilots", icon: Zap },
@@ -170,12 +169,6 @@ const configureNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[]
   { key: "skills", labelKey: "skills", icon: BookOpenText },
   { key: "settings", labelKey: "settings", icon: Settings },
 ];
-
-function DraftDot() {
-  const hasDraft = useIssueDraftStore((s) => !!(s.draft.title || s.draft.description));
-  if (!hasDraft) return null;
-  return <span className="absolute top-0 right-0 size-1.5 rounded-full bg-brand" />;
-}
 
 /**
  * Presentational pin row. The `label` and `iconNode` are computed by the
@@ -353,15 +346,13 @@ function PinSkeleton() {
 interface AppSidebarProps {
   /** Rendered above SidebarHeader (e.g. desktop traffic light spacer) */
   topSlot?: React.ReactNode;
-  /** Rendered in the header between workspace switcher and new-issue button (e.g. search trigger) */
-  searchSlot?: React.ReactNode;
   /** Extra className for SidebarHeader */
   headerClassName?: string;
   /** Extra style for SidebarHeader */
   headerStyle?: React.CSSProperties;
 }
 
-export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }: AppSidebarProps = {}) {
+export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebarProps = {}) {
   const { t } = useT("layout");
   const { pathname, push } = useNavigation();
   const user = useAuthStore((s) => s.user);
@@ -610,26 +601,6 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                   </DropdownMenuGroup>
                 </DropdownMenuContent>
               </DropdownMenu>
-            </SidebarMenuItem>
-          </SidebarMenu>
-          <SidebarMenu>
-            {searchSlot && (
-              <SidebarMenuItem>
-                {searchSlot}
-              </SidebarMenuItem>
-            )}
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                className="text-muted-foreground"
-                onClick={() => openCreateIssueWithPreference()}
-              >
-                <span className="relative">
-                  <SquarePen />
-                  <DraftDot />
-                </span>
-                <span>{t(($) => $.sidebar.new_issue)}</span>
-                <kbd className="pointer-events-none ml-auto inline-flex h-5 select-none items-center gap-0.5 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground">{t(($) => $.sidebar.new_issue_shortcut)}</kbd>
-              </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>
         </SidebarHeader>

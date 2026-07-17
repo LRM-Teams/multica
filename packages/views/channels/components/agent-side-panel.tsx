@@ -212,14 +212,18 @@ function AgentProfileTabContent({
   const update = (data: Record<string, unknown>) => handleUpdate(agent.id, data);
 
   return (
-    <div className="flex flex-col">
-      {/* Identity (read-only): who / what this agent is. */}
-      <div className="border-b p-4">
+    // min-w-0 so nothing inside can force the panel wider than its column —
+    // the docked panel is 360-440px on desktop and a ~90vw / full-width sheet
+    // on mobile (breakpoint 768). Every leaf below truncates instead.
+    <div className="flex min-w-0 flex-col">
+      {/* Identity (read-only): who / what this agent is. Tighter horizontal
+          padding under md (mobile) to give the values more room at 375px. */}
+      <div className="border-b p-3 md:p-4">
         <p className="text-xs leading-5 text-foreground/85">
           {agent.description || t(($) => $.side_panel.no_description)}
         </p>
       </div>
-      <div className="space-y-2 border-b p-4 text-xs">
+      <div className="space-y-2 border-b p-3 text-xs md:p-4">
         <InfoRow label={t(($) => $.side_panel.created_label)} value={formatDate(agent.created_at)} />
         <InfoRow label={t(($) => $.side_panel.owner_label)} value={ownerName(agent, members)} />
       </div>
@@ -229,7 +233,10 @@ function AgentProfileTabContent({
           them read-only while a separate tab edited them. */}
       <ConfigSection label={t(($) => $.inspector.section_properties)}>
         <PropRow label={t(($) => $.inspector.prop_runtime)} interactive={false}>
-          <div className="flex min-w-0 items-center gap-1.5">
+          {/* flex-wrap so the version-outdated (过期) badge drops below the
+              runtime chip instead of being squeezed off at 375px — it must
+              stay visible per Barry's mobile check. */}
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
             <RuntimePicker
               value={agent.runtime_id}
               runtimes={runtimes}
@@ -283,7 +290,7 @@ function AgentProfileTabContent({
 
 function InfoRow({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
   return (
-    <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-2">
+    <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-2 md:grid-cols-[88px_minmax(0,1fr)]">
       <span className="text-muted-foreground">{label}</span>
       <span className={cn("truncate text-foreground", mono && "font-mono")} title={value}>
         {value}
@@ -294,11 +301,14 @@ function InfoRow({ label, value, mono = false }: { label: string; value: string;
 
 function ConfigSection({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="border-b px-4 py-4">
+    // Tighter horizontal padding under md (mobile) widens the picker column at
+    // 375px; the auto/1fr grid keeps the label + picker on one row (same info
+    // hierarchy at every breakpoint), with every picker chip truncating.
+    <div className="border-b px-3 py-4 md:px-4">
       <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
         {label}
       </div>
-      <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">{children}</div>
+      <div className="grid min-w-0 grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">{children}</div>
     </div>
   );
 }

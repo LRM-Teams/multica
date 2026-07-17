@@ -95,9 +95,9 @@ func TestRunTask_StartTaskCalledAfterWorkdirOnDisk(t *testing.T) {
 	expectedWorkDir := filepath.Join(expectedEnvRoot, "workdir")
 
 	var (
-		startCalled    atomic.Bool
-		workdirOnDisk  atomic.Bool
-		envRootOnDisk  atomic.Bool
+		startCalled   atomic.Bool
+		workdirOnDisk atomic.Bool
+		envRootOnDisk atomic.Bool
 	)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -156,6 +156,51 @@ func TestRunTask_StartTaskCalledAfterWorkdirOnDisk(t *testing.T) {
 	}
 }
 
+func TestRunTask_ChatWithoutRunTokenFailsBeforeAgentExecution(t *testing.T) {
+	t.Parallel()
+
+	var startCalls atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/start") {
+			startCalls.Add(1)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	d := &Daemon{
+		client:         NewClient(srv.URL),
+		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		workspaces:     make(map[string]*workspaceState),
+		runtimeIndex:   map[string]Runtime{"rt-1": {ID: "rt-1", Provider: "claude"}},
+		activeEnvRoots: make(map[string]int),
+		cfg: Config{
+			WorkspacesRoot: t.TempDir(),
+			Agents: map[string]AgentEntry{
+				"claude": {Path: filepath.Join(t.TempDir(), "unused-agent-binary")},
+			},
+		},
+	}
+
+	result, err := d.runTask(context.Background(), Task{
+		ID:            "task-chat-no-token",
+		WorkspaceID:   "ws-chat-no-token",
+		RuntimeID:     "rt-1",
+		IssueID:       "issue-chat-no-token",
+		ChatSessionID: "chat-1",
+		Agent:         &AgentData{Name: "test-agent"},
+	}, "claude", 0, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("runTask error = %v, want fail-closed TaskResult", err)
+	}
+	if result.Status != "failed" || result.FailureReason != "transport_unavailable" || !strings.Contains(result.Comment, "missing_run_bearer_token") {
+		t.Fatalf("chat task result = %+v, want transport_unavailable missing_run_bearer_token", result)
+	}
+	if startCalls.Load() != 1 {
+		t.Fatalf("StartTask calls = %d, want one task-state transition before fail-fast transport check", startCalls.Load())
+	}
+}
+
 // TestHandleTask_KeepsEnvRootActiveAcrossCompletion is the regression guard
 // for issue #3999 race B. After runner.run returns, the in-process active
 // guard installed inside runTask (defer unmarkActiveEnvRoot at the
@@ -178,7 +223,7 @@ func TestHandleTask_KeepsEnvRootActiveAcrossCompletion(t *testing.T) {
 	expectedEnvRoot := execenv.PredictRootDir(workspacesRoot, workspaceID, taskID)
 
 	var (
-		completeCalled atomic.Bool
+		completeCalled   atomic.Bool
 		activeAtComplete atomic.Bool
 	)
 

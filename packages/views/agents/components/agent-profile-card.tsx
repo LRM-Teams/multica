@@ -196,6 +196,14 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
             </PropRow>
           )}
         </div>
+        {/* Truthfulness hint (#527, Iris): editing runtime/model/thinking here
+            configures the NEXT run — it does not retarget a task already
+            executing. Shown only to editors, since only they can change it. */}
+        {canEdit.allowed && (
+          <p className="text-[10px] leading-tight text-muted-foreground">
+            {t(($) => $.execution_config.applies_next_run)}
+          </p>
+        )}
         {agent.skills.length > 0 && (
           <SkillsRow skills={agent.skills.map((s) => s.name)} />
         )}

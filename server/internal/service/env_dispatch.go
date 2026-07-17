@@ -711,7 +711,11 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 	var sandboxRefs []SandboxInstanceRef
 	var agentSandboxRefs map[string]SandboxInstanceRef
 	if s.useSandboxInstanceBackend(in) {
-		refs, agentRefs, err := s.createSandboxInstanceRefs(ctx, in, sourceEnv)
+		leaderID := in.AgentID
+		if in.DispatchType == EnvDispatchMessage && roster.LeaderID != "" {
+			leaderID = roster.LeaderID
+		}
+		refs, agentRefs, err := s.createSandboxInstanceRefs(ctx, in, sourceEnv, leaderID)
 		if err != nil {
 			return EnvRollout{}, fmt.Errorf("create sandbox_instance: %w", err)
 		}
@@ -811,7 +815,7 @@ func (s *EnvDispatchService) useSandboxInstanceBackend(in EnvDispatchInput) bool
 // deps; production adapter wiring (node selection) is injected by the handler.
 // Returns the flat slice (for SandboxIDs/SandboxRefs) and, when per-agent specs
 // are used, an agent_id→ref map for AgentSandboxRefs.
-func (s *EnvDispatchService) createSandboxInstanceRefs(ctx context.Context, in EnvDispatchInput, sourceEnv Env) ([]SandboxInstanceRef, map[string]SandboxInstanceRef, error) {
+func (s *EnvDispatchService) createSandboxInstanceRefs(ctx context.Context, in EnvDispatchInput, sourceEnv Env, runtimeAgentID string) ([]SandboxInstanceRef, map[string]SandboxInstanceRef, error) {
 	if len(in.PerAgentEnvSpecs) > 0 {
 		refs := make([]SandboxInstanceRef, 0, len(in.PerAgentEnvSpecs))
 		agentRefs := make(map[string]SandboxInstanceRef, len(in.PerAgentEnvSpecs))
@@ -861,8 +865,8 @@ func (s *EnvDispatchService) createSandboxInstanceRefs(ctx context.Context, in E
 	// runtime and the task stays on the leader's runtime.
 	runtimeEnv := map[string]string{}
 	var runtimeID, daemonID string
-	if in.AgentID != "" && in.SquadID == "" {
-		rid, did, err := s.deps.PrecreateAgentRuntime(ctx, in.WorkspaceID, in.UserID, in.AgentID)
+	if runtimeAgentID != "" {
+		rid, did, err := s.deps.PrecreateAgentRuntime(ctx, in.WorkspaceID, in.UserID, runtimeAgentID)
 		if err != nil {
 			return nil, nil, fmt.Errorf("precreate agent runtime: %w", err)
 		}
@@ -894,7 +898,7 @@ func (s *EnvDispatchService) createSandboxInstanceRefs(ctx context.Context, in E
 // not R'-bound (Fleet path, squad, per-agent specs, or no sandbox ref), which
 // preserves the current runtime routing in EnqueueAgentRun.
 func rolloutRuntimeID(in EnvDispatchInput, r EnvRollout) string {
-	if in.AgentID == "" || in.SquadID != "" {
+	if in.DispatchType != EnvDispatchMessage && (in.AgentID == "" || in.SquadID != "") {
 		return ""
 	}
 	if len(r.SandboxRefs) > 0 {
@@ -912,7 +916,7 @@ func rolloutRuntimeID(in EnvDispatchInput, r EnvRollout) string {
 // to reclaim the sandbox. Same single-agent gating as rolloutRuntimeID; returns
 // "" when the rollout is not R'-bound.
 func rolloutSandboxInstanceID(in EnvDispatchInput, r EnvRollout) string {
-	if in.AgentID == "" || in.SquadID != "" {
+	if in.DispatchType != EnvDispatchMessage && (in.AgentID == "" || in.SquadID != "") {
 		return ""
 	}
 	if len(r.SandboxRefs) > 0 {

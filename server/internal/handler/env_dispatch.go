@@ -1054,7 +1054,9 @@ func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, workspaceI
 				return "", stackerr.Wrap(err, "marshal squad chat context")
 			}
 			params.AgentID = squad.LeaderID
-			params.RuntimeID = leader.RuntimeID
+			if runtimeID == "" {
+				params.RuntimeID = leader.RuntimeID
+			}
 			params.Context = contextJSON
 		} else {
 			params.AgentID = parseUUID(agentID)

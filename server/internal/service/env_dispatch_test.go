@@ -1558,12 +1558,12 @@ func TestDispatch_PrecreatesRuntimeAndRoutesTaskToSandboxRuntime(t *testing.T) {
 	}
 }
 
-// TestDispatch_SquadDispatchDoesNotPrecreateRuntime verifies that squad
-// dispatch (no single agent) does NOT pre-create R' or route to it - the
-// sandbox boots a daemon that registers its own runtime and the task stays on
-// the leader's runtime. (Squad R' routing is deferred.)
-func TestDispatch_SquadDispatchDoesNotPrecreateRuntime(t *testing.T) {
+// TestDispatch_SquadMessagePrecreatesLeaderRuntime verifies that message
+// squads use the resolved leader identity for their rollout runtime rather
+// than falling back to that leader's shared default runtime.
+func TestDispatch_SquadMessagePrecreatesLeaderRuntime(t *testing.T) {
 	f := newFakeEnvDispatchDeps()
+	f.messageRoster = MessageRoster{LeaderID: "leader", AgentIDs: []string{"leader", "peer"}}
 	baseEnv := f.seedBaseEnv()
 	creator := &fakeSandboxInstanceCreator{
 		refs: map[string]SandboxInstanceRef{
@@ -1579,11 +1579,11 @@ func TestDispatch_SquadDispatchDoesNotPrecreateRuntime(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
-	if len(f.precreateRuntimeCalls) != 0 {
-		t.Fatalf("squad dispatch must not precreate runtime, got %d calls", len(f.precreateRuntimeCalls))
+	if len(f.precreateRuntimeCalls) != 1 || f.precreateRuntimeCalls[0].AgentID != "leader" {
+		t.Fatalf("squad message must precreate the leader runtime, got %+v", f.precreateRuntimeCalls)
 	}
-	if len(f.enqueueRuntimeIDs) != 1 || f.enqueueRuntimeIDs[0] != "" {
-		t.Fatalf("squad dispatch task must keep empty runtime_id (leader runtime), got %v", f.enqueueRuntimeIDs)
+	if len(f.enqueueRuntimeIDs) != 1 || f.enqueueRuntimeIDs[0] != "rt-1" {
+		t.Fatalf("squad message task must use leader runtime R', got %v", f.enqueueRuntimeIDs)
 	}
 }
 

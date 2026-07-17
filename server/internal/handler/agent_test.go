@@ -580,7 +580,7 @@ func TestCreateAgent_GeneratesUniqueHandlesForDuplicateDisplayNames(t *testing.T
 	t.Cleanup(cleanup)
 
 	body := map[string]any{
-		"name":                 displayName,
+		"display_name":         displayName,
 		"description":          "first description",
 		"runtime_id":           testRuntimeID,
 		"visibility":           "private",
@@ -607,7 +607,7 @@ func TestCreateAgent_GeneratesUniqueHandlesForDuplicateDisplayNames(t *testing.T
 		t.Fatalf("first display_name = %q, want %q", resp1.DisplayName, displayName)
 	}
 
-	// Second call — same legacy display input is allowed. The server keeps the
+	// Second call — same display input is allowed. The server keeps the
 	// display label and suffixes only the stable handle.
 	body["description"] = "updated description"
 	w2 := httptest.NewRecorder()
@@ -699,7 +699,7 @@ func TestCreateAgent_GeneratesASCIIUsernamesFromDisplayNames(t *testing.T) {
 		t.Run(tt.displayName, func(t *testing.T) {
 			w := httptest.NewRecorder()
 			testHandler.CreateAgent(w, newRequest(http.MethodPost, "/api/agents", map[string]any{
-				"name":                 tt.displayName,
+				"display_name":         tt.displayName,
 				"description":          marker,
 				"runtime_id":           testRuntimeID,
 				"visibility":           "private",
@@ -719,28 +719,27 @@ func TestCreateAgent_GeneratesASCIIUsernamesFromDisplayNames(t *testing.T) {
 	}
 }
 
-func TestUpdateAgent_LegacyNameRenamesDisplayOnly(t *testing.T) {
+func TestAgentRejectsLegacyNameField(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
 
-	displayName := "Legacy Rename Agent"
-	cleanup := func() {
-		testPool.Exec(context.Background(),
-			`DELETE FROM agent
-			 WHERE workspace_id = $1
-			   AND (display_name IN ($2, $3) OR name LIKE 'legacy_rename_agent%')`,
-			testWorkspaceID, displayName, "Renamed Legacy Display",
-		)
-	}
-	cleanup()
-	t.Cleanup(cleanup)
-
 	createBody := map[string]any{
-		"name":                 displayName,
+		"display_name":         "Legacy Rename Agent",
 		"runtime_id":           testRuntimeID,
 		"visibility":           "private",
 		"max_concurrent_tasks": 1,
+	}
+	legacyCreate := map[string]any{
+		"name":                 "Legacy Rename Agent",
+		"runtime_id":           testRuntimeID,
+		"visibility":           "private",
+		"max_concurrent_tasks": 1,
+	}
+	legacyCreateRec := httptest.NewRecorder()
+	testHandler.CreateAgent(legacyCreateRec, newRequest(http.MethodPost, "/api/agents", legacyCreate))
+	if legacyCreateRec.Code != http.StatusBadRequest {
+		t.Fatalf("CreateAgent legacy name: expected 400, got %d: %s", legacyCreateRec.Code, legacyCreateRec.Body.String())
 	}
 	createRec := httptest.NewRecorder()
 	testHandler.CreateAgent(createRec, newRequest(http.MethodPost, "/api/agents", createBody))
@@ -754,24 +753,17 @@ func TestUpdateAgent_LegacyNameRenamesDisplayOnly(t *testing.T) {
 	if created.Name == "" {
 		t.Fatal("created agent missing generated handle")
 	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, parseUUID(created.ID))
+	})
 
 	req := withURLParam(newRequest(http.MethodPut, "/api/agents/"+created.ID, map[string]any{
 		"name": "Renamed Legacy Display",
 	}), "id", created.ID)
 	updateRec := httptest.NewRecorder()
 	testHandler.UpdateAgent(updateRec, req)
-	if updateRec.Code != http.StatusOK {
-		t.Fatalf("UpdateAgent: expected 200, got %d: %s", updateRec.Code, updateRec.Body.String())
-	}
-	var updated AgentResponse
-	if err := json.NewDecoder(updateRec.Body).Decode(&updated); err != nil {
-		t.Fatalf("decode update response: %v", err)
-	}
-	if updated.Name != created.Name {
-		t.Fatalf("legacy name patch changed handle: got %q, want %q", updated.Name, created.Name)
-	}
-	if updated.DisplayName != "Renamed Legacy Display" {
-		t.Fatalf("display_name = %q, want Renamed Legacy Display", updated.DisplayName)
+	if updateRec.Code != http.StatusBadRequest {
+		t.Fatalf("UpdateAgent legacy name: expected 400, got %d: %s", updateRec.Code, updateRec.Body.String())
 	}
 }
 
@@ -783,7 +775,7 @@ func TestUpdateAgent_UsernameChangesHandle(t *testing.T) {
 	marker := "username-update-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
 	createRec := httptest.NewRecorder()
 	testHandler.CreateAgent(createRec, newRequest(http.MethodPost, "/api/agents", map[string]any{
-		"name":                 "贝克汉姆",
+		"display_name":         "贝克汉姆",
 		"description":          marker,
 		"runtime_id":           testRuntimeID,
 		"visibility":           "private",

@@ -154,7 +154,7 @@ func TestCreateAgent_RejectsPrivateRuntimeForNonOwner(t *testing.T) {
 
 	body := func(name string) map[string]any {
 		return map[string]any{
-			"name":                 name,
+			"display_name":         name,
 			"description":          "",
 			"runtime_id":           runtimeID,
 			"visibility":           "private",
@@ -213,7 +213,7 @@ func TestCreateAgent_AllowsPublicRuntimeForPlainMember(t *testing.T) {
 	})
 
 	body := map[string]any{
-		"name":                 "vis-test-public-runtime",
+		"display_name":         "vis-test-public-runtime",
 		"description":          "",
 		"runtime_id":           runtimeID,
 		"visibility":           "private",

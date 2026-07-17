@@ -268,7 +268,7 @@ export interface Agent {
   /** Stable unique handle used for routing and bare @handle fallback. */
   name: string;
   /** Human-facing label. Falls back to `name` for older server payloads. */
-  display_name: string;
+  display_name?: string;
   description: string;
   instructions: string;
   avatar_url: string | null;
@@ -406,13 +406,11 @@ export interface EnsureWindyResponse {
 }
 
 export interface CreateAgentRequest {
-  /** Legacy display input; the server derives a stable handle from it. */
-  name?: string;
   /** Optional explicit stable username. Duplicate values are rejected; when
    * omitted the server derives one from the display name and suffixes collisions. */
   username?: string;
   /** Preferred human-facing label for new clients. */
-  display_name?: string;
+  display_name: string;
   description?: string;
   instructions?: string;
   avatar_url?: string;
@@ -510,8 +508,6 @@ export interface CreateAgentFromTemplateFailure {
 }
 
 export interface UpdateAgentRequest {
-  /** Legacy rename input; updates display_name, not the stable handle. */
-  name?: string;
   /** Stable lowercase ASCII mention handle. Owner/admin only. */
   username?: string;
   /** Preferred human-facing label for new clients. */

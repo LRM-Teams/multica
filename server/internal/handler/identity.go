@@ -3,92 +3,29 @@ package handler
 import (
 	"context"
 	"errors"
-	"regexp"
-	"strconv"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/mozillazg/go-pinyin"
+	"github.com/multica-ai/multica/server/internal/identityhandle"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
-	"golang.org/x/text/unicode/norm"
 )
 
 var errIdentityHandleExhausted = errors.New("identity handle generation exhausted")
-var errIdentityHandleInvalid = errors.New("identity username is invalid")
-var identityHandlePattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+var errIdentityHandleInvalid = identityhandle.ErrInvalid
 
-const maxIdentityHandleLength = 32
+const maxIdentityHandleLength = identityhandle.MaxLength
 
 func identityHandleBase(value, fallback string) string {
-	for _, seed := range []string{value, fallback} {
-		if slug := identityHandleSlug(seed); slug != "" {
-			return truncateRunes(slug, maxIdentityHandleLength)
-		}
-	}
-	return "agent"
+	return identityhandle.Base(value, fallback)
 }
 
 func validateIdentityHandle(handle string) error {
-	if len(handle) > maxIdentityHandleLength || !identityHandlePattern.MatchString(handle) {
-		return errIdentityHandleInvalid
-	}
-	return nil
+	return identityhandle.Validate(handle)
 }
 
 func identityHandleCandidate(base string, attempt int) string {
-	suffix := ""
-	if attempt > 1 {
-		suffix = "-" + strconv.Itoa(attempt)
-	}
-	return truncateRunes(base, maxIdentityHandleLength-len(suffix)) + suffix
-}
-
-// identityHandleSlug makes a human-entered display label into the single ASCII
-// username grammar accepted by common IM clients. Han characters are
-// transliterated to tone-free pinyin; ASCII words and decomposed Latin letters
-// are preserved in lowercase. Every other separator collapses to one hyphen.
-func identityHandleSlug(value string) string {
-	args := pinyin.NewArgs()
-	parts := make([]string, 0, len(value))
-	var ascii strings.Builder
-	flushASCII := func() {
-		if ascii.Len() > 0 {
-			parts = append(parts, ascii.String())
-			ascii.Reset()
-		}
-	}
-	for _, r := range norm.NFD.String(value) {
-		switch {
-		case unicode.Is(unicode.Han, r):
-			flushASCII()
-			if readings := pinyin.SinglePinyin(r, args); len(readings) > 0 && readings[0] != "" {
-				parts = append(parts, readings[0])
-			}
-		case r <= unicode.MaxASCII && unicode.IsLetter(r):
-			ascii.WriteRune(unicode.ToLower(r))
-		case r <= unicode.MaxASCII && unicode.IsDigit(r):
-			ascii.WriteRune(r)
-		case unicode.Is(unicode.Mn, r):
-			// Ignore a combining mark after its Latin base character.
-		default:
-			flushASCII()
-		}
-	}
-	flushASCII()
-	return strings.Join(parts, "-")
-}
-
-func truncateRunes(value string, limit int) string {
-	if limit <= 0 {
-		return ""
-	}
-	if utf8.RuneCountInString(value) <= limit {
-		return value
-	}
-	return string([]rune(value)[:limit])
+	return identityhandle.Candidate(base, attempt)
 }
 
 func identityUniqueViolation(err error, constraint string) bool {
@@ -134,7 +71,7 @@ func (h *Handler) createUserWithIdentity(ctx context.Context, email, displaySeed
 		displayName = strings.TrimSpace(email)
 	}
 	base := identityHandleBase(emailLocalPart(email), "user")
-	base = truncateRunes(base, maxIdentityHandleLength)
+	base = identityhandle.Truncate(base, maxIdentityHandleLength)
 	if err := validateIdentityHandle(base); err != nil {
 		return db.User{}, err
 	}
@@ -164,7 +101,7 @@ func (h *Handler) createAgentWithIdentity(ctx context.Context, q *db.Queries, pa
 		displayName = "Agent"
 	}
 	base := identityHandleBase(handleSeed, displayName)
-	base = truncateRunes(base, maxIdentityHandleLength)
+	base = identityhandle.Truncate(base, maxIdentityHandleLength)
 	if err := validateIdentityHandle(base); err != nil {
 		return db.Agent{}, err
 	}

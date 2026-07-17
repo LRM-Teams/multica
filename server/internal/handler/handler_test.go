@@ -1967,8 +1967,8 @@ func TestUpdateAgentRejectsMalformedAgentID(t *testing.T) {
 func TestCreateAgentRejectsMalformedRuntimeID(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := newRequest("POST", "/api/agents", map[string]any{
-		"name":       "Malformed runtime agent",
-		"runtime_id": "not-a-uuid",
+		"display_name": "Malformed runtime agent",
+		"runtime_id":   "not-a-uuid",
 	})
 	testHandler.CreateAgent(w, req)
 	if w.Code != http.StatusBadRequest {
@@ -2399,11 +2399,11 @@ func TestUpdateAgentMcpConfigObjectUpdatesValue(t *testing.T) {
 func TestCreateAgentMcpConfigNullStoresSQLNull(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := newRequest("POST", "/api/agents", map[string]any{
-		"name":        "Handler Mcp Create Null",
-		"runtime_id":  handlerTestRuntimeID(t),
-		"mcp_config":  nil,
-		"custom_env":  map[string]string{},
-		"custom_args": []string{},
+		"display_name": "Handler Mcp Create Null",
+		"runtime_id":   handlerTestRuntimeID(t),
+		"mcp_config":   nil,
+		"custom_env":   map[string]string{},
+		"custom_args":  []string{},
 	})
 	testHandler.CreateAgent(w, req)
 	if w.Code != http.StatusCreated {

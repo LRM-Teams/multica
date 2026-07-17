@@ -139,6 +139,12 @@ func (h *Handler) channelMentionCandidates(ctx context.Context, workspaceID, cha
 			mentionType = "agent"
 		}
 		handle := strings.TrimSpace(name)
+		if mentionType == "agent" && validateIdentityHandle(handle) != nil {
+			// Agent handles are canonical ASCII usernames. Invalid historical
+			// values deliberately remain plain text in old messages after the
+			// one-time backfill; do not retain a second mention-routing path.
+			continue
+		}
 		key := normalizeMentionCandidateLabel(handle)
 		if key == "" || key == "all" {
 			continue
@@ -215,9 +221,10 @@ func findBareMentionCandidates(content string, candidates map[string]channelMent
 	return out
 }
 
-// mentionHandlePrefix compares one stable username at a time without changing
-// original byte offsets. New usernames follow the ASCII IM grammar, while this
-// stays tolerant of legacy stored handles until they are deliberately migrated.
+// mentionHandlePrefix compares one handle at a time without changing original
+// byte offsets. Agent candidates are canonical ASCII usernames; member
+// candidates remain Unicode-capable because user handles are a separate
+// identity contract.
 func mentionHandlePrefix(content string, start int, handle string) (int, bool) {
 	offset := start
 	for _, want := range handle {

@@ -2568,8 +2568,8 @@ func TestChannelMentionedAgentsUsesHandlesOrStructuredIDs(t *testing.T) {
 
 	ctx := context.Background()
 	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
-	handle := "wendy_" + suffix
-	secondHandle := handle + "_2"
+	handle := "wendy-" + suffix
+	secondHandle := handle + "-2"
 	displayName := "Wendy"
 	agentID := createHandlerTestAgent(t, handle, nil)
 	secondAgentID := createHandlerTestAgent(t, secondHandle, nil)
@@ -2620,6 +2620,41 @@ func TestChannelMentionedAgentsUsesHandlesOrStructuredIDs(t *testing.T) {
 	}
 }
 
+func TestChannelLegacyAgentHandleTextDoesNotRoute(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+	legacyHandle := "actor_" + suffix
+	agentID := createHandlerTestAgent(t, legacyHandle, nil)
+	channelID := seedChannelForTest(t, "legacy-agent-text-"+suffix, testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed legacy agent member: %v", err)
+	}
+
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+	content := "historic @" + legacyHandle + " remains plain text"
+	_, parts, err := testHandler.enrichChannelMessageMentions(ctx, ch, content, nil)
+	if err != nil {
+		t.Fatalf("enrich legacy handle text: %v", err)
+	}
+	for _, part := range parts {
+		if part.Type == protocol.MessagePartTypeReference && part.RefType == "mention" && part.RefID == agentID {
+			t.Fatalf("legacy handle unexpectedly became a structured mention: %+v", part)
+		}
+	}
+	if agents := testHandler.channelMentionedAgents(ctx, testWorkspaceID, channelID, content, nil); len(agents) != 0 {
+		t.Fatalf("legacy handle text routed to agents: %+v", agents)
+	}
+}
+
 func TestChannelBareMentionsBecomeStructuredMessageParts(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -2627,7 +2662,7 @@ func TestChannelBareMentionsBecomeStructuredMessageParts(t *testing.T) {
 
 	ctx := context.Background()
 	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
-	agentName := "mention_agent_" + suffix
+	agentName := "mention-agent-" + suffix
 	agentID := createHandlerTestAgent(t, agentName, nil)
 	memberID := createChannelPlainMember(t)
 	t.Cleanup(func() {

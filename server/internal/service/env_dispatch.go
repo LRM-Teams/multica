@@ -108,14 +108,28 @@ type MessageInput struct {
 	Content string
 }
 
+type MessageRoster struct {
+	LeaderID string
+	AgentIDs []string
+}
+
+type AgentSandboxStatus struct {
+	Status            string `json:"status"`
+	SandboxInstanceID string `json:"sandbox_instance_id,omitempty"`
+	RuntimeID         string `json:"runtime_id,omitempty"`
+}
+
 // EnvRollout is one element of the response array (spec §6.3).
 type EnvRollout struct {
-	EnvID         string // always a new env_id (branch always forks, incl. N=1)
-	ProjectID     string
-	IssueID       string // empty iff dispatch_type=message
-	ChatSessionID string // empty iff dispatch_type=issue
-	AgentRunID    string // empty if dispatch failed (partial rollout)
-	Error         string // empty if rollout succeeded
+	ChannelID      string
+	LeaderRunID    string
+	AgentSandboxes map[string]AgentSandboxStatus
+	EnvID          string // always a new env_id (branch always forks, incl. N=1)
+	ProjectID      string
+	IssueID        string // empty iff dispatch_type=message
+	ChatSessionID  string // empty iff dispatch_type=issue
+	AgentRunID     string // empty if dispatch failed (partial rollout)
+	Error          string // empty if rollout succeeded
 	// Stack is the origin goroutine stack (stackerr.StackOf) for the error in
 	// Error, when the failure came from an adapter call. Surfaced per-rollout in
 	// the 500 (all-failed) response. Empty on success or for leaf logic errors.
@@ -131,6 +145,7 @@ type EnvRollout struct {
 
 // EnvDispatchResult wraps the rollouts slice.
 type EnvDispatchResult struct {
+	ChannelID string
 	ProjectID string // single project for the dispatch (group_size=1: the rollout's project)
 	Rollouts  []EnvRollout
 }
@@ -156,6 +171,9 @@ type EnvDispatchDeps interface {
 	// target the copied issue (branch+swe_lego) or copied session (branch+self_play).
 	CopyProjectSubtree(ctx context.Context, sourceProjectID, workspaceID, envID string) (newProjectID string, issueIDMap, chatSessionIDMap map[string]string, err error)
 	DeleteProject(ctx context.Context, projectID, workspaceID string) error
+	ResolveMessageRoster(ctx context.Context, workspaceID, agentID, squadID string) (MessageRoster, error)
+	CreateEnvDispatchChannel(ctx context.Context, workspaceID, userID, projectID, envID string, roster MessageRoster, specs map[string]SandboxInstanceRef) (channelID string, err error)
+	DeleteChannel(ctx context.Context, workspaceID, channelID string) error
 
 	// Issue operations
 	ListIssuesByProject(ctx context.Context, projectID, workspaceID string) ([]IssueRow, error)
@@ -306,6 +324,14 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 	if err := s.validate(in); err != nil {
 		return EnvDispatchResult{}, err
 	}
+	var messageRoster MessageRoster
+	if in.DispatchType == EnvDispatchMessage {
+		var err error
+		messageRoster, err = s.deps.ResolveMessageRoster(ctx, in.WorkspaceID, in.AgentID, in.SquadID)
+		if err != nil {
+			return EnvDispatchResult{}, fmt.Errorf("validation_failed: resolve message roster: %w", err)
+		}
+	}
 
 	// DB-backed per-agent env spec validation (§5): reject unknown agents and
 	// unknown/unauthorized env specs before any rollout state is created. No-op
@@ -392,7 +418,7 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			r, err := s.resetOne(ctx, in, env, idx)
+			r, err := s.resetOne(ctx, in, env, messageRoster, idx)
 			if err != nil {
 				resetErrMu.Lock()
 				resetErrs = append(resetErrs, fmt.Errorf("rollout %d reset: %w", idx, err))
@@ -460,7 +486,11 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 	if len(rollouts) > 0 {
 		projectID = rollouts[0].ProjectID
 	}
-	result := EnvDispatchResult{ProjectID: projectID, Rollouts: rollouts}
+	channelID := ""
+	if len(rollouts) > 0 {
+		channelID = rollouts[0].ChannelID
+	}
+	result := EnvDispatchResult{ChannelID: channelID, ProjectID: projectID, Rollouts: rollouts}
 
 	// Persist the idempotency response so a retry replays it (spec §7.7). Best-effort.
 	if in.IdempotencyKey != "" {
@@ -672,7 +702,7 @@ func (s *EnvDispatchService) validateBranchSource(ctx context.Context, in EnvDis
 }
 
 // resetOne does the per-rollout reset (sandbox + env + project) per §7.2.
-func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, sourceEnv Env, idx int) (EnvRollout, error) {
+func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, sourceEnv Env, roster MessageRoster, idx int) (EnvRollout, error) {
 	// sandbox_instance backend bridge (D7): save/resume-capable (trained)
 	// rollouts create sandbox_instances via the injected lifecycle creator
 	// instead of forking Fleet sandboxes, and carry structured SandboxRefs.
@@ -736,6 +766,14 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 	}
 
 	r := EnvRollout{EnvID: envID, ProjectID: projectID, SandboxRefs: sandboxRefs, AgentSandboxRefs: agentSandboxRefs}
+	if in.DispatchType == EnvDispatchMessage && in.Mode == EnvModeScratch {
+		channelID, err := s.deps.CreateEnvDispatchChannel(ctx, in.WorkspaceID, in.UserID, projectID, envID, roster, agentSandboxRefs)
+		if err != nil {
+			s.rollbackRollout(ctx, in.WorkspaceID, r)
+			return EnvRollout{}, fmt.Errorf("create env-dispatch channel: %w", err)
+		}
+		r.ChannelID = channelID
+	}
 	// Stash the single copied entity for dispatchOne (spec §7.4: exactly one).
 	if in.Mode == EnvModeBranch {
 		if in.Domain == EnvDomainSweLego {
@@ -963,6 +1001,9 @@ func (s *EnvDispatchService) dispatchOne(ctx context.Context, in EnvDispatchInpu
 // references env_id), then the env row, then its sandboxes. Every rollout
 // forks its own sandboxes, so this never touches a shared/source sandbox.
 func (s *EnvDispatchService) rollbackRollout(ctx context.Context, workspaceID string, r EnvRollout) {
+	if r.ChannelID != "" {
+		_ = s.deps.DeleteChannel(ctx, workspaceID, r.ChannelID)
+	}
 	if r.ProjectID != "" {
 		_ = s.deps.DeleteProject(ctx, r.ProjectID, workspaceID)
 	}

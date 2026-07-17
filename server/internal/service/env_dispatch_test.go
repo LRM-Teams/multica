@@ -13,13 +13,13 @@ import (
 )
 
 type fakeSandboxInstanceCreator struct {
-	calls      []createSandboxCall
-	ref        SandboxInstanceRef
-	err        error
-	refs       map[string]SandboxInstanceRef // instanceID -> ref for GetSandboxInstanceRef
-	getErr     error
-	deleteCalls []string                     // instanceIDs passed to DeleteSandboxInstance
-	deleteErr  error
+	calls       []createSandboxCall
+	ref         SandboxInstanceRef
+	err         error
+	refs        map[string]SandboxInstanceRef // instanceID -> ref for GetSandboxInstanceRef
+	getErr      error
+	deleteCalls []string // instanceIDs passed to DeleteSandboxInstance
+	deleteErr   error
 }
 
 func (c *fakeSandboxInstanceCreator) GetSandboxInstanceRef(_ context.Context, _, instanceID string) (SandboxInstanceRef, error) {
@@ -118,13 +118,35 @@ type fakeEnvDispatchDeps struct {
 	resolveEnvSpecErrs  map[string]error // template or base_env_id -> error; missing key = OK
 	validateAgentCalls  []string
 	resolveEnvSpecCalls []PerAgentEnvSpec
+	messageRoster       MessageRoster
+	channels            map[string]string
 }
 
 func newFakeEnvDispatchDeps() *fakeEnvDispatchDeps {
 	return &fakeEnvDispatchDeps{
 		envs: map[string]Env{}, sandboxes: map[string]string{}, projects: map[string]string{},
-		issues: map[string][]IssueRow{}, chatSess: map[string]string{},
+		issues: map[string][]IssueRow{}, chatSess: map[string]string{}, channels: map[string]string{},
 	}
+}
+
+func (f *fakeEnvDispatchDeps) ResolveMessageRoster(_ context.Context, _, agentID, _ string) (MessageRoster, error) {
+	if f.messageRoster.LeaderID != "" {
+		return f.messageRoster, nil
+	}
+	return MessageRoster{LeaderID: agentID, AgentIDs: []string{agentID}}, nil
+}
+func (f *fakeEnvDispatchDeps) CreateEnvDispatchChannel(_ context.Context, _, _, projectID, _ string, _ MessageRoster, _ map[string]SandboxInstanceRef) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	id := fmt.Sprintf("channel-%d", len(f.channels))
+	f.channels[id] = projectID
+	return id, nil
+}
+func (f *fakeEnvDispatchDeps) DeleteChannel(_ context.Context, _, channelID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.channels, channelID)
+	return nil
 }
 
 func (f *fakeEnvDispatchDeps) GetEnv(_ context.Context, envID, _ string) (Env, error) {
@@ -254,6 +276,7 @@ func (f *fakeEnvDispatchDeps) CreateChatSession(_ context.Context, pid, _, _, _ 
 func (f *fakeEnvDispatchDeps) CreateChatMessage(_ context.Context, _, _, _ string) (string, error) {
 	return "msg-1", nil
 }
+
 type precreateRuntimeCall struct {
 	WorkspaceID string
 	OwnerUserID string

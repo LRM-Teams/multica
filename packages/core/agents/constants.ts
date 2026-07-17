@@ -3,13 +3,14 @@
 // Kept in core so both apps and the test suite read from one source.
 export const AGENT_DESCRIPTION_MAX_LENGTH = 255;
 
-// The stable `@handle` (`Agent.name`). ASCII grammar mirrored from the backend
-// validator on `PUT /api/agents/{id}` (`username` field): lowercase letters,
-// digits, and hyphens, non-empty. Kept in core so the FE client-side check and
-// any future callers read the SAME grammar the server enforces — the server is
-// still authoritative (it also owns uniqueness → 409).
-export const AGENT_USERNAME_REGEX = /^[a-z0-9-]+$/;
-export const AGENT_USERNAME_MAX_LENGTH = 39;
+// The stable `@handle` (`Agent.name`). ASCII grammar mirrored EXACTLY from the
+// backend validator on `PUT /api/agents/{id}` (`username` field): lowercase
+// letters and digits in dash-separated segments — NO leading/trailing hyphen and
+// NO consecutive hyphens. Max 32 chars. Kept in core so the FE client-side check
+// and any future callers read the SAME grammar the server enforces — the server
+// is still authoritative (it also owns uniqueness → 409).
+export const AGENT_USERNAME_REGEX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+export const AGENT_USERNAME_MAX_LENGTH = 32;
 
 export type AgentUsernameError = "empty" | "too_long" | "invalid_chars";
 

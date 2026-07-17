@@ -791,7 +791,7 @@ func TestMemoryOperatingGuidePrioritizesExplicitUserPreferences(t *testing.T) {
 	out := buildMetaSkillContent("codex", ctx)
 
 	for _, want := range []string{
-		"### Memory Operating Guide (v0.2)",
+		"### Memory Operating Guide (v0.3)",
 		"Use high-strength auto-write for explicit user profile facts",
 		"A verbal acknowledgment such as \"got it\" does not count as remembering",
 		"current user's isolated `USER.md`",
@@ -799,14 +799,19 @@ func TestMemoryOperatingGuidePrioritizesExplicitUserPreferences(t *testing.T) {
 		"memory/MEMORY.md",
 		"MULTICA_USER_MEMORY_DIR",
 		"current member's durable preferences",
-		"applies to all agents or the whole team",
+		"Source is not scope",
+		"who said a memory is provenance",
+		"collective wording tells the addressed agents or team",
 		"governed team curation",
 		"memory/STATE.md",
 		"status, TTL/expiry, or reset date",
 		"memory/REVIEW.md",
 		"MULTICA_AGENT_SYNC_QUEUE_DIR/memory-candidates.jsonl",
 		"remember this",
-		"record it immediately in the requested agent-local destination",
+		"defaults to agent-global `memory/MEMORY.md`",
+		"Collective intent does not require the exact words \"all agents\"",
+		"都给我记住",
+		"agents that were absent can receive it",
 		"current task remain authoritative",
 		"Do not record guesses",
 		"never to copy private memory across agents directly",
@@ -853,7 +858,7 @@ func TestMemoryOperatingGuideRequiresAgentLocalScope(t *testing.T) {
 		ChatSessionID: "chat-1",
 		AgentRoot:     "/tmp/multica/workspace-1/.multica/agents/agent-1",
 	})
-	if !strings.Contains(withRoot, "### Memory Operating Guide (v0.2)") {
+	if !strings.Contains(withRoot, "### Memory Operating Guide (v0.3)") {
 		t.Fatalf("memory operating guide missing when an agent-local root exists:\n%s", withRoot)
 	}
 

@@ -586,6 +586,7 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "failed to commit inbox completion")
 		return
 	}
+	h.persistChatRuntimeTokenStats(r.Context(), event.ChatSessionID, req.RuntimeStats)
 	if !req.MustReplyFailure {
 		h.TaskService.RecordEvolutionSkillOutcome(r.Context(), event.ID, "success", "success")
 	}

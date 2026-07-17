@@ -85,20 +85,22 @@ type ChannelLastMessage struct {
 }
 
 type ChannelMemberBrief struct {
-	MemberType  string  `json:"member_type"`
-	MemberID    string  `json:"member_id"`
-	Name        string  `json:"name"`
-	DisplayName string  `json:"display_name"`
-	AvatarURL   *string `json:"avatar_url"`
+	MemberType   string                      `json:"member_type"`
+	MemberID     string                      `json:"member_id"`
+	Name         string                      `json:"name"`
+	DisplayName  string                      `json:"display_name"`
+	AvatarURL    *string                     `json:"avatar_url"`
+	RuntimeStats *protocol.RuntimeTokenStats `json:"runtime_stats,omitempty"`
 }
 
 type ChannelMemberResponse struct {
-	MemberType  string  `json:"member_type"`
-	MemberID    string  `json:"member_id"`
-	Name        string  `json:"name"`
-	DisplayName string  `json:"display_name"`
-	AvatarURL   *string `json:"avatar_url"`
-	CreatedAt   string  `json:"created_at"`
+	MemberType   string                      `json:"member_type"`
+	MemberID     string                      `json:"member_id"`
+	Name         string                      `json:"name"`
+	DisplayName  string                      `json:"display_name"`
+	AvatarURL    *string                     `json:"avatar_url"`
+	RuntimeStats *protocol.RuntimeTokenStats `json:"runtime_stats,omitempty"`
+	CreatedAt    string                      `json:"created_at"`
 }
 
 type ChannelMessageResponse struct {
@@ -881,10 +883,13 @@ func (h *Handler) ListChannelMembers(w http.ResponseWriter, r *http.Request) {
 		       COALESCE(u.name, a.name, ''),
 		       COALESCE(NULLIF(u.display_name, ''), u.name, u.email, NULLIF(a.display_name, ''), a.name, ''),
 		       CASE WHEN cm.member_type = 'user' THEN u.avatar_url ELSE a.avatar_url END,
+		       cs.runtime_token_stats,
 		       cm.created_at
 		FROM channel_member cm
 		LEFT JOIN "user" u ON cm.member_type = 'user' AND u.id = cm.member_id
 		LEFT JOIN agent a ON cm.member_type = 'agent' AND a.id = cm.member_id
+		LEFT JOIN channel_agent_session cas ON cm.member_type = 'agent' AND cas.channel_id = cm.channel_id AND cas.agent_id = cm.member_id
+		LEFT JOIN chat_session cs ON cs.id = cas.chat_session_id
 		WHERE cm.channel_id = $1 AND cm.workspace_id = $2
 		ORDER BY cm.created_at ASC`, channelID, parseUUID(workspaceID))
 	if err != nil {
@@ -897,12 +902,20 @@ func (h *Handler) ListChannelMembers(w http.ResponseWriter, r *http.Request) {
 		var typ, name, displayName string
 		var id pgtype.UUID
 		var avatarURL pgtype.Text
+		var runtimeStatsRaw []byte
 		var createdAt pgtype.Timestamptz
-		if err := rows.Scan(&typ, &id, &name, &displayName, &avatarURL, &createdAt); err != nil {
+		if err := rows.Scan(&typ, &id, &name, &displayName, &avatarURL, &runtimeStatsRaw, &createdAt); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read channel members")
 			return
 		}
-		out = append(out, ChannelMemberResponse{MemberType: typ, MemberID: uuidToString(id), Name: name, DisplayName: firstNonEmpty(displayName, name), AvatarURL: textToPtr(avatarURL), CreatedAt: timestampToString(createdAt)})
+		member := ChannelMemberResponse{MemberType: typ, MemberID: uuidToString(id), Name: name, DisplayName: firstNonEmpty(displayName, name), AvatarURL: textToPtr(avatarURL), CreatedAt: timestampToString(createdAt)}
+		if len(runtimeStatsRaw) > 0 {
+			var stats protocol.RuntimeTokenStats
+			if json.Unmarshal(runtimeStatsRaw, &stats) == nil {
+				member.RuntimeStats = &stats
+			}
+		}
+		out = append(out, member)
 	}
 	writeJSON(w, http.StatusOK, out)
 }

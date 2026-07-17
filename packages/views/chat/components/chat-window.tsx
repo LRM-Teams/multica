@@ -21,6 +21,7 @@ import { api } from "@multica/core/api";
 import { useAgentPresenceDetail, useWorkspaceAgentAvailability } from "@multica/core/agents";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { ActorAvatar } from "../../common/actor-avatar";
+import { RuntimeTokenStatsBadge } from "../../common/runtime-token-stats-badge";
 import {
   PickerEmpty,
   PickerItem,
@@ -726,6 +727,7 @@ export function ChatWindow() {
             activeSessionId={activeSessionId}
             onSelectSession={handleSelectSession}
           />
+          <RuntimeTokenStatsBadge stats={currentSession?.runtime_stats} compact className="hidden sm:inline-flex" />
         </div>
         <div className="flex items-center gap-0.5 shrink-0">
           <Tooltip>

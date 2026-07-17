@@ -49,6 +49,7 @@ import { ActorAvatar } from "../../common/actor-avatar";
 import { AgentCoarsePresenceLine } from "../../agents/components/agent-coarse-presence-line";
 import { ConversationAgentActivityLine } from "../../agents/components/conversation-agent-activity-line";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
+import { RuntimeTokenStatsBadge } from "../../common/runtime-token-stats-badge";
 import { AgentPanelProvider, useOpenAgentPanel } from "../../common/agent-panel-context";
 import { useT } from "../../i18n/use-t";
 import { composePayloadKey } from "../hooks/use-compose-send-intent";
@@ -346,9 +347,12 @@ function DmHeader({
       meta={meta}
       status={agentStatus}
       badges={
-        isConversationMuted(dm) ? (
-          <MutedIndicator label={t(($) => $.dm.muted_label)} />
-        ) : null
+        <>
+          <RuntimeTokenStatsBadge stats={dm.runtime_stats} compact />
+          {isConversationMuted(dm) ? (
+            <MutedIndicator label={t(($) => $.dm.muted_label)} />
+          ) : null}
+        </>
       }
       actions={
         <>
@@ -1185,6 +1189,7 @@ function DmChannelConversation({
         agent={selectedAgentPanel}
         currentUserId={currentUserId}
         members={dmMembers}
+        runtimeStats={dm.runtime_stats}
         onClose={() => setSelectedAgentPanelId(null)}
       />
     ) : null;

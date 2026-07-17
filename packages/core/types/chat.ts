@@ -1,6 +1,22 @@
 import type { AgentTask } from "./agent";
 import type { MessagePart } from "./message-part";
 
+export interface RuntimeTokenStats {
+  provider?: string;
+  model?: string;
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
+  total_tokens?: number;
+  cost_usd?: number;
+  context_tokens?: number;
+  context_window?: number;
+  context_percent?: number;
+  auto_compaction_enabled?: boolean;
+  updated_at?: string;
+}
+
 export interface ChatSession {
   id: string;
   workspace_id: string;
@@ -13,6 +29,8 @@ export interface ChatSession {
    * works inside that project's directory. Null / absent means unbound.
    */
   project_id?: string | null;
+  /** Latest provider-native token/context stats when the runtime reports them. */
+  runtime_stats?: RuntimeTokenStats | null;
   /** True when the session has any unread assistant replies. List-only. */
   has_unread: boolean;
   created_at: string;

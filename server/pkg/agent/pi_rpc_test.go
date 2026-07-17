@@ -20,6 +20,12 @@ while IFS= read -r line; do
       printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Pi reply"}}\n'
       printf '{"type":"agent_end","messages":[{"role":"assistant","model":"test-pi","usage":{"input":2,"output":3}}]}\n'
       ;;
+    *'"type":"get_session_stats"'*)
+      printf '{"id":"multica-stats","type":"response","command":"get_session_stats","success":true,"data":{"tokens":{"input":349000,"output":10000,"cacheRead":2600000,"total":2959000},"cost":3.348,"contextUsage":{"tokens":272000,"contextWindow":607000,"percent":44.8}}}\n'
+      ;;
+    *'"type":"get_state"'*)
+      printf '{"id":"multica-state","type":"response","command":"get_state","success":true,"data":{"autoCompactionEnabled":true}}\n'
+      ;;
   esac
 done
 `
@@ -45,6 +51,9 @@ func TestPiRPCBackendReusesOneChildForCompatibleTurns(t *testing.T) {
 			}
 			if usage := got.Usage["test-pi"]; usage.InputTokens != 2 || usage.OutputTokens != 3 {
 				t.Fatalf("usage = %+v", got.Usage)
+			}
+			if got.RuntimeStats == nil || got.RuntimeStats.ContextPercent == nil || *got.RuntimeStats.ContextPercent != 44.8 || got.RuntimeStats.AutoCompactionEnabled == nil || !*got.RuntimeStats.AutoCompactionEnabled {
+				t.Fatalf("runtime stats = %+v", got.RuntimeStats)
 			}
 		case <-time.After(2 * time.Second):
 			t.Fatal("timed out waiting for Pi RPC turn")

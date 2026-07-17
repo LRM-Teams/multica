@@ -140,6 +140,7 @@ export type { StickerAsset, StickerCatalogResponse, StickerPack } from "./sticke
 export type { Attachment } from "./attachment";
 export { attachmentDownloadPath, attachmentIdFromDownloadURL, contentReferencesAttachment } from "./attachment-url";
 export type {
+  RuntimeTokenStats,
   ChatSession,
   ChatMessage,
   ChatMessagesPage,

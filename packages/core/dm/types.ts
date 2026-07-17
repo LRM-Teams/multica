@@ -1,4 +1,4 @@
-import type { ChannelLastMessage } from "../types";
+import type { ChannelLastMessage, RuntimeTokenStats } from "../types";
 
 /**
  * The other party in a 1-on-1 direct message. `type` discriminates a human
@@ -56,6 +56,8 @@ export interface DMItem {
    * Drives the "N new messages" divider pinned on entry; omitted → no divider.
    */
   last_read_seq?: number;
+  /** Latest provider-native token/context stats for agent DMs when available. */
+  runtime_stats?: RuntimeTokenStats | null;
 }
 
 /** Body for POST /api/dm — idempotent create-or-find of a 1-on-1 DM. */

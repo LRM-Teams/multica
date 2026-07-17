@@ -125,12 +125,31 @@ type TokenUsage struct {
 
 // Result is the final outcome after an agent session completes.
 type Result struct {
-	Status     string // "completed", "failed", "aborted", "timeout", "cancelled"
-	Output     string // accumulated text output
-	Error      string // error message if failed
-	DurationMs int64
-	SessionID  string
-	Usage      map[string]TokenUsage // keyed by model name
+	Status       string // "completed", "failed", "aborted", "timeout", "cancelled"
+	Output       string // accumulated text output
+	Error        string // error message if failed
+	DurationMs   int64
+	SessionID    string
+	Usage        map[string]TokenUsage // keyed by model name
+	RuntimeStats *RuntimeTokenStats    // provider-native current-session telemetry when available
+}
+
+// RuntimeTokenStats is provider-native token/cost/context telemetry for the
+// current persistent runtime session. Backends that cannot report context
+// usage leave it nil.
+type RuntimeTokenStats struct {
+	Provider              string
+	Model                 string
+	InputTokens           int64
+	OutputTokens          int64
+	CacheReadTokens       int64
+	CacheWriteTokens      int64
+	TotalTokens           int64
+	CostUSD               *float64
+	ContextTokens         *int64
+	ContextWindow         *int64
+	ContextPercent        *float64
+	AutoCompactionEnabled *bool
 }
 
 // Config configures a Backend instance.

@@ -133,15 +133,14 @@ func (b *piRPCBackend) executeTurn(ctx context.Context, prompt string, opts Exec
 		b.dispose(p)
 		return Result{Status: "failed", Error: fmt.Sprintf("Pi RPC prompt write: %v", err)}
 	}
-	select {
-	case response := <-turn.response:
-		if !response.Success {
-			b.dispose(p)
-			return Result{Status: "failed", Error: fmt.Sprintf("Pi RPC prompt: %s", response.Error)}
-		}
-	case <-ctx.Done():
+	response, ok := waitPiRPCResponse(ctx, turn, "multica-turn")
+	if !ok {
 		b.dispose(p)
 		return piRPCContextResult(ctx)
+	}
+	if !response.Success {
+		b.dispose(p)
+		return Result{Status: "failed", Error: fmt.Sprintf("Pi RPC prompt: %s", response.Error)}
 	}
 
 	select {
@@ -151,7 +150,7 @@ func (b *piRPCBackend) executeTurn(ctx context.Context, prompt string, opts Exec
 			return Result{Status: "failed", Error: completed.err}
 		}
 		usage := piRPCUsage(completed.messages, opts.Model)
-		return Result{Status: "completed", Output: output.String(), SessionID: p.sessionPath, Usage: usage}
+		return Result{Status: "completed", Output: output.String(), SessionID: p.sessionPath, Usage: usage, RuntimeStats: p.queryRuntimeStats(ctx, turn, opts.Model)}
 	case <-ctx.Done():
 		// A cancelled RPC turn has an unknown queue/agent state. Disposing is
 		// safer than sending abort and guessing whether a later event belongs
@@ -248,7 +247,7 @@ func (b *piRPCBackend) readEvents(p *piRPCProcess, stdout io.Reader) {
 			p.stateMu.Lock()
 			turn := p.turn
 			p.stateMu.Unlock()
-			if turn != nil && response.ID == "multica-turn" {
+			if turn != nil {
 				trySendPiRPCResponse(turn.response, response)
 			}
 			continue
@@ -304,6 +303,97 @@ func piRPCDispatchEvent(event piRPCEvent, turn *piRPCTurn) {
 		trySendPiRPCCompletion(turn.done, piRPCCompletion{err: decodePiString(event.Message)})
 	case "agent_end":
 		trySendPiRPCCompletion(turn.done, piRPCCompletion{messages: event.Messages})
+	}
+}
+
+func waitPiRPCResponse(ctx context.Context, turn *piRPCTurn, id string) (piRPCResponse, bool) {
+	for {
+		select {
+		case response := <-turn.response:
+			if response.ID == id {
+				return response, true
+			}
+		case <-ctx.Done():
+			return piRPCResponse{}, false
+		}
+	}
+}
+
+const piRPCRuntimeStatsQueryTimeout = 300 * time.Millisecond
+
+func (p *piRPCProcess) queryRuntimeStats(ctx context.Context, turn *piRPCTurn, fallbackModel string) *RuntimeTokenStats {
+	statsCtx, cancel := context.WithTimeout(ctx, piRPCRuntimeStatsQueryTimeout)
+	defer cancel()
+
+	if err := p.writeCommand(map[string]any{"id": "multica-stats", "type": "get_session_stats"}); err != nil {
+		return nil
+	}
+	response, ok := waitPiRPCResponse(statsCtx, turn, "multica-stats")
+	if !ok || !response.Success || len(response.Data) == 0 {
+		return nil
+	}
+	stats := parsePiRPCSessionStats(response.Data, fallbackModel)
+	if stats == nil {
+		return nil
+	}
+	if err := p.writeCommand(map[string]any{"id": "multica-state", "type": "get_state"}); err != nil {
+		return stats
+	}
+	stateResponse, ok := waitPiRPCResponse(statsCtx, turn, "multica-state")
+	if ok && stateResponse.Success && len(stateResponse.Data) > 0 {
+		applyPiRPCStateStats(stats, stateResponse.Data)
+	}
+	return stats
+}
+
+type piRPCContextUsage struct {
+	Tokens        *int64   `json:"tokens"`
+	ContextWindow *int64   `json:"contextWindow"`
+	Percent       *float64 `json:"percent"`
+}
+
+func parsePiRPCSessionStats(raw json.RawMessage, fallbackModel string) *RuntimeTokenStats {
+	var payload struct {
+		Tokens struct {
+			Input      int64 `json:"input"`
+			Output     int64 `json:"output"`
+			CacheRead  int64 `json:"cacheRead"`
+			CacheWrite int64 `json:"cacheWrite"`
+			Total      int64 `json:"total"`
+		} `json:"tokens"`
+		Cost         *float64           `json:"cost"`
+		ContextUsage *piRPCContextUsage `json:"contextUsage"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil
+	}
+	if payload.Tokens.Total == 0 && payload.Tokens.Input == 0 && payload.Tokens.Output == 0 && payload.ContextUsage == nil && payload.Cost == nil {
+		return nil
+	}
+	stats := &RuntimeTokenStats{
+		Provider:         "pi",
+		Model:            fallbackModel,
+		InputTokens:      payload.Tokens.Input,
+		OutputTokens:     payload.Tokens.Output,
+		CacheReadTokens:  payload.Tokens.CacheRead,
+		CacheWriteTokens: payload.Tokens.CacheWrite,
+		TotalTokens:      payload.Tokens.Total,
+		CostUSD:          payload.Cost,
+	}
+	if payload.ContextUsage != nil {
+		stats.ContextTokens = payload.ContextUsage.Tokens
+		stats.ContextWindow = payload.ContextUsage.ContextWindow
+		stats.ContextPercent = payload.ContextUsage.Percent
+	}
+	return stats
+}
+
+func applyPiRPCStateStats(stats *RuntimeTokenStats, raw json.RawMessage) {
+	var payload struct {
+		AutoCompactionEnabled *bool `json:"autoCompactionEnabled"`
+	}
+	if json.Unmarshal(raw, &payload) == nil && payload.AutoCompactionEnabled != nil {
+		stats.AutoCompactionEnabled = payload.AutoCompactionEnabled
 	}
 }
 

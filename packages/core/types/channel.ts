@@ -1,3 +1,4 @@
+import type { RuntimeTokenStats } from "./chat";
 import type { MessagePart } from "./message-part";
 
 export interface ChannelLastMessage {
@@ -16,6 +17,7 @@ export interface ChannelMemberBrief {
   /** Human-facing member label. */
   display_name: string;
   avatar_url?: string | null;
+  runtime_stats?: RuntimeTokenStats | null;
 }
 
 export interface Channel {
@@ -56,6 +58,7 @@ export interface ChannelMember {
   /** Human-facing member label. */
   display_name: string;
   avatar_url?: string | null;
+  runtime_stats?: RuntimeTokenStats | null;
   created_at: string;
 }
 

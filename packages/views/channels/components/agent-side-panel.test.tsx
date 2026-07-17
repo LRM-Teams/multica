@@ -53,11 +53,6 @@ vi.mock("../../agents/components/inspector/thinking-prop-row", () => ({
     <div data-testid="thinking-picker" data-can-edit={String(!!p.canEdit)} />
   ),
 }));
-vi.mock("../../agents/components/inspector/concurrency-picker", () => ({
-  ConcurrencyPicker: (p: { canEdit?: boolean }) => (
-    <div data-testid="concurrency-picker" data-can-edit={String(!!p.canEdit)} />
-  ),
-}));
 vi.mock("../../agents/components/inspector/visibility-picker", () => ({
   VisibilityPicker: (p: { canEdit?: boolean }) => (
     <div data-testid="visibility-picker" data-can-edit={String(!!p.canEdit)} />
@@ -101,13 +96,13 @@ const RESOURCES = {
     no_description: "No description",
     created_label: "Created",
     owner_label: "Owner",
+    runtime_section: "Runtime Config",
   },
   inspector: {
     section_properties: "Properties",
     prop_runtime: "Runtime",
     prop_model: "Model",
     prop_visibility: "Visibility",
-    prop_concurrency: "Concurrency",
   },
 };
 
@@ -195,17 +190,29 @@ describe("AgentSidePanel", () => {
   it("never renders a separate Config tab (merged into Profile, #565)", () => {
     renderPanel("user-owner", "group_manager");
     expect(screen.queryByRole("button", { name: "Config" })).not.toBeInTheDocument();
-    // Runtime config now lives inside the Profile view, not a separate tab.
+    // Runtime config now lives inside the Profile view, not a separate tab, under
+    // a Profile-specific "Runtime Config" title (not the shared "Properties").
+    expect(screen.getByText("Runtime Config")).toBeInTheDocument();
+    expect(screen.queryByText("Properties")).not.toBeInTheDocument();
     expect(screen.getByTestId("runtime-picker")).toBeInTheDocument();
-    expect(screen.getByTestId("concurrency-picker")).toBeInTheDocument();
     expect(screen.getByTestId("visibility-picker")).toBeInTheDocument();
+    // Concurrency was dropped from the Profile runtime section (#565 fix-forward).
+    expect(screen.queryByTestId("concurrency-picker")).not.toBeInTheDocument();
+  });
+
+  it("renders exactly the 4 runtime pickers, no Concurrency (#565 fix-forward)", () => {
+    renderPanel("user-owner", "group_manager");
+    for (const id of ["runtime-picker", "model-picker", "thinking-picker", "visibility-picker"]) {
+      expect(screen.getByTestId(id)).toBeInTheDocument();
+    }
+    expect(screen.queryByTestId("concurrency-picker")).not.toBeInTheDocument();
   });
 
   it("renders EDITABLE runtime pickers in Profile for a group manager (any member)", () => {
     // permission stays denied — the group_manager override is what grants edit.
     renderPanel("user-other", "group_manager");
 
-    for (const id of ["runtime-picker", "model-picker", "thinking-picker", "visibility-picker", "concurrency-picker"]) {
+    for (const id of ["runtime-picker", "model-picker", "thinking-picker", "visibility-picker"]) {
       expect(screen.getByTestId(id)).toHaveAttribute("data-can-edit", "true");
     }
   });
@@ -214,7 +221,7 @@ describe("AgentSidePanel", () => {
     permission.allowed = false;
     renderPanel("user-other");
 
-    for (const id of ["runtime-picker", "model-picker", "thinking-picker", "visibility-picker", "concurrency-picker"]) {
+    for (const id of ["runtime-picker", "model-picker", "thinking-picker", "visibility-picker"]) {
       expect(screen.getByTestId(id)).toHaveAttribute("data-can-edit", "false");
     }
   });

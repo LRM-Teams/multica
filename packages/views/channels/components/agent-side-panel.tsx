@@ -14,7 +14,6 @@ import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import { ActivityTab } from "../../agents/components/tabs/activity-tab";
 import { AgentPresenceStatusLine } from "../../agents/components/agent-presence-status-line";
-import { ConcurrencyPicker } from "../../agents/components/inspector/concurrency-picker";
 import { ModelPicker } from "../../agents/components/inspector/model-picker";
 import { RuntimePicker } from "../../agents/components/inspector/runtime-picker";
 import { ThinkingPropRow } from "../../agents/components/inspector/thinking-prop-row";
@@ -232,7 +231,7 @@ function AgentProfileTabContent({
       {/* Runtime config (editable/gated): the execution attributes the old
           standalone Config tab exposed, merged here so Profile no longer shows
           them read-only while a separate tab edited them. */}
-      <ConfigSection label={t(($) => $.inspector.section_properties)}>
+      <ConfigSection label={t(($) => $.side_panel.runtime_section)}>
         <PropRow label={t(($) => $.inspector.prop_runtime)} interactive={false}>
           {/* flex-wrap so the version-outdated (过期) badge drops below the
               runtime chip instead of being squeezed off at 375px — it must
@@ -275,13 +274,6 @@ function AgentProfileTabContent({
             value={agent.visibility}
             canEdit={canEditRuntime}
             onChange={(v) => update({ visibility: v })}
-          />
-        </PropRow>
-        <PropRow label={t(($) => $.inspector.prop_concurrency)} interactive={false}>
-          <ConcurrencyPicker
-            value={agent.max_concurrent_tasks}
-            canEdit={canEditRuntime}
-            onChange={(n) => update({ max_concurrent_tasks: n })}
           />
         </PropRow>
       </ConfigSection>

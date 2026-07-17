@@ -11,6 +11,7 @@
   "exports": {
     "./navigation": "./navigation/index.ts",
     "./common/actor-avatar": "./common/actor-avatar.tsx",
+    "./common/actor-profile-page": "./common/actor-profile-page.tsx",
     "./common/markdown": "./common/markdown.tsx",
     "./editor": "./editor/index.ts",
     "./issues/components": "./issues/components/index.ts",

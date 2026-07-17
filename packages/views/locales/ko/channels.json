@@ -90,6 +90,7 @@
     "member_unavailable": "멤버를 사용할 수 없습니다",
     "no_description": "아직 소개가 없습니다",
     "recent_activity": "최근 활동",
+    "back": "뒤로",
     "no_recent_activity": "최근 활동이 없습니다",
     "role": {
       "owner": "소유자",

@@ -238,12 +238,19 @@ func (h *Handler) GetDag(w http.ResponseWriter, r *http.Request) {
 	if _, ok := requireUserID(w, r); !ok {
 		return
 	}
+	h.getEnvDispatchDagForProject(w, r, chi.URLParam(r, "projectID"))
+}
+
+// getEnvDispatchDagForProject serves the project-scoped assembled DAG for both
+// the project-first route (GetDag) and the channel-first facade
+// (GetEnvDispatchChannelDag). The caller resolves and supplies the project id;
+// no URL param is read here.
+func (h *Handler) getEnvDispatchDagForProject(w http.ResponseWriter, r *http.Request, projectID string) {
 	workspaceID := ctxWorkspaceID(r.Context())
 	if workspaceID == "" {
 		writeError(w, http.StatusBadRequest, "workspace ID required")
 		return
 	}
-	projectID := chi.URLParam(r, "projectID")
 	projectUUID, ok := parseUUIDOrBadRequest(w, projectID, "projectID")
 	if !ok {
 		return

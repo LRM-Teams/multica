@@ -106,10 +106,14 @@ func (s envDispatchChannelStore) markFailed(ctx context.Context, exec db.DBTX, e
 }
 
 func (s envDispatchChannelStore) markDeleting(ctx context.Context, exec db.DBTX, envID string) error {
+	// Mark pending/failed/ready bindings deleting so no new provisioning claim
+	// succeeds (claimProvisioning only claims pending/failed). Provisioning
+	// rows are intentionally left alone so an in-flight provisioner can reach a
+	// terminal state the cleanup then reclaims; cleanup waits for that.
 	_, err := exec.Exec(ctx, `
 		UPDATE environment_agent_sandbox
 		SET status = 'deleting', updated_at = now()
-		WHERE env_id = $1 AND status <> 'deleting'`, envID)
+		WHERE env_id = $1 AND status NOT IN ('deleting', 'provisioning')`, envID)
 	return err
 }
 

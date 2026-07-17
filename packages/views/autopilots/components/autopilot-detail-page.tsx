@@ -74,13 +74,13 @@ function formatDate(date: string): string {
 type RunStatus = "issue_created" | "running" | "skipped" | "completed" | "failed";
 
 const RUN_VISUAL: Record<RunStatus, { color: string; icon: typeof CheckCircle2; spin?: boolean }> = {
-  issue_created: { color: "text-blue-500", icon: Clock },
-  running: { color: "text-blue-500", icon: Loader2, spin: true },
+  issue_created: { color: "text-brand", icon: Clock },
+  running: { color: "text-brand", icon: Loader2, spin: true },
   // `skipped` (admission check found the assignee runtime offline,
   // MUL-1899) is muted so it doesn't read as a failure-ratio inflator.
   // The row still shows failure_reason which carries the skip context.
   skipped: { color: "text-muted-foreground", icon: Ban },
-  completed: { color: "text-emerald-500", icon: CheckCircle2 },
+  completed: { color: "text-success", icon: CheckCircle2 },
   failed: { color: "text-destructive", icon: XCircle },
 };
 
@@ -379,7 +379,7 @@ function TriggerRow({ trigger, autopilotId }: { trigger: AutopilotTrigger; autop
               onClick={handleCopy}
               title={t(($) => $.trigger_row.copy_url)}
             >
-              {copied ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5 text-muted-foreground" />}
+              {copied ? <Check className="h-3.5 w-3.5 text-success" /> : <Copy className="h-3.5 w-3.5 text-muted-foreground" />}
             </Button>
             <Button
               size="icon"
@@ -696,8 +696,8 @@ export function AutopilotDetailPage({ autopilotId }: { autopilotId: string }) {
               />
               <span className={cn(
                 "text-xs font-medium hidden sm:inline",
-                autopilot.status === "active" ? "text-emerald-500" :
-                autopilot.status === "paused" ? "text-amber-500" :
+                autopilot.status === "active" ? "text-success" :
+                autopilot.status === "paused" ? "text-warning" :
                 "text-muted-foreground",
               )}>
                 {t(($) => $.status[autopilot.status])}

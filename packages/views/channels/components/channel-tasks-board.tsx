@@ -57,12 +57,17 @@ function ChannelTaskCard({ issue }: { issue: Issue }) {
  * wiring — just the presentational shell around a plain stack of read-only cards.
  *
  * Responsive (#562 mobile, Iris-gated): the SAME shell/heading/card — only the
- * arrangement changes. On mobile (<768px) `widthClassName` makes the section
- * full-width and the body flows at content height; the mobile board renders just
+ * arrangement changes. When narrow (≤768px) `widthClassName` makes the section
+ * full-width and the body flows at content height; the narrow board renders just
  * ONE of these (the status picked by the segmented control, below) inside its own
  * vertical scroller — NOT all four stacked (that regressed to a grouped list).
- * At ≥768px (`md:`) it is the fixed 300px column with its own internal scroll,
- * identical to the editable board's desktop columns.
+ * At >768px (`min-[769px]:`) it is the fixed 300px column with its own internal
+ * scroll, identical to the editable board's desktop columns.
+ *
+ * The CSS breakpoint is `min-[769px]:` (NOT `md:`/≥768) so it agrees with the JS
+ * `useIsNarrow` single source of truth (≤768 = narrow, #685 closure): at exactly
+ * 768 the JS renders the segmented tree AND the CSS must stay full-width — a `md:`
+ * (768 ≥ 768) would snap this to 300px while `useIsNarrow` says narrow.
  */
 function ChannelBoardColumn({ status, issues }: { status: IssueStatus; issues: Issue[] }) {
   const { t: tc } = useT("channels");
@@ -73,9 +78,10 @@ function ChannelBoardColumn({ status, issues }: { status: IssueStatus; issues: I
     [status, issues.length],
   );
   return (
-    // md:w-[300px] must equal BOARD_COL_WIDTH (Tailwind needs a literal class).
-    <BoardColumnShell heading={heading} widthClassName="w-full shrink-0 md:w-[300px]">
-      <div className="space-y-2 rounded-lg p-1 md:min-h-[200px] md:flex-1 md:overflow-y-auto">
+    // min-[769px]:w-[300px] must equal BOARD_COL_WIDTH (Tailwind needs a literal
+    // class). Breakpoint is >768 (not md:/≥768) to match `useIsNarrow` (≤768).
+    <BoardColumnShell heading={heading} widthClassName="w-full shrink-0 min-[769px]:w-[300px]">
+      <div className="space-y-2 rounded-lg p-1 min-[769px]:min-h-[200px] min-[769px]:flex-1 min-[769px]:overflow-y-auto">
         {issues.length === 0 ? (
           <p className="py-8 text-center text-xs text-muted-foreground">{tc(($) => $.tasks.column_empty)}</p>
         ) : (
@@ -170,9 +176,9 @@ export function ChannelTasksBoard({ channelId }: { channelId: string }) {
 
   if (isPending) {
     return (
-      <div className="flex flex-1 min-h-0 flex-col gap-4 overflow-y-auto p-4 md:flex-row md:overflow-hidden">
+      <div className="flex flex-1 min-h-0 flex-col gap-4 overflow-y-auto p-4 min-[769px]:flex-row min-[769px]:overflow-hidden">
         {Array.from({ length: 4 }).map((_, col) => (
-          <div key={col} className="flex w-full shrink-0 flex-col gap-2 md:w-[300px]">
+          <div key={col} className="flex w-full shrink-0 flex-col gap-2 min-[769px]:w-[300px]">
             <Skeleton className="h-5 w-24" />
             <Skeleton className="h-20" />
             <Skeleton className="h-20" />
@@ -239,7 +245,7 @@ export function ChannelTasksBoard({ channelId }: { channelId: string }) {
             </div>
           </>
         ) : (
-          <div className="flex flex-1 min-h-0 flex-col gap-4 overflow-y-auto p-4 md:flex-row md:overflow-x-auto md:overflow-y-visible">
+          <div className="flex flex-1 min-h-0 flex-col gap-4 overflow-y-auto p-4 min-[769px]:flex-row min-[769px]:overflow-x-auto min-[769px]:overflow-y-visible">
             {columns.map((column) => (
               <ChannelBoardColumn key={column.status} status={column.status} issues={column.issues} />
             ))}

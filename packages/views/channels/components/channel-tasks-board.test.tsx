@@ -54,12 +54,16 @@ vi.mock("../../issues/components/board-column", async () => {
       heading,
       actions,
       children,
+      widthClassName,
     }: {
       heading: React.ReactNode;
       actions?: React.ReactNode;
       children: React.ReactNode;
+      widthClassName?: string;
     }) => (
-      <div>
+      // Faithful to the real shell, which applies `widthClassName` to its root
+      // div — so the board's responsive width class contract stays observable.
+      <div data-testid="board-column-shell" className={widthClassName}>
         {heading}
         {actions}
         {children}
@@ -217,6 +221,25 @@ describe("ChannelTasksBoard", () => {
     // The active pill (only it) is brought into view, centered in its scroller —
     // not the page (block: "nearest").
     expect(activePill.scrollIntoView).toHaveBeenCalledWith({ inline: "center", block: "nearest" });
+  });
+
+  it("column width uses the min-[769px]: breakpoint that agrees with useIsNarrow — never md: (≥768 would snap to 300px at 768 while JS says narrow)", async () => {
+    // The width class is static (the responsive prefix does the switching, not
+    // JS), so its contract is identical narrow or wide. Assert it directly: base
+    // full-width + the desktop 300px gated at >768, and crucially NO `md:` — a
+    // `md:`/≥768 reintroduction would disagree with `useIsNarrow` (≤768) at 768.
+    mockIsNarrow = true;
+    listSourceIssues.mockResolvedValue({
+      issues: [makeIssue({ id: "issue-1", title: "Fix the login bug", status: "in_progress" })],
+      total: 1,
+    });
+    renderBoard();
+
+    await screen.findByText("Fix the login bug");
+    const shell = screen.getByTestId("board-column-shell");
+    expect(shell).toHaveClass("w-full");
+    expect(shell).toHaveClass("min-[769px]:w-[300px]");
+    expect(shell.className).not.toMatch(/(?:^|\s|:)md:/);
   });
 
   it("groups the source tasks into status columns, each card linking to the task detail", async () => {

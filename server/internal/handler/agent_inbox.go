@@ -560,10 +560,14 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		}
 		chatDonePayload = payload
 	}
+	terminalOutcome := agentInboxCompletionTerminalOutcome(r.Context(), h, event, req.TaskCompleteRequest, chatDonePayload)
+	if req.MustReplyFailure {
+		terminalOutcome = "failed"
+	}
 	if _, err := qtx.SetAgentInboxTerminalOutcome(r.Context(), db.SetAgentInboxTerminalOutcomeParams{
 		ID:                 event.ID,
 		WorkspaceID:        event.WorkspaceID,
-		TerminalOutcome:    strToText(agentInboxCompletionTerminalOutcome(r.Context(), h, event, req.TaskCompleteRequest, chatDonePayload)),
+		TerminalOutcome:    strToText(terminalOutcome),
 		TerminalDeliveryID: deliveryID,
 		Retryable:          false,
 	}); err != nil {
@@ -574,13 +578,22 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "failed to commit inbox completion")
 		return
 	}
-	h.TaskService.RecordEvolutionSkillOutcome(r.Context(), event.ID, "success", "success")
+	if !req.MustReplyFailure {
+		h.TaskService.RecordEvolutionSkillOutcome(r.Context(), event.ID, "success", "success")
+	}
 	if chatDonePayload != nil {
 		h.publishAgentInboxChatDone(event, *chatDonePayload)
 		h.recordAgentInboxVisibleOutputActivity(r.Context(), event, task.RuntimeID, *chatDonePayload)
 	}
 	h.recordAgentInboxStatusActivity(r.Context(), event, task.RuntimeID, deliveryID, agentInboxStatusActivityIdle)
-	h.publishAgentInboxTaskLifecycle(protocol.EventTaskCompleted, event, task.RuntimeID, "completed")
+	if req.MustReplyFailure {
+		h.publishAgentInboxTaskLifecycle(protocol.EventTaskFailed, event, task.RuntimeID, "failed")
+		h.recordAgentInboxFailureActivity(r.Context(), event, deliveryID,
+			"directed channel task completed without a successful agent transport reply",
+			"must_reply_failure", "must_reply_failure")
+	} else {
+		h.publishAgentInboxTaskLifecycle(protocol.EventTaskCompleted, event, task.RuntimeID, "completed")
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "acked_seq": acked.SeqTo})
 }
 

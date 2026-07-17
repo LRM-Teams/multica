@@ -2430,27 +2430,11 @@ func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.Agent
 	if err != nil {
 		return fmt.Errorf("invalid message parts: %w", err)
 	}
-	if channelTask && task.Priority >= 2 && !explicitAction {
-		if sanitized, ok := sanitizeRuntimeDiagnosticFinalText(output, parts); ok {
-			slog.Warn("complete task: sanitizing runtime diagnostic final text",
-				"task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID))
-			output = sanitized
-			parts = nil
-			req.Output = output
-			req.Parts = nil
-		}
-	}
 	if channelTask && !explicitAction && isLegacyChannelProtocolOutput(output, parts) {
 		slog.Warn("complete task: suppressing protocol-shaped final text output", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "output_suppressed_reason", protocol.ChannelOutputSuppressedReasonLegacyProtocolOutput)
-		h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonLegacyProtocolOutput)
+		h.suppressChannelTaskCompleteOutput(ctx, task, req, protocol.ChannelOutputSuppressedReasonLegacyProtocolOutput)
 		return nil
 	}
-	if channelTask && !explicitAction && isNoReplyRationaleFinalText(output, parts) {
-		slog.Warn("complete task: suppressing no-reply rationale final text", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "output_suppressed_reason", protocol.ChannelOutputSuppressedReasonNoReplyRationale)
-		h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonNoReplyRationale)
-		return nil
-	}
-
 	if channelTask && strings.TrimSpace(req.Action) == "" {
 		legacyType, legacyErr := protocol.NormalizeChatOutputType(req.Type, strings.TrimSpace(output) != "" || len(parts) > 0, req.Reaction != nil)
 		if legacyErr == nil {
@@ -2477,7 +2461,7 @@ func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.Agent
 		if actionErr != nil {
 			if channelTask {
 				slog.Warn("complete task: suppressing invalid channel output action", "task_id", uuidToString(task.ID), "action", req.Action, "error", actionErr)
-				h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonInvalidAction)
+				h.suppressChannelTaskCompleteOutput(ctx, task, req, protocol.ChannelOutputSuppressedReasonInvalidAction)
 				return nil
 			}
 			return actionErr
@@ -2490,29 +2474,27 @@ func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.Agent
 	if err != nil {
 		if channelTask {
 			slog.Warn("complete task: suppressing invalid channel output type", "task_id", uuidToString(task.ID), "output_type", req.Type, "error", err)
-			h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonInvalidType)
+			h.suppressChannelTaskCompleteOutput(ctx, task, req, protocol.ChannelOutputSuppressedReasonInvalidType)
 			return nil
 		}
 		return err
 	}
 	if channelTask && (outputType == protocol.ChatOutputKindMessage || outputType == protocol.ChatOutputKindReaction) && h.taskHasAgentTransportVisibleOutput(ctx, task.ID) {
 		slog.Warn("complete task: suppressing final output after agent transport output", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "output_suppressed_reason", protocol.ChannelOutputSuppressedReasonToolTransportOutput)
-		h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonToolTransportOutput)
+		h.suppressChannelTaskCompleteOutput(ctx, task, req, protocol.ChannelOutputSuppressedReasonToolTransportOutput)
 		return nil
 	}
-	if channelTask && task.Priority < 2 && !explicitAction && outputType == protocol.ChatOutputKindMessage && h.taskRuntimeHasCapability(ctx, task, protocol.DaemonCapabilityAgentCLITransport) {
-		slog.Warn("complete task: suppressing unsent final text on ambient CLI-capable run", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "output_suppressed_reason", protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
-		h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
-		return nil
-	}
-	if channelTask && !explicitAction && outputType == protocol.ChatOutputKindMessage && h.shouldSuppressWeakAgentThreadPlainText(ctx, task, output) {
-		slog.Warn("complete task: suppressing weak agent thread plain-text fallback", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "output_suppressed_reason", protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
-		h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
-		return nil
-	}
-	if channelTask && explicitAction && (outputType == protocol.ChatOutputKindMessage || outputType == protocol.ChatOutputKindReaction) && !h.taskRuntimeHasCapability(ctx, task, protocol.DaemonCapabilityChannelOutputActions) {
-		slog.Warn("complete task: suppressing channel output action from outdated daemon", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "action", req.Action, "output_suppressed_reason", protocol.ChannelOutputSuppressedReasonDaemonOutdated)
-		h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonDaemonOutdated)
+	// Channel visibility is owned by the agent transport (the same explicit
+	// message-send boundary exposed to agents as Raft). A task completion is a
+	// terminal status report, never a second message-writing path. In
+	// particular, neither a plain final string nor completion-level
+	// message_send/message_react may be bridged into the channel.
+	if channelTask && (outputType == protocol.ChatOutputKindMessage || outputType == protocol.ChatOutputKindReaction) {
+		if task.Priority >= 2 {
+			req.MustReplyFailure = true
+		}
+		slog.Warn("complete task: suppressing channel output without agent transport send", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "action", req.Action, "output_suppressed_reason", protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
+		h.suppressChannelTaskCompleteOutput(ctx, task, req, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
 		return nil
 	}
 	if outputType != protocol.ChatOutputKindMessage {
@@ -2521,30 +2503,22 @@ func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.Agent
 	}
 	if channelTask && outputType == protocol.ChatOutputKindMessage && strings.TrimSpace(output) == "" && len(parts) == 0 {
 		slog.Warn("complete task: suppressing empty channel send action", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID))
-		h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonEmptyMessage)
+		h.suppressChannelTaskCompleteOutput(ctx, task, req, protocol.ChannelOutputSuppressedReasonEmptyMessage)
 		return nil
 	}
 	if channelTask && outputType == protocol.ChatOutputKindReaction && (req.Reaction == nil || strings.TrimSpace(req.Reaction.Emoji) == "") {
 		slog.Warn("complete task: suppressing invalid channel message react action", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID))
-		h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonInvalidReaction)
+		h.suppressChannelTaskCompleteOutput(ctx, task, req, protocol.ChannelOutputSuppressedReasonInvalidReaction)
 		return nil
 	}
-	// #308: Directed run (DM/@mention/direct question, priority >= 2) must produce
-	// visible output. If the agent explicitly chose no_reply or produced empty
-	// output with no CLI-sent message, it's a must-reply failure.
-	// This catches cases like Pi returning no_reply for every DM message,
-	// which bypasses #295's unsent_final_output suppression (no_reply is an
-	// explicit action).
-	// Plain-text final output (action="", non-empty) IS visible even without
-	// CLI transport — do NOT flag those as failure.
+	// Directed runs must use the transport for a visible reply. An explicit
+	// no_reply or empty completion without a transport message is observable as
+	// a must-reply failure; ordinary final text was already suppressed above.
 	if channelTask && task.Priority >= 2 && !req.MustReplyFailure {
 		hasCLIOutput := h.taskHasAgentTransportVisibleOutput(ctx, task.ID)
 		isNoReply := req.Action == protocol.ChatOutputActionNoReply
 		isEmptyMessage := req.Action == "" && outputType == protocol.ChatOutputKindMessage && strings.TrimSpace(output) == "" && len(parts) == 0
-		hasPlainText := req.Action == "" && outputType == protocol.ChatOutputKindMessage && (strings.TrimSpace(output) != "" || len(parts) > 0)
-		hasSendAction := req.Action == protocol.ChatOutputActionMessageSend
-		hasReactAction := req.Action == protocol.ChatOutputActionMessageReact
-		if !hasCLIOutput && !hasSendAction && !hasReactAction && !hasPlainText && (isNoReply || isEmptyMessage) {
+		if !hasCLIOutput && (isNoReply || isEmptyMessage) {
 			req.MustReplyFailure = true
 			slog.Warn("complete task: directed run must-reply failure — no visible output",
 				"task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID),
@@ -2558,7 +2532,7 @@ func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.Agent
 	if channelTask && outputType == protocol.ChatOutputKindMessage {
 		if err := h.validateChatOutputTarget(ctx, task, req.Target, req.Options); err != nil {
 			slog.Warn("complete task: suppressing invalid channel output target", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "target", req.Target, "error", err)
-			h.suppressTaskCompleteOutput(req, protocol.ChannelOutputSuppressedReasonInvalidTarget)
+			h.suppressChannelTaskCompleteOutput(ctx, task, req, protocol.ChannelOutputSuppressedReasonInvalidTarget)
 			return nil
 		}
 	} else if strings.TrimSpace(req.Target) != "" || chatOutputOptionsPresent(req.Options) {
@@ -2566,18 +2540,6 @@ func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.Agent
 		req.Options = nil
 	}
 	return nil
-}
-
-func (h *Handler) taskRuntimeHasCapability(ctx context.Context, task db.AgentTaskQueue, capability string) bool {
-	if !task.RuntimeID.Valid {
-		return false
-	}
-	rt, err := h.Queries.GetAgentRuntime(ctx, task.RuntimeID)
-	if err != nil {
-		slog.Warn("complete task: failed to load task runtime capabilities", "task_id", uuidToString(task.ID), "runtime_id", uuidToString(task.RuntimeID), "error", err)
-		return false
-	}
-	return agentRuntimeHasCapability(rt, capability)
 }
 
 func agentRuntimeHasCapability(rt db.AgentRuntime, capability string) bool {
@@ -2641,112 +2603,6 @@ func isLegacyChannelCLIOutput(output string) bool {
 	return false
 }
 
-func isNoReplyRationaleFinalText(output string, parts []protocol.MessagePart) bool {
-	if len(parts) > 0 {
-		return false
-	}
-	normalized := normalizeNoReplyRationaleCandidate(output)
-	if normalized == "" {
-		return false
-	}
-	for _, phrase := range []string{
-		"no visible reply needed",
-		"not posting",
-		"silence - no action",
-		"not directed at me - no visible reply needed",
-		"not directed at me - this is a general greeting, not a task or request. no visible reply needed",
-		"not directed at me - frank's \"hi\" is a general greeting following my own earlier message, not a new task or all-hands request. no visible reply needed",
-		"已进入静默状态，不再执行任何操作",
-		"已保持静默，无需额外操作",
-		"静默 - 无操作",
-	} {
-		if normalized == phrase {
-			return true
-		}
-	}
-	return isNoReplyRationalePrefix(normalized)
-}
-
-func isNoReplyRationalePrefix(normalized string) bool {
-	if strings.HasPrefix(normalized, "not posting -") {
-		return true
-	}
-	if strings.HasPrefix(normalized, "不发布-") || strings.HasPrefix(normalized, "不发布，") || strings.HasPrefix(normalized, "不发布,") {
-		return true
-	}
-	if strings.Contains(normalized, "不发送频道消息") || strings.Contains(normalized, "无频道消息") {
-		return true
-	}
-	return false
-}
-
-func normalizeNoReplyRationaleCandidate(output string) string {
-	normalized := strings.ToLower(strings.TrimSpace(output))
-	normalized = strings.ReplaceAll(normalized, "—", "-")
-	normalized = strings.ReplaceAll(normalized, "–", "-")
-	for strings.Contains(normalized, "--") {
-		normalized = strings.ReplaceAll(normalized, "--", "-")
-	}
-	normalized = strings.Join(strings.Fields(normalized), " ")
-	normalized = strings.TrimSpace(normalized)
-	for {
-		trimmed := strings.TrimSpace(strings.TrimRight(normalized, ".。！!"))
-		if trimmed == normalized {
-			break
-		}
-		normalized = trimmed
-	}
-	return normalized
-}
-
-func sanitizeRuntimeDiagnosticFinalText(output string, parts []protocol.MessagePart) (string, bool) {
-	if len(parts) > 0 {
-		return "", false
-	}
-	trimmed := strings.TrimSpace(output)
-	if trimmed == "" {
-		return "", false
-	}
-	lower := strings.ToLower(trimmed)
-	markers := []string{
-		"background search finished after the reply was already sent",
-		"nothing else needed for this turn",
-		"先修好 multica message send 的鉴权",
-		"先修好 multica send 的鉴权",
-		"改用任务态 token",
-		"任务态 token 的 multica",
-	}
-	cutAt := -1
-	for _, marker := range markers {
-		if idx := strings.Index(lower, marker); idx >= 0 && (cutAt == -1 || idx < cutAt) {
-			cutAt = idx
-		}
-	}
-	if cutAt == -1 {
-		return "", false
-	}
-	sanitized := strings.TrimSpace(trimmed[:cutAt])
-	for {
-		before := sanitized
-		sanitized = strings.TrimSpace(strings.TrimSuffix(sanitized, "在"))
-		sanitized = strings.TrimSpace(strings.TrimSuffix(sanitized, "The"))
-		sanitized = strings.TrimSpace(strings.TrimSuffix(sanitized, "the"))
-		if sanitized == before {
-			break
-		}
-	}
-	if sanitized == "" {
-		return "在的。", true
-	}
-	sanitizedLower := strings.ToLower(sanitized)
-	for _, marker := range markers {
-		if strings.Contains(sanitizedLower, marker) {
-			return "在的。", true
-		}
-	}
-	return sanitized, true
-}
-
 func (h *Handler) suppressTaskCompleteOutput(req *TaskCompleteRequest, reason string) {
 	req.Action = protocol.ChatOutputActionNoReply
 	req.Type = protocol.ChatOutputKindNoReply
@@ -2759,6 +2615,18 @@ func (h *Handler) suppressTaskCompleteOutput(req *TaskCompleteRequest, reason st
 	if h.Metrics != nil {
 		h.Metrics.RecordChannelOutputSuppressed(reason)
 	}
+}
+
+// suppressChannelTaskCompleteOutput keeps directed channel tasks truthful even
+// when normalization returns early. A completion payload never creates visible
+// chat output; without a successful transport write, a directed task must
+// retain its must-reply failure signal regardless of why the payload was
+// suppressed.
+func (h *Handler) suppressChannelTaskCompleteOutput(ctx context.Context, task db.AgentTaskQueue, req *TaskCompleteRequest, reason string) {
+	if task.Priority >= 2 && !h.taskHasAgentTransportVisibleOutput(ctx, task.ID) {
+		req.MustReplyFailure = true
+	}
+	h.suppressTaskCompleteOutput(req, reason)
 }
 
 func (h *Handler) isChannelAgentTask(ctx context.Context, task db.AgentTaskQueue) bool {

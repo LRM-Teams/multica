@@ -171,6 +171,10 @@ type Daemon struct {
 
 	runner             taskRunner    // executes agent tasks; set to d.runTask by New(), overridable in tests
 	cancelPollInterval time.Duration // how often handleTask polls for server-side cancellation; overridable in tests
+	// Chat transport seams keep the fail-closed setup gate testable without
+	// changing process-global executable resolution or filesystem state.
+	resolveExecutable   func() (string, error)
+	prepareCLITransport func(Config, string, string, string, string, string) (string, string, error)
 	// runUpdateFn executes the release-download upgrade. Set to d.runUpdate by
 	// New() and overridable in tests so the auto-update poller can be exercised
 	// without touching the real network.
@@ -3378,8 +3382,8 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	reused := gateResumeToReusedWorkdir(&task, &taskCtx, env.WorkDir, taskLog)
 
 	// Prepare the per-run Multica CLI wrapper before injecting the runtime
-	// brief. The brief must only advertise chat CLI transport when the command
-	// will actually exist in this run's PATH with a valid bearer token.
+	// brief. Chat runs fail closed when the task-scoped transport cannot be
+	// prepared: final output is never a delivery fallback.
 	agentToken := task.AuthToken
 	durableAgentToken := false
 	if task.isInboxTask() && agentToken == "" {
@@ -3394,14 +3398,37 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		agentToken = token
 		durableAgentToken = true
 	}
+	chatTask := task.ChatSessionID != ""
 	cliWrapperDir := ""
 	cliTokenFile := ""
 	cliBinDir := ""
-	if selfBin, err := os.Executable(); err == nil {
+	resolveExecutable := d.resolveExecutable
+	if resolveExecutable == nil {
+		resolveExecutable = os.Executable
+	}
+	prepareCLITransport := d.prepareCLITransport
+	if prepareCLITransport == nil {
+		prepareCLITransport = prepareTaskCLITransport
+	}
+	selfBin, err := resolveExecutable()
+	if err != nil {
+		if chatTask {
+			return transportUnavailableResult("resolve_multica_executable", err), nil
+		}
+		taskLog.Warn("agent cli transport: unable to resolve multica executable", "error", err)
+	} else {
 		cliBinDir = filepath.Dir(selfBin)
-		if agentToken != "" {
-			wrapperDir, tokenFile, err := prepareTaskCLITransport(d.cfg, task.WorkspaceID, agentID, task.ID, selfBin, agentToken)
+		if agentToken == "" {
+			if chatTask {
+				return transportUnavailableResult("missing_run_bearer_token", nil), nil
+			}
+			taskLog.Warn("agent cli transport: no run bearer token available; CLI API calls will require external auth")
+		} else {
+			wrapperDir, tokenFile, err := prepareCLITransport(d.cfg, task.WorkspaceID, agentID, task.ID, selfBin, agentToken)
 			if err != nil {
+				if chatTask {
+					return transportUnavailableResult("prepare_task_cli_wrapper", err), nil
+				}
 				return TaskResult{}, fmt.Errorf("prepare agent CLI transport: %w", err)
 			}
 			cliWrapperDir = wrapperDir
@@ -3414,14 +3441,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 					}
 				}()
 			}
-		} else {
-			taskLog.Warn("agent cli transport: no run bearer token available; CLI API calls will require external auth")
 		}
-	} else {
-		taskLog.Warn("agent cli transport: unable to resolve multica executable", "error", err)
-	}
-	if task.ChatSessionID != "" && cliWrapperDir == "" {
-		taskCtx.ChatCLITransportUnavailable = true
 	}
 
 	// Inject runtime-specific config (meta skill) so the agent discovers .agent_context/.
@@ -3992,6 +4012,18 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			Usage:         usageEntries,
 			FailureReason: failureReason,
 		}, nil
+	}
+}
+
+func transportUnavailableResult(stage string, err error) TaskResult {
+	comment := "transport_unavailable: " + stage
+	if err != nil {
+		comment += ": " + err.Error()
+	}
+	return TaskResult{
+		Status:        "failed",
+		Comment:       comment,
+		FailureReason: "transport_unavailable",
 	}
 }
 

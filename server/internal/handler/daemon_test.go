@@ -2750,7 +2750,7 @@ func TestClaimTaskByRuntime_TaskWorkspaceMismatch_CancelsAndRejects(t *testing.T
 	}
 }
 
-func TestCompleteTask_GroupChannelSendActionWritesMessage(t *testing.T) {
+func TestCompleteTask_GroupChannelSendActionRequiresAgentTransport(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -2773,8 +2773,20 @@ func TestCompleteTask_GroupChannelSendActionWritesMessage(t *testing.T) {
 	`, channelID, visibleReply).Scan(&channelMessageCount); err != nil {
 		t.Fatalf("count bridged channel messages: %v", err)
 	}
-	if channelMessageCount != 1 {
-		t.Fatalf("channel message count = %d, want 1", channelMessageCount)
+	if channelMessageCount != 0 {
+		t.Fatalf("channel message count = %d, want 0", channelMessageCount)
+	}
+	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
+}
+
+func assertNoAgentChannelMessages(t *testing.T, channelID string) {
+	t.Helper()
+	var count int
+	if err := testPool.QueryRow(context.Background(), "SELECT count(*) FROM channel_message WHERE channel_id = $1 AND author_type = 'agent'", channelID).Scan(&count); err != nil {
+		t.Fatalf("count agent channel messages: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("agent channel messages = %d, want 0", count)
 	}
 }
 
@@ -2835,29 +2847,8 @@ func TestCompleteTask_CrossChannelTargetFinalizesMentionsInDestination(t *testin
 			if w.Code != http.StatusOK {
 				t.Fatalf("CompleteTask status=%d body=%s", w.Code, w.Body.String())
 			}
-
-			var rawParts []byte
-			var gotRoot *string
-			if err := testPool.QueryRow(ctx, `
-				SELECT parts, thread_root_message_id::text
-				FROM channel_message
-				WHERE channel_id = $1 AND author_type = 'agent' AND author_id = $2 AND content = $3
-				LIMIT 1
-			`, targetChannelID, senderID, content).Scan(&rawParts, &gotRoot); err != nil {
-				t.Fatalf("load destination output: %v", err)
-			}
-			if targetKind == "thread" && (gotRoot == nil || *gotRoot != rootID) {
-				t.Fatalf("destination thread root = %v, want %s", gotRoot, rootID)
-			}
-			if targetKind == "channel" && gotRoot != nil {
-				t.Fatalf("destination channel output unexpectedly threaded to %s", *gotRoot)
-			}
-			var parts []protocol.MessagePart
-			if err := json.Unmarshal(rawParts, &parts); err != nil {
-				t.Fatalf("decode destination parts: %v", err)
-			}
-			start, end := contentUTF16Span(content, strings.Index(content, "@"), strings.Index(content, "@")+len("@"+sharedDisplayName))
-			assertSingleMentionReferenceForTest(t, parts, targetOnlyID, start, end)
+			assertNoAgentChannelMessages(t, targetChannelID)
+			assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
 		})
 	}
 }
@@ -2895,24 +2886,8 @@ func TestCompleteTask_CrossChannelTargetDoesNotLeakSourceOnlyMention(t *testing.
 	if w.Code != http.StatusOK {
 		t.Fatalf("CompleteTask status=%d body=%s", w.Code, w.Body.String())
 	}
-	var rawParts []byte
-	if err := testPool.QueryRow(ctx, `
-		SELECT parts
-		FROM channel_message
-		WHERE channel_id = $1 AND author_type = 'agent' AND author_id = $2 AND content = $3
-		LIMIT 1
-	`, targetChannelID, senderID, content).Scan(&rawParts); err != nil {
-		t.Fatalf("load destination output: %v", err)
-	}
-	var parts []protocol.MessagePart
-	if err := json.Unmarshal(rawParts, &parts); err != nil {
-		t.Fatalf("decode destination parts: %v", err)
-	}
-	for _, part := range parts {
-		if part.Type == protocol.MessagePartTypeReference && part.RefType == "mention" {
-			t.Fatalf("source-only mention leaked into destination: %+v", part)
-		}
-	}
+	assertNoAgentChannelMessages(t, targetChannelID)
+	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
 }
 
 func assertSingleMentionReferenceForTest(t *testing.T, parts []protocol.MessagePart, wantID string, wantStart, wantEnd int) {
@@ -2949,7 +2924,7 @@ func TestCompleteTask_GroupChannelSendActionWithoutDaemonCapabilityIsSuppressed(
 	}
 
 	assertNoChannelMessageContent(t, channelID, visibleReply)
-	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonDaemonOutdated)
+	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
 }
 
 func TestCompleteTask_GroupChannelSendTargetDMWithoutDaemonCapabilityIsSuppressed(t *testing.T) {
@@ -2979,7 +2954,7 @@ func TestCompleteTask_GroupChannelSendTargetDMWithoutDaemonCapabilityIsSuppresse
 	}
 
 	assertNoChannelMessageContent(t, sourceChannelID, visibleReply)
-	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonDaemonOutdated)
+	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
 
 	var dmChannelCount int
 	if err := testPool.QueryRow(ctx, `
@@ -3039,25 +3014,7 @@ func TestCompleteTask_GroupChannelSendAliasTargetHumanDMCreatesMessage(t *testin
 	}
 
 	assertNoChannelMessageContent(t, sourceChannelID, visibleReply)
-
-	var dmChannelID string
-	if err := testPool.QueryRow(ctx, `
-		SELECT id FROM channel
-		WHERE workspace_id = $1 AND kind = 'dm' AND name = $2
-	`, testWorkspaceID, canonical).Scan(&dmChannelID); err != nil {
-		t.Fatalf("load targeted dm channel: %v", err)
-	}
-	var dmMessageCount int
-	if err := testPool.QueryRow(ctx, `
-		SELECT count(*)
-		FROM channel_message
-		WHERE channel_id = $1 AND author_type = 'agent' AND author_id = $2 AND content = $3
-	`, dmChannelID, agentID, visibleReply).Scan(&dmMessageCount); err != nil {
-		t.Fatalf("count targeted dm message: %v", err)
-	}
-	if dmMessageCount != 1 {
-		t.Fatalf("targeted dm message count = %d, want 1", dmMessageCount)
-	}
+	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
 }
 
 func TestCompleteTask_GroupChannelSendTargetInvalidSuppressesNonLeaky(t *testing.T) {
@@ -3145,7 +3102,7 @@ func TestCompleteTask_GroupChannelSendTargetInvalidSuppressesNonLeaky(t *testing
 			}
 
 			assertNoChannelMessageContent(t, channelID, visibleReply)
-			assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonInvalidTarget)
+			assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
 			var visibleCount int
 			if err := testPool.QueryRow(context.Background(), `
 				SELECT count(*)
@@ -3191,18 +3148,8 @@ func TestCompleteTask_GroupChannelThreadTargetAllowsFalseShowInChannelOption(t *
 	if w.Code != http.StatusOK {
 		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-
-	var replyCount int
-	if err := testPool.QueryRow(ctx, `
-		SELECT count(*)
-		FROM channel_message
-		WHERE channel_id = $1 AND author_type = 'agent' AND content = $2 AND thread_root_message_id = $3
-	`, channelID, visibleReply, rootID).Scan(&replyCount); err != nil {
-		t.Fatalf("count targeted thread reply: %v", err)
-	}
-	if replyCount != 1 {
-		t.Fatalf("targeted thread reply count = %d, want 1", replyCount)
-	}
+	assertNoAgentChannelMessages(t, channelID)
+	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
 }
 
 func TestCompleteTask_GroupChannelThreadTargetShowInChannelProjectsSameMessage(t *testing.T) {
@@ -3243,55 +3190,8 @@ func TestCompleteTask_GroupChannelThreadTargetShowInChannelProjectsSameMessage(t
 	if w.Code != http.StatusOK {
 		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-
-	var replyID string
-	var projected bool
-	if err := testPool.QueryRow(ctx, `
-		SELECT id, main_timeline_visible
-		FROM channel_message
-		WHERE channel_id = $1 AND author_type = 'agent' AND content = $2 AND thread_root_message_id = $3
-	`, channelID, visibleReply, rootID).Scan(&replyID, &projected); err != nil {
-		t.Fatalf("load targeted thread reply: %v", err)
-	}
-	if !projected {
-		t.Fatalf("targeted thread reply main_timeline_visible = false, want true")
-	}
-	var carrierCount int
-	if err := testPool.QueryRow(ctx, `
-		SELECT count(*)
-		FROM channel_message
-		WHERE channel_id = $1
-		  AND author_type = 'agent'
-		  AND thread_root_message_id IS NULL
-		  AND reply_to_message_id = $2`, channelID, replyID).Scan(&carrierCount); err != nil {
-		t.Fatalf("count legacy thread mirror carriers: %v", err)
-	}
-	if carrierCount != 0 {
-		t.Fatalf("legacy thread mirror carrier count = %d, want 0", carrierCount)
-	}
-	mainTimeline := listedMessagesForUser(t, channelID, testUserID)
-	if len(mainTimeline) != 2 {
-		t.Fatalf("main timeline = %+v, want root + projected reply", mainTimeline)
-	}
-	if mainTimeline[1].ID != replyID {
-		t.Fatalf("projected message id = %s, want thread reply %s", mainTimeline[1].ID, replyID)
-	}
-	if mainTimeline[1].ThreadRootMessageID == nil || *mainTimeline[1].ThreadRootMessageID != rootID {
-		t.Fatalf("projected thread_root_message_id = %v, want %s", mainTimeline[1].ThreadRootMessageID, rootID)
-	}
-	if mainTimeline[1].ThreadRoot == nil || mainTimeline[1].ThreadRoot.ID != rootID {
-		t.Fatalf("projected thread root summary = %+v, want root %s", mainTimeline[1].ThreadRoot, rootID)
-	}
-	var targetWakeEvents int
-	if err := testPool.QueryRow(ctx, `
-		SELECT count(*)
-		FROM agent_inbox_event
-		WHERE channel_id = $1 AND agent_id = $2 AND requires_wake`, channelID, targetAgentID).Scan(&targetWakeEvents); err != nil {
-		t.Fatalf("count target agent inbox events: %v", err)
-	}
-	if targetWakeEvents != 1 {
-		t.Fatalf("target agent inbox event count = %d, want 1", targetWakeEvents)
-	}
+	assertNoAgentChannelMessages(t, channelID)
+	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
 }
 
 func TestCompleteTask_GroupChannelSendActionWritesParts(t *testing.T) {
@@ -3310,23 +3210,8 @@ func TestCompleteTask_GroupChannelSendActionWritesParts(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-
-	var storedParts []byte
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT parts FROM channel_message
-		WHERE channel_id = $1 AND author_type = 'agent'
-		ORDER BY created_at DESC
-		LIMIT 1
-	`, channelID).Scan(&storedParts); err != nil {
-		t.Fatalf("load bridged channel message parts: %v", err)
-	}
-	var decoded []protocol.MessagePart
-	if err := json.Unmarshal(storedParts, &decoded); err != nil {
-		t.Fatalf("decode stored parts: %v", err)
-	}
-	if len(decoded) != 1 || decoded[0].Type != protocol.MessagePartTypeSticker || decoded[0].StickerID != "hi" || decoded[0].PackID != "builtin" {
-		t.Fatalf("stored parts = %+v, want builtin hi sticker", decoded)
-	}
+	assertNoAgentChannelMessages(t, channelID)
+	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
 }
 
 func TestCompleteTask_GroupChannelCommandSendOutputIsSuppressed(t *testing.T) {
@@ -3349,122 +3234,6 @@ func TestCompleteTask_GroupChannelCommandSendOutputIsSuppressed(t *testing.T) {
 	assertNoChannelMessageContent(t, channelID, visibleReply)
 	assertNoChannelMessageContent(t, channelID, rawOutput)
 	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonLegacyProtocolOutput)
-}
-
-func TestCompleteTask_GroupChannelNoReplyRationaleOutputIsSuppressed(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	taskID, channelID := createChannelCompletionTask(t, "group")
-	rawOutput := `Not directed at me — Frank's "hi" is a general greeting following my own earlier message, not a new task or all-hands request. No visible reply needed.`
-
-	w := completeTaskForTest(t, taskID, map[string]any{"output": rawOutput})
-	if w.Code != http.StatusOK {
-		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	assertNoChannelMessageContent(t, channelID, rawOutput)
-	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonNoReplyRationale)
-}
-
-func TestNoReplyRationaleSuppressesSilenceStatusPhrases(t *testing.T) {
-	for _, output := range []string{
-		"Not posting.",
-		"Silence — no action.",
-		"已进入静默状态，不再执行任何操作。",
-		"静默 — 无操作。",
-		"已保持静默，无需额外操作。",
-		"Not posting — the server review has passed and there are no immediate actions.",
-		"不发布——老胡的服务器端审核已通过，确认我交付的内容无误，且没有其他需要立即处理的事项。 LRM-126 现在等待 阿策 的推进/搁置决定。",
-	} {
-		if !isNoReplyRationaleFinalText(output, nil) {
-			t.Fatalf("isNoReplyRationaleFinalText(%q) = false, want true", output)
-		}
-	}
-}
-
-func TestCompleteTask_GroupChannelNoReplyRationaleOutputIsSuppressedWithCLITransport(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	taskID, channelID := createChannelCompletionTaskWithCapabilities(t, "group", []string{
-		protocol.DaemonCapabilityChannelOutputActions,
-		protocol.DaemonCapabilityAgentCLITransport,
-	})
-	rawOutput := `Not directed at me — Frank's "hi" is a general greeting following my own earlier message, not a new task or all-hands request. No visible reply needed.`
-
-	w := completeTaskForTest(t, taskID, map[string]any{"output": rawOutput})
-	if w.Code != http.StatusOK {
-		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	assertNoChannelMessageContent(t, channelID, rawOutput)
-	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonNoReplyRationale)
-}
-
-func TestCompleteTask_GroupChannelChineseNoReplyRationaleOutputIsSuppressed(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	taskID, channelID := createChannelCompletionTask(t, "group")
-	rawOutput := `空的 <br/> 回声，深度 4 —— 话题已结束。没有实质性内容需要回复；不发送频道消息。`
-
-	w := completeTaskForTest(t, taskID, map[string]any{"output": rawOutput})
-	if w.Code != http.StatusOK {
-		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	assertNoChannelMessageContent(t, channelID, rawOutput)
-	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonNoReplyRationale)
-}
-
-func TestCompleteTask_DirectedRuntimeDiagnosticOutputIsSanitized(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	taskID, channelID := createChannelCompletionTask(t, "dm")
-	rawOutput := `“？” 是在确认我是否在线。先修好 multica message send 的鉴权，再发一条可见回复。改用任务态 token 的 multica 包装器发送回复。在The background search finished after the reply was already sent; nothing else needed for this turn.`
-	sanitized := `“？” 是在确认我是否在线。`
-
-	w := completeTaskForTest(t, taskID, map[string]any{"output": rawOutput})
-	if w.Code != http.StatusOK {
-		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	assertNoChannelMessageContent(t, channelID, rawOutput)
-	assertChannelMessageContentCount(t, channelID, sanitized, 1)
-	assertTaskOutputSuppressedReason(t, taskID, "")
-}
-
-func TestSanitizeRuntimeDiagnosticFinalTextFallsBackWhenOnlyLogRemains(t *testing.T) {
-	got, ok := sanitizeRuntimeDiagnosticFinalText("在The background search finished after the reply was already sent; nothing else needed for this turn.", nil)
-	if !ok {
-		t.Fatal("sanitizeRuntimeDiagnosticFinalText ok=false, want true")
-	}
-	if got != "在的。" {
-		t.Fatalf("sanitizeRuntimeDiagnosticFinalText = %q, want fallback", got)
-	}
-}
-
-func TestCompleteTask_GroupChannelNoReplyPhraseInsideNormalTextIsNotSuppressed(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	taskID, channelID := createChannelCompletionTask(t, "group")
-	visibleReply := `Please keep the user-authored phrase "no reply needed" visible in this normal answer.`
-
-	w := completeTaskForTest(t, taskID, map[string]any{"output": visibleReply})
-	if w.Code != http.StatusOK {
-		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	assertChannelMessageContentCount(t, channelID, visibleReply, 1)
-	assertTaskOutputSuppressedReason(t, taskID, "")
 }
 
 func TestCompleteTask_AmbientCLICapableRunSuppressesUnsentFinalText(t *testing.T) {
@@ -3512,7 +3281,7 @@ func TestCompleteTask_AmbientCLICapableRunSuppressesNormalFinalText(t *testing.T
 	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
 }
 
-func TestCompleteTask_CLICapableRunDoesNotSuppressExplicitMessageSendAction(t *testing.T) {
+func TestCompleteTask_CLICapableRunRequiresAgentTransportForExplicitMessageSend(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -3531,19 +3300,17 @@ func TestCompleteTask_CLICapableRunDoesNotSuppressExplicitMessageSendAction(t *t
 		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	// Explicit message_send action is intentional, not rationale text.
-	assertChannelMessageContentCount(t, channelID, visibleReply, 1)
-	assertTaskOutputSuppressedReason(t, taskID, "")
+	assertNoChannelMessageContent(t, channelID, visibleReply)
+	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
 }
 
-func TestCompleteTask_DirectedCLICapableRunBridgesFinalTextFallback(t *testing.T) {
+func TestCompleteTask_DirectedCLICapableRunSuppressesFinalTextFallback(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 
-	// Directed task (priority=2, @mention/DM) on a CLI-capable run.
-	// If multica message send was not used successfully, non-empty final text is a
-	// visible fallback so must-reply runs do not complete silently.
+	// Directed task (priority=2, @mention/DM) must use the agent transport for
+	// visibility. Completion final text never bridges into the channel.
 	taskID, channelID := createChannelCompletionTaskWithCapabilities(t, "group", []string{
 		protocol.DaemonCapabilityChannelOutputActions,
 		protocol.DaemonCapabilityAgentCLITransport,
@@ -3555,10 +3322,31 @@ func TestCompleteTask_DirectedCLICapableRunBridgesFinalTextFallback(t *testing.T
 		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	assertChannelMessageContentCount(t, channelID, rawOutput, 1)
-	assertTaskOutputSuppressedReason(t, taskID, "")
+	assertNoChannelMessageContent(t, channelID, rawOutput)
+	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
 
-	// Plain-text fallback is visible output, not a must-reply failure.
+	var taskStatus string
+	if err := testPool.QueryRow(context.Background(), `SELECT status FROM agent_task_queue WHERE id = $1`, taskID).Scan(&taskStatus); err != nil {
+		t.Fatalf("load completed task status: %v", err)
+	}
+	if taskStatus != "completed" {
+		t.Fatalf("task status = %q, want completed", taskStatus)
+	}
+	var completionActivityCount int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT COUNT(*)
+		FROM agent_activity_event
+		WHERE task_id = $1
+		  AND event_type = 'task_completed'
+		  AND details->>'output_suppressed_reason' = $2`, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput).Scan(&completionActivityCount); err != nil {
+		t.Fatalf("count task completion activity: %v", err)
+	}
+	if completionActivityCount != 1 {
+		t.Fatalf("task_completed activity count = %d, want 1", completionActivityCount)
+	}
+
+	// Unsent directed output remains observable as a must-reply failure rather
+	// than becoming a fallback channel message.
 	var raw []byte
 	if err := testPool.QueryRow(context.Background(), `SELECT result FROM agent_task_queue WHERE id = $1`, taskID).Scan(&raw); err != nil {
 		t.Fatalf("load task result: %v", err)
@@ -3567,8 +3355,8 @@ func TestCompleteTask_DirectedCLICapableRunBridgesFinalTextFallback(t *testing.T
 	if err := json.Unmarshal(raw, &result); err != nil {
 		t.Fatalf("decode task result: %v", err)
 	}
-	if v, ok := result["must_reply_failure"].(bool); ok && v {
-		t.Fatalf("must_reply_failure = %v, want absent/false for visible final text fallback", result["must_reply_failure"])
+	if v, ok := result["must_reply_failure"].(bool); !ok || !v {
+		t.Fatalf("must_reply_failure = %v, want true for unsent directed final output", result["must_reply_failure"])
 	}
 }
 
@@ -3644,7 +3432,7 @@ func TestCompleteTask_GroupChannelStructuredMessageSendOutputIsSuppressed(t *tes
 	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonLegacyProtocolOutput)
 }
 
-func TestCompleteTask_GroupChannelMessageReactActionWritesReaction(t *testing.T) {
+func TestCompleteTask_GroupChannelMessageReactActionRequiresAgentTransport(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -3683,9 +3471,10 @@ func TestCompleteTask_GroupChannelMessageReactActionWritesReaction(t *testing.T)
 	`, triggerID, agentID).Scan(&reactionCount); err != nil {
 		t.Fatalf("count bridged reaction: %v", err)
 	}
-	if reactionCount != 1 {
-		t.Fatalf("reaction count = %d, want 1", reactionCount)
+	if reactionCount != 0 {
+		t.Fatalf("reaction count = %d, want 0", reactionCount)
 	}
+	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
 }
 
 func TestCompleteTask_GroupChannelMessageReactWithoutDaemonCapabilityIsSuppressed(t *testing.T) {
@@ -3730,10 +3519,10 @@ func TestCompleteTask_GroupChannelMessageReactWithoutDaemonCapabilityIsSuppresse
 	if reactionCount != 0 {
 		t.Fatalf("reaction count = %d, want 0", reactionCount)
 	}
-	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonDaemonOutdated)
+	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
 }
 
-func TestCompleteTask_GroupChannelLegacyTopLevelTypeMessageWritesMessage(t *testing.T) {
+func TestCompleteTask_GroupChannelLegacyTopLevelTypeMessageRequiresAgentTransport(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -3748,8 +3537,8 @@ func TestCompleteTask_GroupChannelLegacyTopLevelTypeMessageWritesMessage(t *test
 	if w.Code != http.StatusOK {
 		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	assertChannelMessageContentCount(t, channelID, visibleReply, 1)
-	assertTaskOutputSuppressedReason(t, taskID, "")
+	assertNoChannelMessageContent(t, channelID, visibleReply)
+	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
 
 	var chatMessageCount int
 	if err := testPool.QueryRow(context.Background(), `
@@ -3758,12 +3547,12 @@ func TestCompleteTask_GroupChannelLegacyTopLevelTypeMessageWritesMessage(t *test
 	`, taskID, visibleReply).Scan(&chatMessageCount); err != nil {
 		t.Fatalf("count assistant chat messages: %v", err)
 	}
-	if chatMessageCount != 1 {
-		t.Fatalf("assistant chat message count = %d, want 1", chatMessageCount)
+	if chatMessageCount != 0 {
+		t.Fatalf("assistant chat message count = %d, want 0", chatMessageCount)
 	}
 }
 
-func TestCompleteTask_GroupChannelPlainFinalTextWritesMessage(t *testing.T) {
+func TestCompleteTask_GroupChannelPlainFinalTextRequiresAgentTransport(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -3775,8 +3564,8 @@ func TestCompleteTask_GroupChannelPlainFinalTextWritesMessage(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	assertChannelMessageContentCount(t, channelID, plainReply, 1)
-	assertTaskOutputSuppressedReason(t, taskID, "")
+	assertNoChannelMessageContent(t, channelID, plainReply)
+	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
 
 	var chatMessageCount int
 	if err := testPool.QueryRow(context.Background(), `
@@ -3785,12 +3574,12 @@ func TestCompleteTask_GroupChannelPlainFinalTextWritesMessage(t *testing.T) {
 	`, taskID, plainReply).Scan(&chatMessageCount); err != nil {
 		t.Fatalf("count assistant chat messages: %v", err)
 	}
-	if chatMessageCount != 1 {
-		t.Fatalf("assistant chat message count = %d, want 1", chatMessageCount)
+	if chatMessageCount != 0 {
+		t.Fatalf("assistant chat message count = %d, want 0", chatMessageCount)
 	}
 }
 
-func TestCompleteTask_DMChannelPlainTextReplyWritesMessage(t *testing.T) {
+func TestCompleteTask_DMChannelPlainTextReplyRequiresAgentTransport(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -3803,8 +3592,8 @@ func TestCompleteTask_DMChannelPlainTextReplyWritesMessage(t *testing.T) {
 		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	assertChannelMessageContentCount(t, channelID, dmReply, 1)
-	assertTaskOutputSuppressedReason(t, taskID, "")
+	assertNoChannelMessageContent(t, channelID, dmReply)
+	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
 }
 
 func TestCompleteTask_DMChannelStructuredMessageSendOutputIsSuppressed(t *testing.T) {

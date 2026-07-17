@@ -325,6 +325,8 @@ func TestChatRuntimeBriefIsLeanButKeepsFastChatPaths(t *testing.T) {
 		"Common chat command forms are listed here so you can use them directly",
 		"Do NOT run `multica message send --help`",
 		"Common capability index",
+		"Delivery boundary: only successful chat send/react commands deliver visible chat output.",
+		"Text outside those commands, including final assistant output, is never delivered.",
 		"Chat output: use `multica message send --target <target>`",
 		"explicit Raft-style target",
 		"#channel:<threadId>",
@@ -390,9 +392,8 @@ func TestChatRuntimeBriefIsLeanButKeepsFastChatPaths(t *testing.T) {
 func TestChatRuntimeBriefRendersReplyRequirementForDirectedRun(t *testing.T) {
 	t.Parallel()
 	ctx := TaskContextForEnv{
-		ChatSessionID:               "chat-1",
-		Directed:                    true,
-		ChatCLITransportUnavailable: false,
+		ChatSessionID: "chat-1",
+		Directed:      true,
 	}
 	out := buildMetaSkillContent("codex", ctx)
 
@@ -431,9 +432,8 @@ func TestChatRuntimeBriefRendersReplyRequirementForDirectedRun(t *testing.T) {
 func TestChatRuntimeBriefOmitsReplyRequirementForAmbientRun(t *testing.T) {
 	t.Parallel()
 	ctx := TaskContextForEnv{
-		ChatSessionID:               "chat-1",
-		Directed:                    false, // ambient run
-		ChatCLITransportUnavailable: false,
+		ChatSessionID: "chat-1",
+		Directed:      false, // ambient run
 	}
 	out := buildMetaSkillContent("codex", ctx)
 
@@ -461,12 +461,11 @@ func TestChatRuntimeBriefOmitsReplyRequirementForAmbientRun(t *testing.T) {
 	}
 }
 
-func TestChatRuntimeBriefFallsBackWhenCLITransportUnavailable(t *testing.T) {
+func TestChatRuntimeBriefAlwaysAdvertisesTaskScopedCLITransport(t *testing.T) {
 	t.Parallel()
 	ctx := TaskContextForEnv{
 		ChatSessionID:                    "chat-1",
 		Directed:                         true,
-		ChatCLITransportUnavailable:      true,
 		Repos:                            []RepoContextForEnv{{URL: "https://github.com/acme/app.git"}},
 		AgentSkills:                      []SkillContextForEnv{{Name: "multica-stickers", Description: "Use for short social chat beats."}},
 		RequestingUserName:               "Frank",
@@ -476,26 +475,10 @@ func TestChatRuntimeBriefFallsBackWhenCLITransportUnavailable(t *testing.T) {
 
 	for _, want := range []string{
 		"## Chat Mode",
-		"compatibility chat output",
-		"write the visible reply as your final assistant output",
-		"When a sticker or reaction would normally fit, use a short text reply instead",
-		"Producing empty final output is **not** an option",
-		"Do not try to find, install, or discuss chat send/react commands",
-		"never mention compatibility mode, missing tools, tokens, CLI transport, or runtime setup",
-		"Issues/comments: `multica issue list|get|search|comment ...`",
-		"issue list --mine --output json",
-		"## Repositories",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("compat chat brief missing %q\n---\n%s", want, out)
-		}
-	}
-
-	for _, banned := range []string{
-		"task-scoped Multica CLI transport for visible chat output",
+		"task-scoped Multica CLI transport",
 		"multica message send",
 		"multica message react",
-		"multica message send --message",
+		"--message \"short text\"",
 		"multica message react --message-id",
 		"multica message read",
 		"multica message search",
@@ -508,9 +491,22 @@ func TestChatRuntimeBriefFallsBackWhenCLITransportUnavailable(t *testing.T) {
 		"Use for short social chat beats",
 		"For visible chat replies, run `multica message send`",
 		"After the command succeeds",
+		"Issues/comments: `multica issue list|get|search|comment ...`",
+		"issue list --mine --output json",
+		"## Repositories",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("compat chat brief missing %q\n---\n%s", want, out)
+		}
+	}
+
+	for _, banned := range []string{
+		"This runtime has no chat CLI transport.",
+		"No visible chat reply can be delivered without the task-scoped CLI transport.",
+		"Do not try to find, install, or discuss chat send/react commands",
 	} {
 		if strings.Contains(out, banned) {
-			t.Errorf("compat chat brief should not advertise unavailable chat CLI %q\n---\n%s", banned, out)
+			t.Errorf("chat brief should not contain removed transport-unavailable path %q\n---\n%s", banned, out)
 		}
 	}
 }

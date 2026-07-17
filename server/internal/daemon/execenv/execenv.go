@@ -88,22 +88,17 @@ type TaskContextForEnv struct {
 	// (DM, @mention, direct question/reply) rather than ambient channel
 	// observation. Used by renderChatRuntimeBrief to conditionally render the
 	// must-reply requirement (priority >= 2 is the directed signal).
-	Directed bool
-	// ChatCLITransportUnavailable is true when this chat run cannot expose the
-	// task-scoped chat CLI wrapper. In that mixed-version or fail-closed path,
-	// the brief must not tell the agent to use commands that are absent from
-	// the run environment.
-	ChatCLITransportUnavailable bool
-	AutopilotRunID              string // non-empty for autopilot run_only tasks
-	AutopilotID                 string
-	AutopilotTitle              string
-	AutopilotDescription        string
-	AutopilotSource             string
-	AutopilotTriggerPayload     string
-	QuickCreatePrompt           string // non-empty for quick-create tasks
-	QuickCreateSource           *protocol.QuickCreateSourceContext
-	AgentRadarPrompt            string // non-empty for proactive radar tasks
-	IsSquadLeader               bool   // true when the agent is acting as a squad leader (may exit silently on no_action)
+	Directed                bool
+	AutopilotRunID          string // non-empty for autopilot run_only tasks
+	AutopilotID             string
+	AutopilotTitle          string
+	AutopilotDescription    string
+	AutopilotSource         string
+	AutopilotTriggerPayload string
+	QuickCreatePrompt       string // non-empty for quick-create tasks
+	QuickCreateSource       *protocol.QuickCreateSourceContext
+	AgentRadarPrompt        string // non-empty for proactive radar tasks
+	IsSquadLeader           bool   // true when the agent is acting as a squad leader (may exit silently on no_action)
 	// WorkspaceContext is the workspace-level system prompt (workspace.context
 	// in the DB). Rendered into the brief as `## Workspace Context` when
 	// non-empty so every agent in the workspace sees the same shared context,

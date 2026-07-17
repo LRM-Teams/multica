@@ -3939,9 +3939,15 @@ func (h *Handler) channelMentionedAgents(ctx context.Context, workspaceID, chann
 			mentionedAgents[mention.ID] = struct{}{}
 		}
 	}
-	// Structured references above carry explicit actor identity. Bare @handle
-	// parsing only resolves the remaining visible source text.
-	bareContent := content
+	// Structured references above carry explicit actor identity. For legacy
+	// messages with no references, reuse the same finite-member longest-prefix
+	// resolver that creates structured parts for newly written messages.
+	bareMentionedAgents := map[string]struct{}{}
+	for _, occurrence := range findBareMentionCandidates(content, h.channelMentionCandidates(ctx, workspaceID, channelID)) {
+		if occurrence.Candidate.Type == "agent" {
+			bareMentionedAgents[occurrence.Candidate.ID] = struct{}{}
+		}
+	}
 	rows, err := h.DB.Query(ctx, `
 		SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.visibility, a.status,
 		       a.max_concurrent_tasks, a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id,
@@ -3960,7 +3966,8 @@ func (h *Handler) channelMentionedAgents(ctx context.Context, workspaceID, chann
 			continue
 		}
 		_, mentionedByID := mentionedAgents[uuidToString(a.ID)]
-		if mentionedByID || contentMentionsAgent(bareContent, a.Name) {
+		_, mentionedByBareHandle := bareMentionedAgents[uuidToString(a.ID)]
+		if mentionedByID || mentionedByBareHandle {
 			out = append(out, a)
 		}
 	}
@@ -4000,29 +4007,6 @@ func (h *Handler) channelThreadAgentsFromQuery(ctx context.Context, query string
 		out = append(out, a)
 	}
 	return out
-}
-
-// contentMentionsAgent recognizes a legacy bare @handle. Handles are stable
-// and unique; display names intentionally are not valid bare routing keys.
-func contentMentionsAgent(content, handle string) bool {
-	handle = strings.ToLower(strings.TrimSpace(handle))
-	if handle == "" {
-		return false
-	}
-	needle := "@" + handle
-	lowerContent := strings.ToLower(content)
-	for start := 0; ; {
-		match := strings.Index(lowerContent[start:], needle)
-		if match < 0 {
-			return false
-		}
-		match += start
-		end := match + len(needle)
-		if mentionHandleBoundaryBefore(lowerContent, match) && mentionHandleBoundaryAfter(lowerContent, end) {
-			return true
-		}
-		start = end
-	}
 }
 
 func mentionHandleBoundaryBefore(content string, index int) bool {

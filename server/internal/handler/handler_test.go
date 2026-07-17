@@ -310,19 +310,20 @@ func seedQueueExecution(t *testing.T, taskID string) {
 	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_execution WHERE id = $1`, taskID) })
 }
 
-func createHandlerTestAgent(t *testing.T, name string, mcpConfig []byte) string {
+func createHandlerTestAgent(t *testing.T, displayName string, mcpConfig []byte) string {
 	t.Helper()
 
+	handle := identityHandleCandidate(identityHandleBase(displayName, "agent"), 1)
 	var agentID string
 	if err := testPool.QueryRow(context.Background(), `
 		INSERT INTO agent (
-			workspace_id, name, description, runtime_mode, runtime_config,
+			workspace_id, name, display_name, description, runtime_mode, runtime_config,
 			runtime_id, visibility, max_concurrent_tasks, owner_id,
 			instructions, custom_env, custom_args, mcp_config
 		)
-		VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 'private', 1, $4, '', '{}'::jsonb, '[]'::jsonb, $5)
+		VALUES ($1, $2, $3, '', 'cloud', '{}'::jsonb, $4, 'private', 1, $5, '', '{}'::jsonb, '[]'::jsonb, $6)
 		RETURNING id
-	`, testWorkspaceID, name, handlerTestRuntimeID(t), testUserID, mcpConfig).Scan(&agentID); err != nil {
+	`, testWorkspaceID, handle, displayName, handlerTestRuntimeID(t), testUserID, mcpConfig).Scan(&agentID); err != nil {
 		t.Fatalf("failed to create handler test agent: %v", err)
 	}
 
@@ -1967,8 +1968,8 @@ func TestUpdateAgentRejectsMalformedAgentID(t *testing.T) {
 func TestCreateAgentRejectsMalformedRuntimeID(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := newRequest("POST", "/api/agents", map[string]any{
-		"name":       "Malformed runtime agent",
-		"runtime_id": "not-a-uuid",
+		"display_name": "Malformed runtime agent",
+		"runtime_id":   "not-a-uuid",
 	})
 	testHandler.CreateAgent(w, req)
 	if w.Code != http.StatusBadRequest {
@@ -2336,7 +2337,7 @@ func TestUpdateAgentMcpConfigAbsentPreservesValue(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	req := newRequest("PUT", "/api/agents/"+agentID, map[string]any{
-		"name": "Handler Mcp Preserve Updated",
+		"display_name": "Handler Mcp Preserve Updated",
 	})
 	req = withURLParam(req, "id", agentID)
 	testHandler.UpdateAgent(w, req)
@@ -2399,11 +2400,11 @@ func TestUpdateAgentMcpConfigObjectUpdatesValue(t *testing.T) {
 func TestCreateAgentMcpConfigNullStoresSQLNull(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := newRequest("POST", "/api/agents", map[string]any{
-		"name":        "Handler Mcp Create Null",
-		"runtime_id":  handlerTestRuntimeID(t),
-		"mcp_config":  nil,
-		"custom_env":  map[string]string{},
-		"custom_args": []string{},
+		"display_name": "Handler Mcp Create Null",
+		"runtime_id":   handlerTestRuntimeID(t),
+		"mcp_config":   nil,
+		"custom_env":   map[string]string{},
+		"custom_args":  []string{},
 	})
 	testHandler.CreateAgent(w, req)
 	if w.Code != http.StatusCreated {

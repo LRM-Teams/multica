@@ -181,7 +181,7 @@ describe("WelcomeAfterOnboarding", () => {
       expect(mockCreateAgent).toHaveBeenCalledTimes(1);
       const [agentArgs] = mockCreateAgent.mock.calls[0]!;
       expect(agentArgs.runtime_id).toBe("rt-1");
-      expect(agentArgs.name).toBe("Multica Helper");
+      expect(agentArgs.display_name).toBe("Multica Helper");
       expect(agentArgs.instructions).toContain("Multica Helper");
 
       // 3 starter card titles come from HELPER_STARTER_PROMPTS (TS const,

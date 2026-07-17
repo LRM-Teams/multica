@@ -208,14 +208,15 @@ func TestAgentTransportSendDraftRebuildsMentionForCurrentDestinationMembers(t *t
 	taskID, _ := createChannelCompletionTask(t, "group")
 	senderID := agentIDForTask(t, taskID)
 	targetChannelID := seedChannelForTest(t, "transport-draft-destination-"+uuid.NewString(), testUserID)
-	sharedDisplayName := "Draft Destination " + uuid.NewString()
-	oldTargetID := createHandlerTestAgent(t, "draft-old-"+uuid.NewString(), nil)
-	newTargetID := createHandlerTestAgent(t, "draft-new-"+uuid.NewString(), nil)
+	oldTargetName := "draft-old-" + uuid.NewString()[:8]
+	newTargetName := "draft-new-" + uuid.NewString()[:8]
+	oldTargetID := createHandlerTestAgent(t, oldTargetName, nil)
+	newTargetID := createHandlerTestAgent(t, newTargetName, nil)
 	if _, err := testPool.Exec(ctx, `
 		UPDATE agent
 		SET display_name = $2
 		WHERE id = ANY($1::uuid[])
-	`, []string{oldTargetID, newTargetID}, sharedDisplayName); err != nil {
+	`, []string{oldTargetID, newTargetID}, "Draft Destination "+uuid.NewString()); err != nil {
 		t.Fatalf("set duplicate display names: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `
@@ -234,7 +235,7 @@ func TestAgentTransportSendDraftRebuildsMentionForCurrentDestinationMembers(t *t
 		t.Fatalf("seed newer destination message: %v", err)
 	}
 	target := "#" + channelNameForTransportTest(t, targetChannelID)
-	content := "please @" + sharedDisplayName + " review the held draft"
+	content := "please @" + newTargetName + " review the held draft"
 	clientID := "transport-draft-members-" + uuid.NewString()
 	held := agentTransportSendForTest(t, taskID, senderID, map[string]any{
 		"target":            target,
@@ -270,7 +271,7 @@ func TestAgentTransportSendDraftRebuildsMentionForCurrentDestinationMembers(t *t
 		t.Fatalf("decode held draft response: %v", err)
 	}
 	start := strings.Index(content, "@")
-	startUTF16, endUTF16 := contentUTF16Span(content, start, start+len("@"+sharedDisplayName))
+	startUTF16, endUTF16 := contentUTF16Span(content, start, start+len("@"+newTargetName))
 	assertSingleMentionReferenceForTest(t, body.Message.Parts, newTargetID, startUTF16, endUTF16)
 	for _, part := range body.Message.Parts {
 		if part.Type == protocol.MessagePartTypeReference && part.RefType == "mention" && part.RefID == oldTargetID {

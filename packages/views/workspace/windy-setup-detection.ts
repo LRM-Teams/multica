@@ -4,7 +4,10 @@ import { WINDY_AGENT_NAME } from "../onboarding/templates";
 const LEGACY_WINDY_NAMES = new Set([WINDY_AGENT_NAME, "Windy", "Joe"]);
 
 export function isWindyAgent(agent: Agent): boolean {
-  return LEGACY_WINDY_NAMES.has(agent.display_name) || LEGACY_WINDY_NAMES.has(agent.name);
+  return (
+    (agent.display_name !== undefined && LEGACY_WINDY_NAMES.has(agent.display_name)) ||
+    LEGACY_WINDY_NAMES.has(agent.name)
+  );
 }
 
 export function findWindyAgent(agents: readonly Agent[]): Agent | null {

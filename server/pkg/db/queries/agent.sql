@@ -26,6 +26,7 @@ RETURNING *;
 
 -- name: UpdateAgent :one
 UPDATE agent SET
+    name = COALESCE(sqlc.narg('name'), name),
     display_name = COALESCE(sqlc.narg('display_name'), display_name),
     description = COALESCE(sqlc.narg('description'), description),
     avatar_url = COALESCE(sqlc.narg('avatar_url'), avatar_url),

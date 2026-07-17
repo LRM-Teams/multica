@@ -35,7 +35,7 @@ func TestCreateAgent_ThinkingLevel_ValidationConsistency(t *testing.T) {
 
 	t.Run("empty value succeeds", func(t *testing.T) {
 		body := map[string]any{
-			"name":                 "thinking-test-empty",
+			"display_name":         "thinking-test-empty",
 			"runtime_id":           claudeRuntimeID,
 			"visibility":           "private",
 			"max_concurrent_tasks": 1,
@@ -50,7 +50,7 @@ func TestCreateAgent_ThinkingLevel_ValidationConsistency(t *testing.T) {
 
 	t.Run("known claude value succeeds", func(t *testing.T) {
 		body := map[string]any{
-			"name":                 "thinking-test-known",
+			"display_name":         "thinking-test-known",
 			"runtime_id":           claudeRuntimeID,
 			"visibility":           "private",
 			"max_concurrent_tasks": 1,
@@ -73,7 +73,7 @@ func TestCreateAgent_ThinkingLevel_ValidationConsistency(t *testing.T) {
 		// gate must always 400 regardless of which other fields the
 		// request also tried to change.
 		body := map[string]any{
-			"name":                 "thinking-test-codex-only",
+			"display_name":         "thinking-test-codex-only",
 			"runtime_id":           claudeRuntimeID,
 			"visibility":           "private",
 			"max_concurrent_tasks": 1,
@@ -88,7 +88,7 @@ func TestCreateAgent_ThinkingLevel_ValidationConsistency(t *testing.T) {
 
 	t.Run("garbage value rejected", func(t *testing.T) {
 		body := map[string]any{
-			"name":                 "thinking-test-garbage",
+			"display_name":         "thinking-test-garbage",
 			"runtime_id":           claudeRuntimeID,
 			"visibility":           "private",
 			"max_concurrent_tasks": 1,
@@ -124,21 +124,21 @@ func TestUpdateAgent_ThinkingLevel_TriState(t *testing.T) {
 		testPool.Exec(ctx, `DELETE FROM agent WHERE id = $1`, agentID)
 	})
 
-	// 1. Omitted field — name-only update must NOT touch thinking_level.
+	// 1. Omitted field — display-name-only update must NOT touch thinking_level.
 	t.Run("omitted field leaves value alone", func(t *testing.T) {
 		body := map[string]any{
-			"name": "thinking-update-test-renamed",
+			"display_name": "thinking-update-test-renamed",
 		}
 		w := httptest.NewRecorder()
 		req := withURLParam(newRequest(http.MethodPatch, "/api/agents/"+agentID, body), "id", agentID)
 		testHandler.UpdateAgent(w, req)
 		if w.Code != http.StatusOK {
-			t.Fatalf("name-only update: expected 200, got %d: %s", w.Code, w.Body.String())
+			t.Fatalf("display-name-only update: expected 200, got %d: %s", w.Code, w.Body.String())
 		}
 		var resp map[string]any
 		_ = json.NewDecoder(w.Body).Decode(&resp)
 		if resp["thinking_level"] != "high" {
-			t.Errorf("name-only update silently changed thinking_level: got %v, want high", resp["thinking_level"])
+			t.Errorf("display-name-only update silently changed thinking_level: got %v, want high", resp["thinking_level"])
 		}
 	})
 

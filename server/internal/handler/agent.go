@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -782,7 +783,10 @@ func (h *Handler) GetAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 type CreateAgentRequest struct {
-	Name               string            `json:"name"`
+	// Username is an explicit, stable handle chosen by the caller. When it is
+	// omitted, the server generates the username from display_name and applies
+	// numeric collision suffixes.
+	Username           *string           `json:"username"`
 	DisplayName        string            `json:"display_name"`
 	Description        string            `json:"description"`
 	Instructions       string            `json:"instructions"`
@@ -836,16 +840,19 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	if _, ok := rawFields["name"]; ok {
+		writeError(w, http.StatusBadRequest, "name is no longer accepted; use display_name")
+		return
+	}
 
 	ownerID, ok := requireUserID(w, r)
 	if !ok {
 		return
 	}
 
-	nameSeed := strings.TrimSpace(req.Name)
 	displayName := strings.TrimSpace(req.DisplayName)
-	if nameSeed == "" && displayName == "" {
-		writeError(w, http.StatusBadRequest, "name or display_name is required")
+	if displayName == "" && req.Username == nil {
+		writeError(w, http.StatusBadRequest, "display_name is required")
 		return
 	}
 	if utf8.RuneCountInString(req.Description) > maxAgentDescriptionLength {
@@ -939,7 +946,7 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	created, err := h.createAgentWithIdentity(r.Context(), h.Queries, db.CreateAgentParams{
+	createParams := db.CreateAgentParams{
 		WorkspaceID:        wsUUID,
 		Description:        req.Description,
 		Instructions:       req.Instructions,
@@ -955,8 +962,29 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		McpConfig:          mc,
 		Model:              pgtype.Text{String: req.Model, Valid: req.Model != ""},
 		ThinkingLevel:      pgtype.Text{String: req.ThinkingLevel, Valid: req.ThinkingLevel != ""},
-	}, nameSeed, firstNonEmpty(displayName, nameSeed))
+	}
+
+	var created db.Agent
+	if req.Username != nil {
+		if err := validateIdentityHandle(*req.Username); err != nil {
+			writeError(w, http.StatusBadRequest, "username must be 1-32 lowercase letters, digits, or hyphens")
+			return
+		}
+		createParams.Name = *req.Username
+		createParams.DisplayName = firstNonEmpty(displayName, *req.Username)
+		created, err = h.Queries.CreateAgent(r.Context(), createParams)
+		if identityUniqueViolation(err, "agent_workspace_name_unique") {
+			writeError(w, http.StatusConflict, "username is already in use")
+			return
+		}
+	} else {
+		created, err = h.createAgentWithIdentity(r.Context(), h.Queries, createParams, displayName, displayName)
+	}
 	if err != nil {
+		if errors.Is(err, errIdentityHandleInvalid) {
+			writeError(w, http.StatusBadRequest, "username must be 1-32 lowercase letters, digits, or hyphens")
+			return
+		}
 		slog.Warn("create agent failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
 		writeError(w, http.StatusInternalServerError, "failed to create agent: "+err.Error())
 		return
@@ -1019,7 +1047,7 @@ func (h *Handler) seedAgentInitialContext(r *http.Request, agent db.Agent, initi
 }
 
 type UpdateAgentRequest struct {
-	Name          *string `json:"name"`
+	Username      *string `json:"username"`
 	DisplayName   *string `json:"display_name"`
 	Description   *string `json:"description"`
 	Instructions  *string `json:"instructions"`
@@ -1202,8 +1230,7 @@ func (h *Handler) isGroupManagerAgent(ctx context.Context, agentID pgtype.UUID) 
 }
 
 func agentUpdateAffectsEvolutionMatching(req UpdateAgentRequest) bool {
-	return req.Name != nil ||
-		req.DisplayName != nil ||
+	return req.DisplayName != nil ||
 		req.Description != nil ||
 		req.Instructions != nil ||
 		req.RuntimeConfig != nil ||
@@ -1225,6 +1252,10 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	if _, ok := rawFields["name"]; ok {
+		writeError(w, http.StatusBadRequest, "name is no longer accepted; use display_name")
+		return
+	}
 	if !h.canUpdateAgent(w, r, existing, rawFields) {
 		return
 	}
@@ -1244,13 +1275,12 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	params := db.UpdateAgentParams{
 		ID: existing.ID,
 	}
-	if req.Name != nil {
-		displayName := strings.TrimSpace(*req.Name)
-		if displayName == "" {
-			writeError(w, http.StatusBadRequest, "name is required")
+	if req.Username != nil {
+		if err := validateIdentityHandle(*req.Username); err != nil {
+			writeError(w, http.StatusBadRequest, "username must be 1-32 lowercase letters, digits, or hyphens")
 			return
 		}
-		params.DisplayName = pgtype.Text{String: displayName, Valid: true}
+		params.Name = pgtype.Text{String: *req.Username, Valid: true}
 	}
 	if req.DisplayName != nil {
 		displayName := strings.TrimSpace(*req.DisplayName)
@@ -1410,6 +1440,10 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 
 	updated, err := h.Queries.UpdateAgent(r.Context(), params)
 	if err != nil {
+		if identityUniqueViolation(err, "agent_workspace_name_unique") {
+			writeError(w, http.StatusConflict, "username is already in use")
+			return
+		}
 		slog.Warn("update agent failed", append(logger.RequestAttrs(r), "error", err, "agent_id", id)...)
 		writeError(w, http.StatusInternalServerError, "failed to update agent: "+err.Error())
 		return

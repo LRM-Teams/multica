@@ -170,7 +170,7 @@ async function findOrCreateHelper(
     if (found) return found;
     const lang = pickContentLang(language);
     return api.createAgent({
-      name: HELPER_AGENT_NAME,
+      display_name: HELPER_AGENT_NAME,
       description: HELPER_DESCRIPTION[lang],
       instructions: HELPER_INSTRUCTIONS[lang],
       avatar_url: HELPER_AVATAR_URL,

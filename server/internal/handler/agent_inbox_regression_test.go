@@ -22,6 +22,10 @@ func TestAgentInboxDrainSerializesSameAgentAndKeepsDifferentAgentsConcurrent(t *
 	runtimeID := handlerTestRuntimeID(t)
 	firstAgentName := "Inbox Serial Agent A " + uuid.NewString()[:8]
 	firstAgentID := createHandlerTestAgent(t, firstAgentName, nil)
+	var firstAgentHandle string
+	if err := testPool.QueryRow(ctx, `SELECT name FROM agent WHERE id = $1`, firstAgentID).Scan(&firstAgentHandle); err != nil {
+		t.Fatalf("load first agent handle: %v", err)
+	}
 	firstChannelID := seedChannelForTest(t, "inbox-serial-a-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
@@ -33,7 +37,7 @@ func TestAgentInboxDrainSerializesSameAgentAndKeepsDifferentAgentsConcurrent(t *
 		t.Fatal("first channel not found after seed")
 	}
 	for i := 0; i < 2; i++ {
-		trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(firstChannelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "[@"+firstAgentName+"](mention://agent/"+firstAgentID+") serial prompt", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-serial-a-"+uuid.NewString()), 0)
+		trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(firstChannelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "@"+firstAgentHandle+" serial prompt", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-serial-a-"+uuid.NewString()), 0)
 		if err != nil {
 			t.Fatalf("insert first-agent trigger %d: %v", i, err)
 		}
@@ -110,6 +114,10 @@ func TestAgentInboxDrainSerializesSameAgentAndKeepsDifferentAgentsConcurrent(t *
 
 	secondAgentName := "Inbox Serial Agent B " + uuid.NewString()[:8]
 	secondAgentID := createHandlerTestAgent(t, secondAgentName, nil)
+	var secondAgentHandle string
+	if err := testPool.QueryRow(ctx, `SELECT name FROM agent WHERE id = $1`, secondAgentID).Scan(&secondAgentHandle); err != nil {
+		t.Fatalf("load second agent handle: %v", err)
+	}
 	secondChannelID := seedChannelForTest(t, "inbox-serial-b-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
@@ -120,7 +128,7 @@ func TestAgentInboxDrainSerializesSameAgentAndKeepsDifferentAgentsConcurrent(t *
 	if !found {
 		t.Fatal("second channel not found after seed")
 	}
-	secondTrigger, err := testHandler.insertChannelMessage(ctx, parseUUID(secondChannelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "[@"+secondAgentName+"](mention://agent/"+secondAgentID+") concurrent other agent", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-serial-b-"+uuid.NewString()), 0)
+	secondTrigger, err := testHandler.insertChannelMessage(ctx, parseUUID(secondChannelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "@"+secondAgentHandle+" concurrent other agent", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-serial-b-"+uuid.NewString()), 0)
 	if err != nil {
 		t.Fatalf("insert second-agent trigger: %v", err)
 	}

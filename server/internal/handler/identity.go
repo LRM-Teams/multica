@@ -3,37 +3,29 @@ package handler
 import (
 	"context"
 	"errors"
-	"regexp"
-	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/identityhandle"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-var identityHandleInvalidChars = regexp.MustCompile(`[^a-z0-9]+`)
 var errIdentityHandleExhausted = errors.New("identity handle generation exhausted")
+var errIdentityHandleInvalid = identityhandle.ErrInvalid
+
+const maxIdentityHandleLength = identityhandle.MaxLength
 
 func identityHandleBase(value, fallback string) string {
-	base := identityHandleInvalidChars.ReplaceAllString(strings.ToLower(strings.TrimSpace(value)), "_")
-	base = strings.Trim(base, "_")
-	if base != "" {
-		return base
-	}
-	base = identityHandleInvalidChars.ReplaceAllString(strings.ToLower(strings.TrimSpace(fallback)), "_")
-	base = strings.Trim(base, "_")
-	if base != "" {
-		return base
-	}
-	return "actor"
+	return identityhandle.Base(value, fallback)
+}
+
+func validateIdentityHandle(handle string) error {
+	return identityhandle.Validate(handle)
 }
 
 func identityHandleCandidate(base string, attempt int) string {
-	if attempt <= 1 {
-		return base
-	}
-	return base + "_" + strconv.Itoa(attempt)
+	return identityhandle.Candidate(base, attempt)
 }
 
 func identityUniqueViolation(err error, constraint string) bool {
@@ -79,6 +71,10 @@ func (h *Handler) createUserWithIdentity(ctx context.Context, email, displaySeed
 		displayName = strings.TrimSpace(email)
 	}
 	base := identityHandleBase(emailLocalPart(email), "user")
+	base = identityhandle.Truncate(base, maxIdentityHandleLength)
+	if err := validateIdentityHandle(base); err != nil {
+		return db.User{}, err
+	}
 	for attempt := 1; attempt <= 100; attempt++ {
 		created, err := h.Queries.CreateUser(ctx, db.CreateUserParams{
 			Name:        identityHandleCandidate(base, attempt),
@@ -105,6 +101,10 @@ func (h *Handler) createAgentWithIdentity(ctx context.Context, q *db.Queries, pa
 		displayName = "Agent"
 	}
 	base := identityHandleBase(handleSeed, displayName)
+	base = identityhandle.Truncate(base, maxIdentityHandleLength)
+	if err := validateIdentityHandle(base); err != nil {
+		return db.Agent{}, err
+	}
 	for attempt := 1; attempt <= 100; attempt++ {
 		params.Name = identityHandleCandidate(base, attempt)
 		params.DisplayName = displayName

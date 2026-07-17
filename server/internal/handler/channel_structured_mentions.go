@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/mention"
@@ -13,9 +14,10 @@ import (
 )
 
 type channelMentionCandidate struct {
-	Type  string
-	ID    string
-	Label string
+	Type   string
+	ID     string
+	Handle string
+	Label  string
 }
 
 type channelMentionOccurrence struct {
@@ -136,23 +138,24 @@ func (h *Handler) channelMentionCandidates(ctx context.Context, workspaceID, cha
 		if memberType == "agent" {
 			mentionType = "agent"
 		}
-		candidate := channelMentionCandidate{Type: mentionType, ID: uuidToString(memberID), Label: firstNonEmpty(displayName, name)}
-		for _, label := range []string{name, displayName} {
-			key := normalizeMentionCandidateLabel(label)
-			if key == "" {
-				continue
-			}
-			if key == "all" {
-				continue
-			}
-			if existing, ok := candidates[key]; ok && (existing.Type != candidate.Type || existing.ID != candidate.ID) {
-				delete(candidates, key)
-				ambiguous[key] = true
-				continue
-			}
-			if ambiguous[key] {
-				continue
-			}
+		handle := strings.TrimSpace(name)
+		if mentionType == "agent" && validateIdentityHandle(handle) != nil {
+			// Agent handles are canonical ASCII usernames. Invalid historical
+			// values deliberately remain plain text in old messages after the
+			// one-time backfill; do not retain a second mention-routing path.
+			continue
+		}
+		key := normalizeMentionCandidateLabel(handle)
+		if key == "" || key == "all" {
+			continue
+		}
+		candidate := channelMentionCandidate{Type: mentionType, ID: uuidToString(memberID), Handle: handle, Label: firstNonEmpty(displayName, name)}
+		if existing, ok := candidates[key]; ok && (existing.Type != candidate.Type || existing.ID != candidate.ID) {
+			delete(candidates, key)
+			ambiguous[key] = true
+			continue
+		}
+		if !ambiguous[key] {
 			candidates[key] = candidate
 		}
 	}
@@ -185,38 +188,56 @@ func findBareMentionCandidates(content string, candidates map[string]channelMent
 		labels = append(labels, label)
 	}
 	sort.Slice(labels, func(i, j int) bool {
-		return len([]rune(labels[i])) > len([]rune(labels[j]))
+		return utf8.RuneCountInString(candidates[labels[i]].Handle) > utf8.RuneCountInString(candidates[labels[j]].Handle)
 	})
 
-	lowerContent := strings.ToLower(content)
 	out := make([]channelMentionOccurrence, 0)
-	for start := 0; start < len(lowerContent); {
-		at := strings.IndexByte(lowerContent[start:], '@')
+	for start := 0; start < len(content); {
+		at := strings.IndexByte(content[start:], '@')
 		if at < 0 {
 			break
 		}
 		at += start
-		if !mentionHandleBoundaryBefore(lowerContent, at) {
+		if !mentionHandleBoundaryBefore(content, at) {
 			start = at + 1
 			continue
 		}
 		matchEnd := at + 1
 		for _, label := range labels {
-			begin := at + 1
-			end := begin + len(label)
-			if end > len(lowerContent) || lowerContent[begin:end] != label {
+			candidate := candidates[label]
+			end, ok := mentionHandlePrefix(content, at+1, candidate.Handle)
+			if !ok {
 				continue
 			}
-			if !mentionHandleBoundaryAfter(lowerContent, end) {
+			if !mentionHandleBoundaryAfter(content, end) {
 				continue
 			}
-			out = append(out, channelMentionOccurrence{Candidate: candidates[label], Start: at, End: end})
+			out = append(out, channelMentionOccurrence{Candidate: candidate, Start: at, End: end})
 			matchEnd = end
 			break
 		}
 		start = matchEnd
 	}
 	return out
+}
+
+// mentionHandlePrefix compares one handle at a time without changing original
+// byte offsets. Agent candidates are canonical ASCII usernames; member
+// candidates remain Unicode-capable because user handles are a separate
+// identity contract.
+func mentionHandlePrefix(content string, start int, handle string) (int, bool) {
+	offset := start
+	for _, want := range handle {
+		if offset >= len(content) {
+			return 0, false
+		}
+		got, size := utf8.DecodeRuneInString(content[offset:])
+		if size == 0 || !strings.EqualFold(string(got), string(want)) {
+			return 0, false
+		}
+		offset += size
+	}
+	return offset, true
 }
 
 func contentUTF16Span(content string, start, end int) (int, int) {

@@ -273,7 +273,7 @@ func TestExecuteRadarMentionAgentFinalizesEveryTargetOccurrence(t *testing.T) {
 
 	ctx := context.Background()
 	supervisor := createRadarSupervisorForExecutorTest(t)
-	handle := "actor_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+	handle := "actor-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
 	targetID := createHandlerTestAgent(t, handle, nil)
 	if _, err := testPool.Exec(ctx, `UPDATE agent SET display_name = '阿策' WHERE id = $1`, targetID); err != nil {
 		t.Fatalf("set target display name: %v", err)
@@ -1440,7 +1440,7 @@ func TestExecuteRadarChannelPostFinalizesDestinationReferences(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load publisher: %v", err)
 	}
-	targetHandle := "radar_ref_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+	targetHandle := "radar-ref-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
 	targetID := createHandlerTestAgent(t, targetHandle, nil)
 	channelID := seedChannelForTest(t, "radar-reference-finalizer-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `

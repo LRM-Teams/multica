@@ -38,7 +38,8 @@ type preMigrationHook func(ctx context.Context, pool *pgxpool.Pool) error
 // monthly-slice backfill for the historical pre-103 schema. Current
 // `agent_usage` recovery backfills use cmd/backfill_agent_usage_hourly.
 var preMigrationHooks = map[string]preMigrationHook{
-	"103_drop_legacy_daily_rollups": runHistoricalUsageHourlyHook,
+	"103_drop_legacy_daily_rollups":   runHistoricalUsageHourlyHook,
+	"188_agent_ascii_handle_backfill": runAgentASCIIHandleBackfillHook,
 }
 
 func runHistoricalUsageHourlyHook(ctx context.Context, pool *pgxpool.Pool) error {

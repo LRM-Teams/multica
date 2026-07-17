@@ -146,15 +146,15 @@ func TestCreateAgent_RejectsPrivateRuntimeForNonOwner(t *testing.T) {
 			DELETE FROM agent
 			 WHERE workspace_id = $1
 			   AND (
-			       name LIKE 'runtime_visibility_test_%'
-			       OR display_name LIKE 'runtime-visibility-test-%'
+			       name LIKE 'vis-test-%'
+			       OR display_name LIKE 'vis-test-%'
 			   )
 		`, testWorkspaceID)
 	})
 
 	body := func(name string) map[string]any {
 		return map[string]any{
-			"name":                 name,
+			"display_name":         name,
 			"description":          "",
 			"runtime_id":           runtimeID,
 			"visibility":           "private",
@@ -165,21 +165,21 @@ func TestCreateAgent_RejectsPrivateRuntimeForNonOwner(t *testing.T) {
 	// Workspace owner (testUserID): allowed via admin override even though
 	// the runtime is private and owned by someone else.
 	w := httptest.NewRecorder()
-	testHandler.CreateAgent(w, newRequest(http.MethodPost, "/api/agents", body("runtime-visibility-test-admin")))
+	testHandler.CreateAgent(w, newRequest(http.MethodPost, "/api/agents", body("vis-test-admin")))
 	if w.Code != http.StatusCreated {
 		t.Fatalf("CreateAgent as workspace owner: expected 201, got %d: %s", w.Code, w.Body.String())
 	}
 
 	// Runtime owner: allowed because they own the runtime.
 	w = httptest.NewRecorder()
-	testHandler.CreateAgent(w, newRequestAs(runtimeOwnerID, http.MethodPost, "/api/agents", body("runtime-visibility-test-runtime-owner")))
+	testHandler.CreateAgent(w, newRequestAs(runtimeOwnerID, http.MethodPost, "/api/agents", body("vis-test-runtime-owner")))
 	if w.Code != http.StatusCreated {
 		t.Fatalf("CreateAgent as runtime owner: expected 201, got %d: %s", w.Code, w.Body.String())
 	}
 
 	// Plain member: this is the hole MUL-2062 closes — must be 403.
 	w = httptest.NewRecorder()
-	testHandler.CreateAgent(w, newRequestAs(plainMemberID, http.MethodPost, "/api/agents", body("runtime-visibility-test-plain-member")))
+	testHandler.CreateAgent(w, newRequestAs(plainMemberID, http.MethodPost, "/api/agents", body("vis-test-plain-member")))
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("CreateAgent as plain member on private runtime: expected 403, got %d: %s", w.Code, w.Body.String())
 	}
@@ -206,14 +206,14 @@ func TestCreateAgent_AllowsPublicRuntimeForPlainMember(t *testing.T) {
 			DELETE FROM agent
 			 WHERE workspace_id = $1
 			   AND (
-			       name = 'runtime_visibility_test_public_runtime'
-			       OR display_name = 'runtime-visibility-test-public-runtime'
+			       name = 'vis-test-public-runtime'
+			       OR display_name = 'vis-test-public-runtime'
 			   )
 		`, testWorkspaceID)
 	})
 
 	body := map[string]any{
-		"name":                 "runtime-visibility-test-public-runtime",
+		"display_name":         "vis-test-public-runtime",
 		"description":          "",
 		"runtime_id":           runtimeID,
 		"visibility":           "private",

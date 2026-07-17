@@ -2774,18 +2774,22 @@ func TestChannelLegacyAgentHandleTextDoesNotRoute(t *testing.T) {
 	if !found {
 		t.Fatal("channel not found after seed")
 	}
-	content := "historic @" + legacyHandle + " remains plain text"
-	_, parts, err := testHandler.enrichChannelMessageMentions(ctx, ch, content, nil)
-	if err != nil {
-		t.Fatalf("enrich legacy handle text: %v", err)
-	}
-	for _, part := range parts {
-		if part.Type == protocol.MessagePartTypeReference && part.RefType == "mention" && part.RefID == agentID {
-			t.Fatalf("legacy handle unexpectedly became a structured mention: %+v", part)
+	for _, content := range []string{
+		"historic @" + legacyHandle + " remains plain text",
+		"historic @actor remains plain text",
+	} {
+		_, parts, err := testHandler.enrichChannelMessageMentions(ctx, ch, content, nil)
+		if err != nil {
+			t.Fatalf("enrich legacy handle text: %v", err)
 		}
-	}
-	if agents := testHandler.channelMentionedAgents(ctx, testWorkspaceID, channelID, content, nil); len(agents) != 0 {
-		t.Fatalf("legacy handle text routed to agents: %+v", agents)
+		for _, part := range parts {
+			if part.Type == protocol.MessagePartTypeReference && part.RefType == "mention" && part.RefID == agentID {
+				t.Fatalf("legacy handle unexpectedly became a structured mention: %+v", part)
+			}
+		}
+		if agents := testHandler.channelMentionedAgents(ctx, testWorkspaceID, channelID, content, nil); len(agents) != 0 {
+			t.Fatalf("legacy handle text routed to agents: %+v", agents)
+		}
 	}
 }
 

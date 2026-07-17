@@ -41,6 +41,7 @@ var preMigrationHooks = map[string]preMigrationHook{
 	"103_drop_legacy_daily_rollups":      runHistoricalUsageHourlyHook,
 	"188_agent_ascii_handle_backfill":    runAgentASCIIHandleBackfillHook,
 	"190_agent_handle_truncation_repair": runAgentASCIIHandleBackfillHook,
+	"191_agent_default_handle_repair":    runAgentDefaultHandleRepairHook,
 }
 
 func runHistoricalUsageHourlyHook(ctx context.Context, pool *pgxpool.Pool) error {

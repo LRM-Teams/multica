@@ -199,4 +199,11 @@ describe("AppSidebar workspace nav", () => {
     renderSidebar();
     expect(screen.queryByText("New Issue")).toBeNull();
   });
+
+  it("does not render the My Issues shortcut row (removed; app leads with Messages)", () => {
+    renderSidebar();
+    expect(screen.queryByText("My Issues")).toBeNull();
+    // Inbox stays in the top personal section.
+    expect(screen.getByText("Inbox")).toBeInTheDocument();
+  });
 });

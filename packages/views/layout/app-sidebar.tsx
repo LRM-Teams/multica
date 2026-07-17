@@ -31,7 +31,6 @@ import {
   Plus,
   Check,
   BookOpenText,
-  CircleUser,
   FolderKanban,
   BarChart3,
   Sparkles,
@@ -111,7 +110,6 @@ const EMPTY_INBOX: Awaited<ReturnType<typeof api.listInbox>> = [];
 type NavKey =
   | "overview"
   | "inbox"
-  | "myIssues"
   | "issues"
   | "projects"
   | "channels"
@@ -129,7 +127,6 @@ type NavKey =
 type NavLabelKey =
   | "overview"
   | "inbox"
-  | "my_issues"
   | "issues"
   | "projects"
   | "channels"
@@ -145,7 +142,6 @@ type NavLabelKey =
 
 const personalNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] = [
   { key: "inbox", labelKey: "inbox", icon: Inbox },
-  { key: "myIssues", labelKey: "my_issues", icon: CircleUser },
 ];
 
 // Order is by how often you reach for it, not by module hierarchy: chat is the

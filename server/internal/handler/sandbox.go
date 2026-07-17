@@ -1575,7 +1575,7 @@ func (h *Handler) ClaimSandboxJobs(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to persist sandbox job token")
 			return
 		}
-		if job.Type == "create" {
+		if job.Type == "create" || job.Type == "clone" {
 			_, _ = h.Queries.UpdateSandboxInstanceStatus(r.Context(), db.UpdateSandboxInstanceStatusParams{ID: job.InstanceID, Status: "creating", Error: pgtype.Text{}})
 		}
 		if job.Type == "reconfigure" {
@@ -1620,7 +1620,7 @@ func (h *Handler) CompleteSandboxJob(w http.ResponseWriter, r *http.Request) {
 	}
 	var inst db.SandboxInstance
 	switch job.Type {
-	case "create":
+	case "create", "clone":
 		inst, err = h.Queries.CompleteSandboxInstanceCreate(r.Context(), db.CompleteSandboxInstanceCreateParams{ID: job.InstanceID, LocalRef: strToText(req.LocalRef), EndpointInfo: jsonBytesOrDefault(req.EndpointInfo, "{}")})
 	case "stop":
 		inst, err = h.Queries.MarkSandboxInstanceStopped(r.Context(), job.InstanceID)

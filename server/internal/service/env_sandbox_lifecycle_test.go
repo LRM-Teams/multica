@@ -12,10 +12,11 @@ import (
 type fakeEnvSandboxLifecycleDeps struct {
 	refs map[string]SandboxInstanceRef
 
-	jobs         []sandboxJobCall
-	wakeups      []sandboxWakeupCall
-	forceDeletes []string
-	inserts      []createSandboxInstanceCall
+	jobs           []sandboxJobCall
+	wakeups        []sandboxWakeupCall
+	forceDeletes   []string
+	runtimeDeletes []string
+	inserts        []createSandboxInstanceCall
 
 	insertedRef SandboxInstanceRef
 	enqueueErr  error
@@ -92,6 +93,11 @@ func (f *fakeEnvSandboxLifecycleDeps) ForceDeleteSandboxInstance(_ context.Conte
 		return f.deleteErr
 	}
 	f.forceDeletes = append(f.forceDeletes, workspaceID+":"+instanceID)
+	return nil
+}
+
+func (f *fakeEnvSandboxLifecycleDeps) ForceDeleteSandboxRuntime(_ context.Context, workspaceID, runtimeID string) error {
+	f.runtimeDeletes = append(f.runtimeDeletes, workspaceID+":"+runtimeID)
 	return nil
 }
 
@@ -459,5 +465,52 @@ func TestEnvSandboxLifecycleCreateNotificationFailureKeepsDurableJob(t *testing.
 	}
 	if len(f.forceDeletes) != 0 {
 		t.Fatalf("unexpected compensation: %v", f.forceDeletes)
+	}
+}
+
+func TestCloneSandboxInstanceCreatesOfflineRuntimeAndCloneJob(t *testing.T) {
+	ctx := context.Background()
+	source := lifecycleRef()
+	deps := &fakeEnvSandboxLifecycleDeps{refs: map[string]SandboxInstanceRef{"ws-1:inst-1": source}}
+	svc := NewEnvSandboxLifecycleService(deps, time.Second)
+
+	destination, err := svc.CloneSandboxInstance(ctx, source, CloneSandboxInstanceInput{
+		WorkspaceID: "ws-1", EnvID: "env-1", AgentID: "agent-1", RuntimeID: "runtime-1", DaemonID: "daemon-1",
+		CreatePayload: json.RawMessage(`{"template":"default","limits":{},"runtime":{}}`),
+	}, "user-1")
+	if err != nil {
+		t.Fatalf("CloneSandboxInstance: %v", err)
+	}
+	if destination.InstanceID != "inst-created" {
+		t.Fatalf("destination instance = %q", destination.InstanceID)
+	}
+	if len(deps.jobs) != 1 || deps.jobs[0].JobType != "clone" {
+		t.Fatalf("clone jobs = %+v", deps.jobs)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(deps.jobs[0].Payload, &payload); err != nil {
+		t.Fatalf("decode clone payload: %v", err)
+	}
+	if payload["source_sandbox_instance_id"] != source.InstanceID || payload["source_external_id"] != source.LocalRef {
+		t.Fatalf("clone source payload = %v", payload)
+	}
+}
+
+func TestCloneSandboxInstanceCompensatesRuntimeWhenJobInsertFails(t *testing.T) {
+	source := lifecycleRef()
+	deps := &fakeEnvSandboxLifecycleDeps{refs: map[string]SandboxInstanceRef{"ws-1:inst-1": source}, enqueueErr: errors.New("queue unavailable")}
+	svc := NewEnvSandboxLifecycleService(deps, time.Second)
+	_, err := svc.CloneSandboxInstance(context.Background(), source, CloneSandboxInstanceInput{
+		WorkspaceID: "ws-1", RuntimeID: "runtime-1", DaemonID: "daemon-1",
+		CreatePayload: json.RawMessage(`{"template":"default"}`),
+	}, "user-1")
+	if err == nil {
+		t.Fatal("expected clone enqueue error")
+	}
+	if len(deps.runtimeDeletes) != 1 || deps.runtimeDeletes[0] != "ws-1:runtime-1" {
+		t.Fatalf("runtime compensation = %v", deps.runtimeDeletes)
+	}
+	if len(deps.forceDeletes) != 1 || deps.forceDeletes[0] != "ws-1:inst-created" {
+		t.Fatalf("instance compensation = %v", deps.forceDeletes)
 	}
 }

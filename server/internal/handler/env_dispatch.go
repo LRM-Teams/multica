@@ -67,12 +67,16 @@ type MessageDispatchInput struct {
 // failed) it is reused with Message set and each rollout carrying its Error +
 // Traceback (origin goroutine stack from the failing adapter call).
 type EnvDispatchResponse struct {
+	ChannelID string               `json:"channel_id,omitempty"`
 	ProjectID string               `json:"project_id"`
 	Rollouts  []EnvRolloutResponse `json:"rollouts"`
 	Message   string               `json:"message,omitempty"`
 }
 
 type EnvRolloutResponse struct {
+	ChannelID        string                                `json:"channel_id,omitempty"`
+	LeaderRunID      string                                `json:"leader_run_id,omitempty"`
+	AgentSandboxes   map[string]service.AgentSandboxStatus `json:"agent_sandboxes,omitempty"`
 	EnvID            string                                `json:"env_id"`
 	ProjectID        string                                `json:"project_id"`
 	IssueID          string                                `json:"issue_id,omitempty"`
@@ -174,7 +178,7 @@ func (h *Handler) EnvDispatch(w http.ResponseWriter, r *http.Request) {
 		writeEnvDispatchError(w, err, res)
 		return
 	}
-	writeJSON(w, http.StatusCreated, EnvDispatchResponse{ProjectID: res.ProjectID, Rollouts: mapRollouts(res.Rollouts)})
+	writeJSON(w, http.StatusCreated, EnvDispatchResponse{ChannelID: res.ChannelID, ProjectID: res.ProjectID, Rollouts: mapRollouts(res.Rollouts)})
 }
 
 // DeleteEnvDispatchProject handles DELETE /api/v1/env-dispatch/{projectID}.
@@ -234,12 +238,19 @@ func (h *Handler) GetDag(w http.ResponseWriter, r *http.Request) {
 	if _, ok := requireUserID(w, r); !ok {
 		return
 	}
+	h.getEnvDispatchDagForProject(w, r, chi.URLParam(r, "projectID"))
+}
+
+// getEnvDispatchDagForProject serves the project-scoped assembled DAG for both
+// the project-first route (GetDag) and the channel-first facade
+// (GetEnvDispatchChannelDag). The caller resolves and supplies the project id;
+// no URL param is read here.
+func (h *Handler) getEnvDispatchDagForProject(w http.ResponseWriter, r *http.Request, projectID string) {
 	workspaceID := ctxWorkspaceID(r.Context())
 	if workspaceID == "" {
 		writeError(w, http.StatusBadRequest, "workspace ID required")
 		return
 	}
-	projectID := chi.URLParam(r, "projectID")
 	projectUUID, ok := parseUUIDOrBadRequest(w, projectID, "projectID")
 	if !ok {
 		return
@@ -357,6 +368,7 @@ func writeEnvDispatchError(w http.ResponseWriter, err error, res service.EnvDisp
 		// carries its own origin Traceback. Add a top-level message (gap #1) so a
 		// caller that only inspects the top level sees why the dispatch failed.
 		writeJSON(w, http.StatusInternalServerError, EnvDispatchResponse{
+			ChannelID: res.ChannelID,
 			ProjectID: res.ProjectID,
 			Rollouts:  mapRollouts(res.Rollouts),
 			Message:   "all rollouts failed",
@@ -428,6 +440,7 @@ func mapRollouts(rs []service.EnvRollout) []EnvRolloutResponse {
 	out := make([]EnvRolloutResponse, 0, len(rs))
 	for _, r := range rs {
 		out = append(out, EnvRolloutResponse{
+			ChannelID: r.ChannelID, LeaderRunID: r.LeaderRunID, AgentSandboxes: r.AgentSandboxes,
 			EnvID: r.EnvID, ProjectID: r.ProjectID, IssueID: r.IssueID,
 			ChatSessionID: r.ChatSessionID, AgentRunID: r.AgentRunID, Error: r.Error,
 			Traceback:        string(r.Stack),
@@ -523,6 +536,20 @@ func (a *envDispatchDepsAdapter) CreateEnv(ctx context.Context, workspaceID stri
 		return "", stackerr.Wrap(err, "create env")
 	}
 	return util.UUIDToString(row.ID), nil
+}
+
+func (a *envDispatchDepsAdapter) SetEnvSandboxes(ctx context.Context, envID, workspaceID string, sandboxIDs []string) error {
+	commandTag, err := a.h.DB.Exec(ctx, `
+		UPDATE environment
+		SET sandbox_ids = $3, updated_at = now()
+		WHERE id = $1 AND workspace_id = $2`, parseUUID(envID), parseUUID(workspaceID), sandboxIDs)
+	if err != nil {
+		return stackerr.Wrap(err, "attach environment sandboxes")
+	}
+	if commandTag.RowsAffected() != 1 {
+		return stackerr.New("attach environment sandboxes: environment not found")
+	}
+	return nil
 }
 
 // DeleteEnv deletes the env row. A FK violation (23503) is translated to
@@ -673,6 +700,219 @@ func (a *envDispatchDepsAdapter) DeleteProject(ctx context.Context, projectID, w
 		return nil
 	}
 	return stackerr.Wrap(err, "delete project")
+}
+
+func (a *envDispatchDepsAdapter) ResolveMessageRoster(ctx context.Context, workspaceID, agentID, squadID string) (service.MessageRoster, error) {
+	wsID := parseUUID(workspaceID)
+	if squadID == "" {
+		if _, err := a.h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: parseUUID(agentID), WorkspaceID: wsID}); err != nil {
+			return service.MessageRoster{}, err
+		}
+		return service.MessageRoster{LeaderID: agentID, AgentIDs: []string{agentID}}, nil
+	}
+	squad, err := a.h.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{ID: parseUUID(squadID), WorkspaceID: wsID})
+	if err != nil {
+		return service.MessageRoster{}, err
+	}
+	ids := []string{util.UUIDToString(squad.LeaderID)}
+	seen := map[string]bool{ids[0]: true}
+	members, err := a.h.Queries.ListSquadMembers(ctx, squad.ID)
+	if err != nil {
+		return service.MessageRoster{}, err
+	}
+	for _, member := range members {
+		if member.MemberType != "agent" {
+			continue
+		}
+		id := util.UUIDToString(member.MemberID)
+		if seen[id] {
+			continue
+		}
+		if _, err := a.h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: member.MemberID, WorkspaceID: wsID}); err != nil {
+			return service.MessageRoster{}, err
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	return service.MessageRoster{LeaderID: ids[0], AgentIDs: ids}, nil
+}
+
+func (a *envDispatchDepsAdapter) CreateEnvDispatchChannel(ctx context.Context, workspaceID, userID, projectID, envID string, roster service.MessageRoster, specs map[string]service.SandboxInstanceRef) (string, error) {
+	tx, err := a.h.TxStarter.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback(ctx)
+	var channelID string
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO channel (workspace_id, name, kind, project_id, created_by)
+		VALUES ($1, $2, 'group', $3, $4) RETURNING id::text`,
+		workspaceID, "env-dispatch-"+uuid.NewString(), projectID, userID).Scan(&channelID); err != nil {
+		return "", err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id) VALUES ($1, $2, 'user', $3)`, channelID, workspaceID, userID); err != nil {
+		return "", err
+	}
+	store := envDispatchChannelStore{}
+	for _, agentID := range roster.AgentIDs {
+		if _, err := tx.Exec(ctx, `INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id) VALUES ($1, $2, 'agent', $3)`, channelID, workspaceID, agentID); err != nil {
+			return "", err
+		}
+		config := json.RawMessage(`{}`)
+		if ref, ok := specs[agentID]; ok && ref.Template != "" {
+			config, _ = json.Marshal(map[string]string{"template": ref.Template})
+		}
+		if err := store.insertBinding(ctx, tx, envAgentSandboxBinding{EnvID: envID, ChannelID: channelID, AgentID: agentID, Status: "pending", SandboxConfig: config}); err != nil {
+			return "", err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", err
+	}
+	return channelID, nil
+}
+
+func (a *envDispatchDepsAdapter) DeleteChannel(ctx context.Context, workspaceID, channelID string) error {
+	_, err := a.h.DB.Exec(ctx, `DELETE FROM channel WHERE id = $1 AND workspace_id = $2`, channelID, workspaceID)
+	return err
+}
+
+func (a *envDispatchDepsAdapter) ProvisionEnvDispatchAgent(ctx context.Context, in service.EnvDispatchAgentProvisionInput) (service.EnvDispatchAgentProvisionResult, error) {
+	result, err := a.h.provisionEnvDispatchAgent(ctx, ProvisionEnvDispatchAgentInput{
+		WorkspaceID:             in.WorkspaceID,
+		UserID:                  in.UserID,
+		EnvID:                   in.EnvID,
+		ProjectID:               in.ProjectID,
+		ChannelID:               in.ChannelID,
+		AgentID:                 in.AgentID,
+		SourceSandboxInstanceID: in.SourceSandboxInstanceID,
+		SandboxConfig:           in.SandboxConfig,
+	})
+	if err != nil {
+		return service.EnvDispatchAgentProvisionResult{}, err
+	}
+	return service.EnvDispatchAgentProvisionResult{
+		SandboxInstanceID: result.SandboxInstanceID,
+		RuntimeID:         result.RuntimeID,
+		DaemonID:          result.DaemonID,
+		ChatSessionID:     result.ChatSessionID,
+	}, nil
+}
+
+func (a *envDispatchDepsAdapter) CreateChannelMessage(ctx context.Context, channelID, workspaceID, userID, content string) (string, error) {
+	message, err := a.h.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(workspaceID), "user", parseUUID(userID), "Env Dispatch", content, "env_dispatch", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		return "", stackerr.Wrap(err, "create env-dispatch channel message")
+	}
+	return message.ID, nil
+}
+
+func (a *envDispatchDepsAdapter) EnqueueEnvDispatchChannelRun(ctx context.Context, workspaceID, userID string, in service.ChannelRunInput, idx int) (string, error) {
+	return a.EnqueueAgentRun(ctx, workspaceID, userID, in.AgentID, "", "", in.ChatSessionID, in.SandboxInstanceID, in.EnvID, in.RuntimeID, idx)
+}
+
+func (a *envDispatchDepsAdapter) SaveCollaborationTrigger(ctx context.Context, envID string, trigger service.EnvCollaborationTrigger) error {
+	return (envDispatchChannelStore{}).saveTrigger(ctx, a.h.DB, envID, envCollaborationTrigger{
+		AgentID:             trigger.AgentID,
+		Kind:                trigger.Kind,
+		ChannelID:           trigger.ChannelID,
+		ProjectID:           trigger.ProjectID,
+		ChatSessionID:       trigger.ChatSessionID,
+		SourceMessageID:     trigger.SourceMessageID,
+		ThreadRootMessageID: trigger.ThreadRootMessageID,
+		TaskID:              trigger.TaskID,
+		RuntimeID:           trigger.RuntimeID,
+	})
+}
+
+func (a *envDispatchDepsAdapter) ValidateBranchMessageSource(ctx context.Context, workspaceID, envID, projectID string, roster service.MessageRoster) (service.ValidatedBranchMessageSource, error) {
+	trigger, err := (envDispatchChannelStore{}).loadTrigger(ctx, a.h.DB, envID, workspaceID)
+	if err != nil {
+		return service.ValidatedBranchMessageSource{}, err
+	}
+	if trigger.ProjectID != projectID {
+		return service.ValidatedBranchMessageSource{}, fmt.Errorf("trigger project does not match source project")
+	}
+	rows, err := a.h.DB.Query(ctx, `
+		SELECT member_id::text
+		FROM channel_member
+		WHERE channel_id = $1 AND member_type = 'agent'
+		ORDER BY member_id`, trigger.ChannelID)
+	if err != nil {
+		return service.ValidatedBranchMessageSource{}, err
+	}
+	defer rows.Close()
+	sourceIDs := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return service.ValidatedBranchMessageSource{}, err
+		}
+		sourceIDs = append(sourceIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return service.ValidatedBranchMessageSource{}, err
+	}
+	if !sameEnvDispatchRoster(sourceIDs, roster.AgentIDs) {
+		return service.ValidatedBranchMessageSource{}, fmt.Errorf("requested agent roster differs from source channel")
+	}
+	// Resolve the trigger agent's source binding so the branch can clone its
+	// sandbox state. A ready source binding (sandbox_instance_id set) is the
+	// clone source; a non-ready binding means the trigger agent creates from its
+	// saved policy instead. A missing binding is inconsistent source state.
+	sourceBinding, err := (envDispatchChannelStore{}).binding(ctx, a.h.DB, envID, trigger.AgentID)
+	if err != nil {
+		return service.ValidatedBranchMessageSource{}, fmt.Errorf("load source trigger binding: %w", err)
+	}
+	var sourceSandboxID string
+	if sourceBinding.SandboxInstanceID != nil {
+		sourceSandboxID = *sourceBinding.SandboxInstanceID
+	}
+	return service.ValidatedBranchMessageSource{
+		SourceEnvID:                    envID,
+		SourceProjectID:                projectID,
+		SourceChannelID:                trigger.ChannelID,
+		Roster:                         roster,
+		TriggerSourceSandboxInstanceID: sourceSandboxID,
+		Trigger: service.EnvCollaborationTrigger{
+			AgentID:             trigger.AgentID,
+			Kind:                trigger.Kind,
+			ChannelID:           trigger.ChannelID,
+			ProjectID:           trigger.ProjectID,
+			ChatSessionID:       trigger.ChatSessionID,
+			SourceMessageID:     trigger.SourceMessageID,
+			ThreadRootMessageID: trigger.ThreadRootMessageID,
+			TaskID:              trigger.TaskID,
+			RuntimeID:           trigger.RuntimeID,
+		},
+	}, nil
+}
+
+func (a *envDispatchDepsAdapter) CopyEnvDispatchChannel(ctx context.Context, workspaceID, sourceChannelID, destinationProjectID, destinationEnvID string) (service.ChannelCopyMap, error) {
+	copyMap, err := a.h.copyEnvDispatchChannel(ctx, workspaceID, sourceChannelID, destinationProjectID, destinationEnvID)
+	if err != nil {
+		return service.ChannelCopyMap{}, err
+	}
+	return service.ChannelCopyMap{ChannelID: copyMap.ChannelID, MessageIDs: copyMap.MessageIDs}, nil
+}
+
+func sameEnvDispatchRoster(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	seen := make(map[string]struct{}, len(left))
+	for _, id := range left {
+		seen[id] = struct{}{}
+	}
+	if len(seen) != len(left) {
+		return false
+	}
+	for _, id := range right {
+		if _, ok := seen[id]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // ListIssuesByProject returns all issues under a project. Used during
@@ -973,7 +1213,9 @@ func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, workspaceI
 				return "", stackerr.Wrap(err, "marshal squad chat context")
 			}
 			params.AgentID = squad.LeaderID
-			params.RuntimeID = leader.RuntimeID
+			if runtimeID == "" {
+				params.RuntimeID = leader.RuntimeID
+			}
 			params.Context = contextJSON
 		} else {
 			params.AgentID = parseUUID(agentID)
@@ -1427,6 +1669,9 @@ func (s *stubEnvDispatchDeps) GetEnv(context.Context, string, string) (service.E
 func (s *stubEnvDispatchDeps) CreateEnv(context.Context, string, []string, string, service.EnvMode, service.EnvDomain) (string, error) {
 	return "stub-env", nil
 }
+func (s *stubEnvDispatchDeps) SetEnvSandboxes(context.Context, string, string, []string) error {
+	return nil
+}
 func (s *stubEnvDispatchDeps) DeleteEnv(context.Context, string, string) error { return nil }
 func (s *stubEnvDispatchDeps) ForkSandbox(context.Context, string, int) (string, error) {
 	return "stub-fork", nil
@@ -1451,6 +1696,31 @@ func (s *stubEnvDispatchDeps) SaveIdempotentResponse(context.Context, string, st
 	return nil
 }
 func (s *stubEnvDispatchDeps) DeleteProject(context.Context, string, string) error { return nil }
+func (s *stubEnvDispatchDeps) ResolveMessageRoster(_ context.Context, _, agentID, _ string) (service.MessageRoster, error) {
+	return service.MessageRoster{LeaderID: agentID, AgentIDs: []string{agentID}}, nil
+}
+func (s *stubEnvDispatchDeps) CreateEnvDispatchChannel(context.Context, string, string, string, string, service.MessageRoster, map[string]service.SandboxInstanceRef) (string, error) {
+	return "stub-channel", nil
+}
+func (s *stubEnvDispatchDeps) DeleteChannel(context.Context, string, string) error { return nil }
+func (s *stubEnvDispatchDeps) ProvisionEnvDispatchAgent(context.Context, service.EnvDispatchAgentProvisionInput) (service.EnvDispatchAgentProvisionResult, error) {
+	return service.EnvDispatchAgentProvisionResult{SandboxInstanceID: "stub-sandbox", RuntimeID: "stub-runtime", DaemonID: "stub-daemon", ChatSessionID: "stub-session"}, nil
+}
+func (s *stubEnvDispatchDeps) CreateChannelMessage(context.Context, string, string, string, string) (string, error) {
+	return "stub-channel-message", nil
+}
+func (s *stubEnvDispatchDeps) EnqueueEnvDispatchChannelRun(context.Context, string, string, service.ChannelRunInput, int) (string, error) {
+	return "stub-channel-run", nil
+}
+func (s *stubEnvDispatchDeps) SaveCollaborationTrigger(context.Context, string, service.EnvCollaborationTrigger) error {
+	return nil
+}
+func (s *stubEnvDispatchDeps) ValidateBranchMessageSource(context.Context, string, string, string, service.MessageRoster) (service.ValidatedBranchMessageSource, error) {
+	return service.ValidatedBranchMessageSource{}, nil
+}
+func (s *stubEnvDispatchDeps) CopyEnvDispatchChannel(context.Context, string, string, string, string) (service.ChannelCopyMap, error) {
+	return service.ChannelCopyMap{ChannelID: "stub-channel", MessageIDs: map[string]string{}}, nil
+}
 func (s *stubEnvDispatchDeps) ListIssuesByProject(context.Context, string, string) ([]service.IssueRow, error) {
 	return nil, nil
 }

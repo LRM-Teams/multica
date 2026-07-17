@@ -2,6 +2,8 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
+import { ApiError } from "@multica/core/api";
+import { validateAgentUsername } from "@multica/core/agents";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { resolveActorDisplayName } from "@multica/core/identity";
@@ -12,7 +14,7 @@ import { runtimeListOptions } from "@multica/core/runtimes/queries";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
-import { MessageSquare } from "lucide-react";
+import { MessageSquare, Pencil } from "lucide-react";
 import { AppLink } from "../../navigation/app-link";
 import { useOpenDM } from "../../common/use-open-dm";
 import { PropRow } from "../../common/prop-row";
@@ -23,6 +25,7 @@ import { useRuntimeHealthStateLabel } from "../../runtimes/components/shared";
 import { RuntimePicker } from "./inspector/runtime-picker";
 import { ModelPicker } from "./inspector/model-picker";
 import { ThinkingPropRow } from "./inspector/thinking-prop-row";
+import { InlineEditPopover } from "./inline-edit-popover";
 import { useUpdateAgent } from "../hooks/use-update-agent";
 import { useT } from "../../i18n/use-t";
 
@@ -72,6 +75,20 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
   const runtime = runtimes.find((r) => r.id === agent.runtime_id) ?? null;
   const isArchived = !!agent.archived_at;
   const update = (data: Record<string, unknown>) => handleUpdate(agent.id, data);
+  // Client-side handle grammar check (mirrors the server validator); the code
+  // → message mapping stays here so the shared core validator is i18n-free.
+  const usernameError = (v: string): string | null => {
+    switch (validateAgentUsername(v)) {
+      case "empty":
+        return t(($) => $.profile_card.username_error_empty);
+      case "too_long":
+        return t(($) => $.profile_card.username_error_too_long);
+      case "invalid_chars":
+        return t(($) => $.profile_card.username_error_invalid);
+      default:
+        return null;
+    }
+  };
   // Runtime "version outdated" is an INDEPENDENT axis from online/offline
   // health (kept per Iris/Parker — it currently explains the billing gap).
   // Cloud runtimes never report an outdated local binary.
@@ -154,6 +171,42 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
           the "who/what it is" summary. */}
       <div className="flex flex-col gap-2 text-xs">
         <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+          {/* Username / @handle — the stable ASCII routing handle (`agent.name`),
+              distinct from the human display name. Editable by owners/admins
+              via the same InlineEditPopover the detail inspector uses for the
+              display name; read-only `@handle` for everyone else. */}
+          <PropRow label={t(($) => $.profile_card.username_label)} interactive={false}>
+            {canEdit.allowed ? (
+              <InlineEditPopover
+                value={agent.name}
+                kind="input"
+                title={t(($) => $.profile_card.username_edit_title)}
+                placeholder={t(($) => $.profile_card.username_placeholder)}
+                validate={usernameError}
+                mapSaveError={(e) =>
+                  e instanceof ApiError && e.status === 409
+                    ? t(($) => $.profile_card.username_taken)
+                    : null
+                }
+                onSave={(v) => update({ username: v.trim() })}
+              >
+                {(triggerProps) => (
+                  <button
+                    type="button"
+                    {...triggerProps}
+                    className="group -mx-1 inline-flex min-w-0 items-center gap-1 rounded px-1 text-left transition-colors hover:bg-accent/50"
+                  >
+                    <span className="truncate">@{agent.name}</span>
+                    <Pencil className="h-3 w-3 shrink-0 text-muted-foreground/0 transition-colors group-hover:text-muted-foreground" />
+                  </button>
+                )}
+              </InlineEditPopover>
+            ) : (
+              <span className="min-w-0 truncate" title={agent.name}>
+                @{agent.name}
+              </span>
+            )}
+          </PropRow>
           <PropRow label={t(($) => $.inspector.prop_runtime)} interactive={false}>
             <div className="flex min-w-0 items-center gap-1.5">
               <RuntimePicker

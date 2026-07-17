@@ -508,7 +508,11 @@ export interface CreateAgentFromTemplateFailure {
 }
 
 export interface UpdateAgentRequest {
-  /** Stable lowercase ASCII mention handle. Owner/admin only. */
+  /**
+   * Stable `@handle` (updates `Agent.name`, NOT `display_name`). Server
+   * validates the ASCII grammar (lowercase letters/digits/hyphens) and owns
+   * uniqueness — returns 409 on conflict. Owner/admin only.
+   */
   username?: string;
   /** Preferred human-facing label for new clients. */
   display_name?: string;

@@ -493,7 +493,14 @@
     "runtime_label": "Runtime",
     "skills_label": "Skills",
     "owner_label": "Owner",
-    "unknown_runtime": "Unknown runtime"
+    "unknown_runtime": "Unknown runtime",
+    "username_label": "Username",
+    "username_edit_title": "Edit username",
+    "username_placeholder": "agent-handle",
+    "username_error_empty": "Username is required",
+    "username_error_invalid": "Use lowercase letters, digits, and hyphens only",
+    "username_error_too_long": "Username is too long",
+    "username_taken": "That @handle is already taken"
   },
   "execution_config": {
     "applies_next_run": "Changes take effect on the next run — the current run is unaffected."

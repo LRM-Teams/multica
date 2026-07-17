@@ -475,7 +475,14 @@
     "runtime_label": "ランタイム",
     "skills_label": "スキル",
     "owner_label": "オーナー",
-    "unknown_runtime": "不明なランタイム"
+    "unknown_runtime": "不明なランタイム",
+    "username_label": "ユーザー名",
+    "username_edit_title": "ユーザー名を編集",
+    "username_placeholder": "agent-handle",
+    "username_error_empty": "ユーザー名は必須です",
+    "username_error_invalid": "小文字・数字・ハイフンのみ使用できます",
+    "username_error_too_long": "ユーザー名が長すぎます",
+    "username_taken": "その @handle はすでに使用されています"
   },
   "execution_config": {
     "applies_next_run": "変更は次回の実行から反映されます。実行中のセッションには影響しません。"

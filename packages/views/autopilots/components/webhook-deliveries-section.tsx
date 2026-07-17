@@ -50,8 +50,8 @@ type StatusVisual = {
 };
 
 const STATUS_VISUAL: Record<WebhookDeliveryStatus, StatusVisual> = {
-  queued: { color: "text-blue-500", icon: Loader2, spin: true },
-  dispatched: { color: "text-emerald-500", icon: CheckCircle2 },
+  queued: { color: "text-brand", icon: Loader2, spin: true },
+  dispatched: { color: "text-success", icon: CheckCircle2 },
   // Signature failures and pre-flight bouncebacks land here. Read as a
   // failure visually, the dialog footer explains the reason.
   rejected: { color: "text-destructive", icon: ShieldOff },
@@ -462,7 +462,7 @@ function CodeBlock({ label, value }: { label: string; value: string }) {
           className="flex items-center gap-1 rounded px-2 py-0.5 hover:bg-accent transition-colors"
         >
           {copied ? (
-            <Check className="h-3 w-3 text-emerald-500" />
+            <Check className="h-3 w-3 text-success" />
           ) : (
             <Copy className="h-3 w-3" />
           )}

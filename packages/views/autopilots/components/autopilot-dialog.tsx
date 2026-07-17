@@ -673,7 +673,7 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
         {/* Footer */}
         <div className="flex items-center justify-between gap-3 px-5 py-3 border-t shrink-0 bg-background">
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground min-w-0">
-            <Zap className="size-3.5 text-amber-500 shrink-0" />
+            <Zap className="size-3.5 text-muted-foreground shrink-0" />
             <span className="truncate">{t(($) => $.dialog.auto_run_hint)}</span>
           </div>
           <div className="flex items-center gap-2 shrink-0">
@@ -1156,7 +1156,7 @@ function WebhookCreatedPanel({
                 title={t(($) => $.trigger_row.copy_url)}
               >
                 {copied ? (
-                  <Check className="size-4 text-emerald-500" />
+                  <Check className="size-4 text-success" />
                 ) : (
                   <Copy className="size-4 text-muted-foreground" />
                 )}
@@ -1164,7 +1164,7 @@ function WebhookCreatedPanel({
             </div>
           </div>
 
-          <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400 leading-relaxed">
+          <div className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning leading-relaxed">
             {t(($) => $.dialog.webhook_created_warning)}
           </div>
         </div>

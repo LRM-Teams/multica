@@ -122,8 +122,8 @@ function useFormatRelativeDate(): (date: string) => string {
 }
 
 const STATUS_VISUAL: Record<AutopilotStatus, { color: string; icon: typeof Zap }> = {
-  active: { color: "text-emerald-500", icon: Play },
-  paused: { color: "text-amber-500", icon: Pause },
+  active: { color: "text-success", icon: Play },
+  paused: { color: "text-warning", icon: Pause },
   archived: { color: "text-muted-foreground", icon: AlertCircle },
 };
 

@@ -385,7 +385,8 @@ type ProjectChannelResponse struct {
 // It deliberately does not imply a new ownership model: it is the inverse of
 // channel.project_id and excludes archived groups from the normal surface.
 func (h *Handler) ListProjectChannels(w http.ResponseWriter, r *http.Request) {
-	if _, ok := requireUserID(w, r); !ok {
+	userID, ok := requireUserID(w, r)
+	if !ok {
 		return
 	}
 	workspaceID := h.resolveWorkspaceID(r)
@@ -406,10 +407,14 @@ func (h *Handler) ListProjectChannels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := h.DB.Query(r.Context(), `
-		SELECT id, workspace_id, project_id, name, description, kind, created_at, updated_at
-		FROM channel
-		WHERE workspace_id = $1 AND project_id = $2 AND kind = 'group' AND archived_at IS NULL
-		ORDER BY updated_at DESC, created_at DESC`, workspaceUUID, projectID)
+		SELECT ch.id, ch.workspace_id, ch.project_id, ch.name, ch.description, ch.kind, ch.created_at, ch.updated_at
+		FROM channel ch
+		JOIN channel_member cm ON cm.channel_id = ch.id
+		  AND cm.workspace_id = ch.workspace_id
+		  AND cm.member_type = 'user'
+		  AND cm.member_id = $3
+		WHERE ch.workspace_id = $1 AND ch.project_id = $2 AND ch.kind = 'group' AND ch.archived_at IS NULL
+		ORDER BY ch.updated_at DESC, ch.created_at DESC`, workspaceUUID, projectID, parseUUID(userID))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list project channels")
 		return

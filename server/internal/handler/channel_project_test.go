@@ -75,6 +75,26 @@ func TestCreateChannelProjectBindingAndProjectReverseList(t *testing.T) {
 		t.Fatalf("project channels = %#v, want created channel", response.Channels)
 	}
 
+	// Being a workspace member is not enough to discover a private group via
+	// the project's reverse lookup. The caller must also be a channel member.
+	nonMemberID := seedWorkspaceUserForTransportTargetTest(t, "project-channel-non-member-"+uuid.NewString())
+	nonMemberList := httptest.NewRecorder()
+	nonMemberReq := newRequestAs(nonMemberID, http.MethodGet, "/api/projects/"+projectID+"/channels?workspace_id="+testWorkspaceID, nil)
+	nonMemberReq = withURLParam(nonMemberReq, "id", projectID)
+	testHandler.ListProjectChannels(nonMemberList, nonMemberReq)
+	if nonMemberList.Code != http.StatusOK {
+		t.Fatalf("ListProjectChannels as non-member = %d: %s", nonMemberList.Code, nonMemberList.Body.String())
+	}
+	var nonMemberResponse struct {
+		Channels []ProjectChannelResponse `json:"channels"`
+	}
+	if err := json.NewDecoder(nonMemberList.Body).Decode(&nonMemberResponse); err != nil {
+		t.Fatalf("decode non-member project channels: %v", err)
+	}
+	if len(nonMemberResponse.Channels) != 0 {
+		t.Fatalf("non-member project channels = %#v, want no private group disclosure", nonMemberResponse.Channels)
+	}
+
 	clear := httptest.NewRecorder()
 	clearReq := withChannelTestWorkspaceCtx(t, newRequest(http.MethodPut, "/api/channels/"+channel.ID+"/project", map[string]any{"project_id": ""}), testUserID)
 	clearReq = withURLParam(clearReq, "channelId", channel.ID)

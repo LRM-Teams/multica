@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -275,6 +276,82 @@ func TestCreateIssueWithGroupChannelDoesNotInferProjectAndCanClearAnchor(t *test
 	}
 	if count != 0 {
 		t.Fatalf("anchor count = %d, want 0 after null clear", count)
+	}
+}
+
+func TestIssueSourceChannelAgentTaskTokenSeesOwnAnchorAndPublishesAgentActor(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "issue-source-anchor-agent-"+uuid.NewString(), nil)
+	// The host user owns the issue but is deliberately not a member of this
+	// private group. Only the agent is a group member, which makes the actor
+	// boundary observable in both the response and issue:updated event.
+	channelID := seedChannelForTest(t, "issue-source-anchor-agent-group-"+uuid.NewString())
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent channel member: %v", err)
+	}
+
+	create := httptest.NewRecorder()
+	testHandler.CreateIssue(create, newRequest(http.MethodPost, "/api/issues?workspace_id="+testWorkspaceID, map[string]any{
+		"title":  "Agent-owned group anchor",
+		"status": "backlog",
+	}))
+	if create.Code != http.StatusCreated {
+		t.Fatalf("CreateIssue = %d: %s", create.Code, create.Body.String())
+	}
+	var issue IssueResponse
+	if err := json.NewDecoder(create.Body).Decode(&issue); err != nil {
+		t.Fatalf("decode issue: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issue.ID) })
+
+	var updated *events.Event
+	testHandler.Bus.Subscribe(protocol.EventIssueUpdated, func(event events.Event) {
+		if event.ActorType == "agent" && event.ActorID == agentID {
+			copy := event
+			updated = &copy
+		}
+	})
+
+	setReq := newRequest(http.MethodPut, "/api/issues/"+issue.ID+"/channel?workspace_id="+testWorkspaceID, map[string]any{"channel_id": channelID})
+	setReq = withURLParam(setReq, "id", issue.ID)
+	setReq.Header.Set("X-Actor-Source", "task_token")
+	setReq.Header.Set("X-Agent-ID", agentID)
+	set := httptest.NewRecorder()
+	testHandler.SetIssueSourceChannel(set, setReq)
+	if set.Code != http.StatusOK {
+		t.Fatalf("SetIssueSourceChannel as task-token agent = %d: %s", set.Code, set.Body.String())
+	}
+	var setResponse IssueResponse
+	if err := json.NewDecoder(set.Body).Decode(&setResponse); err != nil {
+		t.Fatalf("decode agent set response: %v", err)
+	}
+	if setResponse.SourceRefs == nil || setResponse.SourceRefs.Channel == nil || setResponse.SourceRefs.Channel.ChannelID != channelID {
+		t.Fatalf("agent set source_refs = %#v, want private group %s", setResponse.SourceRefs, channelID)
+	}
+	if updated == nil || updated.ActorType != "agent" || updated.ActorID != agentID {
+		t.Fatalf("issue:updated actor = %#v, want agent/%s", updated, agentID)
+	}
+
+	getReq := newRequest(http.MethodGet, "/api/issues/"+issue.ID+"?workspace_id="+testWorkspaceID, nil)
+	getReq = withURLParam(getReq, "id", issue.ID)
+	getReq.Header.Set("X-Actor-Source", "task_token")
+	getReq.Header.Set("X-Agent-ID", agentID)
+	get := httptest.NewRecorder()
+	testHandler.GetIssue(get, getReq)
+	if get.Code != http.StatusOK {
+		t.Fatalf("GetIssue as task-token agent = %d: %s", get.Code, get.Body.String())
+	}
+	var getResponse IssueResponse
+	if err := json.NewDecoder(get.Body).Decode(&getResponse); err != nil {
+		t.Fatalf("decode agent get response: %v", err)
+	}
+	if getResponse.SourceRefs == nil || getResponse.SourceRefs.Channel == nil || getResponse.SourceRefs.Channel.ChannelID != channelID {
+		t.Fatalf("agent get source_refs = %#v, want private group %s", getResponse.SourceRefs, channelID)
 	}
 }
 

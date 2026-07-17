@@ -165,21 +165,29 @@ func (h *Handler) SetIssueSourceChannel(w http.ResponseWriter, r *http.Request) 
 	}
 	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
 	resp := issueToResponse(issue, prefix)
+	actorType, actorID := h.resolveActor(r, requesterID, uuidToString(issue.WorkspaceID))
 	if channelID.Valid {
-		if refs := h.issueSourceRefsForUser(r.Context(), issue, parseUUID(requesterID)); refs != nil {
+		if refs := h.issueSourceRefsForActor(r.Context(), issue, actorType, parseUUID(actorID)); refs != nil {
 			resp.SourceRefs = refs
 		}
 	}
-	h.publish(protocol.EventIssueUpdated, uuidToString(issue.WorkspaceID), "member", requesterID, map[string]any{
+	h.publish(protocol.EventIssueUpdated, uuidToString(issue.WorkspaceID), actorType, actorID, map[string]any{
 		"issue": resp,
 	})
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// issueSourceRefsForUser returns the detail-only source ref if it remains
-// visible to this requester. The membership check prevents an issue shared
+// issueSourceRefsForActor returns the detail-only source ref if it remains
+// visible to the resolved caller. The membership check prevents an issue shared
 // broadly in a workspace from becoming a side channel into a private group.
-func (h *Handler) issueSourceRefsForUser(ctx context.Context, issue db.Issue, requesterID pgtype.UUID) *IssueSourceRefsResponse {
+func (h *Handler) issueSourceRefsForActor(ctx context.Context, issue db.Issue, actorType string, actorID pgtype.UUID) *IssueSourceRefsResponse {
+	if actorType != "member" && actorType != "agent" {
+		return nil
+	}
+	membershipType := actorType
+	if membershipType == "member" {
+		membershipType = "user"
+	}
 	var channelRef IssueSourceChannelRefResponse
 	var messageRef IssueSourceMessageRefResponse
 	var channelName string
@@ -198,9 +206,9 @@ func (h *Handler) issueSourceRefsForUser(ctx context.Context, issue db.Issue, re
 		JOIN channel c ON c.id = src.channel_id AND c.workspace_id = src.workspace_id
 		JOIN channel_member cm ON cm.channel_id = src.channel_id
 		  AND cm.workspace_id = src.workspace_id
-		  AND cm.member_type = 'user' AND cm.member_id = $2
-		WHERE src.issue_id = $1 AND src.workspace_id = $3`,
-		issue.ID, requesterID, issue.WorkspaceID,
+		  AND cm.member_type = $2 AND cm.member_id = $3
+		WHERE src.issue_id = $1 AND src.workspace_id = $4`,
+		issue.ID, membershipType, actorID, issue.WorkspaceID,
 	).Scan(&channelID, &channelRef.ChannelKind, &channelName, &messageID, &threadRoot, &content, &rawParts)
 	if err != nil {
 		return nil

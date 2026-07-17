@@ -124,7 +124,7 @@ line 2537).
 | HTTP create accepts nullable `project_id` | `server/internal/handler/issue.go:2000-2009` |
 | Service validates project belongs to the issue workspace | `server/internal/service/issue.go:171-193` |
 | Child without explicit project inherits the parent's project | `server/internal/service/issue.go:171-185` |
-| Group-associated create inherits the channel project when project is omitted | `server/internal/handler/issue.go` |
+| Group association and project are independent explicit create properties; omitting project keeps it empty | `server/internal/handler/issue.go` |
 | `PUT /api/issues/{id}/channel` keeps the canonical 1:1 anchor | `server/internal/handler/issue_source_anchor.go` |
 | HTTP update validates project belongs to the issue workspace | `server/internal/handler/issue.go:2407-2424` |
 | CLI source flags remain independent of `--project` | `server/cmd/multica/cmd_issue.go:680-731` |

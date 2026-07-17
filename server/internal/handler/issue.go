@@ -1646,7 +1646,8 @@ func (h *Handler) GetIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	resp.Labels = &detailLabels
 	if requesterID, ok := requireUserID(w, r); ok {
-		if sourceRefs := h.issueSourceRefsForUser(r.Context(), issue, parseUUID(requesterID)); sourceRefs != nil {
+		actorType, actorID := h.resolveActor(r, requesterID, uuidToString(issue.WorkspaceID))
+		if sourceRefs := h.issueSourceRefsForActor(r.Context(), issue, actorType, parseUUID(actorID)); sourceRefs != nil {
 			resp.SourceRefs = sourceRefs
 		}
 	}

@@ -13,13 +13,13 @@ import (
 )
 
 type fakeSandboxInstanceCreator struct {
-	calls      []createSandboxCall
-	ref        SandboxInstanceRef
-	err        error
-	refs       map[string]SandboxInstanceRef // instanceID -> ref for GetSandboxInstanceRef
-	getErr     error
-	deleteCalls []string                     // instanceIDs passed to DeleteSandboxInstance
-	deleteErr  error
+	calls       []createSandboxCall
+	ref         SandboxInstanceRef
+	err         error
+	refs        map[string]SandboxInstanceRef // instanceID -> ref for GetSandboxInstanceRef
+	getErr      error
+	deleteCalls []string // instanceIDs passed to DeleteSandboxInstance
+	deleteErr   error
 }
 
 func (c *fakeSandboxInstanceCreator) GetSandboxInstanceRef(_ context.Context, _, instanceID string) (SandboxInstanceRef, error) {
@@ -97,11 +97,12 @@ type fakeEnvDispatchDeps struct {
 
 	trainingSaves []trainingSaveCall // every SaveTrainingDispatch call, in order
 
-	forkErr        error
-	createEnvErr   error
-	copyProjectErr error
-	createIssueErr error
-	enqueueErr     error
+	forkErr                    error
+	createEnvErr               error
+	copyProjectErr             error
+	branchMessageValidationErr error
+	createIssueErr             error
+	enqueueErr                 error
 
 	// Phase 2: PrecreateAgentRuntime recording + canned return, and the
 	// runtime_id passed to each EnqueueAgentRun call (the pre-created R').
@@ -118,13 +119,123 @@ type fakeEnvDispatchDeps struct {
 	resolveEnvSpecErrs  map[string]error // template or base_env_id -> error; missing key = OK
 	validateAgentCalls  []string
 	resolveEnvSpecCalls []PerAgentEnvSpec
+	messageRoster       MessageRoster
+	channels            map[string]string
+	channelMessages     []string
+	channelRuns         []ChannelRunInput
+	triggers            []EnvCollaborationTrigger
+	provisionCalls      []EnvDispatchAgentProvisionInput
+	branchTrigger       EnvCollaborationTrigger
+	branchSourceSandbox string
+	copyMessageIDs      map[string]string
 }
 
 func newFakeEnvDispatchDeps() *fakeEnvDispatchDeps {
 	return &fakeEnvDispatchDeps{
 		envs: map[string]Env{}, sandboxes: map[string]string{}, projects: map[string]string{},
-		issues: map[string][]IssueRow{}, chatSess: map[string]string{},
+		issues: map[string][]IssueRow{}, chatSess: map[string]string{}, channels: map[string]string{},
 	}
+}
+
+func (f *fakeEnvDispatchDeps) ResolveMessageRoster(_ context.Context, _, agentID, _ string) (MessageRoster, error) {
+	if f.messageRoster.LeaderID != "" {
+		return f.messageRoster, nil
+	}
+	if agentID == "" {
+		agentID = "squad-leader"
+	}
+	return MessageRoster{LeaderID: agentID, AgentIDs: []string{agentID}}, nil
+}
+func (f *fakeEnvDispatchDeps) CreateEnvDispatchChannel(_ context.Context, _, _, projectID, _ string, _ MessageRoster, _ map[string]SandboxInstanceRef) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	id := fmt.Sprintf("channel-%d", len(f.channels))
+	f.channels[id] = projectID
+	return id, nil
+}
+func (f *fakeEnvDispatchDeps) DeleteChannel(_ context.Context, _, channelID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.channels, channelID)
+	return nil
+}
+func (f *fakeEnvDispatchDeps) ProvisionEnvDispatchAgent(ctx context.Context, in EnvDispatchAgentProvisionInput) (EnvDispatchAgentProvisionResult, error) {
+	f.mu.Lock()
+	f.provisionCalls = append(f.provisionCalls, in)
+	f.mu.Unlock()
+	runtimeID, daemonID, err := f.PrecreateAgentRuntime(ctx, in.WorkspaceID, in.UserID, in.AgentID)
+	if err != nil {
+		return EnvDispatchAgentProvisionResult{}, err
+	}
+	return EnvDispatchAgentProvisionResult{
+		SandboxInstanceID: "binding-sandbox-" + in.AgentID,
+		RuntimeID:         runtimeID,
+		DaemonID:          daemonID,
+		ChatSessionID:     "binding-session-" + in.AgentID,
+	}, nil
+}
+func (f *fakeEnvDispatchDeps) CreateChannelMessage(_ context.Context, _ string, _, _ string, content string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.channelMessages = append(f.channelMessages, content)
+	return fmt.Sprintf("channel-message-%d", len(f.channelMessages)), nil
+}
+func (f *fakeEnvDispatchDeps) EnqueueEnvDispatchChannelRun(_ context.Context, _, _ string, in ChannelRunInput, _ int) (string, error) {
+	if f.enqueueErr != nil {
+		return "", f.enqueueErr
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.channelRuns = append(f.channelRuns, in)
+	f.enqueueRuntimeIDs = append(f.enqueueRuntimeIDs, in.RuntimeID)
+	return fmt.Sprintf("channel-run-%d", len(f.channelRuns)), nil
+}
+func (f *fakeEnvDispatchDeps) SaveCollaborationTrigger(_ context.Context, _ string, trigger EnvCollaborationTrigger) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.triggers = append(f.triggers, trigger)
+	return nil
+}
+func (f *fakeEnvDispatchDeps) ValidateBranchMessageSource(_ context.Context, _, envID, projectID string, roster MessageRoster) (ValidatedBranchMessageSource, error) {
+	if f.branchMessageValidationErr != nil {
+		return ValidatedBranchMessageSource{}, f.branchMessageValidationErr
+	}
+	leader := roster.LeaderID
+	if leader == "" {
+		leader = "trigger-agent"
+	}
+	trigger := f.branchTrigger
+	if trigger.AgentID == "" {
+		trigger = EnvCollaborationTrigger{
+			AgentID:         leader,
+			Kind:            "channel_message",
+			ChannelID:       "source-channel",
+			ProjectID:       projectID,
+			ChatSessionID:   "source-sess-1",
+			SourceMessageID: "source-msg-1",
+			TaskID:          "source-task-1",
+			RuntimeID:       "source-runtime-1",
+		}
+	}
+	return ValidatedBranchMessageSource{
+		SourceEnvID:                    envID,
+		SourceProjectID:                projectID,
+		SourceChannelID:                "source-channel",
+		Roster:                         roster,
+		Trigger:                        trigger,
+		TriggerSourceSandboxInstanceID: f.branchSourceSandbox,
+	}, nil
+}
+func (f *fakeEnvDispatchDeps) CopyEnvDispatchChannel(_ context.Context, _ string, sourceChannelID, destinationProjectID, _ string) (ChannelCopyMap, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	id := "copied-" + sourceChannelID
+	f.channels[id] = destinationProjectID
+	msgIDs := f.copyMessageIDs
+	if msgIDs == nil {
+		msgIDs = map[string]string{"source-msg-1": "copied-msg-1"}
+	}
+	return ChannelCopyMap{ChannelID: id, MessageIDs: msgIDs}, nil
 }
 
 func (f *fakeEnvDispatchDeps) GetEnv(_ context.Context, envID, _ string) (Env, error) {
@@ -145,6 +256,17 @@ func (f *fakeEnvDispatchDeps) CreateEnv(_ context.Context, _ string, sandboxIDs 
 	id := fmt.Sprintf("env-%d", len(f.envs))
 	f.envs[id] = Env{ID: id, SandboxIDs: sandboxIDs, ParentEnvID: parentEnvID, Mode: mode, Domain: domain}
 	return id, nil
+}
+func (f *fakeEnvDispatchDeps) SetEnvSandboxes(_ context.Context, envID, _ string, sandboxIDs []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	env, ok := f.envs[envID]
+	if !ok {
+		return fmt.Errorf("environment %s not found", envID)
+	}
+	env.SandboxIDs = append([]string(nil), sandboxIDs...)
+	f.envs[envID] = env
+	return nil
 }
 func (f *fakeEnvDispatchDeps) DeleteEnv(_ context.Context, envID, _ string) error {
 	f.mu.Lock()
@@ -254,6 +376,7 @@ func (f *fakeEnvDispatchDeps) CreateChatSession(_ context.Context, pid, _, _, _ 
 func (f *fakeEnvDispatchDeps) CreateChatMessage(_ context.Context, _, _, _ string) (string, error) {
 	return "msg-1", nil
 }
+
 type precreateRuntimeCall struct {
 	WorkspaceID string
 	OwnerUserID string
@@ -519,7 +642,6 @@ func TestDispatch_BranchSelfPlayMessage_N2(t *testing.T) {
 	// §7.4: branch+self_play requires the source project to have exactly one
 	// chat session. Seed it so validateBranchSource passes.
 	f.chatSess["source-sess-1"] = "source-proj-1"
-	sessionsBefore := len(f.chatSess)
 
 	svc := NewEnvDispatchService(f, 8)
 	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
@@ -538,15 +660,190 @@ func TestDispatch_BranchSelfPlayMessage_N2(t *testing.T) {
 		if r.EnvID == stateEnv {
 			t.Fatalf("rollout %d: env_id should be forked, not reused", i)
 		}
-		// branch appends to the COPIED session, not a freshly created one (spec §7.3).
-		if r.ChatSessionID != "copied-sess-1" {
-			t.Fatalf("rollout %d: want copied session, got %s", i, r.ChatSessionID)
+		if r.ChannelID == "" {
+			t.Fatalf("rollout %d: missing channel_id", i)
+		}
+		// Branch resumes on the trigger agent's freshly provisioned channel
+		// session, not the copied project chat session.
+		if r.ChatSessionID == "" || r.ChatSessionID == "copied-sess-1" {
+			t.Fatalf("rollout %d: want provisioned channel session, got %q", i, r.ChatSessionID)
+		}
+		if r.AgentRunID == "" {
+			t.Fatalf("rollout %d: missing channel run", i)
 		}
 	}
-	// No new "sess-*" session should be created for branch (append only): the
-	// only session present is the seeded source session.
-	if len(f.chatSess) != sessionsBefore {
-		t.Fatalf("branch must not create new sessions, got %d (want %d)", len(f.chatSess), sessionsBefore)
+	// Branch enqueues a channel run + saves a remapped trigger per rollout.
+	if len(f.channelRuns) != 2 {
+		t.Fatalf("want 2 channel runs, got %d", len(f.channelRuns))
+	}
+	if len(f.triggers) != 2 {
+		t.Fatalf("want 2 saved triggers, got %d", len(f.triggers))
+	}
+	if _, ok := f.envs[stateEnv]; !ok {
+		t.Fatal("source env must remain intact (re-branchable)")
+	}
+}
+
+func TestBranchWakesOnlyTriggerAgentWithClonedSandbox(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	const stateEnv = "state-env-1"
+	f.envs[stateEnv] = Env{ID: stateEnv, SandboxIDs: []string{"state-sbx"}, Mode: EnvModeBranch, Domain: EnvDomainSelfPlay}
+	f.projects["source-proj-1"] = stateEnv
+	f.chatSess["source-sess-1"] = "source-proj-1"
+	// Squad roster: leader + two peers. The trigger selects the leader only.
+	f.messageRoster = MessageRoster{LeaderID: "leader", AgentIDs: []string{"leader", "peerA", "peerB"}}
+	f.branchTrigger = EnvCollaborationTrigger{
+		AgentID: "leader", Kind: "channel_message", ChannelID: "source-channel",
+		ProjectID: "source-proj-1", ChatSessionID: "source-sess-1",
+		SourceMessageID: "source-msg-1", TaskID: "source-task-1", RuntimeID: "source-runtime-1",
+	}
+	f.branchSourceSandbox = "source-sandbox-leader"
+
+	svc := NewEnvDispatchService(f, 1)
+	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", Mode: EnvModeBranch, EnvID: stateEnv,
+		SourceProjectID: "source-proj-1",
+		Domain:          EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
+		SquadID: "squad-1", Message: &MessageInput{Content: "continue"},
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	r := res.Rollouts[0]
+	// Only the trigger agent is provisioned, with its source sandbox marked for clone.
+	if len(f.provisionCalls) != 1 || f.provisionCalls[0].AgentID != "leader" {
+		t.Fatalf("want 1 provision call for leader, got %+v", f.provisionCalls)
+	}
+	if f.provisionCalls[0].SourceSandboxInstanceID != "source-sandbox-leader" {
+		t.Fatalf("want clone source sandbox, got %q", f.provisionCalls[0].SourceSandboxInstanceID)
+	}
+	// Exactly one channel run for the trigger agent, on the provisioned runtime
+	// (not the agent default and not the source runtime).
+	if len(f.channelRuns) != 1 || f.channelRuns[0].AgentID != "leader" {
+		t.Fatalf("want 1 channel run for leader, got %+v", f.channelRuns)
+	}
+	if f.channelRuns[0].RuntimeID == "" || f.channelRuns[0].RuntimeID == "source-runtime-1" {
+		t.Fatalf("channel run must use the new provisioned runtime, got %q", f.channelRuns[0].RuntimeID)
+	}
+	// Leader ready, peers pending (lazy first-mention provisioning).
+	if r.AgentSandboxes["leader"].Status != "ready" {
+		t.Fatalf("leader should be ready, got %q", r.AgentSandboxes["leader"].Status)
+	}
+	for _, peer := range []string{"peerA", "peerB"} {
+		if r.AgentSandboxes[peer].Status != "pending" {
+			t.Fatalf("peer %s should be pending, got %q", peer, r.AgentSandboxes[peer].Status)
+		}
+	}
+}
+
+func TestBranchLeavesNonTriggeredAgentsPendingWithCloneSources(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	const stateEnv = "state-env-1"
+	f.envs[stateEnv] = Env{ID: stateEnv, SandboxIDs: []string{"state-sbx"}, Mode: EnvModeBranch, Domain: EnvDomainSelfPlay}
+	f.projects["source-proj-1"] = stateEnv
+	f.chatSess["source-sess-1"] = "source-proj-1"
+	f.messageRoster = MessageRoster{LeaderID: "leader", AgentIDs: []string{"leader", "peerA", "peerB"}}
+	f.branchTrigger = EnvCollaborationTrigger{
+		AgentID: "leader", Kind: "channel_message", ChannelID: "source-channel",
+		ProjectID: "source-proj-1", ChatSessionID: "source-sess-1",
+		SourceMessageID: "source-msg-1", TaskID: "source-task-1", RuntimeID: "source-runtime-1",
+	}
+
+	svc := NewEnvDispatchService(f, 1)
+	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", Mode: EnvModeBranch, EnvID: stateEnv,
+		SourceProjectID: "source-proj-1",
+		Domain:          EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
+		SquadID: "squad-1", Message: &MessageInput{Content: "go"},
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	r := res.Rollouts[0]
+	// Peers are not provisioned (lazy on first mention) and stay pending with no sandbox.
+	if len(f.provisionCalls) != 1 {
+		t.Fatalf("want exactly 1 provision call (trigger only), got %d", len(f.provisionCalls))
+	}
+	for _, peer := range []string{"peerA", "peerB"} {
+		st, ok := r.AgentSandboxes[peer]
+		if !ok || st.Status != "pending" || st.SandboxInstanceID != "" {
+			t.Fatalf("peer %s should be pending with no sandbox, got %+v", peer, st)
+		}
+	}
+}
+
+func TestBranchAppendsNewMessageWithoutChangingTriggerAgent(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	const stateEnv = "state-env-1"
+	f.envs[stateEnv] = Env{ID: stateEnv, SandboxIDs: []string{"state-sbx"}, Mode: EnvModeBranch, Domain: EnvDomainSelfPlay}
+	f.projects["source-proj-1"] = stateEnv
+	f.chatSess["source-sess-1"] = "source-proj-1"
+	f.messageRoster = MessageRoster{LeaderID: "leader", AgentIDs: []string{"leader", "peerA"}}
+	f.branchTrigger = EnvCollaborationTrigger{
+		AgentID: "leader", Kind: "channel_message", ChannelID: "source-channel",
+		ProjectID: "source-proj-1", ChatSessionID: "source-sess-1",
+		SourceMessageID: "source-msg-1", TaskID: "source-task-1", RuntimeID: "source-runtime-1",
+	}
+
+	svc := NewEnvDispatchService(f, 1)
+	_, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", Mode: EnvModeBranch, EnvID: stateEnv,
+		SourceProjectID: "source-proj-1",
+		Domain:          EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
+		SquadID: "squad-1", Message: &MessageInput{Content: "follow-up question"},
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	// The request content is appended as nondispatching channel context.
+	if len(f.channelMessages) != 1 || f.channelMessages[0] != "follow-up question" {
+		t.Fatalf("want one appended channel message with request content, got %v", f.channelMessages)
+	}
+	// The trigger agent is the one woken (unchanged by the appended content).
+	if len(f.provisionCalls) != 1 || f.provisionCalls[0].AgentID != "leader" {
+		t.Fatalf("trigger agent should remain leader, got %+v", f.provisionCalls)
+	}
+	if len(f.channelRuns) != 1 || f.channelRuns[0].AgentID != "leader" {
+		t.Fatalf("channel run should target the trigger agent, got %+v", f.channelRuns)
+	}
+	// The saved trigger is remapped onto the destination channel, with a fresh task/runtime.
+	if len(f.triggers) != 1 {
+		t.Fatalf("want 1 saved trigger, got %d", len(f.triggers))
+	}
+	saved := f.triggers[0]
+	if saved.AgentID != "leader" || saved.ChannelID == "source-channel" {
+		t.Fatalf("saved trigger should be leader on destination channel, got %+v", saved)
+	}
+	if saved.TaskID == "" || saved.TaskID == "source-task-1" {
+		t.Fatalf("saved trigger must use the new task id, got %q", saved.TaskID)
+	}
+	if saved.RuntimeID == "" || saved.RuntimeID == "source-runtime-1" {
+		t.Fatalf("saved trigger must use the new runtime id, got %q", saved.RuntimeID)
+	}
+	if saved.SourceMessageID != "copied-msg-1" {
+		t.Fatalf("saved trigger source_message_id must be remapped to copied id, got %q", saved.SourceMessageID)
+	}
+}
+
+func TestBranchRejectsInvalidMessageSourceBeforeWrites(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	const stateEnv = "state-env"
+	f.envs[stateEnv] = Env{ID: stateEnv, SandboxIDs: []string{"state-sandbox"}, Mode: EnvModeBranch, Domain: EnvDomainSelfPlay}
+	f.projects["source-project"] = stateEnv
+	f.chatSess["source-session"] = "source-project"
+	f.branchMessageValidationErr = fmt.Errorf("missing collaboration trigger")
+	svc := NewEnvDispatchService(f, 1)
+
+	_, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "user", Mode: EnvModeBranch, EnvID: stateEnv,
+		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
+		AgentID: "agent", Message: &MessageInput{Content: "continue"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "validation_failed: branch message source") {
+		t.Fatalf("expected validation error, got %v", err)
+	}
+	if len(f.sandboxes) != 0 || len(f.projects) != 1 || len(f.channelRuns) != 0 || len(f.precreateRuntimeCalls) != 0 {
+		t.Fatalf("invalid branch source must not create resources: sandboxes=%v projects=%v runs=%v runtimes=%v", f.sandboxes, f.projects, f.channelRuns, f.precreateRuntimeCalls)
 	}
 }
 
@@ -981,27 +1278,18 @@ func TestDispatch_AutoCreatesDefaultSelfPlayEnvAndReuses(t *testing.T) {
 	if f.defaultSelfPlayEnvSetCalls != 1 {
 		t.Fatalf("dispatch 1: want 1 SetDefaultSelfPlayEnv call, got %d", f.defaultSelfPlayEnvSetCalls)
 	}
-	// The auto-created base env's sandbox is a sandbox_instance (inst-1 from the
-	// first CreateSandboxInstance call), and the rollout fork creates a second
-	// instance (inst-2) reusing the base's template.
-	if len(lc.calls) != 2 {
-		t.Fatalf("want 2 sandbox_instance creates (base + rollout fork), got %d", len(lc.calls))
+	// Scratch message dispatch creates the execution sandbox through the channel
+	// binding adapter, so this generic lifecycle creates only the base holder.
+	if len(lc.calls) != 1 {
+		t.Fatalf("want 1 sandbox_instance create (base), got %d", len(lc.calls))
 	}
 	if lc.calls[0].Template != "py312" {
 		t.Fatalf("auto-created base template = %q, want %q", lc.calls[0].Template, "py312")
 	}
-	if lc.calls[1].Template != "py312" {
-		t.Fatalf("rollout fork template = %q, want %q (should reuse base template)", lc.calls[1].Template, "py312")
-	}
 	// The auto-created base env is a forkable template holder - it must NOT boot
-	// a daemon (no DaemonEnabled). The rollout fork is the per-agent execution
-	// sandbox - it MUST be daemon-enabled so the in-sandbox daemon can reach
-	// multica. This is the Phase 1 daemon-runtime-env wiring contract.
+	// a daemon (no DaemonEnabled). The bound leader sandbox is created later.
 	if lc.calls[0].DaemonEnabled {
 		t.Fatalf("auto-created base env sandbox must not be daemon-enabled, got %+v", lc.calls[0])
-	}
-	if !lc.calls[1].DaemonEnabled {
-		t.Fatalf("rollout fork sandbox must be daemon-enabled, got %+v", lc.calls[1])
 	}
 
 	// Dispatch 2: reuses the configured default; no second auto-create.
@@ -1017,9 +1305,9 @@ func TestDispatch_AutoCreatesDefaultSelfPlayEnvAndReuses(t *testing.T) {
 	if f.defaultSelfPlayEnvSetCalls != setCallsBefore {
 		t.Fatalf("dispatch 2: default already configured; want 0 additional SetDefaultSelfPlayEnv calls, got %d", f.defaultSelfPlayEnvSetCalls-setCallsBefore)
 	}
-	// Only the rollout fork creates a new instance (no base auto-create).
-	if len(lc.calls) != createsBefore+1 {
-		t.Fatalf("dispatch 2: want 1 additional sandbox_instance create (rollout fork), got %d", len(lc.calls)-createsBefore)
+	// No generic lifecycle instance is needed for the leader binding.
+	if len(lc.calls) != createsBefore {
+		t.Fatalf("dispatch 2: expected no additional generic sandbox_instance create, got %d", len(lc.calls)-createsBefore)
 	}
 }
 
@@ -1438,30 +1726,14 @@ func TestEnvDispatchPerAgentEnvSpecsAssignDistinctSandboxRefs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
-	if len(creator.calls) != 2 {
-		t.Fatalf("want 2 sandbox_instance creates, got %d", len(creator.calls))
-	}
-	// Each per-agent execution sandbox must be daemon-enabled so the in-sandbox
-	// daemon can reach multica (Phase 1 daemon-runtime-env wiring contract).
-	for i, c := range creator.calls {
-		if !c.DaemonEnabled {
-			t.Fatalf("per-agent sandbox call %d must be daemon-enabled, got %+v", i, c)
-		}
+	if len(creator.calls) != 0 {
+		t.Fatalf("message bindings must defer per-agent sandbox creation, got %d", len(creator.calls))
 	}
 	if len(res.Rollouts) != 1 {
 		t.Fatalf("want 1 rollout, got %d", len(res.Rollouts))
 	}
-	refs := res.Rollouts[0].AgentSandboxRefs
-	if len(refs) != 2 {
-		t.Fatalf("want 2 agent sandbox refs, got %d", len(refs))
-	}
-	r1, ok1 := refs["a1"]
-	r2, ok2 := refs["a2"]
-	if !ok1 || !ok2 {
-		t.Fatalf("missing agent refs: a1=%v a2=%v", ok1, ok2)
-	}
-	if r1.InstanceID == r2.InstanceID {
-		t.Fatalf("agent refs must be distinct: both %s", r1.InstanceID)
+	if len(res.Rollouts[0].AgentSandboxRefs) != 0 {
+		t.Fatalf("message rollout must defer agent refs, got %+v", res.Rollouts[0].AgentSandboxRefs)
 	}
 }
 
@@ -1506,27 +1778,14 @@ func TestDispatch_PrecreatesRuntimeAndRoutesTaskToSandboxRuntime(t *testing.T) {
 		t.Fatalf("unexpected precreate call: %+v", pc)
 	}
 
-	// The rollout sandbox is daemon-enabled AND carries the pre-assigned
-	// MULTICA_DAEMON_ID (the in-sandbox daemon adopts R' on register). The base
-	// env's sandbox was pre-seeded, so only the rollout fork creates an instance.
-	if len(creator.calls) != 1 {
-		t.Fatalf("want 1 sandbox_instance create (rollout fork), got %d", len(creator.calls))
+	// The generic lifecycle must not create a second rollout runtime; the channel
+	// provisioning adapter owns the leader's daemon-enabled sandbox.
+	if len(creator.calls) != 0 {
+		t.Fatalf("want no generic rollout sandbox creation, got %d", len(creator.calls))
 	}
-	sb := creator.calls[0]
-	if !sb.DaemonEnabled {
-		t.Fatalf("rollout sandbox must be daemon-enabled, got %+v", sb)
-	}
-	if sb.RuntimeEnv["MULTICA_DAEMON_ID"] != "daemon-rt-1" {
-		t.Fatalf("MULTICA_DAEMON_ID = %q, want daemon-rt-1", sb.RuntimeEnv["MULTICA_DAEMON_ID"])
-	}
-
-	// The rollout's sandbox ref carries R' (runtime_id + daemon_id).
-	if len(res.Rollouts[0].SandboxRefs) != 1 {
-		t.Fatalf("want 1 sandbox ref, got %d", len(res.Rollouts[0].SandboxRefs))
-	}
-	ref := res.Rollouts[0].SandboxRefs[0]
-	if ref.RuntimeID != "rt-1" || ref.DaemonID != "daemon-rt-1" {
-		t.Fatalf("sandbox ref runtime = %q/%q, want rt-1/daemon-rt-1", ref.RuntimeID, ref.DaemonID)
+	binding := res.Rollouts[0].AgentSandboxes["ag"]
+	if binding.SandboxInstanceID == "" || binding.RuntimeID != "rt-1" {
+		t.Fatalf("leader binding = %+v, want bound sandbox and rt-1", binding)
 	}
 
 	// The task was routed to R' (not the session runtime).
@@ -1535,12 +1794,12 @@ func TestDispatch_PrecreatesRuntimeAndRoutesTaskToSandboxRuntime(t *testing.T) {
 	}
 }
 
-// TestDispatch_SquadDispatchDoesNotPrecreateRuntime verifies that squad
-// dispatch (no single agent) does NOT pre-create R' or route to it - the
-// sandbox boots a daemon that registers its own runtime and the task stays on
-// the leader's runtime. (Squad R' routing is deferred.)
-func TestDispatch_SquadDispatchDoesNotPrecreateRuntime(t *testing.T) {
+// TestDispatch_SquadMessagePrecreatesLeaderRuntime verifies that message
+// squads use the resolved leader identity for their rollout runtime rather
+// than falling back to that leader's shared default runtime.
+func TestDispatch_SquadMessagePrecreatesLeaderRuntime(t *testing.T) {
 	f := newFakeEnvDispatchDeps()
+	f.messageRoster = MessageRoster{LeaderID: "leader", AgentIDs: []string{"leader", "peer"}}
 	baseEnv := f.seedBaseEnv()
 	creator := &fakeSandboxInstanceCreator{
 		refs: map[string]SandboxInstanceRef{
@@ -1556,20 +1815,57 @@ func TestDispatch_SquadDispatchDoesNotPrecreateRuntime(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
-	if len(f.precreateRuntimeCalls) != 0 {
-		t.Fatalf("squad dispatch must not precreate runtime, got %d calls", len(f.precreateRuntimeCalls))
+	if len(f.precreateRuntimeCalls) != 1 || f.precreateRuntimeCalls[0].AgentID != "leader" {
+		t.Fatalf("squad message must precreate the leader runtime, got %+v", f.precreateRuntimeCalls)
 	}
-	if len(f.enqueueRuntimeIDs) != 1 || f.enqueueRuntimeIDs[0] != "" {
-		t.Fatalf("squad dispatch task must keep empty runtime_id (leader runtime), got %v", f.enqueueRuntimeIDs)
+	if len(f.enqueueRuntimeIDs) != 1 || f.enqueueRuntimeIDs[0] != "rt-1" {
+		t.Fatalf("squad message task must use leader runtime R', got %v", f.enqueueRuntimeIDs)
 	}
 }
 
-// TestDispatch_SandboxCreateFailureReclaimsPrecreatedRuntime verifies Phase 2b
-// concern 1: when the rollout sandbox_instance fork fails AFTER R' was
-// pre-created, the pre-created runtime row is reclaimed so an offline orphan
-// does not linger. (Reclaim happens inside createSandboxInstanceRefs, before
-// dispatchOne ever runs.)
-func TestDispatch_SandboxCreateFailureReclaimsPrecreatedRuntime(t *testing.T) {
+func TestScratchMessageProvisionsOnlyLeader(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	f.messageRoster = MessageRoster{LeaderID: "leader", AgentIDs: []string{"leader", "peer-a", "peer-b"}}
+	baseEnv := f.seedBaseEnv()
+	svc := NewEnvDispatchService(f, 1)
+
+	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "user", SquadID: "squad", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
+		Message: &MessageInput{Content: "start the rollout"},
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if len(f.precreateRuntimeCalls) != 1 || f.precreateRuntimeCalls[0].AgentID != "leader" {
+		t.Fatalf("expected only leader provisioning, got %+v", f.precreateRuntimeCalls)
+	}
+	if len(f.channelMessages) != 1 || f.channelMessages[0] != "start the rollout" {
+		t.Fatalf("unexpected channel messages: %v", f.channelMessages)
+	}
+	if len(f.channelRuns) != 1 || f.channelRuns[0].AgentID != "leader" || f.channelRuns[0].RuntimeID != "rt-1" {
+		t.Fatalf("leader run must use its bound runtime, got %+v", f.channelRuns)
+	}
+	r := res.Rollouts[0]
+	createdEnv, ok := f.envs[r.EnvID]
+	if !ok || len(createdEnv.SandboxIDs) != 1 || createdEnv.SandboxIDs[0] != "binding-sandbox-leader" {
+		t.Fatalf("message environment must own the leader binding sandbox, got %+v", createdEnv)
+	}
+	if r.LeaderRunID == "" || r.AgentRunID != r.LeaderRunID {
+		t.Fatalf("leader run compatibility fields not populated: %+v", r)
+	}
+	if r.AgentSandboxes["leader"].Status != "ready" || r.AgentSandboxes["peer-a"].Status != "pending" || r.AgentSandboxes["peer-b"].Status != "pending" {
+		t.Fatalf("unexpected binding statuses: %+v", r.AgentSandboxes)
+	}
+	if len(f.triggers) != 1 || f.triggers[0].AgentID != "leader" || f.triggers[0].RuntimeID != "rt-1" {
+		t.Fatalf("unexpected collaboration triggers: %+v", f.triggers)
+	}
+}
+
+// TestDispatch_MessageProvisionDoesNotUseGenericSandboxFork verifies that a
+// channel leader is provisioned by its binding, not by the generic lifecycle
+// fork that exists for ordinary instance-backed rollouts.
+func TestDispatch_MessageProvisionDoesNotUseGenericSandboxFork(t *testing.T) {
 	f := newFakeEnvDispatchDeps()
 	baseEnv := f.seedBaseEnv()
 	creator := &fakeSandboxInstanceCreator{
@@ -1580,21 +1876,20 @@ func TestDispatch_SandboxCreateFailureReclaimsPrecreatedRuntime(t *testing.T) {
 	}
 	svc := NewEnvDispatchService(f, 1).WithSandboxLifecycle(creator)
 
-	_, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
 		WorkspaceID: "ws", UserID: "u", Mode: EnvModeScratch, EnvID: baseEnv,
 		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage,
 		GroupSize: 1, AgentID: "ag",
 		Message: &MessageInput{Content: "hi"},
 	})
-	if err == nil {
-		t.Fatalf("dispatch must fail when sandbox_instance fork fails")
+	if err != nil {
+		t.Fatalf("message dispatch must not use the failing generic fork: %v", err)
 	}
-	// R' was pre-created then reclaimed because the sandbox fork failed.
 	if len(f.precreateRuntimeCalls) != 1 {
 		t.Fatalf("want 1 precreate call, got %d", len(f.precreateRuntimeCalls))
 	}
-	if len(f.deleteRuntimeCalls) != 1 || f.deleteRuntimeCalls[0] != "rt-1" {
-		t.Fatalf("orphan R' must be reclaimed, deleteRuntimeCalls=%v", f.deleteRuntimeCalls)
+	if res.Rollouts[0].AgentRunID == "" || len(f.deleteRuntimeCalls) != 0 {
+		t.Fatalf("bound leader must run without generic cleanup, rollouts=%+v deletes=%v", res.Rollouts, f.deleteRuntimeCalls)
 	}
 }
 
@@ -1688,15 +1983,8 @@ func TestEnvDispatchPerAgentEnvSpecsPartialSquadUsesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
-	refs := res.Rollouts[0].AgentSandboxRefs
-	if len(refs) != 1 {
-		t.Fatalf("want 1 agent sandbox ref (only specified), got %d", len(refs))
-	}
-	if _, ok := refs["a1"]; !ok {
-		t.Fatalf("missing ref for specified agent a1")
-	}
-	if _, ok := refs["a2"]; ok {
-		t.Fatalf("unspecified agent a2 should not have a ref")
+	if len(res.Rollouts[0].AgentSandboxRefs) != 0 {
+		t.Fatalf("message rollout must defer agent refs, got %+v", res.Rollouts[0].AgentSandboxRefs)
 	}
 }
 

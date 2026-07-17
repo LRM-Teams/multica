@@ -483,7 +483,14 @@
     "runtime_label": "运行时",
     "skills_label": "Skills",
     "owner_label": "所有者",
-    "unknown_runtime": "未知运行时"
+    "unknown_runtime": "未知运行时",
+    "username_label": "用户名",
+    "username_edit_title": "编辑用户名",
+    "username_placeholder": "agent-handle",
+    "username_error_empty": "用户名不能为空",
+    "username_error_invalid": "只能使用小写字母、数字和连字符",
+    "username_error_too_long": "用户名过长",
+    "username_taken": "该 @handle 已被占用"
   },
   "execution_config": {
     "applies_next_run": "改动将在下次运行生效，不影响当前正在运行的会话"

@@ -191,3 +191,25 @@ describe("AgentProfileCard execution controls", () => {
     );
   });
 });
+
+describe("AgentProfileCard username / @handle", () => {
+  it("shows the stable name as an editable @handle trigger for editors", () => {
+    renderCard();
+
+    // The handle is `agent.name` prefixed with `@`, distinct from the
+    // display_name shown in the identity row.
+    expect(
+      screen.getByRole("button", { name: "@Squirtle" }),
+    ).toBeInTheDocument();
+  });
+
+  it("renders the @handle as plain read-only text for non-editors", () => {
+    mockCanEdit.current = { allowed: false };
+    renderCard();
+
+    expect(screen.getByText("@Squirtle")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "@Squirtle" }),
+    ).not.toBeInTheDocument();
+  });
+});

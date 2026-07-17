@@ -728,6 +728,24 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     // else: lists still loading — leave the ref unadvanced to retry.
   }
 
+  // The base route has no conversation id to reconcile. Once the
+  // membership-filtered list is ready, recover the saved group inline so there
+  // is no one-render flash of the desktop default before the user's selection.
+  // This is intentionally state adjustment during render, matching the route
+  // reconciliation above; navigation remains a post-render effect below.
+  const restoredBaseChannelId =
+    !channelId &&
+    !activeDmId &&
+    !suppressBaseRouteRestoreRef.current &&
+    channelsLoaded &&
+    lastSelectedChannelId &&
+    channels.some((channel) => channel.id === lastSelectedChannelId)
+      ? lastSelectedChannelId
+      : null;
+  if (restoredBaseChannelId && activeId !== restoredBaseChannelId) {
+    setActiveId(restoredBaseChannelId);
+  }
+
   // Resolve the selected DM from the list. A DM selection takes priority over a
   // group selection (the two are mutually exclusive via the select handlers),
   // so when a DM is active we don't auto-resolve a group below.
@@ -1094,35 +1112,10 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   }, [activeId, activeDmId, channels, isMobile]);
 
   useEffect(() => {
-    // An explicit route (channel or DM) always wins. The persisted value only
-    // fills the base `/channels` route after its current membership list has
-    // loaded, so a stale/deleted/inaccessible channel safely falls back to the
-    // existing default selection.
-    if (
-      channelId ||
-      activeDmId ||
-      !channelsLoaded ||
-      suppressBaseRouteRestoreRef.current ||
-      !lastSelectedChannelId
-    ) {
-      return;
+    if (restoredBaseChannelId) {
+      replace(wsPaths.channelDetail(restoredBaseChannelId));
     }
-
-    if (!channels.some((channel) => channel.id === lastSelectedChannelId)) return;
-
-    if (activeId === lastSelectedChannelId) return;
-    setActiveId(lastSelectedChannelId);
-    replace(wsPaths.channelDetail(lastSelectedChannelId));
-  }, [
-    activeDmId,
-    activeId,
-    channelId,
-    channels,
-    channelsLoaded,
-    lastSelectedChannelId,
-    replace,
-    wsPaths,
-  ]);
+  }, [replace, restoredBaseChannelId, wsPaths]);
 
   // Bottom-stick on new messages and open-at-latest on switch are handled by
   // ChannelMessageList (react-virtuoso followOutput + initialTopMostItemIndex).

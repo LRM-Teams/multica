@@ -160,13 +160,14 @@ func (s *EnvSandboxLifecycleService) Create(ctx context.Context, in CreateSandbo
 		return SandboxInstanceRef{}, cause
 	}
 	// Daemon-enabled sandbox: mint the bootstrap env (server URL + PAT +
-	// workspace + MULTICA_DAEMON_ENABLED=1 + profile) so the in-sandbox daemon
-	// can reach multica on boot, then overlay any caller-supplied extras (e.g.
-	// Phase 2's pre-assigned MULTICA_DAEMON_ID) on top - caller keys win on
-	// conflict, minted keys (MULTICA_TOKEN etc.) are kept when the caller does
-	// not supply them. The env stays local to Create (folded into the create job
-	// payload below) and is never placed on the ref, so the token cannot leak
-	// into dispatch responses or the idempotency ledger.
+	// workspace + MULTICA_DAEMON_ENABLED=1 + profile + fresh MULTICA_DAEMON_ID)
+	// so the in-sandbox daemon can reach multica on boot with a unique runtime
+	// identity, then overlay any caller-supplied extras (e.g. Phase 2's
+	// pre-assigned MULTICA_DAEMON_ID) on top - caller keys win on conflict,
+	// minted keys (MULTICA_TOKEN etc.) are kept when the caller does not supply
+	// them. The env stays local to Create (folded into the create job payload
+	// below) and is never placed on the ref, so the token cannot leak into
+	// dispatch responses or the idempotency ledger.
 	if in.DaemonEnabled {
 		env, err := s.deps.MintSandboxRuntimeEnv(ctx, in.WorkspaceID, actorUserID, ref.InstanceID)
 		if err != nil {

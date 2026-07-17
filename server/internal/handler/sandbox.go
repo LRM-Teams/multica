@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/auth"
@@ -852,10 +853,18 @@ func (h *Handler) sandboxRuntimeEnv(r *http.Request, workspaceID, userID pgtype.
 // mintSandboxRuntimeEnv builds the daemon bootstrap env for a sandbox: it mints
 // a personal access token for the actor and returns the env map the in-sandbox
 // daemon reads on boot (server URL + token + workspace id +
-// MULTICA_DAEMON_ENABLED=1 + a per-instance profile). The caller resolves the
-// server URL: the UI create path (sandboxRuntimeEnv) falls back to the request
-// host; server-side dispatch (env-dispatch) uses the configured public URL only.
-// The returned map carries the raw token - keep it within the create path.
+// MULTICA_DAEMON_ENABLED=1 + a per-instance profile + a fresh MULTICA_DAEMON_ID).
+//
+// MULTICA_DAEMON_ID must be unique per sandbox instance. Snapshot templates
+// freeze ~/.multica/daemon.id from the source sandbox; without an explicit
+// override, a new sandbox from that template would reuse the same daemon_id and
+// upsert the prior runtime row. Env-dispatch may still overlay a pre-assigned
+// id (caller keys win in EnvSandboxLifecycleService.Create).
+//
+// The caller resolves the server URL: the UI create path (sandboxRuntimeEnv)
+// falls back to the request host; server-side dispatch (env-dispatch) uses the
+// configured public URL only. The returned map carries the raw token - keep it
+// within the create path.
 func (h *Handler) mintSandboxRuntimeEnv(ctx context.Context, workspaceID, userID pgtype.UUID, instanceID, serverURL string) (map[string]string, error) {
 	profile := "sandbox-" + instanceID
 	rawToken, err := auth.GeneratePATToken()
@@ -884,6 +893,7 @@ func (h *Handler) mintSandboxRuntimeEnv(ctx context.Context, workspaceID, userID
 		"MULTICA_TOKEN":          rawToken,
 		"MULTICA_DAEMON_ENABLED": "1",
 		"MULTICA_PROFILE":        profile,
+		"MULTICA_DAEMON_ID":      uuid.NewString(),
 	}, nil
 }
 

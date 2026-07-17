@@ -141,6 +141,10 @@ func (h *Handler) SetIssueSourceChannel(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	if len(req.ChannelID) == 0 {
+		writeError(w, http.StatusBadRequest, "channel_id is required; use null to clear")
+		return
+	}
 	channelID, ok := h.resolveIssueSourceChannelAnchor(w, r, uuidToString(issue.WorkspaceID), requesterID, req.ChannelID)
 	if !ok {
 		return

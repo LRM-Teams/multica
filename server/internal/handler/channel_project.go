@@ -345,6 +345,10 @@ func (h *Handler) SetChannelProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	if len(req.ProjectID) == 0 {
+		writeError(w, http.StatusBadRequest, "project_id is required; use null to clear")
+		return
+	}
 	projectID, ok := h.parseChannelProjectBinding(w, r, workspaceID, req.ProjectID)
 	if !ok {
 		return

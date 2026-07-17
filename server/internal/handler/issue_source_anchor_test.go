@@ -226,6 +226,20 @@ func TestCreateIssueWithGroupChannelDoesNotInferProjectAndCanClearAnchor(t *test
 		t.Fatalf("replaced channel_id = %s, want %s", storedChannelID, replacementChannelID)
 	}
 
+	missing := httptest.NewRecorder()
+	missingReq := newRequest("PUT", "/api/issues/"+created.ID+"/channel?workspace_id="+testWorkspaceID, map[string]any{})
+	missingReq = withURLParam(missingReq, "id", created.ID)
+	testHandler.SetIssueSourceChannel(missing, missingReq)
+	if missing.Code != http.StatusBadRequest {
+		t.Fatalf("SetIssueSourceChannel missing channel_id = %d: %s", missing.Code, missing.Body.String())
+	}
+	if err := testPool.QueryRow(ctx, `SELECT channel_id::text FROM issue_source_message WHERE issue_id = $1`, created.ID).Scan(&storedChannelID); err != nil {
+		t.Fatalf("load anchor after missing update: %v", err)
+	}
+	if storedChannelID != replacementChannelID {
+		t.Fatalf("channel_id after missing update = %s, want %s", storedChannelID, replacementChannelID)
+	}
+
 	clear := httptest.NewRecorder()
 	clearReq := newRequest("PUT", "/api/issues/"+created.ID+"/channel?workspace_id="+testWorkspaceID, map[string]any{"channel_id": nil})
 	clearReq = withURLParam(clearReq, "id", created.ID)

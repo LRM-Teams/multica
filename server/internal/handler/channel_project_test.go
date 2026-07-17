@@ -43,6 +43,21 @@ func TestCreateChannelProjectBindingAndProjectReverseList(t *testing.T) {
 		t.Fatalf("created project_id = %v, want %s", channel.ProjectID, projectID)
 	}
 
+	missing := httptest.NewRecorder()
+	missingReq := withChannelTestWorkspaceCtx(t, newRequest(http.MethodPut, "/api/channels/"+channel.ID+"/project", map[string]any{}), testUserID)
+	missingReq = withURLParam(missingReq, "id", channel.ID)
+	testHandler.SetChannelProject(missing, missingReq)
+	if missing.Code != http.StatusBadRequest {
+		t.Fatalf("SetChannelProject missing project_id = %d: %s", missing.Code, missing.Body.String())
+	}
+	var projectAfterMissing *string
+	if err := testPool.QueryRow(ctx, `SELECT project_id::text FROM channel WHERE id = $1`, channel.ID).Scan(&projectAfterMissing); err != nil {
+		t.Fatalf("load channel project after missing update: %v", err)
+	}
+	if projectAfterMissing == nil || *projectAfterMissing != projectID {
+		t.Fatalf("project_id after missing update = %v, want %s", projectAfterMissing, projectID)
+	}
+
 	list := httptest.NewRecorder()
 	listReq := newRequest(http.MethodGet, "/api/projects/"+projectID+"/channels?workspace_id="+testWorkspaceID, nil)
 	listReq = withURLParam(listReq, "id", projectID)

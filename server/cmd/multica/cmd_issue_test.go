@@ -238,6 +238,7 @@ func newIssueCreateTestCmd() *cobra.Command {
 	cmd.Flags().String("assignee-id", "", "")
 	cmd.Flags().String("parent", "", "")
 	cmd.Flags().String("project", "", "")
+	cmd.Flags().String("channel", "", "")
 	cmd.Flags().String("source-channel", "", "")
 	cmd.Flags().String("source-message", "", "")
 	cmd.Flags().String("due-date", "", "")
@@ -245,6 +246,70 @@ func newIssueCreateTestCmd() *cobra.Command {
 	cmd.Flags().String("output", "json", "")
 	cmd.Flags().StringSlice("attachment-id", nil, "")
 	return cmd
+}
+
+func TestRunIssueCreateSendsGroupChannel(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/channels" {
+			json.NewEncoder(w).Encode([]map[string]any{{"id": "channel-1", "name": "Product"}})
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		json.NewEncoder(w).Encode(map[string]any{"id": "issue-1", "identifier": "MUL-1", "title": "Associated", "status": "todo", "priority": "none"})
+	}))
+	defer srv.Close()
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+	t.Setenv("MULTICA_TOKEN", "test-token")
+
+	cmd := newIssueCreateTestCmd()
+	_ = cmd.Flags().Set("title", "Associated")
+	_ = cmd.Flags().Set("channel", "Product")
+	if err := runIssueCreate(cmd, nil); err != nil {
+		t.Fatalf("runIssueCreate: %v", err)
+	}
+	if body["channel_id"] != "channel-1" {
+		t.Fatalf("channel_id = %#v, want channel-1", body["channel_id"])
+	}
+}
+
+func TestRunIssueChannelSetsExplicitGroup(t *testing.T) {
+	var body map[string]any
+	const issueID = "11111111-1111-4111-8111-111111111111"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/issues/" + issueID:
+			json.NewEncoder(w).Encode(map[string]any{"id": issueID, "identifier": "MUL-1"})
+		case "/api/channels":
+			json.NewEncoder(w).Encode([]map[string]any{{"id": "channel-1", "name": "Product"}})
+		case "/api/issues/" + issueID + "/channel":
+			if r.Method != http.MethodPut {
+				t.Errorf("method = %s, want PUT", r.Method)
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode body: %v", err)
+			}
+			json.NewEncoder(w).Encode(map[string]any{"id": issueID})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+	t.Setenv("MULTICA_TOKEN", "test-token")
+
+	cmd := &cobra.Command{Use: "channel"}
+	cmd.Flags().Bool("clear", false, "")
+	if err := runIssueChannel(cmd, []string{issueID, "Product"}); err != nil {
+		t.Fatalf("runIssueChannel: %v", err)
+	}
+	if body["channel_id"] != "channel-1" {
+		t.Fatalf("channel_id = %#v, want channel-1", body["channel_id"])
+	}
 }
 
 func TestRunIssueCreateSendsSourceMessageAnchor(t *testing.T) {

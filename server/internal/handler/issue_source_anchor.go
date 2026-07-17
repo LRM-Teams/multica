@@ -2,10 +2,12 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/messageparts"
@@ -25,6 +27,13 @@ type IssueSourceMessageRequest struct {
 type issueSourceMessageAnchor struct {
 	ChannelID pgtype.UUID
 	MessageID pgtype.UUID
+}
+
+// IssueSourceChannelRequest updates the one canonical discussion-context
+// anchor for an issue. A UUID associates a group; null or an empty string
+// clears it. Message-backed chat origins keep using IssueSourceMessageRequest.
+type IssueSourceChannelRequest struct {
+	ChannelID json.RawMessage `json:"channel_id"`
 }
 
 func (h *Handler) resolveIssueSourceMessageAnchor(w http.ResponseWriter, r *http.Request, workspaceID, requesterID string, req *IssueSourceMessageRequest) (issueSourceMessageAnchor, bool) {
@@ -54,7 +63,12 @@ func (h *Handler) resolveIssueSourceMessageAnchor(w http.ResponseWriter, r *http
 		writeError(w, http.StatusNotFound, "source channel not found")
 		return issueSourceMessageAnchor{}, false
 	}
-	if !h.channelUserIsMember(r.Context(), workspaceID, channelID, requesterUUID) {
+	actorType, actorID := h.resolveActor(r, requesterID, workspaceID)
+	if actorType == "agent" {
+		if !h.requireChannelAgentMember(w, r.Context(), workspaceID, channelID, parseUUID(actorID)) {
+			return issueSourceMessageAnchor{}, false
+		}
+	} else if !h.channelUserIsMember(r.Context(), workspaceID, channelID, requesterUUID) {
 		writeError(w, http.StatusForbidden, "not a source channel member")
 		return issueSourceMessageAnchor{}, false
 	}
@@ -79,42 +93,131 @@ func (h *Handler) resolveIssueSourceMessageAnchor(w http.ResponseWriter, r *http
 	return issueSourceMessageAnchor{ChannelID: channelID, MessageID: messageID}, true
 }
 
+// resolveIssueSourceChannelAnchor validates an explicit group association that
+// has no source message. The caller must be able to see the group, otherwise
+// this endpoint would turn an issue into a side channel for private groups.
+func (h *Handler) resolveIssueSourceChannelAnchor(w http.ResponseWriter, r *http.Request, workspaceID, requesterID string, raw json.RawMessage) (pgtype.UUID, bool) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return pgtype.UUID{}, true
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid channel_id")
+		return pgtype.UUID{}, false
+	}
+	if value = strings.TrimSpace(value); value == "" {
+		return pgtype.UUID{}, true
+	}
+	channelID, ok := parseUUIDOrBadRequest(w, value, "channel_id")
+	if !ok {
+		return pgtype.UUID{}, false
+	}
+	actorType, actorID := h.resolveActor(r, requesterID, workspaceID)
+	if actorType == "agent" {
+		if !h.requireChannelAgentMember(w, r.Context(), workspaceID, channelID, parseUUID(actorID)) {
+			return pgtype.UUID{}, false
+		}
+	} else if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(requesterID)) {
+		return pgtype.UUID{}, false
+	}
+	if !h.requireGroupChannel(w, r.Context(), workspaceID, channelID) {
+		return pgtype.UUID{}, false
+	}
+	return channelID, true
+}
+
+// SetIssueSourceChannel sets, switches, or clears the issue's canonical group
+// association. It deliberately reuses issue_source_message instead of adding
+// issue.channel_id: an optional message id distinguishes a message-originated
+// discussion from a group-only association while the issue remains 1:1.
+func (h *Handler) SetIssueSourceChannel(w http.ResponseWriter, r *http.Request) {
+	issue, ok := h.loadIssueForUser(w, r, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+	requesterID := requestUserID(r)
+	var req IssueSourceChannelRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	channelID, ok := h.resolveIssueSourceChannelAnchor(w, r, uuidToString(issue.WorkspaceID), requesterID, req.ChannelID)
+	if !ok {
+		return
+	}
+	if !channelID.Valid {
+		if _, err := h.DB.Exec(r.Context(), `DELETE FROM issue_source_message WHERE issue_id = $1 AND workspace_id = $2`, issue.ID, issue.WorkspaceID); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to clear issue channel")
+			return
+		}
+	} else if _, err := h.DB.Exec(r.Context(), `
+		INSERT INTO issue_source_message (issue_id, workspace_id, channel_id, message_id)
+		VALUES ($1, $2, $3, NULL)
+		ON CONFLICT (issue_id) DO UPDATE
+		SET workspace_id = EXCLUDED.workspace_id, channel_id = EXCLUDED.channel_id, message_id = NULL`,
+		issue.ID, issue.WorkspaceID, channelID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to set issue channel")
+		return
+	}
+	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
+	resp := issueToResponse(issue, prefix)
+	if channelID.Valid {
+		if refs := h.issueSourceRefsForUser(r.Context(), issue, parseUUID(requesterID)); refs != nil {
+			resp.SourceRefs = refs
+		}
+	}
+	h.publish(protocol.EventIssueUpdated, uuidToString(issue.WorkspaceID), "member", requesterID, map[string]any{
+		"issue": resp,
+	})
+	writeJSON(w, http.StatusOK, resp)
+}
+
 // issueSourceRefsForUser returns the detail-only source ref if it remains
 // visible to this requester. The membership check prevents an issue shared
 // broadly in a workspace from becoming a side channel into a private group.
-func (h *Handler) issueSourceRefsForUser(ctx context.Context, issue db.Issue, requesterID pgtype.UUID) *IssueSourceMessageRefResponse {
-	var ref IssueSourceMessageRefResponse
+func (h *Handler) issueSourceRefsForUser(ctx context.Context, issue db.Issue, requesterID pgtype.UUID) *IssueSourceRefsResponse {
+	var channelRef IssueSourceChannelRefResponse
+	var messageRef IssueSourceMessageRefResponse
 	var channelName string
 	var channelID pgtype.UUID
 	var messageID pgtype.UUID
 	var threadRoot pgtype.UUID
-	var content string
+	var content pgtype.Text
 	var rawParts []byte
 	err := h.DB.QueryRow(ctx, `
 		SELECT c.id, c.kind, c.name, m.id, COALESCE(m.thread_root_message_id, m.id), m.content, m.parts
 		FROM issue_source_message src
-		JOIN channel_message m ON m.id = src.message_id
+		LEFT JOIN channel_message m ON m.id = src.message_id
 		  AND m.channel_id = src.channel_id
 		  AND m.workspace_id = src.workspace_id
+		  AND m.deleted_at IS NULL
 		JOIN channel c ON c.id = src.channel_id AND c.workspace_id = src.workspace_id
 		JOIN channel_member cm ON cm.channel_id = src.channel_id
 		  AND cm.workspace_id = src.workspace_id
 		  AND cm.member_type = 'user' AND cm.member_id = $2
-		WHERE src.issue_id = $1 AND src.workspace_id = $3 AND m.deleted_at IS NULL`,
+		WHERE src.issue_id = $1 AND src.workspace_id = $3`,
 		issue.ID, requesterID, issue.WorkspaceID,
-	).Scan(&channelID, &ref.ChannelKind, &channelName, &messageID, &threadRoot, &content, &rawParts)
+	).Scan(&channelID, &channelRef.ChannelKind, &channelName, &messageID, &threadRoot, &content, &rawParts)
 	if err != nil {
 		return nil
 	}
-	ref.ChannelID = uuidToString(channelID)
-	ref.MessageID = uuidToString(messageID)
-	ref.ThreadRootMessageID = uuidToString(threadRoot)
-	ref.Excerpt = truncateChannelHistoryContent(content)
-	ref.ExcerptParts = sourceExcerptReferenceParts(content, ref.Excerpt, messageparts.Decode(rawParts))
-	if ref.ChannelKind == "group" && strings.TrimSpace(channelName) != "" {
-		ref.ChannelName = &channelName
+	channelRef.ChannelID = uuidToString(channelID)
+	if channelRef.ChannelKind == "group" && strings.TrimSpace(channelName) != "" {
+		channelRef.ChannelName = &channelName
 	}
-	return &ref
+	refs := &IssueSourceRefsResponse{Channel: &channelRef}
+	if !messageID.Valid {
+		return refs
+	}
+	messageRef.ChannelID = channelRef.ChannelID
+	messageRef.ChannelKind = channelRef.ChannelKind
+	messageRef.ChannelName = channelRef.ChannelName
+	messageRef.MessageID = uuidToString(messageID)
+	messageRef.ThreadRootMessageID = uuidToString(threadRoot)
+	messageRef.Excerpt = truncateChannelHistoryContent(content.String)
+	messageRef.ExcerptParts = sourceExcerptReferenceParts(content.String, messageRef.Excerpt, messageparts.Decode(rawParts))
+	refs.Message = &messageRef
+	return refs
 }
 
 // sourceExcerptReferenceParts returns only references that remain wholly in

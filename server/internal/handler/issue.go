@@ -72,7 +72,14 @@ type IssueResponse struct {
 }
 
 type IssueSourceRefsResponse struct {
+	Channel *IssueSourceChannelRefResponse `json:"channel,omitempty"`
 	Message *IssueSourceMessageRefResponse `json:"message,omitempty"`
+}
+
+type IssueSourceChannelRefResponse struct {
+	ChannelID   string  `json:"channel_id"`
+	ChannelName *string `json:"channel_name,omitempty"`
+	ChannelKind string  `json:"channel_kind"`
 }
 
 type IssueSourceMessageRefResponse struct {
@@ -1639,8 +1646,8 @@ func (h *Handler) GetIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	resp.Labels = &detailLabels
 	if requesterID, ok := requireUserID(w, r); ok {
-		if source := h.issueSourceRefsForUser(r.Context(), issue, parseUUID(requesterID)); source != nil {
-			resp.SourceRefs = &IssueSourceRefsResponse{Message: source}
+		if sourceRefs := h.issueSourceRefsForUser(r.Context(), issue, parseUUID(requesterID)); sourceRefs != nil {
+			resp.SourceRefs = sourceRefs
 		}
 	}
 
@@ -2133,6 +2140,9 @@ type CreateIssueRequest struct {
 	// caller can see it, and persists the canonical anchor separately from
 	// origin_type/origin_id (which are internal producer provenance).
 	Source *IssueSourceMessageRequest `json:"source,omitempty"`
+	// ChannelID associates an issue with a group when there is no originating
+	// message. It uses the same canonical source-anchor table as Source.
+	ChannelID json.RawMessage `json:"channel_id,omitempty"`
 
 	AllowDuplicate bool `json:"allow_duplicate,omitempty"`
 }
@@ -2245,7 +2255,19 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-
+	channelID, ok := h.resolveIssueSourceChannelAnchor(w, r, workspaceID, creatorID, req.ChannelID)
+	if !ok {
+		return
+	}
+	if channelID.Valid {
+		if sourceAnchor.ChannelID.Valid && sourceAnchor.ChannelID != channelID {
+			writeError(w, http.StatusBadRequest, "channel_id must match source.channel_id")
+			return
+		}
+		if !sourceAnchor.ChannelID.Valid {
+			sourceAnchor.ChannelID = channelID
+		}
+	}
 	// Optional origin stamping (quick-create / autopilot). Only the
 	// allowed origin types are accepted; anything else is rejected so a
 	// rogue caller can't mint arbitrary origin labels. Both fields must

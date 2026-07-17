@@ -153,6 +153,21 @@ issue can link back and status changes can flow to the source discussion. Do
 not use the source channel as the issue's project, and do not drop the source
 anchor merely because `--project` is present.
 
+For a group-associated issue without a single originating message, use
+`--channel <group-id-or-name>`. The server keeps this as the same single
+canonical discussion anchor. A group association and `--project` are
+independent explicit Properties: do not expect either to be inferred from the
+other. Inspect the selected group's optional `project_id` with `multica channel
+list --output json`, then explicitly pass the project value you intend to set.
+When both matter, pass both values.
+
+Do not guess a group. Choose one you can actually see, then use
+`multica issue channel <issue-id> <group-id-or-name>` to set or change an
+existing issue's association, or `multica issue channel <issue-id> --clear` to
+remove it. `multica issue get <id> --output json` exposes the current
+`source_refs.channel`; project ownership remains independently visible on the
+issue as `project_id`.
+
 ## Status changes have server side effects
 
 A status change is not cosmetic — the server enqueues or skips agent work based

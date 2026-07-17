@@ -53,6 +53,7 @@ var errChannelClientMessageConflict = errors.New("client_message_id already used
 type ChannelResponse struct {
 	ID          string  `json:"id"`
 	WorkspaceID string  `json:"workspace_id"`
+	ProjectID   *string `json:"project_id,omitempty"`
 	Name        string  `json:"name"`
 	Kind        string  `json:"kind"`
 	Description *string `json:"description"`
@@ -256,6 +257,9 @@ type CreateChannelRequest struct {
 	Name        string  `json:"name"`
 	Description *string `json:"description"`
 	LarkChatID  *string `json:"lark_chat_id"`
+	// ProjectID is optional. A UUID binds the new group to a project; null or
+	// an empty string leaves it unbound.
+	ProjectID json.RawMessage `json:"project_id"`
 }
 
 type UpdateChannelRequest struct {
@@ -316,7 +320,7 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 	uid := parseUUID(userID)
 	archivedOnly := queryBool(r, "archived")
 	rows, err := h.DB.Query(r.Context(), `
-		SELECT ch.id, ch.workspace_id, ch.name, ch.description, ch.lark_chat_id, ch.created_by, ch.created_at, ch.updated_at, ch.kind,
+		SELECT ch.id, ch.workspace_id, ch.name, ch.description, ch.lark_chat_id, ch.project_id, ch.created_by, ch.created_at, ch.updated_at, ch.kind,
 		       ch.archived_at, ch.archived_by, cm.pinned_at, cm.manual_unread_at, COALESCE(vcm.muted_at, cm.muted_at),
 		       lm.author_type, lm.author_name, lm.content, lm.parts, lm.created_at,
 		       COALESCE(uc.cnt, 0),
@@ -377,7 +381,7 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 	out := []ChannelResponse{}
 	channelIDs := []pgtype.UUID{}
 	for rows.Next() {
-		var id, wsID, createdBy, archivedBy pgtype.UUID
+		var id, wsID, projectID, createdBy, archivedBy pgtype.UUID
 		var name string
 		var desc, lark, lastType, lastName, lastContent pgtype.Text
 		var lastParts []byte
@@ -386,13 +390,13 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 		var mentionUnreadCount int
 		var kind string
 		var lastReadSeq int64
-		if err := rows.Scan(&id, &wsID, &name, &desc, &lark, &createdBy, &createdAt, &updatedAt, &kind,
+		if err := rows.Scan(&id, &wsID, &name, &desc, &lark, &projectID, &createdBy, &createdAt, &updatedAt, &kind,
 			&archivedAt, &archivedBy, &pinnedAt, &manualUnreadAt, &mutedAt, &lastType, &lastName, &lastContent, &lastParts, &lastAt, &realUnread, &unread, &mentionUnreadCount, &lastReadSeq); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read channels")
 			return
 		}
 		ch := ChannelResponse{
-			ID: uuidToString(id), WorkspaceID: uuidToString(wsID), Name: name,
+			ID: uuidToString(id), WorkspaceID: uuidToString(wsID), ProjectID: uuidToPtr(projectID), Name: name,
 			Description: textToPtr(desc), LarkChatID: textToPtr(lark), CreatedBy: uuidToString(createdBy),
 			CreatedAt: timestampToString(createdAt), UpdatedAt: timestampToString(updatedAt),
 			ArchivedAt: timestampToPtr(archivedAt), ArchivedBy: uuidToPtr(archivedBy),
@@ -674,13 +678,17 @@ func (h *Handler) CreateChannel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "name is too long")
 		return
 	}
+	projectID, ok := h.parseChannelProjectBinding(w, r, workspaceID, req.ProjectID)
+	if !ok {
+		return
+	}
 	desc := trimTextPtr(req.Description)
 	larkChatID := trimTextPtr(req.LarkChatID)
 	row := h.DB.QueryRow(r.Context(), `
-		INSERT INTO channel (workspace_id, name, description, lark_chat_id, created_by)
-		VALUES ($1, $2, $3, $4, $5)
-		RETURNING id, workspace_id, name, description, lark_chat_id, created_by, created_at, updated_at, kind, archived_at, archived_by`,
-		parseUUID(workspaceID), name, desc, larkChatID, parseUUID(userID))
+		INSERT INTO channel (workspace_id, name, description, lark_chat_id, project_id, created_by)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id, workspace_id, name, description, lark_chat_id, project_id, created_by, created_at, updated_at, kind, archived_at, archived_by`,
+		parseUUID(workspaceID), name, desc, larkChatID, projectID, parseUUID(userID))
 	ch, err := scanChannel(row)
 	if err != nil {
 		if isChannelNameTakenError(err) {
@@ -749,7 +757,7 @@ func (h *Handler) UpdateChannel(w http.ResponseWriter, r *http.Request) {
 		UPDATE channel
 		SET name = COALESCE($3, name), description = COALESCE($4, description), lark_chat_id = COALESCE($5, lark_chat_id), updated_at = now()
 		WHERE id = $1 AND workspace_id = $2
-		RETURNING id, workspace_id, name, description, lark_chat_id, created_by, created_at, updated_at, kind, archived_at, archived_by`,
+		RETURNING id, workspace_id, name, description, lark_chat_id, project_id, created_by, created_at, updated_at, kind, archived_at, archived_by`,
 		channelID, parseUUID(workspaceID), name, trimTextPtr(req.Description), trimTextPtr(req.LarkChatID))
 	ch, err := scanChannel(row)
 	if err != nil {
@@ -820,7 +828,7 @@ func (h *Handler) RestoreChannel(w http.ResponseWriter, r *http.Request) {
 		UPDATE channel
 		SET archived_at = NULL, archived_by = NULL, updated_at = now()
 		WHERE id = $1 AND workspace_id = $2 AND kind = 'group'
-		RETURNING id, workspace_id, name, description, lark_chat_id, created_by, created_at, updated_at, kind, archived_at, archived_by`,
+		RETURNING id, workspace_id, name, description, lark_chat_id, project_id, created_by, created_at, updated_at, kind, archived_at, archived_by`,
 		channelID, parseUUID(workspaceID))
 	ch, err := scanChannel(row)
 	if err != nil {
@@ -840,7 +848,7 @@ func (h *Handler) archiveChannel(w http.ResponseWriter, r *http.Request, workspa
 		UPDATE channel
 		SET archived_at = COALESCE(archived_at, now()), archived_by = COALESCE(archived_by, $3), updated_at = now()
 		WHERE id = $1 AND workspace_id = $2 AND kind = 'group'
-		RETURNING id, workspace_id, name, description, lark_chat_id, created_by, created_at, updated_at, kind, archived_at, archived_by`,
+		RETURNING id, workspace_id, name, description, lark_chat_id, project_id, created_by, created_at, updated_at, kind, archived_at, archived_by`,
 		channelID, parseUUID(workspaceID), userID)
 	ch, err := scanChannel(row)
 	if err != nil {
@@ -5294,13 +5302,13 @@ func (h *Handler) requireChannelManager(w http.ResponseWriter, r *http.Request, 
 }
 
 func (h *Handler) getChannel(ctx context.Context, workspaceID string, channelID pgtype.UUID) (ChannelResponse, bool) {
-	row := h.DB.QueryRow(ctx, `SELECT id, workspace_id, name, description, lark_chat_id, created_by, created_at, updated_at, kind, archived_at, archived_by FROM channel WHERE id = $1 AND workspace_id = $2`, channelID, parseUUID(workspaceID))
+	row := h.DB.QueryRow(ctx, `SELECT id, workspace_id, name, description, lark_chat_id, project_id, created_by, created_at, updated_at, kind, archived_at, archived_by FROM channel WHERE id = $1 AND workspace_id = $2`, channelID, parseUUID(workspaceID))
 	ch, err := scanChannel(row)
 	return ch, err == nil
 }
 
 func (h *Handler) getChannelByLarkChatID(ctx context.Context, workspaceID, larkChatID string) (ChannelResponse, bool) {
-	row := h.DB.QueryRow(ctx, `SELECT id, workspace_id, name, description, lark_chat_id, created_by, created_at, updated_at, kind, archived_at, archived_by FROM channel WHERE workspace_id = $1 AND lark_chat_id = $2 LIMIT 1`, parseUUID(workspaceID), larkChatID)
+	row := h.DB.QueryRow(ctx, `SELECT id, workspace_id, name, description, lark_chat_id, project_id, created_by, created_at, updated_at, kind, archived_at, archived_by FROM channel WHERE workspace_id = $1 AND lark_chat_id = $2 LIMIT 1`, parseUUID(workspaceID), larkChatID)
 	ch, err := scanChannel(row)
 	return ch, err == nil
 }
@@ -5329,17 +5337,18 @@ type rowScanner interface {
 }
 
 func scanChannel(row rowScanner) (ChannelResponse, error) {
-	var id, wsID, createdBy, archivedBy pgtype.UUID
+	var id, wsID, projectID, createdBy, archivedBy pgtype.UUID
 	var name string
 	var desc, lark pgtype.Text
 	var createdAt, updatedAt, archivedAt pgtype.Timestamptz
 	var kind string
-	if err := row.Scan(&id, &wsID, &name, &desc, &lark, &createdBy, &createdAt, &updatedAt, &kind, &archivedAt, &archivedBy); err != nil {
+	if err := row.Scan(&id, &wsID, &name, &desc, &lark, &projectID, &createdBy, &createdAt, &updatedAt, &kind, &archivedAt, &archivedBy); err != nil {
 		return ChannelResponse{}, err
 	}
 	return ChannelResponse{
 		ID:          uuidToString(id),
 		WorkspaceID: uuidToString(wsID),
+		ProjectID:   uuidToPtr(projectID),
 		Name:        name,
 		Kind:        kind,
 		Description: textToPtr(desc),

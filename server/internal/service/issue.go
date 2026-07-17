@@ -264,7 +264,7 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 	if err != nil {
 		return IssueCreateResult{}, fmt.Errorf("create issue: %w", err)
 	}
-	if p.SourceMessageID.Valid {
+	if p.SourceChannelID.Valid {
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO issue_source_message (issue_id, workspace_id, channel_id, message_id)
 			VALUES ($1, $2, $3, $4)`, issue.ID, p.WorkspaceID, p.SourceChannelID, p.SourceMessageID); err != nil {

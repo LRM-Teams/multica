@@ -98,6 +98,150 @@ func TestCreateIssueSourceMessageAnchorPersistsRootAndServesDetailRef(t *testing
 	}
 }
 
+func TestCreateIssueWithGroupChannelDoesNotInferProjectAndCanClearAnchor(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "issue-channel-anchor-"+uuid.NewString(), testUserID)
+	replacementChannelID := seedChannelForTest(t, "issue-channel-anchor-replacement-"+uuid.NewString(), testUserID)
+	var projectID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO project (workspace_id, title) VALUES ($1, $2) RETURNING id`,
+		testWorkspaceID, "Source channel project "+uuid.NewString(),
+	).Scan(&projectID); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM project WHERE id = $1`, projectID) })
+	if _, err := testPool.Exec(ctx, `UPDATE channel SET project_id = $1 WHERE id = $2`, projectID, channelID); err != nil {
+		t.Fatalf("bind channel project: %v", err)
+	}
+
+	create := httptest.NewRecorder()
+	testHandler.CreateIssue(create, newRequest("POST", "/api/issues?workspace_id="+testWorkspaceID, map[string]any{
+		"title":      "Group-only issue anchor",
+		"status":     "backlog",
+		"channel_id": channelID,
+	}))
+	if create.Code != http.StatusCreated {
+		t.Fatalf("CreateIssue = %d: %s", create.Code, create.Body.String())
+	}
+	var created IssueResponse
+	if err := json.NewDecoder(create.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, created.ID) })
+	if created.ProjectID != nil {
+		t.Fatalf("project_id = %v, want nil without an explicit project", created.ProjectID)
+	}
+
+	withBoth := httptest.NewRecorder()
+	testHandler.CreateIssue(withBoth, newRequest("POST", "/api/issues?workspace_id="+testWorkspaceID, map[string]any{
+		"title":      "Explicit group and project issue",
+		"status":     "backlog",
+		"channel_id": channelID,
+		"project_id": projectID,
+	}))
+	if withBoth.Code != http.StatusCreated {
+		t.Fatalf("CreateIssue with channel and project = %d: %s", withBoth.Code, withBoth.Body.String())
+	}
+	var bothCreated IssueResponse
+	if err := json.NewDecoder(withBoth.Body).Decode(&bothCreated); err != nil {
+		t.Fatalf("decode explicit create response: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, bothCreated.ID) })
+	if bothCreated.ProjectID == nil || *bothCreated.ProjectID != projectID {
+		t.Fatalf("explicit project_id = %v, want %s", bothCreated.ProjectID, projectID)
+	}
+	var bothAnchorChannelID string
+	if err := testPool.QueryRow(ctx, `SELECT channel_id::text FROM issue_source_message WHERE issue_id = $1`, bothCreated.ID).Scan(&bothAnchorChannelID); err != nil {
+		t.Fatalf("load explicit channel anchor: %v", err)
+	}
+	if bothAnchorChannelID != channelID {
+		t.Fatalf("explicit channel anchor = %s, want %s", bothAnchorChannelID, channelID)
+	}
+
+	projectOnly := httptest.NewRecorder()
+	testHandler.CreateIssue(projectOnly, newRequest("POST", "/api/issues?workspace_id="+testWorkspaceID, map[string]any{
+		"title":      "Project-only issue",
+		"status":     "backlog",
+		"project_id": projectID,
+	}))
+	if projectOnly.Code != http.StatusCreated {
+		t.Fatalf("CreateIssue with project only = %d: %s", projectOnly.Code, projectOnly.Body.String())
+	}
+	var projectOnlyCreated IssueResponse
+	if err := json.NewDecoder(projectOnly.Body).Decode(&projectOnlyCreated); err != nil {
+		t.Fatalf("decode project-only create response: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, projectOnlyCreated.ID) })
+	if projectOnlyCreated.ProjectID == nil || *projectOnlyCreated.ProjectID != projectID {
+		t.Fatalf("project-only project_id = %v, want %s", projectOnlyCreated.ProjectID, projectID)
+	}
+	var projectOnlyAnchorCount int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM issue_source_message WHERE issue_id = $1`, projectOnlyCreated.ID).Scan(&projectOnlyAnchorCount); err != nil {
+		t.Fatalf("load project-only anchor: %v", err)
+	}
+	if projectOnlyAnchorCount != 0 {
+		t.Fatalf("project-only anchor count = %d, want 0", projectOnlyAnchorCount)
+	}
+
+	var storedChannelID string
+	var storedMessageID *string
+	if err := testPool.QueryRow(ctx, `
+		SELECT channel_id::text, message_id::text FROM issue_source_message WHERE issue_id = $1`, created.ID,
+	).Scan(&storedChannelID, &storedMessageID); err != nil {
+		t.Fatalf("load group-only anchor: %v", err)
+	}
+	if storedChannelID != channelID || storedMessageID != nil {
+		t.Fatalf("stored group anchor = %s/%v, want %s/<nil>", storedChannelID, storedMessageID, channelID)
+	}
+
+	detail := httptest.NewRecorder()
+	detailReq := newRequest("GET", "/api/issues/"+created.ID+"?workspace_id="+testWorkspaceID, nil)
+	detailReq = withURLParam(detailReq, "id", created.ID)
+	testHandler.GetIssue(detail, detailReq)
+	if detail.Code != http.StatusOK {
+		t.Fatalf("GetIssue = %d: %s", detail.Code, detail.Body.String())
+	}
+	var got IssueResponse
+	if err := json.NewDecoder(detail.Body).Decode(&got); err != nil {
+		t.Fatalf("decode detail response: %v", err)
+	}
+	if got.SourceRefs == nil || got.SourceRefs.Channel == nil || got.SourceRefs.Channel.ChannelID != channelID || got.SourceRefs.Message != nil {
+		t.Fatalf("source_refs = %#v, want group-only channel", got.SourceRefs)
+	}
+
+	replace := httptest.NewRecorder()
+	replaceReq := newRequest("PUT", "/api/issues/"+created.ID+"/channel?workspace_id="+testWorkspaceID, map[string]any{"channel_id": replacementChannelID})
+	replaceReq = withURLParam(replaceReq, "id", created.ID)
+	testHandler.SetIssueSourceChannel(replace, replaceReq)
+	if replace.Code != http.StatusOK {
+		t.Fatalf("SetIssueSourceChannel replace = %d: %s", replace.Code, replace.Body.String())
+	}
+	if err := testPool.QueryRow(ctx, `SELECT channel_id::text FROM issue_source_message WHERE issue_id = $1`, created.ID).Scan(&storedChannelID); err != nil {
+		t.Fatalf("load replaced anchor: %v", err)
+	}
+	if storedChannelID != replacementChannelID {
+		t.Fatalf("replaced channel_id = %s, want %s", storedChannelID, replacementChannelID)
+	}
+
+	clear := httptest.NewRecorder()
+	clearReq := newRequest("PUT", "/api/issues/"+created.ID+"/channel?workspace_id="+testWorkspaceID, map[string]any{"channel_id": nil})
+	clearReq = withURLParam(clearReq, "id", created.ID)
+	testHandler.SetIssueSourceChannel(clear, clearReq)
+	if clear.Code != http.StatusOK {
+		t.Fatalf("SetIssueSourceChannel clear = %d: %s", clear.Code, clear.Body.String())
+	}
+	var count int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM issue_source_message WHERE issue_id = $1`, created.ID).Scan(&count); err != nil {
+		t.Fatalf("count cleared anchors: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("anchor count = %d, want 0 after clear", count)
+	}
+}
+
 func TestSourceExcerptReferencePartsKeepsOnlyWholeVisibleAnchors(t *testing.T) {
 	content := "@Barry " + strings.Repeat("a", channelHistoryMessageMaxChars-9) + "@Barry"
 	firstStart := strings.Index(content, "@Barry")

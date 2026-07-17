@@ -2,10 +2,64 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/daemonws"
 )
+
+func TestCreateChannelProjectBindingAndProjectReverseList(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("no test database")
+	}
+	ctx := context.Background()
+	var projectID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO project (workspace_id, title) VALUES ($1, $2) RETURNING id`,
+		testWorkspaceID, "Channel relation "+uuid.NewString(),
+	).Scan(&projectID); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM project WHERE id = $1`, projectID) })
+
+	created := httptest.NewRecorder()
+	createReq := withChannelTestWorkspaceCtx(t, newRequest(http.MethodPost, "/api/channels", map[string]any{
+		"name":       "project-bound-" + uuid.NewString(),
+		"project_id": projectID,
+	}), testUserID)
+	testHandler.CreateChannel(created, createReq)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("CreateChannel = %d: %s", created.Code, created.Body.String())
+	}
+	var channel ChannelResponse
+	if err := json.NewDecoder(created.Body).Decode(&channel); err != nil {
+		t.Fatalf("decode channel: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, channel.ID) })
+	if channel.ProjectID == nil || *channel.ProjectID != projectID {
+		t.Fatalf("created project_id = %v, want %s", channel.ProjectID, projectID)
+	}
+
+	list := httptest.NewRecorder()
+	listReq := newRequest(http.MethodGet, "/api/projects/"+projectID+"/channels?workspace_id="+testWorkspaceID, nil)
+	listReq = withURLParam(listReq, "id", projectID)
+	testHandler.ListProjectChannels(list, listReq)
+	if list.Code != http.StatusOK {
+		t.Fatalf("ListProjectChannels = %d: %s", list.Code, list.Body.String())
+	}
+	var response struct {
+		Channels []ProjectChannelResponse `json:"channels"`
+	}
+	if err := json.NewDecoder(list.Body).Decode(&response); err != nil {
+		t.Fatalf("decode project channels: %v", err)
+	}
+	if len(response.Channels) != 1 || response.Channels[0].ID != channel.ID || response.Channels[0].ProjectID != projectID {
+		t.Fatalf("project channels = %#v, want created channel", response.Channels)
+	}
+}
 
 // TestResolveProjectWorkdirRuntime_SharedRuntime covers the production /
 // cloud case: the project's managed workdir lives on a shared runtime that

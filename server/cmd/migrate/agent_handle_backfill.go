@@ -19,6 +19,18 @@ type agentHandleBackfillRow struct {
 }
 
 func runAgentASCIIHandleBackfillHook(ctx context.Context, pool *pgxpool.Pool) error {
+	return runAgentHandleRepairHook(ctx, pool, planAgentASCIIHandleBackfill)
+}
+
+func runAgentDefaultHandleRepairHook(ctx context.Context, pool *pgxpool.Pool) error {
+	return runAgentHandleRepairHook(ctx, pool, planAgentDefaultHandleRepair)
+}
+
+func runAgentHandleRepairHook(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	plan func([]agentHandleBackfillRow) (map[string]string, error),
+) error {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin agent handle backfill: %w", err)
@@ -47,7 +59,7 @@ func runAgentASCIIHandleBackfillHook(ctx context.Context, pool *pgxpool.Pool) er
 		return fmt.Errorf("iterate agents for handle backfill: %w", err)
 	}
 
-	updates, err := planAgentASCIIHandleBackfill(agents)
+	updates, err := plan(agents)
 	if err != nil {
 		return err
 	}
@@ -106,4 +118,48 @@ func planAgentASCIIHandleBackfill(agents []agentHandleBackfillRow) (map[string]s
 		}
 	}
 	return updates, nil
+}
+
+// planAgentDefaultHandleRepair retires the two historic system fallback
+// usernames. They are syntactically valid but are not meaningful, user-chosen
+// identities; all other valid usernames remain reserved and untouched.
+func planAgentDefaultHandleRepair(agents []agentHandleBackfillRow) (map[string]string, error) {
+	used := make(map[string]map[string]struct{})
+	for _, agent := range agents {
+		if identityhandle.Validate(agent.Name) != nil {
+			continue
+		}
+		if used[agent.WorkspaceID] == nil {
+			used[agent.WorkspaceID] = make(map[string]struct{})
+		}
+		used[agent.WorkspaceID][agent.Name] = struct{}{}
+	}
+
+	updates := make(map[string]string)
+	for _, agent := range agents {
+		if !isHistoricDefaultHandle(agent.Name) {
+			continue
+		}
+		if used[agent.WorkspaceID] == nil {
+			used[agent.WorkspaceID] = make(map[string]struct{})
+		}
+		base := identityhandle.Base(strings.TrimSpace(agent.DisplayName), agent.Name)
+		for attempt := 1; attempt <= 100; attempt++ {
+			candidate := identityhandle.Candidate(base, attempt)
+			if _, exists := used[agent.WorkspaceID][candidate]; exists {
+				continue
+			}
+			updates[agent.ID] = candidate
+			used[agent.WorkspaceID][candidate] = struct{}{}
+			break
+		}
+		if _, ok := updates[agent.ID]; !ok {
+			return nil, fmt.Errorf("agent default handle repair exhausted candidates for agent %s", agent.ID)
+		}
+	}
+	return updates, nil
+}
+
+func isHistoricDefaultHandle(handle string) bool {
+	return handle == "actor" || handle == "agent"
 }

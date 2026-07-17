@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multica/core/i18n/react";
+import { useLastSelectedChannelStore } from "@multica/core/channels";
 import enCommon from "../../locales/en/common.json";
 import enChannels from "../../locales/en/channels.json";
 import { ChannelsPage } from "./channels-page";
@@ -163,12 +164,16 @@ function renderPage(channelId?: string) {
 describe("ChannelsPage path-style selection (#309)", () => {
   beforeEach(() => {
     replaceSpy.mockReset();
+    useLastSelectedChannelStore.setState({ lastSelectedChannelId: null });
   });
 
   it("cold-load deep-link opens the channel named in the route, not the first", async () => {
     renderPage("chan-2");
     await waitFor(() => {
       expect(screen.getByTestId("active-title")).toHaveTextContent("random");
+    });
+    await waitFor(() => {
+      expect(useLastSelectedChannelStore.getState().lastSelectedChannelId).toBe("chan-2");
     });
   });
 
@@ -189,6 +194,7 @@ describe("ChannelsPage path-style selection (#309)", () => {
     fireEvent.click(generalRow!);
 
     expect(replaceSpy).toHaveBeenCalledWith("/w/test/channels/chan-1");
+    expect(useLastSelectedChannelStore.getState().lastSelectedChannelId).toBe("chan-1");
     // Give any (buggy) revert effect a chance to fire, then assert it stuck.
     await waitFor(() => {
       expect(screen.getByTestId("active-title")).toHaveTextContent("general");
@@ -196,5 +202,28 @@ describe("ChannelsPage path-style selection (#309)", () => {
     // And it must stay on general across subsequent renders (no flicker back).
     await new Promise((r) => setTimeout(r, 30));
     expect(screen.getByTestId("active-title")).toHaveTextContent("general");
+  });
+
+  it("restores the last selected group from the base channels route", async () => {
+    useLastSelectedChannelStore.setState({ lastSelectedChannelId: "chan-2" });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("active-title")).toHaveTextContent("random");
+    });
+    expect(replaceSpy).toHaveBeenCalledWith("/w/test/channels/chan-2");
+  });
+
+  it("drops a stale saved group and keeps the existing default fallback", async () => {
+    useLastSelectedChannelStore.setState({ lastSelectedChannelId: "removed-channel" });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(useLastSelectedChannelStore.getState().lastSelectedChannelId).toBeNull();
+    });
+    expect(screen.getByTestId("active-title")).toHaveTextContent("general");
+    expect(replaceSpy).not.toHaveBeenCalled();
   });
 });

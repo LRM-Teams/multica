@@ -51,4 +51,4 @@ export {
   useAddChannelMembers,
   useRemoveChannelMember,
 } from "./mutations";
-export { useComposerDraftStore, type ComposerDraftKey } from "./stores";
+export { useComposerDraftStore, useLastSelectedChannelStore, type ComposerDraftKey } from "./stores";

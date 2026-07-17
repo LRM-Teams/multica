@@ -1,12 +1,15 @@
 "use client";
 
+// NOTE: this file intentionally keeps the whole actor-profile cluster together —
+// the trigger, its mobile-navigation variant, and the shared profile-content
+// components (identity card + recent-activity) are tightly coupled around one
+// profile query and are consumed as a unit (tests import ActorProfileContent /
+// ActorProfileContentLoaded from here). Splitting them into six files would
+// scatter tightly-coupled pieces for no benefit, so each secondary component
+// carries a react-doctor-disable-next-line for react-doctor/no-multi-comp.
+
 import { useQuery } from "@tanstack/react-query";
 import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
-import {
-  Drawer,
-  DrawerContent,
-  DrawerTrigger,
-} from "@multica/ui/components/ui/drawer";
 import {
   HoverCard,
   HoverCardContent,
@@ -17,6 +20,7 @@ import { cn } from "@multica/ui/lib/utils";
 import { memberProfileOptions } from "@multica/core/agents";
 import type { MemberProfile } from "@multica/core/types";
 import { useWorkspaceId } from "@multica/core/hooks";
+import { useWorkspacePaths } from "@multica/core/paths";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import {
   formatActorHandleLabel,
@@ -28,6 +32,7 @@ import { AgentLiveStatusMark } from "../agents/components/agent-live-status-mark
 import { useAgentLiveStatus } from "../agents/use-agent-live-status";
 import { ActivityTimeline } from "../agents/components/tabs/activity-timeline";
 import { useAgentActivityEvents } from "../agents/components/tabs/use-agent-activity-events";
+import { useNavigation } from "../navigation";
 import { useT } from "../i18n/use-t";
 
 type ChannelsT = ReturnType<typeof useT<"channels">>["t"];
@@ -73,35 +78,22 @@ export function ActorProfileTrigger({
     ? <span />
     : <button type="button" />;
 
+  // Mobile: a Drawer caps at 80dvh, so a long Recent-activity list gets cut off
+  // and can't be reached (#586). Navigate to a real full-page profile route
+  // instead — same peek content, but the whole page scrolls with a back button.
+  // Hooks (useWorkspacePaths/useNavigation) live in the child so the desktop
+  // HoverCard branch never calls them.
   if (isMobile) {
-    if (triggerElement === "span") {
-      return (
-        <Drawer>
-          <DrawerTrigger asChild>
-            <span className={triggerClassName} onClickCapture={onClickCapture}>
-              {children}
-            </span>
-          </DrawerTrigger>
-          <DrawerContent className="max-h-[80dvh] overflow-y-auto p-0">
-            {content}
-          </DrawerContent>
-        </Drawer>
-      );
-    }
-
     return (
-      <Drawer>
-        <DrawerTrigger
-          type="button"
-          className={triggerClassName}
-          onClickCapture={onClickCapture}
-        >
-          {children}
-        </DrawerTrigger>
-        <DrawerContent className="max-h-[80dvh] overflow-y-auto p-0">
-          {content}
-        </DrawerContent>
-      </Drawer>
+      <MobileActorProfileTrigger
+        memberType={memberType}
+        memberId={memberId}
+        triggerElement={triggerElement}
+        triggerClassName={triggerClassName}
+        onClickCapture={onClickCapture}
+      >
+        {children}
+      </MobileActorProfileTrigger>
     );
   }
 
@@ -128,7 +120,73 @@ export function ActorProfileTrigger({
   );
 }
 
-function ActorProfileContent({
+// Mobile trigger: navigate to the full-page profile route instead of opening a
+// height-capped Drawer. Kept as its own component so `useWorkspacePaths`/
+// `useNavigation` are only called on mobile — the desktop HoverCard branch stays
+// hook-for-hook identical. Preserves the trigger's className/onClickCapture/
+// children and the button-vs-span choice (span is used inside already-interactive
+// mentions where a nested <button> would be invalid).
+// react-doctor-disable-next-line react-doctor/no-multi-comp -- cohesive actor-profile cluster (see file header)
+function MobileActorProfileTrigger({
+  memberType,
+  memberId,
+  triggerElement,
+  triggerClassName,
+  onClickCapture,
+  children,
+}: {
+  memberType: ProfileMemberType;
+  memberId: string;
+  triggerElement: "button" | "span";
+  triggerClassName: string;
+  onClickCapture?: React.MouseEventHandler;
+  children: React.ReactNode;
+}) {
+  const paths = useWorkspacePaths();
+  const navigation = useNavigation();
+  const openProfile = () => {
+    navigation.push(paths.actorProfile(memberType, memberId));
+  };
+
+  if (triggerElement === "span") {
+    return (
+      // Deliberately a span-with-role, not a <button>: this variant renders
+      // inside already-interactive content (rendered @mentions), where a nested
+      // <button> would be invalid interactive DOM. Same pattern as
+      // ActorAvatarProfileLink / ActorAvatarPanelTrigger in actor-avatar.tsx.
+      // react-doctor-disable-next-line react-doctor/prefer-tag-over-role -- span+role avoids invalid nested-interactive DOM (see comment)
+      <span
+        role="button"
+        tabIndex={0}
+        className={triggerClassName}
+        onClickCapture={onClickCapture}
+        onClick={openProfile}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            openProfile();
+          }
+        }}
+      >
+        {children}
+      </span>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className={triggerClassName}
+      onClickCapture={onClickCapture}
+      onClick={openProfile}
+    >
+      {children}
+    </button>
+  );
+}
+
+// react-doctor-disable-next-line react-doctor/no-multi-comp -- cohesive actor-profile cluster (see file header)
+export function ActorProfileContent({
   memberType,
   memberId,
 }: {
@@ -162,6 +220,7 @@ function ActorProfileContent({
   );
 }
 
+// react-doctor-disable-next-line react-doctor/no-multi-comp -- cohesive actor-profile cluster (see file header)
 export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile }) {
   const { t } = useT("channels");
   const wsId = useWorkspaceId();
@@ -262,6 +321,7 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
   );
 }
 
+// react-doctor-disable-next-line react-doctor/no-multi-comp -- cohesive actor-profile cluster (see file header)
 function ProfileSection({
   title,
   children,
@@ -285,6 +345,7 @@ function ProfileSection({
 // read-model) instead of the legacy server-projected `recent_activity` labels,
 // so this hover surface stays in lockstep with the tab/header and there is a
 // single Activity renderer — no second local presentation to drift.
+// react-doctor-disable-next-line react-doctor/no-multi-comp -- cohesive actor-profile cluster (see file header)
 function AgentRecentActivity({ agentId }: { agentId: string }) {
   const { t } = useT("channels");
   const { events, isLoading } = useAgentActivityEvents(agentId);
@@ -300,6 +361,7 @@ function AgentRecentActivity({ agentId }: { agentId: string }) {
   return <ActivityTimeline events={events} compact />;
 }
 
+// react-doctor-disable-next-line react-doctor/no-multi-comp -- cohesive actor-profile cluster (see file header)
 function UnavailableProfile({ message }: { message: string }) {
   return <div className="p-3 text-xs text-muted-foreground">{message}</div>;
 }

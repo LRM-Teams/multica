@@ -32,6 +32,12 @@ function workspaceScoped(slug: string) {
     agents: () => `${ws}/agents`,
     agentDetail: (id: string) => `${ws}/agents/${encode(id)}`,
     memberDetail: (id: string) => `${ws}/members/${encode(id)}`,
+    // Actor-generic lightweight profile (agent OR user). Distinct from
+    // agentDetail/memberDetail (the full management pages): this is the mobile
+    // full-page host for the same peek content the desktop HoverCard shows, so
+    // Recent activity can scroll instead of being capped by an 80dvh drawer.
+    actorProfile: (memberType: "agent" | "user", memberId: string) =>
+      `${ws}/profile/${encode(memberType)}/${encode(memberId)}`,
     squads: () => `${ws}/squads`,
     squadDetail: (id: string) => `${ws}/squads/${encode(id)}`,
     inbox: () => `${ws}/inbox`,

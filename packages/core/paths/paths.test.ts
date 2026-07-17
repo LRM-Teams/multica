@@ -16,6 +16,8 @@ describe("paths.workspace(slug)", () => {
     expect(ws.autopilotDetail("a1")).toBe("/acme/autopilots/a1");
     expect(ws.agents()).toBe("/acme/agents");
     expect(ws.memberDetail("u1")).toBe("/acme/members/u1");
+    expect(ws.actorProfile("agent", "agent-1")).toBe("/acme/profile/agent/agent-1");
+    expect(ws.actorProfile("user", "u1")).toBe("/acme/profile/user/u1");
     expect(ws.inbox()).toBe("/acme/inbox");
     expect(ws.myIssues()).toBe("/acme/my-issues");
     expect(ws.runtimes()).toBe("/acme/runtimes");

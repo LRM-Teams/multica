@@ -10,6 +10,23 @@ import { ChannelMessageBubble } from "./channel-message-bubble";
 
 const copyTextMock = vi.fn();
 
+// The author avatar renders an ActorProfileTrigger; on mobile it navigates to
+// the full-page profile (#586), which reads useNavigation. Stub the navigation
+// context (the barrel re-exports it) so these layout/interaction tests don't
+// each need a NavigationProvider.
+vi.mock("../../navigation/context", () => ({
+  useNavigation: () => ({
+    push: vi.fn(),
+    replace: vi.fn(),
+    back: vi.fn(),
+    pathname: "/acme/channels",
+    searchParams: new URLSearchParams(),
+    getShareableUrl: (path: string) => path,
+  }),
+  useIsNavigating: () => false,
+  NavigationProvider: ({ children }: { children: ReactNode }) => children,
+}));
+
 vi.mock("@multica/ui/lib/clipboard", () => ({
   copyText: (text: string) => copyTextMock(text),
 }));
@@ -77,6 +94,8 @@ vi.mock("@multica/core/paths", () => ({
   // Needed once a system row projects anchored issue refs into linked tokens.
   useWorkspacePaths: () => ({
     issueDetail: (issueId: string) => `/acme/issues/${issueId}`,
+    actorProfile: (memberType: string, memberId: string) =>
+      `/acme/profile/${memberType}/${memberId}`,
   }),
 }));
 

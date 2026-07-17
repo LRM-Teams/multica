@@ -2264,6 +2264,21 @@ export class ApiClient {
     return this.fetch(`/api/channels/${channelId}/members`);
   }
 
+  // Group-local Tasks projection. The channel is a discussion context, not an
+  // Issue owner: this only returns issues anchored to a source message there.
+  async listChannelSourceIssues(
+    channelId: string,
+    params: Pick<ListIssuesParams, "status" | "assignee_id" | "limit" | "offset"> = {},
+  ): Promise<ListIssuesResponse> {
+    const search = new URLSearchParams();
+    if (params.status) search.set("status", params.status);
+    if (params.assignee_id) search.set("assignee_id", params.assignee_id);
+    if (params.limit !== undefined) search.set("limit", String(params.limit));
+    if (params.offset !== undefined) search.set("offset", String(params.offset));
+    const suffix = search.size > 0 ? `?${search.toString()}` : "";
+    return this.fetch(`/api/channels/${channelId}/issues${suffix}`);
+  }
+
   async addChannelMembers(
     channelId: string,
     members: { member_type: "user" | "agent"; member_id: string }[],

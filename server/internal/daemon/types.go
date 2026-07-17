@@ -253,13 +253,14 @@ type SharedSkillSyncItemError struct {
 }
 
 type SharedSkillSyncResult struct {
-	Status    string                     `json:"status"`
-	Created   int                        `json:"created"`
-	Updated   int                        `json:"updated"`
-	Unchanged int                        `json:"unchanged"`
-	Deleted   int                        `json:"deleted"`
-	Conflicts []SharedSkillSyncConflict  `json:"conflicts,omitempty"`
-	Errors    []SharedSkillSyncItemError `json:"errors,omitempty"`
+	Status       string                     `json:"status"`
+	Created      int                        `json:"created"`
+	Updated      int                        `json:"updated"`
+	Unchanged    int                        `json:"unchanged"`
+	Deleted      int                        `json:"deleted"`
+	Acknowledged []string                   `json:"acknowledged,omitempty"`
+	Conflicts    []SharedSkillSyncConflict  `json:"conflicts,omitempty"`
+	Errors       []SharedSkillSyncItemError `json:"errors,omitempty"`
 }
 
 // TaskUsageEntry represents token usage for a single model during a task execution.

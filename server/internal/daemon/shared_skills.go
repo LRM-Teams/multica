@@ -75,11 +75,11 @@ func (d *Daemon) syncSharedSkillsOnce(ctx context.Context) {
 }
 
 func (d *Daemon) runLocalMemoryCuration(ctx context.Context, rt Runtime) error {
-	if rt.Provider != "pi" || strings.TrimSpace(rt.WorkspaceID) == "" {
+	if strings.TrimSpace(rt.WorkspaceID) == "" {
 		return nil
 	}
-	piEntry, ok := d.cfg.Agents["pi"]
-	if !ok || strings.TrimSpace(piEntry.Path) == "" {
+	agentEntry, ok := d.cfg.Agents[rt.Provider]
+	if !ok || strings.TrimSpace(agentEntry.Path) == "" {
 		return nil
 	}
 	loc, err := time.LoadLocation(memorycuration.DefaultTimezone)
@@ -103,7 +103,7 @@ func (d *Daemon) runLocalMemoryCuration(ctx context.Context, rt Runtime) error {
 			continue
 		}
 		reviewerCfg := memorycuration.AgentL3ReviewerConfig{
-			Provider: "pi", Path: piEntry.Path, Model: piEntry.Model, Timeout: d.cfg.MemoryCurationL3ReviewTimeout,
+			Provider: rt.Provider, Path: agentEntry.Path, Model: agentEntry.Model, Timeout: d.cfg.MemoryCurationL3ReviewTimeout,
 		}
 		reviewer := memorycuration.NewConfiguredL3Reviewer(d.cfg.MemoryCurationL3ReviewEnabled, reviewerCfg)
 		var stageAgent memorycuration.StageAgent
@@ -172,7 +172,8 @@ func (d *Daemon) localMemoryCurationRuntimes() []Runtime {
 		sort.Strings(runtimeIDs)
 		for _, id := range runtimeIDs {
 			rt, ok := d.runtimeIndex[id]
-			if ok && rt.Status == "online" && rt.Provider == "pi" {
+			agentEntry, configured := d.cfg.Agents[rt.Provider]
+			if ok && rt.Status == "online" && configured && strings.TrimSpace(agentEntry.Path) != "" {
 				runtimes = append(runtimes, rt)
 				break
 			}
@@ -238,16 +239,25 @@ func legacyPiAgentRoot(cfg Config, workspaceID, agentID string) string {
 	return filepath.Join(cfg.WorkspacesRoot, workspaceID, ".pi", "agents", agentID)
 }
 
-func piAgentSyncQueueDir(agentRoot string) string { return filepath.Join(agentRoot, "sync_queue") }
-func piAgentSkillDraftsDir(agentRoot string) string {
+func agentSyncQueueDir(agentRoot string) string { return filepath.Join(agentRoot, "sync_queue") }
+func agentSkillDraftsDir(agentRoot string) string {
 	return filepath.Join(agentRoot, "skills", "drafts")
 }
+func agentMemoryCandidatesPath(agentRoot string) string {
+	return filepath.Join(agentSyncQueueDir(agentRoot), "memory-candidates.jsonl")
+}
+func agentSkillCandidatesPath(agentRoot string) string {
+	return filepath.Join(agentSyncQueueDir(agentRoot), "skill-candidates.jsonl")
+}
+
+// Legacy names remain for compatibility with callers that still refer to the
+// original Pi-only queue. The on-disk contract is provider-neutral.
+func piAgentSyncQueueDir(agentRoot string) string   { return agentSyncQueueDir(agentRoot) }
+func piAgentSkillDraftsDir(agentRoot string) string { return agentSkillDraftsDir(agentRoot) }
 func piAgentMemoryCandidatesPath(agentRoot string) string {
-	return filepath.Join(piAgentSyncQueueDir(agentRoot), "memory-candidates.jsonl")
+	return agentMemoryCandidatesPath(agentRoot)
 }
-func piAgentSkillCandidatesPath(agentRoot string) string {
-	return filepath.Join(piAgentSyncQueueDir(agentRoot), "skill-candidates.jsonl")
-}
+func piAgentSkillCandidatesPath(agentRoot string) string { return agentSkillCandidatesPath(agentRoot) }
 
 func ensurePiAgentRoot(root string) error {
 	return ensureMulticaAgentRoot(root)
@@ -438,11 +448,16 @@ func (d *Daemon) syncWorkspaceSharedSkillsForRuntime(ctx context.Context, rt Run
 }
 
 func (d *Daemon) syncEvolutionSubmissionsForRuntime(ctx context.Context, rt Runtime) error {
-	if rt.Provider != "pi" || strings.TrimSpace(rt.WorkspaceID) == "" {
+	if strings.TrimSpace(rt.WorkspaceID) == "" {
 		return nil
 	}
 
+	acknowledged, err := loadEvolutionAcknowledgements(d.cfg, rt.WorkspaceID)
+	if err != nil {
+		return fmt.Errorf("load evolution acknowledgements: %w", err)
+	}
 	payload := EvolutionSubmissionSyncPayload{}
+	pendingFingerprints := map[string]string{}
 	roots := []string{
 		filepath.Join(d.cfg.WorkspacesRoot, rt.WorkspaceID, ".multica", "agents"),
 		filepath.Join(d.cfg.WorkspacesRoot, rt.WorkspaceID, ".pi", "agents"),
@@ -453,7 +468,20 @@ func (d *Daemon) syncEvolutionSubmissionsForRuntime(ctx context.Context, rt Runt
 			d.logger.Warn("agent evolution root unavailable", "path", base, "provider", rt.Provider, "error", err)
 			continue
 		}
-		payload.Submissions = append(payload.Submissions, submissions...)
+		for _, submission := range submissions {
+			ackKey := evolutionSubmissionAckKey(submission.AgentID, submission.LocalUnitID)
+			fingerprint := evolutionSubmissionFingerprint(submission)
+			if acknowledged[ackKey] == fingerprint {
+				continue
+			}
+			// Prefer the first occurrence when a candidate is present in both the
+			// provider-neutral root and the legacy Pi root.
+			if _, exists := pendingFingerprints[ackKey]; exists {
+				continue
+			}
+			pendingFingerprints[ackKey] = fingerprint
+			payload.Submissions = append(payload.Submissions, submission)
+		}
 	}
 	if len(payload.Submissions) == 0 {
 		return nil
@@ -462,6 +490,20 @@ func (d *Daemon) syncEvolutionSubmissionsForRuntime(ctx context.Context, rt Runt
 	result, err := d.client.SyncEvolutionSubmissions(ctx, rt.ID, payload)
 	if err != nil {
 		return err
+	}
+	acknowledgementsChanged := false
+	for _, ackKey := range result.Acknowledged {
+		if fingerprint, ok := pendingFingerprints[ackKey]; ok {
+			if acknowledged[ackKey] != fingerprint {
+				acknowledged[ackKey] = fingerprint
+				acknowledgementsChanged = true
+			}
+		}
+	}
+	if acknowledgementsChanged {
+		if err := saveEvolutionAcknowledgements(d.cfg, rt.WorkspaceID, acknowledged); err != nil {
+			return fmt.Errorf("save evolution acknowledgements: %w", err)
+		}
 	}
 	d.logSharedSkillSyncResult(rt, "evolution submissions synced", result)
 	return nil
@@ -511,9 +553,12 @@ func (d *Daemon) scanEvolutionSubmissionsRoot(rt Runtime, base string) ([]Evolut
 }
 
 func (d *Daemon) loadMemoryCandidateSubmissions(rt Runtime, agentID, agentRoot string) ([]EvolutionSubmissionBundle, error) {
-	path := piAgentMemoryCandidatesPath(agentRoot)
-	items, err := readEvolutionCandidateJSONL(path)
+	path := agentMemoryCandidatesPath(agentRoot)
+	items, issues, err := readEvolutionCandidateJSONL(path)
 	if err != nil {
+		return nil, err
+	}
+	if err := quarantineEvolutionCandidateIssues(path, issues); err != nil {
 		return nil, err
 	}
 	submissions := make([]EvolutionSubmissionBundle, 0, len(items))
@@ -534,9 +579,12 @@ func (d *Daemon) loadMemoryCandidateSubmissions(rt Runtime, agentID, agentRoot s
 }
 
 func (d *Daemon) loadSkillCandidateSubmissions(rt Runtime, agentID, agentRoot string) ([]EvolutionSubmissionBundle, error) {
-	path := piAgentSkillCandidatesPath(agentRoot)
-	items, err := readEvolutionCandidateJSONL(path)
+	path := agentSkillCandidatesPath(agentRoot)
+	items, issues, err := readEvolutionCandidateJSONL(path)
 	if err != nil {
+		return nil, err
+	}
+	if err := quarantineEvolutionCandidateIssues(path, issues); err != nil {
 		return nil, err
 	}
 	submissions := make([]EvolutionSubmissionBundle, 0, len(items))
@@ -550,7 +598,11 @@ func (d *Daemon) loadSkillCandidateSubmissions(rt Runtime, agentID, agentRoot st
 		}
 		bundlePath := bundlePathFromCandidate(item)
 		if bundlePath != "" {
-			bundleDir := filepath.Clean(filepath.Join(piAgentSyncQueueDir(agentRoot), filepath.FromSlash(bundlePath)))
+			bundleDir, err := secureSkillDraftBundleDir(agentRoot, bundlePath)
+			if err != nil {
+				d.logger.Warn("skill candidate bundle rejected", "agent_id", agentID, "local_unit_id", submission.LocalUnitID, "bundle_path", bundlePath, "error", err)
+				continue
+			}
 			files, content, err := loadSkillDraftBundle(bundleDir)
 			if err != nil {
 				d.logger.Warn("skill candidate bundle skipped", "agent_id", agentID, "local_unit_id", submission.LocalUnitID, "bundle_path", bundlePath, "error", err)
@@ -572,34 +624,173 @@ func (d *Daemon) loadSkillCandidateSubmissions(rt Runtime, agentID, agentRoot st
 	return submissions, nil
 }
 
-func readEvolutionCandidateJSONL(path string) ([]map[string]json.RawMessage, error) {
+type evolutionCandidateParseIssue struct {
+	Line  int
+	Raw   string
+	Error string
+}
+
+func readEvolutionCandidateJSONL(path string) ([]map[string]json.RawMessage, []evolutionCandidateParseIssue, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, nil, nil
 		}
-		return nil, err
+		return nil, nil, err
 	}
 	defer f.Close()
 
 	reader := bufio.NewReader(f)
 	items := []map[string]json.RawMessage{}
+	issues := []evolutionCandidateParseIssue{}
+	lineNumber := 0
 	for {
 		line, err := reader.ReadBytes('\n')
+		lineNumber++
 		if len(strings.TrimSpace(string(line))) > 0 {
 			var item map[string]json.RawMessage
 			if unmarshalErr := json.Unmarshal(line, &item); unmarshalErr == nil {
 				items = append(items, item)
+			} else {
+				issues = append(issues, evolutionCandidateParseIssue{Line: lineNumber, Raw: strings.TrimRight(string(line), "\r\n"), Error: unmarshalErr.Error()})
 			}
 		}
 		if err != nil {
 			if err == io.EOF {
 				break
 			}
-			return nil, err
+			return nil, nil, err
 		}
 	}
-	return items, nil
+	return items, issues, nil
+}
+
+func quarantineEvolutionCandidateIssues(sourcePath string, issues []evolutionCandidateParseIssue) error {
+	if len(issues) == 0 {
+		return nil
+	}
+	quarantinePath := sourcePath + ".invalid.jsonl"
+	existing, err := os.ReadFile(quarantinePath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read candidate quarantine: %w", err)
+	}
+	known := string(existing)
+	f, err := os.OpenFile(quarantinePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return fmt.Errorf("open candidate quarantine: %w", err)
+	}
+	defer f.Close()
+	encoder := json.NewEncoder(f)
+	for _, issue := range issues {
+		hash := sha256.Sum256([]byte(issue.Raw))
+		rawHash := hex.EncodeToString(hash[:])
+		if strings.Contains(known, rawHash) {
+			continue
+		}
+		record := struct {
+			SourceLine int    `json:"source_line"`
+			Error      string `json:"error"`
+			Raw        string `json:"raw"`
+			RawHash    string `json:"raw_hash"`
+		}{SourceLine: issue.Line, Error: issue.Error, Raw: issue.Raw, RawHash: rawHash}
+		if err := encoder.Encode(record); err != nil {
+			return fmt.Errorf("write candidate quarantine: %w", err)
+		}
+		known += rawHash
+	}
+	return nil
+}
+
+func secureSkillDraftBundleDir(agentRoot, bundlePath string) (string, error) {
+	bundlePath = strings.TrimSpace(bundlePath)
+	if bundlePath == "" || filepath.IsAbs(filepath.FromSlash(bundlePath)) {
+		return "", fmt.Errorf("bundle path must be relative")
+	}
+	draftsRoot := filepath.Clean(agentSkillDraftsDir(agentRoot))
+	bundleDir := filepath.Clean(filepath.Join(agentSyncQueueDir(agentRoot), filepath.FromSlash(bundlePath)))
+	if !pathContainedBy(draftsRoot, bundleDir) {
+		return "", fmt.Errorf("bundle path escapes skills/drafts")
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(draftsRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve drafts root: %w", err)
+	}
+	resolvedBundle, err := filepath.EvalSymlinks(bundleDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve bundle path: %w", err)
+	}
+	if !pathContainedBy(resolvedRoot, resolvedBundle) {
+		return "", fmt.Errorf("bundle symlink escapes skills/drafts")
+	}
+	return resolvedBundle, nil
+}
+
+func pathContainedBy(root, candidate string) bool {
+	rel, err := filepath.Rel(root, candidate)
+	if err != nil || rel == ".." || filepath.IsAbs(rel) {
+		return false
+	}
+	return !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func evolutionSubmissionAckKey(agentID, localUnitID string) string {
+	return strings.TrimSpace(agentID) + "/" + strings.TrimSpace(localUnitID)
+}
+
+func evolutionSubmissionFingerprint(submission EvolutionSubmissionBundle) string {
+	payload, _ := json.Marshal(submission)
+	hash := sha256.Sum256(payload)
+	return "sha256:" + hex.EncodeToString(hash[:])
+}
+
+func evolutionAcknowledgementsPath(cfg Config, workspaceID string) string {
+	return filepath.Join(cfg.WorkspacesRoot, workspaceID, ".multica", "evolution-sync-acks.json")
+}
+
+func loadEvolutionAcknowledgements(cfg Config, workspaceID string) (map[string]string, error) {
+	path := evolutionAcknowledgementsPath(cfg, workspaceID)
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]string{}, nil
+		}
+		return nil, err
+	}
+	acknowledged := map[string]string{}
+	if err := json.Unmarshal(payload, &acknowledged); err != nil {
+		return nil, fmt.Errorf("decode %s: %w", path, err)
+	}
+	return acknowledged, nil
+}
+
+func saveEvolutionAcknowledgements(cfg Config, workspaceID string, acknowledged map[string]string) error {
+	path := evolutionAcknowledgementsPath(cfg, workspaceID)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	payload, err := json.MarshalIndent(acknowledged, "", "  ")
+	if err != nil {
+		return err
+	}
+	payload = append(payload, '\n')
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".evolution-sync-acks-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(payload); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 func evolutionCandidateToBundle(workspaceID, agentID string, item map[string]json.RawMessage) EvolutionSubmissionBundle {

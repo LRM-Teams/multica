@@ -15,7 +15,7 @@
     "vs_yesterday": "vs yesterday"
   },
   "my_tasks": {
-    "title": "Tasks & messages for me",
+    "title": "Issues & messages for me",
     "empty": "Nothing needs your attention",
     "review_badge": "Review",
     "channel_mention": "{{actor}} mentioned you in #{{channel}}"

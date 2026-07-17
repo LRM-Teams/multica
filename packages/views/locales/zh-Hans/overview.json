@@ -15,7 +15,7 @@
     "vs_yesterday": "vs 昨日"
   },
   "my_tasks": {
-    "title": "与我相关的任务或消息",
+    "title": "与我相关的 Issue 或消息",
     "empty": "暂无需要你处理的事项",
     "review_badge": "待审",
     "channel_mention": "{{actor}} 在 #{{channel}} 中提到了你"

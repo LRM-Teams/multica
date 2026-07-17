@@ -45,7 +45,7 @@ func TestCreateChannelProjectBindingAndProjectReverseList(t *testing.T) {
 
 	missing := httptest.NewRecorder()
 	missingReq := withChannelTestWorkspaceCtx(t, newRequest(http.MethodPut, "/api/channels/"+channel.ID+"/project", map[string]any{}), testUserID)
-	missingReq = withURLParam(missingReq, "id", channel.ID)
+	missingReq = withURLParam(missingReq, "channelId", channel.ID)
 	testHandler.SetChannelProject(missing, missingReq)
 	if missing.Code != http.StatusBadRequest {
 		t.Fatalf("SetChannelProject missing project_id = %d: %s", missing.Code, missing.Body.String())
@@ -73,6 +73,21 @@ func TestCreateChannelProjectBindingAndProjectReverseList(t *testing.T) {
 	}
 	if len(response.Channels) != 1 || response.Channels[0].ID != channel.ID || response.Channels[0].ProjectID != projectID {
 		t.Fatalf("project channels = %#v, want created channel", response.Channels)
+	}
+
+	clear := httptest.NewRecorder()
+	clearReq := withChannelTestWorkspaceCtx(t, newRequest(http.MethodPut, "/api/channels/"+channel.ID+"/project", map[string]any{"project_id": ""}), testUserID)
+	clearReq = withURLParam(clearReq, "channelId", channel.ID)
+	testHandler.SetChannelProject(clear, clearReq)
+	if clear.Code != http.StatusOK {
+		t.Fatalf("SetChannelProject empty clear = %d: %s", clear.Code, clear.Body.String())
+	}
+	var projectAfterClear *string
+	if err := testPool.QueryRow(ctx, `SELECT project_id::text FROM channel WHERE id = $1`, channel.ID).Scan(&projectAfterClear); err != nil {
+		t.Fatalf("load channel project after empty clear: %v", err)
+	}
+	if projectAfterClear != nil {
+		t.Fatalf("project_id after empty clear = %v, want nil", *projectAfterClear)
 	}
 }
 

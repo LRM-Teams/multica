@@ -241,11 +241,11 @@ func TestCreateIssueWithGroupChannelDoesNotInferProjectAndCanClearAnchor(t *test
 	}
 
 	clear := httptest.NewRecorder()
-	clearReq := newRequest("PUT", "/api/issues/"+created.ID+"/channel?workspace_id="+testWorkspaceID, map[string]any{"channel_id": nil})
+	clearReq := newRequest("PUT", "/api/issues/"+created.ID+"/channel?workspace_id="+testWorkspaceID, map[string]any{"channel_id": ""})
 	clearReq = withURLParam(clearReq, "id", created.ID)
 	testHandler.SetIssueSourceChannel(clear, clearReq)
 	if clear.Code != http.StatusOK {
-		t.Fatalf("SetIssueSourceChannel clear = %d: %s", clear.Code, clear.Body.String())
+		t.Fatalf("SetIssueSourceChannel empty clear = %d: %s", clear.Code, clear.Body.String())
 	}
 	var count int
 	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM issue_source_message WHERE issue_id = $1`, created.ID).Scan(&count); err != nil {

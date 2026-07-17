@@ -1,14 +1,12 @@
 "use client";
 
 import { type ReactNode, useState } from "react";
-import { Activity, FileText, Settings, User, X } from "lucide-react";
-import { toast } from "sonner";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Activity, FileText, User, X } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { useConfigStore } from "@multica/core/config";
-import type { Agent, MemberWithUser, UpdateAgentRequest } from "@multica/core/types";
-import { api } from "@multica/core/api";
-import { runtimeListOptions } from "@multica/core/runtimes";
-import { workspaceKeys } from "@multica/core/workspace/queries";
+import type { Agent, MemberWithUser } from "@multica/core/types";
+import { runtimeHealthState, runtimeListOptions } from "@multica/core/runtimes";
+import { useAgentPermissions } from "@multica/core/permissions";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
@@ -21,18 +19,19 @@ import { ModelPicker } from "../../agents/components/inspector/model-picker";
 import { RuntimePicker } from "../../agents/components/inspector/runtime-picker";
 import { ThinkingPropRow } from "../../agents/components/inspector/thinking-prop-row";
 import { VisibilityPicker } from "../../agents/components/inspector/visibility-picker";
+import { useUpdateAgent } from "../../agents/hooks/use-update-agent";
+import { useRuntimeHealthStateLabel } from "../../runtimes/components/shared";
 import { PropRow } from "../../common/prop-row";
 import { initialsOf } from "../../common/initials";
 import { AgentFilesPanel } from "./agent-files-panel";
 import { useT } from "../../i18n/use-t";
 
-type OwnerTab = "activity" | "profile" | "files" | "config";
+type OwnerTab = "activity" | "profile" | "files";
 
 const TAB_ICONS: Record<OwnerTab, typeof Activity> = {
   profile: User,
   activity: Activity,
   files: FileText,
-  config: Settings,
 };
 
 interface AgentSidePanelProps {
@@ -49,19 +48,19 @@ interface AgentSidePanelProps {
  * Production keeps Frank's original privacy correction: owner sees
  * Profile/Activity/Files, non-owner sees Profile only. Dev deployments can
  * open Activity/Files read surfaces for workspace members via /api/config.
+ *
+ * The former standalone "Config" tab was merged into Profile (#565): the same
+ * runtime attributes were shown read-only in Profile AND editable in Config —
+ * one interface lying about the other. Profile now carries an identity section
+ * (read-only) plus a runtime-config section (editable/gated) in one place.
  */
 export function AgentSidePanel({ agent, currentUserId, members, onClose }: AgentSidePanelProps) {
   const { t } = useT("agents");
   const isOwner = !!currentUserId && agent.owner_id === currentUserId;
   const devProfileAccess = useConfigStore((state) => state.agentProfileDevAccessEnabled);
   const canInspectAgent = isOwner || (!!currentUserId && devProfileAccess);
-  // Beckham (per-group manager) is shared team infrastructure: expose a
-  // runtime config tab that ANY workspace member can edit, regardless of the
-  // owner-only inspect gate above.
-  const isGroupManager = agent.managed_role === "group_manager";
   const availableTabs: OwnerTab[] = ["profile"];
   if (canInspectAgent) availableTabs.push("activity", "files");
-  if (isGroupManager) availableTabs.push("config");
   const showTabBar = availableTabs.length > 1;
   const [tab, setTab] = useState<OwnerTab>("profile");
   const displayName = resolveActorDisplayName(agent, agent.id);
@@ -121,7 +120,13 @@ export function AgentSidePanel({ agent, currentUserId, members, onClose }: Agent
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto">
             {tab === "activity" && canInspectAgent && <ActivityTab agent={agent} />}
-            {tab === "profile" && <AgentProfileTabContent agent={agent} members={members} />}
+            {tab === "profile" && (
+              <AgentProfileTabContent
+                agent={agent}
+                members={members}
+                currentUserId={currentUserId}
+              />
+            )}
             {tab === "files" && canInspectAgent && (
               <AgentFilesPanel
                 agent={agent}
@@ -133,18 +138,15 @@ export function AgentSidePanel({ agent, currentUserId, members, onClose }: Agent
                 hideHeader
               />
             )}
-            {tab === "config" && isGroupManager && (
-              <GroupManagerConfigTab
-                agent={agent}
-                members={members}
-                currentUserId={currentUserId}
-              />
-            )}
           </div>
         </>
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <AgentProfileTabContent agent={agent} members={members} />
+          <AgentProfileTabContent
+            agent={agent}
+            members={members}
+            currentUserId={currentUserId}
+          />
         </div>
       )}
     </aside>
@@ -164,40 +166,117 @@ function formatDate(value: string): string {
   return date.toLocaleString();
 }
 
+/**
+ * Profile tab: an IDENTITY section (read-only description / created / owner)
+ * followed by a RUNTIME-CONFIG section (editable/gated pickers) — the merge of
+ * the old Profile + Config tabs (#565).
+ *
+ * Permission split (the one real risk — no privilege widening): the runtime
+ * pickers are editable when `canEditRuntime` is true. For a per-group manager
+ * (Beckham) that is ALWAYS true — group managers are shared team
+ * infrastructure and the backend `canManageAgent` gate lets any member edit
+ * them (this preserves the old Config-tab behavior). For every other agent it
+ * falls back to `useAgentPermissions(agent).canEdit.allowed`, i.e. owner /
+ * workspace-admin only — so an ordinary non-owner viewer keeps a READ-ONLY
+ * Profile (the inspector pickers self-render static when `canEdit=false`).
+ * Identity fields stay read-only for everyone here (name/description/
+ * instructions editing lives on the owner/admin-gated detail page).
+ */
 function AgentProfileTabContent({
   agent,
   members,
+  currentUserId,
 }: {
   agent: Agent;
   members: readonly MemberWithUser[];
+  currentUserId: string | null;
 }) {
   const { t } = useT("agents");
-  // Which runtime this agent runs on (Frank: raft shows it, so show it here too).
-  // Read straight off the aggregated agent payload — the BE denormalizes
-  // `runtime_name` alongside `runtime_health`/`runtime_mode` (#534), so no
-  // separate runtime-list lookup. Cloud agents show the localized "Cloud" label;
-  // a local runtime with no resolved name reads as "—".
-  const runtimeValue =
-    agent.runtime_mode === "cloud"
-      ? t(($) => $.side_panel.runtime_cloud)
-      : agent.runtime_name?.trim() || "—";
+  const wsId = agent.workspace_id;
+  const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
+  const handleUpdate = useUpdateAgent(wsId);
+  const { canEdit } = useAgentPermissions(agent, wsId);
+  const runtimeHealthLabel = useRuntimeHealthStateLabel();
+
+  const isGroupManager = agent.managed_role === "group_manager";
+  const canEditRuntime = isGroupManager ? true : canEdit.allowed;
+
+  const selectedRuntime = runtimes.find((r) => r.id === agent.runtime_id) ?? null;
+  const isOnline = selectedRuntime?.status === "online";
+  // Runtime "version outdated" badge (#527): an INDEPENDENT axis from
+  // online/offline health. Cloud runtimes never report an outdated local
+  // binary. Reuses the exact logic + label from the profile hover card.
+  const runtimeUpdateHealth =
+    agent.runtime_mode !== "cloud" && selectedRuntime ? runtimeHealthState(selectedRuntime) : "ok";
+
+  const update = (data: Record<string, unknown>) => handleUpdate(agent.id, data);
+
   return (
     <div className="flex flex-col">
+      {/* Identity (read-only): who / what this agent is. */}
       <div className="border-b p-4">
         <p className="text-xs leading-5 text-foreground/85">
           {agent.description || t(($) => $.side_panel.no_description)}
         </p>
       </div>
       <div className="space-y-2 border-b p-4 text-xs">
-        <InfoRow label={t(($) => $.side_panel.model_label)} value={agent.model} mono />
-        <InfoRow
-          label={t(($) => $.side_panel.reasoning_label)}
-          value={agent.thinking_level?.trim() || t(($) => $.side_panel.reasoning_default)}
-        />
-        <InfoRow label={t(($) => $.side_panel.runtime_label)} value={runtimeValue} />
         <InfoRow label={t(($) => $.side_panel.created_label)} value={formatDate(agent.created_at)} />
         <InfoRow label={t(($) => $.side_panel.owner_label)} value={ownerName(agent, members)} />
       </div>
+
+      {/* Runtime config (editable/gated): the execution attributes the old
+          standalone Config tab exposed, merged here so Profile no longer shows
+          them read-only while a separate tab edited them. */}
+      <ConfigSection label={t(($) => $.inspector.section_properties)}>
+        <PropRow label={t(($) => $.inspector.prop_runtime)} interactive={false}>
+          <div className="flex min-w-0 items-center gap-1.5">
+            <RuntimePicker
+              value={agent.runtime_id}
+              runtimes={runtimes}
+              members={[...members]}
+              currentUserId={currentUserId}
+              canEdit={canEditRuntime}
+              onChange={(id) => update({ runtime_id: id })}
+            />
+            {runtimeUpdateHealth !== "ok" && (
+              <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                {runtimeHealthLabel(runtimeUpdateHealth)}
+              </span>
+            )}
+          </div>
+        </PropRow>
+        <PropRow label={t(($) => $.inspector.prop_model)} interactive={false}>
+          <ModelPicker
+            runtimeId={agent.runtime_id}
+            runtimeOnline={!!isOnline}
+            value={agent.model ?? ""}
+            canEdit={canEditRuntime}
+            onChange={(m) => update({ model: m })}
+          />
+        </PropRow>
+        <ThinkingPropRow
+          runtimeId={agent.runtime_id}
+          runtimeOnline={!!isOnline}
+          model={agent.model ?? ""}
+          value={agent.thinking_level ?? ""}
+          canEdit={canEditRuntime}
+          onChange={(v) => update({ thinking_level: v })}
+        />
+        <PropRow label={t(($) => $.inspector.prop_visibility)} interactive={false}>
+          <VisibilityPicker
+            value={agent.visibility}
+            canEdit={canEditRuntime}
+            onChange={(v) => update({ visibility: v })}
+          />
+        </PropRow>
+        <PropRow label={t(($) => $.inspector.prop_concurrency)} interactive={false}>
+          <ConcurrencyPicker
+            value={agent.max_concurrent_tasks}
+            canEdit={canEditRuntime}
+            onChange={(n) => update({ max_concurrent_tasks: n })}
+          />
+        </PropRow>
+      </ConfigSection>
     </div>
   );
 }
@@ -209,115 +288,6 @@ function InfoRow({ label, value, mono = false }: { label: string; value: string;
       <span className={cn("truncate text-foreground", mono && "font-mono")} title={value}>
         {value}
       </span>
-    </div>
-  );
-}
-
-/**
- * Runtime config surface for a per-group manager (Beckham), shown as a tab in
- * the channel-side agent panel. Reuses the agent-detail inspector pickers.
- * Editable by ANY workspace member — group managers are shared infrastructure
- * (the backend gate at canManageAgent allows any member for group_manager
- * agents), so `canEdit` is always true here. Ordinary agents never render
- * this tab (the parent only mounts it for managed_role === "group_manager").
- */
-function GroupManagerConfigTab({
-  agent,
-  members,
-  currentUserId,
-}: {
-  agent: Agent;
-  members: readonly MemberWithUser[];
-  currentUserId: string | null;
-}) {
-  const { t } = useT("agents");
-  const qc = useQueryClient();
-  const wsId = agent.workspace_id;
-  const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
-  const selectedRuntime = runtimes.find((r) => r.id === agent.runtime_id) ?? null;
-  const isOnline = selectedRuntime?.status === "online";
-
-  // Optimistic patch of the cached agents list (mirrors the detail page's
-  // handleUpdate) so picker chips flip immediately; rollback only the fields
-  // this call wrote on failure, then invalidate to reconcile with the server.
-  const handleUpdate = async (data: Record<string, unknown>) => {
-    const queryKey = workspaceKeys.agents(wsId);
-    const prevAgents = qc.getQueryData<Agent[]>(queryKey);
-    const prevAgent = prevAgents?.find((a) => a.id === agent.id);
-    const prevFields: Record<string, unknown> = {};
-    if (prevAgent) {
-      for (const key of Object.keys(data)) {
-        prevFields[key] = (prevAgent as unknown as Record<string, unknown>)[key];
-      }
-    }
-    qc.setQueryData<Agent[]>(queryKey, (old) =>
-      old?.map((a) => (a.id === agent.id ? ({ ...a, ...data } as Agent) : a)),
-    );
-    try {
-      await api.updateAgent(agent.id, data as UpdateAgentRequest);
-      qc.invalidateQueries({ queryKey });
-    } catch (e) {
-      if (prevAgent) {
-        qc.setQueryData<Agent[]>(queryKey, (old) =>
-          old?.map((a) => (a.id === agent.id ? ({ ...a, ...prevFields } as Agent) : a)),
-        );
-      }
-      qc.invalidateQueries({ queryKey });
-      toast.error(e instanceof Error ? e.message : t(($) => $.detail.update_failed_toast));
-      throw e;
-    }
-  };
-
-  return (
-    <div className="flex flex-col">
-      <div className="border-b p-4">
-        <p className="text-xs leading-5 text-muted-foreground">
-          {t(($) => $.side_panel.config_shared_hint)}
-        </p>
-      </div>
-      <ConfigSection label={t(($) => $.inspector.section_properties)}>
-        <PropRow label={t(($) => $.inspector.prop_runtime)} interactive={false}>
-          <RuntimePicker
-            value={agent.runtime_id}
-            runtimes={runtimes}
-            members={[...members]}
-            currentUserId={currentUserId}
-            canEdit
-            onChange={(id) => handleUpdate({ runtime_id: id })}
-          />
-        </PropRow>
-        <PropRow label={t(($) => $.inspector.prop_model)} interactive={false}>
-          <ModelPicker
-            runtimeId={agent.runtime_id}
-            runtimeOnline={!!isOnline}
-            value={agent.model ?? ""}
-            canEdit
-            onChange={(m) => handleUpdate({ model: m })}
-          />
-        </PropRow>
-        <ThinkingPropRow
-          runtimeId={agent.runtime_id}
-          runtimeOnline={!!isOnline}
-          model={agent.model ?? ""}
-          value={agent.thinking_level ?? ""}
-          canEdit
-          onChange={(v) => handleUpdate({ thinking_level: v })}
-        />
-        <PropRow label={t(($) => $.inspector.prop_visibility)} interactive={false}>
-          <VisibilityPicker
-            value={agent.visibility}
-            canEdit
-            onChange={(v) => handleUpdate({ visibility: v })}
-          />
-        </PropRow>
-        <PropRow label={t(($) => $.inspector.prop_concurrency)} interactive={false}>
-          <ConcurrencyPicker
-            value={agent.max_concurrent_tasks}
-            canEdit
-            onChange={(n) => handleUpdate({ max_concurrent_tasks: n })}
-          />
-        </PropRow>
-      </ConfigSection>
     </div>
   );
 }

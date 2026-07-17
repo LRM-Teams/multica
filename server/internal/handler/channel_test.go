@@ -1058,8 +1058,8 @@ func TestChannelAgentInboxCompleteDirectedMentionWritesReply(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	agentName := "Inbox Complete Agent " + uuid.NewString()[:8]
-	agentID := createHandlerTestAgent(t, agentName, nil)
+	agentHandle := "inbox-complete-agent-" + uuid.NewString()[:8]
+	agentID := createHandlerTestAgent(t, agentHandle, nil)
 	runtimeID := handlerTestRuntimeID(t)
 	channelID := seedChannelForTest(t, "agent-inbox-complete-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
@@ -1071,7 +1071,7 @@ func TestChannelAgentInboxCompleteDirectedMentionWritesReply(t *testing.T) {
 	if !found {
 		t.Fatal("channel not found after seed")
 	}
-	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "[@"+agentName+"](mention://agent/"+agentID+") please answer from inbox complete", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-complete"), 0)
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "@"+agentHandle+" please answer from inbox complete", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-complete"), 0)
 	if err != nil {
 		t.Fatalf("insert mention trigger: %v", err)
 	}
@@ -4754,8 +4754,8 @@ func TestAgentUnfollowChannelThreadUpdatesAgentStateAndEmitsLinkedSystemEvent(t 
 	}
 
 	ctx := context.Background()
-	agentName := "Thread Unfollow Bot " + uuid.NewString()[:8]
-	agentID := createHandlerTestAgent(t, agentName, nil)
+	agentHandle := "thread-unfollow-bot-" + uuid.NewString()[:8]
+	agentID := createHandlerTestAgent(t, agentHandle, nil)
 	channelID := seedChannelForTest(t, "thread-unfollow-agent-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
@@ -4821,7 +4821,7 @@ func TestAgentUnfollowChannelThreadUpdatesAgentStateAndEmitsLinkedSystemEvent(t 
 	if strings.Contains(content, "mention://") {
 		t.Fatalf("system content leaked legacy mention markdown: %q", content)
 	}
-	if !strings.Contains(content, "@"+agentName) || !strings.Contains(content, "unfollowed this thread") {
+	if !strings.Contains(content, "@"+agentHandle) || !strings.Contains(content, "unfollowed this thread") {
 		t.Fatalf("system content = %q, want readable @handle fallback", content)
 	}
 	var parts []protocol.MessagePart
@@ -4841,10 +4841,10 @@ func TestAgentUnfollowChannelThreadUpdatesAgentStateAndEmitsLinkedSystemEvent(t 
 	if event.Params.AgentID != agentID || event.Params.ActorID != agentID || event.Params.ActorType != "agent" {
 		t.Fatalf("event params = %+v, want agent actor %s", event.Params, agentID)
 	}
-	if event.Params.AgentName != agentName || event.Params.ActorDisplayName != agentName || event.Params.ActorName != agentName {
-		t.Fatalf("event agent names = %+v, want %q", event.Params, agentName)
+	if event.Params.AgentName != agentHandle || event.Params.ActorDisplayName != agentHandle || event.Params.ActorName != agentHandle {
+		t.Fatalf("event agent names = %+v, want %q", event.Params, agentHandle)
 	}
-	if mention := parts[1]; mention.Type != protocol.MessagePartTypeReference || mention.RefType != "mention" || mention.RefSubType != "agent" || mention.RefID != agentID || mention.Label != "@"+agentName {
+	if mention := parts[1]; mention.Type != protocol.MessagePartTypeReference || mention.RefType != "mention" || mention.RefSubType != "agent" || mention.RefID != agentID || mention.Label != "@"+agentHandle {
 		t.Fatalf("mention part = %+v, want structured agent @handle", mention)
 	}
 }
@@ -4958,7 +4958,8 @@ func TestChannelThreadReadModelSurfacesReplyAndAckStates(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	agentID := createHandlerTestAgent(t, "Thread State Helper", nil)
+	agentHandle := "thread-state-helper-" + uuid.NewString()[:8]
+	agentID := createHandlerTestAgent(t, agentHandle, nil)
 	channelID := seedChannelForTest(t, "thread-state-model-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
@@ -4967,7 +4968,7 @@ func TestChannelThreadReadModelSurfacesReplyAndAckStates(t *testing.T) {
 	}
 
 	replyRoot := dispatchThreadMentionForTest(t, channelID, agentID, "thread-state-reply")
-	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "agent", parseUUID(agentID), "Thread State Helper", "visible answer", "multica", nil, pgtype.UUID{}, parseUUID(replyRoot.ID), replyRoot.ThreadID, 1); err != nil {
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "agent", parseUUID(agentID), agentHandle, "visible answer", "multica", nil, pgtype.UUID{}, parseUUID(replyRoot.ID), replyRoot.ThreadID, 1); err != nil {
 		t.Fatalf("insert visible agent reply: %v", err)
 	}
 	replyPage, _ := listedThreadForUser(t, channelID, replyRoot.ID, testUserID)
@@ -4975,7 +4976,7 @@ func TestChannelThreadReadModelSurfacesReplyAndAckStates(t *testing.T) {
 		t.Fatalf("reply wake state = %+v, want replied", got)
 	}
 
-	rec := sendChannelThreadReplyForTest(t, channelID, replyRoot.ID, testUserID, map[string]any{"content": "@Thread State Helper react if done"})
+	rec := sendChannelThreadReplyForTest(t, channelID, replyRoot.ID, testUserID, map[string]any{"content": "@" + agentHandle + " react if done"})
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("send follow-up thread mention: status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -6015,7 +6016,8 @@ func TestChannelThreadMentionedAgentReplyStaysInThread(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	agentID := createHandlerTestAgent(t, "Thread Agent", nil)
+	agentHandle := "thread-agent-" + uuid.NewString()[:8]
+	agentID := createHandlerTestAgent(t, agentHandle, nil)
 	channelID := seedChannelForTest(t, "thread-agent-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
@@ -6026,7 +6028,8 @@ func TestChannelThreadMentionedAgentReplyStaysInThread(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert root: %v", err)
 	}
-	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "@Thread Agent can you answer here?", "multica", nil, pgtype.UUID{}, parseUUID(root.ID), strPtr("ui-thread"), 0)
+	triggerContent := "@" + agentHandle + " can you answer here?"
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", triggerContent, "multica", nil, pgtype.UUID{}, parseUUID(root.ID), strPtr("ui-thread"), 0)
 	if err != nil {
 		t.Fatalf("insert trigger: %v", err)
 	}
@@ -6067,7 +6070,7 @@ func TestChannelThreadMentionedAgentReplyStaysInThread(t *testing.T) {
 	if promptThreadRoot != root.ID {
 		t.Fatalf("prompt thread root = %q, want %s", promptThreadRoot, root.ID)
 	}
-	for _, want := range []string{"Thread context (root message first, then bounded recent replies from this thread only):", "root", "@Thread Agent can you answer here?"} {
+	for _, want := range []string{"Thread context (root message first, then bounded recent replies from this thread only):", "root", triggerContent} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("thread prompt missing %q:\n%s", want, prompt)
 		}

@@ -1586,6 +1586,31 @@ func TestChannelAgentInboxTransportCanSendStickerAndSuppressesFinalOutput(t *tes
 		t.Fatalf("complete inbox event: status=%d body=%s", completeRec.Code, completeRec.Body.String())
 	}
 	assertNoChannelMessageContent(t, channelID, finalText)
+
+	var terminalOutcome string
+	if err := testPool.QueryRow(ctx, `
+		SELECT COALESCE(terminal_outcome, '')
+		FROM agent_inbox_event
+		WHERE id = $1`, got.ID).Scan(&terminalOutcome); err != nil {
+		t.Fatalf("load inbox terminal outcome: %v", err)
+	}
+	if terminalOutcome != "replied" {
+		t.Fatalf("inbox terminal outcome = %q, want replied after transport send", terminalOutcome)
+	}
+
+	var failureRows int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM agent_activity_event
+		WHERE workspace_id = $1
+		  AND agent_id = $2
+		  AND event_type = 'agent_inbox_failed'
+		  AND details->>'inbox_event_id' = $3`, testWorkspaceID, agentID, got.ID).Scan(&failureRows); err != nil {
+		t.Fatalf("count inbox failure activity: %v", err)
+	}
+	if failureRows != 0 {
+		t.Fatalf("inbox failure activity rows = %d, want 0 after transport send", failureRows)
+	}
 }
 
 func TestChannelAgentInboxFailureAfterVisibleTransportSendSettlesAsReplied(t *testing.T) {

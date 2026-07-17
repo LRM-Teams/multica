@@ -2479,7 +2479,7 @@ func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.Agent
 		}
 		return err
 	}
-	if channelTask && (outputType == protocol.ChatOutputKindMessage || outputType == protocol.ChatOutputKindReaction) && h.taskHasAgentTransportVisibleOutput(ctx, task.ID) {
+	if channelTask && (outputType == protocol.ChatOutputKindMessage || outputType == protocol.ChatOutputKindReaction) && h.chatTaskHasAgentTransportVisibleOutput(ctx, task) {
 		slog.Warn("complete task: suppressing final output after agent transport output", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "output_suppressed_reason", protocol.ChannelOutputSuppressedReasonToolTransportOutput)
 		h.suppressChannelTaskCompleteOutput(ctx, task, req, protocol.ChannelOutputSuppressedReasonToolTransportOutput)
 		return nil
@@ -2515,7 +2515,7 @@ func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.Agent
 	// no_reply or empty completion without a transport message is observable as
 	// a must-reply failure; ordinary final text was already suppressed above.
 	if channelTask && task.Priority >= 2 && !req.MustReplyFailure {
-		hasCLIOutput := h.taskHasAgentTransportVisibleOutput(ctx, task.ID)
+		hasCLIOutput := h.chatTaskHasAgentTransportVisibleOutput(ctx, task)
 		isNoReply := req.Action == protocol.ChatOutputActionNoReply
 		isEmptyMessage := req.Action == "" && outputType == protocol.ChatOutputKindMessage && strings.TrimSpace(output) == "" && len(parts) == 0
 		if !hasCLIOutput && (isNoReply || isEmptyMessage) {
@@ -2623,7 +2623,7 @@ func (h *Handler) suppressTaskCompleteOutput(req *TaskCompleteRequest, reason st
 // retain its must-reply failure signal regardless of why the payload was
 // suppressed.
 func (h *Handler) suppressChannelTaskCompleteOutput(ctx context.Context, task db.AgentTaskQueue, req *TaskCompleteRequest, reason string) {
-	if task.Priority >= 2 && !h.taskHasAgentTransportVisibleOutput(ctx, task.ID) {
+	if task.Priority >= 2 && !h.chatTaskHasAgentTransportVisibleOutput(ctx, task) {
 		req.MustReplyFailure = true
 	}
 	h.suppressTaskCompleteOutput(req, reason)

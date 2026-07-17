@@ -581,6 +581,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   // ROUTE change, never on an optimistic in-page selection that momentarily runs
   // ahead of the async route commit. `undefined` = not yet reconciled.
   const reconciledRouteIdRef = useRef<string | undefined>(undefined);
+  const reconciledBaseRestoreIdRef = useRef<string | null>(null);
   // ?message= deep-links to a specific message (e.g. from an overview mention).
   // We scroll to and briefly highlight it, then clear so it fades out.
   const [highlightMessageId, setHighlightMessageId] = useState<string | null>(
@@ -728,24 +729,21 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     // else: lists still loading — leave the ref unadvanced to retry.
   }
 
-  // The base route has no conversation id to reconcile. Once the
-  // membership-filtered list is ready, recover the saved group inline so there
-  // is no one-render flash of the desktop default before the user's selection.
-  // This is intentionally state adjustment during render, matching the route
-  // reconciliation above; navigation remains a post-render effect below.
+  // Existing canonical navigation reacts to external URL/list readiness, not a user event.
+  // react-doctor-disable-next-line react-doctor/no-event-handler
+  const hasRouteSelection = Boolean(channelId || activeDmId);
   const restoredBaseChannelId =
-    !channelId &&
-    !activeDmId &&
+    !hasRouteSelection &&
     !suppressBaseRouteRestoreRef.current &&
     channelsLoaded &&
     lastSelectedChannelId &&
     channels.some((channel) => channel.id === lastSelectedChannelId)
       ? lastSelectedChannelId
       : null;
-  if (restoredBaseChannelId && activeId !== restoredBaseChannelId) {
-    setActiveId(restoredBaseChannelId);
+  if (restoredBaseChannelId !== reconciledBaseRestoreIdRef.current) {
+    if (restoredBaseChannelId) setActiveId(restoredBaseChannelId);
+    reconciledBaseRestoreIdRef.current = restoredBaseChannelId;
   }
-
   // Resolve the selected DM from the list. A DM selection takes priority over a
   // group selection (the two are mutually exclusive via the select handlers),
   // so when a DM is active we don't auto-resolve a group below.
@@ -1057,10 +1055,12 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     [unpinnedChannels],
   );
 
+  // URL/list readiness is external, so direct-link persistence cannot move to a user event.
   useEffect(() => {
     // A direct group link is a real selection too. Remember it once list
     // membership confirms it, while leaving direct-message routes out of this
     // group-only preference.
+    // react-doctor-disable-next-line react-doctor/no-event-handler
     if (channelId && channelsLoaded && channels.some((channel) => channel.id === channelId)) {
       setLastSelectedChannelId(channelId);
     }

@@ -204,14 +204,21 @@ describe("ChannelsPage path-style selection (#309)", () => {
     expect(screen.getByTestId("active-title")).toHaveTextContent("general");
   });
 
-  it("restores the last selected group from the base channels route", async () => {
+  it("restores the last selected group from the base channels route without flashing the default", async () => {
     useLastSelectedChannelStore.setState({ lastSelectedChannelId: "chan-2" });
 
+    let flashedDefault = false;
+    const observer = new MutationObserver(() => {
+      flashedDefault ||= screen.queryByTestId("active-title")?.textContent === "general";
+    });
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
     renderPage();
 
     await waitFor(() => {
       expect(screen.getByTestId("active-title")).toHaveTextContent("random");
     });
+    observer.disconnect();
+    expect(flashedDefault).toBe(false);
     expect(replaceSpy).toHaveBeenCalledWith("/w/test/channels/chan-2");
   });
 

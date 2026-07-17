@@ -7,10 +7,10 @@ import { copyText } from "@multica/ui/lib/clipboard";
 import { useViewingTimezone } from "../../../common/use-viewing-timezone";
 import {
   type ActivityEvent,
-  type ActivityDotTone,
   ACTIVITY_LABEL_EN,
   ACTIVITY_SUBTEXT_EN,
   ACTIVITY_CHROME_EN,
+  ACTIVITY_TONE_DOT_CLASS,
   activityPresentation,
   formatActivityTime,
   isNarrativeActivityEvent,
@@ -18,21 +18,10 @@ import {
 
 // All dots are STATIC — no `animate-pulse` (#404 follow-up). A perpetually
 // pulsing dot made settled/historical rows look like they were still loading
-// live; real "is it live" now comes from the header/hover latest-state (#521),
-// not a blinking dot. Command rows use raft's solid amber; others by tone.
-const TONE_DOT: Record<ActivityDotTone, string> = {
-  neutral: "bg-muted-foreground/40",
-  active: "bg-brand",
-  // Command rows (any `Running command`) get raft's solid amber dot — type-based,
-  // NOT status-based: a settled/idle command still shows amber (raft parity,
-  // #404), so it never reads as a grey "idle" row.
-  running: "bg-[#F5B301]",
-  waiting: "bg-warning",
-  failure: "bg-destructive",
-  // Radar sweeps (group-manager proactive runs) get their own indigo dot so
-  // they're visually distinct from a task "Completed" (neutral) row.
-  radar: "bg-[#6366F1]",
-};
+// live; real "is it live" now comes from the header/hover latest-state (#521)
+// and the avatar pulse, not a blinking or colored dot. Tone → color lives in
+// ONE shared table (ACTIVITY_TONE_DOT_CLASS) so the header can't drift from it.
+const TONE_DOT = ACTIVITY_TONE_DOT_CLASS;
 
 // A file tool's `tool_target` is now a source-backed path (absolute when the
 // runtime provides it, #484) which can be ~90 chars — long enough to blow out

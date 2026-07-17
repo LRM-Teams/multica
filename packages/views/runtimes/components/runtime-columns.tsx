@@ -227,7 +227,7 @@ function VisibilityBadge({ runtime }: { runtime: AgentRuntime }) {
     <Tooltip>
       <TooltipTrigger
         render={
-          <span className="shrink-0 inline-flex items-center gap-0.5 rounded bg-info/10 px-1 text-[10px] font-medium text-info">
+          <span className="shrink-0 inline-flex items-center gap-0.5 rounded bg-brand/10 px-1 text-[10px] font-medium text-brand">
             <Globe className="h-2.5 w-2.5" />
             {t(($) => $.detail.visibility_label.public)}
           </span>

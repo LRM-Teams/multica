@@ -28,9 +28,9 @@ import { ActorAvatar } from "../../common/actor-avatar";
 const BOARD_STATUS_DOT: Record<IssueStatus, string> = {
   backlog: "border-[1.5px] border-muted-foreground/40",
   todo: "border-[1.5px] border-muted-foreground/40",
-  in_progress: "bg-info",
+  in_progress: "bg-brand",
   in_review: "bg-warning",
-  done: "bg-success",
+  done: "bg-muted-foreground/40",
   blocked: "bg-destructive",
   cancelled: "bg-muted-foreground/40",
 };

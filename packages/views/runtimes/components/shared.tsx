@@ -140,7 +140,7 @@ const RUNTIME_HEALTH_STATE_VISUAL: Record<
 > = {
   ok: { dot: "bg-success", tone: "bg-success/10 text-success" },
   update_available: { dot: "bg-warning", tone: "bg-warning/10 text-warning" },
-  updating: { dot: "bg-info", tone: "bg-info/10 text-info" },
+  updating: { dot: "bg-brand", tone: "bg-brand/10 text-brand" },
   failed: { dot: "bg-destructive", tone: "bg-destructive/10 text-destructive" },
   offline: { dot: "bg-muted-foreground/40", tone: "bg-muted text-muted-foreground" },
 };

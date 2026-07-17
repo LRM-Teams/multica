@@ -3,8 +3,8 @@ import type { AgentPresenceDetail } from "@multica/core/agents";
 import type { AgentTask } from "@multica/core/types";
 import {
   ACTIVITY_LABEL_EN,
+  ACTIVITY_TONE_DOT_CLASS,
   activityPresentation,
-  type ActivityDotTone,
   type ActivityEvent,
 } from "./components/tabs/activity-event";
 import {
@@ -14,18 +14,11 @@ import {
   presenceStatusVisual,
 } from "./presence";
 
-// One-to-one with the Activity timeline's dot tone → colour map (TONE_DOT in
-// activity-timeline.tsx). The header projects the SAME latest Activity row, so
-// the DOT uses the SAME type-based colour — command rows read amber, active work
-// brand, etc. — never a separately-maintained stage palette.
-const TONE_DOT_CLASS: Record<ActivityDotTone, string> = {
-  neutral: "bg-muted-foreground/40",
-  active: "bg-brand",
-  running: "bg-[#F5B301]",
-  waiting: "bg-warning",
-  failure: "bg-destructive",
-  radar: "bg-[#6366F1]",
-};
+// The header projects the SAME latest Activity row as the timeline, so it reads
+// the dot colour from the SAME shared table (ACTIVITY_TONE_DOT_CLASS) — one
+// source, no drift. Post-reduction every tone is neutral gray except failure
+// (destructive); "is it live" reads via the avatar pulse, not the dot colour.
+const TONE_DOT_CLASS = ACTIVITY_TONE_DOT_CLASS;
 
 // The kind colour lives on the DOT only. The timeline paints every label —
 // whatever the tone — in neutral foreground (activity-timeline.tsx renders the

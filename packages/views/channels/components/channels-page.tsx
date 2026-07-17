@@ -1792,7 +1792,14 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
             <ChannelGroupAvatar members={channel.members ?? []} size={40} />
             <div className="min-w-0 flex-1">
               <div className="flex items-center justify-between gap-2">
-                <span className="flex min-w-0 items-center gap-1 truncate text-sm font-medium text-foreground">
+                <span
+                  className={cn(
+                    "flex min-w-0 items-center gap-1 truncate text-sm text-foreground",
+                    // Slack-style: an unread (non-muted) channel reads as a BOLD
+                    // name, replacing the old saturated count block (#3).
+                    realUnread > 0 && !isMuted ? "font-semibold" : "font-medium",
+                  )}
+                >
                   {pinned && (
                     <Pin className="size-3 shrink-0 -rotate-45 fill-muted-foreground/70 text-muted-foreground/70" />
                   )}

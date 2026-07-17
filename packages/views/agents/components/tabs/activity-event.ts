@@ -7,9 +7,26 @@ import { stripMentionMarkdown } from "../../../common/strip-mention-markdown";
 // not API fields. Mainline vs diagnostic is driven by `activity_kind` semantics
 // (raft-aligned #389), NOT a `visibility` flag (removed in the cutover).
 
-// Keep the palette intentionally quiet: only failures and waiting states get
-// color; the normal narrative stream stays neutral.
+// Keep the palette intentionally quiet: only failures get color; every other
+// state is neutral gray. "Is it live?" now reads via the avatar's breathing
+// pulse (actor-avatar `animate-ping`), not a dot color.
 export type ActivityDotTone = "neutral" | "active" | "running" | "waiting" | "failure" | "radar";
+
+// SINGLE source for the tone → dot-color map. Both the Activity timeline and the
+// name-row live-status header project the SAME latest Activity row, so the dot
+// must read from ONE table — never two hand-kept copies that can drift (they
+// did: this used to be duplicated verbatim in activity-timeline.tsx and
+// resolve-agent-live-status.ts). Slack-style reduction: active / running /
+// waiting / radar all collapse to neutral gray (distinguished by label + the
+// avatar pulse), and only a failure keeps an accent (destructive red).
+export const ACTIVITY_TONE_DOT_CLASS: Record<ActivityDotTone, string> = {
+  neutral: "bg-muted-foreground/40",
+  active: "bg-muted-foreground/40",
+  running: "bg-muted-foreground/40",
+  waiting: "bg-muted-foreground/40",
+  failure: "bg-destructive",
+  radar: "bg-muted-foreground/40",
+};
 
 // The FE Activity read-model IS the BE #302 timeline event
 // (`AgentActivityTimelineEvent`, packages/core/types/events.ts): id /

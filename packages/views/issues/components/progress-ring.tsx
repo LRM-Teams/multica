@@ -22,7 +22,7 @@ export function ProgressRing({
       width={size}
       height={size}
       viewBox={`0 0 ${size} ${size}`}
-      className={isComplete ? "text-info" : "text-primary"}
+      className={isComplete ? "text-muted-foreground" : "text-primary"}
       aria-hidden="true"
     >
       <circle

@@ -130,7 +130,7 @@ function ActiveChip({ issueId, running, queued }: ActiveChipProps) {
             opacity={anyRunning ? "full" : "half"}
           />
           <span
-            className={`min-w-0 truncate text-xs ${anyRunning ? "text-info" : "text-muted-foreground"}`}
+            className={`min-w-0 truncate text-xs ${anyRunning ? "text-brand" : "text-muted-foreground"}`}
           >
             {label}
           </span>

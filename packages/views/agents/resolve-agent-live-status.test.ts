@@ -166,7 +166,7 @@ describe("resolveAgentLiveStatus (header = Activity latest-row projection)", () 
     expect(view?.label).not.toBe("Queued");
   });
 
-  it("projects a command row as 'Running command' with the AMBER command dot (word+colour agree)", () => {
+  it("projects a command row as 'Running command' with a NEUTRAL dot (Slack-style reduction)", () => {
     const view = resolveAgentLiveStatus({
       presence: online,
       activeTask: task({ id: "task-1", status: "running" }),
@@ -175,11 +175,10 @@ describe("resolveAgentLiveStatus (header = Activity latest-row projection)", () 
       tChat,
     });
     expect(view?.label).toContain("Running command");
-    // The command dot is amber (kind colour lives on the dot)…
-    expect(view?.dotClass).toBe("bg-[#F5B301]");
-    // …but the LABEL text stays neutral, exactly like the timeline row — never
-    // blue or amber. Frank's fix ("Running command 字体还是蓝色的"): the kind
-    // colour must stay on the dot only and never bleed onto the word.
+    // Post-reduction every non-failure tone is neutral gray — the command dot no
+    // longer carries an amber accent; "is it live" reads via the avatar pulse.
+    expect(view?.dotClass).toBe("bg-muted-foreground/40");
+    // The LABEL text stays neutral too, exactly like the timeline row.
     expect(view?.textClass).toBe("text-foreground");
   });
 

@@ -20,19 +20,23 @@ import type {
 // dot reads only from availabilityConfig, the workload chip reads only
 // from workloadConfig.
 //
-// Color tokens map to project semantic tokens (no hardcoded Tailwind colors):
+// Slack-style palette (2026-07 reduction): only ONLINE keeps an accent (success
+// green). Every other presence state is neutral gray and is distinguished by its
+// ICON / word / motion, never by a second colour — amber and blue are retired
+// here so the only surviving accents workspace-wide are mention=blue,
+// error=red, online=green.
 //
 //   AVAILABILITY (drives the dot everywhere a dot appears):
 //     online    → success         (green)
-//     unstable  → warning         (amber) — pairs with the runtime card's amber
+//     unstable  → muted-foreground (gray) — distinguished by the PlugZap icon
 //     offline   → muted-foreground (gray)
 //
 //   WORKLOAD (drives the optional workload chip on focused surfaces):
-//     working   → brand           (blue)  has activity
-//     queued    → warning         (amber) anomaly: nothing running but tasks
-//                                          waiting (typically stuck on offline
-//                                          runtime; brief flash on online is
-//                                          a harmless race)
+//     working   → muted-foreground (gray) — "actively running" reads via the
+//                                          avatar pulse + the spinning Loader2
+//                                          glyph, not a blue colour
+//     queued    → muted-foreground (gray) anomaly: nothing running but tasks
+//                                          waiting (Clock glyph carries it)
 //     idle      → muted           (gray)  nothing on the plate
 //
 // `failed` / `completed` / `cancelled` deliberately have no top-level visual
@@ -58,8 +62,8 @@ export const availabilityConfig: Record<AgentAvailability, AvailabilityVisual> =
   },
   unstable: {
     label: "Unstable",
-    dotClass: "bg-warning",
-    textClass: "text-warning",
+    dotClass: "bg-muted-foreground/40",
+    textClass: "text-muted-foreground",
     icon: PlugZap,
   },
   offline: {
@@ -98,15 +102,18 @@ export interface WorkloadVisual {
 export const workloadConfig: Record<Workload, WorkloadVisual> = {
   working: {
     label: "Working",
-    textClass: "text-brand",
+    // Neutral: "actively working" reads via the avatar pulse + the spinning
+    // Loader2 glyph, not a blue colour (Slack-style reduction).
+    textClass: "text-muted-foreground",
     icon: Loader2,
   },
   queued: {
-    // Amber chip: nothing running but tasks waiting. On an offline runtime
+    // Neutral chip: nothing running but tasks waiting. On an offline runtime
     // this is the "stuck" signal we explicitly surface (replacing the old
-    // misleading "Running 0/N +Mq" copy).
+    // misleading "Running 0/N +Mq" copy); the Clock glyph carries it now that
+    // amber is retired.
     label: "Queued",
-    textClass: "text-warning",
+    textClass: "text-muted-foreground",
     icon: Clock,
   },
   idle: {
@@ -188,8 +195,8 @@ export function presenceStatusVisual(
  * Compact status-dot fill for name-row / timeline chips.
  *
  * Availability reuses `availabilityConfig.dotClass` so the word matches the
- * avatar presence dot. Workload has no list-level dot palette — map it to the
- * same semantic colours as `workloadConfig.textClass` (brand / warning / muted).
+ * avatar presence dot. Workload has no list-level dot palette — every workload
+ * dot is neutral gray now (working reads via the avatar pulse, not a colour).
  */
 export function presenceStatusDotClass(
   presence: AgentPresenceDetail | "loading" | null | undefined,
@@ -201,10 +208,10 @@ export function presenceStatusDotClass(
   }
   switch (token.value) {
     case "working":
-      return "bg-brand";
     case "queued":
-      return "bg-warning";
     case "idle":
+      // All neutral now: working reads via the avatar pulse, queued via its
+      // glyph — no workload state carries a dot colour (Slack-style reduction).
       return "bg-muted-foreground/40";
   }
 }

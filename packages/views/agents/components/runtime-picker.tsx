@@ -133,7 +133,7 @@ export function RuntimePicker({
                     t(($) => $.create_dialog.runtime_none))}
               </span>
               {selectedRuntime?.runtime_mode === "cloud" && (
-                <span className="shrink-0 rounded bg-info/10 px-1.5 py-0.5 text-xs font-medium text-info">
+                <span className="shrink-0 rounded bg-brand/10 px-1.5 py-0.5 text-xs font-medium text-brand">
                   {t(($) => $.create_dialog.runtime_cloud_badge)}
                 </span>
               )}
@@ -188,7 +188,7 @@ export function RuntimePicker({
                   <div className="flex items-center gap-2">
                     <span className="truncate font-medium">{device.name}</span>
                     {device.runtime_mode === "cloud" && (
-                      <span className="shrink-0 rounded bg-info/10 px-1.5 py-0.5 text-xs font-medium text-info">
+                      <span className="shrink-0 rounded bg-brand/10 px-1.5 py-0.5 text-xs font-medium text-brand">
                         {t(($) => $.create_dialog.runtime_cloud_badge)}
                       </span>
                     )}

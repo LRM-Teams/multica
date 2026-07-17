@@ -29,4 +29,7 @@ CREATE INDEX environment_agent_sandbox_channel_idx
 
 ALTER TABLE sandbox_job
     DROP CONSTRAINT IF EXISTS sandbox_job_type_check,
-    ADD CONSTRAINT sandbox_job_type_check CHECK (type IN ('create', 'stop', 'resume', 'delete', 'reconfigure', 'clone', 'exec', 'message'));
+    ADD CONSTRAINT sandbox_job_type_check CHECK (type IN (
+        'create', 'stop', 'resume', 'delete', 'reconfigure',
+        'create_template', 'delete_template', 'clone', 'exec', 'message'
+    ));

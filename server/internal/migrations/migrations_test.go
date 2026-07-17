@@ -9,16 +9,7 @@ import (
 )
 
 func TestMigration186UpContainsBindingAndTriggerConstraints(t *testing.T) {
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve current test file")
-	}
-	path := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations", "186_env_dispatch_message_channels.up.sql")
-	body, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read migration 186: %v", err)
-	}
-	contents := string(body)
+	contents := readMigration(t, "186_env_dispatch_message_channels.up.sql")
 	for _, required := range []string{
 		"ADD COLUMN collaboration_trigger JSONB",
 		"CREATE TABLE environment_agent_sandbox",
@@ -32,6 +23,40 @@ func TestMigration186UpContainsBindingAndTriggerConstraints(t *testing.T) {
 			t.Errorf("migration 186 missing %q", required)
 		}
 	}
+}
+
+func TestMigration186PreservesExistingSandboxJobTypes(t *testing.T) {
+	up := readMigration(t, "186_env_dispatch_message_channels.up.sql")
+	down := readMigration(t, "186_env_dispatch_message_channels.down.sql")
+
+	for _, jobType := range []string{
+		"'create'", "'stop'", "'resume'", "'delete'", "'reconfigure'",
+		"'create_template'", "'delete_template'", "'exec'", "'message'",
+	} {
+		if !strings.Contains(up, jobType) {
+			t.Errorf("migration 186 up drops existing sandbox job type %s", jobType)
+		}
+		if !strings.Contains(down, jobType) {
+			t.Errorf("migration 186 down drops existing sandbox job type %s", jobType)
+		}
+	}
+	if !strings.Contains(up, "'clone'") {
+		t.Error("migration 186 up must add clone sandbox job type")
+	}
+}
+
+func readMigration(t *testing.T, name string) string {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	path := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations", name)
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read migration %s: %v", name, err)
+	}
+	return string(body)
 }
 
 func TestResolveDirSkipsNonMigrationDirectory(t *testing.T) {

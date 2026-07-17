@@ -12,7 +12,7 @@ import { Button } from "@multica/ui/components/ui/button";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { AppLink } from "../../navigation";
 import { BoardCardContent } from "../../issues/components/board-card";
-import { BOARD_COL_WIDTH, BoardColumnShell, BoardStatusHeading } from "../../issues/components/board-column";
+import { BoardColumnShell, BoardStatusHeading } from "../../issues/components/board-column";
 import { buildBoardGroups, buildColumns } from "../../issues/utils/drag-utils";
 import { useT } from "../../i18n";
 
@@ -49,11 +49,16 @@ function ChannelTaskCard({ issue }: { issue: Issue }) {
 }
 
 /**
- * One horizontal status column, read-only: the board's shared shell +
- * `BoardStatusHeading` (dot + localized status label + count) reused verbatim
- * from the editable issues board, with its task cards stacked below at the real
- * board column width. No drag / view-store wiring — just the presentational
- * shell around a plain scroller of read-only cards.
+ * One read-only status section, reusing the board's shared shell +
+ * `BoardStatusHeading` (dot + localized status label + count) verbatim from the
+ * editable issues board, with its task cards stacked below. No drag / view-store
+ * wiring — just the presentational shell around a plain stack of read-only cards.
+ *
+ * Responsive (#562 mobile, Iris-gated): the SAME shell/heading/card — only the
+ * arrangement changes. On mobile (<768px) `widthClassName` makes the section
+ * full-width and the body flows at content height so the whole board scrolls as
+ * one vertical stack; at ≥768px (`md:`) it is the fixed 300px column with its own
+ * internal scroll, identical to the editable board's desktop columns.
  */
 function ChannelBoardColumn({ status, issues }: { status: IssueStatus; issues: Issue[] }) {
   const { t: tc } = useT("channels");
@@ -64,8 +69,9 @@ function ChannelBoardColumn({ status, issues }: { status: IssueStatus; issues: I
     [status, issues.length],
   );
   return (
-    <BoardColumnShell heading={heading}>
-      <div className="min-h-[200px] flex-1 space-y-2 overflow-y-auto rounded-lg p-1">
+    // md:w-[300px] must equal BOARD_COL_WIDTH (Tailwind needs a literal class).
+    <BoardColumnShell heading={heading} widthClassName="w-full shrink-0 md:w-[300px]">
+      <div className="space-y-2 rounded-lg p-1 md:min-h-[200px] md:flex-1 md:overflow-y-auto">
         {issues.length === 0 ? (
           <p className="py-8 text-center text-xs text-muted-foreground">{tc(($) => $.tasks.column_empty)}</p>
         ) : (
@@ -134,9 +140,9 @@ export function ChannelTasksBoard({ channelId }: { channelId: string }) {
 
   if (isPending) {
     return (
-      <div className="flex flex-1 min-h-0 gap-4 overflow-hidden p-4">
+      <div className="flex flex-1 min-h-0 flex-col gap-4 overflow-y-auto p-4 md:flex-row md:overflow-hidden">
         {Array.from({ length: 4 }).map((_, col) => (
-          <div key={col} style={{ width: BOARD_COL_WIDTH }} className="flex shrink-0 flex-col gap-2">
+          <div key={col} className="flex w-full shrink-0 flex-col gap-2 md:w-[300px]">
             <Skeleton className="h-5 w-24" />
             <Skeleton className="h-20" />
             <Skeleton className="h-20" />
@@ -165,7 +171,7 @@ export function ChannelTasksBoard({ channelId }: { channelId: string }) {
   return (
     <ViewStoreProvider store={channelTasksViewStore}>
       <div className="flex flex-1 min-h-0 flex-col">
-        <div className="flex flex-1 min-h-0 gap-4 overflow-x-auto p-4">
+        <div className="flex flex-1 min-h-0 flex-col gap-4 overflow-y-auto p-4 md:flex-row md:overflow-x-auto md:overflow-y-visible">
           {columns.map((column) => (
             <ChannelBoardColumn key={column.status} status={column.status} issues={column.issues} />
           ))}

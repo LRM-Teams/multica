@@ -170,13 +170,25 @@ export function BoardColumnShell({
   heading,
   actions,
   children,
+  widthClassName,
 }: {
   heading: ReactNode;
   actions?: ReactNode;
   children: ReactNode;
+  /**
+   * Overrides the column's fixed desktop width. The editable issues board omits
+   * it, keeping the inline fixed `BOARD_COL_WIDTH` (unchanged). The read-only
+   * channel Tasks board (#562 mobile) passes a responsive width class so columns
+   * stack full-width on a phone and become the fixed 300px column at ≥768px.
+   * When set, the inline fixed-width style is dropped so the class owns width.
+   */
+  widthClassName?: string;
 }) {
   return (
-    <div style={{ width: BOARD_COL_WIDTH }} className="flex shrink-0 flex-col">
+    <div
+      style={widthClassName ? undefined : { width: BOARD_COL_WIDTH }}
+      className={cn("flex flex-col", widthClassName ?? "shrink-0")}
+    >
       <div className="mb-2 flex items-center justify-between px-1.5">
         {heading}
         {actions}

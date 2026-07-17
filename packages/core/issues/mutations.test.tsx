@@ -8,11 +8,21 @@ import type { ReactNode } from "react";
 
 import { setApiInstance } from "../api";
 import type { ApiClient } from "../api/client";
-import { useLoadMoreByAssigneeGroup, useLoadMoreByStatus, useResolveComment } from "./mutations";
+import {
+  useBatchDeleteIssues,
+  useBatchUpdateIssues,
+  useCreateIssue,
+  useDeleteIssue,
+  useLoadMoreByAssigneeGroup,
+  useLoadMoreByStatus,
+  useResolveComment,
+  useUpdateIssue,
+} from "./mutations";
 import {
   issueKeys,
   type IssueSortParam,
 } from "./queries";
+import { channelKeys } from "../channels/queries";
 import type {
   GroupedIssuesResponse,
   Issue,
@@ -423,4 +433,69 @@ describe("useResolveComment", () => {
     // Only b1 is cleared; a1 stays resolved (unresolve never mirrors the clear).
     expect(resolvedIds(qc)).toEqual(["a1"]);
   });
+});
+
+// ---------------------------------------------------------------------------
+// #562: every local issue CRUD mutation must invalidate the channel-issues
+// prefix (`channelKeys.issuesRoot()`) on SETTLE so the read-only channel Tasks
+// board refetches after a create / update / delete / batch-update / batch-delete.
+// One parameterized case per mutation asserts the KEY (not just a count) — a
+// count-only check would stay green if a future refactor dropped this hook.
+// ---------------------------------------------------------------------------
+describe("channel Tasks board invalidation on settle (#562)", () => {
+  let qc: QueryClient;
+
+  beforeEach(() => {
+    qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    setApiInstance({
+      createIssue: vi.fn().mockResolvedValue(makeIssue(1)),
+      updateIssue: vi.fn().mockResolvedValue(makeIssue(1)),
+      deleteIssue: vi.fn().mockResolvedValue({ id: "issue-1" }),
+      batchUpdateIssues: vi.fn().mockResolvedValue({ updated: 1 }),
+      batchDeleteIssues: vi.fn().mockResolvedValue({ deleted: 1 }),
+    } as unknown as ApiClient);
+  });
+
+  afterEach(() => {
+    qc.clear();
+    vi.restoreAllMocks();
+  });
+
+  type SettleCase = {
+    name: string;
+    useHook: () => { mutateAsync: (vars: never) => Promise<unknown> };
+    vars: unknown;
+  };
+
+  const cases: SettleCase[] = [
+    { name: "useCreateIssue", useHook: () => useCreateIssue(), vars: { title: "New task" } },
+    { name: "useUpdateIssue", useHook: () => useUpdateIssue(), vars: { id: "issue-1", status: "done" } },
+    { name: "useDeleteIssue", useHook: () => useDeleteIssue(), vars: "issue-1" },
+    {
+      name: "useBatchUpdateIssues",
+      useHook: () => useBatchUpdateIssues(),
+      vars: { ids: ["issue-1"], updates: { status: "done" } },
+    },
+    { name: "useBatchDeleteIssues", useHook: () => useBatchDeleteIssues(), vars: ["issue-1"] },
+  ];
+
+  it.each(cases)(
+    "$name invalidates the channel-issues prefix on settle",
+    async ({ useHook, vars }) => {
+      const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+
+      const { result } = renderHook(useHook, { wrapper: createWrapper(qc) });
+
+      await act(async () => {
+        // `vars` is heterogeneous across the 5 mutations; the minimal hook shape
+        // types mutateAsync's param as `never` (accepts any concrete hook), so
+        // the concrete payload is cast in at the call.
+        await result.current.mutateAsync(vars as never);
+      });
+
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: channelKeys.issuesRoot() });
+    },
+  );
 });

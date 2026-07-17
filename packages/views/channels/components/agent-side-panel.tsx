@@ -174,8 +174,9 @@ function formatDate(value: string): string {
  * Permission split (the one real risk — no privilege widening): the runtime
  * pickers are editable when `canEditRuntime` is true. For a per-group manager
  * (Beckham) that is ALWAYS true — group managers are shared team
- * infrastructure and the backend `canManageAgent` gate lets any member edit
- * them (this preserves the old Config-tab behavior). For every other agent it
+ * infrastructure and the backend `canUpdateAgent` gate lets any member edit
+ * these five runtime fields (identity + lifecycle via `canManageAgent` stays
+ * owner/admin only). This preserves the old Config-tab behavior. For every other agent it
  * falls back to `useAgentPermissions(agent).canEdit.allowed`, i.e. owner /
  * workspace-admin only — so an ordinary non-owner viewer keeps a READ-ONLY
  * Profile (the inspector pickers self-render static when `canEdit=false`).

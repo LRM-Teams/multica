@@ -3251,6 +3251,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		AgentSkillDir:                    agentSkillDir,
 		AgentSkillDraftsDir:              agentSkillDraftsPath,
 		AgentSkills:                      convertSkillsForEnv(skills),
+		AgentMemories:                    convertMemoriesForEnv(task.Agent),
 		Repos:                            convertReposForEnv(task.Repos),
 		ProjectID:                        task.ProjectID,
 		ProjectTitle:                     task.ProjectTitle,
@@ -4525,6 +4526,20 @@ func convertSkillsForEnv(skills []SkillData) []execenv.SkillContextForEnv {
 				Content: f.Content,
 			})
 		}
+	}
+	return result
+}
+
+func convertMemoriesForEnv(agent *AgentData) []execenv.MemoryContextForEnv {
+	if agent == nil || len(agent.Memories) == 0 {
+		return nil
+	}
+	result := make([]execenv.MemoryContextForEnv, 0, len(agent.Memories))
+	for _, memory := range agent.Memories {
+		result = append(result, execenv.MemoryContextForEnv{
+			Name: memory.Name, Content: memory.Content, Scope: memory.Scope,
+			SubjectType: memory.SubjectType, SubjectID: memory.SubjectID,
+		})
 	}
 	return result
 }

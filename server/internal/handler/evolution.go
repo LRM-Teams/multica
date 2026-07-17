@@ -36,6 +36,9 @@ type EvolutionSubmissionRequest struct {
 	Sensitivity    string                    `json:"sensitivity,omitempty"`
 	Confidence     string                    `json:"confidence,omitempty"`
 	SuggestedScope string                    `json:"suggested_scope,omitempty"`
+	SourceUserID   string                    `json:"source_user_id,omitempty"`
+	SubjectType    string                    `json:"subject_type,omitempty"`
+	SubjectID      string                    `json:"subject_id,omitempty"`
 	Evidence       json.RawMessage           `json:"evidence,omitempty"`
 	Applies        json.RawMessage           `json:"applies,omitempty"`
 	Tags           []string                  `json:"tags,omitempty"`
@@ -113,6 +116,7 @@ func (h *Handler) syncEvolutionSubmission(ctx context.Context, rt db.AgentRuntim
 		raw, _ := json.Marshal(incoming)
 		payload = raw
 	}
+	payload = mergeEvolutionAttributionPayload(payload, incoming)
 	evidence := jsonObjectOrEmpty(incoming.Evidence)
 	applies := jsonObjectOrEmpty(incoming.Applies)
 	sensitivity := normalizeEvolutionSensitivity(incoming.Sensitivity)
@@ -129,9 +133,24 @@ func (h *Handler) syncEvolutionSubmission(ctx context.Context, rt db.AgentRuntim
 	}
 
 	sourceMemberID := pgtype.UUID{}
-	if rt.OwnerID.Valid {
+	sourceUserID := strings.TrimSpace(incoming.SourceUserID)
+	if sourceUserID == "" {
+		sourceUserID = evolutionPayloadString(payload, "source_user_id")
+	}
+	if sourceUserID != "" {
+		member, err := h.getWorkspaceMember(ctx, sourceUserID, uuidToString(rt.WorkspaceID))
+		if err != nil {
+			return "", fmt.Errorf("source_user_id is not a workspace member")
+		}
+		sourceMemberID = member.ID
+	} else if rt.OwnerID.Valid {
 		if member, err := h.getWorkspaceMember(ctx, uuidToString(rt.OwnerID), uuidToString(rt.WorkspaceID)); err == nil {
 			sourceMemberID = member.ID
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(incoming.SubjectType), "member") && strings.TrimSpace(incoming.SubjectID) != "" {
+		if _, err := h.getWorkspaceMember(ctx, strings.TrimSpace(incoming.SubjectID), uuidToString(rt.WorkspaceID)); err != nil {
+			return "", fmt.Errorf("subject_id is not a workspace member")
 		}
 	}
 
@@ -211,6 +230,31 @@ func (h *Handler) syncEvolutionSubmission(ctx context.Context, rt db.AgentRuntim
 		return "created", nil
 	}
 	return "updated", nil
+}
+
+func mergeEvolutionAttributionPayload(payload json.RawMessage, incoming EvolutionSubmissionRequest) json.RawMessage {
+	envelope := map[string]any{}
+	_ = json.Unmarshal(payload, &envelope)
+	for key, value := range map[string]string{
+		"source_user_id": strings.TrimSpace(incoming.SourceUserID),
+		"subject_type":   strings.ToLower(strings.TrimSpace(incoming.SubjectType)),
+		"subject_id":     strings.TrimSpace(incoming.SubjectID),
+	} {
+		if value != "" {
+			envelope[key] = value
+		}
+	}
+	encoded, _ := json.Marshal(envelope)
+	return encoded
+}
+
+func evolutionPayloadString(payload json.RawMessage, key string) string {
+	var envelope map[string]any
+	if json.Unmarshal(payload, &envelope) != nil {
+		return ""
+	}
+	value, _ := envelope[key].(string)
+	return strings.TrimSpace(value)
 }
 
 func normalizeEvolutionUnitType(v string) string {

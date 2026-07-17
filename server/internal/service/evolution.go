@@ -759,6 +759,12 @@ func promotionMetadata(submission db.EvolutionUnitSubmission, dedupeHash string,
 }
 
 func evolutionSubmissionRequiresHumanReview(submission db.EvolutionUnitSubmission) bool {
+	if isEvolutionAutoAssignMemoryUnit(submission.UnitType) {
+		scope, _, _, err := evolutionMemoryDeliveryScope(submission)
+		if err != nil || scope == "user" {
+			return true
+		}
+	}
 	if submission.UnitType != "skill" {
 		return false
 	}
@@ -1682,6 +1688,10 @@ func (s *EvolutionService) assignEvolutionMemory(ctx context.Context, submission
 	if content == "" {
 		return errors.New("memory submission missing content")
 	}
+	scope, subjectType, subjectID, err := evolutionMemoryDeliveryScope(submission)
+	if err != nil {
+		return err
+	}
 
 	syncKey := fmt.Sprintf("evolution/%s/%s", submission.UnitType, strings.TrimSpace(submission.LocalUnitID))
 	contentHash := strings.TrimSpace(submission.ContentHash)
@@ -1689,6 +1699,11 @@ func (s *EvolutionService) assignEvolutionMemory(ctx context.Context, submission
 		contentHash = hashEvolutionContent(content)
 	}
 	config, _ := json.Marshal(map[string]any{
+		"scope": scope,
+		"subject": map[string]any{
+			"type": subjectType,
+			"id":   subjectID,
+		},
 		"origin": map[string]any{
 			"type":          "evolution",
 			"submission_id": uuidString(submission.ID),
@@ -1729,6 +1744,41 @@ func (s *EvolutionService) assignEvolutionMemory(ctx context.Context, submission
 		CreatedBy:   createdBy,
 	})
 	return err
+}
+
+func evolutionMemoryDeliveryScope(submission db.EvolutionUnitSubmission) (string, string, string, error) {
+	values := map[string]any{}
+	_ = json.Unmarshal(submission.Payload, &values)
+	subjectType, _ := values["subject_type"].(string)
+	subjectID, _ := values["subject_id"].(string)
+	if len(submission.Applies) > 0 {
+		applies := map[string]any{}
+		if json.Unmarshal(submission.Applies, &applies) == nil {
+			if subjectType == "" {
+				subjectType, _ = applies["subject_type"].(string)
+			}
+			if subjectID == "" {
+				subjectID, _ = applies["subject_id"].(string)
+			}
+		}
+	}
+	subjectType = strings.ToLower(strings.TrimSpace(subjectType))
+	subjectID = strings.TrimSpace(subjectID)
+	suggested := strings.ToLower(strings.TrimSpace(submission.SuggestedScope))
+	scope := "agent"
+	switch suggested {
+	case "user", "member", "personal":
+		scope = "user"
+	case "workspace", "team", "shared":
+		scope = "workspace"
+	}
+	if subjectType == "member" && subjectID != "" {
+		scope = "user"
+	}
+	if scope == "user" && (subjectType != "member" || subjectID == "") {
+		return "", "", "", errors.New("user-scoped memory missing stable member subject")
+	}
+	return scope, subjectType, subjectID, nil
 }
 
 func hashEvolutionContent(content string) string {

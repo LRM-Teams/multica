@@ -170,11 +170,23 @@ type AgentData struct {
 	Name          string            `json:"name"`
 	Instructions  string            `json:"instructions"`
 	Skills        []SkillData       `json:"skills"`
+	Memories      []MemoryData      `json:"memories,omitempty"`
 	CustomEnv     map[string]string `json:"custom_env,omitempty"`
 	CustomArgs    []string          `json:"custom_args,omitempty"`
 	McpConfig     json.RawMessage   `json:"mcp_config,omitempty"`
 	Model         string            `json:"model,omitempty"`
 	ThinkingLevel string            `json:"thinking_level,omitempty"`
+}
+
+type MemoryData struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Content     string `json:"content"`
+	Scope       string `json:"scope"`
+	SubjectType string `json:"subject_type,omitempty"`
+	SubjectID   string `json:"subject_id,omitempty"`
+	SyncKey     string `json:"sync_key"`
+	ContentHash string `json:"content_hash,omitempty"`
 }
 
 // SkillData represents a structured skill for task execution.
@@ -227,6 +239,9 @@ type EvolutionSubmissionBundle struct {
 	Sensitivity    string          `json:"sensitivity,omitempty"`
 	Confidence     string          `json:"confidence,omitempty"`
 	SuggestedScope string          `json:"suggested_scope,omitempty"`
+	SourceUserID   string          `json:"source_user_id,omitempty"`
+	SubjectType    string          `json:"subject_type,omitempty"`
+	SubjectID      string          `json:"subject_id,omitempty"`
 	Evidence       json.RawMessage `json:"evidence,omitempty"`
 	Applies        json.RawMessage `json:"applies,omitempty"`
 	Tags           []string        `json:"tags,omitempty"`

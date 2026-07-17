@@ -322,8 +322,8 @@ function shortId(value: string | null | undefined): string {
   return value.length <= 8 ? value : value.slice(0, 8);
 }
 
-function normalizeUnitType(value: string): "memory" | "skill" | "workflow" | "preference" | "other" {
-  const lower = value.toLowerCase();
+function normalizeUnitType(value: string | null | undefined): "memory" | "skill" | "workflow" | "preference" | "other" {
+  const lower = (value ?? "").toLowerCase();
   if (lower.includes("skill")) return "skill";
   if (lower.includes("memory")) return "memory";
   if (lower.includes("preference")) return "preference";
@@ -331,12 +331,12 @@ function normalizeUnitType(value: string): "memory" | "skill" | "workflow" | "pr
   return "other";
 }
 
-function isMemoryLikeUnitType(value: string): boolean {
+function isMemoryLikeUnitType(value: string | null | undefined): boolean {
   const normalized = normalizeUnitType(value);
   return normalized === "memory" || normalized === "preference" || normalized === "workflow";
 }
 
-function unitLabel(value: string): string {
+function unitLabel(value: string | null | undefined): string {
   const normalized = normalizeUnitType(value);
   if (normalized === "memory") return copy("memory");
   if (normalized === "skill") return copy("skill");

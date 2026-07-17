@@ -18,6 +18,8 @@ import { useOpenDM } from "../../common/use-open-dm";
 import { PropRow } from "../../common/prop-row";
 import { VisibilityBadge } from "./visibility-badge";
 import { AgentPresenceStatusLine } from "./agent-presence-status-line";
+import { runtimeHealthState } from "@multica/core/runtimes";
+import { useRuntimeHealthStateLabel } from "../../runtimes/components/shared";
 import { RuntimePicker } from "./inspector/runtime-picker";
 import { ModelPicker } from "./inspector/model-picker";
 import { ThinkingPropRow } from "./inspector/thinking-prop-row";
@@ -38,6 +40,7 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
   const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
   const handleUpdate = useUpdateAgent(wsId);
   const currentUser = useAuthStore((s) => s.user);
+  const runtimeHealthLabel = useRuntimeHealthStateLabel();
 
   const agent = agents.find((a) => a.id === agentId);
   // Same permission gate as the detail inspector — owner/admin only. Called
@@ -69,6 +72,13 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
   const runtime = runtimes.find((r) => r.id === agent.runtime_id) ?? null;
   const isArchived = !!agent.archived_at;
   const update = (data: Record<string, unknown>) => handleUpdate(agent.id, data);
+  // Runtime "version outdated" is an INDEPENDENT axis from online/offline
+  // health (kept per Iris/Parker — it currently explains the billing gap).
+  // Cloud runtimes never report an outdated local binary.
+  const runtimeUpdateHealth =
+    agent.runtime_mode !== "cloud" && runtime
+      ? runtimeHealthState(runtime)
+      : "ok";
   const displayName = resolveActorDisplayName(agent, agent.id);
   const initials = displayName
     .split(" ")
@@ -145,14 +155,21 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
       <div className="flex flex-col gap-2 text-xs">
         <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
           <PropRow label={t(($) => $.inspector.prop_runtime)} interactive={false}>
-            <RuntimePicker
-              value={agent.runtime_id}
-              runtimes={runtimes}
-              members={members}
-              currentUserId={currentUser?.id ?? null}
-              canEdit={canEdit.allowed}
-              onChange={(id) => update({ runtime_id: id })}
-            />
+            <div className="flex min-w-0 items-center gap-1.5">
+              <RuntimePicker
+                value={agent.runtime_id}
+                runtimes={runtimes}
+                members={members}
+                currentUserId={currentUser?.id ?? null}
+                canEdit={canEdit.allowed}
+                onChange={(id) => update({ runtime_id: id })}
+              />
+              {runtimeUpdateHealth !== "ok" && (
+                <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                  {runtimeHealthLabel(runtimeUpdateHealth)}
+                </span>
+              )}
+            </div>
           </PropRow>
           <PropRow label={t(($) => $.inspector.prop_model)} interactive={false}>
             <ModelPicker

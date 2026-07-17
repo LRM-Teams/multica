@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -26,9 +28,10 @@ const (
 	defaultSandboxJobTTL   = 24 * time.Hour
 	defaultSandboxLeaseSec = 300
 	// sandboxNodeStaleThreshold marks a node offline when last_seen_at is
-	// older than this. sandboxd polls jobs every 5s by default; 30s tolerates
-	// brief network hiccups without showing a dead node as online for long.
-	sandboxNodeStaleThreshold = 30 * time.Second
+	// older than this. sandboxd claims every ~5s and heartbeats every ~10s;
+	// 60s tolerates a brief control-plane blip (or one slow claim) without
+	// flapping the UI, while still detecting a dead node within about a minute.
+	sandboxNodeStaleThreshold = 60 * time.Second
 )
 
 type SandboxNodeResponse struct {
@@ -290,6 +293,108 @@ func (h *Handler) ListSandboxNodes(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+type SandboxTemplateResponse struct {
+	TemplateID   string `json:"template_id"`
+	Status       string `json:"status"`
+	CreatedAt    string `json:"created_at,omitempty"`
+	ImageInfo    string `json:"image_info,omitempty"`
+	InstanceType string `json:"instance_type,omitempty"`
+	LastError    string `json:"last_error,omitempty"`
+	Version      string `json:"version,omitempty"`
+	JobID        string `json:"job_id,omitempty"`
+	IsDefault    bool   `json:"is_default"`
+}
+
+type SandboxNodeTemplatesResponse struct {
+	Templates         []SandboxTemplateResponse `json:"templates"`
+	DefaultTemplateID string                    `json:"default_template_id,omitempty"`
+	SyncedAt          string                    `json:"synced_at,omitempty"`
+	NodeOnline        bool                      `json:"node_online"`
+}
+
+// ListSandboxNodeTemplates returns Cube templates last reported by sandboxd
+// for a node the caller owns. Templates are cached in node metadata (not a
+// live proxy) so the list is available even briefly after the node goes offline.
+func (h *Handler) ListSandboxNodeTemplates(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	nodeID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "nodeId"), "node_id")
+	if !ok {
+		return
+	}
+	node, err := h.Queries.GetSandboxNodeForOwner(r.Context(), db.GetSandboxNodeForOwnerParams{
+		ID:          nodeID,
+		OwnerUserID: parseUUID(userID),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "sandbox node not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load sandbox node")
+		return
+	}
+	writeJSON(w, http.StatusOK, sandboxNodeTemplatesFromMetadata(node.Metadata, effectiveSandboxNodeStatus(node.Status, node.LastSeenAt) == "online"))
+}
+
+func sandboxNodeTemplatesFromMetadata(raw []byte, nodeOnline bool) SandboxNodeTemplatesResponse {
+	resp := SandboxNodeTemplatesResponse{
+		Templates:  []SandboxTemplateResponse{},
+		NodeOnline: nodeOnline,
+	}
+	var meta map[string]any
+	if len(raw) == 0 || json.Unmarshal(raw, &meta) != nil {
+		return resp
+	}
+	resp.DefaultTemplateID = strings.TrimSpace(stringFromAny(meta["cube_template_id"]))
+	resp.SyncedAt = strings.TrimSpace(stringFromAny(meta["templates_synced_at"]))
+
+	items, _ := meta["templates"].([]any)
+	for _, item := range items {
+		obj, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		id := firstNonEmptyTrimmed(
+			stringFromAny(obj["templateID"]),
+			stringFromAny(obj["template_id"]),
+			stringFromAny(obj["id"]),
+		)
+		if id == "" {
+			continue
+		}
+		status := firstNonEmptyTrimmed(stringFromAny(obj["status"]), "unknown")
+		resp.Templates = append(resp.Templates, SandboxTemplateResponse{
+			TemplateID:   id,
+			Status:       status,
+			CreatedAt:    stringFromAny(obj["createdAt"]),
+			ImageInfo:    firstNonEmptyTrimmed(stringFromAny(obj["imageInfo"]), stringFromAny(obj["image_info"])),
+			InstanceType: firstNonEmptyTrimmed(stringFromAny(obj["instanceType"]), stringFromAny(obj["instance_type"])),
+			LastError:    firstNonEmptyTrimmed(stringFromAny(obj["lastError"]), stringFromAny(obj["last_error"])),
+			Version:      stringFromAny(obj["version"]),
+			JobID:        firstNonEmptyTrimmed(stringFromAny(obj["jobID"]), stringFromAny(obj["job_id"])),
+			IsDefault:    resp.DefaultTemplateID != "" && id == resp.DefaultTemplateID,
+		})
+	}
+	return resp
+}
+
+func stringFromAny(v any) string {
+	s, _ := v.(string)
+	return s
+}
+
+func firstNonEmptyTrimmed(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
 func (h *Handler) UpdateSandboxNode(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {
@@ -300,26 +405,64 @@ func (h *Handler) UpdateSandboxNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Name string `json:"name"`
+		Name                *string `json:"name"`
+		DefaultTemplateID   *string `json:"default_template_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	req.Name = strings.TrimSpace(req.Name)
-	if req.Name == "" {
-		writeError(w, http.StatusBadRequest, "name is required")
+	if req.Name == nil && req.DefaultTemplateID == nil {
+		writeError(w, http.StatusBadRequest, "name or default_template_id is required")
 		return
 	}
-	node, err := h.Queries.UpdateSandboxNodeNameForOwner(r.Context(), db.UpdateSandboxNodeNameForOwnerParams{ID: nodeID, OwnerUserID: parseUUID(userID), Name: req.Name})
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "sandbox node not found")
+
+	ownerUUID := parseUUID(userID)
+	var node db.SandboxNode
+	var err error
+
+	if req.Name != nil {
+		name := strings.TrimSpace(*req.Name)
+		if name == "" {
+			writeError(w, http.StatusBadRequest, "name is required")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "failed to update sandbox node")
-		return
+		node, err = h.Queries.UpdateSandboxNodeNameForOwner(r.Context(), db.UpdateSandboxNodeNameForOwnerParams{
+			ID:          nodeID,
+			OwnerUserID: ownerUUID,
+			Name:        name,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeError(w, http.StatusNotFound, "sandbox node not found")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "failed to update sandbox node")
+			return
+		}
 	}
+
+	if req.DefaultTemplateID != nil {
+		templateID := strings.TrimSpace(*req.DefaultTemplateID)
+		if templateID == "" {
+			writeError(w, http.StatusBadRequest, "default_template_id is required")
+			return
+		}
+		node, err = h.Queries.UpdateSandboxNodeDefaultTemplateForOwner(r.Context(), db.UpdateSandboxNodeDefaultTemplateForOwnerParams{
+			ID:             nodeID,
+			OwnerUserID:    ownerUUID,
+			CubeTemplateID: templateID,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeError(w, http.StatusNotFound, "sandbox node not found")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "failed to update sandbox node default template")
+			return
+		}
+	}
+
 	writeJSON(w, http.StatusOK, sandboxNodeToResponse(node, 0))
 }
 
@@ -997,6 +1140,270 @@ func (h *Handler) DeleteSandboxInstance(w http.ResponseWriter, r *http.Request) 
 	h.enqueueSandboxInstanceJob(w, r, "delete")
 }
 
+type SandboxSnapshotResponse struct {
+	ID             string `json:"id"`
+	WorkspaceID    string `json:"workspace_id"`
+	NodeID         string `json:"node_id"`
+	InstanceID     string `json:"instance_id,omitempty"`
+	CreatorUserID  string `json:"creator_user_id,omitempty"`
+	CubeSnapshotID string `json:"cube_snapshot_id"`
+	Name           string `json:"name"`
+	Description    string `json:"description"`
+	Status         string `json:"status"`
+	Error          string `json:"error,omitempty"`
+	CreatedAt      string `json:"created_at"`
+	UpdatedAt      string `json:"updated_at"`
+}
+
+func sandboxSnapshotToResponse(s db.SandboxSnapshot) SandboxSnapshotResponse {
+	resp := SandboxSnapshotResponse{
+		ID:             uuidToString(s.ID),
+		WorkspaceID:    uuidToString(s.WorkspaceID),
+		NodeID:         uuidToString(s.NodeID),
+		CubeSnapshotID: s.CubeSnapshotID,
+		Name:           s.Name,
+		Description:    s.Description,
+		Status:         s.Status,
+		CreatedAt:      timestampToString(s.CreatedAt),
+		UpdatedAt:      timestampToString(s.UpdatedAt),
+	}
+	if s.InstanceID.Valid {
+		resp.InstanceID = uuidToString(s.InstanceID)
+	}
+	if s.CreatorUserID.Valid {
+		resp.CreatorUserID = uuidToString(s.CreatorUserID)
+	}
+	if s.Error.Valid {
+		resp.Error = s.Error.String
+	}
+	return resp
+}
+
+// CreateSandboxSnapshotTemplate persists a Multica snapshot row and enqueues a
+// create_template job so sandboxd can call Cube POST /sandboxes/{id}/snapshots.
+func (h *Handler) CreateSandboxSnapshotTemplate(w http.ResponseWriter, r *http.Request) {
+	workspaceID := ctxWorkspaceID(r.Context())
+	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace_id")
+	if !ok {
+		return
+	}
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	instanceID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "instanceId"), "instance_id")
+	if !ok {
+		return
+	}
+	inst, err := h.Queries.GetSandboxInstanceForWorkspace(r.Context(), db.GetSandboxInstanceForWorkspaceParams{ID: instanceID, WorkspaceID: wsUUID})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "sandbox not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to get sandbox")
+		return
+	}
+	if strings.TrimSpace(textValue(inst.LocalRef)) == "" {
+		writeError(w, http.StatusConflict, "sandbox is not ready for snapshot")
+		return
+	}
+	if inst.Status != "running" {
+		writeError(w, http.StatusConflict, "sandbox must be running to create a snapshot template")
+		return
+	}
+	var req struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+	decErr := json.NewDecoder(r.Body).Decode(&req)
+	if decErr != nil && !errors.Is(decErr, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		var meta map[string]any
+		if len(inst.Metadata) > 0 && json.Unmarshal(inst.Metadata, &meta) == nil {
+			name = strings.TrimSpace(stringFromAny(meta["name"]))
+		}
+	}
+	if name == "" {
+		name = "snapshot"
+	}
+	description := strings.TrimSpace(req.Description)
+	userUUID := parseUUID(userID)
+	snap, err := h.Queries.CreateSandboxSnapshot(r.Context(), db.CreateSandboxSnapshotParams{
+		WorkspaceID:    wsUUID,
+		NodeID:         inst.NodeID,
+		InstanceID:     instanceID,
+		CreatorUserID:  userUUID,
+		CubeSnapshotID: "",
+		Name:           name,
+		Description:    description,
+		Status:         "creating",
+		Metadata:       []byte("{}"),
+	})
+	if err != nil {
+		slog.Error("failed to create sandbox snapshot row", "error", err, "instance_id", uuidToString(instanceID))
+		writeError(w, http.StatusInternalServerError, "failed to create sandbox snapshot")
+		return
+	}
+	_, _ = h.Queries.UpdateSandboxInstanceStatus(r.Context(), db.UpdateSandboxInstanceStatusParams{
+		ID:     instanceID,
+		Status: "snapshotting",
+		Error:  pgtype.Text{},
+	})
+	payload := map[string]any{
+		"instance_id":         uuidToString(instanceID),
+		"local_ref":           textValue(inst.LocalRef),
+		"snapshot_id":         uuidToString(snap.ID),
+		"name":                name,
+		"description":         description,
+	}
+	rawPayload, _ := json.Marshal(payload)
+	job, err := h.Queries.CreateSandboxJob(r.Context(), db.CreateSandboxJobParams{
+		WorkspaceID:     wsUUID,
+		InitiatorUserID: userUUID,
+		NodeID:          inst.NodeID,
+		InstanceID:      instanceID,
+		Type:            "create_template",
+		Payload:         rawPayload,
+	})
+	if err != nil {
+		slog.Error("failed to enqueue create_template sandbox job", "error", err, "instance_id", uuidToString(instanceID))
+		_, _ = h.Queries.MarkSandboxSnapshotFailed(r.Context(), db.MarkSandboxSnapshotFailedParams{
+			ID:          snap.ID,
+			WorkspaceID: wsUUID,
+			Error:       pgtype.Text{String: "failed to enqueue sandbox job", Valid: true},
+		})
+		writeError(w, http.StatusInternalServerError, "failed to enqueue sandbox job")
+		return
+	}
+	if h.SandboxHub != nil {
+		h.SandboxHub.NotifyJobAvailable(uuidToString(inst.NodeID), uuidToString(job.ID))
+	}
+	writeJSON(w, http.StatusAccepted, sandboxSnapshotToResponse(snap))
+}
+
+func (h *Handler) ListSandboxNodeSnapshots(w http.ResponseWriter, r *http.Request) {
+	workspaceID := middleware.ResolveWorkspaceIDFromRequest(r, h.Queries)
+	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace_id")
+	if !ok {
+		return
+	}
+	nodeID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "nodeId"), "node_id")
+	if !ok {
+		return
+	}
+	if _, err := h.Queries.GetEnabledSandboxBinding(r.Context(), db.GetEnabledSandboxBindingParams{
+		WorkspaceID: wsUUID,
+		NodeID:      nodeID,
+	}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "sandbox node not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load sandbox binding")
+		return
+	}
+	rows, err := h.Queries.ListSandboxSnapshotsByNode(r.Context(), db.ListSandboxSnapshotsByNodeParams{
+		WorkspaceID: wsUUID,
+		NodeID:      nodeID,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list sandbox snapshots")
+		return
+	}
+	resp := make([]SandboxSnapshotResponse, 0, len(rows))
+	for _, row := range rows {
+		resp = append(resp, sandboxSnapshotToResponse(row))
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// DeleteSandboxSnapshot enqueues a delete_template job and removes the Cube
+// snapshot via sandboxd; the Multica row is deleted when the job completes.
+func (h *Handler) DeleteSandboxSnapshot(w http.ResponseWriter, r *http.Request) {
+	workspaceID := middleware.ResolveWorkspaceIDFromRequest(r, h.Queries)
+	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace_id")
+	if !ok {
+		return
+	}
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	snapshotID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "snapshotId"), "snapshot_id")
+	if !ok {
+		return
+	}
+	snap, err := h.Queries.GetSandboxSnapshotForWorkspace(r.Context(), db.GetSandboxSnapshotForWorkspaceParams{
+		ID:          snapshotID,
+		WorkspaceID: wsUUID,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "sandbox snapshot not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load sandbox snapshot")
+		return
+	}
+	if snap.Status == "creating" || snap.Status == "deleting" {
+		writeError(w, http.StatusConflict, "sandbox snapshot is busy")
+		return
+	}
+	cubeID := strings.TrimSpace(snap.CubeSnapshotID)
+	if cubeID == "" {
+		// Never reached Cube — just drop the Multica row.
+		if err := h.Queries.DeleteSandboxSnapshot(r.Context(), db.DeleteSandboxSnapshotParams{
+			ID:          snapshotID,
+			WorkspaceID: wsUUID,
+		}); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to delete sandbox snapshot")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	deleting, err := h.Queries.MarkSandboxSnapshotDeleting(r.Context(), db.MarkSandboxSnapshotDeletingParams{
+		ID:          snapshotID,
+		WorkspaceID: wsUUID,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to mark sandbox snapshot deleting")
+		return
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"snapshot_id":      uuidToString(snap.ID),
+		"cube_snapshot_id": cubeID,
+		"local_ref":        cubeID,
+	})
+	job, err := h.Queries.CreateSandboxJob(r.Context(), db.CreateSandboxJobParams{
+		WorkspaceID:     wsUUID,
+		InitiatorUserID: parseUUID(userID),
+		NodeID:          snap.NodeID,
+		InstanceID:      snap.InstanceID, // may be null if source instance was deleted
+		Type:            "delete_template",
+		Payload:         payload,
+	})
+	if err != nil {
+		slog.Error("failed to enqueue delete_template sandbox job", "error", err, "snapshot_id", uuidToString(snapshotID))
+		_, _ = h.Queries.MarkSandboxSnapshotReadyAgain(r.Context(), db.MarkSandboxSnapshotReadyAgainParams{
+			ID:          snapshotID,
+			WorkspaceID: wsUUID,
+			Error:       pgtype.Text{String: "failed to enqueue delete job", Valid: true},
+		})
+		writeError(w, http.StatusInternalServerError, "failed to enqueue sandbox job")
+		return
+	}
+	if h.SandboxHub != nil {
+		h.SandboxHub.NotifyJobAvailable(uuidToString(snap.NodeID), uuidToString(job.ID))
+	}
+	writeJSON(w, http.StatusAccepted, sandboxSnapshotToResponse(deleting))
+}
+
 func (h *Handler) SandboxNodeRegister(w http.ResponseWriter, r *http.Request) {
 	nodeID := middleware.SandboxNodeIDFromContext(r.Context())
 	if nodeID == "" {
@@ -1058,12 +1465,64 @@ func (h *Handler) SandboxNodeHeartbeat(w http.ResponseWriter, r *http.Request) {
 		Metadata json.RawMessage `json:"metadata"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
-	node, err := h.Queries.TouchSandboxNodeHeartbeat(r.Context(), db.TouchSandboxNodeHeartbeatParams{ID: nodeUUID, Metadata: jsonBytesOrDefault(req.Metadata, "{}")})
+
+	current, err := h.Queries.GetSandboxNode(r.Context(), nodeUUID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "sandbox node not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load sandbox node")
+		return
+	}
+
+	// Merge so sandboxd can refresh templates/cube URLs without clobbering a
+	// default template the owner set via the control plane.
+	merged := mergeSandboxNodeHeartbeatMetadata(current.Metadata, req.Metadata)
+	node, err := h.Queries.TouchSandboxNodeHeartbeat(r.Context(), db.TouchSandboxNodeHeartbeatParams{
+		ID:       nodeUUID,
+		Metadata: merged,
+	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to record sandbox node heartbeat")
 		return
 	}
 	writeJSON(w, http.StatusOK, sandboxNodeToResponse(node, 0))
+}
+
+func mergeSandboxNodeHeartbeatMetadata(existing, incoming json.RawMessage) json.RawMessage {
+	base := map[string]any{}
+	if len(existing) > 0 {
+		_ = json.Unmarshal(existing, &base)
+	}
+	in := map[string]any{}
+	if len(incoming) > 0 {
+		_ = json.Unmarshal(incoming, &in)
+	}
+
+	existingDefault := strings.TrimSpace(stringFromAny(base["cube_template_id"]))
+	for _, key := range []string{
+		"cube_api_url",
+		"cube_proxy_http",
+		"cube_domain",
+		"templates",
+		"templates_synced_at",
+	} {
+		if v, ok := in[key]; ok {
+			base[key] = v
+		}
+	}
+	if existingDefault != "" {
+		base["cube_template_id"] = existingDefault
+	} else if v := strings.TrimSpace(stringFromAny(in["cube_template_id"])); v != "" {
+		base["cube_template_id"] = v
+	}
+
+	raw, err := json.Marshal(base)
+	if err != nil {
+		return jsonBytesOrDefault(incoming, "{}")
+	}
+	return raw
 }
 
 func (h *Handler) SandboxNodeWebSocket(w http.ResponseWriter, r *http.Request) {
@@ -1165,16 +1624,21 @@ func (h *Handler) CompleteSandboxJob(w http.ResponseWriter, r *http.Request) {
 		inst, err = h.Queries.CompleteSandboxInstanceCreate(r.Context(), db.CompleteSandboxInstanceCreateParams{ID: job.InstanceID, LocalRef: strToText(req.LocalRef), EndpointInfo: jsonBytesOrDefault(req.EndpointInfo, "{}")})
 	case "stop":
 		inst, err = h.Queries.MarkSandboxInstanceStopped(r.Context(), job.InstanceID)
-	case "resume":
+	case "resume", "reconfigure":
 		inst, err = h.Queries.MarkSandboxInstanceRunning(r.Context(), job.InstanceID)
-	case "reconfigure":
+	case "create_template":
 		inst, err = h.Queries.MarkSandboxInstanceRunning(r.Context(), job.InstanceID)
+		if err == nil {
+			h.completeCreateTemplateSnapshot(r.Context(), job, req.Result)
+		}
+	case "delete_template":
+		err = h.completeDeleteTemplateSnapshot(r.Context(), job)
 	case "delete":
 		err = h.Queries.DeleteSandboxInstance(r.Context(), job.InstanceID)
 	default:
 		inst, err = h.Queries.UpdateSandboxInstanceStatus(r.Context(), db.UpdateSandboxInstanceStatusParams{ID: job.InstanceID, Status: "running", Error: pgtype.Text{}})
 	}
-	if err == nil {
+	if err == nil && job.Type != "delete_template" {
 		payload := map[string]any{"instance_id": uuidToString(job.InstanceID)}
 		if job.Type == "delete" {
 			payload["deleted"] = true
@@ -1206,19 +1670,112 @@ func (h *Handler) FailSandboxJob(w http.ResponseWriter, r *http.Request) {
 	}
 	var inst db.SandboxInstance
 	var instErr error
-	if job.Type == "reconfigure" {
+	switch job.Type {
+	case "reconfigure", "create_template":
 		inst, instErr = h.Queries.UpdateSandboxInstanceStatus(r.Context(), db.UpdateSandboxInstanceStatusParams{
 			ID:     job.InstanceID,
 			Status: "running",
 			Error:  pgtype.Text{String: errMsg, Valid: true},
 		})
-	} else {
+		if job.Type == "create_template" {
+			h.failCreateTemplateSnapshot(r.Context(), job, errMsg)
+		}
+	case "delete_template":
+		h.failDeleteTemplateSnapshot(r.Context(), job, errMsg)
+	default:
 		inst, instErr = h.Queries.MarkSandboxInstanceFailed(r.Context(), db.MarkSandboxInstanceFailedParams{ID: job.InstanceID, Error: pgtype.Text{String: errMsg, Valid: true}})
 	}
-	if instErr == nil {
+	if instErr == nil && job.Type != "delete_template" {
 		h.publish(protocol.EventSandboxInstanceUpdated, uuidToString(inst.WorkspaceID), "sandbox_node", uuidToString(job.NodeID), map[string]any{"instance": sandboxInstanceToResponse(inst)})
 	}
 	writeJSON(w, http.StatusOK, sandboxJobToResponse(updated, ""))
+}
+
+func snapshotIDFromJobPayload(raw []byte) (pgtype.UUID, bool) {
+	var payload map[string]any
+	if len(raw) == 0 || json.Unmarshal(raw, &payload) != nil {
+		return pgtype.UUID{}, false
+	}
+	id := strings.TrimSpace(stringFromAny(payload["snapshot_id"]))
+	if id == "" {
+		return pgtype.UUID{}, false
+	}
+	parsed, err := util.ParseUUID(id)
+	if err != nil {
+		return pgtype.UUID{}, false
+	}
+	return parsed, true
+}
+
+func cubeSnapshotIDFromJobResult(raw []byte) string {
+	var result map[string]any
+	if len(raw) == 0 || json.Unmarshal(raw, &result) != nil {
+		return ""
+	}
+	return firstNonEmptyTrimmed(
+		stringFromAny(result["snapshot_id"]),
+		stringFromAny(result["template_id"]),
+		stringFromAny(result["snapshotID"]),
+		stringFromAny(result["templateID"]),
+	)
+}
+
+func (h *Handler) completeCreateTemplateSnapshot(ctx context.Context, job db.SandboxJob, result json.RawMessage) {
+	snapID, ok := snapshotIDFromJobPayload(job.Payload)
+	if !ok {
+		return
+	}
+	cubeID := cubeSnapshotIDFromJobResult(result)
+	if cubeID == "" {
+		_, _ = h.Queries.MarkSandboxSnapshotFailed(ctx, db.MarkSandboxSnapshotFailedParams{
+			ID:          snapID,
+			WorkspaceID: job.WorkspaceID,
+			Error:       pgtype.Text{String: "cube snapshot id missing from job result", Valid: true},
+		})
+		return
+	}
+	_, _ = h.Queries.MarkSandboxSnapshotReady(ctx, db.MarkSandboxSnapshotReadyParams{
+		ID:             snapID,
+		WorkspaceID:    job.WorkspaceID,
+		CubeSnapshotID: cubeID,
+	})
+}
+
+func (h *Handler) failCreateTemplateSnapshot(ctx context.Context, job db.SandboxJob, errMsg string) {
+	snapID, ok := snapshotIDFromJobPayload(job.Payload)
+	if !ok {
+		return
+	}
+	_, _ = h.Queries.MarkSandboxSnapshotFailed(ctx, db.MarkSandboxSnapshotFailedParams{
+		ID:          snapID,
+		WorkspaceID: job.WorkspaceID,
+		Error:       pgtype.Text{String: errMsg, Valid: true},
+	})
+}
+
+func (h *Handler) completeDeleteTemplateSnapshot(ctx context.Context, job db.SandboxJob) error {
+	snapID, ok := snapshotIDFromJobPayload(job.Payload)
+	if !ok {
+		return nil
+	}
+	return h.Queries.DeleteSandboxSnapshot(ctx, db.DeleteSandboxSnapshotParams{
+		ID:          snapID,
+		WorkspaceID: job.WorkspaceID,
+	})
+}
+
+func (h *Handler) failDeleteTemplateSnapshot(ctx context.Context, job db.SandboxJob, errMsg string) {
+	snapID, ok := snapshotIDFromJobPayload(job.Payload)
+	if !ok {
+		return
+	}
+	// Keep status=failed (not ready) so a failed delete does not look like the
+	// snapshot was recreated. The user can retry delete from the Snapshots tab.
+	_, _ = h.Queries.MarkSandboxSnapshotFailed(ctx, db.MarkSandboxSnapshotFailedParams{
+		ID:          snapID,
+		WorkspaceID: job.WorkspaceID,
+		Error:       pgtype.Text{String: errMsg, Valid: true},
+	})
 }
 
 func sandboxNodeUUIDFromContext(w http.ResponseWriter, r *http.Request) (pgtype.UUID, bool) {

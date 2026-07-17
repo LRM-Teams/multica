@@ -710,6 +710,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		// use still requires an explicit admin-created workspace binding.
 		r.Get("/api/sandbox/nodes", h.ListSandboxNodes)
 		r.Post("/api/sandbox/nodes", h.CreateSandboxNode)
+		r.Get("/api/sandbox/nodes/{nodeId}/templates", h.ListSandboxNodeTemplates)
 		r.Patch("/api/sandbox/nodes/{nodeId}", h.UpdateSandboxNode)
 		r.Delete("/api/sandbox/nodes/{nodeId}", h.DeleteSandboxNode)
 		r.Post("/api/sandbox/nodes/{nodeId}/tokens", h.CreateSandboxNodeToken)
@@ -804,12 +805,15 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Sandbox instances (workspace-facing control plane).
 			r.Get("/api/sandboxes", h.ListSandboxInstances)
 			r.Post("/api/sandboxes", h.CreateSandboxInstance)
+			r.Get("/api/sandbox/nodes/{nodeId}/snapshots", h.ListSandboxNodeSnapshots)
+			r.Delete("/api/sandbox/snapshots/{snapshotId}", h.DeleteSandboxSnapshot)
 			r.Route("/api/sandboxes/{instanceId}", func(r chi.Router) {
 				r.Get("/", h.GetSandboxInstance)
 				r.Patch("/", h.UpdateSandboxInstance)
 				r.Delete("/", h.DeleteSandboxInstance)
 				r.Post("/stop", h.StopSandboxInstance)
 				r.Post("/resume", h.ResumeSandboxInstance)
+				r.Post("/create-template", h.CreateSandboxSnapshotTemplate)
 			})
 
 			// Task messages (user-facing, not daemon auth)

@@ -1224,6 +1224,22 @@ type SandboxJob struct {
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
 }
 
+type SandboxSnapshot struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	NodeID         pgtype.UUID        `json:"node_id"`
+	InstanceID     pgtype.UUID        `json:"instance_id"`
+	CreatorUserID  pgtype.UUID        `json:"creator_user_id"`
+	CubeSnapshotID string             `json:"cube_snapshot_id"`
+	Name           string             `json:"name"`
+	Description    string             `json:"description"`
+	Status         string             `json:"status"`
+	Error          pgtype.Text        `json:"error"`
+	Metadata       []byte             `json:"metadata"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Workspace struct {
 	ID                   pgtype.UUID        `json:"id"`
 	Name                 string             `json:"name"`

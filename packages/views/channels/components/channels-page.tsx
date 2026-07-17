@@ -209,6 +209,7 @@ export interface TypingActor {
 
 const EMPTY_TYPING_ACTORS: TypingActor[] = [];
 const EMPTY_ACTIVE_TASKS: ChannelActiveTask[] = [];
+const STOPPING_ALL_TASKS_ID = "__all__";
 const identitySearchOptions = { extendedMatch: matchesPinyin };
 
 // Overlapping avatar stack for the channel roster (agents tinted by identity
@@ -379,11 +380,13 @@ export function ConversationActivityStrip({
   tasks = EMPTY_ACTIVE_TASKS,
   stoppingTaskId = null,
   onStopTask,
+  onStopAllTasks,
 }: {
   typingActors?: TypingActor[];
   tasks?: ChannelActiveTask[];
   stoppingTaskId?: string | null;
   onStopTask?: (task: ChannelActiveTask) => void;
+  onStopAllTasks?: (tasks: ChannelActiveTask[]) => void;
 }) {
   const { t } = useT("channels");
   const [expanded, setExpanded] = useState(false);
@@ -453,26 +456,41 @@ export function ConversationActivityStrip({
         </div>
       ) : stoppableTasks.length > 1 ? (
         <div className="flex flex-col gap-1">
-          {/* Multiple agents → collapse to a single count + chevron. Whole row
-              is one toggle; the chevron is a fixed state indicator at the right
-              end (never drifts). Expand → one row per agent with its own Stop. */}
-          <button
-            type="button"
-            onClick={() => setExpanded((value) => !value)}
-            aria-expanded={expanded}
-            className="flex w-full min-w-0 items-center justify-between gap-2 text-left hover:text-foreground"
-          >
-            <span className="flex min-w-0 items-center gap-1.5 truncate">
-              <UnicodeSpinner className="shrink-0 text-muted-foreground/60" />
-              <span className="truncate">
-                {t(($) => $.agent_status.processing_count, { count: stoppableTasks.length })}
+          {/* Multiple agents collapse to one running summary. Keep Stop all
+              outside the disclosure button so one click can cancel the whole group. */}
+          <div className="flex min-w-0 items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={() => setExpanded((value) => !value)}
+              aria-expanded={expanded}
+              className="flex min-w-0 flex-1 items-center justify-between gap-2 text-left hover:text-foreground"
+            >
+              <span className="flex min-w-0 items-center gap-1.5 truncate">
+                <UnicodeSpinner className="shrink-0 text-muted-foreground/60" />
+                <span className="truncate">
+                  {t(($) => $.agent_status.processing_count, { count: stoppableTasks.length })}
+                </span>
               </span>
-            </span>
-            <ChevronDown
-              className={cn("size-3.5 shrink-0 transition-transform", expanded && "rotate-180")}
-              aria-hidden="true"
-            />
-          </button>
+              <ChevronDown
+                className={cn("size-3.5 shrink-0 transition-transform", expanded && "rotate-180")}
+                aria-hidden="true"
+              />
+            </button>
+            {onStopAllTasks ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-6 shrink-0 gap-1 px-2 text-[11px] text-muted-foreground hover:text-foreground"
+                disabled={stoppingTaskId === STOPPING_ALL_TASKS_ID}
+                onClick={() => onStopAllTasks(stoppableTasks)}
+                aria-label={t(($) => $.agent_status.stop_all_aria, { count: stoppableTasks.length })}
+              >
+                <Square className="size-2.5 fill-current" />
+                {t(($) => $.agent_status.stop_all)}
+              </Button>
+            ) : null}
+          </div>
           {expanded ? (
             <div className="flex flex-col gap-1 pl-5">
               {stoppableTasks.map((task) => (
@@ -513,7 +531,7 @@ function StopTaskButton({
       variant="ghost"
       size="sm"
       className="h-6 shrink-0 gap-1 px-2 text-[11px] text-muted-foreground hover:text-foreground"
-      disabled={stoppingTaskId === task.task_id}
+      disabled={stoppingTaskId === task.task_id || stoppingTaskId === STOPPING_ALL_TASKS_ID}
       onClick={() => onStopTask(task)}
       aria-label={t(($) => $.agent_status.stop_aria, { name: task.agent_name })}
     >
@@ -1274,9 +1292,8 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
   });
 
-  useWSEvent("task:cancelled", (payload) => {
-    const e = payload as { chat_session_id?: string };
-    if (!e.chat_session_id || !active?.id) return;
+  useWSEvent("task:cancelled", () => {
+    if (!active?.id) return;
     qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(active.id) });
     qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
     qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
@@ -1438,6 +1455,24 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     } finally {
       setStoppingChannelTaskId((current) => (current === task.task_id ? null : current));
     }
+  }, [active?.id, qc, t, wsId]);
+
+  const handleStopAllChannelTasks = useCallback(async (tasks: ChannelActiveTask[]) => {
+    if (!active?.id || tasks.length === 0) return;
+    setStoppingChannelTaskId(STOPPING_ALL_TASKS_ID);
+    const results = await Promise.allSettled(tasks.map((task) => api.cancelTaskById(task.task_id)));
+    const stopped = results.filter((result) => result.status === "fulfilled").length;
+    if (stopped === tasks.length) {
+      toast.success(t(($) => $.agent_status.stop_all_success, { count: stopped }));
+    } else if (stopped > 0) {
+      toast.warning(t(($) => $.agent_status.stop_all_partial, { stopped, total: tasks.length }));
+    } else {
+      toast.error(t(($) => $.agent_status.stop_failed));
+    }
+    qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(active.id) });
+    qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
+    qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
+    setStoppingChannelTaskId(null);
   }, [active?.id, qc, t, wsId]);
 
   const handleToggleChannelPin = (channel: Channel) => {
@@ -2334,6 +2369,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
             tasks={activeTasks}
             stoppingTaskId={stoppingChannelTaskId}
             onStopTask={handleStopChannelTask}
+            onStopAllTasks={handleStopAllChannelTasks}
           />
         }
       />
@@ -2661,6 +2697,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                     tasks={activeTasks}
                     stoppingTaskId={stoppingChannelTaskId}
                     onStopTask={handleStopChannelTask}
+                    onStopAllTasks={handleStopAllChannelTasks}
                   />
                   <Composer
                     surface="channel"

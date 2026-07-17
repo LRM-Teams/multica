@@ -187,7 +187,11 @@
     "retry_named": "{{name}} 다시 시도",
     "retry_aria": "{{name}}의 답장 다시 시도",
     "retry_success": "{{name}} 다시 시도 중",
-    "retry_failed": "다시 시도하지 못함"
+    "retry_failed": "다시 시도하지 못함",
+    "stop_all": "모두 중지",
+    "stop_all_aria": "현재 에이전트 작업 {{count}}개 모두 중지",
+    "stop_all_success": "에이전트 {{count}}개를 중지했습니다",
+    "stop_all_partial": "에이전트 {{total}}개 중 {{stopped}}개를 중지했습니다"
   },
   "composer": {
     "placeholder": "필요한 내용을 입력하세요…  @에이전트이름 으로 답장을 요청하세요.",

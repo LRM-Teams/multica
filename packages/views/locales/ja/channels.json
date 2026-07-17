@@ -187,7 +187,11 @@
     "retry_named": "{{name}} を再試行",
     "retry_aria": "{{name}} の返信を再試行",
     "retry_success": "{{name}} を再試行中",
-    "retry_failed": "再試行できませんでした"
+    "retry_failed": "再試行できませんでした",
+    "stop_all": "すべて停止",
+    "stop_all_aria": "現在の {{count}} 件のエージェントタスクをすべて停止",
+    "stop_all_success": "{{count}} 件のエージェントを停止しました",
+    "stop_all_partial": "{{total}} 件中 {{stopped}} 件のエージェントを停止しました"
   },
   "composer": {
     "placeholder": "必要なことを入力してください…  @エージェント名 で返信を促します。",

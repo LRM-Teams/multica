@@ -653,9 +653,7 @@ function DmChannelConversation({
     markChannelRead(channelId);
   });
 
-  useWSEvent("task:cancelled", (payload) => {
-    const e = payload as { chat_session_id?: string };
-    if (!e.chat_session_id) return;
+  useWSEvent("task:cancelled", () => {
     qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(channelId) });
     qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
   });

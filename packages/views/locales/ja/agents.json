@@ -490,6 +490,7 @@
     "created_label": "作成日",
     "owner_label": "オーナー",
     "reasoning_default": "デフォルト",
+    "runtime_section": "ランタイム設定",
     "config_shared_hint": "ワークスペースのどのメンバーもこのグループマネージャーのランタイム設定を変更できます。"
   },
   "live_peek": {

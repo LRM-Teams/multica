@@ -498,6 +498,7 @@
     "created_label": "创建时间",
     "owner_label": "所有者",
     "reasoning_default": "默认",
+    "runtime_section": "运行配置",
     "config_shared_hint": "任何工作区成员都可以修改该群管理（贝克汉姆）的运行时设置。"
   },
   "live_peek": {

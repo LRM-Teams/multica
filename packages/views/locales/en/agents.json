@@ -508,6 +508,7 @@
     "created_label": "Created",
     "owner_label": "Owner",
     "reasoning_default": "Default",
+    "runtime_section": "Runtime Config",
     "config_shared_hint": "Any workspace member can adjust this group manager's runtime settings."
   },
   "live_peek": {

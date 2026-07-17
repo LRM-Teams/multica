@@ -13,7 +13,6 @@ import {
   ChevronUp,
   FileText,
   Hash,
-  ListTodo,
   Mail,
   MessageCircle,
   MessageSquare,
@@ -74,7 +73,6 @@ import { api } from "@multica/core/api";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
-import { useIssueViewStore } from "@multica/core/issues/stores/view-store";
 import { useWSEvent } from "@multica/core/realtime";
 import { toast } from "sonner";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
@@ -554,7 +552,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
   const wsPaths = useWorkspacePaths();
-  const { searchParams, replace, push, getShareableUrl } = useNavigation();
+  const { searchParams, replace, getShareableUrl } = useNavigation();
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const currentUserName = useAuthStore((s) => s.user?.name ?? null);
   const { mutate: markChannelRead } = useMarkChannelRead();
@@ -2430,22 +2428,10 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                   </PopoverContent>
                 </Popover>
                 <div className="flex items-center gap-1">
-                  {/* #476 — open the Issues list pre-filtered to issues that
-                      originated in this channel. Sets the shared view-store
-                      filter, then navigates; the issues page reads it on mount
-                      and the Group dropdown shows this channel as active. */}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-8"
-                    aria-label={t(($) => $.header.issues_aria)}
-                    onClick={() => {
-                      useIssueViewStore.getState().setSourceChannel(active.id);
-                      push(wsPaths.issues());
-                    }}
-                  >
-                    <ListTodo className="size-4" />
-                  </Button>
+                  {/* #562 — the old #476 "open global Issues filtered to this
+                      channel" entry is removed: the channel-scoped Tasks tab is
+                      now the single, non-global-filter entry to this channel's
+                      tasks (no more setSourceChannel write-back). */}
                   <Button
                     variant="ghost"
                     size="icon"

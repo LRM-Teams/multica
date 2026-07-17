@@ -590,6 +590,7 @@ project, or on `issue list` to filter issues by project:
 
 ```bash
 multica issue create --title "Login bug" --project <project-id>
+multica issue create --title "Channel follow-up" --channel <group-id-or-name> --project <project-id>
 multica issue update <issue-id> --project <project-id>
 multica issue list --project <project-id>
 ```

@@ -199,7 +199,7 @@ func (h *Handler) resolveChannelOutputTarget(ctx context.Context, origin chatOut
 
 func (h *Handler) groupChannelByName(ctx context.Context, workspaceID pgtype.UUID, name string) (ChannelResponse, error) {
 	row := h.DB.QueryRow(ctx, `
-		SELECT id, workspace_id, name, description, lark_chat_id, created_by, created_at, updated_at, kind, archived_at, archived_by
+		SELECT id, workspace_id, name, description, lark_chat_id, project_id, created_by, created_at, updated_at, kind, archived_at, archived_by
 		FROM channel
 		WHERE workspace_id = $1 AND name = $2 AND kind = 'group' AND archived_at IS NULL
 		LIMIT 1`, workspaceID, name)

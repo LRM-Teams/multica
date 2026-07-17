@@ -121,6 +121,13 @@ var issueUpdateCmd = &cobra.Command{
 	RunE:  runIssueUpdate,
 }
 
+var issueChannelCmd = &cobra.Command{
+	Use:   "channel <issue-id> [group-id-or-name]",
+	Short: "Set or clear an issue's associated group",
+	Args:  cobra.RangeArgs(1, 2),
+	RunE:  runIssueChannel,
+}
+
 var issueAssignCmd = &cobra.Command{
 	Use:   "assign <id>",
 	Short: "Assign an issue to a member, agent, or squad",
@@ -243,6 +250,7 @@ func init() {
 	issueCmd.AddCommand(issuePullRequestsCmd)
 	issueCmd.AddCommand(issueCreateCmd)
 	issueCmd.AddCommand(issueUpdateCmd)
+	issueCmd.AddCommand(issueChannelCmd)
 	issueCmd.AddCommand(issueAssignCmd)
 	issueCmd.AddCommand(issueStatusCmd)
 	issueCmd.AddCommand(issueCommentCmd)
@@ -291,6 +299,7 @@ func init() {
 	issueCreateCmd.Flags().String("assignee-id", "", "Assignee UUID — member, agent, or squad (mutually exclusive with --assignee)")
 	issueCreateCmd.Flags().String("parent", "", "Parent issue ID")
 	issueCreateCmd.Flags().String("project", "", "Project ID")
+	issueCreateCmd.Flags().String("channel", "", "Group channel ID or name to associate with this issue")
 	issueCreateCmd.Flags().String("start-date", "", "Start date (calendar day, YYYY-MM-DD)")
 	issueCreateCmd.Flags().String("due-date", "", "Due date (calendar day, YYYY-MM-DD)")
 	issueCreateCmd.Flags().StringArray("acceptance-criteria", nil, "One acceptance criterion / definition-of-done item (repeatable). Each is a testable, measurable condition the implementer must meet and the reviewer diffs against — e.g. --acceptance-criteria \"bomb play shows screen-shake + sound + doubling indicator\"")
@@ -310,6 +319,7 @@ func init() {
 	issueUpdateCmd.Flags().String("assignee", "", "New assignee name (member, agent, or squad; fuzzy match)")
 	issueUpdateCmd.Flags().String("assignee-id", "", "New assignee UUID — member, agent, or squad (mutually exclusive with --assignee)")
 	issueUpdateCmd.Flags().String("project", "", "Project ID")
+	issueChannelCmd.Flags().Bool("clear", false, "Clear the associated group")
 	issueUpdateCmd.Flags().String("start-date", "", "New start date (calendar day, YYYY-MM-DD; pass empty string to clear)")
 	issueUpdateCmd.Flags().String("due-date", "", "New due date (calendar day, YYYY-MM-DD)")
 	issueUpdateCmd.Flags().StringArray("acceptance-criteria", nil, "Replace the issue's acceptance criteria / definition of done (repeatable; pass none of the flag to leave unchanged). Spec-owner action — implementers propose changes, they do not lower the bar to pass their own work.")
@@ -720,6 +730,13 @@ func runIssueCreate(cmd *cobra.Command, _ []string) error {
 		}
 		body["project_id"] = project.ID
 	}
+	if v, _ := cmd.Flags().GetString("channel"); v != "" {
+		channelID, err := resolveChannelRef(ctx, client, v)
+		if err != nil {
+			return fmt.Errorf("resolve channel: %w", err)
+		}
+		body["channel_id"] = channelID
+	}
 	if v, _ := cmd.Flags().GetString("start-date"); v != "" {
 		body["start_date"] = v
 	}
@@ -916,6 +933,40 @@ func runIssueUpdate(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	return cli.PrintJSON(os.Stdout, result)
+}
+
+func runIssueChannel(cmd *cobra.Command, args []string) error {
+	clear, _ := cmd.Flags().GetBool("clear")
+	if clear && len(args) == 2 {
+		return fmt.Errorf("group argument and --clear are mutually exclusive")
+	}
+	if !clear && len(args) != 2 {
+		return fmt.Errorf("provide a group ID or name, or use --clear")
+	}
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+
+	issue, err := resolveIssueRef(ctx, client, args[0])
+	if err != nil {
+		return fmt.Errorf("resolve issue: %w", err)
+	}
+	body := map[string]any{"channel_id": nil}
+	if !clear {
+		channelID, err := resolveChannelRef(ctx, client, args[1])
+		if err != nil {
+			return fmt.Errorf("resolve group channel: %w", err)
+		}
+		body["channel_id"] = channelID
+	}
+	var result map[string]any
+	if err := client.PutJSON(ctx, "/api/issues/"+issue.ID+"/channel", body, &result); err != nil {
+		return fmt.Errorf("update issue channel: %w", err)
+	}
 	return cli.PrintJSON(os.Stdout, result)
 }
 

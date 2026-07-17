@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/util"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -288,6 +289,37 @@ type setChannelProjectRequest struct {
 	ProjectID json.RawMessage `json:"project_id"`
 }
 
+// parseChannelProjectBinding validates the nullable channel.project_id payload
+// shared by channel creation and the group-settings endpoint.
+func (h *Handler) parseChannelProjectBinding(w http.ResponseWriter, r *http.Request, workspaceID string, raw json.RawMessage) (pgtype.UUID, bool) {
+	var projectID pgtype.UUID // invalid means no project binding
+	if len(raw) == 0 || string(raw) == "null" {
+		return projectID, true
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid project_id")
+		return projectID, false
+	}
+	if value = strings.TrimSpace(value); value == "" {
+		return projectID, true
+	}
+	parsed, err := util.ParseUUID(value)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid project_id")
+		return projectID, false
+	}
+	project, err := h.Queries.GetProjectInWorkspace(r.Context(), db.GetProjectInWorkspaceParams{
+		ID:          parsed,
+		WorkspaceID: parseUUID(workspaceID),
+	})
+	if err != nil || !project.ID.Valid {
+		writeError(w, http.StatusBadRequest, "project not found")
+		return projectID, false
+	}
+	return parsed, true
+}
+
 // SetChannelProject binds, switches, or clears the channel's project.
 func (h *Handler) SetChannelProject(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
@@ -302,6 +334,9 @@ func (h *Handler) SetChannelProject(w http.ResponseWriter, r *http.Request) {
 	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
 		return
 	}
+	if !h.requireChannelManager(w, r, workspaceID, channelID, parseUUID(userID)) {
+		return
+	}
 	if !h.requireChannelWritable(w, r.Context(), workspaceID, channelID) {
 		return
 	}
@@ -310,30 +345,17 @@ func (h *Handler) SetChannelProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	var projectID pgtype.UUID // zero/invalid → clears the binding (NULL)
-	if len(req.ProjectID) > 0 && string(req.ProjectID) != "null" {
-		var raw string
-		if err := json.Unmarshal(req.ProjectID, &raw); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid project_id")
-			return
-		}
-		if raw = strings.TrimSpace(raw); raw != "" {
-			pid, perr := util.ParseUUID(raw)
-			if perr != nil {
-				writeError(w, http.StatusBadRequest, "invalid project_id")
-				return
-			}
-			proj, gerr := h.Queries.GetProject(r.Context(), pid)
-			if gerr != nil || uuidToString(proj.WorkspaceID) != workspaceID {
-				writeError(w, http.StatusBadRequest, "project not found")
-				return
-			}
-			projectID = pid
-		}
+	if len(req.ProjectID) == 0 {
+		writeError(w, http.StatusBadRequest, "project_id is required; use null to clear")
+		return
+	}
+	projectID, ok := h.parseChannelProjectBinding(w, r, workspaceID, req.ProjectID)
+	if !ok {
+		return
 	}
 	if _, err := h.DB.Exec(r.Context(),
-		`UPDATE channel SET project_id = $2 WHERE id = $1`,
-		channelID, projectID,
+		`UPDATE channel SET project_id = $2, updated_at = now() WHERE id = $1 AND workspace_id = $3`,
+		channelID, projectID, parseUUID(workspaceID),
 	); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update channel project")
 		return
@@ -343,4 +365,86 @@ func (h *Handler) SetChannelProject(w http.ResponseWriter, r *http.Request) {
 		out = uuidToString(projectID)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"project_id": out})
+}
+
+// ProjectChannelResponse is the lightweight reverse projection used by a
+// project's Groups panel. A project owns neither the group nor its members;
+// the relation is only optional discussion context.
+type ProjectChannelResponse struct {
+	ID          string  `json:"id"`
+	WorkspaceID string  `json:"workspace_id"`
+	ProjectID   string  `json:"project_id"`
+	Name        string  `json:"name"`
+	Description *string `json:"description"`
+	Kind        string  `json:"kind"`
+	CreatedAt   string  `json:"created_at"`
+	UpdatedAt   string  `json:"updated_at"`
+}
+
+// ListProjectChannels returns active group channels attached to a project.
+// It deliberately does not imply a new ownership model: it is the inverse of
+// channel.project_id and excludes archived groups from the normal surface.
+func (h *Handler) ListProjectChannels(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := h.resolveWorkspaceID(r)
+	workspaceUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace_id")
+	if !ok {
+		return
+	}
+	projectID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "project id")
+	if !ok {
+		return
+	}
+	if _, err := h.Queries.GetProjectInWorkspace(r.Context(), db.GetProjectInWorkspaceParams{
+		ID:          projectID,
+		WorkspaceID: workspaceUUID,
+	}); err != nil {
+		writeError(w, http.StatusNotFound, "project not found")
+		return
+	}
+
+	rows, err := h.DB.Query(r.Context(), `
+		SELECT ch.id, ch.workspace_id, ch.project_id, ch.name, ch.description, ch.kind, ch.created_at, ch.updated_at
+		FROM channel ch
+		JOIN channel_member cm ON cm.channel_id = ch.id
+		  AND cm.workspace_id = ch.workspace_id
+		  AND cm.member_type = 'user'
+		  AND cm.member_id = $3
+		WHERE ch.workspace_id = $1 AND ch.project_id = $2 AND ch.kind = 'group' AND ch.archived_at IS NULL
+		ORDER BY ch.updated_at DESC, ch.created_at DESC`, workspaceUUID, projectID, parseUUID(userID))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list project channels")
+		return
+	}
+	defer rows.Close()
+
+	out := []ProjectChannelResponse{}
+	for rows.Next() {
+		var id, wsID, pid pgtype.UUID
+		var name, kind string
+		var description pgtype.Text
+		var createdAt, updatedAt pgtype.Timestamptz
+		if err := rows.Scan(&id, &wsID, &pid, &name, &description, &kind, &createdAt, &updatedAt); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to read project channels")
+			return
+		}
+		out = append(out, ProjectChannelResponse{
+			ID:          uuidToString(id),
+			WorkspaceID: uuidToString(wsID),
+			ProjectID:   uuidToString(pid),
+			Name:        name,
+			Description: textToPtr(description),
+			Kind:        kind,
+			CreatedAt:   timestampToString(createdAt),
+			UpdatedAt:   timestampToString(updatedAt),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list project channels")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"channels": out, "total": len(out)})
 }

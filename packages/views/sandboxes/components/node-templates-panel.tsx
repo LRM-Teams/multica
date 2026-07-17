@@ -17,12 +17,12 @@ export function NodeTemplatesPanel({
   nodeOnline: boolean;
 }) {
   const { t } = useT("layout");
-  const query = useQuery(sandboxNodeTemplatesOptions(nodeId));
-  const templates = query.data?.templates ?? [];
-  const syncedAt = query.data?.synced_at;
-  const online = query.data?.node_online === true || nodeOnline;
+  const { data, isLoading, error, refetch } = useQuery(sandboxNodeTemplatesOptions(nodeId));
+  const templates = data?.templates ?? [];
+  const syncedAt = data?.synced_at;
+  const online = data?.node_online === true || nodeOnline;
 
-  if (query.isLoading) {
+  if (isLoading) {
     return (
       <div className="space-y-3 p-5">
         <Skeleton className="h-4 w-48" />
@@ -32,15 +32,15 @@ export function NodeTemplatesPanel({
     );
   }
 
-  if (query.error) {
+  if (error) {
     return (
       <div className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
         <p className="text-sm text-destructive">
-          {query.error instanceof Error
-            ? query.error.message
+          {error instanceof Error
+            ? error.message
             : t(($) => $.sandboxes_page.templates_load_failed)}
         </p>
-        <Button type="button" size="sm" variant="outline" onClick={() => void query.refetch()}>
+        <Button type="button" size="sm" variant="outline" onClick={() => void refetch()}>
           {t(($) => $.sandboxes_page.templates_retry)}
         </Button>
       </div>

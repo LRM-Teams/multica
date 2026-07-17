@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useReducer, useState } from "react";
 import { useDefaultLayout } from "react-resizable-panels";
 import {
   Box,
@@ -131,6 +131,77 @@ function buildRuntimePayload(form: Pick<CreateFormState, "apiKey" | "baseUrl" | 
   return runtime;
 }
 
+type PageUiState = {
+  nodeSearch: string;
+  selectedNodeId: string | null;
+  createDialogOpen: boolean;
+  createForm: CreateFormState;
+  deleteConfirmInstance: SandboxInstance | null;
+  snapshotInstance: SandboxInstance | null;
+  snapshotName: string;
+  snapshotDescription: string;
+  creatingNode: boolean;
+};
+
+type PageUiAction =
+  | { type: "set_node_search"; value: string }
+  | { type: "set_selected_node"; value: string | null }
+  | { type: "open_create"; form: CreateFormState }
+  | { type: "set_create_open"; open: boolean }
+  | { type: "patch_create_form"; patch: Partial<CreateFormState> }
+  | { type: "set_delete_confirm"; instance: SandboxInstance | null }
+  | { type: "open_snapshot"; instance: SandboxInstance }
+  | { type: "close_snapshot" }
+  | { type: "set_snapshot_name"; value: string }
+  | { type: "set_snapshot_description"; value: string }
+  | { type: "set_creating_node"; value: boolean };
+
+function pageUiReducer(state: PageUiState, action: PageUiAction): PageUiState {
+  switch (action.type) {
+    case "set_node_search":
+      return { ...state, nodeSearch: action.value };
+    case "set_selected_node":
+      return { ...state, selectedNodeId: action.value };
+    case "open_create":
+      return { ...state, createDialogOpen: true, createForm: action.form };
+    case "set_create_open":
+      return { ...state, createDialogOpen: action.open };
+    case "patch_create_form":
+      return { ...state, createForm: { ...state.createForm, ...action.patch } };
+    case "set_delete_confirm":
+      return { ...state, deleteConfirmInstance: action.instance };
+    case "open_snapshot":
+      return {
+        ...state,
+        snapshotInstance: action.instance,
+        snapshotName: defaultSandboxSnapshotName(action.instance),
+        snapshotDescription: "",
+      };
+    case "close_snapshot":
+      return { ...state, snapshotInstance: null };
+    case "set_snapshot_name":
+      return { ...state, snapshotName: action.value };
+    case "set_snapshot_description":
+      return { ...state, snapshotDescription: action.value };
+    case "set_creating_node":
+      return { ...state, creatingNode: action.value };
+    default:
+      return state;
+  }
+}
+
+const initialPageUiState: PageUiState = {
+  nodeSearch: "",
+  selectedNodeId: null,
+  createDialogOpen: false,
+  createForm: buildDefaultCreateForm(""),
+  deleteConfirmInstance: null,
+  snapshotInstance: null,
+  snapshotName: "",
+  snapshotDescription: "",
+  creatingNode: false,
+};
+
 export function SandboxesPage() {
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
@@ -142,15 +213,18 @@ export function SandboxesPage() {
     id: "multica_sandboxes_layout",
   });
 
-  const [nodeSearch, setNodeSearch] = useState("");
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [createDialogOpen, setCreateDialogOpen] = useState(false);
-  const [createForm, setCreateForm] = useState<CreateFormState>(() => buildDefaultCreateForm(""));
-  const [deleteConfirmInstance, setDeleteConfirmInstance] = useState<SandboxInstance | null>(null);
-  const [snapshotInstance, setSnapshotInstance] = useState<SandboxInstance | null>(null);
-  const [snapshotName, setSnapshotName] = useState("");
-  const [snapshotDescription, setSnapshotDescription] = useState("");
-  const [creatingNode, setCreatingNode] = useState(false);
+  const [ui, dispatch] = useReducer(pageUiReducer, initialPageUiState);
+  const {
+    nodeSearch,
+    selectedNodeId,
+    createDialogOpen,
+    createForm,
+    deleteConfirmInstance,
+    snapshotInstance,
+    snapshotName,
+    snapshotDescription,
+    creatingNode,
+  } = ui;
 
   const { data: instances = [], isLoading } = useQuery(sandboxListOptions(wsId));
   const { data: bindings = [], isLoading: bindingsLoading } = useQuery(sandboxBindingListOptions(wsId));
@@ -215,9 +289,7 @@ export function SandboxesPage() {
   const createTemplate = useCreateSandboxTemplateMutation(wsId);
 
   const openSnapshotDialog = (instance: SandboxInstance) => {
-    setSnapshotInstance(instance);
-    setSnapshotName(defaultSandboxSnapshotName(instance));
-    setSnapshotDescription("");
+    dispatch({ type: "open_snapshot", instance });
   };
 
   const handleCreateTemplate = async () => {
@@ -230,7 +302,7 @@ export function SandboxesPage() {
         name,
         description: snapshotDescription.trim(),
       });
-      setSnapshotInstance(null);
+      dispatch({ type: "close_snapshot" });
       toast.success(t(($) => $.sandboxes_page.create_template_success));
     } catch (e) {
       toast.error(
@@ -239,40 +311,48 @@ export function SandboxesPage() {
     }
   };
 
-  const createTemplatesQuery = useQuery({
+  const {
+    data: createTemplatesData,
+    isLoading: createTemplatesLoading,
+    error: createTemplatesError,
+  } = useQuery({
     ...sandboxNodeTemplatesOptions(createForm.nodeId),
     enabled: createDialogOpen && !!createForm.nodeId,
   });
-  const createDefaultTemplateId = createTemplatesQuery.data?.default_template_id?.trim() ?? "";
+  const createDefaultTemplateId = createTemplatesData?.default_template_id?.trim() ?? "";
   const createTemplateOptions = useMemo(() => {
-    const templates = createTemplatesQuery.data?.templates ?? [];
+    const templates = createTemplatesData?.templates ?? [];
     if (!createDefaultTemplateId) return templates;
     return templates.filter((item) => item.template_id !== createDefaultTemplateId);
-  }, [createTemplatesQuery.data?.templates, createDefaultTemplateId]);
+  }, [createTemplatesData?.templates, createDefaultTemplateId]);
 
   const openCreateDialog = () => {
-    setCreateForm(buildDefaultCreateForm(selectedBinding?.node_id ?? connectedBindings[0]?.node_id ?? ""));
-    setCreateDialogOpen(true);
+    dispatch({
+      type: "open_create",
+      form: buildDefaultCreateForm(selectedBinding?.node_id ?? connectedBindings[0]?.node_id ?? ""),
+    });
   };
 
   const openCreateFromSnapshot = (snapshot: SandboxSnapshot) => {
-    setCreateForm(buildCreateFormFromSnapshot(snapshot));
-    setCreateDialogOpen(true);
+    dispatch({ type: "open_create", form: buildCreateFormFromSnapshot(snapshot) });
   };
 
   const handleAddNode = async () => {
-    setCreatingNode(true);
+    dispatch({ type: "set_creating_node", value: true });
     try {
       const suffix = Math.random().toString(36).slice(2, 8);
       const node = await api.createSandboxNode({ name: `sandboxd-${suffix}` });
       await api.bindSandboxNode(wsId, { node_id: node.id });
-      await queryClient.invalidateQueries({ queryKey: sandboxKeys.bindings(wsId) });
-      await queryClient.invalidateQueries({ queryKey: sandboxKeys.nodes() });
+      // Invalidate in the background; navigation does not need to wait.
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: sandboxKeys.bindings(wsId) }),
+        queryClient.invalidateQueries({ queryKey: sandboxKeys.nodes() }),
+      ]);
       navigation.push(paths.sandboxNodeSetup(node.id));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : t(($) => $.sandboxes_page.add_node_failed));
     } finally {
-      setCreatingNode(false);
+      dispatch({ type: "set_creating_node", value: false });
     }
   };
 
@@ -286,8 +366,8 @@ export function SandboxesPage() {
         template: resolveCreateSandboxTemplate(createForm.templateId),
         ...(Object.keys(runtime).length > 0 ? { runtime } : {}),
       });
-      setCreateDialogOpen(false);
-      setSelectedNodeId(createForm.nodeId);
+      dispatch({ type: "set_create_open", open: false });
+      dispatch({ type: "set_selected_node", value: createForm.nodeId });
       toast.success(t(($) => $.sandboxes_page.create_success));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : t(($) => $.sandboxes_page.create_failed));
@@ -328,9 +408,9 @@ export function SandboxesPage() {
             bindings={filteredBindings}
             selectedNodeId={resolvedNodeId}
             search={nodeSearch}
-            setSearch={setNodeSearch}
+            setSearch={(value) => dispatch({ type: "set_node_search", value })}
             instancesByNode={instancesByNode}
-            onSelect={setSelectedNodeId}
+            onSelect={(value) => dispatch({ type: "set_selected_node", value })}
           />
           <NodeDetail
             binding={selectedBinding}
@@ -350,7 +430,7 @@ export function SandboxesPage() {
             onStop={(instanceId) => stop.mutate(instanceId)}
             onResume={(instanceId) => resume.mutate(instanceId)}
             onCreateTemplate={openSnapshotDialog}
-            onDelete={setDeleteConfirmInstance}
+            onDelete={(instance) => dispatch({ type: "set_delete_confirm", instance })}
           />
         </div>
       ) : (
@@ -372,9 +452,9 @@ export function SandboxesPage() {
                 bindings={filteredBindings}
                 selectedNodeId={resolvedNodeId}
                 search={nodeSearch}
-                setSearch={setNodeSearch}
+                setSearch={(value) => dispatch({ type: "set_node_search", value })}
                 instancesByNode={instancesByNode}
-                onSelect={setSelectedNodeId}
+                onSelect={(value) => dispatch({ type: "set_selected_node", value })}
                 className="h-full border-b-0 border-r"
               />
             </ResizablePanel>
@@ -398,14 +478,17 @@ export function SandboxesPage() {
                 onStop={(instanceId) => stop.mutate(instanceId)}
                 onResume={(instanceId) => resume.mutate(instanceId)}
                 onCreateTemplate={openSnapshotDialog}
-                onDelete={setDeleteConfirmInstance}
+                onDelete={(instance) => dispatch({ type: "set_delete_confirm", instance })}
               />
             </ResizablePanel>
           </ResizablePanelGroup>
         </div>
       )}
 
-      <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
+      <Dialog
+        open={createDialogOpen}
+        onOpenChange={(open) => dispatch({ type: "set_create_open", open })}
+      >
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>
@@ -425,7 +508,9 @@ export function SandboxesPage() {
               <Input
                 id="sandbox-name"
                 value={createForm.name}
-                onChange={(e) => setCreateForm((current) => ({ ...current, name: e.target.value }))}
+                onChange={(e) =>
+                  dispatch({ type: "patch_create_form", patch: { name: e.target.value } })
+                }
               />
             </div>
             <div className="space-y-2">
@@ -439,11 +524,10 @@ export function SandboxesPage() {
                 <Select
                   value={createForm.nodeId}
                   onValueChange={(value) =>
-                    setCreateForm((current) => ({
-                      ...current,
-                      nodeId: value ?? "",
-                      templateId: "default",
-                    }))
+                    dispatch({
+                      type: "patch_create_form",
+                      patch: { nodeId: value ?? "", templateId: "default" },
+                    })
                   }
                 >
                   <SelectTrigger className="h-9 w-full min-w-0">
@@ -473,13 +557,16 @@ export function SandboxesPage() {
                     {t(($) => $.sandboxes_page.create_from_snapshot_template_hint)}
                   </p>
                 </div>
-              ) : createTemplatesQuery.isLoading ? (
+              ) : createTemplatesLoading ? (
                 <Skeleton className="h-9 w-full" />
               ) : (
                 <Select
                   value={createForm.templateId}
                   onValueChange={(value) =>
-                    setCreateForm((current) => ({ ...current, templateId: value ?? "default" }))
+                    dispatch({
+                      type: "patch_create_form",
+                      patch: { templateId: value ?? "default" },
+                    })
                   }
                 >
                   <SelectTrigger className="h-9 w-full min-w-0">
@@ -504,10 +591,10 @@ export function SandboxesPage() {
                   </SelectContent>
                 </Select>
               )}
-              {!createForm.templateLocked && createTemplatesQuery.error ? (
+              {!createForm.templateLocked && createTemplatesError ? (
                 <p className="text-xs text-destructive">
-                  {createTemplatesQuery.error instanceof Error
-                    ? createTemplatesQuery.error.message
+                  {createTemplatesError instanceof Error
+                    ? createTemplatesError.message
                     : t(($) => $.sandboxes_page.templates_load_failed)}
                 </p>
               ) : null}
@@ -518,25 +605,34 @@ export function SandboxesPage() {
                 type="password"
                 placeholder={t(($) => $.sandboxes_page.api_key_placeholder)}
                 value={createForm.apiKey}
-                onChange={(e) => setCreateForm((current) => ({ ...current, apiKey: e.target.value }))}
+                onChange={(e) =>
+                  dispatch({ type: "patch_create_form", patch: { apiKey: e.target.value } })
+                }
               />
               <Input
                 placeholder={t(($) => $.sandboxes_page.base_url_placeholder)}
                 value={createForm.baseUrl}
-                onChange={(e) => setCreateForm((current) => ({ ...current, baseUrl: e.target.value }))}
+                onChange={(e) =>
+                  dispatch({ type: "patch_create_form", patch: { baseUrl: e.target.value } })
+                }
               />
               <Input
                 placeholder={t(($) => $.sandboxes_page.model_placeholder)}
                 value={createForm.model}
-                onChange={(e) => setCreateForm((current) => ({ ...current, model: e.target.value }))}
+                onChange={(e) =>
+                  dispatch({ type: "patch_create_form", patch: { model: e.target.value } })
+                }
               />
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setCreateDialogOpen(false)}>
+            <Button
+              variant="outline"
+              onClick={() => dispatch({ type: "set_create_open", open: false })}
+            >
               {t(($) => $.sandboxes_page.cancel_action)}
             </Button>
-            <Button onClick={handleCreateSandbox} disabled={!canCreate || create.isPending}>
+            <Button onClick={() => void handleCreateSandbox()} disabled={!canCreate || create.isPending}>
               {create.isPending ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
               {t(($) => $.sandboxes_page.create_action)}
             </Button>
@@ -547,7 +643,7 @@ export function SandboxesPage() {
       <Dialog
         open={!!snapshotInstance}
         onOpenChange={(open) => {
-          if (!open) setSnapshotInstance(null);
+          if (!open) dispatch({ type: "close_snapshot" });
         }}
       >
         <DialogContent className="sm:max-w-lg">
@@ -563,7 +659,7 @@ export function SandboxesPage() {
               <Input
                 id="snapshot-name"
                 value={snapshotName}
-                onChange={(e) => setSnapshotName(e.target.value)}
+                onChange={(e) => dispatch({ type: "set_snapshot_name", value: e.target.value })}
               />
             </div>
             <div className="space-y-2">
@@ -573,14 +669,16 @@ export function SandboxesPage() {
               <Textarea
                 id="snapshot-description"
                 value={snapshotDescription}
-                onChange={(e) => setSnapshotDescription(e.target.value)}
+                onChange={(e) =>
+                  dispatch({ type: "set_snapshot_description", value: e.target.value })
+                }
                 placeholder={t(($) => $.sandboxes_page.snapshot_description_placeholder)}
                 rows={3}
               />
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setSnapshotInstance(null)}>
+            <Button variant="outline" onClick={() => dispatch({ type: "close_snapshot" })}>
               {t(($) => $.sandboxes_page.cancel_action)}
             </Button>
             <Button
@@ -597,7 +695,7 @@ export function SandboxesPage() {
       <AlertDialog
         open={!!deleteConfirmInstance}
         onOpenChange={(open) => {
-          if (!open) setDeleteConfirmInstance(null);
+          if (!open) dispatch({ type: "set_delete_confirm", instance: null });
         }}
       >
         <AlertDialogContent>
@@ -615,7 +713,7 @@ export function SandboxesPage() {
               variant="destructive"
               onClick={() => {
                 if (deleteConfirmInstance) del.mutate(deleteConfirmInstance.id);
-                setDeleteConfirmInstance(null);
+                dispatch({ type: "set_delete_confirm", instance: null });
               }}
             >
               {t(($) => $.sandboxes_page.delete_dialog.confirm)}
@@ -725,22 +823,7 @@ function NodeRow({
   );
 }
 
-function NodeDetail({
-  binding,
-  instances,
-  onCreate,
-  onCreateFromSnapshot,
-  onViewSetup,
-  stoppingId,
-  resumingId,
-  deletingId,
-  creatingTemplateId,
-  onOpen,
-  onStop,
-  onResume,
-  onCreateTemplate,
-  onDelete,
-}: {
+function NodeDetail(props: {
   binding: SandboxBinding | null;
   instances: SandboxInstance[];
   onCreate: () => void;
@@ -757,13 +840,7 @@ function NodeDetail({
   onDelete: (instance: SandboxInstance) => void;
 }) {
   const { t } = useT("layout");
-  const [activeTab, setActiveTab] = useState<NodeDetailTab>("sandboxes");
-
-  useEffect(() => {
-    setActiveTab("sandboxes");
-  }, [binding?.node_id]);
-
-  if (!binding) {
+  if (!props.binding) {
     return (
       <main className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 text-center">
         <Server className="h-8 w-8 text-muted-foreground/40" />
@@ -771,6 +848,43 @@ function NodeDetail({
       </main>
     );
   }
+
+  return <NodeDetailContent key={props.binding.node_id} {...props} binding={props.binding} />;
+}
+
+function NodeDetailContent({
+  binding,
+  instances,
+  onCreate,
+  onCreateFromSnapshot,
+  onViewSetup,
+  stoppingId,
+  resumingId,
+  deletingId,
+  creatingTemplateId,
+  onOpen,
+  onStop,
+  onResume,
+  onCreateTemplate,
+  onDelete,
+}: {
+  binding: SandboxBinding;
+  instances: SandboxInstance[];
+  onCreate: () => void;
+  onCreateFromSnapshot: (snapshot: SandboxSnapshot) => void;
+  onViewSetup: () => void;
+  stoppingId?: string;
+  resumingId?: string;
+  deletingId?: string;
+  creatingTemplateId?: string;
+  onOpen: (instanceId: string) => void;
+  onStop: (instanceId: string) => void;
+  onResume: (instanceId: string) => void;
+  onCreateTemplate: (instance: SandboxInstance) => void;
+  onDelete: (instance: SandboxInstance) => void;
+}) {
+  const { t } = useT("layout");
+  const [activeTab, setActiveTab] = useState<NodeDetailTab>("sandboxes");
 
   const online = binding.node_status === "online";
   const runningCount = instances.filter((instance) => instance.status === "running").length;

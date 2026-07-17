@@ -32,10 +32,10 @@ export function NodeSnapshotsPanel({
 }) {
   const { t } = useT("layout");
   const wsId = useWorkspaceId();
-  const query = useQuery(sandboxNodeSnapshotsOptions(nodeId));
+  const { data, isLoading, error, refetch } = useQuery(sandboxNodeSnapshotsOptions(nodeId));
   const del = useDeleteSandboxSnapshotMutation(wsId, nodeId);
   const [pendingDelete, setPendingDelete] = useState<SandboxSnapshot | null>(null);
-  const snapshots = query.data ?? [];
+  const snapshots = data ?? [];
 
   const handleDelete = async () => {
     if (!pendingDelete) return;
@@ -50,7 +50,7 @@ export function NodeSnapshotsPanel({
     }
   };
 
-  if (query.isLoading) {
+  if (isLoading) {
     return (
       <div className="space-y-3 p-5">
         <Skeleton className="h-4 w-48" />
@@ -60,15 +60,15 @@ export function NodeSnapshotsPanel({
     );
   }
 
-  if (query.error) {
+  if (error) {
     return (
       <div className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
         <p className="text-sm text-destructive">
-          {query.error instanceof Error
-            ? query.error.message
+          {error instanceof Error
+            ? error.message
             : t(($) => $.sandboxes_page.snapshots_load_failed)}
         </p>
-        <Button type="button" size="sm" variant="outline" onClick={() => void query.refetch()}>
+        <Button type="button" size="sm" variant="outline" onClick={() => void refetch()}>
           {t(($) => $.sandboxes_page.templates_retry)}
         </Button>
       </div>

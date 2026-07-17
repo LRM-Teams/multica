@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useMemo, useState } from "react";
 import { Check, Copy, FileCode2, Layers, Loader2, Server } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -35,96 +35,90 @@ type SetupCommandState =
   | { status: "ready"; command: string; configPath: string }
   | { status: "error"; message: string };
 
+const SETUP_LEAF_SKELETON = <Skeleton className="h-4 w-32" />;
+
 function metadataString(metadata: Record<string, unknown> | null | undefined, key: string): string {
   const value = metadata?.[key];
   return typeof value === "string" ? value.trim() : "";
 }
 
-function useSandboxNodeSetupCommand(node: SandboxNode | null): SetupCommandState {
+function SetupLeafNode({ name, status }: { name: string; status: string }) {
+  return (
+    <span className="flex min-w-0 items-center gap-2">
+      <span className="truncate font-medium">{name}</span>
+      <span className="inline-flex shrink-0 items-center gap-1 rounded-md border bg-background px-2 py-0.5 text-xs text-muted-foreground">
+        <span
+          className={cn(
+            "h-1.5 w-1.5 rounded-full",
+            status === "online" ? "bg-success" : "bg-muted-foreground/40",
+          )}
+        />
+        {status}
+      </span>
+    </span>
+  );
+}
+
+function useSandboxNodeSetupCommand(node: SandboxNode): SetupCommandState {
   const workspaceSlug = useRequiredWorkspaceSlug();
   const user = useAuthStore((s) => s.user);
   const { t } = useT("layout");
-  const [state, setState] = useState<SetupCommandState>({ status: "loading" });
+  const {
+    data,
+    isLoading,
+    error,
+  } = useQuery({
+    queryKey: [
+      "sandbox-node-setup-command",
+      node.id,
+      node.node_key,
+      node.name,
+      workspaceSlug,
+      user?.id,
+    ],
+    queryFn: async () => {
+      const token = await api.createSandboxNodeToken(node.id, { name: "sandboxd setup" });
+      const serverUrl = api.getBaseUrl?.() || window.location.origin;
+      return buildSandboxdSetupCommand({
+        serverUrl,
+        nodeToken: token.token,
+        nodeKey: node.node_key,
+        name: node.name,
+        ownerUserId: node.owner_user_id || node.node_key,
+        workspaceSlug,
+        userName: user?.name,
+        userEmail: user?.email,
+        userId: user?.id,
+        metadata: node.metadata,
+      });
+    },
+    staleTime: Infinity,
+    retry: false,
+  });
 
-  useEffect(() => {
-    if (!node) {
-      setState({ status: "loading" });
-      return;
-    }
-
-    let cancelled = false;
-    setState({ status: "loading" });
-
-    void (async () => {
-      try {
-        const token = await api.createSandboxNodeToken(node.id, { name: "sandboxd setup" });
-        if (cancelled) return;
-        const serverUrl = api.getBaseUrl?.() || window.location.origin;
-        const { command, configPath } = buildSandboxdSetupCommand({
-          serverUrl,
-          nodeToken: token.token,
-          nodeKey: node.node_key,
-          name: node.name,
-          ownerUserId: node.owner_user_id || node.node_key,
-          workspaceSlug,
-          userName: user?.name,
-          userEmail: user?.email,
-          userId: user?.id,
-          metadata: node.metadata,
-        });
-        setState({ status: "ready", command, configPath });
-      } catch (e) {
-        if (cancelled) return;
-        setState({
-          status: "error",
-          message: e instanceof Error ? e.message : t(($) => $.sandboxes_page.view_setup_failed),
-        });
-      }
-    })();
-
-    return () => {
-      cancelled = true;
+  if (isLoading) return { status: "loading" };
+  if (error || !data) {
+    return {
+      status: "error",
+      message: error instanceof Error ? error.message : t(($) => $.sandboxes_page.view_setup_failed),
     };
-  }, [node, t, user?.email, user?.id, user?.name, workspaceSlug]);
-
-  return state;
+  }
+  return { status: "ready", command: data.command, configPath: data.configPath };
 }
 
 export function SandboxNodeSetupPage({ nodeId }: { nodeId: string }) {
-  const workspaceSlug = useRequiredWorkspaceSlug();
-  const user = useAuthStore((s) => s.user);
   const paths = useWorkspacePaths();
   const navigation = useNavigation();
   const { t } = useT("layout");
-  const [activeTab, setActiveTab] = useState<SetupTab>("setup");
-  const [copied, setCopied] = useState(false);
-
   const { data: nodes = [], isLoading: nodesLoading } = useQuery(sandboxNodeListOptions());
   const node = nodes.find((item) => item.id === nodeId) ?? null;
-  const setup = useSandboxNodeSetupCommand(node);
-  // Prefer API status; it already applies the server stale window.
-  const nodeStatus = node?.status ?? "offline";
-
-  const handleCopy = async () => {
-    if (setup.status !== "ready") return;
-    if (await copyText(setup.command)) {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
-  };
-
-  useEffect(() => {
-    if (setup.status === "error") {
-      toast.error(setup.message);
-    }
-  }, [setup]);
 
   if (nodesLoading) {
     return (
       <div className="flex h-full min-h-0 flex-col bg-background">
         <BreadcrumbHeader
           segments={[{ href: paths.sandboxes(), label: t(($) => $.sandboxes_page.title) }]}
-          leaf={<Skeleton className="h-4 w-32" />}
+          leaf={SETUP_LEAF_SKELETON}
         />
         <div className="space-y-4 p-6">
           <Skeleton className="h-8 w-64" />
@@ -135,19 +129,16 @@ export function SandboxNodeSetupPage({ nodeId }: { nodeId: string }) {
   }
 
   if (!node) {
+    const notFoundLabel = t(($) => $.sandboxes_page.view_setup_not_found);
     return (
       <div className="flex h-full min-h-0 flex-col bg-background">
         <BreadcrumbHeader
           segments={[{ href: paths.sandboxes(), label: t(($) => $.sandboxes_page.title) }]}
-          leaf={
-            <span className="truncate text-muted-foreground">
-              {t(($) => $.sandboxes_page.view_setup_not_found)}
-            </span>
-          }
+          leaf={notFoundLabel}
         />
         <div className="flex flex-1 flex-col items-center justify-center text-muted-foreground">
           <Server className="mb-3 size-10 text-muted-foreground/40" />
-          <p className="text-sm">{t(($) => $.sandboxes_page.view_setup_not_found)}</p>
+          <p className="text-sm">{notFoundLabel}</p>
           <Button className="mt-4" variant="outline" onClick={() => navigation.push(paths.sandboxes())}>
             {t(($) => $.sandboxes_page.back_to_list)}
           </Button>
@@ -155,6 +146,31 @@ export function SandboxNodeSetupPage({ nodeId }: { nodeId: string }) {
       </div>
     );
   }
+
+  return <SandboxNodeSetupContent key={node.id} node={node} />;
+}
+
+function SandboxNodeSetupContent({ node }: { node: SandboxNode }) {
+  const workspaceSlug = useRequiredWorkspaceSlug();
+  const user = useAuthStore((s) => s.user);
+  const paths = useWorkspacePaths();
+  const { t } = useT("layout");
+  const [activeTab, setActiveTab] = useState<SetupTab>("setup");
+  const [copied, setCopied] = useState(false);
+  const setup = useSandboxNodeSetupCommand(node);
+  const nodeStatus = node.status ?? "offline";
+  const nodeLeaf = useMemo(
+    () => <SetupLeafNode name={node.name} status={nodeStatus} />,
+    [node.name, nodeStatus],
+  );
+
+  const handleCopy = async () => {
+    if (setup.status !== "ready") return;
+    if (await copyText(setup.command)) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
 
   const configPathFallback = buildSandboxdConfigPath({
     workspaceSlug,
@@ -177,20 +193,7 @@ export function SandboxNodeSetupPage({ nodeId }: { nodeId: string }) {
     <div className="flex h-full min-h-0 flex-col bg-background">
       <BreadcrumbHeader
         segments={[{ href: paths.sandboxes(), label: t(($) => $.sandboxes_page.title) }]}
-        leaf={
-          <span className="flex min-w-0 items-center gap-2">
-            <span className="truncate font-medium">{node.name}</span>
-            <span className="inline-flex shrink-0 items-center gap-1 rounded-md border bg-background px-2 py-0.5 text-xs text-muted-foreground">
-              <span
-                className={cn(
-                  "h-1.5 w-1.5 rounded-full",
-                  nodeStatus === "online" ? "bg-success" : "bg-muted-foreground/40",
-                )}
-              />
-              {nodeStatus}
-            </span>
-          </span>
-        }
+        leaf={nodeLeaf}
       />
 
       <div className="flex min-h-0 flex-1 flex-col">
@@ -240,7 +243,7 @@ export function SandboxNodeSetupPage({ nodeId }: { nodeId: string }) {
                     type="button"
                     size="sm"
                     variant="outline"
-                    onClick={handleCopy}
+                    onClick={() => void handleCopy()}
                     disabled={setup.status !== "ready"}
                   >
                     {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
@@ -271,7 +274,7 @@ export function SandboxNodeSetupPage({ nodeId }: { nodeId: string }) {
               </div>
             </div>
           ) : (
-            <DefaultTemplateTab node={node} />
+            <DefaultTemplateTab key={node.id} node={node} />
           )}
         </div>
       </div>
@@ -282,19 +285,22 @@ export function SandboxNodeSetupPage({ nodeId }: { nodeId: string }) {
 function DefaultTemplateTab({ node }: { node: SandboxNode }) {
   const { t } = useT("layout");
   const queryClient = useQueryClient();
-  const templatesQuery = useQuery(sandboxNodeTemplatesOptions(node.id));
+  const {
+    data: templatesData,
+    isLoading,
+    error,
+    refetch,
+  } = useQuery(sandboxNodeTemplatesOptions(node.id));
   const currentDefault =
     metadataString(node.metadata, "cube_template_id") ||
-    templatesQuery.data?.default_template_id ||
+    templatesData?.default_template_id ||
     "";
-  const [selected, setSelected] = useState(currentDefault);
+  // null = follow server default; string = user draft selection.
+  const [draft, setDraft] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const selected = draft ?? currentDefault;
 
-  useEffect(() => {
-    setSelected(currentDefault);
-  }, [currentDefault, node.id]);
-
-  const templates = templatesQuery.data?.templates ?? [];
+  const templates = templatesData?.templates ?? [];
   const options = [...templates];
   if (currentDefault && !options.some((item) => item.template_id === currentDefault)) {
     options.unshift({
@@ -304,7 +310,7 @@ function DefaultTemplateTab({ node }: { node: SandboxNode }) {
     });
   }
 
-  const dirty = selected.trim() !== "" && selected.trim() !== currentDefault;
+  const dirty = draft !== null && draft.trim() !== "" && draft.trim() !== currentDefault;
   const canSave = dirty && !saving;
 
   const handleSave = async () => {
@@ -317,6 +323,7 @@ function DefaultTemplateTab({ node }: { node: SandboxNode }) {
         queryClient.invalidateQueries({ queryKey: sandboxKeys.nodes() }),
         queryClient.invalidateQueries({ queryKey: sandboxKeys.nodeTemplates(node.id) }),
       ]);
+      setDraft(null);
       toast.success(t(($) => $.sandboxes_page.default_template_save_success));
     } catch (e) {
       toast.error(
@@ -344,21 +351,16 @@ function DefaultTemplateTab({ node }: { node: SandboxNode }) {
       <div className="space-y-4 rounded-lg border bg-card p-4">
         <div className="space-y-2">
           <Label>{t(($) => $.sandboxes_page.default_template_label)}</Label>
-          {templatesQuery.isLoading ? (
+          {isLoading ? (
             <Skeleton className="h-9 w-full" />
-          ) : templatesQuery.error ? (
+          ) : error ? (
             <div className="space-y-3">
               <p className="text-sm text-destructive">
-                {templatesQuery.error instanceof Error
-                  ? templatesQuery.error.message
+                {error instanceof Error
+                  ? error.message
                   : t(($) => $.sandboxes_page.templates_load_failed)}
               </p>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => void templatesQuery.refetch()}
-              >
+              <Button type="button" size="sm" variant="outline" onClick={() => void refetch()}>
                 {t(($) => $.sandboxes_page.templates_retry)}
               </Button>
             </div>
@@ -367,7 +369,7 @@ function DefaultTemplateTab({ node }: { node: SandboxNode }) {
               {t(($) => $.sandboxes_page.default_template_empty_options)}
             </p>
           ) : (
-            <Select value={selected} onValueChange={(value) => setSelected(value ?? "")}>
+            <Select value={selected} onValueChange={(value) => setDraft(value ?? "")}>
               <SelectTrigger>
                 <SelectValue placeholder={t(($) => $.sandboxes_page.default_template_placeholder)} />
               </SelectTrigger>
@@ -389,7 +391,7 @@ function DefaultTemplateTab({ node }: { node: SandboxNode }) {
           <p className="text-xs text-muted-foreground">
             {t(($) => $.sandboxes_page.default_template_sync_hint)}
           </p>
-          <Button type="button" size="sm" onClick={handleSave} disabled={!canSave}>
+          <Button type="button" size="sm" onClick={() => void handleSave()} disabled={!canSave}>
             {saving ? <Loader2 className="mr-2 size-3.5 animate-spin" /> : null}
             {t(($) => $.sandboxes_page.default_template_save_action)}
           </Button>

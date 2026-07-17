@@ -254,6 +254,28 @@ func TestCreateIssueWithGroupChannelDoesNotInferProjectAndCanClearAnchor(t *test
 	if count != 0 {
 		t.Fatalf("anchor count = %d, want 0 after clear", count)
 	}
+
+	reset := httptest.NewRecorder()
+	resetReq := newRequest("PUT", "/api/issues/"+created.ID+"/channel?workspace_id="+testWorkspaceID, map[string]any{"channel_id": replacementChannelID})
+	resetReq = withURLParam(resetReq, "id", created.ID)
+	testHandler.SetIssueSourceChannel(reset, resetReq)
+	if reset.Code != http.StatusOK {
+		t.Fatalf("SetIssueSourceChannel reset = %d: %s", reset.Code, reset.Body.String())
+	}
+
+	nullClear := httptest.NewRecorder()
+	nullClearReq := newRequest("PUT", "/api/issues/"+created.ID+"/channel?workspace_id="+testWorkspaceID, map[string]any{"channel_id": nil})
+	nullClearReq = withURLParam(nullClearReq, "id", created.ID)
+	testHandler.SetIssueSourceChannel(nullClear, nullClearReq)
+	if nullClear.Code != http.StatusOK {
+		t.Fatalf("SetIssueSourceChannel null clear = %d: %s", nullClear.Code, nullClear.Body.String())
+	}
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM issue_source_message WHERE issue_id = $1`, created.ID).Scan(&count); err != nil {
+		t.Fatalf("count null-cleared anchors: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("anchor count = %d, want 0 after null clear", count)
+	}
 }
 
 func TestSourceExcerptReferencePartsKeepsOnlyWholeVisibleAnchors(t *testing.T) {

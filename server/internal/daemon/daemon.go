@@ -171,6 +171,10 @@ type Daemon struct {
 
 	runner             taskRunner    // executes agent tasks; set to d.runTask by New(), overridable in tests
 	cancelPollInterval time.Duration // how often handleTask polls for server-side cancellation; overridable in tests
+	// Chat transport seams keep the fail-closed setup gate testable without
+	// changing process-global executable resolution or filesystem state.
+	resolveExecutable   func() (string, error)
+	prepareCLITransport func(Config, string, string, string, string, string) (string, string, error)
 	// runUpdateFn executes the release-download upgrade. Set to d.runUpdate by
 	// New() and overridable in tests so the auto-update poller can be exercised
 	// without touching the real network.
@@ -3390,7 +3394,15 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	cliWrapperDir := ""
 	cliTokenFile := ""
 	cliBinDir := ""
-	selfBin, err := os.Executable()
+	resolveExecutable := d.resolveExecutable
+	if resolveExecutable == nil {
+		resolveExecutable = os.Executable
+	}
+	prepareCLITransport := d.prepareCLITransport
+	if prepareCLITransport == nil {
+		prepareCLITransport = prepareTaskCLITransport
+	}
+	selfBin, err := resolveExecutable()
 	if err != nil {
 		if chatTask {
 			return transportUnavailableResult("resolve_multica_executable", err), nil
@@ -3404,7 +3416,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			}
 			taskLog.Warn("agent cli transport: no run bearer token available; CLI API calls will require external auth")
 		} else {
-			wrapperDir, tokenFile, err := prepareTaskCLITransport(d.cfg, task.WorkspaceID, agentID, task.ID, selfBin, agentToken)
+			wrapperDir, tokenFile, err := prepareCLITransport(d.cfg, task.WorkspaceID, agentID, task.ID, selfBin, agentToken)
 			if err != nil {
 				if chatTask {
 					return transportUnavailableResult("prepare_task_cli_wrapper", err), nil

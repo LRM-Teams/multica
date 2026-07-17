@@ -1045,6 +1045,7 @@ func (h *Handler) seedAgentInitialContext(r *http.Request, agent db.Agent, initi
 
 type UpdateAgentRequest struct {
 	Name          *string `json:"name"`
+	Username      *string `json:"username"`
 	DisplayName   *string `json:"display_name"`
 	Description   *string `json:"description"`
 	Instructions  *string `json:"instructions"`
@@ -1269,6 +1270,13 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	params := db.UpdateAgentParams{
 		ID: existing.ID,
 	}
+	if req.Username != nil {
+		if err := validateIdentityHandle(*req.Username); err != nil {
+			writeError(w, http.StatusBadRequest, "username must be 1-32 lowercase letters, digits, or hyphens")
+			return
+		}
+		params.Name = pgtype.Text{String: *req.Username, Valid: true}
+	}
 	if req.Name != nil {
 		displayName := strings.TrimSpace(*req.Name)
 		if displayName == "" {
@@ -1435,6 +1443,10 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 
 	updated, err := h.Queries.UpdateAgent(r.Context(), params)
 	if err != nil {
+		if identityUniqueViolation(err, "agent_workspace_name_unique") {
+			writeError(w, http.StatusConflict, "username is already in use")
+			return
+		}
 		slog.Warn("update agent failed", append(logger.RequestAttrs(r), "error", err, "agent_id", id)...)
 		writeError(w, http.StatusInternalServerError, "failed to update agent: "+err.Error())
 		return

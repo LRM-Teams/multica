@@ -512,6 +512,8 @@ export interface CreateAgentFromTemplateFailure {
 export interface UpdateAgentRequest {
   /** Legacy rename input; updates display_name, not the stable handle. */
   name?: string;
+  /** Stable lowercase ASCII mention handle. Owner/admin only. */
+  username?: string;
   /** Preferred human-facing label for new clients. */
   display_name?: string;
   description?: string;

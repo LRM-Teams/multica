@@ -775,6 +775,51 @@ func TestUpdateAgent_LegacyNameRenamesDisplayOnly(t *testing.T) {
 	}
 }
 
+func TestUpdateAgent_UsernameChangesHandle(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	marker := "username-update-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+	createRec := httptest.NewRecorder()
+	testHandler.CreateAgent(createRec, newRequest(http.MethodPost, "/api/agents", map[string]any{
+		"name":                 "贝克汉姆",
+		"description":          marker,
+		"runtime_id":           testRuntimeID,
+		"visibility":           "private",
+		"max_concurrent_tasks": 1,
+	}))
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("CreateAgent: expected 201, got %d: %s", createRec.Code, createRec.Body.String())
+	}
+	var created AgentResponse
+	if err := json.NewDecoder(createRec.Body).Decode(&created); err != nil {
+		t.Fatalf("decode created agent: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, parseUUID(created.ID))
+	})
+
+	updateRec := httptest.NewRecorder()
+	request := withURLParam(newRequest(http.MethodPut, "/api/agents/"+created.ID, map[string]any{
+		"username": "beckham-eng",
+	}), "id", created.ID)
+	testHandler.UpdateAgent(updateRec, request)
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("UpdateAgent: expected 200, got %d: %s", updateRec.Code, updateRec.Body.String())
+	}
+	var updated AgentResponse
+	if err := json.NewDecoder(updateRec.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode updated agent: %v", err)
+	}
+	if updated.Name != "beckham-eng" {
+		t.Fatalf("username = %q, want beckham-eng", updated.Name)
+	}
+	if updated.DisplayName != "贝克汉姆" {
+		t.Fatalf("display_name = %q, want 贝克汉姆", updated.DisplayName)
+	}
+}
+
 func TestWorkspaceAlwaysRedactSecrets(t *testing.T) {
 	tests := []struct {
 		name     string

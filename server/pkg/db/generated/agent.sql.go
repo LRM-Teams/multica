@@ -2998,21 +2998,22 @@ func (q *Queries) StartAgentTask(ctx context.Context, id pgtype.UUID) (AgentTask
 
 const updateAgent = `-- name: UpdateAgent :one
 UPDATE agent SET
-    display_name = COALESCE($2, display_name),
-    description = COALESCE($3, description),
-    avatar_url = COALESCE($4, avatar_url),
-    runtime_config = COALESCE($5, runtime_config),
-    runtime_mode = COALESCE($6, runtime_mode),
-    runtime_id = COALESCE($7, runtime_id),
-    visibility = COALESCE($8, visibility),
-    status = COALESCE($9, status),
-    max_concurrent_tasks = COALESCE($10, max_concurrent_tasks),
-    instructions = COALESCE($11, instructions),
-    custom_env = COALESCE($12, custom_env),
-    custom_args = COALESCE($13, custom_args),
-    mcp_config = COALESCE($14, mcp_config),
-    model = COALESCE($15, model),
-    thinking_level = COALESCE($16, thinking_level),
+    name = COALESCE($2, name),
+    display_name = COALESCE($3, display_name),
+    description = COALESCE($4, description),
+    avatar_url = COALESCE($5, avatar_url),
+    runtime_config = COALESCE($6, runtime_config),
+    runtime_mode = COALESCE($7, runtime_mode),
+    runtime_id = COALESCE($8, runtime_id),
+    visibility = COALESCE($9, visibility),
+    status = COALESCE($10, status),
+    max_concurrent_tasks = COALESCE($11, max_concurrent_tasks),
+    instructions = COALESCE($12, instructions),
+    custom_env = COALESCE($13, custom_env),
+    custom_args = COALESCE($14, custom_args),
+    mcp_config = COALESCE($15, mcp_config),
+    model = COALESCE($16, model),
+    thinking_level = COALESCE($17, thinking_level),
     updated_at = now()
 WHERE id = $1
 RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name
@@ -3020,6 +3021,7 @@ RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visi
 
 type UpdateAgentParams struct {
 	ID                 pgtype.UUID `json:"id"`
+	Name               pgtype.Text `json:"name"`
 	DisplayName        pgtype.Text `json:"display_name"`
 	Description        pgtype.Text `json:"description"`
 	AvatarUrl          pgtype.Text `json:"avatar_url"`
@@ -3040,6 +3042,7 @@ type UpdateAgentParams struct {
 func (q *Queries) UpdateAgent(ctx context.Context, arg UpdateAgentParams) (Agent, error) {
 	row := q.db.QueryRow(ctx, updateAgent,
 		arg.ID,
+		arg.Name,
 		arg.DisplayName,
 		arg.Description,
 		arg.AvatarUrl,

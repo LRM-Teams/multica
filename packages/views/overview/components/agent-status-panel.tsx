@@ -12,6 +12,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@multica/ui/components
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { cn } from "@multica/ui/lib/utils";
 import { agentColor } from "../../common/agent-color";
+import { stripMentionMarkdown } from "../../common/strip-mention-markdown";
 import { AppLink } from "../../navigation";
 import { useT, useTimeAgo } from "../../i18n";
 
@@ -47,11 +48,19 @@ function TaskRow({ task, name }: { task: AgentTaskFeedItem; name: string }) {
   // What the agent actually did, best source first: its own instruction, then
   // the linked issue's title, then the chat session's topic. Generic fallback
   // so a row never reads as just "<agent> completed".
-  const description =
+  //
+  // These are author-sourced strings (an agent's own trigger instruction, an
+  // issue/chat title) that still carry mention markdown like
+  // `[@Nash](mention://agent/id)`. This row is a single-line truncated preview
+  // inside a jump `AppLink`, so — like the agent Activity timeline (#387) — we
+  // normalize mentions to their display name (`@Nash`) rather than leak the raw
+  // `mention://` URI; real markdown links (`[docs](https://…)`) are untouched.
+  const description = stripMentionMarkdown(
     task.trigger_summary ||
-    task.issue_title ||
-    task.chat_title ||
-    t(($) => $.agent_status.fallback_task);
+      task.issue_title ||
+      task.chat_title ||
+      t(($) => $.agent_status.fallback_task),
+  );
 
   const inner = (
     <>

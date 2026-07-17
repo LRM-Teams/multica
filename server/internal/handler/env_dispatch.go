@@ -849,11 +849,24 @@ func (a *envDispatchDepsAdapter) ValidateBranchMessageSource(ctx context.Context
 	if !sameEnvDispatchRoster(sourceIDs, roster.AgentIDs) {
 		return service.ValidatedBranchMessageSource{}, fmt.Errorf("requested agent roster differs from source channel")
 	}
+	// Resolve the trigger agent's source binding so the branch can clone its
+	// sandbox state. A ready source binding (sandbox_instance_id set) is the
+	// clone source; a non-ready binding means the trigger agent creates from its
+	// saved policy instead. A missing binding is inconsistent source state.
+	sourceBinding, err := (envDispatchChannelStore{}).binding(ctx, a.h.DB, envID, trigger.AgentID)
+	if err != nil {
+		return service.ValidatedBranchMessageSource{}, fmt.Errorf("load source trigger binding: %w", err)
+	}
+	var sourceSandboxID string
+	if sourceBinding.SandboxInstanceID != nil {
+		sourceSandboxID = *sourceBinding.SandboxInstanceID
+	}
 	return service.ValidatedBranchMessageSource{
-		SourceEnvID:     envID,
-		SourceProjectID: projectID,
-		SourceChannelID: trigger.ChannelID,
-		Roster:          roster,
+		SourceEnvID:                    envID,
+		SourceProjectID:                projectID,
+		SourceChannelID:                trigger.ChannelID,
+		Roster:                         roster,
+		TriggerSourceSandboxInstanceID: sourceSandboxID,
 		Trigger: service.EnvCollaborationTrigger{
 			AgentID:             trigger.AgentID,
 			Kind:                trigger.Kind,

@@ -140,7 +140,38 @@ func (h *Handler) provisionEnvDispatchAgent(ctx context.Context, in ProvisionEnv
 	if lifecycle == nil {
 		return cleanup(fmt.Errorf("sandbox lifecycle unavailable"))
 	}
-	ref, err := lifecycle.Create(ctx, service.CreateSandboxInstanceInput{WorkspaceID: in.WorkspaceID, Template: config.Template, DaemonEnabled: true, RuntimeEnv: map[string]string{"MULTICA_DAEMON_ID": daemonID}}, in.UserID)
+	createInput := service.CreateSandboxInstanceInput{
+		WorkspaceID:   in.WorkspaceID,
+		Template:      config.Template,
+		DaemonEnabled: true,
+		RuntimeEnv:    map[string]string{"MULTICA_DAEMON_ID": daemonID},
+	}
+	// A branch trigger (or a copied binding that carried a source sandbox)
+	// clones the source filesystem so the agent resumes with its state. A
+	// scratch leader / first-mentioned peer with no source creates from policy.
+	sourceID := in.SourceSandboxInstanceID
+	if sourceID == "" && binding.SourceSandboxInstanceID != nil {
+		sourceID = *binding.SourceSandboxInstanceID
+	}
+	var ref service.SandboxInstanceRef
+	if sourceID != "" {
+		createJSON, mErr := json.Marshal(createInput)
+		if mErr != nil {
+			return cleanup(fmt.Errorf("encode clone create payload: %w", mErr))
+		}
+		ref, err = lifecycle.CloneSandboxInstance(ctx,
+			service.SandboxInstanceRef{WorkspaceID: in.WorkspaceID, InstanceID: sourceID},
+			service.CloneSandboxInstanceInput{
+				WorkspaceID:   in.WorkspaceID,
+				EnvID:         in.EnvID,
+				AgentID:       in.AgentID,
+				RuntimeID:     runtimeID,
+				DaemonID:      daemonID,
+				CreatePayload: createJSON,
+			}, in.UserID)
+	} else {
+		ref, err = lifecycle.Create(ctx, createInput, in.UserID)
+	}
 	if err != nil {
 		return cleanup(err)
 	}

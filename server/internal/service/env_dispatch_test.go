@@ -124,6 +124,10 @@ type fakeEnvDispatchDeps struct {
 	channelMessages     []string
 	channelRuns         []ChannelRunInput
 	triggers            []EnvCollaborationTrigger
+	provisionCalls      []EnvDispatchAgentProvisionInput
+	branchTrigger       EnvCollaborationTrigger
+	branchSourceSandbox string
+	copyMessageIDs      map[string]string
 }
 
 func newFakeEnvDispatchDeps() *fakeEnvDispatchDeps {
@@ -156,6 +160,9 @@ func (f *fakeEnvDispatchDeps) DeleteChannel(_ context.Context, _, channelID stri
 	return nil
 }
 func (f *fakeEnvDispatchDeps) ProvisionEnvDispatchAgent(ctx context.Context, in EnvDispatchAgentProvisionInput) (EnvDispatchAgentProvisionResult, error) {
+	f.mu.Lock()
+	f.provisionCalls = append(f.provisionCalls, in)
+	f.mu.Unlock()
 	runtimeID, daemonID, err := f.PrecreateAgentRuntime(ctx, in.WorkspaceID, in.UserID, in.AgentID)
 	if err != nil {
 		return EnvDispatchAgentProvisionResult{}, err
@@ -193,14 +200,42 @@ func (f *fakeEnvDispatchDeps) ValidateBranchMessageSource(_ context.Context, _, 
 	if f.branchMessageValidationErr != nil {
 		return ValidatedBranchMessageSource{}, f.branchMessageValidationErr
 	}
-	return ValidatedBranchMessageSource{SourceEnvID: envID, SourceProjectID: projectID, SourceChannelID: "source-channel", Roster: roster}, nil
+	leader := roster.LeaderID
+	if leader == "" {
+		leader = "trigger-agent"
+	}
+	trigger := f.branchTrigger
+	if trigger.AgentID == "" {
+		trigger = EnvCollaborationTrigger{
+			AgentID:         leader,
+			Kind:            "channel_message",
+			ChannelID:       "source-channel",
+			ProjectID:       projectID,
+			ChatSessionID:   "source-sess-1",
+			SourceMessageID: "source-msg-1",
+			TaskID:          "source-task-1",
+			RuntimeID:       "source-runtime-1",
+		}
+	}
+	return ValidatedBranchMessageSource{
+		SourceEnvID:                    envID,
+		SourceProjectID:                projectID,
+		SourceChannelID:                "source-channel",
+		Roster:                         roster,
+		Trigger:                        trigger,
+		TriggerSourceSandboxInstanceID: f.branchSourceSandbox,
+	}, nil
 }
 func (f *fakeEnvDispatchDeps) CopyEnvDispatchChannel(_ context.Context, _ string, sourceChannelID, destinationProjectID, _ string) (ChannelCopyMap, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	id := "copied-" + sourceChannelID
 	f.channels[id] = destinationProjectID
-	return ChannelCopyMap{ChannelID: id, MessageIDs: map[string]string{}}, nil
+	msgIDs := f.copyMessageIDs
+	if msgIDs == nil {
+		msgIDs = map[string]string{"source-msg-1": "copied-msg-1"}
+	}
+	return ChannelCopyMap{ChannelID: id, MessageIDs: msgIDs}, nil
 }
 
 func (f *fakeEnvDispatchDeps) GetEnv(_ context.Context, envID, _ string) (Env, error) {
@@ -607,7 +642,6 @@ func TestDispatch_BranchSelfPlayMessage_N2(t *testing.T) {
 	// §7.4: branch+self_play requires the source project to have exactly one
 	// chat session. Seed it so validateBranchSource passes.
 	f.chatSess["source-sess-1"] = "source-proj-1"
-	sessionsBefore := len(f.chatSess)
 
 	svc := NewEnvDispatchService(f, 8)
 	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
@@ -626,15 +660,168 @@ func TestDispatch_BranchSelfPlayMessage_N2(t *testing.T) {
 		if r.EnvID == stateEnv {
 			t.Fatalf("rollout %d: env_id should be forked, not reused", i)
 		}
-		// branch appends to the COPIED session, not a freshly created one (spec §7.3).
-		if r.ChatSessionID != "copied-sess-1" {
-			t.Fatalf("rollout %d: want copied session, got %s", i, r.ChatSessionID)
+		if r.ChannelID == "" {
+			t.Fatalf("rollout %d: missing channel_id", i)
+		}
+		// Branch resumes on the trigger agent's freshly provisioned channel
+		// session, not the copied project chat session.
+		if r.ChatSessionID == "" || r.ChatSessionID == "copied-sess-1" {
+			t.Fatalf("rollout %d: want provisioned channel session, got %q", i, r.ChatSessionID)
+		}
+		if r.AgentRunID == "" {
+			t.Fatalf("rollout %d: missing channel run", i)
 		}
 	}
-	// No new "sess-*" session should be created for branch (append only): the
-	// only session present is the seeded source session.
-	if len(f.chatSess) != sessionsBefore {
-		t.Fatalf("branch must not create new sessions, got %d (want %d)", len(f.chatSess), sessionsBefore)
+	// Branch enqueues a channel run + saves a remapped trigger per rollout.
+	if len(f.channelRuns) != 2 {
+		t.Fatalf("want 2 channel runs, got %d", len(f.channelRuns))
+	}
+	if len(f.triggers) != 2 {
+		t.Fatalf("want 2 saved triggers, got %d", len(f.triggers))
+	}
+	if _, ok := f.envs[stateEnv]; !ok {
+		t.Fatal("source env must remain intact (re-branchable)")
+	}
+}
+
+func TestBranchWakesOnlyTriggerAgentWithClonedSandbox(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	const stateEnv = "state-env-1"
+	f.envs[stateEnv] = Env{ID: stateEnv, SandboxIDs: []string{"state-sbx"}, Mode: EnvModeBranch, Domain: EnvDomainSelfPlay}
+	f.projects["source-proj-1"] = stateEnv
+	f.chatSess["source-sess-1"] = "source-proj-1"
+	// Squad roster: leader + two peers. The trigger selects the leader only.
+	f.messageRoster = MessageRoster{LeaderID: "leader", AgentIDs: []string{"leader", "peerA", "peerB"}}
+	f.branchTrigger = EnvCollaborationTrigger{
+		AgentID: "leader", Kind: "channel_message", ChannelID: "source-channel",
+		ProjectID: "source-proj-1", ChatSessionID: "source-sess-1",
+		SourceMessageID: "source-msg-1", TaskID: "source-task-1", RuntimeID: "source-runtime-1",
+	}
+	f.branchSourceSandbox = "source-sandbox-leader"
+
+	svc := NewEnvDispatchService(f, 1)
+	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", Mode: EnvModeBranch, EnvID: stateEnv,
+		SourceProjectID: "source-proj-1",
+		Domain:          EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
+		SquadID: "squad-1", Message: &MessageInput{Content: "continue"},
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	r := res.Rollouts[0]
+	// Only the trigger agent is provisioned, with its source sandbox marked for clone.
+	if len(f.provisionCalls) != 1 || f.provisionCalls[0].AgentID != "leader" {
+		t.Fatalf("want 1 provision call for leader, got %+v", f.provisionCalls)
+	}
+	if f.provisionCalls[0].SourceSandboxInstanceID != "source-sandbox-leader" {
+		t.Fatalf("want clone source sandbox, got %q", f.provisionCalls[0].SourceSandboxInstanceID)
+	}
+	// Exactly one channel run for the trigger agent, on the provisioned runtime
+	// (not the agent default and not the source runtime).
+	if len(f.channelRuns) != 1 || f.channelRuns[0].AgentID != "leader" {
+		t.Fatalf("want 1 channel run for leader, got %+v", f.channelRuns)
+	}
+	if f.channelRuns[0].RuntimeID == "" || f.channelRuns[0].RuntimeID == "source-runtime-1" {
+		t.Fatalf("channel run must use the new provisioned runtime, got %q", f.channelRuns[0].RuntimeID)
+	}
+	// Leader ready, peers pending (lazy first-mention provisioning).
+	if r.AgentSandboxes["leader"].Status != "ready" {
+		t.Fatalf("leader should be ready, got %q", r.AgentSandboxes["leader"].Status)
+	}
+	for _, peer := range []string{"peerA", "peerB"} {
+		if r.AgentSandboxes[peer].Status != "pending" {
+			t.Fatalf("peer %s should be pending, got %q", peer, r.AgentSandboxes[peer].Status)
+		}
+	}
+}
+
+func TestBranchLeavesNonTriggeredAgentsPendingWithCloneSources(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	const stateEnv = "state-env-1"
+	f.envs[stateEnv] = Env{ID: stateEnv, SandboxIDs: []string{"state-sbx"}, Mode: EnvModeBranch, Domain: EnvDomainSelfPlay}
+	f.projects["source-proj-1"] = stateEnv
+	f.chatSess["source-sess-1"] = "source-proj-1"
+	f.messageRoster = MessageRoster{LeaderID: "leader", AgentIDs: []string{"leader", "peerA", "peerB"}}
+	f.branchTrigger = EnvCollaborationTrigger{
+		AgentID: "leader", Kind: "channel_message", ChannelID: "source-channel",
+		ProjectID: "source-proj-1", ChatSessionID: "source-sess-1",
+		SourceMessageID: "source-msg-1", TaskID: "source-task-1", RuntimeID: "source-runtime-1",
+	}
+
+	svc := NewEnvDispatchService(f, 1)
+	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", Mode: EnvModeBranch, EnvID: stateEnv,
+		SourceProjectID: "source-proj-1",
+		Domain:          EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
+		SquadID: "squad-1", Message: &MessageInput{Content: "go"},
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	r := res.Rollouts[0]
+	// Peers are not provisioned (lazy on first mention) and stay pending with no sandbox.
+	if len(f.provisionCalls) != 1 {
+		t.Fatalf("want exactly 1 provision call (trigger only), got %d", len(f.provisionCalls))
+	}
+	for _, peer := range []string{"peerA", "peerB"} {
+		st, ok := r.AgentSandboxes[peer]
+		if !ok || st.Status != "pending" || st.SandboxInstanceID != "" {
+			t.Fatalf("peer %s should be pending with no sandbox, got %+v", peer, st)
+		}
+	}
+}
+
+func TestBranchAppendsNewMessageWithoutChangingTriggerAgent(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	const stateEnv = "state-env-1"
+	f.envs[stateEnv] = Env{ID: stateEnv, SandboxIDs: []string{"state-sbx"}, Mode: EnvModeBranch, Domain: EnvDomainSelfPlay}
+	f.projects["source-proj-1"] = stateEnv
+	f.chatSess["source-sess-1"] = "source-proj-1"
+	f.messageRoster = MessageRoster{LeaderID: "leader", AgentIDs: []string{"leader", "peerA"}}
+	f.branchTrigger = EnvCollaborationTrigger{
+		AgentID: "leader", Kind: "channel_message", ChannelID: "source-channel",
+		ProjectID: "source-proj-1", ChatSessionID: "source-sess-1",
+		SourceMessageID: "source-msg-1", TaskID: "source-task-1", RuntimeID: "source-runtime-1",
+	}
+
+	svc := NewEnvDispatchService(f, 1)
+	_, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", Mode: EnvModeBranch, EnvID: stateEnv,
+		SourceProjectID: "source-proj-1",
+		Domain:          EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
+		SquadID: "squad-1", Message: &MessageInput{Content: "follow-up question"},
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	// The request content is appended as nondispatching channel context.
+	if len(f.channelMessages) != 1 || f.channelMessages[0] != "follow-up question" {
+		t.Fatalf("want one appended channel message with request content, got %v", f.channelMessages)
+	}
+	// The trigger agent is the one woken (unchanged by the appended content).
+	if len(f.provisionCalls) != 1 || f.provisionCalls[0].AgentID != "leader" {
+		t.Fatalf("trigger agent should remain leader, got %+v", f.provisionCalls)
+	}
+	if len(f.channelRuns) != 1 || f.channelRuns[0].AgentID != "leader" {
+		t.Fatalf("channel run should target the trigger agent, got %+v", f.channelRuns)
+	}
+	// The saved trigger is remapped onto the destination channel, with a fresh task/runtime.
+	if len(f.triggers) != 1 {
+		t.Fatalf("want 1 saved trigger, got %d", len(f.triggers))
+	}
+	saved := f.triggers[0]
+	if saved.AgentID != "leader" || saved.ChannelID == "source-channel" {
+		t.Fatalf("saved trigger should be leader on destination channel, got %+v", saved)
+	}
+	if saved.TaskID == "" || saved.TaskID == "source-task-1" {
+		t.Fatalf("saved trigger must use the new task id, got %q", saved.TaskID)
+	}
+	if saved.RuntimeID == "" || saved.RuntimeID == "source-runtime-1" {
+		t.Fatalf("saved trigger must use the new runtime id, got %q", saved.RuntimeID)
+	}
+	if saved.SourceMessageID != "copied-msg-1" {
+		t.Fatalf("saved trigger source_message_id must be remapped to copied id, got %q", saved.SourceMessageID)
 	}
 }
 

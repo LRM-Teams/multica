@@ -167,6 +167,12 @@ type EnvRollout struct {
 	// AgentSandboxRefs maps agent_id -> its sandbox_instance ref when per-agent
 	// env specs are used. Empty for default/shared sandbox assignment.
 	AgentSandboxRefs map[string]SandboxInstanceRef
+
+	// channelMessageIDs carries the copied channel's source->destination message
+	// ID map from reset into dispatch, so a branch can remap the source trigger's
+	// source_message_id / thread_root_message_id onto the destination channel.
+	// Unexported: it is not part of the idempotency-replay JSON.
+	channelMessageIDs map[string]string
 }
 
 // EnvDispatchResult wraps the rollouts slice.
@@ -299,6 +305,12 @@ type ValidatedBranchMessageSource struct {
 	SourceEnvID, SourceProjectID, SourceChannelID string
 	Roster                                        MessageRoster
 	Trigger                                       EnvCollaborationTrigger
+	// TriggerSourceSandboxInstanceID is the source env's ready sandbox_instance
+	// for the trigger agent (empty when the source binding was not ready). The
+	// branch dispatch passes it to ProvisionEnvDispatchAgent so the trigger
+	// agent's sandbox is cloned from the source state instead of created from
+	// the saved policy. Empty ⇒ first-mention-style creation.
+	TriggerSourceSandboxInstanceID string
 }
 
 type ChannelCopyMap struct {
@@ -778,11 +790,13 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 	var forked []string
 	var sandboxRefs []SandboxInstanceRef
 	var agentSandboxRefs map[string]SandboxInstanceRef
-	reserveMessageEnv := in.DispatchType == EnvDispatchMessage && in.Mode == EnvModeScratch
+	reserveMessageEnv := in.DispatchType == EnvDispatchMessage
 	if reserveMessageEnv {
-		// The leader's sandbox belongs to its channel binding. Reserve the env
-		// first so provisioning can persist that binding, then attach the exact
-		// binding sandbox in dispatchScratchChannelMessage.
+		// A message rollout's sandboxes belong to per-agent channel bindings
+		// (the leader for scratch, the trigger agent for branch). Reserve the
+		// env with no sandboxes so dispatch can attach the exact binding sandbox
+		// after provisioning; never Fleet-fork the source sandbox set, which for
+		// a message env is a sandbox_instance Fleet cannot fork.
 		forked = []string{}
 	} else if s.useSandboxInstanceBackend(in) {
 		leaderID := in.AgentID
@@ -855,6 +869,7 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 			return EnvRollout{}, fmt.Errorf("copy env-dispatch channel: %w", err)
 		}
 		r.ChannelID = copyMap.ChannelID
+		r.channelMessageIDs = copyMap.MessageIDs
 		if sessionID := chatSessionIDMap[in.BranchMessageSource.Trigger.ChatSessionID]; sessionID != "" {
 			r.ChatSessionID = sessionID
 		}
@@ -1042,6 +1057,10 @@ func (s *EnvDispatchService) dispatchOne(ctx context.Context, in EnvDispatchInpu
 		s.dispatchScratchChannelMessage(ctx, in, r, idx)
 		return
 	}
+	if in.DispatchType == EnvDispatchMessage && in.Mode == EnvModeBranch && r.ChannelID != "" {
+		s.dispatchBranchChannelMessage(ctx, in, r, idx)
+		return
+	}
 	runtimeID := rolloutRuntimeID(in, *r)
 	sandboxInstanceID := rolloutSandboxInstanceID(in, *r)
 	// If this rollout's task is never created (any pre-enqueue step fails, or
@@ -1192,6 +1211,118 @@ func (s *EnvDispatchService) dispatchScratchChannelMessage(ctx context.Context, 
 	}
 	r.LeaderRunID = runID
 	r.AgentRunID = runID
+}
+
+// dispatchBranchChannelMessage resumes the source env's persisted collaboration
+// trigger on the copied channel. Only the trigger-selected agent is woken: its
+// sandbox is cloned from the source binding (when ready) or created from the
+// saved policy. Non-triggered peers keep their pending bindings and are
+// provisioned lazily on first mention. The request's message.content, when
+// non-empty, is appended as nondispatching channel context before the
+// continuation enqueue, without changing the trigger-selected agent.
+func (s *EnvDispatchService) dispatchBranchChannelMessage(ctx context.Context, in EnvDispatchInput, r *EnvRollout, idx int) {
+	if in.BranchMessageSource == nil {
+		r.Error = "internal: missing validated branch message source"
+		return
+	}
+	src := in.BranchMessageSource.Trigger
+	if src.AgentID == "" {
+		r.Error = "internal: branch collaboration trigger missing agent"
+		return
+	}
+
+	// Remap the source trigger onto the copied destination entities. The source
+	// task/runtime are never reused; new IDs are filled in after provisioning.
+	dst := src
+	dst.ChannelID = r.ChannelID
+	dst.ProjectID = r.ProjectID
+	if r.channelMessageIDs != nil {
+		if mapped, ok := r.channelMessageIDs[src.SourceMessageID]; ok && mapped != "" {
+			dst.SourceMessageID = mapped
+		}
+		if src.ThreadRootMessageID != nil {
+			if mapped, ok := r.channelMessageIDs[*src.ThreadRootMessageID]; ok && mapped != "" {
+				mappedCopy := mapped
+				dst.ThreadRootMessageID = &mappedCopy
+			}
+		}
+	}
+	dst.ChatSessionID = ""
+	dst.TaskID = ""
+	dst.RuntimeID = ""
+
+	// Append the request's message.content as nondispatching channel context
+	// (the store's channel-message insert is a pure SQL insert: it dispatches no
+	// channel events and triggers no mention routing). It must not change which
+	// agent is woken; the trigger agent is provisioned and enqueued below.
+	if in.Message != nil && in.Message.Content != "" {
+		if _, err := s.deps.CreateChannelMessage(ctx, r.ChannelID, in.WorkspaceID, in.UserID, in.Message.Content); err != nil {
+			r.Error = fmt.Sprintf("append branch channel message: %v", err)
+			r.Stack = stackerr.StackOf(err)
+			return
+		}
+	}
+
+	provisioned, err := s.deps.ProvisionEnvDispatchAgent(ctx, EnvDispatchAgentProvisionInput{
+		WorkspaceID:             in.WorkspaceID,
+		UserID:                  in.UserID,
+		EnvID:                   r.EnvID,
+		ProjectID:               r.ProjectID,
+		ChannelID:               r.ChannelID,
+		AgentID:                 dst.AgentID,
+		SourceSandboxInstanceID: in.BranchMessageSource.TriggerSourceSandboxInstanceID,
+		SandboxConfig:           json.RawMessage(`{}`),
+	})
+	if err != nil {
+		r.Error = fmt.Sprintf("provision branch trigger agent: %v", err)
+		r.Stack = stackerr.StackOf(err)
+		return
+	}
+	defer func() {
+		if r.AgentRunID == "" {
+			_ = s.deps.DeleteAgentRuntime(ctx, in.WorkspaceID, provisioned.RuntimeID)
+		}
+	}()
+	if err := s.deps.SetEnvSandboxes(ctx, r.EnvID, in.WorkspaceID, []string{provisioned.SandboxInstanceID}); err != nil {
+		r.Error = fmt.Sprintf("attach branch trigger sandbox: %v", err)
+		r.Stack = stackerr.StackOf(err)
+		return
+	}
+	runID, err := s.deps.EnqueueEnvDispatchChannelRun(ctx, in.WorkspaceID, in.UserID, ChannelRunInput{
+		AgentID:           dst.AgentID,
+		ChannelID:         r.ChannelID,
+		ProjectID:         r.ProjectID,
+		EnvID:             r.EnvID,
+		ChatSessionID:     provisioned.ChatSessionID,
+		SandboxInstanceID: provisioned.SandboxInstanceID,
+		RuntimeID:         provisioned.RuntimeID,
+		SourceMessageID:   dst.SourceMessageID,
+	}, idx)
+	if err != nil {
+		r.Error = fmt.Sprintf("enqueue branch trigger: %v", err)
+		r.Stack = stackerr.StackOf(err)
+		return
+	}
+	dst.ChatSessionID = provisioned.ChatSessionID
+	dst.TaskID = runID
+	dst.RuntimeID = provisioned.RuntimeID
+	if err := s.deps.SaveCollaborationTrigger(ctx, r.EnvID, dst); err != nil {
+		r.Error = fmt.Sprintf("save branch collaboration trigger: %v", err)
+		r.Stack = stackerr.StackOf(err)
+		return
+	}
+	r.ChatSessionID = provisioned.ChatSessionID
+	r.LeaderRunID = runID
+	r.AgentRunID = runID
+	r.AgentSandboxes = make(map[string]AgentSandboxStatus, len(in.MessageRoster.AgentIDs))
+	for _, agentID := range in.MessageRoster.AgentIDs {
+		r.AgentSandboxes[agentID] = AgentSandboxStatus{Status: "pending"}
+	}
+	r.AgentSandboxes[dst.AgentID] = AgentSandboxStatus{
+		Status:            "ready",
+		SandboxInstanceID: provisioned.SandboxInstanceID,
+		RuntimeID:         provisioned.RuntimeID,
+	}
 }
 
 // rollbackRollout cleans up a partially-created rollout (reset phase only).

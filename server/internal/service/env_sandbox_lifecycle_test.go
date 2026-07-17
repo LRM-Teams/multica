@@ -136,6 +136,7 @@ func (f *fakeEnvSandboxLifecycleDeps) MintSandboxRuntimeEnv(_ context.Context, w
 		"MULTICA_WORKSPACE_ID":   workspaceID,
 		"MULTICA_DAEMON_ENABLED": "1",
 		"MULTICA_PROFILE":        "sandbox-" + instanceID,
+		"MULTICA_DAEMON_ID":      "daemon-" + instanceID,
 	}, nil
 }
 
@@ -335,6 +336,10 @@ func TestEnvSandboxLifecycleCreateMintsDaemonEnvWhenEnabled(t *testing.T) {
 	wantTok := "tok-" + ref.InstanceID
 	if env["MULTICA_TOKEN"] != wantTok {
 		t.Fatalf("MULTICA_TOKEN = %v, want %v", env["MULTICA_TOKEN"], wantTok)
+	}
+	wantDaemonID := "daemon-" + ref.InstanceID
+	if env["MULTICA_DAEMON_ID"] != wantDaemonID {
+		t.Fatalf("MULTICA_DAEMON_ID = %v, want %v", env["MULTICA_DAEMON_ID"], wantDaemonID)
 	}
 	// The token must NOT leak onto the returned ref (it would otherwise be
 	// serialized into the rollout response + idempotency ledger).

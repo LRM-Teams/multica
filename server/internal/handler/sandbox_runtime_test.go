@@ -11,8 +11,9 @@ func TestMergeRuntimeEnvMetadata(t *testing.T) {
 	t.Parallel()
 	base := json.RawMessage(`{"name":"sandbox-a"}`)
 	out := mergeRuntimeEnvMetadata(base, map[string]string{
-		"MULTICA_TOKEN": "tok",
-		"TEAM_MODEL":    "gpt-5.5",
+		"MULTICA_TOKEN":     "tok",
+		"MULTICA_DAEMON_ID": "daemon-1",
+		"TEAM_MODEL":        "gpt-5.5",
 	})
 	var meta map[string]any
 	if err := json.Unmarshal(out, &meta); err != nil {
@@ -24,6 +25,9 @@ func TestMergeRuntimeEnvMetadata(t *testing.T) {
 	env, ok := meta["runtime_env"].(map[string]any)
 	if !ok || env["MULTICA_TOKEN"] != "tok" {
 		t.Fatalf("runtime_env = %#v", meta["runtime_env"])
+	}
+	if env["MULTICA_DAEMON_ID"] != "daemon-1" {
+		t.Fatalf("MULTICA_DAEMON_ID = %#v", env["MULTICA_DAEMON_ID"])
 	}
 }
 

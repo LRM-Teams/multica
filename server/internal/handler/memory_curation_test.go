@@ -263,7 +263,13 @@ func TestMemoryCuratorProfileQueuesAndCompletesDaemonRun(t *testing.T) {
 	w = httptest.NewRecorder()
 	resultReq := withURLParams(newDaemonTokenRequest(http.MethodPost,
 		"/api/daemon/runtimes/"+runtimeID+"/memory-curation/"+created.ID+"/result",
-		map[string]any{"status": "succeeded", "claim_token": heartbeat.Pending.ClaimToken, "result": map[string]any{"agents_scanned": 1}},
+		map[string]any{"status": "succeeded", "claim_token": heartbeat.Pending.ClaimToken, "result": map[string]any{
+			"agents_scanned": 1,
+			"agent_results": []map[string]any{{
+				"agent_id":       targetAgentID,
+				"curator_output": `{"candidates":[{"type":"memory","scope":"agent","title":"dry run only","content":"must not persist","confidence":0.9}]}`,
+			}},
+		}},
 		testWorkspaceID, "memory-curator-test-daemon"), "runtimeId", runtimeID, "runId", created.ID)
 	testHandler.ReportMemoryCurationRunResult(w, resultReq)
 	if w.Code != http.StatusOK {
@@ -275,6 +281,121 @@ func TestMemoryCuratorProfileQueuesAndCompletesDaemonRun(t *testing.T) {
 	}
 	if status != "succeeded" {
 		t.Fatalf("run status = %q, want succeeded", status)
+	}
+	var dryRunCandidates int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_memory_curation_candidate WHERE run_id = $1`, created.ID).Scan(&dryRunCandidates); err != nil {
+		t.Fatal(err)
+	}
+	if dryRunCandidates != 0 {
+		t.Fatalf("dry-run persisted %d candidates, want 0", dryRunCandidates)
+	}
+}
+
+func TestTeamCurationPersistsKnowledgeAndAppliesDecisionAtomically(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("handler test database unavailable")
+	}
+	ctx := context.Background()
+	suffix := randomID()
+	var agentID, runID, candidateID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent (workspace_id,name,runtime_mode,runtime_id,owner_id)
+		VALUES ($1,$2,'local',$3,$4) RETURNING id::text
+	`, testWorkspaceID, "curation-lifecycle-"+suffix, testRuntimeID, testUserID).Scan(&agentID); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO memory_curation_run (workspace_id,stage,trigger_kind,status,curator_agent_id)
+		VALUES ($1,'team_curation','manual','running',$2) RETURNING id::text
+	`, testWorkspaceID, agentID).Scan(&runID); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_memory_curation_candidate
+		(workspace_id,source_agent_id,run_id,candidate_type,scope,title,content)
+		VALUES ($1,$2,$3,'team_memory','team','Team release rule','Run release tests before publishing.')
+		RETURNING id::text
+	`, testWorkspaceID, agentID, runID).Scan(&candidateID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM team_knowledge_item WHERE workspace_id=$1 AND title='Release verification'`, testWorkspaceID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_memory_curation_candidate WHERE id=$1`, candidateID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM memory_curation_run WHERE id=$1`, runID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE id=$1`, agentID)
+	})
+
+	bundles := testHandler.memoryCurationEvidenceBundles(ctx, testWorkspaceID, []string{agentID}, "2026-07-16", "2026-07-17", true)
+	foundEvidence := false
+	for _, bundle := range bundles {
+		for _, item := range bundle.Items {
+			if item.Kind == "curation_candidate" && item.ID == candidateID {
+				foundEvidence = true
+			}
+		}
+	}
+	if !foundEvidence {
+		t.Fatal("pending candidate was not delivered to team curator evidence")
+	}
+
+	output, _ := json.Marshal(map[string]any{
+		"team_knowledge": []map[string]any{{
+			"kind": "policy", "title": "Release verification",
+			"content": "Run release tests before publishing.", "source_candidate_ids": []string{candidateID},
+		}},
+		"decisions": []map[string]any{{"candidate_id": candidateID, "status": "promoted", "reason": "workspace policy"}},
+	})
+	tx, err := testPool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := testHandler.persistTeamCurationOutput(ctx, tx, runID, testWorkspaceID, string(output)); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var candidateStatus string
+	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_memory_curation_candidate WHERE id=$1`, candidateID).Scan(&candidateStatus); err != nil {
+		t.Fatal(err)
+	}
+	if candidateStatus != "promoted" {
+		t.Fatalf("candidate status = %q, want promoted", candidateStatus)
+	}
+	var knowledgeCount int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM team_knowledge_item WHERE workspace_id=$1 AND title='Release verification' AND $2::uuid = ANY(source_candidate_ids)`, testWorkspaceID, candidateID).Scan(&knowledgeCount); err != nil {
+		t.Fatal(err)
+	}
+	if knowledgeCount != 1 {
+		t.Fatalf("team knowledge count = %d, want 1", knowledgeCount)
+	}
+
+	rollbackTitle := "Rollback verification " + suffix
+	invalidOutput, _ := json.Marshal(map[string]any{
+		"team_knowledge": []map[string]any{{
+			"kind": "policy", "title": rollbackTitle, "content": "This insert must roll back.",
+			"source_candidate_ids": []string{},
+		}},
+		"decisions": []map[string]any{{"candidate_id": "not-a-uuid", "status": "promoted"}},
+	})
+	tx, err = testPool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := testHandler.persistTeamCurationOutput(ctx, tx, runID, testWorkspaceID, string(invalidOutput)); err == nil {
+		_ = tx.Rollback(ctx)
+		t.Fatal("invalid decision unexpectedly succeeded")
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var rollbackCount int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM team_knowledge_item WHERE workspace_id=$1 AND title=$2`, testWorkspaceID, rollbackTitle).Scan(&rollbackCount); err != nil {
+		t.Fatal(err)
+	}
+	if rollbackCount != 0 {
+		t.Fatalf("failed transaction left %d team knowledge rows", rollbackCount)
 	}
 }
 

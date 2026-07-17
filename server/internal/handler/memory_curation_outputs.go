@@ -3,7 +3,10 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
+
+	"github.com/multica-ai/multica/server/internal/util"
 )
 
 type curationResultEnvelope struct {
@@ -34,13 +37,18 @@ type teamCurationOutput struct {
 		SourceCandidateIDs []string        `json:"source_candidate_ids"`
 		Metadata           json.RawMessage `json:"metadata"`
 	} `json:"team_knowledge"`
+	Decisions []struct {
+		CandidateID string `json:"candidate_id"`
+		Status      string `json:"status"`
+		Reason      string `json:"reason"`
+	} `json:"decisions"`
 	Conflicts []struct {
 		Title   string `json:"title"`
 		Content string `json:"content"`
 	} `json:"conflicts"`
 }
 
-func (h *Handler) persistAgenticCurationOutputs(ctx context.Context, runID string, raw json.RawMessage) error {
+func (h *Handler) persistAgenticCurationOutputs(ctx context.Context, exec dbExecutor, runID, workspaceID, stage string, raw json.RawMessage) error {
 	var env curationResultEnvelope
 	if len(raw) == 0 || json.Unmarshal(raw, &env) != nil {
 		return nil
@@ -50,13 +58,21 @@ func (h *Handler) persistAgenticCurationOutputs(ctx context.Context, runID strin
 		if output == "" {
 			continue
 		}
-		switch env.Stage {
+		switch stage {
 		case "agent_self_review":
-			if err := h.persistSelfReviewOutput(ctx, runID, env.WorkspaceID, ar.AgentID, output); err != nil {
+			if err := h.persistSelfReviewOutput(ctx, exec, runID, workspaceID, ar.AgentID, output); err != nil {
 				return err
 			}
 		case "team_curation":
-			if err := h.persistTeamCurationOutput(ctx, runID, env.WorkspaceID, output); err != nil {
+			if err := h.persistTeamCurationOutput(ctx, exec, runID, workspaceID, output); err != nil {
+				return err
+			}
+		case "all":
+			if ar.AgentID == "team" {
+				if err := h.persistTeamCurationOutput(ctx, exec, runID, workspaceID, output); err != nil {
+					return err
+				}
+			} else if err := h.persistSelfReviewOutput(ctx, exec, runID, workspaceID, ar.AgentID, output); err != nil {
 				return err
 			}
 		}
@@ -64,7 +80,7 @@ func (h *Handler) persistAgenticCurationOutputs(ctx context.Context, runID strin
 	return nil
 }
 
-func (h *Handler) persistSelfReviewOutput(ctx context.Context, runID, workspaceID, agentID, output string) error {
+func (h *Handler) persistSelfReviewOutput(ctx context.Context, exec dbExecutor, runID, workspaceID, agentID, output string) error {
 	var parsed selfReviewOutput
 	if !extractJSONObject(output, &parsed) || len(parsed.Candidates) == 0 {
 		return nil
@@ -84,7 +100,7 @@ func (h *Handler) persistSelfReviewOutput(ctx context.Context, runID, workspaceI
 		if confidence <= 0 || confidence > 1 {
 			confidence = 0.5
 		}
-		if _, err := h.DB.Exec(ctx, `
+		if _, err := exec.Exec(ctx, `
 			INSERT INTO agent_memory_curation_candidate (
 			  workspace_id, source_agent_id, run_id, candidate_type, scope, title,
 			  content, evidence_refs, confidence, metadata
@@ -96,7 +112,7 @@ func (h *Handler) persistSelfReviewOutput(ctx context.Context, runID, workspaceI
 	return nil
 }
 
-func (h *Handler) persistTeamCurationOutput(ctx context.Context, runID, workspaceID, output string) error {
+func (h *Handler) persistTeamCurationOutput(ctx context.Context, exec dbExecutor, runID, workspaceID, output string) error {
 	var parsed teamCurationOutput
 	if !extractJSONObject(output, &parsed) {
 		return nil
@@ -112,7 +128,7 @@ func (h *Handler) persistTeamCurationOutput(ctx context.Context, runID, workspac
 		if len(metadata) == 0 || string(metadata) == "null" {
 			metadata = json.RawMessage(`{}`)
 		}
-		if _, err := h.DB.Exec(ctx, `
+		if _, err := exec.Exec(ctx, `
 			INSERT INTO team_knowledge_item (
 			  workspace_id, kind, title, content, source_candidate_ids,
 			  created_by_curator_agent_id, metadata
@@ -123,12 +139,37 @@ func (h *Handler) persistTeamCurationOutput(ctx context.Context, runID, workspac
 			return err
 		}
 	}
+	for _, decision := range parsed.Decisions {
+		candidateID, err := util.ParseUUID(strings.TrimSpace(decision.CandidateID))
+		if err != nil {
+			return fmt.Errorf("invalid team curation candidate_id %q", decision.CandidateID)
+		}
+		status := normalizeTeamCurationDecisionStatus(decision.Status)
+		if status == "" {
+			return fmt.Errorf("invalid team curation decision status %q", decision.Status)
+		}
+		tag, err := exec.Exec(ctx, `
+			UPDATE agent_memory_curation_candidate
+			   SET status = $1,
+			       metadata = metadata || jsonb_build_object(
+			         'team_curation', jsonb_build_object('run_id',$2::text,'reason',$3::text)
+			       ),
+			       updated_at = now()
+			 WHERE id = $4 AND workspace_id = $5 AND status = 'pending'
+		`, status, runID, strings.TrimSpace(decision.Reason), candidateID, workspaceID)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() != 1 {
+			return fmt.Errorf("team curation candidate %s is not pending in this workspace", decision.CandidateID)
+		}
+	}
 	for _, conflict := range parsed.Conflicts {
 		content := strings.TrimSpace(conflict.Content)
 		if content == "" {
 			continue
 		}
-		if _, err := h.DB.Exec(ctx, `
+		if _, err := exec.Exec(ctx, `
 			INSERT INTO agent_memory_curation_candidate (
 			  workspace_id, run_id, candidate_type, scope, title, content, metadata
 			) VALUES ($1,$2,'conflict','team',$3,$4,jsonb_build_object('source','team_curation'))
@@ -137,6 +178,15 @@ func (h *Handler) persistTeamCurationOutput(ctx context.Context, runID, workspac
 		}
 	}
 	return nil
+}
+
+func normalizeTeamCurationDecisionStatus(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "promoted", "rejected", "merged", "superseded":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
 }
 
 func extractJSONObject(output string, dst any) bool {

@@ -92,11 +92,11 @@ func (h *Handler) claimPendingMemoryCurationRun(ctx context.Context, rt db.Agent
 	if string(mcpConfigRaw) != "null" {
 		pending.CuratorMcpConfig = append([]byte(nil), mcpConfigRaw...)
 	}
-	pending.DBEvidence = h.memoryCurationEvidenceBundles(ctx, pending.WorkspaceID, pending.AgentIDs, pending.DateFrom, pending.DateTo)
+	pending.DBEvidence = h.memoryCurationEvidenceBundles(ctx, pending.WorkspaceID, pending.AgentIDs, pending.DateFrom, pending.DateTo, pending.Stage == "team_curation")
 	return &pending, nil
 }
 
-func (h *Handler) memoryCurationEvidenceBundles(ctx context.Context, workspaceID string, agentIDs []string, dateFrom, dateTo string) []protocol.DaemonMemoryCurationEvidenceBundle {
+func (h *Handler) memoryCurationEvidenceBundles(ctx context.Context, workspaceID string, agentIDs []string, dateFrom, dateTo string, includePendingCandidates bool) []protocol.DaemonMemoryCurationEvidenceBundle {
 	since, err := time.Parse("2006-01-02", dateFrom)
 	if err != nil {
 		return nil
@@ -106,6 +106,7 @@ func (h *Handler) memoryCurationEvidenceBundles(ctx context.Context, workspaceID
 		return nil
 	}
 	bundles := make([]protocol.DaemonMemoryCurationEvidenceBundle, 0, len(agentIDs))
+	bundleIndexes := make(map[string]int, len(agentIDs))
 	for _, agentID := range agentIDs {
 		items, err := memorycuration.CollectDBEvidence(ctx, h.DB, workspaceID, agentID, since, until)
 		if err != nil || len(items) == 0 {
@@ -115,7 +116,39 @@ func (h *Handler) memoryCurationEvidenceBundles(ctx context.Context, workspaceID
 		for _, item := range items {
 			bundle.Items = append(bundle.Items, protocol.DaemonMemoryCurationEvidenceItem{Kind: item.Kind, ID: item.ID, Title: item.Title, Snippet: item.Snippet, CreatedAt: item.CreatedAt.UTC().Format(time.RFC3339)})
 		}
+		bundleIndexes[agentID] = len(bundles)
 		bundles = append(bundles, bundle)
+	}
+	if includePendingCandidates {
+		rows, err := h.DB.Query(ctx, `
+			SELECT id::text, COALESCE(source_agent_id::text,''), title,
+			       left(content, 2000), created_at
+			  FROM agent_memory_curation_candidate
+			 WHERE workspace_id = $1 AND status = 'pending'
+			   AND (source_agent_id = ANY($2::uuid[]) OR source_agent_id IS NULL)
+			 ORDER BY created_at, id
+			 LIMIT 200
+		`, workspaceID, agentIDs)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var candidateID, agentID, title, snippet string
+				var createdAt time.Time
+				if rows.Scan(&candidateID, &agentID, &title, &snippet, &createdAt) != nil {
+					continue
+				}
+				idx, ok := bundleIndexes[agentID]
+				if !ok {
+					idx = len(bundles)
+					bundleIndexes[agentID] = idx
+					bundles = append(bundles, protocol.DaemonMemoryCurationEvidenceBundle{AgentID: agentID})
+				}
+				bundles[idx].Items = append(bundles[idx].Items, protocol.DaemonMemoryCurationEvidenceItem{
+					Kind: "curation_candidate", ID: candidateID, Title: title, Snippet: snippet,
+					CreatedAt: createdAt.UTC().Format(time.RFC3339),
+				})
+			}
+		}
 	}
 	return bundles
 }
@@ -164,24 +197,41 @@ func (h *Handler) ReportMemoryCurationRunResult(w http.ResponseWriter, r *http.R
 	if len(result) == 0 {
 		result = json.RawMessage(`{}`)
 	}
-	tag, err := h.DB.Exec(r.Context(), `
+	var reported struct {
+		DryRun bool `json:"dry_run"`
+	}
+	_ = json.Unmarshal(result, &reported)
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to begin curation result transaction")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	var dryRun bool
+	var workspaceID, stage string
+	err = tx.QueryRow(r.Context(), `
 		UPDATE memory_curation_run
 		   SET status = $4, stats = $5::jsonb, error = $6, finished_at = now()
 		 WHERE id = $1 AND runtime_id = $2 AND claim_token = $3 AND status = 'running'
-	`, runUUID, runtimeUUID, claimToken, status, result, strings.TrimSpace(req.Error))
+		 RETURNING dry_run, workspace_id::text, stage
+	`, runUUID, runtimeUUID, claimToken, status, result, strings.TrimSpace(req.Error)).Scan(&dryRun, &workspaceID, &stage)
 	if err != nil {
+		if err == pgx.ErrNoRows {
+			writeError(w, http.StatusConflict, "curation run is not claimable by this runtime")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "failed to report curation result")
 		return
 	}
-	if tag.RowsAffected() != 1 {
-		writeError(w, http.StatusConflict, "curation run is not claimable by this runtime")
-		return
-	}
-	if status == "succeeded" {
-		if err := h.persistAgenticCurationOutputs(r.Context(), runID, result); err != nil {
+	if status == "succeeded" && !dryRun && !reported.DryRun {
+		if err := h.persistAgenticCurationOutputs(r.Context(), tx, runID, workspaceID, stage, result); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to persist curation outputs")
 			return
 		}
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to commit curation result")
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": runID, "status": status})
 }

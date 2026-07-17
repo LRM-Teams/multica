@@ -207,6 +207,7 @@ type EnvDispatchDeps interface {
 	CreateChannelMessage(ctx context.Context, channelID, workspaceID, userID, content string) (messageID string, err error)
 	EnqueueEnvDispatchChannelRun(ctx context.Context, workspaceID, userID string, in ChannelRunInput, idx int) (runID string, err error)
 	SaveCollaborationTrigger(ctx context.Context, envID string, trigger EnvCollaborationTrigger) error
+	ValidateBranchMessageSource(ctx context.Context, workspaceID, envID, projectID string, roster MessageRoster) (ValidatedBranchMessageSource, error)
 
 	// Issue operations
 	ListIssuesByProject(ctx context.Context, projectID, workspaceID string) ([]IssueRow, error)
@@ -287,6 +288,15 @@ type EnvCollaborationTrigger struct {
 	AgentID, Kind, ChannelID, ProjectID, ChatSessionID, SourceMessageID string
 	ThreadRootMessageID                                                 *string
 	TaskID, RuntimeID                                                   string
+}
+
+// ValidatedBranchMessageSource is checked before reset fan-out. It prevents a
+// branch from creating any resources until its source trigger and roster are
+// known to be safe to resume.
+type ValidatedBranchMessageSource struct {
+	SourceEnvID, SourceProjectID, SourceChannelID string
+	Roster                                        MessageRoster
+	Trigger                                       EnvCollaborationTrigger
 }
 
 // Env is a snapshot of an environment row.
@@ -435,6 +445,14 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 			return EnvDispatchResult{}, fmt.Errorf("validation_failed: resolve source project: %w", err)
 		}
 		in.SourceProjectID = pid
+	}
+	if in.Mode == EnvModeBranch && in.DispatchType == EnvDispatchMessage {
+		validated, err := s.deps.ValidateBranchMessageSource(ctx, in.WorkspaceID, in.EnvID, in.SourceProjectID, messageRoster)
+		if err != nil {
+			return EnvDispatchResult{}, fmt.Errorf("validation_failed: branch message source: %w", err)
+		}
+		messageRoster = validated.Roster
+		in.MessageRoster = validated.Roster
 	}
 
 	// Branch source shape (spec §7.4): v1 requires the source project to hold

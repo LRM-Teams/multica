@@ -97,11 +97,12 @@ type fakeEnvDispatchDeps struct {
 
 	trainingSaves []trainingSaveCall // every SaveTrainingDispatch call, in order
 
-	forkErr        error
-	createEnvErr   error
-	copyProjectErr error
-	createIssueErr error
-	enqueueErr     error
+	forkErr                    error
+	createEnvErr               error
+	copyProjectErr             error
+	branchMessageValidationErr error
+	createIssueErr             error
+	enqueueErr                 error
 
 	// Phase 2: PrecreateAgentRuntime recording + canned return, and the
 	// runtime_id passed to each EnqueueAgentRun call (the pre-created R').
@@ -187,6 +188,12 @@ func (f *fakeEnvDispatchDeps) SaveCollaborationTrigger(_ context.Context, _ stri
 	defer f.mu.Unlock()
 	f.triggers = append(f.triggers, trigger)
 	return nil
+}
+func (f *fakeEnvDispatchDeps) ValidateBranchMessageSource(_ context.Context, _, envID, projectID string, roster MessageRoster) (ValidatedBranchMessageSource, error) {
+	if f.branchMessageValidationErr != nil {
+		return ValidatedBranchMessageSource{}, f.branchMessageValidationErr
+	}
+	return ValidatedBranchMessageSource{SourceEnvID: envID, SourceProjectID: projectID, SourceChannelID: "source-channel", Roster: roster}, nil
 }
 
 func (f *fakeEnvDispatchDeps) GetEnv(_ context.Context, envID, _ string) (Env, error) {
@@ -621,6 +628,28 @@ func TestDispatch_BranchSelfPlayMessage_N2(t *testing.T) {
 	// only session present is the seeded source session.
 	if len(f.chatSess) != sessionsBefore {
 		t.Fatalf("branch must not create new sessions, got %d (want %d)", len(f.chatSess), sessionsBefore)
+	}
+}
+
+func TestBranchRejectsInvalidMessageSourceBeforeWrites(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	const stateEnv = "state-env"
+	f.envs[stateEnv] = Env{ID: stateEnv, SandboxIDs: []string{"state-sandbox"}, Mode: EnvModeBranch, Domain: EnvDomainSelfPlay}
+	f.projects["source-project"] = stateEnv
+	f.chatSess["source-session"] = "source-project"
+	f.branchMessageValidationErr = fmt.Errorf("missing collaboration trigger")
+	svc := NewEnvDispatchService(f, 1)
+
+	_, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "user", Mode: EnvModeBranch, EnvID: stateEnv,
+		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
+		AgentID: "agent", Message: &MessageInput{Content: "continue"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "validation_failed: branch message source") {
+		t.Fatalf("expected validation error, got %v", err)
+	}
+	if len(f.sandboxes) != 0 || len(f.projects) != 1 || len(f.channelRuns) != 0 || len(f.precreateRuntimeCalls) != 0 {
+		t.Fatalf("invalid branch source must not create resources: sandboxes=%v projects=%v runs=%v runtimes=%v", f.sandboxes, f.projects, f.channelRuns, f.precreateRuntimeCalls)
 	}
 }
 

@@ -818,6 +818,75 @@ func (a *envDispatchDepsAdapter) SaveCollaborationTrigger(ctx context.Context, e
 	})
 }
 
+func (a *envDispatchDepsAdapter) ValidateBranchMessageSource(ctx context.Context, workspaceID, envID, projectID string, roster service.MessageRoster) (service.ValidatedBranchMessageSource, error) {
+	trigger, err := (envDispatchChannelStore{}).loadTrigger(ctx, a.h.DB, envID, workspaceID)
+	if err != nil {
+		return service.ValidatedBranchMessageSource{}, err
+	}
+	if trigger.ProjectID != projectID {
+		return service.ValidatedBranchMessageSource{}, fmt.Errorf("trigger project does not match source project")
+	}
+	rows, err := a.h.DB.Query(ctx, `
+		SELECT member_id::text
+		FROM channel_member
+		WHERE channel_id = $1 AND member_type = 'agent'
+		ORDER BY member_id`, trigger.ChannelID)
+	if err != nil {
+		return service.ValidatedBranchMessageSource{}, err
+	}
+	defer rows.Close()
+	sourceIDs := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return service.ValidatedBranchMessageSource{}, err
+		}
+		sourceIDs = append(sourceIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return service.ValidatedBranchMessageSource{}, err
+	}
+	if !sameEnvDispatchRoster(sourceIDs, roster.AgentIDs) {
+		return service.ValidatedBranchMessageSource{}, fmt.Errorf("requested agent roster differs from source channel")
+	}
+	return service.ValidatedBranchMessageSource{
+		SourceEnvID:     envID,
+		SourceProjectID: projectID,
+		SourceChannelID: trigger.ChannelID,
+		Roster:          roster,
+		Trigger: service.EnvCollaborationTrigger{
+			AgentID:             trigger.AgentID,
+			Kind:                trigger.Kind,
+			ChannelID:           trigger.ChannelID,
+			ProjectID:           trigger.ProjectID,
+			ChatSessionID:       trigger.ChatSessionID,
+			SourceMessageID:     trigger.SourceMessageID,
+			ThreadRootMessageID: trigger.ThreadRootMessageID,
+			TaskID:              trigger.TaskID,
+			RuntimeID:           trigger.RuntimeID,
+		},
+	}, nil
+}
+
+func sameEnvDispatchRoster(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	seen := make(map[string]struct{}, len(left))
+	for _, id := range left {
+		seen[id] = struct{}{}
+	}
+	if len(seen) != len(left) {
+		return false
+	}
+	for _, id := range right {
+		if _, ok := seen[id]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 // ListIssuesByProject returns all issues under a project. Used during
 // CopyProjectSubtree to deep-copy the source project's issues.
 func (a *envDispatchDepsAdapter) ListIssuesByProject(ctx context.Context, projectID, workspaceID string) ([]service.IssueRow, error) {
@@ -1617,6 +1686,9 @@ func (s *stubEnvDispatchDeps) EnqueueEnvDispatchChannelRun(context.Context, stri
 }
 func (s *stubEnvDispatchDeps) SaveCollaborationTrigger(context.Context, string, service.EnvCollaborationTrigger) error {
 	return nil
+}
+func (s *stubEnvDispatchDeps) ValidateBranchMessageSource(context.Context, string, string, string, service.MessageRoster) (service.ValidatedBranchMessageSource, error) {
+	return service.ValidatedBranchMessageSource{}, nil
 }
 func (s *stubEnvDispatchDeps) ListIssuesByProject(context.Context, string, string) ([]service.IssueRow, error) {
 	return nil, nil

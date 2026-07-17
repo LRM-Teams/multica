@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -100,6 +101,43 @@ func TestEvolutionAcknowledgementsRoundTrip(t *testing.T) {
 	}
 	if got["agent-1/candidate-1"] != "sha256:abc" {
 		t.Fatalf("acknowledgements = %#v", got)
+	}
+}
+
+func TestEvolutionCandidateToBundlePreservesScopedMemoryIdentity(t *testing.T) {
+	item := map[string]json.RawMessage{
+		"unit_type":       json.RawMessage(`"preference"`),
+		"local_unit_id":   json.RawMessage(`"preference-1"`),
+		"title":           json.RawMessage(`"Immediate feedback"`),
+		"content":         json.RawMessage(`"Acknowledge before starting work."`),
+		"suggested_scope": json.RawMessage(`"user"`),
+		"subject_type":    json.RawMessage(`"member"`),
+		"subject_id":      json.RawMessage(`"member-1"`),
+		"source_user_id":  json.RawMessage(`"member-1"`),
+		"applies":         json.RawMessage(`{"project_ids":["project-1"],"channel_ids":["channel-1"],"task_types":["chat"],"expires_at":"2099-01-01T00:00:00Z"}`),
+	}
+	bundle := evolutionCandidateToBundle("workspace-1", "agent-1", item)
+	if bundle.WorkspaceID != "workspace-1" || bundle.AgentID != "agent-1" || bundle.SuggestedScope != "user" {
+		t.Fatalf("bundle identity/scope = %+v", bundle)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(bundle.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["subject_type"] != "member" || payload["subject_id"] != "member-1" || payload["source_user_id"] != "member-1" {
+		t.Fatalf("stable member identity was not preserved: %#v", payload)
+	}
+	var applies struct {
+		ProjectIDs []string `json:"project_ids"`
+		ChannelIDs []string `json:"channel_ids"`
+		TaskTypes  []string `json:"task_types"`
+		ExpiresAt  string   `json:"expires_at"`
+	}
+	if err := json.Unmarshal(bundle.Applies, &applies); err != nil {
+		t.Fatal(err)
+	}
+	if len(applies.ProjectIDs) != 1 || applies.ProjectIDs[0] != "project-1" || len(applies.ChannelIDs) != 1 || applies.ChannelIDs[0] != "channel-1" || len(applies.TaskTypes) != 1 || applies.TaskTypes[0] != "chat" || applies.ExpiresAt != "2099-01-01T00:00:00Z" {
+		t.Fatalf("applicability was not preserved: %+v", applies)
 	}
 }
 

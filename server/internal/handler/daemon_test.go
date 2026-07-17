@@ -4720,45 +4720,45 @@ func TestClaimTask_ChatPriorSessionRuntimeGuard(t *testing.T) {
 		t.Fatalf("setup: complete claimed resume chat task: %v", err)
 	}
 
-	var budgetSessionID string
+	var highUsageSessionID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO chat_session (
 			workspace_id, agent_id, creator_id, title,
 			session_id, work_dir, runtime_id
 		)
-		VALUES ($1, $2, $3, 'token budget chat', 'budget-native-session', '/tmp/budget-chat-workdir', $4)
+		VALUES ($1, $2, $3, 'high usage chat', 'high-usage-native-session', '/tmp/high-usage-chat-workdir', $4)
 		RETURNING id
-	`, testWorkspaceID, agentID, testUserID, runtimeID).Scan(&budgetSessionID); err != nil {
-		t.Fatalf("setup: create token budget chat session: %v", err)
+	`, testWorkspaceID, agentID, testUserID, runtimeID).Scan(&highUsageSessionID); err != nil {
+		t.Fatalf("setup: create high usage chat session: %v", err)
 	}
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM chat_session WHERE id = $1`, budgetSessionID) })
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM chat_session WHERE id = $1`, highUsageSessionID) })
 
-	var priorBudgetTaskID string
+	var priorHighUsageTaskID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_task_queue (
 			agent_id, runtime_id, chat_session_id,
 			status, priority, started_at, completed_at,
 			session_id, work_dir
 		)
-		VALUES ($1, $2, $3, 'completed', 0, now(), now(), 'budget-native-session', '/tmp/budget-chat-workdir')
+		VALUES ($1, $2, $3, 'completed', 0, now(), now(), 'high-usage-native-session', '/tmp/high-usage-chat-workdir')
 		RETURNING id
-	`, agentID, runtimeID, budgetSessionID).Scan(&priorBudgetTaskID); err != nil {
-		t.Fatalf("setup: create token budget prior chat task: %v", err)
+	`, agentID, runtimeID, highUsageSessionID).Scan(&priorHighUsageTaskID); err != nil {
+		t.Fatalf("setup: create high usage prior chat task: %v", err)
 	}
-	seedQueueExecution(t, priorBudgetTaskID)
+	seedQueueExecution(t, priorHighUsageTaskID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO agent_usage (execution_id, source, provider, model, input_tokens)
-		VALUES ($1, 'chat', 'claude', 'test-model', $2)
-	`, priorBudgetTaskID, chatNativeResumeTokenLimit); err != nil {
-		t.Fatalf("setup: create token budget usage: %v", err)
+		VALUES ($1, 'chat', 'claude', 'test-model', 1000000)
+	`, priorHighUsageTaskID); err != nil {
+		t.Fatalf("setup: create high usage ledger row: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO chat_message (chat_session_id, role, content, created_at) VALUES
 			($1, 'user', 'old long-running context', now()),
 			($1, 'assistant', 'previous answer', now() + interval '1 second'),
 			($1, 'user', 'fresh follow-up', now() + interval '2 second')
-	`, budgetSessionID); err != nil {
-		t.Fatalf("setup: insert token budget messages: %v", err)
+	`, highUsageSessionID); err != nil {
+		t.Fatalf("setup: insert high usage messages: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO agent_task_queue (
@@ -4766,24 +4766,22 @@ func TestClaimTask_ChatPriorSessionRuntimeGuard(t *testing.T) {
 			status, priority
 		)
 		VALUES ($1, $2, $3, 'queued', 0)
-	`, agentID, runtimeID, budgetSessionID); err != nil {
-		t.Fatalf("setup: create token budget chat task: %v", err)
+	`, agentID, runtimeID, highUsageSessionID); err != nil {
+		t.Fatalf("setup: create high usage chat task: %v", err)
 	}
 
 	task = claimTaskForRuntimeGuard(t, runtimeID, daemonID)
-	if task.PriorSessionID != "" {
-		t.Fatalf("token budget: expected empty PriorSessionID, got %q", task.PriorSessionID)
+	if task.PriorSessionID != "high-usage-native-session" {
+		t.Fatalf("high usage: expected native session resume, got %q", task.PriorSessionID)
 	}
-	if task.PriorWorkDir != "/tmp/budget-chat-workdir" {
-		t.Fatalf("token budget: expected PriorWorkDir='/tmp/budget-chat-workdir', got %q", task.PriorWorkDir)
+	if task.PriorWorkDir != "/tmp/high-usage-chat-workdir" {
+		t.Fatalf("high usage: expected PriorWorkDir='/tmp/high-usage-chat-workdir', got %q", task.PriorWorkDir)
 	}
 	if task.ChatMessage != "fresh follow-up" {
-		t.Fatalf("token budget: expected current chat message, got %q", task.ChatMessage)
+		t.Fatalf("high usage: expected current chat message, got %q", task.ChatMessage)
 	}
-	for _, want := range []string{"Native session resume was intentionally skipped", "native resume budget", "Recent surface messages", "fresh follow-up"} {
-		if !strings.Contains(task.ChatContextSummary, want) {
-			t.Fatalf("token budget summary missing %q:\n%s", want, task.ChatContextSummary)
-		}
+	if task.ChatContextSummary != "" {
+		t.Fatalf("high usage: expected no fallback summary while native resume is safe, got:\n%s", task.ChatContextSummary)
 	}
 }
 

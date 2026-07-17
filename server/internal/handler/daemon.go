@@ -33,13 +33,6 @@ import (
 )
 
 const chatResumeRecentMessageLimit = 10
-
-// Native provider session history is useful for continuity, but long chats can
-// make every follow-up pay for stale tool output and logs. Once recorded usage
-// crosses this budget, keep the conversation available through a compact
-// Multica handoff summary and lazy CLI reads instead of resuming the full
-// provider session.
-const chatNativeResumeTokenLimit int64 = 60_000
 const daemonRegisterTokenTTL = 24 * time.Hour
 
 var errInvalidTaskMessageSince = errors.New("invalid since parameter")
@@ -1660,9 +1653,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 					surface.SessionID = uuidToString(task.ID)
 				}
 				if resp.PriorSessionID != "" {
-					if reason := chatNativeResumeBudgetReason(totalTokens); reason != "" {
-						freshReason = reason
-					} else if reason, ok := h.latestChatTaskFailureReason(r.Context(), cs.ID, task.ID); ok && chatFailureResumeUnsafe(reason) {
+					if reason, ok := h.latestChatTaskFailureReason(r.Context(), cs.ID, task.ID); ok && chatFailureResumeUnsafe(reason) {
 						freshReason = "the latest task failed because the saved native session is no longer safe to resume (" + reason + ")"
 					}
 					if freshReason != "" {
@@ -1680,7 +1671,6 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 							"agent_id", uuidToString(task.AgentID),
 							"reason", freshReason,
 							"chat_total_tokens", totalTokens,
-							"native_resume_token_limit", chatNativeResumeTokenLimit,
 							"summary_bytes", len(resp.ChatContextSummary),
 						)
 					}
@@ -2080,13 +2070,6 @@ func isAssistantFollowupPrompt(m db.ChatMessage) bool {
 		}
 	}
 	return false
-}
-
-func chatNativeResumeBudgetReason(totalTokens int64) string {
-	if totalTokens < chatNativeResumeTokenLimit {
-		return ""
-	}
-	return fmt.Sprintf("recorded token usage for this chat is %d, at or above the native resume budget of %d", totalTokens, chatNativeResumeTokenLimit)
 }
 
 func chatFailureResumeUnsafe(reason string) bool {

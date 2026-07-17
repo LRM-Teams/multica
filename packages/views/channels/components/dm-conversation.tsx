@@ -46,7 +46,7 @@ import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
 import { ContentEditor, type ContentEditorRef } from "../../editor/content-editor";
 import { ActorAvatar } from "../../common/actor-avatar";
-import { AgentPresenceStatusLine } from "../../agents/components/agent-presence-status-line";
+import { AgentCoarsePresenceLine } from "../../agents/components/agent-coarse-presence-line";
 import { ConversationAgentActivityLine } from "../../agents/components/conversation-agent-activity-line";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { AgentPanelProvider, useOpenAgentPanel } from "../../common/agent-panel-context";
@@ -266,17 +266,21 @@ function DmHeader({
   const actorType = dm.peer.type === "agent" ? "agent" : "member";
   const memberType = dm.peer.type === "agent" ? "agent" : "user";
   const isAgentPeer = dm.peer.type === "agent";
-  // #371: agent peers show live presence (Online / Idle / Queued…) — same word
-  // table + visual as the hover card. Tight after the name (Slack/IM style),
-  // never under it. Human peers keep the static "Human" meta under the name
-  // (no runtime presence). Memoized so the `status` prop is a stable element
-  // (react-doctor jsx-no-jsx-as-prop).
+  // #371: agent peers show COARSE presence (Online / Working / Queued /
+  // Offline…) — "is the agent around", NOT the fine live action verb. The fine
+  // verb (Running command… / Reading…) lives on exactly one surface, the
+  // ConversationAgentActivityLine above the composer, so the header and that
+  // line don't echo the same word twice (Iris split-semantics 2026-07-17):
+  // header = presence granularity, composer line = live-action granularity.
+  // Tight after the name (Slack/IM style), never under it. Human peers keep the
+  // static "Human" meta under the name (no runtime presence). Memoized so the
+  // `status` prop is a stable element (react-doctor jsx-no-jsx-as-prop).
   const agentStatus = useMemo(
     () =>
       isAgentPeer ? (
-        <AgentPresenceStatusLine
+        <AgentCoarsePresenceLine
           agentId={dm.peer.id}
-          // Cap width so long localized stage words don't shove the title
+          // Cap width so long localized presence words don't shove the title
           // (or the search/files cluster) off a narrow header.
           className="max-w-[9rem]"
         />

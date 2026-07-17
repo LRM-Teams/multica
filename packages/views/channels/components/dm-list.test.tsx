@@ -341,14 +341,16 @@ describe("DmList unread affordance (read-model)", () => {
     expect(name).toHaveTextContent("Unread Person");
   });
 
-  it("dims the badge for a muted DM — silent, no primary/red count (A6)", () => {
+  it("shows a DIMMER dot for a muted DM — silent, no count, never louder than active (Parker)", () => {
     mockQueryData.dms = [makeDm({ unread: 4, real_unread: 4, muted: true })];
 
     const { container } = renderDmList();
 
-    const badge = container.querySelector("span.bg-muted-foreground\\/25");
-    expect(badge).not.toBeNull();
-    expect(badge).toHaveTextContent("4");
+    // Muted plain-unread is the quietest: a dimmer neutral dot, no numeric count.
+    const dot = container.querySelector("span.size-2.rounded-full");
+    expect(dot).not.toBeNull();
+    expect(dot).toHaveClass("bg-muted-foreground/50");
+    expect(container).not.toHaveTextContent("4");
     expect(container.querySelector("span.bg-primary")).toBeNull();
   });
 

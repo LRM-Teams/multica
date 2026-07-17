@@ -66,14 +66,12 @@ export function ConversationUnreadAffordance({
   // saturated count block — the unread signal is the BOLD channel name in the
   // row (set by the list-row caller), and this slot shows only a subtle neutral
   // dot. The saturated numeric block is reserved for the @-mention pill below.
-  // Muted conversations keep the dimmed count so a silenced-but-unread row isn't
-  // lost entirely (muted stays information-preserving, never salient).
+  // Muted rows stay the QUIETEST (Parker): a muted plain-unread shows only a
+  // dimmer dot and no count — a silenced row must never be more salient than an
+  // active one (that was the old asymmetry). A direct @-mention still pierces
+  // mute via the pill below.
   const countBadge =
-    isMuted && realUnread > 0 ? (
-      <span className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-muted-foreground/25 px-1 text-[10px] font-medium text-muted-foreground">
-        {realUnread > 99 ? "99+" : realUnread}
-      </span>
-    ) : realUnread > 0 || isManualDot ? (
+    realUnread > 0 || isManualDot ? (
       <span
         className={cn(
           "size-2 shrink-0 rounded-full",
@@ -86,10 +84,11 @@ export function ConversationUnreadAffordance({
   // instead of stacking a mention marker on top of the unread badge (#556, Iris).
   // The literal `@` glyph is the primary cue so it stays distinguishable without
   // relying on color (A6 — colour-blind safe); the emphasis colour is secondary.
-  // The plain-unread `countBadge` path below is deliberately untouched — only the
-  // @-present slot changes. Suppressed when muted: mute stays silent, so the row
-  // falls back to the dimmed count (muted @-pierce is a separate follow-up).
-  if (mentionCount > 0 && !isMuted) {
+  // @-mentions PIERCE mute (Parker): a muted row silences its ambient unread to
+  // a dim dot, but a direct @ still surfaces the `@N` pill at full salience —
+  // matching Slack (mute suppresses ambient noise, not direct mentions). The
+  // mention count is server-cursor driven (#557) and wired for muted rows too.
+  if (mentionCount > 0) {
     const mentionText = `@${mentionCount > 99 ? "99+" : mentionCount}`;
     return (
       <Tooltip>

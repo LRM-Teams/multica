@@ -25,11 +25,16 @@ describe("ConversationUnreadAffordance", () => {
     expect(dot?.textContent ?? "").toBe("");
   });
 
-  it("caps large muted counts at 99+ (the dimmed count is the only surviving number)", () => {
+  it("renders a muted plain-unread as a DIMMER dot with no count (Parker: muted is quietest, never a number)", () => {
     const { container } = render(
       <ConversationUnreadAffordance realUnread={150} isManualDot={false} isMuted />,
     );
-    expect(container.querySelector("span")).toHaveTextContent("99+");
+    const dot = container.querySelector("span");
+    expect(dot).toHaveClass("size-2");
+    expect(dot).toHaveClass("bg-muted-foreground/50");
+    // No surviving number — a muted row must never be more salient than an active one.
+    expect(dot?.textContent ?? "").toBe("");
+    expect(container).not.toHaveTextContent("99+");
   });
 
   it("renders a manual-unread DOT, never a fabricated '1' (Parker gate)", () => {
@@ -47,14 +52,18 @@ describe("ConversationUnreadAffordance", () => {
     expect(dot?.textContent ?? "").toBe("");
   });
 
-  it("dims the count for muted conversations — silent, no primary/red badge (A6)", () => {
-    const { container } = render(
+  it("keeps a muted unread dot DIMMER than an active one (no asymmetry — muted never louder)", () => {
+    const active = render(
+      <ConversationUnreadAffordance realUnread={3} isManualDot={false} isMuted={false} />,
+    );
+    const muted = render(
       <ConversationUnreadAffordance realUnread={3} isManualDot={false} isMuted />,
     );
-    const badge = container.querySelector("span");
-    expect(badge).toHaveTextContent("3");
-    expect(badge).toHaveClass("bg-muted-foreground/25");
-    expect(badge).not.toHaveClass("bg-primary");
+    expect(active.container.querySelector("span")).toHaveClass("bg-muted-foreground");
+    expect(muted.container.querySelector("span")).toHaveClass("bg-muted-foreground/50");
+    // Neither shows a numeric count — the unread signal is the bold name in the row.
+    expect(active.container).not.toHaveTextContent("3");
+    expect(muted.container).not.toHaveTextContent("3");
   });
 
   it("dims the manual dot for muted conversations (A6)", () => {
@@ -100,8 +109,8 @@ describe("ConversationUnreadAffordance", () => {
     expect(getByText("@99+")).toBeTruthy();
   });
 
-  it("does not show the @N pill for muted conversations — falls back to the dimmed count (muted @-pierce is follow-up)", () => {
-    const { container } = render(
+  it("shows the @N pill for muted conversations — @ pierces mute (Parker)", () => {
+    const { getByText, container } = render(
       <ConversationUnreadAffordance
         realUnread={3}
         isManualDot={false}
@@ -110,10 +119,12 @@ describe("ConversationUnreadAffordance", () => {
         mentionLabel="You were mentioned"
       />,
     );
-    expect(container.querySelector(".bg-destructive")).toBeNull();
-    // The dimmed unread count still renders so the conversation isn't lost.
-    expect(container).toHaveTextContent("3");
-    expect(container.querySelector(".bg-muted-foreground\\/25")).not.toBeNull();
+    // A direct @ surfaces the pill even when muted — mute silences ambient noise,
+    // not direct mentions. The ambient unread (3) is NOT shown alongside the pill.
+    const pill = getByText("@2");
+    expect(pill).toHaveClass("bg-brand");
+    expect(pill).not.toHaveClass("bg-destructive");
+    expect(container).not.toHaveTextContent("3");
   });
 
   it("renders a no-@ unread row as a neutral dot, never an @N pill (Iris regression guard)", () => {

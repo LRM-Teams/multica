@@ -87,6 +87,13 @@ vi.mock("../../navigation", () => ({
 vi.mock("@multica/core/paths", () => ({
   useWorkspacePaths: () => ({ issueDetail: (id: string) => `/acme/issues/${id}` }),
 }));
+// The mobile layout is a JS-breakpoint branch (selector + single column) vs the
+// desktop horizontal columns, so `useIsMobile` is the switch. jsdom has no real
+// viewport/matchMedia, so drive it directly. Default false = desktop.
+let mockIsMobile = false;
+vi.mock("@multica/ui/hooks/use-mobile", () => ({
+  useIsMobile: () => mockIsMobile,
+}));
 
 function makeIssue(over: Partial<Issue> = {}): Issue {
   return {
@@ -126,6 +133,56 @@ function renderBoard() {
 describe("ChannelTasksBoard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockIsMobile = false;
+  });
+
+  it("desktop (≥768px): renders every status column side by side", async () => {
+    listSourceIssues.mockResolvedValue({
+      issues: [
+        makeIssue({ id: "issue-1", title: "Fix the login bug", status: "in_progress" }),
+        makeIssue({ id: "issue-2", title: "Add dark mode", status: "todo" }),
+      ],
+      total: 2,
+    });
+    renderBoard();
+
+    // Both columns' cards are visible at once — no selector, no single-column gate.
+    expect(await screen.findByText("Fix the login bug")).toBeInTheDocument();
+    expect(screen.getByText("Add dark mode")).toBeInTheDocument();
+    expect(screen.getByText("In Progress")).toBeInTheDocument();
+    expect(screen.getByText("Todo")).toBeInTheDocument();
+    // No mobile segmented control on desktop.
+    expect(screen.queryByRole("button", { name: /Todo/ })).not.toBeInTheDocument();
+  });
+
+  it("mobile (<768px): a status segmented control shows one status at a time; switching pills swaps the visible column", async () => {
+    mockIsMobile = true;
+    listSourceIssues.mockResolvedValue({
+      issues: [
+        makeIssue({ id: "issue-1", title: "Fix the login bug", status: "in_progress" }),
+        makeIssue({ id: "issue-2", title: "Add dark mode", status: "todo" }),
+      ],
+      total: 2,
+    });
+    renderBoard();
+
+    // A pill per NON-EMPTY status (todo + in_progress here); empty statuses get none.
+    const todoPill = await screen.findByRole("button", { name: /Todo/ });
+    const inProgressPill = screen.getByRole("button", { name: /In Progress/ });
+    expect(todoPill).toBeInTheDocument();
+    expect(inProgressPill).toBeInTheDocument();
+    // The default selection is the first non-empty status in BOARD_STATUSES order
+    // (todo before in_progress), so only its card is visible.
+    expect(screen.getByText("Add dark mode")).toBeInTheDocument();
+    expect(screen.queryByText("Fix the login bug")).not.toBeInTheDocument();
+    expect(todoPill).toHaveAttribute("aria-pressed", "true");
+
+    // Switching the selector swaps the visible column: the old status's card
+    // disappears and the newly-selected status's card appears.
+    await userEvent.click(inProgressPill);
+    expect(await screen.findByText("Fix the login bug")).toBeInTheDocument();
+    expect(screen.queryByText("Add dark mode")).not.toBeInTheDocument();
+    expect(inProgressPill).toHaveAttribute("aria-pressed", "true");
   });
 
   it("groups the source tasks into status columns, each card linking to the task detail", async () => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { channelIssuesInfiniteOptions } from "@multica/core/channels";
 import type { Issue, IssueStatus } from "@multica/core/types";
@@ -10,6 +10,8 @@ import { ViewStoreProvider } from "@multica/core/issues/stores/view-store-contex
 import { useWorkspacePaths } from "@multica/core/paths";
 import { Button } from "@multica/ui/components/ui/button";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
+import { useIsMobile } from "@multica/ui/hooks/use-mobile";
+import { cn } from "@multica/ui/lib/utils";
 import { AppLink } from "../../navigation";
 import { BoardCardContent } from "../../issues/components/board-card";
 import { BoardColumnShell, BoardStatusHeading } from "../../issues/components/board-column";
@@ -56,9 +58,11 @@ function ChannelTaskCard({ issue }: { issue: Issue }) {
  *
  * Responsive (#562 mobile, Iris-gated): the SAME shell/heading/card — only the
  * arrangement changes. On mobile (<768px) `widthClassName` makes the section
- * full-width and the body flows at content height so the whole board scrolls as
- * one vertical stack; at ≥768px (`md:`) it is the fixed 300px column with its own
- * internal scroll, identical to the editable board's desktop columns.
+ * full-width and the body flows at content height; the mobile board renders just
+ * ONE of these (the status picked by the segmented control, below) inside its own
+ * vertical scroller — NOT all four stacked (that regressed to a grouped list).
+ * At ≥768px (`md:`) it is the fixed 300px column with its own internal scroll,
+ * identical to the editable board's desktop columns.
  */
 function ChannelBoardColumn({ status, issues }: { status: IssueStatus; issues: Issue[] }) {
   const { t: tc } = useT("channels");
@@ -106,6 +110,11 @@ interface RenderedColumn {
  */
 export function ChannelTasksBoard({ channelId }: { channelId: string }) {
   const { t } = useT("channels");
+  const isMobile = useIsMobile();
+  // Mobile-only: which status column the segmented control has selected. `null`
+  // = "follow the default" (first non-empty status) — derived below, not seeded
+  // by an effect, so the default tracks the loaded set without an extra render.
+  const [selectedStatus, setSelectedStatus] = useState<IssueStatus | null>(null);
   const { data, isPending, isError, hasNextPage, fetchNextPage, isFetchingNextPage } =
     useInfiniteQuery(channelIssuesInfiniteOptions(channelId));
 
@@ -168,14 +177,58 @@ export function ChannelTasksBoard({ channelId }: { channelId: string }) {
     );
   }
 
+  // Mobile segmented control: one pill per NON-EMPTY status (in BOARD_STATUSES
+  // order, since `columns` preserves it). The selected column below shows that
+  // status's cards; the default follows the loaded set (first non-empty status),
+  // and switching pills never refetches — it just re-slices the same loaded set.
+  const mobileColumns = columns.filter((column) => column.issues.length > 0);
+  const activeStatus =
+    selectedStatus && mobileColumns.some((column) => column.status === selectedStatus)
+      ? selectedStatus
+      : mobileColumns[0]?.status;
+  const activeColumn = mobileColumns.find((column) => column.status === activeStatus);
+
   return (
     <ViewStoreProvider store={channelTasksViewStore}>
       <div className="flex flex-1 min-h-0 flex-col">
-        <div className="flex flex-1 min-h-0 flex-col gap-4 overflow-y-auto p-4 md:flex-row md:overflow-x-auto md:overflow-y-visible">
-          {columns.map((column) => (
-            <ChannelBoardColumn key={column.status} status={column.status} issues={column.issues} />
-          ))}
-        </div>
+        {isMobile ? (
+          <>
+            {/* Horizontally-scrollable status selector — keeps the "board" model
+                on a phone (pick a column) instead of stacking all four. */}
+            <div className="flex shrink-0 gap-1 overflow-x-auto border-b border-border/40 px-4 py-2">
+              {mobileColumns.map((column) => {
+                const isActive = column.status === activeStatus;
+                return (
+                  <button
+                    key={column.status}
+                    type="button"
+                    aria-pressed={isActive}
+                    onClick={() => setSelectedStatus(column.status)}
+                    className={cn(
+                      "shrink-0 rounded-full border px-3 py-1 transition-colors",
+                      isActive
+                        ? "border-brand bg-accent"
+                        : "border-transparent bg-muted/40 hover:bg-accent/60",
+                    )}
+                  >
+                    <BoardStatusHeading status={column.status} count={column.issues.length} />
+                  </button>
+                );
+              })}
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto p-4">
+              {activeColumn ? (
+                <ChannelBoardColumn status={activeColumn.status} issues={activeColumn.issues} />
+              ) : null}
+            </div>
+          </>
+        ) : (
+          <div className="flex flex-1 min-h-0 flex-col gap-4 overflow-y-auto p-4 md:flex-row md:overflow-x-auto md:overflow-y-visible">
+            {columns.map((column) => (
+              <ChannelBoardColumn key={column.status} status={column.status} issues={column.issues} />
+            ))}
+          </div>
+        )}
         {hasNextPage ? (
           <div className="shrink-0 border-t border-border/40 px-4 py-2">
             <Button

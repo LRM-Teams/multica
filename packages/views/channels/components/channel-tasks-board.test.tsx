@@ -88,11 +88,12 @@ vi.mock("@multica/core/paths", () => ({
   useWorkspacePaths: () => ({ issueDetail: (id: string) => `/acme/issues/${id}` }),
 }));
 // The mobile layout is a JS-breakpoint branch (selector + single column) vs the
-// desktop horizontal columns, so `useIsMobile` is the switch. jsdom has no real
-// viewport/matchMedia, so drive it directly. Default false = desktop.
-let mockIsMobile = false;
-vi.mock("@multica/ui/hooks/use-mobile", () => ({
-  useIsMobile: () => mockIsMobile,
+// desktop horizontal columns, so the board-local `useIsNarrow` (≤768px, #685
+// closure) is the switch. jsdom has no real viewport/matchMedia, so drive it
+// directly. Default false = desktop; true = the ≤768 segmented layout.
+let mockIsNarrow = false;
+vi.mock("../hooks/use-is-narrow", () => ({
+  useIsNarrow: () => mockIsNarrow,
 }));
 
 function makeIssue(over: Partial<Issue> = {}): Issue {
@@ -133,10 +134,13 @@ function renderBoard() {
 describe("ChannelTasksBoard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockIsMobile = false;
+    mockIsNarrow = false;
+    // jsdom doesn't implement scrollIntoView; the board calls it on the active
+    // pill's ref. Stub it so the pill-into-view effect can run + be asserted.
+    Element.prototype.scrollIntoView = vi.fn();
   });
 
-  it("desktop (≥768px): renders every status column side by side", async () => {
+  it("desktop (>768px): renders every status column side by side", async () => {
     listSourceIssues.mockResolvedValue({
       issues: [
         makeIssue({ id: "issue-1", title: "Fix the login bug", status: "in_progress" }),
@@ -155,8 +159,8 @@ describe("ChannelTasksBoard", () => {
     expect(screen.queryByRole("button", { name: /Todo/ })).not.toBeInTheDocument();
   });
 
-  it("mobile (<768px): a pill per status (empty ones too); selecting an empty status shows its empty state; switching pills swaps the visible column", async () => {
-    mockIsMobile = true;
+  it("narrow (≤768px): a pill per status (empty ones too); selecting an empty status shows its empty state; switching pills swaps the visible column", async () => {
+    mockIsNarrow = true;
     listSourceIssues.mockResolvedValue({
       issues: [
         makeIssue({ id: "issue-1", title: "Fix the login bug", status: "in_progress" }),
@@ -196,6 +200,23 @@ describe("ChannelTasksBoard", () => {
     expect(screen.queryByText("Fix the login bug")).not.toBeInTheDocument();
     expect(screen.queryByText("Add dark mode")).not.toBeInTheDocument();
     expect(backlogPill).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("narrow: scrolls the default-selected pill into view within the pill row (#685 closure nit)", async () => {
+    mockIsNarrow = true;
+    listSourceIssues.mockResolvedValue({
+      // Default selection is the first NON-empty status (in_progress here), which
+      // can sit off-screen to the right in the horizontally-scrolled pill row.
+      issues: [makeIssue({ id: "issue-1", title: "Fix the login bug", status: "in_progress" })],
+      total: 1,
+    });
+    renderBoard();
+
+    const activePill = await screen.findByRole("button", { name: /In Progress/ });
+    expect(activePill).toHaveAttribute("aria-pressed", "true");
+    // The active pill (only it) is brought into view, centered in its scroller —
+    // not the page (block: "nearest").
+    expect(activePill.scrollIntoView).toHaveBeenCalledWith({ inline: "center", block: "nearest" });
   });
 
   it("groups the source tasks into status columns, each card linking to the task detail", async () => {

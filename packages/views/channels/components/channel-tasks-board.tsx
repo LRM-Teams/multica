@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { channelIssuesInfiniteOptions } from "@multica/core/channels";
 import type { Issue, IssueStatus } from "@multica/core/types";
@@ -10,8 +10,8 @@ import { ViewStoreProvider } from "@multica/core/issues/stores/view-store-contex
 import { useWorkspacePaths } from "@multica/core/paths";
 import { Button } from "@multica/ui/components/ui/button";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
-import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
+import { useIsNarrow } from "../hooks/use-is-narrow";
 import { AppLink } from "../../navigation";
 import { BoardCardContent } from "../../issues/components/board-card";
 import { BoardColumnShell, BoardStatusHeading } from "../../issues/components/board-column";
@@ -110,11 +110,15 @@ interface RenderedColumn {
  */
 export function ChannelTasksBoard({ channelId }: { channelId: string }) {
   const { t } = useT("channels");
-  const isMobile = useIsMobile();
+  const isNarrow = useIsNarrow();
   // Mobile-only: which status column the segmented control has selected. `null`
   // = "follow the default" (first non-empty status) — derived below, not seeded
   // by an effect, so the default tracks the loaded set without an extra render.
   const [selectedStatus, setSelectedStatus] = useState<IssueStatus | null>(null);
+  // The segmented pill row is horizontally scrollable and the default selection
+  // is the first NON-empty status, which can sit off-screen to the right while
+  // the row is scrolled left. Ref the active pill so we can bring it into view.
+  const activePillRef = useRef<HTMLButtonElement>(null);
   const { data, isPending, isError, hasNextPage, fetchNextPage, isFetchingNextPage } =
     useInfiniteQuery(channelIssuesInfiniteOptions(channelId));
 
@@ -146,6 +150,23 @@ export function ChannelTasksBoard({ channelId }: { channelId: string }) {
 
   const total = data?.pages[0]?.total ?? 0;
   const remaining = Math.max(0, total - loadedIssues.length);
+
+  // Mobile segmented control default lands on the first status that HAS issues
+  // (better UX than an empty column); switching pills never refetches — it just
+  // re-slices the same loaded set. Derived here (above the early returns) so the
+  // scroll-into-view effect below keeps a stable hook order.
+  const activeStatus =
+    selectedStatus ?? columns.find((column) => column.issues.length > 0)?.status ?? columns[0]?.status;
+  const activeColumn = columns.find((column) => column.status === activeStatus);
+
+  // Bring the selected pill into view within the pill row (not the page) once the
+  // default selection resolves and whenever it changes — otherwise a right-side
+  // default pill stays hidden behind the left-anchored scroll. `inline: "center"`
+  // centers it in the horizontal scroller; `block: "nearest"` avoids page scroll.
+  useEffect(() => {
+    if (!isNarrow || !activeStatus) return;
+    activePillRef.current?.scrollIntoView({ inline: "center", block: "nearest" });
+  }, [isNarrow, activeStatus]);
 
   if (isPending) {
     return (
@@ -180,17 +201,11 @@ export function ChannelTasksBoard({ channelId }: { channelId: string }) {
   // Mobile segmented control: one pill per status the desktop board shows —
   // ALL of them, in BOARD_STATUSES order (Iris ruling: pills mirror the desktop
   // columns exactly, including empty statuses with a `0` count). The selected
-  // column below shows that status's cards (or its empty state). The default
-  // lands on the first status that HAS issues (better UX than an empty column),
-  // and switching pills never refetches — it just re-slices the same loaded set.
-  const activeStatus =
-    selectedStatus ?? columns.find((column) => column.issues.length > 0)?.status ?? columns[0]?.status;
-  const activeColumn = columns.find((column) => column.status === activeStatus);
-
+  // column below shows that status's cards (or its empty state).
   return (
     <ViewStoreProvider store={channelTasksViewStore}>
       <div className="flex flex-1 min-h-0 flex-col">
-        {isMobile ? (
+        {isNarrow ? (
           <>
             {/* Horizontally-scrollable status selector — keeps the "board" model
                 on a phone (pick a column) instead of stacking all four. Mirrors
@@ -201,6 +216,7 @@ export function ChannelTasksBoard({ channelId }: { channelId: string }) {
                 return (
                   <button
                     key={column.status}
+                    ref={isActive ? activePillRef : undefined}
                     type="button"
                     aria-pressed={isActive}
                     onClick={() => setSelectedStatus(column.status)}

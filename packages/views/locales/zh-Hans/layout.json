@@ -93,6 +93,9 @@
     "waiting_local": "等待本地沙箱",
     "resume_action": "恢复",
     "stop_action": "停止",
+    "create_template_action": "快照模板",
+    "create_template_success": "已提交创建快照模板",
+    "create_template_failed": "创建快照模板失败",
     "delete_action": "删除",
     "delete_dialog": {
       "title": "删除沙箱？",

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -1137,6 +1139,86 @@ func (h *Handler) DeleteSandboxInstance(w http.ResponseWriter, r *http.Request) 
 	h.enqueueSandboxInstanceJob(w, r, "delete")
 }
 
+// CreateSandboxSnapshotTemplate enqueues a create_template job so sandboxd can
+// call Cube POST /sandboxes/{id}/snapshots and publish a reusable template.
+func (h *Handler) CreateSandboxSnapshotTemplate(w http.ResponseWriter, r *http.Request) {
+	workspaceID := ctxWorkspaceID(r.Context())
+	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace_id")
+	if !ok {
+		return
+	}
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	instanceID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "instanceId"), "instance_id")
+	if !ok {
+		return
+	}
+	inst, err := h.Queries.GetSandboxInstanceForWorkspace(r.Context(), db.GetSandboxInstanceForWorkspaceParams{ID: instanceID, WorkspaceID: wsUUID})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "sandbox not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to get sandbox")
+		return
+	}
+	if strings.TrimSpace(textValue(inst.LocalRef)) == "" {
+		writeError(w, http.StatusConflict, "sandbox is not ready for snapshot")
+		return
+	}
+	if inst.Status != "running" {
+		writeError(w, http.StatusConflict, "sandbox must be running to create a snapshot template")
+		return
+	}
+	var req struct {
+		Name string `json:"name"`
+	}
+	decErr := json.NewDecoder(r.Body).Decode(&req)
+	if decErr != nil && !errors.Is(decErr, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		var meta map[string]any
+		if len(inst.Metadata) > 0 && json.Unmarshal(inst.Metadata, &meta) == nil {
+			name = strings.TrimSpace(stringFromAny(meta["name"]))
+		}
+	}
+	_, _ = h.Queries.UpdateSandboxInstanceStatus(r.Context(), db.UpdateSandboxInstanceStatusParams{
+		ID:     instanceID,
+		Status: "snapshotting",
+		Error:  pgtype.Text{},
+	})
+	payload := map[string]any{
+		"instance_id": uuidToString(instanceID),
+		"local_ref":   textValue(inst.LocalRef),
+	}
+	if name != "" {
+		payload["name"] = name
+	}
+	rawPayload, _ := json.Marshal(payload)
+	job, err := h.Queries.CreateSandboxJob(r.Context(), db.CreateSandboxJobParams{
+		WorkspaceID:     wsUUID,
+		InitiatorUserID: parseUUID(userID),
+		NodeID:          inst.NodeID,
+		InstanceID:      instanceID,
+		Type:            "create_template",
+		Payload:         rawPayload,
+	})
+	if err != nil {
+		slog.Error("failed to enqueue create_template sandbox job", "error", err, "instance_id", uuidToString(instanceID))
+		writeError(w, http.StatusInternalServerError, "failed to enqueue sandbox job")
+		return
+	}
+	if h.SandboxHub != nil {
+		h.SandboxHub.NotifyJobAvailable(uuidToString(inst.NodeID), uuidToString(job.ID))
+	}
+	writeJSON(w, http.StatusAccepted, sandboxJobToResponse(job, ""))
+}
+
 func (h *Handler) SandboxNodeRegister(w http.ResponseWriter, r *http.Request) {
 	nodeID := middleware.SandboxNodeIDFromContext(r.Context())
 	if nodeID == "" {
@@ -1357,9 +1439,7 @@ func (h *Handler) CompleteSandboxJob(w http.ResponseWriter, r *http.Request) {
 		inst, err = h.Queries.CompleteSandboxInstanceCreate(r.Context(), db.CompleteSandboxInstanceCreateParams{ID: job.InstanceID, LocalRef: strToText(req.LocalRef), EndpointInfo: jsonBytesOrDefault(req.EndpointInfo, "{}")})
 	case "stop":
 		inst, err = h.Queries.MarkSandboxInstanceStopped(r.Context(), job.InstanceID)
-	case "resume":
-		inst, err = h.Queries.MarkSandboxInstanceRunning(r.Context(), job.InstanceID)
-	case "reconfigure":
+	case "resume", "reconfigure", "create_template":
 		inst, err = h.Queries.MarkSandboxInstanceRunning(r.Context(), job.InstanceID)
 	case "delete":
 		err = h.Queries.DeleteSandboxInstance(r.Context(), job.InstanceID)
@@ -1398,7 +1478,7 @@ func (h *Handler) FailSandboxJob(w http.ResponseWriter, r *http.Request) {
 	}
 	var inst db.SandboxInstance
 	var instErr error
-	if job.Type == "reconfigure" {
+	if job.Type == "reconfigure" || job.Type == "create_template" {
 		inst, instErr = h.Queries.UpdateSandboxInstanceStatus(r.Context(), db.UpdateSandboxInstanceStatusParams{
 			ID:     job.InstanceID,
 			Status: "running",

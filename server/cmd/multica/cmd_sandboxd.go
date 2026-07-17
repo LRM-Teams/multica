@@ -84,6 +84,7 @@ type sandboxJob struct {
 
 type sandboxJobPayload struct {
 	Template   string            `json:"template"`
+	Name       string            `json:"name"`
 	Limits     json.RawMessage   `json:"limits"`
 	Metadata   json.RawMessage   `json:"metadata"`
 	Runtime    map[string]string `json:"runtime"`
@@ -191,7 +192,7 @@ func (c *sandboxdClient) register(ctx context.Context) error {
 		"name":            c.cfg.Name,
 		"owner_user_id":   c.cfg.OwnerUserID,
 		"max_concurrency": c.cfg.Concurrency,
-		"capabilities":    []string{"create", "stop", "resume", "delete", "reconfigure"},
+		"capabilities":    []string{"create", "stop", "resume", "delete", "reconfigure", "create_template"},
 		"metadata":        c.nodeMetadata(),
 	}, nil)
 }
@@ -484,6 +485,8 @@ func (c *sandboxdClient) callCube(ctx context.Context, job sandboxJob) (map[stri
 		return c.reconfigureCubeSandbox(ctx, sandboxID, payload)
 	case "delete":
 		return c.deleteCubeSandbox(ctx, sandboxID)
+	case "create_template":
+		return c.createCubeSnapshotTemplate(ctx, sandboxID, payload)
 	default:
 		return nil, fmt.Errorf("unsupported sandbox job type %q", job.Type)
 	}
@@ -547,6 +550,46 @@ func (c *sandboxdClient) resumeCubeSandbox(ctx context.Context, sandboxID string
 		result["result"] = map[string]any{"resumed": true, "runtime_restarted": true}
 	}
 	return result, nil
+}
+
+// createCubeSnapshotTemplate calls Cube POST /sandboxes/{id}/snapshots.
+// The resulting snapshotID is a reusable Cube template for future creates.
+func (c *sandboxdClient) createCubeSnapshotTemplate(ctx context.Context, sandboxID string, payload sandboxJobPayload) (map[string]any, error) {
+	if sandboxID == "" {
+		return nil, fmt.Errorf("cube sandbox id is required")
+	}
+	body := map[string]any{}
+	if name := strings.TrimSpace(payload.Name); name != "" {
+		body["name"] = name
+	}
+	var raw map[string]any
+	// Snapshots can take several minutes while Cube pauses the sandbox.
+	if err := c.cubeJSONWithTimeout(ctx, 10*time.Minute, http.MethodPost, "/sandboxes/"+url.PathEscape(sandboxID)+"/snapshots", body, "", &raw); err != nil {
+		return nil, err
+	}
+	snapshotID := firstNonEmpty(
+		stringFromMap(raw, "snapshotID"),
+		stringFromMap(raw, "snapshot_id"),
+		stringFromMap(raw, "templateID"),
+		stringFromMap(raw, "template_id"),
+	)
+	if snapshotID == "" {
+		return nil, fmt.Errorf("cube snapshot response missing snapshotID")
+	}
+	// Snapshot may leave the sandbox paused; resume so Multica runtime stays usable.
+	_ = c.cubeJSON(ctx, http.MethodPost, "/sandboxes/"+url.PathEscape(sandboxID)+"/resume", map[string]any{}, "", nil)
+	refreshCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	_ = c.refreshTemplates(refreshCtx, true)
+	cancel()
+	return map[string]any{
+		"local_ref": sandboxID,
+		"result": map[string]any{
+			"snapshot_id": snapshotID,
+			"template_id": snapshotID,
+			"names":       raw["names"],
+			"cube":        raw,
+		},
+	}, nil
 }
 
 func (c *sandboxdClient) reconfigureCubeSandbox(ctx context.Context, sandboxID string, payload sandboxJobPayload) (map[string]any, error) {
@@ -650,6 +693,18 @@ if proc.returncode != 0:
 }
 
 func (c *sandboxdClient) cubeJSON(ctx context.Context, method, path string, body any, host string, out any) error {
+	return c.cubeJSONWithClient(ctx, c.http, method, path, body, host, out)
+}
+
+func (c *sandboxdClient) cubeJSONWithTimeout(ctx context.Context, timeout time.Duration, method, path string, body any, host string, out any) error {
+	client := &http.Client{Timeout: timeout}
+	return c.cubeJSONWithClient(ctx, client, method, path, body, host, out)
+}
+
+func (c *sandboxdClient) cubeJSONWithClient(ctx context.Context, client *http.Client, method, path string, body any, host string, out any) error {
+	if client == nil {
+		client = c.http
+	}
 	var data io.Reader
 	if body != nil {
 		raw, err := json.Marshal(body)
@@ -673,7 +728,7 @@ func (c *sandboxdClient) cubeJSON(ctx context.Context, method, path string, body
 		req.Host = host
 		req.Header.Set("Host", host)
 	}
-	res, err := c.http.Do(req)
+	res, err := client.Do(req)
 	if err != nil {
 		return err
 	}

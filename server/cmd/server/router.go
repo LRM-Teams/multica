@@ -811,6 +811,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Delete("/", h.DeleteSandboxInstance)
 				r.Post("/stop", h.StopSandboxInstance)
 				r.Post("/resume", h.ResumeSandboxInstance)
+				r.Post("/create-template", h.CreateSandboxSnapshotTemplate)
 			})
 
 			// Task messages (user-facing, not daemon auth)

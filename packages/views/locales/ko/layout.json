@@ -93,6 +93,9 @@
     "waiting_local": "로컬 샌드박스 대기 중",
     "resume_action": "재개",
     "stop_action": "중지",
+    "create_template_action": "스냅샷 템플릿",
+    "create_template_success": "스냅샷 템플릿 생성을 시작했습니다",
+    "create_template_failed": "스냅샷 템플릿 생성에 실패했습니다",
     "delete_action": "삭제",
     "delete_dialog": {
       "title": "샌드박스를 삭제할까요?",

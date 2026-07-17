@@ -49,3 +49,14 @@ export function useDeleteSandboxMutation(wsId: string) {
     onSuccess: invalidate,
   });
 }
+
+export function useCreateSandboxTemplateMutation(wsId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.createSandboxTemplate(id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: sandboxKeys.all(wsId) });
+      void queryClient.invalidateQueries({ queryKey: ["sandboxes", "nodes"] });
+    },
+  });
+}

@@ -93,6 +93,9 @@
     "waiting_local": "waiting for local sandbox",
     "resume_action": "Resume",
     "stop_action": "Stop",
+    "create_template_action": "Snapshot template",
+    "create_template_success": "Snapshot template creation started",
+    "create_template_failed": "Failed to create snapshot template",
     "delete_action": "Delete",
     "delete_dialog": {
       "title": "Delete sandbox?",

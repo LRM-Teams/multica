@@ -93,6 +93,9 @@
     "waiting_local": "ローカルサンドボックス待機中",
     "resume_action": "再開",
     "stop_action": "停止",
+    "create_template_action": "スナップショット",
+    "create_template_success": "スナップショットテンプレートの作成を開始しました",
+    "create_template_failed": "スナップショットテンプレートの作成に失敗しました",
     "delete_action": "削除",
     "delete_dialog": {
       "title": "サンドボックスを削除しますか？",

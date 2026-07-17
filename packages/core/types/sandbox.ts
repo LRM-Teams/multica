@@ -7,7 +7,8 @@ export type SandboxInstanceStatus =
   | "stopping"
   | "stopped"
   | "resuming"
-  | "reconfiguring";
+  | "reconfiguring"
+  | "snapshotting";
 export type SandboxJobStatus =
   | "queued"
   | "dispatched"
@@ -89,7 +90,7 @@ export interface SandboxJob {
   initiator_user_id: string;
   node_id: string;
   instance_id: string;
-  type: "create" | "stop" | "resume" | "delete" | "reconfigure" | "exec" | "message";
+  type: "create" | "stop" | "resume" | "delete" | "reconfigure" | "create_template" | "exec" | "message";
   status: SandboxJobStatus;
   payload: Record<string, unknown>;
   result: Record<string, unknown>;

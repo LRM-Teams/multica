@@ -1769,6 +1769,16 @@ export class ApiClient {
     await this.fetch(`/api/sandboxes/${instanceId}`, { method: "DELETE" });
   }
 
+  async createSandboxTemplate(
+    instanceId: string,
+    data?: { name?: string },
+  ): Promise<SandboxJob> {
+    return this.fetch(`/api/sandboxes/${instanceId}/create-template`, {
+      method: "POST",
+      body: JSON.stringify(data ?? {}),
+    });
+  }
+
   // Members
   async listMembers(workspaceId: string): Promise<MemberWithUser[]> {
     return this.fetch(`/api/workspaces/${workspaceId}/members`);

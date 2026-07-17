@@ -2,10 +2,24 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useDefaultLayout } from "react-resizable-panels";
-import { Box, FileCode2, Layers, Loader2, Monitor, Plus, RotateCcw, Search, Server, Square, Trash2 } from "lucide-react";
+import {
+  Box,
+  Camera,
+  FileCode2,
+  Layers,
+  Loader2,
+  Monitor,
+  Plus,
+  RotateCcw,
+  Search,
+  Server,
+  Square,
+  Trash2,
+} from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   useCreateSandboxMutation,
+  useCreateSandboxTemplateMutation,
   useDeleteSandboxMutation,
   useResumeSandboxMutation,
   useStopSandboxMutation,
@@ -192,6 +206,18 @@ export function SandboxesPage() {
   const stop = useStopSandboxMutation(wsId);
   const resume = useResumeSandboxMutation(wsId);
   const del = useDeleteSandboxMutation(wsId);
+  const createTemplate = useCreateSandboxTemplateMutation(wsId);
+
+  const handleCreateTemplate = async (instanceId: string) => {
+    try {
+      await createTemplate.mutateAsync(instanceId);
+      toast.success(t(($) => $.sandboxes_page.create_template_success));
+    } catch (e) {
+      toast.error(
+        e instanceof Error ? e.message : t(($) => $.sandboxes_page.create_template_failed),
+      );
+    }
+  };
 
   const createTemplatesQuery = useQuery({
     ...sandboxNodeTemplatesOptions(createForm.nodeId),
@@ -291,9 +317,11 @@ export function SandboxesPage() {
             stoppingId={stop.isPending ? stop.variables : undefined}
             resumingId={resume.isPending ? resume.variables : undefined}
             deletingId={del.isPending ? del.variables : undefined}
+            creatingTemplateId={createTemplate.isPending ? createTemplate.variables : undefined}
             onOpen={(instanceId) => navigation.push(paths.sandboxDetail(instanceId))}
             onStop={(instanceId) => stop.mutate(instanceId)}
             onResume={(instanceId) => resume.mutate(instanceId)}
+            onCreateTemplate={handleCreateTemplate}
             onDelete={setDeleteConfirmInstance}
           />
         </div>
@@ -334,9 +362,11 @@ export function SandboxesPage() {
                 stoppingId={stop.isPending ? stop.variables : undefined}
                 resumingId={resume.isPending ? resume.variables : undefined}
                 deletingId={del.isPending ? del.variables : undefined}
+                creatingTemplateId={createTemplate.isPending ? createTemplate.variables : undefined}
                 onOpen={(instanceId) => navigation.push(paths.sandboxDetail(instanceId))}
                 onStop={(instanceId) => stop.mutate(instanceId)}
                 onResume={(instanceId) => resume.mutate(instanceId)}
+                onCreateTemplate={handleCreateTemplate}
                 onDelete={setDeleteConfirmInstance}
               />
             </ResizablePanel>
@@ -595,9 +625,11 @@ function NodeDetail({
   stoppingId,
   resumingId,
   deletingId,
+  creatingTemplateId,
   onOpen,
   onStop,
   onResume,
+  onCreateTemplate,
   onDelete,
 }: {
   binding: SandboxBinding | null;
@@ -607,9 +639,11 @@ function NodeDetail({
   stoppingId?: string;
   resumingId?: string;
   deletingId?: string;
+  creatingTemplateId?: string;
   onOpen: (instanceId: string) => void;
   onStop: (instanceId: string) => void;
   onResume: (instanceId: string) => void;
+  onCreateTemplate: (instanceId: string) => void;
   onDelete: (instance: SandboxInstance) => void;
 }) {
   const { t } = useT("layout");
@@ -724,9 +758,11 @@ function NodeDetail({
                 stopping={stoppingId === instance.id}
                 resuming={resumingId === instance.id}
                 deleting={deletingId === instance.id}
+                creatingTemplate={creatingTemplateId === instance.id}
                 onOpen={() => onOpen(instance.id)}
                 onStop={() => onStop(instance.id)}
                 onResume={() => onResume(instance.id)}
+                onCreateTemplate={() => onCreateTemplate(instance.id)}
                 onDelete={() => onDelete(instance)}
               />
             ))}
@@ -742,25 +778,34 @@ function SandboxRow({
   stopping,
   resuming,
   deleting,
+  creatingTemplate,
   onOpen,
   onStop,
   onResume,
+  onCreateTemplate,
   onDelete,
 }: {
   instance: SandboxInstance;
   stopping: boolean;
   resuming: boolean;
   deleting: boolean;
+  creatingTemplate: boolean;
   onOpen: () => void;
   onStop: () => void;
   onResume: () => void;
+  onCreateTemplate: () => void;
   onDelete: () => void;
 }) {
   const { t } = useT("layout");
   const canStop = instance.status === "running";
   const canResume = instance.status === "stopped";
-  const canDelete = instance.status !== "reconfiguring" && instance.status !== "resuming";
+  const canCreateTemplate = instance.status === "running" && !!instance.local_ref;
+  const canDelete =
+    instance.status !== "reconfiguring" &&
+    instance.status !== "resuming" &&
+    instance.status !== "snapshotting";
   const displayName = sandboxDisplayName(instance);
+  const snapshotBusy = creatingTemplate || instance.status === "snapshotting";
 
   return (
     <div className="flex items-center justify-between gap-4 px-5 py-3.5">
@@ -781,11 +826,20 @@ function SandboxRow({
             {t(($) => $.sandboxes_page.resume_action)}
           </Button>
         ) : (
-          <Button size="sm" variant="outline" disabled={!canStop || stopping} onClick={onStop}>
+          <Button size="sm" variant="outline" disabled={!canStop || stopping || snapshotBusy} onClick={onStop}>
             {stopping ? <Loader2 className="mr-2 size-3.5 animate-spin" /> : <Square className="mr-2 size-3.5" />}
             {t(($) => $.sandboxes_page.stop_action)}
           </Button>
         )}
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!canCreateTemplate || snapshotBusy}
+          onClick={onCreateTemplate}
+        >
+          {snapshotBusy ? <Loader2 className="mr-2 size-3.5 animate-spin" /> : <Camera className="mr-2 size-3.5" />}
+          {t(($) => $.sandboxes_page.create_template_action)}
+        </Button>
         <Button size="sm" variant="ghost" disabled={!canDelete || deleting} onClick={onDelete}>
           <Trash2 className="mr-2 size-3.5" /> {t(($) => $.sandboxes_page.delete_action)}
         </Button>
@@ -854,7 +908,11 @@ function StatusBadge({ status }: { status: string }) {
       ? "default"
       : status === "failed"
         ? "destructive"
-        : status === "reconfiguring" || status === "creating" || status === "resuming" || status === "stopping"
+        : status === "reconfiguring" ||
+            status === "creating" ||
+            status === "resuming" ||
+            status === "stopping" ||
+            status === "snapshotting"
           ? "secondary"
           : "secondary";
   return <Badge variant={variant}>{status}</Badge>;

@@ -756,6 +756,54 @@ func (a *envDispatchDepsAdapter) DeleteChannel(ctx context.Context, workspaceID,
 	return err
 }
 
+func (a *envDispatchDepsAdapter) ProvisionEnvDispatchAgent(ctx context.Context, in service.EnvDispatchAgentProvisionInput) (service.EnvDispatchAgentProvisionResult, error) {
+	result, err := a.h.provisionEnvDispatchAgent(ctx, ProvisionEnvDispatchAgentInput{
+		WorkspaceID:             in.WorkspaceID,
+		UserID:                  in.UserID,
+		EnvID:                   in.EnvID,
+		ProjectID:               in.ProjectID,
+		ChannelID:               in.ChannelID,
+		AgentID:                 in.AgentID,
+		SourceSandboxInstanceID: in.SourceSandboxInstanceID,
+		SandboxConfig:           in.SandboxConfig,
+	})
+	if err != nil {
+		return service.EnvDispatchAgentProvisionResult{}, err
+	}
+	return service.EnvDispatchAgentProvisionResult{
+		SandboxInstanceID: result.SandboxInstanceID,
+		RuntimeID:         result.RuntimeID,
+		DaemonID:          result.DaemonID,
+		ChatSessionID:     result.ChatSessionID,
+	}, nil
+}
+
+func (a *envDispatchDepsAdapter) CreateChannelMessage(ctx context.Context, channelID, workspaceID, userID, content string) (string, error) {
+	message, err := a.h.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(workspaceID), "user", parseUUID(userID), "Env Dispatch", content, "env_dispatch", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		return "", stackerr.Wrap(err, "create env-dispatch channel message")
+	}
+	return message.ID, nil
+}
+
+func (a *envDispatchDepsAdapter) EnqueueEnvDispatchChannelRun(ctx context.Context, workspaceID, userID string, in service.ChannelRunInput, idx int) (string, error) {
+	return a.EnqueueAgentRun(ctx, workspaceID, userID, in.AgentID, "", "", in.ChatSessionID, in.SandboxInstanceID, in.EnvID, in.RuntimeID, idx)
+}
+
+func (a *envDispatchDepsAdapter) SaveCollaborationTrigger(ctx context.Context, envID string, trigger service.EnvCollaborationTrigger) error {
+	return (envDispatchChannelStore{}).saveTrigger(ctx, a.h.DB, envID, envCollaborationTrigger{
+		AgentID:             trigger.AgentID,
+		Kind:                trigger.Kind,
+		ChannelID:           trigger.ChannelID,
+		ProjectID:           trigger.ProjectID,
+		ChatSessionID:       trigger.ChatSessionID,
+		SourceMessageID:     trigger.SourceMessageID,
+		ThreadRootMessageID: trigger.ThreadRootMessageID,
+		TaskID:              trigger.TaskID,
+		RuntimeID:           trigger.RuntimeID,
+	})
+}
+
 // ListIssuesByProject returns all issues under a project. Used during
 // CopyProjectSubtree to deep-copy the source project's issues.
 func (a *envDispatchDepsAdapter) ListIssuesByProject(ctx context.Context, projectID, workspaceID string) ([]service.IssueRow, error) {
@@ -1541,6 +1589,18 @@ func (s *stubEnvDispatchDeps) CreateEnvDispatchChannel(context.Context, string, 
 	return "stub-channel", nil
 }
 func (s *stubEnvDispatchDeps) DeleteChannel(context.Context, string, string) error { return nil }
+func (s *stubEnvDispatchDeps) ProvisionEnvDispatchAgent(context.Context, service.EnvDispatchAgentProvisionInput) (service.EnvDispatchAgentProvisionResult, error) {
+	return service.EnvDispatchAgentProvisionResult{SandboxInstanceID: "stub-sandbox", RuntimeID: "stub-runtime", DaemonID: "stub-daemon", ChatSessionID: "stub-session"}, nil
+}
+func (s *stubEnvDispatchDeps) CreateChannelMessage(context.Context, string, string, string, string) (string, error) {
+	return "stub-channel-message", nil
+}
+func (s *stubEnvDispatchDeps) EnqueueEnvDispatchChannelRun(context.Context, string, string, service.ChannelRunInput, int) (string, error) {
+	return "stub-channel-run", nil
+}
+func (s *stubEnvDispatchDeps) SaveCollaborationTrigger(context.Context, string, service.EnvCollaborationTrigger) error {
+	return nil
+}
 func (s *stubEnvDispatchDeps) ListIssuesByProject(context.Context, string, string) ([]service.IssueRow, error) {
 	return nil, nil
 }

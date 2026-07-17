@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -86,6 +87,10 @@ type EnvDispatchInput struct {
 	// Probed once per dispatch via the lifecycle creator; false for Fleet-booted
 	// base envs and when no lifecycle is injected.
 	InstanceBackedBase bool
+
+	// MessageRoster is resolved once before reset fan-out. It is internal
+	// dispatch state, not an HTTP request field.
+	MessageRoster MessageRoster
 }
 
 // PerAgentEnvSpec assigns one squad agent to a sandbox template or base
@@ -111,6 +116,26 @@ type MessageInput struct {
 type MessageRoster struct {
 	LeaderID string
 	AgentIDs []string
+}
+
+// EnvDispatchAgentProvisionInput identifies the channel member whose isolated
+// runtime, sandbox, and channel chat session must be created.
+type EnvDispatchAgentProvisionInput struct {
+	WorkspaceID, UserID, EnvID, ProjectID, ChannelID, AgentID string
+	SourceSandboxInstanceID                                   string
+	SandboxConfig                                             json.RawMessage
+}
+
+type EnvDispatchAgentProvisionResult struct {
+	SandboxInstanceID, RuntimeID, DaemonID, ChatSessionID string
+}
+
+// ChannelRunInput carries the explicit binding IDs that must be used for an
+// EnvDispatch channel task. In particular, RuntimeID is never inferred from
+// the agent's shared default runtime.
+type ChannelRunInput struct {
+	AgentID, ChannelID, ProjectID, EnvID, ChatSessionID string
+	SandboxInstanceID, RuntimeID, SourceMessageID       string
 }
 
 type AgentSandboxStatus struct {
@@ -174,6 +199,10 @@ type EnvDispatchDeps interface {
 	ResolveMessageRoster(ctx context.Context, workspaceID, agentID, squadID string) (MessageRoster, error)
 	CreateEnvDispatchChannel(ctx context.Context, workspaceID, userID, projectID, envID string, roster MessageRoster, specs map[string]SandboxInstanceRef) (channelID string, err error)
 	DeleteChannel(ctx context.Context, workspaceID, channelID string) error
+	ProvisionEnvDispatchAgent(ctx context.Context, in EnvDispatchAgentProvisionInput) (EnvDispatchAgentProvisionResult, error)
+	CreateChannelMessage(ctx context.Context, channelID, workspaceID, userID, content string) (messageID string, err error)
+	EnqueueEnvDispatchChannelRun(ctx context.Context, workspaceID, userID string, in ChannelRunInput, idx int) (runID string, err error)
+	SaveCollaborationTrigger(ctx context.Context, envID string, trigger EnvCollaborationTrigger) error
 
 	// Issue operations
 	ListIssuesByProject(ctx context.Context, projectID, workspaceID string) ([]IssueRow, error)
@@ -246,6 +275,14 @@ type EnvDispatchDeps interface {
 	// sandbox_instance via SandboxInstanceCreator). Returns a typed error when
 	// the template/base_env_id is unknown or unauthorized.
 	ResolvePerAgentEnvSpec(ctx context.Context, workspaceID string, spec PerAgentEnvSpec) (SandboxInstanceRef, error)
+}
+
+// EnvCollaborationTrigger is the persisted source of truth for a branch to
+// resume a channel collaboration without reusing a source runtime or task.
+type EnvCollaborationTrigger struct {
+	AgentID, Kind, ChannelID, ProjectID, ChatSessionID, SourceMessageID string
+	ThreadRootMessageID                                                 *string
+	TaskID, RuntimeID                                                   string
 }
 
 // Env is a snapshot of an environment row.
@@ -331,6 +368,7 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 		if err != nil {
 			return EnvDispatchResult{}, fmt.Errorf("validation_failed: resolve message roster: %w", err)
 		}
+		in.MessageRoster = messageRoster
 	}
 
 	// DB-backed per-agent env spec validation (§5): reject unknown agents and
@@ -801,6 +839,12 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 // trained rollouts are the checkpointing target). Non-trained rollouts keep
 // the Fleet fork path.
 func (s *EnvDispatchService) useSandboxInstanceBackend(in EnvDispatchInput) bool {
+	// Scratch message dispatch provisions the leader through its channel binding
+	// after the project and channel exist. Creating an instance here would
+	// pre-create a second runtime and let the task bypass that binding.
+	if in.DispatchType == EnvDispatchMessage && in.Mode == EnvModeScratch {
+		return false
+	}
 	// train_agent_id keeps the existing D7 trained-rollout path. InstanceBackedBase
 	// extends it to any dispatch forking a sandbox_instance-backed base env (e.g.
 	// an auto-created default self_play env), so the non-trained self_play case
@@ -931,6 +975,10 @@ func rolloutSandboxInstanceID(in EnvDispatchInput, r EnvRollout) string {
 // dispatchOne runs the dispatch phase for one rollout (§7.3). Best-effort:
 // failures recorded in r.Error, no rollback.
 func (s *EnvDispatchService) dispatchOne(ctx context.Context, in EnvDispatchInput, r *EnvRollout, idx int) {
+	if in.DispatchType == EnvDispatchMessage && in.Mode == EnvModeScratch && r.ChannelID != "" {
+		s.dispatchScratchChannelMessage(ctx, in, r, idx)
+		return
+	}
 	runtimeID := rolloutRuntimeID(in, *r)
 	sandboxInstanceID := rolloutSandboxInstanceID(in, *r)
 	// If this rollout's task is never created (any pre-enqueue step fails, or
@@ -997,6 +1045,84 @@ func (s *EnvDispatchService) dispatchOne(ctx context.Context, in EnvDispatchInpu
 		r.Stack = stackerr.StackOf(err)
 		return
 	}
+	r.AgentRunID = runID
+}
+
+// dispatchScratchChannelMessage starts only the canonical roster leader. The
+// other channel members retain pending bindings and are provisioned by the
+// channel delivery hook on their first directed mention.
+func (s *EnvDispatchService) dispatchScratchChannelMessage(ctx context.Context, in EnvDispatchInput, r *EnvRollout, idx int) {
+	leaderID := in.MessageRoster.LeaderID
+	if leaderID == "" {
+		r.Error = "internal: missing message roster leader"
+		return
+	}
+	provisioned, err := s.deps.ProvisionEnvDispatchAgent(ctx, EnvDispatchAgentProvisionInput{
+		WorkspaceID:   in.WorkspaceID,
+		UserID:        in.UserID,
+		EnvID:         r.EnvID,
+		ProjectID:     r.ProjectID,
+		ChannelID:     r.ChannelID,
+		AgentID:       leaderID,
+		SandboxConfig: json.RawMessage(`{}`),
+	})
+	if err != nil {
+		r.Error = fmt.Sprintf("provision channel leader: %v", err)
+		r.Stack = stackerr.StackOf(err)
+		return
+	}
+	defer func() {
+		if r.AgentRunID == "" {
+			_ = s.deps.DeleteAgentRuntime(ctx, in.WorkspaceID, provisioned.RuntimeID)
+		}
+	}()
+	r.ChatSessionID = provisioned.ChatSessionID
+	r.AgentSandboxes = make(map[string]AgentSandboxStatus, len(in.MessageRoster.AgentIDs))
+	for _, agentID := range in.MessageRoster.AgentIDs {
+		r.AgentSandboxes[agentID] = AgentSandboxStatus{Status: "pending"}
+	}
+	r.AgentSandboxes[leaderID] = AgentSandboxStatus{
+		Status:            "ready",
+		SandboxInstanceID: provisioned.SandboxInstanceID,
+		RuntimeID:         provisioned.RuntimeID,
+	}
+
+	messageID, err := s.deps.CreateChannelMessage(ctx, r.ChannelID, in.WorkspaceID, in.UserID, in.Message.Content)
+	if err != nil {
+		r.Error = fmt.Sprintf("create channel message: %v", err)
+		r.Stack = stackerr.StackOf(err)
+		return
+	}
+	runID, err := s.deps.EnqueueEnvDispatchChannelRun(ctx, in.WorkspaceID, in.UserID, ChannelRunInput{
+		AgentID:           leaderID,
+		ChannelID:         r.ChannelID,
+		ProjectID:         r.ProjectID,
+		EnvID:             r.EnvID,
+		ChatSessionID:     provisioned.ChatSessionID,
+		SandboxInstanceID: provisioned.SandboxInstanceID,
+		RuntimeID:         provisioned.RuntimeID,
+		SourceMessageID:   messageID,
+	}, idx)
+	if err != nil {
+		r.Error = fmt.Sprintf("enqueue channel leader: %v", err)
+		r.Stack = stackerr.StackOf(err)
+		return
+	}
+	if err := s.deps.SaveCollaborationTrigger(ctx, r.EnvID, EnvCollaborationTrigger{
+		AgentID:         leaderID,
+		Kind:            "channel_message",
+		ChannelID:       r.ChannelID,
+		ProjectID:       r.ProjectID,
+		ChatSessionID:   provisioned.ChatSessionID,
+		SourceMessageID: messageID,
+		TaskID:          runID,
+		RuntimeID:       provisioned.RuntimeID,
+	}); err != nil {
+		r.Error = fmt.Sprintf("save collaboration trigger: %v", err)
+		r.Stack = stackerr.StackOf(err)
+		return
+	}
+	r.LeaderRunID = runID
 	r.AgentRunID = runID
 }
 

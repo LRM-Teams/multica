@@ -31,3 +31,20 @@ func TestPlanAgentASCIIHandleBackfill(t *testing.T) {
 		t.Fatalf("valid current handle was unexpectedly changed: %#v", updates)
 	}
 }
+
+func TestPlanAgentASCIIHandleBackfillRepairsTruncatedTrailingSeparator(t *testing.T) {
+	updates, err := planAgentASCIIHandleBackfill([]agentHandleBackfillRow{
+		{
+			ID:          "1",
+			WorkspaceID: "workspace",
+			Name:        "ai-fa-qi-tuan-dui-chan-pin-jing-",
+			DisplayName: "AI发起团队产品经理agent",
+		},
+	})
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	if got, want := updates["1"], "ai-fa-qi-tuan-dui-chan-pin-jing"; got != want {
+		t.Fatalf("update[1] = %q, want %q", got, want)
+	}
+}

@@ -14,6 +14,7 @@ func TestIdentityHandleGenerationUsesASCIIIMSlugAndSuffixes(t *testing.T) {
 		{"Latin accent", "café", 1, "cafe"},
 		{"duplicate suffix", "小雅", 2, "xiao-ya-2"},
 		{"max length suffix", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 2, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-2"},
+		{"truncation keeps separator grammar", "AI发起团队产品经理agent", 1, "ai-fa-qi-tuan-dui-chan-pin-jing"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := identityHandleCandidate(identityHandleBase(tt.base, "Agent"), tt.try); got != tt.want {

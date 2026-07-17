@@ -1186,6 +1186,90 @@ func TestChannelAgentInboxCompleteDirectedMentionWithoutTransportRecordsNoReply(
 	}
 }
 
+func TestChannelAgentInboxFreshnessHoldRemainsHeldDraftOutcome(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentName := "Inbox Held Draft Agent " + uuid.NewString()[:8]
+	agentID := createHandlerTestAgent(t, agentName, nil)
+	runtimeID := handlerTestRuntimeID(t)
+	channelID := seedChannelForTest(t, "agent-inbox-held-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "[@"+agentName+"](mention://agent/"+agentID+") reply after reviewing newer context", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-held"), 0)
+	if err != nil {
+		t.Fatalf("insert mention trigger: %v", err)
+	}
+	testHandler.dispatchChannelMessageToAgents(ctx, ch, trigger, parseUUID(testUserID))
+
+	drainReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "agent-inbox-held-daemon")
+	drainReq = withURLParam(drainReq, "runtimeId", runtimeID)
+	drainRec := httptest.NewRecorder()
+	testHandler.DrainAgentInboxByRuntime(drainRec, drainReq)
+	if drainRec.Code != http.StatusOK {
+		t.Fatalf("drain inbox: status=%d body=%s", drainRec.Code, drainRec.Body.String())
+	}
+	var drainResp DrainAgentInboxResponse
+	if err := json.Unmarshal(drainRec.Body.Bytes(), &drainResp); err != nil || len(drainResp.Events) != 1 {
+		t.Fatalf("decode held inbox drain: err=%v body=%s", err, drainRec.Body.String())
+	}
+	got := drainResp.Events[0]
+
+	// This is the persisted audit produced by the real transport hold path.
+	// The dedicated transport suite separately proves that it also saves the
+	// draft; completion must preserve the distinct held outcome rather than
+	// collapsing it into a no_reply terminal state.
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_task_transport_audit (
+			workspace_id, inbox_event_id, agent_id, action, target, context_pack
+		) VALUES ($1, $2, $3, 'message_send', $4, $5::jsonb)`,
+		testWorkspaceID, got.ID, agentID, "#"+channelNameForTransportTest(t, channelID), `{"held":true,"subtype":"freshness","decision":"local_hold"}`); err != nil {
+		t.Fatalf("record freshness hold audit: %v", err)
+	}
+
+	completeReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+got.ID+"/complete", CompleteAgentInboxEventRequest{
+		DeliveryID: got.DeliveryID,
+		LeaseToken: got.LeaseToken,
+		TaskCompleteRequest: TaskCompleteRequest{
+			Output: "suppressed final after freshness hold",
+		},
+	}, testWorkspaceID, "agent-inbox-held-daemon")
+	completeReq = withURLParam(completeReq, "eventId", got.ID)
+	completeRec := httptest.NewRecorder()
+	testHandler.CompleteAgentInboxEvent(completeRec, completeReq)
+	if completeRec.Code != http.StatusOK {
+		t.Fatalf("complete held inbox event: status=%d body=%s", completeRec.Code, completeRec.Body.String())
+	}
+
+	var terminalOutcome string
+	if err := testPool.QueryRow(ctx, `SELECT COALESCE(terminal_outcome, '') FROM agent_inbox_event WHERE id = $1`, got.ID).Scan(&terminalOutcome); err != nil {
+		t.Fatalf("load held inbox terminal outcome: %v", err)
+	}
+	if terminalOutcome != "held" {
+		t.Fatalf("held inbox terminal outcome = %q, want held", terminalOutcome)
+	}
+
+	var failureCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM agent_activity_event
+		WHERE workspace_id = $1 AND agent_id = $2 AND event_type = 'agent_inbox_failed'
+		  AND details->>'inbox_event_id' = $3`, testWorkspaceID, agentID, got.ID).Scan(&failureCount); err != nil {
+		t.Fatalf("count held inbox failures: %v", err)
+	}
+	if failureCount != 0 {
+		t.Fatalf("held inbox failure activity = %d, want 0", failureCount)
+	}
+}
+
 func TestChannelAgentInboxMessagesRecordRuntimeTrajectory(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

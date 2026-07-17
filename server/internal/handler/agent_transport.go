@@ -1450,6 +1450,24 @@ func (h *Handler) inboxEventHasAgentTransportVisibleOutput(ctx context.Context, 
 	return err == nil && exists
 }
 
+// inboxEventHasAgentTransportFreshnessHold reports the Raft-compatible send
+// boundary: the attempted output was saved as a draft because newer context
+// arrived. It is deliberately distinct from a visible transport reply and
+// from an agent's explicit decision not to reply.
+func (h *Handler) inboxEventHasAgentTransportFreshnessHold(ctx context.Context, eventID pgtype.UUID) bool {
+	var exists bool
+	err := h.DB.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM agent_task_transport_audit
+			WHERE inbox_event_id = $1
+			  AND action = 'message_send'
+			  AND COALESCE(context_pack->>'held', 'false') = 'true'
+			  AND context_pack->>'subtype' = 'freshness'
+		)`, eventID).Scan(&exists)
+	return err == nil && exists
+}
+
 func channelMessageIDs(messages []ChannelMessageResponse) []string {
 	out := make([]string, 0, len(messages))
 	for _, msg := range messages {

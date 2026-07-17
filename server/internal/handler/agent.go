@@ -1850,6 +1850,8 @@ func inboxEventTaskStatus(status, terminalOutcome, deliveryStatus string) string
 	switch terminalOutcome {
 	case "replied", "no_reply":
 		return "completed"
+	case "held":
+		return "held"
 	case "failed":
 		return "failed"
 	}

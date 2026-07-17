@@ -83,9 +83,9 @@ export interface ChannelThreadWakeAnnotation {
   member_type: string;
   member_id: string;
   display_name: string;
-  state: "pending" | "replied" | "acked" | "delivered" | "no_reply" | "failed" | (string & {});
+  state: "pending" | "held" | "replied" | "acked" | "delivered" | "no_reply" | "failed" | (string & {});
   reason?: string | null;
-  outcome?: "replied" | "no_reply" | "failed" | null;
+  outcome?: "replied" | "held" | "no_reply" | "failed" | null;
   retryable?: boolean | null;
   inbox_event_id?: string | null;
   delivery_id?: string | null;

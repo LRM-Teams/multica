@@ -2077,6 +2077,8 @@ func channelThreadWakeAnnotationState(memberType, taskStatus, terminalOutcome st
 		return "replied", nil, true
 	}
 	switch terminalOutcome {
+	case "held":
+		return "held", nil, true
 	case "no_reply":
 		return "no_reply", nil, true
 	case "failed":

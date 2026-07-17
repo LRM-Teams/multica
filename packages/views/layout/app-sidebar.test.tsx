@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from "@testing-library/react";
+import { cloneElement, isValidElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@multica/core/api";
 import { I18nProvider } from "@multica/core/i18n/react";
@@ -55,7 +56,8 @@ vi.mock("@multica/ui/components/ui/sidebar", () => ({
   SidebarGroupLabel: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   SidebarHeader: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   SidebarMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  SidebarMenuButton: ({ children }: { children: React.ReactNode }) => <button type="button">{children}</button>,
+  SidebarMenuButton: ({ children, render }: { children: React.ReactNode; render?: React.ReactElement }) =>
+    isValidElement(render) ? cloneElement(render, undefined, children) : <button type="button">{children}</button>,
   SidebarMenuItem: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   SidebarRail: () => null,
 }));
@@ -180,19 +182,17 @@ describe("PinRow", () => {
   });
 });
 
-describe("AppSidebar workspace nav", () => {
+describe("AppSidebar navigation", () => {
   beforeEach(() => {
     detail.current = { isPending: false, isError: false, data: null, error: null };
   });
 
-  it("renders Messages at the top of the workspace group, above Overview", () => {
+  it("replaces My Issues with one personal Messages entry", () => {
     renderSidebar();
-    const messages = screen.getByText("Messages");
-    const overview = screen.getByText("Overview");
-    // Messages must precede Overview in document order.
-    expect(
-      messages.compareDocumentPosition(overview) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+    expect(screen.queryByText("My Issues")).toBeNull();
+    const messages = screen.getAllByText("Messages");
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.closest("a")).toHaveAttribute("href", "/acme/channels");
   });
 
   it("does not render the New Issue row (removed from the sidebar)", () => {

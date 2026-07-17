@@ -31,7 +31,6 @@ import {
   Plus,
   Check,
   BookOpenText,
-  CircleUser,
   FolderKanban,
   BarChart3,
   Sparkles,
@@ -145,14 +144,10 @@ type NavLabelKey =
 
 const personalNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] = [
   { key: "inbox", labelKey: "inbox", icon: Inbox },
-  { key: "myIssues", labelKey: "my_issues", icon: CircleUser },
+  { key: "channels", labelKey: "channels", icon: MessageCircle },
 ];
 
-// Order is by how often you reach for it, not by module hierarchy: chat is the
-// highest-frequency surface here, so it sits at the very top of the group,
-// above Overview (Frank).
 const workspaceNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] = [
-  { key: "channels", labelKey: "channels", icon: MessageCircle },
   { key: "overview", labelKey: "overview", icon: LayoutDashboard },
   { key: "issues", labelKey: "issues", icon: ListTodo },
   { key: "projects", labelKey: "projects", icon: FolderKanban },

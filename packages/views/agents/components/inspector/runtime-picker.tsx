@@ -197,7 +197,7 @@ export function RuntimePicker({
                     {rt.name}
                   </span>
                   {rt.runtime_mode === "cloud" && (
-                    <span className="shrink-0 rounded bg-info/10 px-1 text-[10px] font-medium text-info">
+                    <span className="shrink-0 rounded bg-brand/10 px-1 text-[10px] font-medium text-brand">
                       {t(($) => $.create_dialog.runtime_cloud_badge)}
                     </span>
                   )}

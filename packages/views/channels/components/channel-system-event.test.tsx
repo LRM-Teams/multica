@@ -2,8 +2,13 @@ import type { ReactNode } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessage, MessagePart } from "@multica/core/types";
-import { parseMemberSystemEvent } from "./channel-system-event";
-import { MemberSystemEventContent } from "./channel-system-event-content";
+import {
+  parseMemberSystemEvent,
+  parseIssueSystemEvent,
+  foldedIssueEventIds,
+  type IssueSystemEvent,
+} from "./channel-system-event";
+import { MemberSystemEventContent, IssueSystemEventContent } from "./channel-system-event-content";
 
 const mockAgents = [{ id: "agent-9", handle: "nova" }];
 const mockMembers = [
@@ -66,18 +71,65 @@ vi.mock("../../common/actor-profile-popover", () => ({
   ),
 }));
 
+// The issue-ref token is the ONLY interactive element in an issue row — stub it
+// to a bare link so these tests can assert "exactly one link, and it's the ref".
+vi.mock("../../issues/components/issue-ref-link", () => ({
+  IssueRefLink: ({ issueId, text }: { issueId: string; text: string }) => (
+    <a href={`/issues/${issueId}`} data-issue-ref="">
+      {text}
+    </a>
+  ),
+}));
+
+// Issue rows resolve the actor/assignee display name from the identity cache.
+vi.mock("@multica/core/workspace/hooks", () => ({
+  useActorName: () => ({
+    getActorName: (_type: string, id: string, fallback?: string) =>
+      id === "agent-be"
+        ? "后端工程师"
+        : id === "user-2"
+          ? "Wendy"
+          : fallback ?? "Someone",
+  }),
+}));
+
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
-    t: (selector: (r: unknown) => string) =>
-      selector({
+    t: (selector: (r: unknown) => string, options?: Record<string, unknown>) => {
+      const raw = selector({
         message: {
           system_event: {
             member_added: "{target} was added to this channel by {actor}",
             member_removed: "{target} was removed from this channel by {actor}",
             member_left: "{target} left this channel",
+            issue: {
+              actor_system: "Multica",
+              assigned: "{{actor}} 将任务 {issue} 指派给 {{target}}",
+              assigned_unknown: "{{actor}} 重新指派了任务 {issue}",
+              in_progress: "{{actor}} 将任务 {issue} 标记为处理中",
+              in_review: "{{actor}} 将任务 {issue} 提交审核",
+              done: "{{actor}} 完成了任务 {issue}",
+              updated: "{{actor}} 更新了任务 {issue}",
+              status: "{{actor}} 将任务 {issue} 标记为{{status}}",
+            },
+            issue_status: {
+              backlog: "待办事项",
+              todo: "待办",
+              in_progress: "处理中",
+              in_review: "待审",
+              done: "已完成",
+              blocked: "已阻塞",
+              cancelled: "已取消",
+            },
           },
         },
-      }),
+      });
+      // Mirror i18next's `{{ }}` interpolation; the single-brace `{issue}` slot is
+      // left for the component to split out into the React token.
+      return options
+        ? raw.replace(/\{\{(\w+)\}\}/g, (_, key: string) => String(options[key] ?? ""))
+        : raw;
+    },
   }),
 }));
 
@@ -269,5 +321,189 @@ describe("MemberSystemEventContent", () => {
     expect(token).toHaveAttribute("data-member-type", "agent");
     fireEvent.click(token);
     expect(openPanelMock).toHaveBeenCalledWith("agent-x");
+  });
+});
+
+function issueMsg(
+  id: string,
+  event: string,
+  params: Record<string, unknown>,
+  overrides: Partial<ChannelMessage> = {},
+): ChannelMessage {
+  return systemMessage({ event, params }, { id, ...overrides });
+}
+
+describe("parseIssueSystemEvent", () => {
+  it("projects the load-bearing facts from a status-change part", () => {
+    const event = parseIssueSystemEvent(
+      issueMsg("m1", "issue_status_changed", {
+        issue_id: "issue-uuid",
+        issue_identifier: "LRM-137",
+        issue_status: "in_progress",
+        previous_status: "todo",
+        actor_id: "agent-be",
+        actor_type: "agent",
+      }),
+    );
+    expect(event).toMatchObject({
+      event: "issue_status_changed",
+      issueId: "issue-uuid",
+      issueIdentifier: "LRM-137",
+      issueStatus: "in_progress",
+      previousStatus: "todo",
+      actorId: "agent-be",
+      actorType: "agent",
+    });
+  });
+
+  it("returns null when a load-bearing fact is missing (falls back to raw content)", () => {
+    expect(
+      parseIssueSystemEvent(
+        issueMsg("m1", "issue_status_changed", {
+          issue_identifier: "LRM-137",
+          issue_status: "in_progress",
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("ignores non-issue system events", () => {
+    expect(
+      parseIssueSystemEvent(issueMsg("m1", "channel_member_added", { target_id: "user-2" })),
+    ).toBeNull();
+  });
+});
+
+describe("foldedIssueEventIds", () => {
+  it("merges a same-source completed event with a status→done event (no double render)", () => {
+    const statusDone = issueMsg("m1", "issue_status_changed", {
+      issue_id: "issue-uuid",
+      issue_identifier: "LRM-137",
+      issue_status: "done",
+    });
+    const completed = issueMsg("m2", "issue_completed", {
+      issue_id: "issue-uuid",
+      issue_identifier: "LRM-137",
+      issue_status: "done",
+    });
+    const folded = foldedIssueEventIds([statusDone, completed]);
+    // The first row survives; the redundant "done" repeat is suppressed.
+    expect([...folded]).toEqual(["m2"]);
+  });
+
+  it("keeps distinct verbs on the same task and events on different tasks", () => {
+    const inProgress = issueMsg("m1", "issue_status_changed", {
+      issue_id: "issue-a",
+      issue_identifier: "LRM-1",
+      issue_status: "in_progress",
+    });
+    const inReview = issueMsg("m2", "issue_status_changed", {
+      issue_id: "issue-a",
+      issue_identifier: "LRM-1",
+      issue_status: "in_review",
+    });
+    const otherTaskDone = issueMsg("m3", "issue_completed", {
+      issue_id: "issue-b",
+      issue_identifier: "LRM-2",
+      issue_status: "done",
+    });
+    expect(foldedIssueEventIds([inProgress, inReview, otherTaskDone]).size).toBe(0);
+  });
+
+  it("does not fold across a non-issue row between two identical events", () => {
+    const first = issueMsg("m1", "issue_completed", {
+      issue_id: "issue-a",
+      issue_identifier: "LRM-1",
+      issue_status: "done",
+    });
+    const memberRow = issueMsg("m2", "channel_member_added", { target_id: "user-2" });
+    const second = issueMsg("m3", "issue_completed", {
+      issue_id: "issue-a",
+      issue_identifier: "LRM-1",
+      issue_status: "done",
+    });
+    expect(foldedIssueEventIds([first, memberRow, second]).size).toBe(0);
+  });
+});
+
+describe("IssueSystemEventContent", () => {
+  const inProgressEvent: IssueSystemEvent = {
+    event: "issue_status_changed",
+    issueId: "issue-uuid",
+    issueIdentifier: "LRM-137",
+    issueStatus: "in_progress",
+    previousStatus: "todo",
+    actorId: "agent-be",
+    actorType: "agent",
+  };
+
+  it("renders the frozen 任务 copy with the issue ref as the SOLE link (item #7)", () => {
+    render(<IssueSystemEventContent event={inProgressEvent} />);
+
+    // Canonical example: "后端工程师 将任务 LRM-137 标记为处理中".
+    expect(document.body.textContent).toBe("后端工程师 将任务 LRM-137 标记为处理中");
+
+    // The issue identifier is the one and only clickable token.
+    const links = document.querySelectorAll("a");
+    expect(links).toHaveLength(1);
+    expect(links[0]).toHaveTextContent("LRM-137");
+    expect(links[0]).toHaveAttribute("data-issue-ref", "");
+
+    // Zero internal words / raw enums leak into the copy.
+    const text = document.body.textContent ?? "";
+    expect(text).not.toMatch(/issue/i);
+    expect(text).not.toContain("in_progress");
+    expect(text).not.toContain("移到");
+  });
+
+  it("maps each transition to its frozen action verb", () => {
+    const cases: Array<[Partial<IssueSystemEvent>, string]> = [
+      [{ event: "issue_status_changed", issueStatus: "in_review" }, "后端工程师 将任务 LRM-137 提交审核"],
+      [{ event: "issue_completed", issueStatus: "done" }, "后端工程师 完成了任务 LRM-137"],
+      [{ event: "issue_status_changed", issueStatus: "done" }, "后端工程师 完成了任务 LRM-137"],
+      [{ event: "issue_status_changed", issueStatus: "blocked" }, "后端工程师 将任务 LRM-137 标记为已阻塞"],
+    ];
+    for (const [patch, expected] of cases) {
+      const { unmount } = render(
+        <IssueSystemEventContent event={{ ...inProgressEvent, ...patch }} />,
+      );
+      expect(document.body.textContent).toBe(expected);
+      unmount();
+    }
+  });
+
+  it("degrades an UNKNOWN status to a generic action — never leaks the raw enum (Nash)", () => {
+    render(
+      <IssueSystemEventContent
+        event={{ ...inProgressEvent, event: "issue_status_changed", issueStatus: "triaging_v2" }}
+      />,
+    );
+    const text = document.body.textContent ?? "";
+    // Generic, status-less localized action…
+    expect(text).toBe("后端工程师 更新了任务 LRM-137");
+    // …and the raw enum never reaches the user face.
+    expect(text).not.toContain("triaging_v2");
+  });
+
+  it("names the assignee for an assignment, still with only the ref linked", () => {
+    render(
+      <IssueSystemEventContent
+        event={{
+          event: "issue_assigned",
+          issueId: "issue-uuid",
+          issueIdentifier: "LRM-137",
+          issueStatus: "todo",
+          actorId: "agent-be",
+          actorType: "agent",
+          targetId: "user-2",
+          targetType: "human",
+          targetName: "Wendy",
+        }}
+      />,
+    );
+    expect(document.body.textContent).toBe("后端工程师 将任务 LRM-137 指派给 Wendy");
+    const links = document.querySelectorAll("a");
+    expect(links).toHaveLength(1);
+    expect(links[0]).toHaveTextContent("LRM-137");
   });
 });

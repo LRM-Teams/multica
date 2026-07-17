@@ -37,9 +37,127 @@ export interface MemberSystemEvent {
   targetName?: string;
 }
 
+/**
+ * Issue-lifecycle backflow events (#497). The BE mirrors a narrow set of issue
+ * facts into the originating discussion as `type=system` rows carrying a
+ * `system_event` part (the factual transition) alongside an anchored `issue-ref`
+ * reference part (the token). The FE composes its OWN user-facing copy from the
+ * structured params — "任务" only, localized action verbs, never a raw status
+ * enum or the internal word "issue" (item #7 frozen口径).
+ */
+export const ISSUE_EVENTS = {
+  assigned: "issue_assigned",
+  statusChanged: "issue_status_changed",
+  completed: "issue_completed",
+} as const;
+
+export type IssueSystemEventKind = (typeof ISSUE_EVENTS)[keyof typeof ISSUE_EVENTS];
+
+const ISSUE_EVENT_KINDS = new Set<string>(Object.values(ISSUE_EVENTS));
+
+export interface IssueSystemEvent {
+  event: IssueSystemEventKind;
+  /** Issue uuid — the ref_id the inline token links/hovers on. */
+  issueId: string;
+  /** Canonical identifier ("LRM-137") — the token's verbatim text. */
+  issueIdentifier: string;
+  /** New status enum (never rendered raw; drives the localized verb). */
+  issueStatus: string;
+  previousStatus?: string;
+  actorId?: string;
+  /** Public actor type: "human" | "agent" (see channelMemberSystemEventPublicType). */
+  actorType?: string;
+  targetId?: string;
+  targetType?: string;
+  targetHandle?: string;
+  targetName?: string;
+}
+
 function optString(params: Record<string, unknown>, key: string): string | undefined {
   const value = params[key];
   return typeof value === "string" && value ? value : undefined;
+}
+
+/**
+ * Extract the structured issue-lifecycle event from a system message's parts.
+ * Returns null for anything that isn't one (member changes, archive notices,
+ * or old backflow rows that predate the `system_event` part and carry only the
+ * reference — those keep the raw-content projection). Identity comes entirely
+ * from the `system_event` params, so the projection never parses the fallback
+ * `content` string.
+ */
+export function parseIssueSystemEvent(message: ChannelMessage): IssueSystemEvent | null {
+  if (message.type !== "system" || !Array.isArray(message.parts)) return null;
+  for (const part of message.parts) {
+    if (part.type !== "system_event" || !ISSUE_EVENT_KINDS.has(part.event)) continue;
+    const params = part.event_params;
+    const issueId = optString(params, "issue_id");
+    const issueIdentifier = optString(params, "issue_identifier");
+    const issueStatus = optString(params, "issue_status");
+    // A row missing any of the three load-bearing facts can't be projected into
+    // the "任务 <ref> <verb>" sentence — fall back to the raw-content path.
+    if (!issueId || !issueIdentifier || !issueStatus) continue;
+    return {
+      event: part.event as IssueSystemEventKind,
+      issueId,
+      issueIdentifier,
+      issueStatus,
+      previousStatus: optString(params, "previous_status"),
+      actorId: optString(params, "actor_id"),
+      actorType: optString(params, "actor_type"),
+      targetId: optString(params, "target_id"),
+      targetType: optString(params, "target_type"),
+      targetHandle: optString(params, "target_handle"),
+      targetName: optString(params, "target_name"),
+    };
+  }
+  return null;
+}
+
+/**
+ * The equivalence class two consecutive issue events must share to fold into one
+ * row. A `completed` event and a `status→done` event for the SAME issue collapse
+ * to the same key (both are "this task is done"), so a defensive double-emit —
+ * or the BE's completed-instead-of-status pair — never double-renders. Distinct
+ * verbs on the same task (…→in_progress then …→in_review) keep DIFFERENT keys and
+ * both show; only exact repeats merge.
+ */
+function issueEventFoldKey(event: IssueSystemEvent): string {
+  const kind =
+    event.event === ISSUE_EVENTS.assigned
+      ? "assigned"
+      : event.event === ISSUE_EVENTS.completed || event.issueStatus === "done"
+        ? "done"
+        : `status:${event.issueStatus}`;
+  return `${event.issueId}::${kind}`;
+}
+
+/**
+ * Ids of issue system rows that should NOT render because an immediately
+ * preceding row already conveys the same fact (see {@link issueEventFoldKey}).
+ * Pure over the ordered message window — the caller keeps the FIRST occurrence
+ * and skips the redundant repeats. Deliberately derives a Set instead of
+ * filtering the array so the virtualized list's data/indices stay untouched.
+ */
+export function foldedIssueEventIds(
+  messages: readonly ChannelMessage[],
+): Set<string> {
+  const suppressed = new Set<string>();
+  let prevKey: string | null = null;
+  for (const message of messages) {
+    const event = parseIssueSystemEvent(message);
+    if (!event) {
+      prevKey = null;
+      continue;
+    }
+    const key = issueEventFoldKey(event);
+    if (key === prevKey) {
+      suppressed.add(message.id);
+    } else {
+      prevKey = key;
+    }
+  }
+  return suppressed;
 }
 
 /**

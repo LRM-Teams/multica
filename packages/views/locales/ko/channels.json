@@ -221,7 +221,26 @@
     "system_event": {
       "member_added": "{target}님이 {actor}님에 의해 채널에 추가되었습니다",
       "member_removed": "{target}님이 {actor}님에 의해 채널에서 제거되었습니다",
-      "member_left": "{target}님이 채널에서 나갔습니다"
+      "member_left": "{target}님이 채널에서 나갔습니다",
+      "issue": {
+        "actor_system": "Multica",
+        "assigned": "{{actor}}님이 {issue}을(를) {{target}}님에게 배정했습니다",
+        "assigned_unknown": "{{actor}}님이 {issue}의 담당자를 변경했습니다",
+        "in_progress": "{{actor}}님이 {issue}을(를) 진행 중으로 표시했습니다",
+        "in_review": "{{actor}}님이 {issue}을(를) 검토 요청했습니다",
+        "done": "{{actor}}님이 {issue}을(를) 완료했습니다",
+        "updated": "{{actor}}님이 {issue}을(를) 업데이트했습니다",
+        "status": "{{actor}}님이 {issue}을(를) {{status}}(으)로 표시했습니다"
+      },
+      "issue_status": {
+        "backlog": "백로그",
+        "todo": "할 일",
+        "in_progress": "진행 중",
+        "in_review": "검토 중",
+        "done": "완료",
+        "blocked": "차단됨",
+        "cancelled": "취소됨"
+      }
     }
   },
   "dm": {

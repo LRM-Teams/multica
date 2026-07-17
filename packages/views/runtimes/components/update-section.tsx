@@ -50,7 +50,7 @@ const statusConfig: Record<
   { icon: typeof Loader2; color: string }
 > = {
   pending: { icon: Loader2, color: "text-muted-foreground" },
-  running: { icon: Loader2, color: "text-info" },
+  running: { icon: Loader2, color: "text-brand" },
   completed: { icon: CheckCircle2, color: "text-success" },
   ready_to_apply: { icon: CheckCircle2, color: "text-warning" },
   failed: { icon: XCircle, color: "text-destructive" },
@@ -278,7 +278,7 @@ export function UpdateSection({
             {hasUpdate && !derivedStatus && (
               <>
                 <span className="text-xs text-muted-foreground">→</span>
-                <span className="text-xs font-mono text-info">
+                <span className="text-xs font-mono text-brand">
                   {targetVersion}
                 </span>
                 <span className="text-xs text-muted-foreground">{t(($) => $.update.available)}</span>

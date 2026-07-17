@@ -94,15 +94,17 @@ describe("presenceStatusDotClass", () => {
     expect(presenceStatusDotClass(null)).toBeNull();
   });
 
-  it("maps workload to semantic fills while online", () => {
+  it("maps every workload dot to neutral gray while online (Slack-style reduction)", () => {
+    // Working reads via the avatar pulse, queued via its glyph — no workload
+    // state carries a dot colour any more (#5).
     expect(
       presenceStatusDotClass(presence({ availability: "online", workload: "working" })),
-    ).toBe("bg-brand");
+    ).toBe("bg-muted-foreground/40");
     expect(
       presenceStatusDotClass(presence({ availability: "online", workload: "queued" })),
-    ).toBe("bg-warning");
-    // Online + idle now resolves to the availability word "Online" → green dot
-    // (bg-success), agreeing with the presence word (Frank/Miles 2026-07-15).
+    ).toBe("bg-muted-foreground/40");
+    // Online + idle still resolves to the availability word "Online" → green dot
+    // (bg-success), the one surviving presence accent (Frank/Miles 2026-07-15).
     expect(
       presenceStatusDotClass(presence({ availability: "online", workload: "idle" })),
     ).toBe("bg-success");

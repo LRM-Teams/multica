@@ -126,8 +126,8 @@ export function ExecutionLogSection({ issueId }: ExecutionLogSectionProps) {
           }`}
         />
         {activeTasks.length > 0 && (
-          <span className="ml-auto inline-flex items-center gap-1 text-info">
-            <span className="h-1.5 w-1.5 rounded-full bg-info animate-pulse" />
+          <span className="ml-auto inline-flex items-center gap-1 text-brand">
+            <span className="h-1.5 w-1.5 rounded-full bg-brand animate-pulse" />
             <span className="font-mono tabular-nums">{activeTasks.length}</span>
           </span>
         )}
@@ -197,7 +197,7 @@ const STATUS_TONE: Record<AgentTask["status"], string> = {
   // Same tone as queued/dispatched — visually "stopped" so users see the
   // task is parked, but distinguished by the status label.
   waiting_local_directory: "text-warning",
-  running: "text-info",
+  running: "text-brand",
   completed: "text-success",
   failed: "text-destructive",
   cancelled: "text-muted-foreground",
@@ -302,7 +302,7 @@ export function ActiveTaskRow({
       <RowStatus title={label}>
         {task.status === "running" ? (
           <>
-            <span className="text-info tabular-nums">{elapsed}</span>
+            <span className="text-brand tabular-nums">{elapsed}</span>
             <span className="sr-only">{label}</span>
           </>
         ) : (

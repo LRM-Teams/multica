@@ -329,7 +329,7 @@ export function AgentTranscriptDialog({
 
   // Status display
   const statusBadge = isLive ? (
-    <span className="inline-flex items-center gap-1 rounded-full bg-info/15 px-2 py-0.5 text-xs font-medium text-info">
+    <span className="inline-flex items-center gap-1 rounded-full bg-brand/15 px-2 py-0.5 text-xs font-medium text-brand">
       <Loader2 className="h-3 w-3 animate-spin" />
       {t(($) => $.transcript.status_running)}
     </span>
@@ -365,7 +365,7 @@ export function AgentTranscriptDialog({
               {task.agent_id ? (
                 <ActorAvatar actorType="agent" actorId={task.agent_id} size={24} />
               ) : (
-                <div className="flex items-center justify-center h-6 w-6 rounded-full bg-info/10 text-info">
+                <div className="flex items-center justify-center h-6 w-6 rounded-full bg-brand/10 text-brand">
                   <Bot className="h-3.5 w-3.5" />
                 </div>
               )}

@@ -17,6 +17,7 @@ import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { cn } from "@multica/ui/lib/utils";
 import { ChannelMessageBubble } from "./channel-message-bubble";
 import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
+import { foldedIssueEventIds } from "./channel-system-event";
 import { useMessageDayDividers } from "../../i18n/use-message-time";
 import { useT } from "../../i18n/use-t";
 import { useNewMessagesDivider } from "../hooks/use-new-messages-divider";
@@ -237,6 +238,11 @@ function MessageViewport({
   const channelId = messages[0]?.channel_id;
   const canLoadOlder = !!hasOlder && !loadingOlder && !!onLoadOlder;
   const dayDividers = useMessageDayDividers(messages);
+  // Fold redundant consecutive issue-lifecycle rows (item #7): a same-source
+  // completed/status→done pair, or an exact repeat, renders once. Derived as a
+  // Set (never a filtered array) so Virtuoso's data/indices — and thus the
+  // anchor/pagination math — stay identical; a folded row simply renders null.
+  const foldedIssueIds = useMemo(() => foldedIssueEventIds(messages), [messages]);
   const newMessagesDivider = useNewMessagesDivider(
     channelId,
     messages,
@@ -392,6 +398,10 @@ function MessageViewport({
   }
 
   const renderRow = (msg: ChannelMessage) => {
+    // A folded issue row is suppressed (a preceding row already conveys the
+    // fact). Return null rather than dropping it from `messages` so the list's
+    // virtualization/anchoring is untouched.
+    if (foldedIssueIds.has(msg.id)) return null;
     const searchHighlighted = searchHitIds?.has(msg.id) ?? false;
     const dividerLabel = dayDividers.get(msg.id);
     const isUnreadAnchor = newMessagesDivider?.anchorMessageId === msg.id;

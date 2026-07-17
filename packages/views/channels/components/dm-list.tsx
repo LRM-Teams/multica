@@ -517,7 +517,14 @@ export function DmConversationRow({
                 {pinned && (
                   <Pin className="size-3 shrink-0 -rotate-45 fill-muted-foreground/70 text-muted-foreground/70" />
                 )}
-                <span className="truncate text-sm font-medium text-foreground">
+                <span
+                  className={cn(
+                    "truncate text-sm text-foreground",
+                    // Slack-style: an unread (non-muted) conversation reads as a
+                    // BOLD name, replacing the old saturated count block (#3).
+                    realUnread > 0 && !isMuted ? "font-semibold" : "font-medium",
+                  )}
+                >
                   {dm.peer.name}
                 </span>
                 {isMuted && <MutedIndicator label={t(($) => $.dm.muted_label)} />}

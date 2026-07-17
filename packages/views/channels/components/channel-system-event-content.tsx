@@ -6,10 +6,12 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
 import { resolveActorHandle } from "@multica/core/identity";
 import { useAgentPanelStore } from "@multica/core/agents/stores";
+import { useActorName } from "@multica/core/workspace/hooks";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { useOpenAgentPanel } from "../../common/agent-panel-context";
 import { useT } from "../../i18n/use-t";
-import { MEMBER_EVENTS, type MemberSystemEvent } from "./channel-system-event";
+import { IssueRefLink } from "../../issues/components/issue-ref-link";
+import { MEMBER_EVENTS, type MemberSystemEvent, ISSUE_EVENTS, type IssueSystemEvent } from "./channel-system-event";
 
 /**
  * Renders the composed, tokenized copy for a member-change system event
@@ -124,4 +126,117 @@ export function MemberSystemEventContent({ event }: { event: MemberSystemEvent }
         : t(($) => $.message.system_event.member_left);
 
   return interpolateSlots(template, { target, actor });
+}
+
+// The FE-owned issue token is the ONLY interactive/blue element in the row
+// (item #7口径). The actor, assignee and status are plain interpolated text, so
+// they ride i18next's `{{ }}` interpolation and only the `{issue}` slot is split
+// out for the React token.
+function interpolateIssueSlot(template: string, issue: ReactNode): ReactNode {
+  return template.split(/(\{issue\})/g).map((segment, index) => {
+    if (segment === "{issue}") return <Fragment key={index}>{issue}</Fragment>;
+    if (!segment) return null;
+    return <Fragment key={index}>{segment}</Fragment>;
+  });
+}
+
+type IssueStatusKey =
+  | "backlog"
+  | "todo"
+  | "in_progress"
+  | "in_review"
+  | "done"
+  | "blocked"
+  | "cancelled";
+
+const ISSUE_STATUS_KEYS = new Set<string>([
+  "backlog",
+  "todo",
+  "in_progress",
+  "in_review",
+  "done",
+  "blocked",
+  "cancelled",
+]);
+
+// Public actor type ("human" | "agent") → the identity-cache actor type
+// getActorName resolves against. Humans live in the member cache.
+function toActorType(type: string | undefined): string {
+  return type === "agent" ? "agent" : "member";
+}
+
+/**
+ * Renders an issue-lifecycle backflow row (#497) as the frozen item #7 copy:
+ * "任务" only, a localized action verb (标记为处理中 / 提交审核 / 完成任务 / 指派给 X),
+ * and the issue identifier as the SOLE clickable blue token. The actor and
+ * assignee are plain resolved names — never @tokens, never colored — and the
+ * status is a localized label, never a raw enum or the word "issue". The row
+ * itself owns the (simple) time and quiet centered layout.
+ */
+export function IssueSystemEventContent({ event }: { event: IssueSystemEvent }): ReactNode {
+  const { t } = useT("channels");
+  const { getActorName } = useActorName();
+
+  const actor = event.actorId
+    ? getActorName(toActorType(event.actorType), event.actorId)
+    : t(($) => $.message.system_event.issue.actor_system);
+
+  const issueToken = (
+    <IssueRefLink issueId={event.issueId} text={event.issueIdentifier} source="anchor" />
+  );
+
+  // Assignment: resolve the assignee's plain name live (falling back to the
+  // backend-supplied handle/name), then to a name-less "changed assignee" copy.
+  if (event.event === ISSUE_EVENTS.assigned) {
+    const targetName = event.targetId
+      ? getActorName(toActorType(event.targetType), event.targetId, event.targetName)
+      : event.targetName ?? event.targetHandle;
+    const template = targetName
+      ? t(($) => $.message.system_event.issue.assigned, { actor, target: targetName })
+      : t(($) => $.message.system_event.issue.assigned_unknown, { actor });
+    return interpolateIssueSlot(template, issueToken);
+  }
+
+  // Completion (BE emits this instead of a status→done row).
+  if (event.event === ISSUE_EVENTS.completed || event.issueStatus === "done") {
+    return interpolateIssueSlot(
+      t(($) => $.message.system_event.issue.done, { actor }),
+      issueToken,
+    );
+  }
+
+  // Status change — dedicated action phrasing for the milestone transitions,
+  // else a generic "marked as <localized status>" that still avoids raw enums.
+  if (event.issueStatus === "in_progress") {
+    return interpolateIssueSlot(
+      t(($) => $.message.system_event.issue.in_progress, { actor }),
+      issueToken,
+    );
+  }
+  if (event.issueStatus === "in_review") {
+    return interpolateIssueSlot(
+      t(($) => $.message.system_event.issue.in_review, { actor }),
+      issueToken,
+    );
+  }
+
+  // A status the FE recognizes → "marked as <localized status>". A status it
+  // does NOT recognize must NEVER echo the raw enum to the user face (Nash: no
+  // internal-enum leak) — degrade to a generic, status-less localized action.
+  const statusKey: IssueStatusKey | null = ISSUE_STATUS_KEYS.has(event.issueStatus)
+    ? (event.issueStatus as IssueStatusKey)
+    : null;
+  if (!statusKey) {
+    return interpolateIssueSlot(
+      t(($) => $.message.system_event.issue.updated, { actor }),
+      issueToken,
+    );
+  }
+  return interpolateIssueSlot(
+    t(($) => $.message.system_event.issue.status, {
+      actor,
+      status: t(($) => $.message.system_event.issue_status[statusKey]),
+    }),
+    issueToken,
+  );
 }

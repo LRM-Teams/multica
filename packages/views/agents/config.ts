@@ -8,7 +8,7 @@ import {
 
 export const taskStatusConfig: Record<string, { label: string; icon: typeof CheckCircle2; color: string }> = {
   queued: { label: "Queued", icon: Clock, color: "text-muted-foreground" },
-  dispatched: { label: "Dispatched", icon: Play, color: "text-info" },
+  dispatched: { label: "Dispatched", icon: Play, color: "text-brand" },
   running: { label: "Running", icon: Loader2, color: "text-brand" },
   completed: { label: "Completed", icon: CheckCircle2, color: "text-success" },
   failed: { label: "Failed", icon: XCircle, color: "text-destructive" },

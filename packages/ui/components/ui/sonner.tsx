@@ -21,7 +21,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
           <CircleCheckIcon className="size-4 text-success" />
         ),
         info: (
-          <InfoIcon className="size-4 text-info" />
+          <InfoIcon className="size-4 text-brand" />
         ),
         warning: (
           <TriangleAlertIcon className="size-4 text-warning" />

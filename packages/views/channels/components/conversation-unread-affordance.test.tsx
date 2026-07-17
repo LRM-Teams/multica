@@ -11,22 +11,30 @@ import { ConversationUnreadAffordance } from "./conversation-muted";
  * silently (dimmed, not the salient primary/red badge).
  */
 describe("ConversationUnreadAffordance", () => {
-  it("renders the real unread count (A4 — not a constant)", () => {
+  it("renders a plain (non-@) unread as a subtle neutral dot, not a saturated count (#3 Slack-style)", () => {
     const { container } = render(
       <ConversationUnreadAffordance realUnread={7} isManualDot={false} isMuted={false} />,
     );
-    const badge = container.querySelector("span");
-    expect(badge).not.toBeNull();
-    expect(badge).toHaveTextContent("7");
-    // Salient (unmuted) unread is the primary badge, never dimmed.
-    expect(badge).toHaveClass("bg-primary");
+    const dot = container.querySelector("span");
+    expect(dot).not.toBeNull();
+    // No saturated count block — the unread signal is the bold channel name in
+    // the row; the numeric block is reserved for the @-mention pill.
+    expect(dot).toHaveClass("size-2");
+    expect(dot).toHaveClass("bg-muted-foreground");
+    expect(dot).not.toHaveClass("bg-primary");
+    expect(dot?.textContent ?? "").toBe("");
   });
 
-  it("caps large counts at 99+", () => {
+  it("renders a muted plain-unread as a DIMMER dot with no count (Parker: muted is quietest, never a number)", () => {
     const { container } = render(
-      <ConversationUnreadAffordance realUnread={150} isManualDot={false} isMuted={false} />,
+      <ConversationUnreadAffordance realUnread={150} isManualDot={false} isMuted />,
     );
-    expect(container.querySelector("span")).toHaveTextContent("99+");
+    const dot = container.querySelector("span");
+    expect(dot).toHaveClass("size-2");
+    expect(dot).toHaveClass("bg-muted-foreground/50");
+    // No surviving number — a muted row must never be more salient than an active one.
+    expect(dot?.textContent ?? "").toBe("");
+    expect(container).not.toHaveTextContent("99+");
   });
 
   it("renders a manual-unread DOT, never a fabricated '1' (Parker gate)", () => {
@@ -44,14 +52,18 @@ describe("ConversationUnreadAffordance", () => {
     expect(dot?.textContent ?? "").toBe("");
   });
 
-  it("dims the count for muted conversations — silent, no primary/red badge (A6)", () => {
-    const { container } = render(
+  it("keeps a muted unread dot DIMMER than an active one (no asymmetry — muted never louder)", () => {
+    const active = render(
+      <ConversationUnreadAffordance realUnread={3} isManualDot={false} isMuted={false} />,
+    );
+    const muted = render(
       <ConversationUnreadAffordance realUnread={3} isManualDot={false} isMuted />,
     );
-    const badge = container.querySelector("span");
-    expect(badge).toHaveTextContent("3");
-    expect(badge).toHaveClass("bg-muted-foreground/25");
-    expect(badge).not.toHaveClass("bg-primary");
+    expect(active.container.querySelector("span")).toHaveClass("bg-muted-foreground");
+    expect(muted.container.querySelector("span")).toHaveClass("bg-muted-foreground/50");
+    // Neither shows a numeric count — the unread signal is the bold name in the row.
+    expect(active.container).not.toHaveTextContent("3");
+    expect(muted.container).not.toHaveTextContent("3");
   });
 
   it("dims the manual dot for muted conversations (A6)", () => {
@@ -76,7 +88,9 @@ describe("ConversationUnreadAffordance", () => {
     );
     // The `@` glyph is the primary, colour-blind-safe cue (A6); emphasis colour secondary.
     const pill = getByText("@2");
-    expect(pill).toHaveClass("bg-destructive");
+    // Mention accent is brand blue now (red is reserved for errors only, #1).
+    expect(pill).toHaveClass("bg-brand");
+    expect(pill).not.toHaveClass("bg-destructive");
     expect(pill).toHaveAttribute("aria-label", "You were mentioned");
     // Only @N shows — the plain unread count (5) is NOT stacked alongside it.
     expect(container).not.toHaveTextContent("5");
@@ -95,8 +109,8 @@ describe("ConversationUnreadAffordance", () => {
     expect(getByText("@99+")).toBeTruthy();
   });
 
-  it("does not show the @N pill for muted conversations — falls back to the dimmed count (muted @-pierce is follow-up)", () => {
-    const { container } = render(
+  it("shows the @N pill for muted conversations — @ pierces mute (Parker)", () => {
+    const { getByText, container } = render(
       <ConversationUnreadAffordance
         realUnread={3}
         isManualDot={false}
@@ -105,13 +119,15 @@ describe("ConversationUnreadAffordance", () => {
         mentionLabel="You were mentioned"
       />,
     );
-    expect(container.querySelector(".bg-destructive")).toBeNull();
-    // The dimmed unread count still renders so the conversation isn't lost.
-    expect(container).toHaveTextContent("3");
-    expect(container.querySelector(".bg-muted-foreground\\/25")).not.toBeNull();
+    // A direct @ surfaces the pill even when muted — mute silences ambient noise,
+    // not direct mentions. The ambient unread (3) is NOT shown alongside the pill.
+    const pill = getByText("@2");
+    expect(pill).toHaveClass("bg-brand");
+    expect(pill).not.toHaveClass("bg-destructive");
+    expect(container).not.toHaveTextContent("3");
   });
 
-  it("leaves a no-@ unread row unchanged — plain primary count, no @N (Iris regression guard)", () => {
+  it("renders a no-@ unread row as a neutral dot, never an @N pill (Iris regression guard)", () => {
     const { container } = render(
       <ConversationUnreadAffordance
         realUnread={4}
@@ -120,9 +136,12 @@ describe("ConversationUnreadAffordance", () => {
         mentionCount={0}
       />,
     );
-    const badge = container.querySelector("span");
-    expect(badge).toHaveTextContent("4");
-    expect(badge).toHaveClass("bg-primary");
+    const dot = container.querySelector("span");
+    // Plain unread is a subtle neutral dot — no saturated count, no @N pill.
+    expect(dot).toHaveClass("size-2");
+    expect(dot).toHaveClass("bg-muted-foreground");
+    expect(dot).not.toHaveClass("bg-primary");
+    expect(container.querySelector(".bg-brand")).toBeNull();
     expect(container.querySelector(".bg-destructive")).toBeNull();
   });
 

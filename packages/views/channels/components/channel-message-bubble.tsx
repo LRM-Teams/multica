@@ -41,8 +41,8 @@ import {
 import { MessageBody } from "./message-body";
 import { MessageQuoteCard } from "./message-quote";
 import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
-import { parseMemberSystemEvent } from "./channel-system-event";
-import { MemberSystemEventContent } from "./channel-system-event-content";
+import { parseMemberSystemEvent, parseIssueSystemEvent } from "./channel-system-event";
+import { MemberSystemEventContent, IssueSystemEventContent } from "./channel-system-event-content";
 import { messageMentionsViewer } from "../../common/content-mentions-viewer";
 import { SELF_MENTION_ROW_CLASS } from "../../common/mention-token";
 
@@ -97,9 +97,13 @@ function ChannelSystemMessageRow({
   // Raft/Slack-style row with clickable @username tokens; everything else falls
   // back to the plain canonical text.
   const memberEvent = parseMemberSystemEvent(message);
-  // Issue backflow rows ("MUL-7 assigned to …", #497) carry anchored `reference`
-  // parts, so project them into tokens instead of dumping the raw string — the
-  // system row is otherwise the one surface the projector never reached (#469).
+  // Issue-lifecycle backflow rows (#497, item #7) carry a structured
+  // `system_event` part the FE projects into the frozen "任务" copy — a localized
+  // action verb with the issue identifier as the sole clickable token — instead
+  // of dumping the raw English "moved to In Progress" string.
+  const issueEvent = parseIssueSystemEvent(message);
+  // Older backflow rows without the `system_event` part still carry an anchored
+  // `reference`, so project those into tokens rather than the raw string (#469).
   const hasReferenceParts = message.parts?.some((part) => part.type === "reference") ?? false;
   return (
     <div
@@ -107,11 +111,11 @@ function ChannelSystemMessageRow({
       data-testid="system-message-row"
       data-message-kind="system"
       // Time is NOT a persistent tail (#369, Iris §8: Frank disliked a trailing
-      // timestamp pinned right). Instead the absolute time is REVEALED on hover —
-      // the treatment Frank asked for ("系统事件 hover 出时间") — so the row stays
-      // clean at rest but a hover gives the full local date-time. The native
-      // `title` stays too (keyboard/a11y, and the hover reveal is aria-hidden).
-      title={messageTime.full(message.created_at)}
+      // timestamp pinned right). Member/notice rows keep the absolute time
+      // REVEALED on hover ("系统事件 hover 出时间"), so `title` carries the full
+      // local date-time. Issue rows (item #7口径) show a SIMPLE inline time and
+      // NEVER a full timestamp, so they opt out of the hover-full treatment.
+      title={issueEvent ? undefined : messageTime.full(message.created_at)}
       className={cn(
         // Lightweight CENTERED service notice (#369, Iris §8): a top-left row
         // reads like "a message that lost its avatar" against Multica's heavy
@@ -123,7 +127,9 @@ function ChannelSystemMessageRow({
       )}
     >
       <span className="min-w-0 break-words">
-        {memberEvent ? (
+        {issueEvent ? (
+          <IssueSystemEventContent event={issueEvent} />
+        ) : memberEvent ? (
           <MemberSystemEventContent event={memberEvent} />
         ) : hasReferenceParts ? (
           // Spans are anchored to the RAW `message.content`; feeding the trimmed
@@ -133,12 +139,21 @@ function ChannelSystemMessageRow({
           systemText
         )}
       </span>
-      <span
-        aria-hidden
-        className="shrink-0 tabular-nums text-muted-foreground/50 opacity-0 transition-opacity duration-150 group-hover:opacity-100"
-      >
-        {messageTime.full(message.created_at)}
-      </span>
+      {issueEvent ? (
+        // Simple, always-visible time — "· 10:16" (item #7口径), the bucketed
+        // inline clock the rest of the list uses, never a full timestamp.
+        <span className="shrink-0 tabular-nums text-muted-foreground/60">
+          {"· "}
+          {messageTime.format(message.created_at)}
+        </span>
+      ) : (
+        <span
+          aria-hidden
+          className="shrink-0 tabular-nums text-muted-foreground/50 opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+        >
+          {messageTime.full(message.created_at)}
+        </span>
+      )}
     </div>
   );
 }

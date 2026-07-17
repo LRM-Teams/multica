@@ -221,7 +221,26 @@
     "system_event": {
       "member_added": "{actor} 邀请 {target} 加入了频道",
       "member_removed": "{actor} 将 {target} 移出了频道",
-      "member_left": "{target} 退出了频道"
+      "member_left": "{target} 退出了频道",
+      "issue": {
+        "actor_system": "Multica",
+        "assigned": "{{actor}} 将任务 {issue} 指派给 {{target}}",
+        "assigned_unknown": "{{actor}} 重新指派了任务 {issue}",
+        "in_progress": "{{actor}} 将任务 {issue} 标记为处理中",
+        "in_review": "{{actor}} 将任务 {issue} 提交审核",
+        "done": "{{actor}} 完成了任务 {issue}",
+        "updated": "{{actor}} 更新了任务 {issue}",
+        "status": "{{actor}} 将任务 {issue} 标记为{{status}}"
+      },
+      "issue_status": {
+        "backlog": "待办事项",
+        "todo": "待办",
+        "in_progress": "处理中",
+        "in_review": "待审",
+        "done": "已完成",
+        "blocked": "已阻塞",
+        "cancelled": "已取消"
+      }
     }
   },
   "dm": {

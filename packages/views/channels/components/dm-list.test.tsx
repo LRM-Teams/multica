@@ -318,24 +318,39 @@ describe("DmList unread affordance (read-model)", () => {
     openDMMocks.openDM.mockResolvedValue(makeDm({ id: "dm-created" }));
   });
 
-  it("renders the real unread count from the read-model, not a constant", () => {
-    mockQueryData.dms = [makeDm({ unread: 7, real_unread: 7 })];
+  it("marks a real unread with a bold name + subtle dot, not a saturated count (#3 Slack-style)", () => {
+    mockQueryData.dms = [
+      makeDm({
+        unread: 7,
+        real_unread: 7,
+        peer: { type: "user", id: "peer-1", name: "Unread Person" },
+      }),
+    ];
 
     const { container } = renderDmList();
 
-    const badge = container.querySelector("span.bg-primary");
-    expect(badge).not.toBeNull();
-    expect(badge).toHaveTextContent("7");
+    // No saturated count block — the unread signal is a subtle neutral dot plus
+    // the bold channel name (the numeric block is reserved for @-mentions).
+    expect(container.querySelector("span.bg-primary")).toBeNull();
+    const dot = container.querySelector("span.size-2.rounded-full");
+    expect(dot).not.toBeNull();
+    expect(dot).toHaveClass("bg-muted-foreground");
+    // The name reads bold on unread.
+    const name = container.querySelector("span.font-semibold");
+    expect(name).not.toBeNull();
+    expect(name).toHaveTextContent("Unread Person");
   });
 
-  it("dims the badge for a muted DM — silent, no primary/red count (A6)", () => {
+  it("shows a DIMMER dot for a muted DM — silent, no count, never louder than active (Parker)", () => {
     mockQueryData.dms = [makeDm({ unread: 4, real_unread: 4, muted: true })];
 
     const { container } = renderDmList();
 
-    const badge = container.querySelector("span.bg-muted-foreground\\/25");
-    expect(badge).not.toBeNull();
-    expect(badge).toHaveTextContent("4");
+    // Muted plain-unread is the quietest: a dimmer neutral dot, no numeric count.
+    const dot = container.querySelector("span.size-2.rounded-full");
+    expect(dot).not.toBeNull();
+    expect(dot).toHaveClass("bg-muted-foreground/50");
+    expect(container).not.toHaveTextContent("4");
     expect(container.querySelector("span.bg-primary")).toBeNull();
   });
 

@@ -189,6 +189,9 @@ type Daemon struct {
 	// persistentRuntimes owns Grok ACP chat sessions. Issue work stays one-shot.
 	// Full execution identity keeps unrelated chat agents and prompts isolated.
 	persistentRuntimes *persistentRuntimePool
+	// piPersistentRuntimes owns native Pi RPC chat sessions. Issue work stays
+	// on the existing one-shot Pi path.
+	piPersistentRuntimes *piPersistentPool
 }
 
 // New creates a new Daemon instance.
@@ -219,6 +222,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		memoryCurationRuns:        make(map[string]string),
 		activeCurationRuns:        make(map[string]string),
 		persistentRuntimes:        newPersistentRuntimePool(),
+		piPersistentRuntimes:      newPiPersistentPool(),
 	}
 	d.runner = taskRunnerFunc(d.runTask)
 	d.runUpdateFn = d.runUpdate
@@ -630,6 +634,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.cancelFunc = cancel
 	d.rootCtx = ctx
 	defer d.closePersistentRuntimes()
+	defer d.piPersistentRuntimes.closeAll()
 
 	// Bind health port early to detect another running daemon.
 	healthLn, err := d.listenHealth()
@@ -3703,6 +3708,25 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		backend, releasePersistentRuntime, persistentErr = d.acquireGrokChatACPBackend(identity, backendCfg)
 		if persistentErr != nil {
 			return TaskResult{}, fmt.Errorf("acquire persistent runtime backend: %w", persistentErr)
+		}
+	} else if usesPersistentPiChatRuntime(provider, task) {
+		identity := piPersistentIdentity{
+			AgentID:       resolvedTaskAgentID(task),
+			RuntimeID:     task.RuntimeID,
+			ChatSessionID: task.ChatSessionID,
+			Executable:    entry.Path,
+			Model:         execOpts.Model,
+			Thinking:      execOpts.ThinkingLevel,
+			WorkDir:       execOpts.Cwd,
+			SystemPrompt:  execOpts.SystemPrompt,
+			MCP:           string(execOpts.McpConfig),
+			CustomArgs:    append(append([]string(nil), execOpts.ExtraArgs...), execOpts.CustomArgs...),
+			Environment:   agentEnv,
+		}
+		var persistentErr error
+		backend, releasePersistentRuntime, persistentErr = d.acquirePiChatRPCBackend(identity, backendCfg)
+		if persistentErr != nil {
+			return TaskResult{}, fmt.Errorf("acquire persistent Pi runtime backend: %w", persistentErr)
 		}
 	} else {
 		var createErr error

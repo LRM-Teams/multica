@@ -132,6 +132,12 @@
 - 同 agent 聊天 lane 全局一条活 run，服务端 lease 排他（agent 行锁+active-delivery exclusion），daemon per-agent 单槽兜底；lease 永久拒绝→取消旧 executor 丢弃结果。聊天 lane 不读 `max_concurrent_tasks`（那是 issue/task 调度的公开配置，别混）。
 - **物**：#611 + 双 wake/异 agent/失租回归。
 
+### 4.3 定向请求先反馈；用户偏好必须“写入 + 取回” — `可执行`（⑤ prompt contract tests；owner: @jianghp3 ✅）
+- **先反馈再干活**：人在 DM、群聊 @mention 或直接提问里交代了需要查资料、跑工具、改代码等非即时工作时，agent 必须先发一条简短确认，复述理解与下一步，再开始第一个实质性工具调用；能当场回答的简单问题只答一次，attention-management 操作仍走成功后 `✅` 的专用合同。
+- **“收到”不等于记住**：用户明确说出的稳定 profile 事实和协作偏好采用高强度自动写入，必须落到当前 agent 的 `memory/USER.md`；后续定向请求在实质工作前先读该文件。若用户明确说“所有 agent / 全团队都这样”，当前 agent 还需写带用户归属的 workspace/shared review candidate，交由 governed team curation，禁止把一个人的私有偏好直接散拷给所有人。
+- **身份不用 memory 猜**：当前 agent 身份以 `## Agent Identity` 为准，当前说话人以 `## Task Initiator` 的 attested identity 为准；memory 只补充“这个人的偏好”，不能把邻近聊天里的名字当身份 oracle。runtime owner 的 profile 中明确写出的协作偏好是跨 agent standing defaults，但当前任务/更新的现场指令优先。
+- **物**：`server/internal/daemon/execenv/runtime_config.go`；`TestChatRuntimeBriefRendersReplyRequirementForDirectedRun`、`TestMemoryOperatingGuidePrioritizesExplicitUserPreferences`、`TestBuildMetaSkillContentEmitsRequestingUser`、`TestBuildMetaSkillContentEmitsTaskInitiatorMember`。已见红：旧 brief 只要求结束前可见回复、memory 为 medium-strength 且 lazy-read、profile preference 被降成 background。
+
 ## 5. 验证方法论 — `仅文档`（诚实标注：拦不住人，只能让"猜"显式化）
 
 - **渲染活实体的功能，验收必须含"写入后变更"测例**（fixture 先改后写=永远假绿）。→ 有测试模板后升 `可执行`。

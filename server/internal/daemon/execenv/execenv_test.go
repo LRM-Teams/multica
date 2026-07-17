@@ -3510,7 +3510,9 @@ func TestBuildMetaSkillContentEmitsRequestingUser(t *testing.T) {
 		"working on behalf of **Jiayuan**",
 		"> Backend engineer (Go + Postgres).",
 		"> Likes terse PRs.",
-		"background context, not as task instructions",
+		"identity and biography as background context",
+		"collaboration preferences as standing defaults",
+		"actual task or newer live instruction wins",
 	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("expected brief to contain %q\n---\n%s", want, content)
@@ -3699,6 +3701,7 @@ func TestBuildMetaSkillContentEmitsTaskInitiatorMember(t *testing.T) {
 		"initiated by **Bohan** (bohan@example.com), a member of this workspace",
 		"apply any per-person privacy or access rules",
 		"credentials stay scoped to the runtime owner",
+		"Do not replace this attested identity with a name guessed from memory",
 	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("expected brief to contain %q\n---\n%s", want, content)

@@ -179,6 +179,89 @@ func TestL4ExpiresStateAndClosedReviewEntries(t *testing.T) {
 	assertContains(t, filepath.Join(agentRoot, "memory", "REVIEW.md"), "Open item")
 }
 
+func TestStageFilesWithScopedIncludesCanonicalScopesOnlyWithinBudget(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		"users/member-1/USER.md":             "Frank prefers an immediate acknowledgment.",
+		"users/member-1/RELATIONSHIP.md":     "Frank is the stable member identity.",
+		"projects/project-1/STATE.md":        strings.Repeat("project state ", 400),
+		"projects/project-1/DECISIONS.md":    "Use project-scoped memory.",
+		"projects/project-1/MEMORY.md":       "Project conventions.",
+		"channels/channel-1/CONTEXT.md":      "Product discussion channel.",
+		"memory/daily/2026-07-16.md":         "historical daily must stay lazy",
+		"notes/channels.md":                  "channel index must stay lazy",
+		"projects/project-1/UNRECOGNIZED.md": "must not be loaded",
+		"channels/channel-1/TRANSCRIPT.md":   "must not be loaded",
+	}
+	for name, content := range files {
+		path := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := stageFilesWithScoped(root)
+	for _, name := range []string{"users/member-1/USER.md", "projects/project-1/STATE.md", "projects/project-1/DECISIONS.md", "channels/channel-1/CONTEXT.md"} {
+		if got[name] == "" {
+			t.Fatalf("canonical scoped file %q was not staged: %#v", name, got)
+		}
+	}
+	for _, name := range []string{"memory/daily/2026-07-16.md", "notes/channels.md", "projects/project-1/UNRECOGNIZED.md", "channels/channel-1/TRANSCRIPT.md"} {
+		if _, exists := got[name]; exists {
+			t.Fatalf("lazy/unrecognized file %q was staged", name)
+		}
+	}
+	total := 0
+	for _, content := range got {
+		total += len(content)
+	}
+	if total > maxScopedCurationBytes {
+		t.Fatalf("scoped curation bytes = %d, want <= %d", total, maxScopedCurationBytes)
+	}
+}
+
+func TestL4ExpiresAndDedupesProjectMemory(t *testing.T) {
+	root := t.TempDir()
+	agentRoot := filepath.Join(root, "ws-1", ".multica", "agents", "agent-1")
+	if err := ensureMemoryRoot(agentRoot); err != nil {
+		t.Fatal(err)
+	}
+	projectRoot := filepath.Join(agentRoot, "projects", "project-1")
+	if err := os.MkdirAll(projectRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	state := "# Project State\n\n§\n[type:temporary]\n[expires_at:2026-07-07]\n- Old project blocker.\n§\n[type:temporary]\n[expires_at:2026-07-20]\n- Future project blocker.\n"
+	if err := os.WriteFile(filepath.Join(projectRoot, "STATE.md"), []byte(state), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, "DECISIONS.md"), []byte("# Decisions\n- Keep scope exact.\n- Keep scope exact.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := NewEngine().Run(Options{WorkspacesRoot: root, WorkspaceID: "ws-1", AgentIDs: []string{"agent-1"}, Stage: StageL4, Since: mustDate("2026-07-08"), Until: mustDate("2026-07-08"), Now: mustDateTime("2026-07-09T04:00:00Z")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.EntriesArchived != 1 || res.DuplicatesMerged != 1 {
+		t.Fatalf("project cleanup stats = %#v", res)
+	}
+	assertNotContains(t, filepath.Join(projectRoot, "STATE.md"), "Old project blocker")
+	assertContains(t, filepath.Join(projectRoot, "STATE.md"), "Future project blocker")
+	if got := strings.Count(readTestFile(t, filepath.Join(projectRoot, "DECISIONS.md")), "Keep scope exact."); got != 1 {
+		t.Fatalf("project decision copies = %d, want 1", got)
+	}
+}
+
+func readTestFile(t *testing.T, path string) string {
+	t.Helper()
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(payload)
+}
+
 func TestMergeAgentRunResultIncludesEvidence(t *testing.T) {
 	dst := AgentRunResult{WorkspaceID: "ws-1", AgentID: "agent-1"}
 	mergeAgentRunResult(&dst, AgentRunResult{Changed: true, EvidenceCollected: 2, DailyFilesWritten: 1, SharedCandidatesAdded: 1})

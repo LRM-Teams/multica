@@ -187,7 +187,11 @@
     "retry_named": "Retry {{name}}",
     "retry_aria": "Retry {{name}}'s reply",
     "retry_success": "Retrying {{name}}",
-    "retry_failed": "Couldn't retry"
+    "retry_failed": "Couldn't retry",
+    "stop_all": "Stop all",
+    "stop_all_aria": "Stop all {{count}} current agent tasks",
+    "stop_all_success": "Stopped {{count}} agents",
+    "stop_all_partial": "Stopped {{stopped}} of {{total}} agents"
   },
   "composer": {
     "placeholder": "Describe what you need…  @mention an agent to trigger its reply.",

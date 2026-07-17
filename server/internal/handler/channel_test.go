@@ -4754,8 +4754,12 @@ func TestAgentUnfollowChannelThreadUpdatesAgentStateAndEmitsLinkedSystemEvent(t 
 	}
 
 	ctx := context.Background()
-	agentHandle := "thread-unfollow-bot-" + uuid.NewString()[:8]
-	agentID := createHandlerTestAgent(t, agentHandle, nil)
+	agentDisplayName := "Thread Unfollow 机器人 " + uuid.NewString()[:8]
+	agentID := createHandlerTestAgent(t, agentDisplayName, nil)
+	var agentHandle string
+	if err := testPool.QueryRow(ctx, `SELECT name FROM agent WHERE id = $1`, agentID).Scan(&agentHandle); err != nil {
+		t.Fatalf("load canonical agent handle: %v", err)
+	}
 	channelID := seedChannelForTest(t, "thread-unfollow-agent-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
@@ -4841,8 +4845,11 @@ func TestAgentUnfollowChannelThreadUpdatesAgentStateAndEmitsLinkedSystemEvent(t 
 	if event.Params.AgentID != agentID || event.Params.ActorID != agentID || event.Params.ActorType != "agent" {
 		t.Fatalf("event params = %+v, want agent actor %s", event.Params, agentID)
 	}
-	if event.Params.AgentName != agentHandle || event.Params.ActorDisplayName != agentHandle || event.Params.ActorName != agentHandle {
-		t.Fatalf("event agent names = %+v, want %q", event.Params, agentHandle)
+	if event.Params.ActorHandle != agentHandle {
+		t.Fatalf("event actor handle = %q, want %q", event.Params.ActorHandle, agentHandle)
+	}
+	if event.Params.AgentName != agentDisplayName || event.Params.ActorDisplayName != agentDisplayName || event.Params.ActorName != agentDisplayName {
+		t.Fatalf("event agent names = %+v, want display name %q", event.Params, agentDisplayName)
 	}
 	if mention := parts[1]; mention.Type != protocol.MessagePartTypeReference || mention.RefType != "mention" || mention.RefSubType != "agent" || mention.RefID != agentID || mention.Label != "@"+agentHandle {
 		t.Fatalf("mention part = %+v, want structured agent @handle", mention)

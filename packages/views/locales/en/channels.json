@@ -130,12 +130,12 @@
     "error": "Failed to load"
   },
   "tasks": {
-    "title": "Tasks",
-    "empty": "No tasks from this channel",
+    "title": "Issues",
+    "empty": "No issues from this channel",
     "error": "Failed to load",
     "load_more": "Load more ({{count}} remaining)",
     "loading_more": "Loading...",
-    "column_empty": "No tasks"
+    "column_empty": "No issues"
   },
   "share": {
     "copied": "Channel link copied",
@@ -322,6 +322,6 @@
   },
   "view_tabs": {
     "chat": "Chat",
-    "tasks": "Tasks"
+    "tasks": "Issues"
   }
 }

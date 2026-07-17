@@ -130,12 +130,12 @@
     "error": "불러오기 실패"
   },
   "tasks": {
-    "title": "작업",
-    "empty": "이 채널의 작업이 없습니다",
+    "title": "이슈",
+    "empty": "이 채널의 이슈가 없습니다",
     "error": "불러오기 실패",
     "load_more": "더 보기 (남은 {{count}}개)",
     "loading_more": "불러오는 중…",
-    "column_empty": "작업 없음"
+    "column_empty": "이슈 없음"
   },
   "share": {
     "copied": "채널 링크 복사됨",
@@ -322,6 +322,6 @@
   },
   "view_tabs": {
     "chat": "채팅",
-    "tasks": "작업"
+    "tasks": "이슈"
   }
 }

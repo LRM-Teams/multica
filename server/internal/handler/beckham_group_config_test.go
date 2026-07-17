@@ -22,8 +22,8 @@ func markGroupManagerForTest(t *testing.T, agentID string) {
 }
 
 // A group-manager agent (Beckham) is shared infrastructure: any workspace
-// member can tune its runtime config, and the API stamps managed_role so the
-// UI can surface the config tab.
+// member can tune its five runtime properties, while the API keeps all other
+// agent management operations owner/admin-only.
 func TestUpdateAgent_GroupManagerEditableByPlainMember(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -50,6 +50,77 @@ func TestUpdateAgent_GroupManagerEditableByPlainMember(t *testing.T) {
 	}
 	if resp.MaxConcurrentTasks != 3 {
 		t.Errorf("max_concurrent_tasks = %d, want 3 (edit not applied)", resp.MaxConcurrentTasks)
+	}
+}
+
+// Keep the side-panel payload contract explicit: a plain workspace member may
+// send exactly the five runtime properties. model_catalog_request_id is the
+// transient proof carried by the later #559 discovery flow, not a privilege
+// expansion. This exercises the field gate separately from provider/catalog
+// validation, which is covered by the agent update contract tests.
+func TestCanUpdateAgent_GroupManagerAllowsRuntimePayloadFields(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	agentID := createHandlerTestAgent(t, "beckham-payload-"+uuid.NewString(), nil)
+	markGroupManagerForTest(t, agentID)
+	memberID := createWorkspaceMemberUser(t, "payload-member", "payload-member-"+uuid.NewString()+"@example.com")
+	agent, err := testHandler.Queries.GetAgent(context.Background(), parseUUID(agentID))
+	if err != nil {
+		t.Fatalf("get agent: %v", err)
+	}
+
+	rawFields := map[string]json.RawMessage{
+		"runtime_id":               json.RawMessage(`"runtime-id"`),
+		"model":                    json.RawMessage(`"model-id"`),
+		"model_catalog_request_id": json.RawMessage(`"catalog-proof"`),
+		"thinking_level":           json.RawMessage(`"high"`),
+		"visibility":               json.RawMessage(`"workspace"`),
+		"max_concurrent_tasks":     json.RawMessage(`3`),
+	}
+	w := httptest.NewRecorder()
+	if !testHandler.canUpdateAgent(w, newRequestAs(memberID, http.MethodPut, "/api/agents/"+agentID, nil), agent, rawFields) {
+		t.Fatalf("group-manager runtime payload unexpectedly rejected: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestUpdateAgent_GroupManagerForbidsPlainMemberIdentityChanges(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	agentID := createHandlerTestAgent(t, "beckham-identity-"+uuid.NewString(), nil)
+	markGroupManagerForTest(t, agentID)
+	memberID := createWorkspaceMemberUser(t, "identity-member", "identity-member-"+uuid.NewString()+"@example.com")
+
+	for _, body := range []map[string]any{
+		{"description": "member must not be able to edit this"},
+		{"instructions": "member must not be able to edit this"},
+		{"custom_args": []string{"--unsafe"}},
+	} {
+		req := newRequestAs(memberID, http.MethodPut, "/api/agents/"+agentID, body)
+		req = withURLParam(req, "id", agentID)
+		w := httptest.NewRecorder()
+		testHandler.UpdateAgent(w, req)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("plain member updating %v: expected 403, got %d: %s", body, w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestArchiveAgent_GroupManagerForbidsPlainMember(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	agentID := createHandlerTestAgent(t, "beckham-archive-"+uuid.NewString(), nil)
+	markGroupManagerForTest(t, agentID)
+	memberID := createWorkspaceMemberUser(t, "archive-member", "archive-member-"+uuid.NewString()+"@example.com")
+
+	req := newRequestAs(memberID, http.MethodPost, "/api/agents/"+agentID+"/archive", nil)
+	req = withURLParam(req, "id", agentID)
+	w := httptest.NewRecorder()
+	testHandler.ArchiveAgent(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("plain member archiving group manager: expected 403, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

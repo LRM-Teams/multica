@@ -1129,9 +1129,10 @@ func redactAgentResponseForActor(resp *AgentResponse, actorType string) {
 	}
 }
 
-// canManageAgent checks whether the current user can update or archive an agent.
-// Only the agent owner or workspace owner/admin can manage any agent,
-// regardless of whether it is public or private.
+// canManageAgent checks whether the current user can manage an agent's full
+// lifecycle (archive, restore, skills, and unrestricted updates). Only the
+// agent owner or workspace owner/admin can do that, regardless of whether the
+// agent is public or private.
 func (h *Handler) canManageAgent(w http.ResponseWriter, r *http.Request, agent db.Agent) bool {
 	wsID := uuidToString(agent.WorkspaceID)
 	member, ok := h.requireWorkspaceRole(w, r, wsID, "agent not found", "owner", "admin", "member")
@@ -1140,16 +1141,50 @@ func (h *Handler) canManageAgent(w http.ResponseWriter, r *http.Request, agent d
 	}
 	isAdmin := roleAllowed(member.Role, "owner", "admin")
 	isAgentOwner := uuidToString(agent.OwnerID) == requestUserID(r)
-	// Group-manager agents (Beckham) are shared team infrastructure, not owned
-	// by an individual — any workspace member may tune their runtime config.
-	// requireWorkspaceRole above already established the caller is at least a
-	// member of this workspace.
-	if !isAdmin && !isAgentOwner && h.isGroupManagerAgent(r.Context(), agent.ID) {
-		return true
-	}
 	if !isAdmin && !isAgentOwner {
 		writeError(w, http.StatusForbidden, "only the agent owner can manage this agent")
 		return false
+	}
+	return true
+}
+
+// canUpdateAgent permits the normal owner/admin update path, plus the narrow
+// shared-runtime contract for group-manager agents. The latter deliberately
+// uses the same agent resource but is limited to the five properties shown in
+// Profile's runtime configuration section; it must not accidentally grant a
+// workspace member access to identity, instructions, secrets, skills, or an
+// agent's lifecycle controls.
+func (h *Handler) canUpdateAgent(w http.ResponseWriter, r *http.Request, agent db.Agent, rawFields map[string]json.RawMessage) bool {
+	wsID := uuidToString(agent.WorkspaceID)
+	member, ok := h.requireWorkspaceRole(w, r, wsID, "agent not found", "owner", "admin", "member")
+	if !ok {
+		return false
+	}
+	isAdmin := roleAllowed(member.Role, "owner", "admin")
+	isAgentOwner := uuidToString(agent.OwnerID) == requestUserID(r)
+	if isAdmin || isAgentOwner {
+		return true
+	}
+	if !h.isGroupManagerAgent(r.Context(), agent.ID) {
+		writeError(w, http.StatusForbidden, "only the agent owner can manage this agent")
+		return false
+	}
+
+	allowed := map[string]struct{}{
+		"runtime_id": {},
+		"model":      {},
+		// This is transient validation proof for the selected runtime/model
+		// tuple, not an independently editable agent property.
+		"model_catalog_request_id": {},
+		"thinking_level":           {},
+		"visibility":               {},
+		"max_concurrent_tasks":     {},
+	}
+	for field := range rawFields {
+		if _, ok := allowed[field]; !ok {
+			writeError(w, http.StatusForbidden, "workspace members can only update group manager runtime properties")
+			return false
+		}
 	}
 	return true
 }
@@ -1181,14 +1216,14 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !h.canManageAgent(w, r, existing) {
-		return
-	}
 
 	var req UpdateAgentRequest
 	rawFields, err := decodeJSONBodyWithRawFields(r.Body, &req)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if !h.canUpdateAgent(w, r, existing, rawFields) {
 		return
 	}
 

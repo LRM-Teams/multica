@@ -82,8 +82,12 @@ func Truncate(value string, limit int) string {
 	if limit <= 0 {
 		return ""
 	}
-	if utf8.RuneCountInString(value) <= limit {
-		return value
+	if utf8.RuneCountInString(value) > limit {
+		value = string([]rune(value)[:limit])
 	}
-	return string([]rune(value)[:limit])
+	// A slug can be cut immediately after one of its separators. Trim that
+	// dangling separator so every generated candidate remains in the username
+	// grammar instead of turning a valid long display label into an invalid
+	// trailing-hyphen handle.
+	return strings.TrimRight(value, "-")
 }

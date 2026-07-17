@@ -33,11 +33,10 @@ import {
 import {
   defaultSandboxName,
   defaultSandboxSnapshotName,
-  effectiveSandboxNodeStatus,
   resolveCreateSandboxTemplate,
   sandboxDisplayName,
 } from "@multica/core/sandboxes/utils";
-import type { SandboxBinding, SandboxInstance } from "@multica/core/types";
+import type { SandboxBinding, SandboxInstance, SandboxSnapshot } from "@multica/core/types";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
@@ -87,6 +86,9 @@ type CreateFormState = {
   nodeId: string;
   /** "default" = node configured template; otherwise an explicit Cube template id. */
   templateId: string;
+  /** When true, template (and node) are fixed — e.g. create from a snapshot. */
+  templateLocked: boolean;
+  lockedTemplateLabel: string;
   apiKey: string;
   baseUrl: string;
   model: string;
@@ -97,6 +99,21 @@ function buildDefaultCreateForm(nodeId: string): CreateFormState {
     name: defaultSandboxName(),
     nodeId,
     templateId: "default",
+    templateLocked: false,
+    lockedTemplateLabel: "",
+    apiKey: "",
+    baseUrl: "",
+    model: "",
+  };
+}
+
+function buildCreateFormFromSnapshot(snapshot: SandboxSnapshot): CreateFormState {
+  return {
+    name: defaultSandboxName(),
+    nodeId: snapshot.node_id,
+    templateId: snapshot.cube_snapshot_id.trim(),
+    templateLocked: true,
+    lockedTemplateLabel: snapshot.name.trim() || snapshot.cube_snapshot_id,
     apiKey: "",
     baseUrl: "",
     model: "",
@@ -112,22 +129,6 @@ function buildRuntimePayload(form: Pick<CreateFormState, "apiKey" | "baseUrl" | 
   if (baseUrl) runtime.base_url = baseUrl;
   if (model) runtime.model = model;
   return runtime;
-}
-
-function useNowTick(intervalMs = 10_000): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), intervalMs);
-    return () => clearInterval(id);
-  }, [intervalMs]);
-  return now;
-}
-
-function bindingWithEffectiveStatus(binding: SandboxBinding, now: number): SandboxBinding {
-  return {
-    ...binding,
-    node_status: effectiveSandboxNodeStatus(binding.node_status, binding.node_last_seen_at, now),
-  };
 }
 
 export function SandboxesPage() {
@@ -151,19 +152,16 @@ export function SandboxesPage() {
   const [snapshotDescription, setSnapshotDescription] = useState("");
   const [creatingNode, setCreatingNode] = useState(false);
 
-  const now = useNowTick();
-
   const { data: instances = [], isLoading } = useQuery(sandboxListOptions(wsId));
   const { data: bindings = [], isLoading: bindingsLoading } = useQuery(sandboxBindingListOptions(wsId));
 
-  const connectedBindings = useMemo(() => {
-    const result: SandboxBinding[] = [];
-    for (const binding of bindings) {
-      if (!binding.enabled) continue;
-      result.push(bindingWithEffectiveStatus(binding, now));
-    }
-    return result;
-  }, [bindings, now]);
+  // Trust the API's already-computed node_status. Re-deriving from cached
+  // last_seen_at with a local clock tick caused false offline flaps between
+  // refetches even while sandboxd kept heartbeating.
+  const connectedBindings = useMemo(
+    () => bindings.filter((binding) => binding.enabled),
+    [bindings],
+  );
   const hasConnectedNode = connectedBindings.length > 0;
 
   const instancesByNode = useMemo(() => {
@@ -206,7 +204,9 @@ export function SandboxesPage() {
     : [];
 
   const canCreate =
-    createForm.name.trim().length > 0 && createForm.nodeId.length > 0;
+    createForm.name.trim().length > 0 &&
+    createForm.nodeId.length > 0 &&
+    (!createForm.templateLocked || createForm.templateId.length > 0);
 
   const create = useCreateSandboxMutation(wsId);
   const stop = useStopSandboxMutation(wsId);
@@ -252,6 +252,11 @@ export function SandboxesPage() {
 
   const openCreateDialog = () => {
     setCreateForm(buildDefaultCreateForm(selectedBinding?.node_id ?? connectedBindings[0]?.node_id ?? ""));
+    setCreateDialogOpen(true);
+  };
+
+  const openCreateFromSnapshot = (snapshot: SandboxSnapshot) => {
+    setCreateForm(buildCreateFormFromSnapshot(snapshot));
     setCreateDialogOpen(true);
   };
 
@@ -331,6 +336,7 @@ export function SandboxesPage() {
             binding={selectedBinding}
             instances={selectedInstances}
             onCreate={openCreateDialog}
+            onCreateFromSnapshot={openCreateFromSnapshot}
             onViewSetup={() => {
               if (selectedBinding) navigation.push(paths.sandboxNodeSetup(selectedBinding.node_id));
             }}
@@ -378,6 +384,7 @@ export function SandboxesPage() {
                 binding={selectedBinding}
                 instances={selectedInstances}
                 onCreate={openCreateDialog}
+                onCreateFromSnapshot={openCreateFromSnapshot}
                 onViewSetup={() => {
                   if (selectedBinding) navigation.push(paths.sandboxNodeSetup(selectedBinding.node_id));
                 }}
@@ -401,8 +408,16 @@ export function SandboxesPage() {
       <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>{t(($) => $.sandboxes_page.create_dialog_title)}</DialogTitle>
-            <DialogDescription>{t(($) => $.sandboxes_page.create_dialog_description)}</DialogDescription>
+            <DialogTitle>
+              {createForm.templateLocked
+                ? t(($) => $.sandboxes_page.create_from_snapshot_dialog_title)
+                : t(($) => $.sandboxes_page.create_dialog_title)}
+            </DialogTitle>
+            <DialogDescription>
+              {createForm.templateLocked
+                ? t(($) => $.sandboxes_page.create_from_snapshot_dialog_description)
+                : t(($) => $.sandboxes_page.create_dialog_description)}
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
@@ -415,31 +430,50 @@ export function SandboxesPage() {
             </div>
             <div className="space-y-2">
               <Label>{t(($) => $.sandboxes_page.node_label)}</Label>
-              <Select
-                value={createForm.nodeId}
-                onValueChange={(value) =>
-                  setCreateForm((current) => ({
-                    ...current,
-                    nodeId: value ?? "",
-                    templateId: "default",
-                  }))
-                }
-              >
-                <SelectTrigger className="h-9 w-full min-w-0">
-                  <SelectValue placeholder={t(($) => $.sandboxes_page.select_node_placeholder)} />
-                </SelectTrigger>
-                <SelectContent alignItemWithTrigger className="min-w-(--anchor-width)">
-                  {connectedBindings.map((binding) => (
-                    <SelectItem key={binding.id} value={binding.node_id}>
-                      {binding.node_name} ({binding.node_status})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {createForm.templateLocked ? (
+                <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
+                  {connectedBindings.find((b) => b.node_id === createForm.nodeId)?.node_name ??
+                    createForm.nodeId}
+                </div>
+              ) : (
+                <Select
+                  value={createForm.nodeId}
+                  onValueChange={(value) =>
+                    setCreateForm((current) => ({
+                      ...current,
+                      nodeId: value ?? "",
+                      templateId: "default",
+                    }))
+                  }
+                >
+                  <SelectTrigger className="h-9 w-full min-w-0">
+                    <SelectValue placeholder={t(($) => $.sandboxes_page.select_node_placeholder)} />
+                  </SelectTrigger>
+                  <SelectContent alignItemWithTrigger className="min-w-(--anchor-width)">
+                    {connectedBindings.map((binding) => (
+                      <SelectItem key={binding.id} value={binding.node_id}>
+                        {binding.node_name} ({binding.node_status})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
             </div>
             <div className="space-y-2">
               <Label>{t(($) => $.sandboxes_page.create_template_label)}</Label>
-              {createTemplatesQuery.isLoading ? (
+              {createForm.templateLocked ? (
+                <div className="space-y-1">
+                  <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
+                    <div className="font-medium">{createForm.lockedTemplateLabel}</div>
+                    <div className="mt-0.5 break-all font-mono text-xs text-muted-foreground">
+                      {createForm.templateId}
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {t(($) => $.sandboxes_page.create_from_snapshot_template_hint)}
+                  </p>
+                </div>
+              ) : createTemplatesQuery.isLoading ? (
                 <Skeleton className="h-9 w-full" />
               ) : (
                 <Select
@@ -470,7 +504,7 @@ export function SandboxesPage() {
                   </SelectContent>
                 </Select>
               )}
-              {createTemplatesQuery.error ? (
+              {!createForm.templateLocked && createTemplatesQuery.error ? (
                 <p className="text-xs text-destructive">
                   {createTemplatesQuery.error instanceof Error
                     ? createTemplatesQuery.error.message
@@ -695,6 +729,7 @@ function NodeDetail({
   binding,
   instances,
   onCreate,
+  onCreateFromSnapshot,
   onViewSetup,
   stoppingId,
   resumingId,
@@ -709,6 +744,7 @@ function NodeDetail({
   binding: SandboxBinding | null;
   instances: SandboxInstance[];
   onCreate: () => void;
+  onCreateFromSnapshot: (snapshot: SandboxSnapshot) => void;
   onViewSetup: () => void;
   stoppingId?: string;
   resumingId?: string;
@@ -813,7 +849,10 @@ function NodeDetail({
         {activeTab === "templates" ? (
           <NodeTemplatesPanel nodeId={binding.node_id} nodeOnline={online} />
         ) : activeTab === "snapshots" ? (
-          <NodeSnapshotsPanel nodeId={binding.node_id} />
+          <NodeSnapshotsPanel
+            nodeId={binding.node_id}
+            onCreateSandbox={onCreateFromSnapshot}
+          />
         ) : instances.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center px-6 py-16 text-center">
             <Box className="mb-3 size-8 text-muted-foreground/50" />

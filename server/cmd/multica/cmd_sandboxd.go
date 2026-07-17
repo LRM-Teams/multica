@@ -177,8 +177,12 @@ func runSandboxd(cmd *cobra.Command, _ []string) error {
 	go c.wsLoop(ctx)
 	// Template listing hits the local Cube API and can be slow. Keep it off the
 	// claim/heartbeat path so a sluggish /templates call cannot starve liveness
-	// updates (frontend/server treat >30s without last_seen as offline).
+	// updates (frontend/server treat >60s without last_seen as offline).
 	go c.templateRefreshLoop(ctx)
+	// Heartbeat must not share a loop with claim: a hung claim (shared HTTP
+	// client timeout is 120s for Cube jobs) previously delayed last_seen and
+	// made healthy nodes flap offline in the UI.
+	go c.heartbeatLoop(ctx)
 	return c.pollLoop(ctx)
 }
 
@@ -200,30 +204,37 @@ func (c *sandboxdClient) register(ctx context.Context) error {
 func (c *sandboxdClient) pollLoop(ctx context.Context) error {
 	ticker := time.NewTicker(c.cfg.PollInterval)
 	defer ticker.Stop()
-	// Keep heartbeat comfortably inside the 30s online window even if a claim
-	// tick is delayed. Claim itself also touches liveness every poll.
-	heartbeatEvery := c.cfg.PollInterval * 3
-	if heartbeatEvery < 10*time.Second {
-		heartbeatEvery = 10 * time.Second
-	}
-	if heartbeatEvery > 15*time.Second {
-		heartbeatEvery = 15 * time.Second
-	}
-	lastHeartbeat := time.Time{}
 	for {
-		if err := c.claimAndRun(ctx); err != nil && ctx.Err() == nil {
+		// Bound claim so a stuck control-plane call cannot pin this loop.
+		// Job work runs in goroutines with the shared long-timeout client.
+		claimCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		err := c.claimAndRun(claimCtx)
+		cancel()
+		if err != nil && ctx.Err() == nil {
 			c.logger.Warn("sandboxd claim failed", "error", err)
-		}
-		if time.Since(lastHeartbeat) >= heartbeatEvery {
-			if err := c.heartbeat(ctx); err != nil && ctx.Err() == nil {
-				c.logger.Warn("sandboxd heartbeat failed", "error", err)
-			} else {
-				lastHeartbeat = time.Now()
-			}
 		}
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-ticker.C:
+		}
+	}
+}
+
+func (c *sandboxdClient) heartbeatLoop(ctx context.Context) {
+	const interval = 10 * time.Second
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		hbCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		err := c.heartbeat(hbCtx)
+		cancel()
+		if err != nil && ctx.Err() == nil {
+			c.logger.Warn("sandboxd heartbeat failed", "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
 		case <-ticker.C:
 		}
 	}

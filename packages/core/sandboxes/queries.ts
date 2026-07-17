@@ -42,6 +42,7 @@ export function sandboxNodeListOptions() {
   return queryOptions({
     queryKey: sandboxKeys.nodes(),
     queryFn: () => api.listSandboxNodes(),
+    refetchInterval: 5000,
   });
 }
 

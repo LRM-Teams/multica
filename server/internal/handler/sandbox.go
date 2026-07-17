@@ -28,9 +28,10 @@ const (
 	defaultSandboxJobTTL   = 24 * time.Hour
 	defaultSandboxLeaseSec = 300
 	// sandboxNodeStaleThreshold marks a node offline when last_seen_at is
-	// older than this. sandboxd polls jobs every 5s by default; 30s tolerates
-	// brief network hiccups without showing a dead node as online for long.
-	sandboxNodeStaleThreshold = 30 * time.Second
+	// older than this. sandboxd claims every ~5s and heartbeats every ~10s;
+	// 60s tolerates a brief control-plane blip (or one slow claim) without
+	// flapping the UI, while still detecting a dead node within about a minute.
+	sandboxNodeStaleThreshold = 60 * time.Second
 )
 
 type SandboxNodeResponse struct {

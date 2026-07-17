@@ -44,9 +44,22 @@ fi
 mkdir -p "$CONFIG_DIR" "$LOG_DIR"
 
 # SHA-256 of config contents; used to detect edits between scans.
+# Ignore cube_template_id: sandboxd persists control-plane template changes
+# into this file, and restarting on that write caused needless offline flaps
+# (the process already hot-applies the new template in memory).
 config_fingerprint() {
   local config_path="$1"
-  sha256sum "$config_path" | awk '{print $1}'
+  python3 - "$config_path" <<'PY'
+import hashlib, json, sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as f:
+    obj = json.load(f)
+if isinstance(obj, dict):
+    obj.pop("cube_template_id", None)
+raw = json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+print(hashlib.sha256(raw).hexdigest())
+PY
 }
 
 # Print PIDs of sandboxd processes bound to this config path.

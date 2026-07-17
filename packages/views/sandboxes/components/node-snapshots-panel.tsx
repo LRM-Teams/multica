@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Camera, Loader2, Trash2 } from "lucide-react";
+import { Box, Camera, Loader2, Trash2 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useDeleteSandboxSnapshotMutation } from "@multica/core/sandboxes/mutations";
 import { sandboxNodeSnapshotsOptions } from "@multica/core/sandboxes/queries";
@@ -23,7 +23,13 @@ import {
 import { toast } from "sonner";
 import { useT } from "../../i18n/use-t";
 
-export function NodeSnapshotsPanel({ nodeId }: { nodeId: string }) {
+export function NodeSnapshotsPanel({
+  nodeId,
+  onCreateSandbox,
+}: {
+  nodeId: string;
+  onCreateSandbox: (snapshot: SandboxSnapshot) => void;
+}) {
   const { t } = useT("layout");
   const wsId = useWorkspaceId();
   const query = useQuery(sandboxNodeSnapshotsOptions(nodeId));
@@ -93,6 +99,7 @@ export function NodeSnapshotsPanel({ nodeId }: { nodeId: string }) {
               key={snapshot.id}
               snapshot={snapshot}
               deleting={del.isPending && del.variables === snapshot.id}
+              onCreateSandbox={() => onCreateSandbox(snapshot)}
               onDelete={() => setPendingDelete(snapshot)}
             />
           ))}
@@ -129,15 +136,19 @@ export function NodeSnapshotsPanel({ nodeId }: { nodeId: string }) {
 function SnapshotRow({
   snapshot,
   deleting,
+  onCreateSandbox,
   onDelete,
 }: {
   snapshot: SandboxSnapshot;
   deleting: boolean;
+  onCreateSandbox: () => void;
   onDelete: () => void;
 }) {
   const { t } = useT("layout");
   const busy = snapshot.status === "creating" || snapshot.status === "deleting";
   const canDelete = !busy && snapshot.status !== "deleting";
+  const canCreate =
+    snapshot.status === "ready" && snapshot.cube_snapshot_id.trim().length > 0;
 
   return (
     <div className="flex items-start justify-between gap-4 px-4 py-3">
@@ -161,20 +172,32 @@ function SnapshotRow({
         </div>
         {snapshot.error ? <p className="mt-1 text-xs text-destructive">{snapshot.error}</p> : null}
       </div>
-      <Button
-        type="button"
-        size="sm"
-        variant="ghost"
-        disabled={!canDelete || deleting}
-        onClick={onDelete}
-      >
-        {deleting || snapshot.status === "deleting" ? (
-          <Loader2 className="mr-2 size-3.5 animate-spin" />
-        ) : (
-          <Trash2 className="mr-2 size-3.5" />
-        )}
-        {t(($) => $.sandboxes_page.delete_action)}
-      </Button>
+      <div className="flex shrink-0 items-center gap-1">
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          disabled={!canCreate}
+          onClick={onCreateSandbox}
+        >
+          <Box className="mr-2 size-3.5" />
+          {t(($) => $.sandboxes_page.create_from_snapshot_action)}
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          disabled={!canDelete || deleting}
+          onClick={onDelete}
+        >
+          {deleting || snapshot.status === "deleting" ? (
+            <Loader2 className="mr-2 size-3.5 animate-spin" />
+          ) : (
+            <Trash2 className="mr-2 size-3.5" />
+          )}
+          {t(($) => $.sandboxes_page.delete_action)}
+        </Button>
+      </div>
     </div>
   );
 }

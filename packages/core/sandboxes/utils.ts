@@ -1,7 +1,14 @@
 import type { SandboxInstance, SandboxNodeStatus } from "../types";
 
-/** Must stay in sync with sandboxNodeStaleThreshold in server/internal/handler/sandbox.go */
-export const SANDBOX_NODE_STALE_MS = 30_000;
+/**
+ * Server/job liveness window. Must stay in sync with
+ * sandboxNodeStaleThreshold in server/internal/handler/sandbox.go.
+ *
+ * UI code should prefer the API's already-computed status field. Re-applying
+ * this window against a cached last_seen_at (plus a local clock tick) falsely
+ * flips nodes offline between refetches.
+ */
+export const SANDBOX_NODE_STALE_MS = 60_000;
 
 export function effectiveSandboxNodeStatus(
   status: SandboxNodeStatus,

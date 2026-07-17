@@ -11,7 +11,6 @@ import {
 import {
   buildSandboxdConfigPath,
   buildSandboxdSetupCommand,
-  effectiveSandboxNodeStatus,
 } from "@multica/core/sandboxes/utils";
 import type { SandboxNode } from "@multica/core/types";
 import { useRequiredWorkspaceSlug, useWorkspacePaths } from "@multica/core/paths";
@@ -35,15 +34,6 @@ type SetupCommandState =
   | { status: "loading" }
   | { status: "ready"; command: string; configPath: string }
   | { status: "error"; message: string };
-
-function useNowTick(intervalMs = 10_000): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), intervalMs);
-    return () => clearInterval(id);
-  }, [intervalMs]);
-  return now;
-}
 
 function metadataString(metadata: Record<string, unknown> | null | undefined, key: string): string {
   const value = metadata?.[key];
@@ -106,16 +96,14 @@ export function SandboxNodeSetupPage({ nodeId }: { nodeId: string }) {
   const paths = useWorkspacePaths();
   const navigation = useNavigation();
   const { t } = useT("layout");
-  const now = useNowTick();
   const [activeTab, setActiveTab] = useState<SetupTab>("setup");
   const [copied, setCopied] = useState(false);
 
   const { data: nodes = [], isLoading: nodesLoading } = useQuery(sandboxNodeListOptions());
   const node = nodes.find((item) => item.id === nodeId) ?? null;
   const setup = useSandboxNodeSetupCommand(node);
-  const nodeStatus = node
-    ? effectiveSandboxNodeStatus(node.status, node.last_seen_at, now)
-    : "offline";
+  // Prefer API status; it already applies the server stale window.
+  const nodeStatus = node?.status ?? "offline";
 
   const handleCopy = async () => {
     if (setup.status !== "ready") return;

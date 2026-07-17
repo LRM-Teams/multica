@@ -791,7 +791,7 @@ func TestMemoryOperatingGuidePrioritizesExplicitUserPreferences(t *testing.T) {
 	out := buildMetaSkillContent("codex", ctx)
 
 	for _, want := range []string{
-		"### Memory Operating Guide (v0.3)",
+		"### Memory Operating Guide (v0.4)",
 		"Use high-strength auto-write for explicit user profile facts",
 		"A verbal acknowledgment such as \"got it\" does not count as remembering",
 		"current user's isolated `USER.md`",
@@ -801,8 +801,8 @@ func TestMemoryOperatingGuidePrioritizesExplicitUserPreferences(t *testing.T) {
 		"current member's durable preferences",
 		"Source is not scope",
 		"who said a memory is provenance",
-		"collective wording tells the addressed agents or team",
-		"governed team curation",
+		"agents addressed by the current message",
+		"Do not add a workspace/shared candidate merely to fan the preference out",
 		"memory/STATE.md",
 		"status, TTL/expiry, or reset date",
 		"memory/REVIEW.md",
@@ -811,7 +811,11 @@ func TestMemoryOperatingGuidePrioritizesExplicitUserPreferences(t *testing.T) {
 		"defaults to agent-global `memory/MEMORY.md`",
 		"Collective intent does not require the exact words \"all agents\"",
 		"都给我记住",
-		"agents that were absent can receive it",
+		"separate inbox delivery for each eligible channel agent",
+		"including offline runtimes",
+		"do not create a workspace/shared candidate merely to redeliver",
+		"agents beyond the current message recipients",
+		"explicitly canonical workspace/team knowledge",
 		"current task remain authoritative",
 		"Do not record guesses",
 		"never to copy private memory across agents directly",
@@ -819,6 +823,14 @@ func TestMemoryOperatingGuidePrioritizesExplicitUserPreferences(t *testing.T) {
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("memory operating guide missing %q\n%s", want, out)
+		}
+	}
+	for _, old := range []string{
+		"agents that were absent can receive it",
+		"collective wording tells the addressed agents or team",
+	} {
+		if strings.Contains(out, old) {
+			t.Fatalf("memory guide retained obsolete collective fanout rule %q:\n%s", old, out)
 		}
 	}
 }
@@ -858,7 +870,7 @@ func TestMemoryOperatingGuideRequiresAgentLocalScope(t *testing.T) {
 		ChatSessionID: "chat-1",
 		AgentRoot:     "/tmp/multica/workspace-1/.multica/agents/agent-1",
 	})
-	if !strings.Contains(withRoot, "### Memory Operating Guide (v0.3)") {
+	if !strings.Contains(withRoot, "### Memory Operating Guide (v0.4)") {
 		t.Fatalf("memory operating guide missing when an agent-local root exists:\n%s", withRoot)
 	}
 

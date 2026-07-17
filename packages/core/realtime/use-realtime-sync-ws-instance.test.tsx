@@ -104,9 +104,20 @@ describe("useRealtimeSync — ws instance change", () => {
     rerender({ ws: ws2 });
 
     // Should have called invalidateQueries for all workspace-scoped keys
-    // (15 workspace-scoped + 6 per-issue prefixes + 1 session-scoped chat
-    // predicate + 1 workspaceKeys.list() = 23 calls)
-    expect(invalidateSpy).toHaveBeenCalledTimes(23);
+    // (15 workspace-scoped + 6 per-issue prefixes + 1 channel-issues prefix
+    // (#562) + 1 session-scoped chat predicate + 1 workspaceKeys.list() = 24
+    // calls)
+    expect(invalidateSpy).toHaveBeenCalledTimes(24);
+
+    // Assert the KEY, not just the count (Ronan): the reconnect resync must
+    // invalidate the channel Tasks board prefix (#562) so tasks changed while
+    // disconnected refetch on recovery. A count-only check stays green if this
+    // key silently disappears while another invalidation is added — the exact
+    // regression this guards against.
+    const invalidatedKeys = invalidateSpy.mock.calls.map(
+      (call: [{ queryKey?: unknown }, ...unknown[]]) => call[0].queryKey,
+    );
+    expect(invalidatedKeys).toContainEqual(channelKeys.issuesRoot());
   });
 
   it("does not re-invalidate when rerendered with the same ws instance", () => {

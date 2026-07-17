@@ -47,6 +47,7 @@ import type { Workspace } from "../types/workspace";
 import { chatKeys } from "../chat/queries";
 import {
   channelKeys,
+  invalidateChannelIssues,
   invalidateChannelMessages,
   upsertChannelMessageInCache,
   upsertChannelMessageThreadInCache,
@@ -406,6 +407,10 @@ function invalidateWorkspaceScopedQueries(qc: QueryClient): void {
   qc.invalidateQueries({ queryKey: issueKeys.usageAll() });
   qc.invalidateQueries({ queryKey: issueKeys.attachmentsAll() });
   qc.invalidateQueries({ queryKey: issueKeys.tasksAll() });
+  // The channel Tasks board (#562) is keyed by channelId, not wsId, so the
+  // workspace-scoped invalidations above don't reach it; refetch it on
+  // reconnect so it recovers task changes missed while disconnected.
+  invalidateChannelIssues(qc);
   // Active chat session queries are keyed by session/task id instead of wsId.
   // Without this, a WS reconnect after server restart can leave the chat UI
   // stuck on a stale queued pill until a full page refresh.

@@ -42,6 +42,77 @@ export function getIssueGroupId(issue: Issue, grouping: IssueGrouping): string {
   return assigneeGroupId(issue.assignee_type, issue.assignee_id);
 }
 
+/**
+ * Project an issues array into ordered board groups (columns) — pure, so both
+ * the editable board (`board-view.tsx`) and read-only surfaces (the group Tasks
+ * panel, #562) share ONE grouping definition and status/assignee id convention.
+ * `status` grouping yields one group per visible status; `assignee` grouping
+ * derives the distinct assignees present in `issues`, ordered member→agent→
+ * squad→unassigned. Does not attach issues — pair with {@link buildColumns} to
+ * map issue ids into each group.
+ */
+export function buildBoardGroups(
+  issues: Issue[],
+  visibleStatuses: IssueStatus[],
+  grouping: IssueGrouping,
+  getActorName: (type: string, id: string) => string,
+  noAssigneeLabel: string,
+): BoardColumnGroup[] {
+  if (grouping === "status") {
+    return visibleStatuses.map((status) => ({
+      id: statusGroupId(status),
+      title: status,
+      status,
+      createData: { status },
+    }));
+  }
+
+  const groups = new Map<string, BoardColumnGroup>();
+  for (const issue of issues) {
+    const id = assigneeGroupId(issue.assignee_type, issue.assignee_id);
+    if (groups.has(id)) continue;
+
+    if (issue.assignee_type && issue.assignee_id) {
+      groups.set(id, {
+        id,
+        title: getActorName(issue.assignee_type, issue.assignee_id),
+        assigneeType: issue.assignee_type,
+        assigneeId: issue.assignee_id,
+        createData: {
+          assignee_type: issue.assignee_type,
+          assignee_id: issue.assignee_id,
+        },
+      });
+      continue;
+    }
+
+    groups.set(id, {
+      id,
+      title: noAssigneeLabel,
+      assigneeType: null,
+      assigneeId: null,
+      createData: {
+        assignee_type: null,
+        assignee_id: null,
+      },
+    });
+  }
+
+  const order: Record<string, number> = {
+    member: 0,
+    agent: 1,
+    squad: 2,
+    none: 3,
+  };
+
+  return Array.from(groups.values()).toSorted((a, b) => {
+    const aOrder = order[a.assigneeType ?? "none"] ?? 99;
+    const bOrder = order[b.assigneeType ?? "none"] ?? 99;
+    if (aOrder !== bOrder) return aOrder - bOrder;
+    return a.title.localeCompare(b.title);
+  });
+}
+
 export function buildColumns(
   issues: Issue[],
   groups: BoardColumnGroup[],

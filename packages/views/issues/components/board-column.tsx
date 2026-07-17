@@ -17,23 +17,10 @@ import {
 import { useModalStore } from "@multica/core/modals";
 import { useViewStoreApi } from "@multica/core/issues/stores/view-store-context";
 import { DraggableBoardCard } from "./board-card";
+import { BOARD_STATUS_DOT } from "./board-status-dot";
 import type { ChildProgress } from "./list-row";
 import { useT } from "../../i18n";
 import { ActorAvatar } from "../../common/actor-avatar";
-
-// Board column status dot — a flat filled (or hollow) circle in the status
-// color, matching the kanban design. Kept board-local so the list/swimlane
-// StatusIcon (detailed progress glyph) is unaffected. Uses semantic color
-// tokens only (no hardcoded Tailwind colors).
-const BOARD_STATUS_DOT: Record<IssueStatus, string> = {
-  backlog: "border-[1.5px] border-muted-foreground/40",
-  todo: "border-[1.5px] border-muted-foreground/40",
-  in_progress: "bg-brand",
-  in_review: "bg-warning",
-  done: "bg-muted-foreground/40",
-  blocked: "bg-destructive",
-  cancelled: "bg-muted-foreground/40",
-};
 
 // Insertion-position prediction intentionally omitted. The server's
 // ORDER BY uses PostgreSQL's en_US.utf8 collation (glibc), which
@@ -89,11 +76,10 @@ export const BoardColumn = memo(function BoardColumn({
   );
 
   return (
-    <div style={{ width: BOARD_COL_WIDTH }} className="flex shrink-0 flex-col">
-      <div className="mb-2 flex items-center justify-between px-1.5">
-        <BoardGroupHeading group={group} count={totalCount ?? issueIds.length} />
-
-        {/* Right: add + menu */}
+    <BoardColumnShell
+      heading={<BoardGroupHeading group={group} count={totalCount ?? issueIds.length} />}
+      actions={
+        /* Right: add + menu */
         <div className="flex items-center gap-1">
           {status && (
             <DropdownMenu>
@@ -134,7 +120,8 @@ export const BoardColumn = memo(function BoardColumn({
             <TooltipContent>{t(($) => $.board.add_issue_tooltip)}</TooltipContent>
           </Tooltip>
         </div>
-      </div>
+      }
+    >
       <div className="relative min-h-[200px] flex-1 rounded-lg">
         {isOver && sortLabel && (
           <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-background/40">
@@ -166,11 +153,52 @@ export const BoardColumn = memo(function BoardColumn({
           {footer}
         </div>
       </div>
-    </div>
+    </BoardColumnShell>
   );
 });
 
-function BoardStatusHeading({ status, count }: { status: IssueStatus; count: number }) {
+/**
+ * The presentational shell shared by the editable issues board column and the
+ * read-only channel Tasks board column (#562): the fixed-width column container
+ * plus the header row (heading on the left, optional actions on the right). The
+ * body — a drag surface or a plain read-only card stack — is the child. One
+ * definition keeps the two boards from drifting on column width / header
+ * spacing; it carries NO drag / view-store wiring, so consumers add that around
+ * it (the editable column wraps a droppable body, the channel board a scroller).
+ */
+export function BoardColumnShell({
+  heading,
+  actions,
+  children,
+  widthClassName,
+}: {
+  heading: ReactNode;
+  actions?: ReactNode;
+  children: ReactNode;
+  /**
+   * Overrides the column's fixed desktop width. The editable issues board omits
+   * it, keeping the inline fixed `BOARD_COL_WIDTH` (unchanged). The read-only
+   * channel Tasks board (#562 mobile) passes a responsive width class so columns
+   * stack full-width on a phone and become the fixed 300px column at ≥768px.
+   * When set, the inline fixed-width style is dropped so the class owns width.
+   */
+  widthClassName?: string;
+}) {
+  return (
+    <div
+      style={widthClassName ? undefined : { width: BOARD_COL_WIDTH }}
+      className={cn("flex flex-col", widthClassName ?? "shrink-0")}
+    >
+      <div className="mb-2 flex items-center justify-between px-1.5">
+        {heading}
+        {actions}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+export function BoardStatusHeading({ status, count }: { status: IssueStatus; count: number }) {
   const { t } = useT("issues");
   return (
     <div className="flex min-w-0 items-center gap-2">

@@ -61,6 +61,7 @@
     "manage_members_aria": "Manage members",
     "share_aria": "Share",
     "stats_aria": "Stats",
+    "tasks_aria": "Tasks from this channel",
     "files_aria": "Files",
     "issues_aria": "Issues from this channel",
     "back": "Back",
@@ -127,6 +128,14 @@
     "by_author": "Messages by participant",
     "empty": "No activity yet",
     "error": "Failed to load"
+  },
+  "tasks": {
+    "title": "Tasks",
+    "empty": "No tasks from this channel",
+    "error": "Failed to load",
+    "load_more": "Load more ({{count}} remaining)",
+    "loading_more": "Loading...",
+    "column_empty": "No tasks"
   },
   "share": {
     "copied": "Channel link copied",
@@ -306,5 +315,9 @@
     "close_aria": "Close search",
     "search_aria": "Search in conversation",
     "error": "Search failed"
+  },
+  "view_tabs": {
+    "chat": "Chat",
+    "tasks": "Tasks"
   }
 }

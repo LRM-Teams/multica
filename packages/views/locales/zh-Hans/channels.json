@@ -61,6 +61,7 @@
     "manage_members_aria": "管理成员",
     "share_aria": "分享",
     "stats_aria": "统计",
+    "tasks_aria": "来自本频道的任务",
     "files_aria": "文件",
     "issues_aria": "本频道的 issue",
     "back": "返回",
@@ -127,6 +128,14 @@
     "by_author": "各成员消息数",
     "empty": "暂无数据",
     "error": "加载失败"
+  },
+  "tasks": {
+    "title": "任务",
+    "empty": "本频道暂无任务",
+    "error": "加载失败",
+    "load_more": "加载更多（还剩 {{count}} 个）",
+    "loading_more": "加载中…",
+    "column_empty": "暂无任务"
   },
   "share": {
     "copied": "已复制频道链接",
@@ -306,5 +315,9 @@
     "close_aria": "关闭搜索",
     "search_aria": "在会话中搜索",
     "error": "搜索失败"
+  },
+  "view_tabs": {
+    "chat": "对话",
+    "tasks": "任务"
   }
 }

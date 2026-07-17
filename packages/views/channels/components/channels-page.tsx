@@ -13,7 +13,6 @@ import {
   ChevronUp,
   FileText,
   Hash,
-  ListTodo,
   Mail,
   MessageCircle,
   MessageSquare,
@@ -74,7 +73,6 @@ import { api } from "@multica/core/api";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
-import { useIssueViewStore } from "@multica/core/issues/stores/view-store";
 import { useWSEvent } from "@multica/core/realtime";
 import { toast } from "sonner";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
@@ -150,6 +148,7 @@ import {
 } from "@multica/ui/components/ui/alert-dialog";
 import { cn } from "@multica/ui/lib/utils";
 import { SidebarTrigger, useSidebarSafe } from "@multica/ui/components/ui/sidebar";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@multica/ui/components/ui/tabs";
 import { MobileListDetailLayout } from "../../common/mobile-list-detail-layout";
 import { ContentEditor, type ContentEditorRef, type ContentEditorProps } from "../../editor/content-editor";
 import { useNavigation } from "../../navigation/context";
@@ -171,6 +170,7 @@ import { isChannelNameTakenError } from "../channel-create-error";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelStatsPanel } from "./channel-stats-panel";
+import { ChannelTasksBoard } from "./channel-tasks-board";
 import { ChannelGroupAvatar } from "./channel-group-avatar";
 import { ThreadPanel } from "./thread-panel";
 import { ComposerAttachmentTray } from "./composer-attachment-tray";
@@ -553,7 +553,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
   const wsPaths = useWorkspacePaths();
-  const { searchParams, replace, push, getShareableUrl } = useNavigation();
+  const { searchParams, replace, getShareableUrl } = useNavigation();
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const currentUserName = useAuthStore((s) => s.user?.name ?? null);
   const { mutate: markChannelRead } = useMarkChannelRead();
@@ -569,6 +569,17 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const [mobilePanel, setMobilePanel] = useState<
     "menu" | "members" | "stats" | "files" | null
   >(null);
+  // Channel main-content view switch (#562): the channel area is a top-level
+  // `Chat | Tasks` tab, same level as the message list. Tasks renders a
+  // channel-scoped board full-width in the main content area. Reset to Chat
+  // whenever the active channel changes so switching channels lands on chat.
+  const [channelView, setChannelView] = useState<"chat" | "tasks">("chat");
+  // Tracks the channel `channelView` currently belongs to, so a channel switch
+  // resets the tab to Chat via the render-time guard below (not an effect).
+  // A ref (not state): it's bookkeeping that gates the reset, never a render
+  // input (same convention as `reconciledRouteIdRef` below). `active` changing
+  // already re-renders, so the reset fires without state driving the render.
+  const channelViewChannelIdRef = useRef<string>("");
   // Selected channel. Resolved from the `channelId` route param below, since we
   // don't yet know (until channels/dms load) whether it's a channel or a DM.
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -816,6 +827,14 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     }),
   );
   const activeChannelId = active?.id ?? "";
+  // Land on the conversation whenever the active channel changes; the Tasks tab
+  // is a per-channel view, not a sticky global mode. Reset during render (the
+  // React "adjust state on prop change" pattern used elsewhere in this file for
+  // quoteState) rather than an effect, so there's no extra render / stale frame.
+  if (channelViewChannelIdRef.current !== activeChannelId) {
+    channelViewChannelIdRef.current = activeChannelId;
+    setChannelView("chat");
+  }
   const messages = useMemo(() => flattenChannelMessagePages(activeChannelId ? messagePages : undefined), [activeChannelId, messagePages]);
   const messagesFirstItemIndex = useMemo(
     () => channelMessagesFirstItemIndex(activeChannelId ? messagePages : undefined, messages.length > 0),
@@ -2410,22 +2429,10 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                   </PopoverContent>
                 </Popover>
                 <div className="flex items-center gap-1">
-                  {/* #476 — open the Issues list pre-filtered to issues that
-                      originated in this channel. Sets the shared view-store
-                      filter, then navigates; the issues page reads it on mount
-                      and the Group dropdown shows this channel as active. */}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-8"
-                    aria-label={t(($) => $.header.issues_aria)}
-                    onClick={() => {
-                      useIssueViewStore.getState().setSourceChannel(active.id);
-                      push(wsPaths.issues());
-                    }}
-                  >
-                    <ListTodo className="size-4" />
-                  </Button>
+                  {/* #562 — the old #476 "open global Issues filtered to this
+                      channel" entry is removed: the channel-scoped Tasks tab is
+                      now the single, non-global-filter entry to this channel's
+                      tasks (no more setSourceChannel write-back). */}
                   <Button
                     variant="ghost"
                     size="icon"
@@ -2472,6 +2479,30 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
               </>
             )}
           />
+              {/* #562 — channel main-content tab switch: Chat (message list) and
+                  Tasks (channel-scoped board), full-width in the main area. Uses
+                  the shared Tabs primitive so tablist/tab/tabpanel ARIA roles and
+                  arrow-key navigation come for free; extend by adding a sibling
+                  TabsTrigger + TabsContent for a new view. */}
+              <Tabs
+                value={channelView}
+                onValueChange={(value) => setChannelView(value as "chat" | "tasks")}
+                className="flex flex-1 min-h-0 flex-col gap-0"
+              >
+                <div className="shrink-0 border-b border-border/40 px-4">
+                  <TabsList variant="line" className="h-auto">
+                    <TabsTrigger value="chat" className="flex-none px-3 py-2">
+                      {t(($) => $.view_tabs.chat)}
+                    </TabsTrigger>
+                    <TabsTrigger value="tasks" className="flex-none px-3 py-2">
+                      {t(($) => $.view_tabs.tasks)}
+                    </TabsTrigger>
+                  </TabsList>
+                </div>
+                <TabsContent value="tasks" className="flex flex-1 min-h-0 flex-col text-base">
+                  <ChannelTasksBoard channelId={active.id} />
+                </TabsContent>
+                <TabsContent value="chat" className="flex flex-1 min-h-0 flex-col text-base">
               {convSearchOpen && (
                 <div
                   className={cn(
@@ -2721,6 +2752,8 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                   />
                 </>
               )}
+                </TabsContent>
+              </Tabs>
             </>
           )}
         </main>

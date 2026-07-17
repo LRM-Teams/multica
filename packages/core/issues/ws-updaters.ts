@@ -1,5 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { issueKeys } from "./queries";
+import { invalidateChannelIssues } from "../channels/queries";
 import { labelKeys } from "../labels/queries";
 import { projectKeys } from "../projects/queries";
 import {
@@ -34,6 +35,9 @@ export function onIssueCreated(
     qc.invalidateQueries({ queryKey: issueKeys.children(wsId, issue.parent_issue_id) });
     qc.invalidateQueries({ queryKey: issueKeys.childProgress(wsId) });
   }
+  // Refresh the channel Tasks board (#562) — a new source-message issue may
+  // belong to a mounted channel's board, which reads a separate key family.
+  invalidateChannelIssues(qc);
 }
 
 export function onIssueUpdated(
@@ -98,6 +102,9 @@ export function onIssueUpdated(
     }
     qc.invalidateQueries({ queryKey: issueKeys.childrenByParentsAll(wsId) });
   }
+  // A status / assignee / title change on a channel-sourced issue must be
+  // reflected on the channel Tasks board (#562).
+  invalidateChannelIssues(qc);
 }
 
 /**
@@ -143,6 +150,8 @@ export function onIssueLabelsChanged(
   qc.invalidateQueries({ queryKey: issueKeys.myAll(wsId) });
   qc.invalidateQueries({ queryKey: issueKeys.assigneeGroupsAll(wsId) });
   qc.invalidateQueries({ queryKey: issueKeys.myAssigneeGroupsAll(wsId) });
+  // Label chips render on the channel Tasks board card too (#562).
+  invalidateChannelIssues(qc);
 }
 
 /**
@@ -167,6 +176,8 @@ export function onIssueMetadataChanged(
     old ? { ...old, metadata } : old,
   );
   qc.invalidateQueries({ queryKey: issueKeys.myAll(wsId) });
+  // Metadata strip can surface on the channel Tasks board card (#562).
+  invalidateChannelIssues(qc);
 }
 
 export function onIssueDeleted(
@@ -178,4 +189,6 @@ export function onIssueDeleted(
   qc.invalidateQueries({ queryKey: issueKeys.assigneeGroupsAll(wsId) });
   qc.invalidateQueries({ queryKey: issueKeys.myAssigneeGroupsAll(wsId) });
   qc.invalidateQueries({ queryKey: projectKeys.all(wsId) });
+  // A deleted issue must drop off the channel Tasks board (#562).
+  invalidateChannelIssues(qc);
 }

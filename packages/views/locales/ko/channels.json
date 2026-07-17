@@ -61,6 +61,7 @@
     "manage_members_aria": "멤버 관리",
     "share_aria": "공유",
     "stats_aria": "통계",
+    "tasks_aria": "이 채널의 작업",
     "files_aria": "파일",
     "issues_aria": "이 채널의 이슈",
     "back": "뒤로",
@@ -127,6 +128,14 @@
     "by_author": "참여자별 메시지 수",
     "empty": "데이터 없음",
     "error": "불러오기 실패"
+  },
+  "tasks": {
+    "title": "작업",
+    "empty": "이 채널의 작업이 없습니다",
+    "error": "불러오기 실패",
+    "load_more": "더 보기 (남은 {{count}}개)",
+    "loading_more": "불러오는 중…",
+    "column_empty": "작업 없음"
   },
   "share": {
     "copied": "채널 링크 복사됨",
@@ -306,5 +315,9 @@
     "close_aria": "검색 닫기",
     "search_aria": "대화 내 검색",
     "error": "검색 실패"
+  },
+  "view_tabs": {
+    "chat": "채팅",
+    "tasks": "작업"
   }
 }

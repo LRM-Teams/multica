@@ -63,6 +63,7 @@ const (
 	DefaultAutoUpdateCheckInterval  = 6 * time.Hour  // how often the daemon polls GitHub for a newer CLI release
 	DefaultSharedSkillsSyncInterval = 60 * time.Second
 	DefaultGrokPersistentIdleTTL    = 15 * time.Minute
+	DefaultPiPersistentIdleTTL      = 15 * time.Minute
 )
 
 // DefaultGCArtifactPatterns lists basename matches that the GC loop treats as
@@ -101,6 +102,7 @@ type Config struct {
 	MemoryCurationL3ReviewEnabled  bool                  // run the local Pi L3 reviewer during daemon-side curation
 	MemoryCurationL3ReviewTimeout  time.Duration         // per-agent L3 reviewer timeout
 	GrokPersistentIdleTTL          time.Duration         // 0 disables idle chat-session eviction
+	PiPersistentIdleTTL            time.Duration         // 0 disables idle Pi chat-session eviction
 	PollInterval                   time.Duration
 	HeartbeatInterval              time.Duration
 	AgentTimeout                   time.Duration
@@ -511,6 +513,10 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	piPersistentIdleTTL, err := durationFromEnv("MULTICA_PI_PERSISTENT_IDLE_TTL", DefaultPiPersistentIdleTTL)
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
 		ServerBaseURL:                  serverBaseURL,
@@ -535,6 +541,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		MemoryCurationL3ReviewEnabled:  memoryCurationL3ReviewEnabled,
 		MemoryCurationL3ReviewTimeout:  memoryCurationL3ReviewTimeout,
 		GrokPersistentIdleTTL:          grokPersistentIdleTTL,
+		PiPersistentIdleTTL:            piPersistentIdleTTL,
 		HealthPort:                     healthPort,
 		MaxConcurrentTasks:             maxConcurrentTasks,
 		PollInterval:                   pollInterval,

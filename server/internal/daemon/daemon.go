@@ -185,6 +185,10 @@ type Daemon struct {
 	memoryCurationMu     sync.Mutex
 	memoryCurationRuns   map[string]string // workspace\x00stage -> Beijing plan date
 	activeCurationRuns   map[string]string // runtime id -> claimed run id
+
+	// persistentRuntimes owns Grok ACP chat sessions. Issue work stays one-shot.
+	// Full execution identity keeps unrelated chat agents and prompts isolated.
+	persistentRuntimes *persistentRuntimePool
 }
 
 // New creates a new Daemon instance.
@@ -214,6 +218,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		sharedSkillScanCache:      make(map[string]string),
 		memoryCurationRuns:        make(map[string]string),
 		activeCurationRuns:        make(map[string]string),
+		persistentRuntimes:        newPersistentRuntimePool(),
 	}
 	d.runner = taskRunnerFunc(d.runTask)
 	d.runUpdateFn = d.runUpdate
@@ -624,6 +629,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	d.cancelFunc = cancel
 	d.rootCtx = ctx
+	defer d.closePersistentRuntimes()
 
 	// Bind health port early to detect another running daemon.
 	healthLn, err := d.listenHealth()
@@ -3558,13 +3564,10 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if arealOverride && arealEnvKey != "" {
 		agentEnv[arealEnvKey] = arealEnvVal
 	}
-	backend, err := agent.New(provider, agent.Config{
+	backendCfg := agent.Config{
 		ExecutablePath: entry.Path,
 		Env:            agentEnv,
 		Logger:         d.logger,
-	})
-	if err != nil {
-		return TaskResult{}, fmt.Errorf("create agent backend: %w", err)
 	}
 
 	taskLog.Info("starting agent",
@@ -3680,6 +3683,35 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		execOpts.SystemPrompt = runtimeBrief
 	}
 
+	var backend agent.Backend
+	var releasePersistentRuntime func(bool)
+	if usesPersistentGrokChatRuntime(provider, task) {
+		identity := persistentRuntimeIdentity{
+			AgentID:       resolvedTaskAgentID(task),
+			RuntimeID:     task.RuntimeID,
+			ChatSessionID: task.ChatSessionID,
+			Executable:    entry.Path,
+			Model:         execOpts.Model,
+			Thinking:      execOpts.ThinkingLevel,
+			WorkDir:       execOpts.Cwd,
+			SystemPrompt:  execOpts.SystemPrompt,
+			MCP:           string(execOpts.McpConfig),
+			CustomArgs:    append(append([]string(nil), execOpts.ExtraArgs...), execOpts.CustomArgs...),
+			Environment:   agentEnv,
+		}
+		var persistentErr error
+		backend, releasePersistentRuntime, persistentErr = d.acquireGrokChatACPBackend(identity, backendCfg)
+		if persistentErr != nil {
+			return TaskResult{}, fmt.Errorf("acquire persistent runtime backend: %w", persistentErr)
+		}
+	} else {
+		var createErr error
+		backend, createErr = agent.New(provider, backendCfg)
+		if createErr != nil {
+			return TaskResult{}, fmt.Errorf("create agent backend: %w", createErr)
+		}
+	}
+
 	taskLog.Debug("invoking backend",
 		"provider", provider,
 		"model", model,
@@ -3694,6 +3726,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 
 	result, tools, err := d.executeAndDrainForTask(ctx, backend, prompt, execOpts, taskLog, task)
 	if err != nil {
+		if releasePersistentRuntime != nil {
+			releasePersistentRuntime(false)
+		}
 		return TaskResult{}, err
 	}
 
@@ -3712,6 +3747,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			result.Usage = mergeUsage(firstUsage, result.Usage)
 			tools = retryTools
 		}
+	}
+	if releasePersistentRuntime != nil {
+		releasePersistentRuntime(result.Status == "completed")
 	}
 
 	elapsed := time.Since(taskStart).Round(time.Second)

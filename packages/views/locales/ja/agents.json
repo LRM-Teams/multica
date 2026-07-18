@@ -512,6 +512,11 @@
     "status_running": "実行中",
     "status_completed": "完了",
     "status_failed": "失敗",
+    "status_queued": "キュー待ち",
+    "status_dispatched": "起動中",
+    "status_waiting_local_directory": "待機中",
+    "status_cancelled": "キャンセル済み",
+    "status_unknown": "処理中",
     "filter": "フィルター",
     "clear_filters": "フィルターをクリア",
     "tool_calls_other": "ツール呼び出し {{count}} 回",
@@ -525,6 +530,12 @@
     "sort_label": "並び替え",
     "sort_chronological": "古い順",
     "sort_newest_first": "新しい順"
+  },
+  "files_panel": {
+    "info_id": "ID",
+    "info_created": "作成日",
+    "info_creator": "作成者",
+    "info_status": "ステータス"
   },
   "task_failure": {
     "agent_error": "エージェント実行エラー",

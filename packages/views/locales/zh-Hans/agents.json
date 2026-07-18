@@ -520,6 +520,11 @@
     "status_running": "进行中",
     "status_completed": "已完成",
     "status_failed": "失败",
+    "status_queued": "排队中",
+    "status_dispatched": "已派发",
+    "status_waiting_local_directory": "等待中",
+    "status_cancelled": "已取消",
+    "status_unknown": "处理中",
     "filter": "筛选",
     "clear_filters": "清除筛选",
     "tool_calls_other": "{{count}} 次工具调用",
@@ -533,6 +538,12 @@
     "sort_label": "排序",
     "sort_chronological": "时间顺序",
     "sort_newest_first": "最新在前"
+  },
+  "files_panel": {
+    "info_id": "ID",
+    "info_created": "创建时间",
+    "info_creator": "创建者",
+    "info_status": "状态"
   },
   "task_failure": {
     "agent_error": "智能体执行出错",

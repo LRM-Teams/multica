@@ -13,6 +13,7 @@ import { yaml } from "@codemirror/lang-yaml";
 import { Eye, EyeOff, Save, X } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@multica/core/api";
+import { useAgentPresenceDetail } from "@multica/core/agents";
 import type { Agent, AgentFileContentResponse, MemberWithUser } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import {
@@ -23,6 +24,8 @@ import {
 } from "@multica/ui/components/ui/dialog";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { cn } from "@multica/ui/lib/utils";
+import { useT } from "../../i18n";
+import { formatPresenceStatus } from "../../agents/presence";
 import { FileTree } from "./file-tree";
 import { buildFileTree, fileLanguage } from "./file-tree-utils";
 
@@ -272,9 +275,15 @@ export function AgentFilesPanel({
    */
   hideHeader?: boolean;
 }) {
+  const { t } = useT("agents");
   const isOwner = !!currentUserId && agent.owner_id === currentUserId;
   const canRead = canReadFiles ?? isOwner;
   const canEdit = canEditFiles ?? isOwner;
+  // Reuse the shared #288 presence token → localized word so the Status row
+  // agrees with the agent's presence dot everywhere else, instead of leaking
+  // the raw `agent.status` enum ("idle"/"offline"/…) as hardcoded English.
+  const presence = useAgentPresenceDetail(agent.workspace_id, agent.id);
+  const statusLabel = formatPresenceStatus(presence, t) ?? "—";
   const [includeHidden, setIncludeHidden] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -298,10 +307,10 @@ export function AgentFilesPanel({
     <>
       {!hideHeader && (
         <div className="space-y-2 border-b p-4 text-xs">
-          <InfoRow label="ID" value={agent.id} mono />
-          <InfoRow label="Created" value={formatDate(agent.created_at)} />
-          <InfoRow label="Creator" value={ownerName(agent, members)} />
-          <InfoRow label="Status" value={agent.status} />
+          <InfoRow label={t(($) => $.files_panel.info_id)} value={agent.id} mono />
+          <InfoRow label={t(($) => $.files_panel.info_created)} value={formatDate(agent.created_at)} />
+          <InfoRow label={t(($) => $.files_panel.info_creator)} value={ownerName(agent, members)} />
+          <InfoRow label={t(($) => $.files_panel.info_status)} value={statusLabel} />
         </div>
       )}
       {!canRead ? (

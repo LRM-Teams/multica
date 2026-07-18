@@ -46,6 +46,7 @@
     "open_in_new_tab": "Open in new tab",
     "remove": "Remove attachment",
     "open_file": "Open {{filename}}",
+    "download_file": "Download {{filename}}",
     "file_type": {
       "image": "Image",
       "video": "Video",

@@ -308,17 +308,21 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
       },
     }));
 
+    const selectedOptionId = displayItems[selectedIndex]
+      ? `mention-opt-${displayItems[selectedIndex].type}-${displayItems[selectedIndex].id}`
+      : undefined;
+
     if (displayItems.length === 0) {
       const isWaitingForServer =
         normalizedQuery !== "" &&
         (isSearching || searchedQuery !== normalizedQuery);
 
       return (
-        <div className="rounded-md border bg-popover p-2 text-xs text-muted-foreground shadow-md">
+        <output className="block rounded-md border bg-popover p-2 text-xs text-muted-foreground shadow-md">
           {isWaitingForServer
             ? t(($) => $.mention.searching)
             : t(($) => $.mention.no_results)}
-        </div>
+        </output>
       );
     }
 
@@ -373,7 +377,14 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
 
     if (contextLayout) {
       return (
-        <div className="flex max-h-[420px] w-96 flex-col overflow-hidden rounded-lg border bg-popover py-1 shadow-xl">
+        <div
+          // react-doctor-disable-next-line react-doctor/prefer-tag-over-role -- Custom mention rows need rich buttons, avatars, and grouped sections; native <select> cannot represent this popup.
+          role="listbox"
+          tabIndex={0}
+          aria-label={t(($) => $.mention.aria_label)}
+          aria-activedescendant={selectedOptionId}
+          className="flex max-h-[420px] w-96 flex-col overflow-hidden rounded-lg border bg-popover py-1 shadow-xl"
+        >
           {groups.map((group) => {
             const isRecent = group.label === "Recent";
             return (
@@ -394,7 +405,14 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
     }
 
     return (
-      <div className="w-72 max-h-[300px] overflow-y-auto rounded-md border bg-popover py-1 shadow-md">
+      <div
+        // react-doctor-disable-next-line react-doctor/prefer-tag-over-role -- Custom mention rows need rich buttons, avatars, and grouped sections; native <select> cannot represent this popup.
+        role="listbox"
+        tabIndex={0}
+        aria-label={t(($) => $.mention.aria_label)}
+        aria-activedescendant={selectedOptionId}
+        className="w-72 max-h-[300px] overflow-y-auto rounded-md border bg-popover py-1 shadow-md"
+      >
         {groups.map((group) => (
           <div key={group.label}>
             {group.label !== "Broadcast" && (
@@ -435,6 +453,9 @@ function MentionRow({
     return (
       <button
         type="button"
+        role="option"
+        aria-selected={selected}
+        id={`mention-opt-${item.type}-${item.id}`}
         ref={buttonRef}
         className={`flex w-full items-center gap-2.5 px-3 py-2 text-left text-xs transition-colors ${
           selected ? "bg-accent" : "hover:bg-accent/50"
@@ -469,6 +490,9 @@ function MentionRow({
     return (
       <button
         type="button"
+        role="option"
+        aria-selected={selected}
+        id={`mention-opt-${item.type}-${item.id}`}
         ref={buttonRef}
         className={`flex w-full items-center gap-2.5 px-3 py-2 text-left text-xs transition-colors ${
           selected ? "bg-accent" : "hover:bg-accent/50"
@@ -529,6 +553,9 @@ function MentionRow({
   return (
     <button
       type="button"
+      role="option"
+      aria-selected={selected}
+      id={`mention-opt-${item.type}-${item.id}`}
       ref={buttonRef}
       className={`flex w-full items-center gap-2.5 px-3 py-2 text-left text-xs transition-colors ${
         selected ? "bg-accent" : "hover:bg-accent/50"

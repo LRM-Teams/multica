@@ -9,12 +9,14 @@ export function RuntimeTokenStatsBadge({
   stats,
   className,
   compact = false,
+  emptyLabel,
 }: {
   stats?: RuntimeTokenStats | null;
   className?: string;
   compact?: boolean;
+  emptyLabel?: string;
 }) {
-  const label = runtimeTokenStatsLabel(stats);
+  const label = runtimeTokenStatsLabel(stats) ?? emptyLabel ?? null;
   if (!label) return null;
   const warning = (stats?.context_percent ?? 0) >= 60;
   const title = [

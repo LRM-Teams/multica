@@ -497,6 +497,7 @@
     "created_label": "作成日",
     "owner_label": "オーナー",
     "token_usage_label": "トークン",
+    "token_usage_empty": "0 トークン",
     "reasoning_default": "デフォルト",
     "runtime_section": "ランタイム設定",
     "config_shared_hint": "ワークスペースのどのメンバーもこのグループマネージャーのランタイム設定を変更できます。"

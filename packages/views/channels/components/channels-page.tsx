@@ -1325,6 +1325,10 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
     if (e.channel_id) {
       qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(e.channel_id) });
+      // Agent runtime stats are projected through the channel member list.
+      // Refresh it with new agent replies so an already-open Agent panel can
+      // show freshly persisted token stats without a full page reload.
+      qc.invalidateQueries({ queryKey: channelKeys.members(e.channel_id) });
       if (e.channel_id === active?.id) markChannelRead(active.id);
     }
   });
@@ -1338,7 +1342,23 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   useWSEvent("task:cancelled", () => {
     if (!active?.id) return;
     qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(active.id) });
+    qc.invalidateQueries({ queryKey: channelKeys.members(active.id) });
     qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
+    qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
+  });
+
+
+  useWSEvent("task:completed", (payload) => {
+    const event = payload as { chat_session_id?: string };
+    if (!event.chat_session_id || !active?.id) return;
+    qc.invalidateQueries({ queryKey: channelKeys.members(active.id) });
+    qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
+  });
+
+  useWSEvent("task:failed", (payload) => {
+    const event = payload as { chat_session_id?: string };
+    if (!event.chat_session_id || !active?.id) return;
+    qc.invalidateQueries({ queryKey: channelKeys.members(active.id) });
     qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
   });
 

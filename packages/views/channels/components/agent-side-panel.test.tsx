@@ -96,6 +96,8 @@ const RESOURCES = {
     no_description: "No description",
     created_label: "Created",
     owner_label: "Owner",
+    token_usage_label: "Tokens",
+    token_usage_empty: "0 tokens",
     runtime_section: "Runtime Config",
   },
   inspector: {
@@ -171,6 +173,12 @@ describe("AgentSidePanel", () => {
     expect(screen.getByText("Atlas")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Activity" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Files" })).not.toBeInTheDocument();
+  });
+
+  it("shows a zero-token baseline before a legacy chat session reports stats", () => {
+    renderPanel("user-owner");
+    expect(screen.getByText("Tokens")).toBeInTheDocument();
+    expect(screen.getByText("0 tokens")).toBeInTheDocument();
   });
 
   it("shows Activity and read-only Files tabs for non-owners in dev access mode", () => {

@@ -560,6 +560,31 @@ interface ChannelsPageProps {
   channelId?: string;
 }
 
+function mobileBaseRestoreSuppressionKey(workspaceId: string) {
+  return `multica:channels:skip-base-restore:${workspaceId}`;
+}
+
+function shouldSkipMobileBaseRestore(workspaceId: string) {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.sessionStorage.getItem(mobileBaseRestoreSuppressionKey(workspaceId)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function setMobileBaseRestoreSuppression(workspaceId: string, suppressed: boolean) {
+  if (typeof window === "undefined") return;
+  try {
+    const key = mobileBaseRestoreSuppressionKey(workspaceId);
+    if (suppressed) window.sessionStorage.setItem(key, "1");
+    else window.sessionStorage.removeItem(key);
+  } catch {
+    // Storage may be unavailable in privacy-restricted browser contexts. The
+    // in-component ref still preserves Back when the route does not remount.
+  }
+}
+
 // ChannelsPage's many useState calls predate #309 — this routing change reduced
 // the count, it did not add to it. Consolidating them into useReducer is a
 // refactor of a ~2500-line component, out of scope for a URL-format change and
@@ -587,6 +612,11 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const [mobilePanel, setMobilePanel] = useState<
     "menu" | "members" | "stats" | "files" | null
   >(null);
+  // A route transition can remount this page between `/channels/[id]` and the
+  // base `/channels` route. Preserve the mobile Back intent long enough for
+  // that destination mount, then clear it so a later reload still restores the
+  // user's saved group.
+  const [skipInitialBaseRestore] = useState(() => shouldSkipMobileBaseRestore(wsId));
   // Channel main-content view switch (#562): the channel area is a top-level
   // `Chat | Tasks` tab, same level as the message list. Tasks renders a
   // channel-scoped board full-width in the main content area. Reset to Chat
@@ -763,6 +793,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const hasRouteSelection = Boolean(channelId || activeDmId);
   const restoredBaseChannelId =
     !hasRouteSelection &&
+    !skipInitialBaseRestore &&
     !suppressBaseRouteRestoreRef.current &&
     channelsLoaded &&
     lastSelectedChannelId &&
@@ -1104,6 +1135,15 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   }, [channelId, channels, channelsLoaded, setLastSelectedChannelId]);
 
   useEffect(() => {
+    // A remounted base route consumes the marker via its initial state. When
+    // the component survives the route transition, the local ref above is the
+    // guard, so clear the marker after the route has actually become base.
+    if (skipInitialBaseRestore || (!channelId && suppressBaseRouteRestoreRef.current)) {
+      setMobileBaseRestoreSuppression(wsId, false);
+    }
+  }, [channelId, skipInitialBaseRestore, wsId]);
+
+  useEffect(() => {
     // A removed channel (or a workspace membership change) must not keep a
     // dead restore target around. The list is membership-filtered, so absence
     // here covers both deleted and no-longer-authorized channels.
@@ -1402,6 +1442,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const mobileBackToList = () => {
     resetSidePanelState();
     suppressBaseRouteRestoreRef.current = true;
+    setMobileBaseRestoreSuppression(wsId, true);
     setActiveId(null);
     setActiveDmId(null);
     setMobilePanel(null);

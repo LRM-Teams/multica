@@ -112,9 +112,8 @@ vi.mock("@multica/core/workspace/queries", async (importOriginal) => ({
   agentListOptions: () => ({ queryKey: ["agents"], queryFn: async () => [] }),
 }));
 
-// Desktop-style non-mobile viewport so auto-select-first-channel is in play —
-// exactly the condition that let the buggy resolver revert a click to chan-1.
-vi.mock("@multica/ui/hooks/use-mobile", () => ({ useIsMobile: () => false }));
+const mobileViewport = vi.hoisted(() => ({ value: false }));
+vi.mock("@multica/ui/hooks/use-mobile", () => ({ useIsMobile: () => mobileViewport.value }));
 
 const replaceSpy = vi.hoisted(() => vi.fn());
 vi.mock("../../navigation/context", () => ({
@@ -140,8 +139,11 @@ vi.mock("./channel-message-list", () => ({ ChannelMessageList: () => <div data-t
 // each channel name, so we read the resolved selection from the header stub).
 vi.mock("./conversation-surface", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./conversation-surface")>()),
-  ConversationHeader: ({ title }: { title?: React.ReactNode }) => (
-    <div data-testid="active-title">{title}</div>
+  ConversationHeader: ({ title, leading }: { title?: React.ReactNode; leading?: React.ReactNode }) => (
+    <div data-testid="active-title">
+      {leading}
+      {title}
+    </div>
   ),
 }));
 
@@ -164,6 +166,8 @@ function renderPage(channelId?: string) {
 describe("ChannelsPage path-style selection (#309)", () => {
   beforeEach(() => {
     replaceSpy.mockReset();
+    mobileViewport.value = false;
+    window.sessionStorage.clear();
     useLastSelectedChannelStore.setState({ lastSelectedChannelId: null });
   });
 
@@ -232,5 +236,28 @@ describe("ChannelsPage path-style selection (#309)", () => {
     });
     expect(screen.getByTestId("active-title")).toHaveTextContent("general");
     expect(replaceSpy).not.toHaveBeenCalled();
+  });
+
+  it("keeps the mobile list open when Back remounts the base route", async () => {
+    mobileViewport.value = true;
+    const firstRoute = renderPage("chan-2");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("active-title")).toHaveTextContent("random");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(replaceSpy).toHaveBeenCalledWith("/w/test/channels");
+
+    // App Router may remount the optional catch-all page when the route loses
+    // its `[id]` segment. The base route must honor this explicit Back intent
+    // instead of immediately restoring chan-2 from persisted state.
+    firstRoute.unmount();
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("active-title")).not.toBeInTheDocument();
+    });
+    expect(replaceSpy).toHaveBeenCalledTimes(1);
   });
 });

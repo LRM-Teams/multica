@@ -1759,14 +1759,27 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
         <BreadcrumbHeader
           segments={breadcrumbSegments}
           leaf={
-            <AppLink
-              href={paths.issueDetail(issue.id)}
-              className="flex min-w-0 transition-opacity hover:opacity-80"
-            >
-              <span className="truncate font-medium text-foreground">
-                {issue.identifier} {issue.title}
-              </span>
-            </AppLink>
+            <>
+              {messagesReturnPath && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="shrink-0 gap-1 text-muted-foreground md:hidden"
+                  onClick={() => router.push(messagesReturnPath)}
+                >
+                  <ChevronLeft className="size-3.5" />
+                  {t(($) => $.detail.back_to_messages)}
+                </Button>
+              )}
+              <AppLink
+                href={paths.issueDetail(issue.id)}
+                className="flex min-w-0 transition-opacity hover:opacity-80"
+              >
+                <span className="truncate font-medium text-foreground">
+                  {issue.identifier} {issue.title}
+                </span>
+              </AppLink>
+            </>
           }
           actions={
             <>
@@ -1774,7 +1787,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               <Button
                 variant="ghost"
                 size="sm"
-                className="gap-1 text-muted-foreground"
+                className="hidden shrink-0 gap-1 text-muted-foreground md:inline-flex"
                 onClick={() => router.push(messagesReturnPath)}
               >
                 <ChevronLeft className="size-3.5" />

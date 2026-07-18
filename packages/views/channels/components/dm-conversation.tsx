@@ -666,6 +666,18 @@ function DmChannelConversation({
     qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
   });
 
+  useWSEvent("task:completed", (payload) => {
+    const event = payload as { chat_session_id?: string };
+    if (!event.chat_session_id) return;
+    qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
+  });
+
+  useWSEvent("task:failed", (payload) => {
+    const event = payload as { chat_session_id?: string };
+    if (!event.chat_session_id) return;
+    qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
+  });
+
   useWSEvent("channel:typing", (payload) => {
     const event = payload as ChannelTypingPayload;
     if (!event.channel_id || event.channel_id !== channelId) return;

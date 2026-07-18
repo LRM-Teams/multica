@@ -16,6 +16,7 @@ vi.mock("../i18n", () => ({
           preview_loading: "Loading preview…",
           remove: "Remove attachment",
           open_file: "Open {{filename}}",
+          download_file: "Download {{filename}}",
           file_type: {
             image: "Image",
             video: "Video",
@@ -56,22 +57,24 @@ describe("AttachmentCard — chrome row", () => {
     expect(document.querySelector("iframe")).toBeNull();
   });
 
-  it("html URL-only source is inert body text + download (no primary Open)", () => {
-    // Regression: a cross-comment / copy-pasted `!file[report.html](url)`
-    // used to surface a dead preview affordance — text kinds need an
-    // attachmentId, otherwise the /content proxy rejects. Without one the
-    // body is not openable; download stays available.
+  it("HTML URL-only source downloads from the primary card body", () => {
+    // Text kinds need an attachmentId for the /content proxy, but a reachable
+    // URL still needs a primary touch target that downloads the file.
+    const onDownload = vi.fn();
     render(
       <AttachmentCard
         filename="report.html"
         contentType="text/html"
         href="https://cdn.example/report.html"
         onPreview={() => {}}
-        onDownload={() => {}}
+        onDownload={onDownload}
       />,
     );
-    expect(screen.queryByRole("button", { name: /open/i })).toBeNull();
-    // Download stays available — the underlying URL is still reachable.
+    const download = screen.getByRole("button", {
+      name: /^Download \{\{filename\}\}/,
+    });
+    fireEvent.click(download);
+    expect(onDownload).toHaveBeenCalledTimes(1);
     expect(screen.getByTitle("Download")).toBeTruthy();
   });
 
@@ -141,17 +144,22 @@ describe("AttachmentCard — open / download", () => {
     expect(onPreview).toHaveBeenCalled();
   });
 
-  it("non-previewable file renders an inert body (no Open button), download-only", () => {
+  it("non-previewable file downloads when its primary card body is clicked", () => {
+    const onDownload = vi.fn();
     render(
       <AttachmentCard
         filename="logs.zip"
         contentType="application/zip"
         href="https://cdn.example/logs.zip"
         onPreview={() => {}}
-        onDownload={() => {}}
+        onDownload={onDownload}
       />,
     );
-    expect(screen.queryByRole("button", { name: /open/i })).toBeNull();
+    const download = screen.getByRole("button", {
+      name: /^Download \{\{filename\}\}/,
+    });
+    fireEvent.click(download);
+    expect(onDownload).toHaveBeenCalledTimes(1);
     expect(screen.queryByTitle("Preview")).toBeNull();
     expect(screen.getByTitle("Download")).toBeTruthy();
     expect(screen.getByText("logs.zip")).toBeTruthy();

@@ -95,13 +95,17 @@ export function AttachmentCard({
       : "";
   const meta = [sizeLabel, typeLabel].filter(Boolean).join(" · ");
 
-  // Previewable files get a primary "open" affordance on the body. Uploading
-  // and non-previewable files render the body as inert text.
-  const openable = !uploading && canPreview;
+  // The card body is always the primary touch target once the file can be
+  // opened or downloaded. Previewable files open their preview; regular files
+  // download directly. Keeping non-previewable files as inert text made the
+  // hover-only Download action unreachable on touch devices.
+  const openable = !uploading && (canPreview || canDownload);
   const hasActions = !uploading && (canDownload || canDelete);
-  // Primary-button accessible name: open verb + full file identity, so a
+  // Primary-button accessible name: action verb + full file identity, so a
   // screen reader hears "Open report.pdf · 1.4 MB · PDF" as one item.
-  const openLabelBase = t(($) => $.attachment.open_file, { filename });
+  const openLabelBase = canPreview
+    ? t(($) => $.attachment.open_file, { filename })
+    : t(($) => $.attachment.download_file, { filename });
   const openLabel = meta ? `${openLabelBase} · ${meta}` : openLabelBase;
 
   const body = (
@@ -146,7 +150,7 @@ export function AttachmentCard({
             type="button"
             className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-lg text-left outline-none focus-visible:ring-2 focus-visible:ring-brand/50"
             aria-label={openLabel}
-            onClick={onPreview}
+            onClick={canPreview ? onPreview : onDownload}
           >
             {body}
           </button>
@@ -159,7 +163,7 @@ export function AttachmentCard({
             control above; the hover toolbar stays minimal (download / delete),
             matching the design + Slack parity. */}
         {hasActions && (
-          <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+          <div className="flex shrink-0 items-center gap-0.5 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
             {canDownload && (
               <button
                 type="button"

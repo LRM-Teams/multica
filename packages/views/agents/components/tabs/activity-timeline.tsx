@@ -71,6 +71,7 @@ function ActivityRow({
   const [detailOverflowed, setDetailOverflowed] = useState(false);
   const [showDetailFade, setShowDetailFade] = useState(false);
   const detailRef = useRef<HTMLDivElement>(null);
+  const updateDetailOverflowRef = useRef<() => void>(() => {});
   const detailId = useId();
   const presentation = activityPresentation(event);
   // Activity is English-only (Frank 2026-07-14): the label/fixed-subtext come
@@ -129,6 +130,7 @@ function ActivityRow({
       return previous === next ? previous : next;
     });
   }, []);
+  updateDetailOverflowRef.current = updateDetailOverflow;
 
   // Measure after the sibling detail mounts, then keep the boundary truthful as
   // Markdown reflows or the viewport changes. The initial layout effect avoids
@@ -140,8 +142,8 @@ function ActivityRow({
       return;
     }
 
-    updateDetailOverflow();
-  }, [expanded, updateDetailOverflow]);
+    updateDetailOverflowRef.current();
+  }, [expanded]);
 
   useEffect(() => {
     if (!expanded) return;
@@ -149,18 +151,22 @@ function ActivityRow({
     const detail = detailRef.current;
     if (!detail) return;
 
+    // Keep browser subscriptions stable for this mounted sibling. The current
+    // measurement function lives in a ref so a future handler change cannot
+    // cause listener churn (React Doctor's event-handler-ref contract).
+    const handleDetailOverflow = () => updateDetailOverflowRef.current();
     const resizeObserver =
       typeof ResizeObserver === "undefined"
         ? undefined
-        : new ResizeObserver(() => updateDetailOverflow());
+        : new ResizeObserver(handleDetailOverflow);
     resizeObserver?.observe(detail);
-    window.addEventListener("resize", updateDetailOverflow);
+    window.addEventListener("resize", handleDetailOverflow);
 
     return () => {
       resizeObserver?.disconnect();
-      window.removeEventListener("resize", updateDetailOverflow);
+      window.removeEventListener("resize", handleDetailOverflow);
     };
-  }, [expanded, updateDetailOverflow]);
+  }, [expanded]);
 
   if (expansion) {
     return (

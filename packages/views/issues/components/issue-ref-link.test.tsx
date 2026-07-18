@@ -56,4 +56,26 @@ describe("IssueRefLink navigation context", () => {
       "/acme/issues/issue-1?returnTo=%2Facme%2Fchannels%2Fchannel-1%3Fmessage%3Dmessage-1",
     );
   });
+
+  it("anchors the return intent to the rendered Messages row", () => {
+    render(
+      <NavigationProvider
+        value={{
+          push: vi.fn(),
+          replace: vi.fn(),
+          back: vi.fn(),
+          pathname: "/acme/channels/channel-1",
+          searchParams: new URLSearchParams("message=another-row"),
+          getShareableUrl: (path) => path,
+        }}
+      >
+        <IssueRefLink issueId="issue-1" text="ACME-1" sourceMessageId="source-row" />
+      </NavigationProvider>,
+    );
+
+    expect(screen.getByRole("link", { name: "ACME-1" })).toHaveAttribute(
+      "href",
+      "/acme/issues/issue-1?returnTo=%2Facme%2Fchannels%2Fchannel-1%3Fmessage%3Dsource-row",
+    );
+  });
 });

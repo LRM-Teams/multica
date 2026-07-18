@@ -36,12 +36,14 @@ export function MessageBody({
   attachments,
   highlightQuery,
   compact = false,
+  sourceMessageId,
 }: {
   content: string;
   parts?: ChannelMessage["parts"];
   attachments?: ChannelMessage["attachments"];
   highlightQuery?: string;
   compact?: boolean;
+  sourceMessageId?: string;
 }) {
   const { getActorName } = useActorName();
   const resolveMentionPreview = mentionResolverFrom(getActorName);
@@ -114,6 +116,7 @@ export function MessageBody({
               content={content}
               parts={effectiveParts}
               highlightQuery={highlightQuery}
+              sourceMessageId={sourceMessageId}
             />
             {stickerParts.length > 0 && <MessagePartsRenderer parts={stickerParts} />}
           </>
@@ -127,6 +130,7 @@ export function MessageBody({
         attachments={attachments}
         highlightQuery={highlightQuery}
         enableStickerShortcodes={false}
+        sourceMessageId={sourceMessageId}
       >
         {content}
       </MemoizedMarkdown>
@@ -152,6 +156,7 @@ export function MessageBody({
           attachments={attachments}
           highlightQuery={highlightQuery}
           enableStickerShortcodes={false}
+          sourceMessageId={sourceMessageId}
         >
           {content}
         </MemoizedMarkdown>

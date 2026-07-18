@@ -21,6 +21,8 @@ interface IssueActionsDropdownProps {
   align?: "start" | "end" | "center";
   /** If set, navigate here after the issue is deleted. */
   onDeletedNavigateTo?: string;
+  /** Detail-page mobile overflow action for opening the properties sheet. */
+  onToggleSidebar?: () => void;
 }
 
 export function IssueActionsDropdown({
@@ -28,6 +30,7 @@ export function IssueActionsDropdown({
   trigger,
   align = "end",
   onDeletedNavigateTo,
+  onToggleSidebar,
 }: IssueActionsDropdownProps) {
   const actions = useIssueActions(issue);
   const [assigneeOpen, setAssigneeOpen] = useState(false);
@@ -47,6 +50,7 @@ export function IssueActionsDropdown({
             primitives={dropdownPrimitives}
             onOpenAssignee={() => setAssigneeOpen(true)}
             onDeletedNavigateTo={onDeletedNavigateTo}
+            onToggleSidebar={onToggleSidebar}
           />
         </DropdownMenuContent>
       </DropdownMenu>

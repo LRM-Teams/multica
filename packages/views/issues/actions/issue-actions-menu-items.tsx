@@ -11,6 +11,7 @@ import {
   FolderOpen,
   Link2,
   MoreHorizontal,
+  PanelRight,
   Pin,
   PinOff,
   Plus,
@@ -87,6 +88,9 @@ interface IssueActionsMenuItemsProps {
   onOpenAssignee: () => void;
   /** If set, navigate here after the issue is deleted (used by the detail page). */
   onDeletedNavigateTo?: string;
+  /** Optional detail-page-only control. It keeps the mobile header action
+   * cluster compact while preserving access to the properties sheet. */
+  onToggleSidebar?: () => void;
 }
 
 export function IssueActionsMenuItems({
@@ -95,6 +99,7 @@ export function IssueActionsMenuItems({
   primitives: P,
   onOpenAssignee,
   onDeletedNavigateTo,
+  onToggleSidebar,
 }: IssueActionsMenuItemsProps) {
   const { t } = useT("issues");
   const {
@@ -265,6 +270,12 @@ export function IssueActionsMenuItems({
         <FolderOpen className="h-3.5 w-3.5" />
         {t(($) => $.actions.copy_workdir_path)}
       </P.Item>
+      {onToggleSidebar && (
+        <P.Item onClick={onToggleSidebar}>
+          <PanelRight className="h-3.5 w-3.5" />
+          {t(($) => $.detail.sidebar_tooltip)}
+        </P.Item>
+      )}
 
       <P.Separator />
 

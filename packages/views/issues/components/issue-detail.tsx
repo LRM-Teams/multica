@@ -700,6 +700,12 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     router.searchParams,
     paths.channels(),
   );
+  // Direct issue entry has no Messages origin. Keep the control in the same
+  // navigation slot, but make its destination and wording honest.
+  const returnPath = messagesReturnPath ?? paths.issues();
+  const returnLabel = messagesReturnPath
+    ? t(($) => $.detail.back_to_messages)
+    : t(($) => $.detail.back_to_issues);
 
   // Issue navigation — read from TQ list cache
   const wsId = useWorkspaceId();
@@ -1760,17 +1766,15 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
           segments={breadcrumbSegments}
           leaf={
             <>
-              {messagesReturnPath && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="shrink-0 gap-1 text-muted-foreground md:hidden"
-                  onClick={() => router.push(messagesReturnPath)}
-                >
-                  <ChevronLeft className="size-3.5" />
-                  {t(($) => $.detail.back_to_messages)}
-                </Button>
-              )}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="min-h-11 shrink-0 gap-1.5 px-2 font-medium text-foreground md:hidden"
+                onClick={() => router.push(returnPath)}
+              >
+                <ChevronLeft className="size-4" />
+                {returnLabel}
+              </Button>
               <AppLink
                 href={paths.issueDetail(issue.id)}
                 className="flex min-w-0 transition-opacity hover:opacity-80"
@@ -1783,17 +1787,15 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
           }
           actions={
             <>
-            {messagesReturnPath && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="hidden shrink-0 gap-1 text-muted-foreground md:inline-flex"
-                onClick={() => router.push(messagesReturnPath)}
-              >
-                <ChevronLeft className="size-3.5" />
-                {t(($) => $.detail.back_to_messages)}
-              </Button>
-            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="hidden shrink-0 gap-1.5 text-muted-foreground md:inline-flex"
+              onClick={() => router.push(returnPath)}
+            >
+              <ChevronLeft className="size-3.5" />
+              {returnLabel}
+            </Button>
             {/* Live "agent is working" chip, leftmost in the right cluster so
                 it never overlaps the title (which truncates to make room).
                 It self-hides when no agent is active. */}
@@ -1838,7 +1840,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                   <Button
                     variant="ghost"
                     size="icon-sm"
-                    className={cn("text-muted-foreground", actions.isPinned && "text-foreground")}
+                    className={cn("hidden text-muted-foreground md:inline-flex", actions.isPinned && "text-foreground")}
                     onClick={actions.togglePin}
                   >
                     {actions.isPinned ? <PinOff /> : <Pin />}
@@ -1853,6 +1855,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               // When a parent passes `onDelete`, we detect deletion via effect
               // above and skip navigation. Otherwise the modal navigates for us.
               onDeletedNavigateTo={onDelete ? undefined : paths.issues()}
+              onToggleSidebar={isMobile ? handleToggleSidebar : undefined}
               trigger={
                 <Button variant="ghost" size="icon-sm" className="text-muted-foreground">
                   <MoreHorizontal />
@@ -1865,7 +1868,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                   <Button
                     variant={sidebarOpen ? "secondary" : "ghost"}
                     size="icon-sm"
-                    className={sidebarOpen ? "" : "text-muted-foreground"}
+                    className={sidebarOpen ? "hidden md:inline-flex" : "hidden text-muted-foreground md:inline-flex"}
                     onClick={handleToggleSidebar}
                   >
                     <PanelRight />

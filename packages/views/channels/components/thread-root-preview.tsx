@@ -118,6 +118,7 @@ export function ThreadRootPreview({
               parts={message.parts}
               attachments={message.attachments}
               compact
+              sourceMessageId={message.id}
             />
           </div>
           {onViewParent && (

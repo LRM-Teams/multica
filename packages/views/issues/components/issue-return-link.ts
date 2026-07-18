@@ -17,10 +17,18 @@ export function issueDetailHrefFromChannel(
   channelsPath: string,
   pathname: string,
   searchParams: URLSearchParams,
+  sourceMessageId?: string,
 ): string {
   if (!isMessagesPath(pathname, channelsPath)) return issuePath;
 
-  const query = searchParams?.toString() ?? "";
+  // A channel's normal route has no `?message=` query, even when a reader taps
+  // an issue reference inside a particular row. Prefer that row's id when the
+  // renderer knows it, so the return control lands on the actual source rather
+  // than merely reopening the channel. Keeping all other query parameters
+  // preserves the established deep-link contract.
+  const returnSearch = new URLSearchParams(searchParams);
+  if (sourceMessageId) returnSearch.set("message", sourceMessageId);
+  const query = returnSearch.toString();
   const returnTo = query ? `${pathname}?${query}` : pathname;
   return `${issuePath}?${ISSUE_RETURN_TO_PARAM}=${encodeURIComponent(returnTo)}`;
 }

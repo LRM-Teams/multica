@@ -514,6 +514,7 @@
     "reasoning_label": "Reasoning",
     "created_label": "Created",
     "owner_label": "Owner",
+    "token_usage_label": "Tokens",
     "reasoning_default": "Default",
     "runtime_section": "Runtime Config",
     "config_shared_hint": "Any workspace member can adjust this group manager's runtime settings."

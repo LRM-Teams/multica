@@ -22,8 +22,8 @@ export function runtimeTokenStatsLabel(stats?: RuntimeTokenStats | null): string
   const input = formatCompactTokens(stats.input_tokens);
   const output = formatCompactTokens(stats.output_tokens);
   const cacheRead = formatCompactTokens(stats.cache_read_tokens);
-  if (input) chunks.push(`↑${input}`);
-  if (output) chunks.push(`↓${output}`);
+  if (input) chunks.push(`in ${input}`);
+  if (output) chunks.push(`out ${output}`);
   if (cacheRead) chunks.push(`R${cacheRead}`);
   const cost = formatMoney(stats.cost_usd);
   if (cost) chunks.push(cost);
@@ -68,7 +68,7 @@ export function RuntimeTokenStatsBadge({
               className,
             )}
           >
-            <span className={cn("truncate", compact ? "max-w-[7.5rem]" : "max-w-[14rem]")}>{label}</span>
+            <span className={cn("truncate", compact ? "max-w-[7.5rem]" : "max-w-[11rem] sm:max-w-[14rem]")}>{label}</span>
           </span>
         }
       />

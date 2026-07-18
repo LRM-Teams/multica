@@ -21,7 +21,7 @@ import { VisibilityPicker } from "../../agents/components/inspector/visibility-p
 import { useUpdateAgent } from "../../agents/hooks/use-update-agent";
 import { useRuntimeHealthStateLabel } from "../../runtimes/components/shared";
 import { PropRow } from "../../common/prop-row";
-import { RuntimeTokenStatsBadge } from "../../common/runtime-token-stats-badge";
+import { RuntimeTokenStatsBadge, runtimeTokenStatsLabel } from "../../common/runtime-token-stats-badge";
 import { initialsOf } from "../../common/initials";
 import { AgentFilesPanel } from "./agent-files-panel";
 import { useT } from "../../i18n/use-t";
@@ -214,6 +214,7 @@ function AgentProfileTabContent({
   // binary. Reuses the exact logic + label from the profile hover card.
   const runtimeUpdateHealth =
     agent.runtime_mode !== "cloud" && selectedRuntime ? runtimeHealthState(selectedRuntime) : "ok";
+  const hasRuntimeStats = runtimeTokenStatsLabel(runtimeStats) !== null;
 
   const update = (data: Record<string, unknown>) => handleUpdate(agent.id, data);
 
@@ -232,7 +233,12 @@ function AgentProfileTabContent({
       <div className="space-y-2 border-b p-3 text-xs md:p-4">
         <InfoRow label={t(($) => $.side_panel.created_label)} value={formatDate(agent.created_at)} />
         <InfoRow label={t(($) => $.side_panel.owner_label)} value={ownerName(agent, members)} />
-        <RuntimeTokenStatsBadge stats={runtimeStats} />
+        {hasRuntimeStats ? (
+          <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-2 md:grid-cols-[88px_minmax(0,1fr)]">
+            <span className="text-muted-foreground">{t(($) => $.side_panel.token_usage_label)}</span>
+            <RuntimeTokenStatsBadge stats={runtimeStats} />
+          </div>
+        ) : null}
       </div>
 
       {/* Runtime config (editable/gated): the execution attributes the old

@@ -15,7 +15,7 @@
     "vs_yesterday": "前日比"
   },
   "my_tasks": {
-    "title": "自分に関連するタスク・メッセージ",
+    "title": "自分に関連するイシュー・メッセージ",
     "empty": "対応が必要な項目はありません",
     "review_badge": "レビュー",
     "channel_mention": "{{actor}} が #{{channel}} であなたにメンションしました"

@@ -58,6 +58,7 @@ vi.mock("../../../common/markdown", () => ({
     <div
       data-testid="activity-markdown"
       data-sticker-shortcodes={String(enableStickerShortcodes)}
+      data-source={children}
     >
       {children}
     </div>
@@ -271,8 +272,9 @@ describe("ActivityTimeline", () => {
     expect(header).toHaveAttribute("aria-controls");
     expect(detail).toHaveAttribute("id", header.getAttribute("aria-controls"));
     expect(header.contains(detail)).toBe(false);
-    expect(screen.getByTestId("activity-markdown")).toHaveTextContent(markdownOutput.text!);
-    expect(screen.getByTestId("activity-markdown")).toHaveAttribute("data-sticker-shortcodes", "false");
+    const markdown = screen.getByTestId("activity-markdown");
+    expect(markdown).toHaveAttribute("data-source", markdownOutput.text!);
+    expect(markdown).toHaveAttribute("data-sticker-shortcodes", "false");
   });
 
   it("keeps Tier3 fixed facts inline without an empty expand affordance", () => {
@@ -335,8 +337,8 @@ describe("ActivityTimeline", () => {
     const toggle = screen.getByRole("button", { expanded: false });
     const clamped = toggle.querySelector(".line-clamp-2");
     expect(clamped).not.toBeNull();
-    expect(clamped?.textContent).toContain("Running command");
-    expect(clamped?.textContent).toContain(full);
+    expect(toggle).toHaveTextContent("Running command");
+    expect(toggle).toHaveTextContent(full);
     // Copy is expanded-only — not present while collapsed.
     expect(screen.queryByRole("button", { name: "Copy" })).toBeNull();
     // No dot pulses — all static (#404).

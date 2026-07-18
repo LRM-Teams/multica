@@ -468,8 +468,11 @@ func buildPiRPCArgs(sessionPath string, opts ExecOptions, logger *slog.Logger) [
 	if opts.ThinkingLevel != "" {
 		args = append(args, "--thinking", opts.ThinkingLevel)
 	}
+	if opts.DisableTools {
+		args = append(args, "--tools", "")
+	}
 	if opts.SystemPrompt != "" {
 		args = append(args, "--append-system-prompt", opts.SystemPrompt)
 	}
-	return append(args, filterCustomArgs(opts.CustomArgs, piBlockedArgs, logger)...)
+	return append(args, filterPiCustomArgs(opts, logger)...)
 }

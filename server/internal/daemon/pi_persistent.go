@@ -134,7 +134,8 @@ func (p *piPersistentPool) closeAll() {
 }
 
 func usesPersistentPiChatRuntime(provider string, task Task) bool {
-	return provider == "pi" && task.ChatSessionID != ""
+	profile, err := taskExecutionProfile(task)
+	return err == nil && profile == executionProfileFull && provider == "pi" && task.ChatSessionID != ""
 }
 
 func (d *Daemon) acquirePiChatRPCBackend(identity piPersistentIdentity, cfg agent.Config) (agent.Backend, func(bool), error) {

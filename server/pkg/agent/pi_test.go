@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -19,6 +20,82 @@ func TestBuildPiArgsNoToolAllowlist(t *testing.T) {
 		if arg == "--tools" {
 			t.Errorf("buildPiArgs emits --tools %q; should not restrict tool registry (see #2379)", args[i+1])
 		}
+	}
+}
+
+func TestBuildPiArgsRestrictedProfileUsesEmptyToolAllowlist(t *testing.T) {
+	for name, args := range map[string][]string{
+		"one-shot": buildPiArgs("probe", "/tmp/session.jsonl", ExecOptions{DisableTools: true, CustomArgs: []string{"--tools", "bash"}}, slog.Default()),
+		"rpc":      buildPiRPCArgs("/tmp/session.jsonl", ExecOptions{DisableTools: true, CustomArgs: []string{"--tools", "bash"}}, slog.Default()),
+	} {
+		found := 0
+		for i, arg := range args {
+			if arg == "--tools" && i+1 < len(args) && args[i+1] == "" {
+				found++
+			}
+			if arg == "bash" {
+				t.Fatalf("%s args let custom args override the empty tool registry: %#v", name, args)
+			}
+		}
+		if found != 1 {
+			t.Fatalf("%s args do not enforce an empty tool allowlist: %#v", name, args)
+		}
+	}
+}
+
+func TestPiReportedSessionIDOmittedForEphemeralRun(t *testing.T) {
+	if got := piReportedSessionID("/tmp/probe.jsonl", true); got != "" {
+		t.Fatalf("ephemeral session id = %q, want empty", got)
+	}
+	if got := piReportedSessionID("/tmp/chat.jsonl", false); got != "/tmp/chat.jsonl" {
+		t.Fatalf("durable session id = %q", got)
+	}
+}
+
+func TestPiExecuteEphemeralSessionIsDeletedAndNotReported(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test executable uses a POSIX shell")
+	}
+	dir := t.TempDir()
+	fakePath := filepath.Join(dir, "pi")
+	markerPath := filepath.Join(dir, "session-path")
+	script := `#!/bin/sh
+session=""
+take_next=0
+for arg in "$@"; do
+  if [ "$take_next" = 1 ]; then session="$arg"; take_next=0; continue; fi
+  if [ "$arg" = "--session" ]; then take_next=1; fi
+done
+printf '%s' "$session" > "$PI_EPHEMERAL_MARKER"
+cat >/dev/null
+printf '%s\n' '{"type":"agent_start"}'
+printf '%s\n' '{"type":"turn_end","message":{"role":"assistant","model":"test","stopReason":"stop","usage":{"input":1,"output":1}}}'
+`
+	writeTestExecutable(t, fakePath, []byte(script))
+	backend := &piBackend{cfg: Config{ExecutablePath: fakePath, Env: map[string]string{"PI_EPHEMERAL_MARKER": markerPath}, Logger: slog.Default()}}
+	session, err := backend.Execute(context.Background(), "probe", ExecOptions{Cwd: dir, EphemeralSession: true})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	result := <-session.Result
+	if result.SessionID != "" {
+		t.Fatalf("ephemeral result exposed session id %q", result.SessionID)
+	}
+	pathBytes, err := os.ReadFile(markerPath)
+	if err != nil {
+		t.Fatalf("read session marker: %v", err)
+	}
+	ephemeralPath := string(pathBytes)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		_, statErr := os.Stat(ephemeralPath)
+		if os.IsNotExist(statErr) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("ephemeral session file still exists: %s (stat error: %v)", ephemeralPath, statErr)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

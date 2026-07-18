@@ -2576,9 +2576,19 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 	rt := d.runtimeIndex[task.RuntimeID]
 	d.mu.Unlock()
 	provider := rt.Provider
+	profile, profileErr := taskExecutionProfile(task)
+	if profileErr == nil {
+		profileErr = validateExecutionProfileProvider(profile, provider)
+	}
+	if profileErr != nil {
+		taskLog := d.logger.With("task", shortID(task.ID), "execution_profile", profile)
+		d.reportTaskFailure(ctx, task, profileErr.Error(), "", "", "execution_profile_invalid", taskLog)
+		return
+	}
+	task = restrictTaskForExecutionProfile(task, profile)
 
 	// Task-scoped logger with short ID for readable concurrent logs.
-	taskLog := d.logger.With("task", shortID(task.ID))
+	taskLog := d.logger.With("task", shortID(task.ID), "execution_profile", profile)
 	agentName := "agent"
 	if task.Agent != nil {
 		agentName = task.Agent.Name
@@ -2748,6 +2758,7 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 	}
 
 	result, err := d.runner.run(runCtx, task, provider, slot, taskLog)
+	result = restrictResultForExecutionProfile(result, profile)
 
 	// Lease-loss cancellation owns only the provider execution context. Keep
 	// terminal reporting on the daemon's parent context so a renew request that
@@ -3198,6 +3209,16 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if task.WorkspaceID == "" {
 		return TaskResult{}, fmt.Errorf("refusing to spawn agent: task has no workspace_id (task_id=%s)", task.ID)
 	}
+	profile, err := taskExecutionProfile(task)
+	if err != nil {
+		return TaskResult{}, err
+	}
+	if err := validateExecutionProfileProvider(profile, provider); err != nil {
+		return TaskResult{}, err
+	}
+	restrictedExecution := isRestrictedExecutionProfile(profile)
+	task = restrictTaskForExecutionProfile(task, profile)
+	taskLog = taskLog.With("execution_profile", profile)
 
 	// task.Repos is the authoritative repo list for this task — when the
 	// claimed task belongs to a project with github_repo resources the server
@@ -3226,7 +3247,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	agentMemoryDir := ""
 	agentSkillDir := ""
 	agentSkillDraftsPath := ""
-	if task.WorkspaceID != "" && agentID != "" {
+	if !restrictedExecution && task.WorkspaceID != "" && agentID != "" {
 		agentRoot := multicaAgentRoot(d.cfg, task.WorkspaceID, agentID)
 		if err := ensureMulticaAgentRoot(agentRoot); err != nil {
 			taskLog.Warn("multica agent root creation failed", "error", err)
@@ -3239,7 +3260,11 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	serverMemories := convertMemoriesForEnv(task.Agent)
 	memoryTask := task
 	memoryTask.AgentID = agentID
-	executionMemories, scopedMemory := prepareExecutionMemory(agentRootPath, memoryTask, serverMemories)
+	executionMemories := serverMemories
+	scopedMemory := scopedMemoryPaths{}
+	if !restrictedExecution {
+		executionMemories, scopedMemory = prepareExecutionMemory(agentRootPath, memoryTask, serverMemories)
+	}
 
 	// Prepare isolated execution environment.
 	// Repos are passed as metadata only — the agent checks them out on demand
@@ -3386,7 +3411,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// prepared: final output is never a delivery fallback.
 	agentToken := task.AuthToken
 	durableAgentToken := false
-	if task.isInboxTask() && agentToken == "" {
+	if task.isInboxTask() && agentToken == "" && !restrictedExecution {
 		token, err := d.ensureTaskAgentCredential(ctx, task, taskLog)
 		if err != nil {
 			return TaskResult{
@@ -3398,7 +3423,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		agentToken = token
 		durableAgentToken = true
 	}
-	chatTask := task.ChatSessionID != ""
+	chatTask := task.ChatSessionID != "" && !restrictedExecution
 	cliWrapperDir := ""
 	cliTokenFile := ""
 	cliBinDir := ""
@@ -3410,44 +3435,51 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if prepareCLITransport == nil {
 		prepareCLITransport = prepareTaskCLITransport
 	}
-	selfBin, err := resolveExecutable()
-	if err != nil {
-		if chatTask {
-			return transportUnavailableResult("resolve_multica_executable", err), nil
-		}
-		taskLog.Warn("agent cli transport: unable to resolve multica executable", "error", err)
+	if restrictedExecution {
+		taskLog.Info("agent cli transport omitted for restricted execution")
 	} else {
-		cliBinDir = filepath.Dir(selfBin)
-		if agentToken == "" {
+		selfBin, err := resolveExecutable()
+		if err != nil {
 			if chatTask {
-				return transportUnavailableResult("missing_run_bearer_token", nil), nil
+				return transportUnavailableResult("resolve_multica_executable", err), nil
 			}
-			taskLog.Warn("agent cli transport: no run bearer token available; CLI API calls will require external auth")
+			taskLog.Warn("agent cli transport: unable to resolve multica executable", "error", err)
 		} else {
-			wrapperDir, tokenFile, err := prepareCLITransport(d.cfg, task.WorkspaceID, agentID, task.ID, selfBin, agentToken)
-			if err != nil {
+			cliBinDir = filepath.Dir(selfBin)
+			if agentToken == "" {
 				if chatTask {
-					return transportUnavailableResult("prepare_task_cli_wrapper", err), nil
+					return transportUnavailableResult("missing_run_bearer_token", nil), nil
 				}
-				return TaskResult{}, fmt.Errorf("prepare agent CLI transport: %w", err)
-			}
-			cliWrapperDir = wrapperDir
-			cliTokenFile = tokenFile
-			taskLog.Info("agent cli transport prepared", "wrapper_dir", wrapperDir, "token_file", tokenFile)
-			if durableAgentToken {
-				defer func() {
-					if err := os.RemoveAll(wrapperDir); err != nil {
-						taskLog.Warn("agent cli transport cleanup failed", "wrapper_dir", wrapperDir, "error", err)
+				taskLog.Warn("agent cli transport: no run bearer token available; CLI API calls will require external auth")
+			} else {
+				wrapperDir, tokenFile, err := prepareCLITransport(d.cfg, task.WorkspaceID, agentID, task.ID, selfBin, agentToken)
+				if err != nil {
+					if chatTask {
+						return transportUnavailableResult("prepare_task_cli_wrapper", err), nil
 					}
-				}()
+					return TaskResult{}, fmt.Errorf("prepare agent CLI transport: %w", err)
+				}
+				cliWrapperDir = wrapperDir
+				cliTokenFile = tokenFile
+				taskLog.Info("agent cli transport prepared", "wrapper_dir", wrapperDir, "token_file", tokenFile)
+				if durableAgentToken {
+					defer func() {
+						if err := os.RemoveAll(wrapperDir); err != nil {
+							taskLog.Warn("agent cli transport cleanup failed", "wrapper_dir", wrapperDir, "error", err)
+						}
+					}()
+				}
 			}
 		}
 	}
 
 	// Inject runtime-specific config (meta skill) so the agent discovers .agent_context/.
-	runtimeBrief, err := execenv.InjectRuntimeConfig(env.WorkDir, provider, taskCtx)
-	if err != nil {
-		d.logger.Warn("execenv: inject runtime config failed (non-fatal)", "error", err)
+	runtimeBrief := restrictedExecutionSystemPrompt(profile)
+	if !restrictedExecution {
+		runtimeBrief, err = execenv.InjectRuntimeConfig(env.WorkDir, provider, taskCtx)
+		if err != nil {
+			d.logger.Warn("execenv: inject runtime config failed (non-fatal)", "error", err)
+		}
 	}
 	// Workdir is preserved for reuse by future tasks on the same (agent,
 	// issue) pair in cloud mode; the work_dir path is stored in DB on task
@@ -3532,9 +3564,11 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if scopedMemory.ChannelDir != "" {
 		agentEnv["MULTICA_CHANNEL_MEMORY_DIR"] = scopedMemory.ChannelDir
 	}
-	addMulticaAgentEnv(agentEnv, d.cfg, task.WorkspaceID, agentID, task.ProjectID)
-	if provider == "pi" {
-		addPiAgentEnv(agentEnv, d.cfg, task.WorkspaceID, agentID)
+	if !restrictedExecution {
+		addMulticaAgentEnv(agentEnv, d.cfg, task.WorkspaceID, agentID, task.ProjectID)
+		if provider == "pi" {
+			addPiAgentEnv(agentEnv, d.cfg, task.WorkspaceID, agentID)
+		}
 	}
 	if task.AutopilotRunID != "" {
 		agentEnv["MULTICA_AUTOPILOT_RUN_ID"] = task.AutopilotRunID
@@ -3706,6 +3740,8 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		CustomArgs:                customArgs,
 		McpConfig:                 mcpConfig,
 		ThinkingLevel:             thinkingLevel,
+		DisableTools:              restrictedExecution,
+		EphemeralSession:          restrictedExecution,
 	}
 	// Some providers do not reliably load the per-task runtime config files we
 	// write into the task workdir:
@@ -3728,7 +3764,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// Hermes loads AGENTS.md / .agent_context itself. Prepending the full runtime
 	// brief into the ACP user prompt duplicates that context, bloats every turn,
 	// and has triggered upstream safety filters on harmless tasks.
-	if providerNeedsInlineSystemPrompt(provider) {
+	if restrictedExecution || providerNeedsInlineSystemPrompt(provider) {
 		execOpts.SystemPrompt = runtimeBrief
 	}
 

@@ -20,6 +20,9 @@ func TestTaskExecutionConfigPreservesExistingContext(t *testing.T) {
 	if config.Model != "queued-model" || config.ThinkingLevel != "high" {
 		t.Fatalf("config = %#v", config)
 	}
+	if config.ExecutionProfile != ExecutionProfileFull {
+		t.Fatalf("execution profile = %q, want %q", config.ExecutionProfile, ExecutionProfileFull)
+	}
 }
 
 func TestTaskExecutionConfigLegacyContextFallsBack(t *testing.T) {
@@ -37,6 +40,42 @@ func TestTaskExecutionConfigHandlesNullContext(t *testing.T) {
 	}
 	if _, ok := TaskExecutionConfigFromContext(contextJSON); !ok {
 		t.Fatalf("null context did not receive a snapshot: %s", contextJSON)
+	}
+}
+
+func TestTaskExecutionConfigRestrictedProfilesRoundTrip(t *testing.T) {
+	for _, profile := range []string{ExecutionProfileAttentionProbe, ExecutionProfileProtocolTurn} {
+		contextJSON, err := WithTaskExecutionProfile(nil, "queued-model", "low", profile)
+		if err != nil {
+			t.Fatalf("WithTaskExecutionProfile(%q): %v", profile, err)
+		}
+		config, ok := TaskExecutionConfigFromContext(contextJSON)
+		if !ok {
+			t.Fatalf("profile %q did not round trip", profile)
+		}
+		if config.ExecutionProfile != profile {
+			t.Fatalf("execution profile = %q, want %q", config.ExecutionProfile, profile)
+		}
+	}
+}
+
+func TestTaskExecutionConfigRejectsUnknownProfile(t *testing.T) {
+	if _, err := WithTaskExecutionProfile(nil, "queued-model", "low", "surprise_profile"); err == nil {
+		t.Fatal("unknown execution profile was accepted")
+	}
+	config, ok := TaskExecutionConfigFromContext([]byte(`{"execution_config":{"model":"m","thinking_level":"low","execution_profile":"surprise_profile","snapshotted":true}}`))
+	if !ok || config.ExecutionProfile != "surprise_profile" {
+		t.Fatalf("unknown persisted execution profile was hidden: config=%#v ok=%v", config, ok)
+	}
+}
+
+func TestTaskExecutionConfigLegacySnapshotDefaultsToFull(t *testing.T) {
+	config, ok := TaskExecutionConfigFromContext([]byte(`{"execution_config":{"model":"m","thinking_level":"low","snapshotted":true}}`))
+	if !ok {
+		t.Fatal("legacy snapshot was rejected")
+	}
+	if config.ExecutionProfile != ExecutionProfileFull {
+		t.Fatalf("execution profile = %q, want %q", config.ExecutionProfile, ExecutionProfileFull)
 	}
 }
 

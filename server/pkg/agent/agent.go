@@ -49,6 +49,13 @@ type ExecOptions struct {
 	ExtraArgs                 []string        // daemon-wide default CLI arguments appended before CustomArgs; currently read by claude and codex backends only
 	CustomArgs                []string        // per-agent CLI arguments appended after ExtraArgs
 	McpConfig                 json.RawMessage // if non-nil, MCP server config to pass via --mcp-config
+	// DisableTools requests a provider-enforced empty tool registry. Callers
+	// must reject restricted profiles for backends that cannot enforce it;
+	// silently running with tools would violate the profile boundary.
+	DisableTools bool
+	// EphemeralSession prevents the provider session transcript from becoming a
+	// resumable runtime artifact. It is required for sidecar cognition runs.
+	EphemeralSession bool
 	// ThinkingLevel is the runtime-native reasoning/effort value (e.g.
 	// Claude's "low|medium|high|xhigh|max", Codex's "none|minimal|low|
 	// medium|high|xhigh", OpenCode's model variant names). Empty means

@@ -214,10 +214,26 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 	earlyCompleted := false
 
 	// Pi's --session flag expects a file path where events are appended.
-	// The path doubles as our opaque session identifier: we return it as
-	// SessionID and expect it back as ResumeSessionID on the next turn.
+	// For normal runs the path doubles as our opaque session identifier. A
+	// sidecar cognition run instead gets a temporary transcript that is deleted
+	// after the process exits and is never returned as a resumable SessionID.
 	sessionPath := opts.ResumeSessionID
-	if sessionPath == "" {
+	ephemeralSession := false
+	if opts.EphemeralSession {
+		if sessionPath != "" {
+			return nil, fmt.Errorf("Pi ephemeral session cannot resume %q", sessionPath)
+		}
+		f, err := os.CreateTemp("", "multica-pi-ephemeral-*.jsonl")
+		if err != nil {
+			return nil, fmt.Errorf("Pi ephemeral session path: %w", err)
+		}
+		sessionPath = f.Name()
+		ephemeralSession = true
+		if err := f.Close(); err != nil {
+			_ = os.Remove(sessionPath)
+			return nil, fmt.Errorf("Pi ephemeral session file: %w", err)
+		}
+	} else if sessionPath == "" {
 		p, err := newPiSessionPath()
 		if err != nil {
 			return nil, fmt.Errorf("pi session path: %w", err)
@@ -225,6 +241,9 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 		sessionPath = p
 	}
 	if err := ensurePiSessionFile(sessionPath); err != nil {
+		if ephemeralSession {
+			_ = os.Remove(sessionPath)
+		}
 		return nil, fmt.Errorf("pi session file: %w", err)
 	}
 
@@ -245,6 +264,9 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		cancel()
+		if ephemeralSession {
+			_ = os.Remove(sessionPath)
+		}
 		return nil, fmt.Errorf("pi stdout pipe: %w", err)
 	}
 	// Attach an explicit stdin pipe and write the prompt through it on every
@@ -256,6 +278,9 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		cancel()
+		if ephemeralSession {
+			_ = os.Remove(sessionPath)
+		}
 		return nil, fmt.Errorf("pi stdin pipe: %w", err)
 	}
 	stderrBuf := newStderrTail(newLogWriter(b.cfg.Logger, "[pi:stderr] "), agentStderrTailBytes)
@@ -264,6 +289,9 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 	if err := cmd.Start(); err != nil {
 		_ = stdin.Close()
 		cancel()
+		if ephemeralSession {
+			_ = os.Remove(sessionPath)
+		}
 		return nil, fmt.Errorf("start pi: %w", err)
 	}
 	stdinWriteResult := make(chan error, 1)
@@ -301,6 +329,13 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 		defer cancel()
 		defer close(msgCh)
 		defer close(resCh)
+		if ephemeralSession {
+			defer func() {
+				if err := os.Remove(sessionPath); err != nil && !os.IsNotExist(err) {
+					b.cfg.Logger.Warn("Pi ephemeral session cleanup failed", "path", sessionPath, "error", err)
+				}
+			}()
+		}
 
 		startTime := time.Now()
 		var output strings.Builder
@@ -449,7 +484,7 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 						Output:     output.String(),
 						Error:      finalError,
 						DurationMs: time.Since(startTime).Milliseconds(),
-						SessionID:  sessionPath,
+						SessionID:  piReportedSessionID(sessionPath, ephemeralSession),
 						Usage:      usage,
 					}
 				}
@@ -508,7 +543,7 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 
 		b.cfg.Logger.Info("pi finished", "pid", cmd.Process.Pid, "status", finalStatus, "duration", duration.Round(time.Millisecond).String())
 
-		reportedSessionID := sessionPath
+		reportedSessionID := piReportedSessionID(sessionPath, ephemeralSession)
 		if finalStatus == "failed" && !sessionEstablished {
 			// A resume failure before Pi announces agent_start means no usable
 			// session was established. Returning the requested path here makes
@@ -661,19 +696,39 @@ func buildPiArgs(prompt, sessionPath string, opts ExecOptions, logger *slog.Logg
 	if opts.ThinkingLevel != "" {
 		args = append(args, "--thinking", opts.ThinkingLevel)
 	}
-	// Note: we intentionally do NOT pass --tools here. Omitting it lets
-	// Pi use its full tool registry, including user-installed extension
-	// tools. Passing --tools acts as a restrictive allowlist that
-	// silently filters out extension-registered tools (#2379).
-	// Users who want to restrict tools can do so via custom_args.
+	// Normal runs intentionally omit --tools so Pi can use its full registry,
+	// including extension tools (#2379). Restricted execution profiles pass an
+	// explicit empty allowlist; omission would silently re-enable every tool.
+	if opts.DisableTools {
+		args = append(args, "--tools", "")
+	}
 	if opts.SystemPrompt != "" {
 		args = append(args, "--append-system-prompt", opts.SystemPrompt)
 	}
-	args = append(args, filterCustomArgs(opts.CustomArgs, piBlockedArgs, logger)...)
+	args = append(args, filterPiCustomArgs(opts, logger)...)
 	if prompt != "" {
 		args = append(args, prompt)
 	}
 	return args
+}
+
+func filterPiCustomArgs(opts ExecOptions, logger *slog.Logger) []string {
+	blocked := piBlockedArgs
+	if opts.DisableTools {
+		blocked = make(map[string]blockedArgMode, len(piBlockedArgs)+1)
+		for name, mode := range piBlockedArgs {
+			blocked[name] = mode
+		}
+		blocked["--tools"] = blockedWithValue
+	}
+	return filterCustomArgs(opts.CustomArgs, blocked, logger)
+}
+
+func piReportedSessionID(sessionPath string, ephemeral bool) string {
+	if ephemeral {
+		return ""
+	}
+	return sessionPath
 }
 
 // piStopReasonAllowsEarlyComplete reports whether a turn_end stop reason

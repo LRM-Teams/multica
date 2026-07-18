@@ -128,10 +128,22 @@ type Task struct {
 	// Empty when the server-side runtime has no owning user.
 	AuthToken string `json:"auth_token,omitempty"`
 
+	// ExecutionConfig is the immutable run contract captured by the server.
+	// Restricted profiles must fail closed when the local provider cannot
+	// guarantee an isolated, tool-free invocation.
+	ExecutionConfig *TaskExecutionConfig `json:"execution_config,omitempty"`
+
 	// InboxEvent is present when this work item came from the raft-like
 	// agent inbox instead of legacy agent_task_queue. Terminal callbacks must
 	// use the inbox lease endpoints and must not call task start/complete/fail.
 	InboxEvent *AgentInboxLease `json:"inbox_event,omitempty"`
+}
+
+type TaskExecutionConfig struct {
+	Model            string `json:"model,omitempty"`
+	ThinkingLevel    string `json:"thinking_level,omitempty"`
+	ExecutionProfile string `json:"execution_profile,omitempty"`
+	Snapshotted      bool   `json:"snapshotted,omitempty"`
 }
 
 type AgentInboxLease struct {

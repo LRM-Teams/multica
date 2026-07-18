@@ -138,6 +138,13 @@
 - **身份不用 memory 猜**：当前 agent 身份以 `## Agent Identity` 为准，当前说话人以 `## Task Initiator` 的 attested identity 为准；memory 只补充“这个人的偏好”，不能把邻近聊天里的名字当身份 oracle。runtime owner 的 profile 中明确写出的协作偏好是跨 agent standing defaults，但当前任务/更新的现场指令优先。
 - **物**：`server/internal/daemon/execenv/runtime_config.go`；`TestChatRuntimeBriefRendersReplyRequirementForDirectedRun`、`TestMemoryOperatingGuidePrioritizesExplicitUserPreferences`、`TestBuildMetaSkillContentEmitsRequestingUser`、`TestBuildMetaSkillContentEmitsTaskInitiatorMember`。已见红：旧 brief 只要求结束前可见回复、memory 为 medium-strength 且 lazy-read、profile preference 被降成 background。
 
+### 4.4 轻量认知档位不能静默退化为完整执行 — `可执行`（② profile enum + ⑤ daemon/Pi contract tests）
+- `execution_profile=attention_probe|protocol_turn` 是运行隔离合同，不是 Prompt 风格：必须使用执行后删除且不返回 session ID 的独立临时会话、不可被 custom args 覆盖的空工具 allowlist、无 MCP/Skill/CLI transport、无仓库/附件/完整本地 Memory；不得复用 Agent 的持久 chat runtime。
+- 当前只有 Pi 完成 provider 级空工具注册表约束；其他 provider 收到受限 profile 必须 fail closed，直到各自实现并见过隔离测试红。未知 profile 同样 fail closed，不能按 `full` 执行。
+- 受限 profile 的普通完成回调必须强制归一成 `no_reply`，且清空 session/workdir 指针；探针结构化结果只能走 Attention Round 的内部结果合同，不能借聊天完成输出旁路发布。
+- `execution_profile` 缺失只兼容历史已入队执行，解释为 `full`；新任务必须在创建时快照明确 profile。
+- **物**：`TaskExecutionConfig.ExecutionProfile` 类型/解析；`restrictTaskForExecutionProfile`；Pi `--tools ""` 参数合同；`usesPersistentPiChatRuntime` 受限档位排除；对应 service/daemon/agent tests。
+
 ## 5. 验证方法论 — `仅文档`（诚实标注：拦不住人，只能让"猜"显式化）
 
 - **渲染活实体的功能，验收必须含"写入后变更"测例**（fixture 先改后写=永远假绿）。→ 有测试模板后升 `可执行`。

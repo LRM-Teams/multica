@@ -396,7 +396,7 @@ func (c *Client) ReportAgentInboxMessages(ctx context.Context, lease AgentInboxL
 	}, nil, c.tokenForRuntime(lease.RuntimeID))
 }
 
-func (c *Client) CompleteTask(ctx context.Context, taskID, output, branchName, action, target string, options *protocol.ChatOutputOptions, outputType, sessionID, workDir string, parts []protocol.MessagePart, reaction *protocol.ChatReactionPayload) error {
+func (c *Client) CompleteTask(ctx context.Context, taskID, output, branchName, action, target string, options *protocol.ChatOutputOptions, outputType, sessionID, workDir string, parts []protocol.MessagePart, reaction *protocol.ChatReactionPayload, runtimeStats *protocol.RuntimeTokenStats) error {
 	body := map[string]any{"output": output}
 	if branchName != "" {
 		body["branch_name"] = branchName
@@ -424,6 +424,9 @@ func (c *Client) CompleteTask(ctx context.Context, taskID, output, branchName, a
 	}
 	if workDir != "" {
 		body["work_dir"] = workDir
+	}
+	if runtimeStats != nil {
+		body["runtime_stats"] = runtimeStats
 	}
 	return c.postJSONWithRetry(ctx, fmt.Sprintf("/api/daemon/tasks/%s/complete", taskID), body, nil, defaultTerminalRetrySchedule)
 }
@@ -457,6 +460,9 @@ func (c *Client) CompleteAgentInboxEvent(ctx context.Context, lease AgentInboxLe
 	}
 	if result.WorkDir != "" {
 		body["work_dir"] = result.WorkDir
+	}
+	if result.RuntimeStats != nil {
+		body["runtime_stats"] = result.RuntimeStats
 	}
 	return c.postJSONWithRetryToken(ctx, fmt.Sprintf("/api/daemon/agent-inbox/events/%s/complete", lease.ID), body, nil, defaultTerminalRetrySchedule, c.tokenForRuntime(lease.RuntimeID))
 }

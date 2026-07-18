@@ -2278,6 +2278,7 @@ type TaskCompleteRequest struct {
 	MustReplyFailure       bool                          `json:"must_reply_failure,omitempty"`
 	SessionID              string                        `json:"session_id"` // Claude session ID for future resumption
 	WorkDir                string                        `json:"work_dir"`   // working directory used during execution
+	RuntimeStats           *protocol.RuntimeTokenStats   `json:"runtime_stats,omitempty"`
 }
 
 func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
@@ -2300,6 +2301,7 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, _ := json.Marshal(req)
+	h.persistChatRuntimeTokenStats(r.Context(), originalTask.ChatSessionID, req.RuntimeStats)
 	completion, err := h.TaskService.CompleteDaemonTask(r.Context(), parseUUID(taskID), result, req.SessionID, req.WorkDir)
 	if err != nil {
 		slog.Warn("complete task failed", "task_id", taskID, "error", err)
@@ -2353,6 +2355,21 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	h.handleClaimedAgentRadarTask(r.Context(), *task, completion.RadarRun)
 
 	writeJSON(w, http.StatusOK, taskToResponse(*task, workspaceID))
+}
+
+func (h *Handler) persistChatRuntimeTokenStats(ctx context.Context, chatSessionID pgtype.UUID, stats *protocol.RuntimeTokenStats) {
+	if stats == nil || !chatSessionID.Valid {
+		return
+	}
+	copy := *stats
+	copy.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	raw, err := json.Marshal(copy)
+	if err != nil {
+		return
+	}
+	if _, err := h.DB.Exec(ctx, `UPDATE chat_session SET runtime_token_stats = $2, updated_at = now() WHERE id = $1`, chatSessionID, raw); err != nil {
+		slog.Warn("persist chat runtime token stats failed", "chat_session_id", uuidToString(chatSessionID), "error", err)
+	}
 }
 
 func (h *Handler) handleClaimedAgentRadarTask(ctx context.Context, task db.AgentTaskQueue, run *db.AgentRadarRun) {

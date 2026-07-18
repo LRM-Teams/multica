@@ -38,19 +38,20 @@ type DMPeer struct {
 // DMItem is one row in the unified DM list and the create-or-find response.
 // Unread is a count for dm_channel items.
 type DMItem struct {
-	ID             string              `json:"id"` // dm channel id
-	Source         string              `json:"source"`
-	Peer           DMPeer              `json:"peer"`
-	LastMessage    *ChannelLastMessage `json:"last_message,omitempty"`
-	Unread         int                 `json:"unread"`
-	RealUnread     int                 `json:"real_unread"`
-	ManuallyUnread bool                `json:"manually_unread,omitempty"`
-	PinnedAt       *string             `json:"pinned_at,omitempty"`
-	MutedAt        *string             `json:"muted_at,omitempty"`
-	Muted          bool                `json:"muted,omitempty"`
-	HasMention     bool                `json:"has_mention,omitempty"`
-	LastReadSeq    *int64              `json:"last_read_seq,omitempty"`
-	UpdatedAt      string              `json:"updated_at"`
+	ID             string                      `json:"id"` // dm channel id
+	Source         string                      `json:"source"`
+	Peer           DMPeer                      `json:"peer"`
+	LastMessage    *ChannelLastMessage         `json:"last_message,omitempty"`
+	Unread         int                         `json:"unread"`
+	RealUnread     int                         `json:"real_unread"`
+	ManuallyUnread bool                        `json:"manually_unread,omitempty"`
+	PinnedAt       *string                     `json:"pinned_at,omitempty"`
+	MutedAt        *string                     `json:"muted_at,omitempty"`
+	Muted          bool                        `json:"muted,omitempty"`
+	HasMention     bool                        `json:"has_mention,omitempty"`
+	LastReadSeq    *int64                      `json:"last_read_seq,omitempty"`
+	RuntimeStats   *protocol.RuntimeTokenStats `json:"runtime_stats,omitempty"`
+	UpdatedAt      string                      `json:"updated_at"`
 }
 
 type CreateOrFindDirectMessageRequest struct {
@@ -709,7 +710,8 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 		       COALESCE(uc.cnt, 0) AS real_unread,
 		       state.pinned_at, state.manual_unread_at, COALESCE(vcm.muted_at, state.muted_at),
 		       COALESCE(hm.has_mention, false),
-		       COALESCE(vcm.last_read_seq, cr.last_read_seq, 0)::bigint
+		       COALESCE(vcm.last_read_seq, cr.last_read_seq, 0)::bigint,
+		       cs.runtime_token_stats
 		FROM channel ch
 		JOIN channel_member cm ON cm.channel_id = ch.id AND cm.member_type = 'user' AND cm.member_id = $2
 		JOIN conversation conv ON conv.channel_id = ch.id
@@ -726,6 +728,8 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 		) peer ON true
 		LEFT JOIN "user" u ON peer.member_type = 'user' AND u.id = peer.member_id
 		LEFT JOIN agent a ON peer.member_type = 'agent' AND a.id = peer.member_id
+		LEFT JOIN channel_agent_session cas ON cas.channel_id = ch.id AND peer.member_type = 'agent' AND cas.agent_id = peer.member_id
+		LEFT JOIN chat_session cs ON cs.id = cas.chat_session_id
 		LEFT JOIN LATERAL (
 			SELECT author_type, author_name, content, parts, created_at
 			FROM channel_message m WHERE m.channel_id = ch.id
@@ -769,12 +773,12 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 		var updatedAt, lastAt, pinnedAt, manualUnreadAt, mutedAt pgtype.Timestamptz
 		var peerType, peerName string
 		var peerAvatar, lastType, lastName, lastContent pgtype.Text
-		var lastParts []byte
+		var lastParts, runtimeStatsRaw []byte
 		var unread int
 		var hasMention bool
 		var lastReadSeq int64
 		if err := rows.Scan(&id, &updatedAt, &peerType, &peerID, &peerName, &peerAvatar,
-			&lastType, &lastName, &lastContent, &lastParts, &lastAt, &unread, &pinnedAt, &manualUnreadAt, &mutedAt, &hasMention, &lastReadSeq); err != nil {
+			&lastType, &lastName, &lastContent, &lastParts, &lastAt, &unread, &pinnedAt, &manualUnreadAt, &mutedAt, &hasMention, &lastReadSeq, &runtimeStatsRaw); err != nil {
 			continue
 		}
 		if peerType == "agent" {
@@ -798,6 +802,12 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 		}
 		if item.ManuallyUnread && item.Unread == 0 {
 			item.Unread = 1
+		}
+		if len(runtimeStatsRaw) > 0 {
+			var stats protocol.RuntimeTokenStats
+			if json.Unmarshal(runtimeStatsRaw, &stats) == nil {
+				item.RuntimeStats = &stats
+			}
 		}
 		if lastContent.Valid {
 			item.LastMessage = channelLastMessage(lastType.String, lastName.String, lastContent.String, lastParts, lastAt)

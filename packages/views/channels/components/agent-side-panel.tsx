@@ -4,7 +4,7 @@ import { type ReactNode, useState } from "react";
 import { Activity, FileText, User, X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useConfigStore } from "@multica/core/config";
-import type { Agent, MemberWithUser } from "@multica/core/types";
+import type { Agent, MemberWithUser, RuntimeTokenStats } from "@multica/core/types";
 import { runtimeHealthState, runtimeListOptions } from "@multica/core/runtimes";
 import { useAgentPermissions } from "@multica/core/permissions";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
@@ -21,6 +21,8 @@ import { VisibilityPicker } from "../../agents/components/inspector/visibility-p
 import { useUpdateAgent } from "../../agents/hooks/use-update-agent";
 import { useRuntimeHealthStateLabel } from "../../runtimes/components/shared";
 import { PropRow } from "../../common/prop-row";
+import { RuntimeTokenStatsBadge } from "../../common/runtime-token-stats-badge";
+import { runtimeTokenStatsLabel } from "../../common/runtime-token-stats";
 import { initialsOf } from "../../common/initials";
 import { AgentFilesPanel } from "./agent-files-panel";
 import { useT } from "../../i18n/use-t";
@@ -37,6 +39,7 @@ interface AgentSidePanelProps {
   agent: Agent;
   currentUserId: string | null;
   members: readonly MemberWithUser[];
+  runtimeStats?: RuntimeTokenStats | null;
   onClose: () => void;
 }
 
@@ -53,7 +56,7 @@ interface AgentSidePanelProps {
  * one interface lying about the other. Profile now carries an identity section
  * (read-only) plus a runtime-config section (editable/gated) in one place.
  */
-export function AgentSidePanel({ agent, currentUserId, members, onClose }: AgentSidePanelProps) {
+export function AgentSidePanel({ agent, currentUserId, members, runtimeStats, onClose }: AgentSidePanelProps) {
   const { t } = useT("agents");
   const isOwner = !!currentUserId && agent.owner_id === currentUserId;
   const devProfileAccess = useConfigStore((state) => state.agentProfileDevAccessEnabled);
@@ -124,6 +127,7 @@ export function AgentSidePanel({ agent, currentUserId, members, onClose }: Agent
                 agent={agent}
                 members={members}
                 currentUserId={currentUserId}
+                runtimeStats={runtimeStats}
               />
             )}
             {tab === "files" && canInspectAgent && (
@@ -145,6 +149,7 @@ export function AgentSidePanel({ agent, currentUserId, members, onClose }: Agent
             agent={agent}
             members={members}
             currentUserId={currentUserId}
+            runtimeStats={runtimeStats}
           />
         </div>
       )}
@@ -186,10 +191,12 @@ function AgentProfileTabContent({
   agent,
   members,
   currentUserId,
+  runtimeStats,
 }: {
   agent: Agent;
   members: readonly MemberWithUser[];
   currentUserId: string | null;
+  runtimeStats?: RuntimeTokenStats | null;
 }) {
   const { t } = useT("agents");
   const wsId = agent.workspace_id;
@@ -208,6 +215,7 @@ function AgentProfileTabContent({
   // binary. Reuses the exact logic + label from the profile hover card.
   const runtimeUpdateHealth =
     agent.runtime_mode !== "cloud" && selectedRuntime ? runtimeHealthState(selectedRuntime) : "ok";
+  const hasRuntimeStats = runtimeTokenStatsLabel(runtimeStats) !== null;
 
   const update = (data: Record<string, unknown>) => handleUpdate(agent.id, data);
 
@@ -226,6 +234,12 @@ function AgentProfileTabContent({
       <div className="space-y-2 border-b p-3 text-xs md:p-4">
         <InfoRow label={t(($) => $.side_panel.created_label)} value={formatDate(agent.created_at)} />
         <InfoRow label={t(($) => $.side_panel.owner_label)} value={ownerName(agent, members)} />
+        {hasRuntimeStats ? (
+          <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-2 md:grid-cols-[88px_minmax(0,1fr)]">
+            <span className="text-muted-foreground">{t(($) => $.side_panel.token_usage_label)}</span>
+            <RuntimeTokenStatsBadge stats={runtimeStats} />
+          </div>
+        ) : null}
       </div>
 
       {/* Runtime config (editable/gated): the execution attributes the old

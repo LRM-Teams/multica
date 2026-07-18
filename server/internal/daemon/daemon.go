@@ -3004,7 +3004,7 @@ func (d *Daemon) reportTaskResultForTask(ctx context.Context, task Task, result 
 		if task.isInboxTask() {
 			err = d.client.CompleteAgentInboxEvent(ctx, *task.InboxEvent, result)
 		} else {
-			err = d.client.CompleteTask(ctx, taskID, result.Comment, result.BranchName, result.Action, result.Target, result.Options, result.Type, result.SessionID, result.WorkDir, result.Parts, result.Reaction)
+			err = d.client.CompleteTask(ctx, taskID, result.Comment, result.BranchName, result.Action, result.Target, result.Options, result.Type, result.SessionID, result.WorkDir, result.Parts, result.Reaction, result.RuntimeStats)
 		}
 		if err == nil {
 			return
@@ -3850,6 +3850,8 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		})
 	}
 
+	runtimeStats := runtimeStatsFromAgent(result.RuntimeStats)
+
 	output := result.Output
 	var parts []protocol.MessagePart
 	var reaction *protocol.ChatReactionPayload
@@ -3867,27 +3869,29 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			// a normal completion so the task is not incorrectly marked as
 			// blocked.
 			return TaskResult{
-				Status:    "completed",
-				Comment:   "",
-				Action:    protocol.ChatOutputActionNoReply,
-				Type:      protocol.ChatOutputKindNoReply,
-				SessionID: result.SessionID,
-				WorkDir:   env.WorkDir,
-				EnvRoot:   env.RootDir,
-				Usage:     usageEntries,
+				Status:       "completed",
+				Comment:      "",
+				Action:       protocol.ChatOutputActionNoReply,
+				Type:         protocol.ChatOutputKindNoReply,
+				SessionID:    result.SessionID,
+				WorkDir:      env.WorkDir,
+				EnvRoot:      env.RootDir,
+				Usage:        usageEntries,
+				RuntimeStats: runtimeStats,
 			}, nil
 		}
 		if len(parts) == 0 && reaction == nil && isSilentNoReplyOutput(output) {
 			taskLog.Info("agent produced silent no-reply status output; completing as structured no_reply")
 			return TaskResult{
-				Status:    "completed",
-				Comment:   "",
-				Action:    protocol.ChatOutputActionNoReply,
-				Type:      protocol.ChatOutputKindNoReply,
-				SessionID: result.SessionID,
-				WorkDir:   env.WorkDir,
-				EnvRoot:   env.RootDir,
-				Usage:     usageEntries,
+				Status:       "completed",
+				Comment:      "",
+				Action:       protocol.ChatOutputActionNoReply,
+				Type:         protocol.ChatOutputKindNoReply,
+				SessionID:    result.SessionID,
+				WorkDir:      env.WorkDir,
+				EnvRoot:      env.RootDir,
+				Usage:        usageEntries,
+				RuntimeStats: runtimeStats,
 			}, nil
 		}
 		// Detect "poisoned" terminal output: the agent didn't reach a real
@@ -3908,22 +3912,24 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 				WorkDir:       env.WorkDir,
 				EnvRoot:       env.RootDir,
 				Usage:         usageEntries,
+				RuntimeStats:  runtimeStats,
 				FailureReason: reason,
 			}, nil
 		}
 		return TaskResult{
-			Status:    "completed",
-			Comment:   output,
-			Action:    outputAction,
-			Target:    outputTarget,
-			Options:   outputOptions,
-			Type:      outputType,
-			Parts:     parts,
-			Reaction:  reaction,
-			SessionID: result.SessionID,
-			WorkDir:   env.WorkDir,
-			EnvRoot:   env.RootDir,
-			Usage:     usageEntries,
+			Status:       "completed",
+			Comment:      output,
+			Action:       outputAction,
+			Target:       outputTarget,
+			Options:      outputOptions,
+			Type:         outputType,
+			Parts:        parts,
+			Reaction:     reaction,
+			SessionID:    result.SessionID,
+			WorkDir:      env.WorkDir,
+			EnvRoot:      env.RootDir,
+			Usage:        usageEntries,
+			RuntimeStats: runtimeStats,
 		}, nil
 	case "timeout":
 		// Surface session_id/work_dir so the chat resume pointer is kept
@@ -3949,6 +3955,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			EnvRoot:       env.RootDir,
 			FailureReason: failureReason,
 			Usage:         usageEntries,
+			RuntimeStats:  runtimeStats,
 		}, nil
 	case "idle_watchdog":
 		// The idle watchdog force-stopped the run because the backend
@@ -3968,6 +3975,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			EnvRoot:       env.RootDir,
 			FailureReason: "idle_watchdog",
 			Usage:         usageEntries,
+			RuntimeStats:  runtimeStats,
 		}, nil
 	case "cancelled":
 		// Server cancelled the task (e.g. issue reassignment, user cancel).
@@ -3976,12 +3984,13 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		// status string for the "agent finished" log line so operators can
 		// distinguish "task cancelled by server" from a real timeout.
 		return TaskResult{
-			Status:    "cancelled",
-			Comment:   "task cancelled by server",
-			SessionID: result.SessionID,
-			WorkDir:   env.WorkDir,
-			EnvRoot:   env.RootDir,
-			Usage:     usageEntries,
+			Status:       "cancelled",
+			Comment:      "task cancelled by server",
+			SessionID:    result.SessionID,
+			WorkDir:      env.WorkDir,
+			EnvRoot:      env.RootDir,
+			Usage:        usageEntries,
+			RuntimeStats: runtimeStats,
 		}, nil
 	default:
 		errMsg := result.Error
@@ -4010,6 +4019,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			WorkDir:       env.WorkDir,
 			EnvRoot:       env.RootDir,
 			Usage:         usageEntries,
+			RuntimeStats:  runtimeStats,
 			FailureReason: failureReason,
 		}, nil
 	}
@@ -4024,6 +4034,26 @@ func transportUnavailableResult(stage string, err error) TaskResult {
 		Status:        "failed",
 		Comment:       comment,
 		FailureReason: "transport_unavailable",
+	}
+}
+
+func runtimeStatsFromAgent(stats *agent.RuntimeTokenStats) *protocol.RuntimeTokenStats {
+	if stats == nil {
+		return nil
+	}
+	return &protocol.RuntimeTokenStats{
+		Provider:              stats.Provider,
+		Model:                 stats.Model,
+		InputTokens:           stats.InputTokens,
+		OutputTokens:          stats.OutputTokens,
+		CacheReadTokens:       stats.CacheReadTokens,
+		CacheWriteTokens:      stats.CacheWriteTokens,
+		TotalTokens:           stats.TotalTokens,
+		CostUSD:               stats.CostUSD,
+		ContextTokens:         stats.ContextTokens,
+		ContextWindow:         stats.ContextWindow,
+		ContextPercent:        stats.ContextPercent,
+		AutoCompactionEnabled: stats.AutoCompactionEnabled,
 	}
 }
 

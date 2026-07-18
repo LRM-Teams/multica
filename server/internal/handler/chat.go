@@ -195,6 +195,7 @@ func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	h.fillChatSessionProjects(r.Context(), resp)
+	h.fillChatSessionRuntimeStats(r.Context(), resp)
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -282,7 +283,11 @@ func (h *Handler) GetChatSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, chatSessionToResponse(session))
+	resp := chatSessionToResponse(session)
+	resp.ProjectID = h.chatSessionProjectID(r.Context(), session.ID)
+	responses := []ChatSessionResponse{resp}
+	h.fillChatSessionRuntimeStats(r.Context(), responses)
+	writeJSON(w, http.StatusOK, responses[0])
 }
 
 type UpdateChatSessionRequest struct {
@@ -1243,7 +1248,8 @@ type ChatSessionResponse struct {
 	Status      string `json:"status"`
 	// ProjectID is the chat's bound project (composer "current project"), or
 	// empty. Filled separately so single and list endpoints stay consistent.
-	ProjectID string `json:"project_id,omitempty"`
+	ProjectID    string                      `json:"project_id,omitempty"`
+	RuntimeStats *protocol.RuntimeTokenStats `json:"runtime_stats,omitempty"`
 	// Only populated by list endpoints — single-session fetches return false.
 	HasUnread bool   `json:"has_unread"`
 	CreatedAt string `json:"created_at"`
@@ -1298,6 +1304,38 @@ func (h *Handler) chatSessionProjectID(ctx context.Context, id pgtype.UUID) stri
 
 // fillChatSessionProjects sets ProjectID on each response from a single batched
 // read of chat_session.project_id. Best-effort: leaves ProjectID empty on error.
+func (h *Handler) fillChatSessionRuntimeStats(ctx context.Context, resp []ChatSessionResponse) {
+	if len(resp) == 0 {
+		return
+	}
+	ids := make([]pgtype.UUID, 0, len(resp))
+	for _, s := range resp {
+		ids = append(ids, parseUUID(s.ID))
+	}
+	rows, err := h.DB.Query(ctx, `SELECT id, runtime_token_stats FROM chat_session WHERE id = ANY($1::uuid[]) AND runtime_token_stats IS NOT NULL`, ids)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	byID := make(map[string]*protocol.RuntimeTokenStats, len(resp))
+	for rows.Next() {
+		var id pgtype.UUID
+		var raw []byte
+		if err := rows.Scan(&id, &raw); err != nil || len(raw) == 0 {
+			continue
+		}
+		var stats protocol.RuntimeTokenStats
+		if json.Unmarshal(raw, &stats) == nil {
+			byID[uuidToString(id)] = &stats
+		}
+	}
+	for i := range resp {
+		if stats, ok := byID[resp[i].ID]; ok {
+			resp[i].RuntimeStats = stats
+		}
+	}
+}
+
 func (h *Handler) fillChatSessionProjects(ctx context.Context, resp []ChatSessionResponse) {
 	if len(resp) == 0 {
 		return

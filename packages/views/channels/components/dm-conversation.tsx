@@ -263,9 +263,12 @@ function DmHeader({
   const { t } = useT("channels");
   const isMobile = useIsMobile();
   const openAgentPanel = useOpenAgentPanel();
-  const actorType = dm.peer.type === "agent" ? "agent" : "member";
-  const memberType = dm.peer.type === "agent" ? "agent" : "user";
-  const isAgentPeer = dm.peer.type === "agent";
+  const peerId = dm.peer.id;
+  const peerType = dm.peer.type;
+  const isMuted = isConversationMuted(dm);
+  const actorType = peerType === "agent" ? "agent" : "member";
+  const memberType = peerType === "agent" ? "agent" : "user";
+  const isAgentPeer = peerType === "agent";
   // #371: agent peers show COARSE presence (Online / Working / Queued /
   // Offline…) — "is the agent around", NOT the fine live action verb. The fine
   // verb (Running command… / Reading…) lives on exactly one surface, the
@@ -279,19 +282,23 @@ function DmHeader({
     () =>
       isAgentPeer ? (
         <AgentCoarsePresenceLine
-          agentId={dm.peer.id}
+          agentId={peerId}
           // Cap width so long localized presence words don't shove the title
           // (or the search/files cluster) off a narrow header.
           className="max-w-[9rem]"
         />
       ) : null,
-    [isAgentPeer, dm.peer.id],
+    [isAgentPeer, peerId],
   );
   const meta = isAgentPeer ? undefined : t(($) => $.dm.human_meta);
+  const mutedBadge = useMemo(
+    () => (isMuted ? <MutedIndicator label={t(($) => $.dm.muted_label)} /> : null),
+    [isMuted, t],
+  );
   const peerAvatar = (
     <ActorAvatar
       actorType={actorType}
-      actorId={dm.peer.id}
+      actorId={peerId}
       // 28px matches the message-row avatar so the header avatar and every
       // message avatar share one size + left edge (see ConversationHeader).
       size={28}
@@ -313,12 +320,12 @@ function DmHeader({
       <button
         type="button"
         className="inline-flex min-w-0 items-center rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        onClick={() => openAgentPanel(dm.peer.id)}
+        onClick={() => openAgentPanel(peerId)}
       >
         {child}
       </button>
     ) : (
-      <ActorProfileTrigger memberType={memberType} memberId={dm.peer.id}>
+      <ActorProfileTrigger memberType={memberType} memberId={peerId}>
         {child}
       </ActorProfileTrigger>
     );
@@ -345,11 +352,7 @@ function DmHeader({
       title={wrapPeerTrigger(<span className="truncate">{dm.peer.name}</span>)}
       meta={meta}
       status={agentStatus}
-      badges={
-        isConversationMuted(dm) ? (
-          <MutedIndicator label={t(($) => $.dm.muted_label)} />
-        ) : null
-      }
+      badges={mutedBadge}
       actions={
         <>
           {onSearchOpen && (
@@ -1185,6 +1188,7 @@ function DmChannelConversation({
         agent={selectedAgentPanel}
         currentUserId={currentUserId}
         members={dmMembers}
+        runtimeStats={dm.runtime_stats}
         onClose={() => setSelectedAgentPanelId(null)}
       />
     ) : null;

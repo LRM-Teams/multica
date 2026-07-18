@@ -1,0 +1,188 @@
+# Multica Agent 记忆模型
+
+> 状态：目标行为已实现在 [PR #697](https://github.com/LRM-Teams/multica/pull/697) 和 [PR #698](https://github.com/LRM-Teams/multica/pull/698)。本文描述两项 PR 合并到 `dev` 后的完整行为。
+>
+> 最后核对：2026-07-17。
+
+## 1. 一句话模型
+
+Multica 的记忆分成两层：
+
+- **agent 私有文件**负责让当前 agent 立即、持久地记住；
+- **平台数据库**负责经过审核的跨 agent / 跨 runtime 共享、适用范围、去重和过期治理。
+
+群消息本身也会写入数据库中的 agent inbox，但那是**消息投递队列**，不是团队共享记忆。不要为了给群内 agent 再投递一次消息而创建团队记忆候选。
+
+## 2. 每个 agent 都有隔离的记忆根目录
+
+每个 Multica agent 的持久根目录为：
+
+```text
+<workspace>/.multica/agents/<agent-id>/
+```
+
+不同 agent 的目录互相隔离。Pi、Codex 等 provider 只是运行同一个 Multica agent 的不同执行工具；只要 Multica agent ID 相同，它们就使用同一套 agent 记忆和平台筛选后的记忆快照。provider 自己的全局目录（例如 `~/.codex/memories`）不属于 Multica agent 记忆。
+
+目录职责如下：
+
+| 内容 | 文件 |
+|---|---|
+| 当前 agent 跨项目都适用的稳定知识、习惯和规则 | `memory/MEMORY.md` |
+| 当前 agent 跨项目的临时状态 | `memory/STATE.md` |
+| 不确定、冲突、敏感或等待确认的内容 | `memory/REVIEW.md` |
+| 当天活动和整理记录 | `memory/daily/YYYY-MM-DD.md` |
+| 某个成员的偏好和个人资料 | `users/<member-id>/USER.md` |
+| 当前 agent 与某个成员的关系信息 | `users/<member-id>/RELATIONSHIP.md` |
+| 某个项目的长期知识 | `projects/<project-id>/MEMORY.md` |
+| 某个项目的当前状态和阻塞 | `projects/<project-id>/STATE.md` |
+| 某个项目已经做出的决定 | `projects/<project-id>/DECISIONS.md` |
+| 某个群的非敏感协作约定 | `channels/<channel-id>/CONTEXT.md` |
+| 等待平台审核或共享的候选 | `sync_queue/memory-candidates.jsonl` |
+
+## 3. 写入时先判断“对谁生效”
+
+说话人只代表来源，不自动决定记忆的作用域。系统要根据内容本身判断它约束的是某个成员、某个 agent、某个项目、某个群，还是整个 workspace。
+
+例如安东说“干活前先反馈一下”：
+
+| 实际表达 | 写入位置 | 适用范围 |
+|---|---|---|
+| “以后你给我干活前先反馈” | `users/<andong-member-id>/USER.md` | 当前 agent 服务安东时 |
+| “agent A 以后干活前都先反馈” | agent A 的 `memory/MEMORY.md` | agent A 的所有工作场景 |
+| “这个项目以后都先跑测试” | 当前项目的 `MEMORY.md` 或 `DECISIONS.md` | 当前项目 |
+| “这个群统一用中文” | 当前群的 `CONTEXT.md` | 当前群 |
+
+明确的“记住”“写下来”是直接写入请求。只回复“收到”不算记住；对应的持久文件写入必须成功。
+
+### 3.1 常用写入判断
+
+1. 明确的个人偏好或个人事实，写当前成员的 `USER.md`。
+2. 只要求当前 agent 永久记住、且跨项目适用的安全规则，写当前 agent 的 `memory/MEMORY.md`。
+3. 项目知识、状态和决定，写当前项目目录。
+4. 群目的、语言、路由和协作默认值，写当前群的 `CONTEXT.md`。
+5. 当前事件、配额、阻塞和会过期的状态，写对应 `STATE.md`，并记录日期、状态和可用的 TTL / 到期时间。
+6. 不确定、冲突、敏感或不知道应该放在哪里的内容，先写 `memory/REVIEW.md`。
+7. 猜测、普通任务细节、原始聊天记录、秘密以及只对当前回复有用的内容，不写入长期记忆。
+
+## 4. 单 agent 记忆与群体记忆
+
+### 4.1 只让 agent A 永久记住
+
+安东告诉 agent A：“这个只让你永久记住。”
+
+- 写 agent A 的 `memory/MEMORY.md`；
+- 不因为说话人是安东就错误写成安东专属偏好；
+- 不默认进入团队共享数据库；
+- agent A 换群、换项目或切换 Pi / Codex 后仍会加载；
+- 其他 agent 不会加载这条私有记忆。
+
+如果内容本身是安东的个人偏好，则写 agent A 隔离根目录中的 `users/<andong-member-id>/USER.md`，并只在 agent A 服务安东时启用。
+
+### 4.2 群里未 `@` 的“都给我记住”
+
+对于群里的顶层人类消息，如果没有 `@` agent：
+
+1. 服务端遍历当前群全部未归档、未静音的 agent 成员；
+2. 为每个 agent 创建独立且持久的 `requires_wake=true` inbox event；
+3. 离线 runtime 上线后仍可领取该事件；
+4. 每个收到消息的 agent 独立判断并写自己的本地记忆。
+
+因此，“都给我记住”“你们记一下”“everyone note this”等集体表达，默认指**当前消息实际覆盖的 agent**。每个接收者各写各的，不再为了 fanout 创建 workspace/team shared candidate。
+
+只有满足以下任一条件才创建经过治理的 workspace/team 候选：
+
+- 用户明确包含当前消息接收者以外的 agent，例如“整个 workspace 所有 agent”；
+- 用户明确要求群外 agent 或未来新加入的 agent 也遵守；
+- 内容本身被明确声明为 workspace/team 的公共制度或公共知识。
+
+集体措辞本身不能扩大秘密、敏感个人信息、明确的成员专属偏好或群专属规则。
+
+### 4.3 群消息边界
+
+- 被静音的 agent 不会被未 `@` 的群消息唤醒；共享记忆流程不应绕过静音。
+- 明确 `@agent` 时，只直接唤醒被 `@` 的 agent；直接 mention 可以穿透该 agent 的群静音。
+- thread 内没有 `@` 的回复主要唤醒 thread follower；其他群内 agent 只得到 ambient context，不保证立即运行。
+- 如果要求群内所有 agent 立即处理，顶层未 `@` 群消息是当前的全群 agent wake 路径。
+
+## 5. 文件数据库和两种数据库记录
+
+### 5.1 agent 私有文件
+
+文件是 agent 立即写入、下次运行直接召回的持久记忆。它适合单 agent、单成员、单项目和单群的精确作用域。
+
+### 5.2 agent inbox 数据库记录
+
+`agent_inbox_event` 等记录负责可靠投递群消息和 agent 任务：
+
+- 每个目标 agent 有独立事件；
+- 未处理事件保持 `pending`；
+- runtime 后续领取；
+- delivery lease 过期后可以回收重试。
+
+这是消息可靠性机制，不代表内容已经成为团队长期记忆。
+
+### 5.3 审核后的记忆数据库
+
+平台记忆和 team knowledge 用于：
+
+- 跨 agent 或跨 runtime 提供经过审核的知识；
+- 保存来源和适用对象；
+- 按成员、项目、群、任务类型和到期时间筛选；
+- 去重、合并和处理冲突；
+- 让不在原始消息受众内、但被明确纳入作用范围的 agent 后续获得公共知识。
+
+共享数据库不是 agent 私有文件的替代品，也不应该被当作普通群消息的二次投递通道。
+
+## 6. 每次运行只加载相关记忆
+
+运行时不会把 agent 的所有历史记忆都塞进上下文。它按当前执行范围选择：
+
+- 当前 agent 的全局记忆；
+- 当前成员的 `USER.md` 和关系信息；
+- 当前项目的 `MEMORY.md`、`STATE.md` 和 `DECISIONS.md`；
+- 当前群的 `CONTEXT.md`；
+- Asia/Shanghai 日期下今天的 daily 文件；
+- 数据库中与当前成员、项目、群、任务类型和到期时间匹配的审核后记忆。
+
+默认不加载：
+
+- 其他成员的用户文件；
+- 其他项目或群的文件；
+- 历史 daily 文件；
+- notes 索引和未知文件；
+- 已过期或作用范围不匹配的数据库记忆。
+
+运行时会对本地文件和数据库记忆去重，并将最终记忆包限制在约 16 KiB。数据库读取同时限制为最近 48 条 agent memory 和最近 24 条 team knowledge，避免记忆挤占当前任务上下文。
+
+Codex 只获得当前相关作用域目录的可写权限；Pi 和其他 provider 通过各自文件工具写同一套 Multica agent 根目录。
+
+## 7. 后台自进化和整理
+
+后台整理遵循以下方向：
+
+1. 使用当天证据更新当天的 `memory/daily/YYYY-MM-DD.md`。
+2. agent self-review 将稳定内容整理进正式文件，将不确定或可能共享的内容放进 `REVIEW.md` / proposal。
+3. team curation 只消费主动提交的候选，进行去重、合并、冲突判断和公共知识审核。
+4. collective wording 不再自动证明 workspace/team 作用域；必须有更广受众或公共制度的明确证据。
+5. L4 清理过期的项目 `STATE.md` 内容，并对项目 `MEMORY.md`、`STATE.md`、`DECISIONS.md` 去重。
+
+curator 额外读取的 scoped context 最多 12 个文件、约 16 KiB；不会预加载历史 daily、notes 索引、未知文件或符号链接。
+
+## 8. 冲突和安全规则
+
+- 当前任务和实时用户指令始终高于历史记忆。
+- 记忆与当前指令冲突时，执行当前指令并将冲突放入 `memory/REVIEW.md`，不能静默改写规则。
+- 不能从显示名猜测成员、项目或群的稳定 ID。
+- 用户记忆必须带当前成员的稳定 ID，不能读取或写入另一个成员的隔离目录。
+- 不因“大家”“都”“所有人”等集体措辞扩大秘密、敏感信息或成员专属行为。
+
+## 9. 最终判断口诀
+
+```text
+当前 agent 自己要记住        -> agent 私有文件
+某个成员的偏好              -> users/<member-id>/USER.md
+只属于当前项目或当前群       -> project/channel scoped 文件
+群内所有当前接收者都要记住   -> 每个 agent 各写自己的文件
+明确覆盖群外/未来 agent       -> workspace/team 候选，经过审核后入库
+不确定、冲突或敏感            -> REVIEW.md，不直接扩大范围
+```

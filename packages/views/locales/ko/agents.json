@@ -514,6 +514,7 @@
     "reasoning_label": "추론",
     "created_label": "생성일",
     "owner_label": "소유자",
+    "token_usage_label": "토큰",
     "reasoning_default": "기본값",
     "runtime_section": "런타임 설정",
     "config_shared_hint": "워크스페이스의 모든 멤버가 이 그룹 관리자의 런타임 설정을 변경할 수 있습니다."

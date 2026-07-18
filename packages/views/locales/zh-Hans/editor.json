@@ -75,6 +75,7 @@
     "all_members_hint": "通知此会话中的所有成员",
     "searching": "搜索中...",
     "no_results": "无结果",
+    "aria_label": "提及建议",
     "group_current": "当前页面",
     "group_recent": "最近浏览",
     "group_search": "搜索结果",

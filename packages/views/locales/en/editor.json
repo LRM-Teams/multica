@@ -75,6 +75,7 @@
     "all_members_hint": "Notify everyone in this conversation",
     "searching": "Searching...",
     "no_results": "No results",
+    "aria_label": "Mention suggestions",
     "group_current": "Current page",
     "group_recent": "Recently viewed",
     "group_search": "Search results",

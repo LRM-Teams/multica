@@ -262,12 +262,13 @@ describe("ActivityTimeline", () => {
 
     const header = screen.getByRole("button", { name: /Output/ });
     expect(header).toHaveAttribute("aria-expanded", "false");
-    expect(header).toHaveAttribute("aria-controls");
+    expect(header).not.toHaveAttribute("aria-controls");
     expect(header).toHaveClass("min-h-11");
 
     fireEvent.click(header);
     const detail = screen.getByTestId("activity-expanded-detail");
     expect(header).toHaveAttribute("aria-expanded", "true");
+    expect(header).toHaveAttribute("aria-controls");
     expect(detail).toHaveAttribute("id", header.getAttribute("aria-controls"));
     expect(header.contains(detail)).toBe(false);
     expect(screen.getByTestId("activity-markdown")).toHaveTextContent(markdownOutput.text!);

@@ -116,7 +116,7 @@ function ActivityRow({
           type="button"
           onClick={() => setExpanded((value) => !value)}
           aria-expanded={expanded}
-          aria-controls={detailId}
+          aria-controls={expanded ? detailId : undefined}
           className="group flex min-h-11 w-full items-start gap-3 rounded-md py-1 text-left transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:min-h-0"
         >
           <span className="w-12 shrink-0 pt-1 font-mono text-[11px] tabular-nums text-muted-foreground/70">

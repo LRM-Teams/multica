@@ -793,6 +793,9 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const hasRouteSelection = Boolean(channelId || activeDmId);
   const restoredBaseChannelId =
     !hasRouteSelection &&
+    // Same render-time canonical-navigation reaction as above (#588 marker), kept
+    // adjacent to its own line so react-doctor's suppression check passes.
+    // react-doctor-disable-next-line react-doctor/no-event-handler
     !skipInitialBaseRestore &&
     !suppressBaseRouteRestoreRef.current &&
     channelsLoaded &&

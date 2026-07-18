@@ -107,6 +107,7 @@ export const ACTIVITY_SUBTEXT_EN: Record<ActivitySubtextKey, string> = {
 export const ACTIVITY_CHROME_EN = {
   copy_command: "Copy",
   command_copied: "Copied",
+  expanded_detail_scrollable: "Expanded details, scrollable",
   timeline_empty: "No activity yet",
   jump_to_latest: "Jump to latest",
   view_diagnostics: "View diagnostic details",

@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { copyText } from "@multica/ui/lib/clipboard";
 import { ActivityTimeline } from "./activity-timeline";
 import { formatActivityTime, type ActivityEvent } from "./activity-event";
 
@@ -63,6 +64,10 @@ vi.mock("../../../common/markdown", () => ({
       {children}
     </div>
   ),
+}));
+
+vi.mock("@multica/ui/lib/clipboard", () => ({
+  copyText: vi.fn().mockResolvedValue(true),
 }));
 
 const USER: ActivityEvent = {
@@ -166,7 +171,10 @@ const IDLE_STATUS: ActivityEvent = {
 };
 
 describe("ActivityTimeline", () => {
-  beforeEach(() => cleanup());
+  beforeEach(() => {
+    cleanup();
+    vi.mocked(copyText).mockClear();
+  });
 
   it("renders mainline events (projected label + subtext) and hides diagnostic kinds by default", () => {
     render(<ActivityTimeline events={[USER, DIAG]} />);
@@ -277,6 +285,41 @@ describe("ActivityTimeline", () => {
     expect(markdown).toHaveAttribute("data-sticker-shortcodes", "false");
   });
 
+  it("keeps expanded detail bounded only when it truly overflows, with a fade until scrolled to the end", () => {
+    const longOutput: ActivityEvent = {
+      ...TEXT,
+      text: "Long authored output that exceeds the reused history-message height boundary.",
+    };
+    render(<ActivityTimeline events={[longOutput]} />);
+    fireEvent.click(screen.getByRole("button", { name: /Output/ }));
+
+    const detail = screen.getByTestId("activity-expanded-detail");
+    // Short/default content remains a plain sibling — no empty tab stop or fade.
+    expect(detail).toHaveClass("max-h-[min(260px,55vh)]", "md:max-h-[360px]");
+    expect(detail).not.toHaveAttribute("role");
+    expect(screen.queryByTestId("activity-detail-scroll-fade")).toBeNull();
+
+    Object.defineProperties(detail, {
+      clientHeight: { configurable: true, value: 260 },
+      scrollHeight: { configurable: true, value: 520 },
+      scrollTop: { configurable: true, value: 0, writable: true },
+    });
+    fireEvent(window, new Event("resize"));
+
+    expect(detail).toHaveClass("overflow-y-auto", "overscroll-contain");
+    expect(detail).toHaveAttribute("role", "region");
+    expect(detail).toHaveAttribute("tabindex", "0");
+    expect(detail).toHaveAttribute("aria-label", "Expanded details, scrollable");
+    expect(screen.getByTestId("activity-detail-scroll-fade")).toHaveClass(
+      "pointer-events-none",
+      "bg-gradient-to-t",
+    );
+
+    detail.scrollTop = 260;
+    fireEvent.scroll(detail);
+    expect(screen.queryByTestId("activity-detail-scroll-fade")).toBeNull();
+  });
+
   it("keeps Tier3 fixed facts inline without an empty expand affordance", () => {
     render(<ActivityTimeline events={[WAKE]} />);
     expect(screen.queryByRole("button")).toBeNull();
@@ -345,7 +388,7 @@ describe("ActivityTimeline", () => {
     expect(container.querySelector(".animate-pulse")).toBeNull();
   });
 
-  it("expands a command into a sibling code detail with a separate Copy control", () => {
+  it("expands a command into a bounded sibling code detail with a usable Copy control", async () => {
     const full =
       'multica message send --message \'能看到，截图里是我的状态显示"Idle"\' --output text';
     const CMD: ActivityEvent = {
@@ -367,8 +410,34 @@ describe("ActivityTimeline", () => {
     const open = screen.getByRole("button", { expanded: true });
     const detail = screen.getByTestId("activity-expanded-detail");
     expect(open.contains(detail)).toBe(false);
+    // Tier2 command details share the same bounded vertical-detail baseline,
+    // while their pre keeps its independent horizontal handling.
+    expect(detail).toHaveClass("max-h-[min(260px,55vh)]", "md:max-h-[360px]");
+    expect(detail.querySelector("pre")).toHaveClass("overflow-x-auto");
     expect(detail.querySelector("pre code")).toHaveTextContent(full);
-    expect(screen.getByRole("button", { name: "Copy" })).toHaveTextContent("Copy");
+    const copy = screen.getByRole("button", { name: "Copy" });
+    expect(copy).toHaveTextContent("Copy");
+
+    Object.defineProperties(detail, {
+      clientHeight: { configurable: true, value: 260 },
+      scrollHeight: { configurable: true, value: 520 },
+      scrollTop: { configurable: true, value: 0, writable: true },
+    });
+    fireEvent(window, new Event("resize"));
+
+    // Tier2 command source takes the same real-overflow path as Tier1 Markdown.
+    expect(detail).toHaveClass("overflow-y-auto", "overscroll-contain");
+    expect(detail).toHaveAttribute("role", "region");
+    expect(detail).toHaveAttribute("tabindex", "0");
+    expect(screen.getByTestId("activity-detail-scroll-fade")).toBeInTheDocument();
+
+    fireEvent.click(copy);
+    await waitFor(() => expect(copyText).toHaveBeenCalledWith(full));
+    expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
+
+    detail.scrollTop = 260;
+    fireEvent.scroll(detail);
+    expect(screen.queryByTestId("activity-detail-scroll-fade")).toBeNull();
 
     // Collapse again.
     fireEvent.click(open);

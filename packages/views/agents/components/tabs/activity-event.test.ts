@@ -1,10 +1,63 @@
 import { describe, expect, it } from "vitest";
 import type { ActivityEvent } from "./activity-event";
 import {
+  activityExpansionContent,
   activityPresentation,
   isNarrativeActivityEvent,
   type ActivityLabelKey,
 } from "./activity-event";
+
+describe("activityExpansionContent", () => {
+  function event(
+    activity_kind: ActivityEvent["activity_kind"],
+    text?: string,
+  ): ActivityEvent {
+    return {
+      id: `detail-${activity_kind}`,
+      agent_id: "agent-1",
+      activity_kind,
+      detail_kind: activity_kind,
+      occurred_at: "2026-07-11T00:00:00Z",
+      text,
+      target_ref: { kind: "agent", id: "agent-1" },
+    } as ActivityEvent;
+  }
+
+  it("keeps authored markdown intact for the expanded detail, unlike the preview", () => {
+    const source = "See [@Frank](mention://member/frank-1) and **verify**.";
+    const activity = event("text", source);
+    expect(activityPresentation(activity).subtext).not.toContain("mention://");
+    expect(activityExpansionContent(activity)).toEqual({ kind: "markdown", content: source });
+  });
+
+  it("uses the redacted full CLI command as code detail", () => {
+    const activity: ActivityEvent = {
+      ...event("tool_call"),
+      tool: "bash",
+      tool_target: "multica message send…",
+      entries: [{ kind: "tool_call", command: "multica message send --token sk_agent_<redacted>" }],
+    };
+    expect(activityExpansionContent(activity)).toEqual({
+      kind: "command",
+      content: "multica message send --token sk_agent_<redacted>",
+    });
+  });
+
+  it("does not create disclosure content for fixed status and structured fact rows", () => {
+    const idle: ActivityEvent = {
+      ...event("custom", "Idle"),
+      detail_kind: "agent_status_changed",
+      status: "idle",
+    };
+    const freshness: ActivityEvent = {
+      ...event("text", "raw transport payload must not surface"),
+      detail_kind: "send_freshness_hold_detail",
+      details: { target: "#general", new_message_count: 1 },
+    };
+    expect(activityExpansionContent(idle)).toBeUndefined();
+    expect(activityExpansionContent(freshness)).toBeUndefined();
+  });
+});
 
 function toolEvent(tool: string, status = "running"): ActivityEvent {
   return {

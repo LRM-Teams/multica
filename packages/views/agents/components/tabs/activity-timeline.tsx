@@ -1,9 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { copyText } from "@multica/ui/lib/clipboard";
+import { MemoizedMarkdown } from "../../../common/markdown";
 import { useViewingTimezone } from "../../../common/use-viewing-timezone";
 import {
   type ActivityEvent,
@@ -11,6 +12,7 @@ import {
   ACTIVITY_SUBTEXT_EN,
   ACTIVITY_CHROME_EN,
   ACTIVITY_TONE_DOT_CLASS,
+  activityExpansionContent,
   activityPresentation,
   formatActivityTime,
   isNarrativeActivityEvent,
@@ -57,10 +59,9 @@ function ActivityRow({
   time: string;
   compact?: boolean;
 }) {
-  // Per-row expand — shared by thinking/text (§2.1) and command rows (entries[].command).
-  // Branches are mutually exclusive so one boolean is enough.
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
+  const detailId = useId();
   const presentation = activityPresentation(event);
   // Activity is English-only (Frank 2026-07-14): the label/fixed-subtext come
   // from the canonical English maps, not a locale lookup.
@@ -73,25 +74,15 @@ function ActivityRow({
   const subtext = presentation.subtextKey
     ? ACTIVITY_SUBTEXT_EN[presentation.subtextKey]
     : presentation.subtext;
-  // Thinking and reply Output carry the model's full text (§2.1: collapse to the
-  // first line, click to expand the full content block). Fixed / short subtexts
-  // (tool target, reasons, "Message received") stay inline. The compact profile
-  // surface never expands — it single-line truncates instead (§2.1: full expand
-  // is the Activity tab's job).
-  const expandable =
-    !compact &&
-    !!subtext &&
-    !presentation.subtextKey &&
-    (event.activity_kind === "thinking" || event.activity_kind === "text");
-
-  // Command rows: BE already redacts (`sk_agent_<redacted>`); FE shows
-  // `entries[].command` via presentation.subtextFull / subtext verbatim.
-  const isCommand = presentation.subtextKind === "command" && !!subtext;
-  const commandFull = presentation.subtextFull ?? subtext ?? "";
-  const canExpandCommand = isCommand && !compact;
+  // Full Activity exposes only source-backed detail; compact Profile Recent
+  // remains a non-interactive, scannable summary surface.
+  const expansion = compact ? undefined : activityExpansionContent(event, presentation);
+  const isCommand = expansion?.kind === "command";
 
   const handleCopyCommand = async () => {
-    if (await copyText(commandFull)) {
+    if (expansion?.kind !== "command") return;
+
+    if (await copyText(expansion.content)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }
@@ -114,6 +105,79 @@ function ActivityRow({
     ? ACTIVITY_CHROME_EN.command_copied
     : ACTIVITY_CHROME_EN.copy_command;
 
+  if (expansion) {
+    return (
+      <div
+        className="py-1"
+        data-testid="activity-row"
+        data-activity-kind={event.activity_kind}
+      >
+        <button
+          type="button"
+          onClick={() => setExpanded((value) => !value)}
+          aria-expanded={expanded}
+          aria-controls={detailId}
+          className="group flex min-h-11 w-full items-start gap-3 rounded-md py-1 text-left transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:min-h-0"
+        >
+          <span className="w-12 shrink-0 pt-1 font-mono text-[11px] tabular-nums text-muted-foreground/70">
+            {time}
+          </span>
+          <span
+            className={cn("mt-2.5 size-1.5 shrink-0 rounded-full", TONE_DOT[presentation.tone])}
+            aria-hidden
+          />
+          <span className="min-w-0 flex-1 pt-0.5">
+            <span className="block text-sm text-foreground">{label}</span>
+            {subtext && (
+              <span
+                className={cn(
+                  "mt-0.5 block text-xs text-muted-foreground",
+                  isCommand ? "line-clamp-2 break-words font-mono" : "line-clamp-1",
+                )}
+              >
+                {subtext}
+              </span>
+            )}
+          </span>
+          <span className="mt-1 shrink-0 text-muted-foreground/70 transition-colors group-hover:text-foreground" aria-hidden>
+            {expanded ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
+          </span>
+        </button>
+        {expanded && (
+          <div
+            id={detailId}
+            data-testid="activity-expanded-detail"
+            className="ml-[4.875rem] mt-1 rounded-md border bg-muted/20 px-3 py-2 text-sm text-foreground sm:ml-[5.25rem]"
+          >
+            {isCommand ? (
+              <div className="relative">
+                <pre className="overflow-x-auto pr-14 font-mono text-xs leading-5 whitespace-pre-wrap break-words">
+                  <code>{expansion.content}</code>
+                </pre>
+                <button
+                  type="button"
+                  onClick={handleCopyCommand}
+                  aria-label={copyLabel}
+                  className="absolute right-0 top-0 rounded border bg-background px-1.5 py-0.5 text-[11px] leading-none text-muted-foreground shadow-sm transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  {copyLabel}
+                </button>
+              </div>
+            ) : (
+              <MemoizedMarkdown
+                mode="minimal"
+                enableStickerShortcodes={false}
+                className="activity-expanded-markdown break-words text-sm leading-6 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0"
+              >
+                {expansion.content}
+              </MemoizedMarkdown>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div
       className={cn("flex items-baseline gap-3", compact ? "py-0.5" : "py-1")}
@@ -127,78 +191,7 @@ function ActivityRow({
         className={cn("mt-1.5 size-1.5 shrink-0 rounded-full", TONE_DOT[presentation.tone])}
         aria-hidden
       />
-      {expandable ? (
-        <div className="min-w-0">
-          <span className="text-sm text-foreground">{label}</span>
-          {subtext && (
-            <button
-              type="button"
-              onClick={() => setExpanded((prev) => !prev)}
-              aria-expanded={expanded}
-              className={cn(
-                "mt-0.5 block w-full whitespace-pre-wrap text-left text-xs text-muted-foreground transition-colors hover:text-foreground",
-                !expanded && "line-clamp-1",
-              )}
-            >
-              {subtext}
-            </button>
-          )}
-        </div>
-      ) : canExpandCommand ? (
-        // Command row: label + command as ONE full-width hanging block (#404).
-        // Collapsed = line-clamp-2 tail truncate. Click main row or caret →
-        // drop clamp, pre-wrap + break-words full command (entries[].command),
-        // caret flips; controls are layered on top (see below), never inline.
-        // `break-words` (not `break-all`): wrap on whitespace / word boundaries and
-        // only split a token that truly can't fit, so `git fetch` never reads as
-        // `git fetc\nh` (Frank: 展开态按空格断行 / 保留命令行结构, 不字符级硬折).
-        // #2/#3 (Iris unified expand-state spec): the caret + Copy are layered on
-        // top (absolute) — NEVER in the text flow — so a control can't sit on the
-        // command text (Frank: Copy 压字 / `git fetc[Copy]h`). The whole row is one
-        // toggle; the caret is a fixed state indicator; Copy is a hover toolbar.
-        <div className="group/cmd relative min-w-0 flex-1">
-          <button
-            type="button"
-            onClick={() => setExpanded((v) => !v)}
-            aria-expanded={expanded}
-            className="block w-full pr-6 text-left"
-          >
-            <span
-              className={cn(
-                "block min-w-0 text-sm leading-[1.45] text-foreground",
-                expanded ? "break-words whitespace-pre-wrap" : "line-clamp-2 break-words",
-              )}
-            >
-              <span>{label} </span>
-              <span className="font-mono text-xs text-muted-foreground">
-                {expanded ? commandFull : subtext}
-              </span>
-            </span>
-          </button>
-          {/* Single caret fixed at the row's right end — state only, never drifts
-              with the command's length. `pointer-events-none` keeps the whole row
-              (caret cell included) one click target. */}
-          <span
-            className="pointer-events-none absolute right-0 top-1 text-muted-foreground/70"
-            aria-hidden
-          >
-            {expanded ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
-          </span>
-          {/* Copy: hover toolbar layered at the block's top-right (own background),
-              left of the caret — never over the first line. Desktop reveals on
-              hover / focus; #415 keeps it always-shown on touch (no hover). */}
-          {expanded && (
-            <button
-              type="button"
-              onClick={handleCopyCommand}
-              aria-label={copyLabel}
-              className="absolute right-6 top-0 rounded border bg-background px-1.5 py-0.5 text-[11px] leading-none text-muted-foreground opacity-0 shadow-sm transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover/cmd:opacity-100"
-            >
-              {copyLabel}
-            </button>
-          )}
-        </div>
-      ) : isCommand && compact ? (
+      {presentation.subtextKind === "command" && compact ? (
         // Compact Profile Recent: clamp + no expand / copy (title-only).
         <div className="min-w-0 flex-1">
           <div className="line-clamp-2 break-words text-sm leading-[1.45] text-foreground">

@@ -21,6 +21,20 @@ describe("issue channel-return links", () => {
     );
   });
 
+  it("uses the rendered source message over an unrelated route deep-link", () => {
+    expect(
+      issueDetailHrefFromChannel(
+        issuePath,
+        channelsPath,
+        "/acme/channels/channel-1",
+        new URLSearchParams("message=older-message&view=chat"),
+        "source-message",
+      ),
+    ).toBe(
+      "/acme/issues/issue-1?returnTo=%2Facme%2Fchannels%2Fchannel-1%3Fmessage%3Dsource-message%26view%3Dchat",
+    );
+  });
+
   it("does not attach a message return target outside Messages", () => {
     expect(
       issueDetailHrefFromChannel(

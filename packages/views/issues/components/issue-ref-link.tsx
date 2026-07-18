@@ -94,11 +94,14 @@ export function IssueRefLink({
   issueId,
   text,
   source = "anchor",
+  sourceMessageId,
 }: {
   issueId: string;
   /** Rendered verbatim — the author's own span substring; never rewritten (#467/#600). */
   text: string;
   source?: IssueRefSource;
+  /** Source row id when this reference is rendered inside a Messages timeline. */
+  sourceMessageId?: string;
 }): React.JSX.Element {
   const paths = useWorkspacePaths();
   const navigation = useOptionalNavigation();
@@ -113,6 +116,7 @@ export function IssueRefLink({
           paths.channels(),
           navigation.pathname,
           navigation.searchParams,
+          sourceMessageId,
         )
       : issuePath;
 

@@ -7,6 +7,8 @@ interface IssueMentionCardProps {
   issueId: string;
   /** Fallback text when issue is not in store (e.g. "MUL-7") */
   fallbackLabel?: string;
+  /** Source row id when this legacy reference is rendered in a Messages timeline. */
+  sourceMessageId?: string;
 }
 
 /**
@@ -32,7 +34,7 @@ interface IssueMentionCardProps {
  *     resolve to a real issue; an unresolved identifier renders as plain text so we
  *     never produce a dead link for a false match.
  */
-export function IssueMentionCard({ issueId, fallbackLabel }: IssueMentionCardProps) {
+export function IssueMentionCard({ issueId, fallbackLabel, sourceMessageId }: IssueMentionCardProps) {
   const isUuid = isIssueUuid(issueId);
   const issue = useResolvedIssue(issueId);
 
@@ -47,5 +49,12 @@ export function IssueMentionCard({ issueId, fallbackLabel }: IssueMentionCardPro
   // (#521 — Frank spotted the parser bug only because the miss rendered as a chip),
   // so the signal moved to where assertions can see it and users cannot. It gets
   // deleted along with this whole path once #521 lands (#463/#510 tail).
-  return <IssueRefLink issueId={issueId} text={fallbackLabel ?? issueId} source="fallback" />;
+  return (
+    <IssueRefLink
+      issueId={issueId}
+      text={fallbackLabel ?? issueId}
+      source="fallback"
+      sourceMessageId={sourceMessageId}
+    />
+  );
 }

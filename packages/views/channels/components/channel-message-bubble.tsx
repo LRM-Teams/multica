@@ -128,13 +128,17 @@ function ChannelSystemMessageRow({
     >
       <span className="min-w-0 break-words">
         {issueEvent ? (
-          <IssueSystemEventContent event={issueEvent} />
+          <IssueSystemEventContent event={issueEvent} sourceMessageId={message.id} />
         ) : memberEvent ? (
           <MemberSystemEventContent event={memberEvent} />
         ) : hasReferenceParts ? (
           // Spans are anchored to the RAW `message.content`; feeding the trimmed
           // `systemText` would shift every offset and misplace the tokens.
-          <InlineReferenceContent content={message.content} parts={message.parts} />
+          <InlineReferenceContent
+            content={message.content}
+            parts={message.parts}
+            sourceMessageId={message.id}
+          />
         ) : (
           systemText
         )}
@@ -729,6 +733,7 @@ export function ChannelMessageBubble({
               parts={message.parts}
               attachments={message.attachments}
               highlightQuery={searchHighlighted ? searchQuery : undefined}
+              sourceMessageId={message.id}
             />
             {isContentCollapsed && (
               <div

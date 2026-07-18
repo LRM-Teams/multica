@@ -39,6 +39,8 @@ export interface MarkdownProps extends MarkdownBaseProps {
    * editor surfaces.
    */
   attachments?: AttachmentRecord[];
+  /** Source row id for issue references rendered inside a Messages timeline. */
+  sourceMessageId?: string;
 }
 
 /**
@@ -138,9 +140,10 @@ function defaultRenderMention(
     label?: string;
   },
   highlightQuery?: string,
+  sourceMessageId?: string,
 ): React.ReactNode {
   if (type === "issue") {
-    return <IssueMentionCard issueId={id} />;
+    return <IssueMentionCard issueId={id} sourceMessageId={sourceMessageId} />;
   }
   if (type === "project") {
     return <ProjectMentionCard projectId={id} />;
@@ -243,15 +246,15 @@ export function Markdown(props: MarkdownProps): React.JSX.Element {
   // the current workspace's prefix so it can't false-positive on tokens like
   // "UTF-8". Empty/absent prefix disables it.
   const issueRefPrefix = useCurrentWorkspace()?.issue_prefix || undefined;
-  const { attachments, highlightQuery, enableStickerShortcodes = true, ...rest } = props;
+  const { attachments, highlightQuery, enableStickerShortcodes = true, sourceMessageId, ...rest } = props;
   const renderAppImage = React.useCallback(
     (image: { src: string; alt: string }) => renderImage(image, enableStickerShortcodes),
     [enableStickerShortcodes],
   );
   const renderMention = React.useCallback(
     (mention: { type: string; id: string; label?: string }) =>
-      defaultRenderMention(mention, highlightQuery),
-    [highlightQuery],
+      defaultRenderMention(mention, highlightQuery, sourceMessageId),
+    [highlightQuery, sourceMessageId],
   );
   const RenderAppLink = React.useCallback(
     ({ href, children }: { href: string; children: React.ReactNode }) => {

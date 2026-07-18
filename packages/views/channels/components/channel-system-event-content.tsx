@@ -173,7 +173,13 @@ function toActorType(type: string | undefined): string {
  * status is a localized label, never a raw enum or the word "issue". The row
  * itself owns the (simple) time and quiet centered layout.
  */
-export function IssueSystemEventContent({ event }: { event: IssueSystemEvent }): ReactNode {
+export function IssueSystemEventContent({
+  event,
+  sourceMessageId,
+}: {
+  event: IssueSystemEvent;
+  sourceMessageId?: string;
+}): ReactNode {
   const { t } = useT("channels");
   const { getActorName } = useActorName();
 
@@ -182,7 +188,12 @@ export function IssueSystemEventContent({ event }: { event: IssueSystemEvent }):
     : t(($) => $.message.system_event.issue.actor_system);
 
   const issueToken = (
-    <IssueRefLink issueId={event.issueId} text={event.issueIdentifier} source="anchor" />
+    <IssueRefLink
+      issueId={event.issueId}
+      text={event.issueIdentifier}
+      source="anchor"
+      sourceMessageId={sourceMessageId}
+    />
   );
 
   // Assignment: resolve the assignee's plain name live (falling back to the

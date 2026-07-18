@@ -13,8 +13,10 @@ vi.mock("@multica/core/workspace/hooks", () => ({
 }));
 
 vi.mock("../../common/inline-reference-content", () => ({
-  InlineReferenceContent: ({ content }: { content: string }) => (
-    <div data-testid="inline-reference-content">{content}</div>
+  InlineReferenceContent: ({ content, sourceMessageId }: { content: string; sourceMessageId?: string }) => (
+    <div data-testid="inline-reference-content" data-source-message-id={sourceMessageId}>
+      {content}
+    </div>
   ),
 }));
 
@@ -53,5 +55,20 @@ describe("MessageBody reference-only messages", () => {
     const { container } = render(<MessageBody content="" parts={[mentionRefPart()]} />);
     expect(screen.queryByTestId("inline-reference-content")).toBeNull();
     expect(container.textContent).toBe("");
+  });
+
+  it("passes the owning row id to structured issue references", () => {
+    render(
+      <MessageBody
+        content="See MUL-9"
+        parts={[mentionRefPart()]}
+        sourceMessageId="message-42"
+      />,
+    );
+
+    expect(screen.getByTestId("inline-reference-content")).toHaveAttribute(
+      "data-source-message-id",
+      "message-42",
+    );
   });
 });

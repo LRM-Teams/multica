@@ -26,12 +26,15 @@ export function InlineReferenceContent({
   interactive = true,
   highlightQuery,
   className,
+  sourceMessageId,
 }: {
   content: string | null | undefined;
   parts: readonly MessagePart[] | null | undefined;
   interactive?: boolean;
   highlightQuery?: string;
   className?: string;
+  /** The Messages row that owns these references, for a precise return target. */
+  sourceMessageId?: string;
 }): React.JSX.Element {
   // Key each run by its character offset in the body (stable across renders,
   // never the array index) so React reconciles the same run/token cleanly.
@@ -48,7 +51,12 @@ export function InlineReferenceContent({
     <span className={cn("min-w-0", className)}>
       {keyed.map(({ seg, key }) =>
         seg.kind === "text" ? (
-          <TextRun key={key} text={seg.text} highlightQuery={highlightQuery} />
+          <TextRun
+            key={key}
+            text={seg.text}
+            highlightQuery={highlightQuery}
+            sourceMessageId={sourceMessageId}
+          />
         ) : (
           <ReferenceToken
             key={key}
@@ -56,6 +64,7 @@ export function InlineReferenceContent({
             text={seg.text}
             interactive={interactive}
             highlightQuery={highlightQuery}
+            sourceMessageId={sourceMessageId}
           />
         ),
       )}
@@ -74,9 +83,11 @@ export function InlineReferenceContent({
 function TextRun({
   text,
   highlightQuery,
+  sourceMessageId,
 }: {
   text: string;
   highlightQuery?: string;
+  sourceMessageId?: string;
 }): React.JSX.Element {
   const leading = text.match(/^\s+/)?.[0] ?? "";
   const rest = leading ? text.slice(leading.length) : text;
@@ -84,7 +95,11 @@ function TextRun({
     <>
       {leading}
       {rest && (
-        <MemoizedMarkdown mode="inline" highlightQuery={highlightQuery}>
+        <MemoizedMarkdown
+          mode="inline"
+          highlightQuery={highlightQuery}
+          sourceMessageId={sourceMessageId}
+        >
           {rest}
         </MemoizedMarkdown>
       )}
@@ -98,11 +113,13 @@ function ReferenceToken({
   text,
   interactive,
   highlightQuery,
+  sourceMessageId,
 }: {
   reference: ReferencePart;
   text: string;
   interactive: boolean;
   highlightQuery?: string;
+  sourceMessageId?: string;
 }): React.JSX.Element {
   if (reference.ref_type === "mention") {
     // Non-interactive surfaces (e.g. the excerpt row, itself a link) render the
@@ -137,7 +154,7 @@ function ReferenceToken({
   if (!interactive) {
     return <span className="text-brand">{text}</span>;
   }
-  return <IssueRefToken reference={reference} text={text} />;
+  return <IssueRefToken reference={reference} text={text} sourceMessageId={sourceMessageId} />;
 }
 
 type IssueRefPart = Extract<ReferencePart, { ref_type: "issue-ref" }>;
@@ -151,9 +168,18 @@ type IssueRefPart = Extract<ReferencePart, { ref_type: "issue-ref" }>;
 function IssueRefToken({
   reference,
   text,
+  sourceMessageId,
 }: {
   reference: IssueRefPart;
   text: string;
+  sourceMessageId?: string;
 }): React.JSX.Element {
-  return <IssueRefLink issueId={reference.ref_id} text={text} source="anchor" />;
+  return (
+    <IssueRefLink
+      issueId={reference.ref_id}
+      text={text}
+      source="anchor"
+      sourceMessageId={sourceMessageId}
+    />
+  );
 }

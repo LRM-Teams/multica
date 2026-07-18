@@ -570,11 +570,29 @@ describe("IssueDetail (shared)", () => {
     );
     const leaf = await screen.findByText("TES-1 Implement authentication");
 
-    expect(mobileReturn).toHaveClass("md:hidden", "shrink-0");
+    expect(mobileReturn).toHaveClass("md:hidden", "shrink-0", "min-h-11");
     expect(desktopReturn).toHaveClass("hidden", "md:inline-flex");
     expect(mobileReturn?.compareDocumentPosition(leaf) ?? 0).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
+  });
+
+  it("keeps an honest Issues-list return in the same mobile navigation slot without a Messages origin", async () => {
+    mockViewport.isMobile = true;
+
+    renderIssueDetail();
+
+    const returnButtons = await screen.findAllByRole("button", {
+      name: "Back to Issues",
+    });
+    const mobileReturn = returnButtons.find((button) => button.className.includes("md:hidden"));
+    const desktopReturn = returnButtons.find((button) => button.className.includes("md:inline-flex"));
+
+    expect(mobileReturn).toHaveClass("min-h-11", "shrink-0", "md:hidden");
+    expect(desktopReturn).toHaveClass("hidden", "md:inline-flex");
+
+    fireEvent.click(mobileReturn!);
+    expect(mockNavigation.push).toHaveBeenCalledWith("/test/issues");
   });
 
   it("omits the project breadcrumb segment when the issue has no project_id", async () => {

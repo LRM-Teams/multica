@@ -10,6 +10,11 @@ import enIssues from "../../locales/en/issues.json";
 const TEST_RESOURCES = { en: { common: enCommon, issues: enIssues } };
 
 const mockViewport = vi.hoisted(() => ({ isMobile: false }));
+const mockNavigation = vi.hoisted(() => ({
+  push: vi.fn(),
+  pathname: "/issues/issue-1",
+  searchParams: new URLSearchParams(),
+}));
 
 vi.mock("@multica/ui/hooks/use-mobile", () => ({
   useIsMobile: () => mockViewport.isMobile,
@@ -102,9 +107,7 @@ vi.mock("../../navigation", () => ({
     </a>
   ),
   useNavigation: () => ({
-    push: vi.fn(),
-    pathname: "/issues/issue-1",
-    searchParams: new URLSearchParams(),
+    ...mockNavigation,
     getShareableUrl: (p: string) => `https://app.multica.com${p}`,
   }),
   NavigationProvider: ({ children }: { children: React.ReactNode }) => children,
@@ -497,6 +500,8 @@ describe("IssueDetail (shared)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockViewport.isMobile = false;
+    mockNavigation.pathname = "/issues/issue-1";
+    mockNavigation.searchParams = new URLSearchParams();
     // Default: issue loads successfully
     mockApiObj.getIssue.mockResolvedValue(mockIssue);
     // /timeline returns the entries flat in chronological order (oldest first).
@@ -544,6 +549,32 @@ describe("IssueDetail (shared)", () => {
     // from the inline Inbox pane). A bare issue has no ancestor crumbs.
     const leaf = await screen.findByText("TES-1 Implement authentication");
     expect(leaf.closest("a")).toHaveAttribute("href", "/test/issues/issue-1");
+  });
+
+  it("keeps the Messages return control in the visible mobile navigation slot", async () => {
+    mockViewport.isMobile = true;
+    mockNavigation.searchParams = new URLSearchParams({
+      returnTo: "/test/channels/channel-1?message=message-1",
+    });
+
+    renderIssueDetail();
+
+    const returnButtons = await screen.findAllByRole("button", {
+      name: "Back to Messages",
+    });
+    const mobileReturn = returnButtons.find((button) =>
+      button.className.includes("md:hidden"),
+    );
+    const desktopReturn = returnButtons.find((button) =>
+      button.className.includes("md:inline-flex"),
+    );
+    const leaf = await screen.findByText("TES-1 Implement authentication");
+
+    expect(mobileReturn).toHaveClass("md:hidden", "shrink-0");
+    expect(desktopReturn).toHaveClass("hidden", "md:inline-flex");
+    expect(mobileReturn?.compareDocumentPosition(leaf) ?? 0).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
   });
 
   it("omits the project breadcrumb segment when the issue has no project_id", async () => {

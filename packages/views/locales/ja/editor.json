@@ -75,6 +75,7 @@
     "all_members_hint": "この会話の全員に通知",
     "searching": "検索中...",
     "no_results": "結果なし",
+    "aria_label": "メンション候補",
     "group_current": "現在のページ",
     "group_recent": "最近見た項目",
     "group_search": "検索結果",

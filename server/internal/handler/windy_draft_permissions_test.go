@@ -15,6 +15,7 @@ func createWindyDraftTestMember(t *testing.T, label string) string {
 	t.Helper()
 	ctx := context.Background()
 	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")
+	name := label + " " + suffix
 	email := label + "-" + suffix + "@multica.test"
 
 	var userID string
@@ -22,7 +23,7 @@ func createWindyDraftTestMember(t *testing.T, label string) string {
 		INSERT INTO "user" (name, email)
 		VALUES ($1, $2)
 		RETURNING id
-	`, label, email).Scan(&userID); err != nil {
+	`, name, email).Scan(&userID); err != nil {
 		t.Fatalf("create %s user: %v", label, err)
 	}
 	if _, err := testPool.Exec(ctx, `

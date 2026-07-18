@@ -60,6 +60,7 @@ import { collectThreadReplies, deriveThreadResolution } from "./thread-utils";
 import { isActivityLaneEntry, isReactableComment, activityRunPointer } from "./timeline-isolation";
 import { IssueAgentHeaderChip } from "./issue-agent-header-chip";
 import { issueSourceMessageHref } from "./issue-source-link";
+import { issueMessagesReturnPath } from "./issue-return-link";
 import { ExecutionLogSection } from "./execution-log-section";
 import { PullRequestList } from "./pull-request-list";
 import { useGitHubSettings } from "@multica/core/github";
@@ -695,6 +696,10 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
   const router = useNavigation();
   const user = useAuthStore((s) => s.user);
   const paths = useWorkspacePaths();
+  const messagesReturnPath = issueMessagesReturnPath(
+    router.searchParams,
+    paths.channels(),
+  );
 
   // Issue navigation — read from TQ list cache
   const wsId = useWorkspaceId();
@@ -1765,6 +1770,17 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
           }
           actions={
             <>
+            {messagesReturnPath && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="gap-1 text-muted-foreground"
+                onClick={() => router.push(messagesReturnPath)}
+              >
+                <ChevronLeft className="size-3.5" />
+                {t(($) => $.detail.back_to_messages)}
+              </Button>
+            )}
             {/* Live "agent is working" chip, leftmost in the right cluster so
                 it never overlaps the title (which truncates to make room).
                 It self-hides when no agent is active. */}

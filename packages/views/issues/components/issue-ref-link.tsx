@@ -14,11 +14,13 @@ import {
   HoverCardTrigger,
 } from "@multica/ui/components/ui/hover-card";
 import { AppLink } from "../../navigation/app-link";
+import { useOptionalNavigation } from "../../navigation/context";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ProjectIcon } from "../../projects/components/project-icon";
 import { StatusIcon } from "./status-icon";
 import { PriorityIcon } from "./priority-icon";
 import { useResolvedIssue } from "./issue-chip";
+import { issueDetailHrefFromChannel } from "./issue-return-link";
 
 /**
  * Where a rendered issue reference came from. USER-INVISIBLE by design — it is
@@ -99,30 +101,42 @@ export function IssueRefLink({
   source?: IssueRefSource;
 }): React.JSX.Element {
   const paths = useWorkspacePaths();
+  const navigation = useOptionalNavigation();
   // Mutable issue state is resolved live (#504/#622), never from a write-time
   // snapshot — the part carries identity (ref_id + span), not state.
   const issue = useResolvedIssue(issueId);
+  const issuePath = paths.issueDetail(issue?.id ?? issueId);
+  const href =
+    navigation && typeof paths.channels === "function"
+      ? issueDetailHrefFromChannel(
+          issuePath,
+          paths.channels(),
+          navigation.pathname,
+          navigation.searchParams,
+        )
+      : issuePath;
 
-  const link = (
-    <AppLink
-      href={paths.issueDetail(issue?.id ?? issueId)}
-      className="text-brand hover:underline"
-      // Declares "this link is an issue reference and owns its own hover card", so
-      // generic link affordances (the editor's URL preview) stand down instead of
-      // stacking a second popup on the peek — see link-hover-card.tsx.
-      //
-      // This is an ATTRIBUTE, not the old `issue-mention` CLASS, deliberately.
-      // That class carried the suppression AND chip styling
-      // (`.rich-text-editor a.issue-mention { color: inherit; text-decoration: none }`),
-      // so reusing it would drag back the very decoration #520 removed. Behaviour
-      // riding on a styling class is exactly how this broke: #520 dropped the class
-      // as "chip styling", silently taking a behavioural contract with it, and my
-      // test even asserted the class was GONE — green, and wrong.
-      data-issue-ref=""
-      data-ref-source={source}
-    >
-      {text}
-    </AppLink>
+  const linkProps = {
+    href,
+    className: "text-brand hover:underline",
+    // Declares "this link is an issue reference and owns its own hover card", so
+    // generic link affordances (the editor's URL preview) stand down instead of
+    // stacking a second popup on the peek — see link-hover-card.tsx.
+    //
+    // This is an ATTRIBUTE, not the old `issue-mention` CLASS, deliberately.
+    // That class carried the suppression AND chip styling
+    // (`.rich-text-editor a.issue-mention { color: inherit; text-decoration: none }`),
+    // so reusing it would drag back the very decoration #520 removed. Behaviour
+    // riding on a styling class is exactly how this broke: #520 dropped the class
+    // as "chip styling", silently taking a behavioural contract with it, and my
+    // test even asserted the class was GONE — green, and wrong.
+    "data-issue-ref": "",
+    "data-ref-source": source,
+  };
+  const link = navigation ? (
+    <AppLink {...linkProps}>{text}</AppLink>
+  ) : (
+    <a {...linkProps}>{text}</a>
   );
 
   // Nothing resolved (loading / deleted / other workspace / no permission) → plain

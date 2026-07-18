@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { copyText } from "@multica/ui/lib/clipboard";
@@ -24,6 +24,13 @@ import {
 // and the avatar pulse, not a blinking or colored dot. Tone → color lives in
 // ONE shared table (ACTIVITY_TONE_DOT_CLASS) so the header can't drift from it.
 const TONE_DOT = ACTIVITY_TONE_DOT_CLASS;
+
+// Keep long Activity details on the exact existing history-message baseline.
+// The detail header is already the sole expand/collapse control, so this is a
+// scroll boundary only — never a second "Expand" affordance.
+const ACTIVITY_DETAIL_SCROLL_HEIGHT_CLASS =
+  "max-h-[min(260px,55vh)] md:max-h-[360px]";
+const ACTIVITY_DETAIL_SCROLL_EPSILON = 1;
 
 // A file tool's `tool_target` is now a source-backed path (absolute when the
 // runtime provides it, #484) which can be ~90 chars — long enough to blow out
@@ -61,6 +68,9 @@ function ActivityRow({
 }) {
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [detailOverflowed, setDetailOverflowed] = useState(false);
+  const [showDetailFade, setShowDetailFade] = useState(false);
+  const detailRef = useRef<HTMLDivElement>(null);
   const detailId = useId();
   const presentation = activityPresentation(event);
   // Activity is English-only (Frank 2026-07-14): the label/fixed-subtext come
@@ -105,6 +115,53 @@ function ActivityRow({
     ? ACTIVITY_CHROME_EN.command_copied
     : ACTIVITY_CHROME_EN.copy_command;
 
+  const updateDetailOverflow = useCallback(() => {
+    const detail = detailRef.current;
+    if (!detail) return;
+
+    const overflowed = detail.scrollHeight > detail.clientHeight + ACTIVITY_DETAIL_SCROLL_EPSILON;
+    const atBottom =
+      detail.scrollTop + detail.clientHeight >=
+      detail.scrollHeight - ACTIVITY_DETAIL_SCROLL_EPSILON;
+    setDetailOverflowed((previous) => (previous === overflowed ? previous : overflowed));
+    setShowDetailFade((previous) => {
+      const next = overflowed && !atBottom;
+      return previous === next ? previous : next;
+    });
+  }, []);
+
+  // Measure after the sibling detail mounts, then keep the boundary truthful as
+  // Markdown reflows or the viewport changes. The initial layout effect avoids
+  // a visible unbounded frame for long detail on expand.
+  useLayoutEffect(() => {
+    if (!expanded) {
+      setDetailOverflowed(false);
+      setShowDetailFade(false);
+      return;
+    }
+
+    updateDetailOverflow();
+  }, [expanded, updateDetailOverflow]);
+
+  useEffect(() => {
+    if (!expanded) return;
+
+    const detail = detailRef.current;
+    if (!detail) return;
+
+    const resizeObserver =
+      typeof ResizeObserver === "undefined"
+        ? undefined
+        : new ResizeObserver(() => updateDetailOverflow());
+    resizeObserver?.observe(detail);
+    window.addEventListener("resize", updateDetailOverflow);
+
+    return () => {
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", updateDetailOverflow);
+    };
+  }, [expanded, updateDetailOverflow]);
+
   if (expansion) {
     return (
       <div
@@ -146,8 +203,17 @@ function ActivityRow({
         {expanded && (
           <div
             id={detailId}
+            ref={detailRef}
             data-testid="activity-expanded-detail"
-            className="ml-[4.875rem] mt-1 rounded-md border bg-muted/20 px-3 py-2 text-sm text-foreground sm:ml-[5.25rem]"
+            className={cn(
+              "relative ml-[4.875rem] mt-1 rounded-md border bg-muted/20 px-3 py-2 text-sm text-foreground sm:ml-[5.25rem]",
+              ACTIVITY_DETAIL_SCROLL_HEIGHT_CLASS,
+              detailOverflowed ? "overflow-y-auto overscroll-contain" : "overflow-visible",
+            )}
+            tabIndex={detailOverflowed ? 0 : undefined}
+            role={detailOverflowed ? "region" : undefined}
+            aria-label={detailOverflowed ? ACTIVITY_CHROME_EN.expanded_detail_scrollable : undefined}
+            onScroll={updateDetailOverflow}
           >
             {isCommand ? (
               <div className="relative">
@@ -171,6 +237,12 @@ function ActivityRow({
               >
                 {expansion.content}
               </MemoizedMarkdown>
+            )}
+            {showDetailFade && (
+              <div
+                className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-background via-background/95 to-transparent pb-1.5 pt-12"
+                data-testid="activity-detail-scroll-fade"
+              />
             )}
           </div>
         )}

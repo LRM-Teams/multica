@@ -21,7 +21,8 @@ import { VisibilityPicker } from "../../agents/components/inspector/visibility-p
 import { useUpdateAgent } from "../../agents/hooks/use-update-agent";
 import { useRuntimeHealthStateLabel } from "../../runtimes/components/shared";
 import { PropRow } from "../../common/prop-row";
-import { RuntimeTokenStatsBadge, runtimeTokenStatsLabel } from "../../common/runtime-token-stats-badge";
+import { RuntimeTokenStatsBadge } from "../../common/runtime-token-stats-badge";
+import { runtimeTokenStatsLabel } from "../../common/runtime-token-stats";
 import { initialsOf } from "../../common/initials";
 import { AgentFilesPanel } from "./agent-files-panel";
 import { useT } from "../../i18n/use-t";

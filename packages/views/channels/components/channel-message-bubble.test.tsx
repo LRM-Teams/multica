@@ -15,6 +15,7 @@ const copyTextMock = vi.fn();
 // context (the barrel re-exports it) so these layout/interaction tests don't
 // each need a NavigationProvider.
 vi.mock("../../navigation/context", () => ({
+  useOptionalNavigation: () => null,
   useNavigation: () => ({
     push: vi.fn(),
     replace: vi.fn(),

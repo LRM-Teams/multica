@@ -37,10 +37,19 @@ export function NavigationProvider({
 }
 
 export function useNavigation(): NavigationAdapter {
-  const ctx = use(NavigationContext);
+  const ctx = useOptionalNavigation();
   if (!ctx)
     throw new Error("useNavigation must be used within NavigationProvider");
   return ctx;
+}
+
+/**
+ * Read navigation context for display-only components that can render outside
+ * an application shell. Page and action code should continue using
+ * useNavigation(), which requires the provider.
+ */
+export function useOptionalNavigation(): NavigationAdapter | null {
+  return use(NavigationContext);
 }
 
 /** True while a transition-wrapped push/replace is committing. */

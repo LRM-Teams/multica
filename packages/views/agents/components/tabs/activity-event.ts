@@ -136,6 +136,17 @@ export interface ActivityPresentation {
   tone: ActivityDotTone;
 }
 
+/**
+ * The full, safe detail that can sit behind a narrative Activity row. This is
+ * deliberately separate from `ActivityPresentation`: the presentation's
+ * `subtext` is a one-line preview and normalizes mention markdown for that
+ * compact surface, while an expanded row must preserve the original authored
+ * markdown and its normal message-body interactions.
+ */
+export type ActivityExpansionContent =
+  | { kind: "markdown"; content: string }
+  | { kind: "command"; content: string };
+
 function reasonText(event: ActivityEvent): string {
   return event.reason_code?.trim().replaceAll("_", " ") ?? "";
 }
@@ -317,6 +328,43 @@ function isMappedTool(event: ActivityEvent): boolean {
 // Pull the first entry that carries one.
 function fullCommand(event: ActivityEvent): string | undefined {
   return event.entries?.find((e) => e.command?.trim())?.command?.trim() || undefined;
+}
+
+/**
+ * Returns only detail that is both real and safe to reveal in the full
+ * Activity timeline. Status/fact rows intentionally return nothing: they have
+ * no additional source-backed content, so giving them an empty disclosure
+ * would be a misleading affordance.
+ */
+export function activityExpansionContent(
+  event: ActivityEvent,
+  presentation = activityPresentation(event),
+): ActivityExpansionContent | undefined {
+  if (presentation.subtextKind === "command") {
+    const command = presentation.subtextFull ?? presentation.subtext;
+    return command ? { kind: "command", content: command } : undefined;
+  }
+
+  // The held-freshness projection is composed from a narrow structured
+  // allowlist, not authored markdown. It remains an inline fact row.
+  if (event.detail_kind === "send_freshness_hold_detail") return undefined;
+  if (event.detail_kind === "message_sent") return undefined;
+  if (event.activity_kind === "custom" && event.detail_kind === "agent_status_changed") {
+    return undefined;
+  }
+
+  switch (event.activity_kind) {
+    case "thinking":
+    case "text":
+    case "error":
+    case "blocked":
+    case "custom": {
+      const content = event.text?.trim();
+      return content ? { kind: "markdown", content } : undefined;
+    }
+    default:
+      return undefined;
+  }
 }
 
 // DOM-size safety bound for the inline command string. The VISUAL truncation is

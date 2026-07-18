@@ -11,7 +11,6 @@ vi.mock("../../../common/use-viewing-timezone", () => ({
 
 vi.mock("../../../i18n", () => ({
   useT: () => ({
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     t: (selector: (r: any) => string) =>
       selector({
         tab_body: {
@@ -46,6 +45,24 @@ vi.mock("../../../i18n", () => ({
         },
       }),
   }),
+}));
+
+vi.mock("../../../common/markdown", () => ({
+  MemoizedMarkdown: ({
+    children,
+    enableStickerShortcodes,
+  }: {
+    children: string;
+    enableStickerShortcodes?: boolean;
+  }) => (
+    <div
+      data-testid="activity-markdown"
+      data-sticker-shortcodes={String(enableStickerShortcodes)}
+      data-source={children}
+    >
+      {children}
+    </div>
+  ),
 }));
 
 const USER: ActivityEvent = {
@@ -237,19 +254,32 @@ describe("ActivityTimeline", () => {
     expect(screen.queryByText("Done")).toBeNull();
   });
 
-  it("renders Output/thinking full text as a collapsed click-to-expand block", () => {
-    render(<ActivityTimeline events={[TEXT]} />);
-    // The reply text is a collapsed, expandable control (§2.1: first line, click
-    // for the full block) — not a fixed inline subtext.
-    const block = screen.getByRole("button", { name: "Done." });
-    expect(block).toHaveAttribute("aria-expanded", "false");
-    fireEvent.click(block);
-    expect(block).toHaveAttribute("aria-expanded", "true");
+  it("expands authored output through the message Markdown renderer in a sibling detail region", () => {
+    const markdownOutput: ActivityEvent = {
+      ...TEXT,
+      text: "## Verification\n\n[@Frank](mention://member/frank-1) confirmed it.",
+    };
+    render(<ActivityTimeline events={[markdownOutput]} />);
+
+    const header = screen.getByRole("button", { name: /Output/ });
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    expect(header).not.toHaveAttribute("aria-controls");
+    expect(header).toHaveClass("min-h-11");
+
+    fireEvent.click(header);
+    const detail = screen.getByTestId("activity-expanded-detail");
+    expect(header).toHaveAttribute("aria-expanded", "true");
+    expect(header).toHaveAttribute("aria-controls");
+    expect(detail).toHaveAttribute("id", header.getAttribute("aria-controls"));
+    expect(header.contains(detail)).toBe(false);
+    const markdown = screen.getByTestId("activity-markdown");
+    expect(markdown).toHaveAttribute("data-source", markdownOutput.text!);
+    expect(markdown).toHaveAttribute("data-sticker-shortcodes", "false");
   });
 
-  it("keeps a fixed subtext (Message received) inline, not an expandable block", () => {
+  it("keeps Tier3 fixed facts inline without an empty expand affordance", () => {
     render(<ActivityTimeline events={[WAKE]} />);
-    expect(screen.queryByRole("button", { name: "Message received" })).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
     expect(screen.getByText("Message received")).toBeInTheDocument();
   });
 
@@ -303,19 +333,19 @@ describe("ActivityTimeline", () => {
     expect(screen.getByText("Running command")).toBeInTheDocument();
     // Command is one plain node (never path head/tail); full entries[].command.
     expect(screen.getByText(full)).toBeInTheDocument();
-    // Collapsed: line-clamp-2 on the text span inside the expand control.
+    // Collapsed: the header holds the two-line command preview.
     const toggle = screen.getByRole("button", { expanded: false });
     const clamped = toggle.querySelector(".line-clamp-2");
     expect(clamped).not.toBeNull();
-    expect(clamped?.textContent).toContain("Running command");
-    expect(clamped?.textContent).toContain(full);
+    expect(toggle).toHaveTextContent("Running command");
+    expect(toggle).toHaveTextContent(full);
     // Copy is expanded-only — not present while collapsed.
     expect(screen.queryByRole("button", { name: "Copy" })).toBeNull();
     // No dot pulses — all static (#404).
     expect(container.querySelector(".animate-pulse")).toBeNull();
   });
 
-  it("click expands a command row in place: drop clamp, full width, caret flips, Copy", () => {
+  it("expands a command into a sibling code detail with a separate Copy control", () => {
     const full =
       'multica message send --message \'能看到，截图里是我的状态显示"Idle"\' --output text';
     const CMD: ActivityEvent = {
@@ -335,18 +365,14 @@ describe("ActivityTimeline", () => {
     fireEvent.click(toggle);
 
     const open = screen.getByRole("button", { expanded: true });
-    const body = open.querySelector(".whitespace-pre-wrap.break-words");
-    expect(body).not.toBeNull();
-    expect(body?.className).not.toContain("line-clamp-2");
-    expect(body).toHaveTextContent(full);
-    // Expanded-only small 「Copy」control.
+    const detail = screen.getByTestId("activity-expanded-detail");
+    expect(open.contains(detail)).toBe(false);
+    expect(detail.querySelector("pre code")).toHaveTextContent(full);
     expect(screen.getByRole("button", { name: "Copy" })).toHaveTextContent("Copy");
 
     // Collapse again.
     fireEvent.click(open);
-    expect(
-      screen.getByRole("button", { expanded: false }).querySelector(".line-clamp-2"),
-    ).not.toBeNull();
+    expect(screen.getByRole("button", { expanded: false }).querySelector(".line-clamp-2")).not.toBeNull();
     expect(screen.queryByRole("button", { name: "Copy" })).toBeNull();
   });
 

@@ -180,13 +180,34 @@ func TestAgentTransportSendDraftSendsSavedDraftAndClearsDraft(t *testing.T) {
 	if held.Code != http.StatusOK {
 		t.Fatalf("freshness hold send: status=%d body=%s", held.Code, held.Body.String())
 	}
+	var heldBody AgentTransportSendHeldResponse
+	if err := json.Unmarshal(held.Body.Bytes(), &heldBody); err != nil {
+		t.Fatalf("decode held draft seed: %v", err)
+	}
 
-	sent := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+	staleDraft := agentTransportSendForTest(t, taskID, agentID, map[string]any{
 		"target":     target,
 		"send_draft": true,
 	})
+	if staleDraft.Code != http.StatusOK {
+		t.Fatalf("stale draft freshness hold: status=%d body=%s", staleDraft.Code, staleDraft.Body.String())
+	}
+	var staleBody AgentTransportSendHeldResponse
+	if err := json.Unmarshal(staleDraft.Body.Bytes(), &staleBody); err != nil {
+		t.Fatalf("decode stale draft hold: %v", err)
+	}
+	if staleBody.State != "held" || staleBody.LatestSeq != heldBody.LatestSeq {
+		t.Fatalf("stale draft hold mismatch: %+v", staleBody)
+	}
+	assertAgentTransportDraftContent(t, agentID, target, content)
+
+	sent := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":         target,
+		"send_draft":     true,
+		"seen_up_to_seq": heldBody.LatestSeq,
+	})
 	if sent.Code != http.StatusCreated {
-		t.Fatalf("send saved draft: status=%d body=%s", sent.Code, sent.Body.String())
+		t.Fatalf("send saved draft after reviewing newer context: status=%d body=%s", sent.Code, sent.Body.String())
 	}
 	var body AgentTransportSendResponse
 	if err := json.Unmarshal(sent.Body.Bytes(), &body); err != nil {
@@ -259,9 +280,14 @@ func TestAgentTransportSendDraftRebuildsMentionForCurrentDestinationMembers(t *t
 		t.Fatalf("add current destination member: %v", err)
 	}
 
+	var heldBody AgentTransportSendHeldResponse
+	if err := json.Unmarshal(held.Body.Bytes(), &heldBody); err != nil {
+		t.Fatalf("decode held destination draft: %v", err)
+	}
 	sent := agentTransportSendForTest(t, taskID, senderID, map[string]any{
-		"target":     target,
-		"send_draft": true,
+		"target":         target,
+		"send_draft":     true,
+		"seen_up_to_seq": heldBody.LatestSeq,
 	})
 	if sent.Code != http.StatusCreated {
 		t.Fatalf("send held destination draft: status=%d body=%s", sent.Code, sent.Body.String())

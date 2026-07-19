@@ -193,6 +193,11 @@ func (h *Handler) requireAgentTransportPublicResponseGrant(ctx context.Context, 
 		return fmt.Errorf("agent inbox event response_mode %q does not grant public channel output", responseMode)
 	}
 	if deliveryMode == "attention" {
+		_ = recordChannelDecisionAuditExec(ctx, h.DB, channelDecisionAuditEvent{
+			WorkspaceID: source.origin.workspaceID, ChannelID: channelID, SourceKind: "agent_transport",
+			EventType: "unauthorized_public_send_blocked", AgentID: source.origin.agentID, InboxEventID: source.inboxEventID,
+			Payload: map[string]any{"reason": "restricted_attention_delivery", "response_mode": responseMode, "delivery_mode": deliveryMode},
+		})
 		return errors.New("restricted attention delivery cannot publish channel output")
 	}
 	if err := h.requireAgentTransportResponseGrantActive(ctx, source); err != nil {
@@ -218,6 +223,11 @@ func (h *Handler) requireAgentTransportResponseGrantActive(ctx context.Context, 
 		return err
 	}
 	if grantStatus != "granted" || !grantFresh {
+		_ = recordChannelDecisionAuditExec(ctx, h.DB, channelDecisionAuditEvent{
+			WorkspaceID: source.origin.workspaceID, ChannelID: source.origin.channelID, SourceKind: "response_grant",
+			EventType: "unauthorized_public_send_blocked", AgentID: source.origin.agentID, InboxEventID: source.inboxEventID,
+			Payload: map[string]any{"reason": "response_grant_stale", "grant_status": grantStatus, "grant_fresh": grantFresh},
+		})
 		return fmt.Errorf("response_grant is %s or expired", grantStatus)
 	}
 	return nil
@@ -240,6 +250,11 @@ func (h *Handler) requireAgentTransportTurnGrantActive(ctx context.Context, sour
 		return err
 	}
 	if turnStatus != "granted" || sessionStatus != "active" || !turnFresh || !versionFresh {
+		_ = recordChannelDecisionAuditExec(ctx, h.DB, channelDecisionAuditEvent{
+			WorkspaceID: source.origin.workspaceID, ChannelID: source.origin.channelID, SourceKind: "collaboration_turn",
+			EventType: "unauthorized_public_send_blocked", AgentID: source.origin.agentID, InboxEventID: source.inboxEventID,
+			Payload: map[string]any{"reason": "turn_grant_stale", "turn_status": turnStatus, "session_status": sessionStatus, "turn_fresh": turnFresh, "version_fresh": versionFresh},
+		})
 		return fmt.Errorf("turn_grant is %s, session is %s, or grant is stale", turnStatus, sessionStatus)
 	}
 	return nil

@@ -1954,9 +1954,10 @@ export class ApiClient {
     );
   }
 
-  async getEvolutionMetrics(params?: { unit_type?: string }): Promise<EvolutionMetricsResponse> {
+  async getEvolutionMetrics(params?: { unit_type?: string; days?: number }): Promise<EvolutionMetricsResponse> {
     const search = new URLSearchParams();
     if (params?.unit_type) search.set("unit_type", params.unit_type);
+    if (params?.days) search.set("days", String(params.days));
     const suffix = search.toString();
     const raw = await this.fetch<unknown>(`/api/evolution/metrics${suffix ? `?${suffix}` : ""}`);
     return parseWithFallback(raw, EvolutionMetricsSchema, EMPTY_EVOLUTION_METRICS, {

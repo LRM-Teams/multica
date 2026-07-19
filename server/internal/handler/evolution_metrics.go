@@ -11,6 +11,7 @@ type EvolutionMetricsResponse struct {
 	DailyMetrics           []EvolutionDailyMetricResponse       `json:"daily_metrics"`
 	TaskEfficiency         EvolutionTaskEfficiencyResponse      `json:"task_efficiency"`
 	CollaborationEvolution EvolutionCollaborationMetricResponse `json:"collaboration_evolution"`
+	ModelEvolution         EvolutionModelMetricResponse         `json:"model_evolution"`
 }
 
 type EvolutionUnitMetricResponse struct {
@@ -44,6 +45,7 @@ type EvolutionDailyMetricResponse struct {
 }
 
 type EvolutionCollaborationMetricResponse struct {
+	UnmentionedMessages            int64   `json:"unmentioned_messages"`
 	AttentionRounds                int64   `json:"attention_rounds"`
 	AttentionProbes                int64   `json:"attention_probes"`
 	AttentionSilentRate            float64 `json:"attention_silent_rate"`
@@ -51,13 +53,30 @@ type EvolutionCollaborationMetricResponse struct {
 	PeerConverged                  int64   `json:"peer_converged"`
 	ManagerFallbacks               int64   `json:"manager_fallbacks"`
 	FullExecutionWakes             int64   `json:"full_execution_wakes"`
+	FullExecutionReductionRate     float64 `json:"full_execution_reduction_rate"`
 	CollaborationSessions          int64   `json:"collaboration_sessions"`
+	TurnOrderViolationRate         float64 `json:"turn_order_violation_rate"`
 	ContributionOffers             int64   `json:"contribution_offers"`
 	ContributionOfferAdoptionRate  float64 `json:"contribution_offer_adoption_rate"`
+	ContributionOfferHelpfulRate   float64 `json:"contribution_offer_helpful_rate"`
 	UnauthorizedPublicSendsBlocked int64   `json:"unauthorized_public_sends_blocked"`
+	PoliciesRetrieved              int64   `json:"policies_retrieved"`
+	PoliciesUsed                   int64   `json:"policies_used"`
+	PolicySuccessRate              float64 `json:"policy_success_rate"`
 	AttentionTokens                int64   `json:"attention_tokens"`
 	ExecutionTokens                int64   `json:"execution_tokens"`
+	EstimatedTokensSaved           int64   `json:"estimated_tokens_saved"`
 	ImmutableDecisionAuditEvents   int64   `json:"immutable_decision_audit_events"`
+}
+
+type EvolutionModelMetricResponse struct {
+	AttentionStudentVersion string  `json:"attention_student_version"`
+	AttentionStudentMode    string  `json:"attention_student_mode"`
+	MissedAttentionRate     float64 `json:"missed_attention_rate"`
+	LateRescueRate          float64 `json:"late_rescue_rate"`
+	ContextFilterVersion    string  `json:"context_filter_version"`
+	ContextCompressionRate  float64 `json:"context_compression_rate"`
+	CriticalContextRecall   float64 `json:"critical_context_recall"`
 }
 
 type EvolutionTaskEfficiencyResponse struct {
@@ -267,9 +286,15 @@ func (h *Handler) loadEvolutionTaskEfficiency(r *http.Request, workspaceID strin
 }
 
 func (h *Handler) loadEvolutionCollaborationMetrics(r *http.Request, workspaceID string, days int, resp *EvolutionMetricsResponse) error {
+	resp.ModelEvolution.AttentionStudentMode = "off"
 	return h.DB.QueryRow(r.Context(), `
 		WITH bounds AS (
 		  SELECT current_date - (($2::int - 1) * interval '1 day') AS since
+		), rounds AS (
+		  SELECT count(*) AS attention_rounds
+		    FROM channel_attention_round round
+		    CROSS JOIN bounds
+		   WHERE round.workspace_id = $1 AND round.created_at >= bounds.since
 		), participants AS (
 		  SELECT count(*) AS probes,
 		         count(*) FILTER (WHERE decision = 'SILENT') AS silent,
@@ -304,12 +329,26 @@ func (h *Handler) loadEvolutionCollaborationMetrics(r *http.Request, workspaceID
 		    FROM collaboration_turn turn
 		    CROSS JOIN bounds
 		   WHERE turn.workspace_id = $1 AND turn.created_at >= bounds.since
+		), turns_consumed AS (
+		  SELECT count(*) AS consumed_turns
+		    FROM collaboration_turn turn
+		    CROSS JOIN bounds
+		   WHERE turn.workspace_id = $1 AND turn.updated_at >= bounds.since AND turn.grant_status = 'consumed'
 		), audit AS (
 		  SELECT count(*) AS audit_events,
 		         count(*) FILTER (WHERE event_type = 'unauthorized_public_send_blocked') AS blocked_public_sends
 		    FROM channel_decision_audit audit
 		    CROSS JOIN bounds
 		   WHERE audit.workspace_id = $1 AND audit.created_at >= bounds.since
+		), policies AS (
+		  SELECT count(*) FILTER (WHERE event = 'injected') AS policies_retrieved,
+		         count(*) FILTER (WHERE event = 'used') AS policies_used,
+		         count(*) FILTER (WHERE event = 'success' OR outcome = 'success') AS policy_success,
+		         count(*) FILTER (WHERE event = 'failure' OR outcome = 'failure') AS policy_failure
+		    FROM evolution_unit_feedback_event feedback
+		    CROSS JOIN bounds
+		   WHERE feedback.workspace_id = $1 AND feedback.created_at >= bounds.since
+		     AND feedback.unit_type IN ('workflow', 'tool_pattern')
 		), execution_usage AS (
 		  SELECT COALESCE(sum(usage.input_tokens + usage.output_tokens), 0) AS execution_tokens
 		    FROM agent_usage usage
@@ -319,28 +358,40 @@ func (h *Handler) loadEvolutionCollaborationMetrics(r *http.Request, workspaceID
 		     AND execution.source_kind = 'inbox'
 		)
 		SELECT
-		  (SELECT count(*) FROM channel_attention_round round, bounds WHERE round.workspace_id = $1 AND round.created_at >= bounds.since),
+		  COALESCE(rounds.attention_rounds, 0),
+		  COALESCE(rounds.attention_rounds, 0),
 		  COALESCE(participants.probes, 0),
 		  CASE WHEN COALESCE(participants.probes, 0) > 0 THEN participants.silent::float8 / participants.probes ELSE 0 END,
 		  COALESCE(participants.answer_claims, 0),
 		  COALESCE(grants.peer_converged, 0),
 		  COALESCE(grants.manager_fallbacks, 0),
 		  COALESCE(grants.full_wakes, 0) + COALESCE(turns.turn_full_wakes, 0),
+		  CASE WHEN COALESCE(participants.probes, 0) > 0 THEN GREATEST(participants.probes - COALESCE(grants.full_wakes, 0), 0)::float8 / participants.probes ELSE 0 END,
 		  COALESCE(sessions.collaboration_sessions, 0),
+		  CASE WHEN (COALESCE(turns_consumed.consumed_turns, 0) + COALESCE(audit.blocked_public_sends, 0)) > 0 THEN audit.blocked_public_sends::float8 / (turns_consumed.consumed_turns + audit.blocked_public_sends) ELSE 0 END,
 		  COALESCE(offers.contribution_offers, 0),
 		  CASE WHEN COALESCE(offers.contribution_offers, 0) > 0 THEN offers.adopted::float8 / offers.contribution_offers ELSE 0 END,
+		  0::float8,
 		  COALESCE(audit.blocked_public_sends, 0),
+		  COALESCE(policies.policies_retrieved, 0),
+		  COALESCE(policies.policies_used, 0),
+		  CASE WHEN (COALESCE(policies.policy_success, 0) + COALESCE(policies.policy_failure, 0)) > 0 THEN policies.policy_success::float8 / (policies.policy_success + policies.policy_failure) ELSE 0 END,
 		  COALESCE(participants.attention_tokens, 0),
 		  COALESCE(execution_usage.execution_tokens, 0),
+		  GREATEST(COALESCE(participants.probes, 0) - COALESCE(grants.full_wakes, 0), 0) * 4000,
 		  COALESCE(audit.audit_events, 0)
-		FROM participants
+		FROM rounds
+		CROSS JOIN participants
 		CROSS JOIN grants
 		CROSS JOIN offers
 		CROSS JOIN sessions
 		CROSS JOIN turns
+		CROSS JOIN turns_consumed
 		CROSS JOIN audit
+		CROSS JOIN policies
 		CROSS JOIN execution_usage
 	`, workspaceID, days).Scan(
+		&resp.CollaborationEvolution.UnmentionedMessages,
 		&resp.CollaborationEvolution.AttentionRounds,
 		&resp.CollaborationEvolution.AttentionProbes,
 		&resp.CollaborationEvolution.AttentionSilentRate,
@@ -348,12 +399,19 @@ func (h *Handler) loadEvolutionCollaborationMetrics(r *http.Request, workspaceID
 		&resp.CollaborationEvolution.PeerConverged,
 		&resp.CollaborationEvolution.ManagerFallbacks,
 		&resp.CollaborationEvolution.FullExecutionWakes,
+		&resp.CollaborationEvolution.FullExecutionReductionRate,
 		&resp.CollaborationEvolution.CollaborationSessions,
+		&resp.CollaborationEvolution.TurnOrderViolationRate,
 		&resp.CollaborationEvolution.ContributionOffers,
 		&resp.CollaborationEvolution.ContributionOfferAdoptionRate,
+		&resp.CollaborationEvolution.ContributionOfferHelpfulRate,
 		&resp.CollaborationEvolution.UnauthorizedPublicSendsBlocked,
+		&resp.CollaborationEvolution.PoliciesRetrieved,
+		&resp.CollaborationEvolution.PoliciesUsed,
+		&resp.CollaborationEvolution.PolicySuccessRate,
 		&resp.CollaborationEvolution.AttentionTokens,
 		&resp.CollaborationEvolution.ExecutionTokens,
+		&resp.CollaborationEvolution.EstimatedTokensSaved,
 		&resp.CollaborationEvolution.ImmutableDecisionAuditEvents,
 	)
 }

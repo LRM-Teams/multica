@@ -100,6 +100,7 @@ const COPY = {
   openAgents: "Open agents",
   liveSystem: "Live system",
   thirtyDays: "Last 30 days",
+  metricRange: "Metrics range",
   agentTable: "Agents",
   agentColumn: "Agent",
   learningQueue: "Learning queue",
@@ -271,6 +272,7 @@ const STATUSES = [
 ] as const satisfies EvolutionReviewSubmissionStatus[];
 
 const DAYS = 30;
+const METRIC_DAY_OPTIONS = [7, 30, 90] as const;
 const VIEW_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 const RUN_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
   month: "short",
@@ -467,6 +469,7 @@ export function EvolutionCenterPage() {
   const { userId } = useCurrentMember(wsId);
   const [learningFilter, setLearningFilter] = useState<"all" | "memory" | "skill">("all");
   const [selectedCurationRunId, setSelectedCurationRunId] = useState("");
+  const [metricDays, setMetricDays] = useState<(typeof METRIC_DAY_OPTIONS)[number]>(30);
 
   const { data: agentsData, isLoading: agentsLoading } = useQuery(agentListOptions(wsId));
   const { data: runtimesData } = useQuery(runtimeListOptions(wsId));
@@ -477,7 +480,7 @@ export function EvolutionCenterPage() {
   const { data: candidateData } = useQuery(evolutionReviewSubmissionListOptions(wsId, "candidate"));
   const { data: promotedData } = useQuery(evolutionReviewSubmissionListOptions(wsId, "promoted"));
   const { data: rejectedData } = useQuery(evolutionReviewSubmissionListOptions(wsId, "rejected"));
-  const { data: metricsData } = useQuery(evolutionMetricsOptions(wsId));
+  const { data: metricsData } = useQuery(evolutionMetricsOptions(wsId, metricDays));
   const {
     data: curationStatus,
     isLoading: curationStatusLoading,
@@ -580,6 +583,16 @@ export function EvolutionCenterPage() {
           <Badge variant="secondary" className="hidden md:inline-flex">{copy("liveSystem")}</Badge>
         </div>
         <div className="hidden items-center gap-2 sm:flex">
+          <Select value={String(metricDays)} onValueChange={(value) => setMetricDays(Number(value) as (typeof METRIC_DAY_OPTIONS)[number])}>
+            <SelectTrigger className="h-8 w-[8.5rem] bg-background/80 text-xs" aria-label={copy("metricRange")}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {METRIC_DAY_OPTIONS.map((days) => (
+                <SelectItem key={days} value={String(days)}>Last {days} days</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <AppLink href={paths.agents()} className={buttonVariants({ variant: "outline", size: "sm" })}>
             {copy("openAgents")}
           </AppLink>
@@ -621,9 +634,9 @@ export function EvolutionCenterPage() {
             <MetricCard icon={BrainCircuit} label={copy("memoryReview")} value={String(totals.memoryItems)} detail={`${totals.pending} ${copy("pending").toLowerCase()}`} tone="blue" />
             <MetricCard icon={Lightbulb} label={copy("skillDrafts")} value={String(totals.skillDrafts)} detail={copy("autoDrafts")} tone="amber" />
             <MetricCard icon={CircleDollarSign} label={copy("costEfficiency")} value={money(totals.cost / Math.max(1, totals.taskCount - totals.failedCount))} detail={copy("costPerSuccess")} tone="rose" />
-            <MetricCard icon={GitBranch} label={copy("collaboration")} value={String(collaborationMetrics?.collaboration_sessions ?? 0)} detail={`${collaborationMetrics?.full_execution_wakes ?? 0} turn/response grants`} tone="blue" />
-            <MetricCard icon={Radio} label={copy("attention")} value={String(collaborationMetrics?.attention_rounds ?? 0)} detail={`${pct(collaborationMetrics?.attention_silent_rate ?? 0)} silent`} tone="emerald" />
-            <MetricCard icon={ShieldCheck} label={copy("auditTrail")} value={String(collaborationMetrics?.immutable_decision_audit_events ?? 0)} detail={`${collaborationMetrics?.unauthorized_public_sends_blocked ?? 0} blocked sends`} tone="amber" />
+            <MetricCard icon={GitBranch} label={copy("collaboration")} value={String(collaborationMetrics?.collaboration_sessions ?? 0)} detail={`${collaborationMetrics?.full_execution_wakes ?? 0} turn/response grants · ${metricDays}d`} tone="blue" />
+            <MetricCard icon={Radio} label={copy("attention")} value={String(collaborationMetrics?.attention_rounds ?? 0)} detail={`${pct(collaborationMetrics?.attention_silent_rate ?? 0)} silent · ${pct(collaborationMetrics?.full_execution_reduction_rate ?? 0)} saved`} tone="emerald" />
+            <MetricCard icon={ShieldCheck} label={copy("auditTrail")} value={String(collaborationMetrics?.immutable_decision_audit_events ?? 0)} detail={`${collaborationMetrics?.unauthorized_public_sends_blocked ?? 0} blocked · ${pct(collaborationMetrics?.turn_order_violation_rate ?? 0)} turn risk`} tone="amber" />
           </div>
 
           <Tabs defaultValue="overview" className="gap-4">

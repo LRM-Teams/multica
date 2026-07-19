@@ -371,6 +371,7 @@ const EvolutionTaskEfficiencySchema = z.object({
 }).loose();
 
 const EvolutionCollaborationMetricSchema = z.object({
+  unmentioned_messages: z.number().default(0),
   attention_rounds: z.number().default(0),
   attention_probes: z.number().default(0),
   attention_silent_rate: z.number().default(0),
@@ -378,16 +379,24 @@ const EvolutionCollaborationMetricSchema = z.object({
   peer_converged: z.number().default(0),
   manager_fallbacks: z.number().default(0),
   full_execution_wakes: z.number().default(0),
+  full_execution_reduction_rate: z.number().default(0),
   collaboration_sessions: z.number().default(0),
+  turn_order_violation_rate: z.number().default(0),
   contribution_offers: z.number().default(0),
   contribution_offer_adoption_rate: z.number().default(0),
+  contribution_offer_helpful_rate: z.number().default(0),
   unauthorized_public_sends_blocked: z.number().default(0),
+  policies_retrieved: z.number().default(0),
+  policies_used: z.number().default(0),
+  policy_success_rate: z.number().default(0),
   attention_tokens: z.number().default(0),
   execution_tokens: z.number().default(0),
+  estimated_tokens_saved: z.number().default(0),
   immutable_decision_audit_events: z.number().default(0),
 }).loose();
 
 const EMPTY_EVOLUTION_COLLABORATION_METRICS = {
+  unmentioned_messages: 0,
   attention_rounds: 0,
   attention_probes: 0,
   attention_silent_rate: 0,
@@ -395,13 +404,40 @@ const EMPTY_EVOLUTION_COLLABORATION_METRICS = {
   peer_converged: 0,
   manager_fallbacks: 0,
   full_execution_wakes: 0,
+  full_execution_reduction_rate: 0,
   collaboration_sessions: 0,
+  turn_order_violation_rate: 0,
   contribution_offers: 0,
   contribution_offer_adoption_rate: 0,
+  contribution_offer_helpful_rate: 0,
   unauthorized_public_sends_blocked: 0,
+  policies_retrieved: 0,
+  policies_used: 0,
+  policy_success_rate: 0,
   attention_tokens: 0,
   execution_tokens: 0,
+  estimated_tokens_saved: 0,
   immutable_decision_audit_events: 0,
+};
+
+const EvolutionModelMetricSchema = z.object({
+  attention_student_version: z.string().default(""),
+  attention_student_mode: z.string().default("off"),
+  missed_attention_rate: z.number().default(0),
+  late_rescue_rate: z.number().default(0),
+  context_filter_version: z.string().default(""),
+  context_compression_rate: z.number().default(0),
+  critical_context_recall: z.number().default(0),
+}).loose();
+
+const EMPTY_EVOLUTION_MODEL_METRICS = {
+  attention_student_version: "",
+  attention_student_mode: "off",
+  missed_attention_rate: 0,
+  late_rescue_rate: 0,
+  context_filter_version: "",
+  context_compression_rate: 0,
+  critical_context_recall: 0,
 };
 
 const EMPTY_EVOLUTION_TASK_EFFICIENCY = {
@@ -421,6 +457,7 @@ export const EvolutionMetricsSchema = z.object({
   daily_metrics: z.array(EvolutionDailyMetricSchema).default([]),
   task_efficiency: EvolutionTaskEfficiencySchema.default(EMPTY_EVOLUTION_TASK_EFFICIENCY),
   collaboration_evolution: EvolutionCollaborationMetricSchema.default(EMPTY_EVOLUTION_COLLABORATION_METRICS),
+  model_evolution: EvolutionModelMetricSchema.default(EMPTY_EVOLUTION_MODEL_METRICS),
 }).loose();
 
 export const EMPTY_EVOLUTION_METRICS: EvolutionMetricsResponse = {
@@ -428,6 +465,7 @@ export const EMPTY_EVOLUTION_METRICS: EvolutionMetricsResponse = {
   daily_metrics: [],
   task_efficiency: EMPTY_EVOLUTION_TASK_EFFICIENCY,
   collaboration_evolution: EMPTY_EVOLUTION_COLLABORATION_METRICS,
+  model_evolution: EMPTY_EVOLUTION_MODEL_METRICS,
 };
 
 const EMPTY_MEMORY_CURATION_RUN_STATS = {

@@ -8,7 +8,7 @@ export const evolutionKeys = {
     ["evolution", wsId, "review-submissions", status] as const,
   reviewSubmission: (wsId: string, submissionId: string) =>
     ["evolution", wsId, "review-submissions", submissionId] as const,
-  metrics: (wsId: string) => ["evolution", wsId, "metrics"] as const,
+  metrics: (wsId: string, days = 30) => ["evolution", wsId, "metrics", days] as const,
   memoryCurationStatus: (wsId: string) => ["evolution", wsId, "memory-curation-status"] as const,
   memoryCurationRun: (wsId: string, runId: string) => ["evolution", wsId, "memory-curation-run", runId] as const,
   memoryCuratorProfile: (wsId: string) => ["evolution", wsId, "memory-curator-profile"] as const,
@@ -25,10 +25,10 @@ export function evolutionReviewSubmissionListOptions(
   });
 }
 
-export function evolutionMetricsOptions(wsId: string) {
+export function evolutionMetricsOptions(wsId: string, days = 30) {
   return queryOptions({
-    queryKey: evolutionKeys.metrics(wsId),
-    queryFn: () => api.getEvolutionMetrics(),
+    queryKey: evolutionKeys.metrics(wsId, days),
+    queryFn: () => api.getEvolutionMetrics({ days }),
     enabled: !!wsId,
   });
 }

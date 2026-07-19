@@ -134,6 +134,7 @@ export interface EvolutionTaskEfficiency {
 }
 
 export interface EvolutionCollaborationMetric {
+  unmentioned_messages: number;
   attention_rounds: number;
   attention_probes: number;
   attention_silent_rate: number;
@@ -141,13 +142,30 @@ export interface EvolutionCollaborationMetric {
   peer_converged: number;
   manager_fallbacks: number;
   full_execution_wakes: number;
+  full_execution_reduction_rate: number;
   collaboration_sessions: number;
+  turn_order_violation_rate: number;
   contribution_offers: number;
   contribution_offer_adoption_rate: number;
+  contribution_offer_helpful_rate: number;
   unauthorized_public_sends_blocked: number;
+  policies_retrieved: number;
+  policies_used: number;
+  policy_success_rate: number;
   attention_tokens: number;
   execution_tokens: number;
+  estimated_tokens_saved: number;
   immutable_decision_audit_events: number;
+}
+
+export interface EvolutionModelMetric {
+  attention_student_version: string;
+  attention_student_mode: string;
+  missed_attention_rate: number;
+  late_rescue_rate: number;
+  context_filter_version: string;
+  context_compression_rate: number;
+  critical_context_recall: number;
 }
 
 export interface EvolutionMetricsResponse {
@@ -155,6 +173,7 @@ export interface EvolutionMetricsResponse {
   daily_metrics: EvolutionDailyMetric[];
   task_efficiency: EvolutionTaskEfficiency;
   collaboration_evolution: EvolutionCollaborationMetric;
+  model_evolution: EvolutionModelMetric;
 }
 
 export interface MemoryCurationRunStats {

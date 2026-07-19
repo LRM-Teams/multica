@@ -121,6 +121,10 @@ describe("AgentFilesPanel", () => {
 
   it("shows file tree controls for the creating user", async () => {
     renderPanel(makeAgent());
+    const memory = await screen.findByRole("button", { name: "memory" });
+    expect(memory).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("MEMORY.md")).not.toBeInTheDocument();
+    fireEvent.click(memory);
     expect(await screen.findByText("MEMORY.md")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /show hidden files/i })).toBeInTheDocument();
     expect(api.listAgentFiles).toHaveBeenCalledWith("agent-1", { include_hidden: false });
@@ -138,6 +142,7 @@ describe("AgentFilesPanel", () => {
       canReadFiles: true,
       canEditFiles: false,
     });
+    fireEvent.click(await screen.findByRole("button", { name: "memory" }));
     expect(await screen.findByText("MEMORY.md")).toBeInTheDocument();
     expect(api.listAgentFiles).toHaveBeenCalledWith("agent-1", { include_hidden: false });
 
@@ -156,6 +161,7 @@ describe("AgentFilesPanel", () => {
     });
 
     renderPanel(makeAgent());
+    fireEvent.click(await screen.findByRole("button", { name: "config" }));
     fireEvent.click(await screen.findByText("settings.json"));
 
     const editor = await screen.findByLabelText("File content");
@@ -168,5 +174,23 @@ describe("AgentFilesPanel", () => {
       content: "{\n  \"ok\": false\n}",
       expected_content_hash: "hash-1",
     }));
+  });
+
+  it("keeps long file names within the Files tab width", async () => {
+    const longFileName = "this-is-a-very-long-file-name-that-must-not-widen-the-agent-profile-panel.md";
+    vi.mocked(api.listAgentFiles).mockResolvedValue({
+      agent_id: "agent-1",
+      status: "ok",
+      nodes: [{ path: `memory/${longFileName}`, is_dir: false, size: 12 }],
+      truncated: false,
+    });
+
+    const { container } = renderPanel(makeAgent());
+
+    fireEvent.click(await screen.findByRole("button", { name: "memory" }));
+    const fileName = await screen.findByText(longFileName);
+    expect(fileName).toHaveClass("min-w-0", "flex-1", "truncate");
+    expect(fileName.closest("button")).toHaveClass("min-w-0", "w-full");
+    expect(container.querySelector(".overflow-auto")).toHaveClass("min-w-0");
   });
 });

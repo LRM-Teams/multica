@@ -73,8 +73,14 @@ func (d *Daemon) handleMemoryCuration(ctx context.Context, rt Runtime, pending P
 		dbEvidence[bundle.AgentID] = items
 	}
 	effectiveDryRun := pending.DryRun || strings.EqualFold(strings.TrimSpace(pending.Mode), "observe")
-	res, runErr := memorycuration.NewEngine(reviewer).Run(memorycuration.Options{
-		Context:             ctx,
+	runTimeout := d.cfg.MemoryCurationRunTimeout
+	if runTimeout <= 0 {
+		runTimeout = DefaultMemoryCurationRunTimeout
+	}
+	curationCtx, cancel := context.WithTimeout(ctx, runTimeout)
+	defer cancel()
+	opts := memorycuration.Options{
+		Context:             curationCtx,
 		DBEvidence:          dbEvidence,
 		StageAgent:          stageAgent,
 		WorkspacesRoot:      d.cfg.WorkspacesRoot,
@@ -90,7 +96,50 @@ func (d *Daemon) handleMemoryCuration(ctx context.Context, rt Runtime, pending P
 		Timezone:            pending.Timezone,
 		Mode:                pending.Mode,
 		ConfidenceThreshold: pending.ConfidenceThreshold,
-	})
+	}
+	type engineResult struct {
+		result memorycuration.Result
+		err    error
+	}
+	done := make(chan engineResult, 1)
+	go func() {
+		res, runErr := memorycuration.NewEngine(reviewer).Run(opts)
+		select {
+		case done <- engineResult{result: res, err: runErr}:
+		case <-curationCtx.Done():
+		}
+	}()
+	var res memorycuration.Result
+	var runErr error
+	select {
+	case out := <-done:
+		res = out.result
+		runErr = out.err
+	case <-curationCtx.Done():
+		runErr = fmt.Errorf("memory curation exceeded %s timeout", runTimeout)
+		res = memorycuration.Result{
+			Stage:          stage,
+			WorkspacesRoot: d.cfg.WorkspacesRoot,
+			WorkspaceID:    pending.WorkspaceID,
+			DateFrom:       pending.DateFrom,
+			DateTo:         pending.DateTo,
+			DryRun:         effectiveDryRun,
+			Force:          pending.Force,
+			Timezone:       pending.Timezone,
+			Errors: []memorycuration.AgentError{{
+				WorkspaceID: pending.WorkspaceID,
+				AgentID:     pending.CuratorAgentID,
+				Stage:       stage,
+				Error:       runErr.Error(),
+			}},
+			Events: []memorycuration.RunEvent{{
+				Key:       "invoked_curator",
+				Status:    "failed",
+				Message:   runErr.Error(),
+				CreatedAt: time.Now().UTC().Format(time.RFC3339),
+			}},
+		}
+	}
 	payload["result"] = res
 	if runErr != nil {
 		payload["error"] = runErr.Error()

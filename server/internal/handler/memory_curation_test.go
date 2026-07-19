@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -120,6 +121,90 @@ func TestPublicMemoryCurationStatsProjectsSharedPromotionCounts(t *testing.T) {
 func TestPublicMemoryCurationStatsHandlesMalformedPayload(t *testing.T) {
 	if got := publicMemoryCurationStats([]byte("not-json")); got != (memoryCurationRunStatsResponse{}) {
 		t.Fatalf("stats = %+v, want zero value", got)
+	}
+}
+
+func TestBuildMemoryCurationTimelineKeepsUnfinishedInvocationRunning(t *testing.T) {
+	createdAt := time.Date(2026, 7, 19, 1, 0, 0, 0, time.UTC)
+	startedAt := createdAt.Add(2 * time.Minute)
+	items := buildMemoryCurationTimeline(memoryCurationRunResponse{
+		Status:           "running",
+		TriggerKind:      "scheduled",
+		RuntimeName:      "runtime-89",
+		CuratorAgentName: "xiao-lin",
+		TargetAgentIDs:   []string{"agent-1"},
+	}, []byte(`{}`), createdAt, &startedAt, nil)
+	if len(items) != 3 {
+		t.Fatalf("timeline length = %d, want 3: %+v", len(items), items)
+	}
+	if items[2].Key != "invoked_curator" || items[2].Status != "running" {
+		t.Fatalf("invoked curator item = %+v, want running", items[2])
+	}
+	for _, item := range items {
+		if item.Key == "validated_profile" || item.Key == "resolved_targets" {
+			t.Fatalf("unfinished run should not synthesize completed step %+v", item)
+		}
+	}
+}
+
+func TestMemoryCurationClaimFailsExhaustedStaleRunAndClaimsNext(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("handler test database unavailable")
+	}
+	ctx := context.Background()
+	var runtimeID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (
+		  workspace_id, daemon_id, name, runtime_mode, provider, status,
+		  device_info, metadata, owner_id, visibility, last_seen_at
+		) VALUES ($1, 'memory-curator-stale-daemon', 'Memory Curator Stale Runtime', 'local', 'codex', 'online',
+		          'memory curator stale test', jsonb_build_object('capabilities', jsonb_build_array($2::text)), $3, 'private', now())
+		RETURNING id::text
+	`, testWorkspaceID, protocol.DaemonCapabilityMemoryCuration, testUserID).Scan(&runtimeID); err != nil {
+		t.Fatal(err)
+	}
+	var staleRunID, nextRunID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO memory_curation_run (
+		  workspace_id, stage, trigger_kind, status, date_from, date_to,
+		  runtime_id, execution_owner, attempt, claimed_at, started_at
+		) VALUES ($1, 'agent_self_review', 'scheduled', 'running', '2026-07-18', '2026-07-18',
+		          $2, 'daemon', $3, now() - interval '20 minutes', now())
+		RETURNING id::text
+	`, testWorkspaceID, runtimeID, memoryCurationMaxAttempts).Scan(&staleRunID); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO memory_curation_run (
+		  workspace_id, stage, trigger_kind, status, date_from, date_to,
+		  runtime_id, execution_owner
+		) VALUES ($1, 'team_curation', 'scheduled', 'queued', '2026-07-18', '2026-07-18', $2, 'daemon')
+		RETURNING id::text
+	`, testWorkspaceID, runtimeID).Scan(&nextRunID); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM memory_curation_run WHERE id = ANY($1::uuid[])`, []string{staleRunID, nextRunID})
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+	}()
+
+	rt, err := testHandler.Queries.GetAgentRuntime(ctx, parseUUID(runtimeID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := testHandler.claimPendingMemoryCurationRun(ctx, rt, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending == nil || pending.ID != nextRunID {
+		t.Fatalf("pending = %+v, want next run %s", pending, nextRunID)
+	}
+	var staleStatus, staleError string
+	if err := testPool.QueryRow(ctx, `SELECT status, error FROM memory_curation_run WHERE id = $1`, staleRunID).Scan(&staleStatus, &staleError); err != nil {
+		t.Fatal(err)
+	}
+	if staleStatus != "failed" || !strings.Contains(staleError, "max daemon claim attempts") {
+		t.Fatalf("stale run status/error = %q/%q", staleStatus, staleError)
 	}
 }
 

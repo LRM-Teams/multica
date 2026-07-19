@@ -140,7 +140,7 @@ func (h *Handler) shouldQueueChannelAttention(ch ChannelResponse, content string
 	if !h.channelAttentionModeEnabled() || ch.Kind != "group" {
 		return false
 	}
-	if channelMessageHasAgentMention(content, parts) || channelMessageIsGroupCommand(content, parts) {
+	if strings.Contains(content, "@") || channelMessageHasAgentMention(content, parts) || channelMessageIsGroupCommand(content, parts) {
 		return false
 	}
 	skip, _ := deterministicChannelAmbientRelevanceSkip(content)

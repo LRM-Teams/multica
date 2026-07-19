@@ -273,7 +273,7 @@ describe("AgentSidePanel", () => {
     const { container } = renderPanel("user-owner", undefined, "page");
 
     expect(screen.queryByRole("button", { name: "Close panel" })).not.toBeInTheDocument();
-    expect(container.querySelector("aside")).toHaveClass("min-w-0");
+    expect(container.querySelector("aside")).toHaveClass("min-w-0", "w-full");
     expect(container.querySelector(".overflow-y-auto")).toHaveClass("min-w-0");
     for (const tab of ["Profile", "Activity", "Files"]) {
       expect(screen.getByRole("button", { name: tab })).toHaveClass(
@@ -306,8 +306,9 @@ describe("AgentSidePanel", () => {
   });
 
   it("keeps desktop panel tabs content-width and left aligned", () => {
-    renderPanel();
+    const { container } = renderPanel();
 
+    expect(container.querySelector("aside")).toHaveClass("w-full", "min-w-0");
     const activityTab = screen.getByRole("button", { name: "Activity" });
     expect(activityTab).toHaveClass("shrink-0", "px-3");
     expect(activityTab).not.toHaveClass("flex-1", "justify-center", "min-h-11");

@@ -102,7 +102,12 @@ export function AgentSidePanel({
   }, [tab, variant]);
 
   return (
-    <aside className={cn("flex h-full min-h-0 min-w-0 flex-col bg-background", variant === "panel" && "border-l")}>
+    <aside
+      className={cn(
+        "flex h-full min-h-0 min-w-0 w-full flex-col bg-background",
+        variant === "panel" && "border-l",
+      )}
+    >
       <div className="flex items-center justify-between gap-3 border-b p-4">
         <div className="flex min-w-0 items-center gap-2.5">
           <ActorAvatarBase

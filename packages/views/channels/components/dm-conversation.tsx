@@ -1200,7 +1200,6 @@ function DmChannelConversation({
         agent={selectedAgentPanel}
         currentUserId={currentUserId}
         members={dmMembers}
-        runtimeStats={dm.runtime_stats}
         onClose={() => setSelectedAgentPanelId(null)}
       />
     ) : null;

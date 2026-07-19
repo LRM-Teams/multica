@@ -1,14 +1,16 @@
 "use client";
 
-import { type ReactNode, useLayoutEffect, useRef, useState } from "react";
+import { type ReactNode, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Activity, FileText, User, X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useConfigStore } from "@multica/core/config";
-import type { Agent, MemberWithUser, RuntimeTokenStats } from "@multica/core/types";
+import type { Agent, DashboardUsageByAgent, MemberWithUser } from "@multica/core/types";
 import { runtimeHealthState, runtimeListOptions } from "@multica/core/runtimes";
 import { useAgentPermissions } from "@multica/core/permissions";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { resolveActorDisplayName } from "@multica/core/identity";
+import { dashboardUsageByAgentOptions } from "@multica/core/dashboard/queries";
+import { useCustomPricingStore } from "@multica/core/runtimes/custom-pricing-store";
 import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
 import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
@@ -21,10 +23,10 @@ import { VisibilityPicker } from "../../agents/components/inspector/visibility-p
 import { useUpdateAgent } from "../../agents/hooks/use-update-agent";
 import { useRuntimeHealthStateLabel } from "../../runtimes/components/shared";
 import { PropRow } from "../../common/prop-row";
-import { RuntimeTokenStatsBadge } from "../../common/runtime-token-stats-badge";
 import { initialsOf } from "../../common/initials";
 import { AgentFilesPanel } from "./agent-files-panel";
 import { useT } from "../../i18n/use-t";
+import { estimateCost, formatTokens, isModelPriced } from "../../runtimes/utils";
 
 type OwnerTab = "activity" | "profile" | "files";
 
@@ -38,7 +40,6 @@ interface AgentSidePanelProps {
   agent: Agent;
   currentUserId: string | null;
   members: readonly MemberWithUser[];
-  runtimeStats?: RuntimeTokenStats | null;
   onClose: () => void;
   /** Mobile profile routes reuse this exact tab/body surface without dock chrome. */
   variant?: "panel" | "page";
@@ -61,7 +62,6 @@ export function AgentSidePanel({
   agent,
   currentUserId,
   members,
-  runtimeStats,
   onClose,
   variant = "panel",
 }: AgentSidePanelProps) {
@@ -175,7 +175,6 @@ export function AgentSidePanel({
                   agent={agent}
                   members={members}
                   currentUserId={currentUserId}
-                  runtimeStats={runtimeStats}
                 />
               </div>
             ) : null}
@@ -200,7 +199,6 @@ export function AgentSidePanel({
             agent={agent}
             members={members}
             currentUserId={currentUserId}
-            runtimeStats={runtimeStats}
           />
         </div>
       )}
@@ -242,12 +240,10 @@ function AgentProfileTabContent({
   agent,
   members,
   currentUserId,
-  runtimeStats,
 }: {
   agent: Agent;
   members: readonly MemberWithUser[];
   currentUserId: string | null;
-  runtimeStats?: RuntimeTokenStats | null;
 }) {
   const { t } = useT("agents");
   const wsId = agent.workspace_id;
@@ -284,14 +280,9 @@ function AgentProfileTabContent({
       <div className="space-y-2 border-b p-3 text-xs md:p-4">
         <InfoRow label={t(($) => $.side_panel.created_label)} value={formatDate(agent.created_at)} />
         <InfoRow label={t(($) => $.side_panel.owner_label)} value={ownerName(agent, members)} />
-        <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-2 md:grid-cols-[88px_minmax(0,1fr)]">
-          <span className="text-muted-foreground">{t(($) => $.side_panel.token_usage_label)}</span>
-          <RuntimeTokenStatsBadge
-            stats={runtimeStats}
-            emptyLabel={t(($) => $.side_panel.token_usage_empty)}
-          />
-        </div>
       </div>
+
+      <AgentUsageSection agent={agent} />
 
       {/* Runtime config (editable/gated): the execution attributes the old
           standalone Config tab exposed, merged here so Profile no longer shows
@@ -343,6 +334,70 @@ function AgentProfileTabContent({
         </PropRow>
       </ConfigSection>
     </div>
+  );
+}
+
+function AgentUsageSection({ agent }: { agent: Agent }) {
+  const { t } = useT("agents");
+  const timezone = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone, []);
+  const { data: allUsage = [], isLoading } = useQuery(
+    dashboardUsageByAgentOptions(agent.workspace_id, 30, null, timezone),
+  );
+  // estimateCost resolves custom rates outside React; subscribe so the card
+  // recomputes when the viewer changes one, matching the Usage dashboard.
+  useCustomPricingStore((state) => state.pricings);
+
+  const usage = useMemo(
+    () => allUsage.filter((row) => row.agent_id === agent.id),
+    [agent.id, allUsage],
+  );
+  const tokens = useMemo(() => totalTokens(usage), [usage]);
+  const cost = useMemo(() => usage.reduce((sum, row) => sum + estimateCost(row), 0), [usage]);
+  const canEstimateCost = usage.every((row) => isModelPriced(row.model));
+
+  return (
+    <section className="border-b px-3 py-4 md:px-4" aria-label={t(($) => $.side_panel.usage_section)}>
+      <div className="mb-3">
+        <h3 className="text-sm font-medium text-foreground">{t(($) => $.side_panel.usage_section)}</h3>
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          {t(($) => $.side_panel.usage_reported_window)}
+        </p>
+      </div>
+
+      {isLoading ? (
+        <p className="text-xs text-muted-foreground">{t(($) => $.side_panel.usage_loading)}</p>
+      ) : usage.length === 0 ? (
+        <p className="text-xs text-muted-foreground">{t(($) => $.side_panel.usage_empty)}</p>
+      ) : (
+        <div className="space-y-2 text-xs">
+          <div className="flex items-baseline justify-between gap-3">
+            <span className="text-muted-foreground">{t(($) => $.side_panel.usage_estimated_cost)}</span>
+            <span className="font-medium tabular-nums text-foreground">
+              {canEstimateCost
+                ? new Intl.NumberFormat(undefined, {
+                    style: "currency",
+                    currency: "USD",
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  }).format(cost)
+                : t(($) => $.side_panel.usage_cost_unavailable)}
+            </span>
+          </div>
+          <div className="flex items-baseline justify-between gap-3">
+            <span className="text-muted-foreground">{t(($) => $.side_panel.usage_tokens)}</span>
+            <span className="tabular-nums text-foreground">{formatTokens(tokens)}</span>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function totalTokens(rows: readonly DashboardUsageByAgent[]): number {
+  return rows.reduce(
+    (sum, row) =>
+      sum + row.input_tokens + row.output_tokens + row.cache_read_tokens + row.cache_write_tokens,
+    0,
   );
 }
 

@@ -2438,16 +2438,12 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         }
       />
     ) : null;
-  const selectedAgentMember = selectedAgentPanel
-    ? channelMembers.find((m) => m.member_type === "agent" && m.member_id === selectedAgentPanel.id)
-    : undefined;
   const agentPanel =
     active && selectedAgentPanel ? (
       <AgentSidePanel
         agent={selectedAgentPanel}
         currentUserId={currentUserId}
         members={workspaceMembers}
-        runtimeStats={selectedAgentMember?.runtime_stats}
         onClose={() => setSelectedAgentPanelId(null)}
       />
     ) : null;

@@ -11,7 +11,18 @@ const filesPanelProps = vi.fn();
 // Per-test permission decision for the merged runtime-config section. Group
 // managers override this to always-editable inside the component, so leaving
 // it denied by default lets us assert the read-only path for ordinary agents.
-const { permission } = vi.hoisted(() => ({ permission: { allowed: false } }));
+const { permission, usageRows } = vi.hoisted(() => ({
+  permission: { allowed: false },
+  usageRows: [] as Array<{
+    agent_id: string;
+    model: string;
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_tokens: number;
+    cache_write_tokens: number;
+    task_count: number;
+  }>,
+}));
 
 vi.mock("@multica/core/workspace/avatar-url", () => ({
   resolvePublicFileUrl: () => null,
@@ -71,12 +82,26 @@ vi.mock("../../runtimes/components/shared", () => ({
   useRuntimeHealthStateLabel: () => (state: string) => state,
 }));
 vi.mock("@tanstack/react-query", () => ({
-  useQuery: () => ({ data: [] }),
+  useQuery: (options: { kind?: string }) => ({
+    data: options.kind === "usage-by-agent" ? usageRows : [],
+    isLoading: false,
+  }),
 }));
 vi.mock("@multica/core/runtimes", () => ({
   runtimeListOptions: () => ({ queryKey: ["runtimes"] }),
   runtimeHealthState: () => "ok",
 }));
+vi.mock("@multica/core/dashboard/queries", () => ({
+  dashboardUsageByAgentOptions: () => ({ kind: "usage-by-agent" }),
+}));
+vi.mock("@multica/core/runtimes/custom-pricing-store", () => {
+  const state = { pricings: {} as Record<string, unknown> };
+  const useCustomPricingStore = Object.assign(
+    (selector?: (value: typeof state) => unknown) => (selector ? selector(state) : state),
+    { getState: () => state },
+  );
+  return { useCustomPricingStore, getCustomPricing: () => undefined };
+});
 
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
@@ -96,8 +121,13 @@ const RESOURCES = {
     no_description: "No description",
     created_label: "Created",
     owner_label: "Owner",
-    token_usage_label: "Tokens",
-    token_usage_empty: "0 tokens",
+    usage_section: "Usage",
+    usage_reported_window: "Last 30 days · reported usage only",
+    usage_loading: "Loading reported usage…",
+    usage_empty: "No reported usage yet",
+    usage_estimated_cost: "Estimated cost",
+    usage_cost_unavailable: "Unavailable",
+    usage_tokens: "Tokens",
     runtime_section: "Runtime Config",
   },
   inspector: {
@@ -171,6 +201,7 @@ describe("AgentSidePanel", () => {
     vi.clearAllMocks();
     configStore.setState({ agentProfileDevAccessEnabled: false });
     permission.allowed = false;
+    usageRows.length = 0;
   });
 
   it("keeps non-owner access to profile only by default", () => {
@@ -180,10 +211,48 @@ describe("AgentSidePanel", () => {
     expect(screen.queryByRole("button", { name: "Files" })).not.toBeInTheDocument();
   });
 
-  it("shows a zero-token baseline before a legacy chat session reports stats", () => {
+  it("shows a standalone reported-usage card instead of a fake session-token baseline", () => {
     renderPanel("user-owner");
+    expect(screen.getByRole("region", { name: "Usage" })).toBeInTheDocument();
+    expect(screen.getByText("Last 30 days · reported usage only")).toBeInTheDocument();
+    expect(screen.getByText("No reported usage yet")).toBeInTheDocument();
+    expect(screen.queryByText("0 tokens")).not.toBeInTheDocument();
+  });
+
+  it("shows an estimated cost and secondary token total for reported usage", () => {
+    usageRows.push({
+      agent_id: "agent-1",
+      model: "claude-sonnet-4-6",
+      input_tokens: 1_000_000,
+      output_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      task_count: 1,
+    });
+
+    renderPanel("user-owner");
+
+    expect(screen.getByText("Estimated cost")).toBeInTheDocument();
+    expect(screen.getByText("$3.00")).toBeInTheDocument();
     expect(screen.getByText("Tokens")).toBeInTheDocument();
-    expect(screen.getByText("0 tokens")).toBeInTheDocument();
+    expect(screen.getByText("1M")).toBeInTheDocument();
+  });
+
+  it("does not invent a cost when a reported model has no pricing", () => {
+    usageRows.push({
+      agent_id: "agent-1",
+      model: "unpriced-model",
+      input_tokens: 1_000,
+      output_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      task_count: 1,
+    });
+
+    renderPanel("user-owner");
+
+    expect(screen.getByText("Unavailable")).toBeInTheDocument();
+    expect(screen.getByText("1K")).toBeInTheDocument();
   });
 
   it("shows Activity and read-only Files tabs for non-owners in dev access mode", () => {

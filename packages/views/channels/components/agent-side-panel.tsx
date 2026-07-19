@@ -73,8 +73,19 @@ export function AgentSidePanel({
   if (canInspectAgent) availableTabs.push("activity", "files");
   const showTabBar = availableTabs.length > 1;
   const [tab, setTab] = useState<OwnerTab>("profile");
+  const [mountedTabs, setMountedTabs] = useState<Set<OwnerTab>>(() => new Set(["profile"]));
   const displayName = resolveActorDisplayName(agent, agent.id);
   const initials = initialsOf(displayName);
+  const selectTab = (nextTab: OwnerTab) => {
+    setTab(nextTab);
+    if (variant === "page") {
+      setMountedTabs((current) =>
+        current.has(nextTab) ? current : new Set([...current, nextTab]),
+      );
+    }
+  };
+  const renderTab = (tabId: OwnerTab) =>
+    variant === "page" ? mountedTabs.has(tabId) : tab === tabId;
 
   return (
     <aside className={cn("flex h-full min-h-0 flex-col bg-background", variant === "panel" && "border-l")}>
@@ -116,9 +127,10 @@ export function AgentSidePanel({
                 <button
                   key={tabId}
                   type="button"
-                  onClick={() => setTab(tabId)}
+                  onClick={() => selectTab(tabId)}
                   className={cn(
                     "flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-2.5 text-xs font-medium transition-colors",
+                    variant === "page" && "min-h-11",
                     tab === tabId
                       ? "border-foreground text-foreground"
                       : "border-transparent text-muted-foreground hover:text-foreground",
@@ -131,26 +143,34 @@ export function AgentSidePanel({
             })}
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto">
-            {tab === "activity" && canInspectAgent && <ActivityTab agent={agent} />}
-            {tab === "profile" && (
-              <AgentProfileTabContent
-                agent={agent}
-                members={members}
-                currentUserId={currentUserId}
-                runtimeStats={runtimeStats}
-              />
-            )}
-            {tab === "files" && canInspectAgent && (
-              <AgentFilesPanel
-                agent={agent}
-                currentUserId={currentUserId}
-                members={members}
-                canReadFiles={canInspectAgent}
-                canEditFiles={isOwner}
-                onClose={onClose}
-                hideHeader
-              />
-            )}
+            {renderTab("activity") && canInspectAgent ? (
+              <div className={tab === "activity" ? undefined : "hidden"}>
+                <ActivityTab agent={agent} />
+              </div>
+            ) : null}
+            {renderTab("profile") ? (
+              <div className={tab === "profile" ? undefined : "hidden"}>
+                <AgentProfileTabContent
+                  agent={agent}
+                  members={members}
+                  currentUserId={currentUserId}
+                  runtimeStats={runtimeStats}
+                />
+              </div>
+            ) : null}
+            {renderTab("files") && canInspectAgent ? (
+              <div className={tab === "files" ? undefined : "hidden"}>
+                <AgentFilesPanel
+                  agent={agent}
+                  currentUserId={currentUserId}
+                  members={members}
+                  canReadFiles={canInspectAgent}
+                  canEditFiles={isOwner}
+                  onClose={onClose}
+                  hideHeader
+                />
+              </div>
+            ) : null}
           </div>
         </>
       ) : (

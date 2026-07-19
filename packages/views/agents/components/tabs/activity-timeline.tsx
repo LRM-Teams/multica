@@ -191,7 +191,7 @@ function ActivityRow({
           />
           <span className="min-w-0 flex-1 pt-0.5">
             <span className="block text-sm text-foreground">{label}</span>
-            {subtext && (
+            {!expanded && subtext && (
               <span
                 className={cn(
                   "mt-0.5 block text-xs text-muted-foreground",
@@ -212,7 +212,7 @@ function ActivityRow({
             ref={detailRef}
             data-testid="activity-expanded-detail"
             className={cn(
-              "relative ml-[4.875rem] mt-1 rounded-md border bg-muted/20 px-3 py-2 text-sm text-foreground sm:ml-[5.25rem]",
+              "relative ml-[4.875rem] mt-1 text-xs text-muted-foreground sm:ml-[5.25rem]",
               ACTIVITY_DETAIL_SCROLL_HEIGHT_CLASS,
               detailOverflowed ? "overflow-y-auto overscroll-contain" : "overflow-visible",
             )}
@@ -223,7 +223,7 @@ function ActivityRow({
           >
             {isCommand ? (
               <div className="relative">
-                <pre className="overflow-x-auto pr-14 font-mono text-xs leading-5 whitespace-pre-wrap break-words">
+                <pre className="overflow-x-auto bg-muted/30 px-2 py-1.5 pr-14 font-mono text-xs leading-5 whitespace-pre-wrap break-words">
                   <code>{expansion.content}</code>
                 </pre>
                 <button
@@ -239,7 +239,7 @@ function ActivityRow({
               <MemoizedMarkdown
                 mode="minimal"
                 enableStickerShortcodes={false}
-                className="activity-expanded-markdown break-words text-sm leading-6 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0"
+                className="activity-expanded-markdown break-words text-xs leading-5 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0"
               >
                 {expansion.content}
               </MemoizedMarkdown>

@@ -280,6 +280,11 @@ describe("ActivityTimeline", () => {
     expect(header).toHaveAttribute("aria-controls");
     expect(detail).toHaveAttribute("id", header.getAttribute("aria-controls"));
     expect(header.contains(detail)).toBe(false);
+    // Expanded content replaces the compact preview in the same text column;
+    // it is not rendered as a second bordered card below the row.
+    expect(header).not.toHaveTextContent(markdownOutput.text!);
+    expect(detail).toHaveClass("ml-[4.875rem]", "mt-1", "text-xs", "text-muted-foreground");
+    expect(detail).not.toHaveClass("rounded-md", "border", "bg-muted/20", "px-3", "py-2");
     const markdown = screen.getByTestId("activity-markdown");
     expect(markdown).toHaveAttribute("data-source", markdownOutput.text!);
     expect(markdown).toHaveAttribute("data-sticker-shortcodes", "false");

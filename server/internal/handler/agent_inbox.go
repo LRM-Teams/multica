@@ -73,7 +73,7 @@ type AgentInboxLeaseResponse struct {
 }
 
 func (h *Handler) publishAgentInboxTaskLifecycle(eventType string, event db.AgentInboxEvent, runtimeID pgtype.UUID, status string) {
-	if h == nil || h.Bus == nil || !event.RequiresWake || isChannelAttentionInboxEvent(event) {
+	if h == nil || h.Bus == nil || !event.RequiresWake || isChannelAttentionInboxEvent(event) || isChannelAttentionProtocolTurnInboxEvent(event) {
 		return
 	}
 	payload := map[string]any{
@@ -534,11 +534,17 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 
 	task := agentInboxSyntheticTask(event, h.runtimeIDForAgentInboxDelivery(r.Context(), deliveryID))
 	attentionProbe := isChannelAttentionInboxEvent(event)
+	protocolTurn := isChannelAttentionProtocolTurnInboxEvent(event)
 	var attentionDecision channelAttentionDecision
+	var convergenceVote channelAttentionConvergenceVote
 	var attentionExecutionID pgtype.UUID
-	if attentionProbe {
+	if attentionProbe || protocolTurn {
 		var parseErr error
-		attentionDecision, parseErr = parseChannelAttentionDecision(req.InternalOutput)
+		if attentionProbe {
+			attentionDecision, parseErr = parseChannelAttentionDecision(req.InternalOutput)
+		} else {
+			convergenceVote, parseErr = parseChannelAttentionConvergenceVote(req.InternalOutput)
+		}
 		if parseErr != nil {
 			writeError(w, http.StatusBadRequest, parseErr.Error())
 			return
@@ -549,12 +555,12 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 			return
 		}
 		if len(req.Usage) == 0 {
-			writeError(w, http.StatusBadRequest, "attention probe usage is required")
+			writeError(w, http.StatusBadRequest, "restricted protocol usage is required")
 			return
 		}
 		for _, usage := range req.Usage {
 			if strings.TrimSpace(usage.Provider) == "" || strings.TrimSpace(usage.Model) == "" || usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.CacheReadTokens < 0 || usage.CacheWriteTokens < 0 {
-				writeError(w, http.StatusBadRequest, "invalid attention probe usage")
+				writeError(w, http.StatusBadRequest, "invalid restricted protocol usage")
 				return
 			}
 		}
@@ -584,7 +590,7 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 	}
 	defer tx.Rollback(r.Context())
 	qtx := h.Queries.WithTx(tx)
-	if attentionProbe {
+	if attentionProbe || protocolTurn {
 		if _, err := tx.Exec(r.Context(), `SELECT pg_advisory_xact_lock(hashtext('channel_attention_lifecycle'))`); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to lock attention lifecycle")
 			return
@@ -625,6 +631,12 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 			writeError(w, http.StatusConflict, "failed to record attention decision: "+err.Error())
 			return
 		}
+	} else if protocolTurn {
+		attentionCompletion, err = h.completeChannelAttentionConvergenceVoteTx(r.Context(), tx, event, attentionExecutionID, convergenceVote)
+		if err != nil {
+			writeError(w, http.StatusConflict, "failed to record attention convergence vote: "+err.Error())
+			return
+		}
 	}
 	var chatDonePayload *protocol.ChatDonePayload
 	if event.ChatSessionID.Valid {
@@ -649,7 +661,7 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		chatDonePayload = payload
 	}
 	terminalOutcome := agentInboxCompletionTerminalOutcome(r.Context(), h, event, req.TaskCompleteRequest, chatDonePayload)
-	if attentionProbe {
+	if attentionProbe || protocolTurn {
 		terminalOutcome = "no_reply"
 	}
 	if req.MustReplyFailure {
@@ -677,7 +689,7 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "failed to commit inbox completion")
 		return
 	}
-	if attentionProbe && h.Metrics != nil {
+	if (attentionProbe || protocolTurn) && h.Metrics != nil {
 		h.Metrics.RecordChannelAttentionProbe(attentionCompletion.decision, "completed")
 		h.Metrics.RecordChannelAttentionProbeTokens("input", attentionCompletion.inputTokens)
 		h.Metrics.RecordChannelAttentionProbeTokens("output", attentionCompletion.outputTokens)
@@ -687,7 +699,10 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		}
 	}
 	h.persistChatRuntimeTokenStats(r.Context(), event.ChatSessionID, req.RuntimeStats)
-	if !req.MustReplyFailure && !attentionProbe {
+	for _, wake := range attentionCompletion.wakes {
+		h.recordChannelAgentPromptWake(r.Context(), wake.channel, wake.agent, wake.trigger, wake.reason, wake.result)
+	}
+	if !req.MustReplyFailure && !attentionProbe && !protocolTurn {
 		h.TaskService.RecordEvolutionSkillOutcome(r.Context(), event.ID, "success", "success")
 	}
 	if chatDonePayload != nil {

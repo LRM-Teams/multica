@@ -172,9 +172,33 @@ type agentTransportSource struct {
 	inboxEventID pgtype.UUID
 }
 
+func (h *Handler) requireAgentTransportPublicResponseGrant(ctx context.Context, source agentTransportSource) error {
+	if !source.inboxEventID.Valid {
+		return nil
+	}
+	var deliveryMode, responseMode string
+	if err := h.DB.QueryRow(ctx, `
+		SELECT delivery_mode, response_mode
+		FROM agent_inbox_event
+		WHERE id = $1`, source.inboxEventID).Scan(&deliveryMode, &responseMode); err != nil {
+		return err
+	}
+	if responseMode != "public_response" {
+		return fmt.Errorf("agent inbox event response_mode %q does not grant public channel output", responseMode)
+	}
+	if deliveryMode == "attention" {
+		return errors.New("restricted attention delivery cannot publish channel output")
+	}
+	return nil
+}
+
 func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Request) {
 	source, ok := h.requireAgentTransportSource(w, r)
 	if !ok {
+		return
+	}
+	if err := h.requireAgentTransportPublicResponseGrant(r.Context(), source); err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
 		return
 	}
 	var req AgentTransportSendRequest
@@ -293,6 +317,10 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 func (h *Handler) AgentTransportReactMessage(w http.ResponseWriter, r *http.Request) {
 	source, ok := h.requireAgentTransportSource(w, r)
 	if !ok {
+		return
+	}
+	if err := h.requireAgentTransportPublicResponseGrant(r.Context(), source); err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
 		return
 	}
 	var req AgentTransportReactRequest

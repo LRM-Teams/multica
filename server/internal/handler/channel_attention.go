@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
@@ -24,6 +25,9 @@ const (
 	channelUnmentionedModeAttentionRound = "attention_round"
 	channelUnmentionedModeLegacyFull     = "legacy_full"
 	channelAttentionOutboxBatchSize      = 64
+	channelAttentionResponseGrantReason  = "attention_response_grant"
+	channelAttentionConvergenceReason    = "attention_convergence"
+	channelAttentionManagerReason        = "attention_manager_fallback"
 )
 
 var channelAllMentionPattern = regexp.MustCompile(`(?i)(^|[\s，。！？、,:;])[@＠]all(?:$|[\s，。！？、,:;])`)
@@ -51,6 +55,31 @@ type channelAttentionCompletion struct {
 	latencyMS     int64
 	roundResolved bool
 	roundOutcome  string
+	wakes         []channelAttentionWake
+}
+
+type channelAttentionWake struct {
+	channel ChannelResponse
+	agent   db.Agent
+	trigger ChannelMessageResponse
+	reason  string
+	result  channelAgentPromptTxResult
+}
+
+type channelAttentionConvergenceVote struct {
+	Vote          string `json:"vote"`
+	TargetAgentID string `json:"target_agent_id"`
+	Summary       string `json:"summary"`
+}
+
+type channelAttentionRoundContext struct {
+	workspaceID pgtype.UUID
+	channelID   pgtype.UUID
+	triggerID   pgtype.UUID
+	seqFrom     int64
+	seqTo       int64
+	channel     ChannelResponse
+	trigger     ChannelMessageResponse
 }
 
 func (h *Handler) channelAttentionModeEnabled() bool {
@@ -896,6 +925,52 @@ func parseChannelAttentionDecision(raw json.RawMessage) (channelAttentionDecisio
 	return decision, nil
 }
 
+func parseChannelAttentionConvergenceVote(raw json.RawMessage) (channelAttentionConvergenceVote, error) {
+	var vote channelAttentionConvergenceVote
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" {
+		return vote, errors.New("attention convergence internal_output is required")
+	}
+	if len([]byte(trimmed)) > 2*1024 {
+		return vote, errors.New("attention convergence internal_output exceeds 2048 bytes")
+	}
+	decoder := json.NewDecoder(strings.NewReader(trimmed))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&vote); err != nil {
+		return vote, fmt.Errorf("invalid attention convergence internal_output: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return vote, errors.New("attention convergence internal_output must contain exactly one JSON object")
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(trimmed), &fields); err != nil || fields == nil {
+		return vote, errors.New("attention convergence internal_output must be a JSON object")
+	}
+	if len(fields) != 3 {
+		return vote, errors.New("attention convergence internal_output must contain exactly three fields")
+	}
+	for _, key := range []string{"vote", "target_agent_id", "summary"} {
+		value, ok := fields[key]
+		if !ok || strings.TrimSpace(string(value)) == "null" {
+			return vote, fmt.Errorf("attention convergence internal_output missing field %q", key)
+		}
+	}
+	switch vote.Vote {
+	case "YIELD", "KEEP", "MERGE", "REQUEST_MANAGER":
+	default:
+		return vote, fmt.Errorf("invalid attention convergence vote %q", vote.Vote)
+	}
+	if len([]byte(vote.Summary)) > 1024 {
+		return vote, errors.New("attention convergence summary exceeds 1024 bytes")
+	}
+	if vote.TargetAgentID != "" {
+		if _, err := uuid.Parse(vote.TargetAgentID); err != nil {
+			return vote, errors.New("attention convergence target_agent_id must be a UUID or empty string")
+		}
+	}
+	return vote, nil
+}
+
 func (h *Handler) completeChannelAttentionParticipantTx(ctx context.Context, tx pgx.Tx, event db.AgentInboxEvent, executionID pgtype.UUID, decision channelAttentionDecision) (channelAttentionCompletion, error) {
 	var participantID, roundID pgtype.UUID
 	var participantStatus string
@@ -974,16 +1049,429 @@ func (h *Handler) completeChannelAttentionParticipantTx(ctx context.Context, tx 
 		return channelAttentionCompletion{}, err
 	}
 	roundOutcome := ""
+	var wakes []channelAttentionWake
 	if resolved {
 		roundOutcome, err = channelAttentionRoundOutcomeTx(ctx, tx, roundID)
+		if err != nil {
+			return channelAttentionCompletion{}, err
+		}
+		wakes, err = h.resolveCompletedChannelAttentionRoundTx(ctx, tx, roundID)
 		if err != nil {
 			return channelAttentionCompletion{}, err
 		}
 	}
 	return channelAttentionCompletion{
 		decision: decision.Decision, inputTokens: inputTokens, outputTokens: outputTokens,
-		latencyMS: latencyMS, roundResolved: resolved, roundOutcome: roundOutcome,
+		latencyMS: latencyMS, roundResolved: resolved, roundOutcome: roundOutcome, wakes: wakes,
 	}, nil
+}
+
+func (h *Handler) resolveCompletedChannelAttentionRoundTx(ctx context.Context, tx pgx.Tx, roundID pgtype.UUID) ([]channelAttentionWake, error) {
+	if h == nil {
+		return nil, nil
+	}
+	roundCtx, err := h.channelAttentionRoundContextTx(ctx, tx, roundID)
+	if err != nil {
+		return nil, err
+	}
+	if err := upsertChannelAttentionContributionOffersTx(ctx, tx, roundID); err != nil {
+		return nil, err
+	}
+
+	type answerCandidate struct {
+		participantID pgtype.UUID
+		agentID       pgtype.UUID
+		confidence    float64
+		summary       string
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT id, agent_id, COALESCE(confidence, 0), summary
+		FROM channel_attention_participant
+		WHERE round_id = $1 AND status = 'decided' AND decision = 'ANSWER'
+		ORDER BY COALESCE(confidence, 0) DESC, completed_at ASC, agent_id ASC`, roundID)
+	if err != nil {
+		return nil, err
+	}
+	var answers []answerCandidate
+	for rows.Next() {
+		var item answerCandidate
+		if err := rows.Scan(&item.participantID, &item.agentID, &item.confidence, &item.summary); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		answers = append(answers, item)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	var coordinateCount, decidedCount, unsuccessfulCount int
+	if err := tx.QueryRow(ctx, `
+		SELECT count(*) FILTER (WHERE status = 'decided' AND decision = 'COORDINATE')::int,
+		       count(*) FILTER (WHERE status = 'decided')::int,
+		       count(*) FILTER (WHERE status IN ('failed', 'timed_out', 'unavailable'))::int
+		FROM channel_attention_participant
+		WHERE round_id = $1`, roundID).Scan(&coordinateCount, &decidedCount, &unsuccessfulCount); err != nil {
+		return nil, err
+	}
+
+	switch len(answers) {
+	case 0:
+		if coordinateCount > 0 || (decidedCount == 0 && unsuccessfulCount > 0) {
+			return h.grantChannelAttentionManagerFallbackTx(ctx, tx, roundCtx, roundID, "coordinate_or_all_failed")
+		}
+		return nil, nil
+	case 1:
+		return h.grantChannelAttentionResponderTx(ctx, tx, roundCtx, roundID, answers[0].agentID, "unique_answer", "single ANSWER decision")
+	default:
+		return nil, h.createChannelAttentionConvergenceTurnsTx(ctx, tx, roundCtx, roundID)
+	}
+}
+
+func (h *Handler) channelAttentionRoundContextTx(ctx context.Context, tx pgx.Tx, roundID pgtype.UUID) (channelAttentionRoundContext, error) {
+	var rc channelAttentionRoundContext
+	if err := tx.QueryRow(ctx, `
+		SELECT workspace_id, channel_id, trigger_message_id, seq_from, seq_to
+		FROM channel_attention_round
+		WHERE id = $1`, roundID).Scan(&rc.workspaceID, &rc.channelID, &rc.triggerID, &rc.seqFrom, &rc.seqTo); err != nil {
+		return rc, err
+	}
+	ch, ok := h.getChannel(ctx, uuidToString(rc.workspaceID), rc.channelID)
+	if !ok {
+		return rc, errors.New("attention round channel not found")
+	}
+	rc.channel = ch
+	row := tx.QueryRow(ctx, `
+		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
+		FROM channel_message
+		WHERE workspace_id = $1 AND channel_id = $2 AND (($3::uuid IS NOT NULL AND id = $3) OR ($3::uuid IS NULL AND seq = $4))
+		ORDER BY seq DESC
+		LIMIT 1`, rc.workspaceID, rc.channelID, nullableUUID(rc.triggerID), rc.seqTo)
+	trigger, err := scanChannelMessage(row)
+	if err != nil {
+		return rc, fmt.Errorf("load attention round trigger: %w", err)
+	}
+	rc.trigger = trigger
+	return rc, nil
+}
+
+func upsertChannelAttentionContributionOffersTx(ctx context.Context, tx pgx.Tx, roundID pgtype.UUID) error {
+	_, err := tx.Exec(ctx, `
+		INSERT INTO channel_attention_contribution_offer (
+		  round_id, participant_id, agent_id, offer_source, value_type, summary, evidence_refs
+		)
+		SELECT round_id, id, agent_id, 'attention_decision',
+		       CASE WHEN value_type = 'none' THEN 'unique_evidence' ELSE value_type END,
+		       summary, evidence_refs
+		FROM channel_attention_participant
+		WHERE round_id = $1
+		  AND status = 'decided'
+		  AND decision = 'CONTRIBUTE'
+		  AND value_type IS NOT NULL
+		  AND value_type <> 'none'
+		ON CONFLICT (round_id, agent_id, offer_source)
+		DO UPDATE SET
+		  participant_id = EXCLUDED.participant_id,
+		  value_type = EXCLUDED.value_type,
+		  summary = EXCLUDED.summary,
+		  evidence_refs = EXCLUDED.evidence_refs,
+		  updated_at = now()`, roundID)
+	return err
+}
+
+func (h *Handler) grantChannelAttentionResponderTx(ctx context.Context, tx pgx.Tx, rc channelAttentionRoundContext, roundID, agentID pgtype.UUID, grantType, reason string) ([]channelAttentionWake, error) {
+	agent, err := h.Queries.WithTx(tx).GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: agentID, WorkspaceID: rc.workspaceID})
+	if err != nil {
+		return nil, err
+	}
+	prompt, err := h.buildChannelAttentionGrantPromptTx(ctx, tx, roundID, rc, false, reason)
+	if err != nil {
+		return nil, err
+	}
+	result, err := h.enqueueChannelAgentPromptRangeWithTx(ctx, h.Queries.WithTx(tx), tx, rc.channel, agent, rc.trigger, pgtype.UUID{}, prompt, channelAttentionResponseGrantReason, 10, rc.seqFrom, rc.seqTo)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO channel_attention_response_grant (round_id, agent_id, inbox_event_id, grant_type, reason)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (round_id) DO NOTHING`, roundID, agentID, result.Event.ID, grantType, reason); err != nil {
+		return nil, err
+	}
+	return []channelAttentionWake{{channel: rc.channel, agent: agent, trigger: rc.trigger, reason: channelAttentionResponseGrantReason, result: result}}, nil
+}
+
+func (h *Handler) grantChannelAttentionManagerFallbackTx(ctx context.Context, tx pgx.Tx, rc channelAttentionRoundContext, roundID pgtype.UUID, reason string) ([]channelAttentionWake, error) {
+	managerID, ok := h.resolveGroupManagerForChannel(ctx, rc.workspaceID, rc.channelID)
+	if !ok {
+		return nil, nil
+	}
+	manager, err := h.Queries.WithTx(tx).GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: managerID, WorkspaceID: rc.workspaceID})
+	if err != nil {
+		return nil, err
+	}
+	prompt, err := h.buildChannelAttentionGrantPromptTx(ctx, tx, roundID, rc, true, reason)
+	if err != nil {
+		return nil, err
+	}
+	result, err := h.enqueueChannelAgentPromptRangeWithTx(ctx, h.Queries.WithTx(tx), tx, rc.channel, manager, rc.trigger, pgtype.UUID{}, prompt, channelAttentionManagerReason, 10, rc.seqFrom, rc.seqTo)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO channel_attention_response_grant (round_id, agent_id, inbox_event_id, grant_type, reason)
+		VALUES ($1, $2, $3, 'manager_fallback', $4)
+		ON CONFLICT (round_id) DO NOTHING`, roundID, managerID, result.Event.ID, reason); err != nil {
+		return nil, err
+	}
+	return []channelAttentionWake{{channel: rc.channel, agent: manager, trigger: rc.trigger, reason: channelAttentionManagerReason, result: result}}, nil
+}
+
+func (h *Handler) createChannelAttentionConvergenceTurnsTx(ctx context.Context, tx pgx.Tx, rc channelAttentionRoundContext, roundID pgtype.UUID) error {
+	type candidate struct {
+		participantID pgtype.UUID
+		agentID       pgtype.UUID
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT id, agent_id
+		FROM channel_attention_participant
+		WHERE round_id = $1 AND status = 'decided' AND decision = 'ANSWER'
+		ORDER BY COALESCE(confidence, 0) DESC, completed_at ASC, agent_id`, roundID)
+	if err != nil {
+		return err
+	}
+	var candidates []candidate
+	for rows.Next() {
+		var item candidate
+		if err := rows.Scan(&item.participantID, &item.agentID); err != nil {
+			rows.Close()
+			return err
+		}
+		candidates = append(candidates, item)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, item := range candidates {
+		var exists bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM channel_attention_convergence_vote WHERE round_id = $1 AND agent_id = $2)`, roundID, item.agentID).Scan(&exists); err != nil {
+			return err
+		}
+		if exists {
+			continue
+		}
+		agent, err := h.Queries.WithTx(tx).GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: item.agentID, WorkspaceID: rc.workspaceID})
+		if err != nil {
+			return err
+		}
+		prompt, err := h.buildChannelAttentionConvergencePromptTx(ctx, tx, roundID, rc)
+		if err != nil {
+			return err
+		}
+		eventID, err := h.enqueueChannelAttentionProtocolTurnTx(ctx, tx, rc, agent, prompt, channelAttentionConvergenceReason)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO channel_attention_convergence_vote (round_id, participant_id, agent_id, inbox_event_id)
+			VALUES ($1, $2, $3, $4)
+			ON CONFLICT (round_id, agent_id) DO NOTHING`, roundID, item.participantID, item.agentID, eventID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (h *Handler) enqueueChannelAttentionProtocolTurnTx(ctx context.Context, tx pgx.Tx, rc channelAttentionRoundContext, agent db.Agent, prompt, reason string) (pgtype.UUID, error) {
+	qtx := h.Queries.WithTx(tx)
+	session, err := h.ensureChannelAgentSessionWithDB(ctx, qtx, tx, rc.channel, agent.ID, pgtype.UUID{})
+	if err != nil {
+		return pgtype.UUID{}, err
+	}
+	promptMsg, err := h.createChannelAgentPromptMessageWithDB(ctx, tx, session.ID, prompt, rc.channel.Kind, rc.trigger)
+	if err != nil {
+		return pgtype.UUID{}, err
+	}
+	conversationID, err := h.channelConversationIDWithDB(ctx, tx, rc.channelID)
+	if err != nil {
+		return pgtype.UUID{}, err
+	}
+	agentSession, err := qtx.UpsertAgentSession(ctx, db.UpsertAgentSessionParams{
+		WorkspaceID:    rc.workspaceID,
+		AgentID:        agent.ID,
+		ConversationID: conversationID,
+		Scope:          channelAgentSessionScope(rc.channel.Kind),
+		ChannelID:      rc.channelID,
+		ChatSessionID:  session.ID,
+	})
+	if err != nil {
+		return pgtype.UUID{}, err
+	}
+	var eventID pgtype.UUID
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO agent_inbox_event (
+		  workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id,
+		  agent_id, runtime_id, execution_config, source_message_id, reason,
+		  delivery_mode, response_mode, requires_wake, status, priority, seq_from, seq_to
+		)
+		SELECT $1, $2, $3, $4, $5, agent.id, agent.runtime_id,
+		       jsonb_build_object('execution_config', jsonb_build_object(
+		         'model', COALESCE(agent.model, ''),
+		         'thinking_level', COALESCE(agent.thinking_level, ''),
+		         'execution_profile', $8,
+		         'context_messages', 8,
+		         'memory_budget_bytes', 4096,
+		         'max_output_tokens', 96,
+		         'tools_enabled', false,
+		         'snapshotted', true
+		       )),
+		       $6, $7, 'attention', 'convergence_vote', true, 'pending', 2, $9, $10
+		FROM agent
+		WHERE agent.id = $11
+		RETURNING id`, rc.workspaceID, agentSession.ID, conversationID, rc.channelID, session.ID,
+		channelAmbientTriggerID(rc.trigger), reason, service.ExecutionProfileProtocolTurn, rc.seqFrom, rc.seqTo, agent.ID).Scan(&eventID); err != nil {
+		return pgtype.UUID{}, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE chat_message SET task_id = $1 WHERE id = $2`, eventID, promptMsg.ID); err != nil {
+		return pgtype.UUID{}, err
+	}
+	return eventID, nil
+}
+
+func (h *Handler) buildChannelAttentionGrantPromptTx(ctx context.Context, tx pgx.Tx, roundID pgtype.UUID, rc channelAttentionRoundContext, manager bool, reason string) (string, error) {
+	bundle, err := channelAttentionMessageBundleTx(ctx, tx, rc.channelID, rc.seqFrom, rc.seqTo)
+	if err != nil {
+		return "", err
+	}
+	decisions, err := channelAttentionDecisionLinesTx(ctx, tx, roundID)
+	if err != nil {
+		return "", err
+	}
+	offers, err := channelAttentionOfferLinesTx(ctx, tx, roundID)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	if manager {
+		b.WriteString("Attention round could not auto-select a single responder. You are the group manager fallback and have public_response authorization. Resolve the conflict or coordinate next steps.\n")
+	} else {
+		b.WriteString("You received the response_grant for this unmentioned group message. You are the only agent authorized to post a visible reply for this round.\n")
+	}
+	b.WriteString("Reason: " + reason + "\n")
+	b.WriteString("Message bundle:\n" + bundle + "\n")
+	if decisions != "" {
+		b.WriteString("Attention decisions:\n" + decisions + "\n")
+	}
+	if offers != "" {
+		b.WriteString("Internal contribution offers to consider:\n" + offers + "\n")
+	}
+	b.WriteString("Use the channel output contract. If a visible answer is no longer useful, finish without visible output; otherwise answer once and incorporate useful offers without naming this internal protocol.\n")
+	return b.String(), nil
+}
+
+func (h *Handler) buildChannelAttentionConvergencePromptTx(ctx context.Context, tx pgx.Tx, roundID pgtype.UUID, rc channelAttentionRoundContext) (string, error) {
+	bundle, err := channelAttentionMessageBundleTx(ctx, tx, rc.channelID, rc.seqFrom, rc.seqTo)
+	if err != nil {
+		return "", err
+	}
+	answers, err := channelAttentionAnswerLinesTx(ctx, tx, roundID)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	b.WriteString("This is a restricted protocol_turn for an Attention Round with multiple ANSWER claims. Do not send a public message.\n")
+	b.WriteString("Message bundle:\n" + bundle + "\n")
+	b.WriteString("ANSWER claims:\n" + answers + "\n")
+	b.WriteString("Return exactly one JSON object with fields vote, target_agent_id, summary. vote must be one of YIELD, KEEP, MERGE, REQUEST_MANAGER. Use KEEP only if you should be the sole public responder. Use MERGE to let another responder incorporate your key point; set target_agent_id when known, otherwise empty string. Use REQUEST_MANAGER only for irreducible coordination.\n")
+	return b.String(), nil
+}
+
+func channelAttentionMessageBundleTx(ctx context.Context, tx pgx.Tx, channelID pgtype.UUID, seqFrom, seqTo int64) (string, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
+		FROM channel_message
+		WHERE channel_id = $1 AND seq BETWEEN $2 AND $3
+		ORDER BY seq ASC`, channelID, seqFrom, seqTo)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var lines []string
+	for rows.Next() {
+		msg, err := scanChannelMessage(rows)
+		if err != nil {
+			return "", err
+		}
+		lines = append(lines, fmt.Sprintf("[seq:%d message:%s] %s", msg.Seq, msg.ID, formatChannelMessageLine(msg)))
+	}
+	return strings.Join(lines, "\n"), rows.Err()
+}
+
+func channelAttentionDecisionLinesTx(ctx context.Context, tx pgx.Tx, roundID pgtype.UUID) (string, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT agent_id::text, decision, COALESCE(confidence, 0), COALESCE(value_type, ''), summary
+		FROM channel_attention_participant
+		WHERE round_id = $1 AND status = 'decided' AND decision <> 'SILENT'
+		ORDER BY decision, COALESCE(confidence, 0) DESC, agent_id`, roundID)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var lines []string
+	for rows.Next() {
+		var agentID, decision, valueType, summary string
+		var confidence float64
+		if err := rows.Scan(&agentID, &decision, &confidence, &valueType, &summary); err != nil {
+			return "", err
+		}
+		lines = append(lines, fmt.Sprintf("- agent:%s decision:%s confidence:%.2f value:%s summary:%s", agentID, decision, confidence, valueType, summary))
+	}
+	return strings.Join(lines, "\n"), rows.Err()
+}
+
+func channelAttentionAnswerLinesTx(ctx context.Context, tx pgx.Tx, roundID pgtype.UUID) (string, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT agent_id::text, COALESCE(confidence, 0), summary
+		FROM channel_attention_participant
+		WHERE round_id = $1 AND status = 'decided' AND decision = 'ANSWER'
+		ORDER BY COALESCE(confidence, 0) DESC, completed_at ASC, agent_id`, roundID)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var lines []string
+	for rows.Next() {
+		var agentID, summary string
+		var confidence float64
+		if err := rows.Scan(&agentID, &confidence, &summary); err != nil {
+			return "", err
+		}
+		lines = append(lines, fmt.Sprintf("- agent:%s confidence:%.2f summary:%s", agentID, confidence, summary))
+	}
+	return strings.Join(lines, "\n"), rows.Err()
+}
+
+func channelAttentionOfferLinesTx(ctx context.Context, tx pgx.Tx, roundID pgtype.UUID) (string, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT agent_id::text, value_type, summary, evidence_refs::text
+		FROM channel_attention_contribution_offer
+		WHERE round_id = $1 AND status = 'pending'
+		ORDER BY created_at ASC, agent_id`, roundID)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var lines []string
+	for rows.Next() {
+		var agentID, valueType, summary, evidence string
+		if err := rows.Scan(&agentID, &valueType, &summary, &evidence); err != nil {
+			return "", err
+		}
+		lines = append(lines, fmt.Sprintf("- agent:%s value:%s summary:%s evidence:%s", agentID, valueType, summary, evidence))
+	}
+	return strings.Join(lines, "\n"), rows.Err()
 }
 
 func settleChannelAttentionRoundTx(ctx context.Context, tx pgx.Tx, roundID pgtype.UUID) (bool, error) {
@@ -1033,6 +1521,146 @@ func channelAttentionRoundOutcomeTx(ctx context.Context, tx pgx.Tx, roundID pgty
 		return "partial", nil
 	}
 	return "completed", nil
+}
+
+func isChannelAttentionProtocolTurnInboxEvent(event db.AgentInboxEvent) bool {
+	config, ok := service.TaskExecutionConfigFromContext(event.ExecutionConfig)
+	return ok && config.ExecutionProfile == service.ExecutionProfileProtocolTurn
+}
+
+func (h *Handler) completeChannelAttentionConvergenceVoteTx(ctx context.Context, tx pgx.Tx, event db.AgentInboxEvent, executionID pgtype.UUID, vote channelAttentionConvergenceVote) (channelAttentionCompletion, error) {
+	var voteID, roundID, agentID pgtype.UUID
+	var status string
+	if err := tx.QueryRow(ctx, `
+		SELECT id, round_id, agent_id, status
+		FROM channel_attention_convergence_vote
+		WHERE inbox_event_id = $1
+		FOR UPDATE`, event.ID).Scan(&voteID, &roundID, &agentID, &status); err != nil {
+		return channelAttentionCompletion{}, err
+	}
+	if status != "pending" {
+		return channelAttentionCompletion{}, fmt.Errorf("attention convergence vote is %s", status)
+	}
+
+	var inputTokens, outputTokens int64
+	var actualModel pgtype.Text
+	if err := tx.QueryRow(ctx, `
+		SELECT execution.id,
+		       COALESCE(sum(usage.input_tokens), 0)::bigint,
+		       COALESCE(sum(usage.output_tokens), 0)::bigint,
+		       max(NULLIF(usage.model, ''))
+		FROM agent_execution execution
+		LEFT JOIN agent_usage usage ON usage.execution_id = execution.id
+		WHERE execution.source_kind = 'inbox'
+		  AND execution.source_event_id = $1
+		  AND execution.id = $2
+		GROUP BY execution.id`, event.ID, executionID).Scan(&executionID, &inputTokens, &outputTokens, &actualModel); err != nil {
+		return channelAttentionCompletion{}, err
+	}
+	modelVersion := ""
+	if actualModel.Valid {
+		modelVersion = strings.TrimSpace(actualModel.String)
+	}
+	if modelVersion == "" {
+		return channelAttentionCompletion{}, errors.New("attention convergence execution usage model is missing")
+	}
+	var targetAgentID pgtype.UUID
+	if strings.TrimSpace(vote.TargetAgentID) != "" {
+		targetAgentID = parseUUID(vote.TargetAgentID)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE channel_attention_convergence_vote
+		SET status = 'completed', vote = $2, target_agent_id = $3, summary = $4,
+		    input_tokens = $5, output_tokens = $6, model_version = $7,
+		    completed_at = now(), updated_at = now()
+		WHERE id = $1`, voteID, vote.Vote, nullableUUID(targetAgentID), vote.Summary, inputTokens, outputTokens, modelVersion); err != nil {
+		return channelAttentionCompletion{}, err
+	}
+
+	wakes, err := h.resolveChannelAttentionConvergenceVotesTx(ctx, tx, roundID)
+	if err != nil {
+		return channelAttentionCompletion{}, err
+	}
+	return channelAttentionCompletion{
+		decision: vote.Vote, inputTokens: inputTokens, outputTokens: outputTokens,
+		roundResolved: len(wakes) > 0, roundOutcome: "converged", wakes: wakes,
+	}, nil
+}
+
+func (h *Handler) resolveChannelAttentionConvergenceVotesTx(ctx context.Context, tx pgx.Tx, roundID pgtype.UUID) ([]channelAttentionWake, error) {
+	var pending int
+	if err := tx.QueryRow(ctx, `SELECT count(*)::int FROM channel_attention_convergence_vote WHERE round_id = $1 AND status = 'pending'`, roundID).Scan(&pending); err != nil {
+		return nil, err
+	}
+	if pending > 0 {
+		return nil, nil
+	}
+	var existingGrant bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM channel_attention_response_grant WHERE round_id = $1)`, roundID).Scan(&existingGrant); err != nil {
+		return nil, err
+	}
+	if existingGrant {
+		return nil, nil
+	}
+	rc, err := h.channelAttentionRoundContextTx(ctx, tx, roundID)
+	if err != nil {
+		return nil, err
+	}
+	var managerRequested bool
+	var keepCount int
+	var keepAgentID pgtype.UUID
+	if err := tx.QueryRow(ctx, `
+		SELECT count(*) FILTER (WHERE vote = 'REQUEST_MANAGER') > 0,
+		       count(*) FILTER (WHERE vote = 'KEEP')::int,
+		       COALESCE((array_agg(agent_id ORDER BY completed_at ASC) FILTER (WHERE vote = 'KEEP'))[1], '00000000-0000-0000-0000-000000000000'::uuid)
+		FROM channel_attention_convergence_vote
+		WHERE round_id = $1`, roundID).Scan(&managerRequested, &keepCount, &keepAgentID); err != nil {
+		return nil, err
+	}
+	if managerRequested || keepCount > 1 {
+		return h.grantChannelAttentionManagerFallbackTx(ctx, tx, rc, roundID, "convergence_conflict")
+	}
+	if keepCount == 1 {
+		return h.grantChannelAttentionResponderTx(ctx, tx, rc, roundID, keepAgentID, "converged", "single KEEP convergence vote")
+	}
+	// If everyone yielded or merged, pick the strongest original ANSWER and fold
+	// MERGE votes into contribution offers for the selected responder.
+	var selectedAgentID pgtype.UUID
+	if err := tx.QueryRow(ctx, `
+		SELECT agent_id
+		FROM channel_attention_participant
+		WHERE round_id = $1 AND status = 'decided' AND decision = 'ANSWER'
+		ORDER BY COALESCE(confidence, 0) DESC, completed_at ASC, agent_id ASC
+		LIMIT 1`, roundID).Scan(&selectedAgentID); err != nil {
+		return nil, err
+	}
+	if err := upsertChannelAttentionMergeOffersTx(ctx, tx, roundID, selectedAgentID); err != nil {
+		return nil, err
+	}
+	return h.grantChannelAttentionResponderTx(ctx, tx, rc, roundID, selectedAgentID, "converged", "all responders yielded or merged")
+}
+
+func upsertChannelAttentionMergeOffersTx(ctx context.Context, tx pgx.Tx, roundID, selectedAgentID pgtype.UUID) error {
+	_, err := tx.Exec(ctx, `
+		INSERT INTO channel_attention_contribution_offer (
+		  round_id, participant_id, agent_id, offer_source, value_type, summary, evidence_refs
+		)
+		SELECT vote.round_id, vote.participant_id, vote.agent_id, 'convergence_merge',
+		       COALESCE(participant.value_type, 'direct_answer'), vote.summary,
+		       COALESCE(participant.evidence_refs, '[]'::jsonb)
+		FROM channel_attention_convergence_vote vote
+		LEFT JOIN channel_attention_participant participant ON participant.id = vote.participant_id
+		WHERE vote.round_id = $1
+		  AND vote.agent_id <> $2
+		  AND vote.vote = 'MERGE'
+		ON CONFLICT (round_id, agent_id, offer_source)
+		DO UPDATE SET
+		  participant_id = EXCLUDED.participant_id,
+		  value_type = EXCLUDED.value_type,
+		  summary = EXCLUDED.summary,
+		  evidence_refs = EXCLUDED.evidence_refs,
+		  updated_at = now()`, roundID, selectedAgentID)
+	return err
 }
 
 func failChannelAttentionParticipantTx(ctx context.Context, tx pgx.Tx, eventID pgtype.UUID, errText string) (string, error) {

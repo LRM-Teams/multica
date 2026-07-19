@@ -98,6 +98,37 @@ func TestParseChannelAttentionDecisionStrict(t *testing.T) {
 	}
 }
 
+func TestParseChannelAttentionConvergenceVoteStrict(t *testing.T) {
+	valid := `{"vote":"MERGE","target_agent_id":"` + uuid.NewString() + `","summary":"please include my benchmark result"}`
+	got, err := parseChannelAttentionConvergenceVote(json.RawMessage(valid))
+	if err != nil {
+		t.Fatalf("valid convergence vote rejected: %v", err)
+	}
+	if got.Vote != "MERGE" || got.Summary != "please include my benchmark result" || got.TargetAgentID == "" {
+		t.Fatalf("parsed convergence vote = %+v", got)
+	}
+
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{name: "empty", raw: ``},
+		{name: "not object", raw: `[]`},
+		{name: "unknown field", raw: `{"vote":"YIELD","target_agent_id":"","summary":"","extra":true}`},
+		{name: "missing field", raw: `{"vote":"YIELD","summary":""}`},
+		{name: "bad vote", raw: `{"vote":"ANSWER","target_agent_id":"","summary":""}`},
+		{name: "bad target", raw: `{"vote":"MERGE","target_agent_id":"agent-a","summary":""}`},
+		{name: "trailing value", raw: `{"vote":"KEEP","target_agent_id":"","summary":""} {}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := parseChannelAttentionConvergenceVote(json.RawMessage(tt.raw)); err == nil {
+				t.Fatalf("parseChannelAttentionConvergenceVote(%s) unexpectedly succeeded", tt.raw)
+			}
+		})
+	}
+}
+
 func TestChannelAttentionHumanUnmentionedCreatesProbeRound(t *testing.T) {
 	fixture := newChannelAttentionFixture(t, []attentionRuntimeSpec{{}, {}})
 	trigger := fixture.insertMessage(t, "user", testUserID, "Please compare the release risks", nil)

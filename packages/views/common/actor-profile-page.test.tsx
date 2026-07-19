@@ -75,8 +75,23 @@ describe("ActorProfilePage (#586 mobile full page)", () => {
     agents.splice(0, agents.length, { id: "agent-1" });
     render(<ActorProfilePage memberType="agent" memberId="agent-1" />);
 
-    expect(screen.getByTestId("agent-tabs")).toHaveTextContent("page");
+    const agentTabs = screen.getByTestId("agent-tabs");
+    expect(agentTabs).toHaveTextContent("page");
+    // The page route must pass its bounded height through to AgentSidePanel so
+    // the panel's existing tab body owns scrolling. If this wrapper becomes an
+    // outer scroller again, the tab bar disappears while reading old Activity.
+    expect(agentTabs.parentElement).toHaveClass("flex", "min-h-0", "flex-1");
+    expect(agentTabs.parentElement?.parentElement).toHaveClass("flex", "min-h-0", "flex-1");
+    expect(agentTabs.parentElement?.parentElement).not.toHaveClass("overflow-y-auto");
     agents.splice(0, agents.length);
+  });
+
+  it("keeps the generic profile fallback as the page scroll owner", () => {
+    render(<ActorProfilePage memberType="user" memberId="u1" />);
+
+    expect(screen.getByTestId("actor-profile-content").parentElement?.parentElement).toHaveClass(
+      "overflow-y-auto",
+    );
   });
 
   it("renders a Back button that calls navigation.back()", () => {

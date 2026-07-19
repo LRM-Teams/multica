@@ -16,8 +16,8 @@ import { ActorProfileContent } from "./actor-profile-popover";
  * author/agent avatar routes here instead of opening an 80dvh Drawer that
  * clipped the Recent-activity list. Agents reuse the same owner-gated
  * Profile / Activity / Files tab surface as the conversation side panel;
- * users and unavailable agents retain the generic profile fallback. The whole
- * page scrolls vertically under a header with a Back button.
+ * users and unavailable agents retain the generic profile fallback. The agent
+ * page keeps the Back/header chrome outside the tab body's scroll container.
  *
  * This is intentionally NOT the agent management page (`AgentDetailPage`): it is
  * the lightweight, actor-generic profile for both agents and users.
@@ -49,8 +49,14 @@ export function ActorProfilePage({
           {t(($) => $.profile_popover.back)}
         </button>
       </PageHeader>
-      <div className="flex-1 min-h-0 overflow-y-auto">
-        <div className="mx-auto w-full max-w-2xl">
+      <div className={agent ? "flex min-h-0 flex-1" : "min-h-0 flex-1 overflow-y-auto"}>
+        <div
+          className={
+            agent
+              ? "mx-auto flex min-h-0 w-full max-w-2xl flex-1"
+              : "mx-auto w-full max-w-2xl"
+          }
+        >
           {agent ? (
             <AgentSidePanel
               agent={agent}

@@ -312,10 +312,10 @@ func (h *Handler) loadEvolutionCollaborationMetrics(r *http.Request, workspaceID
 		  SELECT count(*) AS full_wakes,
 		         count(*) FILTER (WHERE grant_type = 'converged') AS peer_converged,
 		         count(*) FILTER (WHERE grant_type = 'manager_fallback') AS manager_fallbacks
-		    FROM channel_attention_response_grant grant
-		    JOIN channel_attention_round round ON round.id = grant.round_id
+		    FROM channel_attention_response_grant response_grant
+		    JOIN channel_attention_round round ON round.id = response_grant.round_id
 		    CROSS JOIN bounds
-		   WHERE round.workspace_id = $1 AND grant.created_at >= bounds.since
+		   WHERE round.workspace_id = $1 AND response_grant.created_at >= bounds.since
 		), offers AS (
 		  SELECT count(*) AS contribution_offers,
 		         count(*) FILTER (WHERE status IN ('merged','escalated')) AS adopted

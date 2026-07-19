@@ -82,6 +82,13 @@ type channelAttentionRoundContext struct {
 	trigger     ChannelMessageResponse
 }
 
+func channelAttentionTriggerCreatorID(trigger ChannelMessageResponse) pgtype.UUID {
+	if trigger.Type == "user" && trigger.AuthorID != nil {
+		return parseUUID(*trigger.AuthorID)
+	}
+	return pgtype.UUID{}
+}
+
 func (h *Handler) channelAttentionModeEnabled() bool {
 	if h == nil || !h.cfg.ChannelAttentionEnabled {
 		return false
@@ -542,7 +549,7 @@ func (h *Handler) createChannelAttentionParticipantsTx(ctx context.Context, tx p
 			  jsonb_build_object('execution_config', jsonb_build_object(
 			    'model', COALESCE(agent.model, ''),
 			    'thinking_level', COALESCE(agent.thinking_level, ''),
-			    'execution_profile', $7,
+			    'execution_profile', $7::text,
 			    'context_messages', $8,
 			    'memory_budget_bytes', $9,
 			    'max_output_tokens', $10,
@@ -1318,7 +1325,8 @@ func (h *Handler) createChannelAttentionConvergenceTurnsTx(ctx context.Context, 
 
 func (h *Handler) enqueueChannelAttentionProtocolTurnTx(ctx context.Context, tx pgx.Tx, rc channelAttentionRoundContext, agent db.Agent, prompt, reason string) (pgtype.UUID, error) {
 	qtx := h.Queries.WithTx(tx)
-	session, err := h.ensureChannelAgentSessionWithDB(ctx, qtx, tx, rc.channel, agent.ID, pgtype.UUID{})
+	creatorID := channelAttentionTriggerCreatorID(rc.trigger)
+	session, err := h.ensureChannelAgentSessionWithDB(ctx, qtx, tx, rc.channel, agent.ID, creatorID)
 	if err != nil {
 		return pgtype.UUID{}, err
 	}
@@ -1352,7 +1360,7 @@ func (h *Handler) enqueueChannelAttentionProtocolTurnTx(ctx context.Context, tx 
 		       jsonb_build_object('execution_config', jsonb_build_object(
 		         'model', COALESCE(agent.model, ''),
 		         'thinking_level', COALESCE(agent.thinking_level, ''),
-		         'execution_profile', $8,
+		         'execution_profile', $8::text,
 		         'context_messages', 8,
 		         'memory_budget_bytes', 4096,
 		         'max_output_tokens', 96,

@@ -593,7 +593,7 @@ export function EvolutionCenterPage() {
             </SelectTrigger>
             <SelectContent>
               {METRIC_DAY_OPTIONS.map((days) => (
-                <SelectItem key={days} value={String(days)}>Last {days} days</SelectItem>
+                <SelectItem key={days} value={String(days)}>{copy("thirtyDays").replace("30", String(days))}</SelectItem>
               ))}
             </SelectContent>
           </Select>

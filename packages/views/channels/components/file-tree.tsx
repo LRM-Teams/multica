@@ -26,8 +26,9 @@ function FileTreeRow({
         <button
           type="button"
           onClick={() => toggle(node.path)}
+          aria-expanded={!collapsed}
           style={{ paddingLeft: depth * INDENT + 6 }}
-          className="flex w-full items-center gap-1 rounded py-1 pr-2 text-left text-xs hover:bg-accent"
+          className="flex min-w-0 w-full items-center gap-1 rounded py-1 pr-2 text-left text-xs hover:bg-accent"
         >
           <ChevronRight
             className={cn(
@@ -36,7 +37,7 @@ function FileTreeRow({
             )}
           />
           <Folder className="size-4 shrink-0 text-sky-500" />
-          <span className="truncate text-foreground">{node.name}</span>
+          <span className="min-w-0 flex-1 truncate text-foreground">{node.name}</span>
         </button>
         {!collapsed &&
           node.children.map((c) => (
@@ -58,10 +59,10 @@ function FileTreeRow({
       type="button"
       onClick={() => onOpenFile(node.path)}
       style={{ paddingLeft: depth * INDENT + 6 + 18 }}
-      className="flex w-full items-center gap-1.5 rounded py-1 pr-2 text-left text-xs hover:bg-accent"
+      className="flex min-w-0 w-full items-center gap-1.5 rounded py-1 pr-2 text-left text-xs hover:bg-accent"
     >
       <Icon className={cn("size-4 shrink-0", className)} />
-      <span className="truncate text-foreground">{node.name}</span>
+      <span className="min-w-0 flex-1 truncate text-foreground">{node.name}</span>
     </button>
   );
 }

@@ -27,7 +27,7 @@ import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n";
 import { formatPresenceStatus } from "../../agents/presence";
 import { FileTree } from "./file-tree";
-import { buildFileTree, fileLanguage } from "./file-tree-utils";
+import { buildFileTree, fileLanguage, type FileTreeNode } from "./file-tree-utils";
 
 const agentFilesQueryKey = (agentId: string, includeHidden: boolean) =>
   ["agent-files", agentId, includeHidden] as const;
@@ -62,6 +62,12 @@ function CenteredNote({ children }: { children: ReactNode }) {
     <div className="flex min-h-32 items-center justify-center p-4 text-center text-xs text-muted-foreground">
       {children}
     </div>
+  );
+}
+
+function directoryPaths(nodes: readonly FileTreeNode[]): string[] {
+  return nodes.flatMap((node) =>
+    node.isDir ? [node.path, ...directoryPaths(node.children)] : [],
   );
 }
 
@@ -285,7 +291,10 @@ export function AgentFilesPanel({
   const presence = useAgentPresenceDetail(agent.workspace_id, agent.id);
   const statusLabel = formatPresenceStatus(presence, t) ?? "—";
   const [includeHidden, setIncludeHidden] = useState(false);
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  // Start with a quiet Files tab: directories reveal their contents only when
+  // the reader asks. Tracking the exceptional *expanded* paths also keeps
+  // directories discovered by a later refetch collapsed by default.
+  const [expandedDirectories, setExpandedDirectories] = useState<Set<string>>(new Set());
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const { data, isPending } = useQuery({
     queryKey: agentFilesQueryKey(agent.id, includeHidden),
@@ -293,8 +302,12 @@ export function AgentFilesPanel({
     enabled: canRead,
   });
   const tree = useMemo(() => buildFileTree(data?.nodes ?? []), [data?.nodes]);
+  const collapsed = useMemo(
+    () => new Set(directoryPaths(tree).filter((path) => !expandedDirectories.has(path))),
+    [tree, expandedDirectories],
+  );
   const toggle = (path: string) =>
-    setCollapsed((prev) => {
+    setExpandedDirectories((prev) => {
       const next = new Set(prev);
       if (next.has(path)) next.delete(path);
       else next.add(path);
@@ -316,7 +329,7 @@ export function AgentFilesPanel({
       {!canRead ? (
         <CenteredNote>{OWNER_ONLY_FILES_MESSAGE}</CenteredNote>
       ) : (
-        <div className="flex min-h-0 flex-1 flex-col">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="flex items-center justify-between border-b px-3 py-2">
             <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
               {FILES_LABEL}
@@ -332,7 +345,7 @@ export function AgentFilesPanel({
               {includeHidden ? <Eye className="size-4" /> : <EyeOff className="size-4" />}
             </Button>
           </div>
-          <div className="min-h-0 flex-1 overflow-auto p-2">
+          <div className="min-h-0 min-w-0 flex-1 overflow-auto p-2">
             {isPending ? (
               <div className="space-y-1.5">
                 <Skeleton className="h-5" />
@@ -374,11 +387,11 @@ export function AgentFilesPanel({
   );
 
   if (hideHeader) {
-    return <div className="flex h-full min-h-0 flex-col">{body}</div>;
+    return <div className="flex h-full min-h-0 min-w-0 flex-col">{body}</div>;
   }
 
   return (
-    <aside className="flex h-full min-h-0 flex-col border-l bg-background">
+    <aside className="flex h-full min-h-0 min-w-0 flex-col border-l bg-background">
       <div className="flex items-start justify-between gap-3 border-b p-4">
         <div className="min-w-0">
           <p className="truncate text-sm font-semibold">{agent.display_name || agent.name}</p>

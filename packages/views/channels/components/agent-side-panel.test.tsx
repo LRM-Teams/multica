@@ -270,9 +270,11 @@ describe("AgentSidePanel", () => {
   });
 
   it("keeps visited page tabs mounted in equal-width 44px mobile targets", () => {
-    renderPanel("user-owner", undefined, "page");
+    const { container } = renderPanel("user-owner", undefined, "page");
 
     expect(screen.queryByRole("button", { name: "Close panel" })).not.toBeInTheDocument();
+    expect(container.querySelector("aside")).toHaveClass("min-w-0");
+    expect(container.querySelector(".overflow-y-auto")).toHaveClass("min-w-0");
     for (const tab of ["Profile", "Activity", "Files"]) {
       expect(screen.getByRole("button", { name: tab })).toHaveClass(
         "min-h-11",

@@ -60,15 +60,22 @@ func buildAttentionProbePrompt(task Task) string {
 		b.WriteString(strings.TrimSpace(task.Agent.Instructions))
 		b.WriteString("\n\n")
 	}
+	if task.Agent != nil {
+		if memorySummary := restrictedMemorySummary(task.Agent.Memories, restrictedMemoryBytes); memorySummary != "" {
+			b.WriteString("Private memory/state summary (bounded):\n")
+			b.WriteString(memorySummary)
+			b.WriteString("\n\n")
+		}
+	}
 	if strings.TrimSpace(task.ChatContextSummary) != "" {
-		b.WriteString("Recent channel context:\n")
+		b.WriteString("Recent channel context (at most 8 entries):\n")
 		b.WriteString(strings.TrimSpace(task.ChatContextSummary))
 		b.WriteString("\n\n")
 	}
 	b.WriteString("Current human message:\n")
 	b.WriteString(strings.TrimSpace(task.ChatMessage))
 	b.WriteString("\n\nReturn exactly this JSON shape:\n")
-	b.WriteString(`{"decision":"SILENT|ANSWER|CONTRIBUTE|COORDINATE","confidence":0.0,"value_type":"none|direct_answer|unique_evidence|correction|task_claim|needs_protocol","summary":"","evidence_refs":[]}`)
+	b.WriteString(`{"decision":"SILENT|ANSWER|CONTRIBUTE|COORDINATE","confidence":0.0,"value_type":"none|direct_answer|unique_evidence|correction|task_claim|needs_protocol","summary":"","evidence_refs":[],"model_version":"current-model","seen_up_to_seq":0}`)
 	b.WriteString("\nChoose CONTRIBUTE only for information that would materially change another agent's result. Choose ANSWER when you are willing to own the response or task. Choose COORDINATE when the work requires ordering, dependencies, multiple owners, or a managed protocol.")
 	return b.String()
 }
@@ -83,7 +90,7 @@ func buildProtocolTurnPrompt(task Task) string {
 	}
 	b.WriteString("Turn instruction:\n")
 	b.WriteString(strings.TrimSpace(task.ChatMessage))
-	b.WriteString("\n\nReturn only the structured value requested by the turn instruction, with no commentary.")
+	b.WriteString("\n\nReturn exactly one non-empty JSON object matching the schema requested by the turn instruction, with no commentary or trailing text.")
 	return b.String()
 }
 

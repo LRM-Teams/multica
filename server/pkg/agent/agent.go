@@ -56,6 +56,14 @@ type ExecOptions struct {
 	// EphemeralSession prevents the provider session transcript from becoming a
 	// resumable runtime artifact. It is required for sidecar cognition runs.
 	EphemeralSession bool
+	// MaxOutputTokens caps the provider request output budget. Restricted
+	// execution profiles set this explicitly and must use a backend that can
+	// enforce it before the request is sent.
+	MaxOutputTokens int
+	// piOutputLimitExtension is populated internally by the Pi backend after it
+	// creates the per-run control extension. Callers outside this package cannot
+	// supply or override the trusted extension path.
+	piOutputLimitExtension string
 	// ThinkingLevel is the runtime-native reasoning/effort value (e.g.
 	// Claude's "low|medium|high|xhigh|max", Codex's "none|minimal|low|
 	// medium|high|xhigh", OpenCode's model variant names). Empty means

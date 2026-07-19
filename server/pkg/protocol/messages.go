@@ -222,18 +222,19 @@ const (
 )
 
 const (
-	ChannelOutputSuppressedReasonDaemonOutdated       = "daemon_outdated"
-	ChannelOutputSuppressedReasonLegacyProtocolOutput = "legacy_protocol_output"
-	ChannelOutputSuppressedReasonNoReplyRationale     = "no_reply_rationale"
-	ChannelOutputSuppressedReasonToolTransportOutput  = "tool_transport_output"
-	ChannelOutputSuppressedReasonInvalidOutput        = "invalid_output"
-	ChannelOutputSuppressedReasonInvalidAction        = "invalid_action"
-	ChannelOutputSuppressedReasonInvalidType          = "invalid_type"
-	ChannelOutputSuppressedReasonEmptyMessage         = "empty_message"
-	ChannelOutputSuppressedReasonInvalidReaction      = "invalid_reaction"
-	ChannelOutputSuppressedReasonMessageMissingAction = "message_missing_action"
-	ChannelOutputSuppressedReasonInvalidTarget        = "invalid_target"
-	ChannelOutputSuppressedReasonUnsentFinalOutput    = "unsent_final_output"
+	ChannelOutputSuppressedReasonDaemonOutdated             = "daemon_outdated"
+	ChannelOutputSuppressedReasonLegacyProtocolOutput       = "legacy_protocol_output"
+	ChannelOutputSuppressedReasonNoReplyRationale           = "no_reply_rationale"
+	ChannelOutputSuppressedReasonToolTransportOutput        = "tool_transport_output"
+	ChannelOutputSuppressedReasonInvalidOutput              = "invalid_output"
+	ChannelOutputSuppressedReasonInvalidAction              = "invalid_action"
+	ChannelOutputSuppressedReasonInvalidType                = "invalid_type"
+	ChannelOutputSuppressedReasonEmptyMessage               = "empty_message"
+	ChannelOutputSuppressedReasonInvalidReaction            = "invalid_reaction"
+	ChannelOutputSuppressedReasonMessageMissingAction       = "message_missing_action"
+	ChannelOutputSuppressedReasonInvalidTarget              = "invalid_target"
+	ChannelOutputSuppressedReasonUnsentFinalOutput          = "unsent_final_output"
+	ChannelOutputSuppressedReasonRestrictedExecutionProfile = "restricted_execution_profile"
 )
 
 type ChatOutputOptions struct {

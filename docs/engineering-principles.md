@@ -141,7 +141,8 @@
 ### 4.4 轻量认知档位不能静默退化为完整执行 — `可执行`（② profile enum + ⑤ daemon/Pi contract tests）
 - `execution_profile=attention_probe|protocol_turn` 是运行隔离合同，不是 Prompt 风格：必须使用执行后删除且不返回 session ID 的独立临时会话、不可被 custom args 覆盖的空工具 allowlist、无 MCP/Skill/CLI transport、无仓库/附件/完整本地 Memory；不得复用 Agent 的持久 chat runtime。
 - 当前只有 Pi 完成 provider 级空工具注册表约束；其他 provider 收到受限 profile 必须 fail closed，直到各自实现并见过隔离测试红。未知 profile 同样 fail closed，不能按 `full` 执行。
-- 受限 profile 的普通完成回调必须强制归一成 `no_reply`，且清空 session/workdir 指针；探针结构化结果只能走 Attention Round 的内部结果合同，不能借聊天完成输出旁路发布。
+- 受限 profile 的成功、失败、超时和 provider/schema 拒绝都必须走 no-public-output：成功回调归一成 `no_reply`，失败回调禁止创建 issue/chat 可见消息，并始终清空 session/workdir 指针；探针结构化结果只能走 Attention Round 的内部结果合同，不能借聊天完成输出旁路发布。
+- Attention Probe 只接受无额外字段/尾随文本的严格 JSON 对象；Pi 受限执行在 provider 请求前把模型输出预算限制为 96 Token，运行后再次按 usage fail closed。最近上下文最多 8 条，当前消息、身份和 Memory 都按 UTF-8 字节硬截断，其中私有 Memory/State 摘要总预算 4 KiB。
 - `execution_profile` 缺失只兼容历史已入队执行，解释为 `full`；新任务必须在创建时快照明确 profile。
 - **物**：`TaskExecutionConfig.ExecutionProfile` 类型/解析；`restrictTaskForExecutionProfile`；Pi `--tools ""` 参数合同；`usesPersistentPiChatRuntime` 受限档位排除；对应 service/daemon/agent tests。
 

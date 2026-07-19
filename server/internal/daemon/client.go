@@ -396,7 +396,7 @@ func (c *Client) ReportAgentInboxMessages(ctx context.Context, lease AgentInboxL
 	}, nil, c.tokenForRuntime(lease.RuntimeID))
 }
 
-func (c *Client) CompleteTask(ctx context.Context, taskID, output, branchName, action, target string, options *protocol.ChatOutputOptions, outputType, sessionID, workDir string, parts []protocol.MessagePart, reaction *protocol.ChatReactionPayload, runtimeStats *protocol.RuntimeTokenStats) error {
+func (c *Client) CompleteTask(ctx context.Context, taskID, output, branchName, action, target string, options *protocol.ChatOutputOptions, outputType, sessionID, workDir, outputSuppressedReason string, parts []protocol.MessagePart, reaction *protocol.ChatReactionPayload, runtimeStats *protocol.RuntimeTokenStats) error {
 	body := map[string]any{"output": output}
 	if branchName != "" {
 		body["branch_name"] = branchName
@@ -424,6 +424,9 @@ func (c *Client) CompleteTask(ctx context.Context, taskID, output, branchName, a
 	}
 	if workDir != "" {
 		body["work_dir"] = workDir
+	}
+	if outputSuppressedReason != "" {
+		body["output_suppressed_reason"] = outputSuppressedReason
 	}
 	if runtimeStats != nil {
 		body["runtime_stats"] = runtimeStats
@@ -460,6 +463,9 @@ func (c *Client) CompleteAgentInboxEvent(ctx context.Context, lease AgentInboxLe
 	}
 	if result.WorkDir != "" {
 		body["work_dir"] = result.WorkDir
+	}
+	if result.OutputSuppressedReason != "" {
+		body["output_suppressed_reason"] = result.OutputSuppressedReason
 	}
 	if result.RuntimeStats != nil {
 		body["runtime_stats"] = result.RuntimeStats
@@ -499,6 +505,14 @@ func (c *Client) ReportAgentInboxUsage(ctx context.Context, lease AgentInboxLeas
 }
 
 func (c *Client) FailTask(ctx context.Context, taskID, errMsg, sessionID, workDir, failureReason string) error {
+	return c.failTask(ctx, taskID, errMsg, sessionID, workDir, failureReason, false)
+}
+
+func (c *Client) FailTaskWithoutPublicOutput(ctx context.Context, taskID, errMsg, sessionID, workDir, failureReason string) error {
+	return c.failTask(ctx, taskID, errMsg, sessionID, workDir, failureReason, true)
+}
+
+func (c *Client) failTask(ctx context.Context, taskID, errMsg, sessionID, workDir, failureReason string, suppressPublicOutput bool) error {
 	body := map[string]any{"error": errMsg}
 	if sessionID != "" {
 		body["session_id"] = sessionID
@@ -508,6 +522,9 @@ func (c *Client) FailTask(ctx context.Context, taskID, errMsg, sessionID, workDi
 	}
 	if failureReason != "" {
 		body["failure_reason"] = failureReason
+	}
+	if suppressPublicOutput {
+		body["suppress_public_output"] = true
 	}
 	return c.postJSONWithRetry(ctx, fmt.Sprintf("/api/daemon/tasks/%s/fail", taskID), body, nil, defaultTerminalRetrySchedule)
 }

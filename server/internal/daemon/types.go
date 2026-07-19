@@ -319,4 +319,9 @@ type TaskResult struct {
 	FailureReason string                        `json:"-"`                    // classifier forwarded to FailTask on the blocked path; empty falls back to 'agent_error'
 	Usage         []TaskUsageEntry              `json:"usage,omitempty"`      // per-model token usage
 	RuntimeStats  *protocol.RuntimeTokenStats   `json:"runtime_stats,omitempty"`
+	// InternalOutput is the validated structured result for a restricted
+	// execution. It is deliberately excluded from legacy task completion JSON;
+	// Attention Round persistence consumes it through its own internal contract.
+	InternalOutput         json.RawMessage `json:"-"`
+	OutputSuppressedReason string          `json:"-"`
 }

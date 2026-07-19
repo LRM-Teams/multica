@@ -60,6 +60,7 @@ type mockDBTX struct {
 	failedTask *db.AgentTaskQueue
 	executed   []string
 	execArgs   [][]interface{}
+	queried    []string
 }
 
 func (m *mockDBTX) Exec(_ context.Context, sql string, args ...interface{}) (pgconn.CommandTag, error) {
@@ -73,6 +74,7 @@ func (m *mockDBTX) Query(_ context.Context, _ string, _ ...interface{}) (pgx.Row
 }
 
 func (m *mockDBTX) QueryRow(_ context.Context, sql string, _ ...interface{}) pgx.Row {
+	m.queried = append(m.queried, sql)
 	if strings.Contains(sql, "INSERT INTO chat_message") || strings.Contains(sql, "RefreshAgentStatusFromTasks") || strings.Contains(sql, "FROM chat_session") {
 		return &mockRow{err: pgx.ErrNoRows}
 	}
@@ -85,6 +87,27 @@ func (m *mockDBTX) QueryRow(_ context.Context, sql string, _ ...interface{}) pgx
 	}
 	// GetAgentTask — return the existing task
 	return &mockRow{task: &m.task}
+}
+
+func TestFailTaskWithoutPublicOutputSkipsChatFailureMessage(t *testing.T) {
+	taskID := testUUID(11)
+	failed := db.AgentTaskQueue{
+		ID:            taskID,
+		AgentID:       testUUID(12),
+		ChatSessionID: testUUID(13),
+		Status:        "failed",
+	}
+	mock := &mockDBTX{failedTask: &failed}
+	svc := &TaskService{Queries: db.New(mock), Bus: events.New()}
+
+	if _, err := svc.FailTaskWithoutPublicOutput(context.Background(), taskID, "invalid restricted JSON", "", "", "restricted_output_invalid"); err != nil {
+		t.Fatalf("FailTaskWithoutPublicOutput() error = %v", err)
+	}
+	for _, sql := range mock.queried {
+		if strings.Contains(sql, "INSERT INTO chat_message") {
+			t.Fatal("suppressed restricted failure created a public chat message")
+		}
+	}
 }
 
 func testUUID(b byte) pgtype.UUID {

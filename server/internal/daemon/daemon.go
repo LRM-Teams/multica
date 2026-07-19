@@ -3015,7 +3015,7 @@ func (d *Daemon) reportTaskResultForTask(ctx context.Context, task Task, result 
 		if task.isInboxTask() {
 			err = d.client.CompleteAgentInboxEvent(ctx, *task.InboxEvent, result)
 		} else {
-			err = d.client.CompleteTask(ctx, taskID, result.Comment, result.BranchName, result.Action, result.Target, result.Options, result.Type, result.SessionID, result.WorkDir, result.Parts, result.Reaction, result.RuntimeStats)
+			err = d.client.CompleteTask(ctx, taskID, result.Comment, result.BranchName, result.Action, result.Target, result.Options, result.Type, result.SessionID, result.WorkDir, result.OutputSuppressedReason, result.Parts, result.Reaction, result.RuntimeStats)
 		}
 		if err == nil {
 			return
@@ -3125,7 +3125,13 @@ func (d *Daemon) reportTaskFailure(ctx context.Context, task Task, errMsg, sessi
 		}
 		return
 	}
-	if err := d.client.FailTask(ctx, task.ID, errMsg, sessionID, workDir, failureReason); err != nil {
+	var err error
+	if suppressPublicOutputForTask(task) {
+		err = d.client.FailTaskWithoutPublicOutput(ctx, task.ID, errMsg, sessionID, workDir, failureReason)
+	} else {
+		err = d.client.FailTask(ctx, task.ID, errMsg, sessionID, workDir, failureReason)
+	}
+	if err != nil {
 		taskLog.Error("report failed task failed", "error", err)
 	}
 }
@@ -3742,6 +3748,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		ThinkingLevel:             thinkingLevel,
 		DisableTools:              restrictedExecution,
 		EphemeralSession:          restrictedExecution,
+		MaxOutputTokens:           restrictedOutputTokenLimit(profile),
 	}
 	// Some providers do not reliably load the per-task runtime config files we
 	// write into the task workdir:
@@ -3889,6 +3896,41 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	runtimeStats := runtimeStatsFromAgent(result.RuntimeStats)
 
 	output := result.Output
+	var internalOutput json.RawMessage
+	if restrictedExecution && result.Status == "completed" {
+		if outputTokens := totalTaskOutputTokens(usageEntries); outputTokens > int64(restrictedOutputTokenLimit(profile)) {
+			return TaskResult{
+				Status:                 "blocked",
+				Comment:                fmt.Sprintf("restricted execution output used %d tokens; limit is %d", outputTokens, restrictedOutputTokenLimit(profile)),
+				FailureReason:          "restricted_output_token_limit",
+				Usage:                  usageEntries,
+				RuntimeStats:           runtimeStats,
+				OutputSuppressedReason: protocol.ChannelOutputSuppressedReasonRestrictedExecutionProfile,
+			}, nil
+		}
+		parsedOutput, parseErr := parseRestrictedExecutionOutput(profile, output)
+		if parseErr != nil {
+			return TaskResult{
+				Status:                 "blocked",
+				Comment:                parseErr.Error(),
+				FailureReason:          "restricted_output_invalid",
+				Usage:                  usageEntries,
+				RuntimeStats:           runtimeStats,
+				OutputSuppressedReason: protocol.ChannelOutputSuppressedReasonRestrictedExecutionProfile,
+			}, nil
+		}
+		internalOutput, parseErr = bindRestrictedOutputMetadata(profile, parsedOutput, model, usageEntries, task)
+		if parseErr != nil {
+			return TaskResult{
+				Status:                 "blocked",
+				Comment:                parseErr.Error(),
+				FailureReason:          "restricted_output_invalid",
+				Usage:                  usageEntries,
+				RuntimeStats:           runtimeStats,
+				OutputSuppressedReason: protocol.ChannelOutputSuppressedReasonRestrictedExecutionProfile,
+			}, nil
+		}
+	}
 	var parts []protocol.MessagePart
 	var reaction *protocol.ChatReactionPayload
 	outputAction := ""
@@ -3953,19 +3995,20 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			}, nil
 		}
 		return TaskResult{
-			Status:       "completed",
-			Comment:      output,
-			Action:       outputAction,
-			Target:       outputTarget,
-			Options:      outputOptions,
-			Type:         outputType,
-			Parts:        parts,
-			Reaction:     reaction,
-			SessionID:    result.SessionID,
-			WorkDir:      env.WorkDir,
-			EnvRoot:      env.RootDir,
-			Usage:        usageEntries,
-			RuntimeStats: runtimeStats,
+			Status:         "completed",
+			Comment:        output,
+			Action:         outputAction,
+			Target:         outputTarget,
+			Options:        outputOptions,
+			Type:           outputType,
+			Parts:          parts,
+			Reaction:       reaction,
+			SessionID:      result.SessionID,
+			WorkDir:        env.WorkDir,
+			EnvRoot:        env.RootDir,
+			Usage:          usageEntries,
+			RuntimeStats:   runtimeStats,
+			InternalOutput: internalOutput,
 		}, nil
 	case "timeout":
 		// Surface session_id/work_dir so the chat resume pointer is kept

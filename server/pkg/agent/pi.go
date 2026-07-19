@@ -201,6 +201,21 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 	}
 
 	timeout := opts.Timeout
+	outputLimitExtensionPath := ""
+	outputLimitExtensionOwned := false
+	if opts.MaxOutputTokens > 0 {
+		outputLimitExtensionPath, err = newPiOutputLimitExtension(opts.MaxOutputTokens)
+		if err != nil {
+			return nil, err
+		}
+		opts.piOutputLimitExtension = outputLimitExtensionPath
+		outputLimitExtensionOwned = true
+	}
+	defer func() {
+		if outputLimitExtensionOwned && outputLimitExtensionPath != "" {
+			_ = os.Remove(outputLimitExtensionPath)
+		}
+	}()
 
 	// Early-complete: when the final assistant turn ends (turn_end with a
 	// terminal stop reason), the model's answer and usage are already known.
@@ -329,6 +344,13 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 		defer cancel()
 		defer close(msgCh)
 		defer close(resCh)
+		if outputLimitExtensionPath != "" {
+			defer func() {
+				if err := os.Remove(outputLimitExtensionPath); err != nil && !os.IsNotExist(err) {
+					b.cfg.Logger.Warn("Pi output-limit extension cleanup failed", "path", outputLimitExtensionPath, "error", err)
+				}
+			}()
+		}
 		if ephemeralSession {
 			defer func() {
 				if err := os.Remove(sessionPath); err != nil && !os.IsNotExist(err) {
@@ -479,6 +501,7 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 					}
 					earlyCompleted = true
 					b.cfg.Logger.Info("pi early-complete", "pid", cmd.Process.Pid, "duration", time.Since(startTime).Round(time.Millisecond).String())
+					finalStatus, finalError = enforcePiOutputTokenLimit(finalStatus, finalError, usage, opts.MaxOutputTokens)
 					resCh <- Result{
 						Status:     finalStatus,
 						Output:     output.String(),
@@ -552,6 +575,7 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 			reportedSessionID = ""
 		}
 
+		finalStatus, finalError = enforcePiOutputTokenLimit(finalStatus, finalError, usage, opts.MaxOutputTokens)
 		resCh <- Result{
 			Status:     finalStatus,
 			Output:     output.String(),
@@ -562,6 +586,7 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 		}
 	}()
 
+	outputLimitExtensionOwned = false
 	return &Session{Messages: msgCh, Result: resCh}, nil
 }
 
@@ -700,7 +725,20 @@ func buildPiArgs(prompt, sessionPath string, opts ExecOptions, logger *slog.Logg
 	// including extension tools (#2379). Restricted execution profiles pass an
 	// explicit empty allowlist; omission would silently re-enable every tool.
 	if opts.DisableTools {
-		args = append(args, "--tools", "")
+		args = append(args,
+			"--no-extensions",
+			"--no-skills",
+			"--no-prompt-templates",
+			"--no-context-files",
+			"--no-approve",
+			"--tools", "",
+		)
+	}
+	if opts.piOutputLimitExtension != "" {
+		// --no-extensions disables discovery only; Pi still loads an explicit
+		// trusted -e/--extension path. This per-run extension lowers the active
+		// model's provider request budget before the first LLM call.
+		args = append(args, "--extension", opts.piOutputLimitExtension)
 	}
 	if opts.SystemPrompt != "" {
 		args = append(args, "--append-system-prompt", opts.SystemPrompt)
@@ -714,14 +752,87 @@ func buildPiArgs(prompt, sessionPath string, opts ExecOptions, logger *slog.Logg
 
 func filterPiCustomArgs(opts ExecOptions, logger *slog.Logger) []string {
 	blocked := piBlockedArgs
-	if opts.DisableTools {
-		blocked = make(map[string]blockedArgMode, len(piBlockedArgs)+1)
+	if opts.DisableTools || opts.MaxOutputTokens > 0 {
+		blocked = make(map[string]blockedArgMode, len(piBlockedArgs)+16)
 		for name, mode := range piBlockedArgs {
 			blocked[name] = mode
 		}
 		blocked["--tools"] = blockedWithValue
+		blocked["-t"] = blockedWithValue
+		blocked["--no-tools"] = blockedStandalone
+		blocked["-nt"] = blockedStandalone
+		blocked["--extension"] = blockedWithValue
+		blocked["-e"] = blockedWithValue
+		blocked["--no-extensions"] = blockedStandalone
+		blocked["-ne"] = blockedStandalone
+		blocked["--skill"] = blockedWithValue
+		blocked["--no-skills"] = blockedStandalone
+		blocked["-ns"] = blockedStandalone
+		blocked["--prompt-template"] = blockedWithValue
+		blocked["--no-prompt-templates"] = blockedStandalone
+		blocked["-np"] = blockedStandalone
+		blocked["--no-context-files"] = blockedStandalone
+		blocked["-nc"] = blockedStandalone
+		blocked["--approve"] = blockedStandalone
+		blocked["-a"] = blockedStandalone
 	}
 	return filterCustomArgs(opts.CustomArgs, blocked, logger)
+}
+
+func newPiOutputLimitExtension(limit int) (string, error) {
+	if limit <= 0 {
+		return "", fmt.Errorf("Pi output token limit must be positive")
+	}
+	f, err := os.CreateTemp("", "multica-pi-output-limit-*.mjs")
+	if err != nil {
+		return "", fmt.Errorf("create Pi output-limit extension: %w", err)
+	}
+	path := f.Name()
+	source := fmt.Sprintf(`export default function (pi) {
+  const limit = %d;
+  const enforce = (model, ctx) => {
+    if (!model || typeof model.maxTokens !== "number" || !Number.isFinite(model.maxTokens)) {
+      if (ctx) ctx.abort();
+      throw new Error("restricted execution requires a model with a finite maxTokens contract");
+    }
+    model.maxTokens = Math.min(model.maxTokens, limit);
+    if (model.maxTokens > limit) {
+      if (ctx) ctx.abort();
+      throw new Error("failed to enforce restricted output token limit");
+    }
+  };
+  pi.on("model_select", (event, ctx) => enforce(event.model, ctx));
+  pi.on("before_agent_start", (_event, ctx) => enforce(ctx.model, ctx));
+}
+`, limit)
+	if _, err := io.WriteString(f, source); err != nil {
+		_ = f.Close()
+		_ = os.Remove(path)
+		return "", fmt.Errorf("write Pi output-limit extension: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", fmt.Errorf("close Pi output-limit extension: %w", err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		_ = os.Remove(path)
+		return "", fmt.Errorf("secure Pi output-limit extension: %w", err)
+	}
+	return path, nil
+}
+
+func enforcePiOutputTokenLimit(status, errText string, usage map[string]TokenUsage, limit int) (string, string) {
+	if limit <= 0 {
+		return status, errText
+	}
+	var outputTokens int64
+	for _, modelUsage := range usage {
+		outputTokens += modelUsage.OutputTokens
+	}
+	if outputTokens <= int64(limit) {
+		return status, errText
+	}
+	return "failed", fmt.Sprintf("Pi output used %d tokens; restricted limit is %d", outputTokens, limit)
 }
 
 func piReportedSessionID(sessionPath string, ephemeral bool) string {

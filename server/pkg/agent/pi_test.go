@@ -25,21 +25,75 @@ func TestBuildPiArgsNoToolAllowlist(t *testing.T) {
 
 func TestBuildPiArgsRestrictedProfileUsesEmptyToolAllowlist(t *testing.T) {
 	for name, args := range map[string][]string{
-		"one-shot": buildPiArgs("probe", "/tmp/session.jsonl", ExecOptions{DisableTools: true, CustomArgs: []string{"--tools", "bash"}}, slog.Default()),
-		"rpc":      buildPiRPCArgs("/tmp/session.jsonl", ExecOptions{DisableTools: true, CustomArgs: []string{"--tools", "bash"}}, slog.Default()),
+		"one-shot": buildPiArgs("probe", "/tmp/session.jsonl", ExecOptions{DisableTools: true, MaxOutputTokens: 96, piOutputLimitExtension: "/tmp/output-limit.mjs", CustomArgs: []string{"--tools", "bash", "--extension", "/tmp/evil.mjs"}}, slog.Default()),
+		"rpc":      buildPiRPCArgs("/tmp/session.jsonl", ExecOptions{DisableTools: true, MaxOutputTokens: 96, piOutputLimitExtension: "/tmp/output-limit.mjs", CustomArgs: []string{"--tools", "bash", "--extension", "/tmp/evil.mjs"}}, slog.Default()),
 	} {
 		found := 0
+		controlExtension := 0
+		requiredStandalone := map[string]bool{
+			"--no-extensions":       false,
+			"--no-skills":           false,
+			"--no-prompt-templates": false,
+			"--no-context-files":    false,
+		}
 		for i, arg := range args {
 			if arg == "--tools" && i+1 < len(args) && args[i+1] == "" {
 				found++
 			}
-			if arg == "bash" {
+			if arg == "--extension" && i+1 < len(args) && args[i+1] == "/tmp/output-limit.mjs" {
+				controlExtension++
+			}
+			if _, ok := requiredStandalone[arg]; ok {
+				requiredStandalone[arg] = true
+			}
+			if arg == "bash" || arg == "/tmp/evil.mjs" {
 				t.Fatalf("%s args let custom args override the empty tool registry: %#v", name, args)
 			}
 		}
 		if found != 1 {
 			t.Fatalf("%s args do not enforce an empty tool allowlist: %#v", name, args)
 		}
+		if name == "one-shot" && controlExtension != 1 {
+			t.Fatalf("%s args do not load exactly one trusted output-limit extension: %#v", name, args)
+		}
+		if name == "one-shot" {
+			for flag, present := range requiredStandalone {
+				if !present {
+					t.Fatalf("%s args missing %s: %#v", name, flag, args)
+				}
+			}
+		}
+	}
+}
+
+func TestPiOutputLimitExtensionCapsActiveModel(t *testing.T) {
+	path, err := newPiOutputLimitExtension(96)
+	if err != nil {
+		t.Fatalf("newPiOutputLimitExtension: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(path) })
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read output-limit extension: %v", err)
+	}
+	for _, want := range []string{"const limit = 96", "model.maxTokens = Math.min", "before_agent_start", "model_select", "ctx.abort()"} {
+		if !strings.Contains(string(content), want) {
+			t.Fatalf("output-limit extension missing %q:\n%s", want, content)
+		}
+	}
+}
+
+func TestEnforcePiOutputTokenLimitFailsClosed(t *testing.T) {
+	status, errText := enforcePiOutputTokenLimit("completed", "", map[string]TokenUsage{
+		"model-a": {OutputTokens: 60},
+		"model-b": {OutputTokens: 37},
+	}, 96)
+	if status != "failed" || !strings.Contains(errText, "97 tokens") {
+		t.Fatalf("output limit result = status:%q error:%q", status, errText)
+	}
+	status, errText = enforcePiOutputTokenLimit("completed", "", map[string]TokenUsage{"model": {OutputTokens: 96}}, 96)
+	if status != "completed" || errText != "" {
+		t.Fatalf("boundary result = status:%q error:%q", status, errText)
 	}
 }
 

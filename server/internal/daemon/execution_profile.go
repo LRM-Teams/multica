@@ -1,8 +1,11 @@
 package daemon
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -12,9 +15,33 @@ const (
 	executionProfileAttentionProbe = "attention_probe"
 	executionProfileProtocolTurn   = "protocol_turn"
 
-	restrictedAgentInstructionsRunes = 4096
-	restrictedMemoryRunes            = 4096
+	restrictedAgentInstructionsBytes   = 4 * 1024
+	restrictedMemoryBytes              = 4 * 1024
+	restrictedMessageBytes             = 4 * 1024
+	restrictedContextBytes             = 8 * 1024
+	restrictedContextMessages          = 8
+	restrictedExecutionMaxOutputTokens = 96
 )
+
+var attentionProbeOutputKeys = []string{
+	"decision",
+	"confidence",
+	"value_type",
+	"summary",
+	"evidence_refs",
+	"model_version",
+	"seen_up_to_seq",
+}
+
+type attentionProbeOutput struct {
+	Decision     string   `json:"decision"`
+	Confidence   float64  `json:"confidence"`
+	ValueType    string   `json:"value_type"`
+	Summary      string   `json:"summary"`
+	EvidenceRefs []string `json:"evidence_refs"`
+	ModelVersion string   `json:"model_version"`
+	SeenUpToSeq  int64    `json:"seen_up_to_seq"`
+}
 
 func taskExecutionProfile(task Task) (string, error) {
 	profile := ""
@@ -33,6 +60,21 @@ func taskExecutionProfile(task Task) (string, error) {
 
 func isRestrictedExecutionProfile(profile string) bool {
 	return profile == executionProfileAttentionProbe || profile == executionProfileProtocolTurn
+}
+
+func restrictedOutputTokenLimit(profile string) int {
+	if isRestrictedExecutionProfile(profile) {
+		return restrictedExecutionMaxOutputTokens
+	}
+	return 0
+}
+
+func totalTaskOutputTokens(usage []TaskUsageEntry) int64 {
+	var total int64
+	for _, entry := range usage {
+		total += entry.OutputTokens
+	}
+	return total
 }
 
 func validateExecutionProfileProvider(profile, provider string) error {
@@ -62,15 +104,17 @@ func restrictTaskForExecutionProfile(task Task, profile string) Task {
 	task.ProvisionManagedWorkdir = false
 	task.ManagedWorkdirRelPath = ""
 	task.ArealProxy = nil
+	task.ChatContextSummary = boundedRestrictedContext(task.ChatContextSummary, restrictedContextMessages, restrictedContextBytes)
+	task.ChatMessage = truncateUTF8Bytes(task.ChatMessage, restrictedMessageBytes)
 	if task.Agent == nil {
 		return task
 	}
 	agentCopy := *task.Agent
-	agentCopy.Instructions = truncateRunes(agentCopy.Instructions, restrictedAgentInstructionsRunes)
+	agentCopy.Instructions = truncateUTF8Bytes(agentCopy.Instructions, restrictedAgentInstructionsBytes)
 	agentCopy.Skills = nil
 	agentCopy.CustomArgs = nil
 	agentCopy.McpConfig = nil
-	agentCopy.Memories = compactRestrictedMemories(agentCopy.Memories, restrictedMemoryRunes)
+	agentCopy.Memories = compactRestrictedMemories(agentCopy.Memories, restrictedMemoryBytes)
 	task.Agent = &agentCopy
 	return task
 }
@@ -86,8 +130,8 @@ func compactRestrictedMemories(memories []MemoryData, budget int) []MemoryData {
 			break
 		}
 		copyMemory := memory
-		copyMemory.Content = truncateRunes(copyMemory.Content, remaining)
-		used := len([]rune(copyMemory.Content))
+		copyMemory.Content = truncateUTF8Bytes(copyMemory.Content, remaining)
+		used := len(copyMemory.Content)
 		if used == 0 {
 			continue
 		}
@@ -97,15 +141,67 @@ func compactRestrictedMemories(memories []MemoryData, budget int) []MemoryData {
 	return compacted
 }
 
-func truncateRunes(value string, limit int) string {
+func truncateUTF8Tail(value string, limit int) string {
 	if limit <= 0 {
 		return ""
 	}
-	runes := []rune(value)
-	if len(runes) <= limit {
+	if len(value) <= limit {
 		return value
 	}
-	return string(runes[:limit])
+	value = value[len(value)-limit:]
+	for len(value) > 0 && !utf8.ValidString(value) {
+		value = value[1:]
+	}
+	return value
+}
+
+func boundedRestrictedContext(value string, maxMessages, maxBytes int) string {
+	value = strings.ReplaceAll(value, "\r\n", "\n")
+	value = strings.ReplaceAll(value, "\r", "\n")
+	lines := strings.Split(value, "\n")
+	bounded := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			bounded = append(bounded, line)
+		}
+	}
+	if maxMessages <= 0 || len(bounded) == 0 {
+		return ""
+	}
+	if len(bounded) > maxMessages {
+		bounded = bounded[len(bounded)-maxMessages:]
+	}
+	return truncateUTF8Tail(strings.Join(bounded, "\n"), maxBytes)
+}
+
+func restrictedMemorySummary(memories []MemoryData, budget int) string {
+	if budget <= 0 || len(memories) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, memory := range memories {
+		content := strings.TrimSpace(memory.Content)
+		if content == "" || b.Len() >= budget {
+			continue
+		}
+		prefix := "- "
+		if name := strings.TrimSpace(memory.Name); name != "" {
+			prefix += name + ": "
+		}
+		remaining := budget - b.Len()
+		if len(prefix) >= remaining {
+			break
+		}
+		if b.Len() > 0 {
+			b.WriteByte('\n')
+			remaining--
+		}
+		b.WriteString(prefix)
+		remaining -= len(prefix)
+		b.WriteString(truncateUTF8Bytes(content, remaining))
+	}
+	return truncateUTF8Bytes(b.String(), budget)
 }
 
 func restrictedExecutionSystemPrompt(profile string) string {
@@ -119,6 +215,148 @@ func restrictedExecutionSystemPrompt(profile string) string {
 	}
 }
 
+func parseRestrictedExecutionOutput(profile, output string) (json.RawMessage, error) {
+	switch profile {
+	case executionProfileAttentionProbe:
+		return parseAttentionProbeOutput(output)
+	case executionProfileProtocolTurn:
+		return parseProtocolTurnOutput(output)
+	default:
+		return nil, fmt.Errorf("execution profile %q has no restricted output contract", profile)
+	}
+}
+
+func parseAttentionProbeOutput(output string) (json.RawMessage, error) {
+	var parsed attentionProbeOutput
+	rawObject, err := decodeStrictJSONObject(output, &parsed)
+	if err != nil {
+		return nil, fmt.Errorf("attention probe output: %w", err)
+	}
+	for _, key := range attentionProbeOutputKeys {
+		rawValue, ok := rawObject[key]
+		if !ok {
+			return nil, fmt.Errorf("attention probe output: missing required field %q", key)
+		}
+		if strings.TrimSpace(string(rawValue)) == "null" {
+			return nil, fmt.Errorf("attention probe output: field %q must not be null", key)
+		}
+	}
+	if !stringInSet(parsed.Decision, "SILENT", "ANSWER", "CONTRIBUTE", "COORDINATE") {
+		return nil, fmt.Errorf("attention probe output: invalid decision %q", parsed.Decision)
+	}
+	if parsed.Confidence < 0 || parsed.Confidence > 1 {
+		return nil, fmt.Errorf("attention probe output: confidence %v is outside [0,1]", parsed.Confidence)
+	}
+	if !stringInSet(parsed.ValueType, "none", "direct_answer", "unique_evidence", "correction", "task_claim", "needs_protocol") {
+		return nil, fmt.Errorf("attention probe output: invalid value_type %q", parsed.ValueType)
+	}
+	if parsed.EvidenceRefs == nil {
+		return nil, fmt.Errorf("attention probe output: evidence_refs must be an array")
+	}
+	var untypedEvidence []any
+	if err := json.Unmarshal(rawObject["evidence_refs"], &untypedEvidence); err != nil {
+		return nil, fmt.Errorf("attention probe output: evidence_refs must be an array of strings")
+	}
+	for _, ref := range untypedEvidence {
+		if _, ok := ref.(string); !ok {
+			return nil, fmt.Errorf("attention probe output: evidence_refs must contain only strings")
+		}
+	}
+	if strings.TrimSpace(parsed.ModelVersion) == "" {
+		return nil, fmt.Errorf("attention probe output: model_version must not be empty")
+	}
+	if parsed.SeenUpToSeq < 0 {
+		return nil, fmt.Errorf("attention probe output: seen_up_to_seq must be non-negative")
+	}
+	canonical, err := json.Marshal(parsed)
+	if err != nil {
+		return nil, fmt.Errorf("attention probe output: marshal canonical result: %w", err)
+	}
+	return canonical, nil
+}
+
+func parseProtocolTurnOutput(output string) (json.RawMessage, error) {
+	var parsed map[string]json.RawMessage
+	if _, err := decodeStrictJSONObject(output, &parsed); err != nil {
+		return nil, fmt.Errorf("protocol turn output: %w", err)
+	}
+	if len(parsed) == 0 {
+		return nil, fmt.Errorf("protocol turn output: JSON object must not be empty")
+	}
+	canonical, err := json.Marshal(parsed)
+	if err != nil {
+		return nil, fmt.Errorf("protocol turn output: marshal canonical result: %w", err)
+	}
+	return canonical, nil
+}
+
+func bindRestrictedOutputMetadata(profile string, output json.RawMessage, configuredModel string, usage []TaskUsageEntry, task Task) (json.RawMessage, error) {
+	if profile != executionProfileAttentionProbe {
+		return output, nil
+	}
+	var parsed attentionProbeOutput
+	if err := json.Unmarshal(output, &parsed); err != nil {
+		return nil, fmt.Errorf("bind attention probe metadata: %w", err)
+	}
+	for _, entry := range usage {
+		if model := strings.TrimSpace(entry.Model); model != "" {
+			parsed.ModelVersion = model
+			break
+		}
+	}
+	if model := strings.TrimSpace(configuredModel); parsed.ModelVersion == "" && model != "" {
+		parsed.ModelVersion = model
+	}
+	if task.InboxEvent != nil {
+		parsed.SeenUpToSeq = task.InboxEvent.SeqTo
+	}
+	canonical, err := json.Marshal(parsed)
+	if err != nil {
+		return nil, fmt.Errorf("bind attention probe metadata: %w", err)
+	}
+	return canonical, nil
+}
+
+func decodeStrictJSONObject(output string, destination any) (map[string]json.RawMessage, error) {
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" {
+		return nil, fmt.Errorf("empty output")
+	}
+	decoder := json.NewDecoder(strings.NewReader(trimmed))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(destination); err != nil {
+		return nil, fmt.Errorf("invalid JSON object: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("multiple JSON values are not allowed")
+		}
+		return nil, fmt.Errorf("trailing content is not allowed: %w", err)
+	}
+	var rawObject map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(trimmed), &rawObject); err != nil || rawObject == nil {
+		return nil, fmt.Errorf("top-level value must be a JSON object")
+	}
+	return rawObject, nil
+}
+
+func stringInSet(value string, allowed ...string) bool {
+	for _, candidate := range allowed {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func suppressPublicOutputForTask(task Task) bool {
+	if task.ExecutionConfig == nil {
+		return false
+	}
+	profile := strings.TrimSpace(task.ExecutionConfig.ExecutionProfile)
+	return profile != "" && profile != executionProfileFull
+}
+
 // restrictResultForExecutionProfile prevents a sidecar cognition run from
 // mutating the primary chat session or becoming a user-visible completion.
 // A later attention-round layer persists the structured probe output through
@@ -129,6 +367,7 @@ func restrictResultForExecutionProfile(result TaskResult, profile string) TaskRe
 	}
 	result.SessionID = ""
 	result.WorkDir = ""
+	result.OutputSuppressedReason = protocol.ChannelOutputSuppressedReasonRestrictedExecutionProfile
 	if result.Status != "completed" {
 		return result
 	}

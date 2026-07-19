@@ -15,13 +15,20 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-const memoryCurationClaimTimeout = 10 * time.Minute
+const (
+	memoryCurationClaimTimeout = 10 * time.Minute
+	memoryCurationMaxRunAge    = 30 * time.Minute
+	memoryCurationMaxAttempts  = 3
+)
 
 func (h *Handler) claimPendingMemoryCurationRun(ctx context.Context, rt db.AgentRuntime, activeRunID string) (*protocol.DaemonHeartbeatPendingMemoryCuration, error) {
 	var pending protocol.DaemonHeartbeatPendingMemoryCuration
 	var targetAgentIDs []string
 	var instructions string
 	var customArgsRaw, mcpConfigRaw []byte
+	if err := h.failExpiredMemoryCurationRuns(ctx, rt); err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(activeRunID) != "" {
 		if _, err := h.DB.Exec(ctx, `
 			UPDATE memory_curation_run
@@ -48,7 +55,9 @@ func (h *Handler) claimPendingMemoryCurationRun(ctx context.Context, rt db.Agent
 		          WHERE active.runtime_id = r.runtime_id AND active.status = 'running'
 		            AND active.claimed_at >= now() - make_interval(secs => $3::double precision)
 		       ))
-		       OR (r.status = 'running' AND r.claimed_at < now() - make_interval(secs => $3::double precision))
+		       OR (r.status = 'running' AND r.claimed_at < now() - make_interval(secs => $3::double precision)
+		           AND r.attempt < $4
+		           AND (r.started_at IS NULL OR r.started_at >= now() - make_interval(secs => $5::double precision)))
 		     )
 		   ORDER BY (r.status = 'running') DESC, r.created_at
 		   FOR UPDATE SKIP LOCKED
@@ -73,7 +82,7 @@ func (h *Handler) claimPendingMemoryCurationRun(ctx context.Context, rt db.Agent
 		  FROM claimed c
 		  LEFT JOIN memory_curator_profile p ON p.id = c.profile_id
 		  LEFT JOIN agent a ON a.id = c.curator_agent_id
-	`, rt.ID, rt.WorkspaceID, memoryCurationClaimTimeout.Seconds()).Scan(
+	`, rt.ID, rt.WorkspaceID, memoryCurationClaimTimeout.Seconds(), memoryCurationMaxAttempts, memoryCurationMaxRunAge.Seconds()).Scan(
 		&pending.ID, &pending.WorkspaceID, &pending.Stage, &pending.DateFrom, &pending.DateTo,
 		&targetAgentIDs, &pending.CuratorAgentID, &pending.CuratorModel, &pending.CuratorThinkingLevel,
 		&customArgsRaw, &mcpConfigRaw, &instructions,
@@ -94,6 +103,27 @@ func (h *Handler) claimPendingMemoryCurationRun(ctx context.Context, rt db.Agent
 	}
 	pending.DBEvidence = h.memoryCurationEvidenceBundles(ctx, pending.WorkspaceID, pending.AgentIDs, pending.DateFrom, pending.DateTo, pending.Stage == "team_curation")
 	return &pending, nil
+}
+
+func (h *Handler) failExpiredMemoryCurationRuns(ctx context.Context, rt db.AgentRuntime) error {
+	_, err := h.DB.Exec(ctx, `
+		UPDATE memory_curation_run
+		   SET status = 'failed', finished_at = now(),
+		       error = CASE
+		         WHEN started_at IS NOT NULL AND started_at < now() - make_interval(secs => $3::double precision)
+		           THEN 'memory curation exceeded server max runtime'
+		         ELSE 'memory curation exceeded max daemon claim attempts'
+		       END
+		 WHERE runtime_id = $1::uuid
+		   AND workspace_id = $2
+		   AND execution_owner = 'daemon'
+		   AND status = 'running'
+		   AND (
+		     (started_at IS NOT NULL AND started_at < now() - make_interval(secs => $3::double precision))
+		     OR (claimed_at < now() - make_interval(secs => $4::double precision) AND attempt >= $5)
+		   )
+	`, rt.ID, uuidToString(rt.WorkspaceID), memoryCurationMaxRunAge.Seconds(), memoryCurationClaimTimeout.Seconds(), memoryCurationMaxAttempts)
+	return err
 }
 
 func (h *Handler) memoryCurationEvidenceBundles(ctx context.Context, workspaceID string, agentIDs []string, dateFrom, dateTo string, includePendingCandidates bool) []protocol.DaemonMemoryCurationEvidenceBundle {

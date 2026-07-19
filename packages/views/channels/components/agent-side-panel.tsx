@@ -40,6 +40,8 @@ interface AgentSidePanelProps {
   members: readonly MemberWithUser[];
   runtimeStats?: RuntimeTokenStats | null;
   onClose: () => void;
+  /** Mobile profile routes reuse this exact tab/body surface without dock chrome. */
+  variant?: "panel" | "page";
 }
 
 /**
@@ -55,7 +57,14 @@ interface AgentSidePanelProps {
  * one interface lying about the other. Profile now carries an identity section
  * (read-only) plus a runtime-config section (editable/gated) in one place.
  */
-export function AgentSidePanel({ agent, currentUserId, members, runtimeStats, onClose }: AgentSidePanelProps) {
+export function AgentSidePanel({
+  agent,
+  currentUserId,
+  members,
+  runtimeStats,
+  onClose,
+  variant = "panel",
+}: AgentSidePanelProps) {
   const { t } = useT("agents");
   const isOwner = !!currentUserId && agent.owner_id === currentUserId;
   const devProfileAccess = useConfigStore((state) => state.agentProfileDevAccessEnabled);
@@ -64,11 +73,22 @@ export function AgentSidePanel({ agent, currentUserId, members, runtimeStats, on
   if (canInspectAgent) availableTabs.push("activity", "files");
   const showTabBar = availableTabs.length > 1;
   const [tab, setTab] = useState<OwnerTab>("profile");
+  const [mountedTabs, setMountedTabs] = useState<Set<OwnerTab>>(() => new Set(["profile"]));
   const displayName = resolveActorDisplayName(agent, agent.id);
   const initials = initialsOf(displayName);
+  const selectTab = (nextTab: OwnerTab) => {
+    setTab(nextTab);
+    if (variant === "page") {
+      setMountedTabs((current) =>
+        current.has(nextTab) ? current : new Set([...current, nextTab]),
+      );
+    }
+  };
+  const renderTab = (tabId: OwnerTab) =>
+    variant === "page" ? mountedTabs.has(tabId) : tab === tabId;
 
   return (
-    <aside className="flex h-full min-h-0 flex-col border-l bg-background">
+    <aside className={cn("flex h-full min-h-0 flex-col bg-background", variant === "panel" && "border-l")}>
       <div className="flex items-center justify-between gap-3 border-b p-4">
         <div className="flex min-w-0 items-center gap-2.5">
           <ActorAvatarBase
@@ -85,15 +105,17 @@ export function AgentSidePanel({ agent, currentUserId, members, runtimeStats, on
             <AgentPresenceStatusLine agentId={agent.id} className="max-w-[9rem]" />
           </div>
         </div>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          onClick={onClose}
-          aria-label={t(($) => $.side_panel.close_aria)}
-        >
-          <X className="size-4" />
-        </Button>
+        {variant === "panel" ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={onClose}
+            aria-label={t(($) => $.side_panel.close_aria)}
+          >
+            <X className="size-4" />
+          </Button>
+        ) : null}
       </div>
 
       {showTabBar ? (
@@ -105,9 +127,10 @@ export function AgentSidePanel({ agent, currentUserId, members, runtimeStats, on
                 <button
                   key={tabId}
                   type="button"
-                  onClick={() => setTab(tabId)}
+                  onClick={() => selectTab(tabId)}
                   className={cn(
                     "flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-2.5 text-xs font-medium transition-colors",
+                    variant === "page" && "min-h-11",
                     tab === tabId
                       ? "border-foreground text-foreground"
                       : "border-transparent text-muted-foreground hover:text-foreground",
@@ -120,26 +143,34 @@ export function AgentSidePanel({ agent, currentUserId, members, runtimeStats, on
             })}
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto">
-            {tab === "activity" && canInspectAgent && <ActivityTab agent={agent} />}
-            {tab === "profile" && (
-              <AgentProfileTabContent
-                agent={agent}
-                members={members}
-                currentUserId={currentUserId}
-                runtimeStats={runtimeStats}
-              />
-            )}
-            {tab === "files" && canInspectAgent && (
-              <AgentFilesPanel
-                agent={agent}
-                currentUserId={currentUserId}
-                members={members}
-                canReadFiles={canInspectAgent}
-                canEditFiles={isOwner}
-                onClose={onClose}
-                hideHeader
-              />
-            )}
+            {renderTab("activity") && canInspectAgent ? (
+              <div className={tab === "activity" ? undefined : "hidden"}>
+                <ActivityTab agent={agent} />
+              </div>
+            ) : null}
+            {renderTab("profile") ? (
+              <div className={tab === "profile" ? undefined : "hidden"}>
+                <AgentProfileTabContent
+                  agent={agent}
+                  members={members}
+                  currentUserId={currentUserId}
+                  runtimeStats={runtimeStats}
+                />
+              </div>
+            ) : null}
+            {renderTab("files") && canInspectAgent ? (
+              <div className={tab === "files" ? undefined : "hidden"}>
+                <AgentFilesPanel
+                  agent={agent}
+                  currentUserId={currentUserId}
+                  members={members}
+                  canReadFiles={canInspectAgent}
+                  canEditFiles={isOwner}
+                  onClose={onClose}
+                  hideHeader
+                />
+              </div>
+            ) : null}
           </div>
         </>
       ) : (

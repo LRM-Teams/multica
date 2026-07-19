@@ -150,13 +150,18 @@ function makeAgent(ownerId = "user-owner", managedRole?: "group_manager"): Agent
   };
 }
 
-function renderPanel(currentUserId = "user-owner", managedRole?: "group_manager") {
+function renderPanel(
+  currentUserId = "user-owner",
+  managedRole?: "group_manager",
+  variant?: "page",
+) {
   return render(
     <AgentSidePanel
       agent={makeAgent("user-owner", managedRole)}
       currentUserId={currentUserId}
       members={members}
       onClose={() => {}}
+      variant={variant}
     />,
   );
 }
@@ -193,6 +198,19 @@ describe("AgentSidePanel", () => {
       canReadFiles: true,
       canEditFiles: false,
     }));
+  });
+
+  it("keeps visited page tabs mounted and gives mobile tab targets 44px", () => {
+    renderPanel("user-owner", undefined, "page");
+
+    expect(screen.queryByRole("button", { name: "Close panel" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Activity" })).toHaveClass("min-h-11");
+
+    fireEvent.click(screen.getByRole("button", { name: "Activity" }));
+    expect(screen.getByText("Activity content")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Profile" }));
+    expect(screen.getByText("Activity content")).toBeInTheDocument();
   });
 
   it("never renders a separate Config tab (merged into Profile, #565)", () => {

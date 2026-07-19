@@ -685,6 +685,14 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "failed to record inbox terminal outcome")
 		return
 	}
+	var collaborationWakes []channelAttentionWake
+	if !attentionProbe && !protocolTurn {
+		collaborationWakes, err = h.completeCollaborationTurnTx(r.Context(), tx, event)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to advance collaboration turn")
+			return
+		}
+	}
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit inbox completion")
 		return
@@ -700,6 +708,9 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 	}
 	h.persistChatRuntimeTokenStats(r.Context(), event.ChatSessionID, req.RuntimeStats)
 	for _, wake := range attentionCompletion.wakes {
+		h.recordChannelAgentPromptWake(r.Context(), wake.channel, wake.agent, wake.trigger, wake.reason, wake.result)
+	}
+	for _, wake := range collaborationWakes {
 		h.recordChannelAgentPromptWake(r.Context(), wake.channel, wake.agent, wake.trigger, wake.reason, wake.result)
 	}
 	if !req.MustReplyFailure && !attentionProbe && !protocolTurn {

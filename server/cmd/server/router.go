@@ -1184,6 +1184,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/members/batch", h.AddChannelMembers)
 					r.Delete("/members/{memberType}/{memberId}", h.RemoveChannelMember)
 					r.Post("/group-manager", h.InviteGroupManager)
+					r.Post("/collaboration-sessions", h.CreateCollaborationSession)
 					r.Get("/messages", h.ListChannelMessages)
 					r.Get("/messages/search", h.SearchChannelMessages)
 					r.Post("/messages", h.SendChannelMessage)

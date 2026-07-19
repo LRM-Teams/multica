@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -148,5 +149,184 @@ func TestSequentialCollaborationTurnAdvancesToNextAgent(t *testing.T) {
 	}
 	if sessionStatus != "completed" || granted != 0 || consumed != 2 {
 		t.Fatalf("completed status=%s granted=%d consumed=%d, want completed/0/2", sessionStatus, granted, consumed)
+	}
+}
+
+func TestSequentialCollaborationRejectsDuplicateTurnConsumption(t *testing.T) {
+	fixture := newChannelAttentionFixture(t, []attentionRuntimeSpec{{}})
+	trigger := fixture.insertMessage(t, "user", testUserID, "Count once", nil)
+	result, err := fixture.handler.createCollaborationSession(context.Background(), collaborationSessionCreateParams{
+		WorkspaceID:         parseUUID(testWorkspaceID),
+		ChannelID:           parseUUID(fixture.channel.ID),
+		SourceMessageID:     parseUUID(trigger.ID),
+		ParticipantAgentIDs: []pgtype.UUID{parseUUID(fixture.agentIDs[0])},
+		Mode:                "sequential",
+		CompletionCondition: map[string]any{"max_turns": 2},
+	})
+	if err != nil {
+		t.Fatalf("create collaboration session: %v", err)
+	}
+	var eventID pgtype.UUID
+	if err := testPool.QueryRow(context.Background(), `SELECT inbox_event_id FROM collaboration_turn WHERE session_id = $1 AND turn_index = 0`, result.SessionID).Scan(&eventID); err != nil {
+		t.Fatalf("load turn event: %v", err)
+	}
+	event, err := fixture.handler.Queries.GetAgentInboxEvent(context.Background(), eventID)
+	if err != nil {
+		t.Fatalf("load turn inbox event: %v", err)
+	}
+	tx, err := fixture.handler.TxStarter.Begin(context.Background())
+	if err != nil {
+		t.Fatalf("begin first completion: %v", err)
+	}
+	if _, err := fixture.handler.completeCollaborationTurnTx(context.Background(), tx, event); err != nil {
+		_ = tx.Rollback(context.Background())
+		t.Fatalf("first completion: %v", err)
+	}
+	if err := tx.Commit(context.Background()); err != nil {
+		t.Fatalf("commit first completion: %v", err)
+	}
+	tx, err = fixture.handler.TxStarter.Begin(context.Background())
+	if err != nil {
+		t.Fatalf("begin duplicate completion: %v", err)
+	}
+	_, err = fixture.handler.completeCollaborationTurnTx(context.Background(), tx, event)
+	_ = tx.Rollback(context.Background())
+	if err == nil {
+		t.Fatal("duplicate completion unexpectedly succeeded")
+	}
+}
+
+func TestSequentialCollaborationRejectsStaleSessionVersion(t *testing.T) {
+	fixture := newChannelAttentionFixture(t, []attentionRuntimeSpec{{}})
+	trigger := fixture.insertMessage(t, "user", testUserID, "Count once", nil)
+	result, err := fixture.handler.createCollaborationSession(context.Background(), collaborationSessionCreateParams{
+		WorkspaceID:         parseUUID(testWorkspaceID),
+		ChannelID:           parseUUID(fixture.channel.ID),
+		SourceMessageID:     parseUUID(trigger.ID),
+		ParticipantAgentIDs: []pgtype.UUID{parseUUID(fixture.agentIDs[0])},
+		Mode:                "sequential",
+	})
+	if err != nil {
+		t.Fatalf("create collaboration session: %v", err)
+	}
+	var eventID pgtype.UUID
+	if err := testPool.QueryRow(context.Background(), `SELECT inbox_event_id FROM collaboration_turn WHERE session_id = $1`, result.SessionID).Scan(&eventID); err != nil {
+		t.Fatalf("load turn event: %v", err)
+	}
+	if _, err := testPool.Exec(context.Background(), `UPDATE collaboration_session SET version = version + 1 WHERE id = $1`, result.SessionID); err != nil {
+		t.Fatalf("make turn stale: %v", err)
+	}
+	event, err := fixture.handler.Queries.GetAgentInboxEvent(context.Background(), eventID)
+	if err != nil {
+		t.Fatalf("load turn inbox event: %v", err)
+	}
+	tx, err := fixture.handler.TxStarter.Begin(context.Background())
+	if err != nil {
+		t.Fatalf("begin stale completion: %v", err)
+	}
+	_, err = fixture.handler.completeCollaborationTurnTx(context.Background(), tx, event)
+	_ = tx.Rollback(context.Background())
+	if err == nil {
+		t.Fatal("stale completion unexpectedly succeeded")
+	}
+}
+
+func TestCollaborationTurnTimeoutSuspendsSession(t *testing.T) {
+	fixture := newChannelAttentionFixture(t, []attentionRuntimeSpec{{}})
+	trigger := fixture.insertMessage(t, "user", testUserID, "Count slowly", nil)
+	result, err := fixture.handler.createCollaborationSession(context.Background(), collaborationSessionCreateParams{
+		WorkspaceID:         parseUUID(testWorkspaceID),
+		ChannelID:           parseUUID(fixture.channel.ID),
+		SourceMessageID:     parseUUID(trigger.ID),
+		ParticipantAgentIDs: []pgtype.UUID{parseUUID(fixture.agentIDs[0])},
+		Mode:                "sequential",
+		TurnTimeout:         time.Second,
+	})
+	if err != nil {
+		t.Fatalf("create collaboration session: %v", err)
+	}
+	if _, err := testPool.Exec(context.Background(), `UPDATE collaboration_turn SET deadline_at = now() - interval '1 millisecond' WHERE session_id = $1`, result.SessionID); err != nil {
+		t.Fatalf("expire turn: %v", err)
+	}
+	if got := fixture.handler.SweepCollaborationTurnTimeouts(context.Background(), 10); got != 1 {
+		t.Fatalf("SweepCollaborationTurnTimeouts() = %d, want 1", got)
+	}
+	var sessionStatus, grantStatus string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT session.status, turn.grant_status
+		FROM collaboration_session session
+		JOIN collaboration_turn turn ON turn.session_id = session.id
+		WHERE session.id = $1`, result.SessionID).Scan(&sessionStatus, &grantStatus); err != nil {
+		t.Fatalf("inspect expired turn: %v", err)
+	}
+	if sessionStatus != "suspended" || grantStatus != "expired" {
+		t.Fatalf("session=%s turn=%s, want suspended/expired", sessionStatus, grantStatus)
+	}
+}
+
+func TestCollaborationTurnRejectsWrongAgentEvent(t *testing.T) {
+	fixture := newChannelAttentionFixture(t, []attentionRuntimeSpec{{}, {}})
+	trigger := fixture.insertMessage(t, "user", testUserID, "Only the granted agent may act", nil)
+	result, err := fixture.handler.createCollaborationSession(context.Background(), collaborationSessionCreateParams{
+		WorkspaceID:         parseUUID(testWorkspaceID),
+		ChannelID:           parseUUID(fixture.channel.ID),
+		SourceMessageID:     parseUUID(trigger.ID),
+		ParticipantAgentIDs: []pgtype.UUID{parseUUID(fixture.agentIDs[0]), parseUUID(fixture.agentIDs[1])},
+		Mode:                "sequential",
+	})
+	if err != nil {
+		t.Fatalf("create collaboration session: %v", err)
+	}
+	var eventID pgtype.UUID
+	if err := testPool.QueryRow(context.Background(), `SELECT inbox_event_id FROM collaboration_turn WHERE session_id = $1`, result.SessionID).Scan(&eventID); err != nil {
+		t.Fatalf("load turn event: %v", err)
+	}
+	event, err := fixture.handler.Queries.GetAgentInboxEvent(context.Background(), eventID)
+	if err != nil {
+		t.Fatalf("load turn inbox event: %v", err)
+	}
+	event.AgentID = parseUUID(fixture.agentIDs[1])
+	tx, err := fixture.handler.TxStarter.Begin(context.Background())
+	if err != nil {
+		t.Fatalf("begin wrong-agent completion: %v", err)
+	}
+	_, err = fixture.handler.completeCollaborationTurnTx(context.Background(), tx, event)
+	_ = tx.Rollback(context.Background())
+	if err == nil {
+		t.Fatal("wrong-agent completion unexpectedly succeeded")
+	}
+}
+
+func TestCollaborationSessionBindsIssueOptionally(t *testing.T) {
+	fixture := newChannelAttentionFixture(t, []attentionRuntimeSpec{{}})
+	trigger := fixture.insertMessage(t, "user", testUserID, "Coordinate this issue", nil)
+	var issueID string
+	if err := testPool.QueryRow(context.Background(), `
+		WITH next_number AS (
+		  SELECT COALESCE(MAX(number), 0) + 1 AS n FROM issue WHERE workspace_id = $1
+		)
+		INSERT INTO issue (workspace_id, title, description, status, priority, creator_type, creator_id, number)
+		SELECT $1, 'collaboration issue binding', '', 'todo', 'none', 'member', $2, n
+		FROM next_number
+		RETURNING id`, testWorkspaceID, testUserID).Scan(&issueID); err != nil {
+		t.Fatalf("create issue: %v", err)
+	}
+	result, err := fixture.handler.createCollaborationSession(context.Background(), collaborationSessionCreateParams{
+		WorkspaceID:         parseUUID(testWorkspaceID),
+		ChannelID:           parseUUID(fixture.channel.ID),
+		IssueID:             parseUUID(issueID),
+		SourceMessageID:     parseUUID(trigger.ID),
+		ParticipantAgentIDs: []pgtype.UUID{parseUUID(fixture.agentIDs[0])},
+		Mode:                "sequential",
+	})
+	if err != nil {
+		t.Fatalf("create issue-bound collaboration session: %v", err)
+	}
+	var boundIssue string
+	if err := testPool.QueryRow(context.Background(), `SELECT issue_id::text FROM collaboration_session WHERE id = $1`, result.SessionID).Scan(&boundIssue); err != nil {
+		t.Fatalf("load bound issue: %v", err)
+	}
+	if boundIssue != issueID {
+		t.Fatalf("issue_id = %s, want %s", boundIssue, issueID)
 	}
 }

@@ -942,10 +942,17 @@ func (h *Handler) completeFailedAgentInboxEvent(w http.ResponseWriter, r *http.R
 		return
 	}
 	attentionRoundOutcome := ""
+	var collaborationWakes []channelAttentionWake
 	if attentionProbe {
 		attentionRoundOutcome, err = failChannelAttentionParticipantTx(r.Context(), tx, event.ID, errText)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to record attention participant failure")
+			return
+		}
+	} else {
+		collaborationWakes, err = h.failCollaborationTurnTx(r.Context(), tx, event, errText)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to record collaboration turn failure")
 			return
 		}
 	}
@@ -987,6 +994,9 @@ func (h *Handler) completeFailedAgentInboxEvent(w http.ResponseWriter, r *http.R
 		if attentionRoundOutcome != "" {
 			h.Metrics.RecordChannelAttentionRound(attentionRoundOutcome)
 		}
+	}
+	for _, wake := range collaborationWakes {
+		h.recordChannelAgentPromptWake(r.Context(), wake.channel, wake.agent, wake.trigger, wake.reason, wake.result)
 	}
 	runtimeID := h.runtimeIDForAgentInboxDelivery(r.Context(), deliveryID)
 	if alreadyReplied {

@@ -538,6 +538,7 @@ func runChannelAttentionWorkers(ctx context.Context, h *handler.Handler) {
 	defer timeoutTicker.Stop()
 	h.ProcessPendingChannelAttentionDispatches(ctx, 64)
 	h.SweepChannelAttentionTimeouts(ctx, 64)
+	h.SweepCollaborationTurnTimeouts(ctx, 64)
 	for {
 		select {
 		case <-ctx.Done():
@@ -546,6 +547,7 @@ func runChannelAttentionWorkers(ctx context.Context, h *handler.Handler) {
 			h.ProcessPendingChannelAttentionDispatches(ctx, 64)
 		case <-timeoutTicker.C:
 			h.SweepChannelAttentionTimeouts(ctx, 64)
+			h.SweepCollaborationTurnTimeouts(ctx, 64)
 		}
 	}
 }

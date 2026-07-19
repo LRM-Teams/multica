@@ -36,11 +36,16 @@ export function evolutionMetricsOptions(wsId: string, days = 30) {
   });
 }
 
+const ACTIVE_MEMORY_CURATION_STATUSES = new Set(["queued", "waiting_runtime", "running"]);
+
 export function workspaceMemoryCurationStatusOptions(wsId: string) {
   return queryOptions({
     queryKey: evolutionKeys.memoryCurationStatus(wsId),
     queryFn: () => api.getWorkspaceMemoryCurationStatus(wsId),
     enabled: !!wsId,
+    refetchInterval: (query) => (
+      query.state.data?.stages?.some((stage) => ACTIVE_MEMORY_CURATION_STATUSES.has(stage.status)) ? 5000 : false
+    ),
   });
 }
 
@@ -49,6 +54,9 @@ export function memoryCurationRunOptions(wsId: string, runId: string) {
     queryKey: evolutionKeys.memoryCurationRun(wsId, runId),
     queryFn: () => api.getMemoryCurationRun(wsId, runId),
     enabled: !!wsId && !!runId,
+    refetchInterval: (query) => (
+      ACTIVE_MEMORY_CURATION_STATUSES.has(query.state.data?.status ?? "") ? 5000 : false
+    ),
   });
 }
 

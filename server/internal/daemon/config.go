@@ -62,6 +62,7 @@ const (
 	DefaultGCArtifactTTL            = 12 * time.Hour // 12h — drop regenerable artifacts on completed but still-open issues
 	DefaultAutoUpdateCheckInterval  = 6 * time.Hour  // how often the daemon polls GitHub for a newer CLI release
 	DefaultSharedSkillsSyncInterval = 60 * time.Second
+	DefaultMemoryCurationRunTimeout = 10 * time.Minute
 	DefaultGrokPersistentIdleTTL    = 15 * time.Minute
 	DefaultPiPersistentIdleTTL      = 15 * time.Minute
 )
@@ -101,6 +102,7 @@ type Config struct {
 	SharedSkillsSyncInterval       time.Duration         // how often to scan and sync SharedSkillsDir
 	MemoryCurationL3ReviewEnabled  bool                  // run the local Pi L3 reviewer during daemon-side curation
 	MemoryCurationL3ReviewTimeout  time.Duration         // per-agent L3 reviewer timeout
+	MemoryCurationRunTimeout       time.Duration         // wall-clock timeout for one daemon-claimed curation run
 	GrokPersistentIdleTTL          time.Duration         // 0 disables idle chat-session eviction
 	PiPersistentIdleTTL            time.Duration         // 0 disables idle Pi chat-session eviction
 	PollInterval                   time.Duration
@@ -509,6 +511,13 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		}
 		memoryCurationL3ReviewTimeout = time.Duration(seconds) * time.Second
 	}
+	memoryCurationRunTimeout, err := durationFromEnv("MULTICA_DAEMON_MEMORY_CURATION_RUN_TIMEOUT", DefaultMemoryCurationRunTimeout)
+	if err != nil {
+		return Config{}, err
+	}
+	if memoryCurationRunTimeout <= 0 {
+		return Config{}, fmt.Errorf("MULTICA_DAEMON_MEMORY_CURATION_RUN_TIMEOUT: must be positive")
+	}
 	grokPersistentIdleTTL, err := durationFromEnv("MULTICA_GROK_PERSISTENT_IDLE_TTL", DefaultGrokPersistentIdleTTL)
 	if err != nil {
 		return Config{}, err
@@ -540,6 +549,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		SharedSkillsSyncInterval:       sharedSkillsInterval,
 		MemoryCurationL3ReviewEnabled:  memoryCurationL3ReviewEnabled,
 		MemoryCurationL3ReviewTimeout:  memoryCurationL3ReviewTimeout,
+		MemoryCurationRunTimeout:       memoryCurationRunTimeout,
 		GrokPersistentIdleTTL:          grokPersistentIdleTTL,
 		PiPersistentIdleTTL:            piPersistentIdleTTL,
 		HealthPort:                     healthPort,

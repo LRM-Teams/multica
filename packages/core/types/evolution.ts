@@ -362,6 +362,10 @@ export interface MemoryCurationRunDetail extends MemoryCurationStageStatus {
   runtime_id?: string;
   runtime_name?: string;
   runtime_device_info?: string;
+  runtime_last_seen_at?: string | null;
+  attempt?: number;
+  claimed_at?: string | null;
+  claimed_age_seconds?: number;
   curator_agent_id?: string;
   curator_agent_name?: string;
   curator_model?: string;

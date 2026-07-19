@@ -133,12 +133,11 @@ export function formatTokens(n: number): string {
 //   Moonshot:  https://www.kimi.com/resources/kimi-k2-6-pricing
 //   Zhipu:     https://docs.z.ai/guides/overview/pricing
 //
-// Anthropic's cacheWrite reflects the 5-minute cache TTL (1.25× input); the
+// Anthropic's cacheWrite reflects the 5-minute cache TTL (1.25x input); the
 // daemon reports cache_creation_input_tokens without TTL metadata, so 5m is
-// the safest / cheapest assumption (matches the API default). OpenAI,
-// DeepSeek, Moonshot and Zhipu do not bill cache writes separately (cached
-// input is just discounted on subsequent reads), so cacheWrite mirrors
-// input there.
+// the safest / cheapest assumption (matches the API default). GPT-5.6 also
+// publishes cache-write rates; older OpenAI, DeepSeek, Moonshot and Zhipu
+// entries mirror input when separate cache-write billing is not published.
 //
 // The resolver matches exact keys after stripping a trailing date snapshot
 // (see `resolvePricing` below). It deliberately does NOT do startsWith
@@ -175,6 +174,9 @@ const MODEL_PRICING: Record<
   // -- OpenAI: dotted-minor Codex catalog SKUs. Each generation is priced
   //    independently — no fallback to `gpt-5`. Entries track
   //    `server/pkg/agent/models.go` (Codex provider list).
+  "gpt-5.6-sol":        { input: 5,    output: 30,   cacheRead: 0.50,  cacheWrite: 6.25 },
+  "gpt-5.6-terra":      { input: 2.50, output: 15,   cacheRead: 0.25,  cacheWrite: 3.125 },
+  "gpt-5.6-luna":       { input: 1,    output: 6,    cacheRead: 0.10,  cacheWrite: 1.25 },
   "gpt-5.5":            { input: 5,    output: 30,   cacheRead: 0.50,  cacheWrite: 5 },
   "gpt-5.4-mini":       { input: 0.75, output: 4.50, cacheRead: 0.075, cacheWrite: 0.75 },
   "gpt-5.4":            { input: 2.50, output: 15,   cacheRead: 0.25,  cacheWrite: 2.50 },
@@ -216,6 +218,7 @@ const MODEL_PRICING: Record<
   // -- Zhipu z.ai (docs.z.ai/guides/overview/pricing). Free flash tiers
   //    are priced at 0 so they resolve cleanly instead of falling through
   //    to the "unmapped" diagnostic. --
+  "glm-5.2":            { input: 1.4,  output: 4.4,  cacheRead: 0.26,   cacheWrite: 1.4 },
   "glm-5.1":            { input: 1.4,  output: 4.4,  cacheRead: 0.26,   cacheWrite: 1.4 },
   "glm-5":              { input: 1.0,  output: 3.2,  cacheRead: 0.2,    cacheWrite: 1.0 },
   "glm-5-turbo":        { input: 1.2,  output: 4.0,  cacheRead: 0.24,   cacheWrite: 1.2 },

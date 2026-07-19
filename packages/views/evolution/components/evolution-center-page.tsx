@@ -223,6 +223,9 @@ const COPY = {
   dedupedTeamKnowledge: "Deduped team knowledge and shared skills",
   stageStatus: "Status",
   curator: "Curator",
+  claimAge: "Claim age",
+  attempt: "Attempt",
+  runtimeLastSeen: "Runtime last seen",
   threshold: "Threshold",
   promotedSharedUnits: "Promoted shared units",
   teamItems: "team items",
@@ -375,6 +378,7 @@ function curationTimelineStatusLabel(value: string, copy: EvolutionCopy): string
     case "done": return copy("timelineDone");
     case "failed": return copy("timelineFailed");
     case "pending": return copy("timelinePending");
+    case "running": return copy("running");
     case "skipped": return copy("timelineSkipped");
     case "started": return copy("timelineStarted");
     default: return copy("timelineUnknown"); // fail-closed, never raw
@@ -1242,6 +1246,9 @@ function CurationRunDetailCard({ run, selectedRunId }: { run: MemoryCurationRunD
           <MiniStat label={copy("stageStatus")} value={curationStatusLabel(run.status, copy)} />
           <MiniStat label={copy("runtime")} value={run.runtime_name || shortId(run.runtime_id)} />
           <MiniStat label={copy("curator")} value={run.curator_agent_name || shortId(run.curator_agent_id)} />
+          <MiniStat label={copy("attempt")} value={run.attempt == null ? "-" : String(run.attempt)} />
+          <MiniStat label={copy("claimAge")} value={run.claimed_at ? formatDuration(run.claimed_age_seconds ?? 0, "<1s") : "-"} />
+          <MiniStat label={copy("runtimeLastSeen")} value={run.runtime_last_seen_at ? formatRunTime(run.runtime_last_seen_at, copy) : "-"} />
           <MiniStat label={copy("mode")} value={run.curator_mode || "-"} />
           <MiniStat label={copy("threshold")} value={run.confidence_threshold == null ? "-" : String(run.confidence_threshold)} />
         </div>

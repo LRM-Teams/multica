@@ -46,6 +46,10 @@ type memoryCurationRunResponse struct {
 	RuntimeID           string                           `json:"runtime_id,omitempty"`
 	RuntimeName         string                           `json:"runtime_name,omitempty"`
 	RuntimeDeviceInfo   string                           `json:"runtime_device_info,omitempty"`
+	RuntimeLastSeenAt   *string                          `json:"runtime_last_seen_at,omitempty"`
+	Attempt             int                              `json:"attempt,omitempty"`
+	ClaimedAt           *string                          `json:"claimed_at,omitempty"`
+	ClaimedAgeSeconds   int                              `json:"claimed_age_seconds,omitempty"`
 	CuratorAgentID      string                           `json:"curator_agent_id,omitempty"`
 	CuratorAgentName    string                           `json:"curator_agent_name,omitempty"`
 	CuratorModel        string                           `json:"curator_model,omitempty"`
@@ -435,11 +439,12 @@ func (h *Handler) loadMemoryCurationRun(r *http.Request, workspaceID string, run
 	var stats []byte
 	var agentID, dateFrom, dateTo string
 	var createdAt time.Time
-	var startedAt, finishedAt *time.Time
+	var startedAt, finishedAt, claimedAt, runtimeLastSeenAt *time.Time
 	err := h.DB.QueryRow(r.Context(), `
 		SELECT r.id::text, r.workspace_id::text, COALESCE(r.agent_id::text, ''), r.stage, r.trigger_kind, r.status,
 		       COALESCE(r.date_from::text, ''), COALESCE(r.date_to::text, ''), r.dry_run, r.force, r.stats, r.error,
-		       COALESCE(r.runtime_id::text, ''), COALESCE(rt.name, ''), COALESCE(rt.device_info, ''),
+		       COALESCE(r.runtime_id::text, ''), COALESCE(rt.name, ''), COALESCE(rt.device_info, ''), rt.last_seen_at,
+		       r.attempt, r.claimed_at,
 		       COALESCE(r.curator_agent_id::text, ''), COALESCE(curator.name, ''), COALESCE(r.curator_model, ''),
 		       COALESCE(r.curator_mode, ''), r.confidence_threshold,
 		       COALESCE((SELECT array_agg(t.id::text ORDER BY t.id::text) FROM unnest(r.target_agent_ids) AS t(id)), '{}'::text[]),
@@ -448,7 +453,7 @@ func (h *Handler) loadMemoryCurationRun(r *http.Request, workspaceID string, run
 		  LEFT JOIN agent_runtime rt ON rt.id = r.runtime_id
 		  LEFT JOIN agent curator ON curator.id = r.curator_agent_id
 		 WHERE r.workspace_id = $1 AND r.id = $2
-	`, workspaceID, runID).Scan(&resp.ID, &resp.WorkspaceID, &agentID, &resp.Stage, &resp.TriggerKind, &resp.Status, &dateFrom, &dateTo, &resp.DryRun, &resp.Force, &stats, &resp.Error, &resp.RuntimeID, &resp.RuntimeName, &resp.RuntimeDeviceInfo, &resp.CuratorAgentID, &resp.CuratorAgentName, &resp.CuratorModel, &resp.CuratorMode, &resp.ConfidenceThreshold, &resp.TargetAgentIDs, &createdAt, &startedAt, &finishedAt)
+	`, workspaceID, runID).Scan(&resp.ID, &resp.WorkspaceID, &agentID, &resp.Stage, &resp.TriggerKind, &resp.Status, &dateFrom, &dateTo, &resp.DryRun, &resp.Force, &stats, &resp.Error, &resp.RuntimeID, &resp.RuntimeName, &resp.RuntimeDeviceInfo, &runtimeLastSeenAt, &resp.Attempt, &claimedAt, &resp.CuratorAgentID, &resp.CuratorAgentName, &resp.CuratorModel, &resp.CuratorMode, &resp.ConfidenceThreshold, &resp.TargetAgentIDs, &createdAt, &startedAt, &finishedAt)
 	if err != nil {
 		return resp, err
 	}
@@ -471,6 +476,18 @@ func (h *Handler) loadMemoryCurationRun(r *http.Request, workspaceID string, run
 	if finishedAt != nil {
 		s := finishedAt.UTC().Format(time.RFC3339)
 		resp.FinishedAt = &s
+	}
+	if runtimeLastSeenAt != nil {
+		s := runtimeLastSeenAt.UTC().Format(time.RFC3339)
+		resp.RuntimeLastSeenAt = &s
+	}
+	if claimedAt != nil {
+		s := claimedAt.UTC().Format(time.RFC3339)
+		resp.ClaimedAt = &s
+		resp.ClaimedAgeSeconds = int(time.Since(*claimedAt).Seconds())
+		if resp.ClaimedAgeSeconds < 0 {
+			resp.ClaimedAgeSeconds = 0
+		}
 	}
 	agentNames, _ := h.memoryCurationAgentNames(r.Context(), workspaceID, resp.TargetAgentIDs)
 	for _, id := range resp.TargetAgentIDs {
@@ -550,8 +567,12 @@ func buildMemoryCurationTimeline(resp memoryCurationRunResponse, raw []byte, cre
 		return items
 	}
 	started := startedAt.UTC().Format(time.RFC3339)
+	items = append(items, memoryCurationRunTimelineItem{Key: "claimed", Label: "Claimed by runtime", Status: "done", Timestamp: started, Detail: resp.RuntimeName})
+	if finishedAt == nil {
+		items = append(items, memoryCurationRunTimelineItem{Key: "invoked_curator", Label: "Invoked curator agent", Status: "running", Timestamp: started, Detail: resp.CuratorAgentName})
+		return items
+	}
 	items = append(items,
-		memoryCurationRunTimelineItem{Key: "claimed", Label: "Claimed by runtime", Status: "done", Timestamp: started, Detail: resp.RuntimeName},
 		memoryCurationRunTimelineItem{Key: "validated_profile", Label: "Validated profile", Status: "done", Timestamp: started, Detail: resp.CuratorMode},
 		memoryCurationRunTimelineItem{Key: "resolved_targets", Label: "Resolved target agents", Status: "done", Timestamp: started, Detail: strings.Join(resp.TargetAgentIDs, ", ")},
 	)

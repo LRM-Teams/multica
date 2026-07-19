@@ -1,6 +1,11 @@
 "use client";
 
 import { ArrowLeft } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { useAuthStore } from "@multica/core/auth";
+import { useWorkspaceId } from "@multica/core/hooks";
+import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
+import { AgentSidePanel } from "../channels/components/agent-side-panel";
 import { PageHeader } from "../layout/page-header";
 import { useNavigation } from "../navigation";
 import { useT } from "../i18n/use-t";
@@ -9,9 +14,10 @@ import { ActorProfileContent } from "./actor-profile-popover";
 /**
  * Mobile full-page host for the actor profile (#586). On mobile, tapping an
  * author/agent avatar routes here instead of opening an 80dvh Drawer that
- * clipped the Recent-activity list. It renders the SAME shared peek content
- * (`ActorProfileContent` → identity + compact `ActivityTimeline`) full-width,
- * so the whole page scrolls vertically, under a header with a Back button.
+ * clipped the Recent-activity list. Agents reuse the same owner-gated
+ * Profile / Activity / Files tab surface as the conversation side panel;
+ * users and unavailable agents retain the generic profile fallback. The whole
+ * page scrolls vertically under a header with a Back button.
  *
  * This is intentionally NOT the agent management page (`AgentDetailPage`): it is
  * the lightweight, actor-generic profile for both agents and users.
@@ -25,6 +31,11 @@ export function ActorProfilePage({
 }) {
   const { t } = useT("channels");
   const navigation = useNavigation();
+  const wsId = useWorkspaceId();
+  const currentUserId = useAuthStore((state) => state.user?.id ?? null);
+  const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  const { data: members = [] } = useQuery(memberListOptions(wsId));
+  const agent = memberType === "agent" ? agents.find((candidate) => candidate.id === memberId) : null;
 
   return (
     <div className="flex flex-1 min-h-0 flex-col">
@@ -40,7 +51,17 @@ export function ActorProfilePage({
       </PageHeader>
       <div className="flex-1 min-h-0 overflow-y-auto">
         <div className="mx-auto w-full max-w-2xl">
-          <ActorProfileContent memberType={memberType} memberId={memberId} />
+          {agent ? (
+            <AgentSidePanel
+              agent={agent}
+              currentUserId={currentUserId}
+              members={members}
+              onClose={() => navigation.back()}
+              variant="page"
+            />
+          ) : (
+            <ActorProfileContent memberType={memberType} memberId={memberId} />
+          )}
         </div>
       </div>
     </div>

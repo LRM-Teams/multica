@@ -40,6 +40,8 @@ interface AgentSidePanelProps {
   members: readonly MemberWithUser[];
   runtimeStats?: RuntimeTokenStats | null;
   onClose: () => void;
+  /** Mobile profile routes reuse this exact tab/body surface without dock chrome. */
+  variant?: "panel" | "page";
 }
 
 /**
@@ -55,7 +57,14 @@ interface AgentSidePanelProps {
  * one interface lying about the other. Profile now carries an identity section
  * (read-only) plus a runtime-config section (editable/gated) in one place.
  */
-export function AgentSidePanel({ agent, currentUserId, members, runtimeStats, onClose }: AgentSidePanelProps) {
+export function AgentSidePanel({
+  agent,
+  currentUserId,
+  members,
+  runtimeStats,
+  onClose,
+  variant = "panel",
+}: AgentSidePanelProps) {
   const { t } = useT("agents");
   const isOwner = !!currentUserId && agent.owner_id === currentUserId;
   const devProfileAccess = useConfigStore((state) => state.agentProfileDevAccessEnabled);
@@ -68,7 +77,7 @@ export function AgentSidePanel({ agent, currentUserId, members, runtimeStats, on
   const initials = initialsOf(displayName);
 
   return (
-    <aside className="flex h-full min-h-0 flex-col border-l bg-background">
+    <aside className={cn("flex h-full min-h-0 flex-col bg-background", variant === "panel" && "border-l")}>
       <div className="flex items-center justify-between gap-3 border-b p-4">
         <div className="flex min-w-0 items-center gap-2.5">
           <ActorAvatarBase
@@ -85,15 +94,17 @@ export function AgentSidePanel({ agent, currentUserId, members, runtimeStats, on
             <AgentPresenceStatusLine agentId={agent.id} className="max-w-[9rem]" />
           </div>
         </div>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          onClick={onClose}
-          aria-label={t(($) => $.side_panel.close_aria)}
-        >
-          <X className="size-4" />
-        </Button>
+        {variant === "panel" ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={onClose}
+            aria-label={t(($) => $.side_panel.close_aria)}
+          >
+            <X className="size-4" />
+          </Button>
+        ) : null}
       </div>
 
       {showTabBar ? (

@@ -370,6 +370,40 @@ const EvolutionTaskEfficiencySchema = z.object({
   without_evolved_units_issue_count: z.number().default(0),
 }).loose();
 
+const EvolutionCollaborationMetricSchema = z.object({
+  attention_rounds: z.number().default(0),
+  attention_probes: z.number().default(0),
+  attention_silent_rate: z.number().default(0),
+  autonomous_claims: z.number().default(0),
+  peer_converged: z.number().default(0),
+  manager_fallbacks: z.number().default(0),
+  full_execution_wakes: z.number().default(0),
+  collaboration_sessions: z.number().default(0),
+  contribution_offers: z.number().default(0),
+  contribution_offer_adoption_rate: z.number().default(0),
+  unauthorized_public_sends_blocked: z.number().default(0),
+  attention_tokens: z.number().default(0),
+  execution_tokens: z.number().default(0),
+  immutable_decision_audit_events: z.number().default(0),
+}).loose();
+
+const EMPTY_EVOLUTION_COLLABORATION_METRICS = {
+  attention_rounds: 0,
+  attention_probes: 0,
+  attention_silent_rate: 0,
+  autonomous_claims: 0,
+  peer_converged: 0,
+  manager_fallbacks: 0,
+  full_execution_wakes: 0,
+  collaboration_sessions: 0,
+  contribution_offers: 0,
+  contribution_offer_adoption_rate: 0,
+  unauthorized_public_sends_blocked: 0,
+  attention_tokens: 0,
+  execution_tokens: 0,
+  immutable_decision_audit_events: 0,
+};
+
 const EMPTY_EVOLUTION_TASK_EFFICIENCY = {
   issue_count: 0,
   average_duration_seconds: 0,
@@ -386,12 +420,14 @@ export const EvolutionMetricsSchema = z.object({
   unit_metrics: z.array(EvolutionUnitMetricSchema).default([]),
   daily_metrics: z.array(EvolutionDailyMetricSchema).default([]),
   task_efficiency: EvolutionTaskEfficiencySchema.default(EMPTY_EVOLUTION_TASK_EFFICIENCY),
+  collaboration_evolution: EvolutionCollaborationMetricSchema.default(EMPTY_EVOLUTION_COLLABORATION_METRICS),
 }).loose();
 
 export const EMPTY_EVOLUTION_METRICS: EvolutionMetricsResponse = {
   unit_metrics: [],
   daily_metrics: [],
   task_efficiency: EMPTY_EVOLUTION_TASK_EFFICIENCY,
+  collaboration_evolution: EMPTY_EVOLUTION_COLLABORATION_METRICS,
 };
 
 const EMPTY_MEMORY_CURATION_RUN_STATS = {

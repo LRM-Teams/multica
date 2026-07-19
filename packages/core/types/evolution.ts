@@ -133,10 +133,28 @@ export interface EvolutionTaskEfficiency {
   without_evolved_units_issue_count: number;
 }
 
+export interface EvolutionCollaborationMetric {
+  attention_rounds: number;
+  attention_probes: number;
+  attention_silent_rate: number;
+  autonomous_claims: number;
+  peer_converged: number;
+  manager_fallbacks: number;
+  full_execution_wakes: number;
+  collaboration_sessions: number;
+  contribution_offers: number;
+  contribution_offer_adoption_rate: number;
+  unauthorized_public_sends_blocked: number;
+  attention_tokens: number;
+  execution_tokens: number;
+  immutable_decision_audit_events: number;
+}
+
 export interface EvolutionMetricsResponse {
   unit_metrics: EvolutionUnitMetric[];
   daily_metrics: EvolutionDailyMetric[];
   task_efficiency: EvolutionTaskEfficiency;
+  collaboration_evolution: EvolutionCollaborationMetric;
 }
 
 export interface MemoryCurationRunStats {

@@ -1044,6 +1044,17 @@ func (h *Handler) completeChannelAttentionParticipantTx(ctx context.Context, tx 
 		decision.SeenUpToSeq, inputTokens, outputTokens, decision.ModelVersion, latencyMS); err != nil {
 		return channelAttentionCompletion{}, err
 	}
+	if err := recordChannelDecisionAuditExec(ctx, tx, channelDecisionAuditEvent{
+		WorkspaceID: event.WorkspaceID, ChannelID: event.ChannelID, SourceKind: "attention_participant",
+		SourceID: participantID, EventType: "attention_decision", AgentID: event.AgentID, InboxEventID: event.ID,
+		Payload: map[string]any{
+			"round_id": uuidToString(roundID), "decision": decision.Decision, "confidence": decision.Confidence,
+			"value_type": decision.ValueType, "summary": decision.Summary, "seen_up_to_seq": decision.SeenUpToSeq,
+			"input_tokens": inputTokens, "output_tokens": outputTokens, "model_version": decision.ModelVersion,
+		},
+	}); err != nil {
+		return channelAttentionCompletion{}, err
+	}
 	resolved, err := settleChannelAttentionRoundTx(ctx, tx, roundID)
 	if err != nil {
 		return channelAttentionCompletion{}, err
@@ -1199,6 +1210,13 @@ func (h *Handler) grantChannelAttentionResponderTx(ctx context.Context, tx pgx.T
 		ON CONFLICT (round_id) DO NOTHING`, roundID, agentID, result.Event.ID, grantType, reason); err != nil {
 		return nil, err
 	}
+	if err := recordChannelDecisionAuditExec(ctx, tx, channelDecisionAuditEvent{
+		WorkspaceID: rc.workspaceID, ChannelID: rc.channelID, SourceKind: "response_grant", SourceID: roundID,
+		EventType: "response_grant_created", AgentID: agentID, InboxEventID: result.Event.ID,
+		Payload: map[string]any{"grant_type": grantType, "reason": reason, "seq_from": rc.seqFrom, "seq_to": rc.seqTo},
+	}); err != nil {
+		return nil, err
+	}
 	return []channelAttentionWake{{channel: rc.channel, agent: agent, trigger: rc.trigger, reason: channelAttentionResponseGrantReason, result: result}}, nil
 }
 
@@ -1223,6 +1241,13 @@ func (h *Handler) grantChannelAttentionManagerFallbackTx(ctx context.Context, tx
 		INSERT INTO channel_attention_response_grant (round_id, agent_id, inbox_event_id, grant_type, reason)
 		VALUES ($1, $2, $3, 'manager_fallback', $4)
 		ON CONFLICT (round_id) DO NOTHING`, roundID, managerID, result.Event.ID, reason); err != nil {
+		return nil, err
+	}
+	if err := recordChannelDecisionAuditExec(ctx, tx, channelDecisionAuditEvent{
+		WorkspaceID: rc.workspaceID, ChannelID: rc.channelID, SourceKind: "response_grant", SourceID: roundID,
+		EventType: "manager_fallback_grant_created", AgentID: managerID, InboxEventID: result.Event.ID,
+		Payload: map[string]any{"grant_type": "manager_fallback", "reason": reason, "seq_from": rc.seqFrom, "seq_to": rc.seqTo},
+	}); err != nil {
 		return nil, err
 	}
 	return []channelAttentionWake{{channel: rc.channel, agent: manager, trigger: rc.trigger, reason: channelAttentionManagerReason, result: result}}, nil

@@ -113,6 +113,8 @@ const COPY = {
   memoryReview: "Memory review",
   skillDrafts: "Skill drafts",
   costEfficiency: "Cost efficiency",
+  collaboration: "Collaboration",
+  auditTrail: "Decision audit",
   successRate: "Success rate",
   tasks: "Tasks",
   issues: "Issues",
@@ -494,6 +496,7 @@ export function EvolutionCenterPage() {
   const unitMetrics = metricsData?.unit_metrics ?? EMPTY_UNIT_METRICS;
   const dailyMetrics = metricsData?.daily_metrics ?? [];
   const taskEfficiency = metricsData?.task_efficiency;
+  const collaborationMetrics = metricsData?.collaboration_evolution;
   const submissionsByStatus = useMemo(
     () => ({
       needs_review: needsReviewSubmissions,
@@ -618,6 +621,9 @@ export function EvolutionCenterPage() {
             <MetricCard icon={BrainCircuit} label={copy("memoryReview")} value={String(totals.memoryItems)} detail={`${totals.pending} ${copy("pending").toLowerCase()}`} tone="blue" />
             <MetricCard icon={Lightbulb} label={copy("skillDrafts")} value={String(totals.skillDrafts)} detail={copy("autoDrafts")} tone="amber" />
             <MetricCard icon={CircleDollarSign} label={copy("costEfficiency")} value={money(totals.cost / Math.max(1, totals.taskCount - totals.failedCount))} detail={copy("costPerSuccess")} tone="rose" />
+            <MetricCard icon={GitBranch} label={copy("collaboration")} value={String(collaborationMetrics?.collaboration_sessions ?? 0)} detail={`${collaborationMetrics?.full_execution_wakes ?? 0} turn/response grants`} tone="blue" />
+            <MetricCard icon={Radio} label={copy("attention")} value={String(collaborationMetrics?.attention_rounds ?? 0)} detail={`${pct(collaborationMetrics?.attention_silent_rate ?? 0)} silent`} tone="emerald" />
+            <MetricCard icon={ShieldCheck} label={copy("auditTrail")} value={String(collaborationMetrics?.immutable_decision_audit_events ?? 0)} detail={`${collaborationMetrics?.unauthorized_public_sends_blocked ?? 0} blocked sends`} tone="amber" />
           </div>
 
           <Tabs defaultValue="overview" className="gap-4">

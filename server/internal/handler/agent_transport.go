@@ -177,17 +177,121 @@ func (h *Handler) requireAgentTransportPublicResponseGrant(ctx context.Context, 
 		return nil
 	}
 	var deliveryMode, responseMode string
+	var channelID pgtype.UUID
 	if err := h.DB.QueryRow(ctx, `
-		SELECT delivery_mode, response_mode
+		SELECT delivery_mode, response_mode, channel_id
 		FROM agent_inbox_event
-		WHERE id = $1`, source.inboxEventID).Scan(&deliveryMode, &responseMode); err != nil {
+		WHERE id = $1`, source.inboxEventID).Scan(&deliveryMode, &responseMode, &channelID); err != nil {
 		return err
 	}
 	if responseMode != "public_response" {
+		_ = recordChannelDecisionAuditExec(ctx, h.DB, channelDecisionAuditEvent{
+			WorkspaceID: source.origin.workspaceID, ChannelID: channelID, SourceKind: "agent_transport",
+			EventType: "unauthorized_public_send_blocked", AgentID: source.origin.agentID, InboxEventID: source.inboxEventID,
+			Payload: map[string]any{"response_mode": responseMode, "delivery_mode": deliveryMode},
+		})
 		return fmt.Errorf("agent inbox event response_mode %q does not grant public channel output", responseMode)
 	}
 	if deliveryMode == "attention" {
 		return errors.New("restricted attention delivery cannot publish channel output")
+	}
+	if err := h.requireAgentTransportResponseGrantActive(ctx, source); err != nil {
+		return err
+	}
+	if err := h.requireAgentTransportTurnGrantActive(ctx, source); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (h *Handler) requireAgentTransportResponseGrantActive(ctx context.Context, source agentTransportSource) error {
+	var grantStatus string
+	var grantFresh bool
+	err := h.DB.QueryRow(ctx, `
+		SELECT status, expires_at > now()
+		FROM channel_attention_response_grant
+		WHERE inbox_event_id = $1 AND agent_id = $2`, source.inboxEventID, source.origin.agentID).Scan(&grantStatus, &grantFresh)
+	if errorsIsNoRows(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if grantStatus != "granted" || !grantFresh {
+		return fmt.Errorf("response_grant is %s or expired", grantStatus)
+	}
+	return nil
+}
+
+func (h *Handler) requireAgentTransportTurnGrantActive(ctx context.Context, source agentTransportSource) error {
+	var turnStatus, sessionStatus string
+	var turnFresh, versionFresh bool
+	err := h.DB.QueryRow(ctx, `
+		SELECT turn.grant_status, session.status,
+		       (turn.deadline_at IS NULL OR turn.deadline_at > now()),
+		       turn.session_version = session.version
+		FROM collaboration_turn turn
+		JOIN collaboration_session session ON session.id = turn.session_id
+		WHERE turn.inbox_event_id = $1 AND turn.agent_id = $2`, source.inboxEventID, source.origin.agentID).Scan(&turnStatus, &sessionStatus, &turnFresh, &versionFresh)
+	if errorsIsNoRows(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if turnStatus != "granted" || sessionStatus != "active" || !turnFresh || !versionFresh {
+		return fmt.Errorf("turn_grant is %s, session is %s, or grant is stale", turnStatus, sessionStatus)
+	}
+	return nil
+}
+
+func consumeAgentTransportVisibilityGrantTx(ctx context.Context, exec dbExecutor, source agentTransportSource, channelID, messageID pgtype.UUID) error {
+	if !source.inboxEventID.Valid {
+		return nil
+	}
+	var responseGrantID, roundID pgtype.UUID
+	err := exec.QueryRow(ctx, `
+		UPDATE channel_attention_response_grant
+		SET status = 'consumed', updated_at = now()
+		WHERE inbox_event_id = $1
+		  AND agent_id = $2
+		  AND status = 'granted'
+		  AND expires_at > now()
+		RETURNING id, round_id`, source.inboxEventID, source.origin.agentID).Scan(&responseGrantID, &roundID)
+	if err != nil && !errorsIsNoRows(err) {
+		return err
+	}
+	if err == nil {
+		if err := recordChannelDecisionAuditExec(ctx, exec, channelDecisionAuditEvent{
+			WorkspaceID: source.origin.workspaceID, ChannelID: channelID, SourceKind: "response_grant", SourceID: responseGrantID,
+			EventType: "response_grant_consumed", AgentID: source.origin.agentID, MessageID: messageID, InboxEventID: source.inboxEventID,
+			Payload: map[string]any{"round_id": uuidToString(roundID)},
+		}); err != nil {
+			return err
+		}
+	}
+	var turnID, sessionID pgtype.UUID
+	err = exec.QueryRow(ctx, `
+		UPDATE collaboration_turn turn
+		SET grant_status = 'consumed', result_message_id = $3, updated_at = now()
+		FROM collaboration_session session
+		WHERE turn.session_id = session.id
+		  AND turn.inbox_event_id = $1
+		  AND turn.agent_id = $2
+		  AND turn.grant_status = 'granted'
+		  AND session.status = 'active'
+		  AND turn.session_version = session.version
+		  AND (turn.deadline_at IS NULL OR turn.deadline_at > now())
+		RETURNING turn.id, turn.session_id`, source.inboxEventID, source.origin.agentID, nullableUUID(messageID)).Scan(&turnID, &sessionID)
+	if err != nil && !errorsIsNoRows(err) {
+		return err
+	}
+	if err == nil {
+		return recordChannelDecisionAuditExec(ctx, exec, channelDecisionAuditEvent{
+			WorkspaceID: source.origin.workspaceID, ChannelID: channelID, SourceKind: "collaboration_turn", SourceID: turnID,
+			EventType: "turn_grant_consumed", AgentID: source.origin.agentID, MessageID: messageID, InboxEventID: source.inboxEventID,
+			Payload: map[string]any{"session_id": uuidToString(sessionID), "consumed_by": "agent_transport"},
+		})
 	}
 	return nil
 }
@@ -966,6 +1070,10 @@ func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, sour
 		_ = tx.Rollback(ctx)
 		return ChannelMessageResponse{}, false, "", err
 	}
+	if err := consumeAgentTransportVisibilityGrantTx(ctx, tx, source, input.ChannelID, parseUUID(msg.ID)); err != nil {
+		_ = tx.Rollback(ctx)
+		return ChannelMessageResponse{}, false, "", err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return ChannelMessageResponse{}, false, "", err
 	}
@@ -1048,6 +1156,10 @@ func (h *Handler) createAgentTransportReaction(ctx context.Context, source agent
 		"client_message_id": clientMessageID,
 	})
 	if err != nil {
+		_ = tx.Rollback(ctx)
+		return ChannelReactionResponse{}, "", err
+	}
+	if err := consumeAgentTransportVisibilityGrantTx(ctx, tx, source, parseUUID(target.channel.ID), messageID); err != nil {
 		_ = tx.Rollback(ctx)
 		return ChannelReactionResponse{}, "", err
 	}

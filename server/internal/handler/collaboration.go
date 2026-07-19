@@ -310,6 +310,16 @@ func (h *Handler) createCollaborationTurnGrantTx(ctx context.Context, tx pgx.Tx,
 		in.participantIndex, nullableInt64(in.trigger.Seq), in.sessionVersion, deadline).Scan(&turnID); err != nil {
 		return pgtype.UUID{}, channelAttentionWake{}, err
 	}
+	if err := recordChannelDecisionAuditExec(ctx, tx, channelDecisionAuditEvent{
+		WorkspaceID: in.workspaceID, ChannelID: parseUUID(in.channel.ID), SourceKind: "collaboration_turn", SourceID: turnID,
+		EventType: "turn_grant_created", AgentID: in.agentID, InboxEventID: result.Event.ID,
+		Payload: map[string]any{
+			"session_id": uuidToString(in.sessionID), "turn_index": in.turnIndex, "participant_index": in.participantIndex,
+			"session_version": in.sessionVersion, "grant_seq": in.trigger.Seq,
+		},
+	}); err != nil {
+		return pgtype.UUID{}, channelAttentionWake{}, err
+	}
 	wake := channelAttentionWake{channel: in.channel, agent: agent, trigger: in.trigger, reason: channelCollaborationTurnReason, result: result}
 	return turnID, wake, nil
 }
@@ -362,7 +372,7 @@ func (h *Handler) completeCollaborationTurnTx(ctx context.Context, tx pgx.Tx, ev
 	if agentID != event.AgentID {
 		return nil, errors.New("collaboration turn agent does not match inbox event")
 	}
-	if turnStatus != "granted" {
+	if turnStatus != "granted" && turnStatus != "consumed" {
 		return nil, fmt.Errorf("collaboration turn is %s", turnStatus)
 	}
 	if currentTurnIndex != turnIndex {
@@ -383,15 +393,24 @@ func (h *Handler) completeCollaborationTurnTx(ctx context.Context, tx pgx.Tx, ev
 		  AND channel_message_id IS NOT NULL
 		ORDER BY created_at ASC
 		LIMIT 1`, event.ID).Scan(&resultMessageID)
-	result, err := tx.Exec(ctx, `
-		UPDATE collaboration_turn
-		SET grant_status = 'consumed', result_message_id = $2, updated_at = now()
-		WHERE id = $1 AND grant_status = 'granted' AND session_version = $3`, turnID, nullableUUID(resultMessageID), version)
-	if err != nil {
-		return nil, err
-	}
-	if result.RowsAffected() != 1 {
-		return nil, errors.New("collaboration turn grant was already consumed or changed")
+	if turnStatus == "granted" {
+		result, err := tx.Exec(ctx, `
+			UPDATE collaboration_turn
+			SET grant_status = 'consumed', result_message_id = $2, updated_at = now()
+			WHERE id = $1 AND grant_status = 'granted' AND session_version = $3`, turnID, nullableUUID(resultMessageID), version)
+		if err != nil {
+			return nil, err
+		}
+		if result.RowsAffected() != 1 {
+			return nil, errors.New("collaboration turn grant was already consumed or changed")
+		}
+		if err := recordChannelDecisionAuditExec(ctx, tx, channelDecisionAuditEvent{
+			WorkspaceID: workspaceID, ChannelID: channelID, SourceKind: "collaboration_turn", SourceID: turnID,
+			EventType: "turn_grant_consumed", AgentID: agentID, MessageID: resultMessageID, InboxEventID: event.ID,
+			Payload: map[string]any{"session_id": uuidToString(sessionID), "turn_index": turnIndex, "session_version": version, "consumed_by": "inbox_completion"},
+		}); err != nil {
+			return nil, err
+		}
 	}
 	if collaborationSessionComplete(turnIndex, completionRaw) {
 		_, err := tx.Exec(ctx, `
@@ -405,14 +424,14 @@ func (h *Handler) completeCollaborationTurnTx(ctx context.Context, tx pgx.Tx, ev
 	}
 	nextParticipantIndex := (participantIndex + 1) % int32(len(participantIDs))
 	nextTurnIndex := turnIndex + 1
-	result, err = tx.Exec(ctx, `
+	advanceResult, err := tx.Exec(ctx, `
 		UPDATE collaboration_session
 		SET current_turn_index = $2, version = version + 1, updated_at = now()
 		WHERE id = $1 AND status = 'active' AND version = $3`, sessionID, nextTurnIndex, version)
 	if err != nil {
 		return nil, err
 	}
-	if result.RowsAffected() != 1 {
+	if advanceResult.RowsAffected() != 1 {
 		return nil, errors.New("collaboration session changed while advancing turn")
 	}
 	ch, ok := h.getChannel(ctx, uuidToString(workspaceID), channelID)
@@ -461,6 +480,13 @@ func (h *Handler) failCollaborationTurnTx(ctx context.Context, tx pgx.Tx, event 
 		return nil, nil
 	}
 	if _, err := tx.Exec(ctx, `UPDATE collaboration_turn SET grant_status = 'expired', updated_at = now() WHERE id = $1 AND grant_status = 'granted'`, turnID); err != nil {
+		return nil, err
+	}
+	if err := recordChannelDecisionAuditExec(ctx, tx, channelDecisionAuditEvent{
+		WorkspaceID: workspaceID, ChannelID: channelID, SourceKind: "collaboration_turn", SourceID: turnID,
+		EventType: "turn_grant_expired", AgentID: event.AgentID, InboxEventID: event.ID,
+		Payload: map[string]any{"session_id": uuidToString(sessionID), "reason": reason},
+	}); err != nil {
 		return nil, err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE collaboration_session SET status = 'suspended', version = version + 1, updated_at = now() WHERE id = $1 AND status = 'active'`, sessionID); err != nil {
@@ -541,6 +567,12 @@ func (h *Handler) SweepCollaborationTurnTimeouts(ctx context.Context, limit int)
 	var wakes []channelAttentionWake
 	for _, item := range expired {
 		if _, err := tx.Exec(ctx, `UPDATE collaboration_turn SET grant_status = 'expired', updated_at = now() WHERE id = $1 AND grant_status = 'granted'`, item.turnID); err != nil {
+			return 0
+		}
+		if err := recordChannelDecisionAuditExec(ctx, tx, channelDecisionAuditEvent{
+			WorkspaceID: item.workspaceID, ChannelID: item.channelID, SourceKind: "collaboration_turn", SourceID: item.turnID,
+			EventType: "turn_grant_expired", Payload: map[string]any{"session_id": uuidToString(item.sessionID), "reason": "turn grant expired"},
+		}); err != nil {
 			return 0
 		}
 		if _, err := tx.Exec(ctx, `UPDATE collaboration_session SET status = 'suspended', version = version + 1, updated_at = now() WHERE id = $1 AND status = 'active'`, item.sessionID); err != nil {

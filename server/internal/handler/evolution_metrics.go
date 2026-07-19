@@ -7,9 +7,10 @@ import (
 )
 
 type EvolutionMetricsResponse struct {
-	UnitMetrics    []EvolutionUnitMetricResponse   `json:"unit_metrics"`
-	DailyMetrics   []EvolutionDailyMetricResponse  `json:"daily_metrics"`
-	TaskEfficiency EvolutionTaskEfficiencyResponse `json:"task_efficiency"`
+	UnitMetrics            []EvolutionUnitMetricResponse        `json:"unit_metrics"`
+	DailyMetrics           []EvolutionDailyMetricResponse       `json:"daily_metrics"`
+	TaskEfficiency         EvolutionTaskEfficiencyResponse      `json:"task_efficiency"`
+	CollaborationEvolution EvolutionCollaborationMetricResponse `json:"collaboration_evolution"`
 }
 
 type EvolutionUnitMetricResponse struct {
@@ -40,6 +41,23 @@ type EvolutionDailyMetricResponse struct {
 	FeedbackFailure        int64  `json:"feedback_failure"`
 	MemoryCurationRunCount int64  `json:"memory_curation_run_count"`
 	MemoryCurationFailed   int64  `json:"memory_curation_failed"`
+}
+
+type EvolutionCollaborationMetricResponse struct {
+	AttentionRounds                int64   `json:"attention_rounds"`
+	AttentionProbes                int64   `json:"attention_probes"`
+	AttentionSilentRate            float64 `json:"attention_silent_rate"`
+	AutonomousClaims               int64   `json:"autonomous_claims"`
+	PeerConverged                  int64   `json:"peer_converged"`
+	ManagerFallbacks               int64   `json:"manager_fallbacks"`
+	FullExecutionWakes             int64   `json:"full_execution_wakes"`
+	CollaborationSessions          int64   `json:"collaboration_sessions"`
+	ContributionOffers             int64   `json:"contribution_offers"`
+	ContributionOfferAdoptionRate  float64 `json:"contribution_offer_adoption_rate"`
+	UnauthorizedPublicSendsBlocked int64   `json:"unauthorized_public_sends_blocked"`
+	AttentionTokens                int64   `json:"attention_tokens"`
+	ExecutionTokens                int64   `json:"execution_tokens"`
+	ImmutableDecisionAuditEvents   int64   `json:"immutable_decision_audit_events"`
 }
 
 type EvolutionTaskEfficiencyResponse struct {
@@ -135,6 +153,10 @@ func (h *Handler) GetEvolutionMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.loadEvolutionTaskEfficiency(r, workspaceID, days, &resp); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load evolution task efficiency")
+		return
+	}
+	if err := h.loadEvolutionCollaborationMetrics(r, workspaceID, days, &resp); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load collaboration evolution metrics")
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -242,4 +264,96 @@ func (h *Handler) loadEvolutionTaskEfficiency(r *http.Request, workspaceID strin
 		       count(*) FILTER (WHERE evolved_units_used = 0)
 		  FROM issue_rollup
 	`, workspaceID, days).Scan(&resp.TaskEfficiency.IssueCount, &resp.TaskEfficiency.AverageDurationSeconds, &resp.TaskEfficiency.AverageInputTokens, &resp.TaskEfficiency.AverageOutputTokens, &resp.TaskEfficiency.AverageCacheReadTokens, &resp.TaskEfficiency.AverageCacheWriteTokens, &resp.TaskEfficiency.AverageEvolvedUnitsUsed, &resp.TaskEfficiency.WithEvolvedUnitsIssueCount, &resp.TaskEfficiency.WithoutEvolvedUnitsIssueCount)
+}
+
+func (h *Handler) loadEvolutionCollaborationMetrics(r *http.Request, workspaceID string, days int, resp *EvolutionMetricsResponse) error {
+	return h.DB.QueryRow(r.Context(), `
+		WITH bounds AS (
+		  SELECT current_date - (($2::int - 1) * interval '1 day') AS since
+		), participants AS (
+		  SELECT count(*) AS probes,
+		         count(*) FILTER (WHERE decision = 'SILENT') AS silent,
+		         count(*) FILTER (WHERE decision = 'ANSWER') AS answer_claims,
+		         COALESCE(sum(input_tokens + output_tokens), 0) AS attention_tokens
+		    FROM channel_attention_participant participant
+		    JOIN channel_attention_round round ON round.id = participant.round_id
+		    CROSS JOIN bounds
+		   WHERE round.workspace_id = $1 AND participant.created_at >= bounds.since
+		), grants AS (
+		  SELECT count(*) AS full_wakes,
+		         count(*) FILTER (WHERE grant_type = 'converged') AS peer_converged,
+		         count(*) FILTER (WHERE grant_type = 'manager_fallback') AS manager_fallbacks
+		    FROM channel_attention_response_grant grant
+		    JOIN channel_attention_round round ON round.id = grant.round_id
+		    CROSS JOIN bounds
+		   WHERE round.workspace_id = $1 AND grant.created_at >= bounds.since
+		), offers AS (
+		  SELECT count(*) AS contribution_offers,
+		         count(*) FILTER (WHERE status IN ('merged','escalated')) AS adopted
+		    FROM channel_attention_contribution_offer offer
+		    JOIN channel_attention_round round ON round.id = offer.round_id
+		    CROSS JOIN bounds
+		   WHERE round.workspace_id = $1 AND offer.created_at >= bounds.since
+		), sessions AS (
+		  SELECT count(*) AS collaboration_sessions
+		    FROM collaboration_session session
+		    CROSS JOIN bounds
+		   WHERE session.workspace_id = $1 AND session.created_at >= bounds.since
+		), turns AS (
+		  SELECT count(*) AS turn_full_wakes
+		    FROM collaboration_turn turn
+		    CROSS JOIN bounds
+		   WHERE turn.workspace_id = $1 AND turn.created_at >= bounds.since
+		), audit AS (
+		  SELECT count(*) AS audit_events,
+		         count(*) FILTER (WHERE event_type = 'unauthorized_public_send_blocked') AS blocked_public_sends
+		    FROM channel_decision_audit audit
+		    CROSS JOIN bounds
+		   WHERE audit.workspace_id = $1 AND audit.created_at >= bounds.since
+		), execution_usage AS (
+		  SELECT COALESCE(sum(usage.input_tokens + usage.output_tokens), 0) AS execution_tokens
+		    FROM agent_usage usage
+		    JOIN agent_execution execution ON execution.id = usage.execution_id
+		    CROSS JOIN bounds
+		   WHERE execution.workspace_id = $1 AND execution.created_at >= bounds.since
+		     AND execution.source_kind = 'inbox'
+		)
+		SELECT
+		  (SELECT count(*) FROM channel_attention_round round, bounds WHERE round.workspace_id = $1 AND round.created_at >= bounds.since),
+		  COALESCE(participants.probes, 0),
+		  CASE WHEN COALESCE(participants.probes, 0) > 0 THEN participants.silent::float8 / participants.probes ELSE 0 END,
+		  COALESCE(participants.answer_claims, 0),
+		  COALESCE(grants.peer_converged, 0),
+		  COALESCE(grants.manager_fallbacks, 0),
+		  COALESCE(grants.full_wakes, 0) + COALESCE(turns.turn_full_wakes, 0),
+		  COALESCE(sessions.collaboration_sessions, 0),
+		  COALESCE(offers.contribution_offers, 0),
+		  CASE WHEN COALESCE(offers.contribution_offers, 0) > 0 THEN offers.adopted::float8 / offers.contribution_offers ELSE 0 END,
+		  COALESCE(audit.blocked_public_sends, 0),
+		  COALESCE(participants.attention_tokens, 0),
+		  COALESCE(execution_usage.execution_tokens, 0),
+		  COALESCE(audit.audit_events, 0)
+		FROM participants
+		CROSS JOIN grants
+		CROSS JOIN offers
+		CROSS JOIN sessions
+		CROSS JOIN turns
+		CROSS JOIN audit
+		CROSS JOIN execution_usage
+	`, workspaceID, days).Scan(
+		&resp.CollaborationEvolution.AttentionRounds,
+		&resp.CollaborationEvolution.AttentionProbes,
+		&resp.CollaborationEvolution.AttentionSilentRate,
+		&resp.CollaborationEvolution.AutonomousClaims,
+		&resp.CollaborationEvolution.PeerConverged,
+		&resp.CollaborationEvolution.ManagerFallbacks,
+		&resp.CollaborationEvolution.FullExecutionWakes,
+		&resp.CollaborationEvolution.CollaborationSessions,
+		&resp.CollaborationEvolution.ContributionOffers,
+		&resp.CollaborationEvolution.ContributionOfferAdoptionRate,
+		&resp.CollaborationEvolution.UnauthorizedPublicSendsBlocked,
+		&resp.CollaborationEvolution.AttentionTokens,
+		&resp.CollaborationEvolution.ExecutionTokens,
+		&resp.CollaborationEvolution.ImmutableDecisionAuditEvents,
+	)
 }

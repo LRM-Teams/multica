@@ -162,6 +162,98 @@ func TestMemoryCurationSchedulerCreatesProfileRunIntent(t *testing.T) {
 	}
 }
 
+func TestMemoryCurationSchedulerSkipsInactiveTargets(t *testing.T) {
+	pool := integrationPool(t)
+	ctx := t.Context()
+	suffix := uuid.NewString()[:8]
+	var userID, workspaceID, runtimeID, curatorAgentID, activeAgentID, inactiveAgentID, profileID string
+	if err := pool.QueryRow(ctx, `INSERT INTO "user" (name, email) VALUES ($1, $2) RETURNING id::text`, "Curator Scheduler Inactive "+suffix, "curator-scheduler-inactive-"+suffix+"@example.test").Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `INSERT INTO workspace (name, slug) VALUES ($1, $2) RETURNING id::text`, "Curator Scheduler Inactive "+suffix, "curator-scheduler-inactive-"+suffix).Scan(&workspaceID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1`, workspaceID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1`, userID)
+	})
+	if _, err := pool.Exec(ctx, `INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'owner')`, workspaceID, userID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, owner_id)
+		VALUES ($1, $2, 'Curator Scheduler Runtime Inactive', 'local', 'codex', 'online', 'test', $3)
+		RETURNING id::text
+	`, workspaceID, "curator-scheduler-inactive-"+suffix, userID).Scan(&runtimeID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO agent (workspace_id, name, runtime_mode, runtime_id, owner_id)
+		VALUES ($1, $2, 'local', $3, $4) RETURNING id::text
+	`, workspaceID, "curator_scheduler_inactive_"+suffix, runtimeID, userID).Scan(&curatorAgentID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO agent (workspace_id, name, runtime_mode, runtime_id, owner_id)
+		VALUES ($1, $2, 'local', $3, $4) RETURNING id::text
+	`, workspaceID, "curator_active_"+suffix, runtimeID, userID).Scan(&activeAgentID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO agent (workspace_id, name, runtime_mode, runtime_id, owner_id)
+		VALUES ($1, $2, 'local', $3, $4) RETURNING id::text
+	`, workspaceID, "curator_inactive_"+suffix, runtimeID, userID).Scan(&inactiveAgentID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO memory_curator_profile (
+		  workspace_id, user_id, enabled, self_review_enabled, team_curation_enabled,
+		  mode, runtime_id, curator_agent_id, target_scope, timezone,
+		  schedule_hour, catch_up_enabled, confidence_threshold
+		) VALUES ($1,$2,true,true,true,'auto_safe',$3,$4,'selected','Asia/Shanghai',23,true,0.9)
+		RETURNING id::text
+	`, workspaceID, userID, runtimeID, curatorAgentID).Scan(&profileID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO memory_curator_target (profile_id, agent_id) VALUES ($1, $2), ($1, $3)`, profileID, activeAgentID, inactiveAgentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id)
+		VALUES ($1, 'Memory curation active agent', 'todo', 'none', 'member', $2)
+	`, workspaceID, userID); err != nil {
+		t.Fatal(err)
+	}
+	var issueID string
+	if err := pool.QueryRow(ctx, `SELECT id::text FROM issue WHERE workspace_id = $1 ORDER BY created_at DESC LIMIT 1`, workspaceID).Scan(&issueID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO agent_task_queue (agent_id, issue_id, runtime_id, status, created_at)
+		VALUES ($1, $2, $3, 'completed', '2026-07-09 12:00:00+00')
+	`, activeAgentID, issueID, runtimeID); err != nil {
+		t.Fatal(err)
+	}
+	plan := time.Date(2026, 7, 11, 0, 0, 0, 0, time.FixedZone("CST", 8*60*60)).UTC()
+	res, err := makeMemoryCurationIntentHandler(pool, memorycuration.StageAgentSelfReview, 1)(ctx, HandlerInput{PlanTime: plan})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.RowsAffected != 1 {
+		t.Fatalf("RowsAffected = %d, want 1 (%#v)", res.RowsAffected, res.Result)
+	}
+	var targets []string
+	if err := pool.QueryRow(ctx, `
+		SELECT target_agent_ids::text[]
+		  FROM memory_curation_run WHERE profile_id = $1 AND stage = 'agent_self_review'
+	`, profileID).Scan(&targets); err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || targets[0] != activeAgentID {
+		t.Fatalf("targets = %v, want [%s]", targets, activeAgentID)
+	}
+}
+
 func TestMemoryCurationStageNormalization(t *testing.T) {
 	cases := map[string]memorycuration.Stage{
 		"agent_self_review": memorycuration.StageAgentSelfReview,

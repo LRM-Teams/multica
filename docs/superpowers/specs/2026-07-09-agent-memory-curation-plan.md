@@ -102,7 +102,7 @@ The platform runs four daily stages. The first three are the memory-recording/or
 
 ### Stage L1: Daily Recorder
 
-For every active agent, L1 creates or updates `memory/daily/<date>.md` for the previous workspace-local day.
+For every active agent, L1 creates or updates `memory/daily/<date>.md` for the previous workspace-local day. Inactive agents are skipped by default; they only re-enter the pipeline when they produce fresh activity, are explicitly backfilled, or are forced through a manual run.
 
 Inputs should be bounded by the agent's actual relevance:
 

@@ -3451,12 +3451,18 @@ func (h *Handler) dispatchChannelMessageToAgents(ctx context.Context, ch Channel
 				}
 			}
 		}
-		h.dispatchChannelAmbientDeliveryExcept(ctx, ch, trigger, targetAgentIDs)
+		if len(targetAgentIDs) == 0 {
+			h.dispatchChannelMessageWake(ctx, ch, trigger, initiatorUserID)
+		} else {
+			h.dispatchChannelAmbientDeliveryExcept(ctx, ch, trigger, targetAgentIDs)
+		}
 		return
 	}
 	if channelMessageIsHumanAuthored(trigger.Type) && h.channelAttentionModeEnabled() {
 		if h.shouldQueueChannelAttention(ch, trigger.Content, trigger.Parts) {
 			h.ensureChannelAttentionDispatch(ctx, trigger, initiatorUserID)
+		} else if strings.Contains(trigger.Content, "@") {
+			h.dispatchChannelMessageWake(ctx, ch, trigger, initiatorUserID)
 		} else {
 			h.dispatchChannelAmbientDelivery(ctx, ch, trigger)
 		}
@@ -3652,6 +3658,9 @@ func (h *Handler) enqueueChannelAgentPromptWithTx(ctx context.Context, qtx *db.Q
 }
 
 func (h *Handler) enqueueChannelAgentPromptRangeWithTx(ctx context.Context, qtx *db.Queries, exec db.DBTX, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, prompt, reason string, priority int32, seqFrom, seqTo int64) (channelAgentPromptTxResult, error) {
+	if !initiatorUserID.Valid {
+		initiatorUserID = channelAttentionTriggerCreatorID(trigger)
+	}
 	session, binding, handled, err := h.routeEnvDispatchChannelAgent(ctx, qtx, exec, ch.ID, ch.WorkspaceID, agent.ID, initiatorUserID)
 	if err != nil {
 		return channelAgentPromptTxResult{}, fmt.Errorf("route env-dispatch channel agent: %w", err)

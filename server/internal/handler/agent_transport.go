@@ -172,7 +172,7 @@ type agentTransportSource struct {
 	inboxEventID pgtype.UUID
 }
 
-func (h *Handler) requireAgentTransportPublicResponseGrant(ctx context.Context, source agentTransportSource) error {
+func (h *Handler) requireAgentTransportPublicResponseMode(ctx context.Context, source agentTransportSource) error {
 	if !source.inboxEventID.Valid {
 		return nil
 	}
@@ -200,6 +200,10 @@ func (h *Handler) requireAgentTransportPublicResponseGrant(ctx context.Context, 
 		})
 		return errors.New("restricted attention delivery cannot publish channel output")
 	}
+	return nil
+}
+
+func (h *Handler) requireAgentTransportVisibilityGrantActive(ctx context.Context, source agentTransportSource) error {
 	if err := h.requireAgentTransportResponseGrantActive(ctx, source); err != nil {
 		return err
 	}
@@ -316,7 +320,7 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	if err := h.requireAgentTransportPublicResponseGrant(r.Context(), source); err != nil {
+	if err := h.requireAgentTransportPublicResponseMode(r.Context(), source); err != nil {
 		writeError(w, http.StatusForbidden, err.Error())
 		return
 	}
@@ -375,6 +379,10 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		return
 	} else if found {
 		h.respondWithDuplicateAgentTransportMessage(w, r.Context(), source, target, input, attachmentIDs, existing, clientMessageID)
+		return
+	}
+	if err := h.requireAgentTransportVisibilityGrantActive(r.Context(), source); err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
 		return
 	}
 	freshness, err := h.agentTransportFreshnessDecision(r.Context(), source, target, req.SeenUpToSeq)
@@ -438,7 +446,7 @@ func (h *Handler) AgentTransportReactMessage(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
-	if err := h.requireAgentTransportPublicResponseGrant(r.Context(), source); err != nil {
+	if err := h.requireAgentTransportPublicResponseMode(r.Context(), source); err != nil {
 		writeError(w, http.StatusForbidden, err.Error())
 		return
 	}
@@ -481,6 +489,10 @@ func (h *Handler) AgentTransportReactMessage(w http.ResponseWriter, r *http.Requ
 	}
 	if !messageID.Valid {
 		writeError(w, http.StatusBadRequest, "message_id is required")
+		return
+	}
+	if err := h.requireAgentTransportVisibilityGrantActive(r.Context(), source); err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
 		return
 	}
 	reaction, transportID, err := h.createAgentTransportReaction(r.Context(), source, target, messageID, emoji, clientMessageID)

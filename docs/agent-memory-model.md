@@ -168,6 +168,14 @@ Codex 只获得当前相关作用域目录的可写权限；Pi 和其他 provide
 
 curator 额外读取的 scoped context 最多 12 个文件、约 16 KiB；不会预加载历史 daily、notes 索引、未知文件或符号链接。
 
+## 7.1 日常运行规则
+
+- 自动日常整理只处理 **active** agent：当天在 `agent_task_queue` 或 `agent_inbox_event` 有活动、且 runtime 在线的 agent 才进入 self-review / promotion / curator 轮次。
+- 长时间没有新活动的 agent 默认跳过自动整理；不会为了“补齐”而强行跑一遍空自审。
+- 这类 inactive agent 只有在手动 backfill、显式 `--force`，或者重新变为 active 后，才会被补跑。
+- team curation 只消费已经产出候选的 active agent；不会把 inactive agent 当成新的共享记忆来源。
+- 如果当天没有相关证据，L1/L2/L3/L4 应当尽量不生成噪音文件，只保留必要的审计记录。
+
 ## 8. 冲突和安全规则
 
 - 当前任务和实时用户指令始终高于历史记忆。

@@ -301,24 +301,24 @@ func (h *Handler) loadEvolutionCollaborationMetrics(r *http.Request, workspaceID
 		   WHERE round.workspace_id = $1 AND round.created_at >= bounds.since
 		), participants AS (
 		  SELECT count(*) AS probes,
-		         count(*) FILTER (WHERE decision = 'SILENT') AS silent,
-		         count(*) FILTER (WHERE decision = 'ANSWER') AS answer_claims,
-		         COALESCE(sum(input_tokens + output_tokens), 0) AS attention_tokens
+		         count(*) FILTER (WHERE participant.decision = 'SILENT') AS silent,
+		         count(*) FILTER (WHERE participant.decision = 'ANSWER') AS answer_claims,
+		         COALESCE(sum(participant.input_tokens + participant.output_tokens), 0) AS attention_tokens
 		    FROM channel_attention_participant participant
 		    JOIN channel_attention_round round ON round.id = participant.round_id
 		    CROSS JOIN bounds
 		   WHERE round.workspace_id = $1 AND participant.created_at >= bounds.since
 		), grants AS (
 		  SELECT count(*) AS full_wakes,
-		         count(*) FILTER (WHERE grant_type = 'converged') AS peer_converged,
-		         count(*) FILTER (WHERE grant_type = 'manager_fallback') AS manager_fallbacks
+		         count(*) FILTER (WHERE response_grant.grant_type = 'converged') AS peer_converged,
+		         count(*) FILTER (WHERE response_grant.grant_type = 'manager_fallback') AS manager_fallbacks
 		    FROM channel_attention_response_grant response_grant
 		    JOIN channel_attention_round round ON round.id = response_grant.round_id
 		    CROSS JOIN bounds
 		   WHERE round.workspace_id = $1 AND response_grant.created_at >= bounds.since
 		), offers AS (
 		  SELECT count(*) AS contribution_offers,
-		         count(*) FILTER (WHERE status IN ('merged','escalated')) AS adopted
+		         count(*) FILTER (WHERE offer.status IN ('merged','escalated')) AS adopted
 		    FROM channel_attention_contribution_offer offer
 		    JOIN channel_attention_round round ON round.id = offer.round_id
 		    CROSS JOIN bounds
@@ -345,10 +345,10 @@ func (h *Handler) loadEvolutionCollaborationMetrics(r *http.Request, workspaceID
 		    CROSS JOIN bounds
 		   WHERE audit.workspace_id = $1 AND audit.created_at >= bounds.since
 		), policies AS (
-		  SELECT count(*) FILTER (WHERE event = 'injected') AS policies_retrieved,
-		         count(*) FILTER (WHERE event = 'used') AS policies_used,
-		         count(*) FILTER (WHERE event = 'success' OR outcome = 'success') AS policy_success,
-		         count(*) FILTER (WHERE event = 'failure' OR outcome = 'failure') AS policy_failure
+		  SELECT count(*) FILTER (WHERE feedback.event = 'injected') AS policies_retrieved,
+		         count(*) FILTER (WHERE feedback.event = 'used') AS policies_used,
+		         count(*) FILTER (WHERE feedback.event = 'success' OR feedback.outcome = 'success') AS policy_success,
+		         count(*) FILTER (WHERE feedback.event = 'failure' OR feedback.outcome = 'failure') AS policy_failure
 		    FROM evolution_unit_feedback_event feedback
 		    CROSS JOIN bounds
 		   WHERE feedback.workspace_id = $1 AND feedback.created_at >= bounds.since

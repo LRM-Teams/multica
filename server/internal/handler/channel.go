@@ -3652,6 +3652,9 @@ func (h *Handler) enqueueChannelAgentPromptWithTx(ctx context.Context, qtx *db.Q
 }
 
 func (h *Handler) enqueueChannelAgentPromptRangeWithTx(ctx context.Context, qtx *db.Queries, exec db.DBTX, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, prompt, reason string, priority int32, seqFrom, seqTo int64) (channelAgentPromptTxResult, error) {
+	if !initiatorUserID.Valid {
+		initiatorUserID = channelAttentionTriggerCreatorID(trigger)
+	}
 	session, binding, handled, err := h.routeEnvDispatchChannelAgent(ctx, qtx, exec, ch.ID, ch.WorkspaceID, agent.ID, initiatorUserID)
 	if err != nil {
 		return channelAgentPromptTxResult{}, fmt.Errorf("route env-dispatch channel agent: %w", err)

@@ -550,9 +550,9 @@ func (h *Handler) createChannelAttentionParticipantsTx(ctx context.Context, tx p
 			    'model', COALESCE(agent.model, ''),
 			    'thinking_level', COALESCE(agent.thinking_level, ''),
 			    'execution_profile', $7::text,
-			    'context_messages', $8,
-			    'memory_budget_bytes', $9,
-			    'max_output_tokens', $10,
+			    'context_messages', $8::int,
+			    'memory_budget_bytes', $9::int,
+			    'max_output_tokens', $10::int,
 			    'tools_enabled', false,
 			    'snapshotted', true
 			  )),

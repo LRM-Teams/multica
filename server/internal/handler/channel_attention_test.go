@@ -431,6 +431,18 @@ func TestChannelAttentionCompletionPersistsDecisionWithoutChannelOutput(t *testi
 	if status != "decided" || decision != "ANSWER" || summary != "version is pinned" || seen != trigger.Seq || roundStatus != "resolved" {
 		t.Fatalf("participant=%q/%q/%q seen=%d round=%q", status, decision, summary, seen, roundStatus)
 	}
+	var exampleCount int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*)::int
+		FROM evolution_training_example
+		WHERE source_kind = 'attention_participant'
+		  AND model_kind = 'attention_student'
+		  AND source_id = (
+		    SELECT id FROM channel_attention_participant WHERE inbox_event_id = $1
+		  )
+		  AND teacher_label->>'decision' = 'ANSWER'`, delivery.InboxEventID).Scan(&exampleCount); err != nil || exampleCount != 1 {
+		t.Fatalf("training example count=%d err=%v, want 1", exampleCount, err)
+	}
 	if after := fixture.channelMessageCount(t); after != before {
 		t.Fatalf("channel message count changed from %d to %d after internal completion", before, after)
 	}

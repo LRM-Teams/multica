@@ -823,6 +823,23 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 			r.Get("/api/evolution/metrics", h.GetEvolutionMetrics)
 
+			r.Route("/api/evolution/training/examples", func(r chi.Router) {
+				r.Use(middleware.RequireWorkspaceRole(queries, "owner", "admin"))
+				r.Get("/", h.ListEvolutionTrainingExamples)
+				r.Post("/", h.CreateEvolutionTrainingExample)
+				r.Patch("/{exampleId}", h.UpdateEvolutionTrainingExample)
+			})
+			r.Route("/api/evolution/model-configs", func(r chi.Router) {
+				r.Use(middleware.RequireWorkspaceRole(queries, "owner", "admin"))
+				r.Get("/", h.ListEvolutionModelRuntimeConfigs)
+				r.Put("/{modelKind}", h.UpdateEvolutionModelRuntimeConfig)
+			})
+			r.Route("/api/evolution/model-evals", func(r chi.Router) {
+				r.Use(middleware.RequireWorkspaceRole(queries, "owner", "admin"))
+				r.Get("/", h.ListEvolutionModelEvalRuns)
+				r.Post("/", h.CreateEvolutionModelEvalRun)
+			})
+
 			r.Route("/api/evolution/units/{unitId}/versions", func(r chi.Router) {
 				r.Use(middleware.RequireWorkspaceRole(queries, "owner", "admin"))
 				r.Get("/", h.ListEvolutionSkillVersions)

@@ -32,7 +32,7 @@ func TestEvolutionMetricsReturnsTaskEfficiency(t *testing.T) {
 	if response.CollaborationEvolution.AttentionRounds < 0 || response.CollaborationEvolution.ImmutableDecisionAuditEvents < 0 {
 		t.Fatalf("collaboration metrics must be non-negative: %+v", response.CollaborationEvolution)
 	}
-	if response.ModelEvolution.AttentionStudentMode != "off" {
-		t.Fatalf("attention_student_mode=%q, want off until PR6 enables a student", response.ModelEvolution.AttentionStudentMode)
+	if response.ModelEvolution.AttentionStudentMode == "" {
+		t.Fatalf("attention_student_mode must expose the PR6 runtime stub state")
 	}
 }

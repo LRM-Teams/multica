@@ -1055,6 +1055,13 @@ func (h *Handler) completeChannelAttentionParticipantTx(ctx context.Context, tx 
 	}); err != nil {
 		return channelAttentionCompletion{}, err
 	}
+	if err := recordAttentionTrainingExampleExec(ctx, tx, attentionTrainingExampleInput{
+		workspaceID: event.WorkspaceID, channelID: event.ChannelID, messageID: event.SourceMessageID,
+		agentID: event.AgentID, inboxEventID: event.ID, participantID: participantID, roundID: roundID,
+		executionID: executionID, decision: decision, inputTokens: inputTokens, outputTokens: outputTokens, latencyMS: latencyMS,
+	}); err != nil {
+		return channelAttentionCompletion{}, err
+	}
 	resolved, err := settleChannelAttentionRoundTx(ctx, tx, roundID)
 	if err != nil {
 		return channelAttentionCompletion{}, err

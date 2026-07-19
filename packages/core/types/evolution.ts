@@ -176,6 +176,109 @@ export interface EvolutionMetricsResponse {
   model_evolution: EvolutionModelMetric;
 }
 
+
+export type EvolutionModelKind = "attention_student" | "context_filter";
+export type EvolutionTrainingExampleStatus = "candidate" | "gold" | "rejected" | "archived";
+export type EvolutionTrainingExampleSplit = "unassigned" | "train" | "validation" | "test" | "holdout";
+
+export interface EvolutionTrainingExample {
+  id: string;
+  workspace_id: string;
+  model_kind: EvolutionModelKind;
+  source_kind: string;
+  source_id?: string;
+  agent_id?: string;
+  channel_id?: string;
+  message_id?: string;
+  input: Record<string, unknown>;
+  teacher_label: Record<string, unknown>;
+  student_prediction: Record<string, unknown>;
+  split: EvolutionTrainingExampleSplit;
+  status: EvolutionTrainingExampleStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EvolutionTrainingExampleListResponse {
+  workspace_id: string;
+  examples: EvolutionTrainingExample[];
+  total: number;
+}
+
+export interface EvolutionTrainingExampleCreateRequest {
+  model_kind: EvolutionModelKind;
+  source_kind?: string;
+  source_id?: string;
+  agent_id?: string;
+  channel_id?: string;
+  message_id?: string;
+  input?: Record<string, unknown>;
+  teacher_label?: Record<string, unknown>;
+  student_prediction?: Record<string, unknown>;
+  split?: EvolutionTrainingExampleSplit;
+  status?: EvolutionTrainingExampleStatus;
+}
+
+export interface EvolutionTrainingExampleUpdateRequest {
+  teacher_label?: Record<string, unknown>;
+  student_prediction?: Record<string, unknown>;
+  split?: EvolutionTrainingExampleSplit;
+  status?: EvolutionTrainingExampleStatus;
+}
+
+export interface EvolutionModelRuntimeConfig {
+  workspace_id: string;
+  model_kind: EvolutionModelKind;
+  mode: "off" | "shadow" | "canary";
+  active_version: string;
+  candidate_version: string;
+  rollout_percent: number;
+  config: Record<string, unknown>;
+  updated_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EvolutionModelRuntimeConfigListResponse {
+  configs: EvolutionModelRuntimeConfig[];
+  total: number;
+}
+
+export interface EvolutionModelRuntimeConfigUpdateRequest {
+  mode: "off" | "shadow" | "canary";
+  active_version?: string;
+  candidate_version?: string;
+  rollout_percent?: number;
+  config?: Record<string, unknown>;
+}
+
+export interface EvolutionModelEvalRun {
+  id: string;
+  workspace_id: string;
+  model_kind: EvolutionModelKind;
+  model_version: string;
+  mode: "offline" | "shadow" | "canary";
+  status: "completed" | "running" | "failed";
+  dataset_filter: Record<string, unknown>;
+  metrics: Record<string, unknown>;
+  example_count: number;
+  created_at: string;
+}
+
+export interface EvolutionModelEvalRunListResponse {
+  eval_runs: EvolutionModelEvalRun[];
+  total: number;
+}
+
+export interface EvolutionModelEvalRunCreateRequest {
+  model_kind: EvolutionModelKind;
+  model_version: string;
+  mode?: "offline" | "shadow" | "canary";
+  status?: "completed" | "running" | "failed";
+  dataset_filter?: Record<string, unknown>;
+  metrics?: Record<string, unknown>;
+}
+
 export interface MemoryCurationRunStats {
   agents_scanned: number;
   agents_changed: number;

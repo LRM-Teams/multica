@@ -178,6 +178,10 @@ func (h *Handler) GetEvolutionMetrics(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to load collaboration evolution metrics")
 		return
 	}
+	if err := h.loadEvolutionModelMetrics(r, workspaceID, &resp); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load model evolution metrics")
+		return
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -414,4 +418,46 @@ func (h *Handler) loadEvolutionCollaborationMetrics(r *http.Request, workspaceID
 		&resp.CollaborationEvolution.EstimatedTokensSaved,
 		&resp.CollaborationEvolution.ImmutableDecisionAuditEvents,
 	)
+}
+
+func (h *Handler) loadEvolutionModelMetrics(r *http.Request, workspaceID string, resp *EvolutionMetricsResponse) error {
+	resp.ModelEvolution.AttentionStudentMode = "off"
+	var attentionVersion, attentionMode string
+	err := h.DB.QueryRow(r.Context(), `
+		SELECT COALESCE(NULLIF(candidate_version, ''), active_version), mode
+		FROM evolution_model_runtime_config
+		WHERE workspace_id = $1 AND model_kind = 'attention_student'`, workspaceID).Scan(&attentionVersion, &attentionMode)
+	if err != nil && !errorsIsNoRows(err) {
+		return err
+	}
+	if err == nil {
+		resp.ModelEvolution.AttentionStudentVersion = attentionVersion
+		resp.ModelEvolution.AttentionStudentMode = attentionMode
+	}
+	var contextVersion string
+	err = h.DB.QueryRow(r.Context(), `
+		SELECT COALESCE(NULLIF(candidate_version, ''), active_version)
+		FROM evolution_model_runtime_config
+		WHERE workspace_id = $1 AND model_kind = 'context_filter'`, workspaceID).Scan(&contextVersion)
+	if err != nil && !errorsIsNoRows(err) {
+		return err
+	}
+	if err == nil {
+		resp.ModelEvolution.ContextFilterVersion = contextVersion
+	}
+	_ = h.DB.QueryRow(r.Context(), `
+		SELECT COALESCE((metrics->>'missed_attention_rate')::float8, 0),
+		       COALESCE((metrics->>'late_rescue_rate')::float8, 0)
+		FROM evolution_model_eval_run
+		WHERE workspace_id = $1 AND model_kind = 'attention_student' AND status = 'completed'
+		ORDER BY created_at DESC
+		LIMIT 1`, workspaceID).Scan(&resp.ModelEvolution.MissedAttentionRate, &resp.ModelEvolution.LateRescueRate)
+	_ = h.DB.QueryRow(r.Context(), `
+		SELECT COALESCE((metrics->>'context_compression_rate')::float8, 0),
+		       COALESCE((metrics->>'critical_context_recall')::float8, 0)
+		FROM evolution_model_eval_run
+		WHERE workspace_id = $1 AND model_kind = 'context_filter' AND status = 'completed'
+		ORDER BY created_at DESC
+		LIMIT 1`, workspaceID).Scan(&resp.ModelEvolution.ContextCompressionRate, &resp.ModelEvolution.CriticalContextRecall)
+	return nil
 }

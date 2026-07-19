@@ -16,6 +16,12 @@ import type {
   CancelTaskResponse,
   CreateAgentFromTemplateResponse,
   EvolutionMetricsResponse,
+  EvolutionTrainingExampleListResponse,
+  EvolutionTrainingExample,
+  EvolutionModelRuntimeConfigListResponse,
+  EvolutionModelRuntimeConfig,
+  EvolutionModelEvalRunListResponse,
+  EvolutionModelEvalRun,
   EvolutionReviewSubmission,
   MemoryCurationRunDetail,
   WorkspaceMemoryCurationStatus,
@@ -467,6 +473,74 @@ export const EMPTY_EVOLUTION_METRICS: EvolutionMetricsResponse = {
   collaboration_evolution: EMPTY_EVOLUTION_COLLABORATION_METRICS,
   model_evolution: EMPTY_EVOLUTION_MODEL_METRICS,
 };
+
+const JsonObjectSchema = z.record(z.string(), z.unknown()).default({});
+
+export const EvolutionTrainingExampleSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  model_kind: z.enum(["attention_student", "context_filter"]),
+  source_kind: z.string(),
+  source_id: z.string().optional(),
+  agent_id: z.string().optional(),
+  channel_id: z.string().optional(),
+  message_id: z.string().optional(),
+  input: JsonObjectSchema,
+  teacher_label: JsonObjectSchema,
+  student_prediction: JsonObjectSchema,
+  split: z.enum(["unassigned", "train", "validation", "test", "holdout"]),
+  status: z.enum(["candidate", "gold", "rejected", "archived"]),
+  created_at: z.string(),
+  updated_at: z.string(),
+}).loose();
+
+export const EvolutionTrainingExampleListSchema = z.object({
+  workspace_id: z.string().default(""),
+  examples: z.array(EvolutionTrainingExampleSchema).default([]),
+  total: z.number().default(0),
+}).loose();
+
+export const EMPTY_EVOLUTION_TRAINING_EXAMPLE_LIST: EvolutionTrainingExampleListResponse = { workspace_id: "", examples: [], total: 0 };
+
+export const EvolutionModelRuntimeConfigSchema = z.object({
+  workspace_id: z.string(),
+  model_kind: z.enum(["attention_student", "context_filter"]),
+  mode: z.enum(["off", "shadow", "canary"]),
+  active_version: z.string().default(""),
+  candidate_version: z.string().default(""),
+  rollout_percent: z.number().default(0),
+  config: JsonObjectSchema,
+  updated_by: z.string().optional(),
+  created_at: z.string(),
+  updated_at: z.string(),
+}).loose();
+
+export const EvolutionModelRuntimeConfigListSchema = z.object({
+  configs: z.array(EvolutionModelRuntimeConfigSchema).default([]),
+  total: z.number().default(0),
+}).loose();
+
+export const EMPTY_EVOLUTION_MODEL_RUNTIME_CONFIG_LIST: EvolutionModelRuntimeConfigListResponse = { configs: [], total: 0 };
+
+export const EvolutionModelEvalRunSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  model_kind: z.enum(["attention_student", "context_filter"]),
+  model_version: z.string(),
+  mode: z.enum(["offline", "shadow", "canary"]),
+  status: z.enum(["completed", "running", "failed"]),
+  dataset_filter: JsonObjectSchema,
+  metrics: JsonObjectSchema,
+  example_count: z.number().default(0),
+  created_at: z.string(),
+}).loose();
+
+export const EvolutionModelEvalRunListSchema = z.object({
+  eval_runs: z.array(EvolutionModelEvalRunSchema).default([]),
+  total: z.number().default(0),
+}).loose();
+
+export const EMPTY_EVOLUTION_MODEL_EVAL_RUN_LIST: EvolutionModelEvalRunListResponse = { eval_runs: [], total: 0 };
 
 const EMPTY_MEMORY_CURATION_RUN_STATS = {
   agents_scanned: 0,

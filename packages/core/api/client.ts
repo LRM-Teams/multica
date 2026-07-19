@@ -25,6 +25,16 @@ import type {
   CreateAgentFromTemplateRequest,
   CreateAgentFromTemplateResponse,
   EvolutionMetricsResponse,
+  EvolutionTrainingExample,
+  EvolutionTrainingExampleListResponse,
+  EvolutionTrainingExampleCreateRequest,
+  EvolutionTrainingExampleUpdateRequest,
+  EvolutionModelRuntimeConfig,
+  EvolutionModelRuntimeConfigListResponse,
+  EvolutionModelRuntimeConfigUpdateRequest,
+  EvolutionModelEvalRun,
+  EvolutionModelEvalRunCreateRequest,
+  EvolutionModelEvalRunListResponse,
   EvolutionReviewDecisionRequest,
   EvolutionReviewSubmission,
   EvolutionReviewSubmissionStatus,
@@ -268,12 +278,21 @@ import {
   EMPTY_SANDBOX_SNAPSHOT,
   EMPTY_CANCEL_TASK_RESPONSE,
   EMPTY_EVOLUTION_METRICS,
+  EMPTY_EVOLUTION_TRAINING_EXAMPLE_LIST,
+  EMPTY_EVOLUTION_MODEL_RUNTIME_CONFIG_LIST,
+  EMPTY_EVOLUTION_MODEL_EVAL_RUN_LIST,
   EMPTY_EVOLUTION_REVIEW_SUBMISSION_LIST,
   EMPTY_UPDATE_AGENT_FILE_CONTENT_RESPONSE,
   EMPTY_WORKSPACE_MEMORY_CURATION_STATUS,
   EMPTY_MEMORY_CURATION_RUN_DETAIL,
   EMPTY_MEMORY_CURATOR_PROFILE,
   EvolutionMetricsSchema,
+  EvolutionTrainingExampleListSchema,
+  EvolutionTrainingExampleSchema,
+  EvolutionModelRuntimeConfigListSchema,
+  EvolutionModelRuntimeConfigSchema,
+  EvolutionModelEvalRunListSchema,
+  EvolutionModelEvalRunSchema,
   EvolutionReviewSubmissionListSchema,
   EvolutionReviewSubmissionSchema,
   UpdateAgentFileContentResponseSchema,
@@ -1962,6 +1981,81 @@ export class ApiClient {
     const raw = await this.fetch<unknown>(`/api/evolution/metrics${suffix ? `?${suffix}` : ""}`);
     return parseWithFallback(raw, EvolutionMetricsSchema, EMPTY_EVOLUTION_METRICS, {
       endpoint: "GET /api/evolution/metrics",
+    });
+  }
+
+  async listEvolutionTrainingExamples(params?: { model_kind?: string; status?: string; split?: string; limit?: number }): Promise<EvolutionTrainingExampleListResponse> {
+    const search = new URLSearchParams();
+    if (params?.model_kind) search.set("model_kind", params.model_kind);
+    if (params?.status) search.set("status", params.status);
+    if (params?.split) search.set("split", params.split);
+    if (params?.limit) search.set("limit", String(params.limit));
+    const suffix = search.toString();
+    const raw = await this.fetch<unknown>(`/api/evolution/training/examples${suffix ? `?${suffix}` : ""}`);
+    return parseWithFallback(raw, EvolutionTrainingExampleListSchema, EMPTY_EVOLUTION_TRAINING_EXAMPLE_LIST, {
+      endpoint: "GET /api/evolution/training/examples",
+    });
+  }
+
+  async createEvolutionTrainingExample(body: EvolutionTrainingExampleCreateRequest): Promise<EvolutionTrainingExample> {
+    const raw = await this.fetch<unknown>("/api/evolution/training/examples", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return parseWithFallback(raw, EvolutionTrainingExampleSchema, {} as EvolutionTrainingExample, {
+      endpoint: "POST /api/evolution/training/examples",
+    });
+  }
+
+  async updateEvolutionTrainingExample(exampleId: string, body: EvolutionTrainingExampleUpdateRequest): Promise<EvolutionTrainingExample> {
+    const raw = await this.fetch<unknown>(`/api/evolution/training/examples/${encodeURIComponent(exampleId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return parseWithFallback(raw, EvolutionTrainingExampleSchema, {} as EvolutionTrainingExample, {
+      endpoint: "PATCH /api/evolution/training/examples/:id",
+    });
+  }
+
+  async listEvolutionModelConfigs(): Promise<EvolutionModelRuntimeConfigListResponse> {
+    const raw = await this.fetch<unknown>("/api/evolution/model-configs");
+    return parseWithFallback(raw, EvolutionModelRuntimeConfigListSchema, EMPTY_EVOLUTION_MODEL_RUNTIME_CONFIG_LIST, {
+      endpoint: "GET /api/evolution/model-configs",
+    });
+  }
+
+  async updateEvolutionModelConfig(modelKind: string, body: EvolutionModelRuntimeConfigUpdateRequest): Promise<EvolutionModelRuntimeConfig> {
+    const raw = await this.fetch<unknown>(`/api/evolution/model-configs/${encodeURIComponent(modelKind)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return parseWithFallback(raw, EvolutionModelRuntimeConfigSchema, {} as EvolutionModelRuntimeConfig, {
+      endpoint: "PUT /api/evolution/model-configs/:modelKind",
+    });
+  }
+
+  async listEvolutionModelEvalRuns(params?: { model_kind?: string; limit?: number }): Promise<EvolutionModelEvalRunListResponse> {
+    const search = new URLSearchParams();
+    if (params?.model_kind) search.set("model_kind", params.model_kind);
+    if (params?.limit) search.set("limit", String(params.limit));
+    const suffix = search.toString();
+    const raw = await this.fetch<unknown>(`/api/evolution/model-evals${suffix ? `?${suffix}` : ""}`);
+    return parseWithFallback(raw, EvolutionModelEvalRunListSchema, EMPTY_EVOLUTION_MODEL_EVAL_RUN_LIST, {
+      endpoint: "GET /api/evolution/model-evals",
+    });
+  }
+
+  async createEvolutionModelEvalRun(body: EvolutionModelEvalRunCreateRequest): Promise<EvolutionModelEvalRun> {
+    const raw = await this.fetch<unknown>("/api/evolution/model-evals", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return parseWithFallback(raw, EvolutionModelEvalRunSchema, {} as EvolutionModelEvalRun, {
+      endpoint: "POST /api/evolution/model-evals",
     });
   }
 

@@ -220,6 +220,20 @@ describe("AgentSidePanel", () => {
     expect(screen.getByText("Activity content")).toBeInTheDocument();
   });
 
+  it("restores a visited page tab's scroll position after switching tabs", () => {
+    const { container } = renderPanel("user-owner", undefined, "page");
+    const tabBody = container.querySelector(".overflow-y-auto") as HTMLDivElement;
+
+    fireEvent.click(screen.getByRole("button", { name: "Activity" }));
+    tabBody.scrollTop = 128;
+
+    fireEvent.click(screen.getByRole("button", { name: "Profile" }));
+    tabBody.scrollTop = 24;
+
+    fireEvent.click(screen.getByRole("button", { name: "Activity" }));
+    expect(tabBody.scrollTop).toBe(128);
+  });
+
   it("keeps desktop panel tabs content-width and left aligned", () => {
     renderPanel();
 

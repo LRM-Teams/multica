@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useLayoutEffect, useRef, useState } from "react";
 import { Activity, FileText, User, X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useConfigStore } from "@multica/core/config";
@@ -74,9 +74,15 @@ export function AgentSidePanel({
   const showTabBar = availableTabs.length > 1;
   const [tab, setTab] = useState<OwnerTab>("profile");
   const [mountedTabs, setMountedTabs] = useState<Set<OwnerTab>>(() => new Set(["profile"]));
+  const tabBodyRef = useRef<HTMLDivElement>(null);
+  const tabScrollTopRef = useRef<Partial<Record<OwnerTab, number>>>({});
   const displayName = resolveActorDisplayName(agent, agent.id);
   const initials = initialsOf(displayName);
   const selectTab = (nextTab: OwnerTab) => {
+    if (nextTab === tab) return;
+    if (variant === "page" && tabBodyRef.current) {
+      tabScrollTopRef.current[tab] = tabBodyRef.current.scrollTop;
+    }
     setTab(nextTab);
     if (variant === "page") {
       setMountedTabs((current) =>
@@ -86,6 +92,14 @@ export function AgentSidePanel({
   };
   const renderTab = (tabId: OwnerTab) =>
     variant === "page" ? mountedTabs.has(tabId) : tab === tabId;
+
+  // Page tabs share a single scroll container. Save before hiding the current
+  // tab and restore after its sibling becomes visible, otherwise a short
+  // Profile tab clamps Activity's history position back to the top.
+  useLayoutEffect(() => {
+    if (variant !== "page" || !tabBodyRef.current) return;
+    tabBodyRef.current.scrollTop = tabScrollTopRef.current[tab] ?? 0;
+  }, [tab, variant]);
 
   return (
     <aside className={cn("flex h-full min-h-0 flex-col bg-background", variant === "panel" && "border-l")}>
@@ -149,7 +163,7 @@ export function AgentSidePanel({
               );
             })}
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto">
+          <div ref={tabBodyRef} className="min-h-0 flex-1 overflow-y-auto">
             {renderTab("activity") && canInspectAgent ? (
               <div className={tab === "activity" ? undefined : "hidden"}>
                 <ActivityTab agent={agent} />

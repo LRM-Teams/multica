@@ -340,6 +340,16 @@ function AgentProfileTabContent({
 function AgentUsageSection({ agent }: { agent: Agent }) {
   const { t } = useT("agents");
   const timezone = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone, []);
+  const usdFormatter = useMemo(
+    () =>
+      new Intl.NumberFormat(undefined, {
+        style: "currency",
+        currency: "USD",
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }),
+    [],
+  );
   const { data: allUsage = [], isLoading } = useQuery(
     dashboardUsageByAgentOptions(agent.workspace_id, 30, null, timezone),
   );
@@ -374,12 +384,7 @@ function AgentUsageSection({ agent }: { agent: Agent }) {
             <span className="text-muted-foreground">{t(($) => $.side_panel.usage_estimated_cost)}</span>
             <span className="text-base font-semibold tabular-nums text-foreground">
               {canEstimateCost
-                ? new Intl.NumberFormat(undefined, {
-                    style: "currency",
-                    currency: "USD",
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2,
-                  }).format(cost)
+                ? usdFormatter.format(cost)
                 : t(($) => $.side_panel.usage_cost_unavailable)}
             </span>
           </div>

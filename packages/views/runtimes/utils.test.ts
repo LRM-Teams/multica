@@ -204,6 +204,26 @@ describe("estimateCost", () => {
     // exact-match-after-date-strip (no startsWith fallback), so each row
     // must exist on its own.
     expect(
+      estimateCost({
+        ...zeroUsage,
+        model: "gpt-5.6-sol",
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+        cache_read_tokens: 1_000_000,
+        cache_write_tokens: 1_000_000,
+      }),
+    ).toBeCloseTo(5 + 30 + 0.5 + 6.25, 5);
+    expect(
+      estimateCost({
+        ...zeroUsage,
+        model: "gpt-5.6-luna",
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+        cache_read_tokens: 1_000_000,
+        cache_write_tokens: 1_000_000,
+      }),
+    ).toBeCloseTo(1 + 6 + 0.1 + 1.25, 5);
+    expect(
       estimateCost({ ...zeroUsage, model: "gpt-5.5", input_tokens: 1_000_000 }),
     ).toBeCloseTo(5, 5);
     expect(
@@ -320,7 +340,16 @@ describe("estimateCost", () => {
     ).toBeCloseTo(4.95, 5);
   });
 
-  it("prices glm-5.1 at the official $1.4 / $4.4 tier", () => {
+  it("prices glm-5.2 and glm-5.1 at the official $1.4 / $4.4 tier", () => {
+    expect(
+      estimateCost({
+        ...zeroUsage,
+        model: "glm-5.2",
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+        cache_read_tokens: 1_000_000,
+      }),
+    ).toBeCloseTo(1.4 + 4.4 + 0.26, 5);
     expect(
       estimateCost({
         ...zeroUsage,
@@ -354,6 +383,7 @@ describe("estimateCost", () => {
     // $0.00 for the runtime that actually triggered this work.
     expect(isModelPriced("deepseek/deepseek-v4-flash")).toBe(true);
     expect(isModelPriced("moonshotai/kimi-k2.6")).toBe(true);
+    expect(isModelPriced("z-ai/glm-5.2")).toBe(true);
     expect(isModelPriced("zhipuai/glm-5.1")).toBe(true);
     expect(isModelPriced("zhipuai/glm-4.5-air")).toBe(true);
   });

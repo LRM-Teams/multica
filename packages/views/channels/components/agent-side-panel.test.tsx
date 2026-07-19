@@ -200,17 +200,33 @@ describe("AgentSidePanel", () => {
     }));
   });
 
-  it("keeps visited page tabs mounted and gives mobile tab targets 44px", () => {
+  it("keeps visited page tabs mounted in equal-width 44px mobile targets", () => {
     renderPanel("user-owner", undefined, "page");
 
     expect(screen.queryByRole("button", { name: "Close panel" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Activity" })).toHaveClass("min-h-11");
+    for (const tab of ["Profile", "Activity", "Files"]) {
+      expect(screen.getByRole("button", { name: tab })).toHaveClass(
+        "min-h-11",
+        "flex-1",
+        "justify-center",
+      );
+    }
+    expect(screen.getByRole("button", { name: "Activity" }).parentElement).toHaveClass("w-full", "px-0");
 
     fireEvent.click(screen.getByRole("button", { name: "Activity" }));
     expect(screen.getByText("Activity content")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Profile" }));
     expect(screen.getByText("Activity content")).toBeInTheDocument();
+  });
+
+  it("keeps desktop panel tabs content-width and left aligned", () => {
+    renderPanel();
+
+    const activityTab = screen.getByRole("button", { name: "Activity" });
+    expect(activityTab).toHaveClass("shrink-0", "px-3");
+    expect(activityTab).not.toHaveClass("flex-1", "justify-center", "min-h-11");
+    expect(activityTab.parentElement).not.toHaveClass("w-full", "px-0");
   });
 
   it("never renders a separate Config tab (merged into Profile, #565)", () => {

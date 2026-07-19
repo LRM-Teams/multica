@@ -372,7 +372,7 @@ function AgentUsageSection({ agent }: { agent: Agent }) {
         <div className="space-y-2 text-xs">
           <div className="flex items-baseline justify-between gap-3">
             <span className="text-muted-foreground">{t(($) => $.side_panel.usage_estimated_cost)}</span>
-            <span className="font-medium tabular-nums text-foreground">
+            <span className="text-base font-semibold tabular-nums text-foreground">
               {canEstimateCost
                 ? new Intl.NumberFormat(undefined, {
                     style: "currency",
@@ -385,7 +385,7 @@ function AgentUsageSection({ agent }: { agent: Agent }) {
           </div>
           <div className="flex items-baseline justify-between gap-3">
             <span className="text-muted-foreground">{t(($) => $.side_panel.usage_tokens)}</span>
-            <span className="tabular-nums text-foreground">{formatTokens(tokens)}</span>
+            <span className="tabular-nums text-muted-foreground">{formatTokens(tokens)}</span>
           </div>
         </div>
       )}

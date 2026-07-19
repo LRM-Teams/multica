@@ -233,9 +233,9 @@ describe("AgentSidePanel", () => {
     renderPanel("user-owner");
 
     expect(screen.getByText("Estimated cost")).toBeInTheDocument();
-    expect(screen.getByText("$3.00")).toBeInTheDocument();
+    expect(screen.getByText("$3.00")).toHaveClass("text-base", "font-semibold");
     expect(screen.getByText("Tokens")).toBeInTheDocument();
-    expect(screen.getByText("1M")).toBeInTheDocument();
+    expect(screen.getByText("1M")).toHaveClass("text-muted-foreground");
   });
 
   it("does not invent a cost when a reported model has no pricing", () => {

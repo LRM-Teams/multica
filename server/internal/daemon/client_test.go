@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"runtime"
 	"sync/atomic"
 	"testing"
@@ -126,6 +127,43 @@ func TestClient_RuntimeScopedCallsSkipExpiredRuntimeDaemonToken(t *testing.T) {
 
 	if _, err := c.EnsureAgentCredential(context.Background(), "rt-1", "agent-1"); err != nil {
 		t.Fatalf("EnsureAgentCredential: %v", err)
+	}
+}
+
+func TestClient_CompleteAgentInboxEventSendsInternalOutput(t *testing.T) {
+	var body map[string]json.RawMessage
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Path; got != "/api/daemon/agent-inbox/events/event-1/complete" {
+			t.Fatalf("path = %q", got)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	c.SetToken("profile-token")
+	lease := AgentInboxLease{ID: "event-1", DeliveryID: "delivery-1", LeaseToken: "lease-1"}
+	internal := json.RawMessage(`{"decision":"SILENT","confidence":0.1}`)
+	usage := []TaskUsageEntry{{Provider: "openai", Model: "gpt-5", InputTokens: 7, OutputTokens: 2}}
+	if err := c.CompleteAgentInboxEvent(context.Background(), lease, TaskResult{ExecutionID: "execution-1", InternalOutput: internal, Usage: usage}); err != nil {
+		t.Fatalf("CompleteAgentInboxEvent: %v", err)
+	}
+	if got := string(body["internal_output"]); got != string(internal) {
+		t.Fatalf("internal_output = %s, want %s", got, internal)
+	}
+	if got := string(body["execution_id"]); got != `"execution-1"` {
+		t.Fatalf("execution_id = %s", got)
+	}
+	var gotUsage []TaskUsageEntry
+	if err := json.Unmarshal(body["usage"], &gotUsage); err != nil {
+		t.Fatalf("decode usage: %v", err)
+	}
+	if !reflect.DeepEqual(gotUsage, usage) {
+		t.Fatalf("usage = %#v, want %#v", gotUsage, usage)
 	}
 }
 

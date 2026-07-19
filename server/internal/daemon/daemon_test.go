@@ -32,6 +32,9 @@ func TestDaemonRegistrationCapabilities_GatesCredentialTransport(t *testing.T) {
 	if !containsString(legacy, protocol.DaemonCapabilityChannelOutputActions) || !containsString(legacy, protocol.DaemonCapabilityAgentCLITransport) {
 		t.Fatalf("legacy capabilities missing base entries: %#v", legacy)
 	}
+	if !containsString(legacy, protocol.DaemonCapabilityRestrictedExecution) {
+		t.Fatalf("legacy capabilities missing restricted execution support: %#v", legacy)
+	}
 
 	capable := daemonRegistrationCapabilities(true)
 	if !containsString(capable, protocol.DaemonCapabilityAgentCredentialTransport) {

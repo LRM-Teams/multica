@@ -17,10 +17,14 @@ const (
 // snapshots it at enqueue time so later edits to an agent affect only work
 // created after the edit.
 type TaskExecutionConfig struct {
-	Model            string `json:"model"`
-	ThinkingLevel    string `json:"thinking_level"`
-	ExecutionProfile string `json:"execution_profile"`
-	Snapshotted      bool   `json:"snapshotted"`
+	Model             string `json:"model"`
+	ThinkingLevel     string `json:"thinking_level"`
+	ExecutionProfile  string `json:"execution_profile"`
+	ContextMessages   int    `json:"context_messages,omitempty"`
+	MemoryBudgetBytes int    `json:"memory_budget_bytes,omitempty"`
+	MaxOutputTokens   int    `json:"max_output_tokens,omitempty"`
+	ToolsEnabled      bool   `json:"tools_enabled"`
+	Snapshotted       bool   `json:"snapshotted"`
 }
 
 // WithTaskExecutionConfig preserves every existing task context key while
@@ -46,12 +50,19 @@ func WithTaskExecutionProfile(contextJSON []byte, model, thinkingLevel, executio
 	if !ok {
 		return nil, fmt.Errorf("unsupported execution profile %q", executionProfile)
 	}
-	config, err := json.Marshal(TaskExecutionConfig{
+	configSnapshot := TaskExecutionConfig{
 		Model:            model,
 		ThinkingLevel:    thinkingLevel,
 		ExecutionProfile: profile,
 		Snapshotted:      true,
-	})
+	}
+	if profile == ExecutionProfileAttentionProbe || profile == ExecutionProfileProtocolTurn {
+		configSnapshot.ContextMessages = 8
+		configSnapshot.MemoryBudgetBytes = 4 * 1024
+		configSnapshot.MaxOutputTokens = 96
+		configSnapshot.ToolsEnabled = false
+	}
+	config, err := json.Marshal(configSnapshot)
 	if err != nil {
 		return nil, err
 	}

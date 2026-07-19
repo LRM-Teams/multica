@@ -37,6 +37,56 @@ func TestRestrictedExecutionProfilesFailClosedOutsidePi(t *testing.T) {
 	}
 }
 
+func TestRestrictedExecutionConfigRejectsUnsafeBounds(t *testing.T) {
+	unsafe := []*TaskExecutionConfig{
+		{ExecutionProfile: executionProfileAttentionProbe, ToolsEnabled: true},
+		{ExecutionProfile: executionProfileAttentionProbe, ContextMessages: restrictedContextMessages + 1},
+		{ExecutionProfile: executionProfileAttentionProbe, MemoryBudgetBytes: restrictedMemoryBytes + 1},
+		{ExecutionProfile: executionProfileAttentionProbe, MaxOutputTokens: restrictedExecutionMaxOutputTokens + 1},
+		{ExecutionProfile: executionProfileAttentionProbe, MaxOutputTokens: -1},
+	}
+	for _, config := range unsafe {
+		if _, err := taskExecutionProfile(Task{ExecutionConfig: config}); err == nil {
+			t.Fatalf("unsafe restricted config accepted: %#v", config)
+		}
+	}
+}
+
+func TestRestrictedExecutionConfigAppliesTighterBounds(t *testing.T) {
+	task := Task{
+		ChatContextSummary: strings.Join([]string{"m1", "m2", "m3", "m4"}, "\n"),
+		Agent: &AgentData{Memories: []MemoryData{
+			{Name: "one", Content: strings.Repeat("a", 32)},
+			{Name: "two", Content: strings.Repeat("b", 32)},
+		}},
+		ExecutionConfig: &TaskExecutionConfig{
+			ExecutionProfile:  executionProfileAttentionProbe,
+			ContextMessages:   2,
+			MemoryBudgetBytes: 24,
+			MaxOutputTokens:   48,
+			ToolsEnabled:      false,
+		},
+	}
+	profile, err := taskExecutionProfile(task)
+	if err != nil {
+		t.Fatalf("taskExecutionProfile: %v", err)
+	}
+	restricted := restrictTaskForExecutionProfile(task, profile)
+	if restricted.ChatContextSummary != "m3\nm4" {
+		t.Fatalf("bounded context = %q", restricted.ChatContextSummary)
+	}
+	var memoryBytes int
+	for _, memory := range restricted.Agent.Memories {
+		memoryBytes += len(memory.Content)
+	}
+	if memoryBytes != 24 {
+		t.Fatalf("memory bytes = %d, want 24", memoryBytes)
+	}
+	if got := restrictedOutputTokenLimitForTask(task, profile); got != 48 {
+		t.Fatalf("output token limit = %d, want 48", got)
+	}
+}
+
 func TestRestrictedPiExecutionNeverReusesPersistentChatRuntime(t *testing.T) {
 	full := Task{ChatSessionID: "chat-1"}
 	if !usesPersistentPiChatRuntime("pi", full) {

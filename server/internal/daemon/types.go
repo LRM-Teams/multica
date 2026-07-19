@@ -140,10 +140,14 @@ type Task struct {
 }
 
 type TaskExecutionConfig struct {
-	Model            string `json:"model,omitempty"`
-	ThinkingLevel    string `json:"thinking_level,omitempty"`
-	ExecutionProfile string `json:"execution_profile,omitempty"`
-	Snapshotted      bool   `json:"snapshotted,omitempty"`
+	Model             string `json:"model,omitempty"`
+	ThinkingLevel     string `json:"thinking_level,omitempty"`
+	ExecutionProfile  string `json:"execution_profile,omitempty"`
+	ContextMessages   int    `json:"context_messages,omitempty"`
+	MemoryBudgetBytes int    `json:"memory_budget_bytes,omitempty"`
+	MaxOutputTokens   int    `json:"max_output_tokens,omitempty"`
+	ToolsEnabled      bool   `json:"tools_enabled"`
+	Snapshotted       bool   `json:"snapshotted,omitempty"`
 }
 
 type AgentInboxLease struct {
@@ -319,6 +323,7 @@ type TaskResult struct {
 	FailureReason string                        `json:"-"`                    // classifier forwarded to FailTask on the blocked path; empty falls back to 'agent_error'
 	Usage         []TaskUsageEntry              `json:"usage,omitempty"`      // per-model token usage
 	RuntimeStats  *protocol.RuntimeTokenStats   `json:"runtime_stats,omitempty"`
+	ExecutionID   string                        `json:"-"`
 	// InternalOutput is the validated structured result for a restricted
 	// execution. It is deliberately excluded from legacy task completion JSON;
 	// Attention Round persistence consumes it through its own internal contract.

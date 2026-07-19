@@ -105,6 +105,29 @@ func envPositiveInt64(name string, def int64) int64 {
 	return v
 }
 
+// envPositiveBytes accepts an explicit byte count or the IEC KiB suffix used
+// by the Attention Round v3 configuration (for example, "4096" or "4KiB").
+func envPositiveBytes(name string, def int) int {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return def
+	}
+
+	number := raw
+	multiplier := int64(1)
+	if strings.HasSuffix(strings.ToLower(number), "kib") {
+		number = strings.TrimSpace(number[:len(number)-3])
+		multiplier = 1024
+	}
+	v, err := strconv.ParseInt(number, 10, 64)
+	maxInt := int64(^uint(0) >> 1)
+	if err != nil || v <= 0 || v > maxInt/multiplier {
+		slog.Warn("invalid env var, using default", "name", name, "value", raw, "default", def, "error", err)
+		return def
+	}
+	return int(v * multiplier)
+}
+
 func envDuration(name string, def time.Duration) time.Duration {
 	raw := os.Getenv(name)
 	if raw == "" {
@@ -369,6 +392,7 @@ func main() {
 
 	// Start background sweeper to mark stale runtimes as offline.
 	go runRuntimeSweeper(sweepCtx, queries, pool, liveness, taskSvc, bus)
+	go runChannelAttentionWorkers(sweepCtx, h)
 	go heartbeatScheduler.Run(sweepCtx)
 	go runAutopilotScheduler(autopilotCtx, queries, autopilotSvc)
 	go runAutopilotFailureMonitor(autopilotCtx, queries, bus, envFailureMonitorConfig())
@@ -502,4 +526,26 @@ func main() {
 		metricsShutdownCancel()
 	}
 	slog.Info("server stopped")
+}
+
+func runChannelAttentionWorkers(ctx context.Context, h *handler.Handler) {
+	if h == nil {
+		return
+	}
+	outboxTicker := time.NewTicker(time.Second)
+	timeoutTicker := time.NewTicker(time.Second)
+	defer outboxTicker.Stop()
+	defer timeoutTicker.Stop()
+	h.ProcessPendingChannelAttentionDispatches(ctx, 64)
+	h.SweepChannelAttentionTimeouts(ctx, 64)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-outboxTicker.C:
+			h.ProcessPendingChannelAttentionDispatches(ctx, 64)
+		case <-timeoutTicker.C:
+			h.SweepChannelAttentionTimeouts(ctx, 64)
+		}
+	}
 }

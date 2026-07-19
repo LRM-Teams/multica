@@ -92,7 +92,7 @@ type Config struct {
 	// with an empty env_id and no default configured). Read from
 	// MULTICA_DEFAULT_SELF_PLAY_TEMPLATE; empty ⇒ "default". A request may
 	// override it per-dispatch via EnvDispatchRequest.Template.
-	DefaultSelfPlayTemplate string
+	DefaultSelfPlayTemplate  string
 	AttachmentDownloadMode   string
 	AttachmentDownloadURLTTL time.Duration
 	// ChannelAmbientGateMode controls the Phase 0 ambient stopgap. Empty and
@@ -102,8 +102,23 @@ type Config struct {
 	ChannelAmbientGateMaxRecentPerAgent   int
 	ChannelAmbientGateMaxRecentPerChannel int
 	ChannelAmbientGateMaxRecentPerRuntime int
-	EvolutionReviewer                     service.EvolutionReviewer
-	EvolutionReviewEnabled                bool
+	// ChannelUnmentionedMode controls how human-authored channel messages with
+	// no explicit Agent mention are dispatched. "attention_round" is the v3
+	// default; "legacy_full" is the emergency rollback to the pre-v3 fan-out.
+	ChannelUnmentionedMode string
+	// ChannelAttentionEnabled is the independent kill switch for Attention
+	// Rounds. The remaining fields bound probe collection and restricted
+	// execution; budgets are bytes/tokens, never characters or model defaults.
+	ChannelAttentionEnabled                 bool
+	ChannelAttentionDebounce                time.Duration
+	ChannelAttentionMaxWait                 time.Duration
+	ChannelAttentionContextMessages         int
+	ChannelAttentionMemoryBudgetBytes       int
+	ChannelAttentionMaxOutputTokens         int
+	ChannelAttentionToolsEnabled            bool
+	ChannelAttentionMaxConcurrentPerRuntime int
+	EvolutionReviewer                       service.EvolutionReviewer
+	EvolutionReviewEnabled                  bool
 }
 
 type cloudRuntimeProxy interface {
@@ -140,13 +155,15 @@ type Handler struct {
 	// May be nil in tests / self-hosted with the metrics listener disabled;
 	// every Record* method is nil-safe and obsmetrics.RecordEvent treats a
 	// nil Metrics as "PostHog only".
-	Metrics              *obsmetrics.BusinessMetrics
-	PATCache             *auth.PATCache
-	DaemonTokenCache     *auth.DaemonTokenCache
-	MembershipCache      *auth.MembershipCache
-	WebhookRateLimiter   WebhookRateLimiter
-	WebhookIPRateLimiter WebhookRateLimiter
-	CloudRuntime         cloudRuntimeProxy
+	Metrics                     *obsmetrics.BusinessMetrics
+	channelUnmentionedMessages  uint64
+	channelUnmentionedFullWakes uint64
+	PATCache                    *auth.PATCache
+	DaemonTokenCache            *auth.DaemonTokenCache
+	MembershipCache             *auth.MembershipCache
+	WebhookRateLimiter          WebhookRateLimiter
+	WebhookIPRateLimiter        WebhookRateLimiter
+	CloudRuntime                cloudRuntimeProxy
 	// Lark integration. All three are nil when the Lark master key
 	// (MULTICA_LARK_SECRET_KEY) is unset; the corresponding HTTP
 	// handlers return 503 in that case so a misconfigured self-host

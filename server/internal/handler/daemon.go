@@ -2279,6 +2279,7 @@ type TaskCompleteRequest struct {
 	SessionID              string                        `json:"session_id"` // Claude session ID for future resumption
 	WorkDir                string                        `json:"work_dir"`   // working directory used during execution
 	RuntimeStats           *protocol.RuntimeTokenStats   `json:"runtime_stats,omitempty"`
+	InternalOutput         json.RawMessage               `json:"internal_output,omitempty"`
 }
 
 func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {

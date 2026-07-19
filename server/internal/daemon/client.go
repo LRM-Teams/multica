@@ -291,14 +291,17 @@ func (c *Client) ClaimTask(ctx context.Context, runtimeID string) (*Task, error)
 }
 
 type AgentInboxEvent struct {
-	ID             string `json:"id"`
-	DeliveryID     string `json:"delivery_id"`
-	LeaseToken     string `json:"lease_token"`
-	LeaseExpiresAt string `json:"lease_expires_at"`
-	SeqTo          int64  `json:"seq_to"`
-	RequiresWake   bool   `json:"requires_wake"`
-	Task           *Task  `json:"task,omitempty"`
-	RuntimeID      string `json:"-"`
+	ID               string `json:"id"`
+	DeliveryID       string `json:"delivery_id"`
+	LeaseToken       string `json:"lease_token"`
+	LeaseExpiresAt   string `json:"lease_expires_at"`
+	SeqTo            int64  `json:"seq_to"`
+	DeliveryMode     string `json:"delivery_mode"`
+	ResponseMode     string `json:"response_mode"`
+	ExecutionProfile string `json:"execution_profile"`
+	RequiresWake     bool   `json:"requires_wake"`
+	Task             *Task  `json:"task,omitempty"`
+	RuntimeID        string `json:"-"`
 }
 
 func (c *Client) DrainAgentInbox(ctx context.Context, runtimeID string) (*AgentInboxEvent, error) {
@@ -440,6 +443,12 @@ func (c *Client) CompleteAgentInboxEvent(ctx context.Context, lease AgentInboxLe
 		"lease_token": lease.LeaseToken,
 		"output":      result.Comment,
 	}
+	if result.ExecutionID != "" {
+		body["execution_id"] = result.ExecutionID
+	}
+	if len(result.Usage) > 0 {
+		body["usage"] = result.Usage
+	}
 	if result.Action != "" {
 		body["action"] = result.Action
 	}
@@ -469,6 +478,9 @@ func (c *Client) CompleteAgentInboxEvent(ctx context.Context, lease AgentInboxLe
 	}
 	if result.RuntimeStats != nil {
 		body["runtime_stats"] = result.RuntimeStats
+	}
+	if len(result.InternalOutput) > 0 {
+		body["internal_output"] = result.InternalOutput
 	}
 	return c.postJSONWithRetryToken(ctx, fmt.Sprintf("/api/daemon/agent-inbox/events/%s/complete", lease.ID), body, nil, defaultTerminalRetrySchedule, c.tokenForRuntime(lease.RuntimeID))
 }

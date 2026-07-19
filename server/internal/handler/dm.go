@@ -827,7 +827,9 @@ func (h *Handler) dispatchDMAgentReply(ctx context.Context, ch ChannelResponse, 
 			slog.Warn("skip dm agent dispatch after access check failed", "channel_id", ch.ID, "agent_id", uuidToString(agent.ID), "initiator_user_id", uuidToString(initiatorUserID))
 			continue
 		}
-		h.dispatchChannelAgentReply(ctx, ch, agent, trigger, initiatorUserID)
+		if _, err := h.dispatchChannelAgentReplyWithReason(ctx, ch, agent, trigger, initiatorUserID, "dm"); err == nil && h.Metrics != nil {
+			h.Metrics.RecordChannelFullExecutionWake("dm")
+		}
 	}
 }
 

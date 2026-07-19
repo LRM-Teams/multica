@@ -95,6 +95,79 @@ func TestBusinessMetricsLLMPricingAndUnpricedTokens(t *testing.T) {
 	}
 }
 
+func TestBusinessMetricsChannelAttentionFamiliesAndBoundedLabels(t *testing.T) {
+	m := NewBusinessMetrics()
+	for _, decision := range []string{"silent", "answer", "contribute", "coordinate"} {
+		if got := NormalizeAttentionDecision(decision); got != decision {
+			t.Fatalf("probe decision %q normalized to %q", decision, got)
+		}
+	}
+	for _, reason := range []string{"single_claim", "coordinate", "all_probes_failed"} {
+		if got := NormalizeFullExecutionWakeReason(reason); got != "other" {
+			t.Fatalf("PR3-only wake reason %q normalized to %q, want other", reason, got)
+		}
+	}
+
+	m.RecordChannelAttentionRound("COMPLETED")
+	m.RecordChannelAttentionRound("workspace-possibly-high-cardinality")
+	m.RecordChannelAttentionProbe("ANSWER", "completed")
+	m.RecordChannelAttentionProbe("agent-123", "raw-provider-error")
+	m.RecordChannelAttentionProbeTokens("input", 42)
+	m.RecordChannelAttentionProbeTokens("arbitrary-kind", 7)
+	m.ObserveChannelAttentionProbeLatency(0.25)
+	m.RecordChannelFullExecutionWake("explicit_mention")
+	m.RecordChannelFullExecutionWake("group_command")
+	m.RecordChannelFullExecutionWake("thread_reply")
+	m.RecordChannelFullExecutionWake("dm")
+	m.RecordChannelFullExecutionWake("legacy_full")
+	m.RecordChannelFullExecutionWake("message-123")
+	m.SetChannelFullExecutionAmplificationRatio(0.3)
+	m.RecordChannelAttentionTimeout("runtime_capacity")
+	m.RecordChannelAttentionTimeout("runtime-123")
+
+	if got := testutil.ToFloat64(m.channelAttentionRounds.WithLabelValues("completed")); got != 1 {
+		t.Fatalf("completed rounds = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(m.channelAttentionRounds.WithLabelValues("other")); got != 1 {
+		t.Fatalf("normalized round outcomes = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(m.channelAttentionProbes.WithLabelValues("answer", "completed")); got != 1 {
+		t.Fatalf("answer/completed probes = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(m.channelAttentionProbes.WithLabelValues("none", "other")); got != 1 {
+		t.Fatalf("normalized probe labels = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(m.channelAttentionProbeTokens.WithLabelValues("input")); got != 42 {
+		t.Fatalf("input probe tokens = %v, want 42", got)
+	}
+	if got := testutil.ToFloat64(m.channelAttentionProbeTokens.WithLabelValues("other")); got != 7 {
+		t.Fatalf("normalized probe tokens = %v, want 7", got)
+	}
+	if got := testutil.ToFloat64(m.channelFullExecutionWakes.WithLabelValues("explicit_mention")); got != 1 {
+		t.Fatalf("explicit mention wakes = %v, want 1", got)
+	}
+	for _, reason := range []string{"group_command", "thread_reply", "dm", "legacy_full"} {
+		if got := testutil.ToFloat64(m.channelFullExecutionWakes.WithLabelValues(reason)); got != 1 {
+			t.Fatalf("%s wakes = %v, want 1", reason, got)
+		}
+	}
+	if got := testutil.ToFloat64(m.channelFullExecutionWakes.WithLabelValues("other")); got != 1 {
+		t.Fatalf("normalized wakes = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(m.channelFullExecutionAmplificationRatio.WithLabelValues()); got != 0.3 {
+		t.Fatalf("amplification ratio = %v, want 0.3", got)
+	}
+	if got := testutil.ToFloat64(m.channelAttentionTimeouts.WithLabelValues("runtime_capacity")); got != 1 {
+		t.Fatalf("runtime capacity timeouts = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(m.channelAttentionTimeouts.WithLabelValues("other")); got != 1 {
+		t.Fatalf("normalized timeouts = %v, want 1", got)
+	}
+	if got := testutil.CollectAndCount(m.channelAttentionProbeLatency); got != 1 {
+		t.Fatalf("probe latency series count = %d, want 1", got)
+	}
+}
+
 func TestBusinessMetricsRegistryExposesAllFamilies(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	m := NewBusinessMetrics()
@@ -109,6 +182,13 @@ func TestBusinessMetricsRegistryExposesAllFamilies(t *testing.T) {
 	m.RecordTaskLeaseExpired("issue")
 	m.RecordChannelAmbientGateDecision("coalesced", "agent_active_ambient")
 	m.RecordChannelOutputSuppressed("legacy_protocol_output")
+	m.RecordChannelAttentionRound("completed")
+	m.RecordChannelAttentionProbe("silent", "completed")
+	m.RecordChannelAttentionProbeTokens("input", 1)
+	m.ObserveChannelAttentionProbeLatency(0.1)
+	m.RecordChannelFullExecutionWake("legacy_full")
+	m.SetChannelFullExecutionAmplificationRatio(0.25)
+	m.RecordChannelAttentionTimeout("max_wait")
 	m.RecordLLMUsage("issue", "local", "codex", "gpt-5.4", 1, 1, 1, 1)
 	m.RecordLLMUsage("issue", "local", "custom-provider", "custom-model", 1, 0, 0, 0)
 

@@ -31,27 +31,36 @@ const (
 	labelAction       = "action"
 	labelResult       = "result"
 	labelOp           = "op"
+	labelOutcome      = "outcome"
+	labelDecision     = "decision"
 )
 
 var businessMetricLabels = map[string][]string{
-	"multica_agent_task_enqueued_total":            {labelSource, labelRuntimeMode},
-	"multica_agent_task_dispatched_total":          {labelSource, labelRuntimeMode},
-	"multica_agent_task_started_total":             {labelSource, labelRuntimeMode, labelProvider},
-	"multica_agent_task_terminal_total":            {labelSource, labelRuntimeMode, labelTerminalStatus},
-	"multica_agent_task_failed_total":              {labelSource, labelRuntimeMode, labelFailureReason},
-	"multica_agent_task_queue_wait_seconds":        {labelSource, labelRuntimeMode},
-	"multica_agent_task_run_seconds":               {labelSource, labelRuntimeMode, labelTerminalStatus},
-	"multica_agent_task_total_seconds":             {labelSource, labelRuntimeMode, labelTerminalStatus},
-	"multica_agent_task_in_progress":               {labelSource, labelRuntimeMode},
-	"multica_agent_task_iteration_count":           {labelSource, labelTerminalStatus},
-	"multica_llm_tokens_total":                     {labelProvider, labelModel, labelTokenType, labelRuntimeMode, labelSource},
-	"multica_llm_cost_usd_total":                   {labelProvider, labelModel, labelTokenType, labelRuntimeMode, labelSource},
-	"multica_llm_unpriced_tokens_total":            {labelProvider, labelModelAlias, labelTokenType},
-	"multica_llm_request_total":                    {labelProvider, labelModel, labelRuntimeMode},
-	"multica_task_queued_expired_total":            {labelSource, labelRuntimeMode},
-	"multica_task_lease_expired_total":             {labelSource},
-	"multica_channel_ambient_gate_decisions_total": {labelAction, labelReason},
-	"multica_channel_output_suppressed_total":      {labelReason},
+	"multica_agent_task_enqueued_total":                  {labelSource, labelRuntimeMode},
+	"multica_agent_task_dispatched_total":                {labelSource, labelRuntimeMode},
+	"multica_agent_task_started_total":                   {labelSource, labelRuntimeMode, labelProvider},
+	"multica_agent_task_terminal_total":                  {labelSource, labelRuntimeMode, labelTerminalStatus},
+	"multica_agent_task_failed_total":                    {labelSource, labelRuntimeMode, labelFailureReason},
+	"multica_agent_task_queue_wait_seconds":              {labelSource, labelRuntimeMode},
+	"multica_agent_task_run_seconds":                     {labelSource, labelRuntimeMode, labelTerminalStatus},
+	"multica_agent_task_total_seconds":                   {labelSource, labelRuntimeMode, labelTerminalStatus},
+	"multica_agent_task_in_progress":                     {labelSource, labelRuntimeMode},
+	"multica_agent_task_iteration_count":                 {labelSource, labelTerminalStatus},
+	"multica_llm_tokens_total":                           {labelProvider, labelModel, labelTokenType, labelRuntimeMode, labelSource},
+	"multica_llm_cost_usd_total":                         {labelProvider, labelModel, labelTokenType, labelRuntimeMode, labelSource},
+	"multica_llm_unpriced_tokens_total":                  {labelProvider, labelModelAlias, labelTokenType},
+	"multica_llm_request_total":                          {labelProvider, labelModel, labelRuntimeMode},
+	"multica_task_queued_expired_total":                  {labelSource, labelRuntimeMode},
+	"multica_task_lease_expired_total":                   {labelSource},
+	"multica_channel_ambient_gate_decisions_total":       {labelAction, labelReason},
+	"multica_channel_output_suppressed_total":            {labelReason},
+	"multica_channel_attention_rounds_total":             {labelOutcome},
+	"multica_channel_attention_probes_total":             {labelDecision, labelOutcome},
+	"multica_channel_attention_probe_tokens_total":       {labelKind},
+	"multica_channel_attention_probe_latency_seconds":    {},
+	"multica_channel_full_execution_wakes_total":         {labelReason},
+	"multica_channel_full_execution_amplification_ratio": {},
+	"multica_channel_attention_timeouts_total":           {labelReason},
 
 	// PR3 funnel / community / commercial.
 	"multica_signup_total":                             {labelSignupSource},
@@ -177,6 +186,51 @@ var (
 		"unsent_final_output":    "unsent_final_output",
 		"other":                  "other",
 	}
+	knownAttentionRoundOutcomes = map[string]string{
+		"completed": "completed",
+		"partial":   "partial",
+		"failed":    "failed",
+		"timed_out": "timed_out",
+		"cancelled": "cancelled",
+		"disabled":  "disabled",
+		"other":     "other",
+	}
+	knownAttentionDecisions = map[string]string{
+		"silent":     "silent",
+		"answer":     "answer",
+		"contribute": "contribute",
+		"coordinate": "coordinate",
+		"none":       "none",
+	}
+	knownAttentionProbeOutcomes = map[string]string{
+		"completed":   "completed",
+		"failed":      "failed",
+		"timed_out":   "timed_out",
+		"unavailable": "unavailable",
+		"cancelled":   "cancelled",
+		"other":       "other",
+	}
+	knownAttentionProbeTokenKinds = map[string]string{
+		"input":  "input",
+		"output": "output",
+		"other":  "other",
+	}
+	knownFullExecutionWakeReasons = map[string]string{
+		"explicit_mention": "explicit_mention",
+		"group_command":    "group_command",
+		"thread_reply":     "thread_reply",
+		"dm":               "dm",
+		"legacy_full":      "legacy_full",
+		"other":            "other",
+	}
+	knownAttentionTimeoutReasons = map[string]string{
+		"debounce":         "debounce",
+		"max_wait":         "max_wait",
+		"runtime_capacity": "runtime_capacity",
+		"probe":            "probe",
+		"round":            "round",
+		"other":            "other",
+	}
 	knownFailureReasons = map[string]string{}
 	modelAliasUnsafeRe  = regexp.MustCompile(`[^a-z0-9._:/+-]+`)
 )
@@ -275,6 +329,38 @@ func NormalizeChannelOutputSuppressedReason(value string) string {
 		return normalized
 	}
 	return "other"
+}
+
+func NormalizeAttentionRoundOutcome(value string) string {
+	return normalizeKnownLabel(value, knownAttentionRoundOutcomes, "other")
+}
+
+func NormalizeAttentionDecision(value string) string {
+	return normalizeKnownLabel(value, knownAttentionDecisions, "none")
+}
+
+func NormalizeAttentionProbeOutcome(value string) string {
+	return normalizeKnownLabel(value, knownAttentionProbeOutcomes, "other")
+}
+
+func NormalizeAttentionProbeTokenKind(value string) string {
+	return normalizeKnownLabel(value, knownAttentionProbeTokenKinds, "other")
+}
+
+func NormalizeFullExecutionWakeReason(value string) string {
+	return normalizeKnownLabel(value, knownFullExecutionWakeReasons, "other")
+}
+
+func NormalizeAttentionTimeoutReason(value string) string {
+	return normalizeKnownLabel(value, knownAttentionTimeoutReasons, "other")
+}
+
+func normalizeKnownLabel(value string, known map[string]string, fallback string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if normalized, ok := known[value]; ok {
+		return normalized
+	}
+	return fallback
 }
 
 func NormalizeModelAlias(value string) string {

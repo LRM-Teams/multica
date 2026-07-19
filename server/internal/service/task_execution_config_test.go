@@ -56,6 +56,33 @@ func TestTaskExecutionConfigRestrictedProfilesRoundTrip(t *testing.T) {
 		if config.ExecutionProfile != profile {
 			t.Fatalf("execution profile = %q, want %q", config.ExecutionProfile, profile)
 		}
+		if config.ContextMessages != 8 || config.MemoryBudgetBytes != 4*1024 || config.MaxOutputTokens != 96 {
+			t.Fatalf("restricted bounds = %#v", config)
+		}
+		if config.ToolsEnabled {
+			t.Fatal("restricted snapshot enabled tools")
+		}
+		var contextMap map[string]json.RawMessage
+		var wireConfig map[string]json.RawMessage
+		if err := json.Unmarshal(contextJSON, &contextMap); err != nil {
+			t.Fatalf("unmarshal context: %v", err)
+		}
+		if err := json.Unmarshal(contextMap[taskExecutionConfigKey], &wireConfig); err != nil {
+			t.Fatalf("unmarshal execution config: %v", err)
+		}
+		if raw, present := wireConfig["tools_enabled"]; !present || string(raw) != "false" {
+			t.Fatalf("tools_enabled wire value = %s, present=%v", raw, present)
+		}
+	}
+}
+
+func TestTaskExecutionConfigParsesAttentionRuntimeBounds(t *testing.T) {
+	config, ok := TaskExecutionConfigFromContext([]byte(`{"execution_config":{"model":"m","thinking_level":"low","execution_profile":"attention_probe","context_messages":4,"memory_budget_bytes":2048,"max_output_tokens":48,"tools_enabled":false,"snapshotted":true}}`))
+	if !ok {
+		t.Fatal("attention runtime config was not parsed")
+	}
+	if config.ContextMessages != 4 || config.MemoryBudgetBytes != 2048 || config.MaxOutputTokens != 48 || config.ToolsEnabled {
+		t.Fatalf("config = %#v", config)
 	}
 }
 

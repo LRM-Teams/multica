@@ -52,10 +52,32 @@ func taskExecutionProfile(task Task) (string, error) {
 	case "", executionProfileFull:
 		return executionProfileFull, nil
 	case executionProfileAttentionProbe, executionProfileProtocolTurn:
+		if err := validateRestrictedExecutionConfig(task.ExecutionConfig); err != nil {
+			return "", fmt.Errorf("execution profile %q: %w", profile, err)
+		}
 		return profile, nil
 	default:
 		return "", fmt.Errorf("unsupported execution profile %q", profile)
 	}
+}
+
+func validateRestrictedExecutionConfig(config *TaskExecutionConfig) error {
+	if config == nil {
+		return nil
+	}
+	if config.ToolsEnabled {
+		return fmt.Errorf("tools_enabled must be false")
+	}
+	if config.ContextMessages < 0 || config.ContextMessages > restrictedContextMessages {
+		return fmt.Errorf("context_messages must be between 0 and %d", restrictedContextMessages)
+	}
+	if config.MemoryBudgetBytes < 0 || config.MemoryBudgetBytes > restrictedMemoryBytes {
+		return fmt.Errorf("memory_budget_bytes must be between 0 and %d", restrictedMemoryBytes)
+	}
+	if config.MaxOutputTokens < 0 || config.MaxOutputTokens > restrictedExecutionMaxOutputTokens {
+		return fmt.Errorf("max_output_tokens must be between 0 and %d", restrictedExecutionMaxOutputTokens)
+	}
+	return nil
 }
 
 func isRestrictedExecutionProfile(profile string) bool {
@@ -67,6 +89,32 @@ func restrictedOutputTokenLimit(profile string) int {
 		return restrictedExecutionMaxOutputTokens
 	}
 	return 0
+}
+
+func restrictedOutputTokenLimitForTask(task Task, profile string) int {
+	limit := restrictedOutputTokenLimit(profile)
+	if limit == 0 || task.ExecutionConfig == nil || task.ExecutionConfig.MaxOutputTokens == 0 {
+		return limit
+	}
+	return task.ExecutionConfig.MaxOutputTokens
+}
+
+func restrictedContextLimits(task Task, profile string) (int, int) {
+	if !isRestrictedExecutionProfile(profile) {
+		return 0, 0
+	}
+	maxMessages := restrictedContextMessages
+	memoryBytes := restrictedMemoryBytes
+	if task.ExecutionConfig == nil {
+		return maxMessages, memoryBytes
+	}
+	if task.ExecutionConfig.ContextMessages > 0 {
+		maxMessages = task.ExecutionConfig.ContextMessages
+	}
+	if task.ExecutionConfig.MemoryBudgetBytes > 0 {
+		memoryBytes = task.ExecutionConfig.MemoryBudgetBytes
+	}
+	return maxMessages, memoryBytes
 }
 
 func totalTaskOutputTokens(usage []TaskUsageEntry) int64 {
@@ -95,6 +143,7 @@ func restrictTaskForExecutionProfile(task Task, profile string) Task {
 	if !isRestrictedExecutionProfile(profile) {
 		return task
 	}
+	contextMessages, memoryBudgetBytes := restrictedContextLimits(task, profile)
 	task.Repos = nil
 	task.ProjectResources = nil
 	task.ChatMessageAttachments = nil
@@ -104,7 +153,7 @@ func restrictTaskForExecutionProfile(task Task, profile string) Task {
 	task.ProvisionManagedWorkdir = false
 	task.ManagedWorkdirRelPath = ""
 	task.ArealProxy = nil
-	task.ChatContextSummary = boundedRestrictedContext(task.ChatContextSummary, restrictedContextMessages, restrictedContextBytes)
+	task.ChatContextSummary = boundedRestrictedContext(task.ChatContextSummary, contextMessages, restrictedContextBytes)
 	task.ChatMessage = truncateUTF8Bytes(task.ChatMessage, restrictedMessageBytes)
 	if task.Agent == nil {
 		return task
@@ -114,7 +163,7 @@ func restrictTaskForExecutionProfile(task Task, profile string) Task {
 	agentCopy.Skills = nil
 	agentCopy.CustomArgs = nil
 	agentCopy.McpConfig = nil
-	agentCopy.Memories = compactRestrictedMemories(agentCopy.Memories, restrictedMemoryBytes)
+	agentCopy.Memories = compactRestrictedMemories(agentCopy.Memories, memoryBudgetBytes)
 	task.Agent = &agentCopy
 	return task
 }

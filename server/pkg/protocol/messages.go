@@ -219,6 +219,7 @@ const (
 	DaemonCapabilityAgentCLITransport        = "agent_cli_transport"
 	DaemonCapabilityAgentCredentialTransport = "agent_credential_transport_v1"
 	DaemonCapabilityMemoryCuration           = "memory_curation_v1"
+	DaemonCapabilityRestrictedExecution      = "restricted_execution_profiles_v1"
 )
 
 const (

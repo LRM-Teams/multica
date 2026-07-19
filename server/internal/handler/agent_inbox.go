@@ -41,23 +41,26 @@ type DrainAgentInboxResponse struct {
 }
 
 type AgentInboxEventResponse struct {
-	ID              string                   `json:"id"`
-	DeliveryID      string                   `json:"delivery_id"`
-	AgentSessionID  string                   `json:"agent_session_id"`
-	ConversationID  string                   `json:"conversation_id"`
-	ChannelID       string                   `json:"channel_id,omitempty"`
-	ChatSessionID   string                   `json:"chat_session_id,omitempty"`
-	AgentID         string                   `json:"agent_id"`
-	SourceMessageID string                   `json:"source_message_id,omitempty"`
-	Reason          string                   `json:"reason"`
-	RequiresWake    bool                     `json:"requires_wake"`
-	Priority        int32                    `json:"priority"`
-	SeqFrom         int64                    `json:"seq_from"`
-	SeqTo           int64                    `json:"seq_to"`
-	Messages        []ChannelMessageResponse `json:"messages,omitempty"`
-	LeaseToken      string                   `json:"lease_token"`
-	LeaseExpiresAt  string                   `json:"lease_expires_at"`
-	Task            *AgentTaskResponse       `json:"task,omitempty"`
+	ID               string                   `json:"id"`
+	DeliveryID       string                   `json:"delivery_id"`
+	AgentSessionID   string                   `json:"agent_session_id"`
+	ConversationID   string                   `json:"conversation_id"`
+	ChannelID        string                   `json:"channel_id,omitempty"`
+	ChatSessionID    string                   `json:"chat_session_id,omitempty"`
+	AgentID          string                   `json:"agent_id"`
+	SourceMessageID  string                   `json:"source_message_id,omitempty"`
+	Reason           string                   `json:"reason"`
+	DeliveryMode     string                   `json:"delivery_mode"`
+	ResponseMode     string                   `json:"response_mode"`
+	ExecutionProfile string                   `json:"execution_profile"`
+	RequiresWake     bool                     `json:"requires_wake"`
+	Priority         int32                    `json:"priority"`
+	SeqFrom          int64                    `json:"seq_from"`
+	SeqTo            int64                    `json:"seq_to"`
+	Messages         []ChannelMessageResponse `json:"messages,omitempty"`
+	LeaseToken       string                   `json:"lease_token"`
+	LeaseExpiresAt   string                   `json:"lease_expires_at"`
+	Task             *AgentTaskResponse       `json:"task,omitempty"`
 }
 
 type AgentInboxLeaseResponse struct {
@@ -70,7 +73,7 @@ type AgentInboxLeaseResponse struct {
 }
 
 func (h *Handler) publishAgentInboxTaskLifecycle(eventType string, event db.AgentInboxEvent, runtimeID pgtype.UUID, status string) {
-	if h == nil || h.Bus == nil || !event.RequiresWake {
+	if h == nil || h.Bus == nil || !event.RequiresWake || isChannelAttentionInboxEvent(event) {
 		return
 	}
 	payload := map[string]any{
@@ -133,8 +136,10 @@ type FailAgentInboxEventRequest struct {
 }
 
 type CompleteAgentInboxEventRequest struct {
-	DeliveryID string `json:"delivery_id"`
-	LeaseToken string `json:"lease_token"`
+	DeliveryID  string              `json:"delivery_id"`
+	LeaseToken  string              `json:"lease_token"`
+	ExecutionID string              `json:"execution_id,omitempty"`
+	Usage       []AgentUsagePayload `json:"usage,omitempty"`
 	TaskCompleteRequest
 }
 
@@ -149,7 +154,12 @@ func (h *Handler) DrainAgentInboxByRuntime(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "failed to reclaim expired inbox deliveries")
 		return
 	}
-	delivery, err := h.Queries.LeaseAgentInboxEventForRuntime(r.Context(), runtime.ID)
+	if err := h.reclaimChannelAttentionParticipantsForRuntime(r.Context(), runtime.ID); err != nil {
+		slog.Warn("agent inbox drain: failed to reclaim attention participants", "runtime_id", runtimeID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to reclaim attention participants")
+		return
+	}
+	delivery, err := h.leaseAgentInboxEventForRuntime(r.Context(), runtime)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			writeJSON(w, http.StatusOK, DrainAgentInboxResponse{Events: []AgentInboxEventResponse{}})
@@ -167,7 +177,7 @@ func (h *Handler) DrainAgentInboxByRuntime(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
-	pending, _ := h.Queries.CountPendingAgentInboxEventsForRuntime(r.Context(), runtime.ID)
+	pending, _ := h.countReadyAgentInboxEventsForRuntime(r.Context(), runtime)
 	respEvent := h.agentInboxEventResponse(r.Context(), runtime, event, delivery)
 	h.publishAgentInboxTaskLifecycle(protocol.EventTaskDispatch, event, runtime.ID, "running")
 	writeJSON(w, http.StatusOK, DrainAgentInboxResponse{
@@ -299,6 +309,13 @@ func (h *Handler) ReportAgentInboxMessages(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
+	if isChannelAttentionInboxEvent(event) {
+		// Probe streaming is internal cognition. Accepting and discarding keeps
+		// older daemons compatible without leaking thinking/tool-shaped messages
+		// into task activity or channel timelines.
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		return
+	}
 	targetKind, targetID := agentInboxActivityTarget(event)
 	for _, msg := range req.Messages {
 		msg.Content = redact.Text(msg.Content)
@@ -428,6 +445,14 @@ func (h *Handler) StartAgentInboxExecution(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "failed to create inbox execution")
 		return
 	}
+	if _, err := h.Queries.GetAgentInboxExecution(r.Context(), db.GetAgentInboxExecutionParams{ExecutionID: executionID, InboxEventID: event.ID}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusConflict, "execution_id is already bound to another inbox event")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to verify inbox execution")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -508,7 +533,42 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 	}
 
 	task := agentInboxSyntheticTask(event, h.runtimeIDForAgentInboxDelivery(r.Context(), deliveryID))
-	if err := h.normalizeTaskCompleteOutput(r.Context(), task, &req.TaskCompleteRequest); err != nil {
+	attentionProbe := isChannelAttentionInboxEvent(event)
+	var attentionDecision channelAttentionDecision
+	var attentionExecutionID pgtype.UUID
+	if attentionProbe {
+		var parseErr error
+		attentionDecision, parseErr = parseChannelAttentionDecision(req.InternalOutput)
+		if parseErr != nil {
+			writeError(w, http.StatusBadRequest, parseErr.Error())
+			return
+		}
+		var executionOK bool
+		attentionExecutionID, executionOK = parseUUIDOrBadRequest(w, req.ExecutionID, "execution_id")
+		if !executionOK {
+			return
+		}
+		if len(req.Usage) == 0 {
+			writeError(w, http.StatusBadRequest, "attention probe usage is required")
+			return
+		}
+		for _, usage := range req.Usage {
+			if strings.TrimSpace(usage.Provider) == "" || strings.TrimSpace(usage.Model) == "" || usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.CacheReadTokens < 0 || usage.CacheWriteTokens < 0 {
+				writeError(w, http.StatusBadRequest, "invalid attention probe usage")
+				return
+			}
+		}
+		// Defense in depth: restricted results are internal state only even if a
+		// buggy or malicious daemon submits public-output fields as well.
+		req.Output = ""
+		req.Action = ""
+		req.Type = ""
+		req.Parts = nil
+		req.Reaction = nil
+		req.Options = nil
+		req.MustReplyFailure = false
+		req.OutputSuppressedReason = protocol.ChannelOutputSuppressedReasonRestrictedExecutionProfile
+	} else if err := h.normalizeTaskCompleteOutput(r.Context(), task, &req.TaskCompleteRequest); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -524,6 +584,26 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 	}
 	defer tx.Rollback(r.Context())
 	qtx := h.Queries.WithTx(tx)
+	if attentionProbe {
+		if _, err := tx.Exec(r.Context(), `SELECT pg_advisory_xact_lock(hashtext('channel_attention_lifecycle'))`); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to lock attention lifecycle")
+			return
+		}
+		if _, err := qtx.GetAgentInboxExecution(r.Context(), db.GetAgentInboxExecutionParams{ExecutionID: attentionExecutionID, InboxEventID: event.ID}); err != nil {
+			writeError(w, http.StatusConflict, "attention execution is not bound to this inbox event")
+			return
+		}
+		for _, usage := range req.Usage {
+			if err := qtx.UpsertAgentUsage(r.Context(), db.UpsertAgentUsageParams{
+				ExecutionID: attentionExecutionID, Source: "chat", Provider: usage.Provider, Model: usage.Model,
+				InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,
+				CacheReadTokens: usage.CacheReadTokens, CacheWriteTokens: usage.CacheWriteTokens,
+			}); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to persist attention usage")
+				return
+			}
+		}
+	}
 
 	acked, err := qtx.AckAgentInboxDelivery(r.Context(), db.AckAgentInboxDeliveryParams{
 		ID:           deliveryID,
@@ -537,6 +617,14 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		}
 		writeError(w, http.StatusInternalServerError, "failed to complete inbox delivery")
 		return
+	}
+	var attentionCompletion channelAttentionCompletion
+	if attentionProbe {
+		attentionCompletion, err = h.completeChannelAttentionParticipantTx(r.Context(), tx, event, attentionExecutionID, attentionDecision)
+		if err != nil {
+			writeError(w, http.StatusConflict, "failed to record attention decision: "+err.Error())
+			return
+		}
 	}
 	var chatDonePayload *protocol.ChatDonePayload
 	if event.ChatSessionID.Valid {
@@ -561,6 +649,9 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		chatDonePayload = payload
 	}
 	terminalOutcome := agentInboxCompletionTerminalOutcome(r.Context(), h, event, req.TaskCompleteRequest, chatDonePayload)
+	if attentionProbe {
+		terminalOutcome = "no_reply"
+	}
 	if req.MustReplyFailure {
 		// A Raft freshness hold already persisted the attempted output as a
 		// server draft. Acknowledging this execution must not relabel that
@@ -586,8 +677,17 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "failed to commit inbox completion")
 		return
 	}
+	if attentionProbe && h.Metrics != nil {
+		h.Metrics.RecordChannelAttentionProbe(attentionCompletion.decision, "completed")
+		h.Metrics.RecordChannelAttentionProbeTokens("input", attentionCompletion.inputTokens)
+		h.Metrics.RecordChannelAttentionProbeTokens("output", attentionCompletion.outputTokens)
+		h.Metrics.ObserveChannelAttentionProbeLatency(float64(attentionCompletion.latencyMS) / 1000)
+		if attentionCompletion.roundResolved {
+			h.Metrics.RecordChannelAttentionRound(attentionCompletion.roundOutcome)
+		}
+	}
 	h.persistChatRuntimeTokenStats(r.Context(), event.ChatSessionID, req.RuntimeStats)
-	if !req.MustReplyFailure {
+	if !req.MustReplyFailure && !attentionProbe {
 		h.TaskService.RecordEvolutionSkillOutcome(r.Context(), event.ID, "success", "success")
 	}
 	if chatDonePayload != nil {
@@ -674,7 +774,15 @@ func (h *Handler) FailAgentInboxEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	failedEvent := failedAgentInboxEvent(failed)
-	h.recordAgentInboxFailureActivity(r.Context(), failedEvent, deliveryID, errText, failureReason, reasonCode)
+	if isChannelAttentionInboxEvent(event) {
+		_, _ = h.DB.Exec(r.Context(), `
+			UPDATE channel_attention_participant
+			SET status = 'pending', started_at = NULL, last_error = $2, updated_at = now()
+			WHERE inbox_event_id = $1 AND status = 'running'`, event.ID, errText)
+	}
+	if !isChannelAttentionInboxEvent(event) {
+		h.recordAgentInboxFailureActivity(r.Context(), failedEvent, deliveryID, errText, failureReason, reasonCode)
+	}
 	h.publishAgentInboxTaskLifecycle(protocol.EventTaskQueued, failedEvent, h.runtimeIDForAgentInboxDelivery(r.Context(), deliveryID), "queued")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
@@ -761,6 +869,13 @@ func (h *Handler) completeFailedAgentInboxEvent(w http.ResponseWriter, r *http.R
 	}
 	defer tx.Rollback(r.Context())
 	qtx := h.Queries.WithTx(tx)
+	attentionProbe := isChannelAttentionInboxEvent(event)
+	if attentionProbe {
+		if _, err := tx.Exec(r.Context(), `SELECT pg_advisory_xact_lock(hashtext('channel_attention_lifecycle'))`); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to lock attention lifecycle")
+			return
+		}
+	}
 
 	acked, err := qtx.AckAgentInboxDelivery(r.Context(), db.AckAgentInboxDeliveryParams{
 		ID:           deliveryID,
@@ -785,7 +900,7 @@ func (h *Handler) completeFailedAgentInboxEvent(w http.ResponseWriter, r *http.R
 	}
 	alreadyReplied := h.inboxEventHasAgentTransportVisibleOutput(r.Context(), event.ID)
 	terminalOutcome := "failed"
-	retryable := true
+	retryable := !attentionProbe
 	if alreadyReplied {
 		terminalOutcome = "replied"
 		retryable = false
@@ -799,6 +914,14 @@ func (h *Handler) completeFailedAgentInboxEvent(w http.ResponseWriter, r *http.R
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to record inbox failure outcome")
 		return
+	}
+	attentionRoundOutcome := ""
+	if attentionProbe {
+		attentionRoundOutcome, err = failChannelAttentionParticipantTx(r.Context(), tx, event.ID, errText)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to record attention participant failure")
+			return
+		}
 	}
 
 	if event.ChatSessionID.Valid {
@@ -833,13 +956,21 @@ func (h *Handler) completeFailedAgentInboxEvent(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusInternalServerError, "failed to commit inbox failure")
 		return
 	}
+	if attentionProbe && h.Metrics != nil {
+		h.Metrics.RecordChannelAttentionProbe("none", "failed")
+		if attentionRoundOutcome != "" {
+			h.Metrics.RecordChannelAttentionRound(attentionRoundOutcome)
+		}
+	}
 	runtimeID := h.runtimeIDForAgentInboxDelivery(r.Context(), deliveryID)
 	if alreadyReplied {
 		h.TaskService.RecordEvolutionSkillOutcome(r.Context(), event.ID, "success", "success")
 		h.publishAgentInboxTaskLifecycle(protocol.EventTaskCompleted, event, runtimeID, "completed")
 	} else {
 		h.publishAgentInboxTaskLifecycle(protocol.EventTaskFailed, event, runtimeID, "failed")
-		h.recordAgentInboxFailureActivity(r.Context(), event, deliveryID, errText, failureReason, reasonCode)
+		if !attentionProbe {
+			h.recordAgentInboxFailureActivity(r.Context(), event, deliveryID, errText, failureReason, reasonCode)
+		}
 	}
 	h.recordAgentInboxStatusActivity(r.Context(), event, runtimeID, deliveryID, agentInboxStatusActivityIdle)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "acked_seq": acked.SeqTo})
@@ -863,6 +994,10 @@ func (h *Handler) RetryChannelAgentInboxEvent(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if !h.requireChannelWritable(w, r.Context(), workspaceID, channelID) {
+		return
+	}
+	if event, err := h.Queries.GetAgentInboxEvent(r.Context(), eventID); err == nil && isChannelAttentionInboxEvent(event) {
+		writeError(w, http.StatusConflict, "attention probe events cannot be retried manually")
 		return
 	}
 
@@ -901,12 +1036,18 @@ func (h *Handler) agentInboxEventResponse(ctx context.Context, runtime db.AgentR
 		AgentID:         uuidToString(event.AgentID),
 		SourceMessageID: uuidToString(event.SourceMessageID),
 		Reason:          event.Reason,
+		DeliveryMode:    "execute",
+		ResponseMode:    "public_response",
 		RequiresWake:    event.RequiresWake,
 		Priority:        event.Priority,
 		SeqFrom:         event.SeqFrom,
 		SeqTo:           event.SeqTo,
 		LeaseToken:      uuidToString(delivery.LeaseToken),
 		LeaseExpiresAt:  timestampToString(delivery.LeaseExpiresAt),
+	}
+	_ = h.DB.QueryRow(ctx, `SELECT delivery_mode, response_mode FROM agent_inbox_event WHERE id = $1`, event.ID).Scan(&resp.DeliveryMode, &resp.ResponseMode)
+	if config, ok := service.TaskExecutionConfigFromContext(event.ExecutionConfig); ok {
+		resp.ExecutionProfile = config.ExecutionProfile
 	}
 	if event.ChannelID.Valid && event.SeqTo > 0 {
 		from := event.SeqFrom - 1
@@ -915,7 +1056,7 @@ func (h *Handler) agentInboxEventResponse(ctx context.Context, runtime db.AgentR
 		}
 		resp.Messages = h.channelAmbientUnreadMessages(ctx, h.DB, uuidToString(event.WorkspaceID), uuidToString(event.ChannelID), from, event.SeqTo, agentInboxDrainMessageLimit)
 	}
-	if event.RequiresWake && event.ChatSessionID.Valid {
+	if event.RequiresWake && (event.ChatSessionID.Valid || isChannelAttentionInboxEvent(event)) {
 		if task := h.agentInboxTaskResponse(ctx, runtime, event, delivery); task != nil {
 			resp.Task = task
 		}
@@ -938,12 +1079,55 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 		SeqTo:          event.SeqTo,
 		RequiresWake:   event.RequiresWake,
 	}
-	if !h.populateAgentInboxChatContext(ctx, event, &resp) {
+	attentionProbe := isChannelAttentionInboxEvent(event)
+	if attentionProbe {
+		if !h.populateChannelAttentionTaskContext(ctx, event, &resp) {
+			slog.Warn("agent inbox attention claim: bounded channel context missing", "inbox_event_id", uuidToString(event.ID))
+			return nil
+		}
+	} else if !h.populateAgentInboxChatContext(ctx, event, &resp) {
 		slog.Warn("agent inbox claim: exact prompt missing",
 			"inbox_event_id", uuidToString(event.ID),
 			"chat_session_id", uuidToString(event.ChatSessionID),
 		)
 		return nil
+	}
+	if attentionProbe {
+		agent, err := h.Queries.GetAgent(ctx, event.AgentID)
+		if err != nil {
+			return nil
+		}
+		model := agent.Model.String
+		thinkingLevel := agent.ThinkingLevel.String
+		if config, ok := service.TaskExecutionConfigFromContext(event.ExecutionConfig); ok {
+			model = config.Model
+			thinkingLevel = config.ThinkingLevel
+		}
+		resp.Agent = &TaskAgentData{
+			ID:            uuidToString(agent.ID),
+			Name:          agentDisplayName(agent),
+			Instructions:  agent.Instructions,
+			Model:         model,
+			ThinkingLevel: thinkingLevel,
+		}
+		memoryBudget := 4 * 1024
+		if config, ok := service.TaskExecutionConfigFromContext(event.ExecutionConfig); ok && config.MemoryBudgetBytes > 0 {
+			memoryBudget = config.MemoryBudgetBytes
+		}
+		if memoryBudget <= 0 || memoryBudget > 4*1024 {
+			memoryBudget = 4 * 1024
+		}
+		resp.Agent.Memories = boundedChannelAttentionMemories(h.TaskService.LoadAgentMemoriesForExecution(ctx, event.AgentID, event.WorkspaceID, service.MemoryExecutionScope{
+			InitiatorType: resp.InitiatorType,
+			InitiatorID:   resp.InitiatorID,
+			ChannelID:     resp.ChannelID,
+			TaskType:      "chat",
+			Now:           time.Now(),
+		}), memoryBudget)
+		if resp.WorkspaceID == "" || resp.WorkspaceID != runtimeWorkspaceID {
+			return nil
+		}
+		return &resp
 	}
 	if agent, err := h.Queries.GetAgent(ctx, event.AgentID); err == nil {
 		skills := h.TaskService.LoadAgentSkillsForInbox(ctx, event.AgentID, event.ID)
@@ -1125,7 +1309,7 @@ func agentInboxActivityTarget(event db.AgentInboxEvent) (string, pgtype.UUID) {
 }
 
 func (h *Handler) recordAgentInboxStatusActivity(ctx context.Context, event db.AgentInboxEvent, runtimeID, deliveryID pgtype.UUID, status string) {
-	if h == nil || h.DB == nil || !event.RequiresWake {
+	if h == nil || h.DB == nil || !event.RequiresWake || isChannelAttentionInboxEvent(event) {
 		return
 	}
 	status = strings.TrimSpace(status)

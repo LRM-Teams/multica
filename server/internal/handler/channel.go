@@ -3175,18 +3175,20 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	authorName := h.channelAuthorName(r.Context(), userID)
 	threadID := uuid.NewString()
+	queueAttention := h.shouldQueueChannelAttention(ch, content, parts)
 	result, err := h.createUserChannelMessageWithIdempotency(r.Context(), channelMessageInsertInput{
-		ChannelID:        channelID,
-		WorkspaceID:      parseUUID(workspaceID),
-		AuthorID:         parseUUID(userID),
-		AuthorName:       authorName,
-		Content:          content,
-		Parts:            parts,
-		ReplyToMessageID: replyToMessageID,
-		QuoteMessageID:   quoteMessageID,
-		QuoteSnapshot:    quoteSnapshot,
-		ThreadID:         &threadID,
-		ClientMessageID:  clientMessageID,
+		ChannelID:              channelID,
+		WorkspaceID:            parseUUID(workspaceID),
+		AuthorID:               parseUUID(userID),
+		AuthorName:             authorName,
+		Content:                content,
+		Parts:                  parts,
+		ReplyToMessageID:       replyToMessageID,
+		QuoteMessageID:         quoteMessageID,
+		QuoteSnapshot:          quoteSnapshot,
+		ThreadID:               &threadID,
+		ClientMessageID:        clientMessageID,
+		QueueAttentionDispatch: queueAttention,
 	}, attachmentIDs)
 	if err != nil {
 		if errors.Is(err, errChannelClientMessageConflict) {
@@ -3199,6 +3201,9 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 	msg := result.Message
 	msg = h.attachSingleChannelMessageDetails(r.Context(), workspaceID, parseUUID(userID), msg)
 	if !result.Created {
+		if queueAttention {
+			h.processExistingChannelAttentionDispatch(r.Context(), msg)
+		}
 		writeJSON(w, http.StatusOK, msg)
 		return
 	}
@@ -3329,14 +3334,43 @@ func (h *Handler) ImportLarkChannelMessage(w http.ResponseWriter, r *http.Reques
 	if !h.requireChannelUserMember(w, r.Context(), workspaceID, parseUUID(ch.ID), parseUUID(userID)) {
 		return
 	}
+	content, parts, err := h.enrichChannelMessageMentions(r.Context(), ch, content, nil)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	threadID := uuid.NewString()
-	msg, err := h.insertChannelMessage(r.Context(), parseUUID(ch.ID), parseUUID(workspaceID), "lark", pgtype.UUID{}, authorName, content, "lark", external, pgtype.UUID{}, pgtype.UUID{}, &threadID, 0)
+	if h.TxStarter == nil {
+		writeError(w, http.StatusInternalServerError, "transaction starter unavailable")
+		return
+	}
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to begin lark message import")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	msg, err := insertChannelMessageWithPartsExec(
+		r.Context(), tx, parseUUID(ch.ID), parseUUID(workspaceID), "lark", pgtype.UUID{},
+		authorName, content, parts, "lark", external, nil, pgtype.UUID{}, pgtype.UUID{}, nil,
+		pgtype.UUID{}, &threadID, 0, false,
+	)
 	if err != nil {
 		if errorsIsNoRows(err) || isUniqueViolation(err) {
 			writeError(w, http.StatusNotFound, "channel not found or message already imported")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "failed to import lark message")
+		return
+	}
+	if h.shouldQueueChannelAttention(ch, content, parts) {
+		if err := enqueueChannelAttentionDispatchTx(r.Context(), tx, parseUUID(msg.ID), parseUUID(workspaceID), parseUUID(ch.ID), parseUUID(userID)); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to queue lark channel attention")
+			return
+		}
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to commit lark message import")
 		return
 	}
 	msg = h.attachSingleChannelMessageDetails(r.Context(), workspaceID, parseUUID(userID), msg)
@@ -3386,13 +3420,50 @@ func (h *Handler) dispatchChannelMessageToAgents(ctx context.Context, ch Channel
 	// mention to a person never feeds the automatic agent-reply loop.
 	h.notifyChannelMemberMentions(ctx, ch, trigger)
 	mentionedAgents := h.channelMentionedAgents(ctx, ch.WorkspaceID, ch.ID, trigger.Content, trigger.Parts)
-	if len(mentionedAgents) > 0 {
+	groupCommand := channelMessageIsHumanAuthored(trigger.Type) && channelMessageIsGroupCommand(trigger.Content, trigger.Parts)
+	if len(mentionedAgents) > 0 && !groupCommand {
+		targetAgentIDs := make(map[string]struct{}, len(mentionedAgents))
 		for _, agent := range mentionedAgents {
+			targetAgentIDs[uuidToString(agent.ID)] = struct{}{}
 			if len(mentionedAgents) == 1 {
 				h.markTriggerFacilitatorIfNeeded(ctx, ch, agent, trigger)
 			}
-			h.dispatchChannelAgentReply(ctx, ch, agent, trigger, initiatorUserID)
+			if _, err := h.dispatchChannelAgentReplyWithReason(ctx, ch, agent, trigger, initiatorUserID, "mention"); err == nil && h.Metrics != nil {
+				h.Metrics.RecordChannelFullExecutionWake("explicit_mention")
+			}
 		}
+		h.dispatchChannelAmbientDeliveryExcept(ctx, ch, trigger, targetAgentIDs)
+		return
+	}
+	if channelMessageIsHumanAuthored(trigger.Type) {
+		h.recordChannelUnmentionedMessage()
+	}
+	if groupCommand {
+		targetAgentIDs := map[string]struct{}{}
+		if managerID, ok := h.resolveGroupManagerForChannel(ctx, parseUUID(ch.WorkspaceID), parseUUID(ch.ID)); ok {
+			targetAgentIDs[uuidToString(managerID)] = struct{}{}
+			if manager, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: managerID, WorkspaceID: parseUUID(ch.WorkspaceID)}); err == nil {
+				if _, err := h.dispatchChannelAgentReplyWithReason(ctx, ch, manager, trigger, initiatorUserID, "group_command"); err == nil {
+					h.recordChannelUnmentionedFullWake()
+					if h.Metrics != nil {
+						h.Metrics.RecordChannelFullExecutionWake("group_command")
+					}
+				}
+			}
+		}
+		h.dispatchChannelAmbientDeliveryExcept(ctx, ch, trigger, targetAgentIDs)
+		return
+	}
+	if channelMessageIsHumanAuthored(trigger.Type) && h.channelAttentionModeEnabled() {
+		if h.shouldQueueChannelAttention(ch, trigger.Content, trigger.Parts) {
+			h.ensureChannelAttentionDispatch(ctx, trigger, initiatorUserID)
+		} else {
+			h.dispatchChannelAmbientDelivery(ctx, ch, trigger)
+		}
+		return
+	}
+	if !channelMessageIsHumanAuthored(trigger.Type) {
+		h.dispatchChannelAmbientDelivery(ctx, ch, trigger)
 		return
 	}
 	h.dispatchChannelMessageWake(ctx, ch, trigger, initiatorUserID)
@@ -3410,7 +3481,9 @@ func (h *Handler) dispatchChannelThreadReplyMentions(ctx context.Context, ch Cha
 			if len(mentionedAgents) == 1 {
 				h.markTriggerFacilitatorIfNeeded(ctx, ch, agent, trigger)
 			}
-			h.dispatchChannelAgentReply(ctx, ch, agent, trigger, initiatorUserID)
+			if _, err := h.dispatchChannelAgentReplyWithReason(ctx, ch, agent, trigger, initiatorUserID, "mention"); err == nil && h.Metrics != nil {
+				h.Metrics.RecordChannelFullExecutionWake("explicit_mention")
+			}
 		}
 		return
 	}
@@ -3430,7 +3503,9 @@ func (h *Handler) dispatchChannelThreadReplyMentions(ctx context.Context, ch Cha
 		if h.isChannelAgentMuted(ctx, parseUUID(ch.ID), parseUUID(ch.WorkspaceID), agent.ID) {
 			continue
 		}
-		h.dispatchChannelAgentReplyWithReason(ctx, ch, agent, trigger, initiatorUserID, "thread_reply")
+		if _, err := h.dispatchChannelAgentReplyWithReason(ctx, ch, agent, trigger, initiatorUserID, "thread_reply"); err == nil && h.Metrics != nil {
+			h.Metrics.RecordChannelFullExecutionWake("thread_reply")
+		}
 	}
 	h.dispatchChannelAmbientDeliveryExcept(ctx, ch, trigger, targetAgentIDs)
 }
@@ -3444,6 +3519,10 @@ func (h *Handler) dispatchChannelMessageWake(ctx context.Context, ch ChannelResp
 			continue
 		}
 		h.dispatchSingleChannelMessageWake(ctx, ch, trigger, initiatorUserID, agent)
+		h.recordChannelUnmentionedFullWake()
+		if h.Metrics != nil {
+			h.Metrics.RecordChannelFullExecutionWake("legacy_full")
+		}
 	}
 }
 
@@ -4214,9 +4293,6 @@ func (h *Handler) dispatchChannelAmbientDelivery(ctx context.Context, ch Channel
 }
 
 func (h *Handler) dispatchChannelAmbientDeliveryExcept(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, skipAgentIDs map[string]struct{}) {
-	if trigger.Type == "agent" {
-		return
-	}
 	for _, agent := range h.channelAgentMembers(ctx, ch.WorkspaceID, ch.ID) {
 		if _, skip := skipAgentIDs[uuidToString(agent.ID)]; skip {
 			continue
@@ -4262,16 +4338,8 @@ func (h *Handler) recordChannelAmbientInboxEvent(ctx context.Context, ch Channel
 		slog.Warn("channel ambient delivery: upsert agent session failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
 		return
 	}
-	if _, err := qtx.UpsertAmbientAgentInboxEvent(ctx, db.UpsertAmbientAgentInboxEventParams{
-		WorkspaceID:     workspaceID,
-		AgentSessionID:  agentSession.ID,
-		ConversationID:  conversationID,
-		ChannelID:       parseUUID(ch.ID),
-		AgentID:         agent.ID,
-		SeqFrom:         cursorSeq + 1,
-		SeqTo:           pendingToSeq,
-		SourceMessageID: channelAmbientTriggerID(trigger),
-	}); err != nil {
+	if err := upsertChannelObserveInboxEventTx(ctx, tx, workspaceID, parseUUID(ch.ID), agent.ID,
+		agentSession.ID, conversationID, channelAmbientTriggerID(trigger), cursorSeq+1, pendingToSeq); err != nil {
 		slog.Warn("channel ambient delivery: upsert inbox failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
 		return
 	}
@@ -4963,20 +5031,21 @@ func (h *Handler) channelInitiatorForChatSession(ctx context.Context, chatSessio
 }
 
 type channelMessageInsertInput struct {
-	ChannelID           pgtype.UUID
-	WorkspaceID         pgtype.UUID
-	AuthorID            pgtype.UUID
-	AuthorName          string
-	Content             string
-	Parts               []protocol.MessagePart
-	ReplyToMessageID    pgtype.UUID
-	QuoteMessageID      pgtype.UUID
-	QuoteSnapshot       []byte
-	ThreadRootMessageID pgtype.UUID
-	ThreadID            *string
-	TriggerDepth        int
-	ClientMessageID     *string
-	MainTimelineVisible bool
+	ChannelID              pgtype.UUID
+	WorkspaceID            pgtype.UUID
+	AuthorID               pgtype.UUID
+	AuthorName             string
+	Content                string
+	Parts                  []protocol.MessagePart
+	ReplyToMessageID       pgtype.UUID
+	QuoteMessageID         pgtype.UUID
+	QuoteSnapshot          []byte
+	ThreadRootMessageID    pgtype.UUID
+	ThreadID               *string
+	TriggerDepth           int
+	ClientMessageID        *string
+	MainTimelineVisible    bool
+	QueueAttentionDispatch bool
 }
 
 type channelMessageCreateResult struct {
@@ -5043,6 +5112,12 @@ func (h *Handler) createUserChannelMessageWithIdempotency(ctx context.Context, i
 			ChannelID:        in.ChannelID,
 			Column3:          attachmentIDs,
 		}); err != nil {
+			_ = tx.Rollback(ctx)
+			return channelMessageCreateResult{}, err
+		}
+	}
+	if in.QueueAttentionDispatch {
+		if err := enqueueChannelAttentionDispatchTx(ctx, tx, parseUUID(msg.ID), in.WorkspaceID, in.ChannelID, in.AuthorID); err != nil {
 			_ = tx.Rollback(ctx)
 			return channelMessageCreateResult{}, err
 		}

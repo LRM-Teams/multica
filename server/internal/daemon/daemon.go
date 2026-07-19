@@ -792,6 +792,7 @@ func daemonRegistrationCapabilities(includeCredentialTransport bool) []string {
 		protocol.DaemonCapabilityChannelOutputActions,
 		protocol.DaemonCapabilityAgentCLITransport,
 		protocol.DaemonCapabilityMemoryCuration,
+		protocol.DaemonCapabilityRestrictedExecution,
 	}
 	if includeCredentialTransport {
 		capabilities = append(capabilities, protocol.DaemonCapabilityAgentCredentialTransport)
@@ -2758,6 +2759,7 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 	}
 
 	result, err := d.runner.run(runCtx, task, provider, slot, taskLog)
+	result.ExecutionID = executionID
 	result = restrictResultForExecutionProfile(result, profile)
 
 	// Lease-loss cancellation owns only the provider execution context. Keep
@@ -3223,6 +3225,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		return TaskResult{}, err
 	}
 	restrictedExecution := isRestrictedExecutionProfile(profile)
+	restrictedMaxOutputTokens := restrictedOutputTokenLimitForTask(task, profile)
 	task = restrictTaskForExecutionProfile(task, profile)
 	taskLog = taskLog.With("execution_profile", profile)
 
@@ -3748,7 +3751,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		ThinkingLevel:             thinkingLevel,
 		DisableTools:              restrictedExecution,
 		EphemeralSession:          restrictedExecution,
-		MaxOutputTokens:           restrictedOutputTokenLimit(profile),
+		MaxOutputTokens:           restrictedMaxOutputTokens,
 	}
 	// Some providers do not reliably load the per-task runtime config files we
 	// write into the task workdir:
@@ -3898,10 +3901,10 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	output := result.Output
 	var internalOutput json.RawMessage
 	if restrictedExecution && result.Status == "completed" {
-		if outputTokens := totalTaskOutputTokens(usageEntries); outputTokens > int64(restrictedOutputTokenLimit(profile)) {
+		if outputTokens := totalTaskOutputTokens(usageEntries); outputTokens > int64(restrictedMaxOutputTokens) {
 			return TaskResult{
 				Status:                 "blocked",
-				Comment:                fmt.Sprintf("restricted execution output used %d tokens; limit is %d", outputTokens, restrictedOutputTokenLimit(profile)),
+				Comment:                fmt.Sprintf("restricted execution output used %d tokens; limit is %d", outputTokens, restrictedMaxOutputTokens),
 				FailureReason:          "restricted_output_token_limit",
 				Usage:                  usageEntries,
 				RuntimeStats:           runtimeStats,

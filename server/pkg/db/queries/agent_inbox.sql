@@ -86,6 +86,8 @@ INSERT INTO agent_inbox_event (
   execution_config,
   source_message_id,
   reason,
+  delivery_mode,
+  response_mode,
   requires_wake,
   status,
   priority,
@@ -99,13 +101,16 @@ VALUES (
   $4,
   $5,
   (SELECT runtime_id FROM agent WHERE id = $5),
-  (SELECT jsonb_build_object(
+  (SELECT jsonb_build_object('execution_config', jsonb_build_object(
       'model', COALESCE(model, ''),
       'thinking_level', COALESCE(thinking_level, ''),
+      'execution_profile', 'full',
       'snapshotted', true
-    ) FROM agent WHERE id = $5),
+    )) FROM agent WHERE id = $5),
   sqlc.narg('source_message_id'),
   'ambient',
+  'observe',
+  'no_public_output',
   false,
   'pending',
   0,
@@ -113,7 +118,7 @@ VALUES (
   $7
 )
 ON CONFLICT (conversation_id, agent_id)
-  WHERE reason = 'ambient' AND status IN ('pending', 'failed') AND conversation_id IS NOT NULL
+  WHERE reason = 'ambient' AND delivery_mode = 'observe' AND status IN ('pending', 'failed') AND conversation_id IS NOT NULL
 DO UPDATE SET
   agent_session_id = EXCLUDED.agent_session_id,
   channel_id = EXCLUDED.channel_id,

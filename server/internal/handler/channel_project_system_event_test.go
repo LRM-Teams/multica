@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -62,6 +63,56 @@ func TestSetChannelProjectWritesTypedSystemEvent(t *testing.T) {
 	unbound := latestChannelProjectSystemEventForTest(t, channelID)
 	if unbound.Event != channelProjectUnboundEvent || unbound.Params.ProjectID != "" || unbound.Params.ProjectTitle != "" || unbound.Params.PreviousProjectID != projectID || unbound.Params.PreviousProjectTitle != projectTitle {
 		t.Fatalf("unbound event = %#v, want previous project %s", unbound, projectID)
+	}
+}
+
+func TestSetChannelProjectPublishesSystemEventToChannelMembers(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "project-system-event-publish-"+uuid.NewString(), testUserID)
+	var projectID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO project (workspace_id, title) VALUES ($1, $2) RETURNING id`,
+		testWorkspaceID, "Project publish "+uuid.NewString()).Scan(&projectID); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM project WHERE id = $1`, projectID) })
+
+	eventsSeen := make(chan events.Event, 1)
+	testHandler.Bus.Subscribe(protocol.EventChannelMessage, func(event events.Event) {
+		message, ok := event.Payload.(ChannelMessageResponse)
+		if ok && message.ChannelID == channelID && message.Type == "system" {
+			eventsSeen <- event
+		}
+	})
+
+	w := httptest.NewRecorder()
+	req := withChannelTestWorkspaceCtx(t, newRequest(http.MethodPut, "/api/channels/"+channelID+"/project", map[string]any{"project_id": projectID}), testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	testHandler.SetChannelProject(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("SetChannelProject = %d: %s", w.Code, w.Body.String())
+	}
+
+	select {
+	case event := <-eventsSeen:
+		if event.ActorType != "system" || event.ActorID != "" {
+			t.Fatalf("published actor = %q/%q, want system/empty", event.ActorType, event.ActorID)
+		}
+		if len(event.RecipientUserIDs) != 1 || event.RecipientUserIDs[0] != testUserID {
+			t.Fatalf("published recipients = %#v, want only channel member %s", event.RecipientUserIDs, testUserID)
+		}
+		message, ok := event.Payload.(ChannelMessageResponse)
+		if !ok {
+			t.Fatalf("published payload type = %T, want ChannelMessageResponse", event.Payload)
+		}
+		if message.ChannelID != channelID || message.Type != "system" {
+			t.Fatalf("published message = %#v, want system message for %s", message, channelID)
+		}
+	default:
+		t.Fatal("expected channel:message publication for project system event")
 	}
 }
 

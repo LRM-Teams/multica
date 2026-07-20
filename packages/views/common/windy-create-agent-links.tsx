@@ -26,7 +26,6 @@ import { ThinkingDropdown } from "../agents/components/thinking-dropdown";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../i18n";
 import { listParam, parseWindyCreateAgentURL } from "./windy-create-agent-link-utils";
-import { randomAgentAvatarUrl } from "./agent-avatar-presets";
 
 export function WindyCreateAgentLink({
   href,
@@ -40,7 +39,6 @@ export function WindyCreateAgentLink({
   const [creatingDraft, setCreatingDraft] = React.useState(false);
   const [draft, setDraft] = React.useState<AgentCreationDraft | null>(null);
   const [createdAgentName, setCreatedAgentName] = React.useState<string | null>(null);
-  const [fallbackAvatarUrl] = React.useState(randomAgentAvatarUrl);
 
   const handleClick = async () => {
     const url = parseWindyCreateAgentURL(href);
@@ -55,7 +53,10 @@ export function WindyCreateAgentLink({
             name,
             description: url.searchParams.get("description")?.trim() || "",
             instructions: url.searchParams.get("instructions")?.trim() || "",
-            avatar_url: url.searchParams.get("avatar_url") || fallbackAvatarUrl,
+            // #451: only an explicit avatar_url from the link is persisted; no
+            // machine default. An unset avatar renders a deterministic pool
+            // photo at display time, never a stored value.
+            avatar_url: url.searchParams.get("avatar_url") || undefined,
             visibility: url.searchParams.get("visibility") === "workspace" ? "workspace" : "private",
             project_id: url.searchParams.get("project_id") || null,
             channel_id: url.searchParams.get("channel_id") || null,

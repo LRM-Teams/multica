@@ -36,8 +36,6 @@ type AgentTransportSendRequest struct {
 	ClientMessageID string                      `json:"client_message_id"`
 	SeenUpToSeq     int64                       `json:"seen_up_to_seq,omitempty"`
 	SendDraft       bool                        `json:"send_draft,omitempty"`
-	ReviseDraft     bool                        `json:"revise_draft,omitempty"`
-	DiscardDraft    bool                        `json:"discard_draft,omitempty"`
 }
 
 type AgentTransportSendResponse struct {
@@ -65,20 +63,6 @@ type AgentTransportSendHeldResponse struct {
 	SeenUpToSeq         int64                    `json:"seenUpToSeq"`
 	LatestSeq           int64                    `json:"latestSeq"`
 	TransportID         string                   `json:"transport_id"`
-}
-
-type AgentTransportDraftPendingResponse struct {
-	Action           string   `json:"action"`
-	Target           string   `json:"target"`
-	State            string   `json:"state"`
-	Outcome          string   `json:"outcome"`
-	Subtype          string   `json:"subtype"`
-	Reason           string   `json:"reason"`
-	Decision         string   `json:"decision"`
-	DecisionFactID   string   `json:"decisionFactId,omitempty"`
-	AvailableActions []string `json:"availableActions"`
-	SeenUpToSeq      int64    `json:"seenUpToSeq"`
-	LatestSeq        int64    `json:"latestSeq"`
 }
 
 type AgentTransportReactRequest struct {
@@ -346,16 +330,8 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if (req.SendDraft && req.ReviseDraft) || (req.SendDraft && req.DiscardDraft) || (req.ReviseDraft && req.DiscardDraft) {
-		writeError(w, http.StatusBadRequest, "send_draft, revise_draft, and discard_draft are mutually exclusive")
-		return
-	}
 	if req.SendDraft {
 		h.agentTransportSendDraft(w, r, source, req)
-		return
-	}
-	if req.DiscardDraft {
-		h.agentTransportDiscardDraft(w, r, source, req)
 		return
 	}
 	content, parts, err := messageparts.Normalize(req.Content, req.Parts)
@@ -397,18 +373,32 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusInternalServerError, "failed to send message")
 		return
 	} else if found {
-		if req.ReviseDraft {
-			if err := h.reviseAgentTransportDraft(r.Context(), source, target.raw, content, parts, req.Options, clientMessageID); err != nil {
-				slog.Warn("agent transport draft revision failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
-				writeError(w, http.StatusInternalServerError, "failed to revise saved draft")
+		freshness, err := h.agentTransportFreshnessDecision(r.Context(), source, target, req.SeenUpToSeq)
+		if err != nil {
+			slog.Warn("agent transport freshness check failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to send message")
+			return
+		}
+		if freshness.Hold {
+			if freshness.LatestSeq <= draft.HeldToSeq {
+				if err := h.replaceAgentTransportDraft(r.Context(), source, target.raw, content, parts, req.Options, clientMessageID); err != nil {
+					slog.Warn("agent transport draft replacement failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
+					writeError(w, http.StatusInternalServerError, "failed to replace saved draft")
+					return
+				}
+				freshness.ProducerID = draft.DecisionFactID
+				writeAgentTransportHeldResponse(w, target, freshness, "")
 				return
 			}
+			transportID, err := h.holdAgentTransportSend(r.Context(), source, target, content, parts, req.Options, clientMessageID, freshness)
+			if err != nil {
+				slog.Warn("agent transport freshness hold failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
+				writeError(w, http.StatusInternalServerError, "failed to hold message")
+				return
+			}
+			writeAgentTransportHeldResponse(w, target, freshness, transportID)
+			return
 		}
-		writeAgentTransportDraftPendingResponse(w, target, draft)
-		return
-	} else if req.ReviseDraft {
-		writeError(w, http.StatusNotFound, "saved draft not found")
-		return
 	}
 	input, err := h.finalizedAgentTransportInsertInput(r.Context(), source, target, content, parts, clientMessageID)
 	if err != nil {
@@ -655,6 +645,17 @@ func (h *Handler) agentTransportSendDraft(w http.ResponseWriter, r *http.Request
 	if seenUpToSeq <= 0 {
 		seenUpToSeq = draft.SeenUpToSeq
 	}
+	decision, err := h.agentTransportFreshnessDecision(r.Context(), source, target, seenUpToSeq)
+	if err != nil {
+		slog.Warn("agent transport draft freshness check failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to send draft")
+		return
+	}
+	if decision.Hold && decision.LatestSeq <= draft.HeldToSeq {
+		decision.ProducerID = draft.DecisionFactID
+		writeAgentTransportHeldResponse(w, target, decision, "")
+		return
+	}
 	msg, created, transportID, err := h.createAgentTransportMessage(r.Context(), source, target, content, parts, draft.Options, attachmentIDs, draft.ClientMessageID, seenUpToSeq, initiatorID)
 	if err != nil {
 		var freshnessHold *agentTransportFreshnessHoldError
@@ -694,63 +695,6 @@ func (h *Handler) agentTransportSendDraft(w http.ResponseWriter, r *http.Request
 			"decision_fact_id": draft.DecisionFactID,
 		},
 	)
-}
-
-func (h *Handler) agentTransportDiscardDraft(w http.ResponseWriter, r *http.Request, source agentTransportSource, req AgentTransportSendRequest) {
-	if strings.TrimSpace(req.Content) != "" || len(req.Parts) > 0 || req.Options != nil || strings.TrimSpace(req.ClientMessageID) != "" || req.SeenUpToSeq != 0 {
-		writeError(w, http.StatusBadRequest, "discard_draft cannot be combined with content, parts, options, client_message_id, or seen_up_to_seq")
-		return
-	}
-	draft, found, err := h.loadAgentTransportDraft(r.Context(), source, req.Target)
-	if err != nil {
-		slog.Warn("agent transport draft lookup failed", "agent_id", uuidToString(source.task.AgentID), "target", req.Target, "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to discard saved draft")
-		return
-	}
-	if !found {
-		writeError(w, http.StatusNotFound, "saved draft not found")
-		return
-	}
-	target, err := h.resolveAgentTransportTarget(r.Context(), source.task, source.origin, draft.Target, draft.Options, true)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid target")
-		return
-	}
-	if _, err := h.recordAgentTransportAudit(r.Context(), source, "message_discard_draft", target.raw, parseUUID(target.channel.ID), pgtype.UUID{}, draft.ClientMessageID, map[string]any{
-		"discarded":        true,
-		"reason":           "explicit_discard",
-		"decision":         "local_hold",
-		"decision_fact_id": draft.DecisionFactID,
-		"channel_id":       target.channel.ID,
-		"seen_up_to_seq":   draft.SeenUpToSeq,
-		"latest_seq":       draft.HeldToSeq,
-	}); err != nil {
-		slog.Warn("agent transport draft discard audit failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to discard saved draft")
-		return
-	}
-	h.deleteAgentTransportDraft(r.Context(), source, draft.Target)
-	h.recordAgentActivityEvent(r.Context(), h.DB,
-		source.origin.workspaceID, source.task.AgentID, source.task.RuntimeID, nullableTaskIDForTransportSource(source),
-		activityKindCustom, "send_freshness_discarded", "info",
-		"channel", parseUUID(target.channel.ID), target.raw,
-		"", "Saved message discarded after freshness hold",
-		map[string]any{
-			"decision_fact_id": draft.DecisionFactID,
-			"target":           target.raw,
-			"outcome":          "discarded",
-		},
-	)
-	writeJSON(w, http.StatusOK, AgentTransportDraftPendingResponse{
-		Action:         agentTransportActionSend,
-		Target:         target.raw,
-		State:          "discarded",
-		Outcome:        "discarded",
-		Subtype:        "freshness",
-		Reason:         "explicit_discard",
-		Decision:       "local_hold",
-		DecisionFactID: draft.DecisionFactID,
-	})
 }
 
 func (h *Handler) AgentTransportSearchMessages(w http.ResponseWriter, r *http.Request) {
@@ -1592,7 +1536,7 @@ func writeAgentTransportHeldResponse(w http.ResponseWriter, target agentTranspor
 		Reason:              "newer_messages_available",
 		Decision:            "local_hold",
 		ProducerFactID:      decision.ProducerID,
-		AvailableActions:    []string{"read_newer_messages", "send_draft", "revise_draft", "discard_draft"},
+		AvailableActions:    []string{"send_draft"},
 		HeldMessages:        decision.Messages,
 		NewMessageCount:     decision.TotalNewer,
 		ShownMessageCount:   int64(len(decision.Messages)),
@@ -1600,22 +1544,6 @@ func writeAgentTransportHeldResponse(w http.ResponseWriter, target agentTranspor
 		SeenUpToSeq:         decision.SeenUpToSeq,
 		LatestSeq:           decision.LatestSeq,
 		TransportID:         transportID,
-	})
-}
-
-func writeAgentTransportDraftPendingResponse(w http.ResponseWriter, target agentTransportTarget, draft agentTransportDraft) {
-	writeJSON(w, http.StatusOK, AgentTransportDraftPendingResponse{
-		Action:           agentTransportActionSend,
-		Target:           target.raw,
-		State:            "draft_pending",
-		Outcome:          "held",
-		Subtype:          "freshness",
-		Reason:           "pending_freshness_decision",
-		Decision:         "local_hold",
-		DecisionFactID:   draft.DecisionFactID,
-		AvailableActions: []string{"read_newer_messages", "send_draft", "revise_draft", "discard_draft"},
-		SeenUpToSeq:      draft.SeenUpToSeq,
-		LatestSeq:        draft.HeldToSeq,
 	})
 }
 
@@ -1750,7 +1678,7 @@ func (h *Handler) deleteAgentTransportDraft(ctx context.Context, source agentTra
 		source.origin.workspaceID, source.origin.agentID, strings.TrimSpace(target), nullableTaskIDForTransportSource(source), nullableInboxEventIDForTransportSource(source))
 }
 
-func (h *Handler) reviseAgentTransportDraft(ctx context.Context, source agentTransportSource, target, content string, parts []protocol.MessagePart, options *protocol.ChatOutputOptions, clientMessageID string) error {
+func (h *Handler) replaceAgentTransportDraft(ctx context.Context, source agentTransportSource, target, content string, parts []protocol.MessagePart, options *protocol.ChatOutputOptions, clientMessageID string) error {
 	partsJSON, err := json.Marshal(parts)
 	if err != nil {
 		return err

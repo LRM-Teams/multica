@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
+	"strings"
 	"sync"
 
 	"github.com/multica-ai/multica/server/internal/util/stackerr"
@@ -96,10 +98,58 @@ type EnvDispatchInput struct {
 
 // PerAgentEnvSpec assigns one squad agent to a sandbox template or base
 // environment. All agents still share the same Multica entity subtree.
+// Runtime, when set, overrides the agent's provider model for a non-training
+// scratch message dispatch (the sandbox starts with the caller's external
+// model instead of the agent's configured runtime).
 type PerAgentEnvSpec struct {
 	AgentID   string
 	Template  string
 	BaseEnvID string
+	Runtime   *ExternalModelRuntime
+}
+
+// ExternalModelRuntime is a caller-supplied external model provider
+// configuration used to start an isolated sandbox for a non-training scratch
+// message agent. APIKey is a secret: it must never be serialized into
+// SandboxInstanceRef, HTTP responses, errors, or structured logs.
+type ExternalModelRuntime struct {
+	BaseURL string `json:"base_url"`
+	APIKey  string `json:"api_key"`
+	Model   string `json:"model"`
+}
+
+// ResolvedPerAgentSandboxPolicy is the internal, resolved per-agent sandbox
+// policy: the sandbox template plus an optional external model runtime. It is
+// the canonical value consumed by channel binding creation and provisioning,
+// and is never serialized into response DTOs - SandboxInstanceRef carries only
+// the non-secret template. The runtime, when present, is persisted only in the
+// env-agent binding's sandbox_config (via the handler codec).
+type ResolvedPerAgentSandboxPolicy struct {
+	Template string
+	Runtime  *ExternalModelRuntime
+}
+
+// NormalizeExternalModelRuntime trims whitespace and validates that the
+// runtime has all three fields and an absolute HTTP(S) base_url. It returns a
+// new normalized value, or an error whose message names fields but never
+// formats runtime values. A nil input returns (nil, nil).
+func NormalizeExternalModelRuntime(in *ExternalModelRuntime) (*ExternalModelRuntime, error) {
+	if in == nil {
+		return nil, nil
+	}
+	out := &ExternalModelRuntime{
+		BaseURL: strings.TrimSpace(in.BaseURL),
+		APIKey:  strings.TrimSpace(in.APIKey),
+		Model:   strings.TrimSpace(in.Model),
+	}
+	if out.BaseURL == "" || out.APIKey == "" || out.Model == "" {
+		return nil, fmt.Errorf("base_url, api_key, and model are required")
+	}
+	parsed, err := url.Parse(out.BaseURL)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return nil, fmt.Errorf("base_url must be an absolute HTTP(S) URL")
+	}
+	return out, nil
 }
 
 type IssueInput struct {
@@ -283,11 +333,12 @@ type EnvDispatchDeps interface {
 	ValidateAgentInWorkspaceOrSquad(ctx context.Context, workspaceID, squadID, agentID string) error
 
 	// ResolvePerAgentEnvSpec validates that the spec's template or base_env_id
-	// is known and authorized for the workspace, and returns a ref carrying the
-	// resolved template name (InstanceID left empty — the caller creates the
-	// sandbox_instance via SandboxInstanceCreator). Returns a typed error when
-	// the template/base_env_id is unknown or unauthorized.
-	ResolvePerAgentEnvSpec(ctx context.Context, workspaceID string, spec PerAgentEnvSpec) (SandboxInstanceRef, error)
+	// is known and authorized for the workspace, and returns the resolved
+	// per-agent sandbox policy (template + optional external model runtime).
+	// InstanceID is left empty - the caller creates the sandbox_instance via
+	// SandboxInstanceCreator. Returns a typed error when the template/base_env_id
+	// is unknown or unauthorized, or when the runtime is malformed.
+	ResolvePerAgentEnvSpec(ctx context.Context, workspaceID string, spec PerAgentEnvSpec) (ResolvedPerAgentSandboxPolicy, error)
 }
 
 // EnvCollaborationTrigger is the persisted source of truth for a branch to
@@ -706,7 +757,7 @@ func (s *EnvDispatchService) validate(in EnvDispatchInput) error {
 			return fmt.Errorf("validation_failed: env_id is required except for scratch self_play")
 		}
 	}
-	if err := validatePerAgentEnvSpecsShape(in.PerAgentEnvSpecs); err != nil {
+	if err := validatePerAgentEnvSpecsShape(in); err != nil {
 		return err
 	}
 	return nil
@@ -714,24 +765,46 @@ func (s *EnvDispatchService) validate(in EnvDispatchInput) error {
 
 // validatePerAgentEnvSpecsShape enforces the synchronous shape rules for
 // per-agent env specs: every spec needs an agent_id, at most one of
-// template/base_env_id, and no duplicate agents. DB-backed membership and
-// env-spec resolution happen later in validatePerAgentEnvSpecs (ctx).
-func validatePerAgentEnvSpecsShape(specs []PerAgentEnvSpec) error {
-	seen := make(map[string]struct{}, len(specs))
-	for _, s := range specs {
+// template/base_env_id (a runtime object is a valid third option for
+// non-training scratch message dispatch), and no duplicate agents. When a
+// runtime is present it must be on a scratch message dispatch that is not the
+// training target, and the runtime must be well-formed (absolute HTTP(S)
+// URL, all fields). DB-backed membership and env-spec resolution happen later
+// in validatePerAgentEnvSpecsDB (ctx). Error messages name fields and agent
+// IDs but never format runtime values.
+func validatePerAgentEnvSpecsShape(in EnvDispatchInput) error {
+	seen := make(map[string]struct{}, len(in.PerAgentEnvSpecs))
+	for _, s := range in.PerAgentEnvSpecs {
 		if s.AgentID == "" {
 			return fmt.Errorf("validation_failed: per_agent_env agent_id is required")
 		}
-		if s.Template == "" && s.BaseEnvID == "" {
-			return fmt.Errorf("validation_failed: per_agent_env spec for agent %s needs a template or base_env_id", s.AgentID)
+		hasTemplate := s.Template != ""
+		hasBase := s.BaseEnvID != ""
+		hasRuntime := s.Runtime != nil
+		if !hasTemplate && !hasBase && !hasRuntime {
+			return fmt.Errorf("validation_failed: per_agent_env spec for agent %s needs a template, base_env_id, or runtime", s.AgentID)
 		}
-		if s.Template != "" && s.BaseEnvID != "" {
+		if hasTemplate && hasBase {
 			return fmt.Errorf("validation_failed: per_agent_env spec for agent %s must set template or base_env_id, not both", s.AgentID)
 		}
 		if _, dup := seen[s.AgentID]; dup {
 			return fmt.Errorf("validation_failed: per_agent_env agent_id %s is duplicated", s.AgentID)
 		}
 		seen[s.AgentID] = struct{}{}
+		if hasRuntime {
+			// A caller runtime is accepted only for non-training scratch
+			// message dispatch; branch/issue/training targets fail before any
+			// rollout resource is created.
+			if in.Mode != EnvModeScratch || in.DispatchType != EnvDispatchMessage {
+				return fmt.Errorf("validation_failed: per_agent_env runtime for agent %s is only allowed for scratch message dispatch", s.AgentID)
+			}
+			if in.TrainAgentID != "" && s.AgentID == in.TrainAgentID {
+				return fmt.Errorf("validation_failed: per_agent_env runtime for agent %s is not allowed for the training target", s.AgentID)
+			}
+			if _, err := NormalizeExternalModelRuntime(s.Runtime); err != nil {
+				return fmt.Errorf("validation_failed: per_agent_env spec for agent %s: %w", s.AgentID, err)
+			}
+		}
 	}
 	return nil
 }
@@ -879,12 +952,16 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 		if len(in.PerAgentEnvSpecs) > 0 && bindingSpecs == nil {
 			bindingSpecs = make(map[string]SandboxInstanceRef, len(in.PerAgentEnvSpecs))
 			for _, spec := range in.PerAgentEnvSpecs {
-				ref, err := s.deps.ResolvePerAgentEnvSpec(ctx, in.WorkspaceID, spec)
+				policy, err := s.deps.ResolvePerAgentEnvSpec(ctx, in.WorkspaceID, spec)
 				if err != nil {
 					s.rollbackRollout(ctx, in.WorkspaceID, r)
 					return EnvRollout{}, fmt.Errorf("resolve channel sandbox policy: %w", err)
 				}
-				bindingSpecs[spec.AgentID] = ref
+				// CreateEnvDispatchChannel still receives sandbox refs; the
+				// resolved runtime policy is persisted on the env-agent binding
+				// separately. The API key never enters SandboxInstanceRef
+				// (secret safety).
+				bindingSpecs[spec.AgentID] = SandboxInstanceRef{Template: policy.Template, WorkspaceID: in.WorkspaceID}
 			}
 		}
 		channelID, err := s.deps.CreateEnvDispatchChannel(ctx, in.WorkspaceID, in.UserID, projectID, envID, roster, bindingSpecs)

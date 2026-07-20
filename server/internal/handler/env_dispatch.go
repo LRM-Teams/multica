@@ -44,11 +44,22 @@ type EnvDispatchRequest struct {
 	PerAgentEnv map[string]PerAgentEnvRequest `json:"per_agent_env,omitempty"`
 }
 
+// ExternalModelRuntimeRequest carries a caller-supplied external model provider
+// configuration for one squad member's isolated sandbox. APIKey is a secret; it
+// is mapped to a service-layer value at the boundary and never retained by the
+// handler-layer pointer.
+type ExternalModelRuntimeRequest struct {
+	BaseURL string `json:"base_url"`
+	APIKey  string `json:"api_key"`
+	Model   string `json:"model"`
+}
+
 // PerAgentEnvRequest carries one squad member's sandbox template or base env
 // intent. The map key in EnvDispatchRequest is the agent_id.
 type PerAgentEnvRequest struct {
-	Template  string `json:"template,omitempty"`
-	BaseEnvID string `json:"base_env_id,omitempty"`
+	Template  string                       `json:"template,omitempty"`
+	BaseEnvID string                       `json:"base_env_id,omitempty"`
+	Runtime   *ExternalModelRuntimeRequest `json:"runtime,omitempty"`
 }
 
 type IssueDispatchInput struct {
@@ -427,11 +438,21 @@ func mapPerAgentEnvSpecs(m map[string]PerAgentEnvRequest) []service.PerAgentEnvS
 	sort.Strings(keys)
 	out := make([]service.PerAgentEnvSpec, 0, len(m))
 	for _, k := range keys {
-		out = append(out, service.PerAgentEnvSpec{
+		spec := service.PerAgentEnvSpec{
 			AgentID:   k,
 			Template:  m[k].Template,
 			BaseEnvID: m[k].BaseEnvID,
-		})
+		}
+		if r := m[k].Runtime; r != nil {
+			// Allocate a new service runtime value; do not retain the
+			// handler-layer pointer (boundary canonicalization).
+			spec.Runtime = &service.ExternalModelRuntime{
+				BaseURL: r.BaseURL,
+				APIKey:  r.APIKey,
+				Model:   r.Model,
+			}
+		}
+		out = append(out, spec)
 	}
 	return out
 }
@@ -1605,15 +1626,17 @@ func (a *envDispatchDepsAdapter) ValidateAgentInWorkspaceOrSquad(ctx context.Con
 
 // ResolvePerAgentEnvSpec validates that the spec's base_env_id is known and
 // authorized (templates are pass-through; there is no template registry), and
-// returns a ref carrying the resolved template. For BaseEnvID, the template is
+// returns the resolved per-agent sandbox policy. For BaseEnvID, the template is
 // resolved from the env's first sandbox_instance; for Template, the spec's
-// template is used directly.
-func (a *envDispatchDepsAdapter) ResolvePerAgentEnvSpec(ctx context.Context, workspaceID string, spec service.PerAgentEnvSpec) (service.SandboxInstanceRef, error) {
+// template is used directly; a runtime-only scratch policy resolves to
+// "default". The runtime, when present, is normalized and validated here so the
+// returned policy carries canonical trimmed values.
+func (a *envDispatchDepsAdapter) ResolvePerAgentEnvSpec(ctx context.Context, workspaceID string, spec service.PerAgentEnvSpec) (service.ResolvedPerAgentSandboxPolicy, error) {
 	template := spec.Template
 	if spec.BaseEnvID != "" {
 		env, err := a.GetEnv(ctx, spec.BaseEnvID, workspaceID)
 		if err != nil {
-			return service.SandboxInstanceRef{}, stackerr.Wrap(err, fmt.Sprintf("resolve base env %s", spec.BaseEnvID))
+			return service.ResolvedPerAgentSandboxPolicy{}, stackerr.Wrap(err, fmt.Sprintf("resolve base env %s", spec.BaseEnvID))
 		}
 		// Resolve the template from the base env's first sandbox_instance, if
 		// any; otherwise fall back to "default".
@@ -1624,11 +1647,15 @@ func (a *envDispatchDepsAdapter) ResolvePerAgentEnvSpec(ctx context.Context, wor
 				}
 			}
 		}
-		if template == "" {
-			template = "default"
-		}
 	}
-	return service.SandboxInstanceRef{Template: template, WorkspaceID: workspaceID}, nil
+	if template == "" {
+		template = "default"
+	}
+	runtime, err := service.NormalizeExternalModelRuntime(spec.Runtime)
+	if err != nil {
+		return service.ResolvedPerAgentSandboxPolicy{}, stackerr.Wrap(err, "normalize per-agent runtime")
+	}
+	return service.ResolvedPerAgentSandboxPolicy{Template: template, Runtime: runtime}, nil
 }
 
 // maybeOpenTrainingSession fires the shared session-open hook for a task
@@ -1757,6 +1784,6 @@ func (s *stubEnvDispatchDeps) SaveTrainingDispatch(context.Context, string, stri
 func (s *stubEnvDispatchDeps) ValidateAgentInWorkspaceOrSquad(context.Context, string, string, string) error {
 	return nil
 }
-func (s *stubEnvDispatchDeps) ResolvePerAgentEnvSpec(context.Context, string, service.PerAgentEnvSpec) (service.SandboxInstanceRef, error) {
-	return service.SandboxInstanceRef{}, nil
+func (s *stubEnvDispatchDeps) ResolvePerAgentEnvSpec(context.Context, string, service.PerAgentEnvSpec) (service.ResolvedPerAgentSandboxPolicy, error) {
+	return service.ResolvedPerAgentSandboxPolicy{}, nil
 }

@@ -238,9 +238,9 @@ func (s *TaskService) insertQuickCreateReturnMessage(ctx context.Context, worksp
 		INSERT INTO channel_message (
 			channel_id, workspace_id, author_type, author_id, author_name,
 			content, parts, source, client_message_id, thread_root_message_id,
-			thread_id, trigger_depth, main_timeline_visible
+			thread_id, trigger_depth
 		)
-		VALUES ($1, $2, 'agent', $3, $4, $5, $6::jsonb, 'multica', $7, $8, $9, $10, false)
+		VALUES ($1, $2, 'agent', $3, $4, $5, $6::jsonb, 'multica', $7, $8, $9, $10)
 		ON CONFLICT DO NOTHING
 		RETURNING id, channel_id, workspace_id, author_type, author_id, author_name, content, parts,
 		          source, external_message_id, client_message_id, reply_to_message_id,

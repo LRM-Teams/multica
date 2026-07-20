@@ -163,7 +163,6 @@ export function useSendChannelThreadMessage() {
       replyToMessageId,
       parts,
       clientMessageId,
-      showInChannel,
       quoteMessageId,
     }: {
       channelId: string;
@@ -173,7 +172,6 @@ export function useSendChannelThreadMessage() {
       /** Structured parts; attachment bind uses `{ type: "attachment", attachment_id }`. */
       parts?: MessagePart[];
       clientMessageId?: string | null;
-      showInChannel?: boolean;
       quoteMessageId?: string | null;
     }) =>
       api.sendChannelThreadMessage(channelId, messageId, {
@@ -181,7 +179,6 @@ export function useSendChannelThreadMessage() {
         parts,
         replyToMessageId,
         clientMessageId,
-        showInChannel,
         quoteMessageId,
       }),
     onSuccess: (msg) => {

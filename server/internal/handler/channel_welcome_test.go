@@ -117,8 +117,8 @@ func TestBuildChannelMentionPromptUsesCLITransportContract(t *testing.T) {
 			"finish without visible output",
 			"Never return no_reply",
 			"greeting sticker only",
-			"keep them on the main channel instead of starting a thread",
-			"Reserve threads for substantive questions, tasks, investigations, or decisions",
+			"current message's source location",
+			"Never create or switch to a thread based on message content or tone",
 			"Substantive requests get a helpful text answer",
 			"no acknowledgement sticker first",
 			"sticker OR a short text reply",
@@ -154,55 +154,20 @@ func TestBuildChannelMentionPromptUsesCLITransportContract(t *testing.T) {
 	}
 }
 
-func TestChannelAgentReplyThreadDefaultPolicy(t *testing.T) {
-	group := "group"
-	messageID := "11111111-1111-1111-1111-111111111111"
-	for _, tc := range []struct {
-		name    string
-		kind    string
-		content string
-		want    bool
-	}{
-		{name: "greeting", kind: group, content: "[@Atlas](mention://agent/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa) hi", want: false},
-		{name: "availability check", kind: group, content: "@Atlas 在么", want: false},
-		{name: "acknowledgement", kind: group, content: "@Atlas 收到，谢谢", want: false},
-		{name: "greeting with name", kind: group, content: "@Atlas hi Atlas", want: false},
-		{name: "light factual answer", kind: group, content: "@Atlas 现在是 3 点", want: false},
-		{name: "question", kind: group, content: "@Atlas 登录为什么失败？", want: true},
-		{name: "question after greeting prefix", kind: group, content: "@Atlas hi status ok?", want: true},
-		{name: "task", kind: group, content: "@Atlas 请修复登录问题", want: true},
-		{name: "explicit thread request", kind: group, content: "@Atlas 在线程里给个方案", want: true},
-		{name: "greeting plus task", kind: group, content: "@Atlas hi 请修复登录问题", want: true},
-		{name: "dm", kind: "dm", content: "请修复登录问题", want: false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			trigger := ChannelMessageResponse{ID: messageID, Content: tc.content}
-			if got := shouldDefaultChannelAgentReplyToThread(tc.kind, trigger); got != tc.want {
-				t.Fatalf("shouldDefaultChannelAgentReplyToThread(%q, %q) = %v, want %v", tc.kind, tc.content, got, tc.want)
-			}
-		})
-	}
-}
+func TestAgentMessageTargetUsesOnlyExplicitThreadSource(t *testing.T) {
+	h := &Handler{}
+	ch := ChannelResponse{Name: "product", Kind: "group"}
+	rootID := "11111111-1111-1111-1111-111111111111"
 
-func TestChannelAgentReplyThreadDefaultPolicyUsesStructuredContext(t *testing.T) {
-	group := "group"
-	messageID := "11111111-1111-1111-1111-111111111111"
-	relatedID := "22222222-2222-2222-2222-222222222222"
-	for _, tc := range []struct {
-		name    string
-		trigger ChannelMessageResponse
-	}{
-		{name: "attachment", trigger: ChannelMessageResponse{Attachments: []AttachmentResponse{{ID: relatedID}}}},
-		{name: "reply", trigger: ChannelMessageResponse{ReplyToMessageID: &relatedID}},
-		{name: "quote", trigger: ChannelMessageResponse{QuoteMessageID: &relatedID}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			tc.trigger.ID = messageID
-			tc.trigger.Content = "@Atlas hi"
-			if !shouldDefaultChannelAgentReplyToThread(group, tc.trigger) {
-				t.Fatalf("structured %s context should default to a thread", tc.name)
-			}
-		})
+	if got := h.agentMessageTargetForPrompt(context.Background(), ch, ChannelMessageResponse{
+		ID: rootID, Content: "@Atlas please investigate this?", ReplyToMessageID: &rootID,
+	}); got != "#product" {
+		t.Fatalf("top-level mention target = %q, want #product", got)
+	}
+	if got := h.agentMessageTargetForPrompt(context.Background(), ch, ChannelMessageResponse{
+		ID: "22222222-2222-2222-2222-222222222222", ThreadRootMessageID: &rootID,
+	}); got != "#product:"+rootID {
+		t.Fatalf("thread source target = %q, want explicit thread target", got)
 	}
 }
 

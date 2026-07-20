@@ -3023,9 +3023,8 @@ func TestCompleteTask_GroupChannelSendTargetInvalidSuppressesNonLeaky(t *testing
 	}
 
 	tests := []struct {
-		name    string
-		target  func(t *testing.T, taskID string) string
-		options map[string]any
+		name   string
+		target func(t *testing.T, taskID string) string
 	}{
 		{
 			name: "missing target",
@@ -3069,17 +3068,6 @@ func TestCompleteTask_GroupChannelSendTargetInvalidSuppressesNonLeaky(t *testing
 				return "dm:@" + agentName
 			},
 		},
-		{
-			name: "dm options rejected outside thread branch",
-			target: func(t *testing.T, taskID string) string {
-				var name string
-				if err := testPool.QueryRow(context.Background(), `SELECT name FROM "user" WHERE id = $1`, testUserID).Scan(&name); err != nil {
-					t.Fatalf("load recipient name: %v", err)
-				}
-				return "dm:@" + name
-			},
-			options: map[string]any{"show_in_channel": false},
-		},
 	}
 
 	for _, tt := range tests {
@@ -3092,10 +3080,6 @@ func TestCompleteTask_GroupChannelSendTargetInvalidSuppressesNonLeaky(t *testing
 				"target": target,
 				"output": visibleReply,
 			}
-			if tt.options != nil {
-				body["options"] = tt.options
-			}
-
 			w := completeTaskForTest(t, taskID, body)
 			if w.Code != http.StatusOK {
 				t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
@@ -3118,7 +3102,7 @@ func TestCompleteTask_GroupChannelSendTargetInvalidSuppressesNonLeaky(t *testing
 	}
 }
 
-func TestCompleteTask_GroupChannelThreadTargetAllowsFalseShowInChannelOption(t *testing.T) {
+func TestCompleteTask_GroupChannelThreadTargetSuppressesLegacyStructuredOutput(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -3140,52 +3124,9 @@ func TestCompleteTask_GroupChannelThreadTargetAllowsFalseShowInChannelOption(t *
 	const visibleReply = "Targeted thread reply"
 
 	w := completeTaskForTest(t, taskID, map[string]any{
-		"action":  "send",
-		"target":  "#" + channelName + ":" + rootID,
-		"options": map[string]any{"show_in_channel": false},
-		"output":  visibleReply,
-	})
-	if w.Code != http.StatusOK {
-		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-	assertNoAgentChannelMessages(t, channelID)
-	assertTaskOutputSuppressedReason(t, taskID, protocol.ChannelOutputSuppressedReasonUnsentFinalOutput)
-}
-
-func TestCompleteTask_GroupChannelThreadTargetShowInChannelProjectsSameMessage(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	taskID, channelID := createChannelCompletionTask(t, "group")
-	targetAgentID := createHandlerTestAgent(t, "Thread Projection Completion Target", nil)
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, targetAgentID); err != nil {
-		t.Fatalf("seed target agent member: %v", err)
-	}
-	var rootID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO channel_message (channel_id, workspace_id, author_type, author_id, author_name, content, source, external_message_id, trigger_depth)
-		VALUES ($1, $2, 'user', $3, 'Tester', 'thread root', 'multica', $4, 0)
-		RETURNING id
-	`, channelID, testWorkspaceID, testUserID, "thread-target-projection-"+uuid.NewString()).Scan(&rootID); err != nil {
-		t.Fatalf("seed thread root: %v", err)
-	}
-	var channelName string
-	if err := testPool.QueryRow(ctx, `SELECT name FROM channel WHERE id = $1`, channelID).Scan(&channelName); err != nil {
-		t.Fatalf("load channel name: %v", err)
-	}
-	// Agent output now writes bare visible handles; channel enrichment resolves
-	// this member to the anchored structured reference used for display/routing.
-	visibleReply := "please @Thread Projection Completion Target review from the thread"
-
-	w := completeTaskForTest(t, taskID, map[string]any{
-		"action":  "send",
-		"target":  "#" + channelName + ":" + rootID,
-		"options": map[string]any{"show_in_channel": true},
-		"output":  visibleReply,
+		"action": "send",
+		"target": "#" + channelName + ":" + rootID,
+		"output": visibleReply,
 	})
 	if w.Code != http.StatusOK {
 		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())

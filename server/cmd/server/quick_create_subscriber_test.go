@@ -183,15 +183,14 @@ func TestQuickCreateCompletion_ReturnsToSourceChannelThreadAndIsIdempotent(t *te
 	var returnCount int
 	var content, gotThreadID string
 	var rootText pgtype.Text
-	var mainTimelineVisible bool
 	if err := testPool.QueryRow(ctx, `
-		SELECT COUNT(*), MAX(content), MAX(thread_id), MAX(thread_root_message_id::text), bool_or(main_timeline_visible)
+		SELECT COUNT(*), MAX(content), MAX(thread_id), MAX(thread_root_message_id::text)
 		FROM channel_message
 		WHERE channel_id = $1
 		  AND author_type = 'agent'
 		  AND author_id = $2
 		  AND client_message_id = $3
-	`, channelID, agentID, clientMessageID).Scan(&returnCount, &content, &gotThreadID, &rootText, &mainTimelineVisible); err != nil {
+	`, channelID, agentID, clientMessageID).Scan(&returnCount, &content, &gotThreadID, &rootText); err != nil {
 		t.Fatalf("load return message: %v", err)
 	}
 	if returnCount != 1 {
@@ -199,9 +198,6 @@ func TestQuickCreateCompletion_ReturnsToSourceChannelThreadAndIsIdempotent(t *te
 	}
 	if rootText.String != rootID || gotThreadID != threadID {
 		t.Fatalf("return thread root/thread = %q/%q, want %q/%q", rootText.String, gotThreadID, rootID, threadID)
-	}
-	if mainTimelineVisible {
-		t.Fatal("return message should stay in source thread, not project into main timeline")
 	}
 	if !strings.Contains(content, "Created issue [") || !strings.Contains(content, util.UUIDToString(issue.ID)) || !strings.Contains(content, "Status: todo.") {
 		t.Fatalf("return content missing human-readable issue summary: %q", content)

@@ -3017,7 +3017,7 @@ func (d *Daemon) reportTaskResultForTask(ctx context.Context, task Task, result 
 		if task.isInboxTask() {
 			err = d.client.CompleteAgentInboxEvent(ctx, *task.InboxEvent, result)
 		} else {
-			err = d.client.CompleteTask(ctx, taskID, result.Comment, result.BranchName, result.Action, result.Target, result.Options, result.Type, result.SessionID, result.WorkDir, result.OutputSuppressedReason, result.Parts, result.Reaction, result.RuntimeStats)
+			err = d.client.CompleteTask(ctx, taskID, result.Comment, result.BranchName, result.Action, result.Target, result.Type, result.SessionID, result.WorkDir, result.OutputSuppressedReason, result.Parts, result.Reaction, result.RuntimeStats)
 		}
 		if err == nil {
 			return
@@ -3948,7 +3948,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	var reaction *protocol.ChatReactionPayload
 	outputAction := ""
 	outputTarget := ""
-	var outputOptions *protocol.ChatOutputOptions
 	outputType := ""
 
 	switch result.Status {
@@ -4012,7 +4011,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			Comment:        output,
 			Action:         outputAction,
 			Target:         outputTarget,
-			Options:        outputOptions,
 			Type:           outputType,
 			Parts:          parts,
 			Reaction:       reaction,

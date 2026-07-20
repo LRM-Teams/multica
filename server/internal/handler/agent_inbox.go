@@ -571,7 +571,6 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		req.Type = ""
 		req.Parts = nil
 		req.Reaction = nil
-		req.Options = nil
 		req.MustReplyFailure = false
 		req.OutputSuppressedReason = protocol.ChannelOutputSuppressedReasonRestrictedExecutionProfile
 	} else if err := h.normalizeTaskCompleteOutput(r.Context(), task, &req.TaskCompleteRequest); err != nil {
@@ -1887,7 +1886,6 @@ func (h *Handler) completedAgentInboxChatPayload(ctx context.Context, q *db.Quer
 		TaskID:                 uuidToString(event.ID),
 		Type:                   outputType,
 		Target:                 strings.TrimSpace(req.Target),
-		Options:                req.Options,
 		Reaction:               req.Reaction,
 		OutputSuppressedReason: req.OutputSuppressedReason,
 		Content:                visibleContent,

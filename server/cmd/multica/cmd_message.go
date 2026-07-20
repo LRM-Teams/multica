@@ -35,7 +35,6 @@ func newMessageSendCmd() *cobra.Command {
 	cmd.Flags().StringSlice("attachment-id", nil, "Attachment id to link (repeatable). Get one from `multica attachment upload`")
 	cmd.Flags().String("client-message-id", "", "Idempotency key; generated automatically when omitted")
 	cmd.Flags().Bool("send-draft", false, "Send the current server-saved draft for --target unchanged")
-	cmd.Flags().Bool("show-in-channel", false, "For thread targets, also show the reply on the parent channel timeline")
 	cmd.Flags().Int64("seen-up-to-seq", 0, "Last channel message sequence the agent reviewed before composing")
 	cmd.Flags().String("output", "json", "Output format: json or text")
 	_ = cmd.Flags().MarkHidden("seen-up-to-seq")
@@ -137,8 +136,8 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 	if sendDraft {
 		if cmd.Flags().Changed("message") || cmd.Flags().Changed("message-stdin") || cmd.Flags().Changed("message-file") ||
 			cmd.Flags().Changed("sticker") || cmd.Flags().Changed("attachment-id") || cmd.Flags().Changed("client-message-id") ||
-			cmd.Flags().Changed("show-in-channel") || cmd.Flags().Changed("seen-up-to-seq") {
-			return fmt.Errorf("--send-draft cannot be combined with message, sticker, attachment, client-message-id, or show-in-channel options")
+			cmd.Flags().Changed("seen-up-to-seq") {
+			return fmt.Errorf("--send-draft cannot be combined with message, sticker, attachment, or client-message-id options")
 		}
 		client, err := newAPIClient(cmd)
 		if err != nil {
@@ -193,10 +192,6 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 	// sidecar attachment_ids field (server binds from parts).
 	if parts := buildAgentSendParts(stickerID, text, attachmentIDs); len(parts) > 0 {
 		body["parts"] = parts
-	}
-	if cmd.Flags().Changed("show-in-channel") {
-		show, _ := cmd.Flags().GetBool("show-in-channel")
-		body["options"] = map[string]any{"show_in_channel": show}
 	}
 	var out map[string]any
 	if err := client.PostJSON(ctx, "/api/agent/messages/send", body, &out); err != nil {

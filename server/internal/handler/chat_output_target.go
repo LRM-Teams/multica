@@ -36,12 +36,12 @@ type resolvedChatOutputTarget struct {
 	threadRoot  ChannelMessageResponse
 }
 
-func (h *Handler) validateChatOutputTarget(ctx context.Context, task db.AgentTaskQueue, rawTarget string, options *protocol.ChatOutputOptions) error {
+func (h *Handler) validateChatOutputTarget(ctx context.Context, task db.AgentTaskQueue, rawTarget string) error {
 	origin, ok := h.chatOutputOriginForTask(ctx, task)
 	if !ok {
 		return errChatOutputInvalidTarget
 	}
-	_, err := h.resolveChatOutputTarget(ctx, origin, rawTarget, options)
+	_, err := h.resolveChatOutputTarget(ctx, origin, rawTarget)
 	return err
 }
 
@@ -56,12 +56,9 @@ func (h *Handler) chatOutputOriginForTask(ctx context.Context, task db.AgentTask
 	return chatOutputOrigin{channelID: channelID, workspaceID: workspaceID, agentID: agentID}, true
 }
 
-func (h *Handler) resolveChatOutputTarget(ctx context.Context, origin chatOutputOrigin, rawTarget string, options *protocol.ChatOutputOptions) (resolvedChatOutputTarget, error) {
+func (h *Handler) resolveChatOutputTarget(ctx context.Context, origin chatOutputOrigin, rawTarget string) (resolvedChatOutputTarget, error) {
 	target := strings.TrimSpace(rawTarget)
 	if target == "" {
-		if chatOutputOptionsPresent(options) {
-			return resolvedChatOutputTarget{}, errChatOutputInvalidTarget
-		}
 		ch, found := h.getChannel(ctx, uuidToString(origin.workspaceID), origin.channelID)
 		if !found || ch.ArchivedAt != nil {
 			return resolvedChatOutputTarget{}, errChatOutputInvalidTarget
@@ -69,9 +66,6 @@ func (h *Handler) resolveChatOutputTarget(ctx context.Context, origin chatOutput
 		return resolvedChatOutputTarget{kind: chatOutputTargetChannel, channel: ch}, nil
 	}
 	if strings.HasPrefix(target, "dm:@") {
-		if chatOutputOptionsPresent(options) {
-			return resolvedChatOutputTarget{}, errChatOutputInvalidTarget
-		}
 		handle, rawMessageID, hasMessageID := splitDMOutputTarget(strings.TrimPrefix(target, "dm:@"))
 		recipientID, err := h.resolveHumanDMOutputTarget(ctx, origin, handle)
 		if err != nil {
@@ -95,7 +89,7 @@ func (h *Handler) resolveChatOutputTarget(ctx context.Context, origin chatOutput
 		return resolvedChatOutputTarget{kind: chatOutputTargetDM, recipientID: recipientID}, nil
 	}
 	if strings.HasPrefix(target, "#") {
-		return h.resolveChannelOutputTarget(ctx, origin, strings.TrimPrefix(target, "#"), options)
+		return h.resolveChannelOutputTarget(ctx, origin, strings.TrimPrefix(target, "#"))
 	}
 	return resolvedChatOutputTarget{}, errChatOutputInvalidTarget
 }
@@ -113,10 +107,6 @@ func splitDMOutputTarget(raw string) (handle, rawMessageID string, hasMessageID 
 		hasMessageID = true
 	}
 	return handle, rawMessageID, hasMessageID
-}
-
-func chatOutputOptionsPresent(options *protocol.ChatOutputOptions) bool {
-	return options.HasChannelDisplayOption()
 }
 
 func (h *Handler) resolveHumanDMOutputTarget(ctx context.Context, origin chatOutputOrigin, handle string) (pgtype.UUID, error) {
@@ -164,7 +154,7 @@ func (h *Handler) resolveHumanDMOutputTarget(ctx context.Context, origin chatOut
 	return userID, nil
 }
 
-func (h *Handler) resolveChannelOutputTarget(ctx context.Context, origin chatOutputOrigin, raw string, options *protocol.ChatOutputOptions) (resolvedChatOutputTarget, error) {
+func (h *Handler) resolveChannelOutputTarget(ctx context.Context, origin chatOutputOrigin, raw string) (resolvedChatOutputTarget, error) {
 	channelName, rawMessageID, hasMessageID := strings.Cut(raw, ":")
 	if strings.Contains(rawMessageID, ":") {
 		return resolvedChatOutputTarget{}, errChatOutputInvalidTarget
@@ -181,9 +171,6 @@ func (h *Handler) resolveChannelOutputTarget(ctx context.Context, origin chatOut
 		return resolvedChatOutputTarget{}, errChatOutputInvalidTarget
 	}
 	if !hasMessageID {
-		if chatOutputOptionsPresent(options) {
-			return resolvedChatOutputTarget{}, errChatOutputInvalidTarget
-		}
 		return resolvedChatOutputTarget{kind: chatOutputTargetChannel, channel: ch}, nil
 	}
 	rootID, err := util.ParseUUID(strings.TrimSpace(rawMessageID))
@@ -266,7 +253,7 @@ func (h *Handler) ensureAgentHumanDMChannel(ctx context.Context, workspaceID, ag
 // message facts, so a cross-channel output cannot borrow mention candidates
 // from the channel that originally woke the agent.
 func (h *Handler) handleResolvedChannelChatDone(ctx context.Context, origin chatOutputOrigin, payload protocol.ChatDonePayload, content string, parts []protocol.MessagePart, initiatorID, defaultThreadRootMessageID pgtype.UUID, defaultThreadID *string, defaultTriggerDepth int) {
-	target, err := h.resolveChatOutputTarget(ctx, origin, payload.Target, payload.Options)
+	target, err := h.resolveChatOutputTarget(ctx, origin, payload.Target)
 	if err != nil {
 		slog.Warn("channel bridge: suppressing invalid chat output target", "chat_session_id", payload.ChatSessionID, "target", payload.Target, "error", err)
 		return
@@ -284,29 +271,28 @@ func (h *Handler) handleResolvedChannelChatDone(ctx context.Context, origin chat
 	}
 	switch target.kind {
 	case chatOutputTargetDM:
-		h.insertAgentChatOutputMessage(ctx, target.channel, origin.agentID, content, parts, pgtype.UUID{}, nil, 0, initiatorID, false)
+		h.insertAgentChatOutputMessage(ctx, target.channel, origin.agentID, content, parts, pgtype.UUID{}, nil, 0, initiatorID)
 	case chatOutputTargetThread:
 		threadID := target.threadRoot.ThreadID
 		if threadID == nil || strings.TrimSpace(*threadID) == "" {
 			fresh := uuid.NewString()
 			threadID = &fresh
 		}
-		mainTimelineVisible := payload.Options.ShowInChannelValue()
-		h.insertAgentChatOutputMessage(ctx, target.channel, origin.agentID, content, parts, parseUUID(target.threadRoot.ID), threadID, target.threadRoot.TriggerDepth+1, initiatorID, mainTimelineVisible)
+		h.insertAgentChatOutputMessage(ctx, target.channel, origin.agentID, content, parts, parseUUID(target.threadRoot.ID), threadID, target.threadRoot.TriggerDepth+1, initiatorID)
 	case chatOutputTargetChannel:
 		threadRootMessageID := pgtype.UUID{}
 		threadID := (*string)(nil)
 		triggerDepth := 0
-		if strings.TrimSpace(payload.Target) == "" && !chatOutputOptionsPresent(payload.Options) {
+		if strings.TrimSpace(payload.Target) == "" {
 			threadRootMessageID = defaultThreadRootMessageID
 			threadID = defaultThreadID
 			triggerDepth = defaultTriggerDepth + 1
 		}
-		h.insertAgentChatOutputMessage(ctx, target.channel, origin.agentID, content, parts, threadRootMessageID, threadID, triggerDepth, initiatorID, false)
+		h.insertAgentChatOutputMessage(ctx, target.channel, origin.agentID, content, parts, threadRootMessageID, threadID, triggerDepth, initiatorID)
 	}
 }
 
-func (h *Handler) insertAgentChatOutputMessage(ctx context.Context, ch ChannelResponse, agentID pgtype.UUID, content string, parts []protocol.MessagePart, threadRootMessageID pgtype.UUID, threadID *string, triggerDepth int, initiatorID pgtype.UUID, mainTimelineVisible bool) (ChannelMessageResponse, bool) {
+func (h *Handler) insertAgentChatOutputMessage(ctx context.Context, ch ChannelResponse, agentID pgtype.UUID, content string, parts []protocol.MessagePart, threadRootMessageID pgtype.UUID, threadID *string, triggerDepth int, initiatorID pgtype.UUID) (ChannelMessageResponse, bool) {
 	content, parts, err := h.finalizeAgentChannelMessage(ctx, ch, content, parts)
 	if err != nil {
 		slog.Warn("channel bridge: invalid agent message output", "channel_id", ch.ID, "agent_id", uuidToString(agentID), "error", err)
@@ -315,7 +301,7 @@ func (h *Handler) insertAgentChatOutputMessage(ctx context.Context, ch ChannelRe
 	channelID := parseUUID(ch.ID)
 	workspaceID := parseUUID(ch.WorkspaceID)
 	agentName := h.agentName(ctx, agentID)
-	msg, err := h.insertChannelMessageWithPartsMainProjection(ctx, channelID, workspaceID, "agent", agentID, agentName, content, parts, "multica", nil, pgtype.UUID{}, threadRootMessageID, threadID, triggerDepth, mainTimelineVisible)
+	msg, err := h.insertChannelMessageWithParts(ctx, channelID, workspaceID, "agent", agentID, agentName, content, parts, "multica", nil, pgtype.UUID{}, threadRootMessageID, threadID, triggerDepth)
 	if err != nil {
 		slog.Warn("channel bridge: insert targeted agent message failed", "channel_id", ch.ID, "agent_id", uuidToString(agentID), "error", err)
 		return ChannelMessageResponse{}, false
@@ -325,9 +311,6 @@ func (h *Handler) insertAgentChatOutputMessage(ctx context.Context, ch ChannelRe
 	}
 	messages := []ChannelMessageResponse{msg}
 	h.attachChannelMessageAuthorAvatars(ctx, ch.WorkspaceID, messages)
-	if mainTimelineVisible {
-		h.attachChannelMessageThreadRootSummaries(ctx, ch.WorkspaceID, messages)
-	}
 	msg = messages[0]
 	_, _ = h.DB.Exec(ctx, `UPDATE channel SET updated_at = now() WHERE id = $1`, channelID)
 	h.clearDMHiddenForChannelMembers(ctx, ch.WorkspaceID, channelID)

@@ -78,7 +78,7 @@ describe("ApiClient", () => {
     }
   });
 
-  it("sends explicit show_in_channel only for thread main-timeline display requests", async () => {
+  it("keeps thread-message requests scoped to the thread", async () => {
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(
       new Response(JSON.stringify({ id: "m-1" }), {
         status: 200,
@@ -92,28 +92,17 @@ describe("ApiClient", () => {
     await client.sendChannelThreadMessage("ch-1", "root-1", {
       content: "hello",
       clientMessageId: "client-1",
-    });
-    await client.sendChannelThreadMessage("ch-1", "root-1", {
-      content: "hello",
-      clientMessageId: "client-2",
-      showInChannel: false,
-    });
-    await client.sendChannelThreadMessage("ch-1", "root-1", {
-      content: "hello",
-      clientMessageId: "client-3",
-      showInChannel: true,
       quoteMessageId: "quote-1",
     });
 
     const bodies = fetchMock.mock.calls.map(([, init]) => JSON.parse(String(init?.body)));
-    expect(bodies[0]).not.toHaveProperty("show_in_channel");
-    expect(bodies[1]).not.toHaveProperty("show_in_channel");
-    expect(bodies[2]).toMatchObject({
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toMatchObject({
       content: "hello",
-      client_message_id: "client-3",
-      show_in_channel: true,
+      client_message_id: "client-1",
       quote_message_id: "quote-1",
     });
+    expect(bodies[0]).not.toHaveProperty("show_in_channel");
   });
 
   it("sends quote_message_id for channel and thread quoted messages", async () => {

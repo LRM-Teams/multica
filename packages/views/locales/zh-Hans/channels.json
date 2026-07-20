@@ -159,9 +159,7 @@
     "load_failed": "线程加载失败。",
     "send_failed": "发送线程回复失败。",
     "composer_placeholder": "在线程中回复...",
-    "back_to_conversation": "返回对话",
-    "show_in_channel_label": "同时在频道显示",
-    "from_thread_badge": "来自话题"
+    "back_to_conversation": "返回对话"
   },
   "typing": {
     "single": "{{name}} 正在输入",

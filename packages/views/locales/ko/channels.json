@@ -159,9 +159,7 @@
     "load_failed": "스레드를 불러오지 못했습니다.",
     "send_failed": "스레드 답글을 보내지 못했습니다.",
     "composer_placeholder": "스레드에서 답장...",
-    "back_to_conversation": "대화로 돌아가기",
-    "show_in_channel_label": "채널에도 표시",
-    "from_thread_badge": "스레드에서"
+    "back_to_conversation": "대화로 돌아가기"
   },
   "typing": {
     "single": "{{name}} 님이 입력 중",

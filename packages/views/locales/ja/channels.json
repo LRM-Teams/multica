@@ -159,9 +159,7 @@
     "load_failed": "スレッドの読み込みに失敗しました。",
     "send_failed": "スレッド返信の送信に失敗しました。",
     "composer_placeholder": "スレッドで返信...",
-    "back_to_conversation": "会話に戻る",
-    "show_in_channel_label": "チャンネルにも表示",
-    "from_thread_badge": "スレッドから"
+    "back_to_conversation": "会話に戻る"
   },
   "typing": {
     "single": "{{name}} が入力中",

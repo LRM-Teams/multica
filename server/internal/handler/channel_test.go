@@ -1052,7 +1052,7 @@ func TestChannelAgentInboxDrainDoesNotReplayFailedPromptBacklog(t *testing.T) {
 	}
 }
 
-func TestChannelAgentInboxCompleteDirectedMentionWithoutTransportRecordsNoReply(t *testing.T) {
+func TestChannelAgentInboxCompleteDirectedMentionWithoutTransportPublishesFinalReply(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -1126,7 +1126,7 @@ func TestChannelAgentInboxCompleteDirectedMentionWithoutTransportRecordsNoReply(
 	if completeRec.Code != http.StatusOK {
 		t.Fatalf("complete inbox event: status=%d body=%s", completeRec.Code, completeRec.Body.String())
 	}
-	assertChannelMessageContentCount(t, channelID, reply, 0)
+	assertChannelMessageContentCount(t, channelID, reply, 1)
 
 	var status, terminalOutcome, terminalDeliveryID string
 	var retryable bool
@@ -1140,8 +1140,8 @@ func TestChannelAgentInboxCompleteDirectedMentionWithoutTransportRecordsNoReply(
 	if status != "acked" {
 		t.Fatalf("inbox event status = %q, want acked", status)
 	}
-	if terminalOutcome != "no_reply" || terminalDeliveryID != got.DeliveryID || retryable || !terminalAt.Valid {
-		t.Fatalf("inbox completion terminal projection = outcome:%q delivery:%q retryable:%v terminal_at:%v, want no_reply/%s/non-retryable/timestamp", terminalOutcome, terminalDeliveryID, retryable, terminalAt.Valid, got.DeliveryID)
+	if terminalOutcome != "replied" || terminalDeliveryID != got.DeliveryID || retryable || !terminalAt.Valid {
+		t.Fatalf("inbox completion terminal projection = outcome:%q delivery:%q retryable:%v terminal_at:%v, want replied/%s/non-retryable/timestamp", terminalOutcome, terminalDeliveryID, retryable, terminalAt.Valid, got.DeliveryID)
 	}
 
 	statusRows, err := testPool.Query(ctx, `
@@ -2192,6 +2192,58 @@ func TestChannelDirectedIssueMentionCoalescesPendingEvent(t *testing.T) {
 	}
 	if count != 1 || uuidToString(sourceMessageID) != second.ID {
 		t.Fatalf("coalesced count/source = %d/%s, want 1/%s", count, uuidToString(sourceMessageID), second.ID)
+	}
+}
+
+func TestChannelDirectedIssueMentionDoesNotCoalesceDrainingEvent(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "Issue Draining Agent "+uuid.NewString()[:8], nil)
+	channelID := seedChannelForTest(t, "issue-draining-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+	makeTrigger := func(content string) ChannelMessageResponse {
+		parts := []protocol.MessagePart{
+			{Type: protocol.MessagePartTypeReference, RefType: "mention", RefSubType: "agent", RefID: agentID, Label: "@worker"},
+			{Type: protocol.MessagePartTypeReference, RefType: "issue-ref", RefSubType: "issue", RefID: "00000000-0000-0000-0000-000000000998", Label: "LRM-998"},
+		}
+		msg, err := testHandler.insertChannelMessageWithParts(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", content, parts, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+		if err != nil {
+			t.Fatalf("insert mention trigger: %v", err)
+		}
+		return msg
+	}
+	first := makeTrigger("@worker please handle LRM-998")
+	testHandler.dispatchChannelMessageToAgents(ctx, ch, first, parseUUID(testUserID))
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_inbox_event
+		SET status = 'draining'
+		WHERE channel_id = $1 AND agent_id = $2 AND reason = 'mention'`, channelID, agentID); err != nil {
+		t.Fatalf("mark event draining: %v", err)
+	}
+	second := makeTrigger("@worker urgent new direction for LRM-998")
+	testHandler.dispatchChannelMessageToAgents(ctx, ch, second, parseUUID(testUserID))
+
+	var total, secondEvents int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)::int,
+		       count(*) FILTER (WHERE source_message_id = $3)::int
+		FROM agent_inbox_event
+		WHERE channel_id = $1 AND agent_id = $2 AND reason = 'mention' AND requires_wake`, channelID, agentID, second.ID).Scan(&total, &secondEvents); err != nil {
+		t.Fatalf("count directed inbox events: %v", err)
+	}
+	if total != 2 || secondEvents != 1 {
+		t.Fatalf("directed events total/second = %d/%d, want 2/1", total, secondEvents)
 	}
 }
 

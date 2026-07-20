@@ -87,7 +87,7 @@ type sandboxJobPayload struct {
 	Name             string            `json:"name"`
 	Limits           json.RawMessage   `json:"limits"`
 	Metadata         json.RawMessage   `json:"metadata"`
-	Runtime          map[string]string `json:"runtime"`
+	Runtime          json.RawMessage   `json:"runtime"`
 	RuntimeEnv       map[string]string `json:"runtime_env"`
 	InstanceID       string            `json:"instance_id"`
 	LocalRef         string            `json:"local_ref"`
@@ -682,13 +682,215 @@ func (c *sandboxdClient) reconfigureCubeSandbox(ctx context.Context, sandboxID s
 	}, nil
 }
 
-func hasRuntimeModelConfig(runtime map[string]string) bool {
-	for _, key := range []string{"api_key", "base_url", "model", "TEAM_API_KEY", "TEAM_BASE_URL", "TEAM_MODEL"} {
-		if strings.TrimSpace(runtime[key]) != "" {
+func hasRuntimeModelConfig(runtime json.RawMessage) bool {
+	if len(runtime) == 0 || string(runtime) == "null" {
+		return false
+	}
+	var raw map[string]any
+	if json.Unmarshal(runtime, &raw) != nil || len(raw) == 0 {
+		return false
+	}
+	if providers, ok := raw["providers"].([]any); ok && len(providers) > 0 {
+		return true
+	}
+	for _, key := range []string{"api_key", "base_url", "model", "provider", "TEAM_API_KEY", "TEAM_BASE_URL", "TEAM_MODEL", "TEAM_PROVIDER"} {
+		if s, ok := raw[key].(string); ok && strings.TrimSpace(s) != "" {
 			return true
 		}
 	}
 	return false
+}
+
+type teamPiProviderConfig struct {
+	Name    string `json:"name"`
+	APIKey  string `json:"apiKey,omitempty"`
+	BaseURL string `json:"baseUrl,omitempty"`
+	Model   string `json:"model,omitempty"`
+}
+
+type teamPiConfig struct {
+	Providers       []teamPiProviderConfig `json:"providers"`
+	DefaultProvider string                 `json:"defaultProvider,omitempty"`
+	DefaultModel    string                 `json:"defaultModel,omitempty"`
+}
+
+func stringFromAny(v any) string {
+	s, _ := v.(string)
+	return strings.TrimSpace(s)
+}
+
+func parseTeamPiConfig(runtime json.RawMessage) (teamPiConfig, bool) {
+	var cfg teamPiConfig
+	if len(runtime) == 0 || string(runtime) == "null" {
+		return cfg, false
+	}
+	var raw map[string]any
+	if json.Unmarshal(runtime, &raw) != nil || len(raw) == 0 {
+		return cfg, false
+	}
+
+	if providers, ok := raw["providers"].([]any); ok {
+		for _, item := range providers {
+			rec, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			name := stringFromAny(rec["provider"])
+			if name == "" {
+				name = stringFromAny(rec["name"])
+			}
+			if name == "" {
+				name = "openai"
+			}
+			p := teamPiProviderConfig{
+				Name:    name,
+				APIKey:  stringFromAny(rec["api_key"]),
+				BaseURL: stringFromAny(rec["base_url"]),
+				Model:   stringFromAny(rec["model"]),
+			}
+			if p.APIKey == "" {
+				p.APIKey = stringFromAny(rec["apiKey"])
+			}
+			if p.BaseURL == "" {
+				p.BaseURL = stringFromAny(rec["baseUrl"])
+			}
+			if p.APIKey == "" && p.BaseURL == "" && p.Model == "" && stringFromAny(rec["provider"]) == "" && stringFromAny(rec["name"]) == "" {
+				continue
+			}
+			cfg.Providers = append(cfg.Providers, p)
+		}
+	}
+
+	if len(cfg.Providers) == 0 {
+		legacy := teamPiProviderConfig{
+			Name:    stringFromAny(raw["provider"]),
+			APIKey:  firstNonEmpty(stringFromAny(raw["api_key"]), stringFromAny(raw["TEAM_API_KEY"]), stringFromAny(raw["team_api_key"])),
+			BaseURL: firstNonEmpty(stringFromAny(raw["base_url"]), stringFromAny(raw["TEAM_BASE_URL"]), stringFromAny(raw["team_base_url"])),
+			Model:   firstNonEmpty(stringFromAny(raw["model"]), stringFromAny(raw["TEAM_MODEL"]), stringFromAny(raw["team_model"])),
+		}
+		if legacy.Name == "" {
+			legacy.Name = firstNonEmpty(stringFromAny(raw["TEAM_PROVIDER"]), "openai")
+		}
+		if legacy.APIKey != "" || legacy.BaseURL != "" || legacy.Model != "" {
+			cfg.Providers = append(cfg.Providers, legacy)
+		}
+	}
+
+	if len(cfg.Providers) == 0 {
+		return cfg, false
+	}
+
+	cfg.DefaultProvider = firstNonEmpty(stringFromAny(raw["default_provider"]), stringFromAny(raw["provider"]), cfg.Providers[0].Name)
+	cfg.DefaultModel = firstNonEmpty(stringFromAny(raw["default_model"]), stringFromAny(raw["model"]))
+	if cfg.DefaultModel == "" {
+		for _, p := range cfg.Providers {
+			if p.Name == cfg.DefaultProvider && p.Model != "" {
+				cfg.DefaultModel = p.Model
+				break
+			}
+		}
+	}
+	if cfg.DefaultModel == "" {
+		cfg.DefaultModel = cfg.Providers[0].Model
+	}
+	return cfg, true
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
+func mergeRuntimeEnv(base map[string]string, runtime json.RawMessage) map[string]string {
+	out := map[string]string{}
+	for k, v := range base {
+		if strings.TrimSpace(v) != "" {
+			out[k] = v
+		}
+	}
+
+	cfg, ok := parseTeamPiConfig(runtime)
+	if ok {
+		raw, err := json.Marshal(cfg)
+		if err == nil {
+			out["TEAM_PI_CONFIG"] = string(raw)
+		}
+		var def *teamPiProviderConfig
+		for i := range cfg.Providers {
+			if cfg.Providers[i].Name == cfg.DefaultProvider {
+				def = &cfg.Providers[i]
+				break
+			}
+		}
+		if def == nil {
+			def = &cfg.Providers[0]
+		}
+		if def.APIKey != "" {
+			out["TEAM_API_KEY"] = def.APIKey
+		}
+		if def.BaseURL != "" {
+			out["TEAM_BASE_URL"] = def.BaseURL
+		}
+		if cfg.DefaultModel != "" {
+			out["TEAM_MODEL"] = cfg.DefaultModel
+		} else if def.Model != "" {
+			out["TEAM_MODEL"] = def.Model
+		}
+		if cfg.DefaultProvider != "" {
+			out["TEAM_PROVIDER"] = cfg.DefaultProvider
+		} else if def.Name != "" {
+			out["TEAM_PROVIDER"] = def.Name
+		}
+	} else if len(runtime) > 0 && string(runtime) != "null" {
+		// Flat string map fallback (older job payloads).
+		var flat map[string]string
+		if json.Unmarshal(runtime, &flat) == nil {
+			aliases := map[string][]string{
+				"TEAM_API_KEY":  {"TEAM_API_KEY", "team_api_key", "api_key"},
+				"TEAM_BASE_URL": {"TEAM_BASE_URL", "team_base_url", "base_url"},
+				"TEAM_MODEL":    {"TEAM_MODEL", "team_model", "model"},
+				"TEAM_PROVIDER": {"TEAM_PROVIDER", "team_provider", "provider"},
+			}
+			for target, keys := range aliases {
+				for _, key := range keys {
+					if v := strings.TrimSpace(flat[key]); v != "" {
+						out[target] = v
+						break
+					}
+				}
+			}
+		}
+	}
+
+	if out["MULTICA_DAEMON_ENABLED"] == "" {
+		out["MULTICA_DAEMON_ENABLED"] = "1"
+	}
+	return out
+}
+
+func redactedRuntimeEnv(env map[string]string) map[string]string {
+	out := map[string]string{}
+	for k, v := range env {
+		lower := strings.ToLower(k)
+		if k == "TEAM_PI_CONFIG" {
+			if v != "" {
+				out[k] = "***"
+			}
+			continue
+		}
+		if strings.Contains(lower, "token") || strings.Contains(lower, "key") {
+			if v != "" {
+				out[k] = "***"
+			}
+			continue
+		}
+		out[k] = v
+	}
+	return out
 }
 
 func (c *sandboxdClient) stopRuntimeInCube(ctx context.Context, sandboxID string) error {
@@ -891,46 +1093,6 @@ func parseSandboxJobPayload(raw json.RawMessage) sandboxJobPayload {
 	return p
 }
 
-func mergeRuntimeEnv(base map[string]string, runtime map[string]string) map[string]string {
-	out := map[string]string{}
-	for k, v := range base {
-		if strings.TrimSpace(v) != "" {
-			out[k] = v
-		}
-	}
-	aliases := map[string][]string{
-		"TEAM_API_KEY":  {"TEAM_API_KEY", "team_api_key", "api_key"},
-		"TEAM_BASE_URL": {"TEAM_BASE_URL", "team_base_url", "base_url"},
-		"TEAM_MODEL":    {"TEAM_MODEL", "team_model", "model"},
-	}
-	for target, keys := range aliases {
-		for _, key := range keys {
-			if v := strings.TrimSpace(runtime[key]); v != "" {
-				out[target] = v
-				break
-			}
-		}
-	}
-	if out["MULTICA_DAEMON_ENABLED"] == "" {
-		out["MULTICA_DAEMON_ENABLED"] = "1"
-	}
-	return out
-}
-
-func redactedRuntimeEnv(env map[string]string) map[string]string {
-	out := map[string]string{}
-	for k, v := range env {
-		if strings.Contains(strings.ToLower(k), "token") || strings.Contains(strings.ToLower(k), "key") {
-			if v != "" {
-				out[k] = "***"
-			}
-			continue
-		}
-		out[k] = v
-	}
-	return out
-}
-
 func mustJSON(v any) string {
 	raw, _ := json.Marshal(v)
 	return string(raw)
@@ -1012,12 +1174,4 @@ func sandboxFlagInt(cmd *cobra.Command, name string) int { v, _ := cmd.Flags().G
 func sandboxFlagDuration(cmd *cobra.Command, name string) time.Duration {
 	v, _ := cmd.Flags().GetDuration(name)
 	return v
-}
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if strings.TrimSpace(v) != "" {
-			return strings.TrimSpace(v)
-		}
-	}
-	return ""
 }

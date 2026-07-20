@@ -2,13 +2,18 @@ import { describe, expect, it } from "vitest";
 import {
   buildSandboxdConfigPath,
   buildSandboxdSetupCommand,
+  buildSandboxRuntimePayload,
+  createEmptyRuntimeProviderEntry,
   effectiveSandboxNodeStatus,
+  emptySandboxRuntimeForm,
   resolveCreateSandboxTemplate,
   resolveSandboxdCubeSettings,
   SANDBOX_NODE_STALE_MS,
   SANDBOXD_PLACEHOLDER_TEMPLATE_ID,
   sanitizeSandboxdConfigSegment,
+  sandboxRuntimeForm,
 } from "./utils";
+import type { SandboxInstance } from "../types";
 
 describe("resolveCreateSandboxTemplate", () => {
   it("maps empty and default to default", () => {
@@ -127,5 +132,98 @@ describe("buildSandboxdSetupCommand", () => {
     expect(command).toContain('"cube_template_id": "tpl-real"');
     expect(command).toContain("mkdir -p ~/.multica/sandbox_daemon");
     expect(command).toContain(`multica sandboxd --config ${configPath}`);
+  });
+});
+
+function fakeInstance(runtime: Record<string, unknown>): SandboxInstance {
+  return {
+    id: "i1",
+    workspace_id: "w1",
+    creator_user_id: "u1",
+    node_id: "n1",
+    status: "running",
+    template: "default",
+    local_ref: "cube-1",
+    endpoint_info: {},
+    limits: {},
+    metadata: { runtime },
+    error: null,
+    created_at: "2026-07-20T00:00:00Z",
+    updated_at: "2026-07-20T00:00:00Z",
+  };
+}
+
+describe("sandboxRuntimeForm / buildSandboxRuntimePayload", () => {
+  it("returns empty form when runtime is missing", () => {
+    const form = sandboxRuntimeForm(fakeInstance({}));
+    expect(form.entries).toHaveLength(1);
+    expect(form.entries[0]?.provider).toBe("openai");
+    expect(buildSandboxRuntimePayload(form)).toBeUndefined();
+  });
+
+  it("parses legacy flat runtime", () => {
+    const form = sandboxRuntimeForm(
+      fakeInstance({
+        api_key: "sk-1",
+        base_url: "https://example.com/v1",
+        model: "gpt-5.5",
+      }),
+    );
+    expect(form.entries).toHaveLength(1);
+    expect(form.entries[0]).toMatchObject({
+      provider: "openai",
+      apiKey: "sk-1",
+      baseUrl: "https://example.com/v1",
+      model: "gpt-5.5",
+    });
+    expect(buildSandboxRuntimePayload(form)).toMatchObject({
+      providers: [
+        {
+          provider: "openai",
+          api_key: "sk-1",
+          base_url: "https://example.com/v1",
+          model: "gpt-5.5",
+        },
+      ],
+      default_provider: "openai",
+      default_model: "gpt-5.5",
+      api_key: "sk-1",
+      model: "gpt-5.5",
+    });
+  });
+
+  it("parses multi-provider runtime and keeps default selection", () => {
+    const form = sandboxRuntimeForm(
+      fakeInstance({
+        providers: [
+          { provider: "openai", api_key: "a", model: "gpt-5.5" },
+          { provider: "anthropic", api_key: "b", model: "claude-sonnet" },
+        ],
+        default_provider: "anthropic",
+        default_model: "claude-sonnet",
+      }),
+    );
+    expect(form.entries).toHaveLength(2);
+    const def = form.entries.find((e) => e.key === form.defaultKey);
+    expect(def?.provider).toBe("anthropic");
+    expect(def?.model).toBe("claude-sonnet");
+
+    const second = createEmptyRuntimeProviderEntry("google");
+    second.apiKey = "g";
+    second.model = "gemini";
+    const payload = buildSandboxRuntimePayload({
+      entries: [...form.entries, second],
+      defaultKey: form.defaultKey,
+    });
+    expect(payload?.providers).toHaveLength(3);
+    expect(payload?.default_provider).toBe("anthropic");
+    expect(payload?.default_model).toBe("claude-sonnet");
+    expect(payload?.api_key).toBe("b");
+  });
+
+  it("omits empty entries from payload", () => {
+    const empty = emptySandboxRuntimeForm();
+    empty.entries.push(createEmptyRuntimeProviderEntry("anthropic"));
+    expect(buildSandboxRuntimePayload(empty)).toBeUndefined();
   });
 });

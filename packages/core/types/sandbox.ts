@@ -131,16 +131,45 @@ export interface CreateSandboxSnapshotRequest {
   description?: string;
 }
 
+/** One Pi provider entry stored on a sandbox instance. */
+export interface SandboxRuntimeProviderConfig {
+  provider: string;
+  api_key?: string;
+  base_url?: string;
+  model?: string;
+}
+
+/**
+ * Sandbox runtime model configuration.
+ *
+ * New shape uses `providers` + `default_*`. Legacy flat `api_key` / `base_url` /
+ * `model` / `provider` are still accepted and written from the default entry so
+ * older Cube templates keep working.
+ */
+export interface SandboxRuntimeConfig {
+  providers?: SandboxRuntimeProviderConfig[];
+  default_provider?: string;
+  default_model?: string;
+  /** @deprecated Prefer providers[].provider / default_provider */
+  provider?: string;
+  /** @deprecated Prefer providers[].api_key */
+  api_key?: string;
+  /** @deprecated Prefer providers[].base_url */
+  base_url?: string;
+  /** @deprecated Prefer providers[].model / default_model */
+  model?: string;
+}
+
 export interface CreateSandboxRequest {
   node_id?: string;
   template?: string;
   name?: string;
   limits?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
-  runtime?: Record<string, string>;
+  runtime?: SandboxRuntimeConfig;
 }
 
 export interface UpdateSandboxRequest {
   name: string;
-  runtime?: Record<string, string>;
+  runtime?: SandboxRuntimeConfig;
 }

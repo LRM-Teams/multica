@@ -5,7 +5,11 @@ import { ArrowLeft, Box, Loader2 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { sandboxDetailOptions } from "@multica/core/sandboxes/queries";
 import { useUpdateSandboxMutation } from "@multica/core/sandboxes/mutations";
-import { sandboxDisplayName, sandboxRuntime } from "@multica/core/sandboxes/utils";
+import {
+  buildSandboxRuntimePayload,
+  sandboxDisplayName,
+  sandboxRuntimeForm,
+} from "@multica/core/sandboxes/utils";
 import type { SandboxInstance } from "@multica/core/types";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
@@ -18,23 +22,7 @@ import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { toast } from "sonner";
 import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n/use-t";
-
-type RuntimeFormState = {
-  apiKey: string;
-  baseUrl: string;
-  model: string;
-};
-
-function buildRuntimePayload(form: RuntimeFormState) {
-  const payload: Record<string, string> = {};
-  const apiKey = form.apiKey.trim();
-  const baseUrl = form.baseUrl.trim();
-  const model = form.model.trim();
-  if (apiKey) payload.api_key = apiKey;
-  if (baseUrl) payload.base_url = baseUrl;
-  if (model) payload.model = model;
-  return payload;
-}
+import { SandboxRuntimeForm } from "./sandbox-runtime-form";
 
 function SandboxDetailEditor({
   instance,
@@ -51,7 +39,7 @@ function SandboxDetailEditor({
   const update = useUpdateSandboxMutation(wsId, instanceId);
 
   const [name, setName] = useState(() => sandboxDisplayName(instance));
-  const [runtime, setRuntime] = useState<RuntimeFormState>(() => sandboxRuntime(instance));
+  const [runtime, setRuntime] = useState(() => sandboxRuntimeForm(instance));
 
   const canSave = name.trim().length > 0;
   const isReconfiguring = instance.status === "reconfiguring";
@@ -59,13 +47,13 @@ function SandboxDetailEditor({
   const handleSave = async () => {
     if (!canSave) return;
     try {
-      const runtimePayload = buildRuntimePayload(runtime);
+      const runtimePayload = buildSandboxRuntimePayload(runtime);
       await update.mutateAsync({
         name: name.trim(),
-        ...(Object.keys(runtimePayload).length > 0 ? { runtime: runtimePayload } : {}),
+        ...(runtimePayload ? { runtime: runtimePayload } : {}),
       });
       toast.success(
-        Object.keys(runtimePayload).length > 0
+        runtimePayload
           ? t(($) => $.sandboxes_page.save_reconfiguring)
           : t(($) => $.sandboxes_page.save_success),
       );
@@ -133,25 +121,7 @@ function SandboxDetailEditor({
               </p>
             </div>
 
-            <div className="space-y-3">
-              <div className="text-sm font-medium">{t(($) => $.sandboxes_page.runtime_model_title)}</div>
-              <Input
-                type="password"
-                placeholder={t(($) => $.sandboxes_page.api_key_placeholder)}
-                value={runtime.apiKey}
-                onChange={(e) => setRuntime((current) => ({ ...current, apiKey: e.target.value }))}
-              />
-              <Input
-                placeholder={t(($) => $.sandboxes_page.base_url_placeholder)}
-                value={runtime.baseUrl}
-                onChange={(e) => setRuntime((current) => ({ ...current, baseUrl: e.target.value }))}
-              />
-              <Input
-                placeholder={t(($) => $.sandboxes_page.model_placeholder)}
-                value={runtime.model}
-                onChange={(e) => setRuntime((current) => ({ ...current, model: e.target.value }))}
-              />
-            </div>
+            <SandboxRuntimeForm value={runtime} onChange={setRuntime} />
 
             <div className="flex justify-end">
               <Button onClick={handleSave} disabled={!canSave || update.isPending || isReconfiguring}>

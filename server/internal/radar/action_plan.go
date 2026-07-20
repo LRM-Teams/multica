@@ -100,7 +100,7 @@ func BuildIdleNudgeChannelPrompt(markdown string) string {
 	b.WriteString("- 3: reassign the work to another capable agent, or @the product manager (产品经理) to re-plan and pick a different owner.\n")
 	b.WriteString("- 4 or more: escalate to a human — @a human member (the workspace owner from Human Members) and flag that this owner is stuck and needs a decision.\n")
 	b.WriteString("Return no_action ONLY if the entire goal is genuinely complete — every relevant issue is done/verified and there is truly no open or next work. Do not go silent just because it is quiet or people said they would do it.\n")
-	b.WriteString("Write visible text in the language most recently used in this channel; do not default to English.\n")
+	b.WriteString("Any visible channel speech must go through actions (post_channel_message / mention_agent); write those payloads in the language most recently used in this channel. Do not write prose outside the JSON.\n")
 	b.WriteString(ambientActionSchema)
 	b.WriteString(markdown)
 	return b.String()
@@ -114,16 +114,74 @@ const ambientActionSchema = `Return at most 5 actions. Use exact UUIDs from the 
 - comment_issue: {"issue_id":"<uuid>","target_agent_id":"<uuid>","content":"plain directive"}
 - create_issue: {"title":"...","description":"...","assignee_id":"<optional agent uuid>","assignee_type":"agent"}
 - post_channel_message: {"channel_id":"<uuid>","content":"plain text; may include [@Name](mention://member/<uuid>) for humans"}
-Return ONLY JSON with this shape:
+Return ONLY JSON with this shape (no prose before or after):
 {"summary":"...","actions":[{"type":"no_action|mention_agent|comment_issue|create_issue|post_channel_message","reason":"...","evidence":["kind:id"],"confidence":"low|medium|high","risk_level":"low","dedupe_key":"stable-key","target_kind":"none|channel|issue","target_id":"","payload":{}}]}
 
 `
 
 func ParseActionPlan(raw string) (ActionPlan, error) {
-	body := strings.TrimSpace(raw)
-	if match := actionPlanFenceRe.FindStringSubmatch(body); len(match) == 2 {
-		body = strings.TrimSpace(match[1])
+	var lastErr error
+	for _, body := range actionPlanJSONCandidates(raw) {
+		plan, err := decodeActionPlan(body)
+		if err == nil {
+			return plan, nil
+		}
+		lastErr = err
 	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("empty action plan")
+	}
+	return ActionPlan{}, lastErr
+}
+
+func actionPlanJSONCandidates(raw string) []string {
+	body := strings.TrimSpace(raw)
+	if body == "" {
+		return nil
+	}
+	candidates := make([]string, 0, 3)
+	seen := map[string]struct{}{}
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return
+		}
+		if _, ok := seen[s]; ok {
+			return
+		}
+		seen[s] = struct{}{}
+		candidates = append(candidates, s)
+	}
+	if match := actionPlanFenceRe.FindStringSubmatch(body); len(match) == 2 {
+		add(match[1])
+	}
+	add(body)
+	if obj, ok := extractFirstJSONObject(body); ok {
+		add(obj)
+	}
+	return candidates
+}
+
+// extractFirstJSONObject returns the first top-level JSON object embedded in s.
+// Models often prepend a short natural-language summary before the action plan.
+func extractFirstJSONObject(s string) (string, bool) {
+	start := strings.IndexByte(s, '{')
+	if start < 0 {
+		return "", false
+	}
+	dec := json.NewDecoder(strings.NewReader(s[start:]))
+	var raw json.RawMessage
+	if err := dec.Decode(&raw); err != nil {
+		return "", false
+	}
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed[0] != '{' {
+		return "", false
+	}
+	return trimmed, true
+}
+
+func decodeActionPlan(body string) (ActionPlan, error) {
 	var plan ActionPlan
 	if err := json.Unmarshal([]byte(body), &plan); err != nil {
 		return ActionPlan{}, err

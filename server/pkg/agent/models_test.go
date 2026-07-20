@@ -57,7 +57,7 @@ func TestListModelsCopilotFallsBackToStatic(t *testing.T) {
 	}
 }
 
-func TestClaudeStaticModelsExposesFable5(t *testing.T) {
+func TestClaudeStaticModelsPreferLatestAliasesAndKeepPinnedCompatibility(t *testing.T) {
 	models := claudeStaticModels()
 	ids := map[string]Model{}
 	defaults := 0
@@ -68,15 +68,16 @@ func TestClaudeStaticModelsExposesFable5(t *testing.T) {
 		}
 	}
 
-	fable, ok := ids["claude-fable-5"]
-	if !ok {
-		t.Fatalf("missing Claude Fable 5 in: %+v", models)
+	for _, want := range []string{"sonnet", "opus", "fable", "haiku", "claude-sonnet-4-6", "claude-fable-5", "claude-haiku-4-5-20251001"} {
+		if _, ok := ids[want]; !ok {
+			t.Errorf("missing Claude model %q in: %+v", want, models)
+		}
 	}
-	if fable.Label != "Claude Fable 5" || fable.Provider != "anthropic" || fable.Default {
-		t.Errorf("unexpected Fable entry: %+v", fable)
+	if defaults != 1 || !ids["sonnet"].Default {
+		t.Errorf("expected latest Sonnet alias to remain the sole default, got defaults=%d models=%+v", defaults, models)
 	}
-	if defaults != 1 || !ids["claude-sonnet-4-6"].Default {
-		t.Errorf("expected Sonnet 4.6 to remain the sole default, got defaults=%d models=%+v", defaults, models)
+	if ids["claude-sonnet-4-6"].Default {
+		t.Errorf("pinned Sonnet entry must not be default: %+v", ids["claude-sonnet-4-6"])
 	}
 }
 

@@ -323,7 +323,7 @@ func TestValidateThinkingLevel_EmptyModelResolvesToDefault(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("valid level on default model passes", func(t *testing.T) {
-		// Claude's catalog flags Sonnet 4.6 as Default. Sonnet supports
+		// Claude's catalog flags the Sonnet alias as Default. Sonnet supports
 		// low/medium/high/max (no xhigh) per claudeModelEffortAllow, so
 		// "high" must round-trip when model is left empty.
 		ok, err := ValidateThinkingLevel(ctx, "claude", fakeClaude, "", "high")
@@ -336,7 +336,7 @@ func TestValidateThinkingLevel_EmptyModelResolvesToDefault(t *testing.T) {
 	})
 
 	t.Run("invalid level on default model fails", func(t *testing.T) {
-		// "xhigh" is opus-only; resolving "" to default (sonnet 4.6)
+		// "xhigh" is opus-only; resolving "" to the default Sonnet alias
 		// should reject it, not silently accept.
 		ok, err := ValidateThinkingLevel(ctx, "claude", fakeClaude, "", "xhigh")
 		if err != nil {

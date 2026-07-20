@@ -218,13 +218,23 @@ func discoveryCacheKey(providerType, executablePath string) string {
 
 // ── Static catalogs ──
 
-// claudeStaticModels reflects the Claude Code CLI's accepted --model
-// values. Keep this list short and current; stale entries here
-// mislead users more than they help. Default = Sonnet because it's
-// the everyday workhorse (Opus is reserved for advisor-style flows).
+// claudeStaticModels exposes Claude Code's stable model aliases before any
+// version-pinned compatibility entries. Claude Code does not provide a model
+// listing command, so a version-only catalog inevitably goes stale between
+// Multica releases. The aliases are resolved by the installed CLI against the
+// account's current entitlement, which keeps the picker current without
+// pretending Multica discovered a dynamic catalog. Default = the `sonnet`
+// alias because it is the everyday workhorse (Opus is reserved for
+// advisor-style flows).
 func claudeStaticModels() []Model {
 	return []Model{
-		{ID: "claude-sonnet-4-6", Label: "Claude Sonnet 4.6", Provider: "anthropic", Default: true},
+		{ID: "sonnet", Label: "Claude Sonnet (latest)", Provider: "anthropic", Default: true},
+		{ID: "opus", Label: "Claude Opus (latest)", Provider: "anthropic"},
+		{ID: "fable", Label: "Claude Fable (latest)", Provider: "anthropic"},
+		{ID: "haiku", Label: "Claude Haiku (latest)", Provider: "anthropic"},
+		// Keep known full IDs for existing persisted agents and callers that
+		// deliberately pin a model. New selections should prefer aliases above.
+		{ID: "claude-sonnet-4-6", Label: "Claude Sonnet 4.6 (pinned)", Provider: "anthropic"},
 		{ID: "claude-fable-5", Label: "Claude Fable 5", Provider: "anthropic"},
 		{ID: "claude-opus-4-8", Label: "Claude Opus 4.8", Provider: "anthropic"},
 		{ID: "claude-opus-4-7", Label: "Claude Opus 4.7", Provider: "anthropic"},

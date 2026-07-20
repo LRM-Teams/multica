@@ -235,6 +235,9 @@ func TestHumanThreadFollowLifecyclePreservesExplicitOptOutInGroupAndDM(t *testin
 				t.Fatalf("insert direct opt-out root: %v", err)
 			}
 			setFollow(directOptOutRoot, false)
+			setFollow(directOptOutRoot, false)
+			assertState(directOptOutRoot, false, "unfollowed")
+			sendReply(testUserID, directOptOutRoot, "ordinary reply after direct opt out")
 			assertState(directOptOutRoot, false, "unfollowed")
 			sendReply(testUserID, directOptOutRoot, "@"+targetHandle+" mention after direct opt out", mention)
 			assertState(directOptOutRoot, false, "unfollowed")

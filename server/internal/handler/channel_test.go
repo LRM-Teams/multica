@@ -4955,6 +4955,11 @@ func TestAgentUnfollowChannelThreadUpdatesAgentStateAndEmitsLinkedSystemEvent(t 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("agent unfollow thread: status=%d body=%s", rec.Code, rec.Body.String())
 	}
+	rec = httptest.NewRecorder()
+	testHandler.UnfollowChannelThread(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("repeat agent unfollow thread: status=%d body=%s", rec.Code, rec.Body.String())
+	}
 
 	var agentFollowedAt pgtype.Timestamptz
 	var agentWakeState string
@@ -4999,6 +5004,19 @@ func TestAgentUnfollowChannelThreadUpdatesAgentStateAndEmitsLinkedSystemEvent(t 
 	}
 	if !strings.Contains(content, "@"+agentHandle) || !strings.Contains(content, "unfollowed this thread") {
 		t.Fatalf("system content = %q, want readable @handle fallback", content)
+	}
+	var eventRows int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_message
+		WHERE channel_id = $1
+		  AND thread_root_message_id = $2
+		  AND author_type = 'system'
+		  AND content LIKE '%unfollowed this thread%'`, channelID, root.ID).Scan(&eventRows); err != nil {
+		t.Fatalf("count thread unfollow system events: %v", err)
+	}
+	if eventRows != 1 {
+		t.Fatalf("thread unfollow system event rows = %d, want 1 after repeated request", eventRows)
 	}
 	var parts []protocol.MessagePart
 	if err := json.Unmarshal(rawParts, &parts); err != nil {

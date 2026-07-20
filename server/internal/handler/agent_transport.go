@@ -664,7 +664,8 @@ func (h *Handler) AgentTransportUnfollowThread(w http.ResponseWriter, r *http.Re
 		return
 	}
 	channelID := parseUUID(target.channel.ID)
-	if err := h.unfollowChannelThreadAgent(r.Context(), channelID, target.threadRootMessageID, source.origin.agentID); err != nil {
+	changed, err := h.unfollowChannelThreadAgent(r.Context(), channelID, target.threadRootMessageID, source.origin.agentID)
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to unfollow thread")
 		return
 	}
@@ -677,7 +678,9 @@ func (h *Handler) AgentTransportUnfollowThread(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusInternalServerError, "failed to record thread unfollow")
 		return
 	}
-	h.emitAgentThreadUnfollowedEvent(w, r.Context(), target.channel.WorkspaceID, channelID, target.threadRootMessageID, source.origin.agentID)
+	if changed {
+		h.emitAgentThreadUnfollowedEvent(w, r.Context(), target.channel.WorkspaceID, channelID, target.threadRootMessageID, source.origin.agentID)
+	}
 	writeJSON(w, http.StatusOK, AgentTransportThreadUnfollowResponse{
 		Action:      agentTransportActionThreadUnfollow,
 		Target:      target.raw,

@@ -1399,6 +1399,12 @@ func TestAgentTransportUnfollowDMThreadTarget(t *testing.T) {
 	if body.Action != agentTransportActionThreadUnfollow || body.ChannelID != dmChannel.ID || body.MessageID != root.ID {
 		t.Fatalf("unfollow response = %+v, want dm channel %s root %s", body, dmChannel.ID, root.ID)
 	}
+	repeatRec := agentTransportUnfollowThreadForTest(t, taskID, agentID, map[string]any{
+		"target": "dm:@" + humanHandle + ":" + root.ID,
+	})
+	if repeatRec.Code != http.StatusOK {
+		t.Fatalf("repeat unfollow dm thread target: status=%d body=%s", repeatRec.Code, repeatRec.Body.String())
+	}
 
 	var followedAt pgtype.Timestamptz
 	var wakeState string
@@ -1430,7 +1436,7 @@ func TestAgentTransportUnfollowDMThreadTarget(t *testing.T) {
 	if eventRows != 1 {
 		t.Fatalf("thread unfollow system event rows = %d, want 1", eventRows)
 	}
-	assertAgentTransportAuditCount(t, taskID, agentTransportActionThreadUnfollow, 1)
+	assertAgentTransportAuditCount(t, taskID, agentTransportActionThreadUnfollow, 2)
 }
 
 func TestDMThreadDeliveryHonorsFollowUnfollowMentionAndAgentPost(t *testing.T) {

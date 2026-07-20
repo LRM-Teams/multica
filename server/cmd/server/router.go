@@ -1138,10 +1138,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				})
 			})
 			r.Get("/api/chat/pending-tasks", h.ListPendingChatTasks)
-			// Agent-initiated 1:1 DM to the human it's working for. Agent-only
-			// (resolveActor must be "agent"); human callers get 403.
-			r.Post("/api/chat/agent-dm", h.AgentDirectMessage)
-
 			// Agent task-token chat transport. These routes intentionally live
 			// on the regular Auth API so task tokens use the same workspace and
 			// permission chain as other channel operations.

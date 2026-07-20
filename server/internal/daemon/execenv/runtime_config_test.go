@@ -328,7 +328,7 @@ func TestChatRuntimeBriefIsLeanButKeepsFastChatPaths(t *testing.T) {
 		"Delivery boundary: only successful chat send/react commands deliver visible chat output.",
 		"Text outside those commands, including final assistant output, is never delivered.",
 		"Chat output: use `multica message send --target <target>`",
-		"explicit Raft-style target",
+		"explicit target",
 		"#channel:<threadId>",
 		"dm:@handle:<threadId>",
 		"--message \"short text\"",
@@ -933,22 +933,21 @@ func TestWorkspaceContextHeadingSkippedWhenEmpty(t *testing.T) {
 	}
 }
 
-func TestMetaSkillDocumentsAgentDMToExplicitHumanMember(t *testing.T) {
+func TestMetaSkillDocumentsCanonicalHumanDMTransport(t *testing.T) {
 	t.Parallel()
-	out := buildMetaSkillContent("claude", TaskContextForEnv{IssueID: "11111111-2222-3333-4444-555555555555"})
+	out := buildMetaSkillContent("claude", TaskContextForEnv{ChatSessionID: "chat-1"})
 
 	for _, want := range []string{
-		"### Direct messages",
-		"multica dm --to <member-id|user-id|name|display-name|email>",
-		"--message-stdin",
-		"omit `--to` only when intentionally DMing the current task initiator",
-		"Human DMs are allowed",
-		"agent-to-agent DMs are not",
-		"multica dm --help",
+		"multica message send --target dm:@<human-handle> --message-stdin",
+		"there is no recipient fallback",
+		"Unknown or agent handles are rejected",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("runtime brief missing DM guidance %q", want)
 		}
+	}
+	if strings.Contains(out, "multica dm") {
+		t.Fatal("runtime brief must not advertise retired multica dm")
 	}
 }
 

@@ -364,7 +364,7 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 	}
 	target, err := h.resolveAgentTransportTarget(r.Context(), source.task, source.origin, req.Target, req.Options, true)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid target")
+		writeError(w, http.StatusBadRequest, "invalid target; use #channel, #channel:<threadId>, or `dm:@<human-handle>` (for a proactive DM: `multica message send --target dm:@<human-handle> --message-stdin`)")
 		return
 	}
 	input, err := h.finalizedAgentTransportInsertInput(r.Context(), source, target, content, parts, clientMessageID)

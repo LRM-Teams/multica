@@ -308,6 +308,14 @@ func (h *Handler) GetWorkspaceMemoryCurationStatus(w http.ResponseWriter, r *htt
 		return
 	}
 
+	// Status polling is the evolution UI's heartbeat. Sweep zombie running
+	// rows here so a stuck claim cannot leave the page spinning forever when
+	// daemon WS delivery fails or skips the claim/fail path.
+	if err := h.failExpiredMemoryCurationRunsForWorkspace(r.Context(), workspaceID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to sweep expired memory curation runs")
+		return
+	}
+
 	response := workspaceMemoryCurationStatusResponse{
 		WorkspaceID: workspaceID,
 		Stages:      []memoryCurationStageStatusResponse{},

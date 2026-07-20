@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/memorycuration"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -16,9 +17,13 @@ import (
 )
 
 const (
-	memoryCurationClaimTimeout = 10 * time.Minute
-	memoryCurationMaxRunAge    = 30 * time.Minute
-	memoryCurationMaxAttempts  = 3
+	// memoryCurationReclaimTimeout is how long a claimed running row may sit
+	// without claimed_at refresh before the server treats it as undelivered /
+	// abandoned and either reclaims or fails it. Keep this short: WS delivery
+	// failures leave claimed rows that the daemon never starts.
+	memoryCurationReclaimTimeout = 2 * time.Minute
+	memoryCurationMaxRunAge      = 30 * time.Minute
+	memoryCurationMaxAttempts    = 3
 )
 
 func (h *Handler) claimPendingMemoryCurationRun(ctx context.Context, rt db.AgentRuntime, activeRunID string) (*protocol.DaemonHeartbeatPendingMemoryCuration, error) {
@@ -26,7 +31,7 @@ func (h *Handler) claimPendingMemoryCurationRun(ctx context.Context, rt db.Agent
 	var targetAgentIDs []string
 	var instructions string
 	var customArgsRaw, mcpConfigRaw []byte
-	if err := h.failExpiredMemoryCurationRuns(ctx, rt); err != nil {
+	if err := h.failExpiredMemoryCurationRuns(ctx, rt.ID, rt.WorkspaceID); err != nil {
 		return nil, err
 	}
 	if strings.TrimSpace(activeRunID) != "" {
@@ -82,7 +87,7 @@ func (h *Handler) claimPendingMemoryCurationRun(ctx context.Context, rt db.Agent
 		  FROM claimed c
 		  LEFT JOIN memory_curator_profile p ON p.id = c.profile_id
 		  LEFT JOIN agent a ON a.id = c.curator_agent_id
-	`, rt.ID, rt.WorkspaceID, memoryCurationClaimTimeout.Seconds(), memoryCurationMaxAttempts, memoryCurationMaxRunAge.Seconds()).Scan(
+	`, rt.ID, rt.WorkspaceID, memoryCurationReclaimTimeout.Seconds(), memoryCurationMaxAttempts, memoryCurationMaxRunAge.Seconds()).Scan(
 		&pending.ID, &pending.WorkspaceID, &pending.Stage, &pending.DateFrom, &pending.DateTo,
 		&targetAgentIDs, &pending.CuratorAgentID, &pending.CuratorModel, &pending.CuratorThinkingLevel,
 		&customArgsRaw, &mcpConfigRaw, &instructions,
@@ -105,7 +110,7 @@ func (h *Handler) claimPendingMemoryCurationRun(ctx context.Context, rt db.Agent
 	return &pending, nil
 }
 
-func (h *Handler) failExpiredMemoryCurationRuns(ctx context.Context, rt db.AgentRuntime) error {
+func (h *Handler) failExpiredMemoryCurationRuns(ctx context.Context, runtimeID, workspaceID pgtype.UUID) error {
 	_, err := h.DB.Exec(ctx, `
 		UPDATE memory_curation_run
 		   SET status = 'failed', finished_at = now(),
@@ -114,7 +119,7 @@ func (h *Handler) failExpiredMemoryCurationRuns(ctx context.Context, rt db.Agent
 		           THEN 'memory curation exceeded server max runtime'
 		         ELSE 'memory curation exceeded max daemon claim attempts'
 		       END
-		 WHERE runtime_id = $1::uuid
+		 WHERE runtime_id = $1
 		   AND workspace_id = $2
 		   AND execution_owner = 'daemon'
 		   AND status = 'running'
@@ -122,7 +127,30 @@ func (h *Handler) failExpiredMemoryCurationRuns(ctx context.Context, rt db.Agent
 		     (started_at IS NOT NULL AND started_at < now() - make_interval(secs => $3::double precision))
 		     OR (claimed_at < now() - make_interval(secs => $4::double precision) AND attempt >= $5)
 		   )
-	`, rt.ID, uuidToString(rt.WorkspaceID), memoryCurationMaxRunAge.Seconds(), memoryCurationClaimTimeout.Seconds(), memoryCurationMaxAttempts)
+	`, runtimeID, workspaceID, memoryCurationMaxRunAge.Seconds(), memoryCurationReclaimTimeout.Seconds(), memoryCurationMaxAttempts)
+	return err
+}
+
+// failExpiredMemoryCurationRunsForWorkspace sweeps zombie running rows for an
+// entire workspace. Used by status polling so the evolution UI does not stay
+// spinning when daemon heartbeats skip the claim/fail path.
+func (h *Handler) failExpiredMemoryCurationRunsForWorkspace(ctx context.Context, workspaceID string) error {
+	_, err := h.DB.Exec(ctx, `
+		UPDATE memory_curation_run
+		   SET status = 'failed', finished_at = now(),
+		       error = CASE
+		         WHEN started_at IS NOT NULL AND started_at < now() - make_interval(secs => $2::double precision)
+		           THEN 'memory curation exceeded server max runtime'
+		         ELSE 'memory curation exceeded max daemon claim attempts'
+		       END
+		 WHERE workspace_id = $1::uuid
+		   AND execution_owner = 'daemon'
+		   AND status = 'running'
+		   AND (
+		     (started_at IS NOT NULL AND started_at < now() - make_interval(secs => $2::double precision))
+		     OR (claimed_at < now() - make_interval(secs => $3::double precision) AND attempt >= $4)
+		   )
+	`, workspaceID, memoryCurationMaxRunAge.Seconds(), memoryCurationReclaimTimeout.Seconds(), memoryCurationMaxAttempts)
 	return err
 }
 

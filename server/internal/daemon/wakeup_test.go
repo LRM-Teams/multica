@@ -7,6 +7,9 @@ import (
 )
 
 func TestTaskWakeupURL(t *testing.T) {
+	if taskWakeupReadLimit < 10<<20 {
+		t.Fatalf("taskWakeupReadLimit = %d, want at least 10MiB to match daemonws hub", taskWakeupReadLimit)
+	}
 	tests := []struct {
 		name       string
 		baseURL    string

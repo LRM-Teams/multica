@@ -264,8 +264,14 @@ func (d *Daemon) handleWSHeartbeatAck(ctx context.Context, ack *HeartbeatRespons
 	d.handleHeartbeatActions(ctx, ack.RuntimeID, ack)
 }
 
+// taskWakeupReadLimit must stay aligned with daemonws hub SetReadLimit.
+// Heartbeat acks can include pending_memory_curation with DB evidence bundles
+// that exceed the old 64KiB client limit and abort the socket with
+// "websocket: read limit exceeded", leaving server-side claimed runs as zombies.
+const taskWakeupReadLimit = 10 << 20
+
 func (d *Daemon) readTaskWakeupMessages(conn *websocket.Conn, taskWakeups chan<- taskWakeup, writes chan<- []byte) error {
-	conn.SetReadLimit(64 * 1024)
+	conn.SetReadLimit(taskWakeupReadLimit)
 	for {
 		_, raw, err := conn.ReadMessage()
 		if err != nil {

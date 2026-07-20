@@ -2524,6 +2524,79 @@ func TestExecuteAndDrain_IdleWatchdog_MessageDuringTerminalSettleResetsDeadObser
 	}
 }
 
+type messageDuringFirstLivenessProbeBackend struct{}
+
+func (messageDuringFirstLivenessProbeBackend) Execute(ctx context.Context, _ string, _ agent.ExecOptions) (*agent.Session, error) {
+	msgCh := make(chan agent.Message, 1)
+	resCh := make(chan agent.Result, 1)
+	probeStarted := make(chan struct{})
+	messageQueued := make(chan struct{})
+	var firstProbe sync.Once
+
+	// Keep a tool in flight so the 50 ms tool threshold is evaluated on the
+	// watchdog's 500 ms idle ticker. That leaves a deterministic result window
+	// between the first probe's settle grace and the next silence tick.
+	msgCh <- agent.Message{Type: agent.MessageToolUse, Tool: "Bash", CallID: "probe-window-tool"}
+
+	go func() {
+		select {
+		case <-probeStarted:
+		case <-ctx.Done():
+			close(msgCh)
+			close(resCh)
+			return
+		}
+
+		msgCh <- agent.Message{Type: agent.MessageText, Content: "progress drained during liveness probe"}
+		close(messageQueued)
+
+		resultTimer := time.NewTimer(150 * time.Millisecond)
+		defer resultTimer.Stop()
+		select {
+		case <-resultTimer.C:
+			close(msgCh)
+			resCh <- agent.Result{Status: "completed", Output: "result-after-probe-window-progress"}
+			close(resCh)
+		case <-ctx.Done():
+			close(msgCh)
+			close(resCh)
+		}
+	}()
+
+	runtimeAlive := func() (bool, bool) {
+		firstProbe.Do(func() {
+			close(probeStarted)
+			<-messageQueued
+			deadline := time.Now().Add(100 * time.Millisecond)
+			for len(msgCh) > 0 && time.Now().Before(deadline) {
+				time.Sleep(time.Millisecond)
+			}
+			// The buffered message has been received by the real drain loop. Give
+			// it time to stamp the activity generation before the probe returns.
+			time.Sleep(30 * time.Millisecond)
+		})
+		return false, true
+	}
+
+	return &agent.Session{Messages: msgCh, Result: resCh, RuntimeAlive: runtimeAlive}, nil
+}
+
+func TestExecuteAndDrain_IdleWatchdog_MessageDrainedDuringFirstProbeResetsDeadObservation(t *testing.T) {
+	t.Parallel()
+
+	d := newTestDaemon(t)
+	d.cfg.AgentIdleWatchdog = time.Second
+	d.cfg.AgentToolWatchdog = 50 * time.Millisecond
+
+	result, _, err := d.executeAndDrain(context.Background(), messageDuringFirstLivenessProbeBackend{}, "p", agent.ExecOptions{}, slog.Default(), "t-idle-first-probe-progress")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != "completed" || result.Output != "result-after-probe-window-progress" {
+		t.Fatalf("result after probe-window progress = status:%q output:%q error:%q, want completed provider result", result.Status, result.Output, result.Error)
+	}
+}
+
 func TestExecuteAndDrain_IdleWatchdog_ParentCancelWinsDuringTerminalSettleGrace(t *testing.T) {
 	t.Parallel()
 

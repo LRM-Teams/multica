@@ -4232,6 +4232,10 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 	// message also trips the watchdog.
 	var lastActivityAt atomic.Int64
 	lastActivityAt.Store(time.Now().UnixNano())
+	// activitySeq is a monotonic generation for backend messages. The idle
+	// watchdog snapshots it before each runtime probe so progress drained while
+	// the probe is blocked cannot be hidden by probe-return wall-clock timing.
+	var activitySeq atomic.Uint64
 	// inFlightTools counts tool_use messages that haven't yet been paired
 	// with a matching tool_result. A non-zero count means the agent is
 	// legitimately waiting on a tool (e.g. `npm install`, `docker build`)
@@ -4247,7 +4251,7 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 	idleWatchdogThreshold.Store(int64(d.cfg.AgentIdleWatchdog))
 	idleWindow := d.cfg.AgentIdleWatchdog
 	if idleWindow > 0 {
-		go d.runIdleWatchdog(agentCtx, idleWindow, d.cfg.AgentToolWatchdog, &lastActivityAt, &inFlightTools, &idleWatchdogFired, &idleWatchdogThreshold, agentCancel, session.Messages, session.RuntimeAlive, taskLog, taskID)
+		go d.runIdleWatchdog(agentCtx, idleWindow, d.cfg.AgentToolWatchdog, &lastActivityAt, &activitySeq, &inFlightTools, &idleWatchdogFired, &idleWatchdogThreshold, agentCancel, session.Messages, session.RuntimeAlive, taskLog, taskID)
 	}
 
 	go func() {
@@ -4329,6 +4333,7 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 				// slow downstream call (mu.Lock contention, batch resize)
 				// can't be misattributed to backend silence.
 				lastActivityAt.Store(time.Now().UnixNano())
+				activitySeq.Add(1)
 				switch msg.Type {
 				case agent.MessageStatus:
 					// Persist the session/work_dir as soon as the backend
@@ -4551,7 +4556,7 @@ func idleWatchdogTerminalSettleGrace(threshold time.Duration) time.Duration {
 // the floor only kicks in for windows >= 1 min so tests can pass tiny windows
 // like 50 ms). Once death is first confirmed, a separate short timer schedules
 // the second probe so recovery never waits for the next long silence tick.
-func (d *Daemon) runIdleWatchdog(agentCtx context.Context, window, toolWindow time.Duration, lastActivityAt *atomic.Int64, inFlightTools *atomic.Int32, fired *atomic.Bool, firedThreshold *atomic.Int64, cancel context.CancelFunc, messages <-chan agent.Message, runtimeAlive agent.RuntimeLivenessProbe, taskLog *slog.Logger, taskID string) {
+func (d *Daemon) runIdleWatchdog(agentCtx context.Context, window, toolWindow time.Duration, lastActivityAt *atomic.Int64, activitySeq *atomic.Uint64, inFlightTools *atomic.Int32, fired *atomic.Bool, firedThreshold *atomic.Int64, cancel context.CancelFunc, messages <-chan agent.Message, runtimeAlive agent.RuntimeLivenessProbe, taskLog *slog.Logger, taskID string) {
 	interval := window / 2
 	if window >= time.Minute && interval < 30*time.Second {
 		interval = 30 * time.Second
@@ -4564,6 +4569,7 @@ func (d *Daemon) runIdleWatchdog(agentCtx context.Context, window, toolWindow ti
 	var suppressionLogged bool
 	var deadConfirmedAt time.Time
 	var deadConfirmedThreshold time.Duration
+	var deadConfirmedActivitySeq uint64
 	var settleTimer *time.Timer
 	var settleTimerC <-chan time.Time
 	defer func() {
@@ -4574,6 +4580,7 @@ func (d *Daemon) runIdleWatchdog(agentCtx context.Context, window, toolWindow ti
 	resetDeadObservation := func() {
 		deadConfirmedAt = time.Time{}
 		deadConfirmedThreshold = 0
+		deadConfirmedActivitySeq = 0
 		if settleTimer != nil {
 			if !settleTimer.Stop() {
 				select {
@@ -4624,9 +4631,19 @@ func (d *Daemon) runIdleWatchdog(agentCtx context.Context, window, toolWindow ti
 		// Raft suppresses stale-progress recovery while the provider child is
 		// alive. An unavailable probe is also not proof that the child died,
 		// so fail open and keep the turn running instead of guessing.
+		activityBeforeProbe := activitySeq.Load()
 		alive, known := false, false
 		if runtimeAlive != nil {
 			alive, known = runtimeAlive()
+		}
+		// The probe may block long enough for the drain loop to consume real
+		// provider progress. Compare a monotonic generation rather than its
+		// timestamp with probe-return time; otherwise progress during the probe
+		// can look older than a newly-created dead observation and be lost.
+		if len(messages) > 0 || activitySeq.Load() != activityBeforeProbe {
+			suppressionLogged = false
+			resetDeadObservation()
+			continue
 		}
 		if !known || alive {
 			resetDeadObservation()
@@ -4649,6 +4666,7 @@ func (d *Daemon) runIdleWatchdog(agentCtx context.Context, window, toolWindow ti
 			suppressionLogged = false
 			deadConfirmedAt = time.Now()
 			deadConfirmedThreshold = threshold
+			deadConfirmedActivitySeq = activityBeforeProbe
 			if settleTimer == nil {
 				settleTimer = time.NewTimer(settleGrace)
 			} else {
@@ -4670,7 +4688,7 @@ func (d *Daemon) runIdleWatchdog(agentCtx context.Context, window, toolWindow ti
 		// Re-check progress after the second OS probe. A message can be
 		// buffered or drained concurrently while that probe runs; either is
 		// terminal progress and invalidates the prior dead observation.
-		if len(messages) > 0 || lastActivityAt.Load() > deadConfirmedAt.UnixNano() {
+		if len(messages) > 0 || activitySeq.Load() != deadConfirmedActivitySeq {
 			resetDeadObservation()
 			continue
 		}

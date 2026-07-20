@@ -118,6 +118,122 @@ func TestCreateChannelProjectBindingAndProjectReverseList(t *testing.T) {
 	}
 }
 
+func TestSetChannelProjectRequiresChannelManager(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("no test database")
+	}
+	ctx := context.Background()
+
+	creatorID := seedWorkspaceUserForTransportTargetTest(t, "project-binding-creator-"+uuid.NewString())
+	memberID := seedWorkspaceUserForTransportTargetTest(t, "project-binding-member-"+uuid.NewString())
+	adminID := seedWorkspaceUserForTransportTargetTest(t, "project-binding-admin-"+uuid.NewString())
+	if _, err := testPool.Exec(ctx, `UPDATE member SET role = 'admin' WHERE workspace_id = $1 AND user_id = $2`, testWorkspaceID, adminID); err != nil {
+		t.Fatalf("promote test admin: %v", err)
+	}
+
+	var channelID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO channel (workspace_id, name, created_by)
+		VALUES ($1, $2, $3)
+		RETURNING id`, testWorkspaceID, "project-binding-permissions-"+uuid.NewString(), creatorID).Scan(&channelID); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, channelID) })
+	for _, userID := range []string{creatorID, memberID, adminID, testUserID} {
+		if _, err := testPool.Exec(ctx, `
+			INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+			VALUES ($1, $2, 'user', $3)`, channelID, testWorkspaceID, userID); err != nil {
+			t.Fatalf("add channel member %s: %v", userID, err)
+		}
+	}
+
+	createProject := func(title string) string {
+		t.Helper()
+		var projectID string
+		if err := testPool.QueryRow(ctx, `
+			INSERT INTO project (workspace_id, title) VALUES ($1, $2) RETURNING id`, testWorkspaceID, title).Scan(&projectID); err != nil {
+			t.Fatalf("create project: %v", err)
+		}
+		t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM project WHERE id = $1`, projectID) })
+		return projectID
+	}
+	projectA := createProject("Channel binding A " + uuid.NewString())
+	projectB := createProject("Channel binding B " + uuid.NewString())
+
+	setProject := func(userID string, projectID any) *httptest.ResponseRecorder {
+		t.Helper()
+		w := httptest.NewRecorder()
+		req := withChannelTestWorkspaceCtx(t, newRequestAs(userID, http.MethodPut, "/api/channels/"+channelID+"/project", map[string]any{"project_id": projectID}), userID)
+		req = withURLParam(req, "channelId", channelID)
+		testHandler.SetChannelProject(w, req)
+		return w
+	}
+	currentProject := func() *string {
+		t.Helper()
+		var projectID *string
+		if err := testPool.QueryRow(ctx, `SELECT project_id::text FROM channel WHERE id = $1`, channelID).Scan(&projectID); err != nil {
+			t.Fatalf("load channel project: %v", err)
+		}
+		return projectID
+	}
+
+	if w := setProject(memberID, projectA); w.Code != http.StatusForbidden {
+		t.Fatalf("member bind = %d: %s", w.Code, w.Body.String())
+	}
+	if got := currentProject(); got != nil {
+		t.Fatalf("member bind changed project to %q", *got)
+	}
+
+	if w := setProject(creatorID, projectA); w.Code != http.StatusOK {
+		t.Fatalf("creator bind = %d: %s", w.Code, w.Body.String())
+	}
+	if got := currentProject(); got == nil || *got != projectA {
+		t.Fatalf("creator bind project = %v, want %s", got, projectA)
+	}
+
+	if w := setProject(memberID, projectB); w.Code != http.StatusForbidden {
+		t.Fatalf("member change = %d: %s", w.Code, w.Body.String())
+	}
+	if got := currentProject(); got == nil || *got != projectA {
+		t.Fatalf("member change project = %v, want %s", got, projectA)
+	}
+
+	if w := setProject(adminID, projectB); w.Code != http.StatusOK {
+		t.Fatalf("admin change = %d: %s", w.Code, w.Body.String())
+	}
+	if got := currentProject(); got == nil || *got != projectB {
+		t.Fatalf("admin change project = %v, want %s", got, projectB)
+	}
+	read := httptest.NewRecorder()
+	readReq := withChannelTestWorkspaceCtx(t, newRequestAs(memberID, http.MethodGet, "/api/channels/"+channelID+"/project", nil), memberID)
+	readReq = withURLParam(readReq, "channelId", channelID)
+	testHandler.GetChannelProject(read, readReq)
+	if read.Code != http.StatusOK {
+		t.Fatalf("member read = %d: %s", read.Code, read.Body.String())
+	}
+	var readBody map[string]string
+	if err := json.NewDecoder(read.Body).Decode(&readBody); err != nil {
+		t.Fatalf("decode member read: %v", err)
+	}
+	if got := readBody["project_id"]; got != projectB {
+		t.Fatalf("member read project_id = %q, want %s", got, projectB)
+	}
+
+	if w := setProject(memberID, nil); w.Code != http.StatusForbidden {
+		t.Fatalf("member unbind = %d: %s", w.Code, w.Body.String())
+	}
+	if got := currentProject(); got == nil || *got != projectB {
+		t.Fatalf("member unbind project = %v, want %s", got, projectB)
+	}
+
+	if w := setProject(testUserID, nil); w.Code != http.StatusOK {
+		t.Fatalf("owner unbind = %d: %s", w.Code, w.Body.String())
+	}
+	if got := currentProject(); got != nil {
+		t.Fatalf("owner unbind project = %q, want nil", *got)
+	}
+}
+
 // TestResolveProjectWorkdirRuntime_SharedRuntime covers the production /
 // cloud case: the project's managed workdir lives on a shared runtime that
 // is NOT owned by the viewer (owner_id is NULL). The old logic looked up

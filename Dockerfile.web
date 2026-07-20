@@ -71,4 +71,7 @@ EXPOSE 3000
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 
+HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=6 \
+  CMD node -e "fetch('http://127.0.0.1:3000/healthz').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"
+
 CMD ["node", "apps/web/server.js"]

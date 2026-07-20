@@ -1254,7 +1254,7 @@ func assertAgentTransportDraftMissing(t *testing.T, agentID, target string) {
 
 func assertAgentTransportFreshnessHoldActivity(t *testing.T, taskID, target string, newMessages int) {
 	t.Helper()
-	var statusCount, detailCount int
+	var holdCount, obsoleteDetailCount int
 	if err := testPool.QueryRow(context.Background(), `
 		SELECT count(*)
 		FROM agent_activity_event
@@ -1262,21 +1262,20 @@ func assertAgentTransportFreshnessHoldActivity(t *testing.T, taskID, target stri
 		  AND event_type = 'send_freshness_hold'
 		  AND message = 'Send held by freshness check'
 		  AND target_slug = $2
-		  AND details->>'new_message_count' = $3`, taskID, target, fmt.Sprint(newMessages)).Scan(&statusCount); err != nil {
-		t.Fatalf("count freshness hold status activity: %v", err)
+		  AND details->>'new_message_count' = $3
+		  AND details->>'decision' = 'local_hold'
+		  AND details->>'recommended_action' = 'review_newer_messages'`, taskID, target, fmt.Sprint(newMessages)).Scan(&holdCount); err != nil {
+		t.Fatalf("count freshness hold activity: %v", err)
 	}
 	if err := testPool.QueryRow(context.Background(), `
 		SELECT count(*)
 		FROM agent_activity_event
 		WHERE task_id = $1
-		  AND event_type = 'send_freshness_hold_detail'
-		  AND target_slug = $2
-		  AND message LIKE 'target: % / new messages: % newer / decision: local hold; review the newer context before retrying'`,
-		taskID, target).Scan(&detailCount); err != nil {
-		t.Fatalf("count freshness hold detail activity: %v", err)
+		  AND event_type = 'send_freshness_hold_detail'`, taskID).Scan(&obsoleteDetailCount); err != nil {
+		t.Fatalf("count obsolete freshness hold detail activity: %v", err)
 	}
-	if statusCount != 1 || detailCount != 1 {
-		t.Fatalf("freshness hold activity status=%d detail=%d, want 1/1", statusCount, detailCount)
+	if holdCount != 1 || obsoleteDetailCount != 0 {
+		t.Fatalf("freshness hold activity=%d obsolete detail=%d, want 1/0", holdCount, obsoleteDetailCount)
 	}
 }
 

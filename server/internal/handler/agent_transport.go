@@ -1509,19 +1509,13 @@ func (h *Handler) recordAgentTransportFreshnessHoldActivity(ctx context.Context,
 		"shown_message_count":   len(decision.Messages),
 		"omitted_message_count": decision.Omitted,
 		"target":                target.raw,
+		"recommended_action":    "review_newer_messages",
 	}
 	h.recordAgentActivityEvent(ctx, h.DB,
 		source.origin.workspaceID, source.task.AgentID, source.task.RuntimeID, nullableTaskIDForTransportSource(source),
 		activityKindBlocked, "send_freshness_hold", "info",
 		"channel", parseUUID(target.channel.ID), target.raw,
 		"", "Send held by freshness check",
-		details,
-	)
-	h.recordAgentActivityEvent(ctx, h.DB,
-		source.origin.workspaceID, source.task.AgentID, source.task.RuntimeID, nullableTaskIDForTransportSource(source),
-		activityKindText, "send_freshness_hold_detail", "info",
-		"channel", parseUUID(target.channel.ID), target.raw,
-		"", fmt.Sprintf("target: %s / new messages: %d newer / decision: local hold; review the newer context before retrying", target.raw, decision.TotalNewer),
 		details,
 	)
 }

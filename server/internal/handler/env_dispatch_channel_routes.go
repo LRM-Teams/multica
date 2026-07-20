@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // resolveChannelProject resolves the project (and its env) bound to an
@@ -146,6 +147,21 @@ func (h *Handler) deleteEnvDispatchChannelRollout(ctx context.Context, workspace
 		if b.Status != "ready" || b.SandboxInstanceID == nil {
 			continue
 		}
+		// AC-6 owned-resource cascade (spec: cancel tasks -> archive derived
+		// -> delete sandbox -> retire runtime -> close session -> revoke
+		// credentials). Already-absent resources are success (idempotent).
+		if b.DerivedAgentID != nil && *b.DerivedAgentID != "" {
+			derivedUUID := parseUUID(*b.DerivedAgentID)
+			if h.TaskService != nil {
+				if _, cerr := h.TaskService.CancelTasksForAgent(ctx, derivedUUID); cerr != nil {
+					slog.Warn("env-dispatch channel cleanup: cancel derived tasks", "derived_agent_id", *b.DerivedAgentID, "error", cerr)
+				}
+			}
+			// archived_by is nullable; NULL records a system/cleanup archive.
+			if _, aerr := h.Queries.ArchiveAgent(ctx, db.ArchiveAgentParams{ID: derivedUUID, ArchivedBy: pgtype.UUID{}}); aerr != nil {
+				slog.Warn("env-dispatch channel cleanup: archive derived agent", "derived_agent_id", *b.DerivedAgentID, "error", aerr)
+			}
+		}
 		if lifecycle != nil {
 			if derr := lifecycle.Delete(ctx, service.SandboxInstanceRef{WorkspaceID: workspaceID, InstanceID: *b.SandboxInstanceID}, ""); derr != nil {
 				slog.Warn("env-dispatch channel cleanup: delete sandbox", "instance_id", *b.SandboxInstanceID, "error", derr)
@@ -153,6 +169,14 @@ func (h *Handler) deleteEnvDispatchChannelRollout(ctx context.Context, workspace
 		}
 		if b.RuntimeID != nil {
 			_ = adapter.DeleteAgentRuntime(ctx, workspaceID, *b.RuntimeID)
+		}
+		// Close the training session when present. The session proxy key is
+		// persisted on the binding as part of AC-4 training orchestration
+		// (pending plan-first); until env-dispatch bindings carry a training
+		// session this is a no-op forward-compatible hook. Wiring arealrl
+		// EndSession here once AC-4 stores the key closes AC-6's session step.
+		if b.TrainingSessionID != nil && *b.TrainingSessionID != "" {
+			slog.Info("env-dispatch channel cleanup: training session close pending AC-4 session-key persistence", "training_session_id", *b.TrainingSessionID)
 		}
 	}
 	// Foreign-key-safe order: channel (cascades messages/members/sessions and

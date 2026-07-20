@@ -3,9 +3,21 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockEvents = vi.hoisted(() => ({ current: [] as { id: string }[] }));
+const mockPaging = vi.hoisted(() => ({
+  loadOlder: vi.fn(),
+  hasOlder: false,
+  isLoadingOlder: false,
+}));
 
 vi.mock("./use-agent-activity-events", () => ({
-  useAgentActivityEvents: () => ({ events: mockEvents.current, latest: null, isLoading: false }),
+  useAgentActivityEvents: () => ({
+    events: mockEvents.current,
+    latest: null,
+    isLoading: false,
+    loadOlder: mockPaging.loadOlder,
+    hasOlder: mockPaging.hasOlder,
+    isLoadingOlder: mockPaging.isLoadingOlder,
+  }),
 }));
 
 vi.mock("./activity-timeline", () => ({
@@ -23,12 +35,20 @@ vi.mock("../../../i18n", () => ({
 
 import { ActivityTab } from "./activity-tab";
 
-// Capture the IntersectionObserver callback so a test can simulate the bottom
-// sentinel scrolling in/out of view (jsdom has neither IO nor layout).
+// Capture each sentinel's IntersectionObserver callback so a test can simulate
+// scrolling (jsdom has neither IO nor layout). The top sentinel (older-page
+// load) uses a "200px…" rootMargin; the bottom sentinel (follow / jump pill)
+// uses "0px 0px 40px…". `ioCallback` stays the bottom one so existing tests are
+// unchanged.
 let ioCallback: (entries: { isIntersecting: boolean }[]) => void = () => {};
+let ioTopCallback: (entries: { isIntersecting: boolean }[]) => void = () => {};
 class MockIntersectionObserver {
-  constructor(cb: (entries: { isIntersecting: boolean }[]) => void) {
-    ioCallback = cb;
+  constructor(
+    cb: (entries: { isIntersecting: boolean }[]) => void,
+    options?: { rootMargin?: string },
+  ) {
+    if (options?.rootMargin?.startsWith("200px")) ioTopCallback = cb;
+    else ioCallback = cb;
   }
   observe = vi.fn();
   unobserve = vi.fn();
@@ -41,6 +61,10 @@ const agent = { id: "a1" } as never;
 beforeEach(() => {
   mockEvents.current = [];
   ioCallback = () => {};
+  ioTopCallback = () => {};
+  mockPaging.loadOlder.mockClear();
+  mockPaging.hasOlder = false;
+  mockPaging.isLoadingOlder = false;
   vi.stubGlobal("IntersectionObserver", MockIntersectionObserver);
   Element.prototype.scrollIntoView = vi.fn();
 });
@@ -114,5 +138,36 @@ describe("ActivityTab scroll-to-latest (#421)", () => {
     rerender(<ActivityTab agent={{ id: "a2" } as never} />);
 
     expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ block: "end" });
+  });
+});
+
+describe("ActivityTab older-page loading (#620)", () => {
+  it("loads an older page when the reader scrolls to the top and older pages remain", () => {
+    mockEvents.current = [ev(1), ev(2)];
+    mockPaging.hasOlder = true;
+    render(<ActivityTab agent={agent} />);
+
+    // Top sentinel scrolls into view (reader reached the top of loaded history).
+    act(() => ioTopCallback([{ isIntersecting: true }]));
+    expect(mockPaging.loadOlder).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not load an older page when none remain", () => {
+    mockEvents.current = [ev(1)];
+    mockPaging.hasOlder = false;
+    render(<ActivityTab agent={agent} />);
+
+    act(() => ioTopCallback([{ isIntersecting: true }]));
+    expect(mockPaging.loadOlder).not.toHaveBeenCalled();
+  });
+
+  it("does not re-load while an older page is already fetching", () => {
+    mockEvents.current = [ev(1), ev(2)];
+    mockPaging.hasOlder = true;
+    mockPaging.isLoadingOlder = true;
+    render(<ActivityTab agent={agent} />);
+
+    act(() => ioTopCallback([{ isIntersecting: true }]));
+    expect(mockPaging.loadOlder).not.toHaveBeenCalled();
   });
 });

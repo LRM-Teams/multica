@@ -916,10 +916,16 @@ export class ApiClient {
   // slug the header uses. The response is a pagination envelope
   // (`{ events, limit, has_more, next_cursor }`), not a bare array — callers
   // read `.events` (see `agentActivityEventsOptions`).
-  async getAgentActivityEvents(agentId: string): Promise<AgentActivityEventsPage> {
+  async getAgentActivityEvents(
+    agentId: string,
+    before?: string,
+  ): Promise<AgentActivityEventsPage> {
     const search = new URLSearchParams();
     const slug = getCurrentSlug();
     if (slug) search.set("workspace_slug", slug);
+    // Cursor for the next (older) page — the BE returns it as `next_cursor` and
+    // reads it back from the `before` query param (an opaque encoded cursor).
+    if (before) search.set("before", before);
     const suffix = search.toString() ? `?${search}` : "";
     return this.fetch(`/api/agents/${agentId}/activity/events${suffix}`);
   }

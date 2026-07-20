@@ -127,6 +127,16 @@ func (s *InteractionDAGService) RecordSessionAgentRun(ctx context.Context, proje
 	})
 }
 
+// LinkSessionTask links a training session to the real derived-agent task ID
+// after normal task insertion, so DAG assembly maps the session to the actual
+// agent run. Used by env-dispatch provisioning once the derived agent is ready
+// and its real task has been enqueued. It is a thin wrapper over
+// RecordSessionAgentRun matching the env-dispatch (sessionID, projectID,
+// realTaskID, issueID) call order from the provisioning orchestrator.
+func (s *InteractionDAGService) LinkSessionTask(ctx context.Context, sessionID, projectID, realTaskID, issueID string) error {
+	return s.RecordSessionAgentRun(ctx, projectID, sessionID, realTaskID, issueID)
+}
+
 // SegmentIDForAgentRun resolves the segment_id recorded for a task by
 // agent_run_id (= task.ID, D8). Used by the DELEGATION-edge hook (D11) to find
 // the parent's segment at the child's close. Returns ("", nil) when the service

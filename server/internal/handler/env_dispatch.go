@@ -1670,6 +1670,20 @@ func (a *envDispatchDepsAdapter) maybeOpenTrainingSession(ctx context.Context, t
 	if a.h.TaskService == nil {
 		return
 	}
+	// AC-4: if this task's agent is a derived env-dispatch agent whose binding
+	// already carries a training session (opened before sandbox creation), link
+	// the real task to that session instead of opening a new one. Falls back to
+	// MaybeOpenTrainingSession (legacy task_id-as-session_ref open) otherwise.
+	if envID != "" {
+		sid, skey, found, lErr := envDispatchChannelStore{}.trainingSessionForDerivedAgent(ctx, a.h.DB, envID, agentID)
+		if lErr == nil && found {
+			if err := a.h.TaskService.LinkExistingTrainingSession(ctx, taskID, agentID, projectID, envID, sid, skey); err != nil {
+				slog.Error("training session link failed (env_dispatch)",
+					"task_id", taskID, "agent_id", agentID, "session_id", sid, "error", err)
+			}
+			return
+		}
+	}
 	if err := a.h.TaskService.MaybeOpenTrainingSession(ctx, taskID, agentID, projectID, envID); err != nil {
 		slog.Error("training session open failed (env_dispatch)",
 			"task_id", taskID, "agent_id", agentID, "project_id", projectID, "env_id", envID, "error", err)

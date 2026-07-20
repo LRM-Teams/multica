@@ -11,7 +11,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/arealrl"
 	"github.com/multica-ai/multica/server/internal/service"
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -164,6 +166,16 @@ func (h *Handler) provisionEnvDispatchAgent(ctx context.Context, in ProvisionEnv
 		return ProvisionEnvDispatchAgentResult{}, err
 	}
 
+	// AC-4: training source agent -> training provisioning branch. The training
+	// session is opened with session_ref=binding.ID BEFORE sandbox creation,
+	// persisted for retry reuse, and the sandbox uses a server-owned
+	// areal-default + bridge URL + session-key runtime. The real task is
+	// enqueued by the service layer after provisioning and linked to the
+	// session for DAG assembly.
+	if h.isEnvDispatchTrainingTarget(ctx, in.ProjectID, in.AgentID) {
+		return h.provisionEnvDispatchAgentTraining(ctx, in, store, binding)
+	}
+
 	configJSON := in.SandboxConfig
 	if len(configJSON) == 0 || string(configJSON) == "{}" {
 		configJSON = binding.SandboxConfig
@@ -177,6 +189,42 @@ func (h *Handler) provisionEnvDispatchAgent(ctx context.Context, in ProvisionEnv
 	if lifecycle == nil {
 		_ = store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "lifecycle unavailable")
 		return ProvisionEnvDispatchAgentResult{}, fmt.Errorf("sandbox lifecycle unavailable")
+	}
+	// AC-4: a training source opens its RL session BEFORE sandbox creation with
+	// the persistent binding ID as session_ref, persists it on the binding (so
+	// retries reuse it), and overrides the sandbox config with areal-default +
+	// the configured bridge URL + the returned session key. Non-training sources
+	// keep the caller-supplied config. spec [需澄清]#3 locked defaults.
+	if h.TaskService != nil && h.TaskService.IsTrainingTarget(ctx, in.ProjectID, in.AgentID) {
+		sessionID, sessionKey := "", ""
+		if binding.TrainingSessionID != nil && *binding.TrainingSessionID != "" {
+			sessionID = *binding.TrainingSessionID // retry reuse (AC-4)
+			if binding.TrainingSessionKey != nil {
+				sessionKey = *binding.TrainingSessionKey
+			}
+		} else {
+			creds, sErr := h.TaskService.OpenEnvDispatchTrainingSession(ctx, in.EnvID, binding.ID)
+			if sErr != nil {
+				_ = store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "training session open failed")
+				return ProvisionEnvDispatchAgentResult{}, fmt.Errorf("training: open env-dispatch session: %w", sErr)
+			}
+			sessionID = creds.SessionID
+			sessionKey = creds.ProxyKey
+			if pErr := store.setTrainingSession(ctx, h.DB, in.EnvID, in.AgentID, sessionID, binding.ID, sessionKey); pErr != nil {
+				_ = store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "training session persist failed")
+				return ProvisionEnvDispatchAgentResult{}, fmt.Errorf("training: persist env-dispatch session: %w", pErr)
+			}
+		}
+		trainingRuntime, rErr := service.NormalizeExternalModelRuntime(&service.ExternalModelRuntime{
+			BaseURL: h.TaskService.TrainingProxyURL(),
+			APIKey:  sessionKey,
+			Model:   "areal-default", // arealProxyModel (service/training.go); spec-locked
+		})
+		if rErr != nil {
+			_ = store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "training runtime config invalid")
+			return ProvisionEnvDispatchAgentResult{}, fmt.Errorf("training: invalid env-dispatch runtime config: %w", rErr)
+		}
+		config = envDispatchSandboxConfig{Template: config.Template, Runtime: trainingRuntime}
 	}
 	sourceID := in.SourceSandboxInstanceID
 	if sourceID == "" && binding.SourceSandboxInstanceID != nil {
@@ -293,4 +341,122 @@ func (h *Handler) provisionEnvDispatchAgentBranch(ctx context.Context, in Provis
 		return cleanup(err)
 	}
 	return ProvisionEnvDispatchAgentResult{SandboxInstanceID: ref.InstanceID, RuntimeID: runtimeID, DaemonID: daemonID, ChatSessionID: sessionID}, nil
+}
+
+// isEnvDispatchTrainingTarget reports whether the addressed agent is the
+// training target for its project's env-dispatch (training_dispatch row with
+// train_agent_id == agentID). Used to route env-dispatch provisioning to the
+// AC-4 training branch.
+func (h *Handler) isEnvDispatchTrainingTarget(ctx context.Context, projectID, agentID string) bool {
+	if projectID == "" || agentID == "" {
+		return false
+	}
+	projectUUID, err := util.ParseUUID(projectID)
+	if err != nil {
+		return false
+	}
+	dispatch, err := h.Queries.GetTrainingDispatchByProject(ctx, projectUUID)
+	if err != nil {
+		return false // no training dispatch / not a training project
+	}
+	return util.UUIDToString(dispatch.TrainAgentID) == agentID
+}
+
+// provisionEnvDispatchAgentTraining handles the AC-4 training source-agent
+// first-address path. It opens the AReaL training session with
+// session_ref=binding.ID BEFORE sandbox creation (reusing a persisted session on
+// retry), persists session id/ref/key on the binding, creates the sandbox with a
+// server-owned areal-default + bridge URL + session-key runtime, discovers the
+// online runtime, clones the derived agent, and opens the channel session. The
+// real task is enqueued by the service layer after provisioning and linked to
+// the session for DAG assembly. No agent_runtime row is pre-created.
+func (h *Handler) provisionEnvDispatchAgentTraining(ctx context.Context, in ProvisionEnvDispatchAgentInput, store envDispatchChannelStore, binding envAgentSandboxBinding) (ProvisionEnvDispatchAgentResult, error) {
+	cfg := service.LoadTrainingConfig()
+	if cfg.BridgeStubURL == "" || cfg.AdminAPIKey == "" {
+		_ = store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "training bridge not configured")
+		return ProvisionEnvDispatchAgentResult{}, fmt.Errorf("env-dispatch training: bridge not configured")
+	}
+	client := arealrl.New(cfg.BridgeStubURL, cfg.AdminAPIKey)
+
+	existingID, existingKey := "", ""
+	if binding.TrainingSessionID != nil {
+		existingID = *binding.TrainingSessionID
+	}
+	if binding.TrainingSessionKey != nil {
+		existingKey = *binding.TrainingSessionKey
+	}
+	res, err := service.ResolveEnvDispatchTrainingSession(ctx, client, service.EnvDispatchTrainingBinding{
+		BindingID:          binding.ID,
+		TrainingSessionID:  existingID,
+		TrainingSessionKey: existingKey,
+	}, in.EnvID)
+	if err != nil {
+		_ = store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "training session resolve failed")
+		return ProvisionEnvDispatchAgentResult{}, err
+	}
+	if res.Opened {
+		if err := store.setTrainingSession(ctx, h.DB, in.EnvID, in.AgentID, res.SessionID, res.SessionRef, res.ProxyKey); err != nil {
+			_ = store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "persist training session failed")
+			return ProvisionEnvDispatchAgentResult{}, fmt.Errorf("persist training session: %w", err)
+		}
+	}
+
+	lifecycle := newEnvSandboxLifecycleService(h)
+	if lifecycle == nil {
+		_ = store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "lifecycle unavailable")
+		return ProvisionEnvDispatchAgentResult{}, fmt.Errorf("sandbox lifecycle unavailable")
+	}
+	rtJSON, err := json.Marshal(service.EnvDispatchTrainingRuntimePolicy(cfg.BridgeStubURL, res.ProxyKey))
+	if err != nil {
+		_ = store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "encode training runtime failed")
+		return ProvisionEnvDispatchAgentResult{}, fmt.Errorf("encode training runtime: %w", err)
+	}
+	ref, err := lifecycle.Create(ctx, service.CreateSandboxInstanceInput{
+		WorkspaceID:   in.WorkspaceID,
+		Template:      "default",
+		DaemonEnabled: true,
+		Runtime:       rtJSON,
+		RuntimeEnv:    map[string]string{},
+	}, in.UserID)
+	if err != nil {
+		_ = store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "sandbox create failed")
+		return ProvisionEnvDispatchAgentResult{}, fmt.Errorf("create training sandbox: %w", err)
+	}
+	cleanup := func(cause error) (ProvisionEnvDispatchAgentResult, error) {
+		_ = lifecycle.Delete(context.WithoutCancel(ctx), ref, in.UserID)
+		_ = store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "training provisioning failed")
+		return ProvisionEnvDispatchAgentResult{}, cause
+	}
+	runtimeRef, err := service.WaitForOnlineSandboxRuntime(ctx, &envSandboxLifecycleDepsAdapter{h: h}, in.WorkspaceID, ref.DaemonID, ref.InstanceID, envDispatchRuntimeReadinessTimeout)
+	if err != nil {
+		return cleanup(fmt.Errorf("wait for online sandbox runtime: %w", err))
+	}
+	derivedID, err := CloneEnvDispatchAgentTx(ctx, h, service.CloneEnvDispatchAgentInput{
+		WorkspaceID:   in.WorkspaceID,
+		SourceAgentID: in.AgentID,
+		RuntimeID:     runtimeRef.ID,
+		EnvID:         in.EnvID,
+		ChannelID:     in.ChannelID,
+		BindingID:     binding.ID,
+	})
+	if err != nil {
+		return cleanup(fmt.Errorf("clone derived agent: %w", err))
+	}
+	var sessionID string
+	if err := h.DB.QueryRow(ctx, `
+		INSERT INTO chat_session (workspace_id, project_id, agent_id, creator_id, title, runtime_id)
+		VALUES ($1, $2, $3, $4, 'env-dispatch', $5) RETURNING id::text`,
+		in.WorkspaceID, in.ProjectID, derivedID, in.UserID, runtimeRef.ID).Scan(&sessionID); err != nil {
+		return cleanup(fmt.Errorf("create env-dispatch chat session: %w", err))
+	}
+	if _, err := h.DB.Exec(ctx, `INSERT INTO channel_agent_session (channel_id, agent_id, chat_session_id) VALUES ($1, $2, $3)`, in.ChannelID, derivedID, sessionID); err != nil {
+		_, _ = h.DB.Exec(context.WithoutCancel(ctx), `DELETE FROM chat_session WHERE id = $1`, sessionID)
+		return cleanup(fmt.Errorf("create env-dispatch channel session: %w", err))
+	}
+	if err := store.markReady(ctx, h.DB, in.EnvID, in.AgentID, ref.InstanceID, runtimeRef.ID, ref.DaemonID); err != nil {
+		_, _ = h.DB.Exec(context.WithoutCancel(ctx), `DELETE FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`, in.ChannelID, derivedID)
+		_, _ = h.DB.Exec(context.WithoutCancel(ctx), `DELETE FROM chat_session WHERE id = $1`, sessionID)
+		return cleanup(fmt.Errorf("mark env-dispatch binding ready: %w", err))
+	}
+	return ProvisionEnvDispatchAgentResult{SandboxInstanceID: ref.InstanceID, RuntimeID: runtimeRef.ID, DaemonID: ref.DaemonID, ChatSessionID: sessionID}, nil
 }

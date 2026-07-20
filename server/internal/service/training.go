@@ -285,6 +285,107 @@ func maybeOpenTrainingSession(ctx context.Context, deps *TrainingSessionDeps, ta
 	return nil
 }
 
+// LinkExistingTrainingSession links a real derived-agent task to a training
+// session that env-dispatch provisioning already opened before sandbox
+// creation (AC-4). It persists the areal_proxy context on the task from the
+// binding's recorded session key + the configured bridge URL and records the
+// {session_id -> real task} mapping for DAG assembly -- WITHOUT calling
+// StartSession (the session is reused, satisfying AC-4 retry identity + real
+// task link). Idempotent: a task already carrying areal_proxy is a no-op.
+//
+// This is the env-dispatch counterpart to MaybeOpenTrainingSession (which opens
+// a fresh session with task_id as session_ref for the legacy non-env-dispatch
+// flow). The handler dispatches between the two based on whether the derived
+// agent's binding already carries a training session.
+func (s *TaskService) LinkExistingTrainingSession(ctx context.Context, taskID, agentID, projectID, envID, sessionID, sessionKey string) error {
+	return linkExistingTrainingSession(ctx, s.Training, taskID, agentID, projectID, envID, sessionID, sessionKey)
+}
+
+func linkExistingTrainingSession(ctx context.Context, deps *TrainingSessionDeps, taskID, agentID, projectID, envID, sessionID, sessionKey string) error {
+	if deps == nil || projectID == "" || sessionID == "" || sessionKey == "" {
+		return nil // nothing to link (training unconfigured or no pre-opened session)
+	}
+	if deps.ProxyURL == "" {
+		return fmt.Errorf("training: link existing session for task %s but the RL bridge is not configured", taskID)
+	}
+	taskUUID, err := util.ParseUUID(taskID)
+	if err != nil {
+		return fmt.Errorf("training: parse task id %q: %w", taskID, err)
+	}
+	task, err := deps.Store.GetAgentTask(ctx, taskUUID)
+	if err != nil {
+		return fmt.Errorf("training: load task %s: %w", taskID, err)
+	}
+	if hasArealProxyContext(task.Context) {
+		return nil // idempotent: task already proxied
+	}
+	payload, err := json.Marshal(arealProxyConfig{
+		Provider:  arealProxyProvider,
+		Model:     arealProxyModel,
+		APIKey:    sessionKey,
+		BaseURL:   deps.ProxyURL,
+		SessionID: sessionID,
+	})
+	if err != nil {
+		return fmt.Errorf("training: marshal areal_proxy for task %s: %w", taskID, err)
+	}
+	if err := deps.Store.MergeTaskArealProxyContext(ctx, db.MergeTaskArealProxyContextParams{
+		ID:         taskUUID,
+		ArealProxy: payload,
+	}); err != nil {
+		return fmt.Errorf("training: persist areal_proxy for task %s: %w", taskID, err)
+	}
+	if deps.DAG != nil {
+		if err := deps.DAG.LinkSessionTask(ctx, sessionID, projectID, taskID, util.UUIDToString(task.IssueID)); err != nil {
+			slog.Warn("training: link session->real task failed",
+				"task_id", taskID, "session_id", sessionID, "issue_id", util.UUIDToString(task.IssueID), "error", err)
+		}
+	}
+	slog.Info("training session linked to real task",
+		"task_id", taskID, "agent_id", agentID, "project_id", projectID, "session_id", sessionID)
+	return nil
+}
+
+// IsTrainingTarget reports whether agentID is the training target for the given
+// project. Env-dispatch provisioning (AC-4) uses this to decide whether to open
+// a training session before sandbox creation.
+func (s *TaskService) IsTrainingTarget(ctx context.Context, projectID, agentID string) bool {
+	if s.Training == nil || projectID == "" || agentID == "" {
+		return false
+	}
+	projectUUID, err := util.ParseUUID(projectID)
+	if err != nil {
+		return false
+	}
+	dispatch, err := s.Training.Lookup.GetTrainingDispatchByProject(ctx, projectUUID)
+	if err != nil {
+		return false
+	}
+	return util.UUIDToString(dispatch.TrainAgentID) == agentID
+}
+
+// OpenEnvDispatchTrainingSession opens one RL session for an env-dispatch
+// training source BEFORE sandbox creation (AC-4), using the persistent binding
+// ID as session_ref. Returns the session id + proxy key for the sandbox config
+// and binding persistence. The session is reused on retry via the binding's
+// persisted identity (LinkExistingTrainingSession links the real task later).
+func (s *TaskService) OpenEnvDispatchTrainingSession(ctx context.Context, envID, bindingID string) (arealrl.SessionCreds, error) {
+	if s.Training == nil || s.Training.RL == nil {
+		return arealrl.SessionCreds{}, fmt.Errorf("training: RL bridge not configured for env-dispatch session")
+	}
+	return s.Training.RL.StartSession(ctx, bindingID, envID)
+}
+
+// TrainingProxyURL returns the configured AReaL bridge URL (the areal-default
+// runtime base_url) for env-dispatch training sandbox config (AC-4). Empty when
+// training is unconfigured.
+func (s *TaskService) TrainingProxyURL() string {
+	if s.Training == nil {
+		return ""
+	}
+	return s.Training.ProxyURL
+}
+
 // hasArealProxyContext reports whether the task context JSONB already carries a
 // non-null areal_proxy sub-object.
 func hasArealProxyContext(raw []byte) bool {

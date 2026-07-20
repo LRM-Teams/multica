@@ -34,8 +34,8 @@ type envAgentSandboxBinding struct {
 	ID, EnvID, ChannelID, SourceAgentID, Status string
 	ModelConfigOwnerAgentID                     string
 	DerivedAgentID, SandboxInstanceID, RuntimeID, DaemonID,
-		SourceSandboxInstanceID, LastError,
-		TrainingSessionID, TrainingSessionRef, CredentialKind *string
+	SourceSandboxInstanceID, LastError,
+	TrainingSessionID, TrainingSessionRef, TrainingSessionKey, CredentialKind *string
 	SandboxConfig json.RawMessage
 }
 
@@ -123,6 +123,42 @@ func (s envDispatchChannelStore) markFailed(ctx context.Context, exec db.DBTX, e
 		WHERE env_id = $1 AND agent_id = $2 AND status IN ('provisioning','credential_ready','sandbox_creating','runtime_waiting','agent_creating')`,
 		envID, agentID, message)
 	return err
+}
+
+// setTrainingSession persists the training session identity (id, ref, key)
+// on a claimed binding after start_session succeeds, so retries reuse the
+// session without re-opening it and cleanup can close it. AC-4 retry identity.
+func (s envDispatchChannelStore) setTrainingSession(ctx context.Context, exec db.DBTX, envID, agentID, sessionID, sessionRef, sessionKey string) error {
+	_, err := exec.Exec(ctx, `
+		UPDATE environment_agent_sandbox
+		SET training_session_id = NULLIF($3, ''),
+		    training_session_ref = NULLIF($4, ''),
+		    training_session_key = NULLIF($5, ''),
+		    updated_at = now()
+		WHERE env_id = $1 AND agent_id = $2`,
+		envID, agentID, sessionID, sessionRef, sessionKey)
+	return err
+}
+
+// trainingSessionForDerivedAgent returns the training session (id + key) an
+// env-dispatch binding opened at provisioning time (AC-4), looked up by the
+// derived agent. found=false when the derived agent has no env-dispatch binding
+// or the binding has no persisted session. Used by the maybeOpenTrainingSession
+// wrapper to link the real task to the pre-opened session instead of opening a
+// new one.
+func (s envDispatchChannelStore) trainingSessionForDerivedAgent(ctx context.Context, exec db.DBTX, envID, derivedAgentID string) (sessionID, sessionKey string, found bool, err error) {
+	var sid, skey *string
+	err = exec.QueryRow(ctx, `SELECT training_session_id, training_session_key FROM environment_agent_sandbox WHERE env_id = $1 AND derived_agent_id = $2`, envID, derivedAgentID).Scan(&sid, &skey)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", "", false, nil
+	}
+	if err != nil {
+		return "", "", false, err
+	}
+	if sid == nil || *sid == "" || skey == nil || *skey == "" {
+		return "", "", false, nil
+	}
+	return *sid, *skey, true, nil
 }
 
 func (s envDispatchChannelStore) markDeleting(ctx context.Context, exec db.DBTX, envID string) error {
@@ -214,7 +250,7 @@ const bindingColumns = `id::text, env_id::text, channel_id::text, agent_id::text
 	model_config_owner_agent_id::text, derived_agent_id::text,
 	sandbox_instance_id::text, runtime_id::text, daemon_id::text,
 	source_sandbox_instance_id::text, last_error,
-	training_session_id, training_session_ref, credential_kind, sandbox_config`
+	training_session_id, training_session_ref, training_session_key, credential_kind, sandbox_config`
 
 const bindingSelect = `SELECT ` + bindingColumns + `
 	FROM environment_agent_sandbox`
@@ -228,7 +264,7 @@ func scanEnvAgentSandboxBinding(row envDispatchBindingRowScanner) (envAgentSandb
 		&binding.ModelConfigOwnerAgentID, &binding.DerivedAgentID,
 		&binding.SandboxInstanceID, &binding.RuntimeID, &binding.DaemonID,
 		&binding.SourceSandboxInstanceID, &binding.LastError,
-		&binding.TrainingSessionID, &binding.TrainingSessionRef, &binding.CredentialKind, &binding.SandboxConfig,
+		&binding.TrainingSessionID, &binding.TrainingSessionRef, &binding.TrainingSessionKey, &binding.CredentialKind, &binding.SandboxConfig,
 	)
 	return binding, err
 }

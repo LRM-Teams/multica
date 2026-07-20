@@ -811,3 +811,79 @@ func TestDiagnosisBeforeCloseHook_Ordering(t *testing.T) {
 		t.Fatalf("call order = %v, want %v", order, want)
 	}
 }
+
+// AC-4: linkExistingTrainingSession links a real derived-agent task to a
+// training session that env-dispatch provisioning already opened (before
+// sandbox creation), WITHOUT calling StartSession (reuse), and is idempotent.
+func TestLinkExistingTrainingSession_ReusesPersistsNoStartSession(t *testing.T) {
+	ctx := context.Background()
+	taskUUID := util.MustParseUUID(testTrainingTaskID)
+	store := &fakeTaskStore{task: db.AgentTaskQueue{ID: taskUUID}}
+	rl := &fakeRLClient{creds: arealrl.SessionCreds{SessionID: "fresh", ProxyKey: "fresh-key"}}
+	deps := newTrainingDeps(&fakeDispatchLookup{}, store, rl)
+
+	const sessionID, sessionKey = "sess-123", "proxy-key-456"
+	if err := linkExistingTrainingSession(ctx, deps, testTrainingTaskID, testTrainAgentID, testTrainingProjectID, "env-1", sessionID, sessionKey); err != nil {
+		t.Fatalf("link: %v", err)
+	}
+	// AC-4 retry identity: did NOT open a new session.
+	if rl.calls != 0 {
+		t.Errorf("StartSession called %d times, want 0 (reuse)", rl.calls)
+	}
+	// Persisted areal_proxy on the real task from the binding key + areal-default.
+	if len(store.merged) != 1 {
+		t.Fatalf("merged %d times, want 1", len(store.merged))
+	}
+	var cfg arealProxyConfig
+	if err := json.Unmarshal(store.merged[0].ArealProxy, &cfg); err != nil {
+		t.Fatalf("unmarshal areal_proxy: %v", err)
+	}
+	if cfg.APIKey != sessionKey || cfg.Model != arealProxyModel || cfg.SessionID != sessionID || cfg.BaseURL != testProxyURL {
+		t.Errorf("unexpected areal_proxy: %+v", cfg)
+	}
+	// Idempotent: a task already carrying areal_proxy is a no-op.
+	store.task.Context = []byte(`{"areal_proxy":{"session_id":"sess-123"}}`)
+	store.merged = nil
+	if err := linkExistingTrainingSession(ctx, deps, testTrainingTaskID, testTrainAgentID, testTrainingProjectID, "env-1", sessionID, sessionKey); err != nil {
+		t.Fatalf("link idempotent: %v", err)
+	}
+	if len(store.merged) != 0 {
+		t.Errorf("idempotent: merged %d times, want 0", len(store.merged))
+	}
+}
+
+// AC-4: OpenEnvDispatchTrainingSession opens a session with session_ref=bindingID
+// (not task_id) before sandbox creation; IsTrainingTarget detects the training
+// source via the project's training dispatch.
+func TestIsTrainingTarget_And_OpenEnvDispatchTrainingSession(t *testing.T) {
+	ctx := context.Background()
+	rl := &fakeRLClient{creds: arealrl.SessionCreds{SessionID: "open-sess", ProxyKey: "open-key"}}
+	deps := &TrainingSessionDeps{Lookup: &fakeDispatchLookup{dispatch: trainingDispatchRow(testTrainAgentID)}, RL: rl, ProxyURL: testProxyURL}
+	ts := &TaskService{Training: deps}
+
+	if !ts.IsTrainingTarget(ctx, testTrainingProjectID, testTrainAgentID) {
+		t.Errorf("IsTrainingTarget=false, want true for train agent")
+	}
+	if ts.IsTrainingTarget(ctx, testTrainingProjectID, "00000000-0000-0000-0000-000000000000") {
+		t.Errorf("IsTrainingTarget=true for non-train agent")
+	}
+
+	const bindingID, envID = "binding-abc", "env-1"
+	creds, err := ts.OpenEnvDispatchTrainingSession(ctx, envID, bindingID)
+	if err != nil {
+		t.Fatalf("OpenEnvDispatchTrainingSession: %v", err)
+	}
+	if creds.SessionID != "open-sess" || creds.ProxyKey != "open-key" {
+		t.Errorf("creds = %+v", creds)
+	}
+	// session_ref is the binding ID (AC-4), NOT a task id.
+	if rl.lastTask != bindingID {
+		t.Errorf("StartSession session_ref = %q, want binding id %q", rl.lastTask, bindingID)
+	}
+	if rl.lastEnv != envID {
+		t.Errorf("StartSession env = %q, want %q", rl.lastEnv, envID)
+	}
+	if ts.TrainingProxyURL() != testProxyURL {
+		t.Errorf("TrainingProxyURL = %q, want %q", ts.TrainingProxyURL(), testProxyURL)
+	}
+}

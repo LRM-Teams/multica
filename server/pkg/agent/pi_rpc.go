@@ -98,7 +98,13 @@ func (b *piRPCBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 		result.DurationMs = time.Since(started).Milliseconds()
 		resCh <- result
 	}()
-	return &Session{Messages: msgCh, Result: resCh}, nil
+	return &Session{Messages: msgCh, Result: resCh, RuntimeAlive: b.runtimeAlive}, nil
+}
+
+func (b *piRPCBackend) runtimeAlive() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.process != nil && processAlive(b.process.cmd.Process)
 }
 
 func (b *piRPCBackend) executeTurn(ctx context.Context, prompt string, opts ExecOptions, msgCh chan<- Message) Result {

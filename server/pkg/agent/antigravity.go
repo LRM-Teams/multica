@@ -174,7 +174,7 @@ func (b *antigravityBackend) Execute(ctx context.Context, prompt string, opts Ex
 		}
 	}()
 
-	return &Session{Messages: msgCh, Result: resCh}, nil
+	return &Session{Messages: msgCh, Result: resCh, RuntimeAlive: processLiveness(cmd.Process)}, nil
 }
 
 func isAntigravityWrapperLine(line string) bool {

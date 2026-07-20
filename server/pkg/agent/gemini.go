@@ -162,7 +162,7 @@ func (b *geminiBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		}
 	}()
 
-	return &Session{Messages: msgCh, Result: resCh}, nil
+	return &Session{Messages: msgCh, Result: resCh, RuntimeAlive: processLiveness(cmd.Process)}, nil
 }
 
 // accumulateUsage extracts per-model token usage from Gemini's result stats.

@@ -587,7 +587,7 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 	}()
 
 	outputLimitExtensionOwned = false
-	return &Session{Messages: msgCh, Result: resCh}, nil
+	return &Session{Messages: msgCh, Result: resCh, RuntimeAlive: processLiveness(cmd.Process)}, nil
 }
 
 // ── Pi event types ──

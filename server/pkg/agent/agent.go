@@ -96,6 +96,11 @@ type Session struct {
 	Messages <-chan Message
 	// Result receives exactly one value — the final outcome — then closes.
 	Result <-chan Result
+	// RuntimeAlive probes whether the provider child process that owns this
+	// turn is still alive. It is optional for non-process backends. The daemon
+	// uses it to distinguish a quiet-but-running provider from a dead runtime
+	// before applying inactivity recovery.
+	RuntimeAlive func() bool
 }
 
 // MessageType identifies the kind of Message.

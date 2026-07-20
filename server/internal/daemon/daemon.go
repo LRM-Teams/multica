@@ -4247,7 +4247,7 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 	idleWatchdogThreshold.Store(int64(d.cfg.AgentIdleWatchdog))
 	idleWindow := d.cfg.AgentIdleWatchdog
 	if idleWindow > 0 {
-		go d.runIdleWatchdog(agentCtx, idleWindow, d.cfg.AgentToolWatchdog, &lastActivityAt, &inFlightTools, &idleWatchdogFired, &idleWatchdogThreshold, agentCancel, session.Messages, taskLog, taskID)
+		go d.runIdleWatchdog(agentCtx, idleWindow, d.cfg.AgentToolWatchdog, &lastActivityAt, &inFlightTools, &idleWatchdogFired, &idleWatchdogThreshold, agentCancel, session.Messages, session.RuntimeAlive, taskLog, taskID)
 	}
 
 	go func() {
@@ -4512,23 +4512,23 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 // idle_watchdog dispositions. Centralised so the result-arrival branch and the
 // drain-timeout branch in executeAndDrain emit identical wording.
 func idleWatchdogReason(window time.Duration) string {
-	return fmt.Sprintf("agent produced no new messages for %s and message queue was empty; force-stopped by idle watchdog", window)
+	return fmt.Sprintf("runtime process was no longer alive after %s without progress; stopped by watchdog", window)
 }
 
 // runIdleWatchdog ticks until either agentCtx is cancelled or the backend has
-// been silent past the applicable budget. On firing, it records the tripped
-// threshold, sets fired, and calls cancel, which propagates to the agent
-// subprocess (via the ctx passed to backend.Execute) and to drainCtx. The
-// silence budget depends on whether a tool call is in flight:
+// been silent past the applicable budget. Silence alone is not termination
+// evidence: once the budget is reached, the watchdog first probes the runtime
+// child. A live child suppresses recovery, matching Raft's runtime-progress
+// behavior. Only a confirmed-dead child with no buffered output can fire the
+// watchdog. On firing, it records the tripped threshold, sets fired, and calls
+// cancel, which propagates to backend.Execute and drainCtx. The silence budget
+// depends on whether a tool call is in flight:
 //
-//  1. No tool in flight — a silent backend is a hang after `window`.
+//  1. No tool in flight — probe after `window` without progress.
 //  2. A tool in flight (tool_use with no matching tool_result yet) — a real
 //     tool (e.g. `npm install`, `docker build`) legitimately runs silently for
 //     many minutes, so the larger `toolWindow` applies instead. toolWindow <= 0
-//     keeps the historical behavior of never force-stopping while a tool is in
-//     flight. Without this in-flight budget a backend that emits tool_use and
-//     never the matching tool_result would run forever now that there is no
-//     wall-clock cap (MUL-3064).
+//     disables the in-flight probe.
 //
 // In both cases the watchdog also requires the session.Messages buffer to be
 // empty — a buffered-but-undrained message means the drain loop is behind, not
@@ -4537,7 +4537,7 @@ func idleWatchdogReason(window time.Duration) string {
 // Tick interval is window/2 (floored at 30 s in production, but the floor only
 // kicks in for windows >= 1 min so tests can pass tiny windows like 50 ms and
 // see the watchdog fire within a few ticks).
-func (d *Daemon) runIdleWatchdog(agentCtx context.Context, window, toolWindow time.Duration, lastActivityAt *atomic.Int64, inFlightTools *atomic.Int32, fired *atomic.Bool, firedThreshold *atomic.Int64, cancel context.CancelFunc, messages <-chan agent.Message, taskLog *slog.Logger, taskID string) {
+func (d *Daemon) runIdleWatchdog(agentCtx context.Context, window, toolWindow time.Duration, lastActivityAt *atomic.Int64, inFlightTools *atomic.Int32, fired *atomic.Bool, firedThreshold *atomic.Int64, cancel context.CancelFunc, messages <-chan agent.Message, runtimeAlive func() bool, taskLog *slog.Logger, taskID string) {
 	interval := window / 2
 	if window >= time.Minute && interval < 30*time.Second {
 		interval = 30 * time.Second
@@ -4547,6 +4547,7 @@ func (d *Daemon) runIdleWatchdog(agentCtx context.Context, window, toolWindow ti
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	var suppressionLogged bool
 	for {
 		select {
 		case <-agentCtx.Done():
@@ -4567,6 +4568,7 @@ func (d *Daemon) runIdleWatchdog(agentCtx context.Context, window, toolWindow ti
 			last := time.Unix(0, lastActivityAt.Load())
 			idleFor := time.Since(last)
 			if idleFor < threshold {
+				suppressionLogged = false
 				continue
 			}
 			// A buffered-but-undrained message means the drain loop is
@@ -4575,7 +4577,23 @@ func (d *Daemon) runIdleWatchdog(agentCtx context.Context, window, toolWindow ti
 			if len(messages) > 0 {
 				continue
 			}
-			taskLog.Warn("idle watchdog firing: no agent activity, force-stopping run",
+			// Raft suppresses stale-progress recovery while the provider child is
+			// alive. An unavailable probe is also not proof that the child died,
+			// so fail open and keep the turn running instead of guessing.
+			if runtimeAlive == nil || runtimeAlive() {
+				if !suppressionLogged {
+					taskLog.Info("watchdog suppressed: runtime remains alive despite silent progress",
+						"task", shortID(taskID),
+						"idle_for", idleFor.Round(time.Second).String(),
+						"threshold", threshold.String(),
+						"tool_in_flight", toolInFlight,
+						"runtime_probe_available", runtimeAlive != nil,
+					)
+					suppressionLogged = true
+				}
+				continue
+			}
+			taskLog.Warn("watchdog firing: runtime no longer alive after silent progress",
 				"task", shortID(taskID),
 				"idle_for", idleFor.Round(time.Second).String(),
 				"threshold", threshold.String(),

@@ -29,28 +29,23 @@ const (
 	// hard ceiling for cost/resource control can set MULTICA_AGENT_TIMEOUT.
 	DefaultAgentTimeout                   = 0
 	DefaultCodexSemanticInactivityTimeout = 10 * time.Minute
-	// DefaultAgentIdleWatchdog is the per-task safety net that force-stops a
-	// run when the backend has emitted no message for this long AND its
-	// message queue is empty. Backends like Claude Code can hang indefinitely
-	// on a stuck child process (e.g. `docker ps` against a frozen dockerd),
-	// in which case `cmd.Wait()` never returns. With no wall-clock cap
-	// (DefaultAgentTimeout = 0) such a run would otherwise sit at "running"
-	// forever, so this watchdog is its sole liveness net. The previous 5 min default
+	// DefaultAgentIdleWatchdog is the per-task silence threshold for probing
+	// runtime liveness. A quiet provider child is not force-stopped merely
+	// because it emitted no user-facing message: the watchdog first probes the
+	// child and suppresses recovery while it remains alive, matching Raft's
+	// runtime-progress behavior. The previous 5 min default
 	// killed legitimate long assistant outputs (e.g. RFC-length writeups)
 	// where the model streams a single message for many minutes without any
 	// daemon-visible activity — see MUL-2300. 30 min keeps the safety net for
 	// truly stuck runs (dockerd hang) while leaving headroom for long writes.
 	// Set MULTICA_AGENT_IDLE_WATCHDOG=0 to disable.
 	DefaultAgentIdleWatchdog = 30 * time.Minute
-	// DefaultAgentToolWatchdog bounds how long a single tool call may stay in
-	// flight (tool_use emitted, no tool_result and no other message) before the
-	// idle watchdog force-stops the run. The idle watchdog ignores its normal
+	// DefaultAgentToolWatchdog sets the liveness-probe threshold while a single
+	// tool call stays in flight (tool_use emitted, no tool_result and no other
+	// message). The watchdog ignores its normal
 	// window while a tool is in flight, because a real build/install/test
-	// legitimately runs silently for many minutes — but with no wall-clock cap
-	// (DefaultAgentTimeout = 0) a backend that emits tool_use and never the
-	// matching tool_result would otherwise run forever. This is the backstop for
-	// that stuck-tool case (MUL-3064). Set MULTICA_AGENT_TOOL_WATCHDOG=0 to
-	// disable, in which case an in-flight tool never force-stops the run.
+	// legitimately runs silently for many minutes. Set
+	// MULTICA_AGENT_TOOL_WATCHDOG=0 to disable the in-flight probe.
 	DefaultAgentToolWatchdog        = 2 * time.Hour
 	DefaultRuntimeName              = "Local Agent"
 	DefaultWorkspaceSyncInterval    = 30 * time.Second
@@ -109,8 +104,8 @@ type Config struct {
 	HeartbeatInterval              time.Duration
 	AgentTimeout                   time.Duration
 	CodexSemanticInactivityTimeout time.Duration
-	AgentIdleWatchdog              time.Duration // force-stop a run when the backend goes silent this long with an empty queue (0 = disabled)
-	AgentToolWatchdog              time.Duration // force-stop a run when a single tool call stays in flight (silent) this long (0 = disabled); backstop for hung tools now that there is no wall-clock cap
+	AgentIdleWatchdog              time.Duration // probe a silent runtime after this long; live children are not stopped (0 = disabled)
+	AgentToolWatchdog              time.Duration // probe liveness after a tool call stays silent this long; live children are not stopped (0 = disabled)
 	ClaudeArgs                     []string
 	CodexArgs                      []string
 	CodebuddyArgs                  []string

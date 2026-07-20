@@ -57,7 +57,7 @@ func TestListModelsCopilotFallsBackToStatic(t *testing.T) {
 	}
 }
 
-func TestClaudeStaticModelsPreferLatestAliasesAndKeepPinnedCompatibility(t *testing.T) {
+func TestClaudeStaticModelsExposeOnlyCurrentCleanLineup(t *testing.T) {
 	models := claudeStaticModels()
 	ids := map[string]Model{}
 	defaults := 0
@@ -68,16 +68,31 @@ func TestClaudeStaticModelsPreferLatestAliasesAndKeepPinnedCompatibility(t *test
 		}
 	}
 
-	for _, want := range []string{"sonnet", "opus", "fable", "haiku", "claude-sonnet-4-6", "claude-fable-5", "claude-haiku-4-5-20251001"} {
+	for _, want := range []string{"sonnet", "opus", "fable", "haiku"} {
 		if _, ok := ids[want]; !ok {
 			t.Errorf("missing Claude model %q in: %+v", want, models)
 		}
 	}
-	if defaults != 1 || !ids["sonnet"].Default {
-		t.Errorf("expected latest Sonnet alias to remain the sole default, got defaults=%d models=%+v", defaults, models)
+	for id, wantLabel := range map[string]string{
+		"sonnet": "Sonnet 5",
+		"opus":   "Opus 4.8",
+		"fable":  "Fable 5",
+		"haiku":  "Haiku 4.5",
+	} {
+		if got := ids[id].Label; got != wantLabel {
+			t.Errorf("visible label for %q = %q, want %q", id, got, wantLabel)
+		}
 	}
-	if ids["claude-sonnet-4-6"].Default {
-		t.Errorf("pinned Sonnet entry must not be default: %+v", ids["claude-sonnet-4-6"])
+	if len(models) != 4 {
+		t.Fatalf("visible Claude lineup = %+v, want exactly four current models", models)
+	}
+	if defaults != 1 || !ids["sonnet"].Default {
+		t.Errorf("expected Sonnet to remain the sole default, got defaults=%d models=%+v", defaults, models)
+	}
+	for _, model := range models {
+		if strings.Contains(strings.ToLower(model.Label), "latest") || strings.Contains(strings.ToLower(model.Label), "pinned") {
+			t.Errorf("visible label leaks implementation state: %+v", model)
+		}
 	}
 }
 

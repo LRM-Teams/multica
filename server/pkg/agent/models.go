@@ -218,30 +218,41 @@ func discoveryCacheKey(providerType, executablePath string) string {
 
 // ── Static catalogs ──
 
-// claudeStaticModels exposes Claude Code's stable model aliases before any
-// version-pinned compatibility entries. Claude Code does not provide a model
-// listing command, so a version-only catalog inevitably goes stale between
-// Multica releases. The aliases are resolved by the installed CLI against the
-// account's current entitlement, which keeps the picker current without
-// pretending Multica discovered a dynamic catalog. Default = the `sonnet`
-// alias because it is the everyday workhorse (Opus is reserved for
-// advisor-style flows).
+// claudeStaticModels is the current, user-visible Claude lineup. The runtime
+// aliases stay stable so the installed Claude CLI can resolve them, while the
+// labels name the actual model a user selects. Compatibility IDs deliberately
+// stay out of this picker; persisted agents still resolve them through
+// claudeCompatibilityModels below.
 func claudeStaticModels() []Model {
 	return []Model{
-		{ID: "sonnet", Label: "Claude Sonnet (latest)", Provider: "anthropic", Default: true},
-		{ID: "opus", Label: "Claude Opus (latest)", Provider: "anthropic"},
-		{ID: "fable", Label: "Claude Fable (latest)", Provider: "anthropic"},
-		{ID: "haiku", Label: "Claude Haiku (latest)", Provider: "anthropic"},
-		// Keep known full IDs for existing persisted agents and callers that
-		// deliberately pin a model. New selections should prefer aliases above.
-		{ID: "claude-sonnet-4-6", Label: "Claude Sonnet 4.6 (pinned)", Provider: "anthropic"},
-		{ID: "claude-fable-5", Label: "Claude Fable 5", Provider: "anthropic"},
-		{ID: "claude-opus-4-8", Label: "Claude Opus 4.8", Provider: "anthropic"},
-		{ID: "claude-opus-4-7", Label: "Claude Opus 4.7", Provider: "anthropic"},
-		{ID: "claude-haiku-4-5-20251001", Label: "Claude Haiku 4.5", Provider: "anthropic"},
-		{ID: "claude-opus-4-6", Label: "Claude Opus 4.6", Provider: "anthropic"},
-		{ID: "claude-sonnet-4-5", Label: "Claude Sonnet 4.5", Provider: "anthropic"},
+		{ID: "sonnet", Label: "Sonnet 5", Provider: "anthropic", Default: true},
+		{ID: "opus", Label: "Opus 4.8", Provider: "anthropic"},
+		{ID: "fable", Label: "Fable 5", Provider: "anthropic"},
+		{ID: "haiku", Label: "Haiku 4.5", Provider: "anthropic"},
 	}
+}
+
+// claudeCompatibilityModels keeps historical, persisted model IDs valid for
+// execution-time validation without turning implementation compatibility into
+// duplicate picker rows.
+func claudeCompatibilityModels() []Model {
+	return []Model{
+		{ID: "claude-sonnet-4-6", Provider: "anthropic"},
+		{ID: "claude-fable-5", Provider: "anthropic"},
+		{ID: "claude-opus-4-8", Provider: "anthropic"},
+		{ID: "claude-opus-4-7", Provider: "anthropic"},
+		{ID: "claude-haiku-4-5-20251001", Provider: "anthropic"},
+		{ID: "claude-opus-4-6", Provider: "anthropic"},
+		{ID: "claude-sonnet-4-5", Provider: "anthropic"},
+	}
+}
+
+// claudeModelsWithCompatibility is the internal validation catalog. Keep this
+// separate from claudeStaticModels so old persisted IDs retain their runtime
+// contracts without becoming duplicate rows in the model picker.
+func claudeModelsWithCompatibility() []Model {
+	models := claudeStaticModels()
+	return append(models, claudeCompatibilityModels()...)
 }
 
 func codexStaticModels() []Model {

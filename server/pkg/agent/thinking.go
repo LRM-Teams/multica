@@ -155,7 +155,7 @@ func loadClaudeThinkingByModel(ctx context.Context, executablePath string) map[s
 
 	superset := claudeEffortSuperset(ctx, executablePath)
 	result := map[string]*ModelThinking{}
-	for _, m := range claudeStaticModels() {
+	for _, m := range claudeModelsWithCompatibility() {
 		allow := claudeModelEffortAllow[m.ID]
 		levels := projectClaudeLevels(superset, allow)
 		if len(levels) == 0 {
@@ -524,6 +524,11 @@ func ValidateThinkingLevel(ctx context.Context, providerType, executablePath, mo
 	models, err := ListModels(ctx, providerType, executablePath)
 	if err != nil {
 		return false, err
+	}
+	if providerType == "claude" {
+		compatibility := claudeCompatibilityModels()
+		annotateClaudeThinking(ctx, compatibility, executablePath)
+		models = append(models, compatibility...)
 	}
 	target := model
 	if target == "" {

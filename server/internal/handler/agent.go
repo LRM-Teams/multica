@@ -1363,42 +1363,27 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		params.Model = pgtype.Text{String: *req.Model, Valid: true}
 	}
 
-	// Profile saves carry the completed discovery request that backed the
-	// picker. Validate the exact runtime/model/thinking combination before any
-	// write, rather than accepting a provider-shaped token that this runtime
-	// does not advertise. The request is intentionally transient: it proves
-	// fresh runtime capability without turning daemon-discovered catalog data
-	// into a stale agent setting.
-	if req.ModelCatalogRequestID != nil {
-		targetModel := existing.Model.String
-		if req.Model != nil {
-			targetModel = *req.Model
-		}
-		targetThinkingLevel := existing.ThinkingLevel.String
-		if req.ThinkingLevel != nil {
-			targetThinkingLevel = *req.ThinkingLevel
-		}
-		if err := h.validateAgentModelCatalog(r.Context(), *req.ModelCatalogRequestID, targetRuntimeID, targetModel, targetThinkingLevel); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-	}
-
 	// thinking_level handling (MUL-2339). Tri-state semantics:
 	//   - field omitted  → leave column alone (COALESCE narg), but if a
 	//     runtime change in this same request would make the *existing*
-	//     value literal-invalid for the new provider, reject 400. This
-	//     closes the gap Elon's review flagged: previously, switching a
-	//     Claude agent storing `max` to a Codex runtime would silently
-	//     keep `max` and forward it to the daemon.
+	//     value literal-invalid for the new provider, reconcile it to the
+	//     target model's advertised default when fresh catalog evidence is
+	//     available, otherwise clear it. This prevents a runtime switch from
+	//     persisting a value the target runtime can never accept.
 	//   - field set to "" → explicit clear (run ClearAgentThinkingLevel post-update)
 	//   - field set to value → validate against the target runtime's provider
 	//     enum; reject literal-invalid with 400. Per-model combination checks
 	//     run in the daemon at execution time, not here — see Trump's review
 	//     constraint that API behaviour stays consistent across change paths.
+	targetModel := existing.Model.String
+	if req.Model != nil {
+		targetModel = *req.Model
+	}
+	targetThinkingLevel := existing.ThinkingLevel.String
 	shouldClearThinkingLevel := false
 	if req.ThinkingLevel != nil {
 		value := *req.ThinkingLevel
+		targetThinkingLevel = value
 		if value == "" {
 			shouldClearThinkingLevel = true
 		} else {
@@ -1417,23 +1402,39 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 			params.ThinkingLevel = pgtype.Text{String: value, Valid: true}
 		}
 	} else if req.RuntimeID != nil && existing.ThinkingLevel.Valid && existing.ThinkingLevel.String != "" {
-		// Runtime is changing but the caller didn't touch thinking_level.
-		// If the existing value is not in the new provider's enum at all,
-		// preserving it would smuggle a literal-invalid token to the daemon.
-		// Hold the same line as the explicit-set path: always 400 on
-		// literal-invalid, never silently coerce. The caller can either
-		// pass `thinking_level: ""` to clear or pick a value valid for the
-		// new runtime.
+		// Runtime is changing but the caller did not touch thinking_level.
+		// Preserve values the target accepts. For an invalid inherited value,
+		// apply the target model's freshly advertised default if one exists;
+		// otherwise clear the override so the runtime chooses its own default.
 		provider, ok := h.resolveAgentProvider(r, existing.WorkspaceID, targetRuntimeID)
 		if !ok {
 			writeError(w, http.StatusInternalServerError, "failed to resolve runtime for thinking_level validation")
 			return
 		}
 		if !agent.IsKnownThinkingValue(provider, existing.ThinkingLevel.String) {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf(
-				"existing thinking_level %q is not valid for runtime %q; pass thinking_level=\"\" to clear or set a value valid for the new runtime",
-				existing.ThinkingLevel.String, provider,
-			))
+			level, err := h.reconciledThinkingLevelFromCatalog(r.Context(), req.ModelCatalogRequestID, targetRuntimeID, targetModel)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			targetThinkingLevel = level
+			if level == "" {
+				shouldClearThinkingLevel = true
+			} else {
+				params.ThinkingLevel = pgtype.Text{String: level, Valid: true}
+			}
+		}
+	}
+
+	// Profile saves carry the completed discovery request that backed the
+	// picker. Validate the final runtime/model/thinking tuple after the
+	// runtime-switch reconciliation above, not the stale inherited value.
+	// The request is intentionally transient: it proves fresh runtime
+	// capability without turning daemon-discovered catalog data into a stale
+	// agent setting.
+	if req.ModelCatalogRequestID != nil {
+		if err := h.validateAgentModelCatalog(r.Context(), *req.ModelCatalogRequestID, targetRuntimeID, targetModel, targetThinkingLevel); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 	}
@@ -1581,6 +1582,45 @@ func (h *Handler) validateAgentModelCatalog(ctx context.Context, requestID strin
 		return fmt.Errorf("thinking_level %q is not advertised for model %q", thinkingLevel, model)
 	}
 	return fmt.Errorf("model %q is not advertised by the selected runtime", model)
+}
+
+// reconciledThinkingLevelFromCatalog returns the target model's advertised
+// default effort for a runtime-switch repair. A missing catalog/default is not
+// an error: clearing the stored override is the only truthful fallback because
+// the runtime itself owns the default. When a caller supplied catalog proof,
+// however, stale, cross-runtime, or unsupported proof remains a bad request.
+func (h *Handler) reconciledThinkingLevelFromCatalog(ctx context.Context, requestID *string, runtimeID pgtype.UUID, model string) (string, error) {
+	if requestID == nil || strings.TrimSpace(*requestID) == "" {
+		return "", nil
+	}
+	request, err := h.ModelListStore.Get(ctx, strings.TrimSpace(*requestID))
+	if err != nil {
+		return "", fmt.Errorf("failed to load model catalog")
+	}
+	if request == nil || request.Status != ModelListCompleted {
+		return "", fmt.Errorf("model catalog is unavailable or expired; refresh runtime models and try again")
+	}
+	if request.RuntimeID != uuidToString(runtimeID) {
+		return "", fmt.Errorf("model catalog does not belong to the selected runtime")
+	}
+	if !request.Supported || model == "" {
+		return "", nil
+	}
+	for _, entry := range request.Models {
+		if entry.ID != model {
+			continue
+		}
+		if entry.Thinking == nil || entry.Thinking.DefaultLevel == "" {
+			return "", nil
+		}
+		for _, level := range entry.Thinking.SupportedLevels {
+			if level.Value == entry.Thinking.DefaultLevel {
+				return entry.Thinking.DefaultLevel, nil
+			}
+		}
+		return "", fmt.Errorf("model catalog default thinking_level %q is not advertised for model %q", entry.Thinking.DefaultLevel, model)
+	}
+	return "", fmt.Errorf("model %q is not advertised by the selected runtime", model)
 }
 
 func (h *Handler) ArchiveAgent(w http.ResponseWriter, r *http.Request) {

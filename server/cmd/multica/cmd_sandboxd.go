@@ -744,8 +744,40 @@ func (c *sandboxdClient) startRuntimeInCube(ctx context.Context, sandboxID strin
 	if len(runtimeEnv) == 0 || runtimeEnv["MULTICA_TOKEN"] == "" {
 		return fmt.Errorf("runtime_env missing MULTICA_TOKEN")
 	}
-	code := fmt.Sprintf(`import json, os, subprocess
+	code := buildStartRuntimeInCubeCode(runtimeEnv)
+	return c.cubeJSON(ctx, http.MethodPost, "/execute", map[string]any{"code": code, "language": "python"}, fmt.Sprintf("49999-%s.%s", sandboxID, c.cfg.CubeDomain), nil)
+}
+
+// buildStartRuntimeInCubeCode stops any snapshot-restored daemon, rewrites
+// Multica identity files to the minted MULTICA_DAEMON_ID, then starts the
+// runtime. Snapshot templates freeze ~/.multica/daemon.id (and possibly a live
+// daemon in memory); without this reset the restored process can briefly
+// re-register as the source sandbox's runtime before the new env takes effect,
+// and leftover profile-scoped daemon.id files can trigger legacy runtime merge
+// that steals the source row.
+func buildStartRuntimeInCubeCode(runtimeEnv map[string]string) string {
+	return fmt.Sprintf(`import json, os, pathlib, subprocess, time
 runtime_env = json.loads(%q)
+subprocess.run(["bash", "-lc", "pkill -f 'multica daemon' || pkill -f 'multica-daemon' || true"], check=False)
+time.sleep(1)
+daemon_id = (runtime_env.get("MULTICA_DAEMON_ID") or "").strip()
+multica = pathlib.Path.home() / ".multica"
+multica.mkdir(parents=True, exist_ok=True)
+daemon_file = multica / "daemon.id"
+if daemon_id:
+    daemon_file.write_text(daemon_id + "\n")
+elif daemon_file.exists():
+    daemon_file.unlink()
+profiles = multica / "profiles"
+if profiles.is_dir():
+    for path in profiles.glob("*/daemon.id"):
+        try:
+            if daemon_id:
+                path.write_text(daemon_id + "\n")
+            else:
+                path.unlink()
+        except OSError:
+            pass
 env = os.environ.copy()
 env.update(runtime_env)
 env["PATH"] = "/home/user/.npm-global/bin:/home/user/.bun/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin"
@@ -754,7 +786,6 @@ print(proc.stdout)
 if proc.returncode != 0:
     raise SystemExit(proc.returncode)
 `, mustJSON(runtimeEnv))
-	return c.cubeJSON(ctx, http.MethodPost, "/execute", map[string]any{"code": code, "language": "python"}, fmt.Sprintf("49999-%s.%s", sandboxID, c.cfg.CubeDomain), nil)
 }
 
 func (c *sandboxdClient) cubeJSON(ctx context.Context, method, path string, body any, host string, out any) error {

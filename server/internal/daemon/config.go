@@ -379,11 +379,12 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	// then reused forever so hostname drift (.local suffix, system rename,
 	// mDNS state, profile switch) no longer mints a new runtime identity.
 	// Callers may still pin a specific id via MULTICA_DAEMON_ID or the
-	// override field (e.g. for tests or embedded environments).
+	// override field (e.g. for tests, sandbox create, or embedded environments).
 	daemonID := strings.TrimSpace(os.Getenv("MULTICA_DAEMON_ID"))
 	if overrides.DaemonID != "" {
 		daemonID = overrides.DaemonID
 	}
+	pinnedDaemonID := daemonID != ""
 	if daemonID == "" {
 		persisted, err := EnsureDaemonID(profile)
 		if err != nil {
@@ -401,8 +402,15 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	// daemon.id. Surface those UUIDs so the server can merge their runtime
 	// rows into the canonical machine UUID. Fatal-free: a broken profiles
 	// dir shouldn't block startup.
-	if uuids, err := LegacyDaemonUUIDs(); err == nil {
-		legacyDaemonIDs = append(legacyDaemonIDs, uuids...)
+	//
+	// Skip when the caller pinned MULTICA_DAEMON_ID / --daemon-id: sandbox
+	// snapshot templates freeze foreign profile daemon.id files from the
+	// source instance, and merging those UUIDs would steal the source
+	// sandbox's agent_runtime row.
+	if !pinnedDaemonID {
+		if uuids, err := LegacyDaemonUUIDs(); err == nil {
+			legacyDaemonIDs = append(legacyDaemonIDs, uuids...)
+		}
 	}
 	// Strip anything that collides with the resolved daemon_id (e.g. when
 	// the user explicitly pins MULTICA_DAEMON_ID=<hostname>, or when the

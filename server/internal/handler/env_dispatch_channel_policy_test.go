@@ -203,3 +203,36 @@ func TestEnvDispatchSandboxConfigRejectsSecretDisclosure(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateEnvDispatchCredentialOwner enforces the spec AC-4 invariant that a
+// binding's model-configuration owner must equal its source agent. A mismatch
+// must fail closed; an empty (legacy/unset) owner is allowed so the check is
+// additive; the error must never echo credential material.
+func TestValidateEnvDispatchCredentialOwner(t *testing.T) {
+	cases := []struct {
+		name    string
+		owner   string
+		source  string
+		wantErr bool
+	}{
+		{"matching owner", "agent-a", "agent-a", false},
+		{"empty owner allowed (legacy)", "", "agent-a", false},
+		{"mismatch fails closed", "agent-b", "agent-a", true},
+		{"empty source with owner allowed", "agent-a", "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			binding := envAgentSandboxBinding{ModelConfigOwnerAgentID: c.owner}
+			err := validateEnvDispatchCredentialOwner(binding, c.source)
+			if c.wantErr && err == nil {
+				t.Fatalf("expected owner mismatch error for owner=%q source=%q", c.owner, c.source)
+			}
+			if !c.wantErr && err != nil {
+				t.Fatalf("unexpected error for owner=%q source=%q: %v", c.owner, c.source, err)
+			}
+			if err != nil && strings.Contains(err.Error(), "sentinel") {
+				t.Fatalf("error must not echo credential material: %q", err.Error())
+			}
+		})
+	}
+}

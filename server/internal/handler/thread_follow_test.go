@@ -222,6 +222,22 @@ func TestHumanThreadFollowLifecyclePreservesExplicitOptOutInGroupAndDM(t *testin
 				}
 				t.Fatalf("thread root %s missing from target read model", root.ID)
 			}
+			mention := protocol.MessagePart{
+				Type:       protocol.MessagePartTypeReference,
+				RefType:    "mention",
+				RefSubType: "member",
+				RefID:      targetID,
+				Label:      "@" + targetHandle,
+			}
+
+			directOptOutRoot, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "direct opt out before participation "+uuid.NewString(), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+			if err != nil {
+				t.Fatalf("insert direct opt-out root: %v", err)
+			}
+			setFollow(directOptOutRoot, false)
+			assertState(directOptOutRoot, false, "unfollowed")
+			sendReply(testUserID, directOptOutRoot, "@"+targetHandle+" mention after direct opt out", mention)
+			assertState(directOptOutRoot, false, "unfollowed")
 
 			rootByTarget, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(targetID), targetHandle, "root author implicit follow "+uuid.NewString(), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
 			if err != nil {
@@ -240,13 +256,6 @@ func TestHumanThreadFollowLifecyclePreservesExplicitOptOutInGroupAndDM(t *testin
 			}
 			markRead(rootByOther)
 			assertState(rootByOther, false, "no_wake")
-			mention := protocol.MessagePart{
-				Type:       protocol.MessagePartTypeReference,
-				RefType:    "mention",
-				RefSubType: "member",
-				RefID:      targetID,
-				Label:      "@" + targetHandle,
-			}
 			sendReply(testUserID, rootByOther, "@"+targetHandle+" first personal mention", mention)
 			assertState(rootByOther, true, "active")
 			setFollow(rootByOther, false)

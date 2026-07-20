@@ -1386,8 +1386,6 @@ func TestAgentTransportUnfollowDMThreadTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert dm root: %v", err)
 	}
-	testHandler.followChannelThreadAgent(ctx, parseUUID(dmChannel.ID), parseUUID(root.ID), parseUUID(agentID))
-
 	rec := agentTransportUnfollowThreadForTest(t, taskID, agentID, map[string]any{
 		"target": "dm:@" + humanHandle + ":" + root.ID,
 	})

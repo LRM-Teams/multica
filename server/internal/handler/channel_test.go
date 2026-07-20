@@ -4944,7 +4944,6 @@ func TestAgentUnfollowChannelThreadUpdatesAgentStateAndEmitsLinkedSystemEvent(t 
 		t.Fatalf("insert root: %v", err)
 	}
 	testHandler.followChannelThreadUser(ctx, parseUUID(channelID), parseUUID(root.ID), parseUUID(testUserID), false)
-	testHandler.followChannelThreadAgent(ctx, parseUUID(channelID), parseUUID(root.ID), parseUUID(agentID))
 
 	req := newRequestAs(testUserID, http.MethodDelete, "/api/channels/"+channelID+"/messages/"+root.ID+"/thread/follow", nil)
 	req.Header.Set("X-Actor-Source", "agent_credential")

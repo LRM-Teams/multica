@@ -348,6 +348,29 @@ func TestAgentTransportFreshnessDraftSQLBranchesAreScopedToTaskOrInbox(t *testin
 	if draftCount != 2 || taskAuditCount != 1 || inboxAuditCount != 1 {
 		t.Fatalf("task/inbox SQL branch rows drafts=%d taskAudits=%d inboxAudits=%d, want 2/1/1", draftCount, taskAuditCount, inboxAuditCount)
 	}
+
+	if err := testHandler.deleteAgentTransportDraftWithExec(ctx, testHandler.DB, inboxSource, target.raw); err != nil {
+		t.Fatalf("delete inbox source draft: %v", err)
+	}
+	if _, found, err := testHandler.loadAgentTransportDraft(ctx, inboxSource, target.raw); err != nil || found {
+		t.Fatalf("inbox source draft after delete: found=%v err=%v", found, err)
+	}
+	if draft, found, err := testHandler.loadAgentTransportDraft(ctx, taskSource, target.raw); err != nil || !found || draft.Content == "" {
+		t.Fatalf("task sibling after inbox delete: draft=%+v found=%v err=%v", draft, found, err)
+	}
+	if err := testHandler.deleteAgentTransportDraftWithExec(ctx, testHandler.DB, taskSource, target.raw); err != nil {
+		t.Fatalf("delete task source draft: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM agent_transport_draft
+		WHERE workspace_id = $1 AND agent_id = $2 AND target = $3`,
+		testWorkspaceID, uuidToString(task.AgentID), target.raw).Scan(&draftCount); err != nil {
+		t.Fatalf("count task/inbox drafts after scoped deletes: %v", err)
+	}
+	if draftCount != 0 {
+		t.Fatalf("task/inbox drafts after scoped deletes=%d, want 0", draftCount)
+	}
 }
 
 func TestAgentTransportFreshnessHoldSameRangeEmitsOneActivityUnderConcurrency(t *testing.T) {
@@ -497,6 +520,8 @@ func TestMigration201BackfillsExactDecisionFactOrFailsClosed(t *testing.T) {
 		{name: "missing exact audit", sourceKind: "task", fact: "freshness_decision_fact:missing", wantErr: true},
 		{name: "missing fact", sourceKind: "task", audits: 1, fact: "", wantErr: true},
 		{name: "ambiguous exact audits", sourceKind: "task", audits: 2, fact: "freshness_decision_fact:ambiguous", wantErr: true},
+		{name: "single audit with both sources", sourceKind: "both", audits: 1, fact: "freshness_decision_fact:both", wantErr: true},
+		{name: "single audit with neither source", sourceKind: "neither", audits: 1, fact: "freshness_decision_fact:neither", wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -522,22 +547,29 @@ func TestMigration201BackfillsExactDecisionFactOrFailsClosed(t *testing.T) {
 				t.Fatalf("create legacy migration fixtures: %v", err)
 			}
 			workspaceID, agentID, sourceID, draftID := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
-			if tc.sourceKind == "inbox" {
+			if tc.sourceKind == "inbox" || tc.sourceKind == "both" {
 				if _, err := tx.Exec(ctx, `INSERT INTO agent_inbox_event (id) VALUES ($1)`, sourceID); err != nil {
 					t.Fatalf("insert legacy inbox event: %v", err)
 				}
-			} else if _, err := tx.Exec(ctx, `INSERT INTO agent_task_queue (id) VALUES ($1)`, sourceID); err != nil {
-				t.Fatalf("insert legacy task: %v", err)
+			}
+			if tc.sourceKind == "task" || tc.sourceKind == "both" {
+				if _, err := tx.Exec(ctx, `INSERT INTO agent_task_queue (id) VALUES ($1)`, sourceID); err != nil {
+					t.Fatalf("insert legacy task: %v", err)
+				}
 			}
 			if _, err := tx.Exec(ctx, `INSERT INTO agent_transport_draft (id, workspace_id, agent_id, target, channel_id, client_message_id, seen_up_to_seq, held_from_seq, held_to_seq) VALUES ($1,$2,$3,'#held',$4,'exact-client',4,5,9)`, draftID, workspaceID, agentID, uuid.NewString()); err != nil {
 				t.Fatalf("insert legacy draft: %v", err)
 			}
 			for i := 0; i < tc.audits; i++ {
 				var taskID, inboxEventID any
-				if tc.sourceKind == "inbox" {
+				switch tc.sourceKind {
+				case "inbox":
 					inboxEventID = sourceID
-				} else {
+				case "task":
 					taskID = sourceID
+				case "both":
+					taskID = sourceID
+					inboxEventID = sourceID
 				}
 				if _, err := tx.Exec(ctx, `INSERT INTO agent_task_transport_audit (id, workspace_id, task_id, inbox_event_id, agent_id, action, target, client_message_id, context_pack) VALUES ($1,$2,$3,$4,$5,'message_send','#held','exact-client',jsonb_build_object('held', true, 'producer_fact_id', $6::text))`, uuid.NewString(), workspaceID, taskID, inboxEventID, agentID, tc.fact); err != nil {
 					t.Fatalf("insert legacy audit: %v", err)

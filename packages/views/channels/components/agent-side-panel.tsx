@@ -76,7 +76,15 @@ export function AgentSidePanel({
   // workspace members only for workspace-visible agents. Private agents remain
   // owner-only so the UI never advertises a tab whose server request must be
   // denied. Do not reuse this for Files or runtime/config access.
-  const canViewActivity = isOwner || (isWorkspaceMember && agent.visibility === "workspace");
+  //
+  // The `devProfileAccess` dev override still applies here, exactly as it does for
+  // `canInspectAgent` above: with the flag on, a non-owner sees Activity (and the
+  // read-only Files tab) regardless of agent visibility. Dropping it would regress
+  // the dev-access mode this panel has always supported (task #606).
+  const canViewActivity =
+    isOwner ||
+    (!!currentUserId && devProfileAccess) ||
+    (isWorkspaceMember && agent.visibility === "workspace");
   const availableTabs: OwnerTab[] = ["profile"];
   if (canViewActivity) availableTabs.push("activity");
   if (canInspectAgent) availableTabs.push("files");

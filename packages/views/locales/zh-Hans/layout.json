@@ -129,6 +129,7 @@
     },
     "add_node_action": "添加节点",
     "add_node_failed": "添加沙箱节点失败",
+    "add_node_permission_denied": "无法将沙箱节点绑定到当前工作区。请确认你是该工作区成员，且节点属于你本人。",
     "view_setup_action": "查看配置",
     "view_setup_failed": "获取节点配置失败",
     "view_setup_not_found": "未找到该沙箱节点",

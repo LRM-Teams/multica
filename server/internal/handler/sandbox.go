@@ -582,6 +582,12 @@ func (h *Handler) BindSandboxNodeToWorkspace(w http.ResponseWriter, r *http.Requ
 		CreatedBy:   parseUUID(userID),
 	})
 	if err != nil {
+		// :one INSERT with WHERE EXISTS returns ErrNoRows when the caller
+		// does not own the node (or the node was deleted).
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "sandbox node not found")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "failed to bind sandbox node")
 		return
 	}

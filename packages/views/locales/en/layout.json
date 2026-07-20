@@ -129,6 +129,7 @@
     },
     "add_node_action": "Add node",
     "add_node_failed": "Failed to add sandbox node",
+    "add_node_permission_denied": "Could not bind this sandbox node to the workspace. Confirm you are a workspace member and that you own the node.",
     "view_setup_action": "View setup",
     "view_setup_failed": "Failed to load node setup",
     "view_setup_not_found": "Sandbox node not found",

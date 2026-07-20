@@ -71,6 +71,7 @@ import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
 import { useWorkspaceId } from "@multica/core/hooks";
+import { getCurrentWsId } from "@multica/core/platform";
 import { api } from "@multica/core/api";
 import { toast } from "sonner";
 import { PageHeader } from "../../layout/page-header";
@@ -340,17 +341,25 @@ export function SandboxesPage() {
   const handleAddNode = async () => {
     dispatch({ type: "set_creating_node", value: true });
     try {
+      // Prefer the platform singleton so a mid-flight workspace switch cannot
+      // bind the new node to a stale wsId from the render closure.
+      const workspaceId = getCurrentWsId() || wsId;
       const suffix = Math.random().toString(36).slice(2, 8);
       const node = await api.createSandboxNode({ name: `sandboxd-${suffix}` });
-      await api.bindSandboxNode(wsId, { node_id: node.id });
+      await api.bindSandboxNode(workspaceId, { node_id: node.id });
       // Invalidate in the background; navigation does not need to wait.
       void Promise.all([
-        queryClient.invalidateQueries({ queryKey: sandboxKeys.bindings(wsId) }),
+        queryClient.invalidateQueries({ queryKey: sandboxKeys.bindings(workspaceId) }),
         queryClient.invalidateQueries({ queryKey: sandboxKeys.nodes() }),
       ]);
       navigation.push(paths.sandboxNodeSetup(node.id));
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t(($) => $.sandboxes_page.add_node_failed));
+      const message = e instanceof Error ? e.message : "";
+      if (/insufficient permissions/i.test(message)) {
+        toast.error(t(($) => $.sandboxes_page.add_node_permission_denied));
+      } else {
+        toast.error(message || t(($) => $.sandboxes_page.add_node_failed));
+      }
     } finally {
       dispatch({ type: "set_creating_node", value: false });
     }

@@ -138,20 +138,24 @@ const RESOURCES = {
   },
 };
 
-const members: MemberWithUser[] = [
-  {
-    id: "m-owner",
-    user_id: "user-owner",
-    workspace_id: "ws-1",
-    role: "member",
-    name: "Owner",
-    display_name: "Owner",
-    email: "owner@example.com",
-    avatar_url: null,
-    profile_description: "",
-    created_at: "2026-01-01T00:00:00Z",
-  },
-];
+// Extracted to a named const so the spreads below start from a concrete
+// `MemberWithUser`. Under `noUncheckedIndexedAccess`, `members[0]` is
+// `MemberWithUser | undefined`, and spreading that into a `: MemberWithUser`
+// literal drops the spread-only required fields (workspace_id/role/…) — TS2322.
+const ownerMember: MemberWithUser = {
+  id: "m-owner",
+  user_id: "user-owner",
+  workspace_id: "ws-1",
+  role: "member",
+  name: "Owner",
+  display_name: "Owner",
+  email: "owner@example.com",
+  avatar_url: null,
+  profile_description: "",
+  created_at: "2026-01-01T00:00:00Z",
+};
+
+const members: MemberWithUser[] = [ownerMember];
 
 function makeAgent(
   ownerId = "user-owner",
@@ -217,7 +221,7 @@ describe("AgentSidePanel", () => {
 
   it("temporarily exposes Activity, but not Files, to a workspace-member viewer", () => {
     const workspaceMember: MemberWithUser = {
-      ...members[0],
+      ...ownerMember,
       id: "m-viewer",
       user_id: "user-other",
       name: "Viewer",
@@ -241,7 +245,7 @@ describe("AgentSidePanel", () => {
 
   it("does not advertise Activity to a non-owner of a private agent", () => {
     const workspaceMember: MemberWithUser = {
-      ...members[0],
+      ...ownerMember,
       id: "m-viewer",
       user_id: "user-other",
       name: "Viewer",

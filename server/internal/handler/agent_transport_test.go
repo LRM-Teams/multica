@@ -134,23 +134,107 @@ func TestAgentTransportSendFreshnessHoldSavesDraftAndDoesNotWriteMessage(t *test
 	assertAgentTransportVisibleOutputAuditCount(t, taskID, 0)
 
 	revised := "revised held draft " + uuid.NewString()
-	secondHeld := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+	replaced := agentTransportSendForTest(t, taskID, agentID, map[string]any{
 		"target":            target,
 		"content":           revised,
 		"client_message_id": "transport-held-" + uuid.NewString(),
 		"seen_up_to_seq":    seen.Seq,
 	})
-	if secondHeld.Code != http.StatusOK {
-		t.Fatalf("second freshness hold send: status=%d body=%s", secondHeld.Code, secondHeld.Body.String())
+	if replaced.Code != http.StatusOK {
+		t.Fatalf("replace held draft: status=%d body=%s", replaced.Code, replaced.Body.String())
 	}
-	var secondBody AgentTransportSendHeldResponse
-	if err := json.Unmarshal(secondHeld.Body.Bytes(), &secondBody); err != nil {
-		t.Fatalf("decode second held response: %v", err)
+	var replacedBody AgentTransportSendHeldResponse
+	if err := json.Unmarshal(replaced.Body.Bytes(), &replacedBody); err != nil {
+		t.Fatalf("decode replaced hold response: %v", err)
 	}
-	if len(secondBody.HeldMessages) != 0 || secondBody.OmittedMessageCount != 1 {
-		t.Fatalf("second hold should omit previously reviewed blockers: %+v", secondBody)
+	if replacedBody.State != "held" || replacedBody.ProducerFactID != held.ProducerFactID {
+		t.Fatalf("replaced hold response mismatch: %+v", replacedBody)
 	}
 	assertAgentTransportDraftContent(t, agentID, target, revised)
+	assertAgentTransportFreshnessHoldActivity(t, taskID, target, 1)
+
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "newer after held decision "+uuid.NewString(), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
+		t.Fatalf("seed newer-after-hold message: %v", err)
+	}
+	secondDecisionContent := "replacement after new context " + uuid.NewString()
+	secondDecision := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":            target,
+		"content":           secondDecisionContent,
+		"client_message_id": "transport-held-second-decision-" + uuid.NewString(),
+		"seen_up_to_seq":    seen.Seq,
+	})
+	if secondDecision.Code != http.StatusOK {
+		t.Fatalf("replacement with newer context: status=%d body=%s", secondDecision.Code, secondDecision.Body.String())
+	}
+	var secondDecisionBody AgentTransportSendHeldResponse
+	if err := json.Unmarshal(secondDecision.Body.Bytes(), &secondDecisionBody); err != nil {
+		t.Fatalf("decode replacement with newer context: %v", err)
+	}
+	if secondDecisionBody.ProducerFactID == held.ProducerFactID || secondDecisionBody.NewMessageCount != 2 {
+		t.Fatalf("newer context must create a distinct decision: %+v", secondDecisionBody)
+	}
+	assertAgentTransportDraftContent(t, agentID, target, secondDecisionContent)
+	assertAgentTransportFreshnessHoldActivity(t, taskID, target, 2)
+}
+
+func TestAgentTransportFreshnessDraftsAreScopedToTheirTask(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	firstTaskID, channelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, firstTaskID)
+	target := "#" + channelNameForTransportTest(t, channelID)
+	seen, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "seen before source scoped hold "+uuid.NewString(), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("seed seen message: %v", err)
+	}
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "newer source scoped hold "+uuid.NewString(), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
+		t.Fatalf("seed newer message: %v", err)
+	}
+
+	var runtimeID, chatSessionID string
+	if err := testPool.QueryRow(ctx, `SELECT runtime_id, chat_session_id FROM agent_task_queue WHERE id = $1`, firstTaskID).Scan(&runtimeID, &chatSessionID); err != nil {
+		t.Fatalf("load first task source: %v", err)
+	}
+	var secondTaskID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (agent_id, runtime_id, chat_session_id, status, priority, started_at)
+		VALUES ($1, $2, $3, 'running', 2, now())
+		RETURNING id`, agentID, runtimeID, chatSessionID).Scan(&secondTaskID); err != nil {
+		t.Fatalf("create second task: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, secondTaskID)
+	})
+
+	for _, tc := range []struct {
+		taskID  string
+		content string
+	}{
+		{firstTaskID, "first source scoped draft " + uuid.NewString()},
+		{secondTaskID, "second source scoped draft " + uuid.NewString()},
+	} {
+		rec := agentTransportSendForTest(t, tc.taskID, agentID, map[string]any{
+			"target": target, "content": tc.content, "client_message_id": "transport-source-" + uuid.NewString(), "seen_up_to_seq": seen.Seq,
+		})
+		if rec.Code != http.StatusOK {
+			t.Fatalf("source-scoped freshness hold: status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	}
+
+	var draftCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM agent_transport_draft
+		WHERE workspace_id = $1 AND agent_id = $2 AND target = $3
+		  AND task_id IN ($4, $5)`, testWorkspaceID, agentID, target, firstTaskID, secondTaskID).Scan(&draftCount); err != nil {
+		t.Fatalf("count task-scoped drafts: %v", err)
+	}
+	if draftCount != 2 {
+		t.Fatalf("task-scoped drafts=%d, want 2", draftCount)
+	}
 }
 
 func TestAgentTransportSendDraftSendsSavedDraftAndClearsDraft(t *testing.T) {
@@ -199,7 +283,11 @@ func TestAgentTransportSendDraftSendsSavedDraftAndClearsDraft(t *testing.T) {
 	if staleBody.State != "held" || staleBody.LatestSeq != heldBody.LatestSeq {
 		t.Fatalf("stale draft hold mismatch: %+v", staleBody)
 	}
+	if staleBody.ProducerFactID != heldBody.ProducerFactID {
+		t.Fatalf("stale draft should retain decision fact: %+v", staleBody)
+	}
 	assertAgentTransportDraftContent(t, agentID, target, content)
+	assertAgentTransportFreshnessHoldActivity(t, taskID, target, 1)
 
 	sent := agentTransportSendForTest(t, taskID, agentID, map[string]any{
 		"target":         target,

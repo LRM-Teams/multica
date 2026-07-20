@@ -104,6 +104,7 @@ type agentTransportDraft struct {
 	SeenUpToSeq     int64
 	HeldFromSeq     int64
 	HeldToSeq       int64
+	DecisionFactID  string
 }
 
 type agentTransportFreshnessDecision struct {
@@ -364,6 +365,38 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid target; use #channel, #channel:<threadId>, or `dm:@<human-handle>` (for a proactive DM: `multica message send --target dm:@<human-handle> --message-stdin`)")
 		return
 	}
+	if draft, found, err := h.loadAgentTransportDraft(r.Context(), source, target.raw); err != nil {
+		slog.Warn("agent transport draft lookup failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to send message")
+		return
+	} else if found {
+		freshness, err := h.agentTransportFreshnessDecision(r.Context(), source, target, req.SeenUpToSeq)
+		if err != nil {
+			slog.Warn("agent transport freshness check failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to send message")
+			return
+		}
+		if freshness.Hold {
+			if freshness.LatestSeq <= draft.HeldToSeq {
+				if err := h.replaceAgentTransportDraft(r.Context(), source, target.raw, content, parts, clientMessageID); err != nil {
+					slog.Warn("agent transport draft replacement failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
+					writeError(w, http.StatusInternalServerError, "failed to replace saved draft")
+					return
+				}
+				freshness.ProducerID = draft.DecisionFactID
+				writeAgentTransportHeldResponse(w, target, freshness, "")
+				return
+			}
+			transportID, err := h.holdAgentTransportSend(r.Context(), source, target, content, parts, clientMessageID, freshness)
+			if err != nil {
+				slog.Warn("agent transport freshness hold failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
+				writeError(w, http.StatusInternalServerError, "failed to hold message")
+				return
+			}
+			writeAgentTransportHeldResponse(w, target, freshness, transportID)
+			return
+		}
+	}
 	input, err := h.finalizedAgentTransportInsertInput(r.Context(), source, target, content, parts, clientMessageID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -600,9 +633,25 @@ func (h *Handler) agentTransportSendDraft(w http.ResponseWriter, r *http.Request
 		return
 	}
 	initiatorID := h.channelInitiatorForChatSession(r.Context(), source.task.ChatSessionID)
-	seenUpToSeq := draft.SeenUpToSeq
-	if req.SeenUpToSeq > 0 {
-		seenUpToSeq = req.SeenUpToSeq
+	seenUpToSeq, err := h.agentTransportSeenUpToSeq(r.Context(), source, target.raw, req.SeenUpToSeq)
+	if err != nil {
+		slog.Warn("agent transport draft freshness state lookup failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to send draft")
+		return
+	}
+	if seenUpToSeq <= 0 {
+		seenUpToSeq = draft.SeenUpToSeq
+	}
+	decision, err := h.agentTransportFreshnessDecision(r.Context(), source, target, seenUpToSeq)
+	if err != nil {
+		slog.Warn("agent transport draft freshness check failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to send draft")
+		return
+	}
+	if decision.Hold && decision.LatestSeq <= draft.HeldToSeq {
+		decision.ProducerID = draft.DecisionFactID
+		writeAgentTransportHeldResponse(w, target, decision, "")
+		return
 	}
 	msg, created, transportID, err := h.createAgentTransportMessage(r.Context(), source, target, content, parts, attachmentIDs, draft.ClientMessageID, seenUpToSeq, initiatorID)
 	if err != nil {
@@ -636,10 +685,11 @@ func (h *Handler) agentTransportSendDraft(w http.ResponseWriter, r *http.Request
 		"channel", parseUUID(target.channel.ID), target.raw,
 		"", agentVisibleOutputActivityText(content, parts, msg.Attachments),
 		map[string]any{
-			"message_id":   msg.ID,
-			"created":      created,
-			"from_draft":   true,
-			"draft_target": draft.Target,
+			"message_id":       msg.ID,
+			"created":          created,
+			"from_draft":       true,
+			"draft_target":     draft.Target,
+			"decision_fact_id": draft.DecisionFactID,
 		},
 	)
 }
@@ -1475,7 +1525,7 @@ func writeAgentTransportHeldResponse(w http.ResponseWriter, target agentTranspor
 		Reason:              "newer_messages_available",
 		Decision:            "local_hold",
 		ProducerFactID:      decision.ProducerID,
-		AvailableActions:    []string{"read_newer_messages", "send_draft", "revise_message"},
+		AvailableActions:    []string{"send_draft"},
 		HeldMessages:        decision.Messages,
 		NewMessageCount:     decision.TotalNewer,
 		ShownMessageCount:   int64(len(decision.Messages)),
@@ -1518,14 +1568,43 @@ func (h *Handler) saveAgentTransportDraftWithExec(ctx context.Context, exec dbEx
 	if err != nil {
 		return err
 	}
+	args := []any{
+		source.origin.workspaceID, source.origin.agentID, strings.TrimSpace(target.raw), parseUUID(target.channel.ID), nullableUUID(target.threadRootMessageID),
+		content, partsJSON, clientMessageID,
+		decision.SeenUpToSeq, decision.SeenUpToSeq + 1, decision.LatestSeq, firstChannelMessageSeq(decision.Messages), maxChannelMessageSeq(decision.Messages), decision.ProducerID,
+	}
+	if source.inboxEventID.Valid {
+		_, err = exec.Exec(ctx, `
+			INSERT INTO agent_transport_draft (
+				workspace_id, agent_id, inbox_event_id, target, channel_id, thread_root_message_id,
+				content, parts, client_message_id,
+				seen_up_to_seq, held_from_seq, held_to_seq, shown_from_seq, shown_to_seq, decision_fact_id
+			)
+			VALUES ($1, $2, $15, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14)
+			ON CONFLICT (workspace_id, agent_id, inbox_event_id, target) WHERE inbox_event_id IS NOT NULL
+			DO UPDATE SET
+				channel_id = EXCLUDED.channel_id,
+				thread_root_message_id = EXCLUDED.thread_root_message_id,
+				content = EXCLUDED.content,
+				parts = EXCLUDED.parts,
+				client_message_id = EXCLUDED.client_message_id,
+				seen_up_to_seq = EXCLUDED.seen_up_to_seq,
+				held_from_seq = EXCLUDED.held_from_seq,
+				held_to_seq = EXCLUDED.held_to_seq,
+				shown_from_seq = EXCLUDED.shown_from_seq,
+				shown_to_seq = EXCLUDED.shown_to_seq,
+				decision_fact_id = EXCLUDED.decision_fact_id,
+			updated_at = now()`, append(args, source.inboxEventID)...)
+		return err
+	}
 	_, err = exec.Exec(ctx, `
 		INSERT INTO agent_transport_draft (
-			workspace_id, agent_id, target, channel_id, thread_root_message_id,
+			workspace_id, agent_id, task_id, target, channel_id, thread_root_message_id,
 			content, parts, client_message_id,
-			seen_up_to_seq, held_from_seq, held_to_seq, shown_from_seq, shown_to_seq
+			seen_up_to_seq, held_from_seq, held_to_seq, shown_from_seq, shown_to_seq, decision_fact_id
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13)
-		ON CONFLICT (workspace_id, agent_id, target)
+		VALUES ($1, $2, $15, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14)
+		ON CONFLICT (workspace_id, agent_id, task_id, target) WHERE task_id IS NOT NULL
 		DO UPDATE SET
 			channel_id = EXCLUDED.channel_id,
 			thread_root_message_id = EXCLUDED.thread_root_message_id,
@@ -1537,10 +1616,8 @@ func (h *Handler) saveAgentTransportDraftWithExec(ctx context.Context, exec dbEx
 			held_to_seq = EXCLUDED.held_to_seq,
 			shown_from_seq = EXCLUDED.shown_from_seq,
 			shown_to_seq = EXCLUDED.shown_to_seq,
-			updated_at = now()`,
-		source.origin.workspaceID, source.origin.agentID, strings.TrimSpace(target.raw), parseUUID(target.channel.ID), nullableUUID(target.threadRootMessageID),
-		content, partsJSON, clientMessageID,
-		decision.SeenUpToSeq, decision.SeenUpToSeq+1, decision.LatestSeq, firstChannelMessageSeq(decision.Messages), maxChannelMessageSeq(decision.Messages))
+			decision_fact_id = EXCLUDED.decision_fact_id,
+		updated_at = now()`, append(args, source.task.ID)...)
 	return err
 }
 
@@ -1552,10 +1629,11 @@ func (h *Handler) loadAgentTransportDraft(ctx context.Context, source agentTrans
 	var draft agentTransportDraft
 	var partsRaw []byte
 	err := h.DB.QueryRow(ctx, `
-		SELECT id, target, channel_id, thread_root_message_id, content, parts, client_message_id, seen_up_to_seq, held_from_seq, held_to_seq
+		SELECT id, target, channel_id, thread_root_message_id, content, parts, client_message_id, seen_up_to_seq, held_from_seq, held_to_seq, COALESCE(decision_fact_id, '')
 		FROM agent_transport_draft
-		WHERE workspace_id = $1 AND agent_id = $2 AND target = $3`,
-		source.origin.workspaceID, source.origin.agentID, target).Scan(&draft.ID, &draft.Target, &draft.ChannelID, &draft.ThreadRootID, &draft.Content, &partsRaw, &draft.ClientMessageID, &draft.SeenUpToSeq, &draft.HeldFromSeq, &draft.HeldToSeq)
+		WHERE workspace_id = $1 AND agent_id = $2 AND target = $3
+		  AND (($4::uuid IS NOT NULL AND task_id = $4) OR ($5::uuid IS NOT NULL AND inbox_event_id = $5))`,
+		source.origin.workspaceID, source.origin.agentID, target, nullableTaskIDForTransportSource(source), nullableInboxEventIDForTransportSource(source)).Scan(&draft.ID, &draft.Target, &draft.ChannelID, &draft.ThreadRootID, &draft.Content, &partsRaw, &draft.ClientMessageID, &draft.SeenUpToSeq, &draft.HeldFromSeq, &draft.HeldToSeq, &draft.DecisionFactID)
 	if err != nil {
 		if errorsIsNoRows(err) {
 			return agentTransportDraft{}, false, nil
@@ -1573,8 +1651,23 @@ func (h *Handler) loadAgentTransportDraft(ctx context.Context, source agentTrans
 func (h *Handler) deleteAgentTransportDraft(ctx context.Context, source agentTransportSource, target string) {
 	_, _ = h.DB.Exec(ctx, `
 		DELETE FROM agent_transport_draft
-		WHERE workspace_id = $1 AND agent_id = $2 AND target = $3`,
-		source.origin.workspaceID, source.origin.agentID, strings.TrimSpace(target))
+		WHERE workspace_id = $1 AND agent_id = $2 AND target = $3
+		  AND (($4::uuid IS NOT NULL AND task_id = $4) OR ($5::uuid IS NOT NULL AND inbox_event_id = $5))`,
+		source.origin.workspaceID, source.origin.agentID, strings.TrimSpace(target), nullableTaskIDForTransportSource(source), nullableInboxEventIDForTransportSource(source))
+}
+
+func (h *Handler) replaceAgentTransportDraft(ctx context.Context, source agentTransportSource, target, content string, parts []protocol.MessagePart, clientMessageID string) error {
+	partsJSON, err := json.Marshal(parts)
+	if err != nil {
+		return err
+	}
+	_, err = h.DB.Exec(ctx, `
+		UPDATE agent_transport_draft
+		SET content = $6, parts = $7::jsonb, client_message_id = $8, updated_at = now()
+		WHERE workspace_id = $1 AND agent_id = $2 AND target = $3
+		  AND (($4::uuid IS NOT NULL AND task_id = $4) OR ($5::uuid IS NOT NULL AND inbox_event_id = $5))`,
+		source.origin.workspaceID, source.origin.agentID, strings.TrimSpace(target), nullableTaskIDForTransportSource(source), nullableInboxEventIDForTransportSource(source), content, partsJSON, clientMessageID)
+	return err
 }
 
 func agentTransportFreshnessProducerID(source agentTransportSource, target agentTransportTarget, seenUpToSeq, latestSeq int64) string {

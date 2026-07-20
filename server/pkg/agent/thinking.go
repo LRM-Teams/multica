@@ -104,6 +104,11 @@ var claudeEffortLabel = map[string]string{
 var claudeModelEffortAllow = map[string]map[string]bool{
 	// Opus is the only model that publicly supports xhigh; the help
 	// list still includes it for Sonnet / Haiku so we filter here.
+	// The stable aliases resolve to those families, so keep their effort
+	// contract explicit rather than treating an alias as an unknown model.
+	"opus":                      {"low": true, "medium": true, "high": true, "xhigh": true, "max": true},
+	"sonnet":                    {"low": true, "medium": true, "high": true, "max": true},
+	"haiku":                     {"low": true, "medium": true, "high": true},
 	"claude-opus-4-8":           {"low": true, "medium": true, "high": true, "xhigh": true, "max": true},
 	"claude-opus-4-7":           {"low": true, "medium": true, "high": true, "xhigh": true, "max": true},
 	"claude-opus-4-6":           {"low": true, "medium": true, "high": true, "xhigh": true, "max": true},
@@ -150,7 +155,7 @@ func loadClaudeThinkingByModel(ctx context.Context, executablePath string) map[s
 
 	superset := claudeEffortSuperset(ctx, executablePath)
 	result := map[string]*ModelThinking{}
-	for _, m := range claudeStaticModels() {
+	for _, m := range claudeModelsWithCompatibility() {
 		allow := claudeModelEffortAllow[m.ID]
 		levels := projectClaudeLevels(superset, allow)
 		if len(levels) == 0 {
@@ -519,6 +524,11 @@ func ValidateThinkingLevel(ctx context.Context, providerType, executablePath, mo
 	models, err := ListModels(ctx, providerType, executablePath)
 	if err != nil {
 		return false, err
+	}
+	if providerType == "claude" {
+		compatibility := claudeCompatibilityModels()
+		annotateClaudeThinking(ctx, compatibility, executablePath)
+		models = append(models, compatibility...)
 	}
 	target := model
 	if target == "" {

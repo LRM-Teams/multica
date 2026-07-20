@@ -57,7 +57,7 @@ func TestListModelsCopilotFallsBackToStatic(t *testing.T) {
 	}
 }
 
-func TestClaudeStaticModelsExposesFable5(t *testing.T) {
+func TestClaudeStaticModelsExposeOnlyCurrentCleanLineup(t *testing.T) {
 	models := claudeStaticModels()
 	ids := map[string]Model{}
 	defaults := 0
@@ -68,15 +68,30 @@ func TestClaudeStaticModelsExposesFable5(t *testing.T) {
 		}
 	}
 
-	fable, ok := ids["claude-fable-5"]
-	if !ok {
-		t.Fatalf("missing Claude Fable 5 in: %+v", models)
+	for _, want := range []string{"sonnet", "opus", "haiku"} {
+		if _, ok := ids[want]; !ok {
+			t.Errorf("missing Claude model %q in: %+v", want, models)
+		}
 	}
-	if fable.Label != "Claude Fable 5" || fable.Provider != "anthropic" || fable.Default {
-		t.Errorf("unexpected Fable entry: %+v", fable)
+	for id, wantLabel := range map[string]string{
+		"sonnet": "Sonnet 5",
+		"opus":   "Opus",
+		"haiku":  "Haiku",
+	} {
+		if got := ids[id].Label; got != wantLabel {
+			t.Errorf("visible label for %q = %q, want %q", id, got, wantLabel)
+		}
 	}
-	if defaults != 1 || !ids["claude-sonnet-4-6"].Default {
-		t.Errorf("expected Sonnet 4.6 to remain the sole default, got defaults=%d models=%+v", defaults, models)
+	if len(models) != 3 {
+		t.Fatalf("visible Claude lineup = %+v, want exactly the three official aliases", models)
+	}
+	if defaults != 1 || !ids["sonnet"].Default {
+		t.Errorf("expected Sonnet to remain the sole default, got defaults=%d models=%+v", defaults, models)
+	}
+	for _, model := range models {
+		if strings.Contains(strings.ToLower(model.Label), "latest") || strings.Contains(strings.ToLower(model.Label), "pinned") {
+			t.Errorf("visible label leaks implementation state: %+v", model)
+		}
 	}
 }
 

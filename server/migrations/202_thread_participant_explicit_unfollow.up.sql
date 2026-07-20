@@ -32,3 +32,19 @@ WHERE participant.member_type = 'agent'
         AND audit.agent_id = participant.member_id
     )
   );
+
+-- Since channel threads were introduced, every human state row was created
+-- with followed_at set. The only writer that clears it is the explicit
+-- Unfollow endpoint; mark-read also followed the thread before this migration.
+-- Environment copies preserve the source state and therefore preserve that
+-- evidence. This makes the legacy human NULL uniquely backfillable here,
+-- before mark-read becomes a non-following operation in the new server code.
+UPDATE thread_participant participant
+SET wake_state = 'unfollowed', updated_at = now()
+FROM channel_thread_state state
+WHERE participant.member_type = 'user'
+  AND participant.root_message_id = state.root_message_id
+  AND participant.member_id = state.user_id
+  AND participant.followed_at IS NULL
+  AND state.followed_at IS NULL
+  AND participant.wake_state IN ('active', 'no_wake');

@@ -125,6 +125,12 @@ func TestMigration202SeparatesExplicitUnfollowFromDirectedNoWake(t *testing.T) {
 		"audit.action = 'thread_unfollow'",
 		"audit.channel_message_id = participant.root_message_id",
 		"audit.agent_id = participant.member_id",
+		"FROM channel_thread_state state",
+		"participant.member_type = 'user'",
+		"participant.member_id = state.user_id",
+		"participant.followed_at IS NULL",
+		"state.followed_at IS NULL",
+		"participant.wake_state IN ('active', 'no_wake')",
 	} {
 		if !strings.Contains(contents, required) {
 			t.Errorf("migration 202 up missing %q", required)

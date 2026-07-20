@@ -169,7 +169,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		EvolutionReviewer:                     evolutionReviewer,
 		EvolutionReviewEnabled:                evolutionReviewEnabled,
 	}
-	applyChannelAttentionConfigFromEnv(&signupConfig)
 	h := handler.New(queries, pool, hub, bus, emailSvc, store, cfSigner, analyticsClient, signupConfig, daemonHub)
 	h.SandboxHub = sandboxHub
 	handler.ConfigureEphemeralSandboxManager(h)
@@ -1244,74 +1243,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	})
 
 	return r, h
-}
-
-func applyChannelAttentionConfigFromEnv(cfg *handler.Config) {
-	if cfg == nil {
-		return
-	}
-	const (
-		defaultDebounce       = 3 * time.Second
-		minDebounce           = 2 * time.Second
-		maxDebounce           = 5 * time.Second
-		defaultMaxWait        = 8 * time.Second
-		maxOutputTokens       = 96
-		maxContextMessages    = 8
-		maxMemoryBytes        = 4 * 1024
-		maxRuntimeConcurrency = 16
-	)
-	cfg.ChannelUnmentionedMode = channelUnmentionedModeFromEnv()
-	// Default off: unmentioned group messages use legacy_full wake-all so each
-	// agent can self-judge whether to reply (Andong ambient contract). Opt into
-	// attention rounds explicitly via CHANNEL_ATTENTION_ENABLED=true.
-	cfg.ChannelAttentionEnabled = envBoolDefault("CHANNEL_ATTENTION_ENABLED", false)
-	cfg.ChannelAttentionDebounce = envDuration("CHANNEL_ATTENTION_DEBOUNCE", defaultDebounce)
-	if cfg.ChannelAttentionDebounce < minDebounce {
-		cfg.ChannelAttentionDebounce = minDebounce
-	} else if cfg.ChannelAttentionDebounce > maxDebounce {
-		cfg.ChannelAttentionDebounce = maxDebounce
-	}
-	cfg.ChannelAttentionMaxWait = envDuration("CHANNEL_ATTENTION_MAX_WAIT", defaultMaxWait)
-	if cfg.ChannelAttentionMaxWait <= cfg.ChannelAttentionDebounce || cfg.ChannelAttentionMaxWait > defaultMaxWait {
-		cfg.ChannelAttentionMaxWait = defaultMaxWait
-	}
-	cfg.ChannelAttentionContextMessages = envPositiveInt("CHANNEL_ATTENTION_CONTEXT_MESSAGES", 8)
-	if cfg.ChannelAttentionContextMessages > maxContextMessages {
-		cfg.ChannelAttentionContextMessages = maxContextMessages
-	}
-	cfg.ChannelAttentionMemoryBudgetBytes = envPositiveBytes("CHANNEL_ATTENTION_MEMORY_BUDGET", 4*1024)
-	if cfg.ChannelAttentionMemoryBudgetBytes > maxMemoryBytes {
-		cfg.ChannelAttentionMemoryBudgetBytes = maxMemoryBytes
-	}
-	cfg.ChannelAttentionMaxOutputTokens = envPositiveInt("CHANNEL_ATTENTION_MAX_OUTPUT_TOKENS", maxOutputTokens)
-	if cfg.ChannelAttentionMaxOutputTokens > maxOutputTokens {
-		cfg.ChannelAttentionMaxOutputTokens = maxOutputTokens
-	}
-	if envBoolDefault("CHANNEL_ATTENTION_TOOLS_ENABLED", false) {
-		slog.Warn("CHANNEL_ATTENTION_TOOLS_ENABLED cannot override restricted probe isolation; tools remain disabled")
-	}
-	cfg.ChannelAttentionToolsEnabled = false
-	cfg.ChannelAttentionMaxConcurrentPerRuntime = envPositiveInt("CHANNEL_ATTENTION_MAX_CONCURRENT_PER_RUNTIME", 16)
-	if cfg.ChannelAttentionMaxConcurrentPerRuntime > maxRuntimeConcurrency {
-		cfg.ChannelAttentionMaxConcurrentPerRuntime = maxRuntimeConcurrency
-	}
-}
-
-func channelUnmentionedModeFromEnv() string {
-	// Default to Andong's wake-all ambient path. Attention rounds remain available
-	// as an explicit opt-in (CHANNEL_UNMENTIONED_MODE=attention_round).
-	const defaultMode = "legacy_full"
-	raw := strings.ToLower(strings.TrimSpace(os.Getenv("CHANNEL_UNMENTIONED_MODE")))
-	if raw == "" {
-		return defaultMode
-	}
-	switch raw {
-	case "attention_round", "legacy_full":
-		return raw
-	default:
-		slog.Warn("invalid env var, using default", "name", "CHANNEL_UNMENTIONED_MODE", "value", raw, "default", defaultMode)
-		return defaultMode
-	}
 }
 
 // buildLarkConnectorFactory wires the real WS long-conn connector

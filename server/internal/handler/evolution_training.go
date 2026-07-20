@@ -100,60 +100,6 @@ type evolutionModelEvalRunRequest struct {
 	Metrics       map[string]any `json:"metrics"`
 }
 
-type attentionTrainingExampleInput struct {
-	workspaceID   pgtype.UUID
-	channelID     pgtype.UUID
-	messageID     pgtype.UUID
-	agentID       pgtype.UUID
-	inboxEventID  pgtype.UUID
-	participantID pgtype.UUID
-	roundID       pgtype.UUID
-	executionID   pgtype.UUID
-	decision      channelAttentionDecision
-	inputTokens   int64
-	outputTokens  int64
-	latencyMS     int64
-}
-
-func recordAttentionTrainingExampleExec(ctx context.Context, exec dbExecutor, in attentionTrainingExampleInput) error {
-	input, err := json.Marshal(map[string]any{
-		"round_id":       uuidToString(in.roundID),
-		"inbox_event_id": uuidToString(in.inboxEventID),
-		"execution_id":   uuidToString(in.executionID),
-		"seen_up_to_seq": in.decision.SeenUpToSeq,
-	})
-	if err != nil {
-		return err
-	}
-	label, err := json.Marshal(map[string]any{
-		"decision":      in.decision.Decision,
-		"confidence":    in.decision.Confidence,
-		"value_type":    in.decision.ValueType,
-		"summary":       in.decision.Summary,
-		"evidence_refs": in.decision.EvidenceRefs,
-		"model_version": in.decision.ModelVersion,
-		"input_tokens":  in.inputTokens,
-		"output_tokens": in.outputTokens,
-		"latency_ms":    in.latencyMS,
-	})
-	if err != nil {
-		return err
-	}
-	_, err = exec.Exec(ctx, `
-		INSERT INTO evolution_training_example (
-		  workspace_id, model_kind, source_kind, source_id, agent_id, channel_id, message_id,
-		  input, teacher_label, status
-		) VALUES ($1, 'attention_student', 'attention_participant', $2, $3, $4, $5, $6::jsonb, $7::jsonb, 'candidate')
-		ON CONFLICT (workspace_id, model_kind, source_kind, source_id) DO UPDATE
-		SET input = EXCLUDED.input,
-		    teacher_label = EXCLUDED.teacher_label,
-		    agent_id = EXCLUDED.agent_id,
-		    channel_id = EXCLUDED.channel_id,
-		    message_id = EXCLUDED.message_id,
-		    updated_at = now()`, in.workspaceID, in.participantID, nullableUUID(in.agentID), nullableUUID(in.channelID), nullableUUID(in.messageID), input, label)
-	return err
-}
-
 func (h *Handler) ListEvolutionTrainingExamples(w http.ResponseWriter, r *http.Request) {
 	workspaceID, wsUUID, ok := evolutionTrainingWorkspace(w, r)
 	if !ok {

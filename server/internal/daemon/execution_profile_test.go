@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -27,7 +26,7 @@ func TestTaskExecutionProfileRejectsUnknown(t *testing.T) {
 }
 
 func TestRestrictedExecutionProfilesFailClosedOutsidePi(t *testing.T) {
-	for _, profile := range []string{executionProfileAttentionProbe, executionProfileProtocolTurn} {
+	for _, profile := range []string{executionProfileProtocolTurn} {
 		if err := validateExecutionProfileProvider(profile, "pi"); err != nil {
 			t.Fatalf("Pi rejected for %q: %v", profile, err)
 		}
@@ -39,11 +38,11 @@ func TestRestrictedExecutionProfilesFailClosedOutsidePi(t *testing.T) {
 
 func TestRestrictedExecutionConfigRejectsUnsafeBounds(t *testing.T) {
 	unsafe := []*TaskExecutionConfig{
-		{ExecutionProfile: executionProfileAttentionProbe, ToolsEnabled: true},
-		{ExecutionProfile: executionProfileAttentionProbe, ContextMessages: restrictedContextMessages + 1},
-		{ExecutionProfile: executionProfileAttentionProbe, MemoryBudgetBytes: restrictedMemoryBytes + 1},
-		{ExecutionProfile: executionProfileAttentionProbe, MaxOutputTokens: restrictedExecutionMaxOutputTokens + 1},
-		{ExecutionProfile: executionProfileAttentionProbe, MaxOutputTokens: -1},
+		{ExecutionProfile: executionProfileProtocolTurn, ToolsEnabled: true},
+		{ExecutionProfile: executionProfileProtocolTurn, ContextMessages: restrictedContextMessages + 1},
+		{ExecutionProfile: executionProfileProtocolTurn, MemoryBudgetBytes: restrictedMemoryBytes + 1},
+		{ExecutionProfile: executionProfileProtocolTurn, MaxOutputTokens: restrictedExecutionMaxOutputTokens + 1},
+		{ExecutionProfile: executionProfileProtocolTurn, MaxOutputTokens: -1},
 	}
 	for _, config := range unsafe {
 		if _, err := taskExecutionProfile(Task{ExecutionConfig: config}); err == nil {
@@ -60,7 +59,7 @@ func TestRestrictedExecutionConfigAppliesTighterBounds(t *testing.T) {
 			{Name: "two", Content: strings.Repeat("b", 32)},
 		}},
 		ExecutionConfig: &TaskExecutionConfig{
-			ExecutionProfile:  executionProfileAttentionProbe,
+			ExecutionProfile:  executionProfileProtocolTurn,
 			ContextMessages:   2,
 			MemoryBudgetBytes: 24,
 			MaxOutputTokens:   48,
@@ -95,11 +94,11 @@ func TestRestrictedPiExecutionNeverReusesPersistentChatRuntime(t *testing.T) {
 	restricted := Task{
 		ChatSessionID: "chat-1",
 		ExecutionConfig: &TaskExecutionConfig{
-			ExecutionProfile: executionProfileAttentionProbe,
+			ExecutionProfile: executionProfileProtocolTurn,
 		},
 	}
 	if usesPersistentPiChatRuntime("pi", restricted) {
-		t.Fatal("attention probe reused the main persistent Pi chat runtime")
+		t.Fatal("protocol turn reused the main persistent Pi chat runtime")
 	}
 }
 
@@ -129,7 +128,7 @@ func TestRestrictTaskForExecutionProfileRemovesFullExecutionSurfaces(t *testing.
 		ChatMessage:             strings.Repeat("问", restrictedMessageBytes),
 	}
 
-	got := restrictTaskForExecutionProfile(task, executionProfileAttentionProbe)
+	got := restrictTaskForExecutionProfile(task, executionProfileProtocolTurn)
 	if len(got.Repos) != 0 || len(got.ProjectResources) != 0 || len(got.ChatMessageAttachments) != 0 {
 		t.Fatalf("restricted task retained repository/resource/attachment surfaces: %#v", got)
 	}
@@ -183,18 +182,18 @@ func TestBuildPromptUsesRestrictedProfileContract(t *testing.T) {
 			Memories:     []MemoryData{{Name: "Prior incident", Content: "Connection pools can stall after config drift."}},
 		},
 		ExecutionConfig: &TaskExecutionConfig{
-			ExecutionProfile: executionProfileAttentionProbe,
+			ExecutionProfile: executionProfileProtocolTurn,
 		},
 	}
 	prompt := BuildPrompt(task, "pi", "/private/agent/root")
-	for _, want := range []string{"SILENT|ANSWER|CONTRIBUTE|COORDINATE", "The login page is slow", "Own performance investigations", "Prior incident", "model_version", "seen_up_to_seq"} {
+	for _, want := range []string{"Execute one bounded collaboration protocol turn"} {
 		if !strings.Contains(prompt, want) {
-			t.Fatalf("attention prompt missing %q:\n%s", want, prompt)
+			t.Fatalf("protocol turn prompt missing %q:\n%s", want, prompt)
 		}
 	}
 	for _, forbidden := range []string{"multica attachment view", "/private/agent/root", "Respond to their message"} {
 		if strings.Contains(prompt, forbidden) {
-			t.Fatalf("attention prompt leaked full chat instruction %q:\n%s", forbidden, prompt)
+			t.Fatalf("protocol turn prompt leaked full chat instruction %q:\n%s", forbidden, prompt)
 		}
 	}
 }
@@ -202,11 +201,11 @@ func TestBuildPromptUsesRestrictedProfileContract(t *testing.T) {
 func TestRestrictedExecutionResultCannotPublishOrReplaceChatSession(t *testing.T) {
 	result := restrictResultForExecutionProfile(TaskResult{
 		Status:     "completed",
-		Comment:    `{"decision":"ANSWER"}`,
+		Comment:    `{"vote":"KEEP"}`,
 		BranchName: "probe-branch",
 		SessionID:  "/tmp/probe.jsonl",
 		WorkDir:    "/tmp/probe-workdir",
-	}, executionProfileAttentionProbe)
+	}, executionProfileProtocolTurn)
 	if result.Comment != "" || result.BranchName != "" || result.SessionID != "" || result.WorkDir != "" {
 		t.Fatalf("restricted result retained public or persistent state: %#v", result)
 	}
@@ -219,41 +218,15 @@ func TestRestrictedExecutionResultCannotPublishOrReplaceChatSession(t *testing.T
 
 	failed := restrictResultForExecutionProfile(TaskResult{
 		Status:    "blocked",
-		Comment:   "invalid probe JSON",
+		Comment:   "invalid protocol turn JSON",
 		SessionID: "/tmp/probe.jsonl",
 		WorkDir:   "/tmp/work",
-	}, executionProfileAttentionProbe)
-	if failed.Status != "blocked" || failed.Comment != "invalid probe JSON" {
+	}, executionProfileProtocolTurn)
+	if failed.Status != "blocked" || failed.Comment != "invalid protocol turn JSON" {
 		t.Fatalf("restricted failure lost internal diagnosis: %#v", failed)
 	}
 	if failed.SessionID != "" || failed.WorkDir != "" || failed.OutputSuppressedReason != "restricted_execution_profile" {
 		t.Fatalf("restricted failure retained public/session state: %#v", failed)
-	}
-}
-
-func TestAttentionProbeOutputRequiresStrictSchema(t *testing.T) {
-	valid := `{"decision":"ANSWER","confidence":0.92,"value_type":"direct_answer","summary":"I can own this","evidence_refs":["memory:incident"],"model_version":"provider/model","seen_up_to_seq":42}`
-	parsed, err := parseRestrictedExecutionOutput(executionProfileAttentionProbe, valid)
-	if err != nil {
-		t.Fatalf("valid attention output rejected: %v", err)
-	}
-	if !strings.Contains(string(parsed), `"decision":"ANSWER"`) {
-		t.Fatalf("canonical output = %s", parsed)
-	}
-
-	invalid := []string{
-		`{"decision":"ANSWER","confidence":0.92,"value_type":"direct_answer","summary":"","evidence_refs":[],"model_version":"m"}`,
-		`{"decision":"MAYBE","confidence":0.92,"value_type":"direct_answer","summary":"","evidence_refs":[],"model_version":"m","seen_up_to_seq":1}`,
-		`{"decision":"ANSWER","confidence":1.2,"value_type":"direct_answer","summary":"","evidence_refs":[],"model_version":"m","seen_up_to_seq":1}`,
-		`{"decision":"ANSWER","confidence":null,"value_type":"direct_answer","summary":"","evidence_refs":[],"model_version":"m","seen_up_to_seq":1}`,
-		`{"decision":"ANSWER","confidence":0.9,"value_type":"direct_answer","summary":"","evidence_refs":[null],"model_version":"m","seen_up_to_seq":1}`,
-		`{"decision":"ANSWER","confidence":0.9,"value_type":"direct_answer","summary":"","evidence_refs":[],"model_version":"m","seen_up_to_seq":1,"extra":true}`,
-		valid + " trailing prose",
-	}
-	for _, output := range invalid {
-		if _, err := parseRestrictedExecutionOutput(executionProfileAttentionProbe, output); err == nil {
-			t.Fatalf("invalid attention output accepted: %s", output)
-		}
 	}
 }
 
@@ -269,29 +242,11 @@ func TestProtocolTurnOutputRequiresOneNonEmptyJSONObject(t *testing.T) {
 }
 
 func TestRestrictedOutputTokenLimit(t *testing.T) {
-	if got := restrictedOutputTokenLimit(executionProfileAttentionProbe); got != 96 {
-		t.Fatalf("attention output limit = %d", got)
-	}
 	if got := restrictedOutputTokenLimit(executionProfileProtocolTurn); got != 96 {
 		t.Fatalf("protocol output limit = %d", got)
 	}
 	if got := restrictedOutputTokenLimit(executionProfileFull); got != 0 {
 		t.Fatalf("full output limit = %d", got)
-	}
-}
-
-func TestAttentionProbeMetadataUsesRuntimeFacts(t *testing.T) {
-	raw := json.RawMessage(`{"decision":"ANSWER","confidence":0.8,"value_type":"direct_answer","summary":"","evidence_refs":[],"model_version":"model-claimed","seen_up_to_seq":1}`)
-	bound, err := bindRestrictedOutputMetadata(executionProfileAttentionProbe, raw, "configured-model", []TaskUsageEntry{{Model: "actual-model"}}, Task{InboxEvent: &AgentInboxLease{SeqTo: 99}})
-	if err != nil {
-		t.Fatalf("bindRestrictedOutputMetadata: %v", err)
-	}
-	var got attentionProbeOutput
-	if err := json.Unmarshal(bound, &got); err != nil {
-		t.Fatalf("unmarshal bound output: %v", err)
-	}
-	if got.ModelVersion != "actual-model" || got.SeenUpToSeq != 99 {
-		t.Fatalf("bound metadata = model:%q seq:%d", got.ModelVersion, got.SeenUpToSeq)
 	}
 }
 

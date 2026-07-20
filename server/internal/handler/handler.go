@@ -102,26 +102,8 @@ type Config struct {
 	ChannelAmbientGateMaxRecentPerAgent   int
 	ChannelAmbientGateMaxRecentPerChannel int
 	ChannelAmbientGateMaxRecentPerRuntime int
-	// ChannelUnmentionedMode controls how human-authored channel messages with
-	// no explicit Agent mention are dispatched. "legacy_full" is the default
-	// (Andong wake-all ambient; agents self-judge replies). "attention_round"
-	// is an explicit opt-in for bounded Attention Probes.
-	ChannelUnmentionedMode string
-	// ChannelAttentionEnabled is the independent kill switch for Attention
-	// Rounds. Defaults off; set true together with ChannelUnmentionedMode=
-	// attention_round to enable probes. The remaining fields bound probe
-	// collection and restricted execution; budgets are bytes/tokens, never
-	// characters or model defaults.
-	ChannelAttentionEnabled                 bool
-	ChannelAttentionDebounce                time.Duration
-	ChannelAttentionMaxWait                 time.Duration
-	ChannelAttentionContextMessages         int
-	ChannelAttentionMemoryBudgetBytes       int
-	ChannelAttentionMaxOutputTokens         int
-	ChannelAttentionToolsEnabled            bool
-	ChannelAttentionMaxConcurrentPerRuntime int
-	EvolutionReviewer                       service.EvolutionReviewer
-	EvolutionReviewEnabled                  bool
+	EvolutionReviewer                     service.EvolutionReviewer
+	EvolutionReviewEnabled                bool
 }
 
 type cloudRuntimeProxy interface {

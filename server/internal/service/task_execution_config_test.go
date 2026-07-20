@@ -44,7 +44,7 @@ func TestTaskExecutionConfigHandlesNullContext(t *testing.T) {
 }
 
 func TestTaskExecutionConfigRestrictedProfilesRoundTrip(t *testing.T) {
-	for _, profile := range []string{ExecutionProfileAttentionProbe, ExecutionProfileProtocolTurn} {
+	for _, profile := range []string{ExecutionProfileProtocolTurn} {
 		contextJSON, err := WithTaskExecutionProfile(nil, "queued-model", "low", profile)
 		if err != nil {
 			t.Fatalf("WithTaskExecutionProfile(%q): %v", profile, err)
@@ -76,10 +76,10 @@ func TestTaskExecutionConfigRestrictedProfilesRoundTrip(t *testing.T) {
 	}
 }
 
-func TestTaskExecutionConfigParsesAttentionRuntimeBounds(t *testing.T) {
-	config, ok := TaskExecutionConfigFromContext([]byte(`{"execution_config":{"model":"m","thinking_level":"low","execution_profile":"attention_probe","context_messages":4,"memory_budget_bytes":2048,"max_output_tokens":48,"tools_enabled":false,"snapshotted":true}}`))
+func TestTaskExecutionConfigParsesProtocolTurnRuntimeBounds(t *testing.T) {
+	config, ok := TaskExecutionConfigFromContext([]byte(`{"execution_config":{"model":"m","thinking_level":"low","execution_profile":"protocol_turn","context_messages":4,"memory_budget_bytes":2048,"max_output_tokens":48,"tools_enabled":false,"snapshotted":true}}`))
 	if !ok {
-		t.Fatal("attention runtime config was not parsed")
+		t.Fatal("protocol turn runtime config was not parsed")
 	}
 	if config.ContextMessages != 4 || config.MemoryBudgetBytes != 2048 || config.MaxOutputTokens != 48 || config.ToolsEnabled {
 		t.Fatalf("config = %#v", config)

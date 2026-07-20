@@ -9,7 +9,7 @@ import (
 )
 
 func TestSequentialCollaborationSessionCreatesSingleTurnGrant(t *testing.T) {
-	fixture := newChannelAttentionFixture(t, []attentionRuntimeSpec{{}, {}, {}})
+	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}, {}, {}})
 	trigger := fixture.insertMessage(t, "user", testUserID, "Agents, count to two in order", nil)
 	result, err := fixture.handler.createCollaborationSession(context.Background(), collaborationSessionCreateParams{
 		WorkspaceID:     parseUUID(testWorkspaceID),
@@ -48,7 +48,7 @@ func TestSequentialCollaborationSessionCreatesSingleTurnGrant(t *testing.T) {
 }
 
 func TestSequentialCollaborationTurnAdvancesToNextAgent(t *testing.T) {
-	fixture := newChannelAttentionFixture(t, []attentionRuntimeSpec{{}, {}})
+	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}, {}})
 	trigger := fixture.insertMessage(t, "user", testUserID, "Count to two", nil)
 	result, err := fixture.handler.createCollaborationSession(context.Background(), collaborationSessionCreateParams{
 		WorkspaceID:     parseUUID(testWorkspaceID),
@@ -153,7 +153,7 @@ func TestSequentialCollaborationTurnAdvancesToNextAgent(t *testing.T) {
 }
 
 func TestSequentialCollaborationRejectsDuplicateTurnConsumption(t *testing.T) {
-	fixture := newChannelAttentionFixture(t, []attentionRuntimeSpec{{}})
+	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
 	trigger := fixture.insertMessage(t, "user", testUserID, "Count once", nil)
 	result, err := fixture.handler.createCollaborationSession(context.Background(), collaborationSessionCreateParams{
 		WorkspaceID:         parseUUID(testWorkspaceID),
@@ -197,7 +197,7 @@ func TestSequentialCollaborationRejectsDuplicateTurnConsumption(t *testing.T) {
 }
 
 func TestSequentialCollaborationRejectsStaleSessionVersion(t *testing.T) {
-	fixture := newChannelAttentionFixture(t, []attentionRuntimeSpec{{}})
+	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
 	trigger := fixture.insertMessage(t, "user", testUserID, "Count once", nil)
 	result, err := fixture.handler.createCollaborationSession(context.Background(), collaborationSessionCreateParams{
 		WorkspaceID:         parseUUID(testWorkspaceID),
@@ -232,7 +232,7 @@ func TestSequentialCollaborationRejectsStaleSessionVersion(t *testing.T) {
 }
 
 func TestCollaborationTurnTimeoutSuspendsSession(t *testing.T) {
-	fixture := newChannelAttentionFixture(t, []attentionRuntimeSpec{{}})
+	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
 	trigger := fixture.insertMessage(t, "user", testUserID, "Count slowly", nil)
 	result, err := fixture.handler.createCollaborationSession(context.Background(), collaborationSessionCreateParams{
 		WorkspaceID:         parseUUID(testWorkspaceID),
@@ -265,7 +265,7 @@ func TestCollaborationTurnTimeoutSuspendsSession(t *testing.T) {
 }
 
 func TestCollaborationTurnRejectsWrongAgentEvent(t *testing.T) {
-	fixture := newChannelAttentionFixture(t, []attentionRuntimeSpec{{}, {}})
+	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}, {}})
 	trigger := fixture.insertMessage(t, "user", testUserID, "Only the granted agent may act", nil)
 	result, err := fixture.handler.createCollaborationSession(context.Background(), collaborationSessionCreateParams{
 		WorkspaceID:         parseUUID(testWorkspaceID),
@@ -298,7 +298,7 @@ func TestCollaborationTurnRejectsWrongAgentEvent(t *testing.T) {
 }
 
 func TestCollaborationSessionBindsIssueOptionally(t *testing.T) {
-	fixture := newChannelAttentionFixture(t, []attentionRuntimeSpec{{}})
+	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
 	trigger := fixture.insertMessage(t, "user", testUserID, "Coordinate this issue", nil)
 	var issueID string
 	if err := testPool.QueryRow(context.Background(), `
@@ -332,7 +332,7 @@ func TestCollaborationSessionBindsIssueOptionally(t *testing.T) {
 }
 
 func TestCollaborationTurnTransportConsumeAuditsAndCompletionAdvances(t *testing.T) {
-	fixture := newChannelAttentionFixture(t, []attentionRuntimeSpec{{}, {}})
+	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}, {}})
 	trigger := fixture.insertMessage(t, "user", testUserID, "Count to two with transport", nil)
 	result, err := fixture.handler.createCollaborationSession(context.Background(), collaborationSessionCreateParams{
 		WorkspaceID:         parseUUID(testWorkspaceID),

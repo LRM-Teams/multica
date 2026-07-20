@@ -289,40 +289,15 @@ func (h *Handler) loadEvolutionTaskEfficiency(r *http.Request, workspaceID strin
 	`, workspaceID, days).Scan(&resp.TaskEfficiency.IssueCount, &resp.TaskEfficiency.AverageDurationSeconds, &resp.TaskEfficiency.AverageInputTokens, &resp.TaskEfficiency.AverageOutputTokens, &resp.TaskEfficiency.AverageCacheReadTokens, &resp.TaskEfficiency.AverageCacheWriteTokens, &resp.TaskEfficiency.AverageEvolvedUnitsUsed, &resp.TaskEfficiency.WithEvolvedUnitsIssueCount, &resp.TaskEfficiency.WithoutEvolvedUnitsIssueCount)
 }
 
+// loadEvolutionCollaborationMetrics reports Collaboration session/turn and
+// policy-feedback metrics. Channel Attention Round metrics were retired
+// alongside the feature and its tables; those response fields remain for API
+// stability but are always zero.
 func (h *Handler) loadEvolutionCollaborationMetrics(r *http.Request, workspaceID string, days int, resp *EvolutionMetricsResponse) error {
 	resp.ModelEvolution.AttentionStudentMode = "off"
 	return h.DB.QueryRow(r.Context(), `
 		WITH bounds AS (
 		  SELECT current_date - (($2::int - 1) * interval '1 day') AS since
-		), rounds AS (
-		  SELECT count(*) AS attention_rounds
-		    FROM channel_attention_round round
-		    CROSS JOIN bounds
-		   WHERE round.workspace_id = $1 AND round.created_at >= bounds.since
-		), participants AS (
-		  SELECT count(*) AS probes,
-		         count(*) FILTER (WHERE participant.decision = 'SILENT') AS silent,
-		         count(*) FILTER (WHERE participant.decision = 'ANSWER') AS answer_claims,
-		         COALESCE(sum(participant.input_tokens + participant.output_tokens), 0) AS attention_tokens
-		    FROM channel_attention_participant participant
-		    JOIN channel_attention_round round ON round.id = participant.round_id
-		    CROSS JOIN bounds
-		   WHERE round.workspace_id = $1 AND participant.created_at >= bounds.since
-		), grants AS (
-		  SELECT count(*) AS full_wakes,
-		         count(*) FILTER (WHERE response_grant.grant_type = 'converged') AS peer_converged,
-		         count(*) FILTER (WHERE response_grant.grant_type = 'manager_fallback') AS manager_fallbacks
-		    FROM channel_attention_response_grant response_grant
-		    JOIN channel_attention_round round ON round.id = response_grant.round_id
-		    CROSS JOIN bounds
-		   WHERE round.workspace_id = $1 AND response_grant.created_at >= bounds.since
-		), offers AS (
-		  SELECT count(*) AS contribution_offers,
-		         count(*) FILTER (WHERE offer.status IN ('merged','escalated')) AS adopted
-		    FROM channel_attention_contribution_offer offer
-		    JOIN channel_attention_round round ON round.id = offer.round_id
-		    CROSS JOIN bounds
-		   WHERE round.workspace_id = $1 AND offer.created_at >= bounds.since
 		), sessions AS (
 		  SELECT count(*) AS collaboration_sessions
 		    FROM collaboration_session session
@@ -362,33 +337,29 @@ func (h *Handler) loadEvolutionCollaborationMetrics(r *http.Request, workspaceID
 		     AND execution.source_kind = 'inbox'
 		)
 		SELECT
-		  COALESCE(rounds.attention_rounds, 0),
-		  COALESCE(rounds.attention_rounds, 0),
-		  COALESCE(participants.probes, 0),
-		  CASE WHEN COALESCE(participants.probes, 0) > 0 THEN participants.silent::float8 / participants.probes ELSE 0 END,
-		  COALESCE(participants.answer_claims, 0),
-		  COALESCE(grants.peer_converged, 0),
-		  COALESCE(grants.manager_fallbacks, 0),
-		  COALESCE(grants.full_wakes, 0) + COALESCE(turns.turn_full_wakes, 0),
-		  CASE WHEN COALESCE(participants.probes, 0) > 0 THEN GREATEST(participants.probes - COALESCE(grants.full_wakes, 0), 0)::float8 / participants.probes ELSE 0 END,
+		  0,
+		  0,
+		  0,
+		  0::float8,
+		  0,
+		  0,
+		  0,
+		  COALESCE(turns.turn_full_wakes, 0),
+		  0::float8,
 		  COALESCE(sessions.collaboration_sessions, 0),
 		  CASE WHEN (COALESCE(turns_consumed.consumed_turns, 0) + COALESCE(audit.blocked_public_sends, 0)) > 0 THEN audit.blocked_public_sends::float8 / (turns_consumed.consumed_turns + audit.blocked_public_sends) ELSE 0 END,
-		  COALESCE(offers.contribution_offers, 0),
-		  CASE WHEN COALESCE(offers.contribution_offers, 0) > 0 THEN offers.adopted::float8 / offers.contribution_offers ELSE 0 END,
+		  0,
+		  0::float8,
 		  0::float8,
 		  COALESCE(audit.blocked_public_sends, 0),
 		  COALESCE(policies.policies_retrieved, 0),
 		  COALESCE(policies.policies_used, 0),
 		  CASE WHEN (COALESCE(policies.policy_success, 0) + COALESCE(policies.policy_failure, 0)) > 0 THEN policies.policy_success::float8 / (policies.policy_success + policies.policy_failure) ELSE 0 END,
-		  COALESCE(participants.attention_tokens, 0),
+		  0,
 		  COALESCE(execution_usage.execution_tokens, 0),
-		  GREATEST(COALESCE(participants.probes, 0) - COALESCE(grants.full_wakes, 0), 0) * 4000,
+		  0,
 		  COALESCE(audit.audit_events, 0)
-		FROM rounds
-		CROSS JOIN participants
-		CROSS JOIN grants
-		CROSS JOIN offers
-		CROSS JOIN sessions
+		FROM sessions
 		CROSS JOIN turns
 		CROSS JOIN turns_consumed
 		CROSS JOIN audit

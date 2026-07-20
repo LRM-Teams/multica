@@ -3168,20 +3168,18 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	authorName := h.channelAuthorName(r.Context(), userID)
 	threadID := uuid.NewString()
-	queueAttention := h.shouldQueueChannelAttention(ch, content, parts)
 	result, err := h.createUserChannelMessageWithIdempotency(r.Context(), channelMessageInsertInput{
-		ChannelID:              channelID,
-		WorkspaceID:            parseUUID(workspaceID),
-		AuthorID:               parseUUID(userID),
-		AuthorName:             authorName,
-		Content:                content,
-		Parts:                  parts,
-		ReplyToMessageID:       replyToMessageID,
-		QuoteMessageID:         quoteMessageID,
-		QuoteSnapshot:          quoteSnapshot,
-		ThreadID:               &threadID,
-		ClientMessageID:        clientMessageID,
-		QueueAttentionDispatch: queueAttention,
+		ChannelID:        channelID,
+		WorkspaceID:      parseUUID(workspaceID),
+		AuthorID:         parseUUID(userID),
+		AuthorName:       authorName,
+		Content:          content,
+		Parts:            parts,
+		ReplyToMessageID: replyToMessageID,
+		QuoteMessageID:   quoteMessageID,
+		QuoteSnapshot:    quoteSnapshot,
+		ThreadID:         &threadID,
+		ClientMessageID:  clientMessageID,
 	}, attachmentIDs)
 	if err != nil {
 		if errors.Is(err, errChannelClientMessageConflict) {
@@ -3194,9 +3192,6 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 	msg := result.Message
 	msg = h.attachSingleChannelMessageDetails(r.Context(), workspaceID, parseUUID(userID), msg)
 	if !result.Created {
-		if queueAttention {
-			h.processExistingChannelAttentionDispatch(r.Context(), msg)
-		}
 		writeJSON(w, http.StatusOK, msg)
 		return
 	}
@@ -3356,12 +3351,6 @@ func (h *Handler) ImportLarkChannelMessage(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "failed to import lark message")
 		return
 	}
-	if h.shouldQueueChannelAttention(ch, content, parts) {
-		if err := enqueueChannelAttentionDispatchTx(r.Context(), tx, parseUUID(msg.ID), parseUUID(workspaceID), parseUUID(ch.ID), parseUUID(userID)); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to queue lark channel attention")
-			return
-		}
-	}
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit lark message import")
 		return
@@ -3432,20 +3421,10 @@ func (h *Handler) dispatchChannelMessageToAgents(ctx context.Context, ch Channel
 		h.recordChannelUnmentionedMessage()
 	}
 	// Unmentioned human messages (including 大家/@all): wake every channel agent
-	// with a silent-capable ambient run and let each agent decide whether to reply.
-	// Attention rounds are opt-in only (CHANNEL_UNMENTIONED_MODE=attention_round).
+	// with a silent-capable ambient run (Andong wake-all) and let each agent
+	// decide whether to reply.
 	if groupCommand {
 		h.dispatchChannelMessageWake(ctx, ch, trigger, initiatorUserID)
-		return
-	}
-	if channelMessageIsHumanAuthored(trigger.Type) && h.channelAttentionModeEnabled() {
-		if h.shouldQueueChannelAttention(ch, trigger.Content, trigger.Parts) {
-			h.ensureChannelAttentionDispatch(ctx, trigger, initiatorUserID)
-		} else if strings.Contains(trigger.Content, "@") {
-			h.dispatchChannelMessageWake(ctx, ch, trigger, initiatorUserID)
-		} else {
-			h.dispatchChannelAmbientDelivery(ctx, ch, trigger)
-		}
 		return
 	}
 	if !channelMessageIsHumanAuthored(trigger.Type) {
@@ -3665,7 +3644,7 @@ func (h *Handler) enqueueChannelAgentPromptWithTx(ctx context.Context, qtx *db.Q
 
 func (h *Handler) enqueueChannelAgentPromptRangeWithTx(ctx context.Context, qtx *db.Queries, exec db.DBTX, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, prompt, reason string, priority int32, seqFrom, seqTo int64) (channelAgentPromptTxResult, error) {
 	if !initiatorUserID.Valid {
-		initiatorUserID = channelAttentionTriggerCreatorID(trigger)
+		initiatorUserID = channelMessageTriggerCreatorID(trigger)
 	}
 	session, binding, handled, err := h.routeEnvDispatchChannelAgent(ctx, qtx, exec, ch.ID, ch.WorkspaceID, agent.ID, initiatorUserID)
 	if err != nil {
@@ -5360,20 +5339,19 @@ func (h *Handler) channelInitiatorForChatSession(ctx context.Context, chatSessio
 }
 
 type channelMessageInsertInput struct {
-	ChannelID              pgtype.UUID
-	WorkspaceID            pgtype.UUID
-	AuthorID               pgtype.UUID
-	AuthorName             string
-	Content                string
-	Parts                  []protocol.MessagePart
-	ReplyToMessageID       pgtype.UUID
-	QuoteMessageID         pgtype.UUID
-	QuoteSnapshot          []byte
-	ThreadRootMessageID    pgtype.UUID
-	ThreadID               *string
-	TriggerDepth           int
-	ClientMessageID        *string
-	QueueAttentionDispatch bool
+	ChannelID           pgtype.UUID
+	WorkspaceID         pgtype.UUID
+	AuthorID            pgtype.UUID
+	AuthorName          string
+	Content             string
+	Parts               []protocol.MessagePart
+	ReplyToMessageID    pgtype.UUID
+	QuoteMessageID      pgtype.UUID
+	QuoteSnapshot       []byte
+	ThreadRootMessageID pgtype.UUID
+	ThreadID            *string
+	TriggerDepth        int
+	ClientMessageID     *string
 }
 
 type channelMessageCreateResult struct {
@@ -5440,12 +5418,6 @@ func (h *Handler) createUserChannelMessageWithIdempotency(ctx context.Context, i
 			ChannelID:        in.ChannelID,
 			Column3:          attachmentIDs,
 		}); err != nil {
-			_ = tx.Rollback(ctx)
-			return channelMessageCreateResult{}, err
-		}
-	}
-	if in.QueueAttentionDispatch {
-		if err := enqueueChannelAttentionDispatchTx(ctx, tx, parseUUID(msg.ID), in.WorkspaceID, in.ChannelID, in.AuthorID); err != nil {
 			_ = tx.Rollback(ctx)
 			return channelMessageCreateResult{}, err
 		}

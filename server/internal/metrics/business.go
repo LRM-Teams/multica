@@ -36,13 +36,8 @@ type BusinessMetrics struct {
 	taskLeaseExpired                       *prometheus.CounterVec
 	channelAmbientGateDecisions            *prometheus.CounterVec
 	channelOutputSuppressed                *prometheus.CounterVec
-	channelAttentionRounds                 *prometheus.CounterVec
-	channelAttentionProbes                 *prometheus.CounterVec
-	channelAttentionProbeTokens            *prometheus.CounterVec
-	channelAttentionProbeLatency           *prometheus.HistogramVec
 	channelFullExecutionWakes              *prometheus.CounterVec
 	channelFullExecutionAmplificationRatio *prometheus.GaugeVec
-	channelAttentionTimeouts               *prometheus.CounterVec
 
 	activeMu    sync.Mutex
 	activeTasks map[string]activeTaskLabels
@@ -167,31 +162,6 @@ func NewBusinessMetrics() *BusinessMetrics {
 			Name:      "suppressed_total",
 			Help:      "Total channel/DM agent task outputs suppressed before becoming visible chat, by reason.",
 		}, metricLabels("multica_channel_output_suppressed_total")),
-		channelAttentionRounds: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: "multica",
-			Subsystem: "channel_attention",
-			Name:      "rounds_total",
-			Help:      "Total channel Attention Rounds by terminal outcome.",
-		}, metricLabels("multica_channel_attention_rounds_total")),
-		channelAttentionProbes: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: "multica",
-			Subsystem: "channel_attention",
-			Name:      "probes_total",
-			Help:      "Total channel attention probes by bounded decision and terminal outcome.",
-		}, metricLabels("multica_channel_attention_probes_total")),
-		channelAttentionProbeTokens: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: "multica",
-			Subsystem: "channel_attention",
-			Name:      "probe_tokens_total",
-			Help:      "Total channel attention probe tokens by input or output kind.",
-		}, metricLabels("multica_channel_attention_probe_tokens_total")),
-		channelAttentionProbeLatency: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Namespace: "multica",
-			Subsystem: "channel_attention",
-			Name:      "probe_latency_seconds",
-			Help:      "Channel attention probe latency in seconds.",
-			Buckets:   []float64{0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 8, 10},
-		}, metricLabels("multica_channel_attention_probe_latency_seconds")),
 		channelFullExecutionWakes: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "multica",
 			Subsystem: "channel",
@@ -204,12 +174,6 @@ func NewBusinessMetrics() *BusinessMetrics {
 			Name:      "full_execution_amplification_ratio",
 			Help:      "Ratio of full-execution wakes to human no-mention channel messages.",
 		}, metricLabels("multica_channel_full_execution_amplification_ratio")),
-		channelAttentionTimeouts: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: "multica",
-			Subsystem: "channel_attention",
-			Name:      "timeouts_total",
-			Help:      "Total channel attention timeouts by bounded reason.",
-		}, metricLabels("multica_channel_attention_timeouts_total")),
 		activeTasks: map[string]activeTaskLabels{},
 		events:      newBusinessEventMetrics(),
 	}
@@ -237,13 +201,8 @@ func (m *BusinessMetrics) Collectors() []prometheus.Collector {
 		m.taskLeaseExpired,
 		m.channelAmbientGateDecisions,
 		m.channelOutputSuppressed,
-		m.channelAttentionRounds,
-		m.channelAttentionProbes,
-		m.channelAttentionProbeTokens,
-		m.channelAttentionProbeLatency,
 		m.channelFullExecutionWakes,
 		m.channelFullExecutionAmplificationRatio,
-		m.channelAttentionTimeouts,
 	}, m.events.collectors()...)
 }
 
@@ -271,37 +230,6 @@ func (m *BusinessMetrics) RecordChannelOutputSuppressed(reason string) {
 	m.channelOutputSuppressed.WithLabelValues(NormalizeChannelOutputSuppressedReason(reason)).Inc()
 }
 
-func (m *BusinessMetrics) RecordChannelAttentionRound(outcome string) {
-	if m == nil {
-		return
-	}
-	m.channelAttentionRounds.WithLabelValues(NormalizeAttentionRoundOutcome(outcome)).Inc()
-}
-
-func (m *BusinessMetrics) RecordChannelAttentionProbe(decision, outcome string) {
-	if m == nil {
-		return
-	}
-	m.channelAttentionProbes.WithLabelValues(
-		NormalizeAttentionDecision(decision),
-		NormalizeAttentionProbeOutcome(outcome),
-	).Inc()
-}
-
-func (m *BusinessMetrics) RecordChannelAttentionProbeTokens(kind string, tokens int64) {
-	if m == nil || tokens <= 0 {
-		return
-	}
-	m.channelAttentionProbeTokens.WithLabelValues(NormalizeAttentionProbeTokenKind(kind)).Add(float64(tokens))
-}
-
-func (m *BusinessMetrics) ObserveChannelAttentionProbeLatency(seconds float64) {
-	if m == nil || seconds < 0 || math.IsNaN(seconds) || math.IsInf(seconds, 0) {
-		return
-	}
-	m.channelAttentionProbeLatency.WithLabelValues().Observe(seconds)
-}
-
 func (m *BusinessMetrics) RecordChannelFullExecutionWake(reason string) {
 	if m == nil {
 		return
@@ -314,13 +242,6 @@ func (m *BusinessMetrics) SetChannelFullExecutionAmplificationRatio(ratio float6
 		return
 	}
 	m.channelFullExecutionAmplificationRatio.WithLabelValues().Set(ratio)
-}
-
-func (m *BusinessMetrics) RecordChannelAttentionTimeout(reason string) {
-	if m == nil {
-		return
-	}
-	m.channelAttentionTimeouts.WithLabelValues(NormalizeAttentionTimeoutReason(reason)).Inc()
 }
 
 func (m *BusinessMetrics) RecordTaskDispatched(taskID, source, runtimeMode string, queueWaitSeconds float64) {

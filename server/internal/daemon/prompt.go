@@ -18,8 +18,6 @@ import (
 func BuildPrompt(task Task, provider string, agentRoot string) string {
 	if profile, err := taskExecutionProfile(task); err == nil {
 		switch profile {
-		case executionProfileAttentionProbe:
-			return buildAttentionProbePrompt(task)
 		case executionProfileProtocolTurn:
 			return buildProtocolTurnPrompt(task)
 		}
@@ -49,34 +47,6 @@ func BuildPrompt(task Task, provider string, agentRoot string) string {
 	fmt.Fprintf(&b, "Your assigned issue ID is: %s\n\n", task.IssueID)
 	fmt.Fprintf(&b, "Start by running `multica issue get %s --output json` to understand your task, then complete it.\n", task.IssueID)
 	fmt.Fprintf(&b, "For comment history, follow the rule in your runtime workflow file (assignment-triggered tasks treat the read as mandatory). `multica issue comment list %s --output json` returns all comments for the issue (server caps at 2000). On long-running issues use `--recent 20 --output json` to read the 20 most recently active threads, then page older threads via the stderr `Next thread cursor: ...` line and the matching `--before` / `--before-id` until you have enough history. `--since <RFC3339>` is still available for incremental polling and may combine with `--recent`.\n", task.IssueID)
-	return b.String()
-}
-
-func buildAttentionProbePrompt(task Task) string {
-	var b strings.Builder
-	b.WriteString("Decide whether your agent identity should participate in the bounded channel context below. Do not solve the task and do not call tools.\n\n")
-	if task.Agent != nil && strings.TrimSpace(task.Agent.Instructions) != "" {
-		b.WriteString("Agent identity and responsibilities:\n")
-		b.WriteString(strings.TrimSpace(task.Agent.Instructions))
-		b.WriteString("\n\n")
-	}
-	if task.Agent != nil {
-		if memorySummary := restrictedMemorySummary(task.Agent.Memories, restrictedMemoryBytes); memorySummary != "" {
-			b.WriteString("Private memory/state summary (bounded):\n")
-			b.WriteString(memorySummary)
-			b.WriteString("\n\n")
-		}
-	}
-	if strings.TrimSpace(task.ChatContextSummary) != "" {
-		b.WriteString("Recent channel context (at most 8 entries):\n")
-		b.WriteString(strings.TrimSpace(task.ChatContextSummary))
-		b.WriteString("\n\n")
-	}
-	b.WriteString("Current human message:\n")
-	b.WriteString(strings.TrimSpace(task.ChatMessage))
-	b.WriteString("\n\nReturn exactly this JSON shape:\n")
-	b.WriteString(`{"decision":"SILENT|ANSWER|CONTRIBUTE|COORDINATE","confidence":0.0,"value_type":"none|direct_answer|unique_evidence|correction|task_claim|needs_protocol","summary":"","evidence_refs":[],"model_version":"current-model","seen_up_to_seq":0}`)
-	b.WriteString("\nChoose CONTRIBUTE only for information that would materially change another agent's result. Choose ANSWER when you are willing to own the response or task. Choose COORDINATE when the work requires ordering, dependencies, multiple owners, or a managed protocol.")
 	return b.String()
 }
 

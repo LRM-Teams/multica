@@ -54,13 +54,8 @@ var businessMetricLabels = map[string][]string{
 	"multica_task_lease_expired_total":                   {labelSource},
 	"multica_channel_ambient_gate_decisions_total":       {labelAction, labelReason},
 	"multica_channel_output_suppressed_total":            {labelReason},
-	"multica_channel_attention_rounds_total":             {labelOutcome},
-	"multica_channel_attention_probes_total":             {labelDecision, labelOutcome},
-	"multica_channel_attention_probe_tokens_total":       {labelKind},
-	"multica_channel_attention_probe_latency_seconds":    {},
 	"multica_channel_full_execution_wakes_total":         {labelReason},
 	"multica_channel_full_execution_amplification_ratio": {},
-	"multica_channel_attention_timeouts_total":           {labelReason},
 
 	// PR3 funnel / community / commercial.
 	"multica_signup_total":                             {labelSignupSource},
@@ -186,49 +181,12 @@ var (
 		"unsent_final_output":    "unsent_final_output",
 		"other":                  "other",
 	}
-	knownAttentionRoundOutcomes = map[string]string{
-		"completed": "completed",
-		"partial":   "partial",
-		"failed":    "failed",
-		"timed_out": "timed_out",
-		"cancelled": "cancelled",
-		"disabled":  "disabled",
-		"other":     "other",
-	}
-	knownAttentionDecisions = map[string]string{
-		"silent":     "silent",
-		"answer":     "answer",
-		"contribute": "contribute",
-		"coordinate": "coordinate",
-		"none":       "none",
-	}
-	knownAttentionProbeOutcomes = map[string]string{
-		"completed":   "completed",
-		"failed":      "failed",
-		"timed_out":   "timed_out",
-		"unavailable": "unavailable",
-		"cancelled":   "cancelled",
-		"other":       "other",
-	}
-	knownAttentionProbeTokenKinds = map[string]string{
-		"input":  "input",
-		"output": "output",
-		"other":  "other",
-	}
 	knownFullExecutionWakeReasons = map[string]string{
 		"explicit_mention": "explicit_mention",
 		"group_command":    "group_command",
 		"thread_reply":     "thread_reply",
 		"dm":               "dm",
 		"legacy_full":      "legacy_full",
-		"other":            "other",
-	}
-	knownAttentionTimeoutReasons = map[string]string{
-		"debounce":         "debounce",
-		"max_wait":         "max_wait",
-		"runtime_capacity": "runtime_capacity",
-		"probe":            "probe",
-		"round":            "round",
 		"other":            "other",
 	}
 	knownFailureReasons = map[string]string{}
@@ -331,28 +289,8 @@ func NormalizeChannelOutputSuppressedReason(value string) string {
 	return "other"
 }
 
-func NormalizeAttentionRoundOutcome(value string) string {
-	return normalizeKnownLabel(value, knownAttentionRoundOutcomes, "other")
-}
-
-func NormalizeAttentionDecision(value string) string {
-	return normalizeKnownLabel(value, knownAttentionDecisions, "none")
-}
-
-func NormalizeAttentionProbeOutcome(value string) string {
-	return normalizeKnownLabel(value, knownAttentionProbeOutcomes, "other")
-}
-
-func NormalizeAttentionProbeTokenKind(value string) string {
-	return normalizeKnownLabel(value, knownAttentionProbeTokenKinds, "other")
-}
-
 func NormalizeFullExecutionWakeReason(value string) string {
 	return normalizeKnownLabel(value, knownFullExecutionWakeReasons, "other")
-}
-
-func NormalizeAttentionTimeoutReason(value string) string {
-	return normalizeKnownLabel(value, knownAttentionTimeoutReasons, "other")
 }
 
 func normalizeKnownLabel(value string, known map[string]string, fallback string) string {

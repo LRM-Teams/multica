@@ -46,6 +46,7 @@ export interface MemberSystemEvent {
  * enum or the internal word "issue" (item #7 frozen口径).
  */
 export const ISSUE_EVENTS = {
+  created: "issue_created",
   assigned: "issue_assigned",
   statusChanged: "issue_status_changed",
   completed: "issue_completed",
@@ -61,8 +62,12 @@ export interface IssueSystemEvent {
   issueId: string;
   /** Canonical identifier ("LRM-137") — the token's verbatim text. */
   issueIdentifier: string;
-  /** New status enum (never rendered raw; drives the localized verb). */
-  issueStatus: string;
+  /**
+   * New status enum (never rendered raw; drives the localized verb). Absent for
+   * `issue_created` (#610), whose verb is fixed ("创建了这个 issue") and carries no
+   * status — every other issue event derives its verb from this field.
+   */
+  issueStatus?: string;
   previousStatus?: string;
   actorId?: string;
   /** Public actor type: "human" | "agent" (see channelMemberSystemEventPublicType). */
@@ -94,9 +99,13 @@ export function parseIssueSystemEvent(message: ChannelMessage): IssueSystemEvent
     const issueId = optString(params, "issue_id");
     const issueIdentifier = optString(params, "issue_identifier");
     const issueStatus = optString(params, "issue_status");
-    // A row missing any of the three load-bearing facts can't be projected into
-    // the "任务 <ref> <verb>" sentence — fall back to the raw-content path.
-    if (!issueId || !issueIdentifier || !issueStatus) continue;
+    // Every row needs the id + identifier to project the "任务 <ref> <verb>"
+    // sentence with a clickable token. `issue_created` (#610) has a fixed verb
+    // and carries no status; every other issue event derives its verb FROM the
+    // status, so a non-created row missing it can't be projected — fall back to
+    // the raw-content path.
+    if (!issueId || !issueIdentifier) continue;
+    if (part.event !== ISSUE_EVENTS.created && !issueStatus) continue;
     return {
       event: part.event as IssueSystemEventKind,
       issueId,
@@ -124,11 +133,13 @@ export function parseIssueSystemEvent(message: ChannelMessage): IssueSystemEvent
  */
 function issueEventFoldKey(event: IssueSystemEvent): string {
   const kind =
-    event.event === ISSUE_EVENTS.assigned
-      ? "assigned"
-      : event.event === ISSUE_EVENTS.completed || event.issueStatus === "done"
-        ? "done"
-        : `status:${event.issueStatus}`;
+    event.event === ISSUE_EVENTS.created
+      ? "created"
+      : event.event === ISSUE_EVENTS.assigned
+        ? "assigned"
+        : event.event === ISSUE_EVENTS.completed || event.issueStatus === "done"
+          ? "done"
+          : `status:${event.issueStatus}`;
   return `${event.issueId}::${kind}`;
 }
 
@@ -186,6 +197,68 @@ export function parseMemberSystemEvent(message: ChannelMessage): MemberSystemEve
       targetType: optString(params, "target_type"),
       targetHandle: optString(params, "target_handle"),
       targetName: optString(params, "target_name"),
+    };
+  }
+  return null;
+}
+
+/**
+ * Channel↔project association events (#610). The BE emits one when a channel is
+ * bound to a project, moved between projects, or unbound. The FE projects each
+ * into a localized row whose SOLE clickable object is the project name (the same
+ * one-object rule the issue rows follow — actor stays plain text). `bound`
+ * carries the current project; `unbound` carries only the previous one; `changed`
+ * carries both.
+ */
+export const PROJECT_EVENTS = {
+  bound: "channel_project_bound",
+  changed: "channel_project_changed",
+  unbound: "channel_project_unbound",
+} as const;
+
+export type ProjectSystemEventKind = (typeof PROJECT_EVENTS)[keyof typeof PROJECT_EVENTS];
+
+const PROJECT_EVENT_KINDS = new Set<string>(Object.values(PROJECT_EVENTS));
+
+export interface ProjectSystemEvent {
+  event: ProjectSystemEventKind;
+  /** Current association's project uuid — absent on `unbound`. */
+  projectId?: string;
+  /** Current project title — absent on `unbound`. */
+  projectTitle?: string;
+  /** Prior association's project uuid — present on `changed` + `unbound`. */
+  previousProjectId?: string;
+  previousProjectTitle?: string;
+  actorId?: string;
+  /** Public actor type: "human" | "agent". */
+  actorType?: string;
+  actorName?: string;
+}
+
+/**
+ * Extract the structured channel↔project association event (#610). Returns null
+ * for any other system message so the caller renders the plain canonical
+ * `content`. A row that names neither the current nor the previous project can't
+ * be projected into the "把本群关联到项目「X」" sentence — fall back to raw content.
+ * Identity is entirely from params — never the fallback `content` string.
+ */
+export function parseProjectSystemEvent(message: ChannelMessage): ProjectSystemEvent | null {
+  if (message.type !== "system" || !Array.isArray(message.parts)) return null;
+  for (const part of message.parts) {
+    if (part.type !== "system_event" || !PROJECT_EVENT_KINDS.has(part.event)) continue;
+    const params = part.event_params;
+    const projectTitle = optString(params, "project_title");
+    const previousProjectTitle = optString(params, "previous_project_title");
+    if (!projectTitle && !previousProjectTitle) continue;
+    return {
+      event: part.event as ProjectSystemEventKind,
+      projectId: optString(params, "project_id"),
+      projectTitle,
+      previousProjectId: optString(params, "previous_project_id"),
+      previousProjectTitle,
+      actorId: optString(params, "actor_id"),
+      actorType: optString(params, "actor_type"),
+      actorName: optString(params, "actor_name"),
     };
   }
   return null;

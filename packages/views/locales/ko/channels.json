@@ -231,6 +231,7 @@
       "member_left": "{target}님이 채널에서 나갔습니다",
       "issue": {
         "actor_system": "Multica",
+        "created": "{{actor}}님이 {issue}을(를) 생성했습니다",
         "assigned": "{{actor}}님이 {issue}을(를) {{target}}님에게 배정했습니다",
         "assigned_unknown": "{{actor}}님이 {issue}의 담당자를 변경했습니다",
         "in_progress": "{{actor}}님이 {issue}을(를) 진행 중으로 표시했습니다",
@@ -247,6 +248,12 @@
         "done": "완료",
         "blocked": "차단됨",
         "cancelled": "취소됨"
+      },
+      "project": {
+        "actor_system": "Multica",
+        "bound": "{{actor}}님이 이 채널을 프로젝트 「{project}」에 연결했습니다",
+        "changed": "{{actor}}님이 이 채널의 연결 프로젝트를 「{previous}」에서 「{project}」(으)로 변경했습니다",
+        "unbound": "{{actor}}님이 이 채널과 프로젝트 「{previous}」의 연결을 해제했습니다"
       }
     }
   },

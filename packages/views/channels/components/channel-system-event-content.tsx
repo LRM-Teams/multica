@@ -7,11 +7,21 @@ import { agentListOptions, memberListOptions } from "@multica/core/workspace/que
 import { resolveActorHandle } from "@multica/core/identity";
 import { useAgentPanelStore } from "@multica/core/agents/stores";
 import { useActorName } from "@multica/core/workspace/hooks";
+import { useWorkspacePaths } from "@multica/core/paths";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { useOpenAgentPanel } from "../../common/agent-panel-context";
 import { useT } from "../../i18n/use-t";
+import { AppLink } from "../../navigation/app-link";
+import { useOptionalNavigation } from "../../navigation/context";
 import { IssueRefLink } from "../../issues/components/issue-ref-link";
-import { MEMBER_EVENTS, type MemberSystemEvent, ISSUE_EVENTS, type IssueSystemEvent } from "./channel-system-event";
+import {
+  MEMBER_EVENTS,
+  type MemberSystemEvent,
+  ISSUE_EVENTS,
+  type IssueSystemEvent,
+  PROJECT_EVENTS,
+  type ProjectSystemEvent,
+} from "./channel-system-event";
 
 /**
  * Renders the composed, tokenized copy for a member-change system event
@@ -196,6 +206,16 @@ export function IssueSystemEventContent({
     />
   );
 
+  // Creation (#610): a fixed "创建了这个 issue" verb, no status. Plain actor +
+  // the issue token as the sole clickable object — same grammar as the other
+  // issue rows.
+  if (event.event === ISSUE_EVENTS.created) {
+    return interpolateIssueSlot(
+      t(($) => $.message.system_event.issue.created, { actor }),
+      issueToken,
+    );
+  }
+
   // Assignment: resolve the assignee's plain name live (falling back to the
   // backend-supplied handle/name), then to a name-less "changed assignee" copy.
   if (event.event === ISSUE_EVENTS.assigned) {
@@ -234,9 +254,10 @@ export function IssueSystemEventContent({
   // A status the FE recognizes → "marked as <localized status>". A status it
   // does NOT recognize must NEVER echo the raw enum to the user face (Nash: no
   // internal-enum leak) — degrade to a generic, status-less localized action.
-  const statusKey: IssueStatusKey | null = ISSUE_STATUS_KEYS.has(event.issueStatus)
-    ? (event.issueStatus as IssueStatusKey)
-    : null;
+  const statusKey: IssueStatusKey | null =
+    event.issueStatus && ISSUE_STATUS_KEYS.has(event.issueStatus)
+      ? (event.issueStatus as IssueStatusKey)
+      : null;
   if (!statusKey) {
     return interpolateIssueSlot(
       t(($) => $.message.system_event.issue.updated, { actor }),
@@ -250,4 +271,79 @@ export function IssueSystemEventContent({
     }),
     issueToken,
   );
+}
+
+// The project name is the SOLE clickable object in a channel↔project row (#610,
+// the same one-object rule the issue rows follow). Splits the localized template
+// on the `{project}` / `{previous}` slots so word order stays per-locale while
+// the FE owns the interactive node. The actor rides i18next's `{{ }}`
+// interpolation as plain text — never a token.
+function interpolateProjectSlots(
+  template: string,
+  slots: { project?: ReactNode; previous?: ReactNode },
+): ReactNode {
+  return template.split(/(\{project\}|\{previous\})/g).map((segment, index) => {
+    if (segment === "{project}") return <Fragment key={index}>{slots.project}</Fragment>;
+    if (segment === "{previous}") return <Fragment key={index}>{slots.previous}</Fragment>;
+    if (!segment) return null;
+    return <Fragment key={index}>{segment}</Fragment>;
+  });
+}
+
+/**
+ * Renders a channel↔project association row (#610) as localized copy whose SOLE
+ * clickable object is a project name — actor stays plain display-text (never a
+ * bare handle), matching the issue rows' one-object rule (Parker/Iris口径).
+ *
+ * Which project links follows the row's subject: `bound`/`changed` link the
+ * CURRENT (new) project; `unbound` links the PREVIOUS one (its only object, per
+ * Barry's contract — `previous_project_id` is a valid target). A name only links
+ * when its id + the project route are available; otherwise it degrades to plain
+ * text (e.g. before the #576 project page ships), never a dead/empty link.
+ */
+export function ProjectSystemEventContent({ event }: { event: ProjectSystemEvent }): ReactNode {
+  const { t } = useT("channels");
+  const { getActorName } = useActorName();
+  const paths = useWorkspacePaths();
+  const navigation = useOptionalNavigation();
+
+  const resolvedActor = event.actorId
+    ? getActorName(toActorType(event.actorType), event.actorId, event.actorName)
+    : undefined;
+  const actor =
+    resolvedActor ?? event.actorName ?? t(($) => $.message.system_event.project.actor_system);
+
+  // A project name → clickable token when we can route to it, else plain text.
+  const projectNode = (title?: string, id?: string, linkable?: boolean): ReactNode => {
+    if (!title) return null;
+    if (linkable && id && typeof paths.projectDetail === "function") {
+      const href = paths.projectDetail(id);
+      const className = "text-brand hover:underline";
+      return navigation ? (
+        <AppLink href={href} className={className}>
+          {title}
+        </AppLink>
+      ) : (
+        <a href={href} className={className}>
+          {title}
+        </a>
+      );
+    }
+    return <span className="text-foreground/80">{title}</span>;
+  };
+
+  if (event.event === PROJECT_EVENTS.bound) {
+    return interpolateProjectSlots(t(($) => $.message.system_event.project.bound, { actor }), {
+      project: projectNode(event.projectTitle, event.projectId, true),
+    });
+  }
+  if (event.event === PROJECT_EVENTS.changed) {
+    return interpolateProjectSlots(t(($) => $.message.system_event.project.changed, { actor }), {
+      project: projectNode(event.projectTitle, event.projectId, true),
+      previous: projectNode(event.previousProjectTitle, event.previousProjectId, false),
+    });
+  }
+  return interpolateProjectSlots(t(($) => $.message.system_event.project.unbound, { actor }), {
+    previous: projectNode(event.previousProjectTitle, event.previousProjectId, true),
+  });
 }

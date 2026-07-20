@@ -1,0 +1,10 @@
+# s89 is fronted by the independently managed multica-caddy container. Keep
+# the application frontend private to the Compose network so Caddy resolves
+# `frontend:3000` directly and this deployment cannot collide with another
+# workload's host port. The public entrypoint remains Caddy on :8090.
+#
+# Local/self-host usage continues to use docker-compose.selfhost.yml alone and
+# may publish FRONTEND_PORT for direct browser access.
+services:
+  frontend:
+    ports: !reset []

@@ -19,7 +19,6 @@ import (
 )
 
 const (
-	quickCreateSourceMetadataKey = "chat_issue_source"
 	quickCreateReturnMetadataKey = "chat_issue_return"
 )
 
@@ -61,9 +60,6 @@ func (s *TaskService) handleQuickCreateSourceReturn(ctx context.Context, task db
 	if err != nil {
 		return
 	}
-	sourceJSON, _ := json.Marshal(qc.Source)
-	s.setIssueMetadataAndPublish(ctx, workspaceID, issue.ID, task.AgentID, quickCreateSourceMetadataKey, sourceJSON)
-
 	target, reason, ok := s.resolveQuickCreateReturnTarget(ctx, workspaceID, qc)
 	if !ok {
 		s.recordQuickCreateReturn(ctx, task, workspaceID, issue.ID, task.AgentID, map[string]any{

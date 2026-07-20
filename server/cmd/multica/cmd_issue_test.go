@@ -562,6 +562,42 @@ func TestRunIssueCreateSendsExistingAttachmentIDs(t *testing.T) {
 	}
 }
 
+func TestRunIssueCreatePersistsDaemonQuickCreateSource(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/issues" {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "issue-1", "identifier": "MUL-1", "title": "Anchored", "status": "todo", "priority": "none",
+		})
+	}))
+	defer srv.Close()
+
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+	t.Setenv("MULTICA_TOKEN", "test-token")
+	t.Setenv("MULTICA_QUICK_CREATE_SOURCE_CHANNEL_ID", "channel-source")
+	t.Setenv("MULTICA_QUICK_CREATE_SOURCE_MESSAGE_ID", "root-message")
+
+	cmd := newIssueCreateTestCmd()
+	_ = cmd.Flags().Set("title", "Anchored")
+	if err := runIssueCreate(cmd, nil); err != nil {
+		t.Fatalf("runIssueCreate: %v", err)
+	}
+	source, ok := body["source"].(map[string]any)
+	if !ok {
+		t.Fatalf("source = %#v, want daemon-owned source object", body["source"])
+	}
+	if source["channel_id"] != "channel-source" || source["message_id"] != "root-message" {
+		t.Fatalf("source = %#v, want daemon channel/root", source)
+	}
+}
+
 func TestRunIssueCreateShowsDuplicateMessage(t *testing.T) {
 	want := "Active duplicate issue exists: YUA-36 SH-PM-SYNTH-01 Synthesize recommendation-to-shortlist planning outputs (status: in_progress). Set allow_duplicate=true or use --allow-duplicate to create another."
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

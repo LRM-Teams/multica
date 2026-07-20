@@ -2391,6 +2391,10 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	h.syncWendyWorkGraphAfterIssueCreate(r.Context(), issue)
+	// The source/channel anchor is persisted atomically by IssueService.Create.
+	// Project the creation fact only after that commit, so the channel row is
+	// always backed by the same durable relation used by later issue updates.
+	h.emitIssueThreadBackflow(r.Context(), issue, creatorType, actualCreatorID, issueThreadCreatedEvent, "", issueThreadBackflowTarget{})
 
 	resp := issueToResponse(issue, prefix)
 	resp.Attachments = buildAttachmentResponses(res.Attachments)

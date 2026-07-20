@@ -193,6 +193,42 @@ func loadIssueThreadBackflowEvents(t *testing.T, channelID, rootID string) []iss
 	return out
 }
 
+func loadIssueChannelBackflowEvents(t *testing.T, channelID string) []issueThreadBackflowEventForTest {
+	t.Helper()
+	rows, err := testPool.Query(context.Background(), `
+		SELECT content, parts
+		FROM channel_message
+		WHERE channel_id = $1
+		  AND thread_root_message_id IS NULL
+		  AND author_type = 'system'
+		ORDER BY seq`, channelID)
+	if err != nil {
+		t.Fatalf("load issue channel events: %v", err)
+	}
+	defer rows.Close()
+	var out []issueThreadBackflowEventForTest
+	for rows.Next() {
+		var raw []byte
+		var content string
+		if err := rows.Scan(&content, &raw); err != nil {
+			t.Fatalf("scan issue channel event: %v", err)
+		}
+		var parts []protocol.MessagePart
+		if err := json.Unmarshal(raw, &parts); err != nil || len(parts) == 0 || parts[0].Type != protocol.MessagePartTypeSystemEvent {
+			continue
+		}
+		var params issueThreadSystemEventParams
+		if err := json.Unmarshal(parts[0].EventParams, &params); err != nil {
+			t.Fatalf("decode issue event params: %v", err)
+		}
+		out = append(out, issueThreadBackflowEventForTest{Content: content, Event: parts[0].Event, Params: params, Parts: parts})
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate issue channel events: %v", err)
+	}
+	return out
+}
+
 func assertIssueThreadBackflowEvent(t *testing.T, got issueThreadBackflowEventForTest, wantEvent, wantAgentID string) {
 	t.Helper()
 	if got.Event != wantEvent {

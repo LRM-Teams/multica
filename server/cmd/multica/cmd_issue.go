@@ -690,6 +690,13 @@ func runIssueCreate(cmd *cobra.Command, _ []string) error {
 	}
 	sourceChannel, _ := cmd.Flags().GetString("source-channel")
 	sourceMessage, _ := cmd.Flags().GetString("source-message")
+	// A quick-create task receives its source from the daemon, not from the
+	// model's command construction. This keeps issue provenance and the
+	// channel system event on the same durable write path.
+	if quickCreateSourceChannel := strings.TrimSpace(os.Getenv("MULTICA_QUICK_CREATE_SOURCE_CHANNEL_ID")); quickCreateSourceChannel != "" {
+		sourceChannel = quickCreateSourceChannel
+		sourceMessage = strings.TrimSpace(os.Getenv("MULTICA_QUICK_CREATE_SOURCE_MESSAGE_ID"))
+	}
 	if (sourceChannel == "") != (sourceMessage == "") {
 		return fmt.Errorf("--source-channel and --source-message must be provided together")
 	}

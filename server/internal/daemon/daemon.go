@@ -3598,6 +3598,16 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 				taskLog.Warn("quick-create attachment ids: marshal failed; skipping env injection", "error", err)
 			}
 		}
+		// The source anchor is a server-owned provenance fact, not a prompt
+		// convention for the agent to remember. Make the CLI persist it with
+		// the issue creation transaction so channel backflow has a durable
+		// target before the issue-created event is published.
+		if source := task.QuickCreateSource; source != nil {
+			if source.ChannelID != "" && source.ThreadRootMessageID != "" {
+				agentEnv["MULTICA_QUICK_CREATE_SOURCE_CHANNEL_ID"] = source.ChannelID
+				agentEnv["MULTICA_QUICK_CREATE_SOURCE_MESSAGE_ID"] = source.ThreadRootMessageID
+			}
+		}
 	}
 	// Ensure the multica CLI is on PATH inside the agent's environment.
 	// Some runtimes (e.g. Codex) run in an isolated sandbox that may not

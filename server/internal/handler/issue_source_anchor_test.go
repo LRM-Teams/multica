@@ -72,6 +72,17 @@ func TestCreateIssueSourceMessageAnchorPersistsRootAndServesDetailRef(t *testing
 	if storedChannelID != channelID || storedMessageID != rootID {
 		t.Fatalf("stored anchor = %s/%s, want source channel/root %s/%s", storedChannelID, storedMessageID, channelID, rootID)
 	}
+	backflow := loadIssueThreadBackflowEvents(t, channelID, rootID)
+	if len(backflow) != 1 {
+		t.Fatalf("created issue backflow count = %d, want 1 (%+v)", len(backflow), backflow)
+	}
+	if backflow[0].Event != issueThreadCreatedEvent {
+		t.Fatalf("created issue backflow event = %q, want %q", backflow[0].Event, issueThreadCreatedEvent)
+	}
+	if backflow[0].Params.ActorType != "human" || backflow[0].Params.ActorID != testUserID {
+		t.Fatalf("created issue backflow actor = %#v, want current human %s", backflow[0].Params, testUserID)
+	}
+	assertIssueThreadBackflowReference(t, backflow[0], created.ID)
 
 	detail := httptest.NewRecorder()
 	detailReq := newRequest("GET", "/api/issues/"+created.ID+"?workspace_id="+testWorkspaceID, nil)
@@ -161,6 +172,7 @@ func TestCreateIssueWithGroupChannelDoesNotInferProjectAndCanClearAnchor(t *test
 	if bothAnchorChannelID != channelID {
 		t.Fatalf("explicit channel anchor = %s, want %s", bothAnchorChannelID, channelID)
 	}
+	assertIssueChannelEventCount(t, channelID, bothCreated.ID, issueThreadCreatedEvent, 1)
 
 	projectOnly := httptest.NewRecorder()
 	testHandler.CreateIssue(projectOnly, newRequest("POST", "/api/issues?workspace_id="+testWorkspaceID, map[string]any{
@@ -186,6 +198,11 @@ func TestCreateIssueWithGroupChannelDoesNotInferProjectAndCanClearAnchor(t *test
 	if projectOnlyAnchorCount != 0 {
 		t.Fatalf("project-only anchor count = %d, want 0", projectOnlyAnchorCount)
 	}
+	assertIssueChannelEvent(t, channelID, created.ID, issueThreadCreatedEvent)
+	assertIssueChannelEvent(t, channelID, projectOnlyCreated.ID, issueThreadCreatedEvent)
+	assertIssueChannelEventCount(t, channelID, projectOnlyCreated.ID, issueThreadCreatedEvent, 1)
+	updateIssueForBackflowTest(t, projectOnlyCreated.ID, map[string]any{"status": "in_progress"})
+	assertIssueChannelEvent(t, channelID, projectOnlyCreated.ID, issueThreadStatusChangedEvent)
 
 	var storedChannelID string
 	var storedMessageID *string
@@ -276,6 +293,30 @@ func TestCreateIssueWithGroupChannelDoesNotInferProjectAndCanClearAnchor(t *test
 	}
 	if count != 0 {
 		t.Fatalf("anchor count = %d, want 0 after null clear", count)
+	}
+}
+
+func assertIssueChannelEvent(t *testing.T, channelID, issueID, wantEvent string) {
+	t.Helper()
+	for _, event := range loadIssueChannelBackflowEvents(t, channelID) {
+		if event.Event == wantEvent && event.Params.IssueID == issueID {
+			assertIssueThreadBackflowReference(t, event, issueID)
+			return
+		}
+	}
+	t.Fatalf("channel %s has no %s system event for issue %s", channelID, wantEvent, issueID)
+}
+
+func assertIssueChannelEventCount(t *testing.T, channelID, issueID, wantEvent string, wantCount int) {
+	t.Helper()
+	count := 0
+	for _, event := range loadIssueChannelBackflowEvents(t, channelID) {
+		if event.Event == wantEvent && event.Params.IssueID == issueID {
+			count++
+		}
+	}
+	if count != wantCount {
+		t.Fatalf("channel %s has %d %s system events for issue %s, want %d", channelID, count, wantEvent, issueID, wantCount)
 	}
 }
 

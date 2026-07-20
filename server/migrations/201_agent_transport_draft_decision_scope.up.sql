@@ -26,6 +26,9 @@ BEGIN
        OR COUNT(audit.id) FILTER (
             WHERE (audit.task_id IS NULL) = (audit.inbox_event_id IS NULL)
           ) <> 0
+       OR COUNT(audit.id) FILTER (
+            WHERE COALESCE(btrim(audit.context_pack->>'producer_fact_id'), '') = ''
+          ) <> 0
   ) THEN
     RAISE EXCEPTION
       'cannot safely backfill agent_transport_draft source: each legacy draft needs exactly one source-bearing held audit with the same client_message_id';
@@ -52,6 +55,13 @@ ALTER TABLE agent_transport_draft
 ALTER TABLE agent_transport_draft
   ADD CONSTRAINT agent_transport_draft_source_check
   CHECK ((task_id IS NOT NULL) <> (inbox_event_id IS NOT NULL));
+
+ALTER TABLE agent_transport_draft
+  ALTER COLUMN decision_fact_id SET NOT NULL;
+
+ALTER TABLE agent_transport_draft
+  ADD CONSTRAINT agent_transport_draft_decision_fact_nonempty_check
+  CHECK (btrim(decision_fact_id) <> '');
 
 ALTER TABLE agent_transport_draft
   DROP CONSTRAINT IF EXISTS agent_transport_draft_workspace_id_agent_id_target_key;

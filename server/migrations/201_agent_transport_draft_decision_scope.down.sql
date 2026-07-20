@@ -22,6 +22,9 @@ ALTER TABLE agent_transport_draft
   DROP CONSTRAINT IF EXISTS agent_transport_draft_source_check;
 
 ALTER TABLE agent_transport_draft
+  DROP CONSTRAINT IF EXISTS agent_transport_draft_decision_fact_nonempty_check;
+
+ALTER TABLE agent_transport_draft
   ADD CONSTRAINT agent_transport_draft_workspace_id_agent_id_target_key
   UNIQUE (workspace_id, agent_id, target);
 

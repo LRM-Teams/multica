@@ -82,10 +82,13 @@ func TestMigration201ScopesFreshnessDraftsBySourceAndFailsClosed(t *testing.T) {
 		"audit.client_message_id = draft.client_message_id",
 		"HAVING COUNT(audit.id) <> 1",
 		"(audit.task_id IS NULL) = (audit.inbox_event_id IS NULL)",
+		"COALESCE(btrim(audit.context_pack->>'producer_fact_id'), '') = ''",
 		"RAISE EXCEPTION",
 		"idx_agent_transport_draft_source_target",
 		"idx_agent_transport_draft_inbox_target",
 		"CHECK ((task_id IS NOT NULL) <> (inbox_event_id IS NOT NULL))",
+		"ALTER COLUMN decision_fact_id SET NOT NULL",
+		"agent_transport_draft_decision_fact_nonempty_check",
 	} {
 		if !strings.Contains(contents, required) {
 			t.Errorf("migration 201 up missing %q", required)

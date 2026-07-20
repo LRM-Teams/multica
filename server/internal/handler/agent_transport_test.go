@@ -134,23 +134,80 @@ func TestAgentTransportSendFreshnessHoldSavesDraftAndDoesNotWriteMessage(t *test
 	assertAgentTransportVisibleOutputAuditCount(t, taskID, 0)
 
 	revised := "revised held draft " + uuid.NewString()
-	secondHeld := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+	pending := agentTransportSendForTest(t, taskID, agentID, map[string]any{
 		"target":            target,
 		"content":           revised,
 		"client_message_id": "transport-held-" + uuid.NewString(),
 		"seen_up_to_seq":    seen.Seq,
 	})
-	if secondHeld.Code != http.StatusOK {
-		t.Fatalf("second freshness hold send: status=%d body=%s", secondHeld.Code, secondHeld.Body.String())
+	if pending.Code != http.StatusOK {
+		t.Fatalf("pending draft send: status=%d body=%s", pending.Code, pending.Body.String())
 	}
-	var secondBody AgentTransportSendHeldResponse
-	if err := json.Unmarshal(secondHeld.Body.Bytes(), &secondBody); err != nil {
-		t.Fatalf("decode second held response: %v", err)
+	var pendingBody AgentTransportDraftPendingResponse
+	if err := json.Unmarshal(pending.Body.Bytes(), &pendingBody); err != nil {
+		t.Fatalf("decode pending draft response: %v", err)
 	}
-	if len(secondBody.HeldMessages) != 0 || secondBody.OmittedMessageCount != 1 {
-		t.Fatalf("second hold should omit previously reviewed blockers: %+v", secondBody)
+	if pendingBody.State != "draft_pending" || pendingBody.Outcome != "held" || pendingBody.DecisionFactID != held.ProducerFactID {
+		t.Fatalf("pending draft response mismatch: %+v", pendingBody)
+	}
+	assertAgentTransportDraftContent(t, agentID, target, draftContent)
+	assertAgentTransportFreshnessHoldActivity(t, taskID, target, 1)
+
+	revisedPending := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":            target,
+		"content":           revised,
+		"client_message_id": "transport-held-revised-" + uuid.NewString(),
+		"seen_up_to_seq":    seen.Seq,
+		"revise_draft":      true,
+	})
+	if revisedPending.Code != http.StatusOK {
+		t.Fatalf("revise pending draft: status=%d body=%s", revisedPending.Code, revisedPending.Body.String())
 	}
 	assertAgentTransportDraftContent(t, agentID, target, revised)
+	assertAgentTransportFreshnessHoldActivity(t, taskID, target, 1)
+}
+
+func TestAgentTransportDiscardDraftRecordsExplicitOutcome(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	target := "#" + channelNameForTransportTest(t, channelID)
+	seen, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "discard seen "+uuid.NewString(), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("seed seen message: %v", err)
+	}
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "discard newer "+uuid.NewString(), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
+		t.Fatalf("seed newer message: %v", err)
+	}
+	held := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":            target,
+		"content":           "discard saved draft " + uuid.NewString(),
+		"client_message_id": "transport-discard-" + uuid.NewString(),
+		"seen_up_to_seq":    seen.Seq,
+	})
+	if held.Code != http.StatusOK {
+		t.Fatalf("freshness hold send: status=%d body=%s", held.Code, held.Body.String())
+	}
+	discarded := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":        target,
+		"discard_draft": true,
+	})
+	if discarded.Code != http.StatusOK {
+		t.Fatalf("discard draft: status=%d body=%s", discarded.Code, discarded.Body.String())
+	}
+	var body AgentTransportDraftPendingResponse
+	if err := json.Unmarshal(discarded.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode discarded response: %v", err)
+	}
+	if body.State != "discarded" || body.Outcome != "discarded" || body.DecisionFactID == "" {
+		t.Fatalf("discarded response mismatch: %+v", body)
+	}
+	assertAgentTransportDraftMissing(t, agentID, target)
+	assertAgentTransportFreshnessDiscardedActivity(t, taskID, target, body.DecisionFactID)
 }
 
 func TestAgentTransportSendDraftSendsSavedDraftAndClearsDraft(t *testing.T) {
@@ -1276,6 +1333,24 @@ func assertAgentTransportFreshnessHoldActivity(t *testing.T, taskID, target stri
 	}
 	if holdCount != 1 || obsoleteDetailCount != 0 {
 		t.Fatalf("freshness hold activity=%d obsolete detail=%d, want 1/0", holdCount, obsoleteDetailCount)
+	}
+}
+
+func assertAgentTransportFreshnessDiscardedActivity(t *testing.T, taskID, target, decisionFactID string) {
+	t.Helper()
+	var got int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*)
+		FROM agent_activity_event
+		WHERE task_id = $1
+		  AND event_type = 'send_freshness_discarded'
+		  AND target_slug = $2
+		  AND details->>'decision_fact_id' = $3
+		  AND details->>'outcome' = 'discarded'`, taskID, target, decisionFactID).Scan(&got); err != nil {
+		t.Fatalf("count freshness discard activity: %v", err)
+	}
+	if got != 1 {
+		t.Fatalf("freshness discard activity count = %d, want 1", got)
 	}
 }
 

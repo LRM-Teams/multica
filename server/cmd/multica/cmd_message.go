@@ -24,7 +24,8 @@ func newMessageSendCmd() *cobra.Command {
 			"followed by explanatory text in one message. Attach files with " +
 			"--attachment-id from `multica attachment upload` (repeatable). If the " +
 			"server holds a send because newer messages arrived, review the bounded " +
-			"context and use --send-draft to send the saved draft unchanged.",
+			"context and then choose exactly one explicit action: --send-draft to send " +
+			"unchanged, --revise-draft with replacement content, or --discard-draft.",
 		RunE: runAgentMessageSend,
 	}
 	cmd.Flags().String("target", "", messageTargetFlagUsage())
@@ -35,6 +36,8 @@ func newMessageSendCmd() *cobra.Command {
 	cmd.Flags().StringSlice("attachment-id", nil, "Attachment id to link (repeatable). Get one from `multica attachment upload`")
 	cmd.Flags().String("client-message-id", "", "Idempotency key; generated automatically when omitted")
 	cmd.Flags().Bool("send-draft", false, "Send the current server-saved draft for --target unchanged")
+	cmd.Flags().Bool("revise-draft", false, "Replace the current server-saved draft with this message; it remains pending until --send-draft")
+	cmd.Flags().Bool("discard-draft", false, "Discard the current server-saved draft for --target")
 	cmd.Flags().Bool("show-in-channel", false, "For thread targets, also show the reply on the parent channel timeline")
 	cmd.Flags().Int64("seen-up-to-seq", 0, "Last channel message sequence the agent reviewed before composing")
 	cmd.Flags().String("output", "json", "Output format: json or text")
@@ -134,6 +137,11 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	sendDraft, _ := cmd.Flags().GetBool("send-draft")
+	reviseDraft, _ := cmd.Flags().GetBool("revise-draft")
+	discardDraft, _ := cmd.Flags().GetBool("discard-draft")
+	if (sendDraft && reviseDraft) || (sendDraft && discardDraft) || (reviseDraft && discardDraft) {
+		return fmt.Errorf("--send-draft, --revise-draft, and --discard-draft are mutually exclusive")
+	}
 	if sendDraft {
 		if cmd.Flags().Changed("message") || cmd.Flags().Changed("message-stdin") || cmd.Flags().Changed("message-file") ||
 			cmd.Flags().Changed("sticker") || cmd.Flags().Changed("attachment-id") || cmd.Flags().Changed("client-message-id") ||
@@ -154,6 +162,27 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 			return fmt.Errorf("send saved draft: %w", err)
 		}
 		return printAgentTransportOutput(cmd, out, "Draft sent.")
+	}
+	if discardDraft {
+		if cmd.Flags().Changed("message") || cmd.Flags().Changed("message-stdin") || cmd.Flags().Changed("message-file") ||
+			cmd.Flags().Changed("sticker") || cmd.Flags().Changed("attachment-id") || cmd.Flags().Changed("client-message-id") ||
+			cmd.Flags().Changed("show-in-channel") || cmd.Flags().Changed("seen-up-to-seq") {
+			return fmt.Errorf("--discard-draft cannot be combined with message, sticker, attachment, client-message-id, show-in-channel, or seen-up-to-seq options")
+		}
+		client, err := newAPIClient(cmd)
+		if err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), cli.APITimeout())
+		defer cancel()
+		var out map[string]any
+		if err := client.PostJSON(ctx, "/api/agent/messages/send", map[string]any{
+			"target":        target,
+			"discard_draft": true,
+		}, &out); err != nil {
+			return fmt.Errorf("discard saved draft: %w", err)
+		}
+		return printAgentTransportOutput(cmd, out, "Draft discarded.")
 	}
 	content, contentOK, err := resolveTextFlag(cmd, "message")
 	if err != nil {
@@ -181,6 +210,9 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 	body := map[string]any{
 		"target":            target,
 		"client_message_id": clientMessageIDFlag(cmd),
+	}
+	if reviseDraft {
+		body["revise_draft"] = true
 	}
 	if seenUpToSeq := seenUpToSeqForMessageSend(cmd, client); seenUpToSeq > 0 {
 		body["seen_up_to_seq"] = seenUpToSeq
@@ -213,6 +245,9 @@ func seenUpToSeqForMessageSend(cmd *cobra.Command, client *cli.APIClient) int64 
 }
 
 func agentMessageSendTextFallback(out map[string]any) string {
+	if strings.EqualFold(fmt.Sprint(out["state"]), "draft_pending") {
+		return "A saved draft is awaiting an explicit decision. Read newer messages, then use --send-draft, --revise-draft, or --discard-draft."
+	}
 	if strings.EqualFold(fmt.Sprint(out["state"]), "held") || strings.EqualFold(fmt.Sprint(out["outcome"]), "held") {
 		return "Message held by freshness check. Review heldMessages, then rerun with --send-draft to send the saved draft unchanged."
 	}

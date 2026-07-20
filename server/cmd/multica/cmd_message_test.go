@@ -179,10 +179,69 @@ func TestRunAgentMessageSendDraftRejectsContentFlags(t *testing.T) {
 	}
 }
 
+func TestRunAgentMessageSendDiscardDraftPostsDecisionOnly(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"state": "discarded"})
+	}))
+	defer srv.Close()
+
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+	t.Setenv("MULTICA_TOKEN", "test-token")
+	cmd := newMessageSendCmd()
+	_ = cmd.Flags().Set("target", "#multica")
+	_ = cmd.Flags().Set("discard-draft", "true")
+	if err := runAgentMessageSend(cmd, nil); err != nil {
+		t.Fatalf("runAgentMessageSend discard-draft: %v", err)
+	}
+	if body["target"] != "#multica" || body["discard_draft"] != true {
+		t.Fatalf("discard body = %#v", body)
+	}
+	for _, field := range []string{"content", "parts", "client_message_id", "seen_up_to_seq"} {
+		if _, ok := body[field]; ok {
+			t.Fatalf("discard body unexpectedly includes %s: %#v", field, body)
+		}
+	}
+}
+
+func TestRunAgentMessageSendReviseDraftSetsExplicitDecision(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"state": "draft_pending"})
+	}))
+	defer srv.Close()
+
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+	t.Setenv("MULTICA_TOKEN", "test-token")
+	cmd := newMessageSendCmd()
+	_ = cmd.Flags().Set("target", "#multica")
+	_ = cmd.Flags().Set("message", "revised after review")
+	_ = cmd.Flags().Set("client-message-id", "cli-revise-1")
+	_ = cmd.Flags().Set("revise-draft", "true")
+	if err := runAgentMessageSend(cmd, nil); err != nil {
+		t.Fatalf("runAgentMessageSend revise-draft: %v", err)
+	}
+	if body["revise_draft"] != true || body["content"] != "revised after review" {
+		t.Fatalf("revise body = %#v", body)
+	}
+}
+
 func TestAgentMessageSendTextFallbackReportsHeld(t *testing.T) {
 	got := agentMessageSendTextFallback(map[string]any{"state": "held"})
 	if !strings.Contains(got, "Message held by freshness check") {
 		t.Fatalf("fallback = %q, want held freshness text", got)
+	}
+	got = agentMessageSendTextFallback(map[string]any{"state": "draft_pending"})
+	if !strings.Contains(got, "awaiting an explicit decision") {
+		t.Fatalf("fallback = %q, want pending-draft decision text", got)
 	}
 	got = agentMessageSendTextFallback(map[string]any{"created": true})
 	if got != "Message sent." {

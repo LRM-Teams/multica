@@ -3,6 +3,7 @@
 package agent
 
 import (
+	"errors"
 	"os"
 
 	"golang.org/x/sys/windows"
@@ -16,7 +17,9 @@ func processAlive(process *os.Process) bool {
 	}
 	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(process.Pid))
 	if err != nil {
-		return false
+		// Match Unix EPERM semantics: lack of permission proves the process
+		// exists, not that it died.
+		return errors.Is(err, windows.ERROR_ACCESS_DENIED)
 	}
 	defer windows.CloseHandle(handle)
 	var exitCode uint32

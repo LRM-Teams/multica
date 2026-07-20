@@ -36,8 +36,9 @@ const (
 	// runtime-progress behavior. The previous 5 min default
 	// killed legitimate long assistant outputs (e.g. RFC-length writeups)
 	// where the model streams a single message for many minutes without any
-	// daemon-visible activity — see MUL-2300. 30 min keeps the safety net for
-	// truly stuck runs (dockerd hang) while leaving headroom for long writes.
+	// daemon-visible activity — see MUL-2300. 30 min leaves headroom for long
+	// writes before checking for a confirmed-dead child whose session did not
+	// close naturally.
 	// Set MULTICA_AGENT_IDLE_WATCHDOG=0 to disable.
 	DefaultAgentIdleWatchdog = 30 * time.Minute
 	// DefaultAgentToolWatchdog sets the liveness-probe threshold while a single

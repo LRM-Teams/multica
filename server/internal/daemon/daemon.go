@@ -4512,7 +4512,7 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 // idle_watchdog dispositions. Centralised so the result-arrival branch and the
 // drain-timeout branch in executeAndDrain emit identical wording.
 func idleWatchdogReason(window time.Duration) string {
-	return fmt.Sprintf("runtime process was no longer alive after %s without progress; stopped by watchdog", window)
+	return fmt.Sprintf("runtime process was no longer alive after %s without progress; stopped by idle watchdog", window)
 }
 
 // runIdleWatchdog ticks until either agentCtx is cancelled or the backend has
@@ -4537,7 +4537,7 @@ func idleWatchdogReason(window time.Duration) string {
 // Tick interval is window/2 (floored at 30 s in production, but the floor only
 // kicks in for windows >= 1 min so tests can pass tiny windows like 50 ms and
 // see the watchdog fire within a few ticks).
-func (d *Daemon) runIdleWatchdog(agentCtx context.Context, window, toolWindow time.Duration, lastActivityAt *atomic.Int64, inFlightTools *atomic.Int32, fired *atomic.Bool, firedThreshold *atomic.Int64, cancel context.CancelFunc, messages <-chan agent.Message, runtimeAlive func() bool, taskLog *slog.Logger, taskID string) {
+func (d *Daemon) runIdleWatchdog(agentCtx context.Context, window, toolWindow time.Duration, lastActivityAt *atomic.Int64, inFlightTools *atomic.Int32, fired *atomic.Bool, firedThreshold *atomic.Int64, cancel context.CancelFunc, messages <-chan agent.Message, runtimeAlive agent.RuntimeLivenessProbe, taskLog *slog.Logger, taskID string) {
 	interval := window / 2
 	if window >= time.Minute && interval < 30*time.Second {
 		interval = 30 * time.Second
@@ -4580,14 +4580,20 @@ func (d *Daemon) runIdleWatchdog(agentCtx context.Context, window, toolWindow ti
 			// Raft suppresses stale-progress recovery while the provider child is
 			// alive. An unavailable probe is also not proof that the child died,
 			// so fail open and keep the turn running instead of guessing.
-			if runtimeAlive == nil || runtimeAlive() {
+			alive, known := false, false
+			if runtimeAlive != nil {
+				alive, known = runtimeAlive()
+			}
+			if !known || alive {
 				if !suppressionLogged {
-					taskLog.Info("watchdog suppressed: runtime remains alive despite silent progress",
+					taskLog.Info("watchdog suppressed: runtime death is not confirmed despite silent progress",
 						"task", shortID(taskID),
 						"idle_for", idleFor.Round(time.Second).String(),
 						"threshold", threshold.String(),
 						"tool_in_flight", toolInFlight,
 						"runtime_probe_available", runtimeAlive != nil,
+						"runtime_probe_known", known,
+						"runtime_alive", alive,
 					)
 					suppressionLogged = true
 				}

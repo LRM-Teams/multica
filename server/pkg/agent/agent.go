@@ -100,8 +100,13 @@ type Session struct {
 	// turn is still alive. It is optional for non-process backends. The daemon
 	// uses it to distinguish a quiet-but-running provider from a dead runtime
 	// before applying inactivity recovery.
-	RuntimeAlive func() bool
+	RuntimeAlive RuntimeLivenessProbe
 }
+
+// RuntimeLivenessProbe returns whether the runtime is alive and whether that
+// answer is known. Unknown probe outcomes must fail open: they are not proof
+// that a provider child died.
+type RuntimeLivenessProbe func() (alive bool, known bool)
 
 // MessageType identifies the kind of Message.
 type MessageType string

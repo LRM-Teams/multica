@@ -79,10 +79,13 @@ func (b *grokACPBackend) Execute(ctx context.Context, prompt string, opts ExecOp
 	return &Session{Messages: msgCh, Result: resCh, RuntimeAlive: b.runtimeAlive}, nil
 }
 
-func (b *grokACPBackend) runtimeAlive() bool {
+func (b *grokACPBackend) runtimeAlive() (bool, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.process != nil && processAlive(b.process.cmd.Process)
+	if b.process == nil {
+		return false, false
+	}
+	return processAlive(b.process.cmd.Process)
 }
 
 func (b *grokACPBackend) executeTurn(ctx context.Context, prompt string, opts ExecOptions, msgCh chan<- Message) Result {

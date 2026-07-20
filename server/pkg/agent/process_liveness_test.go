@@ -13,14 +13,16 @@ func TestProcessAliveCurrentProcess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("find current process: %v", err)
 	}
-	if !processAlive(process) {
-		t.Fatal("current process must be reported alive")
+	alive, known := processAlive(process)
+	if !known || !alive {
+		t.Fatalf("current process liveness = (alive=%v, known=%v), want (true, true)", alive, known)
 	}
 }
 
 func TestProcessAliveNil(t *testing.T) {
-	if processAlive(nil) {
-		t.Fatal("nil process must not be reported alive")
+	alive, known := processAlive(nil)
+	if alive || known {
+		t.Fatalf("nil process liveness = (alive=%v, known=%v), want (false, false)", alive, known)
 	}
 }
 
@@ -30,8 +32,9 @@ func TestProcessAliveExitedProcess(t *testing.T) {
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("run helper process: %v", err)
 	}
-	if processAlive(cmd.Process) {
-		t.Fatal("exited process must not be reported alive")
+	alive, known := processAlive(cmd.Process)
+	if !known || alive {
+		t.Fatalf("exited process liveness = (alive=%v, known=%v), want (false, true)", alive, known)
 	}
 }
 

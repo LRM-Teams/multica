@@ -2628,7 +2628,7 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 		h.followChannelThreadUser(r.Context(), channelID, rootID, parseUUID(*root.AuthorID), false)
 	}
 	if root.Type == "agent" && root.AuthorID != nil {
-		h.ensureChannelThreadAgentInitialFollow(r.Context(), channelID, rootID, parseUUID(*root.AuthorID))
+		h.followChannelThreadAgentUnlessExplicitlyUnfollowed(r.Context(), channelID, rootID, parseUUID(*root.AuthorID))
 	}
 	h.followChannelThreadMentionedUsers(r.Context(), ch, msg)
 	_, _ = h.DB.Exec(r.Context(), `UPDATE channel SET updated_at = now() WHERE id = $1`, channelID)
@@ -2831,10 +2831,11 @@ func (h *Handler) followChannelThreadAgent(ctx context.Context, channelID, rootI
 	}
 }
 
-// ensureChannelThreadAgentInitialFollow registers an agent-authored root's
-// author the first time the thread receives a reply. An existing participant
-// row is left untouched so a later reply cannot undo an explicit unfollow.
-func (h *Handler) ensureChannelThreadAgentInitialFollow(ctx context.Context, channelID, rootID, agentID pgtype.UUID) {
+// followChannelThreadAgentUnlessExplicitlyUnfollowed applies implicit follow
+// transitions such as an agent-authored root's first reply or a personal
+// mention. A recorded explicit unfollow remains sticky until the agent posts
+// in the thread or manually follows it again.
+func (h *Handler) followChannelThreadAgentUnlessExplicitlyUnfollowed(ctx context.Context, channelID, rootID, agentID pgtype.UUID) {
 	if _, err := h.DB.Exec(ctx, `
 		WITH root AS (
 		  SELECT conversation_id
@@ -2844,9 +2845,18 @@ func (h *Handler) ensureChannelThreadAgentInitialFollow(ctx context.Context, cha
 		INSERT INTO thread_participant (conversation_id, root_message_id, member_type, member_id, followed_at, updated_at)
 		SELECT root.conversation_id, $2, 'agent', $3, now(), now()
 		FROM root
-		ON CONFLICT (root_message_id, member_type, member_id) DO NOTHING`,
+		ON CONFLICT (root_message_id, member_type, member_id) DO UPDATE
+		SET followed_at = CASE
+		      WHEN thread_participant.wake_state = 'unfollowed' THEN thread_participant.followed_at
+		      ELSE COALESCE(thread_participant.followed_at, EXCLUDED.followed_at)
+		    END,
+		    wake_state = CASE
+		      WHEN thread_participant.wake_state = 'unfollowed' THEN 'unfollowed'
+		      ELSE 'active'
+		    END,
+		    updated_at = now()`,
 		channelID, rootID, agentID); err != nil {
-		slog.Warn("channel thread agent initial follow failed", "root", uuidToString(rootID), "agent", uuidToString(agentID), "error", err)
+		slog.Warn("channel thread implicit agent follow failed", "root", uuidToString(rootID), "agent", uuidToString(agentID), "error", err)
 	}
 }
 
@@ -2862,7 +2872,7 @@ func (h *Handler) ensureChannelThreadAgentWakeParticipant(ctx context.Context, c
 		FROM root
 		ON CONFLICT (root_message_id, member_type, member_id) DO UPDATE
 		SET wake_state = CASE
-		      WHEN thread_participant.followed_at IS NULL AND thread_participant.wake_state <> 'removed' THEN 'no_wake'
+		      WHEN thread_participant.followed_at IS NULL AND thread_participant.wake_state NOT IN ('removed', 'unfollowed') THEN 'no_wake'
 		      ELSE thread_participant.wake_state
 		    END,
 		    updated_at = now()`,
@@ -2874,7 +2884,7 @@ func (h *Handler) ensureChannelThreadAgentWakeParticipant(ctx context.Context, c
 func (h *Handler) unfollowChannelThreadAgent(ctx context.Context, channelID, rootID, agentID pgtype.UUID) error {
 	_, err := h.DB.Exec(ctx, `
 		UPDATE thread_participant
-		SET followed_at = NULL, wake_state = 'no_wake', updated_at = now()
+		SET followed_at = NULL, wake_state = 'unfollowed', updated_at = now()
 		WHERE root_message_id = $1
 		  AND member_type = 'agent'
 		  AND member_id = $2
@@ -3462,6 +3472,9 @@ func (h *Handler) dispatchChannelThreadReplyMentions(ctx context.Context, ch Cha
 	mentionedAgents := h.channelMentionedAgents(ctx, ch.WorkspaceID, ch.ID, trigger.Content, trigger.Parts)
 	if len(mentionedAgents) > 0 {
 		for _, agent := range mentionedAgents {
+			if trigger.ThreadRootMessageID != nil {
+				h.followChannelThreadAgentUnlessExplicitlyUnfollowed(ctx, parseUUID(ch.ID), parseUUID(*trigger.ThreadRootMessageID), agent.ID)
+			}
 			if len(mentionedAgents) == 1 {
 				h.markTriggerFacilitatorIfNeeded(ctx, ch, agent, trigger)
 			}
@@ -4502,8 +4515,14 @@ func (h *Handler) setChannelThreadAgentRole(ctx context.Context, channelID, root
 		FROM root
 		ON CONFLICT (root_message_id, member_type, member_id) DO UPDATE
 		SET role = EXCLUDED.role,
-		    followed_at = COALESCE(thread_participant.followed_at, EXCLUDED.followed_at),
-		    wake_state = 'active',
+		    followed_at = CASE
+		      WHEN thread_participant.wake_state = 'unfollowed' THEN thread_participant.followed_at
+		      ELSE COALESCE(thread_participant.followed_at, EXCLUDED.followed_at)
+		    END,
+		    wake_state = CASE
+		      WHEN thread_participant.wake_state = 'unfollowed' THEN 'unfollowed'
+		      ELSE 'active'
+		    END,
 		    updated_at = now()`,
 		channelID, rootID, agentID, role); err != nil {
 		slog.Warn("channel thread agent role update failed", "root", uuidToString(rootID), "agent", uuidToString(agentID), "role", role, "error", err)

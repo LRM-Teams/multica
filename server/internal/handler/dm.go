@@ -834,8 +834,9 @@ func (h *Handler) dispatchDMAgentReply(ctx context.Context, ch ChannelResponse, 
 }
 
 // dispatchDMThreadReply applies the same follower boundary as group threads.
-// An explicit agent mention pierces an unfollow and follows the thread again;
-// an ordinary reply is delivered only to active agent followers.
+// A personal mention always pierces as a directed wake, but only establishes
+// an implicit follow when the agent has not explicitly unfollowed. An ordinary
+// reply is delivered only to active agent followers.
 func (h *Handler) dispatchDMThreadReply(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
 	h.notifyChannelMemberMentions(ctx, ch, trigger)
 	mentionedAgents := h.channelMentionedAgents(ctx, ch.WorkspaceID, ch.ID, trigger.Content, trigger.Parts)
@@ -846,7 +847,7 @@ func (h *Handler) dispatchDMThreadReply(ctx context.Context, ch ChannelResponse,
 				continue
 			}
 			if trigger.ThreadRootMessageID != nil {
-				h.followChannelThreadAgent(ctx, parseUUID(ch.ID), parseUUID(*trigger.ThreadRootMessageID), agent.ID)
+				h.followChannelThreadAgentUnlessExplicitlyUnfollowed(ctx, parseUUID(ch.ID), parseUUID(*trigger.ThreadRootMessageID), agent.ID)
 			}
 			if _, err := h.dispatchChannelAgentReplyWithReason(ctx, ch, agent, trigger, initiatorUserID, "mention"); err == nil && h.Metrics != nil {
 				h.Metrics.RecordChannelFullExecutionWake("explicit_mention")

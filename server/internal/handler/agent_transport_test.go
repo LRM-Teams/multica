@@ -1414,8 +1414,8 @@ func TestAgentTransportUnfollowDMThreadTarget(t *testing.T) {
 	if followedAt.Valid {
 		t.Fatalf("agent followed_at still set after unfollow: %+v", followedAt)
 	}
-	if wakeState != "no_wake" {
-		t.Fatalf("agent wake_state=%q, want no_wake", wakeState)
+	if wakeState != "unfollowed" {
+		t.Fatalf("agent wake_state=%q, want unfollowed", wakeState)
 	}
 
 	var eventRows int
@@ -1453,7 +1453,6 @@ func TestDMThreadDeliveryHonorsFollowUnfollowMentionAndAgentPost(t *testing.T) {
 		t.Fatalf("insert dm root: %v", err)
 	}
 	target := "dm:@" + humanHandle + ":" + root.ID
-	testHandler.followChannelThreadAgent(ctx, parseUUID(dmChannel.ID), parseUUID(root.ID), parseUUID(agentID))
 
 	sendHumanReply := func(content string, parts ...protocol.MessagePart) ChannelMessageResponse {
 		t.Helper()
@@ -1506,7 +1505,29 @@ func TestDMThreadDeliveryHonorsFollowUnfollowMentionAndAgentPost(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("unfollow dm thread: status=%d body=%s", rec.Code, rec.Body.String())
 		}
-		assertFollowState(false, "no_wake")
+		assertFollowState(false, "unfollowed")
+	}
+
+	var agentHandle string
+	if err := testPool.QueryRow(ctx, `SELECT name FROM agent WHERE id = $1`, agentID).Scan(&agentHandle); err != nil {
+		t.Fatalf("load agent handle: %v", err)
+	}
+	mentionPart := protocol.MessagePart{
+		Type:       protocol.MessagePartTypeReference,
+		RefType:    "mention",
+		RefSubType: "agent",
+		RefID:      agentID,
+		Label:      "@" + agentHandle,
+	}
+	firstMention := sendHumanReply("@"+agentHandle+" first dm thread mention", mentionPart)
+	assertWakeCount(firstMention.ID, 1)
+	assertChannelAgentWakeReasonPriority(t, dmChannel.ID, agentID, firstMention.ID, "mention", channelDirectedWakePriority)
+	assertFollowState(true, "active")
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_inbox_event
+		SET status = 'acked', acked_at = now(), terminal_outcome = 'no_reply', retryable = false, terminal_at = now(), updated_at = now()
+		WHERE channel_id = $1 AND agent_id = $2 AND source_message_id = $3`, dmChannel.ID, agentID, firstMention.ID); err != nil {
+		t.Fatalf("ack first mention wake: %v", err)
 	}
 
 	ordinary := sendHumanReply("ordinary followed reply " + uuid.NewString())
@@ -1516,24 +1537,13 @@ func TestDMThreadDeliveryHonorsFollowUnfollowMentionAndAgentPost(t *testing.T) {
 	unfollow()
 	ignored := sendHumanReply("ordinary unfollowed reply " + uuid.NewString())
 	assertWakeCount(ignored.ID, 0)
-	assertFollowState(false, "no_wake")
+	assertFollowState(false, "unfollowed")
 
-	var agentHandle string
-	if err := testPool.QueryRow(ctx, `SELECT name FROM agent WHERE id = $1`, agentID).Scan(&agentHandle); err != nil {
-		t.Fatalf("load agent handle: %v", err)
-	}
-	mentioned := sendHumanReply("@"+agentHandle+" explicit dm thread mention", protocol.MessagePart{
-		Type:       protocol.MessagePartTypeReference,
-		RefType:    "mention",
-		RefSubType: "agent",
-		RefID:      agentID,
-		Label:      "@" + agentHandle,
-	})
+	mentioned := sendHumanReply("@"+agentHandle+" explicit dm thread mention after unfollow", mentionPart)
 	assertWakeCount(mentioned.ID, 1)
 	assertChannelAgentWakeReasonPriority(t, dmChannel.ID, agentID, mentioned.ID, "mention", channelDirectedWakePriority)
-	assertFollowState(true, "active")
+	assertFollowState(false, "unfollowed")
 
-	unfollow()
 	post := agentTransportSendForTest(t, taskID, agentID, map[string]any{
 		"target":            target,
 		"content":           "agent post refollows dm thread " + uuid.NewString(),

@@ -4,7 +4,7 @@ import { useCallback, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "../hooks";
 import { memberListOptions, agentListOptions, squadListOptions } from "./queries";
-import { resolvePublicFileUrl } from "./avatar-url";
+import { defaultAgentAvatarPath, resolvePublicFileUrl } from "./avatar-url";
 import { resolveActorDisplayName, resolveActorHandle } from "../identity";
 
 export function useActorName() {
@@ -68,7 +68,13 @@ export function useActorName() {
 
   const getActorAvatarUrl = useCallback((type: string, id: string): string | null => {
     if (type === "member") return resolvePublicFileUrl(members.find((m) => m.user_id === id)?.avatar_url);
-    if (type === "agent") return resolvePublicFileUrl(agents.find((a) => a.id === id)?.avatar_url);
+    // Agents with no self-chosen avatar fall back to a deterministic photo
+    // from the shared pool (#451) — keyed by the stable id, never persisted.
+    if (type === "agent")
+      return (
+        resolvePublicFileUrl(agents.find((a) => a.id === id)?.avatar_url) ??
+        defaultAgentAvatarPath(id)
+      );
     if (type === "squad") return resolvePublicFileUrl(squads.find((s) => s.id === id)?.avatar_url);
     return null;
   }, [agents, members, squads]);

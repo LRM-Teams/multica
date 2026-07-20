@@ -40,7 +40,6 @@ import {
 } from "@multica/core/agents";
 import { CharCounter } from "./char-counter";
 import { useT } from "../../i18n";
-import { randomAgentAvatarUrl } from "../../common/agent-avatar-presets";
 
 export function CreateAgentDialog({
   runtimes,
@@ -101,9 +100,11 @@ export function CreateAgentDialog({
   const [thinkingLevel, setThinkingLevel] = useState(template?.thinking_level ?? "");
   const [instructions, setInstructions] = useState(template?.instructions ?? draft?.instructions ?? "");
   const [avatarUrl, setAvatarUrl] = useState<string | null>(() => {
+    // #451: never seed a machine-picked default here. avatar_url must only ever
+    // hold a human's explicit choice; an unset avatar renders a deterministic
+    // pool photo at display time (getActorAvatarUrl), not a persisted value.
     if (template?.avatar_url) return template.avatar_url;
-    if (draft) return draft.avatar_url ?? randomAgentAvatarUrl();
-    return null;
+    return draft?.avatar_url ?? null;
   });
   const [selectedSkillIds, setSelectedSkillIds] = useState<Set<string>>(
     () => new Set(template?.skills.map((s) => s.id) ?? []),

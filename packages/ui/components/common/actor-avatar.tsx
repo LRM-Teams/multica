@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Bot, Users } from "lucide-react";
+import { Users } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { MulticaIcon } from "./multica-icon";
 
@@ -9,6 +9,11 @@ interface ActorAvatarProps {
   name: string;
   initials: string;
   avatarUrl?: string | null;
+  /**
+   * Retained for call-site symmetry with isSystem/isSquad. No longer drives a
+   * fallback glyph (#451 retired the bot); agents get a pool photo upstream via
+   * getActorAvatarUrl and fall through to initials only if that image fails.
+   */
   isAgent?: boolean;
   isSystem?: boolean;
   isSquad?: boolean;
@@ -20,7 +25,6 @@ function ActorAvatar({
   name,
   initials,
   avatarUrl,
-  isAgent,
   isSystem,
   isSquad,
   size = 20,
@@ -43,8 +47,10 @@ function ActorAvatar({
         // a single person; everyone else stays round.
         isSquad ? "rounded-md" : "rounded-full",
         // One restrained, uniform fallback for everyone — no per-actor hash
-        // colors (#451, Frank: "bot 头像不要五颜六色"; Iris: color is info, not
-        // decoration — distinguish agents by name/handle or a custom avatar).
+        // colors, no bot glyph (#451, Frank: retire the robot / random colors).
+        // Agents render a deterministic photo from the shared pool via
+        // getActorAvatarUrl; this text fallback only shows if that image itself
+        // fails to load, in which case initials read better than a glyph.
         showFallback && "bg-muted text-muted-foreground",
         className
       )}
@@ -64,8 +70,6 @@ function ActorAvatar({
         />
       ) : isSystem ? (
         <MulticaIcon noSpin style={{ width: size * 0.55, height: size * 0.55 }} />
-      ) : isAgent ? (
-        <Bot style={{ width: size * 0.55, height: size * 0.55 }} />
       ) : isSquad ? (
         <Users style={{ width: size * 0.55, height: size * 0.55 }} />
       ) : (

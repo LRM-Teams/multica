@@ -286,7 +286,7 @@ func TestAgentTransportFreshnessDraftSQLBranchesAreScopedToTaskOrInbox(t *testin
 			workspace_id, channel_id, agent_id, reason, status, priority,
 			seq_from, seq_to, delivery_mode, response_mode
 		)
-		VALUES ($1, $2, $3, 'mention', 'draining', 100, $4, $4, 'directed', 'public_response')
+		VALUES ($1, $2, $3, 'mention', 'draining', 100, $4, $4, 'execute', 'public_response')
 		RETURNING id`, testWorkspaceID, channelID, uuidToString(task.AgentID), seen.Seq).Scan(&inboxEventID); err != nil {
 		t.Fatalf("insert transport inbox source: %v", err)
 	}
@@ -650,6 +650,10 @@ func TestAgentTransportSendDraftReloadsWinnerAfterConcurrentReplacement(t *testi
 	if held.Code != http.StatusOK {
 		t.Fatalf("hold race draft A: status=%d body=%s", held.Code, held.Body.String())
 	}
+	newest, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "race newest decision "+uuid.NewString(), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("seed race newest decision message: %v", err)
+	}
 
 	source := agentTransportSource{task: task, origin: origin}
 	replacementTx, err := testPool.Begin(ctx)
@@ -662,15 +666,25 @@ func TestAgentTransportSendDraftReloadsWinnerAfterConcurrentReplacement(t *testi
 	}
 	newContent := "race draft B " + uuid.NewString()
 	newClientID := "race-draft-b-" + uuid.NewString()
+	newDecisionFactID := agentTransportFreshnessProducerID(source, target, seen.Seq, newest.Seq)
 	partsJSON, err := json.Marshal([]protocol.MessagePart{{Type: protocol.MessagePartTypeText, Text: newContent}})
 	if err != nil {
 		t.Fatalf("marshal replacement parts: %v", err)
 	}
 	if _, err := replacementTx.Exec(ctx, `
 		UPDATE agent_transport_draft
-		SET content = $5, parts = $6::jsonb, client_message_id = $7, updated_at = now()
+		SET content = $5,
+		    parts = $6::jsonb,
+		    client_message_id = $7,
+		    seen_up_to_seq = $8::bigint,
+		    held_from_seq = $8::bigint + 1,
+		    held_to_seq = $9,
+		    shown_from_seq = $9,
+		    shown_to_seq = $9,
+		    decision_fact_id = $10,
+		    updated_at = now()
 		WHERE workspace_id = $1 AND agent_id = $2 AND target = $3 AND task_id = $4 AND inbox_event_id IS NULL`,
-		origin.workspaceID, origin.agentID, target.raw, task.ID, newContent, partsJSON, newClientID); err != nil {
+		origin.workspaceID, origin.agentID, target.raw, task.ID, newContent, partsJSON, newClientID, seen.Seq, newest.Seq, newDecisionFactID); err != nil {
 		t.Fatalf("replace draft under held source lock: %v", err)
 	}
 
@@ -718,6 +732,22 @@ func TestAgentTransportSendDraftReloadsWinnerAfterConcurrentReplacement(t *testi
 	}
 	if body.Message.Content != newContent || body.Message.ClientMessageID == nil || *body.Message.ClientMessageID != newClientID {
 		t.Fatalf("sent stale draft after concurrent replacement: %+v, want content/client %q/%q", body.Message, newContent, newClientID)
+	}
+	assertAgentMessageSentActivityText(t, body.Message.ID, newContent)
+	var activityDecisionFactID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT COALESCE(details->>'decision_fact_id', '')
+		FROM agent_activity_event
+		WHERE workspace_id = $1
+		  AND agent_id = $2
+		  AND event_type = 'message_sent'
+		  AND details->>'message_id' = $3
+		ORDER BY created_at DESC
+		LIMIT 1`, testWorkspaceID, uuidToString(task.AgentID), body.Message.ID).Scan(&activityDecisionFactID); err != nil {
+		t.Fatalf("load winner draft Activity fact: %v", err)
+	}
+	if activityDecisionFactID != newDecisionFactID {
+		t.Fatalf("winner draft Activity decision fact=%q, want locked replacement %q", activityDecisionFactID, newDecisionFactID)
 	}
 	assertNoChannelMessageContent(t, channelID, oldContent)
 	assertAgentTransportDraftMissing(t, uuidToString(task.AgentID), target.raw)

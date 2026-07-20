@@ -2399,7 +2399,7 @@ func (h *Handler) ReplayCompletedAgentRadarTask(ctx context.Context, task db.Age
 	var persisted TaskCompleteRequest
 	if err := json.Unmarshal(task.Result, &persisted); err != nil {
 		message := "parse persisted task result: " + err.Error()
-		h.failPersistedAgentRadarRun(ctx, run.ID, message)
+		h.failPersistedAgentRadarRun(ctx, run, message)
 		return errors.New(message)
 	}
 	agent, err := h.Queries.GetAgent(ctx, task.AgentID)
@@ -2409,7 +2409,7 @@ func (h *Handler) ReplayCompletedAgentRadarTask(ctx context.Context, task db.Age
 	plan, err := radar.ParseActionPlan(persisted.Output)
 	if err != nil {
 		message := "parse action plan: " + err.Error()
-		h.failPersistedAgentRadarRun(ctx, run.ID, message)
+		h.failPersistedAgentRadarRun(ctx, run, message)
 		return errors.New(message)
 	}
 	if err := h.ExecuteAgentRadarPlan(ctx, run, agent, plan); err != nil {
@@ -2418,13 +2418,20 @@ func (h *Handler) ReplayCompletedAgentRadarTask(ctx context.Context, task db.Age
 	return nil
 }
 
-func (h *Handler) failPersistedAgentRadarRun(ctx context.Context, runID pgtype.UUID, message string) {
+func (h *Handler) failPersistedAgentRadarRun(ctx context.Context, run db.AgentRadarRun, message string) {
 	if _, updateErr := h.Queries.UpdateAgentRadarRunStatus(ctx, db.UpdateAgentRadarRunStatusParams{
-		ID:     runID,
+		ID:     run.ID,
 		Status: "failed",
 		Error:  pgtype.Text{String: message, Valid: true},
 	}); updateErr == nil {
-		_, _ = h.Queries.MarkWorkspaceRadarFailedByRunID(ctx, runID)
+		_, _ = h.Queries.MarkWorkspaceRadarFailedByRunID(ctx, run.ID)
+	}
+	// Parse/result failures never reach ExecuteAgentRadarPlan, so settle ambient
+	// here; otherwise the watch stays running until stale reclaim (~15m).
+	if h.WorkGraph != nil && strings.HasPrefix(run.CooldownKey, "wendy_ambient:") {
+		if rerr := h.WorkGraph.ReconcileChannelAmbientRun(ctx, run.ID, false); rerr != nil {
+			slog.Warn("reconcile wendy ambient run after radar parse failure", "run_id", uuidToString(run.ID), "error", rerr)
+		}
 	}
 }
 

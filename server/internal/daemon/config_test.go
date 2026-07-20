@@ -864,6 +864,38 @@ func TestLoadConfig_BackendOverrides_MalformedConfigFileNonFatal(t *testing.T) {
 	// make sure log/slog stays imported.
 }
 
+// TestLoadConfig_PinnedDaemonIDSkipsFrozenProfileUUIDs guards the sandbox
+// snapshot create race: a frozen profiles/*/daemon.id from the source sandbox
+// must not enter LegacyDaemonIDs when MULTICA_DAEMON_ID is pinned, or register
+// would merge/steal the source runtime row.
+func TestLoadConfig_PinnedDaemonIDSkipsFrozenProfileUUIDs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stageFakeAgent(t)
+
+	foreignID := "22222222-2222-2222-2222-222222222222"
+	profileDir := filepath.Join(home, ".multica", "profiles", "sandbox-source")
+	if err := os.MkdirAll(profileDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(profileDir, "daemon.id"), []byte(foreignID+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(Overrides{
+		ServerURL:      "http://localhost:8080",
+		WorkspacesRoot: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	for _, id := range cfg.LegacyDaemonIDs {
+		if id == foreignID {
+			t.Fatalf("LegacyDaemonIDs unexpectedly includes frozen source UUID %s: %v", foreignID, cfg.LegacyDaemonIDs)
+		}
+	}
+}
+
 // agentKeys is a tiny helper to make agent-map missing-key error messages
 // readable. Returns sorted keys.
 func agentKeys(m map[string]AgentEntry) []string {

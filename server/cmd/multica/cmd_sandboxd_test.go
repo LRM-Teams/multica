@@ -66,3 +66,21 @@ func TestCallCubeCloneSnapshotsCreatesAndDeletesSnapshot(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildStartRuntimeInCubeCodeResetsFrozenDaemonIdentity(t *testing.T) {
+	code := buildStartRuntimeInCubeCode(map[string]string{
+		"MULTICA_TOKEN":     "tok",
+		"MULTICA_DAEMON_ID": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+	})
+	for _, want := range []string{
+		"pkill -f 'multica daemon'",
+		`daemon_file.write_text(daemon_id + "\n")`,
+		`profiles.glob("*/daemon.id")`,
+		"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		"/usr/local/bin/start-multica-runtime.sh",
+	} {
+		if !strings.Contains(code, want) {
+			t.Fatalf("start runtime code missing %q\n%s", want, code)
+		}
+	}
+}

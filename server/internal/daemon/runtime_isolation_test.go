@@ -371,16 +371,28 @@ func TestPollLoopShutdownWaitsForPollersBeforeTaskWG(t *testing.T) {
 func TestPollLoopTargetsRuntimeWakeup(t *testing.T) {
 	t.Parallel()
 
-	var fastClaims atomic.Int64
-	var slowClaims atomic.Int64
+	// phase 0 = warm-up broadcast; phase 1 = targeted wakeup. Late warm-up
+	// claims must not pollute the targeted counters (CI flake).
+	var phase atomic.Int32
+	var warmFast, warmSlow atomic.Int64
+	var fastClaims, slowClaims atomic.Int64
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
+		targeted := phase.Load() >= 1
 		switch {
 		case strings.HasSuffix(path, "/runtimes/runtime-fast/tasks/claim"):
-			fastClaims.Add(1)
+			if targeted {
+				fastClaims.Add(1)
+			} else {
+				warmFast.Add(1)
+			}
 		case strings.HasSuffix(path, "/runtimes/runtime-slow/tasks/claim"):
-			slowClaims.Add(1)
+			if targeted {
+				slowClaims.Add(1)
+			} else {
+				warmSlow.Add(1)
+			}
 		default:
 			http.Error(w, "unexpected path: "+path, http.StatusNotFound)
 			return
@@ -412,16 +424,15 @@ func TestPollLoopTargetsRuntimeWakeup(t *testing.T) {
 	taskWakeups <- taskWakeup{}
 
 	deadline := time.After(2 * time.Second)
-	for fastClaims.Load() < 1 || slowClaims.Load() < 1 {
+	for warmFast.Load() < 1 || warmSlow.Load() < 1 {
 		select {
 		case <-deadline:
-			t.Fatalf("initial poll did not claim both runtimes; fast=%d slow=%d", fastClaims.Load(), slowClaims.Load())
+			t.Fatalf("initial poll did not claim both runtimes; fast=%d slow=%d", warmFast.Load(), warmSlow.Load())
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
 
-	fastClaims.Store(0)
-	slowClaims.Store(0)
+	phase.Store(1)
 	taskWakeups <- taskWakeup{runtimeID: "runtime-fast"}
 
 	deadline = time.After(2 * time.Second)

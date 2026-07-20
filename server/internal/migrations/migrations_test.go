@@ -105,6 +105,47 @@ func TestMigration201ScopesFreshnessDraftsBySourceAndFailsClosed(t *testing.T) {
 	}
 }
 
+func TestMigration202SeparatesExplicitUnfollowFromDirectedNoWake(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	migrationsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
+
+	up, err := os.ReadFile(filepath.Join(migrationsDir, "202_thread_participant_explicit_unfollow.up.sql"))
+	if err != nil {
+		t.Fatalf("read migration 202 up: %v", err)
+	}
+	contents := string(up)
+	for _, required := range []string{
+		"'active', 'no_wake', 'unfollowed', 'removed'",
+		"participant.followed_at IS NULL",
+		"participant.wake_state = 'no_wake'",
+		"part.value->>'event' = 'thread_unfollowed'",
+		"audit.action = 'thread_unfollow'",
+		"audit.channel_message_id = participant.root_message_id",
+		"audit.agent_id = participant.member_id",
+		"FROM channel_thread_state state",
+		"participant.member_type = 'user'",
+		"participant.member_id = state.user_id",
+		"participant.followed_at IS NULL",
+		"state.followed_at IS NULL",
+		"participant.wake_state IN ('active', 'no_wake')",
+	} {
+		if !strings.Contains(contents, required) {
+			t.Errorf("migration 202 up missing %q", required)
+		}
+	}
+
+	down, err := os.ReadFile(filepath.Join(migrationsDir, "202_thread_participant_explicit_unfollow.down.sql"))
+	if err != nil {
+		t.Fatalf("read migration 202 down: %v", err)
+	}
+	if !strings.Contains(string(down), "SET wake_state = 'no_wake'") {
+		t.Error("migration 202 down does not restore unfollowed rows to no_wake")
+	}
+}
+
 func TestResolveDirSkipsNonMigrationDirectory(t *testing.T) {
 	root := t.TempDir()
 	internalMigrations := filepath.Join(root, "server", "internal", "migrations")

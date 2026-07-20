@@ -4944,7 +4944,6 @@ func TestAgentUnfollowChannelThreadUpdatesAgentStateAndEmitsLinkedSystemEvent(t 
 		t.Fatalf("insert root: %v", err)
 	}
 	testHandler.followChannelThreadUser(ctx, parseUUID(channelID), parseUUID(root.ID), parseUUID(testUserID), false)
-	testHandler.followChannelThreadAgent(ctx, parseUUID(channelID), parseUUID(root.ID), parseUUID(agentID))
 
 	req := newRequestAs(testUserID, http.MethodDelete, "/api/channels/"+channelID+"/messages/"+root.ID+"/thread/follow", nil)
 	req.Header.Set("X-Actor-Source", "agent_credential")
@@ -4955,6 +4954,11 @@ func TestAgentUnfollowChannelThreadUpdatesAgentStateAndEmitsLinkedSystemEvent(t 
 	testHandler.UnfollowChannelThread(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("agent unfollow thread: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	testHandler.UnfollowChannelThread(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("repeat agent unfollow thread: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
 	var agentFollowedAt pgtype.Timestamptz
@@ -4969,8 +4973,8 @@ func TestAgentUnfollowChannelThreadUpdatesAgentStateAndEmitsLinkedSystemEvent(t 
 	if agentFollowedAt.Valid {
 		t.Fatalf("agent followed_at still set after unfollow: %+v", agentFollowedAt)
 	}
-	if agentWakeState != "no_wake" {
-		t.Fatalf("agent wake_state=%q, want no_wake", agentWakeState)
+	if agentWakeState != "unfollowed" {
+		t.Fatalf("agent wake_state=%q, want unfollowed", agentWakeState)
 	}
 
 	var userFollowedAt pgtype.Timestamptz
@@ -5001,6 +5005,19 @@ func TestAgentUnfollowChannelThreadUpdatesAgentStateAndEmitsLinkedSystemEvent(t 
 	if !strings.Contains(content, "@"+agentHandle) || !strings.Contains(content, "unfollowed this thread") {
 		t.Fatalf("system content = %q, want readable @handle fallback", content)
 	}
+	var eventRows int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM channel_message
+		WHERE channel_id = $1
+		  AND thread_root_message_id = $2
+		  AND author_type = 'system'
+		  AND content LIKE '%unfollowed this thread%'`, channelID, root.ID).Scan(&eventRows); err != nil {
+		t.Fatalf("count thread unfollow system events: %v", err)
+	}
+	if eventRows != 1 {
+		t.Fatalf("thread unfollow system event rows = %d, want 1 after repeated request", eventRows)
+	}
 	var parts []protocol.MessagePart
 	if err := json.Unmarshal(rawParts, &parts); err != nil {
 		t.Fatalf("decode system parts: %v", err)
@@ -5027,6 +5044,33 @@ func TestAgentUnfollowChannelThreadUpdatesAgentStateAndEmitsLinkedSystemEvent(t 
 	if mention := parts[1]; mention.Type != protocol.MessagePartTypeReference || mention.RefType != "mention" || mention.RefSubType != "agent" || mention.RefID != agentID || mention.Label != "@"+agentHandle {
 		t.Fatalf("mention part = %+v, want structured agent @handle", mention)
 	}
+
+	mentioned, err := testHandler.insertChannelMessageWithParts(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "@"+agentHandle+" please facilitate this discussion after unfollow", []protocol.MessagePart{{
+		Type:       protocol.MessagePartTypeReference,
+		RefType:    "mention",
+		RefSubType: "agent",
+		RefID:      agentID,
+		Label:      "@" + agentHandle,
+	}}, "multica", nil, pgtype.UUID{}, parseUUID(root.ID), strPtr("thread-unfollow-mention-"+uuid.NewString()), 0)
+	if err != nil {
+		t.Fatalf("insert mention after unfollow: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("load channel after unfollow")
+	}
+	testHandler.dispatchChannelThreadReplyMentions(ctx, ch, mentioned, parseUUID(testUserID))
+	if err := testPool.QueryRow(ctx, `
+		SELECT followed_at, wake_state
+		FROM thread_participant
+		WHERE root_message_id = $1 AND member_type = 'agent' AND member_id = $2`,
+		root.ID, agentID).Scan(&agentFollowedAt, &agentWakeState); err != nil {
+		t.Fatalf("load agent state after directed mention: %v", err)
+	}
+	if agentFollowedAt.Valid || agentWakeState != "unfollowed" {
+		t.Fatalf("directed mention changed explicit unfollow: followed_at=%+v wake_state=%q", agentFollowedAt, agentWakeState)
+	}
+	assertChannelAgentWakeReasonPriority(t, channelID, agentID, mentioned.ID, "mention", channelDirectedWakePriority)
 }
 
 func TestChannelThreadReplyDoesNotCreateMainTimelineUnread(t *testing.T) {
@@ -5111,8 +5155,8 @@ func TestChannelThreadReadModelExposesParticipantsAndPendingWake(t *testing.T) {
 		t.Fatalf("participants missing root user: %+v", gotRoot.ThreadParticipants)
 	}
 	agentParticipant, ok := participants["agent:"+agentID]
-	if !ok || agentParticipant.Followed {
-		t.Fatalf("participants missing pierced non-following agent: %+v", gotRoot.ThreadParticipants)
+	if !ok || !agentParticipant.Followed {
+		t.Fatalf("participants missing first-mention followed agent: %+v", gotRoot.ThreadParticipants)
 	}
 	if len(gotRoot.ThreadWakeAnnotations) != 1 {
 		t.Fatalf("wake annotations = %+v, want one pending agent", gotRoot.ThreadWakeAnnotations)
@@ -6291,8 +6335,8 @@ func TestChannelThreadMentionedAgentReplyStaysInThread(t *testing.T) {
 		  AND wake_state = 'active'`, root.ID, agentID).Scan(&agentParticipants); err != nil {
 		t.Fatalf("count agent thread participant: %v", err)
 	}
-	if agentParticipants != 0 {
-		t.Fatalf("agent thread participant after mention count=%d, want 0", agentParticipants)
+	if agentParticipants != 1 {
+		t.Fatalf("agent thread participant after first mention count=%d, want 1", agentParticipants)
 	}
 
 	var sessionID string

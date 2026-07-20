@@ -63,6 +63,42 @@ func TestMigration200RetiresThreadProjectionAndDraftOptions(t *testing.T) {
 	}
 }
 
+func TestMigration201ScopesFreshnessDraftsBySourceAndFailsClosed(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	migrationsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
+
+	up, err := os.ReadFile(filepath.Join(migrationsDir, "201_agent_transport_draft_decision_scope.up.sql"))
+	if err != nil {
+		t.Fatalf("read migration 201 up: %v", err)
+	}
+	contents := string(up)
+	for _, required := range []string{
+		"ADD COLUMN IF NOT EXISTS task_id UUID",
+		"ADD COLUMN IF NOT EXISTS inbox_event_id UUID",
+		"ADD COLUMN IF NOT EXISTS decision_fact_id TEXT",
+		"audit.client_message_id = draft.client_message_id",
+		"HAVING COUNT(audit.id) <> 1",
+		"(audit.task_id IS NULL) = (audit.inbox_event_id IS NULL)",
+		"COALESCE(btrim(audit.context_pack->>'producer_fact_id'), '') = ''",
+		"RAISE EXCEPTION",
+		"idx_agent_transport_draft_source_target",
+		"idx_agent_transport_draft_inbox_target",
+		"CHECK ((task_id IS NOT NULL) <> (inbox_event_id IS NOT NULL))",
+		"ALTER COLUMN decision_fact_id SET NOT NULL",
+		"agent_transport_draft_decision_fact_nonempty_check",
+	} {
+		if !strings.Contains(contents, required) {
+			t.Errorf("migration 201 up missing %q", required)
+		}
+	}
+	if strings.Contains(contents, "ORDER BY audit.created_at DESC") {
+		t.Error("migration 201 must not choose a latest audit heuristic")
+	}
+}
+
 func TestResolveDirSkipsNonMigrationDirectory(t *testing.T) {
 	root := t.TempDir()
 	internalMigrations := filepath.Join(root, "server", "internal", "migrations")

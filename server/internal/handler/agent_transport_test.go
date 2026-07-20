@@ -509,17 +509,59 @@ func TestMigration201BackfillsExactDecisionFactOrFailsClosed(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		name       string
-		sourceKind string
-		audits     int
-		fact       string
-		wantErr    bool
+		name             string
+		sourceKind       string
+		audits           int
+		fact             string
+		auditSourceKinds []string
+		auditFacts       []string
+		auditLatestSeqs  []int64
+		wantFact         string
+		wantErr          bool
 	}{
 		{name: "valid exact task audit", sourceKind: "task", audits: 1, fact: "freshness_decision_fact:valid-task"},
 		{name: "valid exact inbox audit", sourceKind: "inbox", audits: 1, fact: "freshness_decision_fact:valid-inbox"},
+		{name: "repeated equivalent current-range audits", sourceKind: "inbox", audits: 2, fact: "freshness_decision_fact:equivalent"},
+		{
+			name:       "historical same-source audits use current-range fact",
+			sourceKind: "inbox",
+			audits:     3,
+			auditFacts: []string{
+				"freshness_decision_fact:older",
+				"freshness_decision_fact:newer",
+				"freshness_decision_fact:winner",
+			},
+			auditLatestSeqs: []int64{5, 7, 9},
+			wantFact:        "freshness_decision_fact:winner",
+		},
 		{name: "missing exact audit", sourceKind: "task", fact: "freshness_decision_fact:missing", wantErr: true},
 		{name: "missing fact", sourceKind: "task", audits: 1, fact: "", wantErr: true},
-		{name: "ambiguous exact audits", sourceKind: "task", audits: 2, fact: "freshness_decision_fact:ambiguous", wantErr: true},
+		{
+			name:            "same source without current draft range",
+			sourceKind:      "inbox",
+			audits:          2,
+			fact:            "freshness_decision_fact:historical-only",
+			auditLatestSeqs: []int64{5, 8},
+			wantErr:         true,
+		},
+		{
+			name:       "same source current range has conflicting facts",
+			sourceKind: "inbox",
+			audits:     2,
+			auditFacts: []string{
+				"freshness_decision_fact:conflict-a",
+				"freshness_decision_fact:conflict-b",
+			},
+			wantErr: true,
+		},
+		{
+			name:             "distinct sources across exact audits",
+			sourceKind:       "both",
+			audits:           2,
+			fact:             "freshness_decision_fact:ambiguous-source",
+			auditSourceKinds: []string{"task", "inbox"},
+			wantErr:          true,
+		},
 		{name: "single audit with both sources", sourceKind: "both", audits: 1, fact: "freshness_decision_fact:both", wantErr: true},
 		{name: "single audit with neither source", sourceKind: "neither", audits: 1, fact: "freshness_decision_fact:neither", wantErr: true},
 	} {
@@ -542,7 +584,8 @@ func TestMigration201BackfillsExactDecisionFactOrFailsClosed(t *testing.T) {
 				) ON COMMIT DROP;
 				CREATE TEMP TABLE agent_task_transport_audit (
 					id UUID PRIMARY KEY, workspace_id UUID NOT NULL, task_id UUID, inbox_event_id UUID, agent_id UUID NOT NULL,
-					action TEXT NOT NULL, target TEXT NOT NULL, client_message_id TEXT, context_pack JSONB NOT NULL
+					action TEXT NOT NULL, target TEXT NOT NULL, client_message_id TEXT, context_pack JSONB NOT NULL,
+					created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 				) ON COMMIT DROP;`); err != nil {
 				t.Fatalf("create legacy migration fixtures: %v", err)
 			}
@@ -562,7 +605,11 @@ func TestMigration201BackfillsExactDecisionFactOrFailsClosed(t *testing.T) {
 			}
 			for i := 0; i < tc.audits; i++ {
 				var taskID, inboxEventID any
-				switch tc.sourceKind {
+				auditSourceKind := tc.sourceKind
+				if i < len(tc.auditSourceKinds) {
+					auditSourceKind = tc.auditSourceKinds[i]
+				}
+				switch auditSourceKind {
 				case "inbox":
 					inboxEventID = sourceID
 				case "task":
@@ -571,7 +618,16 @@ func TestMigration201BackfillsExactDecisionFactOrFailsClosed(t *testing.T) {
 					taskID = sourceID
 					inboxEventID = sourceID
 				}
-				if _, err := tx.Exec(ctx, `INSERT INTO agent_task_transport_audit (id, workspace_id, task_id, inbox_event_id, agent_id, action, target, client_message_id, context_pack) VALUES ($1,$2,$3,$4,$5,'message_send','#held','exact-client',jsonb_build_object('held', true, 'producer_fact_id', $6::text))`, uuid.NewString(), workspaceID, taskID, inboxEventID, agentID, tc.fact); err != nil {
+				auditFact := tc.fact
+				if i < len(tc.auditFacts) {
+					auditFact = tc.auditFacts[i]
+				}
+				auditLatestSeq := int64(9)
+				if i < len(tc.auditLatestSeqs) {
+					auditLatestSeq = tc.auditLatestSeqs[i]
+				}
+				auditCreatedAt := time.Date(2026, time.July, 20, 0, 0, i, 0, time.UTC)
+				if _, err := tx.Exec(ctx, `INSERT INTO agent_task_transport_audit (id, workspace_id, task_id, inbox_event_id, agent_id, action, target, client_message_id, context_pack, created_at) VALUES ($1,$2,$3,$4,$5,'message_send','#held','exact-client',jsonb_build_object('held', true, 'producer_fact_id', $6::text, 'seen_up_to_seq', 4, 'latest_seq', $7::bigint),$8)`, uuid.NewString(), workspaceID, taskID, inboxEventID, agentID, auditFact, auditLatestSeq, auditCreatedAt); err != nil {
 					t.Fatalf("insert legacy audit: %v", err)
 				}
 			}
@@ -594,8 +650,12 @@ func TestMigration201BackfillsExactDecisionFactOrFailsClosed(t *testing.T) {
 			if tc.sourceKind == "inbox" {
 				gotSourceID = uuidToString(gotInboxEventID)
 			}
-			if gotSourceID != sourceID || gotFact != tc.fact || gotTaskID.Valid == gotInboxEventID.Valid {
-				t.Fatalf("migrated draft source/fact = task:%s inbox:%s/%q, want %s:%s/%q", uuidToString(gotTaskID), uuidToString(gotInboxEventID), gotFact, tc.sourceKind, sourceID, tc.fact)
+			wantFact := tc.fact
+			if tc.wantFact != "" {
+				wantFact = tc.wantFact
+			}
+			if gotSourceID != sourceID || gotFact != wantFact || gotTaskID.Valid == gotInboxEventID.Valid {
+				t.Fatalf("migrated draft source/fact = task:%s inbox:%s/%q, want %s:%s/%q", uuidToString(gotTaskID), uuidToString(gotInboxEventID), gotFact, tc.sourceKind, sourceID, wantFact)
 			}
 		})
 	}

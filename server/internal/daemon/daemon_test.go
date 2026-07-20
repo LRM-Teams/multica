@@ -2425,6 +2425,137 @@ func TestExecuteAndDrain_IdleWatchdog_HappyPathDoesNotFire(t *testing.T) {
 	}
 }
 
+type delayedTerminalResultBackend struct {
+	resultDelay time.Duration
+	result      *agent.Result
+}
+
+func (b delayedTerminalResultBackend) Execute(ctx context.Context, _ string, _ agent.ExecOptions) (*agent.Session, error) {
+	msgCh := make(chan agent.Message)
+	resCh := make(chan agent.Result, 1)
+	close(msgCh)
+	if b.result != nil {
+		go func() {
+			timer := time.NewTimer(b.resultDelay)
+			defer timer.Stop()
+			select {
+			case <-timer.C:
+				resCh <- *b.result
+				close(resCh)
+			case <-ctx.Done():
+				close(resCh)
+			}
+		}()
+	}
+	return &agent.Session{
+		Messages:     msgCh,
+		Result:       resCh,
+		RuntimeAlive: func() (bool, bool) { return false, true },
+	}, nil
+}
+
+func TestExecuteAndDrain_IdleWatchdog_PreservesDelayedProviderResultAfterRuntimeExit(t *testing.T) {
+	t.Parallel()
+
+	d := newTestDaemon(t)
+	d.cfg.AgentIdleWatchdog = 50 * time.Millisecond
+	want := agent.Result{Status: "completed", Output: "provider-result"}
+
+	result, _, err := d.executeAndDrain(context.Background(), delayedTerminalResultBackend{
+		resultDelay: 120 * time.Millisecond,
+		result:      &want,
+	}, "p", agent.ExecOptions{}, slog.Default(), "t-idle-delayed-result")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != want.Status || result.Output != want.Output {
+		t.Fatalf("result = status:%q output:%q error:%q, want status:%q output:%q", result.Status, result.Output, result.Error, want.Status, want.Output)
+	}
+}
+
+type lateMessageThenResultBackend struct{}
+
+func (lateMessageThenResultBackend) Execute(ctx context.Context, _ string, _ agent.ExecOptions) (*agent.Session, error) {
+	msgCh := make(chan agent.Message, 1)
+	resCh := make(chan agent.Result, 1)
+	go func() {
+		messageTimer := time.NewTimer(80 * time.Millisecond)
+		defer messageTimer.Stop()
+		select {
+		case <-messageTimer.C:
+			msgCh <- agent.Message{Type: agent.MessageText, Content: "late-progress"}
+		case <-ctx.Done():
+			close(msgCh)
+			close(resCh)
+			return
+		}
+
+		resultTimer := time.NewTimer(100 * time.Millisecond)
+		defer resultTimer.Stop()
+		select {
+		case <-resultTimer.C:
+			close(msgCh)
+			resCh <- agent.Result{Status: "completed", Output: "result-after-late-progress"}
+			close(resCh)
+		case <-ctx.Done():
+			close(msgCh)
+			close(resCh)
+		}
+	}()
+	return &agent.Session{
+		Messages:     msgCh,
+		Result:       resCh,
+		RuntimeAlive: func() (bool, bool) { return false, true },
+	}, nil
+}
+
+func TestExecuteAndDrain_IdleWatchdog_MessageDuringTerminalSettleResetsDeadObservation(t *testing.T) {
+	t.Parallel()
+
+	d := newTestDaemon(t)
+	d.cfg.AgentIdleWatchdog = 50 * time.Millisecond
+
+	result, _, err := d.executeAndDrain(context.Background(), lateMessageThenResultBackend{}, "p", agent.ExecOptions{}, slog.Default(), "t-idle-settle-progress")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != "completed" || result.Output != "result-after-late-progress" {
+		t.Fatalf("result after late progress = status:%q output:%q error:%q, want completed provider result", result.Status, result.Output, result.Error)
+	}
+}
+
+func TestExecuteAndDrain_IdleWatchdog_ParentCancelWinsDuringTerminalSettleGrace(t *testing.T) {
+	t.Parallel()
+
+	d := newTestDaemon(t)
+	d.cfg.AgentIdleWatchdog = 50 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(90*time.Millisecond, cancel)
+
+	result, _, err := d.executeAndDrain(ctx, delayedTerminalResultBackend{}, "p", agent.ExecOptions{}, slog.Default(), "t-idle-settle-cancel")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != "cancelled" {
+		t.Fatalf("parent cancel during terminal settle grace = status:%q error:%q, want cancelled", result.Status, result.Error)
+	}
+}
+
+func TestExecuteAndDrain_IdleWatchdog_FiresAfterTerminalSettleGraceWithoutResult(t *testing.T) {
+	t.Parallel()
+
+	d := newTestDaemon(t)
+	d.cfg.AgentIdleWatchdog = 50 * time.Millisecond
+
+	result, _, err := d.executeAndDrain(context.Background(), delayedTerminalResultBackend{}, "p", agent.ExecOptions{}, slog.Default(), "t-idle-settle-expired")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != "idle_watchdog" {
+		t.Fatalf("dead runtime without terminal result = status:%q error:%q, want idle_watchdog", result.Status, result.Error)
+	}
+}
+
 // longToolCallBackend simulates a legitimate long-running tool call (e.g.
 // `npm install`, `docker build`, full test suite). The backend emits a
 // tool_use, stays silent past the idle window while the tool runs, then emits

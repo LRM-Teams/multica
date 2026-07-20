@@ -4515,6 +4515,19 @@ func idleWatchdogReason(window time.Duration) string {
 	return fmt.Sprintf("runtime process was no longer alive after %s without progress; stopped by idle watchdog", window)
 }
 
+const idleWatchdogMaxTerminalSettleGrace = 5 * time.Second
+
+// idleWatchdogTerminalSettleGrace leaves a bounded window for a provider to
+// synthesize and publish its terminal Result after the child process exits.
+// Short test/configured watchdog windows use twice their silence threshold;
+// production windows cap the additional wait at five seconds.
+func idleWatchdogTerminalSettleGrace(threshold time.Duration) time.Duration {
+	if threshold <= 0 || threshold >= idleWatchdogMaxTerminalSettleGrace/2 {
+		return idleWatchdogMaxTerminalSettleGrace
+	}
+	return 2 * threshold
+}
+
 // runIdleWatchdog ticks until either agentCtx is cancelled or the backend has
 // been silent past the applicable budget. Silence alone is not termination
 // evidence: once the budget is reached, the watchdog first probes the runtime
@@ -4534,9 +4547,10 @@ func idleWatchdogReason(window time.Duration) string {
 // empty — a buffered-but-undrained message means the drain loop is behind, not
 // the backend.
 //
-// Tick interval is window/2 (floored at 30 s in production, but the floor only
-// kicks in for windows >= 1 min so tests can pass tiny windows like 50 ms and
-// see the watchdog fire within a few ticks).
+// The silence tick interval is window/2 (floored at 30 s in production, but
+// the floor only kicks in for windows >= 1 min so tests can pass tiny windows
+// like 50 ms). Once death is first confirmed, a separate short timer schedules
+// the second probe so recovery never waits for the next long silence tick.
 func (d *Daemon) runIdleWatchdog(agentCtx context.Context, window, toolWindow time.Duration, lastActivityAt *atomic.Int64, inFlightTools *atomic.Int32, fired *atomic.Bool, firedThreshold *atomic.Int64, cancel context.CancelFunc, messages <-chan agent.Message, runtimeAlive agent.RuntimeLivenessProbe, taskLog *slog.Logger, taskID string) {
 	interval := window / 2
 	if window >= time.Minute && interval < 30*time.Second {
@@ -4548,68 +4562,128 @@ func (d *Daemon) runIdleWatchdog(agentCtx context.Context, window, toolWindow ti
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	var suppressionLogged bool
+	var deadConfirmedAt time.Time
+	var deadConfirmedThreshold time.Duration
+	var settleTimer *time.Timer
+	var settleTimerC <-chan time.Time
+	defer func() {
+		if settleTimer != nil {
+			settleTimer.Stop()
+		}
+	}()
+	resetDeadObservation := func() {
+		deadConfirmedAt = time.Time{}
+		deadConfirmedThreshold = 0
+		if settleTimer != nil {
+			if !settleTimer.Stop() {
+				select {
+				case <-settleTimer.C:
+				default:
+				}
+			}
+		}
+		settleTimerC = nil
+	}
 	for {
 		select {
 		case <-agentCtx.Done():
 			return
 		case <-ticker.C:
-			// Pick the silence budget. A tool in flight is expected to be
-			// silent (a long build/install/test emits nothing between
-			// tool_use and tool_result), so it gets the larger toolWindow;
-			// toolWindow <= 0 disables the in-flight bound entirely.
-			threshold := window
-			toolInFlight := inFlightTools.Load() > 0
-			if toolInFlight {
-				if toolWindow <= 0 {
-					continue
-				}
-				threshold = toolWindow
-			}
-			last := time.Unix(0, lastActivityAt.Load())
-			idleFor := time.Since(last)
-			if idleFor < threshold {
-				suppressionLogged = false
+		case <-settleTimerC:
+			settleTimerC = nil
+		}
+
+		// Pick the silence budget. A tool in flight is expected to be
+		// silent (a long build/install/test emits nothing between
+		// tool_use and tool_result), so it gets the larger toolWindow;
+		// toolWindow <= 0 disables the in-flight bound entirely.
+		threshold := window
+		toolInFlight := inFlightTools.Load() > 0
+		if toolInFlight {
+			if toolWindow <= 0 {
+				resetDeadObservation()
 				continue
 			}
-			// A buffered-but-undrained message means the drain loop is
-			// behind, not the backend. Wait one more tick rather than
-			// killing a backend that is still producing output.
-			if len(messages) > 0 {
-				continue
+			threshold = toolWindow
+		}
+		last := time.Unix(0, lastActivityAt.Load())
+		idleFor := time.Since(last)
+		if idleFor < threshold {
+			suppressionLogged = false
+			resetDeadObservation()
+			continue
+		}
+		// A buffered-but-undrained message means the drain loop is
+		// behind, not the backend. Wait one more tick rather than
+		// killing a backend that is still producing output.
+		if len(messages) > 0 {
+			suppressionLogged = false
+			resetDeadObservation()
+			continue
+		}
+		// Raft suppresses stale-progress recovery while the provider child is
+		// alive. An unavailable probe is also not proof that the child died,
+		// so fail open and keep the turn running instead of guessing.
+		alive, known := false, false
+		if runtimeAlive != nil {
+			alive, known = runtimeAlive()
+		}
+		if !known || alive {
+			resetDeadObservation()
+			if !suppressionLogged {
+				taskLog.Info("watchdog suppressed: runtime death is not confirmed despite silent progress",
+					"task", shortID(taskID),
+					"idle_for", idleFor.Round(time.Second).String(),
+					"threshold", threshold.String(),
+					"tool_in_flight", toolInFlight,
+					"runtime_probe_available", runtimeAlive != nil,
+					"runtime_probe_known", known,
+					"runtime_alive", alive,
+				)
+				suppressionLogged = true
 			}
-			// Raft suppresses stale-progress recovery while the provider child is
-			// alive. An unavailable probe is also not proof that the child died,
-			// so fail open and keep the turn running instead of guessing.
-			alive, known := false, false
-			if runtimeAlive != nil {
-				alive, known = runtimeAlive()
+			continue
+		}
+		settleGrace := idleWatchdogTerminalSettleGrace(threshold)
+		if deadConfirmedAt.IsZero() || deadConfirmedThreshold != threshold {
+			suppressionLogged = false
+			deadConfirmedAt = time.Now()
+			deadConfirmedThreshold = threshold
+			if settleTimer == nil {
+				settleTimer = time.NewTimer(settleGrace)
+			} else {
+				settleTimer.Reset(settleGrace)
 			}
-			if !known || alive {
-				if !suppressionLogged {
-					taskLog.Info("watchdog suppressed: runtime death is not confirmed despite silent progress",
-						"task", shortID(taskID),
-						"idle_for", idleFor.Round(time.Second).String(),
-						"threshold", threshold.String(),
-						"tool_in_flight", toolInFlight,
-						"runtime_probe_available", runtimeAlive != nil,
-						"runtime_probe_known", known,
-						"runtime_alive", alive,
-					)
-					suppressionLogged = true
-				}
-				continue
-			}
-			taskLog.Warn("watchdog firing: runtime no longer alive after silent progress",
+			settleTimerC = settleTimer.C
+			taskLog.Info("watchdog waiting for provider terminal result after runtime exit",
 				"task", shortID(taskID),
 				"idle_for", idleFor.Round(time.Second).String(),
 				"threshold", threshold.String(),
+				"terminal_settle_grace", settleGrace.String(),
 				"tool_in_flight", toolInFlight,
 			)
-			firedThreshold.Store(int64(threshold))
-			fired.Store(true)
-			cancel()
-			return
+			continue
 		}
+		if time.Since(deadConfirmedAt) < settleGrace {
+			continue
+		}
+		// Re-check progress after the second OS probe. A message can be
+		// buffered or drained concurrently while that probe runs; either is
+		// terminal progress and invalidates the prior dead observation.
+		if len(messages) > 0 || lastActivityAt.Load() > deadConfirmedAt.UnixNano() {
+			resetDeadObservation()
+			continue
+		}
+		taskLog.Warn("watchdog firing: runtime no longer alive after silent progress",
+			"task", shortID(taskID),
+			"idle_for", idleFor.Round(time.Second).String(),
+			"threshold", threshold.String(),
+			"tool_in_flight", toolInFlight,
+		)
+		firedThreshold.Store(int64(threshold))
+		fired.Store(true)
+		cancel()
+		return
 	}
 }
 

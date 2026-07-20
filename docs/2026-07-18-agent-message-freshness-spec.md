@@ -166,7 +166,7 @@ This is the chat equivalent of optimistic locking.
 
 Freshness must be scoped to the same target the message would affect:
 
-- main channel target: messages in the main timeline (`thread_root_message_id IS NULL OR main_timeline_visible`);
+- main channel target: messages in the main timeline (`thread_root_message_id IS NULL`);
 - thread target: root message plus replies in that thread;
 - DM target: the DM conversation timeline;
 - future task/issue-derived targets: the conversation/channel projection that users see.
@@ -432,7 +432,6 @@ Acceptance:
 
 1. Should `send_draft` remain available to autonomous agents, or only to human/operator flows?
 2. Should strict action-boundary CAS apply to all group chats by default, or only agent-authored messages?
-3. Should main-timeline replies consider `main_timeline_visible` replies as freshness blockers?
 4. How many repeated freshness holds should one agent run tolerate before staying silent?
 5. Should freshness continuation be implemented in the daemon, the server, or the Pi/Codex transport harness first?
 

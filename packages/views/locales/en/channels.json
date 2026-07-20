@@ -159,9 +159,7 @@
     "load_failed": "Failed to load thread.",
     "send_failed": "Failed to send thread reply.",
     "composer_placeholder": "Reply in thread...",
-    "back_to_conversation": "Back to conversation",
-    "show_in_channel_label": "Also show in channel",
-    "from_thread_badge": "From thread"
+    "back_to_conversation": "Back to conversation"
   },
   "typing": {
     "single": "{{name}} is typing",

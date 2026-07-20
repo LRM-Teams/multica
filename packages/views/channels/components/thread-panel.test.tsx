@@ -2,7 +2,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { ChannelMessage } from "@multica/core/types";
-import { ThreadPanel, ThreadOriginTag } from "./thread-panel";
+import { ThreadPanel } from "./thread-panel";
 import { deriveThreadParticipants } from "./thread-participants";
 
 // Capture the props ThreadPanel hands the reply list so the "no nesting"
@@ -70,8 +70,6 @@ const RESOURCES = {
     view_parent: "Back to main chat",
     close_aria: "Close thread",
     back_to_conversation: "Back to conversation",
-    show_in_channel_label: "Also show in channel",
-    from_thread_badge: "From thread",
   },
   composer: { send: "Send" },
 };
@@ -101,8 +99,6 @@ function baseProps() {
       makeMessage({ id: "r1", type: "agent", author_id: "agent-c", author_name: "Cy", content: "First reply" }),
     ],
     currentUserId: "user-a",
-    showInChannel: false,
-    onShowInChannelChange: vi.fn(),
     isMobile: false,
     onBack: vi.fn(),
     editor: <div data-testid="thread-editor">editor</div>,
@@ -165,19 +161,6 @@ describe("ThreadPanel", () => {
     expect(messageListProps.mock.calls.at(-1)?.[0].onOpenAgent).toBe(onOpenAgent);
   });
 
-  it("defaults show-in-channel off and reports explicit toggles; the main-timeline surface is marked from-thread", () => {
-    const onShowInChannelChange = vi.fn();
-    render(<ThreadPanel {...baseProps()} onShowInChannelChange={onShowInChannelChange} />);
-
-    const checkbox = screen.getByRole("checkbox", { name: "Also show in channel" });
-    expect(checkbox).not.toBeChecked();
-    fireEvent.click(checkbox);
-    expect(onShowInChannelChange).toHaveBeenCalledWith(true);
-
-    render(<ThreadOriginTag />);
-    expect(screen.getByText("From thread")).toBeInTheDocument();
-  });
-
   it("gives an explicit back-to-conversation control on mobile", () => {
     const onBack = vi.fn();
     render(<ThreadPanel {...baseProps()} isMobile onBack={onBack} />);
@@ -188,16 +171,8 @@ describe("ThreadPanel", () => {
 });
 
 describe("ThreadPanel composer rules", () => {
-  it("hides the show-in-channel checkbox when no change handler is supplied (#256 cut)", () => {
-    render(
-      <ThreadPanel
-        {...baseProps()}
-        showInChannel={undefined}
-        onShowInChannelChange={undefined}
-      />,
-    );
-    expect(
-      screen.queryByRole("checkbox", { name: "Also show in channel" }),
-    ).not.toBeInTheDocument();
+  it("does not offer a thread-to-channel projection control", () => {
+    render(<ThreadPanel {...baseProps()} />);
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
   });
 });

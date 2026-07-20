@@ -1354,7 +1354,7 @@ func (h *Handler) enqueueChannelAttentionProtocolTurnTx(ctx context.Context, tx 
 	if err != nil {
 		return pgtype.UUID{}, err
 	}
-	promptMsg, err := h.createChannelAgentPromptMessageWithDB(ctx, tx, session.ID, prompt, rc.channel.Kind, rc.trigger)
+	promptMsg, err := h.createChannelAgentPromptMessageWithDB(ctx, tx, session.ID, prompt, rc.trigger)
 	if err != nil {
 		return pgtype.UUID{}, err
 	}

@@ -206,7 +206,7 @@ func (h *Handler) emitIssueThreadBackflowToScope(ctx context.Context, issue db.I
 			Label:      "@" + firstNonEmpty(params.TargetHandle, params.TargetName),
 		})
 	}
-	msg, err := h.insertChannelMessageWithPartsMainProjection(ctx, scope.ChannelID, issue.WorkspaceID, "system", pgtype.UUID{}, "system", content, parts, "multica", nil, pgtype.UUID{}, scope.RootID, nil, 0, !scope.RootID.Valid)
+	msg, err := h.insertChannelMessageWithParts(ctx, scope.ChannelID, issue.WorkspaceID, "system", pgtype.UUID{}, "system", content, parts, "multica", nil, pgtype.UUID{}, scope.RootID, nil, 0)
 	if err != nil {
 		slog.Warn("issue thread backflow: insert system message", "issue", identifier, "event", event, "error", err)
 		return

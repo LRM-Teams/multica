@@ -424,7 +424,6 @@ func restrictResultForExecutionProfile(result TaskResult, profile string) TaskRe
 	result.BranchName = ""
 	result.Action = protocol.ChatOutputActionNoReply
 	result.Target = ""
-	result.Options = nil
 	result.Type = protocol.ChatOutputKindNoReply
 	result.Parts = nil
 	result.Reaction = nil

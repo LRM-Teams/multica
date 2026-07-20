@@ -2270,7 +2270,6 @@ type TaskCompleteRequest struct {
 	Output                 string                        `json:"output"`
 	Action                 string                        `json:"action"`
 	Target                 string                        `json:"target"`
-	Options                *protocol.ChatOutputOptions   `json:"options"`
 	Type                   string                        `json:"type"`
 	Parts                  []protocol.MessagePart        `json:"parts"`
 	Reaction               *protocol.ChatReactionPayload `json:"reaction"`
@@ -2547,14 +2546,13 @@ func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.Agent
 	req.Parts = parts
 	req.Target = strings.TrimSpace(req.Target)
 	if channelTask && outputType == protocol.ChatOutputKindMessage {
-		if err := h.validateChatOutputTarget(ctx, task, req.Target, req.Options); err != nil {
+		if err := h.validateChatOutputTarget(ctx, task, req.Target); err != nil {
 			slog.Warn("complete task: suppressing invalid channel output target", "task_id", uuidToString(task.ID), "agent_id", uuidToString(task.AgentID), "target", req.Target, "error", err)
 			h.suppressChannelTaskCompleteOutput(ctx, task, req, protocol.ChannelOutputSuppressedReasonInvalidTarget)
 			return nil
 		}
-	} else if strings.TrimSpace(req.Target) != "" || chatOutputOptionsPresent(req.Options) {
+	} else if strings.TrimSpace(req.Target) != "" {
 		req.Target = ""
-		req.Options = nil
 	}
 	return nil
 }
@@ -2583,7 +2581,6 @@ func isLegacyChannelProtocolOutput(output string, parts []protocol.MessagePart) 
 		Action   string                        `json:"action"`
 		Target   string                        `json:"target"`
 		Type     string                        `json:"type"`
-		Options  json.RawMessage               `json:"options"`
 		Parts    []protocol.MessagePart        `json:"parts"`
 		Reaction *protocol.ChatReactionPayload `json:"reaction"`
 	}
@@ -2591,7 +2588,6 @@ func isLegacyChannelProtocolOutput(output string, parts []protocol.MessagePart) 
 		return strings.TrimSpace(envelope.Action) != "" ||
 			strings.TrimSpace(envelope.Target) != "" ||
 			strings.TrimSpace(envelope.Type) != "" ||
-			len(envelope.Options) > 0 ||
 			len(envelope.Parts) > 0 ||
 			envelope.Reaction != nil
 	}
@@ -2626,7 +2622,6 @@ func (h *Handler) suppressTaskCompleteOutput(req *TaskCompleteRequest, reason st
 	req.Output = ""
 	req.Parts = nil
 	req.Target = ""
-	req.Options = nil
 	req.Reaction = nil
 	req.OutputSuppressedReason = reason
 	if h.Metrics != nil {

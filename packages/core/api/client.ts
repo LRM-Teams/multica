@@ -2600,7 +2600,6 @@ export class ApiClient {
       parts?: MessagePart[];
       replyToMessageId?: string | null;
       clientMessageId?: string | null;
-      showInChannel?: boolean;
       quoteMessageId?: string | null;
     },
   ): Promise<ChannelMessage> {
@@ -2611,7 +2610,6 @@ export class ApiClient {
       quote_message_id?: string;
       parts?: MessagePart[];
       client_message_id?: string;
-      show_in_channel?: boolean;
     } = { content: input.content };
     if (input.replyToMessageId) {
       body.reply_to_message_id = input.replyToMessageId;
@@ -2624,9 +2622,6 @@ export class ApiClient {
     }
     if (input.clientMessageId) {
       body.client_message_id = input.clientMessageId;
-    }
-    if (input.showInChannel === true) {
-      body.show_in_channel = true;
     }
     return this.fetch(`/api/channels/${channelId}/messages/${messageId}/thread`, {
       method: "POST",

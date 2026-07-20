@@ -2025,7 +2025,7 @@ func (s *TaskService) completeTask(ctx context.Context, taskID pgtype.UUID, resu
 			}
 		}
 
-		s.broadcastChatDone(ctx, task, assistantMsg, outputType, payload.Target, payload.Options, visibleContent, visibleParts, reaction, outputSuppressedReason)
+		s.broadcastChatDone(ctx, task, assistantMsg, outputType, payload.Target, visibleContent, visibleParts, reaction, outputSuppressedReason)
 	}
 
 	// Reconcile agent status
@@ -3299,7 +3299,7 @@ func parseAgentRadarContext(task db.AgentTaskQueue) (AgentRadarContext, bool) {
 	return radarContext, true
 }
 
-func (s *TaskService) broadcastChatDone(ctx context.Context, task db.AgentTaskQueue, msg *db.ChatMessage, outputType, target string, options *protocol.ChatOutputOptions, content string, parts []protocol.MessagePart, reaction *protocol.ChatReactionPayload, outputSuppressedReason string) {
+func (s *TaskService) broadcastChatDone(ctx context.Context, task db.AgentTaskQueue, msg *db.ChatMessage, outputType, target string, content string, parts []protocol.MessagePart, reaction *protocol.ChatReactionPayload, outputSuppressedReason string) {
 	workspaceID := s.ResolveTaskWorkspaceID(ctx, task)
 	if workspaceID == "" {
 		return
@@ -3312,7 +3312,6 @@ func (s *TaskService) broadcastChatDone(ctx context.Context, task db.AgentTaskQu
 		TaskID:                 util.UUIDToString(task.ID),
 		Type:                   outputType,
 		Target:                 strings.TrimSpace(target),
-		Options:                options,
 		Reaction:               reaction,
 		OutputSuppressedReason: outputSuppressedReason,
 	}

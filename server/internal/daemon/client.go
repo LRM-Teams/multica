@@ -399,7 +399,7 @@ func (c *Client) ReportAgentInboxMessages(ctx context.Context, lease AgentInboxL
 	}, nil, c.tokenForRuntime(lease.RuntimeID))
 }
 
-func (c *Client) CompleteTask(ctx context.Context, taskID, output, branchName, action, target string, options *protocol.ChatOutputOptions, outputType, sessionID, workDir, outputSuppressedReason string, parts []protocol.MessagePart, reaction *protocol.ChatReactionPayload, runtimeStats *protocol.RuntimeTokenStats) error {
+func (c *Client) CompleteTask(ctx context.Context, taskID, output, branchName, action, target, outputType, sessionID, workDir, outputSuppressedReason string, parts []protocol.MessagePart, reaction *protocol.ChatReactionPayload, runtimeStats *protocol.RuntimeTokenStats) error {
 	body := map[string]any{"output": output}
 	if branchName != "" {
 		body["branch_name"] = branchName
@@ -409,9 +409,6 @@ func (c *Client) CompleteTask(ctx context.Context, taskID, output, branchName, a
 	}
 	if target != "" {
 		body["target"] = target
-	}
-	if options != nil {
-		body["options"] = options
 	}
 	if outputType != "" {
 		body["type"] = outputType
@@ -454,9 +451,6 @@ func (c *Client) CompleteAgentInboxEvent(ctx context.Context, lease AgentInboxLe
 	}
 	if result.Target != "" {
 		body["target"] = result.Target
-	}
-	if result.Options != nil {
-		body["options"] = result.Options
 	}
 	if result.Type != "" {
 		body["type"] = result.Type

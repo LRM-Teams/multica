@@ -55,12 +55,12 @@ func (h *Handler) copyEnvDispatchChannel(ctx context.Context, workspaceID, sourc
 			content, parts, source, external_message_id, client_message_id,
 			reply_to_message_id, quote_message_id, quote_snapshot,
 			thread_root_message_id, thread_id, trigger_depth,
-			main_timeline_visible, created_at, edited_at, deleted_at
+			created_at, edited_at, deleted_at
 		)
 		SELECT map.destination_id, $2, m.workspace_id, m.author_type, m.author_id,
 			m.author_name, m.content, m.parts, m.source, m.external_message_id,
 			m.client_message_id, NULL, NULL, m.quote_snapshot, NULL, m.thread_id,
-			m.trigger_depth, m.main_timeline_visible, m.created_at, m.edited_at, m.deleted_at
+			m.trigger_depth, m.created_at, m.edited_at, m.deleted_at
 		FROM channel_message m
 		JOIN env_dispatch_channel_message_map map ON map.source_id = m.id
 		WHERE m.channel_id = $1

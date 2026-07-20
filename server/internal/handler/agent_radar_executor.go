@@ -801,7 +801,7 @@ func (h *Handler) executePreparedRadarAgentMentionInTx(ctx context.Context, qtx 
 		ctx, exec, directive.Target.ChannelID, run.WorkspaceID,
 		"agent", supervisor.ID, agentDisplayName(supervisor), directive.Content, directive.Parts,
 		"multica", nil, nil, pgtype.UUID{}, pgtype.UUID{}, nil,
-		directive.Target.ThreadRoot, directive.Target.ThreadID, 0, true,
+		directive.Target.ThreadRoot, directive.Target.ThreadID, 0,
 	)
 	if err != nil {
 		return execution, fmt.Errorf("create visible radar directive: %w", err)

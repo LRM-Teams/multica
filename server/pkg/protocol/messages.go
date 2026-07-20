@@ -193,7 +193,6 @@ type TaskCompletedPayload struct {
 	PRURL                  string               `json:"pr_url,omitempty"`
 	Action                 string               `json:"action,omitempty"`
 	Target                 string               `json:"target,omitempty"`
-	Options                *ChatOutputOptions   `json:"options,omitempty"`
 	Type                   string               `json:"type,omitempty"`
 	Output                 string               `json:"output,omitempty"`
 	Parts                  []MessagePart        `json:"parts,omitempty"`
@@ -237,25 +236,6 @@ const (
 	ChannelOutputSuppressedReasonUnsentFinalOutput          = "unsent_final_output"
 	ChannelOutputSuppressedReasonRestrictedExecutionProfile = "restricted_execution_profile"
 )
-
-type ChatOutputOptions struct {
-	ShowInChannel     *bool `json:"show_in_channel,omitempty"`
-	AlsoSendToChannel *bool `json:"also_send_to_channel,omitempty"` // legacy #252 name; not part of the new contract.
-}
-
-func (o *ChatOutputOptions) HasChannelDisplayOption() bool {
-	return o != nil && (o.ShowInChannel != nil || o.AlsoSendToChannel != nil)
-}
-
-func (o *ChatOutputOptions) ShowInChannelValue() bool {
-	if o == nil {
-		return false
-	}
-	if o.ShowInChannel != nil {
-		return *o.ShowInChannel
-	}
-	return o.AlsoSendToChannel != nil && *o.AlsoSendToChannel
-}
 
 type ChatReactionPayload struct {
 	MessageID string `json:"message_id,omitempty"`
@@ -368,7 +348,6 @@ type ChatDonePayload struct {
 	TaskID                 string               `json:"task_id"`
 	Type                   string               `json:"type,omitempty"`
 	Target                 string               `json:"target,omitempty"`
-	Options                *ChatOutputOptions   `json:"options,omitempty"`
 	MessageID              string               `json:"message_id,omitempty"`
 	Content                string               `json:"content,omitempty"`
 	Parts                  []MessagePart        `json:"parts,omitempty"`

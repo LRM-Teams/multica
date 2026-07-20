@@ -549,7 +549,7 @@ func (h *Handler) fireReminder(ctx context.Context, reminder agentReminder) erro
 		return err
 	}
 	prompt := buildReminderPrompt(ch, reminder, anchorExcerpt)
-	promptMsg, err := h.createChannelAgentPromptMessage(ctx, session.ID, prompt, ch.Kind, trigger)
+	promptMsg, err := h.createChannelAgentPromptMessage(ctx, session.ID, prompt, trigger)
 	if err != nil {
 		return err
 	}

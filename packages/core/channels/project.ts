@@ -1,6 +1,7 @@
 import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { createLogger } from "../logger";
+import { invalidateChannelMessages } from "./queries";
 
 const logger = createLogger("channel.project");
 
@@ -50,6 +51,16 @@ export function useSetChannelProject(wsId: string, channelId: string) {
     onError: (err, _projectId, ctx) => {
       logger.error("setChannelProject.error.rollback", { channelId, err });
       if (ctx?.prev !== undefined) qc.setQueryData(key, ctx.prev);
+    },
+    onSuccess: () => {
+      // A successful bind/change/unbind makes the server emit a
+      // `channel_project_*` system row. The server broadcasts it to channel
+      // members INCLUDING the originator, but the originator must not depend on
+      // that WS echo to see their own action (#615) — the socket may be
+      // reconnecting, the tab backgrounded, etc. Invalidate the channel timeline
+      // so the confirmation row is fetched and shown immediately, exactly like
+      // sending a message refreshes the sender's own list.
+      invalidateChannelMessages(qc, channelId);
     },
     onSettled: () => {
       qc.invalidateQueries({ queryKey: key });

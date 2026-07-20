@@ -3855,7 +3855,7 @@ func (h *Handler) dispatchChannelMemberWelcome(ctx context.Context, workspaceID 
 		return
 	}
 	ch := ChannelResponse{ID: uuidToString(channelID), WorkspaceID: workspaceID, Name: channelName}
-	joinedName := strings.TrimSpace(h.userName(ctx, joinedUserID))
+	joinedName := h.channelMemberDisplayName(ctx, joinedUserID)
 	if joinedName == "" {
 		joinedName = "新成员"
 	}
@@ -3887,6 +3887,20 @@ func (h *Handler) dispatchChannelMemberWelcome(ctx context.Context, workspaceID 
 			slog.Warn("channel welcome: tag prompt with task failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "task", uuidToString(task.ID), "error", err)
 		}
 	}
+}
+
+// channelMemberDisplayName resolves the name needed for a channel welcome.
+// Keep this lookup with the channel feature: direct-message transport may be
+// removed independently, and channel welcomes must not depend on it.
+func (h *Handler) channelMemberDisplayName(ctx context.Context, userID pgtype.UUID) string {
+	var name string
+	if err := h.DB.QueryRow(ctx, `
+		SELECT COALESCE(NULLIF(to_jsonb(u)->>'display_name', ''), NULLIF(u.name, ''), u.email, '')
+		FROM "user" u
+		WHERE u.id = $1`, userID).Scan(&name); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(name)
 }
 
 // buildChannelWelcomePrompt is a self-contained one-off greeting prompt. Unlike

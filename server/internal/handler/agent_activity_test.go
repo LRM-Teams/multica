@@ -410,9 +410,10 @@ func TestAgentActivityEvents_ExposesHeldFreshnessDetails(t *testing.T) {
 		"shown_message_count": 2,
 		"omitted_message_count": 1,
 		"target": "#multica:test",
+		"recommended_action": "review_newer_messages",
 		"input": {"secret": "sk_agent_should_not_leak"}
 	}`
-	var statusID, detailID string
+	var statusID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_activity_event (
 			workspace_id, agent_id, event_kind, event_type, severity,
@@ -426,44 +427,28 @@ func TestAgentActivityEvents_ExposesHeldFreshnessDetails(t *testing.T) {
 	`, testWorkspaceID, agentID, channelID, details).Scan(&statusID); err != nil {
 		t.Fatalf("insert freshness hold status event: %v", err)
 	}
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_activity_event (
-			workspace_id, agent_id, event_kind, event_type, severity,
-			target_kind, target_id, target_slug, message, details, visibility, created_at
-		)
-		VALUES (
-			$1, $2, 'text', 'send_freshness_hold_detail', 'info',
-			'channel', $3, '#multica:test', 'target: #multica:test / new messages: 3 newer / decision: local hold; review the newer context before retrying', $4::jsonb, 'user_facing', now() - interval '1 second'
-		)
-		RETURNING id
-	`, testWorkspaceID, agentID, channelID, details).Scan(&detailID); err != nil {
-		t.Fatalf("insert freshness hold detail event: %v", err)
-	}
 	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM agent_activity_event WHERE id IN ($1, $2)`, statusID, detailID)
+		testPool.Exec(ctx, `DELETE FROM agent_activity_event WHERE id = $1`, statusID)
 	})
 
 	events := listAgentActivityEventsForUser(t, testUserID, agentID, "")
-	for _, event := range []AgentActivityTimelineEvent{
-		requireActivityTimelineEvent(t, events, statusID),
-		requireActivityTimelineEvent(t, events, detailID),
-	} {
-		if event.Details == nil {
-			t.Fatalf("%s details missing from timeline event: %+v", event.DetailKind, event)
-		}
-		assertActivityTimelineDetail(t, event, "reason", "newer_messages_available")
-		assertActivityTimelineDetail(t, event, "decision", "local_hold")
-		assertActivityTimelineDetail(t, event, "producer_fact_id", "freshness:producer:1")
-		assertActivityTimelineDetail(t, event, "transport_id", "transport-1")
-		assertActivityTimelineDetail(t, event, "seen_up_to_seq", float64(9))
-		assertActivityTimelineDetail(t, event, "latest_seq", float64(12))
-		assertActivityTimelineDetail(t, event, "new_message_count", float64(3))
-		assertActivityTimelineDetail(t, event, "shown_message_count", float64(2))
-		assertActivityTimelineDetail(t, event, "omitted_message_count", float64(1))
-		assertActivityTimelineDetail(t, event, "target", "#multica:test")
-		if _, ok := event.Details["input"]; ok {
-			t.Fatalf("%s leaked raw input details: %+v", event.DetailKind, event.Details)
-		}
+	event := requireActivityTimelineEvent(t, events, statusID)
+	if event.Details == nil {
+		t.Fatalf("%s details missing from timeline event: %+v", event.DetailKind, event)
+	}
+	assertActivityTimelineDetail(t, event, "reason", "newer_messages_available")
+	assertActivityTimelineDetail(t, event, "decision", "local_hold")
+	assertActivityTimelineDetail(t, event, "recommended_action", "review_newer_messages")
+	assertActivityTimelineDetail(t, event, "producer_fact_id", "freshness:producer:1")
+	assertActivityTimelineDetail(t, event, "transport_id", "transport-1")
+	assertActivityTimelineDetail(t, event, "seen_up_to_seq", float64(9))
+	assertActivityTimelineDetail(t, event, "latest_seq", float64(12))
+	assertActivityTimelineDetail(t, event, "new_message_count", float64(3))
+	assertActivityTimelineDetail(t, event, "shown_message_count", float64(2))
+	assertActivityTimelineDetail(t, event, "omitted_message_count", float64(1))
+	assertActivityTimelineDetail(t, event, "target", "#multica:test")
+	if _, ok := event.Details["input"]; ok {
+		t.Fatalf("%s leaked raw input details: %+v", event.DetailKind, event.Details)
 	}
 	if strings.Contains(events.raw, "sk_agent_should_not_leak") {
 		t.Fatalf("activity details leaked raw input secret: %s", events.raw)

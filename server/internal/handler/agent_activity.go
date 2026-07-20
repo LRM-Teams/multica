@@ -57,18 +57,7 @@ var agentActivityTimelinePublicDetailKeys = map[string][]string{
 		"transport_id",
 		"decision",
 		"reason",
-	},
-	"send_freshness_hold_detail": {
-		"target",
-		"new_message_count",
-		"shown_message_count",
-		"omitted_message_count",
-		"seen_up_to_seq",
-		"latest_seq",
-		"producer_fact_id",
-		"transport_id",
-		"decision",
-		"reason",
+		"recommended_action",
 	},
 }
 

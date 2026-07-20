@@ -202,9 +202,10 @@ When freshness fails:
    - `held_from_seq`;
    - `held_to_seq`.
 2. Return the newer messages after the last shown/held range.
-3. Record activity events:
-   - `send_freshness_hold`;
-   - `send_freshness_hold_detail`.
+3. Record one `send_freshness_hold` activity event. Its safe structured details
+   carry target, new/shown/omitted message counts, decision, and recommended
+   next action. Activity renderers must present those facts from the structured
+   fields; they must not parse a duplicated prose detail event.
 4. Do not mark the agent task as failed.
 5. Prefer continuation/resume over final completion when possible.
 

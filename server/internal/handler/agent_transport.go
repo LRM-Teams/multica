@@ -1521,17 +1521,16 @@ func (h *Handler) saveAgentTransportDraftWithExec(ctx context.Context, exec dbEx
 	_, err = exec.Exec(ctx, `
 		INSERT INTO agent_transport_draft (
 			workspace_id, agent_id, target, channel_id, thread_root_message_id,
-			content, parts, options, client_message_id,
+			content, parts, client_message_id,
 			seen_up_to_seq, held_from_seq, held_to_seq, shown_from_seq, shown_to_seq
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, $11, $12, $13, $14)
+		VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13)
 		ON CONFLICT (workspace_id, agent_id, target)
 		DO UPDATE SET
 			channel_id = EXCLUDED.channel_id,
 			thread_root_message_id = EXCLUDED.thread_root_message_id,
 			content = EXCLUDED.content,
 			parts = EXCLUDED.parts,
-			options = EXCLUDED.options,
 			client_message_id = EXCLUDED.client_message_id,
 			seen_up_to_seq = EXCLUDED.seen_up_to_seq,
 			held_from_seq = EXCLUDED.held_from_seq,
@@ -1540,7 +1539,7 @@ func (h *Handler) saveAgentTransportDraftWithExec(ctx context.Context, exec dbEx
 			shown_to_seq = EXCLUDED.shown_to_seq,
 			updated_at = now()`,
 		source.origin.workspaceID, source.origin.agentID, strings.TrimSpace(target.raw), parseUUID(target.channel.ID), nullableUUID(target.threadRootMessageID),
-		content, partsJSON, []byte("{}"), clientMessageID,
+		content, partsJSON, clientMessageID,
 		decision.SeenUpToSeq, decision.SeenUpToSeq+1, decision.LatestSeq, firstChannelMessageSeq(decision.Messages), maxChannelMessageSeq(decision.Messages))
 	return err
 }

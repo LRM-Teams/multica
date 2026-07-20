@@ -123,7 +123,7 @@ func messageTargetFlagUsage() string {
 func requiredMessageTarget(cmd *cobra.Command) (string, error) {
 	target := strings.TrimSpace(flagString(cmd, "target"))
 	if target == "" {
-		return "", fmt.Errorf("target is required; for a proactive human DM use `multica message send --target dm:@<human-handle> --message-stdin`, otherwise pass a Raft-style #channel or thread target")
+		return "", fmt.Errorf("target is required; use #channel, #channel:<threadId>, dm:@<human-handle>, or dm:@<human-handle>:<threadId>")
 	}
 	return target, nil
 }

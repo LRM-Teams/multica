@@ -99,7 +99,7 @@ func TestEnvDispatchSandboxConfigCodec_EmptyDefaultsToDefaultTemplate(t *testing
 	}
 }
 
-// TestEnvDispatchSandboxConfigCodec_SandboxInstanceRefHasNoRuntimeSecret
+// TestEnvDispatchSandboxConfig_SandboxInstanceRefHasNoRuntimeSecret
 // verifies the runtime policy is never stored on SandboxInstanceRef: even a
 // populated ref (with unrelated RuntimeMetadata) cannot carry the API key. The
 // secret lives only in the env-agent binding's sandbox_config.
@@ -116,5 +116,78 @@ func TestEnvDispatchSandboxConfigCodec_SandboxInstanceRefHasNoRuntimeSecret(t *t
 	refJSON, _ := json.Marshal(ref)
 	if strings.Contains(string(refJSON), sentinel) {
 		t.Fatalf("SandboxInstanceRef must not carry runtime policy: %s", refJSON)
+	}
+}
+
+// TestEnvDispatchSandboxConfigCreateInput verifies the createInput helper builds
+// a CreateSandboxInstanceInput carrying the default template, daemon-enabled
+// flag, MULTICA_DAEMON_ID runtime env, and the runtime marshalled to exactly the
+// three-key object. A config without a runtime yields a nil Runtime field.
+func TestEnvDispatchSandboxConfigCreateInput(t *testing.T) {
+	config := envDispatchSandboxConfig{
+		Template: "default",
+		Runtime: &service.ExternalModelRuntime{
+			BaseURL: "https://provider.invalid/v1",
+			APIKey:  "synthetic-secret-for-tests",
+			Model:   "model-a",
+		},
+	}
+	in, err := config.createInput("ws-1", "daemon-1")
+	if err != nil {
+		t.Fatalf("createInput: %v", err)
+	}
+	if in.WorkspaceID != "ws-1" {
+		t.Fatalf("WorkspaceID = %q, want ws-1", in.WorkspaceID)
+	}
+	if in.Template != "default" {
+		t.Fatalf("Template = %q, want default", in.Template)
+	}
+	if !in.DaemonEnabled {
+		t.Fatalf("DaemonEnabled = false, want true")
+	}
+	if in.RuntimeEnv["MULTICA_DAEMON_ID"] != "daemon-1" {
+		t.Fatalf("RuntimeEnv[MULTICA_DAEMON_ID] = %q, want daemon-1", in.RuntimeEnv["MULTICA_DAEMON_ID"])
+	}
+	wantRuntime := `{"base_url":"https://provider.invalid/v1","api_key":"synthetic-secret-for-tests","model":"model-a"}`
+	if string(in.Runtime) != wantRuntime {
+		t.Fatalf("Runtime = %s, want %s", in.Runtime, wantRuntime)
+	}
+
+	// No runtime -> nil Runtime field, template still carried.
+	emptyIn, err := envDispatchSandboxConfig{Template: "python"}.createInput("ws-1", "daemon-1")
+	if err != nil {
+		t.Fatalf("createInput (no runtime): %v", err)
+	}
+	if emptyIn.Runtime != nil {
+		t.Fatalf("Runtime = %s, want nil", emptyIn.Runtime)
+	}
+	if emptyIn.Template != "python" {
+		t.Fatalf("Template = %q, want python", emptyIn.Template)
+	}
+}
+
+// TestEnvDispatchSandboxConfigRejectsSecretDisclosure verifies that malformed
+// and partial stored policies fail at decode time and the error never includes
+// the sentinel API key, so a stored-config failure cannot leak the secret.
+func TestEnvDispatchSandboxConfigRejectsSecretDisclosure(t *testing.T) {
+	sentinel := "synthetic-secret-for-tests"
+	cases := []struct {
+		name string
+		raw  json.RawMessage
+	}{
+		{"partial runtime with sentinel", json.RawMessage(`{"template":"default","runtime":{"base_url":"https://provider.invalid/v1","api_key":"` + sentinel + `","model":""}}`)},
+		{"non-http url with sentinel", json.RawMessage(`{"template":"default","runtime":{"base_url":"ftp://x","api_key":"` + sentinel + `","model":"m"}}`)},
+		{"malformed json", json.RawMessage(`{"template":"default","runtime":{invalid}`)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := decodeEnvDispatchSandboxConfig(c.raw)
+			if err == nil {
+				t.Fatalf("expected decode error for %s", c.raw)
+			}
+			if strings.Contains(err.Error(), sentinel) {
+				t.Fatalf("error must not include the sentinel key: %q", err.Error())
+			}
+		})
 	}
 }

@@ -108,6 +108,56 @@ func validEnvCollaborationTrigger(agentID, channelID, projectID string) envColla
 	}
 }
 
+// TestEnvDispatchChannelStoreClaimProvisioningRetainsRuntimePolicy verifies the
+// provisioning claim path returns the stored runtime policy intact, so
+// provisionEnvDispatchAgent can decode it and pass the runtime to the sandbox
+// lifecycle. This is the exact read path provisioning uses (claim -> decode).
+func TestEnvDispatchChannelStoreClaimProvisioningRetainsRuntimePolicy(t *testing.T) {
+	if testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx, store, envID, channelID, agentID := setupEnvDispatchChannelStoreFixture(t)
+	tx, err := testPool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(ctx)
+
+	policy := service.ResolvedPerAgentSandboxPolicy{
+		Template: "default",
+		Runtime: &service.ExternalModelRuntime{
+			BaseURL: "https://provider.invalid/v1",
+			APIKey:  "synthetic-secret-for-tests",
+			Model:   "model-a",
+		},
+	}
+	config, err := marshalEnvDispatchSandboxConfig(policy)
+	require.NoError(t, err)
+	require.NoError(t, store.insertBinding(ctx, tx, envAgentSandboxBinding{
+		EnvID: envID, ChannelID: channelID, AgentID: agentID,
+		Status: "pending", SandboxConfig: config,
+	}))
+
+	won, got, err := store.claimProvisioning(ctx, tx, envID, agentID)
+	require.NoError(t, err)
+	require.True(t, won)
+	require.Equal(t, "provisioning", got.Status)
+
+	decoded, err := decodeEnvDispatchSandboxConfig(got.SandboxConfig)
+	require.NoError(t, err)
+	require.Equal(t, "default", decoded.Template)
+	require.NotNil(t, decoded.Runtime)
+	require.Equal(t, "https://provider.invalid/v1", decoded.Runtime.BaseURL)
+	require.Equal(t, "synthetic-secret-for-tests", decoded.Runtime.APIKey)
+	require.Equal(t, "model-a", decoded.Runtime.Model)
+
+	// createInput carries the runtime into the sandbox creation payload.
+	in, err := decoded.createInput(testWorkspaceID, "daemon-1")
+	require.NoError(t, err)
+	require.Equal(t, "default", in.Template)
+	require.True(t, in.DaemonEnabled)
+	require.Equal(t, "daemon-1", in.RuntimeEnv["MULTICA_DAEMON_ID"])
+	require.JSONEq(t, `{"base_url":"https://provider.invalid/v1","api_key":"synthetic-secret-for-tests","model":"model-a"}`, string(in.Runtime))
+}
+
 // TestEnvDispatchAdapter_CreateChannelPersistsCanonicalPolicy verifies the
 // adapter's CreateEnvDispatchChannel persists the resolved per-agent runtime
 // policy as canonical JSON (trimmed values, template "default") in the

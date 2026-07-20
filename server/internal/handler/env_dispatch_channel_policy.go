@@ -62,3 +62,27 @@ func decodeEnvDispatchSandboxConfig(raw json.RawMessage) (envDispatchSandboxConf
 	cfg.Runtime = runtime
 	return cfg, nil
 }
+
+// createInput builds the sandbox_instance creation input from a decoded binding
+// policy: the template, a daemon-enabled flag, the MULTICA_DAEMON_ID runtime
+// env, and the runtime marshalled to its three-key JSON object. When the policy
+// has no runtime, the Runtime field is nil. The marshalled runtime carries the
+// API key into the sandbox lifecycle only; it never reaches SandboxInstanceRef,
+// responses, errors, or logs.
+func (c envDispatchSandboxConfig) createInput(workspaceID, daemonID string) (service.CreateSandboxInstanceInput, error) {
+	runtimeJSON := json.RawMessage(nil)
+	if c.Runtime != nil {
+		encoded, err := json.Marshal(c.Runtime)
+		if err != nil {
+			return service.CreateSandboxInstanceInput{}, fmt.Errorf("encode sandbox runtime policy: %w", err)
+		}
+		runtimeJSON = encoded
+	}
+	return service.CreateSandboxInstanceInput{
+		WorkspaceID:   workspaceID,
+		Template:      c.Template,
+		DaemonEnabled: true,
+		Runtime:       runtimeJSON,
+		RuntimeEnv:    map[string]string{"MULTICA_DAEMON_ID": daemonID},
+	}, nil
+}

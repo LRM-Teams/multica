@@ -190,22 +190,12 @@ func TestUpdateAgent_ThinkingLevel_TriState(t *testing.T) {
 	})
 }
 
-// TestUpdateAgent_RuntimeSwitch_PreservesValidValueRejectsInvalid covers
-// the gap Elon flagged in PR1 review: a PATCH that switches `runtime_id`
-// without explicitly touching `thinking_level` used to silently keep
-// the existing value, so a Claude agent storing `max` could land on a
-// Codex runtime where `max` is not a recognised token at all, and the
-// daemon would receive a literal-invalid level.
-//
-// The contract the test pins, matching the existing "always 400 on
-// literal-invalid" rule:
-//
-//   - existing value still valid for the new runtime → 200, value kept
-//   - existing value invalid for the new runtime → 400, never silent
-//     clear or coerce
-//   - caller can recover by re-sending with `thinking_level: ""` to clear
-//     in the same PATCH
-func TestUpdateAgent_RuntimeSwitch_PreservesValidValueRejectsInvalid(t *testing.T) {
+// TestUpdateAgent_RuntimeSwitch_ReconcilesInvalidThinkingLevel proves the
+// runtime-switch write boundary never persists an effort the target runtime
+// rejects. A valid value stays as chosen; an invalid inherited value becomes
+// the selected model's advertised default when fresh catalog evidence exists,
+// otherwise it is cleared so the runtime owns its default.
+func TestUpdateAgent_RuntimeSwitch_ReconcilesInvalidThinkingLevel(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -245,10 +235,9 @@ func TestUpdateAgent_RuntimeSwitch_PreservesValidValueRejectsInvalid(t *testing.
 		}
 	})
 
-	t.Run("existing value invalid for new runtime is 400, not silent", func(t *testing.T) {
-		// `max` is Claude-only; switching to Codex must NOT silently
-		// keep it. Behaviour stays consistent with the explicit-set
-		// path: always 400 on literal-invalid.
+	t.Run("existing value invalid for new runtime clears when no catalog default is available", func(t *testing.T) {
+		// `max` is Claude-only. Without fresh target-model evidence, the only
+		// safe repair is to clear the override and let the runtime decide.
 		agentID := createAgentOnRuntime(t, "runtime-switch-reject", claudeRuntimeID, "max")
 		body := map[string]any{
 			"runtime_id": codexRuntimeID,
@@ -256,16 +245,54 @@ func TestUpdateAgent_RuntimeSwitch_PreservesValidValueRejectsInvalid(t *testing.
 		w := httptest.NewRecorder()
 		req := withURLParam(newRequest(http.MethodPatch, "/api/agents/"+agentID, body), "id", agentID)
 		testHandler.UpdateAgent(w, req)
-		if w.Code != http.StatusBadRequest {
-			t.Fatalf("expected 400 when existing value is invalid for new runtime, got %d: %s", w.Code, w.Body.String())
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected invalid inherited value to clear, got %d: %s", w.Code, w.Body.String())
+		}
+		var resp map[string]any
+		_ = json.NewDecoder(w.Body).Decode(&resp)
+		if resp["thinking_level"] != "" {
+			t.Errorf("expected thinking_level cleared, got %v", resp["thinking_level"])
+		}
+	})
+
+	t.Run("existing invalid value adopts target model catalog default", func(t *testing.T) {
+		agentID := createAgentOnRuntime(t, "runtime-switch-default", claudeRuntimeID, "max")
+		if _, err := testPool.Exec(ctx, `UPDATE agent SET model = 'gpt-5' WHERE id = $1`, agentID); err != nil {
+			t.Fatalf("set agent model: %v", err)
+		}
+		catalog, err := testHandler.ModelListStore.Create(ctx, codexRuntimeID)
+		if err != nil {
+			t.Fatalf("create model catalog: %v", err)
+		}
+		if err := testHandler.ModelListStore.Complete(ctx, catalog.ID, []ModelEntry{{
+			ID: "gpt-5",
+			Thinking: &ModelThinking{
+				SupportedLevels: []ThinkingLevel{{Value: "minimal"}, {Value: "high"}},
+				DefaultLevel:    "minimal",
+			},
+		}}, true); err != nil {
+			t.Fatalf("complete model catalog: %v", err)
+		}
+		body := map[string]any{
+			"runtime_id":               codexRuntimeID,
+			"model_catalog_request_id": catalog.ID,
+		}
+		w := httptest.NewRecorder()
+		req := withURLParam(newRequest(http.MethodPatch, "/api/agents/"+agentID, body), "id", agentID)
+		testHandler.UpdateAgent(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected catalog default reconciliation, got %d: %s", w.Code, w.Body.String())
+		}
+		var resp map[string]any
+		_ = json.NewDecoder(w.Body).Decode(&resp)
+		if resp["thinking_level"] != "minimal" {
+			t.Errorf("expected thinking_level=minimal catalog default, got %v", resp["thinking_level"])
 		}
 	})
 
 	t.Run("simultaneous explicit clear lets the switch through", func(t *testing.T) {
-		// The 400 above is recoverable: pass `thinking_level: ""` in
-		// the same PATCH and the switch goes through with a cleared
-		// value. This is the documented escape hatch in the error
-		// message; the test pins it so the contract holds.
+		// An explicit clear is still respected, even if the target runtime
+		// advertises a default; a user may intentionally delegate to it.
 		agentID := createAgentOnRuntime(t, "runtime-switch-clear", claudeRuntimeID, "max")
 		body := map[string]any{
 			"runtime_id":     codexRuntimeID,

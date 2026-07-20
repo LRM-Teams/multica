@@ -219,16 +219,14 @@ func discoveryCacheKey(providerType, executablePath string) string {
 // ── Static catalogs ──
 
 // claudeStaticModels is the current, user-visible Claude lineup. The runtime
-// aliases stay stable so the installed Claude CLI can resolve them, while the
-// labels name the actual model a user selects. Compatibility IDs deliberately
+// aliases stay stable so the installed Claude CLI can resolve them. Compatibility IDs deliberately
 // stay out of this picker; persisted agents still resolve them through
 // claudeCompatibilityModels below.
 func claudeStaticModels() []Model {
 	return []Model{
 		{ID: "sonnet", Label: "Sonnet 5", Provider: "anthropic", Default: true},
-		{ID: "opus", Label: "Opus 4.8", Provider: "anthropic"},
-		{ID: "fable", Label: "Fable 5", Provider: "anthropic"},
-		{ID: "haiku", Label: "Haiku 4.5", Provider: "anthropic"},
+		{ID: "opus", Label: "Opus", Provider: "anthropic"},
+		{ID: "haiku", Label: "Haiku", Provider: "anthropic"},
 	}
 }
 

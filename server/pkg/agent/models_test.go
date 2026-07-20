@@ -68,23 +68,22 @@ func TestClaudeStaticModelsExposeOnlyCurrentCleanLineup(t *testing.T) {
 		}
 	}
 
-	for _, want := range []string{"sonnet", "opus", "fable", "haiku"} {
+	for _, want := range []string{"sonnet", "opus", "haiku"} {
 		if _, ok := ids[want]; !ok {
 			t.Errorf("missing Claude model %q in: %+v", want, models)
 		}
 	}
 	for id, wantLabel := range map[string]string{
 		"sonnet": "Sonnet 5",
-		"opus":   "Opus 4.8",
-		"fable":  "Fable 5",
-		"haiku":  "Haiku 4.5",
+		"opus":   "Opus",
+		"haiku":  "Haiku",
 	} {
 		if got := ids[id].Label; got != wantLabel {
 			t.Errorf("visible label for %q = %q, want %q", id, got, wantLabel)
 		}
 	}
-	if len(models) != 4 {
-		t.Fatalf("visible Claude lineup = %+v, want exactly four current models", models)
+	if len(models) != 3 {
+		t.Fatalf("visible Claude lineup = %+v, want exactly the three official aliases", models)
 	}
 	if defaults != 1 || !ids["sonnet"].Default {
 		t.Errorf("expected Sonnet to remain the sole default, got defaults=%d models=%+v", defaults, models)

@@ -31,10 +31,13 @@ import {
   sandboxNodeTemplatesOptions,
 } from "@multica/core/sandboxes/queries";
 import {
+  buildSandboxRuntimePayload,
   defaultSandboxName,
   defaultSandboxSnapshotName,
+  emptySandboxRuntimeForm,
   resolveCreateSandboxTemplate,
   sandboxDisplayName,
+  type SandboxRuntimeFormState,
 } from "@multica/core/sandboxes/utils";
 import type { SandboxBinding, SandboxInstance, SandboxSnapshot } from "@multica/core/types";
 import { useWorkspacePaths } from "@multica/core/paths";
@@ -71,11 +74,13 @@ import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
 import { useWorkspaceId } from "@multica/core/hooks";
+import { getCurrentWsId } from "@multica/core/platform";
 import { api } from "@multica/core/api";
 import { toast } from "sonner";
 import { PageHeader } from "../../layout/page-header";
 import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n/use-t";
+import { SandboxRuntimeForm } from "./sandbox-runtime-form";
 import { NodeTemplatesPanel } from "./node-templates-panel";
 import { NodeSnapshotsPanel } from "./node-snapshots-panel";
 
@@ -89,9 +94,7 @@ type CreateFormState = {
   /** When true, template (and node) are fixed — e.g. create from a snapshot. */
   templateLocked: boolean;
   lockedTemplateLabel: string;
-  apiKey: string;
-  baseUrl: string;
-  model: string;
+  runtime: SandboxRuntimeFormState;
 };
 
 function buildDefaultCreateForm(nodeId: string): CreateFormState {
@@ -101,9 +104,7 @@ function buildDefaultCreateForm(nodeId: string): CreateFormState {
     templateId: "default",
     templateLocked: false,
     lockedTemplateLabel: "",
-    apiKey: "",
-    baseUrl: "",
-    model: "",
+    runtime: emptySandboxRuntimeForm(),
   };
 }
 
@@ -114,21 +115,8 @@ function buildCreateFormFromSnapshot(snapshot: SandboxSnapshot): CreateFormState
     templateId: snapshot.cube_snapshot_id.trim(),
     templateLocked: true,
     lockedTemplateLabel: snapshot.name.trim() || snapshot.cube_snapshot_id,
-    apiKey: "",
-    baseUrl: "",
-    model: "",
+    runtime: emptySandboxRuntimeForm(),
   };
-}
-
-function buildRuntimePayload(form: Pick<CreateFormState, "apiKey" | "baseUrl" | "model">) {
-  const runtime: Record<string, string> = {};
-  const apiKey = form.apiKey.trim();
-  const baseUrl = form.baseUrl.trim();
-  const model = form.model.trim();
-  if (apiKey) runtime.api_key = apiKey;
-  if (baseUrl) runtime.base_url = baseUrl;
-  if (model) runtime.model = model;
-  return runtime;
 }
 
 type PageUiState = {
@@ -340,17 +328,25 @@ export function SandboxesPage() {
   const handleAddNode = async () => {
     dispatch({ type: "set_creating_node", value: true });
     try {
+      // Prefer the platform singleton so a mid-flight workspace switch cannot
+      // bind the new node to a stale wsId from the render closure.
+      const workspaceId = getCurrentWsId() || wsId;
       const suffix = Math.random().toString(36).slice(2, 8);
       const node = await api.createSandboxNode({ name: `sandboxd-${suffix}` });
-      await api.bindSandboxNode(wsId, { node_id: node.id });
+      await api.bindSandboxNode(workspaceId, { node_id: node.id });
       // Invalidate in the background; navigation does not need to wait.
       void Promise.all([
-        queryClient.invalidateQueries({ queryKey: sandboxKeys.bindings(wsId) }),
+        queryClient.invalidateQueries({ queryKey: sandboxKeys.bindings(workspaceId) }),
         queryClient.invalidateQueries({ queryKey: sandboxKeys.nodes() }),
       ]);
       navigation.push(paths.sandboxNodeSetup(node.id));
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t(($) => $.sandboxes_page.add_node_failed));
+      const message = e instanceof Error ? e.message : "";
+      if (/insufficient permissions/i.test(message)) {
+        toast.error(t(($) => $.sandboxes_page.add_node_permission_denied));
+      } else {
+        toast.error(message || t(($) => $.sandboxes_page.add_node_failed));
+      }
     } finally {
       dispatch({ type: "set_creating_node", value: false });
     }
@@ -359,12 +355,12 @@ export function SandboxesPage() {
   const handleCreateSandbox = async () => {
     if (!canCreate) return;
     try {
-      const runtime = buildRuntimePayload(createForm);
+      const runtime = buildSandboxRuntimePayload(createForm.runtime);
       await create.mutateAsync({
         name: createForm.name.trim(),
         node_id: createForm.nodeId,
         template: resolveCreateSandboxTemplate(createForm.templateId),
-        ...(Object.keys(runtime).length > 0 ? { runtime } : {}),
+        ...(runtime ? { runtime } : {}),
       });
       dispatch({ type: "set_create_open", open: false });
       dispatch({ type: "set_selected_node", value: createForm.nodeId });
@@ -489,7 +485,7 @@ export function SandboxesPage() {
         open={createDialogOpen}
         onOpenChange={(open) => dispatch({ type: "set_create_open", open })}
       >
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="sm:max-w-xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
               {createForm.templateLocked
@@ -599,31 +595,12 @@ export function SandboxesPage() {
                 </p>
               ) : null}
             </div>
-            <div className="space-y-3">
-              <div className="text-sm font-medium">{t(($) => $.sandboxes_page.runtime_model_title)}</div>
-              <Input
-                type="password"
-                placeholder={t(($) => $.sandboxes_page.api_key_placeholder)}
-                value={createForm.apiKey}
-                onChange={(e) =>
-                  dispatch({ type: "patch_create_form", patch: { apiKey: e.target.value } })
-                }
-              />
-              <Input
-                placeholder={t(($) => $.sandboxes_page.base_url_placeholder)}
-                value={createForm.baseUrl}
-                onChange={(e) =>
-                  dispatch({ type: "patch_create_form", patch: { baseUrl: e.target.value } })
-                }
-              />
-              <Input
-                placeholder={t(($) => $.sandboxes_page.model_placeholder)}
-                value={createForm.model}
-                onChange={(e) =>
-                  dispatch({ type: "patch_create_form", patch: { model: e.target.value } })
-                }
-              />
-            </div>
+            <SandboxRuntimeForm
+              value={createForm.runtime}
+              onChange={(runtime) =>
+                dispatch({ type: "patch_create_form", patch: { runtime } })
+              }
+            />
           </div>
           <DialogFooter>
             <Button

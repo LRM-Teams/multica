@@ -211,6 +211,8 @@ export type {
   SandboxSnapshot,
   SandboxSnapshotStatus,
   CreateSandboxSnapshotRequest,
+  SandboxRuntimeProviderConfig,
+  SandboxRuntimeConfig,
   CreateSandboxRequest,
   UpdateSandboxRequest,
 } from "./sandbox";

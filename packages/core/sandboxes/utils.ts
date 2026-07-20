@@ -1,4 +1,9 @@
-import type { SandboxInstance, SandboxNodeStatus } from "../types";
+import type {
+  SandboxInstance,
+  SandboxNodeStatus,
+  SandboxRuntimeConfig,
+  SandboxRuntimeProviderConfig,
+} from "../types";
 
 /**
  * Server/job liveness window. Must stay in sync with
@@ -30,21 +35,164 @@ export function sandboxDisplayName(instance: SandboxInstance): string {
   return instance.template;
 }
 
+/** Common Pi provider names offered in the sandbox runtime form. */
+export const SANDBOX_RUNTIME_PROVIDER_PRESETS = ["openai", "anthropic", "google"] as const;
+
+export type SandboxRuntimeProviderFormEntry = {
+  /** Stable React key; not persisted. */
+  key: string;
+  provider: string;
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+};
+
+export type SandboxRuntimeFormState = {
+  entries: SandboxRuntimeProviderFormEntry[];
+  /** `key` of the entry used as Pi defaultProvider / defaultModel. */
+  defaultKey: string;
+};
+
+let runtimeEntrySeq = 0;
+
+export function createEmptyRuntimeProviderEntry(
+  provider = "openai",
+): SandboxRuntimeProviderFormEntry {
+  runtimeEntrySeq += 1;
+  return {
+    key: `rt-${runtimeEntrySeq}-${Math.random().toString(36).slice(2, 8)}`,
+    provider,
+    apiKey: "",
+    baseUrl: "",
+    model: "",
+  };
+}
+
+export function emptySandboxRuntimeForm(): SandboxRuntimeFormState {
+  const entry = createEmptyRuntimeProviderEntry("openai");
+  return { entries: [entry], defaultKey: entry.key };
+}
+
+function asTrimmedString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function providerEntryFromRecord(
+  record: Record<string, unknown>,
+  fallbackProvider = "openai",
+): SandboxRuntimeProviderFormEntry {
+  return {
+    ...createEmptyRuntimeProviderEntry(asTrimmedString(record.provider) || fallbackProvider),
+    apiKey: asTrimmedString(record.api_key),
+    baseUrl: asTrimmedString(record.base_url),
+    model: asTrimmedString(record.model),
+  };
+}
+
+function providerEntryHasContent(entry: SandboxRuntimeProviderFormEntry): boolean {
+  return Boolean(entry.apiKey.trim() || entry.baseUrl.trim() || entry.model.trim());
+}
+
+/**
+ * Load editable runtime form state from sandbox metadata.
+ * Supports the multi-provider shape and legacy flat api_key/base_url/model.
+ */
+export function sandboxRuntimeForm(instance: SandboxInstance): SandboxRuntimeFormState {
+  const runtime = instance.metadata?.runtime;
+  if (!runtime || typeof runtime !== "object" || Array.isArray(runtime)) {
+    return emptySandboxRuntimeForm();
+  }
+  const record = runtime as Record<string, unknown>;
+
+  if (Array.isArray(record.providers) && record.providers.length > 0) {
+    const entries: SandboxRuntimeProviderFormEntry[] = [];
+    for (const item of record.providers) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const entry = providerEntryFromRecord(item as Record<string, unknown>);
+      if (providerEntryHasContent(entry)) entries.push(entry);
+    }
+    if (entries.length === 0) return emptySandboxRuntimeForm();
+
+    const defaultProvider = asTrimmedString(record.default_provider);
+    const defaultModel = asTrimmedString(record.default_model);
+    const fallback = entries[0];
+    if (!fallback) return emptySandboxRuntimeForm();
+    const matched =
+      entries.find(
+        (e) =>
+          e.provider === defaultProvider &&
+          (!defaultModel || e.model === defaultModel || !e.model),
+      ) ??
+      entries.find((e) => e.provider === defaultProvider) ??
+      fallback;
+
+    return { entries, defaultKey: matched.key };
+  }
+
+  const legacy = providerEntryFromRecord(record);
+  if (!providerEntryHasContent(legacy)) return emptySandboxRuntimeForm();
+  return { entries: [legacy], defaultKey: legacy.key };
+}
+
+/**
+ * @deprecated Use sandboxRuntimeForm. Returns the default entry's flat fields.
+ */
 export function sandboxRuntime(instance: SandboxInstance): {
   apiKey: string;
   baseUrl: string;
   model: string;
 } {
-  const runtime = instance.metadata?.runtime;
-  if (runtime && typeof runtime === "object" && !Array.isArray(runtime)) {
-    const record = runtime as Record<string, unknown>;
-    return {
-      apiKey: typeof record.api_key === "string" ? record.api_key : "",
-      baseUrl: typeof record.base_url === "string" ? record.base_url : "",
-      model: typeof record.model === "string" ? record.model : "",
-    };
+  const form = sandboxRuntimeForm(instance);
+  const entry = form.entries.find((e) => e.key === form.defaultKey) ?? form.entries[0];
+  if (!entry) return { apiKey: "", baseUrl: "", model: "" };
+  return { apiKey: entry.apiKey, baseUrl: entry.baseUrl, model: entry.model };
+}
+
+/**
+ * Build the API runtime payload from the form. Returns undefined when empty
+ * so callers can omit the field entirely.
+ */
+export function buildSandboxRuntimePayload(
+  form: SandboxRuntimeFormState,
+): SandboxRuntimeConfig | undefined {
+  const providers: SandboxRuntimeProviderConfig[] = [];
+  for (const entry of form.entries) {
+    const provider = entry.provider.trim() || "openai";
+    const apiKey = entry.apiKey.trim();
+    const baseUrl = entry.baseUrl.trim();
+    const model = entry.model.trim();
+    // Require at least one concrete config field so an empty create form
+    // does not enqueue a no-op reconfigure.
+    if (!apiKey && !baseUrl && !model) continue;
+    const item: SandboxRuntimeProviderConfig = { provider };
+    if (apiKey) item.api_key = apiKey;
+    if (baseUrl) item.base_url = baseUrl;
+    if (model) item.model = model;
+    providers.push(item);
   }
-  return { apiKey: "", baseUrl: "", model: "" };
+  if (providers.length === 0) return undefined;
+
+  const firstProvider = providers[0];
+  if (!firstProvider) return undefined;
+
+  const defaultFormEntry =
+    form.entries.find((e) => e.key === form.defaultKey) ?? form.entries[0];
+  const defaultProviderName = (
+    defaultFormEntry?.provider.trim() || firstProvider.provider
+  ).trim();
+  const defaultPayload =
+    providers.find((p) => p.provider === defaultProviderName) ?? firstProvider;
+
+  return {
+    providers,
+    default_provider: defaultPayload.provider,
+    default_model: defaultPayload.model ?? "",
+    // Legacy flat fields from the default entry (old Cube templates).
+    provider: defaultPayload.provider,
+    ...(defaultPayload.api_key ? { api_key: defaultPayload.api_key } : {}),
+    ...(defaultPayload.base_url ? { base_url: defaultPayload.base_url } : {}),
+    ...(defaultPayload.model ? { model: defaultPayload.model } : {}),
+  };
 }
 
 export function defaultSandboxName(): string {

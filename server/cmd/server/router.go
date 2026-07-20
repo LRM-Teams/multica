@@ -634,6 +634,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					// can_manage hint so the UI can gate connect/disconnect.
 					r.Get("/github/installations", h.ListGitHubInstallations)
 					r.Get("/sandbox/bindings", h.ListWorkspaceSandboxBindings)
+					// Members may bind nodes they own; UpsertSandboxWorkspaceBinding
+					// enforces owner_user_id = caller. Admin gate blocked the
+					// Sandboxes "Add node" flow after workspace switch for
+					// non-admins with a raw "insufficient permissions" error.
+					r.Post("/sandbox/bindings", h.BindSandboxNodeToWorkspace)
 				})
 				// Admin-level access
 				r.Group(func(r chi.Router) {
@@ -648,7 +653,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 						r.Delete("/", h.DeleteMember)
 					})
 					r.Delete("/invitations/{invitationId}", h.RevokeInvitation)
-					r.Post("/sandbox/bindings", h.BindSandboxNodeToWorkspace)
 				})
 				// Owner-only access
 				r.With(middleware.RequireWorkspaceRoleFromURL(queries, "id", "owner")).Delete("/", h.DeleteWorkspace)
@@ -707,8 +711,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Delete("/{id}", h.RevokePersonalAccessToken)
 		})
 
-		// Sandbox node administration. MVP keeps this authenticated-only; workspace
-		// use still requires an explicit admin-created workspace binding.
+		// Sandbox node administration. Node CRUD is authenticated + owner-scoped;
+		// workspace use requires an explicit membership-scoped binding (any
+		// member may bind a node they own).
 		r.Get("/api/sandbox/nodes", h.ListSandboxNodes)
 		r.Post("/api/sandbox/nodes", h.CreateSandboxNode)
 		r.Get("/api/sandbox/nodes/{nodeId}/templates", h.ListSandboxNodeTemplates)

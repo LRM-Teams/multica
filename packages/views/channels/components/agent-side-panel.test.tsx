@@ -204,9 +204,25 @@ describe("AgentSidePanel", () => {
     usageRows.length = 0;
   });
 
-  it("keeps non-owner access to profile only by default", () => {
+  it("shows Activity (not Files) to a workspace member for a workspace-visible agent", () => {
+    // #607 temporary (Frank's call): Activity is readable by any workspace
+    // member for workspace-visible agents (the server already returns it);
+    // Files stays owner/dev-gated.
     renderPanel("user-other");
     expect(screen.getByText("Atlas")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Activity" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Files" })).not.toBeInTheDocument();
+  });
+
+  it("keeps a private agent's Activity owner-only for non-owners", () => {
+    render(
+      <AgentSidePanel
+        agent={{ ...makeAgent("user-owner"), visibility: "private" }}
+        currentUserId="user-other"
+        members={members}
+        onClose={() => {}}
+      />,
+    );
     expect(screen.queryByRole("button", { name: "Activity" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Files" })).not.toBeInTheDocument();
   });

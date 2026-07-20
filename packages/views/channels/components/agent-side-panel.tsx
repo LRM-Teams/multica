@@ -68,9 +68,16 @@ export function AgentSidePanel({
   const { t } = useT("agents");
   const isOwner = !!currentUserId && agent.owner_id === currentUserId;
   const devProfileAccess = useConfigStore((state) => state.agentProfileDevAccessEnabled);
-  const canInspectAgent = isOwner || (!!currentUserId && devProfileAccess);
+  // #607 (temporary, Frank's call): Activity is readable by any workspace member
+  // for workspace-visible agents — the server already row-filters and returns
+  // it (Barry), the FE gate was over-blocking. Files + runtime/config stay
+  // owner-gated until the formal visibility model (#607) lands.
+  const canViewActivity =
+    isOwner || (!!currentUserId && agent.visibility === "workspace");
+  const canInspectFiles = isOwner || (!!currentUserId && devProfileAccess);
   const availableTabs: OwnerTab[] = ["profile"];
-  if (canInspectAgent) availableTabs.push("activity", "files");
+  if (canViewActivity) availableTabs.push("activity");
+  if (canInspectFiles) availableTabs.push("files");
   const showTabBar = availableTabs.length > 1;
   const [tab, setTab] = useState<OwnerTab>("profile");
   const [mountedTabs, setMountedTabs] = useState<Set<OwnerTab>>(() => new Set(["profile"]));
@@ -169,7 +176,7 @@ export function AgentSidePanel({
             })}
           </div>
           <div ref={tabBodyRef} className="min-h-0 min-w-0 flex-1 overflow-y-auto">
-            {renderTab("activity") && canInspectAgent ? (
+            {renderTab("activity") && canViewActivity ? (
               <div className={tab === "activity" ? undefined : "hidden"}>
                 <ActivityTab agent={agent} />
               </div>
@@ -183,13 +190,13 @@ export function AgentSidePanel({
                 />
               </div>
             ) : null}
-            {renderTab("files") && canInspectAgent ? (
+            {renderTab("files") && canInspectFiles ? (
               <div className={tab === "files" ? undefined : "hidden"}>
                 <AgentFilesPanel
                   agent={agent}
                   currentUserId={currentUserId}
                   members={members}
-                  canReadFiles={canInspectAgent}
+                  canReadFiles={canInspectFiles}
                   canEditFiles={isOwner}
                   onClose={onClose}
                   hideHeader

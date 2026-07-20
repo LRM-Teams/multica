@@ -758,7 +758,7 @@ func (a *envDispatchDepsAdapter) ResolveMessageRoster(ctx context.Context, works
 	return service.MessageRoster{LeaderID: ids[0], AgentIDs: ids}, nil
 }
 
-func (a *envDispatchDepsAdapter) CreateEnvDispatchChannel(ctx context.Context, workspaceID, userID, projectID, envID string, roster service.MessageRoster, specs map[string]service.SandboxInstanceRef) (string, error) {
+func (a *envDispatchDepsAdapter) CreateEnvDispatchChannel(ctx context.Context, workspaceID, userID, projectID, envID string, roster service.MessageRoster, specs map[string]service.ResolvedPerAgentSandboxPolicy) (string, error) {
 	tx, err := a.h.TxStarter.Begin(ctx)
 	if err != nil {
 		return "", err
@@ -780,8 +780,12 @@ func (a *envDispatchDepsAdapter) CreateEnvDispatchChannel(ctx context.Context, w
 			return "", err
 		}
 		config := json.RawMessage(`{}`)
-		if ref, ok := specs[agentID]; ok && ref.Template != "" {
-			config, _ = json.Marshal(map[string]string{"template": ref.Template})
+		if policy, ok := specs[agentID]; ok {
+			encoded, err := marshalEnvDispatchSandboxConfig(policy)
+			if err != nil {
+				return "", fmt.Errorf("encode binding sandbox config for agent %s: %w", agentID, err)
+			}
+			config = encoded
 		}
 		if err := store.insertBinding(ctx, tx, envAgentSandboxBinding{EnvID: envID, ChannelID: channelID, AgentID: agentID, Status: "pending", SandboxConfig: config}); err != nil {
 			return "", err
@@ -1726,7 +1730,7 @@ func (s *stubEnvDispatchDeps) DeleteProject(context.Context, string, string) err
 func (s *stubEnvDispatchDeps) ResolveMessageRoster(_ context.Context, _, agentID, _ string) (service.MessageRoster, error) {
 	return service.MessageRoster{LeaderID: agentID, AgentIDs: []string{agentID}}, nil
 }
-func (s *stubEnvDispatchDeps) CreateEnvDispatchChannel(context.Context, string, string, string, string, service.MessageRoster, map[string]service.SandboxInstanceRef) (string, error) {
+func (s *stubEnvDispatchDeps) CreateEnvDispatchChannel(context.Context, string, string, string, string, service.MessageRoster, map[string]service.ResolvedPerAgentSandboxPolicy) (string, error) {
 	return "stub-channel", nil
 }
 func (s *stubEnvDispatchDeps) DeleteChannel(context.Context, string, string) error { return nil }

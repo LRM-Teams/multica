@@ -121,6 +121,7 @@ type fakeEnvDispatchDeps struct {
 	resolveEnvSpecCalls []PerAgentEnvSpec
 	messageRoster       MessageRoster
 	channels            map[string]string
+	createChannelSpecs  map[string]ResolvedPerAgentSandboxPolicy
 	channelMessages     []string
 	channelRuns         []ChannelRunInput
 	triggers            []EnvCollaborationTrigger
@@ -146,11 +147,12 @@ func (f *fakeEnvDispatchDeps) ResolveMessageRoster(_ context.Context, _, agentID
 	}
 	return MessageRoster{LeaderID: agentID, AgentIDs: []string{agentID}}, nil
 }
-func (f *fakeEnvDispatchDeps) CreateEnvDispatchChannel(_ context.Context, _, _, projectID, _ string, _ MessageRoster, _ map[string]SandboxInstanceRef) (string, error) {
+func (f *fakeEnvDispatchDeps) CreateEnvDispatchChannel(_ context.Context, _, _, projectID, _ string, _ MessageRoster, specs map[string]ResolvedPerAgentSandboxPolicy) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	id := fmt.Sprintf("channel-%d", len(f.channels))
 	f.channels[id] = projectID
+	f.createChannelSpecs = specs
 	return id, nil
 }
 func (f *fakeEnvDispatchDeps) DeleteChannel(_ context.Context, _, channelID string) error {
@@ -1747,6 +1749,51 @@ func TestEnvDispatchPerAgentEnvSpecs_RuntimeValidation(t *testing.T) {
 				t.Fatalf("response must not contain runtime API key: %s", body)
 			}
 		})
+	}
+}
+
+// TestEnvDispatchPerAgentRuntimePolicy_IsolatedPerAgent verifies that a
+// scratch squad dispatch with two different runtime objects passes one resolved
+// policy per agent to CreateEnvDispatchChannel, each isolated and each resolving
+// to the default template (runtime-only scratch policy).
+func TestEnvDispatchPerAgentRuntimePolicy_IsolatedPerAgent(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	svc := NewEnvDispatchService(f, 1)
+	runtimeA := &ExternalModelRuntime{BaseURL: "https://provider-a.invalid/v1", APIKey: "key-a", Model: "model-a"}
+	runtimeB := &ExternalModelRuntime{BaseURL: "https://provider-b.invalid/v1", APIKey: "key-b", Model: "model-b"}
+
+	_, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", SquadID: "sq", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
+		Message: &MessageInput{Content: "hi"},
+		PerAgentEnvSpecs: []PerAgentEnvSpec{
+			{AgentID: "a1", Runtime: runtimeA},
+			{AgentID: "a2", Runtime: runtimeB},
+		},
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if f.createChannelSpecs == nil {
+		t.Fatalf("expected CreateEnvDispatchChannel to receive a policy map")
+	}
+	if len(f.createChannelSpecs) != 2 {
+		t.Fatalf("expected 2 binding specs, got %d", len(f.createChannelSpecs))
+	}
+	pa := f.createChannelSpecs["a1"]
+	pb := f.createChannelSpecs["a2"]
+	if pa.Template != "default" || pb.Template != "default" {
+		t.Fatalf("runtime-only policies must resolve to template default, got %+v and %+v", pa, pb)
+	}
+	if pa.Runtime == nil || pb.Runtime == nil {
+		t.Fatalf("expected non-nil runtimes on both policies")
+	}
+	if pa.Runtime.BaseURL != "https://provider-a.invalid/v1" || pb.Runtime.BaseURL != "https://provider-b.invalid/v1" {
+		t.Fatalf("per-agent runtimes must be isolated: %+v and %+v", pa, pb)
+	}
+	if pa.Runtime.APIKey == pb.Runtime.APIKey {
+		t.Fatalf("per-agent runtimes must differ")
 	}
 }
 

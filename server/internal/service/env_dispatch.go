@@ -258,7 +258,7 @@ type EnvDispatchDeps interface {
 	CopyProjectSubtree(ctx context.Context, sourceProjectID, workspaceID, envID string) (newProjectID string, issueIDMap, chatSessionIDMap map[string]string, err error)
 	DeleteProject(ctx context.Context, projectID, workspaceID string) error
 	ResolveMessageRoster(ctx context.Context, workspaceID, agentID, squadID string) (MessageRoster, error)
-	CreateEnvDispatchChannel(ctx context.Context, workspaceID, userID, projectID, envID string, roster MessageRoster, specs map[string]SandboxInstanceRef) (channelID string, err error)
+	CreateEnvDispatchChannel(ctx context.Context, workspaceID, userID, projectID, envID string, roster MessageRoster, specs map[string]ResolvedPerAgentSandboxPolicy) (channelID string, err error)
 	DeleteChannel(ctx context.Context, workspaceID, channelID string) error
 	ProvisionEnvDispatchAgent(ctx context.Context, in EnvDispatchAgentProvisionInput) (EnvDispatchAgentProvisionResult, error)
 	CreateChannelMessage(ctx context.Context, channelID, workspaceID, userID, content string) (messageID string, err error)
@@ -948,20 +948,21 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 		}
 	}
 	if in.DispatchType == EnvDispatchMessage && in.Mode == EnvModeScratch {
-		bindingSpecs := agentSandboxRefs
-		if len(in.PerAgentEnvSpecs) > 0 && bindingSpecs == nil {
-			bindingSpecs = make(map[string]SandboxInstanceRef, len(in.PerAgentEnvSpecs))
+		// Scratch message rollouts provision through per-agent channel bindings,
+		// so the binding specs are the resolved per-agent sandbox policies. The
+		// sandbox_instance backend (agentSandboxRefs) is never used for scratch
+		// message dispatch (useSandboxInstanceBackend returns false), so binding
+		// specs are built solely from PerAgentEnvSpecs.
+		var bindingSpecs map[string]ResolvedPerAgentSandboxPolicy
+		if len(in.PerAgentEnvSpecs) > 0 {
+			bindingSpecs = make(map[string]ResolvedPerAgentSandboxPolicy, len(in.PerAgentEnvSpecs))
 			for _, spec := range in.PerAgentEnvSpecs {
 				policy, err := s.deps.ResolvePerAgentEnvSpec(ctx, in.WorkspaceID, spec)
 				if err != nil {
 					s.rollbackRollout(ctx, in.WorkspaceID, r)
 					return EnvRollout{}, fmt.Errorf("resolve channel sandbox policy: %w", err)
 				}
-				// CreateEnvDispatchChannel still receives sandbox refs; the
-				// resolved runtime policy is persisted on the env-agent binding
-				// separately. The API key never enters SandboxInstanceRef
-				// (secret safety).
-				bindingSpecs[spec.AgentID] = SandboxInstanceRef{Template: policy.Template, WorkspaceID: in.WorkspaceID}
+				bindingSpecs[spec.AgentID] = policy
 			}
 		}
 		channelID, err := s.deps.CreateEnvDispatchChannel(ctx, in.WorkspaceID, in.UserID, projectID, envID, roster, bindingSpecs)

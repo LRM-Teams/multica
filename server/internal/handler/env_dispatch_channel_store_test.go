@@ -7,6 +7,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+
+	"github.com/multica-ai/multica/server/internal/service"
 )
 
 func TestEnvDispatchChannelStoreClaimProvisioningIsSingleWinner(t *testing.T) {
@@ -104,4 +106,54 @@ func validEnvCollaborationTrigger(agentID, channelID, projectID string) envColla
 		ChatSessionID: uuid.NewString(), SourceMessageID: uuid.NewString(),
 		TaskID: uuid.NewString(), RuntimeID: uuid.NewString(),
 	}
+}
+
+// TestEnvDispatchAdapter_CreateChannelPersistsCanonicalPolicy verifies the
+// adapter's CreateEnvDispatchChannel persists the resolved per-agent runtime
+// policy as canonical JSON (trimmed values, template "default") in the
+// environment_agent_sandbox.sandbox_config column, while a member without an
+// override persists "{}".
+func TestEnvDispatchAdapter_CreateChannelPersistsCanonicalPolicy(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx, store, envID, _, agentID := setupEnvDispatchChannelStoreFixture(t)
+	projectID := projectIDForEnvDispatchStoreFixture(t, ctx, envID)
+	otherAgent := createHandlerTestAgent(t, "Env Dispatch Other Agent", nil)
+
+	adapter := &envDispatchDepsAdapter{h: testHandler}
+	policy := service.ResolvedPerAgentSandboxPolicy{
+		Template: "  default  ",
+		Runtime: &service.ExternalModelRuntime{
+			BaseURL: " https://provider.invalid/v1 ",
+			APIKey:  " synthetic-secret-for-tests ",
+			Model:   " model-a ",
+		},
+	}
+	roster := service.MessageRoster{LeaderID: agentID, AgentIDs: []string{agentID, otherAgent}}
+	specs := map[string]service.ResolvedPerAgentSandboxPolicy{agentID: policy}
+
+	channelID, err := adapter.CreateEnvDispatchChannel(ctx, testWorkspaceID, testUserID, projectID, envID, roster, specs)
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, channelID) })
+
+	// Configured member: canonical trimmed runtime + template default.
+	binding, err := store.binding(ctx, testPool, envID, agentID)
+	require.NoError(t, err)
+	decoded, err := decodeEnvDispatchSandboxConfig(binding.SandboxConfig)
+	require.NoError(t, err)
+	require.Equal(t, "default", decoded.Template)
+	require.NotNil(t, decoded.Runtime)
+	require.Equal(t, "https://provider.invalid/v1", decoded.Runtime.BaseURL)
+	require.Equal(t, "synthetic-secret-for-tests", decoded.Runtime.APIKey)
+	require.Equal(t, "model-a", decoded.Runtime.Model)
+
+	// Unconfigured member: "{}" persists, decoding to default template.
+	other, err := store.binding(ctx, testPool, envID, otherAgent)
+	require.NoError(t, err)
+	require.JSONEq(t, `{}`, string(other.SandboxConfig))
+	otherDecoded, err := decodeEnvDispatchSandboxConfig(other.SandboxConfig)
+	require.NoError(t, err)
+	require.Equal(t, "default", otherDecoded.Template)
+	require.Nil(t, otherDecoded.Runtime)
 }

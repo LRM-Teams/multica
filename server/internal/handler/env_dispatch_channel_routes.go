@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/arealrl"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -170,13 +171,15 @@ func (h *Handler) deleteEnvDispatchChannelRollout(ctx context.Context, workspace
 		if b.RuntimeID != nil {
 			_ = adapter.DeleteAgentRuntime(ctx, workspaceID, *b.RuntimeID)
 		}
-		// Close the training session when present. The session proxy key is
-		// persisted on the binding as part of AC-4 training orchestration
-		// (pending plan-first); until env-dispatch bindings carry a training
-		// session this is a no-op forward-compatible hook. Wiring arealrl
-		// EndSession here once AC-4 stores the key closes AC-6's session step.
-		if b.TrainingSessionID != nil && *b.TrainingSessionID != "" {
-			slog.Info("env-dispatch channel cleanup: training session close pending AC-4 session-key persistence", "training_session_id", *b.TrainingSessionID)
+		// Close the training session when present (AC-6). The session proxy key is
+		// persisted on the binding by AC-4 training provisioning; EndSession closes
+		// it via the bridge. Absent key (static dispatch) is a no-op.
+		if b.TrainingSessionID != nil && *b.TrainingSessionID != "" && b.TrainingSessionKey != nil && *b.TrainingSessionKey != "" {
+			if cfg := service.LoadTrainingConfig(); cfg.BridgeStubURL != "" && cfg.AdminAPIKey != "" {
+				if cerr := arealrl.New(cfg.BridgeStubURL, cfg.AdminAPIKey).EndSession(ctx, *b.TrainingSessionKey); cerr != nil {
+					slog.Warn("env-dispatch channel cleanup: close training session", "training_session_id", *b.TrainingSessionID, "error", cerr)
+				}
+			}
 		}
 	}
 	// Foreign-key-safe order: channel (cascades messages/members/sessions and

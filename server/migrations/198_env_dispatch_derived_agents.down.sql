@@ -14,6 +14,7 @@ DROP INDEX IF EXISTS environment_agent_sandbox_id_uidx;
 ALTER TABLE environment_agent_sandbox
   DROP COLUMN IF EXISTS model_config_owner_agent_id,
   DROP COLUMN IF EXISTS credential_kind,
+  DROP COLUMN IF EXISTS training_session_key,
   DROP COLUMN IF EXISTS training_session_ref,
   DROP COLUMN IF EXISTS training_session_id,
   DROP COLUMN IF EXISTS derived_agent_id,

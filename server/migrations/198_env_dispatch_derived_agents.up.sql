@@ -18,6 +18,7 @@ ALTER TABLE environment_agent_sandbox
   ADD COLUMN IF NOT EXISTS derived_agent_id uuid,
   ADD COLUMN IF NOT EXISTS training_session_id text,
   ADD COLUMN IF NOT EXISTS training_session_ref text,
+  ADD COLUMN IF NOT EXISTS training_session_key text,
   ADD COLUMN IF NOT EXISTS credential_kind text,
   ADD COLUMN IF NOT EXISTS model_config_owner_agent_id uuid;
 

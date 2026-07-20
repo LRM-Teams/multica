@@ -370,7 +370,7 @@ func TestMigration201BackfillsExactDecisionFactOrFailsClosed(t *testing.T) {
 				t.Fatalf("insert legacy draft: %v", err)
 			}
 			for i := 0; i < tc.audits; i++ {
-				if _, err := tx.Exec(ctx, `INSERT INTO agent_task_transport_audit (id, workspace_id, task_id, agent_id, action, target, client_message_id, context_pack) VALUES ($1,$2,$3,$4,'message_send','#held','exact-client',jsonb_build_object('held', true, 'producer_fact_id', $5))`, uuid.NewString(), workspaceID, taskID, agentID, tc.fact); err != nil {
+				if _, err := tx.Exec(ctx, `INSERT INTO agent_task_transport_audit (id, workspace_id, task_id, agent_id, action, target, client_message_id, context_pack) VALUES ($1,$2,$3,$4,'message_send','#held','exact-client',jsonb_build_object('held', true, 'producer_fact_id', $5::text))`, uuid.NewString(), workspaceID, taskID, agentID, tc.fact); err != nil {
 					t.Fatalf("insert legacy audit: %v", err)
 				}
 			}

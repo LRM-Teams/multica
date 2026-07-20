@@ -431,7 +431,7 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		writeAgentTransportHeldResponse(w, target, freshness, transportID)
 		return
 	}
-	msg, created, transportID, err := h.createAgentTransportMessage(r.Context(), source, target, content, parts, attachmentIDs, clientMessageID, freshness.SeenUpToSeq, initiatorID)
+	msg, created, transportID, err := h.createAgentTransportMessage(r.Context(), source, target, content, parts, attachmentIDs, clientMessageID, freshness.SeenUpToSeq, initiatorID, false)
 	if err != nil {
 		var freshnessHold *agentTransportFreshnessHoldError
 		if errors.As(err, &freshnessHold) {
@@ -453,8 +453,6 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		Created:     created,
 		TransportID: transportID,
 	})
-	h.deleteAgentTransportDraft(r.Context(), source, target.raw)
-
 	// Record a message-sent activity event (agent replied via multica message send).
 	if !created {
 		return
@@ -643,7 +641,7 @@ func (h *Handler) agentTransportSendDraft(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "failed to send draft")
 		return
 	}
-	msg, created, transportID, err := h.createAgentTransportMessage(r.Context(), source, target, content, parts, attachmentIDs, draft.ClientMessageID, seenUpToSeq, initiatorID)
+	msg, created, transportID, err := h.createAgentTransportMessage(r.Context(), source, target, content, parts, attachmentIDs, draft.ClientMessageID, seenUpToSeq, initiatorID, true)
 	if err != nil {
 		var freshnessHold *agentTransportFreshnessHoldError
 		if errors.As(err, &freshnessHold) {
@@ -658,7 +656,6 @@ func (h *Handler) agentTransportSendDraft(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "failed to send draft")
 		return
 	}
-	h.deleteAgentTransportDraft(r.Context(), source, draft.Target)
 	writeJSON(w, http.StatusCreated, AgentTransportSendResponse{
 		Action:      agentTransportActionSend,
 		Target:      target.raw,
@@ -998,7 +995,7 @@ func (h *Handler) agentHumanDMChannel(ctx context.Context, workspaceID, agentID,
 	return h.ensureAgentHumanDMChannel(ctx, workspaceID, agentID, userID)
 }
 
-func (h *Handler) createAgentTransportMessage(ctx context.Context, source agentTransportSource, target agentTransportTarget, content string, parts []protocol.MessagePart, attachmentIDs []pgtype.UUID, clientMessageID string, seenUpToSeq int64, initiatorID pgtype.UUID) (ChannelMessageResponse, bool, string, error) {
+func (h *Handler) createAgentTransportMessage(ctx context.Context, source agentTransportSource, target agentTransportTarget, content string, parts []protocol.MessagePart, attachmentIDs []pgtype.UUID, clientMessageID string, seenUpToSeq int64, initiatorID pgtype.UUID, sendSavedDraft bool) (ChannelMessageResponse, bool, string, error) {
 	input, err := h.finalizedAgentTransportInsertInput(ctx, source, target, content, parts, clientMessageID)
 	if err != nil {
 		return ChannelMessageResponse{}, false, "", err
@@ -1010,7 +1007,7 @@ func (h *Handler) createAgentTransportMessage(ctx context.Context, source agentT
 			return ChannelMessageResponse{}, false, "", err
 		}
 	}
-	msg, created, transportID, err := h.insertAgentTransportMessageWithAudit(ctx, source, target, input, content, parts, attachmentIDs, clientMessageID, seenUpToSeq)
+	msg, created, transportID, err := h.insertAgentTransportMessageWithAudit(ctx, source, target, input, content, parts, attachmentIDs, clientMessageID, seenUpToSeq, sendSavedDraft)
 	if err != nil {
 		return ChannelMessageResponse{}, false, "", err
 	}
@@ -1064,7 +1061,7 @@ func (h *Handler) finalizedAgentTransportInsertInput(ctx context.Context, source
 	}, nil
 }
 
-func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, source agentTransportSource, target agentTransportTarget, input channelMessageInsertInput, draftContent string, draftParts []protocol.MessagePart, attachmentIDs []pgtype.UUID, clientMessageID string, seenUpToSeq int64) (ChannelMessageResponse, bool, string, error) {
+func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, source agentTransportSource, target agentTransportTarget, input channelMessageInsertInput, draftContent string, draftParts []protocol.MessagePart, attachmentIDs []pgtype.UUID, clientMessageID string, seenUpToSeq int64, sendSavedDraft bool) (ChannelMessageResponse, bool, string, error) {
 	tx, err := h.TxStarter.Begin(ctx)
 	if err != nil {
 		return ChannelMessageResponse{}, false, "", err
@@ -1076,6 +1073,28 @@ func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, sour
 	if err := h.lockAgentTransportDraftSource(ctx, tx, source, target); err != nil {
 		_ = tx.Rollback(ctx)
 		return ChannelMessageResponse{}, false, "", err
+	}
+	if sendSavedDraft {
+		current, found, err := h.loadAgentTransportDraftWithExec(ctx, tx, source, target.raw)
+		if err != nil {
+			_ = tx.Rollback(ctx)
+			return ChannelMessageResponse{}, false, "", err
+		}
+		if !found {
+			_ = tx.Rollback(ctx)
+			return ChannelMessageResponse{}, false, "", fmt.Errorf("saved draft not found")
+		}
+		draftContent, draftParts, clientMessageID = current.Content, current.Parts, current.ClientMessageID
+		seenUpToSeq = current.HeldToSeq
+		attachmentIDs = make([]pgtype.UUID, 0, len(attachmentIDsFromParts(draftParts)))
+		for _, rawID := range attachmentIDsFromParts(draftParts) {
+			attachmentIDs = append(attachmentIDs, parseUUID(rawID))
+		}
+		input, err = h.finalizedAgentTransportInsertInput(ctx, source, target, draftContent, draftParts, clientMessageID)
+		if err != nil {
+			_ = tx.Rollback(ctx)
+			return ChannelMessageResponse{}, false, "", err
+		}
 	}
 	if seenUpToSeq > 0 {
 		decision, err := h.agentTransportFreshnessDecisionWithSeen(ctx, tx, source, target, seenUpToSeq)
@@ -1133,6 +1152,10 @@ func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, sour
 		return ChannelMessageResponse{}, false, "", err
 	}
 	if err := consumeAgentTransportVisibilityGrantTx(ctx, tx, source, input.ChannelID, parseUUID(msg.ID)); err != nil {
+		_ = tx.Rollback(ctx)
+		return ChannelMessageResponse{}, false, "", err
+	}
+	if err := h.deleteAgentTransportDraftWithExec(ctx, tx, source, target.raw); err != nil {
 		_ = tx.Rollback(ctx)
 		return ChannelMessageResponse{}, false, "", err
 	}
@@ -1677,13 +1700,17 @@ func (h *Handler) replaceHeldAgentTransportDraftWithExec(ctx context.Context, ex
 }
 
 func (h *Handler) loadAgentTransportDraft(ctx context.Context, source agentTransportSource, target string) (agentTransportDraft, bool, error) {
+	return h.loadAgentTransportDraftWithExec(ctx, h.DB, source, target)
+}
+
+func (h *Handler) loadAgentTransportDraftWithExec(ctx context.Context, exec dbExecutor, source agentTransportSource, target string) (agentTransportDraft, bool, error) {
 	target = strings.TrimSpace(target)
 	if target == "" {
 		return agentTransportDraft{}, false, nil
 	}
 	var draft agentTransportDraft
 	var partsRaw []byte
-	err := h.DB.QueryRow(ctx, `
+	err := exec.QueryRow(ctx, `
 		SELECT id, target, channel_id, thread_root_message_id, content, parts, client_message_id, seen_up_to_seq, held_from_seq, held_to_seq, COALESCE(decision_fact_id, '')
 		FROM agent_transport_draft
 		WHERE workspace_id = $1 AND agent_id = $2 AND target = $3
@@ -1711,18 +1738,39 @@ func (h *Handler) deleteAgentTransportDraft(ctx context.Context, source agentTra
 		source.origin.workspaceID, source.origin.agentID, strings.TrimSpace(target), nullableTaskIDForTransportSource(source), nullableInboxEventIDForTransportSource(source))
 }
 
+func (h *Handler) deleteAgentTransportDraftWithExec(ctx context.Context, exec dbExecutor, source agentTransportSource, target string) error {
+	_, err := exec.Exec(ctx, `
+		DELETE FROM agent_transport_draft
+		WHERE workspace_id = $1 AND agent_id = $2 AND target = $3
+		  AND (($4::uuid IS NOT NULL AND task_id = $4) OR ($5::uuid IS NOT NULL AND inbox_event_id = $5))`,
+		source.origin.workspaceID, source.origin.agentID, strings.TrimSpace(target), nullableTaskIDForTransportSource(source), nullableInboxEventIDForTransportSource(source))
+	return err
+}
+
 func (h *Handler) replaceAgentTransportDraft(ctx context.Context, source agentTransportSource, target, content string, parts []protocol.MessagePart, clientMessageID string) error {
 	partsJSON, err := json.Marshal(parts)
 	if err != nil {
 		return err
 	}
-	_, err = h.DB.Exec(ctx, `
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	if err := h.lockAgentTransportDraftSource(ctx, tx, source, agentTransportTarget{raw: target}); err != nil {
+		_ = tx.Rollback(ctx)
+		return err
+	}
+	_, err = tx.Exec(ctx, `
 		UPDATE agent_transport_draft
 		SET content = $6, parts = $7::jsonb, client_message_id = $8, updated_at = now()
 		WHERE workspace_id = $1 AND agent_id = $2 AND target = $3
 		  AND (($4::uuid IS NOT NULL AND task_id = $4) OR ($5::uuid IS NOT NULL AND inbox_event_id = $5))`,
 		source.origin.workspaceID, source.origin.agentID, strings.TrimSpace(target), nullableTaskIDForTransportSource(source), nullableInboxEventIDForTransportSource(source), content, partsJSON, clientMessageID)
-	return err
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func agentTransportFreshnessProducerID(source agentTransportSource, target agentTransportTarget, seenUpToSeq, latestSeq int64) string {

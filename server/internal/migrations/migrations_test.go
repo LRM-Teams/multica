@@ -80,9 +80,18 @@ func TestMigration201ScopesFreshnessDraftsBySourceAndFailsClosed(t *testing.T) {
 		"ADD COLUMN IF NOT EXISTS inbox_event_id UUID",
 		"ADD COLUMN IF NOT EXISTS decision_fact_id TEXT",
 		"audit.client_message_id = draft.client_message_id",
-		"HAVING COUNT(audit.id) <> 1",
+		"HAVING COUNT(audit.id) = 0",
 		"(audit.task_id IS NULL) = (audit.inbox_event_id IS NULL)",
 		"COALESCE(btrim(audit.context_pack->>'producer_fact_id'), '') = ''",
+		"COUNT(DISTINCT CASE",
+		"THEN 'task:' || audit.task_id::text",
+		"THEN 'inbox:' || audit.inbox_event_id::text",
+		"audit.context_pack->>'seen_up_to_seq' = draft.seen_up_to_seq::text",
+		"audit.context_pack->>'latest_seq' = draft.held_to_seq::text",
+		"COUNT(DISTINCT audit.context_pack->>'producer_fact_id') FILTER",
+		"ROW_NUMBER() OVER",
+		"ORDER BY audit.created_at DESC, audit.id DESC",
+		"winner.winner_rank = 1",
 		"RAISE EXCEPTION",
 		"idx_agent_transport_draft_source_target",
 		"idx_agent_transport_draft_inbox_target",
@@ -93,9 +102,6 @@ func TestMigration201ScopesFreshnessDraftsBySourceAndFailsClosed(t *testing.T) {
 		if !strings.Contains(contents, required) {
 			t.Errorf("migration 201 up missing %q", required)
 		}
-	}
-	if strings.Contains(contents, "ORDER BY audit.created_at DESC") {
-		t.Error("migration 201 must not choose a latest audit heuristic")
 	}
 }
 

@@ -95,7 +95,6 @@ func init() {
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(versionCmd)
-	rootCmd.AddCommand(dmCmd)
 	rootCmd.AddCommand(channelCmd)
 	rootCmd.AddCommand(threadCmd)
 	rootCmd.AddCommand(reminderCmd)

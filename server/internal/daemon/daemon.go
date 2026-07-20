@@ -4613,6 +4613,10 @@ func (d *Daemon) runIdleWatchdog(agentCtx context.Context, window, toolWindow ti
 			}
 			threshold = toolWindow
 		}
+		// Snapshot before evaluating silence so the generation covers the whole
+		// decision window, not only the potentially-blocking OS probe. Progress
+		// that lands after this point must invalidate the observation.
+		activityBeforeProbe := activitySeq.Load()
 		last := time.Unix(0, lastActivityAt.Load())
 		idleFor := time.Since(last)
 		if idleFor < threshold {
@@ -4628,10 +4632,14 @@ func (d *Daemon) runIdleWatchdog(agentCtx context.Context, window, toolWindow ti
 			resetDeadObservation()
 			continue
 		}
+		if activitySeq.Load() != activityBeforeProbe {
+			suppressionLogged = false
+			resetDeadObservation()
+			continue
+		}
 		// Raft suppresses stale-progress recovery while the provider child is
 		// alive. An unavailable probe is also not proof that the child died,
 		// so fail open and keep the turn running instead of guessing.
-		activityBeforeProbe := activitySeq.Load()
 		alive, known := false, false
 		if runtimeAlive != nil {
 			alive, known = runtimeAlive()

@@ -4,7 +4,7 @@ import { useWorkspaceId } from "../hooks";
 import { channelKeys, invalidateChannelMessages, upsertChannelMessageInCache } from "./queries";
 import { dmKeys } from "../dm/queries";
 import type { DMItem } from "../dm/types";
-import type { MessagePart } from "../types";
+import type { ChannelThreadMessagesPage, MessagePart } from "../types";
 
 export function useCreateChannel() {
   const qc = useQueryClient();
@@ -242,7 +242,29 @@ export function useSetChannelThreadFollowed() {
   return useMutation({
     mutationFn: ({ channelId, messageId, followed }: { channelId: string; messageId: string; followed: boolean }) =>
       followed ? api.followChannelThread(channelId, messageId) : api.unfollowChannelThread(channelId, messageId),
-    onSuccess: (_result, vars) => {
+    onMutate: async (vars) => {
+      const queryKey = channelKeys.messageThread(vars.channelId, vars.messageId);
+      await qc.cancelQueries({ queryKey });
+      const previousThreads = qc.getQueriesData<ChannelThreadMessagesPage>({ queryKey });
+      qc.setQueriesData<ChannelThreadMessagesPage>({ queryKey }, (old) => {
+        if (!old) return old;
+        return {
+          ...old,
+          messages: old.messages.map((message) =>
+            message.id === vars.messageId
+              ? { ...message, thread_followed: vars.followed }
+              : message,
+          ),
+        };
+      });
+      return { previousThreads };
+    },
+    onError: (_error, _vars, context) => {
+      for (const [queryKey, data] of context?.previousThreads ?? []) {
+        qc.setQueryData(queryKey, data);
+      }
+    },
+    onSettled: (_result, _error, vars) => {
       qc.invalidateQueries({ queryKey: channelKeys.messageThread(vars.channelId, vars.messageId) });
       invalidateChannelMessages(qc, vars.channelId);
     },

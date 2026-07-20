@@ -158,6 +158,12 @@
     "empty_replies": "No replies yet.",
     "load_failed": "Failed to load thread.",
     "send_failed": "Failed to send thread reply.",
+    "follow": "Follow",
+    "following": "Following",
+    "follow_aria": "Follow thread",
+    "unfollow_aria": "Unfollow thread",
+    "follow_failed": "Failed to follow thread.",
+    "unfollow_failed": "Failed to unfollow thread.",
     "composer_placeholder": "Reply in thread...",
     "back_to_conversation": "Back to conversation"
   },

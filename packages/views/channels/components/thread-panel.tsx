@@ -12,6 +12,7 @@ import { ThreadRootPreview } from "./thread-root-preview";
 import { Composer } from "./composer";
 import { ReadOnlyConversationBanner } from "./read-only-conversation-banner";
 import { ConversationHeader } from "./conversation-surface";
+import { ThreadFollowButton } from "./thread-follow-button";
 
 export interface ThreadPanelProps {
   root: ChannelMessage;
@@ -21,6 +22,10 @@ export interface ThreadPanelProps {
   isMobile: boolean;
   /** Return to the parent conversation (mobile back / desktop close). */
   onBack: () => void;
+  /** Current human viewer's explicit/automatic thread subscription state. */
+  followed: boolean;
+  followDisabled?: boolean;
+  onFollowChange: (followed: boolean) => void;
   /** Jump to the root in the main timeline. */
   onViewParent?: () => void;
   loading?: boolean;
@@ -52,9 +57,9 @@ export interface ThreadPanelProps {
 /**
  * The thread panel: a pinned read-only root, a FLAT reply list (no nesting —
  * the reply list is never given an open-thread affordance), the reused
- * `<Composer surface="thread">`. A thread reply stays in that thread;
- * following is implicit (replying follows the thread), with no explicit
- * follow toggle.
+ * `<Composer surface="thread">`. A thread reply stays in that thread; the
+ * header exposes the same minimal explicit follow control for group and DM
+ * threads while reply/mention auto-follow remains a server responsibility.
  */
 export function ThreadPanel({
   root,
@@ -63,6 +68,9 @@ export function ThreadPanel({
   currentUserName,
   isMobile,
   onBack,
+  followed,
+  followDisabled,
+  onFollowChange,
   onViewParent,
   loading,
   loadError,
@@ -108,19 +116,27 @@ export function ThreadPanel({
   );
 
   const headerActions = useMemo(
-    () =>
-      isMobile ? undefined : (
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-8"
-          aria-label={t(($) => $.thread.close_aria)}
-          onClick={onBack}
-        >
-          <X className="size-4" />
-        </Button>
-      ),
-    [isMobile, onBack, t],
+    () => (
+      <>
+        <ThreadFollowButton
+          followed={followed}
+          disabled={followDisabled}
+          onFollowChange={onFollowChange}
+        />
+        {!isMobile && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-8"
+            aria-label={t(($) => $.thread.close_aria)}
+            onClick={onBack}
+          >
+            <X className="size-4" />
+          </Button>
+        )}
+      </>
+    ),
+    [followDisabled, followed, isMobile, onBack, onFollowChange, t],
   );
 
   const composerActions = useMemo(() => composerLeadingActions, [composerLeadingActions]);

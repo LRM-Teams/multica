@@ -19,6 +19,7 @@ import {
   useRemoveChannelReaction,
   useEditChannelMessage,
   useDeleteChannelMessage,
+  useSetChannelThreadFollowed,
   useSetChannelTyping,
 } from "@multica/core/channels";
 import { dmKeys } from "@multica/core/dm";
@@ -65,6 +66,7 @@ import { AgentSidePanel } from "./agent-side-panel";
 import { Composer, ConversationHeader } from "./conversation-surface";
 import { ComposerAttachmentTray } from "./composer-attachment-tray";
 import { ThreadRootPreview } from "./thread-root-preview";
+import { ThreadFollowButton } from "./thread-follow-button";
 import { ComposerQuotePreview } from "./message-quote";
 import type { QuoteTarget } from "./message-quote-types";
 import {
@@ -446,6 +448,7 @@ function DmChannelConversation({
   const removeChannelReaction = useRemoveChannelReaction();
   const editChannelMessage = useEditChannelMessage();
   const deleteChannelMessage = useDeleteChannelMessage();
+  const setThreadFollowed = useSetChannelThreadFollowed();
   // Edit is a PATCH of an existing message (H5) — it routes through
   // editChannelMessage, never the send path, so it can never produce a new wake.
   // DMs are never archived/closed, so (like onReact) edit/delete are always wired;
@@ -510,6 +513,10 @@ function DmChannelConversation({
   const { data: threadPage, isLoading: threadLoading, isError: threadError, refetch: refetchThread } = useQuery(
     channelMessageThreadOptions(channelId, threadRoot?.id ?? ""),
   );
+  const threadSurfaceRoot = useMemo(
+    () => threadPage?.messages.find((message) => message.id === threadRoot?.id) ?? threadRoot,
+    [threadPage?.messages, threadRoot],
+  );
   const threadReplies = useMemo(
     () => {
       const messages = threadPage?.messages ?? [];
@@ -518,6 +525,22 @@ function DmChannelConversation({
     [threadPage?.messages, threadRoot],
   );
   const { data: activeTasks = [] } = useQuery(activeChannelTasksOptions(channelId));
+
+  const handleThreadFollowChange = useCallback((followed: boolean) => {
+    if (!threadSurfaceRoot) return;
+    setThreadFollowed.mutate(
+      {
+        channelId: threadSurfaceRoot.channel_id,
+        messageId: threadSurfaceRoot.id,
+        followed,
+      },
+      {
+        onError: () => toast.error(
+          t(($) => followed ? $.thread.follow_failed : $.thread.unfollow_failed),
+        ),
+      },
+    );
+  }, [setThreadFollowed, t, threadSurfaceRoot]);
 
   const editorRef = useRef<ContentEditorRef>(null);
   const threadEditorRef = useRef<ContentEditorRef>(null);
@@ -842,7 +865,7 @@ function DmChannelConversation({
   };
 
   const threadPanel =
-    threadRoot ? (
+    threadSurfaceRoot ? (
       <div className="flex h-full min-h-0 min-w-0 flex-col bg-background">
         <ConversationHeader
           isMobile={isMobile}
@@ -872,21 +895,32 @@ function DmChannelConversation({
               : undefined
           }
           actions={
-            isMobile ? undefined : (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-8"
-                aria-label={t(($) => $.thread.close_aria)}
-                onClick={() => dispatch({ type: "closeThread" })}
-              >
-                <X className="size-4" />
-              </Button>
-            )
+            <>
+              <ThreadFollowButton
+                followed={threadSurfaceRoot.thread_followed === true}
+                disabled={
+                  threadLoading ||
+                  (setThreadFollowed.isPending &&
+                    setThreadFollowed.variables?.messageId === threadSurfaceRoot.id)
+                }
+                onFollowChange={handleThreadFollowChange}
+              />
+              {!isMobile && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-8"
+                  aria-label={t(($) => $.thread.close_aria)}
+                  onClick={() => dispatch({ type: "closeThread" })}
+                >
+                  <X className="size-4" />
+                </Button>
+              )}
+            </>
           }
         />
         <ChannelMessageList
-          key={`dm-thread:${threadRoot.id}:${threadLoading ? "loading" : "ready"}`}
+          key={`dm-thread:${threadSurfaceRoot.id}:${threadLoading ? "loading" : "ready"}`}
           messages={threadReplies}
           currentUserId={currentUserId}
           ownName={currentUserName ?? undefined}
@@ -894,11 +928,11 @@ function DmChannelConversation({
           initialScroll="top"
           header={
             <ThreadRootPreview
-              message={threadRoot}
+              message={threadSurfaceRoot}
               currentUserId={currentUserId}
               ownName={currentUserName ?? undefined}
               onViewParent={() => {
-                dispatch({ type: "setThreadParentHighlightId", id: threadRoot.id });
+                dispatch({ type: "setThreadParentHighlightId", id: threadSurfaceRoot.id });
                 if (isMobile) dispatch({ type: "closeThread" });
               }}
             />
@@ -944,7 +978,7 @@ function DmChannelConversation({
           }
           editor={
             <ContentEditor
-              key={`dm-thread-editor:${threadRoot.id}`}
+              key={`dm-thread-editor:${threadSurfaceRoot.id}`}
               ref={threadEditorRef}
               // Bare URLs stay plain text in the composer (#531/#542).
               plainUrls

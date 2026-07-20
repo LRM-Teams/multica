@@ -32,10 +32,14 @@ const apiMock = vi.hoisted(() => {
     return undefined;
   });
   const sendChannelMessage = vi.fn();
+  const followChannelThread = vi.fn();
+  const unfollowChannelThread = vi.fn();
   const known: Record<string, unknown> = {
     editChannelMessage,
     deleteChannelMessage,
     sendChannelMessage,
+    followChannelThread,
+    unfollowChannelThread,
   };
   const proxy = new Proxy(known, {
     get(target, prop) {
@@ -44,7 +48,15 @@ const apiMock = vi.hoisted(() => {
       return target[prop];
     },
   });
-  return { proxy, state, editChannelMessage, deleteChannelMessage, sendChannelMessage };
+  return {
+    proxy,
+    state,
+    editChannelMessage,
+    deleteChannelMessage,
+    sendChannelMessage,
+    followChannelThread,
+    unfollowChannelThread,
+  };
 });
 vi.mock("@multica/core/api", () => ({ api: apiMock.proxy }));
 
@@ -108,7 +120,14 @@ vi.mock("@multica/core/channels", async (importOriginal) => {
   return {
     ...actual,
     activeChannelTasksOptions: () => ({ queryKey: ["channel-tasks"], queryFn: async () => [] }),
-    channelMessageThreadOptions: () => ({ queryKey: ["channel-thread"], queryFn: async () => ({ messages: [] }) }),
+    channelMessageThreadOptions: () => ({
+      queryKey: ["channel-thread"],
+      queryFn: async () => ({
+        messages: currentPageMessages[0]
+          ? [{ ...currentPageMessages[0], thread_followed: true }]
+          : [],
+      }),
+    }),
     channelMessagesPageOptions: () => ({
       queryKey: ["dm-messages", apiMock.state.deleted],
       queryFn: async () => ({
@@ -234,6 +253,8 @@ describe.sequential("DmConversation message edit / delete wiring (#241 B3)", () 
     });
     apiMock.deleteChannelMessage.mockClear();
     apiMock.sendChannelMessage.mockReset().mockResolvedValue(ownMessage());
+    apiMock.followChannelThread.mockReset().mockResolvedValue(undefined);
+    apiMock.unfollowChannelThread.mockReset().mockResolvedValue(undefined);
   });
 
   // Edit unshipped 2026-07-05 (Frank/Miles): the Edit entry point is hidden in
@@ -317,5 +338,24 @@ describe.sequential("DmConversation message edit / delete wiring (#241 B3)", () 
     for (const composer of screen.getAllByTestId("content-editor")) {
       expect(composer.getAttribute("data-plain-urls")).toBe("true");
     }
+  });
+
+  it("shows the DM thread follow state in the header and can unfollow it", async () => {
+    const user = userEvent.setup();
+    renderDm();
+    await screen.findByTestId("message-bubble");
+
+    const replyButtons = await screen.findAllByRole("button", { name: "Reply in thread" });
+    await user.click(replyButtons[0]!);
+
+    const following = await screen.findByRole("button", { name: "Unfollow thread" });
+    expect(apiMock.followChannelThread).not.toHaveBeenCalled();
+    expect(apiMock.unfollowChannelThread).not.toHaveBeenCalled();
+    expect(following).toHaveTextContent("Following");
+    await user.click(following);
+
+    await waitFor(() => {
+      expect(apiMock.unfollowChannelThread).toHaveBeenCalledWith("dm-chan-1", "m-1");
+    });
   });
 });

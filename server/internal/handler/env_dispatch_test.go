@@ -272,19 +272,11 @@ func TestMapRollouts_IncludesSandboxRefs(t *testing.T) {
 	if !strings.Contains(string(body), "agent_sandbox_refs") {
 		t.Fatalf("JSON should include agent_sandbox_refs: %s", body)
 	}
-	// The runtime policy is internal: its secret API key lives in
-	// ResolvedPerAgentSandboxPolicy, never in the serialized SandboxInstanceRef,
-	// so the marshaled rollout JSON cannot leak it even when a policy is held
-	// alongside the rollout.
-	policy := service.ResolvedPerAgentSandboxPolicy{
-		Template: "default",
-		Runtime: &service.ExternalModelRuntime{
-			BaseURL: "https://provider.invalid/v1",
-			APIKey:  "synthetic-secret-for-tests",
-			Model:   "model-a",
-		},
-	}
-	_ = policy
+	// The runtime policy is a separate internal type
+	// (ResolvedPerAgentSandboxPolicy) and is never stored on SandboxInstanceRef,
+	// so the marshaled rollout JSON - which carries only SandboxInstanceRef -
+	// cannot leak the API key. The type-level guarantee is asserted in
+	// TestEnvDispatchSandboxConfigCodec_SandboxInstanceRefHasNoRuntimeSecret.
 	if strings.Contains(string(body), "synthetic-secret-for-tests") {
 		t.Fatalf("rollout JSON must not contain the runtime API key: %s", body)
 	}

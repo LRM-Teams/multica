@@ -229,7 +229,7 @@ func TestRunAgentMessageCommandsRequireTarget(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.run()
-			const want = "target is required; use #channel, #channel:<threadId>, dm:@<human-handle>, or dm:@<human-handle>:<threadId>"
+			const want = "target is required; --target accepts #channel, #channel:<threadId>, dm:@<human-handle>, or dm:@<human-handle>:<threadId>"
 			if err == nil || err.Error() != want {
 				t.Fatalf("error = %v, want %q", err, want)
 			}

@@ -328,7 +328,7 @@ func TestChatRuntimeBriefIsLeanButKeepsFastChatPaths(t *testing.T) {
 		"Delivery boundary: only successful chat send/react commands deliver visible chat output.",
 		"Text outside those commands, including final assistant output, is never delivered.",
 		"Chat output: use `multica message send --target <target>`",
-		"explicit Raft-style target",
+		"explicit target",
 		"#channel:<threadId>",
 		"dm:@handle:<threadId>",
 		"--message \"short text\"",

@@ -18,7 +18,7 @@ func newMessageSendCmd() *cobra.Command {
 		Use:   "send",
 		Short: "Send a visible chat message from the running agent task",
 		Long: "Send a visible message from the running agent task to an explicit " +
-			"target. Target syntax matches Raft: #channel, #channel:<threadId>, " +
+			"target. Target syntax: #channel, #channel:<threadId>, " +
 			"dm:@handle, or dm:@handle:<threadId>. Use --sticker for a sticker-only " +
 			"reply, or combine --sticker with --message for an acknowledgement sticker " +
 			"followed by explanatory text in one message. Attach files with " +
@@ -47,7 +47,7 @@ func newMessageReactCmd() *cobra.Command {
 		Use:   "react",
 		Short: "React to a channel or thread message from the running agent task",
 		Long: "Add a reaction from the running agent task to an explicit target. " +
-			"Target syntax matches Raft: #channel, #channel:<threadId>, dm:@handle, " +
+			"Target syntax: #channel, #channel:<threadId>, dm:@handle, " +
 			"or dm:@handle:<threadId>. Omit --message-id to react to the message " +
 			"that triggered the task when the task context provides one.",
 		RunE: runAgentMessageReact,
@@ -123,7 +123,7 @@ func messageTargetFlagUsage() string {
 func requiredMessageTarget(cmd *cobra.Command) (string, error) {
 	target := strings.TrimSpace(flagString(cmd, "target"))
 	if target == "" {
-		return "", fmt.Errorf("target is required; use #channel, #channel:<threadId>, dm:@<human-handle>, or dm:@<human-handle>:<threadId>")
+		return "", fmt.Errorf("target is required; --target accepts #channel, #channel:<threadId>, dm:@<human-handle>, or dm:@<human-handle>:<threadId>")
 	}
 	return target, nil
 }

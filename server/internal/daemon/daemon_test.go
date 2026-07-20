@@ -2248,7 +2248,8 @@ func TestExecuteAndDrain_ContextCancelled_ReportsCancelled(t *testing.T) {
 // cap (opts.Timeout = 0) the drain loop imposes no deadline of its own, so the
 // idle watchdog is the only thing that ends this otherwise-forever-silent run.
 type idleWatchdogBackend struct {
-	emitOne bool // when true, emit one message before going silent; when false, never emit anything
+	emitOne      bool // when true, emit one message before going silent; when false, never emit anything
+	runtimeAlive agent.RuntimeLivenessProbe
 }
 
 func (b idleWatchdogBackend) Execute(_ context.Context, _ string, _ agent.ExecOptions) (*agent.Session, error) {
@@ -2259,7 +2260,7 @@ func (b idleWatchdogBackend) Execute(_ context.Context, _ string, _ agent.ExecOp
 	}
 	// Deliberately do NOT close msgCh and never write to resCh — this models
 	// a backend whose subprocess is hung and will never naturally complete.
-	return &agent.Session{Messages: msgCh, Result: resCh}, nil
+	return &agent.Session{Messages: msgCh, Result: resCh, RuntimeAlive: b.runtimeAlive}, nil
 }
 
 func TestExecuteAndDrain_IdleWatchdog_FiresOnInactivity(t *testing.T) {
@@ -2272,7 +2273,7 @@ func TestExecuteAndDrain_IdleWatchdog_FiresOnInactivity(t *testing.T) {
 	t.Cleanup(cancel)
 
 	start := time.Now()
-	result, _, err := d.executeAndDrain(ctx, idleWatchdogBackend{emitOne: true}, "p", agent.ExecOptions{}, slog.Default(), "t-idle")
+	result, _, err := d.executeAndDrain(ctx, idleWatchdogBackend{emitOne: true, runtimeAlive: func() (bool, bool) { return false, true }}, "p", agent.ExecOptions{}, slog.Default(), "t-idle")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -2302,12 +2303,75 @@ func TestExecuteAndDrain_IdleWatchdog_FiresWhenNoMessageEverArrives(t *testing.T
 	// emitOne=false models a backend that hangs before sending any message.
 	// lastActivityAt is initialised at executeAndDrain entry, so the same
 	// window applies even with zero traffic.
-	result, _, err := d.executeAndDrain(ctx, idleWatchdogBackend{emitOne: false}, "p", agent.ExecOptions{}, slog.Default(), "t-idle-zero")
+	result, _, err := d.executeAndDrain(ctx, idleWatchdogBackend{emitOne: false, runtimeAlive: func() (bool, bool) { return false, true }}, "p", agent.ExecOptions{}, slog.Default(), "t-idle-zero")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if result.Status != "idle_watchdog" {
 		t.Fatalf("expected status=idle_watchdog when backend never emits, got %q (err=%q)", result.Status, result.Error)
+	}
+}
+
+func TestExecuteAndDrain_IdleWatchdog_SuppressesWhileRuntimeIsAlive(t *testing.T) {
+	t.Parallel()
+
+	d := newTestDaemon(t)
+	d.cfg.AgentIdleWatchdog = 50 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(180*time.Millisecond, cancel)
+
+	result, _, err := d.executeAndDrain(ctx, idleWatchdogBackend{
+		emitOne:      true,
+		runtimeAlive: func() (bool, bool) { return true, true },
+	}, "p", agent.ExecOptions{}, slog.Default(), "t-idle-alive")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status == "idle_watchdog" {
+		t.Fatalf("watchdog must not fire while the runtime child is alive, got status=%q (err=%q)", result.Status, result.Error)
+	}
+	if result.Status != "cancelled" {
+		t.Fatalf("expected parent cancellation after alive suppression, got status=%q (err=%q)", result.Status, result.Error)
+	}
+}
+
+func TestExecuteAndDrain_IdleWatchdog_SuppressesWithoutLivenessEvidence(t *testing.T) {
+	t.Parallel()
+
+	d := newTestDaemon(t)
+	d.cfg.AgentIdleWatchdog = 50 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(180*time.Millisecond, cancel)
+
+	result, _, err := d.executeAndDrain(ctx, idleWatchdogBackend{emitOne: true}, "p", agent.ExecOptions{}, slog.Default(), "t-idle-no-probe")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != "cancelled" {
+		t.Fatalf("missing liveness evidence must fail open until parent cancellation, got status=%q (err=%q)", result.Status, result.Error)
+	}
+}
+
+func TestExecuteAndDrain_IdleWatchdog_SuppressesWhenLivenessIsUnknown(t *testing.T) {
+	t.Parallel()
+
+	d := newTestDaemon(t)
+	d.cfg.AgentIdleWatchdog = 50 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(180*time.Millisecond, cancel)
+
+	result, _, err := d.executeAndDrain(ctx, idleWatchdogBackend{
+		emitOne:      true,
+		runtimeAlive: func() (bool, bool) { return false, false },
+	}, "p", agent.ExecOptions{}, slog.Default(), "t-idle-unknown")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != "cancelled" {
+		t.Fatalf("unknown liveness must fail open until parent cancellation, got status=%q (err=%q)", result.Status, result.Error)
 	}
 }
 
@@ -2361,6 +2425,210 @@ func TestExecuteAndDrain_IdleWatchdog_HappyPathDoesNotFire(t *testing.T) {
 	}
 }
 
+type delayedTerminalResultBackend struct {
+	resultDelay time.Duration
+	result      *agent.Result
+}
+
+func (b delayedTerminalResultBackend) Execute(ctx context.Context, _ string, _ agent.ExecOptions) (*agent.Session, error) {
+	msgCh := make(chan agent.Message)
+	resCh := make(chan agent.Result, 1)
+	close(msgCh)
+	if b.result != nil {
+		go func() {
+			timer := time.NewTimer(b.resultDelay)
+			defer timer.Stop()
+			select {
+			case <-timer.C:
+				resCh <- *b.result
+				close(resCh)
+			case <-ctx.Done():
+				close(resCh)
+			}
+		}()
+	}
+	return &agent.Session{
+		Messages:     msgCh,
+		Result:       resCh,
+		RuntimeAlive: func() (bool, bool) { return false, true },
+	}, nil
+}
+
+func TestExecuteAndDrain_IdleWatchdog_PreservesDelayedProviderResultAfterRuntimeExit(t *testing.T) {
+	t.Parallel()
+
+	d := newTestDaemon(t)
+	d.cfg.AgentIdleWatchdog = 50 * time.Millisecond
+	want := agent.Result{Status: "completed", Output: "provider-result"}
+
+	result, _, err := d.executeAndDrain(context.Background(), delayedTerminalResultBackend{
+		resultDelay: 120 * time.Millisecond,
+		result:      &want,
+	}, "p", agent.ExecOptions{}, slog.Default(), "t-idle-delayed-result")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != want.Status || result.Output != want.Output {
+		t.Fatalf("result = status:%q output:%q error:%q, want status:%q output:%q", result.Status, result.Output, result.Error, want.Status, want.Output)
+	}
+}
+
+type lateMessageThenResultBackend struct{}
+
+func (lateMessageThenResultBackend) Execute(ctx context.Context, _ string, _ agent.ExecOptions) (*agent.Session, error) {
+	msgCh := make(chan agent.Message, 1)
+	resCh := make(chan agent.Result, 1)
+	go func() {
+		messageTimer := time.NewTimer(80 * time.Millisecond)
+		defer messageTimer.Stop()
+		select {
+		case <-messageTimer.C:
+			msgCh <- agent.Message{Type: agent.MessageText, Content: "late-progress"}
+		case <-ctx.Done():
+			close(msgCh)
+			close(resCh)
+			return
+		}
+
+		resultTimer := time.NewTimer(100 * time.Millisecond)
+		defer resultTimer.Stop()
+		select {
+		case <-resultTimer.C:
+			close(msgCh)
+			resCh <- agent.Result{Status: "completed", Output: "result-after-late-progress"}
+			close(resCh)
+		case <-ctx.Done():
+			close(msgCh)
+			close(resCh)
+		}
+	}()
+	return &agent.Session{
+		Messages:     msgCh,
+		Result:       resCh,
+		RuntimeAlive: func() (bool, bool) { return false, true },
+	}, nil
+}
+
+func TestExecuteAndDrain_IdleWatchdog_MessageDuringTerminalSettleResetsDeadObservation(t *testing.T) {
+	t.Parallel()
+
+	d := newTestDaemon(t)
+	d.cfg.AgentIdleWatchdog = 50 * time.Millisecond
+
+	result, _, err := d.executeAndDrain(context.Background(), lateMessageThenResultBackend{}, "p", agent.ExecOptions{}, slog.Default(), "t-idle-settle-progress")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != "completed" || result.Output != "result-after-late-progress" {
+		t.Fatalf("result after late progress = status:%q output:%q error:%q, want completed provider result", result.Status, result.Output, result.Error)
+	}
+}
+
+type messageDuringFirstLivenessProbeBackend struct{}
+
+func (messageDuringFirstLivenessProbeBackend) Execute(ctx context.Context, _ string, _ agent.ExecOptions) (*agent.Session, error) {
+	msgCh := make(chan agent.Message, 1)
+	resCh := make(chan agent.Result, 1)
+	probeStarted := make(chan struct{})
+	messageQueued := make(chan struct{})
+	var firstProbe sync.Once
+
+	// Keep a tool in flight so the 50 ms tool threshold is evaluated on the
+	// watchdog's 500 ms idle ticker. That leaves a deterministic result window
+	// between the first probe's settle grace and the next silence tick.
+	msgCh <- agent.Message{Type: agent.MessageToolUse, Tool: "Bash", CallID: "probe-window-tool"}
+
+	go func() {
+		select {
+		case <-probeStarted:
+		case <-ctx.Done():
+			close(msgCh)
+			close(resCh)
+			return
+		}
+
+		msgCh <- agent.Message{Type: agent.MessageText, Content: "progress drained during liveness probe"}
+		close(messageQueued)
+
+		resultTimer := time.NewTimer(150 * time.Millisecond)
+		defer resultTimer.Stop()
+		select {
+		case <-resultTimer.C:
+			close(msgCh)
+			resCh <- agent.Result{Status: "completed", Output: "result-after-probe-window-progress"}
+			close(resCh)
+		case <-ctx.Done():
+			close(msgCh)
+			close(resCh)
+		}
+	}()
+
+	runtimeAlive := func() (bool, bool) {
+		firstProbe.Do(func() {
+			close(probeStarted)
+			<-messageQueued
+			deadline := time.Now().Add(100 * time.Millisecond)
+			for len(msgCh) > 0 && time.Now().Before(deadline) {
+				time.Sleep(time.Millisecond)
+			}
+			// The buffered message has been received by the real drain loop. Give
+			// it time to stamp the activity generation before the probe returns.
+			time.Sleep(30 * time.Millisecond)
+		})
+		return false, true
+	}
+
+	return &agent.Session{Messages: msgCh, Result: resCh, RuntimeAlive: runtimeAlive}, nil
+}
+
+func TestExecuteAndDrain_IdleWatchdog_MessageDrainedDuringFirstProbeResetsDeadObservation(t *testing.T) {
+	t.Parallel()
+
+	d := newTestDaemon(t)
+	d.cfg.AgentIdleWatchdog = time.Second
+	d.cfg.AgentToolWatchdog = 50 * time.Millisecond
+
+	result, _, err := d.executeAndDrain(context.Background(), messageDuringFirstLivenessProbeBackend{}, "p", agent.ExecOptions{}, slog.Default(), "t-idle-first-probe-progress")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != "completed" || result.Output != "result-after-probe-window-progress" {
+		t.Fatalf("result after probe-window progress = status:%q output:%q error:%q, want completed provider result", result.Status, result.Output, result.Error)
+	}
+}
+
+func TestExecuteAndDrain_IdleWatchdog_ParentCancelWinsDuringTerminalSettleGrace(t *testing.T) {
+	t.Parallel()
+
+	d := newTestDaemon(t)
+	d.cfg.AgentIdleWatchdog = 50 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(90*time.Millisecond, cancel)
+
+	result, _, err := d.executeAndDrain(ctx, delayedTerminalResultBackend{}, "p", agent.ExecOptions{}, slog.Default(), "t-idle-settle-cancel")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != "cancelled" {
+		t.Fatalf("parent cancel during terminal settle grace = status:%q error:%q, want cancelled", result.Status, result.Error)
+	}
+}
+
+func TestExecuteAndDrain_IdleWatchdog_FiresAfterTerminalSettleGraceWithoutResult(t *testing.T) {
+	t.Parallel()
+
+	d := newTestDaemon(t)
+	d.cfg.AgentIdleWatchdog = 50 * time.Millisecond
+
+	result, _, err := d.executeAndDrain(context.Background(), delayedTerminalResultBackend{}, "p", agent.ExecOptions{}, slog.Default(), "t-idle-settle-expired")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != "idle_watchdog" {
+		t.Fatalf("dead runtime without terminal result = status:%q error:%q, want idle_watchdog", result.Status, result.Error)
+	}
+}
+
 // longToolCallBackend simulates a legitimate long-running tool call (e.g.
 // `npm install`, `docker build`, full test suite). The backend emits a
 // tool_use, stays silent past the idle window while the tool runs, then emits
@@ -2403,7 +2671,7 @@ func (b longToolCallBackend) Execute(ctx context.Context, _ string, _ agent.Exec
 		close(resCh)
 	}()
 
-	return &agent.Session{Messages: msgCh, Result: resCh}, nil
+	return &agent.Session{Messages: msgCh, Result: resCh, RuntimeAlive: func() (bool, bool) { return false, true }}, nil
 }
 
 func TestExecuteAndDrain_IdleWatchdog_DoesNotFireDuringInFlightToolCall(t *testing.T) {
@@ -2445,7 +2713,7 @@ func (stuckInFlightToolBackend) Execute(_ context.Context, _ string, _ agent.Exe
 	resCh := make(chan agent.Result)
 	msgCh <- agent.Message{Type: agent.MessageToolUse, Tool: "Bash", CallID: "c1"}
 	// Deliberately leave msgCh open, never emit tool_result, never write resCh.
-	return &agent.Session{Messages: msgCh, Result: resCh}, nil
+	return &agent.Session{Messages: msgCh, Result: resCh, RuntimeAlive: func() (bool, bool) { return false, true }}, nil
 }
 
 func TestExecuteAndDrain_IdleWatchdog_FiresOnStuckInFlightTool(t *testing.T) {
@@ -2485,7 +2753,7 @@ func (tailIdleAfterToolBackend) Execute(_ context.Context, _ string, _ agent.Exe
 	msgCh <- agent.Message{Type: agent.MessageToolUse, Tool: "Bash", CallID: "c1"}
 	msgCh <- agent.Message{Type: agent.MessageToolResult, Tool: "Bash", CallID: "c1", Output: "ok"}
 	// Deliberately leave msgCh open and never write to resCh.
-	return &agent.Session{Messages: msgCh, Result: resCh}, nil
+	return &agent.Session{Messages: msgCh, Result: resCh, RuntimeAlive: func() (bool, bool) { return false, true }}, nil
 }
 
 func TestExecuteAndDrain_IdleWatchdog_FiresAfterToolResultIfBackendStaysSilent(t *testing.T) {

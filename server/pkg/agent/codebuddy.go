@@ -280,7 +280,7 @@ func (b *codebuddyBackend) Execute(ctx context.Context, prompt string, opts Exec
 		}
 	}()
 
-	return &Session{Messages: msgCh, Result: resCh}, nil
+	return &Session{Messages: msgCh, Result: resCh, RuntimeAlive: processLiveness(cmd.Process)}, nil
 }
 
 func (b *codebuddyBackend) handleAssistant(msg codebuddySDKMessage, ch chan<- Message, output *strings.Builder, usage map[string]TokenUsage) {

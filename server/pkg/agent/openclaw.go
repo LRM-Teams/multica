@@ -164,7 +164,7 @@ func (b *openclawBackend) Execute(ctx context.Context, prompt string, opts ExecO
 		}
 	}()
 
-	return &Session{Messages: msgCh, Result: resCh}, nil
+	return &Session{Messages: msgCh, Result: resCh, RuntimeAlive: processLiveness(cmd.Process)}, nil
 }
 
 // buildOpenclawArgs assembles the argv for a one-shot `openclaw agent` invocation.

@@ -5600,7 +5600,7 @@ func TestChannelThreadPlainReplyWakesAgentFollower(t *testing.T) {
 	testHandler.dispatchChannelThreadReplyMentions(ctx, ch, followup, parseUUID(testUserID))
 
 	assertChannelAgentInboxEventCounts(t, channelID, participantID, 0, 1)
-	assertChannelAgentWakeReason(t, channelID, participantID, followup.ID, "thread_reply")
+	assertChannelAgentWakeReasonPriority(t, channelID, participantID, followup.ID, "thread_reply", channelThreadReplyPriority)
 	assertChannelAgentWakeActivity(t, participantID, followup.ID, "thread_reply")
 	assertChannelAgentInboxEventCounts(t, channelID, bystanderID, 1, 0)
 }
@@ -5638,7 +5638,7 @@ func TestChannelThreadPlainReplyWakesAgentRootAuthor(t *testing.T) {
 	}
 
 	assertChannelAgentInboxEventCounts(t, channelID, rootAgentID, 0, 1)
-	assertChannelAgentWakeReason(t, channelID, rootAgentID, followup.ID, "thread_reply")
+	assertChannelAgentWakeReasonPriority(t, channelID, rootAgentID, followup.ID, "thread_reply", channelThreadReplyPriority)
 	assertChannelAgentInboxEventCounts(t, channelID, bystanderID, 1, 0)
 }
 
@@ -5716,8 +5716,73 @@ func TestChannelAmbientGateDoesNotBlockThreadDirectedContinuation(t *testing.T) 
 	}
 	testHandler.dispatchChannelThreadReplyMentions(ctx, ch, followup, parseUUID(testUserID))
 
-	assertChannelAgentInboxEventCounts(t, channelID, participantID, 0, 2)
+	var pendingWake, mentionWake, absorbedAmbient int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FILTER (WHERE requires_wake AND status IN ('pending', 'draining', 'failed'))::int,
+		       count(*) FILTER (WHERE reason = 'mention' AND requires_wake AND status IN ('pending', 'draining', 'failed'))::int,
+		       count(*) FILTER (WHERE reason = 'channel_message' AND status = 'acked' AND terminal_outcome = 'no_reply')::int
+		FROM agent_inbox_event
+		WHERE channel_id = $1 AND agent_id = $2`, channelID, participantID).Scan(&pendingWake, &mentionWake, &absorbedAmbient); err != nil {
+		t.Fatalf("count wake/absorb events: %v", err)
+	}
+	if pendingWake != 1 || mentionWake != 1 {
+		t.Fatalf("pending/mention wakes = %d/%d, want 1/1", pendingWake, mentionWake)
+	}
+	if absorbedAmbient != 1 {
+		t.Fatalf("absorbed ambient wakes = %d, want 1", absorbedAmbient)
+	}
 	assertChannelAgentWakeReason(t, channelID, participantID, followup.ID, "mention")
+}
+
+func TestChannelThreadContinuationPromptAllowsSilence(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "Thread Silent Prompt "+uuid.NewString()[:8], nil)
+	channelID := seedChannelForTest(t, "thread-silent-prompt-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+	agent, err := testHandler.Queries.GetAgent(ctx, parseUUID(agentID))
+	if err != nil {
+		t.Fatalf("load agent: %v", err)
+	}
+	root, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "root", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("silent-prompt-root"), 0)
+	if err != nil {
+		t.Fatalf("insert root: %v", err)
+	}
+	followup, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "never mind", "multica", nil, pgtype.UUID{}, parseUUID(root.ID), strPtr("silent-prompt-root"), 0)
+	if err != nil {
+		t.Fatalf("insert follow-up: %v", err)
+	}
+
+	prompt := testHandler.buildChannelThreadContinuationPrompt(ctx, ch, agent, followup)
+	for _, want := range []string{
+		"not a must-reply directed mention",
+		"finish without visible output",
+		"Current follow-up:",
+		"never mind",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("thread continuation prompt missing %q:\n%s", want, prompt)
+		}
+	}
+	for _, banned := range []string{
+		"require a visible result",
+		"This run is directly addressed to you",
+	} {
+		if strings.Contains(prompt, banned) {
+			t.Fatalf("thread continuation prompt should not contain directed must-reply text %q:\n%s", banned, prompt)
+		}
+	}
 }
 
 func assertChannelAgentInboxEventCounts(t *testing.T, channelID, agentID string, wantAmbient, wantWake int) {

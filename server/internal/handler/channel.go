@@ -41,13 +41,15 @@ const channelThreadDefaultLimit = 50
 const channelThreadMaxLimit = 100
 const channelClientMessageIDMaxLen = 128
 const channelOutputContractInstruction = "Channel output contract: use the runtime brief as the source of truth for visible output. Never print JSON envelopes, action objects, no_reply/stay_silent tokens, tool intent, analysis, missing-tool diagnostics, or described commands as the final answer."
-const channelDirectedReplyInstruction = "This run is directly addressed to you. Human DMs, human @mentions, direct questions, assigned tasks, and DM-style continuations require a visible result. Agent-to-agent channel @mentions are weak notifications unless they ask for an immediate deliverable, review, decision, or direct answer; weak notifications should finish without visible output. Pure greetings (hi/你好/在吗) get a greeting sticker only; when they are top-level group messages, keep them on the main channel instead of starting a thread. Reserve threads for substantive questions, tasks, investigations, or decisions that benefit from focused follow-up. Substantive requests get a helpful answer, optionally with one acknowledgement sticker. Never return no_reply, stay_silent, JSON, or other protocol text."
+const channelDirectedReplyInstruction = "This run is directly addressed to you. Human DMs, human @mentions, direct questions, assigned tasks, and DM-style continuations require a visible result. Agent-to-agent channel @mentions are weak notifications unless they ask for an immediate deliverable, review, decision, or direct answer; weak notifications should finish without visible output. Pure greetings (hi/你好/在吗) get a greeting sticker only; when they are top-level group messages, keep them on the main channel instead of starting a thread. Reserve threads for substantive questions, tasks, investigations, or decisions that benefit from focused follow-up. Substantive requests get a helpful text answer (no acknowledgement sticker first). Never return no_reply, stay_silent, JSON, or other protocol text."
 const channelAmbientNoReplyInstruction = "If you should not reply, finish without a visible reply. Do not use the visible-output path, and do not print no_reply, stay_silent, JSON, or CLI/protocol text."
 const channelAmbientGreetingReactionInstruction = "If the current channel message or unread bundle is only a casual greeting or small talk (for example hi, hello, hey, 你好, 在吗) with no @-mention, no question, and no task request, respond with a 👋 reaction to the reaction target only and do not create a text reply. This also applies when you are the only agent in the channel: treat the greeting as directed to you, but keep the action reaction-only unless the user includes a question or request. If reactions are unavailable, finish without visible output rather than explaining that no reply is needed."
-const channelStickerReplyInstruction = "Sticker replies: for directed short social beats (hi/你好, ok/好的, 收到/明白, 谢谢, 赞), use a sticker; for substantive answers, send at most one acknowledgement sticker plus text. For ambient/unaddressed runs, use stickers only when explicitly requested or genuinely welcoming someone; otherwise react or stay silent. Follow the runtime output path and never print protocol text."
+const channelStickerReplyInstruction = "Sticker replies: for directed short social beats (hi/你好, ok/好的, 收到/明白, 谢谢, 赞), use a sticker OR a short text reply — not both. For substantive answers, send text only (no acknowledgement sticker first). For ambient/unaddressed runs, use stickers only when explicitly requested or genuinely welcoming someone; otherwise react or stay silent. Follow the runtime output path and never print protocol text."
 const channelContinuationInstruction = "Collaborative discussion rule: reply only when you move the topic toward a decision, owner, or completed action. For a requested completion/blocker summary in a group chat, you may @-mention the responsible human once. Use @-mentions only for concrete actions, unresolved questions, human escalation, or requested completion/blocker delivery; never for thanks, generic status, future handoffs, or generic opinion invites. If the topic already has an owner and you add nothing immediate, finish without visible output."
 const channelMessageWakeReason = "channel_message"
 const channelMessageWakePriority int32 = 1
+const channelThreadReplyPriority int32 = 1
+const channelDirectedWakePriority int32 = 10
 const channelNameTakenCode = "channel_name_taken"
 const channelNameUniqueConstraint = "channel_workspace_id_name_key"
 
@@ -3520,7 +3522,10 @@ func (h *Handler) dispatchChannelThreadReplyMentions(ctx context.Context, ch Cha
 		if h.isChannelAgentMuted(ctx, parseUUID(ch.ID), parseUUID(ch.WorkspaceID), agent.ID) {
 			continue
 		}
-		if _, err := h.dispatchChannelAgentReplyWithReason(ctx, ch, agent, trigger, initiatorUserID, "thread_reply"); err == nil && h.Metrics != nil {
+		// No @ in a thread: participant delivery with the same silent-capable
+		// contract as main-channel ambient (priority 1). Must-reply stays on
+		// explicit @ / DM / group_command paths only.
+		if _, err := h.dispatchChannelThreadContinuation(ctx, ch, agent, trigger, initiatorUserID); err == nil && h.Metrics != nil {
 			h.Metrics.RecordChannelFullExecutionWake("thread_reply")
 		}
 	}
@@ -3617,7 +3622,25 @@ func (h *Handler) dispatchChannelAgentReplyWithReason(ctx context.Context, ch Ch
 			reason = "dm"
 		}
 	}
-	return h.enqueueChannelAgentPrompt(ctx, ch, agent, trigger, initiatorUserID, h.buildChannelMentionPrompt(ctx, ch, trigger, facilitatorState), "channel agent reply", true, reason, 10)
+	return h.enqueueChannelAgentPrompt(ctx, ch, agent, trigger, initiatorUserID, h.buildChannelMentionPrompt(ctx, ch, trigger, facilitatorState), "channel agent reply", true, reason, channelDirectedWakePriority)
+}
+
+// dispatchChannelThreadContinuation wakes a thread participant for a non-@
+// follow-up. Same silent-capable contract as channel_message ambient: reply
+// only when useful; otherwise finish without visible output.
+func (h *Handler) dispatchChannelThreadContinuation(ctx context.Context, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) (db.AgentInboxEvent, error) {
+	if trigger.TriggerDepth >= channelRunTriggerLimit {
+		slog.Warn("channel thread continuation: trigger limit reached", "channel", ch.ID, "thread_id", ptrString(trigger.ThreadID), "depth", trigger.TriggerDepth)
+		return db.AgentInboxEvent{}, errors.New("channel agent reply trigger limit reached")
+	}
+	if trigger.Type == "agent" && trigger.AuthorID != nil && *trigger.AuthorID == uuidToString(agent.ID) {
+		return db.AgentInboxEvent{}, errors.New("agent cannot trigger itself")
+	}
+	if trigger.ThreadRootMessageID != nil {
+		h.ensureChannelThreadAgentWakeParticipant(ctx, parseUUID(ch.ID), parseUUID(*trigger.ThreadRootMessageID), agent.ID)
+	}
+	prompt := h.buildChannelThreadContinuationPrompt(ctx, ch, agent, trigger)
+	return h.enqueueChannelAgentPrompt(ctx, ch, agent, trigger, initiatorUserID, prompt, "channel thread continuation", true, "thread_reply", channelThreadReplyPriority)
 }
 
 type channelAgentPromptTxResult struct {
@@ -3708,6 +3731,22 @@ func (h *Handler) enqueueChannelAgentPromptRangeWithTx(ctx context.Context, qtx 
 	if seqTo <= 0 || seqTo < seqFrom {
 		seqTo = seqFrom
 	}
+	if priority >= channelDirectedWakePriority {
+		if absorbedFrom, absorbedTo, err := h.absorbPendingSilentChannelWakesTx(ctx, exec, conversationID, agent.ID); err != nil {
+			return channelAgentPromptTxResult{}, err
+		} else {
+			if absorbedFrom > 0 && (seqFrom == 0 || absorbedFrom < seqFrom) {
+				seqFrom = absorbedFrom
+			}
+			if absorbedTo > seqTo {
+				seqTo = absorbedTo
+			}
+		}
+	} else if folded, ok, err := h.foldSilentUnreadIntoPendingDirectedWakeTx(ctx, qtx, exec, conversationID, agent.ID, seqFrom, seqTo); err != nil {
+		return channelAgentPromptTxResult{}, err
+	} else if ok {
+		return folded, nil
+	}
 	if coalesced, ok, err := h.coalesceDirectedIssueInboxEventTx(ctx, qtx, exec, ch, agent, trigger, prompt, reason, priority, seqFrom, seqTo, conversationID); err != nil {
 		return channelAgentPromptTxResult{}, err
 	} else if ok {
@@ -3774,6 +3813,121 @@ func channelDirectedCoalesceReason(reason string) bool {
 	default:
 		return false
 	}
+}
+
+// absorbPendingSilentChannelWakesTx cancels pending priority<2 channel wakes
+// (channel_message / thread_reply) for the same conversation+agent so a directed
+// must-reply run does not follow a redundant silent ambient pass. Returns the
+// absorbed seq span so the directed event can cover the same unread range.
+func (h *Handler) absorbPendingSilentChannelWakesTx(ctx context.Context, exec db.DBTX, conversationID, agentID pgtype.UUID) (int64, int64, error) {
+	rows, err := exec.Query(ctx, `
+		SELECT id, agent_session_id, seq_from, seq_to
+		FROM agent_inbox_event
+		WHERE conversation_id = $1
+		  AND agent_id = $2
+		  AND requires_wake = true
+		  AND status = 'pending'
+		  AND priority < $3
+		  AND reason IN ('channel_message', 'thread_reply')
+		FOR UPDATE`, conversationID, agentID, channelDirectedWakePriority)
+	if err != nil {
+		return 0, 0, fmt.Errorf("load pending silent channel wakes: %w", err)
+	}
+	defer rows.Close()
+
+	var minFrom, maxTo int64
+	var sessionID pgtype.UUID
+	var eventIDs []pgtype.UUID
+	for rows.Next() {
+		var eventID, agentSessionID pgtype.UUID
+		var seqFrom, seqTo int64
+		if err := rows.Scan(&eventID, &agentSessionID, &seqFrom, &seqTo); err != nil {
+			return 0, 0, fmt.Errorf("scan pending silent channel wake: %w", err)
+		}
+		eventIDs = append(eventIDs, eventID)
+		sessionID = agentSessionID
+		if minFrom == 0 || seqFrom < minFrom {
+			minFrom = seqFrom
+		}
+		if seqTo > maxTo {
+			maxTo = seqTo
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, 0, err
+	}
+	if len(eventIDs) == 0 {
+		return 0, 0, nil
+	}
+	if _, err := exec.Exec(ctx, `
+		UPDATE agent_inbox_event
+		SET status = 'acked',
+		    acked_at = now(),
+		    terminal_outcome = 'no_reply',
+		    retryable = false,
+		    terminal_at = now(),
+		    updated_at = now()
+		WHERE id = ANY($1::uuid[])`, eventIDs); err != nil {
+		return 0, 0, fmt.Errorf("absorb pending silent channel wakes: %w", err)
+	}
+	if sessionID.Valid && maxTo > 0 {
+		if _, err := exec.Exec(ctx, `
+			UPDATE agent_session
+			SET last_drained_seq = GREATEST(last_drained_seq, $2),
+			    updated_at = now()
+			WHERE id = $1`, sessionID, maxTo); err != nil {
+			return 0, 0, fmt.Errorf("advance session cursor after silent wake absorb: %w", err)
+		}
+	}
+	return minFrom, maxTo, nil
+}
+
+// foldSilentUnreadIntoPendingDirectedWakeTx extends a pending/draining directed
+// wake's seq range when newer ambient unread arrives, instead of enqueueing a
+// separate priority-1 ambient run.
+func (h *Handler) foldSilentUnreadIntoPendingDirectedWakeTx(ctx context.Context, qtx *db.Queries, exec db.DBTX, conversationID, agentID pgtype.UUID, seqFrom, seqTo int64) (channelAgentPromptTxResult, bool, error) {
+	var existingEventID, existingAgentSessionID pgtype.UUID
+	var existingSeqFrom, existingSeqTo int64
+	err := exec.QueryRow(ctx, `
+		SELECT id, agent_session_id, seq_from, seq_to
+		FROM agent_inbox_event
+		WHERE conversation_id = $1
+		  AND agent_id = $2
+		  AND requires_wake = true
+		  AND status IN ('pending', 'draining')
+		  AND priority >= $3
+		ORDER BY CASE status WHEN 'draining' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END, created_at ASC
+		LIMIT 1
+		FOR UPDATE`, conversationID, agentID, channelDirectedWakePriority).Scan(&existingEventID, &existingAgentSessionID, &existingSeqFrom, &existingSeqTo)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return channelAgentPromptTxResult{}, false, nil
+		}
+		return channelAgentPromptTxResult{}, false, fmt.Errorf("load pending directed wake for ambient fold: %w", err)
+	}
+	if existingSeqFrom > 0 && existingSeqFrom < seqFrom {
+		seqFrom = existingSeqFrom
+	}
+	if existingSeqTo > seqTo {
+		seqTo = existingSeqTo
+	}
+	if _, err := exec.Exec(ctx, `
+		UPDATE agent_inbox_event
+		SET seq_from = $2,
+		    seq_to = $3,
+		    updated_at = now()
+		WHERE id = $1`, existingEventID, seqFrom, seqTo); err != nil {
+		return channelAgentPromptTxResult{}, false, fmt.Errorf("fold ambient unread into directed wake: %w", err)
+	}
+	event, err := qtx.GetAgentInboxEvent(ctx, existingEventID)
+	if err != nil {
+		return channelAgentPromptTxResult{}, false, fmt.Errorf("reload directed wake after ambient fold: %w", err)
+	}
+	agentSession, err := qtx.GetAgentSession(ctx, existingAgentSessionID)
+	if err != nil {
+		return channelAgentPromptTxResult{}, false, fmt.Errorf("reload directed wake agent session after ambient fold: %w", err)
+	}
+	return channelAgentPromptTxResult{Event: event, AgentSession: agentSession, Coalesced: true}, true, nil
 }
 
 func channelIssueReferenceTerms(trigger ChannelMessageResponse) ([]string, []string) {
@@ -3899,6 +4053,14 @@ func (h *Handler) coalesceDirectedIssueInboxEventTx(ctx context.Context, qtx *db
 }
 
 func (h *Handler) enqueueOrCoalesceChannelMessageWakeWithTx(ctx context.Context, qtx *db.Queries, exec db.DBTX, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID, conversationID, workspaceID pgtype.UUID, cursorSeq, pendingToSeq int64) (channelAgentPromptTxResult, error) {
+	// If a directed must-reply wake is already pending/draining, fold this
+	// ambient unread into that run instead of starting a second (p1 then p10)
+	// LLM pass for the same agent.
+	if folded, ok, err := h.foldSilentUnreadIntoPendingDirectedWakeTx(ctx, qtx, exec, conversationID, agent.ID, cursorSeq+1, pendingToSeq); err != nil {
+		return channelAgentPromptTxResult{}, err
+	} else if ok {
+		return folded, nil
+	}
 	prompt := h.buildChannelAmbientUnreadPromptWithDB(ctx, exec, ch, agent, trigger, cursorSeq, pendingToSeq)
 	var existingEventID, existingChatSessionID pgtype.UUID
 	var existingAgentSessionID pgtype.UUID
@@ -4601,6 +4763,45 @@ func buildChannelAmbientObservationPrompt(ch ChannelResponse, agent db.Agent, tr
 	}
 	b.WriteString("\nCurrent message only:\n")
 	fmt.Fprintf(&b, "%s (%s): %s", trigger.AuthorName, trigger.Type, trigger.Content)
+	return b.String()
+}
+
+func (h *Handler) buildChannelThreadContinuationPrompt(ctx context.Context, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse) string {
+	limit := channelAgentDirectedContextMessageLimit
+	var messages []ChannelMessageResponse
+	if trigger.ThreadRootMessageID != nil {
+		messages = h.channelThreadContextMessages(ctx, ch.WorkspaceID, ch.ID, *trigger.ThreadRootMessageID, limit)
+	}
+	messages = channelContextMessagesExcludingTrigger(messages, trigger.ID)
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "You are a participant in a thread inside Multica group chat #%s. A follow-up arrived without @-mentioning you.\n", ch.Name)
+	b.WriteString("This is participant delivery, not a must-reply directed mention: reply only when you add a concrete decision, owner, answer, or completed action; otherwise finish without visible output.\n")
+	b.WriteString("Use ONLY the thread context below for this decision. Do not assume older channel context unless you explicitly fetch/search it.\n")
+	b.WriteString(channelOutputContractInstruction)
+	b.WriteString("\n")
+	b.WriteString(channelAmbientNoReplyInstruction)
+	b.WriteString("\n")
+	b.WriteString(channelStickerReplyInstruction)
+	b.WriteString("\n")
+	b.WriteString(channelContinuationInstruction)
+	b.WriteString("\nDo not @-mention anyone unless a concrete action or human escalation is required.\n\n")
+	fmt.Fprintf(&b, "Reaction target message id: %s\n", trigger.ID)
+	fmt.Fprintf(&b, "Your agent name: %s\n", agentDisplayName(agent))
+	if strings.TrimSpace(agent.Description) != "" {
+		fmt.Fprintf(&b, "Your agent description: %s\n", strings.TrimSpace(agent.Description))
+	}
+	if strings.TrimSpace(agent.Instructions) != "" {
+		fmt.Fprintf(&b, "Your agent instructions: %s\n", strings.TrimSpace(agent.Instructions))
+	}
+	if len(messages) > 0 {
+		b.WriteString("\nThread context:\n")
+		for _, msg := range messages {
+			fmt.Fprintf(&b, "%s\n", formatChannelMessageLine(msg))
+		}
+	}
+	b.WriteString("\nCurrent follow-up:\n")
+	fmt.Fprintf(&b, "%s\n", formatChannelMessageLine(trigger))
 	return b.String()
 }
 

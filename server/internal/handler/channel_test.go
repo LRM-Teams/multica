@@ -678,6 +678,53 @@ func TestChannelAmbientDispatchNotSkippedForAtMention(t *testing.T) {
 	assertChannelAgentWakeReasonPriority(t, channelID, agentID, trigger.ID, channelMessageWakeReason, channelMessageWakePriority)
 }
 
+// TestChannelGroupCommandWakesAllAgentsRestoresAndongDefault is the regression for
+// restoring Andong's wake-all contract: "大家"/@all must wake every unmuted agent
+// with a silent-capable channel_message run, not only the group manager.
+func TestChannelGroupCommandWakesAllAgentsRestoresAndongDefault(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	withChannelAmbientGateTestConfig(t)
+	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+	channelID := seedChannelForTest(t, "group-command-wake-all-"+suffix, testUserID)
+	managerID := createHandlerTestAgent(t, "group-mgr-"+suffix, nil)
+	peerID := createHandlerTestAgent(t, "group-peer-"+suffix, nil)
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent SET managed_role = 'group_manager', display_name = $2 WHERE id = $1`,
+		managerID, "贝克汉姆"+suffix); err != nil {
+		t.Fatalf("mark group manager: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		UPDATE channel SET group_manager_agent_id = $2 WHERE id = $1`, channelID, managerID); err != nil {
+		t.Fatalf("bind group manager: %v", err)
+	}
+	for _, agentID := range []string{managerID, peerID} {
+		if _, err := testPool.Exec(ctx, `
+			INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+			VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+			t.Fatalf("seed agent member %s: %v", agentID, err)
+		}
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "大家出来打个招呼", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("group-command-wake-all"), 0)
+	if err != nil {
+		t.Fatalf("insert group command: %v", err)
+	}
+	testHandler.dispatchChannelMessageToAgents(ctx, ch, trigger, parseUUID(testUserID))
+
+	for _, agentID := range []string{managerID, peerID} {
+		assertChannelAgentInboxEventCounts(t, channelID, agentID, 0, 1)
+		assertChannelAgentWakeReasonPriority(t, channelID, agentID, trigger.ID, channelMessageWakeReason, channelMessageWakePriority)
+	}
+}
+
 func TestChannelAmbientUnreadPromptKeepsLatestTriggerWhenCursorIsStale(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

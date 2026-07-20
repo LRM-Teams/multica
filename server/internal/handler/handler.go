@@ -103,12 +103,15 @@ type Config struct {
 	ChannelAmbientGateMaxRecentPerChannel int
 	ChannelAmbientGateMaxRecentPerRuntime int
 	// ChannelUnmentionedMode controls how human-authored channel messages with
-	// no explicit Agent mention are dispatched. "attention_round" is the v3
-	// default; "legacy_full" is the emergency rollback to the pre-v3 fan-out.
+	// no explicit Agent mention are dispatched. "legacy_full" is the default
+	// (Andong wake-all ambient; agents self-judge replies). "attention_round"
+	// is an explicit opt-in for bounded Attention Probes.
 	ChannelUnmentionedMode string
 	// ChannelAttentionEnabled is the independent kill switch for Attention
-	// Rounds. The remaining fields bound probe collection and restricted
-	// execution; budgets are bytes/tokens, never characters or model defaults.
+	// Rounds. Defaults off; set true together with ChannelUnmentionedMode=
+	// attention_round to enable probes. The remaining fields bound probe
+	// collection and restricted execution; budgets are bytes/tokens, never
+	// characters or model defaults.
 	ChannelAttentionEnabled                 bool
 	ChannelAttentionDebounce                time.Duration
 	ChannelAttentionMaxWait                 time.Duration

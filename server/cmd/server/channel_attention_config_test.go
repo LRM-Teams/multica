@@ -26,8 +26,8 @@ func TestChannelAttentionConfigDefaults(t *testing.T) {
 	applyChannelAttentionConfigFromEnv(&cfg)
 
 	assertChannelAttentionConfig(t, cfg, handler.Config{
-		ChannelUnmentionedMode:                  "attention_round",
-		ChannelAttentionEnabled:                 true,
+		ChannelUnmentionedMode:                  "legacy_full",
+		ChannelAttentionEnabled:                 false,
 		ChannelAttentionDebounce:                3 * time.Second,
 		ChannelAttentionMaxWait:                 8 * time.Second,
 		ChannelAttentionContextMessages:         8,
@@ -63,6 +63,19 @@ func TestChannelAttentionConfigOverridesAndLegacyRollback(t *testing.T) {
 		ChannelAttentionToolsEnabled:            false,
 		ChannelAttentionMaxConcurrentPerRuntime: 7,
 	})
+}
+
+func TestChannelAttentionConfigOptInAttentionRound(t *testing.T) {
+	clearChannelAttentionEnv(t)
+	t.Setenv("CHANNEL_UNMENTIONED_MODE", "attention_round")
+	t.Setenv("CHANNEL_ATTENTION_ENABLED", "true")
+
+	var cfg handler.Config
+	applyChannelAttentionConfigFromEnv(&cfg)
+
+	if cfg.ChannelUnmentionedMode != "attention_round" || !cfg.ChannelAttentionEnabled {
+		t.Fatalf("opt-in attention config = mode:%q enabled:%v, want attention_round/true", cfg.ChannelUnmentionedMode, cfg.ChannelAttentionEnabled)
+	}
 }
 
 func TestChannelAttentionConfigBoundsRestrictedProbeBudgets(t *testing.T) {
@@ -110,8 +123,8 @@ func TestChannelAttentionConfigInvalidValuesFailClosedToDefaults(t *testing.T) {
 	applyChannelAttentionConfigFromEnv(&cfg)
 
 	assertChannelAttentionConfig(t, cfg, handler.Config{
-		ChannelUnmentionedMode:                  "attention_round",
-		ChannelAttentionEnabled:                 true,
+		ChannelUnmentionedMode:                  "legacy_full",
+		ChannelAttentionEnabled:                 false,
 		ChannelAttentionDebounce:                3 * time.Second,
 		ChannelAttentionMaxWait:                 8 * time.Second,
 		ChannelAttentionContextMessages:         8,

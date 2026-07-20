@@ -3431,24 +3431,11 @@ func (h *Handler) dispatchChannelMessageToAgents(ctx context.Context, ch Channel
 	if channelMessageIsHumanAuthored(trigger.Type) {
 		h.recordChannelUnmentionedMessage()
 	}
+	// Unmentioned human messages (including 大家/@all): wake every channel agent
+	// with a silent-capable ambient run and let each agent decide whether to reply.
+	// Attention rounds are opt-in only (CHANNEL_UNMENTIONED_MODE=attention_round).
 	if groupCommand {
-		targetAgentIDs := map[string]struct{}{}
-		if managerID, ok := h.resolveGroupManagerForChannel(ctx, parseUUID(ch.WorkspaceID), parseUUID(ch.ID)); ok {
-			targetAgentIDs[uuidToString(managerID)] = struct{}{}
-			if manager, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: managerID, WorkspaceID: parseUUID(ch.WorkspaceID)}); err == nil {
-				if _, err := h.dispatchChannelAgentReplyWithReason(ctx, ch, manager, trigger, initiatorUserID, "group_command"); err == nil {
-					h.recordChannelUnmentionedFullWake()
-					if h.Metrics != nil {
-						h.Metrics.RecordChannelFullExecutionWake("group_command")
-					}
-				}
-			}
-		}
-		if len(targetAgentIDs) == 0 {
-			h.dispatchChannelMessageWake(ctx, ch, trigger, initiatorUserID)
-		} else {
-			h.dispatchChannelAmbientDeliveryExcept(ctx, ch, trigger, targetAgentIDs)
-		}
+		h.dispatchChannelMessageWake(ctx, ch, trigger, initiatorUserID)
 		return
 	}
 	if channelMessageIsHumanAuthored(trigger.Type) && h.channelAttentionModeEnabled() {

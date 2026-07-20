@@ -2095,6 +2095,106 @@ func TestChannelAgentInboxDrainAckAmbientAdvancesSessionCursor(t *testing.T) {
 	}
 }
 
+func TestChannelAmbientDeliverySkipsAgentAndDirectedMentionNoise(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	targetID := createHandlerTestAgent(t, "Ambient Target "+uuid.NewString()[:8], nil)
+	bystanderID := createHandlerTestAgent(t, "Ambient Bystander "+uuid.NewString()[:8], nil)
+	channelID := seedChannelForTest(t, "ambient-skip-"+uuid.NewString(), testUserID)
+	for _, agentID := range []string{targetID, bystanderID} {
+		if _, err := testPool.Exec(ctx, `
+			INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+			VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+			t.Fatalf("seed agent member: %v", err)
+		}
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+
+	agentMsg, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "agent", parseUUID(targetID), "Target", "status update", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("insert agent message: %v", err)
+	}
+	testHandler.dispatchChannelAmbientDelivery(ctx, ch, agentMsg)
+
+	mentionContent := "@target please handle"
+	mentionParts := []protocol.MessagePart{{Type: protocol.MessagePartTypeReference, RefType: "mention", RefSubType: "agent", RefID: targetID, Label: "@target"}}
+	humanMention, err := testHandler.insertChannelMessageWithParts(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", mentionContent, mentionParts, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("insert human mention: %v", err)
+	}
+	testHandler.dispatchChannelMessageToAgents(ctx, ch, humanMention, parseUUID(testUserID))
+
+	var ambientCount, mentionCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FILTER (WHERE reason = 'ambient'),
+		       count(*) FILTER (WHERE reason = 'mention' AND agent_id = $2)
+		FROM agent_inbox_event
+		WHERE channel_id = $1`, channelID, targetID).Scan(&ambientCount, &mentionCount); err != nil {
+		t.Fatalf("count inbox events: %v", err)
+	}
+	if ambientCount != 0 || mentionCount != 1 {
+		t.Fatalf("events ambient=%d mention=%d, want 0/1", ambientCount, mentionCount)
+	}
+}
+
+func TestChannelDirectedIssueMentionCoalescesPendingEvent(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "Issue Coalesce Agent "+uuid.NewString()[:8], nil)
+	channelID := seedChannelForTest(t, "issue-coalesce-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+	makeTrigger := func(content string) ChannelMessageResponse {
+		parts := []protocol.MessagePart{
+			{Type: protocol.MessagePartTypeReference, RefType: "mention", RefSubType: "agent", RefID: agentID, Label: "@worker"},
+			{Type: protocol.MessagePartTypeReference, RefType: "issue-ref", RefSubType: "issue", RefID: "00000000-0000-0000-0000-000000000999", Label: "LRM-999"},
+		}
+		msg, err := testHandler.insertChannelMessageWithParts(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", content, parts, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+		if err != nil {
+			t.Fatalf("insert mention trigger: %v", err)
+		}
+		return msg
+	}
+	first := makeTrigger("@worker please handle LRM-999")
+	testHandler.dispatchChannelMessageToAgents(ctx, ch, first, parseUUID(testUserID))
+	second := makeTrigger("@worker updated acceptance for LRM-999")
+	testHandler.dispatchChannelMessageToAgents(ctx, ch, second, parseUUID(testUserID))
+
+	var count int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM agent_inbox_event
+		WHERE channel_id = $1 AND agent_id = $2 AND reason = 'mention' AND requires_wake`, channelID, agentID).Scan(&count); err != nil {
+		t.Fatalf("count directed inbox events: %v", err)
+	}
+	var sourceMessageID pgtype.UUID
+	if err := testPool.QueryRow(ctx, `
+		SELECT source_message_id
+		FROM agent_inbox_event
+		WHERE channel_id = $1 AND agent_id = $2 AND reason = 'mention' AND requires_wake`, channelID, agentID).Scan(&sourceMessageID); err != nil {
+		t.Fatalf("load directed inbox event: %v", err)
+	}
+	if count != 1 || uuidToString(sourceMessageID) != second.ID {
+		t.Fatalf("coalesced count/source = %d/%s, want 1/%s", count, uuidToString(sourceMessageID), second.ID)
+	}
+}
+
 func TestChannelAgentInboxFailDirectedMention(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

@@ -33,7 +33,13 @@ SELECT
     e.chat_session_id,
     NULL,
     NULL,
-    e.execution_config
+    COALESCE(e.execution_config, '{}'::jsonb) || jsonb_strip_nulls(jsonb_build_object(
+        'inbox_reason', e.reason,
+        'channel_id', e.channel_id,
+        'source_message_id', e.source_message_id,
+        'delivery_mode', e.delivery_mode,
+        'response_mode', e.response_mode
+    ))
 FROM agent_inbox_event e
 WHERE e.id = @inbox_event_id
 ON CONFLICT (id) DO NOTHING;

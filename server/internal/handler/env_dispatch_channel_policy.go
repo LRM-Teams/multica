@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/multica-ai/multica/server/internal/service"
 )
@@ -26,7 +27,7 @@ func marshalEnvDispatchSandboxConfig(policy service.ResolvedPerAgentSandboxPolic
 	if err != nil {
 		return nil, fmt.Errorf("normalize runtime policy: %w", err)
 	}
-	template := policy.Template
+	template := strings.TrimSpace(policy.Template)
 	if template == "" {
 		template = "default"
 	}
@@ -56,6 +57,7 @@ func decodeEnvDispatchSandboxConfig(raw json.RawMessage) (envDispatchSandboxConf
 	if err != nil {
 		return envDispatchSandboxConfig{}, fmt.Errorf("normalize stored runtime: %w", err)
 	}
+	cfg.Template = strings.TrimSpace(cfg.Template)
 	if cfg.Template == "" {
 		cfg.Template = "default"
 	}

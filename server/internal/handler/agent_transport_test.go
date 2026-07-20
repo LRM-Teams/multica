@@ -576,7 +576,7 @@ func TestAgentTransportSendThreadReplyFollowsAgentForPlainFollowup(t *testing.T)
 	}
 
 	assertChannelAgentInboxEventCounts(t, channelID, agentID, 0, 1)
-	assertChannelAgentWakeReason(t, channelID, agentID, followup.ID, "thread_reply")
+	assertChannelAgentWakeReasonPriority(t, channelID, agentID, followup.ID, "thread_reply", channelThreadReplyPriority)
 }
 
 func TestAgentTransportReadSearchAndReactAudit(t *testing.T) {

@@ -51,14 +51,21 @@ export const agentActivityEventsKeys = {
 };
 
 export function agentActivityEventsOptions(agentId: string) {
-  return queryOptions({
+  return infiniteQueryOptions({
     queryKey: agentActivityEventsKeys.all(agentId),
-    // The REST route returns a pagination envelope (`{ events, has_more, … }`);
-    // the timeline consumes the event list, so unwrap `.events` into the cache.
-    // The full page stays reachable via `api.getAgentActivityEvents` for a
-    // cursor-pagination follow-up. Caching the array keeps the WS `by-id upsert`
-    // (`setQueryData`) operating on the same shape the timeline reads.
-    queryFn: () => api.getAgentActivityEvents(agentId).then((page) => page.events),
+    // The REST route is cursor-paginated, newest-first (`{ events, has_more,
+    // next_cursor }`). We keep every fetched page in the infinite cache and the
+    // hook flattens `pages[].events` through the id-keyed reducer, so scrolling
+    // up to read history loads OLDER pages instead of the first ~50 being a
+    // permanent ceiling (#620: a high-frequency agent's newer status/thinking
+    // rows had pushed old `Running command` rows past the first page, so they
+    // looked "gone"). WS live events stay in the hook's own buffer (never
+    // written into this cache), so this page shape is read-only REST.
+    queryFn: ({ pageParam }) =>
+      api.getAgentActivityEvents(agentId, pageParam ?? undefined),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) =>
+      lastPage.has_more ? (lastPage.next_cursor ?? undefined) : undefined,
     staleTime: 30 * 1000,
     gcTime: 5 * 60 * 1000,
   });

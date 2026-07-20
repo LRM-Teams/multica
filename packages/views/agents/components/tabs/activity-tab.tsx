@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowDown } from "lucide-react";
 import type { Agent } from "@multica/core/types";
 import { ActivityTimeline } from "./activity-timeline";
@@ -49,6 +49,61 @@ function StreamBottomAnchor({
 }
 
 /**
+ * Zero-height anchor at the START of the stream — the mirror of
+ * {@link StreamBottomAnchor}. Reports (via `onReachedChange`) whether it is on
+ * screen so the tab can fetch the next (older) page as the reader scrolls up to
+ * read history. A generous top `rootMargin` prefetches that older page slightly
+ * before the reader hits the very top, so the prepend lands without a stall.
+ */
+function StreamTopAnchor({
+  anchorRef,
+  onReachedChange,
+}: {
+  anchorRef: React.RefObject<HTMLDivElement | null>;
+  onReachedChange: (reached: boolean) => void;
+}) {
+  const onReachedChangeRef = useRef(onReachedChange);
+  onReachedChangeRef.current = onReachedChange;
+
+  useEffect(() => {
+    const node = anchorRef.current;
+    if (!node) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0];
+        if (entry) onReachedChangeRef.current(entry.isIntersecting);
+      },
+      { rootMargin: "200px 0px 0px 0px" },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [anchorRef]);
+
+  return <div ref={anchorRef} aria-hidden className="h-px w-full" />;
+}
+
+/**
+ * The nearest scrollable ancestor of `node` — the panel/page wrapper the tab is
+ * mounted in (the tab intentionally does not own a scroll container). Used to
+ * re-anchor the reader's viewport when an older page prepends above it. Returns
+ * null when none is found (e.g. jsdom), so callers no-op safely.
+ */
+function getScrollParent(node: HTMLElement | null): HTMLElement | null {
+  let el: HTMLElement | null = node?.parentElement ?? null;
+  while (el) {
+    const overflowY = getComputedStyle(el).overflowY;
+    if (
+      (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay") &&
+      el.scrollHeight > el.clientHeight
+    ) {
+      return el;
+    }
+    el = el.parentElement;
+  }
+  return null;
+}
+
+/**
  * Agent Activity tab (#351) — a single, raft-aligned, time-ordered event
  * stream: `time · status dot · human label · optional detail`, newest work
  * flowing down the column. It replaces the old Now / Last-30-days / Recent-work
@@ -69,10 +124,29 @@ function StreamBottomAnchor({
  * sites already provide; we drive it via a bottom sentinel + IntersectionObserver
  * so the same code works in the side panel and the overview pane without owning a
  * scroll container of our own (and without touching the row render).
+ *
+ * History (#620): the REST stream is cursor-paginated, so scrolling UP to the
+ * top loads the next (older) page instead of the first ~50 events being a hard
+ * ceiling (a high-frequency agent's newer rows had buried old `Running command`
+ * rows past the first page, so they looked "gone"). A top sentinel mirrors the
+ * bottom one to trigger the fetch, and the added height is compensated against
+ * the scroll container so the reader's viewport stays anchored (no jump).
  */
 export function ActivityTab({ agent }: ActivityTabProps) {
-  const { events } = useAgentActivityEvents(agent.id);
+  const { events, loadOlder, hasOlder, isLoadingOlder } = useAgentActivityEvents(
+    agent.id,
+  );
+  const rootRef = useRef<HTMLDivElement>(null);
+  const topRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  // Scroll metrics captured when an older-page load starts, so the reader's
+  // viewport can be re-anchored after the older rows prepend above it (otherwise
+  // the added height shoves their content down — a visible upward jump).
+  const olderLoadAnchorRef = useRef<{
+    scrollTop: number;
+    scrollHeight: number;
+  } | null>(null);
+  const wasLoadingOlderRef = useRef(false);
   // Whether the bottom sentinel is on screen = the reader is at the latest row
   // and live events should keep following. A ref (read inside the append effect
   // without re-subscribing) plus state (drives the pill).
@@ -111,6 +185,32 @@ export function ActivityTab({ agent }: ActivityTabProps) {
     }
   }, [events.length, agent.id]);
 
+  // Re-anchor the reader's viewport after an older page has prepended. Runs on
+  // the commit where `isLoadingOlder` flips back to false (react-query lands the
+  // new pages and the flag together), so it never fires for a bottom WS append.
+  useLayoutEffect(() => {
+    if (wasLoadingOlderRef.current && !isLoadingOlder) {
+      const anchor = olderLoadAnchorRef.current;
+      const el = getScrollParent(rootRef.current);
+      if (anchor && el) {
+        el.scrollTop = anchor.scrollTop + (el.scrollHeight - anchor.scrollHeight);
+      }
+      olderLoadAnchorRef.current = null;
+    }
+    wasLoadingOlderRef.current = isLoadingOlder;
+  }, [isLoadingOlder]);
+
+  // The reader scrolled up to the top of the loaded history → fetch the next
+  // (older) page, capturing the pre-prepend scroll metrics for re-anchoring.
+  const handleTopReached = (reached: boolean) => {
+    if (!reached || !hasOlder || isLoadingOlder) return;
+    const el = getScrollParent(rootRef.current);
+    olderLoadAnchorRef.current = el
+      ? { scrollTop: el.scrollTop, scrollHeight: el.scrollHeight }
+      : null;
+    loadOlder();
+  };
+
   const handleReachedChange = (reached: boolean) => {
     atBottomRef.current = reached;
     setShowJump(!reached);
@@ -120,7 +220,8 @@ export function ActivityTab({ agent }: ActivityTabProps) {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
 
   return (
-    <div className="p-6">
+    <div ref={rootRef} className="p-6">
+      <StreamTopAnchor anchorRef={topRef} onReachedChange={handleTopReached} />
       <ActivityTimeline events={events} />
       <StreamBottomAnchor anchorRef={bottomRef} onReachedChange={handleReachedChange} />
       {showJump && (

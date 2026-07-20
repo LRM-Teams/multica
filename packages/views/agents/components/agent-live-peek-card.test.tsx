@@ -70,6 +70,15 @@ vi.mock("@tanstack/react-query", async () => {
     // useAgentLiveStatus now sources the live stage from the Activity event
     // stream (#414), which grabs the QueryClient for WS-reconnect invalidation.
     useQueryClient: () => ({ invalidateQueries: () => {} }),
+    // The Activity event stream is a cursor-paginated infinite query (#620); the
+    // card only reads its `latest`, so an empty stream is enough here.
+    useInfiniteQuery: () => ({
+      data: undefined,
+      isLoading: false,
+      fetchNextPage: () => {},
+      hasNextPage: false,
+      isFetchingNextPage: false,
+    }),
     useQuery: (opts: { queryKey: readonly unknown[]; enabled?: boolean }) => {
       const key = opts.queryKey;
       // Distinguish by the third segment which is the factory tag:

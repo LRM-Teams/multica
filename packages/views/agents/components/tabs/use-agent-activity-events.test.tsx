@@ -9,8 +9,17 @@ import type { ActivityEvent } from "./activity-event";
 const wsHandlers = vi.hoisted(() => new Map<string, (payload: unknown) => void>());
 // Captures the reconnect callback the hook registers.
 const reconnect = vi.hoisted(() => ({ cb: null as null | (() => void) }));
-// Controllable stand-in for what useQuery returns this render (the REST cache).
-const queryState = vi.hoisted(() => ({ data: [] as unknown, isLoading: false }));
+// Controllable stand-in for what useInfiniteQuery returns this render. `pages`
+// is one event array per fetched REST page (newest page first, older pages
+// appended as the reader scrolls up); the hook flattens them through the
+// id-keyed reducer.
+const queryState = vi.hoisted(() => ({
+  pages: [[]] as ActivityEvent[][],
+  isLoading: false,
+  hasNextPage: false,
+  isFetchingNextPage: false,
+  fetchNextPage: vi.fn(),
+}));
 const clientHandles = vi.hoisted(() => ({ invalidateQueries: vi.fn() }));
 
 vi.mock("@multica/core/agents", () => ({
@@ -19,7 +28,9 @@ vi.mock("@multica/core/agents", () => ({
   },
   agentActivityEventsOptions: (agentId: string) => ({
     queryKey: ["agent-activity-events", agentId],
-    queryFn: () => Promise.resolve([]),
+    queryFn: () => Promise.resolve({ events: [], has_more: false, next_cursor: null }),
+    initialPageParam: null,
+    getNextPageParam: () => undefined,
   }),
 }));
 
@@ -29,9 +40,19 @@ vi.mock("@tanstack/react-query", async () => {
   );
   return {
     ...actual,
-    // Return whatever the test set as the current REST snapshot; changing it +
-    // rerender models a fetch resolving / refetch replacing the cache.
-    useQuery: () => ({ data: queryState.data, isLoading: queryState.isLoading }),
+    // Wrap the test's `pages` into the InfiniteData shape the hook flattens.
+    // Changing `pages` + rerender models a fetch resolving / an older page
+    // arriving; the extra flags drive the load-older controls.
+    useInfiniteQuery: () => ({
+      data: {
+        pages: queryState.pages.map((events) => ({ events })),
+        pageParams: queryState.pages.map(() => null),
+      },
+      isLoading: queryState.isLoading,
+      fetchNextPage: queryState.fetchNextPage,
+      hasNextPage: queryState.hasNextPage,
+      isFetchingNextPage: queryState.isFetchingNextPage,
+    }),
     useQueryClient: () => ({ invalidateQueries: clientHandles.invalidateQueries }),
   };
 });
@@ -73,8 +94,11 @@ describe("useAgentActivityEvents", () => {
   beforeEach(() => {
     wsHandlers.clear();
     reconnect.cb = null;
-    queryState.data = [];
+    queryState.pages = [[]];
     queryState.isLoading = false;
+    queryState.hasNextPage = false;
+    queryState.isFetchingNextPage = false;
+    queryState.fetchNextPage.mockClear();
     clientHandles.invalidateQueries.mockClear();
   });
 
@@ -86,7 +110,7 @@ describe("useAgentActivityEvents", () => {
   // reappeared on hard-refresh (REST always had it). Holding live events in
   // their own buffer means a REST replace can never drop one.
   it("keeps a live WS event when the first-paint REST fetch later resolves without it", () => {
-    queryState.data = []; // fetch in-flight, cache still empty
+    queryState.pages = [[]]; // fetch in-flight, cache still empty
     const { result, rerender } = renderHook(() => useAgentActivityEvents("agent-1"));
 
     // WS delivers the wake before REST first-paint lands.
@@ -102,7 +126,7 @@ describe("useAgentActivityEvents", () => {
 
     // The in-flight fetch resolves with a snapshot captured BEFORE the wake.
     act(() => {
-      queryState.data = [evt("older", "2026-07-13T14:20:00Z")];
+      queryState.pages = [[evt("older", "2026-07-13T14:20:00Z")]];
       rerender();
     });
 
@@ -112,7 +136,7 @@ describe("useAgentActivityEvents", () => {
   });
 
   it("appends further live events after first-paint, chronologically by id upsert", () => {
-    queryState.data = [evt("older", "2026-07-13T14:20:00Z")];
+    queryState.pages = [[evt("older", "2026-07-13T14:20:00Z")]];
     const { result } = renderHook(() => useAgentActivityEvents("agent-1"));
 
     push({
@@ -133,12 +157,14 @@ describe("useAgentActivityEvents", () => {
   });
 
   it("replaces a row in place when a later WS push carries the same id (grown aggregate wins)", () => {
-    queryState.data = [
-      evt("t1", "2026-07-13T14:21:00Z", {
-        activity_kind: "thinking",
-        detail_kind: "thinking",
-        text: "partial",
-      }),
+    queryState.pages = [
+      [
+        evt("t1", "2026-07-13T14:21:00Z", {
+          activity_kind: "thinking",
+          detail_kind: "thinking",
+          text: "partial",
+        }),
+      ],
     ];
     const { result } = renderHook(() => useAgentActivityEvents("agent-1"));
 
@@ -201,5 +227,94 @@ describe("useAgentActivityEvents", () => {
     expect(clientHandles.invalidateQueries).toHaveBeenCalledWith({
       queryKey: ["agent-activity-events", "agent-1"],
     });
+  });
+
+  // #620: the first page (newest ~50) had no `Running command` row because a
+  // high-frequency agent's newer rows pushed it into an older page. Loading the
+  // older page must surface it. The hook flattens ALL fetched pages through the
+  // reducer, so a command in a later-fetched (older) page appears in `events`,
+  // ordered oldest-first regardless of page fetch order.
+  it("surfaces a command from an older page once it is fetched (first page has none)", () => {
+    queryState.pages = [
+      [
+        evt("s2", "2026-07-13T14:55:00Z", {
+          activity_kind: "custom",
+          detail_kind: "agent_status_changed",
+        }),
+        evt("s1", "2026-07-13T14:54:40Z", {
+          activity_kind: "thinking",
+          detail_kind: "thinking",
+        }),
+      ],
+    ];
+    queryState.hasNextPage = true;
+    const { result, rerender } = renderHook(() => useAgentActivityEvents("agent-1"));
+
+    // First page: no command reachable yet.
+    expect(result.current.events.map((e) => e.id)).toEqual(["s1", "s2"]);
+    expect(result.current.hasOlder).toBe(true);
+
+    // Reader scrolls to top → the tab calls loadOlder → fetchNextPage.
+    act(() => {
+      result.current.loadOlder();
+    });
+    expect(queryState.fetchNextPage).toHaveBeenCalledTimes(1);
+
+    // The older page arrives carrying the command; it now appears, ordered
+    // oldest-first ahead of the newer status rows.
+    act(() => {
+      queryState.pages = [
+        queryState.pages[0]!,
+        [
+          evt("cmd", "2026-07-13T14:54:31Z", {
+            activity_kind: "tool_call",
+            detail_kind: "tool_use",
+            tool: "bash",
+          }),
+        ],
+      ];
+      queryState.hasNextPage = false;
+      rerender();
+    });
+    expect(result.current.events.map((e) => e.id)).toEqual(["cmd", "s1", "s2"]);
+  });
+
+  it("does not fetch an older page when none remain or one is already loading", () => {
+    queryState.pages = [[evt("a", "2026-07-13T14:21:00Z")]];
+    queryState.hasNextPage = false;
+    const { result, rerender } = renderHook(() => useAgentActivityEvents("agent-1"));
+
+    act(() => result.current.loadOlder());
+    expect(queryState.fetchNextPage).not.toHaveBeenCalled();
+
+    act(() => {
+      queryState.hasNextPage = true;
+      queryState.isFetchingNextPage = true;
+      rerender();
+    });
+    expect(result.current.hasOlder).toBe(true);
+    expect(result.current.isLoadingOlder).toBe(true);
+    act(() => result.current.loadOlder());
+    expect(queryState.fetchNextPage).not.toHaveBeenCalled();
+  });
+
+  it("dedupes an id that appears in two pages and in a WS push (single row)", () => {
+    // Same id in the newest page and an older page (e.g. a boundary row the
+    // cursor re-returned) — the reducer must not double it.
+    queryState.pages = [
+      [evt("dup", "2026-07-13T14:30:00Z", { text: "page-new" })],
+      [evt("dup", "2026-07-13T14:30:00Z", { text: "page-old" })],
+    ];
+    const { result } = renderHook(() => useAgentActivityEvents("agent-1"));
+    expect(result.current.events).toHaveLength(1);
+
+    // A WS push for that same id replaces it in place — still one row.
+    push({
+      agent_id: "agent-1",
+      event_id: "dup",
+      event: evt("dup", "2026-07-13T14:30:00Z", { text: "ws-grown" }),
+    });
+    expect(result.current.events).toHaveLength(1);
+    expect(result.current.events[0]!.text).toBe("ws-grown");
   });
 });

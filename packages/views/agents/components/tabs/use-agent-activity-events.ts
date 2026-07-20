@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import {
   agentActivityEventsKeys,
   agentActivityEventsOptions,
@@ -32,12 +32,30 @@ export function useAgentActivityEvents(agentId: string): {
   events: ActivityEvent[];
   latest: ActivityEvent | null;
   isLoading: boolean;
+  /** Load the next (older) page — drives scroll-up history in the timeline. */
+  loadOlder: () => void;
+  /** More (older) pages remain beyond what's already fetched. */
+  hasOlder: boolean;
+  /** An older page is currently being fetched. */
+  isLoadingOlder: boolean;
 } {
   const queryClient = useQueryClient();
-  const { data = [], isLoading } = useQuery({
-    ...agentActivityEventsOptions(agentId),
-    enabled: !!agentId,
-  });
+  const { data, isLoading, fetchNextPage, hasNextPage, isFetchingNextPage } =
+    useInfiniteQuery({
+      ...agentActivityEventsOptions(agentId),
+      enabled: !!agentId,
+    });
+  // Flatten every fetched page's events, deduped by id. Pages are newest-first
+  // and older pages append as the reader scrolls up; a boundary row can recur
+  // across two pages, so dedupe here (the reducer's WS-merge only dedupes
+  // `current` when the live buffer is non-empty). Order is irrelevant — the
+  // reducer below sorts by `occurred_at`.
+  const restEvents = useMemo(() => {
+    if (!data) return [];
+    const byId = new Map<string, ActivityEvent>();
+    for (const page of data.pages) for (const event of page.events) byId.set(event.id, event);
+    return Array.from(byId.values());
+  }, [data]);
 
   // Live WS events are held in their OWN state, separate from the REST query
   // cache, and merged at read time below. Writing them straight into the query
@@ -97,7 +115,20 @@ export function useAgentActivityEvents(agentId: string): {
 
   // Merge REST first-paint with the live buffer (WS applied last, so a fresher
   // WS aggregate wins for a shared id). Also normalizes order and dedupes.
-  const events = useMemo(() => upsertActivityEvents(data, liveEvents), [data, liveEvents]);
+  const events = useMemo(
+    () => upsertActivityEvents(restEvents, liveEvents),
+    [restEvents, liveEvents],
+  );
   const latest = useMemo(() => projectLatestActivity(events), [events]);
-  return { events, latest, isLoading };
+  const loadOlder = useCallback(() => {
+    if (hasNextPage && !isFetchingNextPage) fetchNextPage();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+  return {
+    events,
+    latest,
+    isLoading,
+    loadOlder,
+    hasOlder: hasNextPage,
+    isLoadingOlder: isFetchingNextPage,
+  };
 }

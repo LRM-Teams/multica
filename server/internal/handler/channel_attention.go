@@ -95,7 +95,8 @@ func (h *Handler) channelAttentionModeEnabled() bool {
 		return false
 	}
 	mode := strings.ToLower(strings.TrimSpace(h.cfg.ChannelUnmentionedMode))
-	return mode == "" || mode == channelUnmentionedModeAttentionRound
+	// Explicit opt-in only. Empty / legacy_full keep Andong wake-all ambient.
+	return mode == channelUnmentionedModeAttentionRound
 }
 
 func (h *Handler) recordChannelUnmentionedMessage() {

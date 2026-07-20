@@ -1256,7 +1256,10 @@ func applyChannelAttentionConfigFromEnv(cfg *handler.Config) {
 		maxRuntimeConcurrency = 16
 	)
 	cfg.ChannelUnmentionedMode = channelUnmentionedModeFromEnv()
-	cfg.ChannelAttentionEnabled = envBoolDefault("CHANNEL_ATTENTION_ENABLED", true)
+	// Default off: unmentioned group messages use legacy_full wake-all so each
+	// agent can self-judge whether to reply (Andong ambient contract). Opt into
+	// attention rounds explicitly via CHANNEL_ATTENTION_ENABLED=true.
+	cfg.ChannelAttentionEnabled = envBoolDefault("CHANNEL_ATTENTION_ENABLED", false)
 	cfg.ChannelAttentionDebounce = envDuration("CHANNEL_ATTENTION_DEBOUNCE", defaultDebounce)
 	if cfg.ChannelAttentionDebounce < minDebounce {
 		cfg.ChannelAttentionDebounce = minDebounce
@@ -1290,7 +1293,9 @@ func applyChannelAttentionConfigFromEnv(cfg *handler.Config) {
 }
 
 func channelUnmentionedModeFromEnv() string {
-	const defaultMode = "attention_round"
+	// Default to Andong's wake-all ambient path. Attention rounds remain available
+	// as an explicit opt-in (CHANNEL_UNMENTIONED_MODE=attention_round).
+	const defaultMode = "legacy_full"
 	raw := strings.ToLower(strings.TrimSpace(os.Getenv("CHANNEL_UNMENTIONED_MODE")))
 	if raw == "" {
 		return defaultMode

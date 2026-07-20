@@ -326,6 +326,68 @@ func TestEnvSandboxLifecycleCreateEmitsCanonicalPayloadWithInstanceIDAndMetadata
 	}
 }
 
+// TestEnvSandboxLifecycleCreateSurfacesMintedDaemonIDOnRef verifies that Create
+// surfaces the minted daemon correlation nonce on ref.DaemonID (== the
+// MULTICA_DAEMON_ID injected into the sandbox env) so the pre-create-free
+// provisioning path can discover the online runtime by daemon_id. The fake
+// mints "daemon-<instanceID>".
+func TestEnvSandboxLifecycleCreateSurfacesMintedDaemonIDOnRef(t *testing.T) {
+	ctx := context.Background()
+	deps := &fakeEnvSandboxLifecycleDeps{}
+	svc := NewEnvSandboxLifecycleService(deps, 5*time.Second)
+	in := CreateSandboxInstanceInput{
+		WorkspaceID: "ws-1", NodeID: "node-1", Template: "python",
+		DaemonEnabled: true,
+	}
+	ref, err := svc.Create(ctx, in, "user-1")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	wantDaemonID := "daemon-" + ref.InstanceID
+	if ref.DaemonID != wantDaemonID {
+		t.Fatalf("ref.DaemonID = %q, want %q", ref.DaemonID, wantDaemonID)
+	}
+}
+
+// TestEnvSandboxLifecycleCreateSurfacesCallerSuppliedDaemonIDOnRef verifies
+// that when the caller pre-assigns MULTICA_DAEMON_ID (the legacy pre-create
+// path), ref.DaemonID echoes it - so surfacing is non-breaking for the existing
+// env-dispatch flow while establishing the contract for the pre-create-free path.
+func TestEnvSandboxLifecycleCreateSurfacesCallerSuppliedDaemonIDOnRef(t *testing.T) {
+	ctx := context.Background()
+	deps := &fakeEnvSandboxLifecycleDeps{}
+	svc := NewEnvSandboxLifecycleService(deps, 5*time.Second)
+	in := CreateSandboxInstanceInput{
+		WorkspaceID: "ws-1", NodeID: "node-1", Template: "python",
+		DaemonEnabled: true,
+		RuntimeEnv:    map[string]string{"MULTICA_DAEMON_ID": "preassigned-daemon"},
+	}
+	ref, err := svc.Create(ctx, in, "user-1")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if ref.DaemonID != "preassigned-daemon" {
+		t.Fatalf("ref.DaemonID = %q, want preassigned-daemon", ref.DaemonID)
+	}
+}
+
+// TestEnvSandboxLifecycleCreateLeavesDaemonIDEmptyWhenDaemonDisabled verifies a
+// non-daemon sandbox (base/template) gets no daemon correlation nonce.
+func TestEnvSandboxLifecycleCreateLeavesDaemonIDEmptyWhenDaemonDisabled(t *testing.T) {
+	ctx := context.Background()
+	deps := &fakeEnvSandboxLifecycleDeps{}
+	svc := NewEnvSandboxLifecycleService(deps, 5*time.Second)
+	ref, err := svc.Create(ctx, CreateSandboxInstanceInput{
+		WorkspaceID: "ws-1", NodeID: "node-1", Template: "python",
+	}, "user-1")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if ref.DaemonID != "" {
+		t.Fatalf("ref.DaemonID = %q, want empty for non-daemon sandbox", ref.DaemonID)
+	}
+}
+
 // TestEnvSandboxLifecycleCreateMintsDaemonEnvWhenEnabled verifies that Create
 // mints a daemon bootstrap runtime_env (via MintSandboxRuntimeEnv) when the
 // sandbox is flagged DaemonEnabled and no RuntimeEnv was supplied, folds that

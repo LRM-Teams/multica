@@ -177,6 +177,16 @@ func (s *EnvSandboxLifecycleService) Create(ctx context.Context, in CreateSandbo
 			env[k] = v
 		}
 		in.RuntimeEnv = env
+		// Surface the daemon correlation nonce on the ref so env-dispatch
+		// first-address provisioning can persist it on the binding and later
+		// discover the online runtime by (workspace, daemon_id,
+		// sandbox_instance_id). When the caller did not supply
+		// MULTICA_DAEMON_ID, MintSandboxRuntimeEnv minted a unique one;
+		// caller-supplied values win. Either way this is the daemon ID injected
+		// into the sandbox env, so it matches what the in-sandbox daemon
+		// registers - the pre-create-free provisioning path (Task 3.1) relies on
+		// this instead of a pre-created offline runtime row.
+		ref.DaemonID = env["MULTICA_DAEMON_ID"]
 	}
 	payload, err := sandboxCreatePayload(in, ref.InstanceID, ref.RuntimeMetadata)
 	if err != nil {

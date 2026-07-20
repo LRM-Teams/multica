@@ -50,7 +50,7 @@ func (h *Handler) routeEnvDispatchChannelAgent(ctx context.Context, qtx *db.Quer
 				return db.ChatSession{}, binding, true, fmt.Errorf("env-dispatch channel session runtime does not match binding")
 			}
 			return session, binding, true, nil
-		case "pending", "failed":
+		case "pending", "failed", "failed_retryable":
 			var projectID string
 			if err := h.DB.QueryRow(ctx, `SELECT project_id::text FROM channel WHERE id = $1 AND workspace_id = $2`, channelID, workspaceID).Scan(&projectID); err != nil {
 				return db.ChatSession{}, binding, true, fmt.Errorf("load env-dispatch channel project: %w", err)
@@ -71,7 +71,7 @@ func (h *Handler) routeEnvDispatchChannelAgent(ctx context.Context, qtx *db.Quer
 			if err != nil {
 				return db.ChatSession{}, envAgentSandboxBinding{}, true, err
 			}
-		case "provisioning":
+		case "provisioning", "credential_ready", "sandbox_creating", "runtime_waiting", "agent_creating":
 			select {
 			case <-waitCtx.Done():
 				return db.ChatSession{}, binding, true, waitCtx.Err()

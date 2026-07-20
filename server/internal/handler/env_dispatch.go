@@ -787,7 +787,7 @@ func (a *envDispatchDepsAdapter) CreateEnvDispatchChannel(ctx context.Context, w
 			}
 			config = encoded
 		}
-		if err := store.insertBinding(ctx, tx, envAgentSandboxBinding{EnvID: envID, ChannelID: channelID, AgentID: agentID, Status: "pending", SandboxConfig: config}); err != nil {
+		if err := store.insertBinding(ctx, tx, envAgentSandboxBinding{EnvID: envID, ChannelID: channelID, SourceAgentID: agentID, ModelConfigOwnerAgentID: agentID, Status: "pending", SandboxConfig: config}); err != nil {
 			return "", err
 		}
 	}

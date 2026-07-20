@@ -107,9 +107,9 @@ func (h *Handler) copyEnvDispatchChannel(ctx context.Context, workspaceID, sourc
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO environment_agent_sandbox (
-			env_id, channel_id, agent_id, status, source_sandbox_instance_id, sandbox_config
+			env_id, channel_id, agent_id, source_agent_id, model_config_owner_agent_id, status, source_sandbox_instance_id, sandbox_config
 		)
-		SELECT $2, $3, agent_id, 'pending',
+		SELECT $2, $3, agent_id, agent_id, agent_id, 'pending',
 			CASE WHEN status = 'ready' THEN sandbox_instance_id ELSE source_sandbox_instance_id END,
 			sandbox_config
 		FROM environment_agent_sandbox WHERE channel_id = $1`, sourceChannelID, destinationEnvID, destinationChannelID); err != nil {

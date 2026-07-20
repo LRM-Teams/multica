@@ -4,3 +4,6 @@ ALTER TABLE channel_message
 CREATE INDEX IF NOT EXISTS idx_channel_message_main_projection_seq
   ON channel_message(channel_id, workspace_id, seq DESC)
   WHERE thread_root_message_id IS NULL OR main_timeline_visible;
+
+ALTER TABLE agent_transport_draft
+  ADD COLUMN IF NOT EXISTS options JSONB NOT NULL DEFAULT '{}'::jsonb;

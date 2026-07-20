@@ -34,6 +34,35 @@ func TestMigration186UpContainsBindingAndTriggerConstraints(t *testing.T) {
 	}
 }
 
+func TestMigration200RetiresThreadProjectionAndDraftOptions(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	migrationsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
+
+	up, err := os.ReadFile(filepath.Join(migrationsDir, "200_retire_channel_thread_main_projection.up.sql"))
+	if err != nil {
+		t.Fatalf("read migration 200 up: %v", err)
+	}
+	for _, required := range []string{
+		"DROP COLUMN IF EXISTS main_timeline_visible",
+		"DROP COLUMN IF EXISTS options",
+	} {
+		if !strings.Contains(string(up), required) {
+			t.Errorf("migration 200 up missing %q", required)
+		}
+	}
+
+	down, err := os.ReadFile(filepath.Join(migrationsDir, "200_retire_channel_thread_main_projection.down.sql"))
+	if err != nil {
+		t.Fatalf("read migration 200 down: %v", err)
+	}
+	if !strings.Contains(string(down), "ADD COLUMN IF NOT EXISTS options JSONB NOT NULL DEFAULT '{}'::jsonb") {
+		t.Error("migration 200 down does not restore draft options")
+	}
+}
+
 func TestResolveDirSkipsNonMigrationDirectory(t *testing.T) {
 	root := t.TempDir()
 	internalMigrations := filepath.Join(root, "server", "internal", "migrations")

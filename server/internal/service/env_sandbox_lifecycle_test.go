@@ -285,6 +285,47 @@ func TestEnvSandboxLifecycleCreateEnqueuesCreateJobAndWakesNode(t *testing.T) {
 	}
 }
 
+// TestEnvSandboxLifecycleCreateEmitsCanonicalPayloadWithInstanceIDAndMetadata
+// verifies that Create's sandboxd job payload carries the canonical key set the
+// frontend CreateSandboxInstance handler emits - including instance_id (so the
+// in-sandbox daemon can register its runtime with sandbox_instance_id for
+// env-dispatch discovery) and metadata - so frontend and env-dispatch create
+// jobs are interchangeable. See openspec change env-dispatch-agent-runtime-config
+// Task 2 (shared canonical payload).
+func TestEnvSandboxLifecycleCreateEmitsCanonicalPayloadWithInstanceIDAndMetadata(t *testing.T) {
+	ctx := context.Background()
+	deps := &fakeEnvSandboxLifecycleDeps{}
+	svc := NewEnvSandboxLifecycleService(deps, 5*time.Second)
+
+	in := CreateSandboxInstanceInput{
+		WorkspaceID:   "ws-1",
+		NodeID:        "node-1",
+		Template:      "python",
+		Limits:        json.RawMessage(`{"cpu":2}`),
+		Runtime:       json.RawMessage(`{"model":"gpt-test"}`),
+		DaemonEnabled: true,
+	}
+	ref, err := svc.Create(ctx, in, "user-1")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if len(deps.jobs) != 1 {
+		t.Fatalf("want 1 create job, got %d", len(deps.jobs))
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(deps.jobs[0].Payload, &payload); err != nil {
+		t.Fatalf("payload invalid JSON: %v", err)
+	}
+	for _, key := range []string{"template", "limits", "runtime", "runtime_env", "metadata", "instance_id"} {
+		if _, ok := payload[key]; !ok {
+			t.Fatalf("canonical create payload missing %q: %s", key, string(deps.jobs[0].Payload))
+		}
+	}
+	if payload["instance_id"] != ref.InstanceID {
+		t.Fatalf("instance_id = %v, want %s", payload["instance_id"], ref.InstanceID)
+	}
+}
+
 // TestEnvSandboxLifecycleCreateMintsDaemonEnvWhenEnabled verifies that Create
 // mints a daemon bootstrap runtime_env (via MintSandboxRuntimeEnv) when the
 // sandbox is flagged DaemonEnabled and no RuntimeEnv was supplied, folds that

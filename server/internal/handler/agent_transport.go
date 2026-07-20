@@ -189,49 +189,14 @@ func (h *Handler) requireAgentTransportPublicResponseMode(ctx context.Context, s
 		})
 		return fmt.Errorf("agent inbox event response_mode %q does not grant public channel output", responseMode)
 	}
-	if deliveryMode == "attention" {
-		_ = recordChannelDecisionAuditExec(ctx, h.DB, channelDecisionAuditEvent{
-			WorkspaceID: source.origin.workspaceID, ChannelID: channelID, SourceKind: "agent_transport",
-			EventType: "unauthorized_public_send_blocked", AgentID: source.origin.agentID, InboxEventID: source.inboxEventID,
-			Payload: map[string]any{"reason": "restricted_attention_delivery", "response_mode": responseMode, "delivery_mode": deliveryMode},
-		})
-		return errors.New("restricted attention delivery cannot publish channel output")
-	}
 	return nil
 }
 
+// requireAgentTransportVisibilityGrantActive checks the Collaboration turn
+// grant. Channel Attention Round response grants were retired with the
+// feature and its tables.
 func (h *Handler) requireAgentTransportVisibilityGrantActive(ctx context.Context, source agentTransportSource) error {
-	if err := h.requireAgentTransportResponseGrantActive(ctx, source); err != nil {
-		return err
-	}
-	if err := h.requireAgentTransportTurnGrantActive(ctx, source); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (h *Handler) requireAgentTransportResponseGrantActive(ctx context.Context, source agentTransportSource) error {
-	var grantStatus string
-	var grantFresh bool
-	err := h.DB.QueryRow(ctx, `
-		SELECT status, expires_at > now()
-		FROM channel_attention_response_grant
-		WHERE inbox_event_id = $1 AND agent_id = $2`, source.inboxEventID, source.origin.agentID).Scan(&grantStatus, &grantFresh)
-	if errorsIsNoRows(err) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if grantStatus != "granted" || !grantFresh {
-		_ = recordChannelDecisionAuditExec(ctx, h.DB, channelDecisionAuditEvent{
-			WorkspaceID: source.origin.workspaceID, ChannelID: source.origin.channelID, SourceKind: "response_grant",
-			EventType: "unauthorized_public_send_blocked", AgentID: source.origin.agentID, InboxEventID: source.inboxEventID,
-			Payload: map[string]any{"reason": "response_grant_stale", "grant_status": grantStatus, "grant_fresh": grantFresh},
-		})
-		return fmt.Errorf("response_grant is %s or expired", grantStatus)
-	}
-	return nil
+	return h.requireAgentTransportTurnGrantActive(ctx, source)
 }
 
 func (h *Handler) requireAgentTransportTurnGrantActive(ctx context.Context, source agentTransportSource) error {
@@ -265,29 +230,8 @@ func consumeAgentTransportVisibilityGrantTx(ctx context.Context, exec dbExecutor
 	if !source.inboxEventID.Valid {
 		return nil
 	}
-	var responseGrantID, roundID pgtype.UUID
-	err := exec.QueryRow(ctx, `
-		UPDATE channel_attention_response_grant
-		SET status = 'consumed', updated_at = now()
-		WHERE inbox_event_id = $1
-		  AND agent_id = $2
-		  AND status = 'granted'
-		  AND expires_at > now()
-		RETURNING id, round_id`, source.inboxEventID, source.origin.agentID).Scan(&responseGrantID, &roundID)
-	if err != nil && !errorsIsNoRows(err) {
-		return err
-	}
-	if err == nil {
-		if err := recordChannelDecisionAuditExec(ctx, exec, channelDecisionAuditEvent{
-			WorkspaceID: source.origin.workspaceID, ChannelID: channelID, SourceKind: "response_grant", SourceID: responseGrantID,
-			EventType: "response_grant_consumed", AgentID: source.origin.agentID, MessageID: messageID, InboxEventID: source.inboxEventID,
-			Payload: map[string]any{"round_id": uuidToString(roundID)},
-		}); err != nil {
-			return err
-		}
-	}
 	var turnID, sessionID pgtype.UUID
-	err = exec.QueryRow(ctx, `
+	err := exec.QueryRow(ctx, `
 		UPDATE collaboration_turn turn
 		SET grant_status = 'consumed', result_message_id = $3, updated_at = now()
 		FROM collaboration_session session

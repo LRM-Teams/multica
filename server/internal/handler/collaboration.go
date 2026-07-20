@@ -15,7 +15,10 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-const channelCollaborationTurnReason = "collaboration_turn"
+const (
+	channelCollaborationTurnReason     = "collaboration_turn"
+	collaborationManagerFallbackReason = "collaboration_manager_fallback"
+)
 
 type CreateCollaborationSessionRequest struct {
 	Mode                string         `json:"mode"`
@@ -131,7 +134,7 @@ type collaborationSessionCreateParams struct {
 type collaborationSessionCreateResult struct {
 	SessionID pgtype.UUID
 	FirstTurn pgtype.UUID
-	Wake      channelAttentionWake
+	Wake      channelAgentWake
 }
 
 func (h *Handler) createCollaborationSession(ctx context.Context, params collaborationSessionCreateParams) (collaborationSessionCreateResult, error) {
@@ -285,15 +288,15 @@ type collaborationTurnGrantInput struct {
 	turnTimeout      time.Duration
 }
 
-func (h *Handler) createCollaborationTurnGrantTx(ctx context.Context, tx pgx.Tx, in collaborationTurnGrantInput) (pgtype.UUID, channelAttentionWake, error) {
+func (h *Handler) createCollaborationTurnGrantTx(ctx context.Context, tx pgx.Tx, in collaborationTurnGrantInput) (pgtype.UUID, channelAgentWake, error) {
 	agent, err := h.Queries.WithTx(tx).GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: in.agentID, WorkspaceID: in.workspaceID})
 	if err != nil {
-		return pgtype.UUID{}, channelAttentionWake{}, err
+		return pgtype.UUID{}, channelAgentWake{}, err
 	}
 	prompt := buildCollaborationTurnPrompt(in)
 	result, err := h.enqueueChannelAgentPromptRangeWithTx(ctx, h.Queries.WithTx(tx), tx, in.channel, agent, in.trigger, pgtype.UUID{}, prompt, channelCollaborationTurnReason, 10, in.trigger.Seq, in.trigger.Seq)
 	if err != nil {
-		return pgtype.UUID{}, channelAttentionWake{}, err
+		return pgtype.UUID{}, channelAgentWake{}, err
 	}
 	var deadline any
 	if in.turnTimeout > 0 {
@@ -308,7 +311,7 @@ func (h *Handler) createCollaborationTurnGrantTx(ctx context.Context, tx pgx.Tx,
 		VALUES ($1, $2, $3, $4, $5, $6, 'granted', $7, $8, $9)
 		RETURNING id`, in.workspaceID, in.sessionID, in.agentID, result.Event.ID, in.turnIndex,
 		in.participantIndex, nullableInt64(in.trigger.Seq), in.sessionVersion, deadline).Scan(&turnID); err != nil {
-		return pgtype.UUID{}, channelAttentionWake{}, err
+		return pgtype.UUID{}, channelAgentWake{}, err
 	}
 	if err := recordChannelDecisionAuditExec(ctx, tx, channelDecisionAuditEvent{
 		WorkspaceID: in.workspaceID, ChannelID: parseUUID(in.channel.ID), SourceKind: "collaboration_turn", SourceID: turnID,
@@ -318,9 +321,9 @@ func (h *Handler) createCollaborationTurnGrantTx(ctx context.Context, tx pgx.Tx,
 			"session_version": in.sessionVersion, "grant_seq": in.trigger.Seq,
 		},
 	}); err != nil {
-		return pgtype.UUID{}, channelAttentionWake{}, err
+		return pgtype.UUID{}, channelAgentWake{}, err
 	}
-	wake := channelAttentionWake{channel: in.channel, agent: agent, trigger: in.trigger, reason: channelCollaborationTurnReason, result: result}
+	wake := channelAgentWake{channel: in.channel, agent: agent, trigger: in.trigger, reason: channelCollaborationTurnReason, result: result}
 	return turnID, wake, nil
 }
 
@@ -340,7 +343,7 @@ func buildCollaborationTurnPrompt(in collaborationTurnGrantInput) string {
 	return b.String()
 }
 
-func (h *Handler) completeCollaborationTurnTx(ctx context.Context, tx pgx.Tx, event db.AgentInboxEvent) ([]channelAttentionWake, error) {
+func (h *Handler) completeCollaborationTurnTx(ctx context.Context, tx pgx.Tx, event db.AgentInboxEvent) ([]channelAgentWake, error) {
 	var sessionID, turnID, workspaceID, channelID pgtype.UUID
 	var agentID, sourceMessageID pgtype.UUID
 	var mode, sessionStatus, turnStatus string
@@ -457,10 +460,10 @@ func (h *Handler) completeCollaborationTurnTx(ctx context.Context, tx pgx.Tx, ev
 	if err != nil {
 		return nil, err
 	}
-	return []channelAttentionWake{wake}, nil
+	return []channelAgentWake{wake}, nil
 }
 
-func (h *Handler) failCollaborationTurnTx(ctx context.Context, tx pgx.Tx, event db.AgentInboxEvent, reason string) ([]channelAttentionWake, error) {
+func (h *Handler) failCollaborationTurnTx(ctx context.Context, tx pgx.Tx, event db.AgentInboxEvent, reason string) ([]channelAgentWake, error) {
 	var sessionID, turnID, workspaceID, channelID, sourceMessageID pgtype.UUID
 	var sessionStatus, turnStatus string
 	err := tx.QueryRow(ctx, `
@@ -495,7 +498,7 @@ func (h *Handler) failCollaborationTurnTx(ctx context.Context, tx pgx.Tx, event 
 	return h.createCollaborationManagerFallbackTx(ctx, tx, workspaceID, channelID, sourceMessageID, sessionID, reason)
 }
 
-func (h *Handler) createCollaborationManagerFallbackTx(ctx context.Context, tx pgx.Tx, workspaceID, channelID, sourceMessageID, sessionID pgtype.UUID, reason string) ([]channelAttentionWake, error) {
+func (h *Handler) createCollaborationManagerFallbackTx(ctx context.Context, tx pgx.Tx, workspaceID, channelID, sourceMessageID, sessionID pgtype.UUID, reason string) ([]channelAgentWake, error) {
 	managerID, ok := h.resolveGroupManagerForChannel(ctx, workspaceID, channelID)
 	if !ok {
 		return nil, nil
@@ -513,11 +516,11 @@ func (h *Handler) createCollaborationManagerFallbackTx(ctx context.Context, tx p
 		return nil, err
 	}
 	prompt := fmt.Sprintf("Collaboration session %s was suspended: %s. Review the session state, decide whether to skip, replace a participant, resume, or cancel, and post a concise coordination update if useful.", uuidToString(sessionID), reason)
-	result, err := h.enqueueChannelAgentPromptRangeWithTx(ctx, h.Queries.WithTx(tx), tx, ch, manager, trigger, pgtype.UUID{}, prompt, channelAttentionManagerReason, 10, trigger.Seq, trigger.Seq)
+	result, err := h.enqueueChannelAgentPromptRangeWithTx(ctx, h.Queries.WithTx(tx), tx, ch, manager, trigger, pgtype.UUID{}, prompt, collaborationManagerFallbackReason, 10, trigger.Seq, trigger.Seq)
 	if err != nil {
 		return nil, err
 	}
-	return []channelAttentionWake{{channel: ch, agent: manager, trigger: trigger, reason: channelAttentionManagerReason, result: result}}, nil
+	return []channelAgentWake{{channel: ch, agent: manager, trigger: trigger, reason: collaborationManagerFallbackReason, result: result}}, nil
 }
 
 func (h *Handler) SweepCollaborationTurnTimeouts(ctx context.Context, limit int) int {
@@ -564,7 +567,7 @@ func (h *Handler) SweepCollaborationTurnTimeouts(ctx context.Context, limit int)
 		_ = tx.Commit(ctx)
 		return 0
 	}
-	var wakes []channelAttentionWake
+	var wakes []channelAgentWake
 	for _, item := range expired {
 		if _, err := tx.Exec(ctx, `UPDATE collaboration_turn SET grant_status = 'expired', updated_at = now() WHERE id = $1 AND grant_status = 'granted'`, item.turnID); err != nil {
 			return 0

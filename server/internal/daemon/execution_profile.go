@@ -11,9 +11,8 @@ import (
 )
 
 const (
-	executionProfileFull           = "full"
-	executionProfileAttentionProbe = "attention_probe"
-	executionProfileProtocolTurn   = "protocol_turn"
+	executionProfileFull         = "full"
+	executionProfileProtocolTurn = "protocol_turn"
 
 	restrictedAgentInstructionsBytes   = 4 * 1024
 	restrictedMemoryBytes              = 4 * 1024
@@ -23,26 +22,6 @@ const (
 	restrictedExecutionMaxOutputTokens = 96
 )
 
-var attentionProbeOutputKeys = []string{
-	"decision",
-	"confidence",
-	"value_type",
-	"summary",
-	"evidence_refs",
-	"model_version",
-	"seen_up_to_seq",
-}
-
-type attentionProbeOutput struct {
-	Decision     string   `json:"decision"`
-	Confidence   float64  `json:"confidence"`
-	ValueType    string   `json:"value_type"`
-	Summary      string   `json:"summary"`
-	EvidenceRefs []string `json:"evidence_refs"`
-	ModelVersion string   `json:"model_version"`
-	SeenUpToSeq  int64    `json:"seen_up_to_seq"`
-}
-
 func taskExecutionProfile(task Task) (string, error) {
 	profile := ""
 	if task.ExecutionConfig != nil {
@@ -51,7 +30,7 @@ func taskExecutionProfile(task Task) (string, error) {
 	switch profile {
 	case "", executionProfileFull:
 		return executionProfileFull, nil
-	case executionProfileAttentionProbe, executionProfileProtocolTurn:
+	case executionProfileProtocolTurn:
 		if err := validateRestrictedExecutionConfig(task.ExecutionConfig); err != nil {
 			return "", fmt.Errorf("execution profile %q: %w", profile, err)
 		}
@@ -81,7 +60,7 @@ func validateRestrictedExecutionConfig(config *TaskExecutionConfig) error {
 }
 
 func isRestrictedExecutionProfile(profile string) bool {
-	return profile == executionProfileAttentionProbe || profile == executionProfileProtocolTurn
+	return profile == executionProfileProtocolTurn
 }
 
 func restrictedOutputTokenLimit(profile string) int {
@@ -255,8 +234,6 @@ func restrictedMemorySummary(memories []MemoryData, budget int) string {
 
 func restrictedExecutionSystemPrompt(profile string) string {
 	switch profile {
-	case executionProfileAttentionProbe:
-		return "You are running an internal attention probe for your agent identity. Tools, shell, files, network access, and public messaging are unavailable. Judge only from the supplied bounded context. Return exactly one JSON object and no prose."
 	case executionProfileProtocolTurn:
 		return "You are running one bounded protocol turn. Tools, shell, files, network access, and public messaging are unavailable. Follow the supplied protocol state and return exactly the requested structured result with no extra prose."
 	default:
@@ -266,62 +243,11 @@ func restrictedExecutionSystemPrompt(profile string) string {
 
 func parseRestrictedExecutionOutput(profile, output string) (json.RawMessage, error) {
 	switch profile {
-	case executionProfileAttentionProbe:
-		return parseAttentionProbeOutput(output)
 	case executionProfileProtocolTurn:
 		return parseProtocolTurnOutput(output)
 	default:
 		return nil, fmt.Errorf("execution profile %q has no restricted output contract", profile)
 	}
-}
-
-func parseAttentionProbeOutput(output string) (json.RawMessage, error) {
-	var parsed attentionProbeOutput
-	rawObject, err := decodeStrictJSONObject(output, &parsed)
-	if err != nil {
-		return nil, fmt.Errorf("attention probe output: %w", err)
-	}
-	for _, key := range attentionProbeOutputKeys {
-		rawValue, ok := rawObject[key]
-		if !ok {
-			return nil, fmt.Errorf("attention probe output: missing required field %q", key)
-		}
-		if strings.TrimSpace(string(rawValue)) == "null" {
-			return nil, fmt.Errorf("attention probe output: field %q must not be null", key)
-		}
-	}
-	if !stringInSet(parsed.Decision, "SILENT", "ANSWER", "CONTRIBUTE", "COORDINATE") {
-		return nil, fmt.Errorf("attention probe output: invalid decision %q", parsed.Decision)
-	}
-	if parsed.Confidence < 0 || parsed.Confidence > 1 {
-		return nil, fmt.Errorf("attention probe output: confidence %v is outside [0,1]", parsed.Confidence)
-	}
-	if !stringInSet(parsed.ValueType, "none", "direct_answer", "unique_evidence", "correction", "task_claim", "needs_protocol") {
-		return nil, fmt.Errorf("attention probe output: invalid value_type %q", parsed.ValueType)
-	}
-	if parsed.EvidenceRefs == nil {
-		return nil, fmt.Errorf("attention probe output: evidence_refs must be an array")
-	}
-	var untypedEvidence []any
-	if err := json.Unmarshal(rawObject["evidence_refs"], &untypedEvidence); err != nil {
-		return nil, fmt.Errorf("attention probe output: evidence_refs must be an array of strings")
-	}
-	for _, ref := range untypedEvidence {
-		if _, ok := ref.(string); !ok {
-			return nil, fmt.Errorf("attention probe output: evidence_refs must contain only strings")
-		}
-	}
-	if strings.TrimSpace(parsed.ModelVersion) == "" {
-		return nil, fmt.Errorf("attention probe output: model_version must not be empty")
-	}
-	if parsed.SeenUpToSeq < 0 {
-		return nil, fmt.Errorf("attention probe output: seen_up_to_seq must be non-negative")
-	}
-	canonical, err := json.Marshal(parsed)
-	if err != nil {
-		return nil, fmt.Errorf("attention probe output: marshal canonical result: %w", err)
-	}
-	return canonical, nil
 }
 
 func parseProtocolTurnOutput(output string) (json.RawMessage, error) {
@@ -339,31 +265,12 @@ func parseProtocolTurnOutput(output string) (json.RawMessage, error) {
 	return canonical, nil
 }
 
+// bindRestrictedOutputMetadata is a hook for restricted execution profiles
+// that need to stamp server-known metadata onto their structured output
+// before persistence. No current profile requires this; protocol_turn output
+// passes through unchanged.
 func bindRestrictedOutputMetadata(profile string, output json.RawMessage, configuredModel string, usage []TaskUsageEntry, task Task) (json.RawMessage, error) {
-	if profile != executionProfileAttentionProbe {
-		return output, nil
-	}
-	var parsed attentionProbeOutput
-	if err := json.Unmarshal(output, &parsed); err != nil {
-		return nil, fmt.Errorf("bind attention probe metadata: %w", err)
-	}
-	for _, entry := range usage {
-		if model := strings.TrimSpace(entry.Model); model != "" {
-			parsed.ModelVersion = model
-			break
-		}
-	}
-	if model := strings.TrimSpace(configuredModel); parsed.ModelVersion == "" && model != "" {
-		parsed.ModelVersion = model
-	}
-	if task.InboxEvent != nil {
-		parsed.SeenUpToSeq = task.InboxEvent.SeqTo
-	}
-	canonical, err := json.Marshal(parsed)
-	if err != nil {
-		return nil, fmt.Errorf("bind attention probe metadata: %w", err)
-	}
-	return canonical, nil
+	return output, nil
 }
 
 func decodeStrictJSONObject(output string, destination any) (map[string]json.RawMessage, error) {
@@ -389,15 +296,6 @@ func decodeStrictJSONObject(output string, destination any) (map[string]json.Raw
 	return rawObject, nil
 }
 
-func stringInSet(value string, allowed ...string) bool {
-	for _, candidate := range allowed {
-		if value == candidate {
-			return true
-		}
-	}
-	return false
-}
-
 func suppressPublicOutputForTask(task Task) bool {
 	if task.ExecutionConfig == nil {
 		return false
@@ -408,8 +306,8 @@ func suppressPublicOutputForTask(task Task) bool {
 
 // restrictResultForExecutionProfile prevents a sidecar cognition run from
 // mutating the primary chat session or becoming a user-visible completion.
-// A later attention-round layer persists the structured probe output through
-// its own internal result contract before this terminal callback is sent.
+// A later protocol layer persists the structured turn output through its own
+// internal result contract before this terminal callback is sent.
 func restrictResultForExecutionProfile(result TaskResult, profile string) TaskResult {
 	if !isRestrictedExecutionProfile(profile) {
 		return result

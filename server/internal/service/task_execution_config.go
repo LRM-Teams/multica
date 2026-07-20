@@ -8,9 +8,8 @@ import (
 const taskExecutionConfigKey = "execution_config"
 
 const (
-	ExecutionProfileFull           = "full"
-	ExecutionProfileAttentionProbe = "attention_probe"
-	ExecutionProfileProtocolTurn   = "protocol_turn"
+	ExecutionProfileFull         = "full"
+	ExecutionProfileProtocolTurn = "protocol_turn"
 )
 
 // TaskExecutionConfig is the task-scoped runtime configuration. New work
@@ -56,7 +55,7 @@ func WithTaskExecutionProfile(contextJSON []byte, model, thinkingLevel, executio
 		ExecutionProfile: profile,
 		Snapshotted:      true,
 	}
-	if profile == ExecutionProfileAttentionProbe || profile == ExecutionProfileProtocolTurn {
+	if profile == ExecutionProfileProtocolTurn {
 		configSnapshot.ContextMessages = 8
 		configSnapshot.MemoryBudgetBytes = 4 * 1024
 		configSnapshot.MaxOutputTokens = 96
@@ -98,7 +97,7 @@ func NormalizeExecutionProfile(profile string) (string, bool) {
 	switch profile {
 	case "", ExecutionProfileFull:
 		return ExecutionProfileFull, true
-	case ExecutionProfileAttentionProbe, ExecutionProfileProtocolTurn:
+	case ExecutionProfileProtocolTurn:
 		return profile, true
 	default:
 		return "", false

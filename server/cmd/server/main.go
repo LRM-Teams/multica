@@ -105,8 +105,8 @@ func envPositiveInt64(name string, def int64) int64 {
 	return v
 }
 
-// envPositiveBytes accepts an explicit byte count or the IEC KiB suffix used
-// by the Attention Round v3 configuration (for example, "4096" or "4KiB").
+// envPositiveBytes accepts an explicit byte count or the IEC KiB suffix
+// (for example, "4096" or "4KiB").
 func envPositiveBytes(name string, def int) int {
 	raw := strings.TrimSpace(os.Getenv(name))
 	if raw == "" {
@@ -392,7 +392,7 @@ func main() {
 
 	// Start background sweeper to mark stale runtimes as offline.
 	go runRuntimeSweeper(sweepCtx, queries, pool, liveness, taskSvc, bus)
-	go runChannelAttentionWorkers(sweepCtx, h)
+	go runCollaborationTurnWorkers(sweepCtx, h)
 	go heartbeatScheduler.Run(sweepCtx)
 	go runAutopilotScheduler(autopilotCtx, queries, autopilotSvc)
 	go runAutopilotFailureMonitor(autopilotCtx, queries, bus, envFailureMonitorConfig())
@@ -528,25 +528,20 @@ func main() {
 	slog.Info("server stopped")
 }
 
-func runChannelAttentionWorkers(ctx context.Context, h *handler.Handler) {
+// runCollaborationTurnWorkers periodically expires overdue Collaboration turn
+// grants so a stuck/unresponsive participant cannot wedge a session forever.
+func runCollaborationTurnWorkers(ctx context.Context, h *handler.Handler) {
 	if h == nil {
 		return
 	}
-	outboxTicker := time.NewTicker(time.Second)
 	timeoutTicker := time.NewTicker(time.Second)
-	defer outboxTicker.Stop()
 	defer timeoutTicker.Stop()
-	h.ProcessPendingChannelAttentionDispatches(ctx, 64)
-	h.SweepChannelAttentionTimeouts(ctx, 64)
 	h.SweepCollaborationTurnTimeouts(ctx, 64)
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-outboxTicker.C:
-			h.ProcessPendingChannelAttentionDispatches(ctx, 64)
 		case <-timeoutTicker.C:
-			h.SweepChannelAttentionTimeouts(ctx, 64)
 			h.SweepCollaborationTurnTimeouts(ctx, 64)
 		}
 	}

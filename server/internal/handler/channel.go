@@ -2628,7 +2628,7 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 		h.followChannelThreadUser(r.Context(), channelID, rootID, parseUUID(*root.AuthorID), false)
 	}
 	if root.Type == "agent" && root.AuthorID != nil {
-		h.followChannelThreadAgent(r.Context(), channelID, rootID, parseUUID(*root.AuthorID))
+		h.ensureChannelThreadAgentInitialFollow(r.Context(), channelID, rootID, parseUUID(*root.AuthorID))
 	}
 	h.followChannelThreadMentionedUsers(r.Context(), ch, msg)
 	_, _ = h.DB.Exec(r.Context(), `UPDATE channel SET updated_at = now() WHERE id = $1`, channelID)
@@ -2637,7 +2637,7 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 	}
 	h.publishChannelToMembers(r.Context(), protocol.EventChannelMessage, workspaceID, "member", userID, channelID, msg)
 	if ch.Kind == "dm" {
-		h.dispatchDMAgentReply(r.Context(), ch, msg, parseUUID(userID))
+		h.dispatchDMThreadReply(r.Context(), ch, msg, parseUUID(userID))
 	} else {
 		h.dispatchChannelThreadReplyMentions(r.Context(), ch, msg, parseUUID(userID))
 	}
@@ -2828,6 +2828,25 @@ func (h *Handler) followChannelThreadAgent(ctx context.Context, channelID, rootI
 		    updated_at = now()`,
 		channelID, rootID, agentID); err != nil {
 		slog.Warn("channel thread agent follow failed", "root", uuidToString(rootID), "agent", uuidToString(agentID), "error", err)
+	}
+}
+
+// ensureChannelThreadAgentInitialFollow registers an agent-authored root's
+// author the first time the thread receives a reply. An existing participant
+// row is left untouched so a later reply cannot undo an explicit unfollow.
+func (h *Handler) ensureChannelThreadAgentInitialFollow(ctx context.Context, channelID, rootID, agentID pgtype.UUID) {
+	if _, err := h.DB.Exec(ctx, `
+		WITH root AS (
+		  SELECT conversation_id
+		  FROM channel_message
+		  WHERE id = $2 AND channel_id = $1
+		)
+		INSERT INTO thread_participant (conversation_id, root_message_id, member_type, member_id, followed_at, updated_at)
+		SELECT root.conversation_id, $2, 'agent', $3, now(), now()
+		FROM root
+		ON CONFLICT (root_message_id, member_type, member_id) DO NOTHING`,
+		channelID, rootID, agentID); err != nil {
+		slog.Warn("channel thread agent initial follow failed", "root", uuidToString(rootID), "agent", uuidToString(agentID), "error", err)
 	}
 }
 

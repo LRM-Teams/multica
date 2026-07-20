@@ -1435,6 +1435,116 @@ func TestAgentTransportUnfollowDMThreadTarget(t *testing.T) {
 	assertAgentTransportAuditCount(t, taskID, agentTransportActionThreadUnfollow, 1)
 }
 
+func TestDMThreadDeliveryHonorsFollowUnfollowMentionAndAgentPost(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, _ := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	humanHandle := userHandleForTransportTest(t, testUserID)
+	dmChannel, ok := testHandler.ensureAgentHumanDMChannel(ctx, parseUUID(testWorkspaceID), parseUUID(agentID), parseUUID(testUserID))
+	if !ok {
+		t.Fatal("create agent-human DM channel")
+	}
+	root, err := testHandler.insertChannelMessage(ctx, parseUUID(dmChannel.ID), parseUUID(testWorkspaceID), "agent", parseUUID(agentID), "DM Agent", "dm delivery root "+uuid.NewString(), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("insert dm root: %v", err)
+	}
+	target := "dm:@" + humanHandle + ":" + root.ID
+	testHandler.followChannelThreadAgent(ctx, parseUUID(dmChannel.ID), parseUUID(root.ID), parseUUID(agentID))
+
+	sendHumanReply := func(content string, parts ...protocol.MessagePart) ChannelMessageResponse {
+		t.Helper()
+		req := newRequest(http.MethodPost, "/api/channels/"+dmChannel.ID+"/messages/"+root.ID+"/thread", map[string]any{"content": content, "parts": parts})
+		req = withChannelTestWorkspaceCtx(t, req, testUserID)
+		req = withURLParams(req, "channelId", dmChannel.ID, "messageId", root.ID)
+		rec := httptest.NewRecorder()
+		testHandler.SendChannelMessageThreadReply(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("send human dm thread reply: status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		var message ChannelMessageResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &message); err != nil {
+			t.Fatalf("decode human dm thread reply: %v", err)
+		}
+		return message
+	}
+	assertWakeCount := func(messageID string, want int) {
+		t.Helper()
+		var got int
+		if err := testPool.QueryRow(ctx, `
+			SELECT count(*)
+			FROM agent_inbox_event
+			WHERE channel_id = $1 AND agent_id = $2 AND source_message_id = $3 AND requires_wake`,
+			dmChannel.ID, agentID, messageID).Scan(&got); err != nil {
+			t.Fatalf("count dm thread wake events: %v", err)
+		}
+		if got != want {
+			t.Fatalf("dm thread wake events for message %s = %d, want %d", messageID, got, want)
+		}
+	}
+	assertFollowState := func(wantFollowed bool, wantWakeState string) {
+		t.Helper()
+		var followed bool
+		var wakeState string
+		if err := testPool.QueryRow(ctx, `
+			SELECT followed_at IS NOT NULL, wake_state
+			FROM thread_participant
+			WHERE root_message_id = $1 AND member_type = 'agent' AND member_id = $2`,
+			root.ID, agentID).Scan(&followed, &wakeState); err != nil {
+			t.Fatalf("load dm thread participant: %v", err)
+		}
+		if followed != wantFollowed || wakeState != wantWakeState {
+			t.Fatalf("dm thread participant = followed:%v wake_state:%q, want %v/%q", followed, wakeState, wantFollowed, wantWakeState)
+		}
+	}
+	unfollow := func() {
+		t.Helper()
+		rec := agentTransportUnfollowThreadForTest(t, taskID, agentID, map[string]any{"target": target})
+		if rec.Code != http.StatusOK {
+			t.Fatalf("unfollow dm thread: status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		assertFollowState(false, "no_wake")
+	}
+
+	ordinary := sendHumanReply("ordinary followed reply " + uuid.NewString())
+	assertWakeCount(ordinary.ID, 1)
+	assertChannelAgentWakeReasonPriority(t, dmChannel.ID, agentID, ordinary.ID, "thread_reply", channelThreadReplyPriority)
+
+	unfollow()
+	ignored := sendHumanReply("ordinary unfollowed reply " + uuid.NewString())
+	assertWakeCount(ignored.ID, 0)
+	assertFollowState(false, "no_wake")
+
+	var agentHandle string
+	if err := testPool.QueryRow(ctx, `SELECT name FROM agent WHERE id = $1`, agentID).Scan(&agentHandle); err != nil {
+		t.Fatalf("load agent handle: %v", err)
+	}
+	mentioned := sendHumanReply("@"+agentHandle+" explicit dm thread mention", protocol.MessagePart{
+		Type:       protocol.MessagePartTypeReference,
+		RefType:    "mention",
+		RefSubType: "agent",
+		RefID:      agentID,
+		Label:      "@" + agentHandle,
+	})
+	assertWakeCount(mentioned.ID, 1)
+	assertChannelAgentWakeReasonPriority(t, dmChannel.ID, agentID, mentioned.ID, "mention", channelDirectedWakePriority)
+	assertFollowState(true, "active")
+
+	unfollow()
+	post := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":            target,
+		"content":           "agent post refollows dm thread " + uuid.NewString(),
+		"client_message_id": "dm-thread-refollow-" + uuid.NewString(),
+	})
+	if post.Code != http.StatusCreated {
+		t.Fatalf("agent post to unfollowed dm thread: status=%d body=%s", post.Code, post.Body.String())
+	}
+	assertFollowState(true, "active")
+}
+
 func TestAgentTransportRejectsNonRaftTargetForms(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

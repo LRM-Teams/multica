@@ -138,22 +138,30 @@ const RESOURCES = {
   },
 };
 
-const members: MemberWithUser[] = [
-  {
-    id: "m-owner",
-    user_id: "user-owner",
-    workspace_id: "ws-1",
-    role: "member",
-    name: "Owner",
-    display_name: "Owner",
-    email: "owner@example.com",
-    avatar_url: null,
-    profile_description: "",
-    created_at: "2026-01-01T00:00:00Z",
-  },
-];
+// Extracted to a named const so the spreads below start from a concrete
+// `MemberWithUser`. Under `noUncheckedIndexedAccess`, `members[0]` is
+// `MemberWithUser | undefined`, and spreading that into a `: MemberWithUser`
+// literal drops the spread-only required fields (workspace_id/role/…) — TS2322.
+const ownerMember: MemberWithUser = {
+  id: "m-owner",
+  user_id: "user-owner",
+  workspace_id: "ws-1",
+  role: "member",
+  name: "Owner",
+  display_name: "Owner",
+  email: "owner@example.com",
+  avatar_url: null,
+  profile_description: "",
+  created_at: "2026-01-01T00:00:00Z",
+};
 
-function makeAgent(ownerId = "user-owner", managedRole?: "group_manager"): Agent {
+const members: MemberWithUser[] = [ownerMember];
+
+function makeAgent(
+  ownerId = "user-owner",
+  managedRole?: "group_manager",
+  visibility: Agent["visibility"] = "workspace",
+): Agent {
   return {
     id: "agent-1",
     workspace_id: "ws-1",
@@ -166,7 +174,7 @@ function makeAgent(ownerId = "user-owner", managedRole?: "group_manager"): Agent
     runtime_mode: "local",
     runtime_config: {},
     custom_args: [],
-    visibility: "workspace",
+    visibility,
     status: "idle",
     max_concurrent_tasks: 1,
     model: "",
@@ -207,6 +215,53 @@ describe("AgentSidePanel", () => {
   it("keeps non-owner access to profile only by default", () => {
     renderPanel("user-other");
     expect(screen.getByText("Atlas")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Activity" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Files" })).not.toBeInTheDocument();
+  });
+
+  it("temporarily exposes Activity, but not Files, to a workspace-member viewer", () => {
+    const workspaceMember: MemberWithUser = {
+      ...ownerMember,
+      id: "m-viewer",
+      user_id: "user-other",
+      name: "Viewer",
+      display_name: "Viewer",
+      email: "viewer@example.com",
+    };
+
+    render(
+      <AgentSidePanel
+        agent={makeAgent()}
+        currentUserId="user-other"
+        members={[...members, workspaceMember]}
+        onClose={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Activity" }));
+    expect(screen.getByText("Activity content")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Files" })).not.toBeInTheDocument();
+  });
+
+  it("does not advertise Activity to a non-owner of a private agent", () => {
+    const workspaceMember: MemberWithUser = {
+      ...ownerMember,
+      id: "m-viewer",
+      user_id: "user-other",
+      name: "Viewer",
+      display_name: "Viewer",
+      email: "viewer@example.com",
+    };
+
+    render(
+      <AgentSidePanel
+        agent={makeAgent("user-owner", undefined, "private")}
+        currentUserId="user-other"
+        members={[...members, workspaceMember]}
+        onClose={() => {}}
+      />,
+    );
+
     expect(screen.queryByRole("button", { name: "Activity" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Files" })).not.toBeInTheDocument();
   });

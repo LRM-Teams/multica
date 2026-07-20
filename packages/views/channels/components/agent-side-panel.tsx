@@ -49,9 +49,10 @@ interface AgentSidePanelProps {
  * Right-pane surface opened by clicking an agent's avatar/name in the
  * conversation — mutually exclusive with the thread panel (same slot,
  * per Frank's direction 2026-07-09: inline panel, not a route jump).
- * Production keeps Frank's original privacy correction: owner sees
- * Profile/Activity/Files, non-owner sees Profile only. Dev deployments can
- * open Activity/Files read surfaces for workspace members via /api/config.
+ * Temporary Frank-approved rule: workspace members may read the Activity tab.
+ * The server remains the data authority and still filters non-visible rows.
+ * Files and runtime/config inspection keep their existing owner/inspector
+ * gates until the formal visibility model in task #607 replaces this override.
  *
  * The former standalone "Config" tab was merged into Profile (#565): the same
  * runtime attributes were shown read-only in Profile AND editable in Config —
@@ -69,8 +70,24 @@ export function AgentSidePanel({
   const isOwner = !!currentUserId && agent.owner_id === currentUserId;
   const devProfileAccess = useConfigStore((state) => state.agentProfileDevAccessEnabled);
   const canInspectAgent = isOwner || (!!currentUserId && devProfileAccess);
+  const isWorkspaceMember =
+    !!currentUserId && members.some((member) => member.user_id === currentUserId);
+  // TEMP(task #607): make the existing read-only Activity surface available to
+  // workspace members only for workspace-visible agents. Private agents remain
+  // owner-only so the UI never advertises a tab whose server request must be
+  // denied. Do not reuse this for Files or runtime/config access.
+  //
+  // The `devProfileAccess` dev override still applies here, exactly as it does for
+  // `canInspectAgent` above: with the flag on, a non-owner sees Activity (and the
+  // read-only Files tab) regardless of agent visibility. Dropping it would regress
+  // the dev-access mode this panel has always supported (task #606).
+  const canViewActivity =
+    isOwner ||
+    (!!currentUserId && devProfileAccess) ||
+    (isWorkspaceMember && agent.visibility === "workspace");
   const availableTabs: OwnerTab[] = ["profile"];
-  if (canInspectAgent) availableTabs.push("activity", "files");
+  if (canViewActivity) availableTabs.push("activity");
+  if (canInspectAgent) availableTabs.push("files");
   const showTabBar = availableTabs.length > 1;
   const [tab, setTab] = useState<OwnerTab>("profile");
   const [mountedTabs, setMountedTabs] = useState<Set<OwnerTab>>(() => new Set(["profile"]));
@@ -169,7 +186,7 @@ export function AgentSidePanel({
             })}
           </div>
           <div ref={tabBodyRef} className="min-h-0 min-w-0 flex-1 overflow-y-auto">
-            {renderTab("activity") && canInspectAgent ? (
+            {renderTab("activity") && canViewActivity ? (
               <div className={tab === "activity" ? undefined : "hidden"}>
                 <ActivityTab agent={agent} />
               </div>

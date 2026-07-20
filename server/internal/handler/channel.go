@@ -3830,7 +3830,7 @@ func (h *Handler) coalesceDirectedIssueInboxEventTx(ctx context.Context, qtx *db
 		  AND e.agent_id = $2
 		  AND e.reason = $3
 		  AND e.requires_wake = true
-		  AND e.status IN ('pending', 'draining', 'failed')
+		  AND e.status = 'pending'
 		  AND (
 		    (cardinality($4::text[]) > 0 AND EXISTS (
 		      SELECT 1 FROM jsonb_array_elements(COALESCE(cm.parts, '[]'::jsonb)) part
@@ -3853,7 +3853,7 @@ func (h *Handler) coalesceDirectedIssueInboxEventTx(ctx context.Context, qtx *db
 		    OR ($6::uuid IS NOT NULL AND (cm.thread_root_message_id = $6::uuid OR cm.id = $6::uuid))
 		  )
 		  AND e.created_at >= now() - make_interval(secs => $7::double precision)
-		ORDER BY CASE e.status WHEN 'draining' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END, e.created_at ASC
+		ORDER BY e.created_at ASC
 		LIMIT 1
 		FOR UPDATE OF e`, conversationID, agent.ID, reason, issueIDs, issueLabels, nullableUUID(rootID), channelDirectedIssueCooldown.Seconds()).Scan(&existingEventID, &existingAgentSessionID, &existingChatSessionID, &existingSeqFrom, &existingSeqTo)
 	if err != nil {

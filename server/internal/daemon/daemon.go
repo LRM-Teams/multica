@@ -1559,7 +1559,21 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 		}
 	}
 	if resp.PendingMemoryCuration != nil {
-		if rt := d.findRuntime(runtimeID); rt != nil && d.beginMemoryCurationRun(runtimeID, resp.PendingMemoryCuration.ID) {
+		if rt := d.findRuntime(runtimeID); rt == nil {
+			d.logger.Warn("memory curation claim dropped: runtime not found", "runtime_id", runtimeID, "run_id", resp.PendingMemoryCuration.ID)
+		} else if !d.beginMemoryCurationRun(runtimeID, resp.PendingMemoryCuration.ID) {
+			// Server already flipped the row to running; if we silently drop
+			// it here the evolution page spins on a zombie claim. Fail fast
+			// so reclaim/timeout logic can unblock the queue.
+			d.logger.Warn("memory curation claim dropped: already active", "runtime_id", runtimeID, "run_id", resp.PendingMemoryCuration.ID)
+			pending := *resp.PendingMemoryCuration
+			go d.reportMemoryCurationResult(ctx, *rt, pending.ID, map[string]any{
+				"status":      "failed",
+				"claim_token": pending.ClaimToken,
+				"error":       "daemon already running another memory curation claim",
+				"result":      map[string]any{},
+			})
+		} else {
 			go d.handleMemoryCuration(ctx, *rt, *resp.PendingMemoryCuration)
 		}
 	}

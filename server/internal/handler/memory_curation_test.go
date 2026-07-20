@@ -169,7 +169,7 @@ func TestMemoryCurationClaimFailsExhaustedStaleRunAndClaimsNext(t *testing.T) {
 		  workspace_id, stage, trigger_kind, status, date_from, date_to,
 		  runtime_id, execution_owner, attempt, claimed_at, started_at
 		) VALUES ($1, 'agent_self_review', 'scheduled', 'running', '2026-07-18', '2026-07-18',
-		          $2, 'daemon', $3, now() - interval '20 minutes', now())
+		          $2, 'daemon', $3, now() - interval '5 minutes', now())
 		RETURNING id::text
 	`, testWorkspaceID, runtimeID, memoryCurationMaxAttempts).Scan(&staleRunID); err != nil {
 		t.Fatal(err)
@@ -205,6 +205,63 @@ func TestMemoryCurationClaimFailsExhaustedStaleRunAndClaimsNext(t *testing.T) {
 	}
 	if staleStatus != "failed" || !strings.Contains(staleError, "max daemon claim attempts") {
 		t.Fatalf("stale run status/error = %q/%q", staleStatus, staleError)
+	}
+}
+
+func TestWorkspaceMemoryCurationStatusSweepsExpiredRunningRuns(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("handler test database unavailable")
+	}
+	ctx := context.Background()
+	var runtimeID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (
+		  workspace_id, daemon_id, name, runtime_mode, provider, status,
+		  device_info, metadata, owner_id, visibility, last_seen_at
+		) VALUES ($1, 'memory-curator-status-daemon', 'Memory Curator Status Runtime', 'local', 'codex', 'online',
+		          'memory curator status sweep', jsonb_build_object('capabilities', jsonb_build_array($2::text)), $3, 'private', now())
+		RETURNING id::text
+	`, testWorkspaceID, protocol.DaemonCapabilityMemoryCuration, testUserID).Scan(&runtimeID); err != nil {
+		t.Fatal(err)
+	}
+	var staleRunID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO memory_curation_run (
+		  workspace_id, stage, trigger_kind, status, date_from, date_to,
+		  runtime_id, execution_owner, attempt, claimed_at, started_at
+		) VALUES ($1, 'all', 'manual', 'running', '2026-07-20', '2026-07-20',
+		          $2, 'daemon', $3, now() - interval '40 minutes', now() - interval '40 minutes')
+		RETURNING id::text
+	`, testWorkspaceID, runtimeID, memoryCurationMaxAttempts).Scan(&staleRunID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM memory_curation_run WHERE id = $1`, staleRunID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+	})
+
+	w := httptest.NewRecorder()
+	req := withURLParam(newRequest(http.MethodGet, "/api/workspaces/"+testWorkspaceID+"/memory-curation/status", nil), "id", testWorkspaceID)
+	testHandler.GetWorkspaceMemoryCurationStatus(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetWorkspaceMemoryCurationStatus: status=%d body=%s", w.Code, w.Body.String())
+	}
+
+	var status, errText string
+	if err := testPool.QueryRow(ctx, `SELECT status, error FROM memory_curation_run WHERE id = $1`, staleRunID).Scan(&status, &errText); err != nil {
+		t.Fatal(err)
+	}
+	if status != "failed" || !strings.Contains(errText, "exceeded server max runtime") {
+		t.Fatalf("stale run status/error = %q/%q", status, errText)
+	}
+	var body struct {
+		PendingRuns int `json:"pending_runs"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.PendingRuns != 0 {
+		t.Fatalf("pending_runs = %d, want 0 after sweep", body.PendingRuns)
 	}
 }
 

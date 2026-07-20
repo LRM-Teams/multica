@@ -231,6 +231,7 @@
       "member_left": "{target} left this channel",
       "issue": {
         "actor_system": "Multica",
+        "created": "{{actor}} created {issue}",
         "assigned": "{{actor}} assigned {issue} to {{target}}",
         "assigned_unknown": "{{actor}} changed the assignee of {issue}",
         "in_progress": "{{actor}} started {issue}",
@@ -247,6 +248,12 @@
         "done": "Done",
         "blocked": "Blocked",
         "cancelled": "Cancelled"
+      },
+      "project": {
+        "actor_system": "Multica",
+        "bound": "{{actor}} linked this channel to project «{project}»",
+        "changed": "{{actor}} moved this channel from project «{previous}» to project «{project}»",
+        "unbound": "{{actor}} unlinked this channel from project «{previous}»"
       }
     }
   },

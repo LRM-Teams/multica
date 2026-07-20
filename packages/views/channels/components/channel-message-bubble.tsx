@@ -41,8 +41,16 @@ import {
 import { MessageBody } from "./message-body";
 import { MessageQuoteCard } from "./message-quote";
 import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
-import { parseMemberSystemEvent, parseIssueSystemEvent } from "./channel-system-event";
-import { MemberSystemEventContent, IssueSystemEventContent } from "./channel-system-event-content";
+import {
+  parseMemberSystemEvent,
+  parseIssueSystemEvent,
+  parseProjectSystemEvent,
+} from "./channel-system-event";
+import {
+  MemberSystemEventContent,
+  IssueSystemEventContent,
+  ProjectSystemEventContent,
+} from "./channel-system-event-content";
 import { messageMentionsViewer } from "../../common/content-mentions-viewer";
 import { SELF_MENTION_ROW_CLASS } from "../../common/mention-token";
 
@@ -102,6 +110,9 @@ function ChannelSystemMessageRow({
   // action verb with the issue identifier as the sole clickable token — instead
   // of dumping the raw English "moved to In Progress" string.
   const issueEvent = parseIssueSystemEvent(message);
+  // Channel↔project association events (#610): bind/change/unbind, projected into
+  // a localized row whose sole clickable object is the project name.
+  const projectEvent = parseProjectSystemEvent(message);
   // Older backflow rows without the `system_event` part still carry an anchored
   // `reference`, so project those into tokens rather than the raw string (#469).
   const hasReferenceParts = message.parts?.some((part) => part.type === "reference") ?? false;
@@ -131,6 +142,8 @@ function ChannelSystemMessageRow({
           <IssueSystemEventContent event={issueEvent} sourceMessageId={message.id} />
         ) : memberEvent ? (
           <MemberSystemEventContent event={memberEvent} />
+        ) : projectEvent ? (
+          <ProjectSystemEventContent event={projectEvent} />
         ) : hasReferenceParts ? (
           // Spans are anchored to the RAW `message.content`; feeding the trimmed
           // `systemText` would shift every offset and misplace the tokens.

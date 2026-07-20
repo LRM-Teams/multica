@@ -231,6 +231,7 @@
       "member_left": "{target} 退出了频道",
       "issue": {
         "actor_system": "Multica",
+        "created": "{{actor}} 创建了 Issue {issue}",
         "assigned": "{{actor}} 将 Issue {issue} 指派给 {{target}}",
         "assigned_unknown": "{{actor}} 重新指派了 Issue {issue}",
         "in_progress": "{{actor}} 将 Issue {issue} 标记为处理中",
@@ -247,6 +248,12 @@
         "done": "已完成",
         "blocked": "已阻塞",
         "cancelled": "已取消"
+      },
+      "project": {
+        "actor_system": "Multica",
+        "bound": "{{actor}} 把本群关联到项目「{project}」",
+        "changed": "{{actor}} 把关联项目从「{previous}」改为「{project}」",
+        "unbound": "{{actor}} 解除了与项目「{previous}」的关联"
       }
     }
   },

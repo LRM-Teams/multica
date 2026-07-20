@@ -265,7 +265,7 @@ func TestChannelAttentionExplicitMentionExecutesOnlyTarget(t *testing.T) {
 	}
 }
 
-func TestChannelAttentionAgentAndSystemMessagesObserveOnly(t *testing.T) {
+func TestChannelAttentionAgentAndSystemMessagesDoNotDispatchAmbient(t *testing.T) {
 	fixture := newChannelAttentionFixture(t, []attentionRuntimeSpec{{}, {}})
 	for _, author := range []struct {
 		typeName string
@@ -288,8 +288,8 @@ func TestChannelAttentionAgentAndSystemMessagesObserveOnly(t *testing.T) {
 		WHERE channel_id = $1`, fixture.channel.ID).Scan(&rounds, &full, &observe); err != nil {
 		t.Fatalf("inspect observe-only dispatch: %v", err)
 	}
-	if rounds != 0 || full != 0 || observe == 0 {
-		t.Fatalf("rounds=%d full=%d observe=%d, want 0/0/>0", rounds, full, observe)
+	if rounds != 0 || full != 0 || observe != 0 {
+		t.Fatalf("rounds=%d full=%d observe=%d, want 0/0/0", rounds, full, observe)
 	}
 }
 
@@ -445,6 +445,70 @@ func TestChannelAttentionCompletionPersistsDecisionWithoutChannelOutput(t *testi
 	}
 	if after := fixture.channelMessageCount(t); after != before {
 		t.Fatalf("channel message count changed from %d to %d after internal completion", before, after)
+	}
+}
+
+func TestChannelAttentionManagerFallbackCooldownSuppressesRepeatedProactiveWake(t *testing.T) {
+	fixture := newChannelAttentionFixture(t, []attentionRuntimeSpec{{}})
+	ctx := context.Background()
+	managerID := fixture.agentIDs[0]
+	if _, err := testPool.Exec(ctx, `UPDATE channel SET group_manager_agent_id = $1 WHERE id = $2`, managerID, fixture.channel.ID); err != nil {
+		t.Fatalf("bind group manager: %v", err)
+	}
+
+	createRound := func(content string) pgtype.UUID {
+		t.Helper()
+		trigger := fixture.insertMessage(t, "user", testUserID, content, nil)
+		var roundID pgtype.UUID
+		if err := testPool.QueryRow(ctx, `
+			INSERT INTO channel_attention_round (
+			  workspace_id, channel_id, trigger_message_id, seq_from, seq_to,
+			  status, expected_agent_count, completed_agent_count, dispatch_at, deadline_at
+			)
+			VALUES ($1, $2, $3, $4, $4, 'resolving', 0, 0, now(), now() + interval '5 minutes')
+			RETURNING id`, testWorkspaceID, fixture.channel.ID, trigger.ID, trigger.Seq).Scan(&roundID); err != nil {
+			t.Fatalf("create attention round: %v", err)
+		}
+		return roundID
+	}
+	grant := func(roundID pgtype.UUID) int {
+		t.Helper()
+		tx, err := fixture.handler.TxStarter.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin manager fallback: %v", err)
+		}
+		rc, err := fixture.handler.channelAttentionRoundContextTx(ctx, tx, roundID)
+		if err != nil {
+			_ = tx.Rollback(ctx)
+			t.Fatalf("load round context: %v", err)
+		}
+		wakes, err := fixture.handler.grantChannelAttentionManagerFallbackTx(ctx, tx, rc, roundID, "coordinate_or_all_failed")
+		if err != nil {
+			_ = tx.Rollback(ctx)
+			t.Fatalf("grant manager fallback: %v", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatalf("commit manager fallback: %v", err)
+		}
+		return len(wakes)
+	}
+
+	if got := grant(createRound("Nobody has a clear answer yet")); got != 1 {
+		t.Fatalf("first manager fallback wakes = %d, want 1", got)
+	}
+	if got := grant(createRound("Another nearby ambiguous update")); got != 0 {
+		t.Fatalf("second manager fallback wakes = %d, want 0", got)
+	}
+	var grants int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)::int
+		FROM channel_attention_response_grant gr
+		JOIN channel_attention_round round ON round.id = gr.round_id
+		WHERE round.channel_id = $1 AND gr.agent_id = $2 AND gr.grant_type = 'manager_fallback'`, fixture.channel.ID, managerID).Scan(&grants); err != nil {
+		t.Fatalf("count manager grants: %v", err)
+	}
+	if grants != 1 {
+		t.Fatalf("manager fallback grants = %d, want 1", grants)
 	}
 }
 

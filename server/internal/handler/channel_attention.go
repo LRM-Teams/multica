@@ -22,12 +22,13 @@ import (
 )
 
 const (
-	channelUnmentionedModeAttentionRound = "attention_round"
-	channelUnmentionedModeLegacyFull     = "legacy_full"
-	channelAttentionOutboxBatchSize      = 64
-	channelAttentionResponseGrantReason  = "attention_response_grant"
-	channelAttentionConvergenceReason    = "attention_convergence"
-	channelAttentionManagerReason        = "attention_manager_fallback"
+	channelUnmentionedModeAttentionRound        = "attention_round"
+	channelUnmentionedModeLegacyFull            = "legacy_full"
+	channelAttentionOutboxBatchSize             = 64
+	channelAttentionResponseGrantReason         = "attention_response_grant"
+	channelAttentionConvergenceReason           = "attention_convergence"
+	channelAttentionManagerReason               = "attention_manager_fallback"
+	channelAttentionManagerFallbackCooldownSecs = 20 * 60
 )
 
 var channelAllMentionPattern = regexp.MustCompile(`(?i)(^|[\s，。！？、,:;])[@＠]all(?:$|[\s，。！？、,:;])`)
@@ -1234,6 +1235,24 @@ func (h *Handler) grantChannelAttentionResponderTx(ctx context.Context, tx pgx.T
 	return []channelAttentionWake{{channel: rc.channel, agent: agent, trigger: rc.trigger, reason: channelAttentionResponseGrantReason, result: result}}, nil
 }
 
+func channelAttentionManagerFallbackRecentlyGrantedTx(ctx context.Context, tx pgx.Tx, workspaceID, channelID, managerID, currentRoundID pgtype.UUID) (bool, error) {
+	var recent bool
+	err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+		  SELECT 1
+		  FROM channel_attention_response_grant gr
+		  JOIN channel_attention_round round ON round.id = gr.round_id
+		  WHERE round.workspace_id = $1
+		    AND round.channel_id = $2
+		    AND gr.agent_id = $3
+		    AND gr.round_id <> $4
+		    AND gr.grant_type = 'manager_fallback'
+		    AND gr.status IN ('granted', 'consumed')
+		    AND gr.created_at >= now() - make_interval(secs => $5::double precision)
+		)`, workspaceID, channelID, managerID, currentRoundID, channelAttentionManagerFallbackCooldownSecs).Scan(&recent)
+	return recent, err
+}
+
 func (h *Handler) grantChannelAttentionManagerFallbackTx(ctx context.Context, tx pgx.Tx, rc channelAttentionRoundContext, roundID pgtype.UUID, reason string) ([]channelAttentionWake, error) {
 	managerID, ok := h.resolveGroupManagerForChannel(ctx, rc.workspaceID, rc.channelID)
 	if !ok {
@@ -1242,6 +1261,11 @@ func (h *Handler) grantChannelAttentionManagerFallbackTx(ctx context.Context, tx
 	manager, err := h.Queries.WithTx(tx).GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: managerID, WorkspaceID: rc.workspaceID})
 	if err != nil {
 		return nil, err
+	}
+	if recent, err := channelAttentionManagerFallbackRecentlyGrantedTx(ctx, tx, rc.workspaceID, rc.channelID, managerID, roundID); err != nil {
+		return nil, err
+	} else if recent {
+		return nil, nil
 	}
 	prompt, err := h.buildChannelAttentionGrantPromptTx(ctx, tx, roundID, rc, true, reason)
 	if err != nil {

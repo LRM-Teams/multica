@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -29,7 +30,9 @@ import (
 const channelNameMaxLen = 80
 const channelMessageMaxLen = 20000
 const channelContextMessageLimit = 12
+const channelAgentDirectedContextMessageLimit = 4
 const channelRunTriggerLimit = 10
+const channelDirectedIssueCooldown = 30 * time.Minute
 const channelUserTypingExpiresInMS = 5000
 const channelAgentTypingExpiresInMS = 10 * 60 * 1000
 const channelMessagesDefaultLimit = 50
@@ -49,6 +52,8 @@ const channelNameTakenCode = "channel_name_taken"
 const channelNameUniqueConstraint = "channel_workspace_id_name_key"
 
 var errChannelClientMessageConflict = errors.New("client_message_id already used for different channel message payload")
+
+var channelIssueLabelPattern = regexp.MustCompile(`\b[A-Z][A-Z0-9]+-\d+\b`)
 
 type ChannelResponse struct {
 	ID          string  `json:"id"`
@@ -3573,7 +3578,9 @@ func (h *Handler) dispatchSingleChannelMessageWake(ctx context.Context, ch Chann
 		slog.Warn("channel message wake: commit failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "inbox_event", uuidToString(txResult.Event.ID), "error", err)
 		return
 	}
-	h.recordChannelAgentPromptWake(ctx, ch, agent, trigger, channelMessageWakeReason, txResult)
+	if !txResult.Coalesced {
+		h.recordChannelAgentPromptWake(ctx, ch, agent, trigger, channelMessageWakeReason, txResult)
+	}
 }
 
 // dispatchChannelAgentReply runs one agent's reply to a triggering message:
@@ -3616,6 +3623,7 @@ func (h *Handler) dispatchChannelAgentReplyWithReason(ctx context.Context, ch Ch
 type channelAgentPromptTxResult struct {
 	Event        db.AgentInboxEvent
 	AgentSession db.AgentSession
+	Coalesced    bool
 }
 
 func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, prompt, logScope string, showTyping bool, reason string, priority int32) (db.AgentInboxEvent, error) {
@@ -3650,7 +3658,9 @@ func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelRespo
 		return db.AgentInboxEvent{}, fmt.Errorf("commit channel agent prompt: %w", err)
 	}
 	typingActive = false
-	h.recordChannelAgentPromptWake(ctx, ch, agent, trigger, reason, txResult)
+	if !txResult.Coalesced {
+		h.recordChannelAgentPromptWake(ctx, ch, agent, trigger, reason, txResult)
+	}
 	return txResult.Event, nil
 }
 
@@ -3677,10 +3687,6 @@ func (h *Handler) enqueueChannelAgentPromptRangeWithTx(ctx context.Context, qtx 
 	if err != nil {
 		return channelAgentPromptTxResult{}, fmt.Errorf("ensure channel agent session: %w", err)
 	}
-	promptMsg, err := h.createChannelAgentPromptMessageWithDB(ctx, exec, session.ID, prompt, ch.Kind, trigger)
-	if err != nil {
-		return channelAgentPromptTxResult{}, fmt.Errorf("create channel agent prompt: %w", err)
-	}
 	conversationID, err := h.channelConversationIDWithDB(ctx, exec, parseUUID(ch.ID))
 	if err != nil {
 		return channelAgentPromptTxResult{}, fmt.Errorf("load channel conversation: %w", err)
@@ -3701,6 +3707,15 @@ func (h *Handler) enqueueChannelAgentPromptRangeWithTx(ctx context.Context, qtx 
 	}
 	if seqTo <= 0 || seqTo < seqFrom {
 		seqTo = seqFrom
+	}
+	if coalesced, ok, err := h.coalesceDirectedIssueInboxEventTx(ctx, qtx, exec, ch, agent, trigger, prompt, reason, priority, seqFrom, seqTo, conversationID); err != nil {
+		return channelAgentPromptTxResult{}, err
+	} else if ok {
+		return coalesced, nil
+	}
+	promptMsg, err := h.createChannelAgentPromptMessageWithDB(ctx, exec, session.ID, prompt, ch.Kind, trigger)
+	if err != nil {
+		return channelAgentPromptTxResult{}, fmt.Errorf("create channel agent prompt: %w", err)
 	}
 	event, err := qtx.CreateAgentInboxEvent(ctx, db.CreateAgentInboxEventParams{
 		WorkspaceID:     parseUUID(ch.WorkspaceID),
@@ -3750,6 +3765,137 @@ func (h *Handler) enqueueChannelAgentPromptRangeWithTx(ctx context.Context, qtx 
 		}
 	}
 	return channelAgentPromptTxResult{Event: event, AgentSession: agentSession}, nil
+}
+
+func channelDirectedCoalesceReason(reason string) bool {
+	switch strings.TrimSpace(reason) {
+	case "mention", "thread_reply", "handoff":
+		return true
+	default:
+		return false
+	}
+}
+
+func channelIssueReferenceTerms(trigger ChannelMessageResponse) ([]string, []string) {
+	ids := map[string]struct{}{}
+	labels := map[string]struct{}{}
+	for _, part := range trigger.Parts {
+		if part.Type != protocol.MessagePartTypeReference || part.RefType != "issue-ref" {
+			continue
+		}
+		if refID := strings.TrimSpace(part.RefID); refID != "" {
+			ids[refID] = struct{}{}
+		}
+		if label := strings.ToUpper(strings.TrimSpace(part.Label)); label != "" {
+			labels[label] = struct{}{}
+		}
+	}
+	for _, match := range channelIssueLabelPattern.FindAllString(strings.ToUpper(trigger.Content), -1) {
+		labels[match] = struct{}{}
+	}
+	return sortedStringKeys(ids), sortedStringKeys(labels)
+}
+
+func sortedStringKeys(values map[string]struct{}) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for value := range values {
+		out = append(out, value)
+	}
+	return out
+}
+
+func (h *Handler) coalesceDirectedIssueInboxEventTx(ctx context.Context, qtx *db.Queries, exec db.DBTX, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, prompt, reason string, priority int32, seqFrom, seqTo int64, conversationID pgtype.UUID) (channelAgentPromptTxResult, bool, error) {
+	if !channelDirectedCoalesceReason(reason) {
+		return channelAgentPromptTxResult{}, false, nil
+	}
+	issueIDs, issueLabels := channelIssueReferenceTerms(trigger)
+	rootID := pgtype.UUID{}
+	if trigger.ThreadRootMessageID != nil && strings.TrimSpace(*trigger.ThreadRootMessageID) != "" {
+		rootID = parseUUID(*trigger.ThreadRootMessageID)
+	}
+	if len(issueIDs) == 0 && len(issueLabels) == 0 && !rootID.Valid {
+		return channelAgentPromptTxResult{}, false, nil
+	}
+
+	var existingEventID, existingAgentSessionID, existingChatSessionID pgtype.UUID
+	var existingSeqFrom, existingSeqTo int64
+	err := exec.QueryRow(ctx, `
+		SELECT e.id, e.agent_session_id, e.chat_session_id, e.seq_from, e.seq_to
+		FROM agent_inbox_event e
+		LEFT JOIN channel_message cm ON cm.id = e.source_message_id
+		WHERE e.conversation_id = $1
+		  AND e.agent_id = $2
+		  AND e.reason = $3
+		  AND e.requires_wake = true
+		  AND e.status IN ('pending', 'draining', 'failed')
+		  AND (
+		    (cardinality($4::text[]) > 0 AND EXISTS (
+		      SELECT 1 FROM jsonb_array_elements(COALESCE(cm.parts, '[]'::jsonb)) part
+		      WHERE part->>'type' = 'reference'
+		        AND part->>'ref_type' = 'issue-ref'
+		        AND part->>'ref_id' = ANY($4::text[])
+		    ))
+		    OR (cardinality($5::text[]) > 0 AND (
+		      EXISTS (
+		        SELECT 1 FROM jsonb_array_elements(COALESCE(cm.parts, '[]'::jsonb)) part
+		        WHERE part->>'type' = 'reference'
+		          AND part->>'ref_type' = 'issue-ref'
+		          AND upper(part->>'label') = ANY($5::text[])
+		      )
+		      OR EXISTS (
+		        SELECT 1 FROM unnest($5::text[]) label
+		        WHERE upper(COALESCE(cm.content, '')) LIKE '%' || label || '%'
+		      )
+		    ))
+		    OR ($6::uuid IS NOT NULL AND (cm.thread_root_message_id = $6::uuid OR cm.id = $6::uuid))
+		  )
+		  AND e.created_at >= now() - make_interval(secs => $7::double precision)
+		ORDER BY CASE e.status WHEN 'draining' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END, e.created_at ASC
+		LIMIT 1
+		FOR UPDATE OF e`, conversationID, agent.ID, reason, issueIDs, issueLabels, nullableUUID(rootID), channelDirectedIssueCooldown.Seconds()).Scan(&existingEventID, &existingAgentSessionID, &existingChatSessionID, &existingSeqFrom, &existingSeqTo)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return channelAgentPromptTxResult{}, false, nil
+		}
+		return channelAgentPromptTxResult{}, false, fmt.Errorf("load coalescable directed inbox event: %w", err)
+	}
+	if existingSeqFrom > 0 && existingSeqFrom < seqFrom {
+		seqFrom = existingSeqFrom
+	}
+	if existingSeqTo > seqTo {
+		seqTo = existingSeqTo
+	}
+	if _, err := exec.Exec(ctx, `
+		UPDATE agent_inbox_event
+		SET source_message_id = COALESCE($2, source_message_id),
+		    status = CASE WHEN status = 'failed' THEN 'pending' ELSE status END,
+		    priority = GREATEST(priority, $3),
+		    seq_from = $4,
+		    seq_to = $5,
+		    updated_at = now()
+		WHERE id = $1`, existingEventID, nullableUUID(channelAmbientTriggerID(trigger)), priority, seqFrom, seqTo); err != nil {
+		return channelAgentPromptTxResult{}, false, fmt.Errorf("coalesce directed inbox event: %w", err)
+	}
+	if _, err := exec.Exec(ctx, `
+		UPDATE chat_message
+		SET content = $3
+		WHERE chat_session_id = $1
+		  AND task_id = $2
+		  AND role = 'user'`, existingChatSessionID, existingEventID, prompt); err != nil {
+		return channelAgentPromptTxResult{}, false, fmt.Errorf("refresh directed inbox prompt: %w", err)
+	}
+	event, err := qtx.GetAgentInboxEvent(ctx, existingEventID)
+	if err != nil {
+		return channelAgentPromptTxResult{}, false, fmt.Errorf("reload coalesced inbox event: %w", err)
+	}
+	agentSession, err := qtx.GetAgentSession(ctx, existingAgentSessionID)
+	if err != nil {
+		return channelAgentPromptTxResult{}, false, fmt.Errorf("reload coalesced agent session: %w", err)
+	}
+	return channelAgentPromptTxResult{Event: event, AgentSession: agentSession, Coalesced: true}, true, nil
 }
 
 func (h *Handler) enqueueOrCoalesceChannelMessageWakeWithTx(ctx context.Context, qtx *db.Queries, exec db.DBTX, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID, conversationID, workspaceID pgtype.UUID, cursorSeq, pendingToSeq int64) (channelAgentPromptTxResult, error) {
@@ -3813,7 +3959,7 @@ func (h *Handler) enqueueOrCoalesceChannelMessageWakeWithTx(ctx context.Context,
 		if err != nil {
 			return channelAgentPromptTxResult{}, fmt.Errorf("reload channel message wake agent session: %w", err)
 		}
-		return channelAgentPromptTxResult{Event: event, AgentSession: agentSession}, nil
+		return channelAgentPromptTxResult{Event: event, AgentSession: agentSession, Coalesced: true}, nil
 	}
 	return h.enqueueChannelAgentPromptRangeWithTx(ctx, qtx, exec, ch, agent, trigger, initiatorUserID, prompt, channelMessageWakeReason, channelMessageWakePriority, cursorSeq+1, pendingToSeq)
 }
@@ -4304,8 +4450,42 @@ func appendChannelFacilitatorPromptSection(b *strings.Builder, state channelFaci
 	}
 }
 
+func channelMessageAmbientSkipReason(trigger ChannelMessageResponse) (bool, string) {
+	if !channelMessageIsHumanAuthored(trigger.Type) {
+		return true, "non_human_trigger"
+	}
+	if channelMessageHasAgentMention(trigger.Content, trigger.Parts) {
+		return true, "directed_agent_mention"
+	}
+	if channelMessageHasOnlyNonTextNoiseParts(trigger.Parts) {
+		return true, channelAmbientGateReasonNonTextNoise
+	}
+	if skip, reason := deterministicChannelAmbientRelevanceSkip(trigger.Content); skip {
+		return true, reason
+	}
+	return false, ""
+}
+
+func channelMessageHasOnlyNonTextNoiseParts(parts []protocol.MessagePart) bool {
+	if len(parts) == 0 {
+		return false
+	}
+	for _, part := range parts {
+		switch part.Type {
+		case protocol.MessagePartTypeSticker, protocol.MessagePartTypeSystemEvent:
+			continue
+		case protocol.MessagePartTypeText:
+			if strings.TrimSpace(part.Text) == "" {
+				continue
+			}
+		}
+		return false
+	}
+	return true
+}
+
 func (h *Handler) dispatchChannelAmbientObservation(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
-	if trigger.Type == "agent" {
+	if skip, _ := channelMessageAmbientSkipReason(trigger); skip {
 		return
 	}
 	for _, agent := range h.channelAgentMembers(ctx, ch.WorkspaceID, ch.ID) {
@@ -4322,6 +4502,9 @@ func (h *Handler) dispatchChannelAmbientDelivery(ctx context.Context, ch Channel
 }
 
 func (h *Handler) dispatchChannelAmbientDeliveryExcept(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, skipAgentIDs map[string]struct{}) {
+	if skip, _ := channelMessageAmbientSkipReason(trigger); skip {
+		return
+	}
 	for _, agent := range h.channelAgentMembers(ctx, ch.WorkspaceID, ch.ID) {
 		if _, skip := skipAgentIDs[uuidToString(agent.ID)]; skip {
 			continue
@@ -4421,11 +4604,26 @@ func buildChannelAmbientObservationPrompt(ch ChannelResponse, agent db.Agent, tr
 	return b.String()
 }
 
+func channelMentionPromptNeedsMemberDirectory(trigger ChannelMessageResponse) bool {
+	// Human-authored prompts often need exact mention links for escalation. Agent
+	// handoffs already carry structured mention parts, so omit the roster there to
+	// keep repeated coordination prompts small.
+	return channelMessageIsHumanAuthored(trigger.Type)
+}
+
 func (h *Handler) buildChannelMentionPrompt(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, facilitatorState channelFacilitatorState) string {
-	members := h.channelMemberSummaries(ctx, ch.WorkspaceID, ch.ID)
-	messages := h.recentChannelMessages(ctx, ch.WorkspaceID, ch.ID, channelContextMessageLimit)
+	limit := channelContextMessageLimit
+	if trigger.Type == "agent" || trigger.ThreadRootMessageID != nil {
+		limit = channelAgentDirectedContextMessageLimit
+	}
+	var members []ChannelMemberResponse
+	includeMembers := channelMentionPromptNeedsMemberDirectory(trigger)
+	if includeMembers {
+		members = h.channelMemberSummaries(ctx, ch.WorkspaceID, ch.ID)
+	}
+	messages := h.recentChannelMessages(ctx, ch.WorkspaceID, ch.ID, limit)
 	if trigger.ThreadRootMessageID != nil {
-		messages = h.channelThreadContextMessages(ctx, ch.WorkspaceID, ch.ID, *trigger.ThreadRootMessageID, channelContextMessageLimit)
+		messages = h.channelThreadContextMessages(ctx, ch.WorkspaceID, ch.ID, *trigger.ThreadRootMessageID, limit)
 	}
 	messages = channelContextMessagesExcludingTrigger(messages, trigger.ID)
 

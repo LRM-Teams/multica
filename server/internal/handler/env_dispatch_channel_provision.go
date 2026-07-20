@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -104,6 +106,22 @@ type ProvisionEnvDispatchAgentResult struct {
 // indefinitely in progress.
 const envDispatchRuntimeReadinessTimeout = 2 * time.Minute
 
+// envDispatchDerivedAgentEnabled gates the derived-agent provisioning path
+// (ARE-5 feature flag, openspec env-dispatch-agent-runtime-config Task 8.3).
+// Set ENV_DISPATCH_DERIVED_AGENT=false to disable new derived-agent
+// provisioning as a rollout kill-switch. Default true: the scratch
+// first-address path is already fully migrated to the derived flow (no legacy
+// pre-create scratch path remains), so defaulting false would reject all
+// scratch provisioning and break the suite. Prod rollout should set the env
+// explicitly; see verify report for the open default decision.
+func envDispatchDerivedAgentEnabled() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("ENV_DISPATCH_DERIVED_AGENT")))
+	if v == "" {
+		return true
+	}
+	return v != "false" && v != "0" && v != "no"
+}
+
 // provisionEnvDispatchAgent creates the isolated runtime/session pair that an
 // EnvDispatch-bound channel agent must use. It intentionally does not call the
 // ordinary channel session helper, which would select the agent's shared
@@ -118,6 +136,9 @@ const envDispatchRuntimeReadinessTimeout = 2 * time.Minute
 // because CloneSandboxInstance requires a destination runtime_id; migrating it
 // to the pre-create-free discovery flow is a follow-up.
 func (h *Handler) provisionEnvDispatchAgent(ctx context.Context, in ProvisionEnvDispatchAgentInput) (ProvisionEnvDispatchAgentResult, error) {
+	if !envDispatchDerivedAgentEnabled() {
+		return ProvisionEnvDispatchAgentResult{}, fmt.Errorf("env-dispatch derived-agent provisioning is disabled")
+	}
 	store := envDispatchChannelStore{}
 	won, binding, err := store.claimProvisioning(ctx, h.DB, in.EnvID, in.AgentID)
 	if err != nil {
@@ -132,6 +153,15 @@ func (h *Handler) provisionEnvDispatchAgent(ctx context.Context, in ProvisionEnv
 			}
 		}
 		return ProvisionEnvDispatchAgentResult{}, fmt.Errorf("env-dispatch binding is %s", binding.Status)
+	}
+
+	// Credential owner invariant (spec AC-4): a binding's model credential owner
+	// must equal its source agent. A mismatch means a credential was resolved for
+	// a different source agent and must never reach the sandbox; fail closed and
+	// leave the binding retryable so the caller can re-resolve correctly.
+	if err := validateEnvDispatchCredentialOwner(binding, in.AgentID); err != nil {
+		_ = store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "model credential owner mismatch")
+		return ProvisionEnvDispatchAgentResult{}, err
 	}
 
 	configJSON := in.SandboxConfig

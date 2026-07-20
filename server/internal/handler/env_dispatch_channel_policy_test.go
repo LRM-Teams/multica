@@ -99,6 +99,18 @@ func TestEnvDispatchSandboxConfigCodec_EmptyDefaultsToDefaultTemplate(t *testing
 	}
 }
 
+// TestEnvDispatchSandboxConfigCodec_TrimsStoredTemplate verifies legacy binding
+// configs with surrounding whitespace are canonicalized before provisioning.
+func TestEnvDispatchSandboxConfigCodec_TrimsStoredTemplate(t *testing.T) {
+	decoded, err := decodeEnvDispatchSandboxConfig(json.RawMessage(`{"template":"  python  "}`))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if decoded.Template != "python" {
+		t.Fatalf("decoded template = %q, want python", decoded.Template)
+	}
+}
+
 // TestEnvDispatchSandboxConfig_SandboxInstanceRefHasNoRuntimeSecret
 // verifies the runtime policy is never stored on SandboxInstanceRef: even a
 // populated ref (with unrelated RuntimeMetadata) cannot carry the API key. The

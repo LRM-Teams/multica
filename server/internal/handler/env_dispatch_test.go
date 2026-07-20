@@ -222,6 +222,19 @@ func TestEnvDispatch_ParsesPerAgentEnv(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "per_agent_env spec for agent") {
 		t.Fatalf("body should mention per_agent_env shape error; got %s", w.Body.String())
 	}
+
+	// A runtime-only spec advances past the old "needs a template or base_env_id"
+	// shape error: the runtime is a valid scratch policy, so synchronous shape
+	// validation passes and the dispatch proceeds. The synthetic API key must
+	// not surface in the response.
+	runtimeBody := `{"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"squad_id":"` + validUUID + `","message":{"content":"hi"},"per_agent_env":{"` + validUUID + `":{"runtime":{"base_url":"https://provider.invalid/v1","api_key":"synthetic-secret-for-tests","model":"model-a"}}}}`
+	w2 := doEnvDispatch(t, runtimeBody)
+	if strings.Contains(w2.Body.String(), "needs a template") {
+		t.Fatalf("runtime-only spec must advance past the shape error; got %s", w2.Body.String())
+	}
+	if strings.Contains(w2.Body.String(), "synthetic-secret-for-tests") {
+		t.Fatalf("response must not contain the runtime API key; got %s", w2.Body.String())
+	}
 }
 
 // TestMapRollouts_IncludesSandboxRefs verifies that SandboxRefs and
@@ -258,6 +271,52 @@ func TestMapRollouts_IncludesSandboxRefs(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "agent_sandbox_refs") {
 		t.Fatalf("JSON should include agent_sandbox_refs: %s", body)
+	}
+	// The runtime policy is a separate internal type
+	// (ResolvedPerAgentSandboxPolicy) and is never stored on SandboxInstanceRef,
+	// so the marshaled rollout JSON - which carries only SandboxInstanceRef -
+	// cannot leak the API key. The type-level guarantee is asserted in
+	// TestEnvDispatchSandboxConfigCodec_SandboxInstanceRefHasNoRuntimeSecret.
+	if strings.Contains(string(body), "synthetic-secret-for-tests") {
+		t.Fatalf("rollout JSON must not contain the runtime API key: %s", body)
+	}
+}
+
+// TestMapPerAgentEnvSpecs verifies mapPerAgentEnvSpecs maps template,
+// base_env_id, and runtime from the request to the service spec. The runtime
+// is mapped field-by-field into a new service.ExternalModelRuntime (the handler
+// and service types differ, so the compiler enforces a fresh allocation rather
+// than retaining the handler-layer pointer).
+func TestMapPerAgentEnvSpecs(t *testing.T) {
+	in := map[string]PerAgentEnvRequest{
+		"agent-template": {Template: "python"},
+		"agent-base":     {BaseEnvID: "base-env-1"},
+		"agent-runtime": {Runtime: &ExternalModelRuntimeRequest{
+			BaseURL: "https://provider.invalid/v1",
+			APIKey:  "synthetic-secret-for-tests",
+			Model:   "model-a",
+		}},
+	}
+	out := mapPerAgentEnvSpecs(in)
+	if len(out) != 3 {
+		t.Fatalf("want 3 specs, got %d (%+v)", len(out), out)
+	}
+	byAgent := map[string]service.PerAgentEnvSpec{}
+	for _, s := range out {
+		byAgent[s.AgentID] = s
+	}
+	if byAgent["agent-template"].Template != "python" {
+		t.Fatalf("template not mapped: %+v", byAgent["agent-template"])
+	}
+	if byAgent["agent-base"].BaseEnvID != "base-env-1" {
+		t.Fatalf("base_env_id not mapped: %+v", byAgent["agent-base"])
+	}
+	rt := byAgent["agent-runtime"].Runtime
+	if rt == nil {
+		t.Fatalf("runtime not mapped")
+	}
+	if rt.BaseURL != "https://provider.invalid/v1" || rt.APIKey != "synthetic-secret-for-tests" || rt.Model != "model-a" {
+		t.Fatalf("runtime fields not mapped: %+v", rt)
 	}
 }
 

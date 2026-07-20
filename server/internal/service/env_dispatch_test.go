@@ -121,6 +121,7 @@ type fakeEnvDispatchDeps struct {
 	resolveEnvSpecCalls []PerAgentEnvSpec
 	messageRoster       MessageRoster
 	channels            map[string]string
+	createChannelSpecs  map[string]ResolvedPerAgentSandboxPolicy
 	channelMessages     []string
 	channelRuns         []ChannelRunInput
 	triggers            []EnvCollaborationTrigger
@@ -146,11 +147,12 @@ func (f *fakeEnvDispatchDeps) ResolveMessageRoster(_ context.Context, _, agentID
 	}
 	return MessageRoster{LeaderID: agentID, AgentIDs: []string{agentID}}, nil
 }
-func (f *fakeEnvDispatchDeps) CreateEnvDispatchChannel(_ context.Context, _, _, projectID, _ string, _ MessageRoster, _ map[string]SandboxInstanceRef) (string, error) {
+func (f *fakeEnvDispatchDeps) CreateEnvDispatchChannel(_ context.Context, _, _, projectID, _ string, _ MessageRoster, specs map[string]ResolvedPerAgentSandboxPolicy) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	id := fmt.Sprintf("channel-%d", len(f.channels))
 	f.channels[id] = projectID
+	f.createChannelSpecs = specs
 	return id, nil
 }
 func (f *fakeEnvDispatchDeps) DeleteChannel(_ context.Context, _, channelID string) error {
@@ -475,7 +477,7 @@ func (f *fakeEnvDispatchDeps) ValidateAgentInWorkspaceOrSquad(_ context.Context,
 	return nil
 }
 
-func (f *fakeEnvDispatchDeps) ResolvePerAgentEnvSpec(_ context.Context, _ string, spec PerAgentEnvSpec) (SandboxInstanceRef, error) {
+func (f *fakeEnvDispatchDeps) ResolvePerAgentEnvSpec(_ context.Context, _ string, spec PerAgentEnvSpec) (ResolvedPerAgentSandboxPolicy, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.resolveEnvSpecCalls = append(f.resolveEnvSpecCalls, spec)
@@ -485,14 +487,16 @@ func (f *fakeEnvDispatchDeps) ResolvePerAgentEnvSpec(_ context.Context, _ string
 	}
 	if f.resolveEnvSpecErrs != nil {
 		if err, ok := f.resolveEnvSpecErrs[key]; ok {
-			return SandboxInstanceRef{}, err
+			return ResolvedPerAgentSandboxPolicy{}, err
 		}
 	}
 	template := spec.Template
 	if template == "" {
 		template = "default"
 	}
-	return SandboxInstanceRef{Template: template, WorkspaceID: spec.AgentID}, nil
+	// The fake returns the runtime as-is; synchronous shape validation has
+	// already normalized/validated it before this DB-backed seam runs.
+	return ResolvedPerAgentSandboxPolicy{Template: template, Runtime: spec.Runtime}, nil
 }
 
 // Helper: seed a base env in the fake.
@@ -1588,8 +1592,10 @@ func TestEnvDispatchPerAgentEnvSpecs_ShapeValidation(t *testing.T) {
 		{"empty ok", nil, ""},
 		{"valid template ok", []PerAgentEnvSpec{{AgentID: "a", Template: "python"}}, ""},
 		{"valid base_env ok", []PerAgentEnvSpec{{AgentID: "a", BaseEnvID: "base"}}, ""},
+		{"valid runtime only ok", []PerAgentEnvSpec{{AgentID: "a", Runtime: &ExternalModelRuntime{BaseURL: "https://provider.invalid/v1", APIKey: "k", Model: "m"}}}, ""},
+		{"valid runtime with template ok", []PerAgentEnvSpec{{AgentID: "a", Template: "python", Runtime: &ExternalModelRuntime{BaseURL: "https://provider.invalid/v1", APIKey: "k", Model: "m"}}}, ""},
 		{"empty agent_id rejected", []PerAgentEnvSpec{{Template: "python"}}, "validation_failed: per_agent_env agent_id is required"},
-		{"missing template and base_env rejected", []PerAgentEnvSpec{{AgentID: "a"}}, "validation_failed: per_agent_env spec for agent a needs a template or base_env_id"},
+		{"missing template base_env and runtime rejected", []PerAgentEnvSpec{{AgentID: "a"}}, "validation_failed: per_agent_env spec for agent a needs a template, base_env_id, or runtime"},
 		{"both template and base_env rejected", []PerAgentEnvSpec{{AgentID: "a", Template: "python", BaseEnvID: "base"}}, "validation_failed: per_agent_env spec for agent a must set template or base_env_id, not both"},
 		{"duplicate agent rejected", []PerAgentEnvSpec{{AgentID: "a", Template: "x"}, {AgentID: "a", Template: "y"}}, "validation_failed: per_agent_env agent_id a is duplicated"},
 	}
@@ -1616,6 +1622,178 @@ func TestEnvDispatchPerAgentEnvSpecs_ShapeValidation(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestEnvDispatchPerAgentEnvSpecs_RuntimeValidation exercises runtime policy
+// validation end-to-end through Dispatch: a runtime-only scratch message spec
+// (with whitespace) is accepted and creates the channel binding, while a
+// partial runtime, a relative/non-HTTP URL, a runtime on a branch or issue
+// dispatch, and a runtime on the training target are all rejected before any
+// rollout resource (env/project/channel/sandbox/task) is created. The
+// synthetic API key must never reach the dispatch response or an error.
+func TestEnvDispatchPerAgentEnvSpecs_RuntimeValidation(t *testing.T) {
+	validRuntime := &ExternalModelRuntime{
+		BaseURL: " https://provider.invalid/v1 ",
+		APIKey:  " synthetic-secret-for-tests ",
+		Model:   " model-a ",
+	}
+	sentinel := "synthetic-secret-for-tests"
+
+	cases := []struct {
+		name    string
+		modify  func(in *EnvDispatchInput)
+		wantErr bool
+	}{
+		{
+			name: "runtime only scratch success",
+			modify: func(in *EnvDispatchInput) {
+				in.PerAgentEnvSpecs = []PerAgentEnvSpec{{AgentID: "agent-a", Runtime: validRuntime}}
+			},
+			wantErr: false,
+		},
+		{
+			name: "partial runtime rejected",
+			modify: func(in *EnvDispatchInput) {
+				in.PerAgentEnvSpecs = []PerAgentEnvSpec{{AgentID: "agent-a", Runtime: &ExternalModelRuntime{BaseURL: "https://provider.invalid/v1", APIKey: "", Model: "m"}}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "relative url rejected",
+			modify: func(in *EnvDispatchInput) {
+				in.PerAgentEnvSpecs = []PerAgentEnvSpec{{AgentID: "agent-a", Runtime: &ExternalModelRuntime{BaseURL: "/v1", APIKey: "k", Model: "m"}}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "non-http url rejected",
+			modify: func(in *EnvDispatchInput) {
+				in.PerAgentEnvSpecs = []PerAgentEnvSpec{{AgentID: "agent-a", Runtime: &ExternalModelRuntime{BaseURL: "ftp://provider.invalid/v1", APIKey: "k", Model: "m"}}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "branch runtime rejected",
+			modify: func(in *EnvDispatchInput) {
+				in.Mode = EnvModeBranch
+				in.PerAgentEnvSpecs = []PerAgentEnvSpec{{AgentID: "agent-a", Runtime: validRuntime}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "issue runtime rejected",
+			modify: func(in *EnvDispatchInput) {
+				in.DispatchType = EnvDispatchIssue
+				in.Domain = EnvDomainSweLego
+				in.Issue = &IssueInput{Title: "t"}
+				in.PerAgentEnvSpecs = []PerAgentEnvSpec{{AgentID: "agent-a", Runtime: validRuntime}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "training target runtime rejected",
+			modify: func(in *EnvDispatchInput) {
+				in.SquadID = ""
+				in.AgentID = "agent-a"
+				in.TrainAgentID = "agent-a"
+				in.PerAgentEnvSpecs = []PerAgentEnvSpec{{AgentID: "agent-a", Runtime: validRuntime}}
+			},
+			wantErr: true,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFakeEnvDispatchDeps()
+			baseEnv := f.seedBaseEnv()
+			svc := NewEnvDispatchService(f, 1)
+			in := EnvDispatchInput{
+				WorkspaceID: "ws", UserID: "u", SquadID: "sq", Mode: EnvModeScratch, EnvID: baseEnv,
+				Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
+				Message: &MessageInput{Content: "hi"},
+			}
+			c.modify(&in)
+			res, err := svc.Dispatch(context.Background(), in)
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("expected validation error, got nil")
+				}
+				if !strings.Contains(err.Error(), "validation_failed") {
+					t.Fatalf("expected validation_failed error, got %v", err)
+				}
+				if strings.Contains(err.Error(), sentinel) {
+					t.Fatalf("error must not format runtime values, got %q", err.Error())
+				}
+				if len(f.envs) != 1 {
+					t.Fatalf("reject must happen before env creation; envs=%d", len(f.envs))
+				}
+				if len(f.channels) != 0 {
+					t.Fatalf("reject must happen before channel creation; channels=%d", len(f.channels))
+				}
+				if len(f.provisionCalls) != 0 {
+					t.Fatalf("reject must happen before provisioning; provisionCalls=%d", len(f.provisionCalls))
+				}
+				if len(f.agentRuns) != 0 {
+					t.Fatalf("reject must happen before task enqueue; agentRuns=%d", len(f.agentRuns))
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("dispatch: %v", err)
+			}
+			if len(f.channels) == 0 {
+				t.Fatalf("expected channel creation for valid runtime")
+			}
+			body, _ := json.Marshal(res)
+			if strings.Contains(string(body), sentinel) {
+				t.Fatalf("response must not contain runtime API key: %s", body)
+			}
+		})
+	}
+}
+
+// TestEnvDispatchPerAgentRuntimePolicy_IsolatedPerAgent verifies that a
+// scratch squad dispatch with two different runtime objects passes one resolved
+// policy per agent to CreateEnvDispatchChannel, each isolated and each resolving
+// to the default template (runtime-only scratch policy).
+func TestEnvDispatchPerAgentRuntimePolicy_IsolatedPerAgent(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	svc := NewEnvDispatchService(f, 1)
+	runtimeA := &ExternalModelRuntime{BaseURL: "https://provider-a.invalid/v1", APIKey: "key-a", Model: "model-a"}
+	runtimeB := &ExternalModelRuntime{BaseURL: "https://provider-b.invalid/v1", APIKey: "key-b", Model: "model-b"}
+
+	_, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", SquadID: "sq", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
+		Message: &MessageInput{Content: "hi"},
+		PerAgentEnvSpecs: []PerAgentEnvSpec{
+			{AgentID: "a1", Runtime: runtimeA},
+			{AgentID: "a2", Runtime: runtimeB},
+		},
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if f.createChannelSpecs == nil {
+		t.Fatalf("expected CreateEnvDispatchChannel to receive a policy map")
+	}
+	if len(f.createChannelSpecs) != 2 {
+		t.Fatalf("expected 2 binding specs, got %d", len(f.createChannelSpecs))
+	}
+	pa := f.createChannelSpecs["a1"]
+	pb := f.createChannelSpecs["a2"]
+	if pa.Template != "default" || pb.Template != "default" {
+		t.Fatalf("runtime-only policies must resolve to template default, got %+v and %+v", pa, pb)
+	}
+	if pa.Runtime == nil || pb.Runtime == nil {
+		t.Fatalf("expected non-nil runtimes on both policies")
+	}
+	if pa.Runtime.BaseURL != "https://provider-a.invalid/v1" || pb.Runtime.BaseURL != "https://provider-b.invalid/v1" {
+		t.Fatalf("per-agent runtimes must be isolated: %+v and %+v", pa, pb)
+	}
+	if pa.Runtime.APIKey == pb.Runtime.APIKey {
+		t.Fatalf("per-agent runtimes must differ")
 	}
 }
 

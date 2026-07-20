@@ -129,22 +129,17 @@ func (h *Handler) provisionEnvDispatchAgent(ctx context.Context, in ProvisionEnv
 	if len(configJSON) == 0 || string(configJSON) == "{}" {
 		configJSON = binding.SandboxConfig
 	}
-	var config struct {
-		Template string `json:"template"`
-	}
-	_ = json.Unmarshal(configJSON, &config)
-	if config.Template == "" {
-		config.Template = "default"
+	config, err := decodeEnvDispatchSandboxConfig(configJSON)
+	if err != nil {
+		return cleanup(fmt.Errorf("decode binding sandbox config: %w", err))
 	}
 	lifecycle := newEnvSandboxLifecycleService(h)
 	if lifecycle == nil {
 		return cleanup(fmt.Errorf("sandbox lifecycle unavailable"))
 	}
-	createInput := service.CreateSandboxInstanceInput{
-		WorkspaceID:   in.WorkspaceID,
-		Template:      config.Template,
-		DaemonEnabled: true,
-		RuntimeEnv:    map[string]string{"MULTICA_DAEMON_ID": daemonID},
+	createInput, err := config.createInput(in.WorkspaceID, daemonID)
+	if err != nil {
+		return cleanup(err)
 	}
 	// A branch trigger (or a copied binding that carried a source sandbox)
 	// clones the source filesystem so the agent resumes with its state. A

@@ -5,6 +5,7 @@ import { ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { MemoizedMarkdown } from "../../../common/markdown";
+import { ChannelChip } from "../../../channels/components/channel-chip";
 import { useViewingTimezone } from "../../../common/use-viewing-timezone";
 import {
   type ActivityEvent,
@@ -221,7 +222,35 @@ function ActivityRow({
             aria-label={detailOverflowed ? ACTIVITY_CHROME_EN.expanded_detail_scrollable : undefined}
             onScroll={updateDetailOverflow}
           >
-            {isCommand ? (
+            {expansion?.kind === "freshness_hold" ? (
+              <div className="flex flex-col gap-1" data-testid="activity-freshness-hold">
+                {expansion.target ? (
+                  <div className="flex items-center gap-1">
+                    <span className="text-muted-foreground/70">
+                      {ACTIVITY_CHROME_EN.hold_target_label}
+                    </span>
+                    <ChannelChip name={expansion.target} />
+                  </div>
+                ) : null}
+                {expansion.newCount != null ? (
+                  <div>
+                    <span className="text-muted-foreground/70">
+                      {ACTIVITY_CHROME_EN.hold_new_messages_label}
+                    </span>{" "}
+                    {expansion.newCount}{" "}
+                    {expansion.newCount === 1
+                      ? ACTIVITY_CHROME_EN.hold_newer_message
+                      : ACTIVITY_CHROME_EN.hold_newer_messages}
+                  </div>
+                ) : null}
+                <div>
+                  <span className="text-muted-foreground/70">
+                    {ACTIVITY_CHROME_EN.hold_decision_label}
+                  </span>{" "}
+                  {ACTIVITY_CHROME_EN.hold_decision_value}
+                </div>
+              </div>
+            ) : isCommand ? (
               <div className="relative">
                 <pre className="overflow-x-auto bg-muted/30 px-2 py-1.5 pr-14 font-mono text-xs leading-5 whitespace-pre-wrap break-words">
                   <code>{expansion.content}</code>

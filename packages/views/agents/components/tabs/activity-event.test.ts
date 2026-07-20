@@ -43,19 +43,39 @@ describe("activityExpansionContent", () => {
     });
   });
 
-  it("does not create disclosure content for fixed status and structured fact rows", () => {
+  it("does not create disclosure content for fixed status rows", () => {
     const idle: ActivityEvent = {
       ...event("custom", "Idle"),
       detail_kind: "agent_status_changed",
       status: "idle",
     };
+    expect(activityExpansionContent(idle)).toBeUndefined();
+  });
+
+  it("expands a held-freshness row into the structured hold block (#765)", () => {
     const freshness: ActivityEvent = {
       ...event("text", "raw transport payload must not surface"),
       detail_kind: "send_freshness_hold_detail",
-      details: { target: "#general", new_message_count: 1 },
+      details: { target: "#general", new_message_count: 3 },
     };
-    expect(activityExpansionContent(idle)).toBeUndefined();
-    expect(activityExpansionContent(freshness)).toBeUndefined();
+    expect(activityExpansionContent(freshness)).toEqual({
+      kind: "freshness_hold",
+      target: "#general",
+      newCount: 3,
+    });
+  });
+
+  it("degrades a held-freshness row to whatever facts the BE supplied (#765)", () => {
+    const freshness: ActivityEvent = {
+      ...event("text", "held"),
+      detail_kind: "send_freshness_hold_detail",
+      details: {},
+    };
+    expect(activityExpansionContent(freshness)).toEqual({
+      kind: "freshness_hold",
+      target: undefined,
+      newCount: undefined,
+    });
   });
 });
 
@@ -438,45 +458,50 @@ describe("activityPresentation — held-freshness projection (#441)", () => {
     expect(p.subtextKey).toBeUndefined();
   });
 
-  it("detail row (text) → same label + English subtext composed from details", () => {
+  it("detail row (text) → label-only, waiting tone; specifics move to the expanded block (#765)", () => {
+    // Iris #765 Raft parity: the collapsed row is just the label; target / new
+    // messages / decision live in the expanded structured block.
     const p = activityPresentation(
-      holdDetail({
-        target: "#general",
-        new_message_count: 3,
-        shown_message_count: 2,
-        omitted_message_count: 1,
-        // internal keys that must NOT leak into the reader-facing subtext:
-        seen_up_to_seq: 41,
-        latest_seq: 44,
-        producer_fact_id: "freshness_decision_fact:abc",
-        transport_id: "t-9",
-        decision: "local_hold",
-        reason: "newer_messages_available",
-      }),
+      holdDetail({ target: "#general", new_message_count: 3, shown_message_count: 2 }),
     );
     expect(p.labelKey).toBe("send_held_by_freshness");
     expect(p.tone).toBe("waiting");
-    expect(p.subtext).toBe(
-      "3 newer messages in #general (2 shown, 1 not yet shown) — send held until the newer context is reviewed.",
-    );
-    // No internal ids / seqs / codes bleed into the visible string.
-    expect(p.subtext).not.toContain("freshness_decision_fact");
-    expect(p.subtext).not.toContain("local_hold");
-    expect(p.subtext).not.toContain("44");
+    expect(p.subtext).toBeUndefined();
+    expect(p.subtextKey).toBeUndefined();
   });
 
-  it("singular new_message_count reads 'message', not 'messages'", () => {
-    expect(activityPresentation(holdDetail({ target: "dm:@ann", new_message_count: 1 })).subtext).toBe(
-      "1 newer message in dm:@ann — send held until the newer context is reviewed.",
+  it("the expanded hold block surfaces only target + new count, never internal ids/seqs/codes (#765)", () => {
+    const expansion = activityExpansionContent(
+      holdDetail({
+        target: "#general",
+        new_message_count: 3,
+        // internal keys that must NOT surface:
+        seen_up_to_seq: 41,
+        producer_fact_id: "freshness_decision_fact:abc",
+        decision: "local_hold",
+      }),
     );
+    expect(expansion).toEqual({ kind: "freshness_hold", target: "#general", newCount: 3 });
+    const serialized = JSON.stringify(expansion);
+    expect(serialized).not.toContain("freshness_decision_fact");
+    expect(serialized).not.toContain("local_hold");
+    expect(serialized).not.toContain("41");
   });
 
-  it("degrades gracefully when details are partial or absent", () => {
-    // Only a target, no counts.
-    expect(activityPresentation(holdDetail({ target: "#general" })).subtext).toBe(
-      "Newer messages in #general — send held until the newer context is reviewed.",
-    );
-    // No details at all → status label only, no subtext (never a fabricated one).
+  it("degrades gracefully when details are partial or absent (#765)", () => {
+    // Only a target → target present, count absent.
+    expect(activityExpansionContent(holdDetail({ target: "#general" }))).toEqual({
+      kind: "freshness_hold",
+      target: "#general",
+      newCount: undefined,
+    });
+    // No details at all → still a hold block, all facts absent (never fabricated).
+    expect(activityExpansionContent(holdDetail(undefined))).toEqual({
+      kind: "freshness_hold",
+      target: undefined,
+      newCount: undefined,
+    });
+    // The collapsed presentation stays label-only regardless.
     const bare = activityPresentation(holdDetail(undefined));
     expect(bare.labelKey).toBe("send_held_by_freshness");
     expect(bare.subtext).toBeUndefined();

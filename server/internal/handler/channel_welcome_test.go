@@ -279,7 +279,7 @@ func TestBuildChannelMentionPromptIncludesCurrentReplyAndQuoteTargets(t *testing
 		"[2026-07-09T10:00:00Z] 用户 (user): 继续",
 		"treat the current message text as the user's question/request",
 		"direct reply/quote target as the referenced message content",
-		"Message target for chat transport: #multica-dev:55555555-5555-5555-5555-555555555555",
+		"Message target for chat transport: #multica-dev",
 		"Current message to respond to:",
 		"用户 (user): 这条我说了什么",
 	} {

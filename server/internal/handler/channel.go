@@ -710,6 +710,12 @@ func (h *Handler) CreateChannel(w http.ResponseWriter, r *http.Request) {
 	if ch.Kind == "group" {
 		h.provisionGroupManagerForNewChannel(r.Context(), workspaceID, parseUUID(ch.ID), parseUUID(userID))
 	}
+	if projectID.Valid {
+		// Creating an already-bound group is still a project/channel association.
+		// Record the same typed system fact as a later settings change so the
+		// timeline has one durable projection regardless of entry point.
+		h.emitChannelProjectSystemEvent(r.Context(), workspaceID, parseUUID(ch.ID), parseUUID(userID), pgtype.UUID{}, projectID)
+	}
 	h.publish(protocol.EventChannelUpdated, workspaceID, "member", userID, ch)
 	writeJSON(w, http.StatusCreated, ch)
 }

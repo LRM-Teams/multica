@@ -42,6 +42,13 @@ func TestCreateChannelProjectBindingAndProjectReverseList(t *testing.T) {
 	if channel.ProjectID == nil || *channel.ProjectID != projectID {
 		t.Fatalf("created project_id = %v, want %s", channel.ProjectID, projectID)
 	}
+	bound := latestChannelProjectSystemEventForTest(t, channel.ID)
+	if bound.Event != channelProjectBoundEvent || bound.Params.ProjectID != projectID || bound.Params.PreviousProjectID != "" {
+		t.Fatalf("created channel project event = %#v, want bound project %s", bound, projectID)
+	}
+	if bound.Params.ActorID != testUserID || bound.Params.ActorType != "human" {
+		t.Fatalf("created channel project actor = %#v, want current human %s", bound.Params, testUserID)
+	}
 
 	missing := httptest.NewRecorder()
 	missingReq := withChannelTestWorkspaceCtx(t, newRequest(http.MethodPut, "/api/channels/"+channel.ID+"/project", map[string]any{}), testUserID)

@@ -353,6 +353,14 @@ func (h *Handler) SetChannelProject(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	var previousProjectID pgtype.UUID
+	if err := h.DB.QueryRow(r.Context(), `
+		SELECT project_id
+		FROM channel
+		WHERE id = $1 AND workspace_id = $2`, channelID, parseUUID(workspaceID)).Scan(&previousProjectID); err != nil {
+		writeError(w, http.StatusNotFound, "channel not found")
+		return
+	}
 	if _, err := h.DB.Exec(r.Context(),
 		`UPDATE channel SET project_id = $2, updated_at = now() WHERE id = $1 AND workspace_id = $3`,
 		channelID, projectID, parseUUID(workspaceID),
@@ -364,6 +372,7 @@ func (h *Handler) SetChannelProject(w http.ResponseWriter, r *http.Request) {
 	if projectID.Valid {
 		out = uuidToString(projectID)
 	}
+	h.emitChannelProjectSystemEvent(r.Context(), workspaceID, channelID, parseUUID(userID), previousProjectID, projectID)
 	writeJSON(w, http.StatusOK, map[string]string{"project_id": out})
 }
 

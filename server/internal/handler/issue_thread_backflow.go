@@ -13,6 +13,7 @@ import (
 )
 
 const (
+	issueThreadCreatedEvent       = "issue_created"
 	issueThreadAssignedEvent      = "issue_assigned"
 	issueThreadStatusChangedEvent = "issue_status_changed"
 	issueThreadCompletedEvent     = "issue_completed"
@@ -39,16 +40,36 @@ type issueThreadBackflowTarget struct {
 	Type string
 }
 
-// emitIssueThreadBackflow records the narrow set of issue facts that belong in
-// the originating discussion. Source anchors are always thread roots, but the
-// query defensively normalizes older data as well. An unanchored issue is a
-// normal no-op: it has no conversation to update.
+// issueThreadBackflowScope identifies one canonical conversation projection for
+// an issue. A direct source anchor wins when it overlaps a project-bound group:
+// it keeps the event in the originating thread instead of duplicating it in the
+// channel timeline. Project-only scopes are still useful for issues that were
+// created outside chat but belong to that project's group.
+type issueThreadBackflowScope struct {
+	ChannelID       pgtype.UUID
+	RootID          pgtype.UUID
+	InitiatorUserID pgtype.UUID
+	DirectSource    bool
+}
+
+// emitIssueThreadBackflow records issue facts in their canonical conversation
+// contexts. A message-backed anchor writes into that source thread; a
+// channel-only anchor writes one low-noise row in the channel timeline. An
+// unanchored issue is a normal no-op: it has no conversation to update.
 func (h *Handler) emitIssueThreadBackflow(ctx context.Context, issue db.Issue, actorType, actorID string, event string, previousStatus string, target issueThreadBackflowTarget) {
-	var channelID, rootID, initiatorUserID pgtype.UUID
-	err := h.DB.QueryRow(ctx, `
+	for _, scope := range h.issueThreadBackflowScopes(ctx, issue) {
+		h.emitIssueThreadBackflowToScope(ctx, issue, actorType, actorID, event, previousStatus, target, scope)
+	}
+}
+
+func (h *Handler) issueThreadBackflowScopes(ctx context.Context, issue db.Issue) []issueThreadBackflowScope {
+	var scopes []issueThreadBackflowScope
+	seenChannelIDs := make(map[string]struct{})
+
+	directRows, err := h.DB.Query(ctx, `
 		SELECT src.channel_id, COALESCE(message.thread_root_message_id, message.id), channel_row.created_by
 		FROM issue_source_message src
-		JOIN channel_message message
+		LEFT JOIN channel_message message
 		  ON message.id = src.message_id
 		 AND message.channel_id = src.channel_id
 		 AND message.workspace_id = src.workspace_id
@@ -57,12 +78,58 @@ func (h *Handler) emitIssueThreadBackflow(ctx context.Context, issue db.Issue, a
 		 AND channel_row.workspace_id = src.workspace_id
 		WHERE src.issue_id = $1
 		  AND src.workspace_id = $2
-		  AND message.deleted_at IS NULL
-		  AND channel_row.archived_at IS NULL`, issue.ID, issue.WorkspaceID).Scan(&channelID, &rootID, &initiatorUserID)
+		  AND (src.message_id IS NULL OR (message.id IS NOT NULL AND message.deleted_at IS NULL))
+		  AND channel_row.archived_at IS NULL`, issue.ID, issue.WorkspaceID)
 	if err != nil {
-		return
+		return scopes
 	}
-	ch, found := h.getChannel(ctx, uuidToString(issue.WorkspaceID), channelID)
+	defer directRows.Close()
+	for directRows.Next() {
+		var scope issueThreadBackflowScope
+		if err := directRows.Scan(&scope.ChannelID, &scope.RootID, &scope.InitiatorUserID); err != nil {
+			continue
+		}
+		scope.DirectSource = true
+		scopes = append(scopes, scope)
+		seenChannelIDs[uuidToString(scope.ChannelID)] = struct{}{}
+	}
+	if directRows.Err() != nil {
+		return scopes
+	}
+
+	if !issue.ProjectID.Valid {
+		return scopes
+	}
+	projectRows, err := h.DB.Query(ctx, `
+		SELECT id, created_by
+		FROM channel
+		WHERE workspace_id = $1
+		  AND project_id = $2
+		  AND kind = 'group'
+		  AND archived_at IS NULL`, issue.WorkspaceID, issue.ProjectID)
+	if err != nil {
+		return scopes
+	}
+	defer projectRows.Close()
+	for projectRows.Next() {
+		var scope issueThreadBackflowScope
+		if err := projectRows.Scan(&scope.ChannelID, &scope.InitiatorUserID); err != nil {
+			continue
+		}
+		if _, alreadyProjected := seenChannelIDs[uuidToString(scope.ChannelID)]; alreadyProjected {
+			continue
+		}
+		scopes = append(scopes, scope)
+		seenChannelIDs[uuidToString(scope.ChannelID)] = struct{}{}
+	}
+	if projectRows.Err() != nil {
+		return scopes
+	}
+	return scopes
+}
+
+func (h *Handler) emitIssueThreadBackflowToScope(ctx context.Context, issue db.Issue, actorType, actorID string, event string, previousStatus string, target issueThreadBackflowTarget, scope issueThreadBackflowScope) {
+	ch, found := h.getChannel(ctx, uuidToString(issue.WorkspaceID), scope.ChannelID)
 	if !found {
 		return
 	}
@@ -139,19 +206,19 @@ func (h *Handler) emitIssueThreadBackflow(ctx context.Context, issue db.Issue, a
 			Label:      "@" + firstNonEmpty(params.TargetHandle, params.TargetName),
 		})
 	}
-	msg, err := h.insertChannelMessageWithParts(ctx, channelID, issue.WorkspaceID, "system", pgtype.UUID{}, "system", content, parts, "multica", nil, pgtype.UUID{}, rootID, nil, 0)
+	msg, err := h.insertChannelMessageWithPartsMainProjection(ctx, scope.ChannelID, issue.WorkspaceID, "system", pgtype.UUID{}, "system", content, parts, "multica", nil, pgtype.UUID{}, scope.RootID, nil, 0, !scope.RootID.Valid)
 	if err != nil {
 		slog.Warn("issue thread backflow: insert system message", "issue", identifier, "event", event, "error", err)
 		return
 	}
-	h.publishChannelToMembers(ctx, protocol.EventChannelMessage, ch.WorkspaceID, "system", "", channelID, msg)
+	h.publishChannelToMembers(ctx, protocol.EventChannelMessage, ch.WorkspaceID, "system", "", scope.ChannelID, msg)
 
 	// System rows are observable but never ambiently wake agents. A structured
 	// agent reference is the explicit exception: dispatch only that member.
-	if targetAgent.ID.Valid && initiatorUserID.Valid {
+	if scope.DirectSource && targetAgent.ID.Valid && scope.InitiatorUserID.Valid {
 		// The persisted reference is an explicit personal mention, so retain the
 		// established inbox reason instead of adding a parallel event reason.
-		if _, err := h.dispatchChannelAgentReplyWithReason(ctx, ch, targetAgent, msg, initiatorUserID, "mention"); err != nil {
+		if _, err := h.dispatchChannelAgentReplyWithReason(ctx, ch, targetAgent, msg, scope.InitiatorUserID, "mention"); err != nil {
 			slog.Warn("issue thread backflow: dispatch target agent", "issue", identifier, "event", event, "agent", uuidToString(targetAgent.ID), "error", err)
 		}
 	}
@@ -160,6 +227,8 @@ func (h *Handler) emitIssueThreadBackflow(ctx context.Context, issue db.Issue, a
 func issueThreadBackflowContent(event, identifier, status, previousStatus, targetHandle string) string {
 	target := strings.TrimPrefix(strings.TrimSpace(targetHandle), "@")
 	switch event {
+	case issueThreadCreatedEvent:
+		return fmt.Sprintf("%s created", identifier)
 	case issueThreadAssignedEvent:
 		if target != "" {
 			return fmt.Sprintf("%s assigned to @%s", identifier, target)

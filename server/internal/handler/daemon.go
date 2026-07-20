@@ -180,12 +180,13 @@ type DaemonRegisterRequest struct {
 	// may have registered under before switching to a persistent UUID. The
 	// handler merges any matching runtime rows into the new row so agents
 	// and tasks keep working without manual intervention.
-	LegacyDaemonIDs []string `json:"legacy_daemon_ids"`
-	DeviceName      string   `json:"device_name"`
-	CLIVersion      string   `json:"cli_version"` // multica CLI version
-	LaunchedBy      string   `json:"launched_by"` // "desktop" when spawned by the Electron app
-	Capabilities    []string `json:"capabilities"`
-	Runtimes        []struct {
+	LegacyDaemonIDs   []string `json:"legacy_daemon_ids"`
+	DeviceName        string   `json:"device_name"`
+	CLIVersion        string   `json:"cli_version"` // multica CLI version
+	LaunchedBy        string   `json:"launched_by"` // "desktop" when spawned by the Electron app
+	Capabilities      []string `json:"capabilities"`
+	SandboxInstanceID string   `json:"sandbox_instance_id,omitempty"` // daemon-enabled env-dispatch sandboxes forward MULTICA_SANDBOX_INSTANCE_ID so the runtime row carries it for discovery
+	Runtimes          []struct {
 		Name    string `json:"name"`
 		Type    string `json:"type"`
 		Version string `json:"version"` // agent CLI version (claude/codex)
@@ -359,12 +360,19 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		if runtime.Status == "offline" {
 			status = "offline"
 		}
-		metadata, _ := json.Marshal(map[string]any{
+		metadataMap := map[string]any{
 			"version":      runtime.Version,
 			"cli_version":  req.CLIVersion,
 			"launched_by":  req.LaunchedBy,
 			"capabilities": capabilities,
-		})
+		}
+		// sandbox_instance_id is forwarded only by daemon-enabled env-dispatch
+		// sandboxes; recording it on the runtime row lets env-dispatch discover
+		// the online runtime by (workspace, daemon_id, sandbox_instance_id).
+		if sid := strings.TrimSpace(req.SandboxInstanceID); sid != "" {
+			metadataMap["sandbox_instance_id"] = sid
+		}
+		metadata, _ := json.Marshal(metadataMap)
 
 		row, err := h.Queries.UpsertAgentRuntime(r.Context(), db.UpsertAgentRuntimeParams{
 			WorkspaceID: wsUUID,

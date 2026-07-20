@@ -406,8 +406,8 @@ func (h *Handler) UpdateSandboxNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Name                *string `json:"name"`
-		DefaultTemplateID   *string `json:"default_template_id"`
+		Name              *string `json:"name"`
+		DefaultTemplateID *string `json:"default_template_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -893,13 +893,14 @@ func (h *Handler) mintSandboxRuntimeEnv(ctx context.Context, workspaceID, userID
 		return nil, err
 	}
 	return map[string]string{
-		"MULTICA_SERVER_URL":     serverURL,
-		"MULTICA_APP_URL":        firstNonEmptyString(os.Getenv("MULTICA_APP_URL"), serverURL),
-		"MULTICA_WORKSPACE_ID":   uuidToString(workspaceID),
-		"MULTICA_TOKEN":          rawToken,
-		"MULTICA_DAEMON_ENABLED": "1",
-		"MULTICA_PROFILE":        profile,
-		"MULTICA_DAEMON_ID":      uuid.NewString(),
+		"MULTICA_SERVER_URL":          serverURL,
+		"MULTICA_APP_URL":             firstNonEmptyString(os.Getenv("MULTICA_APP_URL"), serverURL),
+		"MULTICA_WORKSPACE_ID":        uuidToString(workspaceID),
+		"MULTICA_TOKEN":               rawToken,
+		"MULTICA_DAEMON_ENABLED":      "1",
+		"MULTICA_PROFILE":             profile,
+		"MULTICA_DAEMON_ID":           uuid.NewString(),
+		"MULTICA_SANDBOX_INSTANCE_ID": instanceID,
 	}, nil
 }
 
@@ -1271,11 +1272,11 @@ func (h *Handler) CreateSandboxSnapshotTemplate(w http.ResponseWriter, r *http.R
 		Error:  pgtype.Text{},
 	})
 	payload := map[string]any{
-		"instance_id":         uuidToString(instanceID),
-		"local_ref":           textValue(inst.LocalRef),
-		"snapshot_id":         uuidToString(snap.ID),
-		"name":                name,
-		"description":         description,
+		"instance_id": uuidToString(instanceID),
+		"local_ref":   textValue(inst.LocalRef),
+		"snapshot_id": uuidToString(snap.ID),
+		"name":        name,
+		"description": description,
 	}
 	rawPayload, _ := json.Marshal(payload)
 	job, err := h.Queries.CreateSandboxJob(r.Context(), db.CreateSandboxJobParams{

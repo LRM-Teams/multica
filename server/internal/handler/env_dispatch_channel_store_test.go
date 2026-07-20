@@ -21,19 +21,19 @@ func TestEnvDispatchChannelStoreClaimProvisioningIsSingleWinner(t *testing.T) {
 	defer tx.Rollback(ctx)
 
 	binding := envAgentSandboxBinding{
-		EnvID: envID, ChannelID: channelID, AgentID: agentID,
+		EnvID: envID, ChannelID: channelID, SourceAgentID: agentID,
 		Status: "pending", SandboxConfig: json.RawMessage(`{"template":"default"}`),
 	}
 	require.NoError(t, store.insertBinding(ctx, tx, binding))
 	won, got, err := store.claimProvisioning(ctx, tx, envID, agentID)
 	require.NoError(t, err)
 	require.True(t, won)
-	require.Equal(t, "provisioning", got.Status)
+	require.Equal(t, "credential_ready", got.Status)
 
 	won, got, err = store.claimProvisioning(ctx, tx, envID, agentID)
 	require.NoError(t, err)
 	require.False(t, won)
-	require.Equal(t, "provisioning", got.Status)
+	require.Equal(t, "credential_ready", got.Status)
 }
 
 func TestEnvDispatchChannelStoreRejectsTriggerAgentOutsideChannel(t *testing.T) {
@@ -56,7 +56,7 @@ func TestEnvDispatchChannelStoreMarkDeletingBlocksProvisioning(t *testing.T) {
 	}
 	ctx, store, envID, channelID, agentID := setupEnvDispatchChannelStoreFixture(t)
 	binding := envAgentSandboxBinding{
-		EnvID: envID, ChannelID: channelID, AgentID: agentID,
+		EnvID: envID, ChannelID: channelID, SourceAgentID: agentID,
 		Status: "pending", SandboxConfig: json.RawMessage(`{"template":"default"}`),
 	}
 	require.NoError(t, store.insertBinding(ctx, testPool, binding))
@@ -132,14 +132,14 @@ func TestEnvDispatchChannelStoreClaimProvisioningRetainsRuntimePolicy(t *testing
 	config, err := marshalEnvDispatchSandboxConfig(policy)
 	require.NoError(t, err)
 	require.NoError(t, store.insertBinding(ctx, tx, envAgentSandboxBinding{
-		EnvID: envID, ChannelID: channelID, AgentID: agentID,
+		EnvID: envID, ChannelID: channelID, SourceAgentID: agentID,
 		Status: "pending", SandboxConfig: config,
 	}))
 
 	won, got, err := store.claimProvisioning(ctx, tx, envID, agentID)
 	require.NoError(t, err)
 	require.True(t, won)
-	require.Equal(t, "provisioning", got.Status)
+	require.Equal(t, "credential_ready", got.Status)
 
 	decoded, err := decodeEnvDispatchSandboxConfig(got.SandboxConfig)
 	require.NoError(t, err)
@@ -197,6 +197,8 @@ func TestEnvDispatchAdapter_CreateChannelPersistsCanonicalPolicy(t *testing.T) {
 	require.Equal(t, "https://provider.invalid/v1", decoded.Runtime.BaseURL)
 	require.Equal(t, "synthetic-secret-for-tests", decoded.Runtime.APIKey)
 	require.Equal(t, "model-a", decoded.Runtime.Model)
+	require.Equal(t, agentID, binding.SourceAgentID)
+	require.Equal(t, agentID, binding.ModelConfigOwnerAgentID)
 
 	// Unconfigured member: "{}" persists, decoding to default template.
 	other, err := store.binding(ctx, testPool, envID, otherAgent)
@@ -206,4 +208,61 @@ func TestEnvDispatchAdapter_CreateChannelPersistsCanonicalPolicy(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "default", otherDecoded.Template)
 	require.Nil(t, otherDecoded.Runtime)
+}
+
+// TestEnvDispatchBindingIdentityAndRetryState verifies the expanded binding
+// identity (id, source_agent_id, model_config_owner_agent_id) is persisted and
+// that the single-flight claim transitions a pending binding to
+// credential_ready, the first-address entry state of the derived provisioning
+// state machine.
+func TestEnvDispatchBindingIdentityAndRetryState(t *testing.T) {
+	if testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx, store, envID, channelID, sourceID := setupEnvDispatchChannelStoreFixture(t)
+	b := envAgentSandboxBinding{
+		ID: uuid.NewString(), EnvID: envID, ChannelID: channelID,
+		SourceAgentID: sourceID, Status: "pending",
+		ModelConfigOwnerAgentID: sourceID,
+		SandboxConfig: json.RawMessage(`{"template":"default"}`),
+	}
+	require.NoError(t, store.insertBinding(ctx, testPool, b))
+	won, claimed, err := store.claimProvisioning(ctx, testPool, envID, sourceID)
+	require.NoError(t, err)
+	require.True(t, won)
+	require.Equal(t, b.ID, claimed.ID)
+	require.Equal(t, sourceID, claimed.SourceAgentID)
+	require.Equal(t, sourceID, claimed.ModelConfigOwnerAgentID)
+	require.Equal(t, "credential_ready", claimed.Status)
+}
+
+// TestAgentLineageRejectsCrossWorkspaceSource verifies the agent.source_agent_id
+// foreign key is workspace-scoped: a derived agent cannot record a source agent
+// from another workspace. The insert supplies a valid foreign-workspace runtime
+// so it clears agent.runtime_id NOT NULL and the only failing constraint is the
+// (workspace_id, source_agent_id) -> agent(workspace_id, id) FK.
+func TestAgentLineageRejectsCrossWorkspaceSource(t *testing.T) {
+	if testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	sourceAgentID := createHandlerTestAgent(t, "Lineage Source Agent", nil)
+	foreignWS := createOtherTestWorkspace(t)
+
+	var foreignRuntimeID string
+	require.NoError(t, testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (workspace_id, name, runtime_mode, provider, status)
+		VALUES ($1, $2, 'cloud', 'multica_agent', 'offline') RETURNING id`,
+		foreignWS, "lineage-foreign-runtime-"+uuid.NewString()).Scan(&foreignRuntimeID))
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, foreignRuntimeID) })
+
+	_, err := testPool.Exec(ctx, `
+		INSERT INTO agent (
+			workspace_id, name, display_name, description, runtime_mode, runtime_config,
+			runtime_id, visibility, max_concurrent_tasks, owner_id,
+			instructions, custom_env, custom_args, mcp_config, source_agent_id
+		)
+		VALUES ($1, $2, $2, '', 'cloud', '{}'::jsonb, $3, 'private', 1, $4, '', '{}'::jsonb, '[]'::jsonb, $5)`,
+		foreignWS, "derived-cross-ws-"+uuid.NewString(), foreignRuntimeID, testUserID, sourceAgentID)
+	require.Error(t, err, "cross-workspace source_agent_id must be rejected by the workspace-scoped FK")
 }

@@ -80,11 +80,19 @@ func (c envDispatchSandboxConfig) createInput(workspaceID, daemonID string) (ser
 		}
 		runtimeJSON = encoded
 	}
+	// MULTICA_DAEMON_ID is only pre-assigned for the branch path (which still
+	// pre-creates a runtime). The scratch first-address path passes "" so the
+	// sandbox lifecycle mints a unique daemon correlation nonce (ref.DaemonID)
+	// and env-dispatch discovers the online runtime after registration.
+	runtimeEnv := map[string]string{}
+	if daemonID != "" {
+		runtimeEnv["MULTICA_DAEMON_ID"] = daemonID
+	}
 	return service.CreateSandboxInstanceInput{
 		WorkspaceID:   workspaceID,
 		Template:      c.Template,
 		DaemonEnabled: true,
 		Runtime:       runtimeJSON,
-		RuntimeEnv:    map[string]string{"MULTICA_DAEMON_ID": daemonID},
+		RuntimeEnv:    runtimeEnv,
 	}, nil
 }

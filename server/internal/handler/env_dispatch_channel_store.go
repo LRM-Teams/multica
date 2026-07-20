@@ -23,23 +23,40 @@ type envCollaborationTrigger struct {
 	RuntimeID           string  `json:"runtime_id"`
 }
 
+// envAgentSandboxBinding is the single-flight provisioning owner for one
+// (env_id, source_agent_id) pair. SourceAgentID is the addressed source/roster
+// agent (the agent_id PK column); source_agent_id is persisted as the same
+// value to carry explicit lineage and back the single-flight unique index.
+// DerivedAgentID is the derived global agent bound to the discovered runtime,
+// NULL until derivation succeeds. ModelConfigOwnerAgentID must equal
+// SourceAgentID; the credential resolver rejects any mismatch.
 type envAgentSandboxBinding struct {
-	EnvID, ChannelID, AgentID, Status                                          string
-	SandboxInstanceID, RuntimeID, DaemonID, SourceSandboxInstanceID, LastError *string
-	SandboxConfig                                                              json.RawMessage
+	ID, EnvID, ChannelID, SourceAgentID, Status string
+	ModelConfigOwnerAgentID                     string
+	DerivedAgentID, SandboxInstanceID, RuntimeID, DaemonID,
+		SourceSandboxInstanceID, LastError,
+		TrainingSessionID, TrainingSessionRef, CredentialKind *string
+	SandboxConfig json.RawMessage
 }
 
 type envDispatchChannelStore struct{ db db.DBTX }
 
 func (s envDispatchChannelStore) insertBinding(ctx context.Context, exec db.DBTX, binding envAgentSandboxBinding) error {
+	if binding.ID == "" {
+		binding.ID = uuid.NewString()
+	}
 	_, err := exec.Exec(ctx, `
 		INSERT INTO environment_agent_sandbox (
-			env_id, channel_id, agent_id, status, sandbox_instance_id, runtime_id,
-			daemon_id, source_sandbox_instance_id, sandbox_config, last_error
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-		binding.EnvID, binding.ChannelID, binding.AgentID, binding.Status,
-		binding.SandboxInstanceID, binding.RuntimeID, binding.DaemonID,
-		binding.SourceSandboxInstanceID, binding.SandboxConfig, binding.LastError,
+			id, env_id, channel_id, agent_id, source_agent_id, derived_agent_id, status,
+			sandbox_instance_id, runtime_id, daemon_id, source_sandbox_instance_id,
+			training_session_id, training_session_ref, credential_kind,
+			model_config_owner_agent_id, sandbox_config, last_error
+		) VALUES ($1, $2, $3, $4, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NULLIF($14, '')::uuid, $15, $16)`,
+		binding.ID, binding.EnvID, binding.ChannelID, binding.SourceAgentID,
+		binding.DerivedAgentID, binding.Status, binding.SandboxInstanceID,
+		binding.RuntimeID, binding.DaemonID, binding.SourceSandboxInstanceID,
+		binding.TrainingSessionID, binding.TrainingSessionRef, binding.CredentialKind,
+		binding.ModelConfigOwnerAgentID, binding.SandboxConfig, binding.LastError,
 	)
 	return err
 }
@@ -66,14 +83,16 @@ func (s envDispatchChannelStore) binding(ctx context.Context, exec db.DBTX, envI
 	return scanEnvAgentSandboxBinding(exec.QueryRow(ctx, bindingSelect+` WHERE env_id = $1 AND agent_id = $2`, envID, agentID))
 }
 
+// claimProvisioning is the single-flight entry point for first-address
+// provisioning. The claimant transitions a pending/failed/failed_retryable
+// binding to credential_ready; concurrent callers observe the winner and wait
+// for the same terminal result.
 func (s envDispatchChannelStore) claimProvisioning(ctx context.Context, exec db.DBTX, envID, agentID string) (bool, envAgentSandboxBinding, error) {
 	binding, err := scanEnvAgentSandboxBinding(exec.QueryRow(ctx, `
 		UPDATE environment_agent_sandbox
-		SET status = 'provisioning', last_error = NULL, updated_at = now()
-		WHERE env_id = $1 AND agent_id = $2 AND status IN ('pending', 'failed')
-		RETURNING env_id::text, channel_id::text, agent_id::text, status,
-			sandbox_instance_id::text, runtime_id::text, daemon_id::text,
-			source_sandbox_instance_id::text, sandbox_config, last_error`, envID, agentID))
+		SET status = 'credential_ready', last_error = NULL, updated_at = now()
+		WHERE env_id = $1 AND agent_id = $2 AND status IN ('pending', 'failed', 'failed_retryable')
+		RETURNING `+bindingColumns, envID, agentID))
 	if err == nil {
 		return true, binding, nil
 	}
@@ -92,7 +111,7 @@ func (s envDispatchChannelStore) markReady(ctx context.Context, exec db.DBTX, en
 		UPDATE environment_agent_sandbox
 		SET status = 'ready', sandbox_instance_id = $3, runtime_id = $4, daemon_id = $5,
 			last_error = NULL, updated_at = now()
-		WHERE env_id = $1 AND agent_id = $2 AND status = 'provisioning'`,
+		WHERE env_id = $1 AND agent_id = $2 AND status IN ('provisioning','credential_ready','sandbox_creating','runtime_waiting','agent_creating')`,
 		envID, agentID, sandboxInstanceID, runtimeID, daemonID)
 	return err
 }
@@ -100,20 +119,21 @@ func (s envDispatchChannelStore) markReady(ctx context.Context, exec db.DBTX, en
 func (s envDispatchChannelStore) markFailed(ctx context.Context, exec db.DBTX, envID, agentID, message string) error {
 	_, err := exec.Exec(ctx, `
 		UPDATE environment_agent_sandbox
-		SET status = 'failed', last_error = $3, updated_at = now()
-		WHERE env_id = $1 AND agent_id = $2 AND status = 'provisioning'`, envID, agentID, message)
+		SET status = 'failed_retryable', last_error = $3, updated_at = now()
+		WHERE env_id = $1 AND agent_id = $2 AND status IN ('provisioning','credential_ready','sandbox_creating','runtime_waiting','agent_creating')`,
+		envID, agentID, message)
 	return err
 }
 
 func (s envDispatchChannelStore) markDeleting(ctx context.Context, exec db.DBTX, envID string) error {
 	// Mark pending/failed/ready bindings deleting so no new provisioning claim
-	// succeeds (claimProvisioning only claims pending/failed). Provisioning
-	// rows are intentionally left alone so an in-flight provisioner can reach a
-	// terminal state the cleanup then reclaims; cleanup waits for that.
+	// succeeds (claimProvisioning only claims pending/failed/failed_retryable).
+	// Provisioning rows are intentionally left alone so an in-flight provisioner
+	// can reach a terminal state the cleanup then reclaims; cleanup waits for that.
 	_, err := exec.Exec(ctx, `
 		UPDATE environment_agent_sandbox
 		SET status = 'deleting', updated_at = now()
-		WHERE env_id = $1 AND status NOT IN ('deleting', 'provisioning')`, envID)
+		WHERE env_id = $1 AND status NOT IN ('deleting', 'deleted') AND status NOT IN ('credential_ready','sandbox_creating','runtime_waiting','agent_creating')`, envID)
 	return err
 }
 
@@ -144,7 +164,7 @@ func (s envDispatchChannelStore) loadTrigger(ctx context.Context, exec db.DBTX, 
 			JOIN channel_member cm ON cm.channel_id = c.id
 			WHERE e.id = $1 AND e.workspace_id = $2 AND c.id = $3 AND p.id = $4
 				AND cm.member_type = 'agent' AND cm.member_id = $5
-		)`, envID, workspaceID, trigger.ChannelID, trigger.ProjectID, trigger.AgentID).Scan(&found)
+			)`, envID, workspaceID, trigger.ChannelID, trigger.ProjectID, trigger.AgentID).Scan(&found)
 	if err != nil {
 		return envCollaborationTrigger{}, err
 	}
@@ -189,10 +209,14 @@ func (trigger envCollaborationTrigger) validate() error {
 	}
 }
 
-const bindingSelect = `
-	SELECT env_id::text, channel_id::text, agent_id::text, status,
-		sandbox_instance_id::text, runtime_id::text, daemon_id::text,
-		source_sandbox_instance_id::text, sandbox_config, last_error
+// bindingColumns lists environment_agent_sandbox columns in scanEnvAgentSandboxBinding order.
+const bindingColumns = `id::text, env_id::text, channel_id::text, agent_id::text, status,
+	model_config_owner_agent_id::text, derived_agent_id::text,
+	sandbox_instance_id::text, runtime_id::text, daemon_id::text,
+	source_sandbox_instance_id::text, last_error,
+	training_session_id, training_session_ref, credential_kind, sandbox_config`
+
+const bindingSelect = `SELECT ` + bindingColumns + `
 	FROM environment_agent_sandbox`
 
 type envDispatchBindingRowScanner interface{ Scan(...any) error }
@@ -200,9 +224,11 @@ type envDispatchBindingRowScanner interface{ Scan(...any) error }
 func scanEnvAgentSandboxBinding(row envDispatchBindingRowScanner) (envAgentSandboxBinding, error) {
 	var binding envAgentSandboxBinding
 	err := row.Scan(
-		&binding.EnvID, &binding.ChannelID, &binding.AgentID, &binding.Status,
+		&binding.ID, &binding.EnvID, &binding.ChannelID, &binding.SourceAgentID, &binding.Status,
+		&binding.ModelConfigOwnerAgentID, &binding.DerivedAgentID,
 		&binding.SandboxInstanceID, &binding.RuntimeID, &binding.DaemonID,
-		&binding.SourceSandboxInstanceID, &binding.SandboxConfig, &binding.LastError,
+		&binding.SourceSandboxInstanceID, &binding.LastError,
+		&binding.TrainingSessionID, &binding.TrainingSessionRef, &binding.CredentialKind, &binding.SandboxConfig,
 	)
 	return binding, err
 }

@@ -64,7 +64,10 @@ var _ trainingTaskStore = (*db.Queries)(nil)
 // implementation is *arealrl.Client; tests inject a fake. The helper never
 // constructs a real client — it is injected via TrainingSessionDeps.
 type arealSessionStarter interface {
-	StartSession(ctx context.Context, taskID, envID string) (arealrl.SessionCreds, error)
+	// StartSession opens an RL session; sessionRef is the canonical session
+	// reference (task id for the legacy training flow, source-binding id for
+	// env-dispatch), forwarded to the bridge as "session_ref".
+	StartSession(ctx context.Context, sessionRef, envID string) (arealrl.SessionCreds, error)
 }
 
 // arealSessionCloser closes an RL session and sets reward via the bridge.
@@ -182,7 +185,7 @@ func (s *TaskService) tryOpenTrainingSession(ctx context.Context, task db.AgentT
 //  2. project has no training_dispatch row -> no-op (not a training project).
 //  3. training_dispatch.train_agent_id != agentID -> no-op (not the target).
 //  4. task already has context.areal_proxy -> no-op (idempotent / retry-safe).
-//  5. otherwise: StartSession(taskID, envID) and merge context.areal_proxy.
+//  5. otherwise: StartSession(sessionRef=taskID, envID) and merge context.areal_proxy.
 //
 // It returns (does NOT swallow) StartSession/persist errors so the caller can
 // log + record. When a task IS a training target but the RL bridge is not

@@ -869,6 +869,14 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 		"capabilities":      daemonRegistrationCapabilities(includeCredentialTransport),
 		"runtimes":          runtimes,
 	}
+	// MULTICA_SANDBOX_INSTANCE_ID is set by mintSandboxRuntimeEnv for daemon-
+	// enabled env-dispatch sandboxes. Forwarding it lets the server record
+	// sandbox_instance_id on the registered runtime so env-dispatch can discover
+	// it by (workspace, daemon_id, sandbox_instance_id). Empty for non-sandbox
+	// daemons (regular machine runtimes), which do not need it.
+	if sid := strings.TrimSpace(os.Getenv("MULTICA_SANDBOX_INSTANCE_ID")); sid != "" {
+		req["sandbox_instance_id"] = sid
+	}
 
 	resp, err := d.client.RegisterForWorkspace(ctx, workspaceID, req)
 	if err != nil {

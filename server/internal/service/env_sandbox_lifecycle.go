@@ -177,8 +177,18 @@ func (s *EnvSandboxLifecycleService) Create(ctx context.Context, in CreateSandbo
 			env[k] = v
 		}
 		in.RuntimeEnv = env
+		// Surface the daemon correlation nonce on the ref so env-dispatch
+		// first-address provisioning can persist it on the binding and later
+		// discover the online runtime by (workspace, daemon_id,
+		// sandbox_instance_id). When the caller did not supply
+		// MULTICA_DAEMON_ID, MintSandboxRuntimeEnv minted a unique one;
+		// caller-supplied values win. Either way this is the daemon ID injected
+		// into the sandbox env, so it matches what the in-sandbox daemon
+		// registers - the pre-create-free provisioning path (Task 3.1) relies on
+		// this instead of a pre-created offline runtime row.
+		ref.DaemonID = env["MULTICA_DAEMON_ID"]
 	}
-	payload, err := sandboxCreatePayload(in)
+	payload, err := sandboxCreatePayload(in, ref.InstanceID, ref.RuntimeMetadata)
 	if err != nil {
 		return compensate(fmt.Errorf("build sandbox create payload: %w", err))
 	}
@@ -315,14 +325,21 @@ func sandboxLifecyclePayload(ref SandboxInstanceRef, runtime json.RawMessage) (j
 	return json.Marshal(payload)
 }
 
-// sandboxCreatePayload builds the sandboxd create job payload, mirroring the
-// existing CreateSandboxInstance handler (template, limits, runtime,
-// runtime_env).
-func sandboxCreatePayload(in CreateSandboxInstanceInput) (json.RawMessage, error) {
+// sandboxCreatePayload builds the canonical sandboxd create job payload shared
+// by the frontend CreateSandboxInstance handler and env-dispatch provisioning:
+// template, limits, runtime, runtime_env (when present), metadata, and
+// instance_id. instance_id lets the in-sandbox daemon register its runtime with
+// sandbox_instance_id so env-dispatch can discover the online runtime by
+// (workspace, daemon_id, sandbox_instance_id) instead of binding to a
+// pre-created row. metadata mirrors the instance's persisted metadata so
+// frontend and env-dispatch create jobs carry the same canonical shape.
+func sandboxCreatePayload(in CreateSandboxInstanceInput, instanceID string, metadata json.RawMessage) (json.RawMessage, error) {
 	payload := map[string]any{
-		"template": in.Template,
-		"limits":   json.RawMessage(jsonBytesOrDefault(in.Limits, "{}")),
-		"runtime":  json.RawMessage(jsonBytesOrDefault(in.Runtime, "{}")),
+		"template":    in.Template,
+		"limits":      json.RawMessage(jsonBytesOrDefault(in.Limits, "{}")),
+		"runtime":     json.RawMessage(jsonBytesOrDefault(in.Runtime, "{}")),
+		"metadata":    json.RawMessage(jsonBytesOrDefault(metadata, "{}")),
+		"instance_id": instanceID,
 	}
 	if len(in.RuntimeEnv) > 0 {
 		payload["runtime_env"] = in.RuntimeEnv

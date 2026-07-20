@@ -55,8 +55,11 @@ func TestStartSession_RequestAndResponse(t *testing.T) {
 	if gotAuth != "Bearer "+testAdminKey {
 		t.Errorf("auth = %q, want Bearer admin key", gotAuth)
 	}
-	if gotBody["task_id"] != "task-123" {
-		t.Errorf("body task_id = %v, want task-123", gotBody["task_id"])
+	if gotBody["session_ref"] != "task-123" {
+		t.Errorf("body session_ref = %v, want task-123", gotBody["session_ref"])
+	}
+	if _, ok := gotBody["task_id"]; ok {
+		t.Errorf("body must not contain task_id (session_ref is canonical), got %v", gotBody["task_id"])
 	}
 	// group_size:1 per spec §4.6
 	if gs, ok := gotBody["group_size"]; !ok || gs.(float64) != 1 {

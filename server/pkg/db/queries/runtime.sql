@@ -341,3 +341,17 @@ WHERE status = 'offline'
   AND last_seen_at < now() - make_interval(secs => @stale_seconds::double precision)
   AND id NOT IN (SELECT DISTINCT runtime_id FROM agent)
 RETURNING id, workspace_id;
+
+-- name: FindOnlineSandboxRuntime :one
+-- Resolves the daemon-registered Pi runtime for an env-dispatch binding by
+-- immutable identity (workspace, daemon_id, sandbox_instance_id) once the
+-- provider reports online. Runtime display names are intentionally not used;
+-- matching by name would let an unrelated runtime bind to the dispatch. Used
+-- by WaitForOnlineSandboxRuntime during first-address provisioning.
+SELECT * FROM agent_runtime
+WHERE workspace_id = @workspace_id
+  AND provider = 'pi'
+  AND daemon_id = @daemon_id
+  AND status = 'online'
+  AND metadata->>'sandbox_instance_id' = @sandbox_instance_id
+LIMIT 1;

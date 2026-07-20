@@ -100,12 +100,19 @@ type startSessionResponse struct {
 	APIKey    string `json:"api_key"`
 }
 
-// StartSession opens a new RL session for taskID using admin-key auth and
+// StartSession opens a new RL session for sessionRef using admin-key auth and
 // returns the session id and per-session proxy key.
-func (c *Client) StartSession(ctx context.Context, taskID, envID string) (SessionCreds, error) {
+//
+// sessionRef is the canonical session reference forwarded to the bridge as
+// "session_ref": for the legacy training flow it is the task id; for
+// env-dispatch derived-agent provisioning it is the persistent source-binding
+// id. The bridge accepts exactly one of session_ref/task_id and derives its
+// canonical namespace from whichever is supplied, so sending session_ref with
+// the same string value is backward compatible with the prior task_id flow.
+func (c *Client) StartSession(ctx context.Context, sessionRef, envID string) (SessionCreds, error) {
 	body := map[string]any{
-		"task_id":    taskID,
-		"group_size": 1,
+		"session_ref": sessionRef,
+		"group_size":  1,
 	}
 	if envID != "" {
 		body["env_id"] = envID

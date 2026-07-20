@@ -285,6 +285,109 @@ func TestEnvSandboxLifecycleCreateEnqueuesCreateJobAndWakesNode(t *testing.T) {
 	}
 }
 
+// TestEnvSandboxLifecycleCreateEmitsCanonicalPayloadWithInstanceIDAndMetadata
+// verifies that Create's sandboxd job payload carries the canonical key set the
+// frontend CreateSandboxInstance handler emits - including instance_id (so the
+// in-sandbox daemon can register its runtime with sandbox_instance_id for
+// env-dispatch discovery) and metadata - so frontend and env-dispatch create
+// jobs are interchangeable. See openspec change env-dispatch-agent-runtime-config
+// Task 2 (shared canonical payload).
+func TestEnvSandboxLifecycleCreateEmitsCanonicalPayloadWithInstanceIDAndMetadata(t *testing.T) {
+	ctx := context.Background()
+	deps := &fakeEnvSandboxLifecycleDeps{}
+	svc := NewEnvSandboxLifecycleService(deps, 5*time.Second)
+
+	in := CreateSandboxInstanceInput{
+		WorkspaceID:   "ws-1",
+		NodeID:        "node-1",
+		Template:      "python",
+		Limits:        json.RawMessage(`{"cpu":2}`),
+		Runtime:       json.RawMessage(`{"model":"gpt-test"}`),
+		DaemonEnabled: true,
+	}
+	ref, err := svc.Create(ctx, in, "user-1")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if len(deps.jobs) != 1 {
+		t.Fatalf("want 1 create job, got %d", len(deps.jobs))
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(deps.jobs[0].Payload, &payload); err != nil {
+		t.Fatalf("payload invalid JSON: %v", err)
+	}
+	for _, key := range []string{"template", "limits", "runtime", "runtime_env", "metadata", "instance_id"} {
+		if _, ok := payload[key]; !ok {
+			t.Fatalf("canonical create payload missing %q: %s", key, string(deps.jobs[0].Payload))
+		}
+	}
+	if payload["instance_id"] != ref.InstanceID {
+		t.Fatalf("instance_id = %v, want %s", payload["instance_id"], ref.InstanceID)
+	}
+}
+
+// TestEnvSandboxLifecycleCreateSurfacesMintedDaemonIDOnRef verifies that Create
+// surfaces the minted daemon correlation nonce on ref.DaemonID (== the
+// MULTICA_DAEMON_ID injected into the sandbox env) so the pre-create-free
+// provisioning path can discover the online runtime by daemon_id. The fake
+// mints "daemon-<instanceID>".
+func TestEnvSandboxLifecycleCreateSurfacesMintedDaemonIDOnRef(t *testing.T) {
+	ctx := context.Background()
+	deps := &fakeEnvSandboxLifecycleDeps{}
+	svc := NewEnvSandboxLifecycleService(deps, 5*time.Second)
+	in := CreateSandboxInstanceInput{
+		WorkspaceID: "ws-1", NodeID: "node-1", Template: "python",
+		DaemonEnabled: true,
+	}
+	ref, err := svc.Create(ctx, in, "user-1")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	wantDaemonID := "daemon-" + ref.InstanceID
+	if ref.DaemonID != wantDaemonID {
+		t.Fatalf("ref.DaemonID = %q, want %q", ref.DaemonID, wantDaemonID)
+	}
+}
+
+// TestEnvSandboxLifecycleCreateSurfacesCallerSuppliedDaemonIDOnRef verifies
+// that when the caller pre-assigns MULTICA_DAEMON_ID (the legacy pre-create
+// path), ref.DaemonID echoes it - so surfacing is non-breaking for the existing
+// env-dispatch flow while establishing the contract for the pre-create-free path.
+func TestEnvSandboxLifecycleCreateSurfacesCallerSuppliedDaemonIDOnRef(t *testing.T) {
+	ctx := context.Background()
+	deps := &fakeEnvSandboxLifecycleDeps{}
+	svc := NewEnvSandboxLifecycleService(deps, 5*time.Second)
+	in := CreateSandboxInstanceInput{
+		WorkspaceID: "ws-1", NodeID: "node-1", Template: "python",
+		DaemonEnabled: true,
+		RuntimeEnv:    map[string]string{"MULTICA_DAEMON_ID": "preassigned-daemon"},
+	}
+	ref, err := svc.Create(ctx, in, "user-1")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if ref.DaemonID != "preassigned-daemon" {
+		t.Fatalf("ref.DaemonID = %q, want preassigned-daemon", ref.DaemonID)
+	}
+}
+
+// TestEnvSandboxLifecycleCreateLeavesDaemonIDEmptyWhenDaemonDisabled verifies a
+// non-daemon sandbox (base/template) gets no daemon correlation nonce.
+func TestEnvSandboxLifecycleCreateLeavesDaemonIDEmptyWhenDaemonDisabled(t *testing.T) {
+	ctx := context.Background()
+	deps := &fakeEnvSandboxLifecycleDeps{}
+	svc := NewEnvSandboxLifecycleService(deps, 5*time.Second)
+	ref, err := svc.Create(ctx, CreateSandboxInstanceInput{
+		WorkspaceID: "ws-1", NodeID: "node-1", Template: "python",
+	}, "user-1")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if ref.DaemonID != "" {
+		t.Fatalf("ref.DaemonID = %q, want empty for non-daemon sandbox", ref.DaemonID)
+	}
+}
+
 // TestEnvSandboxLifecycleCreateMintsDaemonEnvWhenEnabled verifies that Create
 // mints a daemon bootstrap runtime_env (via MintSandboxRuntimeEnv) when the
 // sandbox is flagged DaemonEnabled and no RuntimeEnv was supplied, folds that

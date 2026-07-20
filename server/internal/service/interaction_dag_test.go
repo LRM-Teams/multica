@@ -452,6 +452,26 @@ func TestInteractionDAG_RecordSessionAgentRun_RejectsMissingIDs(t *testing.T) {
 	}
 }
 
+// TestInteractionDAG_LinkSessionTask_DelegatesToRecord verifies LinkSessionTask
+// links a training session to the real derived-agent task id (env-dispatch
+// provisioning call order: sessionID, projectID, realTaskID, issueID) by
+// delegating to RecordSessionAgentRun's upsert.
+func TestInteractionDAG_LinkSessionTask_DelegatesToRecord(t *testing.T) {
+	store := newFakeInteractionDAGStore()
+	svc := NewInteractionDAGService(store, &fakeArealSegmentClient{}, true)
+
+	if err := svc.LinkSessionTask(context.Background(), "sess-1", "proj-1", "run-real", "issue-1"); err != nil {
+		t.Fatalf("LinkSessionTask: %v", err)
+	}
+	row, ok := store.sessionRuns["sess-1"]
+	if !ok {
+		t.Fatal("session_run row not stored")
+	}
+	assert.Equal(t, "run-real", row.AgentRunID, "LinkSessionTask must bind the real task id")
+	assert.Equal(t, "proj-1", row.ProjectID)
+	assert.Equal(t, ptrText("issue-1"), row.IssueID)
+}
+
 // TestCloseSegmentForEvent_RecordsSegment verifies the full close+export+
 // record path: looks up agent_run_id via session, closes the segment, exports
 // the trajectory, decodes tensor_ref, and stores a segment + env snapshot.

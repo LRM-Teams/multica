@@ -2649,15 +2649,32 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
             ) : (
               <>
                 <Popover>
-                  <PopoverTrigger
-                    className="flex items-center gap-1.5 rounded-full p-0.5 transition-colors hover:bg-accent"
-                    aria-label={t(($) => $.header.manage_members_aria)}
-                  >
-                    <MemberStack members={channelMembers} />
-                    <span className="flex size-7 items-center justify-center rounded-full border border-dashed text-muted-foreground">
-                      <Plus className="size-3.5" />
-                    </span>
-                  </PopoverTrigger>
+                  {/* #642 follow-up (Parker/Iris) — the system #general
+                      channel's roster is auto-managed and read-only, so
+                      the "+" invite affordance is a lie there: swap to a
+                      neutral view-only trigger. Ordinary channels keep
+                      the add/manage semantics unchanged. */}
+                  {isActiveSystemChannel ? (
+                    <PopoverTrigger
+                      className="flex items-center gap-1.5 rounded-full p-0.5 transition-colors hover:bg-accent"
+                      aria-label={t(($) => $.header.view_members_aria)}
+                    >
+                      <MemberStack members={channelMembers} />
+                      <span className="flex size-7 items-center justify-center rounded-full text-muted-foreground">
+                        <Users className="size-3.5" />
+                      </span>
+                    </PopoverTrigger>
+                  ) : (
+                    <PopoverTrigger
+                      className="flex items-center gap-1.5 rounded-full p-0.5 transition-colors hover:bg-accent"
+                      aria-label={t(($) => $.header.manage_members_aria)}
+                    >
+                      <MemberStack members={channelMembers} />
+                      <span className="flex size-7 items-center justify-center rounded-full border border-dashed text-muted-foreground">
+                        <Plus className="size-3.5" />
+                      </span>
+                    </PopoverTrigger>
+                  )}
                   <PopoverContent align="end" className="w-80 p-0">
                     {memberPanelBody}
                   </PopoverContent>
@@ -3146,7 +3163,11 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                   className="flex min-h-[44px] items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-accent"
                 >
                   <Users className="size-5 shrink-0 text-muted-foreground" />
-                  <span className="flex-1">{t(($) => $.header.manage_members_aria)}</span>
+                  {/* #642 follow-up — same read-only-roster honesty as the
+                      desktop trigger: no "Manage" wording for #general. */}
+                  <span className="flex-1">
+                    {t(($) => (isActiveSystemChannel ? $.header.view_members_aria : $.header.manage_members_aria))}
+                  </span>
                   <span className="text-xs text-muted-foreground">{channelMembers.length}</span>
                   <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
                 </button>

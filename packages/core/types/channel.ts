@@ -48,6 +48,11 @@ export interface Channel {
   muted?: boolean;
   last_message?: ChannelLastMessage | null;
   members?: ChannelMemberBrief[];
+  /** #642 — server-owned identity for an immutable system channel (e.g.
+   *  "general"). Absent/unknown values must degrade to a normal channel,
+   *  never a blank screen — this is a capability marker, not a display
+   *  name or a second source of the channel's `name`. */
+  system_key?: string | null;
 }
 
 export interface ChannelMember {

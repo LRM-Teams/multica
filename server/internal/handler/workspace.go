@@ -263,6 +263,18 @@ func (h *Handler) CreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The default system channel is part of workspace creation, not a
+	// best-effort follow-up. Running the idempotent DB boundary inside this
+	// transaction guarantees callers can never observe a workspace without its
+	// pristine #general row and complete initial roster.
+	var generalChannelID pgtype.UUID
+	if err := tx.QueryRow(r.Context(),
+		`SELECT ensure_system_general_channel($1, $2)`, ws.ID, parseUUID(userID),
+	).Scan(&generalChannelID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create system channel")
+		return
+	}
+
 	// NOTE: CreateWorkspace deliberately does NOT mark the user as
 	// onboarded. The `onboarded_at` flag is owned by CompleteOnboarding
 	// (Step 3 of the flow) and by AcceptInvitation (invitee joining an

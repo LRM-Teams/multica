@@ -98,6 +98,28 @@ describe("HtmlAttachmentPreview — visual shell (does not use file-card chrome)
     expect(screen.queryByText("report.html")).toBeNull();
   });
 
+  // LRM-201 — narrow screens must not use the desktop 480px preview height alone.
+  it("caps preview height for narrow viewports (md:480 desktop)", async () => {
+    getAttachmentTextContentMock.mockResolvedValueOnce({
+      text: "<p>ok</p>",
+      originalContentType: "text/html",
+    });
+    const { container } = renderWithQuery(
+      <HtmlAttachmentPreview
+        attachmentId="att-1"
+        filename="report.html"
+        onPreview={() => {}}
+        onDownload={() => {}}
+      />,
+    );
+    await waitFor(() => {
+      expect(document.querySelector("iframe")).toBeTruthy();
+    });
+    const sized = container.querySelector("[class*='min(36vh']");
+    expect(sized).toBeTruthy();
+    expect(sized?.className).toContain("md:h-[480px]");
+  });
+
   it("renders iframe with sandbox='allow-scripts' and srcdoc when text loads", async () => {
     getAttachmentTextContentMock.mockResolvedValueOnce({
       text: "<p>chart goes here</p>",

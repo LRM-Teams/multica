@@ -140,15 +140,15 @@ export function AttachmentCard({
   );
 
   return (
-    <div className="my-1">
+    <div className="my-1 min-w-0 w-full max-w-[340px]">
       <div
-        className="group inline-flex max-w-[340px] items-center gap-2 rounded-xl border border-border bg-muted/40 px-3 py-2.5 transition-colors hover:bg-muted/70"
+        className="group inline-flex w-full max-w-full items-center gap-2 rounded-xl border border-border bg-muted/40 px-3 py-2.5 transition-colors hover:bg-muted/70"
         onMouseDown={(e) => e.stopPropagation()}
       >
         {openable ? (
           <button
             type="button"
-            className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-lg text-left outline-none focus-visible:ring-2 focus-visible:ring-brand/50"
+            className="flex min-h-11 min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-lg text-left outline-none focus-visible:ring-2 focus-visible:ring-brand/50 md:min-h-0"
             aria-label={openLabel}
             onClick={canPreview ? onPreview : onDownload}
           >
@@ -158,16 +158,16 @@ export function AttachmentCard({
           <div className="flex min-w-0 flex-1 items-center gap-3">{body}</div>
         )}
 
-        {/* Actions — hidden until hover / keyboard focus, grouped on the right.
+        {/* Actions — always visible on narrow / coarse pointers; hover-reveal on fine desktop.
             Preview is NOT a button here: previewable files open from the body
             control above; the hover toolbar stays minimal (download / delete),
             matching the design + Slack parity. */}
         {hasActions && (
-          <div className="flex shrink-0 items-center gap-0.5 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
+          <div className="flex shrink-0 items-center gap-0.5 opacity-100 transition-opacity [@media(pointer:fine)]:opacity-0 [@media(pointer:fine)]:group-hover:opacity-100 [@media(pointer:fine)]:group-focus-within:opacity-100">
             {canDownload && (
               <button
                 type="button"
-                className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-brand/10 hover:text-brand"
+                className="flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-brand/10 hover:text-brand md:size-7"
                 title={t(($) => $.image.download)}
                 aria-label={t(($) => $.image.download)}
                 onMouseDown={(e) => {
@@ -182,7 +182,7 @@ export function AttachmentCard({
             {canDelete && onDelete && (
               <button
                 type="button"
-                className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                className="flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive md:size-7"
                 title={t(($) => $.attachment.remove)}
                 aria-label={t(($) => $.attachment.remove)}
                 onMouseDown={(e) => {

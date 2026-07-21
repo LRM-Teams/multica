@@ -48,14 +48,16 @@ export function MessageAttachmentZone({
           className,
         )}
       >
-        <div className="flex min-w-0 flex-wrap items-start gap-1.5">
+        <div className="flex min-w-0 flex-col gap-1.5 sm:flex-row sm:flex-wrap sm:items-start">
           {items.map((item) =>
             item.kind === "record" ? (
               <div
                 key={item.attachmentId}
                 className={cn(
                   "min-w-0",
-                  isImageAttachment(item.attachment) ? "max-w-full" : "w-full max-w-[340px]",
+                  isImageAttachment(item.attachment)
+                    ? "max-w-full"
+                    : "w-full max-w-full sm:max-w-[340px]",
                 )}
               >
                 <AttachmentRenderer

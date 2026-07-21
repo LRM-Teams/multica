@@ -54,25 +54,29 @@ vi.mock("@multica/core/agents/stores", () => ({
     selector({ open: openPanelMock }),
 }));
 
-vi.mock("../../common/actor-profile-popover", () => ({
-  ActorProfileTrigger: ({
-    memberType,
-    memberId,
-    children,
-    onClickCapture,
+// System rows render actors through the ordinary @mention component (#603),
+// not the bespoke ActorProfileTrigger. Stub it with the same "actor-token"
+// shape the pre-#603 tests already assert against, and replicate the
+// agent-side-panel-on-click affordance via the already-mocked panel store so
+// that behavior stays covered without depending on ActorMention's real
+// internals (which need a live auth store this unit doesn't provide).
+vi.mock("../../common/markdown", () => ({
+  ActorMention: ({
+    type,
+    id,
+    label,
   }: {
-    memberType: string;
-    memberId: string;
-    children: ReactNode;
-    onClickCapture?: (e: unknown) => void;
+    type: string;
+    id: string;
+    label?: string;
   }) => (
     <span
       data-testid="actor-token"
-      data-member-type={memberType}
-      data-member-id={memberId}
-      onClickCapture={onClickCapture}
+      data-member-type={type}
+      data-member-id={id}
+      onClick={type === "agent" ? () => openPanelMock(id) : undefined}
     >
-      {children}
+      {label}
     </span>
   ),
 }));
@@ -115,12 +119,19 @@ vi.mock("../../navigation/context", () => ({
 // Issue rows resolve the actor/assignee display name from the identity cache.
 vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({
-    getActorName: (_type: string, id: string, fallback?: string) =>
-      id === "agent-be"
-        ? "后端工程师"
-        : id === "user-2"
-          ? "Wendy"
-          : fallback ?? "Someone",
+    // Mirrors the real resolver's priority: a cache hit (by id, across both
+    // agents and members) wins over whatever display-name fallback the
+    // caller passed in; "agent-be" is an Issue-test-only fixture that's
+    // deliberately absent from mockAgents so it always falls through to the
+    // caller-supplied fallback.
+    getActorName: (_type: string, id: string, fallback?: string) => {
+      if (id === "agent-be") return "后端工程师";
+      const agent = mockAgents.find((a) => a.id === id);
+      if (agent) return agent.handle;
+      const member = mockMembers.find((m) => m.user_id === id);
+      if (member) return member.handle;
+      return fallback ?? "Someone";
+    },
   }),
 }));
 
@@ -135,14 +146,14 @@ vi.mock("../../i18n/use-t", () => ({
             member_left: "{target} left this channel",
             issue: {
               actor_system: "Multica",
-              created: "{{actor}} 创建了 Issue {issue}",
-              assigned: "{{actor}} 将 Issue {issue} 指派给 {{target}}",
-              assigned_unknown: "{{actor}} 重新指派了 Issue {issue}",
-              in_progress: "{{actor}} 将 Issue {issue} 标记为处理中",
-              in_review: "{{actor}} 将 Issue {issue} 提交审核",
-              done: "{{actor}} 完成了 Issue {issue}",
-              updated: "{{actor}} 更新了 Issue {issue}",
-              status: "{{actor}} 将 Issue {issue} 标记为{{status}}",
+              created: "{actor} 创建了 Issue {issue}",
+              assigned: "{actor} 将 Issue {issue} 指派给 {{target}}",
+              assigned_unknown: "{actor} 重新指派了 Issue {issue}",
+              in_progress: "{actor} 将 Issue {issue} 标记为处理中",
+              in_review: "{actor} 将 Issue {issue} 提交审核",
+              done: "{actor} 完成了 Issue {issue}",
+              updated: "{actor} 更新了 Issue {issue}",
+              status: "{actor} 将 Issue {issue} 标记为{{status}}",
             },
             issue_status: {
               backlog: "待办事项",
@@ -155,9 +166,9 @@ vi.mock("../../i18n/use-t", () => ({
             },
             project: {
               actor_system: "Multica",
-              bound: "{{actor}} 把本群关联到项目「{project}」",
-              changed: "{{actor}} 把关联项目从「{previous}」改为「{project}」",
-              unbound: "{{actor}} 解除了与项目「{previous}」的关联",
+              bound: "{actor} 把本群关联到项目「{project}」",
+              changed: "{actor} 把关联项目从「{previous}」改为「{project}」",
+              unbound: "{actor} 解除了与项目「{previous}」的关联",
             },
           },
         },
@@ -288,7 +299,7 @@ describe("MemberSystemEventContent", () => {
     expect(document.body.textContent).toBe("@wendy was added to this channel by @frank");
     const tokens = screen.getAllByTestId("actor-token");
     expect(tokens).toHaveLength(2);
-    expect(tokens[0]).toHaveAttribute("data-member-type", "user");
+    expect(tokens[0]).toHaveAttribute("data-member-type", "member");
     expect(tokens[0]).toHaveAttribute("data-member-id", "user-2");
   });
 
@@ -340,7 +351,7 @@ describe("MemberSystemEventContent", () => {
     );
     expect(document.body.textContent).toBe("@ghost left this channel");
     const token = screen.getByTestId("actor-token");
-    expect(token).toHaveAttribute("data-member-type", "user");
+    expect(token).toHaveAttribute("data-member-type", "member");
     expect(token).toHaveAttribute("data-member-id", "ghost-x");
   });
 
@@ -569,8 +580,8 @@ describe("IssueSystemEventContent", () => {
   it("renders the frozen Issue copy with the issue ref as the SOLE link (item #7)", () => {
     render(<IssueSystemEventContent event={inProgressEvent} />);
 
-    // Canonical example: "后端工程师 将 Issue LRM-137 标记为处理中".
-    expect(document.body.textContent).toBe("后端工程师 将 Issue LRM-137 标记为处理中");
+    // Canonical example: "@后端工程师 将 Issue LRM-137 标记为处理中".
+    expect(document.body.textContent).toBe("@后端工程师 将 Issue LRM-137 标记为处理中");
 
     // The issue identifier is the one and only clickable token.
     const links = document.querySelectorAll("a");
@@ -586,10 +597,10 @@ describe("IssueSystemEventContent", () => {
 
   it("maps each transition to its frozen action verb", () => {
     const cases: Array<[Partial<IssueSystemEvent>, string]> = [
-      [{ event: "issue_status_changed", issueStatus: "in_review" }, "后端工程师 将 Issue LRM-137 提交审核"],
-      [{ event: "issue_completed", issueStatus: "done" }, "后端工程师 完成了 Issue LRM-137"],
-      [{ event: "issue_status_changed", issueStatus: "done" }, "后端工程师 完成了 Issue LRM-137"],
-      [{ event: "issue_status_changed", issueStatus: "blocked" }, "后端工程师 将 Issue LRM-137 标记为已阻塞"],
+      [{ event: "issue_status_changed", issueStatus: "in_review" }, "@后端工程师 将 Issue LRM-137 提交审核"],
+      [{ event: "issue_completed", issueStatus: "done" }, "@后端工程师 完成了 Issue LRM-137"],
+      [{ event: "issue_status_changed", issueStatus: "done" }, "@后端工程师 完成了 Issue LRM-137"],
+      [{ event: "issue_status_changed", issueStatus: "blocked" }, "@后端工程师 将 Issue LRM-137 标记为已阻塞"],
     ];
     for (const [patch, expected] of cases) {
       const { unmount } = render(
@@ -608,7 +619,7 @@ describe("IssueSystemEventContent", () => {
     );
     const text = document.body.textContent ?? "";
     // Generic, status-less localized action…
-    expect(text).toBe("后端工程师 更新了 Issue LRM-137");
+    expect(text).toBe("@后端工程师 更新了 Issue LRM-137");
     // …and the raw enum never reaches the user face.
     expect(text).not.toContain("triaging_v2");
   });
@@ -629,7 +640,7 @@ describe("IssueSystemEventContent", () => {
         }}
       />,
     );
-    expect(document.body.textContent).toBe("后端工程师 将 Issue LRM-137 指派给 Wendy");
+    expect(document.body.textContent).toBe("@后端工程师 将 Issue LRM-137 指派给 wendy");
     const links = document.querySelectorAll("a");
     expect(links).toHaveLength(1);
     expect(links[0]).toHaveTextContent("LRM-137");
@@ -647,7 +658,7 @@ describe("IssueSystemEventContent", () => {
         }}
       />,
     );
-    expect(document.body.textContent).toBe("后端工程师 创建了 Issue LRM-200");
+    expect(document.body.textContent).toBe("@后端工程师 创建了 Issue LRM-200");
     const links = document.querySelectorAll("a");
     expect(links).toHaveLength(1);
     expect(links[0]).toHaveTextContent("LRM-200");
@@ -665,12 +676,12 @@ describe("ProjectSystemEventContent", () => {
 
   it("renders a bind with the current project as the SOLE clickable object (#610)", () => {
     render(<ProjectSystemEventContent event={boundEvent} />);
-    expect(document.body.textContent).toBe("后端工程师 把本群关联到项目「Q3 Roadmap」");
+    expect(document.body.textContent).toBe("@后端工程师 把本群关联到项目「Q3 Roadmap」");
     const links = document.querySelectorAll("a");
     expect(links).toHaveLength(1);
     expect(links[0]).toHaveTextContent("Q3 Roadmap");
     expect(links[0]).toHaveAttribute("href", "/ws/projects/proj-1");
-    // The actor is plain display text — never a link/token.
+    // The actor is its own @mention token — never inside the project link.
     expect(links[0]).not.toHaveTextContent("后端工程师");
   });
 
@@ -688,7 +699,7 @@ describe("ProjectSystemEventContent", () => {
         }}
       />,
     );
-    expect(document.body.textContent).toBe("后端工程师 把关联项目从「Old Home」改为「New Home」");
+    expect(document.body.textContent).toBe("@后端工程师 把关联项目从「Old Home」改为「New Home」");
     const links = document.querySelectorAll("a");
     expect(links).toHaveLength(1);
     expect(links[0]).toHaveTextContent("New Home");
@@ -707,7 +718,7 @@ describe("ProjectSystemEventContent", () => {
         }}
       />,
     );
-    expect(document.body.textContent).toBe("后端工程师 解除了与项目「Old Home」的关联");
+    expect(document.body.textContent).toBe("@后端工程师 解除了与项目「Old Home」的关联");
     const links = document.querySelectorAll("a");
     expect(links).toHaveLength(1);
     expect(links[0]).toHaveTextContent("Old Home");
@@ -725,7 +736,7 @@ describe("ProjectSystemEventContent", () => {
         }}
       />,
     );
-    expect(document.body.textContent).toBe("后端工程师 把本群关联到项目「Untethered」");
+    expect(document.body.textContent).toBe("@后端工程师 把本群关联到项目「Untethered」");
     expect(document.querySelectorAll("a")).toHaveLength(0);
   });
 
@@ -742,6 +753,6 @@ describe("ProjectSystemEventContent", () => {
         }}
       />,
     );
-    expect(document.body.textContent).toBe("Lin 把本群关联到项目「Q3 Roadmap」");
+    expect(document.body.textContent).toBe("@Lin 把本群关联到项目「Q3 Roadmap」");
   });
 });

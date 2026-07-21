@@ -237,14 +237,14 @@
       "member_left": "{target} 退出了频道",
       "issue": {
         "actor_system": "Multica",
-        "created": "{{actor}} 创建了 Issue {issue}",
-        "assigned": "{{actor}} 将 Issue {issue} 指派给 {{target}}",
-        "assigned_unknown": "{{actor}} 重新指派了 Issue {issue}",
-        "in_progress": "{{actor}} 将 Issue {issue} 标记为处理中",
-        "in_review": "{{actor}} 将 Issue {issue} 提交审核",
-        "done": "{{actor}} 完成了 Issue {issue}",
-        "updated": "{{actor}} 更新了 Issue {issue}",
-        "status": "{{actor}} 将 Issue {issue} 标记为{{status}}"
+        "created": "{actor} 创建了 Issue {issue}",
+        "assigned": "{actor} 将 Issue {issue} 指派给 {{target}}",
+        "assigned_unknown": "{actor} 重新指派了 Issue {issue}",
+        "in_progress": "{actor} 将 Issue {issue} 标记为处理中",
+        "in_review": "{actor} 将 Issue {issue} 提交审核",
+        "done": "{actor} 完成了 Issue {issue}",
+        "updated": "{actor} 更新了 Issue {issue}",
+        "status": "{actor} 将 Issue {issue} 标记为{{status}}"
       },
       "issue_status": {
         "backlog": "待办事项",
@@ -257,9 +257,9 @@
       },
       "project": {
         "actor_system": "Multica",
-        "bound": "{{actor}} 把本群关联到项目「{project}」",
-        "changed": "{{actor}} 把关联项目从「{previous}」改为「{project}」",
-        "unbound": "{{actor}} 解除了与项目「{previous}」的关联"
+        "bound": "{actor} 把本群关联到项目「{project}」",
+        "changed": "{actor} 把关联项目从「{previous}」改为「{project}」",
+        "unbound": "{actor} 解除了与项目「{previous}」的关联"
       }
     }
   },

@@ -374,3 +374,67 @@ describe("ChannelsPage — project picker relocated to group settings (#576)", (
     expect(await screen.findByRole("button", { name: "project" })).toBeDisabled();
   });
 });
+
+describe("ChannelsPage — Group Settings shares the exclusive thread/agent slot (#645)", () => {
+  beforeEach(() => {
+    listProps.current = null;
+    channelFixture.current = {
+      id: "chan-1",
+      workspace_id: "ws-1",
+      name: "general",
+      kind: "group" as const,
+      description: null,
+      lark_chat_id: null,
+      created_by: "user-1",
+      created_at: "2026-06-17T09:00:00Z",
+      updated_at: "2026-06-17T09:00:00Z",
+      archived_at: null,
+    };
+    memberFixture.current = [];
+  });
+
+  // Settings and the Thread panel both route through the same
+  // setOpenThreadRoot/setChannelSettingsOpen exclusion logic that gates the
+  // Agent panel too (handleOpenAgentPanel is symmetric with handleOpenThread
+  // — both clear channelSettingsOpen) — this exercises the real shared code
+  // path, not a duplicate per-panel test.
+  it("opening a thread closes an already-open Group settings panel", async () => {
+    renderPage();
+    await screen.findByTestId("message-list");
+    fireEvent.click(screen.getByRole("button", { name: "Group settings" }));
+    expect(await screen.findByRole("button", { name: "project" })).toBeTruthy();
+
+    await waitFor(() => expect(listProps.current?.onOpenThread).toBeTypeOf("function"));
+    await act(async () => {
+      listProps.current?.onOpenThread?.(ownMessage());
+    });
+    await screen.findByTestId("thread-panel");
+    expect(screen.queryByRole("button", { name: "project" })).toBeNull();
+  });
+
+  it("opening Group settings closes an already-open thread", async () => {
+    renderPage();
+    await screen.findByTestId("message-list");
+    await waitFor(() => expect(listProps.current?.onOpenThread).toBeTypeOf("function"));
+    await act(async () => {
+      listProps.current?.onOpenThread?.(ownMessage());
+    });
+    await screen.findByTestId("thread-panel");
+
+    fireEvent.click(screen.getByRole("button", { name: "Group settings" }));
+    expect(await screen.findByRole("button", { name: "project" })).toBeTruthy();
+    expect(screen.queryByTestId("thread-panel")).toBeNull();
+  });
+
+  it("clicking the Group settings toggle again closes it", async () => {
+    renderPage();
+    await screen.findByTestId("message-list");
+    const toggle = screen.getByRole("button", { name: "Group settings" });
+    fireEvent.click(toggle);
+    expect(await screen.findByRole("button", { name: "project" })).toBeTruthy();
+    fireEvent.click(toggle);
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "project" })).toBeNull();
+    });
+  });
+});

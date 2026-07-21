@@ -173,6 +173,7 @@ import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelStatsPanel } from "./channel-stats-panel";
 import { ChannelProjectSettingsPanel } from "./channel-project-settings-panel";
+import { ChannelSettingsSidePanel } from "./channel-settings-side-panel";
 import { ChannelTasksBoard } from "./channel-tasks-board";
 import { ChannelGroupAvatar } from "./channel-group-avatar";
 import { ThreadPanel } from "./thread-panel";
@@ -2725,30 +2726,25 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                       <ChannelFilesPanel channelId={active.id} />
                     </PopoverContent>
                   </Popover>
-                  {/* #576 — group settings surface, currently just the Project
-                      section. Same Popover pattern as Stats/Files above.
+                  {/* #576/#645 — group settings now opens in the docked
+                      right-side panel (same exclusive slot as Thread/Agent),
+                      not a Popover — "布局要收敛", not another one-off card.
                       #642 — the system #general channel has no settings to
                       show (no project binding, immutable), so the entry
                       point itself is gone, not a disabled/empty panel. */}
                   {!isActiveSystemChannel && (
-                    <Popover>
-                      <PopoverTrigger
-                        className="flex size-8 items-center justify-center rounded-md transition-colors hover:bg-accent"
-                        aria-label={t(($) => $.header.settings_aria)}
-                      >
-                        <Settings className="size-4" />
-                      </PopoverTrigger>
-                      <PopoverContent align="end" className="w-80">
-                        <p className="mb-3 text-sm font-medium">{t(($) => $.settings.title)}</p>
-                        <ChannelProjectSettingsPanel
-                          wsId={wsId}
-                          projectId={channelProjectId || null}
-                          onChange={(projectId) => setChannelProject.mutate(projectId)}
-                          disabled={!projectEditable}
-                          disabledReason={projectDisabledReason}
-                        />
-                      </PopoverContent>
-                    </Popover>
+                    <button
+                      type="button"
+                      className={cn(
+                        "flex size-8 items-center justify-center rounded-md transition-colors hover:bg-accent",
+                        channelSettingsOpen && "bg-accent text-foreground",
+                      )}
+                      aria-label={t(($) => $.header.settings_aria)}
+                      aria-pressed={channelSettingsOpen}
+                      onClick={toggleChannelSettings}
+                    >
+                      <Settings className="size-4" />
+                    </button>
                   )}
                 </div>
               </>

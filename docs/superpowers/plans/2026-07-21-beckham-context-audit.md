@@ -103,4 +103,4 @@ Evidence:
 - Fetched the remote before publishing and found five new `dev` commits. Reviewed their changed files and rebased without conflict onto `2504248ac` (`feat(#576): move project binding from composer to a group settings surface (#800)`). The server-side channel/project contract used here was unchanged.
 - Re-ran all focused regressions and `go test ./... -run '^$'` after the rebase; all passed.
 - Pushed `agent/beckham-context-audit` to `origin`.
-- The GitHub connector returned `403 Resource not accessible by integration` on PR creation. The authenticated `gh` fallback created Draft PR [#804](https://github.com/LRM-Teams/multica/pull/804) targeting `dev`.
+- The GitHub connector returned `403 Resource not accessible by integration` on PR creation. The authenticated `gh` fallback created PR [#804](https://github.com/LRM-Teams/multica/pull/804) targeting `dev`; it was marked ready for review so Draft state does not block the user-managed merge.

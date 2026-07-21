@@ -107,8 +107,6 @@ vi.mock("../i18n", () => ({
           preview_failed: "Couldn't load preview",
           preview_too_large: "File is too large to preview. Please download.",
           preview_unsupported: "This file type can't be previewed.",
-          pdf_preview_blocked:
-            "This PDF can't be shown inline here — open it in a new tab instead.",
           close: "Close",
           download_failed: "",
           open_in_new_tab: "Open in new tab",
@@ -189,16 +187,22 @@ describe("AttachmentPreviewModal — dispatch", () => {
     expect(img?.getAttribute("src")).toBe(url);
   });
 
-  it("shows the blocked-inline-preview fallback for PDFs, never an iframe (#591)", () => {
-    // The app's global CSP `frame-ancestors 'none'` refuses ANY iframe
-    // embed of the download URL (same-origin included) — an inline PDF
-    // preview here always dead-ends, so the modal must not attempt one.
+  it("renders nothing for a directly-mounted PDF source, never an iframe (#591/#799)", () => {
+    // Real usage never reaches this: both open() and tryOpen() dispatch pdf
+    // sources to openExternal and never mount this modal (tryOpen-gate
+    // suite below). A direct mount is unreachable through any current
+    // caller, but must still render no fallback dialog and definitely no
+    // iframe — the app's global CSP `frame-ancestors 'none'` refuses ANY
+    // iframe embed of the download URL (same-origin included), so an
+    // inline PDF preview here always dead-ends.
     const att = makeAttachment({ filename: "manual.pdf", content_type: "application/pdf" });
-    render(<AttachmentPreviewModal source={{ kind: "full", attachment: att }} open onClose={() => {}} />);
+    render(
+      <AttachmentPreviewModal source={{ kind: "full", attachment: att }} open onClose={() => {}} />,
+    );
+    // The modal portals to document.body, so the content region lives
+    // outside RTL's `container` — query the document directly.
     expect(document.querySelector("iframe")).toBeNull();
-    expect(
-      screen.getByText("This PDF can't be shown inline here — open it in a new tab instead."),
-    ).toBeTruthy();
+    expect(document.querySelector(".min-h-0.flex-1")?.textContent).toBe("");
   });
 
   it("renders a <video> for video/* content types", () => {

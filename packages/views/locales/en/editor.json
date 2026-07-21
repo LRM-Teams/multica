@@ -42,7 +42,6 @@
     "preview_failed": "Couldn't load preview",
     "preview_too_large": "File is too large to preview. Please download.",
     "preview_unsupported": "This file type can't be previewed.",
-    "pdf_preview_blocked": "This PDF can't be shown inline here — open it in a new tab instead.",
     "close": "Close",
     "open_in_new_tab": "Open in new tab",
     "remove": "Remove attachment",

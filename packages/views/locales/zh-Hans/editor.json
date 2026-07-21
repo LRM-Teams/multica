@@ -42,7 +42,6 @@
     "preview_failed": "预览加载失败",
     "preview_too_large": "文件太大，无法在线预览，请下载查看。",
     "preview_unsupported": "该文件类型暂不支持预览。",
-    "pdf_preview_blocked": "这个 PDF 无法在此内嵌显示，请在新标签页打开。",
     "close": "关闭",
     "open_in_new_tab": "在新标签页打开",
     "remove": "移除附件",

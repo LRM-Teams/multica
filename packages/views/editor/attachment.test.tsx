@@ -438,6 +438,21 @@ describe("Attachment — file-card dispatch", () => {
     expect(document.querySelector("img")).toBeNull();
   });
 
+  // #591/#799 (Iris): a wiring-level check on the real file-card, not just
+  // the hook in isolation — proves the card's click handler actually
+  // reaches the openExternal dispatch, and that no preview dialog appears.
+  it("clicking a real PDF file-card opens the media URL externally, no dialog", () => {
+    const att = makeRecord({
+      filename: "manual.pdf",
+      content_type: "application/pdf",
+    });
+    renderWithQuery(<Attachment attachment={{ kind: "record", attachment: att }} />);
+    fireEvent.click(screen.getByRole("button", { name: /^Open \{\{filename\}\}/ }));
+    expect(openExternalMock).toHaveBeenCalledTimes(1);
+    expect(openExternalMock).toHaveBeenCalledWith(att.download_url);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
   it("uploading file-card surfaces the uploading template, no Preview/Download", () => {
     renderWithQuery(
       <Attachment

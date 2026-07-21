@@ -52,13 +52,13 @@ vi.mock("./html-preview-body", () => ({
   ),
 }));
 
-describe("MobileFileAttachment (LRM-216 / LRM-217)", () => {
+describe("MobileFileAttachment (LRM-216 Slack freeze)", () => {
   beforeEach(() => {
     document.body.innerHTML = "";
   });
   afterEach(() => cleanup());
 
-  it("renders a compact entry without an iframe in the stream", () => {
+  it("renders a compact entry with type · size and no stream iframe", () => {
     render(
       <MobileFileAttachment
         filename="lrm201-tall-preview.html"
@@ -67,18 +67,17 @@ describe("MobileFileAttachment (LRM-216 / LRM-217)", () => {
         previewMode="html"
         attachmentId="att-1"
         onDownload={() => {}}
-        onOpen={() => {}}
       />,
     );
     expect(screen.getByTestId("mobile-file-entry")).toBeTruthy();
     expect(screen.getByText("lrm201-tall-preview.html")).toBeTruthy();
+    expect(screen.getByText("HTML · 606 B")).toBeTruthy();
     expect(document.querySelector("iframe")).toBeNull();
     expect(screen.queryByTestId("mobile-file-preview-pane")).toBeNull();
   });
 
-  it("opens fullscreen with HTML preview pane + download/open", () => {
+  it("opens Slack shell: back · filename · one download + full preview, no meta/footer", () => {
     const onDownload = vi.fn();
-    const onOpen = vi.fn();
     render(
       <MobileFileAttachment
         filename="lrm201-tall-preview.html"
@@ -89,19 +88,26 @@ describe("MobileFileAttachment (LRM-216 / LRM-217)", () => {
         previewMode="html"
         attachmentId="att-1"
         onDownload={onDownload}
-        onOpen={onOpen}
+        onOpen={() => {}}
       />,
     );
     fireEvent.click(screen.getByTestId("mobile-file-entry"));
-    expect(screen.getByTestId("mobile-file-detail")).toBeTruthy();
+    const detail = screen.getByTestId("mobile-file-detail");
+    expect(detail).toBeTruthy();
     expect(screen.getByTestId("mobile-file-preview-pane")).toBeTruthy();
     expect(screen.getByTestId("mobile-file-preview-html-body")).toBeTruthy();
-    expect(screen.getByText("Frank An")).toBeTruthy();
+
+    // One download only (top bar) — no second green CTA / Open button.
+    expect(screen.getAllByTestId("mobile-file-detail-download")).toHaveLength(1);
+    expect(screen.queryByTestId("mobile-file-detail-open")).toBeNull();
+    expect(screen.queryByText("Frank An")).toBeNull();
+    expect(screen.queryByText("Sender")).toBeNull();
+    expect(screen.queryByText("Time")).toBeNull();
+    // Top bar must not show type · size under the filename.
+    expect(detail.textContent).not.toMatch(/606 B/);
 
     fireEvent.click(screen.getByTestId("mobile-file-detail-download"));
-    expect(onDownload).toHaveBeenCalled();
-    fireEvent.click(screen.getByTestId("mobile-file-detail-open"));
-    expect(onOpen).toHaveBeenCalled();
+    expect(onDownload).toHaveBeenCalledTimes(1);
 
     fireEvent.click(screen.getByTestId("mobile-file-detail-back"));
     expect(screen.queryByTestId("mobile-file-detail")).toBeNull();
@@ -115,26 +121,29 @@ describe("MobileFileAttachment (LRM-216 / LRM-217)", () => {
         previewMode="image"
         previewUrl="https://example.com/shot.png"
         onDownload={() => {}}
-        onOpen={() => {}}
       />,
     );
     fireEvent.click(screen.getByTestId("mobile-file-entry"));
     expect(screen.getByTestId("mobile-file-preview-image")).toBeTruthy();
+    expect(screen.queryByTestId("mobile-file-detail-open")).toBeNull();
   });
 
-  it("shows cannot-preview placeholder for other types", () => {
+  it("shows cannot-preview placeholder with top-bar download only", () => {
+    const onDownload = vi.fn();
     render(
       <MobileFileAttachment
         filename="archive.zip"
         contentType="application/zip"
         previewMode="none"
-        onDownload={() => {}}
-        onOpen={() => {}}
+        onDownload={onDownload}
       />,
     );
     fireEvent.click(screen.getByTestId("mobile-file-entry"));
     expect(screen.getByTestId("mobile-file-preview-unavailable")).toBeTruthy();
     expect(screen.getByText("Can't preview")).toBeTruthy();
+    expect(screen.queryByTestId("mobile-file-detail-open")).toBeNull();
+    fireEvent.click(screen.getByTestId("mobile-file-detail-download"));
+    expect(onDownload).toHaveBeenCalledTimes(1);
   });
 
   it("does not open detail when not openable", () => {
@@ -144,7 +153,6 @@ describe("MobileFileAttachment (LRM-216 / LRM-217)", () => {
         contentType="text/html"
         openable={false}
         onDownload={() => {}}
-        onOpen={() => {}}
       />,
     );
     fireEvent.click(screen.getByTestId("mobile-file-entry"));

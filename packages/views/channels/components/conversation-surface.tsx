@@ -18,6 +18,8 @@ export function ConversationHeader({
   badges,
   status,
   actions,
+  onTitleClick,
+  titleAriaLabel,
 }: {
   isMobile: boolean;
   leading: ReactNode;
@@ -32,7 +34,22 @@ export function ConversationHeader({
    */
   status?: ReactNode;
   actions?: ReactNode;
+  /** LRM-210 — Slack-style: click channel name → channel details panel. */
+  onTitleClick?: () => void;
+  titleAriaLabel?: string;
 }) {
+  const titleNode = onTitleClick ? (
+    <button
+      type="button"
+      onClick={onTitleClick}
+      aria-label={titleAriaLabel}
+      className="min-w-0 truncate rounded-sm text-left transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+    >
+      {title}
+    </button>
+  ) : (
+    <span className="truncate">{title}</span>
+  );
   return (
     <header
       className={cn(
@@ -56,7 +73,7 @@ export function ConversationHeader({
               it keeps its own weight/color and can shrink on narrow widths. */}
           <div className="flex min-w-0 items-center gap-2">
             <div className="flex min-w-0 items-center gap-1.5 text-sm font-semibold leading-5">
-              <span className="truncate">{title}</span>
+              {titleNode}
               {badges}
             </div>
             {status}

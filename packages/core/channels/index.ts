@@ -36,6 +36,7 @@ export {
 } from "./project";
 export {
   useCreateChannel,
+  useUpdateChannel,
   useDeleteChannel,
   useArchiveChannel,
   useRestoreChannel,

@@ -181,14 +181,24 @@ vi.mock("./conversation-surface", async (importOriginal) => ({
     title,
     leading,
     actions,
+    onTitleClick,
+    titleAriaLabel,
   }: {
     title?: React.ReactNode;
     leading?: React.ReactNode;
     actions?: React.ReactNode;
+    onTitleClick?: () => void;
+    titleAriaLabel?: string;
   }) => (
     <div data-testid="active-title">
       {leading}
-      {title}
+      {onTitleClick ? (
+        <button type="button" aria-label={titleAriaLabel} onClick={onTitleClick}>
+          {title}
+        </button>
+      ) : (
+        title
+      )}
       {actions}
     </div>
   ),
@@ -259,7 +269,9 @@ describe("ChannelsPage — system #general channel (#642)", () => {
     await waitFor(() => {
       expect(screen.getByTestId("active-title")).toHaveTextContent("general");
     });
+    // LRM-210 — gear is gone; channel-name opens details for every channel.
     expect(screen.queryByLabelText("Group settings")).toBeNull();
+    expect(screen.getByLabelText("Open channel details")).toBeTruthy();
   });
 
   it("shows the header Settings entry for a normal channel", async () => {
@@ -267,7 +279,9 @@ describe("ChannelsPage — system #general channel (#642)", () => {
     await waitFor(() => {
       expect(screen.getByTestId("active-title")).toHaveTextContent("random");
     });
-    expect(screen.getByLabelText("Group settings")).toBeTruthy();
+    // LRM-210 — no gear; clickable title opens Channel details.
+    expect(screen.queryByLabelText("Group settings")).toBeNull();
+    expect(screen.getByLabelText("Open channel details")).toBeTruthy();
   });
 
   it("hides the per-member remove button in the system channel's member panel", async () => {
@@ -302,9 +316,8 @@ describe("ChannelsPage — system #general channel (#642)", () => {
     });
     fireEvent.click(screen.getByLabelText("More"));
     expect(screen.queryByText("Group settings")).toBeNull();
-    // Normal behavior preserved: Members/Stats/Files stay reachable — but
-    // #642 follow-up (Parker/Iris): the read-only auto-managed roster
-    // must not say "Manage" (that implies add/remove that doesn't exist).
+    // LRM-210 — Channel details replaces Settings/Share/Stats chrome.
+    expect(screen.getByText("Channel details")).toBeTruthy();
     expect(screen.getByText("View members")).toBeTruthy();
     expect(screen.queryByText("Manage members")).toBeNull();
   });
@@ -316,7 +329,7 @@ describe("ChannelsPage — system #general channel (#642)", () => {
       expect(screen.getByTestId("active-title")).toHaveTextContent("random");
     });
     fireEvent.click(screen.getByLabelText("More"));
-    expect(screen.getByText("Group settings")).toBeTruthy();
+    expect(screen.getByText("Channel details")).toBeTruthy();
   });
 
   // Slack-style header: faces + count open View-members (browse). System
@@ -412,7 +425,7 @@ describe("ChannelsPage — system #general channel (#642)", () => {
     await waitFor(() => {
       expect(screen.getByTestId("active-title")).toHaveTextContent("unknownkey");
     });
-    expect(screen.getByLabelText("Group settings")).toBeTruthy();
+    expect(screen.getByLabelText("Open channel details")).toBeTruthy();
   });
 
   it("degrades an absent system_key to a normal, fully-mutable channel", async () => {
@@ -421,7 +434,7 @@ describe("ChannelsPage — system #general channel (#642)", () => {
     await waitFor(() => {
       expect(screen.getByTestId("active-title")).toHaveTextContent("nokey");
     });
-    expect(screen.getByLabelText("Group settings")).toBeTruthy();
+    expect(screen.getByLabelText("Open channel details")).toBeTruthy();
     fireEvent.click(screen.getByLabelText("View members"));
     await screen.findByText("Bob");
     expect(screen.getByLabelText("Remove member")).toBeTruthy();

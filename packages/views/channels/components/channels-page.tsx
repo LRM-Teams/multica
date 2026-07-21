@@ -8,22 +8,18 @@ import {
   Bell,
   BellOff,
   ChevronDown,
-  ChevronLeft,
   ChevronRight,
   ChevronUp,
-  FileText,
   Mail,
   MessageCircle,
   MessageSquare,
   MoreHorizontal,
   Paperclip,
-  PieChart,
   Pin,
   PinOff,
   Plus,
   Search,
   Settings,
-  Share2,
   Smartphone,
   Square,
   Users,
@@ -48,6 +44,7 @@ import {
   useCreateChannel,
   useDeleteChannel,
   useArchiveChannel,
+  useUpdateChannel,
   useRestoreChannel,
   useSetChannelPin,
   useMarkChannelRead,
@@ -170,9 +167,7 @@ import { useEntryAnchor } from "../hooks/use-entry-around-seq";
 import { isChannelNameTakenError } from "../channel-create-error";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
-import { ChannelStatsPanel } from "./channel-stats-panel";
-import { ChannelProjectSettingsPanel } from "./channel-project-settings-panel";
-import { ChannelSettingsSidePanel } from "./channel-settings-side-panel";
+import { ChannelDetailsPanel, type ChannelDetailsTab } from "./channel-details-panel";
 import { ChannelTasksBoard } from "./channel-tasks-board";
 import { ChannelGroupAvatar } from "./channel-group-avatar";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
@@ -595,12 +590,17 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   // the action list (Members / Share / Stats / Files / Settings); picking one
   // swaps the Drawer body to that section. A header Popover can render
   // off-screen on a narrow viewport, so the drawer is the reliable container.
-  // `null` = closed. `"settings"` is the #576 group-settings surface (currently
-  // just the Project section) — full-width like every other mobile panel here,
-  // per Iris's placement spec.
+  // `null` = closed. LRM-210 — mobile drawer hosts channel-details tabs
+  // (about/members/files/settings); Share/Stats no longer top-level chrome.
   const [mobilePanel, setMobilePanel] = useState<
-    "menu" | "members" | "stats" | "files" | "settings" | null
+    "menu" | "details" | null
   >(null);
+  const [mobileDetailsTab, setMobileDetailsTab] = useState<ChannelDetailsTab>("about");
+  const [pendingRemoveMember, setPendingRemoveMember] = useState<{
+    memberType: ChannelMember["member_type"];
+    memberId: string;
+    name: string;
+  } | null>(null);
   // A route transition can remount this page between `/channels/[id]` and the
   // base `/channels` route. Preserve the mobile Back intent long enough for
   // that destination mount, then clear it so a later reload still restores the
@@ -682,20 +682,28 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     | { kind: "none" }
     | { kind: "thread"; message: ChannelMessage }
     | { kind: "agent"; agentId: string }
-    | { kind: "channel-settings" }
+    | { kind: "channel-details"; tab: ChannelDetailsTab }
   >({ kind: "none" });
   const [threadDraftEmpty, setThreadDraftEmpty] = useState(true);
   const openThreadRoot = sidePanel.kind === "thread" ? sidePanel.message : null;
   const selectedAgentPanelId = sidePanel.kind === "agent" ? sidePanel.agentId : null;
-  const channelSettingsOpen = sidePanel.kind === "channel-settings";
+  const channelDetailsOpen = sidePanel.kind === "channel-details";
+  const channelDetailsTab =
+    sidePanel.kind === "channel-details" ? sidePanel.tab : ("about" as ChannelDetailsTab);
   const setOpenThreadRoot = useCallback((next: ChannelMessage | null) => {
     setSidePanel(next ? { kind: "thread", message: next } : { kind: "none" });
   }, []);
   const setSelectedAgentPanelId = useCallback((next: string | null) => {
     setSidePanel(next ? { kind: "agent", agentId: next } : { kind: "none" });
   }, []);
-  const setChannelSettingsOpen = useCallback((next: boolean) => {
-    setSidePanel(next ? { kind: "channel-settings" } : { kind: "none" });
+  const openChannelDetails = useCallback((tab: ChannelDetailsTab = "about") => {
+    setSidePanel({ kind: "channel-details", tab });
+  }, []);
+  const setChannelDetailsOpen = useCallback((next: boolean) => {
+    setSidePanel(next ? { kind: "channel-details", tab: "about" } : { kind: "none" });
+  }, []);
+  const setChannelDetailsTab = useCallback((tab: ChannelDetailsTab) => {
+    setSidePanel({ kind: "channel-details", tab });
   }, []);
   const resetSidePanelState = useCallback(() => {
     setSidePanel({ kind: "none" });
@@ -923,6 +931,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const createChannel = useCreateChannel();
   const deleteChannel = useDeleteChannel();
   const archiveChannel = useArchiveChannel();
+  const updateChannel = useUpdateChannel();
   const restoreChannel = useRestoreChannel();
   const setChannelPin = useSetChannelPin();
   const markChannelUnread = useMarkChannelUnread();
@@ -1783,10 +1792,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
 
   // #645 — toggles the same exclusive slot; opening it always wins over
   // thread/agent (mirrors handleOpenAgentPanel), closing just clears it.
-  const toggleChannelSettings = () => {
-    setSidePanel(channelSettingsOpen ? { kind: "none" } : { kind: "channel-settings" });
-  };
-
   const toggleInvite = (key: string) => {
     setSelectedInvites((prev) => {
       const next = new Set(prev);
@@ -1970,16 +1975,21 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                     <button
                       type="button"
                       onClick={() =>
-                        removeMember.mutate({
-                          channelId: active.id,
+                        setPendingRemoveMember({
                           memberType: m.member_type,
                           memberId: m.member_id,
+                          name: presentation.displayName,
                         })
                       }
                       aria-label={t(($) => $.members.remove_aria)}
-                      className="rounded p-1 text-muted-foreground opacity-0 transition hover:text-destructive group-hover:opacity-100"
+                      className={cn(
+                        "shrink-0 font-medium text-destructive transition-colors hover:text-destructive",
+                        isMobile
+                          ? "min-h-11 px-2 text-sm"
+                          : "rounded px-1.5 py-0.5 text-xs opacity-0 group-hover:opacity-100",
+                      )}
                     >
-                      <X className="size-3.5" />
+                      {t(($) => $.details.remove_member)}
                     </button>
                   )}
                 </div>
@@ -2560,20 +2570,44 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         onClose={() => setSelectedAgentPanelId(null)}
       />
     ) : null;
-  // #645 — never renders for the system #general channel even if somehow
-  // triggered (defense in depth alongside the header entry point being
-  // hidden outright — see isActiveSystemChannel below).
-  const settingsPanel =
-    channelSettingsOpen && active && !isActiveSystemChannel ? (
-      <ChannelSettingsSidePanel
+  // LRM-210 — Slack channel details (About | Members | Files | Settings).
+  // System #general stays without settings mutations; about/members/files OK.
+  const detailsPanel =
+    channelDetailsOpen && active ? (
+      <ChannelDetailsPanel
         channel={active}
         members={channelMembers}
-        wsId={wsId}
+        tab={channelDetailsTab}
+        onTabChange={setChannelDetailsTab}
+        onClose={() => setChannelDetailsOpen(false)}
+        onShare={handleShare}
+        onToggleMute={() => handleToggleChannelMute(active)}
+        isMuted={isConversationMuted(active)}
+        canManage={canArchive(active) && !isActiveArchived && !isActiveSystemChannel}
+        manageDisabledReason={
+          isActiveSystemChannel
+            ? t(($) => $.sidebar.archive_permission)
+            : projectDisabledReason
+        }
+        onRename={(name) => {
+          updateChannel.mutate(
+            { channelId: active.id, name },
+            {
+              onSuccess: () => toast.success(t(($) => $.details.rename_success)),
+              onError: () => toast.error(t(($) => $.details.rename_failed)),
+            },
+          );
+        }}
+        renaming={updateChannel.isPending}
+        onArchive={() => setArchiveTarget(active)}
+        archivePending={archiveChannel.isPending}
         projectId={channelProjectId || null}
+        wsId={wsId}
         onChangeProject={(projectId) => setChannelProject.mutate(projectId)}
         projectEditable={projectEditable}
         projectDisabledReason={projectDisabledReason}
-        onClose={() => setChannelSettingsOpen(false)}
+        membersContent={<div>{memberPanelBody}</div>}
+        filesContent={<ChannelFilesPanel channelId={active.id} />}
       />
     ) : null;
   const channelConversationPane = (
@@ -2605,6 +2639,15 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
               </>
             }
             title={active.name}
+            onTitleClick={
+              isMobile
+                ? () => {
+                    setMobileDetailsTab("about");
+                    setMobilePanel("details");
+                  }
+                : () => openChannelDetails("about")
+            }
+            titleAriaLabel={t(($) => $.details.open_aria)}
             meta={
               <>
                 {t(($) => $.header.running)}
@@ -2688,10 +2731,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                   )}
                 </div>
                 <div className="flex items-center gap-1">
-                  {/* #562 — the old #476 "open global Issues filtered to this
-                      channel" entry is removed: the channel-scoped Tasks tab is
-                      now the single, non-global-filter entry to this channel's
-                      tasks (no more setSourceChannel write-back). */}
                   <Button
                     variant="ghost"
                     size="icon"
@@ -2701,58 +2740,9 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                   >
                     <Search className="size-4" />
                   </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-8"
-                    aria-label={t(($) => $.header.share_aria)}
-                    onClick={handleShare}
-                  >
-                    <Share2 className="size-4" />
-                  </Button>
-                  <Popover>
-                    <PopoverTrigger
-                      className="flex size-8 items-center justify-center rounded-md transition-colors hover:bg-accent"
-                      aria-label={t(($) => $.header.stats_aria)}
-                    >
-                      <PieChart className="size-4" />
-                    </PopoverTrigger>
-                    <PopoverContent align="end" className="w-72">
-                      <p className="mb-3 text-sm font-medium">{t(($) => $.stats.title)}</p>
-                      <ChannelStatsPanel channelId={active.id} />
-                    </PopoverContent>
-                  </Popover>
-                  <Popover>
-                    <PopoverTrigger
-                      className="flex size-8 items-center justify-center rounded-md transition-colors hover:bg-accent"
-                      aria-label={t(($) => $.header.files_aria)}
-                    >
-                      <FileText className="size-4" />
-                    </PopoverTrigger>
-                    <PopoverContent align="end" className="w-80">
-                      <p className="mb-3 text-sm font-medium">{t(($) => $.files.title)}</p>
-                      <ChannelFilesPanel channelId={active.id} />
-                    </PopoverContent>
-                  </Popover>
-                  {/* #576/#645 — group settings now opens in the docked
-                      right-side panel (same exclusive slot as Thread/Agent),
-                      not a Popover — "布局要收敛", not another one-off card.
-                      #642 — the system #general channel has no settings to
-                      show (no project binding, immutable), so the entry
-                      point itself is gone, not a disabled/empty panel. */}
-                  {!isActiveSystemChannel && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className={cn("size-8", channelSettingsOpen && "bg-accent text-foreground")}
-                      aria-label={t(($) => $.header.settings_aria)}
-                      aria-pressed={channelSettingsOpen}
-                      onClick={toggleChannelSettings}
-                    >
-                      <Settings className="size-4" />
-                    </Button>
-                  )}
+                  {/* LRM-210 — Share / Stats / Files / Settings moved into
+                      Channel Details (click channel name). Header keeps
+                      faces + Invite + search only. */}
                 </div>
               </>
             )}
@@ -3027,18 +3017,18 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       <ResizablePanel id="conversation" minSize="50%" className="flex min-h-0 flex-col">
         {channelConversationPane}
       </ResizablePanel>
-      {threadPanel || agentPanel || settingsPanel ? (
+      {threadPanel || agentPanel || detailsPanel ? (
         <>
           <ResizableHandle />
           <ResizablePanel
-            id={threadPanel ? "thread" : agentPanel ? "agent-files" : "channel-settings"}
+            id={threadPanel ? "thread" : agentPanel ? "agent-files" : "channel-details"}
             defaultSize={440}
             minSize={360}
             maxSize={640}
             groupResizeBehavior="preserve-pixel-size"
             className="border-l border-border/30 bg-background"
           >
-            {threadPanel ?? agentPanel ?? settingsPanel}
+            {threadPanel ?? agentPanel ?? detailsPanel}
           </ResizablePanel>
         </>
       ) : null}
@@ -3113,11 +3103,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         </ResizablePanelGroup>
       )}
 
-      {/* Mobile overflow drawer. One bottom Drawer (vaul, with drag handle)
-          behind the header "⋯": `"menu"` lists the actions (Members / Share /
-          Stats / Files); picking one swaps the body to that section.
-          Members/Stats/Files reuse the exact same component bodies as the
-          desktop popovers. */}
+      {/* LRM-210 — mobile overflow: menu → Channel Details tabs (no Share/Stats icons). */}
       {isMobile && active && (
         <Drawer
           direction="bottom"
@@ -3127,116 +3113,128 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
           }}
         >
           <DrawerContent className="max-h-[85dvh] gap-0 overflow-y-auto p-0">
-            <DrawerHeader className="flex-row items-center gap-1 border-b py-3">
-              {mobilePanel !== "menu" && (
-                <button
-                  type="button"
-                  onClick={() => setMobilePanel("menu")}
-                  aria-label={t(($) => $.header.back)}
-                  className="-ml-1 flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent"
-                >
-                  <ChevronLeft className="size-5" />
-                </button>
-              )}
-              <DrawerTitle>
-                {mobilePanel === "members"
-                  ? t(($) => $.members.title)
-                  : mobilePanel === "stats"
-                    ? t(($) => $.stats.title)
-                    : mobilePanel === "files"
-                      ? t(($) => $.files.title)
-                      : mobilePanel === "settings"
-                        ? t(($) => $.settings.title)
-                        : active.name}
-              </DrawerTitle>
-            </DrawerHeader>
-
-            {mobilePanel === "menu" && (
-              <div className="flex flex-col py-1">
-                <button
-                  type="button"
-                  onClick={() => setMobilePanel("members")}
-                  className="flex min-h-[44px] items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-accent"
-                >
-                  <Users className="size-5 shrink-0 text-muted-foreground" />
-                  {/* #642 follow-up — same read-only-roster honesty as the
-                      desktop trigger: no "Manage" wording for #general. */}
-                  <span className="flex-1">
-                    {t(($) => (isActiveSystemChannel ? $.header.view_members_aria : $.header.manage_members_aria))}
-                  </span>
-                  <span className="text-xs text-muted-foreground">{channelMembers.length}</span>
-                  <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMobilePanel(null);
-                    void handleShare();
-                  }}
-                  className="flex min-h-[44px] items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-accent"
-                >
-                  <Share2 className="size-5 shrink-0 text-muted-foreground" />
-                  <span className="flex-1">{t(($) => $.header.share_aria)}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setMobilePanel("stats")}
-                  className="flex min-h-[44px] items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-accent"
-                >
-                  <PieChart className="size-5 shrink-0 text-muted-foreground" />
-                  <span className="flex-1">{t(($) => $.stats.title)}</span>
-                  <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setMobilePanel("files")}
-                  className="flex min-h-[44px] items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-accent"
-                >
-                  <FileText className="size-5 shrink-0 text-muted-foreground" />
-                  <span className="flex-1">{t(($) => $.files.title)}</span>
-                  <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
-                </button>
-                {/* #642 — no settings row for the system #general channel;
-                    same reasoning as the desktop Popover trigger. */}
-                {!isActiveSystemChannel && (
+            {mobilePanel === "menu" ? (
+              <>
+                <DrawerHeader className="border-b py-3">
+                  <DrawerTitle>{active.name}</DrawerTitle>
+                </DrawerHeader>
+                <div className="flex flex-col py-1">
                   <button
                     type="button"
-                    onClick={() => setMobilePanel("settings")}
+                    onClick={() => {
+                      setMobileDetailsTab("about");
+                      setMobilePanel("details");
+                    }}
                     className="flex min-h-[44px] items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-accent"
                   >
                     <Settings className="size-5 shrink-0 text-muted-foreground" />
-                    <span className="flex-1">{t(($) => $.settings.title)}</span>
+                    <span className="flex-1">{t(($) => $.details.title)}</span>
                     <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
                   </button>
-                )}
-              </div>
-            )}
-
-            {mobilePanel === "members" && <div>{memberPanelBody}</div>}
-            {mobilePanel === "stats" && (
-              <div className="p-4">
-                <ChannelStatsPanel channelId={active.id} />
-              </div>
-            )}
-            {mobilePanel === "files" && (
-              <div className="p-4">
-                <ChannelFilesPanel channelId={active.id} />
-              </div>
-            )}
-            {mobilePanel === "settings" && (
-              <div className="p-4">
-                <ChannelProjectSettingsPanel
-                  wsId={wsId}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMobileDetailsTab("members");
+                      setMobilePanel("details");
+                    }}
+                    className="flex min-h-[44px] items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-accent"
+                  >
+                    <Users className="size-5 shrink-0 text-muted-foreground" />
+                    <span className="flex-1">
+                      {t(($) =>
+                        isActiveSystemChannel
+                          ? $.header.view_members_aria
+                          : $.header.manage_members_aria,
+                      )}
+                    </span>
+                    <span className="text-xs text-muted-foreground">{channelMembers.length}</span>
+                    <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="flex min-h-0 flex-1 flex-col">
+                <ChannelDetailsPanel
+                  variant="page"
+                  channel={active}
+                  members={channelMembers}
+                  tab={mobileDetailsTab}
+                  onTabChange={setMobileDetailsTab}
+                  onClose={() => setMobilePanel(null)}
+                  onShare={handleShare}
+                  onToggleMute={() => handleToggleChannelMute(active)}
+                  isMuted={isConversationMuted(active)}
+                  canManage={canArchive(active) && !isActiveArchived && !isActiveSystemChannel}
+                  manageDisabledReason={
+                    isActiveSystemChannel
+                      ? t(($) => $.sidebar.archive_permission)
+                      : projectDisabledReason
+                  }
+                  onRename={(name) => {
+                    updateChannel.mutate(
+                      { channelId: active.id, name },
+                      {
+                        onSuccess: () => toast.success(t(($) => $.details.rename_success)),
+                        onError: () => toast.error(t(($) => $.details.rename_failed)),
+                      },
+                    );
+                  }}
+                  renaming={updateChannel.isPending}
+                  onArchive={() => {
+                    setMobilePanel(null);
+                    setArchiveTarget(active);
+                  }}
+                  archivePending={archiveChannel.isPending}
                   projectId={channelProjectId || null}
-                  onChange={(projectId) => setChannelProject.mutate(projectId)}
-                  disabled={!projectEditable}
-                  disabledReason={projectDisabledReason}
+                  wsId={wsId}
+                  onChangeProject={(projectId) => setChannelProject.mutate(projectId)}
+                  projectEditable={projectEditable}
+                  projectDisabledReason={projectDisabledReason}
+                  membersContent={<div>{memberPanelBody}</div>}
+                  filesContent={<ChannelFilesPanel channelId={active.id} />}
                 />
               </div>
             )}
           </DrawerContent>
         </Drawer>
       )}
+
+      <AlertDialog
+        open={pendingRemoveMember !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingRemoveMember(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {t(($) => $.details.remove_confirm_title, {
+                name: pendingRemoveMember?.name ?? "",
+              })}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t(($) => $.details.remove_confirm_desc)}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t(($) => $.details.remove_cancel)}</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                if (!active || !pendingRemoveMember) return;
+                removeMember.mutate({
+                  channelId: active.id,
+                  memberType: pendingRemoveMember.memberType,
+                  memberId: pendingRemoveMember.memberId,
+                });
+                setPendingRemoveMember(null);
+              }}
+            >
+              {t(($) => $.details.remove_confirm)}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog
         open={deleteTarget !== null}

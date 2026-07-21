@@ -255,32 +255,28 @@ func (h *Handler) StartMemoryCurationRun(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusConflict, "no active online target agents for this date")
 		return
 	}
-	dbStage := memorycuration.DBStageName(stage)
 	trigger := "manual"
 	if req.IncludeHistory {
 		trigger = "backfill"
 	}
-	var agentForRun any
-	if len(agentIDs) == 1 {
-		agentForRun = parseUUID(agentIDs[0])
-	}
-	var runID string
-	if err := h.DB.QueryRow(r.Context(), `
-		INSERT INTO memory_curation_run (
-		  workspace_id, agent_id, stage, trigger_kind, status, date_from, date_to,
-		  dry_run, force, requested_by, profile_id, owner_user_id, runtime_id,
-		  curator_agent_id, curator_model, curator_mode, confidence_threshold,
-		  config_version, target_agent_ids, execution_owner
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19::uuid[],'daemon')
-		RETURNING id::text
-	`, workspaceID, agentForRun, dbStage, trigger, runStatus, since, until, req.DryRun, req.Force,
-		uuidToString(member.ID), profile.ID, profile.UserID, profile.RuntimeID,
-		profile.CuratorAgentID, profile.ModelOverride, profile.Mode, profile.ConfidenceThreshold,
-		profile.ConfigVersion, agentIDs).Scan(&runID); err != nil {
+	runID, status, err := h.enqueueMemoryCurationRun(r.Context(), enqueueMemoryCurationRunParams{
+		WorkspaceID: workspaceID,
+		MemberID:    uuidToString(member.ID),
+		Profile:     profile,
+		Stage:       stage,
+		TriggerKind: trigger,
+		RunStatus:   runStatus,
+		Since:       since,
+		Until:       until,
+		AgentIDs:    agentIDs,
+		DryRun:      req.DryRun,
+		Force:       req.Force,
+	})
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create curation run")
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"id": runID, "status": runStatus})
+	writeJSON(w, http.StatusAccepted, map[string]any{"id": runID, "status": status})
 }
 
 func (h *Handler) GetMemoryCurationRun(w http.ResponseWriter, r *http.Request) {

@@ -204,6 +204,12 @@ const COPY = {
   configureProfile: "Select a runtime and curator agent first, then enable self-review or team curation.",
   manualRun: "Manual run",
   manualRunHint: "Queue agent self-review or team curation for active online agents on the configured runtime.",
+  backfillRun: "Backfill missed days",
+  backfillRunHint: "Queue self-review and team curation for active days in the last month that never succeeded. Idle days are skipped.",
+  backfillSince: "From",
+  backfillUntil: "To",
+  queueBackfill: "Queue backfill",
+  backfillQueued: "Backfill queued",
   allStages: "Self-review + team curation",
   stage: "Stage",
   dryRun: "Dry run",
@@ -1008,6 +1014,10 @@ function CuratorProfileCard({
   const [draft, setDraft] = useState<CuratorProfileDraft>(() => draftFromProfile(profile));
   const [runStage, setRunStage] = useState<"agent_self_review" | "team_curation" | "all">("agent_self_review");
   const [dryRun, setDryRun] = useState(false);
+  const [backfillRange, setBackfillRange] = useState(() => ({
+    since: defaultBackfillSince(),
+    until: defaultBackfillUntil(),
+  }));
 
   const availableRuntimes = runtimes.filter(
     (runtime) => runtime.owner_id === userId || runtime.visibility === "public",
@@ -1062,6 +1072,21 @@ function CuratorProfileCard({
     }),
     onSuccess: async () => {
       toast.success(copy("runQueued"));
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: evolutionKeys.memoryCuratorProfile(wsId) }),
+        queryClient.invalidateQueries({ queryKey: evolutionKeys.memoryCurationStatus(wsId) }),
+      ]);
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : copy("configureProfile")),
+  });
+  const backfill = useMutation({
+    mutationFn: () => api.startMemoryCurationBackfill(wsId, {
+      since: backfillRange.since,
+      until: backfillRange.until,
+      dry_run: dryRun,
+    }),
+    onSuccess: async (result) => {
+      toast.success(`${copy("backfillQueued")}: ${result.queued_days}`);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: evolutionKeys.memoryCuratorProfile(wsId) }),
         queryClient.invalidateQueries({ queryKey: evolutionKeys.memoryCurationStatus(wsId) }),
@@ -1148,13 +1173,40 @@ function CuratorProfileCard({
             <div className="flex flex-wrap items-center gap-2">
               <Select value={effectiveRunStage} onValueChange={(value) => value && setRunStage(value as typeof runStage)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="agent_self_review" disabled={!selfReviewRunnable}>{copy(MEMORY_CURATION_STAGE_LABELS.selfReview)}</SelectItem><SelectItem value="team_curation" disabled={!teamCurationRunnable}>{copy(MEMORY_CURATION_STAGE_LABELS.teamCuration)}</SelectItem><SelectItem value="all" disabled={!selfReviewRunnable || !teamCurationRunnable}>{copy("allStages")}</SelectItem></SelectContent></Select>
               <label className="flex items-center gap-2 text-xs"><Checkbox checked={dryRun} onCheckedChange={(checked) => setDryRun(checked === true)} />{copy("dryRun")}</label>
-              <Button variant="outline" onClick={() => run.mutate()} disabled={!configured || !configuredTargetsValid || !runStageEnabled || run.isPending || save.isPending} title={runStageEnabled ? undefined : copy("saveProfileForStage")} className="gap-2"><Play className="h-4 w-4" />{copy("queueRun")}</Button>
+              <Button variant="outline" onClick={() => run.mutate()} disabled={!configured || !configuredTargetsValid || !runStageEnabled || run.isPending || save.isPending || backfill.isPending} title={runStageEnabled ? undefined : copy("saveProfileForStage")} className="gap-2"><Play className="h-4 w-4" />{copy("queueRun")}</Button>
+            </div>
+          </div>
+        </div>
+        <div className="rounded-2xl border bg-muted/20 p-4">
+          <div className="flex flex-col gap-3">
+            <div><div className="text-sm font-medium">{copy("backfillRun")}</div><p className="mt-1 text-xs text-muted-foreground">{copy("backfillRunHint")}</p></div>
+            <div className="flex flex-wrap items-end gap-2">
+              <Field label={copy("backfillSince")}><Input type="date" value={backfillRange.since} onChange={(event) => setBackfillRange((current) => ({ ...current, since: event.target.value }))} /></Field>
+              <Field label={copy("backfillUntil")}><Input type="date" value={backfillRange.until} onChange={(event) => setBackfillRange((current) => ({ ...current, until: event.target.value }))} /></Field>
+              <Button variant="outline" onClick={() => backfill.mutate()} disabled={!configured || !configuredTargetsValid || (!selfReviewRunnable && !teamCurationRunnable) || backfill.isPending || run.isPending || save.isPending || !backfillRange.since || !backfillRange.until} className="gap-2"><RefreshCw className={cn("h-4 w-4", backfill.isPending && "animate-spin")} />{copy("queueBackfill")}</Button>
             </div>
           </div>
         </div>
       </CardContent>
     </Card>
   );
+}
+
+function formatDateInput(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function defaultBackfillUntil(): string {
+  return formatDateInput(new Date());
+}
+
+function defaultBackfillSince(): string {
+  const date = new Date();
+  date.setDate(date.getDate() - 29);
+  return formatDateInput(date);
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {

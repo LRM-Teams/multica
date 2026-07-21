@@ -442,6 +442,35 @@ export interface StartMemoryCurationRunResponse {
   status: string;
 }
 
+export interface MemoryCurationBackfillRequest {
+  since?: string;
+  until?: string;
+  dry_run?: boolean;
+}
+
+export interface MemoryCurationBackfillDayPlan {
+  date: string;
+  stage: string;
+  target_agent_ids: string[];
+  run_id?: string;
+  status?: string;
+}
+
+export interface MemoryCurationBackfillSkip {
+  date: string;
+  reason: string;
+}
+
+export interface MemoryCurationBackfillResponse {
+  since: string;
+  until: string;
+  dry_run: boolean;
+  queued: MemoryCurationBackfillDayPlan[];
+  skipped: MemoryCurationBackfillSkip[];
+  queued_days: number;
+  skip_days: number;
+}
+
 export interface EvolutionReviewDecisionRequest {
   reason?: string;
   apply_review_suggestions?: boolean;

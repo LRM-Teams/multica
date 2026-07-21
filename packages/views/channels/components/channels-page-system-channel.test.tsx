@@ -330,8 +330,13 @@ describe("ChannelsPage — system #general channel (#642)", () => {
     await waitFor(() => {
       expect(screen.getByTestId("active-title")).toHaveTextContent("general");
     });
-    expect(screen.getByLabelText("View members")).toBeTruthy();
+    const trigger = screen.getByLabelText("View members");
+    expect(trigger).toBeTruthy();
     expect(screen.queryByLabelText("Manage members")).toBeNull();
+    // Iris: the label alone doesn't prove the icon actually swapped —
+    // assert the real lucide-users/lucide-plus SVG classes.
+    expect(trigger.querySelector("svg.lucide-users")).toBeTruthy();
+    expect(trigger.querySelector("svg.lucide-plus")).toBeNull();
   });
 
   it("desktop header keeps the Manage-members + trigger for a normal channel", async () => {
@@ -339,8 +344,11 @@ describe("ChannelsPage — system #general channel (#642)", () => {
     await waitFor(() => {
       expect(screen.getByTestId("active-title")).toHaveTextContent("random");
     });
-    expect(screen.getByLabelText("Manage members")).toBeTruthy();
+    const trigger = screen.getByLabelText("Manage members");
+    expect(trigger).toBeTruthy();
     expect(screen.queryByLabelText("View members")).toBeNull();
+    expect(trigger.querySelector("svg.lucide-plus")).toBeTruthy();
+    expect(trigger.querySelector("svg.lucide-users")).toBeNull();
   });
 
   // Iris/Parker review of PR #810's first head: code/design PASS on the

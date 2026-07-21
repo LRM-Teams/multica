@@ -1,12 +1,12 @@
 "use client";
 
 /**
- * Mobile file attachment entry + fullscreen detail (LRM-216 / LRM-217).
+ * Mobile file attachment entry + fullscreen detail (LRM-216).
  *
- * Narrow screens only: compact Slack/Discord-style info card in the message
- * stream (no inline iframe / content preview). Tap pushes a 100vh detail
- * sheet: preview pane (HTML / image / PDF) + metadata + Download / Open.
- * Other types show a「无法预览」placeholder in the same shell.
+ * Narrow screens: compact stream card (no inline preview). Tap pushes a
+ * Slack-style fullscreen sheet — top bar is back · filename · one Download;
+ * the rest is the preview pane (HTML / image / PDF) or「无法预览」. No
+ * metadata form and no bottom Download / Open buttons (Frank Slack 定稿).
  */
 
 import * as React from "react";
@@ -26,32 +26,19 @@ export interface MobileFileAttachmentProps {
   filename: string;
   contentType?: string;
   sizeBytes?: number;
+  /** @deprecated Unused in Slack chrome; kept for call-site compat. */
   createdAt?: string;
-  /** Display name when known; omitted row value falls back to em dash. */
+  /** @deprecated Unused in Slack chrome; kept for call-site compat. */
   uploaderName?: string;
   uploading?: boolean;
-  /** False when the file cannot be opened (no href / unavailable). */
   openable?: boolean;
-  /** Direct URL for image / PDF / fallback iframe. */
   previewUrl?: string | null;
-  /** Attachment id — preferred for HTML via /content proxy. */
   attachmentId?: string | null;
   previewMode?: MobilePreviewMode;
   onDownload: () => void;
-  /** Open in new tab / other app. */
-  onOpen: () => void;
+  /** @deprecated Unused in Slack chrome; kept for call-site compat. */
+  onOpen?: () => void;
   className?: string;
-}
-
-function formatWhen(iso?: string): string {
-  if (!iso) return "—";
-  try {
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return "—";
-    return d.toLocaleString();
-  } catch {
-    return "—";
-  }
 }
 
 function typeBadge(filename: string, contentType: string): string {
@@ -86,7 +73,10 @@ function resolvePreviewMode(
   const ct = contentType.toLowerCase();
   const ext = getFileExtension(filename);
   if (ct.includes("html") || ext === "html" || ext === "htm") return "html";
-  if (ct.startsWith("image/") || ["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext)) {
+  if (
+    ct.startsWith("image/") ||
+    ["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext)
+  ) {
     return "image";
   }
   if (ct.includes("pdf") || ext === "pdf") return "pdf";
@@ -97,15 +87,12 @@ export function MobileFileAttachment({
   filename,
   contentType = "",
   sizeBytes,
-  createdAt,
-  uploaderName,
   uploading,
   openable = true,
   previewUrl,
   attachmentId,
   previewMode,
   onDownload,
-  onOpen,
   className,
 }: MobileFileAttachmentProps) {
   const { t } = useT("editor");
@@ -210,7 +197,8 @@ export function MobileFileAttachment({
           }}
           onClose={() => setOpen(false)}
         >
-          <div className="flex min-h-12 shrink-0 items-center gap-0.5 border-b border-border px-1">
+          {/* Slack chrome: back · filename · one Download — no type/size/meta */}
+          <div className="flex min-h-12 shrink-0 items-center gap-0.5 border-b border-border bg-background px-1">
             <button
               type="button"
               data-testid="mobile-file-detail-back"
@@ -220,19 +208,12 @@ export function MobileFileAttachment({
             >
               <ChevronLeft className="size-6" />
             </button>
-            <div className="min-w-0 flex-1 py-1">
-              <div className="truncate text-[14px] font-semibold leading-tight">
-                {filename}
-              </div>
-              {sub && (
-                <div className="truncate text-[11px] text-muted-foreground">
-                  {sub}
-                </div>
-              )}
+            <div className="min-w-0 flex-1 truncate py-1 text-[14px] font-bold leading-tight">
+              {filename}
             </div>
             <button
               type="button"
-              data-testid="mobile-file-detail-download-nav"
+              data-testid="mobile-file-detail-download"
               className="shrink-0 px-3 py-2 text-[13px] font-bold text-[#1264a3] hover:bg-muted/50"
               onClick={runDownload}
             >
@@ -242,49 +223,14 @@ export function MobileFileAttachment({
 
           <div
             data-testid="mobile-file-preview-pane"
-            className="flex min-h-0 flex-1 flex-col bg-[#f0f0ee]"
+            className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[#f0f0ee]"
           >
-            <div className="m-2.5 flex min-h-0 flex-1 flex-col overflow-hidden rounded-[10px] border border-border bg-background">
-              <MobilePreviewBody
-                mode={mode}
-                filename={filename}
-                previewUrl={previewUrl}
-                attachmentId={attachmentId}
-              />
-            </div>
-
-            <div className="shrink-0 border-t border-border bg-background px-3.5 pb-3.5 pt-2.5">
-              <div className="mb-2.5 flex items-center justify-between gap-3 text-[12px] text-muted-foreground">
-                <span>{t(($) => $.attachment.meta_sender)}</span>
-                <span className="min-w-0 truncate font-semibold text-foreground">
-                  {uploaderName?.trim() || "—"}
-                </span>
-              </div>
-              {createdAt && (
-                <div className="mb-2.5 flex items-center justify-between gap-3 text-[12px] text-muted-foreground">
-                  <span>{t(($) => $.attachment.meta_time)}</span>
-                  <span className="min-w-0 truncate font-semibold text-foreground">
-                    {formatWhen(createdAt)}
-                  </span>
-                </div>
-              )}
-              <button
-                type="button"
-                data-testid="mobile-file-detail-download"
-                className="mb-2 h-11 w-full rounded-[10px] bg-[#007a5a] text-[15px] font-bold text-white hover:bg-[#006b4e]"
-                onClick={runDownload}
-              >
-                {t(($) => $.image.download)}
-              </button>
-              <button
-                type="button"
-                data-testid="mobile-file-detail-open"
-                className="h-11 w-full rounded-[10px] border border-border bg-background text-[14px] font-semibold text-foreground hover:bg-muted/50"
-                onClick={onOpen}
-              >
-                {t(($) => $.attachment.open_elsewhere)}
-              </button>
-            </div>
+            <MobilePreviewBody
+              mode={mode}
+              filename={filename}
+              previewUrl={previewUrl}
+              attachmentId={attachmentId}
+            />
           </div>
         </dialog>
       )}
@@ -310,7 +256,7 @@ function MobilePreviewBody({
       <HtmlPreviewBody
         source={{ kind: "attachment", attachmentId }}
         title={filename}
-        className="h-full min-h-[12rem] w-full"
+        className="h-full min-h-0 w-full flex-1"
         iframeClassName="rounded-none border-0"
         placeholderClassName="h-full min-h-[12rem]"
         errorTestId="mobile-file-preview-error"
@@ -325,14 +271,14 @@ function MobilePreviewBody({
         title={filename}
         src={previewUrl}
         sandbox="allow-scripts"
-        className="h-full min-h-[12rem] w-full border-0 bg-background"
+        className="h-full min-h-0 w-full flex-1 border-0 bg-background"
       />
     );
   }
 
   if (mode === "image" && previewUrl) {
     return (
-      <div className="flex h-full min-h-[12rem] items-center justify-center overflow-auto p-3">
+      <div className="flex h-full min-h-0 flex-1 items-center justify-center overflow-auto p-3">
         <img
           data-testid="mobile-file-preview-image"
           src={previewUrl}
@@ -344,16 +290,13 @@ function MobilePreviewBody({
   }
 
   if (mode === "pdf" && previewUrl) {
-    // Prefer <object> over <iframe>: app CSP blocks PDF in iframes
-    // (see attachment-preview-modal), and react-doctor requires sandboxed
-    // iframes which break Chromium's PDF viewer.
     return (
       <object
         data={previewUrl}
         type="application/pdf"
         data-testid="mobile-file-preview-pdf"
         aria-label={filename}
-        className="h-full min-h-[12rem] w-full bg-background"
+        className="h-full min-h-0 w-full flex-1 bg-background"
       >
         <div className="flex h-full min-h-[12rem] flex-col items-center justify-center gap-2 px-6 text-center">
           <p className="text-[15px] font-semibold">
@@ -370,7 +313,7 @@ function MobilePreviewBody({
   return (
     <div
       data-testid="mobile-file-preview-unavailable"
-      className="flex h-full min-h-[12rem] flex-col items-center justify-center gap-2 px-6 text-center"
+      className="flex h-full min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 text-center"
     >
       <p className="text-[15px] font-semibold text-foreground">
         {t(($) => $.attachment.cannot_preview)}

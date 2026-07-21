@@ -324,6 +324,9 @@ func (h *Handler) InviteGroupManager(w http.ResponseWriter, r *http.Request) {
 	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
 		return
 	}
+	if !h.requireChannelNotSystem(w, r.Context(), workspaceID, channelID) {
+		return
+	}
 	agent, created, err := h.EnsureGroupManagerForChannel(r.Context(), parseUUID(workspaceID), channelID, parseUUID(userID))
 	if err != nil {
 		if errors.Is(err, errGroupManagerNoRuntime) {

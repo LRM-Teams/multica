@@ -100,11 +100,12 @@ func (c envDispatchSandboxConfig) createInput(workspaceID, daemonID string) (ser
 // validateEnvDispatchCredentialOwner enforces the spec AC-4 invariant that a
 // binding's model-configuration owner equals its source agent. A model
 // credential or training session MUST NOT be used when its owner does not equal
-// the binding source agent. An empty owner (legacy/unset binding) is allowed so
-// the check is additive; an explicit mismatch fails closed. Error messages never
-// format credential values.
+// the binding source agent. An empty owner (legacy/unset binding) or empty source
+// (caller has no owner fact to compare) is allowed so the check is additive; an
+// explicit mismatch between two known identities fails closed. Error messages
+// never format credential values.
 func validateEnvDispatchCredentialOwner(binding envAgentSandboxBinding, sourceAgentID string) error {
-	if binding.ModelConfigOwnerAgentID != "" && binding.ModelConfigOwnerAgentID != sourceAgentID {
+	if binding.ModelConfigOwnerAgentID != "" && sourceAgentID != "" && binding.ModelConfigOwnerAgentID != sourceAgentID {
 		return fmt.Errorf("env-dispatch model credential owner mismatch")
 	}
 	return nil

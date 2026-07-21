@@ -91,7 +91,7 @@ Unexpected defects handled:
 - A generated `GetIssueForTask` method was depended on by service code but absent from its sqlc source query. Regeneration deleted it and made the project fail compilation. The source query is now authoritative, so future generation preserves the interface.
 - The first full handler run showed that direct `CreateIssue` callers such as Autopilot and onboarding passed no new acceptance-criteria argument, causing a database NOT NULL failure and user-visible HTTP 500s. SQL now maps an omitted argument to `[]`; Radar still enforces non-empty criteria at its own action boundary. The full handler package passes with these entry points covered.
 - Two new database tests initially combined parameterized SQL statements in one prepared call. pgx correctly rejected the test setup; the fixtures were split into separate statements. This was test-only and did not justify a product fallback.
-- The existing default local database records migration 169 while missing columns defined by that migration. The deployed dev database has the complete schema through migration 203, so this is stale local test state rather than a user-path defect. Verification uses a fresh disposable database migrated from 001 through 204.
+- The existing default local database records migration 169 while missing columns defined by that migration. The deployed dev database has the complete schema through migration 203, so this is stale local test state rather than a user-path defect. Verification uses a fresh disposable database migrated from 001 through the branch's latest migration.
 
 ### Step 4 — Implement capability-aware delegation and rework
 
@@ -112,12 +112,12 @@ Status: complete
 
 Verification:
 
-- A fresh disposable PostgreSQL database was migrated from 001 through 204 and used for the database-backed regression suite. `go test ./internal/handler ./internal/service ./internal/radar ./internal/migrations` passes, including HTTP issue creation, Ambient context assembly, Radar issue authoring, rework success, and injected transactional rollback.
+- A fresh disposable PostgreSQL database was explicitly migrated from 001 through 205. Both `204_system_general_channel` and `205_beckham_product_delivery_actions` are recorded, and `go test -count=1 ./internal/handler ./internal/radar ./internal/migrations ./cmd/migrate` passes, including HTTP issue creation, Ambient context assembly, Radar issue authoring, rework success, injected transactional rollback, and migration-runner coverage. The complete backend suite also passes in final Linux CI.
 - `go vet ./...` passes.
 - `pnpm typecheck` passes across the monorepo.
 - `pnpm test` passes all TypeScript unit-test tasks: core 733, docs 17, web 69, desktop 216, and views 2164 passed with 5 skipped.
 - `git diff --check` passes.
-- The deployed dev service was inspected without mutation: `http://82.157.184.89:8090/health` returned `{"status":"ok"}`; the backend container was running with restart count 0; its database has the complete workspace-Radar schema and migrations through 203. Migration 204 remains intentionally undeployed until this PR is merged.
+- The deployed dev service was inspected without mutation: `http://82.157.184.89:8090/health` returned `{"status":"ok"}`; the backend container was running with restart count 0; its database has the complete workspace-Radar schema and migrations through 203. The branch's newer migrations remain intentionally undeployed until this PR is merged.
 - Before publication, `origin/dev` advanced to `f4a9b09e48f19eac41740648eda5ee6db66774af` (`hot-fix`). Its files do not overlap this change. The branch was rebased onto that commit and the handler/service/Radar/migration suite passed again.
 - Browser/E2E testing was not attempted because this checkout cannot run the product locally and the agreed boundary permits unit/static verification. No deployed-server files or database rows were modified.
 
@@ -127,6 +127,8 @@ Unexpected failures assessed:
 - `pnpm test` prints existing React `act`, i18n, and mock-DOM-property warnings while all test tasks pass. None originate from the backend-only implementation in this change.
 - A final `make sqlc` idempotence check could not run because this development machine has no `sqlc` executable. This is a missing local generator tool, not a product path. The authoritative SQL and generated Go are both committed, compile, and pass the database-backed tests; generation previously exposed and prompted the missing-source-query repair recorded in Step 3.
 - The first PR CI run exposed a flaky pre-existing daemon test, `TestPollLoopTargetsRuntimeWakeup`: its setup queued a broadcast wakeup even though runtime pollers already claim immediately, then changed counter phases as soon as those initial claims arrived. A still-buffered broadcast could therefore be counted as a targeted slow-runtime claim. The production code has separate per-runtime wakeup channels and the targeted branch only signals the selected channel, so this was not runtime cross-talk. The redundant test broadcast was removed; the corrected focused test passed 200 consecutive local runs.
+- While final CI was running, `dev` added `204_system_general_channel`, so the Beckham migration moved to the next sequence number, 205. An initial concern that two numeric 204 prefixes would collide was disproved by the authoritative migration run: the version key is the full filename stem, this repository already has several shared numeric prefixes, and both distinct stems would execute. The renumbering preserves chronological order; it is not a compatibility workaround for a nonexistent loader collision. A new database was then migrated through 204 and 205 before rerunning the backend suite.
+- The first fresh-database command started handler, service, and Radar test packages concurrently while relying on the handler package to bootstrap migrations. Service/Radar reached the empty database first and reported missing relations. After an explicit migration phase, Radar passed; three unrelated service sandbox-cleanup tests still assume some global user already exists and return `no rows` on a truly empty database. That is a non-hermetic test fixture, not a runtime path, and this PR does not add product waits or seed data for it. The final CI backend job runs the repository's supported setup and passes the full package set.
 
 ### Step 6 — Publish for review
 
@@ -135,7 +137,7 @@ Status: complete
 Publication:
 
 - Implementation commit: `845b6b7017537813007606db67664bfbca964c2d` (`feat(beckham): enforce evidence-based product delivery`).
-- Branch: `agent/beckham-product-delivery`. It was initially based on `f4a9b09e48f19eac41740648eda5ee6db66774af`; when `dev` advanced during PR verification, current `origin/dev` commit `6da5dd09ccf0d35ff850fe9b6991723f31d1ac45` was merged before final handoff. The incoming Plan & Billing files do not overlap this implementation.
+- Branch: `agent/beckham-product-delivery`. It was synchronized while `dev` advanced during PR verification and finally includes `c843c86728b525d3880459eab6b7dea304101a9c`. The incoming product changes do not overlap this implementation; after their migration 204 landed, this branch uses the next sequence number, 205.
 - PR: [#815 — feat(beckham): enforce evidence-based product delivery](https://github.com/LRM-Teams/multica/pull/815), targeting `dev`.
 - PR state after creation: open, ready for review, and reported mergeable by GitHub. It is not a draft, so the repository merge control is available once required checks pass.
 - The GitHub App PR-creation call returned `403 Resource not accessible by integration`; authenticated `gh` with repository scope created the same PR as the documented fallback. This affected only the publication interface, not repository contents or validation.

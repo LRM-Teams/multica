@@ -432,4 +432,59 @@ describe("ChannelsPage header actions — container-driven overflow (#568)", () 
 
     expect(await screen.findByRole("button", { name: "project" })).toBeInTheDocument();
   });
+
+  // Exact-boundary guard: the contract is `< HEADER_ACTIONS_COMPACT_BREAKPOINT`
+  // (360), so 359 must collapse and 360/361 must not — and each side must be
+  // stable under repeated same-width ResizeObserver ticks right at the edge,
+  // not just "far from the boundary" (which the earlier no-flap test only
+  // proved at 300/1024).
+  it("resolves the exact 360px boundary correctly and stays stable under repeated ticks at 359/360/361", async () => {
+    resizeContainerTo(1024);
+    renderPage();
+    await screen.findByTestId("message-list");
+    expectDirect();
+
+    // 359 — one px below the breakpoint — must collapse, and stay collapsed
+    // across repeated identical-width ticks.
+    resizeContainerTo(359);
+    expectCompact();
+    resizeContainerTo(359);
+    expectCompact();
+    resizeContainerTo(359);
+    expectCompact();
+
+    // 360 — exactly at the breakpoint — contract is `< 360`, so this is
+    // "enough room," must be direct, and stay direct across repeated ticks.
+    resizeContainerTo(360);
+    expectDirect();
+    resizeContainerTo(360);
+    expectDirect();
+    resizeContainerTo(360);
+    expectDirect();
+
+    // 361 — one px above — must also be direct, stable across repeated ticks.
+    resizeContainerTo(361);
+    expectDirect();
+    resizeContainerTo(361);
+    expectDirect();
+  });
+
+  // Single-flip guard right at the edge: crossing the boundary in either
+  // direction switches exactly once per crossing — no double-fire, no
+  // settling on the wrong side after the second tick.
+  it("flips exactly once when crossing the boundary 359 → 360 → 359", async () => {
+    resizeContainerTo(1024);
+    renderPage();
+    await screen.findByTestId("message-list");
+    expectDirect();
+
+    resizeContainerTo(359);
+    expectCompact();
+
+    resizeContainerTo(360);
+    expectDirect();
+
+    resizeContainerTo(359);
+    expectCompact();
+  });
 });

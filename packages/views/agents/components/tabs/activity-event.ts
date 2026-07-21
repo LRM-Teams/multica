@@ -57,7 +57,42 @@ export type ActivityLabelKey =
   | "searching_code"
   | "searching_web"
   | "sending_message"
-  | "send_held_by_freshness";
+  | "send_held_by_freshness"
+  // #601 — the rest of the canonical tool/CLI family Barry's BE now emits.
+  // One label per canonical tool name (see TOOL_ACTION_KEY below); no raw
+  // slug ever reaches this union.
+  | "checking_messages"
+  | "waiting_for_message"
+  | "reading_history"
+  | "searching_messages"
+  | "listing_server"
+  | "listing_tasks"
+  | "creating_tasks"
+  | "claiming_task"
+  | "unclaiming_task"
+  | "updating_task_status"
+  | "adding_channel_member"
+  | "joining_channel"
+  | "leaving_channel"
+  | "uploading_file"
+  | "viewing_file"
+  | "listing_issues"
+  | "getting_issue"
+  | "searching_issues"
+  | "listing_issue_comments"
+  | "commenting_issue"
+  | "deleting_issue_comment"
+  | "updating_tasks"
+  | "scheduling_reminder"
+  | "listing_reminders"
+  | "canceling_reminder"
+  | "collaborating"
+  | "fetching_url"
+  // Generic, safe fallback for a tool the FE doesn't (yet) recognize a
+  // canonical label for. Never the raw slug, never a fabricated subtext —
+  // diagnostic detail lives behind the existing raw/diagnostic surfaces,
+  // never this mainline row (#601, Parker: "unknown 不静默丢").
+  | "performing_action";
 
 export type ActivitySubtextKey =
   | "message_received"
@@ -88,6 +123,34 @@ export const ACTIVITY_LABEL_EN: Record<ActivityLabelKey, string> = {
   searching_web: "Searching web",
   sending_message: "Sending message",
   send_held_by_freshness: "Send held by freshness check",
+  checking_messages: "Checking messages",
+  waiting_for_message: "Waiting for message",
+  reading_history: "Reading history",
+  searching_messages: "Searching messages",
+  listing_server: "Listing server",
+  listing_tasks: "Listing tasks",
+  creating_tasks: "Creating tasks",
+  claiming_task: "Claiming task",
+  unclaiming_task: "Unclaiming task",
+  updating_task_status: "Updating task status",
+  adding_channel_member: "Adding channel member",
+  joining_channel: "Joining channel",
+  leaving_channel: "Leaving channel",
+  uploading_file: "Uploading file",
+  viewing_file: "Viewing file",
+  listing_issues: "Listing issues",
+  getting_issue: "Getting issue",
+  searching_issues: "Searching issues",
+  listing_issue_comments: "Listing issue comments",
+  commenting_issue: "Commenting on issue",
+  deleting_issue_comment: "Deleting issue comment",
+  updating_tasks: "Updating tasks",
+  scheduling_reminder: "Scheduling reminder",
+  listing_reminders: "Listing reminders",
+  canceling_reminder: "Canceling reminder",
+  collaborating: "Collaborating",
+  fetching_url: "Fetching URL",
+  performing_action: "Performing an action",
 };
 
 export const ACTIVITY_SUBTEXT_EN: Record<ActivitySubtextKey, string> = {
@@ -215,12 +278,14 @@ export function isNarrativeActivityEvent(event: ActivityEvent): boolean {
     case "runtime_diagnostic":
       return false;
     case "tool_call":
-      // Only surface a tool row we can label with a canonical Raft action. An
-      // un-mapped tool (BE didn't canonicalize it, or a parse artifact like a
-      // status leaking into `tool`) drops out of the user-facing timeline
-      // entirely — never faked as "Working" (#384). BE emits an
-      // `unmapped_tool_name` gap event so the miss is fixed at the source.
-      return isMappedTool(event);
+      // Every tool_call now reaches the mainline (#601, Parker: "unknown 不
+      // 静默丢"). A canonical tool gets its real gerund label; a tool the FE
+      // doesn't recognize still shows — as the generic, safe "Performing an
+      // action" row (`toolPresentation`'s fallback), never faked as "Working"
+      // and never leaking the raw slug. Superseded the pre-#601 behavior of
+      // dropping an un-mapped row entirely (#384) — that made a real gap
+      // invisible instead of surfacing it honestly.
+      return true;
     case "custom":
       return (
         // Agent status → timeline: keep IDLE only, drop WORKING. "Working" the
@@ -273,9 +338,9 @@ function statusTone(event: ActivityEvent): ActivityDotTone {
 // `Read`, etc. — so `event.tool` is NOT a stable Raft key set (confirmed with BE,
 // #382). Normalize the provider slug to a Raft semantic action, then use the
 // source-backed gerund label (raft `TOOL_DISPLAY_METADATA`). An un-mapped slug
-// (BE didn't canonicalize it, or a parse artifact) is dropped from the
-// user-facing timeline by `isMappedTool`/`isNarrativeActivityEvent` — never
-// faked as "Working" and never echoing the raw name (#384).
+// (BE didn't canonicalize it, or a parse artifact) still reaches the timeline
+// (#601) via `toolPresentation`'s generic "Performing an action" fallback —
+// never faked as "Working" and never echoing the raw name (#384).
 const TOOL_SEMANTIC: Record<string, string> = {
   bash: "command",
   exec_command: "command",
@@ -309,6 +374,39 @@ const TOOL_SEMANTIC: Record<string, string> = {
   web_search: "web_search",
   websearch: "web_search",
   send_message: "send_message",
+  // #601 — the rest of the canonical Raft CLI family (Barry's BE alias table,
+  // server/internal/handler/agent_activity.go `agentActivityToolAliases`).
+  // These arrive from the BE already canonicalized (no raw provider slugs to
+  // fold), but are listed here in the same semantic → label indirection as
+  // everything else so a future alias only ever needs one new entry.
+  check_messages: "check_messages",
+  receive_message: "check_messages", // Barry: check_messages/receive_message share one label
+  wait_for_message: "wait_for_message",
+  read_history: "read_history",
+  search_messages: "search_messages",
+  list_server: "list_server",
+  list_tasks: "list_tasks",
+  create_tasks: "create_tasks",
+  claim_tasks: "claim_tasks",
+  unclaim_task: "unclaim_task",
+  update_task_status: "update_task_status",
+  add_channel_member: "add_channel_member",
+  join_channel: "join_channel",
+  leave_channel: "leave_channel",
+  upload_file: "upload_file",
+  view_file: "view_file",
+  list_issues: "list_issues",
+  get_issue: "get_issue",
+  search_issues: "search_issues",
+  list_issue_comments: "list_issue_comments",
+  comment_issue: "comment_issue",
+  delete_issue_comment: "delete_issue_comment",
+  todo_write: "todo_write",
+  schedule_reminder: "schedule_reminder",
+  list_reminders: "list_reminders",
+  cancel_reminder: "cancel_reminder",
+  collab_tool_call: "collab_tool_call",
+  web_fetch: "web_fetch",
 };
 
 const TOOL_ACTION_KEY: Record<string, ActivityLabelKey> = {
@@ -324,17 +422,34 @@ const TOOL_ACTION_KEY: Record<string, ActivityLabelKey> = {
   // shown as "Running command · <command>" via the command branch in
   // `toolPresentation` — Frank's #v0 rule: don't invent a "Sending message"
   // label, show the real command like any other CLI.
+  check_messages: "checking_messages",
+  wait_for_message: "waiting_for_message",
+  read_history: "reading_history",
+  search_messages: "searching_messages",
+  list_server: "listing_server",
+  list_tasks: "listing_tasks",
+  create_tasks: "creating_tasks",
+  claim_tasks: "claiming_task",
+  unclaim_task: "unclaiming_task",
+  update_task_status: "updating_task_status",
+  add_channel_member: "adding_channel_member",
+  join_channel: "joining_channel",
+  leave_channel: "leaving_channel",
+  upload_file: "uploading_file",
+  view_file: "viewing_file",
+  list_issues: "listing_issues",
+  get_issue: "getting_issue",
+  search_issues: "searching_issues",
+  list_issue_comments: "listing_issue_comments",
+  comment_issue: "commenting_issue",
+  delete_issue_comment: "deleting_issue_comment",
+  todo_write: "updating_tasks",
+  schedule_reminder: "scheduling_reminder",
+  list_reminders: "listing_reminders",
+  cancel_reminder: "canceling_reminder",
+  collab_tool_call: "collaborating",
+  web_fetch: "fetching_url",
 };
-
-// A tool row only reaches the user-facing timeline when its slug maps to a
-// canonical Raft action (see `isNarrativeActivityEvent`). An un-mapped tool is a
-// canonicalization gap — the BE didn't canonicalize the name, or a parse
-// artifact leaked a non-tool string into `tool`. We keep it diagnostic-only
-// rather than papering over it with a fake "Working" row (#384); the source-side
-// fix is BE emitting an `unmapped_tool_name` gap event.
-function isMappedTool(event: ActivityEvent): boolean {
-  return !!TOOL_SEMANTIC[normalizedTool(event)];
-}
 
 // The full redacted command lives in `entries[].command` (#389 two-tier: the
 // compact clip is `tool_target` inline, the full command is for hover/copy).
@@ -398,6 +513,27 @@ export function activityExpansionContent(
 const COMMAND_INLINE_CAP = 500;
 
 function toolPresentation(event: ActivityEvent): ActivityPresentation {
+  // #601 security gate (Parker): the mapped/semantic check MUST run before
+  // anything else, including the command branch below. `fullCommand()` reads
+  // `entries[].command` regardless of whether `tool` is recognized — if an
+  // unmapped/unknown tool happened to carry that field (a BE version drift,
+  // a partially-scrubbed row, anything), checking command first would still
+  // surface it as "Running command · <raw command>". The FE contract must
+  // not rely on the BE having already scrubbed unknown rows; it must refuse
+  // to render ANY detail for a tool it doesn't recognize, unconditionally.
+  const semantic = TOOL_SEMANTIC[normalizedTool(event)];
+  if (!semantic) {
+    // A tool the FE doesn't recognize (BE didn't canonicalize it, or a parse
+    // artifact leaked a non-tool string into `tool`). Show the generic, safe
+    // row — never the raw slug, never a fabricated subtext or command detail,
+    // regardless of what other fields the event happens to carry (#601,
+    // Parker: "unknown 不静默丢" + "unknown 先直接返回 performing_action +
+    // 无 subtext/expand"). Gated on `semantic`, NOT `labelKey` — `send_message`
+    // is a recognized semantic with no static label (it always renders via
+    // the command branch below), and must not be misclassified as unknown.
+    return { labelKey: "performing_action", tone: statusTone(event) };
+  }
+
   // Frank's rule (#v0 「不发明新东西」): anything run as a CLI command — bash, and
   // any multica subcommand the daemon canonicalized to a semantic tool
   // (`send_message`, …) — is shown FAITHFULLY as "Running command · <command>",
@@ -419,11 +555,16 @@ function toolPresentation(event: ActivityEvent): ActivityPresentation {
     };
   }
 
+  // A mapped semantic with no static label and no command (e.g. a future
+  // command-family alias added to TOOL_SEMANTIC without a matching
+  // TOOL_ACTION_KEY entry) still falls back to the generic safe row, never
+  // an invented label.
+  const labelKey = TOOL_ACTION_KEY[semantic] ?? "performing_action";
+  if (labelKey === "performing_action") {
+    return { labelKey, tone: statusTone(event) };
+  }
+
   const subtext = toolTarget(event);
-  const semantic = TOOL_SEMANTIC[normalizedTool(event)];
-  // Rendered tool rows are always mapped (see `isNarrativeActivityEvent`); the
-  // "working" branch is an unreachable type guard, never a real fallback label.
-  const labelKey = (semantic && TOOL_ACTION_KEY[semantic]) || "working";
   // Classify the subtext so the row renders it correctly (#v0 照实显示). A file
   // tool's target is a PATH (basename-preserving middle-ellipsis). A command
   // tool whose clip arrived without an attached full command still renders as a

@@ -60,3 +60,31 @@ if (typeof globalThis.ResizeObserver === "undefined") {
 if (typeof document.elementFromPoint !== "function") {
   document.elementFromPoint = () => null;
 }
+
+// jsdom doesn't implement pointer capture; vaul's Drawer (drag-to-dismiss)
+// calls setPointerCapture/releasePointerCapture on every pointerdown/up
+// inside its content, not just on the drag handle.
+if (typeof Element.prototype.setPointerCapture !== "function") {
+  Element.prototype.setPointerCapture = () => {};
+}
+if (typeof Element.prototype.releasePointerCapture !== "function") {
+  Element.prototype.releasePointerCapture = () => {};
+}
+if (typeof Element.prototype.hasPointerCapture !== "function") {
+  Element.prototype.hasPointerCapture = () => false;
+}
+
+// jsdom's CSSStyleDeclaration implements `webkitTransform` (returning `""`)
+// but not `mozTransform` (returns `undefined`). vaul's Drawer reads
+// `style.transform || style.webkitTransform || style.mozTransform` on
+// pointerup (getTranslate, for drag-to-dismiss); with `transform`/
+// `webkitTransform` both `""` (falsy) it falls through to `mozTransform`,
+// and the following `.match()` call on `undefined` throws.
+if (typeof CSSStyleDeclaration !== "undefined" && !("mozTransform" in CSSStyleDeclaration.prototype)) {
+  Object.defineProperty(CSSStyleDeclaration.prototype, "mozTransform", {
+    configurable: true,
+    get(this: CSSStyleDeclaration) {
+      return this.transform || "";
+    },
+  });
+}

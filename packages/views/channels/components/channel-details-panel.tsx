@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode, useState } from "react";
+import { type ComponentProps, type ReactNode, useState } from "react";
 import { Archive, Bell, BellOff } from "lucide-react";
 import type { Channel, ChannelMemberBrief } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
@@ -50,6 +50,7 @@ export function ChannelDetailsPanel({
   hideSettingsTab = false,
   onClose,
   variant = "panel",
+  portalContainer,
 }: {
   channel: Channel;
   members: ChannelMemberBrief[];
@@ -76,6 +77,22 @@ export function ChannelDetailsPanel({
   hideSettingsTab?: boolean;
   onClose: () => void;
   variant?: "panel" | "page";
+  /**
+   * DOM node (or ref) to portal the Settings tab's project picker dropdown
+   * into, instead of the default `document.body`. #576 — needed when this
+   * panel is hosted inside the mobile "..." modal Drawer (`variant="page"`):
+   * a modal Dialog locks background interaction by setting
+   * `body.style.pointerEvents = "none"` and re-enabling `pointer-events:
+   * auto` only on its own content node, so a menu portaled to
+   * `document.body` (a DOM sibling of that content, not a descendant)
+   * inherits the lock and becomes unclickable. When provided, this same ref
+   * is attached to the Settings tab's own wrapper node (a descendant of the
+   * Drawer's unlocked content) and forwarded to
+   * `ChannelProjectSettingsPanel`, nesting the picker's popup inside the
+   * already-unlocked subtree. Left undefined for the desktop docked
+   * `variant="panel"` panel, which isn't inside a modal overlay.
+   */
+  portalContainer?: ComponentProps<typeof ChannelProjectSettingsPanel>["portalContainer"];
 }) {
   const { t } = useT("channels");
   const tabs: { id: ChannelDetailsTab; label: string; hidden?: boolean }[] = [
@@ -202,7 +219,10 @@ export function ChannelDetailsPanel({
         )}
 
         {tab === "settings" && !hideSettingsTab && (
-          <div>
+          // #576 — also the portal-container anchor for the project picker's
+          // dropdown (see the `portalContainer` prop doc above); only
+          // load-bearing for the mobile `variant="page"` Drawer case.
+          <div ref={portalContainer}>
             <div className="space-y-4 border-b p-3 md:p-4">
               <div>
                 <label className="mb-1.5 block text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
@@ -262,6 +282,7 @@ export function ChannelDetailsPanel({
               onChange={onChangeProject}
               disabled={!projectEditable}
               disabledReason={projectDisabledReason}
+              portalContainer={portalContainer}
             />
 
             <div className="border-t p-3 md:p-4">

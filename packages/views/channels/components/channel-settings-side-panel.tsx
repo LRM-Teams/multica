@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import type { Channel, ChannelMemberBrief } from "@multica/core/types";
 import { ConversationSidePanelShell } from "../../common/conversation-side-panel-shell";
 import { ChannelGroupAvatar } from "./channel-group-avatar";
@@ -39,23 +40,26 @@ export function ChannelSettingsSidePanel({
   variant?: "panel" | "page";
 }) {
   const { t } = useT("channels");
+  const settingsLabel = t(($) => $.settings.title);
+  const leading = useMemo(
+    () => (
+      <>
+        <ChannelGroupAvatar members={members} size={32} />
+        <div className="flex min-w-0 flex-col">
+          <p className="min-w-0 truncate text-sm font-semibold">{channel.name}</p>
+          <p className="truncate text-xs text-muted-foreground">{settingsLabel}</p>
+        </div>
+      </>
+    ),
+    [members, channel.name, settingsLabel],
+  );
 
   return (
     <ConversationSidePanelShell
       variant={variant}
       onClose={onClose}
       closeAriaLabel={t(($) => $.settings.close_aria)}
-      leading={
-        <>
-          <ChannelGroupAvatar members={members} size={32} />
-          <div className="flex min-w-0 flex-col">
-            <p className="min-w-0 truncate text-sm font-semibold">{channel.name}</p>
-            <p className="truncate text-xs text-muted-foreground">
-              {t(($) => $.settings.title)}
-            </p>
-          </div>
-        </>
-      }
+      leading={leading}
     >
       <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
         <ChannelProjectSettingsPanel

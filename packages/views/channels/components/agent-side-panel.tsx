@@ -118,28 +118,33 @@ export function AgentSidePanel({
     tabBodyRef.current.scrollTop = tabScrollTopRef.current[tab] ?? 0;
   }, [tab, variant]);
 
+  const leading = useMemo(
+    () => (
+      <>
+        <ActorAvatarBase
+          name={displayName}
+          initials={initials}
+          avatarUrl={resolvePublicFileUrl(agent.avatar_url)}
+          isAgent
+          size={32}
+        />
+        {/* #371: name + live presence tight together (matches DM header /
+            profile hover card). Visible before opening the Activity tab. */}
+        <div className="flex min-w-0 items-center gap-2">
+          <p className="min-w-0 truncate text-sm font-semibold">{displayName}</p>
+          <AgentPresenceStatusLine agentId={agent.id} className="max-w-[9rem]" />
+        </div>
+      </>
+    ),
+    [displayName, initials, agent.avatar_url, agent.id],
+  );
+
   return (
     <ConversationSidePanelShell
       variant={variant}
       onClose={onClose}
       closeAriaLabel={t(($) => $.side_panel.close_aria)}
-      leading={
-        <>
-          <ActorAvatarBase
-            name={displayName}
-            initials={initials}
-            avatarUrl={resolvePublicFileUrl(agent.avatar_url)}
-            isAgent
-            size={32}
-          />
-          {/* #371: name + live presence tight together (matches DM header /
-              profile hover card). Visible before opening the Activity tab. */}
-          <div className="flex min-w-0 items-center gap-2">
-            <p className="min-w-0 truncate text-sm font-semibold">{displayName}</p>
-            <AgentPresenceStatusLine agentId={agent.id} className="max-w-[9rem]" />
-          </div>
-        </>
-      }
+      leading={leading}
     >
       {showTabBar ? (
         <>

@@ -173,13 +173,13 @@ function TasksScopeToggle({
   projectUnavailable: boolean;
 }) {
   const { t } = useT("channels");
+  // The wrapping row deliberately carries no `role="group"` — each pill's own
+  // visible text ("This group" / "Whole project") is already its accessible
+  // name via `aria-pressed`, so a redundant group role/label isn't needed
+  // (and `<div role="group">` isn't the right semantic element here anyway).
   return (
     <div className="shrink-0 border-b border-border/40 px-4 py-2">
-      <div
-        className="flex flex-wrap items-center gap-1.5"
-        role="group"
-        aria-label={t(($) => $.tasks.scope_toggle_aria)}
-      >
+      <div className="flex flex-wrap items-center gap-1.5">
         <button
           type="button"
           aria-pressed={scope === "group"}
@@ -296,11 +296,15 @@ export function ChannelTasksBoard({ channelId }: { channelId: string }) {
   // Project Detail's exact `project:<id>` cache identity, so this never
   // mints a second source of truth for the same project's issues.
   const projectOpts = hasProject ? projectMyIssuesOpts(projectId) : undefined;
-  const projectIssuesQuery = useQuery({
+  const {
+    data: projectIssuesData,
+    isPending: projectIssuesPending,
+    isError: projectIssuesError,
+  } = useQuery({
     ...myIssueListOptions(wsId, projectOpts?.scope ?? "", projectOpts?.filter ?? {}),
     enabled: !!projectOpts,
   });
-  const projectUnavailable = hasProject && projectIssuesQuery.isError;
+  const projectUnavailable = hasProject && projectIssuesError;
 
   // The single source columns are built from — whichever scope is active.
   // The empty state, pending/error state and count all read this same value,
@@ -308,11 +312,11 @@ export function ChannelTasksBoard({ channelId }: { channelId: string }) {
   // so the `columns` useMemo below doesn't see a fresh array identity (and
   // thus re-derive) on every render while nothing scope-relevant changed.
   const activeIssues = useMemo(
-    () => (isProjectScope ? (projectIssuesQuery.data ?? []) : groupLoadedIssues),
-    [isProjectScope, projectIssuesQuery.data, groupLoadedIssues],
+    () => (isProjectScope ? (projectIssuesData ?? []) : groupLoadedIssues),
+    [isProjectScope, projectIssuesData, groupLoadedIssues],
   );
-  const isPending = isProjectScope ? projectIssuesQuery.isPending : channelPending;
-  const isError = isProjectScope ? projectIssuesQuery.isError : channelIsError;
+  const isPending = isProjectScope ? projectIssuesPending : channelPending;
+  const isError = isProjectScope ? projectIssuesError : channelIsError;
 
   const columns = useMemo<RenderedColumn[]>(() => {
     // Reuse the board's grouping definition: one group per board status, in

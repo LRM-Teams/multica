@@ -346,7 +346,6 @@ describe("ChannelTasksBoard", () => {
       renderBoard();
 
       expect(await screen.findByText("Fix the login bug")).toBeInTheDocument();
-      expect(screen.queryByRole("group")).not.toBeInTheDocument();
       expect(screen.queryByText(/This group/)).not.toBeInTheDocument();
       expect(screen.queryByText(/Whole project/)).not.toBeInTheDocument();
     });

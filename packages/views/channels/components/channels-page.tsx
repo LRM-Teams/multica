@@ -658,12 +658,14 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   // isHeaderActionsCompact` (below). If the container widens past the
   // compact breakpoint while the Drawer is open, that condition alone
   // going false would unmount the whole `<Drawer>` out from under an
-  // `open={true}` state — no declarative close transition, and `mobilePanel`
-  // would still hold its last value. Re-narrowing later would then remount
-  // the Drawer already `open={true}` (ghost reopen), with no user click.
-  // Clear the panel state declaratively as soon as eligibility is lost, so
-  // the Drawer always gets a real close transition and a later re-narrow
-  // starts from a genuinely closed state.
+  // `open={true}` state — an unmount, not a controlled `open={false}` exit
+  // transition — and `mobilePanel` would still hold its last value.
+  // Re-narrowing later would then remount the Drawer already `open={true}`
+  // (ghost reopen), with no user click. Clear the panel state declaratively
+  // as soon as eligibility is lost, so the eligibility-loss path is an
+  // unmount-with-state-already-cleared (Radix's own unmount cleanup runs,
+  // not an open-state exit animation) and a later re-narrow starts from a
+  // genuinely closed state.
   useEffect(() => {
     if (!isMobile && !isHeaderActionsCompact) setMobilePanel(null);
   }, [isMobile, isHeaderActionsCompact]);

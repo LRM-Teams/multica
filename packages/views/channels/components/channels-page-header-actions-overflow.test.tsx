@@ -512,6 +512,13 @@ describe("ChannelsPage header actions — container-driven overflow (#568)", () 
     expectDirect();
     expect(screen.queryByRole("button", { name: "project" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Settings" })).toBeNull();
+    // Cleanup guard: the real (unmocked) Vaul overlay/backdrop must not be
+    // left in the document, and Radix/Vaul's own body scroll-lock attribute
+    // must not linger — both are real Vaul-driven DOM side effects (not
+    // this component's own state), so asserting them here is exercising
+    // Vaul's actual unmount cleanup, not a stand-in.
+    expect(document.querySelector("[data-vaul-overlay]")).toBeNull();
+    expect(document.body).not.toHaveAttribute("data-scroll-locked");
 
     // Narrow again — must land on the closed "More" trigger only, never
     // resurrect the Settings tab that was open before it widened.

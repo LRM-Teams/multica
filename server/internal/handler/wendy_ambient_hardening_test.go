@@ -84,11 +84,28 @@ func TestBuildWendyAmbientMarkdownUsesBoundProjectContext(t *testing.T) {
 	`, projectID, openIssueID); err != nil {
 		t.Fatalf("attach open issue to ambient project: %v", err)
 	}
-	if _, err := testPool.Exec(ctx, `
+	var openCommentID string
+	if err := testPool.QueryRow(ctx, `
 		INSERT INTO comment (issue_id, workspace_id, author_type, author_id, content)
 		VALUES ($1, $2, 'member', $3, 'PR is ready for evidence review')
-	`, openIssueID, testWorkspaceID, testUserID); err != nil {
+		RETURNING id
+	`, openIssueID, testWorkspaceID, testUserID).Scan(&openCommentID); err != nil {
 		t.Fatalf("create open issue progress: %v", err)
+	}
+	var issueAttachmentID, commentAttachmentID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO attachment (workspace_id, issue_id, uploader_type, uploader_id, filename, url, content_type, size_bytes)
+		VALUES ($1, $2, 'member', $3, 'approved-layout.webp', '/approved-layout.webp', 'image/webp', 42)
+		RETURNING id
+	`, testWorkspaceID, openIssueID, testUserID).Scan(&issueAttachmentID); err != nil {
+		t.Fatalf("create open issue attachment: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO attachment (workspace_id, issue_id, comment_id, uploader_type, uploader_id, filename, url, content_type, size_bytes)
+		VALUES ($1, $2, $3, 'member', $4, 'implementation-shot.png', '/implementation-shot.png', 'image/png', 84)
+		RETURNING id
+	`, testWorkspaceID, openIssueID, openCommentID, testUserID).Scan(&commentAttachmentID); err != nil {
+		t.Fatalf("create open comment attachment: %v", err)
 	}
 
 	doneTitle := "Project Completed Issue " + uuid.NewString()
@@ -118,6 +135,95 @@ func TestBuildWendyAmbientMarkdownUsesBoundProjectContext(t *testing.T) {
 	}
 	if _, err := testPool.Exec(ctx, `UPDATE issue SET updated_at = '2026-07-21T06:07:08Z'::timestamptz WHERE id = $1`, doneIssueID); err != nil {
 		t.Fatalf("edit completed issue after completion: %v", err)
+	}
+
+	workerID := createHandlerTestAgent(t, "visual-worker-"+uuid.NewString(), nil)
+	worker, err := testHandler.Queries.GetAgent(ctx, parseUUID(workerID))
+	if err != nil {
+		t.Fatalf("load visual worker: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `UPDATE agent SET description = 'Builds polished UI and repository-native visual assets' WHERE id = $1`, workerID); err != nil {
+		t.Fatalf("configure visual worker: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)
+	`, channelID, testWorkspaceID, workerID); err != nil {
+		t.Fatalf("add visual worker to channel: %v", err)
+	}
+	skillSuffix := uuid.NewString()
+	assignedSkillName := "ui-production-" + skillSuffix
+	runtimeSkillName := "imagegen-" + skillSuffix
+	foreignSkillName := "foreign-runtime-imagegen-" + skillSuffix
+	var assignedSkillID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO skill (workspace_id, name, description, content, created_by)
+		VALUES ($1, $2, 'Implements responsive production UI', 'Use repository assets.', $3)
+		RETURNING id
+	`, testWorkspaceID, assignedSkillName, testUserID).Scan(&assignedSkillID); err != nil {
+		t.Fatalf("create assigned visual skill: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `INSERT INTO agent_skill (agent_id, skill_id) VALUES ($1, $2)`, workerID, assignedSkillID); err != nil {
+		t.Fatalf("assign visual skill: %v", err)
+	}
+	var runtimeSkillID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO skill (workspace_id, name, description, content, config, created_by)
+		VALUES (
+			$1, $2, 'Generates bitmap illustrations and textures', 'Use the configured image generator.',
+			jsonb_build_object('origin', jsonb_build_object('type', 'runtime_shared', 'runtime_id', $3::text)), $4
+		)
+		RETURNING id
+	`, testWorkspaceID, runtimeSkillName, uuidToString(worker.RuntimeID), testUserID).Scan(&runtimeSkillID); err != nil {
+		t.Fatalf("create runtime visual skill: %v", err)
+	}
+	var foreignSkillID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO skill (workspace_id, name, description, content, config, created_by)
+		VALUES (
+			$1, $2, 'Must not be attributed to this worker', 'Unavailable here.',
+			jsonb_build_object('origin', jsonb_build_object('type', 'runtime_shared', 'runtime_id', $3::text)), $4
+		)
+		RETURNING id
+	`, testWorkspaceID, foreignSkillName, uuid.NewString(), testUserID).Scan(&foreignSkillID); err != nil {
+		t.Fatalf("create foreign runtime skill: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM skill WHERE id = ANY($1::uuid[])`, []string{assignedSkillID, runtimeSkillID, foreignSkillID})
+	})
+	var messageID, messageAttachmentID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO channel_message (channel_id, workspace_id, author_type, author_id, author_name, content)
+		VALUES ($1, $2, 'user', $3, 'Reference author', 'Match this visual reference')
+		RETURNING id
+	`, channelID, testWorkspaceID, testUserID).Scan(&messageID); err != nil {
+		t.Fatalf("create reference message: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO attachment (
+			workspace_id, uploader_type, uploader_id, filename, url, content_type,
+			size_bytes, channel_id, channel_message_id
+		) VALUES ($1, 'member', $2, 'reference-board.png', '/reference-board.png', 'image/png', 128, $3, $4)
+		RETURNING id
+	`, testWorkspaceID, testUserID, channelID, messageID).Scan(&messageAttachmentID); err != nil {
+		t.Fatalf("create reference message attachment: %v", err)
+	}
+	var deletedMessageID, deletedAttachmentID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO channel_message (channel_id, workspace_id, author_type, author_id, author_name, content, deleted_at)
+		VALUES ($1, $2, 'user', $3, 'Deleted author', 'Deleted visual reference', now())
+		RETURNING id
+	`, channelID, testWorkspaceID, testUserID).Scan(&deletedMessageID); err != nil {
+		t.Fatalf("create deleted reference message: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO attachment (
+			workspace_id, uploader_type, uploader_id, filename, url, content_type,
+			size_bytes, channel_id, channel_message_id
+		) VALUES ($1, 'member', $2, 'deleted-reference.png', '/deleted-reference.png', 'image/png', 64, $3, $4)
+		RETURNING id
+	`, testWorkspaceID, testUserID, channelID, deletedMessageID).Scan(&deletedAttachmentID); err != nil {
+		t.Fatalf("create deleted reference attachment: %v", err)
 	}
 
 	unrelatedTitle := "Unrelated Workspace Issue " + uuid.NewString()
@@ -171,13 +277,26 @@ func TestBuildWendyAmbientMarkdownUsesBoundProjectContext(t *testing.T) {
 		"issue_id=" + openIssueID,
 		openTitle,
 		`acceptance_criteria=["shows project evidence", "uses the issue UUID"]`,
-		"PR is ready for evidence review",
-		"type=comment author_type=member author_id=" + testUserID,
+		`"content": "PR is ready for evidence review"`,
+		`"author_type": "member"`,
+		`"attachment_id": "` + issueAttachmentID + `"`,
+		`"filename": "approved-layout.webp"`,
+		`"content_type": "image/webp"`,
+		`"attachment_id": "` + commentAttachmentID + `"`,
+		`"filename": "implementation-shot.png"`,
+		`"content_type": "image/png"`,
 		"## Recently Completed Project Issues",
 		doneTitle,
 		"completed_at=" + completedAt,
 		"Verified on the delivered artifact",
 		coordinationTitle,
+		"agent_id=" + workerID,
+		`description="Builds polished UI and repository-native visual assets"`,
+		assignedSkillName,
+		runtimeSkillName,
+		"attachment_id=" + messageAttachmentID,
+		`filename="reference-board.png" content_type=image/png`,
+		"multica attachment view --id " + messageAttachmentID + " --output <path>",
 	} {
 		if !strings.Contains(md, want) {
 			t.Fatalf("project ambient markdown missing %q:\n%s", want, md)
@@ -188,6 +307,11 @@ func TestBuildWendyAmbientMarkdownUsesBoundProjectContext(t *testing.T) {
 	}
 	if strings.Contains(md, "completed_at=2026-07-21T06:07:08Z") {
 		t.Fatalf("project ambient markdown mislabeled issue.updated_at as completion time:\n%s", md)
+	}
+	for _, forbidden := range []string{"Deleted visual reference", deletedAttachmentID, "deleted-reference.png", foreignSkillName} {
+		if strings.Contains(md, forbidden) {
+			t.Fatalf("project ambient markdown exposed unavailable evidence %q:\n%s", forbidden, md)
+		}
 	}
 }
 

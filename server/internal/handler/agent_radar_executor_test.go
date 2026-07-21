@@ -20,6 +20,31 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
+func TestValidateAmbientCoordinationPlanRejectsUnsafeShapes(t *testing.T) {
+	allowed := radar.RadarAction{Type: radar.ActionPostChannelMessage}
+	tests := []struct {
+		name string
+		plan radar.ActionPlan
+	}{
+		{name: "more than five actions", plan: radar.ActionPlan{Actions: []radar.RadarAction{allowed, allowed, allowed, allowed, allowed, allowed}}},
+		{name: "no action mixed with effect", plan: radar.ActionPlan{Actions: []radar.RadarAction{{Type: radar.ActionNoAction}, allowed}}},
+		{name: "action outside ambient allowlist", plan: radar.ActionPlan{Actions: []radar.RadarAction{{Type: radar.ActionUpdateAgentPlan}}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := validateAmbientCoordinationPlan(tt.plan); err == nil {
+				t.Fatalf("unsafe plan accepted: %+v", tt.plan)
+			}
+		})
+	}
+	if err := validateAmbientCoordinationPlan(radar.ActionPlan{Actions: []radar.RadarAction{
+		{Type: radar.ActionCreateIssue},
+		{Type: radar.ActionRequestRework},
+	}}); err != nil {
+		t.Fatalf("valid coordination plan rejected: %v", err)
+	}
+}
+
 func TestExecuteRadarCommentIssueCreatesVisibleCommentBeforeExactTargetTask(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -104,6 +129,131 @@ func TestExecuteRadarCommentIssueCreatesVisibleCommentBeforeExactTargetTask(t *t
 	}
 	if got, _ := result["task_id"].(string); got != taskID {
 		t.Fatalf("result task_id = %q, want %s", got, taskID)
+	}
+}
+
+func TestExecuteRadarRequestReworkReopensDoneIssueWithSpecCommentAndTask(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	supervisor := createRadarSupervisorForExecutorTest(t)
+	targetID := createHandlerTestAgent(t, "Radar Rework Target "+uuid.NewString(), nil)
+	issueID := createCommentTriggerPreviewIssue(t, "Radar rework "+uuid.NewString(), "", "")
+	if _, err := testPool.Exec(ctx, `
+		UPDATE issue
+		SET status = 'done', assignee_type = 'agent', assignee_id = $2,
+		    acceptance_criteria = '["old criterion"]'::jsonb
+		WHERE id = $1
+	`, issueID, targetID); err != nil {
+		t.Fatalf("prepare completed issue: %v", err)
+	}
+	criteria := []string{"use the approved WebP asset", "attach desktop and mobile screenshots"}
+	payload, err := json.Marshal(map[string]any{
+		"issue_id":            issueID,
+		"target_agent_id":     targetID,
+		"content":             "The delivered UI substitutes CSS shapes for the required artwork.",
+		"acceptance_criteria": criteria,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, activityTarget, err := testHandler.executeApprovedRadarActionWithTarget(ctx, db.AgentRadarRun{
+		WorkspaceID: supervisor.WorkspaceID,
+		AgentID:     supervisor.ID,
+	}, supervisor, radar.RadarAction{Type: radar.ActionRequestRework, Payload: payload})
+	if err != nil {
+		t.Fatalf("request rework: %v", err)
+	}
+	if !activityTarget.Trusted || activityTarget.Kind != "issue" || uuidToString(activityTarget.ID) != issueID {
+		t.Fatalf("activity target = %+v, want issue %s", activityTarget, issueID)
+	}
+	var status string
+	var rawCriteria []byte
+	if err := testPool.QueryRow(ctx, `SELECT status, acceptance_criteria FROM issue WHERE id = $1`, issueID).Scan(&status, &rawCriteria); err != nil {
+		t.Fatalf("load reopened issue: %v", err)
+	}
+	if status != "todo" {
+		t.Fatalf("reworked issue status = %q, want todo", status)
+	}
+	var storedCriteria []string
+	if err := json.Unmarshal(rawCriteria, &storedCriteria); err != nil {
+		t.Fatalf("decode rework criteria: %v", err)
+	}
+	if len(storedCriteria) != len(criteria) || storedCriteria[0] != criteria[0] || storedCriteria[1] != criteria[1] {
+		t.Fatalf("rework criteria = %#v, want %#v", storedCriteria, criteria)
+	}
+	var commentID, content string
+	if err := testPool.QueryRow(ctx, `SELECT id, content FROM comment WHERE issue_id = $1`, issueID).Scan(&commentID, &content); err != nil {
+		t.Fatalf("load rework comment: %v", err)
+	}
+	if !strings.Contains(content, "substitutes CSS shapes") || !strings.Contains(content, "mention://agent/"+targetID) {
+		t.Fatalf("rework comment = %q", content)
+	}
+	var taskID, triggerCommentID, taskStatus string
+	if err := testPool.QueryRow(ctx, `
+		SELECT id, trigger_comment_id, status
+		FROM agent_task_queue WHERE issue_id = $1 AND agent_id = $2
+	`, issueID, targetID).Scan(&taskID, &triggerCommentID, &taskStatus); err != nil {
+		t.Fatalf("load rework task: %v", err)
+	}
+	if triggerCommentID != commentID || taskStatus != "queued" {
+		t.Fatalf("rework task trigger/status = %s/%s, want %s/queued", triggerCommentID, taskStatus, commentID)
+	}
+	if result["comment_id"] != commentID || result["task_id"] != taskID {
+		t.Fatalf("rework result = %#v, want comment/task %s/%s", result, commentID, taskID)
+	}
+}
+
+func TestExecuteRadarRequestReworkRollsBackIssueWhenTaskCreationFails(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	supervisor := createRadarSupervisorForExecutorTest(t)
+	targetID := createHandlerTestAgent(t, "Radar Atomic Rework Target "+uuid.NewString(), nil)
+	issueID := createCommentTriggerPreviewIssue(t, "Radar atomic rework "+uuid.NewString(), "", "")
+	if _, err := testPool.Exec(ctx, `
+		UPDATE issue
+		SET status = 'done', assignee_type = 'agent', assignee_id = $2,
+		    acceptance_criteria = '["original"]'::jsonb
+		WHERE id = $1
+	`, issueID, targetID); err != nil {
+		t.Fatalf("prepare completed issue: %v", err)
+	}
+	payload, err := json.Marshal(map[string]any{
+		"issue_id":            issueID,
+		"target_agent_id":     targetID,
+		"content":             "this request must be atomic",
+		"acceptance_criteria": []string{"replacement"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := *testHandler
+	h.TxStarter = radarExecutorFailingTxStarter{base: testHandler.TxStarter, needle: "INSERT INTO agent_task_queue"}
+	_, _, err = h.executeApprovedRadarActionWithTarget(ctx, db.AgentRadarRun{
+		WorkspaceID: supervisor.WorkspaceID,
+		AgentID:     supervisor.ID,
+	}, supervisor, radar.RadarAction{Type: radar.ActionRequestRework, Payload: payload})
+	if err == nil {
+		t.Fatal("request rework unexpectedly succeeded after injected task failure")
+	}
+	var status string
+	var criteria []byte
+	var commentCount, taskCount int
+	if err := testPool.QueryRow(ctx, `SELECT status, acceptance_criteria FROM issue WHERE id = $1`, issueID).Scan(&status, &criteria); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM comment WHERE issue_id = $1`, issueID).Scan(&commentCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_task_queue WHERE issue_id = $1`, issueID).Scan(&taskCount); err != nil {
+		t.Fatal(err)
+	}
+	if status != "done" || string(criteria) != `["original"]` || commentCount != 0 || taskCount != 0 {
+		t.Fatalf("rolled-back rework state = status:%s criteria:%s comments:%d tasks:%d", status, criteria, commentCount, taskCount)
 	}
 }
 

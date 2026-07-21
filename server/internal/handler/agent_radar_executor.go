@@ -57,11 +57,14 @@ type radarAgentMentionDirective struct {
 }
 
 type radarIssueCreatePayload struct {
-	Title        string `json:"title"`
-	Description  string `json:"description"`
-	ProjectID    string `json:"project_id"`
-	AssigneeType string `json:"assignee_type"`
-	AssigneeID   string `json:"assignee_id"`
+	Title              string   `json:"title"`
+	Description        string   `json:"description"`
+	ProjectID          string   `json:"project_id"`
+	AssigneeType       string   `json:"assignee_type"`
+	AssigneeID         string   `json:"assignee_id"`
+	AcceptanceCriteria []string `json:"acceptance_criteria"`
+	AttachmentIDs      []string `json:"attachment_ids"`
+	SourceMessageID    string   `json:"source_message_id"`
 }
 
 // Keep the historical create-issue payload name for focused authorization
@@ -72,6 +75,13 @@ type radarIssueCommentPayload struct {
 	IssueID       string `json:"issue_id"`
 	TargetAgentID string `json:"target_agent_id"`
 	Content       string `json:"content"`
+}
+
+type radarIssueReworkPayload struct {
+	IssueID            string    `json:"issue_id"`
+	TargetAgentID      string    `json:"target_agent_id"`
+	Content            string    `json:"content"`
+	AcceptanceCriteria *[]string `json:"acceptance_criteria"`
 }
 
 type radarIssueDirective struct {
@@ -85,6 +95,16 @@ type radarPlanPayload struct {
 }
 
 func (h *Handler) ExecuteAgentRadarPlan(ctx context.Context, run db.AgentRadarRun, agent db.Agent, plan radar.ActionPlan) error {
+	if len(plan.Actions) == 0 {
+		plan.Actions = []radar.RadarAction{{Type: radar.ActionNoAction, Reason: "agent returned no actions", Confidence: "medium", RiskLevel: "low", TargetKind: "none"}}
+	}
+	if strings.HasPrefix(run.CooldownKey, "wendy_ambient:") {
+		if err := validateAmbientCoordinationPlan(plan); err != nil {
+			message := "invalid ambient coordination plan: " + err.Error()
+			h.failPersistedAgentRadarRun(ctx, run, message)
+			return errors.New(message)
+		}
+	}
 	if run.TriggerKind == "scheduled" {
 		if err := h.validateScheduledRadarSupervisor(ctx, run, agent); err != nil {
 			_, _ = h.Queries.UpdateAgentRadarRunStatus(ctx, db.UpdateAgentRadarRunStatusParams{
@@ -106,9 +126,6 @@ func (h *Handler) ExecuteAgentRadarPlan(ctx context.Context, run db.AgentRadarRu
 		}
 	}
 	status := "succeeded"
-	if len(plan.Actions) == 0 {
-		plan.Actions = []radar.RadarAction{{Type: radar.ActionNoAction, Reason: "agent returned no actions", Confidence: "medium", RiskLevel: "low", TargetKind: "none"}}
-	}
 	for _, action := range plan.Actions {
 		if err := h.executeAgentRadarAction(ctx, run, agent, action); err != nil {
 			status = "failed"
@@ -140,6 +157,29 @@ func (h *Handler) ExecuteAgentRadarPlan(ctx context.Context, run db.AgentRadarRu
 		}
 	}
 	return err
+}
+
+func validateAmbientCoordinationPlan(plan radar.ActionPlan) error {
+	if len(plan.Actions) > 5 {
+		return errors.New("more than 5 actions")
+	}
+	allowed := map[string]struct{}{
+		radar.ActionNoAction:           {},
+		radar.ActionMentionAgent:       {},
+		radar.ActionCommentIssue:       {},
+		radar.ActionCreateIssue:        {},
+		radar.ActionRequestRework:      {},
+		radar.ActionPostChannelMessage: {},
+	}
+	for _, action := range plan.Actions {
+		if _, ok := allowed[action.Type]; !ok {
+			return fmt.Errorf("action %s is outside the ambient allowlist", action.Type)
+		}
+		if action.Type == radar.ActionNoAction && len(plan.Actions) != 1 {
+			return errors.New("no_action must be the only ambient action")
+		}
+	}
+	return nil
 }
 
 func (h *Handler) validateScheduledRadarSupervisor(ctx context.Context, run db.AgentRadarRun, agent db.Agent) error {
@@ -613,6 +653,8 @@ func (h *Handler) executeApprovedRadarActionWithTarget(ctx context.Context, run 
 		return result, radarActivityTarget{Kind: "issue", ID: issueID, Trusted: true}, nil
 	case radar.ActionCommentIssue:
 		return h.executeRadarIssueCommentWithTarget(ctx, run, agent, action)
+	case radar.ActionRequestRework:
+		return h.executeRadarRequestReworkWithTarget(ctx, run, agent, action)
 	case radar.ActionUpdateAgentPlan:
 		if !radarUUIDsMatch(run.WorkspaceID, agent.WorkspaceID) {
 			return nil, radarActivityTarget{}, errors.New("radar agent does not belong to the run workspace")
@@ -1069,6 +1111,142 @@ func (h *Handler) executeRadarIssueCommentWithTarget(ctx context.Context, run db
 	return execution.Result, execution.Activity, nil
 }
 
+func (h *Handler) executeRadarRequestReworkWithTarget(ctx context.Context, run db.AgentRadarRun, supervisor db.Agent, action radar.RadarAction) (map[string]any, radarActivityTarget, error) {
+	var payload radarIssueReworkPayload
+	if err := json.Unmarshal(action.Payload, &payload); err != nil {
+		return nil, radarActivityTarget{}, err
+	}
+	if strings.TrimSpace(payload.IssueID) == "" || strings.TrimSpace(payload.TargetAgentID) == "" {
+		return nil, radarActivityTarget{}, errors.New("issue_id and target_agent_id are required")
+	}
+	if err := validateRadarDirectiveContent(payload.Content); err != nil {
+		return nil, radarActivityTarget{}, err
+	}
+	if h.TaskService == nil || h.TxStarter == nil {
+		return nil, radarActivityTarget{}, errors.New("rework transaction services unavailable")
+	}
+	targetAgent, err := h.resolveRadarDirectiveAgent(ctx, run, supervisor, payload.TargetAgentID)
+	if err != nil {
+		return nil, radarActivityTarget{}, err
+	}
+	issueID, err := parseUUIDString(strings.TrimSpace(payload.IssueID))
+	if err != nil {
+		return nil, radarActivityTarget{}, errors.New("invalid issue_id")
+	}
+	issue, err := h.Queries.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{
+		ID:          issueID,
+		WorkspaceID: run.WorkspaceID,
+	})
+	if err != nil {
+		return nil, radarActivityTarget{}, errors.New("issue does not belong to the run workspace")
+	}
+	activity := radarActivityTarget{Kind: "issue", ID: issue.ID, Trusted: true}
+	if issue.Status == "cancelled" {
+		return nil, activity, errors.New("cancelled issues cannot be reopened by request_rework")
+	}
+	if issue.AssigneeType.String != "agent" || !radarUUIDsMatch(issue.AssigneeID, targetAgent.ID) {
+		return nil, activity, errors.New("target_agent_id must be the issue's current agent assignee")
+	}
+	projectID, err := h.resolveRadarIssueCreateProject(ctx, run, "")
+	if err != nil {
+		return nil, activity, err
+	}
+	if projectID.Valid && !radarUUIDsMatch(projectID, issue.ProjectID) {
+		return nil, activity, errors.New("issue is outside the radar task project scope")
+	}
+	channelID, _, err := h.resolveRadarIssueCreateSource(ctx, run, "")
+	if err != nil {
+		return nil, activity, err
+	}
+	if channelID.Valid && !h.channelHasAgentMember(ctx, run.WorkspaceID, channelID, targetAgent.ID) {
+		return nil, activity, errors.New("issue assignee is not a member of the radar channel")
+	}
+
+	criteriaChanged := payload.AcceptanceCriteria != nil
+	var criteriaJSON []byte
+	if criteriaChanged {
+		criteria := cleanRadarAcceptanceCriteria(*payload.AcceptanceCriteria)
+		if len(criteria) == 0 {
+			return nil, activity, errors.New("acceptance_criteria must contain at least one non-empty criterion when provided")
+		}
+		criteriaJSON, err = json.Marshal(criteria)
+		if err != nil {
+			return nil, activity, fmt.Errorf("encode rework acceptance criteria: %w", err)
+		}
+	}
+
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return nil, activity, fmt.Errorf("begin radar rework transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	qtx := h.Queries.WithTx(tx)
+
+	var previousStatus string
+	if err := tx.QueryRow(ctx, `
+		SELECT status
+		FROM issue
+		WHERE id = $1
+		  AND workspace_id = $2
+		  AND status <> 'cancelled'
+		  AND assignee_type = 'agent'
+		  AND assignee_id = $3
+		FOR UPDATE
+	`, issue.ID, run.WorkspaceID, targetAgent.ID).Scan(&previousStatus); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, activity, errors.New("issue is no longer eligible for request_rework")
+		}
+		return nil, activity, fmt.Errorf("lock radar rework issue: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE issue
+		SET status = 'todo',
+		    acceptance_criteria = CASE WHEN $2::boolean THEN $3::jsonb ELSE acceptance_criteria END,
+		    updated_at = now()
+		WHERE id = $1
+	`, issue.ID, criteriaChanged, criteriaJSON); err != nil {
+		return nil, activity, fmt.Errorf("reopen radar rework issue: %w", err)
+	}
+	reopened, err := qtx.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{
+		ID:          issue.ID,
+		WorkspaceID: run.WorkspaceID,
+	})
+	if err != nil {
+		return nil, activity, fmt.Errorf("reload radar rework issue: %w", err)
+	}
+	directive := radarIssueDirective{
+		TargetAgent: targetAgent,
+		Issue:       reopened,
+		Content:     formatRadarIssueDirectiveMention(targetAgent.Name, uuidToString(targetAgent.ID)) + " " + strings.TrimSpace(payload.Content),
+	}
+	execution, err := h.executePreparedRadarIssueCommentInTx(ctx, qtx, tx, run, supervisor, directive)
+	if err != nil {
+		return execution.Result, activity, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, activity, fmt.Errorf("commit radar rework: %w", err)
+	}
+	commentAfterCommit := execution.AfterCommit
+	h.publish(protocol.EventIssueUpdated, uuidToString(reopened.WorkspaceID), "agent", uuidToString(supervisor.ID), map[string]any{
+		"issue":                       issueToResponse(reopened, h.getIssuePrefix(ctx, reopened.WorkspaceID)),
+		"assignee_changed":            false,
+		"status_changed":              previousStatus != reopened.Status,
+		"acceptance_criteria_changed": criteriaChanged,
+		"prev_status":                 previousStatus,
+	})
+	if previousStatus != reopened.Status {
+		// The targeted issue comment below owns the one wake for this rework.
+		// Keep the source-thread status projection factual so it cannot enqueue a
+		// second, competing channel task for the same agent.
+		h.emitIssueThreadBackflow(ctx, reopened, "agent", uuidToString(supervisor.ID), issueThreadStatusChangedEvent, previousStatus, issueThreadBackflowTarget{})
+	}
+	h.syncWendyWorkGraphAfterIssueUpdate(ctx, reopened)
+	if commentAfterCommit != nil {
+		commentAfterCommit()
+	}
+	return execution.Result, execution.Activity, nil
+}
+
 func (h *Handler) prepareRadarIssueDirective(ctx context.Context, run db.AgentRadarRun, supervisor db.Agent, action radar.RadarAction) (radarIssueDirective, error) {
 	var payload radarIssueCommentPayload
 	if err := json.Unmarshal(action.Payload, &payload); err != nil {
@@ -1297,17 +1475,30 @@ func (h *Handler) executeRadarCreateIssue(ctx context.Context, run db.AgentRadar
 	if strings.TrimSpace(payload.Title) == "" {
 		return nil, errors.New("title is required")
 	}
-	assigneeType := pgtype.Text{String: "agent", Valid: true}
-	assigneeID := agent.ID
-	if payload.AssigneeID != "" {
+	if strings.TrimSpace(payload.Description) == "" {
+		return nil, errors.New("description is required")
+	}
+	criteria := cleanRadarAcceptanceCriteria(payload.AcceptanceCriteria)
+	if len(criteria) == 0 {
+		return nil, errors.New("acceptance_criteria must contain at least one non-empty criterion")
+	}
+	var assigneeType pgtype.Text
+	var assigneeID pgtype.UUID
+	if strings.TrimSpace(payload.AssigneeID) != "" {
 		parsed, err := parseUUIDString(payload.AssigneeID)
 		if err != nil {
 			return nil, err
 		}
 		assigneeID = parsed
+		assigneeType = pgtype.Text{String: "agent", Valid: true}
+		if strings.TrimSpace(payload.AssigneeType) != "" {
+			assigneeType.String = strings.TrimSpace(payload.AssigneeType)
+		}
+	} else if strings.TrimSpace(payload.AssigneeType) != "" {
+		return nil, errors.New("assignee_id is required when assignee_type is set")
 	}
-	if payload.AssigneeType != "" {
-		assigneeType = pgtype.Text{String: payload.AssigneeType, Valid: true}
+	if strings.HasPrefix(run.CooldownKey, "wendy_ambient:") && assigneeType.Valid && assigneeType.String != "agent" {
+		return nil, errors.New("ambient issue creation may only assign a qualified channel agent")
 	}
 	projectID, err := h.resolveRadarIssueCreateProject(ctx, run, payload.ProjectID)
 	if err != nil {
@@ -1316,27 +1507,177 @@ func (h *Handler) executeRadarCreateIssue(ctx context.Context, run db.AgentRadar
 	if err := h.validateRadarIssueCreateWorkspaceTargets(ctx, run, agent, assigneeType, assigneeID, projectID); err != nil {
 		return nil, err
 	}
+	sourceChannelID, sourceMessageID, err := h.resolveRadarIssueCreateSource(ctx, run, payload.SourceMessageID)
+	if err != nil {
+		return nil, err
+	}
+	attachmentIDs, err := h.resolveRadarIssueCreateAttachments(ctx, run, sourceChannelID, payload.AttachmentIDs)
+	if err != nil {
+		return nil, err
+	}
+	if err := h.validateRadarIssueCreateAssigneeForChannel(ctx, run, agent, sourceChannelID, assigneeType, assigneeID); err != nil {
+		return nil, err
+	}
 	result, err := h.IssueService.Create(ctx, service.IssueCreateParams{
-		WorkspaceID:    run.WorkspaceID,
-		Title:          strings.TrimSpace(payload.Title),
-		Description:    pgtype.Text{String: payload.Description, Valid: strings.TrimSpace(payload.Description) != ""},
-		Status:         "todo",
-		Priority:       "none",
-		AssigneeType:   assigneeType,
-		AssigneeID:     assigneeID,
-		CreatorType:    "agent",
-		CreatorID:      agent.ID,
-		ProjectID:      projectID,
-		AllowDuplicate: false,
+		WorkspaceID:        run.WorkspaceID,
+		Title:              strings.TrimSpace(payload.Title),
+		Description:        pgtype.Text{String: strings.TrimSpace(payload.Description), Valid: true},
+		Status:             "todo",
+		Priority:           "none",
+		AssigneeType:       assigneeType,
+		AssigneeID:         assigneeID,
+		CreatorType:        "agent",
+		CreatorID:          agent.ID,
+		ProjectID:          projectID,
+		SourceChannelID:    sourceChannelID,
+		SourceMessageID:    sourceMessageID,
+		AcceptanceCriteria: criteria,
+		AttachmentIDs:      attachmentIDs,
+		AllowDuplicate:     false,
 	}, service.IssueCreateOpts{
 		ActorID:          uuidToString(agent.ID),
-		AnalyticsAgentID: uuidToString(agent.ID),
+		AnalyticsAgentID: uuidToString(assigneeID),
 		Platform:         "radar",
+		BroadcastPayload: func(issue db.Issue, attachments []db.Attachment) map[string]any {
+			response := issueToResponse(issue, h.getIssuePrefix(ctx, issue.WorkspaceID))
+			if len(attachments) > 0 {
+				response.Attachments = make([]AttachmentResponse, len(attachments))
+				for i, attachment := range attachments {
+					response.Attachments[i] = h.attachmentToResponse(attachment)
+				}
+			}
+			return map[string]any{"issue": response}
+		},
 	})
 	if err != nil {
 		return nil, err
 	}
+	h.syncWendyWorkGraphAfterIssueCreate(ctx, result.Issue)
+	h.emitIssueThreadBackflow(ctx, result.Issue, "agent", uuidToString(agent.ID), issueThreadCreatedEvent, "", issueThreadBackflowTarget{})
 	return map[string]any{"issue_id": uuidToString(result.Issue.ID)}, nil
+}
+
+func cleanRadarAcceptanceCriteria(criteria []string) []string {
+	out := make([]string, 0, len(criteria))
+	for _, criterion := range criteria {
+		if trimmed := strings.TrimSpace(criterion); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+func (h *Handler) resolveRadarIssueCreateSource(ctx context.Context, run db.AgentRadarRun, rawMessageID string) (pgtype.UUID, pgtype.UUID, error) {
+	taskContext, err := h.loadRadarTaskContext(ctx, run)
+	if err != nil {
+		return pgtype.UUID{}, pgtype.UUID{}, err
+	}
+	if strings.TrimSpace(taskContext.ChannelID) == "" {
+		if strings.TrimSpace(rawMessageID) != "" {
+			return pgtype.UUID{}, pgtype.UUID{}, errors.New("source_message_id requires a channel-scoped radar task")
+		}
+		return pgtype.UUID{}, pgtype.UUID{}, nil
+	}
+	channelID, err := parseUUIDString(strings.TrimSpace(taskContext.ChannelID))
+	if err != nil {
+		return pgtype.UUID{}, pgtype.UUID{}, errors.New("radar task contains an invalid channel_id")
+	}
+	channel, found := h.getChannel(ctx, uuidToString(run.WorkspaceID), channelID)
+	if !found || channel.Kind != "group" || channel.ArchivedAt != nil {
+		return pgtype.UUID{}, pgtype.UUID{}, errors.New("radar task channel is no longer available")
+	}
+	if strings.TrimSpace(taskContext.ProjectID) != "" {
+		if channel.ProjectID == nil || strings.TrimSpace(*channel.ProjectID) != strings.TrimSpace(taskContext.ProjectID) {
+			return pgtype.UUID{}, pgtype.UUID{}, errors.New("radar task channel no longer matches its project scope")
+		}
+	}
+	if strings.TrimSpace(rawMessageID) == "" {
+		return channelID, pgtype.UUID{}, nil
+	}
+	messageID, err := parseUUIDString(strings.TrimSpace(rawMessageID))
+	if err != nil {
+		return pgtype.UUID{}, pgtype.UUID{}, errors.New("invalid source_message_id")
+	}
+	var threadRoot pgtype.UUID
+	if err := h.DB.QueryRow(ctx, `
+		SELECT thread_root_message_id
+		FROM channel_message
+		WHERE id = $1
+		  AND workspace_id = $2
+		  AND channel_id = $3
+		  AND deleted_at IS NULL
+	`, messageID, run.WorkspaceID, channelID).Scan(&threadRoot); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return pgtype.UUID{}, pgtype.UUID{}, errors.New("source message does not belong to the radar channel")
+		}
+		return pgtype.UUID{}, pgtype.UUID{}, fmt.Errorf("load radar source message: %w", err)
+	}
+	if threadRoot.Valid {
+		messageID = threadRoot
+	}
+	return channelID, messageID, nil
+}
+
+func (h *Handler) resolveRadarIssueCreateAttachments(ctx context.Context, run db.AgentRadarRun, channelID pgtype.UUID, rawIDs []string) ([]pgtype.UUID, error) {
+	ids := make([]pgtype.UUID, 0, len(rawIDs))
+	seen := make(map[string]struct{}, len(rawIDs))
+	for _, rawID := range rawIDs {
+		id, err := parseUUIDString(strings.TrimSpace(rawID))
+		if err != nil {
+			return nil, errors.New("invalid attachment_id")
+		}
+		key := uuidToString(id)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		attachment, err := h.Queries.GetAttachment(ctx, db.GetAttachmentParams{ID: id, WorkspaceID: run.WorkspaceID})
+		if err != nil {
+			return nil, errors.New("attachment does not belong to the radar workspace")
+		}
+		if !channelID.Valid || !attachment.ChannelID.Valid || !radarUUIDsMatch(attachment.ChannelID, channelID) || !attachment.ChannelMessageID.Valid {
+			return nil, errors.New("attachment is not visible in the radar channel")
+		}
+		var messageVisible bool
+		if err := h.DB.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM channel_message
+				WHERE id = $1
+				  AND workspace_id = $2
+				  AND channel_id = $3
+				  AND deleted_at IS NULL
+			)
+		`, attachment.ChannelMessageID, run.WorkspaceID, channelID).Scan(&messageVisible); err != nil {
+			return nil, fmt.Errorf("verify radar attachment message: %w", err)
+		}
+		if !messageVisible {
+			return nil, errors.New("attachment message is deleted or outside the radar channel")
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+func (h *Handler) loadRadarTaskContext(ctx context.Context, run db.AgentRadarRun) (service.AgentRadarContext, error) {
+	if !run.TaskID.Valid {
+		return service.AgentRadarContext{}, nil
+	}
+	task, err := h.Queries.GetAgentTask(ctx, run.TaskID)
+	if err != nil {
+		return service.AgentRadarContext{}, fmt.Errorf("load radar task context: %w", err)
+	}
+	if !radarUUIDsMatch(task.AgentID, run.AgentID) {
+		return service.AgentRadarContext{}, errors.New("radar task does not belong to the run agent")
+	}
+	var taskContext service.AgentRadarContext
+	if err := json.Unmarshal(task.Context, &taskContext); err != nil {
+		return service.AgentRadarContext{}, fmt.Errorf("decode radar task context: %w", err)
+	}
+	if taskContext.Type != service.AgentRadarContextType || taskContext.RadarRunID != uuidToString(run.ID) {
+		return service.AgentRadarContext{}, errors.New("radar task context does not match the run")
+	}
+	return taskContext, nil
 }
 
 // resolveRadarIssueCreateProject makes the persisted Radar task scope
@@ -1357,19 +1698,9 @@ func (h *Handler) resolveRadarIssueCreateProject(ctx context.Context, run db.Age
 		return payloadProjectID, nil
 	}
 
-	task, err := h.Queries.GetAgentTask(ctx, run.TaskID)
+	taskContext, err := h.loadRadarTaskContext(ctx, run)
 	if err != nil {
-		return pgtype.UUID{}, fmt.Errorf("load radar task project scope: %w", err)
-	}
-	if !radarUUIDsMatch(task.AgentID, run.AgentID) {
-		return pgtype.UUID{}, errors.New("radar task does not belong to the run agent")
-	}
-	var taskContext service.AgentRadarContext
-	if err := json.Unmarshal(task.Context, &taskContext); err != nil {
-		return pgtype.UUID{}, fmt.Errorf("decode radar task project scope: %w", err)
-	}
-	if taskContext.Type != service.AgentRadarContextType || taskContext.RadarRunID != uuidToString(run.ID) {
-		return pgtype.UUID{}, errors.New("radar task context does not match the run")
+		return pgtype.UUID{}, err
 	}
 	if strings.TrimSpace(taskContext.ProjectID) == "" {
 		return payloadProjectID, nil

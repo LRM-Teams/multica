@@ -65,6 +65,14 @@ LIMIT $2 OFFSET $3;
 SELECT * FROM issue
 WHERE id = $1;
 
+-- name: GetIssueForTask :one
+-- Returns the issue linked to an agent task. The text comparison matches the
+-- message-range queries whose callers carry the task ID as text.
+SELECT i.*
+FROM issue i
+JOIN agent_task_queue atq ON atq.issue_id = i.id
+WHERE atq.id::text = $1::text;
+
 -- name: GetIssueInWorkspace :one
 SELECT * FROM issue
 WHERE id = $1 AND workspace_id = $2;
@@ -73,9 +81,11 @@ WHERE id = $1 AND workspace_id = $2;
 INSERT INTO issue (
     workspace_id, title, description, status, priority,
     assignee_type, assignee_id, creator_type, creator_id,
-    parent_issue_id, position, start_date, due_date, number, project_id
+    parent_issue_id, position, start_date, due_date, number, project_id,
+    acceptance_criteria
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+    COALESCE(sqlc.narg('acceptance_criteria')::jsonb, '[]'::jsonb)
 ) RETURNING *;
 
 -- name: CreateIssueWithMetadata :one
@@ -107,6 +117,7 @@ UPDATE issue SET
     due_date = sqlc.narg('due_date'),
     parent_issue_id = sqlc.narg('parent_issue_id'),
     project_id = sqlc.narg('project_id'),
+    acceptance_criteria = COALESCE(sqlc.narg('acceptance_criteria')::jsonb, acceptance_criteria),
     updated_at = now()
 WHERE id = $1
 RETURNING *;
@@ -124,10 +135,11 @@ INSERT INTO issue (
     workspace_id, title, description, status, priority,
     assignee_type, assignee_id, creator_type, creator_id,
     parent_issue_id, position, start_date, due_date, number, project_id,
-    origin_type, origin_id
+    origin_type, origin_id, acceptance_criteria
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-    sqlc.narg('origin_type'), sqlc.narg('origin_id')
+    sqlc.narg('origin_type'), sqlc.narg('origin_id'),
+    COALESCE(sqlc.narg('acceptance_criteria')::jsonb, '[]'::jsonb)
 ) RETURNING *;
 
 -- name: LockIssueDuplicateKey :exec

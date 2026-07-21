@@ -207,9 +207,36 @@ func (h *Handler) buildWendyAmbientChannelMarkdown(ctx context.Context, watch wo
 
 	b.WriteString("\n## Channel Agents\n\n")
 	agentRows, err := h.DB.Query(ctx, `
-		SELECT a.id, a.name
+		SELECT a.id, a.name, a.description, a.status,
+		       COALESCE(a.managed_role, '') AS managed_role,
+		       COALESCE(runtime.provider, '') AS runtime_provider,
+		       COALESCE(runtime.status, '') AS runtime_status,
+		       COALESCE(skill_summary.skills, '[]'::jsonb) AS skills
 		FROM channel_member cm
 		JOIN agent a ON a.id = cm.member_id AND a.workspace_id = cm.workspace_id
+		LEFT JOIN agent_runtime runtime
+		  ON runtime.id = a.runtime_id
+		 AND runtime.workspace_id = a.workspace_id
+		LEFT JOIN LATERAL (
+		  SELECT jsonb_agg(jsonb_build_object(
+		    'skill_id', available_skill.id,
+		    'name', available_skill.name,
+		    'description', available_skill.description,
+		    'source', available_skill.source
+		  ) ORDER BY available_skill.name, available_skill.source) AS skills
+		  FROM (
+		    SELECT skill.id, skill.name, skill.description, 'assigned'::text AS source
+		    FROM agent_skill assigned
+		    JOIN skill ON skill.id = assigned.skill_id AND skill.workspace_id = a.workspace_id
+		    WHERE assigned.agent_id = a.id
+		    UNION
+		    SELECT skill.id, skill.name, skill.description, 'runtime_shared'::text AS source
+		    FROM skill
+		    WHERE skill.workspace_id = a.workspace_id
+		      AND skill.config #>> '{origin,type}' = 'runtime_shared'
+		      AND skill.config #>> '{origin,runtime_id}' = a.runtime_id::text
+		  ) available_skill
+		) skill_summary ON true
 		WHERE cm.workspace_id = $1
 		  AND cm.channel_id = $2
 		  AND cm.member_type = 'agent'
@@ -221,22 +248,40 @@ func (h *Handler) buildWendyAmbientChannelMarkdown(ctx context.Context, watch wo
 		return "", fmt.Errorf("list ambient channel agents: %w", err)
 	}
 	ladder := h.channelNudgeLadder(ctx, watch.ChannelID)
+	agentCount := 0
 	for agentRows.Next() {
 		var id pgtype.UUID
-		var name string
-		if err := agentRows.Scan(&id, &name); err != nil {
+		var name, description, status, managedRole, runtimeProvider, runtimeStatus string
+		var skills []byte
+		if err := agentRows.Scan(&id, &name, &description, &status, &managedRole, &runtimeProvider, &runtimeStatus, &skills); err != nil {
 			agentRows.Close()
 			return "", err
 		}
-		if n := ladder[uuidToString(id)]; n > 0 {
-			fmt.Fprintf(&b, "- agent_id=%s name=%q nudged_without_progress=%d\n", uuidToString(id), name, n)
+		fmt.Fprintf(&b, "- agent_id=%s name=%q status=%s runtime_provider=%s runtime_status=%s",
+			uuidToString(id), name, status, runtimeProvider, runtimeStatus)
+		if managedRole != "" {
+			fmt.Fprintf(&b, " managed_role=%s delivery_assignable=false", managedRole)
 		} else {
-			fmt.Fprintf(&b, "- agent_id=%s name=%q\n", uuidToString(id), name)
+			b.WriteString(" delivery_assignable=true")
 		}
+		if n := ladder[uuidToString(id)]; n > 0 {
+			fmt.Fprintf(&b, " nudged_without_progress=%d", n)
+		}
+		b.WriteString("\n")
+		if strings.TrimSpace(description) != "" {
+			fmt.Fprintf(&b, "  description=%q\n", trimAmbientContent(description))
+		}
+		if string(skills) != "[]" {
+			fmt.Fprintf(&b, "  skills=%s\n", trimAmbientJSON(skills))
+		}
+		agentCount++
 	}
 	agentRows.Close()
 	if err := agentRows.Err(); err != nil {
 		return "", err
+	}
+	if agentCount == 0 {
+		b.WriteString("- (none)\n")
 	}
 
 	// Human members — so escalation to a person (@a human owner) can target a real
@@ -300,24 +345,52 @@ func (h *Handler) buildWendyAmbientChannelMarkdown(ctx context.Context, watch wo
 		         JOIN issue dependency ON dependency.id = dep_link.depends_on_issue_id
 		         WHERE dep_link.issue_id = i.id
 		       ), '[]'::jsonb) AS dependencies,
-		       COALESCE(latest_comment.content, '') AS latest_comment_content,
-		       COALESCE(latest_comment.type, '') AS latest_comment_type,
-		       COALESCE(latest_comment.author_type, '') AS latest_comment_author_type,
-		       latest_comment.author_id AS latest_comment_author_id,
-		       latest_comment.created_at AS latest_comment_at,
+		       COALESCE((
+		         SELECT jsonb_agg(jsonb_build_object(
+		           'comment_id', recent.id,
+		           'content', left(recent.content, 400),
+		           'type', recent.type,
+		           'author_type', recent.author_type,
+		           'author_id', recent.author_id,
+		           'created_at', recent.created_at,
+		           'attachments', COALESCE((
+		             SELECT jsonb_agg(jsonb_build_object(
+		               'attachment_id', attachment.id,
+		               'filename', attachment.filename,
+		               'content_type', attachment.content_type
+		             ) ORDER BY attachment.created_at)
+		             FROM attachment
+		             WHERE attachment.comment_id = recent.id
+		           ), '[]'::jsonb)
+		         ) ORDER BY recent.created_at, recent.id)
+		         FROM (
+		           SELECT c.id, c.content, c.type, c.author_type, c.author_id, c.created_at
+		           FROM comment c
+		           WHERE c.issue_id = i.id
+		           ORDER BY c.created_at DESC, c.id DESC
+		           LIMIT 3
+		         ) recent
+		       ), '[]'::jsonb) AS recent_comments,
+		       COALESCE((
+		         SELECT jsonb_agg(jsonb_build_object(
+		           'attachment_id', issue_attachment.id,
+		           'filename', issue_attachment.filename,
+		           'content_type', issue_attachment.content_type
+		         ) ORDER BY issue_attachment.created_at)
+		         FROM (
+		           SELECT attachment.id, attachment.filename, attachment.content_type, attachment.created_at
+		           FROM attachment
+		           WHERE attachment.issue_id = i.id AND attachment.comment_id IS NULL
+		           ORDER BY attachment.created_at DESC
+		           LIMIT 10
+		         ) issue_attachment
+		       ), '[]'::jsonb) AS issue_attachments,
 		       i.updated_at
 		FROM issue i
 		JOIN workspace w ON w.id = i.workspace_id
 		LEFT JOIN agent a
 		  ON a.id = i.assignee_id
 		 AND i.assignee_type = 'agent'
-		LEFT JOIN LATERAL (
-		  SELECT c.content, c.type, c.author_type, c.author_id, c.created_at
-		  FROM comment c
-		  WHERE c.issue_id = i.id
-		  ORDER BY c.created_at DESC, c.id DESC
-		  LIMIT 1
-		) latest_comment ON true
 		WHERE i.workspace_id = $1
 		  `+issueScopePredicate+`
 		  AND i.status NOT IN ('done', 'cancelled', 'closed')
@@ -331,17 +404,14 @@ func (h *Handler) buildWendyAmbientChannelMarkdown(ctx context.Context, watch wo
 		issueCount := 0
 		for issueRows.Next() {
 			var number int64
-			var issueID, assigneeID, parentIssueID, latestCommentAuthorID pgtype.UUID
+			var issueID, assigneeID, parentIssueID pgtype.UUID
 			var title, description, status, assigneeType, agentName, issuePrefix string
-			var latestComment, latestCommentType, latestCommentAuthorType string
-			var acceptanceCriteria, dependencies []byte
-			var latestCommentAt pgtype.Timestamptz
+			var acceptanceCriteria, dependencies, recentComments, issueAttachments []byte
 			var updatedAt time.Time
 			if err := issueRows.Scan(
 				&issueID, &issuePrefix, &number, &title, &description, &status,
 				&assigneeType, &assigneeID, &agentName, &parentIssueID,
-				&acceptanceCriteria, &dependencies,
-				&latestComment, &latestCommentType, &latestCommentAuthorType, &latestCommentAuthorID, &latestCommentAt,
+				&acceptanceCriteria, &dependencies, &recentComments, &issueAttachments,
 				&updatedAt,
 			); err != nil {
 				issueRows.Close()
@@ -361,13 +431,11 @@ func (h *Handler) buildWendyAmbientChannelMarkdown(ctx context.Context, watch wo
 			}
 			fmt.Fprintf(&b, "  acceptance_criteria=%s\n", trimAmbientJSON(acceptanceCriteria))
 			fmt.Fprintf(&b, "  dependencies=%s\n", trimAmbientJSON(dependencies))
-			if strings.TrimSpace(latestComment) != "" {
-				fmt.Fprintf(&b, "  latest_comment=%q type=%s author_type=%s author_id=%s",
-					trimAmbientContent(latestComment), latestCommentType, latestCommentAuthorType, uuidToString(latestCommentAuthorID))
-				if latestCommentAt.Valid {
-					fmt.Fprintf(&b, " at=%s", latestCommentAt.Time.UTC().Format(time.RFC3339))
-				}
-				b.WriteString("\n")
+			if string(issueAttachments) != "[]" {
+				fmt.Fprintf(&b, "  issue_attachments=%s\n", trimAmbientEvidenceJSON(issueAttachments))
+			}
+			if string(recentComments) != "[]" {
+				fmt.Fprintf(&b, "  recent_comments=%s\n", trimAmbientEvidenceJSON(recentComments))
 			}
 			issueCount++
 		}
@@ -385,11 +453,46 @@ func (h *Handler) buildWendyAmbientChannelMarkdown(ctx context.Context, watch wo
 		SELECT i.id, w.issue_prefix, i.number, i.title,
 		       COALESCE(i.assignee_type, '') AS assignee_type, i.assignee_id,
 		       COALESCE(a.name, '') AS agent_name, i.acceptance_criteria,
-		       COALESCE(latest_comment.content, '') AS latest_comment_content,
-		       COALESCE(latest_comment.type, '') AS latest_comment_type,
-		       COALESCE(latest_comment.author_type, '') AS latest_comment_author_type,
-		       latest_comment.author_id AS latest_comment_author_id,
-		       latest_comment.created_at AS latest_comment_at,
+		       COALESCE((
+		         SELECT jsonb_agg(jsonb_build_object(
+		           'comment_id', recent.id,
+		           'content', left(recent.content, 400),
+		           'type', recent.type,
+		           'author_type', recent.author_type,
+		           'author_id', recent.author_id,
+		           'created_at', recent.created_at,
+		           'attachments', COALESCE((
+		             SELECT jsonb_agg(jsonb_build_object(
+		               'attachment_id', attachment.id,
+		               'filename', attachment.filename,
+		               'content_type', attachment.content_type
+		             ) ORDER BY attachment.created_at)
+		             FROM attachment
+		             WHERE attachment.comment_id = recent.id
+		           ), '[]'::jsonb)
+		         ) ORDER BY recent.created_at, recent.id)
+		         FROM (
+		           SELECT c.id, c.content, c.type, c.author_type, c.author_id, c.created_at
+		           FROM comment c
+		           WHERE c.issue_id = i.id
+		           ORDER BY c.created_at DESC, c.id DESC
+		           LIMIT 3
+		         ) recent
+		       ), '[]'::jsonb) AS recent_comments,
+		       COALESCE((
+		         SELECT jsonb_agg(jsonb_build_object(
+		           'attachment_id', issue_attachment.id,
+		           'filename', issue_attachment.filename,
+		           'content_type', issue_attachment.content_type
+		         ) ORDER BY issue_attachment.created_at)
+		         FROM (
+		           SELECT attachment.id, attachment.filename, attachment.content_type, attachment.created_at
+		           FROM attachment
+		           WHERE attachment.issue_id = i.id AND attachment.comment_id IS NULL
+		           ORDER BY attachment.created_at DESC
+		           LIMIT 10
+		         ) issue_attachment
+		       ), '[]'::jsonb) AS issue_attachments,
 		       completed_activity.completed_at,
 		       i.updated_at
 		FROM issue i
@@ -397,13 +500,6 @@ func (h *Handler) buildWendyAmbientChannelMarkdown(ctx context.Context, watch wo
 		LEFT JOIN agent a
 		  ON a.id = i.assignee_id
 		 AND i.assignee_type = 'agent'
-		LEFT JOIN LATERAL (
-		  SELECT c.content, c.type, c.author_type, c.author_id, c.created_at
-		  FROM comment c
-		  WHERE c.issue_id = i.id
-		  ORDER BY c.created_at DESC, c.id DESC
-		  LIMIT 1
-		) latest_comment ON true
 		LEFT JOIN LATERAL (
 		  SELECT activity.created_at AS completed_at
 		  FROM activity_log activity
@@ -426,15 +522,14 @@ func (h *Handler) buildWendyAmbientChannelMarkdown(ctx context.Context, watch wo
 		doneCount := 0
 		for doneRows.Next() {
 			var number int64
-			var issueID, assigneeID, latestCommentAuthorID pgtype.UUID
-			var issuePrefix, title, assigneeType, agentName, latestComment, latestCommentType, latestCommentAuthorType string
-			var acceptanceCriteria []byte
-			var latestCommentAt, completedAt pgtype.Timestamptz
+			var issueID, assigneeID pgtype.UUID
+			var issuePrefix, title, assigneeType, agentName string
+			var acceptanceCriteria, recentComments, issueAttachments []byte
+			var completedAt pgtype.Timestamptz
 			var updatedAt time.Time
 			if err := doneRows.Scan(
 				&issueID, &issuePrefix, &number, &title, &assigneeType, &assigneeID,
-				&agentName, &acceptanceCriteria,
-				&latestComment, &latestCommentType, &latestCommentAuthorType, &latestCommentAuthorID, &latestCommentAt,
+				&agentName, &acceptanceCriteria, &recentComments, &issueAttachments,
 				&completedAt, &updatedAt,
 			); err != nil {
 				doneRows.Close()
@@ -455,13 +550,11 @@ func (h *Handler) buildWendyAmbientChannelMarkdown(ctx context.Context, watch wo
 			}
 			b.WriteString("\n")
 			fmt.Fprintf(&b, "  acceptance_criteria=%s\n", trimAmbientJSON(acceptanceCriteria))
-			if strings.TrimSpace(latestComment) != "" {
-				fmt.Fprintf(&b, "  latest_comment=%q type=%s author_type=%s author_id=%s",
-					trimAmbientContent(latestComment), latestCommentType, latestCommentAuthorType, uuidToString(latestCommentAuthorID))
-				if latestCommentAt.Valid {
-					fmt.Fprintf(&b, " at=%s", latestCommentAt.Time.UTC().Format(time.RFC3339))
-				}
-				b.WriteString("\n")
+			if string(issueAttachments) != "[]" {
+				fmt.Fprintf(&b, "  issue_attachments=%s\n", trimAmbientEvidenceJSON(issueAttachments))
+			}
+			if string(recentComments) != "[]" {
+				fmt.Fprintf(&b, "  recent_comments=%s\n", trimAmbientEvidenceJSON(recentComments))
 			}
 			doneCount++
 		}
@@ -478,7 +571,9 @@ func (h *Handler) buildWendyAmbientChannelMarkdown(ctx context.Context, watch wo
 	msgRows, err := h.DB.Query(ctx, `
 		SELECT id, author_type, author_id, author_name, content, created_at
 		FROM channel_message
-		WHERE workspace_id = $1 AND channel_id = $2
+		WHERE workspace_id = $1
+		  AND channel_id = $2
+		  AND deleted_at IS NULL
 		ORDER BY created_at DESC
 		LIMIT 40
 	`, watch.WorkspaceID, watch.ChannelID)
@@ -503,12 +598,62 @@ func (h *Handler) buildWendyAmbientChannelMarkdown(ctx context.Context, watch wo
 	if err := msgRows.Err(); err != nil {
 		return "", err
 	}
+	messageIDs := make([]pgtype.UUID, 0, len(messages))
+	for _, msg := range messages {
+		messageIDs = append(messageIDs, msg.id)
+	}
+	attachmentsByMessage := make(map[string][]db.Attachment, len(messages))
+	if len(messageIDs) > 0 {
+		attachments, err := h.Queries.ListAttachmentsByChannelMessageIDs(ctx, db.ListAttachmentsByChannelMessageIDsParams{
+			Column1:     messageIDs,
+			WorkspaceID: watch.WorkspaceID,
+		})
+		if err != nil {
+			return "", fmt.Errorf("list ambient channel message attachments: %w", err)
+		}
+		for _, attachment := range attachments {
+			if !attachment.ChannelMessageID.Valid {
+				continue
+			}
+			key := uuidToString(attachment.ChannelMessageID)
+			attachmentsByMessage[key] = append(attachmentsByMessage[key], attachment)
+		}
+	}
 	for i := len(messages) - 1; i >= 0; i-- {
 		msg := messages[i]
 		fmt.Fprintf(&b, "- message_id=%s at=%s author_type=%s author_id=%s author_name=%q content=%q\n",
 			uuidToString(msg.id), msg.createdAt.UTC().Format(time.RFC3339), msg.authorType, uuidToString(msg.authorID), msg.authorName, trimAmbientContent(msg.content))
+		attachments := attachmentsByMessage[uuidToString(msg.id)]
+		if len(attachments) > 0 {
+			metadata := make([]map[string]string, 0, len(attachments))
+			for _, attachment := range attachments {
+				metadata = append(metadata, map[string]string{
+					"attachment_id": uuidToString(attachment.ID),
+					"filename":      attachment.Filename,
+					"content_type":  attachment.ContentType,
+				})
+			}
+			raw, err := json.Marshal(metadata)
+			if err != nil {
+				return "", fmt.Errorf("encode ambient channel attachments: %w", err)
+			}
+			fmt.Fprintf(&b, "  attachments=%s\n", trimAmbientEvidenceJSON(raw))
+		}
 	}
 	if len(messages) == 0 {
+		b.WriteString("- (none)\n")
+	}
+	b.WriteString("\n## Evidence Access\n\n")
+	evidenceCount := 0
+	for _, msg := range messages {
+		for _, attachment := range attachmentsByMessage[uuidToString(msg.id)] {
+			fmt.Fprintf(&b, "- attachment_id=%s filename=%q content_type=%s command=%q\n",
+				uuidToString(attachment.ID), attachment.Filename, attachment.ContentType,
+				"multica attachment view --id "+uuidToString(attachment.ID)+" --output <path>")
+			evidenceCount++
+		}
+	}
+	if evidenceCount == 0 {
 		b.WriteString("- (none)\n")
 	}
 	return b.String(), nil
@@ -538,6 +683,33 @@ func trimAmbientJSON(raw []byte) string {
 	envelope, err := json.Marshal(map[string]any{
 		"truncated": true,
 		"preview":   preview,
+	})
+	if err != nil {
+		return `{"truncated":true}`
+	}
+	return string(envelope)
+}
+
+// trimAmbientEvidenceJSON allows enough room for several recent comments and
+// their attachment metadata while preserving a valid JSON value when a large
+// discussion must be abbreviated.
+func trimAmbientEvidenceJSON(raw []byte) string {
+	const maxRunes = 2400
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" {
+		return "null"
+	}
+	if len([]rune(trimmed)) <= maxRunes && json.Valid([]byte(trimmed)) {
+		return trimmed
+	}
+	runes := []rune(trimmed)
+	previewLimit := maxRunes - 100
+	if len(runes) > previewLimit {
+		runes = runes[:previewLimit]
+	}
+	envelope, err := json.Marshal(map[string]any{
+		"truncated": true,
+		"preview":   string(runes) + "…",
 	})
 	if err != nil {
 		return `{"truncated":true}`

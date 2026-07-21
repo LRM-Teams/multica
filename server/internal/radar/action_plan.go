@@ -16,6 +16,7 @@ const (
 	ActionMentionAgent       = "mention_agent"
 	ActionCreateIssue        = "create_issue"
 	ActionCommentIssue       = "comment_issue"
+	ActionRequestRework      = "request_rework"
 	ActionAssignIssue        = "assign_issue"
 	ActionScheduleReminder   = "schedule_reminder"
 	ActionUpdateAgentPlan    = "update_agent_plan"
@@ -72,7 +73,10 @@ func BuildAmbientChannelPrompt(markdown string) string {
 	b.WriteString("Requirements go through issues, not chat: when anyone (a human, you, or another agent) states a new requirement or change, get it captured into a concrete issue first (amend an existing one or create a new one, with acceptance criteria; attach any reference material) before development — an issue is the contract agents build against. Do not expect agents to build from loose chat. Plain social chatter (hi/你好/天气) needs no issue.\n")
 	b.WriteString("When a deliverable is claimed done, judge it against its acceptance criteria and the spec — based on evidence (the actual artifact/result), not a chat claim that it works. \"Playable / it runs\" is NOT \"meets the standard\": if it is incomplete, unpolished, or misses edge/error states, bounce it back to its owner with the specific gap (or file the gap as a new acceptance-criteria issue). A scope-cut is re-opened, not accepted.\n")
 	b.WriteString("When it falls short, first diagnose spec-wrong vs implementation-wrong: check whether the issue's acceptance criteria were themselves wrong/missing/ambiguous. If the spec was wrong, fix the spec first (you/the PM own acceptance-criteria changes; an implementer may propose a fix but must not lower the bar to pass its own work), then have it rebuilt. If the spec was right but unmet, bounce to the implementer. Spec-gate (is the issue right?) and delivery-gate (does it meet the criteria?) are separate; both must pass.\n")
-	b.WriteString("For UI/visual deliverables, review the actual screenshot (you can read images) against the reference/target product — layout, hierarchy, icons, animation/feedback, responsive and empty/error states — and bounce visual polish that falls short, not just broken functionality. If no screenshot is available, ask the owner to attach one.\n")
+	b.WriteString("For UI/visual deliverables, use the attachment metadata in this review as evidence pointers. Fetch every relevant reference and delivery screenshot with `multica attachment view --id <id> --output <path>` before judging it. Only claim visual inspection when the file was successfully fetched and viewed; otherwise ask the owner for reachable evidence. Compare layout, hierarchy, icons, animation/feedback, responsive behavior, and loading/empty/error states against the approved reference.\n")
+	b.WriteString("Treat CSS as layout and interface styling, not as a substitute asset generator. CSS is appropriate for layout, responsive behavior, design tokens, controls, and simple transitions. When the specification calls for illustration, brand art, characters, textured backgrounds, special badges, or complex motion, require real repository files such as SVG, PNG, WebP, Lottie, video, or frame assets. Reject CSS shapes, gradients, pseudo-elements, or emoji used in place of those required assets.\n")
+	b.WriteString("Assign visual-asset work only to an agent whose listed description or skills declare the needed visual or image-generation capability. Skill metadata is evidence of configuration, not proof of a result: still require repository asset paths and screenshots. If no channel agent has a declared visual or image-generation capability, leave the issue unassigned and notify the product manager or a human to add/configure one; do not assign an arbitrary engineer or yourself.\n")
+	b.WriteString("Use request_rework to return an existing delivered issue to its current agent assignee. It atomically reopens the issue, records the visible gap, optionally replaces acceptance criteria, and wakes the owner. Do not emulate it with separate partial actions.\n")
 	b.WriteString("To actually make an agent start or continue work you MUST emit a mention_agent action targeting that agent — that is what pings and wakes them. The server adds the one target mention; payload content must not repeat that target by @handle or display name. Writing a name as plain text, or naming people inside post_channel_message, does NOT reach or wake any agent. Emit one mention_agent per agent you need to move (each with a concrete next step).\n")
 	b.WriteString("If the thread is healthy chatter, correct waiting, or already covered by open waits_on edges, return one no_action.\n")
 	b.WriteString(ambientActionSchema)
@@ -112,10 +116,11 @@ const ambientActionSchema = `Return at most 5 actions. Use exact UUIDs from the 
 - no_action: {}
 - mention_agent: {"channel_id":"<uuid>","target_agent_id":"<uuid>","content":"plain directive"}
 - comment_issue: {"issue_id":"<uuid>","target_agent_id":"<uuid>","content":"plain directive"}
-- create_issue: {"title":"...","description":"...","assignee_id":"<optional agent uuid>","assignee_type":"agent"} (project scope is enforced by the server from this review; do not send project_id)
+- create_issue: {"title":"...","description":"...","acceptance_criteria":["testable criterion"],"attachment_ids":["<optional visible attachment uuid>"],"source_message_id":"<optional visible channel message uuid>","assignee_id":"<optional qualified agent uuid>","assignee_type":"agent"} (project and channel scope are enforced by the server from this review; do not send project_id or channel_id; omit both assignee fields to leave it unassigned)
+- request_rework: {"issue_id":"<uuid>","target_agent_id":"<current agent assignee uuid>","content":"specific evidence-backed gap","acceptance_criteria":["optional replacement criterion"]}
 - post_channel_message: {"channel_id":"<uuid>","content":"plain text; may include [@Name](mention://member/<uuid>) for humans"}
 Return ONLY JSON with this shape (no prose before or after):
-{"summary":"...","actions":[{"type":"no_action|mention_agent|comment_issue|create_issue|post_channel_message","reason":"...","evidence":["kind:id"],"confidence":"low|medium|high","risk_level":"low","dedupe_key":"stable-key","target_kind":"none|channel|issue","target_id":"","payload":{}}]}
+{"summary":"...","actions":[{"type":"no_action|mention_agent|comment_issue|create_issue|request_rework|post_channel_message","reason":"...","evidence":["kind:id"],"confidence":"low|medium|high","risk_level":"low","dedupe_key":"stable-key","target_kind":"none|channel|issue","target_id":"","payload":{}}]}
 
 `
 
@@ -209,7 +214,7 @@ func decodeActionPlan(body string) (ActionPlan, error) {
 
 func validActionType(t string) bool {
 	switch t {
-	case ActionNoAction, ActionPostChannelMessage, ActionReplyThread, ActionMentionAgent, ActionCreateIssue, ActionCommentIssue, ActionAssignIssue, ActionScheduleReminder, ActionUpdateAgentPlan:
+	case ActionNoAction, ActionPostChannelMessage, ActionReplyThread, ActionMentionAgent, ActionCreateIssue, ActionCommentIssue, ActionRequestRework, ActionUpdateAgentPlan:
 		return true
 	default:
 		return false

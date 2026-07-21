@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -50,25 +51,26 @@ func NewIssueService(q *db.Queries, tx TxStarter, bus *events.Bus, ac analytics.
 // to IssueService.Create. The handler owns the parsing step that turns its
 // request payload into this struct; the service stays transport-agnostic.
 type IssueCreateParams struct {
-	WorkspaceID     pgtype.UUID
-	Title           string
-	Description     pgtype.Text
-	Status          string
-	Priority        string
-	AssigneeType    pgtype.Text
-	AssigneeID      pgtype.UUID
-	CreatorType     string // "agent" or "member"
-	CreatorID       pgtype.UUID
-	ParentIssueID   pgtype.UUID
-	ProjectID       pgtype.UUID
-	StartDate       pgtype.Date
-	DueDate         pgtype.Date
-	OriginType      pgtype.Text
-	OriginID        pgtype.UUID
-	SourceChannelID pgtype.UUID
-	SourceMessageID pgtype.UUID
-	AttachmentIDs   []pgtype.UUID
-	AllowDuplicate  bool
+	WorkspaceID        pgtype.UUID
+	Title              string
+	Description        pgtype.Text
+	Status             string
+	Priority           string
+	AssigneeType       pgtype.Text
+	AssigneeID         pgtype.UUID
+	CreatorType        string // "agent" or "member"
+	CreatorID          pgtype.UUID
+	ParentIssueID      pgtype.UUID
+	ProjectID          pgtype.UUID
+	StartDate          pgtype.Date
+	DueDate            pgtype.Date
+	OriginType         pgtype.Text
+	OriginID           pgtype.UUID
+	SourceChannelID    pgtype.UUID
+	SourceMessageID    pgtype.UUID
+	AcceptanceCriteria []string
+	AttachmentIDs      []pgtype.UUID
+	AllowDuplicate     bool
 }
 
 // IssueCreateOpts groups optional knobs for IssueService.Create. Most
@@ -123,6 +125,12 @@ var ErrParentIssueNotFound = errors.New("parent issue not found in this workspac
 // having to remember it. Callers translate this into 400.
 var ErrProjectNotFound = errors.New("project not found in this workspace")
 
+// ErrAttachmentNotFound signals that at least one requested attachment is
+// absent, belongs to another workspace, or is already bound to another issue.
+// Issue creation is rejected atomically instead of succeeding without the
+// caller's reference material.
+var ErrAttachmentNotFound = errors.New("attachment not available for issue creation")
+
 // IssueCreateResult is the typed return from IssueService.Create.
 //
 //   - On the happy path: Issue is the new row, Attachments lists the
@@ -138,12 +146,12 @@ type IssueCreateResult struct {
 // Create runs the full issue-creation pipeline atomically end-to-end:
 //
 //  1. Begin transaction.
-//  2. Resolve & validate parent / project belong to the same workspace.
-//  3. Lock & check the duplicate guard.
-//  4. Increment the workspace issue counter.
-//  5. Insert the issue row (with optional origin stamping).
-//  6. Commit.
-//  7. Link any pre-uploaded attachments (post-commit, idempotent).
+//  2. Lock and validate requested attachments in the workspace.
+//  3. Resolve & validate parent / project belong to the same workspace.
+//  4. Lock & check the duplicate guard.
+//  5. Increment the workspace issue counter.
+//  6. Insert the issue row, acceptance criteria, source anchor, and attachments.
+//  7. Commit.
 //  8. Publish EventIssueCreated to the bus (payload via opts.BroadcastPayload).
 //  9. Capture the IssueCreated analytics event.
 //  10. Enqueue an agent task or trigger the squad leader when the issue is
@@ -156,12 +164,56 @@ type IssueCreateResult struct {
 // Caller-owned validation is limited to transport-shaped checks: title
 // required, RFC3339 date format, assignee pair sanity.
 func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts IssueCreateOpts) (IssueCreateResult, error) {
+	acceptanceCriteria := p.AcceptanceCriteria
+	if acceptanceCriteria == nil {
+		acceptanceCriteria = []string{}
+	}
+	acceptanceCriteriaJSON, err := json.Marshal(acceptanceCriteria)
+	if err != nil {
+		return IssueCreateResult{}, fmt.Errorf("marshal acceptance criteria: %w", err)
+	}
+	for _, id := range p.AttachmentIDs {
+		if !id.Valid {
+			return IssueCreateResult{}, ErrAttachmentNotFound
+		}
+	}
+	attachmentIDs := uniqueUUIDs(p.AttachmentIDs)
+
 	tx, err := s.TxStarter.Begin(ctx)
 	if err != nil {
 		return IssueCreateResult{}, fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
 	qtx := s.Queries.WithTx(tx)
+	if len(attachmentIDs) > 0 {
+		rows, err := tx.Query(ctx, `
+			SELECT id
+			FROM attachment
+			WHERE workspace_id = $1
+			  AND issue_id IS NULL
+			  AND id = ANY($2::uuid[])
+			FOR UPDATE
+		`, p.WorkspaceID, attachmentIDs)
+		if err != nil {
+			return IssueCreateResult{}, fmt.Errorf("lock issue attachments: %w", err)
+		}
+		available := 0
+		for rows.Next() {
+			var id pgtype.UUID
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return IssueCreateResult{}, fmt.Errorf("scan issue attachment: %w", err)
+			}
+			available++
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return IssueCreateResult{}, fmt.Errorf("list issue attachments: %w", err)
+		}
+		if available != len(attachmentIDs) {
+			return IssueCreateResult{}, ErrAttachmentNotFound
+		}
+	}
 
 	// Resolve and validate parent / project before reading from the
 	// duplicate guard so a forged parent or project ID is rejected
@@ -224,41 +276,43 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 	var issue db.Issue
 	if p.OriginType.Valid {
 		issue, err = qtx.CreateIssueWithOrigin(ctx, db.CreateIssueWithOriginParams{
-			WorkspaceID:   p.WorkspaceID,
-			Title:         p.Title,
-			Description:   p.Description,
-			Status:        p.Status,
-			Priority:      p.Priority,
-			AssigneeType:  p.AssigneeType,
-			AssigneeID:    p.AssigneeID,
-			CreatorType:   p.CreatorType,
-			CreatorID:     p.CreatorID,
-			ParentIssueID: p.ParentIssueID,
-			Position:      newPosition,
-			StartDate:     p.StartDate,
-			DueDate:       p.DueDate,
-			Number:        issueNumber,
-			ProjectID:     projectID,
-			OriginType:    p.OriginType,
-			OriginID:      p.OriginID,
+			WorkspaceID:        p.WorkspaceID,
+			Title:              p.Title,
+			Description:        p.Description,
+			Status:             p.Status,
+			Priority:           p.Priority,
+			AssigneeType:       p.AssigneeType,
+			AssigneeID:         p.AssigneeID,
+			CreatorType:        p.CreatorType,
+			CreatorID:          p.CreatorID,
+			ParentIssueID:      p.ParentIssueID,
+			Position:           newPosition,
+			StartDate:          p.StartDate,
+			DueDate:            p.DueDate,
+			Number:             issueNumber,
+			ProjectID:          projectID,
+			OriginType:         p.OriginType,
+			OriginID:           p.OriginID,
+			AcceptanceCriteria: acceptanceCriteriaJSON,
 		})
 	} else {
 		issue, err = qtx.CreateIssue(ctx, db.CreateIssueParams{
-			WorkspaceID:   p.WorkspaceID,
-			Title:         p.Title,
-			Description:   p.Description,
-			Status:        p.Status,
-			Priority:      p.Priority,
-			AssigneeType:  p.AssigneeType,
-			AssigneeID:    p.AssigneeID,
-			CreatorType:   p.CreatorType,
-			CreatorID:     p.CreatorID,
-			ParentIssueID: p.ParentIssueID,
-			Position:      newPosition,
-			StartDate:     p.StartDate,
-			DueDate:       p.DueDate,
-			Number:        issueNumber,
-			ProjectID:     projectID,
+			WorkspaceID:        p.WorkspaceID,
+			Title:              p.Title,
+			Description:        p.Description,
+			Status:             p.Status,
+			Priority:           p.Priority,
+			AssigneeType:       p.AssigneeType,
+			AssigneeID:         p.AssigneeID,
+			CreatorType:        p.CreatorType,
+			CreatorID:          p.CreatorID,
+			ParentIssueID:      p.ParentIssueID,
+			Position:           newPosition,
+			StartDate:          p.StartDate,
+			DueDate:            p.DueDate,
+			Number:             issueNumber,
+			ProjectID:          projectID,
+			AcceptanceCriteria: acceptanceCriteriaJSON,
 		})
 	}
 	if err != nil {
@@ -271,12 +325,26 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 			return IssueCreateResult{}, fmt.Errorf("persist issue source message: %w", err)
 		}
 	}
+	if len(attachmentIDs) > 0 {
+		if err := qtx.LinkAttachmentsToIssue(ctx, db.LinkAttachmentsToIssueParams{
+			IssueID:     issue.ID,
+			WorkspaceID: issue.WorkspaceID,
+			Column3:     attachmentIDs,
+		}); err != nil {
+			return IssueCreateResult{}, fmt.Errorf("link issue attachments: %w", err)
+		}
+	}
+	attachments, err := qtx.ListAttachmentsByIssue(ctx, db.ListAttachmentsByIssueParams{
+		IssueID:     issue.ID,
+		WorkspaceID: issue.WorkspaceID,
+	})
+	if err != nil {
+		return IssueCreateResult{}, fmt.Errorf("list linked issue attachments: %w", err)
+	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return IssueCreateResult{}, fmt.Errorf("commit: %w", err)
 	}
-
-	attachments := s.linkAttachments(ctx, issue, p.AttachmentIDs)
 
 	actorID := opts.ActorID
 	if actorID == "" {
@@ -290,36 +358,21 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 	return IssueCreateResult{Issue: issue, Attachments: attachments}, nil
 }
 
-// linkAttachments links the given attachment IDs to the newly created
-// issue and returns the re-fetched attachment rows so callers can build
-// their response without a second query. Errors are logged and swallowed
-// — attachment linking is a best-effort post-commit step, and a stale
-// attachment row doesn't justify failing the whole create.
-func (s *IssueService) linkAttachments(ctx context.Context, issue db.Issue, ids []pgtype.UUID) []db.Attachment {
+func uniqueUUIDs(ids []pgtype.UUID) []pgtype.UUID {
 	if len(ids) == 0 {
 		return nil
 	}
-	if err := s.Queries.LinkAttachmentsToIssue(ctx, db.LinkAttachmentsToIssueParams{
-		IssueID:     issue.ID,
-		WorkspaceID: issue.WorkspaceID,
-		Column3:     ids,
-	}); err != nil {
-		slog.Error("failed to link attachments to issue",
-			"issue_id", util.UUIDToString(issue.ID),
-			"error", err)
-		return nil
+	seen := make(map[string]struct{}, len(ids))
+	out := make([]pgtype.UUID, 0, len(ids))
+	for _, id := range ids {
+		key := util.UUIDToString(id)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, id)
 	}
-	list, err := s.Queries.ListAttachmentsByIssue(ctx, db.ListAttachmentsByIssueParams{
-		IssueID:     issue.ID,
-		WorkspaceID: issue.WorkspaceID,
-	})
-	if err != nil {
-		slog.Warn("failed to list attachments for new issue",
-			"issue_id", util.UUIDToString(issue.ID),
-			"error", err)
-		return nil
-	}
-	return list
+	return out
 }
 
 func (s *IssueService) publishIssueCreated(issue db.Issue, attachments []db.Attachment, creatorType, actorID string, opts IssueCreateOpts) {

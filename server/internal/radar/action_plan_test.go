@@ -54,6 +54,25 @@ func TestParseActionPlanRejectsUnknownAction(t *testing.T) {
 	}
 }
 
+func TestParseActionPlanRejectsDeclaredButUnexecutableActions(t *testing.T) {
+	for _, actionType := range []string{ActionAssignIssue, ActionScheduleReminder} {
+		_, err := ParseActionPlan(`{"actions":[{"type":"` + actionType + `"}]}`)
+		if err == nil {
+			t.Fatalf("expected unexecutable action %q to be rejected", actionType)
+		}
+	}
+}
+
+func TestParseActionPlanAcceptsRequestRework(t *testing.T) {
+	plan, err := ParseActionPlan(`{"actions":[{"type":"request_rework","payload":{"issue_id":"00000000-0000-0000-0000-000000000001","target_agent_id":"00000000-0000-0000-0000-000000000002","content":"match the approved visual reference"}}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Actions) != 1 || plan.Actions[0].Type != ActionRequestRework {
+		t.Fatalf("unexpected actions: %+v", plan.Actions)
+	}
+}
+
 func TestBuildAmbientChannelPromptCoversCoordinationActions(t *testing.T) {
 	prompt := BuildAmbientChannelPrompt("## Channel\n\n- channel_id=abc")
 	for _, want := range []string{
@@ -61,7 +80,8 @@ func TestBuildAmbientChannelPromptCoversCoordinationActions(t *testing.T) {
 		"no_action",
 		"mention_agent",
 		"create_issue",
-		"project scope is enforced by the server",
+		"request_rework",
+		"project and channel scope are enforced by the server",
 		"do not send project_id",
 		"post_channel_message",
 		"untrusted evidence",
@@ -75,8 +95,12 @@ func TestBuildAmbientChannelPromptCoversCoordinationActions(t *testing.T) {
 		"not a playable demo",
 		"acceptance criteria",
 		"based on evidence",
-		// Visual/UI审 leverages image reading: review the screenshot vs reference.
-		"review the actual screenshot",
+		// Visual/UI review must use reachable evidence and real asset files.
+		"multica attachment view",
+		"Only claim visual inspection",
+		"declared visual or image-generation capability",
+		"SVG, PNG, WebP, Lottie, video, or frame assets",
+		"CSS shapes, gradients, pseudo-elements, or emoji",
 		// 对话→issue→开发: requirements become issues; execution builds from issues.
 		"Requirements go through issues, not chat",
 		// On shortfall: diagnose spec-wrong vs impl-wrong; owner owns criteria.

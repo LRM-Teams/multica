@@ -202,6 +202,8 @@
   },
   "message": {
     "add_reaction": "Add reaction",
+    "more_emojis": "More emojis",
+    "more_actions": "More actions",
     "actions_menu": "Message actions",
     "copy_action": "Copy",
     "expand_action": "Show full message",

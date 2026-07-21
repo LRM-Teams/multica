@@ -202,6 +202,8 @@
   },
   "message": {
     "add_reaction": "添加表情回应",
+    "more_emojis": "更多表情",
+    "more_actions": "更多操作",
     "actions_menu": "消息操作",
     "copy_action": "复制",
     "expand_action": "展开全文",

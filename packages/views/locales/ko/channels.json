@@ -202,6 +202,8 @@
   },
   "message": {
     "add_reaction": "반응 추가",
+    "more_emojis": "이모지 더 보기",
+    "more_actions": "더 보기",
     "actions_menu": "메시지 작업",
     "copy_action": "복사",
     "expand_action": "전체 메시지 보기",

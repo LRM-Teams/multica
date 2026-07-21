@@ -6,9 +6,13 @@ import { Picker } from "emoji-mart";
 
 interface EmojiPickerProps {
   onSelect: (emoji: string) => void;
+  /** emoji-mart's clickable button size in px. Defaults to its own (desktop
+   * mouse) default; pass 44 for coarse-pointer surfaces per the touch-target
+   * guideline. */
+  emojiButtonSize?: number;
 }
 
-export function EmojiPicker({ onSelect }: EmojiPickerProps) {
+export function EmojiPicker({ onSelect, emojiButtonSize }: EmojiPickerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
@@ -29,6 +33,7 @@ export function EmojiPicker({ onSelect }: EmojiPickerProps) {
       previewPosition: "none",
       skinTonePosition: "search",
       maxFrequentRows: 2,
+      ...(emojiButtonSize ? { emojiButtonSize, emojiSize: Math.round(emojiButtonSize * 0.6) } : {}),
     });
 
     container.appendChild(picker as unknown as Node);
@@ -36,7 +41,7 @@ export function EmojiPicker({ onSelect }: EmojiPickerProps) {
     return () => {
       container.replaceChildren();
     };
-  }, [handleSelect]);
+  }, [handleSelect, emojiButtonSize]);
 
   return <div ref={containerRef} />;
 }

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -293,6 +293,41 @@ describe.sequential("DmConversation message edit / delete wiring (#241 B3)", () 
     await waitFor(() => expect(apiMock.deleteChannelMessage).toHaveBeenCalledWith("dm-chan-1", "m-1"));
     expect(apiMock.sendChannelMessage).not.toHaveBeenCalled();
     expect(await screen.findByTestId("message-tombstone")).toBeInTheDocument();
+  });
+
+  // #568 — the mobile Reply/React entry point and single-overlay reaction
+  // sheet live in the shared ChannelMessageBubble, but DM was a separate
+  // regression Frank hit live (task #630) — this proves the fix reaches the
+  // DM consumer specifically, not just the channel path (Parker/Iris: "共用
+  // 组件不能假定双面 PASS").
+  it("shows the mobile More trigger and reaction sheet through the real DM path (#568)", async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 390 });
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: vi.fn((query: string) => ({
+        matches: query.includes("max-width") || query.includes("pointer"),
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    });
+    currentPageMessages = [peerMessage()];
+    renderDm();
+    await screen.findByTestId("message-bubble");
+
+    await user.click(await screen.findByRole("button", { name: "More actions" }));
+    const sheet = await screen.findByRole("dialog", { name: "Message actions" });
+    await user.click(within(sheet).getByRole("button", { name: "Add reaction" }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Message actions" })).not.toBeInTheDocument(),
+    );
+    expect(await screen.findByRole("dialog", { name: "Add reaction" })).toBeInTheDocument();
   });
 
   // #542 — both DM composers (main + thread) must opt into plain-text URLs so a

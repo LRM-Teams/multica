@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useState } from "react";
 import { Archive, Bell, BellOff } from "lucide-react";
 import type { Channel, ChannelMemberBrief } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
@@ -21,6 +21,9 @@ export type ChannelDetailsTab = "about" | "members" | "files" | "settings";
  * open a right dock (desktop) or bottom drawer page (mobile) with tabs
  * About | Members | Files | Settings. Replaces the old icon-heap of
  * Share / Stats / Files / Settings popovers in the conversation header.
+ *
+ * Remount via `key={`${channel.id}:${initialTab}`}` when the opener changes
+ * tab/channel so draft + tab state reset without derived-state effects.
  */
 export function ChannelDetailsPanel({
   channel,
@@ -85,45 +88,41 @@ export function ChannelDetailsPanel({
       hidden: hideSettingsTab,
     },
   ];
-  const visibleTabs = tabs.filter((tab) => !tab.hidden);
+  const visibleTabs = tabs.filter((tabItem) => !tabItem.hidden);
   const resolvedInitial =
     hideSettingsTab && initialTab === "settings" ? "about" : initialTab;
+  // Local UI state only — parent remounts this panel via key when channel/tab
+  // opener changes, so these are not kept in sync through effects.
+  // react-doctor-disable-next-line react-doctor/no-derived-state -- intentional editable draft + active tab; remount keyed by channel/initialTab
   const [tab, setTab] = useState<ChannelDetailsTab>(resolvedInitial);
-  useEffect(() => {
-    setTab(hideSettingsTab && initialTab === "settings" ? "about" : initialTab);
-  }, [initialTab, hideSettingsTab, channel.id]);
+  // react-doctor-disable-next-line react-doctor/no-derived-useState, react-doctor/no-derived-state -- rename/lark drafts; remount keyed by channel.id
+  const [nameDraft, setNameDraft] = useState(channel.name);
+  // react-doctor-disable-next-line react-doctor/no-derived-useState, react-doctor/no-derived-state -- rename/lark drafts; remount keyed by channel.id
+  const [larkDraft, setLarkDraft] = useState(channel.lark_chat_id ?? "");
 
   const muted = isConversationMuted(channel);
-  const [nameDraft, setNameDraft] = useState(channel.name);
-  const [larkDraft, setLarkDraft] = useState(channel.lark_chat_id ?? "");
-  useEffect(() => {
-    setNameDraft(channel.name);
-    setLarkDraft(channel.lark_chat_id ?? "");
-  }, [channel.id, channel.name, channel.lark_chat_id]);
-
   const nameDirty = nameDraft.trim() !== channel.name;
   const larkDirty = (larkDraft.trim() || null) !== (channel.lark_chat_id || null);
   const settingsEditable = canManage && !isArchived;
-
-  const leading = (
-    <div className="flex min-w-0 flex-col">
-      <p className="truncate text-sm font-semibold">{t(($) => $.details.title)}</p>
-      <p className="truncate text-xs text-muted-foreground">
-        #{channel.name}
-        {" · "}
-        {projectBound
-          ? t(($) => $.details.project_bound)
-          : t(($) => $.details.project_unbound)}
-      </p>
-    </div>
-  );
 
   return (
     <ConversationSidePanelShell
       variant={variant}
       onClose={onClose}
       closeAriaLabel={t(($) => $.details.close_aria)}
-      leading={leading}
+      // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- shell leading slot; remount keyed by channel/tab
+      leading={
+        <div className="flex min-w-0 flex-col">
+          <p className="truncate text-sm font-semibold">{t(($) => $.details.title)}</p>
+          <p className="truncate text-xs text-muted-foreground">
+            #{channel.name}
+            {" · "}
+            {projectBound
+              ? t(($) => $.details.project_bound)
+              : t(($) => $.details.project_unbound)}
+          </p>
+        </div>
+      }
     >
       <div className="flex shrink-0 gap-0.5 overflow-x-auto border-b px-2">
         {visibleTabs.map((item) => (

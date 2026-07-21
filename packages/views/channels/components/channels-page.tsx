@@ -2657,6 +2657,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const detailsPanel =
     channelDetailsOpen && detailsPanelProps ? (
       <ChannelDetailsPanel
+        key={`${active!.id}:${channelDetailsTab}`}
         {...detailsPanelProps}
         initialTab={channelDetailsTab}
         variant="panel"
@@ -3218,6 +3219,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
               </>
             ) : mobilePanel ? (
               <ChannelDetailsPanel
+                key={`${active.id}:${mobilePanel}`}
                 {...detailsPanelProps}
                 initialTab={mobilePanel}
                 variant="page"

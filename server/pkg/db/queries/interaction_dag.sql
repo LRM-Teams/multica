@@ -30,11 +30,11 @@ WHERE session_id = $1;
 -- sandbox_ids and env_state are opaque jsonb (NOT NULL); issue_snapshot_id is
 -- nullable.
 WITH seg AS (
-  INSERT INTO interaction_dag_segment (segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, start_seq, end_seq)
-  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+  INSERT INTO interaction_dag_segment (segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, start_seq, end_seq, trajectory_source, trainable, trajectory)
+  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 )
 INSERT INTO interaction_dag_env_snapshot (segment_id, sandbox_ids, issue_snapshot_id, env_state)
-VALUES ($1, $12, $13, $14);
+VALUES ($1, $15, $16, $17);
 
 -- name: GetInteractionDAGSegmentByAgentRun :one
 -- Resolves a task's segment by agent_run_id (= task.ID, D8). For change 1 each
@@ -42,7 +42,7 @@ VALUES ($1, $12, $13, $14);
 -- this stable if a future multi-segment model adds more. Used by the
 -- DELEGATION-edge recorder (D11) to find the parent's segment at the child's
 -- close. Returns no rows when the parent's segment has not been recorded yet.
-SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, start_seq, end_seq, created_at
+SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, start_seq, end_seq, trajectory_source, trainable, trajectory, created_at
 FROM interaction_dag_segment
 WHERE agent_run_id = $1
 ORDER BY created_at DESC
@@ -71,7 +71,7 @@ VALUES ($1, $2, $3, $4);
 -- GetInteractionDAGSegmentByAgentRun), including the start_seq/end_seq turn
 -- range (Task 2). No scores or message-text columns live on this table; step
 -- rewards live in interaction_dag_step_reward (Task 5).
-SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, start_seq, end_seq, created_at
+SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, start_seq, end_seq, trajectory_source, trainable, trajectory, created_at
 FROM interaction_dag_segment
 WHERE project_id = $1
 ORDER BY created_at;

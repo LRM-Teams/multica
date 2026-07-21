@@ -4,6 +4,7 @@ import { DashboardLayout } from "@multica/views/layout";
 import { MulticaIcon } from "@multica/ui/components/common/multica-icon";
 import { SearchCommand } from "@multica/views/search";
 import { WebNotificationBridge } from "@/components/web-notification-bridge";
+import { BrowserNotificationPrompt } from "@multica/views/settings/browser-notification-prompt";
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   return (
@@ -13,6 +14,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         <>
           <SearchCommand />
           <WebNotificationBridge />
+          <BrowserNotificationPrompt />
         </>
       }
     >

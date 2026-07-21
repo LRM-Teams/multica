@@ -51,6 +51,7 @@
     "./channels": "./channels/index.ts",
     "./settings": "./settings/index.ts",
     "./settings/lark-tab": "./settings/components/lark-tab.tsx",
+    "./settings/browser-notification-prompt": "./settings/components/browser-notification-prompt.tsx",
     "./lark": "./lark/index.ts",
     "./invite": "./invite/index.ts",
     "./invitations": "./invitations/index.ts",

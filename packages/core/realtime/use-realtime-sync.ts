@@ -52,7 +52,9 @@ import {
   upsertChannelMessageInCache,
   upsertChannelMessageThreadInCache,
 } from "../channels/queries";
+import { messageMentionsViewer } from "../channels/mentions-viewer";
 import { dmKeys } from "../dm/queries";
+import type { DMItem } from "../dm/types";
 import { useChatStore } from "../chat";
 import { resolvePostAuthDestination, useHasOnboarded } from "../paths";
 import type {
@@ -338,11 +340,25 @@ export async function handleChannelMessageNotification(
 
   const channels = qc.getQueryData<Channel[]>(channelKeys.list(sourceWsId)) ?? [];
   const channel = channels.find((c) => c.id === message.channel_id) ?? null;
-  if (channel?.muted || channel?.muted_at) return;
+  const dmItems = qc.getQueryData<DMItem[]>(dmKeys.list(sourceWsId)) ?? [];
+  const dmItem = dmItems.find((d) => d.id === message.channel_id) ?? null;
+  const isDM = channel?.kind === "dm" || dmItem != null;
 
-  const isDM = channel?.kind === "dm";
+  // WeChat-style mute: suppress banners for muted group channels / DMs.
+  if (channel?.muted || channel?.muted_at || dmItem?.muted || dmItem?.muted_at) {
+    return;
+  }
+
+  // Group (and unknown) chats only banner on @me / @all; DMs banner every message.
+  if (
+    !isDM &&
+    !messageMentionsViewer(message.content, myUserId, message.parts)
+  ) {
+    return;
+  }
+
   const title = isDM
-    ? message.author_name || "Direct message"
+    ? message.author_name || dmItem?.peer?.name || "Direct message"
     : channel?.name
       ? `#${channel.name}`
       : "New group message";

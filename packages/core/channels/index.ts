@@ -60,3 +60,7 @@ export {
 } from "./mutations";
 export { useComposerDraftStore, useLastSelectedChannelStore, type ComposerDraftKey } from "./stores";
 export { isImmutableSystemChannel } from "./system-channel";
+export {
+  contentMentionsViewer,
+  messageMentionsViewer,
+} from "./mentions-viewer";

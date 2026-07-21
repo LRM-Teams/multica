@@ -110,4 +110,26 @@ describe("Composer", () => {
     expect(shell?.firstElementChild).toBe(prefix);
     expect(prefix.compareDocumentPosition(tray as HTMLElement) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
+
+  // LRM-205: composer toolbar keeps attach only — no # / warning-icon chrome.
+  it("LRM-205: action row accepts paperclip-only leading actions without a # control", () => {
+    render(
+      <Composer
+        surface="channel"
+        {...baseProps}
+        sendDisabled={false}
+        leadingActions={
+          <button type="button" aria-label="Attach file">
+            Attach
+          </button>
+        }
+      />,
+    );
+    const row = screen.getByRole("button", { name: /attach file/i }).closest(
+      '[data-slot="composer-action-row"]',
+    );
+    expect(row).not.toBeNull();
+    expect(screen.queryByRole("button", { name: /reference issue|#|警/i })).toBeNull();
+    expect(screen.getByRole("button", { name: /send/i })).toBeInTheDocument();
+  });
 });

@@ -14,12 +14,17 @@ import {
 } from "./resolve-agent-live-status";
 import { useAgentActivityEvents } from "./components/tabs/use-agent-activity-events";
 
-// The header projects the latest WORK row of the current round — thinking / text
-// / tool_call — so it reads the actual action (Running command · / Writing file /
-// Thinking), never a generic "Working" status row. Status rows (agent_status_
-// changed) and diagnostics are skipped here; the active-vs-idle gate is the
-// snapshot's active task, not these events.
-const HEADER_STAGE_KINDS = new Set(["thinking", "text", "tool_call"]);
+// The header projects the latest WORK row of the current round — thinking /
+// tool_call — so it reads the actual action (Running command · / Thinking),
+// never a generic "Working" status row. Status rows (agent_status_changed) and
+// diagnostics are skipped here; the active-vs-idle gate is the snapshot's
+// active task, not these events.
+//
+// LRM-202: deliberately exclude `text` — Activity presents those as "Output",
+// which Frank does not want mirrored above the composer (or on the live name
+// row). Streaming prose falls back to the prior thinking/tool verb, or
+// Thinking when nothing else has streamed yet.
+const HEADER_STAGE_KINDS = new Set(["thinking", "tool_call"]);
 
 /**
  * Live name-row status for an agent. While a task is active the header projects

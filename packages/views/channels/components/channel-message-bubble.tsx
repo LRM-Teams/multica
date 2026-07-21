@@ -23,13 +23,16 @@ import {
   ContextMenuTrigger,
 } from "@multica/ui/components/ui/context-menu";
 import { useActorName } from "@multica/core/workspace/hooks";
-import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import type { ChannelMessage } from "@multica/core/types";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
-import { initialsOf } from "../../common/initials";
+import { avatarGlyph, avatarToneClass } from "../../common/initials";
 import { InlineReferenceContent } from "../../common/inline-reference-content";
 import { useT } from "../../i18n/use-t";
 import { useMessageTime } from "../../i18n/use-message-time";
+import {
+  authorAvatarCacheKey,
+  resolveCachedAuthorAvatarUrl,
+} from "./author-avatar-cache";
 import {
   mentionResolverFrom,
   projectReferencesToText,
@@ -386,12 +389,10 @@ export function ChannelMessageBubble({
     message.author_id === currentUserId;
   const isAgent = message.type === "agent";
   const isExternal = message.source === "lark";
-  // Read the author avatar straight from the message payload (#453/#574). The
-  // BE aggregates `author_avatar_url` per fetch from the current DB, so every
-  // viewer who can see the message gets the author's real avatar — no
-  // viewer-scoped `getActorAvatarUrl` list guess and no fallback (Frank: a
-  // missing avatar here is a payload bug, not something to paper over).
-  const avatarUrl = resolvePublicFileUrl(message.author_avatar_url);
+  // Read the author avatar from the message payload (#453/#574), with an
+  // author-scoped sticky cache (LRM-202) so consecutive same-author bubbles
+  // keep the real face when a later payload omits `author_avatar_url`.
+  const avatarUrl = resolveCachedAuthorAvatarUrl(message);
   const displayName = resolveChannelAuthorDisplayName(message, {
     currentUserId,
     ownName,
@@ -409,15 +410,16 @@ export function ChannelMessageBubble({
   // avatar itself, so that when the avatar sits inside the fixed-size presence
   // box the box hugs the avatar exactly (a margin on the inner avatar would
   // overflow the box and lift the dot off the avatar's bottom edge).
+  const avatarSeed = authorAvatarCacheKey(message) ?? displayName;
   const avatarNode = (
     <ActorAvatar
       name={displayName}
-      initials={initialsOf(displayName)}
-      avatarUrl={avatarUrl ?? undefined}
+      initials={avatarGlyph(displayName)}
+      avatarUrl={avatarUrl}
       isAgent={isAgent}
       isSystem={false}
       size={28}
-      className="select-none"
+      className={cn("select-none", avatarToneClass(avatarSeed))}
     />
   );
   // Message rows carry NO live presence dot. A message is history, so pinning

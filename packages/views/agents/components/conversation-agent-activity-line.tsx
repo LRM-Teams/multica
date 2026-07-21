@@ -50,7 +50,10 @@ export function ConversationAgentActivityLine({
   // Only paint while the agent is actively working. No active task (idle) — or
   // status still resolving — hides the whole line; never a fabricated idle word
   // or fake activity beneath the composer.
+  // LRM-202: also hide the Activity "Output" verb above the composer — Frank
+  // marked it as unwanted chrome; streaming prose should not surface that label.
   if (!activeTask || !status) return null;
+  if (status.label === "Output") return null;
 
   return (
     <div

@@ -155,7 +155,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@multica/ui/components
 import { MobileListDetailLayout } from "../../common/mobile-list-detail-layout";
 import { ContentEditor, type ContentEditorRef, type ContentEditorProps } from "../../editor/content-editor";
 import { useNavigation } from "../../navigation/context";
-import { initialsOf } from "../../common/initials";
+import { avatarGlyph, avatarToneClass } from "../../common/initials";
 import { useT } from "../../i18n/use-t";
 import { useTimeAgo } from "../../i18n/use-time-ago";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
@@ -176,6 +176,7 @@ import { ChannelProjectSettingsPanel } from "./channel-project-settings-panel";
 import { ChannelSettingsSidePanel } from "./channel-settings-side-panel";
 import { ChannelTasksBoard } from "./channel-tasks-board";
 import { ChannelGroupAvatar } from "./channel-group-avatar";
+import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { ThreadPanel } from "./thread-panel";
 import { ComposerAttachmentTray } from "./composer-attachment-tray";
 import { ComposerQuotePreview } from "./message-quote";
@@ -216,62 +217,44 @@ const EMPTY_ACTIVE_TASKS: ChannelActiveTask[] = [];
 const STOPPING_ALL_TASKS_ID = "__all__";
 const identitySearchOptions = { extendedMatch: matchesPinyin };
 
-// Overlapping avatar stack for the channel roster (agents tinted by identity
-// color, humans as initials). The whole stack is the trigger that opens member
-// management — matching the Figma header where the roster doubles as the
-// add/remove entry point.
-function MemberStack({
+// Slack-style presence: up to 4 faces + member-count badge. Opens the
+// members panel (browse). Invite is a separate text button — no hollow "+".
+function MemberPresenceStack({
   members,
   max = 4,
-  size = 28,
-  emptyHint = true,
+  size = 26,
 }: {
   members: ChannelMemberBrief[];
   max?: number;
   size?: number;
-  emptyHint?: boolean;
 }) {
-  const { t } = useT("channels");
-  if (members.length === 0) {
-    return emptyHint ? (
-      <span className="text-xs text-muted-foreground">{t(($) => $.members.empty)}</span>
-    ) : null;
-  }
   const visible = members.slice(0, max);
-  const overflow = members.length - visible.length;
-  const overlap = Math.round(size * 0.3);
+  const overlap = Math.round(size * 0.28);
   return (
     <span className="inline-flex items-center">
-      {visible.map((m, i) => (
-        <span
-          key={`${m.member_type}:${m.member_id}`}
-          style={{ marginLeft: i === 0 ? 0 : -overlap }}
-          className="inline-flex rounded-full ring-2 ring-background"
-        >
-          {(() => {
-            const name = resolveActorDisplayName(
-              m,
-              m.member_type === "agent" ? "Agent" : "Member",
-            );
-            return (
-              <ActorAvatar
-                name={name}
-                initials={initialsOf(name || "?")}
-                isAgent={m.member_type === "agent"}
-                size={size}
-              />
-            );
-          })()}
-        </span>
-      ))}
-      {overflow > 0 && (
-        <span
-          style={{ marginLeft: -overlap, width: size, height: size, fontSize: Math.max(9, Math.round(size * 0.36)) }}
-          className="inline-flex items-center justify-center rounded-full bg-muted font-medium text-muted-foreground ring-2 ring-background"
-        >
-          +{overflow}
-        </span>
-      )}
+      {visible.map((m, i) => {
+        const name = resolveActorDisplayName(
+          m,
+          m.member_type === "agent" ? "Agent" : "Member",
+        );
+        const seed = `${m.member_type}:${m.member_id}:${name}`;
+        return (
+          <span
+            key={`${m.member_type}:${m.member_id}`}
+            style={{ marginLeft: i === 0 ? 0 : -overlap }}
+            className="inline-flex rounded-full ring-2 ring-background"
+          >
+            <ActorAvatar
+              name={name}
+              initials={avatarGlyph(name || "?")}
+              avatarUrl={resolvePublicFileUrl(m.avatar_url)}
+              isAgent={m.member_type === "agent"}
+              size={size}
+              className={avatarToneClass(seed)}
+            />
+          </span>
+        );
+      })}
     </span>
   );
 }
@@ -1036,18 +1019,21 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       key: string;
       type: "user" | "agent";
       id: string;
+      avatarUrl?: string | null;
       presentation: ActorIdentityPresentation;
     }> = [
       ...availableMembers.map((m) => ({
         key: `user:${m.user_id}`,
         type: "user" as const,
         id: m.user_id,
+        avatarUrl: m.avatar_url,
         presentation: resolveActorIdentityPresentation(m, m.email),
       })),
       ...availableAgents.map((a) => ({
         key: `agent:${a.id}`,
         type: "agent" as const,
         id: a.id,
+        avatarUrl: a.avatar_url,
         presentation: resolveActorIdentityPresentation(a, "Agent"),
       })),
     ];
@@ -1822,7 +1808,10 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     });
     addMembers.mutate(
       { channelId: active.id, members },
-      { onSuccess: () => setSelectedInvites(new Set()) },
+      {
+        onSuccess: () => setSelectedInvites(new Set()),
+        onError: () => toast.error(t(($) => $.members.invite_failed)),
+      },
     );
   };
 
@@ -1888,7 +1877,10 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
               inviteCandidates.map((c) => (
                 <label
                   key={c.key}
-                  className="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-accent"
+                  className={cn(
+                    "flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-accent",
+                    selectedInvites.has(c.key) && "bg-accent/60",
+                  )}
                 >
                   <Checkbox
                     checked={selectedInvites.has(c.key)}
@@ -1896,32 +1888,34 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                   />
                   <ActorAvatar
                     name={c.presentation.displayName}
-                    initials={initialsOf(c.presentation.displayName || "?")}
+                    initials={avatarGlyph(c.presentation.displayName || "?")}
+                    avatarUrl={resolvePublicFileUrl(c.avatarUrl)}
                     isAgent={c.type === "agent"}
-                    size={26}
+                    size={32}
+                    className={avatarToneClass(c.key)}
                   />
                   <ActorIdentityRow
                     displayName={c.presentation.displayName}
                     handle={c.presentation.handle}
-                    showHandle={c.presentation.showHandleLabel}
-                    primaryClassName="truncate text-sm"
+                    showHandle
+                    primaryClassName="truncate text-sm font-medium"
                   />
                 </label>
               ))
             )}
           </div>
-          {selectedInvites.size > 0 && (
-            <div className="border-t p-2">
-              <Button
-                size="sm"
-                className="w-full"
-                onClick={inviteSelected}
-                disabled={addMembers.isPending}
-              >
-                {t(($) => $.members.invite_count, { count: selectedInvites.size })}
-              </Button>
-            </div>
-          )}
+          <div className="flex items-center justify-between gap-2 border-t p-2">
+            <span className="text-xs text-muted-foreground">
+              {t(($) => $.members.invite_selected, { count: selectedInvites.size })}
+            </span>
+            <Button
+              size="sm"
+              onClick={inviteSelected}
+              disabled={selectedInvites.size === 0 || addMembers.isPending}
+            >
+              {t(($) => $.members.invite_cta)}
+            </Button>
+          </div>
         </>
       ) : (
         <div className="max-h-72 overflow-y-auto px-1.5 pb-2">
@@ -1947,15 +1941,17 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                 >
                   <ActorAvatar
                     name={presentation.displayName}
-                    initials={initialsOf(presentation.displayName || "?")}
+                    initials={avatarGlyph(presentation.displayName || "?")}
+                    avatarUrl={resolvePublicFileUrl(m.avatar_url)}
                     isAgent={isAgent}
-                    size={26}
+                    size={32}
+                    className={avatarToneClass(`${m.member_type}:${m.member_id}`)}
                   />
                   <ActorIdentityRow
                     displayName={presentation.displayName}
                     handle={presentation.handle}
-                    showHandle={presentation.showHandleLabel}
-                    primaryClassName="truncate text-sm"
+                    showHandle
+                    primaryClassName="truncate text-sm font-medium"
                   />
                   {/* Send message: agents always, users except yourself (the
                       backend rejects a self-DM). Create-or-find then open it. */}
@@ -2648,37 +2644,50 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
               </Button>
             ) : (
               <>
-                <Popover>
-                  {/* #642 follow-up (Parker/Iris) — the system #general
-                      channel's roster is auto-managed and read-only, so
-                      the "+" invite affordance is a lie there: swap to a
-                      neutral view-only trigger. Ordinary channels keep
-                      the add/manage semantics unchanged. */}
-                  {isActiveSystemChannel ? (
+                {/* Slack-style: faces + count → browse members; separate
+                   「邀请」text button → invite tab. No hollow "+" circle. */}
+                <div className="flex items-center gap-2">
+                  <Popover
+                    onOpenChange={(open) => {
+                      if (open) setMemberTab("members");
+                    }}
+                  >
                     <PopoverTrigger
-                      className="flex items-center gap-1.5 rounded-full p-0.5 transition-colors hover:bg-accent"
+                      className="flex items-center gap-1.5 rounded-md px-1 py-0.5 transition-colors hover:bg-accent"
                       aria-label={t(($) => $.header.view_members_aria)}
                     >
-                      <MemberStack members={channelMembers} />
-                      <span className="flex size-7 items-center justify-center rounded-full text-muted-foreground">
-                        <Users className="size-3.5" />
+                      <MemberPresenceStack members={channelMembers} />
+                      <span
+                        className="inline-flex h-[26px] min-w-[26px] items-center justify-center rounded-md border border-border bg-background px-2 text-xs font-semibold text-muted-foreground"
+                        aria-label={t(($) => $.header.member_count_aria, {
+                          count: channelMembers.length,
+                        })}
+                      >
+                        {channelMembers.length}
                       </span>
                     </PopoverTrigger>
-                  ) : (
-                    <PopoverTrigger
-                      className="flex items-center gap-1.5 rounded-full p-0.5 transition-colors hover:bg-accent"
-                      aria-label={t(($) => $.header.manage_members_aria)}
+                    <PopoverContent align="end" className="w-[360px] p-0">
+                      {memberPanelBody}
+                    </PopoverContent>
+                  </Popover>
+                  {!isActiveSystemChannel && (
+                    <Popover
+                      onOpenChange={(open) => {
+                        if (open) setMemberTab("invite");
+                      }}
                     >
-                      <MemberStack members={channelMembers} />
-                      <span className="flex size-7 items-center justify-center rounded-full border border-dashed text-muted-foreground">
-                        <Plus className="size-3.5" />
-                      </span>
-                    </PopoverTrigger>
+                      <PopoverTrigger
+                        className="inline-flex h-[26px] items-center justify-center rounded-md bg-primary px-2.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+                        aria-label={t(($) => $.header.invite_members_aria)}
+                      >
+                        {t(($) => $.members.invite)}
+                      </PopoverTrigger>
+                      <PopoverContent align="end" className="w-[360px] p-0">
+                        {memberPanelBody}
+                      </PopoverContent>
+                    </Popover>
                   )}
-                  <PopoverContent align="end" className="w-80 p-0">
-                    {memberPanelBody}
-                  </PopoverContent>
-                </Popover>
+                </div>
                 <div className="flex items-center gap-1">
                   {/* #562 — the old #476 "open global Issues filtered to this
                       channel" entry is removed: the channel-scoped Tasks tab is

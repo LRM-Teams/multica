@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessage } from "@multica/core/types";
 import { stickerCatalogKeys } from "@multica/core/stickers";
+import { __resetAuthorAvatarOkCacheForTests } from "./author-avatar-cache";
 import { ChannelMessageBubble } from "./channel-message-bubble";
 
 const copyTextMock = vi.fn();
@@ -379,6 +380,7 @@ describe("ChannelMessageBubble", () => {
     copyTextMock.mockReset();
     vi.mocked(toast.success).mockReset();
     vi.mocked(toast.error).mockReset();
+    __resetAuthorAvatarOkCacheForTests();
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 1024 });
     Object.defineProperty(window, "matchMedia", {
       configurable: true,
@@ -416,6 +418,38 @@ describe("ChannelMessageBubble", () => {
     // real avatar instead of the default bot; no `getActorAvatarUrl` guess.
     const img = screen.getByRole("img", { name: /Research Agent/i });
     expect(img).toHaveAttribute("src", "/uploads/agent-avatar.png");
+  });
+
+  it("LRM-202: reuses a prior same-author avatar when a later message omits author_avatar_url", () => {
+    const { rerender } = render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          id: "msg-1",
+          author_avatar_url: "/uploads/agent-avatar.png",
+          content: "first",
+        })}
+        currentUserId="user-1"
+      />,
+    );
+    expect(screen.getByRole("img", { name: /Research Agent/i })).toHaveAttribute(
+      "src",
+      "/uploads/agent-avatar.png",
+    );
+
+    rerender(
+      <ChannelMessageBubble
+        message={makeMessage({
+          id: "msg-2",
+          author_avatar_url: null,
+          content: "second",
+        })}
+        currentUserId="user-1"
+      />,
+    );
+    expect(screen.getByRole("img", { name: /Research Agent/i })).toHaveAttribute(
+      "src",
+      "/uploads/agent-avatar.png",
+    );
   });
 
   it("marks proactive radar messages with a Project Radar pill", () => {

@@ -222,10 +222,9 @@ const EMPTY_TYPING_ACTORS: TypingActor[] = [];
 const EMPTY_ACTIVE_TASKS: ChannelActiveTask[] = [];
 const STOPPING_ALL_TASKS_ID = "__all__";
 // #568 — below this, the two-pane desktop layout's detail header doesn't
-// reliably have room for the full action-icon row (member cluster + invite +
-// search/share/stats/files/settings): the row is all `shrink-0`, so it never
-// yields space back to the truncating title, and it overflows with no way to
-// reach the rightmost icons.
+// reliably have room for the full action row (member cluster + invite +
+// search) alongside the truncating title: the row is all `shrink-0`, so it
+// never yields space back to the title.
 //
 // This is a CONTAINER width, not a viewport width — see
 // `useContainerNarrowerThan` (packages/ui/hooks/use-mobile.ts). A design/
@@ -233,22 +232,38 @@ const STOPPING_ALL_TASKS_ID = "__all__";
 // `window.innerWidth` is wrong for a resizable two-pane layout: dragging the
 // list↔detail divider changes the detail pane's actual width independently
 // of the viewport, in both directions (a wide viewport with a
-// dragged-narrow detail pane still overflows; a narrower viewport with a
-// wide detail pane doesn't need to collapse). Measuring the detail pane's
-// own rendered box (via the `detailHeaderContainerRef` attached to
+// dragged-narrow detail pane still squeezes the title; a narrower viewport
+// with a wide detail pane doesn't need to collapse). Measuring the detail
+// pane's own rendered box (via the `detailHeaderContainerRef` attached to
 // `channelConversationPane`'s `<main>` below) fixes both, and as a side
 // effect also reacts correctly to a right-side thread/settings panel
 // squeezing the same container further.
 //
-// Value: carried over from the original fix's viewport-based measurement
-// (live agent-browser: overflow persisted through detail-pane-implying
-// viewports up to ~1200-1300, with the default 280px list rail open) minus
-// the default list-rail width and resizable-handle chrome, converted to a
-// direct container-width threshold. This is an engineering estimate, not
-// independently re-measured live against the container signal — flag for a
-// live-device pixel check on the actual overflow point of the icon row's
-// natural width if this ever needs tightening.
-const HEADER_ACTIONS_COMPACT_BREAKPOINT = 900;
+// Value: re-derived live (agent-browser, local dev server, real qa-bot
+// group channels) AFTER #831 (LRM-210) folded the old standalone
+// Share/Stats/Files/Settings icon buttons into a single "Channel details"
+// entry point, which shrank the direct row down to just the member
+// cluster + invite button + Search — measured 166-216px wide (vs. the
+// pre-#831 row, which the original 900 estimate was arithmetically sized
+// for and was never re-verified against this lighter composition).
+//
+// With the row this light, `<header>`'s own `scrollWidth > clientWidth`
+// (real DOM overflow — the row physically clipped/unreachable, the literal
+// pre-#831 bug symptom) turns out to be unreachable across the two-pane
+// layout's entire achievable container-width range: even at the narrowest
+// container the desktop layout can produce (~268px, right at the
+// `useIsMobile` 768px viewport cutover), the title's `min-w-0 truncate`
+// absorbs all of the squeeze and the header never truly overflows. So a
+// pure overflow check would never fire here — the real, live-observed
+// failure mode instead is the title getting crushed to unreadable before
+// that point. Measured title-truncation onset (row shown directly, real
+// channel names, container width where the title's own `scrollWidth`
+// first exceeds its `clientWidth`): a 3-char name truncates ~338-367px, a
+// 9-char name ~438-454px, a 13-char name ~486-502px. 520 sits just above
+// that range (with a still-large margin over the ~268px hard floor above),
+// so ordinary channel names keep their title fully visible next to the
+// direct row and only compact once the container is genuinely tight.
+const HEADER_ACTIONS_COMPACT_BREAKPOINT = 520;
 const identitySearchOptions = { extendedMatch: matchesPinyin };
 
 // Slack-style presence: up to 4 faces + member-count badge. Opens the

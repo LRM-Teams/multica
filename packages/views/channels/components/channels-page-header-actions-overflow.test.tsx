@@ -10,11 +10,15 @@ import { ChannelsPage } from "./channels-page";
 // two-pane desktop layout's detail header doesn't switch to any condensed
 // pattern (MOBILE_BREAKPOINT is 768, and `useIsMobile` uses a strict `<`, so
 // 768 itself stays on the desktop icon-row branch), but the detail pane at
-// that width doesn't have room for the full action-icon row (member cluster
-// + invite + search/share/stats/files/settings — all `shrink-0`, so they
-// never yield space to the truncating title). The row overflowed past the
-// viewport with 群设置 (Group Settings) physically unreachable — no scroll,
-// no affordance to get to it.
+// that width doesn't have room for the full action-icon row (at the time:
+// member cluster + invite + search/share/stats/files/settings — all
+// `shrink-0`, so they never yield space to the truncating title). The row
+// overflowed past the viewport with 群设置 (Group Settings) physically
+// unreachable — no scroll, no affordance to get to it. #831 (LRM-210) later
+// folded Share/Stats/Files/Settings into a single "Channel details" entry
+// point, shrinking the row to just member cluster + invite + Search — see
+// the HEADER_ACTIONS_COMPACT_BREAKPOINT comment in channels-page.tsx for the
+// re-measured threshold against that lighter, current composition.
 //
 // A design/product review blocker on the *original* fix (which gated this
 // on `window.innerWidth`) caught that a global viewport breakpoint is the
@@ -231,8 +235,9 @@ vi.mock("../../editor/content-editor", () => ({
 }));
 
 // The real settings surface — asserting THIS renders (not just that a click
-// handler fired) is what proves the compact "⋯" path actually reaches Group
-// Settings, matching how #576's own tests prove reachability.
+// handler fired) is what proves the compact "⋯" path actually reaches the
+// channel Settings tab (LRM-210's ChannelDetailsPanel), matching how #576's
+// own tests prove reachability.
 vi.mock("../../common/project-picker-button", () => ({
   ProjectPickerButton: (props: { disabled?: boolean }) => (
     <button type="button" disabled={props.disabled}>
@@ -269,13 +274,17 @@ function renderPage(channelId?: string) {
   );
 }
 
+// LRM-210 folded the old standalone Share/Stats/Files/Settings icon buttons
+// into the "Channel details" panel (opened via the title / member cluster),
+// so the direct row's own reachability marker is now the Search button —
+// the one icon action that's still inline rather than behind that panel.
 function expectCompact() {
-  expect(screen.queryByRole("button", { name: "Group settings" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Search in conversation" })).toBeNull();
   expect(screen.getByTestId("channel-header-actions-trigger")).toBeInTheDocument();
 }
 
 function expectDirect() {
-  expect(screen.getByRole("button", { name: "Group settings" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Search in conversation" })).toBeInTheDocument();
   expect(screen.queryByTestId("channel-header-actions-trigger")).toBeNull();
 }
 
@@ -289,8 +298,10 @@ describe("ChannelsPage header actions — container-driven overflow (#568)", () 
 
     // Drag the divider so the detail pane narrows below the threshold —
     // same container, same (unmocked) viewport, only the container's own
-    // rendered width changed.
-    resizeContainerTo(600);
+    // rendered width changed. 450px is comfortably below
+    // HEADER_ACTIONS_COMPACT_BREAKPOINT (520, re-measured live post-#831 —
+    // see the comment on the constant in channels-page.tsx).
+    resizeContainerTo(450);
     expectCompact();
 
     // Drag back out — the row must return, not stay stuck compact.
@@ -298,7 +309,7 @@ describe("ChannelsPage header actions — container-driven overflow (#568)", () 
     expectDirect();
 
     // And narrow again, to prove it isn't a one-shot mount-time decision.
-    resizeContainerTo(600);
+    resizeContainerTo(450);
     expectCompact();
   });
 
@@ -309,7 +320,7 @@ describe("ChannelsPage header actions — container-driven overflow (#568)", () 
     const originalInnerWidth = window.innerWidth;
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 1440 });
     try {
-      resizeContainerTo(640);
+      resizeContainerTo(450);
       renderPage();
       await screen.findByTestId("message-list");
 
@@ -344,18 +355,21 @@ describe("ChannelsPage header actions — container-driven overflow (#568)", () 
     expectDirect();
   });
 
-  // Reachability guard (kept from the original #568 fix): the compact
-  // trigger must actually open the same bottom Drawer / Group Settings path
-  // the true-mobile flow already uses, not just render inertly.
-  it("reaches Group Settings through the compact trigger when the container is narrow", async () => {
-    resizeContainerTo(600);
+  // Reachability guard (kept from the original #568 fix, updated for
+  // LRM-210's Channel details panel): the compact trigger must actually
+  // open the same overflow Drawer the true-mobile flow already uses, and
+  // its "Settings" menu item must reach the same ChannelDetailsPanel
+  // settings tab (project binding etc.) the direct row's title/member
+  // click reaches on a wide container — not just render inertly.
+  it("reaches channel settings through the compact trigger when the container is narrow", async () => {
+    resizeContainerTo(450);
     renderPage();
     await screen.findByTestId("message-list");
 
     const trigger = screen.getByTestId("channel-header-actions-trigger");
     fireEvent.click(trigger);
 
-    const settingsRow = await screen.findByRole("button", { name: "Group settings" });
+    const settingsRow = await screen.findByRole("button", { name: "Settings" });
     fireEvent.click(settingsRow);
 
     expect(await screen.findByRole("button", { name: "project" })).toBeInTheDocument();

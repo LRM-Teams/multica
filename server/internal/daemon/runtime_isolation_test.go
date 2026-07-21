@@ -371,8 +371,9 @@ func TestPollLoopShutdownWaitsForPollersBeforeTaskWG(t *testing.T) {
 func TestPollLoopTargetsRuntimeWakeup(t *testing.T) {
 	t.Parallel()
 
-	// phase 0 = warm-up broadcast; phase 1 = targeted wakeup. Late warm-up
-	// claims must not pollute the targeted counters (CI flake).
+	// phase 0 = each poller's immediate initial claim; phase 1 = targeted
+	// wakeup. Do not enqueue a broadcast here: it can remain buffered after the
+	// initial claims and then be miscounted as a targeted slow-runtime claim.
 	var phase atomic.Int32
 	var warmFast, warmSlow atomic.Int64
 	var fastClaims, slowClaims atomic.Int64
@@ -420,8 +421,6 @@ func TestPollLoopTargetsRuntimeWakeup(t *testing.T) {
 	go func() {
 		pollDone <- d.pollLoop(ctx, taskWakeups)
 	}()
-
-	taskWakeups <- taskWakeup{}
 
 	deadline := time.After(2 * time.Second)
 	for warmFast.Load() < 1 || warmSlow.Load() < 1 {

@@ -1,18 +1,23 @@
 "use client";
 
 /**
- * Mobile file attachment entry + fullscreen detail (LRM-216 / LRM-215).
+ * Mobile file attachment entry + fullscreen detail (LRM-216 / LRM-217).
  *
  * Narrow screens only: compact Slack/Discord-style info card in the message
  * stream (no inline iframe / content preview). Tap pushes a 100vh detail
- * sheet with basic metadata + Download / Open — no preview pane.
+ * sheet with an embedded preview zone (HTML / image / PDF same shell) +
+ * metadata + Download / Open. Non-previewable types show an unavailable
+ * placeholder in the same shell.
  */
 
 import * as React from "react";
-import { ChevronRight, ChevronLeft } from "lucide-react";
-import { FileIcon, defaultStyles } from "react-file-icon";
+import { ChevronLeft, ChevronRight, FileWarning } from "lucide-react";
+import { useActorName } from "@multica/core/workspace/hooks";
+import { useWorkspaceSlug } from "@multica/core/paths";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../i18n";
+import { HtmlPreviewBody } from "./html-preview-body";
+import { getPreviewKind } from "./utils/preview";
 import {
   formatFileSize,
   getFileExtension,
@@ -24,8 +29,14 @@ export interface MobileFileAttachmentProps {
   contentType?: string;
   sizeBytes?: number;
   createdAt?: string;
-  /** Display name when known; omitted row value falls back to em dash. */
+  /** Display name when known; omitted row value falls back to resolver / em dash. */
   uploaderName?: string;
+  uploaderType?: string;
+  uploaderId?: string;
+  /** ID-keyed HTML preview + same-origin PDF iframe. */
+  attachmentId?: string;
+  /** Media URL for image / PDF iframe / open-elsewhere. */
+  mediaUrl?: string;
   uploading?: boolean;
   /** False when the file cannot be opened (no href / unavailable). */
   openable?: boolean;
@@ -33,6 +44,19 @@ export interface MobileFileAttachmentProps {
   /** Open in new tab / other app. */
   onOpen: () => void;
   className?: string;
+}
+
+type ShellPreviewKind = "html" | "image" | "pdf" | "none";
+
+function shellPreviewKind(
+  contentType: string,
+  filename: string,
+): ShellPreviewKind {
+  const kind = getPreviewKind(contentType, filename);
+  if (kind === "html") return "html";
+  if (kind === "image") return "image";
+  if (kind === "pdf") return "pdf";
+  return "none";
 }
 
 function formatWhen(iso?: string): string {
@@ -65,8 +89,20 @@ function badgeTone(filename: string, contentType: string): string {
   if (ext === "pdf" || contentType.includes("pdf")) {
     return "bg-[#e01e5a] text-white";
   }
-  if (contentType.startsWith("image/")) return "bg-[#1264a3] text-white";
+  if (contentType.startsWith("image/")) return "bg-brand text-brand-foreground";
   return "bg-[#2b2d31] text-white";
+}
+
+function sameOriginPdfSrc(
+  attachmentId: string | undefined,
+  mediaUrl: string | undefined,
+  workspaceSlug: string | null,
+): string | undefined {
+  if (attachmentId && workspaceSlug) {
+    const params = new URLSearchParams({ workspace_slug: workspaceSlug });
+    return `/api/attachments/${encodeURIComponent(attachmentId)}/download?${params}`;
+  }
+  return mediaUrl || undefined;
 }
 
 export function MobileFileAttachment({
@@ -74,7 +110,11 @@ export function MobileFileAttachment({
   contentType = "",
   sizeBytes,
   createdAt,
-  uploaderName,
+  uploaderName: uploaderNameProp,
+  uploaderType,
+  uploaderId,
+  attachmentId,
+  mediaUrl,
   uploading,
   openable = true,
   onDownload,
@@ -82,19 +122,27 @@ export function MobileFileAttachment({
   className,
 }: MobileFileAttachmentProps) {
   const { t } = useT("editor");
+  const workspaceSlug = useWorkspaceSlug();
+  const { getActorName } = useActorName();
   const [open, setOpen] = React.useState(false);
   const dialogRef = React.useRef<HTMLDialogElement | null>(null);
-  const ext = getFileExtension(filename);
-  const iconStyles = defaultStyles[ext as keyof typeof defaultStyles] ?? {};
   const category = getFileTypeCategory(contentType, filename);
   const typeLabel = t(($) => $.attachment.file_type[category]);
   const sizeLabel =
     typeof sizeBytes === "number" && sizeBytes > 0
       ? formatFileSize(sizeBytes)
       : "";
-  const sub = [typeLabel, sizeLabel].filter(Boolean).join(" · ");
   const badge = typeBadge(filename, contentType);
   const tone = badgeTone(filename, contentType);
+  const sub = [badge, sizeLabel].filter(Boolean).join(" · ");
+  const previewKind = shellPreviewKind(contentType, filename);
+  const pdfSrc = sameOriginPdfSrc(attachmentId, mediaUrl, workspaceSlug);
+  const actorType =
+    uploaderType === "user" ? "member" : (uploaderType ?? "");
+  const uploaderName =
+    uploaderNameProp?.trim() ||
+    (actorType && uploaderId ? getActorName(actorType, uploaderId) : "") ||
+    "";
 
   const bindDialog = React.useCallback((dialog: HTMLDialogElement | null) => {
     dialogRef.current = dialog;
@@ -144,7 +192,7 @@ export function MobileFileAttachment({
           </span>
           <span className="min-w-0 flex-1">
             <span
-              className="block truncate text-[13px] font-semibold leading-tight text-[#1264a3]"
+              className="block truncate text-[13px] font-semibold leading-tight text-brand"
               title={filename}
             >
               {uploading
@@ -168,7 +216,7 @@ export function MobileFileAttachment({
         <dialog
           ref={bindDialog}
           data-testid="mobile-file-detail"
-          aria-label={t(($) => $.attachment.file_detail_title)}
+          aria-label={filename || t(($) => $.attachment.file_detail_title)}
           className="fixed inset-0 z-[80] m-0 flex h-dvh max-h-none w-screen max-w-none flex-col border-0 bg-background p-0 open:flex animate-in slide-in-from-right duration-300"
           onCancel={(event) => {
             event.preventDefault();
@@ -186,41 +234,35 @@ export function MobileFileAttachment({
             >
               <ChevronLeft className="size-6" />
             </button>
-            <span className="text-[15px] font-semibold">
-              {t(($) => $.attachment.file_detail_title)}
+            <span className="min-w-0 flex-1 truncate text-[15px] font-semibold">
+              {filename || t(($) => $.attachment.file_detail_title)}
             </span>
           </div>
 
-          <div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-5 pb-6 pt-8">
-            <div
-              className={cn(
-                "mb-4 grid size-[72px] place-items-center rounded-2xl text-sm font-extrabold",
-                tone,
-              )}
-              aria-hidden
-            >
-              {badge}
-            </div>
-            {/* Keep FileIcon available for a11y/tests but prefer badge for visual parity with design */}
-            <span className="sr-only">
-              <FileIcon extension={ext || undefined} {...iconStyles} />
-            </span>
-            <h2 className="mb-2 max-w-full break-all text-center text-[17px] font-bold leading-snug">
+          <MobileFilePreviewZone
+            previewKind={previewKind}
+            filename={filename}
+            attachmentId={attachmentId}
+            mediaUrl={mediaUrl}
+            pdfSrc={pdfSrc}
+            badge={badge}
+            tone={tone}
+          />
+
+          <div className="flex min-h-0 shrink-0 flex-col overflow-y-auto px-4 pb-5 pt-3">
+            <h2 className="break-all text-[15px] font-bold leading-snug">
               {filename}
             </h2>
+            {(typeLabel || sizeLabel) && (
+              <p className="mt-1 text-[12px] text-muted-foreground">
+                {[typeLabel, sizeLabel].filter(Boolean).join(" · ")}
+              </p>
+            )}
 
-            <dl className="mt-4 w-full border-t border-border">
-              <Fact
-                label={t(($) => $.attachment.meta_type)}
-                value={contentType || typeLabel}
-              />
-              <Fact
-                label={t(($) => $.attachment.meta_size)}
-                value={sizeLabel || "—"}
-              />
+            <dl className="mt-3 w-full border-t border-border">
               <Fact
                 label={t(($) => $.attachment.meta_sender)}
-                value={uploaderName?.trim() || "—"}
+                value={uploaderName || "—"}
               />
               <Fact
                 label={t(($) => $.attachment.meta_time)}
@@ -228,17 +270,13 @@ export function MobileFileAttachment({
               />
             </dl>
 
-            <div className="mt-auto flex w-full flex-col gap-2 pt-8">
+            <div className="mt-4 flex w-full flex-col gap-2">
               <button
                 type="button"
                 data-testid="mobile-file-detail-download"
                 className="h-11 rounded-[10px] bg-[#007a5a] text-[15px] font-bold text-white hover:bg-[#006b4e]"
                 onClick={() => {
-                  try {
-                    onDownload();
-                  } catch {
-                    /* toast handled by download helper */
-                  }
+                  void onDownload();
                 }}
               >
                 {t(($) => $.image.download)}
@@ -259,11 +297,121 @@ export function MobileFileAttachment({
   );
 }
 
+function MobileFilePreviewZone({
+  previewKind,
+  filename,
+  attachmentId,
+  mediaUrl,
+  pdfSrc,
+  badge,
+  tone,
+}: {
+  previewKind: ShellPreviewKind;
+  filename: string;
+  attachmentId?: string;
+  mediaUrl?: string;
+  pdfSrc?: string;
+  badge: string;
+  tone: string;
+}) {
+  const { t } = useT("editor");
+  const chip =
+    previewKind === "html"
+      ? t(($) => $.attachment.preview_chip_html)
+      : previewKind === "image"
+        ? t(($) => $.attachment.preview_chip_image)
+        : previewKind === "pdf"
+          ? t(($) => $.attachment.preview_chip_pdf)
+          : t(($) => $.attachment.preview_unavailable_chip);
+
+  return (
+    <div
+      data-testid="mobile-file-preview"
+      data-preview-kind={previewKind}
+      className={cn(
+        "relative flex min-h-[168px] max-h-[52%] flex-1 flex-col overflow-hidden border-b border-border bg-muted/40",
+        previewKind === "html" && "bg-background",
+      )}
+    >
+      <span
+        className={cn(
+          "absolute left-2 top-2 z-[1] rounded-full border border-border bg-background/95 px-2 py-0.5 text-[10px] font-bold text-muted-foreground",
+          previewKind === "none" &&
+            "border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-200",
+        )}
+      >
+        {chip}
+      </span>
+
+      {previewKind === "html" && attachmentId ? (
+        <HtmlPreviewBody
+          source={{ kind: "attachment", attachmentId }}
+          title={filename}
+          className="h-full min-h-[168px] w-full flex-1"
+          iframeClassName="rounded-none border-0"
+          errorTestId="mobile-file-preview-html-error"
+        />
+      ) : previewKind === "html" ? (
+        <UnavailablePreview badge={badge} tone={tone} />
+      ) : previewKind === "image" && mediaUrl ? (
+        <img
+          src={mediaUrl}
+          alt={filename}
+          className="mx-auto h-full max-h-full w-full object-contain p-2.5"
+          data-testid="mobile-file-preview-image"
+        />
+      ) : previewKind === "pdf" && pdfSrc ? (
+        <iframe
+          src={pdfSrc}
+          title={filename}
+          className="h-full min-h-[168px] w-full flex-1 border-0 bg-background"
+          data-testid="mobile-file-preview-pdf"
+        />
+      ) : (
+        <UnavailablePreview badge={badge} tone={tone} />
+      )}
+    </div>
+  );
+}
+
+function UnavailablePreview({
+  badge,
+  tone,
+}: {
+  badge: string;
+  tone: string;
+}) {
+  const { t } = useT("editor");
+  return (
+    <div
+      data-testid="mobile-file-preview-unavailable"
+      className="flex flex-1 flex-col items-center justify-center gap-2 px-4 py-8 text-center"
+    >
+      <span
+        className={cn(
+          "grid size-12 place-items-center rounded-xl text-[11px] font-extrabold",
+          tone,
+        )}
+        aria-hidden
+      >
+        {badge}
+      </span>
+      <FileWarning className="size-5 text-muted-foreground" aria-hidden />
+      <p className="text-[13px] font-semibold text-foreground">
+        {t(($) => $.attachment.preview_unavailable)}
+      </p>
+      <p className="max-w-[16rem] text-[12px] leading-snug text-muted-foreground">
+        {t(($) => $.attachment.preview_unavailable_hint)}
+      </p>
+    </div>
+  );
+}
+
 function Fact({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-start justify-between gap-3 border-b border-border py-3 text-[13px]">
+    <div className="flex items-start justify-between gap-3 border-b border-border py-2.5 text-[12px] last:border-b-0">
       <dt className="shrink-0 text-muted-foreground">{label}</dt>
-      <dd className="min-w-0 text-right font-semibold break-all">{value}</dd>
+      <dd className="min-w-0 break-all text-right font-semibold">{value}</dd>
     </div>
   );
 }

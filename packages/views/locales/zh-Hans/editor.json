@@ -66,6 +66,12 @@
     "meta_type": "类型",
     "meta_size": "大小",
     "meta_sender": "发送者",
+    "preview_chip_html": "预览 · HTML",
+    "preview_chip_image": "预览 · 图片",
+    "preview_chip_pdf": "预览 · PDF",
+    "preview_unavailable_chip": "无法预览",
+    "preview_unavailable": "无法预览此文件",
+    "preview_unavailable_hint": "请下载或用其他应用打开。",
     "meta_time": "时间"
   },
   "link_hover": {

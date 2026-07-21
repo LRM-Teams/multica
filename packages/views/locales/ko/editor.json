@@ -66,6 +66,12 @@
     "meta_type": "유형",
     "meta_size": "크기",
     "meta_sender": "보낸 사람",
+    "preview_chip_html": "미리보기 · HTML",
+    "preview_chip_image": "미리보기 · 이미지",
+    "preview_chip_pdf": "미리보기 · PDF",
+    "preview_unavailable_chip": "미리보기 불가",
+    "preview_unavailable": "이 파일은 미리볼 수 없습니다",
+    "preview_unavailable_hint": "다운로드하거나 다른 앱으로 여세요.",
     "meta_time": "시간"
   },
   "link_hover": {

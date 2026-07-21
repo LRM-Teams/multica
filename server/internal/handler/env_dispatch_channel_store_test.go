@@ -29,6 +29,7 @@ func TestEnvDispatchChannelStoreClaimProvisioningIsSingleWinner(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, won)
 	require.Equal(t, "credential_ready", got.Status)
+	require.Empty(t, got.ModelConfigOwnerAgentID, "nullable legacy owner must normalize to the empty domain value")
 
 	won, got, err = store.claimProvisioning(ctx, tx, envID, agentID)
 	require.NoError(t, err)

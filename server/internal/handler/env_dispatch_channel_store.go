@@ -259,12 +259,16 @@ type envDispatchBindingRowScanner interface{ Scan(...any) error }
 
 func scanEnvAgentSandboxBinding(row envDispatchBindingRowScanner) (envAgentSandboxBinding, error) {
 	var binding envAgentSandboxBinding
+	var modelConfigOwnerAgentID *string
 	err := row.Scan(
 		&binding.ID, &binding.EnvID, &binding.ChannelID, &binding.SourceAgentID, &binding.Status,
-		&binding.ModelConfigOwnerAgentID, &binding.DerivedAgentID,
+		&modelConfigOwnerAgentID, &binding.DerivedAgentID,
 		&binding.SandboxInstanceID, &binding.RuntimeID, &binding.DaemonID,
 		&binding.SourceSandboxInstanceID, &binding.LastError,
 		&binding.TrainingSessionID, &binding.TrainingSessionRef, &binding.TrainingSessionKey, &binding.CredentialKind, &binding.SandboxConfig,
 	)
+	if modelConfigOwnerAgentID != nil {
+		binding.ModelConfigOwnerAgentID = *modelConfigOwnerAgentID
+	}
 	return binding, err
 }

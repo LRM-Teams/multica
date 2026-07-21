@@ -42,6 +42,7 @@
     "preview_failed": "プレビューを読み込めませんでした",
     "preview_too_large": "ファイルが大きすぎてプレビューできません。ダウンロードしてください。",
     "preview_unsupported": "このファイル形式はプレビューできません。",
+    "pdf_preview_blocked": "この PDF はここに埋め込み表示できません。新しいタブで開いてください。",
     "close": "閉じる",
     "open_in_new_tab": "新しいタブで開く",
     "remove": "添付ファイルを削除",

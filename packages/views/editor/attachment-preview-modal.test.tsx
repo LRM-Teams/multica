@@ -107,6 +107,8 @@ vi.mock("../i18n", () => ({
           preview_failed: "Couldn't load preview",
           preview_too_large: "File is too large to preview. Please download.",
           preview_unsupported: "This file type can't be previewed.",
+          pdf_preview_blocked:
+            "This PDF can't be shown inline here — open it in a new tab instead.",
           close: "Close",
           download_failed: "",
           open_in_new_tab: "Open in new tab",
@@ -187,12 +189,16 @@ describe("AttachmentPreviewModal — dispatch", () => {
     expect(img?.getAttribute("src")).toBe(url);
   });
 
-  it("renders a PDF iframe pointing at the signed download URL", () => {
+  it("shows the blocked-inline-preview fallback for PDFs, never an iframe (#591)", () => {
+    // The app's global CSP `frame-ancestors 'none'` refuses ANY iframe
+    // embed of the download URL (same-origin included) — an inline PDF
+    // preview here always dead-ends, so the modal must not attempt one.
     const att = makeAttachment({ filename: "manual.pdf", content_type: "application/pdf" });
     render(<AttachmentPreviewModal source={{ kind: "full", attachment: att }} open onClose={() => {}} />);
-    const iframe = document.querySelector("iframe");
-    expect(iframe).toBeTruthy();
-    expect(iframe?.getAttribute("src")).toBe(att.download_url);
+    expect(document.querySelector("iframe")).toBeNull();
+    expect(
+      screen.getByText("This PDF can't be shown inline here — open it in a new tab instead."),
+    ).toBeTruthy();
   });
 
   it("renders a <video> for video/* content types", () => {
@@ -298,7 +304,7 @@ describe("AttachmentPreviewModal — server-relative download_url resolution (MU
     );
   });
 
-  it("prefixes the configured API base for PDF previews when download_url is server-relative", () => {
+  it("opens the API-base-prefixed URL for PDFs when download_url is server-relative", () => {
     getBaseUrlMock.mockReturnValue("https://api.example.test");
     const att = makeAttachment({
       filename: "manual.pdf",
@@ -312,8 +318,8 @@ describe("AttachmentPreviewModal — server-relative download_url resolution (MU
         onClose={() => {}}
       />,
     );
-    const iframe = document.querySelector("iframe");
-    expect(iframe?.getAttribute("src")).toBe(
+    fireEvent.click(screen.getAllByTitle("Open in new tab")[0]!);
+    expect(openExternalMock).toHaveBeenCalledWith(
       "https://api.example.test/api/attachments/att-1/download",
     );
   });
@@ -440,7 +446,7 @@ describe("AttachmentPreviewModal — controls", () => {
 });
 
 describe("AttachmentPreviewModal — URL-only source", () => {
-  it("renders a PDF iframe from the URL when no attachment record is available", () => {
+  it("shows the blocked-inline-preview fallback for a PDF opened from a URL-only source (#591)", () => {
     const url = "https://cdn.example.test/orphan.pdf?Signature=s";
     render(
       <AttachmentPreviewModal
@@ -449,9 +455,11 @@ describe("AttachmentPreviewModal — URL-only source", () => {
         onClose={() => {}}
       />,
     );
-    const iframe = document.querySelector("iframe");
-    expect(iframe).toBeTruthy();
-    expect(iframe?.getAttribute("src")).toBe(url);
+    expect(document.querySelector("iframe")).toBeNull();
+    // Open-in-new-tab works for a PDF even with no attachment id — it just
+    // opens the raw media URL, no /content proxy or id-keyed route needed.
+    fireEvent.click(screen.getAllByTitle("Open in new tab")[0]!);
+    expect(openExternalMock).toHaveBeenCalledWith(url);
   });
 
   it("renders <video> from the URL when no attachment record is available", () => {
@@ -573,10 +581,10 @@ describe("AttachmentPreviewModal — open-in-new-tab (HTML only)", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("does not render the new-tab button for non-HTML kinds", () => {
+  it("does not render the new-tab button for a kind with no open-in-new-tab path (e.g. image)", () => {
     const att = makeAttachment({
-      filename: "manual.pdf",
-      content_type: "application/pdf",
+      filename: "shot.png",
+      content_type: "image/png",
     });
     render(
       <AttachmentPreviewModal
@@ -586,6 +594,17 @@ describe("AttachmentPreviewModal — open-in-new-tab (HTML only)", () => {
       />,
     );
     expect(screen.queryByTitle("Open in new tab")).toBeNull();
+  });
+
+  it("clicking the header's open-in-new-tab button for a PDF opens the media URL externally and closes the modal", () => {
+    const onClose = vi.fn();
+    const att = makeAttachment({ filename: "manual.pdf", content_type: "application/pdf" });
+    render(
+      <AttachmentPreviewModal source={{ kind: "full", attachment: att }} open onClose={onClose} />,
+    );
+    fireEvent.click(screen.getAllByTitle("Open in new tab")[0]!);
+    expect(openExternalMock).toHaveBeenCalledWith(att.download_url);
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it("does not render the new-tab button when there is no workspace slug", async () => {

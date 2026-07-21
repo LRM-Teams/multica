@@ -223,12 +223,25 @@ export function AttachmentPreviewModal({
     }
   };
 
-  // Open-in-new-tab mirrors HtmlAttachmentPreview's inline toolbar: only the
-  // `html` kind has a dedicated full-page route (/attachments/{id}/preview).
-  // Gated on slug + attachmentId for the same reason — URL-only sources
-  // can't address the /content proxy the page relies on.
-  const canOpenInNewTab = kind === "html" && !!slug && !!state.attachmentId;
+  // Open-in-new-tab mirrors HtmlAttachmentPreview's inline toolbar: the
+  // `html` kind has a dedicated full-page route (/attachments/{id}/preview),
+  // gated on slug + attachmentId because URL-only sources can't address the
+  // /content proxy the page relies on.
+  //
+  // `pdf` is a second, simpler case (#591): the browser's native PDF viewer
+  // renders `mediaUrl` fine in a top-level tab — the file is only unviewable
+  // INLINE, because the app's global CSP `frame-ancestors 'none'` (by design,
+  // not a bug — see server/internal/middleware/csp.go) blocks it from loading
+  // inside this modal's iframe. So pdf just opens the raw media URL directly,
+  // no route/id/slug dependency, and works for URL-only sources too.
+  const canOpenInNewTab =
+    (kind === "html" && !!slug && !!state.attachmentId) || kind === "pdf";
   const handleOpenInNewTab = () => {
+    if (kind === "pdf") {
+      openExternal(state.mediaUrl);
+      onClose();
+      return;
+    }
     if (!slug || !state.attachmentId) return;
     const nameQuery = state.filename
       ? `?name=${encodeURIComponent(state.filename)}`
@@ -305,6 +318,7 @@ export function AttachmentPreviewModal({
             source={source}
             state={state}
             onDownload={handleDownload}
+            onOpenInNewTab={canOpenInNewTab ? handleOpenInNewTab : undefined}
           />
         </div>
       </div>
@@ -325,11 +339,13 @@ function PreviewContent({
   source,
   state,
   onDownload,
+  onOpenInNewTab,
 }: {
   kind: PreviewKind | null;
   source: PreviewSource;
   state: PreviewState;
   onDownload: () => void;
+  onOpenInNewTab?: () => void;
 }) {
   const { t } = useT("editor");
 
@@ -371,11 +387,17 @@ function PreviewContent({
         </div>
       );
     case "pdf":
+      // #591: the app's global CSP `frame-ancestors 'none'` (by design —
+      // server/internal/middleware/csp.go) blocks this URL from loading in
+      // ANY iframe, including same-origin, so an inline preview here is not
+      // fixable by tweaking this component — it always resolves to a dead
+      // "refused to connect" frame. The browser's native PDF viewer renders
+      // the same URL fine in a top-level tab, so that's the real affordance.
       return (
-        <iframe
-          src={state.mediaUrl}
-          className="h-full w-full bg-background"
-          title={state.filename}
+        <UnsupportedFallback
+          message={t(($) => $.attachment.pdf_preview_blocked)}
+          onDownload={onDownload}
+          onOpenInNewTab={onOpenInNewTab}
         />
       );
     case "video":
@@ -503,23 +525,40 @@ function TextBackedPreview({
 function UnsupportedFallback({
   message,
   onDownload,
+  onOpenInNewTab,
 }: {
   message: string;
   onDownload: () => void;
+  /** #591 — when the file can't render inline but a top-level tab CAN show
+   *  it (e.g. a PDF blocked only by the app's iframe CSP, not actually
+   *  broken), offer that as the primary action instead of Download-only. */
+  onOpenInNewTab?: () => void;
 }) {
   const { t } = useT("editor");
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 px-8 text-center">
       <FileText className="size-8 text-muted-foreground" />
       <p className="text-sm text-muted-foreground">{message}</p>
-      <button
-        type="button"
-        className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-3 py-1.5 text-sm transition-colors hover:bg-muted"
-        onClick={onDownload}
-      >
-        <Download className="size-4" />
-        {t(($) => $.image.download)}
-      </button>
+      <div className="flex items-center gap-2">
+        {onOpenInNewTab && (
+          <button
+            type="button"
+            className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-3 py-1.5 text-sm transition-colors hover:bg-muted"
+            onClick={onOpenInNewTab}
+          >
+            <ExternalLink className="size-4" />
+            {t(($) => $.attachment.open_in_new_tab)}
+          </button>
+        )}
+        <button
+          type="button"
+          className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-3 py-1.5 text-sm transition-colors hover:bg-muted"
+          onClick={onDownload}
+        >
+          <Download className="size-4" />
+          {t(($) => $.image.download)}
+        </button>
+      </div>
     </div>
   );
 }

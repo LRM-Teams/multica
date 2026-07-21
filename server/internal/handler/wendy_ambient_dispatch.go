@@ -16,7 +16,10 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-const wendyAmbientDispatchLimit = int32(5)
+const (
+	wendyAmbientDispatchLimit      = int32(5)
+	beckhamContextModeCoordination = "coordination"
+)
 
 func (h *Handler) DispatchDueWendyAmbientReviews(ctx context.Context, limit int32) (int, error) {
 	if h.WorkGraph == nil || h.TaskService == nil || limit <= 0 {
@@ -81,10 +84,13 @@ func (h *Handler) dispatchClaimedWendyAmbient(ctx context.Context, watch workgra
 	run, _, err := h.TaskService.EnqueueAgentRadarRun(ctx, service.EnqueueAgentRadarRunParams{
 		WorkspaceID:    watch.WorkspaceID,
 		AgentID:        watch.WendyAgentID,
+		ChannelID:      watch.ChannelID,
+		ProjectID:      ambientChannelProjectID(channel),
+		ContextMode:    beckhamContextModeCoordination,
 		TriggerKind:    "event",
 		TriggerRef:     triggerRef,
 		CooldownKey:    "wendy_ambient:" + uuidToString(watch.ChannelID),
-		ContextSummary: "Wendy ambient review for channel " + channel.Name,
+		ContextSummary: "Beckham ambient review for channel " + channel.Name,
 		ScheduledFor:   time.Now().UTC(),
 		Prompt:         prompt,
 	})
@@ -100,10 +106,63 @@ func (h *Handler) dispatchClaimedWendyAmbient(ctx context.Context, watch workgra
 	return true, nil
 }
 
+func ambientChannelProjectID(channel ChannelResponse) pgtype.UUID {
+	if channel.ProjectID == nil {
+		return pgtype.UUID{}
+	}
+	projectID, err := util.ParseUUID(*channel.ProjectID)
+	if err != nil {
+		return pgtype.UUID{}
+	}
+	return projectID
+}
+
 func (h *Handler) buildWendyAmbientChannelMarkdown(ctx context.Context, watch workgraph.ChannelAmbientWatch, channel ChannelResponse) (string, error) {
 	var b strings.Builder
-	fmt.Fprintf(&b, "## Channel\n\n- channel_id=%s\n- name=%s\n\n", channel.ID, channel.Name)
+	projectID := ambientChannelProjectID(channel)
+	fmt.Fprintf(&b, "## Channel\n\n- channel_id=%s\n- name=%s\n- context_mode=%s\n", channel.ID, channel.Name, beckhamContextModeCoordination)
+	if projectID.Valid {
+		fmt.Fprintf(&b, "- project_id=%s\n\n", uuidToString(projectID))
+	} else {
+		b.WriteString("- project_id=(unbound)\n\n")
+	}
 
+	b.WriteString("## Project\n\n")
+	if !projectID.Valid {
+		b.WriteString("- (channel is not bound to a project; issue sections use a workspace fallback)\n")
+	} else {
+		project, err := h.Queries.GetProjectInWorkspace(ctx, db.GetProjectInWorkspaceParams{
+			ID:          projectID,
+			WorkspaceID: watch.WorkspaceID,
+		})
+		if err != nil {
+			return "", fmt.Errorf("load ambient project: %w", err)
+		}
+		fmt.Fprintf(&b, "- project_id=%s title=%q status=%s", uuidToString(project.ID), project.Title, project.Status)
+		if project.LeadType.Valid || project.LeadID.Valid {
+			fmt.Fprintf(&b, " lead_type=%s lead_id=%s", project.LeadType.String, uuidToString(project.LeadID))
+		}
+		b.WriteString("\n")
+		if project.Description.Valid && strings.TrimSpace(project.Description.String) != "" {
+			fmt.Fprintf(&b, "- description=%q\n", trimAmbientContent(project.Description.String))
+		}
+
+		b.WriteString("\n## Project Resources\n\n")
+		resources := h.listProjectResourcesForProject(ctx, projectID)
+		if len(resources) == 0 {
+			b.WriteString("- (none)\n")
+		}
+		for _, resource := range resources {
+			label := ""
+			if resource.Label.Valid {
+				label = resource.Label.String
+			}
+			fmt.Fprintf(&b, "- resource_id=%s type=%s label=%q resource_ref=%s\n",
+				uuidToString(resource.ID), resource.ResourceType, label, trimAmbientContent(string(resource.ResourceRef)))
+		}
+	}
+
+	b.WriteString("\n")
 	b.WriteString("## Open Work Nodes In Channel\n\n")
 	rows, err := h.DB.Query(ctx, `
 		SELECT id, title, status, owner_type, owner_id, linked_issue_id
@@ -204,24 +263,53 @@ func (h *Handler) buildWendyAmbientChannelMarkdown(ctx context.Context, watch wo
 		b.WriteString("- (none)\n")
 	}
 
-	b.WriteString("\n## Open Workspace Issues\n\n")
-	// #4: issue-backed work_nodes carry no primary_channel_id, so the
-	// channel-scoped section above never surfaces them. Give the review the
-	// workspace's open issues (with assignee) so it can spot missing tracking,
-	// stalled owners, or who should start/stop — instead of judging on chat text
-	// alone. Best-effort: a transient error must not sink the whole review.
+	issueScopeLabel := "Project"
+	issueScopePredicate := "AND i.project_id = $2"
+	issueArgs := []any{watch.WorkspaceID, projectID}
+	if !projectID.Valid {
+		issueScopeLabel = "Workspace Fallback"
+		issueScopePredicate = ""
+		issueArgs = []any{watch.WorkspaceID}
+	}
+	b.WriteString("\n## Open " + issueScopeLabel + " Issues\n\n")
+	// Issue-backed work_nodes carry no primary_channel_id. Surface the bound
+	// project's issues with enough contract data to review and target them. An
+	// unbound channel keeps the historical workspace-wide fallback.
 	issueRows, err := h.DB.Query(ctx, `
-		SELECT i.number, i.title, i.status, COALESCE(i.assignee_type, '') AS assignee_type, i.assignee_id,
-		       COALESCE(a.name, '') AS agent_name
+		SELECT i.id, w.issue_prefix, i.number, i.title, COALESCE(i.description, ''), i.status,
+		       COALESCE(i.assignee_type, '') AS assignee_type, i.assignee_id,
+		       COALESCE(a.name, '') AS agent_name, i.parent_issue_id,
+		       i.acceptance_criteria,
+		       COALESCE((
+		         SELECT jsonb_agg(jsonb_build_object(
+		           'type', dep_link.type,
+		           'issue_id', dependency.id,
+		           'identifier', w.issue_prefix || '-' || dependency.number::text,
+		           'status', dependency.status
+		         ) ORDER BY dependency.number)
+		         FROM issue_dependency dep_link
+		         JOIN issue dependency ON dependency.id = dep_link.depends_on_issue_id
+		         WHERE dep_link.issue_id = i.id
+		       ), '[]'::jsonb) AS dependencies,
+		       COALESCE((
+		         SELECT c.content
+		         FROM comment c
+		         WHERE c.issue_id = i.id
+		         ORDER BY c.created_at DESC
+		         LIMIT 1
+		       ), '') AS latest_progress,
+		       i.updated_at
 		FROM issue i
+		JOIN workspace w ON w.id = i.workspace_id
 		LEFT JOIN agent a
 		  ON a.id = i.assignee_id
 		 AND i.assignee_type = 'agent'
 		WHERE i.workspace_id = $1
+		  `+issueScopePredicate+`
 		  AND i.status NOT IN ('done', 'cancelled', 'closed')
 		ORDER BY i.updated_at DESC
 		LIMIT 30
-	`, watch.WorkspaceID)
+	`, issueArgs...)
 	if err != nil {
 		b.WriteString("- (issues unavailable)\n")
 		slog.Warn("ambient markdown: list open issues failed", "workspace_id", uuidToString(watch.WorkspaceID), "error", err)
@@ -229,9 +317,15 @@ func (h *Handler) buildWendyAmbientChannelMarkdown(ctx context.Context, watch wo
 		issueCount := 0
 		for issueRows.Next() {
 			var number int64
-			var assigneeID pgtype.UUID
-			var title, status, assigneeType, agentName string
-			if err := issueRows.Scan(&number, &title, &status, &assigneeType, &assigneeID, &agentName); err != nil {
+			var issueID, assigneeID, parentIssueID pgtype.UUID
+			var title, description, status, assigneeType, agentName, issuePrefix, latestProgress string
+			var acceptanceCriteria, dependencies []byte
+			var updatedAt time.Time
+			if err := issueRows.Scan(
+				&issueID, &issuePrefix, &number, &title, &description, &status,
+				&assigneeType, &assigneeID, &agentName, &parentIssueID,
+				&acceptanceCriteria, &dependencies, &latestProgress, &updatedAt,
+			); err != nil {
 				issueRows.Close()
 				return "", err
 			}
@@ -241,7 +335,17 @@ func (h *Handler) buildWendyAmbientChannelMarkdown(ctx context.Context, watch wo
 			} else if assigneeType != "" && assigneeID.Valid {
 				assignee = assigneeType + ":" + uuidToString(assigneeID)
 			}
-			fmt.Fprintf(&b, "- issue #%d title=%q status=%s assignee=%s\n", number, trimAmbientContent(title), status, assignee)
+			fmt.Fprintf(&b, "- issue_id=%s identifier=%s-%d title=%q status=%s assignee=%s parent_issue_id=%s updated_at=%s\n",
+				uuidToString(issueID), issuePrefix, number, trimAmbientContent(title), status, assignee,
+				uuidToString(parentIssueID), updatedAt.UTC().Format(time.RFC3339))
+			if strings.TrimSpace(description) != "" {
+				fmt.Fprintf(&b, "  description=%q\n", trimAmbientContent(description))
+			}
+			fmt.Fprintf(&b, "  acceptance_criteria=%s\n", trimAmbientContent(string(acceptanceCriteria)))
+			fmt.Fprintf(&b, "  dependencies=%s\n", trimAmbientContent(string(dependencies)))
+			if strings.TrimSpace(latestProgress) != "" {
+				fmt.Fprintf(&b, "  latest_progress=%q\n", trimAmbientContent(latestProgress))
+			}
 			issueCount++
 		}
 		issueRows.Close()
@@ -249,6 +353,72 @@ func (h *Handler) buildWendyAmbientChannelMarkdown(ctx context.Context, watch wo
 			return "", err
 		}
 		if issueCount == 0 {
+			b.WriteString("- (none)\n")
+		}
+	}
+
+	b.WriteString("\n## Recently Completed " + issueScopeLabel + " Issues\n\n")
+	doneRows, err := h.DB.Query(ctx, `
+		SELECT i.id, w.issue_prefix, i.number, i.title,
+		       COALESCE(i.assignee_type, '') AS assignee_type, i.assignee_id,
+		       COALESCE(a.name, '') AS agent_name, i.acceptance_criteria,
+		       COALESCE((
+		         SELECT c.content
+		         FROM comment c
+		         WHERE c.issue_id = i.id
+		         ORDER BY c.created_at DESC
+		         LIMIT 1
+		       ), '') AS latest_comment,
+		       i.updated_at
+		FROM issue i
+		JOIN workspace w ON w.id = i.workspace_id
+		LEFT JOIN agent a
+		  ON a.id = i.assignee_id
+		 AND i.assignee_type = 'agent'
+		WHERE i.workspace_id = $1
+		  `+issueScopePredicate+`
+		  AND i.status = 'done'
+		ORDER BY i.updated_at DESC
+		LIMIT 10
+	`, issueArgs...)
+	if err != nil {
+		b.WriteString("- (recent completions unavailable)\n")
+		slog.Warn("ambient markdown: list recently completed issues failed", "workspace_id", uuidToString(watch.WorkspaceID), "error", err)
+	} else {
+		doneCount := 0
+		for doneRows.Next() {
+			var number int64
+			var issueID, assigneeID pgtype.UUID
+			var issuePrefix, title, assigneeType, agentName, latestComment string
+			var acceptanceCriteria []byte
+			var updatedAt time.Time
+			if err := doneRows.Scan(
+				&issueID, &issuePrefix, &number, &title, &assigneeType, &assigneeID,
+				&agentName, &acceptanceCriteria, &latestComment, &updatedAt,
+			); err != nil {
+				doneRows.Close()
+				return "", err
+			}
+			assignee := "unassigned"
+			if assigneeType == "agent" && agentName != "" {
+				assignee = "agent:" + agentName
+			} else if assigneeType != "" && assigneeID.Valid {
+				assignee = assigneeType + ":" + uuidToString(assigneeID)
+			}
+			fmt.Fprintf(&b, "- issue_id=%s identifier=%s-%d title=%q assignee=%s completed_at=%s\n",
+				uuidToString(issueID), issuePrefix, number, trimAmbientContent(title), assignee,
+				updatedAt.UTC().Format(time.RFC3339))
+			fmt.Fprintf(&b, "  acceptance_criteria=%s\n", trimAmbientContent(string(acceptanceCriteria)))
+			if strings.TrimSpace(latestComment) != "" {
+				fmt.Fprintf(&b, "  latest_result=%q\n", trimAmbientContent(latestComment))
+			}
+			doneCount++
+		}
+		doneRows.Close()
+		if err := doneRows.Err(); err != nil {
+			return "", err
+		}
+		if doneCount == 0 {
 			b.WriteString("- (none)\n")
 		}
 	}

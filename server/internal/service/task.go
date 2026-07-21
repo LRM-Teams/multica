@@ -826,9 +826,12 @@ const AgentRadarContextType = "agent_radar"
 // AgentRadarContext is the JSON payload stored on radar tasks. The daemon
 // treats Prompt as the full turn prompt and returns a structured action plan.
 type AgentRadarContext struct {
-	Type       string `json:"type"`
-	RadarRunID string `json:"radar_run_id"`
-	Prompt     string `json:"prompt"`
+	Type        string `json:"type"`
+	RadarRunID  string `json:"radar_run_id"`
+	Prompt      string `json:"prompt"`
+	ChannelID   string `json:"channel_id,omitempty"`
+	ProjectID   string `json:"project_id,omitempty"`
+	ContextMode string `json:"context_mode,omitempty"`
 }
 
 // EnqueueQuickCreateTask creates a queued task that has no issue / chat /
@@ -939,6 +942,9 @@ var (
 type EnqueueAgentRadarRunParams struct {
 	WorkspaceID    pgtype.UUID
 	AgentID        pgtype.UUID
+	ChannelID      pgtype.UUID
+	ProjectID      pgtype.UUID
+	ContextMode    string
 	TriggerKind    string
 	TriggerRef     string
 	CooldownKey    string
@@ -989,9 +995,12 @@ func (s *TaskService) EnqueueAgentRadarRun(ctx context.Context, in EnqueueAgentR
 		}
 
 		contextJSON, err := json.Marshal(AgentRadarContext{
-			Type:       AgentRadarContextType,
-			RadarRunID: util.UUIDToString(run.ID),
-			Prompt:     in.Prompt,
+			Type:        AgentRadarContextType,
+			RadarRunID:  util.UUIDToString(run.ID),
+			Prompt:      in.Prompt,
+			ChannelID:   util.UUIDToString(in.ChannelID),
+			ProjectID:   util.UUIDToString(in.ProjectID),
+			ContextMode: strings.TrimSpace(in.ContextMode),
 		})
 		if err != nil {
 			return fmt.Errorf("marshal radar context: %w", err)

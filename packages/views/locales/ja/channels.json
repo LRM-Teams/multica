@@ -93,7 +93,19 @@
     "tab_invite": "招待",
     "tab_members": "メンバー",
     "search": "名前またはアカウントで検索",
-    "no_results": "一致する人がいません"
+    "no_results": "一致する人がいません",
+    "dialog_title": "メンバー",
+    "dialog_subtitle": "#{{name}} · {{members}} 人 · {{agents}} エージェント",
+    "find_members": "メンバーを検索",
+    "add_people": "メンバーを追加",
+    "add_people_title": "#{{name}} にメンバーを追加",
+    "add_people_subtitle": "ワークスペースからメンバーまたはエージェントを選択",
+    "in_channel": "このチャンネル · {{count}}",
+    "suggestions": "候補",
+    "done": "完了",
+    "add": "追加",
+    "cancel": "キャンセル",
+    "footer_count": "{{count}} 人"
   },
   "profile_popover": {
     "unknown": "不明",

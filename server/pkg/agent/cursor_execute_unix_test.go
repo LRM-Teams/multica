@@ -3,7 +3,12 @@
 package agent
 
 import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -57,25 +62,81 @@ sleep 10
 func TestCursorExecuteCurrentToolCallStreamShape(t *testing.T) {
 	t.Parallel()
 
-	script := `#!/bin/sh
-printf '%s\n' '{"type":"system","subtype":"init","session_id":"sess-tool-call"}'
-printf '%s\n' '{"type":"tool_call","subtype":"started","call_id":"call-1","tool_call":{"shellToolCall":{"args":{"command":"pwd"}}},"session_id":"sess-tool-call"}'
-printf '%s\n' '{"type":"tool_call","subtype":"completed","call_id":"call-1","tool_call":{"shellToolCall":{"args":{"command":"pwd"},"result":{"success":{"stdout":"/tmp\\n","exitCode":0}}}},"session_id":"sess-tool-call"}'
-printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"sess-tool-call"}'
-`
+	fixturePath, err := filepath.Abs(filepath.Join("testdata", "cursor-tool-calls-2026-07-17.jsonl"))
+	if err != nil {
+		t.Fatalf("fixture path: %v", err)
+	}
+	fixture, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	assertCursorLiveToolCallFixture(t, fixture)
+
+	script := fmt.Sprintf("#!/bin/sh\ncat %q\n", fixturePath)
 	messages, result := executeFakeCursorWithMessages(t, script)
 
 	if result.Status != "completed" || result.Output != "done" {
 		t.Fatalf("result = %+v", result)
 	}
-	if len(messages) != 3 {
-		t.Fatalf("messages = %+v, want status + tool use + tool result", messages)
+	if result.SessionID != "session-live-sanitized" {
+		t.Fatalf("session id = %q, want session-live-sanitized", result.SessionID)
 	}
-	if got := messages[1]; got.Type != MessageToolUse || got.Tool != "shell" || got.CallID != "call-1" || got.Input["command"] != "pwd" {
-		t.Fatalf("tool use = %+v", got)
+	if len(messages) != 19 {
+		t.Fatalf("message count = %d, want status + 18 live tool events", len(messages))
 	}
-	if got := messages[2]; got.Type != MessageToolResult || got.Tool != "shell" || got.CallID != "call-1" || got.Output == "" {
-		t.Fatalf("tool result = %+v", got)
+
+	wantStarted := map[string]int{"shell": 3, "read_file": 3, "edit_file": 3}
+	wantCompleted := map[string]int{"shell": 3, "read_file": 3, "edit_file": 3}
+	gotStarted := make(map[string]int)
+	gotCompleted := make(map[string]int)
+	for _, message := range messages[1:] {
+		switch message.Type {
+		case MessageToolUse:
+			gotStarted[message.Tool]++
+		case MessageToolResult:
+			gotCompleted[message.Tool]++
+		default:
+			t.Fatalf("unexpected message in live fixture: %+v", message)
+		}
+	}
+	for tool, want := range wantStarted {
+		if gotStarted[tool] != want || gotCompleted[tool] != wantCompleted[tool] {
+			t.Fatalf("tool %q counts: started=%d completed=%d, want %d/%d", tool, gotStarted[tool], gotCompleted[tool], want, wantCompleted[tool])
+		}
+	}
+}
+
+func assertCursorLiveToolCallFixture(t *testing.T, fixture []byte) {
+	t.Helper()
+
+	tracker := newRuntimeToolEventTracker(time.Hour, 32)
+	scanner := bufio.NewScanner(bytes.NewReader(fixture))
+	accepted := 0
+	for scanner.Scan() {
+		var event cursorStreamEvent
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			t.Fatalf("decode fixture line: %v", err)
+		}
+		if event.Type != "tool_call" {
+			continue
+		}
+		decoded := decodeCursorToolEvents(&event, time.Unix(int64(accepted+1), 0))
+		if len(decoded) != 1 || decoded[0].reason != "" {
+			t.Fatalf("decode call %q = %+v, want one accepted event", event.CallID, decoded)
+		}
+		if _, ok, reason := tracker.accept(decoded[0].event); !ok {
+			t.Fatalf("tracker rejected call %q subtype %q: %s", event.CallID, event.Subtype, reason)
+		}
+		accepted++
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan fixture: %v", err)
+	}
+	if accepted != 18 {
+		t.Fatalf("accepted events = %d, want 18", accepted)
+	}
+	if missing, expired := tracker.finish(); missing != 0 || expired != 0 {
+		t.Fatalf("tracker finish: missing=%d expired=%d, want 0/0", missing, expired)
 	}
 }
 

@@ -66,11 +66,8 @@ export function PlanBillingPage() {
             {t(($) => $.subtitle)}
           </p>
 
-          <div
-            className="mt-8 inline-flex items-center rounded-md border-2 border-foreground/90 bg-background p-1"
-            role="group"
-            aria-label={t(($) => $.billing.cycle_label)}
-          >
+          <fieldset className="mt-8 inline-flex items-center rounded-md border-2 border-foreground/90 bg-background p-1">
+            <legend className="sr-only">{t(($) => $.billing.cycle_label)}</legend>
             <button
               type="button"
               onClick={() => setCycle("monthly")}
@@ -100,7 +97,7 @@ export function PlanBillingPage() {
                 {t(($) => $.billing.save_badge)}
               </span>
             </button>
-          </div>
+          </fieldset>
 
           <div className="mt-10 grid w-full gap-5 md:grid-cols-3">
             <PlanCard

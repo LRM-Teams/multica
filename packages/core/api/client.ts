@@ -44,6 +44,8 @@ import type {
   UpdateMemoryCuratorProfileRequest,
   StartMemoryCurationRunRequest,
   StartMemoryCurationRunResponse,
+  MemoryCurationBackfillRequest,
+  MemoryCurationBackfillResponse,
   PromoteEvolutionReviewSubmissionResponse,
   UpdateAgentRequest,
   AgentEnvResponse,
@@ -300,6 +302,8 @@ import {
   MemoryCurationRunDetailSchema,
   MemoryCuratorProfileSchema,
   StartMemoryCurationRunResponseSchema,
+  MemoryCurationBackfillResponseSchema,
+  EMPTY_MEMORY_CURATION_BACKFILL_RESPONSE,
   SandboxNodeTemplatesResponseSchema,
   SandboxSnapshotSchema,
   SandboxSnapshotListSchema,
@@ -2118,6 +2122,35 @@ export class ApiClient {
     );
     return parseWithFallback(raw, StartMemoryCurationRunResponseSchema, { id: "", status: "failed" }, {
       endpoint: "POST /api/workspaces/{id}/memory-curation/runs",
+    });
+  }
+
+  async previewMemoryCurationBackfill(
+    workspaceId: string,
+    params: { since?: string; until?: string } = {},
+  ): Promise<MemoryCurationBackfillResponse> {
+    const query = new URLSearchParams();
+    if (params.since) query.set("since", params.since);
+    if (params.until) query.set("until", params.until);
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/memory-curation/backfill-preview${suffix}`,
+    );
+    return parseWithFallback(raw, MemoryCurationBackfillResponseSchema, EMPTY_MEMORY_CURATION_BACKFILL_RESPONSE, {
+      endpoint: "GET /api/workspaces/{id}/memory-curation/backfill-preview",
+    });
+  }
+
+  async startMemoryCurationBackfill(
+    workspaceId: string,
+    data: MemoryCurationBackfillRequest,
+  ): Promise<MemoryCurationBackfillResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/memory-curation/backfill`,
+      { method: "POST", body: JSON.stringify(data) },
+    );
+    return parseWithFallback(raw, MemoryCurationBackfillResponseSchema, EMPTY_MEMORY_CURATION_BACKFILL_RESPONSE, {
+      endpoint: "POST /api/workspaces/{id}/memory-curation/backfill",
     });
   }
 

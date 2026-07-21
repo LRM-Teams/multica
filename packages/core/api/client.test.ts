@@ -1099,4 +1099,36 @@ describe("ApiClient", () => {
       dry_run: true,
     });
   });
+
+  it("starts memory curation backfill for a date range", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        since: "2026-06-22",
+        until: "2026-07-21",
+        dry_run: false,
+        queued: [{ date: "2026-07-18", stage: "all", target_agent_ids: ["a1"], run_id: "run-1", status: "queued" }],
+        skipped: [{ date: "2026-07-17", reason: "no_activity" }],
+        queued_days: 1,
+        skip_days: 1,
+      }), {
+        status: 202,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    const result = await client.startMemoryCurationBackfill("ws-1", {
+      since: "2026-06-22",
+      until: "2026-07-21",
+    });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.example.test/api/workspaces/ws-1/memory-curation/backfill");
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      since: "2026-06-22",
+      until: "2026-07-21",
+    });
+    expect(result.queued_days).toBe(1);
+    expect(result.queued[0]?.date).toBe("2026-07-18");
+  });
 });

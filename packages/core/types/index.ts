@@ -124,6 +124,10 @@ export type {
   UpdateMemoryCuratorProfileRequest,
   StartMemoryCurationRunRequest,
   StartMemoryCurationRunResponse,
+  MemoryCurationBackfillRequest,
+  MemoryCurationBackfillDayPlan,
+  MemoryCurationBackfillSkip,
+  MemoryCurationBackfillResponse,
   PromoteEvolutionReviewSubmissionResponse,
 } from "./evolution";
 export type {

@@ -645,6 +645,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Put("/", h.UpdateWorkspace)
 					r.Patch("/", h.UpdateWorkspace)
 					r.Post("/memory-curation/runs", h.StartMemoryCurationRun)
+					r.Get("/memory-curation/backfill-preview", h.PreviewMemoryCurationBackfill)
+					r.Post("/memory-curation/backfill", h.StartMemoryCurationBackfill)
 					r.Get("/memory-curation/runs/{runId}", h.GetMemoryCurationRun)
 					r.Post("/members", h.CreateInvitation)
 					r.Route("/members/{memberId}", func(r chi.Router) {

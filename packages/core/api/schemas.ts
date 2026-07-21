@@ -735,6 +735,35 @@ export const StartMemoryCurationRunResponseSchema = z.object({
   status: z.string().default("queued"),
 }).loose();
 
+export const MemoryCurationBackfillResponseSchema = z.object({
+  since: z.string().default(""),
+  until: z.string().default(""),
+  dry_run: z.boolean().default(false),
+  queued: z.array(z.object({
+    date: z.string().default(""),
+    stage: z.string().default(""),
+    target_agent_ids: z.array(z.string()).default([]),
+    run_id: z.string().optional(),
+    status: z.string().optional(),
+  }).loose()).default([]),
+  skipped: z.array(z.object({
+    date: z.string().default(""),
+    reason: z.string().default(""),
+  }).loose()).default([]),
+  queued_days: z.number().default(0),
+  skip_days: z.number().default(0),
+}).loose();
+
+export const EMPTY_MEMORY_CURATION_BACKFILL_RESPONSE = {
+  since: "",
+  until: "",
+  dry_run: false,
+  queued: [],
+  skipped: [],
+  queued_days: 0,
+  skip_days: 0,
+};
+
 const ChannelMessageSearchResultSchema = z.object({
   message_id: z.string().default(""),
   channel_id: z.string().default(""),

@@ -19,6 +19,7 @@ import {
   WorkspaceMemoryCurationStatusSchema,
   MemoryCuratorProfileSchema,
   StartMemoryCurationRunResponseSchema,
+  MemoryCurationBackfillResponseSchema,
   ListIssuesResponseSchema,
   RuntimeHourlyActivityListSchema,
   RuntimeUsageByAgentListSchema,
@@ -360,6 +361,18 @@ describe("MemoryCuratorProfileSchema drift", () => {
   it("preserves waiting_runtime manual-run responses", () => {
     expect(StartMemoryCurationRunResponseSchema.parse({ id: "run-1", status: "waiting_runtime" }))
       .toEqual({ id: "run-1", status: "waiting_runtime" });
+  });
+
+  it("tolerates sparse memory curation backfill responses", () => {
+    expect(MemoryCurationBackfillResponseSchema.parse({})).toMatchObject({
+      since: "",
+      until: "",
+      dry_run: false,
+      queued: [],
+      skipped: [],
+      queued_days: 0,
+      skip_days: 0,
+    });
   });
 });
 

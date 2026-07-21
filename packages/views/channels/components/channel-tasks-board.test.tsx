@@ -370,6 +370,50 @@ describe("ChannelTasksBoard", () => {
       expect(screen.getByText("Fix the login bug")).toBeInTheDocument();
     });
 
+    it("keyboard: arrow keys move focus between items via the real ToggleGroup roving-tabindex, and re-activating the already-pressed item never drops to 0 active scopes", async () => {
+      mockProjectId = "proj-1";
+      listSourceIssues.mockResolvedValue({
+        issues: [makeIssue({ id: "issue-1", title: "Fix the login bug", status: "in_progress" })],
+        total: 1,
+      });
+      listProjectIssues.mockResolvedValue([]);
+      const user = userEvent.setup();
+      renderBoard();
+
+      const groupPill = await screen.findByRole("button", { name: "This group" });
+      const projectPill = screen.getByRole("button", { name: /Whole project/ });
+
+      // Focus the currently-active item and activate it again (re-click via
+      // keyboard) — Base UI's single-select ToggleGroup would emit an EMPTY
+      // array here; the guard in `TasksScopeToggle` must keep it pinned to
+      // "group" rather than ending up with neither item pressed.
+      groupPill.focus();
+      expect(groupPill).toHaveFocus();
+      await user.keyboard("[Enter]");
+      expect(groupPill).toHaveAttribute("aria-pressed", "true");
+      expect(projectPill).toHaveAttribute("aria-pressed", "false");
+      // Never both unpressed.
+      expect(
+        groupPill.getAttribute("aria-pressed") === "true" || projectPill.getAttribute("aria-pressed") === "true",
+      ).toBe(true);
+
+      // Arrow-right moves FOCUS to the next item via the group's real
+      // roving-tabindex composite navigation (not a manual tab-index hack).
+      await user.keyboard("[ArrowRight]");
+      expect(projectPill).toHaveFocus();
+
+      // Activating the now-focused item switches the pressed scope — exactly
+      // one item pressed at a time, never zero.
+      await user.keyboard("[Enter]");
+      expect(projectPill).toHaveAttribute("aria-pressed", "true");
+      expect(groupPill).toHaveAttribute("aria-pressed", "false");
+      expect(await screen.findByText("Project proj-1")).toBeInTheDocument();
+
+      // Arrow-left moves focus back.
+      await user.keyboard("[ArrowLeft]");
+      expect(groupPill).toHaveFocus();
+    });
+
     it("switching to \"Whole project\": swaps to the project-scoped query — list, empty state and count all switch together", async () => {
       mockProjectId = "proj-1";
       listSourceIssues.mockResolvedValue({

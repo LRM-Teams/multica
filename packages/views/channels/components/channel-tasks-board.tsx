@@ -13,6 +13,7 @@ import { useWorkspacePaths } from "@multica/core/paths";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { Button } from "@multica/ui/components/ui/button";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
+import { ToggleGroup, ToggleGroupItem } from "@multica/ui/components/ui/toggle-group";
 import { cn } from "@multica/ui/lib/utils";
 import { useIsNarrow } from "../hooks/use-is-narrow";
 import { AppLink } from "../../navigation";
@@ -160,6 +161,14 @@ interface RenderedColumn {
  * scope. Disabled with a visible reason (never just a greyed hover tooltip —
  * matches `ChannelProjectSettingsPanel`'s honesty convention) when the
  * project-scoped query has errored, so a click can't lead into a silent 403.
+ *
+ * Built on this repo's shared `ToggleGroup`/`ToggleGroupItem` primitive
+ * (single-select) rather than hand-rolled `<button aria-pressed>` pills —
+ * that gets roving-tabindex arrow-key navigation and disabled handling for
+ * free. Base UI's single-select `ToggleGroup` emits an EMPTY array from
+ * `onValueChange` when the currently-pressed item is activated again
+ * (re-toggle-off); that's ignored below so a scope is always selected —
+ * this toggle can never end up with zero active scopes.
  */
 function TasksScopeToggle({
   scope,
@@ -173,43 +182,30 @@ function TasksScopeToggle({
   projectUnavailable: boolean;
 }) {
   const { t } = useT("channels");
-  // The wrapping row deliberately carries no `role="group"` — each pill's own
-  // visible text ("This group" / "Whole project") is already its accessible
-  // name via `aria-pressed`, so a redundant group role/label isn't needed
-  // (and `<div role="group">` isn't the right semantic element here anyway).
   return (
     <div className="shrink-0 border-b border-border/40 px-4 py-2">
-      <div className="flex flex-wrap items-center gap-1.5">
-        <button
-          type="button"
-          aria-pressed={scope === "group"}
-          onClick={() => onScopeChange("group")}
-          className={cn(
-            "shrink-0 rounded-full border px-3 py-1 text-xs transition-colors",
-            scope === "group"
-              ? "border-brand bg-accent"
-              : "border-transparent bg-muted/40 hover:bg-accent/60",
-          )}
-        >
-          {t(($) => $.tasks.scope_group)}
-        </button>
-        <button
-          type="button"
-          aria-pressed={scope === "project"}
+      <ToggleGroup
+        value={[scope]}
+        onValueChange={(next) => {
+          const [nextScope] = next;
+          if (!nextScope) return; // re-click of the active item — stay pinned, never 0 selected.
+          onScopeChange(nextScope as ChannelTasksScope);
+        }}
+        aria-label={t(($) => $.tasks.scope_toggle_aria)}
+        variant="outline"
+        size="sm"
+        className="w-fit"
+      >
+        <ToggleGroupItem value="group">{t(($) => $.tasks.scope_group)}</ToggleGroupItem>
+        <ToggleGroupItem
+          value="project"
           disabled={projectUnavailable}
-          onClick={() => onScopeChange("project")}
-          className={cn(
-            "inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors",
-            scope === "project"
-              ? "border-brand bg-accent"
-              : "border-transparent bg-muted/40 hover:bg-accent/60",
-            projectUnavailable && "cursor-not-allowed opacity-50 hover:bg-muted/40",
-          )}
+          className="inline-flex items-center gap-1.5"
         >
           <span>{t(($) => $.tasks.scope_project)}</span>
           <ProjectChip projectId={projectId} className="pointer-events-none" />
-        </button>
-      </div>
+        </ToggleGroupItem>
+      </ToggleGroup>
       {projectUnavailable ? (
         <p className="mt-1.5 text-xs text-muted-foreground">{t(($) => $.tasks.scope_project_unavailable)}</p>
       ) : null}

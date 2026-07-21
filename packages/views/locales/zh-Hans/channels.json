@@ -145,6 +145,7 @@
     "load_more": "加载更多（还剩 {{count}} 个）",
     "loading_more": "加载中…",
     "column_empty": "暂无 Issue",
+    "scope_toggle_aria": "任务范围",
     "scope_group": "本群创建",
     "scope_project": "项目全部",
     "scope_project_unavailable": "暂时无法加载该项目的 Issue",

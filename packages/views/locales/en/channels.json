@@ -145,6 +145,7 @@
     "load_more": "Load more ({{count}} remaining)",
     "loading_more": "Loading...",
     "column_empty": "No issues",
+    "scope_toggle_aria": "Tasks scope",
     "scope_group": "This group",
     "scope_project": "Whole project",
     "scope_project_unavailable": "Can't load this project's issues right now",

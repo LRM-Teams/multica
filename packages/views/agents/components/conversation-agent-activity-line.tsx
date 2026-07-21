@@ -8,6 +8,7 @@ import { cn } from "@multica/ui/lib/utils";
 import { useAgentLiveStatus } from "../use-agent-live-status";
 import { pickPrimaryActiveTask } from "../resolve-agent-live-status";
 import { AgentLiveStatusMark } from "./agent-live-status-mark";
+import { ACTIVITY_LABEL_EN } from "./tabs/activity-event";
 
 /**
  * Quiet one-line "what is this conversation's agent doing right now" strip,
@@ -24,6 +25,10 @@ import { AgentLiveStatusMark } from "./agent-live-status-mark";
  * active task on the plate — gated on `pickPrimaryActiveTask`, the SAME
  * active-vs-idle boundary `useAgentLiveStatus` uses internally. No fabricated
  * "Idle" row and no fake activity (Parker: 没活动不显).
+ *
+ * Also hides the Activity "Output" label above the composer (LRM-202): that
+ * word is a timeline diagnostic for already-emitted text, not a live verb, and
+ * reads as a stray chrome label next to "is preparing a reply…".
  *
  * The caller resolves `agentId` to the single conversation agent (a DM whose
  * peer is an agent). Where a single conversation agent is undefined (a
@@ -51,6 +56,8 @@ export function ConversationAgentActivityLine({
   // status still resolving — hides the whole line; never a fabricated idle word
   // or fake activity beneath the composer.
   if (!activeTask || !status) return null;
+  // Composer chrome must not show Activity's "Output" diagnostic (LRM-202).
+  if (status.label === ACTIVITY_LABEL_EN.output) return null;
 
   return (
     <div

@@ -411,6 +411,7 @@ export function ChannelMessageBubble({
   // overflow the box and lift the dot off the avatar's bottom edge).
   const avatarNode = (
     <ActorAvatar
+      key={message.id}
       name={displayName}
       initials={initialsOf(displayName)}
       avatarUrl={avatarUrl ?? undefined}

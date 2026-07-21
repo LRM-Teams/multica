@@ -19,6 +19,7 @@ import {
   channelMessagesFirstItemIndex,
   channelMessagesPageOptions,
   flattenChannelMessagePages,
+  withPreservedAuthorAvatar,
 } from "./queries";
 
 function page(ids: string[], extra: Partial<ChannelMessagesPage> = {}): ChannelMessagesPage {
@@ -94,5 +95,46 @@ describe("flatten + firstItemIndex", () => {
       CHANNEL_MESSAGES_VIRTUOSO_BASE_INDEX - 2,
     );
     expect(channelMessagesFirstItemIndex(data, false)).toBe(0);
+  });
+});
+
+describe("withPreservedAuthorAvatar (LRM-202)", () => {
+  const base = {
+    id: "m2",
+    channel_id: "c1",
+    workspace_id: "w1",
+    type: "agent" as const,
+    author_id: "agent-1",
+    author_name: "前端工程师",
+    content: "hi",
+    created_at: "2026-07-21T10:00:00Z",
+  };
+
+  it("keeps an incoming author_avatar_url", () => {
+    const incoming = { ...base, author_avatar_url: "/uploads/new.png" } as ChannelMessage;
+    const existing = { ...base, id: "m2", author_avatar_url: "/uploads/old.png" } as ChannelMessage;
+    expect(withPreservedAuthorAvatar(incoming, existing, [existing]).author_avatar_url).toBe(
+      "/uploads/new.png",
+    );
+  });
+
+  it("preserves the cached row avatar when the WS payload omits it", () => {
+    const incoming = { ...base, author_avatar_url: null } as ChannelMessage;
+    const existing = { ...base, author_avatar_url: "/uploads/agent.png" } as ChannelMessage;
+    expect(withPreservedAuthorAvatar(incoming, existing, [existing]).author_avatar_url).toBe(
+      "/uploads/agent.png",
+    );
+  });
+
+  it("backfills from an earlier same-author bubble so consecutive messages stay consistent", () => {
+    const prior = {
+      ...base,
+      id: "m1",
+      author_avatar_url: "/uploads/agent.png",
+    } as ChannelMessage;
+    const incoming = { ...base, id: "m2", author_avatar_url: null } as ChannelMessage;
+    expect(withPreservedAuthorAvatar(incoming, undefined, [prior]).author_avatar_url).toBe(
+      "/uploads/agent.png",
+    );
   });
 });

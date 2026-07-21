@@ -328,10 +328,11 @@ describe("ChannelsPage — project picker relocated to group settings (#576)", (
     expect(screen.queryByRole("button", { name: "project" })).toBeNull();
   });
 
-  it("reveals the project picker inside the header's Group settings popover", async () => {
+  it("reveals the project picker inside Channel details → Settings", async () => {
     renderPage();
     await screen.findByTestId("message-list");
-    fireEvent.click(screen.getByRole("button", { name: "Group settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open channel details" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
     expect(await screen.findByRole("button", { name: "project" })).toBeTruthy();
   });
 
@@ -344,7 +345,8 @@ describe("ChannelsPage — project picker relocated to group settings (#576)", (
     // Fixture default: chan-1.created_by === "user-1" === the signed-in user.
     renderPage();
     await screen.findByTestId("message-list");
-    fireEvent.click(screen.getByRole("button", { name: "Group settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open channel details" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
     expect(await screen.findByRole("button", { name: "project" })).toBeEnabled();
   });
 
@@ -353,7 +355,8 @@ describe("ChannelsPage — project picker relocated to group settings (#576)", (
     memberFixture.current = [{ user_id: "user-1", role: "admin" }];
     renderPage();
     await screen.findByTestId("message-list");
-    fireEvent.click(screen.getByRole("button", { name: "Group settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open channel details" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
     expect(await screen.findByRole("button", { name: "project" })).toBeEnabled();
   });
 
@@ -362,7 +365,8 @@ describe("ChannelsPage — project picker relocated to group settings (#576)", (
     memberFixture.current = [{ user_id: "user-1", role: "member" }];
     renderPage();
     await screen.findByTestId("message-list");
-    fireEvent.click(screen.getByRole("button", { name: "Group settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open channel details" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
     expect(await screen.findByRole("button", { name: "project" })).toBeDisabled();
   });
 
@@ -370,12 +374,13 @@ describe("ChannelsPage — project picker relocated to group settings (#576)", (
     channelFixture.current = { ...channelFixture.current, archived_at: "2026-07-01T00:00:00Z" };
     renderPage();
     await screen.findByTestId("message-list");
-    fireEvent.click(screen.getByRole("button", { name: "Group settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open channel details" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
     expect(await screen.findByRole("button", { name: "project" })).toBeDisabled();
   });
 });
 
-describe("ChannelsPage — Group Settings shares the exclusive thread/agent slot (#645)", () => {
+describe("ChannelsPage — Channel details shares the exclusive thread/agent slot (#645)", () => {
   beforeEach(() => {
     listProps.current = null;
     channelFixture.current = {
@@ -393,15 +398,13 @@ describe("ChannelsPage — Group Settings shares the exclusive thread/agent slot
     memberFixture.current = [];
   });
 
-  // Settings and the Thread panel both route through the same
-  // setOpenThreadRoot/setChannelSettingsOpen exclusion logic that gates the
-  // Agent panel too (handleOpenAgentPanel is symmetric with handleOpenThread
-  // — both clear channelSettingsOpen) — this exercises the real shared code
-  // path, not a duplicate per-panel test.
-  it("opening a thread closes an already-open Group settings panel", async () => {
+  // Details and the Thread panel both route through the same exclusive
+  // sidePanel union that gates the Agent panel too.
+  it("opening a thread closes an already-open Channel details panel", async () => {
     renderPage();
     await screen.findByTestId("message-list");
-    fireEvent.click(screen.getByRole("button", { name: "Group settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open channel details" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
     expect(await screen.findByRole("button", { name: "project" })).toBeTruthy();
 
     await waitFor(() => expect(listProps.current?.onOpenThread).toBeTypeOf("function"));
@@ -412,7 +415,7 @@ describe("ChannelsPage — Group Settings shares the exclusive thread/agent slot
     expect(screen.queryByRole("button", { name: "project" })).toBeNull();
   });
 
-  it("opening Group settings closes an already-open thread", async () => {
+  it("opening Channel details closes an already-open thread", async () => {
     renderPage();
     await screen.findByTestId("message-list");
     await waitFor(() => expect(listProps.current?.onOpenThread).toBeTypeOf("function"));
@@ -421,16 +424,18 @@ describe("ChannelsPage — Group Settings shares the exclusive thread/agent slot
     });
     await screen.findByTestId("thread-panel");
 
-    fireEvent.click(screen.getByRole("button", { name: "Group settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open channel details" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
     expect(await screen.findByRole("button", { name: "project" })).toBeTruthy();
     expect(screen.queryByTestId("thread-panel")).toBeNull();
   });
 
-  it("clicking the Group settings toggle again closes it", async () => {
+  it("clicking the channel name again closes Channel details", async () => {
     renderPage();
     await screen.findByTestId("message-list");
-    const toggle = screen.getByRole("button", { name: "Group settings" });
+    const toggle = screen.getByRole("button", { name: "Open channel details" });
     fireEvent.click(toggle);
+    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
     expect(await screen.findByRole("button", { name: "project" })).toBeTruthy();
     fireEvent.click(toggle);
     await waitFor(() => {

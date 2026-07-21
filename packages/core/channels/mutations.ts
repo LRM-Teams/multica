@@ -15,6 +15,23 @@ export function useCreateChannel() {
   });
 }
 
+export function useUpdateChannel() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: ({
+      channelId,
+      ...data
+    }: {
+      channelId: string;
+      name?: string;
+      description?: string | null;
+      lark_chat_id?: string | null;
+    }) => api.updateChannel(channelId, data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: channelKeys.all(wsId) }),
+  });
+}
+
 export function useDeleteChannel() {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();

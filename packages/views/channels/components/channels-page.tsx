@@ -14,7 +14,6 @@ import {
   Info,
   Mail,
   MessageCircle,
-  MessageSquare,
   MoreHorizontal,
   Paperclip,
   Pin,
@@ -96,7 +95,6 @@ import type {
 import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
 import { UnicodeSpinner } from "@multica/ui/components/common/unicode-spinner";
 import { Button } from "@multica/ui/components/ui/button";
-import { Checkbox } from "@multica/ui/components/ui/checkbox";
 import { Input } from "@multica/ui/components/ui/input";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
@@ -165,7 +163,6 @@ import { avatarGlyph, avatarToneClass } from "../../common/initials";
 import { useT } from "../../i18n/use-t";
 import { useTimeAgo } from "../../i18n/use-time-ago";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
-import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { composePayloadKey } from "../hooks/use-compose-send-intent";
 import { useComposerSend } from "../hooks/use-composer-send";
 import {
@@ -209,6 +206,9 @@ import { buildPinnedConversationEntries } from "./pinned-conversations";
 import { PinnedConversationsSection } from "./pinned-conversations-section";
 import { AgentSidePanel } from "./agent-side-panel";
 import { AgentPanelProvider } from "../../common/agent-panel-context";
+import { ChannelMembersList, type MemberRoleLabel } from "./channel-members-list";
+import { ChannelMembersDialog } from "./channel-members-dialog";
+import { ChannelAddPeopleDialog } from "./channel-add-people-dialog";
 
 export interface TypingActor {
   key: string;
@@ -657,8 +657,10 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const [createNameError, setCreateNameError] = useState(false);
   // Multi-select invite: keys are `${type}:${id}` so users and agents share one set.
   const [selectedInvites, setSelectedInvites] = useState<Set<string>>(new Set());
-  const [memberTab, setMemberTab] = useState<"invite" | "members">("invite");
-  const [memberQuery, setMemberQuery] = useState("");
+  const [membersDialogOpen, setMembersDialogOpen] = useState(false);
+  const [addPeopleDialogOpen, setAddPeopleDialogOpen] = useState(false);
+  const [membersQuery, setMembersQuery] = useState("");
+  const [inviteQuery, setInviteQuery] = useState("");
   const typingStartedRef = useRef(false);
   const typingStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const typingPulseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -935,7 +937,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     },
     [threadPage?.messages, threadRoot],
   );
-  const { data: channelMembers = [] } = useQuery(channelMembersOptions(active?.id ?? ""));
+  const { data: channelMembers = [], isPending: membersPending } = useQuery(channelMembersOptions(active?.id ?? ""));
   const { data: channelProjectId = "" } = useQuery(channelProjectOptions(wsId, active?.id ?? ""));
   const { data: activeTasks = [] } = useQuery(activeChannelTasksOptions(active?.id ?? ""));
   const [stoppingChannelTaskId, setStoppingChannelTaskId] = useState<string | null>(null);
@@ -1032,9 +1034,9 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   );
   const availableMembers = workspaceMembers.filter((m) => !memberIds.has(m.user_id));
   const availableAgents = agents.filter((a) => !agentIds.has(a.id) && !a.archived_at);
-  // Flat, searchable candidate list (users + agents) for the invite tab.
-  const inviteCandidates = useMemo(() => {
-    const q = memberQuery.trim();
+  // Flat candidate list (users + agents) for Add people; chips use the
+  // unfiltered pool so selections survive search.
+  const allInviteCandidates = useMemo(() => {
     const list: Array<{
       key: string;
       type: "user" | "agent";
@@ -1057,8 +1059,12 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         presentation: resolveActorIdentityPresentation(a, "Agent"),
       })),
     ];
+    return list;
+  }, [availableMembers, availableAgents]);
+  const inviteCandidates = useMemo(() => {
+    const q = inviteQuery.trim();
     return q
-      ? list.filter((c) =>
+      ? allInviteCandidates.filter((c) =>
           matchesActorIdentitySearch(
             c.presentation.displayName,
             c.presentation.handle,
@@ -1066,10 +1072,10 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
             identitySearchOptions,
           ),
         )
-      : list;
-  }, [availableMembers, availableAgents, memberQuery]);
+      : allInviteCandidates;
+  }, [allInviteCandidates, inviteQuery]);
   const filteredMembers = useMemo(() => {
-    const q = memberQuery.trim();
+    const q = membersQuery.trim();
     return q
       ? channelMembers.filter((m) =>
           matchesActorIdentitySearch(
@@ -1085,7 +1091,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
           ),
         )
       : channelMembers;
-  }, [channelMembers, memberQuery, t]);
+  }, [channelMembers, membersQuery, t]);
   // Scope the composer's @ picker to this channel's members only.
   const channelMemberIds = useMemo(
     () => new Set(channelMembers.map((m) => m.member_id)),
@@ -1844,199 +1850,99 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     addMembers.mutate(
       { channelId: active.id, members },
       {
-        onSuccess: () => setSelectedInvites(new Set()),
+        onSuccess: () => {
+          setSelectedInvites(new Set());
+          setInviteQuery("");
+          setAddPeopleDialogOpen(false);
+        },
         onError: () => toast.error(t(($) => $.members.invite_failed)),
       },
     );
   };
 
-  // Member management body (invite / members tabs + search). Extracted so the
-  // SAME markup renders in the desktop header Popover and the mobile overflow
-  // Drawer — no logic or layout duplicated. Guarded on `active` so the member-
-  // remove handler always has a channel id.
+  const roleForChannelMember = useCallback(
+    (m: ChannelMember): MemberRoleLabel => {
+      if (m.member_type === "agent") return "agent";
+      const role = workspaceMembers.find((w) => w.user_id === m.member_id)?.role;
+      if (role === "owner" || role === "admin") return role;
+      return "member";
+    },
+    [workspaceMembers],
+  );
+
+  const openMembersDialog = useCallback(() => {
+    setMembersQuery("");
+    setMembersDialogOpen(true);
+  }, []);
+
+  const openAddPeopleDialog = useCallback(() => {
+    setInviteQuery("");
+    setSelectedInvites(new Set());
+    setAddPeopleDialogOpen(true);
+  }, []);
+
+  const handleRemoveMemberClick = useCallback(
+    (m: ChannelMember) => {
+      if (!active) return;
+      if (isMobile) {
+        setRemoveMemberTarget(m);
+        return;
+      }
+      removeMember.mutate({
+        channelId: active.id,
+        memberType: m.member_type,
+        memberId: m.member_id,
+      });
+    },
+    [active, isMobile, removeMember],
+  );
+
+  // LRM-211 — Channel details Members tab reuses the same list as the
+  // Members dialog (no dual-tab Popover).
   const memberPanelBody = active ? (
-    <>
-      {/* #642 — the system #general channel's roster is auto-managed
-          server-side (every workspace member + active workspace-visible
-          agent); there's nothing to invite, so the tab switcher itself
-          would be a dead affordance. Go straight to a read-only list. */}
-      {!isActiveSystemChannel && (
-        <div className="flex border-b">
-          <button
-            type="button"
-            onClick={() => setMemberTab("invite")}
-            className={cn(
-              "flex-1 border-b-2 px-3 py-2 text-sm font-medium transition-colors",
-              memberTab === "invite"
-                ? "border-primary text-foreground"
-                : "border-transparent text-muted-foreground hover:text-foreground",
-            )}
-          >
-            {t(($) => $.members.tab_invite)}
-          </button>
-          <button
-            type="button"
-            onClick={() => setMemberTab("members")}
-            className={cn(
-              "flex-1 border-b-2 px-3 py-2 text-sm font-medium transition-colors",
-              memberTab === "members"
-                ? "border-primary text-foreground"
-                : "border-transparent text-muted-foreground hover:text-foreground",
-            )}
-          >
-            {t(($) => $.members.tab_members)} · {channelMembers.length}
-          </button>
-        </div>
-      )}
-      <div className="p-2">
-        <div className="relative">
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex items-center gap-2 border-b px-3 py-2">
+        <div className="relative min-w-0 flex-1">
           <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
-            value={memberQuery}
-            onChange={(e) => setMemberQuery(e.target.value)}
-            placeholder={t(($) => $.members.search)}
+            value={membersQuery}
+            onChange={(e) => setMembersQuery(e.target.value)}
+            placeholder={t(($) => $.members.find_members)}
             className="h-8 pl-7"
           />
         </div>
+        {!isActiveSystemChannel && canArchive(active) && (
+          <Button
+            type="button"
+            size="sm"
+            className="h-8 shrink-0"
+            onClick={openAddPeopleDialog}
+          >
+            {t(($) => $.members.add_people)}
+          </Button>
+        )}
       </div>
-      {memberTab === "invite" && !isActiveSystemChannel ? (
-        <>
-          <div className="max-h-64 overflow-y-auto px-1.5 pb-1.5">
-            {inviteCandidates.length === 0 ? (
-              <p className="px-2 py-6 text-center text-xs text-muted-foreground">
-                {memberQuery
-                  ? t(($) => $.members.no_results)
-                  : t(($) => $.members.no_candidates)}
-              </p>
-            ) : (
-              inviteCandidates.map((c) => (
-                <label
-                  key={c.key}
-                  className={cn(
-                    "flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-accent",
-                    selectedInvites.has(c.key) && "bg-accent/60",
-                  )}
-                >
-                  <Checkbox
-                    checked={selectedInvites.has(c.key)}
-                    onCheckedChange={() => toggleInvite(c.key)}
-                  />
-                  <ActorAvatar
-                    name={c.presentation.displayName}
-                    initials={avatarGlyph(c.presentation.displayName || "?")}
-                    avatarUrl={resolvePublicFileUrl(c.avatarUrl)}
-                    isAgent={c.type === "agent"}
-                    size={32}
-                    className={avatarToneClass(c.key)}
-                  />
-                  <ActorIdentityRow
-                    displayName={c.presentation.displayName}
-                    handle={c.presentation.handle}
-                    showHandle
-                    primaryClassName="truncate text-sm font-medium"
-                  />
-                </label>
-              ))
-            )}
-          </div>
-          <div className="flex items-center justify-between gap-2 border-t p-2">
-            <span className="text-xs text-muted-foreground">
-              {t(($) => $.members.invite_selected, { count: selectedInvites.size })}
-            </span>
-            <Button
-              size="sm"
-              onClick={inviteSelected}
-              disabled={selectedInvites.size === 0 || addMembers.isPending}
-            >
-              {t(($) => $.members.invite_cta)}
-            </Button>
-          </div>
-        </>
-      ) : (
-        <div className="max-h-72 overflow-y-auto px-1.5 pb-2">
-          {filteredMembers.length === 0 ? (
-            <p className="px-2 py-6 text-center text-xs text-muted-foreground">
-              {channelMembers.length === 0
-                ? t(($) => $.members.empty)
-                : t(($) => $.members.no_results)}
-            </p>
-          ) : (
-            filteredMembers.map((m) => {
-              const isAgent = m.member_type === "agent";
-              const presentation = resolveActorIdentityPresentation(
-                m,
-                isAgent
-                  ? t(($) => $.message.agent_badge)
-                  : t(($) => $.members.title),
-              );
-              return (
-                <div
-                  key={`${m.member_type}:${m.member_id}`}
-                  className="group flex items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-accent"
-                >
-                  <ActorAvatar
-                    name={presentation.displayName}
-                    initials={avatarGlyph(presentation.displayName || "?")}
-                    avatarUrl={resolvePublicFileUrl(m.avatar_url)}
-                    isAgent={isAgent}
-                    size={32}
-                    className={avatarToneClass(`${m.member_type}:${m.member_id}`)}
-                  />
-                  <ActorIdentityRow
-                    displayName={presentation.displayName}
-                    handle={presentation.handle}
-                    showHandle
-                    primaryClassName="truncate text-sm font-medium"
-                  />
-                  {/* Send message: agents always, users except yourself (the
-                      backend rejects a self-DM). Create-or-find then open it. */}
-                  {(isAgent || m.member_id !== currentUserId) && (
-                    <button
-                      type="button"
-                      onClick={() => openDmWithMember(m)}
-                      disabled={createOrFindDm.isPending}
-                      aria-label={t(($) => $.dm.send_message)}
-                      title={t(($) => $.dm.send_message)}
-                      className="rounded p-1 text-muted-foreground opacity-0 transition hover:text-foreground group-hover:opacity-100 disabled:opacity-50"
-                    >
-                      <MessageSquare className="size-3.5" />
-                    </button>
-                  )}
-                  {!isActiveSystemChannel && (
-                    isMobile ? (
-                      <button
-                        type="button"
-                        onClick={() => setRemoveMemberTarget(m)}
-                        aria-label={t(($) => $.members.remove_aria)}
-                        className="min-h-11 shrink-0 px-2 py-2.5 text-sm font-semibold text-destructive"
-                      >
-                        {t(($) => $.members.remove)}
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          removeMember.mutate({
-                            channelId: active.id,
-                            memberType: m.member_type,
-                            memberId: m.member_id,
-                          })
-                        }
-                        aria-label={t(($) => $.members.remove_aria)}
-                        className="rounded p-1 text-muted-foreground opacity-0 transition hover:text-destructive group-hover:opacity-100"
-                      >
-                        <X className="size-3.5" />
-                      </button>
-                    )
-                  )}
-                </div>
-              );
-            })
-          )}
-        </div>
-      )}
-    </>
+      <ChannelMembersList
+        members={filteredMembers}
+        loading={membersPending}
+        emptyLabel={
+          membersQuery.trim()
+            ? t(($) => $.members.no_results)
+            : t(($) => $.members.empty)
+        }
+        noResultsLabel={t(($) => $.members.no_results)}
+        roleForMember={roleForChannelMember}
+        canRemove={!isActiveSystemChannel && canArchive(active)}
+        isMobile={isMobile}
+        currentUserId={currentUserId ?? ""}
+        onOpenDm={openDmWithMember}
+        onRemove={handleRemoveMemberClick}
+        dmPending={createOrFindDm.isPending}
+        className="max-h-none"
+      />
+    </div>
   ) : null;
+
 
   // Shared channel row for the unified PINNED section and the CHANNELS list.
   const renderChannelSidebarRow = (channel: Channel) => {
@@ -2740,18 +2646,14 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
               </Button>
             ) : (
               <>
-                {/* LRM-200 + LRM-210: faces + count → members tab; 「邀请」→ invite
-                    sub-tab. Share/Stats/Files/Settings moved into Channel details. */}
+                {/* LRM-211: faces + count → Members dialog; Invite → Add people dialog. */}
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => {
-                      setMemberTab("members");
-                      toggleChannelDetails("members");
-                    }}
+                    onClick={openMembersDialog}
                     className={cn(
                       "flex items-center gap-1.5 rounded-md px-1 py-0.5 transition-colors hover:bg-accent",
-                      channelDetailsOpen && channelDetailsTab === "members" && "bg-accent",
+                      membersDialogOpen && "bg-accent",
                     )}
                     aria-label={t(($) => $.header.view_members_aria)}
                   >
@@ -2768,10 +2670,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                   {!isActiveSystemChannel && (
                     <button
                       type="button"
-                      onClick={() => {
-                        setMemberTab("invite");
-                        openChannelDetails("members");
-                      }}
+                      onClick={openAddPeopleDialog}
                       className="inline-flex h-[26px] items-center justify-center rounded-md bg-primary px-2.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
                       aria-label={t(($) => $.header.invite_members_aria)}
                     >
@@ -3179,8 +3078,8 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                   <button
                     type="button"
                     onClick={() => {
-                      setMemberTab("members");
-                      setMobilePanel("members");
+                      setMobilePanel(null);
+                      openMembersDialog();
                     }}
                     className="flex min-h-[44px] items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-accent"
                   >
@@ -3228,6 +3127,63 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
             ) : null}
           </DrawerContent>
         </Drawer>
+      )}
+
+      {active && (
+        <ChannelMembersDialog
+          open={membersDialogOpen}
+          onOpenChange={(open) => {
+            setMembersDialogOpen(open);
+            if (!open) setMembersQuery("");
+          }}
+          channelName={active.name}
+          memberCount={channelMembers.filter((m) => m.member_type === "user").length}
+          agentCount={channelMembers.filter((m) => m.member_type === "agent").length}
+          members={filteredMembers}
+          loading={membersPending}
+          query={membersQuery}
+          onQueryChange={setMembersQuery}
+          roleForMember={roleForChannelMember}
+          canManage={!isActiveSystemChannel && canArchive(active)}
+          isMobile={isMobile}
+          currentUserId={currentUserId ?? ""}
+          onAddPeople={() => {
+            setMembersDialogOpen(false);
+            openAddPeopleDialog();
+          }}
+          onOpenDm={openDmWithMember}
+          onRemove={handleRemoveMemberClick}
+          dmPending={createOrFindDm.isPending}
+        />
+      )}
+
+      {active && !isActiveSystemChannel && (
+        <ChannelAddPeopleDialog
+          open={addPeopleDialogOpen}
+          onOpenChange={(open) => {
+            setAddPeopleDialogOpen(open);
+            if (!open) {
+              setInviteQuery("");
+              setSelectedInvites(new Set());
+            }
+          }}
+          channelName={active.name}
+          candidates={inviteCandidates}
+          allCandidates={allInviteCandidates}
+          query={inviteQuery}
+          onQueryChange={setInviteQuery}
+          selected={selectedInvites}
+          onToggle={toggleInvite}
+          onClearOne={(key) =>
+            setSelectedInvites((prev) => {
+              const next = new Set(prev);
+              next.delete(key);
+              return next;
+            })
+          }
+          onSubmit={inviteSelected}
+          submitting={addMembers.isPending}
+        />
       )}
 
       <Sheet

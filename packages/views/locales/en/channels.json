@@ -93,7 +93,19 @@
     "tab_invite": "Invite",
     "tab_members": "Members",
     "search": "Search by name or handle",
-    "no_results": "No matching people"
+    "no_results": "No matching people",
+    "dialog_title": "Members",
+    "dialog_subtitle": "#{{name}} · {{members}} members · {{agents}} agents",
+    "find_members": "Find members",
+    "add_people": "Add people",
+    "add_people_title": "Add people to #{{name}}",
+    "add_people_subtitle": "Choose members or agents from the workspace",
+    "in_channel": "In this channel · {{count}}",
+    "suggestions": "Suggestions",
+    "done": "Done",
+    "add": "Add",
+    "cancel": "Cancel",
+    "footer_count": "{{count}} people"
   },
   "profile_popover": {
     "unknown": "Unknown",

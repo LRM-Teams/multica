@@ -93,7 +93,19 @@
     "tab_invite": "邀请",
     "tab_members": "成员",
     "search": "搜索姓名或账号",
-    "no_results": "没有匹配的人"
+    "no_results": "没有匹配的人",
+    "dialog_title": "成员",
+    "dialog_subtitle": "#{{name}} · {{members}} 人 · {{agents}} 个智能体",
+    "find_members": "查找成员",
+    "add_people": "添加成员",
+    "add_people_title": "添加成员到 #{{name}}",
+    "add_people_subtitle": "从工作区选择成员或智能体",
+    "in_channel": "本频道 · {{count}}",
+    "suggestions": "建议",
+    "done": "完成",
+    "add": "添加",
+    "cancel": "取消",
+    "footer_count": "{{count}} 人"
   },
   "profile_popover": {
     "unknown": "未知",

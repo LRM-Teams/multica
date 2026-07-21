@@ -1014,8 +1014,10 @@ function CuratorProfileCard({
   const [draft, setDraft] = useState<CuratorProfileDraft>(() => draftFromProfile(profile));
   const [runStage, setRunStage] = useState<"agent_self_review" | "team_curation" | "all">("agent_self_review");
   const [dryRun, setDryRun] = useState(false);
-  const [backfillSince, setBackfillSince] = useState(() => defaultBackfillSince());
-  const [backfillUntil, setBackfillUntil] = useState(() => defaultBackfillUntil());
+  const [backfillRange, setBackfillRange] = useState(() => ({
+    since: defaultBackfillSince(),
+    until: defaultBackfillUntil(),
+  }));
 
   const availableRuntimes = runtimes.filter(
     (runtime) => runtime.owner_id === userId || runtime.visibility === "public",
@@ -1079,8 +1081,8 @@ function CuratorProfileCard({
   });
   const backfill = useMutation({
     mutationFn: () => api.startMemoryCurationBackfill(wsId, {
-      since: backfillSince,
-      until: backfillUntil,
+      since: backfillRange.since,
+      until: backfillRange.until,
       dry_run: dryRun,
     }),
     onSuccess: async (result) => {
@@ -1179,9 +1181,9 @@ function CuratorProfileCard({
           <div className="flex flex-col gap-3">
             <div><div className="text-sm font-medium">{copy("backfillRun")}</div><p className="mt-1 text-xs text-muted-foreground">{copy("backfillRunHint")}</p></div>
             <div className="flex flex-wrap items-end gap-2">
-              <Field label={copy("backfillSince")}><Input type="date" value={backfillSince} onChange={(event) => setBackfillSince(event.target.value)} /></Field>
-              <Field label={copy("backfillUntil")}><Input type="date" value={backfillUntil} onChange={(event) => setBackfillUntil(event.target.value)} /></Field>
-              <Button variant="outline" onClick={() => backfill.mutate()} disabled={!configured || !configuredTargetsValid || (!selfReviewRunnable && !teamCurationRunnable) || backfill.isPending || run.isPending || save.isPending || !backfillSince || !backfillUntil} className="gap-2"><RefreshCw className={cn("h-4 w-4", backfill.isPending && "animate-spin")} />{copy("queueBackfill")}</Button>
+              <Field label={copy("backfillSince")}><Input type="date" value={backfillRange.since} onChange={(event) => setBackfillRange((current) => ({ ...current, since: event.target.value }))} /></Field>
+              <Field label={copy("backfillUntil")}><Input type="date" value={backfillRange.until} onChange={(event) => setBackfillRange((current) => ({ ...current, until: event.target.value }))} /></Field>
+              <Button variant="outline" onClick={() => backfill.mutate()} disabled={!configured || !configuredTargetsValid || (!selfReviewRunnable && !teamCurationRunnable) || backfill.isPending || run.isPending || save.isPending || !backfillRange.since || !backfillRange.until} className="gap-2"><RefreshCw className={cn("h-4 w-4", backfill.isPending && "animate-spin")} />{copy("queueBackfill")}</Button>
             </div>
           </div>
         </div>

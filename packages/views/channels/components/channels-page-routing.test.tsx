@@ -113,7 +113,13 @@ vi.mock("@multica/core/workspace/queries", async (importOriginal) => ({
 }));
 
 const mobileViewport = vi.hoisted(() => ({ value: false }));
-vi.mock("@multica/ui/hooks/use-mobile", () => ({ useIsMobile: () => mobileViewport.value }));
+// #568 — channels-page.tsx also uses `useIsNarrowerThan` for the header
+// actions row's own (wider) compact breakpoint; keep it false here so the
+// full desktop icon row renders as before (routing tests don't exercise it).
+vi.mock("@multica/ui/hooks/use-mobile", () => ({
+  useIsMobile: () => mobileViewport.value,
+  useIsNarrowerThan: () => false,
+}));
 
 const replaceSpy = vi.hoisted(() => vi.fn());
 vi.mock("../../navigation/context", () => ({

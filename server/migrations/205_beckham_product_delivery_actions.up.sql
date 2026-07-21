@@ -11,5 +11,7 @@ ALTER TABLE agent_radar_action
     'create_issue',
     'comment_issue',
     'request_rework',
+    'assign_issue',
+    'schedule_reminder',
     'update_agent_plan'
   ));

@@ -2143,7 +2143,7 @@ func TestChannelAgentInboxDrainAckAmbientAdvancesSessionCursor(t *testing.T) {
 	}
 }
 
-func TestChannelAmbientDeliverySkipsAgentAndDirectedMentionNoise(t *testing.T) {
+func TestChannelHumanMentionDirectsTargetAndOrdinaryWakesOnlyUnmutedBystanders(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -2151,24 +2151,19 @@ func TestChannelAmbientDeliverySkipsAgentAndDirectedMentionNoise(t *testing.T) {
 	ctx := context.Background()
 	targetID := createHandlerTestAgent(t, "Ambient Target "+uuid.NewString()[:8], nil)
 	bystanderID := createHandlerTestAgent(t, "Ambient Bystander "+uuid.NewString()[:8], nil)
+	mutedBystanderID := createHandlerTestAgent(t, "Muted Ambient Bystander "+uuid.NewString()[:8], nil)
 	channelID := seedChannelForTest(t, "ambient-skip-"+uuid.NewString(), testUserID)
-	for _, agentID := range []string{targetID, bystanderID} {
-		if _, err := testPool.Exec(ctx, `
-			INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-			VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
-			t.Fatalf("seed agent member: %v", err)
-		}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, muted_at)
+		VALUES ($1, $2, 'agent', $3, now()),
+		       ($1, $2, 'agent', $4, NULL),
+		       ($1, $2, 'agent', $5, now())`, channelID, testWorkspaceID, targetID, bystanderID, mutedBystanderID); err != nil {
+		t.Fatalf("seed agent members: %v", err)
 	}
 	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
 	if !found {
 		t.Fatal("channel not found after seed")
 	}
-
-	agentMsg, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "agent", parseUUID(targetID), "Target", "status update", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
-	if err != nil {
-		t.Fatalf("insert agent message: %v", err)
-	}
-	testHandler.dispatchChannelAmbientDelivery(ctx, ch, agentMsg)
 
 	mentionContent := "@target please handle"
 	mentionParts := []protocol.MessagePart{{Type: protocol.MessagePartTypeReference, RefType: "mention", RefSubType: "agent", RefID: targetID, Label: "@target"}}
@@ -2178,16 +2173,103 @@ func TestChannelAmbientDeliverySkipsAgentAndDirectedMentionNoise(t *testing.T) {
 	}
 	testHandler.dispatchChannelMessageToAgents(ctx, ch, humanMention, parseUUID(testUserID))
 
-	var ambientCount, mentionCount int
-	if err := testPool.QueryRow(ctx, `
-		SELECT count(*) FILTER (WHERE reason = 'ambient'),
-		       count(*) FILTER (WHERE reason = 'mention' AND agent_id = $2)
+	type inboxFact struct {
+		agentID      string
+		reason       string
+		requiresWake bool
+		priority     int32
+	}
+	rows, err := testPool.Query(ctx, `
+		SELECT agent_id, reason, requires_wake, priority
 		FROM agent_inbox_event
-		WHERE channel_id = $1`, channelID, targetID).Scan(&ambientCount, &mentionCount); err != nil {
+		WHERE channel_id = $1 AND source_message_id = $2
+		ORDER BY agent_id`, channelID, humanMention.ID)
+	if err != nil {
+		t.Fatalf("load mention inbox facts: %v", err)
+	}
+	defer rows.Close()
+	facts := map[string]inboxFact{}
+	for rows.Next() {
+		var fact inboxFact
+		if err := rows.Scan(&fact.agentID, &fact.reason, &fact.requiresWake, &fact.priority); err != nil {
+			t.Fatalf("scan mention inbox fact: %v", err)
+		}
+		if _, duplicate := facts[fact.agentID]; duplicate {
+			t.Fatalf("duplicate inbox fact for agent %s", fact.agentID)
+		}
+		facts[fact.agentID] = fact
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate mention inbox facts: %v", err)
+	}
+	if len(facts) != 2 {
+		t.Fatalf("mention created %d inbox facts, want target + unmuted bystander only: %+v", len(facts), facts)
+	}
+	if got := facts[targetID]; got.reason != "mention" || !got.requiresWake || got.priority != channelDirectedWakePriority {
+		t.Fatalf("target fact = %+v, want directed mention wake", got)
+	}
+	if got := facts[bystanderID]; got.reason != channelMessageWakeReason || !got.requiresWake || got.priority != channelMessageWakePriority {
+		t.Fatalf("bystander fact = %+v, want ordinary coalesced channel wake", got)
+	}
+	if _, ok := facts[mutedBystanderID]; ok {
+		t.Fatalf("muted non-target received inbox fact: %+v", facts[mutedBystanderID])
+	}
+
+	var targetCount, bystanderCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FILTER (WHERE agent_id = $2),
+		       count(*) FILTER (WHERE agent_id = $3)
+		FROM agent_inbox_event
+		WHERE channel_id = $1 AND source_message_id = $4`, channelID, targetID, bystanderID, humanMention.ID).Scan(&targetCount, &bystanderCount); err != nil {
 		t.Fatalf("count inbox events: %v", err)
 	}
-	if ambientCount != 0 || mentionCount != 1 {
-		t.Fatalf("events ambient=%d mention=%d, want 0/1", ambientCount, mentionCount)
+	if targetCount != 1 || bystanderCount != 1 {
+		t.Fatalf("per-agent inbox counts target=%d bystander=%d, want 1/1", targetCount, bystanderCount)
+	}
+}
+
+func TestChannelAgentMentionDoesNotOrdinaryWakeNonTargets(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	authorID := createHandlerTestAgent(t, "Agent Mention Author "+uuid.NewString()[:8], nil)
+	targetID := createHandlerTestAgent(t, "Agent Mention Target "+uuid.NewString()[:8], nil)
+	bystanderID := createHandlerTestAgent(t, "Agent Mention Bystander "+uuid.NewString()[:8], nil)
+	channelID := seedChannelForTest(t, "agent-mention-loop-boundary-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3),
+		       ($1, $2, 'agent', $4),
+		       ($1, $2, 'agent', $5)`, channelID, testWorkspaceID, authorID, targetID, bystanderID); err != nil {
+		t.Fatalf("seed agent members: %v", err)
+	}
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+
+	mentionParts := []protocol.MessagePart{{Type: protocol.MessagePartTypeReference, RefType: "mention", RefSubType: "agent", RefID: targetID, Label: "@target"}}
+	agentMention, err := testHandler.insertChannelMessageWithParts(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "agent", parseUUID(authorID), "Agent Author", "@target please review", mentionParts, "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 1)
+	if err != nil {
+		t.Fatalf("insert agent mention: %v", err)
+	}
+	testHandler.dispatchChannelMessageToAgents(ctx, ch, agentMention, parseUUID(testUserID))
+
+	assertChannelAgentWakeReasonPriority(t, channelID, targetID, agentMention.ID, "mention", channelDirectedWakePriority)
+	var nonTargetWakeCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM agent_inbox_event
+		WHERE channel_id = $1
+		  AND source_message_id = $2
+		  AND agent_id IN ($3, $4)
+		  AND requires_wake`, channelID, agentMention.ID, authorID, bystanderID).Scan(&nonTargetWakeCount); err != nil {
+		t.Fatalf("count agent-authored non-target wakes: %v", err)
+	}
+	if nonTargetWakeCount != 0 {
+		t.Fatalf("agent-authored mention created %d non-target wakes, want 0", nonTargetWakeCount)
 	}
 }
 

@@ -3551,7 +3551,17 @@ func (h *Handler) dispatchChannelMessageToAgents(ctx context.Context, ch Channel
 				h.Metrics.RecordChannelFullExecutionWake("explicit_mention")
 			}
 		}
-		h.dispatchChannelAmbientDeliveryExcept(ctx, ch, trigger, targetAgentIDs)
+		if channelMessageIsHumanAuthored(trigger.Type) {
+			// A human @mention upgrades only the mentioned agents to a directed,
+			// must-reply wake. Every other joined, unmuted agent still receives
+			// the message through the ordinary coalesced channel wake path so the
+			// mention does not make shared channel context disappear.
+			h.dispatchChannelMessageWakeExcept(ctx, ch, trigger, initiatorUserID, targetAgentIDs)
+		} else {
+			// Preserve the existing loop boundary for agent-authored messages:
+			// non-targets observe without starting another agent run.
+			h.dispatchChannelAmbientDeliveryExcept(ctx, ch, trigger, targetAgentIDs)
+		}
 		return
 	}
 	if channelMessageIsHumanAuthored(trigger.Type) {
@@ -3619,10 +3629,17 @@ func (h *Handler) dispatchChannelThreadReplyMentions(ctx context.Context, ch Cha
 }
 
 func (h *Handler) dispatchChannelMessageWake(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
+	h.dispatchChannelMessageWakeExcept(ctx, ch, trigger, initiatorUserID, nil)
+}
+
+func (h *Handler) dispatchChannelMessageWakeExcept(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, skipAgentIDs map[string]struct{}) {
 	if trigger.Type == "agent" || trigger.Type == "system" {
 		return
 	}
 	for _, agent := range h.channelAgentMembers(ctx, ch.WorkspaceID, ch.ID) {
+		if _, skip := skipAgentIDs[uuidToString(agent.ID)]; skip {
+			continue
+		}
 		if h.isChannelAgentMuted(ctx, parseUUID(ch.ID), parseUUID(ch.WorkspaceID), agent.ID) {
 			continue
 		}

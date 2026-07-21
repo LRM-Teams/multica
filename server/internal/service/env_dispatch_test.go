@@ -74,6 +74,10 @@ func (c *fakeSandboxInstanceCreator) DeleteSandboxInstance(_ context.Context, re
 
 var _ SandboxInstanceCreator = (*fakeSandboxInstanceCreator)(nil)
 
+type linkSessionCall struct {
+	EnvID, AgentID, ProjectID, RunID, IssueID string
+}
+
 type fakeEnvDispatchDeps struct {
 	mu sync.Mutex
 
@@ -85,6 +89,7 @@ type fakeEnvDispatchDeps struct {
 	agentRuns  []string              // every enqueued runID
 	runCounter int
 	idem       map[string]EnvDispatchResult // idempotency ledger
+	linkSessionCalls []linkSessionCall          // AC-4: records LinkEnvDispatchTrainingSession calls
 
 	defaultSelfPlayEnv string // per-workspace default self_play base env ("" = unconfigured)
 
@@ -182,6 +187,13 @@ func (f *fakeEnvDispatchDeps) CreateChannelMessage(_ context.Context, _ string, 
 	f.channelMessages = append(f.channelMessages, content)
 	return fmt.Sprintf("channel-message-%d", len(f.channelMessages)), nil
 }
+func (f *fakeEnvDispatchDeps) LinkEnvDispatchTrainingSession(_ context.Context, envID, agentID, projectID, runID, issueID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.linkSessionCalls = append(f.linkSessionCalls, linkSessionCall{EnvID: envID, AgentID: agentID, ProjectID: projectID, RunID: runID, IssueID: issueID})
+	return nil
+}
+
 func (f *fakeEnvDispatchDeps) EnqueueEnvDispatchChannelRun(_ context.Context, _, _ string, in ChannelRunInput, _ int) (string, error) {
 	if f.enqueueErr != nil {
 		return "", f.enqueueErr

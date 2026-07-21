@@ -263,6 +263,13 @@ type EnvDispatchDeps interface {
 	ProvisionEnvDispatchAgent(ctx context.Context, in EnvDispatchAgentProvisionInput) (EnvDispatchAgentProvisionResult, error)
 	CreateChannelMessage(ctx context.Context, channelID, workspaceID, userID, content string) (messageID string, err error)
 	EnqueueEnvDispatchChannelRun(ctx context.Context, workspaceID, userID string, in ChannelRunInput, idx int) (runID string, err error)
+
+	// LinkEnvDispatchTrainingSession links the binding's persisted training
+	// session to the real derived-agent task ID after the task is enqueued, so
+	// DAG assembly maps the session to the actual agent run (AC-4). Best-effort:
+	// a no-op when the (envID, agentID) binding is not a training binding
+	// (training_session_id NULL). Called after EnqueueEnvDispatchChannelRun.
+	LinkEnvDispatchTrainingSession(ctx context.Context, envID, agentID, projectID, runID, issueID string) error
 	SaveCollaborationTrigger(ctx context.Context, envID string, trigger EnvCollaborationTrigger) error
 	ValidateBranchMessageSource(ctx context.Context, workspaceID, envID, projectID string, roster MessageRoster) (ValidatedBranchMessageSource, error)
 	CopyEnvDispatchChannel(ctx context.Context, workspaceID, sourceChannelID, destinationProjectID, destinationEnvID string) (ChannelCopyMap, error)
@@ -1289,6 +1296,10 @@ func (s *EnvDispatchService) dispatchScratchChannelMessage(ctx context.Context, 
 	}
 	r.LeaderRunID = runID
 	r.AgentRunID = runID
+	// AC-4: link the binding's persisted training session (if any) to the real
+	// task so DAG assembly maps session->agent_run. Best-effort; non-training
+	// bindings no-op inside the dep, and link failure never fails the dispatch.
+	_ = s.deps.LinkEnvDispatchTrainingSession(ctx, r.EnvID, leaderID, r.ProjectID, runID, "")
 }
 
 // dispatchBranchChannelMessage resumes the source env's persisted collaboration

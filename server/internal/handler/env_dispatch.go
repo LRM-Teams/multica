@@ -832,6 +832,32 @@ func (a *envDispatchDepsAdapter) CreateChannelMessage(ctx context.Context, chann
 	return message.ID, nil
 }
 
+// LinkEnvDispatchTrainingSession links the binding's persisted training session
+// to the real derived-agent task ID after the task is enqueued (AC-4), so DAG
+// assembly maps the session to the actual agent run. Best-effort no-op when the
+// (envID, agentID) binding is not a training binding (training_session_id NULL)
+// or has no binding; link failure is logged and never fails the dispatch.
+func (a *envDispatchDepsAdapter) LinkEnvDispatchTrainingSession(ctx context.Context, envID, agentID, projectID, runID, issueID string) error {
+	store := envDispatchChannelStore{}
+	binding, err := store.binding(ctx, a.h.DB, envID, agentID)
+	if err != nil {
+		return nil // no binding / not env-dispatch: best-effort no-op
+	}
+	if binding.TrainingSessionID == nil || *binding.TrainingSessionID == "" {
+		return nil // not a training binding
+	}
+	dagSvc := service.NewInteractionDAGService(a.h.Queries, nil, true)
+	if err := dagSvc.LinkSessionTask(ctx, *binding.TrainingSessionID, projectID, runID, issueID); err != nil {
+		slog.Warn("env-dispatch: link training session->real task failed",
+			"env_id", envID, "agent_id", agentID, "run_id", runID,
+			"session_id", *binding.TrainingSessionID, "error", err)
+		return nil
+	}
+	slog.Info("env-dispatch training session linked to real task",
+		"env_id", envID, "agent_id", agentID, "run_id", runID, "session_id", *binding.TrainingSessionID)
+	return nil
+}
+
 func (a *envDispatchDepsAdapter) EnqueueEnvDispatchChannelRun(ctx context.Context, workspaceID, userID string, in service.ChannelRunInput, idx int) (string, error) {
 	return a.EnqueueAgentRun(ctx, workspaceID, userID, in.AgentID, "", "", in.ChatSessionID, in.SandboxInstanceID, in.EnvID, in.RuntimeID, idx)
 }
@@ -1783,6 +1809,9 @@ func (s *stubEnvDispatchDeps) CreateChatMessage(context.Context, string, string,
 }
 func (s *stubEnvDispatchDeps) EnqueueAgentRun(context.Context, string, string, string, string, string, string, string, string, string, int) (string, error) {
 	return "stub-run", nil
+}
+func (s *stubEnvDispatchDeps) LinkEnvDispatchTrainingSession(context.Context, string, string, string, string, string) error {
+	return nil
 }
 func (s *stubEnvDispatchDeps) PrecreateAgentRuntime(context.Context, string, string, string) (string, string, error) {
 	return "stub-runtime", "stub-daemon", nil

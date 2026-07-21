@@ -1,6 +1,6 @@
 "use client";
 
-import { type ComponentProps, type ReactNode, useState } from "react";
+import { type ReactNode, type RefObject, useState } from "react";
 import { Archive, Bell, BellOff } from "lucide-react";
 import type { Channel, ChannelMemberBrief } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
@@ -91,8 +91,13 @@ export function ChannelDetailsPanel({
    * `ChannelProjectSettingsPanel`, nesting the picker's popup inside the
    * already-unlocked subtree. Left undefined for the desktop docked
    * `variant="panel"` panel, which isn't inside a modal overlay.
+   *
+   * Typed as a concrete `RefObject` (narrower than
+   * `ChannelProjectSettingsPanel`'s own `portalContainer`, which also
+   * accepts a raw DOM node) because this same ref doubles as the `ref` of
+   * the Settings tab's wrapper `<div>` below.
    */
-  portalContainer?: ComponentProps<typeof ChannelProjectSettingsPanel>["portalContainer"];
+  portalContainer?: RefObject<HTMLDivElement | null>;
 }) {
   const { t } = useT("channels");
   const tabs: { id: ChannelDetailsTab; label: string; hidden?: boolean }[] = [

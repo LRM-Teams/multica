@@ -141,3 +141,27 @@ Publication:
 - PR: [#815 — feat(beckham): enforce evidence-based product delivery](https://github.com/LRM-Teams/multica/pull/815), targeting `dev`.
 - PR state after creation: open, ready for review, and reported mergeable by GitHub. It is not a draft, so the repository merge control is available once required checks pass.
 - The GitHub App PR-creation call returned `403 Resource not accessible by integration`; authenticated `gh` with repository scope created the same PR as the documented fallback. This affected only the publication interface, not repository contents or validation.
+
+### Step 7 — Repair deployment migration compatibility
+
+Status: in progress
+
+Diagnosis evidence:
+
+- Deploy run `29816385159` for merge commit `a17879f20f397da4c67bc2efbc6ce31d81a8870d` built both images, then left the backend restart-looping because migration 205 failed with `SQLSTATE 23514`. The frontend remained healthy; Caddy's backend lookup and 502 errors followed from the backend process exiting and are not an independent proxy defect.
+- A read-only query against the deployed dev database found seven historical `schedule_reminder` rows and no action type outside the pre-205 constraint. Migration 205 is absent from `schema_migrations`, migration 204 remains the latest applied version, and the pre-205 check constraint is intact. PostgreSQL therefore rolled the failed migration statement back without leaving a partial schema.
+- The 205 migration removed `assign_issue` and `schedule_reminder` from the table constraint while adding `request_rework`. Removing parser acceptance prevents Beckham from proposing new unimplemented actions, but rewriting a check constraint also validates persisted audit history. These are separate boundaries and cannot share the narrower set.
+- `TestBeckhamProductDeliveryMigration205PreservesLegacyRadarActions` creates the pre-205 table, seeds both legacy action types, and executes the real up migration. Before the repair it fails with the same `agent_radar_action_action_type_check` violation and SQLSTATE as deployment.
+
+Decision:
+
+- Keep both legacy values in the database constraint so existing Radar audit rows remain valid. Continue rejecting new model-produced `assign_issue` and `schedule_reminder` plans in the parser; do not delete or rewrite deployed history.
+- Validate the up and down migrations against seeded legacy history, the new `request_rework` value, and an unknown value before publication.
+
+Repair and verification:
+
+- Migration 205 now keeps `assign_issue` and `schedule_reminder` in the persistence constraint while adding `request_rework`. No executor, parser, proxy, container-startup, or deployed data path was changed.
+- The migration regression test passes in both directions. It proves legacy rows survive up and down, `request_rework` is accepted only after up and removed by down, and unknown actions still fail with `23514`.
+- The parser boundary tests pass: Beckham still rejects newly proposed `assign_issue` and `schedule_reminder` actions and accepts `request_rework`.
+- A disposable local database was created, migrated from 001 through the repaired 205, and used to run `./cmd/migrate`, `./internal/radar`, and `./internal/migrations`; all passed. `go vet` for those packages also passed. The disposable database was then dropped.
+- The first Radar package run against the default local database failed because that database records old migrations while missing `refresh_workspace_radar_time_signals`. A read-only production query confirmed the deployed database has the function, and the fully migrated disposable database passed both affected tests. This is stale local state, not a deployed user-path defect, so no product fallback or unrelated migration was added.

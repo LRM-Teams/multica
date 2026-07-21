@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -244,7 +245,7 @@ func TestWendyOwnGroupMessageDoesNotTouchAmbientWatch(t *testing.T) {
 	}
 
 	testHandler.ingestWendyAgentGroupMessage(context.Background(), ch, ChannelMessageResponse{
-		Content: "@someone 请继续下一棒",
+		Content:   "@someone 请继续下一棒",
 		CreatedAt: time.Now().Add(2 * time.Minute).UTC().Format(time.RFC3339Nano),
 	}, supervisor.ID)
 
@@ -269,7 +270,20 @@ func TestWendyAmbientDispatchEnqueuesEventRadarRun(t *testing.T) {
 	}
 
 	supervisor := createRadarSupervisorForExecutorTest(t)
+	var projectID string
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO project (workspace_id, title)
+		VALUES ($1, $2)
+		RETURNING id
+	`, testWorkspaceID, "Ambient Dispatch Project "+uuid.NewString()).Scan(&projectID); err != nil {
+		t.Fatalf("create ambient dispatch project: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM project WHERE id = $1`, projectID) })
+
 	channelID := seedChannelForTest(t, "wendy-ambient-dispatch-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(context.Background(), `UPDATE channel SET project_id = $1 WHERE id = $2`, projectID, channelID); err != nil {
+		t.Fatalf("bind ambient dispatch project: %v", err)
+	}
 	addRadarAgentMembersForExecutorTest(t, channelID, supervisor.ID.String())
 	bindWendySupervisorForHandoffTest(t, supervisor.ID.String())
 	bindChannelGroupManagerForTest(t, channelID, supervisor.ID.String())
@@ -308,22 +322,38 @@ func TestWendyAmbientDispatchEnqueuesEventRadarRun(t *testing.T) {
 		t.Fatalf("enqueued ambient reviews = %d, want 1", enqueued)
 	}
 
-	var runID pgtype.UUID
+	var runID, taskID pgtype.UUID
 	var triggerKind, cooldownKey, status string
 	err = testPool.QueryRow(context.Background(), `
-		SELECT id, trigger_kind, cooldown_key, status
+		SELECT id, task_id, trigger_kind, cooldown_key, status
 		FROM agent_radar_run
 		WHERE workspace_id = $1
 		  AND agent_id = $2
 		  AND cooldown_key = $3
 		ORDER BY created_at DESC
 		LIMIT 1
-	`, testWorkspaceID, supervisor.ID, "wendy_ambient:"+channelID).Scan(&runID, &triggerKind, &cooldownKey, &status)
+	`, testWorkspaceID, supervisor.ID, "wendy_ambient:"+channelID).Scan(&runID, &taskID, &triggerKind, &cooldownKey, &status)
 	if err != nil {
 		t.Fatalf("load ambient radar run: %v", err)
 	}
 	if triggerKind != "event" || status != "queued" {
 		t.Fatalf("ambient radar run trigger=%q status=%q, want event queued", triggerKind, status)
+	}
+
+	var taskContext []byte
+	if err := testPool.QueryRow(context.Background(), `SELECT context FROM agent_task_queue WHERE id = $1`, taskID).Scan(&taskContext); err != nil {
+		t.Fatalf("load ambient task context: %v", err)
+	}
+	var radarContext struct {
+		ChannelID   string `json:"channel_id"`
+		ProjectID   string `json:"project_id"`
+		ContextMode string `json:"context_mode"`
+	}
+	if err := json.Unmarshal(taskContext, &radarContext); err != nil {
+		t.Fatalf("decode ambient task context: %v", err)
+	}
+	if radarContext.ChannelID != channelID || radarContext.ProjectID != projectID || radarContext.ContextMode != "coordination" {
+		t.Fatalf("ambient task scope = %+v, want channel=%s project=%s mode=coordination", radarContext, channelID, projectID)
 	}
 
 	// #2: the review is in flight after enqueue — dirty stays set and the row is

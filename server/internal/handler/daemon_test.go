@@ -2325,9 +2325,32 @@ func TestRadarTaskLifecycle_ResolvesWorkspaceFromLinkedRun(t *testing.T) {
 
 	ctx := context.Background()
 	agentID, runtimeID, daemonID := createRuntimeGuardAgent(t, ctx)
+	var projectID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO project (workspace_id, title)
+		VALUES ($1, 'Radar Project Context')
+		RETURNING id
+	`, testWorkspaceID).Scan(&projectID); err != nil {
+		t.Fatalf("create Radar project: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM project WHERE id = $1`, projectID) })
+	const radarRepoURL = "https://github.com/example/radar-project-context"
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO project_resource (project_id, workspace_id, resource_type, resource_ref)
+		VALUES ($1, $2, 'github_repo', $3::jsonb)
+	`, projectID, testWorkspaceID, `{"url":"`+radarRepoURL+`"}`); err != nil {
+		t.Fatalf("create Radar project resource: %v", err)
+	}
+	channelID := seedChannelForTest(t, "radar-project-context-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `UPDATE channel SET project_id = $1 WHERE id = $2`, projectID, channelID); err != nil {
+		t.Fatalf("bind Radar channel project: %v", err)
+	}
 	run, task, err := testHandler.TaskService.EnqueueAgentRadarRun(ctx, service.EnqueueAgentRadarRunParams{
 		WorkspaceID:    parseUUID(testWorkspaceID),
 		AgentID:        parseUUID(agentID),
+		ChannelID:      parseUUID(channelID),
+		ProjectID:      parseUUID(projectID),
+		ContextMode:    "coordination",
 		TriggerKind:    "manual",
 		TriggerRef:     "daemon-lifecycle-regression",
 		CooldownKey:    "daemon-lifecycle-regression",
@@ -2352,6 +2375,13 @@ func TestRadarTaskLifecycle_ResolvesWorkspaceFromLinkedRun(t *testing.T) {
 	taskID := uuidToString(task.ID)
 	if claimed.ID != taskID {
 		t.Fatalf("claimed task = %q, want Radar task %q", claimed.ID, taskID)
+	}
+	if claimed.ChannelID != channelID || claimed.ProjectID != projectID {
+		t.Fatalf("claimed Radar scope channel=%q project=%q, want channel=%q project=%q",
+			claimed.ChannelID, claimed.ProjectID, channelID, projectID)
+	}
+	if len(claimed.Repos) != 1 || claimed.Repos[0].URL != radarRepoURL || len(claimed.ProjectResources) != 1 {
+		t.Fatalf("claimed Radar project resources = repos:%+v resources:%+v", claimed.Repos, claimed.ProjectResources)
 	}
 
 	w := httptest.NewRecorder()
@@ -3946,13 +3976,17 @@ func TestCompleteTask_AssignmentTriggered_DoesNotSuppressTrivialDoneOutput(t *te
 }
 
 type claimRuntimeGuardTask struct {
-	ID                       string   `json:"id"`
-	PriorSessionID           string   `json:"prior_session_id"`
-	PriorWorkDir             string   `json:"prior_work_dir"`
-	ChatMessage              string   `json:"chat_message"`
-	ChatContextSummary       string   `json:"chat_context_summary"`
-	ThreadName               string   `json:"thread_name"`
-	QuickCreateAttachmentIDs []string `json:"quick_create_attachment_ids"`
+	ID                       string                `json:"id"`
+	ProjectID                string                `json:"project_id"`
+	ChannelID                string                `json:"channel_id"`
+	Repos                    []RepoData            `json:"repos"`
+	ProjectResources         []ProjectResourceData `json:"project_resources"`
+	PriorSessionID           string                `json:"prior_session_id"`
+	PriorWorkDir             string                `json:"prior_work_dir"`
+	ChatMessage              string                `json:"chat_message"`
+	ChatContextSummary       string                `json:"chat_context_summary"`
+	ThreadName               string                `json:"thread_name"`
+	QuickCreateAttachmentIDs []string              `json:"quick_create_attachment_ids"`
 }
 
 func claimTaskForRuntimeGuard(t *testing.T, runtimeID, daemonID string) *claimRuntimeGuardTask {

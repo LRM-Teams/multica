@@ -142,6 +142,9 @@ func (h *Handler) DispatchIdleNudges(ctx context.Context, limit int32) (int, err
 		_, _, err = h.TaskService.EnqueueAgentRadarRun(ctx, service.EnqueueAgentRadarRunParams{
 			WorkspaceID:    c.workspaceID,
 			AgentID:        c.managerID,
+			ChannelID:      c.channelID,
+			ProjectID:      ambientChannelProjectID(channel),
+			ContextMode:    beckhamContextModeCoordination,
 			TriggerKind:    "event",
 			TriggerRef:     triggerRef,
 			CooldownKey:    "wendy_ambient:" + uuidToString(c.channelID),

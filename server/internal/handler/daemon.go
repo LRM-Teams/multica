@@ -1850,6 +1850,36 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 				resp.ThreadName = "agent radar"
 				resp.Kind = "agent_radar"
 				resp.WorkspaceID = runtimeWorkspaceID
+
+				// Channel-scoped Radar reviews must see the same canonical project
+				// identity and resources as a directed chat in that channel. Resolve
+				// the channel first so a stale/tampered task context cannot attach a
+				// review to another channel or project in the workspace.
+				var radarProjectID pgtype.UUID
+				if channelID, parseErr := util.ParseUUID(radarCtx.ChannelID); parseErr == nil {
+					if radarChannel, found := h.getChannel(r.Context(), runtimeWorkspaceID, channelID); found {
+						resp.ChannelID = radarChannel.ID
+						radarProjectID = ambientChannelProjectID(radarChannel)
+					}
+				}
+				if !radarProjectID.Valid && resp.ChannelID == "" {
+					if projectID, parseErr := util.ParseUUID(radarCtx.ProjectID); parseErr == nil {
+						radarProjectID = projectID
+					}
+				}
+				if radarProjectID.Valid {
+					project, projectErr := h.Queries.GetProjectInWorkspace(r.Context(), db.GetProjectInWorkspaceParams{
+						ID:          radarProjectID,
+						WorkspaceID: runtime.WorkspaceID,
+					})
+					if projectErr == nil {
+						resp.ProjectID = uuidToString(project.ID)
+						resp.ProjectTitle = project.Title
+						resources, repos := h.mapProjectResources(r.Context(), project.ID)
+						resp.ProjectResources = resources
+						resp.Repos = repos
+					}
+				}
 			}
 		}
 	}

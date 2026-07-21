@@ -61,6 +61,7 @@ func TestBuildAmbientChannelPromptCoversCoordinationActions(t *testing.T) {
 		"no_action",
 		"mention_agent",
 		"create_issue",
+		`"project_id":"<project uuid from Project; omit only when the channel is unbound>"`,
 		"post_channel_message",
 		"untrusted evidence",
 		"Return at most 5 actions",

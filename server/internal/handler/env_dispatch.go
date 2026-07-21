@@ -489,7 +489,26 @@ func newEnvDispatchDepsAdapter(h *Handler) service.EnvDispatchDeps {
 	if h.Queries == nil {
 		return &stubEnvDispatchDeps{}
 	}
-	return &envDispatchDepsAdapter{h: h}
+	adapter := &envDispatchDepsAdapter{h: h}
+	// Wire the env-dispatch run checker so interaction-dag seams can route
+	// non-training env-dispatch tasks to local task_messages recording.
+	if h.TaskService != nil {
+		h.TaskService.EnvDispatchCheck = adapter
+	}
+	return adapter
+}
+
+// HasEnvDispatchRun reports whether the project has an env_dispatch_run row,
+// indicating it was created via env-dispatch. Used by interaction-dag seams
+// to gate local trajectory recording for non-training dispatch tasks.
+func (a *envDispatchDepsAdapter) HasEnvDispatchRun(ctx context.Context, projectID string) (bool, error) {
+	pid := parseUUID(projectID)
+	var exists bool
+	err := a.h.DB.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM env_dispatch_run WHERE project_id = $1)", pid).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
 }
 
 // envDispatchDepsAdapter bridges service.EnvDispatchDeps to *Handler.Queries

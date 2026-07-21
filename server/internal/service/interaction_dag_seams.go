@@ -20,6 +20,14 @@ const (
 	closingEventSquadBriefing = "squad_briefing"
 )
 
+// EnvDispatchRunChecker checks whether a project was created via env-dispatch.
+// The interaction-dag seams use this to decide between AReaL bridge recording
+// (training mode) and local task_messages recording (non-training mode).
+// Nil means no env-dispatch awareness (no-op for non-proxy tasks).
+type EnvDispatchRunChecker interface {
+	HasEnvDispatchRun(ctx context.Context, projectID string) (bool, error)
+}
+
 // closeSegmentForDelegation is the normal delegation event seam (D11): the
 // trained parent that posted the trigger comment is delegating to a child task.
 func (s *TaskService) closeSegmentForDelegation(ctx context.Context, parent db.AgentTaskQueue, projectID string, envSnapshot map[string]any) {
@@ -45,14 +53,27 @@ func isSquadContextHandoff(parent db.AgentTaskQueue, childIsSquadLeader bool) bo
 // (it delegated earlier), this is a no-op. Best-effort: errors are logged and
 // the run continues. envSnapshot is the lean {sandbox_ids, env_state} shape
 // resolved by the caller (SandboxRefs are not in hand at the task.go seams).
+//
+// Routing:
+//   - Training task (has areal_proxy context) → AReaL bridge (CloseSegmentForEvent, export)
+//   - Non-training env-dispatch task (no proxy, but env_dispatch_run exists) → local
+//     task_messages recording via RecordLocalSegmentForEvent
+//   - Neither → no-op (ordinary task, not in an env-dispatch project)
 func (s *TaskService) closeSegmentForDelegationEvent(ctx context.Context, parent db.AgentTaskQueue, projectID string, closingEvent string, envSnapshot map[string]any) {
 	if s.Training == nil || s.Training.DAG == nil || !s.Training.DAG.Enabled() {
 		return
 	}
 	cfg, ok := extractArealProxyConfig(parent.Context)
-	if !ok {
+	if ok {
+		s.closeTrainedSegmentForDelegation(ctx, parent, projectID, closingEvent, envSnapshot, cfg)
 		return
 	}
+	// Non-training env-dispatch: record locally via task_messages.
+	s.maybeRecordLocalSegmentForEvent(ctx, parent, projectID, closingEvent, envSnapshot)
+}
+
+// closeTrainedSegmentForDelegation handles the AReaL bridge path for a training task.
+func (s *TaskService) closeTrainedSegmentForDelegation(ctx context.Context, parent db.AgentTaskQueue, projectID, closingEvent string, envSnapshot map[string]any, cfg *arealProxyConfig) {
 	parentRunID := util.UUIDToString(parent.ID)
 	// One-segment-per-task: skip if the parent already recorded a segment (a
 	// prior delegation closed it). SegmentIDForAgentRun returns ("", ErrNoRows)
@@ -86,14 +107,27 @@ func (s *TaskService) closeSegmentForDelegationEvent(ctx context.Context, parent
 // delegated earlier in its run). Best-effort. MUST run before the RL session is
 // ended (CloseSegmentForEvent exports the just-closed trajectory over the live
 // session) - the caller invokes this before RouteTerminalTrainingTask.
+//
+// Routing:
+//   - Training task (has areal_proxy context) → AReaL bridge (CloseSegmentForEvent, export)
+//   - Non-training env-dispatch task (no proxy, but env_dispatch_run exists) → local
+//     task_messages recording via RecordLocalSegmentForEvent
+//   - Neither → no-op (ordinary task, not in an env-dispatch project)
 func (s *TaskService) closeSegmentForTerminal(ctx context.Context, task db.AgentTaskQueue, projectID string, envSnapshot map[string]any) {
 	if s.Training == nil || s.Training.DAG == nil || !s.Training.DAG.Enabled() {
 		return
 	}
 	cfg, ok := extractArealProxyConfig(task.Context)
-	if !ok {
+	if ok {
+		s.closeTrainedSegmentForTerminal(ctx, task, projectID, envSnapshot, cfg)
 		return
 	}
+	// Non-training env-dispatch: record locally via task_messages.
+	s.maybeRecordLocalSegmentForEvent(ctx, task, projectID, "", envSnapshot)
+}
+
+// closeTrainedSegmentForTerminal handles the AReaL bridge path for a training task.
+func (s *TaskService) closeTrainedSegmentForTerminal(ctx context.Context, task db.AgentTaskQueue, projectID string, envSnapshot map[string]any, cfg *arealProxyConfig) {
 	runID := util.UUIDToString(task.ID)
 	if existing, err := s.Training.DAG.SegmentIDForAgentRun(ctx, runID); err == nil && existing != "" {
 		return // already closed via an earlier delegation
@@ -112,6 +146,57 @@ func (s *TaskService) closeSegmentForTerminal(ctx context.Context, task db.Agent
 		if parentSeg, err := s.Training.DAG.SegmentIDForAgentRun(ctx, util.UUIDToString(task.ParentTaskID)); err == nil && parentSeg != "" {
 			if err := s.Training.DAG.AddEdge(ctx, projectID, parentSeg, segID, closingEventDelegation); err != nil {
 				slog.Warn("interaction_dag: delegation edge failed", "err", err)
+			}
+		}
+	}
+}
+
+// maybeRecordLocalSegmentForEvent checks whether the task belongs to an
+// env-dispatch project and, if so, records a local segment via
+// RecordLocalSegmentForEvent. The task is non-training (no areal_proxy context).
+// Zero AReaL client calls are made in this path. Recording is best-effort:
+// errors are logged and the run continues.
+func (s *TaskService) maybeRecordLocalSegmentForEvent(ctx context.Context, task db.AgentTaskQueue, projectID, closingEvent string, envSnapshot map[string]any) {
+	if s.EnvDispatchCheck == nil {
+		return
+	}
+	isDispatch, err := s.EnvDispatchCheck.HasEnvDispatchRun(ctx, projectID)
+	if err != nil {
+		slog.Warn("interaction_dag: env_dispatch check failed",
+			"task_id", util.UUIDToString(task.ID),
+			"project_id", projectID,
+			"error", err,
+		)
+		return
+	}
+	if !isDispatch {
+		return
+	}
+	runID := util.UUIDToString(task.ID)
+	// One-segment-per-task: skip if this task already recorded a segment.
+	if existing, err := s.Training.DAG.SegmentIDForAgentRun(ctx, runID); err == nil && existing != "" {
+		return
+	}
+	// Determine closingEvent for the terminal seam.
+	if closingEvent == "" {
+		if task.ParentTaskID.Valid {
+			closingEvent = closingEventCompletion
+		}
+	}
+	issueID := ""
+	if task.IssueID.Valid {
+		issueID = util.UUIDToString(task.IssueID)
+	}
+	segID, err := s.Training.DAG.RecordLocalSegmentForEvent(ctx, projectID, runID, issueID, closingEvent, envSnapshot)
+	if err != nil {
+		slog.Warn("interaction_dag: local segment record failed", "task_id", runID, "err", err)
+		return
+	}
+	// Delegation edge parent->child, recorded at the child's close.
+	if task.ParentTaskID.Valid {
+		if parentSeg, err := s.Training.DAG.SegmentIDForAgentRun(ctx, util.UUIDToString(task.ParentTaskID)); err == nil && parentSeg != "" {
+			if err := s.Training.DAG.AddEdge(ctx, projectID, parentSeg, segID, closingEventDelegation); err != nil {
+				slog.Warn("interaction_dag: local delegation edge failed", "err", err)
 			}
 		}
 	}

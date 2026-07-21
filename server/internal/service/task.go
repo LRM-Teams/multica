@@ -83,6 +83,14 @@ type TaskService struct {
 	// for this deployment; the hook is then a no-op. Wired in Task 8 (config).
 	Training *TrainingSessionDeps
 
+	// EnvDispatchCheck, when non-nil, checks whether a project was created via
+	// env-dispatch. The interaction-dag seams use this to decide between AReaL
+	// bridge recording (training mode, areal_proxy present) and local
+	// task_messages recording (non-training mode, env-dispatch project without
+	// proxy). Nil = no env-dispatch awareness (no-op for non-proxy tasks).
+	// Wired by the handler in env_dispatch.go (newEnvDispatchDepsAdapter).
+	EnvDispatchCheck EnvDispatchRunChecker
+
 	// EphemeralSandboxCleaner, when non-nil, enables the Phase 5 sandbox
 	// cleanup hook at task terminal. Nil = no-op (sandbox cleanup not
 	// configured). Wired by the handler to the env-sandbox-lifecycle adapter.

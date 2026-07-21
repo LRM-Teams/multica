@@ -55,6 +55,8 @@
     "copy_link": "リンクをコピー",
     "delete_action": "プロジェクトを削除",
     "section_properties": "プロパティ",
+    "prop_associated_groups": "関連グループ",
+    "no_associated_groups": "関連グループはありません",
     "section_progress": "進捗",
     "section_description": "説明",
     "description_placeholder": "説明を追加...",

@@ -52,6 +52,7 @@ import { toast } from "sonner";
 import { StatusIcon, PriorityIcon, StatusPicker, PriorityPicker, StartDatePicker, DueDatePicker, AssigneePicker, LabelPicker } from ".";
 import { IssueActionsDropdown, useIssueActions } from "../actions";
 import { ProjectPicker } from "../../projects/components/project-picker";
+import { AssociatedGroupPicker } from "./associated-group-picker";
 import { LocalDirectoryHint } from "../../projects/components/local-directory-hint";
 import { CommentCard } from "./comment-card";
 import { CommentInput } from "./comment-input";
@@ -1439,6 +1440,9 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               projectId={issue.project_id}
               onUpdate={handleUpdateField}
             />
+          </PropRow>
+          <PropRow label={t(($) => $.detail.prop_associated_group)}>
+            <AssociatedGroupPicker issueId={issue.id} channel={issue.channel ?? null} />
           </PropRow>
 
           {/* Optional props — rendered only when set on the issue OR added

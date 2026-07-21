@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useCallback, useRef, useEffect } from "react";
 import { useDefaultLayout, usePanelRef } from "react-resizable-panels";
-import { Check, ChevronRight, Link2, ListTodo, MoreHorizontal, PanelRight, Pin, PinOff, Plus, Trash2, UserMinus } from "lucide-react";
+import { Check, ChevronRight, Hash, Link2, ListTodo, MoreHorizontal, PanelRight, Pin, PinOff, Plus, Trash2, UserMinus } from "lucide-react";
 import { useQuery, type QueryKey } from "@tanstack/react-query";
 import { cn } from "@multica/ui/lib/utils";
 import { copyText } from "@multica/ui/lib/clipboard";
@@ -38,7 +38,8 @@ import { filterIssues } from "../../issues/utils/filter";
 import { getProjectIssueMetrics } from "./project-issue-metrics";
 import { filterRunningAssigneeGroups } from "./project-issue-filters";
 import { ActorAvatar } from "../../common/actor-avatar";
-import { useNavigation } from "../../navigation";
+import { useNavigation, AppLink } from "../../navigation";
+import { projectChannelsOptions } from "@multica/core/channels";
 import { TitleEditor, ContentEditor, type ContentEditorRef } from "../../editor";
 import { PriorityIcon } from "../../issues/components/priority-icon";
 import { ProjectResourcesSection } from "./project-resources-section";
@@ -417,6 +418,9 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
   const router = useNavigation();
   const userId = useAuthStore((s) => s.user?.id);
   const { data: project, isLoading } = useQuery(projectDetailOptions(wsId, projectId));
+  // Groups bound to this project (#629) — a reverse-only, read-only navigation
+  // row; binding happens on the channel side, not here.
+  const { data: associatedChannels = [] } = useQuery(projectChannelsOptions(wsId, projectId));
   const recordRecentContext = useRecentContextStore((s) => s.recordVisit);
   useEffect(() => {
     if (project) {
@@ -680,6 +684,29 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
                 </div>
               </PopoverContent>
             </Popover>
+          </PropRow>
+          {/* Associated groups (#629) — reverse-only, read-only navigation to the
+              channels bound to this project. Binding is done channel-side; this
+              row never creates a binding. Honest empty state when none. */}
+          <PropRow label={t(($) => $.detail.prop_associated_groups)}>
+            {associatedChannels.length > 0 ? (
+              <div className="flex min-w-0 flex-col gap-1">
+                {associatedChannels.map((ch) => (
+                  <AppLink
+                    key={ch.id}
+                    href={wsPaths.channelDetail(ch.id)}
+                    className="inline-flex min-w-0 items-center gap-1.5 text-xs transition-colors hover:text-foreground"
+                  >
+                    <Hash className="size-3 shrink-0 text-muted-foreground" />
+                    <span className="truncate">{ch.name}</span>
+                  </AppLink>
+                ))}
+              </div>
+            ) : (
+              <span className="text-xs text-muted-foreground">
+                {t(($) => $.detail.no_associated_groups)}
+              </span>
+            )}
           </PropRow>
         </div>}
       </div>

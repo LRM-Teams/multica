@@ -55,6 +55,8 @@
     "copy_link": "링크 복사",
     "delete_action": "프로젝트 삭제",
     "section_properties": "속성",
+    "prop_associated_groups": "연결된 그룹",
+    "no_associated_groups": "연결된 그룹 없음",
     "section_progress": "진행률",
     "section_description": "설명",
     "description_placeholder": "설명 추가...",

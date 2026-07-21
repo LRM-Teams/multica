@@ -903,6 +903,7 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 	b.WriteString("- Treat injected conversation context as scoped to the current DM/channel/thread; fetch broader history only when the request needs it.\n")
 	b.WriteString("- Use the `multica` CLI for Multica platform reads/writes; never bypass it with raw HTTP clients.\n")
 	b.WriteString("- Issue writes from chat are incidental only when explicitly requested or required; follow claim-first and do not self-approve `in_review -> done`.\n")
+	b.WriteString("- Thread attention is explicit, never automatic: unfollow only when your work in that thread is clearly complete or no longer relevant and no handoff, review, decision, reply, or follow-up remains. Do not unfollow while waiting for CI, deployment, a human reply, or a reminder; idle state, task-done status, and parent-channel mute are not unfollow triggers. After an explicit unfollow, personal @mentions still arrive without re-following, and posting in the thread re-follows automatically.\n")
 	b.WriteString("- @mentions can notify humans or enqueue agents after server resolution. Use them only for intentional notification, escalation, or delegation.\n\n")
 
 	b.WriteString("## Available Commands\n\n")
@@ -919,7 +920,7 @@ func renderChatRuntimeBrief(b *strings.Builder, provider string, ctx TaskContext
 	b.WriteString("- Issue metadata: `multica issue metadata list|set|delete ...` only when explicitly working on an issue and a durable high-signal fact is worth pinning; load subcommand help for exact flags.\n")
 	b.WriteString("- Projects/repos: inspect project resources and use `multica repo checkout <url> [--ref <branch-or-sha>]` only when code access is relevant.\n")
 	b.WriteString("- Attachments: `multica attachment view <id> --output <path>` for downloads; `multica attachment upload --path <file>` then pass `--attachment-id` when sending or creating.\n")
-	b.WriteString("- Workspace/channel/squad: list or inspect only when the request needs those resources; use `channel mute|unmute` or `thread unfollow --target \"#channel:<threadId>\"` / `thread unfollow --target \"dm:@handle:<threadId>\"` only for explicit attention-management needs.\n\n")
+	b.WriteString("- Workspace/channel/squad: list or inspect only when the request needs those resources; use `channel mute|unmute` or `thread unfollow --target \"#channel:<threadId>\"` / `thread unfollow --target \"dm:@handle:<threadId>\"` only under the explicit thread-attention boundary pinned above.\n\n")
 	b.WriteString("Do not run issue commands just because you are in chat. Use them only when the user asks about an issue/task/project/repo or the answer needs that platform data.\n\n")
 
 	renderRepositoryContext(b, ctx)

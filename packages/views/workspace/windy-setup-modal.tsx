@@ -27,7 +27,6 @@ import { ModelDropdown } from "../agents/components/model-dropdown";
 import { ThinkingDropdown } from "../agents/components/thinking-dropdown";
 import {
   WINDY_AGENT_NAME,
-  WINDY_AVATAR_URL,
   WINDY_DESCRIPTION,
   WINDY_INSTRUCTIONS,
 } from "../onboarding/templates";
@@ -122,11 +121,15 @@ export function WindySetupModal({ open, onOpenChange, onConfigured }: WindySetup
     updateState({ saving: true });
     try {
       const ensured = await api.ensureWindy(effectiveRuntimeId);
+      // #599: no avatar_selection here — ensureWindy already assigns
+      // WINDY_AVATAR_URL server-side (`assigned` provenance) whenever it
+      // creates the Windy agent, so resubmitting it here would be a raw
+      // URL round-trip through a client-owned constant. Let the server's
+      // own baseline stand.
       const updated = await api.updateAgent(ensured.agent.id, {
         display_name: WINDY_AGENT_NAME,
         description: WINDY_DESCRIPTION,
         instructions: WINDY_INSTRUCTIONS,
-        avatar_url: WINDY_AVATAR_URL,
         runtime_id: effectiveRuntimeId,
         model: model.trim(),
         thinking_level: thinkingLevel,

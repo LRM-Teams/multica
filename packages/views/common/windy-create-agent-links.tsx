@@ -147,7 +147,10 @@ function InlineCreateAgentDialog({
         display_name: draft.name,
         description: draft.description,
         instructions: draft.instructions,
-        avatar_url: draft.avatar_url ?? undefined,
+        // #599: avatar_selection is intentionally omitted — the server
+        // resolves the draft's suggested avatar itself via draft_id and
+        // records it as `assigned`. draft.avatar_url is a preview-only
+        // suggestion string; it must never be resubmitted as a raw URL.
         visibility: draft.visibility,
         runtime_id: selectedRuntime.id,
         model: model.trim() || undefined,

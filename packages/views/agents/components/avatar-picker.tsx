@@ -9,12 +9,20 @@ import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n";
 
+/** What the picker hands back after a successful upload: the attachment id
+ * the server needs for `avatar_selection` plus the URL for local preview. */
+export interface AvatarPickerSelection {
+  attachmentId: string;
+  previewUrl: string;
+}
+
 interface AvatarPickerProps {
-  /** Current avatar URL. null when nothing chosen yet. */
+  /** Current preview URL. null when nothing chosen yet. */
   value: string | null;
-  /** Fires after a successful upload — the parent stashes the URL for the
-   *  create call. Re-fires with null when the user clears the choice. */
-  onChange: (url: string | null) => void;
+  /** Fires after a successful upload with the attachment id the parent
+   *  must submit as `avatar_selection`. Re-fires with null when the user
+   *  clears the choice. */
+  onChange: (selection: AvatarPickerSelection | null) => void;
   /** Pixel size of the square. Defaults to 56 (h-14 / w-14), which lines
    *  up vertically with the Name + Description stack in the create-agent
    *  form so the two read as a single visual row. */
@@ -51,7 +59,7 @@ export function AvatarPicker({ value, onChange, size = 56 }: AvatarPickerProps) 
       const result = await upload(file);
       if (!result) return;
       setPreviewError(false);
-      onChange(result.link);
+      onChange({ attachmentId: result.id, previewUrl: result.link });
     } catch (err) {
       toast.error(
         err instanceof Error

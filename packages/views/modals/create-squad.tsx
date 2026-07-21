@@ -157,7 +157,11 @@ export function CreateSquadModal({ onClose }: { onClose: () => void }) {
             {/* Identity row mirrors CreateAgentDialog so the two creates read
                 as siblings — avatar (left) + name/description stack (right). */}
             <div className="flex items-start gap-4">
-              <AvatarPicker value={avatarUrl} onChange={setAvatarUrl} size={64} />
+              <AvatarPicker
+                value={avatarUrl}
+                onChange={(selection) => setAvatarUrl(selection?.previewUrl ?? null)}
+                size={64}
+              />
               <div className="flex-1 min-w-0 space-y-3">
                 <div>
                   <Label className="text-xs text-muted-foreground">

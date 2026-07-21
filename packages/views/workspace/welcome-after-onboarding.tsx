@@ -173,7 +173,12 @@ async function findOrCreateHelper(
       display_name: HELPER_AGENT_NAME,
       description: HELPER_DESCRIPTION[lang],
       instructions: HELPER_INSTRUCTIONS[lang],
-      avatar_url: HELPER_AVATAR_URL,
+      // #599: no trusted avatar fact exists for this inline SVG brand mark
+      // (it's neither an uploaded attachment nor a canonical preset) —
+      // fail closed and omit avatar_selection rather than smuggle a raw
+      // URL through. The Helper gets the server's assigned default until
+      // its brand mark has a real server-owned path (registered preset or
+      // an internal ensure-style write like Windy/Beckham).
       runtime_id: runtimeId,
       visibility: "workspace",
       max_concurrent_tasks: 6,

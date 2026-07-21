@@ -159,15 +159,9 @@ const ISSUE_STATUS_KEYS = new Set<string>([
 ]);
 
 // Public actor type ("human" | "agent") → the identity-cache actor type
-// getActorName resolves against. Humans live in the member cache. Still used
-// by ProjectSystemEventContent's plain-text actor below.
-function toActorType(type: string | undefined): string {
-  return type === "agent" ? "agent" : "member";
-}
-
-// Same mapping, but returning null for an unrecognized/missing type so the
-// issue actor token can fall back to an honest plain label instead of
-// guessing "member" (#603 — a missing typed fact must never fabricate a
+// getActorName resolves against, or null for an unrecognized/missing type so
+// a system-event actor token can fall back to an honest plain label instead
+// of guessing "member" (#603 — a missing typed fact must never fabricate a
 // clickable identity).
 function toActorMentionType(type: string | undefined): "agent" | "member" | null {
   if (type === "agent") return "agent";
@@ -280,16 +274,18 @@ export function IssueSystemEventContent({
   );
 }
 
-// The project name is the SOLE clickable object in a channel↔project row (#610,
-// the same one-object rule the issue rows follow). Splits the localized template
-// on the `{project}` / `{previous}` slots so word order stays per-locale while
-// the FE owns the interactive node. The actor rides i18next's `{{ }}`
-// interpolation as plain text — never a token.
+// The project name is its own clickable object in a channel↔project row (#610,
+// the same one-object-per-thing rule the issue rows follow) — independent from
+// the actor's own @mention token (#603): each owns its own hover/link
+// semantics, never a merged click region. Splits the localized template on the
+// `{actor}` / `{project}` / `{previous}` slots so word order stays per-locale
+// while the FE owns the interactive nodes.
 function interpolateProjectSlots(
   template: string,
-  slots: { project?: ReactNode; previous?: ReactNode },
+  slots: { actor: ReactNode; project?: ReactNode; previous?: ReactNode },
 ): ReactNode {
-  return template.split(/(\{project\}|\{previous\})/g).map((segment, index) => {
+  return template.split(/(\{actor\}|\{project\}|\{previous\})/g).map((segment, index) => {
+    if (segment === "{actor}") return <Fragment key={index}>{slots.actor}</Fragment>;
     if (segment === "{project}") return <Fragment key={index}>{slots.project}</Fragment>;
     if (segment === "{previous}") return <Fragment key={index}>{slots.previous}</Fragment>;
     if (!segment) return null;
@@ -298,15 +294,15 @@ function interpolateProjectSlots(
 }
 
 /**
- * Renders a channel↔project association row (#610) as localized copy whose SOLE
- * clickable object is a project name — actor stays plain display-text (never a
- * bare handle), matching the issue rows' one-object rule (Parker/Iris口径).
- *
- * Which project links follows the row's subject: `bound`/`changed` link the
- * CURRENT (new) project; `unbound` links the PREVIOUS one (its only object, per
- * Barry's contract — `previous_project_id` is a valid target). A name only links
- * when its id + the project route are available; otherwise it degrades to plain
- * text (e.g. before the #576 project page ships), never a dead/empty link.
+ * Renders a channel↔project association row (#610) as localized copy with two
+ * independent interactive objects: the actor (#603 — the same @mention token
+ * issue/member rows use, once a typed actor fact exists) and the project name
+ * (#610's own one-object rule: `bound`/`changed` link the CURRENT project,
+ * `unbound` links the PREVIOUS one — Barry's contract). Neither shares the
+ * other's hover/click region. A project name only links when its id + the
+ * project route are available; otherwise it degrades to plain text (e.g.
+ * before the #576 project page ships), never a dead/empty link. A missing
+ * actor fact degrades the same honest way the issue rows do.
  */
 export function ProjectSystemEventContent({ event }: { event: ProjectSystemEvent }): ReactNode {
   const { t } = useT("channels");
@@ -314,11 +310,19 @@ export function ProjectSystemEventContent({ event }: { event: ProjectSystemEvent
   const paths = useWorkspacePaths();
   const navigation = useOptionalNavigation();
 
-  const resolvedActor = event.actorId
-    ? getActorName(toActorType(event.actorType), event.actorId, event.actorName)
-    : undefined;
+  const actorType = toActorMentionType(event.actorType);
   const actor =
-    resolvedActor ?? event.actorName ?? t(($) => $.message.system_event.project.actor_system);
+    event.actorId && actorType ? (
+      <SystemEventActorToken
+        actor={{
+          type: actorType,
+          id: event.actorId,
+          displayName: getActorName(actorType, event.actorId, event.actorName),
+        }}
+      />
+    ) : (
+      event.actorName ?? t(($) => $.message.system_event.project.actor_system)
+    );
 
   // A project name → clickable token when we can route to it, else plain text.
   const projectNode = (title?: string, id?: string, linkable?: boolean): ReactNode => {
@@ -340,17 +344,20 @@ export function ProjectSystemEventContent({ event }: { event: ProjectSystemEvent
   };
 
   if (event.event === PROJECT_EVENTS.bound) {
-    return interpolateProjectSlots(t(($) => $.message.system_event.project.bound, { actor }), {
+    return interpolateProjectSlots(t(($) => $.message.system_event.project.bound), {
+      actor,
       project: projectNode(event.projectTitle, event.projectId, true),
     });
   }
   if (event.event === PROJECT_EVENTS.changed) {
-    return interpolateProjectSlots(t(($) => $.message.system_event.project.changed, { actor }), {
+    return interpolateProjectSlots(t(($) => $.message.system_event.project.changed), {
+      actor,
       project: projectNode(event.projectTitle, event.projectId, true),
       previous: projectNode(event.previousProjectTitle, event.previousProjectId, false),
     });
   }
-  return interpolateProjectSlots(t(($) => $.message.system_event.project.unbound, { actor }), {
+  return interpolateProjectSlots(t(($) => $.message.system_event.project.unbound), {
+    actor,
     previous: projectNode(event.previousProjectTitle, event.previousProjectId, true),
   });
 }

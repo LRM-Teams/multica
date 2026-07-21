@@ -166,9 +166,9 @@ vi.mock("../../i18n/use-t", () => ({
             },
             project: {
               actor_system: "Multica",
-              bound: "{{actor}} 把本群关联到项目「{project}」",
-              changed: "{{actor}} 把关联项目从「{previous}」改为「{project}」",
-              unbound: "{{actor}} 解除了与项目「{previous}」的关联",
+              bound: "{actor} 把本群关联到项目「{project}」",
+              changed: "{actor} 把关联项目从「{previous}」改为「{project}」",
+              unbound: "{actor} 解除了与项目「{previous}」的关联",
             },
           },
         },
@@ -676,12 +676,12 @@ describe("ProjectSystemEventContent", () => {
 
   it("renders a bind with the current project as the SOLE clickable object (#610)", () => {
     render(<ProjectSystemEventContent event={boundEvent} />);
-    expect(document.body.textContent).toBe("后端工程师 把本群关联到项目「Q3 Roadmap」");
+    expect(document.body.textContent).toBe("@后端工程师 把本群关联到项目「Q3 Roadmap」");
     const links = document.querySelectorAll("a");
     expect(links).toHaveLength(1);
     expect(links[0]).toHaveTextContent("Q3 Roadmap");
     expect(links[0]).toHaveAttribute("href", "/ws/projects/proj-1");
-    // The actor is plain display text — never a link/token.
+    // The actor is its own @mention token — never inside the project link.
     expect(links[0]).not.toHaveTextContent("后端工程师");
   });
 
@@ -699,7 +699,7 @@ describe("ProjectSystemEventContent", () => {
         }}
       />,
     );
-    expect(document.body.textContent).toBe("后端工程师 把关联项目从「Old Home」改为「New Home」");
+    expect(document.body.textContent).toBe("@后端工程师 把关联项目从「Old Home」改为「New Home」");
     const links = document.querySelectorAll("a");
     expect(links).toHaveLength(1);
     expect(links[0]).toHaveTextContent("New Home");
@@ -718,7 +718,7 @@ describe("ProjectSystemEventContent", () => {
         }}
       />,
     );
-    expect(document.body.textContent).toBe("后端工程师 解除了与项目「Old Home」的关联");
+    expect(document.body.textContent).toBe("@后端工程师 解除了与项目「Old Home」的关联");
     const links = document.querySelectorAll("a");
     expect(links).toHaveLength(1);
     expect(links[0]).toHaveTextContent("Old Home");
@@ -736,7 +736,7 @@ describe("ProjectSystemEventContent", () => {
         }}
       />,
     );
-    expect(document.body.textContent).toBe("后端工程师 把本群关联到项目「Untethered」");
+    expect(document.body.textContent).toBe("@后端工程师 把本群关联到项目「Untethered」");
     expect(document.querySelectorAll("a")).toHaveLength(0);
   });
 
@@ -753,6 +753,6 @@ describe("ProjectSystemEventContent", () => {
         }}
       />,
     );
-    expect(document.body.textContent).toBe("Lin 把本群关联到项目「Q3 Roadmap」");
+    expect(document.body.textContent).toBe("@Lin 把本群关联到项目「Q3 Roadmap」");
   });
 });

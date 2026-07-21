@@ -249,9 +249,9 @@
       },
       "project": {
         "actor_system": "Multica",
-        "bound": "{{actor}} linked this channel to project «{project}»",
-        "changed": "{{actor}} moved this channel from project «{previous}» to project «{project}»",
-        "unbound": "{{actor}} unlinked this channel from project «{previous}»"
+        "bound": "{actor} linked this channel to project «{project}»",
+        "changed": "{actor} moved this channel from project «{previous}» to project «{project}»",
+        "unbound": "{actor} unlinked this channel from project «{previous}»"
       }
     }
   },

@@ -249,9 +249,9 @@
       },
       "project": {
         "actor_system": "Multica",
-        "bound": "{{actor}} 把本群关联到项目「{project}」",
-        "changed": "{{actor}} 把关联项目从「{previous}」改为「{project}」",
-        "unbound": "{{actor}} 解除了与项目「{previous}」的关联"
+        "bound": "{actor} 把本群关联到项目「{project}」",
+        "changed": "{actor} 把关联项目从「{previous}」改为「{project}」",
+        "unbound": "{actor} 解除了与项目「{previous}」的关联"
       }
     }
   },

@@ -32,7 +32,7 @@ vi.mock("@multica/core/api", () => ({ api: apiMock.proxy }));
 
 // The system channel is deliberately NOT first in this array — ordering
 // must come from `system_key`, never array/list position.
-const CHANNELS = [
+const DEFAULT_CHANNELS = [
   {
     id: "chan-random",
     workspace_id: "ws-1",
@@ -58,6 +58,11 @@ const CHANNELS = [
   },
 ];
 
+// Mutable per-test channel list — a handful of tests need a different
+// workspace shape (no system channel at all; an unrecognized system_key)
+// without duplicating the whole mock setup into a second file.
+const channelsFixture = vi.hoisted(() => ({ current: [] as unknown[] }));
+
 const membersByChannel: Record<string, unknown[]> = {
   "chan-general": [
     {
@@ -77,6 +82,15 @@ const membersByChannel: Record<string, unknown[]> = {
       avatar_url: null,
     },
   ],
+  "chan-no-key": [
+    {
+      member_type: "user",
+      member_id: "user-2",
+      name: "bob",
+      display_name: "Bob",
+      avatar_url: null,
+    },
+  ],
 };
 
 vi.mock("@multica/core/channels", async (importOriginal) => {
@@ -84,7 +98,7 @@ vi.mock("@multica/core/channels", async (importOriginal) => {
   const options = (queryKey: string[], data: unknown) => ({ queryKey, queryFn: async () => data });
   return {
     ...actual,
-    channelsOptions: () => options(["channels"], CHANNELS),
+    channelsOptions: () => options(["channels"], channelsFixture.current),
     archivedChannelsOptions: () => options(["channels-archived"], []),
     channelMembersOptions: (channelId: string) =>
       options(["channel-members", channelId], membersByChannel[channelId] ?? []),
@@ -202,6 +216,7 @@ describe("ChannelsPage — system #general channel (#642)", () => {
     mobileViewport.value = false;
     window.sessionStorage.clear();
     useLastSelectedChannelStore.setState({ lastSelectedChannelId: null });
+    channelsFixture.current = DEFAULT_CHANNELS;
   });
 
   it("sorts the system channel first in the sidebar regardless of API order", async () => {
@@ -301,5 +316,52 @@ describe("ChannelsPage — system #general channel (#642)", () => {
     });
     fireEvent.click(screen.getByLabelText("More"));
     expect(screen.getByText("Group settings")).toBeTruthy();
+  });
+
+  // Iris/Parker review of PR #810's first head: code/design PASS on the
+  // surface sweep, but flagged these 3 regressions as missing before code
+  // GO. All three lock a #general edge case without touching the two
+  // pre-existing auto-select effects' architecture (explicitly out of
+  // scope for this PR).
+  it("mobile cold-load with no deep-link/remembered stays list-first, not stolen by #general", async () => {
+    mobileViewport.value = true;
+    renderPage();
+    // Give the auto-select effects a chance to run — mobile must never
+    // land on a detail view (system channel or otherwise) on a bare load.
+    await new Promise((r) => setTimeout(r, 30));
+    expect(screen.queryByTestId("active-title")).not.toBeInTheDocument();
+    expect(replaceSpy).not.toHaveBeenCalled();
+  });
+
+  it("desktop still falls back to the first channel when no system channel exists at all", async () => {
+    channelsFixture.current = DEFAULT_CHANNELS.filter((c) => c.system_key !== "general");
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId("active-title")).toHaveTextContent("random");
+    });
+  });
+
+  it("degrades an unrecognized system_key to a normal, fully-mutable channel", async () => {
+    channelsFixture.current = [
+      { ...DEFAULT_CHANNELS[0], id: "chan-unknown-key", name: "unknownkey", system_key: "future" },
+    ];
+    renderPage("chan-unknown-key");
+    await waitFor(() => {
+      expect(screen.getByTestId("active-title")).toHaveTextContent("unknownkey");
+    });
+    expect(screen.getByLabelText("Group settings")).toBeTruthy();
+  });
+
+  it("degrades an absent system_key to a normal, fully-mutable channel", async () => {
+    channelsFixture.current = [{ ...DEFAULT_CHANNELS[0], id: "chan-no-key", name: "nokey" }];
+    renderPage("chan-no-key");
+    await waitFor(() => {
+      expect(screen.getByTestId("active-title")).toHaveTextContent("nokey");
+    });
+    expect(screen.getByLabelText("Group settings")).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("Manage members"));
+    fireEvent.click(screen.getByText("Members", { exact: false }));
+    await screen.findByText("Bob");
+    expect(screen.getByLabelText("Remove member")).toBeTruthy();
   });
 });

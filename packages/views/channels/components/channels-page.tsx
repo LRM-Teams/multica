@@ -1226,41 +1226,44 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     setViewportReady(true);
   }, []);
 
+  // Single auto-select decision, computed once per relevant input change
+  // rather than split across two effects that each independently watch
+  // (and one of them writes) `activeId` — the original two-effect shape
+  // triggered react-doctor's chained-state-update / event-in-effect
+  // rules. Both prior cases are preserved as one branch each:
+  //   - the live desktop→mobile viewport TRANSITION still restores a
+  //     selection (matches the historical behavior, guarded by the
+  //     previous/current mobile comparison);
+  //   - the steady-state desktop case still auto-selects once viewport
+  //     and channel data are known and nothing else claimed the slot.
+  // Mobile is otherwise list-first — never auto-open a channel there, or
+  // the list would never be reachable.
+  //
+  // `useIsMobile()` reports `false` on the very first render (its internal
+  // state is still `undefined`) even on a phone, so we can't trust it here
+  // on mount — measure the viewport directly (effects are client-only, so
+  // `window` is always defined) to avoid auto-selecting before the
+  // breakpoint is known.
   useEffect(() => {
-    if (!viewportReady) return;
+    if (!viewportReady || activeId || activeDmId) return;
     const previous = previousMobileRef.current;
-    if (previous === false && isMobile && !activeId && !activeDmId && channels[0]) {
-      // #642 — deep-link/remembered already won by this point (they set
-      // activeId earlier); this is the no-selection-yet fallback, so prefer
-      // the system #general channel over an arbitrary first channel.
-      setActiveId((channels.find(isImmutableSystemChannel) ?? channels[0]).id);
-    }
-    previousMobileRef.current = isMobile;
-  }, [viewportReady, isMobile, activeId, activeDmId, channels]);
-
-  useEffect(() => {
-    // Mobile is list-first — don't auto-open a channel, or the list would never
-    // be reachable. Desktop keeps auto-selecting the first channel.
-    //
-    // `useIsMobile()` reports `false` on the very first render (its internal
-    // state is still `undefined`) even on a phone, so we can't trust it here on
-    // mount. Measure the viewport directly — effects are client-only, so
-    // `window` is always defined — to avoid auto-selecting (and thus forcing the
-    // detail view) before the breakpoint is known.
     const onMobileViewport =
       isMobile || (typeof window !== "undefined" && window.innerWidth < 768);
-    if (onMobileViewport) return;
-    // Don't auto-open a group when a DM is the active selection.
-    if (activeDmId) return;
+    const transitionedToMobile = previous === false && isMobile;
+    previousMobileRef.current = isMobile;
+    if (onMobileViewport && !transitionedToMobile) return;
+    if (!channels[0]) return;
     // #642 — priority is deep-link > remembered > system #general > first
     // channel. Deep-link and remembered both already set activeId before
-    // this effect runs (see the route-reconciliation and restoredBaseChannelId
-    // effects above), so reaching here with `!activeId` means neither fired —
-    // prefer #general over an arbitrary first channel.
-    if (!activeId && channels[0]) {
-      setActiveId((channels.find(isImmutableSystemChannel) ?? channels[0]).id);
-    }
-  }, [activeId, activeDmId, channels, isMobile]);
+    // this effect runs (see the route-reconciliation and
+    // restoredBaseChannelId effects above), so reaching here with
+    // `!activeId` means neither fired — prefer #general over an arbitrary
+    // first channel. This is externally-driven default resolution (reacts
+    // to async channel-list load / viewport becoming known), not a chain
+    // of derived state — there's no event handler to move it into.
+    // react-doctor-disable-next-line react-doctor/no-chain-state-updates
+    setActiveId((channels.find(isImmutableSystemChannel) ?? channels[0]).id);
+  }, [viewportReady, isMobile, activeId, activeDmId, channels]);
 
   useEffect(() => {
     if (restoredBaseChannelId) {

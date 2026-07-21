@@ -288,10 +288,8 @@ describe("ChannelsPage — system #general channel (#642)", () => {
     await waitFor(() => {
       expect(screen.getByTestId("active-title")).toHaveTextContent("random");
     });
-    fireEvent.click(screen.getByLabelText("Manage members"));
-    // Unlike the system channel (which skips straight to the read-only
-    // list), a normal channel's panel defaults to the Invite tab.
-    fireEvent.click(screen.getByText("Members", { exact: false }));
+    // Presence stack opens the Members (browse) tab directly.
+    fireEvent.click(screen.getByLabelText("View members"));
     await screen.findByText("Bob");
     expect(screen.getByLabelText("Remove member")).toBeTruthy();
   });
@@ -321,34 +319,31 @@ describe("ChannelsPage — system #general channel (#642)", () => {
     expect(screen.getByText("Group settings")).toBeTruthy();
   });
 
-  // #642 follow-up (Parker/Iris served finding): the desktop header's "+"
-  // member trigger implies an add affordance that doesn't exist on the
-  // read-only auto-managed roster — swap to a neutral view-only trigger,
-  // ordinary channels keep the existing add/manage semantics.
-  it("desktop header shows a neutral View-members trigger for the system channel, no + icon", async () => {
+  // Slack-style header: faces + count open View-members (browse). System
+  // #general has no Invite text button (read-only auto-managed roster).
+  it("desktop header shows View-members presence trigger for the system channel, no Invite / +", async () => {
     renderPage("chan-general");
     await waitFor(() => {
       expect(screen.getByTestId("active-title")).toHaveTextContent("general");
     });
     const trigger = screen.getByLabelText("View members");
     expect(trigger).toBeTruthy();
+    expect(screen.queryByLabelText("Invite people")).toBeNull();
     expect(screen.queryByLabelText("Manage members")).toBeNull();
-    // Iris: the label alone doesn't prove the icon actually swapped —
-    // assert the real lucide-users/lucide-plus SVG classes.
-    expect(trigger.querySelector("svg.lucide-users")).toBeTruthy();
+    // Presence trigger itself must not carry a hollow "+" affordance.
     expect(trigger.querySelector("svg.lucide-plus")).toBeNull();
   });
 
-  it("desktop header keeps the Manage-members + trigger for a normal channel", async () => {
+  it("desktop header keeps View-members + Invite text button for a normal channel (no hollow +)", async () => {
     renderPage("chan-random");
     await waitFor(() => {
       expect(screen.getByTestId("active-title")).toHaveTextContent("random");
     });
-    const trigger = screen.getByLabelText("Manage members");
-    expect(trigger).toBeTruthy();
-    expect(screen.queryByLabelText("View members")).toBeNull();
-    expect(trigger.querySelector("svg.lucide-plus")).toBeTruthy();
-    expect(trigger.querySelector("svg.lucide-users")).toBeNull();
+    expect(screen.getByLabelText("View members")).toBeTruthy();
+    expect(screen.getByLabelText("Invite people")).toBeTruthy();
+    expect(screen.queryByLabelText("Manage members")).toBeNull();
+    const invite = screen.getByLabelText("Invite people");
+    expect(invite.querySelector("svg.lucide-plus")).toBeNull();
   });
 
   // Iris/Parker review of PR #810's first head: code/design PASS on the
@@ -427,8 +422,7 @@ describe("ChannelsPage — system #general channel (#642)", () => {
       expect(screen.getByTestId("active-title")).toHaveTextContent("nokey");
     });
     expect(screen.getByLabelText("Group settings")).toBeTruthy();
-    fireEvent.click(screen.getByLabelText("Manage members"));
-    fireEvent.click(screen.getByText("Members", { exact: false }));
+    fireEvent.click(screen.getByLabelText("View members"));
     await screen.findByText("Bob");
     expect(screen.getByLabelText("Remove member")).toBeTruthy();
   });

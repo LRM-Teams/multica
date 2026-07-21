@@ -60,6 +60,8 @@
     "feishu": "飞书",
     "manage_members_aria": "管理成员",
     "view_members_aria": "查看成员",
+    "invite_members_aria": "邀请成员",
+    "member_count_aria": "{{count}} 位成员",
     "share_aria": "分享",
     "stats_aria": "统计",
     "tasks_aria": "来自本频道的任务",
@@ -80,10 +82,13 @@
     "no_candidates": "没有可邀请的成员",
     "invite": "邀请",
     "invite_count": "邀请 ({{count}})",
+    "invite_cta": "邀请加入",
+    "invite_selected": "已选 {{count}} 人",
+    "invite_failed": "邀请失败，请重试",
     "tab_invite": "邀请",
-    "tab_members": "群成员",
-    "search": "搜索…",
-    "no_results": "没有匹配的结果"
+    "tab_members": "成员",
+    "search": "搜索姓名或账号",
+    "no_results": "没有匹配的人"
   },
   "profile_popover": {
     "unknown": "未知",

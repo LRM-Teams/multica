@@ -60,6 +60,8 @@
     "feishu": "Feishu",
     "manage_members_aria": "Manage members",
     "view_members_aria": "View members",
+    "invite_members_aria": "Invite people",
+    "member_count_aria": "{{count}} members",
     "share_aria": "Share",
     "stats_aria": "Stats",
     "tasks_aria": "Tasks from this channel",
@@ -80,10 +82,13 @@
     "no_candidates": "No one left to invite",
     "invite": "Invite",
     "invite_count": "Invite ({{count}})",
+    "invite_cta": "Invite to join",
+    "invite_selected": "{{count}} selected",
+    "invite_failed": "Invite failed, please try again",
     "tab_invite": "Invite",
     "tab_members": "Members",
-    "search": "Search…",
-    "no_results": "No matches"
+    "search": "Search by name or handle",
+    "no_results": "No matching people"
   },
   "profile_popover": {
     "unknown": "Unknown",

@@ -60,6 +60,8 @@
     "feishu": "Feishu",
     "manage_members_aria": "メンバーを管理",
     "view_members_aria": "メンバーを表示",
+    "invite_members_aria": "メンバーを招待",
+    "member_count_aria": "{{count}} 人のメンバー",
     "share_aria": "共有",
     "stats_aria": "統計",
     "tasks_aria": "このチャンネルのタスク",
@@ -80,10 +82,13 @@
     "no_candidates": "招待できる相手がいません",
     "invite": "招待",
     "invite_count": "招待 ({{count}})",
+    "invite_cta": "招待して参加",
+    "invite_selected": "{{count}} 人を選択中",
+    "invite_failed": "招待に失敗しました。もう一度お試しください",
     "tab_invite": "招待",
     "tab_members": "メンバー",
-    "search": "検索…",
-    "no_results": "一致する結果がありません"
+    "search": "名前またはアカウントで検索",
+    "no_results": "一致する人がいません"
   },
   "profile_popover": {
     "unknown": "不明",

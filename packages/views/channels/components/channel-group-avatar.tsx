@@ -3,15 +3,24 @@
 import { Hash } from "lucide-react";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import type { ChannelMemberBrief } from "@multica/core/types";
+import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
+import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 
 /**
- * WeChat-style composite group avatar: member tiles packed into a single round
- * circle. Shows up to 9 members in an adaptive grid (1 → full, 2-4 → 2 cols,
- * 5-9 → 3 cols), partial rows centered so any count reads evenly. Members
- * beyond 9 are dropped. Recomputes whenever the member list changes (joins /
- * leaves), since it derives purely from `members`.
+ * WeChat-style composite group avatar: up to 4 members' real, persisted
+ * avatars tiled into a single round circle — 1 → full circle, 2 → a
+ * centered pair, 3-4 → a 2x2 grid. Members (human or agent) beyond the
+ * first 4, in `channel.members`' own order, are dropped — a stable,
+ * deterministic selection, not a random sample. Recomputes whenever the
+ * member list changes (joins/leaves), since it derives purely from
+ * `members`.
+ *
+ * Each tile renders that member's own persisted `avatar_url`; a missing or
+ * failed-to-load image falls back to that member's initials (never a random
+ * or synthesized avatar — see `ActorAvatar`'s own fallback). Only an empty
+ * channel (no members at all) falls back to the neutral `#` glyph.
  */
-const MAX_TILES = 9;
+const MAX_TILES = 4;
 
 function firstLetter(name: string): string {
   const c = name.trim().charAt(0);
@@ -41,7 +50,7 @@ export function ChannelGroupAvatar({
   }
 
   const shown = members.slice(0, MAX_TILES);
-  const cols = shown.length === 1 ? 1 : shown.length <= 4 ? 2 : 3;
+  const cols = shown.length === 1 ? 1 : 2;
   const tile = size / cols;
 
   return (
@@ -52,20 +61,14 @@ export function ChannelGroupAvatar({
       {shown.map((m) => {
         const label = memberLabel(m);
         return (
-          <span
+          <ActorAvatar
             key={`${m.member_type}:${m.member_id}`}
-            title={label}
-            style={{
-              width: tile,
-              height: tile,
-              fontSize: Math.max(7, Math.round(tile * 0.42)),
-            }}
-            // #451: uniform muted tiles — no per-agent hash color, matching the
-            // single-avatar fallback (Frank: "bot 头像不要五颜六色").
-            className="flex items-center justify-center bg-muted font-medium text-muted-foreground"
-          >
-            {firstLetter(label)}
-          </span>
+            name={label}
+            initials={firstLetter(label)}
+            avatarUrl={resolvePublicFileUrl(m.avatar_url)}
+            size={tile}
+            className="rounded-none"
+          />
         );
       })}
     </span>

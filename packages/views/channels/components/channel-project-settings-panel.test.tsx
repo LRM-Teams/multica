@@ -4,37 +4,72 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multica/core/i18n/react";
+import type { Channel } from "@multica/core/types";
 import { Drawer, DrawerContent } from "@multica/ui/components/ui/drawer";
 import enCommon from "../../locales/en/common.json";
 import enChannels from "../../locales/en/channels.json";
+import { ChannelDetailsPanel } from "./channel-details-panel";
 import { ChannelProjectSettingsPanel } from "./channel-project-settings-panel";
 
-// Mirrors channels-page.tsx's `mobilePanel === "settings"` branch exactly:
-// a ref attached to a node inside `DrawerContent`, handed to the panel as
-// `portalContainer` so the picker's dropdown portals inside the Drawer's
-// already-unlocked content instead of the default `document.body`.
+const testChannel: Channel = {
+  id: "chan-1",
+  workspace_id: "ws-1",
+  name: "general-eng",
+  kind: "group",
+  description: null,
+  lark_chat_id: null,
+  created_by: "user-1",
+  created_at: "2026-01-01T00:00:00Z",
+  updated_at: "2026-01-01T00:00:00Z",
+};
+
+// Mirrors channels-page.tsx's mobile overflow Drawer exactly (the
+// `mobilePanel === "settings"` branch): a `Drawer`/`DrawerContent` (vaul)
+// hosting the REAL `ChannelDetailsPanel` at `variant="page"`, with a ref
+// owned at this level (channels-page.tsx's `mobileSettingsDrawerBodyRef`)
+// passed down as `portalContainer`. `ChannelDetailsPanel` itself attaches
+// that ref to its own Settings-tab wrapper node and forwards it to
+// `ChannelProjectSettingsPanel` -> `ProjectPickerButton` -> the dropdown's
+// `container` prop. This is the actual, current ownership chain post-#831
+// (LRM-210's shared `ChannelDetailsPanel`) — NOT a hand-built stand-in that
+// mounts `ChannelProjectSettingsPanel` directly, which would silently pass
+// even if `ChannelDetailsPanel` stopped attaching/forwarding the ref.
 function MobileSettingsDrawer({ onChange }: { onChange: (projectId: string | null) => void }) {
   const bodyRef = useRef<HTMLDivElement | null>(null);
   return (
     <Drawer open direction="bottom" onOpenChange={() => {}}>
       <DrawerContent>
-        <div className="p-4" ref={bodyRef}>
-          <ChannelProjectSettingsPanel
-            wsId="ws-1"
-            projectId={null}
-            onChange={onChange}
-            portalContainer={bodyRef}
-          />
-        </div>
+        <ChannelDetailsPanel
+          channel={testChannel}
+          members={[]}
+          wsId="ws-1"
+          projectId={null}
+          projectBound={false}
+          onChangeProject={onChange}
+          projectEditable
+          canManage
+          isArchived={false}
+          onMuteToggle={() => {}}
+          onShare={() => {}}
+          onArchive={() => {}}
+          onRename={() => {}}
+          onUpdateLarkChatId={() => {}}
+          membersBody={null}
+          initialTab="settings"
+          variant="page"
+          onClose={() => {}}
+          portalContainer={bodyRef}
+        />
       </DrawerContent>
     </Drawer>
   );
 }
 
 // #576 (task #576 mobile follow-up) — at 375px, the Group Settings mobile
-// panel renders `ChannelProjectSettingsPanel` (and its `ProjectPickerButton`
-// dropdown) inside a Vaul bottom-sheet Drawer (channels-page.tsx's
-// `mobilePanel === "settings"` branch). Vaul's modal Drawer locks background
+// panel renders `ChannelDetailsPanel` (`variant="page"`, LRM-210 #831) inside
+// a Vaul bottom-sheet Drawer (channels-page.tsx's `mobilePanel === "settings"`
+// branch), and its Settings tab hosts `ChannelProjectSettingsPanel` and its
+// `ProjectPickerButton` dropdown. Vaul's modal Drawer locks background
 // interaction by setting `document.body.style.pointerEvents = "none"` and
 // re-enabling `pointer-events: auto` only on its OWN `DrawerContent` DOM
 // node. The picker's dropdown (`@multica/ui/components/ui/dropdown-menu`,
@@ -46,8 +81,8 @@ function MobileSettingsDrawer({ onChange }: { onChange: (projectId: string | nul
 // entirely (see channels-page-message-actions.test.tsx, dm-list.test.tsx,
 // app-sidebar.test.tsx), so this exact portal-boundary interaction was never
 // exercised — that's why the bug shipped. These tests render the REAL
-// `Drawer`/`DrawerContent` (vaul) nested around the REAL
-// `ChannelProjectSettingsPanel` (real `ProjectPickerButton` /
+// `Drawer`/`DrawerContent` (vaul) nested around the REAL `ChannelDetailsPanel`
+// (real `ChannelProjectSettingsPanel` / `ProjectPickerButton` /
 // `DropdownMenu`), exactly like channels-page.tsx's mobile branch, and use
 // `userEvent` — which enforces a `pointer-events` check before clicking —
 // so a regression here fails the test instead of silently no-oping.
@@ -88,8 +123,10 @@ describe("ChannelProjectSettingsPanel", () => {
   });
 
   // Control case: the desktop docked side panel never wraps this component
-  // in a Drawer (see channel-settings-side-panel.tsx). Picking an option
-  // must fire onChange — this is the baseline the mobile case must match.
+  // in a Drawer (see channel-settings-side-panel.tsx / ChannelDetailsPanel's
+  // `variant="panel"` call in channels-page.tsx, which passes no
+  // `portalContainer`). Picking an option must fire onChange — this is the
+  // baseline the mobile case must match.
   it("fires onChange when a project is picked outside any Drawer (desktop baseline)", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
@@ -104,13 +141,16 @@ describe("ChannelProjectSettingsPanel", () => {
     await waitFor(() => expect(onChange).toHaveBeenCalledWith("proj-1"));
   });
 
-  // The actual #576 regression: same component, same picker, nested inside
-  // a real modal Vaul Drawer exactly like channels-page.tsx's mobile
-  // `mobilePanel === "settings"` branch. Before the fix, every
-  // `[role=menuitemradio]` here has computed `pointer-events: none`
-  // (inherited from the Drawer's `body.style.pointerEvents = "none"` lock)
-  // and `userEvent.click` throws instead of firing onChange.
-  it("fires onChange when a project is picked inside the mobile Group Settings Drawer (#576)", async () => {
+  // The actual #576 regression, exercised through the real current owner
+  // chain: `ChannelDetailsPanel` (`variant="page"`) nested inside a real
+  // modal Vaul Drawer exactly like channels-page.tsx's mobile
+  // `mobilePanel === "settings"` branch, with `ChannelDetailsPanel` itself
+  // owning + forwarding the `portalContainer` ref (not a bespoke ref built
+  // by the test). Before the fix, every `[role=menuitemradio]` here has
+  // computed `pointer-events: none` (inherited from the Drawer's
+  // `body.style.pointerEvents = "none"` lock) and `userEvent.click` throws
+  // instead of firing the change callback.
+  it("fires onChange when a project is picked inside the real ChannelDetailsPanel mobile Drawer (#576)", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     renderWithProviders(<MobileSettingsDrawer onChange={onChange} />);

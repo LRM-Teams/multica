@@ -1059,6 +1059,84 @@ func TestAgentTransportSendMessageLinksOwnedAttachmentsOnly(t *testing.T) {
 	}
 }
 
+// Regression: `multica attachment upload --target '#channel'` sets channel_id
+// before send. LinkOwned used to require channel_id IS NULL, so the send kept
+// attachment parts but never bound channel_message_id → "Attachment unavailable".
+func TestAgentTransportSendMessageLinksChannelPreboundOwnedAttachments(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	target := "#" + channelNameForTransportTest(t, channelID)
+
+	preboundID := seedChannelPreboundAgentAttachmentForTest(t, agentID, channelID, "prebound.png")
+
+	resp := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":  target,
+		"content": "prebound shot",
+		"parts": []protocol.MessagePart{
+			{Type: protocol.MessagePartTypeText, Text: "prebound shot"},
+			{Type: protocol.MessagePartTypeAttachment, AttachmentID: preboundID},
+		},
+		"client_message_id": "transport-prebound-" + uuid.NewString(),
+	})
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("transport send with prebound attachment: status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	var body AgentTransportSendResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode transport send: %v", err)
+	}
+	if len(body.Message.Attachments) != 1 || body.Message.Attachments[0].ID != preboundID {
+		t.Fatalf("message attachments = %+v, want prebound attachment %s", body.Message.Attachments, preboundID)
+	}
+
+	var gotChannelID, gotMessageID string
+	if err := testPool.QueryRow(ctx, `SELECT channel_id, channel_message_id FROM attachment WHERE id = $1`, preboundID).Scan(&gotChannelID, &gotMessageID); err != nil {
+		t.Fatalf("load prebound attachment: %v", err)
+	}
+	if gotChannelID != channelID || gotMessageID != body.Message.ID {
+		t.Fatalf("prebound attachment link: channel_id=%s message_id=%s, want channel=%s message=%s", gotChannelID, gotMessageID, channelID, body.Message.ID)
+	}
+}
+
+// Regression: transport/radar publish used to omit author_avatar_url on the
+// WS/API payload, so group bubbles showed initials while the profile card had
+// the real photo. Attach before publish so the stream matches the DB avatar.
+func TestAgentTransportSendMessageIncludesAuthorAvatarURL(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	avatarURL := "/files/transport-agent-avatar.png"
+	if _, err := testPool.Exec(ctx, `UPDATE agent SET avatar_url = $1 WHERE id = $2`, avatarURL, agentID); err != nil {
+		t.Fatalf("seed agent avatar: %v", err)
+	}
+	target := "#" + channelNameForTransportTest(t, channelID)
+
+	resp := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":            target,
+		"content":           "avatar stream check",
+		"client_message_id": "transport-avatar-" + uuid.NewString(),
+	})
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("transport send: status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	var body AgentTransportSendResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode transport send: %v", err)
+	}
+	if body.Message.AuthorAvatarURL == nil || *body.Message.AuthorAvatarURL != avatarURL {
+		t.Fatalf("message author_avatar_url = %v, want %q", body.Message.AuthorAvatarURL, avatarURL)
+	}
+}
+
 func TestAgentTransportSendMessageAttachmentOnlyActivityText(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -1938,6 +2016,19 @@ func seedUnboundAgentAttachmentForTest(t *testing.T, agentID, filename string) s
 		RETURNING id`,
 		testWorkspaceID, agentID, filename).Scan(&attachmentID); err != nil {
 		t.Fatalf("seed unbound agent attachment: %v", err)
+	}
+	return attachmentID
+}
+
+func seedChannelPreboundAgentAttachmentForTest(t *testing.T, agentID, channelID, filename string) string {
+	t.Helper()
+	var attachmentID string
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO attachment (workspace_id, channel_id, uploader_type, uploader_id, filename, url, content_type, size_bytes)
+		VALUES ($1, $2, 'agent', $3, $4, 's3://'||$4, 'image/png', 42)
+		RETURNING id`,
+		testWorkspaceID, channelID, agentID, filename).Scan(&attachmentID); err != nil {
+		t.Fatalf("seed channel-prebound agent attachment: %v", err)
 	}
 	return attachmentID
 }

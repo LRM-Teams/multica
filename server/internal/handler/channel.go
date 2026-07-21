@@ -1190,15 +1190,8 @@ func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 		out = append(out, desc[i])
 	}
 	attachChannelMessageExtras := func(msgs []ChannelMessageResponse) {
-		messageIDs := make([]pgtype.UUID, len(msgs))
-		for i, m := range msgs {
-			messageIDs[i] = parseUUID(m.ID)
-		}
 		h.attachChannelMessageAuthorAvatars(r.Context(), workspaceID, msgs)
-		grouped := h.groupChannelMessageAttachments(r.Context(), workspaceID, messageIDs)
-		for i := range msgs {
-			msgs[i].Attachments = grouped[msgs[i].ID]
-		}
+		h.attachChannelMessageAttachments(r.Context(), workspaceID, msgs)
 		h.attachChannelMessageReactions(r.Context(), workspaceID, msgs)
 		h.attachChannelMessageReplySummaries(r.Context(), workspaceID, msgs)
 		h.attachChannelMessageQuotes(r.Context(), workspaceID, msgs)
@@ -1368,15 +1361,8 @@ func (h *Handler) listChannelMessagesAround(w http.ResponseWriter, r *http.Reque
 
 	// Attach extras
 	attachChannelMessageExtras := func(msgs []ChannelMessageResponse) {
-		messageIDs := make([]pgtype.UUID, len(msgs))
-		for i, m := range msgs {
-			messageIDs[i] = parseUUID(m.ID)
-		}
 		h.attachChannelMessageAuthorAvatars(r.Context(), workspaceIDStr, msgs)
-		grouped := h.groupChannelMessageAttachments(r.Context(), workspaceIDStr, messageIDs)
-		for i := range msgs {
-			msgs[i].Attachments = grouped[msgs[i].ID]
-		}
+		h.attachChannelMessageAttachments(r.Context(), workspaceIDStr, msgs)
 		h.attachChannelMessageReactions(r.Context(), workspaceIDStr, msgs)
 		h.attachChannelMessageReplySummaries(r.Context(), workspaceIDStr, msgs)
 		h.attachChannelMessageQuotes(r.Context(), workspaceIDStr, msgs)
@@ -1578,10 +1564,120 @@ func (h *Handler) attachSingleChannelMessageDetails(ctx context.Context, workspa
 	h.attachChannelMessageQuotes(ctx, workspaceID, messages)
 	h.attachChannelMessageThreadMetadata(ctx, workspaceID, userID, messages)
 	h.attachChannelMessageThreadReadModel(ctx, workspaceID, messages)
+	h.attachChannelMessageAttachments(ctx, workspaceID, messages)
 	msg = messages[0]
-	msg.Attachments = h.groupChannelMessageAttachments(ctx, workspaceID, []pgtype.UUID{parseUUID(msg.ID)})[msg.ID]
 	applyChannelMessageTombstone(&msg)
 	return msg
+}
+
+// attachChannelMessageAttachments hydrates message.Attachments for the UI
+// attachment zone. Primary source is rows linked via channel_message_id.
+// Additionally, attachment parts that reference same-channel rows (including
+// uploads bound with `attachment upload --target` but never linked to a
+// message id) are merged in — otherwise the FE renders "Attachment unavailable".
+func (h *Handler) attachChannelMessageAttachments(ctx context.Context, workspaceID string, messages []ChannelMessageResponse) {
+	if len(messages) == 0 {
+		return
+	}
+	messageIDs := make([]pgtype.UUID, len(messages))
+	channelIDs := make([]pgtype.UUID, 0, len(messages))
+	seenChannels := map[string]struct{}{}
+	for i, msg := range messages {
+		messageIDs[i] = parseUUID(msg.ID)
+		if _, ok := seenChannels[msg.ChannelID]; ok || msg.ChannelID == "" {
+			continue
+		}
+		seenChannels[msg.ChannelID] = struct{}{}
+		channelIDs = append(channelIDs, parseUUID(msg.ChannelID))
+	}
+	grouped := h.groupChannelMessageAttachments(ctx, workspaceID, messageIDs)
+
+	missingIDs := make([]pgtype.UUID, 0)
+	seenMissing := map[string]struct{}{}
+	for _, msg := range messages {
+		have := map[string]struct{}{}
+		for _, att := range grouped[msg.ID] {
+			have[att.ID] = struct{}{}
+		}
+		for _, part := range msg.Parts {
+			if part.Type != protocol.MessagePartTypeAttachment {
+				continue
+			}
+			id := strings.TrimSpace(part.AttachmentID)
+			if id == "" {
+				continue
+			}
+			if _, ok := have[id]; ok {
+				continue
+			}
+			if _, ok := seenMissing[id]; ok {
+				continue
+			}
+			seenMissing[id] = struct{}{}
+			missingIDs = append(missingIDs, parseUUID(id))
+		}
+	}
+
+	byID := map[string]AttachmentResponse{}
+	if len(missingIDs) > 0 && len(channelIDs) > 0 {
+		rows, err := h.DB.Query(ctx, `
+			SELECT id, workspace_id, issue_id, comment_id, uploader_type, uploader_id,
+			       filename, url, content_type, size_bytes, created_at,
+			       chat_session_id, chat_message_id, channel_id, channel_message_id
+			FROM attachment a
+			WHERE a.workspace_id = $1
+			  AND a.id = ANY($2::uuid[])
+			  AND (
+			    a.channel_id = ANY($3::uuid[])
+			    OR a.channel_message_id = ANY($4::uuid[])
+			    OR EXISTS (
+			      SELECT 1 FROM channel_message m
+			      WHERE m.id = a.channel_message_id
+			        AND m.channel_id = ANY($3::uuid[])
+			    )
+			  )`, parseUUID(workspaceID), missingIDs, channelIDs, messageIDs)
+		if err != nil {
+			slog.Error("failed to load part-referenced channel attachments", "error", err)
+		} else {
+			defer rows.Close()
+			for rows.Next() {
+				var a db.Attachment
+				if err := rows.Scan(
+					&a.ID, &a.WorkspaceID, &a.IssueID, &a.CommentID, &a.UploaderType, &a.UploaderID,
+					&a.Filename, &a.Url, &a.ContentType, &a.SizeBytes, &a.CreatedAt,
+					&a.ChatSessionID, &a.ChatMessageID, &a.ChannelID, &a.ChannelMessageID,
+				); err != nil {
+					continue
+				}
+				byID[uuidToString(a.ID)] = h.attachmentToResponse(a)
+			}
+		}
+	}
+
+	for i := range messages {
+		atts := append([]AttachmentResponse(nil), grouped[messages[i].ID]...)
+		have := map[string]struct{}{}
+		for _, att := range atts {
+			have[att.ID] = struct{}{}
+		}
+		for _, part := range messages[i].Parts {
+			if part.Type != protocol.MessagePartTypeAttachment {
+				continue
+			}
+			id := strings.TrimSpace(part.AttachmentID)
+			if id == "" {
+				continue
+			}
+			if _, ok := have[id]; ok {
+				continue
+			}
+			if att, ok := byID[id]; ok {
+				atts = append(atts, att)
+				have[id] = struct{}{}
+			}
+		}
+		messages[i].Attachments = atts
+	}
 }
 
 func (h *Handler) attachChannelMessageAuthorAvatars(ctx context.Context, workspaceID string, messages []ChannelMessageResponse) {
@@ -2564,15 +2660,8 @@ func (h *Handler) ListChannelMessageThread(w http.ResponseWriter, r *http.Reques
 	for i := len(repliesDesc) - 1; i >= 0; i-- {
 		out = append(out, repliesDesc[i])
 	}
-	messageIDs := make([]pgtype.UUID, len(out))
-	for i, m := range out {
-		messageIDs[i] = parseUUID(m.ID)
-	}
 	h.attachChannelMessageAuthorAvatars(r.Context(), workspaceID, out)
-	grouped := h.groupChannelMessageAttachments(r.Context(), workspaceID, messageIDs)
-	for i := range out {
-		out[i].Attachments = grouped[out[i].ID]
-	}
+	h.attachChannelMessageAttachments(r.Context(), workspaceID, out)
 	h.attachChannelMessageReactions(r.Context(), workspaceID, out)
 	h.attachChannelMessageReplySummaries(r.Context(), workspaceID, out)
 	h.attachChannelMessageQuotes(r.Context(), workspaceID, out)

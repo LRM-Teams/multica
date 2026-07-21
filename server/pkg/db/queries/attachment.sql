@@ -96,18 +96,21 @@ WHERE channel_message_id = ANY($1::uuid[]) AND workspace_id = $2
 ORDER BY created_at ASC;
 
 -- name: LinkOwnedAttachmentsToChannelMessage :exec
--- Binds channel_id + channel_message_id together for attachments the CLI
--- uploaded unbound (target channel isn't known until send-time server-side
--- resolution). Scoped by uploader ownership instead of a pre-existing
--- channel_id match, since the human-message upload flow's channel_id-set-at-
--- upload-time authorization isn't available here.
+-- Binds channel_id + channel_message_id for attachments the agent owns.
+-- Accepts either:
+--   1) unbound uploads (channel_id IS NULL) — channel resolved at send time, or
+--   2) uploads already scoped to this channel via `attachment upload --target`
+--      (channel_id already set, channel_message_id still NULL).
+-- Previously requiring channel_id IS NULL broke the documented --target flow:
+-- send succeeded with attachment parts, but LinkOwned matched 0 rows → UI
+-- rendered "Attachment unavailable".
 UPDATE attachment
 SET channel_id = $1, channel_message_id = $2
 WHERE workspace_id = $3
   AND uploader_type = $4
   AND uploader_id = $5
-  AND channel_id IS NULL
   AND channel_message_id IS NULL
+  AND (channel_id IS NULL OR channel_id = $1)
   AND id = ANY(sqlc.arg(attachment_ids)::uuid[]);
 
 -- name: ListAttachmentsByChannel :many

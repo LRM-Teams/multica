@@ -927,7 +927,12 @@ func (h *Handler) createAgentTransportMessage(ctx context.Context, source agentT
 	if err != nil {
 		return agentTransportMessageResult{}, err
 	}
-	result.Message.Attachments = h.groupChannelMessageAttachments(ctx, uuidToString(source.origin.workspaceID), []pgtype.UUID{parseUUID(result.Message.ID)})[result.Message.ID]
+	{
+		msgs := []ChannelMessageResponse{result.Message}
+		h.attachChannelMessageAuthorAvatars(ctx, uuidToString(source.origin.workspaceID), msgs)
+		h.attachChannelMessageAttachments(ctx, uuidToString(source.origin.workspaceID), msgs)
+		result.Message = msgs[0]
+	}
 	if result.Created {
 		if target.threadRootMessageID.Valid {
 			h.followChannelThreadAgent(ctx, input.ChannelID, target.threadRootMessageID, source.origin.agentID)
@@ -1225,15 +1230,8 @@ func (h *Handler) readAgentTransportMessages(ctx context.Context, target agentTr
 }
 
 func (h *Handler) decorateAgentTransportMessages(ctx context.Context, workspaceID string, messages []ChannelMessageResponse) {
-	messageIDs := make([]pgtype.UUID, len(messages))
-	for i, msg := range messages {
-		messageIDs[i] = parseUUID(msg.ID)
-	}
 	h.attachChannelMessageAuthorAvatars(ctx, workspaceID, messages)
-	grouped := h.groupChannelMessageAttachments(ctx, workspaceID, messageIDs)
-	for i := range messages {
-		messages[i].Attachments = grouped[messages[i].ID]
-	}
+	h.attachChannelMessageAttachments(ctx, workspaceID, messages)
 	h.attachChannelMessageReactions(ctx, workspaceID, messages)
 	h.attachChannelMessageReplySummaries(ctx, workspaceID, messages)
 	h.attachChannelMessageThreadRootSummaries(ctx, workspaceID, messages)

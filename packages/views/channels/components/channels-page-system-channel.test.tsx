@@ -275,7 +275,7 @@ describe("ChannelsPage — system #general channel (#642)", () => {
     await waitFor(() => {
       expect(screen.getByTestId("active-title")).toHaveTextContent("general");
     });
-    fireEvent.click(screen.getByLabelText("Manage members"));
+    fireEvent.click(screen.getByLabelText("View members"));
     const panel = await screen.findByText("Bob");
     const row = panel.closest("div")!;
     expect(within(row.parentElement as HTMLElement).queryByLabelText("Remove member")).toBeNull();
@@ -304,8 +304,11 @@ describe("ChannelsPage — system #general channel (#642)", () => {
     });
     fireEvent.click(screen.getByLabelText("More"));
     expect(screen.queryByText("Group settings")).toBeNull();
-    // Normal behavior preserved: Members/Stats/Files stay reachable.
-    expect(screen.getByText("Manage members")).toBeTruthy();
+    // Normal behavior preserved: Members/Stats/Files stay reachable — but
+    // #642 follow-up (Parker/Iris): the read-only auto-managed roster
+    // must not say "Manage" (that implies add/remove that doesn't exist).
+    expect(screen.getByText("View members")).toBeTruthy();
+    expect(screen.queryByText("Manage members")).toBeNull();
   });
 
   it("keeps the mobile Drawer's Settings row for a normal channel", async () => {
@@ -316,6 +319,28 @@ describe("ChannelsPage — system #general channel (#642)", () => {
     });
     fireEvent.click(screen.getByLabelText("More"));
     expect(screen.getByText("Group settings")).toBeTruthy();
+  });
+
+  // #642 follow-up (Parker/Iris served finding): the desktop header's "+"
+  // member trigger implies an add affordance that doesn't exist on the
+  // read-only auto-managed roster — swap to a neutral view-only trigger,
+  // ordinary channels keep the existing add/manage semantics.
+  it("desktop header shows a neutral View-members trigger for the system channel, no + icon", async () => {
+    renderPage("chan-general");
+    await waitFor(() => {
+      expect(screen.getByTestId("active-title")).toHaveTextContent("general");
+    });
+    expect(screen.getByLabelText("View members")).toBeTruthy();
+    expect(screen.queryByLabelText("Manage members")).toBeNull();
+  });
+
+  it("desktop header keeps the Manage-members + trigger for a normal channel", async () => {
+    renderPage("chan-random");
+    await waitFor(() => {
+      expect(screen.getByTestId("active-title")).toHaveTextContent("random");
+    });
+    expect(screen.getByLabelText("Manage members")).toBeTruthy();
+    expect(screen.queryByLabelText("View members")).toBeNull();
   });
 
   // Iris/Parker review of PR #810's first head: code/design PASS on the

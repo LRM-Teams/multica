@@ -157,17 +157,38 @@ export interface AttachmentPreviewHandle {
   modal: ReactNode;
 }
 
+// #591/#799 (Iris): the modal's inline iframe can never render a PDF — the
+// app's global CSP blocks it — so a fallback dialog with an "Open in new
+// tab" button was just a valueless extra click. PDF never gets the modal,
+// full stop: both `open` (force-open) and `tryOpen` route through this one
+// dispatcher so a future force-open() caller can't resurrect the removed
+// fallback dialog. openExternal fires synchronously in the caller's own
+// call stack (still inside the original click's gesture) so the tab isn't
+// popup-blocked.
+function dispatchPreviewSource(source: PreviewSource, setCurrent: (source: PreviewSource) => void) {
+  const state = normalize(source);
+  const kind = getPreviewKind(state.contentType, state.filename);
+  if (kind === "pdf") {
+    openExternal(state.mediaUrl);
+    return;
+  }
+  setCurrent(source);
+}
+
 export function useAttachmentPreview(): AttachmentPreviewHandle {
   const [current, setCurrent] = useState<PreviewSource | null>(null);
 
-  const open = useCallback((source: PreviewSource) => setCurrent(source), []);
+  const open = useCallback(
+    (source: PreviewSource) => dispatchPreviewSource(source, setCurrent),
+    [],
+  );
   const tryOpen = useCallback((source: PreviewSource) => {
     const state = normalize(source);
     const kind = getPreviewKind(state.contentType, state.filename);
     if (!kind) return false;
     // URL-only sources cannot drive text kinds — the /content proxy is ID-keyed.
     if (source.kind === "url" && !URL_ONLY_KINDS.has(kind)) return false;
-    setCurrent(source);
+    dispatchPreviewSource(source, setCurrent);
     return true;
   }, []);
 
@@ -223,10 +244,15 @@ export function AttachmentPreviewModal({
     }
   };
 
-  // Open-in-new-tab mirrors HtmlAttachmentPreview's inline toolbar: only the
-  // `html` kind has a dedicated full-page route (/attachments/{id}/preview).
-  // Gated on slug + attachmentId for the same reason — URL-only sources
-  // can't address the /content proxy the page relies on.
+  // Open-in-new-tab mirrors HtmlAttachmentPreview's inline toolbar: the
+  // `html` kind has a dedicated full-page route (/attachments/{id}/preview),
+  // gated on slug + attachmentId because URL-only sources can't address the
+  // /content proxy the page relies on.
+  //
+  // `pdf` never reaches this modal at all (see tryOpen above) — the app's
+  // global CSP `frame-ancestors 'none'` blocks it from loading in an iframe
+  // regardless, so useAttachmentPreview hands PDFs straight to the browser's
+  // native viewer instead of mounting this dialog.
   const canOpenInNewTab = kind === "html" && !!slug && !!state.attachmentId;
   const handleOpenInNewTab = () => {
     if (!slug || !state.attachmentId) return;
@@ -371,13 +397,11 @@ function PreviewContent({
         </div>
       );
     case "pdf":
-      return (
-        <iframe
-          src={state.mediaUrl}
-          className="h-full w-full bg-background"
-          title={state.filename}
-        />
-      );
+      // #591/#799 (Iris): unreachable — both open() and tryOpen() dispatch
+      // pdf sources straight to openExternal via dispatchPreviewSource
+      // (above `useAttachmentPreview`) and never call setCurrent, so this
+      // modal never mounts for a pdf source. No fallback dialog kept.
+      return null;
     case "video":
       return (
         <div className="flex h-full w-full items-center justify-center bg-black">
@@ -512,14 +536,16 @@ function UnsupportedFallback({
     <div className="flex h-full flex-col items-center justify-center gap-3 px-8 text-center">
       <FileText className="size-8 text-muted-foreground" />
       <p className="text-sm text-muted-foreground">{message}</p>
-      <button
-        type="button"
-        className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-3 py-1.5 text-sm transition-colors hover:bg-muted"
-        onClick={onDownload}
-      >
-        <Download className="size-4" />
-        {t(($) => $.image.download)}
-      </button>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-3 py-1.5 text-sm transition-colors hover:bg-muted"
+          onClick={onDownload}
+        >
+          <Download className="size-4" />
+          {t(($) => $.image.download)}
+        </button>
+      </div>
     </div>
   );
 }

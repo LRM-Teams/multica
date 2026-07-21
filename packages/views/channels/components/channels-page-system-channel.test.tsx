@@ -254,20 +254,23 @@ describe("ChannelsPage — system #general channel (#642)", () => {
     });
   });
 
-  it("hides the header Settings entry for the system channel", async () => {
+  it("hides the Settings tab for the system channel in Channel details", async () => {
     renderPage("chan-general");
     await waitFor(() => {
       expect(screen.getByTestId("active-title")).toHaveTextContent("general");
     });
-    expect(screen.queryByLabelText("Group settings")).toBeNull();
+    fireEvent.click(screen.getByLabelText("Open channel details"));
+    expect(await screen.findByText("Channel details")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Settings" })).toBeNull();
   });
 
-  it("shows the header Settings entry for a normal channel", async () => {
+  it("shows the Settings tab for a normal channel in Channel details", async () => {
     renderPage("chan-random");
     await waitFor(() => {
       expect(screen.getByTestId("active-title")).toHaveTextContent("random");
     });
-    expect(screen.getByLabelText("Group settings")).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("Open channel details"));
+    expect(await screen.findByRole("button", { name: "Settings" })).toBeTruthy();
   });
 
   it("hides the per-member remove button in the system channel's member panel", async () => {
@@ -301,8 +304,8 @@ describe("ChannelsPage — system #general channel (#642)", () => {
       expect(screen.getByTestId("active-title")).toHaveTextContent("general");
     });
     fireEvent.click(screen.getByLabelText("More"));
-    expect(screen.queryByText("Group settings")).toBeNull();
-    // Normal behavior preserved: Members/Stats/Files stay reachable — but
+    expect(screen.queryByText("Settings")).toBeNull();
+    // Normal behavior preserved: Members/Files stay reachable — but
     // #642 follow-up (Parker/Iris): the read-only auto-managed roster
     // must not say "Manage" (that implies add/remove that doesn't exist).
     expect(screen.getByText("View members")).toBeTruthy();
@@ -316,7 +319,7 @@ describe("ChannelsPage — system #general channel (#642)", () => {
       expect(screen.getByTestId("active-title")).toHaveTextContent("random");
     });
     fireEvent.click(screen.getByLabelText("More"));
-    expect(screen.getByText("Group settings")).toBeTruthy();
+    expect(screen.getByText("Settings")).toBeTruthy();
   });
 
   // Slack-style header: faces + count open View-members (browse). System
@@ -412,7 +415,7 @@ describe("ChannelsPage — system #general channel (#642)", () => {
     await waitFor(() => {
       expect(screen.getByTestId("active-title")).toHaveTextContent("unknownkey");
     });
-    expect(screen.getByLabelText("Group settings")).toBeTruthy();
+    expect(screen.getByLabelText("Open channel details")).toBeTruthy();
   });
 
   it("degrades an absent system_key to a normal, fully-mutable channel", async () => {
@@ -421,7 +424,8 @@ describe("ChannelsPage — system #general channel (#642)", () => {
     await waitFor(() => {
       expect(screen.getByTestId("active-title")).toHaveTextContent("nokey");
     });
-    expect(screen.getByLabelText("Group settings")).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("Open channel details"));
+    expect(await screen.findByRole("button", { name: "Settings" })).toBeTruthy();
     fireEvent.click(screen.getByLabelText("View members"));
     await screen.findByText("Bob");
     expect(screen.getByLabelText("Remove member")).toBeTruthy();

@@ -70,4 +70,18 @@ describe("ConversationAgentActivityLine", () => {
 
     expect(screen.queryByTestId("conversation-agent-activity-line")).toBeNull();
   });
+
+  it("LRM-202: hides the Activity 'Output' verb above the composer", () => {
+    snapshotMock.mockReturnValue([runningTask("agent-1")]);
+    liveStatusMock.mockReturnValue({
+      label: "Output",
+      textClass: "text-foreground",
+      dotClass: "bg-muted-foreground/40",
+    });
+
+    render(<ConversationAgentActivityLine agentId="agent-1" />);
+
+    expect(screen.queryByTestId("conversation-agent-activity-line")).toBeNull();
+    expect(screen.queryByText("Output")).toBeNull();
+  });
 });

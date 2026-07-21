@@ -2861,9 +2861,12 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
               )}
 
               {jumpStatus === "exhausted" && (
-                <output className="block border-b bg-muted/40 px-5 py-1.5 text-center text-xs text-muted-foreground">
+                <div
+                  role="status"
+                  className="block border-b bg-muted/40 px-5 py-1.5 text-center text-xs text-muted-foreground"
+                >
                   {t(($) => $.message_loading.jump_not_found)}
-                </output>
+                </div>
               )}
 
               <ChannelMessageList

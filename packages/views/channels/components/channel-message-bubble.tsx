@@ -26,7 +26,7 @@ import { useActorName } from "@multica/core/workspace/hooks";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import type { ChannelMessage } from "@multica/core/types";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
-import { initialsOf } from "../../common/initials";
+import { avatarGlyph, avatarToneClass } from "../../common/initials";
 import { InlineReferenceContent } from "../../common/inline-reference-content";
 import { useT } from "../../i18n/use-t";
 import { useMessageTime } from "../../i18n/use-message-time";
@@ -68,6 +68,34 @@ const MOBILE_THREAD_TAP_FEEDBACK_MS = 120;
 const HISTORY_MESSAGE_COLLAPSE_HEIGHT_CLASS = "max-h-[min(260px,55vh)] md:max-h-[360px]";
 const HISTORY_MESSAGE_COLLAPSE_MIN_CHARS = 800;
 const HISTORY_MESSAGE_COLLAPSE_MIN_LINES = 12;
+
+/**
+ * LRM-202: remember the last good avatar URL per author so a later message
+ * that omits `author_avatar_url` does not flash a gray text placeholder while
+ * an earlier bubble from the same author already showed the real face.
+ */
+const authorAvatarOkCache = new Map<string, string>();
+
+function authorAvatarCacheKey(message: ChannelMessage): string | null {
+  if (!message.author_id) return null;
+  if (message.type !== "agent" && message.type !== "user") return null;
+  return `${message.type}:${message.author_id}`;
+}
+
+function resolveCachedAuthorAvatarUrl(message: ChannelMessage): string | undefined {
+  const key = authorAvatarCacheKey(message);
+  const fromPayload = resolvePublicFileUrl(message.author_avatar_url) ?? undefined;
+  if (fromPayload) {
+    if (key) authorAvatarOkCache.set(key, fromPayload);
+    return fromPayload;
+  }
+  return key ? authorAvatarOkCache.get(key) : undefined;
+}
+
+/** Test-only helper to isolate sticky avatar-cache cases. */
+export function __resetAuthorAvatarOkCacheForTests() {
+  authorAvatarOkCache.clear();
+}
 
 function isInteractiveMessageTarget(target: EventTarget | null) {
   if (!(target instanceof Element)) return false;
@@ -386,12 +414,10 @@ export function ChannelMessageBubble({
     message.author_id === currentUserId;
   const isAgent = message.type === "agent";
   const isExternal = message.source === "lark";
-  // Read the author avatar straight from the message payload (#453/#574). The
-  // BE aggregates `author_avatar_url` per fetch from the current DB, so every
-  // viewer who can see the message gets the author's real avatar — no
-  // viewer-scoped `getActorAvatarUrl` list guess and no fallback (Frank: a
-  // missing avatar here is a payload bug, not something to paper over).
-  const avatarUrl = resolvePublicFileUrl(message.author_avatar_url);
+  // Read the author avatar from the message payload (#453/#574), with an
+  // author-scoped sticky cache (LRM-202) so consecutive same-author bubbles
+  // keep the real face when a later payload omits `author_avatar_url`.
+  const avatarUrl = resolveCachedAuthorAvatarUrl(message);
   const displayName = resolveChannelAuthorDisplayName(message, {
     currentUserId,
     ownName,
@@ -409,15 +435,16 @@ export function ChannelMessageBubble({
   // avatar itself, so that when the avatar sits inside the fixed-size presence
   // box the box hugs the avatar exactly (a margin on the inner avatar would
   // overflow the box and lift the dot off the avatar's bottom edge).
+  const avatarSeed = authorAvatarCacheKey(message) ?? displayName;
   const avatarNode = (
     <ActorAvatar
       name={displayName}
-      initials={initialsOf(displayName)}
-      avatarUrl={avatarUrl ?? undefined}
+      initials={avatarGlyph(displayName)}
+      avatarUrl={avatarUrl}
       isAgent={isAgent}
       isSystem={false}
       size={28}
-      className="select-none"
+      className={cn("select-none", avatarToneClass(avatarSeed))}
     />
   );
   // Message rows carry NO live presence dot. A message is history, so pinning

@@ -306,9 +306,16 @@ export function ChannelMessageBubble({
   const resolveMentionPreview = mentionResolverFrom(getActorName);
   const messageTime = useMessageTime();
   const [editDraft, setEditDraft] = useState<string | null>(null);
-  const [mobileActionsOpen, setMobileActionsOpen] = useState(false);
-  const [mobileReactionOpen, setMobileReactionOpen] = useState(false);
-  const [mobileReactionShowFull, setMobileReactionShowFull] = useState(false);
+  // Single state machine for the mobile action/reaction sheets (react-doctor
+  // prefer-useReducer + Iris #568: three independent booleans made "only one
+  // mobile overlay open at a time" something callers had to remember; a union
+  // makes it structurally impossible to have two open together).
+  const [mobileOverlay, setMobileOverlay] = useState<
+    "none" | "actions" | "reaction" | "reaction-full"
+  >("none");
+  const mobileActionsOpen = mobileOverlay === "actions";
+  const mobileReactionOpen = mobileOverlay === "reaction" || mobileOverlay === "reaction-full";
+  const mobileReactionShowFull = mobileOverlay === "reaction-full";
   const [expandedContentKey, setExpandedContentKey] = useState<string | null>(null);
   const [mobileThreadTapActive, setMobileThreadTapActive] = useState(false);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -451,7 +458,7 @@ export function ChannelMessageBubble({
     }
   };
   const runMobileAction = (action: () => void | Promise<void>) => {
-    setMobileActionsOpen(false);
+    setMobileOverlay("none");
     void action();
   };
   const handleQuote = () => onQuote?.(message);
@@ -506,8 +513,7 @@ export function ChannelMessageBubble({
     if (!isEditing && isMobileActionViewport()) {
       clearTapFeedbackTimer();
       setMobileThreadTapActive(false);
-      setMobileReactionOpen(false);
-      setMobileActionsOpen(true);
+      setMobileOverlay("actions");
     }
   };
   // Reply/React overlay lifecycle (Iris #568): only one mobile action layer may
@@ -515,18 +521,15 @@ export function ChannelMessageBubble({
   // it first, then opens the dedicated reaction sheet — never both mounted
   // together (was a real double-panel bug: Popover portal + open <dialog>).
   const openMobileReactionFromActions = () => {
-    setMobileActionsOpen(false);
-    setMobileReactionShowFull(false);
-    setMobileReactionOpen(true);
+    setMobileOverlay("reaction");
   };
   const handleMobileReactionSheetSelect = (emoji: string) => {
-    setMobileReactionOpen(false);
-    setMobileReactionShowFull(false);
+    setMobileOverlay("none");
     onReact?.(message, emoji);
   };
   const openThreadAfterMobileTap = () => {
     if (!canOpenThread) return;
-    setMobileActionsOpen(false);
+    setMobileOverlay("none");
     clearTapFeedbackTimer();
     setMobileThreadTapActive(true);
     tapFeedbackTimerRef.current = setTimeout(() => {
@@ -814,9 +817,9 @@ export function ChannelMessageBubble({
             aria-label={t(($) => $.message.actions_menu)}
             onCancel={(event) => {
               event.preventDefault();
-              setMobileActionsOpen(false);
+              setMobileOverlay("none");
             }}
-            onClose={() => setMobileActionsOpen(false)}
+            onClose={() => setMobileOverlay("none")}
           >
             <form method="dialog" className="absolute inset-0">
               <button
@@ -891,9 +894,9 @@ export function ChannelMessageBubble({
             aria-label={t(($) => $.message.add_reaction)}
             onCancel={(event) => {
               event.preventDefault();
-              setMobileReactionOpen(false);
+              setMobileOverlay("none");
             }}
-            onClose={() => setMobileReactionOpen(false)}
+            onClose={() => setMobileOverlay("none")}
           >
             <form method="dialog" className="absolute inset-0">
               <button
@@ -934,7 +937,7 @@ export function ChannelMessageBubble({
                   </div>
                   <button
                     type="button"
-                    onClick={() => setMobileReactionShowFull(true)}
+                    onClick={() => setMobileOverlay("reaction-full")}
                     className="mt-1 flex h-11 w-full items-center justify-center rounded-xl text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:outline-none"
                   >
                     {t(($) => $.message.more_emojis)}

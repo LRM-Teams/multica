@@ -135,7 +135,7 @@ Status: complete
 Publication:
 
 - Implementation commit: `845b6b7017537813007606db67664bfbca964c2d` (`feat(beckham): enforce evidence-based product delivery`).
-- Branch: `agent/beckham-product-delivery`, based on the then-current `origin/dev` commit `f4a9b09e48f19eac41740648eda5ee6db66774af`.
+- Branch: `agent/beckham-product-delivery`. It was initially based on `f4a9b09e48f19eac41740648eda5ee6db66774af`; when `dev` advanced during PR verification, current `origin/dev` commit `6da5dd09ccf0d35ff850fe9b6991723f31d1ac45` was merged before final handoff. The incoming Plan & Billing files do not overlap this implementation.
 - PR: [#815 — feat(beckham): enforce evidence-based product delivery](https://github.com/LRM-Teams/multica/pull/815), targeting `dev`.
 - PR state after creation: open, ready for review, and reported mergeable by GitHub. It is not a draft, so the repository merge control is available once required checks pass.
 - The GitHub App PR-creation call returned `403 Resource not accessible by integration`; authenticated `gh` with repository scope created the same PR as the documented fallback. This affected only the publication interface, not repository contents or validation.

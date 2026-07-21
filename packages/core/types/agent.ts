@@ -272,6 +272,11 @@ export interface Agent {
   description: string;
   instructions: string;
   avatar_url: string | null;
+  /**
+   * Server-owned provenance for the persisted avatar value. Clients must
+   * never infer provenance or a display fallback from the URL at render time.
+   */
+  avatar_source?: "assigned" | "picked" | "uploaded";
   runtime_mode: AgentRuntimeMode;
   /** Display name for the bound runtime, denormalized by the API. */
   runtime_name?: string | null;

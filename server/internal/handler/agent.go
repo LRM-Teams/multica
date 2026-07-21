@@ -42,6 +42,7 @@ type AgentResponse struct {
 	Description   string          `json:"description"`
 	Instructions  string          `json:"instructions"`
 	AvatarURL     *string         `json:"avatar_url"`
+	AvatarSource  string          `json:"avatar_source"`
 	RuntimeMode   string          `json:"runtime_mode"`
 	RuntimeName   string          `json:"runtime_name"`
 	RuntimeConfig any             `json:"runtime_config"`
@@ -124,6 +125,7 @@ func agentToResponse(a db.Agent) AgentResponse {
 		Description:        a.Description,
 		Instructions:       a.Instructions,
 		AvatarURL:          textToPtr(a.AvatarUrl),
+		AvatarSource:       a.AvatarSource,
 		RuntimeMode:        a.RuntimeMode,
 		RuntimeName:        defaultAgentRuntimeName(a.RuntimeMode),
 		RuntimeConfig:      rc,
@@ -945,12 +947,18 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 			initialMemory = draftMemory
 		}
 	}
+	avatarURL := pgtype.Text{}
+	if req.AvatarURL != nil {
+		if trimmed := strings.TrimSpace(*req.AvatarURL); trimmed != "" {
+			avatarURL = pgtype.Text{String: trimmed, Valid: true}
+		}
+	}
 
 	createParams := db.CreateAgentParams{
 		WorkspaceID:        wsUUID,
 		Description:        req.Description,
 		Instructions:       req.Instructions,
-		AvatarUrl:          ptrToText(req.AvatarURL),
+		AvatarUrl:          avatarURL,
 		RuntimeMode:        runtime.RuntimeMode,
 		RuntimeConfig:      rc,
 		RuntimeID:          runtime.ID,
@@ -1301,7 +1309,12 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		params.Instructions = pgtype.Text{String: *req.Instructions, Valid: true}
 	}
 	if req.AvatarURL != nil {
-		params.AvatarUrl = pgtype.Text{String: *req.AvatarURL, Valid: true}
+		avatarURL := strings.TrimSpace(*req.AvatarURL)
+		if avatarURL == "" {
+			writeError(w, http.StatusBadRequest, "avatar_url must not be empty")
+			return
+		}
+		params.AvatarUrl = pgtype.Text{String: avatarURL, Valid: true}
 	}
 	if req.RuntimeConfig != nil {
 		rc, _ := json.Marshal(req.RuntimeConfig)

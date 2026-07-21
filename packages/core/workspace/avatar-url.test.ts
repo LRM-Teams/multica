@@ -1,10 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   AGENT_AVATAR_PRESETS,
-  defaultAgentAvatarPath,
   resolvePublicFileUrl,
   resolvePublicFileUrlWithBase,
-  stableHash,
 } from "./avatar-url";
 
 vi.mock("../api", () => ({
@@ -57,42 +55,5 @@ describe("AGENT_AVATAR_PRESETS", () => {
     expect(AGENT_AVATAR_PRESETS[0]).toBe("/agent-avatars/human-01.jpg");
     expect(AGENT_AVATAR_PRESETS[23]).toBe("/agent-avatars/human-24.jpg");
     expect(new Set(AGENT_AVATAR_PRESETS).size).toBe(24); // no dupes
-  });
-});
-
-describe("stableHash", () => {
-  it("is deterministic for the same input", () => {
-    expect(stableHash("agent-abc")).toBe(stableHash("agent-abc"));
-  });
-
-  it("returns an unsigned 32-bit integer", () => {
-    const h = stableHash("agent-abc");
-    expect(Number.isInteger(h)).toBe(true);
-    expect(h).toBeGreaterThanOrEqual(0);
-    expect(h).toBeLessThanOrEqual(0xffffffff);
-  });
-
-  it("differs across distinct inputs", () => {
-    expect(stableHash("agent-a")).not.toBe(stableHash("agent-b"));
-  });
-});
-
-describe("defaultAgentAvatarPath", () => {
-  it("maps an id to a stable pool photo (same id → same photo)", () => {
-    const id = "c56c3ac3-bf1d-475e-b761-7c508e16c9f1";
-    expect(defaultAgentAvatarPath(id)).toBe(defaultAgentAvatarPath(id));
-    expect(AGENT_AVATAR_PRESETS).toContain(defaultAgentAvatarPath(id));
-  });
-
-  it("spreads distinct ids across the pool (not all the same slot)", () => {
-    const paths = Array.from({ length: 50 }, (_, i) => defaultAgentAvatarPath(`agent-${i}`));
-    expect(new Set(paths).size).toBeGreaterThan(1);
-  });
-
-  it("is keyed by id, not name — differing ids can resolve differently", () => {
-    // Two ids that hash into different pool slots stay independent of any name.
-    const a = defaultAgentAvatarPath("id-one");
-    const b = defaultAgentAvatarPath("id-two");
-    expect([a, b].every((p) => AGENT_AVATAR_PRESETS.includes(p))).toBe(true);
   });
 });

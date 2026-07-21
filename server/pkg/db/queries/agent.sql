@@ -29,7 +29,13 @@ UPDATE agent SET
     name = COALESCE(sqlc.narg('name'), name),
     display_name = COALESCE(sqlc.narg('display_name'), display_name),
     description = COALESCE(sqlc.narg('description'), description),
-    avatar_url = COALESCE(sqlc.narg('avatar_url'), avatar_url),
+    avatar_url = COALESCE(NULLIF(btrim(sqlc.narg('avatar_url')), ''), avatar_url),
+    avatar_source = CASE
+        WHEN NULLIF(btrim(sqlc.narg('avatar_url')), '') IS NULL THEN avatar_source
+        WHEN btrim(sqlc.narg('avatar_url')) ~ '^/agent-avatars/human-(0[1-9]|1[0-9]|2[0-4])\.jpg$'
+            THEN 'picked'
+        ELSE 'uploaded'
+    END,
     runtime_config = COALESCE(sqlc.narg('runtime_config'), runtime_config),
     runtime_mode = COALESCE(sqlc.narg('runtime_mode'), runtime_mode),
     runtime_id = COALESCE(sqlc.narg('runtime_id'), runtime_id),

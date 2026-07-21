@@ -146,6 +146,51 @@ func TestMigration202SeparatesExplicitUnfollowFromDirectedNoWake(t *testing.T) {
 	}
 }
 
+func TestMigration203PersistsAgentAvatarTruthAtWriteBoundary(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	migrationsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
+
+	up, err := os.ReadFile(filepath.Join(migrationsDir, "203_agent_durable_avatar.up.sql"))
+	if err != nil {
+		t.Fatalf("read migration 203 up: %v", err)
+	}
+	contents := string(up)
+	for _, required := range []string{
+		"CREATE OR REPLACE FUNCTION default_agent_avatar_url(agent_id UUID)",
+		"ADD COLUMN avatar_source TEXT NOT NULL DEFAULT 'assigned'",
+		"CHECK (avatar_source IN ('assigned', 'picked', 'uploaded'))",
+		"WHERE avatar_url IS NULL OR btrim(avatar_url) = ''",
+		"CREATE TRIGGER agent_assign_durable_avatar_on_insert",
+		"BEFORE INSERT ON agent",
+		"NEW.avatar_url := default_agent_avatar_url(NEW.id)",
+		"NEW.avatar_source := 'assigned'",
+		"ALTER COLUMN avatar_url SET NOT NULL",
+	} {
+		if !strings.Contains(contents, required) {
+			t.Errorf("migration 203 up missing %q", required)
+		}
+	}
+
+	down, err := os.ReadFile(filepath.Join(migrationsDir, "203_agent_durable_avatar.down.sql"))
+	if err != nil {
+		t.Fatalf("read migration 203 down: %v", err)
+	}
+	downContents := string(down)
+	for _, required := range []string{
+		"ALTER COLUMN avatar_url DROP NOT NULL",
+		"DROP TRIGGER IF EXISTS agent_assign_durable_avatar_on_insert ON agent",
+		"DROP COLUMN IF EXISTS avatar_source",
+		"DROP FUNCTION IF EXISTS default_agent_avatar_url(UUID)",
+	} {
+		if !strings.Contains(downContents, required) {
+			t.Errorf("migration 203 down missing %q", required)
+		}
+	}
+}
+
 func TestResolveDirSkipsNonMigrationDirectory(t *testing.T) {
 	root := t.TempDir()
 	internalMigrations := filepath.Join(root, "server", "internal", "migrations")

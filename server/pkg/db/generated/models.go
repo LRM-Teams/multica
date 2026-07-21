@@ -45,6 +45,7 @@ type Agent struct {
 	Model              pgtype.Text        `json:"model"`
 	ThinkingLevel      pgtype.Text        `json:"thinking_level"`
 	DisplayName        string             `json:"display_name"`
+	AvatarSource       string             `json:"avatar_source"`
 }
 
 type AgentEventDelivery struct {

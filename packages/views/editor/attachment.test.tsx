@@ -35,6 +35,29 @@ vi.mock("./use-download-attachment", () => ({
   useDownloadAttachment: () => downloadMock,
 }));
 
+const { isMobileMock } = vi.hoisted(() => ({
+  isMobileMock: { current: false },
+}));
+
+vi.mock("@multica/ui/hooks/use-mobile", () => ({
+  useIsMobile: () => isMobileMock.current,
+}));
+
+vi.mock("@multica/core/workspace/hooks", () => ({
+  useActorName: () => ({
+    getActorName: () => "Frank An",
+  }),
+}));
+
+vi.mock("../i18n/use-message-time", () => ({
+  useMessageTime: () => ({
+    format: () => "10:24",
+    full: () => "full",
+    dayLabel: () => "",
+    startsNewDay: () => false,
+  }),
+}));
+
 vi.mock("../platform", () => ({
   openExternal: openExternalMock,
 }));
@@ -64,6 +87,14 @@ vi.mock("../i18n", () => ({
           open_in_new_tab: "Open in new tab",
           close: "Close",
           open_file: "Open {{filename}}",
+          download_file: "Download {{filename}}",
+          file_detail_title: "File",
+          back: "Back",
+          open_elsewhere: "Open with another app",
+          meta_type: "Type",
+          meta_size: "Size",
+          meta_sender: "Sender",
+          meta_time: "Time",
           file_type: {
             image: "Image",
             video: "Video",
@@ -173,6 +204,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   resolverState.attachments = [];
   configStore.setState({ cdnDomain: "" });
+  isMobileMock.current = false;
   // Default to "no proxy override" — site-relative URLs stay as-is, mirroring
   // the web app's same-origin proxy. Tests that simulate Desktop / mobile
   // webview override per-case via getBaseUrlMock.mockReturnValue(...).
@@ -423,6 +455,22 @@ describe("Attachment — html dispatch", () => {
     // show the chrome instead of the iframe.
     expect(screen.getByText("report.html")).toBeTruthy();
     expect(document.querySelector("iframe")).toBeNull();
+  });
+
+  // LRM-216 — mobile/narrow skips the inline HTML iframe for a compact card.
+  it("mobile html uses compact file card (no iframe preview)", () => {
+    isMobileMock.current = true;
+    const att = makeRecord({
+      filename: "report.html",
+      content_type: "text/html",
+      url: "https://cdn.example.test/report.html",
+      size_bytes: 606,
+    });
+    renderWithQuery(<Attachment attachment={{ kind: "record", attachment: att }} />);
+    expect(screen.getByTestId("mobile-file-entry")).toBeTruthy();
+    expect(screen.getByText("report.html")).toBeTruthy();
+    expect(document.querySelector("iframe")).toBeNull();
+    expect(screen.queryByTitle("Preview")).toBeNull();
   });
 });
 

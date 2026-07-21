@@ -47,6 +47,13 @@
     "remove": "添付ファイルを削除",
     "open_file": "{{filename}} を開く",
     "download_file": "{{filename}} をダウンロード",
+    "file_detail_title": "ファイル",
+    "back": "戻る",
+    "open_elsewhere": "別のアプリで開く",
+    "meta_type": "種類",
+    "meta_size": "サイズ",
+    "meta_sender": "送信者",
+    "meta_time": "時刻",
     "file_type": {
       "image": "画像",
       "video": "動画",

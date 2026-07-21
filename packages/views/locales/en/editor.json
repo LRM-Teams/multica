@@ -47,6 +47,13 @@
     "remove": "Remove attachment",
     "open_file": "Open {{filename}}",
     "download_file": "Download {{filename}}",
+    "file_detail_title": "File",
+    "back": "Back",
+    "open_elsewhere": "Open with another app",
+    "meta_type": "Type",
+    "meta_size": "Size",
+    "meta_sender": "Sender",
+    "meta_time": "Time",
     "file_type": {
       "image": "Image",
       "video": "Video",

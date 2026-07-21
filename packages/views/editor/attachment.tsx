@@ -9,7 +9,10 @@
  *   - image  → ImageAttachmentView (figure + hover toolbar + lightbox via
  *              the shared AttachmentPreviewModal)
  *   - html   → HtmlAttachmentPreview (inline iframe + hover toolbar)
+ *              — except on mobile/narrow (LRM-216): MobileFileAttachment
  *   - others → AttachmentCard (icon + filename + Eye/Download row)
+ *              — on mobile/narrow: MobileFileAttachment (compact card →
+ *              fullscreen basic-info detail, no content preview)
  *
  * Call sites:
  *   - extensions/file-card.tsx FileCardView (Tiptap NodeView)
@@ -35,12 +38,15 @@ import { copyText } from "@multica/ui/lib/clipboard";
 import { api } from "@multica/core/api";
 import { useConfigStore } from "@multica/core/config";
 import type { Attachment as AttachmentRecord } from "@multica/core/types";
+import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { useT } from "../i18n";
+import { openExternal } from "../platform";
 import { useAttachmentDownloadResolver } from "./attachment-download-context";
 import { useAttachmentPreview } from "./attachment-preview-modal";
 import { useDownloadAttachment } from "./use-download-attachment";
 import { AttachmentCard } from "./attachment-card";
 import { HtmlAttachmentPreview } from "./html-attachment-preview";
+import { MobileFileAttachment } from "./mobile-file-attachment";
 import { getPreviewKind, type PreviewKind } from "./utils/preview";
 import "./styles/attachment.css";
 
@@ -303,6 +309,7 @@ export function Attachment({
   const cdnDomain = useConfigStore((s) => s.cdnDomain);
   const download = useDownloadAttachment();
   const preview = useAttachmentPreview();
+  const isMobile = useIsMobile();
 
   const state = normalize(attachment, resolveAttachment, cdnDomain);
   const forceKind =
@@ -334,6 +341,36 @@ export function Attachment({
     }
     if (state.url) openByUrl(state.url);
   };
+
+  const handleOpenElsewhere = () => {
+    if (state.url) {
+      openExternal(state.url);
+      return;
+    }
+    handleDownload();
+  };
+
+  // LRM-216 — narrow/mobile: compact info card → fullscreen detail (no inline
+  // HTML/iframe preview). Images keep the existing thumbnail + lightbox path.
+  if (isMobile && kind !== "image") {
+    const canOpen = !!state.url || !!state.attachmentId;
+    return (
+      <MobileFileAttachment
+        filename={state.filename}
+        contentType={state.contentType}
+        sizeBytes={state.sizeBytes}
+        createdAt={state.record?.created_at}
+        uploaderType={state.record?.uploader_type}
+        uploaderId={state.record?.uploader_id}
+        uploading={state.uploading}
+        openable={canOpen && !state.uploading}
+        onDownload={handleDownload}
+        onOpen={handleOpenElsewhere}
+        onDelete={editable ? onDelete : undefined}
+        className={className}
+      />
+    );
+  }
 
   if (kind === "image") {
     return (

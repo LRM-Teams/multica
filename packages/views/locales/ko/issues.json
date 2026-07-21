@@ -156,6 +156,7 @@
     "back_to_messages": "메시지로 돌아가기",
     "title_placeholder": "이슈 제목",
     "desc_placeholder": "설명 추가...",
+    "desc_edit_aria": "설명 편집",
     "sub_issues_label": "하위 이슈",
     "sub_issue_of": "상위 이슈",
     "from_discussion": "토론에서",

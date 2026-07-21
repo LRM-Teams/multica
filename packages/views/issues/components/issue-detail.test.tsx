@@ -1,6 +1,6 @@
 import { forwardRef, useRef, useState, useImperativeHandle } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Issue, TimelineEntry } from "@multica/core/types";
 import { I18nProvider } from "@multica/core/i18n/react";
@@ -468,6 +468,15 @@ function renderIssueDetail(issueId = "issue-1") {
   );
 }
 
+// ReadonlyContent bodies that belong to the TIMELINE (message bubbles), not the
+// issue description. The description's reading surface (#538) also renders a
+// ReadonlyContent, so the message-vs-activity discrimination must exclude it.
+function messageBodies() {
+  return screen
+    .queryAllByTestId("readonly-content")
+    .filter((el) => !el.closest("[data-testid='issue-description']"));
+}
+
 function renderIssueDetailWithHighlight(
   highlightCommentId: string,
   issueId = "issue-1",
@@ -538,7 +547,34 @@ describe("IssueDetail (shared)", () => {
       expect(screen.getByDisplayValue("Implement authentication")).toBeInTheDocument();
     });
 
-    expect(screen.getByDisplayValue("Add JWT auth to the backend")).toBeInTheDocument();
+    // Description is a READING surface by default (#538) — rendered via
+    // ReadonlyContent (link+peek projection), not the editable textarea — so a
+    // typed issue-ref shows as a plain link, not the editing-only chip. (Scoped
+    // to the description; the comment composer is also a rich-text-editor.)
+    const description = screen.getByTestId("issue-description");
+    expect(within(description).getByText("Add JWT auth to the backend")).toBeInTheDocument();
+    expect(within(description).queryByTestId("rich-text-editor")).toBeNull();
+  });
+
+  it("switches the description to the editor on click and back to reading on an outside click (#538)", async () => {
+    renderIssueDetail();
+    const description = () => screen.getByTestId("issue-description");
+    await waitFor(() =>
+      expect(within(description()).getByText("Add JWT auth to the backend")).toBeInTheDocument(),
+    );
+
+    // Reading → clicking the description text mounts the editable ContentEditor.
+    fireEvent.click(within(description()).getByText("Add JWT auth to the backend"));
+    await waitFor(() =>
+      expect(within(description()).queryByTestId("rich-text-editor")).toBeInTheDocument(),
+    );
+
+    // A click outside the description area drops back to the reading surface.
+    fireEvent.mouseDown(document.body);
+    await waitFor(() =>
+      expect(within(description()).queryByTestId("rich-text-editor")).toBeNull(),
+    );
+    expect(within(description()).getByText("Add JWT auth to the backend")).toBeInTheDocument();
   });
 
   it("renders the issue title leaf as a link to the issue detail page", async () => {
@@ -838,10 +874,11 @@ describe("IssueDetail (shared)", () => {
 
       renderIssueDetail();
 
-      // Message bubble body flows through ReadonlyContent.
+      // Message bubble body flows through ReadonlyContent (timeline only).
       await waitFor(() => {
-        expect(screen.getByTestId("readonly-content")).toHaveTextContent("A real reply");
+        expect(messageBodies()).toHaveLength(1);
       });
+      expect(messageBodies()[0]).toHaveTextContent("A real reply");
     });
 
     it("renders progress_update / status_change / system as an Activity entry, never a Message row", async () => {
@@ -867,7 +904,7 @@ describe("IssueDetail (shared)", () => {
       });
       // ... but it is NOT a Message bubble — no ReadonlyContent body, so it is
       // not reactable/quotable/copyable/searchable like a real comment.
-      expect(screen.queryByTestId("readonly-content")).not.toBeInTheDocument();
+      expect(messageBodies()).toHaveLength(0);
     });
 
     it("renders an execution-result row with no content as an Activity entry, never an empty row", async () => {
@@ -891,7 +928,7 @@ describe("IssueDetail (shared)", () => {
       await waitFor(() => {
         expect(screen.getByText("Activity update")).toBeInTheDocument();
       });
-      expect(screen.queryByTestId("readonly-content")).not.toBeInTheDocument();
+      expect(messageBodies()).toHaveLength(0);
     });
 
     it("renders an explicit link to the Activity run when the entry carries a run pointer", async () => {
@@ -1243,11 +1280,11 @@ describe("IssueDetail (shared)", () => {
   it("sends empty description when editor is cleared", async () => {
     renderIssueDetail();
 
-    await waitFor(() => {
-      expect(screen.getByDisplayValue("Add JWT auth to the backend")).toBeInTheDocument();
-    });
+    // The description is a reading surface by default (#538); click it to mount
+    // the editor before clearing.
+    fireEvent.click(await screen.findByText("Add JWT auth to the backend"));
 
-    const editor = screen.getByPlaceholderText("Add description...");
+    const editor = await screen.findByPlaceholderText("Add description...");
     fireEvent.change(editor, { target: { value: "" } });
 
     await waitFor(() => {

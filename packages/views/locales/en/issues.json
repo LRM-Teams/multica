@@ -156,6 +156,7 @@
     "back_to_messages": "Back to Messages",
     "title_placeholder": "Issue title",
     "desc_placeholder": "Add description...",
+    "desc_edit_aria": "Edit description",
     "sub_issues_label": "Sub-issues",
     "sub_issue_of": "Sub-issue of",
     "from_discussion": "From discussion",

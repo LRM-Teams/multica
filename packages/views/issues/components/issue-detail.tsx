@@ -29,7 +29,7 @@ import { Button } from "@multica/ui/components/ui/button";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@multica/ui/components/ui/resizable";
 import { Sheet, SheetContent } from "@multica/ui/components/ui/sheet";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
-import { ContentEditor, type ContentEditorRef, TitleEditor, useFileDropZone, FileDropOverlay } from "../../editor";
+import { ContentEditor, type ContentEditorRef, TitleEditor, useFileDropZone, FileDropOverlay, ReadonlyContent } from "../../editor";
 import { FileUploadButton } from "@multica/ui/components/common/file-upload-button";
 import {
   Tooltip,
@@ -1264,6 +1264,73 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
   const actions = useIssueActions(issue);
   const handleUpdateField = actions.updateField;
 
+  // Description reading/edit toggle (#538). The description is a READING surface
+  // by default — it renders issue-refs as plain link+peek via ReadonlyContent
+  // (the same projection comments use, #520), NOT the editing-only ref chip.
+  // Clicking it mounts the editable ContentEditor (which shows chips); autosave
+  // is preserved end-to-end, there is no Save/Cancel (Linear-style, Frank/Felix).
+  const [descEditing, setDescEditing] = useState(false);
+  const descContainerRef = useRef<HTMLDivElement>(null);
+
+  // Persist the description, binding any pending uploads still referenced in the
+  // markdown so they appear in `issueAttachments` after refresh and the editor's
+  // preview keeps working past reload. Match with `contentReferencesAttachment`,
+  // NOT `md.includes(a.url)`: the editor persists the durable `markdownLink`
+  // (`/api/attachments/<id>/download`), never the raw storage `a.url`, so a bare
+  // includes() never matches and the upload is never linked via `attachment_ids`
+  // (mirrors the comment/reply/chat composers — MUL-3130 / MUL-3192). Shared by
+  // the debounced onUpdate and the flush-on-exit path.
+  const saveDescription = useCallback(
+    (md: string) => {
+      const ids = descPendingAttachments
+        .filter((a) => contentReferencesAttachment(md, a))
+        .map((a) => a.id);
+      handleUpdateField({ description: md, attachment_ids: ids.length > 0 ? ids : undefined });
+    },
+    [descPendingAttachments, handleUpdateField],
+  );
+
+  // Leaving edit mode FLUSHES the pending debounced save before the editor
+  // unmounts — ContentEditor cancels its debounce on unmount, so an edit made
+  // inside the 1.5s window would otherwise be lost — then drops to reading.
+  const exitDescriptionEditing = useCallback(() => {
+    const md = descEditorRef.current?.getMarkdown();
+    if (md != null) saveDescription(md);
+    setDescEditing(false);
+  }, [saveDescription]);
+
+  // Attach `descEditorRef` and focus the editor as soon as it mounts (i.e. on
+  // entering edit mode) — a callback ref does this at mount time, without an
+  // effect that watches state.
+  const attachDescEditor = useCallback((instance: ContentEditorRef | null) => {
+    descEditorRef.current = instance;
+    instance?.focus();
+  }, []);
+
+  // Exit edit on a click outside the whole description area, or Escape — NOT on
+  // the editor's own blur (clicking the in-area upload button blurs the editor
+  // but must stay in edit mode). The latest exit callback is read via a ref so
+  // the listeners subscribe once per edit session, not on every callback change.
+  const exitRef = useRef(exitDescriptionEditing);
+  exitRef.current = exitDescriptionEditing;
+  useEffect(() => {
+    if (!descEditing) return;
+    const onMouseDown = (e: MouseEvent) => {
+      if (descContainerRef.current && !descContainerRef.current.contains(e.target as Node)) {
+        exitRef.current();
+      }
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") exitRef.current();
+    };
+    document.addEventListener("mousedown", onMouseDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onMouseDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [descEditing]);
+
   // Labels live in their own query (not on the issue body) — fetch the count
   // here so seeding can decide whether the "Labels" optional row should be
   // shown for an issue that already has labels attached.
@@ -1951,40 +2018,67 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             );
           })()}
 
-          <div {...descDropZoneProps} className="relative mt-5 rounded-lg">
-            <ContentEditor
-              ref={descEditorRef}
-              key={id}
-              defaultValue={issue.description || ""}
-              placeholder={t(($) => $.detail.desc_placeholder)}
-              onUpdate={(md) => {
-                // Bind any pending uploads still referenced in the markdown
-                // so they appear in `issueAttachments` after refresh and the
-                // editor's text/code preview keeps working past reload.
-                //
-                // Match with `contentReferencesAttachment`, NOT `md.includes(a.url)`:
-                // the editor persists the durable `markdownLink`
-                // (`/api/attachments/<id>/download` / `markdown_url`) into the
-                // body, never the raw storage `a.url`. A bare `md.includes(a.url)`
-                // therefore never matches, so the upload is never linked via
-                // `attachment_ids`. After reload it's absent from
-                // `issueAttachments`, the renderer can't resolve it to a
-                // freshly-signed `download_url`, and the persisted auth-gated
-                // download endpoint fails to load as a native <img> on clients
-                // whose origin isn't the API host (Desktop/Electron, mobile
-                // webview) — while still working on web via the cookie/proxy.
-                // This mirrors the comment/reply/chat composers, which already
-                // bind via `contentReferencesAttachment` (MUL-3130 / MUL-3192).
-                const ids = descPendingAttachments
-                  .filter((a) => contentReferencesAttachment(md, a))
-                  .map((a) => a.id);
-                handleUpdateField({ description: md, attachment_ids: ids.length > 0 ? ids : undefined });
-              }}
-              onUploadFile={handleDescriptionUpload}
-              debounceMs={1500}
-              currentIssueId={id}
-              attachments={descEditorAttachments}
-            />
+          <div
+            ref={descContainerRef}
+            {...descDropZoneProps}
+            data-testid="issue-description"
+            className="relative mt-5 rounded-lg"
+          >
+            {descEditing ? (
+              <ContentEditor
+                ref={attachDescEditor}
+                key={id}
+                defaultValue={issue.description || ""}
+                placeholder={t(($) => $.detail.desc_placeholder)}
+                // Autosave (debounced). The attachment-binding rationale lives on
+                // `saveDescription`; `exitDescriptionEditing` flushes it on exit.
+                onUpdate={saveDescription}
+                onUploadFile={handleDescriptionUpload}
+                debounceMs={1500}
+                currentIssueId={id}
+                attachments={descEditorAttachments}
+              />
+            ) : (
+              // Reading surface (#538): issue-refs render as plain link+peek (via
+              // ReadonlyContent), not the editing-only chip. Click plain text to
+              // edit; a click on an inner link/mention falls through so it
+              // navigates instead of entering edit.
+              // A <button> can't wrap the inner links/mentions (invalid nested
+              // interactive DOM), so this click-to-edit region is a role=button
+              // that lets inner links keep their own click handling.
+              // react-doctor-disable-next-line react-doctor/no-noninteractive-element-interactions, react-doctor/prefer-tag-over-role -- click-to-edit region; a <button> can't wrap the inner links (invalid nested interactive), so inner links keep their own click handling
+              <div
+                role="button"
+                tabIndex={0}
+                aria-label={t(($) => $.detail.desc_edit_aria)}
+                onClick={(e) => {
+                  // Let a click on an inner link/mention/button navigate instead
+                  // of entering edit; the container itself also has role=button,
+                  // so exclude it from the interactive check.
+                  const interactive = (e.target as HTMLElement).closest("a,button,[role='button']");
+                  if (interactive && interactive !== e.currentTarget) return;
+                  setDescEditing(true);
+                }}
+                onKeyDown={(e) => {
+                  if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) {
+                    e.preventDefault();
+                    setDescEditing(true);
+                  }
+                }}
+                className="cursor-text rounded-md -mx-1 px-1 py-1 transition-colors hover:bg-muted/40"
+              >
+                {issue.description?.trim() ? (
+                  <ReadonlyContent
+                    content={issue.description}
+                    attachments={descEditorAttachments}
+                  />
+                ) : (
+                  <span className="text-sm text-muted-foreground">
+                    {t(($) => $.detail.desc_placeholder)}
+                  </span>
+                )}
+              </div>
+            )}
 
             <div className="flex items-center gap-1 mt-3">
               <ReactionBar
@@ -1993,10 +2087,12 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                 onToggle={handleToggleIssueReaction}
                 getActorName={getActorName}
               />
-              <FileUploadButton
-                size="sm"
-                onSelect={(file) => descEditorRef.current?.uploadFile(file)}
-              />
+              {descEditing && (
+                <FileUploadButton
+                  size="sm"
+                  onSelect={(file) => descEditorRef.current?.uploadFile(file)}
+                />
+              )}
             </div>
             {descDragOver && <FileDropOverlay />}
           </div>

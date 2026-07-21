@@ -2,7 +2,8 @@
   "ignore": {
     "rules": [
       "react-doctor/no-barrel-import",
-      "react-doctor/no-giant-component"
+      "react-doctor/no-giant-component",
+      "react-doctor/nextjs-no-img-element"
     ]
   }
 }

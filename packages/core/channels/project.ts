@@ -67,3 +67,21 @@ export function useSetChannelProject(wsId: string, channelId: string) {
     },
   });
 }
+
+export const projectChannelKeys = {
+  channels: (wsId: string, projectId: string) =>
+    ["project-channels", wsId, projectId] as const,
+};
+
+/**
+ * The group channels attached to a project (#574 / #629). Read-only; drives the
+ * "Associated groups" row on the project detail page. Reverse of
+ * `channelProjectOptions` (which resolves a single channel's bound project).
+ */
+export function projectChannelsOptions(wsId: string, projectId: string) {
+  return queryOptions({
+    queryKey: projectChannelKeys.channels(wsId, projectId),
+    queryFn: () => api.listProjectChannels(projectId, wsId),
+    enabled: !!wsId && !!projectId,
+  });
+}

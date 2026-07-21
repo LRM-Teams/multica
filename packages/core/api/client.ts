@@ -181,6 +181,7 @@ import type {
   CreateSandboxSnapshotRequest,
   CreateSandboxRequest,
   UpdateSandboxRequest,
+  ProjectChannel,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import type { DMItem, CreateOrFindDMBody } from "../dm/types";
@@ -2706,6 +2707,29 @@ export class ApiClient {
       method: "PUT",
       body: JSON.stringify({ project_id: projectId }),
     });
+  }
+
+  // The group channels attached to a project (#574 / #629 — project detail page).
+  async listProjectChannels(projectId: string, workspaceId: string): Promise<ProjectChannel[]> {
+    return this.fetch(
+      `/api/projects/${projectId}/channels?workspace_id=${encodeURIComponent(workspaceId)}`,
+    );
+  }
+
+  // Set (or clear, with `null`) the group an issue is associated with (#574 /
+  // #629 — Issue Properties). The server enforces the 1:1 constraint.
+  async setIssueChannel(
+    issueId: string,
+    channelId: string | null,
+    workspaceId: string,
+  ): Promise<{ channel_id: string }> {
+    return this.fetch(
+      `/api/issues/${issueId}/channel?workspace_id=${encodeURIComponent(workspaceId)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ channel_id: channelId }),
+      },
+    );
   }
 
   async importLarkChannelMessage(data: {

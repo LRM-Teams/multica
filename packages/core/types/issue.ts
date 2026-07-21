@@ -63,6 +63,30 @@ export interface IssueSourceRefs {
   message?: IssueSourceMessageRef;
 }
 
+/**
+ * The group (channel) an issue is associated with — 1:1 (#574). Distinct from
+ * `source_refs.message`: an issue can be linked to a group without originating
+ * from a specific message. Set/cleared via `PUT /api/issues/{id}/channel`.
+ */
+export interface IssueSourceChannelRef {
+  channel_id: string;
+  channel_name?: string | null;
+  channel_kind: string;
+}
+
+/** A group (channel) bound to a project (#574 / #629). Returned by
+ *  `GET /api/projects/{id}/channels` for the project detail page. */
+export interface ProjectChannel {
+  id: string;
+  workspace_id: string;
+  project_id: string;
+  name: string;
+  description?: string | null;
+  kind: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Issue {
   id: string;
   workspace_id: string;
@@ -91,6 +115,9 @@ export interface Issue {
   // responses. Absent when the issue has no chat origin or the viewer can't see
   // the source channel.
   source_refs?: IssueSourceRefs;
+  /** The associated group (#574 / #629), 1:1. Present when the issue is linked
+   *  to a group channel; edited in Issue Properties. */
+  channel?: IssueSourceChannelRef | null;
   created_at: string;
   updated_at: string;
 }

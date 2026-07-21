@@ -144,7 +144,12 @@
     "error": "불러오기 실패",
     "load_more": "더 보기 (남은 {{count}}개)",
     "loading_more": "불러오는 중…",
-    "column_empty": "이슈 없음"
+    "column_empty": "이슈 없음",
+    "scope_toggle_aria": "작업 범위",
+    "scope_group": "이 그룹",
+    "scope_project": "전체 프로젝트",
+    "scope_project_unavailable": "이 프로젝트의 이슈를 불러올 수 없습니다",
+    "empty_project": "이 프로젝트에 이슈가 없습니다"
   },
   "share": {
     "copied": "채널 링크 복사됨",

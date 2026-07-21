@@ -144,7 +144,12 @@
     "error": "読み込みに失敗しました",
     "load_more": "さらに読み込む（残り {{count}} 件）",
     "loading_more": "読み込み中…",
-    "column_empty": "イシューなし"
+    "column_empty": "イシューなし",
+    "scope_toggle_aria": "タスクの範囲",
+    "scope_group": "このグループ",
+    "scope_project": "プロジェクト全体",
+    "scope_project_unavailable": "このプロジェクトのイシューを読み込めません",
+    "empty_project": "このプロジェクトにはイシューがありません"
   },
   "share": {
     "copied": "チャンネルリンクをコピーしました",

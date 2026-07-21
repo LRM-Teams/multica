@@ -684,3 +684,119 @@ func TestEnvDispatch_TrainingMode(t *testing.T) {
 		}
 	})
 }
+
+// TestGetDag_NoEnvDispatchRun_Returns202 verifies the /dag endpoint returns
+// 202 {"status":"in_progress"} when a project exists but has no env_dispatch_run
+// row (rollout not started). Readiness is derived exclusively from
+// env_dispatch_run, so the absence of a row means in_progress. Requires
+// Postgres (skips locally); the readiness decision logic is also covered by
+// service-level TestEnvDispatch_GetDagReadiness_NoRun.
+func TestGetDag_NoEnvDispatchRun_Returns202(t *testing.T) {
+	if testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	projectID := seedHandlerDagProject(t, ctx, testWorkspaceID)
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM project WHERE id = $1`, projectID) })
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/v1/env-dispatch/"+projectID+"/dag", nil)
+	r = r.WithContext(middleware.SetMemberContext(r.Context(), testWorkspaceID, db.Member{}))
+	testHandler.getEnvDispatchDagForProject(w, r, projectID)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 (no env_dispatch_run -> in_progress); body=%s", w.Code, w.Body.String())
+	}
+}
+
+// TestGetDag_NonTrainingCompletedRoot_ReturnsNot202 verifies the /dag endpoint
+// derives readiness from env_dispatch_run.root_task_id, NOT training_dispatch: a
+// training_mode=false dispatch with a terminal (completed) root task and NO
+// training_dispatch row returns a 200 (not 202). Requires Postgres (skips
+// locally); the readiness decision is also covered by service-level
+// TestEnvDispatch_GetDagReadiness_Terminal_NonTrainingRoot.
+func TestGetDag_NonTrainingCompletedRoot_ReturnsNot202(t *testing.T) {
+	if testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	projectID, rootTaskID := seedHandlerDagNonTrainingCompletedRoot(t, ctx, testWorkspaceID)
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM env_dispatch_run WHERE project_id = $1`, projectID)
+		testPool.Exec(ctx, `DELETE FROM project WHERE id = $1`, projectID)
+	})
+
+	// Override the root task status to completed after fixture creation.
+	if _, err := testPool.Exec(ctx, `UPDATE agent_task_queue SET status = 'completed' WHERE id = $1`, rootTaskID); err != nil {
+		t.Fatalf("set root task completed: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/v1/env-dispatch/"+projectID+"/dag", nil)
+	r = r.WithContext(middleware.SetMemberContext(r.Context(), testWorkspaceID, db.Member{}))
+	testHandler.getEnvDispatchDagForProject(w, r, projectID)
+	if w.Code == http.StatusAccepted {
+		t.Fatalf("status = 202, want non-202 (completed non-training root via env_dispatch_run, no training_dispatch); body=%s", w.Body.String())
+	}
+}
+
+// seedHandlerDagProject creates a minimal project in the given workspace and
+// returns its UUID string. Used by /dag handler tests that need a project row.
+func seedHandlerDagProject(t *testing.T, ctx context.Context, workspaceID string) string {
+	t.Helper()
+	var projectID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO project (workspace_id, title, status)
+		VALUES ($1, 'env-dispatch-dag-test', 'planned')
+		RETURNING id
+	`, workspaceID).Scan(&projectID); err != nil {
+		t.Fatalf("create test project: %v", err)
+	}
+	return projectID
+}
+
+// seedHandlerDagNonTrainingCompletedRoot creates a project, an agent, an issue,
+// an agent_task_queue row (the root task), and an env_dispatch_run row with
+// training_mode=false and the root task bound. No training_dispatch row is
+// created. Returns (projectID, rootTaskID).
+func seedHandlerDagNonTrainingCompletedRoot(t *testing.T, ctx context.Context, workspaceID string) (string, string) {
+	t.Helper()
+	projectID := seedHandlerDagProject(t, ctx, workspaceID)
+	// Agent (required FK for agent_task_queue).
+	var agentID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent (workspace_id, name, display_name, description, runtime_mode, runtime_config, visibility, max_concurrent_tasks, owner_id, instructions, custom_env, custom_args, mcp_config)
+		VALUES ($1, 'dag-test-agent', 'DAG Test Agent', '', 'cloud', '{}'::jsonb, 'private', 1, NULL, '', '{}'::jsonb, '[]'::jsonb, '[]'::jsonb)
+		RETURNING id
+	`, workspaceID).Scan(&agentID); err != nil {
+		t.Fatalf("create test agent: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent WHERE id = $1`, agentID) })
+	// Issue (required FK for agent_task_queue).
+	var issueID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (workspace_id, project_id, title, status, priority, creator_type, creator_id)
+		VALUES ($1, $2, 'dag-test-issue', 'backlog', 'none', 'member', $3)
+		RETURNING id
+	`, workspaceID, projectID, testUserID).Scan(&issueID); err != nil {
+		t.Fatalf("create test issue: %v", err)
+	}
+	// Root task (agent_task_queue with status=queued initially; the test sets it
+	// to completed before the /dag call).
+	var rootTaskID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (agent_id, issue_id, status, priority)
+		VALUES ($1, $2, 'queued', 0)
+		RETURNING id
+	`, agentID, issueID).Scan(&rootTaskID); err != nil {
+		t.Fatalf("create test root task: %v", err)
+	}
+	// env_dispatch_run: training_mode=false, root_task_id bound. No
+	// training_dispatch row is created.
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO env_dispatch_run (project_id, workspace_id, training_mode, root_task_id)
+		VALUES ($1, $2, false, $3)
+	`, projectID, workspaceID, rootTaskID); err != nil {
+		t.Fatalf("create env_dispatch_run: %v", err)
+	}
+	return projectID, rootTaskID
+}

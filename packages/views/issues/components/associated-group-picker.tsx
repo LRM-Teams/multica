@@ -33,13 +33,15 @@ export function AssociatedGroupPicker({
   const setChannel = useSetIssueChannel(issueId);
   const { data: channels = [] } = useQuery(channelsOptions(wsId));
 
-  const groups = useMemo(
-    () =>
-      channels
-        .filter((c) => c.kind === "group" && !c.archived_at)
-        .filter((c) => !filter || c.name.toLowerCase().includes(filter.toLowerCase())),
-    [channels, filter],
-  );
+  const groups = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    return channels.filter(
+      (c) =>
+        c.kind === "group" &&
+        !c.archived_at &&
+        (!q || c.name.toLowerCase().includes(q)),
+    );
+  }, [channels, filter]);
 
   const reset = () => {
     setOpen(false);
@@ -120,6 +122,7 @@ export function AssociatedGroupPicker({
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
                 placeholder={t(($) => $.detail.associated_group_search)}
+                aria-label={t(($) => $.detail.associated_group_search)}
                 className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
               />
             </div>

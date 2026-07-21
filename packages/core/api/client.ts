@@ -2710,10 +2710,13 @@ export class ApiClient {
   }
 
   // The group channels attached to a project (#574 / #629 — project detail page).
+  // The endpoint responds with an envelope `{ channels, total }`; unwrap it so
+  // callers get the list directly.
   async listProjectChannels(projectId: string, workspaceId: string): Promise<ProjectChannel[]> {
-    return this.fetch(
+    const res = await this.fetch<{ channels: ProjectChannel[]; total: number }>(
       `/api/projects/${projectId}/channels?workspace_id=${encodeURIComponent(workspaceId)}`,
     );
+    return res.channels ?? [];
   }
 
   // Set (or clear, with `null`) the group an issue is associated with (#574 /

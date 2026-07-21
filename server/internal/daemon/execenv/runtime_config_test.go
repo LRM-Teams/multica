@@ -774,6 +774,35 @@ func TestPinnedRulesAndLazyReferencesRenderForChat(t *testing.T) {
 	}
 }
 
+func TestRenderProjectContextUsesTruthfulTaskKindWording(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		ctx  TaskContextForEnv
+		want string
+	}{
+		{name: "issue", ctx: TaskContextForEnv{IssueID: "issue-1"}, want: "This issue belongs to **Project A**."},
+		{name: "chat", ctx: TaskContextForEnv{ChatSessionID: "chat-1"}, want: "This conversation is associated with **Project A**."},
+		{name: "radar", ctx: TaskContextForEnv{AgentRadarPrompt: "review"}, want: "This proactive review is scoped to **Project A**."},
+		{name: "quick create", ctx: TaskContextForEnv{QuickCreatePrompt: "create"}, want: "The requested issue will be created in **Project A**."},
+		{name: "autopilot", ctx: TaskContextForEnv{AutopilotRunID: "run-1"}, want: "This automation run is associated with **Project A**."},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var b strings.Builder
+			tt.ctx.ProjectID = "project-1"
+			tt.ctx.ProjectTitle = "Project A"
+			renderProjectContext(&b, tt.ctx)
+			if got := b.String(); !strings.Contains(got, tt.want) {
+				t.Fatalf("project context missing %q:\n%s", tt.want, got)
+			}
+			if tt.name != "issue" && strings.Contains(b.String(), "This issue belongs") {
+				t.Fatalf("non-issue context used issue wording:\n%s", b.String())
+			}
+		})
+	}
+}
+
 func TestMulticaMemoryScopeRenderedForPiProvider(t *testing.T) {
 	t.Parallel()
 	ctx := TaskContextForEnv{

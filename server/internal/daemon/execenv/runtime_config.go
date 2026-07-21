@@ -970,10 +970,19 @@ func renderProjectContext(b *strings.Builder, ctx TaskContextForEnv) {
 	}
 	b.WriteString("## Project Context\n\n")
 	if ctx.ProjectTitle != "" {
-		if ctx.ChatSessionID != "" {
+		switch {
+		case ctx.ChatSessionID != "":
 			fmt.Fprintf(b, "This conversation is associated with **%s**.\n\n", ctx.ProjectTitle)
-		} else {
+		case ctx.IssueID != "":
 			fmt.Fprintf(b, "This issue belongs to **%s**.\n\n", ctx.ProjectTitle)
+		case ctx.AgentRadarPrompt != "":
+			fmt.Fprintf(b, "This proactive review is scoped to **%s**.\n\n", ctx.ProjectTitle)
+		case ctx.QuickCreatePrompt != "":
+			fmt.Fprintf(b, "The requested issue will be created in **%s**.\n\n", ctx.ProjectTitle)
+		case ctx.AutopilotRunID != "":
+			fmt.Fprintf(b, "This automation run is associated with **%s**.\n\n", ctx.ProjectTitle)
+		default:
+			fmt.Fprintf(b, "This task is associated with **%s**.\n\n", ctx.ProjectTitle)
 		}
 	}
 	if len(ctx.ProjectResources) > 0 {

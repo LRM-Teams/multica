@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -158,21 +159,29 @@ func (h *Handler) buildWendyAmbientChannelMarkdown(ctx context.Context, watch wo
 				label = resource.Label.String
 			}
 			fmt.Fprintf(&b, "- resource_id=%s type=%s label=%q resource_ref=%s\n",
-				uuidToString(resource.ID), resource.ResourceType, label, trimAmbientContent(string(resource.ResourceRef)))
+				uuidToString(resource.ID), resource.ResourceType, label, trimAmbientJSON(resource.ResourceRef))
 		}
 	}
 
 	b.WriteString("\n")
 	b.WriteString("## Open Work Nodes In Channel\n\n")
 	rows, err := h.DB.Query(ctx, `
-		SELECT id, title, status, owner_type, owner_id, linked_issue_id
-		FROM work_node
-		WHERE workspace_id = $1
-		  AND primary_channel_id = $2
-		  AND status NOT IN ('done', 'cancelled')
-		ORDER BY updated_at DESC
+		SELECT node.id, node.title, node.status, node.owner_type, node.owner_id, node.linked_issue_id
+		FROM work_node node
+		LEFT JOIN issue linked_issue
+		  ON linked_issue.id = node.linked_issue_id
+		 AND linked_issue.workspace_id = node.workspace_id
+		WHERE node.workspace_id = $1
+		  AND node.primary_channel_id = $2
+		  AND node.status NOT IN ('done', 'cancelled')
+		  AND (
+		    $3::uuid IS NULL
+		    OR node.linked_issue_id IS NULL
+		    OR linked_issue.project_id = $3
+		  )
+		ORDER BY node.updated_at DESC
 		LIMIT 30
-	`, watch.WorkspaceID, watch.ChannelID)
+	`, watch.WorkspaceID, watch.ChannelID, projectID)
 	if err != nil {
 		return "", fmt.Errorf("list ambient work nodes: %w", err)
 	}
@@ -291,19 +300,24 @@ func (h *Handler) buildWendyAmbientChannelMarkdown(ctx context.Context, watch wo
 		         JOIN issue dependency ON dependency.id = dep_link.depends_on_issue_id
 		         WHERE dep_link.issue_id = i.id
 		       ), '[]'::jsonb) AS dependencies,
-		       COALESCE((
-		         SELECT c.content
-		         FROM comment c
-		         WHERE c.issue_id = i.id
-		         ORDER BY c.created_at DESC
-		         LIMIT 1
-		       ), '') AS latest_progress,
+		       COALESCE(latest_comment.content, '') AS latest_comment_content,
+		       COALESCE(latest_comment.type, '') AS latest_comment_type,
+		       COALESCE(latest_comment.author_type, '') AS latest_comment_author_type,
+		       latest_comment.author_id AS latest_comment_author_id,
+		       latest_comment.created_at AS latest_comment_at,
 		       i.updated_at
 		FROM issue i
 		JOIN workspace w ON w.id = i.workspace_id
 		LEFT JOIN agent a
 		  ON a.id = i.assignee_id
 		 AND i.assignee_type = 'agent'
+		LEFT JOIN LATERAL (
+		  SELECT c.content, c.type, c.author_type, c.author_id, c.created_at
+		  FROM comment c
+		  WHERE c.issue_id = i.id
+		  ORDER BY c.created_at DESC, c.id DESC
+		  LIMIT 1
+		) latest_comment ON true
 		WHERE i.workspace_id = $1
 		  `+issueScopePredicate+`
 		  AND i.status NOT IN ('done', 'cancelled', 'closed')
@@ -317,14 +331,18 @@ func (h *Handler) buildWendyAmbientChannelMarkdown(ctx context.Context, watch wo
 		issueCount := 0
 		for issueRows.Next() {
 			var number int64
-			var issueID, assigneeID, parentIssueID pgtype.UUID
-			var title, description, status, assigneeType, agentName, issuePrefix, latestProgress string
+			var issueID, assigneeID, parentIssueID, latestCommentAuthorID pgtype.UUID
+			var title, description, status, assigneeType, agentName, issuePrefix string
+			var latestComment, latestCommentType, latestCommentAuthorType string
 			var acceptanceCriteria, dependencies []byte
+			var latestCommentAt pgtype.Timestamptz
 			var updatedAt time.Time
 			if err := issueRows.Scan(
 				&issueID, &issuePrefix, &number, &title, &description, &status,
 				&assigneeType, &assigneeID, &agentName, &parentIssueID,
-				&acceptanceCriteria, &dependencies, &latestProgress, &updatedAt,
+				&acceptanceCriteria, &dependencies,
+				&latestComment, &latestCommentType, &latestCommentAuthorType, &latestCommentAuthorID, &latestCommentAt,
+				&updatedAt,
 			); err != nil {
 				issueRows.Close()
 				return "", err
@@ -341,10 +359,15 @@ func (h *Handler) buildWendyAmbientChannelMarkdown(ctx context.Context, watch wo
 			if strings.TrimSpace(description) != "" {
 				fmt.Fprintf(&b, "  description=%q\n", trimAmbientContent(description))
 			}
-			fmt.Fprintf(&b, "  acceptance_criteria=%s\n", trimAmbientContent(string(acceptanceCriteria)))
-			fmt.Fprintf(&b, "  dependencies=%s\n", trimAmbientContent(string(dependencies)))
-			if strings.TrimSpace(latestProgress) != "" {
-				fmt.Fprintf(&b, "  latest_progress=%q\n", trimAmbientContent(latestProgress))
+			fmt.Fprintf(&b, "  acceptance_criteria=%s\n", trimAmbientJSON(acceptanceCriteria))
+			fmt.Fprintf(&b, "  dependencies=%s\n", trimAmbientJSON(dependencies))
+			if strings.TrimSpace(latestComment) != "" {
+				fmt.Fprintf(&b, "  latest_comment=%q type=%s author_type=%s author_id=%s",
+					trimAmbientContent(latestComment), latestCommentType, latestCommentAuthorType, uuidToString(latestCommentAuthorID))
+				if latestCommentAt.Valid {
+					fmt.Fprintf(&b, " at=%s", latestCommentAt.Time.UTC().Format(time.RFC3339))
+				}
+				b.WriteString("\n")
 			}
 			issueCount++
 		}
@@ -362,19 +385,34 @@ func (h *Handler) buildWendyAmbientChannelMarkdown(ctx context.Context, watch wo
 		SELECT i.id, w.issue_prefix, i.number, i.title,
 		       COALESCE(i.assignee_type, '') AS assignee_type, i.assignee_id,
 		       COALESCE(a.name, '') AS agent_name, i.acceptance_criteria,
-		       COALESCE((
-		         SELECT c.content
-		         FROM comment c
-		         WHERE c.issue_id = i.id
-		         ORDER BY c.created_at DESC
-		         LIMIT 1
-		       ), '') AS latest_comment,
+		       COALESCE(latest_comment.content, '') AS latest_comment_content,
+		       COALESCE(latest_comment.type, '') AS latest_comment_type,
+		       COALESCE(latest_comment.author_type, '') AS latest_comment_author_type,
+		       latest_comment.author_id AS latest_comment_author_id,
+		       latest_comment.created_at AS latest_comment_at,
+		       completed_activity.completed_at,
 		       i.updated_at
 		FROM issue i
 		JOIN workspace w ON w.id = i.workspace_id
 		LEFT JOIN agent a
 		  ON a.id = i.assignee_id
 		 AND i.assignee_type = 'agent'
+		LEFT JOIN LATERAL (
+		  SELECT c.content, c.type, c.author_type, c.author_id, c.created_at
+		  FROM comment c
+		  WHERE c.issue_id = i.id
+		  ORDER BY c.created_at DESC, c.id DESC
+		  LIMIT 1
+		) latest_comment ON true
+		LEFT JOIN LATERAL (
+		  SELECT activity.created_at AS completed_at
+		  FROM activity_log activity
+		  WHERE activity.issue_id = i.id
+		    AND activity.action = 'status_changed'
+		    AND activity.details->>'to' = 'done'
+		  ORDER BY activity.created_at DESC, activity.id DESC
+		  LIMIT 1
+		) completed_activity ON true
 		WHERE i.workspace_id = $1
 		  `+issueScopePredicate+`
 		  AND i.status = 'done'
@@ -388,13 +426,16 @@ func (h *Handler) buildWendyAmbientChannelMarkdown(ctx context.Context, watch wo
 		doneCount := 0
 		for doneRows.Next() {
 			var number int64
-			var issueID, assigneeID pgtype.UUID
-			var issuePrefix, title, assigneeType, agentName, latestComment string
+			var issueID, assigneeID, latestCommentAuthorID pgtype.UUID
+			var issuePrefix, title, assigneeType, agentName, latestComment, latestCommentType, latestCommentAuthorType string
 			var acceptanceCriteria []byte
+			var latestCommentAt, completedAt pgtype.Timestamptz
 			var updatedAt time.Time
 			if err := doneRows.Scan(
 				&issueID, &issuePrefix, &number, &title, &assigneeType, &assigneeID,
-				&agentName, &acceptanceCriteria, &latestComment, &updatedAt,
+				&agentName, &acceptanceCriteria,
+				&latestComment, &latestCommentType, &latestCommentAuthorType, &latestCommentAuthorID, &latestCommentAt,
+				&completedAt, &updatedAt,
 			); err != nil {
 				doneRows.Close()
 				return "", err
@@ -405,12 +446,22 @@ func (h *Handler) buildWendyAmbientChannelMarkdown(ctx context.Context, watch wo
 			} else if assigneeType != "" && assigneeID.Valid {
 				assignee = assigneeType + ":" + uuidToString(assigneeID)
 			}
-			fmt.Fprintf(&b, "- issue_id=%s identifier=%s-%d title=%q assignee=%s completed_at=%s\n",
-				uuidToString(issueID), issuePrefix, number, trimAmbientContent(title), assignee,
-				updatedAt.UTC().Format(time.RFC3339))
-			fmt.Fprintf(&b, "  acceptance_criteria=%s\n", trimAmbientContent(string(acceptanceCriteria)))
+			fmt.Fprintf(&b, "- issue_id=%s identifier=%s-%d title=%q assignee=%s",
+				uuidToString(issueID), issuePrefix, number, trimAmbientContent(title), assignee)
+			if completedAt.Valid {
+				fmt.Fprintf(&b, " completed_at=%s", completedAt.Time.UTC().Format(time.RFC3339))
+			} else {
+				fmt.Fprintf(&b, " last_updated_at=%s", updatedAt.UTC().Format(time.RFC3339))
+			}
+			b.WriteString("\n")
+			fmt.Fprintf(&b, "  acceptance_criteria=%s\n", trimAmbientJSON(acceptanceCriteria))
 			if strings.TrimSpace(latestComment) != "" {
-				fmt.Fprintf(&b, "  latest_result=%q\n", trimAmbientContent(latestComment))
+				fmt.Fprintf(&b, "  latest_comment=%q type=%s author_type=%s author_id=%s",
+					trimAmbientContent(latestComment), latestCommentType, latestCommentAuthorType, uuidToString(latestCommentAuthorID))
+				if latestCommentAt.Valid {
+					fmt.Fprintf(&b, " at=%s", latestCommentAt.Time.UTC().Format(time.RFC3339))
+				}
+				b.WriteString("\n")
 			}
 			doneCount++
 		}
@@ -470,6 +521,28 @@ func trimAmbientContent(content string) string {
 		return string(runes[:400]) + "…"
 	}
 	return content
+}
+
+// trimAmbientJSON keeps the prompt's structured fields syntactically valid.
+// Arbitrarily cutting JSON makes the remainder look like corrupt source data
+// and leaves the model unable to distinguish truncation from a broken record.
+func trimAmbientJSON(raw []byte) string {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" {
+		return "null"
+	}
+	if len([]rune(trimmed)) <= 400 && json.Valid([]byte(trimmed)) {
+		return trimmed
+	}
+	preview := trimAmbientContent(trimmed)
+	envelope, err := json.Marshal(map[string]any{
+		"truncated": true,
+		"preview":   preview,
+	})
+	if err != nil {
+		return `{"truncated":true}`
+	}
+	return string(envelope)
 }
 
 func (h *Handler) touchWendyChannelAmbient(ctx context.Context, ch ChannelResponse, msg ChannelMessageResponse) {

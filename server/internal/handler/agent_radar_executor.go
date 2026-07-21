@@ -869,6 +869,9 @@ func (h *Handler) executePreparedRadarAgentMentionInTx(ctx context.Context, qtx 
 	execution.AfterCommit = func() {
 		// Realtime and activity publication must observe committed rows only.
 		h.clearDMHiddenForChannelMembers(ctx, uuidToString(run.WorkspaceID), directive.Target.ChannelID)
+		messages := []ChannelMessageResponse{msg}
+		h.attachChannelMessageAuthorAvatars(ctx, uuidToString(run.WorkspaceID), messages)
+		msg = messages[0]
 		h.publishChannelToMembers(ctx, protocol.EventChannelMessage, uuidToString(run.WorkspaceID), "agent", uuidToString(supervisor.ID), directive.Target.ChannelID, msg)
 		h.recordChannelAgentPromptWake(ctx, directive.Channel, directive.TargetAgent, msg, "mention", txResult)
 		if msg.ThreadRootMessageID != nil {

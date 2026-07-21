@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/radar"
+	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -107,6 +109,109 @@ func cleanupRadarIssueTitle(t *testing.T, title string) {
 			DELETE FROM issue WHERE workspace_id = $1 AND title = $2
 		`, testWorkspaceID, title)
 	})
+}
+
+func createRadarProjectForTest(t *testing.T, title string) string {
+	t.Helper()
+	var projectID string
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO project (workspace_id, title)
+		VALUES ($1, $2)
+		RETURNING id
+	`, testWorkspaceID, title).Scan(&projectID); err != nil {
+		t.Fatalf("create radar project: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM project WHERE id = $1`, projectID)
+	})
+	return projectID
+}
+
+func enqueueProjectScopedRadarRunForTest(t *testing.T, agent db.Agent, projectID string) db.AgentRadarRun {
+	t.Helper()
+	run, _, err := testHandler.TaskService.EnqueueAgentRadarRun(context.Background(), service.EnqueueAgentRadarRunParams{
+		WorkspaceID:    agent.WorkspaceID,
+		AgentID:        agent.ID,
+		ProjectID:      parseUUID(projectID),
+		TriggerKind:    "event",
+		TriggerRef:     "project-scope-test-" + uuid.NewString(),
+		CooldownKey:    "wendy_ambient:" + uuid.NewString(),
+		ContextSummary: "project scope executor test",
+		ScheduledFor:   time.Now(),
+		Prompt:         "review project",
+	})
+	if err != nil {
+		t.Fatalf("enqueue project-scoped radar run: %v", err)
+	}
+	return run
+}
+
+func TestExecuteRadarCreateIssueUsesPersistedProjectWhenPayloadOmitsIt(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	creatorID := createHandlerTestAgent(t, "Radar scoped project creator "+uuid.NewString(), nil)
+	creator, err := testHandler.Queries.GetAgent(context.Background(), parseUUID(creatorID))
+	if err != nil {
+		t.Fatalf("load creator agent: %v", err)
+	}
+	projectID := createRadarProjectForTest(t, "Radar canonical project "+uuid.NewString())
+	run := enqueueProjectScopedRadarRunForTest(t, creator, projectID)
+	title := "Radar canonical project issue " + uuid.NewString()
+	cleanupRadarIssueTitle(t, title)
+
+	result, err := executeRadarCreateIssueForRunTest(t, run, creator, radarIssuePayload{Title: title})
+	if err != nil {
+		t.Fatalf("create project-scoped issue: %v", err)
+	}
+	issue, err := testHandler.Queries.GetIssueInWorkspace(context.Background(), db.GetIssueInWorkspaceParams{
+		ID:          parseUUID(result["issue_id"].(string)),
+		WorkspaceID: creator.WorkspaceID,
+	})
+	if err != nil {
+		t.Fatalf("load project-scoped issue: %v", err)
+	}
+	if got := uuidToString(issue.ProjectID); got != projectID {
+		t.Fatalf("created issue project_id = %s, want persisted scope %s", got, projectID)
+	}
+}
+
+func TestExecuteRadarCreateIssueRejectsProjectConflictingWithPersistedScope(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	creatorID := createHandlerTestAgent(t, "Radar conflicting project creator "+uuid.NewString(), nil)
+	creator, err := testHandler.Queries.GetAgent(context.Background(), parseUUID(creatorID))
+	if err != nil {
+		t.Fatalf("load creator agent: %v", err)
+	}
+	canonicalProjectID := createRadarProjectForTest(t, "Radar canonical project "+uuid.NewString())
+	otherProjectID := createRadarProjectForTest(t, "Radar wrong project "+uuid.NewString())
+	run := enqueueProjectScopedRadarRunForTest(t, creator, canonicalProjectID)
+	title := "Radar conflicting project issue " + uuid.NewString()
+	cleanupRadarIssueTitle(t, title)
+
+	_, err = executeRadarCreateIssueForRunTest(t, run, creator, radarIssuePayload{
+		Title:     title,
+		ProjectID: otherProjectID,
+	})
+	if err == nil {
+		t.Fatal("expected conflicting project_id to be rejected")
+	}
+	if got, want := err.Error(), "project_id conflicts with the radar task project scope"; got != want {
+		t.Fatalf("error = %q, want %q", got, want)
+	}
+	var count int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*) FROM issue WHERE workspace_id = $1 AND title = $2
+	`, testWorkspaceID, title).Scan(&count); err != nil {
+		t.Fatalf("count rejected issues: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("conflicting project action created %d issues, want 0", count)
+	}
 }
 
 func TestExecuteRadarCreateIssueRejectsForeignAgentAssignee(t *testing.T) {

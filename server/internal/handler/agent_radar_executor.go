@@ -1309,13 +1309,9 @@ func (h *Handler) executeRadarCreateIssue(ctx context.Context, run db.AgentRadar
 	if payload.AssigneeType != "" {
 		assigneeType = pgtype.Text{String: payload.AssigneeType, Valid: true}
 	}
-	var projectID pgtype.UUID
-	if payload.ProjectID != "" {
-		parsed, err := parseUUIDString(payload.ProjectID)
-		if err != nil {
-			return nil, err
-		}
-		projectID = parsed
+	projectID, err := h.resolveRadarIssueCreateProject(ctx, run, payload.ProjectID)
+	if err != nil {
+		return nil, err
 	}
 	if err := h.validateRadarIssueCreateWorkspaceTargets(ctx, run, agent, assigneeType, assigneeID, projectID); err != nil {
 		return nil, err
@@ -1341,6 +1337,52 @@ func (h *Handler) executeRadarCreateIssue(ctx context.Context, run db.AgentRadar
 		return nil, err
 	}
 	return map[string]any{"issue_id": uuidToString(result.Issue.ID)}, nil
+}
+
+// resolveRadarIssueCreateProject makes the persisted Radar task scope
+// authoritative. The model may omit a project or echo one from its prompt,
+// but it cannot redirect an action to another same-workspace project.
+// Historical/manual runs without a task-scoped project retain their payload
+// behavior for compatibility.
+func (h *Handler) resolveRadarIssueCreateProject(ctx context.Context, run db.AgentRadarRun, rawPayloadProjectID string) (pgtype.UUID, error) {
+	var payloadProjectID pgtype.UUID
+	if strings.TrimSpace(rawPayloadProjectID) != "" {
+		parsed, err := parseUUIDString(strings.TrimSpace(rawPayloadProjectID))
+		if err != nil {
+			return pgtype.UUID{}, errors.New("invalid project_id")
+		}
+		payloadProjectID = parsed
+	}
+	if !run.TaskID.Valid {
+		return payloadProjectID, nil
+	}
+
+	task, err := h.Queries.GetAgentTask(ctx, run.TaskID)
+	if err != nil {
+		return pgtype.UUID{}, fmt.Errorf("load radar task project scope: %w", err)
+	}
+	if !radarUUIDsMatch(task.AgentID, run.AgentID) {
+		return pgtype.UUID{}, errors.New("radar task does not belong to the run agent")
+	}
+	var taskContext service.AgentRadarContext
+	if err := json.Unmarshal(task.Context, &taskContext); err != nil {
+		return pgtype.UUID{}, fmt.Errorf("decode radar task project scope: %w", err)
+	}
+	if taskContext.Type != service.AgentRadarContextType || taskContext.RadarRunID != uuidToString(run.ID) {
+		return pgtype.UUID{}, errors.New("radar task context does not match the run")
+	}
+	if strings.TrimSpace(taskContext.ProjectID) == "" {
+		return payloadProjectID, nil
+	}
+
+	canonicalProjectID, err := parseUUIDString(strings.TrimSpace(taskContext.ProjectID))
+	if err != nil {
+		return pgtype.UUID{}, errors.New("radar task contains an invalid project_id")
+	}
+	if payloadProjectID.Valid && !radarUUIDsMatch(payloadProjectID, canonicalProjectID) {
+		return pgtype.UUID{}, errors.New("project_id conflicts with the radar task project scope")
+	}
+	return canonicalProjectID, nil
 }
 
 func (h *Handler) executeRadarPlanUpdate(ctx context.Context, agent db.Agent, action radar.RadarAction) (map[string]any, error) {

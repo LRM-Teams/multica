@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -108,9 +109,43 @@ func TestBuildWendyAmbientMarkdownUsesBoundProjectContext(t *testing.T) {
 	`, doneIssueID, testWorkspaceID, testUserID); err != nil {
 		t.Fatalf("create completed issue evidence: %v", err)
 	}
+	const completedAt = "2026-07-20T03:04:05Z"
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO activity_log (workspace_id, issue_id, actor_type, actor_id, action, details, created_at)
+		VALUES ($1, $2, 'member', $3, 'status_changed', '{"from":"in_review","to":"done"}'::jsonb, $4::timestamptz)
+	`, testWorkspaceID, doneIssueID, testUserID, completedAt); err != nil {
+		t.Fatalf("record completed issue transition: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `UPDATE issue SET updated_at = '2026-07-21T06:07:08Z'::timestamptz WHERE id = $1`, doneIssueID); err != nil {
+		t.Fatalf("edit completed issue after completion: %v", err)
+	}
 
 	unrelatedTitle := "Unrelated Workspace Issue " + uuid.NewString()
-	createIssueForTimeline(t, unrelatedTitle)
+	unrelatedIssueID := createIssueForTimeline(t, unrelatedTitle)
+	unrelatedIssue, err := testHandler.Queries.GetIssue(ctx, parseUUID(unrelatedIssueID))
+	if err != nil {
+		t.Fatalf("load unrelated issue: %v", err)
+	}
+	unrelatedNode, err := testHandler.WorkGraph.SyncIssueNode(ctx, unrelatedIssue)
+	if err != nil {
+		t.Fatalf("sync unrelated issue work node: %v", err)
+	}
+	if err := testHandler.WorkGraph.SetPrimaryChannel(ctx, unrelatedNode.ID, parseUUID(channelID)); err != nil {
+		t.Fatalf("attach unrelated issue work node to project channel: %v", err)
+	}
+	coordinationTitle := "Channel-only coordination " + uuid.NewString()
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO work_node (
+		  workspace_id, kind, title, owner_type, owner_id, status, primary_channel_id, description
+		) VALUES ($1, 'chat_commitment', $2, 'unassigned', NULL, 'active', $3, 'test coordination node')
+	`, testWorkspaceID, coordinationTitle, channelID); err != nil {
+		t.Fatalf("create channel coordination node: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `
+			DELETE FROM work_node WHERE workspace_id = $1 AND title = $2
+		`, testWorkspaceID, coordinationTitle)
+	})
 
 	channel, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
 	if !found {
@@ -137,9 +172,12 @@ func TestBuildWendyAmbientMarkdownUsesBoundProjectContext(t *testing.T) {
 		openTitle,
 		`acceptance_criteria=["shows project evidence", "uses the issue UUID"]`,
 		"PR is ready for evidence review",
+		"type=comment author_type=member author_id=" + testUserID,
 		"## Recently Completed Project Issues",
 		doneTitle,
+		"completed_at=" + completedAt,
 		"Verified on the delivered artifact",
+		coordinationTitle,
 	} {
 		if !strings.Contains(md, want) {
 			t.Fatalf("project ambient markdown missing %q:\n%s", want, md)
@@ -147,5 +185,26 @@ func TestBuildWendyAmbientMarkdownUsesBoundProjectContext(t *testing.T) {
 	}
 	if strings.Contains(md, unrelatedTitle) {
 		t.Fatalf("project ambient markdown leaked unrelated workspace issue %q:\n%s", unrelatedTitle, md)
+	}
+	if strings.Contains(md, "completed_at=2026-07-21T06:07:08Z") {
+		t.Fatalf("project ambient markdown mislabeled issue.updated_at as completion time:\n%s", md)
+	}
+}
+
+func TestTrimAmbientJSONKeepsTruncatedValuesValid(t *testing.T) {
+	raw := []byte(`{"items":["` + strings.Repeat("long-value-", 80) + `"]}`)
+	got := trimAmbientJSON(raw)
+	if !json.Valid([]byte(got)) {
+		t.Fatalf("trimmed structured value is invalid JSON: %s", got)
+	}
+	var envelope struct {
+		Truncated bool   `json:"truncated"`
+		Preview   string `json:"preview"`
+	}
+	if err := json.Unmarshal([]byte(got), &envelope); err != nil {
+		t.Fatalf("decode truncation envelope: %v", err)
+	}
+	if !envelope.Truncated || envelope.Preview == "" {
+		t.Fatalf("truncation envelope = %+v, want explicit non-empty preview", envelope)
 	}
 }

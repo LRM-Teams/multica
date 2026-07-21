@@ -112,7 +112,7 @@ const ambientActionSchema = `Return at most 5 actions. Use exact UUIDs from the 
 - no_action: {}
 - mention_agent: {"channel_id":"<uuid>","target_agent_id":"<uuid>","content":"plain directive"}
 - comment_issue: {"issue_id":"<uuid>","target_agent_id":"<uuid>","content":"plain directive"}
-- create_issue: {"title":"...","description":"...","project_id":"<project uuid from Project; omit only when the channel is unbound>","assignee_id":"<optional agent uuid>","assignee_type":"agent"}
+- create_issue: {"title":"...","description":"...","assignee_id":"<optional agent uuid>","assignee_type":"agent"} (project scope is enforced by the server from this review; do not send project_id)
 - post_channel_message: {"channel_id":"<uuid>","content":"plain text; may include [@Name](mention://member/<uuid>) for humans"}
 Return ONLY JSON with this shape (no prose before or after):
 {"summary":"...","actions":[{"type":"no_action|mention_agent|comment_issue|create_issue|post_channel_message","reason":"...","evidence":["kind:id"],"confidence":"low|medium|high","risk_level":"low","dedupe_key":"stable-key","target_kind":"none|channel|issue","target_id":"","payload":{}}]}

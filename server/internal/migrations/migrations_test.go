@@ -161,12 +161,19 @@ func TestMigration203PersistsAgentAvatarTruthAtWriteBoundary(t *testing.T) {
 	for _, required := range []string{
 		"CREATE OR REPLACE FUNCTION default_agent_avatar_url(agent_id UUID)",
 		"ADD COLUMN avatar_source TEXT NOT NULL DEFAULT 'assigned'",
+		"ADD COLUMN avatar_attachment_id UUID REFERENCES attachment(id) ON DELETE RESTRICT",
 		"CHECK (avatar_source IN ('assigned', 'picked', 'uploaded'))",
+		"CHECK ((avatar_source = 'uploaded') = (avatar_attachment_id IS NOT NULL))",
+		"ADD CONSTRAINT agent_avatar_attachment_unique",
+		"UNIQUE (avatar_attachment_id)",
 		"WHERE avatar_url IS NULL OR btrim(avatar_url) = ''",
 		"CREATE TRIGGER agent_assign_durable_avatar_on_insert",
 		"BEFORE INSERT ON agent",
 		"NEW.avatar_url := default_agent_avatar_url(NEW.id)",
 		"NEW.avatar_source := 'assigned'",
+		"NEW.avatar_attachment_id := NULL",
+		"ADD CONSTRAINT agent_avatar_url_nonblank_check",
+		"CHECK (btrim(avatar_url) <> '')",
 		"ALTER COLUMN avatar_url SET NOT NULL",
 	} {
 		if !strings.Contains(contents, required) {
@@ -181,7 +188,10 @@ func TestMigration203PersistsAgentAvatarTruthAtWriteBoundary(t *testing.T) {
 	downContents := string(down)
 	for _, required := range []string{
 		"ALTER COLUMN avatar_url DROP NOT NULL",
+		"DROP CONSTRAINT IF EXISTS agent_avatar_url_nonblank_check",
 		"DROP TRIGGER IF EXISTS agent_assign_durable_avatar_on_insert ON agent",
+		"DROP CONSTRAINT IF EXISTS agent_avatar_attachment_unique",
+		"DROP COLUMN IF EXISTS avatar_attachment_id",
 		"DROP COLUMN IF EXISTS avatar_source",
 		"DROP FUNCTION IF EXISTS default_agent_avatar_url(UUID)",
 	} {

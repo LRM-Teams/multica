@@ -128,9 +128,10 @@ type CreateAgentFromTemplateRequest struct {
 	// Optional overrides — let the picker UI customise the template before
 	// creation without forcing a second round-trip to the detail page.
 	// When nil/empty, the template's own values are used.
-	Description  *string `json:"description,omitempty"`
-	Instructions *string `json:"instructions,omitempty"`
-	AvatarURL    *string `json:"avatar_url,omitempty"`
+	Description     *string               `json:"description,omitempty"`
+	Instructions    *string               `json:"instructions,omitempty"`
+	AvatarURL       json.RawMessage       `json:"avatar_url,omitempty"`
+	AvatarSelection *AgentAvatarSelection `json:"avatar_selection,omitempty"`
 	// Workspace skill IDs to attach **in addition to** the template's
 	// skills. The merge dedupes against template skills automatically
 	// (agent_skill INSERT uses ON CONFLICT DO NOTHING).
@@ -161,6 +162,10 @@ func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	if req.AvatarURL != nil {
+		writeError(w, http.StatusBadRequest, "avatar_url is no longer accepted; use avatar_selection")
+		return
+	}
 
 	nameSeed := strings.TrimSpace(req.Name)
 	displayName := strings.TrimSpace(req.DisplayName)
@@ -186,6 +191,10 @@ func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request
 	}
 
 	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
+	if !ok {
+		return
+	}
+	avatar, ok := h.resolveAgentAvatarSelection(w, r, wsUUID, ownerID, pgtype.UUID{}, req.AvatarSelection)
 	if !ok {
 		return
 	}
@@ -429,16 +438,10 @@ func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request
 	if req.Instructions != nil {
 		instructions = *req.Instructions
 	}
-	avatarURL := pgtype.Text{}
-	if req.AvatarURL != nil && *req.AvatarURL != "" {
-		avatarURL = pgtype.Text{String: *req.AvatarURL, Valid: true}
-	}
-
-	agent, err := h.createAgentWithIdentity(r.Context(), qtx, db.CreateAgentParams{
+	createParams := db.CreateAgentParams{
 		WorkspaceID:        wsUUID,
 		Description:        description,
 		Instructions:       instructions,
-		AvatarUrl:          avatarURL,
 		RuntimeMode:        runtime.RuntimeMode,
 		RuntimeConfig:      rc,
 		RuntimeID:          runtime.ID,
@@ -449,7 +452,9 @@ func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request
 		CustomArgs:         ca,
 		McpConfig:          nil,
 		Model:              pgtype.Text{String: req.Model, Valid: req.Model != ""},
-	}, nameSeed, firstNonEmpty(displayName, nameSeed))
+	}
+	applyCreateAgentAvatar(&createParams, avatar)
+	agent, err := h.createAgentWithIdentity(r.Context(), qtx, createParams, nameSeed, firstNonEmpty(displayName, nameSeed))
 	if err != nil {
 		slog.Error("agent-template create: failed to create agent",
 			append(logger.RequestAttrs(r),

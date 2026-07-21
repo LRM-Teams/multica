@@ -50,7 +50,7 @@ only.
 |---|---|---|
 | `maxAgentDescriptionLength = 255` | 31 | Cap is 255 **Unicode code points** (comment: counted via `utf8.RuneCountInString`, matches Postgres `char_length`) |
 | `AgentResponse` avatar truth + no plaintext `custom_env` | 36–79, 119–147 | Exposes persisted `avatar_url` and server-owned `avatar_source`, plus only env metadata (`has_custom_env`, `custom_env_key_count`); comment cites MUL-2600 |
-| `CreateAgentRequest` fields | 787–813 | `username`, `display_name`, `description`, `instructions`, `avatar_url`, `runtime_config`, `custom_env`, `custom_args`, `model`, `thinking_level` (plus visibility/mcp_config/max_concurrent_tasks) |
+| `CreateAgentRequest` fields | 787–813 | `username`, `display_name`, `description`, `instructions`, verified `avatar_selection`, `runtime_config`, `custom_env`, `custom_args`, `model`, `thinking_level` (plus visibility/mcp_config/max_concurrent_tasks) |
 | identity seed required | 654–658 | Create accepts old `name` or new `display_name`; both empty → 400 "name or display_name is required" |
 | `description` ≤ 255 code points | 660–662 | `utf8.RuneCountInString(req.Description) > maxAgentDescriptionLength` → 400 |
 | `runtime_id` required | 664–666 | `if req.RuntimeID == ""` → 400 "runtime_id is required" |
@@ -61,21 +61,22 @@ only.
 | `max_concurrent_tasks` default | 671–672 | `if req.MaxConcurrentTasks == 0 { req.MaxConcurrentTasks = 6 }` — scheduler cap |
 | `mcp_config` null-skip on create | 736–739 | raw JSON copied through unless the body value is the literal `null` |
 | `mcp_config` redacted on read | 56, 573–590 | `redactMcpConfig` sets `McpConfigRedacted=true`; agent actors and private/unauthorized member reads redact |
-| Avatar normalization on create | 950–973 | trims an explicit `avatar_url`; blank/omitted becomes SQL NULL so migration 203's insert trigger assigns one concrete persisted preset with source `assigned` |
-| `CreateAgent` insert params | 957–973 | persists generated handle/display_name plus avatar_url, runtime_config, instructions, custom_env, custom_args, model, thinking_level, mcp_config, visibility, max_concurrent_tasks |
+| Avatar verification on create | `server/internal/handler/agent.go:839-852,945-991`; `server/internal/handler/agent_avatar.go:45-148` | omit lets migration 203 assign; `uploaded` resolves an owned workspace image attachment and uses its DB URL; `picked` accepts only a canonical preset; raw `avatar_url` is rejected |
+| `CreateAgent` insert params | 975–1008 | persists generated handle/display_name plus the server-derived avatar tuple, runtime_config, instructions, custom_env, custom_args, model, thinking_level, mcp_config, visibility, max_concurrent_tasks |
 | `UpdateAgent` rejects `custom_env` | 929–938 | if `custom_env` present in body → 400 "use PUT /api/agents/{id}/env (or `multica agent env set`)" |
 | `UpdateAgent` treats `name` as display rename | 944–958 | old `name` and new `display_name` update only `display_name`; the stable handle remains unchanged |
 | `description` ≤ 255 on update too | 960–964 | same cap re-checked on update |
-| Avatar update fail-closed | 1311–1318 | trims `avatar_url`; blank → 400; nonblank enters the atomic SQL URL/source update |
+| Avatar update fail-closed | `server/internal/handler/agent.go:1279-1292,1337-1341`; `server/internal/handler/agent_avatar.go:45-148` | omit leaves the tuple unchanged; a verified selection updates URL/source/attachment atomically; raw `avatar_url` is rejected |
 
 ## Durable avatar write boundary — migration/query/tests
 
 | Contract | Source | Behavior |
 |---|---|---|
-| Three-state persisted schema | `server/migrations/203_agent_durable_avatar.up.sql:17-22,49-54` | adds NOT NULL `avatar_source` CHECKed to `assigned|picked|uploaded`; preserves every existing nonblank URL, fills only blank/NULL rows, then makes `avatar_url` NOT NULL |
-| Every insert receives one durable assigned value | `server/migrations/203_agent_durable_avatar.up.sql:24-44` | BEFORE INSERT trigger preserves a supplied nonblank URL or assigns one concrete preset, and sets source `assigned` in the same write |
-| Picker/upload provenance is atomic with URL | `server/pkg/db/queries/agent.sql:27-53` | the one UPDATE statement classifies exact built-in preset paths as `picked` and every other nonblank URL as `uploaded` |
-| Behavioral regression matrix | `server/internal/handler/agent_avatar_test.go:18-164` | covers create assigned, picker picked, upload uploaded, blank rejection, direct insert trigger, and concurrent URL/source atomicity |
+| Three-state persisted schema | `server/migrations/203_agent_durable_avatar.up.sql:17-27,52-62` | adds NOT NULL `avatar_source`, an optional attachment FK, source/attachment consistency CHECK, and one-attachment-per-agent uniqueness; preserves every historical nonblank URL byte-for-byte as `assigned`, fills only blank/NULL rows, then makes `avatar_url` NOT NULL |
+| Every insert receives one durable assigned value | `server/migrations/203_agent_durable_avatar.up.sql:29-50` | BEFORE INSERT trigger assigns one concrete preset plus `assigned`/NULL attachment only when URL is blank; verified explicit tuples remain intact |
+| Picker/upload provenance is atomic with URL | `server/pkg/db/queries/agent.sql:19-64` | create writes the verified tuple; update uses one `avatar_selection_set` CASE across URL/source/attachment, with no URL-shape classification |
+| Behavioral regression matrix | `server/internal/handler/agent_avatar_test.go:19-559` | covers assigned create, verified picked/uploaded create+update, raw URL and invalid attachment rejection, trusted-draft remapping, direct inserts, concurrent creates, attachment uniqueness, and atomic concurrent tuple updates |
+| Executable migration fixture | `server/cmd/migrate/agent_avatar_migration_test.go:20-187` | applies the real 203 SQL against a temporary PostgreSQL schema, checks byte preservation/backfill/constraints/direct insert/attachment uniqueness, then applies down |
 
 ## Env endpoint — `server/internal/handler/agent_env.go`
 

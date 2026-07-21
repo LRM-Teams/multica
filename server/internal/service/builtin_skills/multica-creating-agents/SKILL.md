@@ -71,7 +71,7 @@ to server defaults rather than sending empty strings.
 
 The HTTP body (`CreateAgentRequest`) accepts: `name`, `description`,
 `display_name`, `description`, `instructions`, `runtime_id`, `runtime_config`,
-`avatar_url`, `custom_env`, `custom_args`, `model`, `thinking_level`, `visibility`,
+`avatar_selection`, `custom_env`, `custom_args`, `model`, `thinking_level`, `visibility`,
 `max_concurrent_tasks`, `mcp_config`.
 
 ## Field contracts
@@ -82,7 +82,7 @@ The HTTP body (`CreateAgentRequest`) accepts: `name`, `description`,
 | `display_name` | `agent.display_name` | create requires either `name` or `display_name`; update rejects empty | listings, runtime payload labels |
 | `description` | `agent.description` | 400 if > 255 code points | catalog/listing only — NOT the runtime prompt |
 | `instructions` | `agent.instructions` | none | daemon → provider at claim time |
-| `avatar_url` | `agent.avatar_url` plus server-owned `agent.avatar_source` | omitted/blank at create receives one concrete persisted preset with source `assigned`; update rejects blank; a preset URL becomes `picked`, any other URL becomes `uploaded` | durable member identity on every surface; reads use the persisted value, never recompute from the pool |
+| `avatar_selection` | server-derived `agent.avatar_url`, `agent.avatar_source`, and optional `agent.avatar_attachment_id` | omit on create → one concrete `assigned` preset; omit on update → no change; `picked` accepts only a canonical 24-preset path; `uploaded` accepts only an owned, workspace-local, unbound image attachment id | durable member identity on every surface; reads use the persisted URL/source and never infer provenance from URL shape |
 | `runtime_id` | `agent.runtime_id` | required (400) + must resolve to a runtime in this workspace | selects runtime/provider |
 | `model` | `agent.model` (nullable) | none beyond runtime support | daemon reads; empty = runtime default |
 | `thinking_level` | `agent.thinking_level` (nullable) | provider-level enum; unknown literal → 400 | daemon; empty = runtime default |
@@ -95,9 +95,10 @@ The HTTP body (`CreateAgentRequest`) accepts: `name`, `description`,
 
 Defaults when omitted: `display_name` falls back to the legacy `name` seed,
 `runtime_config` → `{}`, `custom_env` → `{}`, `custom_args` → `[]`,
-`visibility` → `private`, `max_concurrent_tasks` → `6`; omitted/blank
-`avatar_url` receives one concrete persisted preset at the database write
-boundary with `avatar_source=assigned`. `custom_args`/`runtime_config` are typed
+`visibility` → `private`, `max_concurrent_tasks` → `6`; omitted
+`avatar_selection` receives one concrete persisted preset at the database
+write boundary with `avatar_source=assigned`. Raw `avatar_url` is rejected on
+create and update. `custom_args`/`runtime_config` are typed
 `[]string`/`any` and marshaled as-is — the JSON-shape rejection happens in the
 CLI, not the create handler.
 
@@ -227,6 +228,11 @@ State-changing (require an explicit instruction — do not run speculatively):
   render." Current servers persist one concrete `avatar_url`; `avatar_source`
   is exactly `assigned`, `picked`, or `uploaded`. Pool changes affect future
   assignments only.
+- "Clients can classify an avatar by sending a URL." They cannot. Send
+  `avatar_selection={kind:"uploaded",attachment_id:"..."}` or
+  `{kind:"picked",preset_url:"/agent-avatars/human-NN.jpg"}`. The server
+  verifies the referenced fact and derives URL/source atomically; raw
+  `avatar_url` is a 400.
 - "An invalid `thinking_level`/`model` combo is caught at create." Only an
   unknown provider-level literal is — model-specific gaps fail at run time.
 - "`set` and `add` are interchangeable for skills." `set` replaces all

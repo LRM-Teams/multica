@@ -953,10 +953,16 @@ func (q *Queries) CountRunningChatTasks(ctx context.Context, agentID pgtype.UUID
 
 const createAgent = `-- name: CreateAgent :one
 INSERT INTO agent (
-    workspace_id, name, display_name, description, avatar_url, runtime_mode,
-    runtime_config, runtime_id, visibility, max_concurrent_tasks, owner_id,
-    instructions, custom_env, custom_args, mcp_config, model, thinking_level
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+    workspace_id, name, display_name, description, avatar_url, avatar_source,
+    avatar_attachment_id, runtime_mode, runtime_config, runtime_id, visibility,
+    max_concurrent_tasks, owner_id, instructions, custom_env, custom_args,
+    mcp_config, model, thinking_level
+) VALUES (
+    $1, $2, $3, $4, $17,
+    COALESCE(NULLIF($18::text, ''), 'assigned'),
+    $19, $5, $6, $7, $8, $9, $10, $11, $12,
+    $13, $14, $15, $16
+)
 RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, avatar_source
 `
 
@@ -978,6 +984,8 @@ type CreateAgentParams struct {
 	McpConfig          []byte      `json:"mcp_config"`
 	Model              pgtype.Text `json:"model"`
 	ThinkingLevel      pgtype.Text `json:"thinking_level"`
+	AvatarSource       string      `json:"avatar_source"`
+	AvatarAttachmentID pgtype.UUID `json:"avatar_attachment_id"`
 }
 
 func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent, error) {
@@ -986,7 +994,6 @@ func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent
 		arg.Name,
 		arg.DisplayName,
 		arg.Description,
-		arg.AvatarUrl,
 		arg.RuntimeMode,
 		arg.RuntimeConfig,
 		arg.RuntimeID,
@@ -999,6 +1006,9 @@ func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent
 		arg.McpConfig,
 		arg.Model,
 		arg.ThinkingLevel,
+		arg.AvatarUrl,
+		arg.AvatarSource,
+		arg.AvatarAttachmentID,
 	)
 	var i Agent
 	err := row.Scan(
@@ -3015,25 +3025,30 @@ UPDATE agent SET
     name = COALESCE($2, name),
     display_name = COALESCE($3, display_name),
     description = COALESCE($4, description),
-    avatar_url = COALESCE(NULLIF(btrim($5), ''), avatar_url),
-    avatar_source = CASE
-        WHEN NULLIF(btrim($5), '') IS NULL THEN avatar_source
-        WHEN btrim($5) ~ '^/agent-avatars/human-(0[1-9]|1[0-9]|2[0-4])\.jpg$'
-            THEN 'picked'
-        ELSE 'uploaded'
+    avatar_url = CASE
+        WHEN $5::boolean THEN $6
+        ELSE avatar_url
     END,
-    runtime_config = COALESCE($6, runtime_config),
-    runtime_mode = COALESCE($7, runtime_mode),
-    runtime_id = COALESCE($8, runtime_id),
-    visibility = COALESCE($9, visibility),
-    status = COALESCE($10, status),
-    max_concurrent_tasks = COALESCE($11, max_concurrent_tasks),
-    instructions = COALESCE($12, instructions),
-    custom_env = COALESCE($13, custom_env),
-    custom_args = COALESCE($14, custom_args),
-    mcp_config = COALESCE($15, mcp_config),
-    model = COALESCE($16, model),
-    thinking_level = COALESCE($17, thinking_level),
+    avatar_source = CASE
+        WHEN $5::boolean THEN $7
+        ELSE avatar_source
+    END,
+    avatar_attachment_id = CASE
+        WHEN $5::boolean THEN $8
+        ELSE avatar_attachment_id
+    END,
+    runtime_config = COALESCE($9, runtime_config),
+    runtime_mode = COALESCE($10, runtime_mode),
+    runtime_id = COALESCE($11, runtime_id),
+    visibility = COALESCE($12, visibility),
+    status = COALESCE($13, status),
+    max_concurrent_tasks = COALESCE($14, max_concurrent_tasks),
+    instructions = COALESCE($15, instructions),
+    custom_env = COALESCE($16, custom_env),
+    custom_args = COALESCE($17, custom_args),
+    mcp_config = COALESCE($18, mcp_config),
+    model = COALESCE($19, model),
+    thinking_level = COALESCE($20, thinking_level),
     updated_at = now()
 WHERE id = $1
 RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, avatar_source
@@ -3044,7 +3059,10 @@ type UpdateAgentParams struct {
 	Name               pgtype.Text `json:"name"`
 	DisplayName        pgtype.Text `json:"display_name"`
 	Description        pgtype.Text `json:"description"`
+	AvatarSelectionSet bool        `json:"avatar_selection_set"`
 	AvatarUrl          pgtype.Text `json:"avatar_url"`
+	AvatarSource       string      `json:"avatar_source"`
+	AvatarAttachmentID pgtype.UUID `json:"avatar_attachment_id"`
 	RuntimeConfig      []byte      `json:"runtime_config"`
 	RuntimeMode        pgtype.Text `json:"runtime_mode"`
 	RuntimeID          pgtype.UUID `json:"runtime_id"`
@@ -3065,7 +3083,10 @@ func (q *Queries) UpdateAgent(ctx context.Context, arg UpdateAgentParams) (Agent
 		arg.Name,
 		arg.DisplayName,
 		arg.Description,
+		arg.AvatarSelectionSet,
 		arg.AvatarUrl,
+		arg.AvatarSource,
+		arg.AvatarAttachmentID,
 		arg.RuntimeConfig,
 		arg.RuntimeMode,
 		arg.RuntimeID,

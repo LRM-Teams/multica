@@ -410,6 +410,12 @@ export interface EnsureWindyResponse {
   dm_id?: string;
 }
 
+/** Verified avatar write intent. The server derives and persists the URL and
+ * source; clients never submit a raw agent avatar URL. */
+export type AgentAvatarSelection =
+  | { kind: "uploaded"; attachment_id: string; preset_url?: never }
+  | { kind: "picked"; preset_url: string; attachment_id?: never };
+
 export interface CreateAgentRequest {
   /** Optional explicit stable username. Duplicate values are rejected; when
    * omitted the server derives one from the display name and suffixes collisions. */
@@ -418,7 +424,7 @@ export interface CreateAgentRequest {
   display_name: string;
   description?: string;
   instructions?: string;
-  avatar_url?: string;
+  avatar_selection?: AgentAvatarSelection;
   runtime_id: string;
   runtime_config?: Record<string, unknown>;
   custom_env?: Record<string, string>;
@@ -488,7 +494,7 @@ export interface CreateAgentFromTemplateRequest {
    *  uses the template's own value. */
   description?: string;
   instructions?: string;
-  avatar_url?: string;
+  avatar_selection?: AgentAvatarSelection;
   /** Workspace skill IDs attached **in addition to** the template's
    *  skills. Server dedupes against template skills automatically. */
   extra_skill_ids?: string[];
@@ -523,7 +529,7 @@ export interface UpdateAgentRequest {
   display_name?: string;
   description?: string;
   instructions?: string;
-  avatar_url?: string;
+  avatar_selection?: AgentAvatarSelection;
   runtime_id?: string;
   runtime_config?: Record<string, unknown>;
   /**

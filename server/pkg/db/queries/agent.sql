@@ -18,10 +18,16 @@ WHERE id = $1 AND workspace_id = $2;
 
 -- name: CreateAgent :one
 INSERT INTO agent (
-    workspace_id, name, display_name, description, avatar_url, runtime_mode,
-    runtime_config, runtime_id, visibility, max_concurrent_tasks, owner_id,
-    instructions, custom_env, custom_args, mcp_config, model, thinking_level
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+    workspace_id, name, display_name, description, avatar_url, avatar_source,
+    avatar_attachment_id, runtime_mode, runtime_config, runtime_id, visibility,
+    max_concurrent_tasks, owner_id, instructions, custom_env, custom_args,
+    mcp_config, model, thinking_level
+) VALUES (
+    $1, $2, $3, $4, sqlc.narg('avatar_url'),
+    COALESCE(NULLIF(sqlc.arg('avatar_source')::text, ''), 'assigned'),
+    sqlc.narg('avatar_attachment_id'), $5, $6, $7, $8, $9, $10, $11, $12,
+    $13, $14, $15, $16
+)
 RETURNING *;
 
 -- name: UpdateAgent :one
@@ -29,12 +35,17 @@ UPDATE agent SET
     name = COALESCE(sqlc.narg('name'), name),
     display_name = COALESCE(sqlc.narg('display_name'), display_name),
     description = COALESCE(sqlc.narg('description'), description),
-    avatar_url = COALESCE(NULLIF(btrim(sqlc.narg('avatar_url')), ''), avatar_url),
+    avatar_url = CASE
+        WHEN sqlc.arg('avatar_selection_set')::boolean THEN sqlc.narg('avatar_url')
+        ELSE avatar_url
+    END,
     avatar_source = CASE
-        WHEN NULLIF(btrim(sqlc.narg('avatar_url')), '') IS NULL THEN avatar_source
-        WHEN btrim(sqlc.narg('avatar_url')) ~ '^/agent-avatars/human-(0[1-9]|1[0-9]|2[0-4])\.jpg$'
-            THEN 'picked'
-        ELSE 'uploaded'
+        WHEN sqlc.arg('avatar_selection_set')::boolean THEN sqlc.arg('avatar_source')
+        ELSE avatar_source
+    END,
+    avatar_attachment_id = CASE
+        WHEN sqlc.arg('avatar_selection_set')::boolean THEN sqlc.narg('avatar_attachment_id')
+        ELSE avatar_attachment_id
     END,
     runtime_config = COALESCE(sqlc.narg('runtime_config'), runtime_config),
     runtime_mode = COALESCE(sqlc.narg('runtime_mode'), runtime_mode),

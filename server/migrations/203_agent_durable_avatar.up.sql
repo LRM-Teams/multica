@@ -15,11 +15,16 @@ AS $$
 $$;
 
 ALTER TABLE agent
-    ADD COLUMN avatar_source TEXT NOT NULL DEFAULT 'assigned';
+    ADD COLUMN avatar_source TEXT NOT NULL DEFAULT 'assigned',
+    ADD COLUMN avatar_attachment_id UUID REFERENCES attachment(id) ON DELETE RESTRICT;
 
 ALTER TABLE agent
     ADD CONSTRAINT agent_avatar_source_check
-    CHECK (avatar_source IN ('assigned', 'picked', 'uploaded'));
+    CHECK (avatar_source IN ('assigned', 'picked', 'uploaded')),
+    ADD CONSTRAINT agent_avatar_attachment_source_check
+    CHECK ((avatar_source = 'uploaded') = (avatar_attachment_id IS NOT NULL)),
+    ADD CONSTRAINT agent_avatar_attachment_unique
+    UNIQUE (avatar_attachment_id);
 
 -- Keep every insertion path on the same durable boundary. Production creates
 -- use the generated query below, while migrations/tests/administrative tools
@@ -32,8 +37,9 @@ AS $$
 BEGIN
     IF NEW.avatar_url IS NULL OR btrim(NEW.avatar_url) = '' THEN
         NEW.avatar_url := default_agent_avatar_url(NEW.id);
+        NEW.avatar_source := 'assigned';
+        NEW.avatar_attachment_id := NULL;
     END IF;
-    NEW.avatar_source := 'assigned';
     RETURN NEW;
 END
 $$;
@@ -51,4 +57,6 @@ SET avatar_url = default_agent_avatar_url(id)
 WHERE avatar_url IS NULL OR btrim(avatar_url) = '';
 
 ALTER TABLE agent
+    ADD CONSTRAINT agent_avatar_url_nonblank_check
+    CHECK (btrim(avatar_url) <> ''),
     ALTER COLUMN avatar_url SET NOT NULL;

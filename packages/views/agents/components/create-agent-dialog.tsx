@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Globe, Lock } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ModelDropdown } from "./model-dropdown";
@@ -107,14 +107,16 @@ export function CreateAgentDialog({
   // the user actively picks/uploads their own, letting the server resolve
   // the draft's suggestion via the trusted draft_id instead of a raw URL.
   const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | null>(draft?.avatar_url ?? null);
-  const [avatarSelection, setAvatarSelection] = useState<AgentAvatarSelection | null>(null);
+  // Never rendered — only read at submit time — so a ref avoids a redraw
+  // on every avatar change.
+  const avatarSelectionRef = useRef<AgentAvatarSelection | null>(null);
   const handleAvatarChange = (selection: AvatarPickerSelection | null) => {
     if (selection) {
       setAvatarPreviewUrl(selection.previewUrl);
-      setAvatarSelection({ kind: "uploaded", attachment_id: selection.attachmentId });
+      avatarSelectionRef.current = { kind: "uploaded", attachment_id: selection.attachmentId };
     } else {
       setAvatarPreviewUrl(null);
-      setAvatarSelection(null);
+      avatarSelectionRef.current = null;
     }
   };
   const [selectedSkillIds, setSelectedSkillIds] = useState<Set<string>>(
@@ -191,7 +193,7 @@ export function CreateAgentDialog({
         model: model.trim() || undefined,
         thinking_level: thinkingLevel || undefined,
         instructions: trimmedInstructions || undefined,
-        avatar_selection: avatarSelection ?? undefined,
+        avatar_selection: avatarSelectionRef.current ?? undefined,
         draft_id: draft?.id,
       };
       if (template) {

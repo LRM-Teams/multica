@@ -66,7 +66,8 @@
     "issues_aria": "이 채널의 이슈",
     "back": "뒤로",
     "more_aria": "더 보기",
-    "roster_summary": "멤버 {{members}}명 · 에이전트 {{agents}}개"
+    "roster_summary": "멤버 {{members}}명 · 에이전트 {{agents}}개",
+    "settings_aria": "그룹 설정"
   },
   "members": {
     "select_user": "멤버 선택",
@@ -120,6 +121,9 @@
     "preview_error": "파일 내용을 불러오지 못했습니다",
     "preview_empty": "(빈 파일)",
     "preview_too_large": "파일이 너무 커서 미리볼 수 없습니다"
+  },
+  "settings": {
+    "title": "그룹 설정"
   },
   "stats": {
     "title": "활동",

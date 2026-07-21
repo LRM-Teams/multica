@@ -23,6 +23,7 @@ import {
   PinOff,
   Plus,
   Search,
+  Settings,
   Share2,
   Smartphone,
   Square,
@@ -153,7 +154,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@multica/ui/components
 import { MobileListDetailLayout } from "../../common/mobile-list-detail-layout";
 import { ContentEditor, type ContentEditorRef, type ContentEditorProps } from "../../editor/content-editor";
 import { useNavigation } from "../../navigation/context";
-import { ProjectPickerButton } from "../../common/project-picker-button";
 import { initialsOf } from "../../common/initials";
 import { useT } from "../../i18n/use-t";
 import { useTimeAgo } from "../../i18n/use-time-ago";
@@ -171,6 +171,7 @@ import { isChannelNameTakenError } from "../channel-create-error";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelStatsPanel } from "./channel-stats-panel";
+import { ChannelProjectSettingsPanel } from "./channel-project-settings-panel";
 import { ChannelTasksBoard } from "./channel-tasks-board";
 import { ChannelGroupAvatar } from "./channel-group-avatar";
 import { ThreadPanel } from "./thread-panel";
@@ -607,11 +608,14 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   });
   // Mobile-only: the header's right-side actions collapse into a single "⋯"
   // button that opens a bottom Drawer (vaul, with drag handle). `"menu"` shows
-  // the action list (Members / Share / Stats / Files); picking one swaps the
-  // Drawer body to that section. A header Popover can render off-screen on a
-  // narrow viewport, so the drawer is the reliable container. `null` = closed.
+  // the action list (Members / Share / Stats / Files / Settings); picking one
+  // swaps the Drawer body to that section. A header Popover can render
+  // off-screen on a narrow viewport, so the drawer is the reliable container.
+  // `null` = closed. `"settings"` is the #576 group-settings surface (currently
+  // just the Project section) — full-width like every other mobile panel here,
+  // per Iris's placement spec.
   const [mobilePanel, setMobilePanel] = useState<
-    "menu" | "members" | "stats" | "files" | null
+    "menu" | "members" | "stats" | "files" | "settings" | null
   >(null);
   // A route transition can remount this page between `/channels/[id]` and the
   // base `/channels` route. Preserve the mobile Back intent long enough for
@@ -2603,6 +2607,24 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                       <ChannelFilesPanel channelId={active.id} />
                     </PopoverContent>
                   </Popover>
+                  {/* #576 — group settings surface, currently just the Project
+                      section. Same Popover pattern as Stats/Files above. */}
+                  <Popover>
+                    <PopoverTrigger
+                      className="flex size-8 items-center justify-center rounded-md transition-colors hover:bg-accent"
+                      aria-label={t(($) => $.header.settings_aria)}
+                    >
+                      <Settings className="size-4" />
+                    </PopoverTrigger>
+                    <PopoverContent align="end" className="w-80">
+                      <p className="mb-3 text-sm font-medium">{t(($) => $.settings.title)}</p>
+                      <ChannelProjectSettingsPanel
+                        wsId={wsId}
+                        projectId={channelProjectId || null}
+                        onChange={(projectId) => setChannelProject.mutate(projectId)}
+                      />
+                    </PopoverContent>
+                  </Popover>
                 </div>
               </>
             )}
@@ -2859,14 +2881,11 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                         >
                           <Paperclip className={cn(isMobile ? "size-5" : "size-4")} />
                         </Button>
-                        <ProjectPickerButton
-                          wsId={wsId}
-                          value={channelProjectId || null}
-                          onChange={(projectId) => setChannelProject.mutate(projectId)}
-                          label={t(($) => $.composer.project_label)}
-                          noneLabel={t(($) => $.composer.project_none)}
-                          tooltip={t(($) => $.composer.project_tooltip)}
-                        />
+                        {/* #576 — the composer's ProjectPickerButton moved to the
+                            group settings surface (header Settings popover /
+                            mobile Settings drawer panel). Binding a channel to a
+                            project is a group-configuration decision, not a
+                            per-message composer action. */}
                         <Button
                           variant="ghost"
                           size="icon"
@@ -3010,7 +3029,9 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                     ? t(($) => $.stats.title)
                     : mobilePanel === "files"
                       ? t(($) => $.files.title)
-                      : active.name}
+                      : mobilePanel === "settings"
+                        ? t(($) => $.settings.title)
+                        : active.name}
               </DrawerTitle>
             </DrawerHeader>
 
@@ -3055,6 +3076,15 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                   <span className="flex-1">{t(($) => $.files.title)}</span>
                   <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setMobilePanel("settings")}
+                  className="flex min-h-[44px] items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-accent"
+                >
+                  <Settings className="size-5 shrink-0 text-muted-foreground" />
+                  <span className="flex-1">{t(($) => $.settings.title)}</span>
+                  <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+                </button>
               </div>
             )}
 
@@ -3067,6 +3097,15 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
             {mobilePanel === "files" && (
               <div className="p-4">
                 <ChannelFilesPanel channelId={active.id} />
+              </div>
+            )}
+            {mobilePanel === "settings" && (
+              <div className="p-4">
+                <ChannelProjectSettingsPanel
+                  wsId={wsId}
+                  projectId={channelProjectId || null}
+                  onChange={(projectId) => setChannelProject.mutate(projectId)}
+                />
               </div>
             )}
           </DrawerContent>

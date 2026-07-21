@@ -66,7 +66,8 @@
     "issues_aria": "Issues from this channel",
     "back": "Back",
     "more_aria": "More",
-    "roster_summary": "{{members}} members · {{agents}} agents"
+    "roster_summary": "{{members}} members · {{agents}} agents",
+    "settings_aria": "Group settings"
   },
   "members": {
     "select_user": "Select a member",
@@ -120,6 +121,9 @@
     "preview_error": "Failed to load file content",
     "preview_empty": "(empty file)",
     "preview_too_large": "File too large to preview"
+  },
+  "settings": {
+    "title": "Group settings"
   },
   "stats": {
     "title": "Activity",

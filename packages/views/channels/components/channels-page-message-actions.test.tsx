@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multica/core/i18n/react";
@@ -282,5 +282,26 @@ describe("ChannelsPage message edit / delete wiring (#241 B3)", () => {
     for (const composer of composers) {
       expect(composer.getAttribute("data-plain-urls")).toBe("true");
     }
+  });
+});
+
+describe("ChannelsPage — project picker relocated to group settings (#576)", () => {
+  beforeEach(() => {
+    listProps.current = null;
+  });
+
+  it("does not render the project picker in the composer", async () => {
+    renderPage();
+    await screen.findByTestId("message-list");
+    // The mocked ProjectPickerButton renders as a plain button labeled
+    // "project" — it must not appear until the settings surface is opened.
+    expect(screen.queryByRole("button", { name: "project" })).toBeNull();
+  });
+
+  it("reveals the project picker inside the header's Group settings popover", async () => {
+    renderPage();
+    await screen.findByTestId("message-list");
+    fireEvent.click(screen.getByRole("button", { name: "Group settings" }));
+    expect(await screen.findByRole("button", { name: "project" })).toBeTruthy();
   });
 });

@@ -81,15 +81,15 @@ type linkSessionCall struct {
 type fakeEnvDispatchDeps struct {
 	mu sync.Mutex
 
-	envs       map[string]Env        // by envID
-	sandboxes  map[string]string     // sandboxID -> sourceSandboxID (for fork provenance)
-	projects   map[string]string     // projectID -> envID
-	issues     map[string][]IssueRow // projectID -> issues
-	chatSess   map[string]string     // sessionID -> projectID
-	agentRuns  []string              // every enqueued runID
-	runCounter int
-	idem       map[string]EnvDispatchResult // idempotency ledger
-	linkSessionCalls []linkSessionCall          // AC-4: records LinkEnvDispatchTrainingSession calls
+	envs             map[string]Env        // by envID
+	sandboxes        map[string]string     // sandboxID -> sourceSandboxID (for fork provenance)
+	projects         map[string]string     // projectID -> envID
+	issues           map[string][]IssueRow // projectID -> issues
+	chatSess         map[string]string     // sessionID -> projectID
+	agentRuns        []string              // every enqueued runID
+	runCounter       int
+	idem             map[string]EnvDispatchResult // idempotency ledger
+	linkSessionCalls []linkSessionCall            // AC-4: records LinkEnvDispatchTrainingSession calls
 
 	defaultSelfPlayEnv string // per-workspace default self_play base env ("" = unconfigured)
 
@@ -613,6 +613,41 @@ func TestDispatch_ScratchSelfPlayMessage_N3(t *testing.T) {
 	for i, r := range res.Rollouts {
 		if r.ChatSessionID == "" {
 			t.Fatalf("rollout %d: no session", i)
+		}
+	}
+}
+
+// TestDispatch_ScratchMessage_TrainingSessionLinkedAfterEnqueue asserts AC-4's
+// "real task is linked after session bootstrap" ordering for a training
+// message dispatch: each rollout calls LinkEnvDispatchTrainingSession once,
+// after the real task is enqueued, with a non-empty runID. Retry reuse
+// (startSessionCount==0) is asserted in TestResolveEnvDispatchTrainingSessionReusesOnRetry;
+// session-before-sandbox is structural in provisionEnvDispatchAgentTraining
+// (StartSession precedes lifecycle.Create) and asserted by the helper tests.
+func TestDispatch_ScratchMessage_TrainingSessionLinkedAfterEnqueue(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	svc := NewEnvDispatchService(f, 8)
+	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 3,
+		AgentID: "ag", TrainAgentID: "ag", Message: &MessageInput{Content: "q"},
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if len(res.Rollouts) != 3 {
+		t.Fatalf("want 3 rollouts, got %d", len(res.Rollouts))
+	}
+	if len(f.linkSessionCalls) != len(res.Rollouts) {
+		t.Fatalf("AC-4 link-session calls: want %d (one per rollout, after enqueue), got %d", len(res.Rollouts), len(f.linkSessionCalls))
+	}
+	for _, c := range f.linkSessionCalls {
+		if c.RunID == "" {
+			t.Fatalf("AC-4 link-session call missing runID: %+v", c)
+		}
+		if c.AgentID != "ag" || c.ProjectID == "" {
+			t.Fatalf("AC-4 link-session call wrong identity: %+v", c)
 		}
 	}
 }

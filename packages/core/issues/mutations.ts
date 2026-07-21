@@ -929,3 +929,34 @@ export function useToggleIssueSubscriber(issueId: string) {
     },
   });
 }
+
+/**
+ * Set (or clear, with `null`) the group an issue is associated with (#574 /
+ * #629 — Issue Properties). The server enforces the 1:1 constraint. Clearing is
+ * applied optimistically; a set waits for the settle refetch to resolve the
+ * channel name/kind (not known at the call site), so the issue's `channel`
+ * field always reflects the server truth.
+ */
+export function useSetIssueChannel(issueId: string) {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: (channelId: string | null) =>
+      api.setIssueChannel(issueId, channelId, wsId),
+    onMutate: (channelId) => {
+      const prev = qc.getQueryData<Issue>(issueKeys.detail(wsId, issueId));
+      if (channelId === null) {
+        qc.setQueryData<Issue>(issueKeys.detail(wsId, issueId), (old) =>
+          old ? { ...old, channel: null } : old,
+        );
+      }
+      return { prev };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.prev) qc.setQueryData(issueKeys.detail(wsId, issueId), ctx.prev);
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: issueKeys.detail(wsId, issueId) });
+    },
+  });
+}

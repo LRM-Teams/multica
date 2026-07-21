@@ -31,6 +31,8 @@ export {
   channelProjectKeys,
   channelProjectOptions,
   useSetChannelProject,
+  projectChannelKeys,
+  projectChannelsOptions,
 } from "./project";
 export {
   useCreateChannel,

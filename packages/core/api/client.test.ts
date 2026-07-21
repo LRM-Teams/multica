@@ -51,6 +51,32 @@ describe("ApiClient", () => {
     expect(fetchMock).toHaveBeenCalledWith("https://api.example.test/api/stickers", expect.any(Object));
   });
 
+  it("unwraps the project-channels `{ channels, total }` envelope to the list (#629)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        channels: [
+          { id: "c1", workspace_id: "ws-1", project_id: "p1", name: "Alpha", description: null, kind: "group", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" },
+          { id: "c2", workspace_id: "ws-1", project_id: "p1", name: "Beta", description: null, kind: "group", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" },
+        ],
+        total: 2,
+      }), { status: 200, headers: { "Content-Type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new ApiClient("https://api.example.test");
+    const channels = await client.listProjectChannels("p1", "ws-1");
+
+    // The row iterates the array directly — a leaked envelope object would make
+    // `channels.length` undefined and always render the empty state.
+    expect(Array.isArray(channels)).toBe(true);
+    expect(channels).toHaveLength(2);
+    expect(channels[0]).toMatchObject({ id: "c1", name: "Alpha" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.test/api/projects/p1/channels?workspace_id=ws-1",
+      expect.any(Object),
+    );
+  });
+
   it("preserves HTTP status on failed requests", async () => {
     vi.stubGlobal(
       "fetch",

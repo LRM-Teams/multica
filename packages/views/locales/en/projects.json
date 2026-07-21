@@ -55,6 +55,8 @@
     "copy_link": "Copy link",
     "delete_action": "Delete project",
     "section_properties": "Properties",
+    "prop_associated_groups": "Associated groups",
+    "no_associated_groups": "No associated groups",
     "section_progress": "Progress",
     "section_description": "Description",
     "description_placeholder": "Add description...",

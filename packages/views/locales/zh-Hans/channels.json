@@ -26,6 +26,7 @@
     "archive": "归档",
     "mute": "静音通知",
     "unmute": "取消静音",
+    "rename": "修改群聊名称",
     "muted_label": "已静音",
     "archived_section": "已归档",
     "archived_restore": "取消归档",
@@ -40,6 +41,16 @@
     "error": "归档频道失败",
     "restore_error": "取消归档失败",
     "readonly_notice": "此频道已归档"
+  },
+  "rename_dialog": {
+    "title": "修改群聊名称",
+    "description": "为该群聊输入新名称。",
+    "cancel": "取消",
+    "confirm": "保存",
+    "name_required": "请输入群聊名称。",
+    "name_taken": "该群聊名称已存在。",
+    "error": "修改群聊名称失败",
+    "success": "群聊名称已更新"
   },
   "delete_dialog": {
     "title": "删除这个群组？",

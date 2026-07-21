@@ -2162,6 +2162,16 @@ export class ApiClient {
     });
   }
 
+  async updateChannel(
+    channelId: string,
+    data: { name?: string; description?: string; lark_chat_id?: string },
+  ): Promise<Channel> {
+    return this.fetch(`/api/channels/${channelId}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+  }
+
   async deleteChannel(channelId: string): Promise<void> {
     await this.fetch(`/api/channels/${channelId}`, { method: "DELETE" });
   }

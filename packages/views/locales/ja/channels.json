@@ -26,6 +26,7 @@
     "archive": "アーカイブ",
     "mute": "通知をミュート",
     "unmute": "ミュート解除",
+    "rename": "チャンネル名を変更",
     "muted_label": "ミュート中",
     "archived_section": "アーカイブ済み",
     "archived_restore": "アーカイブ解除",
@@ -40,6 +41,16 @@
     "error": "チャンネルのアーカイブに失敗しました",
     "restore_error": "アーカイブ解除に失敗しました",
     "readonly_notice": "このチャンネルはアーカイブされています"
+  },
+  "rename_dialog": {
+    "title": "チャンネル名を変更",
+    "description": "このグループチャットの新しい名前を入力してください。",
+    "cancel": "キャンセル",
+    "confirm": "保存",
+    "name_required": "チャンネル名を入力してください。",
+    "name_taken": "このチャンネル名は既に存在します。",
+    "error": "チャンネル名の変更に失敗しました",
+    "success": "チャンネル名を更新しました"
   },
   "delete_dialog": {
     "title": "このグループを削除しますか？",

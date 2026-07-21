@@ -26,6 +26,7 @@
     "archive": "Archive",
     "mute": "Mute notifications",
     "unmute": "Unmute",
+    "rename": "Rename channel",
     "muted_label": "Muted",
     "archived_section": "Archived",
     "archived_restore": "Unarchive",
@@ -40,6 +41,16 @@
     "error": "Failed to archive channel",
     "restore_error": "Failed to restore channel",
     "readonly_notice": "This channel is archived"
+  },
+  "rename_dialog": {
+    "title": "Rename channel",
+    "description": "Enter a new name for this group chat.",
+    "cancel": "Cancel",
+    "confirm": "Save",
+    "name_required": "Please enter a channel name.",
+    "name_taken": "A channel with this name already exists.",
+    "error": "Failed to rename channel",
+    "success": "Channel renamed"
   },
   "delete_dialog": {
     "title": "Delete this group?",

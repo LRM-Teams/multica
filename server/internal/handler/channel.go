@@ -733,6 +733,10 @@ func (h *Handler) UpdateChannel(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "channel not found")
 			return
 		}
+		if isChannelNameTakenError(err) {
+			writeCodedError(w, http.StatusConflict, channelNameTakenCode, "channel name already exists")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "failed to update channel")
 		return
 	}

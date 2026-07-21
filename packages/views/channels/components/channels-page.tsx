@@ -18,6 +18,7 @@ import {
   MessageSquare,
   MoreHorizontal,
   Paperclip,
+  Pencil,
   PieChart,
   Pin,
   PinOff,
@@ -47,6 +48,7 @@ import {
   useSetChannelProject,
   useAddChannelMembers,
   useCreateChannel,
+  useUpdateChannel,
   useDeleteChannel,
   useArchiveChannel,
   useRestoreChannel,
@@ -146,6 +148,14 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@multica/ui/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@multica/ui/components/ui/dialog";
 import { cn } from "@multica/ui/lib/utils";
 import { SidebarTrigger, useSidebarSafe } from "@multica/ui/components/ui/sidebar";
 import { MobileListDetailLayout } from "../../common/mobile-list-detail-layout";
@@ -607,6 +617,9 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const [channelsCollapsed, setChannelsCollapsed] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Channel | null>(null);
   const [archiveTarget, setArchiveTarget] = useState<Channel | null>(null);
+  const [renameTarget, setRenameTarget] = useState<Channel | null>(null);
+  const [renameName, setRenameName] = useState("");
+  const [renameNameError, setRenameNameError] = useState(false);
   const [archivedOpen, setArchivedOpen] = useState(false);
   const editorRef = useRef<ContentEditorRef>(null);
   const composerDrafts = useComposerDraftStore((s) => s.drafts);
@@ -830,6 +843,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const createChannel = useCreateChannel();
   const deleteChannel = useDeleteChannel();
   const archiveChannel = useArchiveChannel();
+  const updateChannel = useUpdateChannel();
   const restoreChannel = useRestoreChannel();
   const setChannelPin = useSetChannelPin();
   const markChannelUnread = useMarkChannelUnread();
@@ -1261,6 +1275,44 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
             isChannelNameTakenError(err)
               ? t(($) => $.sidebar.create_name_taken)
               : t(($) => $.sidebar.create_failed),
+          );
+        },
+      },
+    );
+  };
+
+  const openRenameChannel = (channel: Channel) => {
+    setRenameTarget(channel);
+    setRenameName(channel.name);
+    setRenameNameError(false);
+  };
+
+  const handleRenameChannel = () => {
+    const target = renameTarget;
+    if (!target) return;
+    const name = renameName.trim();
+    if (!name) {
+      setRenameNameError(true);
+      return;
+    }
+    if (name === target.name) {
+      setRenameTarget(null);
+      setRenameNameError(false);
+      return;
+    }
+    updateChannel.mutate(
+      { channelId: target.id, name },
+      {
+        onSuccess: () => {
+          toast.success(t(($) => $.rename_dialog.success));
+          setRenameTarget(null);
+          setRenameNameError(false);
+        },
+        onError: (err) => {
+          toast.error(
+            isChannelNameTakenError(err)
+              ? t(($) => $.rename_dialog.name_taken)
+              : t(($) => $.rename_dialog.error),
           );
         },
       },
@@ -1768,6 +1820,10 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
           {isMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />}
           {isMuted ? t(($) => $.sidebar.unmute) : t(($) => $.sidebar.mute)}
         </ContextMenuItem>
+        <ContextMenuItem onClick={() => openRenameChannel(channel)}>
+          <Pencil className="size-4" />
+          {t(($) => $.sidebar.rename)}
+        </ContextMenuItem>
         <ContextMenuSeparator />
         {archiveAllowed ? (
           <ContextMenuItem onClick={() => setArchiveTarget(channel)}>
@@ -1868,6 +1924,10 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
               <DropdownMenuItem onClick={() => handleToggleChannelMute(channel)}>
                 {isMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />}
                 {isMuted ? t(($) => $.sidebar.unmute) : t(($) => $.sidebar.mute)}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => openRenameChannel(channel)}>
+                <Pencil className="size-4" />
+                {t(($) => $.sidebar.rename)}
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               {archiveAllowed ? (
@@ -2860,6 +2920,53 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog
+        open={renameTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setRenameTarget(null);
+            setRenameNameError(false);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t(($) => $.rename_dialog.title)}</DialogTitle>
+            <DialogDescription>{t(($) => $.rename_dialog.description)}</DialogDescription>
+          </DialogHeader>
+          <Input
+            autoFocus
+            placeholder={t(($) => $.sidebar.name_placeholder)}
+            value={renameName}
+            aria-invalid={renameNameError}
+            onChange={(e) => {
+              setRenameName(e.target.value);
+              if (renameNameError) setRenameNameError(false);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleRenameChannel();
+            }}
+          />
+          {renameNameError && (
+            <p className="text-xs text-destructive">{t(($) => $.rename_dialog.name_required)}</p>
+          )}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setRenameTarget(null);
+                setRenameNameError(false);
+              }}
+            >
+              {t(($) => $.rename_dialog.cancel)}
+            </Button>
+            <Button onClick={handleRenameChannel} disabled={updateChannel.isPending}>
+              {t(($) => $.rename_dialog.confirm)}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog
         open={archiveTarget !== null}

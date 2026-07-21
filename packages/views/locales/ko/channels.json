@@ -26,6 +26,7 @@
     "archive": "보관",
     "mute": "알림 음소거",
     "unmute": "음소거 해제",
+    "rename": "채널 이름 변경",
     "muted_label": "음소거됨",
     "archived_section": "보관됨",
     "archived_restore": "보관 해제",
@@ -40,6 +41,16 @@
     "error": "채널 보관에 실패했습니다",
     "restore_error": "보관 해제에 실패했습니다",
     "readonly_notice": "이 채널은 보관되었습니다"
+  },
+  "rename_dialog": {
+    "title": "채널 이름 변경",
+    "description": "이 그룹 채팅의 새 이름을 입력하세요.",
+    "cancel": "취소",
+    "confirm": "저장",
+    "name_required": "채널 이름을 입력하세요.",
+    "name_taken": "이미 존재하는 채널 이름입니다.",
+    "error": "채널 이름 변경에 실패했습니다",
+    "success": "채널 이름이 업데이트되었습니다"
   },
   "delete_dialog": {
     "title": "이 그룹을 삭제할까요?",

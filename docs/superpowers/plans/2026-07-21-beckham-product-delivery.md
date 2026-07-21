@@ -144,7 +144,7 @@ Publication:
 
 ### Step 7 — Repair deployment migration compatibility
 
-Status: in progress
+Status: complete
 
 Diagnosis evidence:
 
@@ -165,3 +165,10 @@ Repair and verification:
 - The parser boundary tests pass: Beckham still rejects newly proposed `assign_issue` and `schedule_reminder` actions and accepts `request_rework`.
 - A disposable local database was created, migrated from 001 through the repaired 205, and used to run `./cmd/migrate`, `./internal/radar`, and `./internal/migrations`; all passed. `go vet` for those packages also passed. The disposable database was then dropped.
 - The first Radar package run against the default local database failed because that database records old migrations while missing `refresh_workspace_radar_time_signals`. A read-only production query confirmed the deployed database has the function, and the fully migrated disposable database passed both affected tests. This is stale local state, not a deployed user-path defect, so no product fallback or unrelated migration was added.
+
+Publication:
+
+- Repair commit: `d06a5121b30519e4b1c82fb5cf8218c672bdeec1` (`fix(beckham): preserve radar action history in migration`).
+- Branch: `agent/fix-beckham-migration-history`, based on deployed failing merge commit `a17879f20f397da4c67bc2efbc6ce31d81a8870d` from `dev`.
+- PR: [#817 — fix(beckham): preserve radar action history in migration](https://github.com/LRM-Teams/multica/pull/817), targeting `dev`.
+- PR state after creation: open, ready for review, non-draft, and reported mergeable by GitHub. CI started on the published head.

@@ -154,6 +154,7 @@
     "back_to_messages": "メッセージに戻る",
     "title_placeholder": "イシューのタイトル",
     "desc_placeholder": "説明を追加...",
+    "desc_edit_aria": "説明を編集",
     "sub_issues_label": "サブイシュー",
     "sub_issue_of": "親イシュー",
     "from_discussion": "ディスカッションから",

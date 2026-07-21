@@ -34,6 +34,7 @@ import {
   FolderKanban,
   BarChart3,
   Sparkles,
+  CreditCard,
   X,
   Zap,
   Users,
@@ -118,6 +119,7 @@ type NavKey =
   | "squads"
   | "usage"
   | "evolution"
+  | "planBilling"
   | "runtimes"
   | "sandboxes"
   | "skills"
@@ -135,6 +137,7 @@ type NavLabelKey =
   | "squads"
   | "usage"
   | "evolution"
+  | "plan_billing"
   | "runtimes"
   | "sandboxes"
   | "skills"
@@ -156,6 +159,7 @@ const workspaceNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[]
   { key: "squads", labelKey: "squads", icon: Users },
   { key: "usage", labelKey: "usage", icon: BarChart3 },
   { key: "evolution", labelKey: "evolution", icon: Sparkles },
+  { key: "planBilling", labelKey: "plan_billing", icon: CreditCard },
 ];
 
 const configureNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] = [

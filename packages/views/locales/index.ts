@@ -27,6 +27,7 @@ import enSquads from "./en/squads.json";
 import enBilling from "./en/billing.json";
 import enChannels from "./en/channels.json";
 import enEvolution from "./en/evolution.json";
+import enPlanBilling from "./en/plan-billing.json";
 import zhHansCommon from "./zh-Hans/common.json";
 import zhHansAuth from "./zh-Hans/auth.json";
 import zhHansSettings from "./zh-Hans/settings.json";
@@ -55,6 +56,7 @@ import zhHansSquads from "./zh-Hans/squads.json";
 import zhHansBilling from "./zh-Hans/billing.json";
 import zhHansChannels from "./zh-Hans/channels.json";
 import zhHansEvolution from "./zh-Hans/evolution.json";
+import zhHansPlanBilling from "./zh-Hans/plan-billing.json";
 import koCommon from "./ko/common.json";
 import koAuth from "./ko/auth.json";
 import koSettings from "./ko/settings.json";
@@ -83,6 +85,7 @@ import koSquads from "./ko/squads.json";
 import koBilling from "./ko/billing.json";
 import koChannels from "./ko/channels.json";
 import koEvolution from "./ko/evolution.json";
+import koPlanBilling from "./ko/plan-billing.json";
 import jaCommon from "./ja/common.json";
 import jaAuth from "./ja/auth.json";
 import jaSettings from "./ja/settings.json";
@@ -111,6 +114,7 @@ import jaSquads from "./ja/squads.json";
 import jaBilling from "./ja/billing.json";
 import jaChannels from "./ja/channels.json";
 import jaEvolution from "./ja/evolution.json";
+import jaPlanBilling from "./ja/plan-billing.json";
 
 // Single source of truth for the resource bundle. Both apps (web layout +
 // desktop App.tsx) import from here so adding a locale or namespace happens
@@ -145,6 +149,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     billing: enBilling,
     channels: enChannels,
     evolution: enEvolution,
+    "plan-billing": enPlanBilling,
   },
   "zh-Hans": {
     common: zhHansCommon,
@@ -175,6 +180,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     billing: zhHansBilling,
     channels: zhHansChannels,
     evolution: zhHansEvolution,
+    "plan-billing": zhHansPlanBilling,
   },
   ko: {
     common: koCommon,
@@ -205,6 +211,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     billing: koBilling,
     channels: koChannels,
     evolution: koEvolution,
+    "plan-billing": koPlanBilling,
   },
   ja: {
     common: jaCommon,
@@ -235,5 +242,6 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     billing: jaBilling,
     channels: jaChannels,
     evolution: jaEvolution,
+    "plan-billing": jaPlanBilling,
   },
 };

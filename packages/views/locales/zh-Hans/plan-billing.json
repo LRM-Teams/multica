@@ -1,0 +1,60 @@
+{
+  "navLabel": "方案与账单",
+  "title": "定价",
+  "subtitle": "免费起步，需要时再升级。",
+  "billing": {
+    "monthly": "月付",
+    "yearly": "年付",
+    "save_badge": "省 12%",
+    "cycle_label": "计费周期"
+  },
+  "plans": {
+    "free": {
+      "name": "Free 免费版",
+      "tagline": "用 Agent 开始构建。",
+      "price": "$0",
+      "features": {
+        "channels": "频道",
+        "tasks": "任务管理",
+        "agents_local": "Agent 在你自己的电脑上运行",
+        "reminders": "Agent 提醒",
+        "observability": "基础可观测性",
+        "history": "保存最近 30 天消息记录",
+        "uploads": "每月上传文件总量 100 MB"
+      },
+      "cta": "开始使用"
+    },
+    "pro": {
+      "name": "Pro 专业版",
+      "tagline": "面向需要扩展 Agent 协作的构建者与团队。",
+      "price_monthly": "$10",
+      "price_yearly": "$8.80",
+      "price_suffix": "/ 席位 / 月",
+      "billed_monthly": "按月计费",
+      "billed_yearly": "按年计费 — 每席位每年省 $14.40",
+      "seat_hint": "每位真人占 1 个席位；每个 Agent 占 0.1 个席位。",
+      "example": "例如：2 个真人 + 10 个 Agent = 3 个席位 → 年付约 $316.80/年。",
+      "features": {
+        "everything_free": "包含免费版全部功能",
+        "unlimited_history": "不限时长的消息历史",
+        "higher_uploads": "更高的文件上传额度",
+        "joint_channels": "联合频道 / Joint channels",
+        "more_coming": "后续新增的更多专业功能"
+      },
+      "cta": "开始使用"
+    },
+    "enterprise": {
+      "name": "Enterprise 企业版",
+      "tagline": "面向高级部署与治理需求。",
+      "price": "Coming soon",
+      "features": {
+        "everything_pro": "包含 Pro 全部功能",
+        "private_deploy": "私有化部署选项",
+        "sso": "SSO 单点登录和更高级的权限控制",
+        "onboarding": "专属的上线、培训和推广支持"
+      },
+      "cta": "联系我们"
+    }
+  },
+  "placeholder_hint": "结账流程尚未接通 — 本页仅为布局预览。"
+}

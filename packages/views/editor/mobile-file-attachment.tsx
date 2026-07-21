@@ -9,7 +9,6 @@
  */
 
 import * as React from "react";
-import { createPortal } from "react-dom";
 import { ChevronRight, ChevronLeft } from "lucide-react";
 import { FileIcon, defaultStyles } from "react-file-icon";
 import { cn } from "@multica/ui/lib/utils";
@@ -41,12 +40,7 @@ function formatWhen(iso?: string): string {
   try {
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return "—";
-    return d.toLocaleString(undefined, {
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+    return d.toLocaleString();
   } catch {
     return "—";
   }
@@ -89,6 +83,7 @@ export function MobileFileAttachment({
 }: MobileFileAttachmentProps) {
   const { t } = useT("editor");
   const [open, setOpen] = React.useState(false);
+  const dialogRef = React.useRef<HTMLDialogElement | null>(null);
   const ext = getFileExtension(filename);
   const iconStyles = defaultStyles[ext as keyof typeof defaultStyles] ?? {};
   const category = getFileTypeCategory(contentType, filename);
@@ -100,6 +95,22 @@ export function MobileFileAttachment({
   const sub = [typeLabel, sizeLabel].filter(Boolean).join(" · ");
   const badge = typeBadge(filename, contentType);
   const tone = badgeTone(filename, contentType);
+
+  const bindDialog = React.useCallback((dialog: HTMLDialogElement | null) => {
+    dialogRef.current = dialog;
+    if (!dialog || dialog.open) return;
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
+  }, []);
+
+  const closeDetail = React.useCallback(() => {
+    const dialog = dialogRef.current;
+    if (dialog?.open) {
+      if (typeof dialog.close === "function") dialog.close();
+      else dialog.removeAttribute("open");
+    }
+    setOpen(false);
+  }, []);
 
   const openDetail = () => {
     if (!openable || uploading) return;
@@ -153,96 +164,97 @@ export function MobileFileAttachment({
         </button>
       </div>
 
-      {open &&
-        typeof document !== "undefined" &&
-        createPortal(
-          <div
-            data-testid="mobile-file-detail"
-            role="dialog"
-            aria-modal="true"
-            aria-label={t(($) => $.attachment.file_detail_title)}
-            className="fixed inset-0 z-[80] flex flex-col bg-background animate-in slide-in-from-right duration-300"
-          >
-            <div className="flex min-h-12 shrink-0 items-center gap-1 border-b border-border px-1">
+      {open && (
+        <dialog
+          ref={bindDialog}
+          data-testid="mobile-file-detail"
+          aria-label={t(($) => $.attachment.file_detail_title)}
+          className="fixed inset-0 z-[80] m-0 flex h-dvh max-h-none w-screen max-w-none flex-col border-0 bg-background p-0 open:flex animate-in slide-in-from-right duration-300"
+          onCancel={(event) => {
+            event.preventDefault();
+            closeDetail();
+          }}
+          onClose={() => setOpen(false)}
+        >
+          <div className="flex min-h-12 shrink-0 items-center gap-1 border-b border-border px-1">
+            <button
+              type="button"
+              data-testid="mobile-file-detail-back"
+              className="grid size-11 place-items-center rounded-md text-foreground hover:bg-muted"
+              aria-label={t(($) => $.attachment.back)}
+              onClick={closeDetail}
+            >
+              <ChevronLeft className="size-6" />
+            </button>
+            <span className="text-[15px] font-semibold">
+              {t(($) => $.attachment.file_detail_title)}
+            </span>
+          </div>
+
+          <div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-5 pb-6 pt-8">
+            <div
+              className={cn(
+                "mb-4 grid size-[72px] place-items-center rounded-2xl text-sm font-extrabold",
+                tone,
+              )}
+              aria-hidden
+            >
+              {badge}
+            </div>
+            {/* Keep FileIcon available for a11y/tests but prefer badge for visual parity with design */}
+            <span className="sr-only">
+              <FileIcon extension={ext || undefined} {...iconStyles} />
+            </span>
+            <h2 className="mb-2 max-w-full break-all text-center text-[17px] font-bold leading-snug">
+              {filename}
+            </h2>
+
+            <dl className="mt-4 w-full border-t border-border">
+              <Fact
+                label={t(($) => $.attachment.meta_type)}
+                value={contentType || typeLabel}
+              />
+              <Fact
+                label={t(($) => $.attachment.meta_size)}
+                value={sizeLabel || "—"}
+              />
+              <Fact
+                label={t(($) => $.attachment.meta_sender)}
+                value={uploaderName?.trim() || "—"}
+              />
+              <Fact
+                label={t(($) => $.attachment.meta_time)}
+                value={formatWhen(createdAt)}
+              />
+            </dl>
+
+            <div className="mt-auto flex w-full flex-col gap-2 pt-8">
               <button
                 type="button"
-                data-testid="mobile-file-detail-back"
-                className="grid size-11 place-items-center rounded-md text-foreground hover:bg-muted"
-                aria-label={t(($) => $.attachment.back)}
-                onClick={() => setOpen(false)}
+                data-testid="mobile-file-detail-download"
+                className="h-11 rounded-[10px] bg-[#007a5a] text-[15px] font-bold text-white hover:bg-[#006b4e]"
+                onClick={() => {
+                  try {
+                    onDownload();
+                  } catch {
+                    /* toast handled by download helper */
+                  }
+                }}
               >
-                <ChevronLeft className="size-6" />
+                {t(($) => $.image.download)}
               </button>
-              <span className="text-[15px] font-semibold">
-                {t(($) => $.attachment.file_detail_title)}
-              </span>
-            </div>
-
-            <div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-5 pb-6 pt-8">
-              <div
-                className={cn(
-                  "mb-4 grid size-[72px] place-items-center rounded-2xl text-sm font-extrabold",
-                  tone,
-                )}
-                aria-hidden
+              <button
+                type="button"
+                data-testid="mobile-file-detail-open"
+                className="h-11 rounded-[10px] border border-border bg-background text-[14px] font-semibold text-foreground hover:bg-muted/50"
+                onClick={onOpen}
               >
-                {badge}
-              </div>
-              {/* Keep FileIcon available for a11y/tests but prefer badge for visual parity with design */}
-              <span className="sr-only">
-                <FileIcon extension={ext || undefined} {...iconStyles} />
-              </span>
-              <h2 className="mb-2 max-w-full break-all text-center text-[17px] font-bold leading-snug">
-                {filename}
-              </h2>
-
-              <dl className="mt-4 w-full border-t border-border">
-                <Fact
-                  label={t(($) => $.attachment.meta_type)}
-                  value={contentType || typeLabel}
-                />
-                <Fact
-                  label={t(($) => $.attachment.meta_size)}
-                  value={sizeLabel || "—"}
-                />
-                <Fact
-                  label={t(($) => $.attachment.meta_sender)}
-                  value={uploaderName?.trim() || "—"}
-                />
-                <Fact
-                  label={t(($) => $.attachment.meta_time)}
-                  value={formatWhen(createdAt)}
-                />
-              </dl>
-
-              <div className="mt-auto flex w-full flex-col gap-2 pt-8">
-                <button
-                  type="button"
-                  data-testid="mobile-file-detail-download"
-                  className="h-11 rounded-[10px] bg-[#007a5a] text-[15px] font-bold text-white hover:bg-[#006b4e]"
-                  onClick={() => {
-                    try {
-                      onDownload();
-                    } catch {
-                      /* toast handled by download helper */
-                    }
-                  }}
-                >
-                  {t(($) => $.image.download)}
-                </button>
-                <button
-                  type="button"
-                  data-testid="mobile-file-detail-open"
-                  className="h-11 rounded-[10px] border border-border bg-background text-[14px] font-semibold text-foreground hover:bg-muted/50"
-                  onClick={onOpen}
-                >
-                  {t(($) => $.attachment.open_elsewhere)}
-                </button>
-              </div>
+                {t(($) => $.attachment.open_elsewhere)}
+              </button>
             </div>
-          </div>,
-          document.body,
-        )}
+          </div>
+        </dialog>
+      )}
     </>
   );
 }

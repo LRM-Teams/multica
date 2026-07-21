@@ -607,7 +607,36 @@ describe("handleInboxNew", () => {
     };
   }
 
-  it("shows a group-channel browser banner that links back to the channel", async () => {
+  it("shows a group-channel browser banner only for @mentions", async () => {
+    const qc = createQueryClient();
+    qc.setQueryData<Workspace[]>(workspaceKeys.list(), [workspace()]);
+    qc.setQueryData(notificationPreferenceKeys.all("ws-a"), {
+      preferences: { system_notifications: "all" },
+    });
+    qc.setQueryData<Channel[]>(channelKeys.list("ws-a"), [channel()]);
+    installBrowserNotification("granted");
+
+    await handleChannelMessageNotification(
+      qc,
+      channelMessage({
+        content: "hey [@Alice](mention://member/member-1) please look",
+      }),
+      "member-1",
+    );
+
+    expect(webBanners).toHaveLength(1);
+    expect(webBanners[0]?.title).toBe("#general");
+    expect(webBanners[0]?.options).toMatchObject({
+      body: "Agent Bot: hey [@Alice](mention://member/member-1) please look",
+      tag: "channel-1",
+      data: expect.objectContaining({
+        channelId: "channel-1",
+        url: "/workspace-a/channels/channel-1",
+      }),
+    });
+  });
+
+  it("suppresses ordinary group messages without an @mention", async () => {
     const qc = createQueryClient();
     qc.setQueryData<Workspace[]>(workspaceKeys.list(), [workspace()]);
     qc.setQueryData(notificationPreferenceKeys.all("ws-a"), {
@@ -618,16 +647,7 @@ describe("handleInboxNew", () => {
 
     await handleChannelMessageNotification(qc, channelMessage(), "member-1");
 
-    expect(webBanners).toHaveLength(1);
-    expect(webBanners[0]?.title).toBe("#general");
-    expect(webBanners[0]?.options).toMatchObject({
-      body: "Agent Bot: I finished the work",
-      tag: "channel-1",
-      data: expect.objectContaining({
-        channelId: "channel-1",
-        url: "/workspace-a/channels/channel-1",
-      }),
-    });
+    expect(webBanners).toHaveLength(0);
   });
 
   it("routes DM channel banners to the same channel detail path", async () => {
@@ -660,7 +680,13 @@ describe("handleInboxNew", () => {
     qc.setQueryData<Channel[]>(channelKeys.list("ws-a"), [channel({ muted: true })]);
     installBrowserNotification("granted");
 
-    await handleChannelMessageNotification(qc, channelMessage(), "member-1");
+    await handleChannelMessageNotification(
+      qc,
+      channelMessage({
+        content: "hey [@Alice](mention://member/member-1)",
+      }),
+      "member-1",
+    );
     await handleChannelMessageNotification(
       qc,
       channelMessage({ type: "user", author_id: "member-1" }),

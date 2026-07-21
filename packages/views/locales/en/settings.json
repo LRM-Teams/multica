@@ -90,14 +90,21 @@
     },
     "browser": {
       "label": "Browser notifications",
-      "hint": "Allow this browser to show notification banners for new inbox, direct-message, and group replies.",
+      "hint": "Allow this browser to show notification banners for inbox items, direct messages, and group @mentions.",
       "enable": "Enable",
-      "granted": "This browser can show notification banners for inbox, DM, and group replies.",
+      "granted": "This browser can show notification banners for inbox, DMs, and group @mentions.",
       "denied": "Blocked by your browser. Enable notifications for this site in your browser settings.",
       "enabled_badge": "Enabled",
       "unsupported": "This browser does not support system notifications. You will still see in-app unread badges and toasts.",
       "ios_needs_pwa": "On iPhone, add Multica to the Home Screen first. Then open it from the Home Screen to enable notifications.",
-      "ios_pwa_hint": "Allow this Home Screen web app to show notification banners for inbox, DM, and group replies."
+      "ios_pwa_hint": "Allow this Home Screen web app to show notification banners for inbox, DMs, and group @mentions.",
+      "prompt": {
+        "title": "Turn on message notifications",
+        "description": "Get a system banner for direct messages and group @mentions when Multica is in the background — similar to WeChat / mobile Chrome alerts.",
+        "enable": "Allow notifications",
+        "later": "Not now",
+        "dismiss": "Don't ask again"
+      }
     }
   },
   "tokens": {

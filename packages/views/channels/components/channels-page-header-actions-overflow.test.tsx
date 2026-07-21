@@ -487,4 +487,64 @@ describe("ChannelsPage header actions — container-driven overflow (#568)", () 
     resizeContainerTo(359);
     expectCompact();
   });
+
+  // Ghost-reopen guard: opening the overflow Drawer while compact, then
+  // widening past the breakpoint, must not just unmount the Drawer out from
+  // under an `open={true}` state — it must declaratively close first. A
+  // later re-narrow must land back in a genuinely closed state (only the
+  // "More" trigger, nothing already open), never silently reopen whatever
+  // tab was showing when the container widened.
+  it("does not ghost-reopen the overflow Drawer after narrow → open → wide → narrow, with no state left over", async () => {
+    resizeContainerTo(300);
+    renderPage();
+    await screen.findByTestId("message-list");
+    expectCompact();
+
+    // Open the Drawer and drill into Settings while compact.
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    const settingsRow = await screen.findByRole("button", { name: "Settings" });
+    fireEvent.click(settingsRow);
+    expect(await screen.findByRole("button", { name: "project" })).toBeInTheDocument();
+
+    // Widen past the breakpoint — the eligibility effect must declaratively
+    // clear `mobilePanel`, closing the Drawer, not just unmount it mid-open.
+    resizeContainerTo(1024);
+    expectDirect();
+    expect(screen.queryByRole("button", { name: "project" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Settings" })).toBeNull();
+
+    // Narrow again — must land on the closed "More" trigger only, never
+    // resurrect the Settings tab that was open before it widened.
+    resizeContainerTo(300);
+    expectCompact();
+    expect(screen.queryByRole("button", { name: "project" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Settings" })).toBeNull();
+
+    // A fresh click still reaches the panel normally — the guard only
+    // prevents an AUTOMATIC reopen, it doesn't disable the entry point.
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    expect(await screen.findByRole("button", { name: "Settings" })).toBeInTheDocument();
+  });
+
+  // First-paint guard: once the header actually mounts on a narrow
+  // container, it must already be compact — never a "direct" frame that
+  // then flips. `useContainerNarrowerThan` measures in `useLayoutEffect`
+  // (synchronous, before the browser paints) rather than `useEffect`
+  // (deferred to after paint) specifically so the corrected value lands in
+  // the same commit a real browser paints, not a visibly later one.
+  //
+  // A synchronous post-`render()` assertion (no `await`) would be a
+  // stronger proof, but the header itself only mounts once the channel's
+  // async data resolves — asserting before that just observes "nothing
+  // rendered yet," not the flash this test is guarding against. Awaiting
+  // the header's first appearance and checking it lands compact is the
+  // meaningful boundary: is the FIRST paint of the actions row itself ever
+  // wrong.
+  it("the header's first paint on a narrow container is already compact — never direct-then-flip", async () => {
+    resizeContainerTo(300);
+    renderPage();
+
+    await screen.findByRole("button", { name: "More" });
+    expectCompact();
+  });
 });

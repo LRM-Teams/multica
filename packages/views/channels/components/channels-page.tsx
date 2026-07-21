@@ -654,6 +654,19 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const [mobilePanel, setMobilePanel] = useState<
     "menu" | ChannelDetailsTab | null
   >(null);
+  // #568 — the overflow Drawer only renders while `isMobile ||
+  // isHeaderActionsCompact` (below). If the container widens past the
+  // compact breakpoint while the Drawer is open, that condition alone
+  // going false would unmount the whole `<Drawer>` out from under an
+  // `open={true}` state — no declarative close transition, and `mobilePanel`
+  // would still hold its last value. Re-narrowing later would then remount
+  // the Drawer already `open={true}` (ghost reopen), with no user click.
+  // Clear the panel state declaratively as soon as eligibility is lost, so
+  // the Drawer always gets a real close transition and a later re-narrow
+  // starts from a genuinely closed state.
+  useEffect(() => {
+    if (!isMobile && !isHeaderActionsCompact) setMobilePanel(null);
+  }, [isMobile, isHeaderActionsCompact]);
   const [removeMemberTarget, setRemoveMemberTarget] = useState<ChannelMember | null>(null);
   // A route transition can remount this page between `/channels/[id]` and the
   // base `/channels` route. Preserve the mobile Back intent long enough for

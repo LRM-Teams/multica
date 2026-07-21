@@ -1616,13 +1616,13 @@ func (h *Handler) taskMessageActivityTimelineEvent(ctx context.Context, workspac
 		}
 		if known {
 			details["tool"] = canonicalTool
+			agentActivityApplyToolSourceFacts(details, rawTool, canonicalTool, input)
 		} else {
 			details["unmapped_tool_name"] = rawTool
 		}
 		if canonicalTool != rawTool {
 			details["raw_tool"] = rawTool
 		}
-		agentActivityApplyToolSourceFacts(details, rawTool, canonicalTool, input)
 	}
 	if target, summaryKind := taskMessageActivityToolTarget(message); target != "" {
 		details["tool_target"] = target
@@ -1700,19 +1700,41 @@ func agentActivityTimelineEvent(row agentActivityRawRow, targetRef AgentActivity
 	input := mapFromMap(details, "input")
 	tool := stringPtrFromMap(details, "tool")
 	cliResolved := false
-	if tool != nil {
-		canonical := agentActivityCanonicalToolName(*tool)
+	unknownTool := strings.TrimSpace(stringFromMap(details, "unmapped_tool_name")) != ""
+	if tool != nil && !unknownTool {
+		canonical, known := taskMessageCanonicalToolName(*tool, input)
 		if cli, ok := resolveRaftCLIInvocation(canonical, input); ok {
 			cliResolved = true
 			canonical = cli.Tool
+			known = true
 			for key, value := range cli.Details {
 				details[key] = value
 			}
 		}
-		tool = &canonical
+		if known {
+			tool = &canonical
+		} else {
+			unknownTool = true
+		}
 	}
-	if command := redactedCommandFromInput(input); command != "" && details["command"] == nil {
-		details["command"] = command
+	if unknownTool {
+		// Unknown tools have two persisted shapes: historical rows carry the raw
+		// name in details.tool, while realtime task-message rows carry the
+		// diagnostic-only details.unmapped_tool_name marker. Collapse both before
+		// any narrative entry is generated so source facts, status, or raw names
+		// cannot be projected back into the user-facing event.
+		tool = nil
+		for _, key := range []string{
+			"tool", "raw_tool", "unmapped_tool_name", "tool_target", "summary_kind",
+			"command", "input", "path", "file_path", "filePath", "filepath",
+			"query", "pattern", "scope", "cwd", "basePath",
+		} {
+			delete(details, key)
+		}
+	} else {
+		if command := redactedCommandFromInput(input); command != "" && details["command"] == nil {
+			details["command"] = command
+		}
 	}
 	if tool != nil {
 		agentActivityApplyToolInputSummary(details, *tool, agentActivityToolSummaryInput(details, input), true)
@@ -1721,6 +1743,16 @@ func agentActivityTimelineEvent(row agentActivityRawRow, targetRef AgentActivity
 		}
 	}
 	detailKind := agentActivityDetailKind(row.EventType)
+	status := textToPtr(row.Status)
+	text := textToPtr(row.Message)
+	reasonCode := textOrDefault(row.ReasonCode, "")
+	entries := agentActivityTimelineEntries(row, details, tool)
+	if unknownTool {
+		status = nil
+		text = nil
+		reasonCode = ""
+		entries = nil
+	}
 	return AgentActivityTimelineEvent{
 		ID:           uuidToString(row.ID),
 		AgentID:      uuidToString(row.AgentID),
@@ -1732,13 +1764,13 @@ func agentActivityTimelineEvent(row agentActivityRawRow, targetRef AgentActivity
 		DetailKind:   detailKind,
 		OccurredAt:   timestampToString(row.CreatedAt),
 		Visibility:   textOrDefault(row.Visibility, "user_facing"),
-		Text:         textToPtr(row.Message),
+		Text:         text,
 		Tool:         tool,
 		ToolTarget:   stringPtrFromMap(details, "tool_target"),
-		Status:       textToPtr(row.Status),
-		ReasonCode:   textOrDefault(row.ReasonCode, ""),
+		Status:       status,
+		ReasonCode:   reasonCode,
 		Details:      agentActivityTimelinePublicDetails(detailKind, details),
-		Entries:      agentActivityTimelineEntries(row, details, tool),
+		Entries:      entries,
 		TargetRef:    targetRef,
 		SourceRefs:   agentActivitySourceRefs(row),
 	}
@@ -2048,12 +2080,21 @@ func resolveRaftCLIInvocation(toolName string, input map[string]any) (raftCLIInv
 	case "task list":
 		invocation.Tool = "list_tasks"
 		invocation.ToolTarget = firstNonEmptyActivityString(optionValue(rest, "--channel"), optionValue(rest, "--target"))
+	case "task create":
+		invocation.Tool = "create_tasks"
+		invocation.ToolTarget = firstNonEmptyActivityString(optionValue(rest, "--channel"), optionValue(rest, "--target"))
 	case "task claim":
 		invocation.Tool = "claim_tasks"
+		invocation.ToolTarget = firstNonEmptyActivityString(optionValue(rest, "--channel"), optionValue(rest, "--target"))
+	case "task unclaim":
+		invocation.Tool = "unclaim_task"
 		invocation.ToolTarget = firstNonEmptyActivityString(optionValue(rest, "--channel"), optionValue(rest, "--target"))
 	case "task update":
 		invocation.Tool = "update_task_status"
 		invocation.ToolTarget = firstNonEmptyActivityString(optionValue(rest, "--channel"), optionValue(rest, "--target"))
+	case "channel add-member":
+		invocation.Tool = "add_channel_member"
+		invocation.ToolTarget = optionValue(rest, "--target")
 	case "channel join":
 		invocation.Tool = "join_channel"
 		invocation.ToolTarget = optionValue(rest, "--target")
@@ -2070,6 +2111,41 @@ func resolveRaftCLIInvocation(toolName string, input map[string]any) (raftCLIInv
 	case "reminder schedule":
 		invocation.Tool = "schedule_reminder"
 		invocation.ToolTarget = optionValue(rest, "--title")
+	case "reminder list":
+		invocation.Tool = "list_reminders"
+		invocation.SummaryKind = "none"
+	case "reminder cancel":
+		invocation.Tool = "cancel_reminder"
+		invocation.SummaryKind = "none"
+	case "issue list":
+		invocation.Tool = "list_issues"
+		invocation.SummaryKind = "none"
+	case "issue get":
+		invocation.Tool = "get_issue"
+		invocation.ToolTarget = positionalArg(rest, 0)
+		invocation.SummaryKind = "issue"
+	case "issue search":
+		invocation.Tool = "search_issues"
+		invocation.ToolTarget = positionalArg(rest, 0)
+		invocation.SummaryKind = "query"
+	case "issue comment":
+		commentAction := positionalArg(rest, 0)
+		switch commentAction {
+		case "list":
+			invocation.Tool = "list_issue_comments"
+			invocation.ToolTarget = positionalArg(rest, 1)
+			invocation.SummaryKind = "issue"
+		case "add":
+			invocation.Tool = "comment_issue"
+			invocation.ToolTarget = positionalArg(rest, 1)
+			invocation.SummaryKind = "issue"
+		case "delete":
+			invocation.Tool = "delete_issue_comment"
+			invocation.ToolTarget = positionalArg(rest, 1)
+			invocation.SummaryKind = "comment"
+		default:
+			return raftCLIInvocation{}, false
+		}
 	default:
 		return raftCLIInvocation{}, false
 	}
@@ -2205,6 +2281,30 @@ func optionValue(args []string, flag string) string {
 	return ""
 }
 
+func positionalArg(args []string, index int) string {
+	if index < 0 {
+		return ""
+	}
+	position := 0
+	for _, arg := range args {
+		arg = strings.TrimSpace(arg)
+		if arg == "" {
+			continue
+		}
+		// Positional identifiers precede flags in every supported Raft/Multica
+		// command grammar. Stop at the option boundary so an option value can
+		// never be mistaken for a user-facing issue or comment target.
+		if strings.HasPrefix(arg, "-") {
+			break
+		}
+		if position == index {
+			return arg
+		}
+		position++
+	}
+	return ""
+}
+
 func firstNonEmptyActivityString(values ...string) string {
 	for _, value := range values {
 		if strings.TrimSpace(value) != "" {
@@ -2307,11 +2407,15 @@ func agentActivityTimelineRowIsNarrative(row agentActivityRawRow) bool {
 			return strings.TrimSpace(cli.Tool) != ""
 		}
 		tool := stringFromMap(details, "tool")
-		if tool == "" {
-			return false
+		if tool != "" {
+			if _, known := taskMessageCanonicalToolName(tool, mapFromMap(details, "input")); known {
+				return true
+			}
+			// Unknown tool calls remain narrative events so the presentation layer
+			// can render its safe generic fallback without exposing the raw tool.
+			return true
 		}
-		_, known := taskMessageCanonicalToolName(tool, mapFromMap(details, "input"))
-		return known
+		return stringFromMap(details, "unmapped_tool_name") != ""
 	case activityKindCustom:
 		return customActivityEventIsNarrative(
 			textOrDefault(row.EventType, ""),
@@ -2334,21 +2438,29 @@ var agentActivityToolAliases = map[string]string{
 	"send_message": "send_message",
 	"message_send": "send_message",
 
-	"check_messages":     "check_messages",
-	"wait_for_message":   "wait_for_message",
-	"receive_message":    "receive_message",
-	"read_history":       "read_history",
-	"search_messages":    "search_messages",
-	"list_server":        "list_server",
-	"list_tasks":         "list_tasks",
-	"create_tasks":       "create_tasks",
-	"claim_tasks":        "claim_tasks",
-	"unclaim_task":       "unclaim_task",
-	"update_task_status": "update_task_status",
-	"join_channel":       "join_channel",
-	"leave_channel":      "leave_channel",
-	"upload_file":        "upload_file",
-	"view_file":          "view_file",
+	"check_messages":       "check_messages",
+	"wait_for_message":     "wait_for_message",
+	"receive_message":      "receive_message",
+	"read_messages":        "read_history",
+	"read_history":         "read_history",
+	"search_messages":      "search_messages",
+	"list_server":          "list_server",
+	"list_tasks":           "list_tasks",
+	"create_tasks":         "create_tasks",
+	"claim_tasks":          "claim_tasks",
+	"unclaim_task":         "unclaim_task",
+	"update_task_status":   "update_task_status",
+	"add_channel_member":   "add_channel_member",
+	"join_channel":         "join_channel",
+	"leave_channel":        "leave_channel",
+	"upload_file":          "upload_file",
+	"view_file":            "view_file",
+	"list_issues":          "list_issues",
+	"get_issue":            "get_issue",
+	"search_issues":        "search_issues",
+	"list_issue_comments":  "list_issue_comments",
+	"comment_issue":        "comment_issue",
+	"delete_issue_comment": "delete_issue_comment",
 
 	"bash":                 "bash",
 	"shell":                "bash",

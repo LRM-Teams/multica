@@ -59,7 +59,14 @@
       "code": "コード",
       "text": "テキスト",
       "file": "ファイル"
-    }
+    },
+    "file_detail_title": "ファイル詳細",
+    "back": "戻る",
+    "open_elsewhere": "別のアプリで開く",
+    "meta_type": "種類",
+    "meta_size": "サイズ",
+    "meta_sender": "送信者",
+    "meta_time": "日時"
   },
   "link_hover": {
     "copy_link": "リンクをコピー",

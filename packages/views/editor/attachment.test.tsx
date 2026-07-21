@@ -35,6 +35,10 @@ vi.mock("./use-download-attachment", () => ({
   useDownloadAttachment: () => downloadMock,
 }));
 
+vi.mock("@multica/ui/hooks/use-mobile", () => ({
+  useIsMobile: () => false,
+}));
+
 vi.mock("../platform", () => ({
   openExternal: openExternalMock,
 }));

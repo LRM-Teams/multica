@@ -346,10 +346,12 @@ export function Attachment({
     handleDownload();
   };
 
-  // LRM-216 — narrow/mobile: compact info card → fullscreen detail (no inline
-  // HTML/iframe preview). Images keep the existing thumbnail + lightbox path.
-  if (isMobile && kind !== "image") {
+  // LRM-216 / LRM-217 — narrow/mobile: compact info card (no inline preview)
+  // → fullscreen shell with preview pane (HTML / image / PDF) or「无法预览」.
+  if (isMobile) {
     const canOpen = !!state.url || !!state.attachmentId;
+    const previewMode =
+      kind === "html" || kind === "image" || kind === "pdf" ? kind : "none";
     return (
       <MobileFileAttachment
         filename={state.filename}
@@ -358,6 +360,9 @@ export function Attachment({
         createdAt={state.record?.created_at}
         uploading={state.uploading}
         openable={canOpen && !state.uploading}
+        previewUrl={state.url}
+        attachmentId={state.attachmentId}
+        previewMode={previewMode}
         onDownload={handleDownload}
         onOpen={handleOpenElsewhere}
         className={className}

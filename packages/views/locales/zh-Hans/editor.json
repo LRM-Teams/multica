@@ -66,7 +66,8 @@
     "meta_type": "类型",
     "meta_size": "大小",
     "meta_sender": "发送者",
-    "meta_time": "时间"
+    "meta_time": "时间",
+    "cannot_preview": "无法预览"
   },
   "link_hover": {
     "copy_link": "复制链接",

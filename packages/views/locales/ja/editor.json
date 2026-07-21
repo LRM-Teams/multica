@@ -66,7 +66,8 @@
     "meta_type": "種類",
     "meta_size": "サイズ",
     "meta_sender": "送信者",
-    "meta_time": "日時"
+    "meta_time": "日時",
+    "cannot_preview": "プレビューできません"
   },
   "link_hover": {
     "copy_link": "リンクをコピー",

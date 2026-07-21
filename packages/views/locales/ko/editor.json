@@ -66,7 +66,8 @@
     "meta_type": "유형",
     "meta_size": "크기",
     "meta_sender": "보낸 사람",
-    "meta_time": "시간"
+    "meta_time": "시간",
+    "cannot_preview": "미리볼 수 없음"
   },
   "link_hover": {
     "copy_link": "링크 복사",

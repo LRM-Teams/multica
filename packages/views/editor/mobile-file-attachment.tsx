@@ -1,16 +1,16 @@
 "use client";
 
 /**
- * Mobile file attachment entry + fullscreen detail (LRM-216 / LRM-215).
+ * Mobile file attachment entry + fullscreen detail (LRM-216 / LRM-217).
  *
  * Narrow screens only: compact Slack/Discord-style info card in the message
  * stream (no inline iframe / content preview). Tap pushes a 100vh detail
- * sheet with basic metadata + Download / Open — no preview pane.
+ * sheet: preview pane (HTML / image / PDF) + metadata + Download / Open.
+ * Other types show a「无法预览」placeholder in the same shell.
  */
 
 import * as React from "react";
 import { ChevronRight, ChevronLeft } from "lucide-react";
-import { FileIcon, defaultStyles } from "react-file-icon";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../i18n";
 import {
@@ -18,6 +18,9 @@ import {
   getFileExtension,
   getFileTypeCategory,
 } from "./utils/file-meta";
+import { HtmlPreviewBody } from "./html-preview-body";
+
+export type MobilePreviewMode = "html" | "image" | "pdf" | "none";
 
 export interface MobileFileAttachmentProps {
   filename: string;
@@ -29,6 +32,11 @@ export interface MobileFileAttachmentProps {
   uploading?: boolean;
   /** False when the file cannot be opened (no href / unavailable). */
   openable?: boolean;
+  /** Direct URL for image / PDF / fallback iframe. */
+  previewUrl?: string | null;
+  /** Attachment id — preferred for HTML via /content proxy. */
+  attachmentId?: string | null;
+  previewMode?: MobilePreviewMode;
   onDownload: () => void;
   /** Open in new tab / other app. */
   onOpen: () => void;
@@ -69,6 +77,22 @@ function badgeTone(filename: string, contentType: string): string {
   return "bg-[#2b2d31] text-white";
 }
 
+function resolvePreviewMode(
+  mode: MobilePreviewMode | undefined,
+  contentType: string,
+  filename: string,
+): MobilePreviewMode {
+  if (mode) return mode;
+  const ct = contentType.toLowerCase();
+  const ext = getFileExtension(filename);
+  if (ct.includes("html") || ext === "html" || ext === "htm") return "html";
+  if (ct.startsWith("image/") || ["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext)) {
+    return "image";
+  }
+  if (ct.includes("pdf") || ext === "pdf") return "pdf";
+  return "none";
+}
+
 export function MobileFileAttachment({
   filename,
   contentType = "",
@@ -77,6 +101,9 @@ export function MobileFileAttachment({
   uploaderName,
   uploading,
   openable = true,
+  previewUrl,
+  attachmentId,
+  previewMode,
   onDownload,
   onOpen,
   className,
@@ -84,8 +111,6 @@ export function MobileFileAttachment({
   const { t } = useT("editor");
   const [open, setOpen] = React.useState(false);
   const dialogRef = React.useRef<HTMLDialogElement | null>(null);
-  const ext = getFileExtension(filename);
-  const iconStyles = defaultStyles[ext as keyof typeof defaultStyles] ?? {};
   const category = getFileTypeCategory(contentType, filename);
   const typeLabel = t(($) => $.attachment.file_type[category]);
   const sizeLabel =
@@ -95,6 +120,7 @@ export function MobileFileAttachment({
   const sub = [typeLabel, sizeLabel].filter(Boolean).join(" · ");
   const badge = typeBadge(filename, contentType);
   const tone = badgeTone(filename, contentType);
+  const mode = resolvePreviewMode(previewMode, contentType, filename);
 
   const bindDialog = React.useCallback((dialog: HTMLDialogElement | null) => {
     dialogRef.current = dialog;
@@ -115,6 +141,14 @@ export function MobileFileAttachment({
   const openDetail = () => {
     if (!openable || uploading) return;
     setOpen(true);
+  };
+
+  const runDownload = () => {
+    try {
+      onDownload();
+    } catch {
+      /* toast handled by download helper */
+    }
   };
 
   return (
@@ -168,7 +202,7 @@ export function MobileFileAttachment({
         <dialog
           ref={bindDialog}
           data-testid="mobile-file-detail"
-          aria-label={t(($) => $.attachment.file_detail_title)}
+          aria-label={filename}
           className="fixed inset-0 z-[80] m-0 flex h-dvh max-h-none w-screen max-w-none flex-col border-0 bg-background p-0 open:flex animate-in slide-in-from-right duration-300"
           onCancel={(event) => {
             event.preventDefault();
@@ -176,7 +210,7 @@ export function MobileFileAttachment({
           }}
           onClose={() => setOpen(false)}
         >
-          <div className="flex min-h-12 shrink-0 items-center gap-1 border-b border-border px-1">
+          <div className="flex min-h-12 shrink-0 items-center gap-0.5 border-b border-border px-1">
             <button
               type="button"
               data-testid="mobile-file-detail-back"
@@ -186,67 +220,66 @@ export function MobileFileAttachment({
             >
               <ChevronLeft className="size-6" />
             </button>
-            <span className="text-[15px] font-semibold">
-              {t(($) => $.attachment.file_detail_title)}
-            </span>
+            <div className="min-w-0 flex-1 py-1">
+              <div className="truncate text-[14px] font-semibold leading-tight">
+                {filename}
+              </div>
+              {sub && (
+                <div className="truncate text-[11px] text-muted-foreground">
+                  {sub}
+                </div>
+              )}
+            </div>
+            <button
+              type="button"
+              data-testid="mobile-file-detail-download-nav"
+              className="shrink-0 px-3 py-2 text-[13px] font-bold text-[#1264a3] hover:bg-muted/50"
+              onClick={runDownload}
+            >
+              {t(($) => $.image.download)}
+            </button>
           </div>
 
-          <div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-5 pb-6 pt-8">
-            <div
-              className={cn(
-                "mb-4 grid size-[72px] place-items-center rounded-2xl text-sm font-extrabold",
-                tone,
-              )}
-              aria-hidden
-            >
-              {badge}
+          <div
+            data-testid="mobile-file-preview-pane"
+            className="flex min-h-0 flex-1 flex-col bg-[#f0f0ee]"
+          >
+            <div className="m-2.5 flex min-h-0 flex-1 flex-col overflow-hidden rounded-[10px] border border-border bg-background">
+              <MobilePreviewBody
+                mode={mode}
+                filename={filename}
+                previewUrl={previewUrl}
+                attachmentId={attachmentId}
+              />
             </div>
-            {/* Keep FileIcon available for a11y/tests but prefer badge for visual parity with design */}
-            <span className="sr-only">
-              <FileIcon extension={ext || undefined} {...iconStyles} />
-            </span>
-            <h2 className="mb-2 max-w-full break-all text-center text-[17px] font-bold leading-snug">
-              {filename}
-            </h2>
 
-            <dl className="mt-4 w-full border-t border-border">
-              <Fact
-                label={t(($) => $.attachment.meta_type)}
-                value={contentType || typeLabel}
-              />
-              <Fact
-                label={t(($) => $.attachment.meta_size)}
-                value={sizeLabel || "—"}
-              />
-              <Fact
-                label={t(($) => $.attachment.meta_sender)}
-                value={uploaderName?.trim() || "—"}
-              />
-              <Fact
-                label={t(($) => $.attachment.meta_time)}
-                value={formatWhen(createdAt)}
-              />
-            </dl>
-
-            <div className="mt-auto flex w-full flex-col gap-2 pt-8">
+            <div className="shrink-0 border-t border-border bg-background px-3.5 pb-3.5 pt-2.5">
+              <div className="mb-2.5 flex items-center justify-between gap-3 text-[12px] text-muted-foreground">
+                <span>{t(($) => $.attachment.meta_sender)}</span>
+                <span className="min-w-0 truncate font-semibold text-foreground">
+                  {uploaderName?.trim() || "—"}
+                </span>
+              </div>
+              {createdAt && (
+                <div className="mb-2.5 flex items-center justify-between gap-3 text-[12px] text-muted-foreground">
+                  <span>{t(($) => $.attachment.meta_time)}</span>
+                  <span className="min-w-0 truncate font-semibold text-foreground">
+                    {formatWhen(createdAt)}
+                  </span>
+                </div>
+              )}
               <button
                 type="button"
                 data-testid="mobile-file-detail-download"
-                className="h-11 rounded-[10px] bg-[#007a5a] text-[15px] font-bold text-white hover:bg-[#006b4e]"
-                onClick={() => {
-                  try {
-                    onDownload();
-                  } catch {
-                    /* toast handled by download helper */
-                  }
-                }}
+                className="mb-2 h-11 w-full rounded-[10px] bg-[#007a5a] text-[15px] font-bold text-white hover:bg-[#006b4e]"
+                onClick={runDownload}
               >
                 {t(($) => $.image.download)}
               </button>
               <button
                 type="button"
                 data-testid="mobile-file-detail-open"
-                className="h-11 rounded-[10px] border border-border bg-background text-[14px] font-semibold text-foreground hover:bg-muted/50"
+                className="h-11 w-full rounded-[10px] border border-border bg-background text-[14px] font-semibold text-foreground hover:bg-muted/50"
                 onClick={onOpen}
               >
                 {t(($) => $.attachment.open_elsewhere)}
@@ -259,11 +292,92 @@ export function MobileFileAttachment({
   );
 }
 
-function Fact({ label, value }: { label: string; value: string }) {
+function MobilePreviewBody({
+  mode,
+  filename,
+  previewUrl,
+  attachmentId,
+}: {
+  mode: MobilePreviewMode;
+  filename: string;
+  previewUrl?: string | null;
+  attachmentId?: string | null;
+}) {
+  const { t } = useT("editor");
+
+  if (mode === "html" && attachmentId) {
+    return (
+      <HtmlPreviewBody
+        source={{ kind: "attachment", attachmentId }}
+        title={filename}
+        className="h-full min-h-[12rem] w-full"
+        iframeClassName="rounded-none border-0"
+        placeholderClassName="h-full min-h-[12rem]"
+        errorTestId="mobile-file-preview-error"
+      />
+    );
+  }
+
+  if (mode === "html" && previewUrl) {
+    return (
+      <iframe
+        data-testid="mobile-file-preview-html"
+        title={filename}
+        src={previewUrl}
+        sandbox="allow-scripts"
+        className="h-full min-h-[12rem] w-full border-0 bg-background"
+      />
+    );
+  }
+
+  if (mode === "image" && previewUrl) {
+    return (
+      <div className="flex h-full min-h-[12rem] items-center justify-center overflow-auto p-3">
+        <img
+          data-testid="mobile-file-preview-image"
+          src={previewUrl}
+          alt={filename}
+          className="max-h-full max-w-full object-contain"
+        />
+      </div>
+    );
+  }
+
+  if (mode === "pdf" && previewUrl) {
+    // Prefer <object> over <iframe>: app CSP blocks PDF in iframes
+    // (see attachment-preview-modal), and react-doctor requires sandboxed
+    // iframes which break Chromium's PDF viewer.
+    return (
+      <object
+        data={previewUrl}
+        type="application/pdf"
+        data-testid="mobile-file-preview-pdf"
+        aria-label={filename}
+        className="h-full min-h-[12rem] w-full bg-background"
+      >
+        <div className="flex h-full min-h-[12rem] flex-col items-center justify-center gap-2 px-6 text-center">
+          <p className="text-[15px] font-semibold">
+            {t(($) => $.attachment.cannot_preview)}
+          </p>
+          <p className="text-[12px] text-muted-foreground">
+            {t(($) => $.attachment.preview_unsupported)}
+          </p>
+        </div>
+      </object>
+    );
+  }
+
   return (
-    <div className="flex items-start justify-between gap-3 border-b border-border py-3 text-[13px]">
-      <dt className="shrink-0 text-muted-foreground">{label}</dt>
-      <dd className="min-w-0 text-right font-semibold break-all">{value}</dd>
+    <div
+      data-testid="mobile-file-preview-unavailable"
+      className="flex h-full min-h-[12rem] flex-col items-center justify-center gap-2 px-6 text-center"
+    >
+      <p className="text-[15px] font-semibold text-foreground">
+        {t(($) => $.attachment.cannot_preview)}
+      </p>
+      <p className="text-[12px] text-muted-foreground">
+        {t(($) => $.attachment.preview_unsupported)}
+      </p>
     </div>
   );
 }

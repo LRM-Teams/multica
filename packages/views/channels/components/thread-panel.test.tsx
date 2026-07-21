@@ -70,6 +70,10 @@ const RESOURCES = {
     view_parent: "Back to main chat",
     close_aria: "Close thread",
     back_to_conversation: "Back to conversation",
+    follow: "Follow",
+    following: "Following",
+    follow_aria: "Follow thread",
+    unfollow_aria: "Unfollow thread",
   },
   composer: { send: "Send" },
 };
@@ -101,6 +105,8 @@ function baseProps() {
     currentUserId: "user-a",
     isMobile: false,
     onBack: vi.fn(),
+    followed: false,
+    onFollowChange: vi.fn(),
     editor: <div data-testid="thread-editor">editor</div>,
     onSend: vi.fn(),
     sendDisabled: false,
@@ -167,6 +173,33 @@ describe("ThreadPanel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Back to conversation" }));
     expect(onBack).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders the follow state in the header and toggles it on desktop and mobile", () => {
+    const desktopToggle = vi.fn();
+    const { unmount } = render(
+      <ThreadPanel {...baseProps()} followed onFollowChange={desktopToggle} />,
+    );
+
+    const following = screen.getByRole("button", { name: "Unfollow thread" });
+    expect(desktopToggle).not.toHaveBeenCalled();
+    expect(following).toHaveTextContent("Following");
+    expect(following).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(following);
+    expect(desktopToggle).toHaveBeenCalledWith(false);
+
+    unmount();
+    const mobileToggle = vi.fn();
+    render(
+      <ThreadPanel
+        {...baseProps()}
+        isMobile
+        followed={false}
+        onFollowChange={mobileToggle}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Follow thread" }));
+    expect(mobileToggle).toHaveBeenCalledWith(true);
   });
 });
 

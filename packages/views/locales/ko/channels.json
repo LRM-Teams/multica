@@ -158,6 +158,12 @@
     "empty_replies": "아직 답글이 없습니다.",
     "load_failed": "스레드를 불러오지 못했습니다.",
     "send_failed": "스레드 답글을 보내지 못했습니다.",
+    "follow": "팔로우",
+    "following": "팔로우 중",
+    "follow_aria": "스레드 팔로우",
+    "unfollow_aria": "스레드 팔로우 해제",
+    "follow_failed": "스레드를 팔로우하지 못했습니다.",
+    "unfollow_failed": "스레드 팔로우를 해제하지 못했습니다.",
     "composer_placeholder": "스레드에서 답장...",
     "back_to_conversation": "대화로 돌아가기"
   },

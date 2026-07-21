@@ -61,6 +61,7 @@ import {
   useAddChannelReaction,
   useRemoveChannelReaction,
   useMarkChannelThreadRead,
+  useSetChannelThreadFollowed,
   useSetChannelTyping,
   useComposerDraftStore,
   useLastSelectedChannelStore,
@@ -902,6 +903,10 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const { data: threadPage, isLoading: threadLoading, isError: threadError, refetch: refetchThread } = useQuery(
     channelMessageThreadOptions(activeChannelId, threadRoot?.id ?? ""),
   );
+  const threadSurfaceRoot = useMemo(
+    () => threadPage?.messages.find((message) => message.id === threadRoot?.id) ?? threadRoot,
+    [threadPage?.messages, threadRoot],
+  );
   const threadReplies = useMemo(
     () => {
       const messages = threadPage?.messages ?? [];
@@ -927,7 +932,23 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const editChannelMessage = useEditChannelMessage();
   const deleteChannelMessage = useDeleteChannelMessage();
   const { mutate: markThreadRead } = useMarkChannelThreadRead();
+  const setThreadFollowed = useSetChannelThreadFollowed();
   const setTyping = useSetChannelTyping();
+  const handleThreadFollowChange = useCallback((followed: boolean) => {
+    if (!threadSurfaceRoot) return;
+    setThreadFollowed.mutate(
+      {
+        channelId: threadSurfaceRoot.channel_id,
+        messageId: threadSurfaceRoot.id,
+        followed,
+      },
+      {
+        onError: () => toast.error(
+          t(($) => followed ? $.thread.follow_failed : $.thread.unfollow_failed),
+        ),
+      },
+    );
+  }, [setThreadFollowed, t, threadSurfaceRoot]);
   // Edit is a PATCH of an existing message (H5) — it routes through
   // editChannelMessage, never the send path, so it can never produce a new wake.
   const handleEditMessage = useCallback((message: ChannelMessage, content: string) => {
@@ -2346,16 +2367,23 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   // message. also-send is CUT this round (#256), so no also-send props are
   // passed — the panel then hides the checkbox entirely.
   const threadPanel =
-    active && threadRoot ? (
+    active && threadSurfaceRoot ? (
       <ThreadPanel
-        root={threadRoot}
+        root={threadSurfaceRoot}
         replies={threadReplies}
         currentUserId={currentUserId}
         currentUserName={currentUserName ?? undefined}
         isMobile={isMobile}
         onBack={() => setOpenThreadRoot(null)}
+        followed={threadSurfaceRoot.thread_followed === true}
+        followDisabled={
+          threadLoading ||
+          (setThreadFollowed.isPending &&
+            setThreadFollowed.variables?.messageId === threadSurfaceRoot.id)
+        }
+        onFollowChange={handleThreadFollowChange}
         onViewParent={() => {
-          setHighlightMessageId(threadRoot.id);
+          setHighlightMessageId(threadSurfaceRoot.id);
           if (isMobile) setOpenThreadRoot(null);
         }}
         loading={threadLoading}
@@ -2368,7 +2396,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         onClearQuote={() => setThreadQuoteTarget(null)}
         editor={
           <ContentEditor
-            key={`thread-editor:${threadRoot.id}`}
+            key={`thread-editor:${threadSurfaceRoot.id}`}
             ref={threadEditorRef}
             // Bare URLs stay plain text in the composer (#531/#542).
             plainUrls

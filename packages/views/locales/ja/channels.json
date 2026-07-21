@@ -158,6 +158,12 @@
     "empty_replies": "返信はまだありません。",
     "load_failed": "スレッドの読み込みに失敗しました。",
     "send_failed": "スレッド返信の送信に失敗しました。",
+    "follow": "フォロー",
+    "following": "フォロー中",
+    "follow_aria": "スレッドをフォロー",
+    "unfollow_aria": "スレッドのフォローを解除",
+    "follow_failed": "スレッドをフォローできませんでした。",
+    "unfollow_failed": "スレッドのフォローを解除できませんでした。",
     "composer_placeholder": "スレッドで返信...",
     "back_to_conversation": "会話に戻る"
   },

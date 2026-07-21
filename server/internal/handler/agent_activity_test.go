@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -643,6 +644,10 @@ func TestAgentActivityCanonicalToolName_UsesRaftAliases(t *testing.T) {
 		"StrReplaceFile":            "edit_file",
 		"mcp__chat__send_message":   "send_message",
 		"mcp_chat_search_messages":  "search_messages",
+		"read_messages":             "read_history",
+		"add_channel_member":        "add_channel_member",
+		"list_issues":               "list_issues",
+		"comment_issue":             "comment_issue",
 		"mcp__filesystem__ReadFile": "read_file",
 		"SearchWeb":                 "web_search",
 		"FetchURL":                  "web_fetch",
@@ -654,6 +659,79 @@ func TestAgentActivityCanonicalToolName_UsesRaftAliases(t *testing.T) {
 		if got := agentActivityCanonicalToolName(raw); got != want {
 			t.Fatalf("agentActivityCanonicalToolName(%q) = %q, want %q", raw, got, want)
 		}
+	}
+}
+
+func TestAgentActivityCanonicalToolName_CoversNarrativeActionMatrix(t *testing.T) {
+	tests := map[string]string{
+		"send_message":         "send_message",
+		"message_send":         "send_message",
+		"check_messages":       "check_messages",
+		"wait_for_message":     "wait_for_message",
+		"receive_message":      "receive_message",
+		"read_messages":        "read_history",
+		"read_history":         "read_history",
+		"search_messages":      "search_messages",
+		"list_server":          "list_server",
+		"list_tasks":           "list_tasks",
+		"create_tasks":         "create_tasks",
+		"claim_tasks":          "claim_tasks",
+		"unclaim_task":         "unclaim_task",
+		"update_task_status":   "update_task_status",
+		"add_channel_member":   "add_channel_member",
+		"join_channel":         "join_channel",
+		"leave_channel":        "leave_channel",
+		"upload_file":          "upload_file",
+		"view_file":            "view_file",
+		"web_fetch":            "web_fetch",
+		"schedule_reminder":    "schedule_reminder",
+		"list_reminders":       "list_reminders",
+		"cancel_reminder":      "cancel_reminder",
+		"todo_write":           "todo_write",
+		"collab_tool_call":     "collab_tool_call",
+		"list_issues":          "list_issues",
+		"get_issue":            "get_issue",
+		"search_issues":        "search_issues",
+		"list_issue_comments":  "list_issue_comments",
+		"comment_issue":        "comment_issue",
+		"delete_issue_comment": "delete_issue_comment",
+	}
+
+	for raw, want := range tests {
+		got, known := agentActivityCanonicalToolNameKnown(raw)
+		if !known || got != want {
+			t.Fatalf("agentActivityCanonicalToolNameKnown(%q) = %q/%v, want %q/true", raw, got, known, want)
+		}
+	}
+}
+
+func TestAgentActivityTimelineEvent_AliasProducesSingleCanonicalEntry(t *testing.T) {
+	tests := map[string]string{
+		"message_send":  "send_message",
+		"read_messages": "read_history",
+		"FetchURL":      "web_fetch",
+		"SetTodoList":   "todo_write",
+	}
+
+	for raw, want := range tests {
+		t.Run(raw, func(t *testing.T) {
+			details, err := json.Marshal(map[string]any{"tool": raw, "input": map[string]any{}})
+			if err != nil {
+				t.Fatalf("marshal details: %v", err)
+			}
+			event := agentActivityTimelineEvent(agentActivityRawRow{
+				ID:      parseUUID("11111111-1111-1111-1111-111111111111"),
+				AgentID: parseUUID("22222222-2222-2222-2222-222222222222"),
+				Kind:    activityKindToolCall,
+				Details: details,
+			}, AgentActivityTargetRef{})
+			if event.Tool == nil || *event.Tool != want {
+				t.Fatalf("event tool = %+v, want %q", event.Tool, want)
+			}
+			if len(event.Entries) != 1 || event.Entries[0].Tool == nil || *event.Entries[0].Tool != want {
+				t.Fatalf("entries = %+v, want one canonical %q entry", event.Entries, want)
+			}
+		})
 	}
 }
 
@@ -701,6 +779,184 @@ func TestResolveRaftCLIInvocation_MapsMessageCommands(t *testing.T) {
 	check, ok := resolveRaftCLIInvocation("bash", map[string]any{"command": "raft message check"})
 	if !ok || check.Tool != "check_messages" || check.ToolTarget != "" || check.SummaryKind != "none" {
 		t.Fatalf("message check invocation = %+v ok=%v, want check_messages without target", check, ok)
+	}
+}
+
+func TestResolveRaftCLIInvocation_MapsStableActivityActions(t *testing.T) {
+	tests := []struct {
+		command     string
+		tool        string
+		toolTarget  string
+		summaryKind string
+	}{
+		{command: "raft task create --target '#multica' --title test", tool: "create_tasks", toolTarget: "#multica", summaryKind: "message_target"},
+		{command: "raft task unclaim --target '#multica' --number 601", tool: "unclaim_task", toolTarget: "#multica", summaryKind: "message_target"},
+		{command: "raft channel add-member --target '#multica' --member @Barry", tool: "add_channel_member", toolTarget: "#multica", summaryKind: "message_target"},
+		{command: "raft reminder list", tool: "list_reminders", summaryKind: "none"},
+		{command: "raft reminder cancel --id abc123", tool: "cancel_reminder", summaryKind: "none"},
+		{command: "multica issue list --mine --output json", tool: "list_issues", summaryKind: "none"},
+		{command: "multica issue get MUL-601 --output json", tool: "get_issue", toolTarget: "MUL-601", summaryKind: "issue"},
+		{command: `multica issue search "activity fallback" --output json`, tool: "search_issues", toolTarget: "activity fallback", summaryKind: "query"},
+		{command: "multica issue comment list MUL-601 --recent 20", tool: "list_issue_comments", toolTarget: "MUL-601", summaryKind: "issue"},
+		{command: "multica issue comment add MUL-601 --content-stdin", tool: "comment_issue", toolTarget: "MUL-601", summaryKind: "issue"},
+		{command: "multica issue comment delete deadbeef", tool: "delete_issue_comment", toolTarget: "deadbeef", summaryKind: "comment"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.tool, func(t *testing.T) {
+			got, ok := resolveRaftCLIInvocation("bash", map[string]any{"command": tt.command})
+			if !ok {
+				t.Fatalf("resolveRaftCLIInvocation(%q) did not resolve", tt.command)
+			}
+			if got.Tool != tt.tool || got.ToolTarget != tt.toolTarget || got.SummaryKind != tt.summaryKind {
+				t.Fatalf("invocation = %+v, want tool=%q target=%q kind=%q", got, tt.tool, tt.toolTarget, tt.summaryKind)
+			}
+		})
+	}
+}
+
+func TestAgentActivityTimelineRowIsNarrative_UnknownToolUsesSafeFallback(t *testing.T) {
+	for _, details := range []string{
+		`{"tool":"future_provider_action","input":{"secret":"must-not-be-rendered"}}`,
+		`{"unmapped_tool_name":"future_provider_action"}`,
+	} {
+		row := agentActivityRawRow{
+			Kind:    activityKindToolCall,
+			Details: []byte(details),
+		}
+		if !agentActivityTimelineRowIsNarrative(row) {
+			t.Fatalf("unknown tool call must reach the presentation fallback: %s", details)
+		}
+	}
+
+	if agentActivityTimelineRowIsNarrative(agentActivityRawRow{Kind: activityKindToolCall, Details: []byte(`{}`)}) {
+		t.Fatal("empty tool row must not become a generic narrative event")
+	}
+}
+
+func TestAgentActivityTimelineEvent_UnknownToolDoesNotLeakRawDiagnostics(t *testing.T) {
+	row := agentActivityRawRow{
+		ID:      parseUUID("11111111-1111-1111-1111-111111111111"),
+		AgentID: parseUUID("22222222-2222-2222-2222-222222222222"),
+		Kind:    activityKindToolCall,
+		Status:  pgtype.Text{String: "running", Valid: true},
+		Message: pgtype.Text{String: "raw provider status", Valid: true},
+		ReasonCode: pgtype.Text{
+			String: "unmapped_tool_name",
+			Valid:  true,
+		},
+		Details: []byte(`{
+			"tool":"future_provider_action",
+			"tool_target":"private-target",
+			"summary_kind":"command",
+			"command":"precomputed private command",
+			"input":{
+				"secret":"must-not-be-rendered",
+				"command":"curl https://private.example/?token=sk_agent_should_not_leak"
+			}
+		}`),
+	}
+	event := agentActivityTimelineEvent(row, AgentActivityTargetRef{})
+	if event.Tool != nil {
+		t.Fatalf("unknown provider tool leaked into narrative tool field: %q", *event.Tool)
+	}
+	if event.ToolTarget != nil || event.Status != nil || event.Text != nil || event.ReasonCode != "" || len(event.Entries) != 0 {
+		t.Fatalf("unknown provider diagnostics leaked into narrative fields: target=%v status=%v text=%v reason=%q entries=%+v", event.ToolTarget, event.Status, event.Text, event.ReasonCode, event.Entries)
+	}
+	encoded, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("marshal event: %v", err)
+	}
+	for _, forbidden := range []string{
+		"future_provider_action",
+		"must-not-be-rendered",
+		"private-target",
+		"summary_kind",
+		"precomputed private command",
+		"raw provider status",
+		"unmapped_tool_name",
+		"curl https://private.example",
+		"sk_agent_",
+	} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("unknown diagnostic %q leaked into narrative event: %s", forbidden, encoded)
+		}
+	}
+}
+
+func TestTaskMessageActivityTimelineEvent_UnmappedRealtimeToolUsesOnlyGenericNarrative(t *testing.T) {
+	h := &Handler{}
+	taskID := parseUUID("11111111-1111-1111-1111-111111111111")
+	agentID := parseUUID("22222222-2222-2222-2222-222222222222")
+	task := db.AgentTaskQueue{
+		ID:      taskID,
+		AgentID: agentID,
+		Status:  "running",
+	}
+	message := db.TaskMessage{
+		ID:     parseUUID("33333333-3333-3333-3333-333333333333"),
+		TaskID: taskID,
+		Seq:    7,
+		Type:   "tool_use",
+		Tool:   pgtype.Text{String: "future_provider_action", Valid: true},
+		Input: []byte(`{
+			"command":"curl https://private.example/?token=sk_agent_should_not_leak",
+			"path":"/private/realtime-target"
+		}`),
+		CreatedAt:  pgtype.Timestamptz{Time: time.Unix(1_700_000_000, 0), Valid: true},
+		Visibility: "user_facing",
+	}
+
+	event := h.taskMessageActivityTimelineEvent(context.Background(), "", task, message)
+	if event == nil {
+		t.Fatal("realtime builder returned nil event")
+	}
+	if event.Tool != nil || event.ToolTarget != nil || event.Status != nil || event.Text != nil || event.ReasonCode != "" || len(event.Entries) != 0 {
+		t.Fatalf("unmapped realtime tool must serialize as generic narrative only: %+v", event)
+	}
+	encoded, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("marshal realtime event: %v", err)
+	}
+	for _, forbidden := range []string{
+		"future_provider_action",
+		"unmapped_tool_name",
+		"private/realtime-target",
+		"curl https://private.example",
+		"sk_agent_",
+		"running",
+	} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("unmapped realtime diagnostic %q leaked into narrative event: %s", forbidden, encoded)
+		}
+	}
+}
+
+func TestTaskMessageActivityTimelineEvent_MappedRealtimeCommandKeepsSemanticEntry(t *testing.T) {
+	h := &Handler{}
+	taskID := parseUUID("44444444-4444-4444-4444-444444444444")
+	task := db.AgentTaskQueue{
+		ID:      taskID,
+		AgentID: parseUUID("55555555-5555-5555-5555-555555555555"),
+		Status:  "running",
+	}
+	message := db.TaskMessage{
+		ID:         parseUUID("66666666-6666-6666-6666-666666666666"),
+		TaskID:     taskID,
+		Seq:        8,
+		Type:       "tool_use",
+		Tool:       pgtype.Text{String: "bash", Valid: true},
+		Input:      []byte(`{"command":"multica issue list --mine --output json"}`),
+		CreatedAt:  pgtype.Timestamptz{Time: time.Unix(1_700_000_001, 0), Valid: true},
+		Visibility: "user_facing",
+	}
+
+	event := h.taskMessageActivityTimelineEvent(context.Background(), "", task, message)
+	if event == nil || event.Tool == nil || *event.Tool != "list_issues" {
+		t.Fatalf("mapped realtime CLI command lost semantic tool: %+v", event)
+	}
+	if event.Status == nil || *event.Status != "running" || len(event.Entries) != 1 || event.Entries[0].Tool == nil || *event.Entries[0].Tool != "list_issues" {
+		t.Fatalf("mapped realtime CLI command lost status/entry projection: %+v", event)
 	}
 }
 

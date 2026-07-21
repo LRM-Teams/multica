@@ -833,6 +833,42 @@ func (h *Handler) dispatchDMAgentReply(ctx context.Context, ch ChannelResponse, 
 	}
 }
 
+// dispatchDMThreadReply applies the same follower boundary as group threads.
+// A personal mention always pierces as a directed wake, but only establishes
+// an implicit follow when the agent has not explicitly unfollowed. An ordinary
+// reply is delivered only to active agent followers.
+func (h *Handler) dispatchDMThreadReply(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
+	h.notifyChannelMemberMentions(ctx, ch, trigger)
+	mentionedAgents := h.channelMentionedAgents(ctx, ch.WorkspaceID, ch.ID, trigger.Content, trigger.Parts)
+	if len(mentionedAgents) > 0 {
+		for _, agent := range mentionedAgents {
+			if !h.canAccessPrivateAgent(ctx, agent, "user", uuidToString(initiatorUserID), ch.WorkspaceID) {
+				slog.Warn("skip dm thread mention dispatch after access check failed", "channel_id", ch.ID, "agent_id", uuidToString(agent.ID), "initiator_user_id", uuidToString(initiatorUserID))
+				continue
+			}
+			if trigger.ThreadRootMessageID != nil {
+				h.followChannelThreadAgentUnlessExplicitlyUnfollowed(ctx, parseUUID(ch.ID), parseUUID(*trigger.ThreadRootMessageID), agent.ID)
+			}
+			if _, err := h.dispatchChannelAgentReplyWithReason(ctx, ch, agent, trigger, initiatorUserID, "mention"); err == nil && h.Metrics != nil {
+				h.Metrics.RecordChannelFullExecutionWake("explicit_mention")
+			}
+		}
+		return
+	}
+	if trigger.ThreadRootMessageID == nil {
+		return
+	}
+	for _, agent := range h.channelThreadFollowerAgents(ctx, ch.WorkspaceID, ch.ID, *trigger.ThreadRootMessageID) {
+		if !h.canAccessPrivateAgent(ctx, agent, "user", uuidToString(initiatorUserID), ch.WorkspaceID) {
+			slog.Warn("skip dm thread follower dispatch after access check failed", "channel_id", ch.ID, "agent_id", uuidToString(agent.ID), "initiator_user_id", uuidToString(initiatorUserID))
+			continue
+		}
+		if _, err := h.dispatchChannelThreadContinuation(ctx, ch, agent, trigger, initiatorUserID); err == nil && h.Metrics != nil {
+			h.Metrics.RecordChannelFullExecutionWake("thread_reply")
+		}
+	}
+}
+
 // channelAgentMembers loads every (non-archived) agent member of a channel as a
 // full db.Agent, regardless of @-mentions. Mirrors the agent load in
 // channelMentionedAgents minus the mention filter; used by DM auto-dispatch.

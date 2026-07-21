@@ -124,6 +124,7 @@
   },
   "settings": {
     "title": "Group settings",
+    "close_aria": "Close group settings",
     "project_disabled_archived": "This channel is archived, so its project can't be changed.",
     "project_disabled_member": "Only the group's creator or an admin can change its project."
   },

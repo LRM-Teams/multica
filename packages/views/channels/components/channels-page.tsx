@@ -173,6 +173,7 @@ import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelStatsPanel } from "./channel-stats-panel";
 import { ChannelProjectSettingsPanel } from "./channel-project-settings-panel";
+import { ChannelSettingsSidePanel } from "./channel-settings-side-panel";
 import { ChannelTasksBoard } from "./channel-tasks-board";
 import { ChannelGroupAvatar } from "./channel-group-avatar";
 import { ThreadPanel } from "./thread-panel";
@@ -689,31 +690,34 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   }>({ channelId: null, target: null, threadRootId: null, threadTarget: null });
   const threadEditorRef = useRef<ContentEditorRef>(null);
   const focusThreadComposerOnOpenRef = useRef(false);
-  const [sidePanelState, setSidePanelState] = useState<{
-    openThreadRoot: ChannelMessage | null;
-    selectedAgentPanelId: string | null;
-    threadDraftEmpty: boolean;
-  }>({
-    openThreadRoot: null,
-    selectedAgentPanelId: null,
-    threadDraftEmpty: true,
-  });
-  const { openThreadRoot, selectedAgentPanelId, threadDraftEmpty } = sidePanelState;
+  // #645 (Iris) — a true discriminated union: the type itself makes
+  // thread+agent+settings-simultaneously-true unrepresentable, instead of
+  // 3 independent nullable/boolean fields that "happen to" stay mutually
+  // exclusive only because every call site remembers to clear the other
+  // two. `threadDraftEmpty` stays a separate piece of state — it's thread
+  // draft metadata, not part of which panel is showing.
+  const [sidePanel, setSidePanel] = useState<
+    | { kind: "none" }
+    | { kind: "thread"; message: ChannelMessage }
+    | { kind: "agent"; agentId: string }
+    | { kind: "channel-settings" }
+  >({ kind: "none" });
+  const [threadDraftEmpty, setThreadDraftEmpty] = useState(true);
+  const openThreadRoot = sidePanel.kind === "thread" ? sidePanel.message : null;
+  const selectedAgentPanelId = sidePanel.kind === "agent" ? sidePanel.agentId : null;
+  const channelSettingsOpen = sidePanel.kind === "channel-settings";
   const setOpenThreadRoot = useCallback((next: ChannelMessage | null) => {
-    setSidePanelState((current) => ({ ...current, openThreadRoot: next }));
+    setSidePanel(next ? { kind: "thread", message: next } : { kind: "none" });
   }, []);
   const setSelectedAgentPanelId = useCallback((next: string | null) => {
-    setSidePanelState((current) => ({ ...current, selectedAgentPanelId: next }));
+    setSidePanel(next ? { kind: "agent", agentId: next } : { kind: "none" });
   }, []);
-  const setThreadDraftEmpty = useCallback((next: boolean) => {
-    setSidePanelState((current) => ({ ...current, threadDraftEmpty: next }));
+  const setChannelSettingsOpen = useCallback((next: boolean) => {
+    setSidePanel(next ? { kind: "channel-settings" } : { kind: "none" });
   }, []);
   const resetSidePanelState = useCallback(() => {
-    setSidePanelState({
-      openThreadRoot: null,
-      selectedAgentPanelId: null,
-      threadDraftEmpty: true,
-    });
+    setSidePanel({ kind: "none" });
+    setThreadDraftEmpty(true);
   }, []);
   const [convSearchOpen, setConvSearchOpen] = useState(false);
   const [convSearchQuery, setConvSearchQuery] = useState("");
@@ -1785,13 +1789,17 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
 
   const handleOpenThread = (message: ChannelMessage) => {
     focusThreadComposerOnOpenRef.current = true;
-    setSelectedAgentPanelId(null);
-    setOpenThreadRoot(message);
+    setSidePanel({ kind: "thread", message });
   };
 
   const handleOpenAgentPanel = (agentId: string) => {
-    setOpenThreadRoot(null);
-    setSelectedAgentPanelId(agentId);
+    setSidePanel({ kind: "agent", agentId });
+  };
+
+  // #645 — toggles the same exclusive slot; opening it always wins over
+  // thread/agent (mirrors handleOpenAgentPanel), closing just clears it.
+  const toggleChannelSettings = () => {
+    setSidePanel(channelSettingsOpen ? { kind: "none" } : { kind: "channel-settings" });
   };
 
   const toggleInvite = (key: string) => {
@@ -2557,6 +2565,22 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         onClose={() => setSelectedAgentPanelId(null)}
       />
     ) : null;
+  // #645 — never renders for the system #general channel even if somehow
+  // triggered (defense in depth alongside the header entry point being
+  // hidden outright — see isActiveSystemChannel below).
+  const settingsPanel =
+    channelSettingsOpen && active && !isActiveSystemChannel ? (
+      <ChannelSettingsSidePanel
+        channel={active}
+        members={channelMembers}
+        wsId={wsId}
+        projectId={channelProjectId || null}
+        onChangeProject={(projectId) => setChannelProject.mutate(projectId)}
+        projectEditable={projectEditable}
+        projectDisabledReason={projectDisabledReason}
+        onClose={() => setChannelSettingsOpen(false)}
+      />
+    ) : null;
   const channelConversationPane = (
     <main className="relative flex flex-1 min-h-0 min-w-0 flex-col bg-background">
       {!active ? (
@@ -2685,30 +2709,24 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                       <ChannelFilesPanel channelId={active.id} />
                     </PopoverContent>
                   </Popover>
-                  {/* #576 — group settings surface, currently just the Project
-                      section. Same Popover pattern as Stats/Files above.
+                  {/* #576/#645 — group settings now opens in the docked
+                      right-side panel (same exclusive slot as Thread/Agent),
+                      not a Popover — "布局要收敛", not another one-off card.
                       #642 — the system #general channel has no settings to
                       show (no project binding, immutable), so the entry
                       point itself is gone, not a disabled/empty panel. */}
                   {!isActiveSystemChannel && (
-                    <Popover>
-                      <PopoverTrigger
-                        className="flex size-8 items-center justify-center rounded-md transition-colors hover:bg-accent"
-                        aria-label={t(($) => $.header.settings_aria)}
-                      >
-                        <Settings className="size-4" />
-                      </PopoverTrigger>
-                      <PopoverContent align="end" className="w-80">
-                        <p className="mb-3 text-sm font-medium">{t(($) => $.settings.title)}</p>
-                        <ChannelProjectSettingsPanel
-                          wsId={wsId}
-                          projectId={channelProjectId || null}
-                          onChange={(projectId) => setChannelProject.mutate(projectId)}
-                          disabled={!projectEditable}
-                          disabledReason={projectDisabledReason}
-                        />
-                      </PopoverContent>
-                    </Popover>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className={cn("size-8", channelSettingsOpen && "bg-accent text-foreground")}
+                      aria-label={t(($) => $.header.settings_aria)}
+                      aria-pressed={channelSettingsOpen}
+                      onClick={toggleChannelSettings}
+                    >
+                      <Settings className="size-4" />
+                    </Button>
                   )}
                 </div>
               </>
@@ -2996,18 +3014,18 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       <ResizablePanel id="conversation" minSize="50%" className="flex min-h-0 flex-col">
         {channelConversationPane}
       </ResizablePanel>
-      {threadPanel || agentPanel ? (
+      {threadPanel || agentPanel || settingsPanel ? (
         <>
           <ResizableHandle />
           <ResizablePanel
-            id={threadPanel ? "thread" : "agent-files"}
+            id={threadPanel ? "thread" : agentPanel ? "agent-files" : "channel-settings"}
             defaultSize={440}
             minSize={360}
             maxSize={640}
             groupResizeBehavior="preserve-pixel-size"
             className="border-l border-border/30 bg-background"
           >
-            {threadPanel ?? agentPanel}
+            {threadPanel ?? agentPanel ?? settingsPanel}
           </ResizablePanel>
         </>
       ) : null}

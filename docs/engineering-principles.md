@@ -151,6 +151,20 @@
 - `execution_profile` 缺失只兼容历史已入队执行，解释为 `full`；新任务必须在创建时快照明确 profile。
 - **物**：`TaskExecutionConfig.ExecutionProfile` 类型/解析；`restrictTaskForExecutionProfile`；Pi `--tools ""` 参数合同；`usesPersistentPiChatRuntime` 受限档位排除；对应 service/daemon/agent tests。
 
+### 4.5 Provider 工具事件先归一成独立事实 — `可执行`（②统一类型 + ③单一 adapter 边界 + ⑤合同/状态机测试；owner: @Barry）
+- **契约**：所有用户可见工具 Activity 必须来自 provider 原生事件或已验证 runtime hook，先归一成 `RuntimeToolEvent v1`（event_id/source/protocol shape/session/call_id/phase/tool/input/output/time），再进入既有 daemon Message/Activity 管道；最终回答 prose 永远不是工具事实来源。
+- **Raft 真实基线（`raft-computer 1.0.7`）**：内置 runtime 主链也是 provider 原生输出流 → driver `parseLine` → 统一 `tool_call/tool_output` → Activity 投影，不是统一 hook。Cursor driver 直接启动 `cursor-agent --print --output-format stream-json`，当前只认旧 `assistant.message.content[].type=tool_use`，尚不认顶层 `tool_call started/completed`，所以 Raft 值得复用的是统一事实边界与下游投影，不是它的 Cursor shape 覆盖。
+- **Provider 边界**：外部协议版本通过显式 shape registry + 真实 raw fixture 支持，不在执行循环里散落字段猜测/fallback。未知/非法 shape 只记结构化 diagnostic（accepted by shape / dropped by reason），不猜成命令、不静默消失。
+- **生命周期**：`call_id` 状态机按一次 `Backend.Execute` 隔离，started/completed 不跨 turn 配对；duplicate/out-of-order/tool mismatch 有稳定拒绝原因；TTL + capacity 限制长 turn 内存；turn 结束统计 missing completion。
+- **物**：`server/pkg/agent/runtime_tool_event.go`；Cursor `cursorToolEventDecoders`；`TestRuntimeToolEventTracker*`、current/legacy shape contract tests、真实 execute lifecycle fixture。新增 provider/shape 必须先让对应 raw fixture 在旧 decoder 上见红，再加 registry entry。
+
+### 4.6 Durable async hook 是目标权威源，不是已完成能力 — `仅文档`（outbox/cutover 尚未落地）
+- **终态（Frank 2026-07-21 拍定）**：runtime hook 先极快写本地 durable outbox 再返回，后台重试上传 `RuntimeToolEvent v1`；event id/call_id 幂等、daemon 崩溃后续传，Activity 失败不阻塞 Agent 主流程。
+- **不要把目标态归因给 Raft**：`raft-computer 1.0.7` 的 daemon WebSocket 断线时只在内存 `pendingActivityByAgent` 中按 agent 覆盖保留最后一条 Activity；重连时清空该 map 后 replay，没有磁盘 outbox、逐事件 ACK 或崩溃续传。另有 self-hosted `raft agent bridge` 可从 runtime plugin 的 `/activity/drain` 拉取 `raft-activity-drain.v1` 并转发，但它不是内置 Cursor driver 的采集链，且 daemon 侧是先 drain 再 POST，失败路径没有 requeue/ACK 合同；不能据此宣称 Raft 已有 durable hook。Multica 的 durable hook/outbox 是我们要补强的目标架构。
+- **现实边界**：Cursor 已定义通用 `preToolUse/postToolUse/postToolUseFailure`，但 Multica 使用的是 local `cursor-agent --print` 路径；不得拿 IDE/Cloud 的支持面推定某个已装 CLI 版本。每个目标版本必须用 Shell/Read/Write/MCP × success/failure/rejection 探针证明实际覆盖。Cursor 不替 Multica 保证本地持久化/重试/幂等/崩溃恢复；官方 `stream-json` 当前明确提供通用 `tool_call started/completed`，所以在 hook 探针未全绿前它仍是交付权威。
+- **切换门**：相关工具覆盖率完整 + 本地落盘/重试 + 幂等去重 + crash resume + shadow 无丢失五门全部通过，才把 hook 切为单一权威；随后删除 native 权威。Shadow 永不写第二份用户事实，不允许永久双真相。
+- **待升档的物**：provider-neutral hook source contract、原子 outbox/spool、ACK/checkpoint、重启恢复、source-selection/cutover 配置与双源差异指标。上述代码和见红测试未落前，本节不得改标 `可执行`。
+
 ## 5. 验证方法论 — `仅文档`（诚实标注：拦不住人，只能让"猜"显式化）
 
 - **渲染活实体的功能，验收必须含"写入后变更"测例**（fixture 先改后写=永远假绿）。→ 有测试模板后升 `可执行`。

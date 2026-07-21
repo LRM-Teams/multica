@@ -86,6 +86,43 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		stepUsage := make(map[string]TokenUsage)
 		resultUsage := make(map[string]TokenUsage)
 		hasResultUsage := false
+		toolEvents := newRuntimeToolEventTracker(30*time.Minute, 1024)
+		toolDiagnostics := newCursorToolEventDiagnostics()
+		emitToolEvent := func(decoded cursorDecodedToolEvent) {
+			if decoded.reason != "" {
+				toolDiagnostics.dropped(decoded.reason)
+				b.cfg.Logger.Warn(
+					"cursor runtime tool event rejected",
+					"schema", decoded.event.Schema,
+					"event_id", decoded.event.EventID,
+					"source", decoded.event.Source,
+					"protocol_shape", decoded.event.ProtocolShape,
+					"phase", decoded.event.Phase,
+					"tool", decoded.event.Tool,
+					"call_id", decoded.event.CallID,
+					"reason", decoded.reason,
+				)
+				return
+			}
+			message, accepted, reason := toolEvents.accept(decoded.event)
+			if !accepted {
+				toolDiagnostics.dropped(reason)
+				b.cfg.Logger.Warn(
+					"cursor runtime tool event rejected",
+					"schema", decoded.event.Schema,
+					"event_id", decoded.event.EventID,
+					"source", decoded.event.Source,
+					"protocol_shape", decoded.event.ProtocolShape,
+					"phase", decoded.event.Phase,
+					"tool", decoded.event.Tool,
+					"call_id", decoded.event.CallID,
+					"reason", reason,
+				)
+				return
+			}
+			toolDiagnostics.accepted(decoded.event.ProtocolShape)
+			trySend(msgCh, message)
+		}
 
 		scanner := bufio.NewScanner(stdout)
 		scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024)
@@ -106,6 +143,10 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 				sessionID = sid
 			}
 
+			for _, decoded := range decodeCursorToolEvents(&evt, time.Now()) {
+				emitToolEvent(decoded)
+			}
+
 			switch evt.Type {
 			case "system":
 				if evt.Subtype == "init" {
@@ -119,26 +160,7 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 				}
 
 			case "assistant":
-				b.handleCursorAssistant(&evt, msgCh, &output)
-
-			case "tool_use":
-				var params map[string]any
-				if evt.Parameters != nil {
-					_ = json.Unmarshal(evt.Parameters, &params)
-				}
-				trySend(msgCh, Message{
-					Type:   MessageToolUse,
-					Tool:   evt.ToolName,
-					CallID: evt.ToolID,
-					Input:  params,
-				})
-
-			case "tool_result":
-				trySend(msgCh, Message{
-					Type:   MessageToolResult,
-					CallID: evt.ToolID,
-					Output: evt.Output,
-				})
+				b.handleCursorAssistant(&evt, msgCh, &output, emitToolEvent)
 
 			case "result":
 				resultSeen = true
@@ -197,6 +219,22 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		if !hasResultUsage {
 			resultUsage = stepUsage
 		}
+		missingCompletions, expiredIncomplete := toolEvents.finish()
+		if missingCompletions > 0 {
+			toolDiagnostics.droppedByReason["missing_completion"] += missingCompletions
+		}
+		if expiredIncomplete > 0 {
+			toolDiagnostics.droppedByReason["expired_incomplete"] += expiredIncomplete
+		}
+		if len(toolDiagnostics.acceptedByShape) > 0 || len(toolDiagnostics.droppedByReason) > 0 {
+			b.cfg.Logger.Info(
+				"cursor runtime tool event summary",
+				"schema", RuntimeToolEventSchemaV1,
+				"source", cursorToolEventSource,
+				"accepted_by_shape", toolDiagnostics.acceptedByShape,
+				"dropped_by_reason", toolDiagnostics.droppedByReason,
+			)
+		}
 
 		exitErr := cmd.Wait()
 		duration := time.Since(startTime)
@@ -227,7 +265,7 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 	return &Session{Messages: msgCh, Result: resCh, RuntimeAlive: processLiveness(cmd.Process)}, nil
 }
 
-func (b *cursorBackend) handleCursorAssistant(evt *cursorStreamEvent, ch chan<- Message, output *strings.Builder) {
+func (b *cursorBackend) handleCursorAssistant(evt *cursorStreamEvent, ch chan<- Message, output *strings.Builder, emitToolEvent func(cursorDecodedToolEvent)) {
 	if evt.Message == nil {
 		return
 	}
@@ -253,16 +291,9 @@ func (b *cursorBackend) handleCursorAssistant(evt *cursorStreamEvent, ch chan<- 
 				trySend(ch, Message{Type: MessageThinking, Content: block.Text})
 			}
 		case "tool_use":
-			var input map[string]any
-			if block.Input != nil {
-				_ = json.Unmarshal(block.Input, &input)
+			if emitToolEvent != nil {
+				emitToolEvent(decodeCursorAssistantToolBlock(evt.SessionID, block, time.Now()))
 			}
-			trySend(ch, Message{
-				Type:   MessageToolUse,
-				Tool:   block.Name,
-				CallID: block.ID,
-				Input:  input,
-			})
 		}
 	}
 }
@@ -297,6 +328,11 @@ type cursorStreamEvent struct {
 	ToolName   string          `json:"tool_name,omitempty"`
 	ToolID     string          `json:"tool_id,omitempty"`
 	Parameters json.RawMessage `json:"parameters,omitempty"`
+
+	// Current Cursor stream-json tool_call fields. The tool_call object has one
+	// dynamic key such as readToolCall, writeToolCall, or shellToolCall.
+	CallID   string          `json:"call_id,omitempty"`
+	ToolCall json.RawMessage `json:"tool_call,omitempty"`
 
 	// tool_result fields
 	Output string `json:"output,omitempty"`
@@ -340,6 +376,11 @@ type cursorContentBlock struct {
 	ID    string          `json:"id,omitempty"`
 	Name  string          `json:"name,omitempty"`
 	Input json.RawMessage `json:"input,omitempty"`
+}
+
+type cursorToolCallPayload struct {
+	Args   map[string]any  `json:"args,omitempty"`
+	Result json.RawMessage `json:"result,omitempty"`
 }
 
 type cursorTextPart struct {
@@ -386,6 +427,67 @@ func cursorErrorText(evt *cursorStreamEvent) string {
 		return evt.ResultText
 	}
 	return ""
+}
+
+func parseCursorToolCall(raw json.RawMessage) (string, map[string]any, json.RawMessage, bool) {
+	if len(raw) == 0 {
+		return "", nil, nil, false
+	}
+
+	var envelope map[string]cursorToolCallPayload
+	if err := json.Unmarshal(raw, &envelope); err != nil || len(envelope) != 1 {
+		return "", nil, nil, false
+	}
+	for key, payload := range envelope {
+		tool := cursorToolCallName(key)
+		if tool == "" {
+			return "", nil, nil, false
+		}
+		return tool, payload.Args, payload.Result, true
+	}
+	return "", nil, nil, false
+}
+
+func cursorToolCallName(key string) string {
+	base := strings.TrimSpace(key)
+	if !strings.HasSuffix(base, "ToolCall") {
+		return ""
+	}
+	base = strings.TrimSuffix(base, "ToolCall")
+	base = strings.TrimSpace(base)
+	if base == "" {
+		return ""
+	}
+
+	var out strings.Builder
+	for i, r := range base {
+		if 'A' <= r && r <= 'Z' {
+			if i > 0 {
+				out.WriteByte('_')
+			}
+			out.WriteRune(r + ('a' - 'A'))
+			continue
+		}
+		out.WriteRune(r)
+	}
+
+	switch out.String() {
+	case "read":
+		return "read_file"
+	case "write":
+		return "write_file"
+	case "edit":
+		return "edit_file"
+	default:
+		return out.String()
+	}
+}
+
+func cursorToolCallResultText(result json.RawMessage) string {
+	if len(result) == 0 || string(result) == "null" {
+		return ""
+	}
+	return string(result)
 }
 
 // cursorBlockedArgs are flags hardcoded by the daemon that must not be

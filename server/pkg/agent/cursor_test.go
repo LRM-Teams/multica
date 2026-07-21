@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNewReturnsCursorBackend(t *testing.T) {
@@ -178,7 +179,7 @@ func TestCursorHandleAssistantText(t *testing.T) {
 		}),
 	}
 
-	b.handleCursorAssistant(evt, ch, &output)
+	b.handleCursorAssistant(evt, ch, &output, nil)
 
 	if output.String() != "Hello from Cursor" {
 		t.Fatalf("expected output 'Hello from Cursor', got %q", output.String())
@@ -194,15 +195,12 @@ func TestCursorHandleAssistantText(t *testing.T) {
 	}
 }
 
-func TestCursorHandleAssistantToolUse(t *testing.T) {
+func TestCursorDecodeLegacyAssistantToolUse(t *testing.T) {
 	t.Parallel()
 
-	b := &cursorBackend{cfg: Config{Logger: slog.Default()}}
-	ch := make(chan Message, 10)
-	var output strings.Builder
-
 	evt := &cursorStreamEvent{
-		Type: "assistant",
+		Type:      "assistant",
+		SessionID: "session-1",
 		Message: mustMarshal(t, cursorAssistantMessage{
 			Content: []cursorContentBlock{
 				{
@@ -215,15 +213,161 @@ func TestCursorHandleAssistantToolUse(t *testing.T) {
 		}),
 	}
 
-	b.handleCursorAssistant(evt, ch, &output)
+	decoded := decodeCursorAssistantToolEvents(evt, time.Unix(100, 0))
+	if len(decoded) != 1 || decoded[0].reason != "" {
+		t.Fatalf("decoded = %+v", decoded)
+	}
+	event := decoded[0].event
+	if event.Schema != RuntimeToolEventSchemaV1 || event.Source != cursorToolEventSource || event.ProtocolShape != cursorLegacyAssistantToolUseShape {
+		t.Fatalf("event identity = %+v", event)
+	}
+	if event.Phase != RuntimeToolEventStarted || event.Tool != "file_edit" || event.CallID != "call-42" || event.SessionID != "session-1" {
+		t.Fatalf("event lifecycle = %+v", event)
+	}
+}
 
-	select {
-	case m := <-ch:
-		if m.Type != MessageToolUse || m.Tool != "file_edit" || m.CallID != "call-42" {
-			t.Fatalf("unexpected message: %+v", m)
+func TestCursorHandleAssistantPreservesTextToolOrder(t *testing.T) {
+	t.Parallel()
+
+	b := &cursorBackend{cfg: Config{Logger: slog.Default()}}
+	ch := make(chan Message, 10)
+	var output strings.Builder
+	tracker := newRuntimeToolEventTracker(time.Minute, 8)
+
+	evt := &cursorStreamEvent{
+		Type:      "assistant",
+		SessionID: "session-1",
+		Message: mustMarshal(t, cursorAssistantMessage{Content: []cursorContentBlock{
+			{Type: "text", Text: "before"},
+			{Type: "tool_use", ID: "call-1", Name: "shell", Input: mustMarshal(t, map[string]any{"command": "pwd"})},
+			{Type: "text", Text: "after"},
+		}}),
+	}
+	b.handleCursorAssistant(evt, ch, &output, func(decoded cursorDecodedToolEvent) {
+		message, ok, reason := tracker.accept(decoded.event)
+		if decoded.reason != "" || !ok || reason != "" {
+			t.Fatalf("tool event rejected: decoded=%q ok=%v reason=%q", decoded.reason, ok, reason)
 		}
-	default:
-		t.Fatal("expected message on channel")
+		ch <- message
+	})
+
+	want := []MessageType{MessageText, MessageToolUse, MessageText}
+	for i, wantType := range want {
+		select {
+		case message := <-ch:
+			if message.Type != wantType {
+				t.Fatalf("message[%d].Type = %q, want %q", i, message.Type, wantType)
+			}
+		default:
+			t.Fatalf("missing message[%d]", i)
+		}
+	}
+}
+
+func TestParseCursorToolCallCurrentStreamShape(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		raw      string
+		wantTool string
+		wantKey  string
+		wantVal  string
+	}{
+		{
+			name:     "shell command",
+			raw:      `{"shellToolCall":{"args":{"command":"pwd"}}}`,
+			wantTool: "shell",
+			wantKey:  "command",
+			wantVal:  "pwd",
+		},
+		{
+			name:     "read file",
+			raw:      `{"readToolCall":{"args":{"path":"README.md"}}}`,
+			wantTool: "read_file",
+			wantKey:  "path",
+			wantVal:  "README.md",
+		},
+		{
+			name:     "write file",
+			raw:      `{"writeToolCall":{"args":{"path":"notes.txt","fileText":"hello"}}}`,
+			wantTool: "write_file",
+			wantKey:  "path",
+			wantVal:  "notes.txt",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tool, input, result, ok := parseCursorToolCall(json.RawMessage(tc.raw))
+			if !ok {
+				t.Fatal("parseCursorToolCall returned ok=false")
+			}
+			if tool != tc.wantTool {
+				t.Fatalf("tool = %q, want %q", tool, tc.wantTool)
+			}
+			if got, _ := input[tc.wantKey].(string); got != tc.wantVal {
+				t.Fatalf("input[%q] = %q, want %q", tc.wantKey, got, tc.wantVal)
+			}
+			if len(result) != 0 {
+				t.Fatalf("result = %s, want empty", result)
+			}
+		})
+	}
+}
+
+func TestParseCursorToolCallCompletedResult(t *testing.T) {
+	t.Parallel()
+
+	raw := json.RawMessage(`{"shellToolCall":{"args":{"command":"pwd"},"result":{"success":{"stdout":"/tmp\n","exitCode":0}}}}`)
+	tool, input, result, ok := parseCursorToolCall(raw)
+	if !ok {
+		t.Fatal("parseCursorToolCall returned ok=false")
+	}
+	if tool != "shell" || input["command"] != "pwd" {
+		t.Fatalf("parsed tool/input = %q/%v", tool, input)
+	}
+	if got := cursorToolCallResultText(result); !strings.Contains(got, `"stdout":"/tmp\n"`) {
+		t.Fatalf("result text = %q", got)
+	}
+}
+
+func TestCursorDecodeCurrentToolCallContract(t *testing.T) {
+	t.Parallel()
+
+	evt := &cursorStreamEvent{
+		Type:      "tool_call",
+		Subtype:   "started",
+		SessionID: "session-1",
+		CallID:    "call-1",
+		ToolCall:  json.RawMessage(`{"shellToolCall":{"args":{"command":"pwd"}}}`),
+	}
+	decoded := decodeCursorToolEvents(evt, time.Unix(100, 0))
+	if len(decoded) != 1 || decoded[0].reason != "" {
+		t.Fatalf("decoded = %+v", decoded)
+	}
+	event := decoded[0].event
+	if event.Schema != RuntimeToolEventSchemaV1 || event.Source != cursorToolEventSource || event.ProtocolShape != cursorCurrentToolCallShape {
+		t.Fatalf("event identity = %+v", event)
+	}
+	if event.Phase != RuntimeToolEventStarted || event.Tool != "shell" || event.CallID != "call-1" || event.Input["command"] != "pwd" {
+		t.Fatalf("event lifecycle = %+v", event)
+	}
+}
+
+func TestCursorToolEventShapeRegistryRejectsUnknownPayload(t *testing.T) {
+	t.Parallel()
+
+	evt := &cursorStreamEvent{
+		Type:     "tool_call",
+		Subtype:  "started",
+		CallID:   "call-1",
+		ToolCall: json.RawMessage(`{"shell":{"args":{"command":"pwd"}}}`),
+	}
+	decoded := decodeCursorToolEvents(evt, time.Unix(100, 0))
+	if len(decoded) != 1 || decoded[0].reason != "unsupported_payload" {
+		t.Fatalf("decoded = %+v", decoded)
 	}
 }
 
@@ -295,7 +439,7 @@ func TestCursorUsageOnlyFromResult(t *testing.T) {
 		}),
 	}
 
-	b.handleCursorAssistant(evt, ch, &output)
+	b.handleCursorAssistant(evt, ch, &output, nil)
 
 	if output.String() != "hello" {
 		t.Fatalf("expected 'hello', got %q", output.String())

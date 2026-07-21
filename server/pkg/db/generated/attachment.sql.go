@@ -237,8 +237,8 @@ SET channel_id = $1, channel_message_id = $2
 WHERE workspace_id = $3
   AND uploader_type = $4
   AND uploader_id = $5
-  AND channel_id IS NULL
   AND channel_message_id IS NULL
+  AND (channel_id IS NULL OR channel_id = $1)
   AND id = ANY($6::uuid[])
 `
 
@@ -251,11 +251,9 @@ type LinkOwnedAttachmentsToChannelMessageParams struct {
 	AttachmentIds    []pgtype.UUID `json:"attachment_ids"`
 }
 
-// Binds channel_id + channel_message_id together for attachments the CLI
-// uploaded unbound (target channel isn't known until send-time server-side
-// resolution). Scoped by uploader ownership instead of a pre-existing
-// channel_id match, since the human-message upload flow's channel_id-set-at-
-// upload-time authorization isn't available here.
+// Binds channel_id + channel_message_id for attachments the agent owns.
+// Accepts unbound uploads and uploads already scoped to this channel via
+// `attachment upload --target` (channel_id set, channel_message_id still NULL).
 func (q *Queries) LinkOwnedAttachmentsToChannelMessage(ctx context.Context, arg LinkOwnedAttachmentsToChannelMessageParams) error {
 	_, err := q.db.Exec(ctx, linkOwnedAttachmentsToChannelMessage,
 		arg.ChannelID,

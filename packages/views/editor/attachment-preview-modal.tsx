@@ -167,6 +167,16 @@ export function useAttachmentPreview(): AttachmentPreviewHandle {
     if (!kind) return false;
     // URL-only sources cannot drive text kinds — the /content proxy is ID-keyed.
     if (source.kind === "url" && !URL_ONLY_KINDS.has(kind)) return false;
+    // #591/#799 (Iris): the modal's inline iframe can never render a PDF —
+    // the app's global CSP blocks it — so a fallback dialog with an
+    // "Open in new tab" button was just a valueless extra click. Skip the
+    // modal entirely and hand off to the browser's native PDF viewer
+    // directly, synchronously in this call (still inside the original
+    // click's gesture stack) so the popup isn't blocked.
+    if (kind === "pdf") {
+      openExternal(state.mediaUrl);
+      return true;
+    }
     setCurrent(source);
     return true;
   }, []);
@@ -228,20 +238,12 @@ export function AttachmentPreviewModal({
   // gated on slug + attachmentId because URL-only sources can't address the
   // /content proxy the page relies on.
   //
-  // `pdf` is a second, simpler case (#591): the browser's native PDF viewer
-  // renders `mediaUrl` fine in a top-level tab — the file is only unviewable
-  // INLINE, because the app's global CSP `frame-ancestors 'none'` (by design,
-  // not a bug — see server/internal/middleware/csp.go) blocks it from loading
-  // inside this modal's iframe. So pdf just opens the raw media URL directly,
-  // no route/id/slug dependency, and works for URL-only sources too.
-  const canOpenInNewTab =
-    (kind === "html" && !!slug && !!state.attachmentId) || kind === "pdf";
+  // `pdf` never reaches this modal at all (see tryOpen above) — the app's
+  // global CSP `frame-ancestors 'none'` blocks it from loading in an iframe
+  // regardless, so useAttachmentPreview hands PDFs straight to the browser's
+  // native viewer instead of mounting this dialog.
+  const canOpenInNewTab = kind === "html" && !!slug && !!state.attachmentId;
   const handleOpenInNewTab = () => {
-    if (kind === "pdf") {
-      openExternal(state.mediaUrl);
-      onClose();
-      return;
-    }
     if (!slug || !state.attachmentId) return;
     const nameQuery = state.filename
       ? `?name=${encodeURIComponent(state.filename)}`
@@ -318,7 +320,6 @@ export function AttachmentPreviewModal({
             source={source}
             state={state}
             onDownload={handleDownload}
-            onOpenInNewTab={canOpenInNewTab ? handleOpenInNewTab : undefined}
           />
         </div>
       </div>
@@ -339,13 +340,11 @@ function PreviewContent({
   source,
   state,
   onDownload,
-  onOpenInNewTab,
 }: {
   kind: PreviewKind | null;
   source: PreviewSource;
   state: PreviewState;
   onDownload: () => void;
-  onOpenInNewTab?: () => void;
 }) {
   const { t } = useT("editor");
 
@@ -387,17 +386,14 @@ function PreviewContent({
         </div>
       );
     case "pdf":
-      // #591: the app's global CSP `frame-ancestors 'none'` (by design —
-      // server/internal/middleware/csp.go) blocks this URL from loading in
-      // ANY iframe, including same-origin, so an inline preview here is not
-      // fixable by tweaking this component — it always resolves to a dead
-      // "refused to connect" frame. The browser's native PDF viewer renders
-      // the same URL fine in a top-level tab, so that's the real affordance.
+      // #591/#799: tryOpen (above) never lets a pdf source reach this modal
+      // — it hands off to the browser's native PDF viewer directly, since
+      // the app's global CSP blocks any iframe from rendering it. This case
+      // stays only as a defensive no-op for the unused force-open() path.
       return (
         <UnsupportedFallback
           message={t(($) => $.attachment.pdf_preview_blocked)}
           onDownload={onDownload}
-          onOpenInNewTab={onOpenInNewTab}
         />
       );
     case "video":
@@ -525,14 +521,9 @@ function TextBackedPreview({
 function UnsupportedFallback({
   message,
   onDownload,
-  onOpenInNewTab,
 }: {
   message: string;
   onDownload: () => void;
-  /** #591 — when the file can't render inline but a top-level tab CAN show
-   *  it (e.g. a PDF blocked only by the app's iframe CSP, not actually
-   *  broken), offer that as the primary action instead of Download-only. */
-  onOpenInNewTab?: () => void;
 }) {
   const { t } = useT("editor");
   return (
@@ -540,16 +531,6 @@ function UnsupportedFallback({
       <FileText className="size-8 text-muted-foreground" />
       <p className="text-sm text-muted-foreground">{message}</p>
       <div className="flex items-center gap-2">
-        {onOpenInNewTab && (
-          <button
-            type="button"
-            className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-3 py-1.5 text-sm transition-colors hover:bg-muted"
-            onClick={onOpenInNewTab}
-          >
-            <ExternalLink className="size-4" />
-            {t(($) => $.attachment.open_in_new_tab)}
-          </button>
-        )}
         <button
           type="button"
           className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-3 py-1.5 text-sm transition-colors hover:bg-muted"

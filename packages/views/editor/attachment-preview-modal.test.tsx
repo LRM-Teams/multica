@@ -305,20 +305,19 @@ describe("AttachmentPreviewModal — server-relative download_url resolution (MU
   });
 
   it("opens the API-base-prefixed URL for PDFs when download_url is server-relative", () => {
+    // #591/#799: PDFs never mount the modal (tryOpen hands off directly),
+    // so this exercises the same resolution through the real entry point
+    // instead of a header button that no longer exists for this kind.
     getBaseUrlMock.mockReturnValue("https://api.example.test");
     const att = makeAttachment({
       filename: "manual.pdf",
       content_type: "application/pdf",
       download_url: "/api/attachments/att-1/download",
     });
-    render(
-      <AttachmentPreviewModal
-        source={{ kind: "full", attachment: att }}
-        open
-        onClose={() => {}}
-      />,
-    );
-    fireEvent.click(screen.getAllByTitle("Open in new tab")[0]!);
+    const { result } = renderHook(() => useAttachmentPreview());
+    hookAct(() => {
+      result.current.tryOpen({ kind: "full", attachment: att });
+    });
     expect(openExternalMock).toHaveBeenCalledWith(
       "https://api.example.test/api/attachments/att-1/download",
     );
@@ -446,22 +445,6 @@ describe("AttachmentPreviewModal — controls", () => {
 });
 
 describe("AttachmentPreviewModal — URL-only source", () => {
-  it("shows the blocked-inline-preview fallback for a PDF opened from a URL-only source (#591)", () => {
-    const url = "https://cdn.example.test/orphan.pdf?Signature=s";
-    render(
-      <AttachmentPreviewModal
-        source={{ kind: "url", url, filename: "orphan.pdf" }}
-        open
-        onClose={() => {}}
-      />,
-    );
-    expect(document.querySelector("iframe")).toBeNull();
-    // Open-in-new-tab works for a PDF even with no attachment id — it just
-    // opens the raw media URL, no /content proxy or id-keyed route needed.
-    fireEvent.click(screen.getAllByTitle("Open in new tab")[0]!);
-    expect(openExternalMock).toHaveBeenCalledWith(url);
-  });
-
   it("renders <video> from the URL when no attachment record is available", () => {
     const url = "https://cdn.example.test/clip.mp4?Signature=s";
     render(
@@ -596,15 +579,16 @@ describe("AttachmentPreviewModal — open-in-new-tab (HTML only)", () => {
     expect(screen.queryByTitle("Open in new tab")).toBeNull();
   });
 
-  it("clicking the header's open-in-new-tab button for a PDF opens the media URL externally and closes the modal", () => {
-    const onClose = vi.fn();
+  it("does not render the new-tab button for a directly-mounted PDF (#591/#799)", () => {
+    // Real usage never reaches this — tryOpen hands PDFs to openExternal
+    // before the modal ever mounts (see the tryOpen-gate suite below) — but
+    // a direct mount (the defensive PreviewContent branch) shouldn't offer
+    // a second, dead open-in-new-tab affordance either.
     const att = makeAttachment({ filename: "manual.pdf", content_type: "application/pdf" });
     render(
-      <AttachmentPreviewModal source={{ kind: "full", attachment: att }} open onClose={onClose} />,
+      <AttachmentPreviewModal source={{ kind: "full", attachment: att }} open onClose={() => {}} />,
     );
-    fireEvent.click(screen.getAllByTitle("Open in new tab")[0]!);
-    expect(openExternalMock).toHaveBeenCalledWith(att.download_url);
-    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTitle("Open in new tab")).toBeNull();
   });
 
   it("does not render the new-tab button when there is no workspace slug", async () => {
@@ -631,7 +615,7 @@ describe("AttachmentPreviewModal — open-in-new-tab (HTML only)", () => {
 describe("useAttachmentPreview — tryOpen gate", () => {
   it("accepts a full attachment for a media kind", () => {
     const { result } = renderHook(() => useAttachmentPreview());
-    const att = makeAttachment({ filename: "x.pdf", content_type: "application/pdf" });
+    const att = makeAttachment({ filename: "x.jpg", content_type: "image/jpeg" });
     let opened = false;
     hookAct(() => {
       opened = result.current.tryOpen({ kind: "full", attachment: att });
@@ -645,11 +629,41 @@ describe("useAttachmentPreview — tryOpen gate", () => {
     hookAct(() => {
       opened = result.current.tryOpen({
         kind: "url",
-        url: "https://x/y.pdf",
-        filename: "y.pdf",
+        url: "https://x/y.png",
+        filename: "y.png",
       });
     });
     expect(opened).toBe(true);
+  });
+
+  // #591/#799: a PDF click never mounts the modal — it hands off straight
+  // to the browser's native viewer, synchronously in the same tryOpen call
+  // (still inside the original click's gesture stack, so the tab isn't
+  // popup-blocked).
+  it("hands a full-attachment PDF source straight to openExternal, no modal", () => {
+    const { result } = renderHook(() => useAttachmentPreview());
+    const att = makeAttachment({ filename: "manual.pdf", content_type: "application/pdf" });
+    let opened = false;
+    hookAct(() => {
+      opened = result.current.tryOpen({ kind: "full", attachment: att });
+    });
+    expect(opened).toBe(true);
+    expect(openExternalMock).toHaveBeenCalledTimes(1);
+    expect(openExternalMock).toHaveBeenCalledWith(att.download_url);
+    expect(result.current.modal).toBeNull();
+  });
+
+  it("hands a URL-only PDF source straight to openExternal, no modal", () => {
+    const { result } = renderHook(() => useAttachmentPreview());
+    const url = "https://cdn.example.test/orphan.pdf?Signature=s";
+    let opened = false;
+    hookAct(() => {
+      opened = result.current.tryOpen({ kind: "url", url, filename: "orphan.pdf" });
+    });
+    expect(opened).toBe(true);
+    expect(openExternalMock).toHaveBeenCalledTimes(1);
+    expect(openExternalMock).toHaveBeenCalledWith(url);
+    expect(result.current.modal).toBeNull();
   });
 
   it("rejects a URL source for a text kind — /content proxy needs an id", () => {

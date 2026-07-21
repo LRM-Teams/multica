@@ -59,7 +59,14 @@
       "code": "코드",
       "text": "텍스트",
       "file": "파일"
-    }
+    },
+    "file_detail_title": "파일 상세",
+    "back": "뒤로",
+    "open_elsewhere": "다른 앱에서 열기",
+    "meta_type": "유형",
+    "meta_size": "크기",
+    "meta_sender": "보낸 사람",
+    "meta_time": "시간"
   },
   "link_hover": {
     "copy_link": "링크 복사",

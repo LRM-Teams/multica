@@ -39,8 +39,10 @@ import { useT } from "../i18n";
 import { useAttachmentDownloadResolver } from "./attachment-download-context";
 import { useAttachmentPreview } from "./attachment-preview-modal";
 import { useDownloadAttachment } from "./use-download-attachment";
+import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { AttachmentCard } from "./attachment-card";
 import { HtmlAttachmentPreview } from "./html-attachment-preview";
+import { MobileFileAttachment } from "./mobile-file-attachment";
 import { getPreviewKind, type PreviewKind } from "./utils/preview";
 import "./styles/attachment.css";
 
@@ -303,6 +305,7 @@ export function Attachment({
   const cdnDomain = useConfigStore((s) => s.cdnDomain);
   const download = useDownloadAttachment();
   const preview = useAttachmentPreview();
+  const isMobile = useIsMobile();
 
   const state = normalize(attachment, resolveAttachment, cdnDomain);
   const forceKind =
@@ -334,6 +337,33 @@ export function Attachment({
     }
     if (state.url) openByUrl(state.url);
   };
+
+  const handleOpenElsewhere = () => {
+    if (state.url) {
+      window.open(state.url, "_blank", "noopener,noreferrer");
+      return;
+    }
+    handleDownload();
+  };
+
+  // LRM-216 — narrow/mobile: compact info card → fullscreen detail (no inline
+  // HTML/iframe preview). Images keep the existing thumbnail + lightbox path.
+  if (isMobile && kind !== "image") {
+    const canOpen = !!state.url || !!state.attachmentId;
+    return (
+      <MobileFileAttachment
+        filename={state.filename}
+        contentType={state.contentType}
+        sizeBytes={state.sizeBytes}
+        createdAt={state.record?.created_at}
+        uploading={state.uploading}
+        openable={canOpen && !state.uploading}
+        onDownload={handleDownload}
+        onOpen={handleOpenElsewhere}
+        className={className}
+      />
+    );
+  }
 
   if (kind === "image") {
     return (

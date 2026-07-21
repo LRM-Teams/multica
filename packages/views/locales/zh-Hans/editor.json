@@ -59,7 +59,14 @@
       "code": "代码",
       "text": "纯文本",
       "file": "文件"
-    }
+    },
+    "file_detail_title": "文件详情",
+    "back": "返回",
+    "open_elsewhere": "在其他应用中打开",
+    "meta_type": "类型",
+    "meta_size": "大小",
+    "meta_sender": "发送者",
+    "meta_time": "时间"
   },
   "link_hover": {
     "copy_link": "复制链接",

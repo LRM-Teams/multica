@@ -63,6 +63,12 @@ type EnvDispatchInput struct {
 	CriticAgentID   string // optional critic for trained agent (sub-project E): evaluates the trained agent's output; empty ⇒ unchanged behavior
 	IdempotencyKey  string // optional; dedupes retries (spec §7.7)
 
+	// TrainingMode is the explicit training vs non-training switch (Task 1).
+	// true requires TrainAgentID; false forbids TrainAgentID and CriticAgentID.
+	// The handler dereferences the request pointer and never passes an absent
+	// value (nil is rejected at the HTTP boundary).
+	TrainingMode bool
+
 	// PerAgentEnvSpecs optionally assigns individual squad agents to sandbox
 	// templates or base environments while preserving a shared Multica entity
 	// subtree. Empty preserves existing default/shared sandbox behavior.
@@ -718,6 +724,16 @@ func (s *EnvDispatchService) validate(in EnvDispatchInput) error {
 		return fmt.Errorf("validation_failed: agent_id or squad_id is required")
 	case in.AgentID != "" && in.SquadID != "":
 		return fmt.Errorf("validation_failed: agent_id and squad_id are mutually exclusive")
+	}
+	// training_mode (Task 1): false forbids training IDs; true requires
+	// train_agent_id. The handler rejects an omitted training_mode before
+	// constructing EnvDispatchInput, so the service only sees an explicit
+	// boolean.
+	if !in.TrainingMode && (in.TrainAgentID != "" || in.CriticAgentID != "") {
+		return fmt.Errorf("validation_failed: training_mode=false forbids train_agent_id and critic_agent_id")
+	}
+	if in.TrainingMode && in.TrainAgentID == "" {
+		return fmt.Errorf("validation_failed: training_mode=true requires train_agent_id")
 	}
 	// train_agent_id (spec §4.1): the training target. Allowed when a squad_id
 	// is set (a team member) OR when it equals agent_id (single-agent

@@ -550,6 +550,7 @@ func TestValidate_TrainAgentID(t *testing.T) {
 	single := base
 	single.AgentID = "ag"
 	single.TrainAgentID = "ag"
+	single.TrainingMode = true
 	if err := svc.validate(single); err != nil {
 		t.Fatalf("train_agent_id == agent_id must be accepted, got %v", err)
 	}
@@ -558,6 +559,7 @@ func TestValidate_TrainAgentID(t *testing.T) {
 	team := base
 	team.SquadID = "sq"
 	team.TrainAgentID = "member"
+	team.TrainingMode = true
 	if err := svc.validate(team); err != nil {
 		t.Fatalf("train_agent_id with squad_id must be accepted, got %v", err)
 	}
@@ -566,6 +568,7 @@ func TestValidate_TrainAgentID(t *testing.T) {
 	bad := base
 	bad.AgentID = "ag"
 	bad.TrainAgentID = "other"
+	bad.TrainingMode = true
 	if err := svc.validate(bad); err == nil {
 		t.Fatal("train_agent_id != agent_id without squad_id must be rejected")
 	}
@@ -636,7 +639,7 @@ func TestDispatch_ScratchMessage_TrainingSessionLinkedAfterEnqueue(t *testing.T)
 	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
 		WorkspaceID: "ws", UserID: "u", Mode: EnvModeScratch, EnvID: baseEnv,
 		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 3,
-		AgentID: "ag", TrainAgentID: "ag", Message: &MessageInput{Content: "q"},
+		AgentID: "ag", TrainAgentID: "ag", TrainingMode: true, Message: &MessageInput{Content: "q"},
 	})
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)
@@ -1423,7 +1426,7 @@ func TestDispatch_PersistsTrainingDispatchWhenTrainAgentSet(t *testing.T) {
 	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
 		WorkspaceID: "ws", UserID: "u", Mode: EnvModeScratch, EnvID: baseEnv,
 		Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue, GroupSize: 3,
-		AgentID: "ag", TrainAgentID: "ag", Issue: &IssueInput{Title: "t"},
+		AgentID: "ag", TrainAgentID: "ag", TrainingMode: true, Issue: &IssueInput{Title: "t"},
 	})
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)
@@ -1487,14 +1490,14 @@ func TestEnvDispatchInput_Validate_CriticAgentID(t *testing.T) {
 		in      EnvDispatchInput
 		wantErr string
 	}{
-		{"empty critic ok (squad)", EnvDispatchInput{WorkspaceID: "ws", SquadID: "sq", TrainAgentID: "train", Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, ""},
-		{"critic with squad+train ok", EnvDispatchInput{WorkspaceID: "ws", SquadID: "sq", TrainAgentID: "train", CriticAgentID: "crit", Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, ""},
-		{"critic without train rejected", EnvDispatchInput{WorkspaceID: "ws", SquadID: "sq", CriticAgentID: "crit", Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, "validation_failed: critic_agent_id requires train_agent_id"},
-		{"critic == train rejected", EnvDispatchInput{WorkspaceID: "ws", SquadID: "sq", TrainAgentID: "same", CriticAgentID: "same", Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, "validation_failed: critic_agent_id must differ from train_agent_id"},
-		{"critic == agent rejected (single agent)", EnvDispatchInput{WorkspaceID: "ws", AgentID: "ag", TrainAgentID: "ag", CriticAgentID: "ag", Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, "validation_failed: critic_agent_id must differ from train_agent_id"},
-		{"critic ok with squad (no agent id)", EnvDispatchInput{WorkspaceID: "ws", SquadID: "sq", TrainAgentID: "train", CriticAgentID: "crit", Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, ""},
-		{"empty critic ok (single agent)", EnvDispatchInput{WorkspaceID: "ws", AgentID: "ag", TrainAgentID: "ag", Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, ""},
-		{"critic with single agent ok", EnvDispatchInput{WorkspaceID: "ws", AgentID: "ag", TrainAgentID: "ag", CriticAgentID: "crit", Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, ""},
+		{"empty critic ok (squad)", EnvDispatchInput{WorkspaceID: "ws", SquadID: "sq", TrainAgentID: "train", TrainingMode: true, Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, ""},
+		{"critic with squad+train ok", EnvDispatchInput{WorkspaceID: "ws", SquadID: "sq", TrainAgentID: "train", CriticAgentID: "crit", TrainingMode: true, Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, ""},
+		{"critic without train rejected", EnvDispatchInput{WorkspaceID: "ws", SquadID: "sq", CriticAgentID: "crit", TrainingMode: true, Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, "validation_failed: training_mode=true requires train_agent_id"},
+		{"critic == train rejected", EnvDispatchInput{WorkspaceID: "ws", SquadID: "sq", TrainAgentID: "same", CriticAgentID: "same", TrainingMode: true, Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, "validation_failed: critic_agent_id must differ from train_agent_id"},
+		{"critic == agent rejected (single agent)", EnvDispatchInput{WorkspaceID: "ws", AgentID: "ag", TrainAgentID: "ag", CriticAgentID: "ag", TrainingMode: true, Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, "validation_failed: critic_agent_id must differ from train_agent_id"},
+		{"critic ok with squad (no agent id)", EnvDispatchInput{WorkspaceID: "ws", SquadID: "sq", TrainAgentID: "train", CriticAgentID: "crit", TrainingMode: true, Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, ""},
+		{"empty critic ok (single agent)", EnvDispatchInput{WorkspaceID: "ws", AgentID: "ag", TrainAgentID: "ag", TrainingMode: true, Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, ""},
+		{"critic with single agent ok", EnvDispatchInput{WorkspaceID: "ws", AgentID: "ag", TrainAgentID: "ag", CriticAgentID: "crit", TrainingMode: true, Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1534,7 +1537,7 @@ func TestEnvDispatchTrainedRolloutCreatesSandboxInstanceRefs(t *testing.T) {
 	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
 		WorkspaceID: "ws", UserID: "u", Mode: EnvModeScratch, EnvID: baseEnv,
 		Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue, GroupSize: 1,
-		AgentID: "ag", TrainAgentID: "ag", Issue: &IssueInput{Title: "t"},
+		AgentID: "ag", TrainAgentID: "ag", TrainingMode: true, Issue: &IssueInput{Title: "t"},
 	})
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)
@@ -1611,7 +1614,7 @@ func TestEnvDispatchSandboxInstanceBranchCreatesFreshFromTemplate(t *testing.T) 
 	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
 		WorkspaceID: "ws", UserID: "u", Mode: EnvModeBranch, EnvID: sourceEnvID,
 		Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue, GroupSize: 1,
-		AgentID: "ag", TrainAgentID: "ag",
+		AgentID: "ag", TrainAgentID: "ag", TrainingMode: true,
 	})
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)
@@ -1946,8 +1949,8 @@ func TestEnvDispatchPerAgentEnvSpecsAssignDistinctSandboxRefs(t *testing.T) {
 	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
 		WorkspaceID: "ws", UserID: "u", SquadID: "sq", Mode: EnvModeScratch, EnvID: baseEnv,
 		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
-		TrainAgentID: "train",
-		Message:      &MessageInput{Content: "hi"},
+		TrainAgentID: "train", TrainingMode: true,
+		Message: &MessageInput{Content: "hi"},
 		PerAgentEnvSpecs: []PerAgentEnvSpec{
 			{AgentID: "a1", Template: "python"},
 			{AgentID: "a2", Template: "node"},
@@ -2204,8 +2207,8 @@ func TestEnvDispatchPerAgentEnvSpecsPartialSquadUsesDefaults(t *testing.T) {
 	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
 		WorkspaceID: "ws", UserID: "u", SquadID: "sq", Mode: EnvModeScratch, EnvID: baseEnv,
 		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
-		TrainAgentID: "train",
-		Message:      &MessageInput{Content: "hi"},
+		TrainAgentID: "train", TrainingMode: true,
+		Message: &MessageInput{Content: "hi"},
 		PerAgentEnvSpecs: []PerAgentEnvSpec{
 			{AgentID: "a1", Template: "python"},
 		},
@@ -2238,6 +2241,7 @@ func TestEnvDispatch_PersistsCriticAgentID(t *testing.T) {
 		AgentID:       "agent-1",
 		TrainAgentID:  "agent-1",
 		CriticAgentID: "critic-1",
+		TrainingMode:  true,
 		Issue: &IssueInput{
 			Title: "Test Issue",
 		},
@@ -2280,6 +2284,7 @@ func TestEnvDispatch_NoCritic_PersistsNull(t *testing.T) {
 		GroupSize:    1,
 		AgentID:      "agent-1",
 		TrainAgentID: "agent-1",
+		TrainingMode: true,
 		Issue: &IssueInput{
 			Title: "Test Issue",
 		},
@@ -2300,5 +2305,61 @@ func TestEnvDispatch_NoCritic_PersistsNull(t *testing.T) {
 	}
 	if fake.trainingSaves[0].projectID != result.Rollouts[0].ProjectID {
 		t.Fatalf("save projectID mismatch: got %q, want %q", fake.trainingSaves[0].projectID, result.Rollouts[0].ProjectID)
+	}
+}
+
+// TestEnvDispatchValidate_TrainingMode exercises the training_mode validation
+// rules (Task 1): training_mode=false forbids train_agent_id/critic_agent_id,
+// and training_mode=true requires train_agent_id. The two valid forms
+// (true + train_agent_id, false + no training IDs) must pass the training_mode
+// rules, proving the exact boolean is honored by the service validation.
+func TestEnvDispatchValidate_TrainingMode(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	svc := NewEnvDispatchService(f, 1)
+	base := EnvDispatchInput{
+		WorkspaceID: "ws", Mode: EnvModeScratch, EnvID: "base",
+		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage,
+		GroupSize: 1, AgentID: "ag", Message: &MessageInput{Content: "hi"},
+	}
+
+	// training_mode=false + train_agent_id -> rejected.
+	falseWithTrain := base
+	falseWithTrain.TrainingMode = false
+	falseWithTrain.TrainAgentID = "ag"
+	if err := svc.validate(falseWithTrain); err == nil {
+		t.Fatal("training_mode=false with train_agent_id must be rejected")
+	}
+
+	// training_mode=false + critic_agent_id -> rejected. train_agent_id is
+	// set to satisfy the existing critic shape rule so the rejection is
+	// attributable to the training_mode rule.
+	falseWithCritic := base
+	falseWithCritic.TrainingMode = false
+	falseWithCritic.TrainAgentID = "ag"
+	falseWithCritic.CriticAgentID = "critic"
+	if err := svc.validate(falseWithCritic); err == nil {
+		t.Fatal("training_mode=false with critic_agent_id must be rejected")
+	}
+
+	// training_mode=true + empty train_agent_id -> rejected.
+	trueNoTrain := base
+	trueNoTrain.TrainingMode = true
+	if err := svc.validate(trueNoTrain); err == nil {
+		t.Fatal("training_mode=true without train_agent_id must be rejected")
+	}
+
+	// Valid form 1: training_mode=true + train_agent_id == agent_id -> accepted.
+	trueWithTrain := base
+	trueWithTrain.TrainingMode = true
+	trueWithTrain.TrainAgentID = "ag"
+	if err := svc.validate(trueWithTrain); err != nil {
+		t.Fatalf("training_mode=true with train_agent_id must be accepted, got %v", err)
+	}
+
+	// Valid form 2: training_mode=false + no training IDs -> accepted.
+	falseNoIDs := base
+	falseNoIDs.TrainingMode = false
+	if err := svc.validate(falseNoIDs); err != nil {
+		t.Fatalf("training_mode=false without training IDs must be accepted, got %v", err)
 	}
 }

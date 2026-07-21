@@ -34,6 +34,12 @@ type EnvDispatchRequest struct {
 	TrainAgentID   string `json:"train_agent_id,omitempty"`
 	CriticAgentID  string `json:"critic_agent_id,omitempty"`
 	IdempotencyKey string `json:"idempotency_key,omitempty"`
+	// TrainingMode explicitly selects training vs non-training dispatch. It is
+	// required (nil is rejected at the handler boundary before the service is
+	// constructed) so the dispatch mode is an explicit caller choice, never
+	// inferred from the presence of train_agent_id. A pointer distinguishes an
+	// omitted JSON field (nil) from an explicit false.
+	TrainingMode *bool `json:"training_mode"`
 	// Template optionally overrides the server's default self_play sandbox
 	// template (MULTICA_DEFAULT_SELF_PLAY_TEMPLATE) for the auto-created default
 	// base env. Only consulted when env_id is empty and no default is configured
@@ -115,6 +121,14 @@ func (h *Handler) EnvDispatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "malformed request body")
 		return
 	}
+	// training_mode is required (Task 1): nil means the caller omitted it.
+	// Reject before constructing EnvDispatchInput so the service never sees an
+	// absent training mode. The pointer distinguishes omitted (nil) from an
+	// explicit false.
+	if req.TrainingMode == nil {
+		writeError(w, http.StatusBadRequest, "training_mode is required")
+		return
+	}
 
 	// UUID-shape validation (spec §6.3). Do it here so malformed IDs return a
 	// 400 instead of panicking deep in the adapter (parseUUID is MustParseUUID).
@@ -180,6 +194,7 @@ func (h *Handler) EnvDispatch(w http.ResponseWriter, r *http.Request) {
 		TrainAgentID:        req.TrainAgentID,
 		CriticAgentID:       req.CriticAgentID,
 		IdempotencyKey:      req.IdempotencyKey,
+		TrainingMode:        *req.TrainingMode,
 		DefaultBaseTemplate: template,
 		Issue:               mapIssueInput(req.Issue),
 		Message:             mapMessageInput(req.Message),

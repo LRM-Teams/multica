@@ -78,7 +78,7 @@ func TestWriteEnvDispatchError_TracebackFromAdapterStack(t *testing.T) {
 func TestEnvDispatch_RejectsMissingMode(t *testing.T) {
 	h := newTestHandler(Config{})
 	w := httptest.NewRecorder()
-	body := `{"env_id":"` + validUUID + `","dispatch_type":"issue","group_size":1,"agent_id":"` + validUUID + `","domain":"swe_lego","issue":{"title":"t"}}`
+	body := `{"training_mode":false,"env_id":"` + validUUID + `","dispatch_type":"issue","group_size":1,"agent_id":"` + validUUID + `","domain":"swe_lego","issue":{"title":"t"}}`
 	r := httptest.NewRequest("POST", "/api/v1/env-dispatch", bytes.NewReader([]byte(body)))
 	r.Header.Set("X-User-ID", "u1")
 	r = r.WithContext(middleware.SetMemberContext(r.Context(), "ws1", db.Member{}))
@@ -91,7 +91,7 @@ func TestEnvDispatch_RejectsMissingMode(t *testing.T) {
 func TestEnvDispatch_RejectsMalformedEnvID(t *testing.T) {
 	h := newTestHandler(Config{})
 	w := httptest.NewRecorder()
-	body := `{"mode":"scratch","env_id":"not-a-uuid","domain":"swe_lego","dispatch_type":"issue","group_size":1,"agent_id":"` + validUUID + `","issue":{"title":"t"}}`
+	body := `{"training_mode":false,"mode":"scratch","env_id":"not-a-uuid","domain":"swe_lego","dispatch_type":"issue","group_size":1,"agent_id":"` + validUUID + `","issue":{"title":"t"}}`
 	r := httptest.NewRequest("POST", "/api/v1/env-dispatch", bytes.NewReader([]byte(body)))
 	r.Header.Set("X-User-ID", "u1")
 	r = r.WithContext(middleware.SetMemberContext(r.Context(), "ws1", db.Member{}))
@@ -104,7 +104,7 @@ func TestEnvDispatch_RejectsMalformedEnvID(t *testing.T) {
 func TestEnvDispatch_RejectsSweLegoMessage(t *testing.T) {
 	h := newTestHandler(Config{})
 	w := httptest.NewRecorder()
-	body := `{"mode":"scratch","env_id":"` + validUUID + `","domain":"swe_lego","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","message":{"content":"q"}}`
+	body := `{"training_mode":false,"mode":"scratch","env_id":"` + validUUID + `","domain":"swe_lego","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","message":{"content":"q"}}`
 	r := httptest.NewRequest("POST", "/api/v1/env-dispatch", bytes.NewReader([]byte(body)))
 	r.Header.Set("X-User-ID", "u1")
 	r = r.WithContext(middleware.SetMemberContext(r.Context(), "ws1", db.Member{}))
@@ -117,7 +117,7 @@ func TestEnvDispatch_RejectsSweLegoMessage(t *testing.T) {
 func TestEnvDispatch_SelfPlayIssue_Returns501(t *testing.T) {
 	h := newTestHandler(Config{})
 	w := httptest.NewRecorder()
-	body := `{"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"issue","group_size":1,"agent_id":"` + validUUID + `","issue":{"title":"t"}}`
+	body := `{"training_mode":false,"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"issue","group_size":1,"agent_id":"` + validUUID + `","issue":{"title":"t"}}`
 	r := httptest.NewRequest("POST", "/api/v1/env-dispatch", bytes.NewReader([]byte(body)))
 	r.Header.Set("X-User-ID", "u1")
 	r = r.WithContext(middleware.SetMemberContext(r.Context(), "ws1", db.Member{}))
@@ -140,7 +140,7 @@ func TestDeleteEnvDispatchProject_RequiresProjectID(t *testing.T) {
 }
 
 func TestEnvDispatch_RejectsBothAgentAndSquad(t *testing.T) {
-	body := `{"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","squad_id":"` + validUUID + `","message":{"content":"hi"}}`
+	body := `{"training_mode":false,"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","squad_id":"` + validUUID + `","message":{"content":"hi"}}`
 	rr := doEnvDispatch(t, body)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("both agent+squad: want 400, got %d %s", rr.Code, rr.Body.String())
@@ -151,7 +151,7 @@ func TestEnvDispatch_AcceptsEmptyEnvIDShape(t *testing.T) {
 	// empty env_id must not be rejected by the handler's UUID-shape gate
 	// (which would emit "invalid env_id"); the service decides whether an
 	// empty env_id is allowed (scratch self_play resolves a default).
-	body := `{"mode":"scratch","env_id":"","domain":"self_play","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","message":{"content":"hi"}}`
+	body := `{"training_mode":false,"mode":"scratch","env_id":"","domain":"self_play","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","message":{"content":"hi"}}`
 	rr := doEnvDispatch(t, body)
 	if rr.Code == http.StatusBadRequest && strings.Contains(rr.Body.String(), "invalid env_id") {
 		t.Fatalf("empty env_id must pass the handler UUID gate, got %d %s", rr.Code, rr.Body.String())
@@ -162,7 +162,7 @@ func TestEnvDispatch_RejectsMalformedTrainAgentID(t *testing.T) {
 	// A malformed train_agent_id must be rejected by the handler's UUID-shape
 	// gate with a 400 (mirroring the agent_id/squad_id shape checks) instead of
 	// panicking deeper in the adapter.
-	body := `{"mode":"scratch","env_id":"` + validUUID + `","domain":"swe_lego","dispatch_type":"issue","group_size":1,"agent_id":"` + validUUID + `","train_agent_id":"not-a-uuid","issue":{"title":"t"}}`
+	body := `{"training_mode":true,"mode":"scratch","env_id":"` + validUUID + `","domain":"swe_lego","dispatch_type":"issue","group_size":1,"agent_id":"` + validUUID + `","train_agent_id":"not-a-uuid","issue":{"title":"t"}}`
 	rr := doEnvDispatch(t, body)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (malformed train_agent_id must not panic)", rr.Code)
@@ -176,7 +176,7 @@ func TestEnvDispatch_AcceptsWellFormedTrainAgentID(t *testing.T) {
 	// A well-formed train_agent_id equal to agent_id (single-agent training)
 	// must pass the handler's UUID-shape gate. Using train_agent_id == agent_id
 	// also satisfies the service validate() rule so no 400 is emitted.
-	body := `{"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","train_agent_id":"` + validUUID + `","message":{"content":"hi"}}`
+	body := `{"training_mode":true,"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","train_agent_id":"` + validUUID + `","message":{"content":"hi"}}`
 	rr := doEnvDispatch(t, body)
 	if rr.Code == http.StatusBadRequest && strings.Contains(rr.Body.String(), "train_agent_id") {
 		t.Fatalf("well-formed train_agent_id must pass shape validation, got %d %s", rr.Code, rr.Body.String())
@@ -184,7 +184,7 @@ func TestEnvDispatch_AcceptsWellFormedTrainAgentID(t *testing.T) {
 }
 
 func TestEnvDispatch_AcceptsResumeMode(t *testing.T) {
-	body := `{"mode":"resume","env_id":"` + validUUID + `","domain":"swe_lego","dispatch_type":"issue","group_size":1,"agent_id":"` + validUUID + `","issue":{"title":"t"}}`
+	body := `{"training_mode":false,"mode":"resume","env_id":"` + validUUID + `","domain":"swe_lego","dispatch_type":"issue","group_size":1,"agent_id":"` + validUUID + `","issue":{"title":"t"}}`
 	rr := doEnvDispatch(t, body)
 	if rr.Code == http.StatusBadRequest && strings.Contains(rr.Body.String(), "mode") {
 		t.Fatalf("resume must be accepted as a mode, got %d %s", rr.Code, rr.Body.String())
@@ -193,7 +193,7 @@ func TestEnvDispatch_AcceptsResumeMode(t *testing.T) {
 
 func TestEnvDispatchHandler_CriticAgentID_ShapeValidation(t *testing.T) {
 	// 400 on malformed UUID
-	body := `{"squad_id":"` + validUUID + `","mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"train_agent_id":"` + validUUID + `","critic_agent_id":"not-a-uuid","message":{"content":"hi"}}`
+	body := `{"training_mode":true,"squad_id":"` + validUUID + `","mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"train_agent_id":"` + validUUID + `","critic_agent_id":"not-a-uuid","message":{"content":"hi"}}`
 	req := httptest.NewRequest("POST", "/api/v1/env-dispatch", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	h := newTestHandler(Config{})
@@ -214,7 +214,7 @@ func TestEnvDispatchHandler_CriticAgentID_ShapeValidation(t *testing.T) {
 // A spec with neither template nor base_env_id triggers the service's shape
 // validation error, proving the field reached the service layer.
 func TestEnvDispatch_ParsesPerAgentEnv(t *testing.T) {
-	body := `{"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"squad_id":"` + validUUID + `","message":{"content":"hi"},"per_agent_env":{"` + validUUID + `":{}}}`
+	body := `{"training_mode":false,"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"squad_id":"` + validUUID + `","message":{"content":"hi"},"per_agent_env":{"` + validUUID + `":{}}}`
 	w := doEnvDispatch(t, body)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (shape validation); body=%s", w.Code, w.Body.String())
@@ -227,7 +227,7 @@ func TestEnvDispatch_ParsesPerAgentEnv(t *testing.T) {
 	// shape error: the runtime is a valid scratch policy, so synchronous shape
 	// validation passes and the dispatch proceeds. The synthetic API key must
 	// not surface in the response.
-	runtimeBody := `{"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"squad_id":"` + validUUID + `","message":{"content":"hi"},"per_agent_env":{"` + validUUID + `":{"runtime":{"base_url":"https://provider.invalid/v1","api_key":"synthetic-secret-for-tests","model":"model-a"}}}}`
+	runtimeBody := `{"training_mode":false,"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"squad_id":"` + validUUID + `","message":{"content":"hi"},"per_agent_env":{"` + validUUID + `":{"runtime":{"base_url":"https://provider.invalid/v1","api_key":"synthetic-secret-for-tests","model":"model-a"}}}}`
 	w2 := doEnvDispatch(t, runtimeBody)
 	if strings.Contains(w2.Body.String(), "needs a template") {
 		t.Fatalf("runtime-only spec must advance past the shape error; got %s", w2.Body.String())
@@ -616,4 +616,71 @@ func agentWorkspaceID(t *testing.T, agentID string) string {
 		t.Fatalf("load agent workspace: %v", err)
 	}
 	return wsID
+}
+
+// TestEnvDispatch_TrainingMode exercises the required training_mode request
+// contract (Task 1): omitted training_mode returns HTTP 400 at the handler
+// boundary; training_mode=true without train_agent_id and training_mode=false
+// with a training ID are rejected by service validation (surfaced as 400 with
+// "training_mode"). The two valid forms (true + train_agent_id, false + no
+// training IDs) must reach the service with the exact boolean - verified by
+// the service validation behavior: a wrong boolean would trigger the
+// opposite training_mode 400.
+func TestEnvDispatch_TrainingMode(t *testing.T) {
+	t.Run("Omitted_Returns400", func(t *testing.T) {
+		body := `{"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","message":{"content":"hi"}}`
+		rr := doEnvDispatch(t, body)
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("omitted training_mode: want 400, got %d %s", rr.Code, rr.Body.String())
+		}
+		if !strings.Contains(rr.Body.String(), "training_mode") {
+			t.Fatalf("body should mention training_mode; got %s", rr.Body.String())
+		}
+	})
+
+	t.Run("TrueWithoutTrainAgentID_Returns400", func(t *testing.T) {
+		body := `{"training_mode":true,"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","message":{"content":"hi"}}`
+		rr := doEnvDispatch(t, body)
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("true without train_agent_id: want 400, got %d %s", rr.Code, rr.Body.String())
+		}
+		if !strings.Contains(rr.Body.String(), "training_mode") {
+			t.Fatalf("body should mention training_mode; got %s", rr.Body.String())
+		}
+	})
+
+	t.Run("FalseWithTrainAgentID_Returns400", func(t *testing.T) {
+		body := `{"training_mode":false,"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","train_agent_id":"` + validUUID + `","message":{"content":"hi"}}`
+		rr := doEnvDispatch(t, body)
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("false with train_agent_id: want 400, got %d %s", rr.Code, rr.Body.String())
+		}
+		if !strings.Contains(rr.Body.String(), "training_mode") {
+			t.Fatalf("body should mention training_mode; got %s", rr.Body.String())
+		}
+	})
+
+	t.Run("TrueWithTrainAgentID_ReachesServiceWithExactBoolean", func(t *testing.T) {
+		// training_mode=true with train_agent_id == agent_id (single-agent
+		// training) must pass the training_mode validation rules. If the
+		// handler incorrectly passed false, the service would emit
+		// "training_mode false forbids train_agent_id" -> 400.
+		body := `{"training_mode":true,"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","train_agent_id":"` + validUUID + `","message":{"content":"hi"}}`
+		rr := doEnvDispatch(t, body)
+		if rr.Code == http.StatusBadRequest && strings.Contains(rr.Body.String(), "training_mode") {
+			t.Fatalf("true with train_agent_id must pass training_mode validation, got %d %s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("FalseWithoutTrainingIDs_ReachesServiceWithExactBoolean", func(t *testing.T) {
+		// training_mode=false with no train_agent_id/critic_agent_id must pass
+		// the training_mode validation rules. If the handler incorrectly
+		// passed true, the service would emit "training_mode true requires
+		// train_agent_id" -> 400.
+		body := `{"training_mode":false,"mode":"scratch","env_id":"` + validUUID + `","domain":"self_play","dispatch_type":"message","group_size":1,"agent_id":"` + validUUID + `","message":{"content":"hi"}}`
+		rr := doEnvDispatch(t, body)
+		if rr.Code == http.StatusBadRequest && strings.Contains(rr.Body.String(), "training_mode") {
+			t.Fatalf("false without training IDs must pass training_mode validation, got %d %s", rr.Code, rr.Body.String())
+		}
+	})
 }

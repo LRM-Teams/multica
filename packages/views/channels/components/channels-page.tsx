@@ -176,6 +176,7 @@ import {
 } from "../hooks/use-composer-pending-attachments";
 import { useEntryReadCursor } from "../hooks/use-entry-read-cursor";
 import { useEntryAnchor } from "../hooks/use-entry-around-seq";
+import { isImeComposing } from "@multica/core/utils";
 import { isChannelNameTakenError } from "../channel-create-error";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
@@ -2945,7 +2946,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
               if (renameNameError) setRenameNameError(false);
             }}
             onKeyDown={(e) => {
-              if (e.key === "Enter") handleRenameChannel();
+              if (e.key === "Enter" && !isImeComposing(e)) handleRenameChannel();
             }}
           />
           {renameNameError && (

@@ -30,7 +30,7 @@ export function useUpdateChannel() {
       description?: string;
       lark_chat_id?: string;
     }) => api.updateChannel(channelId, { name, description, lark_chat_id }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: channelKeys.all(wsId) }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: channelKeys.list(wsId) }),
   });
 }
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { ArrowLeft, ChevronDown, ChevronUp, FileText, Hash, MessageSquare, Paperclip, Search, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronUp, FileText, MessageSquare, Paperclip, Search, X } from "lucide-react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   activeChannelTasksKeys,
@@ -1211,15 +1211,8 @@ function DmChannelConversation({
               >
                 <Paperclip className={cn(isMobile ? "size-5" : "size-4")} />
               </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className={cn(isMobile ? "size-10" : "size-8")}
-                aria-label={t(($) => $.composer.issue_ref_aria)}
-                onClick={() => editorRef.current?.openIssueReferences()}
-              >
-                <Hash className={cn(isMobile ? "size-5" : "size-4")} />
-              </Button>
+              {/* LRM-205 — composer toolbar # (井号) removed; type # in the
+                  editor to open issue references (enableIssueReferences). */}
           </>
         }
       />

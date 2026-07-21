@@ -12,7 +12,6 @@ import {
   ChevronRight,
   ChevronUp,
   FileText,
-  Hash,
   Mail,
   MessageCircle,
   MessageSquare,
@@ -3015,15 +3014,10 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                             mobile Settings drawer panel). Binding a channel to a
                             project is a group-configuration decision, not a
                             per-message composer action. */}
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className={cn(isMobile ? "size-10" : "size-8")}
-                          aria-label={t(($) => $.composer.issue_ref_aria)}
-                          onClick={() => editorRef.current?.openIssueReferences()}
-                        >
-                          <Hash className={cn(isMobile ? "size-5" : "size-4")} />
-                        </Button>
+                        {/* LRM-205 — remove the composer toolbar # (井号) button.
+                            Frank: 「把composer的警号删除掉」(井号/警号同音). Issue
+                            refs stay available by typing # in the editor
+                            (enableIssueReferences). */}
                       </>
                     }
                   />

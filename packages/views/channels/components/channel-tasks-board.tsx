@@ -1,22 +1,42 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useInfiniteQuery } from "@tanstack/react-query";
-import { channelIssuesInfiniteOptions } from "@multica/core/channels";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { channelIssuesInfiniteOptions, channelProjectOptions } from "@multica/core/channels";
 import type { Issue, IssueStatus } from "@multica/core/types";
 import { BOARD_STATUSES } from "@multica/core/issues/config";
+import { myIssueListOptions, type MyIssuesFilter } from "@multica/core/issues/queries";
+import { useLoadMoreByStatus } from "@multica/core/issues/mutations";
 import { createIssueViewStore } from "@multica/core/issues/stores/view-store";
 import { ViewStoreProvider } from "@multica/core/issues/stores/view-store-context";
 import { useWorkspacePaths } from "@multica/core/paths";
+import { useWorkspaceId } from "@multica/core/hooks";
 import { Button } from "@multica/ui/components/ui/button";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
+import { ToggleGroup, ToggleGroupItem } from "@multica/ui/components/ui/toggle-group";
 import { cn } from "@multica/ui/lib/utils";
 import { useIsNarrow } from "../hooks/use-is-narrow";
 import { AppLink } from "../../navigation";
 import { BoardCardContent } from "../../issues/components/board-card";
 import { BoardColumnShell, BoardStatusHeading } from "../../issues/components/board-column";
 import { buildBoardGroups, buildColumns } from "../../issues/utils/drag-utils";
+import { ProjectChip } from "../../projects/components/project-chip";
 import { useT } from "../../i18n";
+
+/** Which set of issues the Tasks tab is currently showing. "group" (the
+ *  default, always) is today's behavior — issues created from a source
+ *  message in THIS channel. "project" widens the scope to every issue under
+ *  the channel's bound project (#576 follow-up) — only offered when a
+ *  project is actually bound. */
+export type ChannelTasksScope = "group" | "project";
+
+/** Cache identity for the whole-project scope — deliberately the SAME
+ *  `scope`/`filter` shape Project Detail's board uses
+ *  (`project-detail.tsx`'s `projectScope`/`projectFilter`), so this view
+ *  shares that exact cache entry rather than minting a parallel one. */
+function projectMyIssuesOpts(projectId: string): { scope: string; filter: MyIssuesFilter } {
+  return { scope: `project:${projectId}`, filter: { project_id: projectId } };
+}
 
 // Status grouping never resolves actor names (that's the assignee-grouping
 // path), so the shared `buildBoardGroups` gets a no-op resolver + label.
@@ -69,8 +89,27 @@ function ChannelTaskCard({ issue }: { issue: Issue }) {
  * 768 the JS renders the segmented tree AND the CSS must stay full-width — a `md:`
  * (768 ≥ 768) would snap this to 300px while `useIsNarrow` says narrow.
  */
-function ChannelBoardColumn({ status, issues }: { status: IssueStatus; issues: Issue[] }) {
+function ChannelBoardColumn({
+  status,
+  issues,
+  projectLoadMore,
+}: {
+  status: IssueStatus;
+  issues: Issue[];
+  /**
+   * Present only in the "whole project" scope. Undefined in the (default)
+   * group scope, which pages via ONE flat "Load more" bar below the whole
+   * board instead (`ChannelTasksBoard`) — never both at once. When set, this
+   * column pages independently via the same `useLoadMoreByStatus` mechanism
+   * the real (editable) issues board uses, targeting the identical
+   * `project:<id>` cache entry so the two views never drift apart.
+   */
+  projectLoadMore?: { scope: string; filter: MyIssuesFilter };
+}) {
   const { t: tc } = useT("channels");
+  const { loadMore, hasMore, isLoading, total } = useLoadMoreByStatus(status, projectLoadMore);
+  const showLoadMore = !!projectLoadMore && hasMore;
+  const remaining = Math.max(0, total - issues.length);
   // useMemo the heading element so it isn't a fresh JSX node on every render
   // (react:doctor `jsx-no-jsx-as-prop`).
   const heading = useMemo(
@@ -88,6 +127,20 @@ function ChannelBoardColumn({ status, issues }: { status: IssueStatus; issues: I
           issues.map((issue) => <ChannelTaskCard key={issue.id} issue={issue} />)
         )}
       </div>
+      {showLoadMore ? (
+        <div className="shrink-0 p-1">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="w-full text-xs text-muted-foreground"
+            disabled={isLoading}
+            onClick={() => void loadMore()}
+          >
+            {isLoading ? tc(($) => $.tasks.loading_more) : tc(($) => $.tasks.load_more, { count: remaining })}
+          </Button>
+        </div>
+      ) : null}
     </BoardColumnShell>
   );
 }
@@ -98,25 +151,118 @@ interface RenderedColumn {
 }
 
 /**
- * The channel Tasks TAB (#562): the tasks created from a source message in THIS
- * channel, presented full-width as a real status board — horizontal status
- * columns (`BOARD_STATUSES`) + the issues board's card, fixed-scoped to the
- * channel via `channelId`.
+ * Scope toggle shown above the board ONLY when the channel has a bound
+ * project (#576 follow-up). "This group" (`scope_group`) is the default and
+ * always available — today's channel-scoped behavior, byte-for-byte
+ * unchanged. "Whole project" (`scope_project`) widens the Tasks tab to every
+ * issue under the bound project; the project's name/icon rides along as
+ * supplementary label text via the shared `ProjectChip` (never invents its
+ * own chip styling), but the pill itself — not the chip — is what switches
+ * scope. Disabled with a visible reason (never just a greyed hover tooltip —
+ * matches `ChannelProjectSettingsPanel`'s honesty convention) when the
+ * project-scoped query has errored, so a click can't lead into a silent 403.
+ *
+ * Built on this repo's shared `ToggleGroup`/`ToggleGroupItem` primitive
+ * (single-select) rather than hand-rolled `<button aria-pressed>` pills —
+ * that gets roving-tabindex arrow-key navigation and disabled handling for
+ * free. Base UI's single-select `ToggleGroup` emits an EMPTY array from
+ * `onValueChange` when the currently-pressed item is activated again
+ * (re-toggle-off); that's ignored below so a scope is always selected —
+ * this toggle can never end up with zero active scopes.
+ */
+function TasksScopeToggle({
+  scope,
+  onScopeChange,
+  projectId,
+  projectUnavailable,
+}: {
+  scope: ChannelTasksScope;
+  onScopeChange: (scope: ChannelTasksScope) => void;
+  projectId: string;
+  projectUnavailable: boolean;
+}) {
+  const { t } = useT("channels");
+  return (
+    <div className="shrink-0 border-b border-border/40 px-4 py-2">
+      <ToggleGroup
+        value={[scope]}
+        onValueChange={(next) => {
+          const [nextScope] = next;
+          if (!nextScope) return; // re-click of the active item — stay pinned, never 0 selected.
+          onScopeChange(nextScope as ChannelTasksScope);
+        }}
+        aria-label={t(($) => $.tasks.scope_toggle_aria)}
+        variant="outline"
+        size="sm"
+        className="w-fit"
+      >
+        <ToggleGroupItem value="group">{t(($) => $.tasks.scope_group)}</ToggleGroupItem>
+        <ToggleGroupItem
+          value="project"
+          disabled={projectUnavailable}
+          className="inline-flex items-center gap-1.5"
+        >
+          <span>{t(($) => $.tasks.scope_project)}</span>
+          <ProjectChip projectId={projectId} className="pointer-events-none" />
+        </ToggleGroupItem>
+      </ToggleGroup>
+      {projectUnavailable ? (
+        <p className="mt-1.5 text-xs text-muted-foreground">{t(($) => $.tasks.scope_project_unavailable)}</p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * The channel Tasks TAB (#562, scope-toggle added #576 follow-up): by default,
+ * the tasks created from a source message in THIS channel, presented
+ * full-width as a real status board — horizontal status columns
+ * (`BOARD_STATUSES`) + the issues board's card. When the channel/group has a
+ * project bound, a scope toggle lets the view widen to every issue under
+ * that project instead (never both mixed in one render — the active scope's
+ * query is the SINGLE source columns are built from).
  *
  * Composed from the board's presentational pieces rather than reusing
  * `board-view.tsx` directly: the board's status columns are hard-coupled to the
- * workspace/scoped `byStatus` issues cache (`useLoadMoreByStatus` paginates via
- * `api.listIssues`), which would show the wrong workspace totals and load-more
- * the wrong data for a channel scope. This never touches the global issues view
- * store, never writes back a global filter, and the cards are read-only.
+ * workspace/scoped `byStatus` issues cache, which would show the wrong
+ * workspace totals and load-more the wrong data for the (default) channel
+ * scope. This never touches the global issues view store, never writes back
+ * a global filter, and the cards are read-only.
  *
- * The #684 endpoint caps a page at 100 and returns `total`, so this pages via
- * `channelIssuesInfiniteOptions` and groups only the ALREADY-LOADED set — a
- * single "load more" appends the next offset page rather than truncating at 100.
+ * Group scope pages via `channelIssuesInfiniteOptions` — the #684 endpoint
+ * caps a page at 100 and returns `total`, so this pages through the whole
+ * set and groups only the ALREADY-LOADED issues; a single "Load more" bar
+ * appends the next offset page rather than truncating at 100. Project scope
+ * instead rides the SAME bucketed `myIssueListOptions`/`useLoadMoreByStatus`
+ * mechanism Project Detail's own board uses (`project:<id>` scope/filter) —
+ * scoped server-side by `project_id`, never derived by client-side grouping
+ * — with each status column paginating independently.
  */
 export function ChannelTasksBoard({ channelId }: { channelId: string }) {
   const { t } = useT("channels");
   const isNarrow = useIsNarrow();
+  const wsId = useWorkspaceId();
+
+  // The channel/group's bound project — the SAME read the group settings
+  // panel's project picker resolves (`channelProjectOptions`). "" = unbound.
+  // Group and project are independent explicit properties (#576 contract):
+  // this is never inferred from the loaded issues themselves.
+  const { data: projectId = "" } = useQuery(channelProjectOptions(wsId, channelId));
+  const hasProject = !!projectId;
+
+  // "This group" (default, always) vs "Whole project" (only offered when a
+  // project is bound). Resets to the default whenever the active channel
+  // changes — a per-channel view, not a sticky global mode (mirrors the
+  // `channelView` reset in channels-page.tsx: "adjust state during render"
+  // against a ref, rather than an effect, so there's no extra render).
+  const [scope, setScope] = useState<ChannelTasksScope>("group");
+  const scopeChannelIdRef = useRef(channelId);
+  if (scopeChannelIdRef.current !== channelId) {
+    scopeChannelIdRef.current = channelId;
+    setScope("group");
+  }
+  const isProjectScope = scope === "project" && hasProject;
+
   // Mobile-only: which status column the segmented control has selected. `null`
   // = "follow the default" (first non-empty status) — derived below, not seeded
   // by an effect, so the default tracks the loaded set without an extra render.
@@ -125,20 +271,57 @@ export function ChannelTasksBoard({ channelId }: { channelId: string }) {
   // is the first NON-empty status, which can sit off-screen to the right while
   // the row is scrolled left. Ref the active pill so we can bring it into view.
   const activePillRef = useRef<HTMLButtonElement>(null);
-  const { data, isPending, isError, hasNextPage, fetchNextPage, isFetchingNextPage } =
-    useInfiniteQuery(channelIssuesInfiniteOptions(channelId));
 
-  const loadedIssues = useMemo(
-    () => (data?.pages ?? []).flatMap((page) => page.issues),
-    [data?.pages],
+  const {
+    data: channelData,
+    isPending: channelPending,
+    isError: channelIsError,
+    hasNextPage,
+    fetchNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery(channelIssuesInfiniteOptions(channelId));
+
+  const groupLoadedIssues = useMemo(
+    () => (channelData?.pages ?? []).flatMap((page) => page.issues),
+    [channelData?.pages],
   );
+
+  // Runs whenever a project is bound — not just while "Whole project" is the
+  // active scope — so an access error surfaces BEFORE the toggle is clicked:
+  // the toggle disables itself instead of leading into a silent 403. Shares
+  // Project Detail's exact `project:<id>` cache identity, so this never
+  // mints a second source of truth for the same project's issues.
+  const projectOpts = hasProject ? projectMyIssuesOpts(projectId) : undefined;
+  const {
+    data: projectIssuesData,
+    isPending: projectIssuesPending,
+    isError: projectIssuesError,
+  } = useQuery({
+    ...myIssueListOptions(wsId, projectOpts?.scope ?? "", projectOpts?.filter ?? {}),
+    enabled: !!projectOpts,
+  });
+  const projectUnavailable = hasProject && projectIssuesError;
+
+  // The single source columns are built from — whichever scope is active.
+  // The empty state, pending/error state and count all read this same value,
+  // so they can never disagree about which scope they're describing. Memoized
+  // so the `columns` useMemo below doesn't see a fresh array identity (and
+  // thus re-derive) on every render while nothing scope-relevant changed.
+  const activeIssues = useMemo(
+    () => (isProjectScope ? (projectIssuesData ?? []) : groupLoadedIssues),
+    [isProjectScope, projectIssuesData, groupLoadedIssues],
+  );
+  const isPending = isProjectScope ? projectIssuesPending : channelPending;
+  const isError = isProjectScope ? projectIssuesError : channelIsError;
 
   const columns = useMemo<RenderedColumn[]>(() => {
     // Reuse the board's grouping definition: one group per board status, in
-    // order, then map the loaded issue ids into each column.
-    const groups = buildBoardGroups(loadedIssues, BOARD_STATUSES, "status", NO_ACTOR_NAME, NO_ASSIGNEE_LABEL);
-    const byGroup = buildColumns(loadedIssues, groups, "status");
-    const byId = new Map(loadedIssues.map((issue) => [issue.id, issue]));
+    // order, then map the loaded issue ids into each column. Purely a
+    // presentational grouping of `activeIssues` — the scope switch above is
+    // what picked the server-scoped source; this never re-derives scope.
+    const groups = buildBoardGroups(activeIssues, BOARD_STATUSES, "status", NO_ACTOR_NAME, NO_ASSIGNEE_LABEL);
+    const byGroup = buildColumns(activeIssues, groups, "status");
+    const byId = new Map(activeIssues.map((issue) => [issue.id, issue]));
     return groups.flatMap((group) =>
       group.status
         ? [
@@ -152,10 +335,10 @@ export function ChannelTasksBoard({ channelId }: { channelId: string }) {
           ]
         : [],
     );
-  }, [loadedIssues]);
+  }, [activeIssues]);
 
-  const total = data?.pages[0]?.total ?? 0;
-  const remaining = Math.max(0, total - loadedIssues.length);
+  const total = channelData?.pages[0]?.total ?? 0;
+  const remaining = Math.max(0, total - groupLoadedIssues.length);
 
   // Mobile segmented control default lands on the first status that HAS issues
   // (better UX than an empty column); switching pills never refetches — it just
@@ -174,8 +357,22 @@ export function ChannelTasksBoard({ channelId }: { channelId: string }) {
     activePillRef.current?.scrollIntoView({ inline: "center", block: "nearest" });
   }, [isNarrow, activeStatus]);
 
+  // Rendered above the board body in EVERY state (loading / error / empty /
+  // loaded) so switching scope is never gated behind the other scope's data
+  // resolving first. Absent entirely when unbound — the tab then looks
+  // exactly as it did before this feature, no regression.
+  const scopeToggle = hasProject ? (
+    <TasksScopeToggle
+      scope={scope}
+      onScopeChange={setScope}
+      projectId={projectId}
+      projectUnavailable={projectUnavailable}
+    />
+  ) : null;
+
+  let body: ReactNode;
   if (isPending) {
-    return (
+    body = (
       <div className="flex flex-1 min-h-0 flex-col gap-4 overflow-y-auto p-4 min-[769px]:flex-row min-[769px]:overflow-hidden">
         {Array.from({ length: 4 }).map((_, col) => (
           <div key={col} className="flex w-full shrink-0 flex-col gap-2 min-[769px]:w-[300px]">
@@ -186,31 +383,27 @@ export function ChannelTasksBoard({ channelId }: { channelId: string }) {
         ))}
       </div>
     );
-  }
-
-  if (isError) {
-    return (
+  } else if (isError) {
+    body = (
       <div className="flex flex-1 min-h-0 items-center justify-center">
         <p className="text-sm text-muted-foreground">{t(($) => $.tasks.error)}</p>
       </div>
     );
-  }
-
-  if (loadedIssues.length === 0) {
-    return (
+  } else if (activeIssues.length === 0) {
+    body = (
       <div className="flex flex-1 min-h-0 items-center justify-center">
-        <p className="text-sm text-muted-foreground">{t(($) => $.tasks.empty)}</p>
+        <p className="text-sm text-muted-foreground">
+          {isProjectScope ? t(($) => $.tasks.empty_project) : t(($) => $.tasks.empty)}
+        </p>
       </div>
     );
-  }
-
-  // Mobile segmented control: one pill per status the desktop board shows —
-  // ALL of them, in BOARD_STATUSES order (Iris ruling: pills mirror the desktop
-  // columns exactly, including empty statuses with a `0` count). The selected
-  // column below shows that status's cards (or its empty state).
-  return (
-    <ViewStoreProvider store={channelTasksViewStore}>
-      <div className="flex flex-1 min-h-0 flex-col">
+  } else {
+    // Mobile segmented control: one pill per status the desktop board shows —
+    // ALL of them, in BOARD_STATUSES order (Iris ruling: pills mirror the desktop
+    // columns exactly, including empty statuses with a `0` count). The selected
+    // column below shows that status's cards (or its empty state).
+    body = (
+      <>
         {isNarrow ? (
           <>
             {/* Horizontally-scrollable status selector — keeps the "board" model
@@ -240,18 +433,30 @@ export function ChannelTasksBoard({ channelId }: { channelId: string }) {
             </div>
             <div className="flex-1 min-h-0 overflow-y-auto p-4">
               {activeColumn ? (
-                <ChannelBoardColumn status={activeColumn.status} issues={activeColumn.issues} />
+                <ChannelBoardColumn
+                  status={activeColumn.status}
+                  issues={activeColumn.issues}
+                  projectLoadMore={isProjectScope ? projectOpts : undefined}
+                />
               ) : null}
             </div>
           </>
         ) : (
           <div className="flex flex-1 min-h-0 flex-col gap-4 overflow-y-auto p-4 min-[769px]:flex-row min-[769px]:overflow-x-auto min-[769px]:overflow-y-visible">
             {columns.map((column) => (
-              <ChannelBoardColumn key={column.status} status={column.status} issues={column.issues} />
+              <ChannelBoardColumn
+                key={column.status}
+                status={column.status}
+                issues={column.issues}
+                projectLoadMore={isProjectScope ? projectOpts : undefined}
+              />
             ))}
           </div>
         )}
-        {hasNextPage ? (
+        {/* Group scope's single flat "Load more" bar — project scope paginates
+            per-column instead (see `ChannelBoardColumn`'s own footer button),
+            so this never shows while `isProjectScope`. */}
+        {!isProjectScope && hasNextPage ? (
           <div className="shrink-0 border-t border-border/40 px-4 py-2">
             <Button
               type="button"
@@ -267,6 +472,15 @@ export function ChannelTasksBoard({ channelId }: { channelId: string }) {
             </Button>
           </div>
         ) : null}
+      </>
+    );
+  }
+
+  return (
+    <ViewStoreProvider store={channelTasksViewStore}>
+      <div className="flex flex-1 min-h-0 flex-col">
+        {scopeToggle}
+        {body}
       </div>
     </ViewStoreProvider>
   );

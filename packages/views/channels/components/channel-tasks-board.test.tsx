@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Issue } from "@multica/core/types";
+import type { Issue, IssueStatus } from "@multica/core/types";
 import { renderWithI18n } from "../../test/i18n";
 import { ChannelTasksBoard } from "./channel-tasks-board";
 
@@ -13,6 +13,9 @@ import { ChannelTasksBoard } from "./channel-tasks-board";
 // queryFn returns one page per offset so the status grouping + load-more are the
 // whole contract. `getNextPageParam` mirrors the real one (offset until total).
 const listSourceIssues = vi.fn();
+// The channel/group's bound project (#576 follow-up) — "" (or unresolved) means
+// unbound. Individual tests override via `mockProjectId`.
+let mockProjectId = "";
 vi.mock("@multica/core/channels", () => ({
   channelIssuesInfiniteOptions: (channelId: string) => ({
     queryKey: ["channel-issues", channelId, "infinite"],
@@ -27,6 +30,36 @@ vi.mock("@multica/core/channels", () => ({
       return loaded < total ? loaded : undefined;
     },
   }),
+  channelProjectOptions: (_wsId: string, channelId: string) => ({
+    queryKey: ["channel-project", channelId],
+    queryFn: () => Promise.resolve(mockProjectId),
+  }),
+}));
+
+vi.mock("@multica/core/hooks", () => ({
+  useWorkspaceId: () => "ws-1",
+}));
+
+// The "whole project" scope (#576 follow-up). `listProjectIssues` is the
+// controlled queryFn standing in for the real bucketed `fetchFirstPages` —
+// resolving to a flat Issue[] mirrors `myIssueListOptions`'s own
+// `select: flattenIssueBuckets`. `mockLoadMoreByStatus` stands in for
+// `useLoadMoreByStatus`'s per-column pagination.
+const listProjectIssues = vi.fn();
+const mockLoadMoreByStatus = vi.fn();
+vi.mock("@multica/core/issues/queries", () => ({
+  myIssueListOptions: (_wsId: string, scope: string, filter: Record<string, unknown>) => ({
+    queryKey: ["my-issues", scope, filter],
+    queryFn: () => listProjectIssues(scope, filter),
+  }),
+}));
+vi.mock("@multica/core/issues/mutations", () => ({
+  useLoadMoreByStatus: (status: IssueStatus, myIssues?: { scope: string; filter: Record<string, unknown> }) =>
+    mockLoadMoreByStatus(status, myIssues),
+}));
+
+vi.mock("../../projects/components/project-chip", () => ({
+  ProjectChip: ({ projectId }: { projectId: string }) => <span>Project {projectId}</span>,
 }));
 
 // The board wraps its cards in an isolated view store + the REAL board card.
@@ -139,6 +172,12 @@ describe("ChannelTasksBoard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockIsNarrow = false;
+    mockProjectId = "";
+    // Sane default so every column's unconditional `useLoadMoreByStatus` call
+    // (group scope passes `projectLoadMore: undefined`, but the hook itself is
+    // still called every render) has something to destructure. Tests that care
+    // about project-scope per-column pagination override this explicitly.
+    mockLoadMoreByStatus.mockReturnValue({ loadMore: vi.fn(), hasMore: false, isLoading: false, total: 0 });
     // jsdom doesn't implement scrollIntoView; the board calls it on the active
     // pill's ref. Stub it so the pill-into-view effect can run + be asserted.
     Element.prototype.scrollIntoView = vi.fn();
@@ -294,5 +333,228 @@ describe("ChannelTasksBoard", () => {
     // Next offset page is appended and grouped into its own status column.
     expect(await screen.findByText("Second page task")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Load more/ })).not.toBeInTheDocument();
+  });
+
+  // #576 follow-up — the scope toggle ("This group" vs "Whole project").
+  describe("scope toggle", () => {
+    it("no project bound: renders exactly as before — no toggle, no chip", async () => {
+      mockProjectId = "";
+      listSourceIssues.mockResolvedValue({
+        issues: [makeIssue({ id: "issue-1", title: "Fix the login bug", status: "in_progress" })],
+        total: 1,
+      });
+      renderBoard();
+
+      expect(await screen.findByText("Fix the login bug")).toBeInTheDocument();
+      expect(screen.queryByText(/This group/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Whole project/)).not.toBeInTheDocument();
+    });
+
+    it("project bound: shows the toggle, defaulting to \"This group\" (unchanged channel-scoped issues)", async () => {
+      mockProjectId = "proj-1";
+      listSourceIssues.mockResolvedValue({
+        issues: [makeIssue({ id: "issue-1", title: "Fix the login bug", status: "in_progress" })],
+        total: 1,
+      });
+      listProjectIssues.mockResolvedValue([]);
+      renderBoard();
+
+      const groupPill = await screen.findByRole("button", { name: "This group" });
+      const projectPill = screen.getByRole("button", { name: /Whole project/ });
+      expect(groupPill).toHaveAttribute("aria-pressed", "true");
+      expect(projectPill).toHaveAttribute("aria-pressed", "false");
+      // The project's name rides along as supplementary label text on the
+      // "Whole project" option, but isn't itself a separate switching control.
+      expect(projectPill).toHaveTextContent("Project proj-1");
+      // Default scope shows the channel-scoped (group) issues, unchanged.
+      expect(screen.getByText("Fix the login bug")).toBeInTheDocument();
+    });
+
+    it("keyboard: arrow keys move focus between items via the real ToggleGroup roving-tabindex, and re-activating the already-pressed item never drops to 0 active scopes", async () => {
+      mockProjectId = "proj-1";
+      listSourceIssues.mockResolvedValue({
+        issues: [makeIssue({ id: "issue-1", title: "Fix the login bug", status: "in_progress" })],
+        total: 1,
+      });
+      listProjectIssues.mockResolvedValue([]);
+      const user = userEvent.setup();
+      renderBoard();
+
+      const groupPill = await screen.findByRole("button", { name: "This group" });
+      const projectPill = screen.getByRole("button", { name: /Whole project/ });
+
+      // Focus the currently-active item and activate it again (re-click via
+      // keyboard) — Base UI's single-select ToggleGroup would emit an EMPTY
+      // array here; the guard in `TasksScopeToggle` must keep it pinned to
+      // "group" rather than ending up with neither item pressed.
+      groupPill.focus();
+      expect(groupPill).toHaveFocus();
+      await user.keyboard("[Enter]");
+      expect(groupPill).toHaveAttribute("aria-pressed", "true");
+      expect(projectPill).toHaveAttribute("aria-pressed", "false");
+      // Never both unpressed.
+      expect(
+        groupPill.getAttribute("aria-pressed") === "true" || projectPill.getAttribute("aria-pressed") === "true",
+      ).toBe(true);
+
+      // Arrow-right moves FOCUS to the next item via the group's real
+      // roving-tabindex composite navigation (not a manual tab-index hack).
+      await user.keyboard("[ArrowRight]");
+      expect(projectPill).toHaveFocus();
+
+      // Activating the now-focused item switches the pressed scope — exactly
+      // one item pressed at a time, never zero.
+      await user.keyboard("[Enter]");
+      expect(projectPill).toHaveAttribute("aria-pressed", "true");
+      expect(groupPill).toHaveAttribute("aria-pressed", "false");
+      expect(await screen.findByText("Project proj-1")).toBeInTheDocument();
+
+      // Arrow-left moves focus back.
+      await user.keyboard("[ArrowLeft]");
+      expect(groupPill).toHaveFocus();
+    });
+
+    it("switching to \"Whole project\": swaps to the project-scoped query — list, empty state and count all switch together", async () => {
+      mockProjectId = "proj-1";
+      listSourceIssues.mockResolvedValue({
+        issues: [makeIssue({ id: "issue-1", title: "Group-only task", status: "todo" })],
+        total: 1,
+      });
+      listProjectIssues.mockResolvedValue([
+        makeIssue({ id: "issue-2", title: "Project-wide task A", status: "todo" }),
+        makeIssue({ id: "issue-3", title: "Project-wide task B", status: "in_progress" }),
+      ]);
+      renderBoard();
+
+      expect(await screen.findByText("Group-only task")).toBeInTheDocument();
+      expect(screen.queryByText("Project-wide task A")).not.toBeInTheDocument();
+
+      const projectPill = screen.getByRole("button", { name: /Whole project/ });
+      await userEvent.click(projectPill);
+
+      // The group-scoped card disappears; both project-wide cards appear —
+      // never a mix of the two scopes in one render.
+      expect(await screen.findByText("Project-wide task A")).toBeInTheDocument();
+      expect(screen.getByText("Project-wide task B")).toBeInTheDocument();
+      expect(screen.queryByText("Group-only task")).not.toBeInTheDocument();
+      expect(projectPill).toHaveAttribute("aria-pressed", "true");
+
+      // The status columns reflect the project-scoped set's own counts, not
+      // the group-scoped set's.
+      expect(screen.getByText("Todo")).toBeInTheDocument();
+      expect(screen.getByText("In Progress")).toBeInTheDocument();
+    });
+
+    it("\"Whole project\" empty: shows the project-scoped empty state, not the channel one", async () => {
+      mockProjectId = "proj-1";
+      listSourceIssues.mockResolvedValue({
+        issues: [makeIssue({ id: "issue-1", title: "Group-only task", status: "todo" })],
+        total: 1,
+      });
+      listProjectIssues.mockResolvedValue([]);
+      renderBoard();
+
+      const projectPill = await screen.findByRole("button", { name: /Whole project/ });
+      await userEvent.click(projectPill);
+
+      expect(await screen.findByText("No issues in this project")).toBeInTheDocument();
+      expect(screen.queryByText("No issues from this channel")).not.toBeInTheDocument();
+      expect(screen.queryByText("Group-only task")).not.toBeInTheDocument();
+    });
+
+    it("no permission to view the project's issues: the \"Whole project\" option disables itself with a visible reason, not a silent 403", async () => {
+      mockProjectId = "proj-1";
+      listSourceIssues.mockResolvedValue({
+        issues: [makeIssue({ id: "issue-1", title: "Fix the login bug", status: "in_progress" })],
+        total: 1,
+      });
+      // The project-scoped query fails (e.g. a 403) — this must surface BEFORE
+      // any click, disabling the toggle rather than letting the user tap
+      // through into the error.
+      listProjectIssues.mockRejectedValue(new Error("forbidden"));
+      renderBoard();
+
+      const projectPill = await screen.findByRole("button", { name: /Whole project/ });
+      await vi.waitFor(() => expect(projectPill).toBeDisabled());
+      expect(screen.getByText("Can't load this project's issues right now")).toBeInTheDocument();
+      // Group scope is unaffected — still the active, working view.
+      expect(screen.getByText("Fix the login bug")).toBeInTheDocument();
+    });
+
+    it("switching channels resets the scope back to \"This group\" — a per-channel view, not a sticky global mode", async () => {
+      mockProjectId = "proj-1";
+      listSourceIssues.mockResolvedValue({
+        issues: [makeIssue({ id: "issue-1", title: "Group-only task", status: "todo" })],
+        total: 1,
+      });
+      listProjectIssues.mockResolvedValue([
+        makeIssue({ id: "issue-2", title: "Project-wide task", status: "todo" }),
+      ]);
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const { rerender } = renderWithI18n(
+        <QueryClientProvider client={queryClient}>
+          <ChannelTasksBoard channelId="chan-1" />
+        </QueryClientProvider>,
+      );
+
+      const projectPill = await screen.findByRole("button", { name: /Whole project/ });
+      await userEvent.click(projectPill);
+      expect(await screen.findByText("Project-wide task")).toBeInTheDocument();
+
+      rerender(
+        <QueryClientProvider client={queryClient}>
+          <ChannelTasksBoard channelId="chan-2" />
+        </QueryClientProvider>,
+      );
+
+      // Back on "This group" for the new channel, not stuck on "Whole project".
+      const groupPillAfterSwitch = await screen.findByRole("button", { name: "This group" });
+      expect(groupPillAfterSwitch).toHaveAttribute("aria-pressed", "true");
+      expect(await screen.findByText("Group-only task")).toBeInTheDocument();
+    });
+
+    it("archived channel or member-only access: the toggle is driven only by `channelId` — no admin/archived flag gates read visibility", async () => {
+      // The component takes no archived/admin prop; the read-only toggle must
+      // work purely off the channel id + its resolved project binding, exactly
+      // like `ChannelProjectSettingsPanel`'s own read (vs. write) split — only
+      // the WRITE picker there is admin-gated, never the read.
+      mockProjectId = "proj-1";
+      listSourceIssues.mockResolvedValue({ issues: [], total: 0 });
+      listProjectIssues.mockResolvedValue([
+        makeIssue({ id: "issue-2", title: "Project-wide task", status: "todo" }),
+      ]);
+      renderBoard();
+
+      const projectPill = await screen.findByRole("button", { name: /Whole project/ });
+      expect(projectPill).not.toBeDisabled();
+      await userEvent.click(projectPill);
+      expect(await screen.findByText("Project-wide task")).toBeInTheDocument();
+    });
+
+    it("\"Whole project\" scope: a status column with more pages than loaded shows its own per-column Load more (group scope's flat bar does not apply here)", async () => {
+      mockProjectId = "proj-1";
+      listSourceIssues.mockResolvedValue({ issues: [], total: 0 });
+      listProjectIssues.mockResolvedValue([
+        makeIssue({ id: "issue-2", title: "Project-wide task", status: "todo" }),
+      ]);
+      // Simulate the "todo" column having more on the server than loaded.
+      const loadMore = vi.fn();
+      mockLoadMoreByStatus.mockImplementation((status: IssueStatus) =>
+        status === "todo"
+          ? { loadMore, hasMore: true, isLoading: false, total: 5 }
+          : { loadMore: vi.fn(), hasMore: false, isLoading: false, total: 0 },
+      );
+      renderBoard();
+
+      const projectPill = await screen.findByRole("button", { name: /Whole project/ });
+      await userEvent.click(projectPill);
+      await screen.findByText("Project-wide task");
+
+      // "4 remaining" — 5 total minus the 1 already loaded for "todo".
+      const columnLoadMore = screen.getByRole("button", { name: /Load more/ });
+      expect(columnLoadMore).toHaveTextContent("4");
+      await userEvent.click(columnLoadMore);
+      expect(loadMore).toHaveBeenCalledTimes(1);
+    });
   });
 });

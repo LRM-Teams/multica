@@ -34,7 +34,10 @@ import { useNavigation } from "../navigation";
 import { useAttachmentHtmlText } from "./hooks/use-attachment-html-text";
 import { HtmlPreviewBody } from "./html-preview-body";
 
-const PREVIEW_HEIGHT = "h-[480px]";
+const PREVIEW_HEIGHT =
+  // LRM-201 — desktop keeps a tall preview; narrow/mobile caps height so the
+  // attachment does not eat the chat viewport (Frank: 卡片过高).
+  "h-[min(36vh,11.25rem)] md:h-[480px]";
 const ERROR_PLACEHOLDER_HEIGHT = "h-20";
 
 interface HtmlAttachmentPreviewProps {
@@ -82,9 +85,12 @@ export function HtmlAttachmentPreview({
     window.open(url, "_blank", "noopener,noreferrer");
   };
 
+  const toolbarBtn =
+    "flex size-9 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:size-6 [@media(pointer:fine)]:size-6";
+
   return (
     <div
-      className="group/html-preview relative my-1"
+      className="group/html-preview relative my-1 min-w-0 max-w-full"
       onMouseDown={(e) => e.stopPropagation()}
     >
       <HtmlPreviewBody
@@ -99,14 +105,16 @@ export function HtmlAttachmentPreview({
           "absolute right-2 top-2 flex items-center gap-0.5 rounded-md border border-border bg-background/95 p-0.5 shadow-sm transition-opacity",
           // Error state pins the toolbar open — Preview / Download are the
           // only user-reachable escape hatches when inline render fails.
+          // LRM-201 — coarse pointers (phone web) never get hover; keep actions
+          // visible so Open / Download stay tappable.
           isError
             ? "opacity-100"
-            : "opacity-0 group-hover/html-preview:opacity-100",
+            : "opacity-100 [@media(pointer:fine)]:opacity-0 [@media(pointer:fine)]:group-hover/html-preview:opacity-100",
         )}
       >
         <button
           type="button"
-          className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          className={toolbarBtn}
           title={t(($) => $.attachment.preview)}
           aria-label={t(($) => $.attachment.preview)}
           onMouseDown={(e) => {
@@ -120,7 +128,7 @@ export function HtmlAttachmentPreview({
         {canOpenInNewTab && (
           <button
             type="button"
-            className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            className={toolbarBtn}
             title={t(($) => $.attachment.open_in_new_tab)}
             aria-label={t(($) => $.attachment.open_in_new_tab)}
             onMouseDown={(e) => {
@@ -134,7 +142,7 @@ export function HtmlAttachmentPreview({
         )}
         <button
           type="button"
-          className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          className={toolbarBtn}
           title={t(($) => $.image.download)}
           aria-label={t(($) => $.image.download)}
           onMouseDown={(e) => {
@@ -148,7 +156,7 @@ export function HtmlAttachmentPreview({
         {onDelete && (
           <button
             type="button"
-            className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+            className={cn(toolbarBtn, "hover:bg-destructive/10 hover:text-destructive")}
             title={t(($) => $.attachment.remove)}
             aria-label={t(($) => $.attachment.remove)}
             onMouseDown={(e) => {

@@ -76,6 +76,7 @@ import { useWorkspacePaths } from "@multica/core/paths";
 import { useWSEvent } from "@multica/core/realtime";
 import { toast } from "sonner";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
+import { projectListOptions } from "@multica/core/projects/queries";
 import {
   matchesActorIdentitySearch,
   resolveActorDisplayName,
@@ -162,6 +163,8 @@ import { useNavigation } from "../../navigation/context";
 import { useT } from "../../i18n/use-t";
 import { useTimeAgo } from "../../i18n/use-time-ago";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
+import { ProjectPickerButton } from "../../common/project-picker-button";
+import { PropRow } from "../../common/prop-row";
 import { composePayloadKey } from "../hooks/use-compose-send-intent";
 import { useComposerSend } from "../hooks/use-composer-send";
 import {
@@ -709,6 +712,10 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const [typingActors, setTypingActors] = useState<Record<string, TypingActor>>({});
   const [newName, setNewName] = useState("");
   const [newLarkChatId, setNewLarkChatId] = useState("");
+  // #576 — optional project binding, set at creation time via the same
+  // ProjectPickerButton the group-settings panel uses (channel-project-settings-panel.tsx).
+  // `null` means unbound, which is the pre-existing default create behavior.
+  const [newProjectId, setNewProjectId] = useState<string | null>(null);
   // Inline "name required" hint for the create popover. Empty names used to
   // silently default to "general", which collided with an existing general
   // channel and surfaced as an opaque failure (#216).
@@ -801,6 +808,15 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const { data: archivedChannels = [] } = useQuery(archivedChannelsOptions(wsId));
   const { data: workspaceMembers = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  // #576 — resolves the create-popover's selected project title, same query the
+  // group-settings Project section (ChannelProjectSettingsPanel) uses. Keep it
+  // dormant while the popover is closed: the project list is not rendered or
+  // needed then, and ChannelsPage should not add a background request merely
+  // because the optional create field exists.
+  const { data: workspaceProjects = [] } = useQuery({
+    ...projectListOptions(wsId),
+    enabled: createOpen,
+  });
   const resolveMentionPreview = useMemo<MentionPreviewResolver>(
     () => (type, id, fallbackLabel) => {
       if (type === "agent") {
@@ -1592,12 +1608,20 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       return;
     }
     createChannel.mutate(
-      { name, lark_chat_id: newLarkChatId.trim() || undefined },
+      {
+        name,
+        lark_chat_id: newLarkChatId.trim() || undefined,
+        // Omit entirely (not null) when unset, so the request body doesn't
+        // carry a `project_id` key at all — matching the pre-existing create
+        // flow exactly when no project is picked.
+        project_id: newProjectId ?? undefined,
+      },
       {
         onSuccess: (channel: Channel) => {
           selectChannel(channel.id);
           setNewName("");
           setNewLarkChatId("");
+          setNewProjectId(null);
           setCreateNameError(false);
           setCreateOpen(false);
         },
@@ -2375,6 +2399,29 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                       value={newLarkChatId}
                       onChange={(e) => setNewLarkChatId(e.target.value)}
                     />
+                    {/* #576 — optional project binding at creation time. Same
+                        ProjectPickerButton + PropRow pattern the group-settings
+                        Project section uses (ChannelProjectSettingsPanel);
+                        leaving it unset behaves exactly like the pre-existing
+                        create flow. */}
+                    <div className="grid min-w-0 grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+                      <PropRow label={t(($) => $.composer.project_label)} interactive={false}>
+                        <div className="flex min-w-0 items-center gap-1.5">
+                          <span className="min-w-0 truncate text-xs text-foreground">
+                            {workspaceProjects.find((p) => p.id === newProjectId)?.title ??
+                              t(($) => $.composer.project_none)}
+                          </span>
+                          <ProjectPickerButton
+                            wsId={wsId}
+                            value={newProjectId}
+                            onChange={setNewProjectId}
+                            label={t(($) => $.composer.project_label)}
+                            noneLabel={t(($) => $.composer.project_none)}
+                            tooltip={t(($) => $.composer.project_tooltip)}
+                          />
+                        </div>
+                      </PropRow>
+                    </div>
                     <Button className="w-full" onClick={handleCreate} disabled={createChannel.isPending}>
                       {t(($) => $.sidebar.create_aria)}
                     </Button>

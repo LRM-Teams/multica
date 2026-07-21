@@ -600,7 +600,12 @@ export function ChannelMessageBubble({
       data-own={isOwn}
       data-self-mentioned={selfMentioned ? "true" : undefined}
       className={cn(
-        "group relative grid grid-cols-[28px_minmax(0,1fr)] gap-2.5 rounded-lg px-2 py-1.5 outline-none transition-colors duration-1000 hover:bg-muted/35 focus-within:bg-muted/35",
+        // Coarse pointers get a dedicated 44px action column (Parker #568:
+        // an absolutely-positioned More button compensated by body padding
+        // was a layout hack that still clipped link/mention/attachment
+        // hitboxes in the first line) — content stays in its own track so
+        // nothing overlaps regardless of grouped-message author-row state.
+        "group relative grid grid-cols-[28px_minmax(0,1fr)] gap-2.5 rounded-lg px-2 py-1.5 outline-none transition-colors duration-1000 hover:bg-muted/35 focus-within:bg-muted/35 [@media(pointer:coarse)]:grid-cols-[28px_minmax(0,1fr)_44px]",
         selfMentioned && SELF_MENTION_ROW_CLASS,
         highlighted && "bg-primary/10 ring-1 ring-primary/25 duration-0 hover:bg-primary/10 focus-within:bg-primary/10",
         mobileThreadTapActive && "bg-primary/[0.04] ring-1 ring-primary/45 duration-75",
@@ -743,19 +748,6 @@ export function ChannelMessageBubble({
             )}
           </div>
         )}
-        {!isEditing && (onReact || onQuote || canOpenThread) && (
-          <button
-            type="button"
-            data-testid="message-mobile-more-trigger"
-            data-message-action-surface="true"
-            onClick={openMobileActions}
-            aria-label={t(($) => $.message.more_actions)}
-            title={t(($) => $.message.more_actions)}
-            className="absolute right-1 top-0.5 z-10 hidden h-11 w-11 items-center justify-center rounded-full text-muted-foreground/50 transition-colors [@media(pointer:coarse)]:flex hover:bg-background/70 hover:text-foreground active:bg-background/70"
-          >
-            <MoreHorizontal className="size-[18px]" />
-          </button>
-        )}
         {isEditing ? (
           <MessageInlineEditor
             value={editDraft ?? ""}
@@ -813,7 +805,7 @@ export function ChannelMessageBubble({
         {!isEditing && mobileActionsOpen && (
           <dialog
             ref={showMobileActionsDialog}
-            className="fixed inset-0 z-50 m-0 h-dvh max-h-none w-screen max-w-none border-0 bg-transparent p-0 backdrop:bg-black/10 md:hidden"
+            className="fixed inset-0 z-50 m-0 h-dvh max-h-none w-screen max-w-none border-0 bg-transparent p-0 backdrop:bg-black/10 [@media(pointer:fine)]:hidden"
             aria-label={t(($) => $.message.actions_menu)}
             onCancel={(event) => {
               event.preventDefault();
@@ -890,7 +882,7 @@ export function ChannelMessageBubble({
         {!isEditing && onReact && mobileReactionOpen && (
           <dialog
             ref={showMobileReactionDialog}
-            className="fixed inset-0 z-50 m-0 h-dvh max-h-none w-screen max-w-none border-0 bg-transparent p-0 backdrop:bg-black/10 md:hidden"
+            className="fixed inset-0 z-50 m-0 h-dvh max-h-none w-screen max-w-none border-0 bg-transparent p-0 backdrop:bg-black/10 [@media(pointer:fine)]:hidden"
             aria-label={t(($) => $.message.add_reaction)}
             onCancel={(event) => {
               event.preventDefault();
@@ -919,7 +911,7 @@ export function ChannelMessageBubble({
                     </div>
                   }
                 >
-                  <FullEmojiPicker onSelect={handleMobileReactionSheetSelect} />
+                  <FullEmojiPicker onSelect={handleMobileReactionSheetSelect} emojiButtonSize={44} />
                 </Suspense>
               ) : (
                 <>
@@ -980,6 +972,19 @@ export function ChannelMessageBubble({
           </div>
         )}
       </div>
+      {!isEditing && (onReact || onQuote || canOpenThread) && (
+        <button
+          type="button"
+          data-testid="message-mobile-more-trigger"
+          data-message-action-surface="true"
+          onClick={openMobileActions}
+          aria-label={t(($) => $.message.more_actions)}
+          title={t(($) => $.message.more_actions)}
+          className="hidden h-11 w-11 shrink-0 items-center justify-center self-start justify-self-end rounded-full text-muted-foreground/50 transition-colors [@media(pointer:coarse)]:flex hover:bg-background/70 hover:text-foreground active:bg-background/70"
+        >
+          <MoreHorizontal className="size-[18px]" />
+        </button>
+      )}
     </div>
   );
 

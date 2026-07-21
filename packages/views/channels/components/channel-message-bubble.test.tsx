@@ -151,6 +151,8 @@ vi.mock("../../i18n/use-t", () => ({
       selector: (resources: {
         message: {
           add_reaction: string;
+          more_emojis: string;
+          more_actions: string;
           agent_badge: string;
           radar_badge: string;
           feishu_badge: string;
@@ -215,6 +217,8 @@ vi.mock("../../i18n/use-t", () => ({
       const raw = selector({
         message: {
           add_reaction: "Add reaction",
+          more_emojis: "More emojis",
+          more_actions: "More actions",
           agent_badge: "Agent",
           radar_badge: "Project Radar",
           feishu_badge: "Feishu",
@@ -1182,7 +1186,7 @@ describe("ChannelMessageBubble", () => {
     const bubble = screen.getByTestId("message-bubble");
     const actionBar = screen.getByTestId("message-action-bar");
     expect(actionBar).toHaveClass("hidden");
-    expect(actionBar).toHaveClass("md:flex");
+    expect(actionBar).toHaveClass("[@media(pointer:fine)]:flex");
     expect(actionBar).toHaveClass("opacity-0");
     expect(screen.queryByRole("dialog", { name: "Message actions" })).not.toBeInTheDocument();
 
@@ -1231,6 +1235,55 @@ describe("ChannelMessageBubble", () => {
     await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith("Here is the data."));
     await waitFor(() =>
       expect(screen.queryByRole("dialog", { name: "Message actions" })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("shows a low-emphasis More trigger that opens the mobile action sheet without a long press (#568)", async () => {
+    setMobileViewport();
+    render(
+      <ChannelMessageBubble
+        message={makeMessage()}
+        currentUserId="user-1"
+        onReact={vi.fn()}
+        onQuote={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("dialog", { name: "Message actions" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "More actions" }));
+
+    expect(await screen.findByRole("dialog", { name: "Message actions" })).toBeInTheDocument();
+  });
+
+  it("opens the reaction sheet in place of the action sheet, never both at once (#568)", async () => {
+    setMobileViewport();
+    const onReact = vi.fn();
+    render(
+      <ChannelMessageBubble message={makeMessage()} currentUserId="user-1" onReact={onReact} />,
+    );
+
+    const bubble = screen.getByTestId("message-bubble");
+    fireEvent.pointerDown(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
+    fireEvent.pointerUp(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
+
+    const menu = await screen.findByRole("dialog", { name: "Message actions" });
+    await userEvent.click(within(menu).getByRole("button", { name: "Add reaction" }));
+
+    // The action sheet must be gone before the reaction sheet appears — the two
+    // mobile overlays are never mounted together (Iris #568: was a real
+    // double-panel bug when the QuickEmojiPicker popover opened on top of the
+    // still-open action <dialog>).
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Message actions" })).not.toBeInTheDocument(),
+    );
+    const reactionSheet = await screen.findByRole("dialog", { name: "Add reaction" });
+    expect(reactionSheet).toBeInTheDocument();
+
+    await userEvent.click(within(reactionSheet).getByRole("button", { name: "🎉" }));
+
+    expect(onReact).toHaveBeenCalledWith(expect.anything(), "🎉");
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Add reaction" })).not.toBeInTheDocument(),
     );
   });
 

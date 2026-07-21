@@ -202,6 +202,8 @@
   },
   "message": {
     "add_reaction": "リアクションを追加",
+    "more_emojis": "その他の絵文字",
+    "more_actions": "その他の操作",
     "actions_menu": "メッセージ操作",
     "copy_action": "コピー",
     "expand_action": "全文を表示",

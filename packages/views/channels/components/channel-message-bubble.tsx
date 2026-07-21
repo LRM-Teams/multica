@@ -1,13 +1,15 @@
 "use client";
 
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useRef,
   useState,
   type PointerEvent,
 } from "react";
-import { Copy, MessageSquare, Pencil, Quote, Trash2 } from "lucide-react";
+import { Copy, MessageSquare, MoreHorizontal, Pencil, Quote, Trash2, SmilePlus } from "lucide-react";
 import { toast } from "sonner";
 import { ReactionBar } from "@multica/ui/components/common/reaction-bar";
 import { QuickEmojiPicker } from "@multica/ui/components/common/quick-emoji-picker";
@@ -53,6 +55,12 @@ import {
 } from "./channel-system-event-content";
 import { messageMentionsViewer } from "../../common/content-mentions-viewer";
 import { SELF_MENTION_ROW_CLASS } from "../../common/mention-token";
+
+const FullEmojiPicker = lazy(() =>
+  import("@multica/ui/components/common/emoji-picker").then((m) => ({
+    default: m.EmojiPicker,
+  })),
+);
 
 const LONG_PRESS_MS = 450;
 const TOUCH_MOVE_CANCEL_PX = 8;
@@ -299,11 +307,14 @@ export function ChannelMessageBubble({
   const messageTime = useMessageTime();
   const [editDraft, setEditDraft] = useState<string | null>(null);
   const [mobileActionsOpen, setMobileActionsOpen] = useState(false);
+  const [mobileReactionOpen, setMobileReactionOpen] = useState(false);
+  const [mobileReactionShowFull, setMobileReactionShowFull] = useState(false);
   const [expandedContentKey, setExpandedContentKey] = useState<string | null>(null);
   const [mobileThreadTapActive, setMobileThreadTapActive] = useState(false);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tapFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mobileActionsDialogRef = useRef<HTMLDialogElement | null>(null);
+  const mobileReactionDialogRef = useRef<HTMLDialogElement | null>(null);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const touchCancelledRef = useRef(false);
 
@@ -318,6 +329,13 @@ export function ChannelMessageBubble({
 
   const showMobileActionsDialog = useCallback((dialog: HTMLDialogElement | null) => {
     mobileActionsDialogRef.current = dialog;
+    if (!dialog || dialog.open) return;
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
+  }, []);
+
+  const showMobileReactionDialog = useCallback((dialog: HTMLDialogElement | null) => {
+    mobileReactionDialogRef.current = dialog;
     if (!dialog || dialog.open) return;
     if (typeof dialog.showModal === "function") dialog.showModal();
     else dialog.setAttribute("open", "");
@@ -436,9 +454,6 @@ export function ChannelMessageBubble({
     setMobileActionsOpen(false);
     void action();
   };
-  const handleMobileReactionSelect = (emoji: string) => {
-    runMobileAction(() => onReact?.(message, emoji));
-  };
   const handleQuote = () => onQuote?.(message);
 
   // Edit / delete are viewer-own affordances only. H5: saving an edit routes
@@ -491,8 +506,23 @@ export function ChannelMessageBubble({
     if (!isEditing && isMobileActionViewport()) {
       clearTapFeedbackTimer();
       setMobileThreadTapActive(false);
+      setMobileReactionOpen(false);
       setMobileActionsOpen(true);
     }
+  };
+  // Reply/React overlay lifecycle (Iris #568): only one mobile action layer may
+  // be open at a time. Selecting "Add reaction" from the primary sheet closes
+  // it first, then opens the dedicated reaction sheet — never both mounted
+  // together (was a real double-panel bug: Popover portal + open <dialog>).
+  const openMobileReactionFromActions = () => {
+    setMobileActionsOpen(false);
+    setMobileReactionShowFull(false);
+    setMobileReactionOpen(true);
+  };
+  const handleMobileReactionSheetSelect = (emoji: string) => {
+    setMobileReactionOpen(false);
+    setMobileReactionShowFull(false);
+    onReact?.(message, emoji);
   };
   const openThreadAfterMobileTap = () => {
     if (!canOpenThread) return;
@@ -640,14 +670,14 @@ export function ChannelMessageBubble({
           <div
             data-testid="message-action-bar"
             data-message-action-surface="true"
-            className="pointer-events-none absolute right-3 top-2 z-10 hidden items-center gap-0.5 text-muted-foreground opacity-0 transition-opacity md:flex md:group-hover:pointer-events-auto md:group-hover:opacity-100 md:group-focus-within:pointer-events-auto md:group-focus-within:opacity-100"
+            className="pointer-events-none absolute right-3 top-2 z-10 hidden items-center gap-0.5 text-muted-foreground opacity-0 transition-opacity [@media(pointer:fine)]:flex [@media(pointer:fine)]:group-hover:pointer-events-auto [@media(pointer:fine)]:group-hover:opacity-100 [@media(pointer:fine)]:group-focus-within:pointer-events-auto [@media(pointer:fine)]:group-focus-within:opacity-100"
           >
             {onReact && (
               <QuickEmojiPicker
                 onSelect={(emoji) => onReact(message, emoji)}
                 align="end"
                 side="bottom"
-                className="size-7 rounded-md hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
+                className="size-8 rounded-md hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
                 ariaLabel={t(($) => $.message.add_reaction)}
                 sideOffset={4}
                 emojis={quickReactionEmojis}
@@ -658,57 +688,70 @@ export function ChannelMessageBubble({
             <button
               type="button"
               onClick={handleCopy}
-              className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
+              className="inline-flex size-8 items-center justify-center rounded-md transition-colors hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
               aria-label={t(($) => $.message.copy_action)}
               title={t(($) => $.message.copy_action)}
             >
-              <Copy className="size-3.5" />
+              <Copy className="size-4" />
             </button>
             {onQuote && (
               <button
                 type="button"
                 onClick={handleQuote}
-                className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
+                className="inline-flex size-8 items-center justify-center rounded-md transition-colors hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
                 aria-label={t(($) => $.quote.action)}
                 title={t(($) => $.quote.action)}
               >
-                <Quote className="size-3.5" />
+                <Quote className="size-4" />
               </button>
             )}
             {canOpenThread && (
               <button
                 type="button"
                 onClick={() => onOpenThread?.(message)}
-                className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
+                className="inline-flex size-8 items-center justify-center rounded-md transition-colors hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
                 aria-label={t(($) => $.thread.reply)}
                 title={t(($) => $.thread.reply)}
               >
-                <MessageSquare className="size-3.5" />
+                <MessageSquare className="size-4" />
               </button>
             )}
             {canEdit && (
               <button
                 type="button"
                 onClick={handleStartEdit}
-                className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
+                className="inline-flex size-8 items-center justify-center rounded-md transition-colors hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
                 aria-label={t(($) => $.message.edit_action)}
                 title={t(($) => $.message.edit_action)}
               >
-                <Pencil className="size-3.5" />
+                <Pencil className="size-4" />
               </button>
             )}
             {canDelete && (
               <button
                 type="button"
                 onClick={handleDelete}
-                className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:bg-destructive/10 focus-visible:text-destructive"
+                className="inline-flex size-8 items-center justify-center rounded-md transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:bg-destructive/10 focus-visible:text-destructive"
                 aria-label={t(($) => $.message.delete_action)}
                 title={t(($) => $.message.delete_action)}
               >
-                <Trash2 className="size-3.5" />
+                <Trash2 className="size-4" />
               </button>
             )}
           </div>
+        )}
+        {!isEditing && (onReact || onQuote || canOpenThread) && (
+          <button
+            type="button"
+            data-testid="message-mobile-more-trigger"
+            data-message-action-surface="true"
+            onClick={openMobileActions}
+            aria-label={t(($) => $.message.more_actions)}
+            title={t(($) => $.message.more_actions)}
+            className="absolute right-1 top-0.5 z-10 hidden h-11 w-11 items-center justify-center rounded-full text-muted-foreground/50 transition-colors [@media(pointer:coarse)]:flex hover:bg-background/70 hover:text-foreground active:bg-background/70"
+          >
+            <MoreHorizontal className="size-[18px]" />
+          </button>
         )}
         {isEditing ? (
           <MessageInlineEditor
@@ -790,18 +833,14 @@ export function ChannelMessageBubble({
               <div className="mx-auto mb-2 h-1 w-10 rounded-full bg-muted-foreground/25" />
               <div className="flex flex-col gap-1">
                 {onReact && (
-                  <QuickEmojiPicker
-                    onSelect={handleMobileReactionSelect}
-                    align="start"
-                    side="top"
-                    className="h-11 w-full justify-start gap-3 rounded-xl px-3 text-sm text-popover-foreground hover:bg-muted focus-visible:bg-muted"
-                    ariaLabel={t(($) => $.message.add_reaction)}
-                    sideOffset={8}
-                    emojis={quickReactionEmojis}
-                    showMore={false}
-                    contentClassName="rounded-lg border border-border/70 bg-popover/95 shadow-lg ring-0"
-                    label={t(($) => $.message.add_reaction)}
-                  />
+                  <button
+                    type="button"
+                    onClick={openMobileReactionFromActions}
+                    className="inline-flex h-11 items-center gap-3 rounded-xl px-3 text-sm text-popover-foreground transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
+                  >
+                    <SmilePlus className="size-4" />
+                    <span>{t(($) => $.message.add_reaction)}</span>
+                  </button>
                 )}
                 <button
                   type="button"
@@ -842,6 +881,66 @@ export function ChannelMessageBubble({
                   </button>
                 )}
               </div>
+            </div>
+          </dialog>
+        )}
+        {!isEditing && onReact && mobileReactionOpen && (
+          <dialog
+            ref={showMobileReactionDialog}
+            className="fixed inset-0 z-50 m-0 h-dvh max-h-none w-screen max-w-none border-0 bg-transparent p-0 backdrop:bg-black/10 md:hidden"
+            aria-label={t(($) => $.message.add_reaction)}
+            onCancel={(event) => {
+              event.preventDefault();
+              setMobileReactionOpen(false);
+            }}
+            onClose={() => setMobileReactionOpen(false)}
+          >
+            <form method="dialog" className="absolute inset-0">
+              <button
+                type="submit"
+                aria-label={t(($) => $.message.add_reaction)}
+                className="h-full w-full cursor-default"
+              />
+            </form>
+            <div
+              data-testid="mobile-reaction-sheet"
+              data-message-action-surface="true"
+              className="absolute inset-x-0 bottom-0 rounded-t-2xl border-t border-border bg-popover p-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] text-popover-foreground shadow-2xl"
+            >
+              <div className="mx-auto mb-2 h-1 w-10 rounded-full bg-muted-foreground/25" />
+              {mobileReactionShowFull ? (
+                <Suspense
+                  fallback={
+                    <div className="p-4 text-center text-sm text-muted-foreground">
+                      {t(($) => $.message.actions_menu)}
+                    </div>
+                  }
+                >
+                  <FullEmojiPicker onSelect={handleMobileReactionSheetSelect} />
+                </Suspense>
+              ) : (
+                <>
+                  <div className="grid grid-cols-4 gap-2 py-1">
+                    {quickReactionEmojis.map((emoji) => (
+                      <button
+                        key={emoji}
+                        type="button"
+                        onClick={() => handleMobileReactionSheetSelect(emoji)}
+                        className="flex h-11 w-11 items-center justify-center rounded-xl text-xl transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
+                      >
+                        {emoji}
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setMobileReactionShowFull(true)}
+                    className="mt-1 flex h-11 w-full items-center justify-center rounded-xl text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:outline-none"
+                  >
+                    {t(($) => $.message.more_emojis)}
+                  </button>
+                </>
+              )}
             </div>
           </dialog>
         )}

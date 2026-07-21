@@ -46,11 +46,14 @@ describe("AssociatedGroupPicker (#629)", () => {
   it("renders the current group name", () => {
     renderPicker({ channel_id: "g1", channel_name: "Alpha", channel_kind: "group" });
     expect(screen.getByText("Alpha")).toBeInTheDocument();
+    // Full value is kept in `title` so a narrow column can ellipsize without lying (#629 768px).
+    expect(screen.getByRole("button")).toHaveAttribute("title", "Alpha");
   });
 
   it("renders the empty label when there is no association", () => {
     renderPicker(null);
     expect(screen.getByText("No associated group")).toBeInTheDocument();
+    expect(screen.getByRole("button")).toHaveAttribute("title", "No associated group");
   });
 
   it("lists only visible, unarchived group channels and sets on pick", async () => {

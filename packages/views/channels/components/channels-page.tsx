@@ -66,6 +66,7 @@ import {
   useSetChannelTyping,
   useComposerDraftStore,
   useLastSelectedChannelStore,
+  isImmutableSystemChannel,
   type ComposerDraftKey,
 } from "@multica/core/channels";
 import { useAuthStore } from "@multica/core/auth";
@@ -827,13 +828,23 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       channels.find((c) => c.id === activeId) ??
       archivedChannels.find((c) => c.id === activeId) ??
       null;
-    return isMobile ? explicit : (explicit ?? channels[0] ?? null);
+    // #642 — same priority as the auto-select effects: prefer #general over
+    // an arbitrary first channel for the render-time fallback too, so the
+    // very first paint (before those effects commit) doesn't briefly show
+    // the wrong channel.
+    return isMobile
+      ? explicit
+      : (explicit ?? channels.find(isImmutableSystemChannel) ?? channels[0] ?? null);
   }, [channels, archivedChannels, activeId, activeDmId, isMobile]);
   const selectedAgentPanel = useMemo(
     () => (selectedAgentPanelId ? agents.find((agent) => agent.id === selectedAgentPanelId) ?? null : null),
     [agents, selectedAgentPanelId],
   );
   const isActiveArchived = !!active?.archived_at;
+  // #642 — the workspace's system #general channel: immutable, auto-managed
+  // roster (all human members + active workspace-visible agents, synced
+  // server-side), no Settings entry, no invite/remove/archive affordance.
+  const isActiveSystemChannel = active ? isImmutableSystemChannel(active) : false;
   const activeDraftKey = active ? (`channel:${active.id}` as const) : null;
   const activeDraft = activeDraftKey ? (composerDrafts[activeDraftKey]?.content ?? "") : "";
   const activeDraftEmpty = !activeDraft.trim();
@@ -1107,10 +1118,19 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   );
   // Pinned conversations live in the unified PINNED section (Slack-style),
   // not floated to the top of Channels / Direct messages.
-  const unpinnedChannels = useMemo(
-    () => channels.filter((c) => !c.pinned_at),
-    [channels],
-  );
+  //
+  // #642 — the workspace's system #general channel sorts first in the
+  // unpinned list ("fixed first"). If the user pins it, it moves into
+  // PINNED like any other pinned channel instead — `unpinnedChannels`
+  // already excludes pinned entries, so there's no risk of it appearing
+  // twice.
+  const unpinnedChannels = useMemo(() => {
+    const rest = channels.filter((c) => !c.pinned_at);
+    const generalIndex = rest.findIndex(isImmutableSystemChannel);
+    if (generalIndex <= 0) return rest;
+    const general = rest[generalIndex]!;
+    return [general, ...rest.slice(0, generalIndex), ...rest.slice(generalIndex + 1)];
+  }, [channels]);
   const filteredChannels = useMemo(() => {
     const q = search.trim().toLowerCase();
     return q ? unpinnedChannels.filter((c) => c.name.toLowerCase().includes(q)) : unpinnedChannels;
@@ -1135,9 +1155,13 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   );
   const canArchive = useCallback(
     (channel: Channel) =>
-      channel.created_by === currentUserId ||
-      currentUserRole === "owner" ||
-      currentUserRole === "admin",
+      // #642 — the system #general channel is immutable regardless of role;
+      // this is the single capability gate archive AND (today, indirectly
+      // via #576) project-editing both route through, so neither can drift.
+      !isImmutableSystemChannel(channel) &&
+      (channel.created_by === currentUserId ||
+        currentUserRole === "owner" ||
+        currentUserRole === "admin"),
     [currentUserId, currentUserRole],
   );
   // #576 blocker (Iris) — the group-settings Project picker must be gated by
@@ -1202,31 +1226,52 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     setViewportReady(true);
   }, []);
 
+  // Single auto-select decision, computed once per relevant input change
+  // rather than split across two effects that each independently watch
+  // (and one of them writes) `activeId` — the original two-effect shape
+  // triggered react-doctor's chained-state-update / event-in-effect
+  // rules. Both prior cases are preserved as one branch each:
+  //   - the live desktop→mobile viewport TRANSITION still restores a
+  //     selection (matches the historical behavior, guarded by the
+  //     previous/current mobile comparison);
+  //   - the steady-state desktop case still auto-selects once viewport
+  //     and channel data are known and nothing else claimed the slot.
+  // Mobile is otherwise list-first — never auto-open a channel there, or
+  // the list would never be reachable.
+  //
+  // `useIsMobile()` reports `false` on the very first render (its internal
+  // state is still `undefined`) even on a phone, so we can't trust it here
+  // on mount — measure the viewport directly (effects are client-only, so
+  // `window` is always defined) to avoid auto-selecting before the
+  // breakpoint is known.
   useEffect(() => {
     if (!viewportReady) return;
+    // The previous/current mobile snapshot must update on EVERY run where
+    // viewportReady, regardless of whether there's an active selection —
+    // otherwise it goes stale while a channel is selected (Iris: desktop
+    // active → resize to mobile → clear selection/back still on mobile —
+    // without this the stale `previous === false` reads as "just
+    // transitioned to mobile" and wrongly re-grabs #general, breaking
+    // mobile list-first).
     const previous = previousMobileRef.current;
-    if (previous === false && isMobile && !activeId && !activeDmId && channels[0]) {
-      setActiveId(channels[0].id);
-    }
+    const transitionedToMobile = previous === false && isMobile;
     previousMobileRef.current = isMobile;
-  }, [viewportReady, isMobile, activeId, activeDmId, channels]);
-
-  useEffect(() => {
-    // Mobile is list-first — don't auto-open a channel, or the list would never
-    // be reachable. Desktop keeps auto-selecting the first channel.
-    //
-    // `useIsMobile()` reports `false` on the very first render (its internal
-    // state is still `undefined`) even on a phone, so we can't trust it here on
-    // mount. Measure the viewport directly — effects are client-only, so
-    // `window` is always defined — to avoid auto-selecting (and thus forcing the
-    // detail view) before the breakpoint is known.
+    if (activeId || activeDmId) return;
     const onMobileViewport =
       isMobile || (typeof window !== "undefined" && window.innerWidth < 768);
-    if (onMobileViewport) return;
-    // Don't auto-open a group when a DM is the active selection.
-    if (activeDmId) return;
-    if (!activeId && channels[0]) setActiveId(channels[0].id);
-  }, [activeId, activeDmId, channels, isMobile]);
+    if (onMobileViewport && !transitionedToMobile) return;
+    if (!channels[0]) return;
+    // #642 — priority is deep-link > remembered > system #general > first
+    // channel. Deep-link and remembered both already set activeId before
+    // this effect runs (see the route-reconciliation and
+    // restoredBaseChannelId effects above), so reaching here with
+    // `!activeId` means neither fired — prefer #general over an arbitrary
+    // first channel. This is externally-driven default resolution (reacts
+    // to async channel-list load / viewport becoming known), not a chain
+    // of derived state — there's no event handler to move it into.
+    // react-doctor-disable-next-line react-doctor/no-chain-state-updates
+    setActiveId((channels.find(isImmutableSystemChannel) ?? channels[0]).id);
+  }, [viewportReady, isMobile, activeId, activeDmId, channels]);
 
   useEffect(() => {
     if (restoredBaseChannelId) {
@@ -1779,32 +1824,38 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   // remove handler always has a channel id.
   const memberPanelBody = active ? (
     <>
-      <div className="flex border-b">
-        <button
-          type="button"
-          onClick={() => setMemberTab("invite")}
-          className={cn(
-            "flex-1 border-b-2 px-3 py-2 text-sm font-medium transition-colors",
-            memberTab === "invite"
-              ? "border-primary text-foreground"
-              : "border-transparent text-muted-foreground hover:text-foreground",
-          )}
-        >
-          {t(($) => $.members.tab_invite)}
-        </button>
-        <button
-          type="button"
-          onClick={() => setMemberTab("members")}
-          className={cn(
-            "flex-1 border-b-2 px-3 py-2 text-sm font-medium transition-colors",
-            memberTab === "members"
-              ? "border-primary text-foreground"
-              : "border-transparent text-muted-foreground hover:text-foreground",
-          )}
-        >
-          {t(($) => $.members.tab_members)} · {channelMembers.length}
-        </button>
-      </div>
+      {/* #642 — the system #general channel's roster is auto-managed
+          server-side (every workspace member + active workspace-visible
+          agent); there's nothing to invite, so the tab switcher itself
+          would be a dead affordance. Go straight to a read-only list. */}
+      {!isActiveSystemChannel && (
+        <div className="flex border-b">
+          <button
+            type="button"
+            onClick={() => setMemberTab("invite")}
+            className={cn(
+              "flex-1 border-b-2 px-3 py-2 text-sm font-medium transition-colors",
+              memberTab === "invite"
+                ? "border-primary text-foreground"
+                : "border-transparent text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {t(($) => $.members.tab_invite)}
+          </button>
+          <button
+            type="button"
+            onClick={() => setMemberTab("members")}
+            className={cn(
+              "flex-1 border-b-2 px-3 py-2 text-sm font-medium transition-colors",
+              memberTab === "members"
+                ? "border-primary text-foreground"
+                : "border-transparent text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {t(($) => $.members.tab_members)} · {channelMembers.length}
+          </button>
+        </div>
+      )}
       <div className="p-2">
         <div className="relative">
           <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -1816,7 +1867,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
           />
         </div>
       </div>
-      {memberTab === "invite" ? (
+      {memberTab === "invite" && !isActiveSystemChannel ? (
         <>
           <div className="max-h-64 overflow-y-auto px-1.5 pb-1.5">
             {inviteCandidates.length === 0 ? (
@@ -1912,20 +1963,22 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                       <MessageSquare className="size-3.5" />
                     </button>
                   )}
-                  <button
-                    type="button"
-                    onClick={() =>
-                      removeMember.mutate({
-                        channelId: active.id,
-                        memberType: m.member_type,
-                        memberId: m.member_id,
-                      })
-                    }
-                    aria-label={t(($) => $.members.remove_aria)}
-                    className="rounded p-1 text-muted-foreground opacity-0 transition hover:text-destructive group-hover:opacity-100"
-                  >
-                    <X className="size-3.5" />
-                  </button>
+                  {!isActiveSystemChannel && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        removeMember.mutate({
+                          channelId: active.id,
+                          memberType: m.member_type,
+                          memberId: m.member_id,
+                        })
+                      }
+                      aria-label={t(($) => $.members.remove_aria)}
+                      className="rounded p-1 text-muted-foreground opacity-0 transition hover:text-destructive group-hover:opacity-100"
+                    >
+                      <X className="size-3.5" />
+                    </button>
+                  )}
                 </div>
               );
             })
@@ -1954,6 +2007,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       : "";
     const pinned = !!channel.pinned_at;
     const archiveAllowed = canArchive(channel);
+    const isSystemChannel = isImmutableSystemChannel(channel);
     const channelMenuItems = (
       <>
         <ContextMenuItem onClick={() => handleMarkChannelUnread(channel.id)}>
@@ -1968,28 +2022,36 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
           {isMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />}
           {isMuted ? t(($) => $.sidebar.unmute) : t(($) => $.sidebar.mute)}
         </ContextMenuItem>
-        <ContextMenuSeparator />
-        {archiveAllowed ? (
-          <ContextMenuItem onClick={() => setArchiveTarget(channel)}>
-            <Archive className="size-4" />
-            {t(($) => $.sidebar.archive)}
-          </ContextMenuItem>
-        ) : (
-          <Tooltip>
-            <TooltipTrigger>
-              <ContextMenuItem
-                aria-disabled
-                onClick={() => toast.error(t(($) => $.sidebar.archive_permission))}
-                className="opacity-50"
-              >
+        {/* #642 — the system #general channel's archive action doesn't just
+            disable, it disappears entirely (no separator either): a
+            disabled-with-permission-tooltip item would misleadingly imply an
+            owner/admin *could* archive it. */}
+        {!isSystemChannel && (
+          <>
+            <ContextMenuSeparator />
+            {archiveAllowed ? (
+              <ContextMenuItem onClick={() => setArchiveTarget(channel)}>
                 <Archive className="size-4" />
                 {t(($) => $.sidebar.archive)}
               </ContextMenuItem>
-            </TooltipTrigger>
-            <TooltipContent side="right">
-              {t(($) => $.sidebar.archive_permission)}
-            </TooltipContent>
-          </Tooltip>
+            ) : (
+              <Tooltip>
+                <TooltipTrigger>
+                  <ContextMenuItem
+                    aria-disabled
+                    onClick={() => toast.error(t(($) => $.sidebar.archive_permission))}
+                    className="opacity-50"
+                  >
+                    <Archive className="size-4" />
+                    {t(($) => $.sidebar.archive)}
+                  </ContextMenuItem>
+                </TooltipTrigger>
+                <TooltipContent side="right">
+                  {t(($) => $.sidebar.archive_permission)}
+                </TooltipContent>
+              </Tooltip>
+            )}
+          </>
         )}
       </>
     );
@@ -2080,28 +2142,32 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                 {isMuted ? <Bell className="size-4" /> : <BellOff className="size-4" />}
                 {isMuted ? t(($) => $.sidebar.unmute) : t(($) => $.sidebar.mute)}
               </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              {archiveAllowed ? (
-                <DropdownMenuItem onClick={() => setArchiveTarget(channel)}>
-                  <Archive className="size-4" />
-                  {t(($) => $.sidebar.archive)}
-                </DropdownMenuItem>
-              ) : (
-                <Tooltip>
-                  <TooltipTrigger>
-                    <DropdownMenuItem
-                      aria-disabled
-                      onClick={() => toast.error(t(($) => $.sidebar.archive_permission))}
-                      className="opacity-50"
-                    >
+              {!isSystemChannel && (
+                <>
+                  <DropdownMenuSeparator />
+                  {archiveAllowed ? (
+                    <DropdownMenuItem onClick={() => setArchiveTarget(channel)}>
                       <Archive className="size-4" />
                       {t(($) => $.sidebar.archive)}
                     </DropdownMenuItem>
-                  </TooltipTrigger>
-                  <TooltipContent side="left">
-                    {t(($) => $.sidebar.archive_permission)}
-                  </TooltipContent>
-                </Tooltip>
+                  ) : (
+                    <Tooltip>
+                      <TooltipTrigger>
+                        <DropdownMenuItem
+                          aria-disabled
+                          onClick={() => toast.error(t(($) => $.sidebar.archive_permission))}
+                          className="opacity-50"
+                        >
+                          <Archive className="size-4" />
+                          {t(($) => $.sidebar.archive)}
+                        </DropdownMenuItem>
+                      </TooltipTrigger>
+                      <TooltipContent side="left">
+                        {t(($) => $.sidebar.archive_permission)}
+                      </TooltipContent>
+                    </Tooltip>
+                  )}
+                </>
               )}
             </DropdownMenuContent>
           </DropdownMenu>
@@ -2620,25 +2686,30 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                     </PopoverContent>
                   </Popover>
                   {/* #576 — group settings surface, currently just the Project
-                      section. Same Popover pattern as Stats/Files above. */}
-                  <Popover>
-                    <PopoverTrigger
-                      className="flex size-8 items-center justify-center rounded-md transition-colors hover:bg-accent"
-                      aria-label={t(($) => $.header.settings_aria)}
-                    >
-                      <Settings className="size-4" />
-                    </PopoverTrigger>
-                    <PopoverContent align="end" className="w-80">
-                      <p className="mb-3 text-sm font-medium">{t(($) => $.settings.title)}</p>
-                      <ChannelProjectSettingsPanel
-                        wsId={wsId}
-                        projectId={channelProjectId || null}
-                        onChange={(projectId) => setChannelProject.mutate(projectId)}
-                        disabled={!projectEditable}
-                        disabledReason={projectDisabledReason}
-                      />
-                    </PopoverContent>
-                  </Popover>
+                      section. Same Popover pattern as Stats/Files above.
+                      #642 — the system #general channel has no settings to
+                      show (no project binding, immutable), so the entry
+                      point itself is gone, not a disabled/empty panel. */}
+                  {!isActiveSystemChannel && (
+                    <Popover>
+                      <PopoverTrigger
+                        className="flex size-8 items-center justify-center rounded-md transition-colors hover:bg-accent"
+                        aria-label={t(($) => $.header.settings_aria)}
+                      >
+                        <Settings className="size-4" />
+                      </PopoverTrigger>
+                      <PopoverContent align="end" className="w-80">
+                        <p className="mb-3 text-sm font-medium">{t(($) => $.settings.title)}</p>
+                        <ChannelProjectSettingsPanel
+                          wsId={wsId}
+                          projectId={channelProjectId || null}
+                          onChange={(projectId) => setChannelProject.mutate(projectId)}
+                          disabled={!projectEditable}
+                          disabledReason={projectDisabledReason}
+                        />
+                      </PopoverContent>
+                    </Popover>
+                  )}
                 </div>
               </>
             )}
@@ -3090,15 +3161,19 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                   <span className="flex-1">{t(($) => $.files.title)}</span>
                   <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setMobilePanel("settings")}
-                  className="flex min-h-[44px] items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-accent"
-                >
-                  <Settings className="size-5 shrink-0 text-muted-foreground" />
-                  <span className="flex-1">{t(($) => $.settings.title)}</span>
-                  <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
-                </button>
+                {/* #642 — no settings row for the system #general channel;
+                    same reasoning as the desktop Popover trigger. */}
+                {!isActiveSystemChannel && (
+                  <button
+                    type="button"
+                    onClick={() => setMobilePanel("settings")}
+                    className="flex min-h-[44px] items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-accent"
+                  >
+                    <Settings className="size-5 shrink-0 text-muted-foreground" />
+                    <span className="flex-1">{t(($) => $.settings.title)}</span>
+                    <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+                  </button>
+                )}
               </div>
             )}
 

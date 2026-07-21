@@ -17,7 +17,7 @@ import (
 
 const (
 	L3ReviewPromptVersion     = "memory-curation-l3-v1"
-	defaultL3ReviewTimeout    = 30 * time.Second
+	defaultL3ReviewTimeout    = 10 * time.Minute
 	defaultL3ReviewMaxEntries = 20
 	maxL3ReviewInputBodyBytes = 8 * 1024
 	maxL3ReviewOutputBytes    = 64 * 1024

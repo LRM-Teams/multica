@@ -58,7 +58,11 @@ const (
 	DefaultGCArtifactTTL            = 12 * time.Hour // 12h — drop regenerable artifacts on completed but still-open issues
 	DefaultAutoUpdateCheckInterval  = 6 * time.Hour  // how often the daemon polls GitHub for a newer CLI release
 	DefaultSharedSkillsSyncInterval = 60 * time.Second
-	DefaultMemoryCurationRunTimeout = 10 * time.Minute
+	DefaultMemoryCurationRunTimeout       = 10 * time.Minute
+	// DefaultMemoryCurationL3ReviewTimeout is the per-invocation wall clock for
+	// the curator agent (self-review / team curation / L3). 30s was too short
+	// for Cursor/Codex team curation over multiple agents and evidence.
+	DefaultMemoryCurationL3ReviewTimeout = 10 * time.Minute
 	DefaultGrokPersistentIdleTTL    = 15 * time.Minute
 	DefaultPiPersistentIdleTTL      = 15 * time.Minute
 )
@@ -507,7 +511,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 			return Config{}, fmt.Errorf("MULTICA_DAEMON_MEMORY_CURATION_L3_REVIEW_ENABLED: invalid boolean %q", v)
 		}
 	}
-	memoryCurationL3ReviewTimeout := 30 * time.Second
+	memoryCurationL3ReviewTimeout := DefaultMemoryCurationL3ReviewTimeout
 	if v := strings.TrimSpace(os.Getenv("MEMORY_CURATION_L3_REVIEW_TIMEOUT_SECONDS")); v != "" {
 		seconds, parseErr := strconv.Atoi(v)
 		if parseErr != nil || seconds <= 0 {

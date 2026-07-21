@@ -113,6 +113,35 @@ describe("activityPresentation — tool normalization", () => {
     ["grep", "searching_code"],
     ["rg", "searching_code"],
     ["web_search", "searching_web"],
+    // #601 — the rest of the canonical Raft CLI family.
+    ["check_messages", "checking_messages"],
+    ["receive_message", "checking_messages"], // shares check_messages' label
+    ["wait_for_message", "waiting_for_message"],
+    ["read_history", "reading_history"],
+    ["search_messages", "searching_messages"],
+    ["list_server", "listing_server"],
+    ["list_tasks", "listing_tasks"],
+    ["create_tasks", "creating_tasks"],
+    ["claim_tasks", "claiming_task"],
+    ["unclaim_task", "unclaiming_task"],
+    ["update_task_status", "updating_task_status"],
+    ["add_channel_member", "adding_channel_member"],
+    ["join_channel", "joining_channel"],
+    ["leave_channel", "leaving_channel"],
+    ["upload_file", "uploading_file"],
+    ["view_file", "viewing_file"],
+    ["list_issues", "listing_issues"],
+    ["get_issue", "getting_issue"],
+    ["search_issues", "searching_issues"],
+    ["list_issue_comments", "listing_issue_comments"],
+    ["comment_issue", "commenting_issue"],
+    ["delete_issue_comment", "deleting_issue_comment"],
+    ["todo_write", "updating_tasks"],
+    ["schedule_reminder", "scheduling_reminder"],
+    ["list_reminders", "listing_reminders"],
+    ["cancel_reminder", "canceling_reminder"],
+    ["collab_tool_call", "collaborating"],
+    ["web_fetch", "fetching_url"],
   ];
 
   it.each(cases)("normalizes provider slug %s to labelKey %s", (tool, labelKey) => {
@@ -120,13 +149,12 @@ describe("activityPresentation — tool normalization", () => {
   });
 
   it("never leaks a raw slug for an unknown provider tool (projection stays label-safe)", () => {
-    // An un-mapped tool never reaches the user-facing timeline (see
-    // isNarrativeActivityEvent filter below); if the projection is ever invoked
-    // it still yields the neutral union labelKey, never the raw slug.
+    // An un-mapped tool now reaches the timeline (#601) via the generic,
+    // safe "Performing an action" fallback — never the raw slug, never a
+    // fabricated subtext.
     const p = activityPresentation(toolEvent("some_mystery_tool"));
-    expect(p.labelKey).toBe("working");
-    // labelKey is a fixed union; the raw slug must not leak via subtext either.
-    expect(p.subtext ?? "").not.toContain("mystery");
+    expect(p.labelKey).toBe("performing_action");
+    expect(p.subtext).toBeUndefined();
   });
 
   it("never uses the raw tool slug as subtext when no safe tool_target is present", () => {
@@ -196,12 +224,12 @@ describe("activityPresentation — mention markdown in narrative subtext (#387)"
   });
 });
 
-describe("isNarrativeActivityEvent — un-mapped tool filter (#384)", () => {
-  // A tool_call only enters the user-facing timeline when its slug maps to a
-  // canonical Raft action. An un-mapped tool (BE didn't canonicalize it, or a
-  // parse artifact like a status leaking into `tool`) is dropped — no fake
-  // "Working" row, no raw slug. The source-side fix is a BE `unmapped_tool_name`
-  // gap event; the FE just refuses to render the un-mapped row.
+describe("isNarrativeActivityEvent — tool_call always narrative (#601, was #384's un-mapped filter)", () => {
+  // Every tool_call now reaches the mainline. A canonical tool gets its real
+  // gerund label; an un-mapped tool (BE didn't canonicalize it, or a parse
+  // artifact like a status leaking into `tool`) still shows, via the generic
+  // "Performing an action" fallback — never faked as "Working", never the raw
+  // slug, and never silently dropped (Parker: "unknown 不静默丢").
   it("keeps a mapped tool_call in the narrative", () => {
     expect(isNarrativeActivityEvent(toolEvent("bash"))).toBe(true);
     expect(isNarrativeActivityEvent(toolEvent("read_file"))).toBe(true);
@@ -218,11 +246,13 @@ describe("isNarrativeActivityEvent — un-mapped tool filter (#384)", () => {
     expect(p.subtextKind).toBe("path"); // basename-preserving path, NOT a command clip
   });
 
-  it("drops an un-mapped tool_call from the narrative", () => {
-    expect(isNarrativeActivityEvent(toolEvent("some_mystery_tool"))).toBe(false);
-    // A status string leaking into `tool` (parse artifact) is also un-mapped.
-    expect(isNarrativeActivityEvent(toolEvent("running"))).toBe(false);
-    expect(isNarrativeActivityEvent(toolEvent(""))).toBe(false);
+  it("keeps an un-mapped tool_call in the narrative — as the generic fallback, not dropped", () => {
+    expect(isNarrativeActivityEvent(toolEvent("some_mystery_tool"))).toBe(true);
+    // A status string leaking into `tool` (parse artifact) is also un-mapped,
+    // but still shows — as "Performing an action", never as that raw string.
+    expect(isNarrativeActivityEvent(toolEvent("running"))).toBe(true);
+    expect(isNarrativeActivityEvent(toolEvent(""))).toBe(true);
+    expect(activityPresentation(toolEvent("some_mystery_tool")).labelKey).toBe("performing_action");
   });
 
   it("drops raft diagnostic kinds (internal_progress / runtime_diagnostic) from the mainline", () => {

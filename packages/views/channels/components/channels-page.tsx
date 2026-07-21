@@ -1245,12 +1245,20 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   // `window` is always defined) to avoid auto-selecting before the
   // breakpoint is known.
   useEffect(() => {
-    if (!viewportReady || activeId || activeDmId) return;
+    if (!viewportReady) return;
+    // The previous/current mobile snapshot must update on EVERY run where
+    // viewportReady, regardless of whether there's an active selection —
+    // otherwise it goes stale while a channel is selected (Iris: desktop
+    // active → resize to mobile → clear selection/back still on mobile —
+    // without this the stale `previous === false` reads as "just
+    // transitioned to mobile" and wrongly re-grabs #general, breaking
+    // mobile list-first).
     const previous = previousMobileRef.current;
-    const onMobileViewport =
-      isMobile || (typeof window !== "undefined" && window.innerWidth < 768);
     const transitionedToMobile = previous === false && isMobile;
     previousMobileRef.current = isMobile;
+    if (activeId || activeDmId) return;
+    const onMobileViewport =
+      isMobile || (typeof window !== "undefined" && window.innerWidth < 768);
     if (onMobileViewport && !transitionedToMobile) return;
     if (!channels[0]) return;
     // #642 — priority is deep-link > remembered > system #general > first

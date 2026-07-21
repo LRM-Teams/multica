@@ -333,6 +333,41 @@ describe("ChannelsPage — system #general channel (#642)", () => {
     expect(replaceSpy).not.toHaveBeenCalled();
   });
 
+  it("desktop active → resize to mobile → back to list stays list, not re-grabbed by #general (Iris timing fix)", async () => {
+    // The merged auto-select effect must sync its previous/current mobile
+    // snapshot on EVERY run, not only when there's no active selection —
+    // otherwise the snapshot goes stale while a channel is selected, and
+    // clearing the selection afterward misreads as a fresh
+    // desktop→mobile transition and wrongly re-grabs #general.
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
+    });
+    const page = (channelId?: string) => (
+      <I18nProvider locale="en" resources={{ en: { common: enCommon, channels: enChannels } }}>
+        <QueryClientProvider client={qc}>
+          <ChannelsPage channelId={channelId} />
+        </QueryClientProvider>
+      </I18nProvider>
+    );
+    const { rerender } = render(page("chan-random"));
+    await waitFor(() => {
+      expect(screen.getByTestId("active-title")).toHaveTextContent("random");
+    });
+
+    // Resize to mobile while chan-random is still the active selection.
+    mobileViewport.value = true;
+    rerender(page("chan-random"));
+    await waitFor(() => {
+      expect(screen.getByTestId("active-title")).toHaveTextContent("random");
+    });
+
+    // "Back to list" — clears the selection client-side, same instance,
+    // no remount (mobileBackToList).
+    fireEvent.click(screen.getByLabelText("Back"));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(screen.queryByTestId("active-title")).not.toBeInTheDocument();
+  });
+
   it("desktop still falls back to the first channel when no system channel exists at all", async () => {
     channelsFixture.current = DEFAULT_CHANNELS.filter((c) => c.system_key !== "general");
     renderPage();

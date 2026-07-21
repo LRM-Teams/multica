@@ -960,6 +960,98 @@ func TestTaskMessageActivityTimelineEvent_MappedRealtimeCommandKeepsSemanticEntr
 	}
 }
 
+func TestTaskMessageActivityTimelineEvent_CheckMessagesHidesOnlyTransportCommand(t *testing.T) {
+	h := &Handler{}
+	taskID := parseUUID("77777777-7777-7777-7777-777777777777")
+	task := db.AgentTaskQueue{
+		ID:      taskID,
+		AgentID: parseUUID("88888888-8888-8888-8888-888888888888"),
+		Status:  "running",
+	}
+	tests := []struct {
+		name        string
+		messageID   string
+		rawTool     string
+		command     string
+		wantTool    string
+		wantCommand bool
+	}{
+		{
+			name:      "inbox polling is semantic only",
+			messageID: "90000000-0000-0000-0000-000000000001",
+			command:   "raft message check",
+			wantTool:  "check_messages",
+		},
+		{
+			name:      "receive alias is semantic only",
+			messageID: "90000000-0000-0000-0000-000000000002",
+			rawTool:   "receive_message",
+			command:   "raft message receive",
+			wantTool:  "receive_message",
+		},
+		{
+			name:      "wait alias is semantic only",
+			messageID: "90000000-0000-0000-0000-000000000003",
+			rawTool:   "wait_for_message",
+			command:   "raft message wait",
+			wantTool:  "wait_for_message",
+		},
+		{
+			name:        "issue list keeps its real command",
+			messageID:   "90000000-0000-0000-0000-000000000004",
+			command:     "multica issue list --mine --output json",
+			wantTool:    "list_issues",
+			wantCommand: true,
+		},
+		{
+			name:        "ordinary shell keeps its real command",
+			messageID:   "90000000-0000-0000-0000-000000000005",
+			command:     "printf 'TASK601_LIVE'",
+			wantTool:    "bash",
+			wantCommand: true,
+		},
+		{
+			name:        "message send keeps its real command",
+			messageID:   "90000000-0000-0000-0000-000000000006",
+			command:     "multica message send --target dm:@andong3 --message-stdin",
+			wantTool:    "send_message",
+			wantCommand: true,
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rawTool := tt.rawTool
+			if rawTool == "" {
+				rawTool = "shell"
+			}
+			message := db.TaskMessage{
+				ID:         parseUUID(tt.messageID),
+				TaskID:     taskID,
+				Seq:        int32(i + 1),
+				Type:       "tool_use",
+				Tool:       pgtype.Text{String: rawTool, Valid: true},
+				Input:      []byte(fmt.Sprintf(`{"command":%q}`, tt.command)),
+				CreatedAt:  pgtype.Timestamptz{Time: time.Unix(1_700_000_100+int64(i), 0), Valid: true},
+				Visibility: "user_facing",
+			}
+
+			event := h.taskMessageActivityTimelineEvent(context.Background(), "", task, message)
+			if event == nil || event.Tool == nil || *event.Tool != tt.wantTool || len(event.Entries) != 1 {
+				t.Fatalf("event = %+v, want one %q entry", event, tt.wantTool)
+			}
+			gotCommand := event.Entries[0].Command
+			if tt.wantCommand {
+				if gotCommand == nil || *gotCommand != tt.command {
+					t.Fatalf("command = %v, want %q", gotCommand, tt.command)
+				}
+			} else if gotCommand != nil {
+				t.Fatalf("transport command leaked into narrative entry: %q", *gotCommand)
+			}
+		})
+	}
+}
+
 func TestAgentActivitySafeToolTargetForTool_FileToolsUseSourceBackedPath(t *testing.T) {
 	tests := []struct {
 		name string

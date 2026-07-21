@@ -53,10 +53,12 @@ export function WindyCreateAgentLink({
             name,
             description: url.searchParams.get("description")?.trim() || "",
             instructions: url.searchParams.get("instructions")?.trim() || "",
-            // #451: only an explicit avatar_url from the link is persisted; no
-            // machine default. An unset avatar renders a deterministic pool
-            // photo at display time, never a stored value.
-            avatar_url: url.searchParams.get("avatar_url") || undefined,
+            // #599: a link's `avatar_url` query param is fully client-
+            // controlled (anyone who can post a message can craft one) and
+            // was getting persisted onto the draft row, then promoted to a
+            // real agent as trusted `assigned` avatar via draft_id — a raw
+            // URL bypass of the avatar_selection contract. Never forward it;
+            // the created agent gets the server's concrete assigned default.
             visibility: url.searchParams.get("visibility") === "workspace" ? "workspace" : "private",
             project_id: url.searchParams.get("project_id") || null,
             channel_id: url.searchParams.get("channel_id") || null,

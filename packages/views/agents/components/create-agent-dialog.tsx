@@ -101,12 +101,13 @@ export function CreateAgentDialog({
   const [thinkingLevel, setThinkingLevel] = useState(template?.thinking_level ?? "");
   const [instructions, setInstructions] = useState(template?.instructions ?? draft?.instructions ?? "");
   // #599: avatar is server-owned provenance now. Duplicate never inherits
-  // the template's avatar (a clone gets its own fresh assigned default,
-  // not a copy) — only a draft's server-suggested preview seeds anything,
-  // and even that is preview-only: submit omits avatar_selection unless
-  // the user actively picks/uploads their own, letting the server resolve
-  // the draft's suggestion via the trusted draft_id instead of a raw URL.
-  const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | null>(draft?.avatar_url ?? null);
+  // the template's avatar (a clone gets its own fresh assigned default, not
+  // a copy). A draft's `avatar_url` is never seeded either: it's a raw,
+  // client-writable field promotion no longer honors (Parker's provenance
+  // ruling — showing it here would promise an avatar the agent won't
+  // actually get). The dialog always starts blank; submit only ever sends
+  // avatar_selection when the user actively picks/uploads their own.
+  const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | null>(null);
   // Never rendered — only read at submit time — so a ref avoids a redraw
   // on every avatar change.
   const avatarSelectionRef = useRef<AgentAvatarSelection | null>(null);

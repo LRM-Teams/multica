@@ -1616,13 +1616,13 @@ func (h *Handler) taskMessageActivityTimelineEvent(ctx context.Context, workspac
 		}
 		if known {
 			details["tool"] = canonicalTool
+			agentActivityApplyToolSourceFacts(details, rawTool, canonicalTool, input)
 		} else {
 			details["unmapped_tool_name"] = rawTool
 		}
 		if canonicalTool != rawTool {
 			details["raw_tool"] = rawTool
 		}
-		agentActivityApplyToolSourceFacts(details, rawTool, canonicalTool, input)
 	}
 	if target, summaryKind := taskMessageActivityToolTarget(message); target != "" {
 		details["tool_target"] = target
@@ -1700,8 +1700,8 @@ func agentActivityTimelineEvent(row agentActivityRawRow, targetRef AgentActivity
 	input := mapFromMap(details, "input")
 	tool := stringPtrFromMap(details, "tool")
 	cliResolved := false
-	unknownTool := false
-	if tool != nil {
+	unknownTool := strings.TrimSpace(stringFromMap(details, "unmapped_tool_name")) != ""
+	if tool != nil && !unknownTool {
 		canonical, known := taskMessageCanonicalToolName(*tool, input)
 		if cli, ok := resolveRaftCLIInvocation(canonical, input); ok {
 			cliResolved = true
@@ -1714,17 +1714,24 @@ func agentActivityTimelineEvent(row agentActivityRawRow, targetRef AgentActivity
 		if known {
 			tool = &canonical
 		} else {
-			// The narrative API deliberately withholds unknown provider names.
-			// The UI renders a generic activity row; raw diagnostics stay on the
-			// explicit diagnostic surface instead of leaking into the main line.
 			unknownTool = true
-			tool = nil
-			delete(details, "tool_target")
-			delete(details, "summary_kind")
-			delete(details, "command")
 		}
 	}
-	if !unknownTool {
+	if unknownTool {
+		// Unknown tools have two persisted shapes: historical rows carry the raw
+		// name in details.tool, while realtime task-message rows carry the
+		// diagnostic-only details.unmapped_tool_name marker. Collapse both before
+		// any narrative entry is generated so source facts, status, or raw names
+		// cannot be projected back into the user-facing event.
+		tool = nil
+		for _, key := range []string{
+			"tool", "raw_tool", "unmapped_tool_name", "tool_target", "summary_kind",
+			"command", "input", "path", "file_path", "filePath", "filepath",
+			"query", "pattern", "scope", "cwd", "basePath",
+		} {
+			delete(details, key)
+		}
+	} else {
 		if command := redactedCommandFromInput(input); command != "" && details["command"] == nil {
 			details["command"] = command
 		}
@@ -1736,6 +1743,16 @@ func agentActivityTimelineEvent(row agentActivityRawRow, targetRef AgentActivity
 		}
 	}
 	detailKind := agentActivityDetailKind(row.EventType)
+	status := textToPtr(row.Status)
+	text := textToPtr(row.Message)
+	reasonCode := textOrDefault(row.ReasonCode, "")
+	entries := agentActivityTimelineEntries(row, details, tool)
+	if unknownTool {
+		status = nil
+		text = nil
+		reasonCode = ""
+		entries = nil
+	}
 	return AgentActivityTimelineEvent{
 		ID:           uuidToString(row.ID),
 		AgentID:      uuidToString(row.AgentID),
@@ -1747,13 +1764,13 @@ func agentActivityTimelineEvent(row agentActivityRawRow, targetRef AgentActivity
 		DetailKind:   detailKind,
 		OccurredAt:   timestampToString(row.CreatedAt),
 		Visibility:   textOrDefault(row.Visibility, "user_facing"),
-		Text:         textToPtr(row.Message),
+		Text:         text,
 		Tool:         tool,
 		ToolTarget:   stringPtrFromMap(details, "tool_target"),
-		Status:       textToPtr(row.Status),
-		ReasonCode:   textOrDefault(row.ReasonCode, ""),
+		Status:       status,
+		ReasonCode:   reasonCode,
 		Details:      agentActivityTimelinePublicDetails(detailKind, details),
-		Entries:      agentActivityTimelineEntries(row, details, tool),
+		Entries:      entries,
 		TargetRef:    targetRef,
 		SourceRefs:   agentActivitySourceRefs(row),
 	}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -838,6 +839,12 @@ func TestAgentActivityTimelineEvent_UnknownToolDoesNotLeakRawDiagnostics(t *test
 		ID:      parseUUID("11111111-1111-1111-1111-111111111111"),
 		AgentID: parseUUID("22222222-2222-2222-2222-222222222222"),
 		Kind:    activityKindToolCall,
+		Status:  pgtype.Text{String: "running", Valid: true},
+		Message: pgtype.Text{String: "raw provider status", Valid: true},
+		ReasonCode: pgtype.Text{
+			String: "unmapped_tool_name",
+			Valid:  true,
+		},
 		Details: []byte(`{
 			"tool":"future_provider_action",
 			"tool_target":"private-target",
@@ -853,8 +860,8 @@ func TestAgentActivityTimelineEvent_UnknownToolDoesNotLeakRawDiagnostics(t *test
 	if event.Tool != nil {
 		t.Fatalf("unknown provider tool leaked into narrative tool field: %q", *event.Tool)
 	}
-	if event.ToolTarget != nil || len(event.Entries) != 0 {
-		t.Fatalf("unknown provider diagnostics leaked into narrative fields: target=%v entries=%+v", event.ToolTarget, event.Entries)
+	if event.ToolTarget != nil || event.Status != nil || event.Text != nil || event.ReasonCode != "" || len(event.Entries) != 0 {
+		t.Fatalf("unknown provider diagnostics leaked into narrative fields: target=%v status=%v text=%v reason=%q entries=%+v", event.ToolTarget, event.Status, event.Text, event.ReasonCode, event.Entries)
 	}
 	encoded, err := json.Marshal(event)
 	if err != nil {
@@ -866,12 +873,90 @@ func TestAgentActivityTimelineEvent_UnknownToolDoesNotLeakRawDiagnostics(t *test
 		"private-target",
 		"summary_kind",
 		"precomputed private command",
+		"raw provider status",
+		"unmapped_tool_name",
 		"curl https://private.example",
 		"sk_agent_",
 	} {
 		if strings.Contains(string(encoded), forbidden) {
 			t.Fatalf("unknown diagnostic %q leaked into narrative event: %s", forbidden, encoded)
 		}
+	}
+}
+
+func TestTaskMessageActivityTimelineEvent_UnmappedRealtimeToolUsesOnlyGenericNarrative(t *testing.T) {
+	h := &Handler{}
+	taskID := parseUUID("11111111-1111-1111-1111-111111111111")
+	agentID := parseUUID("22222222-2222-2222-2222-222222222222")
+	task := db.AgentTaskQueue{
+		ID:      taskID,
+		AgentID: agentID,
+		Status:  "running",
+	}
+	message := db.TaskMessage{
+		ID:     parseUUID("33333333-3333-3333-3333-333333333333"),
+		TaskID: taskID,
+		Seq:    7,
+		Type:   "tool_use",
+		Tool:   pgtype.Text{String: "future_provider_action", Valid: true},
+		Input: []byte(`{
+			"command":"curl https://private.example/?token=sk_agent_should_not_leak",
+			"path":"/private/realtime-target"
+		}`),
+		CreatedAt:  pgtype.Timestamptz{Time: time.Unix(1_700_000_000, 0), Valid: true},
+		Visibility: "user_facing",
+	}
+
+	event := h.taskMessageActivityTimelineEvent(context.Background(), "", task, message)
+	if event == nil {
+		t.Fatal("realtime builder returned nil event")
+	}
+	if event.Tool != nil || event.ToolTarget != nil || event.Status != nil || event.Text != nil || event.ReasonCode != "" || len(event.Entries) != 0 {
+		t.Fatalf("unmapped realtime tool must serialize as generic narrative only: %+v", event)
+	}
+	encoded, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("marshal realtime event: %v", err)
+	}
+	for _, forbidden := range []string{
+		"future_provider_action",
+		"unmapped_tool_name",
+		"private/realtime-target",
+		"curl https://private.example",
+		"sk_agent_",
+		"running",
+	} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("unmapped realtime diagnostic %q leaked into narrative event: %s", forbidden, encoded)
+		}
+	}
+}
+
+func TestTaskMessageActivityTimelineEvent_MappedRealtimeCommandKeepsSemanticEntry(t *testing.T) {
+	h := &Handler{}
+	taskID := parseUUID("44444444-4444-4444-4444-444444444444")
+	task := db.AgentTaskQueue{
+		ID:      taskID,
+		AgentID: parseUUID("55555555-5555-5555-5555-555555555555"),
+		Status:  "running",
+	}
+	message := db.TaskMessage{
+		ID:         parseUUID("66666666-6666-6666-6666-666666666666"),
+		TaskID:     taskID,
+		Seq:        8,
+		Type:       "tool_use",
+		Tool:       pgtype.Text{String: "bash", Valid: true},
+		Input:      []byte(`{"command":"multica issue list --mine --output json"}`),
+		CreatedAt:  pgtype.Timestamptz{Time: time.Unix(1_700_000_001, 0), Valid: true},
+		Visibility: "user_facing",
+	}
+
+	event := h.taskMessageActivityTimelineEvent(context.Background(), "", task, message)
+	if event == nil || event.Tool == nil || *event.Tool != "list_issues" {
+		t.Fatalf("mapped realtime CLI command lost semantic tool: %+v", event)
+	}
+	if event.Status == nil || *event.Status != "running" || len(event.Entries) != 1 || event.Entries[0].Tool == nil || *event.Entries[0].Tool != "list_issues" {
+		t.Fatalf("mapped realtime CLI command lost status/entry projection: %+v", event)
 	}
 }
 

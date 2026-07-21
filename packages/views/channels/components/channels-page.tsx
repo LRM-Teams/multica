@@ -1004,6 +1004,21 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const { uploadWithToast } = useFileUpload(api);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const threadFileInputRef = useRef<HTMLInputElement | null>(null);
+  // #576 — the mobile "..." Drawer's Settings tab (LRM-210's
+  // `ChannelDetailsPanel`, `variant="page"`) hosts the project picker's own
+  // dropdown (a Base UI Menu, portaled to `document.body` by default). The
+  // Drawer is a modal Vaul/Radix Dialog that locks background interaction by
+  // setting `body.style.pointerEvents = "none"` and re-enabling
+  // `pointer-events: auto` only on its own content node — a menu portaled to
+  // `document.body` is a DOM sibling of that content, not a descendant, so
+  // it inherits the lock and becomes unclickable. Passing this ref down as
+  // `ChannelDetailsPanel`'s `portalContainer` — which it attaches to its own
+  // Settings-tab wrapper node inside `DrawerContent` and forwards to
+  // `ChannelProjectSettingsPanel` — nests the picker's popup inside the
+  // already-unlocked subtree. Left unset for the desktop docked
+  // `ChannelDetailsPanel` (`variant="panel"`), which isn't inside a modal
+  // Dialog, so the default `document.body` portal is fine there.
+  const mobileSettingsDrawerBodyRef = useRef<HTMLDivElement | null>(null);
 
   const uploadForActiveChannel = useCallback(
     async (file: File) => {
@@ -3123,6 +3138,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                 initialTab={mobilePanel}
                 variant="page"
                 onClose={() => setMobilePanel(null)}
+                portalContainer={mobileSettingsDrawerBodyRef}
               />
             ) : null}
           </DrawerContent>

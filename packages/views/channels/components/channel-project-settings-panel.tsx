@@ -1,5 +1,6 @@
 "use client";
 
+import type { ComponentProps } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { projectListOptions } from "@multica/core/projects/queries";
 import { ProjectPickerButton } from "../../common/project-picker-button";
@@ -25,6 +26,7 @@ export function ChannelProjectSettingsPanel({
   onChange,
   disabled,
   disabledReason,
+  portalContainer,
 }: {
   wsId: string;
   projectId: string | null;
@@ -34,6 +36,15 @@ export function ChannelProjectSettingsPanel({
    * plain member or an archived channel gets an honest reason, not just a
    * greyed-out icon. */
   disabledReason?: string;
+  /**
+   * DOM node (or ref) to portal the project picker's dropdown into. Needed
+   * when this panel is hosted inside a modal Drawer (the mobile "..." more
+   * menu's Group Settings sub-page, #576) — see `ProjectPickerButton`'s
+   * `portalContainer` doc. Left undefined on desktop, where the panel isn't
+   * nested in a modal overlay and the default `document.body` portal is
+   * fine.
+   */
+  portalContainer?: ComponentProps<typeof ProjectPickerButton>["portalContainer"];
 }) {
   const { t } = useT("channels");
   const { data: projects = [] } = useQuery(projectListOptions(wsId));
@@ -59,6 +70,7 @@ export function ChannelProjectSettingsPanel({
               label={t(($) => $.composer.project_label)}
               noneLabel={t(($) => $.composer.project_none)}
               tooltip={reason ?? t(($) => $.composer.project_tooltip)}
+              portalContainer={portalContainer}
             />
           </div>
         </PropRow>

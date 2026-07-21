@@ -25,19 +25,31 @@ function DropdownMenuContent({
   sideOffset = 4,
   className,
   onClick,
+  container,
   ...props
 }: MenuPrimitive.Popup.Props &
   Pick<
     MenuPrimitive.Positioner.Props,
     "align" | "alignOffset" | "side" | "sideOffset"
-  >) {
+  > &
+  // Lets a caller nest this menu's portal inside another overlay's own DOM
+  // boundary instead of the default `document.body` — needed when the
+  // trigger lives inside a modal Vaul/Radix Dialog (e.g. the mobile Group
+  // Settings Drawer, #576): a modal Dialog locks background interaction by
+  // setting `body.style.pointerEvents = "none"` and re-enabling
+  // `pointer-events: auto` only on its own content node. A menu portaled to
+  // `document.body` (a sibling of the Dialog's portal, not a descendant of
+  // its content) inherits that lock and becomes unclickable. Passing the
+  // Dialog's content node (or a ref to it) as `container` makes the menu's
+  // popup a DOM descendant of the already-unlocked content instead.
+  Pick<MenuPrimitive.Portal.Props, "container">) {
   // Stop click events from bubbling out of the menu. Base UI portals the
   // popup so DOM is detached, but React's synthetic event system still
   // bubbles through the React component tree — without this, clicking a
   // menu item inside a row that's wrapped in <a> (agent / runtime list
   // rows) would ALSO fire the row's onClick → unintended navigation.
   return (
-    <MenuPrimitive.Portal>
+    <MenuPrimitive.Portal container={container}>
       <MenuPrimitive.Positioner
         className="isolate z-50 outline-none"
         align={align}

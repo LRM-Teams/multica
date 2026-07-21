@@ -1,5 +1,6 @@
 "use client";
 
+import type { ComponentProps } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { FolderGit2 } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
@@ -28,6 +29,13 @@ interface ProjectPickerButtonProps {
   noneLabel: string;
   /** Tooltip shown when nothing is bound. */
   tooltip: string;
+  /**
+   * DOM node (or ref) to portal the dropdown's popup into, instead of the
+   * default `document.body`. Required when this button is hosted inside a
+   * modal Drawer/Dialog — see the `container` doc on
+   * `@multica/ui/components/ui/dropdown-menu`'s `DropdownMenuContent`.
+   */
+  portalContainer?: ComponentProps<typeof DropdownMenuContent>["container"];
 }
 
 /**
@@ -47,6 +55,7 @@ export function ProjectPickerButton({
   label,
   noneLabel,
   tooltip,
+  portalContainer,
 }: ProjectPickerButtonProps) {
   const { data: projects = [] } = useQuery(projectListOptions(wsId));
 
@@ -76,7 +85,12 @@ export function ProjectPickerButton({
       >
         <FolderGit2 />
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" side="top" className="min-w-48 max-w-64">
+      <DropdownMenuContent
+        align="end"
+        side="top"
+        className="min-w-48 max-w-64"
+        container={portalContainer}
+      >
         <DropdownMenuGroup>
           <DropdownMenuLabel>{label}</DropdownMenuLabel>
         </DropdownMenuGroup>

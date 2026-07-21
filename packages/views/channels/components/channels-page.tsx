@@ -111,7 +111,7 @@ import {
   DrawerHeader,
   DrawerTitle,
 } from "@multica/ui/components/ui/drawer";
-import { useIsMobile, useIsNarrowerThan } from "@multica/ui/hooks/use-mobile";
+import { useIsMobile, useContainerNarrowerThan } from "@multica/ui/hooks/use-mobile";
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -223,15 +223,32 @@ const EMPTY_ACTIVE_TASKS: ChannelActiveTask[] = [];
 const STOPPING_ALL_TASKS_ID = "__all__";
 // #568 — below this, the two-pane desktop layout's detail header doesn't
 // reliably have room for the full action-icon row (member cluster + invite +
-// search/share/stats/files/settings): the list rail (~280px default) plus
-// the title's own minimum width eat into the detail pane faster than the
-// icon row shrinks (it doesn't — shrink-0 by design), so the row overflows
-// past the viewport with no way to reach the rightmost icons (measured: still
-// overflowing at 1024/1100, first reliably fitting around 1200-1300). This is
-// independent of MOBILE_BREAKPOINT (768, in `useIsMobile`), which governs the
-// single-pane list↔detail switch — that's a much bigger UX change than "the
-// icon row needs a collapse menu" and isn't warranted just to fix this.
-const HEADER_ACTIONS_COMPACT_BREAKPOINT = 1200;
+// search/share/stats/files/settings): the row is all `shrink-0`, so it never
+// yields space back to the truncating title, and it overflows with no way to
+// reach the rightmost icons.
+//
+// This is a CONTAINER width, not a viewport width — see
+// `useContainerNarrowerThan` (packages/ui/hooks/use-mobile.ts). A design/
+// product review blocker on the original fix caught that gating this on
+// `window.innerWidth` is wrong for a resizable two-pane layout: dragging the
+// list↔detail divider changes the detail pane's actual width independently
+// of the viewport, in both directions (a wide viewport with a
+// dragged-narrow detail pane still overflows; a narrower viewport with a
+// wide detail pane doesn't need to collapse). Measuring the detail pane's
+// own rendered box (via the `detailHeaderContainerRef` attached to
+// `channelConversationPane`'s `<main>` below) fixes both, and as a side
+// effect also reacts correctly to a right-side thread/settings panel
+// squeezing the same container further.
+//
+// Value: carried over from the original fix's viewport-based measurement
+// (live agent-browser: overflow persisted through detail-pane-implying
+// viewports up to ~1200-1300, with the default 280px list rail open) minus
+// the default list-rail width and resizable-handle chrome, converted to a
+// direct container-width threshold. This is an engineering estimate, not
+// independently re-measured live against the container signal — flag for a
+// live-device pixel check on the actual overflow point of the icon row's
+// natural width if this ever needs tightening.
+const HEADER_ACTIONS_COMPACT_BREAKPOINT = 900;
 const identitySearchOptions = { extendedMatch: matchesPinyin };
 
 // Slack-style presence: up to 4 faces + member-count badge. Opens the
@@ -605,13 +622,30 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const currentUserName = useAuthStore((s) => s.user?.name ?? null);
   const { mutate: markChannelRead } = useMarkChannelRead();
   const isMobile = useIsMobile();
-  // #568 — the two-pane desktop layout's detail header runs out of room for
-  // the full action-icon row well before MOBILE_BREAKPOINT's single-pane
-  // switch would kick in (see HEADER_ACTIONS_COMPACT_BREAKPOINT above).
-  // `isMobile` already implies this (768 < 1200), so this is only "true but
-  // not the mobile branch" for the two-pane desktop range that's too narrow
-  // for the icon row.
-  const headerActionsCompact = useIsNarrowerThan(HEADER_ACTIONS_COMPACT_BREAKPOINT);
+  // #568 — the two-pane desktop layout's detail header can run out of room
+  // for the full action-icon row (see HEADER_ACTIONS_COMPACT_BREAKPOINT
+  // above for why this measures the detail pane's own rendered width, not
+  // the viewport). `detailHeaderContainerRef` is attached to
+  // `channelConversationPane`'s `<main>` below, whose rendered width already
+  // reflects the list-rail width, the divider drag position, and any
+  // right-side thread/settings panel — everything that actually eats into
+  // the header's available space. `channelConversationPane` also mounts on
+  // the true single-pane mobile path (its own viewport there is well under
+  // the breakpoint, so the container measurement alone would already agree),
+  // but `isMobile` is OR'd in explicitly so the existing mobile
+  // collapsed-trigger behavior never depends on a `ResizeObserver` having
+  // fired yet — it's correct on the very first render, not just once
+  // layout settles.
+  // Must call the hook unconditionally every render (Rules of Hooks) — the
+  // `isMobile` short-circuit below is applied after, not by skipping the
+  // call. `detailHeaderContainerRef` is a callback ref (see
+  // `useContainerNarrowerThan`), not a plain `useRef` — the `<main>` it
+  // measures can mount after this hook's first render (gated behind
+  // `viewportReady`), and only a callback ref reliably notices that.
+  const [detailHeaderNarrow, detailHeaderContainerRef] = useContainerNarrowerThan(
+    HEADER_ACTIONS_COMPACT_BREAKPOINT,
+  );
+  const headerActionsCompact = isMobile || detailHeaderNarrow;
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
     id: "multica_channels_layout",
   });
@@ -2682,7 +2716,10 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       />
     ) : null;
   const channelConversationPane = (
-    <main className="relative flex flex-1 min-h-0 min-w-0 flex-col bg-background">
+    <main
+      ref={detailHeaderContainerRef}
+      className="relative flex flex-1 min-h-0 min-w-0 flex-col bg-background"
+    >
       {!active ? (
         showChannelDetailSkeleton ? (
           <ConversationSwitchSkeleton isMobile={isMobile} />
@@ -2744,14 +2781,15 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                 )}
               </>
             }
-            actions={isMobile || headerActionsCompact ? (
-              // Mobile: ⋯ opens a tab-aligned menu (About/Members/Files/Settings).
-              // #568: the same collapse also covers the two-pane desktop
-              // layout below HEADER_ACTIONS_COMPACT_BREAKPOINT, where the
-              // detail header doesn't have room for the full row (member
-              // cluster + invite + search) — it collapses into the same
-              // "⋯" that opens the LRM-210 details menu below.
-              // size-10 keeps the tap target ≥44px.
+            actions={headerActionsCompact ? (
+              // True mobile: ⋯ opens a tab-aligned menu (About/Members/
+              // Files/Settings — LRM-210). #568: the same collapse also
+              // covers the two-pane desktop layout when the detail pane's
+              // own rendered width is below HEADER_ACTIONS_COMPACT_BREAKPOINT
+              // (see that constant above — `headerActionsCompact` already
+              // folds in `isMobile`) — the member cluster + invite + search
+              // row collapses into the same "⋯" that opens the LRM-210
+              // details menu below. size-10 keeps the tap target ≥44px.
               <Button
                 variant="ghost"
                 size="icon"
@@ -3176,12 +3214,13 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       {/* Overflow drawer — LRM-210: menu items align with Channel details
           tabs (About / Members / Files / Settings); selecting a tab swaps
           the body to ChannelDetailsPanel (shared with desktop). Mobile uses
-          this unconditionally (isMobile); #568 also opens it on the
-          two-pane desktop layout below HEADER_ACTIONS_COMPACT_BREAKPOINT,
-          where the header's "⋯" trigger is the same button (see `actions`
-          above) but the surrounding layout is still the desktop split
-          view, not the single-pane mobile one. */}
-      {(isMobile || headerActionsCompact) && active && detailsPanelProps && (
+          this unconditionally (`isMobile`, folded into `headerActionsCompact`);
+          #568 also opens it on the two-pane desktop layout when the detail
+          pane itself is too narrow for the icon row, where the header "⋯"
+          trigger is the same button (see `actions` above) but the
+          surrounding layout is still the desktop split view, not the
+          single-pane mobile one. */}
+      {headerActionsCompact && active && detailsPanelProps && (
         <Drawer
           direction="bottom"
           open={mobilePanel !== null}

@@ -30,7 +30,6 @@ import {
 import { matchesActorIdentitySearch, resolveActorDisplayName } from "@multica/core/identity";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
-import { OfflineBanner } from "./offline-banner";
 import { NoAgentBanner } from "./no-agent-banner";
 import {
   chatSessionsOptions,
@@ -269,10 +268,10 @@ export function ChatWindow() {
   const noAgent = agentAvailability === "none";
 
   // Presence drives both the avatar status dot (via ActorAvatar) and the
-  // OfflineBanner / TaskStatusPill availability copy. `useAgentPresenceDetail`
-  // returns "loading" while queries are still resolving — pass `undefined`
-  // downstream so banners and pill copy stay silent during loading rather
-  // than flash speculative offline text.
+  // TaskStatusPill availability copy. `useAgentPresenceDetail` returns
+  // "loading" while queries are still resolving — pass `undefined`
+  // downstream so pill copy stays silent during loading rather than flash
+  // speculative offline text.
   const presenceDetail = useAgentPresenceDetail(wsId, activeAgent?.id);
   const availability =
     presenceDetail === "loading" ? undefined : presenceDetail.availability;
@@ -786,20 +785,17 @@ export function ChatWindow() {
         />
       )}
 
-      {/* Status banner above the input — single mutually-exclusive slot.
-       *  Priority: no-agent > offline / unstable. Agent presence is the
-       *  hard prerequisite (you can't send anything without one), so it
-       *  always wins over a presence hint. Recent issue/project navigation
-       *  lives in the input action row; it is not message/session state.
+      {/* No-agent banner above the input. Presence (online/offline/unstable)
+       *  belongs to the header only (#624, Parker/Iris) — this slot used to
+       *  also render an OfflineBanner duplicating that state here, which
+       *  produced a second "Offline" line stacked on top of a real live
+       *  action row (e.g. "is preparing a reply..."). The input area now
+       *  shows only the no-agent case, or nothing.
        *
        *  We key off `noAgent` (the resolved-empty state) rather than
        *  `!activeAgent`, so the loading window between mount and the
        *  first agent-list response stays banner-free. */}
-      {noAgent ? (
-        <NoAgentBanner />
-      ) : (
-        <OfflineBanner agentName={activeAgent?.name} availability={availability} />
-      )}
+      {noAgent && <NoAgentBanner />}
 
       {/* Input — disabled for legacy archived sessions; locked out entirely
        *  when there's no agent (the EmptyState above carries the CTA). */}

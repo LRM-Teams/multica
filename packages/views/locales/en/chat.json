@@ -106,11 +106,6 @@
     "plan_next": "Plan what to work on next"
   },
   "no_agent_banner": "You need an agent to start chatting.",
-  "offline_banner": {
-    "fallback_name": "the agent",
-    "unstable": "{{name}}'s connection is unstable — replies may be delayed.",
-    "offline": "{{name}} is offline — your message will be delivered when they're back."
-  },
   "status_pill": {
     "stages": {
       "offline": "Offline",

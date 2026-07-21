@@ -103,11 +103,6 @@
     "plan_next": "次に取り組むことを計画して"
   },
   "no_agent_banner": "チャットを始めるにはエージェントが必要です。",
-  "offline_banner": {
-    "fallback_name": "エージェント",
-    "unstable": "{{name}} の接続が不安定です。返信が遅れる場合があります。",
-    "offline": "{{name}} はオフラインです。再接続されたらメッセージが届きます。"
-  },
   "status_pill": {
     "stages": {
       "offline": "オフライン",

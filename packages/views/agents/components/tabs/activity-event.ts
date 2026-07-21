@@ -513,6 +513,27 @@ export function activityExpansionContent(
 const COMMAND_INLINE_CAP = 500;
 
 function toolPresentation(event: ActivityEvent): ActivityPresentation {
+  // #601 security gate (Parker): the mapped/semantic check MUST run before
+  // anything else, including the command branch below. `fullCommand()` reads
+  // `entries[].command` regardless of whether `tool` is recognized — if an
+  // unmapped/unknown tool happened to carry that field (a BE version drift,
+  // a partially-scrubbed row, anything), checking command first would still
+  // surface it as "Running command · <raw command>". The FE contract must
+  // not rely on the BE having already scrubbed unknown rows; it must refuse
+  // to render ANY detail for a tool it doesn't recognize, unconditionally.
+  const semantic = TOOL_SEMANTIC[normalizedTool(event)];
+  if (!semantic) {
+    // A tool the FE doesn't recognize (BE didn't canonicalize it, or a parse
+    // artifact leaked a non-tool string into `tool`). Show the generic, safe
+    // row — never the raw slug, never a fabricated subtext or command detail,
+    // regardless of what other fields the event happens to carry (#601,
+    // Parker: "unknown 不静默丢" + "unknown 先直接返回 performing_action +
+    // 无 subtext/expand"). Gated on `semantic`, NOT `labelKey` — `send_message`
+    // is a recognized semantic with no static label (it always renders via
+    // the command branch below), and must not be misclassified as unknown.
+    return { labelKey: "performing_action", tone: statusTone(event) };
+  }
+
   // Frank's rule (#v0 「不发明新东西」): anything run as a CLI command — bash, and
   // any multica subcommand the daemon canonicalized to a semantic tool
   // (`send_message`, …) — is shown FAITHFULLY as "Running command · <command>",
@@ -534,15 +555,15 @@ function toolPresentation(event: ActivityEvent): ActivityPresentation {
     };
   }
 
-  const semantic = TOOL_SEMANTIC[normalizedTool(event)];
-  const labelKey = semantic ? TOOL_ACTION_KEY[semantic] : undefined;
-  if (!labelKey) {
-    // A tool the FE doesn't recognize (BE didn't canonicalize it, or a parse
-    // artifact leaked a non-tool string into `tool`). Show the generic, safe
-    // row — never the raw slug, never a fabricated subtext, even if the BE
-    // happened to still send one (#601, Parker: "unknown 不静默丢").
-    return { labelKey: "performing_action", tone: statusTone(event) };
+  // A mapped semantic with no static label and no command (e.g. a future
+  // command-family alias added to TOOL_SEMANTIC without a matching
+  // TOOL_ACTION_KEY entry) still falls back to the generic safe row, never
+  // an invented label.
+  const labelKey = TOOL_ACTION_KEY[semantic] ?? "performing_action";
+  if (labelKey === "performing_action") {
+    return { labelKey, tone: statusTone(event) };
   }
+
   const subtext = toolTarget(event);
   // Classify the subtext so the row renders it correctly (#v0 照实显示). A file
   // tool's target is a PATH (basename-preserving middle-ellipsis). A command

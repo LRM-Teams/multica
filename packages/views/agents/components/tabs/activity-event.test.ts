@@ -163,6 +163,25 @@ describe("activityPresentation — tool normalization", () => {
     expect(activityPresentation(toolEvent("bash")).subtext).toBeUndefined();
   });
 
+  it("refuses to surface command/tool_target detail for an unknown tool, even if the event carries both (#601 security gate)", () => {
+    // Parker: the mapped/semantic check must run BEFORE the command branch —
+    // an unmapped tool must never reach "Running command · <raw>" just
+    // because the event happened to carry entries[].command. The FE can't
+    // rely on the BE having already scrubbed an unknown row; it must refuse
+    // unconditionally.
+    const event: ActivityEvent = {
+      ...toolEvent("some_mystery_tool"),
+      tool_target: "private-target",
+      entries: [{ kind: "tool_call", command: "curl https://private.example/?token=secret" }],
+    };
+    const presentation = activityPresentation(event);
+    expect(presentation.labelKey).toBe("performing_action");
+    expect(presentation.subtext).toBeUndefined();
+    expect(presentation.subtextFull).toBeUndefined();
+    expect(presentation.subtextKind).toBeUndefined();
+    expect(activityExpansionContent(event, presentation)).toBeUndefined();
+  });
+
   it("uses the BE-provided safe tool_target as subtext when present", () => {
     const event: ActivityEvent = { ...toolEvent("read_file"), tool_target: "src/app.ts" };
     expect(activityPresentation(event).subtext).toBe("src/app.ts");

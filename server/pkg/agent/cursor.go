@@ -434,18 +434,45 @@ func parseCursorToolCall(raw json.RawMessage) (string, map[string]any, json.RawM
 		return "", nil, nil, false
 	}
 
-	var envelope map[string]cursorToolCallPayload
-	if err := json.Unmarshal(raw, &envelope); err != nil || len(envelope) != 1 {
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &envelope); err != nil || len(envelope) == 0 {
 		return "", nil, nil, false
 	}
-	for key, payload := range envelope {
+
+	var matched *cursorToolCallPayload
+	var matchedTool string
+	for key, value := range envelope {
+		if cursorToolCallMetadataKeys[key] {
+			continue
+		}
 		tool := cursorToolCallName(key)
 		if tool == "" {
 			return "", nil, nil, false
 		}
-		return tool, payload.Args, payload.Result, true
+		if matched != nil {
+			return "", nil, nil, false
+		}
+		var payload cursorToolCallPayload
+		if err := json.Unmarshal(value, &payload); err != nil {
+			return "", nil, nil, false
+		}
+		matched = &payload
+		matchedTool = tool
 	}
-	return "", nil, nil, false
+	if matched == nil {
+		return "", nil, nil, false
+	}
+	return matchedTool, matched.Args, matched.Result, true
+}
+
+// Cursor 2026.07.17 adds lifecycle metadata beside the single dynamic
+// *ToolCall payload. Keep this allowlist explicit: accepting arbitrary sibling
+// keys would turn protocol drift into guessed Activity facts.
+var cursorToolCallMetadataKeys = map[string]bool{
+	"toolCallId":             true,
+	"startedAtMs":            true,
+	"completedAtMs":          true,
+	"hookAdditionalContexts": true,
 }
 
 func cursorToolCallName(key string) string {

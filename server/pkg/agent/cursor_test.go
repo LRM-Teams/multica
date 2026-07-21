@@ -276,7 +276,7 @@ func TestParseCursorToolCallCurrentStreamShape(t *testing.T) {
 	}{
 		{
 			name:     "shell command",
-			raw:      `{"shellToolCall":{"args":{"command":"pwd"}}}`,
+			raw:      `{"toolCallId":"call-1","startedAtMs":100,"shellToolCall":{"args":{"command":"pwd"}},"hookAdditionalContexts":[]}`,
 			wantTool: "shell",
 			wantKey:  "command",
 			wantVal:  "pwd",
@@ -289,9 +289,9 @@ func TestParseCursorToolCallCurrentStreamShape(t *testing.T) {
 			wantVal:  "README.md",
 		},
 		{
-			name:     "write file",
-			raw:      `{"writeToolCall":{"args":{"path":"notes.txt","fileText":"hello"}}}`,
-			wantTool: "write_file",
+			name:     "edit file with current lifecycle metadata",
+			raw:      `{"toolCallId":"call-3","startedAtMs":100,"editToolCall":{"args":{"path":"notes.txt","fileText":"hello"}},"hookAdditionalContexts":[]}`,
+			wantTool: "edit_file",
 			wantKey:  "path",
 			wantVal:  "notes.txt",
 		},
@@ -317,10 +317,24 @@ func TestParseCursorToolCallCurrentStreamShape(t *testing.T) {
 	}
 }
 
+func TestParseCursorToolCallRejectsAmbiguousOrUnknownSiblings(t *testing.T) {
+	t.Parallel()
+
+	for _, raw := range []string{
+		`{"toolCallId":"call-1","startedAtMs":100}`,
+		`{"shellToolCall":{"args":{"command":"pwd"}},"readToolCall":{"args":{"path":"README.md"}}}`,
+		`{"shellToolCall":{"args":{"command":"pwd"}},"futureMetadata":"drift"}`,
+	} {
+		if tool, _, _, ok := parseCursorToolCall(json.RawMessage(raw)); ok {
+			t.Fatalf("parseCursorToolCall(%s) = %q, want rejected", raw, tool)
+		}
+	}
+}
+
 func TestParseCursorToolCallCompletedResult(t *testing.T) {
 	t.Parallel()
 
-	raw := json.RawMessage(`{"shellToolCall":{"args":{"command":"pwd"},"result":{"success":{"stdout":"/tmp\n","exitCode":0}}}}`)
+	raw := json.RawMessage(`{"toolCallId":"call-1","startedAtMs":100,"completedAtMs":101,"shellToolCall":{"args":{"command":"pwd"},"result":{"success":{"stdout":"/tmp\n","exitCode":0}}},"hookAdditionalContexts":[]}`)
 	tool, input, result, ok := parseCursorToolCall(raw)
 	if !ok {
 		t.Fatal("parseCursorToolCall returned ok=false")

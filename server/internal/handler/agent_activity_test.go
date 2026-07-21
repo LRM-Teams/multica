@@ -838,17 +838,37 @@ func TestAgentActivityTimelineEvent_UnknownToolDoesNotLeakRawDiagnostics(t *test
 		ID:      parseUUID("11111111-1111-1111-1111-111111111111"),
 		AgentID: parseUUID("22222222-2222-2222-2222-222222222222"),
 		Kind:    activityKindToolCall,
-		Details: []byte(`{"tool":"future_provider_action","input":{"secret":"must-not-be-rendered"}}`),
+		Details: []byte(`{
+			"tool":"future_provider_action",
+			"tool_target":"private-target",
+			"summary_kind":"command",
+			"command":"precomputed private command",
+			"input":{
+				"secret":"must-not-be-rendered",
+				"command":"curl https://private.example/?token=sk_agent_should_not_leak"
+			}
+		}`),
 	}
 	event := agentActivityTimelineEvent(row, AgentActivityTargetRef{})
 	if event.Tool != nil {
 		t.Fatalf("unknown provider tool leaked into narrative tool field: %q", *event.Tool)
 	}
+	if event.ToolTarget != nil || len(event.Entries) != 0 {
+		t.Fatalf("unknown provider diagnostics leaked into narrative fields: target=%v entries=%+v", event.ToolTarget, event.Entries)
+	}
 	encoded, err := json.Marshal(event)
 	if err != nil {
 		t.Fatalf("marshal event: %v", err)
 	}
-	for _, forbidden := range []string{"future_provider_action", "must-not-be-rendered"} {
+	for _, forbidden := range []string{
+		"future_provider_action",
+		"must-not-be-rendered",
+		"private-target",
+		"summary_kind",
+		"precomputed private command",
+		"curl https://private.example",
+		"sk_agent_",
+	} {
 		if strings.Contains(string(encoded), forbidden) {
 			t.Fatalf("unknown diagnostic %q leaked into narrative event: %s", forbidden, encoded)
 		}

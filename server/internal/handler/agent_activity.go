@@ -1700,6 +1700,7 @@ func agentActivityTimelineEvent(row agentActivityRawRow, targetRef AgentActivity
 	input := mapFromMap(details, "input")
 	tool := stringPtrFromMap(details, "tool")
 	cliResolved := false
+	unknownTool := false
 	if tool != nil {
 		canonical, known := taskMessageCanonicalToolName(*tool, input)
 		if cli, ok := resolveRaftCLIInvocation(canonical, input); ok {
@@ -1716,11 +1717,17 @@ func agentActivityTimelineEvent(row agentActivityRawRow, targetRef AgentActivity
 			// The narrative API deliberately withholds unknown provider names.
 			// The UI renders a generic activity row; raw diagnostics stay on the
 			// explicit diagnostic surface instead of leaking into the main line.
+			unknownTool = true
 			tool = nil
+			delete(details, "tool_target")
+			delete(details, "summary_kind")
+			delete(details, "command")
 		}
 	}
-	if command := redactedCommandFromInput(input); command != "" && details["command"] == nil {
-		details["command"] = command
+	if !unknownTool {
+		if command := redactedCommandFromInput(input); command != "" && details["command"] == nil {
+			details["command"] = command
+		}
 	}
 	if tool != nil {
 		agentActivityApplyToolInputSummary(details, *tool, agentActivityToolSummaryInput(details, input), true)

@@ -21,6 +21,7 @@ export type {
   TaskFailureReason,
   AgentRuntime,
   RuntimeDevice,
+  AgentAvatarSelection,
   CreateAgentRequest,
   AgentCreationDraft,
   CreateAgentDraftRequest,

@@ -11,8 +11,8 @@ interface ActorAvatarProps {
   avatarUrl?: string | null;
   /**
    * Retained for call-site symmetry with isSystem/isSquad. No longer drives a
-   * fallback glyph (#451 retired the bot); agents get a pool photo upstream via
-   * getActorAvatarUrl and fall through to initials only if that image fails.
+   * fallback glyph (#451 retired the bot); agents render their persisted avatar
+   * URL and fall through to initials only when it is missing or fails to load.
    */
   isAgent?: boolean;
   isSystem?: boolean;
@@ -48,9 +48,9 @@ function ActorAvatar({
         isSquad ? "rounded-md" : "rounded-full",
         // One restrained, uniform fallback for everyone — no per-actor hash
         // colors, no bot glyph (#451, Frank: retire the robot / random colors).
-        // Agents render a deterministic photo from the shared pool via
-        // getActorAvatarUrl; this text fallback only shows if that image itself
-        // fails to load, in which case initials read better than a glyph.
+        // Agents render their persisted avatar URL; this text fallback only
+        // shows when it is missing or fails to load, in which case initials
+        // read better than a glyph.
         showFallback && "bg-muted text-muted-foreground",
         className
       )}

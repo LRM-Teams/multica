@@ -42,6 +42,7 @@ type AgentResponse struct {
 	Description   string          `json:"description"`
 	Instructions  string          `json:"instructions"`
 	AvatarURL     *string         `json:"avatar_url"`
+	AvatarSource  string          `json:"avatar_source"`
 	RuntimeMode   string          `json:"runtime_mode"`
 	RuntimeName   string          `json:"runtime_name"`
 	RuntimeConfig any             `json:"runtime_config"`
@@ -124,6 +125,7 @@ func agentToResponse(a db.Agent) AgentResponse {
 		Description:        a.Description,
 		Instructions:       a.Instructions,
 		AvatarURL:          textToPtr(a.AvatarUrl),
+		AvatarSource:       a.AvatarSource,
 		RuntimeMode:        a.RuntimeMode,
 		RuntimeName:        defaultAgentRuntimeName(a.RuntimeMode),
 		RuntimeConfig:      rc,
@@ -786,22 +788,22 @@ type CreateAgentRequest struct {
 	// Username is an explicit, stable handle chosen by the caller. When it is
 	// omitted, the server generates the username from display_name and applies
 	// numeric collision suffixes.
-	Username           *string           `json:"username"`
-	DisplayName        string            `json:"display_name"`
-	Description        string            `json:"description"`
-	Instructions       string            `json:"instructions"`
-	AvatarURL          *string           `json:"avatar_url"`
-	RuntimeID          string            `json:"runtime_id"`
-	RuntimeConfig      any               `json:"runtime_config"`
-	CustomEnv          map[string]string `json:"custom_env"`
-	CustomArgs         []string          `json:"custom_args"`
-	McpConfig          json.RawMessage   `json:"mcp_config"`
-	Visibility         string            `json:"visibility"`
-	MaxConcurrentTasks int32             `json:"max_concurrent_tasks"`
-	Model              string            `json:"model"`
-	ThinkingLevel      string            `json:"thinking_level"`
-	InitialNotes       map[string]string `json:"initial_notes"`
-	InitialMemory      map[string]string `json:"initial_memory"`
+	Username           *string               `json:"username"`
+	DisplayName        string                `json:"display_name"`
+	Description        string                `json:"description"`
+	Instructions       string                `json:"instructions"`
+	AvatarSelection    *AgentAvatarSelection `json:"avatar_selection"`
+	RuntimeID          string                `json:"runtime_id"`
+	RuntimeConfig      any                   `json:"runtime_config"`
+	CustomEnv          map[string]string     `json:"custom_env"`
+	CustomArgs         []string              `json:"custom_args"`
+	McpConfig          json.RawMessage       `json:"mcp_config"`
+	Visibility         string                `json:"visibility"`
+	MaxConcurrentTasks int32                 `json:"max_concurrent_tasks"`
+	Model              string                `json:"model"`
+	ThinkingLevel      string                `json:"thinking_level"`
+	InitialNotes       map[string]string     `json:"initial_notes"`
+	InitialMemory      map[string]string     `json:"initial_memory"`
 	// Template records which template slug was used to seed this agent
 	// (e.g. "coding" / "planning" / "writing" / "assistant"). Empty when
 	// the caller didn't come from a template picker — the `agent_created`
@@ -842,6 +844,10 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, ok := rawFields["name"]; ok {
 		writeError(w, http.StatusBadRequest, "name is no longer accepted; use display_name")
+		return
+	}
+	if _, ok := rawFields["avatar_url"]; ok {
+		writeError(w, http.StatusBadRequest, "avatar_url is no longer accepted; use avatar_selection")
 		return
 	}
 
@@ -936,21 +942,40 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		mc = append([]byte(nil), rawMcpConfig...)
 	}
 
-	draftID := extractDraftID(rawFields)
+	draftID, hasDraftID, err := extractDraftID(rawFields)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	initialNotes := cleanInitialContextMap(req.InitialNotes, allowedInitialNoteSeedPath)
 	initialMemory := cleanInitialContextMap(req.InitialMemory, allowedInitialMemorySeedPath)
-	if draftID.Valid {
-		if draftNotes, draftMemory := h.loadAgentDraftInitialContext(r, workspaceID, ownerID, draftID); len(draftNotes) > 0 || len(draftMemory) > 0 {
-			initialNotes = draftNotes
-			initialMemory = draftMemory
+	var draftAvatar resolvedAgentAvatar
+	if hasDraftID {
+		draftSeed, found := h.loadAgentDraftSeed(r, workspaceID, ownerID, draftID)
+		if !found {
+			writeError(w, http.StatusBadRequest, "agent draft not found")
+			return
 		}
+		if len(draftSeed.InitialNotes) > 0 || len(draftSeed.InitialMemory) > 0 {
+			initialNotes = draftSeed.InitialNotes
+			initialMemory = draftSeed.InitialMemory
+		}
+		if draftSeed.AvatarURL.Valid {
+			draftAvatar = assignedAgentAvatar(draftSeed.AvatarURL.String)
+		}
+	}
+	avatar, ok := h.resolveAgentAvatarSelection(w, r, wsUUID, ownerID, pgtype.UUID{}, req.AvatarSelection)
+	if !ok {
+		return
+	}
+	if !avatar.Set && draftAvatar.Set {
+		avatar = draftAvatar
 	}
 
 	createParams := db.CreateAgentParams{
 		WorkspaceID:        wsUUID,
 		Description:        req.Description,
 		Instructions:       req.Instructions,
-		AvatarUrl:          ptrToText(req.AvatarURL),
 		RuntimeMode:        runtime.RuntimeMode,
 		RuntimeConfig:      rc,
 		RuntimeID:          runtime.ID,
@@ -963,6 +988,7 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		Model:              pgtype.Text{String: req.Model, Valid: req.Model != ""},
 		ThinkingLevel:      pgtype.Text{String: req.ThinkingLevel, Valid: req.ThinkingLevel != ""},
 	}
+	applyCreateAgentAvatar(&createParams, avatar)
 
 	var created db.Agent
 	if req.Username != nil {
@@ -985,12 +1011,16 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "username must be 1-32 lowercase letters, digits, or hyphens")
 			return
 		}
+		if identityUniqueViolation(err, "agent_avatar_attachment_unique") {
+			writeError(w, http.StatusConflict, "avatar attachment is already bound")
+			return
+		}
 		slog.Warn("create agent failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
 		writeError(w, http.StatusInternalServerError, "failed to create agent: "+err.Error())
 		return
 	}
 	slog.Info("agent created", append(logger.RequestAttrs(r), "agent_id", uuidToString(created.ID), "name", created.Name, "workspace_id", workspaceID)...)
-	if draftID.Valid {
+	if hasDraftID {
 		h.MarkAgentDraftUsed(r, workspaceID, ownerID, draftID, created.ID)
 	}
 	if len(initialNotes) > 0 || len(initialMemory) > 0 {
@@ -1047,13 +1077,13 @@ func (h *Handler) seedAgentInitialContext(r *http.Request, agent db.Agent, initi
 }
 
 type UpdateAgentRequest struct {
-	Username      *string `json:"username"`
-	DisplayName   *string `json:"display_name"`
-	Description   *string `json:"description"`
-	Instructions  *string `json:"instructions"`
-	AvatarURL     *string `json:"avatar_url"`
-	RuntimeID     *string `json:"runtime_id"`
-	RuntimeConfig any     `json:"runtime_config"`
+	Username        *string               `json:"username"`
+	DisplayName     *string               `json:"display_name"`
+	Description     *string               `json:"description"`
+	Instructions    *string               `json:"instructions"`
+	AvatarSelection *AgentAvatarSelection `json:"avatar_selection"`
+	RuntimeID       *string               `json:"runtime_id"`
+	RuntimeConfig   any                   `json:"runtime_config"`
 	// custom_env is intentionally NOT updatable through this endpoint.
 	// Use `PUT /api/agents/{id}/env` for env changes — that path is
 	// owner/admin-only, denies agent actors, and writes a persisted
@@ -1256,6 +1286,10 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "name is no longer accepted; use display_name")
 		return
 	}
+	if _, ok := rawFields["avatar_url"]; ok {
+		writeError(w, http.StatusBadRequest, "avatar_url is no longer accepted; use avatar_selection")
+		return
+	}
 	if !h.canUpdateAgent(w, r, existing, rawFields) {
 		return
 	}
@@ -1300,9 +1334,11 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	if req.Instructions != nil {
 		params.Instructions = pgtype.Text{String: *req.Instructions, Valid: true}
 	}
-	if req.AvatarURL != nil {
-		params.AvatarUrl = pgtype.Text{String: *req.AvatarURL, Valid: true}
+	avatar, ok := h.resolveAgentAvatarSelection(w, r, existing.WorkspaceID, requestUserID(r), existing.ID, req.AvatarSelection)
+	if !ok {
+		return
 	}
+	applyUpdateAgentAvatar(&params, avatar)
 	if req.RuntimeConfig != nil {
 		rc, _ := json.Marshal(req.RuntimeConfig)
 		params.RuntimeConfig = rc
@@ -1443,6 +1479,10 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if identityUniqueViolation(err, "agent_workspace_name_unique") {
 			writeError(w, http.StatusConflict, "username is already in use")
+			return
+		}
+		if identityUniqueViolation(err, "agent_avatar_attachment_unique") {
+			writeError(w, http.StatusConflict, "avatar attachment is already bound")
 			return
 		}
 		slog.Warn("update agent failed", append(logger.RequestAttrs(r), "error", err, "agent_id", id)...)

@@ -115,6 +115,11 @@
 - 共享组件只接受"一项属性长什么样"，**不接受 `storeProperties` 等策略参数**；"哪些属性显示"归调用方。hover 卡永远"设了就显、没设不占位"。
 - **今天靠的是"写对了+注释"，没有物拦下一个人**；#518 的 API 形状（组件签名里没有策略参数）落地才是 `可执行`。同理："server-paginated 响应不得客户端重排"目前也只有 review（BE 侧跨页 fixture 已有 #635，FE 侧禁令无物）。
 
+### 3.3 Agent avatar 是持久身份事实，不是读取时派生值 — `可执行`（①②⑤，owner: @Barry；task #599）
+- **契约**：`agent.avatar_url` 与 `user.avatar_url` 一样是唯一显示事实。Agent source 只允许 `assigned|picked|uploaded`；不存在 `legacy/unknown` 第四态。迁移逐字保留全部既有非空 URL 并标 `assigned`，只为 NULL/blank 一次性写入 concrete pool URL。写入只接受可验证的 `avatar_selection`：picker 提交 canonical preset，upload 提交归当前用户、同 workspace、未绑定的 image attachment id；服务端从可信事实原子派生 URL/source/attachment，拒绝 raw `avatar_url`。读路径不得根据 URL 形状或可变 pool 重算 provenance。
+- **为什么**：render-time hash 会让 pool 扩容/重排悄悄改掉所有未自选头像，同一个成员身份在不同时间与不同 surface 漂移。`assigned` 表示系统当前持有的基线头像（包括迁移保留值），不是声称迁移重新生成了 URL。
+- **物**：migration 203 的 `avatar_url NOT NULL` + 三态 CHECK + insert trigger（①②）；`Agent.avatar_source` API/type；`defaultAgentAvatarPath`/`stableHash` render-time exports 已删除（①）；create/pick/upload/direct-insert/concurrent-update handler tests，以及迁移 ledger 门（总数不变、非空 100%、既有非空 URL changed=0、source 分布）（⑤）。缺值只准走成员首字母占位，不再从 pool 派生第二真相。
+
 ## 4. Provider / 环境（daemon）
 
 ### 4.0 s89 双部署环境（2026-07-16 当天进档——此前是隐性知识，烧过一小时考古）

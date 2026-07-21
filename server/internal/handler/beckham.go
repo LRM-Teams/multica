@@ -112,10 +112,12 @@ func (h *Handler) refreshGroupManagerIfStale(ctx context.Context, agent db.Agent
 		return agent
 	}
 	updated, err := h.Queries.UpdateAgent(ctx, db.UpdateAgentParams{
-		ID:           agent.ID,
-		Instructions: pgtype.Text{String: beckhamInstructions, Valid: true},
-		Description:  pgtype.Text{String: beckhamDescription, Valid: true},
-		AvatarUrl:    pgtype.Text{String: beckhamAvatarURL, Valid: true},
+		ID:                 agent.ID,
+		Instructions:       pgtype.Text{String: beckhamInstructions, Valid: true},
+		Description:        pgtype.Text{String: beckhamDescription, Valid: true},
+		AvatarSelectionSet: true,
+		AvatarUrl:          pgtype.Text{String: beckhamAvatarURL, Valid: true},
+		AvatarSource:       agentAvatarSourceAssigned,
 	})
 	if err != nil {
 		slog.Warn("refresh group manager persona failed", "agent_id", uuidToString(agent.ID), "error", err)
@@ -222,6 +224,7 @@ func (h *Handler) EnsureGroupManagerForChannel(ctx context.Context, workspaceID,
 		Description:        beckhamDescription,
 		Instructions:       beckhamInstructions,
 		AvatarUrl:          pgtype.Text{String: beckhamAvatarURL, Valid: true},
+		AvatarSource:       agentAvatarSourceAssigned,
 		RuntimeMode:        runtime.RuntimeMode,
 		RuntimeConfig:      []byte("{}"),
 		RuntimeID:          runtime.ID,

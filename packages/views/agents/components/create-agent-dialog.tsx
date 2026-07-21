@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Globe, Lock } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ModelDropdown } from "./model-dropdown";
@@ -8,13 +8,14 @@ import { ThinkingDropdown } from "./thinking-dropdown";
 import { RuntimePicker, isRuntimeUsableForUser } from "./runtime-picker";
 import { InstructionsEditor } from "./instructions-editor";
 import { SkillMultiSelect } from "./skill-multi-select";
-import { AvatarPicker } from "./avatar-picker";
+import { AvatarPicker, type AvatarPickerSelection } from "./avatar-picker";
 import { api } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import type {
   Agent,
+  AgentAvatarSelection,
   AgentVisibility,
   RuntimeDevice,
   MemberWithUser,
@@ -99,13 +100,26 @@ export function CreateAgentDialog({
   const [model, setModel] = useState(template?.model ?? "");
   const [thinkingLevel, setThinkingLevel] = useState(template?.thinking_level ?? "");
   const [instructions, setInstructions] = useState(template?.instructions ?? draft?.instructions ?? "");
-  const [avatarUrl, setAvatarUrl] = useState<string | null>(() => {
-    // #451: never seed a machine-picked default here. avatar_url must only ever
-    // hold a human's explicit choice; an unset avatar renders a deterministic
-    // pool photo at display time (getActorAvatarUrl), not a persisted value.
-    if (template?.avatar_url) return template.avatar_url;
-    return draft?.avatar_url ?? null;
-  });
+  // #599: avatar is server-owned provenance now. Duplicate never inherits
+  // the template's avatar (a clone gets its own fresh assigned default, not
+  // a copy). A draft's `avatar_url` is never seeded either: it's a raw,
+  // client-writable field promotion no longer honors (Parker's provenance
+  // ruling — showing it here would promise an avatar the agent won't
+  // actually get). The dialog always starts blank; submit only ever sends
+  // avatar_selection when the user actively picks/uploads their own.
+  const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | null>(null);
+  // Never rendered — only read at submit time — so a ref avoids a redraw
+  // on every avatar change.
+  const avatarSelectionRef = useRef<AgentAvatarSelection | null>(null);
+  const handleAvatarChange = (selection: AvatarPickerSelection | null) => {
+    if (selection) {
+      setAvatarPreviewUrl(selection.previewUrl);
+      avatarSelectionRef.current = { kind: "uploaded", attachment_id: selection.attachmentId };
+    } else {
+      setAvatarPreviewUrl(null);
+      avatarSelectionRef.current = null;
+    }
+  };
   const [selectedSkillIds, setSelectedSkillIds] = useState<Set<string>>(
     () => new Set(template?.skills.map((s) => s.id) ?? []),
   );
@@ -180,7 +194,7 @@ export function CreateAgentDialog({
         model: model.trim() || undefined,
         thinking_level: thinkingLevel || undefined,
         instructions: trimmedInstructions || undefined,
-        avatar_url: avatarUrl ?? undefined,
+        avatar_selection: avatarSelectionRef.current ?? undefined,
         draft_id: draft?.id,
       };
       if (template) {
@@ -274,7 +288,7 @@ export function CreateAgentDialog({
                 same shape as detail-page header so the affordance is
                 instantly familiar. */}
             <div className="flex items-start gap-4">
-              <AvatarPicker value={avatarUrl} onChange={setAvatarUrl} size={64} />
+              <AvatarPicker value={avatarPreviewUrl} onChange={handleAvatarChange} size={64} />
               <div className="flex-1 min-w-0 space-y-3">
                 <div>
                   <Label className="text-xs text-muted-foreground">{t(($) => $.create_dialog.display_name_label)}</Label>

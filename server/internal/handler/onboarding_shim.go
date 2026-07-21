@@ -217,6 +217,7 @@ func (h *Handler) BootstrapOnboardingRuntime(w http.ResponseWriter, r *http.Requ
 			WorkspaceID:        wsUUID,
 			Description:        onboardingAssistantDescription,
 			AvatarUrl:          pgtype.Text{String: onboardingAssistantAvatarURL, Valid: true},
+			AvatarSource:       agentAvatarSourceAssigned,
 			RuntimeMode:        runtime.RuntimeMode,
 			RuntimeConfig:      []byte("{}"),
 			RuntimeID:          runtime.ID,

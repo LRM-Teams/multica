@@ -89,7 +89,7 @@ multica agent draft create --file <draft.json> --output link
 
 Allowed initial_notes keys: notes/agents.md, notes/channels.md, notes/project-map.md, notes/relationship-map.md, notes/role-playbook.md, notes/work-log.md, notes/decisions.md. Allowed initial_memory keys: memory/MEMORY.md and memory/STATE.md only. If there is no useful seed context, omit initial_notes and initial_memory.
 
-Leave avatar_url empty unless the user explicitly provides an image. The Multica UI will assign a random human avatar automatically.
+Leave avatar_url empty unless the user explicitly provides an image. It is only a draft suggestion: final creation sends the trusted draft_id, and the server persists it as assigned provenance or assigns a concrete preset when absent.
 
 Do not silently create agents. Always let the user confirm by clicking a create card or creation action.
 
@@ -455,6 +455,7 @@ func (h *Handler) ensureWindyAgent(r *http.Request, workspaceID, userID pgtype.U
 		Description:        windyDescription,
 		Instructions:       windyInstructions,
 		AvatarUrl:          pgtype.Text{String: windyAvatarURL, Valid: true},
+		AvatarSource:       agentAvatarSourceAssigned,
 		RuntimeMode:        runtime.RuntimeMode,
 		RuntimeConfig:      []byte("{}"),
 		RuntimeID:          runtime.ID,
@@ -995,35 +996,49 @@ func (h *Handler) MarkAgentDraftUsed(r *http.Request, workspaceID, targetUserID 
 		draftID, usedAgentID, parseUUID(workspaceID), parseUUID(targetUserID))
 }
 
-func (h *Handler) loadAgentDraftInitialContext(r *http.Request, workspaceID, targetUserID string, draftID pgtype.UUID) (map[string]string, map[string]string) {
-	if h == nil || h.DB == nil || !draftID.Valid || strings.TrimSpace(targetUserID) == "" {
-		return nil, nil
-	}
-	var initialNotesRaw, initialMemoryRaw []byte
-	err := h.DB.QueryRow(r.Context(), `
-		SELECT initial_notes, initial_memory
-		FROM agent_creation_draft
-		WHERE id = $1 AND workspace_id = $2 AND target_user_id = $3 AND status = 'draft'`,
-		draftID, parseUUID(workspaceID), parseUUID(targetUserID)).Scan(&initialNotesRaw, &initialMemoryRaw)
-	if err != nil {
-		return nil, nil
-	}
-	return decodeStringMap(initialNotesRaw), decodeStringMap(initialMemoryRaw)
+type agentDraftSeed struct {
+	InitialNotes  map[string]string
+	InitialMemory map[string]string
+	AvatarURL     pgtype.Text
 }
 
-func extractDraftID(rawFields map[string]json.RawMessage) pgtype.UUID {
+func (h *Handler) loadAgentDraftSeed(r *http.Request, workspaceID, targetUserID string, draftID pgtype.UUID) (agentDraftSeed, bool) {
+	if h == nil || h.DB == nil || !draftID.Valid || strings.TrimSpace(targetUserID) == "" {
+		return agentDraftSeed{}, false
+	}
+	var initialNotesRaw, initialMemoryRaw []byte
+	var avatarURL pgtype.Text
+	err := h.DB.QueryRow(r.Context(), `
+		SELECT initial_notes, initial_memory, avatar_url
+		FROM agent_creation_draft
+		WHERE id = $1 AND workspace_id = $2 AND target_user_id = $3 AND status = 'draft'`,
+		draftID, parseUUID(workspaceID), parseUUID(targetUserID)).Scan(&initialNotesRaw, &initialMemoryRaw, &avatarURL)
+	if err != nil {
+		return agentDraftSeed{}, false
+	}
+	return agentDraftSeed{
+		InitialNotes:  decodeStringMap(initialNotesRaw),
+		InitialMemory: decodeStringMap(initialMemoryRaw),
+		AvatarURL:     avatarURL,
+	}, true
+}
+
+func extractDraftID(rawFields map[string]json.RawMessage) (pgtype.UUID, bool, error) {
 	var empty pgtype.UUID
 	raw, ok := rawFields["draft_id"]
-	if !ok || len(raw) == 0 || string(raw) == "null" {
-		return empty
+	if !ok {
+		return empty, false, nil
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return empty, true, fmt.Errorf("draft_id must be a UUID")
 	}
 	var draftID string
 	if err := json.Unmarshal(raw, &draftID); err != nil || strings.TrimSpace(draftID) == "" {
-		return empty
+		return empty, true, fmt.Errorf("draft_id must be a UUID")
 	}
 	var out pgtype.UUID
 	if err := out.Scan(strings.TrimSpace(draftID)); err != nil {
-		return empty
+		return empty, true, fmt.Errorf("draft_id must be a UUID")
 	}
-	return out
+	return out, true, nil
 }

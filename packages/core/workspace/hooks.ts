@@ -57,13 +57,11 @@ export function useActorName() {
   }, [getAgentHandle, getMemberHandle]);
 
   const getActorInitials = useCallback((type: string, id: string) => {
-    const name = getActorName(type, id);
-    return name
-      .split(" ")
-      .map((w) => w[0])
-      .join("")
-      .toUpperCase()
-      .slice(0, 2);
+    // LRM-201: avatar discs use a single glyph (not gray two-letter initials).
+    const name = getActorName(type, id).trim();
+    const c = name.charAt(0);
+    if (!c) return "?";
+    return /[a-z]/i.test(c) ? c.toUpperCase() : c;
   }, [getActorName]);
 
   const getActorAvatarUrl = useCallback((type: string, id: string): string | null => {

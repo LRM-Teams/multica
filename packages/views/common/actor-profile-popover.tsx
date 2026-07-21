@@ -17,6 +17,7 @@ import {
 } from "@multica/ui/components/ui/hover-card";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
+import { avatarGlyph } from "@multica/ui/lib/avatar-fallback";
 import { memberProfileOptions } from "@multica/core/agents";
 import type { MemberProfile } from "@multica/core/types";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -246,12 +247,6 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
   };
   const presentation = resolveActorIdentityPresentation(identity, "");
   const displayName = presentation.displayName || presentation.handle || t(($) => $.profile_popover.unknown);
-  const initials = displayName
-    .split(" ")
-    .map((part) => part[0])
-    .join("")
-    .toUpperCase()
-    .slice(0, 2);
   const description = profile.description?.trim() || "";
   // Members: role text on the name row. Agents: live status immediately
   // after the name (dot + word) — not a far-right filler and not a pill.
@@ -274,10 +269,11 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
       >
         <ActorAvatarBase
           name={displayName}
-          initials={initials}
+          initials={avatarGlyph(displayName)}
           avatarUrl={resolvePublicFileUrl(profile.avatar_url)}
           isAgent={profile.member_type === "agent"}
           size={48}
+          toneSeed={`${profile.member_type}:${profile.member_id}`}
         />
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-1.5">

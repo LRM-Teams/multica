@@ -1140,6 +1140,18 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       currentUserRole === "admin",
     [currentUserId, currentUserRole],
   );
+  // #576 blocker (Iris) — the group-settings Project picker must be gated by
+  // the same creator/admin permission as archiving, plus archived-channel and
+  // in-flight-mutation states: a plain member (or anyone viewing an archived
+  // channel) could otherwise open the picker and have the mutation 403.
+  const projectEditable = !!active && canArchive(active) && !isActiveArchived && !setChannelProject.isPending;
+  const projectDisabledReason = !active
+    ? undefined
+    : isActiveArchived
+      ? t(($) => $.settings.project_disabled_archived)
+      : !canArchive(active)
+        ? t(($) => $.settings.project_disabled_member)
+        : undefined;
   // Collapsed CHANNELS badge covers unpinned only — pinned rows sit in PINNED.
   const aggregateChannelUnread = useMemo(
     () =>
@@ -2622,6 +2634,8 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                         wsId={wsId}
                         projectId={channelProjectId || null}
                         onChange={(projectId) => setChannelProject.mutate(projectId)}
+                        disabled={!projectEditable}
+                        disabledReason={projectDisabledReason}
                       />
                     </PopoverContent>
                   </Popover>
@@ -3105,6 +3119,8 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                   wsId={wsId}
                   projectId={channelProjectId || null}
                   onChange={(projectId) => setChannelProject.mutate(projectId)}
+                  disabled={!projectEditable}
+                  disabledReason={projectDisabledReason}
                 />
               </div>
             )}

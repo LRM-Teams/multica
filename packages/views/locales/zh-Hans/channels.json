@@ -123,7 +123,9 @@
     "preview_too_large": "文件过大，无法预览"
   },
   "settings": {
-    "title": "群设置"
+    "title": "群设置",
+    "project_disabled_archived": "该群组已归档，无法修改所属项目。",
+    "project_disabled_member": "只有群组创建者或管理员可以修改所属项目。"
   },
   "stats": {
     "title": "活跃度",

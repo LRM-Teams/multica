@@ -20,11 +20,16 @@ export function ChannelProjectSettingsPanel({
   projectId,
   onChange,
   disabled,
+  disabledReason,
 }: {
   wsId: string;
   projectId: string | null;
   onChange: (projectId: string | null) => void;
   disabled?: boolean;
+  /** Why the picker is disabled — shown instead of the default tooltip so a
+   * plain member or an archived channel gets an honest reason, not just a
+   * greyed-out icon. */
+  disabledReason?: string;
 }) {
   const { t } = useT("channels");
 
@@ -33,7 +38,7 @@ export function ChannelProjectSettingsPanel({
       <div className="min-w-0">
         <p className="text-sm font-medium">{t(($) => $.composer.project_label)}</p>
         <p className="truncate text-xs text-muted-foreground">
-          {t(($) => $.composer.project_tooltip)}
+          {disabled && disabledReason ? disabledReason : t(($) => $.composer.project_tooltip)}
         </p>
       </div>
       <ProjectPickerButton
@@ -43,7 +48,7 @@ export function ChannelProjectSettingsPanel({
         disabled={disabled}
         label={t(($) => $.composer.project_label)}
         noneLabel={t(($) => $.composer.project_none)}
-        tooltip={t(($) => $.composer.project_tooltip)}
+        tooltip={disabled && disabledReason ? disabledReason : t(($) => $.composer.project_tooltip)}
       />
     </div>
   );

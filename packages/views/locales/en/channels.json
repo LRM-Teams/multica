@@ -123,7 +123,9 @@
     "preview_too_large": "File too large to preview"
   },
   "settings": {
-    "title": "Group settings"
+    "title": "Group settings",
+    "project_disabled_archived": "This channel is archived, so its project can't be changed.",
+    "project_disabled_member": "Only the group's creator or an admin can change its project."
   },
   "stats": {
     "title": "Activity",

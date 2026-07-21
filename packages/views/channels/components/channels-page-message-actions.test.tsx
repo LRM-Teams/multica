@@ -41,9 +41,11 @@ vi.mock("@multica/core/api", () => ({ api: apiMock.proxy }));
 // Keep the real mutation hooks (so edit really routes through
 // api.editChannelMessage), but stub the query options to fixtures so the page
 // resolves a single active channel without any network.
-vi.mock("@multica/core/channels", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@multica/core/channels")>();
-  const channel = {
+// Mutable per-test channel fixture (#576 tri-state tests need to flip
+// `created_by`/`archived_at` between tests without re-declaring the whole
+// mock factory).
+const channelFixture = vi.hoisted(() => ({
+  current: {
     id: "chan-1",
     workspace_id: "ws-1",
     name: "general",
@@ -53,11 +55,22 @@ vi.mock("@multica/core/channels", async (importOriginal) => {
     created_by: "user-1",
     created_at: "2026-06-17T09:00:00Z",
     updated_at: "2026-06-17T09:00:00Z",
-  };
+    archived_at: null as string | null,
+  },
+}));
+
+// Mutable per-test workspace-member fixture, so a test can grant the current
+// user an "admin" role without being the channel's creator.
+const memberFixture = vi.hoisted(() => ({
+  current: [] as Array<{ user_id: string; role: string }>,
+}));
+
+vi.mock("@multica/core/channels", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@multica/core/channels")>();
   const options = (queryKey: string[], data: unknown) => ({ queryKey, queryFn: async () => data });
   return {
     ...actual,
-    channelsOptions: () => options(["channels"], [channel]),
+    channelsOptions: () => options(["channels"], [channelFixture.current]),
     archivedChannelsOptions: () => options(["channels-archived"], []),
     channelMembersOptions: () => options(["channel-members"], []),
     channelProjectOptions: () => options(["channel-project"], ""),
@@ -109,7 +122,7 @@ vi.mock("@multica/core/dm", async (importOriginal) => ({
 
 vi.mock("@multica/core/workspace/queries", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@multica/core/workspace/queries")>()),
-  memberListOptions: () => ({ queryKey: ["members"], queryFn: async () => [] }),
+  memberListOptions: () => ({ queryKey: ["members"], queryFn: async () => memberFixture.current }),
   agentListOptions: () => ({ queryKey: ["agents"], queryFn: async () => [] }),
 }));
 
@@ -133,7 +146,11 @@ vi.mock("../../editor/content-editor", () => ({
 }));
 
 vi.mock("../../common/project-picker-button", () => ({
-  ProjectPickerButton: () => <button type="button">project</button>,
+  ProjectPickerButton: (props: { disabled?: boolean }) => (
+    <button type="button" disabled={props.disabled}>
+      project
+    </button>
+  ),
 }));
 
 vi.mock("./dm-conversation", () => ({ DmConversation: () => <div /> }));
@@ -288,6 +305,19 @@ describe("ChannelsPage message edit / delete wiring (#241 B3)", () => {
 describe("ChannelsPage — project picker relocated to group settings (#576)", () => {
   beforeEach(() => {
     listProps.current = null;
+    channelFixture.current = {
+      id: "chan-1",
+      workspace_id: "ws-1",
+      name: "general",
+      kind: "group" as const,
+      description: null,
+      lark_chat_id: null,
+      created_by: "user-1",
+      created_at: "2026-06-17T09:00:00Z",
+      updated_at: "2026-06-17T09:00:00Z",
+      archived_at: null,
+    };
+    memberFixture.current = [];
   });
 
   it("does not render the project picker in the composer", async () => {
@@ -303,5 +333,44 @@ describe("ChannelsPage — project picker relocated to group settings (#576)", (
     await screen.findByTestId("message-list");
     fireEvent.click(screen.getByRole("button", { name: "Group settings" }));
     expect(await screen.findByRole("button", { name: "project" })).toBeTruthy();
+  });
+
+  // #576 blocker (Iris): the picker must be gated by the same permission
+  // canArchive() already uses, plus the archived state — a plain member or
+  // anyone viewing an archived channel could otherwise fire a mutation that
+  // 403s server-side. Tri-state: creator/admin editable, plain member
+  // disabled, archived disabled even for the creator.
+  it("enables the project picker for the channel's creator", async () => {
+    // Fixture default: chan-1.created_by === "user-1" === the signed-in user.
+    renderPage();
+    await screen.findByTestId("message-list");
+    fireEvent.click(screen.getByRole("button", { name: "Group settings" }));
+    expect(await screen.findByRole("button", { name: "project" })).toBeEnabled();
+  });
+
+  it("enables the project picker for a workspace admin who didn't create the channel", async () => {
+    channelFixture.current = { ...channelFixture.current, created_by: "user-2" };
+    memberFixture.current = [{ user_id: "user-1", role: "admin" }];
+    renderPage();
+    await screen.findByTestId("message-list");
+    fireEvent.click(screen.getByRole("button", { name: "Group settings" }));
+    expect(await screen.findByRole("button", { name: "project" })).toBeEnabled();
+  });
+
+  it("disables the project picker for a plain member", async () => {
+    channelFixture.current = { ...channelFixture.current, created_by: "user-2" };
+    memberFixture.current = [{ user_id: "user-1", role: "member" }];
+    renderPage();
+    await screen.findByTestId("message-list");
+    fireEvent.click(screen.getByRole("button", { name: "Group settings" }));
+    expect(await screen.findByRole("button", { name: "project" })).toBeDisabled();
+  });
+
+  it("disables the project picker for an archived channel, even for its creator", async () => {
+    channelFixture.current = { ...channelFixture.current, archived_at: "2026-07-01T00:00:00Z" };
+    renderPage();
+    await screen.findByTestId("message-list");
+    fireEvent.click(screen.getByRole("button", { name: "Group settings" }));
+    expect(await screen.findByRole("button", { name: "project" })).toBeDisabled();
   });
 });

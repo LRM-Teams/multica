@@ -301,28 +301,30 @@ describe("AgentStatusDot", () => {
   });
 });
 
-describe("ActorAvatar uniform fallback (#451, no per-agent color)", () => {
-  it("agent fallback uses the uniform muted fill — no per-id hash color", () => {
+describe("ActorAvatar fallback (LRM-201 single glyph + stable tone)", () => {
+  it("agent fallback uses a stable tone class — not flat gray two-letter disc", () => {
     const { container } = render(
       <ActorAvatar actorType="agent" actorId="agent-1" profileLink={false} />,
     );
     const node = container.querySelector('[data-slot="avatar"]') as HTMLElement | null;
     expect(node).not.toBeNull();
-    // #451 (Frank: "bot 头像不要五颜六色"): agents no longer get a per-id inline
-    // tint — the fallback is one restrained uniform muted fill (a class, not an
-    // inline color). Distinguish agents by name/handle or a custom avatar.
+    // LRM-201: missing/failed avatar → single glyph + stable palette (not bg-muted).
     expect(node!.style.backgroundColor).toBe("");
     expect(node!.style.color).toBe("");
-    expect(node!.className).toContain("bg-muted");
+    expect(node!.className).toMatch(/bg-\[#/);
+    expect(node!.className).not.toContain("bg-muted");
+    expect(node!.getAttribute("data-fallback")).toBe("true");
+    expect((node!.textContent || "").trim().length).toBe(1);
   });
 
-  it("member fallback also uses the uniform muted fill (no inline color)", () => {
+  it("member fallback also uses a stable tone class (no inline color)", () => {
     const { container } = render(
       <ActorAvatar actorType="member" actorId="user-1" profileLink={false} />,
     );
     const node = container.querySelector('[data-slot="avatar"]') as HTMLElement | null;
     expect(node).not.toBeNull();
     expect(node!.style.backgroundColor).toBe("");
+    expect(node!.className).toMatch(/bg-\[#/);
   });
 });
 

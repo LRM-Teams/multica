@@ -25,7 +25,7 @@ import {
 import { useActorName } from "@multica/core/workspace/hooks";
 import type { ChannelMessage } from "@multica/core/types";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
-import { avatarGlyph, avatarToneClass } from "../../common/initials";
+import { avatarGlyph } from "../../common/initials";
 import { InlineReferenceContent } from "../../common/inline-reference-content";
 import { useT } from "../../i18n/use-t";
 import { useMessageTime } from "../../i18n/use-message-time";
@@ -419,7 +419,8 @@ export function ChannelMessageBubble({
       isAgent={isAgent}
       isSystem={false}
       size={28}
-      className={cn("select-none", avatarToneClass(avatarSeed))}
+      toneSeed={avatarSeed}
+      className="select-none"
     />
   );
   // Message rows carry NO live presence dot. A message is history, so pinning
@@ -763,7 +764,7 @@ export function ChannelMessageBubble({
         ) : (
           <div
             className={cn(
-              "message-surface relative min-w-0 max-w-full select-text break-words text-sm leading-6 text-foreground",
+              "message-surface relative min-w-0 max-w-full select-text break-words [overflow-wrap:anywhere] text-sm leading-6 text-foreground",
               isContentCollapsed && "overflow-hidden",
               isContentCollapsed ? HISTORY_MESSAGE_COLLAPSE_HEIGHT_CLASS : "overflow-visible",
               searchHighlighted && "rounded-md bg-primary/5",

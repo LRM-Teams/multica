@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { Users } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
+import { avatarGlyph, avatarToneClass } from "@multica/ui/lib/avatar-fallback";
 import { MulticaIcon } from "./multica-icon";
 
 interface ActorAvatarProps {
@@ -19,6 +20,11 @@ interface ActorAvatarProps {
   isSquad?: boolean;
   size?: number;
   className?: string;
+  /**
+   * Seed for the stable fallback tone palette (LRM-201). Defaults to `name`.
+   * Prefer an actor id when available so rename does not recolor the disc.
+   */
+  toneSeed?: string;
 }
 
 function ActorAvatar({
@@ -29,6 +35,7 @@ function ActorAvatar({
   isSquad,
   size = 20,
   className,
+  toneSeed,
 }: ActorAvatarProps) {
   const [imgError, setImgError] = useState(false);
 
@@ -37,22 +44,24 @@ function ActorAvatar({
   }, [avatarUrl]);
 
   const showFallback = !avatarUrl || imgError;
+  // Single glyph always — callers may still pass two-letter initials for
+  // legacy surfaces; LRM-201 forbids gray double-letter fake faces.
+  const fallbackGlyph = avatarGlyph(name) || avatarGlyph(initials) || "?";
+  const tone = avatarToneClass(toneSeed || name || initials || "?");
 
   return (
     <div
       data-slot="avatar"
+      data-fallback={showFallback ? "true" : undefined}
       className={cn(
         "inline-flex shrink-0 items-center justify-center font-medium overflow-hidden",
         // Squads (a group, non-human) get a square tile so they don't read as
         // a single person; everyone else stays round.
         isSquad ? "rounded-md" : "rounded-full",
-        // One restrained, uniform fallback for everyone — no per-actor hash
-        // colors, no bot glyph (#451, Frank: retire the robot / random colors).
-        // Agents render their persisted avatar URL; this text fallback only
-        // shows when it is missing or fails to load, in which case initials
-        // read better than a glyph.
-        showFallback && "bg-muted text-muted-foreground",
-        className
+        // Missing / failed image → stable tone palette (LRM-201). Callers may
+        // still pass an explicit tone via className; tw-merge keeps the last bg-*.
+        showFallback && !isSystem && !isSquad && tone,
+        className,
       )}
       style={{
         width: size,
@@ -73,7 +82,7 @@ function ActorAvatar({
       ) : isSquad ? (
         <Users style={{ width: size * 0.55, height: size * 0.55 }} />
       ) : (
-        initials
+        fallbackGlyph
       )}
     </div>
   );

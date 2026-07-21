@@ -634,7 +634,8 @@ func TestWriteAgentRootSection(t *testing.T) {
 	for _, want := range []string{
 		"Your personal workspace directory (one per agent, persists across runs):",
 		root + "/",
-		"- memory: " + root + "/memory/  (MEMORY.md, USER.md, STATE.md, REVIEW.md, daily/)",
+		"- memory: " + root + "/memory/  (MEMORY.md, STATE.md, REVIEW.md, daily/)",
+		"- scoped: " + root + "/users/<member-id>/  (USER.md, RELATIONSHIP.md); projects/<project-id>/; channels/<channel-id>/CONTEXT.md",
 		"- skills: " + root + "/skills/  (drafts/, generated/, enabled/)",
 		"- notes:  " + root + "/notes/  (agents.md, channels.md, project-map.md, relationship-map.md, role-playbook.md, work-log.md, decisions.md)",
 		"When asked where your memory or files live, give these absolute paths.",

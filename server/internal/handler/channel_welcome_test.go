@@ -331,7 +331,11 @@ func TestChannelContextMessagesExcludingTrigger(t *testing.T) {
 }
 
 func TestBuildChannelWelcomePrompt(t *testing.T) {
-	p := buildChannelWelcomePrompt("产品讨论", "张三")
+	const (
+		channelID = "5a7ba4e8-85a2-4a7a-8047-a38c41ef85ed"
+		memberID  = "cf7670af-d77f-469c-b395-36b390119bd7"
+	)
+	p := buildChannelWelcomePrompt("产品讨论", "张三", channelID, memberID)
 
 	if !strings.Contains(p, "张三") {
 		t.Error("prompt should name the joining member")
@@ -347,6 +351,18 @@ func TestBuildChannelWelcomePrompt(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(p), "one short line") {
 		t.Error("prompt must constrain the welcome to one short line")
+	}
+	if !strings.Contains(p, "RELATIONSHIP.md") {
+		t.Error("prompt should instruct a silent RELATIONSHIP.md write for the joiner")
+	}
+	if !strings.Contains(p, memberID) {
+		t.Error("prompt must include the joiner member id for the RELATIONSHIP path")
+	}
+	if !strings.Contains(p, channelID) {
+		t.Error("prompt must include the channel id for scoped channel context writes")
+	}
+	if !strings.Contains(p, "silently record") {
+		t.Error("prompt should keep the relationship write silent (no chat about remembering)")
 	}
 	for _, banned := range []string{"structured sticker", "stickers are unavailable", "sticker JSON", ":sticker:", "\"action\"", "\"parts\"", "\"sticker_id\""} {
 		if strings.Contains(p, banned) {

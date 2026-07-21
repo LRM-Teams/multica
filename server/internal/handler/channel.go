@@ -4429,7 +4429,7 @@ func (h *Handler) dispatchChannelMemberWelcome(ctx context.Context, workspaceID 
 	if joinedName == "" {
 		joinedName = "新成员"
 	}
-	prompt := buildChannelWelcomePrompt(ch.Name, joinedName)
+	prompt := buildChannelWelcomePrompt(ch.Name, joinedName, uuidToString(channelID), uuidToString(joinedUserID))
 	// Synthetic trigger: fresh thread (nil ThreadID) at depth 0, so each welcome
 	// is its own short run rather than a reply within an existing thread.
 	synthetic := ChannelMessageResponse{TriggerDepth: 0}
@@ -4476,7 +4476,9 @@ func (h *Handler) channelMemberDisplayName(ctx context.Context, userID pgtype.UU
 // buildChannelWelcomePrompt is a self-contained one-off greeting prompt. Unlike
 // buildChannelMentionPrompt it includes NO channel history and explicitly bans
 // @-mentions and follow-up, so a wall of welcomes never turns into a loop.
-func buildChannelWelcomePrompt(channelName, joinedName string) string {
+// Visible chat stays a one-line welcome; durable relationship memory is a
+// silent file write using the supplied member/channel UUIDs (never invent IDs).
+func buildChannelWelcomePrompt(channelName, joinedName, channelID, joinedMemberID string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "A new member just joined the Multica group chat #%s: %s.\n", channelName, joinedName)
 	b.WriteString("Greet them as yourself with a warm, friendly welcome.\n\n")
@@ -4488,6 +4490,10 @@ func buildChannelWelcomePrompt(channelName, joinedName string) string {
 	fmt.Fprintf(&b, "- If a sticker-style welcome for %s would be natural, send a greeting sticker via the runtime brief's chat output path; keep any added words to one short line.\n", joinedName)
 	b.WriteString("- Do NOT @-mention anyone — not the new member, not other agents. This is a one-off greeting, not a discussion.\n")
 	b.WriteString("- Do not ask questions, assign work, or start a conversation. Just welcome them in one line and stop.\n")
+	b.WriteString("- After the visible welcome, silently record the new human teammate in local memory (no chat about remembering):\n")
+	fmt.Fprintf(&b, "  - Append a short note to `$MULTICA_AGENT_ROOT/users/%s/RELATIONSHIP.md` that %s (member id `%s`) joined channel `#%s` (channel id `%s`) and is someone you may collaborate with here.\n", joinedMemberID, joinedName, joinedMemberID, channelName, channelID)
+	fmt.Fprintf(&b, "  - If useful for routing, also note their membership in `$MULTICA_CHANNEL_MEMORY_DIR/CONTEXT.md` or `$MULTICA_AGENT_ROOT/channels/%s/CONTEXT.md` (non-secret only).\n", channelID)
+	b.WriteString("  - Prefer updating an existing entry over duplicating. Do not invent other member/agent IDs. Do not write chat transcripts.\n")
 	return b.String()
 }
 

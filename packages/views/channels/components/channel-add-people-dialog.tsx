@@ -148,39 +148,44 @@ export function ChannelAddPeopleDialog({
                 : t(($) => $.members.no_candidates)}
             </p>
           ) : (
-            candidates.map((c) => (
-              <label
-                key={c.key}
-                className={cn(
-                  "flex min-h-[52px] cursor-pointer items-center gap-3 px-5 py-2.5 hover:bg-accent/60",
-                  selected.has(c.key) && "bg-accent/40",
-                )}
-              >
-                <Checkbox
-                  checked={selected.has(c.key)}
-                  onCheckedChange={() => onToggle(c.key)}
-                />
-                <ActorAvatar
-                  name={c.presentation.displayName}
-                  initials={avatarGlyph(c.presentation.displayName || "?")}
-                  avatarUrl={resolvePublicFileUrl(c.avatarUrl)}
-                  isAgent={c.type === "agent"}
-                  size={36}
-                  className={avatarToneClass(c.key)}
-                />
-                <ActorIdentityRow
-                  displayName={c.presentation.displayName}
-                  handle={
-                    c.type === "agent"
-                      ? `${c.presentation.handle} · ${t(($) => $.profile_popover.role.agent)}`
-                      : c.presentation.handle
-                  }
-                  showHandle
-                  className="min-w-0 flex-1"
-                  primaryClassName="truncate text-sm font-semibold"
-                />
-              </label>
-            ))
+            candidates.map((c) => {
+              const checkboxId = `invite-${c.key.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+              return (
+                <label
+                  key={c.key}
+                  htmlFor={checkboxId}
+                  className={cn(
+                    "flex min-h-[52px] cursor-pointer items-center gap-3 px-5 py-2.5 hover:bg-accent/60",
+                    selected.has(c.key) && "bg-accent/40",
+                  )}
+                >
+                  <Checkbox
+                    id={checkboxId}
+                    checked={selected.has(c.key)}
+                    onCheckedChange={() => onToggle(c.key)}
+                  />
+                  <ActorAvatar
+                    name={c.presentation.displayName}
+                    initials={avatarGlyph(c.presentation.displayName || "?")}
+                    avatarUrl={resolvePublicFileUrl(c.avatarUrl)}
+                    isAgent={c.type === "agent"}
+                    size={36}
+                    className={avatarToneClass(c.key)}
+                  />
+                  <ActorIdentityRow
+                    displayName={c.presentation.displayName}
+                    handle={
+                      c.type === "agent"
+                        ? `${c.presentation.handle} · ${t(($) => $.profile_popover.role.agent)}`
+                        : c.presentation.handle
+                    }
+                    showHandle
+                    className="min-w-0 flex-1"
+                    primaryClassName="truncate text-sm font-semibold"
+                  />
+                </label>
+              );
+            })
           )}
         </div>
 

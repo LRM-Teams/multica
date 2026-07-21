@@ -661,6 +661,79 @@ func TestAgentActivityCanonicalToolName_UsesRaftAliases(t *testing.T) {
 	}
 }
 
+func TestAgentActivityCanonicalToolName_CoversNarrativeActionMatrix(t *testing.T) {
+	tests := map[string]string{
+		"send_message":         "send_message",
+		"message_send":         "send_message",
+		"check_messages":       "check_messages",
+		"wait_for_message":     "wait_for_message",
+		"receive_message":      "receive_message",
+		"read_messages":        "read_history",
+		"read_history":         "read_history",
+		"search_messages":      "search_messages",
+		"list_server":          "list_server",
+		"list_tasks":           "list_tasks",
+		"create_tasks":         "create_tasks",
+		"claim_tasks":          "claim_tasks",
+		"unclaim_task":         "unclaim_task",
+		"update_task_status":   "update_task_status",
+		"add_channel_member":   "add_channel_member",
+		"join_channel":         "join_channel",
+		"leave_channel":        "leave_channel",
+		"upload_file":          "upload_file",
+		"view_file":            "view_file",
+		"web_fetch":            "web_fetch",
+		"schedule_reminder":    "schedule_reminder",
+		"list_reminders":       "list_reminders",
+		"cancel_reminder":      "cancel_reminder",
+		"todo_write":           "todo_write",
+		"collab_tool_call":     "collab_tool_call",
+		"list_issues":          "list_issues",
+		"get_issue":            "get_issue",
+		"search_issues":        "search_issues",
+		"list_issue_comments":  "list_issue_comments",
+		"comment_issue":        "comment_issue",
+		"delete_issue_comment": "delete_issue_comment",
+	}
+
+	for raw, want := range tests {
+		got, known := agentActivityCanonicalToolNameKnown(raw)
+		if !known || got != want {
+			t.Fatalf("agentActivityCanonicalToolNameKnown(%q) = %q/%v, want %q/true", raw, got, known, want)
+		}
+	}
+}
+
+func TestAgentActivityTimelineEvent_AliasProducesSingleCanonicalEntry(t *testing.T) {
+	tests := map[string]string{
+		"message_send":  "send_message",
+		"read_messages": "read_history",
+		"FetchURL":      "web_fetch",
+		"SetTodoList":   "todo_write",
+	}
+
+	for raw, want := range tests {
+		t.Run(raw, func(t *testing.T) {
+			details, err := json.Marshal(map[string]any{"tool": raw, "input": map[string]any{}})
+			if err != nil {
+				t.Fatalf("marshal details: %v", err)
+			}
+			event := agentActivityTimelineEvent(agentActivityRawRow{
+				ID:      parseUUID("11111111-1111-1111-1111-111111111111"),
+				AgentID: parseUUID("22222222-2222-2222-2222-222222222222"),
+				Kind:    activityKindToolCall,
+				Details: details,
+			}, AgentActivityTargetRef{})
+			if event.Tool == nil || *event.Tool != want {
+				t.Fatalf("event tool = %+v, want %q", event.Tool, want)
+			}
+			if len(event.Entries) != 1 || event.Entries[0].Tool == nil || *event.Entries[0].Tool != want {
+				t.Fatalf("entries = %+v, want one canonical %q entry", event.Entries, want)
+			}
+		})
+	}
+}
+
 func TestTaskMessageCanonicalToolName_StatusLikeCommandIsBash(t *testing.T) {
 	canonical, known := taskMessageCanonicalToolName("running", map[string]any{
 		"command": "multica message send --target #multica --message-file hello_world.txt",

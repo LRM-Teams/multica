@@ -2546,11 +2546,12 @@ func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.Agent
 		h.suppressChannelTaskCompleteOutput(ctx, task, req, protocol.ChannelOutputSuppressedReasonToolTransportOutput)
 		return nil
 	}
-	// Channel visibility is owned by the agent transport when the runtime has that
-	// boundary. Inbox-backed directed mentions may still run on older runtimes that
-	// only return final text; bridge that final answer so the group is not left with
-	// activity-only replies.
-	if channelTask && (outputType == protocol.ChatOutputKindMessage || outputType == protocol.ChatOutputKindReaction) && !h.allowAgentInboxCompletionVisibleOutput(ctx, task) {
+	// Channel visibility is owned by the agent transport (the same explicit
+	// message-send boundary exposed to agents as Raft). A task completion is a
+	// terminal status report, never a second message-writing path. In
+	// particular, neither a plain final string nor completion-level
+	// message_send/message_react may be bridged into the channel.
+	if channelTask && (outputType == protocol.ChatOutputKindMessage || outputType == protocol.ChatOutputKindReaction) {
 		if task.Priority >= 2 {
 			req.MustReplyFailure = true
 		}
@@ -2683,30 +2684,6 @@ func (h *Handler) suppressChannelTaskCompleteOutput(ctx context.Context, task db
 		req.MustReplyFailure = true
 	}
 	h.suppressTaskCompleteOutput(req, reason)
-}
-
-func (h *Handler) allowAgentInboxCompletionVisibleOutput(ctx context.Context, task db.AgentTaskQueue) bool {
-	if task.Priority < 2 {
-		return false
-	}
-	var exists bool
-	if err := h.DB.QueryRow(ctx, `
-		SELECT EXISTS (
-		  SELECT 1
-		  FROM agent_inbox_event
-		  WHERE id = $1
-		    AND agent_id = $2
-		    AND requires_wake
-		    AND delivery_mode = 'execute'
-		    AND response_mode = 'public_response'
-		    AND reason IN ('mention', 'thread_reply', 'handoff', 'dm', 'group_command')
-		)`, task.ID, task.AgentID).Scan(&exists); err != nil {
-		if !isNotFound(err) {
-			slog.Warn("complete task: failed to resolve inbox completion output policy", "task_id", uuidToString(task.ID), "error", err)
-		}
-		return false
-	}
-	return exists
 }
 
 func (h *Handler) isChannelAgentTask(ctx context.Context, task db.AgentTaskQueue) bool {

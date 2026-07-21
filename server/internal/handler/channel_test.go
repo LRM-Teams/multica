@@ -1100,7 +1100,7 @@ func TestChannelAgentInboxDrainDoesNotReplayFailedPromptBacklog(t *testing.T) {
 	}
 }
 
-func TestChannelAgentInboxCompleteDirectedMentionWithoutTransportPublishesFinalReply(t *testing.T) {
+func TestChannelAgentInboxCompleteDirectedMentionAfterNoPublicOutputObserveRecordsNoReply(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -1147,9 +1147,40 @@ func TestChannelAgentInboxCompleteDirectedMentionWithoutTransportPublishesFinalR
 		t.Fatalf("drained task = %+v, want inbox-backed chat task for event %s", got.Task, got.ID)
 	}
 
+	// Reproduce the exact interleaving from #646: while the original directed
+	// public-response run is still active, the same agent consumes a later
+	// no-public-output observation. The directed event's metadata must never
+	// authorize completion final text as a visible channel message.
+	observeSource, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "Later context that requires observation only", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-complete-observe"), 0)
+	if err != nil {
+		t.Fatalf("insert no-public-output observe source: %v", err)
+	}
+	var observeEventID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_inbox_event (
+			workspace_id, agent_session_id, conversation_id, channel_id,
+			agent_id, runtime_id, source_message_id, reason,
+			delivery_mode, response_mode, requires_wake, status,
+			priority, seq_from, seq_to
+		)
+		SELECT workspace_id, agent_session_id, conversation_id, channel_id,
+		       agent_id, runtime_id, $2, 'ambient',
+		       'observe', 'no_public_output', false, 'acked',
+		       0, $3, $3
+		FROM agent_inbox_event
+		WHERE id = $1
+		RETURNING id
+	`, got.ID, observeSource.ID, observeSource.Seq).Scan(&observeEventID); err != nil {
+		t.Fatalf("seed consumed no-public-output observe: %v", err)
+	}
+
+	chatDoneEvents := 0
+	var completionPayload protocol.ChatDonePayload
 	testHandler.Bus.Subscribe(protocol.EventChatDone, func(e events.Event) {
 		payload, ok := e.Payload.(protocol.ChatDonePayload)
 		if ok && payload.TaskID == got.ID {
+			chatDoneEvents++
+			completionPayload = payload
 			testHandler.handleChannelChatDone(e)
 		}
 	})
@@ -1174,7 +1205,21 @@ func TestChannelAgentInboxCompleteDirectedMentionWithoutTransportPublishesFinalR
 	if completeRec.Code != http.StatusOK {
 		t.Fatalf("complete inbox event: status=%d body=%s", completeRec.Code, completeRec.Body.String())
 	}
-	assertChannelMessageContentCount(t, channelID, reply, 1)
+	assertChannelMessageContentCount(t, channelID, reply, 0)
+	if chatDoneEvents != 1 || completionPayload.Type != protocol.ChatOutputKindNoReply || completionPayload.Content != "" || len(completionPayload.Parts) != 0 {
+		t.Fatalf("completion terminal payload = count:%d type:%q content:%q parts:%+v, want one no_reply terminal without visible content", chatDoneEvents, completionPayload.Type, completionPayload.Content, completionPayload.Parts)
+	}
+	var completionChatMessages int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM chat_message
+		WHERE task_id = $1 AND role = 'assistant' AND content = $2
+	`, got.ID, reply).Scan(&completionChatMessages); err != nil {
+		t.Fatalf("count completion assistant messages: %v", err)
+	}
+	if completionChatMessages != 0 {
+		t.Fatalf("completion assistant messages = %d, want 0", completionChatMessages)
+	}
 
 	var status, terminalOutcome, terminalDeliveryID string
 	var retryable bool
@@ -1188,8 +1233,19 @@ func TestChannelAgentInboxCompleteDirectedMentionWithoutTransportPublishesFinalR
 	if status != "acked" {
 		t.Fatalf("inbox event status = %q, want acked", status)
 	}
-	if terminalOutcome != "replied" || terminalDeliveryID != got.DeliveryID || retryable || !terminalAt.Valid {
-		t.Fatalf("inbox completion terminal projection = outcome:%q delivery:%q retryable:%v terminal_at:%v, want replied/%s/non-retryable/timestamp", terminalOutcome, terminalDeliveryID, retryable, terminalAt.Valid, got.DeliveryID)
+	if terminalOutcome != "no_reply" || terminalDeliveryID != got.DeliveryID || retryable || !terminalAt.Valid {
+		t.Fatalf("inbox completion terminal projection = outcome:%q delivery:%q retryable:%v terminal_at:%v, want no_reply/%s/non-retryable/timestamp", terminalOutcome, terminalDeliveryID, retryable, terminalAt.Valid, got.DeliveryID)
+	}
+	var observeMode, observeResponseMode, observeStatus string
+	if err := testPool.QueryRow(ctx, `
+		SELECT delivery_mode, response_mode, status
+		FROM agent_inbox_event
+		WHERE id = $1
+	`, observeEventID).Scan(&observeMode, &observeResponseMode, &observeStatus); err != nil {
+		t.Fatalf("load consumed observe event: %v", err)
+	}
+	if observeMode != "observe" || observeResponseMode != "no_public_output" || observeStatus != "acked" {
+		t.Fatalf("observe event = %s/%s/%s, want observe/no_public_output/acked", observeMode, observeResponseMode, observeStatus)
 	}
 
 	statusRows, err := testPool.Query(ctx, `

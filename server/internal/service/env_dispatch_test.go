@@ -174,7 +174,12 @@ func (f *fakeEnvDispatchDeps) ProvisionEnvDispatchAgent(ctx context.Context, in 
 	if err != nil {
 		return EnvDispatchAgentProvisionResult{}, err
 	}
+	executionAgentID := "derived-" + in.AgentID
+	if in.SourceSandboxInstanceID != "" {
+		executionAgentID = in.AgentID
+	}
 	return EnvDispatchAgentProvisionResult{
+		AgentID:           executionAgentID,
 		SandboxInstanceID: "binding-sandbox-" + in.AgentID,
 		RuntimeID:         runtimeID,
 		DaemonID:          daemonID,
@@ -854,8 +859,8 @@ func TestBranchAppendsNewMessageWithoutChangingTriggerAgent(t *testing.T) {
 	if len(f.provisionCalls) != 1 || f.provisionCalls[0].AgentID != "leader" {
 		t.Fatalf("trigger agent should remain leader, got %+v", f.provisionCalls)
 	}
-	if len(f.channelRuns) != 1 || f.channelRuns[0].AgentID != "leader" {
-		t.Fatalf("channel run should target the trigger agent, got %+v", f.channelRuns)
+	if len(f.channelRuns) != 1 || f.channelRuns[0].AgentID != "derived-leader" {
+		t.Fatalf("channel run should target the trigger agent's derived execution agent, got %+v", f.channelRuns)
 	}
 	// The saved trigger is remapped onto the destination channel, with a fresh task/runtime.
 	if len(f.triggers) != 1 {
@@ -2068,8 +2073,8 @@ func TestScratchMessageProvisionsOnlyLeader(t *testing.T) {
 	if len(f.channelMessages) != 1 || f.channelMessages[0] != "start the rollout" {
 		t.Fatalf("unexpected channel messages: %v", f.channelMessages)
 	}
-	if len(f.channelRuns) != 1 || f.channelRuns[0].AgentID != "leader" || f.channelRuns[0].RuntimeID != "rt-1" {
-		t.Fatalf("leader run must use its bound runtime, got %+v", f.channelRuns)
+	if len(f.channelRuns) != 1 || f.channelRuns[0].AgentID != "derived-leader" || f.channelRuns[0].RuntimeID != "rt-1" {
+		t.Fatalf("leader run must use its derived agent and bound runtime, got %+v", f.channelRuns)
 	}
 	r := res.Rollouts[0]
 	createdEnv, ok := f.envs[r.EnvID]

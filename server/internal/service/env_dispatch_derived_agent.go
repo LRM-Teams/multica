@@ -63,9 +63,9 @@ type CloneDeps interface {
 	// CopyApprovedSkills copies the source agent's approved skills to the derived
 	// agent. Source skills are read, never mutated.
 	CopyApprovedSkills(ctx context.Context, workspaceID, sourceAgentID, derivedAgentID string) error
-	// ReplaceDispatchChannelMember adds the derived agent to the env-dispatch
-	// channel and removes only the source member from that channel. The source's
-	// memberships outside this channel are untouched.
+	// ReplaceDispatchChannelMember replaces an existing source-owned dispatch
+	// channel session with the derived agent. The canonical channel_member stays
+	// source-keyed so future user mentions resolve through the binding.
 	ReplaceDispatchChannelMember(ctx context.Context, channelID, sourceAgentID, derivedAgentID string) error
 	// SetBindingDerivedAgent persists the derived agent ID on the claimed
 	// env-dispatch binding so subsequent dispatches route to the derived agent.
@@ -100,7 +100,7 @@ func CloneEnvDispatchAgent(ctx context.Context, q CloneDeps, in CloneEnvDispatch
 		WorkspaceID:    in.WorkspaceID,
 		SourceAgentID:  in.SourceAgentID,
 		RuntimeID:      in.RuntimeID,
-		Name:           src.Name,
+		Name:           envDispatchDerivedAgentName(in.BindingID),
 		Instructions:   src.Instructions,
 		ApprovedConfig: src.ApprovedConfig,
 	})
@@ -117,4 +117,11 @@ func CloneEnvDispatchAgent(ctx context.Context, q CloneDeps, in CloneEnvDispatch
 		return "", fmt.Errorf("set binding derived agent: %w", err)
 	}
 	return derivedID, nil
+}
+
+// envDispatchDerivedAgentName is stable for one canonical binding and unique
+// within a workspace. It deliberately does not copy the source name because
+// agent_workspace_name_unique rejects two agents with the same name.
+func envDispatchDerivedAgentName(bindingID string) string {
+	return "env-" + bindingID
 }

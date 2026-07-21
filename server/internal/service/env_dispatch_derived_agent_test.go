@@ -88,7 +88,7 @@ func TestCloneEnvDispatchAgentCreatesDerivedWithLineageAndRuntime(t *testing.T) 
 	if deps.created.RuntimeID != "rt-1" {
 		t.Fatalf("derived RuntimeID = %q, want rt-1", deps.created.RuntimeID)
 	}
-	if deps.created.Name != "agent-a" || deps.created.Instructions != "do thing" {
+	if deps.created.Name != "env-bind-1" || deps.created.Instructions != "do thing" {
 		t.Fatalf("derived did not copy approved config: %+v", deps.created)
 	}
 	if string(deps.created.ApprovedConfig) != `{"pi":"visible"}` {

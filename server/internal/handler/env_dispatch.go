@@ -817,6 +817,7 @@ func (a *envDispatchDepsAdapter) ProvisionEnvDispatchAgent(ctx context.Context, 
 		return service.EnvDispatchAgentProvisionResult{}, err
 	}
 	return service.EnvDispatchAgentProvisionResult{
+		AgentID:           result.AgentID,
 		SandboxInstanceID: result.SandboxInstanceID,
 		RuntimeID:         result.RuntimeID,
 		DaemonID:          result.DaemonID,
@@ -1775,7 +1776,7 @@ func (s *stubEnvDispatchDeps) CreateEnvDispatchChannel(context.Context, string, 
 }
 func (s *stubEnvDispatchDeps) DeleteChannel(context.Context, string, string) error { return nil }
 func (s *stubEnvDispatchDeps) ProvisionEnvDispatchAgent(context.Context, service.EnvDispatchAgentProvisionInput) (service.EnvDispatchAgentProvisionResult, error) {
-	return service.EnvDispatchAgentProvisionResult{SandboxInstanceID: "stub-sandbox", RuntimeID: "stub-runtime", DaemonID: "stub-daemon", ChatSessionID: "stub-session"}, nil
+	return service.EnvDispatchAgentProvisionResult{AgentID: "stub-derived-agent", SandboxInstanceID: "stub-sandbox", RuntimeID: "stub-runtime", DaemonID: "stub-daemon", ChatSessionID: "stub-session"}, nil
 }
 func (s *stubEnvDispatchDeps) CreateChannelMessage(context.Context, string, string, string, string) (string, error) {
 	return "stub-channel-message", nil

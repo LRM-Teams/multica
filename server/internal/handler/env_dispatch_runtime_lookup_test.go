@@ -17,16 +17,24 @@ import (
 // row->RuntimeRef mapping and error translation be unit-tested without a
 // database (testPool is nil in this env; DB-backed coverage runs in CI).
 type fakeRuntimeLookupDBTX struct {
-	row *fakeRuntimeRow
+	row          *fakeRuntimeRow
+	queryRowSQL  string
+	queryRowArgs []any
+	execSQL      string
+	execArgs     []any
 }
 
-func (f *fakeRuntimeLookupDBTX) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
+func (f *fakeRuntimeLookupDBTX) Exec(_ context.Context, query string, args ...any) (pgconn.CommandTag, error) {
+	f.execSQL = query
+	f.execArgs = args
 	return pgconn.CommandTag{}, nil
 }
 func (f *fakeRuntimeLookupDBTX) Query(context.Context, string, ...any) (pgx.Rows, error) {
 	return nil, nil
 }
-func (f *fakeRuntimeLookupDBTX) QueryRow(_ context.Context, _ string, _ ...any) pgx.Row {
+func (f *fakeRuntimeLookupDBTX) QueryRow(_ context.Context, query string, args ...any) pgx.Row {
+	f.queryRowSQL = query
+	f.queryRowArgs = args
 	return f.row
 }
 

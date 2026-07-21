@@ -178,7 +178,7 @@ type EnvDispatchAgentProvisionInput struct {
 }
 
 type EnvDispatchAgentProvisionResult struct {
-	SandboxInstanceID, RuntimeID, DaemonID, ChatSessionID string
+	AgentID, SandboxInstanceID, RuntimeID, DaemonID, ChatSessionID string
 }
 
 // ChannelRunInput carries the explicit binding IDs that must be used for an
@@ -1266,7 +1266,7 @@ func (s *EnvDispatchService) dispatchScratchChannelMessage(ctx context.Context, 
 		return
 	}
 	runID, err := s.deps.EnqueueEnvDispatchChannelRun(ctx, in.WorkspaceID, in.UserID, ChannelRunInput{
-		AgentID:           leaderID,
+		AgentID:           provisioned.AgentID,
 		ChannelID:         r.ChannelID,
 		ProjectID:         r.ProjectID,
 		EnvID:             r.EnvID,
@@ -1378,7 +1378,7 @@ func (s *EnvDispatchService) dispatchBranchChannelMessage(ctx context.Context, i
 		return
 	}
 	runID, err := s.deps.EnqueueEnvDispatchChannelRun(ctx, in.WorkspaceID, in.UserID, ChannelRunInput{
-		AgentID:           dst.AgentID,
+		AgentID:           provisioned.AgentID,
 		ChannelID:         r.ChannelID,
 		ProjectID:         r.ProjectID,
 		EnvID:             r.EnvID,

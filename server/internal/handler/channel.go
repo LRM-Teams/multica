@@ -3809,9 +3809,11 @@ func (h *Handler) enqueueChannelAgentPromptRangeWithTx(ctx context.Context, qtx 
 	}
 	if !handled {
 		session, err = h.ensureChannelAgentSessionWithDB(ctx, qtx, exec, ch, agent.ID, initiatorUserID)
+	} else if binding.DerivedAgentID != nil && *binding.DerivedAgentID != "" {
+		agent, err = qtx.GetAgent(ctx, parseUUID(*binding.DerivedAgentID))
 	}
 	if err != nil {
-		return channelAgentPromptTxResult{}, fmt.Errorf("ensure channel agent session: %w", err)
+		return channelAgentPromptTxResult{}, fmt.Errorf("resolve channel execution agent session: %w", err)
 	}
 	conversationID, err := h.channelConversationIDWithDB(ctx, exec, parseUUID(ch.ID))
 	if err != nil {
@@ -3893,7 +3895,7 @@ func (h *Handler) enqueueChannelAgentPromptRangeWithTx(ctx context.Context, qtx 
 			kind = "continuation"
 		}
 		if err := (envDispatchChannelStore{}).saveTrigger(ctx, exec, binding.EnvID, envCollaborationTrigger{
-			AgentID:             uuidToString(agent.ID),
+			AgentID:             binding.SourceAgentID,
 			Kind:                kind,
 			ChannelID:           ch.ID,
 			ProjectID:           uuidToString(session.ProjectID),

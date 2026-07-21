@@ -42,8 +42,9 @@ func (h *Handler) routeEnvDispatchChannelAgent(ctx context.Context, qtx *db.Quer
 	for {
 		switch binding.Status {
 		case "ready":
+			executionAgentID := envDispatchBindingExecutionAgentID(binding)
 			var sessionID pgtype.UUID
-			if err := exec.QueryRow(ctx, `SELECT chat_session_id FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`, channelID, agentID).Scan(&sessionID); err != nil {
+			if err := exec.QueryRow(ctx, `SELECT chat_session_id FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`, channelID, executionAgentID).Scan(&sessionID); err != nil {
 				return db.ChatSession{}, binding, true, fmt.Errorf("load env-dispatch channel session: %w", err)
 			}
 			session, err := qtx.GetChatSession(ctx, sessionID)
@@ -93,8 +94,15 @@ func (h *Handler) routeEnvDispatchChannelAgent(ctx context.Context, qtx *db.Quer
 	}
 }
 
+func envDispatchBindingExecutionAgentID(binding envAgentSandboxBinding) string {
+	if binding.DerivedAgentID != nil && *binding.DerivedAgentID != "" {
+		return *binding.DerivedAgentID
+	}
+	return binding.SourceAgentID
+}
+
 type ProvisionEnvDispatchAgentResult struct {
-	SandboxInstanceID, RuntimeID, DaemonID, ChatSessionID string
+	AgentID, SandboxInstanceID, RuntimeID, DaemonID, ChatSessionID string
 }
 
 // provisionEnvDispatchAgent creates the isolated runtime/session pair that an
@@ -148,10 +156,11 @@ func (h *Handler) provisionEnvDispatchAgent(ctx context.Context, in ProvisionEnv
 	}
 	if !won {
 		if binding.Status == "ready" && binding.SandboxInstanceID != nil && binding.RuntimeID != nil && binding.DaemonID != nil {
+			executionAgentID := envDispatchBindingExecutionAgentID(binding)
 			var sessionID string
-			err := h.DB.QueryRow(ctx, `SELECT chat_session_id::text FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`, in.ChannelID, in.AgentID).Scan(&sessionID)
+			err := h.DB.QueryRow(ctx, `SELECT chat_session_id::text FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`, in.ChannelID, executionAgentID).Scan(&sessionID)
 			if err == nil {
-				return ProvisionEnvDispatchAgentResult{SandboxInstanceID: *binding.SandboxInstanceID, RuntimeID: *binding.RuntimeID, DaemonID: *binding.DaemonID, ChatSessionID: sessionID}, nil
+				return ProvisionEnvDispatchAgentResult{AgentID: executionAgentID, SandboxInstanceID: *binding.SandboxInstanceID, RuntimeID: *binding.RuntimeID, DaemonID: *binding.DaemonID, ChatSessionID: sessionID}, nil
 			}
 		}
 		return ProvisionEnvDispatchAgentResult{}, fmt.Errorf("env-dispatch binding is %s", binding.Status)
@@ -246,7 +255,11 @@ func (h *Handler) provisionEnvDispatchAgent(ctx context.Context, in ProvisionEnv
 		_ = store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "sandbox create failed")
 		return ProvisionEnvDispatchAgentResult{}, fmt.Errorf("create sandbox: %w", err)
 	}
+	derivedID := ""
 	cleanup := func(cause error) (ProvisionEnvDispatchAgentResult, error) {
+		if cleanupErr := h.cleanupFailedEnvDispatchDerivedAgent(context.WithoutCancel(ctx), binding.ID, in.AgentID, derivedID); cleanupErr != nil {
+			cause = fmt.Errorf("%w (cleanup derived agent: %v)", cause, cleanupErr)
+		}
 		_ = lifecycle.Delete(context.WithoutCancel(ctx), ref, in.UserID)
 		_ = store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "provisioning failed")
 		return ProvisionEnvDispatchAgentResult{}, cause
@@ -255,7 +268,7 @@ func (h *Handler) provisionEnvDispatchAgent(ctx context.Context, in ProvisionEnv
 	if err != nil {
 		return cleanup(fmt.Errorf("wait for online sandbox runtime: %w", err))
 	}
-	derivedID, err := CloneEnvDispatchAgentTx(ctx, h, service.CloneEnvDispatchAgentInput{
+	derivedID, err = CloneEnvDispatchAgentTx(ctx, h, service.CloneEnvDispatchAgentInput{
 		WorkspaceID:   in.WorkspaceID,
 		SourceAgentID: in.AgentID,
 		RuntimeID:     runtimeRef.ID,
@@ -282,7 +295,30 @@ func (h *Handler) provisionEnvDispatchAgent(ctx context.Context, in ProvisionEnv
 		_, _ = h.DB.Exec(context.WithoutCancel(ctx), `DELETE FROM chat_session WHERE id = $1`, sessionID)
 		return cleanup(fmt.Errorf("mark env-dispatch binding ready: %w", err))
 	}
-	return ProvisionEnvDispatchAgentResult{SandboxInstanceID: ref.InstanceID, RuntimeID: runtimeRef.ID, DaemonID: ref.DaemonID, ChatSessionID: sessionID}, nil
+	return ProvisionEnvDispatchAgentResult{AgentID: derivedID, SandboxInstanceID: ref.InstanceID, RuntimeID: runtimeRef.ID, DaemonID: ref.DaemonID, ChatSessionID: sessionID}, nil
+}
+
+// cleanupFailedEnvDispatchDerivedAgent removes the runtime-owning derived
+// agent before sandbox deletion so agent.runtime_id's ON DELETE RESTRICT does
+// not strand the failed attempt's runtime. The CTE makes binding detach and
+// agent deletion atomic and source-lineage guarded. An empty derived ID means
+// provisioning failed before the clone committed and is a no-op.
+func (h *Handler) cleanupFailedEnvDispatchDerivedAgent(ctx context.Context, bindingID, sourceAgentID, derivedAgentID string) error {
+	if derivedAgentID == "" {
+		return nil
+	}
+	_, err := h.DB.Exec(ctx, `
+WITH cleared AS (
+    UPDATE environment_agent_sandbox
+    SET derived_agent_id = NULL, updated_at = now()
+    WHERE id::text = $1 AND derived_agent_id::text = $2
+    RETURNING 1
+)
+DELETE FROM agent
+WHERE id::text = $2
+  AND source_agent_id::text = $3
+  AND EXISTS (SELECT 1 FROM cleared)`, bindingID, derivedAgentID, sourceAgentID)
+	return err
 }
 
 // provisionEnvDispatchAgentBranch handles the branch-trigger path (cloning a
@@ -340,7 +376,7 @@ func (h *Handler) provisionEnvDispatchAgentBranch(ctx context.Context, in Provis
 		_ = lifecycle.Delete(context.WithoutCancel(ctx), ref, in.UserID)
 		return cleanup(err)
 	}
-	return ProvisionEnvDispatchAgentResult{SandboxInstanceID: ref.InstanceID, RuntimeID: runtimeID, DaemonID: daemonID, ChatSessionID: sessionID}, nil
+	return ProvisionEnvDispatchAgentResult{AgentID: in.AgentID, SandboxInstanceID: ref.InstanceID, RuntimeID: runtimeID, DaemonID: daemonID, ChatSessionID: sessionID}, nil
 }
 
 // isEnvDispatchTrainingTarget reports whether the addressed agent is the
@@ -422,7 +458,11 @@ func (h *Handler) provisionEnvDispatchAgentTraining(ctx context.Context, in Prov
 		_ = store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "sandbox create failed")
 		return ProvisionEnvDispatchAgentResult{}, fmt.Errorf("create training sandbox: %w", err)
 	}
+	derivedID := ""
 	cleanup := func(cause error) (ProvisionEnvDispatchAgentResult, error) {
+		if cleanupErr := h.cleanupFailedEnvDispatchDerivedAgent(context.WithoutCancel(ctx), binding.ID, in.AgentID, derivedID); cleanupErr != nil {
+			cause = fmt.Errorf("%w (cleanup derived agent: %v)", cause, cleanupErr)
+		}
 		_ = lifecycle.Delete(context.WithoutCancel(ctx), ref, in.UserID)
 		_ = store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "training provisioning failed")
 		return ProvisionEnvDispatchAgentResult{}, cause
@@ -431,7 +471,7 @@ func (h *Handler) provisionEnvDispatchAgentTraining(ctx context.Context, in Prov
 	if err != nil {
 		return cleanup(fmt.Errorf("wait for online sandbox runtime: %w", err))
 	}
-	derivedID, err := CloneEnvDispatchAgentTx(ctx, h, service.CloneEnvDispatchAgentInput{
+	derivedID, err = CloneEnvDispatchAgentTx(ctx, h, service.CloneEnvDispatchAgentInput{
 		WorkspaceID:   in.WorkspaceID,
 		SourceAgentID: in.AgentID,
 		RuntimeID:     runtimeRef.ID,
@@ -458,5 +498,5 @@ func (h *Handler) provisionEnvDispatchAgentTraining(ctx context.Context, in Prov
 		_, _ = h.DB.Exec(context.WithoutCancel(ctx), `DELETE FROM chat_session WHERE id = $1`, sessionID)
 		return cleanup(fmt.Errorf("mark env-dispatch binding ready: %w", err))
 	}
-	return ProvisionEnvDispatchAgentResult{SandboxInstanceID: ref.InstanceID, RuntimeID: runtimeRef.ID, DaemonID: ref.DaemonID, ChatSessionID: sessionID}, nil
+	return ProvisionEnvDispatchAgentResult{AgentID: derivedID, SandboxInstanceID: ref.InstanceID, RuntimeID: runtimeRef.ID, DaemonID: ref.DaemonID, ChatSessionID: sessionID}, nil
 }

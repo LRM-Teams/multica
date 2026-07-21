@@ -107,13 +107,19 @@ func (s envDispatchChannelStore) claimProvisioning(ctx context.Context, exec db.
 }
 
 func (s envDispatchChannelStore) markReady(ctx context.Context, exec db.DBTX, envID, agentID, sandboxInstanceID, runtimeID, daemonID string) error {
-	_, err := exec.Exec(ctx, `
+	ct, err := exec.Exec(ctx, `
 		UPDATE environment_agent_sandbox
 		SET status = 'ready', sandbox_instance_id = $3, runtime_id = $4, daemon_id = $5,
 			last_error = NULL, updated_at = now()
 		WHERE env_id = $1 AND agent_id = $2 AND status IN ('provisioning','credential_ready','sandbox_creating','runtime_waiting','agent_creating')`,
 		envID, agentID, sandboxInstanceID, runtimeID, daemonID)
-	return err
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() != 1 {
+		return fmt.Errorf("env-dispatch binding was not readyable")
+	}
+	return nil
 }
 
 func (s envDispatchChannelStore) markFailed(ctx context.Context, exec db.DBTX, envID, agentID, message string) error {

@@ -68,14 +68,17 @@ INSERT INTO agent (
     instructions, custom_env, custom_args, mcp_config, model, thinking_level,
     source_agent_id
 )
-SELECT workspace_id, name, display_name, description, avatar_url, runtime_mode,
+SELECT workspace_id, $3, display_name, description, avatar_url, runtime_mode,
        runtime_config, $1, visibility, max_concurrent_tasks, owner_id,
        instructions, custom_env, custom_args, mcp_config, model, thinking_level,
        $2
 FROM agent
-WHERE id::text = $3 AND workspace_id::text = $4
+WHERE id::text = $4 AND workspace_id::text = $5
+ON CONFLICT (workspace_id, name) DO UPDATE
+SET runtime_id = EXCLUDED.runtime_id, updated_at = now()
+WHERE agent.source_agent_id = EXCLUDED.source_agent_id
 RETURNING id::text`,
-		in.RuntimeID, in.SourceAgentID, in.SourceAgentID, in.WorkspaceID).Scan(&derivedID)
+		in.RuntimeID, in.SourceAgentID, in.Name, in.SourceAgentID, in.WorkspaceID).Scan(&derivedID)
 	if err != nil {
 		return "", fmt.Errorf("create derived agent: %w", err)
 	}
@@ -96,11 +99,12 @@ ON CONFLICT DO NOTHING`,
 	return nil
 }
 
-// ReplaceDispatchChannelMember swaps the source agent's channel_agent_session
-// row to the derived agent within the env-dispatch channel, preserving the
-// chat_session. The source's memberships outside this channel are untouched. If
-// no session exists yet for the source in this channel, this is a no-op (the
-// provision flow creates the derived session during routing).
+// ReplaceDispatchChannelMember swaps an existing source channel_agent_session
+// row to the derived agent, preserving the chat_session. channel_member stays
+// keyed by the source agent as the stable user-facing mention alias; the
+// env-dispatch router resolves that source binding to the derived execution
+// agent. If no source session exists yet this is a no-op, and provisioning
+// creates the derived session directly.
 func (a *envDispatchCloneAdapter) ReplaceDispatchChannelMember(ctx context.Context, channelID, sourceAgentID, derivedAgentID string) error {
 	if _, err := a.exec().Exec(ctx, `
 UPDATE channel_agent_session

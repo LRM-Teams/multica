@@ -61,7 +61,19 @@ vi.mock("../../common/markdown", () => ({
   ),
   // A message carrying reference parts renders its body through the projector,
   // which reaches for ActorMention — stub it so these tests stay on the bubble.
-  ActorMention: ({ label }: { label: string }) => <span>{label}</span>,
+  ActorMention: ({
+    type,
+    id,
+    label,
+  }: {
+    type: string;
+    id: string;
+    label: string;
+  }) => (
+    <span data-testid="actor-mention" data-mention-type={type} data-mention-id={id}>
+      {label}
+    </span>
+  ),
 }));
 
 
@@ -172,11 +184,13 @@ vi.mock("../../i18n/use-t", () => ({
           system_event: {
             issue: {
               actor_system: string;
+              created: string;
               assigned: string;
               assigned_unknown: string;
               in_progress: string;
               in_review: string;
               done: string;
+              updated: string;
               status: string;
             };
             issue_status: {
@@ -236,12 +250,14 @@ vi.mock("../../i18n/use-t", () => ({
           system_event: {
             issue: {
               actor_system: "Multica",
-              assigned: "{{actor}} assigned {issue} to {{target}}",
-              assigned_unknown: "{{actor}} changed the assignee of {issue}",
-              in_progress: "{{actor}} started {issue}",
-              in_review: "{{actor}} sent {issue} for review",
-              done: "{{actor}} completed {issue}",
-              status: "{{actor}} marked {issue} as {{status}}",
+              created: "{actor} created {issue}",
+              assigned: "{actor} assigned {issue} to {{target}}",
+              assigned_unknown: "{actor} changed the assignee of {issue}",
+              in_progress: "{actor} started {issue}",
+              in_review: "{actor} sent {issue} for review",
+              done: "{actor} completed {issue}",
+              updated: "{actor} updated {issue}",
+              status: "{actor} marked {issue} as {{status}}",
             },
             issue_status: {
               backlog: "Backlog",
@@ -1307,9 +1323,21 @@ describe("ChannelMessageBubble", () => {
 
     const systemRow = screen.getByTestId("system-message-row");
     // The projected action verb replaces the raw "moved from Todo to In Progress".
-    expect(systemRow).toHaveTextContent("Alice Display started");
+    expect(systemRow).toHaveTextContent("@Alice Display started");
     expect(systemRow.textContent).not.toContain("moved");
     expect(systemRow.textContent).not.toContain("in_progress");
+
+    // A typed actor is projected through the same interactive @mention path as
+    // message prose. The profile card owns its avatar; the system row does not
+    // invent an inline avatar or parse the fallback sentence.
+    expect(within(systemRow).getByTestId("actor-mention")).toHaveAttribute(
+      "data-mention-type",
+      "member",
+    );
+    expect(within(systemRow).getByTestId("actor-mention")).toHaveAttribute(
+      "data-mention-id",
+      "user-1",
+    );
 
     // The issue identifier is the sole link in the row.
     const links = within(systemRow).getAllByRole("link");

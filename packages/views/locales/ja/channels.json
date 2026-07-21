@@ -229,14 +229,14 @@
       "member_left": "{target} がチャンネルから退出しました",
       "issue": {
         "actor_system": "Multica",
-        "created": "{{actor}} がイシュー {issue} を作成しました",
-        "assigned": "{{actor}} がイシュー {issue} を {{target}} に割り当てました",
-        "assigned_unknown": "{{actor}} がイシュー {issue} の担当者を変更しました",
-        "in_progress": "{{actor}} がイシュー {issue} を進行中にしました",
-        "in_review": "{{actor}} がイシュー {issue} をレビューに提出しました",
-        "done": "{{actor}} がイシュー {issue} を完了しました",
-        "updated": "{{actor}} がイシュー {issue} を更新しました",
-        "status": "{{actor}} がイシュー {issue} を{{status}}にしました"
+        "created": "{actor} がイシュー {issue} を作成しました",
+        "assigned": "{actor} がイシュー {issue} を {{target}} に割り当てました",
+        "assigned_unknown": "{actor} がイシュー {issue} の担当者を変更しました",
+        "in_progress": "{actor} がイシュー {issue} を進行中にしました",
+        "in_review": "{actor} がイシュー {issue} をレビューに提出しました",
+        "done": "{actor} がイシュー {issue} を完了しました",
+        "updated": "{actor} がイシュー {issue} を更新しました",
+        "status": "{actor} がイシュー {issue} を{{status}}にしました"
       },
       "issue_status": {
         "backlog": "バックログ",

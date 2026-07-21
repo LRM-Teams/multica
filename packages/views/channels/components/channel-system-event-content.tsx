@@ -4,12 +4,9 @@ import { Fragment, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
-import { resolveActorHandle } from "@multica/core/identity";
-import { useAgentPanelStore } from "@multica/core/agents/stores";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
-import { ActorProfileTrigger } from "../../common/actor-profile-popover";
-import { useOpenAgentPanel } from "../../common/agent-panel-context";
+import { ActorMention } from "../../common/markdown";
 import { useT } from "../../i18n/use-t";
 import { AppLink } from "../../navigation/app-link";
 import { useOptionalNavigation } from "../../navigation/context";
@@ -26,46 +23,32 @@ import {
 /**
  * Renders the composed, tokenized copy for a member-change system event
  * (parsed by channel-system-event.ts). The row owns the timestamp + layout;
- * this owns the localized, target-first passive copy with clickable @username
- * tokens. Usernames + actor type are resolved from the workspace caches by id
- * (the #450 params only carry ids + display names), so no BE change is needed.
+ * this owns the localized, target-first passive copy with clickable @display-name
+ * mention tokens. Identity is read only from the structured event facts and the
+ * existing actor cache; it never parses the fallback prose.
  */
 
 interface ResolvedActor {
-  type: "agent" | "user" | null;
+  type: "agent" | "member" | null;
   id: string;
-  handle: string;
+  displayName: string;
 }
 
 /**
- * A clickable @username token inside a system row. Agents open the #349 side
- * panel on click (context in channels/DM, global store elsewhere — same wiring
- * as rendered @mentions in markdown.tsx); members open the profile popover.
- * An unresolved actor (left the workspace, cache miss) degrades to plain,
- * non-interactive text so the sentence never breaks.
+ * Reuse the ordinary @mention identity affordance: a clickable @display-name
+ * token with the existing agent/member profile behavior (#603) — the same
+ * chip rendered mentions get in message bodies, not a bespoke system-row
+ * variant. Its hover card owns the avatar; activity rows intentionally do not
+ * add an inline avatar slot. If an event can't identify the actor type (older
+ * bridge rows, or a real cache miss), degrade to an honest plain label so the
+ * sentence never fakes a clickable identity.
  */
 function SystemEventActorToken({ actor }: { actor: ResolvedActor }): ReactNode {
-  const openAgentPanelFromContext = useOpenAgentPanel();
-  const openAgentPanelFromStore = useAgentPanelStore((s) => s.open);
-  const openAgentPanel = openAgentPanelFromContext ?? openAgentPanelFromStore;
-
-  const label = `@${actor.handle}`;
-  if (actor.type !== "agent" && actor.type !== "user") {
+  const label = `@${actor.displayName}`;
+  if (!actor.type) {
     return <span className="font-medium text-foreground/70">{label}</span>;
   }
-  return (
-    <ActorProfileTrigger
-      memberType={actor.type}
-      memberId={actor.id}
-      triggerElement="span"
-      className="cursor-pointer font-medium text-foreground/80 hover:underline"
-      onClickCapture={
-        actor.type === "agent" && openAgentPanel ? () => openAgentPanel(actor.id) : undefined
-      }
-    >
-      {label}
-    </ActorProfileTrigger>
-  );
+  return <ActorMention type={actor.type} id={actor.id} label={label} />;
 }
 
 // Interleave the localized template's `{target}` / `{actor}` slots with the
@@ -88,6 +71,7 @@ function interpolateSlots(
 
 export function MemberSystemEventContent({ event }: { event: MemberSystemEvent }): ReactNode {
   const { t } = useT("channels");
+  const { getActorName } = useActorName();
   const wsId = useWorkspaceId();
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
@@ -98,23 +82,23 @@ export function MemberSystemEventContent({ event }: { event: MemberSystemEvent }
     factHandle?: string,
     fallbackName?: string,
   ): ResolvedActor => {
-    // #456 fact layer: trust the BE-emitted type + canonical handle. This works
-    // even when the actor has left the channel (removed/left members no longer in
-    // the workspace cache), so the @token stays clickable — the bridge's
-    // cache-miss degradation to plain text is gone. `human` maps to the member
-    // profile ("user"), `agent` to the #349 side panel.
-    if (factHandle && (factType === "human" || factType === "agent")) {
-      return { type: factType === "agent" ? "agent" : "user", id, handle: factHandle };
+    // The canonical handle wins over the display-name fallback: it's a stable
+    // routable identity, while the display name is just prose the backend
+    // happened to send with this particular event.
+    const fallback = factHandle ?? fallbackName ?? id;
+    // The typed fact is authoritative even when a former member has fallen out
+    // of the live list. `human` maps to the standard member mention route.
+    if (factType === "human" || factType === "agent") {
+      const type = factType === "agent" ? "agent" : "member";
+      return { type, id, displayName: getActorName(type, id, fallback) };
     }
-    // Bridge fallback for older messages without the fact layer: resolve type +
-    // handle from the workspace caches by id.
+    // Older bridge rows do not carry actor_type. Resolve only from identity
+    // caches, never from prose; a real cache miss stays a non-interactive label.
     const agent = agents.find((a) => a.id === id);
-    if (agent) return { type: "agent", id, handle: resolveActorHandle(agent, fallbackName) };
+    if (agent) return { type: "agent", id, displayName: getActorName("agent", id, fallback) };
     const member = members.find((m) => m.user_id === id);
-    if (member) return { type: "user", id, handle: resolveActorHandle(member, fallbackName) };
-    // Truly unknown (old message, actor gone): keep the sentence intact with the
-    // backend-supplied name, non-interactive.
-    return { type: null, id, handle: fallbackName ?? id };
+    if (member) return { type: "member", id, displayName: getActorName("member", id, fallback) };
+    return { type: null, id, displayName: fallback };
   };
 
   const target = (
@@ -138,13 +122,18 @@ export function MemberSystemEventContent({ event }: { event: MemberSystemEvent }
   return interpolateSlots(template, { target, actor });
 }
 
-// The FE-owned issue token is the ONLY interactive/blue element in the row
-// (item #7口径). The actor, assignee and status are plain interpolated text, so
-// they ride i18next's `{{ }}` interpolation and only the `{issue}` slot is split
-// out for the React token.
-function interpolateIssueSlot(template: string, issue: ReactNode): ReactNode {
-  return template.split(/(\{issue\})/g).map((segment, index) => {
-    if (segment === "{issue}") return <Fragment key={index}>{issue}</Fragment>;
+// Issue rows carry both structured actor and issue facts (#603). Keep their
+// relative word order in each locale while making the actor the same real
+// @mention token used elsewhere in the conversation — the issue identifier
+// stays its own separately-hoverable anchored reference (Iris: actor and
+// issue each own their hover/link semantics, never one mixed click region).
+function interpolateIssueSlots(
+  template: string,
+  slots: { actor: ReactNode; issue: ReactNode },
+): ReactNode {
+  return template.split(/(\{actor\}|\{issue\})/g).map((segment, index) => {
+    if (segment === "{actor}") return <Fragment key={index}>{slots.actor}</Fragment>;
+    if (segment === "{issue}") return <Fragment key={index}>{slots.issue}</Fragment>;
     if (!segment) return null;
     return <Fragment key={index}>{segment}</Fragment>;
   });
@@ -170,18 +159,29 @@ const ISSUE_STATUS_KEYS = new Set<string>([
 ]);
 
 // Public actor type ("human" | "agent") → the identity-cache actor type
-// getActorName resolves against. Humans live in the member cache.
+// getActorName resolves against. Humans live in the member cache. Still used
+// by ProjectSystemEventContent's plain-text actor below.
 function toActorType(type: string | undefined): string {
   return type === "agent" ? "agent" : "member";
 }
 
+// Same mapping, but returning null for an unrecognized/missing type so the
+// issue actor token can fall back to an honest plain label instead of
+// guessing "member" (#603 — a missing typed fact must never fabricate a
+// clickable identity).
+function toActorMentionType(type: string | undefined): "agent" | "member" | null {
+  if (type === "agent") return "agent";
+  if (type === "human") return "member";
+  return null;
+}
+
 /**
- * Renders an issue-lifecycle backflow row (#497) as the frozen item #7 copy:
- * "任务" only, a localized action verb (标记为处理中 / 提交审核 / 完成任务 / 指派给 X),
- * and the issue identifier as the SOLE clickable blue token. The actor and
- * assignee are plain resolved names — never @tokens, never colored — and the
- * status is a localized label, never a raw enum or the word "issue". The row
- * itself owns the (simple) time and quiet centered layout.
+ * Renders an issue-lifecycle backflow row (#497, #603) as the frozen item #7
+ * copy: "任务" only, a localized action verb (标记为处理中 / 提交审核 / 完成任务 /
+ * 指派给 X), and the issue identifier as its anchored reference. A structured
+ * actor is rendered as the ordinary clickable @display-name mention (#603);
+ * assignee and status stay plain localized text — never colored, never a raw
+ * enum. The row itself owns the simple time and quiet centered layout.
  */
 export function IssueSystemEventContent({
   event,
@@ -193,9 +193,19 @@ export function IssueSystemEventContent({
   const { t } = useT("channels");
   const { getActorName } = useActorName();
 
-  const actor = event.actorId
-    ? getActorName(toActorType(event.actorType), event.actorId)
-    : t(($) => $.message.system_event.issue.actor_system);
+  const actorType = toActorMentionType(event.actorType);
+  const actor =
+    event.actorId && actorType ? (
+      <SystemEventActorToken
+        actor={{
+          type: actorType,
+          id: event.actorId,
+          displayName: getActorName(actorType, event.actorId),
+        }}
+      />
+    ) : (
+      t(($) => $.message.system_event.issue.actor_system)
+    );
 
   const issueToken = (
     <IssueRefLink
@@ -206,49 +216,47 @@ export function IssueSystemEventContent({
     />
   );
 
-  // Creation (#610): a fixed "创建了这个 issue" verb, no status. Plain actor +
-  // the issue token as the sole clickable object — same grammar as the other
-  // issue rows.
+  // Creation (#610): a fixed "创建了这个 issue" verb, no status.
   if (event.event === ISSUE_EVENTS.created) {
-    return interpolateIssueSlot(
-      t(($) => $.message.system_event.issue.created, { actor }),
-      issueToken,
-    );
+    return interpolateIssueSlots(t(($) => $.message.system_event.issue.created), {
+      actor,
+      issue: issueToken,
+    });
   }
 
   // Assignment: resolve the assignee's plain name live (falling back to the
   // backend-supplied handle/name), then to a name-less "changed assignee" copy.
   if (event.event === ISSUE_EVENTS.assigned) {
     const targetName = event.targetId
-      ? getActorName(toActorType(event.targetType), event.targetId, event.targetName)
+      ? getActorName(event.targetType === "agent" ? "agent" : "member", event.targetId, event.targetName)
       : event.targetName ?? event.targetHandle;
     const template = targetName
-      ? t(($) => $.message.system_event.issue.assigned, { actor, target: targetName })
-      : t(($) => $.message.system_event.issue.assigned_unknown, { actor });
-    return interpolateIssueSlot(template, issueToken);
+      ? t(($) => $.message.system_event.issue.assigned, { target: targetName })
+      : t(($) => $.message.system_event.issue.assigned_unknown);
+    return interpolateIssueSlots(template, { actor, issue: issueToken });
   }
 
   // Completion (BE emits this instead of a status→done row).
   if (event.event === ISSUE_EVENTS.completed || event.issueStatus === "done") {
-    return interpolateIssueSlot(
-      t(($) => $.message.system_event.issue.done, { actor }),
-      issueToken,
-    );
+    return interpolateIssueSlots(t(($) => $.message.system_event.issue.done), {
+      actor,
+      issue: issueToken,
+    });
   }
 
   // Status change — dedicated action phrasing for the milestone transitions,
   // else a generic "marked as <localized status>" that still avoids raw enums.
   if (event.issueStatus === "in_progress") {
-    return interpolateIssueSlot(
-      t(($) => $.message.system_event.issue.in_progress, { actor }),
-      issueToken,
-    );
+    return interpolateIssueSlots(t(($) => $.message.system_event.issue.in_progress), {
+      actor,
+      issue: issueToken,
+    });
   }
   if (event.issueStatus === "in_review") {
-    return interpolateIssueSlot(
-      t(($) => $.message.system_event.issue.in_review, { actor }),
-      issueToken,
-    );
+    return interpolateIssueSlots(t(($) => $.message.system_event.issue.in_review), {
+      actor,
+      issue: issueToken,
+    });
   }
 
   // A status the FE recognizes → "marked as <localized status>". A status it
@@ -259,17 +267,16 @@ export function IssueSystemEventContent({
       ? (event.issueStatus as IssueStatusKey)
       : null;
   if (!statusKey) {
-    return interpolateIssueSlot(
-      t(($) => $.message.system_event.issue.updated, { actor }),
-      issueToken,
-    );
-  }
-  return interpolateIssueSlot(
-    t(($) => $.message.system_event.issue.status, {
+    return interpolateIssueSlots(t(($) => $.message.system_event.issue.updated), {
       actor,
+      issue: issueToken,
+    });
+  }
+  return interpolateIssueSlots(
+    t(($) => $.message.system_event.issue.status, {
       status: t(($) => $.message.system_event.issue_status[statusKey]),
     }),
-    issueToken,
+    { actor, issue: issueToken },
   );
 }
 

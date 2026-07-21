@@ -58,3 +58,4 @@ export {
   useRemoveChannelMember,
 } from "./mutations";
 export { useComposerDraftStore, useLastSelectedChannelStore, type ComposerDraftKey } from "./stores";
+export { isImmutableSystemChannel } from "./system-channel";

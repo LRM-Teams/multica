@@ -33,6 +33,11 @@ export function AssociatedGroupPicker({
   const setChannel = useSetIssueChannel(issueId);
   const { data: channels = [] } = useQuery(channelsOptions(wsId));
 
+  const emptyLabel = t(($) => $.detail.no_associated_group);
+  // Full, untruncated value — used verbatim as the trigger's `title` so a
+  // narrow value column can ellipsize without hiding the real value (#629 768px).
+  const triggerLabel = channel ? channel.channel_name ?? channel.channel_id : emptyLabel;
+
   const groups = useMemo(() => {
     const q = filter.trim().toLowerCase();
     return channels.filter(
@@ -78,15 +83,16 @@ export function AssociatedGroupPicker({
         render={
           <button
             type="button"
+            title={triggerLabel}
             className="inline-flex min-w-0 items-center gap-1.5 text-xs transition-colors hover:text-foreground"
           >
             {channel ? (
               <>
                 <Hash className="size-3 shrink-0 text-muted-foreground" />
-                <span className="truncate">{channel.channel_name ?? channel.channel_id}</span>
+                <span className="min-w-0 truncate">{channel.channel_name ?? channel.channel_id}</span>
               </>
             ) : (
-              <span className="text-muted-foreground">{t(($) => $.detail.no_associated_group)}</span>
+              <span className="min-w-0 truncate text-muted-foreground">{emptyLabel}</span>
             )}
           </button>
         }

@@ -970,9 +970,10 @@ func TestListRadarCandidatesReturnsOnlyBoundReadySupervisor(t *testing.T) {
 	}
 	if _, err := pool.Exec(t.Context(), `
 		DELETE FROM channel_member
-		WHERE workspace_id = $1 AND member_type = 'agent' AND member_id = $2
-	`, bound.workspaceID, bound.agentID); err != nil {
-		t.Fatalf("remove bound supervisor from channel: %v", err)
+		WHERE channel_id = $1 AND workspace_id = $2
+		  AND member_type = 'agent' AND member_id = $3
+	`, bound.channelID, bound.workspaceID, bound.agentID); err != nil {
+		t.Fatalf("remove bound supervisor from ordinary channel: %v", err)
 	}
 	unboundOrdinary := seedAdditionalRadarTestAgent(t, bound, "Ordinary Agent", true)
 	unboundWendy := seedAdditionalRadarTestAgent(t, bound, "Wendy", true)
@@ -982,7 +983,7 @@ func TestListRadarCandidatesReturnsOnlyBoundReadySupervisor(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !hasRadarCandidate(candidates, bound.agentID) {
-		t.Fatal("bound online supervisor without channel membership was not selected")
+		t.Fatal("bound online supervisor without ordinary channel membership was not selected")
 	}
 	if hasRadarCandidate(candidates, offline.agentID) {
 		t.Fatal("bound supervisor with offline runtime was selected")

@@ -340,6 +340,9 @@ func (h *Handler) SetChannelProject(w http.ResponseWriter, r *http.Request) {
 	if !h.requireChannelWritable(w, r.Context(), workspaceID, channelID) {
 		return
 	}
+	if !h.requireChannelNotSystem(w, r.Context(), workspaceID, channelID) {
+		return
+	}
 	var req setChannelProjectRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -365,6 +368,10 @@ func (h *Handler) SetChannelProject(w http.ResponseWriter, r *http.Request) {
 		`UPDATE channel SET project_id = $2, updated_at = now() WHERE id = $1 AND workspace_id = $3`,
 		channelID, projectID, parseUUID(workspaceID),
 	); err != nil {
+		if isSystemGeneralGuardError(err) {
+			writeSystemChannelProtected(w)
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "failed to update channel project")
 		return
 	}

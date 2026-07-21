@@ -1741,6 +1741,14 @@ func agentActivityTimelineEvent(row agentActivityRawRow, targetRef AgentActivity
 		if isFileActivityTool(*tool) && !cliResolved && !hasShellCommandInput(input) {
 			delete(details, "command")
 		}
+		// Inbox polling is transport lifecycle, not a user-authored command
+		// narrative. Cursor truthfully reports `raft message check` as a Shell
+		// tool call; keep that raw command in the persisted diagnostic fact, but
+		// project only the canonical check_messages semantic into Activity so the
+		// view renders "Checking messages" without transport plumbing.
+		if agentActivityToolIsInboxPolling(*tool) {
+			delete(details, "command")
+		}
 	}
 	detailKind := agentActivityDetailKind(row.EventType)
 	status := textToPtr(row.Status)
@@ -2371,6 +2379,15 @@ func hasShellCommandInput(input map[string]any) bool {
 		}
 	}
 	return false
+}
+
+func agentActivityToolIsInboxPolling(tool string) bool {
+	switch agentActivityCanonicalToolName(tool) {
+	case "check_messages", "receive_message", "wait_for_message":
+		return true
+	default:
+		return false
+	}
 }
 
 func agentActivityTimelineEntries(row agentActivityRawRow, details map[string]any, tool *string) []AgentActivityEntry {

@@ -389,6 +389,41 @@ func TestChatRuntimeBriefIsLeanButKeepsFastChatPaths(t *testing.T) {
 	}
 }
 
+func TestChatRuntimeBriefPinsRaftThreadUnfollowDecisionBoundary(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name     string
+		directed bool
+	}{
+		{name: "ambient", directed: false},
+		{name: "directed", directed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			out := buildMetaSkillContent("codex", TaskContextForEnv{
+				ChatSessionID: "chat-1",
+				Directed:      tc.directed,
+			})
+
+			for _, want := range []string{
+				"Thread attention is explicit, never automatic",
+				"clearly complete or no longer relevant",
+				"no handoff, review, decision, reply, or follow-up remains",
+				"Do not unfollow while waiting for CI, deployment, a human reply, or a reminder",
+				"idle state, task-done status, and parent-channel mute are not unfollow triggers",
+				"After an explicit unfollow, personal @mentions still arrive without re-following",
+				"posting in the thread re-follows automatically",
+				"only under the explicit thread-attention boundary pinned above",
+			} {
+				if !strings.Contains(out, want) {
+					t.Errorf("%s chat brief missing thread-unfollow boundary %q\n---\n%s", tc.name, want, out)
+				}
+			}
+		})
+	}
+}
+
 func TestChatRuntimeBriefRendersReplyRequirementForDirectedRun(t *testing.T) {
 	t.Parallel()
 	ctx := TaskContextForEnv{

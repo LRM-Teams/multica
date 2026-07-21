@@ -1097,12 +1097,9 @@ function DmChannelConversation({
         </div>
       )}
       {jumpStatus === "exhausted" && (
-        <div
-          role="status"
-          className="block border-b bg-muted/40 px-5 py-1.5 text-center text-xs text-muted-foreground"
-        >
+        <output className="block border-b bg-muted/40 px-5 py-1.5 text-center text-xs text-muted-foreground">
           {t(($) => $.message_loading.jump_not_found)}
-        </div>
+        </output>
       )}
       <ChannelMessageList
         key={channelId}

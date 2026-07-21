@@ -23,13 +23,16 @@ import {
   ContextMenuTrigger,
 } from "@multica/ui/components/ui/context-menu";
 import { useActorName } from "@multica/core/workspace/hooks";
-import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import type { ChannelMessage } from "@multica/core/types";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { avatarGlyph, avatarToneClass } from "../../common/initials";
 import { InlineReferenceContent } from "../../common/inline-reference-content";
 import { useT } from "../../i18n/use-t";
 import { useMessageTime } from "../../i18n/use-message-time";
+import {
+  authorAvatarCacheKey,
+  resolveCachedAuthorAvatarUrl,
+} from "./author-avatar-cache";
 import {
   mentionResolverFrom,
   projectReferencesToText,
@@ -68,34 +71,6 @@ const MOBILE_THREAD_TAP_FEEDBACK_MS = 120;
 const HISTORY_MESSAGE_COLLAPSE_HEIGHT_CLASS = "max-h-[min(260px,55vh)] md:max-h-[360px]";
 const HISTORY_MESSAGE_COLLAPSE_MIN_CHARS = 800;
 const HISTORY_MESSAGE_COLLAPSE_MIN_LINES = 12;
-
-/**
- * LRM-202: remember the last good avatar URL per author so a later message
- * that omits `author_avatar_url` does not flash a gray text placeholder while
- * an earlier bubble from the same author already showed the real face.
- */
-const authorAvatarOkCache = new Map<string, string>();
-
-function authorAvatarCacheKey(message: ChannelMessage): string | null {
-  if (!message.author_id) return null;
-  if (message.type !== "agent" && message.type !== "user") return null;
-  return `${message.type}:${message.author_id}`;
-}
-
-function resolveCachedAuthorAvatarUrl(message: ChannelMessage): string | undefined {
-  const key = authorAvatarCacheKey(message);
-  const fromPayload = resolvePublicFileUrl(message.author_avatar_url) ?? undefined;
-  if (fromPayload) {
-    if (key) authorAvatarOkCache.set(key, fromPayload);
-    return fromPayload;
-  }
-  return key ? authorAvatarOkCache.get(key) : undefined;
-}
-
-/** Test-only helper to isolate sticky avatar-cache cases. */
-export function __resetAuthorAvatarOkCacheForTests() {
-  authorAvatarOkCache.clear();
-}
 
 function isInteractiveMessageTarget(target: EventTarget | null) {
   if (!(target instanceof Element)) return false;

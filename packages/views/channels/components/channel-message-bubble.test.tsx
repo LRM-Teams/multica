@@ -6,7 +6,8 @@ import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessage } from "@multica/core/types";
 import { stickerCatalogKeys } from "@multica/core/stickers";
-import { ChannelMessageBubble, __resetAuthorAvatarOkCacheForTests } from "./channel-message-bubble";
+import { __resetAuthorAvatarOkCacheForTests } from "./author-avatar-cache";
+import { ChannelMessageBubble } from "./channel-message-bubble";
 
 const copyTextMock = vi.fn();
 

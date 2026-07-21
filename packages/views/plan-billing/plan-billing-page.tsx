@@ -1,8 +1,18 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { CreditCard } from "lucide-react";
+import { Check, CreditCard } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
+import { Badge } from "@multica/ui/components/ui/badge";
+import { Button } from "@multica/ui/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@multica/ui/components/ui/card";
 import { PageHeader } from "../layout/page-header";
 import { useT } from "../i18n";
 
@@ -34,8 +44,9 @@ const ENTERPRISE_FEATURE_KEYS = [
 ] as const;
 
 /**
- * Plan & Billing pricing preview. Layout matches the provided mock
- * (title → cycle toggle → three plan cards). CTAs are non-functional for now.
+ * Workspace Plan & Billing preview. Uses Multica dashboard chrome
+ * (PageHeader + Card/Button tokens) rather than a marketing landing look.
+ * CTAs are disabled until checkout is wired.
  */
 export function PlanBillingPage() {
   const { t } = useT("plan-billing");
@@ -57,54 +68,56 @@ export function PlanBillingPage() {
         <h1 className="text-sm font-medium">{t(($) => $.navLabel)}</h1>
       </PageHeader>
 
-      <div className="min-h-0 flex-1 overflow-y-auto bg-[#f7f3eb]">
-        <div className="mx-auto flex w-full max-w-6xl flex-col items-center px-4 py-10 md:px-8 md:py-14">
-          <h2 className="text-center text-4xl font-bold tracking-tight text-foreground md:text-5xl">
-            {t(($) => $.title)}
-          </h2>
-          <p className="mt-3 text-center text-base text-muted-foreground md:text-lg">
-            {t(($) => $.subtitle)}
-          </p>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 p-4 md:p-6">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+            <div className="space-y-1">
+              <h2 className="text-xl font-semibold tracking-tight">{t(($) => $.title)}</h2>
+              <p className="max-w-xl text-sm text-muted-foreground">
+                {t(($) => $.subtitle)}
+              </p>
+            </div>
 
-          <fieldset className="mt-8 inline-flex items-center rounded-md border-2 border-foreground/90 bg-background p-1">
-            <legend className="sr-only">{t(($) => $.billing.cycle_label)}</legend>
-            <button
-              type="button"
-              onClick={() => setCycle("monthly")}
-              className={cn(
-                "rounded px-4 py-1.5 text-sm font-medium transition-colors",
-                cycle === "monthly"
-                  ? "bg-[#f5d76e] text-foreground"
-                  : "bg-transparent text-foreground hover:bg-muted/60",
-              )}
-              aria-pressed={cycle === "monthly"}
-            >
-              {t(($) => $.billing.monthly)}
-            </button>
-            <button
-              type="button"
-              onClick={() => setCycle("yearly")}
-              className={cn(
-                "relative rounded px-4 py-1.5 text-sm font-medium transition-colors",
-                cycle === "yearly"
-                  ? "bg-[#f5d76e] text-foreground"
-                  : "bg-transparent text-foreground hover:bg-muted/60",
-              )}
-              aria-pressed={cycle === "yearly"}
-            >
-              {t(($) => $.billing.yearly)}
-              <span className="ml-2 align-middle text-[10px] font-bold tracking-wide text-foreground/80">
-                {t(($) => $.billing.save_badge)}
-              </span>
-            </button>
-          </fieldset>
+            <fieldset className="inline-flex self-start rounded-lg bg-muted p-1">
+              <legend className="sr-only">{t(($) => $.billing.cycle_label)}</legend>
+              <button
+                type="button"
+                onClick={() => setCycle("monthly")}
+                className={cn(
+                  "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                  cycle === "monthly"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+                aria-pressed={cycle === "monthly"}
+              >
+                {t(($) => $.billing.monthly)}
+              </button>
+              <button
+                type="button"
+                onClick={() => setCycle("yearly")}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                  cycle === "yearly"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+                aria-pressed={cycle === "yearly"}
+              >
+                {t(($) => $.billing.yearly)}
+                <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
+                  {t(($) => $.billing.save_badge)}
+                </Badge>
+              </button>
+            </fieldset>
+          </div>
 
-          <div className="mt-10 grid w-full gap-5 md:grid-cols-3">
+          <div className="grid gap-4 lg:grid-cols-3">
             <PlanCard
               name={t(($) => $.plans.free.name)}
               tagline={t(($) => $.plans.free.tagline)}
               price={
-                <span className="text-5xl font-bold tracking-tight">
+                <span className="text-3xl font-semibold tracking-tight tabular-nums">
                   {t(($) => $.plans.free.price)}
                 </span>
               }
@@ -112,15 +125,19 @@ export function PlanBillingPage() {
                 t(($) => $.plans.free.features[key]),
               )}
               cta={t(($) => $.plans.free.cta)}
-              ctaVariant="primary"
+              ctaVariant="outline"
             />
 
             <PlanCard
+              highlighted
+              badge={t(($) => $.plans.pro.recommended)}
               name={t(($) => $.plans.pro.name)}
               tagline={t(($) => $.plans.pro.tagline)}
               price={
-                <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                  <span className="text-5xl font-bold tracking-tight">{proPrice}</span>
+                <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-1">
+                  <span className="text-3xl font-semibold tracking-tight tabular-nums">
+                    {proPrice}
+                  </span>
                   <span className="text-sm text-muted-foreground">
                     {t(($) => $.plans.pro.price_suffix)}
                   </span>
@@ -135,14 +152,14 @@ export function PlanBillingPage() {
                 t(($) => $.plans.pro.features[key]),
               )}
               cta={t(($) => $.plans.pro.cta)}
-              ctaVariant="primary"
+              ctaVariant="default"
             />
 
             <PlanCard
               name={t(($) => $.plans.enterprise.name)}
               tagline={t(($) => $.plans.enterprise.tagline)}
               price={
-                <span className="text-4xl font-bold tracking-tight text-muted-foreground md:text-5xl">
+                <span className="text-2xl font-semibold tracking-tight text-muted-foreground">
                   {t(($) => $.plans.enterprise.price)}
                 </span>
               }
@@ -154,9 +171,7 @@ export function PlanBillingPage() {
             />
           </div>
 
-          <p className="mt-8 text-center text-xs text-muted-foreground">
-            {t(($) => $.placeholder_hint)}
-          </p>
+          <p className="text-xs text-muted-foreground">{t(($) => $.placeholder_hint)}</p>
         </div>
       </div>
     </div>
@@ -171,6 +186,8 @@ function PlanCard({
   features,
   cta,
   ctaVariant,
+  highlighted,
+  badge,
 }: {
   name: string;
   tagline: string;
@@ -178,43 +195,52 @@ function PlanCard({
   notes?: string[];
   features: string[];
   cta: string;
-  ctaVariant: "primary" | "outline";
+  ctaVariant: "default" | "outline";
+  highlighted?: boolean;
+  badge?: string;
 }) {
   return (
-    <section className="flex h-full flex-col rounded-sm border-2 border-foreground/90 bg-background p-6 shadow-[4px_4px_0_0_rgba(0,0,0,0.12)]">
-      <h3 className="text-2xl font-bold tracking-tight">{name}</h3>
-      <p className="mt-2 min-h-10 text-sm text-muted-foreground">{tagline}</p>
-      <div className="mt-6">{price}</div>
-      {notes && notes.length > 0 && (
-        <div className="mt-2 space-y-1">
-          {notes.map((note) => (
-            <p key={note} className="text-xs text-muted-foreground">
-              {note}
-            </p>
-          ))}
-        </div>
+    <Card
+      className={cn(
+        "h-full",
+        highlighted && "ring-2 ring-primary/40",
       )}
-      <ul className="mt-6 flex-1 space-y-2.5">
-        {features.map((feature) => (
-          <li key={feature} className="flex items-start gap-2.5 text-sm leading-snug">
-            <span className="mt-1.5 size-1.5 shrink-0 bg-foreground" aria-hidden />
-            <span>{feature}</span>
-          </li>
-        ))}
-      </ul>
-      <button
-        type="button"
-        disabled
-        title={cta}
-        className={cn(
-          "mt-8 w-full rounded-sm px-4 py-2.5 text-sm font-semibold transition-opacity",
-          ctaVariant === "primary"
-            ? "bg-[#f472b6] text-white opacity-90"
-            : "border-2 border-foreground/90 bg-background text-foreground opacity-90",
-        )}
-      >
-        {cta}
-      </button>
-    </section>
+    >
+      <CardHeader className="gap-2">
+        <div className="flex items-center gap-2">
+          <CardTitle className="text-base font-semibold">{name}</CardTitle>
+          {badge ? <Badge variant="secondary">{badge}</Badge> : null}
+        </div>
+        <CardDescription>{tagline}</CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-1 flex-col gap-4">
+        <div>{price}</div>
+        {notes && notes.length > 0 ? (
+          <div className="space-y-1">
+            {notes.map((note) => (
+              <p key={note} className="text-xs leading-relaxed text-muted-foreground">
+                {note}
+              </p>
+            ))}
+          </div>
+        ) : null}
+        <ul className="space-y-2.5 border-t border-border/60 pt-4">
+          {features.map((feature) => (
+            <li key={feature} className="flex items-start gap-2 text-sm leading-snug">
+              <Check
+                className="mt-0.5 size-4 shrink-0 text-primary"
+                aria-hidden
+              />
+              <span>{feature}</span>
+            </li>
+          ))}
+        </ul>
+      </CardContent>
+      <CardFooter>
+        <Button type="button" variant={ctaVariant} className="w-full" disabled>
+          {cta}
+        </Button>
+      </CardFooter>
+    </Card>
   );
 }

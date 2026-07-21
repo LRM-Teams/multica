@@ -2322,25 +2322,26 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	res, err := h.IssueService.Create(r.Context(), service.IssueCreateParams{
-		WorkspaceID:     wsUUID,
-		Title:           req.Title,
-		Description:     ptrToText(req.Description),
-		Status:          status,
-		Priority:        priority,
-		AssigneeType:    assigneeType,
-		AssigneeID:      assigneeID,
-		CreatorType:     creatorType,
-		CreatorID:       parseUUID(actualCreatorID),
-		ParentIssueID:   parentIssueID,
-		ProjectID:       projectID,
-		StartDate:       startDate,
-		DueDate:         dueDate,
-		OriginType:      originType,
-		OriginID:        originID,
-		SourceChannelID: sourceAnchor.ChannelID,
-		SourceMessageID: sourceAnchor.MessageID,
-		AttachmentIDs:   attachmentIDs,
-		AllowDuplicate:  req.AllowDuplicate,
+		WorkspaceID:        wsUUID,
+		Title:              req.Title,
+		Description:        ptrToText(req.Description),
+		Status:             status,
+		Priority:           priority,
+		AssigneeType:       assigneeType,
+		AssigneeID:         assigneeID,
+		CreatorType:        creatorType,
+		CreatorID:          parseUUID(actualCreatorID),
+		ParentIssueID:      parentIssueID,
+		ProjectID:          projectID,
+		StartDate:          startDate,
+		DueDate:            dueDate,
+		OriginType:         originType,
+		OriginID:           originID,
+		SourceChannelID:    sourceAnchor.ChannelID,
+		SourceMessageID:    sourceAnchor.MessageID,
+		AcceptanceCriteria: req.AcceptanceCriteria,
+		AttachmentIDs:      attachmentIDs,
+		AllowDuplicate:     req.AllowDuplicate,
 	}, service.IssueCreateOpts{
 		ActorID:          actualCreatorID,
 		AnalyticsAgentID: analyticsAgentID,
@@ -2370,6 +2371,10 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "project not found in this workspace")
 		return
 	}
+	if errors.Is(err, service.ErrAttachmentNotFound) {
+		writeError(w, http.StatusBadRequest, "one or more attachments are unavailable")
+		return
+	}
 	if err != nil {
 		slog.Warn("create issue failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
 		writeError(w, http.StatusInternalServerError, "failed to create issue: "+err.Error())
@@ -2378,18 +2383,6 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 
 	issue := res.Issue
 	slog.Info("issue created", append(logger.RequestAttrs(r), "issue_id", uuidToString(issue.ID), "title", issue.Title, "status", issue.Status, "workspace_id", workspaceID)...)
-	// acceptance_criteria is not part of the sqlc CreateIssue params; persist it
-	// with a scoped follow-up write when provided so the structured definition
-	// of done is set at creation time.
-	if len(req.AcceptanceCriteria) > 0 {
-		if raw, mErr := json.Marshal(req.AcceptanceCriteria); mErr == nil {
-			if _, uErr := h.DB.Exec(r.Context(), `UPDATE issue SET acceptance_criteria = $1 WHERE id = $2 AND workspace_id = $3`, raw, issue.ID, issue.WorkspaceID); uErr != nil {
-				slog.Warn("set issue acceptance_criteria failed", "issue_id", uuidToString(issue.ID), "error", uErr)
-			} else {
-				issue.AcceptanceCriteria = raw
-			}
-		}
-	}
 	h.syncWendyWorkGraphAfterIssueCreate(r.Context(), issue)
 	// The source/channel anchor is persisted atomically by IssueService.Create.
 	// Project the creation fact only after that commit, so the channel row is
@@ -2595,6 +2588,19 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.AcceptanceCriteria != nil {
+		criteria := *req.AcceptanceCriteria
+		if criteria == nil {
+			criteria = []string{}
+		}
+		raw, err := json.Marshal(criteria)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid acceptance_criteria")
+			return
+		}
+		params.AcceptanceCriteria = raw
+	}
+
 	issue, err := h.Queries.UpdateIssue(r.Context(), params)
 	if err != nil {
 		slog.Warn("update issue failed", append(logger.RequestAttrs(r), "error", err, "issue_id", id, "workspace_id", workspaceID)...)
@@ -2604,23 +2610,6 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 
 	if len(attachmentIDs) > 0 {
 		h.linkAttachmentsByIssueIDs(r.Context(), issue.ID, issue.WorkspaceID, attachmentIDs)
-	}
-
-	// acceptance_criteria is not part of the sqlc UpdateIssue params; apply it
-	// with a scoped follow-up write when the field was sent (tri-state: absent
-	// = leave as-is, present = replace with the given list, empty list clears).
-	if req.AcceptanceCriteria != nil {
-		criteria := *req.AcceptanceCriteria
-		if criteria == nil {
-			criteria = []string{}
-		}
-		if raw, mErr := json.Marshal(criteria); mErr == nil {
-			if _, uErr := h.DB.Exec(r.Context(), `UPDATE issue SET acceptance_criteria = $1 WHERE id = $2 AND workspace_id = $3`, raw, issue.ID, issue.WorkspaceID); uErr != nil {
-				slog.Warn("update issue acceptance_criteria failed", "issue_id", uuidToString(issue.ID), "error", uErr)
-			} else {
-				issue.AcceptanceCriteria = raw
-			}
-		}
 	}
 
 	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)

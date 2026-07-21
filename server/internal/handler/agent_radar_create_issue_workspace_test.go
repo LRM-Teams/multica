@@ -7,9 +7,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/radar"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 type radarIssueForeignWorkspaceFixture struct {
@@ -161,7 +163,12 @@ func TestExecuteRadarCreateIssueUsesPersistedProjectWhenPayloadOmitsIt(t *testin
 	title := "Radar canonical project issue " + uuid.NewString()
 	cleanupRadarIssueTitle(t, title)
 
-	result, err := executeRadarCreateIssueForRunTest(t, run, creator, radarIssuePayload{Title: title})
+	criteria := []string{"the implementation matches the approved specification"}
+	result, err := executeRadarCreateIssueForRunTest(t, run, creator, radarIssuePayload{
+		Title:              title,
+		Description:        "Deliver the scoped project requirement",
+		AcceptanceCriteria: criteria,
+	})
 	if err != nil {
 		t.Fatalf("create project-scoped issue: %v", err)
 	}
@@ -174,6 +181,200 @@ func TestExecuteRadarCreateIssueUsesPersistedProjectWhenPayloadOmitsIt(t *testin
 	}
 	if got := uuidToString(issue.ProjectID); got != projectID {
 		t.Fatalf("created issue project_id = %s, want persisted scope %s", got, projectID)
+	}
+	if issue.AssigneeType.Valid || issue.AssigneeID.Valid {
+		t.Fatalf("omitted assignee created manager-owned issue %q/%s", issue.AssigneeType.String, uuidToString(issue.AssigneeID))
+	}
+	var storedCriteria []string
+	if err := json.Unmarshal(issue.AcceptanceCriteria, &storedCriteria); err != nil {
+		t.Fatalf("decode acceptance criteria: %v", err)
+	}
+	if len(storedCriteria) != 1 || storedCriteria[0] != criteria[0] {
+		t.Fatalf("acceptance criteria = %#v, want %#v", storedCriteria, criteria)
+	}
+	var managerTaskCount int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*) FROM agent_task_queue WHERE issue_id = $1 AND agent_id = $2
+	`, issue.ID, creator.ID).Scan(&managerTaskCount); err != nil {
+		t.Fatalf("count manager tasks: %v", err)
+	}
+	if managerTaskCount != 0 {
+		t.Fatalf("omitted assignee queued %d concrete task(s) for the manager", managerTaskCount)
+	}
+}
+
+func TestExecuteRadarCreateIssuePersistsSourceAndReferenceAttachment(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	creatorID := createHandlerTestAgent(t, "Radar evidence creator "+uuid.NewString(), nil)
+	creator, err := testHandler.Queries.GetAgent(ctx, parseUUID(creatorID))
+	if err != nil {
+		t.Fatalf("load creator agent: %v", err)
+	}
+	projectID := createRadarProjectForTest(t, "Radar evidence project "+uuid.NewString())
+	channelID := seedChannelForTest(t, "radar-evidence-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `UPDATE channel SET project_id = $2 WHERE id = $1`, channelID, projectID); err != nil {
+		t.Fatalf("bind evidence channel: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)
+	`, channelID, testWorkspaceID, creatorID); err != nil {
+		t.Fatalf("add evidence channel agent: %v", err)
+	}
+	var messageID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO channel_message (channel_id, workspace_id, author_type, author_id, author_name, content)
+		VALUES ($1, $2, 'user', $3, 'Evidence author', 'Use this reference image')
+		RETURNING id
+	`, channelID, testWorkspaceID, testUserID).Scan(&messageID); err != nil {
+		t.Fatalf("create source message: %v", err)
+	}
+	var attachmentID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO attachment (
+			workspace_id, uploader_type, uploader_id, filename, url, content_type,
+			size_bytes, channel_id, channel_message_id
+		) VALUES ($1, 'member', $2, 'approved-reference.webp', '/reference.webp', 'image/webp', 42, $3, $4)
+		RETURNING id
+	`, testWorkspaceID, testUserID, channelID, messageID).Scan(&attachmentID); err != nil {
+		t.Fatalf("create source attachment: %v", err)
+	}
+
+	run := enqueueProjectScopedRadarRunForTest(t, creator, projectID)
+	task, err := testHandler.Queries.GetAgentTask(ctx, run.TaskID)
+	if err != nil {
+		t.Fatalf("load radar task: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_task_queue
+		SET context = jsonb_set(context, '{channel_id}', to_jsonb($2::text), true)
+		WHERE id = $1
+	`, task.ID, channelID); err != nil {
+		t.Fatalf("pin radar channel context: %v", err)
+	}
+	title := "Radar evidence issue " + uuid.NewString()
+	cleanupRadarIssueTitle(t, title)
+	criteria := []string{"ship a WebP asset in the repository", "attach responsive screenshots"}
+	createdEvents := make(chan events.Event, 1)
+	testHandler.Bus.Subscribe(protocol.EventIssueCreated, func(event events.Event) {
+		payload, _ := event.Payload.(map[string]any)
+		issue, _ := payload["issue"].(IssueResponse)
+		if issue.Title == title {
+			createdEvents <- event
+		}
+	})
+	result, err := executeRadarCreateIssueForRunTest(t, run, creator, radarIssuePayload{
+		Title:              title,
+		Description:        "Build the visual from the approved reference",
+		AcceptanceCriteria: criteria,
+		AttachmentIDs:      []string{attachmentID},
+		SourceMessageID:    messageID,
+	})
+	if err != nil {
+		t.Fatalf("create evidence-backed issue: %v", err)
+	}
+	issueID := result["issue_id"].(string)
+	var sourceChannelID, sourceMessageID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT channel_id::text, message_id::text
+		FROM issue_source_message WHERE issue_id = $1
+	`, issueID).Scan(&sourceChannelID, &sourceMessageID); err != nil {
+		t.Fatalf("load source anchor: %v", err)
+	}
+	if sourceChannelID != channelID || sourceMessageID != messageID {
+		t.Fatalf("source anchor = %s/%s, want %s/%s", sourceChannelID, sourceMessageID, channelID, messageID)
+	}
+	var linkedIssueID string
+	if err := testPool.QueryRow(ctx, `SELECT issue_id::text FROM attachment WHERE id = $1`, attachmentID).Scan(&linkedIssueID); err != nil {
+		t.Fatalf("load linked attachment: %v", err)
+	}
+	if linkedIssueID != issueID {
+		t.Fatalf("attachment issue_id = %s, want %s", linkedIssueID, issueID)
+	}
+	select {
+	case event := <-createdEvents:
+		payload := event.Payload.(map[string]any)
+		created := payload["issue"].(IssueResponse)
+		if created.ID != issueID || len(created.AcceptanceCriteria) != len(criteria) || len(created.Attachments) != 1 {
+			t.Fatalf("issue:created payload = %+v", created)
+		}
+	default:
+		t.Fatal("radar issue creation did not publish the full issue payload")
+	}
+	var nodeCount int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM work_node WHERE linked_issue_id = $1`, issueID).Scan(&nodeCount); err != nil {
+		t.Fatalf("count synced work nodes: %v", err)
+	}
+	if nodeCount != 1 {
+		t.Fatalf("radar-created issue work node count = %d, want 1", nodeCount)
+	}
+
+	var deletedMessageID, deletedAttachmentID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO channel_message (
+			channel_id, workspace_id, author_type, author_id, author_name, content, deleted_at
+		) VALUES ($1, $2, 'user', $3, 'Deleted evidence author', 'Deleted evidence', now())
+		RETURNING id
+	`, channelID, testWorkspaceID, testUserID).Scan(&deletedMessageID); err != nil {
+		t.Fatalf("create deleted evidence message: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO attachment (
+			workspace_id, uploader_type, uploader_id, filename, url, content_type,
+			size_bytes, channel_id, channel_message_id
+		) VALUES ($1, 'member', $2, 'deleted-reference.webp', '/deleted-reference.webp', 'image/webp', 42, $3, $4)
+		RETURNING id
+	`, testWorkspaceID, testUserID, channelID, deletedMessageID).Scan(&deletedAttachmentID); err != nil {
+		t.Fatalf("create deleted evidence attachment: %v", err)
+	}
+	deletedTitle := "Radar deleted evidence issue " + uuid.NewString()
+	cleanupRadarIssueTitle(t, deletedTitle)
+	_, err = executeRadarCreateIssueForRunTest(t, run, creator, radarIssuePayload{
+		Title:              deletedTitle,
+		Description:        "This action must not reuse deleted evidence",
+		AcceptanceCriteria: []string{"only live channel evidence is attached"},
+		AttachmentIDs:      []string{deletedAttachmentID},
+		SourceMessageID:    messageID,
+	})
+	if err == nil || err.Error() != "attachment message is deleted or outside the radar channel" {
+		t.Fatalf("deleted attachment error = %v", err)
+	}
+	var deletedIssueCount int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM issue WHERE title = $1`, deletedTitle).Scan(&deletedIssueCount); err != nil {
+		t.Fatalf("count deleted-evidence issues: %v", err)
+	}
+	if deletedIssueCount != 0 {
+		t.Fatalf("deleted evidence created %d issue(s), want 0", deletedIssueCount)
+	}
+}
+
+func TestExecuteRadarCreateIssueRejectsMissingAcceptanceCriteria(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	creatorID := createHandlerTestAgent(t, "Radar spec guard creator "+uuid.NewString(), nil)
+	creator, err := testHandler.Queries.GetAgent(context.Background(), parseUUID(creatorID))
+	if err != nil {
+		t.Fatalf("load creator agent: %v", err)
+	}
+	title := "Radar missing criteria " + uuid.NewString()
+	cleanupRadarIssueTitle(t, title)
+	_, err = executeRadarCreateIssueForTest(t, creator, radarIssuePayload{
+		Title:       title,
+		Description: "A description without a verifiable definition of done",
+	})
+	if err == nil || err.Error() != "acceptance_criteria must contain at least one non-empty criterion" {
+		t.Fatalf("error = %v, want acceptance criteria validation", err)
+	}
+	var count int
+	if err := testPool.QueryRow(context.Background(), `SELECT count(*) FROM issue WHERE title = $1`, title).Scan(&count); err != nil {
+		t.Fatalf("count rejected issues: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("missing-criteria action created %d issue(s), want 0", count)
 	}
 }
 
@@ -194,8 +395,10 @@ func TestExecuteRadarCreateIssueRejectsProjectConflictingWithPersistedScope(t *t
 	cleanupRadarIssueTitle(t, title)
 
 	_, err = executeRadarCreateIssueForRunTest(t, run, creator, radarIssuePayload{
-		Title:     title,
-		ProjectID: otherProjectID,
+		Title:              title,
+		Description:        "Reject a conflicting persisted project scope",
+		AcceptanceCriteria: []string{"the issue stays in the persisted project"},
+		ProjectID:          otherProjectID,
 	})
 	if err == nil {
 		t.Fatal("expected conflicting project_id to be rejected")
@@ -229,9 +432,11 @@ func TestExecuteRadarCreateIssueRejectsForeignAgentAssignee(t *testing.T) {
 	cleanupRadarIssueTitle(t, title)
 
 	_, err = executeRadarCreateIssueForTest(t, creator, radarIssuePayload{
-		Title:        title,
-		AssigneeType: "agent",
-		AssigneeID:   foreign.agentID,
+		Title:              title,
+		Description:        "Reject a foreign agent assignee",
+		AcceptanceCriteria: []string{"the assignee belongs to the run workspace"},
+		AssigneeType:       "agent",
+		AssigneeID:         foreign.agentID,
 	})
 	if err == nil {
 		t.Fatal("expected foreign-workspace agent assignee to be rejected")
@@ -253,9 +458,11 @@ func TestExecuteRadarCreateIssueRejectsForeignMemberAssignee(t *testing.T) {
 	cleanupRadarIssueTitle(t, title)
 
 	_, err = executeRadarCreateIssueForTest(t, creator, radarIssuePayload{
-		Title:        title,
-		AssigneeType: "member",
-		AssigneeID:   foreign.userID,
+		Title:              title,
+		Description:        "Reject a foreign member assignee",
+		AcceptanceCriteria: []string{"the assignee belongs to the run workspace"},
+		AssigneeType:       "member",
+		AssigneeID:         foreign.userID,
 	})
 	if err == nil {
 		t.Fatal("expected foreign-workspace member assignee to be rejected")
@@ -277,8 +484,10 @@ func TestExecuteRadarCreateIssueRejectsForeignProject(t *testing.T) {
 	cleanupRadarIssueTitle(t, title)
 
 	_, err = executeRadarCreateIssueForTest(t, creator, radarIssuePayload{
-		Title:     title,
-		ProjectID: foreign.projectID,
+		Title:              title,
+		Description:        "Reject a foreign project",
+		AcceptanceCriteria: []string{"the project belongs to the run workspace"},
+		ProjectID:          foreign.projectID,
 	})
 	if err == nil {
 		t.Fatal("expected foreign-workspace project to be rejected")
@@ -302,9 +511,11 @@ func TestExecuteRadarCreateIssueRejectsUnsupportedAssigneeType(t *testing.T) {
 	cleanupRadarIssueTitle(t, title)
 
 	_, err = executeRadarCreateIssueForTest(t, creator, radarIssuePayload{
-		Title:        title,
-		AssigneeType: "user",
-		AssigneeID:   testUserID,
+		Title:              title,
+		Description:        "Reject an unsupported assignee type",
+		AcceptanceCriteria: []string{"the assignee type is supported"},
+		AssigneeType:       "user",
+		AssigneeID:         testUserID,
 	})
 	if err == nil {
 		t.Fatal("expected unsupported assignee type to be rejected")
@@ -314,7 +525,7 @@ func TestExecuteRadarCreateIssueRejectsUnsupportedAssigneeType(t *testing.T) {
 	}
 }
 
-func TestExecuteRadarCreateIssueAcceptsDefaultAgentInRunWorkspace(t *testing.T) {
+func TestExecuteRadarCreateIssueLeavesOmittedAssigneeUnassigned(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -328,7 +539,9 @@ func TestExecuteRadarCreateIssueAcceptsDefaultAgentInRunWorkspace(t *testing.T) 
 	cleanupRadarIssueTitle(t, title)
 
 	result, err := executeRadarCreateIssueForTest(t, creator, radarIssuePayload{
-		Title: title,
+		Title:              title,
+		Description:        "Keep this issue unassigned until a capable owner is selected",
+		AcceptanceCriteria: []string{"a capable owner is explicitly selected"},
 	})
 	if err != nil {
 		t.Fatalf("create issue for workspace agent: %v", err)
@@ -344,8 +557,8 @@ func TestExecuteRadarCreateIssueAcceptsDefaultAgentInRunWorkspace(t *testing.T) 
 	if err != nil {
 		t.Fatalf("load created issue: %v", err)
 	}
-	if !issue.AssigneeType.Valid || issue.AssigneeType.String != "agent" || uuidToString(issue.AssigneeID) != creatorID {
-		t.Fatalf("assignee = %q/%s, want agent/%s", issue.AssigneeType.String, uuidToString(issue.AssigneeID), creatorID)
+	if issue.AssigneeType.Valid || issue.AssigneeID.Valid {
+		t.Fatalf("assignee = %q/%s, want unassigned", issue.AssigneeType.String, uuidToString(issue.AssigneeID))
 	}
 }
 
@@ -363,9 +576,11 @@ func TestExecuteRadarCreateIssueAcceptsMemberInRunWorkspace(t *testing.T) {
 	cleanupRadarIssueTitle(t, title)
 
 	result, err := executeRadarCreateIssueForTest(t, creator, radarIssuePayload{
-		Title:        title,
-		AssigneeType: "member",
-		AssigneeID:   testUserID,
+		Title:              title,
+		Description:        "Deliver the member-owned requirement",
+		AcceptanceCriteria: []string{"the member verifies the delivered result"},
+		AssigneeType:       "member",
+		AssigneeID:         testUserID,
 	})
 	if err != nil {
 		t.Fatalf("create issue for workspace member: %v", err)
@@ -386,6 +601,31 @@ func TestExecuteRadarCreateIssueAcceptsMemberInRunWorkspace(t *testing.T) {
 	}
 }
 
+func TestExecuteRadarCreateIssueAmbientRejectsNonAgentAssignee(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	creatorID := createHandlerTestAgent(t, "Radar ambient assignee guard "+uuid.NewString(), nil)
+	creator, err := testHandler.Queries.GetAgent(context.Background(), parseUUID(creatorID))
+	if err != nil {
+		t.Fatalf("load creator agent: %v", err)
+	}
+	projectID := createRadarProjectForTest(t, "Radar ambient assignee project "+uuid.NewString())
+	run := enqueueProjectScopedRadarRunForTest(t, creator, projectID)
+	title := "Radar ambient member assignment " + uuid.NewString()
+	cleanupRadarIssueTitle(t, title)
+	_, err = executeRadarCreateIssueForRunTest(t, run, creator, radarIssuePayload{
+		Title:              title,
+		Description:        "Ambient coordination must choose a qualified delivery agent",
+		AcceptanceCriteria: []string{"a qualified channel agent owns implementation"},
+		AssigneeType:       "member",
+		AssigneeID:         testUserID,
+	})
+	if err == nil || err.Error() != "ambient issue creation may only assign a qualified channel agent" {
+		t.Fatalf("ambient member assignment error = %v", err)
+	}
+}
+
 func TestExecuteRadarCreateIssueRejectsCreatorFromAnotherWorkspace(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -402,9 +642,11 @@ func TestExecuteRadarCreateIssueRejectsCreatorFromAnotherWorkspace(t *testing.T)
 	_, err = executeRadarCreateIssueForRunTest(t, db.AgentRadarRun{
 		WorkspaceID: parseUUID(testWorkspaceID),
 	}, creator, radarIssuePayload{
-		Title:        title,
-		AssigneeType: "member",
-		AssigneeID:   testUserID,
+		Title:              title,
+		Description:        "Reject a creator from another workspace",
+		AcceptanceCriteria: []string{"the creator belongs to the run workspace"},
+		AssigneeType:       "member",
+		AssigneeID:         testUserID,
 	})
 	if err == nil {
 		t.Fatal("expected creator from another workspace to be rejected")
@@ -432,9 +674,11 @@ func TestExecuteRadarCreateIssueRejectsCreatorThatDoesNotMatchRunAgent(t *testin
 		WorkspaceID: parseUUID(testWorkspaceID),
 		AgentID:     parseUUID(otherAgentID),
 	}, creator, radarIssuePayload{
-		Title:        title,
-		AssigneeType: "member",
-		AssigneeID:   testUserID,
+		Title:              title,
+		Description:        "Reject a creator that differs from the run agent",
+		AcceptanceCriteria: []string{"the creator matches the run agent"},
+		AssigneeType:       "member",
+		AssigneeID:         testUserID,
 	})
 	if err == nil {
 		t.Fatal("expected creator that does not match run.agent_id to be rejected")

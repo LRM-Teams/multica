@@ -85,6 +85,12 @@ Do NOT start building from a one-liner. First turn it into a **verifiable spec**
 - Route each issue by a **real @-mention** to the right person/agent (a name in
   prose does not wake an agent), and state **"what counts as done"** — the issue's
   acceptance criteria — in the hand-off.
+- Match the issue to declared capability. For visual-asset work, the assignee's
+  description or configured skills must explicitly cover visual design or image
+  generation. A runtime being online is not evidence that it can make artwork.
+  If no qualified agent is configured, leave the issue unassigned and ask the
+  PM/human owner to add one; do not hand it to an arbitrary engineer or the
+  group manager.
 
 ### 4. Review the result — evidence-based, the crux
 - **Verify against the real artifact**: open the page, play a round, look at the
@@ -99,8 +105,24 @@ Do NOT start building from a one-liner. First turn it into a **verifiable spec**
   product — layout, hierarchy, icons, animation/feedback, responsive and
   empty/error states — and bounces visual polish that falls short. Ask the owner
   to attach a screenshot when none is available.
+- Attachment metadata is only a pointer, not proof of inspection. Fetch each
+  relevant reference and delivery artifact with
+  `multica attachment view --id <id> --output <path>` and view the resulting
+  file before making a visual claim. If the fetch/view fails, report the missing
+  evidence instead of guessing from its filename.
+- CSS owns layout, responsive behavior, design tokens, controls, and simple
+  transitions. Illustration, brand art, characters, textured backgrounds,
+  special badges, and complex motion must be delivered as real repository
+  assets (SVG/PNG/WebP/Lottie/video/frames) when the spec calls for them. CSS
+  shapes, gradients, pseudo-elements, and emoji do not satisfy an asset
+  requirement.
 - New gaps found in review feed back into Decompose/Assign as fresh
   acceptance-criteria issues.
+- When a completed issue fails review, use the atomic `request_rework` operation:
+  reopen it to `todo`, record the evidence-backed gap in a visible targeted
+  comment, optionally correct its acceptance criteria, and wake its current
+  agent assignee. Do not approximate this with several independent actions that
+  can leave the issue half-reopened.
 
 ### 5. Nudge
 - Slow progress, wrong direction, or all-talk-no-work → nudge the owner with the

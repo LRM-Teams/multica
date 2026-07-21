@@ -174,28 +174,31 @@ const createIssue = `-- name: CreateIssue :one
 INSERT INTO issue (
     workspace_id, title, description, status, priority,
     assignee_type, assignee_id, creator_type, creator_id,
-    parent_issue_id, position, start_date, due_date, number, project_id
+    parent_issue_id, position, start_date, due_date, number, project_id,
+    acceptance_criteria
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+    COALESCE($16::jsonb, '[]'::jsonb)
 ) RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id
 `
 
 type CreateIssueParams struct {
-	WorkspaceID   pgtype.UUID `json:"workspace_id"`
-	Title         string      `json:"title"`
-	Description   pgtype.Text `json:"description"`
-	Status        string      `json:"status"`
-	Priority      string      `json:"priority"`
-	AssigneeType  pgtype.Text `json:"assignee_type"`
-	AssigneeID    pgtype.UUID `json:"assignee_id"`
-	CreatorType   string      `json:"creator_type"`
-	CreatorID     pgtype.UUID `json:"creator_id"`
-	ParentIssueID pgtype.UUID `json:"parent_issue_id"`
-	Position      float64     `json:"position"`
-	StartDate     pgtype.Date `json:"start_date"`
-	DueDate       pgtype.Date `json:"due_date"`
-	Number        int32       `json:"number"`
-	ProjectID     pgtype.UUID `json:"project_id"`
+	WorkspaceID        pgtype.UUID `json:"workspace_id"`
+	Title              string      `json:"title"`
+	Description        pgtype.Text `json:"description"`
+	Status             string      `json:"status"`
+	Priority           string      `json:"priority"`
+	AssigneeType       pgtype.Text `json:"assignee_type"`
+	AssigneeID         pgtype.UUID `json:"assignee_id"`
+	CreatorType        string      `json:"creator_type"`
+	CreatorID          pgtype.UUID `json:"creator_id"`
+	ParentIssueID      pgtype.UUID `json:"parent_issue_id"`
+	Position           float64     `json:"position"`
+	StartDate          pgtype.Date `json:"start_date"`
+	DueDate            pgtype.Date `json:"due_date"`
+	Number             int32       `json:"number"`
+	ProjectID          pgtype.UUID `json:"project_id"`
+	AcceptanceCriteria []byte      `json:"acceptance_criteria"`
 }
 
 func (q *Queries) CreateIssue(ctx context.Context, arg CreateIssueParams) (Issue, error) {
@@ -215,6 +218,7 @@ func (q *Queries) CreateIssue(ctx context.Context, arg CreateIssueParams) (Issue
 		arg.DueDate,
 		arg.Number,
 		arg.ProjectID,
+		arg.AcceptanceCriteria,
 	)
 	var i Issue
 	err := row.Scan(
@@ -338,31 +342,32 @@ INSERT INTO issue (
     workspace_id, title, description, status, priority,
     assignee_type, assignee_id, creator_type, creator_id,
     parent_issue_id, position, start_date, due_date, number, project_id,
-    origin_type, origin_id
+    origin_type, origin_id, acceptance_criteria
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-    $16, $17
+    $16, $17, COALESCE($18::jsonb, '[]'::jsonb)
 ) RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id
 `
 
 type CreateIssueWithOriginParams struct {
-	WorkspaceID   pgtype.UUID `json:"workspace_id"`
-	Title         string      `json:"title"`
-	Description   pgtype.Text `json:"description"`
-	Status        string      `json:"status"`
-	Priority      string      `json:"priority"`
-	AssigneeType  pgtype.Text `json:"assignee_type"`
-	AssigneeID    pgtype.UUID `json:"assignee_id"`
-	CreatorType   string      `json:"creator_type"`
-	CreatorID     pgtype.UUID `json:"creator_id"`
-	ParentIssueID pgtype.UUID `json:"parent_issue_id"`
-	Position      float64     `json:"position"`
-	StartDate     pgtype.Date `json:"start_date"`
-	DueDate       pgtype.Date `json:"due_date"`
-	Number        int32       `json:"number"`
-	ProjectID     pgtype.UUID `json:"project_id"`
-	OriginType    pgtype.Text `json:"origin_type"`
-	OriginID      pgtype.UUID `json:"origin_id"`
+	WorkspaceID        pgtype.UUID `json:"workspace_id"`
+	Title              string      `json:"title"`
+	Description        pgtype.Text `json:"description"`
+	Status             string      `json:"status"`
+	Priority           string      `json:"priority"`
+	AssigneeType       pgtype.Text `json:"assignee_type"`
+	AssigneeID         pgtype.UUID `json:"assignee_id"`
+	CreatorType        string      `json:"creator_type"`
+	CreatorID          pgtype.UUID `json:"creator_id"`
+	ParentIssueID      pgtype.UUID `json:"parent_issue_id"`
+	Position           float64     `json:"position"`
+	StartDate          pgtype.Date `json:"start_date"`
+	DueDate            pgtype.Date `json:"due_date"`
+	Number             int32       `json:"number"`
+	ProjectID          pgtype.UUID `json:"project_id"`
+	OriginType         pgtype.Text `json:"origin_type"`
+	OriginID           pgtype.UUID `json:"origin_id"`
+	AcceptanceCriteria []byte      `json:"acceptance_criteria"`
 }
 
 func (q *Queries) CreateIssueWithOrigin(ctx context.Context, arg CreateIssueWithOriginParams) (Issue, error) {
@@ -384,6 +389,7 @@ func (q *Queries) CreateIssueWithOrigin(ctx context.Context, arg CreateIssueWith
 		arg.ProjectID,
 		arg.OriginType,
 		arg.OriginID,
+		arg.AcceptanceCriteria,
 	)
 	var i Issue
 	err := row.Scan(
@@ -593,9 +599,8 @@ JOIN agent_task_queue atq ON atq.issue_id = i.id
 WHERE atq.id::text = $1::text
 `
 
-// GetIssueForTask returns the issue linked to a task (agent_task_queue.id).
-// Both sides are text so the caller passes the text task ID without UUID parsing,
-// matching GetMaxTaskMessageSeq and MessagesForTaskInRange.
+// GetIssueForTask returns the issue linked to an agent task. The text comparison matches the
+// message-range queries whose callers carry the task ID as text.
 func (q *Queries) GetIssueForTask(ctx context.Context, dollar_1 string) (Issue, error) {
 	row := q.db.QueryRow(ctx, getIssueForTask, dollar_1)
 	var i Issue
@@ -1280,6 +1285,33 @@ func (q *Queries) MarkIssueFirstExecuted(ctx context.Context, id pgtype.UUID) (M
 	return i, err
 }
 
+const setIssueAssignee = `-- name: SetIssueAssignee :exec
+UPDATE issue
+   SET assignee_type = $2, assignee_id = $3
+ WHERE id = $1 AND workspace_id = $4
+`
+
+type SetIssueAssigneeParams struct {
+	ID           pgtype.UUID `json:"id"`
+	AssigneeType pgtype.Text `json:"assignee_type"`
+	AssigneeID   pgtype.UUID `json:"assignee_id"`
+	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+}
+
+// Sets an issue's assignee (type + id) within its workspace. Used by
+// env-dispatch squad dispatch to mark the issue assignee_type='squad' so the
+// squad-leader task ownership rules apply. The workspace_id predicate keeps
+// the tenant invariant a SQL-layer guarantee (see DeleteIssue).
+func (q *Queries) SetIssueAssignee(ctx context.Context, arg SetIssueAssigneeParams) error {
+	_, err := q.db.Exec(ctx, setIssueAssignee,
+		arg.ID,
+		arg.AssigneeType,
+		arg.AssigneeID,
+		arg.WorkspaceID,
+	)
+	return err
+}
+
 const setIssueMetadataKey = `-- name: SetIssueMetadataKey :one
 
 UPDATE issue SET
@@ -1353,24 +1385,26 @@ UPDATE issue SET
     due_date = $10,
     parent_issue_id = $11,
     project_id = $12,
+    acceptance_criteria = COALESCE($13::jsonb, acceptance_criteria),
     updated_at = now()
 WHERE id = $1
 RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, forked_from_issue_id, forked_at_seq, forked_at_task_id
 `
 
 type UpdateIssueParams struct {
-	ID            pgtype.UUID   `json:"id"`
-	Title         pgtype.Text   `json:"title"`
-	Description   pgtype.Text   `json:"description"`
-	Status        pgtype.Text   `json:"status"`
-	Priority      pgtype.Text   `json:"priority"`
-	AssigneeType  pgtype.Text   `json:"assignee_type"`
-	AssigneeID    pgtype.UUID   `json:"assignee_id"`
-	Position      pgtype.Float8 `json:"position"`
-	StartDate     pgtype.Date   `json:"start_date"`
-	DueDate       pgtype.Date   `json:"due_date"`
-	ParentIssueID pgtype.UUID   `json:"parent_issue_id"`
-	ProjectID     pgtype.UUID   `json:"project_id"`
+	ID                 pgtype.UUID   `json:"id"`
+	Title              pgtype.Text   `json:"title"`
+	Description        pgtype.Text   `json:"description"`
+	Status             pgtype.Text   `json:"status"`
+	Priority           pgtype.Text   `json:"priority"`
+	AssigneeType       pgtype.Text   `json:"assignee_type"`
+	AssigneeID         pgtype.UUID   `json:"assignee_id"`
+	Position           pgtype.Float8 `json:"position"`
+	StartDate          pgtype.Date   `json:"start_date"`
+	DueDate            pgtype.Date   `json:"due_date"`
+	ParentIssueID      pgtype.UUID   `json:"parent_issue_id"`
+	ProjectID          pgtype.UUID   `json:"project_id"`
+	AcceptanceCriteria []byte        `json:"acceptance_criteria"`
 }
 
 func (q *Queries) UpdateIssue(ctx context.Context, arg UpdateIssueParams) (Issue, error) {
@@ -1387,6 +1421,7 @@ func (q *Queries) UpdateIssue(ctx context.Context, arg UpdateIssueParams) (Issue
 		arg.DueDate,
 		arg.ParentIssueID,
 		arg.ProjectID,
+		arg.AcceptanceCriteria,
 	)
 	var i Issue
 	err := row.Scan(
@@ -1469,26 +1504,4 @@ func (q *Queries) UpdateIssueStatus(ctx context.Context, arg UpdateIssueStatusPa
 		&i.ForkedAtTaskID,
 	)
 	return i, err
-}
-
-const setIssueAssignee = `-- name: SetIssueAssignee :exec
-UPDATE issue
-   SET assignee_type = $2, assignee_id = $3
- WHERE id = $1 AND workspace_id = $4
-`
-
-type SetIssueAssigneeParams struct {
-	ID           pgtype.UUID `json:"id"`
-	AssigneeType pgtype.Text `json:"assignee_type"`
-	AssigneeID   pgtype.UUID `json:"assignee_id"`
-	WorkspaceID  pgtype.UUID `json:"workspace_id"`
-}
-
-// Sets an issue's assignee (type + id) within its workspace. Used by
-// env-dispatch squad dispatch to mark the issue assignee_type='squad' so the
-// squad-leader task ownership rules apply. The workspace_id predicate keeps
-// the tenant invariant a SQL-layer guarantee (see DeleteIssue).
-func (q *Queries) SetIssueAssignee(ctx context.Context, arg SetIssueAssigneeParams) error {
-	_, err := q.db.Exec(ctx, setIssueAssignee, arg.ID, arg.AssigneeType, arg.AssigneeID, arg.WorkspaceID)
-	return err
 }

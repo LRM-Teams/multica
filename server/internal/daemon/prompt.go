@@ -297,7 +297,8 @@ func writeAgentRootSection(b *strings.Builder, agentRoot string) {
 	}
 	b.WriteString("Your personal workspace directory (one per agent, persists across runs):\n")
 	fmt.Fprintf(b, "%s/\n", agentRoot)
-	fmt.Fprintf(b, "- memory: %s/memory/  (MEMORY.md, USER.md, STATE.md, REVIEW.md, daily/)\n", agentRoot)
+	fmt.Fprintf(b, "- memory: %s/memory/  (MEMORY.md, STATE.md, REVIEW.md, daily/)\n", agentRoot)
+	fmt.Fprintf(b, "- scoped: %s/users/<member-id>/  (USER.md, RELATIONSHIP.md); projects/<project-id>/; channels/<channel-id>/CONTEXT.md\n", agentRoot)
 	fmt.Fprintf(b, "- skills: %s/skills/  (drafts/, generated/, enabled/)\n", agentRoot)
 	fmt.Fprintf(b, "- notes:  %s/notes/  (agents.md, channels.md, project-map.md, relationship-map.md, role-playbook.md, work-log.md, decisions.md)\n", agentRoot)
 	fmt.Fprintf(b, "Other local dirs (agent-managed caches & team-sync plumbing; not usually needed): projects/, repos/, sessions/, runtime/, profile/, feedback/, sync_queue/, inbox/, shared-cache/.\n")

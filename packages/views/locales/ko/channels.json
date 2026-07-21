@@ -124,6 +124,7 @@
   },
   "settings": {
     "title": "그룹 설정",
+    "close_aria": "그룹 설정 닫기",
     "project_disabled_archived": "이 채널은 보관되어 프로젝트를 변경할 수 없습니다.",
     "project_disabled_member": "그룹 생성자 또는 관리자만 프로젝트를 변경할 수 있습니다."
   },

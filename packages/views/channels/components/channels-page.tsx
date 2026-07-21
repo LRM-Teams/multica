@@ -693,12 +693,18 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     openThreadRoot: ChannelMessage | null;
     selectedAgentPanelId: string | null;
     threadDraftEmpty: boolean;
+    // #645 — same exclusive right-side slot as thread/agent; a plain
+    // boolean (not an id) since there's only ever one channel's settings
+    // to show — the currently active channel's.
+    channelSettingsOpen: boolean;
   }>({
     openThreadRoot: null,
     selectedAgentPanelId: null,
     threadDraftEmpty: true,
+    channelSettingsOpen: false,
   });
-  const { openThreadRoot, selectedAgentPanelId, threadDraftEmpty } = sidePanelState;
+  const { openThreadRoot, selectedAgentPanelId, threadDraftEmpty, channelSettingsOpen } =
+    sidePanelState;
   const setOpenThreadRoot = useCallback((next: ChannelMessage | null) => {
     setSidePanelState((current) => ({ ...current, openThreadRoot: next }));
   }, []);
@@ -708,11 +714,15 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const setThreadDraftEmpty = useCallback((next: boolean) => {
     setSidePanelState((current) => ({ ...current, threadDraftEmpty: next }));
   }, []);
+  const setChannelSettingsOpen = useCallback((next: boolean) => {
+    setSidePanelState((current) => ({ ...current, channelSettingsOpen: next }));
+  }, []);
   const resetSidePanelState = useCallback(() => {
     setSidePanelState({
       openThreadRoot: null,
       selectedAgentPanelId: null,
       threadDraftEmpty: true,
+      channelSettingsOpen: false,
     });
   }, []);
   const [convSearchOpen, setConvSearchOpen] = useState(false);
@@ -1786,12 +1796,26 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const handleOpenThread = (message: ChannelMessage) => {
     focusThreadComposerOnOpenRef.current = true;
     setSelectedAgentPanelId(null);
+    setChannelSettingsOpen(false);
     setOpenThreadRoot(message);
   };
 
   const handleOpenAgentPanel = (agentId: string) => {
     setOpenThreadRoot(null);
+    setChannelSettingsOpen(false);
     setSelectedAgentPanelId(agentId);
+  };
+
+  // #645 — toggles the same exclusive slot; opening it always wins over
+  // thread/agent (mirrors handleOpenAgentPanel), closing just clears it.
+  const toggleChannelSettings = () => {
+    if (channelSettingsOpen) {
+      setChannelSettingsOpen(false);
+      return;
+    }
+    setOpenThreadRoot(null);
+    setSelectedAgentPanelId(null);
+    setChannelSettingsOpen(true);
   };
 
   const toggleInvite = (key: string) => {
@@ -2557,6 +2581,22 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         onClose={() => setSelectedAgentPanelId(null)}
       />
     ) : null;
+  // #645 — never renders for the system #general channel even if somehow
+  // triggered (defense in depth alongside the header entry point being
+  // hidden outright — see isActiveSystemChannel below).
+  const settingsPanel =
+    channelSettingsOpen && active && !isActiveSystemChannel ? (
+      <ChannelSettingsSidePanel
+        channel={active}
+        members={channelMembers}
+        wsId={wsId}
+        projectId={channelProjectId || null}
+        onChangeProject={(projectId) => setChannelProject.mutate(projectId)}
+        projectEditable={projectEditable}
+        projectDisabledReason={projectDisabledReason}
+        onClose={() => setChannelSettingsOpen(false)}
+      />
+    ) : null;
   const channelConversationPane = (
     <main className="relative flex flex-1 min-h-0 min-w-0 flex-col bg-background">
       {!active ? (
@@ -2996,18 +3036,18 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       <ResizablePanel id="conversation" minSize="50%" className="flex min-h-0 flex-col">
         {channelConversationPane}
       </ResizablePanel>
-      {threadPanel || agentPanel ? (
+      {threadPanel || agentPanel || settingsPanel ? (
         <>
           <ResizableHandle />
           <ResizablePanel
-            id={threadPanel ? "thread" : "agent-files"}
+            id={threadPanel ? "thread" : agentPanel ? "agent-files" : "channel-settings"}
             defaultSize={440}
             minSize={360}
             maxSize={640}
             groupResizeBehavior="preserve-pixel-size"
             className="border-l border-border/30 bg-background"
           >
-            {threadPanel ?? agentPanel}
+            {threadPanel ?? agentPanel ?? settingsPanel}
           </ResizablePanel>
         </>
       ) : null}

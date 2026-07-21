@@ -1,7 +1,7 @@
 "use client";
 
 import { type ReactNode, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Activity, FileText, User, X } from "lucide-react";
+import { Activity, FileText, User } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useConfigStore } from "@multica/core/config";
 import type { Agent, DashboardUsageByAgent, MemberWithUser } from "@multica/core/types";
@@ -12,7 +12,6 @@ import { resolveActorDisplayName } from "@multica/core/identity";
 import { dashboardUsageByAgentOptions } from "@multica/core/dashboard/queries";
 import { useCustomPricingStore } from "@multica/core/runtimes/custom-pricing-store";
 import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
-import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import { ActivityTab } from "../../agents/components/tabs/activity-tab";
 import { AgentPresenceStatusLine } from "../../agents/components/agent-presence-status-line";
@@ -24,6 +23,7 @@ import { useUpdateAgent } from "../../agents/hooks/use-update-agent";
 import { useRuntimeHealthStateLabel } from "../../runtimes/components/shared";
 import { PropRow } from "../../common/prop-row";
 import { initialsOf } from "../../common/initials";
+import { ConversationSidePanelShell } from "../../common/conversation-side-panel-shell";
 import { AgentFilesPanel } from "./agent-files-panel";
 import { useT } from "../../i18n/use-t";
 import { estimateCost, formatTokens, isModelPriced } from "../../runtimes/utils";
@@ -119,14 +119,12 @@ export function AgentSidePanel({
   }, [tab, variant]);
 
   return (
-    <aside
-      className={cn(
-        "flex h-full min-h-0 min-w-0 w-full flex-col bg-background",
-        variant === "panel" && "border-l",
-      )}
-    >
-      <div className="flex items-center justify-between gap-3 border-b p-4">
-        <div className="flex min-w-0 items-center gap-2.5">
+    <ConversationSidePanelShell
+      variant={variant}
+      onClose={onClose}
+      closeAriaLabel={t(($) => $.side_panel.close_aria)}
+      leading={
+        <>
           <ActorAvatarBase
             name={displayName}
             initials={initials}
@@ -140,20 +138,9 @@ export function AgentSidePanel({
             <p className="min-w-0 truncate text-sm font-semibold">{displayName}</p>
             <AgentPresenceStatusLine agentId={agent.id} className="max-w-[9rem]" />
           </div>
-        </div>
-        {variant === "panel" ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            onClick={onClose}
-            aria-label={t(($) => $.side_panel.close_aria)}
-          >
-            <X className="size-4" />
-          </Button>
-        ) : null}
-      </div>
-
+        </>
+      }
+    >
       {showTabBar ? (
         <>
           <div
@@ -224,7 +211,7 @@ export function AgentSidePanel({
           />
         </div>
       )}
-    </aside>
+    </ConversationSidePanelShell>
   );
 }
 

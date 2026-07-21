@@ -124,6 +124,7 @@
   },
   "settings": {
     "title": "グループ設定",
+    "close_aria": "グループ設定を閉じる",
     "project_disabled_archived": "このチャンネルはアーカイブ済みのため、プロジェクトを変更できません。",
     "project_disabled_member": "プロジェクトを変更できるのは、グループの作成者または管理者のみです。"
   },

@@ -66,13 +66,8 @@
     "meta_type": "種類",
     "meta_size": "サイズ",
     "meta_sender": "送信者",
-    "preview_chip_html": "プレビュー · HTML",
-    "preview_chip_image": "プレビュー · 画像",
-    "preview_chip_pdf": "プレビュー · PDF",
-    "preview_unavailable_chip": "プレビュー不可",
-    "preview_unavailable": "このファイルはプレビューできません",
-    "preview_unavailable_hint": "ダウンロードするか、別のアプリで開いてください。",
-    "meta_time": "日時"
+    "meta_time": "日時",
+    "cannot_preview": "プレビューできません"
   },
   "link_hover": {
     "copy_link": "リンクをコピー",

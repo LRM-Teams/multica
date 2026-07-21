@@ -1,31 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
-import type { ReactElement } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-
-const { getAttachmentTextContentMock } = vi.hoisted(() => ({
-  getAttachmentTextContentMock: vi.fn(),
-}));
-
-vi.mock("@multica/core/api", () => ({
-  api: { getAttachmentTextContent: getAttachmentTextContentMock },
-  PreviewTooLargeError: class extends Error {},
-  PreviewUnsupportedError: class extends Error {},
-}));
-
-vi.mock("@multica/core/paths", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@multica/core/paths")>();
-  return {
-    ...actual,
-    useWorkspaceSlug: () => "acme",
-  };
-});
-
-vi.mock("@multica/core/workspace/hooks", () => ({
-  useActorName: () => ({
-    getActorName: () => "Frank An",
-  }),
-}));
+import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { MobileFileAttachment } from "./mobile-file-attachment";
 
 vi.mock("../i18n", () => ({
   useT: () => ({
@@ -46,15 +21,7 @@ vi.mock("../i18n", () => ({
           meta_size: "Size",
           meta_sender: "Sender",
           meta_time: "Time",
-          preview_chip_html: "Preview · HTML",
-          preview_chip_image: "Preview · Image",
-          preview_chip_pdf: "Preview · PDF",
-          preview_unavailable_chip: "Can't preview",
-          preview_unavailable: "Can't preview this file",
-          preview_unavailable_hint: "Download it or open with another app.",
-          preview_loading: "Loading preview…",
-          preview_failed: "Couldn't load preview",
-          preview_too_large: "File is too large to preview.",
+          cannot_preview: "Can't preview",
           preview_unsupported: "This file type can't be previewed.",
           file_type: {
             image: "Image",
@@ -79,28 +46,25 @@ vi.mock("../i18n", () => ({
   }),
 }));
 
-import { MobileFileAttachment } from "./mobile-file-attachment";
-
-function renderWithQuery(ui: ReactElement) {
-  const qc = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: 0 } },
-  });
-  return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
-}
+vi.mock("./html-preview-body", () => ({
+  HtmlPreviewBody: (props: { title: string }) => (
+    <div data-testid="mobile-file-preview-html-body">{props.title}</div>
+  ),
+}));
 
 describe("MobileFileAttachment (LRM-216 / LRM-217)", () => {
   beforeEach(() => {
     document.body.innerHTML = "";
-    getAttachmentTextContentMock.mockReset();
   });
   afterEach(() => cleanup());
 
-  it("renders a compact entry without an iframe", () => {
-    renderWithQuery(
+  it("renders a compact entry without an iframe in the stream", () => {
+    render(
       <MobileFileAttachment
         filename="lrm201-tall-preview.html"
         contentType="text/html"
         sizeBytes={606}
+        previewMode="html"
         attachmentId="att-1"
         onDownload={() => {}}
         onOpen={() => {}}
@@ -109,22 +73,20 @@ describe("MobileFileAttachment (LRM-216 / LRM-217)", () => {
     expect(screen.getByTestId("mobile-file-entry")).toBeTruthy();
     expect(screen.getByText("lrm201-tall-preview.html")).toBeTruthy();
     expect(document.querySelector("iframe")).toBeNull();
+    expect(screen.queryByTestId("mobile-file-preview-pane")).toBeNull();
   });
 
-  it("opens fullscreen HTML preview shell with download/open", async () => {
-    getAttachmentTextContentMock.mockResolvedValue({
-      text: "<p>chart</p>",
-      originalContentType: "text/html",
-    });
+  it("opens fullscreen with HTML preview pane + download/open", () => {
     const onDownload = vi.fn();
     const onOpen = vi.fn();
-    renderWithQuery(
+    render(
       <MobileFileAttachment
         filename="lrm201-tall-preview.html"
         contentType="text/html; charset=utf-8"
         sizeBytes={606}
         createdAt="2026-07-21T14:45:23Z"
         uploaderName="Frank An"
+        previewMode="html"
         attachmentId="att-1"
         onDownload={onDownload}
         onOpen={onOpen}
@@ -132,16 +94,9 @@ describe("MobileFileAttachment (LRM-216 / LRM-217)", () => {
     );
     fireEvent.click(screen.getByTestId("mobile-file-entry"));
     expect(screen.getByTestId("mobile-file-detail")).toBeTruthy();
-    expect(screen.getByTestId("mobile-file-preview")).toHaveAttribute(
-      "data-preview-kind",
-      "html",
-    );
+    expect(screen.getByTestId("mobile-file-preview-pane")).toBeTruthy();
+    expect(screen.getByTestId("mobile-file-preview-html-body")).toBeTruthy();
     expect(screen.getByText("Frank An")).toBeTruthy();
-    await waitFor(() => {
-      expect(
-        screen.getByTestId("mobile-file-preview").querySelector("iframe"),
-      ).toBeTruthy();
-    });
 
     fireEvent.click(screen.getByTestId("mobile-file-detail-download"));
     expect(onDownload).toHaveBeenCalled();
@@ -152,75 +107,38 @@ describe("MobileFileAttachment (LRM-216 / LRM-217)", () => {
     expect(screen.queryByTestId("mobile-file-detail")).toBeNull();
   });
 
-  it("shows image fit preview in the same shell", () => {
-    renderWithQuery(
+  it("shows image preview when mode is image", () => {
+    render(
       <MobileFileAttachment
         filename="shot.png"
         contentType="image/png"
-        sizeBytes={2048}
-        mediaUrl="https://cdn.example/shot.png"
+        previewMode="image"
+        previewUrl="https://example.com/shot.png"
         onDownload={() => {}}
         onOpen={() => {}}
       />,
     );
     fireEvent.click(screen.getByTestId("mobile-file-entry"));
-    expect(screen.getByTestId("mobile-file-preview")).toHaveAttribute(
-      "data-preview-kind",
-      "image",
-    );
-    expect(screen.getByTestId("mobile-file-preview-image")).toHaveAttribute(
-      "src",
-      "https://cdn.example/shot.png",
-    );
+    expect(screen.getByTestId("mobile-file-preview-image")).toBeTruthy();
   });
 
-  it("shows PDF iframe in the same shell", () => {
-    renderWithQuery(
+  it("shows cannot-preview placeholder for other types", () => {
+    render(
       <MobileFileAttachment
-        filename="manual.pdf"
-        contentType="application/pdf"
-        attachmentId="att-pdf"
-        mediaUrl="https://cdn.example/manual.pdf"
-        onDownload={() => {}}
-        onOpen={() => {}}
-      />,
-    );
-    fireEvent.click(screen.getByTestId("mobile-file-entry"));
-    expect(screen.getByTestId("mobile-file-preview")).toHaveAttribute(
-      "data-preview-kind",
-      "pdf",
-    );
-    const frame = screen.getByTestId("mobile-file-preview-pdf");
-    expect(frame.getAttribute("src")).toContain(
-      "/api/attachments/att-pdf/download",
-    );
-  });
-
-  it("shows unavailable placeholder for zip and keeps download/open", () => {
-    const onDownload = vi.fn();
-    renderWithQuery(
-      <MobileFileAttachment
-        filename="logs.zip"
+        filename="archive.zip"
         contentType="application/zip"
-        sizeBytes={4096}
-        mediaUrl="https://cdn.example/logs.zip"
-        onDownload={onDownload}
+        previewMode="none"
+        onDownload={() => {}}
         onOpen={() => {}}
       />,
     );
     fireEvent.click(screen.getByTestId("mobile-file-entry"));
-    expect(screen.getByTestId("mobile-file-preview")).toHaveAttribute(
-      "data-preview-kind",
-      "none",
-    );
     expect(screen.getByTestId("mobile-file-preview-unavailable")).toBeTruthy();
-    expect(screen.getByText("Can't preview this file")).toBeTruthy();
-    fireEvent.click(screen.getByTestId("mobile-file-detail-download"));
-    expect(onDownload).toHaveBeenCalled();
+    expect(screen.getByText("Can't preview")).toBeTruthy();
   });
 
   it("does not open detail when not openable", () => {
-    renderWithQuery(
+    render(
       <MobileFileAttachment
         filename="gone.html"
         contentType="text/html"

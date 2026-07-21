@@ -8,12 +8,8 @@
  *
  *   - image  → ImageAttachmentView (figure + hover toolbar + lightbox via
  *              the shared AttachmentPreviewModal)
- *              — on mobile/narrow (LRM-216/217): MobileFileAttachment same shell
  *   - html   → HtmlAttachmentPreview (inline iframe + hover toolbar)
- *              — on mobile/narrow: MobileFileAttachment (compact card →
- *              fullscreen with embedded preview)
  *   - others → AttachmentCard (icon + filename + Eye/Download row)
- *              — on mobile/narrow: MobileFileAttachment
  *
  * Call sites:
  *   - extensions/file-card.tsx FileCardView (Tiptap NodeView)
@@ -350,23 +346,23 @@ export function Attachment({
     handleDownload();
   };
 
-  // LRM-216 / LRM-217 — narrow/mobile: compact info card → fullscreen detail
-  // with an embedded preview shell (HTML / image / PDF). No stream-inline
-  // iframe; images use the same shell (no separate lightbox).
+  // LRM-216 / LRM-217 — narrow/mobile: compact info card (no inline preview)
+  // → fullscreen shell with preview pane (HTML / image / PDF) or「无法预览」.
   if (isMobile) {
     const canOpen = !!state.url || !!state.attachmentId;
+    const previewMode =
+      kind === "html" || kind === "image" || kind === "pdf" ? kind : "none";
     return (
       <MobileFileAttachment
         filename={state.filename}
         contentType={state.contentType}
         sizeBytes={state.sizeBytes}
         createdAt={state.record?.created_at}
-        uploaderType={state.record?.uploader_type}
-        uploaderId={state.record?.uploader_id}
-        attachmentId={state.attachmentId}
-        mediaUrl={state.url || undefined}
         uploading={state.uploading}
         openable={canOpen && !state.uploading}
+        previewUrl={state.url}
+        attachmentId={state.attachmentId}
+        previewMode={previewMode}
         onDownload={handleDownload}
         onOpen={handleOpenElsewhere}
         className={className}

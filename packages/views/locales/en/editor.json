@@ -66,13 +66,8 @@
     "meta_type": "Type",
     "meta_size": "Size",
     "meta_sender": "Sender",
-    "preview_chip_html": "Preview · HTML",
-    "preview_chip_image": "Preview · Image",
-    "preview_chip_pdf": "Preview · PDF",
-    "preview_unavailable_chip": "Can't preview",
-    "preview_unavailable": "Can't preview this file",
-    "preview_unavailable_hint": "Download it or open with another app.",
-    "meta_time": "Time"
+    "meta_time": "Time",
+    "cannot_preview": "Can't preview"
   },
   "link_hover": {
     "copy_link": "Copy link",

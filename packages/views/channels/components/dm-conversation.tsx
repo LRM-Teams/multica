@@ -29,7 +29,11 @@ import { useAuthStore } from "@multica/core/auth";
 import { api } from "@multica/core/api";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
+import { memberListOptions } from "@multica/core/workspace/queries";
+import type {
+  AgentPanelIdentitySnapshot,
+  OpenAgentPanelFn,
+} from "@multica/core/agents";
 import { useWSEvent } from "@multica/core/realtime";
 import type { ChannelActiveTask, ChannelMessage, ChannelMessageSearchResult, ChannelTypingPayload } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
@@ -414,14 +418,13 @@ function DmChannelConversation({
   // exclusive), matching channels-page.tsx's inline-panel pattern per
   // Frank's direction (replace the slot, don't route away).
   const [selectedAgentPanelId, setSelectedAgentPanelId] = useState<string | null>(null);
-  const handleOpenAgentPanel = useCallback((agentId: string) => {
+  const [selectedAgentPanelSnapshot, setSelectedAgentPanelSnapshot] =
+    useState<AgentPanelIdentitySnapshot | null>(null);
+  const handleOpenAgentPanel = useCallback<OpenAgentPanelFn>((agentId, snapshot) => {
     dispatch({ type: "closeThread" });
     setSelectedAgentPanelId(agentId);
+    setSelectedAgentPanelSnapshot(snapshot ?? null);
   }, []);
-  const { data: dmAgents = [] } = useQuery({
-    ...agentListOptions(wsId),
-    enabled: !!selectedAgentPanelId,
-  });
   const { data: dmMembers = [] } = useQuery({
     ...memberListOptions(wsId),
     enabled: !!selectedAgentPanelId,
@@ -1318,10 +1321,13 @@ function DmChannelConversation({
     selectedAgentPanelId ? (
       <ResolvedAgentSidePanel
         agentId={selectedAgentPanelId}
-        agents={dmAgents}
+        identitySnapshot={selectedAgentPanelSnapshot}
         currentUserId={currentUserId}
         members={dmMembers}
-        onClose={() => setSelectedAgentPanelId(null)}
+        onClose={() => {
+          setSelectedAgentPanelId(null);
+          setSelectedAgentPanelSnapshot(null);
+        }}
       />
     ) : null;
   const detailPanel = threadPanel ?? agentPanel;

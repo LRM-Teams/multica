@@ -5,9 +5,11 @@ import { Dialog } from "@base-ui/react/dialog";
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useAuthStore } from "@multica/core/auth";
-import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
-import { useAgentPanelStore } from "@multica/core/agents/stores";
-import type { Agent } from "@multica/core/types";
+import { memberListOptions } from "@multica/core/workspace/queries";
+import {
+  useAgentPanelStore,
+} from "@multica/core/agents/stores";
+import type { AgentPanelIdentitySnapshot } from "@multica/core/agents";
 import { ResolvedAgentSidePanel } from "../common/resolved-agent-side-panel";
 import { useNavigation } from "../navigation";
 
@@ -29,20 +31,16 @@ import { useNavigation } from "../navigation";
  * header+tabs, and uses a TRANSPARENT backdrop (click-outside dismiss, no
  * dimming scrim) so the "overlay vs push" difference stays invisible.
  *
- * LRM-288: opens on selectedAgentId even when the agent is absent from
- * ListAgents (channel-only / group managers); resolution is delegated to
- * ResolvedAgentSidePanel.
+ * LRM-292: opens on selectedAgentId; panel body always from GetAgent via
+ * ResolvedAgentSidePanel — ListAgents is not consulted.
  */
 export function GlobalAgentPanel() {
   const wsId = useWorkspaceId();
   const { pathname } = useNavigation();
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const selectedAgentId = useAgentPanelStore((s) => s.selectedAgentId);
+  const identitySnapshot = useAgentPanelStore((s) => s.identitySnapshot);
   const close = useAgentPanelStore((s) => s.close);
-  const { data: agents = [] } = useQuery({
-    ...agentListOptions(wsId),
-    enabled: !!selectedAgentId,
-  });
   const { data: members = [] } = useQuery({
     ...memberListOptions(wsId),
     enabled: !!selectedAgentId,
@@ -57,20 +55,20 @@ export function GlobalAgentPanel() {
     close();
   }, [pathname, close]);
 
-  // Latch the selected id so content survives the slide-out exit animation:
-  // `close()` clears selectedAgentId immediately, so without the latch the
-  // panel would slide out empty. Refreshed when a new agent is selected.
+  // Latch the selected id + snapshot so content survives the slide-out exit
+  // animation: `close()` clears selectedAgentId immediately, so without the
+  // latch the panel would slide out empty. Refreshed when a new agent is selected.
   const [displayedId, setDisplayedId] = useState<string | null>(null);
-  const [displayedAgents, setDisplayedAgents] = useState<readonly Agent[]>([]);
+  const [displayedSnapshot, setDisplayedSnapshot] =
+    useState<AgentPanelIdentitySnapshot | null>(null);
   if (selectedAgentId && selectedAgentId !== displayedId) {
     setDisplayedId(selectedAgentId);
-  }
-  if (selectedAgentId && agents.length > 0 && agents !== displayedAgents) {
-    setDisplayedAgents(agents);
+    setDisplayedSnapshot(identitySnapshot);
   }
 
   const open = !!selectedAgentId;
   const panelAgentId = selectedAgentId ?? displayedId;
+  const panelSnapshot = selectedAgentId ? identitySnapshot : displayedSnapshot;
 
   return (
     <Dialog.Root
@@ -92,7 +90,7 @@ export function GlobalAgentPanel() {
           {panelAgentId ? (
             <ResolvedAgentSidePanel
               agentId={panelAgentId}
-              agents={selectedAgentId ? agents : displayedAgents}
+              identitySnapshot={panelSnapshot}
               currentUserId={currentUserId}
               members={members}
               onClose={close}

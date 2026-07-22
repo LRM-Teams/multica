@@ -6,17 +6,16 @@ import { ApiError } from "@multica/core/api";
 import {
   agentDetailOptions,
   memberProfileOptions,
+  type AgentPanelIdentitySnapshot,
 } from "@multica/core/agents";
 import { useWorkspaceId } from "@multica/core/hooks";
-import type { Agent, MemberWithUser } from "@multica/core/types";
+import type { MemberWithUser } from "@multica/core/types";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { toast } from "sonner";
 import { AgentSidePanel } from "../channels/components/agent-side-panel";
 import { useT } from "../i18n/use-t";
 import { ActorProfileContent } from "./actor-profile-popover";
 import { ConversationSidePanelShell } from "./conversation-side-panel-shell";
-
-const EMPTY_AGENTS: readonly Agent[] = [];
 
 const PANEL_LOADING_LEADING = (
   <div className="flex items-center gap-2.5">
@@ -33,29 +32,33 @@ const PANEL_LOADING_BODY = (
   </div>
 );
 
+function snapshotLabel(snapshot: AgentPanelIdentitySnapshot | null | undefined): string | null {
+  if (!snapshot) return null;
+  const label = (snapshot.display_name || snapshot.name || "").trim();
+  return label || null;
+}
+
 /**
- * Resolves an agent by id for the #349 side panel when the actor may be absent
- * from ListAgents (channel-only discovery — group managers / LRM-233).
+ * Resolves an agent panel by id (LRM-292).
  *
- * Resolution order (LRM-288):
- * 1. Prefer the workspace agent list cache (no extra fetch).
- * 2. Fall back to GET /api/agents/:id (group managers are still readable).
- * 3. On 403, open the identity-only member profile (basic card, sensitive
- *    blocks gated by profile_access) — never a silent no-op.
- * 4. On true failure (404 / network / identity profile also fails), toast
- *    explicitly and show an error panel (close via shell X — no silent null).
+ * Contract:
+ * - Callers open with `agentId` (+ optional identity snapshot from the row).
+ * - Panel body always comes from GET /api/agents/:id.
+ * - ListAgents is NOT consulted and is NOT an open gate (Frank / LRM-288 follow-up).
+ * - 403 → identity-only member profile (sensitive blocks gated by profile_access).
+ * - True failure → explicit toast + error panel (LRM-238: no silent no-op).
  */
 export function ResolvedAgentSidePanel({
   agentId,
-  agents = EMPTY_AGENTS,
+  identitySnapshot = null,
   currentUserId,
   members,
   onClose,
   variant = "panel",
 }: {
   agentId: string;
-  /** Workspace ListAgents cache; may omit channel-only agents. */
-  agents?: readonly Agent[];
+  /** Optional row-level identity for optimistic chrome while GetAgent loads. */
+  identitySnapshot?: AgentPanelIdentitySnapshot | null;
   currentUserId: string | null;
   members: readonly MemberWithUser[];
   onClose: () => void;
@@ -63,21 +66,18 @@ export function ResolvedAgentSidePanel({
 }) {
   const { t } = useT("channels");
   const wsId = useWorkspaceId();
-  const listAgent = agents.find((agent) => agent.id === agentId) ?? null;
 
   const {
-    data: detailAgent,
+    data: agent,
     isPending: detailPending,
     isError: detailIsError,
     error: detailError,
   } = useQuery({
     ...agentDetailOptions(wsId, agentId),
-    enabled: !!agentId && !listAgent,
+    enabled: !!agentId,
   });
 
-  const agent = listAgent ?? detailAgent ?? null;
   const detailForbidden =
-    !listAgent &&
     detailIsError &&
     detailError instanceof ApiError &&
     detailError.status === 403;
@@ -97,9 +97,7 @@ export function ResolvedAgentSidePanel({
     !detailPending &&
     !(detailForbidden && identityPending) &&
     !(detailForbidden && identityProfile) &&
-    (detailForbidden
-      ? identityIsError || identityFetched
-      : detailIsError);
+    (detailForbidden ? identityIsError || identityFetched : detailIsError);
 
   const toastedRef = useRef(false);
   useEffect(() => {
@@ -125,12 +123,20 @@ export function ResolvedAgentSidePanel({
   }
 
   if (detailPending || (detailForbidden && identityPending)) {
+    const optimisticName = snapshotLabel(identitySnapshot);
     return (
       <ConversationSidePanelShell
         variant={variant}
         onClose={onClose}
         closeAriaLabel={t(($) => $.profile_popover.close_aria)}
-        leading={PANEL_LOADING_LEADING}
+        // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- shell leading slot; optimistic name or skeleton
+        leading={
+          optimisticName ? (
+            <p className="min-w-0 truncate text-sm font-semibold">{optimisticName}</p>
+          ) : (
+            PANEL_LOADING_LEADING
+          )
+        }
       >
         {PANEL_LOADING_BODY}
       </ConversationSidePanelShell>

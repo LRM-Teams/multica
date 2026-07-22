@@ -4,6 +4,7 @@ import { Bot } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { useActorName } from "@multica/core/workspace/hooks";
 import type { ChannelMessage } from "@multica/core/types";
+import type { OpenAgentPanelFn } from "@multica/core/agents";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { initialsOf } from "../../common/initials";
@@ -23,7 +24,7 @@ export function ThreadRootPreview({
   currentUserId: string | null;
   ownName?: string;
   onViewParent?: () => void;
-  onOpenAgent?: (agentId: string) => void;
+  onOpenAgent?: OpenAgentPanelFn;
 }) {
   const { t } = useT("channels");
   const messageTime = useMessageTime();
@@ -44,10 +45,14 @@ export function ThreadRootPreview({
         : null;
   const profileActorId = message.author_id ?? null;
   // Agent author → clicking the avatar/name opens the agent side panel, same as
-  // the main channel bubble. Members keep the hover card only. (#488)
+  // the main channel bubble. Members keep the hover card only. (#488 / LRM-292)
   const handleOpenAgentCapture =
     isAgent && onOpenAgent && profileActorId
-      ? () => onOpenAgent(profileActorId)
+      ? () =>
+          onOpenAgent(profileActorId, {
+            display_name: message.author_name,
+            avatar_url: message.author_avatar_url ?? null,
+          })
       : undefined;
   const avatarActorType = isAgent ? "agent" : "member";
   const avatar = profileActorId ? (

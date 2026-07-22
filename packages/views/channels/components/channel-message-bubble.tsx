@@ -24,6 +24,7 @@ import {
 } from "@multica/ui/components/ui/context-menu";
 import { useActorName } from "@multica/core/workspace/hooks";
 import type { ChannelMessage } from "@multica/core/types";
+import type { OpenAgentPanelFn } from "@multica/core/agents";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { InlineReferenceContent } from "../../common/inline-reference-content";
@@ -295,8 +296,9 @@ export function ChannelMessageBubble({
   onEdit?: (message: ChannelMessage, content: string) => void;
   /** Soft-delete the viewer's own message; the bubble then renders a tombstone. */
   onDelete?: (message: ChannelMessage) => void;
-  /** Opens the side agent file/public-info panel for agent-authored messages. */
-  onOpenAgent?: (agentId: string) => void;
+  /** Opens the side agent file/public-info panel for agent-authored messages
+   *  (LRM-292: agentId + optional row identity snapshot). */
+  onOpenAgent?: OpenAgentPanelFn;
   /** One-click retry for a failed optimistic send (reuses `client_message_id`). */
   onRetrySend?: (message: ChannelMessage) => void;
   /** Search hit: marks matching visible text while search is open. */
@@ -563,7 +565,10 @@ export function ChannelMessageBubble({
   const handleDelete = () => onDelete?.(message);
   const handleOpenAgent = () => {
     if (isAgent && message.author_id) {
-      onOpenAgent?.(message.author_id);
+      onOpenAgent?.(message.author_id, {
+        display_name: message.author_name,
+        avatar_url: message.author_avatar_url ?? null,
+      });
     }
   };
   const handleOpenAgentCapture = isAgent && onOpenAgent ? handleOpenAgent : undefined;

@@ -89,7 +89,7 @@ vi.mock("./agent-presence-status-line", () => ({
   AgentPresenceStatusLine: () => <span data-testid="presence-line" />,
 }));
 
-const mockAgents = vi.hoisted(() => ({ current: [] as unknown[] }));
+const mockAgent = vi.hoisted(() => ({ current: null as unknown }));
 const mockMembers = vi.hoisted(() => ({ current: [] as unknown[] }));
 const mockRuntimes = vi.hoisted(() => ({ current: [] as unknown[] }));
 
@@ -99,12 +99,22 @@ vi.mock("@tanstack/react-query", async () => {
   );
   return {
     ...actual,
-    useQuery: (opts: { queryKey: readonly unknown[] }) => {
+    useQuery: (opts: { queryKey: readonly unknown[]; enabled?: boolean }) => {
+      if (opts.enabled === false) {
+        return { data: undefined, isLoading: false, isPending: false, isError: false };
+      }
       const key = opts.queryKey;
       const root = key[0];
       const marker = key[2];
-      if (root === "workspaces" && marker === "agents") {
-        return { data: mockAgents.current, isLoading: false, isPending: false };
+      // LRM-292: card body from GetAgent (`…/agent/:id`), not ListAgents.
+      if (root === "workspaces" && marker === "agent") {
+        return {
+          data: mockAgent.current,
+          isLoading: false,
+          isPending: false,
+          isError: false,
+          error: null,
+        };
       }
       if (root === "workspaces" && marker === "members") {
         return { data: mockMembers.current, isLoading: false, isPending: false };
@@ -158,7 +168,7 @@ function renderCard() {
 beforeEach(() => {
   vi.clearAllMocks();
   cleanup();
-  mockAgents.current = [makeAgent()];
+  mockAgent.current = makeAgent();
   mockMembers.current = [];
   mockRuntimes.current = [
     { id: "rt-1", name: "Claude (host.local)", status: "online" },

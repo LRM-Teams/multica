@@ -1,10 +1,13 @@
 "use client";
 
 import { create } from "zustand";
+import type { AgentPanelIdentitySnapshot } from "../panel-open";
 
 interface AgentPanelState {
   selectedAgentId: string | null;
-  open: (agentId: string) => void;
+  /** Optimistic identity from the click source; cleared on close. */
+  identitySnapshot: AgentPanelIdentitySnapshot | null;
+  open: (agentId: string, snapshot?: AgentPanelIdentitySnapshot) => void;
   close: () => void;
 }
 
@@ -17,9 +20,17 @@ interface AgentPanelState {
  * `ActorAvatar` prefers that local context when present and only falls back
  * to this store when it isn't, so the two mechanisms never both fire for the
  * same click.
+ *
+ * LRM-292: open is id-driven (optional identity snapshot). Hosts always
+ * GET /api/agents/:id for panel body — never gate on ListAgents.find.
  */
 export const useAgentPanelStore = create<AgentPanelState>((set) => ({
   selectedAgentId: null,
-  open: (agentId) => set({ selectedAgentId: agentId }),
-  close: () => set({ selectedAgentId: null }),
+  identitySnapshot: null,
+  open: (agentId, snapshot) =>
+    set({
+      selectedAgentId: agentId,
+      identitySnapshot: snapshot ?? null,
+    }),
+  close: () => set({ selectedAgentId: null, identitySnapshot: null }),
 }));

@@ -162,7 +162,10 @@ describe("ThreadRootPreview", () => {
     // fires the capture handler with the agent id (parity with the channel bubble).
     const [firstTrigger] = screen.getAllByTestId("actor-profile-trigger");
     fireEvent.click(firstTrigger!);
-    expect(onOpenAgent).toHaveBeenCalledWith("agent-1");
+    expect(onOpenAgent).toHaveBeenCalledWith("agent-1", {
+      display_name: "Research Agent",
+      avatar_url: null,
+    });
   });
 
   it("does NOT open a panel for a human (member) root author — hover card only (#488)", () => {

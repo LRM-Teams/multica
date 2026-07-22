@@ -107,9 +107,9 @@ type fakeEnvDispatchDeps struct {
 	// in-memory run map keyed by projectID. rootTaskStatusOverride, when
 	// non-empty, is returned by GetEnvDispatchRootTaskStatus for any bound root
 	// (empty -> "completed", the terminal default so a bound root is ready).
-	dispatchRuns          map[string]fakeEnvDispatchRun
-	createRunCalls        []createEnvDispatchRunCall
-	bindRootTaskCalls     []bindRootTaskCall
+	dispatchRuns           map[string]fakeEnvDispatchRun
+	createRunCalls         []createEnvDispatchRunCall
+	bindRootTaskCalls      []bindRootTaskCall
 	rootTaskStatusOverride string
 
 	forkErr                    error
@@ -2151,6 +2151,16 @@ func TestScratchMessageProvisionsOnlyLeader(t *testing.T) {
 		t.Fatalf("leader run must use its derived agent and bound runtime, got %+v", f.channelRuns)
 	}
 	r := res.Rollouts[0]
+	run := f.channelRuns[0]
+	if run.ChatSessionID != "binding-session-leader" ||
+		run.ChannelID != r.ChannelID ||
+		run.SourceMessageID == "" ||
+		run.ProjectID != r.ProjectID ||
+		run.EnvID != r.EnvID ||
+		run.SandboxInstanceID != "binding-sandbox-leader" ||
+		run.RuntimeID != "rt-1" {
+		t.Fatalf("channel run lost sandbox dispatch identity: %+v", run)
+	}
 	createdEnv, ok := f.envs[r.EnvID]
 	if !ok || len(createdEnv.SandboxIDs) != 1 || createdEnv.SandboxIDs[0] != "binding-sandbox-leader" {
 		t.Fatalf("message environment must own the leader binding sandbox, got %+v", createdEnv)

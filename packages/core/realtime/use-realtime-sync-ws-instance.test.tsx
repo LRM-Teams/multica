@@ -183,7 +183,7 @@ describe("useRealtimeSync — ws instance change", () => {
     expect(calls).toContainEqual(["issues", "tasks"]);
   });
 
-  it("upserts root channel messages but invalidates thread replies", () => {
+  it("upserts thread replies without invalidating the thread query (LRM-271)", () => {
     const ws = createMockWs();
     renderHook(() => useRealtimeSync(ws, stores), {
       wrapper: createWrapper(qc),
@@ -205,6 +205,9 @@ describe("useRealtimeSync — ws instance change", () => {
       ],
       pageParams: [null],
     });
+    qc.setQueryData(channelKeys.messageThread("channel-1", "root-old"), {
+      messages: [channelMessage("root-old")],
+    });
 
     channelMessageHandler?.(channelMessage("root-new"));
 
@@ -222,13 +225,22 @@ describe("useRealtimeSync — ws instance change", () => {
         .getQueryData<InfiniteData<ChannelMessagesPage>>(channelKeys.messagesPage("channel-1"))
         ?.pages[0]?.messages.map((message) => message.id),
     ).toEqual(["root-old", "root-new"]);
+    // Main timeline still refreshes for root reply-count metadata.
     expect(invalidateSpy.mock.calls.length).toBeGreaterThan(invalidateBeforeThreadReply);
-    expect(invalidateSpy).toHaveBeenCalledWith({
-      queryKey: channelKeys.messageThread("channel-1", "root-old"),
-    });
     expect(invalidateSpy).toHaveBeenCalledWith({
       queryKey: channelKeys.messagesPage("channel-1"),
     });
+    // Thread panel uses upsert only — no post-ACK invalidate that races pending clear.
+    expect(invalidateSpy).not.toHaveBeenCalledWith({
+      queryKey: channelKeys.messageThread("channel-1", "root-old"),
+    });
+    expect(
+      (
+        qc.getQueryData<{ messages: ChannelMessage[] }>(
+          channelKeys.messageThread("channel-1", "root-old"),
+        )?.messages ?? []
+      ).map((message) => message.id),
+    ).toEqual(["root-old", "reply-1"]);
   });
 
   it("removes deleted root messages without replies but keeps tombstone roots with replies", () => {

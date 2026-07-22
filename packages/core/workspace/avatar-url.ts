@@ -20,11 +20,18 @@ function withAgentAvatarCacheBust(path: string): string {
 export function resolvePublicFileUrlWithBase(rawUrl: string | null | undefined, baseUrl: string): string | null {
   if (!rawUrl) return null;
   if (!rawUrl.startsWith("/")) return rawUrl;
-  // Preset faces live on the web origin (`apps/web/public/agent-avatars`), not
-  // the API upload store. Keep them origin-relative and cache-bust so a
-  // poisoned 404 cannot stick after assets land.
-  if (rawUrl.startsWith("/agent-avatars/")) return withAgentAvatarCacheBust(rawUrl);
   const trimmedBaseUrl = baseUrl.replace(/\/+$/, "");
+
+  // Agent presets: always cache-bust. Empty base = web same-origin (Next
+  // `public/`). Non-empty base = desktop / remote API — renderer has no
+  // bundled pool, so presets must hit the API host like uploads do.
+  if (rawUrl.startsWith("/agent-avatars/")) {
+    const busted = withAgentAvatarCacheBust(rawUrl);
+    if (!trimmedBaseUrl) return busted;
+    return `${trimmedBaseUrl}${busted}`;
+  }
+
+  if (!trimmedBaseUrl) return rawUrl;
   return `${trimmedBaseUrl}${rawUrl}`;
 }
 

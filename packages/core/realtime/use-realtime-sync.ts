@@ -1189,8 +1189,9 @@ export function useRealtimeSync(
         invalidateChannelMessages(qc, payload.channel_id);
       }
       if (payload.thread_root_message_id) {
+        // Upsert is enough to retire optimistic pending bubbles. An immediate
+        // thread refetch can race the ACK and leave Sending… visible (LRM-271).
         upsertChannelMessageThreadInCache(qc, payload, payload.thread_root_message_id);
-        qc.invalidateQueries({ queryKey: channelKeys.messageThread(payload.channel_id, payload.thread_root_message_id) });
       }
       const id = getCurrentWsId();
       if (id) qc.invalidateQueries({ queryKey: channelKeys.list(id) });

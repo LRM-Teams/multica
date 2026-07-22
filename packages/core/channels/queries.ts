@@ -169,9 +169,15 @@ export function channelMessagesFirstItemIndex(data: InfiniteData<ChannelMessages
   return CHANNEL_MESSAGES_VIRTUOSO_BASE_INDEX - olderCount;
 }
 
+function isLocalSendRow(message: ChannelMessage): boolean {
+  return message.local_send_status === "pending" || message.local_send_status === "failed";
+}
+
 /**
  * Match an existing cache row to an incoming message: same `id`, OR same
  * non-empty `client_message_id` (temp optimistic id → authoritative ACK / WS).
+ * If the ACK/WS omits `client_message_id`, fall back to the pending/failed
+ * optimistic bubble with the same author + content + thread root (LRM-271).
  */
 export function findChannelMessageMatchIndex(
   messages: readonly ChannelMessage[],
@@ -180,19 +186,27 @@ export function findChannelMessageMatchIndex(
   const byId = messages.findIndex((m) => m.id === message.id);
   if (byId >= 0) return byId;
   const clientId = message.client_message_id;
-  if (!clientId) return -1;
-  // Optimistic rows use `client_message_id` as temp `id`; ACK/WS may only carry
-  // the client id on the incoming payload.
+  if (clientId) {
+    // Optimistic rows use `client_message_id` as temp `id`; ACK/WS may only carry
+    // the client id on the incoming payload.
+    const byClient = messages.findIndex(
+      (m) => m.client_message_id === clientId || m.id === clientId,
+    );
+    if (byClient >= 0) return byClient;
+  }
+  // Authoritative rows never carry local_send_status; only replace a temp bubble.
+  if (isLocalSendRow(message) || !message.author_id) return -1;
   return messages.findIndex(
-    (m) => m.client_message_id === clientId || m.id === clientId,
+    (m) =>
+      isLocalSendRow(m) &&
+      m.author_id === message.author_id &&
+      m.content === message.content &&
+      (m.thread_root_message_id ?? null) === (message.thread_root_message_id ?? null),
   );
 }
 
 function matchesChannelMessage(existing: ChannelMessage, incoming: ChannelMessage): boolean {
-  if (existing.id === incoming.id) return true;
-  const clientId = incoming.client_message_id;
-  if (!clientId) return false;
-  return existing.client_message_id === clientId || existing.id === clientId;
+  return findChannelMessageMatchIndex([existing], incoming) === 0;
 }
 
 export function upsertChannelMessageInCache(qc: QueryClient, message: ChannelMessage) {
@@ -216,7 +230,7 @@ export function upsertChannelMessageInCache(qc: QueryClient, message: ChannelMes
     const siblings = flattenChannelMessagePages(old);
     const matchIndex = findChannelMessageMatchIndex(siblings, message);
     const existing = matchIndex >= 0 ? siblings[matchIndex] : undefined;
-    const enriched = withPreservedAuthorAvatar(message, existing, siblings);
+    const enriched = asCacheMessage(message, existing, siblings);
     const existingPageIndex = old.pages.findIndex((page: ChannelMessagesPage) =>
       page.messages.some((m: ChannelMessage) => matchesChannelMessage(m, enriched)),
     );
@@ -284,14 +298,31 @@ export function withPreservedAuthorAvatar(
   return { ...incoming, author_avatar_url: fromSibling };
 }
 
+/** Authoritative API/WS rows must never keep client-only pending/failed state. */
+function asCacheMessage(
+  incoming: ChannelMessage,
+  existing: ChannelMessage | undefined,
+  siblings: readonly ChannelMessage[] | undefined,
+): ChannelMessage {
+  const enriched = withPreservedAuthorAvatar(incoming, existing, siblings);
+  // Temp optimistic rows use `id === client_message_id` and may carry
+  // `local_send_status`. Authoritative HTTP ACK / WS rows use a server id and
+  // must never keep a client-only pending/failed badge (LRM-271).
+  const clientId = enriched.client_message_id;
+  if (clientId && enriched.id === clientId) return enriched;
+  if (enriched.local_send_status == null) return enriched;
+  const { local_send_status: _drop, ...rest } = enriched;
+  return rest;
+}
+
 function upsertChannelMessage(old: ChannelMessage[] | undefined, message: ChannelMessage) {
   if (!shouldRenderChannelMessage(message)) {
     return old?.filter((existing) => !matchesChannelMessage(existing, message));
   }
-  if (!old) return [message];
+  if (!old) return [asCacheMessage(message, undefined, undefined)];
   const index = findChannelMessageMatchIndex(old, message);
   const existing = index >= 0 ? old[index] : undefined;
-  const enriched = withPreservedAuthorAvatar(message, existing, old);
+  const enriched = asCacheMessage(message, existing, old);
   if (index >= 0) {
     return old.map((m, i) => (i === index ? enriched : m));
   }

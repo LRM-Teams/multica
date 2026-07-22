@@ -7,6 +7,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+
+	"github.com/multica-ai/multica/server/internal/service"
 )
 
 func setupEnvDispatchChannelSessionFixture(t *testing.T) (context.Context, envDispatchChannelSessionInput) {
@@ -116,4 +118,45 @@ func TestEnsureEnvDispatchChannelSessionConcurrentWinnerLeavesNoOrphan(t *testin
 		in.ProjectID, in.AgentID).Scan(&sessions))
 	require.Equal(t, 1, mappings)
 	require.Equal(t, 1, sessions)
+}
+
+func TestEnvDispatchAdapterEnqueueChannelRunPersistsPromptWithTask(t *testing.T) {
+	ctx, sessionIn := setupEnvDispatchChannelSessionFixture(t)
+	sessionID, _, err := testHandler.ensureEnvDispatchChannelSession(ctx, sessionIn)
+	require.NoError(t, err)
+
+	adapter := &envDispatchDepsAdapter{h: testHandler}
+	const prompt = "complete this task inside the sandbox"
+	messageID, err := adapter.CreateChannelMessage(
+		ctx, sessionIn.ChannelID, sessionIn.WorkspaceID, sessionIn.CreatorID, prompt,
+	)
+	require.NoError(t, err)
+
+	taskID, err := adapter.EnqueueEnvDispatchChannelRun(ctx, sessionIn.WorkspaceID, sessionIn.CreatorID, service.ChannelRunInput{
+		AgentID:         sessionIn.AgentID,
+		ChannelID:       sessionIn.ChannelID,
+		ProjectID:       sessionIn.ProjectID,
+		EnvID:           uuid.NewString(),
+		ChatSessionID:   sessionID,
+		RuntimeID:       sessionIn.RuntimeID,
+		SourceMessageID: messageID,
+	}, 0)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID)
+	})
+
+	var gotPrompt, gotAgentID, gotRuntimeID, gotSessionID string
+	require.NoError(t, testPool.QueryRow(ctx, `
+		SELECT message.content, task.agent_id::text, task.runtime_id::text,
+		       task.chat_session_id::text
+		FROM chat_message message
+		JOIN agent_task_queue task ON task.id = message.task_id
+		WHERE task.id = $1 AND message.role = 'user'`, taskID).Scan(
+		&gotPrompt, &gotAgentID, &gotRuntimeID, &gotSessionID,
+	))
+	require.Equal(t, prompt, gotPrompt)
+	require.Equal(t, sessionIn.AgentID, gotAgentID)
+	require.Equal(t, sessionIn.RuntimeID, gotRuntimeID)
+	require.Equal(t, sessionID, gotSessionID)
 }

@@ -886,8 +886,86 @@ func (a *envDispatchDepsAdapter) LinkEnvDispatchTrainingSession(ctx context.Cont
 	return nil
 }
 
-func (a *envDispatchDepsAdapter) EnqueueEnvDispatchChannelRun(ctx context.Context, workspaceID, userID string, in service.ChannelRunInput, idx int) (string, error) {
-	return a.EnqueueAgentRun(ctx, workspaceID, userID, in.AgentID, "", "", in.ChatSessionID, in.SandboxInstanceID, in.EnvID, in.RuntimeID, idx)
+func (a *envDispatchDepsAdapter) EnqueueEnvDispatchChannelRun(ctx context.Context, workspaceID, userID string, in service.ChannelRunInput, _ int) (string, error) {
+	if workspaceID == "" || userID == "" || in.AgentID == "" || in.ChannelID == "" ||
+		in.ProjectID == "" || in.ChatSessionID == "" || in.RuntimeID == "" || in.SourceMessageID == "" {
+		return "", stackerr.New("enqueue env-dispatch channel run: execution identity is required")
+	}
+	tx, err := a.h.TxStarter.Begin(ctx)
+	if err != nil {
+		return "", stackerr.Wrap(err, "begin env-dispatch channel run")
+	}
+	defer tx.Rollback(ctx)
+	qtx := a.h.Queries.WithTx(tx)
+
+	session, err := qtx.GetChatSession(ctx, parseUUID(in.ChatSessionID))
+	if err != nil {
+		return "", stackerr.Wrap(err, "get env-dispatch chat session for run")
+	}
+	if uuidToString(session.WorkspaceID) != workspaceID ||
+		uuidToString(session.ProjectID) != in.ProjectID ||
+		uuidToString(session.AgentID) != in.AgentID ||
+		uuidToString(session.RuntimeID) != in.RuntimeID {
+		return "", stackerr.New("enqueue env-dispatch channel run: session identity mismatch")
+	}
+
+	var prompt string
+	if err := tx.QueryRow(ctx, `
+SELECT content
+FROM channel_message
+WHERE id = $1 AND channel_id = $2 AND workspace_id = $3 AND deleted_at IS NULL`,
+		parseUUID(in.SourceMessageID), parseUUID(in.ChannelID), parseUUID(workspaceID)).Scan(&prompt); err != nil {
+		return "", stackerr.Wrap(err, "load env-dispatch channel prompt")
+	}
+	if strings.TrimSpace(prompt) == "" {
+		return "", stackerr.New("enqueue env-dispatch channel run: channel prompt is empty")
+	}
+
+	targetAgent, err := qtx.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
+		ID:          parseUUID(in.AgentID),
+		WorkspaceID: parseUUID(workspaceID),
+	})
+	if err != nil {
+		return "", stackerr.Wrap(err, "get env-dispatch channel task agent")
+	}
+	taskContext := mergeEphemeralSandboxContext(nil, in.SandboxInstanceID, userID)
+	taskContext, err = service.WithTaskExecutionConfig(taskContext, targetAgent.Model.String, targetAgent.ThinkingLevel.String)
+	if err != nil {
+		return "", stackerr.Wrap(err, "snapshot env-dispatch channel task execution config")
+	}
+	task, err := qtx.CreateChatTask(ctx, db.CreateChatTaskParams{
+		AgentID:         parseUUID(in.AgentID),
+		RuntimeID:       parseUUID(in.RuntimeID),
+		Priority:        envDispatchTaskPriority,
+		ChatSessionID:   parseUUID(in.ChatSessionID),
+		InitiatorUserID: parseUUID(userID),
+		Context:         taskContext,
+	})
+	if err != nil {
+		return "", stackerr.Wrap(err, "create env-dispatch channel task")
+	}
+	tag, err := tx.Exec(ctx, `
+INSERT INTO chat_message (
+    chat_session_id, role, content, parts, task_id, thread_id, trigger_depth
+)
+SELECT $1, 'user', content, parts, $2, COALESCE(thread_id, id::text), trigger_depth
+FROM channel_message
+WHERE id = $3 AND channel_id = $4 AND workspace_id = $5 AND deleted_at IS NULL`,
+		parseUUID(in.ChatSessionID), task.ID, parseUUID(in.SourceMessageID),
+		parseUUID(in.ChannelID), parseUUID(workspaceID))
+	if err != nil {
+		return "", stackerr.Wrap(err, "create env-dispatch channel prompt")
+	}
+	if tag.RowsAffected() != 1 {
+		return "", stackerr.New("create env-dispatch channel prompt: source message not found")
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", stackerr.Wrap(err, "commit env-dispatch channel run")
+	}
+
+	taskID := util.UUIDToString(task.ID)
+	a.maybeOpenTrainingSession(ctx, taskID, in.AgentID, in.ProjectID, in.EnvID)
+	return taskID, nil
 }
 
 func (a *envDispatchDepsAdapter) SaveCollaborationTrigger(ctx context.Context, envID string, trigger service.EnvCollaborationTrigger) error {

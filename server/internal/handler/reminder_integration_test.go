@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -75,6 +77,30 @@ func reminderFireCounts(t *testing.T, reminderID string) (occurrences, receipts,
 		t.Fatalf("load reminder fire counts: %v", err)
 	}
 	return
+}
+
+func waitForReminderChannelRowLock(t *testing.T, channelID string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		probe, err := testPool.Begin(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var one int
+		err = probe.QueryRow(context.Background(), `SELECT 1 FROM channel WHERE id = $1 FOR UPDATE NOWAIT`, channelID).Scan(&one)
+		_ = probe.Rollback(context.Background())
+		if err == nil {
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "55P03" {
+			return
+		}
+		t.Fatalf("probe reminder channel lock: %v", err)
+	}
+	t.Fatal("reminder fire did not acquire the channel row lock")
 }
 
 func TestFireDueReminderOccurrenceIsIdempotentAcrossSchedulers(t *testing.T) {
@@ -290,6 +316,95 @@ func TestReminderFireSerializesAgainstConcurrentAgentArchive(t *testing.T) {
 		t.Fatal("fire did not resume after agent archive committed")
 	}
 	assertReminderEligibilityTerminalized(t, reminderID, "agent_archived")
+}
+
+func TestReminderFireFirstSerializesAgainstActiveChannelOnboarding(t *testing.T) {
+	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
+	anchor := fixture.insertMessage(t, "user", testUserID, "anchor", nil)
+	reminderID := seedDueReminder(t, fixture.agentIDs[0], fixture.channel.ID, anchor.ID, "", "")
+	var onboardingID string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT id
+		FROM channel_agent_onboarding
+		WHERE channel_id = $1 AND agent_id = $2 AND status IN ('pending', 'claimed')`,
+		fixture.channel.ID, fixture.agentIDs[0]).Scan(&onboardingID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Hold the agent row so the production fire transaction pauses after taking
+	// channel but before membership. The old joined onboarding FOR UPDATE could
+	// then own membership while waiting for channel, producing a real cycle.
+	agentBlocker, err := testPool.Begin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer agentBlocker.Rollback(context.Background())
+	if err := agentBlocker.QueryRow(context.Background(), `SELECT 1 FROM agent WHERE id = $1 FOR UPDATE`, fixture.agentIDs[0]).Scan(new(int)); err != nil {
+		t.Fatal(err)
+	}
+
+	fireDone := make(chan error, 1)
+	go func() { fireDone <- fixture.handler.FireDueReminders(context.Background()) }()
+	waitForReminderChannelRowLock(t, fixture.channel.ID)
+
+	type onboardingResult struct {
+		active  bool
+		updated int64
+		err     error
+	}
+	activeDone := make(chan onboardingResult, 1)
+	go func() {
+		tx, err := testPool.Begin(context.Background())
+		if err != nil {
+			activeDone <- onboardingResult{err: err}
+			return
+		}
+		defer tx.Rollback(context.Background())
+		active, err := channelOnboardingGenerationActiveTx(context.Background(), tx,
+			parseUUID(onboardingID), parseUUID(fixture.channel.ID), parseUUID(fixture.agentIDs[0]), true)
+		if err != nil || !active {
+			activeDone <- onboardingResult{active: active, err: err}
+			return
+		}
+		tag, err := tx.Exec(context.Background(), `
+			UPDATE channel_agent_onboarding
+			SET status = 'skipped', terminal_at = now(), updated_at = now()
+			WHERE id = $1 AND status IN ('pending', 'claimed')`, onboardingID)
+		if err == nil {
+			err = tx.Commit(context.Background())
+		}
+		activeDone <- onboardingResult{active: active, updated: tag.RowsAffected(), err: err}
+	}()
+	select {
+	case result := <-activeDone:
+		t.Fatalf("active onboarding crossed reminder's channel lock: %+v", result)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if err := agentBlocker.Commit(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-fireDone:
+		if err != nil {
+			t.Fatalf("fire after agent blocker release: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("reminder fire deadlocked with active channel onboarding")
+	}
+	select {
+	case result := <-activeDone:
+		if result.err != nil || !result.active || result.updated != 1 {
+			t.Fatalf("active onboarding result = %+v, want active single-row terminalization", result)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("active channel onboarding did not resume after reminder fire committed")
+	}
+
+	occurrences, receipts, tasks, firedEvents := reminderFireCounts(t, reminderID)
+	if occurrences != 1 || receipts != 1 || tasks != 1 || firedEvents != 1 {
+		t.Fatalf("fire counts = occurrence:%d receipt:%d task:%d event:%d, want one serialized winner each", occurrences, receipts, tasks, firedEvents)
+	}
 }
 
 func assertReminderEligibilityTerminalized(t *testing.T, reminderID, wantReason string) {

@@ -961,10 +961,11 @@ func (h *Handler) fireReminderOccurrence(ctx context.Context, reminderID, occurr
 	}
 	// Lock eligibility in the fixed channel -> agent -> membership order and hold
 	// every row through the same transaction that creates the receipt and wake.
-	// The archive/remove write paths each lock only their own row, so this order
-	// cannot form a reverse lock cycle with them. Either fire commits the complete
-	// occurrence first, or an eligibility write wins and this transaction
-	// terminalizes with no receipt, task, or wake.
+	// Non-SKIP channel-onboarding eligibility uses the same prefix before locking
+	// onboarding, while the membership DELETE trigger uses the compatible
+	// membership -> onboarding suffix. Either fire commits the complete occurrence
+	// first, or an eligibility write wins and this transaction terminalizes with
+	// no receipt, task, or wake.
 	var memberID pgtype.UUID
 	if err := tx.QueryRow(ctx, `
 		SELECT member_id

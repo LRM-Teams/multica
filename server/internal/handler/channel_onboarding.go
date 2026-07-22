@@ -582,18 +582,7 @@ func (h *Handler) buildChannelOnboardingPrompt(ctx context.Context, onboarding c
 	return b.String()
 }
 
-func (h *Handler) completeChannelOnboardingTx(ctx context.Context, tx pgx.Tx, event db.AgentInboxEvent, deliveryID pgtype.UUID, decision string) (string, error) {
-	onboardingID, err := channelOnboardingIDForInboxEventTx(ctx, tx, event.ID)
-	if err != nil {
-		return "", err
-	}
-	if !onboardingID.Valid {
-		return "", errors.New("channel onboarding inbox event is missing its canonical event")
-	}
-	active, err := channelOnboardingGenerationActiveTx(ctx, tx, onboardingID, event.ChannelID, event.AgentID, true)
-	if err != nil {
-		return "", err
-	}
+func (h *Handler) completeChannelOnboardingTx(ctx context.Context, tx pgx.Tx, event db.AgentInboxEvent, deliveryID, onboardingID pgtype.UUID, active bool, decision string) (string, error) {
 	outcome := ""
 	if !active {
 		outcome = "expired"
@@ -636,6 +625,9 @@ func channelOnboardingIDForInboxEventTx(ctx context.Context, tx pgx.Tx, eventID 
 }
 
 func channelOnboardingGenerationActiveTx(ctx context.Context, tx pgx.Tx, onboardingID, channelID, agentID pgtype.UUID, lock bool) (bool, error) {
+	if lock {
+		return lockChannelOnboardingGenerationActiveTx(ctx, tx, onboardingID, channelID, agentID)
+	}
 	query := `
 		SELECT 1
 		FROM channel_agent_onboarding onboarding
@@ -658,9 +650,6 @@ func channelOnboardingGenerationActiveTx(ctx context.Context, tx pgx.Tx, onboard
 		  AND onboarding.channel_id = $2
 		  AND onboarding.agent_id = $3
 		  AND onboarding.status IN ('pending', 'claimed')`
-	if lock {
-		query += " FOR UPDATE OF onboarding, membership, channel_row, agent_row"
-	}
 	var one int
 	err := tx.QueryRow(ctx, query, onboardingID, channelID, agentID).Scan(&one)
 	if err != nil {
@@ -668,6 +657,55 @@ func channelOnboardingGenerationActiveTx(ctx context.Context, tx pgx.Tx, onboard
 			return false, nil
 		}
 		return false, err
+	}
+	return true, nil
+}
+
+func lockChannelOnboardingGenerationActiveTx(ctx context.Context, tx pgx.Tx, onboardingID, channelID, agentID pgtype.UUID) (bool, error) {
+	// Read immutable generation coordinates without taking a row lock, then lock
+	// every eligibility row in the same global order as reminder fire:
+	// channel -> agent -> membership -> onboarding. The membership-before-
+	// onboarding suffix also matches the channel_member DELETE trigger, which
+	// owns the deleted membership row before expiring its onboarding generation.
+	// Revalidate the onboarding row last so a terminal transition that raced the
+	// coordinate read cannot be mistaken for an active generation.
+	var workspaceID, generationID pgtype.UUID
+	if err := tx.QueryRow(ctx, `
+		SELECT workspace_id, membership_generation_id
+		FROM channel_agent_onboarding
+		WHERE id = $1 AND channel_id = $2 AND agent_id = $3`, onboardingID, channelID, agentID).Scan(&workspaceID, &generationID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	for _, query := range []struct {
+		sql  string
+		args []any
+	}{
+		{`SELECT 1 FROM channel
+			WHERE id = $1 AND workspace_id = $2 AND kind = 'group' AND archived_at IS NULL
+			FOR UPDATE`, []any{channelID, workspaceID}},
+		{`SELECT 1 FROM agent
+			WHERE id = $1 AND workspace_id = $2 AND archived_at IS NULL
+			FOR UPDATE`, []any{agentID, workspaceID}},
+		{`SELECT 1 FROM channel_member
+			WHERE channel_id = $1 AND workspace_id = $2
+			  AND member_type = 'agent' AND member_id = $3 AND generation_id = $4
+			FOR UPDATE`, []any{channelID, workspaceID, agentID, generationID}},
+		{`SELECT 1 FROM channel_agent_onboarding
+			WHERE id = $1 AND workspace_id = $2 AND channel_id = $3 AND agent_id = $4
+			  AND membership_generation_id = $5 AND status IN ('pending', 'claimed')
+			FOR UPDATE`, []any{onboardingID, workspaceID, channelID, agentID, generationID}},
+	} {
+		var one int
+		if err := tx.QueryRow(ctx, query.sql, query.args...).Scan(&one); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return false, nil
+			}
+			return false, err
+		}
 	}
 	return true, nil
 }

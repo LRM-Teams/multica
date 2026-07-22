@@ -4,11 +4,16 @@ package service
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/multica-ai/multica/server/pkg/db/generated"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // Budget constants mirroring evolution_review_provider.go:
@@ -225,5 +230,223 @@ func GetTaskContext(
 	return TaskContext{
 		Goal:        goal,
 		GoldContext: goldContext,
+	}, nil
+}
+
+// ── Cursor-paginated segment messages (Task 2) ──
+
+// DiagnosisMessagePager is the narrow query surface for paging segment messages.
+// *db.Queries satisfies it in production.
+type DiagnosisMessagePager interface {
+	PageTaskMessagesInRange(ctx context.Context, arg db.PageTaskMessagesInRangeParams) ([]db.TaskMessage, error)
+	CountTaskMessagesInRange(ctx context.Context, arg db.CountTaskMessagesInRangeParams) (int32, error)
+}
+
+var _ DiagnosisMessagePager = (*db.Queries)(nil)
+
+// diagnosisCursorPayload is the HMAC-signed internal payload carried in opaque
+// page cursors. The caller must never trust fields from cursor without verifying
+// the HMAC.
+type diagnosisCursorPayload struct {
+	RunID     string `json:"r"`
+	SegmentID string `json:"s"`
+	LastSeq   int32  `json:"q"`
+	LastID    string `json:"i"`
+	PageSeq   int    `json:"p"`
+}
+
+// DiagnosisMessage is a single message surfaced to the diagnosis agent.
+type DiagnosisMessage struct {
+	Seq       int32  `json:"seq"`
+	Type      string `json:"type"`
+	Content   string `json:"content"`
+	Truncated bool   `json:"truncated,omitempty"`
+}
+
+// SegmentMessagePage is one page of diagnosis segment messages.
+type SegmentMessagePage struct {
+	Messages      []DiagnosisMessage `json:"messages"`
+	NextCursor    string             `json:"next_cursor"`
+	FetchedCount  int                `json:"fetched_count"`
+	ExpectedCount int                `json:"expected_count"`
+	Complete      bool               `json:"complete"`
+}
+
+// encodeDiagnosisCursor signs and encodes a cursor payload. The key must be
+// stable for the lifetime of one tool-server session.
+func encodeDiagnosisCursor(payload diagnosisCursorPayload, key []byte) (string, error) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("encode diagnosis cursor: %w", err)
+	}
+	mac := hmac.New(sha256.New, key)
+	mac.Write(data)
+	sig := mac.Sum(nil)
+	raw := make([]byte, 0, len(data)+sha256.Size)
+	raw = append(raw, data...)
+	raw = append(raw, sig...)
+	return base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
+// decodeDiagnosisCursor verifies and decodes an opaque cursor. Returns an error
+// when the HMAC mismatches, the payload is malformed, or required fields are
+// missing.
+func decodeDiagnosisCursor(encoded string, key []byte) (diagnosisCursorPayload, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		return diagnosisCursorPayload{}, fmt.Errorf("decode diagnosis cursor: %w", err)
+	}
+	if len(raw) < sha256.Size {
+		return diagnosisCursorPayload{}, fmt.Errorf("decode diagnosis cursor: payload too short")
+	}
+	data := raw[:len(raw)-sha256.Size]
+	sig := raw[len(raw)-sha256.Size:]
+	mac := hmac.New(sha256.New, key)
+	mac.Write(data)
+	if !hmac.Equal(mac.Sum(nil), sig) {
+		return diagnosisCursorPayload{}, fmt.Errorf("decode diagnosis cursor: signature mismatch")
+	}
+	var payload diagnosisCursorPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return diagnosisCursorPayload{}, fmt.Errorf("decode diagnosis cursor: %w", err)
+	}
+	if payload.SegmentID == "" {
+		return diagnosisCursorPayload{}, fmt.Errorf("decode diagnosis cursor: missing segment_id")
+	}
+	return payload, nil
+}
+
+// diagnosisPagerKey is a per-session HMAC key for signing cursors. It will be
+// supplied by DiagnosisToolServer at construction time; tests pass their own.
+var diagnosisPagerKey func() []byte
+
+// SetDiagnosisPagerKey installs the per-session cursor-signing key getter.
+func SetDiagnosisPagerKey(getter func() []byte) { diagnosisPagerKey = getter }
+
+// GetSegmentMessagePage returns one page of messages for a segment using
+// keyset pagination. An empty cursor starts at the first message; subsequent
+// pages pass the NextCursor from the prior response. The page is bounded by
+// maxDiagnosisSegmentTurns (turns) and maxDiagnosisSegmentBudgetBytes (bytes);
+// a single message larger than the byte budget is returned alone rather than
+// split. Returns the page, the next opaque cursor, and whether all remaining
+// messages have been returned.
+func GetSegmentMessagePage(ctx context.Context, pager DiagnosisMessagePager, taskID, segmentID string, startSeq, endSeq int32, encodedCursor string) (SegmentMessagePage, error) {
+	var lastSeq int32
+	var lastID pgtype.UUID
+	pageSeq := 0
+	accumulated := 0
+
+	if encodedCursor != "" {
+		if diagnosisPagerKey == nil {
+			return SegmentMessagePage{}, fmt.Errorf("diagnosis cursor key not initialised")
+		}
+		payload, err := decodeDiagnosisCursor(encodedCursor, diagnosisPagerKey())
+		if err != nil {
+			return SegmentMessagePage{}, err
+		}
+		if payload.SegmentID != segmentID {
+			return SegmentMessagePage{}, fmt.Errorf("cursor segment mismatch: %s != %s", payload.SegmentID, segmentID)
+		}
+		lastSeq = payload.LastSeq
+		if payload.LastID != "" {
+			if err := lastID.Scan(payload.LastID); err != nil {
+				return SegmentMessagePage{}, fmt.Errorf("cursor last_id: %w", err)
+			}
+		}
+		pageSeq = payload.PageSeq
+		accumulated = pageSeq * maxDiagnosisSegmentTurns
+	}
+
+	// Count total messages in range (no cursor filter).
+	expected, err := pager.CountTaskMessagesInRange(ctx, db.CountTaskMessagesInRangeParams{
+		TaskID:   taskID,
+		StartSeq: startSeq,
+		EndSeq:   endSeq,
+	})
+	if err != nil {
+		return SegmentMessagePage{}, err
+	}
+
+	rows, err := pager.PageTaskMessagesInRange(ctx, db.PageTaskMessagesInRangeParams{
+		TaskID:   taskID,
+		StartSeq: startSeq,
+		EndSeq:   endSeq,
+		LastSeq:  lastSeq,
+		LastID:   lastID,
+		Limit:    maxDiagnosisSegmentTurns,
+	})
+	if err != nil {
+		return SegmentMessagePage{}, err
+	}
+
+	msgs := make([]DiagnosisMessage, 0, len(rows))
+	totalBytes := 0
+	fetched := 0
+	var lastRowSeq int32
+	var lastRowID pgtype.UUID
+
+	for _, row := range rows {
+		content := ""
+		if row.Content.Valid {
+			content = row.Content.String
+		}
+		contentBytes := len(content)
+
+		// If we already have messages and adding this one exceeds byte budget,
+		// stop here (but never split a message).
+		if len(msgs) > 0 && totalBytes+contentBytes > maxDiagnosisSegmentBudgetBytes {
+			break
+		}
+
+		truncated := false
+		if contentBytes > maxDiagnosisMessageBytes {
+			content = truncateUTF8Bytes(content, maxDiagnosisMessageBytes)
+			truncated = true
+			contentBytes = len(content)
+		}
+
+		msgs = append(msgs, DiagnosisMessage{
+			Seq:       row.Seq,
+			Type:      row.Type,
+			Content:   content,
+			Truncated: truncated,
+		})
+		totalBytes += contentBytes
+		fetched++
+		lastRowSeq = row.Seq
+		lastRowID = row.ID
+	}
+
+	accumulated += fetched
+	complete := accumulated >= int(expected) || len(rows) < maxDiagnosisSegmentTurns
+
+	nextCursor := ""
+	if !complete {
+		if diagnosisPagerKey == nil {
+			return SegmentMessagePage{}, fmt.Errorf("diagnosis cursor key not initialised")
+		}
+		lastIDStr := ""
+		if lastRowID.Valid {
+			lastIDStr = fmt.Sprintf("%x", lastRowID.Bytes)
+		}
+		encoded, err := encodeDiagnosisCursor(diagnosisCursorPayload{
+			RunID:     "", // run_id is validated at the server layer, not cursor layer
+			SegmentID: segmentID,
+			LastSeq:   lastRowSeq,
+			LastID:    lastIDStr,
+			PageSeq:   pageSeq + 1,
+		}, diagnosisPagerKey())
+		if err != nil {
+			return SegmentMessagePage{}, err
+		}
+		nextCursor = encoded
+	}
+
+	return SegmentMessagePage{
+		Messages:      msgs,
+		NextCursor:    nextCursor,
+		FetchedCount:  accumulated,
+		ExpectedCount: int(expected),
+		Complete:      complete,
 	}, nil
 }

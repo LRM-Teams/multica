@@ -4,6 +4,9 @@ package service
 
 import (
 	"context"
+	"fmt"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -12,7 +15,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/multica-ai/multica/server/pkg/db/generated"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // MockDiagnosisStores combines the required store interfaces for testing
@@ -267,6 +270,231 @@ func TestGetInteractionDAG(t *testing.T) {
 		assert.Equal(t, EdgeTypeDelegation, resultEdges[0].Type)
 		mockStore.AssertExpectations(t)
 	})
+}
+
+// fakeDiagnosisMessagePager is an in-memory DiagnosisMessagePager for Task 2
+// paging tests. It holds messages keyed by task_id and supports keyset pagination
+// over (seq, id).
+type fakeDiagnosisMessagePager struct {
+	mu       sync.Mutex
+	messages []db.TaskMessage
+}
+
+func newFakeDiagnosisMessagePager(t *testing.T) *fakeDiagnosisMessagePager {
+	t.Helper()
+	return &fakeDiagnosisMessagePager{}
+}
+
+func (f *fakeDiagnosisMessagePager) addMessage(t *testing.T, seq int32, typ, content string) {
+	t.Helper()
+	var id pgtype.UUID
+	// Use a deterministic UUID from seq for stable tie-breaking.
+	_ = id.Scan(fmt.Sprintf("00000000-0000-0000-0000-%012d", seq))
+	f.messages = append(f.messages, db.TaskMessage{
+		ID:      id,
+		Seq:     seq,
+		Type:    typ,
+		Content: pgtype.Text{String: content, Valid: true},
+	})
+}
+
+func (f *fakeDiagnosisMessagePager) PageTaskMessagesInRange(_ context.Context, arg db.PageTaskMessagesInRangeParams) ([]db.TaskMessage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var result []db.TaskMessage
+	for _, m := range f.messages {
+		if m.Seq < arg.StartSeq || m.Seq > arg.EndSeq {
+			continue
+		}
+		if m.Seq > arg.LastSeq || (m.Seq == arg.LastSeq && comparePgUUID(m.ID, arg.LastID) > 0) {
+			result = append(result, m)
+		}
+	}
+	// Sort by (seq, id) to match the SQL ORDER BY.
+	sortTaskMessages(result)
+	if len(result) > int(arg.Limit) {
+		result = result[:arg.Limit]
+	}
+	return result, nil
+}
+
+func (f *fakeDiagnosisMessagePager) CountTaskMessagesInRange(_ context.Context, arg db.CountTaskMessagesInRangeParams) (int32, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var count int32
+	for _, m := range f.messages {
+		if m.Seq >= arg.StartSeq && m.Seq <= arg.EndSeq {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func sortTaskMessages(msgs []db.TaskMessage) {
+	for i := 0; i < len(msgs); i++ {
+		for j := i + 1; j < len(msgs); j++ {
+			if msgs[i].Seq > msgs[j].Seq || (msgs[i].Seq == msgs[j].Seq && comparePgUUID(msgs[i].ID, msgs[j].ID) > 0) {
+				msgs[i], msgs[j] = msgs[j], msgs[i]
+			}
+		}
+	}
+}
+
+func comparePgUUID(a, b pgtype.UUID) int {
+	if !a.Valid && !b.Valid {
+		return 0
+	}
+	if !a.Valid {
+		return -1
+	}
+	if !b.Valid {
+		return 1
+	}
+	for i := 0; i < 16; i++ {
+		if a.Bytes[i] < b.Bytes[i] {
+			return -1
+		}
+		if a.Bytes[i] > b.Bytes[i] {
+			return 1
+		}
+	}
+	return 0
+}
+
+// tamperDiagnosisCursorSegment decodes a cursor, changes its segment_id, and
+// re-encodes it with the test key. Used to verify cross-segment cursor rejection.
+func tamperDiagnosisCursorSegment(t *testing.T, encoded, newSegmentID string) string {
+	t.Helper()
+	payload, err := decodeDiagnosisCursor(encoded, testDiagnosisPagerKey)
+	require.NoError(t, err)
+	payload.SegmentID = newSegmentID
+	newEncoded, err := encodeDiagnosisCursor(payload, testDiagnosisPagerKey)
+	require.NoError(t, err)
+	return newEncoded
+}
+
+var testDiagnosisPagerKey = []byte("test-diagnosis-pager-key-32bytes!")
+
+func init() {
+	SetDiagnosisPagerKey(func() []byte { return testDiagnosisPagerKey })
+}
+
+func TestGetSegmentMessagePage_EmptyCursorFirstPage(t *testing.T) {
+	ctx := context.Background()
+	// Use the in-memory fake message pager (added in Task 2).
+	store := newFakeDiagnosisMessagePager(t)
+	// Write enough messages across two pages (default 20/page) to exercise
+	// paging with 25 messages.
+	for i := 1; i <= 25; i++ {
+		store.addMessage(t, int32(i), "assistant", fmt.Sprintf("message-%02d", i))
+	}
+
+	page, err := GetSegmentMessagePage(ctx, store, "task-1", "seg-1", 1, 25, "")
+	require.NoError(t, err)
+	assert.Equal(t, 20, page.FetchedCount, "first page should return up to 20 turns")
+	assert.Equal(t, 25, page.ExpectedCount, "expected count is the full segment range")
+	assert.False(t, page.Complete, "more pages remain")
+	assert.NotEmpty(t, page.NextCursor, "next cursor must be set for the next page")
+	assert.Len(t, page.Messages, 20, "first page messages count matches fetches")
+
+	// Fetch second page with the returned cursor.
+	page2, err := GetSegmentMessagePage(ctx, store, "task-1", "seg-1", 1, 25, page.NextCursor)
+	require.NoError(t, err)
+	assert.Equal(t, 25, page2.FetchedCount, "second page: cumulative fetched is 25")
+	assert.True(t, page2.Complete, "all messages fetched")
+	assert.Empty(t, page2.NextCursor, "terminal cursor is empty")
+	assert.Len(t, page2.Messages, 5)
+}
+
+func TestGetSegmentMessagePage_ByteLimitNeverSplitsMessage(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeDiagnosisMessagePager(t)
+	// One oversized message (> 24 KiB page budget) must still be returned as a
+	// single page rather than splitting mid-message. The message-level cap
+	// (maxDiagnosisMessageBytes) still applies.
+	huge := strings.Repeat("x", maxDiagnosisSegmentBudgetBytes+1024)
+	store.addMessage(t, 1, "assistant", huge)
+
+	page, err := GetSegmentMessagePage(ctx, store, "task-1", "seg-1", 1, 1, "")
+	require.NoError(t, err)
+	assert.Equal(t, 1, page.FetchedCount, "an oversized message is a single page of 1")
+	assert.True(t, page.Complete)
+	assert.Len(t, page.Messages, 1)
+	// Message-level cap truncates, but the page-level budget does not split.
+	assert.True(t, page.Messages[0].Truncated, "oversized message must be truncated")
+	assert.LessOrEqual(t, len(page.Messages[0].Content), maxDiagnosisMessageBytes)
+}
+
+func TestGetSegmentMessagePage_ReplaySameCursor(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeDiagnosisMessagePager(t)
+	for i := 1; i <= 30; i++ {
+		store.addMessage(t, int32(i), "assistant", fmt.Sprintf("msg-%02d", i))
+	}
+
+	page1, err := GetSegmentMessagePage(ctx, store, "task-1", "seg-1", 1, 30, "")
+	require.NoError(t, err)
+	require.False(t, page1.Complete)
+
+	// Replay the empty cursor — must return the same first page.
+	replay, err := GetSegmentMessagePage(ctx, store, "task-1", "seg-1", 1, 30, "")
+	require.NoError(t, err)
+	assert.Equal(t, page1.FetchedCount, replay.FetchedCount)
+	assert.Equal(t, page1.NextCursor, replay.NextCursor)
+	assert.Len(t, replay.Messages, len(page1.Messages))
+}
+
+func TestGetSegmentMessagePage_MalformedCursor(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeDiagnosisMessagePager(t)
+	store.addMessage(t, 1, "assistant", "hello")
+
+	_, err := GetSegmentMessagePage(ctx, store, "task-1", "seg-1", 1, 1, "not-a-valid-cursor")
+	assert.Error(t, err)
+}
+
+func TestGetSegmentMessagePage_CursorRunMismatch(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeDiagnosisMessagePager(t)
+	for i := 1; i <= 25; i++ {
+		store.addMessage(t, int32(i), "assistant", fmt.Sprintf("msg-%02d", i))
+	}
+	page1, err := GetSegmentMessagePage(ctx, store, "task-1", "seg-1", 1, 25, "")
+	require.NoError(t, err)
+	require.False(t, page1.Complete)
+	require.NotEmpty(t, page1.NextCursor)
+
+	// Tamper with the cursor to point to a different segment — must be rejected.
+	tampered := tamperDiagnosisCursorSegment(t, page1.NextCursor, "seg-other")
+	_, err = GetSegmentMessagePage(ctx, store, "task-1", "seg-1", 1, 25, tampered)
+	assert.Error(t, err)
+}
+
+func TestGetSegmentMessagePage_TurnLimit(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeDiagnosisMessagePager(t)
+	for i := 1; i <= 30; i++ {
+		store.addMessage(t, int32(i), "assistant", fmt.Sprintf("msg-%02d", i))
+	}
+	page, err := GetSegmentMessagePage(ctx, store, "task-1", "seg-1", 1, 30, "")
+	require.NoError(t, err)
+	assert.LessOrEqual(t, page.FetchedCount, maxDiagnosisSegmentTurns)
+	assert.False(t, page.Complete, "more pages remain after turn-limited page")
+}
+
+func TestGetSegmentMessagePage_SystemMessagesOutsideRange(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeDiagnosisMessagePager(t)
+	// Messages outside [startSeq, endSeq] must not leak into the page.
+	store.addMessage(t, 1, "system", "outside-start")  // seq < 2
+	store.addMessage(t, 2, "assistant", "inside")
+	store.addMessage(t, 3, "system", "outside-end")     // seq > 2
+
+	page, err := GetSegmentMessagePage(ctx, store, "task-1", "seg-1", 2, 2, "")
+	require.NoError(t, err)
+	require.Len(t, page.Messages, 1)
+	assert.Equal(t, "inside", page.Messages[0].Content)
+	assert.True(t, page.Complete)
 }
 
 func TestGetTaskContext(t *testing.T) {

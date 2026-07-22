@@ -273,6 +273,67 @@ func TestDiagnose_InvalidUUIDErrors(t *testing.T) {
 // TestDiagnose_CapsSegmentCount: a DAG with more than maxDiagnosisSegments
 // segments is capped - only the first maxDiagnosisSegments are fetched for
 // messages and appear in the prompt, bounding prompt size.
+func TestTopologyBootstrapPrompt_ContainsNoRawMessages(t *testing.T) {
+	r, err := NewDiagnosisAgentRunner(DiagnosisAgentConfig{ScoreMax: 10, Backend: &fakeBackend{}})
+	require.NoError(t, err)
+
+	segments := []SegmentDiagnosisCheckpoint{
+		{SegmentID: "seg-1", Status: SegmentDiagnosisPending, ExpectedMessageCount: 5, ExpectedRewardCount: 2},
+		{SegmentID: "seg-2", Status: SegmentDiagnosisPending, ExpectedMessageCount: 3, ExpectedRewardCount: 1},
+	}
+	infos := []segmentDiagnosisInfo{
+		{SegmentID: "seg-1", ExpectedMessages: 5, ExpectedRewards: 2},
+		{SegmentID: "seg-2", ExpectedMessages: 3, ExpectedRewards: 1},
+	}
+
+	prompt := r.buildTopologyBootstrapPrompt("proj-1", []string{"seg-1", "seg-2"}, infos, segments)
+
+	// Topology is present.
+	assert.Contains(t, prompt, "seg-1")
+	assert.Contains(t, prompt, "seg-2")
+	assert.Contains(t, prompt, "Score max: 10")
+	assert.Contains(t, prompt, "INCOMPLETE SEGMENTS")
+
+	// NO raw message bodies.
+	sentinel := "the quick brown fox jumps over the lazy dog sentinel message body"
+	assert.NotContains(t, prompt, sentinel, "bootstrap prompt must not contain raw message content")
+}
+
+func TestOnDemandSystemPrompt_ContainsToolNames(t *testing.T) {
+	r, err := NewDiagnosisAgentRunner(DiagnosisAgentConfig{ScoreMax: 10, Backend: &fakeBackend{}})
+	require.NoError(t, err)
+
+	prompt := r.onDemandSystemPrompt()
+	toolNames := []string{
+		"multica_get_segment_messages",
+		"multica_record_step_rewards",
+		"multica_get_diagnosis_progress",
+		"multica_finish_segment",
+		"multica_complete_diagnosis",
+	}
+	for _, name := range toolNames {
+		assert.Contains(t, prompt, name)
+	}
+}
+
+func TestTopologyHashFromIDs_Deterministic(t *testing.T) {
+	h1 := topologyHashFromIDs([]string{"a", "b", "c"})
+	h2 := topologyHashFromIDs([]string{"a", "b", "c"})
+	h3 := topologyHashFromIDs([]string{"a", "b"})
+	assert.Equal(t, h1, h2, "hash must be deterministic")
+	assert.NotEqual(t, h1, h3, "different orderings produce different hashes")
+}
+
+func TestDiagnoseOnDemand_RequiresStateStore(t *testing.T) {
+	r, err := NewDiagnosisAgentRunner(DiagnosisAgentConfig{ScoreMax: 10, Backend: &fakeBackend{}})
+	require.NoError(t, err)
+
+	// Calling DiagnoseOnDemand with a nil state store panics (expected).
+	assert.Panics(t, func() {
+		_, _ = r.DiagnoseOnDemand(context.Background(), "proj", "task", []string{"seg-1"}, DiagnosisOnDemandConfig{})
+	}, "nil state store should panic (programmer error, not runtime error)")
+}
+
 func TestDiagnose_CapsSegmentCount(t *testing.T) {
 	projectID := util.MustParseUUID(diagProjectID)
 	workspaceID := util.MustParseUUID(diagWorkspaceID)

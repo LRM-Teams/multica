@@ -587,3 +587,21 @@ describe("ChannelsPage header — desktop title chevron (LRM-234)", () => {
     expect(screen.getByRole("button", { name: "More" })).toBeInTheDocument();
   });
 });
+
+// LRM-254 A1 — channel landmark is text-level # (sidebar + header), never a
+// member collage avatar slot that drifts when the roster changes.
+describe("ChannelsPage — channel hash landmark (LRM-254)", () => {
+  it("puts a text-level # in the desktop title (no leading collage avatar)", async () => {
+    resizeContainerTo(1024);
+    renderPage();
+    await screen.findByTestId("message-list");
+    const toggle = screen.getByRole("button", { name: "Open channel details" });
+    const hashes = screen.getAllByTestId("channel-hash-landmark");
+    expect(hashes.length).toBeGreaterThan(0);
+    expect(toggle).toContainElement(
+      hashes.find((el) => el.getAttribute("data-size") === "lg")!,
+    );
+    // Title control must not host an <img> collage tile.
+    expect(toggle.querySelector("img")).toBeNull();
+  });
+});

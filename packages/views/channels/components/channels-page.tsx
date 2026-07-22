@@ -181,7 +181,7 @@ import {
 } from "./channel-details-panel";
 import { DeleteChannelDialog } from "./delete-channel-dialog";
 import { ChannelTasksBoard } from "./channel-tasks-board";
-import { ChannelGroupAvatar } from "./channel-group-avatar";
+import { ChannelHashLandmark } from "./channel-hash-landmark";
 import { ThreadPanel } from "./thread-panel";
 import { ComposerAttachmentTray } from "./composer-attachment-tray";
 import { ComposerQuotePreview } from "./message-quote";
@@ -2172,7 +2172,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
             onClick={() => selectChannel(channel.id)}
             className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 pr-7 text-left"
           >
-            <ChannelGroupAvatar members={channel.members ?? []} size={40} />
             <div className="min-w-0 flex-1">
               <div className="flex items-center justify-between gap-2">
                 <span
@@ -2186,6 +2185,8 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                   {pinned && (
                     <Pin className="size-3 shrink-0 -rotate-45 fill-muted-foreground/70 text-muted-foreground/70" />
                   )}
+                  {/* LRM-254 A1 — text-level # landmark; no member collage. */}
+                  <ChannelHashLandmark size="sm" />
                   <span className="truncate">{channel.name}</span>
                   {isMuted && (
                     <MutedIndicator label={t(($) => $.sidebar.muted_label)} />
@@ -2482,10 +2483,10 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                               onClick={() => selectChannel(channel.id)}
                               className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 pr-7 text-left opacity-60 hover:opacity-100"
                             >
-                              <ChannelGroupAvatar members={channel.members ?? []} size={40} />
                               <div className="min-w-0 flex-1">
-                                <span className="truncate text-sm font-medium text-muted-foreground">
-                                  {channel.name}
+                                <span className="flex min-w-0 items-center gap-1 truncate text-sm font-medium text-muted-foreground">
+                                  <ChannelHashLandmark size="sm" />
+                                  <span className="truncate">{channel.name}</span>
                                 </span>
                               </div>
                             </button>
@@ -2755,24 +2756,22 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
           <ConversationHeader
             isMobile={isMobile}
             leading={
-              <>
-                {isMobile && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-10 shrink-0 text-muted-foreground"
-                    aria-label={t(($) => $.header.back)}
-                    onClick={mobileBackToList}
-                  >
-                    <ArrowLeft className="size-5" />
-                  </Button>
-                )}
-                <ChannelGroupAvatar members={channelMembers} size={28} />
-              </>
+              isMobile ? (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-10 shrink-0 text-muted-foreground"
+                  aria-label={t(($) => $.header.back)}
+                  onClick={mobileBackToList}
+                >
+                  <ArrowLeft className="size-5" />
+                </Button>
+              ) : null
             }
             title={
               // LRM-234 — Slack-like desktop title: bold name + tight ▾
               // caret, soft rounded hover/open wash (not primary recolor).
+              // LRM-254 A1 — text-level # landmark (no member collage).
               // Same control still opens Channel details; mobile keeps ⋯.
               <button
                 type="button"
@@ -2787,6 +2786,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                     "bg-black/[0.06] dark:bg-white/[0.08]",
                 )}
               >
+                <ChannelHashLandmark size="lg" />
                 <span className="truncate font-bold tracking-tight">{active.name}</span>
                 {!isMobile && (
                   <ChevronDown

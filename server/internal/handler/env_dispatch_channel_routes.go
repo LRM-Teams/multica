@@ -161,10 +161,6 @@ func (h *Handler) deleteEnvDispatchChannelRollout(ctx context.Context, workspace
 			// archived_by is nullable; NULL records a system/cleanup archive.
 			if _, aerr := h.Queries.ArchiveAgent(ctx, db.ArchiveAgentParams{ID: derivedUUID, ArchivedBy: pgtype.UUID{}}); aerr != nil {
 				slog.Warn("env-dispatch channel cleanup: archive derived agent", "derived_agent_id", *b.DerivedAgentID, "error", aerr)
-			} else if b.RuntimeID != nil {
-				if rerr := h.terminalizeAndRemoveReminderOwner(ctx, *b.RuntimeID, *b.DerivedAgentID, "agent_runtime_removed"); rerr != nil {
-					slog.Warn("env-dispatch channel cleanup: terminalize derived reminders", "derived_agent_id", *b.DerivedAgentID, "error", rerr)
-				}
 			}
 		}
 		if lifecycle != nil {

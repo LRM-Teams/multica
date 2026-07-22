@@ -49,6 +49,18 @@ func reminderJob(id, owner string, version int64, fireAt time.Time) protocol.Rem
 	return protocol.ReminderTimerJob{ReminderID: id, OwnerAgentID: owner, Version: version, FireAt: fireAt.Format(time.RFC3339Nano)}
 }
 
+func reminderProjection(seq int64, runtimeID, eventType string, job protocol.ReminderTimerJob, terminal bool) protocol.ReminderProjectionEvent {
+	event := protocol.ReminderProjectionEvent{
+		Seq: seq, RuntimeID: runtimeID, AgentID: job.OwnerAgentID, EventType: eventType,
+		PlacementGeneration: 1, ReminderID: job.ReminderID, Version: job.Version, Terminal: terminal,
+	}
+	if !terminal {
+		event.FireAt = job.FireAt
+		event.Reminder = job
+	}
+	return event
+}
+
 func TestReminderCacheVersionFencingAndTimerReplacement(t *testing.T) {
 	now := time.Date(2026, 7, 22, 8, 0, 0, 0, time.UTC)
 	clock := &fakeReminderClock{now: now}
@@ -85,10 +97,13 @@ func TestReminderCacheOwnerSnapshotAndPastDue(t *testing.T) {
 	cache.upsert(reminderJob("a-old", "a", 1, now.Add(time.Hour)))
 	cache.upsert(reminderJob("b-keep", "b", 1, now.Add(time.Hour)))
 
-	installed := cache.snapshot("a", []protocol.ReminderTimerJob{
+	installed, err := cache.snapshot("runtime-a", "a", 2, []protocol.ReminderTimerJob{
 		reminderJob("a-new", "a", 2, now.Add(-time.Minute)),
 		reminderJob("cross-owner", "b", 9, now.Add(time.Hour)),
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if installed != 1 {
 		t.Fatalf("installed = %d, want 1", installed)
 	}
@@ -108,6 +123,216 @@ func TestReminderCacheOwnerSnapshotAndPastDue(t *testing.T) {
 	clock.fire(last)
 	if len(fired) != 1 || fired[0].ReminderID != "a-new" {
 		t.Fatalf("past due fire = %+v", fired)
+	}
+}
+
+func TestReminderCacheTombstoneAndNewerEventFenceSnapshots(t *testing.T) {
+	now := time.Date(2026, 7, 22, 8, 0, 0, 0, time.UTC)
+	cache := newReminderCache(&fakeReminderClock{now: now}, nil, nil)
+	jobV2 := reminderJob("r1", "agent-a", 2, now.Add(time.Hour))
+	if applied, err := cache.applyProjection(reminderProjection(1, "runtime-a", "upsert", jobV2, false)); err != nil || !applied {
+		t.Fatalf("apply v2 = %v, %v", applied, err)
+	}
+	jobV3 := reminderJob("r1", "agent-a", 3, now.Add(2*time.Hour))
+	if applied, err := cache.applyProjection(reminderProjection(2, "runtime-a", "cancel", jobV3, true)); err != nil || !applied {
+		t.Fatalf("apply cancel v3 = %v, %v", applied, err)
+	}
+	if installed, err := cache.snapshot("runtime-a", "agent-a", 2, []protocol.ReminderTimerJob{jobV3}); err != nil || installed != 0 {
+		t.Fatalf("equal-version tombstone snapshot = %d, %v", installed, err)
+	}
+	if _, ok := cache.get("r1"); ok {
+		t.Fatal("equal-version snapshot resurrected cancelled reminder")
+	}
+	if applied, err := cache.applyProjection(reminderProjection(3, "runtime-a", "upsert", jobV3, false)); err != nil || applied {
+		t.Fatalf("equal-version upsert after tombstone = %v, %v", applied, err)
+	}
+	if got := cache.projectionCursors()["runtime-a"]; got != 3 {
+		t.Fatalf("stale event cursor = %d, want 3", got)
+	}
+
+	jobV4 := reminderJob("r1", "agent-a", 4, now.Add(3*time.Hour))
+	if applied, err := cache.applyProjection(reminderProjection(4, "runtime-a", "upsert", jobV4, false)); err != nil || !applied {
+		t.Fatalf("apply v4 = %v, %v", applied, err)
+	}
+	if installed, err := cache.snapshot("runtime-a", "agent-a", 3, []protocol.ReminderTimerJob{reminderJob("r1", "agent-a", 5, now.Add(4*time.Hour))}); err != nil || installed != 0 {
+		t.Fatalf("older-watermark snapshot = %d, %v", installed, err)
+	}
+	got, ok := cache.get("r1")
+	if !ok || got.Version != 4 {
+		t.Fatalf("older snapshot replaced newer event: %+v, %v", got, ok)
+	}
+}
+
+func TestReminderCacheOnlyFireResultRearmsSameVersionPendingFire(t *testing.T) {
+	now := time.Date(2026, 7, 22, 8, 0, 0, 0, time.UTC)
+	clock := &fakeReminderClock{now: now}
+	cache := newReminderCache(clock, nil, nil)
+	job := reminderJob("r1", "agent-a", 1, now.Add(-time.Minute))
+	if applied, err := cache.applyProjection(reminderProjection(1, "runtime-a", "upsert", job, false)); err != nil || !applied {
+		t.Fatalf("apply due job = %v, %v", applied, err)
+	}
+	clock.fire(0)
+	if _, ok := cache.get("r1"); ok {
+		t.Fatal("due timer remained installed")
+	}
+	if installed, err := cache.snapshot("runtime-a", "agent-a", 1, []protocol.ReminderTimerJob{job}); err != nil || installed != 0 {
+		t.Fatalf("same-version snapshot rearm = %d, %v", installed, err)
+	}
+	result := reminderProjection(2, "runtime-a", "fire_result", job, false)
+	if applied, err := cache.applyProjection(result); err != nil || !applied {
+		t.Fatalf("same-version fire result = %v, %v", applied, err)
+	}
+	if got, ok := cache.get("r1"); !ok || got.Version != 1 {
+		t.Fatalf("fire result did not rearm canonical job: %+v, %v", got, ok)
+	}
+}
+
+func TestReminderCachePersistenceFailureRollsBackCursorAndFence(t *testing.T) {
+	cache := newReminderCache(&fakeReminderClock{now: time.Now().UTC()}, nil, nil)
+	cache.path = filepath.Join(t.TempDir(), reminderCacheStateFile)
+	cache.writeState = func(string, []byte) error { return errors.New("injected reminder cache write failure") }
+	job := reminderJob("r1", "agent-a", 1, time.Now().UTC().Add(time.Hour))
+	if applied, err := cache.applyProjection(reminderProjection(1, "runtime-a", "upsert", job, false)); err == nil || applied {
+		t.Fatalf("persist failure = applied %v err %v", applied, err)
+	}
+	if _, ok := cache.get("r1"); ok {
+		t.Fatal("failed persist leaked timer")
+	}
+	if got := cache.projectionCursors()["runtime-a"]; got != 0 {
+		t.Fatalf("failed persist leaked cursor %d", got)
+	}
+	if fence := cache.highWatermark("r1"); fence.Version != 0 {
+		t.Fatalf("failed persist leaked fence %+v", fence)
+	}
+}
+
+func TestReminderCacheCorruptDurableStateFailsClosedWithoutAckableMutation(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ".daemon", reminderCacheStateFile)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{not-json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cache := newReminderCache(&fakeReminderClock{now: time.Now().UTC()}, nil, nil)
+	cache.setPersistence(root)
+	if cache.stateError() == nil {
+		t.Fatal("corrupt state did not surface startup error")
+	}
+	job := reminderJob("r1", "agent-a", 1, time.Now().UTC().Add(time.Hour))
+	if applied, err := cache.applyProjection(reminderProjection(1, "runtime-a", "upsert", job, false)); err == nil || applied {
+		t.Fatalf("corrupt state mutation = applied %v err %v", applied, err)
+	}
+	if got := cache.projectionCursors()["runtime-a"]; got != 0 {
+		t.Fatalf("corrupt state advanced cursor to %d", got)
+	}
+	if _, ok := cache.get("r1"); ok {
+		t.Fatal("corrupt state installed timer")
+	}
+}
+
+func TestReminderCacheOwnerRemovalPersistFailureRestoresPendingFireFence(t *testing.T) {
+	now := time.Now().UTC()
+	clock := &fakeReminderClock{now: now}
+	cache := newReminderCache(clock, nil, nil)
+	cache.path = filepath.Join(t.TempDir(), reminderCacheStateFile)
+	job := reminderJob("r1", "agent-a", 3, now.Add(-time.Minute))
+	if applied, err := cache.applyProjection(reminderProjection(1, "runtime-a", "upsert", job, false)); err != nil || !applied {
+		t.Fatalf("seed projection = %v, %v", applied, err)
+	}
+	clock.fire(0)
+	cache.writeState = func(string, []byte) error { return errors.New("injected owner removal failure") }
+	if err := cache.removeOwner("agent-a"); err == nil {
+		t.Fatal("owner removal persist unexpectedly succeeded")
+	}
+	if fence := cache.highWatermark("r1"); fence.Version != 3 || fence.Terminal {
+		t.Fatalf("owner removal failure lost fence: %+v", fence)
+	}
+	cache.writeState = writeReminderAgentState
+	result := reminderProjection(2, "runtime-a", "fire_result", job, false)
+	if applied, err := cache.applyProjection(result); err != nil || !applied {
+		t.Fatalf("restored pending fire did not accept canonical result = %v, %v", applied, err)
+	}
+}
+
+func TestReminderProjectionStalePlacementOnlyAdvancesDurableCursor(t *testing.T) {
+	root := t.TempDir()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cache := newReminderCache(&fakeReminderClock{now: time.Now().UTC()}, logger, nil)
+	cache.setPersistence(root)
+	mgr := newReminderAgentManager(t.TempDir(), logger)
+	if changed, accepted, err := mgr.applyStart("agent-a", "runtime-a", "workspace-a", 2); err != nil || !changed || !accepted {
+		t.Fatal("seed placement")
+	}
+	writes := make(chan []byte, 2)
+	d := &Daemon{
+		logger:         logger,
+		runtimeIndex:   map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
+		reminderAgents: mgr,
+		reminderCache:  cache,
+	}
+	d.setReminderWS(writes, make(chan struct{}), func() error { return nil })
+	job := reminderJob("r1", "agent-a", 1, time.Now().UTC().Add(time.Hour))
+	stale := reminderProjection(1, "runtime-a", "upsert", job, false)
+	stale.PlacementGeneration = 1
+	if err := d.handleReminderProjection(stale); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cache.get("r1"); ok {
+		t.Fatal("stale placement installed timer")
+	}
+	current := reminderProjection(2, "runtime-a", "upsert", job, false)
+	current.PlacementGeneration = 2
+	if err := d.handleReminderProjection(current); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cache.get("r1"); !ok {
+		t.Fatal("current placement did not install timer")
+	}
+	if got := newReminderCache(&fakeReminderClock{now: time.Now().UTC()}, logger, nil); got != nil {
+		got.setPersistence(root)
+		if seq := got.projectionCursors()["runtime-a"]; seq != 2 {
+			t.Fatalf("durable cursor = %d, want 2", seq)
+		}
+	}
+}
+
+func TestReminderProjectionForDepartedOwnerPersistsCursorBeforeAck(t *testing.T) {
+	root := t.TempDir()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cache := newReminderCache(&fakeReminderClock{now: time.Now().UTC()}, logger, nil)
+	cache.setPersistence(root)
+	writes := make(chan []byte, 1)
+	done := make(chan struct{})
+	d := &Daemon{
+		logger:         logger,
+		runtimeIndex:   map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
+		reminderAgents: newReminderAgentManager(t.TempDir(), logger),
+		reminderCache:  cache,
+	}
+	d.setReminderWS(writes, done, func() error { return nil })
+	job := reminderJob("departed", "agent-gone", 7, time.Now().UTC().Add(time.Hour))
+	if err := d.handleReminderProjection(reminderProjection(11, "runtime-a", "upsert", job, false)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cache.get(job.ReminderID); ok {
+		t.Fatal("departed owner projection installed a timer")
+	}
+	if got := cache.projectionCursors()["runtime-a"]; got != 11 {
+		t.Fatalf("departed owner cursor = %d, want 11", got)
+	}
+	reloaded := newReminderCache(&fakeReminderClock{now: time.Now().UTC()}, logger, nil)
+	reloaded.setPersistence(root)
+	if got := reloaded.projectionCursors()["runtime-a"]; got != 11 {
+		t.Fatalf("durable departed owner cursor = %d, want 11", got)
+	}
+	var frame protocol.Message
+	if err := json.Unmarshal(<-writes, &frame); err != nil {
+		t.Fatal(err)
+	}
+	if frame.Type != protocol.EventReminderProjectionAck {
+		t.Fatalf("departed owner frame = %q", frame.Type)
 	}
 }
 
@@ -256,6 +481,9 @@ func TestReminderReconnectRequestsSnapshotForRunningAndIdleOwners(t *testing.T) 
 		reminderAgents: mgr,
 	}
 	d.setReminderWS(writes, done, func() error { return nil })
+	d.reminderGateMu.Lock()
+	d.reminderReplayComplete = true
+	d.reminderGateMu.Unlock()
 	d.requestReminderSnapshots()
 
 	got := map[string]bool{}
@@ -285,7 +513,7 @@ func TestReminderLifecycleReplayEndsBeforeSnapshotAndPersistsAckCursor(t *testin
 	if changed, accepted, err := mgr.applyStart("agent-a", "runtime-a", "workspace-a", 4); err != nil || !changed || !accepted {
 		t.Fatal("seed placement failed")
 	}
-	writes := make(chan []byte, 3)
+	writes := make(chan []byte, 4)
 	done := make(chan struct{})
 	d := &Daemon{
 		logger: logger,
@@ -294,6 +522,7 @@ func TestReminderLifecycleReplayEndsBeforeSnapshotAndPersistsAckCursor(t *testin
 		},
 		runtimeIndex:   map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
 		reminderAgents: mgr,
+		reminderCache:  newReminderCache(&fakeReminderClock{now: time.Now().UTC()}, logger, nil),
 	}
 	d.setReminderWS(writes, done, func() error { return nil })
 	d.handleDaemonAgentLifecycleReplayEnd(protocol.DaemonAgentLifecycleReplayEndPayload{RuntimeCursors: map[string]int64{"runtime-a": 9}})
@@ -305,11 +534,24 @@ func TestReminderLifecycleReplayEndsBeforeSnapshotAndPersistsAckCursor(t *testin
 	if err := json.Unmarshal(<-writes, &second); err != nil {
 		t.Fatal(err)
 	}
-	if first.Type != protocol.EventDaemonAgentLifecycleAck || second.Type != protocol.EventReminderSnapshotRequest {
+	if first.Type != protocol.EventDaemonAgentLifecycleAck || second.Type != protocol.EventReminderProjectionReq {
 		t.Fatalf("frame order = %q then %q", first.Type, second.Type)
 	}
+	if err := d.handleReminderProjectionReplayEnd(protocol.ReminderProjectionReplayEndPayload{RuntimeCursors: map[string]int64{"runtime-a": 0}}); err != nil {
+		t.Fatal(err)
+	}
+	var third, fourth protocol.Message
+	if err := json.Unmarshal(<-writes, &third); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(<-writes, &fourth); err != nil {
+		t.Fatal(err)
+	}
+	if third.Type != protocol.EventReminderProjectionAck || fourth.Type != protocol.EventReminderSnapshotRequest {
+		t.Fatalf("post-replay frame order = %q then %q", third.Type, fourth.Type)
+	}
 	var snapshot protocol.ReminderSnapshotRequestPayload
-	if err := json.Unmarshal(second.Payload, &snapshot); err != nil {
+	if err := json.Unmarshal(fourth.Payload, &snapshot); err != nil {
 		t.Fatal(err)
 	}
 	if snapshot.AgentID != "agent-a" || snapshot.RuntimeID != "runtime-a" || snapshot.PlacementGeneration != 4 {
@@ -376,6 +618,9 @@ func TestRestoredOwnerStartFromZeroResidentsRequestsSnapshotAndSchedulesTimer(t 
 		reminderCache:  newReminderCache(clock, logger, func(protocol.ReminderTimerJob) {}),
 	}
 	d.setReminderWS(writes, done, func() error { return nil })
+	d.reminderGateMu.Lock()
+	d.reminderReplayComplete = true
+	d.reminderGateMu.Unlock()
 	if err := d.handleDaemonAgentStart(protocol.DaemonAgentStartPayload{
 		AgentID: "agent-a", RuntimeID: "runtime-a", WorkspaceID: "workspace-a", PlacementGeneration: 7,
 	}); err != nil {

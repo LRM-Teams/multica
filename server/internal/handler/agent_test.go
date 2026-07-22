@@ -24,8 +24,8 @@ type recordingReminderNotifier struct {
 	stops  []protocol.DaemonAgentStopPayload
 }
 
-func (*recordingReminderNotifier) NotifyReminderUpsert(string, protocol.ReminderUpsertPayload) {}
-func (*recordingReminderNotifier) NotifyReminderCancel(string, protocol.ReminderCancelPayload) {}
+func (*recordingReminderNotifier) NotifyReminderProjection(string, protocol.ReminderProjectionEvent) {
+}
 func (n *recordingReminderNotifier) NotifyReminderOwnerAdded(_ string, payload protocol.DaemonAgentStartPayload) {
 	n.starts = append(n.starts, payload)
 }

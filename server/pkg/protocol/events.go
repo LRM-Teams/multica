@@ -138,6 +138,11 @@ const (
 	EventReminderSnapshotRequest = "reminder.snapshot.request"
 	EventReminderSnapshot        = "reminder.snapshot"
 	EventReminderFireAttempt     = "reminder.fire_attempt"
+	EventReminderFireResult      = "reminder.fire_result"
+	EventReminderProjection      = "reminder.projection"
+	EventReminderProjectionReq   = "reminder.projection.request"
+	EventReminderProjectionEnd   = "reminder.projection.replay_end"
+	EventReminderProjectionAck   = "reminder.projection.ack"
 
 	// Sandbox events. Node-facing events wake shared sandbox infrastructure;
 	// instance events are broadcast to workspace clients for UI refresh.

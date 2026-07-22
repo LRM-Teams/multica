@@ -3,6 +3,7 @@ package daemonws
 import (
 	"encoding/json"
 	"log/slog"
+	"strconv"
 
 	"github.com/oklog/ulid/v2"
 
@@ -11,8 +12,7 @@ import (
 )
 
 type ReminderNotifier interface {
-	NotifyReminderUpsert(runtimeID string, payload protocol.ReminderUpsertPayload)
-	NotifyReminderCancel(runtimeID string, payload protocol.ReminderCancelPayload)
+	NotifyReminderProjection(runtimeID string, payload protocol.ReminderProjectionEvent)
 	NotifyReminderOwnerAdded(runtimeID string, payload protocol.DaemonAgentStartPayload)
 	NotifyReminderOwnerRemoved(runtimeID string, payload protocol.DaemonAgentStopPayload)
 }
@@ -57,12 +57,8 @@ func (n *RelayNotifier) NotifyTaskAvailable(runtimeID, taskID string) {
 	M.WakeupPublishedTotal.Add(1)
 }
 
-func (n *RelayNotifier) NotifyReminderUpsert(runtimeID string, payload protocol.ReminderUpsertPayload) {
-	n.notifyReminder(runtimeID, protocol.EventReminderUpsert, payload)
-}
-
-func (n *RelayNotifier) NotifyReminderCancel(runtimeID string, payload protocol.ReminderCancelPayload) {
-	n.notifyReminder(runtimeID, protocol.EventReminderCancel, payload)
+func (n *RelayNotifier) NotifyReminderProjection(runtimeID string, payload protocol.ReminderProjectionEvent) {
+	n.notifyReminderWithID(runtimeID, protocol.EventReminderProjection, payload, "reminder-projection:"+runtimeID+":"+strconv.FormatInt(payload.Seq, 10))
 }
 
 func (n *RelayNotifier) NotifyReminderOwnerRemoved(runtimeID string, payload protocol.DaemonAgentStopPayload) {
@@ -74,10 +70,13 @@ func (n *RelayNotifier) NotifyReminderOwnerAdded(runtimeID string, payload proto
 }
 
 func (n *RelayNotifier) notifyReminder(runtimeID, eventType string, payload any) {
+	n.notifyReminderWithID(runtimeID, eventType, payload, ulid.Make().String())
+}
+
+func (n *RelayNotifier) notifyReminderWithID(runtimeID, eventType string, payload any, eventID string) {
 	if runtimeID == "" {
 		return
 	}
-	eventID := ulid.Make().String()
 	frame, err := json.Marshal(protocol.Message{Type: eventType, Payload: mustMarshalRaw(payload)})
 	if err != nil {
 		return

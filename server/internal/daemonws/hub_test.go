@@ -413,6 +413,82 @@ func TestReminderLifecycleReplayDrainsMoreThanSendBufferInOrder(t *testing.T) {
 	}
 }
 
+func TestReminderProjectionReplayDrainsMoreThanSendBufferInOrder(t *testing.T) {
+	hub := NewHub()
+	const eventCount = 40
+	hub.SetReminderProjectionHandlers(func(_ context.Context, identity ClientIdentity, payload protocol.ReminderProjectionRequestPayload) ([]protocol.ReminderProjectionEvent, map[string]int64, error) {
+		if len(identity.RuntimeIDs) != 1 || identity.RuntimeIDs[0] != "runtime-1" {
+			t.Fatalf("identity runtimes = %#v", identity.RuntimeIDs)
+		}
+		if payload.RuntimeCursors["runtime-1"] != 0 {
+			t.Fatalf("request cursors = %#v", payload.RuntimeCursors)
+		}
+		events := make([]protocol.ReminderProjectionEvent, 0, eventCount)
+		for i := 1; i <= eventCount; i++ {
+			events = append(events, protocol.ReminderProjectionEvent{
+				Seq: int64(i), RuntimeID: "runtime-1", AgentID: "agent-1", EventType: "upsert",
+				ReminderID: "reminder-" + strconv.Itoa(i), Version: 1,
+				FireAt: time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano),
+			})
+		}
+		return events, map[string]int64{"runtime-1": eventCount}, nil
+	}, nil)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, ClientIdentity{WorkspaceID: "workspace-1", RuntimeIDs: []string{"runtime-1"}})
+	}))
+	defer server.Close()
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	request, err := json.Marshal(protocol.Message{
+		Type:    protocol.EventReminderProjectionReq,
+		Payload: mustMarshalRaw(protocol.ReminderProjectionRequestPayload{RuntimeCursors: map[string]int64{"runtime-1": 0}}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, request); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= eventCount; i++ {
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("read projection event %d: %v", i, err)
+		}
+		var msg protocol.Message
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			t.Fatal(err)
+		}
+		if msg.Type != protocol.EventReminderProjection {
+			t.Fatalf("event %d type = %q", i, msg.Type)
+		}
+		var event protocol.ReminderProjectionEvent
+		if err := json.Unmarshal(msg.Payload, &event); err != nil {
+			t.Fatal(err)
+		}
+		if event.Seq != int64(i) {
+			t.Fatalf("event %d seq = %d", i, event.Seq)
+		}
+	}
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read projection replay end: %v", err)
+	}
+	var end protocol.Message
+	if err := json.Unmarshal(raw, &end); err != nil {
+		t.Fatal(err)
+	}
+	if end.Type != protocol.EventReminderProjectionEnd {
+		t.Fatalf("final type = %q", end.Type)
+	}
+}
+
 func attachDaemonTestClient(hub *Hub, runtimeID string) *client {
 	c := &client{
 		send:     make(chan []byte, 2),

@@ -111,12 +111,16 @@ type Daemon struct {
 	wsHBMu      sync.RWMutex         // guards wsHBLastAck
 	wsHBLastAck map[string]time.Time // runtime_id -> last successful WS heartbeat ack timestamp
 
-	reminderCache  *reminderCache
-	reminderAgents *reminderAgentManager
-	reminderWSMu   sync.RWMutex
-	reminderWrites chan<- []byte
-	reminderWSDone <-chan struct{}
-	reminderClose  func() error
+	reminderCache                    *reminderCache
+	reminderAgents                   *reminderAgentManager
+	reminderWSMu                     sync.RWMutex
+	reminderWrites                   chan<- []byte
+	reminderWSDone                   <-chan struct{}
+	reminderClose                    func() error
+	reminderGateMu                   sync.Mutex
+	reminderReplayComplete           bool
+	reminderProjectionReplayInFlight bool
+	reminderPendingSnapshots         map[string]struct{}
 
 	// runtimeGoneMu guards runtimeGoneInflight, reregisterNextAttempt, and
 	// reregisterLastCompletedAt. The state lets heartbeat / poller / WS-ack
@@ -238,6 +242,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 	}
 	d.runner = taskRunnerFunc(d.runTask)
 	d.reminderCache = newReminderCache(nil, logger, d.onReminderTimer)
+	d.reminderCache.setPersistence(cfg.WorkspacesRoot)
 	d.reminderAgents = newReminderAgentManager(cfg.WorkspacesRoot, logger)
 	d.runUpdateFn = d.runUpdate
 	d.verifyUpdatedBinaryFn = d.verifyUpdatedBinary
@@ -274,7 +279,9 @@ func (d *Daemon) removeReminderAgent(agentID, runtimeID string, generation int64
 		}
 	}
 	if removed && d.reminderCache != nil {
-		d.reminderCache.removeOwner(agentID)
+		if err := d.reminderCache.removeOwner(agentID); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -695,6 +702,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 		"auto_update", d.cfg.AutoUpdateEnabled,
 		"launched_by", d.cfg.LaunchedBy,
 	)
+	if err := d.reminderCache.stateError(); err != nil {
+		return fmt.Errorf("reminder cache is not recoverable: %w", err)
+	}
 
 	// Load auth token from CLI config.
 	if err := d.resolveAuth(); err != nil {

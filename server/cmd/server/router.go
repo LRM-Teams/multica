@@ -417,6 +417,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		h.HandleDaemonReminderOwnerLifecycle,
 		h.HandleDaemonReminderOwnerLifecycleAck,
 	)
+	daemonHub.SetReminderProjectionHandlers(
+		h.HandleDaemonReminderProjection,
+		h.HandleDaemonReminderProjectionAck,
+	)
 	health := newServerHealth(pool)
 
 	r := chi.NewRouter()

@@ -262,14 +262,49 @@ type ReminderSnapshotPayload struct {
 	AgentID             string             `json:"agent_id"`
 	RuntimeID           string             `json:"runtime_id"`
 	PlacementGeneration int64              `json:"placement_generation"`
+	ProjectionWatermark int64              `json:"projection_watermark"`
 	Reminders           []ReminderTimerJob `json:"reminders"`
 }
 
 type ReminderFireAttemptPayload struct {
-	AgentID       string `json:"agent_id"`
-	ReminderID    string `json:"reminder_id"`
-	Version       int64  `json:"version"`
-	FiredAtClient string `json:"fired_at_client"`
+	AgentID             string `json:"agent_id"`
+	RuntimeID           string `json:"runtime_id"`
+	PlacementGeneration int64  `json:"placement_generation"`
+	ReminderID          string `json:"reminder_id"`
+	Version             int64  `json:"version"`
+	FiredAtClient       string `json:"fired_at_client"`
+}
+
+// ReminderProjectionEvent is the sole ordered timer mutation envelope. Live
+// hints and durable replay use the same Seq; daemon ACKs only after applying
+// and persisting the version fence for this event.
+type ReminderProjectionEvent struct {
+	Seq                 int64            `json:"seq"`
+	RuntimeID           string           `json:"runtime_id"`
+	AgentID             string           `json:"agent_id"`
+	PlacementGeneration int64            `json:"placement_generation"`
+	EventType           string           `json:"event_type"`
+	ReminderID          string           `json:"reminder_id"`
+	Version             int64            `json:"version"`
+	FireAt              string           `json:"fire_at,omitempty"`
+	Terminal            bool             `json:"terminal"`
+	Reminder            ReminderTimerJob `json:"reminder"`
+}
+
+type ReminderProjectionRequestPayload struct {
+	RuntimeCursors map[string]int64 `json:"runtime_cursors"`
+}
+
+type ReminderProjectionReplayEndPayload struct {
+	RuntimeCursors map[string]int64 `json:"runtime_cursors"`
+}
+
+type ReminderProjectionAckPayload struct {
+	RuntimeCursors map[string]int64 `json:"runtime_cursors"`
+}
+
+type ReminderFireResultPayload struct {
+	Projection ReminderProjectionEvent `json:"projection"`
 }
 
 // DaemonAgentStopPayload removes an Agent from the daemon-local lifecycle

@@ -721,6 +721,63 @@ func TestDaemonRegister_WithDaemonToken(t *testing.T) {
 	testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
 }
 
+func TestDaemonRegister_ReplacesReminderCapabilityOnReconnect(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	daemonID := "test-daemon-capability-replace-" + uuid.NewString()
+	runtimeName := "test-runtime-capability-replace-" + uuid.NewString()
+	register := func(capabilities []string) map[string]any {
+		t.Helper()
+		w := httptest.NewRecorder()
+		req := newDaemonTokenRequest("POST", "/api/daemon/register", map[string]any{
+			"workspace_id": testWorkspaceID,
+			"daemon_id":    daemonID,
+			"device_name":  "test-device",
+			"cli_version":  "v0.3.0",
+			"capabilities": capabilities,
+			"runtimes": []map[string]any{
+				{"name": runtimeName, "type": "claude", "version": "1.0.0", "status": "online"},
+			},
+		}, testWorkspaceID, daemonID)
+		testHandler.DaemonRegister(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("DaemonRegister: status=%d body=%s", w.Code, w.Body.String())
+		}
+		var resp map[string]any
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatal(err)
+		}
+		runtimes, _ := resp["runtimes"].([]any)
+		if len(runtimes) != 1 {
+			t.Fatalf("runtimes = %#v", resp["runtimes"])
+		}
+		return runtimes[0].(map[string]any)
+	}
+
+	first := register([]string{protocol.DaemonCapabilityReminderVersionedCache})
+	runtimeID := first["id"].(string)
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+	})
+	second := register(nil)
+	if second["id"] != runtimeID {
+		t.Fatalf("reconnect replaced runtime id: first=%s second=%v", runtimeID, second["id"])
+	}
+	metadata := second["metadata"].(map[string]any)
+	capabilities, ok := metadata["capabilities"].([]any)
+	if !ok || len(capabilities) != 0 {
+		t.Fatalf("reconnect retained stale capabilities: %#v", metadata["capabilities"])
+	}
+	var stored []byte
+	if err := testPool.QueryRow(context.Background(), `SELECT metadata FROM agent_runtime WHERE id = $1`, runtimeID).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(stored), protocol.DaemonCapabilityReminderVersionedCache) {
+		t.Fatalf("stored metadata retained stale reminder capability: %s", stored)
+	}
+}
+
 func TestDaemonRegister_ProfileTokenReturnsDaemonToken(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

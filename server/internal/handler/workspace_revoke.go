@@ -169,9 +169,7 @@ func (h *Handler) publishRevocation(ctx context.Context, result revocationResult
 			"agent": agentToResponse(agent),
 		})
 		if agent.RuntimeID.Valid {
-			if err := h.terminalizeAndRemoveReminderOwner(ctx, uuidToString(agent.RuntimeID), uuidToString(agent.ID), "agent_owner_removed"); err != nil {
-				slog.Warn("terminalize reminders on workspace revocation failed", "error", err, "agent_id", uuidToString(agent.ID))
-			}
+			h.projectReminderOwnerStop(ctx, uuidToString(agent.ID), uuidToString(agent.RuntimeID))
 		}
 	}
 

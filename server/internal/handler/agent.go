@@ -1420,6 +1420,21 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, "this runtime is private; only its owner or a workspace admin can move agents onto it")
 			return
 		}
+		if runtime.ID != existing.RuntimeID && !agentRuntimeHasCapability(runtime, protocol.DaemonCapabilityReminderVersionedCache) {
+			var hasActiveReminders bool
+			if err := h.DB.QueryRow(r.Context(), `
+				SELECT EXISTS (
+				  SELECT 1 FROM agent_reminder
+				  WHERE agent_id = $1 AND status IN ('scheduled', 'firing')
+				)`, existing.ID).Scan(&hasActiveReminders); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to validate reminder runtime capability")
+				return
+			}
+			if hasActiveReminders {
+				writeCodedError(w, http.StatusConflict, "daemon_outdated", "target runtime must upgrade before moving an agent with active reminders")
+				return
+			}
+		}
 		params.RuntimeID = runtime.ID
 		params.RuntimeMode = pgtype.Text{String: runtime.RuntimeMode, Valid: true}
 		targetRuntimeID = runtime.ID
@@ -1519,6 +1534,10 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 
 	updated, err := h.Queries.UpdateAgent(r.Context(), params)
 	if err != nil {
+		if isReminderDaemonOutdatedError(err) {
+			writeCodedError(w, http.StatusConflict, "daemon_outdated", "target runtime must upgrade before moving an agent with active reminders")
+			return
+		}
 		if identityUniqueViolation(err, "agent_workspace_name_unique") {
 			writeError(w, http.StatusConflict, "username is already in use")
 			return
@@ -1756,9 +1775,7 @@ func (h *Handler) ArchiveAgent(w http.ResponseWriter, r *http.Request) {
 	actorType, actorID := h.resolveActor(r, userID, wsID)
 	h.publish(protocol.EventAgentArchived, wsID, actorType, actorID, map[string]any{"agent": broadcastAgentResponse(resp)})
 	if archived.RuntimeID.Valid {
-		if err := h.terminalizeAndRemoveReminderOwner(r.Context(), uuidToString(archived.RuntimeID), uuidToString(archived.ID), "agent_archived"); err != nil {
-			slog.Warn("terminalize reminders on agent archive failed", append(logger.RequestAttrs(r), "error", err, "agent_id", id)...)
-		}
+		h.projectReminderOwnerStop(r.Context(), uuidToString(archived.ID), uuidToString(archived.RuntimeID))
 	}
 	redactAgentResponseForActor(&resp, actorType)
 	writeJSON(w, http.StatusOK, resp)

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -34,6 +35,27 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 	runCtx, cancel := runContext(ctx, timeout)
 
 	args := buildCursorArgs(prompt, opts, b.cfg.Logger)
+	var promptFile string
+	if cursorArgsSize(args) > maxCursorArgvBytes {
+		file, err := os.CreateTemp("", "multica-cursor-prompt-*.txt")
+		if err != nil {
+			cancel()
+			return nil, fmt.Errorf("cursor prompt temp file: %w", err)
+		}
+		promptFile = file.Name()
+		if _, err := file.WriteString(prompt); err != nil {
+			_ = file.Close()
+			_ = os.Remove(promptFile)
+			cancel()
+			return nil, fmt.Errorf("cursor prompt temp file write: %w", err)
+		}
+		if err := file.Close(); err != nil {
+			_ = os.Remove(promptFile)
+			cancel()
+			return nil, fmt.Errorf("cursor prompt temp file close: %w", err)
+		}
+		args = buildCursorArgs("Read the full task JSON from this local file, then execute it exactly: "+promptFile, opts, b.cfg.Logger)
+	}
 	argv0, cmdArgs := chooseCursorInvocation(execName, lookedUp, args, b.cfg.Logger)
 
 	cmd := exec.CommandContext(runCtx, argv0, cmdArgs...)
@@ -66,6 +88,9 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		defer cancel()
 		defer close(msgCh)
 		defer close(resCh)
+		if promptFile != "" {
+			defer os.Remove(promptFile)
+		}
 
 		// Close stdout when the context is cancelled so scanner.Scan() unblocks.
 		go func() {
@@ -524,6 +549,16 @@ var cursorBlockedArgs = map[string]blockedArgMode{
 	"-p":              blockedStandalone, // non-interactive print mode
 	"--output-format": blockedWithValue,  // stream-json protocol
 	"--yolo":          blockedStandalone, // auto-approval for autonomous operation
+}
+
+const maxCursorArgvBytes = 128 * 1024
+
+func cursorArgsSize(args []string) int {
+	size := 0
+	for _, arg := range args {
+		size += len(arg) + 1
+	}
+	return size
 }
 
 // buildCursorArgs assembles the argv for a one-shot cursor-agent invocation.

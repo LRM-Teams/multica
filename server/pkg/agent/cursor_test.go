@@ -19,6 +19,14 @@ func TestNewReturnsCursorBackend(t *testing.T) {
 	}
 }
 
+func TestCursorArgsSize(t *testing.T) {
+	t.Parallel()
+
+	if got := cursorArgsSize([]string{"-p", "hello"}); got != len("-p")+1+len("hello")+1 {
+		t.Fatalf("cursorArgsSize = %d", got)
+	}
+}
+
 func TestBuildCursorArgs(t *testing.T) {
 	t.Parallel()
 

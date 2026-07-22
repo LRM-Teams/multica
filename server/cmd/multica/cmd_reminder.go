@@ -127,27 +127,40 @@ func reminderUpdateBody(cmd *cobra.Command) (map[string]any, error) {
 	body := map[string]any{}
 	body["id"], _ = cmd.Flags().GetString("id")
 	mutationCount := 0
-	if title, _ := cmd.Flags().GetString("title"); strings.TrimSpace(title) != "" {
-		body["title"] = title
-		mutationCount++
-	}
-	delay, _ := cmd.Flags().GetInt64("delay-seconds")
-	fireAt, _ := cmd.Flags().GetString("fire-at")
-	if delay > 0 {
-		body["delay_seconds"] = delay
-		mutationCount++
-	}
-	if strings.TrimSpace(fireAt) != "" {
-		body["fire_at"] = fireAt
-		mutationCount++
-	}
-	cadence, _ := cmd.Flags().GetString("cadence")
-	if strings.TrimSpace(cadence) != "" {
-		body["cadence"] = cadence
-		mutationCount++
+	for _, name := range []string{"title", "delay-seconds", "fire-at", "cadence"} {
+		if cmd.Flags().Changed(name) {
+			mutationCount++
+		}
 	}
 	if mutationCount != 1 {
 		return nil, fmt.Errorf("provide exactly one of --title, --delay-seconds, --fire-at, or --cadence")
+	}
+	if title, _ := cmd.Flags().GetString("title"); cmd.Flags().Changed("title") {
+		if strings.TrimSpace(title) == "" {
+			return nil, fmt.Errorf("--title must not be empty")
+		}
+		body["title"] = title
+	}
+	delay, _ := cmd.Flags().GetInt64("delay-seconds")
+	fireAt, _ := cmd.Flags().GetString("fire-at")
+	if cmd.Flags().Changed("delay-seconds") {
+		if delay <= 0 {
+			return nil, fmt.Errorf("--delay-seconds must be a positive integer")
+		}
+		body["delay_seconds"] = delay
+	}
+	if cmd.Flags().Changed("fire-at") {
+		if strings.TrimSpace(fireAt) == "" {
+			return nil, fmt.Errorf("--fire-at must not be empty")
+		}
+		body["fire_at"] = fireAt
+	}
+	cadence, _ := cmd.Flags().GetString("cadence")
+	if cmd.Flags().Changed("cadence") {
+		if strings.TrimSpace(cadence) == "" {
+			return nil, fmt.Errorf("--cadence must not be empty")
+		}
+		body["cadence"] = cadence
 	}
 	return body, nil
 }

@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/spf13/cobra"
+)
 
 func TestReminderScheduleBodyValidation(t *testing.T) {
 	cmd := reminderScheduleCmd
@@ -57,23 +61,31 @@ func TestReminderScheduleBodyRequiresExactlyOneSchedule(t *testing.T) {
 }
 
 func TestReminderUpdateBodyRequiresExactlyOneMutation(t *testing.T) {
-	cmd := reminderUpdateCmd
-	set := func(title, delay, fireAt, cadence string) {
+	newCommand := func(t *testing.T, title, delay, fireAt, cadence string) *cobra.Command {
 		t.Helper()
-		if delay == "" {
-			delay = "0"
+		cmd := &cobra.Command{}
+		cmd.Flags().String("id", "", "")
+		cmd.Flags().String("title", "", "")
+		cmd.Flags().Int64("delay-seconds", 0, "")
+		cmd.Flags().String("fire-at", "", "")
+		cmd.Flags().String("cadence", "", "")
+		if err := cmd.Flags().Set("id", "abc12345"); err != nil {
+			t.Fatal(err)
 		}
 		for name, value := range map[string]string{
-			"id": "abc12345", "title": title, "delay-seconds": delay,
-			"fire-at": fireAt, "cadence": cadence,
+			"title": title, "delay-seconds": delay, "fire-at": fireAt, "cadence": cadence,
 		} {
+			if value == "" {
+				continue
+			}
 			if err := cmd.Flags().Set(name, value); err != nil {
 				t.Fatalf("set %s: %v", name, err)
 			}
 		}
+		return cmd
 	}
 
-	set("new title", "0", "", "")
+	cmd := newCommand(t, "new title", "", "", "")
 	body, err := reminderUpdateBody(cmd)
 	if err != nil {
 		t.Fatalf("single title mutation: %v", err)
@@ -94,9 +106,35 @@ func TestReminderUpdateBodyRequiresExactlyOneMutation(t *testing.T) {
 		{name: "fire at and cadence", fireAt: "2026-07-10T04:00:00Z", cadence: "every:2h"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			set(tc.title, tc.delay, tc.fireAt, tc.cadence)
+			cmd := newCommand(t, tc.title, tc.delay, tc.fireAt, tc.cadence)
 			if _, err := reminderUpdateBody(cmd); err == nil {
 				t.Fatal("expected exactly-one validation error")
+			}
+		})
+	}
+}
+
+func TestReminderUpdateBodyRejectsInvalidSelectedValue(t *testing.T) {
+	for _, tc := range []struct {
+		name, flag, value string
+	}{
+		{name: "empty title", flag: "title", value: " "},
+		{name: "zero delay", flag: "delay-seconds", value: "0"},
+		{name: "empty fire at", flag: "fire-at", value: " "},
+		{name: "empty cadence", flag: "cadence", value: " "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := &cobra.Command{}
+			cmd.Flags().String("id", "abc12345", "")
+			cmd.Flags().String("title", "", "")
+			cmd.Flags().Int64("delay-seconds", 0, "")
+			cmd.Flags().String("fire-at", "", "")
+			cmd.Flags().String("cadence", "", "")
+			if err := cmd.Flags().Set(tc.flag, tc.value); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := reminderUpdateBody(cmd); err == nil {
+				t.Fatal("expected selected-value validation error")
 			}
 		})
 	}

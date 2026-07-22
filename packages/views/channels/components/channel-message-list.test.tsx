@@ -90,6 +90,7 @@ vi.mock("@multica/core/workspace/hooks", () => ({
     getActorAvatarUrl: () => null,
     getActorName: () => "Test Actor",
     getActorInitials: () => "TA",
+    getMemberRole: () => null,
   }),
 }));
 
@@ -284,6 +285,28 @@ describe("MessageViewport", () => {
     expect(screen.getByText("First visible message")).toBeInTheDocument();
     expect(screen.getByText("Second visible message")).toBeInTheDocument();
     expect(screen.queryByText("daemon_outdated")).not.toBeInTheDocument();
+  });
+
+  it("groups consecutive same-author messages into lead + compact rows (LRM-255)", () => {
+    render(
+      <MessageViewport
+        messages={[
+          makeMessage("m1", "First in group"),
+          {
+            ...makeMessage("m2", "Second in group"),
+            created_at: "2026-06-17T09:16:00Z",
+          },
+        ]}
+        currentUserId="user-1"
+        emptyLabel="No messages"
+      />,
+    );
+
+    const rows = screen.getAllByTestId("message-row");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveAttribute("data-message-group", "lead");
+    expect(rows[1]).toHaveAttribute("data-message-group", "compact");
+    expect(screen.getByTestId("message-gutter-time")).toHaveTextContent("09:16");
   });
 
   it("opens thread lists at the root context when requested", () => {

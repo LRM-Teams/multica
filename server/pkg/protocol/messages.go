@@ -214,6 +214,12 @@ const (
 )
 
 const (
+	ChannelOnboardingReason          = "channel_onboarding"
+	ChannelOnboardingSkipReceipt     = "channel_onboarding_skipped"
+	ChannelOnboardingDecisionSkipped = "skipped"
+)
+
+const (
 	DaemonCapabilityChannelOutputActions     = "channel_output_actions"
 	DaemonCapabilityAgentCLITransport        = "agent_cli_transport"
 	DaemonCapabilityAgentCredentialTransport = "agent_credential_transport_v1"
@@ -500,4 +506,29 @@ type DaemonMemoryCurationEvidenceItem struct {
 	Title     string `json:"title"`
 	Snippet   string `json:"snippet"`
 	CreatedAt string `json:"created_at"`
+}
+
+// AgentMemoryWriteReport is sent by the daemon after a task when whitelisted
+// agent-local memory files changed.
+type AgentMemoryWriteReport struct {
+	AgentID   string                    `json:"agent_id"`
+	RuntimeID string                    `json:"runtime_id"`
+	TaskID    string                    `json:"task_id,omitempty"`
+	Writes    []AgentMemoryWriteEntry   `json:"writes"`
+}
+
+type AgentMemoryWriteEntry struct {
+	RelPath     string `json:"rel_path"`
+	ScopeType   string `json:"scope_type"`
+	FileKey     string `json:"file_key"`
+	ContentHash string `json:"content_hash"`
+	DeltaChars  int    `json:"delta_chars"`
+}
+
+// AgentMemoryUpdatedPayload is broadcast to workspace clients for avatar +N UI.
+type AgentMemoryUpdatedPayload struct {
+	AgentID   string `json:"agent_id"`
+	ScopeType string `json:"scope_type"`
+	FileKey   string `json:"file_key"`
+	Count     int    `json:"count"`
 }

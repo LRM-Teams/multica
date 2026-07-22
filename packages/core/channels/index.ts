@@ -5,6 +5,7 @@ export {
   channelMessagesOptions,
   channelMessagesPageOptions,
   flattenChannelMessagePages,
+  enrichChannelMessagesPreservingAvatars,
   channelMessagesFirstItemIndex,
   upsertChannelMessageInCache,
   invalidateChannelMessages,

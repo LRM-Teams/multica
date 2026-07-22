@@ -122,6 +122,12 @@ vi.mock("@multica/core/agents", async () => {
   };
 });
 
+vi.mock("../../common/actor-avatar", () => ({
+  AgentPresenceOverlay: ({ children }: { children: React.ReactNode }) => (
+    <>{children}</>
+  ),
+}));
+
 import { AgentLivePeekCard } from "./agent-live-peek-card";
 
 function makeAgent(overrides: Record<string, unknown> = {}) {
@@ -217,9 +223,9 @@ describe("AgentLivePeekCard", () => {
 
     renderCard();
 
-    // Active task with no streamed messages → chat stage "Thinking" (same
-    // resolveAgentLiveStatus path as the profile hover card).
-    expect(screen.getByText("Thinking")).toBeInTheDocument();
+    // LRM-248: live peek header is Online/Offline only — never Thinking /
+    // Working as presence. Activity verbs live on the composer strip.
+    expect(screen.getByText("Online")).toBeInTheDocument();
     // identifier + title both render under the same link.
     const link = screen.getByRole("link", { name: /MUL-42/ });
     expect(link).toHaveAttribute("href", "/test/issues/issue-42");

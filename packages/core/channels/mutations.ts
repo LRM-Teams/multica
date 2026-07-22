@@ -33,7 +33,8 @@ export function useCreateChannel() {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
   return useMutation({
-    mutationFn: (data: { name: string; description?: string; lark_chat_id?: string }) => api.createChannel(data),
+    mutationFn: (data: { name: string; description?: string; lark_chat_id?: string; project_id?: string | null }) =>
+      api.createChannel(data),
     onSuccess: () => qc.invalidateQueries({ queryKey: channelKeys.list(wsId) }),
   });
 }
@@ -392,7 +393,7 @@ export function useAddChannelMember() {
       api.addChannelMember(channelId, { member_type: memberType, member_id: memberId }),
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: channelKeys.members(vars.channelId) });
-      // Refresh the list so the composite group avatar reflects the new roster.
+      // Refresh the list so channel member briefs stay current after roster changes.
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
     },
   });

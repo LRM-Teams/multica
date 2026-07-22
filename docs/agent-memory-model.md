@@ -2,7 +2,7 @@
 
 > 状态：目标行为已实现在 [PR #697](https://github.com/LRM-Teams/multica/pull/697) 和 [PR #698](https://github.com/LRM-Teams/multica/pull/698)。本文描述两项 PR 合并到 `dev` 后的完整行为。
 >
-> 最后核对：2026-07-17。
+> 最后核对：2026-07-21。
 
 ## 1. 一句话模型
 
@@ -64,6 +64,16 @@ Multica 的记忆分成两层：
 6. 当前事件、配额、阻塞和会过期的状态，写对应 `STATE.md`，并记录日期、状态和可用的 TTL / 到期时间。
 7. 不确定、冲突、敏感或不知道应该放在哪里的内容，先写 `memory/REVIEW.md`。
 8. 猜测、一次性执行噪音、原始聊天记录、秘密以及只对当前回复有用的内容，不写入长期记忆。
+9. 实质收工（改代码、定方案、推进 issue、非琐碎排查）时，给当天 `memory/daily/YYYY-MM-DD.md` **追加几行**流水；纯打招呼 / 贴纸 / 测试废话不写 Daily。偏好和对接仍热路径直写正式文件，不要只堆在 Daily。
+
+### 3.2 热路径 vs 冷路径（避免短任务卡顿）
+
+| 路径 | 谁做 | 何时 | 写什么 | 不要做什么 |
+|---|---|---|---|---|
+| **热路径** | 当前任务里的 agent | 干活过程中 / 实质收工 | 偏好→`USER.md`；对接→`RELATIONSHIP.md`；实质流水→append Daily | 每轮聊天都做全文自审再决定写不写 |
+| **冷路径** | L1 Daily / L2 自审 / Team Curator | 后台、按 active agent 定时/轮次 | 补齐 Daily、提升稳定事实、去重合并共享候选 | 挡在用户回消息的延迟路径上 |
+
+一句话：**自己轻量记；自审+Curator 负责整理。**
 
 ## 4. 单 agent 记忆与群体记忆
 
@@ -159,10 +169,12 @@ Codex 只获得当前相关作用域目录的可写权限；Pi 和其他 provide
 
 ## 7. 后台自进化和整理
 
+后台整理是**冷路径**：补齐、提升、去重，不替代热路径里的即时写入，也不应在每一轮聊天结束时由干活 agent 自己再跑一遍。
+
 后台整理遵循以下方向：
 
-1. 使用当天证据更新当天的 `memory/daily/YYYY-MM-DD.md`。
-2. agent self-review 将稳定内容整理进正式文件，将不确定或可能共享的内容放进 `REVIEW.md` / proposal。
+1. L1 使用当天证据更新当天的 `memory/daily/YYYY-MM-DD.md`（补 agent 漏记的流水）。
+2. L2 agent self-review 从 Daily 将稳定内容整理进正式文件（含 `USER.md` / `RELATIONSHIP.md` / `MEMORY.md` 等），将不确定或可能共享的内容放进 `REVIEW.md` / proposal。
 3. team curation 只消费主动提交的候选，进行去重、合并、冲突判断和公共知识审核。
 4. collective wording 不再自动证明 workspace/team 作用域；必须有更广受众或公共制度的明确证据。
 5. L4 清理过期的项目 `STATE.md` 内容，并对项目 `MEMORY.md`、`STATE.md`、`DECISIONS.md` 去重。
@@ -189,9 +201,12 @@ curator 额外读取的 scoped context 最多 12 个文件、约 16 KiB；不会
 
 ```text
 当前 agent 自己要记住        -> agent 私有文件
-某个成员的偏好              -> users/<member-id>/USER.md
+某个成员的偏好              -> users/<member-id>/USER.md（热路径立刻写）
+对接/交接/归属              -> RELATIONSHIP.md / notes（热路径立刻写）
+实质收工流水账              -> memory/daily/今天.md（热路径 append；短社交跳过）
 只属于当前项目或当前群       -> project/channel scoped 文件
 群内所有当前接收者都要记住   -> 每个 agent 各写自己的文件
 明确覆盖群外/未来 agent       -> workspace/team 候选，经过审核后入库
 不确定、冲突或敏感            -> REVIEW.md，不直接扩大范围
+整理/提升/去重/共享审核       -> L1/L2/Curator 冷路径，不挡聊天
 ```

@@ -140,23 +140,39 @@ vi.mock("../../navigation/app-link", () => ({
   ),
 }));
 
-// The bubble resolves the author's live avatar from the members/agents cache.
-// Stub it so these layout/identity tests don't need a QueryClient/workspace.
+// The bubble may fall back to the members/agents directory (profile-card source)
+// when the message payload omits author_avatar_url (LRM-218). Stub the hook so
+// layout tests don't need a QueryClient/workspace; override per-case when needed.
+const getActorAvatarUrlMock = vi.fn(
+  (_type: string, _id: string): string | null => null,
+);
 vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({
-    getActorAvatarUrl: () => null,
+    getActorAvatarUrl: getActorAvatarUrlMock,
     getActorInitials: (_type: string, id: string) => {
       if (id === "user-1") return "A";
       if (id === "user-2") return "B";
+      if (id === "user-owner") return "F";
+      if (id === "user-admin") return "Ad";
       if (id === "agent-1") return "R";
       return "?";
     },
     getActorName: (_type: string, id: string, fallback?: string) => {
       if (id === "user-1") return "Alice Display";
       if (id === "user-2") return "Bob Display";
+      if (id === "user-owner") return "Frank An";
+      if (id === "user-admin") return "Admin User";
       if (id === "agent-1") return "Research Agent";
       return fallback ?? id;
     },
+    getMemberRole: (id: string) =>
+      id === "user-owner"
+        ? ("owner" as const)
+        : id === "user-admin"
+          ? ("admin" as const)
+          : id === "user-1" || id === "user-2"
+            ? ("member" as const)
+            : null,
   }),
 }));
 
@@ -252,6 +268,9 @@ vi.mock("../../i18n/use-t", () => ({
         };
         thread: { reply: string; reply_count: string };
         time: { today: string; yesterday: string };
+        profile_popover: {
+          role: { owner: string; admin: string; member: string; agent: string };
+        };
       }) => string,
       options?: Record<string, unknown>,
     ) => {
@@ -327,6 +346,9 @@ vi.mock("../../i18n/use-t", () => ({
           reply_count: "2 replies",
         },
         time: { today: "Today", yesterday: "Yesterday" },
+        profile_popover: {
+          role: { owner: "Owner", admin: "Admin", member: "Member", agent: "Agent" },
+        },
       });
       return options
         ? raw.replace(/\{\{(\w+)\}\}/g, (_, key: string) => String(options[key] ?? ""))
@@ -408,6 +430,8 @@ describe("ChannelMessageBubble", () => {
 
   beforeEach(() => {
     copyTextMock.mockReset();
+    getActorAvatarUrlMock.mockReset();
+    getActorAvatarUrlMock.mockReturnValue(null);
     vi.mocked(toast.success).mockReset();
     vi.mocked(toast.error).mockReset();
     __resetAuthorAvatarOkCacheForTests();
@@ -427,13 +451,85 @@ describe("ChannelMessageBubble", () => {
     });
   });
 
-  it("renders an agent message left-aligned with an Agent pill, name and body", () => {
+  it("renders an agent message with name and body but no Agent pill (LRM-232)", () => {
     render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
 
     expect(screen.getByText("Research Agent")).toBeInTheDocument();
-    expect(screen.getByText("Agent")).toBeInTheDocument();
+    expect(screen.queryByText("Agent")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("message-author-role")).not.toBeInTheDocument();
     expect(screen.getByText("Here is the data.")).toBeInTheDocument();
     expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-own", "false");
+  });
+
+  it("renders compact continuations without author chrome but keeps body and gutter time (LRM-255)", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          type: "user",
+          author_id: "user-a",
+          author_name: "Alice",
+          content: "follow-up",
+          created_at: "2026-06-17T09:16:00Z",
+        })}
+        currentUserId="user-1"
+        compact
+      />,
+    );
+
+    expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-message-group", "compact");
+    expect(screen.queryByText("Alice")).not.toBeInTheDocument();
+    expect(screen.getByTestId("message-gutter-time")).toHaveTextContent("09:16");
+    expect(screen.getByText("follow-up")).toBeInTheDocument();
+    expect(screen.getByTestId("message-action-bar")).toBeInTheDocument();
+  });
+
+  it("shows muted Owner role after a workspace owner name (LRM-232)", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          type: "user",
+          author_id: "user-owner",
+          author_name: "frank",
+          content: "hello from owner",
+        })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.getByText("Frank An")).toBeInTheDocument();
+    const role = screen.getByTestId("message-author-role");
+    expect(role).toHaveTextContent("Owner");
+    expect(role).toHaveClass("text-ink-3");
+    expect(role.className).not.toMatch(/rounded-full|border|bg-/);
+  });
+
+  it("shows muted Admin role and hides ordinary Member role (LRM-232)", () => {
+    const { rerender } = render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          type: "user",
+          author_id: "user-admin",
+          author_name: "admin",
+          content: "admin note",
+        })}
+        currentUserId="user-1"
+      />,
+    );
+    expect(screen.getByTestId("message-author-role")).toHaveTextContent("Admin");
+
+    rerender(
+      <ChannelMessageBubble
+        message={makeMessage({
+          type: "user",
+          author_id: "user-2",
+          author_name: "bob",
+          content: "member note",
+        })}
+        currentUserId="user-1"
+      />,
+    );
+    expect(screen.getByText("Bob Display")).toBeInTheDocument();
+    expect(screen.queryByTestId("message-author-role")).not.toBeInTheDocument();
   });
 
   it("renders the author avatar straight from the message payload (#453), not a viewer-scoped lookup", () => {
@@ -444,8 +540,8 @@ describe("ChannelMessageBubble", () => {
       />,
     );
     // The avatar image comes from the payload's `author_avatar_url` (aggregated
-    // by the BE for every viewer, #574) — so a group member sees the author's
-    // real avatar instead of the default bot; no `getActorAvatarUrl` guess.
+    // by the BE for every viewer, #574). Directory fallback is only used when
+    // payload + sticky cache both miss.
     const img = screen.getByRole("img", { name: /Research Agent/i });
     expect(img).toHaveAttribute("src", "/uploads/agent-avatar.png");
   });
@@ -479,6 +575,64 @@ describe("ChannelMessageBubble", () => {
     expect(screen.getByRole("img", { name: /Research Agent/i })).toHaveAttribute(
       "src",
       "/uploads/agent-avatar.png",
+    );
+  });
+
+  it("LRM-218: falls back to actor-directory avatar when payload omits URL", () => {
+    getActorAvatarUrlMock.mockImplementation((type, id) =>
+      type === "agent" && id === "agent-1" ? "/agent-avatars/human-02.jpg" : null,
+    );
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          author_id: "agent-1",
+          author_avatar_url: null,
+          content: "no payload avatar",
+        })}
+        currentUserId="user-1"
+      />,
+    );
+    expect(screen.getByRole("img", { name: /Research Agent/i })).toHaveAttribute(
+      "src",
+      "/agent-avatars/human-02.jpg",
+    );
+  });
+
+  it("LRM-218: directory fallback seeds sticky cache for consecutive same-author bubbles", () => {
+    getActorAvatarUrlMock.mockImplementation((type, id) =>
+      type === "agent" && id === "agent-1" ? "/agent-avatars/human-02.jpg" : null,
+    );
+    const { rerender } = render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          id: "msg-1",
+          author_id: "agent-1",
+          author_avatar_url: null,
+          content: "first",
+        })}
+        currentUserId="user-1"
+      />,
+    );
+    expect(screen.getByRole("img", { name: /Research Agent/i })).toHaveAttribute(
+      "src",
+      "/agent-avatars/human-02.jpg",
+    );
+
+    getActorAvatarUrlMock.mockReturnValue(null);
+    rerender(
+      <ChannelMessageBubble
+        message={makeMessage({
+          id: "msg-2",
+          author_id: "agent-1",
+          author_avatar_url: null,
+          content: "second",
+        })}
+        currentUserId="user-1"
+      />,
+    );
+    expect(screen.getByRole("img", { name: /Research Agent/i })).toHaveAttribute(
+      "src",
+      "/agent-avatars/human-02.jpg",
     );
   });
 

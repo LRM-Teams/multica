@@ -455,6 +455,7 @@ func (b *ContextBuilder) appendDBSections(ctx context.Context, out *strings.Buil
 		  WHERE message.channel_id = channel.id
 		    AND message.workspace_id = channel.workspace_id
 		    AND message.deleted_at IS NULL
+		    AND message.membership_generation_id IS NULL
 		  ORDER BY message.seq DESC
 		  LIMIT 1
 		) latest_message ON true
@@ -480,6 +481,7 @@ func (b *ContextBuilder) appendDBSections(ctx context.Context, out *strings.Buil
 			  WHERE channel_message.channel_id = channel.id
 			    AND channel_message.workspace_id = channel.workspace_id
 			    AND channel_message.deleted_at IS NULL
+			    AND channel_message.membership_generation_id IS NULL
 			  ORDER BY channel_message.seq DESC
 			  LIMIT 5
 			) message
@@ -516,6 +518,7 @@ func (b *ContextBuilder) appendDBSections(ctx context.Context, out *strings.Buil
 		  WHERE channel_message.channel_id = channel.id
 		    AND channel_message.workspace_id = channel.workspace_id
 		    AND channel_message.deleted_at IS NULL
+		    AND channel_message.membership_generation_id IS NULL
 		  ORDER BY channel_message.seq DESC
 		  LIMIT 5
 		) message

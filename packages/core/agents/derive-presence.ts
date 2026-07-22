@@ -19,12 +19,15 @@ import type {
   Workload,
 } from "./types";
 
+/** Presence-safe runtime fields. Enough for online/offline without full runtime details. */
+export type RuntimeReachability = Pick<AgentRuntime, "status" | "last_seen_at">;
+
 // AgentAvailability mirrors RuntimeHealth's reachability buckets but folds
 // `about_to_gc` into `offline` — both mean "long unreachable" from the
 // user's standpoint; the GC-warning copy belongs to the runtime card, not
 // the agent dot.
 export function deriveAgentAvailability(
-  runtime: AgentRuntime | null,
+  runtime: RuntimeReachability | null,
   now: number,
 ): AgentAvailability {
   if (!runtime) return "offline";
@@ -84,7 +87,7 @@ export function deriveWorkloadDetail(tasks: readonly AgentTask[]): WorkloadDetai
 
 interface DerivePresenceInput {
   agent: Agent;
-  runtime: AgentRuntime | null;
+  runtime: RuntimeReachability | null;
   // Tasks for THIS agent only. Callers (buildPresenceMap, hooks) pre-filter
   // by agent_id — we don't re-check here.
   tasks: readonly AgentTask[];
@@ -108,6 +111,10 @@ export function deriveAgentPresenceDetail(input: DerivePresenceInput): AgentPres
     };
   }
 
+  // Availability comes only from runtime reachability — never from workload.
+  // LRM-248 AC5: when a private runtime is filtered from the list, callers
+  // must still pass a reachability stub (status + last_seen) so "can't see
+  // runtime details" does not collapse to offline.
   const availability = deriveAgentAvailability(input.runtime, input.now);
   const detail = deriveWorkloadDetail(input.tasks);
 
@@ -117,6 +124,21 @@ export function deriveAgentPresenceDetail(input: DerivePresenceInput): AgentPres
     runningCount: detail.runningCount,
     queuedCount: detail.queuedCount,
     capacity: input.agent.max_concurrent_tasks,
+  };
+}
+
+
+/**
+ * LRM-248 AC5: when ListVisibleAgentRuntimes hides another member's private
+ * runtime, the agent list still projects status + last_seen so live chrome
+ * can render. Prefer a full runtime row when present; otherwise use this stub.
+ */
+export function runtimeReachabilityFromAgent(agent: Agent): RuntimeReachability | null {
+  const status = agent.runtime_status;
+  if (status !== "online" && status !== "offline") return null;
+  return {
+    status,
+    last_seen_at: agent.runtime_last_seen_at ?? null,
   };
 }
 
@@ -147,7 +169,9 @@ export function buildPresenceMap(args: {
   }
 
   for (const agent of args.agents) {
-    const runtime = runtimesById.get(agent.runtime_id) ?? null;
+    const runtime =
+      runtimesById.get(agent.runtime_id) ??
+      runtimeReachabilityFromAgent(agent);
     const tasks = tasksByAgent.get(agent.id) ?? [];
     out.set(agent.id, deriveAgentPresenceDetail({ agent, runtime, tasks, now: args.now }));
   }

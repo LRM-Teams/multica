@@ -36,13 +36,13 @@ function renderLine() {
   );
 }
 
-describe("AgentCoarsePresenceLine", () => {
+describe("AgentCoarsePresenceLine (LRM-248)", () => {
   beforeEach(() => {
     cleanup();
     mockPresence.current = "loading";
   });
 
-  it("shows the coarse presence word 'Online', not a fine action verb", () => {
+  it("shows Online as plain text — no second status dot", () => {
     mockPresence.current = {
       availability: "online",
       workload: "idle",
@@ -53,10 +53,11 @@ describe("AgentCoarsePresenceLine", () => {
     renderLine();
     const mark = screen.getByTestId("agent-live-status");
     expect(mark).toHaveTextContent("Online");
-    expect(mark.querySelector(".rounded-full")).not.toBeNull();
+    // LRM-248: profile/DM header text has no second round indicator.
+    expect(mark.querySelector(".rounded-full")).toBeNull();
   });
 
-  it("shows the coarse workload word 'Working' while a task runs (never the tool verb)", () => {
+  it("shows Online while a task runs — never Working", () => {
     mockPresence.current = {
       availability: "online",
       workload: "working",
@@ -66,12 +67,23 @@ describe("AgentCoarsePresenceLine", () => {
     };
     renderLine();
     const mark = screen.getByTestId("agent-live-status");
-    expect(mark).toHaveTextContent("Working");
-    // Coarse only — no fine action verb echoed from the composer line.
-    expect(mark).not.toHaveTextContent(/command|Reading|Writing/i);
+    expect(mark).toHaveTextContent("Online");
+    expect(mark).not.toHaveTextContent(/Working|command|Reading/i);
   });
 
-  it("shows 'Offline' when the runtime is down", () => {
+  it("folds unstable → Online", () => {
+    mockPresence.current = {
+      availability: "unstable",
+      workload: "idle",
+      runningCount: 0,
+      capacity: 1,
+      queuedCount: 0,
+    };
+    renderLine();
+    expect(screen.getByTestId("agent-live-status")).toHaveTextContent("Online");
+  });
+
+  it("shows Offline when the runtime is down", () => {
     mockPresence.current = {
       availability: "offline",
       workload: "idle",

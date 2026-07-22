@@ -20,7 +20,7 @@ import { AgentProfileCard } from "../agents/components/agent-profile-card";
 import { AgentLivePeekCard } from "../agents/components/agent-live-peek-card";
 import { MemberProfileCard } from "../members/member-profile-card";
 import { SquadProfileCard } from "../squads/components/squad-profile-card";
-import { availabilityConfig } from "../agents/presence";
+import { availabilityConfig, toLiveAvailability } from "../agents/presence";
 import { useNavigation } from "../navigation";
 import { useOpenAgentPanel } from "./agent-panel-context";
 import { resolveIdentityAvatarUrl } from "./identity-avatar-cache";
@@ -44,6 +44,12 @@ interface ActorAvatarProps {
   actorId: string;
   size?: number;
   className?: string;
+  /**
+   * Optional display name from a row/message payload. Prefer this over the
+   * workspace directory when the actor is hidden from list endpoints (e.g.
+   * group-manager Beckham) so the glyph fallback still shows the real name.
+   */
+  name?: string;
   /**
    * Optional face URL from a row/message payload (LRM-224). Only accelerates
    * the identity cache — null / undefined must not clear a known face.
@@ -111,6 +117,7 @@ export function ActorAvatar({
   actorId,
   size,
   className,
+  name: nameOverride,
   avatarUrlHint,
   enableHoverCard,
   showStatusDot,
@@ -125,10 +132,16 @@ export function ActorAvatar({
     avatarUrlHint,
     directoryUrl: getActorAvatarUrl(actorType, actorId),
   });
+  const displayName = nameOverride?.trim() || getActorName(actorType, actorId);
+  const initials = nameOverride?.trim()
+    ? (/[a-z]/i.test(displayName.charAt(0))
+        ? displayName.charAt(0).toUpperCase()
+        : displayName.charAt(0))
+    : getActorInitials(actorType, actorId);
   const avatar = (
     <ActorAvatarBase
-      name={getActorName(actorType, actorId)}
-      initials={getActorInitials(actorType, actorId)}
+      name={displayName}
+      initials={initials}
       avatarUrl={avatarUrl}
       isAgent={actorType === "agent"}
       isSystem={actorType === "system"}
@@ -366,35 +379,28 @@ export function AgentStatusDot({ agentId, size }: { agentId: string; size?: numb
   // Activity tab Health block, so the dot can never drift from the tab.
   const { summary: healthSummary } = useAgentHealth(agentId);
   if (detail === "loading") return null;
+  // LRM-248: archived / deleted → gray avatar, NO live badge.
+  if (detail.availability === "archived") return null;
 
-  const { dotClass: availabilityDotClass, label } =
-    availabilityConfig[detail.availability];
-  // TODO(#266): once the BE health API is live, health_summary.state is the
-  // SOLE dot color source. Until then the dot degrades to the availability
-  // color when the summary is missing (endpoint not deployed / loading) so it
-  // never blanks or crashes. STRUCTURE (fixed box, proportional dot, cut-out
-  // ring) and PULSE (a workload overlay, below) are unchanged — orthogonal to
-  // color.
+  const live = toLiveAvailability(detail.availability);
+  if (!live) return null;
+  const { dotClass: availabilityDotClass, label } = availabilityConfig[live];
+  // Live badge folds reconnecting / suspected_disconnect → Online green
+  // (LRM-248). Offline stays gray.
   const dotClass = resolveHealthDotClass(healthSummary, availabilityDotClass);
   // Diameter tracks the avatar so the indicator is proportional everywhere,
   // with a floor so it never disappears on the smallest (14–16px) avatars.
   const diameter = Math.max(5, Math.round((size ?? 24) * 0.28));
   const dotStyle = { width: diameter, height: diameter };
-  // "Working" is a motion cue layered on top of the online color, not a new
-  // color — amber is already taken by `unstable`. A slow breathing pulse
-  // communicates "online + actively running a task" without colliding with
-  // the availability palette. `idle` / `queued` / non-online stay static.
-  //
-  // Gate the pulse on the SAME connectivity axis as the dot color (Iris): a
-  // disconnected agent must never appear to be "working". When health is known,
-  // pulse only on a healthy link (online / recovered); when the summary is
-  // absent (transitional / no record yet) fall back to the availability signal,
-  // consistent with the color fallback above.
+  // Pulse is a motion cue on Online while a task runs — not a third presence
+  // word. Gate on the live Online axis (unstable counts as online).
   const connectivityOk = healthSummary
-    ? healthSummary.state === "online" || healthSummary.state === "recovered"
-    : detail.availability === "online";
+    ? healthSummary.state !== "offline"
+    : live === "online";
   const isWorking = connectivityOk && detail.workload === "working";
-  const statusLabel = isWorking ? `${label} · Working` : label;
+  // aria/title: Online / Offline only — never "Working" / "Unstable" as a
+  // live status label (LRM-248).
+  const statusLabel = label;
 
   // §3-v2 ①: an OFFLINE agent's dot is a HOLLOW gray ring (ring-only, no fill)
   // so "unavailable" reads distinctly from the filled active states. On tiny

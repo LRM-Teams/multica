@@ -3,10 +3,11 @@ import type { TFunction } from "i18next";
 import type { AgentPresenceDetail } from "@multica/core/agents";
 import {
   formatPresenceStatus,
+  matchesLiveAvailabilityFilter,
   presenceStatusDotClass,
   presenceStatusToken,
   presenceStatusVisual,
-  workloadConfig,
+  toLiveAvailability,
   availabilityConfig,
 } from "./presence";
 
@@ -31,30 +32,38 @@ const LABELS = {
   },
 } as const;
 
-// Minimal stand-in for useT("agents").t — only the selector form is used.
 const t = ((selector: (res: typeof LABELS) => string) =>
   selector(LABELS)) as TFunction<"agents">;
 
-describe("formatPresenceStatus", () => {
+describe("toLiveAvailability", () => {
+  it("folds online + unstable → online, offline → offline, archived → null", () => {
+    expect(toLiveAvailability("online")).toBe("online");
+    expect(toLiveAvailability("unstable")).toBe("online");
+    expect(toLiveAvailability("offline")).toBe("offline");
+    expect(toLiveAvailability("archived")).toBeNull();
+  });
+});
+
+describe("formatPresenceStatus (LRM-248 Online/Offline only)", () => {
   it("returns null while loading", () => {
     expect(formatPresenceStatus("loading", t)).toBeNull();
     expect(formatPresenceStatus(null, t)).toBeNull();
     expect(formatPresenceStatus(undefined, t)).toBeNull();
   });
 
-  it("shows the workload word for active states, but Online for an idle plate", () => {
+  it("always shows Online while reachable — never Working / Idle / Queued", () => {
     expect(
       formatPresenceStatus(presence({ availability: "online", workload: "working" }), t),
-    ).toBe("Working");
-    // Online + idle (nothing on the plate) surfaces the availability word
-    // "Online", not the workload word "Idle" — a ready agent reads as
-    // available, not away/inactive (Frank/Miles 2026-07-15).
+    ).toBe("Online");
     expect(
       formatPresenceStatus(presence({ availability: "online", workload: "idle" }), t),
     ).toBe("Online");
+    expect(
+      formatPresenceStatus(presence({ availability: "online", workload: "queued" }), t),
+    ).toBe("Online");
   });
 
-  it("localizes availability when not online (never a workload word)", () => {
+  it("folds unstable → Online; offline → Offline; archived → null", () => {
     expect(
       formatPresenceStatus(
         presence({ availability: "offline", workload: "working" }),
@@ -66,18 +75,31 @@ describe("formatPresenceStatus", () => {
         presence({ availability: "unstable", workload: "idle" }),
         t,
       ),
-    ).toBe("Unstable");
+    ).toBe("Online");
+    expect(
+      formatPresenceStatus(
+        presence({ availability: "archived", workload: "idle" }),
+        t,
+      ),
+    ).toBeNull();
   });
 });
 
 describe("presenceStatusVisual", () => {
-  it("returns the config for the same token as formatPresenceStatus", () => {
+  it("returns online config for online and unstable", () => {
     const onlineWorking = presence({ availability: "online", workload: "working" });
     expect(presenceStatusToken(onlineWorking)).toEqual({
-      kind: "workload",
-      value: "working",
+      kind: "availability",
+      value: "online",
     });
-    expect(presenceStatusVisual(onlineWorking)).toBe(workloadConfig.working);
+    expect(presenceStatusVisual(onlineWorking)).toBe(availabilityConfig.online);
+
+    const unstable = presence({ availability: "unstable", workload: "idle" });
+    expect(presenceStatusToken(unstable)).toEqual({
+      kind: "availability",
+      value: "online",
+    });
+    expect(presenceStatusVisual(unstable)).toBe(availabilityConfig.online);
 
     const offline = presence({ availability: "offline", workload: "working" });
     expect(presenceStatusToken(offline)).toEqual({
@@ -89,29 +111,33 @@ describe("presenceStatusVisual", () => {
 });
 
 describe("presenceStatusDotClass", () => {
-  it("returns null while loading", () => {
+  it("returns null while loading or archived", () => {
     expect(presenceStatusDotClass("loading")).toBeNull();
     expect(presenceStatusDotClass(null)).toBeNull();
+    expect(
+      presenceStatusDotClass(presence({ availability: "archived" })),
+    ).toBeNull();
   });
 
-  it("maps every workload dot to neutral gray while online (Slack-style reduction)", () => {
-    // Working reads via the avatar pulse, queued via its glyph — no workload
-    // state carries a dot colour any more (#5).
+  it("maps online + unstable to green; offline to gray", () => {
     expect(
       presenceStatusDotClass(presence({ availability: "online", workload: "working" })),
-    ).toBe("bg-muted-foreground/40");
-    expect(
-      presenceStatusDotClass(presence({ availability: "online", workload: "queued" })),
-    ).toBe("bg-muted-foreground/40");
-    // Online + idle still resolves to the availability word "Online" → green dot
-    // (bg-success), the one surviving presence accent (Frank/Miles 2026-07-15).
-    expect(
-      presenceStatusDotClass(presence({ availability: "online", workload: "idle" })),
     ).toBe("bg-success");
+    expect(
+      presenceStatusDotClass(presence({ availability: "unstable", workload: "idle" })),
+    ).toBe("bg-success");
+    expect(
+      presenceStatusDotClass(presence({ availability: "offline", workload: "idle" })),
+    ).toBe(availabilityConfig.offline.dotClass);
   });
+});
 
-  it("reuses availabilityConfig.dotClass when offline", () => {
-    const offline = presence({ availability: "offline", workload: "idle" });
-    expect(presenceStatusDotClass(offline)).toBe(availabilityConfig.offline.dotClass);
+describe("matchesLiveAvailabilityFilter", () => {
+  it("counts unstable under Online", () => {
+    expect(matchesLiveAvailabilityFilter("unstable", "online")).toBe(true);
+    expect(matchesLiveAvailabilityFilter("online", "online")).toBe(true);
+    expect(matchesLiveAvailabilityFilter("offline", "online")).toBe(false);
+    expect(matchesLiveAvailabilityFilter("offline", "offline")).toBe(true);
+    expect(matchesLiveAvailabilityFilter("archived", "offline")).toBe(false);
   });
 });

@@ -530,14 +530,16 @@ func TestExecuteRadarMentionAgentRejectsManualAndEventSupervisorOutsideGroup(t *
 			}
 
 			var messageCount, inboxCount int
-			if err := testPool.QueryRow(ctx, `SELECT count(*) FROM channel_message WHERE channel_id = $1`, channelID).Scan(&messageCount); err != nil {
+			if err := testPool.QueryRow(ctx, `
+				SELECT count(*) FROM channel_message
+				WHERE channel_id = $1 AND membership_generation_id IS NULL`, channelID).Scan(&messageCount); err != nil {
 				t.Fatalf("count rejected messages: %v", err)
 			}
 			if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_inbox_event WHERE channel_id = $1`, channelID).Scan(&inboxCount); err != nil {
 				t.Fatalf("count rejected inbox events: %v", err)
 			}
 			if messageCount != 0 || inboxCount != 0 {
-				t.Fatalf("rejected %s artifacts = messages:%d inbox:%d, want 0/0", triggerKind, messageCount, inboxCount)
+				t.Fatalf("rejected %s action artifacts = messages:%d inbox:%d, want 0/0 (canonical membership row excluded)", triggerKind, messageCount, inboxCount)
 			}
 		})
 	}

@@ -19,10 +19,12 @@ import { ChannelMessageBubble } from "./channel-message-bubble";
 import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
 import { foldedIssueEventIds } from "./channel-system-event";
 import { useMessageDayDividers } from "../../i18n/use-message-time";
+import { useViewingTimezone } from "../../common/use-viewing-timezone";
 import { useT } from "../../i18n/use-t";
 import { useNewMessagesDivider } from "../hooks/use-new-messages-divider";
 import { useNewMessagesPill } from "../hooks/use-new-arrivals-pill";
 import { useUnreadAnchorScroll } from "../hooks/use-unread-anchor-scroll";
+import { buildMessageGroupCompactMap } from "./message-group-compact";
 
 // Small centered date pill (Iris #303 A) — the inline date divider at each local
 // day boundary.
@@ -240,12 +242,22 @@ function MessageViewport({
   const [scrollContainerEl, setScrollContainerEl] = useState<HTMLDivElement | null>(null);
   const channelId = messages[0]?.channel_id;
   const canLoadOlder = !!hasOlder && !loadingOlder && !!onLoadOlder;
+  const tz = useViewingTimezone();
   const dayDividers = useMessageDayDividers(messages);
   // Fold redundant consecutive issue-lifecycle rows (item #7): a same-source
   // completed/status→done pair, or an exact repeat, renders once. Derived as a
   // Set (never a filtered array) so Virtuoso's data/indices — and thus the
   // anchor/pagination math — stay identical; a folded row simply renders null.
   const foldedIssueIds = useMemo(() => foldedIssueEventIds(messages), [messages]);
+  const messageGroupCompact = useMemo(
+    () =>
+      buildMessageGroupCompactMap(messages, {
+        foldedIds: foldedIssueIds,
+        dateDividerIds: new Set(dayDividers.keys()),
+        tz,
+      }),
+    [messages, foldedIssueIds, dayDividers, tz],
+  );
   const newMessagesDivider = useNewMessagesDivider(
     channelId,
     messages,
@@ -409,6 +421,7 @@ function MessageViewport({
     const dividerLabel = dayDividers.get(msg.id);
     const isUnreadAnchor = newMessagesDivider?.anchorMessageId === msg.id;
     const collapseLongContent = lastReadSeq != null && msg.seq <= lastReadSeq;
+    const compact = messageGroupCompact.get(msg.id) ?? false;
     return (
       <Fragment key={msg.id}>
         {dividerLabel && <DateDivider label={dividerLabel} />}
@@ -425,8 +438,9 @@ function MessageViewport({
               messageRefMap.delete(msg.id);
             }
           }}
-          className="px-5 pt-1.5"
+          className={cn("px-5", compact ? "pt-px" : "pt-1.5")}
           data-testid="message-row"
+          data-message-group={compact ? "compact" : "lead"}
         >
           <ChannelMessageBubble
             message={msg}
@@ -444,6 +458,7 @@ function MessageViewport({
             searchHighlighted={searchHighlighted}
             searchQuery={searchHighlighted ? searchQuery : undefined}
             collapseLongContent={collapseLongContent}
+            compact={compact}
           />
         </div>
       </Fragment>

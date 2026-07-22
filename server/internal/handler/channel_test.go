@@ -160,8 +160,8 @@ func TestChannelMentionStoresThreadContextAndBridgesAgentReply(t *testing.T) {
 	if threadID != "debate-thread" || promptRoot.Valid || depth != 2 {
 		t.Fatalf("prompt thread/root/depth = %q/%+v/%d, want debate-thread/no-root/2", threadID, promptRoot, depth)
 	}
-	if strings.Contains(prompt, "Recent channel messages from this channel only (bounded window):") {
-		t.Fatalf("prompt should not repeat the trigger in recent channel context:\n%s", prompt)
+	if !strings.Contains(prompt, agentHandle+" joined this channel") {
+		t.Fatalf("prompt should retain the canonical membership context before the trigger:\n%s", prompt)
 	}
 	if count := strings.Count(prompt, triggerContent); count != 1 {
 		t.Fatalf("current trigger should appear exactly once, got %d:\n%s", count, prompt)
@@ -435,7 +435,8 @@ func TestChannelChatDoneSuppressedDaemonOutdatedDoesNotWriteSystemMessage(t *tes
 	var messageCount int
 	if err := testPool.QueryRow(ctx, `
 		SELECT count(*) FROM channel_message
-		WHERE channel_id = $1 AND author_type IN ('agent', 'system')
+		WHERE channel_id = $1
+		  AND (author_type = 'agent' OR (author_type = 'system' AND membership_generation_id IS NULL))
 	`, channelID).Scan(&messageCount); err != nil {
 		t.Fatalf("count visible output messages: %v", err)
 	}
@@ -483,7 +484,8 @@ func TestChannelChatDoneSuppressedTraceOnlyDoesNotWriteSystemMessage(t *testing.
 	var messageCount int
 	if err := testPool.QueryRow(ctx, `
 		SELECT count(*) FROM channel_message
-		WHERE channel_id = $1 AND author_type IN ('agent', 'system')
+		WHERE channel_id = $1
+		  AND (author_type = 'agent' OR (author_type = 'system' AND membership_generation_id IS NULL))
 	`, channelID).Scan(&messageCount); err != nil {
 		t.Fatalf("count visible output messages: %v", err)
 	}
@@ -2155,8 +2157,8 @@ func TestChannelAgentInboxDrainAckAmbientAdvancesSessionCursor(t *testing.T) {
 	if got.AgentID != agentID || got.Reason != "ambient" || got.RequiresWake || got.SeqTo != first.Seq {
 		t.Fatalf("drained ambient event = %+v, want ambient context for agent %s seq %d", got, agentID, first.Seq)
 	}
-	if len(got.Messages) != 1 || got.Messages[0].Content != "ordinary ambient one" {
-		t.Fatalf("ambient drain messages = %+v, want first ambient message only", got.Messages)
+	if len(got.Messages) != 2 || got.Messages[0].Type != "system" || got.Messages[1].Content != "ordinary ambient one" {
+		t.Fatalf("ambient drain messages = %+v, want membership row followed by first ambient message", got.Messages)
 	}
 
 	ackReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+got.ID+"/ack", AckAgentInboxEventRequest{
@@ -4624,11 +4626,14 @@ func TestChannelMessageEditDeleteOwnOnlyKeepsTombstoneNoWake(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
 		t.Fatalf("decode messages after delete: %v", err)
 	}
-	if len(page.Messages) != 1 {
-		t.Fatalf("messages after delete = %#v, want one tombstone", page.Messages)
+	var tombstone *ChannelMessageResponse
+	for i := range page.Messages {
+		if page.Messages[i].ID == msg.ID {
+			tombstone = &page.Messages[i]
+			break
+		}
 	}
-	tombstone := page.Messages[0]
-	if tombstone.ID != msg.ID || tombstone.Content != "" || len(tombstone.Parts) != 0 || tombstone.EditedAt == nil || tombstone.DeletedAt == nil {
+	if tombstone == nil || tombstone.Content != "" || len(tombstone.Parts) != 0 || tombstone.EditedAt == nil || tombstone.DeletedAt == nil {
 		t.Fatalf("tombstone message = %#v, want empty content/parts with edited_at and deleted_at", tombstone)
 	}
 	if len(tombstone.Reactions) != 0 {
@@ -4907,6 +4912,212 @@ func TestChannelArchivePlainMemberForbidden(t *testing.T) {
 	}
 	if archived {
 		t.Fatal("plain member archived the channel")
+	}
+}
+
+func TestChannelPermanentDeleteRemovesChannelAndMessages(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "perm-delete-"+uuid.NewString(), testUserID)
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "bye forever", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
+		t.Fatalf("seed message: %v", err)
+	}
+
+	req := newRequest(http.MethodDelete, "/api/channels/"+channelID, nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.DeleteChannel(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete channel: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var exists bool
+	if err := testPool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM channel WHERE id = $1)`, channelID).Scan(&exists); err != nil {
+		t.Fatalf("check channel exists: %v", err)
+	}
+	if exists {
+		t.Fatal("channel row still present after permanent delete")
+	}
+	var messageCount int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM channel_message WHERE channel_id = $1`, channelID).Scan(&messageCount); err != nil {
+		t.Fatalf("count messages: %v", err)
+	}
+	if messageCount != 0 {
+		t.Fatalf("messages remaining after delete: %d", messageCount)
+	}
+	if ch := listedChannelForTest(t, channelID); ch != nil {
+		t.Fatalf("deleted channel still listed: %+v", *ch)
+	}
+	if ch := archivedListedChannelForTest(t, channelID); ch != nil {
+		t.Fatalf("deleted channel still in archived list: %+v", *ch)
+	}
+
+	req = newRequest(http.MethodGet, "/api/channels/"+channelID+"/messages", nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec = httptest.NewRecorder()
+	testHandler.ListChannelMessages(rec, req)
+	if rec.Code != http.StatusNotFound && rec.Code != http.StatusForbidden {
+		t.Fatalf("enter deleted channel: status=%d body=%s, want 404/403", rec.Code, rec.Body.String())
+	}
+}
+
+func TestChannelPermanentDeleteWorksOnArchivedChannel(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	channelID := seedChannelForTest(t, "perm-delete-archived-"+uuid.NewString(), testUserID)
+	req := newRequest(http.MethodPost, "/api/channels/"+channelID+"/archive", nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.ArchiveChannel(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("archive channel: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = newRequest(http.MethodDelete, "/api/channels/"+channelID, nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec = httptest.NewRecorder()
+	testHandler.DeleteChannel(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete archived channel: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var exists bool
+	if err := testPool.QueryRow(context.Background(), `SELECT EXISTS(SELECT 1 FROM channel WHERE id = $1)`, channelID).Scan(&exists); err != nil {
+		t.Fatalf("check channel exists: %v", err)
+	}
+	if exists {
+		t.Fatal("archived channel still present after permanent delete")
+	}
+}
+
+func TestChannelPermanentDeletePlainMemberForbidden(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	memberID := createChannelPlainMember(t)
+	channelID := seedChannelForTest(t, "perm-delete-member-"+uuid.NewString(), testUserID, memberID)
+
+	req := newRequestAs(memberID, http.MethodDelete, "/api/channels/"+channelID, nil)
+	req = withChannelTestWorkspaceCtx(t, req, memberID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.DeleteChannel(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("plain member delete: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var exists bool
+	if err := testPool.QueryRow(context.Background(), `SELECT EXISTS(SELECT 1 FROM channel WHERE id = $1)`, channelID).Scan(&exists); err != nil {
+		t.Fatalf("check channel exists: %v", err)
+	}
+	if !exists {
+		t.Fatal("plain member permanently deleted the channel")
+	}
+}
+
+func TestChannelPermanentDeleteCreatorOnlyForbidden(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	// Channel creator who is only a workspace member may archive, but must not
+	// permanently delete (owner/admin only).
+	creatorID := createChannelPlainMember(t)
+	ctx := context.Background()
+	var channelID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO channel (workspace_id, name, created_by)
+		VALUES ($1, $2, $3)
+		RETURNING id`, testWorkspaceID, "perm-delete-creator-"+uuid.NewString(), creatorID).Scan(&channelID); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, channelID) })
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'user', $3)`, channelID, testWorkspaceID, creatorID); err != nil {
+		t.Fatalf("seed creator membership: %v", err)
+	}
+
+	req := newRequestAs(creatorID, http.MethodDelete, "/api/channels/"+channelID, nil)
+	req = withChannelTestWorkspaceCtx(t, req, creatorID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.DeleteChannel(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("creator-only delete: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var exists bool
+	if err := testPool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM channel WHERE id = $1)`, channelID).Scan(&exists); err != nil {
+		t.Fatalf("check channel exists: %v", err)
+	}
+	if !exists {
+		t.Fatal("creator-only permanently deleted the channel")
+	}
+}
+
+func TestChannelPermanentDeleteAdminAllowed(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	adminID := createChannelWorkspaceAdmin(t)
+	channelID := seedChannelForTest(t, "perm-delete-admin-"+uuid.NewString(), testUserID, adminID)
+
+	req := newRequestAs(adminID, http.MethodDelete, "/api/channels/"+channelID, nil)
+	req = withChannelTestWorkspaceCtx(t, req, adminID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.DeleteChannel(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("admin delete: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var exists bool
+	if err := testPool.QueryRow(context.Background(), `SELECT EXISTS(SELECT 1 FROM channel WHERE id = $1)`, channelID).Scan(&exists); err != nil {
+		t.Fatalf("check channel exists: %v", err)
+	}
+	if exists {
+		t.Fatal("admin delete left channel row")
+	}
+}
+
+func TestChannelPermanentDeleteRejectsDM(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	agentID := createHandlerTestAgent(t, "Perm Delete DM Bot", []byte("[]"))
+	channelID := seedAgentDMChannel(t, agentID)
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, channelID) })
+
+	req := newRequest(http.MethodDelete, "/api/channels/"+channelID, nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.DeleteChannel(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("delete DM: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if body["error"] != "direct messages cannot be permanently deleted" {
+		t.Fatalf("error = %q, want DM rejection message", body["error"])
+	}
+	var exists bool
+	if err := testPool.QueryRow(context.Background(), `SELECT EXISTS(SELECT 1 FROM channel WHERE id = $1)`, channelID).Scan(&exists); err != nil {
+		t.Fatalf("check channel exists: %v", err)
+	}
+	if !exists {
+		t.Fatal("DM channel was deleted")
 	}
 }
 
@@ -5279,7 +5490,14 @@ func TestChannelThreadReadModelExposesParticipantsAndPendingWake(t *testing.T) {
 	}
 	gotRoot := page.Messages[0]
 	timeline := listedMessagesForUser(t, channelID, testUserID)
-	if len(timeline) != 1 || len(timeline[0].ThreadParticipants) == 0 || len(timeline[0].ThreadWakeAnnotations) == 0 {
+	var timelineRoot *ChannelMessageResponse
+	for i := range timeline {
+		if timeline[i].ID == root.ID {
+			timelineRoot = &timeline[i]
+			break
+		}
+	}
+	if timelineRoot == nil || len(timelineRoot.ThreadParticipants) == 0 || len(timelineRoot.ThreadWakeAnnotations) == 0 {
 		t.Fatalf("main timeline root missing thread read-model fields: %+v", timeline)
 	}
 	if len(gotRoot.ThreadParticipants) != 2 {
@@ -7100,21 +7318,31 @@ func assertNoThreadRepliesForRoot(t *testing.T, channelID, rootID string) {
 
 func createChannelPlainMember(t *testing.T) string {
 	t.Helper()
+	return createChannelWorkspaceMemberWithRole(t, "member")
+}
+
+func createChannelWorkspaceAdmin(t *testing.T) string {
+	t.Helper()
+	return createChannelWorkspaceMemberWithRole(t, "admin")
+}
+
+func createChannelWorkspaceMemberWithRole(t *testing.T, role string) string {
+	t.Helper()
 	ctx := context.Background()
 	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")
-	name := "channel_plain_" + suffix
-	email := "channel-plain-" + suffix + "@multica.test"
+	name := "channel_" + role + "_" + suffix
+	email := "channel-" + role + "-" + suffix + "@multica.test"
 	var userID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO "user" (name, email)
 		VALUES ($1, $2)
 		RETURNING id`, name, email).Scan(&userID); err != nil {
-		t.Fatalf("create plain member user: %v", err)
+		t.Fatalf("create %s user: %v", role, err)
 	}
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO member (workspace_id, user_id, role)
-		VALUES ($1, $2, 'member')`, testWorkspaceID, userID); err != nil {
-		t.Fatalf("add plain member: %v", err)
+		VALUES ($1, $2, $3)`, testWorkspaceID, userID, role); err != nil {
+		t.Fatalf("add %s member: %v", role, err)
 	}
 	t.Cleanup(func() {
 		testPool.Exec(context.Background(), `DELETE FROM member WHERE workspace_id = $1 AND user_id = $2`, testWorkspaceID, userID)

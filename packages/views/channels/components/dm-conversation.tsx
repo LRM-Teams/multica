@@ -9,6 +9,7 @@ import {
   channelMessageThreadOptions,
   channelMessagesPageOptions,
   flattenChannelMessagePages,
+  enrichChannelMessagesPreservingAvatars,
   channelMessagesFirstItemIndex,
   useEnsureMessageLoaded,
   useMarkChannelThreadRead,
@@ -271,15 +272,11 @@ function DmHeader({
   const actorType = peerType === "agent" ? "agent" : "member";
   const memberType = peerType === "agent" ? "agent" : "user";
   const isAgentPeer = peerType === "agent";
-  // #371: agent peers show COARSE presence (Online / Working / Queued /
-  // Offline…) — "is the agent around", NOT the fine live action verb. The fine
-  // verb (Running command… / Reading…) lives on exactly one surface, the
-  // ConversationAgentActivityLine above the composer, so the header and that
-  // line don't echo the same word twice (Iris split-semantics 2026-07-17):
-  // header = presence granularity, composer line = live-action granularity.
-  // Tight after the name (Slack/IM style), never under it. Human peers keep the
-  // static "Human" meta under the name (no runtime presence). Memoized so the
-  // `status` prop is a stable element (react-doctor jsx-no-jsx-as-prop).
+  // LRM-248: agent peers show plain Online/Offline text (no second dot — the
+  // avatar badge is the round indicator). Activity verbs live on
+  // ConversationAgentActivityLine above the composer. Human peers keep the
+  // static "Human" meta under the name. Memoized so the `status` prop is a
+  // stable element (react-doctor jsx-no-jsx-as-prop).
   const agentStatus = useMemo(
     () =>
       isAgentPeer ? (
@@ -304,12 +301,9 @@ function DmHeader({
       // 28px matches the message-row avatar so the header avatar and every
       // message avatar share one size + left edge (see ConversationHeader).
       size={28}
-      // Presence lives in the header's status word (● Online / Idle …) for an
-      // agent peer, so the avatar's own presence dot would double-encode the
-      // same state on one line. Drop it here ("presence 冗余合并": show presence
-      // once per view — Frank/Iris/Miles 2026-07-15); the avatar dot stays on
-      // message rows / member lists, where there is no status word.
-      showStatusDot={false}
+      // LRM-248: avatar badge is the round live indicator; the name-row word
+      // is plain Online/Offline text (no second dot).
+      showStatusDot={isAgentPeer}
       profileLink={false}
     />
   );
@@ -520,7 +514,8 @@ function DmChannelConversation({
   const threadReplies = useMemo(
     () => {
       const messages = threadPage?.messages ?? [];
-      return threadRoot ? messages.filter((msg) => msg.id !== threadRoot.id) : messages;
+      const filtered = threadRoot ? messages.filter((msg) => msg.id !== threadRoot.id) : messages;
+      return enrichChannelMessagesPreservingAvatars(filtered);
     },
     [threadPage?.messages, threadRoot],
   );

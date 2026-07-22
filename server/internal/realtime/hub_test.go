@@ -224,6 +224,33 @@ func TestHub_MultipleBroadcasts(t *testing.T) {
 	}
 }
 
+func TestHub_SendToUserWithIDDedupesStableEvent(t *testing.T) {
+	hub, server := newTestHub(t)
+	defer server.Close()
+
+	conn := connectWS(t, server)
+	defer conn.Close()
+	time.Sleep(50 * time.Millisecond)
+
+	first := []byte(`{"type":"channel:message","payload":{"seq":1}}`)
+	duplicate := []byte(`{"type":"channel:message","payload":{"seq":1,"replayed":true}}`)
+	hub.SendToUserWithID(testUserID, first, "stable-system-message-id")
+	hub.SendToUserWithID(testUserID, duplicate, "stable-system-message-id")
+
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, received, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read first stable event: %v", err)
+	}
+	if string(received) != string(first) {
+		t.Fatalf("first stable event = %s, want %s", received, first)
+	}
+	conn.SetReadDeadline(time.Now().Add(150 * time.Millisecond))
+	if _, replay, err := conn.ReadMessage(); err == nil {
+		t.Fatalf("duplicate stable event was delivered: %s", replay)
+	}
+}
+
 // TestHandleWebSocket_ClientIdentityFromQuery verifies that client_platform,
 // client_version, and client_os query params on the WS upgrade URL are read
 // by the handler and surfaced to the access log. Browsers cannot set custom

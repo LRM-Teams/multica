@@ -5,21 +5,28 @@ import { cn } from "@multica/ui/lib/utils";
 import type { AgentLiveStatusView } from "../resolve-agent-live-status";
 
 /**
- * Canonical name-row live status chip: coloured dot + localized word.
+ * Canonical live / activity status chip.
  *
- * Used by the profile hover card, DM header, agent side panel, and live
- * peek so every surface paints the same mark from `AgentLiveStatusView`
- * (dot + text-xs label). Icons / pills live elsewhere.
+ * Profile / DM / side-panel headers (LRM-248): pass `showDot={false}` so the
+ * avatar badge is the only round indicator; the word is plain "Online" /
+ * "Offline" text. Activity composer strip keeps the small tone dot.
  */
 export function AgentLiveStatusMark({
   status,
   className,
   showSkeleton = false,
+  showDot = true,
 }: {
   status: AgentLiveStatusView | null;
   className?: string;
   /** When status is still resolving, render a width-stable skeleton. */
   showSkeleton?: boolean;
+  /**
+   * When false, render the label only (no second round indicator next to the
+   * word). Use on profile surfaces where the avatar already carries the live
+   * badge (LRM-248 — no duplicate indicators).
+   */
+  showDot?: boolean;
 }) {
   if (!status) {
     return showSkeleton ? (
@@ -36,10 +43,12 @@ export function AgentLiveStatusMark({
       )}
       data-testid="agent-live-status"
     >
-      <span
-        className={cn("size-1.5 shrink-0 rounded-full", status.dotClass)}
-        aria-hidden
-      />
+      {showDot ? (
+        <span
+          className={cn("size-1.5 shrink-0 rounded-full", status.dotClass)}
+          aria-hidden
+        />
+      ) : null}
       <span className="truncate">{status.label}</span>
     </span>
   );

@@ -6,6 +6,7 @@ import {
   deriveAgentPresenceDetail,
   deriveWorkload,
   deriveWorkloadDetail,
+  runtimeReachabilityFromAgent,
 } from "./derive-presence";
 
 function makeAgent(overrides: Partial<Agent> = {}): Agent {
@@ -484,5 +485,48 @@ describe("buildPresenceMap", () => {
       now: NOW,
     });
     expect(map.get("a")?.workload).toBe("idle");
+  });
+});
+
+describe("runtimeReachabilityFromAgent (LRM-248 AC5)", () => {
+  it("projects online/offline from agent fields when the runtime list hides private details", () => {
+    const agent = makeAgent({
+      runtime_status: "online",
+      runtime_last_seen_at: new Date(NOW - 10_000).toISOString(),
+    });
+    const stub = runtimeReachabilityFromAgent(agent);
+    expect(stub).toEqual({
+      status: "online",
+      last_seen_at: agent.runtime_last_seen_at,
+    });
+    expect(deriveAgentAvailability(stub, NOW)).toBe("online");
+  });
+
+  it("buildPresenceMap uses the agent stub when the runtime is absent from the visible list", () => {
+    const agent = makeAgent({
+      runtime_id: "private-rt",
+      runtime_status: "online",
+      runtime_last_seen_at: new Date(NOW - 10_000).toISOString(),
+    });
+    const map = buildPresenceMap({
+      agents: [agent],
+      runtimes: [], // filtered out by ListVisibleAgentRuntimes
+      snapshot: [],
+      now: NOW,
+    });
+    expect(map.get(agent.id)?.availability).toBe("online");
+  });
+
+  it("does not invent reachability when the agent carries no status projection", () => {
+    expect(runtimeReachabilityFromAgent(makeAgent())).toBeNull();
+    const map = buildPresenceMap({
+      agents: [makeAgent({ runtime_id: "missing" })],
+      runtimes: [],
+      snapshot: [makeTask({ status: "running" })],
+      now: NOW,
+    });
+    // Truly missing / unprojected runtime stays offline — workload may still be working.
+    expect(map.get("agent-1")?.availability).toBe("offline");
+    expect(map.get("agent-1")?.workload).toBe("working");
   });
 });

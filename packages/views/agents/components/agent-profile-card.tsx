@@ -110,21 +110,30 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
           actorId={agentId}
           size={40}
           avatarUrlHint={agent.avatar_url}
-          showStatusDot
+          showStatusDot={!isArchived}
           profileLink={false}
+          className={isArchived ? "opacity-50 grayscale" : undefined}
         />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
-            <ActorIdentityRow identity={agent} primaryClassName="truncate text-sm font-semibold" className="min-w-0 shrink" />
+            <ActorIdentityRow
+              identity={agent}
+              primaryClassName={`truncate text-sm font-semibold ${
+                isArchived ? "text-muted-foreground" : ""
+              }`}
+              className="min-w-0 shrink"
+            />
             {!isArchived && <VisibilityBadge value={agent.visibility} compact />}
-            {isArchived && (
-              <span className="rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                {t(($) => $.row.archived)}
-              </span>
-            )}
           </div>
-          {!isArchived && <AgentAvailabilityLine agentId={agent.id} />}
-
+          {/* LRM-248: live Online/Offline plain text (no second dot); archived
+              is muted secondary copy, not a third presence state. */}
+          {isArchived ? (
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {t(($) => $.row.archived)}
+            </p>
+          ) : (
+            <AgentAvailabilityLine agentId={agent.id} />
+          )}
         </div>
         {!isArchived && (
           <div className="mr-1 mt-0.5 flex shrink-0 items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100">

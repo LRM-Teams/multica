@@ -11,10 +11,9 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-// The welcome prompt must (1) name the joiner and channel, (2) route visible
-// output through the runtime-selected chat transport, and (3) forbid
-// @-mentions / follow-up — that last rule is what keeps a wall of welcomes
-// from chaining into the automatic agent-reply loop.
+// Ambient acknowledgement prompts route visible output through the
+// runtime-selected chat transport and must not revive the retired forced
+// all-agent welcome loop.
 func TestBuildChannelAmbientObservationPrompt(t *testing.T) {
 	agent := db.Agent{Name: "总监助理", DisplayName: "总监助理", Description: "负责总监以上协调"}
 	trigger := ChannelMessageResponse{ID: "11111111-1111-1111-1111-111111111111", AuthorName: "用户", Type: "user", Content: "全体总监以上欢迎一下新同事"}
@@ -330,43 +329,60 @@ func TestChannelContextMessagesExcludingTrigger(t *testing.T) {
 	}
 }
 
-func TestBuildChannelWelcomePrompt(t *testing.T) {
+func TestBuildChannelOnboardingPrompt(t *testing.T) {
 	const (
-		channelID = "5a7ba4e8-85a2-4a7a-8047-a38c41ef85ed"
-		memberID  = "cf7670af-d77f-469c-b395-36b390119bd7"
+		workspaceID = "33333333-3333-3333-3333-333333333333"
+		channelID   = "5a7ba4e8-85a2-4a7a-8047-a38c41ef85ed"
+		agentID     = "cf7670af-d77f-469c-b395-36b390119bd7"
 	)
-	p := buildChannelWelcomePrompt("产品讨论", "张三", channelID, memberID)
+	h := &Handler{DB: channelPromptNoopDB{}}
+	p := h.buildChannelOnboardingPrompt(context.Background(), channelOnboardingRecord{
+		ID:                     parseUUID("11111111-1111-1111-1111-111111111111"),
+		WorkspaceID:            parseUUID(workspaceID),
+		ChannelID:              parseUUID(channelID),
+		AgentID:                parseUUID(agentID),
+		MembershipGenerationID: parseUUID("22222222-2222-2222-2222-222222222222"),
+		SourceType:             "manual",
+		ChannelName:            "产品讨论",
+	}, ChannelResponse{
+		ID:          channelID,
+		WorkspaceID: workspaceID,
+		Name:        "产品讨论",
+		Kind:        "group",
+	}, db.Agent{
+		ID:          parseUUID(agentID),
+		Name:        "backend-agent",
+		DisplayName: "张三",
+		Description: "Backend engineer",
+	})
 
 	if !strings.Contains(p, "张三") {
-		t.Error("prompt should name the joining member")
+		t.Error("prompt should name the onboarded agent")
 	}
 	if !strings.Contains(p, "产品讨论") {
 		t.Error("prompt should name the channel")
 	}
-	if !strings.Contains(p, "runtime brief's chat output path") {
-		t.Error("prompt should instruct the agent to send a greeting sticker via the runtime brief")
+	if !strings.Contains(p, "channel_onboarding_skipped") {
+		t.Error("prompt should define the exact typed skip receipt")
 	}
-	if !strings.Contains(p, "Do NOT @-mention") {
-		t.Error("prompt must forbid @-mentions to avoid re-triggering the agent-reply loop")
+	if !strings.Contains(p, "exact target") {
+		t.Error("prompt must bind any visible send to the joined channel")
 	}
-	if !strings.Contains(strings.ToLower(p), "one short line") {
-		t.Error("prompt must constrain the welcome to one short line")
+	if !strings.Contains(p, "Send at most one concise message") {
+		t.Error("prompt must constrain onboarding to at most one visible message")
 	}
-	if !strings.Contains(p, "RELATIONSHIP.md") {
-		t.Error("prompt should instruct a silent RELATIONSHIP.md write for the joiner")
+	if !strings.Contains(p, "ordinary final/completion text") {
+		t.Error("prompt must reject final prose as visible onboarding output")
 	}
-	if !strings.Contains(p, memberID) {
-		t.Error("prompt must include the joiner member id for the RELATIONSHIP path")
+	if !strings.Contains(p, agentID) {
+		t.Error("prompt must include the onboarded agent id")
 	}
 	if !strings.Contains(p, channelID) {
-		t.Error("prompt must include the channel id for scoped channel context writes")
+		t.Error("prompt must include the exact channel id")
 	}
-	if !strings.Contains(p, "silently record") {
-		t.Error("prompt should keep the relationship write silent (no chat about remembering)")
-	}
-	for _, banned := range []string{"structured sticker", "stickers are unavailable", "sticker JSON", ":sticker:", "\"action\"", "\"parts\"", "\"sticker_id\""} {
+	for _, banned := range []string{"RELATIONSHIP.md", "greeting sticker", "must welcome", "Do not stay silent", "\"action\"", "\"parts\""} {
 		if strings.Contains(p, banned) {
-			t.Errorf("welcome prompt must not expose internal sticker transport detail %q:\n%s", banned, p)
+			t.Errorf("onboarding prompt must not preserve the old forced-welcome contract %q:\n%s", banned, p)
 		}
 	}
 }

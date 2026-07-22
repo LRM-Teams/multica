@@ -60,6 +60,36 @@ vi.mock("@multica/core/workspace/avatar-url", () => ({
   resolvePublicFileUrl: (url: string | null | undefined) => url ?? null,
 }));
 
+// Shared views ActorAvatar (LRM-224) pulls presence + workspace query hooks.
+vi.mock("@multica/core/agents", () => ({
+  useAgentPresenceDetail: () => "loading",
+  useAgentHealth: () => ({
+    summary: undefined,
+    events: undefined,
+    isLoading: false,
+    isError: false,
+  }),
+}));
+
+vi.mock("@multica/core/paths", () => ({
+  useCurrentWorkspace: () => ({ id: "ws-1", slug: "test" }),
+  useWorkspaceSlug: () => "test",
+  useRequiredWorkspaceSlug: () => "test",
+  useWorkspacePaths: () => ({
+    memberDetail: (id: string) => `/test/members/${id}`,
+    squadDetail: (id: string) => `/test/squads/${id}`,
+    agentDetail: (id: string) => `/test/agents/${id}`,
+  }),
+}));
+
+vi.mock("@multica/core/workspace/hooks", () => ({
+  useActorName: () => ({
+    getActorAvatarUrl: () => null,
+    getActorName: (_t: string, id: string) => id,
+    getActorInitials: () => "P",
+  }),
+}));
+
 function member(
   id: string,
   name: string,

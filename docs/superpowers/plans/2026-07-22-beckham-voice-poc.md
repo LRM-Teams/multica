@@ -57,7 +57,7 @@ Status: complete
 
 Evidence:
 
-- Added `POST /api/voice/tts`: one strict JSON object containing `text`, at most 32 KiB / 4,096 Unicode code points; returns 24 kHz MP3.
+- Added `POST /api/voice/tts`: one strict JSON object containing `text`, at most 32 KiB / 4,096 Unicode code points; returns self-describing 24 kHz mono PCM WAV. The endpoint originally returned MP3; the production voice-bubble fix switched to WAV after the provider MP3 was verified valid but the browser playback path produced noise.
 - Added `POST /api/voice/asr`: `audio/pcm`, signed 16-bit little-endian mono at 16 kHz, at most 2 MiB; an explicit MIME `rate` must equal 16000; returns the final transcript as JSON.
 - Both endpoints are behind the existing authentication chain, workspace membership, and `RequireHumanActor`, preventing task tokens, agent credentials, and cloud PATs from consuming the account's speech quota.
 - Provider credentials remain in backend environment variables. Unconfigured deployments return coded 503 responses; upstream failures return sanitized coded 502 responses with diagnostic provider code/log ID kept in server logs only.

@@ -37,6 +37,16 @@ describe("ApiClient", () => {
     await expect(client.synthesizeVoice("hello")).rejects.toMatchObject({ status: 502 });
   });
 
+  it("accepts the self-describing WAV returned by TTS", async () => {
+    const wav = new Uint8Array([0x52, 0x49, 0x46, 0x46]).buffer;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(wav, { status: 200, headers: { "Content-Type": "audio/wav" } }),
+    ));
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.synthesizeVoice("hello")).resolves.toEqual(wav);
+  });
+
   it("rejects a malformed ASR response instead of reporting no speech", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
       new Response("not-json", { status: 200, headers: { "Content-Type": "application/json" } }),

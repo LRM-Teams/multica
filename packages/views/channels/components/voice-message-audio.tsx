@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { LoaderCircle, Mic, Play, RotateCcw, Square, Volume2 } from "lucide-react";
+import { AudioLines, LoaderCircle, Mic, Play, RotateCcw, Square } from "lucide-react";
 import type { ChannelMessage } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
@@ -19,6 +19,9 @@ export function VoiceMessageAudio({ message }: { message: ChannelMessage }) {
   const voicePart = message.parts?.find((part) => part.type === "voice");
   const hasVoicePart = Boolean(voicePart);
   const [state, setState] = useState<PlaybackState>("idle");
+  const [durationSeconds, setDurationSeconds] = useState<number | null>(() =>
+    voicePart?.duration_ms ? Math.max(1, Math.round(voicePart.duration_ms / 1000)) : null,
+  );
   const playbackRef = useRef<VoicePlayback | null>(null);
   const mountedRef = useRef(true);
   const startRef = useRef<(() => Promise<void>) | null>(null);
@@ -33,6 +36,7 @@ export function VoiceMessageAudio({ message }: { message: ChannelMessage }) {
         return;
       }
       playbackRef.current = playback;
+      setDurationSeconds(Math.max(1, Math.round(playback.durationMs / 1000)));
       setState("playing");
       await playback.finished;
       playbackRef.current = null;
@@ -91,13 +95,14 @@ export function VoiceMessageAudio({ message }: { message: ChannelMessage }) {
     <button
       type="button"
       className={cn(
-        "mt-1.5 inline-flex min-h-8 items-center gap-1.5 rounded-full border border-primary/20 bg-primary/[0.06] px-3 text-xs font-medium text-primary transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+        "mt-1.5 inline-flex min-h-10 min-w-28 items-center justify-between gap-2 rounded-2xl rounded-bl-sm border border-primary/20 bg-primary/[0.08] px-3 py-2 text-xs font-medium text-primary shadow-sm transition-colors hover:bg-primary/[0.12] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
         state === "error" && "border-destructive/30 bg-destructive/5 text-destructive hover:bg-destructive/10",
       )}
       onClick={state === "playing" ? stop : () => void start()}
       disabled={state === "loading"}
       aria-label={label}
       data-testid="voice-reply-control"
+      data-voice-bubble="true"
     >
       {state === "loading" ? (
         <LoaderCircle className="size-3.5 animate-spin" />
@@ -108,8 +113,13 @@ export function VoiceMessageAudio({ message }: { message: ChannelMessage }) {
       ) : (
         <Play className="size-3.5 fill-current" />
       )}
-      {state === "playing" && <Volume2 className="size-3.5" />}
-      <span>{label}</span>
+      <AudioLines
+        className={cn("size-5", state === "playing" && "animate-pulse")}
+        aria-hidden="true"
+      />
+      <span className="min-w-5 text-right tabular-nums" aria-hidden="true">
+        {durationSeconds ? `${durationSeconds}″` : "…"}
+      </span>
     </button>
   );
 }

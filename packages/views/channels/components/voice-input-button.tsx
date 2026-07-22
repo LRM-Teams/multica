@@ -15,6 +15,14 @@ import {
 import { cancelVoicePlayback, prepareVoicePlayback } from "../lib/voice-playback";
 
 type RecordingState = "idle" | "starting" | "recording" | "transcribing";
+type VoiceCaptureUnavailableReason = "insecure-context" | "unsupported";
+
+type VoiceCaptureCapabilities = {
+  secureContext: boolean;
+  hasGetUserMedia: boolean;
+  hasMediaRecorder: boolean;
+  hasAudioContext: boolean;
+};
 
 export interface VoiceInputButtonProps {
   disabled?: boolean;
@@ -30,6 +38,21 @@ function preferredRecordingMimeType(): string | undefined {
     "audio/mp4;codecs=mp4a.40.2",
     "audio/ogg;codecs=opus",
   ].find((type) => MediaRecorder.isTypeSupported(type));
+}
+
+export function voiceCaptureUnavailableReason(
+  capabilities: VoiceCaptureCapabilities = {
+    secureContext: typeof window !== "undefined" && window.isSecureContext,
+    hasGetUserMedia: typeof navigator !== "undefined" && Boolean(navigator.mediaDevices?.getUserMedia),
+    hasMediaRecorder: typeof MediaRecorder !== "undefined",
+    hasAudioContext: typeof AudioContext !== "undefined",
+  },
+): VoiceCaptureUnavailableReason | null {
+  if (!capabilities.secureContext) return "insecure-context";
+  if (!capabilities.hasGetUserMedia || !capabilities.hasMediaRecorder || !capabilities.hasAudioContext) {
+    return "unsupported";
+  }
+  return null;
 }
 
 function stopStream(stream: MediaStream | null): void {
@@ -112,17 +135,16 @@ export function VoiceInputButton({
 
   const startCapture = useCallback(async () => {
     if (disabled || state !== "idle") return;
+    const unavailableReason = voiceCaptureUnavailableReason();
+    if (unavailableReason) {
+      toast.error(t(($) => unavailableReason === "insecure-context"
+        ? $.composer.voice_secure_context_required
+        : $.composer.voice_unavailable));
+      return;
+    }
     prepareVoicePlayback(playbackScope);
     setState("starting");
     try {
-      if (
-        typeof navigator === "undefined" ||
-        !navigator.mediaDevices?.getUserMedia ||
-        typeof MediaRecorder === "undefined" ||
-        typeof AudioContext === "undefined"
-      ) {
-        throw new Error("unsupported");
-      }
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });

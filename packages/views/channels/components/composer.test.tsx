@@ -54,7 +54,7 @@ describe("Composer", () => {
     expect(screen.getByRole("button", { name: /send/i })).toBeInTheDocument();
   });
 
-  it("renders the shared microphone control inside the composer action row", () => {
+  it("renders the shared microphone immediately beside Send", () => {
     render(
       <Composer
         surface="channel"
@@ -66,8 +66,12 @@ describe("Composer", () => {
     );
 
     const microphone = screen.getByRole("button", { name: "Record voice message" });
+    const send = screen.getByRole("button", { name: /send/i });
+    const submitActions = send.closest('[data-slot="composer-submit-actions"]');
     expect(microphone).toBeInTheDocument();
-    expect(microphone.closest('[data-slot="composer-action-row"]')).not.toBeNull();
+    expect(submitActions).not.toBeNull();
+    expect(submitActions).toContainElement(microphone);
+    expect(microphone.nextElementSibling).toBe(send);
   });
 
   it("tags each of the 4 surfaces so the same shell renders everywhere", () => {

@@ -3,10 +3,18 @@ import {
   cancelVoicePlayback,
   claimVoiceAutoplay,
   prepareVoicePlayback,
+  startVoicePlayback,
 } from "./voice-playback";
+
+const apiMocks = vi.hoisted(() => ({ synthesizeVoice: vi.fn() }));
+
+vi.mock("@multica/core/api", () => ({
+  api: { synthesizeVoice: apiMocks.synthesizeVoice },
+}));
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 describe("voice autoplay eligibility", () => {
@@ -74,5 +82,32 @@ describe("voice autoplay eligibility", () => {
       "channel:second",
       "2026-07-22T10:31:01.000Z",
     )).toBe(true);
+  });
+
+  it("reports the duration decoded from the self-describing audio response", async () => {
+    const source = {
+      buffer: null,
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+      onended: null,
+      start: vi.fn(),
+      stop: vi.fn(),
+    };
+    const decodeAudioData = vi.fn().mockResolvedValue({ duration: 2.04 });
+    class FakeAudioContext {
+      destination = {};
+      resume = vi.fn().mockResolvedValue(undefined);
+      decodeAudioData = decodeAudioData;
+      createBufferSource = vi.fn(() => source);
+    }
+    vi.stubGlobal("AudioContext", FakeAudioContext);
+    const encoded = new Uint8Array([0x52, 0x49, 0x46, 0x46]).buffer;
+    apiMocks.synthesizeVoice.mockResolvedValue(encoded);
+
+    const playback = await startVoicePlayback("Spoken answer");
+
+    expect(decodeAudioData).toHaveBeenCalledWith(encoded);
+    expect(source.start).toHaveBeenCalledOnce();
+    expect(playback.durationMs).toBe(2040);
   });
 });

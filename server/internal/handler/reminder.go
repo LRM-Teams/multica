@@ -489,19 +489,28 @@ func (h *Handler) AgentTransportUpdateReminder(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if strings.TrimSpace(req.Title) == "" && req.DelaySeconds == nil && strings.TrimSpace(req.FireAt) == "" && strings.TrimSpace(req.Cadence) == "" {
-		writeError(w, http.StatusBadRequest, "title or schedule update is required")
-		return
+	title := strings.TrimSpace(req.Title)
+	mutationCount := 0
+	if title != "" {
+		mutationCount++
 	}
-	if strings.TrimSpace(req.Cadence) != "" && (req.DelaySeconds != nil || strings.TrimSpace(req.FireAt) != "") {
-		writeError(w, http.StatusBadRequest, "cadence cannot be combined with delay_seconds or fire_at")
+	if req.DelaySeconds != nil {
+		mutationCount++
+	}
+	if strings.TrimSpace(req.FireAt) != "" {
+		mutationCount++
+	}
+	if strings.TrimSpace(req.Cadence) != "" {
+		mutationCount++
+	}
+	if mutationCount != 1 {
+		writeError(w, http.StatusBadRequest, "provide exactly one of title, delay_seconds, fire_at, or cadence")
 		return
 	}
 	id, ok := h.resolveReminderID(w, r.Context(), origin.workspaceID, task.AgentID, req.ID)
 	if !ok {
 		return
 	}
-	title := strings.TrimSpace(req.Title)
 	if len([]rune(title)) > 500 {
 		writeError(w, http.StatusBadRequest, "title must be at most 500 characters")
 		return

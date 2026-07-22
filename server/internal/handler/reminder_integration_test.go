@@ -1075,3 +1075,63 @@ func TestAgentReminderExplicitTimeUpdateConvertsRecurrenceToOneShotAndRetainsTim
 		t.Fatalf("converted one-shot status=%q err=%v, want fired", status, err)
 	}
 }
+
+func TestAgentReminderUpdateRejectsMultipleMutations(t *testing.T) {
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	message, err := testHandler.insertChannelMessage(context.Background(), parseUUID(channelID), parseUUID(testWorkspaceID),
+		"user", parseUUID(testUserID), "Tester", "single mutation anchor", "multica", nil,
+		pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduleReq := agentTransportRequest(t, http.MethodPost, "/api/agent/reminders/schedule", taskID, agentID, map[string]any{
+		"title": "single mutation", "delay_seconds": 300, "message_id": message.ID,
+	})
+	scheduleRec := httptest.NewRecorder()
+	testHandler.AgentTransportScheduleReminder(scheduleRec, scheduleReq)
+	if scheduleRec.Code != http.StatusCreated {
+		t.Fatalf("schedule status=%d body=%s", scheduleRec.Code, scheduleRec.Body.String())
+	}
+	var scheduled agentReminderResponse
+	if err := json.NewDecoder(scheduleRec.Body).Decode(&scheduled); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_reminder WHERE id = $1`, scheduled.ID)
+	})
+
+	for _, tc := range []struct {
+		name string
+		body map[string]any
+	}{
+		{name: "missing", body: map[string]any{"id": scheduled.ID}},
+		{name: "title and delay", body: map[string]any{"id": scheduled.ID, "title": "renamed", "delay_seconds": 300}},
+		{name: "title and fire at", body: map[string]any{"id": scheduled.ID, "title": "renamed", "fire_at": time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339)}},
+		{name: "title and cadence", body: map[string]any{"id": scheduled.ID, "title": "renamed", "cadence": "every:2h"}},
+		{name: "delay and fire at", body: map[string]any{"id": scheduled.ID, "delay_seconds": 300, "fire_at": time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339)}},
+		{name: "delay and cadence", body: map[string]any{"id": scheduled.ID, "delay_seconds": 300, "cadence": "every:2h"}},
+		{name: "fire at and cadence", body: map[string]any{"id": scheduled.ID, "fire_at": time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339), "cadence": "every:2h"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := agentTransportRequest(t, http.MethodPost, "/api/agent/reminders/update", taskID, agentID, tc.body)
+			rec := httptest.NewRecorder()
+			testHandler.AgentTransportUpdateReminder(rec, req)
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "provide exactly one") {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+
+	var title string
+	var lifecycleCount int
+	if err := testPool.QueryRow(context.Background(), `SELECT title FROM agent_reminder WHERE id = $1`, scheduled.ID).Scan(&title); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(context.Background(), `SELECT count(*) FROM agent_reminder_lifecycle_event WHERE reminder_id = $1`, scheduled.ID).Scan(&lifecycleCount); err != nil {
+		t.Fatal(err)
+	}
+	if title != "single mutation" || lifecycleCount != 1 {
+		t.Fatalf("rejected updates mutated reminder: title=%q lifecycle=%d", title, lifecycleCount)
+	}
+}

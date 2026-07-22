@@ -55,3 +55,49 @@ func TestReminderScheduleBodyRequiresExactlyOneSchedule(t *testing.T) {
 		t.Fatal("expected validation error when both schedule forms are present")
 	}
 }
+
+func TestReminderUpdateBodyRequiresExactlyOneMutation(t *testing.T) {
+	cmd := reminderUpdateCmd
+	set := func(title, delay, fireAt, cadence string) {
+		t.Helper()
+		if delay == "" {
+			delay = "0"
+		}
+		for name, value := range map[string]string{
+			"id": "abc12345", "title": title, "delay-seconds": delay,
+			"fire-at": fireAt, "cadence": cadence,
+		} {
+			if err := cmd.Flags().Set(name, value); err != nil {
+				t.Fatalf("set %s: %v", name, err)
+			}
+		}
+	}
+
+	set("new title", "0", "", "")
+	body, err := reminderUpdateBody(cmd)
+	if err != nil {
+		t.Fatalf("single title mutation: %v", err)
+	}
+	if body["title"] != "new title" || len(body) != 2 {
+		t.Fatalf("unexpected body: %#v", body)
+	}
+
+	for _, tc := range []struct {
+		name, title, delay, fireAt, cadence string
+	}{
+		{name: "missing"},
+		{name: "title and delay", title: "new title", delay: "300"},
+		{name: "title and fire at", title: "new title", fireAt: "2026-07-10T04:00:00Z"},
+		{name: "title and cadence", title: "new title", cadence: "every:2h"},
+		{name: "delay and fire at", delay: "300", fireAt: "2026-07-10T04:00:00Z"},
+		{name: "delay and cadence", delay: "300", cadence: "every:2h"},
+		{name: "fire at and cadence", fireAt: "2026-07-10T04:00:00Z", cadence: "every:2h"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			set(tc.title, tc.delay, tc.fireAt, tc.cadence)
+			if _, err := reminderUpdateBody(cmd); err == nil {
+				t.Fatal("expected exactly-one validation error")
+			}
+		})
+	}
+}

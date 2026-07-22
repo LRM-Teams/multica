@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -115,33 +116,40 @@ func runReminderSnooze(cmd *cobra.Command, _ []string) error {
 }
 
 func runReminderUpdate(cmd *cobra.Command, _ []string) error {
+	body, err := reminderUpdateBody(cmd)
+	if err != nil {
+		return err
+	}
+	return postReminder(cmd, "/api/agent/reminders/update", body)
+}
+
+func reminderUpdateBody(cmd *cobra.Command) (map[string]any, error) {
 	body := map[string]any{}
 	body["id"], _ = cmd.Flags().GetString("id")
-	if title, _ := cmd.Flags().GetString("title"); title != "" {
+	mutationCount := 0
+	if title, _ := cmd.Flags().GetString("title"); strings.TrimSpace(title) != "" {
 		body["title"] = title
+		mutationCount++
 	}
 	delay, _ := cmd.Flags().GetInt64("delay-seconds")
 	fireAt, _ := cmd.Flags().GetString("fire-at")
-	if delay > 0 && fireAt != "" {
-		return fmt.Errorf("use only one of --delay-seconds or --fire-at")
-	}
 	if delay > 0 {
 		body["delay_seconds"] = delay
+		mutationCount++
 	}
-	if fireAt != "" {
+	if strings.TrimSpace(fireAt) != "" {
 		body["fire_at"] = fireAt
+		mutationCount++
 	}
 	cadence, _ := cmd.Flags().GetString("cadence")
-	if cadence != "" {
+	if strings.TrimSpace(cadence) != "" {
 		body["cadence"] = cadence
+		mutationCount++
 	}
-	if cadence != "" && (delay > 0 || fireAt != "") {
-		return fmt.Errorf("--cadence cannot be combined with --delay-seconds or --fire-at")
+	if mutationCount != 1 {
+		return nil, fmt.Errorf("provide exactly one of --title, --delay-seconds, --fire-at, or --cadence")
 	}
-	if len(body) == 1 {
-		return fmt.Errorf("provide --title, --delay-seconds, --fire-at, or --cadence")
-	}
-	return postReminder(cmd, "/api/agent/reminders/update", body)
+	return body, nil
 }
 
 func runReminderCancel(cmd *cobra.Command, _ []string) error {

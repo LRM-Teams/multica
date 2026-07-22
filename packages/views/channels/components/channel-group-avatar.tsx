@@ -3,8 +3,7 @@
 import { Hash } from "lucide-react";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import type { ChannelMemberBrief } from "@multica/core/types";
-import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
-import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
+import { ActorAvatar } from "../../common/actor-avatar";
 
 /**
  * WeChat-style composite group avatar: up to 4 members' real, persisted
@@ -15,17 +14,11 @@ import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
  * member list changes (joins/leaves), since it derives purely from
  * `members`.
  *
- * Each tile renders that member's own persisted `avatar_url`; a missing or
- * failed-to-load image falls back to that member's initials (never a random
- * or synthesized avatar — see `ActorAvatar`'s own fallback). Only an empty
+ * Each tile uses the shared identity-first Avatar (LRM-224 Option B):
+ * actor id → directory/sticky/hint → 色圆字母 placeholder. Only an empty
  * channel (no members at all) falls back to the neutral `#` glyph.
  */
 const MAX_TILES = 4;
-
-function firstLetter(name: string): string {
-  const c = name.trim().charAt(0);
-  return c ? c.toUpperCase() : "?";
-}
 
 function memberLabel(member: ChannelMemberBrief): string {
   return resolveActorDisplayName(member, "?");
@@ -60,13 +53,16 @@ export function ChannelGroupAvatar({
     >
       {shown.map((m) => {
         const label = memberLabel(m);
+        const actorType = m.member_type === "agent" ? "agent" : "member";
         return (
           <ActorAvatar
             key={`${m.member_type}:${m.member_id}`}
-            name={label}
-            initials={firstLetter(label)}
-            avatarUrl={resolvePublicFileUrl(m.avatar_url)}
+            actorType={actorType}
+            actorId={m.member_id}
+            avatarUrlHint={m.avatar_url}
+            nameFallback={label}
             size={tile}
+            profileLink={false}
             className="rounded-none"
           />
         );

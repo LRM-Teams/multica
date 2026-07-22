@@ -13,7 +13,6 @@ import { Copy, MessageSquare, MoreHorizontal, Pencil, Quote, Trash2, SmilePlus }
 import { toast } from "sonner";
 import { ReactionBar } from "@multica/ui/components/common/reaction-bar";
 import { QuickEmojiPicker } from "@multica/ui/components/common/quick-emoji-picker";
-import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { cn } from "@multica/ui/lib/utils";
 import {
@@ -24,15 +23,12 @@ import {
 } from "@multica/ui/components/ui/context-menu";
 import { useActorName } from "@multica/core/workspace/hooks";
 import type { ChannelMessage } from "@multica/core/types";
+import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
-import { avatarGlyph } from "../../common/initials";
 import { InlineReferenceContent } from "../../common/inline-reference-content";
 import { useT } from "../../i18n/use-t";
 import { useMessageTime } from "../../i18n/use-message-time";
-import {
-  authorAvatarCacheKey,
-  resolveCachedAuthorAvatarUrl,
-} from "./author-avatar-cache";
+import { messageAuthorActor } from "./author-avatar-cache";
 import {
   mentionResolverFrom,
   projectReferencesToText,
@@ -305,7 +301,7 @@ export function ChannelMessageBubble({
   collapseLongContent?: boolean;
 }) {
   const { t } = useT("channels");
-  const { getActorName, getActorAvatarUrl } = useActorName();
+  const { getActorName } = useActorName();
   const resolveMentionPreview = mentionResolverFrom(getActorName);
   const messageTime = useMessageTime();
   const [editDraft, setEditDraft] = useState<string | null>(null);
@@ -389,18 +385,6 @@ export function ChannelMessageBubble({
     message.author_id === currentUserId;
   const isAgent = message.type === "agent";
   const isExternal = message.source === "lark";
-  // Avatar resolution (LRM-202 / LRM-218 / LRM-221): payload → sticky
-  // same-author cache → actor directory (same source as the profile card).
-  // WS upserts also preserve URLs in `withPreservedAuthorAvatar` so consecutive
-  // bubbles don't regress to glyph placeholders when a publish path omits
-  // `author_avatar_url` (Frank: realtime payloads need not include the face).
-  const directoryActorType =
-    message.type === "agent" ? "agent" : message.type === "user" ? "member" : null;
-  const directoryAvatarUrl =
-    directoryActorType && message.author_id
-      ? getActorAvatarUrl(directoryActorType, message.author_id)
-      : null;
-  const avatarUrl = resolveCachedAuthorAvatarUrl(message, directoryAvatarUrl);
   const displayName = resolveChannelAuthorDisplayName(message, {
     currentUserId,
     ownName,
@@ -414,29 +398,25 @@ export function ChannelMessageBubble({
         ? "user"
         : null;
   const profileActorId = profileActorType ? message.author_id : null;
-  // The 2px baseline nudge (`mt-0.5`) lives on the outer wrapper, not the
-  // avatar itself, so that when the avatar sits inside the fixed-size presence
-  // box the box hugs the avatar exactly (a margin on the inner avatar would
-  // overflow the box and lift the dot off the avatar's bottom edge).
-  const avatarSeed = authorAvatarCacheKey(message) ?? displayName;
-  const avatarNode = (
+  // LRM-224 Option B: identity-first Avatar (actor id). Message
+  // `author_avatar_url` is only an optional cache hint — missing ≠ clear.
+  // Presence dots stay OFF on history rows (#477); live status lives on
+  // directory surfaces (lists / mentions / profile).
+  const authorActor = messageAuthorActor(message);
+  const avatarNode = authorActor ? (
     <ActorAvatar
-      name={displayName}
-      initials={avatarGlyph(displayName)}
-      avatarUrl={avatarUrl}
-      isAgent={isAgent}
-      isSystem={false}
+      actorType={authorActor.actorType}
+      actorId={authorActor.actorId}
+      avatarUrlHint={message.author_avatar_url}
+      nameFallback={displayName}
       size={28}
-      toneSeed={avatarSeed}
+      profileLink={false}
       className="select-none"
     />
-  );
-  // Message rows carry NO live presence dot. A message is history, so pinning
-  // "online right now" onto a historical row is both the noisiest column in the
-  // view (Frank's screenshot) and semantically wrong (#477 principle: "presence
-  // 每视图只一次、且不进消息历史" — Parker/Iris). Live presence lives on directory
-  // surfaces (sidebar / member list) and the header status word, not the stream.
-  const avatar = <span className="mt-0.5 inline-flex shrink-0">{avatarNode}</span>;
+  ) : null;
+  const avatar = avatarNode ? (
+    <span className="mt-0.5 inline-flex shrink-0">{avatarNode}</span>
+  ) : null;
   const nameLabel = (
     <span className="truncate font-bold text-ink">{displayName}</span>
   );

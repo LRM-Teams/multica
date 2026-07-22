@@ -1,11 +1,67 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import { act, render } from "@testing-library/react";
 import type { ChannelMemberBrief } from "@multica/core/types";
 import { ChannelGroupAvatar } from "./channel-group-avatar";
+import { __resetActorAvatarOkCacheForTests } from "../../common/actor-avatar-url";
 
 vi.mock("@multica/core/api", () => ({
   api: { getBaseUrl: () => "" },
 }));
+
+vi.mock("@multica/core/workspace/avatar-url", () => ({
+  resolvePublicFileUrl: (url: string | null | undefined) => url ?? null,
+}));
+
+vi.mock("@multica/core/workspace/hooks", () => ({
+  useActorName: () => ({
+    getActorAvatarUrl: () => null,
+    getActorName: (_type: string, _id: string, fallback?: string) => fallback ?? "Unknown",
+  }),
+}));
+
+// Identity-first Avatar chrome is out of scope for mosaic layout tests —
+// resolve URLs via the shared helper + UI base shell.
+vi.mock("../../common/actor-avatar", async () => {
+  const React = await import("react");
+  const { ActorAvatar: Base } = await import("@multica/ui/components/common/actor-avatar");
+  const { avatarGlyph } = await import("@multica/ui/lib/avatar-fallback");
+  const { resolveActorAvatarUrl } = await import("../../common/actor-avatar-url");
+  const { useActorName } = await import("@multica/core/workspace/hooks");
+  return {
+    ActorAvatar: ({
+      actorType,
+      actorId,
+      avatarUrlHint,
+      nameFallback,
+      size,
+      className,
+    }: {
+      actorType: string;
+      actorId: string;
+      avatarUrlHint?: string | null;
+      nameFallback?: string;
+      size?: number;
+      className?: string;
+    }) => {
+      const { getActorName, getActorAvatarUrl } = useActorName();
+      const name = getActorName(actorType, actorId, nameFallback);
+      const avatarUrl = resolveActorAvatarUrl({
+        actorType,
+        actorId,
+        directoryUrl: getActorAvatarUrl(actorType, actorId),
+        hintUrl: avatarUrlHint,
+      });
+      return React.createElement(Base, {
+        name,
+        initials: avatarGlyph(name),
+        avatarUrl,
+        size,
+        className,
+        toneSeed: `${actorType}:${actorId}`,
+      });
+    },
+  };
+});
 
 function member(overrides: Partial<ChannelMemberBrief> = {}): ChannelMemberBrief {
   return {
@@ -19,6 +75,10 @@ function member(overrides: Partial<ChannelMemberBrief> = {}): ChannelMemberBrief
 }
 
 describe("ChannelGroupAvatar", () => {
+  beforeEach(() => {
+    __resetActorAvatarOkCacheForTests();
+  });
+
   it("shows the neutral # glyph when there are no members", () => {
     const { container } = render(<ChannelGroupAvatar members={[]} size={40} />);
     expect(container.querySelector("svg")).toBeTruthy();
@@ -122,7 +182,7 @@ describe("ChannelGroupAvatar", () => {
     rerender(
       <ChannelGroupAvatar
         members={[
-          ...members,
+          member({ member_id: "u-1" }),
           member({ member_id: "u-2", avatar_url: "https://cdn.example.test/u-2.png" }),
         ]}
         size={40}
@@ -131,7 +191,7 @@ describe("ChannelGroupAvatar", () => {
     expect(container.querySelectorAll("img").length).toBe(2);
 
     rerender(<ChannelGroupAvatar members={[]} size={40} />);
-    expect(container.querySelectorAll("img").length).toBe(0);
     expect(container.querySelector("svg")).toBeTruthy();
+    expect(container.querySelectorAll("img").length).toBe(0);
   });
 });

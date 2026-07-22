@@ -1,8 +1,7 @@
 "use client";
 
 import type { ActorIdentityPresentation } from "@multica/core/identity";
-import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
-import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
+import { ActorAvatar } from "../../common/actor-avatar";
 import { Button } from "@multica/ui/components/ui/button";
 import { Checkbox } from "@multica/ui/components/ui/checkbox";
 import {
@@ -18,7 +17,6 @@ import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { cn } from "@multica/ui/lib/utils";
 import { Search, X } from "lucide-react";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
-import { avatarGlyph, avatarToneClass } from "../../common/initials";
 import { useT } from "../../i18n";
 
 export type InviteCandidate = {
@@ -108,12 +106,12 @@ export function ChannelAddPeopleDialog({
                 className="inline-flex h-7 items-center gap-1.5 rounded-full bg-brand-soft py-0 pl-1 pr-2 text-xs font-semibold text-brand"
               >
                 <ActorAvatar
-                  name={c.presentation.displayName}
-                  initials={avatarGlyph(c.presentation.displayName || "?")}
-                  avatarUrl={resolvePublicFileUrl(c.avatarUrl)}
-                  isAgent={c.type === "agent"}
+                  actorType={c.type === "agent" ? "agent" : "member"}
+                  actorId={c.id}
+                  avatarUrlHint={c.avatarUrl}
+                  nameFallback={c.presentation.displayName}
                   size={20}
-                  className={avatarToneClass(c.key)}
+                  profileLink={false}
                 />
                 <span className="max-w-[7rem] truncate">{c.presentation.displayName}</span>
                 <button
@@ -171,12 +169,13 @@ export function ChannelAddPeopleDialog({
                     onCheckedChange={() => onToggle(c.key)}
                   />
                   <ActorAvatar
-                    name={c.presentation.displayName}
-                    initials={avatarGlyph(c.presentation.displayName || "?")}
-                    avatarUrl={resolvePublicFileUrl(c.avatarUrl)}
-                    isAgent={c.type === "agent"}
+                    actorType={c.type === "agent" ? "agent" : "member"}
+                    actorId={c.id}
+                    avatarUrlHint={c.avatarUrl}
+                    nameFallback={c.presentation.displayName}
                     size={36}
-                    className={avatarToneClass(c.key)}
+                    showStatusDot={c.type === "agent"}
+                    profileLink={false}
                   />
                   <ActorIdentityRow
                     displayName={c.presentation.displayName}

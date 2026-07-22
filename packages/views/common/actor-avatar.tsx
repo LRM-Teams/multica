@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
+import { avatarGlyph } from "@multica/ui/lib/avatar-fallback";
 import {
   HoverCard,
   HoverCardTrigger,
@@ -23,6 +24,7 @@ import { SquadProfileCard } from "../squads/components/squad-profile-card";
 import { availabilityConfig } from "../agents/presence";
 import { useNavigation } from "../navigation";
 import { useOpenAgentPanel } from "./agent-panel-context";
+import { resolveActorAvatarUrl } from "./actor-avatar-url";
 
 /**
  * Selects which agent hover-card payload to render when `enableHoverCard` is
@@ -44,6 +46,17 @@ interface ActorAvatarProps {
   size?: number;
   className?: string;
   /**
+   * Optional payload URL (e.g. message.author_avatar_url). Identity-first
+   * (LRM-224 Option B): directory + sticky cache win; a hint only accelerates
+   * / refreshes the cache. Missing hint never clears a known face.
+   */
+  avatarUrlHint?: string | null;
+  /**
+   * Display-name fallback while the actor directory is still hydrating
+   * (e.g. message.author_name). Used for the glyph placeholder + img alt.
+   */
+  nameFallback?: string;
+  /**
    * Wrap the avatar in a hover-card preview on dwell. Use for "who is this?"
    * surfaces — comment authors, list rows, subscriber chips. Independent of
    * `showStatusDot`: a surface can have one, both, or neither.
@@ -55,6 +68,9 @@ interface ActorAvatarProps {
    * surfaces). Has no effect for non-agent actors. Independent of
    * `enableHoverCard` so picker rows can show the dot without nesting a
    * popover inside the dropdown.
+   *
+   * Do NOT enable on message-history bubbles (#477: presence is live, not
+   * historical). Prefer directory surfaces (lists, mentions, profile).
    */
   showStatusDot?: boolean;
   /**
@@ -80,22 +96,34 @@ export function ActorAvatar({
   actorId,
   size,
   className,
+  avatarUrlHint,
+  nameFallback,
   enableHoverCard,
   showStatusDot,
   hoverCardVariant = "profile",
   profileLink,
 }: ActorAvatarProps) {
-  const { getActorName, getActorInitials, getActorAvatarUrl } = useActorName();
-  const paths = useWorkspacePaths();
+  const { getActorName, getActorAvatarUrl } = useActorName();
+  // LRM-224 Option B: resolve by actor id. Directory → sticky → optional hint.
+  // Tone is seeded by identity so a rename does not recolor the disc (LRM-201).
+  const name =
+    getActorName(actorType, actorId, nameFallback) || nameFallback || "?";
+  const avatarUrl = resolveActorAvatarUrl({
+    actorType,
+    actorId,
+    directoryUrl: getActorAvatarUrl(actorType, actorId),
+    hintUrl: avatarUrlHint,
+  });
   const avatar = (
     <ActorAvatarBase
-      name={getActorName(actorType, actorId)}
-      initials={getActorInitials(actorType, actorId)}
-      avatarUrl={getActorAvatarUrl(actorType, actorId)}
+      name={name}
+      initials={avatarGlyph(name)}
+      avatarUrl={avatarUrl}
       isAgent={actorType === "agent"}
       isSystem={actorType === "system"}
       isSquad={actorType === "squad"}
       size={size}
+      toneSeed={`${actorType}:${actorId}`}
       className={className}
     />
   );
@@ -115,15 +143,58 @@ export function ActorAvatar({
   const shouldLinkToProfile =
     profileLink ??
     (actorType === "member" || actorType === "agent" || actorType === "squad");
+
+  // Keep path/panel/hover chrome behind a child so message bubbles
+  // (`profileLink={false}`, no hover) never subscribe to workspace paths —
+  // those hooks are mocked incompletely in list/viewport unit tests.
+  const needsChrome = shouldLinkToProfile || !!enableHoverCard;
+  const content = needsChrome ? (
+    <ActorAvatarInteractiveChrome
+      actorType={actorType}
+      actorId={actorId}
+      enableHoverCard={enableHoverCard}
+      hoverCardVariant={hoverCardVariant}
+      shouldLinkToProfile={shouldLinkToProfile}
+    >
+      {dotted}
+    </ActorAvatarInteractiveChrome>
+  ) : (
+    dotted
+  );
+
+  return content;
+}
+
+/**
+ * Profile-link + hover-card chrome. Mounted only when a surface opts into
+ * navigation or dwell preview — keeps the identity face itself free of
+ * path/panel store subscriptions.
+ */
+function ActorAvatarInteractiveChrome({
+  actorType,
+  actorId,
+  enableHoverCard,
+  hoverCardVariant,
+  shouldLinkToProfile,
+  children,
+}: {
+  actorType: string;
+  actorId: string;
+  enableHoverCard?: boolean;
+  hoverCardVariant: AgentHoverCardVariant;
+  shouldLinkToProfile: boolean;
+  children: React.ReactNode;
+}) {
+  const paths = useWorkspacePaths();
   // Agents open the #349 side panel (inline in channels/DM via
   // AgentPanelProvider, a global overlay everywhere else via the fallback
   // store — see agent-panel-context.tsx / panel-store.ts) instead of routing
   // to the full agent detail page. Members/squads still route — no side
   // panel exists for those actor types yet.
-  const content = !shouldLinkToProfile
-    ? dotted
+  const linked = !shouldLinkToProfile
+    ? children
     : actorType === "agent"
-      ? <ActorAvatarPanelTrigger agentId={actorId}>{dotted}</ActorAvatarPanelTrigger>
+      ? <ActorAvatarPanelTrigger agentId={actorId}>{children}</ActorAvatarPanelTrigger>
       : (() => {
           const href =
             actorType === "member"
@@ -132,29 +203,29 @@ export function ActorAvatar({
                 ? paths.squadDetail(actorId)
                 : null;
           return href ? (
-            <ActorAvatarProfileLink href={href}>{dotted}</ActorAvatarProfileLink>
+            <ActorAvatarProfileLink href={href}>{children}</ActorAvatarProfileLink>
           ) : (
-            dotted
+            children
           );
         })();
 
   if (!enableHoverCard) {
-    return content;
+    return linked;
   }
   if (actorType === "agent") {
     return (
       <AgentAvatarHoverCard agentId={actorId} variant={hoverCardVariant}>
-        {content}
+        {linked}
       </AgentAvatarHoverCard>
     );
   }
   if (actorType === "member") {
-    return <MemberAvatarHoverCard userId={actorId}>{content}</MemberAvatarHoverCard>;
+    return <MemberAvatarHoverCard userId={actorId}>{linked}</MemberAvatarHoverCard>;
   }
   if (actorType === "squad") {
-    return <SquadAvatarHoverCard squadId={actorId}>{content}</SquadAvatarHoverCard>;
+    return <SquadAvatarHoverCard squadId={actorId}>{linked}</SquadAvatarHoverCard>;
   }
-  return content;
+  return linked;
 }
 
 function ActorAvatarProfileLink({

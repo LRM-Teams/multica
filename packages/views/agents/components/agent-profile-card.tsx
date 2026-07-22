@@ -120,6 +120,7 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
           avatarUrl={resolvePublicFileUrl(agent.avatar_url)}
           isAgent
           size={40}
+          toneSeed={`agent:${agent.id}`}
         />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">

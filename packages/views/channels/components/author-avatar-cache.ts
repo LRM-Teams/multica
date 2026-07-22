@@ -1,53 +1,60 @@
-import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import type { ChannelMessage } from "@multica/core/types";
+import {
+  actorAvatarCacheKey,
+  resolveActorAvatarUrl,
+  __resetActorAvatarOkCacheForTests,
+} from "../../common/actor-avatar-url";
 
 /**
- * LRM-202 / LRM-218 / LRM-221: remember the last good avatar URL per author so
- * a later message that omits `author_avatar_url` does not flash a text/glyph
- * placeholder while an earlier bubble from the same author (or the actor
- * directory / profile card) already has the real face.
+ * Message → identity helpers for chat bubbles (LRM-224 Option B).
  *
- * Kept outside the bubble component file so Fast Refresh can preserve
- * component state (react-doctor: only-export-components).
+ * Bubbles render the shared identity-first `ActorAvatar`; these helpers only
+ * map message fields onto that contract and keep the historical test reset
+ * entry point. Supersedes the LRM-221 payload→sticky→directory helper —
+ * directory/sticky live in `resolveActorAvatarUrl`, keyed by actor id.
  */
-const authorAvatarOkCache = new Map<string, string>();
 
-export function authorAvatarCacheKey(message: ChannelMessage): string | null {
+/** Map a channel message author onto the actor-directory key space. */
+export function messageAuthorActor(
+  message: ChannelMessage,
+): { actorType: "agent" | "member"; actorId: string } | null {
   if (!message.author_id) return null;
-  if (message.type !== "agent" && message.type !== "user") return null;
-  return `${message.type}:${message.author_id}`;
+  if (message.type === "agent") {
+    return { actorType: "agent", actorId: message.author_id };
+  }
+  if (message.type === "user") {
+    return { actorType: "member", actorId: message.author_id };
+  }
+  return null;
+}
+
+/** @deprecated Prefer `messageAuthorActor` + `actorAvatarCacheKey`. */
+export function authorAvatarCacheKey(message: ChannelMessage): string | null {
+  const author = messageAuthorActor(message);
+  if (!author) return null;
+  return actorAvatarCacheKey(author.actorType, author.actorId);
 }
 
 /**
- * Resolve the avatar URL for a chat bubble.
- *
- * Priority: message payload → sticky same-author cache → actor directory
- * (same source as the profile card). Directory is a last resort so bubbles
- * stay consistent with the profile card when WS/list payloads omit the URL
- * (LRM-218 regression: “整体头像又变文字”).
+ * Resolve a bubble avatar URL via the shared identity-first pipeline.
+ * Prefer rendering `<ActorAvatar actorType actorId avatarUrlHint />` instead
+ * of calling this from new UI — kept for tests and transitional call sites.
  */
 export function resolveCachedAuthorAvatarUrl(
   message: ChannelMessage,
   directoryUrl?: string | null,
 ): string | undefined {
-  const key = authorAvatarCacheKey(message);
-  const fromPayload = resolvePublicFileUrl(message.author_avatar_url) ?? undefined;
-  if (fromPayload) {
-    if (key) authorAvatarOkCache.set(key, fromPayload);
-    return fromPayload;
-  }
-  const sticky = key ? authorAvatarOkCache.get(key) : undefined;
-  if (sticky) return sticky;
-
-  const fromDirectory = resolvePublicFileUrl(directoryUrl) ?? undefined;
-  if (fromDirectory) {
-    if (key) authorAvatarOkCache.set(key, fromDirectory);
-    return fromDirectory;
-  }
-  return undefined;
+  const author = messageAuthorActor(message);
+  if (!author) return undefined;
+  return resolveActorAvatarUrl({
+    actorType: author.actorType,
+    actorId: author.actorId,
+    directoryUrl,
+    hintUrl: message.author_avatar_url,
+  });
 }
 
-/** Test-only helper to isolate sticky avatar-cache cases. */
+/** Test-only helper — clears the shared identity sticky cache. */
 export function __resetAuthorAvatarOkCacheForTests() {
-  authorAvatarOkCache.clear();
+  __resetActorAvatarOkCacheForTests();
 }

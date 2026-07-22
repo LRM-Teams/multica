@@ -86,6 +86,7 @@ export function MemberProfileCard({ userId }: MemberProfileCardProps) {
           initials={initials}
           avatarUrl={resolvePublicFileUrl(member.avatar_url)}
           size={40}
+          toneSeed={`member:${userId}`}
           className="rounded-full"
         />
         <div className="min-w-0 flex-1">

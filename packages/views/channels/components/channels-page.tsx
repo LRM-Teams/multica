@@ -92,7 +92,7 @@ import type {
   ChannelMessageSearchResult,
   ChannelTypingPayload,
 } from "@multica/core/types";
-import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
+import { ActorAvatar } from "../../common/actor-avatar";
 import { UnicodeSpinner } from "@multica/ui/components/common/unicode-spinner";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
@@ -159,7 +159,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@multica/ui/components
 import { MobileListDetailLayout } from "../../common/mobile-list-detail-layout";
 import { ContentEditor, type ContentEditorRef, type ContentEditorProps } from "../../editor/content-editor";
 import { useNavigation } from "../../navigation/context";
-import { avatarGlyph, avatarToneClass } from "../../common/initials";
 import { useT } from "../../i18n/use-t";
 import { useTimeAgo } from "../../i18n/use-time-ago";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
@@ -179,7 +178,6 @@ import {
 } from "./channel-details-panel";
 import { ChannelTasksBoard } from "./channel-tasks-board";
 import { ChannelGroupAvatar } from "./channel-group-avatar";
-import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { ThreadPanel } from "./thread-panel";
 import { ComposerAttachmentTray } from "./composer-attachment-tray";
 import { ComposerQuotePreview } from "./message-quote";
@@ -285,7 +283,6 @@ function MemberPresenceStack({
           m,
           m.member_type === "agent" ? "Agent" : "Member",
         );
-        const seed = `${m.member_type}:${m.member_id}:${name}`;
         return (
           <span
             key={`${m.member_type}:${m.member_id}`}
@@ -293,12 +290,12 @@ function MemberPresenceStack({
             className="inline-flex rounded-full ring-2 ring-background"
           >
             <ActorAvatar
-              name={name}
-              initials={avatarGlyph(name || "?")}
-              avatarUrl={resolvePublicFileUrl(m.avatar_url)}
-              isAgent={m.member_type === "agent"}
+              actorType={m.member_type === "agent" ? "agent" : "member"}
+              actorId={m.member_id}
+              avatarUrlHint={m.avatar_url}
+              nameFallback={name}
               size={size}
-              className={avatarToneClass(seed)}
+              profileLink={false}
             />
           </span>
         );

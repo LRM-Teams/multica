@@ -3857,16 +3857,7 @@ func TestSendChannelMessageClientMessageIDDedupesTopLevelWithSideEffects(t *test
 	if got := len(eventsSeen); got != 1 {
 		t.Fatalf("published channel message events = %d, want 1", got)
 	}
-	var wakeEvents int
-	if err := testPool.QueryRow(ctx, `
-		SELECT count(*)
-		FROM agent_inbox_event
-		WHERE channel_id = $1 AND agent_id = $2 AND requires_wake`, channelID, agentID).Scan(&wakeEvents); err != nil {
-		t.Fatalf("count dispatched inbox events: %v", err)
-	}
-	if wakeEvents != 1 {
-		t.Fatalf("agent dispatch inbox events = %d, want 1", wakeEvents)
-	}
+	waitForAgentWakeEvents(t, channelID, agentID, 1)
 }
 
 func TestSendChannelMessageClientMessageIDConflictOnChangedPayload(t *testing.T) {
@@ -3972,16 +3963,7 @@ func TestSendChannelMessageClientMessageIDDedupesDMDispatch(t *testing.T) {
 	if rows != 1 {
 		t.Fatalf("DM channel_message rows = %d, want 1", rows)
 	}
-	var wakeEvents int
-	if err := testPool.QueryRow(ctx, `
-		SELECT count(*)
-		FROM agent_inbox_event
-		WHERE channel_id = $1 AND agent_id = $2 AND requires_wake`, channelID, agentID).Scan(&wakeEvents); err != nil {
-		t.Fatalf("count DM dispatched inbox events: %v", err)
-	}
-	if wakeEvents != 1 {
-		t.Fatalf("DM agent dispatch inbox events = %d, want 1", wakeEvents)
-	}
+	waitForAgentWakeEvents(t, channelID, agentID, 1)
 }
 
 func TestSendChannelMessageThreadReplyClientMessageIDDedupes(t *testing.T) {
@@ -7197,6 +7179,29 @@ func sendChannelMessageForTest(t *testing.T, channelID, userID string, body map[
 	rec := httptest.NewRecorder()
 	testHandler.SendChannelMessage(rec, req)
 	return rec
+}
+
+// waitForAgentWakeEvents polls because post-ACK agent enqueue runs asynchronously (LRM-271).
+func waitForAgentWakeEvents(t *testing.T, channelID, agentID string, want int) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	var wakeEvents int
+	for {
+		err := testPool.QueryRow(context.Background(), `
+			SELECT count(*)
+			FROM agent_inbox_event
+			WHERE channel_id = $1 AND agent_id = $2 AND requires_wake`, channelID, agentID).Scan(&wakeEvents)
+		if err != nil {
+			t.Fatalf("count dispatched inbox events: %v", err)
+		}
+		if wakeEvents == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("agent dispatch inbox events = %d, want %d", wakeEvents, want)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func sendChannelThreadReplyForTest(t *testing.T, channelID, rootID, userID string, body map[string]any) *httptest.ResponseRecorder {

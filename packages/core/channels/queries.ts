@@ -216,7 +216,9 @@ export function upsertChannelMessageInCache(qc: QueryClient, message: ChannelMes
     const siblings = flattenChannelMessagePages(old);
     const matchIndex = findChannelMessageMatchIndex(siblings, message);
     const existing = matchIndex >= 0 ? siblings[matchIndex] : undefined;
-    const enriched = withPreservedAuthorAvatar(message, existing, siblings);
+    const enriched = canonicalizeChannelMessageForCache(
+      withPreservedAuthorAvatar(message, existing, siblings),
+    );
     const existingPageIndex = old.pages.findIndex((page: ChannelMessagesPage) =>
       page.messages.some((m: ChannelMessage) => matchesChannelMessage(m, enriched)),
     );
@@ -288,14 +290,29 @@ function upsertChannelMessage(old: ChannelMessage[] | undefined, message: Channe
   if (!shouldRenderChannelMessage(message)) {
     return old?.filter((existing) => !matchesChannelMessage(existing, message));
   }
-  if (!old) return [message];
+  if (!old) return [canonicalizeChannelMessageForCache(message)];
   const index = findChannelMessageMatchIndex(old, message);
   const existing = index >= 0 ? old[index] : undefined;
-  const enriched = withPreservedAuthorAvatar(message, existing, old);
+  const enriched = canonicalizeChannelMessageForCache(
+    withPreservedAuthorAvatar(message, existing, old),
+  );
   if (index >= 0) {
     return old.map((m, i) => (i === index ? enriched : m));
   }
   return [...old, enriched];
+}
+
+/**
+ * Temp optimistic rows use `id === client_message_id` and may carry
+ * `local_send_status`. Authoritative HTTP ACK / WS rows use a server id and
+ * must never keep a client-only pending/failed badge (LRM-271).
+ */
+function canonicalizeChannelMessageForCache(message: ChannelMessage): ChannelMessage {
+  const clientId = message.client_message_id;
+  if (clientId && message.id === clientId) return message;
+  if (message.local_send_status == null) return message;
+  const { local_send_status: _drop, ...rest } = message;
+  return rest;
 }
 
 export function channelMessageThreadOptions(

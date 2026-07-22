@@ -939,10 +939,12 @@ export class ApiClient {
   // #656 Agent Card Reminders tab: read-only, per the V2 product contract
   // (docs/superpowers/specs/2026-07-22-raft-reminder-parity.md). `status`
   // selects which section this page belongs to server-side — "scheduled"
-  // for Upcoming, "fired" for History (individual fire occurrences, cursor-
-  // paginated newest-first) — not a client-side filter of one bigger list.
-  // Placeholder endpoint/shape pending task #655; keep in lockstep with the
-  // real contract once it lands, not speculatively ahead of it.
+  // populates only `definitions` (Upcoming), "fired" populates only
+  // `occurrences` (History, cursor-paginated newest-first) — not a
+  // client-side filter of one bigger list. Matches task #655's committed
+  // `ListAgentReminders` read-page contract (product baseline
+  // `product/654-reminder-parity@4937f3841`) — locked independent of #870's
+  // open fire/migration-correctness review.
   async getAgentReminders(
     agentId: string,
     params: { status: "scheduled" | "fired"; cursor?: string; limit?: number },

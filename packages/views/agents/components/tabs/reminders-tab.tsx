@@ -17,6 +17,7 @@ import {
   type FiredReminderRow,
 } from "@multica/core/agents/reminder-view-model";
 import { useT } from "../../../i18n";
+import { useAgentRemindersRealtime } from "./use-agent-reminders-realtime";
 
 interface RemindersTabProps {
   agent: Agent;
@@ -39,6 +40,7 @@ interface RemindersTabProps {
 export function RemindersTab({ agent }: RemindersTabProps) {
   const { t } = useT("agents");
   const queryClient = useQueryClient();
+  useAgentRemindersRealtime(agent.id);
 
   const {
     data: upcomingData,
@@ -58,7 +60,7 @@ export function RemindersTab({ agent }: RemindersTabProps) {
 
   const upcomingRows = useMemo<UpcomingReminderRow[]>(
     () =>
-      (upcomingData?.reminders ?? [])
+      (upcomingData?.definitions ?? [])
         .map(adaptUpcomingRow)
         .filter((row): row is UpcomingReminderRow => row !== null),
     [upcomingData],
@@ -66,7 +68,7 @@ export function RemindersTab({ agent }: RemindersTabProps) {
   const historyRows = useMemo<FiredReminderRow[]>(
     () =>
       (historyData?.pages ?? []).reduce<FiredReminderRow[]>((rows, page) => {
-        for (const raw of page.reminders) {
+        for (const raw of page.occurrences) {
           const row = adaptFiredRow(raw);
           if (row) rows.push(row);
         }
@@ -221,26 +223,28 @@ function AnchorLink({ anchor }: { anchor: UpcomingReminderRow["anchor"] }) {
   if (!anchor.available) {
     return <span className="text-muted-foreground">{t(($) => $.reminders.anchor_unavailable)}</span>;
   }
+  // `href` is a server-computed, already-authorized internal path (never
+  // built from raw ids client-side) — `?message=` (kind: "channel") or
+  // `?thread=<root>&message=<reply>` (kind: "thread"). Channels' page-mount
+  // deep-link handling resolves either shape into the right surface
+  // (main-timeline highlight vs opening ThreadPanel + highlighting the
+  // reply inside it) — this link needs no special click handling itself.
   return (
-    <a
-      href={anchor.url}
-      className="truncate text-primary hover:underline"
-      title={anchor.label}
-    >
+    <a href={anchor.href} className="truncate text-primary hover:underline" title={anchor.label}>
       {anchor.label}
     </a>
   );
 }
 
-function TimezoneTag({ timezone, showTimezone }: { timezone: string; showTimezone: boolean }) {
+function TimezoneTag({ cadence }: { cadence: UpcomingReminderRow["cadence"] }) {
   const { t } = useT("agents");
-  // Only daily/weekly cadences resolve against a schedule-time-locked
-  // timezone in a way that's meaningfully different from "just a moment" —
-  // showing it for a one-shot fire-at instant would be noise, not honesty.
-  if (!showTimezone) return null;
+  // Only a calendar cadence (daily/weekly) resolves against a schedule-time-
+  // locked timezone in a way that's meaningfully different from "just a
+  // moment" — an interval cadence or a one-shot fire-at instant has none.
+  if (cadence.kind !== "recurring" || cadence.family !== "calendar" || !cadence.timezone) return null;
   return (
     <span className="text-[10px] text-muted-foreground" title={t(($) => $.reminders.timezone_label)}>
-      {timezone}
+      {cadence.timezone}
     </span>
   );
 }
@@ -260,10 +264,7 @@ function UpcomingRowView({ row }: { row: UpcomingReminderRow }) {
           {t(($) => $.reminders.next_fire_label)}: {formatInstant(row.nextFireAt)}
         </span>
         <CadenceLabel row={row} />
-        <TimezoneTag
-          timezone={row.timezone}
-          showTimezone={row.cadence.kind === "recurring" && row.cadence.family === "calendar"}
-        />
+        <TimezoneTag cadence={row.cadence} />
       </div>
       <div className="pl-5">
         <AnchorLink anchor={row.anchor} />
@@ -290,10 +291,7 @@ function FiredRowView({ row }: { row: FiredReminderRow }) {
             fired" — a recurring definition that's still `scheduled` must not
             read as if this past occurrence terminated it. */}
         <CadenceLabel row={row} />
-        <TimezoneTag
-          timezone={row.timezone}
-          showTimezone={row.cadence.kind === "recurring" && row.cadence.family === "calendar"}
-        />
+        <TimezoneTag cadence={row.cadence} />
       </div>
       <div className="pl-5">
         <AnchorLink anchor={row.anchor} />

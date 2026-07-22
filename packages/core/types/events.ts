@@ -32,6 +32,7 @@ export type WSEventType =
   | "task:failed"
   | "task:message"
   | "agent_activity:event"
+  | "agent_reminder:changed"
   | "task:cancelled"
   | "inbox:new"
   | "inbox:read"
@@ -320,6 +321,11 @@ export interface AgentActivityEventRealtimePayload {
   event?: AgentActivityTimelineEvent;
 }
 
+/** `agent_reminder:changed` — a pure invalidate signal (schedule/snooze/update/cancel/fire/terminalize, emitted post-commit). Minimal on purpose: no title/anchor/reminder data broadcast, just the scope to refetch. */
+export interface AgentReminderChangedPayload {
+  agent_id: string;
+}
+
 /**
  * REST response for `GET /api/agents/{id}/activity/events` — an intentional
  * pagination envelope (#474/#389), NOT a bare array. `next_cursor` is an
@@ -530,6 +536,7 @@ export interface WSEventPayloadMap {
   "task:failed": TaskFailedPayload;
   "task:message": TaskMessagePayload;
   "agent_activity:event": AgentActivityEventRealtimePayload;
+  "agent_reminder:changed": AgentReminderChangedPayload;
   "task:cancelled": TaskCancelledPayload;
   "task:progress": unknown;
   "inbox:new": InboxNewPayload;

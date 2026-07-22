@@ -4,7 +4,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import type { Agent } from "@multica/core/types";
-import type { RawReminderRow } from "@multica/core/agents/reminder-view-model";
+import type {
+  RawReminderDefinition,
+  RawReminderOccurrence,
+} from "@multica/core/agents/reminder-view-model";
 import { I18nProvider } from "@multica/core/i18n/react";
 import enCommon from "../../../locales/en/common.json";
 import enAgents from "../../../locales/en/agents.json";
@@ -20,6 +23,14 @@ vi.mock("@multica/core/api", async (importOriginal) => {
     api: { ...actual.api, getAgentReminders: (...args: unknown[]) => mockGetAgentReminders(...args) },
   };
 });
+
+// This tab doesn't exercise realtime behavior directly (that's covered by a
+// dedicated use-agent-reminders-realtime test) — a no-op stub just keeps the
+// hook from needing a real WS provider in the tree.
+vi.mock("@multica/core/realtime", () => ({
+  useWSEvent: () => {},
+  useWSReconnect: () => {},
+}));
 
 import { RemindersTab } from "./reminders-tab";
 import { ApiError } from "@multica/core/api";
@@ -48,41 +59,55 @@ const agent: Agent = {
   archived_by: null,
 } as Agent;
 
-function oneShotUpcoming(overrides: Partial<RawReminderRow> = {}): RawReminderRow {
+function oneShotUpcoming(overrides: Partial<RawReminderDefinition> = {}): RawReminderDefinition {
   return {
     id: "rem-1",
     title: "Ping the deploy thread",
     status: "scheduled",
-    definition_state: "scheduled",
-    recurrence: null,
-    timezone: "America/Los_Angeles",
+    schedule_kind: "one_shot",
     next_fire_at: "2026-07-23T09:00:00Z",
-    fired_at: null,
-    anchor_available: true,
-    anchor_label: "#deploys",
-    anchor_url: "https://multica.test/channels/deploys",
+    snooze_count: 0,
+    anchor: {
+      available: true,
+      kind: "channel",
+      display: "#deploys",
+      href: "/acme/channels/chan-1?message=msg-1",
+    },
     ...overrides,
   };
 }
 
-function recurringFired(overrides: Partial<RawReminderRow> = {}): RawReminderRow {
+function recurringFired(overrides: Partial<RawReminderOccurrence> = {}): RawReminderOccurrence {
   return {
-    id: "rem-2",
+    id: "occ-1",
+    reminder_id: "rem-2",
     title: "Daily standup follow-up",
     status: "fired",
     // The parent definition is STILL scheduled (it's recurring) even though
-    // this row describes a past fired occurrence — see the #652 note this
-    // adapter is built around.
-    definition_state: "scheduled",
-    recurrence: "daily@09:00",
-    timezone: "Asia/Shanghai",
-    next_fire_at: null,
+    // this row describes a past fired occurrence.
+    definition_status: "scheduled",
+    schedule_kind: "recurring",
+    cadence: "daily@09:00",
+    schedule_timezone: "Asia/Shanghai",
+    cadence_scheduled_for: "2026-07-21T01:00:00Z",
+    due_at: "2026-07-21T01:00:00Z",
     fired_at: "2026-07-21T01:00:00Z",
-    anchor_available: true,
-    anchor_label: "#standup",
-    anchor_url: "https://multica.test/channels/standup",
+    anchor: {
+      available: true,
+      kind: "channel",
+      display: "#standup",
+      href: "/acme/channels/chan-2?message=msg-2",
+    },
     ...overrides,
   };
+}
+
+function definitionsPage(definitions: RawReminderDefinition[]) {
+  return { definitions, occurrences: [], limit: 20, has_more: false };
+}
+
+function occurrencesPage(occurrences: RawReminderOccurrence[], overrides: { has_more?: boolean; next_cursor?: string } = {}) {
+  return { definitions: [], occurrences, limit: 20, has_more: false, ...overrides };
 }
 
 function renderTab() {
@@ -103,10 +128,8 @@ beforeEach(() => {
 describe("RemindersTab (#656)", () => {
   it("renders Upcoming and History as distinct sections from a single fixture set", async () => {
     mockGetAgentReminders.mockImplementation((_agentId: string, params: { status: string }) => {
-      if (params.status === "scheduled") {
-        return Promise.resolve({ reminders: [oneShotUpcoming()], next_cursor: null });
-      }
-      return Promise.resolve({ reminders: [recurringFired()], next_cursor: null });
+      if (params.status === "scheduled") return Promise.resolve(definitionsPage([oneShotUpcoming()]));
+      return Promise.resolve(occurrencesPage([recurringFired()]));
     });
 
     renderTab();
@@ -124,19 +147,19 @@ describe("RemindersTab (#656)", () => {
     // (History) — the real state this bug class targets.
     mockGetAgentReminders.mockImplementation((_agentId: string, params: { status: string }) => {
       if (params.status === "scheduled") {
-        return Promise.resolve({
-          reminders: [
+        return Promise.resolve(
+          definitionsPage([
             oneShotUpcoming({
               id: "rem-2",
               title: "Daily standup follow-up",
-              recurrence: "daily@09:00",
+              schedule_kind: "recurring",
+              cadence: "daily@09:00",
               next_fire_at: "2026-07-22T01:00:00Z",
             }),
-          ],
-          next_cursor: null,
-        });
+          ]),
+        );
       }
-      return Promise.resolve({ reminders: [recurringFired()], next_cursor: null });
+      return Promise.resolve(occurrencesPage([recurringFired()]));
     });
 
     renderTab();
@@ -153,12 +176,13 @@ describe("RemindersTab (#656)", () => {
   it("shows the locked schedule timezone for a recurring reminder, not the viewer's own zone", async () => {
     mockGetAgentReminders.mockImplementation((_agentId: string, params: { status: string }) => {
       if (params.status === "scheduled") {
-        return Promise.resolve({
-          reminders: [oneShotUpcoming({ recurrence: "daily@09:00", timezone: "Asia/Tokyo" })],
-          next_cursor: null,
-        });
+        return Promise.resolve(
+          definitionsPage([
+            oneShotUpcoming({ schedule_kind: "recurring", cadence: "daily@09:00", schedule_timezone: "Asia/Tokyo" }),
+          ]),
+        );
       }
-      return Promise.resolve({ reminders: [], next_cursor: null });
+      return Promise.resolve(occurrencesPage([]));
     });
 
     renderTab();
@@ -169,12 +193,9 @@ describe("RemindersTab (#656)", () => {
   it("does not show a timezone tag for a one-shot reminder (an instant, not a recurring calendar rule)", async () => {
     mockGetAgentReminders.mockImplementation((_agentId: string, params: { status: string }) => {
       if (params.status === "scheduled") {
-        return Promise.resolve({
-          reminders: [oneShotUpcoming({ recurrence: null, timezone: "Asia/Tokyo" })],
-          next_cursor: null,
-        });
+        return Promise.resolve(definitionsPage([oneShotUpcoming({ schedule_kind: "one_shot" })]));
       }
-      return Promise.resolve({ reminders: [], next_cursor: null });
+      return Promise.resolve(occurrencesPage([]));
     });
 
     renderTab();
@@ -184,18 +205,18 @@ describe("RemindersTab (#656)", () => {
   });
 
   it("does not show a timezone tag for an interval cadence (every:*), distinct from a calendar cadence (daily/weekly)", async () => {
-    // `every:*` is a zone-free elapsed interval, not a calendar rule — even
-    // though it IS recurring (unlike the one-shot case above), it must not
-    // show a timezone tag either. This is the cadence-FAMILY distinction,
-    // not a blanket recurring-vs-one-shot split.
+    // `every:*` is a zone-free elapsed interval, not a calendar rule — the
+    // server never populates `schedule_timezone` for it — even though it IS
+    // recurring (unlike the one-shot case above), it must not show a
+    // timezone tag either. This is the cadence-FAMILY distinction, not a
+    // blanket recurring-vs-one-shot split.
     mockGetAgentReminders.mockImplementation((_agentId: string, params: { status: string }) => {
       if (params.status === "scheduled") {
-        return Promise.resolve({
-          reminders: [oneShotUpcoming({ recurrence: "every:30m", timezone: "Asia/Tokyo" })],
-          next_cursor: null,
-        });
+        return Promise.resolve(
+          definitionsPage([oneShotUpcoming({ schedule_kind: "recurring", cadence: "every:30m" })]),
+        );
       }
-      return Promise.resolve({ reminders: [], next_cursor: null });
+      return Promise.resolve(occurrencesPage([]));
     });
 
     renderTab();
@@ -204,30 +225,41 @@ describe("RemindersTab (#656)", () => {
     expect(screen.queryByText("Asia/Tokyo")).toBeNull();
   });
 
+  it("accepts a transient 'firing' definition status as-is, without coercing it to fired", async () => {
+    mockGetAgentReminders.mockImplementation((_agentId: string, params: { status: string }) => {
+      if (params.status === "scheduled") return Promise.resolve(definitionsPage([]));
+      return Promise.resolve(
+        occurrencesPage([recurringFired({ definition_status: "firing" })]),
+      );
+    });
+
+    renderTab();
+
+    // Renders without throwing/falling back — the union includes "firing".
+    expect(await screen.findByText("Daily standup follow-up")).toBeInTheDocument();
+  });
+
   it("shows a safe anchor link when available, and an honest 'unavailable' marker (no leaked ids) when not", async () => {
     mockGetAgentReminders.mockImplementation((_agentId: string, params: { status: string }) => {
       if (params.status === "scheduled") {
-        return Promise.resolve({
-          reminders: [
+        return Promise.resolve(
+          definitionsPage([
             oneShotUpcoming({ id: "rem-a", title: "Has anchor" }),
             oneShotUpcoming({
               id: "rem-b",
               title: "No anchor",
-              anchor_available: false,
-              anchor_label: null,
-              anchor_url: null,
+              anchor: { available: false },
             }),
-          ],
-          next_cursor: null,
-        });
+          ]),
+        );
       }
-      return Promise.resolve({ reminders: [], next_cursor: null });
+      return Promise.resolve(occurrencesPage([]));
     });
 
     renderTab();
 
     const anchorLink = await screen.findByRole("link", { name: "#deploys" });
-    expect(anchorLink).toHaveAttribute("href", "https://multica.test/channels/deploys");
+    expect(anchorLink).toHaveAttribute("href", "/acme/channels/chan-1?message=msg-1");
     expect(screen.getByText("Anchor unavailable")).toBeInTheDocument();
     // Never dumps a raw id/url as a fallback label when unavailable.
     expect(screen.queryByText(/rem-b/)).toBeNull();
@@ -236,7 +268,7 @@ describe("RemindersTab (#656)", () => {
   it("distinguishes a genuine fetch error from a real empty result", async () => {
     mockGetAgentReminders.mockImplementation((_agentId: string, params: { status: string }) => {
       if (params.status === "scheduled") return Promise.reject(new Error("network down"));
-      return Promise.resolve({ reminders: [], next_cursor: null });
+      return Promise.resolve(occurrencesPage([]));
     });
 
     renderTab();
@@ -263,10 +295,8 @@ describe("RemindersTab (#656)", () => {
 
   it("exposes zero mutation affordances anywhere in the tab", async () => {
     mockGetAgentReminders.mockImplementation((_agentId: string, params: { status: string }) => {
-      if (params.status === "scheduled") {
-        return Promise.resolve({ reminders: [oneShotUpcoming()], next_cursor: null });
-      }
-      return Promise.resolve({ reminders: [recurringFired()], next_cursor: null });
+      if (params.status === "scheduled") return Promise.resolve(definitionsPage([oneShotUpcoming()]));
+      return Promise.resolve(occurrencesPage([recurringFired()]));
     });
 
     renderTab();
@@ -285,17 +315,15 @@ describe("RemindersTab (#656)", () => {
 
   it("paginates History via cursor with a Load more control, not an unbounded auto-fetch", async () => {
     mockGetAgentReminders.mockImplementation((_agentId: string, params: { status: string; cursor?: string }) => {
-      if (params.status === "scheduled") return Promise.resolve({ reminders: [], next_cursor: null });
+      if (params.status === "scheduled") return Promise.resolve(definitionsPage([]));
       if (!params.cursor) {
-        return Promise.resolve({
-          reminders: [recurringFired({ id: "rem-page1" })],
-          next_cursor: "cursor-2",
-        });
+        return Promise.resolve(
+          occurrencesPage([recurringFired({ id: "occ-page1" })], { has_more: true, next_cursor: "cursor-2" }),
+        );
       }
-      return Promise.resolve({
-        reminders: [recurringFired({ id: "rem-page2", title: "Older occurrence" })],
-        next_cursor: null,
-      });
+      return Promise.resolve(
+        occurrencesPage([recurringFired({ id: "occ-page2", title: "Older occurrence" })]),
+      );
     });
 
     renderTab();
@@ -314,7 +342,9 @@ describe("RemindersTab (#656)", () => {
   });
 
   it("shows exactly one aggregated 'No reminders yet' message when BOTH Upcoming and History are genuinely empty", async () => {
-    mockGetAgentReminders.mockResolvedValue({ reminders: [], next_cursor: null });
+    mockGetAgentReminders.mockImplementation((_agentId: string, params: { status: string }) =>
+      Promise.resolve(params.status === "scheduled" ? definitionsPage([]) : occurrencesPage([])),
+    );
 
     renderTab();
 
@@ -332,10 +362,8 @@ describe("RemindersTab (#656)", () => {
 
   it("shows only History's own specific empty copy when Upcoming has real content (not the aggregate message)", async () => {
     mockGetAgentReminders.mockImplementation((_agentId: string, params: { status: string }) => {
-      if (params.status === "scheduled") {
-        return Promise.resolve({ reminders: [oneShotUpcoming()], next_cursor: null });
-      }
-      return Promise.resolve({ reminders: [], next_cursor: null });
+      if (params.status === "scheduled") return Promise.resolve(definitionsPage([oneShotUpcoming()]));
+      return Promise.resolve(occurrencesPage([]));
     });
 
     renderTab();

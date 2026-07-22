@@ -77,8 +77,9 @@ export function agentActivityEventsOptions(agentId: string) {
 // (definitions ordered by next_fire_at — there's no unbounded history to
 // page through); History is cursor-paginated "fired" occurrences,
 // newest-first, same infinite-query shape as `agentActivityEventsOptions`
-// above. Both invalidate on schedule/fire/snooze/update/cancel per the spec
-// ("Live updates invalidate or update the tab") — WS wiring lands with #655.
+// above. Both invalidate on the `agent_reminder:changed` WS event (see
+// `use-agent-reminders-realtime.ts`) — the 30s staleTime below is just a
+// safety net, not the live-refresh mechanism.
 export const agentRemindersKeys = {
   all: (agentId: string) => ["agent-reminders", agentId] as const,
   upcoming: (agentId: string) => [...agentRemindersKeys.all(agentId), "scheduled"] as const,

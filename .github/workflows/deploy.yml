@@ -203,6 +203,9 @@ jobs:
         # verbatim inside postgres://user:PASSWORD@host, which is not URL-encoded.
         env:
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          # Optional s89 Environment secret. Empty keeps voice endpoints
+          # disabled; the value is passed directly to Compose and never echoed.
+          DOUBAO_SPEECH_API_KEY: ${{ secrets.DOUBAO_SPEECH_API_KEY }}
         run: |
           set -euo pipefail
           owner_lc="${GITHUB_REPOSITORY_OWNER,,}"

@@ -112,6 +112,10 @@ services:
       MULTICA_LARK_SECRET_KEY: ${MULTICA_LARK_SECRET_KEY:-}
       MULTICA_LARK_HTTP_BASE_URL: ${MULTICA_LARK_HTTP_BASE_URL:-}
       MULTICA_LARK_CALLBACK_BASE_URL: ${MULTICA_LARK_CALLBACK_BASE_URL:-}
+      # Doubao Speech ASR 2.0 + TTS 2.0. The API key is server-only and the
+      # endpoints stay disabled when it is empty.
+      DOUBAO_SPEECH_API_KEY: ${DOUBAO_SPEECH_API_KEY:-}
+      DOUBAO_TTS_SPEAKER_ID: ${DOUBAO_TTS_SPEAKER_ID:-zh_male_m191_uranus_bigtts}
       # Point multica's arealrl client (server/internal/arealrl/client.go) at
       # the multica-side gateway stub (db-bridge-stub-multica), which serves
       # /rl/* and /chat/completions and relays them through the shared Supabase

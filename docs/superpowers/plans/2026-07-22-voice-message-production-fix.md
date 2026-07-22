@@ -1,5 +1,7 @@
 # Voice message production fix
 
+Overall status: application changes are complete and published. Real-browser microphone capture remains blocked until the deployment has a trusted HTTPS entrypoint.
+
 ## Goal
 
 Fix the deployed voice-message experience without changing providers or hiding failures: place recording beside Send, make recording available through a browser-secure origin, render Agent voice replies as playable duration-bearing chat bubbles, and remove the reported noisy playback.
@@ -66,5 +68,5 @@ Status: complete
 Evidence:
 
 - Committed the scoped fix as `54d834ec9` on `fix/voice-message-production` and pushed it to `origin`.
-- Opened draft PR #896 against `dev`: `fix(channels): repair production voice messages`.
+- Opened PR #896 against `dev` and marked it ready for review: `fix(channels): repair production voice messages`.
 - The PR states that the application fixes are verified while browser recording remains conditional on a trusted HTTPS entrypoint; deployment will run only after the user merges the PR.

@@ -1,9 +1,29 @@
 import { api } from "../api";
 
+/**
+ * Cache-bust token for bundled agent preset faces (LRM-218).
+ *
+ * Browsers (esp. mobile Safari) can pin a prior 404 for `/agent-avatars/*`
+ * across deploys; payloads and static files are fine but `<img>` keeps failing
+ * into the glyph fallback. Bumping this forces a fresh fetch without waiting
+ * for cache expiry.
+ */
+export const AGENT_AVATAR_ASSET_VERSION = "lrm218";
+
+function withAgentAvatarCacheBust(path: string): string {
+  if (!path.startsWith("/agent-avatars/")) return path;
+  if (path.includes(`v=${AGENT_AVATAR_ASSET_VERSION}`)) return path;
+  const sep = path.includes("?") ? "&" : "?";
+  return `${path}${sep}v=${AGENT_AVATAR_ASSET_VERSION}`;
+}
+
 export function resolvePublicFileUrlWithBase(rawUrl: string | null | undefined, baseUrl: string): string | null {
   if (!rawUrl) return null;
   if (!rawUrl.startsWith("/")) return rawUrl;
-  if (rawUrl.startsWith("/agent-avatars/")) return rawUrl;
+  // Preset faces live on the web origin (`apps/web/public/agent-avatars`), not
+  // the API upload store. Keep them origin-relative and cache-bust so a
+  // poisoned 404 cannot stick after assets land.
+  if (rawUrl.startsWith("/agent-avatars/")) return withAgentAvatarCacheBust(rawUrl);
   const trimmedBaseUrl = baseUrl.replace(/\/+$/, "");
   return `${trimmedBaseUrl}${rawUrl}`;
 }

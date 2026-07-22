@@ -30,10 +30,16 @@ describe("resolvePublicFileUrlWithBase", () => {
     );
   });
 
-  it("keeps bundled agent avatars on the web origin", () => {
+  it("keeps bundled agent avatars on the web origin with a cache-bust token", () => {
     expect(resolvePublicFileUrlWithBase("/agent-avatars/human-11.jpg", "http://127.0.0.1:8080")).toBe(
-      "/agent-avatars/human-11.jpg",
+      "/agent-avatars/human-11.jpg?v=lrm218",
     );
+  });
+
+  it("does not double-append the agent-avatar cache-bust token", () => {
+    expect(
+      resolvePublicFileUrlWithBase("/agent-avatars/human-11.jpg?v=lrm218", "http://127.0.0.1:8080"),
+    ).toBe("/agent-avatars/human-11.jpg?v=lrm218");
   });
 
   it("returns null for empty values", () => {

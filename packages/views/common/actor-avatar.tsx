@@ -45,6 +45,12 @@ interface ActorAvatarProps {
   size?: number;
   className?: string;
   /**
+   * Optional display name from a row/message payload. Prefer this over the
+   * workspace directory when the actor is hidden from list endpoints (e.g.
+   * group-manager Beckham) so the glyph fallback still shows the real name.
+   */
+  name?: string;
+  /**
    * Optional face URL from a row/message payload (LRM-224). Only accelerates
    * the identity cache — null / undefined must not clear a known face.
    */
@@ -111,6 +117,7 @@ export function ActorAvatar({
   actorId,
   size,
   className,
+  name: nameOverride,
   avatarUrlHint,
   enableHoverCard,
   showStatusDot,
@@ -125,10 +132,16 @@ export function ActorAvatar({
     avatarUrlHint,
     directoryUrl: getActorAvatarUrl(actorType, actorId),
   });
+  const displayName = nameOverride?.trim() || getActorName(actorType, actorId);
+  const initials = nameOverride?.trim()
+    ? (/[a-z]/i.test(displayName.charAt(0))
+        ? displayName.charAt(0).toUpperCase()
+        : displayName.charAt(0))
+    : getActorInitials(actorType, actorId);
   const avatar = (
     <ActorAvatarBase
-      name={getActorName(actorType, actorId)}
-      initials={getActorInitials(actorType, actorId)}
+      name={displayName}
+      initials={initials}
       avatarUrl={avatarUrl}
       isAgent={actorType === "agent"}
       isSystem={actorType === "system"}

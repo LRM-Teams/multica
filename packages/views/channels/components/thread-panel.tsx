@@ -50,8 +50,6 @@ export interface ThreadPanelProps {
   /** Read-only surface (archived channel) → banner instead of composer. */
   readOnly?: boolean;
   readOnlyContent?: ReactNode;
-  /** Activity strip rendered between the reply list and the composer. */
-  activitySlot?: ReactNode;
 }
 
 /**
@@ -88,7 +86,6 @@ export function ThreadPanel({
   composerTray,
   readOnly = false,
   readOnlyContent,
-  activitySlot,
 }: ThreadPanelProps) {
   const { t } = useT("channels");
 
@@ -180,9 +177,7 @@ export function ThreadPanel({
       {readOnly ? (
         <ReadOnlyConversationBanner>{readOnlyContent}</ReadOnlyConversationBanner>
       ) : (
-        <>
-          {activitySlot}
-          <Composer
+        <Composer
             surface="thread"
             editor={editor}
             sendLabel={t(($) => $.composer.send)}
@@ -200,7 +195,6 @@ export function ThreadPanel({
             tray={composerTray}
             leadingActions={composerActions}
           />
-        </>
       )}
     </div>
   );

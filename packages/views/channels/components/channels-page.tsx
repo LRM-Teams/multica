@@ -22,14 +22,12 @@ import {
   Search,
   Settings,
   Smartphone,
-  Square,
   Users,
   X,
 } from "lucide-react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   activeChannelTasksKeys,
-  activeChannelTasksOptions,
   channelMessageThreadOptions,
   channelKeys,
   channelMessagesPageOptions,
@@ -85,7 +83,6 @@ import {
 } from "@multica/core/identity";
 import type {
   Channel,
-  ChannelActiveTask,
   ChannelMember,
   ChannelMemberBrief,
   ChannelMessage,
@@ -93,7 +90,6 @@ import type {
   ChannelTypingPayload,
 } from "@multica/core/types";
 import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
-import { UnicodeSpinner } from "@multica/ui/components/common/unicode-spinner";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
 import { Badge } from "@multica/ui/components/ui/badge";
@@ -210,17 +206,6 @@ import { ChannelMembersList, type MemberRoleLabel } from "./channel-members-list
 import { ChannelMembersDialog } from "./channel-members-dialog";
 import { ChannelAddPeopleDialog } from "./channel-add-people-dialog";
 
-export interface TypingActor {
-  key: string;
-  channelId: string;
-  actorName: string;
-  actorType: ChannelTypingPayload["actor_type"];
-  expiresAt: number;
-}
-
-const EMPTY_TYPING_ACTORS: TypingActor[] = [];
-const EMPTY_ACTIVE_TASKS: ChannelActiveTask[] = [];
-const STOPPING_ALL_TASKS_ID = "__all__";
 const identitySearchOptions = { extendedMatch: matchesPinyin };
 
 // #568 — below this, the two-pane desktop layout's conversation pane
@@ -410,186 +395,6 @@ function InitialChannelsShellSkeleton() {
   );
 }
 
-export function ConversationActivityStrip({
-  typingActors = EMPTY_TYPING_ACTORS,
-  tasks = EMPTY_ACTIVE_TASKS,
-  stoppingTaskId = null,
-  onStopTask,
-  onStopAllTasks,
-}: {
-  typingActors?: TypingActor[];
-  tasks?: ChannelActiveTask[];
-  stoppingTaskId?: string | null;
-  onStopTask?: (task: ChannelActiveTask) => void;
-  onStopAllTasks?: (tasks: ChannelActiveTask[]) => void;
-}) {
-  const { t } = useT("channels");
-  const [expanded, setExpanded] = useState(false);
-  const typingNames = useMemo(
-    () => typingActors.flatMap((a) => {
-      const name = a.actorName.trim();
-      return name ? [name] : [];
-    }),
-    [typingActors],
-  );
-  // The strip is the "in progress" control surface ONLY — who is running now +
-  // Stop. Terminal outcomes (#388 no_reply / failed) stay visible as Activity
-  // fact rows ("what happened"); the strip is not a history review surface. The
-  // Retry action is removed per product decision (Frank 2026-07-14) — not a
-  // pending follow-up: to have an agent try again you re-@ it, so a dedicated
-  // Retry button isn't needed; failure remains visible as an Activity fact.
-  // Terminal rows are excluded here — multiple agents used to stack the Stop
-  // buttons horizontally (`overflow-x-auto`, no wrap) and garble; now they
-  // collapse behind a single count + chevron.
-  const stoppableTasks = useMemo(() => {
-    const next: ChannelActiveTask[] = [];
-    for (const task of tasks) {
-      if (isTerminalChannelActiveTask(task)) continue;
-      next.push(task);
-    }
-    return next;
-  }, [tasks]);
-  const typingLabel =
-    typingNames.length === 0
-      ? null
-      : typingNames.length === 1
-        ? t(($) => $.typing.single, { name: typingNames[0]! })
-        : typingNames.length === 2
-          ? t(($) => $.typing.pair, { a: typingNames[0]!, b: typingNames[1]! })
-          : t(($) => $.typing.overflow, { a: typingNames[0]!, b: typingNames[1]!, count: typingNames.length });
-
-  if (!typingLabel && stoppableTasks.length === 0) return null;
-
-  return (
-    <div
-      className="flex min-h-6 flex-col gap-1 px-5 pb-2 text-xs text-muted-foreground"
-      aria-live="polite"
-      data-testid="conversation-activity-strip"
-    >
-      {typingLabel ? (
-        <span className="flex min-w-0 items-center gap-1 truncate">
-          <span className="truncate">{typingLabel}</span>
-          <TypingDots />
-        </span>
-      ) : null}
-      {stoppableTasks.length === 1 ? (
-        <div className="flex min-w-0 items-center justify-between gap-2">
-          <span className="flex min-w-0 items-center gap-1.5 truncate">
-            <UnicodeSpinner className="shrink-0 text-muted-foreground/60" />
-            <span className="truncate">
-              {t(($) => $.agent_status.processing_single, { name: stoppableTasks[0]!.agent_name })}
-            </span>
-          </span>
-          {onStopTask ? (
-            <StopTaskButton
-              task={stoppableTasks[0]!}
-              stoppingTaskId={stoppingTaskId}
-              onStopTask={onStopTask}
-              t={t}
-            />
-          ) : null}
-        </div>
-      ) : stoppableTasks.length > 1 ? (
-        <div className="flex flex-col gap-1">
-          {/* Multiple agents collapse to one running summary. Keep Stop all
-              outside the disclosure button so one click can cancel the whole group. */}
-          <div className="flex min-w-0 items-center justify-between gap-2">
-            <button
-              type="button"
-              onClick={() => setExpanded((value) => !value)}
-              aria-expanded={expanded}
-              className="flex min-w-0 flex-1 items-center justify-between gap-2 text-left hover:text-foreground"
-            >
-              <span className="flex min-w-0 items-center gap-1.5 truncate">
-                <UnicodeSpinner className="shrink-0 text-muted-foreground/60" />
-                <span className="truncate">
-                  {t(($) => $.agent_status.processing_count, { count: stoppableTasks.length })}
-                </span>
-              </span>
-              <ChevronDown
-                className={cn("size-3.5 shrink-0 transition-transform", expanded && "rotate-180")}
-                aria-hidden="true"
-              />
-            </button>
-            {onStopAllTasks ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="h-6 shrink-0 gap-1 px-2 text-[11px] text-muted-foreground hover:text-foreground"
-                disabled={stoppingTaskId === STOPPING_ALL_TASKS_ID}
-                onClick={() => onStopAllTasks(stoppableTasks)}
-                aria-label={t(($) => $.agent_status.stop_all_aria, { count: stoppableTasks.length })}
-              >
-                <Square className="size-2.5 fill-current" />
-                {t(($) => $.agent_status.stop_all)}
-              </Button>
-            ) : null}
-          </div>
-          {expanded ? (
-            <div className="flex flex-col gap-1 pl-5">
-              {stoppableTasks.map((task) => (
-                <div key={task.task_id} className="flex min-w-0 items-center justify-between gap-2">
-                  <span className="min-w-0 flex-1 truncate">{task.agent_name}</span>
-                  {onStopTask ? (
-                    <StopTaskButton
-                      task={task}
-                      stoppingTaskId={stoppingTaskId}
-                      onStopTask={onStopTask}
-                      t={t}
-                    />
-                  ) : null}
-                </div>
-              ))}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function StopTaskButton({
-  task,
-  stoppingTaskId,
-  onStopTask,
-  t,
-}: {
-  task: ChannelActiveTask;
-  stoppingTaskId: string | null;
-  onStopTask: (task: ChannelActiveTask) => void;
-  t: ReturnType<typeof useT<"channels">>["t"];
-}) {
-  return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="sm"
-      className="h-6 shrink-0 gap-1 px-2 text-[11px] text-muted-foreground hover:text-foreground"
-      disabled={stoppingTaskId === task.task_id || stoppingTaskId === STOPPING_ALL_TASKS_ID}
-      onClick={() => onStopTask(task)}
-      aria-label={t(($) => $.agent_status.stop_aria, { name: task.agent_name })}
-    >
-      <Square className="size-2.5 fill-current" />
-      {t(($) => $.agent_status.stop)}
-    </Button>
-  );
-}
-
-function isTerminalChannelActiveTask(task: ChannelActiveTask) {
-  return typeof task.outcome === "string";
-}
-
-function TypingDots() {
-  return (
-    <span className="flex shrink-0 items-end gap-0.5" aria-hidden="true">
-      <span className="size-1 animate-pulse rounded-full bg-muted-foreground/60 [animation-delay:-0.24s]" />
-      <span className="size-1 animate-pulse rounded-full bg-muted-foreground/60 [animation-delay:-0.12s]" />
-      <span className="size-1 animate-pulse rounded-full bg-muted-foreground/60" />
-    </span>
-  );
-}
-
 interface ChannelsPageProps {
   /** The selected channel or DM id, from the /channels/[id] route segment. */
   channelId?: string;
@@ -714,7 +519,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const composerDrafts = useComposerDraftStore((s) => s.drafts);
   const storeSetComposerDraft = useComposerDraftStore((s) => s.setDraft);
   const storeClearComposerDraft = useComposerDraftStore((s) => s.clearDraft);
-  const [typingActors, setTypingActors] = useState<Record<string, TypingActor>>({});
   const [newName, setNewName] = useState("");
   const [newLarkChatId, setNewLarkChatId] = useState("");
   // Inline "name required" hint for the create popover. Empty names used to
@@ -1005,8 +809,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   );
   const { data: channelMembers = [], isPending: membersPending } = useQuery(channelMembersOptions(active?.id ?? ""));
   const { data: channelProjectId = "" } = useQuery(channelProjectOptions(wsId, active?.id ?? ""));
-  const { data: activeTasks = [] } = useQuery(activeChannelTasksOptions(active?.id ?? ""));
-  const [stoppingChannelTaskId, setStoppingChannelTaskId] = useState<string | null>(null);
   const setChannelProject = useSetChannelProject(wsId, active?.id ?? "");
   const createChannel = useCreateChannel();
   const updateChannel = useUpdateChannel();
@@ -1192,17 +994,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       return out;
     },
     [channelMembers],
-  );
-  // Agents surface their lifecycle stage via the query-driven working indicator
-  // (which shows "Thinking"/"Starting up" rather than a premature "typing"), so
-  // filter agent actors out of the typing render to avoid showing them twice.
-  // Human/member typing keeps using the transient broadcast.
-  const activeTypingActors = useMemo(
-    () =>
-      Object.values(typingActors).filter(
-        (a) => a.channelId === active?.id && a.actorType !== "agent",
-      ),
-    [active?.id, typingActors],
   );
   const rosterSummary = useMemo(
     () => {
@@ -1472,17 +1263,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   );
 
   useEffect(() => {
-    const timer = window.setInterval(() => {
-      const now = Date.now();
-      setTypingActors((current) => {
-        const next = Object.fromEntries(Object.entries(current).filter(([, actor]) => actor.expiresAt > now));
-        return Object.keys(next).length === Object.keys(current).length ? current : next;
-      });
-    }, 1000);
-    return () => window.clearInterval(timer);
-  }, []);
-
-  useEffect(() => {
     typingStartedRef.current = false;
     if (typingStopTimerRef.current) window.clearTimeout(typingStopTimerRef.current);
     if (typingPulseTimerRef.current) window.clearTimeout(typingPulseTimerRef.current);
@@ -1561,26 +1341,10 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     if (!event.channel_id || event.channel_id !== active?.id) return;
     // A typing pulse from an agent often coincides with a task starting or
     // ending — refresh the authoritative lifecycle view promptly.
+    // LRM-228: composer-adjacent activity strip removed; typing is no longer
+    // rendered above the input, but the cache refresh still keeps Working /
+    // agent panels honest.
     qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(event.channel_id) });
-    const actorKey = `${event.actor_type}:${event.actor_id ?? event.actor_name}`;
-    if (event.actor_type === "user" && event.actor_id && event.actor_id === currentUserId) return;
-    setTypingActors((current) => {
-      if (!event.is_typing) {
-        const next = { ...current };
-        delete next[actorKey];
-        return next;
-      }
-      return {
-        ...current,
-        [actorKey]: {
-          key: actorKey,
-          channelId: event.channel_id,
-          actorName: event.actor_name,
-          actorType: event.actor_type,
-          expiresAt: Date.now() + (event.expires_in_ms ?? 5000),
-        },
-      };
-    });
   });
 
   const handleCreate = () => {
@@ -1690,40 +1454,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       onError: () => toast.error(t(($) => $.archive_dialog.restore_error)),
     });
   };
-
-  const handleStopChannelTask = useCallback(async (task: ChannelActiveTask) => {
-    if (!active?.id) return;
-    setStoppingChannelTaskId(task.task_id);
-    try {
-      await api.cancelTaskById(task.task_id);
-      toast.success(t(($) => $.agent_status.stop_success, { name: task.agent_name }));
-      qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(active.id) });
-      qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
-      qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
-    } catch {
-      toast.error(t(($) => $.agent_status.stop_failed));
-    } finally {
-      setStoppingChannelTaskId((current) => (current === task.task_id ? null : current));
-    }
-  }, [active?.id, qc, t, wsId]);
-
-  const handleStopAllChannelTasks = useCallback(async (tasks: ChannelActiveTask[]) => {
-    if (!active?.id || tasks.length === 0) return;
-    setStoppingChannelTaskId(STOPPING_ALL_TASKS_ID);
-    const results = await Promise.allSettled(tasks.map((task) => api.cancelTaskById(task.task_id)));
-    const stopped = results.filter((result) => result.status === "fulfilled").length;
-    if (stopped === tasks.length) {
-      toast.success(t(($) => $.agent_status.stop_all_success, { count: stopped }));
-    } else if (stopped > 0) {
-      toast.warning(t(($) => $.agent_status.stop_all_partial, { stopped, total: tasks.length }));
-    } else {
-      toast.error(t(($) => $.agent_status.stop_failed));
-    }
-    qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(active.id) });
-    qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
-    qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
-    setStoppingChannelTaskId(null);
-  }, [active?.id, qc, t, wsId]);
 
   const handleToggleChannelPin = (channel: Channel) => {
     setChannelPin.mutate(
@@ -2575,14 +2305,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
             <span>{t(($) => $.archive_dialog.readonly_notice)}</span>
           </>
         }
-        activitySlot={
-          <ConversationActivityStrip
-            tasks={activeTasks}
-            stoppingTaskId={stoppingChannelTaskId}
-            onStopTask={handleStopChannelTask}
-            onStopAllTasks={handleStopAllChannelTasks}
-          />
-        }
       />
     ) : null;
   const agentPanel =
@@ -2957,15 +2679,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                   )}
                 </ReadOnlyConversationBanner>
               ) : (
-                <>
-                  <ConversationActivityStrip
-                    typingActors={activeTypingActors}
-                    tasks={activeTasks}
-                    stoppingTaskId={stoppingChannelTaskId}
-                    onStopTask={handleStopChannelTask}
-                    onStopAllTasks={handleStopAllChannelTasks}
-                  />
-                  <Composer
+                <Composer
                     surface="channel"
                     sendLabel={t(($) => $.composer.send)}
                     sendDisabled={
@@ -3038,7 +2752,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                       </>
                     }
                   />
-                </>
               )}
                 </TabsContent>
               </Tabs>

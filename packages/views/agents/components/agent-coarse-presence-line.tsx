@@ -15,13 +15,10 @@ import { AgentLiveStatusMark } from "./agent-live-status-mark";
 /**
  * Coarse presence line for the DM header: the agent name row shows only "is
  * the agent around" — Online / Working / Queued / Offline / … — never the
- * FINE live action verb (Running command… / Reading… / Writing…).
+ * fine live action verb (Running command… / Reading… / Writing…).
  *
- * The fine verb lives on exactly ONE surface: the `ConversationAgentActivityLine`
- * above the composer. Splitting the granularity this way stops the header and
- * that line from echoing the same word twice (Iris split-semantics 2026-07-17):
- * header = presence ("is she around"), composer line = live action ("what is
- * she doing this second").
+ * LRM-228 removed the composer-adjacent fine-verb line; Working / presence
+ * stays in the header only (Iris split-semantics, updated).
  *
  * Reuses the shared #288 presence-token helpers (`formatPresenceStatus` /
  * `presenceStatusVisual` / `presenceStatusDotClass`) so the coarse word always

@@ -193,11 +193,7 @@ import {
 } from "./conversation-surface";
 import { DmConversationRow, DmList, useDmRowActions } from "./dm-list";
 import { DmConversation } from "./dm-conversation";
-import {
-  formatChannelMessagePreview,
-  resolveChannelAuthorDisplayName,
-  type MentionPreviewResolver,
-} from "./message-preview";
+import { type MentionPreviewResolver } from "./message-preview";
 import {
   ConversationUnreadAffordance,
   isConversationMuted,
@@ -2088,22 +2084,12 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
 
 
   // Shared channel row for the unified PINNED section and the CHANNELS list.
+  // LRM-263 / Frank A: Slack-style — `#` + name (+ unread), never an
+  // `author: summary` preview line. DM rows keep their preview (dm-list.tsx).
   const renderChannelSidebarRow = (channel: Channel) => {
     const realUnread = channel.real_unread_count ?? channel.unread_count ?? 0;
     const isManualDot = !!channel.manually_unread && realUnread === 0;
     const isMuted = isConversationMuted(channel);
-    const last = channel.last_message;
-    const preview = last
-      ? formatChannelMessagePreview(
-          resolveChannelAuthorDisplayName(last, {
-            members: workspaceMembers,
-            agents,
-          }),
-          last.content,
-          resolveMentionPreview,
-          last.parts,
-        )
-      : "";
     const pinned = !!channel.pinned_at;
     const archiveAllowed = canArchive(channel);
     const isSystemChannel = isImmutableSystemChannel(channel);
@@ -2160,6 +2146,8 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
           render={
             <div
               data-pinned={pinned ? "true" : undefined}
+              data-testid="channel-sidebar-row"
+              data-channel-id={channel.id}
               className={cn(
                 "group/row relative mb-0.5 rounded-lg transition-colors",
                 active?.id === channel.id ? "bg-primary/[0.08]" : "hover:bg-accent",
@@ -2195,14 +2183,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                     <Smartphone className="size-3 shrink-0 text-emerald-600" />
                   )}
                 </span>
-                {last && (
-                  <span className="shrink-0 text-[11px] text-muted-foreground">
-                    {timeAgo(last.created_at)}
-                  </span>
-                )}
-              </div>
-              <div className="mt-0.5 flex items-center justify-between gap-2">
-                <span className="truncate text-xs text-muted-foreground">{preview}</span>
                 <ConversationUnreadAffordance
                   realUnread={realUnread}
                   isManualDot={isManualDot}

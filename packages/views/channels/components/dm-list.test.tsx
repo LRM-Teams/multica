@@ -368,3 +368,37 @@ describe("DmList unread affordance (read-model)", () => {
     expect(dot).not.toBeNull();
   });
 });
+
+// LRM-263 facet split: DM rows keep last-message + peer avatar preview even
+// though channel sidebar rows drop theirs.
+describe("DmList last-message preview (LRM-263)", () => {
+  beforeEach(() => {
+    mockViewport.isMobile = false;
+    mockQueryData.dms = [];
+    mockQueryData.agents = [];
+    mockQueryData.members = [];
+    mockQueryData.squads = [];
+    openDMMocks.openDM.mockReset();
+  });
+
+  it("keeps author:summary preview and peer avatar on DM rows", () => {
+    mockQueryData.dms = [
+      makeDm({
+        id: "dm-preview",
+        peer: { type: "user", id: "peer-1", name: "Bob" },
+        last_message: {
+          type: "user",
+          author_name: "Bob",
+          content: "dm-preview-keeps-showing",
+          created_at: "2026-07-22T03:10:00Z",
+        },
+      }),
+    ];
+
+    renderDmList();
+
+    expect(screen.getByTestId("avatar-peer-1")).toBeInTheDocument();
+    expect(screen.getByText(/Bob:\s*dm-preview-keeps-showing/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Bob/i })).toBeInTheDocument();
+  });
+});

@@ -208,7 +208,12 @@ func (h *Handler) enqueueMemoryCurationRun(ctx context.Context, params enqueueMe
 	if len(params.AgentIDs) == 1 {
 		agentForRun = parseUUID(params.AgentIDs[0])
 	}
-	err = h.DB.QueryRow(ctx, `
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return "", "", err
+	}
+	defer tx.Rollback(ctx)
+	if err = tx.QueryRow(ctx, `
 		INSERT INTO memory_curation_run (
 		  workspace_id, agent_id, stage, trigger_kind, status, date_from, date_to,
 		  dry_run, force, requested_by, profile_id, owner_user_id, runtime_id,
@@ -219,8 +224,44 @@ func (h *Handler) enqueueMemoryCurationRun(ctx context.Context, params enqueueMe
 	`, params.WorkspaceID, agentForRun, dbStage, trigger, params.RunStatus, params.Since, params.Until,
 		params.DryRun, params.Force, params.MemberID, params.Profile.ID, params.Profile.UserID, params.Profile.RuntimeID,
 		params.Profile.CuratorAgentID, params.Profile.ModelOverride, params.Profile.Mode, params.Profile.ConfidenceThreshold,
-		params.Profile.ConfigVersion, params.AgentIDs).Scan(&runID)
-	return runID, params.RunStatus, err
+		params.Profile.ConfigVersion, params.AgentIDs).Scan(&runID); err != nil {
+		return "", "", err
+	}
+	if memoryCurationStageIncludesSelfReview(params.Stage) {
+		if err := insertMemoryCurationAgentRuns(ctx, tx, runID, params.WorkspaceID, params.Profile.RuntimeID, params.AgentIDs); err != nil {
+			return "", "", err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", "", err
+	}
+	return runID, params.RunStatus, nil
+}
+
+func memoryCurationStageIncludesSelfReview(stage memorycuration.Stage) bool {
+	return stage == memorycuration.StageAgentSelfReview || stage == memorycuration.StageAll
+}
+
+func insertMemoryCurationAgentRuns(ctx context.Context, exec dbExecutor, runID, workspaceID, runtimeID string, agentIDs []string) error {
+	for _, agentID := range agentIDs {
+		if _, err := exec.Exec(ctx, `
+			INSERT INTO memory_curation_agent_run (
+			  parent_run_id, workspace_id, agent_id, runtime_id, stage, status
+			)
+			SELECT $1::uuid, $2::uuid, a.id, COALESCE(a.runtime_id, NULLIF($4,'')::uuid), 'agent_self_review',
+			       CASE WHEN rt.status = 'online' THEN 'queued' ELSE 'waiting_runtime' END
+			  FROM agent a
+			  LEFT JOIN agent_runtime rt ON rt.id = COALESCE(a.runtime_id, NULLIF($4,'')::uuid)
+			 WHERE a.id = $3::uuid AND a.workspace_id = $2::uuid
+			ON CONFLICT (parent_run_id, agent_id, stage) DO UPDATE SET
+			  runtime_id = EXCLUDED.runtime_id,
+			  status = CASE WHEN memory_curation_agent_run.status IN ('queued','waiting_runtime') THEN EXCLUDED.status ELSE memory_curation_agent_run.status END,
+			  updated_at = now()
+		`, runID, workspaceID, agentID, runtimeID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type succeededCurationDays struct {

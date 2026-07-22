@@ -154,6 +154,8 @@
   "timelineSkipped": "건너뜀",
   "timelineStarted": "시작됨",
   "timelineUnknown": "처리 중",
+  "selfReviewChildRuns": "Self-review child runs",
+  "noSelfReviewChildRuns": "No self-review child runs were recorded for this parent run.",
   "perAgentResults": "Per-agent results",
   "noPerAgentDetails": "No per-agent details were reported by this daemon.",
   "artifacts": "Artifacts",

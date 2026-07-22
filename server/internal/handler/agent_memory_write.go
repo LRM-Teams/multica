@@ -8,8 +8,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/middleware"
-	"github.com/multica-ai/multica/server/pkg/protocol"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 const agentMemoryWriteDedupWindow = 5 * time.Minute
@@ -17,6 +17,8 @@ const agentMemoryWriteDedupWindow = 5 * time.Minute
 var allowedAgentMemoryScopeTypes = map[string]struct{}{
 	"agent_global": {},
 	"agent_state":  {},
+	"agent_daily":  {},
+	"agent_notes":  {},
 	"user":         {},
 	"channel":      {},
 	"project":      {},

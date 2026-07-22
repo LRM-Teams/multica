@@ -156,7 +156,7 @@ func TestEnvDispatchChannelStoreClaimProvisioningRetainsRuntimePolicy(t *testing
 	require.Equal(t, "default", in.Template)
 	require.True(t, in.DaemonEnabled)
 	require.Equal(t, "daemon-1", in.RuntimeEnv["MULTICA_DAEMON_ID"])
-	require.JSONEq(t, `{"base_url":"https://provider.invalid/v1","api_key":"synthetic-secret-for-tests","model":"model-a"}`, string(in.Runtime))
+	require.JSONEq(t, `{"provider":"openai","base_url":"https://provider.invalid/v1","api_key":"synthetic-secret-for-tests","model":"model-a"}`, string(in.Runtime))
 }
 
 // TestEnvDispatchAdapter_CreateChannelPersistsCanonicalPolicy verifies the

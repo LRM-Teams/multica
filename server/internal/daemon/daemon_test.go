@@ -1289,6 +1289,9 @@ func TestHandleTask_InboxUsageStartsExecutionBeforeProvider(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 		case "/api/daemon/agent-inbox/events/event-usage/complete":
 			w.WriteHeader(http.StatusOK)
+		case "/api/daemon/agent-memory-writes":
+			// Memory write telemetry is reported after a successful inbox task.
+			w.WriteHeader(http.StatusOK)
 		default:
 			t.Fatalf("unexpected inbox path: %s", r.URL.Path)
 		}

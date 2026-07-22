@@ -2641,6 +2641,10 @@ const ephemeralSandboxContextKey = "ephemeral_sandbox"
 type EphemeralSandboxMarker struct {
 	SandboxInstanceID string `json:"sandbox_instance_id"`
 	ActorUserID       string `json:"actor_user_id"`
+	// CleanupOnTerminal defaults to true when omitted for compatibility with
+	// existing ephemeral rollout tasks. Env-dispatch channels set it false so
+	// their sandbox remains available until the channel cleanup endpoint runs.
+	CleanupOnTerminal *bool `json:"cleanup_on_terminal,omitempty"`
 }
 
 // ExtractEphemeralSandbox reads the Phase 5 ephemeral_sandbox marker from a
@@ -2672,6 +2676,13 @@ func extractEphemeralSandbox(raw []byte) (*EphemeralSandboxMarker, bool) {
 // instance (stop+delete via sandboxd) and mark R' offline. Best-effort — errors
 // are logged but never fail the terminal flow.
 func (s *TaskService) maybeCleanupEphemeralSandbox(ctx context.Context, task db.AgentTaskQueue) {
+	marker, ok := extractEphemeralSandbox(task.Context)
+	if !ok {
+		return // not an ephemeral rollout
+	}
+	if marker.CleanupOnTerminal != nil && !*marker.CleanupOnTerminal {
+		return // lifecycle is owned by an explicit cleanup endpoint
+	}
 	if s.EphemeralSandboxManager != nil {
 		if err := s.EphemeralSandboxManager.Cleanup(ctx, task); err != nil {
 			slog.Warn("ephemeral sandbox cleanup failed",
@@ -2683,10 +2694,6 @@ func (s *TaskService) maybeCleanupEphemeralSandbox(ctx context.Context, task db.
 	}
 	if s.EphemeralSandboxCleaner == nil {
 		return
-	}
-	marker, ok := extractEphemeralSandbox(task.Context)
-	if !ok {
-		return // not an ephemeral rollout
 	}
 
 	// Guard: skip if another active task is still on R' (e.g. a retry child

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -12,6 +13,11 @@ import (
 	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
+
+// errAgentMessageHeld is returned after a successful HTTP freshness hold so the
+// process exits non-zero. Agents must treat held as "not delivered" and decide
+// --send-draft or revise in the same turn; the JSON body is still printed first.
+var errAgentMessageHeld = errors.New("message held by freshness check (not delivered); review heldMessages, then either `multica message send --send-draft --target <target>` or a revised normal send")
 
 func newMessageSendCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -216,10 +222,14 @@ func seenUpToSeqForMessageSend(cmd *cobra.Command, client *cli.APIClient) int64 
 }
 
 func agentMessageSendTextFallback(out map[string]any) string {
-	if strings.EqualFold(fmt.Sprint(out["state"]), "held") || strings.EqualFold(fmt.Sprint(out["outcome"]), "held") {
-		return "Message held by freshness check. Review heldMessages, then rerun with --send-draft to send the saved draft unchanged."
+	if agentTransportOutputIsHeld(out) {
+		return "Message held by freshness check (not delivered; CLI exits non-zero). Review heldMessages, then in this same turn either rerun with --send-draft to send the saved draft unchanged, or send revised content with a normal message send."
 	}
 	return "Message sent."
+}
+
+func agentTransportOutputIsHeld(out map[string]any) bool {
+	return strings.EqualFold(fmt.Sprint(out["state"]), "held") || strings.EqualFold(fmt.Sprint(out["outcome"]), "held")
 }
 
 // buildAgentSendParts assembles the structured chat message body for agent
@@ -331,15 +341,22 @@ func clientMessageIDFlag(cmd *cobra.Command) string {
 
 func printAgentTransportOutput(cmd *cobra.Command, out map[string]any, textFallback string) error {
 	output := strings.ToLower(strings.TrimSpace(flagString(cmd, "output")))
-	if output == "" || output == "json" {
-		return cli.PrintJSON(os.Stdout, out)
-	}
-	if output != "text" {
+	switch {
+	case output == "" || output == "json":
+		if err := cli.PrintJSON(os.Stdout, out); err != nil {
+			return err
+		}
+	case output == "text":
+		if textFallback != "" {
+			fmt.Fprintln(os.Stdout, textFallback)
+		} else if err := cli.PrintJSON(os.Stdout, out); err != nil {
+			return err
+		}
+	default:
 		return fmt.Errorf("unsupported output format %q; use json or text", output)
 	}
-	if textFallback != "" {
-		fmt.Fprintln(os.Stdout, textFallback)
-		return nil
+	if agentTransportOutputIsHeld(out) {
+		return errAgentMessageHeld
 	}
-	return cli.PrintJSON(os.Stdout, out)
+	return nil
 }

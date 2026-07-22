@@ -1632,7 +1632,7 @@ func writeAgentTransportHeldResponse(w http.ResponseWriter, target agentTranspor
 		Reason:              "newer_messages_available",
 		Decision:            "local_hold",
 		ProducerFactID:      decision.ProducerID,
-		AvailableActions:    []string{"send_draft"},
+		AvailableActions:    []string{"send_draft", "revise_message"},
 		HeldMessages:        decision.Messages,
 		NewMessageCount:     decision.TotalNewer,
 		ShownMessageCount:   int64(len(decision.Messages)),

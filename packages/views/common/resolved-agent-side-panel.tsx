@@ -48,19 +48,29 @@ export function ResolvedAgentSidePanel({
   const wsId = useWorkspaceId();
   const listAgent = agents.find((agent) => agent.id === agentId) ?? null;
 
-  const detailQuery = useQuery({
+  const {
+    data: detailAgent,
+    isPending: detailPending,
+    isError: detailIsError,
+    error: detailError,
+  } = useQuery({
     ...agentDetailOptions(wsId, agentId),
     enabled: !!agentId && !listAgent,
   });
 
-  const agent = listAgent ?? detailQuery.data ?? null;
+  const agent = listAgent ?? detailAgent ?? null;
   const detailForbidden =
     !listAgent &&
-    detailQuery.isError &&
-    detailQuery.error instanceof ApiError &&
-    detailQuery.error.status === 403;
+    detailIsError &&
+    detailError instanceof ApiError &&
+    detailError.status === 403;
 
-  const identityQuery = useQuery({
+  const {
+    data: identityProfile,
+    isPending: identityPending,
+    isError: identityIsError,
+    isFetched: identityFetched,
+  } = useQuery({
     ...memberProfileOptions(wsId, "agent", agentId),
     enabled: !!agentId && detailForbidden,
   });
@@ -71,11 +81,11 @@ export function ResolvedAgentSidePanel({
   }, [agentId]);
 
   useEffect(() => {
-    if (agent || detailQuery.isPending || identityQuery.isPending) return;
+    if (agent || detailPending || identityPending) return;
     if (detailForbidden) {
-      if (identityQuery.data) return;
-      if (!identityQuery.isError && !identityQuery.isFetched) return;
-    } else if (!detailQuery.isError) {
+      if (identityProfile) return;
+      if (!identityIsError && !identityFetched) return;
+    } else if (!detailIsError) {
       return;
     }
     if (toastedRef.current) return;
@@ -85,12 +95,12 @@ export function ResolvedAgentSidePanel({
   }, [
     agent,
     detailForbidden,
-    detailQuery.isError,
-    detailQuery.isPending,
-    identityQuery.data,
-    identityQuery.isError,
-    identityQuery.isFetched,
-    identityQuery.isPending,
+    detailIsError,
+    detailPending,
+    identityProfile,
+    identityIsError,
+    identityFetched,
+    identityPending,
     onClose,
     t,
   ]);
@@ -107,10 +117,7 @@ export function ResolvedAgentSidePanel({
     );
   }
 
-  if (
-    detailQuery.isPending ||
-    (detailForbidden && identityQuery.isPending)
-  ) {
+  if (detailPending || (detailForbidden && identityPending)) {
     return (
       <ConversationSidePanelShell
         variant={variant}
@@ -132,7 +139,7 @@ export function ResolvedAgentSidePanel({
     );
   }
 
-  if (detailForbidden && identityQuery.data) {
+  if (detailForbidden && identityProfile) {
     return (
       <ConversationSidePanelShell
         variant={variant}
@@ -140,7 +147,7 @@ export function ResolvedAgentSidePanel({
         closeAriaLabel={t(($) => $.profile_popover.close_aria)}
         leading={
           <p className="min-w-0 truncate text-sm font-semibold">
-            {identityQuery.data.display_name || identityQuery.data.name}
+            {identityProfile.display_name || identityProfile.name}
           </p>
         }
       >

@@ -51,17 +51,25 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
   const listAgent = agents.find((a) => a.id === agentId) ?? null;
   // Channel-only agents (group managers) are omitted from ListAgents
   // (LRM-233) but remain openable — resolve by id (LRM-288).
-  const detailQuery = useQuery({
+  const {
+    data: detailAgent,
+    isPending: detailPending,
+    isError: detailIsError,
+    error: detailError,
+  } = useQuery({
     ...agentDetailOptions(wsId, agentId),
     enabled: !!agentId && !listAgent && !agentsLoading,
   });
-  const agent = listAgent ?? detailQuery.data ?? null;
+  const agent = listAgent ?? detailAgent ?? null;
   const detailForbidden =
     !listAgent &&
-    detailQuery.isError &&
-    detailQuery.error instanceof ApiError &&
-    detailQuery.error.status === 403;
-  const identityQuery = useQuery({
+    detailIsError &&
+    detailError instanceof ApiError &&
+    detailError.status === 403;
+  const {
+    data: identityProfile,
+    isPending: identityPending,
+  } = useQuery({
     ...memberProfileOptions(wsId, "agent", agentId),
     enabled: !!agentId && detailForbidden,
   });
@@ -72,8 +80,8 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
 
   const isLoading =
     (agentsLoading && !listAgent) ||
-    (!listAgent && detailQuery.isPending) ||
-    (detailForbidden && identityQuery.isPending);
+    (!listAgent && detailPending) ||
+    (detailForbidden && identityPending);
 
   if (isLoading) {
     return (
@@ -88,8 +96,8 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
   }
 
   if (!agent) {
-    if (identityQuery.data) {
-      return <ActorProfileContentLoaded profile={identityQuery.data} />;
+    if (identityProfile) {
+      return <ActorProfileContentLoaded profile={identityProfile} />;
     }
     return (
       <div className="text-xs text-muted-foreground">{t(($) => $.profile_card.unavailable)}</div>

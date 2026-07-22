@@ -34,7 +34,11 @@ func (h *Handler) claimPendingMemoryCurationRun(ctx context.Context, rt db.Agent
 		if _, err := h.DB.Exec(ctx, `
 			UPDATE memory_curation_run
 			   SET claimed_at = now()
-			 WHERE id::text = $1 AND runtime_id = $2 AND status = 'running';
+			 WHERE id::text = $1 AND runtime_id = $2 AND status = 'running'
+		`, strings.TrimSpace(activeRunID), rt.ID); err != nil {
+			return nil, err
+		}
+		if _, err := h.DB.Exec(ctx, `
 			UPDATE memory_curation_agent_run
 			   SET claimed_at = now(), updated_at = now()
 			 WHERE id::text = $1 AND runtime_id = $2 AND status = 'running'
@@ -210,7 +214,7 @@ func (h *Handler) claimPendingMemoryCurationParentRun(ctx context.Context, rt db
 }
 
 func (h *Handler) failExpiredMemoryCurationRuns(ctx context.Context, runtimeID, workspaceID pgtype.UUID) error {
-	_, err := h.DB.Exec(ctx, `
+	if _, err := h.DB.Exec(ctx, `
 		UPDATE memory_curation_run
 		   SET status = 'failed', finished_at = now(),
 		       error = CASE
@@ -225,7 +229,11 @@ func (h *Handler) failExpiredMemoryCurationRuns(ctx context.Context, runtimeID, 
 		   AND (
 		     (started_at IS NOT NULL AND started_at < now() - make_interval(secs => $3::double precision))
 		     OR (claimed_at < now() - make_interval(secs => $4::double precision) AND attempt >= $5)
-		   );
+		   )
+	`, runtimeID, workspaceID, memoryCurationMaxRunAge.Seconds(), memoryCurationReclaimTimeout.Seconds(), memoryCurationMaxAttempts); err != nil {
+		return err
+	}
+	_, err := h.DB.Exec(ctx, `
 		UPDATE memory_curation_agent_run
 		   SET status = 'failed', finished_at = now(), updated_at = now(),
 		       error = CASE
@@ -248,7 +256,7 @@ func (h *Handler) failExpiredMemoryCurationRuns(ctx context.Context, runtimeID, 
 // entire workspace. Used by status polling so the evolution UI does not stay
 // spinning when daemon heartbeats skip the claim/fail path.
 func (h *Handler) failExpiredMemoryCurationRunsForWorkspace(ctx context.Context, workspaceID string) error {
-	_, err := h.DB.Exec(ctx, `
+	if _, err := h.DB.Exec(ctx, `
 		UPDATE memory_curation_run
 		   SET status = 'failed', finished_at = now(),
 		       error = CASE
@@ -262,7 +270,11 @@ func (h *Handler) failExpiredMemoryCurationRunsForWorkspace(ctx context.Context,
 		   AND (
 		     (started_at IS NOT NULL AND started_at < now() - make_interval(secs => $2::double precision))
 		     OR (claimed_at < now() - make_interval(secs => $3::double precision) AND attempt >= $4)
-		   );
+		   )
+	`, workspaceID, memoryCurationMaxRunAge.Seconds(), memoryCurationReclaimTimeout.Seconds(), memoryCurationMaxAttempts); err != nil {
+		return err
+	}
+	_, err := h.DB.Exec(ctx, `
 		UPDATE memory_curation_agent_run
 		   SET status = 'failed', finished_at = now(), updated_at = now(),
 		       error = CASE

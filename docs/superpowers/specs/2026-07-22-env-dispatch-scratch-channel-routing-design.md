@@ -74,13 +74,15 @@ A new forward migration will:
 
 1. Replace `channel_member_join_source_check` so it accepts the existing values
    plus `env_dispatch`.
-2. Replace `maintain_channel_agent_onboarding()` with the current behavior plus
-   an early return for agent inserts whose `join_source` is `env_dispatch`.
+2. Replace the combined INSERT/DELETE onboarding trigger with separate triggers.
+   The INSERT trigger has a `WHEN (NEW.join_source <> 'env_dispatch')`
+   predicate; the DELETE trigger retains the existing cleanup behavior. The
+   underlying `maintain_channel_agent_onboarding()` function is unchanged.
 
 The down migration will first rewrite any remaining `env_dispatch` membership
 rows to `system`, restore the previous check constraint, and restore the
-previous onboarding function without the early return. This makes rollback
-possible without violating the old constraint.
+previous combined INSERT/DELETE trigger. This makes rollback possible without
+violating the old constraint.
 
 No existing membership rows are rewritten by the up migration.
 

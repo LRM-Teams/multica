@@ -10,7 +10,7 @@
  *              the shared AttachmentPreviewModal)
  *   - html   → HtmlAttachmentPreview (inline iframe + hover toolbar), unless
  *              `inlineHtmlPreview={false}` (channel/thread message stream —
- *              LRM-285: Slack file-card only; open in new tab / download)
+ *              LRM-285: Slack file-card in the stream; click still previews)
  *   - others → AttachmentCard (icon + filename + Eye/Download row)
  *
  * Call sites:
@@ -98,10 +98,10 @@ export interface AttachmentProps {
   /** Editor hint — wired to Tiptap deleteNode(). */
   onDelete?: () => void;
   /**
-   * When false, HTML attachments render as a Slack-style file card (name +
-   * type + open/download) instead of an in-bubble iframe preview. Channel /
-   * thread message streams pass false (LRM-285). Issue comments keep the
-   * default true so comment attachment strategy is unchanged.
+   * When false, HTML attachments render as a Slack-style file card in the
+   * message stream (no in-bubble iframe). Click-to-preview (fullscreen on
+   * mobile, attachment preview route on desktop) is unchanged. Channel /
+   * thread message streams pass false (LRM-285).
    */
   inlineHtmlPreview?: boolean;
   className?: string;
@@ -384,17 +384,17 @@ export function Attachment({
     handleDownload();
   };
 
-  // LRM-216 / LRM-219 / LRM-230 — narrow/mobile:
+  // LRM-216 / LRM-219 / LRM-230 / LRM-285 — narrow/mobile:
   //   image → stream thumb → fullscreen big image
-  //   html  → compact card → fullscreen sandboxed HTML preview (issue comments)
-  //           or download guidance when inlineHtmlPreview=false (message stream)
+  //   html  → compact card in message stream → fullscreen sandboxed HTML on tap
+  //           (`inlineHtmlPreview` only gates the in-stream iframe, not tap preview)
   //   else  → compact card → fullscreen download guidance (never blank)
   if (isMobile) {
     const canOpen = !!state.url || !!state.attachmentId;
     const previewMode =
       kind === "image"
         ? "image"
-        : kind === "html" && inlineHtmlPreview
+        : kind === "html" && state.attachmentId
           ? "html"
           : "none";
     return (
@@ -409,7 +409,11 @@ export function Attachment({
         attachmentId={state.attachmentId}
         previewMode={previewMode}
         onDownload={handleDownload}
-        onOpen={handleOpenElsewhere}
+        onOpen={
+          kind === "html" && !inlineHtmlPreview
+            ? openHtmlInNewTabOrDownload
+            : handleOpenElsewhere
+        }
         className={className}
       />
     );

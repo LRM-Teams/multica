@@ -12,6 +12,7 @@ const {
   openByUrlMock,
   openInNewTabMock,
   getShareableUrlMock,
+  isMobileMock,
 } = vi.hoisted(() => ({
   getAttachmentTextContentMock: vi.fn(),
   // Default: empty base URL so existing tests render site-relative URLs
@@ -24,6 +25,7 @@ const {
   openByUrlMock: vi.fn(),
   openInNewTabMock: vi.fn(),
   getShareableUrlMock: vi.fn((p: string) => `https://app.example${p}`),
+  isMobileMock: vi.fn(() => false),
 }));
 
 vi.mock("@multica/core/api", () => ({
@@ -40,7 +42,7 @@ vi.mock("./use-download-attachment", () => ({
 }));
 
 vi.mock("@multica/ui/hooks/use-mobile", () => ({
-  useIsMobile: () => false,
+  useIsMobile: () => isMobileMock(),
 }));
 
 vi.mock("../platform", () => ({
@@ -72,6 +74,10 @@ vi.mock("../i18n", () => ({
           open_in_new_tab: "Open in new tab",
           close: "Close",
           open_file: "Open {{filename}}",
+          back: "Back",
+          preview_unavailable: "Can't preview this file",
+          preview_unavailable_hint:
+            "Download it, then open with your browser or another app.",
           file_type: {
             image: "Image",
             video: "Video",
@@ -476,6 +482,31 @@ describe("Attachment — html dispatch", () => {
       { activate: true },
     );
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("inlineHtmlPreview=false on mobile opens fullscreen HTML preview (not can't preview)", () => {
+    isMobileMock.mockReturnValue(true);
+    getAttachmentTextContentMock.mockResolvedValue({
+      text: "<p>design</p>",
+      originalContentType: "text/html",
+    });
+    const att = makeRecord({
+      filename: "design-agent-card-dm.html",
+      content_type: "text/html",
+      url: "https://cdn.example.test/design-agent-card-dm.html",
+    });
+    renderWithQuery(
+      <Attachment
+        attachment={{ kind: "record", attachment: att }}
+        inlineHtmlPreview={false}
+      />,
+    );
+    expect(screen.getByTestId("mobile-file-entry")).toBeTruthy();
+    expect(document.querySelector("iframe")).toBeNull();
+    fireEvent.click(screen.getByTestId("mobile-file-entry"));
+    expect(screen.getByTestId("mobile-file-preview-html-body")).toBeTruthy();
+    expect(screen.queryByText("Can't preview this file")).toBeNull();
+    isMobileMock.mockReturnValue(false);
   });
 });
 

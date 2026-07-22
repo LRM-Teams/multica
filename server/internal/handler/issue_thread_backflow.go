@@ -22,8 +22,11 @@ const (
 // issueThreadSystemEventParams is deliberately factual: the event identifies
 // the issue and transition, while the optional target is the only agent that
 // may be woken. Clients can render it without parsing the fallback content.
-// Actor/target names are denormalized so the FE does not depend on the
-// workspace agent directory (group managers are hidden from ListAgents — LRM-233).
+// Actor/target ids are the resolvable identity (GET /api/member-profiles/…).
+// Optional handle/name fields may still be emitted for diagnostics, but the FE
+// must not use them as a silent display fallback (LRM-281 / LRM-238) — group
+// managers are hidden from ListAgents (LRM-233) and must be looked up via the
+// profile API instead.
 type issueThreadSystemEventParams struct {
 	IssueID         string `json:"issue_id"`
 	IssueIdentifier string `json:"issue_identifier"`
@@ -149,8 +152,9 @@ func (h *Handler) emitIssueThreadBackflowToScope(ctx context.Context, issue db.I
 		ActorType:       channelMemberSystemEventPublicType(actorType),
 	}
 	if actorID != "" {
-		// Resolve display facts at emit time. Group managers (贝克汉姆) are
-		// omitted from ListAgents, so the FE cannot look them up live.
+		// Still stamp handle/name for diagnostics / older clients, but display
+		// must resolve via member-profile (LRM-281) because group managers are
+		// omitted from ListAgents (LRM-233).
 		refMemberType := "user"
 		if actorType == "agent" {
 			refMemberType = "agent"

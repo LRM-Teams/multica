@@ -209,6 +209,7 @@ vi.mock("../../i18n/use-t", () => ({
           feishu_badge: string;
           copy_action: string;
           expand_action: string;
+          collapse_action: string;
           copied_toast: string;
           copy_failed_toast: string;
           sticker_alt: string;
@@ -284,7 +285,8 @@ vi.mock("../../i18n/use-t", () => ({
           feishu_badge: "Feishu",
           actions_menu: "Message actions",
           copy_action: "Copy",
-          expand_action: "Show full message",
+          expand_action: "See more",
+          collapse_action: "See less",
           copied_toast: "Copied",
           copy_failed_toast: "Copy failed",
           sticker_alt: "Sticker",
@@ -934,37 +936,56 @@ describe("ChannelMessageBubble", () => {
     expect(body).toHaveClass("select-text");
   });
 
-  it("keeps long history as full DOM content behind a readable collapsed preview", async () => {
+  it("keeps long messages as full DOM content behind a Slack-height collapsed preview", async () => {
     render(
       <ChannelMessageBubble
-        message={makeMessage({ content: Array.from({ length: 13 }, (_, index) => `Line ${index}`).join("\n") })}
+        message={makeMessage({ content: Array.from({ length: 20 }, (_, index) => `Line ${index}`).join("\n") })}
         currentUserId="user-1"
-        collapseLongContent
       />,
     );
 
     const body = screen.getByTestId("message-body");
-    expect(body).toHaveAttribute("data-collapsed", "true");
-    expect(body).toHaveClass("max-h-[min(260px,55vh)]");
-    expect(body).toHaveTextContent("Line 12");
+    Object.defineProperties(body, {
+      scrollHeight: { configurable: true, value: 420 },
+      clientHeight: { configurable: true, value: 160 },
+    });
+    fireEvent(window, new Event("resize"));
 
-    await userEvent.click(screen.getByRole("button", { name: "Show full message" }));
+    await waitFor(() => {
+      expect(body).toHaveAttribute("data-collapsed", "true");
+    });
+    expect(body).toHaveClass("max-h-[160px]");
+    expect(body).toHaveTextContent("Line 19");
+    expect(screen.getByTestId("message-collapse-fade")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "See more" }));
 
     expect(body).not.toHaveAttribute("data-collapsed");
-    expect(screen.queryByRole("button", { name: "Show full message" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "See more" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "See less" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "See less" }));
+    expect(body).toHaveAttribute("data-collapsed", "true");
+    expect(screen.getByRole("button", { name: "See more" })).toBeInTheDocument();
   });
 
-  it("does not show the history collapse affordance for short messages", () => {
+  it("does not show the collapse affordance for short messages", () => {
     render(
       <ChannelMessageBubble
         message={makeMessage({ content: "Short historical answer" })}
         currentUserId="user-1"
-        collapseLongContent
       />,
     );
 
-    expect(screen.getByTestId("message-body")).not.toHaveAttribute("data-collapsed");
-    expect(screen.queryByRole("button", { name: "Show full message" })).not.toBeInTheDocument();
+    const body = screen.getByTestId("message-body");
+    Object.defineProperties(body, {
+      scrollHeight: { configurable: true, value: 48 },
+      clientHeight: { configurable: true, value: 48 },
+    });
+    fireEvent(window, new Event("resize"));
+
+    expect(body).not.toHaveAttribute("data-collapsed");
+    expect(screen.queryByRole("button", { name: "See more" })).not.toBeInTheDocument();
   });
 
   it("copies the message content from the visible action button", async () => {

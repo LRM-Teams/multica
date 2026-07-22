@@ -5,6 +5,7 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type PointerEvent,
@@ -63,9 +64,12 @@ const FullEmojiPicker = lazy(() =>
 const LONG_PRESS_MS = 450;
 const TOUCH_MOVE_CANCEL_PX = 8;
 const MOBILE_THREAD_TAP_FEEDBACK_MS = 120;
-const HISTORY_MESSAGE_COLLAPSE_HEIGHT_CLASS = "max-h-[min(260px,55vh)] md:max-h-[360px]";
-const HISTORY_MESSAGE_COLLAPSE_MIN_CHARS = 800;
-const HISTORY_MESSAGE_COLLAPSE_MIN_LINES = 12;
+/** LRM-268 / design-long-message-slack-vs-multica.html — Slack collapsed body height. */
+export const MESSAGE_COLLAPSE_MAX_HEIGHT_PX = 160;
+/** Fade overlay height from the same design mock (±2px AC). */
+export const MESSAGE_COLLAPSE_FADE_HEIGHT_PX = 72;
+const MESSAGE_COLLAPSE_HEIGHT_CLASS = "max-h-[160px]";
+const MESSAGE_COLLAPSE_OVERFLOW_EPSILON_PX = 2;
 
 function isInteractiveMessageTarget(target: EventTarget | null) {
   if (!(target instanceof Element)) return false;
@@ -87,13 +91,6 @@ function isMobileActionViewport() {
     window.innerWidth < 768 ||
     window.matchMedia?.("(max-width: 767px)").matches ||
     window.matchMedia?.("(pointer: coarse)").matches
-  );
-}
-
-function isLongHistoryMessageText(text: string) {
-  return (
-    text.length >= HISTORY_MESSAGE_COLLAPSE_MIN_CHARS ||
-    text.split(/\r?\n/).length >= HISTORY_MESSAGE_COLLAPSE_MIN_LINES
   );
 }
 
@@ -268,7 +265,11 @@ export function ChannelMessageBubble({
   onRetrySend,
   searchHighlighted = false,
   searchQuery,
-  collapseLongContent = false,
+  /**
+   * Slack parity (LRM-268): long bodies clamp for every message (read + unread).
+   * Pass false only in tests that need an uncapped body.
+   */
+  collapseLongContent = true,
   /** Slack-style continuation: no avatar/name row; gutter shows HH:mm on hover. */
   compact = false,
 }: {
@@ -301,7 +302,7 @@ export function ChannelMessageBubble({
   searchHighlighted?: boolean;
   /** Trimmed conversation search phrase to mark inside this hit's visible text. */
   searchQuery?: string;
-  /** Visually clamp already-read long history while keeping the full DOM/copy payload intact. */
+  /** When true (default), clamp overflowing bodies to Slack's collapsed height. */
   collapseLongContent?: boolean;
   /** When true, render as a same-author continuation (avatar/name hidden). */
   compact?: boolean;
@@ -321,12 +322,15 @@ export function ChannelMessageBubble({
   const mobileActionsOpen = mobileOverlay === "actions";
   const mobileReactionOpen = mobileOverlay === "reaction" || mobileOverlay === "reaction-full";
   const mobileReactionShowFull = mobileOverlay === "reaction-full";
-  const [expandedContentKey, setExpandedContentKey] = useState<string | null>(null);
+  const [contentExpanded, setContentExpanded] = useState(false);
+  const [contentOverflows, setContentOverflows] = useState(false);
   const [mobileThreadTapActive, setMobileThreadTapActive] = useState(false);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tapFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mobileActionsDialogRef = useRef<HTMLDialogElement | null>(null);
   const mobileReactionDialogRef = useRef<HTMLDialogElement | null>(null);
+  const messageBodyRef = useRef<HTMLDivElement | null>(null);
+  const measureContentOverflowRef = useRef<() => void>(() => {});
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const touchCancelledRef = useRef(false);
 
@@ -352,6 +356,59 @@ export function ChannelMessageBubble({
     if (typeof dialog.showModal === "function") dialog.showModal();
     else dialog.setAttribute("open", "");
   }, []);
+
+  const measureContentOverflow = useCallback(() => {
+    const body = messageBodyRef.current;
+    if (!body || !collapseLongContent) {
+      setContentOverflows(false);
+      return;
+    }
+    // scrollHeight stays the full content height even while max-height clips.
+    const overflows =
+      body.scrollHeight > MESSAGE_COLLAPSE_MAX_HEIGHT_PX + MESSAGE_COLLAPSE_OVERFLOW_EPSILON_PX;
+    setContentOverflows((previous) => (previous === overflows ? previous : overflows));
+  }, [collapseLongContent]);
+  measureContentOverflowRef.current = measureContentOverflow;
+
+  // Reset expand state when the message identity/content changes so a recycled
+  // row does not keep another message's See-more choice.
+  useEffect(() => {
+    setContentExpanded(false);
+  }, [message.id, message.content, message.parts, message.attachments]);
+
+  useLayoutEffect(() => {
+    if (!collapseLongContent || message.deleted_at || message.type === "system") {
+      setContentOverflows(false);
+      return;
+    }
+    measureContentOverflowRef.current();
+  }, [
+    collapseLongContent,
+    contentExpanded,
+    message.id,
+    message.content,
+    message.parts,
+    message.attachments,
+    message.deleted_at,
+    message.type,
+    editDraft,
+  ]);
+
+  useEffect(() => {
+    if (!collapseLongContent || message.deleted_at || message.type === "system") return;
+    const body = messageBodyRef.current;
+    if (!body) return;
+
+    const handleOverflow = () => measureContentOverflowRef.current();
+    const resizeObserver =
+      typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(handleOverflow);
+    resizeObserver?.observe(body);
+    window.addEventListener("resize", handleOverflow);
+    return () => {
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", handleOverflow);
+    };
+  }, [collapseLongContent, message.id, message.deleted_at, message.type]);
 
   if (message.deleted_at) {
     return (
@@ -494,14 +551,8 @@ export function ChannelMessageBubble({
   const canEdit = false;
   const canDelete = isOwn && !!onDelete && !isLocalSend;
   const isEdited = !!message.edited_at;
-  const collapseText =
-    projectReferencesToText(message.content, message.parts, resolveMentionPreview) ??
-    formatMessagePartsCopyText(effectiveParts) ??
-    unwrapStructuredPreviewContent(message.content) ??
-    message.content;
-  const contentCollapseKey = `${message.id}:${collapseLongContent ? "collapsed" : "open"}`;
-  const canCollapseContent = collapseLongContent && isLongHistoryMessageText(collapseText);
-  const isContentCollapsed = canCollapseContent && expandedContentKey !== contentCollapseKey;
+  const canCollapseContent = collapseLongContent && contentOverflows;
+  const isContentCollapsed = canCollapseContent && !contentExpanded;
   const handleStartEdit = () => setEditDraft(message.content);
   const handleCancelEdit = () => setEditDraft(null);
   const handleSaveEdit = () => {
@@ -804,10 +855,11 @@ export function ChannelMessageBubble({
           />
         ) : (
           <div
+            ref={messageBodyRef}
             className={cn(
               "message-surface relative min-w-0 max-w-full select-text break-words [overflow-wrap:anywhere] text-sm leading-6 text-ink",
               isContentCollapsed && "overflow-hidden",
-              isContentCollapsed ? HISTORY_MESSAGE_COLLAPSE_HEIGHT_CLASS : "overflow-visible",
+              isContentCollapsed ? MESSAGE_COLLAPSE_HEIGHT_CLASS : "overflow-visible",
               searchHighlighted && "rounded-md bg-primary/5",
             )}
             data-testid="message-body"
@@ -855,15 +907,26 @@ export function ChannelMessageBubble({
             )}
             {isContentCollapsed && (
               <div
-                className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center bg-gradient-to-t from-background via-background/95 to-transparent pb-1.5 pt-12"
+                className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center bg-gradient-to-t from-background via-background/95 to-transparent pb-1.5 pt-[72px]"
                 data-testid="message-collapse-fade"
               >
                 <button
                   type="button"
-                  className="pointer-events-auto inline-flex min-h-11 items-center rounded-full border border-border bg-background px-3 text-xs font-medium text-foreground shadow-sm transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring md:min-h-8"
-                  onClick={() => setExpandedContentKey(contentCollapseKey)}
+                  className="pointer-events-auto inline-flex min-h-11 items-center rounded-full border border-primary/25 bg-background px-3 text-xs font-semibold text-primary shadow-sm transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring md:min-h-8"
+                  onClick={() => setContentExpanded(true)}
                 >
                   {t(($) => $.message.expand_action)}
+                </button>
+              </div>
+            )}
+            {canCollapseContent && !isContentCollapsed && (
+              <div className="mt-1.5 flex justify-center" data-testid="message-collapse-less">
+                <button
+                  type="button"
+                  className="inline-flex min-h-11 items-center rounded-full border border-primary/25 bg-background px-3 text-xs font-semibold text-primary shadow-sm transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring md:min-h-8"
+                  onClick={() => setContentExpanded(false)}
+                >
+                  {t(($) => $.message.collapse_action)}
                 </button>
               </div>
             )}

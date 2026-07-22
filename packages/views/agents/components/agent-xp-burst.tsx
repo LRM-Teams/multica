@@ -2,7 +2,10 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { cn } from "@multica/ui/lib/utils";
-import { useAgentXpBurstStore } from "@multica/core/agents/stores/xp-burst-store";
+import {
+  type AgentXpBurstSnapshot,
+  useAgentXpBurstStore,
+} from "@multica/core/agents/stores/xp-burst-store";
 
 /** Ring + float label duration (design-memory-feedback-phase1-v2). */
 export const AGENT_XP_BURST_ANIMATION_MS = 1100;
@@ -22,28 +25,35 @@ export function AgentXpBurst({
   className?: string;
 }) {
   const burst = useAgentXpBurstStore((s) => s.bursts[agentId]);
-  const [activeKey, setActiveKey] = useState(0);
-  const [visible, setVisible] = useState(false);
+  const [displayBurst, setDisplayBurst] = useState<AgentXpBurstSnapshot | null>(null);
+  const [trackedKey, setTrackedKey] = useState(0);
+
+  if (burst && burst.burstKey !== trackedKey) {
+    setTrackedKey(burst.burstKey);
+    setDisplayBurst(burst);
+  }
 
   useEffect(() => {
-    if (!burst?.burstKey) return;
-    setActiveKey(burst.burstKey);
-    setVisible(true);
-    const timer = window.setTimeout(() => setVisible(false), AGENT_XP_BURST_ANIMATION_MS);
+    if (!displayBurst) return;
+    const timer = window.setTimeout(
+      () => setDisplayBurst(null),
+      AGENT_XP_BURST_ANIMATION_MS,
+    );
     return () => window.clearTimeout(timer);
-  }, [burst?.burstKey]);
+  }, [displayBurst?.burstKey]);
 
-  const delta = burst?.delta ?? 1;
+  const visible = displayBurst !== null;
+  const delta = displayBurst?.delta ?? 1;
 
   return (
     <span
       data-testid="agent-xp-burst"
       data-agent-id={agentId}
-      data-burst-key={activeKey}
+      data-burst-key={displayBurst?.burstKey ?? 0}
       className={cn("relative inline-flex shrink-0", className)}
     >
       {children}
-      {visible && burst ? (
+      {visible ? (
         <>
           <span
             aria-hidden

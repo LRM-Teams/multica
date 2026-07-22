@@ -845,7 +845,7 @@ func (h *Handler) DeleteChannel(w http.ResponseWriter, r *http.Request) {
 	if !h.requireChannelNotSystem(w, r.Context(), workspaceID, channelID) {
 		return
 	}
-	if _, ok := h.archiveChannel(w, r, workspaceID, channelID, parseUUID(userID)); !ok {
+	if !h.permanentlyDeleteChannel(w, r, workspaceID, channelID, parseUUID(userID)) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -935,6 +935,54 @@ func (h *Handler) archiveChannel(w http.ResponseWriter, r *http.Request, workspa
 	}
 	h.publish(protocol.EventChannelDeleted, workspaceID, "member", uuidToString(userID), map[string]any{"id": uuidToString(channelID)})
 	return ch, true
+}
+
+// permanentlyDeleteChannel hard-deletes a group channel (and cascades messages /
+// members). The bound group manager agent is archived so it is not left as an
+// orphan inviteable identity. DM and system channels are rejected by the
+// caller gates (requireChannelManager / requireChannelNotSystem).
+func (h *Handler) permanentlyDeleteChannel(w http.ResponseWriter, r *http.Request, workspaceID string, channelID, userID pgtype.UUID) bool {
+	var managerID pgtype.UUID
+	_ = h.DB.QueryRow(r.Context(), `
+		SELECT group_manager_agent_id
+		FROM channel
+		WHERE id = $1 AND workspace_id = $2 AND kind = 'group'`,
+		channelID, parseUUID(workspaceID)).Scan(&managerID)
+
+	tag, err := h.DB.Exec(r.Context(), `
+		DELETE FROM channel
+		WHERE id = $1 AND workspace_id = $2 AND kind = 'group'`,
+		channelID, parseUUID(workspaceID))
+	if err != nil {
+		if isSystemGeneralGuardError(err) {
+			writeSystemChannelProtected(w)
+			return false
+		}
+		slog.Error("permanent channel delete failed", "channel_id", uuidToString(channelID), "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to permanently delete channel")
+		return false
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "channel not found")
+		return false
+	}
+
+	if managerID.Valid {
+		if _, err := h.DB.Exec(r.Context(), `
+			UPDATE agent
+			SET archived_at = COALESCE(archived_at, now()), updated_at = now()
+			WHERE id = $1 AND workspace_id = $2 AND managed_role = $3`,
+			managerID, parseUUID(workspaceID), managedRoleGroupManager); err != nil {
+			slog.Warn("archive group manager after channel delete failed",
+				"agent_id", uuidToString(managerID), "error", err)
+		}
+	}
+
+	h.publish(protocol.EventChannelDeleted, workspaceID, "member", uuidToString(userID), map[string]any{
+		"id":        uuidToString(channelID),
+		"permanent": true,
+	})
+	return true
 }
 
 func (h *Handler) ListChannelMembers(w http.ResponseWriter, r *http.Request) {

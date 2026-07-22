@@ -72,7 +72,7 @@
 - **先让人看见，再让 agent 决策**：system row 必须先以其 message UUID 作为稳定 realtime event id 发布成功，publication fence 才允许生成 target-only onboarding inbox lease。system row 本身不唤醒 agent；除新加入的目标 agent 外，其他 agent inbox 必须为 0。在线路径的可见顺序固定为 `joined system event → Agent intro`。
 - **generation 是隔离单位**：remove 立即令旧 generation 过期，re-add 创建新 generation；drain、send、complete 三处都重验 membership + generation。失效 generation 只能 terminal `expired`，可见 agent message 为 0。
 - **显式终态**：只有 canonical send 或 typed receipt `channel_onboarding_skipped` 能完成决策；空输出、final prose、timeout、同字符串的普通事件都不能伪装 skip，必须让同一 event retry。send 使用 `channel-onboarding:<inbox_event_id>` deterministic client id，保证 crash/retry 后可见消息 1、transport audit 1。
-- **物**：migration `206_channel_agent_onboarding` 的 generation/trigger/check constraints；`server/internal/handler/channel_onboarding.go` 的 publication fence、target-only materialization、三段 revalidation 与 terminal transaction；`channel_onboarding_publisher.go` 的 crash-replay publisher；daemon/protocol typed decision；`channel_onboarding_test.go`、agent transport/daemon/realtime listener regressions。
+- **物**：migration `207_channel_agent_onboarding` 的 generation/trigger/check constraints；`server/internal/handler/channel_onboarding.go` 的 publication fence、target-only materialization、三段 revalidation 与 terminal transaction；`channel_onboarding_publisher.go` 的 crash-replay publisher；daemon/protocol typed decision；`channel_onboarding_test.go`、agent transport/daemon/realtime listener regressions。
 - **已见红**：首轮 crash retry 回归暴露 duplicate transport audit（2，修成复用原 audit 后为 1）；publication gate 在 system row 尚未发布时拒绝 lease；旧 handler tests 因把 channel 当成“只有业务消息”而被新增 canonical membership row 打红，消费者改为按目标消息/语义断言；draft freshness 回归也证明 joined row 会进入真实 recent context，不能继续沿用旧消息数量假设。
 
 ## 2. 引用与渲染（FE）

@@ -255,12 +255,12 @@ func (r *RedisRelay) BroadcastToWorkspace(workspaceID string, message []byte) {
 func (r *RedisRelay) SendToUser(userID string, message []byte, excludeWorkspace ...string) {
 	r.SendToUserWithID(userID, message, ulid.Make().String(), excludeWorkspace...)
 }
-func (r *RedisRelay) SendToUserWithID(userID string, message []byte, eventID string, excludeWorkspace ...string) {
+func (r *RedisRelay) SendToUserWithID(userID string, message []byte, eventID string, excludeWorkspace ...string) error {
 	exclude := ""
 	if len(excludeWorkspace) > 0 {
 		exclude = excludeWorkspace[0]
 	}
-	_ = r.PublishWithID(ScopeUser, userID, exclude, message, eventID)
+	return r.PublishWithID(ScopeUser, userID, exclude, message, eventID)
 }
 func (r *RedisRelay) Broadcast(message []byte) {
 	// Daemon broadcast — write to a special "global" stream so other nodes
@@ -538,14 +538,14 @@ func (d *DualWriteBroadcaster) SendToUser(userID string, message []byte, exclude
 	d.SendToUserWithID(userID, message, ulid.Make().String(), excludeWorkspace...)
 }
 
-func (d *DualWriteBroadcaster) SendToUserWithID(userID string, message []byte, eventID string, excludeWorkspace ...string) {
+func (d *DualWriteBroadcaster) SendToUserWithID(userID string, message []byte, eventID string, excludeWorkspace ...string) error {
 	exclude := ""
 	if len(excludeWorkspace) > 0 {
 		exclude = excludeWorkspace[0]
 	}
 	frame := injectEventID(message, eventID)
 	d.local.fanoutUser(userID, frame, exclude, eventID)
-	_ = d.relay.PublishWithID(ScopeUser, userID, exclude, message, eventID)
+	return d.relay.PublishWithID(ScopeUser, userID, exclude, message, eventID)
 }
 
 func (d *DualWriteBroadcaster) Broadcast(message []byte) {

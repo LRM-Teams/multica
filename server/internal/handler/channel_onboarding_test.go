@@ -3,11 +3,13 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/events"
@@ -504,6 +506,272 @@ func TestChannelOnboardingSystemGeneralWaitsForDurablePublication(t *testing.T) 
 		t.Fatalf("system-general onboarding after publication = %+v", after.Events)
 	}
 	completeChannelOnboardingForTest(t, after.Events[0], "", protocol.ChannelOnboardingDecisionSkipped, http.StatusOK)
+}
+
+func TestChannelOnboardingPublicationFailureStaysRetryableAndBlocksLease(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "Onboarding Publish Failure "+uuid.NewString()[:8], nil)
+	if _, err := testPool.Exec(ctx, `UPDATE agent SET visibility = 'workspace' WHERE id = $1`, agentID); err != nil {
+		t.Fatalf("make agent workspace-visible: %v", err)
+	}
+
+	var onboardingID, generationID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT onboarding.id::text, onboarding.membership_generation_id::text
+		FROM channel_agent_onboarding onboarding
+		JOIN channel channel_row ON channel_row.id = onboarding.channel_id
+		WHERE onboarding.agent_id = $1 AND channel_row.system_key = 'general'`, agentID).Scan(&onboardingID, &generationID); err != nil {
+		t.Fatalf("load pending system-general onboarding: %v", err)
+	}
+
+	noAckHandler := *testHandler
+	noAckHandler.Bus = events.New()
+	err := noAckHandler.publishChannelOnboardingSystemMessageForGeneration(ctx, parseUUID(generationID))
+	if err == nil || !strings.Contains(err.Error(), "did not acknowledge") {
+		t.Fatalf("missing-listener publication error = %v", err)
+	}
+	assertChannelOnboardingPublicationRetryable(t, onboardingID, 1)
+	if drain := drainChannelOnboardingForTest(t, handlerTestRuntimeID(t)); len(drain.Events) != 0 {
+		t.Fatalf("missing-listener publication became leaseable: %+v", drain.Events)
+	}
+
+	panicBus := events.New()
+	panicBus.SubscribeAll(func(events.Event) {
+		panic("realtime listener panic")
+	})
+	panicHandler := *testHandler
+	panicHandler.Bus = panicBus
+	err = panicHandler.publishChannelOnboardingSystemMessageForGeneration(ctx, parseUUID(generationID))
+	if err == nil || !strings.Contains(err.Error(), "did not acknowledge") {
+		t.Fatalf("panicked-listener publication error = %v", err)
+	}
+	assertChannelOnboardingPublicationRetryable(t, onboardingID, 2)
+	if drain := drainChannelOnboardingForTest(t, handlerTestRuntimeID(t)); len(drain.Events) != 0 {
+		t.Fatalf("panicked-listener publication became leaseable: %+v", drain.Events)
+	}
+
+	wantRelayErr := errors.New("relay unavailable")
+	failedBus := events.New()
+	failedBus.SubscribeAll(func(event events.Event) {
+		if event.RealtimeDeliveryAck != nil {
+			event.RealtimeDeliveryAck(wantRelayErr)
+		}
+	})
+	failedHandler := *testHandler
+	failedHandler.Bus = failedBus
+	err = failedHandler.publishChannelOnboardingSystemMessageForGeneration(ctx, parseUUID(generationID))
+	if !errors.Is(err, wantRelayErr) {
+		t.Fatalf("relay-failure publication error = %v, want %v", err, wantRelayErr)
+	}
+	assertChannelOnboardingPublicationRetryable(t, onboardingID, 3)
+	if drain := drainChannelOnboardingForTest(t, handlerTestRuntimeID(t)); len(drain.Events) != 0 {
+		t.Fatalf("relay-failure publication became leaseable: %+v", drain.Events)
+	}
+
+	if err := testHandler.publishChannelOnboardingSystemMessageForGeneration(ctx, parseUUID(generationID)); err != nil {
+		t.Fatalf("retry confirmed system-general publication: %v", err)
+	}
+	var publicationStatus string
+	var publicationAttempt int
+	if err := testPool.QueryRow(ctx, `
+		SELECT publication_status, publication_attempt
+		FROM channel_agent_onboarding WHERE id = $1`, onboardingID).Scan(&publicationStatus, &publicationAttempt); err != nil {
+		t.Fatalf("load confirmed publication state: %v", err)
+	}
+	if publicationStatus != "published" || publicationAttempt != 4 {
+		t.Fatalf("confirmed publication = status:%q attempt:%d, want published/4", publicationStatus, publicationAttempt)
+	}
+	drain := drainChannelOnboardingForTest(t, handlerTestRuntimeID(t))
+	if len(drain.Events) != 1 || drain.Events[0].AgentID != agentID {
+		t.Fatalf("confirmed publication drain = %+v", drain.Events)
+	}
+	completeChannelOnboardingForTest(t, drain.Events[0], "", protocol.ChannelOnboardingDecisionSkipped, http.StatusOK)
+}
+
+func assertChannelOnboardingPublicationRetryable(t *testing.T, onboardingID string, wantAttempt int) {
+	t.Helper()
+	var status, publicationStatus string
+	var publicationAttempt int
+	var leasePresent, publishedPresent bool
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT status,
+		       publication_status,
+		       publication_attempt,
+		       publication_lease_expires_at IS NOT NULL,
+		       published_at IS NOT NULL
+		FROM channel_agent_onboarding
+		WHERE id = $1`, onboardingID).Scan(
+		&status, &publicationStatus, &publicationAttempt, &leasePresent, &publishedPresent,
+	); err != nil {
+		t.Fatalf("load failed publication state: %v", err)
+	}
+	if status != "pending" || publicationStatus != "pending" || publicationAttempt != wantAttempt || leasePresent || publishedPresent {
+		t.Fatalf("failed publication = status:%q publication:%q attempt:%d lease:%v published:%v", status, publicationStatus, publicationAttempt, leasePresent, publishedPresent)
+	}
+}
+
+func TestChannelOnboardingRemovedGenerationCannotUseFastPublicationPath(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "Onboarding Removed Publish "+uuid.NewString()[:8], nil)
+	channelID := seedChannelForTest(t, "onboarding-removed-publish-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (
+		  channel_id, workspace_id, member_type, member_id, join_source, added_by
+		)
+		VALUES ($1, $2, 'agent', $3, 'manual', $4)`, channelID, testWorkspaceID, agentID, testUserID); err != nil {
+		t.Fatalf("insert pending onboarding generation: %v", err)
+	}
+
+	var onboardingID, generationID, systemMessageID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT onboarding.id::text,
+		       onboarding.membership_generation_id::text,
+		       onboarding.system_message_id::text
+		FROM channel_agent_onboarding onboarding
+		WHERE onboarding.channel_id = $1 AND onboarding.agent_id = $2`, channelID, agentID).Scan(
+		&onboardingID, &generationID, &systemMessageID,
+	); err != nil {
+		t.Fatalf("load removable pending onboarding: %v", err)
+	}
+
+	published := 0
+	testHandler.Bus.Subscribe(protocol.EventChannelMessage, func(event events.Event) {
+		if event.RealtimeEventID == systemMessageID {
+			published++
+		}
+	})
+	if _, err := testPool.Exec(ctx, `
+		DELETE FROM channel_member
+		WHERE channel_id = $1
+		  AND member_type = 'agent'
+		  AND member_id = $2
+		  AND generation_id = $3`, channelID, agentID, generationID); err != nil {
+		t.Fatalf("remove pending onboarding generation: %v", err)
+	}
+	if err := testHandler.publishChannelOnboardingSystemMessageForGeneration(ctx, parseUUID(generationID)); err != nil {
+		t.Fatalf("fast publication after removal: %v", err)
+	}
+
+	var status, publicationStatus string
+	var leasePresent bool
+	if err := testPool.QueryRow(ctx, `
+		SELECT status, publication_status, publication_lease_expires_at IS NOT NULL
+		FROM channel_agent_onboarding WHERE id = $1`, onboardingID).Scan(&status, &publicationStatus, &leasePresent); err != nil {
+		t.Fatalf("load removed generation publication state: %v", err)
+	}
+	if status != "expired" || publicationStatus != "pending" || leasePresent || published != 0 {
+		t.Fatalf("removed generation = status:%q publication:%q lease:%v events:%d", status, publicationStatus, leasePresent, published)
+	}
+	if drain := drainChannelOnboardingForTest(t, handlerTestRuntimeID(t)); len(drain.Events) != 0 {
+		t.Fatalf("removed generation became leaseable: %+v", drain.Events)
+	}
+}
+
+func TestChannelOnboardingPublicationSerializesClaimBeforeConcurrentRemoval(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "Onboarding Publish Remove Race "+uuid.NewString()[:8], nil)
+	channelID := seedChannelForTest(t, "onboarding-publish-remove-race-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (
+		  channel_id, workspace_id, member_type, member_id, join_source, added_by
+		)
+		VALUES ($1, $2, 'agent', $3, 'manual', $4)`, channelID, testWorkspaceID, agentID, testUserID); err != nil {
+		t.Fatalf("insert pending onboarding generation: %v", err)
+	}
+
+	var onboardingID, generationID, systemMessageID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT id::text, membership_generation_id::text, system_message_id::text
+		FROM channel_agent_onboarding
+		WHERE channel_id = $1 AND agent_id = $2`, channelID, agentID).Scan(
+		&onboardingID, &generationID, &systemMessageID,
+	); err != nil {
+		t.Fatalf("load race onboarding generation: %v", err)
+	}
+
+	enteredFanout := make(chan struct{}, 1)
+	releaseFanout := make(chan struct{})
+	publishedEvents := 0
+	testHandler.Bus.Subscribe(protocol.EventChannelMessage, func(event events.Event) {
+		if event.RealtimeEventID != systemMessageID {
+			return
+		}
+		publishedEvents++
+		enteredFanout <- struct{}{}
+		<-releaseFanout
+	})
+
+	publishDone := make(chan error, 1)
+	go func() {
+		publishDone <- testHandler.publishChannelOnboardingSystemMessageForGeneration(ctx, parseUUID(generationID))
+	}()
+	select {
+	case <-enteredFanout:
+	case <-time.After(5 * time.Second):
+		t.Fatal("publication did not reach blocked fanout after claim")
+	}
+
+	removeDone := make(chan error, 1)
+	go func() {
+		_, err := testPool.Exec(ctx, `
+			DELETE FROM channel_member
+			WHERE channel_id = $1
+			  AND member_type = 'agent'
+			  AND member_id = $2
+			  AND generation_id = $3`, channelID, agentID, generationID)
+		removeDone <- err
+	}()
+	select {
+	case err := <-removeDone:
+		t.Fatalf("membership removal completed before publication transaction released generation lock: %v", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	close(releaseFanout)
+	select {
+	case err := <-publishDone:
+		if err != nil {
+			t.Fatalf("publish claimed generation: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("publication did not finish after fanout release")
+	}
+	select {
+	case err := <-removeDone:
+		if err != nil {
+			t.Fatalf("remove generation after publication commit: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("membership removal did not finish after publication commit")
+	}
+
+	var status, publicationStatus string
+	var publishedAtPresent bool
+	if err := testPool.QueryRow(ctx, `
+		SELECT status, publication_status, published_at IS NOT NULL
+		FROM channel_agent_onboarding WHERE id = $1`, onboardingID).Scan(
+		&status, &publicationStatus, &publishedAtPresent,
+	); err != nil {
+		t.Fatalf("load serialized publication/removal state: %v", err)
+	}
+	if status != "expired" || publicationStatus != "published" || !publishedAtPresent || publishedEvents != 1 {
+		t.Fatalf("serialized publication/removal = status:%q publication:%q published_at:%v events:%d", status, publicationStatus, publishedAtPresent, publishedEvents)
+	}
+	if drain := drainChannelOnboardingForTest(t, handlerTestRuntimeID(t)); len(drain.Events) != 0 {
+		t.Fatalf("removed generation became leaseable after serialized publication: %+v", drain.Events)
+	}
 }
 
 func TestChannelOnboardingHumanAddCreatesNoOnboarding(t *testing.T) {

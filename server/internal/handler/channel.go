@@ -4583,9 +4583,9 @@ func (h *Handler) publishChannelToMembers(ctx context.Context, eventType, worksp
 	h.publishToUsers(eventType, workspaceID, actorType, actorID, recipientIDs, payload)
 }
 
-func (h *Handler) publishChannelToMembersWithID(ctx context.Context, eventType, workspaceID, actorType, actorID string, channelID pgtype.UUID, payload any, realtimeEventID string) {
+func (h *Handler) publishChannelToMembersWithID(ctx context.Context, eventType, workspaceID, actorType, actorID string, channelID pgtype.UUID, payload any, realtimeEventID string) error {
 	recipientIDs := recipientUserIDsFromSet(h.channelHumanMemberIDs(ctx, workspaceID, uuidToString(channelID)))
-	h.publishToUsersWithID(eventType, workspaceID, actorType, actorID, recipientIDs, payload, realtimeEventID)
+	return h.publishToUsersWithID(eventType, workspaceID, actorType, actorID, recipientIDs, payload, realtimeEventID)
 }
 
 func (h *Handler) publishChannelAgentTyping(ctx context.Context, ch ChannelResponse, agent db.Agent, isTyping bool) {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -163,9 +164,16 @@ func registerListeners(bus *events.Bus, b realtime.Broadcaster) {
 		data, err := json.Marshal(msg)
 		if err != nil {
 			slog.Error("failed to marshal event", "event_type", e.Type, "error", err)
+			if e.RealtimeDeliveryAck != nil {
+				e.RealtimeDeliveryAck(err)
+			}
 			return
 		}
 		if e.RecipientUserIDs != nil {
+			var deliveryErr error
+			if e.RealtimeDeliveryAck != nil && e.RealtimeEventID == "" {
+				deliveryErr = errors.New("confirmed recipient publication requires a stable realtime event id")
+			}
 			seen := make(map[string]bool, len(e.RecipientUserIDs))
 			for _, recipientID := range e.RecipientUserIDs {
 				recipientID = strings.TrimSpace(recipientID)
@@ -173,14 +181,24 @@ func registerListeners(bus *events.Bus, b realtime.Broadcaster) {
 					continue
 				}
 				seen[recipientID] = true
+				if deliveryErr != nil && e.RealtimeDeliveryAck != nil && e.RealtimeEventID == "" {
+					continue
+				}
 				realtime.M.RecordEvent(e.Type)
 				if e.RealtimeEventID != "" {
 					if idempotent, ok := b.(realtime.IdempotentUserBroadcaster); ok {
-						idempotent.SendToUserWithID(recipientID, data, e.RealtimeEventID)
+						deliveryErr = errors.Join(deliveryErr, idempotent.SendToUserWithID(recipientID, data, e.RealtimeEventID))
+						continue
+					}
+					if e.RealtimeDeliveryAck != nil {
+						deliveryErr = errors.Join(deliveryErr, errors.New("realtime broadcaster does not support confirmed stable-id delivery"))
 						continue
 					}
 				}
 				b.SendToUser(recipientID, data)
+			}
+			if e.RealtimeDeliveryAck != nil {
+				e.RealtimeDeliveryAck(deliveryErr)
 			}
 			return
 		}

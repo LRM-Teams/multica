@@ -312,60 +312,12 @@ func (h *Handler) PublishPendingChannelOnboardingSystemMessages(ctx context.Cont
 	}
 	published := 0
 	for published < limit {
-		var publication channelOnboardingPublication
-		err := h.DB.QueryRow(ctx, `
-			WITH candidate AS (
-			  SELECT onboarding.id
-			  FROM channel_agent_onboarding onboarding
-			  JOIN channel channel_row
-			    ON channel_row.id = onboarding.channel_id
-			   AND channel_row.workspace_id = onboarding.workspace_id
-			   AND channel_row.kind = 'group'
-			   AND channel_row.archived_at IS NULL
-			  JOIN channel_member membership
-			    ON membership.channel_id = onboarding.channel_id
-			   AND membership.workspace_id = onboarding.workspace_id
-			   AND membership.member_type = 'agent'
-			   AND membership.member_id = onboarding.agent_id
-			   AND membership.generation_id = onboarding.membership_generation_id
-			  JOIN agent agent_row
-			    ON agent_row.id = onboarding.agent_id
-			   AND agent_row.workspace_id = onboarding.workspace_id
-			   AND agent_row.archived_at IS NULL
-			  WHERE onboarding.status IN ('pending', 'claimed')
-			    AND (
-			      onboarding.publication_status = 'pending'
-			      OR (
-			        onboarding.publication_status = 'publishing'
-			        AND onboarding.publication_lease_expires_at <= now()
-			      )
-			    )
-			  ORDER BY onboarding.created_at, onboarding.id
-			  LIMIT 1
-			  FOR UPDATE OF onboarding SKIP LOCKED
-			)
-			UPDATE channel_agent_onboarding onboarding
-			SET publication_status = 'publishing',
-			    publication_attempt = onboarding.publication_attempt + 1,
-			    publication_lease_expires_at = now() + interval '30 seconds',
-			    updated_at = now()
-			FROM candidate
-			WHERE onboarding.id = candidate.id
-			RETURNING onboarding.id, onboarding.workspace_id, onboarding.channel_id,
-			          onboarding.system_message_id`).Scan(
-			&publication.OnboardingID,
-			&publication.WorkspaceID,
-			&publication.ChannelID,
-			&publication.SystemMessageID,
-		)
+		didPublish, err := h.publishOneChannelOnboardingSystemMessage(ctx, pgtype.UUID{})
 		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return published, nil
-			}
 			return published, err
 		}
-		if err := h.publishClaimedChannelOnboardingSystemMessage(ctx, publication); err != nil {
-			return published, err
+		if !didPublish {
+			return published, nil
 		}
 		published++
 	}
@@ -373,38 +325,102 @@ func (h *Handler) PublishPendingChannelOnboardingSystemMessages(ctx context.Cont
 }
 
 func (h *Handler) publishChannelOnboardingSystemMessageForGeneration(ctx context.Context, generationID pgtype.UUID) error {
+	_, err := h.publishOneChannelOnboardingSystemMessage(ctx, generationID)
+	return err
+}
+
+func (h *Handler) publishOneChannelOnboardingSystemMessage(ctx context.Context, generationID pgtype.UUID) (bool, error) {
+	if h.TxStarter == nil {
+		return false, errors.New("channel onboarding publication transaction starter unavailable")
+	}
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+
+	publication, err := h.claimChannelOnboardingPublication(ctx, tx, generationID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	if err := h.publishClaimedChannelOnboardingSystemMessage(ctx, tx, publication); err != nil {
+		if resetErr := resetChannelOnboardingPublicationAfterFailure(ctx, tx, publication.OnboardingID); resetErr != nil {
+			return false, errors.Join(err, resetErr)
+		}
+		if commitErr := tx.Commit(ctx); commitErr != nil {
+			return false, errors.Join(err, fmt.Errorf("commit failed onboarding publication reset: %w", commitErr))
+		}
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// claimChannelOnboardingPublication is the sole publication claim boundary.
+// Both the synchronous post-membership fast path and the background retry
+// worker therefore enforce the same active channel/membership/agent/status
+// eligibility before transitioning a row to publishing.
+func (h *Handler) claimChannelOnboardingPublication(ctx context.Context, executor dbExecutor, generationID pgtype.UUID) (channelOnboardingPublication, error) {
 	var publication channelOnboardingPublication
-	err := h.DB.QueryRow(ctx, `
+	err := executor.QueryRow(ctx, `
+		WITH candidate AS (
+		  SELECT onboarding.id
+		  FROM channel_agent_onboarding onboarding
+		  JOIN channel channel_row
+		    ON channel_row.id = onboarding.channel_id
+		   AND channel_row.workspace_id = onboarding.workspace_id
+		   AND channel_row.kind = 'group'
+		   AND channel_row.archived_at IS NULL
+		  JOIN channel_member membership
+		    ON membership.channel_id = onboarding.channel_id
+		   AND membership.workspace_id = onboarding.workspace_id
+		   AND membership.member_type = 'agent'
+		   AND membership.member_id = onboarding.agent_id
+		   AND membership.generation_id = onboarding.membership_generation_id
+		  JOIN agent agent_row
+		    ON agent_row.id = onboarding.agent_id
+		   AND agent_row.workspace_id = onboarding.workspace_id
+		   AND agent_row.archived_at IS NULL
+		  WHERE (NOT $1::boolean OR onboarding.membership_generation_id = $2::uuid)
+		    AND onboarding.status IN ('pending', 'claimed')
+		    AND (
+		      onboarding.publication_status = 'pending'
+		      OR (
+		        onboarding.publication_status = 'publishing'
+		        AND onboarding.publication_lease_expires_at <= now()
+		      )
+		    )
+		  ORDER BY onboarding.created_at, onboarding.id
+		  LIMIT 1
+		  -- Lock the generation row before UPDATE takes the onboarding row lock.
+		  -- DELETE uses the same membership -> onboarding order through the
+		  -- migration trigger, avoiding a lock-order inversion under a true race.
+		  FOR UPDATE OF membership, channel_row, agent_row SKIP LOCKED
+		)
 		UPDATE channel_agent_onboarding onboarding
 		SET publication_status = 'publishing',
 		    publication_attempt = onboarding.publication_attempt + 1,
 		    publication_lease_expires_at = now() + interval '30 seconds',
 		    updated_at = now()
-		WHERE onboarding.membership_generation_id = $1
-		  AND (
-		    onboarding.publication_status = 'pending'
-		    OR (
-		      onboarding.publication_status = 'publishing'
-		      AND onboarding.publication_lease_expires_at <= now()
-		    )
-		  )
-		RETURNING onboarding.id, onboarding.workspace_id, onboarding.channel_id, onboarding.system_message_id`, generationID).Scan(
+		FROM candidate
+		WHERE onboarding.id = candidate.id
+		RETURNING onboarding.id, onboarding.workspace_id, onboarding.channel_id,
+		          onboarding.system_message_id`, generationID.Valid, generationID).Scan(
 		&publication.OnboardingID,
 		&publication.WorkspaceID,
 		&publication.ChannelID,
 		&publication.SystemMessageID,
 	)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil
-		}
-		return err
-	}
-	return h.publishClaimedChannelOnboardingSystemMessage(ctx, publication)
+	return publication, err
 }
 
-func (h *Handler) publishClaimedChannelOnboardingSystemMessage(ctx context.Context, publication channelOnboardingPublication) error {
-	row := h.DB.QueryRow(ctx, `
+func (h *Handler) publishClaimedChannelOnboardingSystemMessage(ctx context.Context, executor dbExecutor, publication channelOnboardingPublication) error {
+	row := executor.QueryRow(ctx, `
 		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
 		FROM channel_message
 		WHERE id = $1
@@ -415,8 +431,10 @@ func (h *Handler) publishClaimedChannelOnboardingSystemMessage(ctx context.Conte
 	if err != nil {
 		return err
 	}
-	h.publishChannelToMembersWithID(ctx, protocol.EventChannelMessage, uuidToString(publication.WorkspaceID), "system", "", publication.ChannelID, message, uuidToString(publication.SystemMessageID))
-	tag, err := h.DB.Exec(ctx, `
+	if err := h.publishChannelToMembersWithID(ctx, protocol.EventChannelMessage, uuidToString(publication.WorkspaceID), "system", "", publication.ChannelID, message, uuidToString(publication.SystemMessageID)); err != nil {
+		return err
+	}
+	tag, err := executor.Exec(ctx, `
 		UPDATE channel_agent_onboarding
 		SET publication_status = 'published',
 		    publication_lease_expires_at = NULL,
@@ -429,6 +447,23 @@ func (h *Handler) publishClaimedChannelOnboardingSystemMessage(ctx context.Conte
 	}
 	if tag.RowsAffected() != 1 {
 		return errors.New("channel onboarding publication lease is no longer active")
+	}
+	return nil
+}
+
+func resetChannelOnboardingPublicationAfterFailure(ctx context.Context, executor dbExecutor, onboardingID pgtype.UUID) error {
+	tag, err := executor.Exec(ctx, `
+		UPDATE channel_agent_onboarding
+		SET publication_status = 'pending',
+		    publication_lease_expires_at = NULL,
+		    updated_at = now()
+		WHERE id = $1
+		  AND publication_status = 'publishing'`, onboardingID)
+	if err != nil {
+		return fmt.Errorf("reset failed onboarding publication: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return errors.New("failed onboarding publication lease is no longer active")
 	}
 	return nil
 }

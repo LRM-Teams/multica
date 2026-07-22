@@ -73,12 +73,12 @@ func (r *MirroredRelay) SendToUser(userID string, message []byte, excludeWorkspa
 	r.SendToUserWithID(userID, message, ulid.Make().String(), excludeWorkspace...)
 }
 
-func (r *MirroredRelay) SendToUserWithID(userID string, message []byte, eventID string, excludeWorkspace ...string) {
+func (r *MirroredRelay) SendToUserWithID(userID string, message []byte, eventID string, excludeWorkspace ...string) error {
 	exclude := ""
 	if len(excludeWorkspace) > 0 {
 		exclude = excludeWorkspace[0]
 	}
-	_ = r.PublishWithID(ScopeUser, userID, exclude, message, eventID)
+	return r.PublishWithID(ScopeUser, userID, exclude, message, eventID)
 }
 
 func (r *MirroredRelay) Broadcast(message []byte) {

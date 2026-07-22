@@ -381,7 +381,8 @@ func (h *Handler) publishToUsers(eventType, workspaceID, actorType, actorID stri
 	})
 }
 
-func (h *Handler) publishToUsersWithID(eventType, workspaceID, actorType, actorID string, recipientUserIDs []string, payload any, realtimeEventID string) {
+func (h *Handler) publishToUsersWithID(eventType, workspaceID, actorType, actorID string, recipientUserIDs []string, payload any, realtimeEventID string) error {
+	ack := make(chan error, 1)
 	h.Bus.Publish(events.Event{
 		Type:             eventType,
 		WorkspaceID:      workspaceID,
@@ -390,7 +391,19 @@ func (h *Handler) publishToUsersWithID(eventType, workspaceID, actorType, actorI
 		RecipientUserIDs: uniqueRecipientUserIDs(recipientUserIDs),
 		Payload:          payload,
 		RealtimeEventID:  realtimeEventID,
+		RealtimeDeliveryAck: func(err error) {
+			select {
+			case ack <- err:
+			default:
+			}
+		},
 	})
+	select {
+	case err := <-ack:
+		return err
+	default:
+		return errors.New("realtime publication listener did not acknowledge delivery")
+	}
 }
 
 func (h *Handler) publishChatToCreator(eventType, workspaceID, actorType, actorID, chatSessionID, creatorUserID string, payload any) {

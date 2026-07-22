@@ -1921,7 +1921,7 @@ describe("ChannelMessageBubble", () => {
 
     expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-local-send", "pending");
     expect(screen.getByText("optimistic pending")).toBeInTheDocument();
-    // Slack / LRM-271/280: no Sending… chrome on pending optimistic rows.
+    // Slack / LRM-271/273/280: no Sending… chrome on pending optimistic rows.
     expect(screen.queryByTestId("message-send-pending")).not.toBeInTheDocument();
     expect(screen.queryByText(/Sending/i)).not.toBeInTheDocument();
     expect(screen.queryByTestId("message-action-bar")).not.toBeInTheDocument();

@@ -11,8 +11,11 @@ import {
   type Ref,
   type ReactNode,
 } from "react";
+import { flushSync } from "react-dom";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { ChannelMessage } from "@multica/core/types";
+import { channelMessageListItemKey } from "@multica/core/channels";
+
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { cn } from "@multica/ui/lib/utils";
 import { ChannelMessageBubble } from "./channel-message-bubble";
@@ -279,9 +282,19 @@ function MessageViewport({
   // `initialTopMostItemIndex` land correctly; giving Virtuoso its own flex
   // scroller regressed cold-load positioning), and (c) backs the fallback
   // scroll-position preservation + the render-detection probe via `scrollRef`.
+  //
+  // `flushSync` attaches Virtuoso in the same commit (before paint) so the list
+  // never flashes an empty scroller between skeleton/loading and messages
+  // (LRM-273).
   const setScrollContainerRef = useCallback((node: HTMLDivElement | null) => {
     scrollRef.current = node;
-    setScrollContainerEl(node);
+    if (node) {
+      flushSync(() => {
+        setScrollContainerEl(node);
+      });
+    } else {
+      setScrollContainerEl(null);
+    }
   }, []);
 
   const highlightIndex = useMemo(() => {
@@ -417,12 +430,15 @@ function MessageViewport({
     // fact). Return null rather than dropping it from `messages` so the list's
     // virtualization/anchoring is untouched.
     if (foldedIssueIds.has(msg.id)) return null;
+    // Stable across optimistic temp id → server ACK so rows do not remount
+    // (LRM-273 secondary flash).
+    const rowKey = channelMessageListItemKey(msg);
     const searchHighlighted = searchHitIds?.has(msg.id) ?? false;
     const dividerLabel = dayDividers.get(msg.id);
     const isUnreadAnchor = newMessagesDivider?.anchorMessageId === msg.id;
-    const compact = messageGroupCompact.get(msg.id) ?? false;
+    const compact = messageGroupCompact.get(rowKey) ?? messageGroupCompact.get(msg.id) ?? false;
     return (
-      <Fragment key={msg.id}>
+      <Fragment key={rowKey}>
         {dividerLabel && <DateDivider label={dividerLabel} />}
         {isUnreadAnchor && (
           // #340: real unread total frozen at entry (sidebar-same source); the
@@ -432,9 +448,12 @@ function MessageViewport({
         <div
           ref={(node) => {
             if (node) {
-              messageRefMap.set(msg.id, node);
+              messageRefMap.set(rowKey, node);
+              // Highlight/scroll may still look up by server id after ACK.
+              if (rowKey !== msg.id) messageRefMap.set(msg.id, node);
             } else {
-              messageRefMap.delete(msg.id);
+              messageRefMap.delete(rowKey);
+              if (rowKey !== msg.id) messageRefMap.delete(msg.id);
             }
           }}
           className={cn("px-5", compact ? "pt-px" : "pt-1.5")}
@@ -565,7 +584,7 @@ function MessageViewport({
           startReached={() => {
             if (canLoadOlder) onLoadOlder?.();
           }}
-          computeItemKey={(_, msg) => msg.id}
+          computeItemKey={(_, msg) => channelMessageListItemKey(msg)}
           components={{
             List: VirtuosoItemList,
             Header: () => (

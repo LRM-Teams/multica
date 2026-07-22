@@ -228,8 +228,8 @@ describe("findChannelMessageMatchIndex (optimistic ACK)", () => {
   });
 });
 
-describe("upsertChannelMessageInCache (LRM-271)", () => {
-  it("strips a leaked local_send_status when the authoritative ACK replaces the temp row", () => {
+describe("upsertChannelMessageInCache (LRM-271/273 ACK)", () => {
+  it("strips leaked local_send_status and preserves client_message_id for stable list keys", () => {
     const qc = new QueryClient();
     const optimistic = {
       id: "client-1",
@@ -252,6 +252,7 @@ describe("upsertChannelMessageInCache (LRM-271)", () => {
       ...optimistic,
       id: "server-1",
       seq: 42,
+      client_message_id: null,
       // Simulate a buggy merge that left the client-only flag on the ACK.
       local_send_status: "pending",
     });
@@ -259,6 +260,7 @@ describe("upsertChannelMessageInCache (LRM-271)", () => {
     const cached = qc.getQueryData<ChannelMessage[]>(channelKeys.messages("c1")) ?? [];
     expect(cached).toHaveLength(1);
     expect(cached[0]?.id).toBe("server-1");
+    expect(cached[0]?.client_message_id).toBe("client-1");
     expect(cached[0]?.local_send_status ?? null).toBeNull();
   });
 });

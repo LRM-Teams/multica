@@ -163,7 +163,7 @@ export function ThreadPanel({
       />
 
       <ChannelMessageList
-        key={`thread:${root.id}:${loading ? "loading" : "ready"}`}
+        key={`thread:${root.id}`}
         messages={replies}
         currentUserId={currentUserId}
         ownName={currentUserName}

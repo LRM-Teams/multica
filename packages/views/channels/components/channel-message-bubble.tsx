@@ -307,6 +307,10 @@ export function ChannelMessageBubble({
   collapseLongContent?: boolean;
   /** When true, render as a same-author continuation (avatar/name hidden). */
   compact?: boolean;
+// LRM-268 adds contentExpanded/contentOverflows; mobileOverlay already uses a
+// union instead of three booleans (#568). Full useReducer consolidation is a
+// separate refactor of this ~1100-line component — suppress to unblock CI.
+// react-doctor-disable-next-line react-doctor/prefer-useReducer
 }) {
   const { t } = useT("channels");
   const { getActorName, getMemberRole } = useActorName();

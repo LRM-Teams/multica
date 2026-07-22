@@ -192,7 +192,15 @@ func firstCompactLines(content string, limit int) string {
 }
 
 func formatChannelMessageLine(msg ChannelMessageResponse) string {
-	return fmt.Sprintf("[%s] %s (%s): %s", msg.CreatedAt, msg.AuthorName, msg.Type, truncateChannelHistoryContent(msg.Content))
+	messageType := msg.Type
+	if channelMessageHasVoicePart(msg.Parts) {
+		if channelMessageIsHumanAuthored(msg.Type) {
+			messageType += ", voice input"
+		} else {
+			messageType += ", voice reply"
+		}
+	}
+	return fmt.Sprintf("[%s] %s (%s): %s", msg.CreatedAt, msg.AuthorName, messageType, truncateChannelHistoryContent(msg.Content))
 }
 
 func formatChannelMessageReplyLine(msg ChannelMessageReply) string {

@@ -174,6 +174,8 @@ import {
 } from "../hooks/use-composer-pending-attachments";
 import { useEntryReadCursor } from "../hooks/use-entry-read-cursor";
 import { useEntryAnchor } from "../hooks/use-entry-around-seq";
+import { buildVoiceMessageParts } from "../lib/voice-audio";
+import { prepareVoicePlayback, voicePlaybackScope } from "../lib/voice-playback";
 import { isChannelNameTakenError } from "../channel-create-error";
 import { ChannelMessageList } from "./channel-message-list";
 import {
@@ -1876,6 +1878,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       },
     });
     if (dispatched) {
+      prepareVoicePlayback(voicePlaybackScope(active.id));
       editorRef.current?.clearContent();
       channelPending.clear();
       setQuoteTarget(null);
@@ -1885,6 +1888,36 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         publishTyping(false);
       }
     }
+  };
+
+  const handleVoiceSend = (content: string, durationMs: number): boolean => {
+    if (!active || !activeDraftEmpty || channelPending.pending.length > 0) return false;
+    const parts = buildVoiceMessageParts(content, durationMs);
+    if (parts.length === 0) return false;
+    const dispatched = channelSend.send({
+      payloadKey: composePayloadKey(content, [], `voice:${quoteTarget?.id ?? ""}`),
+      buildVars: (clientMessageId) => ({
+        channelId: active.id,
+        content,
+        parts,
+        quoteMessageId: quoteTarget?.id ?? undefined,
+        clientMessageId,
+      }),
+      mutate: sendMessage.mutate,
+      onCommitted: () => {},
+      onVisibleError: (kind) => {
+        if (kind === "conflict") toast.error(t(($) => $.composer.send_failed));
+      },
+    });
+    if (dispatched) {
+      setQuoteTarget(null);
+      if (activeDraftKey) storeClearComposerDraft(activeDraftKey);
+      if (typingStartedRef.current) {
+        typingStartedRef.current = false;
+        publishTyping(false);
+      }
+    }
+    return dispatched;
   };
 
   const handleThreadSend = () => {
@@ -1915,11 +1948,43 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       },
     });
     if (dispatched) {
+      prepareVoicePlayback(voicePlaybackScope(active.id, threadRoot.id));
       threadEditorRef.current?.clearContent();
       threadPending.clear();
       setThreadQuoteTarget(null);
       setThreadDraftEmpty(true);
     }
+  };
+
+  const handleThreadVoiceSend = (content: string, durationMs: number): boolean => {
+    if (!active || !threadRoot || !threadDraftEmpty || threadPending.pending.length > 0) return false;
+    const parts = buildVoiceMessageParts(content, durationMs);
+    if (parts.length === 0) return false;
+    const dispatched = threadSend.send({
+      payloadKey: composePayloadKey(
+        content,
+        [],
+        `${threadRoot.id}:voice:${threadQuoteTarget?.id ?? ""}`,
+      ),
+      buildVars: (clientMessageId) => ({
+        channelId: active.id,
+        messageId: threadRoot.id,
+        content,
+        parts,
+        quoteMessageId: threadQuoteTarget?.id ?? undefined,
+        clientMessageId,
+      }),
+      mutate: sendThreadMessage.mutate,
+      onCommitted: () => {},
+      onVisibleError: (kind) => {
+        if (kind === "conflict") toast.error(t(($) => $.thread.send_failed));
+      },
+    });
+    if (dispatched) {
+      setThreadQuoteTarget(null);
+      setThreadDraftEmpty(true);
+    }
+    return dispatched;
   };
 
   const handleRetrySend = useCallback(
@@ -2596,6 +2661,9 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
           />
         }
         onSend={handleThreadSend}
+        voicePlaybackScope={voicePlaybackScope(active.id, threadSurfaceRoot.id)}
+        voiceDisabled={!threadDraftEmpty || threadPending.pending.length > 0}
+        onVoiceSend={handleThreadVoiceSend}
         sendDisabled={
           (threadDraftEmpty && threadPending.readyAttachmentParts.length === 0) ||
           threadPending.hasUploading
@@ -3074,6 +3142,9 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                     }
                     sending={sendMessage.isPending}
                     onSend={handleSend}
+                    voicePlaybackScope={voicePlaybackScope(active.id)}
+                    voiceDisabled={!activeDraftEmpty || channelPending.pending.length > 0}
+                    onVoiceSend={handleVoiceSend}
                     isMobile={isMobile}
                     prefix={quoteTarget ? (
                       <ComposerQuotePreview

@@ -1917,6 +1917,14 @@ export const SandboxSnapshotSchema = z.object({
 
 export const SandboxSnapshotListSchema = z.array(SandboxSnapshotSchema);
 
+export const VoiceTranscriptResponseSchema = z.object({
+  text: z.string(),
+}).loose();
+
+export const EMPTY_VOICE_TRANSCRIPT_RESPONSE = {
+  text: "",
+};
+
 export const EMPTY_SANDBOX_SNAPSHOT: SandboxSnapshot = {
   id: "",
   workspace_id: "",

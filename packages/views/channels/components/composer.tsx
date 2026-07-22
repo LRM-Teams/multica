@@ -5,6 +5,7 @@ import { Send } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import { ReadOnlyConversationBanner } from "./read-only-conversation-banner";
+import { VoiceInputButton } from "./voice-input-button";
 
 /**
  * The conversation surface a composer belongs to. The composer shell is
@@ -29,6 +30,10 @@ export interface ComposerProps {
   prefix?: ReactNode;
   /** Action-row controls left of Send (attach, mention, issue-ref, project). */
   leadingActions?: ReactNode;
+  /** Optional speech input shared by channel, DM, and thread composers. */
+  voicePlaybackScope?: string;
+  voiceDisabled?: boolean;
+  onVoiceSend?: (transcript: string, durationMs: number) => boolean;
   /**
    * Attachment tray mount point (#151/#154). Rendered above the input and never
    * over the Send control, so touch targets stay reachable; the Attachment lane
@@ -57,6 +62,9 @@ export function Composer({
   isMobile,
   prefix,
   leadingActions,
+  voicePlaybackScope,
+  voiceDisabled = false,
+  onVoiceSend,
   tray,
   readOnly = false,
   readOnlyContent,
@@ -99,6 +107,14 @@ export function Composer({
         >
           <div className="flex min-h-8 min-w-0 flex-1 items-center gap-0.5 overflow-x-auto text-muted-foreground">
             {leadingActions}
+            {voicePlaybackScope && onVoiceSend ? (
+              <VoiceInputButton
+                disabled={voiceDisabled || sending}
+                isMobile={isMobile}
+                playbackScope={voicePlaybackScope}
+                onVoiceSend={onVoiceSend}
+              />
+            ) : null}
           </div>
           <Button
             onClick={onSend}

@@ -53,6 +53,7 @@ import {
 } from "./channel-system-event-content";
 import { messageMentionsViewer } from "../../common/content-mentions-viewer";
 import { SELF_MENTION_ROW_CLASS } from "../../common/mention-token";
+import { VoiceMessageAudio } from "./voice-message-audio";
 
 const FullEmojiPicker = lazy(() =>
   import("@multica/ui/components/common/emoji-picker").then((m) => ({
@@ -307,7 +308,7 @@ export function ChannelMessageBubble({
   compact?: boolean;
 }) {
   const { t } = useT("channels");
-  const { getActorName, getMemberRole } = useActorName();
+  const { getActorName } = useActorName();
   const resolveMentionPreview = mentionResolverFrom(getActorName);
   const messageTime = useMessageTime();
   const [editDraft, setEditDraft] = useState<string | null>(null);
@@ -391,15 +392,9 @@ export function ChannelMessageBubble({
     message.author_id === currentUserId;
   const isAgent = message.type === "agent";
   const isExternal = message.source === "lark";
-  // LRM-232 Phase 1 (Frank freeze): muted owner/admin next to human names;
-  // ordinary members stay quiet. No Agent/APP type pill on any surface.
-  // Radar / Feishu functional badges stay.
-  const authorMemberRole =
-    message.type === "user" && message.author_id
-      ? getMemberRole(message.author_id)
-      : null;
-  const showAuthorRole =
-    authorMemberRole === "owner" || authorMemberRole === "admin";
+  // LRM-270 (Slack align): message author row — name + time only.
+  // No Owner/Admin chrome (Slack has none); no Agent/APP type pill.
+  // Radar / Feishu functional badges stay. Member-list muted role is unchanged.
   const displayName = resolveChannelAuthorDisplayName(message, {
     currentUserId,
     ownName,
@@ -681,14 +676,6 @@ export function ChannelMessageBubble({
             ) : (
               nameLabel
             )}
-            {showAuthorRole && authorMemberRole && (
-              <span
-                data-testid="message-author-role"
-                className="shrink-0 text-[11px] font-normal leading-none text-ink-3"
-              >
-                {t(($) => $.profile_popover.role[authorMemberRole])}
-              </span>
-            )}
             {isRadarMessage && (
               <span className="shrink-0 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-normal leading-none text-amber-700 dark:text-amber-300">
                 {t(($) => $.message.radar_badge)}
@@ -830,6 +817,7 @@ export function ChannelMessageBubble({
               highlightQuery={searchHighlighted ? searchQuery : undefined}
               sourceMessageId={message.id}
             />
+            <VoiceMessageAudio message={message} />
             {isLocalFailed && onRetrySend && (
               <div
                 data-testid="message-send-failed"

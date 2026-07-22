@@ -219,6 +219,12 @@ vi.mock("../../i18n/use-t", () => ({
           send_failed: string;
           retry_send: string;
           sending: string;
+          voice_input: string;
+          voice_input_duration: string;
+          voice_play: string;
+          voice_loading: string;
+          voice_stop: string;
+          voice_retry: string;
           edit_action: string;
           actions_menu: string;
           delete_action: string;
@@ -295,6 +301,12 @@ vi.mock("../../i18n/use-t", () => ({
           send_failed: "Couldn't send",
           retry_send: "Retry",
           sending: "Sending…",
+          voice_input: "Voice input",
+          voice_input_duration: "Voice input · {{seconds}}s",
+          voice_play: "Play voice reply",
+          voice_loading: "Preparing voice reply…",
+          voice_stop: "Stop voice reply",
+          voice_retry: "Voice playback failed · Retry",
           edit_action: "Edit",
           delete_action: "Delete",
           edited_label: "(edited)",
@@ -483,8 +495,8 @@ describe("ChannelMessageBubble", () => {
     expect(screen.getByTestId("message-action-bar")).toBeInTheDocument();
   });
 
-  it("shows muted Owner role after a workspace owner name (LRM-232)", () => {
-    render(
+  it("does not show Owner/Admin chrome on message author rows (LRM-270)", () => {
+    const { rerender } = render(
       <ChannelMessageBubble
         message={makeMessage({
           type: "user",
@@ -497,14 +509,10 @@ describe("ChannelMessageBubble", () => {
     );
 
     expect(screen.getByText("Frank An")).toBeInTheDocument();
-    const role = screen.getByTestId("message-author-role");
-    expect(role).toHaveTextContent("Owner");
-    expect(role).toHaveClass("text-ink-3");
-    expect(role.className).not.toMatch(/rounded-full|border|bg-/);
-  });
+    expect(screen.queryByTestId("message-author-role")).not.toBeInTheDocument();
+    expect(screen.queryByText("Owner")).not.toBeInTheDocument();
 
-  it("shows muted Admin role and hides ordinary Member role (LRM-232)", () => {
-    const { rerender } = render(
+    rerender(
       <ChannelMessageBubble
         message={makeMessage({
           type: "user",
@@ -515,7 +523,9 @@ describe("ChannelMessageBubble", () => {
         currentUserId="user-1"
       />,
     );
-    expect(screen.getByTestId("message-author-role")).toHaveTextContent("Admin");
+    expect(screen.getByText("Admin User")).toBeInTheDocument();
+    expect(screen.queryByTestId("message-author-role")).not.toBeInTheDocument();
+    expect(screen.queryByText("Admin")).not.toBeInTheDocument();
 
     rerender(
       <ChannelMessageBubble
@@ -1915,5 +1925,45 @@ describe("ChannelMessageBubble", () => {
     expect(screen.getByTestId("message-send-failed")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(onRetrySend).toHaveBeenCalledWith(message);
+  });
+
+  it("labels transcribed human voice input without inventing stored audio", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          type: "user",
+          author_id: "user-1",
+          author_name: "Alice",
+          content: "spoken question",
+          parts: [
+            { type: "text", text: "spoken question" },
+            { type: "voice", duration_ms: 2400 },
+          ],
+        })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.getByTestId("voice-input-label")).toHaveTextContent("Voice input · 2s");
+    expect(screen.queryByTestId("voice-reply-control")).not.toBeInTheDocument();
+  });
+
+  it("keeps the Agent voice replay control in a compact message group", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          content: "spoken answer",
+          parts: [
+            { type: "text", text: "spoken answer" },
+            { type: "voice" },
+          ],
+        })}
+        currentUserId="user-1"
+        compact
+      />,
+    );
+
+    expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-message-group", "compact");
+    expect(screen.getByRole("button", { name: "Play voice reply" })).toBeInTheDocument();
   });
 });

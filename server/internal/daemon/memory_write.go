@@ -142,6 +142,9 @@ func collectWhitelistedMemoryFiles(agentRoot string) ([]string, error) {
 		}
 		return nil
 	})
+	if err != nil && os.IsNotExist(err) {
+		return nil, nil
+	}
 	return paths, err
 }
 
@@ -196,7 +199,7 @@ func diffAgentMemoryWrites(agentRoot string, prior memoryWriteSnapshot) (memoryW
 }
 
 func (d *Daemon) maybeAppendDailyCloseoutStub(task Task, result TaskResult) {
-	if d == nil || !taskHasSubstantiveCloseoutSignal(task, result) {
+	if d == nil {
 		return
 	}
 	workspaceID := strings.TrimSpace(task.WorkspaceID)
@@ -209,6 +212,23 @@ func (d *Daemon) maybeAppendDailyCloseoutStub(task Task, result TaskResult) {
 	rel := filepath.ToSlash(filepath.Join("memory", "daily", now.Format("2006-01-02")+".md"))
 	prior, err := loadMemoryWriteSnapshot(agentRoot)
 	if err != nil {
+		return
+	}
+	_, changes, diffErr := diffAgentMemoryWrites(agentRoot, prior)
+	if diffErr != nil {
+		return
+	}
+	hasNonDailyWrite := false
+	for _, ch := range changes {
+		if ch.FileKey != "DAILY" {
+			hasNonDailyWrite = true
+			break
+		}
+	}
+	// Prefer missing a stub over polluting Daily: Parts/Usage/chat text alone
+	// are not enough. Require a strong task/result signal, or a non-daily
+	// memory write without a matching daily write this turn.
+	if !taskHasSubstantiveCloseoutSignal(task, result) && !hasNonDailyWrite {
 		return
 	}
 	abs := filepath.Join(agentRoot, filepath.FromSlash(rel))
@@ -236,40 +256,31 @@ func (d *Daemon) maybeAppendDailyCloseoutStub(task Task, result TaskResult) {
 	_, _ = f.WriteString(renderDailyCloseoutStub(task, result, now, len(current) == 0))
 }
 
+// taskHasSubstantiveCloseoutSignal reports strong, low-noise signals only.
+// Chat text, message Parts, token Usage, and RuntimeStats alone do not qualify —
+// those fire on almost every short turn and would spam Daily stubs.
 func taskHasSubstantiveCloseoutSignal(task Task, result TaskResult) bool {
-	chatMessage := strings.TrimSpace(task.ChatMessage)
-	if chatMessage != "" && isSimpleSocialMessage(chatMessage) && !resultHasSubstantiveSignal(result) {
-		return false
-	}
-	if resultHasSubstantiveSignal(result) {
+	if hasStrongTaskKind(task) {
 		return true
 	}
-	if strings.TrimSpace(task.IssueID) != "" || strings.TrimSpace(task.AutopilotRunID) != "" || strings.TrimSpace(task.AutopilotID) != "" || strings.TrimSpace(task.QuickCreatePrompt) != "" || strings.TrimSpace(task.TriggerCommentID) != "" || strings.TrimSpace(task.AgentRadarPrompt) != "" {
-		return true
-	}
-	msg := strings.TrimSpace(task.ChatMessage)
-	return msg != "" && !isSimpleSocialMessage(msg)
+	return hasStrongResultSignal(result)
 }
 
-func resultHasSubstantiveSignal(result TaskResult) bool {
-	if strings.TrimSpace(result.BranchName) != "" || strings.TrimSpace(result.WorkDir) != "" || len(result.Parts) > 0 || len(result.Usage) > 0 || result.RuntimeStats != nil {
+func hasStrongTaskKind(task Task) bool {
+	return strings.TrimSpace(task.IssueID) != "" ||
+		strings.TrimSpace(task.AutopilotRunID) != "" ||
+		strings.TrimSpace(task.AutopilotID) != "" ||
+		strings.TrimSpace(task.QuickCreatePrompt) != "" ||
+		strings.TrimSpace(task.TriggerCommentID) != "" ||
+		strings.TrimSpace(task.AgentRadarPrompt) != ""
+}
+
+func hasStrongResultSignal(result TaskResult) bool {
+	if strings.TrimSpace(result.BranchName) != "" {
 		return true
 	}
 	action := strings.ToLower(strings.TrimSpace(result.Action))
 	return action != "" && action != "no_reply"
-}
-
-func isSimpleSocialMessage(message string) bool {
-	msg := strings.ToLower(strings.TrimSpace(message))
-	msg = strings.Trim(msg, " \t\r\n.!?。！？~～")
-	if msg == "" {
-		return true
-	}
-	switch msg {
-	case "hi", "hello", "hey", "yo", "thanks", "thank you", "thx", "谢谢", "谢谢你", "感谢", "辛苦了", "贴纸", "sticker":
-		return true
-	}
-	return false
 }
 
 func renderDailyCloseoutStub(task Task, result TaskResult, now time.Time, includeHeader bool) string {

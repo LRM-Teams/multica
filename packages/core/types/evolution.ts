@@ -350,6 +350,9 @@ export interface MemoryCurationChildRun {
   agent_name?: string;
   runtime_id?: string;
   runtime_name?: string;
+  agent_runtime_id?: string;
+  runtime_source?: string;
+  runtime_fallback?: boolean;
   stage: string;
   status: string;
   attempt: number;

@@ -249,6 +249,8 @@ const COPY = {
   timelineUnknown: "Processing",
   selfReviewChildRuns: "Self-review child runs",
   noSelfReviewChildRuns: "No self-review child runs were recorded for this parent run.",
+  runtimeFallback: "profile fallback",
+  agentRuntime: "agent runtime",
   perAgentResults: "Per-agent results",
   noPerAgentDetails: "No per-agent details were reported by this daemon.",
   artifacts: "Artifacts",
@@ -1333,7 +1335,16 @@ function CurationRunDetailCard({ run, selectedRunId }: { run: MemoryCurationRunD
                     <div className="font-medium">{child.agent_name || shortId(child.agent_id)}</div>
                     <Badge variant={child.status === "failed" ? "destructive" : child.status === "succeeded" ? "secondary" : "outline"}>{curationStatusLabel(child.status, copy)}</Badge>
                   </div>
-                  <div className="mt-1 text-xs text-muted-foreground">{child.runtime_name || shortId(child.runtime_id)} · {copy("attempt")} {child.attempt}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    {child.runtime_name || shortId(child.runtime_id)}
+                    {child.runtime_fallback
+                      ? ` · ${copy("runtimeFallback")}`
+                      : child.runtime_source === "agent"
+                        ? ` · ${copy("agentRuntime")}`
+                        : ""}
+                    {" · "}
+                    {copy("attempt")} {child.attempt}
+                  </div>
                   <div className="mt-3 grid grid-cols-4 gap-2">
                     <MiniStat label={copy("evidence")} value={String(child.evidence_collected)} />
                     <MiniStat label={copy("dailyReviewProposalFiles")} value={String(child.daily_files_written)} />

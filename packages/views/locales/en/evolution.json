@@ -156,6 +156,8 @@
   "timelineUnknown": "Processing",
   "selfReviewChildRuns": "Self-review child runs",
   "noSelfReviewChildRuns": "No self-review child runs were recorded for this parent run.",
+  "runtimeFallback": "profile fallback",
+  "agentRuntime": "agent runtime",
   "perAgentResults": "Per-agent results",
   "noPerAgentDetails": "No per-agent details were reported by this daemon.",
   "artifacts": "Artifacts",

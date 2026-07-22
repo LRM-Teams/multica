@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 func TestClassifyMemoryWritePath(t *testing.T) {
@@ -123,7 +125,17 @@ func TestDailyCloseoutGuardSkipsGreetingAndAppendsSubstantiveStub(t *testing.T) 
 		t.Fatalf("greeting wrote daily entries: %+v", entries)
 	}
 
+	// Parts/Usage alone must not spam Daily on ordinary chat turns.
 	task.ChatMessage = "please investigate the failing deploy"
+	d.maybeAppendDailyCloseoutStub(task, TaskResult{
+		Status: "completed",
+		Parts:  []protocol.MessagePart{{Type: "text", Text: "looking"}},
+		Usage:  []TaskUsageEntry{{InputTokens: 12}},
+	})
+	if entries, err := os.ReadDir(dailyDir); err == nil && len(entries) != 0 {
+		t.Fatalf("usage/parts-only turn wrote daily entries: %+v", entries)
+	}
+
 	d.maybeAppendDailyCloseoutStub(task, TaskResult{Status: "completed", BranchName: "fix/deploy"})
 	entries, err := os.ReadDir(dailyDir)
 	if err != nil {
@@ -138,6 +150,28 @@ func TestDailyCloseoutGuardSkipsGreetingAndAppendsSubstantiveStub(t *testing.T) 
 	}
 	if got := string(data); !strings.Contains(got, "Auto Closeout") || !strings.Contains(got, "branch=fix/deploy") {
 		t.Fatalf("daily stub missing expected content:\n%s", got)
+	}
+}
+
+func TestDailyCloseoutGuardWritesWhenNonDailyMemoryChanged(t *testing.T) {
+	root := t.TempDir()
+	d := &Daemon{cfg: Config{WorkspacesRoot: root}}
+	agentRoot := multicaAgentRoot(d.cfg, "ws-1", "agent-1")
+	userPath := filepath.Join(agentRoot, "users", "member-1", "USER.md")
+	if err := os.MkdirAll(filepath.Dir(userPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(userPath, []byte("prefers brief status updates"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d.maybeAppendDailyCloseoutStub(Task{WorkspaceID: "ws-1", AgentID: "agent-1", ChatSessionID: "chat-1", ChatMessage: "remember this"}, TaskResult{Status: "completed"})
+	dailyPath := filepath.Join(agentRoot, "memory", "daily", time.Now().UTC().Format("2006-01-02")+".md")
+	data, err := os.ReadFile(dailyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "Auto Closeout") {
+		t.Fatalf("expected closeout after non-daily memory write:\n%s", string(data))
 	}
 }
 

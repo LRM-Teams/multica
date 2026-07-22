@@ -110,6 +110,9 @@ type memoryCurationChildRunResponse struct {
 	AgentName             string  `json:"agent_name,omitempty"`
 	RuntimeID             string  `json:"runtime_id,omitempty"`
 	RuntimeName           string  `json:"runtime_name,omitempty"`
+	AgentRuntimeID        string  `json:"agent_runtime_id,omitempty"`
+	RuntimeSource         string  `json:"runtime_source,omitempty"` // agent | profile_fallback | other
+	RuntimeFallback       bool    `json:"runtime_fallback"`
 	Stage                 string  `json:"stage"`
 	Status                string  `json:"status"`
 	Attempt               int     `json:"attempt"`
@@ -535,6 +538,15 @@ func (h *Handler) loadMemoryCurationChildRuns(ctx context.Context, workspaceID, 
 	rows, err := h.DB.Query(ctx, `
 		SELECT cr.id::text, cr.parent_run_id::text, cr.workspace_id::text, cr.agent_id::text,
 		       COALESCE(a.name, ''), COALESCE(cr.runtime_id::text, ''), COALESCE(rt.name, ''),
+		       COALESCE(a.runtime_id::text, ''),
+		       CASE
+		         WHEN a.runtime_id IS NOT NULL AND cr.runtime_id IS NOT DISTINCT FROM a.runtime_id THEN 'agent'
+		         WHEN a.runtime_id IS NULL AND cr.runtime_id IS NOT NULL THEN 'profile_fallback'
+		         WHEN cr.runtime_id IS NULL THEN ''
+		         ELSE 'other'
+		       END,
+		       (a.runtime_id IS NULL AND cr.runtime_id IS NOT NULL)
+		         OR (a.runtime_id IS NOT NULL AND cr.runtime_id IS DISTINCT FROM a.runtime_id),
 		       cr.stage, cr.status, cr.attempt, cr.started_at, cr.finished_at, cr.error,
 		       COALESCE((cr.stats->>'changed')::boolean, false),
 		       COALESCE((cr.stats->>'daily_files_written')::int, 0),
@@ -557,7 +569,13 @@ func (h *Handler) loadMemoryCurationChildRuns(ctx context.Context, workspaceID, 
 	for rows.Next() {
 		var item memoryCurationChildRunResponse
 		var startedAt, finishedAt *time.Time
-		if err := rows.Scan(&item.ID, &item.ParentRunID, &item.WorkspaceID, &item.AgentID, &item.AgentName, &item.RuntimeID, &item.RuntimeName, &item.Stage, &item.Status, &item.Attempt, &startedAt, &finishedAt, &item.Error, &item.Changed, &item.DailyFilesWritten, &item.ReviewCandidatesAdded, &item.SkillCandidatesAdded, &item.EvidenceCollected, &item.ConflictsFound, &item.OutputExcerpt); err != nil {
+		if err := rows.Scan(
+			&item.ID, &item.ParentRunID, &item.WorkspaceID, &item.AgentID, &item.AgentName,
+			&item.RuntimeID, &item.RuntimeName, &item.AgentRuntimeID, &item.RuntimeSource, &item.RuntimeFallback,
+			&item.Stage, &item.Status, &item.Attempt, &startedAt, &finishedAt, &item.Error,
+			&item.Changed, &item.DailyFilesWritten, &item.ReviewCandidatesAdded, &item.SkillCandidatesAdded,
+			&item.EvidenceCollected, &item.ConflictsFound, &item.OutputExcerpt,
+		); err != nil {
 			return nil, err
 		}
 		if startedAt != nil {

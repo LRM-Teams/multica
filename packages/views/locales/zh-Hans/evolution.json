@@ -156,6 +156,8 @@
   "timelineUnknown": "处理中",
   "selfReviewChildRuns": "自审子运行",
   "noSelfReviewChildRuns": "该父运行没有记录自审子运行。",
+  "runtimeFallback": "回落到 profile runtime",
+  "agentRuntime": "agent 自有 runtime",
   "perAgentResults": "逐智能体结果",
   "noPerAgentDetails": "该 daemon 未上报逐智能体详情。",
   "artifacts": "产物",

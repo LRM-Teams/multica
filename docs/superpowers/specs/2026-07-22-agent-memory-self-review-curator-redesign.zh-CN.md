@@ -302,12 +302,15 @@ closeout guard 是 daemon 中的 Go 逻辑，不调用 LLM，不启动 Cursor/Pi
 
 强信号包括：
 
-- issue task 完成。
-- result 有 branch/action/PR/comment。
-- 运行时长超过阈值。
-- 有明显工具调用/平台操作统计。
-- 有 memory 文件写入但没有 daily。
-- 有人类明确反馈或纠正。
+- issue / autopilot / radar / quick-create task 完成。
+- result 有 branch 或非 `no_reply` action。
+- 本轮检测到非 daily 记忆文件写入（例如 USER / RELATIONSHIP / project files）。
+
+弱信号（单独出现时不补）：
+
+- 普通聊天文本（即使不是 hi/谢谢）。
+- message Parts / token Usage / RuntimeStats。
+- WorkDir 非空。
 
 弱消息如 `hi`、`hello`、`谢谢`、贴纸、纯寒暄，因没有强信号而跳过。
 
@@ -511,28 +514,30 @@ daily closeout 必须默认 skip，只有强实质工作信号才写。宁可漏
 
 ### 14.1 记忆写入闭环
 
-- [ ] 扩展 `server/internal/daemon/memory_write.go` 的白名单，让 `memory/daily/*.md`、`users/*/RELATIONSHIP.md`、`projects/*/STATE.md`、`notes/agents.md`、`notes/relationship-map.md`、`notes/work-log.md` 都进入写入 diff / telemetry。
-- [ ] 在 `server/internal/daemon/daemon.go` 的 task result closeout 路径增加轻量 guard：只对“实质工作”补 daily stub，`hi/hello/谢谢/贴纸` 直接跳过。
-- [ ] 在 `server/internal/daemon/execenv/runtime_config.go` 继续强化 Memory Operating Guide，明确 daily 先写、长期经验再晋升、project scope 与 user scope 不能串。
-- [ ] 为 daily closeout、user preference、relationship、project state 增加幂等写入测试。
+- [x] 扩展 `server/internal/daemon/memory_write.go` 的白名单，让 `memory/daily/*.md`、`users/*/RELATIONSHIP.md`、`projects/*/STATE.md`、`notes/agents.md`、`notes/relationship-map.md`、`notes/work-log.md` 都进入写入 diff / telemetry。
+- [x] 在 `server/internal/daemon/daemon.go` 的 task result closeout 路径增加轻量 guard：只对“实质工作”补 daily stub，`hi/hello/谢谢/贴纸` 直接跳过。
+- [x] 在 `server/internal/daemon/execenv/runtime_config.go` 继续强化 Memory Operating Guide，明确 daily 先写、长期经验再晋升、project scope 与 user scope 不能串。
+- [x] 为 daily closeout、user preference、relationship、project state 增加幂等写入测试。
+- [x] 收紧 closeout 信号：`Parts` / `Usage` / 普通聊天文本单独不足以触发 auto stub；要求 issue/autopilot/branch/action 强信号，或本轮有非 daily 记忆写入。
 
 ### 14.2 自审/团队策展语义
 
-- [ ] 把 `agent_self_review` 拆成 per-agent 子 run 或等价执行单元，确保每个 target agent 用自己的 root / identity 自审。
-- [ ] 保留 `memory_curation_run` 作为父 run，新增子 run 记录每个 agent 的自审状态、结果和错误。
-- [ ] 让 `team_curation` 只消费 self-review 产出的候选，不再代跑所有 target agent 的 self-review。
-- [ ] 在 `server/internal/memorycuration/l3_reviewer.go` 和 `server/internal/memorycuration/engine.go` 中保留 scope / applies 信息，避免项目/群/用户内容被错误晋升。
+- [x] 把 `agent_self_review` 拆成 per-agent 子 run 或等价执行单元，确保每个 target agent 用自己的 root / identity 自审。
+- [x] 保留 `memory_curation_run` 作为父 run，新增子 run 记录每个 agent 的自审状态、结果和错误。
+- [x] 让 `team_curation` 只消费 self-review 产出的候选，不再代跑所有 target agent 的 self-review。
+- [x] 在 `server/internal/memorycuration/l3_reviewer.go` 和 `server/internal/memorycuration/engine.go` 中保留 scope / applies 信息，避免项目/群/用户内容被错误晋升。
+- [x] child run API/UI/日志标明自审 runtime 归属：`agent` / `profile_fallback`，避免多机排查时误判“谁在跑”。
 
 ### 14.3 数据与接口
 
-- [ ] 为 per-agent self-review 增加子 run schema 或等价字段，至少包含 `parent_run_id`、`agent_id`、`runtime_id`、`status`、`output`、`error`、`attempt`、`started_at`、`finished_at`。
-- [ ] 更新 `server/internal/handler/memory_curation.go`、`server/internal/handler/memory_curation_daemon.go`、`server/internal/daemon/memory_curation.go` 的调度/claim/执行链路。
-- [ ] 保持现有 parent run API 兼容，旧 UI 仍能读取 parent 状态，新 UI 再展开 child runs。
+- [x] 为 per-agent self-review 增加子 run schema 或等价字段，至少包含 `parent_run_id`、`agent_id`、`runtime_id`、`status`、`output`、`error`、`attempt`、`started_at`、`finished_at`。
+- [x] 更新 `server/internal/handler/memory_curation.go`、`server/internal/handler/memory_curation_daemon.go`、`server/internal/daemon/memory_curation.go` 的调度/claim/执行链路。
+- [x] 保持现有 parent run API 兼容，旧 UI 仍能读取 parent 状态，新 UI 再展开 child runs。
 
 ### 14.4 验证与回归
 
-- [ ] 自审：5 个 target agents 时应出现 5 条 self-review 结果；其中单个失败不应拖死其他 agent。
-- [ ] curator：a-kun 只做团队治理时，应清楚看到输入候选数、合并数、冲突数、晋升数。
-- [ ] daily：实质工作完成但 agent 没写时，应自动补 closeout；纯寒暄不补。
-- [ ] scope：Multica / River 等不同项目群的项目记忆不混，单聊默认不加载项目记忆。
-- [ ] 可观测：页面和写入事件都能看见 daily / user / relationship / project / channel 的写入计数。
+- [x] 自审：5 个 target agents 时应出现 5 条 self-review 结果；其中单个失败不应拖死其他 agent。
+- [x] curator：a-kun 只做团队治理时，应清楚看到输入候选数、合并数、冲突数、晋升数。
+- [x] daily：实质工作完成但 agent 没写时，应自动补 closeout；纯寒暄不补。
+- [ ] scope：Multica / River 等不同项目群的项目记忆不混，单聊默认不加载项目记忆。（依赖运行时加载策略，本改造保留 scope 字段但不单独验收）
+- [x] 可观测：页面和写入事件都能看见 daily / user / relationship / project / channel 的写入计数。

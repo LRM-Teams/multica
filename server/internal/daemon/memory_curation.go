@@ -12,7 +12,24 @@ import (
 
 func (d *Daemon) handleMemoryCuration(ctx context.Context, rt Runtime, pending PendingMemoryCuration) {
 	defer d.finishMemoryCurationRun(rt.ID, pending.ID)
-	d.logger.Info("memory curation requested", "runtime_id", rt.ID, "run_id", pending.ID, "stage", pending.Stage)
+	if strings.TrimSpace(pending.AgentRunID) != "" {
+		targetAgentID := ""
+		if len(pending.AgentIDs) > 0 {
+			targetAgentID = strings.TrimSpace(pending.AgentIDs[0])
+		}
+		if targetAgentID == "" {
+			targetAgentID = strings.TrimSpace(pending.CuratorAgentID)
+		}
+		d.logger.Info("memory self-review child run",
+			"runtime_id", rt.ID,
+			"agent_run_id", pending.AgentRunID,
+			"parent_run_id", pending.ParentRunID,
+			"agent_id", targetAgentID,
+			"stage", pending.Stage,
+			"runtime_source", "claimed_runtime")
+	} else {
+		d.logger.Info("memory curation requested", "runtime_id", rt.ID, "run_id", pending.ID, "stage", pending.Stage, "curator_agent_id", pending.CuratorAgentID)
+	}
 	payload := map[string]any{"status": "failed", "claim_token": pending.ClaimToken}
 
 	stage, err := memorycuration.NormalizeStage(pending.Stage)

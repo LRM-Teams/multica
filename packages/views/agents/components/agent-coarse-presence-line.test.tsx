@@ -42,7 +42,7 @@ describe("AgentCoarsePresenceLine (LRM-248)", () => {
     mockPresence.current = "loading";
   });
 
-  it("shows Online as text only (no duplicate dot)", () => {
+  it("shows Online as plain text — no second status dot", () => {
     mockPresence.current = {
       availability: "online",
       workload: "idle",
@@ -53,10 +53,11 @@ describe("AgentCoarsePresenceLine (LRM-248)", () => {
     renderLine();
     const mark = screen.getByTestId("agent-live-status");
     expect(mark).toHaveTextContent("Online");
+    // LRM-248: profile/DM header text has no second round indicator.
     expect(mark.querySelector(".rounded-full")).toBeNull();
   });
 
-  it("stays Online while a task runs — never Working / tool verbs", () => {
+  it("shows Online while a task runs — never Working", () => {
     mockPresence.current = {
       availability: "online",
       workload: "working",
@@ -67,11 +68,10 @@ describe("AgentCoarsePresenceLine (LRM-248)", () => {
     renderLine();
     const mark = screen.getByTestId("agent-live-status");
     expect(mark).toHaveTextContent("Online");
-    expect(mark).not.toHaveTextContent("Working");
-    expect(mark).not.toHaveTextContent(/command|Reading|Writing/i);
+    expect(mark).not.toHaveTextContent(/Working|command|Reading/i);
   });
 
-  it("folds unstable into Online", () => {
+  it("folds unstable → Online", () => {
     mockPresence.current = {
       availability: "unstable",
       workload: "idle",

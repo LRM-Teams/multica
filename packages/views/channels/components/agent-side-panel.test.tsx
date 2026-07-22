@@ -32,6 +32,12 @@ vi.mock("../../agents/components/agent-presence-status-line", () => ({
   AgentPresenceStatusLine: () => <span data-testid="presence-status" />,
 }));
 
+vi.mock("../../common/actor-avatar", () => ({
+  AgentPresenceOverlay: ({ children }: { children: React.ReactNode }) => (
+    <>{children}</>
+  ),
+}));
+
 vi.mock("../../agents/components/tabs/activity-tab", () => ({
   ActivityTab: () => <div>Activity content</div>,
 }));

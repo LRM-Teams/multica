@@ -5,7 +5,7 @@ import type { AgentTask } from "@multica/core/types";
 import type { ActivityEvent } from "./components/tabs/activity-event";
 import {
   pickPrimaryActiveTask,
-  resolveAgentActivityHeader,
+  resolveAgentActivityProjection,
   resolveAgentLiveStatus,
 } from "./resolve-agent-live-status";
 
@@ -86,34 +86,42 @@ describe("pickPrimaryActiveTask", () => {
 
 describe("resolveAgentLiveStatus (LRM-248 Online/Offline only)", () => {
   it("returns null while presence is loading", () => {
-    expect(resolveAgentLiveStatus({ presence: "loading", tAgents })).toBeNull();
+    expect(
+      resolveAgentLiveStatus({ presence: "loading", tAgents }),
+    ).toBeNull();
   });
 
-  it("shows Online for online and unstable; never Unstable/Working", () => {
-    expect(
-      resolveAgentLiveStatus({
-        presence: presence({ availability: "online", workload: "working" }),
-        tAgents,
-      })?.label,
-    ).toBe("Online");
-    expect(
-      resolveAgentLiveStatus({
-        presence: presence({ availability: "unstable", workload: "idle" }),
-        tAgents,
-      })?.label,
-    ).toBe("Online");
+  it("shows Online when online — never Working / Idle / activity verbs", () => {
+    const view = resolveAgentLiveStatus({
+      presence: presence({ availability: "online", workload: "working", runningCount: 1 }),
+      activeTask: task({ id: "task-1", status: "running" }),
+      latestActivity: evt({ activity_kind: "tool_call", tool: "bash" }),
+      tAgents,
+    });
+    expect(view?.label).toBe("Online");
+    expect(view?.dotClass).toBe("bg-success");
+  });
+
+  it("folds unstable → Online (never Unstable / Reconnecting)", () => {
+    const view = resolveAgentLiveStatus({
+      presence: presence({ availability: "unstable", workload: "working", runningCount: 1 }),
+      activeTask: task({ id: "task-1", status: "running" }),
+      latestActivity: evt({ activity_kind: "tool_call", tool: "bash" }),
+      tAgents,
+    });
+    expect(view?.label).toBe("Online");
+    expect(view?.label).not.toMatch(/Unstable|Reconnecting/i);
   });
 
   it("shows Offline when offline", () => {
-    expect(
-      resolveAgentLiveStatus({
-        presence: presence({ availability: "offline", workload: "working" }),
-        tAgents,
-      })?.label,
-    ).toBe("Offline");
+    const view = resolveAgentLiveStatus({
+      presence: presence({ availability: "offline", workload: "idle" }),
+      tAgents,
+    });
+    expect(view?.label).toBe("Offline");
   });
 
-  it("returns null for archived (avatar grayscale, no live word)", () => {
+  it("returns null for archived (not a live presence)", () => {
     expect(
       resolveAgentLiveStatus({
         presence: presence({ availability: "archived" }),
@@ -123,41 +131,51 @@ describe("resolveAgentLiveStatus (LRM-248 Online/Offline only)", () => {
   });
 });
 
-describe("resolveAgentActivityHeader (Activity verbs, not live presence)", () => {
+describe("resolveAgentActivityProjection (composer strip — non-live verbs)", () => {
   const online = presence({ availability: "online", workload: "working", runningCount: 1 });
 
-  it("returns null when idle or offline", () => {
+  it("returns null when idle / offline / no active task", () => {
     expect(
-      resolveAgentActivityHeader({
+      resolveAgentActivityProjection({
         presence: presence({ availability: "online", workload: "idle" }),
         activeTask: null,
         latestActivity: null,
       }),
     ).toBeNull();
     expect(
-      resolveAgentActivityHeader({
-        presence: presence({ availability: "offline" }),
+      resolveAgentActivityProjection({
+        presence: presence({ availability: "offline", workload: "working" }),
         activeTask: task({ id: "t", status: "running" }),
-        latestActivity: evt({ activity_kind: "thinking" }),
+        latestActivity: evt({ activity_kind: "tool_call", tool: "bash" }),
       }),
     ).toBeNull();
   });
 
-  it("treats unstable as online for activity projection", () => {
-    const view = resolveAgentActivityHeader({
-      presence: presence({ availability: "unstable", workload: "working", runningCount: 1 }),
+  it("shows Thinking for a running task with no activity row yet", () => {
+    const view = resolveAgentActivityProjection({
+      presence: online,
       activeTask: task({ id: "task-1", status: "running" }),
       latestActivity: null,
     });
     expect(view?.label).toBe("Thinking");
   });
 
-  it("projects a command row as Running command", () => {
-    const view = resolveAgentActivityHeader({
+  it("projects a command row as 'Running command…'", () => {
+    const view = resolveAgentActivityProjection({
       presence: online,
       activeTask: task({ id: "task-1", status: "running" }),
       latestActivity: evt({ activity_kind: "tool_call", tool: "bash" }),
     });
     expect(view?.label).toContain("Running command");
+  });
+
+  it("never invents Queued / Unstable / Reconnecting", () => {
+    const view = resolveAgentActivityProjection({
+      presence: presence({ availability: "unstable", workload: "queued", queuedCount: 1 }),
+      activeTask: task({ id: "task-1", status: "queued" }),
+      latestActivity: null,
+    });
+    expect(view?.label).toBe("Thinking");
+    expect(view?.label).not.toMatch(/Queued|Unstable|Reconnecting/i);
   });
 });

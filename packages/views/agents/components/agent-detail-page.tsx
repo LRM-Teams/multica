@@ -47,7 +47,7 @@ import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { AppLink, useNavigation } from "../../navigation";
 import { BreadcrumbHeader } from "../../layout/breadcrumb-header";
 import { PageHeader } from "../../layout/page-header";
-import { availabilityConfig } from "../presence";
+import { availabilityConfig, toLiveAvailability } from "../presence";
 import { AgentDetailInspector } from "./agent-detail-inspector";
 import { AgentOverviewPane, type DetailTab } from "./agent-overview-pane";
 import { useUpdateAgent } from "../hooks/use-update-agent";
@@ -328,8 +328,9 @@ function DetailHeader({
   const { t } = useT("agents");
   const isArchived = !!agent.archived_at;
   const displayName = resolveActorDisplayName(agent, agent.id);
-  const av = presence
-    ? { ...availabilityConfig[presence.availability], label: t(($) => $.availability[presence.availability]) }
+  const live = presence ? toLiveAvailability(presence.availability) : null;
+  const av = live
+    ? { ...availabilityConfig[live], label: t(($) => $.availability[live]) }
     : null;
   // Last-task state is intentionally not surfaced in the header — the
   // Recent work section on this page already shows the same information
@@ -342,13 +343,16 @@ function DetailHeader({
       leaf={
         <>
           <h1 className="min-w-0 truncate text-sm font-medium text-foreground">{displayName}</h1>
-          {av && presence && (
-            <span
-              className={`inline-flex shrink-0 items-center gap-1.5 rounded-md border px-1.5 py-0.5 text-xs ${av.textClass}`}
-            >
-              <span className={`h-1.5 w-1.5 rounded-full ${av.dotClass}`} />
-              {av.label}
+          {isArchived ? (
+            <span className="shrink-0 text-xs text-muted-foreground">
+              {t(($) => $.row.archived)}
             </span>
+          ) : (
+            av && (
+              <span className={`shrink-0 text-xs ${av.textClass}`}>
+                {av.label}
+              </span>
+            )
           )}
         </>
       }

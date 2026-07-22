@@ -27,6 +27,12 @@ vi.mock("@multica/ui/components/common/actor-avatar", () => ({
   ActorAvatar: () => <span data-testid="actor-avatar" />,
 }));
 
+vi.mock("./actor-avatar", () => ({
+  AgentPresenceOverlay: ({ children }: { children: React.ReactNode }) => (
+    <>{children}</>
+  ),
+}));
+
 vi.mock("@multica/core/workspace/avatar-url", () => ({
   resolvePublicFileUrl: (url: string | null | undefined) => url ?? null,
 }));
@@ -163,23 +169,23 @@ describe("ActorProfileContentLoaded", () => {
     expect(screen.queryByText(/Working/)).toBeNull();
   });
 
-  it("name-row status shows detailed stage labels from the live hook", () => {
-    mockLiveStatus.current = live("Running command…", {
-      textClass: "text-brand",
-      dotClass: "bg-brand",
+  it("name-row status shows Online/Offline plain text without a second status dot (LRM-248)", () => {
+    mockLiveStatus.current = live("Online", {
+      textClass: "text-success",
+      dotClass: "bg-success",
     });
 
     render(<ActorProfileContentLoaded profile={makeProfile()} />);
 
-    expect(screen.getByTestId("agent-live-status")).toHaveTextContent(
-      "Running command…",
-    );
+    const mark = screen.getByTestId("agent-live-status");
+    expect(mark).toHaveTextContent("Online");
+    expect(mark.querySelector(".rounded-full")).toBeNull();
   });
 
   it("places live status immediately after the display name (not far-right)", () => {
-    mockLiveStatus.current = live("Thinking", {
-      textClass: "text-brand",
-      dotClass: "bg-brand",
+    mockLiveStatus.current = live("Online", {
+      textClass: "text-success",
+      dotClass: "bg-success",
     });
 
     render(<ActorProfileContentLoaded profile={makeProfile()} />);
@@ -190,7 +196,7 @@ describe("ActorProfileContentLoaded", () => {
     // short name would shove status to the far edge of the card.
     expect(name.parentElement).toBe(status.parentElement);
     expect(name.className).not.toMatch(/\bflex-1\b/);
-    expect(status).toHaveTextContent("Thinking");
+    expect(status).toHaveTextContent("Online");
   });
 
   it("omits the description section when the profile has no description", () => {

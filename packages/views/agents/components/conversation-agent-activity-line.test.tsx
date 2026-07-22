@@ -14,8 +14,8 @@ vi.mock("@multica/core/agents", () => ({
 vi.mock("@tanstack/react-query", () => ({
   useQuery: () => ({ data: snapshotMock() }),
 }));
-vi.mock("../use-agent-activity-header", () => ({
-  useAgentActivityHeader: () => liveStatusMock(),
+vi.mock("../use-agent-live-status", () => ({
+  useAgentActivityProjection: () => liveStatusMock(),
 }));
 
 function runningTask(agentId: string): AgentTask {

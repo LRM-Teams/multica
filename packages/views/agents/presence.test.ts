@@ -3,10 +3,11 @@ import type { TFunction } from "i18next";
 import type { AgentPresenceDetail } from "@multica/core/agents";
 import {
   formatPresenceStatus,
+  matchesLiveAvailabilityFilter,
   presenceStatusDotClass,
   presenceStatusToken,
   presenceStatusVisual,
-  toLivePresence,
+  toLiveAvailability,
   availabilityConfig,
 } from "./presence";
 
@@ -34,49 +35,58 @@ const LABELS = {
 const t = ((selector: (res: typeof LABELS) => string) =>
   selector(LABELS)) as TFunction<"agents">;
 
-describe("toLivePresence (LRM-248)", () => {
-  it("folds unstable into online", () => {
-    expect(toLivePresence("online")).toBe("online");
-    expect(toLivePresence("unstable")).toBe("online");
-    expect(toLivePresence("offline")).toBe("offline");
-    expect(toLivePresence("archived")).toBe("archived");
+describe("toLiveAvailability", () => {
+  it("folds online + unstable → online, offline → offline, archived → null", () => {
+    expect(toLiveAvailability("online")).toBe("online");
+    expect(toLiveAvailability("unstable")).toBe("online");
+    expect(toLiveAvailability("offline")).toBe("offline");
+    expect(toLiveAvailability("archived")).toBeNull();
   });
 });
 
-describe("formatPresenceStatus (LRM-248)", () => {
+describe("formatPresenceStatus (LRM-248 Online/Offline only)", () => {
   it("returns null while loading", () => {
     expect(formatPresenceStatus("loading", t)).toBeNull();
     expect(formatPresenceStatus(null, t)).toBeNull();
     expect(formatPresenceStatus(undefined, t)).toBeNull();
   });
 
-  it("never surfaces Working / Queued / Idle / Unstable as live words", () => {
+  it("always shows Online while reachable — never Working / Idle / Queued", () => {
     expect(
       formatPresenceStatus(presence({ availability: "online", workload: "working" }), t),
-    ).toBe("Online");
-    expect(
-      formatPresenceStatus(presence({ availability: "online", workload: "queued" }), t),
     ).toBe("Online");
     expect(
       formatPresenceStatus(presence({ availability: "online", workload: "idle" }), t),
     ).toBe("Online");
     expect(
-      formatPresenceStatus(presence({ availability: "unstable", workload: "idle" }), t),
+      formatPresenceStatus(presence({ availability: "online", workload: "queued" }), t),
     ).toBe("Online");
   });
 
-  it("shows Offline when offline even with residual workload", () => {
+  it("folds unstable → Online; offline → Offline; archived → null", () => {
     expect(
       formatPresenceStatus(
         presence({ availability: "offline", workload: "working" }),
         t,
       ),
     ).toBe("Offline");
+    expect(
+      formatPresenceStatus(
+        presence({ availability: "unstable", workload: "idle" }),
+        t,
+      ),
+    ).toBe("Online");
+    expect(
+      formatPresenceStatus(
+        presence({ availability: "archived", workload: "idle" }),
+        t,
+      ),
+    ).toBeNull();
   });
 });
 
 describe("presenceStatusVisual", () => {
-  it("always returns availability visuals for live presence", () => {
+  it("returns online config for online and unstable", () => {
     const onlineWorking = presence({ availability: "online", workload: "working" });
     expect(presenceStatusToken(onlineWorking)).toEqual({
       kind: "availability",
@@ -89,6 +99,7 @@ describe("presenceStatusVisual", () => {
       kind: "availability",
       value: "online",
     });
+    expect(presenceStatusVisual(unstable)).toBe(availabilityConfig.online);
 
     const offline = presence({ availability: "offline", workload: "working" });
     expect(presenceStatusToken(offline)).toEqual({
@@ -100,9 +111,12 @@ describe("presenceStatusVisual", () => {
 });
 
 describe("presenceStatusDotClass", () => {
-  it("returns null while loading", () => {
+  it("returns null while loading or archived", () => {
     expect(presenceStatusDotClass("loading")).toBeNull();
     expect(presenceStatusDotClass(null)).toBeNull();
+    expect(
+      presenceStatusDotClass(presence({ availability: "archived" })),
+    ).toBeNull();
   });
 
   it("maps online + unstable to green; offline to gray", () => {
@@ -115,5 +129,15 @@ describe("presenceStatusDotClass", () => {
     expect(
       presenceStatusDotClass(presence({ availability: "offline", workload: "idle" })),
     ).toBe(availabilityConfig.offline.dotClass);
+  });
+});
+
+describe("matchesLiveAvailabilityFilter", () => {
+  it("counts unstable under Online", () => {
+    expect(matchesLiveAvailabilityFilter("unstable", "online")).toBe(true);
+    expect(matchesLiveAvailabilityFilter("online", "online")).toBe(true);
+    expect(matchesLiveAvailabilityFilter("offline", "online")).toBe(false);
+    expect(matchesLiveAvailabilityFilter("offline", "offline")).toBe(true);
+    expect(matchesLiveAvailabilityFilter("archived", "offline")).toBe(false);
   });
 });

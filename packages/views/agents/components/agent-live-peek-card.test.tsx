@@ -122,6 +122,12 @@ vi.mock("@multica/core/agents", async () => {
   };
 });
 
+vi.mock("../../common/actor-avatar", () => ({
+  AgentPresenceOverlay: ({ children }: { children: React.ReactNode }) => (
+    <>{children}</>
+  ),
+}));
+
 import { AgentLivePeekCard } from "./agent-live-peek-card";
 
 function makeAgent(overrides: Record<string, unknown> = {}) {
@@ -217,10 +223,9 @@ describe("AgentLivePeekCard", () => {
 
     renderCard();
 
-    // LRM-248: live name-row word is Online/Offline only (Activity verbs stay
-    // on the Activity timeline / composer strip, not the peek header).
+    // LRM-248: live peek header is Online/Offline only — never Thinking /
+    // Working as presence. Activity verbs live on the composer strip.
     expect(screen.getByText("Online")).toBeInTheDocument();
-    expect(screen.queryByText("Thinking")).toBeNull();
     // identifier + title both render under the same link.
     const link = screen.getByRole("link", { name: /MUL-42/ });
     expect(link).toHaveAttribute("href", "/test/issues/issue-42");

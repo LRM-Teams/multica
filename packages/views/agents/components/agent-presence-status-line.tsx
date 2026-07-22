@@ -5,18 +5,11 @@ import { useAgentLiveStatus } from "../use-agent-live-status";
 import { AgentLiveStatusMark } from "./agent-live-status-mark";
 
 /**
- * Live name-row status for an agent, wired for header call sites
- * (DM header, side panel, live peek).
+ * Live Online/Offline name-row status for header call sites
+ * (DM header, side panel, live peek, profile card).
  *
- * Data: `useAgentLiveStatus` — stage word when a task is active
- * (Thinking / Running command… / Queued…), coarse presence when idle
- * (Idle / Offline / …). Same source as the profile hover card.
- *
- * Visual: `AgentLiveStatusMark` — coloured dot + word (never a Lucide
- * icon), so headers cannot drift from the hover card.
- *
- * Shows a skeleton while status is still resolving so header height stays
- * stable.
+ * LRM-248: plain text word only — the avatar badge is the round indicator;
+ * no second dot next to the word.
  */
 export function AgentPresenceStatusLine({
   agentId,
@@ -28,6 +21,11 @@ export function AgentPresenceStatusLine({
   const wsId = useWorkspaceId();
   const status = useAgentLiveStatus(wsId, agentId);
   return (
-    <AgentLiveStatusMark status={status} className={className} showSkeleton />
+    <AgentLiveStatusMark
+      status={status}
+      className={className}
+      showSkeleton
+      showDot={false}
+    />
   );
 }

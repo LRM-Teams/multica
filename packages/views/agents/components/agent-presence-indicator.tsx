@@ -2,17 +2,28 @@
 
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import type { AgentPresenceDetail } from "@multica/core/agents";
-import { availabilityConfig, toLivePresence } from "../presence";
+import {
+  availabilityConfig,
+  toLiveAvailability,
+} from "../presence";
 import { useT } from "../../i18n";
 
 interface PresenceIndicatorProps {
+  // null/undefined = still loading. Caller passes the detail computed at
+  // the page level (or via the useAgentPresenceDetail hook for single-agent
+  // views). Keeping this as a prop avoids per-row hook subscriptions in
+  // long lists.
   detail: AgentPresenceDetail | null | undefined;
-  /** Compact = dot only. Used in dense rows. */
+  // Compact = dot only, no label. Used in dense rows.
   compact?: boolean;
 }
 
 /**
- * Live Online/Offline indicator (LRM-248). No Unstable / Working / Queued chips.
+ * Renders live Online/Offline presence (LRM-248).
+ *
+ * Compact mode collapses to dot-only. Full mode is dot + Online/Offline
+ * word — never Unstable / Working / Queued / Idle as live labels.
+ * Archived returns null (caller grays the avatar separately).
  */
 export function AgentPresenceIndicator({
   detail,
@@ -27,20 +38,11 @@ export function AgentPresenceIndicator({
     );
   }
 
-  const live = toLivePresence(detail.availability);
-  if (live === "archived") {
-    return compact ? null : (
-      <span className="text-xs text-muted-foreground">
-        {t(($) => $.availability.archived)}
-      </span>
-    );
-  }
+  const live = toLiveAvailability(detail.availability);
+  if (!live) return null;
 
-  const av = live === "online" ? availabilityConfig.online : availabilityConfig.offline;
-  const availabilityLabel =
-    live === "online"
-      ? t(($) => $.availability.online)
-      : t(($) => $.availability.offline);
+  const av = availabilityConfig[live];
+  const availabilityLabel = t(($) => $.availability[live]);
 
   if (compact) {
     return (

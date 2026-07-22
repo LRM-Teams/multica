@@ -8,17 +8,20 @@ import {
   type ActivityEvent,
 } from "./components/tabs/activity-event";
 import {
-  availabilityConfig,
   formatPresenceStatus,
-  toLivePresence,
+  presenceStatusDotClass,
+  presenceStatusVisual,
+  toLiveAvailability,
 } from "./presence";
 
+// Activity projection tones — kind colour on the DOT only; label text stays
+// neutral (mirrors the Activity timeline row).
 const TONE_DOT_CLASS = ACTIVITY_TONE_DOT_CLASS;
 const ACTIVITY_LABEL_TEXT = "text-foreground";
 
 /**
- * Live presence word for profile / name-row surfaces (LRM-248).
- * Only Online / Offline — never Unstable / Reconnecting / Idle / Working / Queued.
+ * Live Online/Offline view for profile / DM / side-panel headers (LRM-248).
+ * Never carries Unstable / Reconnecting / Working / Idle / activity verbs.
  */
 export type AgentLiveStatusView = {
   label: string;
@@ -65,45 +68,53 @@ export function pickPrimaryActiveTask(
 }
 
 /**
- * Live Online/Offline word for profile cards and name rows (LRM-248).
- * Archived agents return null — avatar is grayscale with no live chrome.
+ * Live presence for headers / profile cards — Online or Offline only.
+ * `unstable` folds to Online. Archived returns null (caller shows gray avatar
+ * + muted Archived secondary line; not a third live state).
  */
 export function resolveAgentLiveStatus(args: {
   presence: AgentPresenceDetail | "loading" | null | undefined;
-  /** @deprecated Ignored — live status is presence-only (LRM-248). */
+  /** @deprecated Ignored — live status no longer projects activity (LRM-248). */
   activeTask?: AgentTask | null;
-  /** @deprecated Ignored — live status is presence-only (LRM-248). */
+  /** @deprecated Ignored — live status no longer projects activity (LRM-248). */
   latestActivity?: ActivityEvent | null;
   tAgents: TFunction<"agents">;
-  /** @deprecated Ignored — live status is presence-only (LRM-248). */
+  /** @deprecated Unused for live Online/Offline. */
   tChat?: TFunction<"chat">;
 }): AgentLiveStatusView | null {
   const { presence, tAgents } = args;
   if (!presence || presence === "loading") return null;
-  const live = toLivePresence(presence.availability);
-  if (live === "archived") return null;
+  if (toLiveAvailability(presence.availability) === null) return null;
 
   const label = formatPresenceStatus(presence, tAgents);
-  if (!label) return null;
-  const visual =
-    live === "online" ? availabilityConfig.online : availabilityConfig.offline;
-  return { label, textClass: visual.textClass, dotClass: visual.dotClass };
+  const visual = presenceStatusVisual(presence);
+  const dotClass = presenceStatusDotClass(presence);
+  if (!label || !visual || !dotClass) return null;
+  return { label, textClass: visual.textClass, dotClass };
 }
 
 /**
- * Composer / Activity header projection of the latest work row (Thinking /
- * Running command…). Not a live presence word — Activity event vocabulary is
- * allowed here (LRM-248). Never surfaces Unstable / Reconnecting.
+ * Activity-timeline projection for the composer strip (non-live event verbs:
+ * Thinking / Running command…). Not a live presence label — Idle/Working/
+ * Queued/Unstable/Reconnecting never appear here as presence words.
+ *
+ * Connection down (offline) suppresses activity verbs so a stale task cannot
+ * paint "Running command" on an unreachable agent.
  */
-export function resolveAgentActivityHeader(args: {
+export function resolveAgentActivityProjection(args: {
   presence: AgentPresenceDetail | "loading" | null | undefined;
   activeTask: AgentTask | null;
   latestActivity: ActivityEvent | null;
 }): AgentLiveStatusView | null {
   const { presence, activeTask, latestActivity } = args;
-  if (!presence || presence === "loading" || !activeTask) return null;
-  const live = toLivePresence(presence.availability);
-  if (live === "archived" || live === "offline") return null;
+  if (!presence || presence === "loading") return null;
+  if (!activeTask) return null;
+
+  const live = toLiveAvailability(presence.availability);
+  // Archived / unknown — no activity strip.
+  if (live === null) return null;
+  // Offline — hide activity verbs (connection wins).
+  if (live === "offline") return null;
 
   if (latestActivity) {
     const p = activityPresentation(latestActivity);
@@ -118,6 +129,8 @@ export function resolveAgentActivityHeader(args: {
       dotClass: TONE_DOT_CLASS[p.tone],
     };
   }
+
+  // Task on the plate but nothing streamed yet → Thinking (timeline opener).
   return {
     label: ACTIVITY_LABEL_EN.thinking,
     textClass: ACTIVITY_LABEL_TEXT,

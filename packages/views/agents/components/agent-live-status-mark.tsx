@@ -5,23 +5,27 @@ import { cn } from "@multica/ui/lib/utils";
 import type { AgentLiveStatusView } from "../resolve-agent-live-status";
 
 /**
- * Live status word next to a name (LRM-248).
+ * Canonical live / activity status chip.
  *
- * Profile / name rows: **text only** by default — the avatar already carries
- * the corner live dot; a second dot next to「在线」is the duplicate Frank rejected.
- * Pass `showDot` for Activity-style strips that are not sitting beside an avatar.
+ * Profile / DM / side-panel headers (LRM-248): pass `showDot={false}` so the
+ * avatar badge is the only round indicator; the word is plain "Online" /
+ * "Offline" text. Activity composer strip keeps the small tone dot.
  */
 export function AgentLiveStatusMark({
   status,
   className,
   showSkeleton = false,
-  showDot = false,
+  showDot = true,
 }: {
   status: AgentLiveStatusView | null;
   className?: string;
   /** When status is still resolving, render a width-stable skeleton. */
   showSkeleton?: boolean;
-  /** Include the coloured status dot (default false — LRM-248 no duplicate). */
+  /**
+   * When false, render the label only (no second round indicator next to the
+   * word). Use on profile surfaces where the avatar already carries the live
+   * badge (LRM-248 — no duplicate indicators).
+   */
   showDot?: boolean;
 }) {
   if (!status) {

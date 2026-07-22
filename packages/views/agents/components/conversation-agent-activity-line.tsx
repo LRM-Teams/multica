@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { agentTaskSnapshotOptions } from "@multica/core/agents";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { cn } from "@multica/ui/lib/utils";
-import { useAgentActivityHeader } from "../use-agent-activity-header";
+import { useAgentActivityProjection } from "../use-agent-live-status";
 import { pickPrimaryActiveTask } from "../resolve-agent-live-status";
 import { AgentLiveStatusMark } from "./agent-live-status-mark";
 
@@ -13,8 +13,11 @@ import { AgentLiveStatusMark } from "./agent-live-status-mark";
  * Quiet one-line "what is this conversation's agent doing right now" strip,
  * rendered directly above the composer.
  *
- * Projects the latest Activity work row (Thinking / Running command…) — not
- * live Online/Offline presence (LRM-248). Hide when idle.
+ * Projects Activity timeline verbs (Thinking / Running command…) — these are
+ * non-live event copy, allowed by LRM-248. Live Online/Offline lives on the
+ * header / avatar badge, not here.
+ *
+ * HONEST / hide-when-idle: renders nothing unless the agent has an active task.
  */
 export function ConversationAgentActivityLine({
   agentId,
@@ -32,7 +35,7 @@ export function ConversationAgentActivityLine({
     () => pickPrimaryActiveTask(snapshot, agentId),
     [snapshot, agentId],
   );
-  const status = useAgentActivityHeader(wsId, agentId);
+  const status = useAgentActivityProjection(wsId, agentId);
 
   if (!activeTask || !status) return null;
   if (status.label === "Output") return null;
@@ -46,7 +49,7 @@ export function ConversationAgentActivityLine({
       aria-live="polite"
       data-testid="conversation-agent-activity-line"
     >
-      <AgentLiveStatusMark status={status} showDot />
+      <AgentLiveStatusMark status={status} />
     </div>
   );
 }

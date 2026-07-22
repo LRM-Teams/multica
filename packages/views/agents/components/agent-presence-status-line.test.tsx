@@ -10,7 +10,7 @@ vi.mock("../use-agent-live-status", () => ({
 }));
 
 describe("AgentPresenceStatusLine", () => {
-  it("renders the live status word without a duplicate dot (LRM-248)", () => {
+  it("renders the live status mark (dot + word) when status resolves", () => {
     liveStatusMock.mockReturnValue({
       label: "Offline",
       textClass: "text-muted-foreground",
@@ -21,8 +21,7 @@ describe("AgentPresenceStatusLine", () => {
 
     const mark = screen.getByTestId("agent-live-status");
     expect(mark).toHaveTextContent("Offline");
-    // Avatar already carries the corner live dot — name-row mark is text only.
-    expect(mark.querySelector(".rounded-full")).toBeNull();
+    expect(mark.querySelector(".rounded-full")).not.toBeNull();
     expect(screen.queryByTestId("presence-skeleton")).toBeNull();
   });
 

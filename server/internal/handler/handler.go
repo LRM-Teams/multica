@@ -183,6 +183,12 @@ type Handler struct {
 	// next replica waits the full TTL.
 	LarkHub *lark.Hub
 	cfg     Config
+	// syncMessageSideEffects forces post-ack fanout (agent wake, Wendy
+	// ingest, Feishu) to run inline before the HTTP handler returns.
+	// Production leaves this false so SendChannelMessage / ThreadReply
+	// can return 201 immediately after WS publish. Tests set it true to
+	// avoid racing the background goroutine.
+	syncMessageSideEffects bool
 }
 
 func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *events.Bus, emailService *service.EmailService, store storage.Storage, cfSigner *auth.CloudFrontSigner, analyticsClient analytics.Client, cfg Config, daemonHubs ...*daemonws.Hub) *Handler {

@@ -73,6 +73,9 @@ func TestMain(m *testing.M) {
 	})
 	emailSvc := service.NewEmailService()
 	testHandler = New(queries, pool, hub, bus, emailSvc, nil, nil, analytics.NoopClient{}, Config{AllowSignup: true})
+	// Channel send tests assert wake/inbox side effects immediately after the
+	// handler returns; keep those inline so async fanout does not flake CI.
+	testHandler.syncMessageSideEffects = true
 	// httptest.NewRequest defaults RemoteAddr to 192.0.2.1, so every webhook
 	// test in the suite shares one IP bucket. With the production default
 	// (30/min) the budget runs out partway through the suite and unrelated

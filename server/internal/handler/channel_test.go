@@ -3492,6 +3492,44 @@ func TestListChannelsMentionUnreadCountTracksReadCursor(t *testing.T) {
 	}
 }
 
+func TestRunChannelMessageSideEffectsSyncRunsInline(t *testing.T) {
+	h := &Handler{syncMessageSideEffects: true}
+	ran := false
+	h.runChannelMessageSideEffects(context.Background(), func(context.Context) {
+		ran = true
+	})
+	if !ran {
+		t.Fatal("expected sync side effects to run before return")
+	}
+}
+
+func TestRunChannelMessageSideEffectsAsyncDoesNotBlock(t *testing.T) {
+	h := &Handler{} // production default: async
+	started := make(chan struct{})
+	unblock := make(chan struct{})
+	done := make(chan struct{})
+	begin := time.Now()
+	h.runChannelMessageSideEffects(context.Background(), func(context.Context) {
+		close(started)
+		<-unblock
+		close(done)
+	})
+	if elapsed := time.Since(begin); elapsed > 50*time.Millisecond {
+		t.Fatalf("async side effects blocked caller for %s", elapsed)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("async side effects never started")
+	}
+	close(unblock)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("async side effects never finished")
+	}
+}
+
 func TestSendChannelMessageReplyReturnsSummary(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

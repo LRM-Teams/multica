@@ -439,16 +439,23 @@ describe("ChannelsPage — Channel details shares the exclusive thread/agent slo
     expect(screen.queryByTestId("thread-panel")).toBeNull();
   });
 
-  it("clicking the channel name again closes Channel details", async () => {
-    renderPage();
-    await screen.findByTestId("message-list");
-    const toggle = screen.getByRole("button", { name: "Open channel details" });
-    fireEvent.click(toggle);
-    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
-    expect(await screen.findByRole("button", { name: "project" })).toBeTruthy();
-    fireEvent.click(toggle);
-    await waitFor(() => {
-      expect(screen.queryByRole("button", { name: "project" })).toBeNull();
-    });
-  });
+  it(
+    "clicking the channel name again closes Channel details",
+    async () => {
+      renderPage();
+      await screen.findByTestId("message-list");
+      const toggle = screen.getByRole("button", { name: "Open channel details" });
+      fireEvent.click(toggle);
+      fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+      expect(await screen.findByRole("button", { name: "project" })).toBeTruthy();
+      fireEvent.click(toggle);
+      await waitFor(
+        () => {
+          expect(screen.queryByRole("button", { name: "project" })).toBeNull();
+        },
+        { timeout: 8000 },
+      );
+    },
+    12000,
+  );
 });

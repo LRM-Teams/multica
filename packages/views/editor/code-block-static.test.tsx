@@ -21,5 +21,7 @@ describe("CodeBlockStatic", () => {
 
     expect(codeCss).toContain("pre.rich-text-editor");
     expect(codeCss).toContain("pre.rich-text-editor code");
+    expect(codeCss).toContain("max-height: 300px;");
+    expect(codeCss).toContain("overflow-y: auto;");
   });
 });

@@ -14,8 +14,10 @@ vi.mock("@multica/core/workspace/hooks", () => ({
 vi.mock("../../editor", () => ({
   Attachment: ({
     attachment,
+    inlineHtmlPreview,
   }: {
     attachment: { kind: string; attachment?: { id: string; filename: string; content_type: string } };
+    inlineHtmlPreview?: boolean;
   }) => {
     if (attachment.kind === "record" && attachment.attachment) {
       const a = attachment.attachment;
@@ -24,6 +26,7 @@ vi.mock("../../editor", () => ({
         <div
           data-testid={isImage ? "attachment-image" : "attachment-file"}
           data-attachment-id={a.id}
+          data-inline-html-preview={inlineHtmlPreview === false ? "false" : "true"}
         >
           {a.filename}
         </div>
@@ -131,6 +134,26 @@ describe("MessageAttachmentZone", () => {
 
     expect(screen.getByTestId("attachment-file")).toHaveTextContent("spec.pdf");
     expect(screen.queryByTestId("attachment-image")).not.toBeInTheDocument();
+  });
+
+  // LRM-285 — message stream opts out of in-bubble HTML iframe preview.
+  it("passes inlineHtmlPreview=false for HTML attachments", () => {
+    const parts: MessagePart[] = [
+      { type: "attachment", attachment_id: "html-1" },
+    ];
+    const attachments = [
+      makeAttachment({
+        id: "html-1",
+        filename: "design-agent-card-dm.html",
+        content_type: "text/html",
+      }),
+    ];
+
+    render(<MessageAttachmentZone parts={parts} attachments={attachments} />);
+
+    const tile = screen.getByTestId("attachment-file");
+    expect(tile).toHaveTextContent("design-agent-card-dm.html");
+    expect(tile).toHaveAttribute("data-inline-html-preview", "false");
   });
 
   it("renders a safe placeholder when hydration is missing", () => {

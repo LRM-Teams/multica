@@ -61,4 +61,10 @@ Evidence:
 
 ## Step 5 — Push and open a PR against `dev`
 
-Status: in progress
+Status: complete
+
+Evidence:
+
+- Committed the scoped fix as `54d834ec9` on `fix/voice-message-production` and pushed it to `origin`.
+- Opened draft PR #896 against `dev`: `fix(channels): repair production voice messages`.
+- The PR states that the application fixes are verified while browser recording remains conditional on a trusted HTTPS entrypoint; deployment will run only after the user merges the PR.

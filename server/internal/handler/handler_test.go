@@ -66,6 +66,11 @@ func TestMain(m *testing.M) {
 	hub := realtime.NewHub()
 	go hub.Run()
 	bus := events.New()
+	bus.SubscribeAll(func(event events.Event) {
+		if event.RealtimeDeliveryAck != nil {
+			event.RealtimeDeliveryAck(nil)
+		}
+	})
 	emailSvc := service.NewEmailService()
 	testHandler = New(queries, pool, hub, bus, emailSvc, nil, nil, analytics.NoopClient{}, Config{AllowSignup: true})
 	// httptest.NewRequest defaults RemoteAddr to 192.0.2.1, so every webhook

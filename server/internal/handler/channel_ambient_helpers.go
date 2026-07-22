@@ -210,6 +210,17 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 	if err != nil {
 		return db.AgentEventDelivery{}, err
 	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE channel_agent_onboarding onboarding
+		SET status = 'claimed',
+		    claimed_at = COALESCE(onboarding.claimed_at, now()),
+		    updated_at = now()
+		FROM agent_inbox_event event
+		WHERE event.id = $1
+		  AND event.channel_onboarding_id = onboarding.id
+		  AND onboarding.status = 'pending'`, eventID); err != nil {
+		return db.AgentEventDelivery{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return db.AgentEventDelivery{}, err
 	}

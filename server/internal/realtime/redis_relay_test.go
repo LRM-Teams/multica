@@ -3,6 +3,7 @@ package realtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -81,6 +82,22 @@ func TestDualWriteBroadcasterFansOutLocallyBeforePublishing(t *testing.T) {
 	}
 }
 
+func TestDualWriteBroadcasterStableUserDeliveryReturnsRelayError(t *testing.T) {
+	hub := NewHub()
+	client := attachRealtimeTestClient(hub, ScopeUser, "user-1")
+	wantErr := errors.New("xadd unavailable")
+	publisher := &localFirstPublisher{t: t, client: client, publishErr: wantErr}
+	broadcaster := newDualWriteBroadcaster(hub, publisher)
+
+	err := broadcaster.SendToUserWithID("user-1", []byte(`{"type":"channel:message"}`), "stable-message-1")
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("stable user delivery error = %v, want %v", err, wantErr)
+	}
+	if publisher.scopeType != ScopeUser || publisher.scopeID != "user-1" || publisher.eventID != "stable-message-1" {
+		t.Fatalf("stable relay publication = scope:%s/%s event:%s", publisher.scopeType, publisher.scopeID, publisher.eventID)
+	}
+}
+
 func attachRealtimeTestClient(hub *Hub, scopeType, scopeID string) *Client {
 	client := &Client{
 		send:          make(chan []byte, 2),
@@ -110,6 +127,7 @@ type localFirstPublisher struct {
 	frame      []byte
 	eventID    string
 	localFrame []byte
+	publishErr error
 }
 
 func (p *localFirstPublisher) PublishWithID(scopeType, scopeID, exclude string, frame []byte, id string) error {
@@ -125,5 +143,5 @@ func (p *localFirstPublisher) PublishWithID(scopeType, scopeID, exclude string, 
 	default:
 		p.t.Fatal("expected local fanout to happen before relay publish")
 	}
-	return nil
+	return p.publishErr
 }

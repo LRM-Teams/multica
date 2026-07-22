@@ -24,6 +24,16 @@ type Event struct {
 	// slice means "use the default workspace routing"; a non-nil empty slice is
 	// intentional fail-closed routing and must not fall back to workspace fanout.
 	RecipientUserIDs []string
+
+	// RealtimeEventID is an optional durable idempotency key for producers
+	// that may replay the same committed projection after a restart.
+	RealtimeEventID string
+
+	// RealtimeDeliveryAck is set only by producers whose durable state must
+	// not advance until the realtime listener has accepted the event. The
+	// listener calls it synchronously with the relay enqueue result. A missing
+	// callback invocation is a failed publication fence, not implicit success.
+	RealtimeDeliveryAck func(error)
 }
 
 // Handler is a function that processes an event.

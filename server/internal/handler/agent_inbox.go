@@ -154,6 +154,11 @@ func (h *Handler) DrainAgentInboxByRuntime(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "failed to reclaim expired inbox deliveries")
 		return
 	}
+	if err := h.materializeNextChannelOnboardingForRuntime(r.Context(), runtime); err != nil {
+		slog.Warn("agent inbox drain: failed to materialize channel onboarding", "runtime_id", runtimeID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to materialize channel onboarding")
+		return
+	}
 	delivery, err := h.leaseAgentInboxEventForRuntime(r.Context(), runtime)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -551,6 +556,7 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "failed to complete inbox delivery")
 		return
 	}
+	isChannelOnboarding := event.Reason == channelOnboardingReason
 	var chatDonePayload *protocol.ChatDonePayload
 	if event.ChatSessionID.Valid {
 		var sessionRuntimeID pgtype.UUID
@@ -566,15 +572,30 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 			writeError(w, http.StatusInternalServerError, "failed to update chat session")
 			return
 		}
-		payload, err := h.completedAgentInboxChatPayload(r.Context(), qtx, event, req.TaskCompleteRequest)
+		if !isChannelOnboarding {
+			payload, err := h.completedAgentInboxChatPayload(r.Context(), qtx, event, req.TaskCompleteRequest)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to save inbox chat output")
+				return
+			}
+			chatDonePayload = payload
+		}
+	}
+	terminalOutcome := ""
+	if isChannelOnboarding {
+		terminalOutcome, err = h.completeChannelOnboardingTx(r.Context(), tx, event, deliveryID, req.ChannelOnboardingDecision)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to save inbox chat output")
+			if errors.Is(err, errChannelOnboardingDecisionRequired) {
+				writeError(w, http.StatusConflict, err.Error())
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "failed to complete channel onboarding")
 			return
 		}
-		chatDonePayload = payload
+	} else {
+		terminalOutcome = agentInboxCompletionTerminalOutcome(r.Context(), h, event, req.TaskCompleteRequest, chatDonePayload)
 	}
-	terminalOutcome := agentInboxCompletionTerminalOutcome(r.Context(), h, event, req.TaskCompleteRequest, chatDonePayload)
-	if req.MustReplyFailure {
+	if !isChannelOnboarding && req.MustReplyFailure {
 		// A Raft freshness hold already persisted the attempted output as a
 		// server draft. Acknowledging this execution must not relabel that
 		// draft as an explicit no-reply decision. Actual transport failures
@@ -616,10 +637,11 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		h.recordAgentInboxVisibleOutputActivity(r.Context(), event, task.RuntimeID, *chatDonePayload)
 	}
 	h.recordAgentInboxStatusActivity(r.Context(), event, task.RuntimeID, deliveryID, agentInboxStatusActivityIdle)
-	// A held draft, an explicit no-reply decision, and a completed transport
-	// reply are separate observable outcomes. None is a delivery failure.
+	// A held draft, explicit no-reply, onboarding sent/skipped/expired, and a
+	// completed transport reply are separate observable outcomes. None is a
+	// delivery failure.
 	lifecycleStatus := "completed"
-	if terminalOutcome == "held" || terminalOutcome == "no_reply" {
+	if terminalOutcome == "held" || terminalOutcome == "no_reply" || isChannelOnboarding {
 		lifecycleStatus = terminalOutcome
 	}
 	h.publishAgentInboxTaskLifecycle(protocol.EventTaskCompleted, event, task.RuntimeID, lifecycleStatus)
@@ -675,7 +697,7 @@ func (h *Handler) FailAgentInboxEvent(w http.ResponseWriter, r *http.Request) {
 	}
 	failureReason := strings.TrimSpace(req.FailureReason)
 	reasonCode := agentInboxFailureReasonCode(errText, failureReason, req.ReasonCode)
-	if failureReason != "" {
+	if failureReason != "" && event.Reason != channelOnboardingReason {
 		h.completeFailedAgentInboxEvent(w, r, event, deliveryID, leaseToken, errText, failureReason, reasonCode, req.SessionID, req.WorkDir)
 		return
 	}
@@ -892,6 +914,23 @@ func (h *Handler) RetryChannelAgentInboxEvent(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if !h.requireChannelWritable(w, r.Context(), workspaceID, channelID) {
+		return
+	}
+	var reason string
+	if err := h.DB.QueryRow(r.Context(), `
+		SELECT reason
+		FROM agent_inbox_event
+		WHERE id = $1 AND workspace_id = $2 AND channel_id = $3`,
+		eventID, parseUUID(workspaceID), channelID).Scan(&reason); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusConflict, "inbox event is not retryable")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to inspect inbox event")
+		return
+	}
+	if reason == channelOnboardingReason {
+		writeError(w, http.StatusConflict, "channel onboarding retries reuse the canonical inbox event")
 		return
 	}
 	retry, err := h.Queries.RetryAgentInboxEvent(r.Context(), db.RetryAgentInboxEventParams{

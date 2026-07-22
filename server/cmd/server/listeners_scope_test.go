@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"sync"
 	"testing"
 
@@ -15,7 +16,9 @@ type fakeBroadcaster struct {
 	scopeCalls      []scopeCall
 	workspaceCalls  []workspaceCall
 	userCalls       []userCall
+	idUserCalls     []idUserCall
 	broadcastCalled int
+	idUserErr       error
 }
 
 type scopeCall struct {
@@ -30,6 +33,10 @@ type userCall struct {
 	userID  string
 	msg     []byte
 	exclude []string
+}
+type idUserCall struct {
+	userID, eventID string
+	msg             []byte
 }
 
 func (f *fakeBroadcaster) BroadcastToScope(scopeType, scopeID string, message []byte) {
@@ -46,6 +53,12 @@ func (f *fakeBroadcaster) SendToUser(userID string, message []byte, excludeWorks
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.userCalls = append(f.userCalls, userCall{userID, message, excludeWorkspace})
+}
+func (f *fakeBroadcaster) SendToUserWithID(userID string, message []byte, eventID string, _ ...string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.idUserCalls = append(f.idUserCalls, idUserCall{userID: userID, eventID: eventID, msg: message})
+	return f.idUserErr
 }
 func (f *fakeBroadcaster) Broadcast(message []byte) {
 	f.mu.Lock()
@@ -147,5 +160,62 @@ func TestRegisterListeners_RecipientScopedEmptyListFailsClosed(t *testing.T) {
 	}
 	if len(fb.userCalls) != 0 {
 		t.Fatalf("expected no SendToUser calls for empty recipient-scoped event, got %d", len(fb.userCalls))
+	}
+}
+
+func TestRegisterListeners_RecipientScopedStableIDUsesIdempotentFanout(t *testing.T) {
+	bus := events.New()
+	fb := &fakeBroadcaster{}
+	registerListeners(bus, fb)
+
+	var acknowledged bool
+	bus.Publish(events.Event{
+		Type:             protocol.EventChannelMessage,
+		WorkspaceID:      "ws-1",
+		RecipientUserIDs: []string{"user-1", "user-1"},
+		RealtimeEventID:  "system-message-1",
+		Payload:          map[string]any{"content": "joined"},
+		RealtimeDeliveryAck: func(err error) {
+			if err != nil {
+				t.Fatalf("stable recipient publication ack: %v", err)
+			}
+			acknowledged = true
+		},
+	})
+
+	if len(fb.userCalls) != 0 {
+		t.Fatalf("stable recipient event used non-idempotent fanout: %+v", fb.userCalls)
+	}
+	if len(fb.idUserCalls) != 1 {
+		t.Fatalf("stable recipient event fanout calls = %d, want 1", len(fb.idUserCalls))
+	}
+	if got := fb.idUserCalls[0]; got.userID != "user-1" || got.eventID != "system-message-1" {
+		t.Fatalf("stable recipient call = %+v", got)
+	}
+	if !acknowledged {
+		t.Fatal("stable recipient publication was not acknowledged")
+	}
+}
+
+func TestRegisterListeners_RecipientScopedStableIDPropagatesDeliveryFailure(t *testing.T) {
+	bus := events.New()
+	wantErr := errors.New("relay unavailable")
+	fb := &fakeBroadcaster{idUserErr: wantErr}
+	registerListeners(bus, fb)
+
+	var gotErr error
+	bus.Publish(events.Event{
+		Type:             protocol.EventChannelMessage,
+		WorkspaceID:      "ws-1",
+		RecipientUserIDs: []string{"user-1"},
+		RealtimeEventID:  "system-message-1",
+		Payload:          map[string]any{"content": "joined"},
+		RealtimeDeliveryAck: func(err error) {
+			gotErr = err
+		},
+	})
+
+	if !errors.Is(gotErr, wantErr) {
+		t.Fatalf("stable recipient publication ack error = %v, want %v", gotErr, wantErr)
 	}
 }

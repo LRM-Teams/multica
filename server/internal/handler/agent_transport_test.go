@@ -914,6 +914,22 @@ func TestAgentTransportSendDraftRebuildsMentionForCurrentDestinationMembers(t *t
 		"send_draft":     true,
 		"seen_up_to_seq": heldBody.LatestSeq,
 	})
+	// Adding the replacement destination agent commits a canonical membership
+	// system row. That is genuinely newer context, so the first retry must hold
+	// again; the next retry consumes the refreshed draft and sends it once.
+	if sent.Code == http.StatusOK {
+		var refreshed AgentTransportSendHeldResponse
+		if err := json.Unmarshal(sent.Body.Bytes(), &refreshed); err != nil {
+			t.Fatalf("decode refreshed held draft: %v", err)
+		}
+		if refreshed.Subtype != "freshness" || len(refreshed.HeldMessages) != 1 || refreshed.HeldMessages[0].Type != "system" {
+			t.Fatalf("membership change hold = %+v, want one system membership row", refreshed)
+		}
+		sent = agentTransportSendForTest(t, taskID, senderID, map[string]any{
+			"target":     target,
+			"send_draft": true,
+		})
+	}
 	if sent.Code != http.StatusCreated {
 		t.Fatalf("send held destination draft: status=%d body=%s", sent.Code, sent.Body.String())
 	}

@@ -214,6 +214,12 @@ const (
 )
 
 const (
+	ChannelOnboardingReason          = "channel_onboarding"
+	ChannelOnboardingSkipReceipt     = "channel_onboarding_skipped"
+	ChannelOnboardingDecisionSkipped = "skipped"
+)
+
+const (
 	DaemonCapabilityChannelOutputActions     = "channel_output_actions"
 	DaemonCapabilityAgentCLITransport        = "agent_cli_transport"
 	DaemonCapabilityAgentCredentialTransport = "agent_credential_transport_v1"

@@ -160,8 +160,8 @@ func TestChannelMentionStoresThreadContextAndBridgesAgentReply(t *testing.T) {
 	if threadID != "debate-thread" || promptRoot.Valid || depth != 2 {
 		t.Fatalf("prompt thread/root/depth = %q/%+v/%d, want debate-thread/no-root/2", threadID, promptRoot, depth)
 	}
-	if strings.Contains(prompt, "Recent channel messages from this channel only (bounded window):") {
-		t.Fatalf("prompt should not repeat the trigger in recent channel context:\n%s", prompt)
+	if !strings.Contains(prompt, agentHandle+" joined this channel") {
+		t.Fatalf("prompt should retain the canonical membership context before the trigger:\n%s", prompt)
 	}
 	if count := strings.Count(prompt, triggerContent); count != 1 {
 		t.Fatalf("current trigger should appear exactly once, got %d:\n%s", count, prompt)
@@ -435,7 +435,8 @@ func TestChannelChatDoneSuppressedDaemonOutdatedDoesNotWriteSystemMessage(t *tes
 	var messageCount int
 	if err := testPool.QueryRow(ctx, `
 		SELECT count(*) FROM channel_message
-		WHERE channel_id = $1 AND author_type IN ('agent', 'system')
+		WHERE channel_id = $1
+		  AND (author_type = 'agent' OR (author_type = 'system' AND membership_generation_id IS NULL))
 	`, channelID).Scan(&messageCount); err != nil {
 		t.Fatalf("count visible output messages: %v", err)
 	}
@@ -483,7 +484,8 @@ func TestChannelChatDoneSuppressedTraceOnlyDoesNotWriteSystemMessage(t *testing.
 	var messageCount int
 	if err := testPool.QueryRow(ctx, `
 		SELECT count(*) FROM channel_message
-		WHERE channel_id = $1 AND author_type IN ('agent', 'system')
+		WHERE channel_id = $1
+		  AND (author_type = 'agent' OR (author_type = 'system' AND membership_generation_id IS NULL))
 	`, channelID).Scan(&messageCount); err != nil {
 		t.Fatalf("count visible output messages: %v", err)
 	}
@@ -2155,8 +2157,8 @@ func TestChannelAgentInboxDrainAckAmbientAdvancesSessionCursor(t *testing.T) {
 	if got.AgentID != agentID || got.Reason != "ambient" || got.RequiresWake || got.SeqTo != first.Seq {
 		t.Fatalf("drained ambient event = %+v, want ambient context for agent %s seq %d", got, agentID, first.Seq)
 	}
-	if len(got.Messages) != 1 || got.Messages[0].Content != "ordinary ambient one" {
-		t.Fatalf("ambient drain messages = %+v, want first ambient message only", got.Messages)
+	if len(got.Messages) != 2 || got.Messages[0].Type != "system" || got.Messages[1].Content != "ordinary ambient one" {
+		t.Fatalf("ambient drain messages = %+v, want membership row followed by first ambient message", got.Messages)
 	}
 
 	ackReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+got.ID+"/ack", AckAgentInboxEventRequest{
@@ -4624,11 +4626,14 @@ func TestChannelMessageEditDeleteOwnOnlyKeepsTombstoneNoWake(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
 		t.Fatalf("decode messages after delete: %v", err)
 	}
-	if len(page.Messages) != 1 {
-		t.Fatalf("messages after delete = %#v, want one tombstone", page.Messages)
+	var tombstone *ChannelMessageResponse
+	for i := range page.Messages {
+		if page.Messages[i].ID == msg.ID {
+			tombstone = &page.Messages[i]
+			break
+		}
 	}
-	tombstone := page.Messages[0]
-	if tombstone.ID != msg.ID || tombstone.Content != "" || len(tombstone.Parts) != 0 || tombstone.EditedAt == nil || tombstone.DeletedAt == nil {
+	if tombstone == nil || tombstone.Content != "" || len(tombstone.Parts) != 0 || tombstone.EditedAt == nil || tombstone.DeletedAt == nil {
 		t.Fatalf("tombstone message = %#v, want empty content/parts with edited_at and deleted_at", tombstone)
 	}
 	if len(tombstone.Reactions) != 0 {
@@ -5485,7 +5490,14 @@ func TestChannelThreadReadModelExposesParticipantsAndPendingWake(t *testing.T) {
 	}
 	gotRoot := page.Messages[0]
 	timeline := listedMessagesForUser(t, channelID, testUserID)
-	if len(timeline) != 1 || len(timeline[0].ThreadParticipants) == 0 || len(timeline[0].ThreadWakeAnnotations) == 0 {
+	var timelineRoot *ChannelMessageResponse
+	for i := range timeline {
+		if timeline[i].ID == root.ID {
+			timelineRoot = &timeline[i]
+			break
+		}
+	}
+	if timelineRoot == nil || len(timelineRoot.ThreadParticipants) == 0 || len(timelineRoot.ThreadWakeAnnotations) == 0 {
 		t.Fatalf("main timeline root missing thread read-model fields: %+v", timeline)
 	}
 	if len(gotRoot.ThreadParticipants) != 2 {

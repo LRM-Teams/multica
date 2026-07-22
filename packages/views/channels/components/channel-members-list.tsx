@@ -116,7 +116,6 @@ export function ChannelMembersList({
               actorType={actorType}
               actorId={m.member_id}
               avatarUrlHint={m.avatar_url}
-              nameFallback={presentation.displayName}
               size={36}
               showStatusDot={isAgent}
               profileLink={false}

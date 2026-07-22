@@ -121,7 +121,9 @@ export function channelMessagesPageOptions(
 }
 
 export function flattenChannelMessagePages(data?: InfiniteData<ChannelMessagesPage>): ChannelMessage[] {
-  const flat = data ? [...data.pages].reverse().flatMap((page) => page.messages) : [];
+  const flat = data
+    ? [...data.pages].reverse().flatMap((page) => page.messages ?? []).filter(Boolean)
+    : [];
   return enrichChannelMessagesPreservingAvatars(flat);
 }
 
@@ -136,6 +138,9 @@ export function enrichChannelMessagesPreservingAvatars(
 ): ChannelMessage[] {
   let acc: ChannelMessage[] | undefined;
   for (const message of messages) {
+    // List/refetch pages (and some test fixtures) can include sparse holes;
+    // never call render/upsert helpers with undefined (LRM-218 CI crash).
+    if (!message) continue;
     if (!shouldRenderChannelMessage(message)) {
       acc = acc?.filter((existing) => !matchesChannelMessage(existing, message));
       continue;
@@ -242,7 +247,8 @@ export function invalidateChannelMessages(qc: QueryClient, channelId: string) {
   qc.invalidateQueries({ queryKey: channelKeys.messagesPage(channelId) });
 }
 
-function shouldRenderChannelMessage(message: ChannelMessage): boolean {
+function shouldRenderChannelMessage(message: ChannelMessage | null | undefined): boolean {
+  if (!message) return false;
   return !message.deleted_at || (message.thread_reply_count ?? 0) > 0;
 }
 

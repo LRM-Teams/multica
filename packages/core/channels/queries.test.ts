@@ -164,6 +164,16 @@ describe("enrichChannelMessagesPreservingAvatars (LRM-218)", () => {
       "/uploads/agent.png",
     ]);
   });
+
+  it("skips sparse undefined holes without throwing", () => {
+    const enriched = enrichChannelMessagesPreservingAvatars([
+      undefined as unknown as ChannelMessage,
+      { ...base, id: "m1", author_avatar_url: "/uploads/agent.png" } as ChannelMessage,
+      null as unknown as ChannelMessage,
+    ]);
+    expect(enriched).toHaveLength(1);
+    expect(enriched[0]?.author_avatar_url).toBe("/uploads/agent.png");
+  });
 });
 
 describe("findChannelMessageMatchIndex (optimistic ACK)", () => {

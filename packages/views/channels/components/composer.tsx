@@ -72,7 +72,7 @@ export function Composer({
       )}
     >
       <div
-        className="composer-shell min-w-0 rounded-lg border border-border/35 bg-background shadow-none"
+        className="composer-shell min-w-0 rounded-lg border border-input bg-card shadow-none"
         data-slot="composer-shell"
         data-composer-surface={surface}
       >

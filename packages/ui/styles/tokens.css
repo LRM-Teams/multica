@@ -1,4 +1,10 @@
-/* Multica design tokens — shared across Web + Desktop */
+/* Multica design tokens — shared across Web + Desktop
+ *
+ * Product-surface freeze (LRM-226 / docs/design-product-surfaces.md):
+ * light-mode neutrals + brand/ok/danger align to the frozen hex table.
+ * Design aliases (--ink, --brand-soft, …) mirror that table so chat /
+ * members / settings never re-declare a second palette.
+ */
 
 @theme inline {
     --font-heading: var(--font-sans);
@@ -26,6 +32,7 @@
     --color-warning: var(--warning);
     --color-brand: var(--brand);
     --color-brand-foreground: var(--brand-foreground);
+    --color-brand-soft: var(--brand-soft);
     --color-accent-foreground: var(--accent-foreground);
     --color-accent: var(--accent);
     --color-muted-foreground: var(--muted-foreground);
@@ -40,6 +47,15 @@
     --color-card: var(--card);
     --color-foreground: var(--foreground);
     --color-background: var(--background);
+    /* Product-surface aliases (design --ink / --line / …) */
+    --color-ink: var(--ink);
+    --color-ink-2: var(--ink-2);
+    --color-ink-3: var(--ink-3);
+    --color-line: var(--line);
+    --color-line-strong: var(--line-strong);
+    --color-hover: var(--hover);
+    --color-online: var(--online);
+    --color-busy: var(--busy);
     --radius-sm: calc(var(--radius) * 0.6);
     --radius-md: calc(var(--radius) * 0.8);
     --radius-lg: var(--radius);
@@ -50,47 +66,60 @@
 }
 
 :root {
-    --background: oklch(1 0 0);
-    --foreground: oklch(0.141 0.005 285.823);
-    --card: oklch(1 0 0);
-    --card-foreground: oklch(0.141 0.005 285.823);
-    --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.141 0.005 285.823);
-    --primary: oklch(0.21 0.006 285.885);
-    --primary-foreground: oklch(0.985 0 0);
-    --secondary: oklch(0.967 0.001 286.375);
-    --secondary-foreground: oklch(0.21 0.006 285.885);
-    --muted: oklch(0.967 0.001 286.375);
-    --muted-foreground: oklch(0.552 0.016 285.938);
-    --accent: oklch(0.967 0.001 286.375);
-    --accent-foreground: oklch(0.21 0.006 285.885);
-    --destructive: oklch(0.577 0.245 27.325);
-    --border: oklch(0.92 0.004 286.32);
-    --input: oklch(0.92 0.004 286.32);
-    --ring: oklch(0.705 0.015 286.067);
-    /* Brand-derived blue gradient (h=255 = brand hue). chart-1 equals brand
-       so the most important series visually anchors to the product colour;
-       chart-2..5 step lighter + less saturated so a stacked bar reads
-       "primary → secondary → tertiary" at a glance instead of fighting
-       for attention as five equally-weighted greys. */
-    --chart-1: oklch(0.55 0.16 255);
-    --chart-2: oklch(0.66 0.13 255);
-    --chart-3: oklch(0.76 0.10 255);
-    --chart-4: oklch(0.85 0.06 255);
-    --chart-5: oklch(0.92 0.03 255);
+    /* —— Frozen product-surface palette (LRM-226) —— */
+    --ink: #1d1c1d;
+    --ink-2: #616061;
+    --ink-3: #868686;
+    --line: #e8e8e8;
+    --line-strong: #d1d1d1;
+    --hover: #f8f8f8;
+    --surface: #ffffff;
+    --page-bg: #f6f6f4;
+    --brand: #1264a3;
+    --brand-foreground: #ffffff;
+    --brand-soft: #e8f5fa;
+    --ok: #007a5a;
+    --danger: #e01e5a;
+    --online: #2bac76;
+    --busy: #e8912d;
+
+    /* Semantic shadcn map → same freeze (no purple-gray dual track) */
+    --background: var(--surface);
+    --foreground: var(--ink);
+    --card: var(--surface);
+    --card-foreground: var(--ink);
+    --popover: var(--surface);
+    --popover-foreground: var(--ink);
+    --primary: var(--ink);
+    --primary-foreground: #ffffff;
+    --secondary: var(--hover);
+    --secondary-foreground: var(--ink);
+    --muted: var(--page-bg);
+    --muted-foreground: var(--ink-2);
+    /* shadcn --accent = hover wash; design link blue lives on --brand */
+    --accent: var(--hover);
+    --accent-foreground: var(--ink);
+    --destructive: var(--danger);
+    --border: var(--line);
+    --input: var(--line-strong);
+    --ring: var(--ink-3);
+    --success: var(--ok);
+    --warning: #b35c00;
+    /* Charts stay brand-anchored (hue ≈ #1264a3) */
+    --chart-1: #1264a3;
+    --chart-2: #3d8ec4;
+    --chart-3: #6aafd6;
+    --chart-4: #9dcee6;
+    --chart-5: #cfe6f2;
     --radius: 0.625rem;
-    --sidebar: oklch(0.985 0 0);
-    --sidebar-foreground: oklch(0.141 0.005 285.823);
-    --sidebar-primary: oklch(0.21 0.006 285.885);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.95 0.002 286.375);
-    --sidebar-accent-foreground: oklch(0.21 0.006 285.885);
-    --sidebar-border: oklch(0.92 0.004 286.32);
-    --sidebar-ring: oklch(0.705 0.015 286.067);
-    --brand: oklch(0.55 0.16 255);
-    --brand-foreground: oklch(0.985 0 0);
-    --success: oklch(0.55 0.16 145);
-    --warning: oklch(0.75 0.16 85);
+    --sidebar: var(--page-bg);
+    --sidebar-foreground: var(--ink);
+    --sidebar-primary: var(--ink);
+    --sidebar-primary-foreground: #ffffff;
+    --sidebar-accent: var(--hover);
+    --sidebar-accent-foreground: var(--ink);
+    --sidebar-border: var(--line);
+    --sidebar-ring: var(--ink-3);
     --scrollbar-thumb: oklch(0 0 0 / 10%);
     --scrollbar-thumb-hover: oklch(0 0 0 / 18%);
     --scrollbar-track: transparent;
@@ -115,26 +144,36 @@
     --border: oklch(1 0 0 / 10%);
     --input: oklch(1 0 0 / 15%);
     --ring: oklch(0.552 0.016 285.938);
-    /* Dark mode mirrors light mode's "primary → secondary" gradient on the
-       brand hue, but flips the lightness curve: the most important series
-       is the brightest (so it pops on the dark background) and trailing
-       series get progressively darker / less saturated. */
-    --chart-1: oklch(0.72 0.16 255);
-    --chart-2: oklch(0.62 0.13 255);
-    --chart-3: oklch(0.52 0.10 255);
-    --chart-4: oklch(0.42 0.06 255);
-    --chart-5: oklch(0.32 0.03 255);
+    /* Dark mode mirrors light brand hue; LRM-227 does not restyle dark. */
+    --chart-1: oklch(0.72 0.12 240);
+    --chart-2: oklch(0.62 0.10 240);
+    --chart-3: oklch(0.52 0.08 240);
+    --chart-4: oklch(0.42 0.05 240);
+    --chart-5: oklch(0.32 0.03 240);
     --sidebar: oklch(0.21 0.006 285.885);
     --sidebar-foreground: oklch(0.985 0 0);
-    --sidebar-primary: oklch(0.488 0.243 264.376);
+    --sidebar-primary: oklch(0.55 0.12 240);
     --sidebar-primary-foreground: oklch(0.985 0 0);
     --sidebar-accent: oklch(0.274 0.006 286.033);
     --sidebar-accent-foreground: oklch(0.985 0 0);
     --sidebar-border: oklch(1 0 0 / 10%);
     --sidebar-ring: oklch(0.552 0.016 285.938);
-    --brand: oklch(0.65 0.16 255);
+    --brand: #3d8ec4;
     --brand-foreground: oklch(0.985 0 0);
-    --success: oklch(0.65 0.15 145);
+    --brand-soft: oklch(0.35 0.04 240);
+    --ink: oklch(0.985 0 0);
+    --ink-2: oklch(0.705 0.015 286.067);
+    --ink-3: oklch(0.55 0.01 286);
+    --line: oklch(1 0 0 / 10%);
+    --line-strong: oklch(1 0 0 / 15%);
+    --hover: oklch(0.274 0.006 286.033);
+    --surface: oklch(0.21 0.006 285.885);
+    --page-bg: oklch(0.18 0.005 285.823);
+    --ok: oklch(0.65 0.15 145);
+    --danger: oklch(0.704 0.191 22.216);
+    --online: #2bac76;
+    --busy: #e8912d;
+    --success: var(--ok);
     --warning: oklch(0.70 0.16 85);
     --scrollbar-thumb: oklch(1 0 0 / 8%);
     --scrollbar-thumb-hover: oklch(1 0 0 / 18%);

@@ -1,9 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
-import {
-  MobileFileAttachment,
-  resolvePreviewMode,
-} from "./mobile-file-attachment";
+import { MobileFileAttachment } from "./mobile-file-attachment";
+import { resolveMobilePreviewMode } from "./mobile-preview-mode";
 
 vi.mock("../i18n", () => ({
   useT: () => ({
@@ -43,13 +41,21 @@ vi.mock("../i18n", () => ({
   }),
 }));
 
-describe("resolvePreviewMode (LRM-219)", () => {
+describe("resolveMobilePreviewMode (LRM-219)", () => {
   it("only images preview; html/pdf narrow to none", () => {
-    expect(resolvePreviewMode("image", "image/png", "a.png")).toBe("image");
-    expect(resolvePreviewMode(undefined, "image/jpeg", "a.jpg")).toBe("image");
-    expect(resolvePreviewMode("html", "text/html", "a.html")).toBe("none");
-    expect(resolvePreviewMode("pdf", "application/pdf", "a.pdf")).toBe("none");
-    expect(resolvePreviewMode(undefined, "application/zip", "a.zip")).toBe(
+    expect(resolveMobilePreviewMode("image", "image/png", "a.png")).toBe(
+      "image",
+    );
+    expect(resolveMobilePreviewMode(undefined, "image/jpeg", "a.jpg")).toBe(
+      "image",
+    );
+    expect(resolveMobilePreviewMode("html", "text/html", "a.html")).toBe(
+      "none",
+    );
+    expect(resolveMobilePreviewMode("pdf", "application/pdf", "a.pdf")).toBe(
+      "none",
+    );
+    expect(resolveMobilePreviewMode(undefined, "application/zip", "a.zip")).toBe(
       "none",
     );
   });

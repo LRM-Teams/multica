@@ -18,9 +18,10 @@ import {
   getFileExtension,
   getFileTypeCategory,
 } from "./utils/file-meta";
-
-/** LRM-219: only image content preview; html/pdf kept for call-site compat → treated as none. */
-export type MobilePreviewMode = "html" | "image" | "pdf" | "none";
+import {
+  resolveMobilePreviewMode,
+  type MobilePreviewMode,
+} from "./mobile-preview-mode";
 
 export interface MobileFileAttachmentProps {
   filename: string;
@@ -64,30 +65,6 @@ function badgeTone(filename: string, contentType: string): string {
   return "bg-[#2b2d31] text-white";
 }
 
-function isImageFile(contentType: string, filename: string): boolean {
-  const ct = contentType.toLowerCase();
-  const ext = getFileExtension(filename);
-  return (
-    ct.startsWith("image/") ||
-    ["png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "bmp", "ico"].includes(
-      ext,
-    )
-  );
-}
-
-/**
- * LRM-219: only images preview. HTML/PDF (and anything else) → none.
- */
-export function resolvePreviewMode(
-  mode: MobilePreviewMode | undefined,
-  contentType: string,
-  filename: string,
-): "image" | "none" {
-  if (mode === "image") return "image";
-  if (mode === "html" || mode === "pdf" || mode === "none") return "none";
-  return isImageFile(contentType, filename) ? "image" : "none";
-}
-
 export function MobileFileAttachment({
   filename,
   contentType = "",
@@ -111,7 +88,7 @@ export function MobileFileAttachment({
   const sub = [typeLabel, sizeLabel].filter(Boolean).join(" · ");
   const badge = typeBadge(filename, contentType);
   const tone = badgeTone(filename, contentType);
-  const mode = resolvePreviewMode(previewMode, contentType, filename);
+  const mode = resolveMobilePreviewMode(previewMode, contentType, filename);
   const showImageThumb =
     mode === "image" && !!previewUrl && !uploading;
 

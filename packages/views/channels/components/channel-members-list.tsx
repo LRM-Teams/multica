@@ -108,7 +108,7 @@ export function ChannelMembersList({
         return (
           <div
             key={`${m.member_type}:${m.member_id}`}
-            className="group flex min-h-[52px] items-center gap-3 border-b border-border/40 px-5 py-2.5 last:border-b-0 hover:bg-accent/60"
+            className="group flex min-h-[52px] items-center gap-3 border-b border-border px-5 py-2.5 last:border-b-0 hover:bg-hover"
           >
             <ActorAvatar
               name={presentation.displayName}
@@ -123,9 +123,10 @@ export function ChannelMembersList({
               handle={presentation.handle}
               showHandle
               className="min-w-0 flex-1"
-              primaryClassName="truncate text-sm font-semibold text-foreground"
+              primaryClassName="truncate text-sm font-semibold text-ink"
+              secondaryClassName="truncate text-xs text-ink-2"
             />
-            <span className="shrink-0 rounded-full border border-border bg-background px-2 py-0.5 text-[11px] text-muted-foreground">
+            <span className="shrink-0 rounded-full border border-border bg-card px-2 py-0.5 text-[11px] text-ink-3">
               {roleLabel}
             </span>
             {canDm && (

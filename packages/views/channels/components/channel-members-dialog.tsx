@@ -68,7 +68,7 @@ export function ChannelMembersDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className={cn(
-          "flex w-full flex-col gap-0 overflow-hidden bg-background p-0 sm:max-w-[520px]",
+          "flex w-full flex-col gap-0 overflow-hidden bg-card p-0 sm:max-w-[520px]",
           // Definite height so the flex-1 list can shrink and scroll (connect-remote pattern).
           "h-[min(85dvh,640px)] max-h-[min(85dvh,640px)]",
           // Mobile: bottom sheet — avoid translate-centered popup (iOS nested scroll breaks).
@@ -97,13 +97,13 @@ export function ChannelMembersDialog({
               value={query}
               onChange={(e) => onQueryChange(e.target.value)}
               placeholder={t(($) => $.members.find_members)}
-              className="h-10 rounded-lg border-border bg-muted/40 pl-9"
+              className="h-10 rounded-lg border-input bg-muted/40 pl-9"
             />
           </div>
           {canManage && onAddPeople && (
             <Button
               type="button"
-              className="h-9 shrink-0 rounded-lg bg-[#1264a3] px-3.5 text-sm font-semibold text-white hover:bg-[#1264a3]/90"
+              className="h-9 shrink-0 rounded-lg bg-brand px-3.5 text-sm font-semibold text-brand-foreground hover:bg-brand/90"
               onClick={onAddPeople}
             >
               {t(($) => $.members.add_people)}

@@ -136,37 +136,41 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
       className="flex-1 min-h-0 gap-0 flex flex-col md:flex-row md:overflow-hidden overflow-y-auto"
     >
       {/* Left nav (stacks on top on mobile, sidebar on md+) */}
-      <div className="shrink-0 md:w-52 border-b md:border-b-0 md:border-r md:overflow-y-auto p-3 md:p-4">
-        <h1 className="text-sm font-semibold mb-4 px-2">{t(($) => $.page.title)}</h1>
-        <TabsList variant="line" className="flex-col items-stretch w-full">
+      <div className="shrink-0 border-b border-border p-3 md:w-52 md:overflow-y-auto md:border-b-0 md:border-r md:p-4">
+        <h1 className="mb-4 px-2 text-base font-bold text-ink">{t(($) => $.page.title)}</h1>
+        <TabsList variant="line" className="w-full flex-col items-stretch">
           {/* My Account group */}
-          <span className="px-2 pb-1 pt-2 text-xs font-medium text-muted-foreground">
+          <span className="px-2 pb-1 pt-2 text-xs font-bold text-ink-2">
             {t(($) => $.page.my_account)}
           </span>
           {ACCOUNT_TAB_KEYS.map((key) => {
             const Icon = ACCOUNT_TAB_ICONS[key];
             return (
-              <TabsTrigger key={key} value={key}>
+              <TabsTrigger key={key} value={key} className="text-xs font-bold">
                 <Icon className="h-4 w-4" />
                 {t(($) => $.page.tabs[key])}
               </TabsTrigger>
             );
           })}
           {extraAccountTabs?.map((tab) => (
-            <TabsTrigger key={tab.value} value={tab.value}>
+            <TabsTrigger key={tab.value} value={tab.value} className="text-xs font-bold">
               <tab.icon className="h-4 w-4" />
               {tab.label}
             </TabsTrigger>
           ))}
 
           {/* Workspace group */}
-          <span className="px-2 pb-1 pt-4 text-xs font-medium text-muted-foreground truncate">
+          <span className="truncate px-2 pb-1 pt-4 text-xs font-bold text-ink-2">
             {workspaceName ?? t(($) => $.page.workspace_fallback)}
           </span>
           {WORKSPACE_TAB_KEYS.map((key) => {
             const Icon = WORKSPACE_TAB_ICONS[key];
             return (
-              <TabsTrigger key={key} value={WORKSPACE_TAB_VALUES[key]}>
+              <TabsTrigger
+                key={key}
+                value={WORKSPACE_TAB_VALUES[key]}
+                className="text-xs font-bold"
+              >
                 <Icon className="h-4 w-4" />
                 {t(($) => $.page.tabs[key])}
               </TabsTrigger>

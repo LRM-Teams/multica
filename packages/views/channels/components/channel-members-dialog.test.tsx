@@ -111,6 +111,32 @@ describe("ChannelMembersDialog (LRM-225)", () => {
     expect(screen.getByText("Person 15")).toBeInTheDocument();
   });
 
+  it("uses brand / surface tokens instead of raw hex on Add people chrome", () => {
+    render(
+      <ChannelMembersDialog
+        open
+        onOpenChange={() => {}}
+        channelName="multica-frank"
+        memberCount={1}
+        agentCount={0}
+        members={[member("u1", "Frank")]}
+        query=""
+        onQueryChange={() => {}}
+        roleForMember={() => "owner"}
+        canManage
+        isMobile={false}
+        currentUserId="u1"
+        onAddPeople={() => {}}
+      />,
+    );
+
+    const addPeople = screen.getByRole("button", { name: /add people/i });
+    expect(addPeople.className).toMatch(/bg-brand/);
+    expect(addPeople.className).not.toMatch(/#1264a3/);
+    const popup = document.querySelector('[data-slot="dialog-content"]');
+    expect(popup!.className).toMatch(/bg-card/);
+  });
+
   it("anchors the dialog as a bottom sheet on narrow viewports (class contract)", () => {
     render(
       <ChannelMembersDialog
@@ -133,7 +159,7 @@ describe("ChannelMembersDialog (LRM-225)", () => {
     expect(popup).not.toBeNull();
     expect(popup!.className).toMatch(/max-sm:bottom-0/);
     expect(popup!.className).toMatch(/max-sm:translate-y-0/);
-    expect(popup!.className).toMatch(/bg-background/);
+    expect(popup!.className).toMatch(/bg-card/);
     expect(popup!.className).toMatch(/h-\[min\(85dvh,640px\)\]/);
   });
 });

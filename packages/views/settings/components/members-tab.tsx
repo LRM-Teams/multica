@@ -103,14 +103,14 @@ function MemberRow({
   const isLastOwner = member.role === "owner" && ownerCount <= 1;
   const showMenu = canEditRole || canRemove;
   return (
-    <div className="flex items-center gap-3 px-4 py-3">
+    <div className="flex items-center gap-3 border-b border-border px-4 py-3 last:border-b-0 hover:bg-hover">
       <ActorAvatar actorType="member" actorId={member.user_id} size={32} />
       <div className="min-w-0 flex-1">
         <ActorIdentityRow
           identity={member}
-          primaryClassName="truncate text-sm font-medium"
+          primaryClassName="truncate text-sm font-semibold text-ink"
         />
-        <div className="text-xs text-muted-foreground truncate">{member.email}</div>
+        <div className="truncate text-xs text-ink-2">{member.email}</div>
       </div>
       {showMenu && (
         <DropdownMenu>

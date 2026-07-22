@@ -1990,13 +1990,13 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
             value={membersQuery}
             onChange={(e) => setMembersQuery(e.target.value)}
             placeholder={t(($) => $.members.find_members)}
-            className="h-10 rounded-lg border-border bg-muted/40 pl-9"
+            className="h-10 rounded-lg border-input bg-muted/40 pl-9"
           />
         </div>
         {!isActiveSystemChannel && canArchive(active) && (
           <Button
             type="button"
-            className="h-9 shrink-0 rounded-lg bg-[#1264a3] px-3.5 text-sm font-semibold text-white hover:bg-[#1264a3]/90"
+            className="h-9 shrink-0 rounded-lg bg-brand px-3.5 text-sm font-semibold text-brand-foreground hover:bg-brand/90"
             onClick={openAddPeopleDialog}
           >
             {t(($) => $.members.add_people)}

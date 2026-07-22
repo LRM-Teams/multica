@@ -72,7 +72,7 @@ export function ChannelAddPeopleDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className={cn(
-          "flex w-full flex-col gap-0 overflow-hidden bg-background p-0 sm:max-w-[520px]",
+          "flex w-full flex-col gap-0 overflow-hidden bg-card p-0 sm:max-w-[520px]",
           "h-[min(85dvh,640px)] max-h-[min(85dvh,640px)]",
           "max-sm:top-auto max-sm:bottom-0 max-sm:left-1/2 max-sm:right-auto max-sm:max-w-[calc(100%-0px)] max-sm:w-full max-sm:translate-x-[-50%] max-sm:translate-y-0 max-sm:rounded-b-none max-sm:rounded-t-2xl",
           "max-sm:h-[min(90dvh,640px)] max-sm:max-h-[min(90dvh,640px)]",
@@ -95,7 +95,7 @@ export function ChannelAddPeopleDialog({
               value={query}
               onChange={(e) => onQueryChange(e.target.value)}
               placeholder={t(($) => $.members.search)}
-              className="h-10 rounded-lg border-border bg-muted/40 pl-9"
+              className="h-10 rounded-lg border-input bg-muted/40 pl-9"
             />
           </div>
         </div>
@@ -105,7 +105,7 @@ export function ChannelAddPeopleDialog({
             {chipItems.map((c) => (
               <span
                 key={c.key}
-                className="inline-flex h-7 items-center gap-1.5 rounded-full bg-[#e8f5fa] py-0 pl-1 pr-2 text-xs font-semibold text-[#1264a3]"
+                className="inline-flex h-7 items-center gap-1.5 rounded-full bg-brand-soft py-0 pl-1 pr-2 text-xs font-semibold text-brand"
               >
                 <ActorAvatar
                   name={c.presentation.displayName}
@@ -120,7 +120,7 @@ export function ChannelAddPeopleDialog({
                   type="button"
                   onClick={() => onClearOne(c.key)}
                   aria-label={t(($) => $.members.remove_aria)}
-                  className="rounded p-0.5 hover:bg-[#1264a3]/15"
+                  className="rounded p-0.5 hover:bg-brand/15"
                 >
                   <X className="size-3" />
                 </button>
@@ -161,8 +161,8 @@ export function ChannelAddPeopleDialog({
                   key={c.key}
                   htmlFor={checkboxId}
                   className={cn(
-                    "flex min-h-[52px] cursor-pointer items-center gap-3 px-5 py-2.5 hover:bg-accent/60",
-                    selected.has(c.key) && "bg-accent/40",
+                    "flex min-h-[52px] cursor-pointer items-center gap-3 px-5 py-2.5 hover:bg-hover",
+                    selected.has(c.key) && "bg-brand-soft/70",
                   )}
                 >
                   <Checkbox
@@ -187,7 +187,7 @@ export function ChannelAddPeopleDialog({
                     }
                     showHandle
                     className="min-w-0 flex-1"
-                    primaryClassName="truncate text-sm font-semibold"
+                    primaryClassName="truncate text-sm font-semibold text-ink"
                   />
                 </label>
               );
@@ -201,7 +201,7 @@ export function ChannelAddPeopleDialog({
           </Button>
           <Button
             type="button"
-            className="rounded-lg bg-[#007a5a] font-bold text-white hover:bg-[#007a5a]/90"
+            className="rounded-lg bg-success font-bold text-white hover:bg-success/90"
             disabled={selected.size === 0 || submitting}
             onClick={onSubmit}
           >

@@ -155,8 +155,8 @@ export function ChannelDetailsPanel({
             className={cn(
               "shrink-0 border-b-2 px-2.5 py-2.5 text-xs transition-colors",
               tab === item.id
-                ? "border-primary font-semibold text-foreground"
-                : "border-transparent text-muted-foreground hover:text-foreground",
+                ? "border-ink font-bold text-ink"
+                : "border-transparent font-bold text-ink-2 hover:text-ink",
             )}
           >
             {item.label}

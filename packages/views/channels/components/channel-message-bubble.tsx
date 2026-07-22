@@ -231,7 +231,7 @@ function MessageInlineEditor({
           }
         }}
         rows={2}
-        className="w-full resize-none rounded-md border border-border bg-background px-2 py-1.5 text-sm leading-6 text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        className="w-full resize-none rounded-md border border-input bg-card px-2 py-1.5 text-sm leading-6 text-ink outline-none focus-visible:ring-1 focus-visible:ring-ring"
       />
       <div className="mt-1.5 flex items-center gap-2">
         <button
@@ -430,7 +430,7 @@ export function ChannelMessageBubble({
   // surfaces (sidebar / member list) and the header status word, not the stream.
   const avatar = <span className="mt-0.5 inline-flex shrink-0">{avatarNode}</span>;
   const nameLabel = (
-    <span className="truncate font-medium text-foreground">{displayName}</span>
+    <span className="truncate font-bold text-ink">{displayName}</span>
   );
 
   const canOpenThread = !!onOpenThread && !message.thread_root_message_id;
@@ -663,7 +663,7 @@ export function ChannelMessageBubble({
             </span>
           )}
           <span
-            className="shrink-0 text-[11px] text-muted-foreground"
+            className="shrink-0 text-[11px] text-ink-3"
             title={messageTime.full(message.created_at)}
           >
             {messageTime.format(message.created_at)}
@@ -671,7 +671,7 @@ export function ChannelMessageBubble({
           {isEdited && (
             <span
               data-testid="message-edited"
-              className="shrink-0 text-[11px] text-muted-foreground/70"
+              className="shrink-0 text-[11px] text-ink-3/70"
             >
               {t(($) => $.message.edited_label)}
             </span>
@@ -764,7 +764,7 @@ export function ChannelMessageBubble({
         ) : (
           <div
             className={cn(
-              "message-surface relative min-w-0 max-w-full select-text break-words [overflow-wrap:anywhere] text-sm leading-6 text-foreground",
+              "message-surface relative min-w-0 max-w-full select-text break-words [overflow-wrap:anywhere] text-sm leading-6 text-ink",
               isContentCollapsed && "overflow-hidden",
               isContentCollapsed ? HISTORY_MESSAGE_COLLAPSE_HEIGHT_CLASS : "overflow-visible",
               searchHighlighted && "rounded-md bg-primary/5",

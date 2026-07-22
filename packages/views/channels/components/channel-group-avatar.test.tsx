@@ -1,8 +1,8 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { act, render } from "@testing-library/react";
 import type { ChannelMemberBrief } from "@multica/core/types";
+import { __resetIdentityAvatarOkCacheForTests } from "../../common/identity-avatar-cache";
 import { ChannelGroupAvatar } from "./channel-group-avatar";
-import { __resetActorAvatarOkCacheForTests } from "../../common/actor-avatar-url";
 
 vi.mock("@multica/core/api", () => ({
   api: { getBaseUrl: () => "" },
@@ -12,59 +12,60 @@ vi.mock("@multica/core/workspace/avatar-url", () => ({
   resolvePublicFileUrl: (url: string | null | undefined) => url ?? null,
 }));
 
+const nameById = new Map<string, string>();
+
 vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({
+    getActorName: (_type: string, id: string) => nameById.get(id) ?? id,
+    getActorInitials: (_type: string, id: string) => {
+      const name = nameById.get(id) ?? id;
+      const c = name.trim().charAt(0);
+      return c ? (/[a-z]/i.test(c) ? c.toUpperCase() : c) : "?";
+    },
     getActorAvatarUrl: () => null,
-    getActorName: (_type: string, _id: string, fallback?: string) => fallback ?? "Unknown",
   }),
 }));
 
-// Identity-first Avatar chrome is out of scope for mosaic layout tests —
-// resolve URLs via the shared helper + UI base shell.
-vi.mock("../../common/actor-avatar", async () => {
-  const React = await import("react");
-  const { ActorAvatar: Base } = await import("@multica/ui/components/common/actor-avatar");
-  const { avatarGlyph } = await import("@multica/ui/lib/avatar-fallback");
-  const { resolveActorAvatarUrl } = await import("../../common/actor-avatar-url");
-  const { useActorName } = await import("@multica/core/workspace/hooks");
-  return {
-    ActorAvatar: ({
-      actorType,
-      actorId,
-      avatarUrlHint,
-      nameFallback,
-      size,
-      className,
-    }: {
-      actorType: string;
-      actorId: string;
-      avatarUrlHint?: string | null;
-      nameFallback?: string;
-      size?: number;
-      className?: string;
-    }) => {
-      const { getActorName, getActorAvatarUrl } = useActorName();
-      const name = getActorName(actorType, actorId, nameFallback);
-      const avatarUrl = resolveActorAvatarUrl({
-        actorType,
-        actorId,
-        directoryUrl: getActorAvatarUrl(actorType, actorId),
-        hintUrl: avatarUrlHint,
-      });
-      return React.createElement(Base, {
-        name,
-        initials: avatarGlyph(name),
-        avatarUrl,
-        size,
-        className,
-        toneSeed: `${actorType}:${actorId}`,
-      });
-    },
-  };
-});
+vi.mock("@multica/core/paths", () => ({
+  useCurrentWorkspace: () => ({ id: "ws-1" }),
+  useWorkspacePaths: () => ({
+    agentDetail: (id: string) => `/agents/${id}`,
+    memberDetail: (id: string) => `/members/${id}`,
+    squadDetail: (id: string) => `/squads/${id}`,
+  }),
+}));
+
+vi.mock("@multica/core/agents", () => ({
+  useAgentPresenceDetail: () => ({
+    availability: "online",
+    workload: "idle",
+    runningCount: 0,
+    queuedCount: 0,
+    capacity: 1,
+  }),
+  useAgentHealth: () => ({
+    summary: undefined,
+    events: undefined,
+    isLoading: false,
+    isError: false,
+  }),
+}));
+
+vi.mock("@multica/core/agents/stores", () => ({
+  useAgentPanelStore: (selector: (s: { open: (id: string) => void }) => unknown) =>
+    selector({ open: vi.fn() }),
+}));
+
+vi.mock("../../common/agent-panel-context", () => ({
+  useOpenAgentPanel: () => null,
+}));
+
+vi.mock("../../navigation", () => ({
+  useNavigation: () => ({ push: vi.fn(), openInNewTab: vi.fn() }),
+}));
 
 function member(overrides: Partial<ChannelMemberBrief> = {}): ChannelMemberBrief {
-  return {
+  const m: ChannelMemberBrief = {
     member_type: "user",
     member_id: "m-1",
     name: "handle",
@@ -72,11 +73,14 @@ function member(overrides: Partial<ChannelMemberBrief> = {}): ChannelMemberBrief
     avatar_url: "https://cdn.example.test/m-1.png",
     ...overrides,
   };
+  if (m.display_name) nameById.set(m.member_id, m.display_name);
+  return m;
 }
 
 describe("ChannelGroupAvatar", () => {
   beforeEach(() => {
-    __resetActorAvatarOkCacheForTests();
+    nameById.clear();
+    __resetIdentityAvatarOkCacheForTests();
   });
 
   it("shows the neutral # glyph when there are no members", () => {
@@ -182,7 +186,7 @@ describe("ChannelGroupAvatar", () => {
     rerender(
       <ChannelGroupAvatar
         members={[
-          member({ member_id: "u-1" }),
+          ...members,
           member({ member_id: "u-2", avatar_url: "https://cdn.example.test/u-2.png" }),
         ]}
         size={40}
@@ -191,7 +195,7 @@ describe("ChannelGroupAvatar", () => {
     expect(container.querySelectorAll("img").length).toBe(2);
 
     rerender(<ChannelGroupAvatar members={[]} size={40} />);
-    expect(container.querySelector("svg")).toBeTruthy();
     expect(container.querySelectorAll("img").length).toBe(0);
+    expect(container.querySelector("svg")).toBeTruthy();
   });
 });

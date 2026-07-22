@@ -9,7 +9,6 @@ import {
   memberListOptions,
 } from "@multica/core/workspace/queries";
 import { useWorkspacePaths } from "@multica/core/paths";
-import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { AppLink } from "../../navigation";
@@ -52,12 +51,6 @@ export function SquadProfileCard({ squadId }: SquadProfileCardProps) {
   }
 
   const isArchived = !!squad.archived_at;
-  const initials = squad.name
-    .split(" ")
-    .map((w) => w[0])
-    .join("")
-    .toUpperCase()
-    .slice(0, 2);
 
   const memberPreview = squad.member_preview ?? [];
   const memberCount = squad.member_count ?? memberPreview.length;
@@ -65,12 +58,12 @@ export function SquadProfileCard({ squadId }: SquadProfileCardProps) {
   return (
     <div className="group flex flex-col gap-3 text-left">
       <div className="flex items-start gap-3">
-        <ActorAvatarBase
-          name={squad.name}
-          initials={initials}
-          avatarUrl={squad.avatar_url}
-          isSquad
+        <ActorAvatar
+          actorType="squad"
+          actorId={squadId}
           size={40}
+          avatarUrlHint={squad.avatar_url}
+          profileLink={false}
           className="rounded-md"
         />
         <div className="min-w-0 flex-1">

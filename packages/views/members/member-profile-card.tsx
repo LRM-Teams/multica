@@ -5,11 +5,9 @@ import type { Agent, MemberRole } from "@multica/core/types";
 import { useWorkspaceId } from "@multica/core";
 import { agentRunCounts30dOptions } from "@multica/core/agents";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
-import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import { ActorIdentityRow } from "../common/actor-identity-row";
 import { useWorkspacePaths } from "@multica/core/paths";
-import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { ActorAvatar } from "../common/actor-avatar";
 import { AppLink } from "../navigation";
@@ -56,14 +54,6 @@ export function MemberProfileCard({ userId }: MemberProfileCardProps) {
     );
   }
 
-  const displayName = resolveActorDisplayName(member, member.user_id);
-  const initials = displayName
-    .split(" ")
-    .map((w) => w[0])
-    .join("")
-    .toUpperCase()
-    .slice(0, 2);
-
   // Sort owned agents by 30-day run count (most-used first); break ties on
   // name for a stable order. Run counts come from the same workspace-wide
   // query that powers the Agents-list RUNS column — no extra fetch.
@@ -81,12 +71,12 @@ export function MemberProfileCard({ userId }: MemberProfileCardProps) {
     <div className="flex flex-col gap-3 text-left">
       {/* Header */}
       <div className="flex items-start gap-3">
-        <ActorAvatarBase
-          name={displayName}
-          initials={initials}
-          avatarUrl={resolvePublicFileUrl(member.avatar_url)}
+        <ActorAvatar
+          actorType="member"
+          actorId={userId}
           size={40}
-          toneSeed={`member:${userId}`}
+          avatarUrlHint={member.avatar_url}
+          profileLink={false}
           className="rounded-full"
         />
         <div className="min-w-0 flex-1">

@@ -41,7 +41,7 @@ import {
   MessageCircle,
 } from "lucide-react";
 import { WorkspaceAvatar } from "../workspace/workspace-avatar";
-import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
+import { ActorAvatar } from "../common/actor-avatar";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@multica/ui/components/ui/collapsible";
 import { StatusIcon } from "../issues/components/status-icon";
@@ -71,7 +71,6 @@ import {
 import { useAuthStore } from "@multica/core/auth";
 import { useCurrentWorkspace, useWorkspacePaths, paths } from "@multica/core/paths";
 import { workspaceListOptions, myInvitationListOptions, workspaceKeys } from "@multica/core/workspace/queries";
-import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { inboxKeys, deduplicateInboxItems } from "@multica/core/inbox/queries";
 import { api, ApiError } from "@multica/core/api";
@@ -509,10 +508,11 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
                 >
                   <div className="flex items-center gap-2.5 px-2 py-1.5">
                     <ActorAvatar
-                      name={user?.name ?? ""}
-                      initials={(user?.name ?? "U").charAt(0).toUpperCase()}
-                      avatarUrl={resolvePublicFileUrl(user?.avatar_url)}
+                      actorType="member"
+                      actorId={userId ?? ""}
                       size={32}
+                      avatarUrlHint={user?.avatar_url}
+                      profileLink={false}
                     />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-medium leading-tight">

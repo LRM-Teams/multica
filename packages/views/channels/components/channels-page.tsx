@@ -278,28 +278,22 @@ function MemberPresenceStack({
   const overlap = Math.round(size * 0.28);
   return (
     <span className="inline-flex items-center">
-      {visible.map((m, i) => {
-        const name = resolveActorDisplayName(
-          m,
-          m.member_type === "agent" ? "Agent" : "Member",
-        );
-        return (
-          <span
-            key={`${m.member_type}:${m.member_id}`}
-            style={{ marginLeft: i === 0 ? 0 : -overlap }}
-            className="inline-flex rounded-full ring-2 ring-background"
-          >
-            <ActorAvatar
-              actorType={m.member_type === "agent" ? "agent" : "member"}
-              actorId={m.member_id}
-              avatarUrlHint={m.avatar_url}
-              nameFallback={name}
-              size={size}
-              profileLink={false}
-            />
-          </span>
-        );
-      })}
+      {visible.map((m, i) => (
+        <span
+          key={`${m.member_type}:${m.member_id}`}
+          style={{ marginLeft: i === 0 ? 0 : -overlap }}
+          className="inline-flex rounded-full ring-2 ring-background"
+        >
+          <ActorAvatar
+            actorType={m.member_type === "agent" ? "agent" : "member"}
+            actorId={m.member_id}
+            size={size}
+            avatarUrlHint={m.avatar_url}
+            showStatusDot={m.member_type === "agent"}
+            profileLink={false}
+          />
+        </span>
+      ))}
     </span>
   );
 }

@@ -1,7 +1,6 @@
 "use client";
 
 import type { ActorIdentityPresentation } from "@multica/core/identity";
-import { ActorAvatar } from "../../common/actor-avatar";
 import { Button } from "@multica/ui/components/ui/button";
 import { Checkbox } from "@multica/ui/components/ui/checkbox";
 import {
@@ -16,6 +15,7 @@ import { Input } from "@multica/ui/components/ui/input";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { cn } from "@multica/ui/lib/utils";
 import { Search, X } from "lucide-react";
+import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { useT } from "../../i18n";
 
@@ -108,9 +108,8 @@ export function ChannelAddPeopleDialog({
                 <ActorAvatar
                   actorType={c.type === "agent" ? "agent" : "member"}
                   actorId={c.id}
-                  avatarUrlHint={c.avatarUrl}
-                  nameFallback={c.presentation.displayName}
                   size={20}
+                  avatarUrlHint={c.avatarUrl}
                   profileLink={false}
                 />
                 <span className="max-w-[7rem] truncate">{c.presentation.displayName}</span>
@@ -171,9 +170,8 @@ export function ChannelAddPeopleDialog({
                   <ActorAvatar
                     actorType={c.type === "agent" ? "agent" : "member"}
                     actorId={c.id}
-                    avatarUrlHint={c.avatarUrl}
-                    nameFallback={c.presentation.displayName}
                     size={36}
+                    avatarUrlHint={c.avatarUrl}
                     showStatusDot={c.type === "agent"}
                     profileLink={false}
                   />

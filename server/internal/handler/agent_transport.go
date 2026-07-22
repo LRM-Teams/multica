@@ -1039,14 +1039,24 @@ func (h *Handler) createAgentTransportMessage(ctx context.Context, source agentT
 			h.clearDMHiddenForChannelMembers(ctx, target.channel.WorkspaceID, input.ChannelID)
 		}
 		h.publishChannelToMembers(ctx, protocol.EventChannelMessage, target.channel.WorkspaceID, "agent", uuidToString(source.origin.agentID), input.ChannelID, result.Message)
+		// Ack path: WS already published so the channel can render immediately.
+		// Mention wake / ambient delivery / Feishu are O(agents)/network — same
+		// LRM-272 contract as human SendChannelMessage; do not inflate
+		// `multica message send` RTT (Activity "Running command").
 		if target.channel.Kind == "group" {
-			h.ingestWendyAgentGroupMessage(ctx, target.channel, result.Message, source.origin.agentID)
-			if target.threadRootMessageID.Valid {
-				h.dispatchChannelThreadReplyMentions(ctx, target.channel, result.Message, initiatorID)
-			} else {
-				h.dispatchChannelMentions(ctx, target.channel, result.Message, initiatorID)
-			}
-			h.sendChannelMessageToFeishu(ctx, target.channel, result.Message.AuthorName, result.Message.Content)
+			ch := target.channel
+			msg := result.Message
+			agentID := source.origin.agentID
+			threadRoot := target.threadRootMessageID
+			h.runAfterChannelMessageAck(ctx, func(ctx context.Context) {
+				h.ingestWendyAgentGroupMessage(ctx, ch, msg, agentID)
+				if threadRoot.Valid {
+					h.dispatchChannelThreadReplyMentions(ctx, ch, msg, initiatorID)
+				} else {
+					h.dispatchChannelMentions(ctx, ch, msg, initiatorID)
+				}
+				h.sendChannelMessageToFeishu(ctx, ch, msg.AuthorName, msg.Content)
+			})
 		}
 	}
 	return result, nil
@@ -1632,7 +1642,7 @@ func writeAgentTransportHeldResponse(w http.ResponseWriter, target agentTranspor
 		Reason:              "newer_messages_available",
 		Decision:            "local_hold",
 		ProducerFactID:      decision.ProducerID,
-		AvailableActions:    []string{"send_draft"},
+		AvailableActions:    []string{"send_draft", "revise_message"},
 		HeldMessages:        decision.Messages,
 		NewMessageCount:     decision.TotalNewer,
 		ShownMessageCount:   int64(len(decision.Messages)),

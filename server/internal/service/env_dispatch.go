@@ -120,9 +120,10 @@ type PerAgentEnvSpec struct {
 // message agent. APIKey is a secret: it must never be serialized into
 // SandboxInstanceRef, HTTP responses, errors, or structured logs.
 type ExternalModelRuntime struct {
-	BaseURL string `json:"base_url"`
-	APIKey  string `json:"api_key"`
-	Model   string `json:"model"`
+	Provider string `json:"provider"`
+	BaseURL  string `json:"base_url"`
+	APIKey   string `json:"api_key"`
+	Model    string `json:"model"`
 }
 
 // ResolvedPerAgentSandboxPolicy is the internal, resolved per-agent sandbox
@@ -145,9 +146,16 @@ func NormalizeExternalModelRuntime(in *ExternalModelRuntime) (*ExternalModelRunt
 		return nil, nil
 	}
 	out := &ExternalModelRuntime{
-		BaseURL: strings.TrimSpace(in.BaseURL),
-		APIKey:  strings.TrimSpace(in.APIKey),
-		Model:   strings.TrimSpace(in.Model),
+		Provider: strings.ToLower(strings.TrimSpace(in.Provider)),
+		BaseURL:  strings.TrimSpace(in.BaseURL),
+		APIKey:   strings.TrimSpace(in.APIKey),
+		Model:    strings.TrimSpace(in.Model),
+	}
+	// Preserve compatibility with callers created before provider selection was
+	// explicit. The sandbox runtime historically interpreted this flat shape as
+	// OpenAI-compatible.
+	if out.Provider == "" {
+		out.Provider = "openai"
 	}
 	if out.BaseURL == "" || out.APIKey == "" || out.Model == "" {
 		return nil, fmt.Errorf("base_url, api_key, and model are required")

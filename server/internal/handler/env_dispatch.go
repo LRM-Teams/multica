@@ -55,9 +55,10 @@ type EnvDispatchRequest struct {
 // is mapped to a service-layer value at the boundary and never retained by the
 // handler-layer pointer.
 type ExternalModelRuntimeRequest struct {
-	BaseURL string `json:"base_url"`
-	APIKey  string `json:"api_key"`
-	Model   string `json:"model"`
+	Provider string `json:"provider,omitempty"`
+	BaseURL  string `json:"base_url"`
+	APIKey   string `json:"api_key"`
+	Model    string `json:"model"`
 }
 
 // PerAgentEnvRequest carries one squad member's sandbox template or base env
@@ -449,9 +450,10 @@ func mapPerAgentEnvSpecs(m map[string]PerAgentEnvRequest) []service.PerAgentEnvS
 			// Allocate a new service runtime value; do not retain the
 			// handler-layer pointer (boundary canonicalization).
 			spec.Runtime = &service.ExternalModelRuntime{
-				BaseURL: r.BaseURL,
-				APIKey:  r.APIKey,
-				Model:   r.Model,
+				Provider: r.Provider,
+				BaseURL:  r.BaseURL,
+				APIKey:   r.APIKey,
+				Model:    r.Model,
 			}
 		}
 		out = append(out, spec)
@@ -928,7 +930,10 @@ WHERE id = $1 AND channel_id = $2 AND workspace_id = $3 AND deleted_at IS NULL`,
 	if err != nil {
 		return "", stackerr.Wrap(err, "get env-dispatch channel task agent")
 	}
-	taskContext := mergeEphemeralSandboxContext(nil, in.SandboxInstanceID, userID)
+	// The env-dispatch DELETE endpoint owns this sandbox lifecycle. Retain the
+	// marker for execution identity/retry metadata, but do not reclaim the
+	// sandbox when the first channel task reaches a terminal state.
+	taskContext := mergeEphemeralSandboxContext(nil, in.SandboxInstanceID, userID, false)
 	taskContext, err = service.WithTaskExecutionConfig(taskContext, targetAgent.Model.String, targetAgent.ThinkingLevel.String)
 	if err != nil {
 		return "", stackerr.Wrap(err, "snapshot env-dispatch channel task execution config")
@@ -1462,7 +1467,7 @@ func (a *envDispatchDepsAdapter) PrecreateAgentRuntime(ctx context.Context, work
 // empty (not an ephemeral rollout). A malformed existing context is left intact
 // (the marker is skipped - cleanup then no-ops for that task) rather than risk
 // clobbering a context the task relies on.
-func mergeEphemeralSandboxContext(existing []byte, instanceID, actorUserID string) []byte {
+func mergeEphemeralSandboxContext(existing []byte, instanceID, actorUserID string, cleanupOnTerminal ...bool) []byte {
 	if instanceID == "" {
 		return existing
 	}
@@ -1472,10 +1477,14 @@ func mergeEphemeralSandboxContext(existing []byte, instanceID, actorUserID strin
 			return existing
 		}
 	}
-	marker, _ := json.Marshal(map[string]string{
+	markerFields := map[string]any{
 		"sandbox_instance_id": instanceID,
 		"actor_user_id":       actorUserID,
-	})
+	}
+	if len(cleanupOnTerminal) > 0 {
+		markerFields["cleanup_on_terminal"] = cleanupOnTerminal[0]
+	}
+	marker, _ := json.Marshal(markerFields)
 	obj["ephemeral_sandbox"] = marker
 	merged, _ := json.Marshal(obj)
 	return merged

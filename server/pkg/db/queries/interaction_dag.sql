@@ -99,3 +99,91 @@ SELECT e.segment_id, e.sandbox_ids, e.issue_snapshot_id, e.env_state
 FROM interaction_dag_env_snapshot e
 JOIN interaction_dag_segment s ON s.segment_id = e.segment_id
 WHERE s.project_id = $1;
+
+-- name: CreateInteractionDAGDiagnosisRun :exec
+-- Snapshots a new diagnosis run (migration 208): project/task scope, topology
+-- hash, and the ordered segment IDs as jsonb. Status starts 'running'.
+INSERT INTO interaction_dag_diagnosis_run (run_id, project_id, task_id, topology_hash, ordered_segment_ids, status)
+VALUES ($1, $2, $3, $4, $5, 'running');
+
+-- name: GetInteractionDAGDiagnosisRun :one
+SELECT run_id, project_id, task_id, topology_hash, ordered_segment_ids, status, current_segment_ordinal, pi_session_id, last_error, created_at, updated_at, completed_at
+FROM interaction_dag_diagnosis_run
+WHERE run_id = $1;
+
+-- name: GetResumableInteractionDAGDiagnosisRun :one
+-- Latest still-active (running/compacting) run for a (project, task); used to
+-- resume an interrupted diagnosis instead of starting over.
+SELECT run_id, project_id, task_id, topology_hash, ordered_segment_ids, status, current_segment_ordinal, pi_session_id, last_error, created_at, updated_at, completed_at
+FROM interaction_dag_diagnosis_run
+WHERE project_id = $1 AND task_id = $2 AND status IN ('running', 'compacting')
+ORDER BY updated_at DESC
+LIMIT 1;
+
+-- name: FailInteractionDAGDiagnosisRun :execrows
+-- CAS: only an active run can be failed; last_error is bounded by the caller.
+UPDATE interaction_dag_diagnosis_run
+SET status = 'failed', last_error = $2, updated_at = now()
+WHERE run_id = $1 AND status IN ('running', 'compacting');
+
+-- name: CompleteInteractionDAGDiagnosisRun :execrows
+-- CAS: completes only while active AND every segment checkpoint is completed,
+-- so the run can never be marked done with outstanding coverage.
+UPDATE interaction_dag_diagnosis_run
+SET status = 'completed', completed_at = now(), updated_at = now()
+WHERE run_id = $1
+  AND status IN ('running', 'compacting')
+  AND NOT EXISTS (
+    SELECT 1 FROM interaction_dag_diagnosis_segment s
+    WHERE s.run_id = $1 AND s.status <> 'completed'
+  );
+
+-- name: CreateInteractionDAGDiagnosisSegment :exec
+INSERT INTO interaction_dag_diagnosis_segment (run_id, segment_id, ordinal, status)
+VALUES ($1, $2, $3, 'pending');
+
+-- name: GetInteractionDAGDiagnosisSegment :one
+SELECT run_id, segment_id, ordinal, expected_message_count, fetched_message_count, expected_reward_count, reward_count, next_cursor, status, created_at, updated_at, completed_at
+FROM interaction_dag_diagnosis_segment
+WHERE run_id = $1 AND segment_id = $2;
+
+-- name: ListInteractionDAGDiagnosisSegments :many
+-- All segment checkpoints for a run in snapshot (ordinal) order.
+SELECT run_id, segment_id, ordinal, expected_message_count, fetched_message_count, expected_reward_count, reward_count, next_cursor, status, created_at, updated_at, completed_at
+FROM interaction_dag_diagnosis_segment
+WHERE run_id = $1
+ORDER BY ordinal;
+
+-- name: StartInteractionDAGDiagnosisSegment :execrows
+-- CAS: pending -> in_progress, recording the expected message/reward coverage.
+-- A replay while already in_progress/completed matches no row (idempotency is
+-- resolved by the service comparing the stored expectations).
+UPDATE interaction_dag_diagnosis_segment
+SET status = 'in_progress', expected_message_count = $3, expected_reward_count = $4, updated_at = now()
+WHERE run_id = $1 AND segment_id = $2 AND status = 'pending';
+
+-- name: AdvanceInteractionDAGDiagnosisSegmentFetch :execrows
+-- CAS: only the holder of the current cursor may advance it, and the fetched
+-- count only moves forward. next_cursor is opaque (HMAC-signed by the server).
+UPDATE interaction_dag_diagnosis_segment
+SET next_cursor = $4, fetched_message_count = $5, updated_at = now()
+WHERE run_id = $1 AND segment_id = $2
+  AND status = 'in_progress'
+  AND next_cursor = $3
+  AND fetched_message_count <= $5;
+
+-- name: SetInteractionDAGDiagnosisSegmentRewardCount :execrows
+-- Monotonic reward-coverage counter; regressive writes match no row.
+UPDATE interaction_dag_diagnosis_segment
+SET reward_count = $3, updated_at = now()
+WHERE run_id = $1 AND segment_id = $2 AND reward_count <= $3;
+
+-- name: CompleteInteractionDAGDiagnosisSegment :execrows
+-- CAS: completes only from in_progress once both message and reward coverage
+-- are satisfied; the DB, not the model, decides completion.
+UPDATE interaction_dag_diagnosis_segment
+SET status = 'completed', completed_at = now(), updated_at = now()
+WHERE run_id = $1 AND segment_id = $2
+  AND status = 'in_progress'
+  AND fetched_message_count >= expected_message_count
+  AND reward_count >= expected_reward_count;

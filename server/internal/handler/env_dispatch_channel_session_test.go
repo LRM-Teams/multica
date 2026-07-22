@@ -147,16 +147,21 @@ func TestEnvDispatchAdapterEnqueueChannelRunPersistsPromptWithTask(t *testing.T)
 	})
 
 	var gotPrompt, gotAgentID, gotRuntimeID, gotSessionID string
+	var gotContext []byte
 	require.NoError(t, testPool.QueryRow(ctx, `
 		SELECT message.content, task.agent_id::text, task.runtime_id::text,
-		       task.chat_session_id::text
+		       task.chat_session_id::text, task.context
 		FROM chat_message message
 		JOIN agent_task_queue task ON task.id = message.task_id
 		WHERE task.id = $1 AND message.role = 'user'`, taskID).Scan(
-		&gotPrompt, &gotAgentID, &gotRuntimeID, &gotSessionID,
+		&gotPrompt, &gotAgentID, &gotRuntimeID, &gotSessionID, &gotContext,
 	))
 	require.Equal(t, prompt, gotPrompt)
 	require.Equal(t, sessionIn.AgentID, gotAgentID)
 	require.Equal(t, sessionIn.RuntimeID, gotRuntimeID)
 	require.Equal(t, sessionID, gotSessionID)
+	marker, ok := service.ExtractEphemeralSandbox(gotContext)
+	require.True(t, ok)
+	require.NotNil(t, marker.CleanupOnTerminal)
+	require.False(t, *marker.CleanupOnTerminal, "env-dispatch channel owns sandbox cleanup")
 }

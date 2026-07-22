@@ -74,6 +74,17 @@ type ExecOptions struct {
 	// field rather than fail (so MUL-2339 can grow runtime support
 	// incrementally without breaking unrelated agents).
 	ThinkingLevel string
+	// TrustedExtensionPaths is a list of application-generated extension files
+	// to load explicitly via --extension. Only accepted when DisableTools is
+	// true (restricted execution profile). Each path must be an absolute,
+	// regular file within TrustedExtensionRoot. Duplicates are silently
+	// deduplicated. Relative paths, directories, and paths outside the root
+	// are rejected at option-validation time.
+	TrustedExtensionPaths []string
+	// TrustedExtensionRoot is the directory that TrustedExtensionPaths must
+	// reside within. Must be an absolute path. Ignored when
+	// TrustedExtensionPaths is empty.
+	TrustedExtensionRoot string
 }
 
 // runContext derives the execution context for an agent subprocess from the

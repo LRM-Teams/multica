@@ -590,6 +590,124 @@ func TestPiExecuteToolUseTurnDoesNotEarlyComplete(t *testing.T) {
 	}
 }
 
+func TestBuildPiArgsTrustedExtension_Disabled(t *testing.T) {
+	// TrustedExtensionPaths is not accepted unless DisableTools is true.
+	_, err := validateTrustedExtensionPaths([]string{"/tmp/d.ts"}, "/tmp", false)
+	if err == nil {
+		t.Fatal("expected error when TrustedExtensionPaths is set without DisableTools")
+	}
+}
+
+func TestBuildPiArgsTrustedExtension_EmitsExtensionFlag(t *testing.T) {
+	trustedRoot := t.TempDir()
+	extPath := filepath.Join(trustedRoot, "diagnosis.ts")
+	writeTestFile(t, extPath, []byte("// trusted extension"))
+
+	args := buildPiArgs("prompt", "/tmp/s.jsonl", ExecOptions{
+		DisableTools:          true,
+		TrustedExtensionPaths: []string{extPath},
+		TrustedExtensionRoot:  trustedRoot,
+	}, slog.Default())
+
+	found := false
+	for _, arg := range args {
+		if arg == "--extension" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected --extension flag for trusted extension, got: %v", args)
+	}
+	// --no-extensions should still be present (disables discovery but explicit
+	// extensions are still loaded).
+	hasNoExtensions := false
+	for _, arg := range args {
+		if arg == "--no-extensions" {
+			hasNoExtensions = true
+		}
+	}
+	if !hasNoExtensions {
+		t.Fatalf("expected --no-extensions flag, got: %v", args)
+	}
+}
+
+func TestBuildPiArgsTrustedExtension_RejectsRelativePath(t *testing.T) {
+	_, err := validateTrustedExtensionPaths([]string{"relative/path.ts"}, "/tmp", true)
+	if err == nil {
+		t.Fatal("expected error for relative path")
+	}
+}
+
+func TestBuildPiArgsTrustedExtension_RejectsMissingFile(t *testing.T) {
+	_, err := validateTrustedExtensionPaths([]string{"/nonexistent/extension.ts"}, "/nonexistent", true)
+	if err == nil {
+		t.Fatal("expected error for missing file")
+	}
+}
+
+func TestBuildPiArgsTrustedExtension_RejectsDirectory(t *testing.T) {
+	trustedRoot := t.TempDir()
+	_, err := validateTrustedExtensionPaths([]string{trustedRoot}, trustedRoot, true)
+	if err == nil {
+		t.Fatal("expected error for directory path")
+	}
+}
+
+func TestBuildPiArgsTrustedExtension_RejectsOutsideRoot(t *testing.T) {
+	trustedRoot := t.TempDir()
+	outsideRoot := t.TempDir()
+	extPath := filepath.Join(outsideRoot, "extension.ts")
+	writeTestFile(t, extPath, []byte("// outside"))
+
+	_, err := validateTrustedExtensionPaths([]string{extPath}, trustedRoot, true)
+	if err == nil {
+		t.Fatal("expected error for path outside trusted root")
+	}
+}
+
+func TestBuildPiArgsTrustedExtension_RejectsDuplicatePaths(t *testing.T) {
+	trustedRoot := t.TempDir()
+	extPath := filepath.Join(trustedRoot, "ext.ts")
+	writeTestFile(t, extPath, []byte("// ext"))
+
+	paths, err := validateTrustedExtensionPaths([]string{extPath, extPath}, trustedRoot, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(paths) != 1 {
+		t.Fatalf("expected 1 deduplicated path, got %d: %v", len(paths), paths)
+	}
+}
+
+func TestBuildPiRPCArgsTrustedExtension_DisabledProfile(t *testing.T) {
+	trustedRoot := t.TempDir()
+	extPath := filepath.Join(trustedRoot, "diagnosis.ts")
+	writeTestFile(t, extPath, []byte("// trusted extension"))
+
+	args := buildPiRPCArgs("/tmp/s.jsonl", ExecOptions{
+		DisableTools:          true,
+		TrustedExtensionPaths: []string{extPath},
+		TrustedExtensionRoot:  trustedRoot,
+	}, slog.Default())
+
+	found := false
+	for _, arg := range args {
+		if arg == "--extension" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected --extension flag in RPC args, got: %v", args)
+	}
+}
+
+func writeTestFile(t *testing.T, path string, content []byte) {
+	t.Helper()
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+}
+
 func TestFlushPiTextBufferKeepsUnmatchedToolPrefixes(t *testing.T) {
 	tests := []string{
 		"plain response: see below",

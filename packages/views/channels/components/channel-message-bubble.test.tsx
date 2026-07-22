@@ -992,7 +992,17 @@ describe("ChannelMessageBubble", () => {
     expect(body).toHaveTextContent("Line 19");
     expect(screen.getByTestId("message-collapse-fade")).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: "See more" }));
+    const expand = screen.getByRole("button", { name: "See more" });
+    // LRM-302: text link, not centered pill covering the body.
+    expect(expand.className).toMatch(/text-sm/);
+    expect(expand.className).not.toMatch(/rounded-full/);
+    expect(expand.className).not.toMatch(/min-h-11/);
+    expect(expand.className).not.toMatch(/shadow-sm/);
+    expect(screen.getByTestId("message-collapse-fade").className).toMatch(
+      /justify-start/,
+    );
+
+    await userEvent.click(expand);
 
     expect(body).not.toHaveAttribute("data-collapsed");
     expect(screen.queryByRole("button", { name: "See more" })).not.toBeInTheDocument();

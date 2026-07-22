@@ -177,7 +177,9 @@ vi.mock("../../i18n/use-t", () => ({
         message: {
           system_event: {
             member_added: "{target} was added to this channel by {actor}",
+            member_added_no_actor: "{target} joined this channel",
             member_removed: "{target} was removed from this channel by {actor}",
+            member_removed_no_actor: "{target} was removed from this channel",
             member_left: "{target} left this channel",
             issue: {
               actor_system: "Multica",
@@ -315,6 +317,26 @@ describe("parseMemberSystemEvent", () => {
       parseMemberSystemEvent(systemMessage({ event: "channel_member_added", params: { actor_id: "user-1" } })),
     ).toBeNull();
   });
+
+  it("extracts `source` for an actor-less system-maintained row (#661)", () => {
+    const event = parseMemberSystemEvent(
+      systemMessage({
+        event: "channel_member_added",
+        params: { target_id: "user-2", source: "system_invariant" },
+      }),
+    );
+    expect(event).toMatchObject({ source: "system_invariant", actorId: undefined });
+  });
+
+  it("leaves `source` undefined for an older row that predates the field", () => {
+    const event = parseMemberSystemEvent(
+      systemMessage({
+        event: "channel_member_added",
+        params: { actor_id: "user-1", target_id: "user-2" },
+      }),
+    );
+    expect(event).toMatchObject({ source: undefined });
+  });
 });
 
 describe("MemberSystemEventContent", () => {
@@ -406,6 +428,47 @@ describe("MemberSystemEventContent", () => {
     expect(token).toHaveAttribute("data-member-type", "agent");
     fireEvent.click(token);
     expect(openPanelMock).toHaveBeenCalledWith("agent-x");
+  });
+
+  it("drops the dangling 'by' clause for an actor-less system-maintained add (#661)", () => {
+    render(
+      <MemberSystemEventContent
+        event={{
+          event: "channel_member_added",
+          targetId: "user-2",
+          source: "system_invariant",
+        }}
+      />,
+    );
+    expect(document.body.textContent).toBe("@wendy joined this channel");
+    expect(screen.getAllByTestId("actor-token")).toHaveLength(1);
+  });
+
+  it("drops the dangling 'by' clause for an actor-less removal, and never says 'left' (#661)", () => {
+    render(
+      <MemberSystemEventContent
+        event={{
+          event: "channel_member_removed",
+          targetId: "user-2",
+          source: "system_invariant",
+        }}
+      />,
+    );
+    expect(document.body.textContent).toBe("@wendy was removed from this channel");
+    expect(document.body.textContent).not.toContain("left");
+  });
+
+  it("still uses the manual template when a real actor is present, even without `source` (old rows)", () => {
+    render(
+      <MemberSystemEventContent
+        event={{
+          event: "channel_member_added",
+          actorId: "user-1",
+          targetId: "user-2",
+        }}
+      />,
+    );
+    expect(document.body.textContent).toBe("@wendy was added to this channel by @frank");
   });
 });
 

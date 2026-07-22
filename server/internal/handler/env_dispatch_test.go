@@ -292,9 +292,10 @@ func TestMapPerAgentEnvSpecs(t *testing.T) {
 		"agent-template": {Template: "python"},
 		"agent-base":     {BaseEnvID: "base-env-1"},
 		"agent-runtime": {Runtime: &ExternalModelRuntimeRequest{
-			BaseURL: "https://provider.invalid/v1",
-			APIKey:  "synthetic-secret-for-tests",
-			Model:   "model-a",
+			Provider: "anthropic",
+			BaseURL:  "https://provider.invalid/v1",
+			APIKey:   "synthetic-secret-for-tests",
+			Model:    "model-a",
 		}},
 	}
 	out := mapPerAgentEnvSpecs(in)
@@ -315,7 +316,7 @@ func TestMapPerAgentEnvSpecs(t *testing.T) {
 	if rt == nil {
 		t.Fatalf("runtime not mapped")
 	}
-	if rt.BaseURL != "https://provider.invalid/v1" || rt.APIKey != "synthetic-secret-for-tests" || rt.Model != "model-a" {
+	if rt.Provider != "anthropic" || rt.BaseURL != "https://provider.invalid/v1" || rt.APIKey != "synthetic-secret-for-tests" || rt.Model != "model-a" {
 		t.Fatalf("runtime fields not mapped: %+v", rt)
 	}
 }

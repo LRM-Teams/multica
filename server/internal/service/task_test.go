@@ -244,6 +244,21 @@ func TestCleanupCancelledTaskUsesEphemeralManager(t *testing.T) {
 	assert.Equal(t, 1, manager.cleanups)
 }
 
+func TestMaybeCleanupEphemeralSandbox_PersistentMarkerSkipsManager(t *testing.T) {
+	manager := &fakeEphemeralSandboxManager{}
+	svc := &TaskService{EphemeralSandboxManager: manager}
+	task := db.AgentTaskQueue{Context: json.RawMessage(`{
+		"ephemeral_sandbox": {
+			"sandbox_instance_id": "sandbox-env-dispatch",
+			"cleanup_on_terminal": false
+		}
+	}`)}
+
+	svc.maybeCleanupEphemeralSandbox(context.Background(), task)
+
+	assert.Equal(t, 0, manager.cleanups, "explicitly persistent sandbox must await env-dispatch cleanup")
+}
+
 func TestMaybeRetryOfflineEphemeralTaskUsesFreshResources(t *testing.T) {
 	env := setupRetryTestDB(t, "runtime_offline")
 	ctx := context.Background()

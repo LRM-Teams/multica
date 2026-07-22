@@ -17,9 +17,10 @@ func TestEnvDispatchSandboxConfigCodec(t *testing.T) {
 	policy := service.ResolvedPerAgentSandboxPolicy{
 		Template: "  default  ",
 		Runtime: &service.ExternalModelRuntime{
-			BaseURL: " https://provider.invalid/v1 ",
-			APIKey:  " synthetic-secret-for-tests ",
-			Model:   " model-a ",
+			Provider: " anthropic ",
+			BaseURL:  " https://provider.invalid/v1 ",
+			APIKey:   " synthetic-secret-for-tests ",
+			Model:    " model-a ",
 		},
 	}
 	raw, err := marshalEnvDispatchSandboxConfig(policy)
@@ -29,6 +30,7 @@ func TestEnvDispatchSandboxConfigCodec(t *testing.T) {
 	body := string(raw)
 	for _, want := range []string{
 		`"template":"default"`,
+		`"provider":"anthropic"`,
 		`"base_url":"https://provider.invalid/v1"`,
 		`"api_key":"synthetic-secret-for-tests"`,
 		`"model":"model-a"`,
@@ -48,7 +50,8 @@ func TestEnvDispatchSandboxConfigCodec(t *testing.T) {
 	if decoded.Runtime == nil {
 		t.Fatalf("decoded runtime is nil")
 	}
-	if decoded.Runtime.BaseURL != "https://provider.invalid/v1" ||
+	if decoded.Runtime.Provider != "anthropic" ||
+		decoded.Runtime.BaseURL != "https://provider.invalid/v1" ||
 		decoded.Runtime.APIKey != "synthetic-secret-for-tests" ||
 		decoded.Runtime.Model != "model-a" {
 		t.Fatalf("decoded runtime mismatch: %+v", decoded.Runtime)
@@ -139,9 +142,10 @@ func TestEnvDispatchSandboxConfigCreateInput(t *testing.T) {
 	config := envDispatchSandboxConfig{
 		Template: "default",
 		Runtime: &service.ExternalModelRuntime{
-			BaseURL: "https://provider.invalid/v1",
-			APIKey:  "synthetic-secret-for-tests",
-			Model:   "model-a",
+			Provider: "anthropic",
+			BaseURL:  "https://provider.invalid/v1",
+			APIKey:   "synthetic-secret-for-tests",
+			Model:    "model-a",
 		},
 	}
 	in, err := config.createInput("ws-1", "daemon-1")
@@ -160,7 +164,7 @@ func TestEnvDispatchSandboxConfigCreateInput(t *testing.T) {
 	if in.RuntimeEnv["MULTICA_DAEMON_ID"] != "daemon-1" {
 		t.Fatalf("RuntimeEnv[MULTICA_DAEMON_ID] = %q, want daemon-1", in.RuntimeEnv["MULTICA_DAEMON_ID"])
 	}
-	wantRuntime := `{"base_url":"https://provider.invalid/v1","api_key":"synthetic-secret-for-tests","model":"model-a"}`
+	wantRuntime := `{"provider":"anthropic","base_url":"https://provider.invalid/v1","api_key":"synthetic-secret-for-tests","model":"model-a"}`
 	if string(in.Runtime) != wantRuntime {
 		t.Fatalf("Runtime = %s, want %s", in.Runtime, wantRuntime)
 	}

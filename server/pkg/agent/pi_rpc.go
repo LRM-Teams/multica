@@ -26,6 +26,114 @@ var ErrPiRPCTurnBusy = errors.New("pi RPC turn busy")
 type PiRPCBackend interface {
 	Backend
 	Close()
+	// Compact explicitly compacts the Pi session context with custom instructions.
+	// Returns the compaction summary and before/after token counts.
+	Compact(ctx context.Context, instructions string) (PiCompactionResult, error)
+	// SetAutoCompaction enables or disables Pi's automatic context compaction.
+	// Diagnosis sessions disable it so Multica controls compaction at segment
+	// boundaries via Compact().
+	SetAutoCompaction(ctx context.Context, enabled bool) error
+	// RuntimeStats returns the current Pi process token/cost/context telemetry
+	// outside an active prompt turn. Returns the same RuntimeTokenStats shape
+	// that Execute attaches to Result, queryable between segment turns.
+	RuntimeStats(ctx context.Context) (*RuntimeTokenStats, error)
+}
+
+// Compact explicitly compacts the Pi session context.
+func (b *piRPCBackend) Compact(ctx context.Context, instructions string) (PiCompactionResult, error) {
+	p, err := b.getProcess()
+	if err != nil {
+		return PiCompactionResult{}, err
+	}
+	resp, err := b.sendControlCommand(ctx, p, "multica-compact", map[string]any{
+		"type":    "compact",
+		"message": instructions,
+	})
+	if err != nil {
+		return PiCompactionResult{}, err
+	}
+	if !resp.Success {
+		return PiCompactionResult{}, fmt.Errorf("Pi RPC compact: %s", resp.Error)
+	}
+	var result PiCompactionResult
+	if len(resp.Data) > 0 {
+		var payload struct {
+			Summary      string `json:"summary"`
+			TokensBefore int    `json:"tokensBefore"`
+			TokensAfter  int    `json:"tokensAfter"`
+		}
+		if json.Unmarshal(resp.Data, &payload) == nil {
+			result = PiCompactionResult{
+				Summary:      payload.Summary,
+				TokensBefore: payload.TokensBefore,
+				TokensAfter:  payload.TokensAfter,
+			}
+		}
+	}
+	return result, nil
+}
+
+// SetAutoCompaction enables or disables Pi's automatic compaction.
+func (b *piRPCBackend) SetAutoCompaction(ctx context.Context, enabled bool) error {
+	p, err := b.getProcess()
+	if err != nil {
+		return err
+	}
+	resp, err := b.sendControlCommand(ctx, p, "multica-autocompact", map[string]any{
+		"type":    "set_auto_compaction",
+		"enabled": enabled,
+	})
+	if err != nil {
+		return err
+	}
+	if !resp.Success {
+		return fmt.Errorf("Pi RPC set_auto_compaction: %s", resp.Error)
+	}
+	return nil
+}
+
+// RuntimeStats returns the current Pi process telemetry.
+func (b *piRPCBackend) RuntimeStats(ctx context.Context) (*RuntimeTokenStats, error) {
+	p, err := b.getProcess()
+	if err != nil {
+		return nil, err
+	}
+	return p.queryRuntimeStats(ctx, nil, ""), nil
+}
+
+func (b *piRPCBackend) getProcess() (*piRPCProcess, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.process == nil {
+		return nil, fmt.Errorf("Pi RPC process not started")
+	}
+	return b.process, nil
+}
+
+// sendControlCommand writes a JSON-RPC-style command to Pi stdin and waits for
+// the response by request ID. It is safe to call between or during turns;
+// responses are routed through the pending map by request ID.
+func (b *piRPCBackend) sendControlCommand(ctx context.Context, p *piRPCProcess, id string, command map[string]any) (piRPCResponse, error) {
+	command["id"] = id
+	ch := make(chan piRPCResponse, 1)
+	p.stateMu.Lock()
+	p.pending[id] = ch
+	p.stateMu.Unlock()
+	defer func() {
+		p.stateMu.Lock()
+		delete(p.pending, id)
+		p.stateMu.Unlock()
+	}()
+
+	if err := p.writeCommand(command); err != nil {
+		return piRPCResponse{}, fmt.Errorf("Pi RPC control write: %w", err)
+	}
+	select {
+	case resp := <-ch:
+		return resp, nil
+	case <-ctx.Done():
+		return piRPCResponse{}, ctx.Err()
+	}
 }
 
 type piRPCBackend struct {
@@ -41,15 +149,23 @@ type piRPCProcess struct {
 	stdin       io.WriteCloser
 	sessionPath string
 
-	writeMu sync.Mutex
-	stateMu sync.Mutex
-	turn    *piRPCTurn
+	writeMu  sync.Mutex
+	stateMu  sync.Mutex
+	turn     *piRPCTurn
+	pending  map[string]chan piRPCResponse // request-ID keyed control responses
 }
 
 type piRPCTurn struct {
 	response chan piRPCResponse
 	done     chan piRPCCompletion
 	message  func(Message)
+}
+
+// PiCompactionResult is the outcome of an explicit compaction call.
+type PiCompactionResult struct {
+	Summary      string
+	TokensBefore int
+	TokensAfter  int
 }
 
 type piRPCResponse struct {
@@ -224,7 +340,7 @@ func (b *piRPCBackend) ensureProcess(opts ExecOptions) (*piRPCProcess, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start Pi RPC: %w", err)
 	}
-	p := &piRPCProcess{cmd: cmd, stdin: stdin, sessionPath: sessionPath}
+	p := &piRPCProcess{cmd: cmd, stdin: stdin, sessionPath: sessionPath, pending: make(map[string]chan piRPCResponse)}
 	go b.readEvents(p, stdout)
 	go func() { _, _ = io.Copy(newLogWriter(b.cfg.Logger, "[pi-rpc:stderr] "), stderr) }()
 	b.cfg.Logger.Info("Pi RPC started", "pid", cmd.Process.Pid, "cwd", opts.Cwd, "model", opts.Model)
@@ -254,6 +370,14 @@ func (b *piRPCBackend) readEvents(p *piRPCProcess, stdout io.Reader) {
 		var response piRPCResponse
 		if json.Unmarshal([]byte(line), &response) == nil && response.Type == "response" {
 			p.stateMu.Lock()
+			// Route by request ID: control commands go to the pending map,
+			// prompt-turn responses go to the active turn.
+			if ch, ok := p.pending[response.ID]; ok {
+				delete(p.pending, response.ID)
+				p.stateMu.Unlock()
+				trySendPiRPCResponse(ch, response)
+				continue
+			}
 			turn := p.turn
 			p.stateMu.Unlock()
 			if turn != nil {
@@ -330,14 +454,61 @@ func waitPiRPCResponse(ctx context.Context, turn *piRPCTurn, id string) (piRPCRe
 
 const piRPCRuntimeStatsQueryTimeout = 300 * time.Millisecond
 
+// queryPiRPCResponse waits for a single response by request ID from the pending
+// map. It registers a channel, writes the command, waits for the response, then
+// cleans up.
+func (p *piRPCProcess) queryPiRPCResponse(ctx context.Context, id string, command map[string]any) (piRPCResponse, bool) {
+	command["id"] = id
+	ch := make(chan piRPCResponse, 1)
+	p.stateMu.Lock()
+	p.pending[id] = ch
+	p.stateMu.Unlock()
+	defer func() {
+		p.stateMu.Lock()
+		delete(p.pending, id)
+		p.stateMu.Unlock()
+	}()
+	if err := p.writeCommand(command); err != nil {
+		return piRPCResponse{}, false
+	}
+	select {
+	case resp := <-ch:
+		return resp, true
+	case <-ctx.Done():
+		return piRPCResponse{}, false
+	}
+}
+
 func (p *piRPCProcess) queryRuntimeStats(ctx context.Context, turn *piRPCTurn, fallbackModel string) *RuntimeTokenStats {
 	statsCtx, cancel := context.WithTimeout(ctx, piRPCRuntimeStatsQueryTimeout)
 	defer cancel()
 
-	if err := p.writeCommand(map[string]any{"id": "multica-stats", "type": "get_session_stats"}); err != nil {
-		return nil
+	// When called during a turn, use the turn's response channel for backward
+	// compatibility. When called outside a turn (turn == nil), use the pending map.
+	if turn != nil {
+		if err := p.writeCommand(map[string]any{"id": "multica-stats", "type": "get_session_stats"}); err != nil {
+			return nil
+		}
+		response, ok := waitPiRPCResponse(statsCtx, turn, "multica-stats")
+		if !ok || !response.Success || len(response.Data) == 0 {
+			return nil
+		}
+		stats := parsePiRPCSessionStats(response.Data, fallbackModel)
+		if stats == nil {
+			return nil
+		}
+		if err := p.writeCommand(map[string]any{"id": "multica-state", "type": "get_state"}); err != nil {
+			return stats
+		}
+		stateResponse, ok := waitPiRPCResponse(statsCtx, turn, "multica-state")
+		if ok && stateResponse.Success && len(stateResponse.Data) > 0 {
+			applyPiRPCStateStats(stats, stateResponse.Data)
+		}
+		return stats
 	}
-	response, ok := waitPiRPCResponse(statsCtx, turn, "multica-stats")
+
+	// Outside a turn: use the pending map.
+	response, ok := p.queryPiRPCResponse(statsCtx, "multica-stats", map[string]any{"type": "get_session_stats"})
 	if !ok || !response.Success || len(response.Data) == 0 {
 		return nil
 	}
@@ -345,10 +516,7 @@ func (p *piRPCProcess) queryRuntimeStats(ctx context.Context, turn *piRPCTurn, f
 	if stats == nil {
 		return nil
 	}
-	if err := p.writeCommand(map[string]any{"id": "multica-state", "type": "get_state"}); err != nil {
-		return stats
-	}
-	stateResponse, ok := waitPiRPCResponse(statsCtx, turn, "multica-state")
+	stateResponse, ok := p.queryPiRPCResponse(statsCtx, "multica-state", map[string]any{"type": "get_state"})
 	if ok && stateResponse.Success && len(stateResponse.Data) > 0 {
 		applyPiRPCStateStats(stats, stateResponse.Data)
 	}
@@ -477,9 +645,21 @@ func buildPiRPCArgs(sessionPath string, opts ExecOptions, logger *slog.Logger) [
 	if opts.ThinkingLevel != "" {
 		args = append(args, "--thinking", opts.ThinkingLevel)
 	}
-	if opts.DisableTools {
-		args = append(args, "--tools", "")
-	}
+		if opts.DisableTools {
+			args = append(args,
+				"--no-extensions",
+				"--no-skills",
+				"--no-prompt-templates",
+				"--no-context-files",
+				"--no-approve",
+				"--tools", "",
+			)
+			if len(opts.TrustedExtensionPaths) > 0 {
+				for _, p := range opts.TrustedExtensionPaths {
+					args = append(args, "--extension", p)
+				}
+			}
+		}
 	if opts.SystemPrompt != "" {
 		args = append(args, "--append-system-prompt", opts.SystemPrompt)
 	}

@@ -2,8 +2,12 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
+	"os"
 	"strings"
 	"time"
 
@@ -302,4 +306,218 @@ func (r *DiagnosisAgentRunner) resolveTaskContext(ctx context.Context, segments 
 		return tc
 	}
 	return TaskContext{}
+}
+
+// DiagnosisReport is the result of an on-demand diagnosis run. Rewards are
+// already persisted in the DAG store; the report carries status only.
+type DiagnosisReport struct {
+	RunID              string
+	CompletedSegments  int
+	TotalSegments      int
+	Status             DiagnosisRunStatus
+}
+
+// DiagnosisOnDemandConfig holds the dependencies for the on-demand diagnosis
+// flow (Tasks 1-6). When set, Diagnose routes through the persistent-session
+// path; when nil, it falls back to the legacy one-shot prompt path.
+type DiagnosisOnDemandConfig struct {
+	StateStore      *DiagnosisStateStore
+	DAGWriter       DiagnosisDAGWriter
+	MessagePager    DiagnosisMessagePager
+	PiRPC           agentpkg.PiRPCBackend
+	ExtensionRoot   string
+}
+
+// DiagnoseOnDemand runs the persistent per-segment diagnosis flow. It creates or
+// resumes a diagnosis run, starts the loopback tool server, launches a single
+// persistent Pi RPC session with the trusted extension, and processes one
+// segment per turn with compaction between segments.
+func (r *DiagnosisAgentRunner) DiagnoseOnDemand(ctx context.Context, projectID, taskID string, orderedSegmentIDs []string, cfg DiagnosisOnDemandConfig) (DiagnosisReport, error) {
+	topoHash := topologyHashFromIDs(orderedSegmentIDs)
+
+	// Create or resume a diagnosis run.
+	runCkpt, segments, err := cfg.StateStore.LoadResumableRun(ctx, projectID, taskID)
+	if err != nil && !errors.Is(err, ErrDiagnosisRunNotFound) {
+		return DiagnosisReport{}, fmt.Errorf("diagnosis on-demand: load run: %w", err)
+	}
+	if errors.Is(err, ErrDiagnosisRunNotFound) {
+		// New run.
+		runID := fmt.Sprintf("diag-%s-%d", taskID[:min(8, len(taskID))], time.Now().UnixMilli())
+		runCkpt, err = cfg.StateStore.CreateRun(ctx, DiagnosisRunCheckpoint{
+			RunID:             runID,
+			ProjectID:         projectID,
+			TaskID:            taskID,
+			TopologyHash:      topoHash,
+			OrderedSegmentIDs: orderedSegmentIDs,
+		})
+		if err != nil {
+			return DiagnosisReport{}, fmt.Errorf("diagnosis on-demand: create run: %w", err)
+		}
+		segments, _ = cfg.StateStore.ListSegments(ctx, runCkpt.RunID)
+	}
+
+	// Start the loopback tool server.
+	server, err := NewDiagnosisToolServer(runCkpt, cfg.StateStore, cfg.MessagePager, cfg.DAGWriter)
+	if err != nil {
+		return DiagnosisReport{}, fmt.Errorf("diagnosis on-demand: tool server: %w", err)
+	}
+	baseURL, err := server.ListenAndServe()
+	if err != nil {
+		return DiagnosisReport{}, fmt.Errorf("diagnosis on-demand: listen: %w", err)
+	}
+	defer server.Shutdown(ctx)
+
+	// Generate the trusted extension.
+	extPath, err := GenerateDiagnosisPiExtension(cfg.ExtensionRoot, 0o600)
+	if err != nil {
+		return DiagnosisReport{}, fmt.Errorf("diagnosis on-demand: extension: %w", err)
+	}
+	defer os.Remove(extPath)
+
+	// Set environment for the Pi process.
+	os.Setenv("MULTICA_DIAGNOSIS_API_URL", baseURL)
+	os.Setenv("MULTICA_DIAGNOSIS_CAPABILITY_TOKEN", server.BearerToken())
+	defer func() {
+		os.Unsetenv("MULTICA_DIAGNOSIS_API_URL")
+		os.Unsetenv("MULTICA_DIAGNOSIS_CAPABILITY_TOKEN")
+	}()
+
+	// Compute missing seqs from the DAG store.
+	segInfos := make([]segmentDiagnosisInfo, 0, len(segments))
+	completedCount := 0
+	for _, seg := range segments {
+		if seg.Status == SegmentDiagnosisCompleted {
+			completedCount++
+			continue
+		}
+		// Query expected reward count from DAG.
+		totalRewards, _ := cfg.DAGWriter.CountDiagnosisStepRewards(ctx, projectID, seg.SegmentID)
+		segInfos = append(segInfos, segmentDiagnosisInfo{
+			SegmentID:       seg.SegmentID,
+			ExpectedMessages: seg.ExpectedMessageCount,
+			ExpectedRewards:  seg.ExpectedRewardCount,
+			RecordedRewards:  totalRewards,
+		})
+	}
+
+	if len(segInfos) == 0 {
+		_ = cfg.StateStore.CompleteRun(ctx, runCkpt.RunID, topoHash)
+		return DiagnosisReport{
+			RunID:             runCkpt.RunID,
+			CompletedSegments: completedCount,
+			TotalSegments:     len(segments),
+			Status:            DiagnosisRunCompleted,
+		}, nil
+	}
+
+	// Start the persistent Pi RPC session.
+	bootstrapPrompt := r.buildTopologyBootstrapPrompt(projectID, orderedSegmentIDs, segInfos, segments)
+	piSession, err := cfg.PiRPC.Execute(ctx, bootstrapPrompt, agentpkg.ExecOptions{
+		Model:                 r.model,
+		SystemPrompt:          r.onDemandSystemPrompt(),
+		DisableTools:          true,
+		TrustedExtensionPaths: []string{extPath},
+		TrustedExtensionRoot:  cfg.ExtensionRoot,
+		Timeout:               r.timeout,
+	})
+	if err != nil {
+		return DiagnosisReport{}, fmt.Errorf("diagnosis on-demand: pi session: %w", err)
+	}
+
+	// Disable Pi's auto-compaction — Multica controls it at segment boundaries.
+	if err := cfg.PiRPC.SetAutoCompaction(ctx, false); err != nil {
+		slog.Warn("diagnosis on-demand: set auto compaction failed", "error", err)
+	}
+
+	result, ok := <-piSession.Result
+	if !ok {
+		return DiagnosisReport{}, fmt.Errorf("diagnosis on-demand: pi session closed without result")
+	}
+	if result.Status != "completed" {
+		return DiagnosisReport{Status: DiagnosisRunFailed}, fmt.Errorf("diagnosis on-demand: pi session %s: %s", result.Status, result.Error)
+	}
+
+	// After the session, verify all segments are completed.
+	segments, _ = cfg.StateStore.ListSegments(ctx, runCkpt.RunID)
+	completedCount = 0
+	for _, seg := range segments {
+		if seg.Status == SegmentDiagnosisCompleted {
+			completedCount++
+		}
+	}
+
+	_ = cfg.StateStore.CompleteRun(ctx, runCkpt.RunID, topoHash)
+
+	return DiagnosisReport{
+		RunID:             runCkpt.RunID,
+		CompletedSegments: completedCount,
+		TotalSegments:     len(segments),
+		Status:            DiagnosisRunCompleted,
+	}, nil
+}
+
+type segmentDiagnosisInfo struct {
+	SegmentID        string
+	ExpectedMessages int
+	ExpectedRewards  int
+	RecordedRewards  int
+}
+
+// topologyHashFromIDs computes a deterministic hash of ordered segment IDs.
+func topologyHashFromIDs(ids []string) string {
+	data, _ := json.Marshal(ids)
+	h := sha256.Sum256(data)
+	return fmt.Sprintf("%x", h)
+}
+
+// onDemandSystemPrompt builds the system prompt for the on-demand diagnosis
+// agent: it instructs Pi to use only the five diagnosis tools, process one
+// segment at a time, page messages, record rewards incrementally, and finish
+// each segment before moving to the next.
+func (r *DiagnosisAgentRunner) onDemandSystemPrompt() string {
+	return fmt.Sprintf(`You are a diagnosis agent that evaluates each LLM output (assistant turn) within a collaborative task DAG.
+
+CAPABILITIES — use ONLY these tools:
+- multica_get_segment_messages — fetch one page of messages for a segment
+- multica_record_step_rewards — persist step scores (0–%d) incrementally
+- multica_get_diagnosis_progress — read authoritative server state
+- multica_finish_segment — mark a segment complete (server validates coverage)
+- multica_complete_diagnosis — finalize after all segments are done
+
+PROCESS each segment:
+1. Call multica_get_segment_messages for the segment. Page through ALL messages until Complete=true.
+2. Score every assistant turn (0–%d). Call multica_record_step_rewards after each page.
+3. When all messages are fetched AND all rewards are recorded, call multica_finish_segment.
+4. The server will reject finish until message and reward coverage are both complete.
+5. Move to the next segment only after the current one is confirmed completed.
+
+RULES:
+- Never fabricate or skip turns — every assistant message must be scored.
+- Scores reflect contribution toward the task goal, not message length or style.
+- Conflicting rewrites of the same (segment_id, seq) are rejected — use multica_get_diagnosis_progress to reconcile.
+- The database is authoritative — if progress disagrees with your memory, trust the server.`, r.scoreMax, r.scoreMax)
+}
+
+// buildTopologyBootstrapPrompt assembles the initial prompt containing task
+// context, scoring rubric, ordered topology, and segment/step IDs — but NO
+// segment message bodies. Messages are fetched on demand via the extension.
+func (r *DiagnosisAgentRunner) buildTopologyBootstrapPrompt(projectID string, orderedSegmentIDs []string, infos []segmentDiagnosisInfo, segments []SegmentDiagnosisCheckpoint) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Project: %s\n", projectID))
+	sb.WriteString(fmt.Sprintf("Score max: %d\n\n", r.scoreMax))
+
+	sb.WriteString("SEGMENT TOPOLOGY (ordered):\n")
+	for i, seg := range segments {
+		status := string(seg.Status)
+		sb.WriteString(fmt.Sprintf("  %d. segment_id=%s status=%s messages=%d rewards=%d/%d\n",
+			i+1, seg.SegmentID, status,
+			seg.ExpectedMessageCount, seg.RewardCount, seg.ExpectedRewardCount))
+	}
+	sb.WriteString("\nINCOMPLETE SEGMENTS to process:\n")
+	for _, info := range infos {
+		sb.WriteString(fmt.Sprintf("  segment_id=%s expected_messages=%d expected_rewards=%d recorded_rewards=%d\n",
+			info.SegmentID, info.ExpectedMessages, info.ExpectedRewards, info.RecordedRewards))
+	}
+	sb.WriteString("\nStart with the first incomplete segment. Use multica_get_segment_messages to read its messages page by page.\n")
+	return sb.String()
 }

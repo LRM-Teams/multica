@@ -69,8 +69,8 @@ const TOUCH_MOVE_CANCEL_PX = 8;
 const MOBILE_THREAD_TAP_FEEDBACK_MS = 120;
 /** LRM-268 / design-long-message-slack-vs-multica.html — Slack collapsed body height. */
 export const MESSAGE_COLLAPSE_MAX_HEIGHT_PX = 160;
-/** Fade overlay height from the same design mock (±2px AC). */
-export const MESSAGE_COLLAPSE_FADE_HEIGHT_PX = 72;
+/** Fade overlay height — light bottom wash only (LRM-302); must not center-cover text. */
+export const MESSAGE_COLLAPSE_FADE_HEIGHT_PX = 40;
 const MESSAGE_COLLAPSE_HEIGHT_CLASS = "max-h-[160px]";
 const MESSAGE_COLLAPSE_OVERFLOW_EPSILON_PX = 2;
 
@@ -898,12 +898,13 @@ export function ChannelMessageBubble({
             )}
             {isContentCollapsed && (
               <div
-                className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center bg-gradient-to-t from-background via-background/95 to-transparent pb-1.5 pt-[72px]"
+                className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-start bg-gradient-to-t from-background via-background/90 to-transparent pb-0.5 pt-10"
                 data-testid="message-collapse-fade"
               >
+                {/* LRM-302: text link, not centered pill — must not cover body. */}
                 <button
                   type="button"
-                  className="pointer-events-auto inline-flex min-h-11 items-center rounded-full border border-primary/25 bg-background px-3 text-xs font-semibold text-primary shadow-sm transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring md:min-h-8"
+                  className="pointer-events-auto inline-flex min-h-8 items-center px-0 text-sm font-normal text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                   onClick={() => setExpandedForIdentity(collapseIdentity)}
                 >
                   {t(($) => $.message.expand_action)}
@@ -911,10 +912,10 @@ export function ChannelMessageBubble({
               </div>
             )}
             {canCollapseContent && !isContentCollapsed && (
-              <div className="mt-1.5 flex justify-center" data-testid="message-collapse-less">
+              <div className="mt-1 flex justify-start" data-testid="message-collapse-less">
                 <button
                   type="button"
-                  className="inline-flex min-h-11 items-center rounded-full border border-primary/25 bg-background px-3 text-xs font-semibold text-primary shadow-sm transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring md:min-h-8"
+                  className="inline-flex min-h-8 items-center px-0 text-sm font-normal text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                   onClick={() => setExpandedForIdentity(null)}
                 >
                   {t(($) => $.message.collapse_action)}

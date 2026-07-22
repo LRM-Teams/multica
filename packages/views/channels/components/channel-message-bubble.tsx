@@ -270,6 +270,8 @@ export function ChannelMessageBubble({
   searchHighlighted = false,
   searchQuery,
   collapseLongContent = false,
+  /** Slack-style continuation: no avatar/name row; gutter shows HH:mm on hover. */
+  compact = false,
 }: {
   message: ChannelMessage;
   currentUserId: string | null;
@@ -302,6 +304,8 @@ export function ChannelMessageBubble({
   searchQuery?: string;
   /** Visually clamp already-read long history while keeping the full DOM/copy payload intact. */
   collapseLongContent?: boolean;
+  /** When true, render as a same-author continuation (avatar/name hidden). */
+  compact?: boolean;
 }) {
   const { t } = useT("channels");
   const { getActorName, getMemberRole } = useActorName();
@@ -609,11 +613,13 @@ export function ChannelMessageBubble({
     message.parts,
   );
   const selfMentioned = addressedToViewer && !isOwn;
+  const showAuthor = !compact;
 
   const bubble = (
     <div
       id={`message-${message.id}`}
       data-testid="message-bubble"
+      data-message-group={compact ? "compact" : "lead"}
       data-own={isOwn}
       data-self-mentioned={selfMentioned ? "true" : undefined}
       data-local-send={localSendStatus ?? undefined}
@@ -623,7 +629,8 @@ export function ChannelMessageBubble({
         // was a layout hack that still clipped link/mention/attachment
         // hitboxes in the first line) — content stays in its own track so
         // nothing overlaps regardless of grouped-message author-row state.
-        "group relative grid grid-cols-[28px_minmax(0,1fr)] gap-2.5 rounded-lg px-2 py-1.5 outline-none transition-colors duration-1000 hover:bg-muted/35 focus-within:bg-muted/35 [@media(pointer:coarse)]:grid-cols-[28px_minmax(0,1fr)_44px]",
+        "group relative grid grid-cols-[28px_minmax(0,1fr)] gap-2.5 rounded-lg px-2 outline-none transition-colors duration-1000 hover:bg-muted/35 focus-within:bg-muted/35 [@media(pointer:coarse)]:grid-cols-[28px_minmax(0,1fr)_44px]",
+        compact ? "py-0.5" : "py-1.5",
         selfMentioned && SELF_MENTION_ROW_CLASS,
         highlighted && "bg-primary/10 ring-1 ring-primary/25 duration-0 hover:bg-primary/10 focus-within:bg-primary/10",
         mobileThreadTapActive && "bg-primary/[0.04] ring-1 ring-primary/45 duration-75",
@@ -636,7 +643,16 @@ export function ChannelMessageBubble({
       onPointerCancel={cancelTouchGesture}
       onPointerLeave={cancelTouchGesture}
     >
-      {profileActorType && profileActorId ? (
+      {compact ? (
+        <span
+          data-testid="message-gutter-time"
+          className="mt-0.5 select-none self-start justify-self-end pt-0.5 text-[10px] tabular-nums text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100"
+          title={messageTime.full(message.created_at)}
+          aria-hidden
+        >
+          {messageTime.clock(message.created_at)}
+        </span>
+      ) : profileActorType && profileActorId ? (
         <ActorProfileTrigger
           memberType={profileActorType}
           memberId={profileActorId}
@@ -650,58 +666,63 @@ export function ChannelMessageBubble({
         avatar
       )}
       <div className="min-w-0 max-w-[min(760px,100%)]">
-        <div className="mb-0.5 flex select-none items-baseline gap-2 pr-40 text-sm md:pr-24">
-          {profileActorType && profileActorId ? (
-            <ActorProfileTrigger
-              memberType={profileActorType}
-              memberId={profileActorId}
-              side="top"
-              sideOffset={8}
-              onClickCapture={handleOpenAgentCapture}
-            >
-              {nameLabel}
-            </ActorProfileTrigger>
-          ) : (
-            nameLabel
-          )}
-          {showAuthorRole && authorMemberRole && (
+        {showAuthor && (
+          <div className="mb-0.5 flex select-none items-baseline gap-2 pr-40 text-sm md:pr-24">
+            {profileActorType && profileActorId ? (
+              <ActorProfileTrigger
+                memberType={profileActorType}
+                memberId={profileActorId}
+                side="top"
+                sideOffset={8}
+                onClickCapture={handleOpenAgentCapture}
+              >
+                {nameLabel}
+              </ActorProfileTrigger>
+            ) : (
+              nameLabel
+            )}
+            {showAuthorRole && authorMemberRole && (
+              <span
+                data-testid="message-author-role"
+                className="shrink-0 text-[11px] font-normal leading-none text-ink-3"
+              >
+                {t(($) => $.profile_popover.role[authorMemberRole])}
+              </span>
+            )}
+            {isRadarMessage && (
+              <span className="shrink-0 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-normal leading-none text-amber-700 dark:text-amber-300">
+                {t(($) => $.message.radar_badge)}
+              </span>
+            )}
+            {isExternal && (
+              <span className="shrink-0 rounded-full border bg-muted px-2 py-0.5 text-[11px] leading-none text-muted-foreground">
+                {t(($) => $.message.feishu_badge)}
+              </span>
+            )}
             <span
-              data-testid="message-author-role"
-              className="shrink-0 text-[11px] font-normal leading-none text-ink-3"
+              className="shrink-0 text-[11px] text-ink-3"
+              title={messageTime.full(message.created_at)}
             >
-              {t(($) => $.profile_popover.role[authorMemberRole])}
+              {messageTime.format(message.created_at)}
             </span>
-          )}
-          {isRadarMessage && (
-            <span className="shrink-0 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-normal leading-none text-amber-700 dark:text-amber-300">
-              {t(($) => $.message.radar_badge)}
-            </span>
-          )}
-          {isExternal && (
-            <span className="shrink-0 rounded-full border bg-muted px-2 py-0.5 text-[11px] leading-none text-muted-foreground">
-              {t(($) => $.message.feishu_badge)}
-            </span>
-          )}
-          <span
-            className="shrink-0 text-[11px] text-ink-3"
-            title={messageTime.full(message.created_at)}
-          >
-            {messageTime.format(message.created_at)}
-          </span>
-          {isEdited && (
-            <span
-              data-testid="message-edited"
-              className="shrink-0 text-[11px] text-ink-3/70"
-            >
-              {t(($) => $.message.edited_label)}
-            </span>
-          )}
-        </div>
+            {isEdited && (
+              <span
+                data-testid="message-edited"
+                className="shrink-0 text-[11px] text-ink-3/70"
+              >
+                {t(($) => $.message.edited_label)}
+              </span>
+            )}
+          </div>
+        )}
         {!isEditing && !isLocalSend && (
           <div
             data-testid="message-action-bar"
             data-message-action-surface="true"
-            className="pointer-events-none absolute right-3 top-2 z-10 hidden items-center gap-0.5 text-muted-foreground opacity-0 transition-opacity [@media(pointer:fine)]:flex [@media(pointer:fine)]:group-hover:pointer-events-auto [@media(pointer:fine)]:group-hover:opacity-100 [@media(pointer:fine)]:group-focus-within:pointer-events-auto [@media(pointer:fine)]:group-focus-within:opacity-100"
+            className={cn(
+              "pointer-events-none absolute right-3 z-10 hidden items-center gap-0.5 text-muted-foreground opacity-0 transition-opacity [@media(pointer:fine)]:flex [@media(pointer:fine)]:group-hover:pointer-events-auto [@media(pointer:fine)]:group-hover:opacity-100 [@media(pointer:fine)]:group-focus-within:pointer-events-auto [@media(pointer:fine)]:group-focus-within:opacity-100",
+              compact ? "top-0.5" : "top-2",
+            )}
           >
             {onReact && (
               <QuickEmojiPicker

@@ -88,10 +88,11 @@ export function VoiceInputButton({
         return;
       }
       const transcript = await api.transcribeVoice(pcm);
-      if (!mountedRef.current) return;
-      if (!transcript) {
-        cancelVoicePlayback(playbackScope);
-        toast.error(t(($) => $.composer.voice_no_speech));
+      if (!mountedRef.current || !transcript) {
+        if (mountedRef.current) {
+          cancelVoicePlayback(playbackScope);
+          toast.error(t(($) => $.composer.voice_no_speech));
+        }
         return;
       }
       if (!onVoiceSendRef.current(transcript, durationMs)) {

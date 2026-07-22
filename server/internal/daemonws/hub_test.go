@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -337,9 +338,85 @@ func TestHeartbeatRejectsUnauthorizedRuntime(t *testing.T) {
 	}
 }
 
+func TestReminderLifecycleReplayDrainsMoreThanSendBufferInOrder(t *testing.T) {
+	hub := NewHub()
+	const eventCount = 40
+	hub.SetReminderHandlers(nil, nil, func(_ context.Context, identity ClientIdentity, payload protocol.DaemonAgentLifecycleRequestPayload) ([]protocol.DaemonAgentLifecycleEvent, map[string]int64, error) {
+		if len(identity.RuntimeIDs) != 1 || identity.RuntimeIDs[0] != "runtime-1" {
+			t.Fatalf("identity runtimes = %#v", identity.RuntimeIDs)
+		}
+		if payload.RuntimeCursors["runtime-1"] != 0 {
+			t.Fatalf("request cursors = %#v", payload.RuntimeCursors)
+		}
+		events := make([]protocol.DaemonAgentLifecycleEvent, 0, eventCount)
+		for i := 1; i <= eventCount; i++ {
+			events = append(events, protocol.DaemonAgentLifecycleEvent{
+				EventType: "start", AgentID: "agent-" + strconv.Itoa(i), RuntimeID: "runtime-1", WorkspaceID: "workspace-1",
+				PlacementGeneration: int64(i), LifecycleSeq: int64(i),
+			})
+		}
+		return events, map[string]int64{"runtime-1": eventCount}, nil
+	}, nil)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, ClientIdentity{WorkspaceID: "workspace-1", RuntimeIDs: []string{"runtime-1"}})
+	}))
+	defer server.Close()
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	request, err := json.Marshal(protocol.Message{
+		Type:    protocol.EventDaemonAgentLifecycleReq,
+		Payload: mustMarshalRaw(protocol.DaemonAgentLifecycleRequestPayload{RuntimeCursors: map[string]int64{"runtime-1": 0}}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, request); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= eventCount; i++ {
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("read replay event %d: %v", i, err)
+		}
+		var msg protocol.Message
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			t.Fatal(err)
+		}
+		if msg.Type != protocol.EventDaemonAgentStart {
+			t.Fatalf("event %d type = %q", i, msg.Type)
+		}
+		var payload protocol.DaemonAgentStartPayload
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.LifecycleSeq != int64(i) || !payload.Replay {
+			t.Fatalf("event %d payload = %+v", i, payload)
+		}
+	}
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read replay end: %v", err)
+	}
+	var end protocol.Message
+	if err := json.Unmarshal(raw, &end); err != nil {
+		t.Fatal(err)
+	}
+	if end.Type != protocol.EventDaemonAgentLifecycleEnd {
+		t.Fatalf("final type = %q", end.Type)
+	}
+}
+
 func attachDaemonTestClient(hub *Hub, runtimeID string) *client {
 	c := &client{
 		send:     make(chan []byte, 2),
+		done:     make(chan struct{}),
 		runtimes: map[string]struct{}{runtimeID: {}},
 	}
 

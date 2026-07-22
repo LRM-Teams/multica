@@ -98,6 +98,10 @@ Each event records reminder ID, event time, actor, previous/next fire time when 
 
 ### Server-to-daemon projection
 
+Transport remains Multica's existing WebSocket protocol envelope `{type, payload}`. This format is explicitly approved and is not required to copy Raft's top-level discriminated JSON byte-for-byte. Reminder event names, payload fields, ownership, version fencing, snapshot, timer, and fire-attempt semantics still match Raft. For example, Multica sends `{type:"reminder.upsert", payload:{reminder:{...}}}` where Raft places `reminder` beside `type` at the top level.
+
+Snapshot owner discovery comes only from a daemon-local running/idle AgentManager, matching Raft. It must be an explicit Agent-session lifecycle registry, not a temporary projection of currently executing tasks and not a server-returned owner inventory. Running-to-idle transitions keep the owner registered; local owner creation adds it; terminal removal clears it and that owner's cache. Daemon restart rebuilds the registry from locally recoverable Agent session/config state before requesting one snapshot per owner.
+
 1. A successful schedule, update, or snooze transaction advances the Reminder's monotonic `version`. After commit, the server sends the owner daemon `reminder.upsert` containing the complete timer job, including Reminder ID, owner Agent ID, version, and fire time.
 2. A successful cancel or terminalization transaction advances `version`. After commit, the server sends `reminder.cancel {reminderId, version}`. A stale cancel may not remove a newer cached timer.
 3. On daemon connect/reconnect, every running or idle Agent requests `reminder.snapshot`. The server returns exactly that Agent's active Reminder jobs. The daemon replaces only that owner's cache entries and rejects any snapshot job whose owner differs from the requested Agent.

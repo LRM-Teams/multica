@@ -555,6 +555,9 @@ func (h *Handler) restoreAndNormalizeWindyAgent(r *http.Request, agent db.Agent)
 	if restored {
 		resp := agentToResponse(updated)
 		h.publish(protocol.EventAgentStatus, uuidToString(updated.WorkspaceID), "member", requestUserID(r), map[string]any{"agent": broadcastAgentResponse(resp)})
+		if updated.RuntimeID.Valid {
+			h.projectReminderOwnerStart(r.Context(), uuidToString(updated.ID), uuidToString(updated.RuntimeID))
+		}
 	}
 	return updated, nil
 }

@@ -74,14 +74,15 @@ var (
 // possibly other typed sources later) — those don't show up in
 // GetWorkspaceRepos, so they would be wiped on refresh if we shared one map.
 type workspaceState struct {
-	workspaceID     string
-	runtimeIDs      []string
-	reposVersion    string // stored for future use: skip refresh when version unchanged
-	allowedRepoURLs map[string]struct{}
-	taskRepoURLs    map[string]struct{}
-	settings        json.RawMessage // workspace settings (JSONB)
-	lastRepoSyncErr string
-	repoRefreshMu   sync.Mutex
+	workspaceID        string
+	runtimeIDs         []string
+	reposVersion       string // stored for future use: skip refresh when version unchanged
+	allowedRepoURLs    map[string]struct{}
+	taskRepoURLs       map[string]struct{}
+	settings           json.RawMessage // workspace settings (JSONB)
+	serverCapabilities []string
+	lastRepoSyncErr    string
+	repoRefreshMu      sync.Mutex
 }
 
 type repoCacheBackend interface {
@@ -109,6 +110,13 @@ type Daemon struct {
 
 	wsHBMu      sync.RWMutex         // guards wsHBLastAck
 	wsHBLastAck map[string]time.Time // runtime_id -> last successful WS heartbeat ack timestamp
+
+	reminderCache  *reminderCache
+	reminderAgents *reminderAgentManager
+	reminderWSMu   sync.RWMutex
+	reminderWrites chan<- []byte
+	reminderWSDone <-chan struct{}
+	reminderClose  func() error
 
 	// runtimeGoneMu guards runtimeGoneInflight, reregisterNextAttempt, and
 	// reregisterLastCompletedAt. The state lets heartbeat / poller / WS-ack
@@ -229,6 +237,8 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		piPersistentRuntimes:      newPiPersistentPool(),
 	}
 	d.runner = taskRunnerFunc(d.runTask)
+	d.reminderCache = newReminderCache(nil, logger, d.onReminderTimer)
+	d.reminderAgents = newReminderAgentManager(cfg.WorkspacesRoot, logger)
 	d.runUpdateFn = d.runUpdate
 	d.verifyUpdatedBinaryFn = d.verifyUpdatedBinary
 	return d
@@ -252,6 +262,21 @@ func (d *Daemon) agentVersion(provider string) string {
 
 func (d *Daemon) notifyRuntimeSetChanged() {
 	d.runtimeSet.notify()
+}
+
+func (d *Daemon) removeReminderAgent(agentID, runtimeID string, generation int64) error {
+	removed := false
+	if d.reminderAgents != nil {
+		var err error
+		removed, _, err = d.reminderAgents.applyStop(agentID, runtimeID, generation)
+		if err != nil {
+			return err
+		}
+	}
+	if removed && d.reminderCache != nil {
+		d.reminderCache.removeOwner(agentID)
+	}
+	return nil
 }
 
 // reregisterCoalesceWindow caps how often the daemon re-registers a workspace
@@ -523,6 +548,7 @@ func (d *Daemon) reregisterWorkspaceAfterRuntimeGone(ctx context.Context, worksp
 	if len(resp.Settings) > 0 {
 		ws.settings = resp.Settings
 	}
+	ws.serverCapabilities = append([]string(nil), resp.ServerCapabilities...)
 	d.mu.Unlock()
 
 	for _, rid := range newIDs {
@@ -793,6 +819,7 @@ func daemonRegistrationCapabilities(includeCredentialTransport bool) []string {
 		protocol.DaemonCapabilityAgentCLITransport,
 		protocol.DaemonCapabilityMemoryCuration,
 		protocol.DaemonCapabilityRestrictedExecution,
+		protocol.DaemonCapabilityReminderVersionedCache,
 	}
 	if includeCredentialTransport {
 		capabilities = append(capabilities, protocol.DaemonCapabilityAgentCredentialTransport)
@@ -913,13 +940,14 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 	return resp, nil
 }
 
-func newWorkspaceState(workspaceID string, runtimeIDs []string, reposVersion string, repos []RepoData, settings json.RawMessage) *workspaceState {
+func newWorkspaceState(workspaceID string, runtimeIDs []string, reposVersion string, repos []RepoData, settings json.RawMessage, serverCapabilities ...string) *workspaceState {
 	return &workspaceState{
-		workspaceID:     workspaceID,
-		runtimeIDs:      runtimeIDs,
-		reposVersion:    reposVersion,
-		allowedRepoURLs: repoAllowlist(repos),
-		settings:        settings,
+		workspaceID:        workspaceID,
+		runtimeIDs:         runtimeIDs,
+		reposVersion:       reposVersion,
+		allowedRepoURLs:    repoAllowlist(repos),
+		settings:           settings,
+		serverCapabilities: append([]string(nil), serverCapabilities...),
 	}
 }
 
@@ -1351,7 +1379,7 @@ func (d *Daemon) syncWorkspacesFromAPI(ctx context.Context) error {
 			d.logger.Info("registered runtime", "workspace_id", id, "runtime_id", rt.ID, "provider", rt.Provider)
 		}
 		d.mu.Lock()
-		d.workspaces[id] = newWorkspaceState(id, runtimeIDs, resp.ReposVersion, resp.Repos, resp.Settings)
+		d.workspaces[id] = newWorkspaceState(id, runtimeIDs, resp.ReposVersion, resp.Repos, resp.Settings, resp.ServerCapabilities...)
 		for _, rt := range resp.Runtimes {
 			d.runtimeIndex[rt.ID] = rt
 		}
@@ -2611,6 +2639,12 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 		return
 	}
 	task = restrictTaskForExecutionProfile(task, profile)
+	if d.reminderAgents != nil {
+		if d.reminderAgents.markRunning(task.AgentID, task.RuntimeID, task.WorkspaceID) {
+			d.requestReminderSnapshot(task.AgentID)
+		}
+		defer d.reminderAgents.markIdle(task.AgentID)
+	}
 
 	// Task-scoped logger with short ID for readable concurrent logs.
 	taskLog := d.logger.With("task", shortID(task.ID), "execution_profile", profile)

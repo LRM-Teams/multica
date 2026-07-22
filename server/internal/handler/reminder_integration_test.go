@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -59,6 +60,27 @@ func seedDueReminder(t *testing.T, agentID, channelID, messageID, cadence, timez
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_reminder WHERE id = $1`, reminderID)
 	})
 	return reminderID
+}
+
+func fireReminderAttempt(h *Handler, reminderID string) error {
+	var agentID, workspaceID, runtimeID string
+	var version int64
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT reminder.agent_id, reminder.workspace_id, agent.runtime_id, reminder.version
+		FROM agent_reminder reminder
+		JOIN agent ON agent.id = reminder.agent_id
+		WHERE reminder.id = $1`, reminderID).Scan(&agentID, &workspaceID, &runtimeID, &version); err != nil {
+		return err
+	}
+	return h.HandleDaemonReminderFireAttempt(context.Background(), daemonws.ClientIdentity{
+		WorkspaceID: workspaceID,
+		RuntimeIDs:  []string{runtimeID},
+	}, protocol.ReminderFireAttemptPayload{
+		AgentID:       agentID,
+		ReminderID:    reminderID,
+		Version:       version,
+		FiredAtClient: time.Now().UTC().Format(time.RFC3339Nano),
+	})
 }
 
 func reminderFireCounts(t *testing.T, reminderID string) (occurrences, receipts, tasks, firedEvents int) {
@@ -130,7 +152,7 @@ func terminalizeActiveChannelOnboardingForReminderRace(onboardingID, channelID, 
 	return reminderOnboardingResult{active: active, updated: tag.RowsAffected(), err: err}
 }
 
-func TestFireDueReminderOccurrenceIsIdempotentAcrossSchedulers(t *testing.T) {
+func TestDaemonReminderFireAttemptIsIdempotentAcrossConnections(t *testing.T) {
 	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{status: "offline"}, {}})
 	anchor := fixture.insertMessage(t, "user", testUserID, "anchor", nil)
 	reminderID := seedDueReminder(t, fixture.agentIDs[0], fixture.channel.ID, anchor.ID, "", "")
@@ -151,7 +173,7 @@ func TestFireDueReminderOccurrenceIsIdempotentAcrossSchedulers(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			errCh <- fixture.handler.FireDueReminders(context.Background())
+			errCh <- fireReminderAttempt(fixture.handler, reminderID)
 		}()
 	}
 	close(start)
@@ -159,7 +181,7 @@ func TestFireDueReminderOccurrenceIsIdempotentAcrossSchedulers(t *testing.T) {
 	close(errCh)
 	for err := range errCh {
 		if err != nil {
-			t.Fatalf("fire due reminders: %v", err)
+			t.Fatalf("submit daemon reminder fire attempt: %v", err)
 		}
 	}
 
@@ -206,12 +228,119 @@ func TestFireDueReminderOccurrenceIsIdempotentAcrossSchedulers(t *testing.T) {
 	if err := testPool.QueryRow(context.Background(), `SELECT status FROM agent_reminder WHERE id = $1`, reminderID).Scan(&status); err != nil || status != "fired" {
 		t.Fatalf("one-shot status = %q err=%v, want fired", status, err)
 	}
-	if err := fixture.handler.FireDueReminders(context.Background()); err != nil {
+	if err := fireReminderAttempt(fixture.handler, reminderID); err != nil {
 		t.Fatalf("idempotent retry: %v", err)
 	}
 	gotOccurrences, gotReceipts, gotTasks, gotEvents := reminderFireCounts(t, reminderID)
 	if gotOccurrences != occurrences || gotReceipts != receipts || gotTasks != tasks || gotEvents != firedEvents {
 		t.Fatalf("retry duplicated fire: before=%d/%d/%d/%d after=%d/%d/%d/%d", occurrences, receipts, tasks, firedEvents, gotOccurrences, gotReceipts, gotTasks, gotEvents)
+	}
+}
+
+func TestReminderOwnerLifecycleReplayFencesRuntimeMigrationAndCompactsAckedHistory(t *testing.T) {
+	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
+	agentID := fixture.agentIDs[0]
+	runtimeA := fixture.runtimeIDs[0]
+	var runtimeB string
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO agent_runtime (workspace_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
+		VALUES ($1, $2, 'cloud', 'pi', 'online', 'reminder lifecycle migration target', $3, now())
+		RETURNING id`, testWorkspaceID, "reminder-lifecycle-target-"+uuid.NewString(), []byte(`{"capabilities":["reminder_versioned_cache_v1"]}`)).Scan(&runtimeB); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeB)
+	})
+	identityA := daemonws.ClientIdentity{WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeA}}
+	identityB := daemonws.ClientIdentity{WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeB}}
+
+	initial, cursors, err := fixture.handler.HandleDaemonReminderOwnerLifecycle(context.Background(), identityA, protocol.DaemonAgentLifecycleRequestPayload{
+		RuntimeCursors: map[string]int64{runtimeA: 0},
+	})
+	if err != nil || len(initial) != 1 || initial[0].AgentID != agentID || initial[0].EventType != "start" || initial[0].PlacementGeneration < 1 {
+		t.Fatalf("initial lifecycle = %+v cursors=%v err=%v", initial, cursors, err)
+	}
+	initialGeneration := initial[0].PlacementGeneration
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent SET runtime_id = $2 WHERE id = $1`, agentID, runtimeB); err != nil {
+		t.Fatal(err)
+	}
+
+	oldRuntime, oldCursors, err := fixture.handler.HandleDaemonReminderOwnerLifecycle(context.Background(), identityA, protocol.DaemonAgentLifecycleRequestPayload{
+		RuntimeCursors: map[string]int64{runtimeA: cursors[runtimeA]},
+	})
+	if err != nil || len(oldRuntime) != 1 || oldRuntime[0].EventType != "stop" || oldRuntime[0].PlacementGeneration <= initialGeneration {
+		t.Fatalf("old-runtime replay = %+v cursors=%v err=%v", oldRuntime, oldCursors, err)
+	}
+	newRuntime, newCursors, err := fixture.handler.HandleDaemonReminderOwnerLifecycle(context.Background(), identityB, protocol.DaemonAgentLifecycleRequestPayload{
+		RuntimeCursors: map[string]int64{runtimeB: 0},
+	})
+	if err != nil || len(newRuntime) != 1 || newRuntime[0].EventType != "start" || newRuntime[0].PlacementGeneration != oldRuntime[0].PlacementGeneration {
+		t.Fatalf("new-runtime replay = %+v cursors=%v err=%v", newRuntime, newCursors, err)
+	}
+
+	_, err = fixture.handler.HandleDaemonReminderSnapshot(context.Background(), identityA, protocol.ReminderSnapshotRequestPayload{
+		AgentID: agentID, RuntimeID: runtimeA, PlacementGeneration: initialGeneration,
+	})
+	var ownerGone *daemonws.ReminderOwnerGoneError
+	if !errors.As(err, &ownerGone) || ownerGone.RuntimeID != runtimeA || ownerGone.PlacementGeneration != oldRuntime[0].PlacementGeneration {
+		t.Fatalf("stale owner snapshot err = %#v", err)
+	}
+	current, err := fixture.handler.HandleDaemonReminderSnapshot(context.Background(), identityB, protocol.ReminderSnapshotRequestPayload{
+		AgentID: agentID, RuntimeID: runtimeB, PlacementGeneration: newRuntime[0].PlacementGeneration,
+	})
+	if err != nil || current.RuntimeID != runtimeB || current.PlacementGeneration != newRuntime[0].PlacementGeneration {
+		t.Fatalf("current owner snapshot = %+v err=%v", current, err)
+	}
+
+	if err := fixture.handler.HandleDaemonReminderOwnerLifecycleAck(context.Background(), identityA, protocol.DaemonAgentLifecycleAckPayload{
+		RuntimeCursors: map[string]int64{runtimeA: oldCursors[runtimeA]},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var oldHistory int
+	if err := testPool.QueryRow(context.Background(), `SELECT count(*) FROM agent_reminder_daemon_owner_event WHERE agent_id = $1 AND runtime_id = $2`, agentID, runtimeA).Scan(&oldHistory); err != nil {
+		t.Fatal(err)
+	}
+	if oldHistory != 1 {
+		t.Fatalf("acked old-runtime history rows = %d, want one latest checkpoint", oldHistory)
+	}
+	if _, _, err := fixture.handler.HandleDaemonReminderOwnerLifecycle(context.Background(), identityA, protocol.DaemonAgentLifecycleRequestPayload{
+		RuntimeCursors: map[string]int64{runtimeB: 0},
+	}); err == nil {
+		t.Fatal("cross-runtime lifecycle replay accepted")
+	}
+}
+
+func TestDaemonReminderFireAttemptRejectsStaleCancelledAndCrossOwner(t *testing.T) {
+	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}, {}})
+	anchor := fixture.insertMessage(t, "user", testUserID, "anchor", nil)
+	reminderID := seedDueReminder(t, fixture.agentIDs[0], fixture.channel.ID, anchor.ID, "", "")
+	var version int64
+	if err := testPool.QueryRow(context.Background(), `SELECT version FROM agent_reminder WHERE id = $1`, reminderID).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	identity := daemonws.ClientIdentity{WorkspaceID: testWorkspaceID, RuntimeIDs: []string{fixture.runtimeIDs[0]}}
+	for _, payload := range []protocol.ReminderFireAttemptPayload{
+		{AgentID: fixture.agentIDs[0], ReminderID: reminderID, Version: version + 1},
+		{AgentID: fixture.agentIDs[1], ReminderID: reminderID, Version: version},
+	} {
+		if err := fixture.handler.HandleDaemonReminderFireAttempt(context.Background(), identity, payload); err != nil {
+			t.Fatalf("canonical no-op failed: %v", err)
+		}
+	}
+	if occurrences, receipts, tasks, fired := reminderFireCounts(t, reminderID); occurrences+receipts+tasks+fired != 0 {
+		t.Fatalf("invalid attempts mutated fire state: %d/%d/%d/%d", occurrences, receipts, tasks, fired)
+	}
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent_reminder SET status = 'cancelled', version = version + 1 WHERE id = $1`, reminderID); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.handler.HandleDaemonReminderFireAttempt(context.Background(), identity, protocol.ReminderFireAttemptPayload{
+		AgentID: fixture.agentIDs[0], ReminderID: reminderID, Version: version + 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if occurrences, receipts, tasks, fired := reminderFireCounts(t, reminderID); occurrences+receipts+tasks+fired != 0 {
+		t.Fatalf("cancelled attempt mutated fire state: %d/%d/%d/%d", occurrences, receipts, tasks, fired)
 	}
 }
 
@@ -225,7 +354,7 @@ func TestReminderFireTerminalizesWhenAgentRemovedFromAnchorChannel(t *testing.T)
 		fixture.channel.ID, testWorkspaceID, fixture.agentIDs[0]); err != nil {
 		t.Fatal(err)
 	}
-	if err := fixture.handler.FireDueReminders(context.Background()); err != nil {
+	if err := fireReminderAttempt(fixture.handler, reminderID); err != nil {
 		t.Fatalf("fire after membership removal: %v", err)
 	}
 	assertReminderEligibilityTerminalized(t, reminderID, "agent_removed_from_anchor_channel")
@@ -249,7 +378,7 @@ func TestReminderFireSerializesAgainstConcurrentMembershipRemoval(t *testing.T) 
 	}
 
 	fireDone := make(chan error, 1)
-	go func() { fireDone <- fixture.handler.FireDueReminders(context.Background()) }()
+	go func() { fireDone <- fireReminderAttempt(fixture.handler, reminderID) }()
 	select {
 	case err := <-fireDone:
 		t.Fatalf("fire crossed uncommitted membership removal: %v", err)
@@ -287,7 +416,7 @@ func TestReminderFireSerializesAgainstConcurrentChannelArchive(t *testing.T) {
 	}
 
 	fireDone := make(chan error, 1)
-	go func() { fireDone <- fixture.handler.FireDueReminders(context.Background()) }()
+	go func() { fireDone <- fireReminderAttempt(fixture.handler, reminderID) }()
 	select {
 	case err := <-fireDone:
 		t.Fatalf("fire crossed uncommitted channel archive: %v", err)
@@ -325,7 +454,7 @@ func TestReminderFireSerializesAgainstConcurrentAgentArchive(t *testing.T) {
 	}
 
 	fireDone := make(chan error, 1)
-	go func() { fireDone <- fixture.handler.FireDueReminders(context.Background()) }()
+	go func() { fireDone <- fireReminderAttempt(fixture.handler, reminderID) }()
 	select {
 	case err := <-fireDone:
 		t.Fatalf("fire crossed uncommitted agent archive: %v", err)
@@ -371,7 +500,7 @@ func TestReminderFireFirstSerializesAgainstActiveChannelOnboarding(t *testing.T)
 	}
 
 	fireDone := make(chan error, 1)
-	go func() { fireDone <- fixture.handler.FireDueReminders(context.Background()) }()
+	go func() { fireDone <- fireReminderAttempt(fixture.handler, reminderID) }()
 	waitForReminderChannelRowLock(t, fixture.channel.ID)
 
 	activeDone := make(chan reminderOnboardingResult, 1)
@@ -442,7 +571,7 @@ func TestActiveChannelOnboardingFirstSerializesAgainstReminderFire(t *testing.T)
 	waitForReminderChannelRowLock(t, fixture.channel.ID)
 
 	fireDone := make(chan error, 1)
-	go func() { fireDone <- fixture.handler.FireDueReminders(context.Background()) }()
+	go func() { fireDone <- fireReminderAttempt(fixture.handler, reminderID) }()
 	select {
 	case err := <-fireDone:
 		t.Fatalf("reminder fire crossed active onboarding's channel lock: %v", err)
@@ -508,7 +637,7 @@ func TestRecurringReminderFireAdvancesFromCadenceAndSnoozeSlot(t *testing.T) {
 	if _, err := testPool.Exec(context.Background(), `UPDATE agent_reminder SET fire_at = now() - interval '5 seconds' WHERE id = $1`, reminderID); err != nil {
 		t.Fatal(err)
 	}
-	if err := fixture.handler.FireDueReminders(context.Background()); err != nil {
+	if err := fireReminderAttempt(fixture.handler, reminderID); err != nil {
 		t.Fatalf("fire recurring reminder: %v", err)
 	}
 	var status string
@@ -550,7 +679,7 @@ func TestDeletedReminderAnchorFiresWithUnavailableMarker(t *testing.T) {
 	if _, err := testPool.Exec(context.Background(), `UPDATE channel_message SET deleted_at = now() WHERE id = $1`, anchor.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := fixture.handler.FireDueReminders(context.Background()); err != nil {
+	if err := fireReminderAttempt(fixture.handler, reminderID); err != nil {
 		t.Fatalf("fire deleted anchor reminder: %v", err)
 	}
 	var available bool
@@ -585,7 +714,7 @@ func TestDeletedReminderThreadRootHidesAnchorEverywhere(t *testing.T) {
 	if _, err := testPool.Exec(context.Background(), `UPDATE channel_message SET deleted_at = now() WHERE id = $1`, root.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := fixture.handler.FireDueReminders(context.Background()); err != nil {
+	if err := fireReminderAttempt(fixture.handler, reminderID); err != nil {
 		t.Fatalf("fire deleted-root reminder: %v", err)
 	}
 	var available bool
@@ -650,7 +779,7 @@ func TestReminderFireFallsBackToCurrentAgentOwnerWhenInitiatorIsGone(t *testing.
 				}
 			}
 
-			if err := fixture.handler.FireDueReminders(context.Background()); err != nil {
+			if err := fireReminderAttempt(fixture.handler, reminderID); err != nil {
 				t.Fatalf("fire after initiator removal: %v", err)
 			}
 			occurrences, receipts, tasks, firedEvents := reminderFireCounts(t, reminderID)
@@ -669,7 +798,7 @@ func TestReminderFireFallsBackToCurrentAgentOwnerWhenInitiatorIsGone(t *testing.
 			if taskInitiatorID != testUserID || sessionCreatorID != testUserID {
 				t.Fatalf("fallback task/session creator = %s/%s, want current agent owner %s", taskInitiatorID, sessionCreatorID, testUserID)
 			}
-			if err := fixture.handler.FireDueReminders(context.Background()); err != nil {
+			if err := fireReminderAttempt(fixture.handler, reminderID); err != nil {
 				t.Fatalf("idempotent retry after initiator removal: %v", err)
 			}
 			gotOccurrences, gotReceipts, gotTasks, gotEvents := reminderFireCounts(t, reminderID)
@@ -677,54 +806,6 @@ func TestReminderFireFallsBackToCurrentAgentOwnerWhenInitiatorIsGone(t *testing.
 				t.Fatalf("retry duplicated fire: before=%d/%d/%d/%d after=%d/%d/%d/%d", occurrences, receipts, tasks, firedEvents, gotOccurrences, gotReceipts, gotTasks, gotEvents)
 			}
 		})
-	}
-}
-
-func TestRecoverStaleFiringWithDurableTaskNeverRearmsWake(t *testing.T) {
-	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
-	anchor := fixture.insertMessage(t, "user", testUserID, "anchor", nil)
-	reminderID := seedDueReminder(t, fixture.agentIDs[0], fixture.channel.ID, anchor.ID, "", "")
-	if err := fixture.handler.FireDueReminders(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	var occurrenceID, taskID string
-	if err := testPool.QueryRow(context.Background(), `SELECT id, fired_task_id FROM agent_reminder_occurrence WHERE reminder_id = $1`, reminderID).Scan(&occurrenceID, &taskID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := testPool.Exec(context.Background(), `DELETE FROM agent_reminder_lifecycle_event WHERE reminder_id = $1 AND event_type = 'fired'`, reminderID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := testPool.Exec(context.Background(), `
-		UPDATE agent_reminder_occurrence
-		SET status = 'claimed', claimed_at = now() - interval '10 minutes', fired_at = NULL
-		WHERE id = $1`, occurrenceID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := testPool.Exec(context.Background(), `
-		UPDATE agent_reminder
-		SET status = 'firing', current_occurrence_id = $2, fired_at = NULL
-		WHERE id = $1`, reminderID, occurrenceID); err != nil {
-		t.Fatal(err)
-	}
-	var before int
-	if err := testPool.QueryRow(context.Background(), `SELECT count(*) FROM agent_task_queue WHERE agent_id = $1`, fixture.agentIDs[0]).Scan(&before); err != nil {
-		t.Fatal(err)
-	}
-	if err := fixture.handler.RecoverStuckFiringReminders(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	var after int
-	var status, persistedTaskID string
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT reminder.status, occurrence.fired_task_id,
-		       (SELECT count(*) FROM agent_task_queue WHERE agent_id = $2)
-		FROM agent_reminder reminder
-		JOIN agent_reminder_occurrence occurrence ON occurrence.reminder_id = reminder.id
-		WHERE reminder.id = $1`, reminderID, fixture.agentIDs[0]).Scan(&status, &persistedTaskID, &after); err != nil {
-		t.Fatal(err)
-	}
-	if before != after || persistedTaskID != taskID || status != "fired" {
-		t.Fatalf("recovery rearmed or failed: before=%d after=%d task=%s/%s status=%s", before, after, persistedTaskID, taskID, status)
 	}
 }
 
@@ -736,7 +817,7 @@ func TestArchivedReminderChannelTerminalizesWithoutWake(t *testing.T) {
 	if _, err := testPool.Exec(context.Background(), `UPDATE channel SET archived_at = now() WHERE id = $1`, fixture.channel.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := fixture.handler.FireDueReminders(context.Background()); err != nil {
+	if err := fireReminderAttempt(fixture.handler, reminderID); err != nil {
 		t.Fatalf("fire archived channel reminder: %v", err)
 	}
 	var status, reason string
@@ -1054,7 +1135,7 @@ func TestAgentReminderExplicitTimeUpdateConvertsRecurrenceToOneShotAndRetainsTim
 	if _, err := testPool.Exec(context.Background(), `UPDATE agent_reminder SET fire_at = now() - interval '1 second' WHERE id = $1`, scheduled.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := testHandler.FireDueReminders(context.Background()); err != nil {
+	if err := fireReminderAttempt(testHandler, scheduled.ID); err != nil {
 		t.Fatalf("fire converted one-shot: %v", err)
 	}
 	before := [4]int{}
@@ -1062,7 +1143,7 @@ func TestAgentReminderExplicitTimeUpdateConvertsRecurrenceToOneShotAndRetainsTim
 	if before != [4]int{1, 1, 1, 1} {
 		t.Fatalf("converted one-shot fire counts=%v, want [1 1 1 1]", before)
 	}
-	if err := testHandler.FireDueReminders(context.Background()); err != nil {
+	if err := fireReminderAttempt(testHandler, scheduled.ID); err != nil {
 		t.Fatalf("retry converted one-shot: %v", err)
 	}
 	after := [4]int{}

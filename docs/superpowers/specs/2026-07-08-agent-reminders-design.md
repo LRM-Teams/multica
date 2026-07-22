@@ -128,7 +128,7 @@ The fire receipt rides the #329 decision: system notices reuse the message flow 
 | fire | **System line in the anchored surface.** | 影响该 surface 参与者的预期(作者要回来跟进了)— same boundary as thread unfollow 公示. |
 
 Wiring: the fire path needs handler-package helpers, so the fire executor is a
-`*handler.Handler` method (`FireDueReminders`); preferred wiring is exposing the handler from
+`*handler.Handler` scanner method (removed by the V3 daemon-timer cutover); preferred wiring was exposing the handler from
 router construction (add a variant of `NewRouterWithOptions` returning it, or an accessor) so
 `main.go` can hand it to the scheduler goroutine — implementer picks the least invasive form.
 

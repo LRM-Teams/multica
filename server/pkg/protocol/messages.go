@@ -229,7 +229,93 @@ const (
 	DaemonCapabilityAgentCredentialTransport = "agent_credential_transport_v1"
 	DaemonCapabilityMemoryCuration           = "memory_curation_v1"
 	DaemonCapabilityRestrictedExecution      = "restricted_execution_profiles_v1"
+	DaemonCapabilityReminderVersionedCache   = "reminder_versioned_cache_v1"
 )
+
+// ReminderTimerJob is the complete server-owned timer projection cached by
+// the owner daemon. Version is monotonic per Reminder definition.
+type ReminderTimerJob struct {
+	ReminderID   string `json:"reminder_id"`
+	OwnerAgentID string `json:"owner_agent_id"`
+	Version      int64  `json:"version"`
+	FireAt       string `json:"fire_at"`
+}
+
+type ReminderUpsertPayload struct {
+	AgentID  string           `json:"agent_id"`
+	Reminder ReminderTimerJob `json:"reminder"`
+}
+
+type ReminderCancelPayload struct {
+	AgentID    string `json:"agent_id"`
+	ReminderID string `json:"reminder_id"`
+	Version    int64  `json:"version"`
+}
+
+type ReminderSnapshotRequestPayload struct {
+	AgentID             string `json:"agent_id"`
+	RuntimeID           string `json:"runtime_id"`
+	PlacementGeneration int64  `json:"placement_generation"`
+}
+
+type ReminderSnapshotPayload struct {
+	AgentID             string             `json:"agent_id"`
+	RuntimeID           string             `json:"runtime_id"`
+	PlacementGeneration int64              `json:"placement_generation"`
+	Reminders           []ReminderTimerJob `json:"reminders"`
+}
+
+type ReminderFireAttemptPayload struct {
+	AgentID       string `json:"agent_id"`
+	ReminderID    string `json:"reminder_id"`
+	Version       int64  `json:"version"`
+	FiredAtClient string `json:"fired_at_client"`
+}
+
+// DaemonAgentStopPayload removes an Agent from the daemon-local lifecycle
+// registry. It mirrors Raft's explicit agent:stop lifecycle boundary; the
+// daemon also clears every cached Reminder owned by the Agent.
+type DaemonAgentStopPayload struct {
+	AgentID             string `json:"agent_id"`
+	RuntimeID           string `json:"runtime_id"`
+	PlacementGeneration int64  `json:"placement_generation"`
+	LifecycleSeq        int64  `json:"lifecycle_seq,omitempty"`
+	Replay              bool   `json:"replay,omitempty"`
+}
+
+// DaemonAgentStartPayload adds or moves an Agent in the daemon-local
+// running/idle lifecycle registry. Runtime placement mutations are replayed
+// through a durable lifecycle outbox, so an offline target daemon converges
+// before requesting the Agent's Reminder snapshot.
+type DaemonAgentStartPayload struct {
+	AgentID             string `json:"agent_id"`
+	RuntimeID           string `json:"runtime_id"`
+	WorkspaceID         string `json:"workspace_id"`
+	PlacementGeneration int64  `json:"placement_generation"`
+	LifecycleSeq        int64  `json:"lifecycle_seq,omitempty"`
+	Replay              bool   `json:"replay,omitempty"`
+}
+
+type DaemonAgentLifecycleRequestPayload struct {
+	RuntimeCursors map[string]int64 `json:"runtime_cursors"`
+}
+
+type DaemonAgentLifecycleReplayEndPayload struct {
+	RuntimeCursors map[string]int64 `json:"runtime_cursors"`
+}
+
+type DaemonAgentLifecycleAckPayload struct {
+	RuntimeCursors map[string]int64 `json:"runtime_cursors"`
+}
+
+type DaemonAgentLifecycleEvent struct {
+	EventType           string `json:"event_type"`
+	AgentID             string `json:"agent_id"`
+	RuntimeID           string `json:"runtime_id"`
+	WorkspaceID         string `json:"workspace_id"`
+	LifecycleSeq        int64  `json:"lifecycle_seq"`
+	PlacementGeneration int64  `json:"placement_generation"`
+}
 
 const (
 	ChannelOutputSuppressedReasonDaemonOutdated             = "daemon_outdated"

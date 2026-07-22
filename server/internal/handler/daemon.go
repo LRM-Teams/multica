@@ -473,7 +473,17 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		"settings":                repoResp.Settings,
 		"daemon_token":            daemonToken,
 		"daemon_token_expires_at": daemonTokenExpiresAt.UTC().Format(time.RFC3339Nano),
+		"server_capabilities":     negotiatedDaemonCapabilities(capabilities),
 	})
+}
+
+func negotiatedDaemonCapabilities(capabilities []string) []string {
+	for _, capability := range capabilities {
+		if capability == protocol.DaemonCapabilityReminderVersionedCache {
+			return []string{protocol.DaemonCapabilityReminderVersionedCache}
+		}
+	}
+	return []string{}
 }
 
 func (h *Handler) completeRuntimeUpdateOnTargetRegister(r *http.Request, rt db.AgentRuntime, cliVersion string) {

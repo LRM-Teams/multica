@@ -37,6 +37,7 @@ type client struct {
 	hub      *Hub
 	conn     *websocket.Conn
 	send     chan []byte
+	done     chan struct{}
 	identity ClientIdentity
 	runtimes map[string]struct{}
 
@@ -77,6 +78,19 @@ func (c *client) markSeen(eventID string) bool {
 // the ack and is logged at debug level.
 type HeartbeatHandler func(ctx context.Context, identity ClientIdentity, payload protocol.DaemonHeartbeatRequestPayload) (*protocol.DaemonHeartbeatAckPayload, error)
 
+type ReminderSnapshotHandler func(ctx context.Context, identity ClientIdentity, payload protocol.ReminderSnapshotRequestPayload) (*protocol.ReminderSnapshotPayload, error)
+type ReminderFireAttemptHandler func(ctx context.Context, identity ClientIdentity, payload protocol.ReminderFireAttemptPayload) error
+type ReminderOwnerLifecycleHandler func(ctx context.Context, identity ClientIdentity, payload protocol.DaemonAgentLifecycleRequestPayload) ([]protocol.DaemonAgentLifecycleEvent, map[string]int64, error)
+type ReminderOwnerLifecycleAckHandler func(ctx context.Context, identity ClientIdentity, payload protocol.DaemonAgentLifecycleAckPayload) error
+
+type ReminderOwnerGoneError struct {
+	AgentID             string
+	RuntimeID           string
+	PlacementGeneration int64
+}
+
+func (e *ReminderOwnerGoneError) Error() string { return "reminder owner no longer belongs to daemon" }
+
 // MessageKindRecorder is the optional metric hook called once per inbound
 // daemon WebSocket frame. kind is the protocol message type with the
 // "daemon:" prefix stripped (e.g. "heartbeat") or the literal "unknown" for
@@ -94,8 +108,13 @@ type Hub struct {
 	clients   map[*client]bool
 	byRuntime map[string]map[*client]bool
 
-	hbMu        sync.RWMutex
-	onHeartbeat HeartbeatHandler
+	hbMu                   sync.RWMutex
+	onHeartbeat            HeartbeatHandler
+	reminderMu             sync.RWMutex
+	onReminderSnapshot     ReminderSnapshotHandler
+	onReminderFire         ReminderFireAttemptHandler
+	onReminderLifecycle    ReminderOwnerLifecycleHandler
+	onReminderLifecycleAck ReminderOwnerLifecycleAckHandler
 
 	kindMu       sync.RWMutex
 	kindRecorder MessageKindRecorder
@@ -258,6 +277,24 @@ func (h *Hub) heartbeatHandler() HeartbeatHandler {
 	return h.onHeartbeat
 }
 
+func (h *Hub) SetReminderHandlers(snapshot ReminderSnapshotHandler, fire ReminderFireAttemptHandler, lifecycle ReminderOwnerLifecycleHandler, lifecycleAck ReminderOwnerLifecycleAckHandler) {
+	if h == nil {
+		return
+	}
+	h.reminderMu.Lock()
+	h.onReminderSnapshot = snapshot
+	h.onReminderFire = fire
+	h.onReminderLifecycle = lifecycle
+	h.onReminderLifecycleAck = lifecycleAck
+	h.reminderMu.Unlock()
+}
+
+func (h *Hub) reminderHandlers() (ReminderSnapshotHandler, ReminderFireAttemptHandler, ReminderOwnerLifecycleHandler, ReminderOwnerLifecycleAckHandler) {
+	h.reminderMu.RLock()
+	defer h.reminderMu.RUnlock()
+	return h.onReminderSnapshot, h.onReminderFire, h.onReminderLifecycle, h.onReminderLifecycleAck
+}
+
 // SetMessageKindRecorder installs an optional callback fired exactly once per
 // inbound daemon WebSocket frame. Used by the metrics layer to count traffic
 // by handler kind without hard-coupling the hub to any specific collector.
@@ -307,6 +344,7 @@ func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request, identity C
 		hub:      h,
 		conn:     conn,
 		send:     make(chan []byte, 16),
+		done:     make(chan struct{}),
 		identity: identity,
 		runtimes: runtimes,
 	}
@@ -319,6 +357,40 @@ func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request, identity C
 // NotifyTaskAvailable sends a best-effort wakeup to daemons watching runtimeID.
 func (h *Hub) NotifyTaskAvailable(runtimeID, taskID string) {
 	h.notifyTaskAvailable(runtimeID, taskID, "")
+}
+
+func (h *Hub) NotifyReminderUpsert(runtimeID string, payload protocol.ReminderUpsertPayload) {
+	h.notifyReminder(runtimeID, protocol.EventReminderUpsert, payload, "")
+}
+
+func (h *Hub) NotifyReminderCancel(runtimeID string, payload protocol.ReminderCancelPayload) {
+	h.notifyReminder(runtimeID, protocol.EventReminderCancel, payload, "")
+}
+
+func (h *Hub) NotifyReminderOwnerRemoved(runtimeID string, payload protocol.DaemonAgentStopPayload) {
+	h.notifyReminder(runtimeID, protocol.EventDaemonAgentStop, payload, "")
+}
+
+func (h *Hub) NotifyReminderOwnerAdded(runtimeID string, payload protocol.DaemonAgentStartPayload) {
+	h.notifyReminder(runtimeID, protocol.EventDaemonAgentStart, payload, "")
+}
+
+func (h *Hub) notifyReminder(runtimeID, eventType string, payload any, eventID string) {
+	if h == nil || runtimeID == "" {
+		return
+	}
+	frame, err := json.Marshal(protocol.Message{Type: eventType, Payload: mustMarshalRaw(payload)})
+	if err != nil {
+		return
+	}
+	h.notifyReminderFrame(runtimeID, frame, eventID)
+}
+
+func (h *Hub) notifyReminderFrame(runtimeID string, frame []byte, eventID string) {
+	if h == nil || runtimeID == "" {
+		return
+	}
+	h.notifyFrame(runtimeID, frame, eventID)
 }
 
 func (h *Hub) notifyTaskAvailable(runtimeID, taskID, eventID string) {
@@ -348,17 +420,23 @@ func (h *Hub) DeliverDaemonRuntime(scopeID string, frame []byte, eventID string)
 		M.WakeupDeliveredMiss.Add(1)
 		return
 	}
-	if msg.Type != protocol.EventDaemonTaskAvailable {
+	runtimeID := ""
+	switch msg.Type {
+	case protocol.EventDaemonTaskAvailable:
+		var payload protocol.TaskAvailablePayload
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.RuntimeID == "" {
+			slog.Debug("daemon websocket relay: invalid task_available payload", "error", err, "scope_id", scopeID, "event_id", eventID)
+			M.WakeupDeliveredMiss.Add(1)
+			return
+		}
+		runtimeID = payload.RuntimeID
+	case protocol.EventReminderUpsert, protocol.EventReminderCancel, protocol.EventDaemonAgentStart, protocol.EventDaemonAgentStop:
+		runtimeID = scopeID
+	default:
 		M.WakeupDeliveredMiss.Add(1)
 		return
 	}
-	var payload protocol.TaskAvailablePayload
-	if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.RuntimeID == "" {
-		slog.Debug("daemon websocket relay: invalid task_available payload", "error", err, "scope_id", scopeID, "event_id", eventID)
-		M.WakeupDeliveredMiss.Add(1)
-		return
-	}
-	delivered, deduped := h.notifyFrame(payload.RuntimeID, frame, eventID)
+	delivered, deduped := h.notifyFrame(runtimeID, frame, eventID)
 	if delivered {
 		M.WakeupDeliveredHit.Add(1)
 	} else if !deduped {
@@ -459,7 +537,7 @@ func (h *Hub) unregister(c *client) {
 			}
 		}
 	}
-	close(c.send)
+	close(c.done)
 	total := len(h.clients)
 	h.mu.Unlock()
 
@@ -529,9 +607,138 @@ func (c *client) handleFrame(raw []byte) {
 		if err := json.Unmarshal(msg.Payload, &idOnly); err == nil && idOnly.RequestID != "" {
 			c.hub.deliverResponse(idOnly.RequestID, msg.Payload)
 		}
+	case protocol.EventReminderSnapshotRequest:
+		c.handleReminderSnapshotRequest(msg.Payload)
+	case protocol.EventReminderFireAttempt:
+		c.handleReminderFireAttempt(msg.Payload)
+	case protocol.EventDaemonAgentLifecycleReq:
+		c.handleReminderOwnerLifecycleRequest(msg.Payload)
+	case protocol.EventDaemonAgentLifecycleAck:
+		c.handleReminderOwnerLifecycleAck(msg.Payload)
 	default:
 		// Unknown app messages are intentionally ignored for forward
 		// compatibility with future daemon → server message types.
+	}
+}
+
+func (c *client) handleReminderSnapshotRequest(raw json.RawMessage) {
+	handler, _, _, _ := c.hub.reminderHandlers()
+	if handler == nil {
+		return
+	}
+	var payload protocol.ReminderSnapshotRequestPayload
+	if err := json.Unmarshal(raw, &payload); err != nil || payload.AgentID == "" {
+		slog.Debug("daemon websocket reminder snapshot invalid payload", "error", err, "daemon_id", c.identity.DaemonID)
+		return
+	}
+	snapshot, err := handler(context.Background(), c.identity, payload)
+	if err != nil {
+		var ownerGone *ReminderOwnerGoneError
+		if errors.As(err, &ownerGone) {
+			c.sendReminderFrame(protocol.EventDaemonAgentStop, protocol.DaemonAgentStopPayload{
+				AgentID: ownerGone.AgentID, RuntimeID: ownerGone.RuntimeID, PlacementGeneration: ownerGone.PlacementGeneration,
+			})
+			return
+		}
+		slog.Warn("daemon websocket reminder snapshot failed", "error", err, "daemon_id", c.identity.DaemonID, "agent_id", payload.AgentID)
+		return
+	}
+	if snapshot == nil {
+		return
+	}
+	frame, err := json.Marshal(protocol.Message{Type: protocol.EventReminderSnapshot, Payload: mustMarshalRaw(snapshot)})
+	if err != nil {
+		return
+	}
+	select {
+	case c.send <- frame:
+	default:
+		c.conn.Close()
+	}
+}
+
+func (c *client) handleReminderFireAttempt(raw json.RawMessage) {
+	_, handler, _, _ := c.hub.reminderHandlers()
+	if handler == nil {
+		return
+	}
+	var payload protocol.ReminderFireAttemptPayload
+	if err := json.Unmarshal(raw, &payload); err != nil || payload.AgentID == "" || payload.ReminderID == "" || payload.Version < 1 {
+		slog.Debug("daemon websocket reminder fire invalid payload", "error", err, "daemon_id", c.identity.DaemonID)
+		return
+	}
+	if err := handler(context.Background(), c.identity, payload); err != nil {
+		slog.Warn("daemon websocket reminder fire failed", "error", err, "daemon_id", c.identity.DaemonID, "agent_id", payload.AgentID, "reminder_id", payload.ReminderID)
+		// The daemon removes a due timer before submitting the attempt. A
+		// transient server failure therefore has no local retry entry left;
+		// reconnect so the owner-scoped snapshot restores the canonical job.
+		_ = c.conn.Close()
+	}
+}
+
+func (c *client) handleReminderOwnerLifecycleRequest(raw json.RawMessage) {
+	_, _, handler, _ := c.hub.reminderHandlers()
+	if handler == nil {
+		return
+	}
+	var payload protocol.DaemonAgentLifecycleRequestPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		_ = c.conn.Close()
+		return
+	}
+	events, cursors, err := handler(context.Background(), c.identity, payload)
+	if err != nil {
+		slog.Warn("daemon websocket agent lifecycle replay failed", "error", err, "daemon_id", c.identity.DaemonID)
+		_ = c.conn.Close()
+		return
+	}
+	for _, event := range events {
+		switch event.EventType {
+		case "start":
+			if err := c.sendReminderFrame(protocol.EventDaemonAgentStart, protocol.DaemonAgentStartPayload{
+				AgentID: event.AgentID, RuntimeID: event.RuntimeID, WorkspaceID: event.WorkspaceID,
+				PlacementGeneration: event.PlacementGeneration, LifecycleSeq: event.LifecycleSeq, Replay: true,
+			}); err != nil {
+				return
+			}
+		case "stop":
+			if err := c.sendReminderFrame(protocol.EventDaemonAgentStop, protocol.DaemonAgentStopPayload{
+				AgentID: event.AgentID, RuntimeID: event.RuntimeID, PlacementGeneration: event.PlacementGeneration,
+				LifecycleSeq: event.LifecycleSeq, Replay: true,
+			}); err != nil {
+				return
+			}
+		}
+	}
+	_ = c.sendReminderFrame(protocol.EventDaemonAgentLifecycleEnd, protocol.DaemonAgentLifecycleReplayEndPayload{RuntimeCursors: cursors})
+}
+
+func (c *client) handleReminderOwnerLifecycleAck(raw json.RawMessage) {
+	_, _, _, handler := c.hub.reminderHandlers()
+	if handler == nil {
+		return
+	}
+	var payload protocol.DaemonAgentLifecycleAckPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		_ = c.conn.Close()
+		return
+	}
+	if err := handler(context.Background(), c.identity, payload); err != nil {
+		slog.Warn("daemon websocket agent lifecycle ack failed", "error", err, "daemon_id", c.identity.DaemonID)
+		_ = c.conn.Close()
+	}
+}
+
+func (c *client) sendReminderFrame(eventType string, payload any) error {
+	frame, err := json.Marshal(protocol.Message{Type: eventType, Payload: mustMarshalRaw(payload)})
+	if err != nil {
+		return err
+	}
+	select {
+	case c.send <- frame:
+		return nil
+	case <-c.done:
+		return errors.New("daemon websocket client disconnected")
 	}
 }
 
@@ -609,12 +816,8 @@ func (c *client) writePump() {
 
 	for {
 		select {
-		case message, ok := <-c.send:
+		case message := <-c.send:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
-			if !ok {
-				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
-				return
-			}
 			if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
 				slog.Debug("daemon websocket write error", "error", err, "daemon_id", c.identity.DaemonID)
 				return
@@ -624,6 +827,9 @@ func (c *client) writePump() {
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}
+		case <-c.done:
+			_ = c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+			return
 		}
 	}
 }

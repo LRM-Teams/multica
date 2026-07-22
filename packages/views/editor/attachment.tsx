@@ -8,7 +8,9 @@
  *
  *   - image  → ImageAttachmentView (figure + hover toolbar + lightbox via
  *              the shared AttachmentPreviewModal)
- *   - html   → HtmlAttachmentPreview (inline iframe + hover toolbar)
+ *   - html   → HtmlAttachmentPreview (inline iframe + hover toolbar), unless
+ *              `inlineHtmlPreview={false}` (channel/thread message stream —
+ *              LRM-285: Slack file-card only; open in new tab / download)
  *   - others → AttachmentCard (icon + filename + Eye/Download row)
  *
  * Call sites:
@@ -34,8 +36,10 @@ import { cn } from "@multica/ui/lib/utils";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { api } from "@multica/core/api";
 import { useConfigStore } from "@multica/core/config";
+import { paths, useWorkspaceSlug } from "@multica/core/paths";
 import type { Attachment as AttachmentRecord } from "@multica/core/types";
 import { useT } from "../i18n";
+import { useNavigation } from "../navigation";
 import { useAttachmentDownloadResolver } from "./attachment-download-context";
 import { useAttachmentPreview } from "./attachment-preview-modal";
 import { useDownloadAttachment } from "./use-download-attachment";
@@ -92,6 +96,13 @@ export interface AttachmentProps {
   selected?: boolean;
   /** Editor hint — wired to Tiptap deleteNode(). */
   onDelete?: () => void;
+  /**
+   * When false, HTML attachments render as a Slack-style file card (name +
+   * type + open/download) instead of an in-bubble iframe preview. Channel /
+   * thread message streams pass false (LRM-285). Issue comments keep the
+   * default true so comment attachment strategy is unchanged.
+   */
+  inlineHtmlPreview?: boolean;
   className?: string;
 }
 
@@ -299,6 +310,7 @@ export function Attachment({
   editable,
   selected,
   onDelete,
+  inlineHtmlPreview = true,
   className,
 }: AttachmentProps) {
   const { resolveAttachment, openByUrl } = useAttachmentDownloadResolver();
@@ -306,6 +318,8 @@ export function Attachment({
   const download = useDownloadAttachment();
   const preview = useAttachmentPreview();
   const isMobile = useIsMobile();
+  const slug = useWorkspaceSlug();
+  const navigation = useNavigation();
 
   const state = normalize(attachment, resolveAttachment, cdnDomain);
   const forceKind =
@@ -330,6 +344,29 @@ export function Attachment({
     }
   };
 
+  // LRM-285 — message-stream HTML: open in an independent tab (or download),
+  // never launch the in-app preview modal from the file card body.
+  const openHtmlInNewTabOrDownload = () => {
+    if (slug && state.attachmentId) {
+      const nameQuery = state.filename
+        ? `?name=${encodeURIComponent(state.filename)}`
+        : "";
+      const path = `${paths.workspace(slug).attachmentPreview(state.attachmentId)}${nameQuery}`;
+      if (navigation.openInNewTab) {
+        navigation.openInNewTab(path, state.filename, { activate: true });
+        return;
+      }
+      const url = navigation.getShareableUrl(path);
+      window.open(url, "_blank", "noopener,noreferrer");
+      return;
+    }
+    if (state.attachmentId) {
+      download(state.attachmentId);
+      return;
+    }
+    if (state.url) openByUrl(state.url);
+  };
+
   const handleDownload = () => {
     if (state.attachmentId) {
       download(state.attachmentId);
@@ -348,12 +385,17 @@ export function Attachment({
 
   // LRM-216 / LRM-219 / LRM-230 — narrow/mobile:
   //   image → stream thumb → fullscreen big image
-  //   html  → compact card → fullscreen sandboxed HTML preview (restored)
+  //   html  → compact card → fullscreen sandboxed HTML preview (issue comments)
+  //           or download guidance when inlineHtmlPreview=false (message stream)
   //   else  → compact card → fullscreen download guidance (never blank)
   if (isMobile) {
     const canOpen = !!state.url || !!state.attachmentId;
     const previewMode =
-      kind === "image" ? "image" : kind === "html" ? "html" : "none";
+      kind === "image"
+        ? "image"
+        : kind === "html" && inlineHtmlPreview
+          ? "html"
+          : "none";
     return (
       <MobileFileAttachment
         filename={state.filename}
@@ -393,7 +435,12 @@ export function Attachment({
     );
   }
 
-  if (kind === "html" && state.attachmentId && !state.uploading) {
+  if (
+    kind === "html" &&
+    inlineHtmlPreview &&
+    state.attachmentId &&
+    !state.uploading
+  ) {
     return (
       <>
         <HtmlAttachmentPreview
@@ -408,6 +455,11 @@ export function Attachment({
     );
   }
 
+  const cardOpen =
+    kind === "html" && !inlineHtmlPreview
+      ? openHtmlInNewTabOrDownload
+      : openPreview;
+
   return (
     <>
       <AttachmentCard
@@ -417,7 +469,7 @@ export function Attachment({
         attachmentId={state.attachmentId}
         href={state.url || undefined}
         uploading={state.uploading}
-        onPreview={openPreview}
+        onPreview={cardOpen}
         onDownload={handleDownload}
         onDelete={editable ? onDelete : undefined}
       />

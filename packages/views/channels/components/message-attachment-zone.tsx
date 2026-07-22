@@ -62,6 +62,9 @@ export function MessageAttachmentZone({
               >
                 <AttachmentRenderer
                   attachment={{ kind: "record", attachment: item.attachment }}
+                  // LRM-285 — message stream: HTML is a file card, never an
+                  // in-bubble iframe preview (issue comments keep default).
+                  inlineHtmlPreview={false}
                 />
               </div>
             ) : (

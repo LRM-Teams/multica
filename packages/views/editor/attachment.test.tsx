@@ -10,6 +10,8 @@ const {
   downloadMock,
   openExternalMock,
   openByUrlMock,
+  openInNewTabMock,
+  getShareableUrlMock,
 } = vi.hoisted(() => ({
   getAttachmentTextContentMock: vi.fn(),
   // Default: empty base URL so existing tests render site-relative URLs
@@ -20,6 +22,8 @@ const {
   downloadMock: vi.fn(),
   openExternalMock: vi.fn(),
   openByUrlMock: vi.fn(),
+  openInNewTabMock: vi.fn(),
+  getShareableUrlMock: vi.fn((p: string) => `https://app.example${p}`),
 }));
 
 vi.mock("@multica/core/api", () => ({
@@ -94,8 +98,8 @@ vi.mock("../navigation", () => ({
     back: vi.fn(),
     pathname: "/acme/issues",
     searchParams: new URLSearchParams(),
-    openInNewTab: vi.fn(),
-    getShareableUrl: (p: string) => `https://app.example${p}`,
+    openInNewTab: openInNewTabMock,
+    getShareableUrl: getShareableUrlMock,
   }),
 }));
 
@@ -427,6 +431,51 @@ describe("Attachment — html dispatch", () => {
     // show the chrome instead of the iframe.
     expect(screen.getByText("report.html")).toBeTruthy();
     expect(document.querySelector("iframe")).toBeNull();
+  });
+
+  // LRM-285 — channel/thread message stream: no in-bubble HTML iframe.
+  it("inlineHtmlPreview=false renders file-card chrome (filename, no iframe)", () => {
+    getAttachmentTextContentMock.mockResolvedValueOnce({
+      text: "<p>design</p>",
+      originalContentType: "text/html",
+    });
+    const att = makeRecord({
+      filename: "design-agent-card-dm.html",
+      content_type: "text/html",
+      url: "https://cdn.example.test/design-agent-card-dm.html",
+    });
+    renderWithQuery(
+      <Attachment
+        attachment={{ kind: "record", attachment: att }}
+        inlineHtmlPreview={false}
+      />,
+    );
+    expect(screen.getByText("design-agent-card-dm.html")).toBeTruthy();
+    expect(document.querySelector("iframe")).toBeNull();
+    expect(screen.queryByTitle("Preview")).toBeNull();
+    expect(screen.getByTitle("Download")).toBeTruthy();
+  });
+
+  it("inlineHtmlPreview=false file-card open routes to new tab (not modal)", () => {
+    const att = makeRecord({
+      filename: "design-agent-card-dm.html",
+      content_type: "text/html",
+      url: "https://cdn.example.test/design-agent-card-dm.html",
+    });
+    renderWithQuery(
+      <Attachment
+        attachment={{ kind: "record", attachment: att }}
+        inlineHtmlPreview={false}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Open \{\{filename\}\}/ }));
+    expect(openInNewTabMock).toHaveBeenCalledTimes(1);
+    expect(openInNewTabMock).toHaveBeenCalledWith(
+      expect.stringContaining(`/acme/attachments/${att.id}/preview`),
+      "design-agent-card-dm.html",
+      { activate: true },
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });
 

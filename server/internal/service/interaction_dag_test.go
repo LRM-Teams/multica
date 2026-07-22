@@ -957,8 +957,13 @@ func TestInteractionDAGQueries_Integration(t *testing.T) {
 	require.NoError(t, q.InsertInteractionDAGSegmentWithSnapshot(ctx, db.InsertInteractionDAGSegmentWithSnapshotParams{
 		SegmentID: segID, ProjectID: "int-proj", AgentRunID: "int-run",
 		IssueID: ptrText("int-issue"), TrajectoryID: pgtype.Int8{Int64: 42, Valid: true},
-		TensorRef: []byte(`{"shard_id":"int-shard"}`), ClosingEvent: ptrText("delegation"),
-		SandboxIDs: []byte(`["sbx"]`), EnvState: []byte(`{}`),
+		TensorRef:        []byte(`{"shard_id":"int-shard"}`),
+		ClosingEvent:     ptrText("delegation"),
+		TrajectorySource: "areal_tensor",
+		Trainable:        true,
+		Trajectory:       []byte(`[]`),
+		SandboxIDs:       []byte(`["sbx"]`),
+		EnvState:         []byte(`{}`),
 	}))
 
 	// Insert typed edges (CHECK constraint accepts the 3 types).
@@ -1001,8 +1006,9 @@ func assembleDAGTestService(t *testing.T) (*InteractionDAGService, *db.Queries, 
 // reads back recorded segment/edge/env_snapshot/session_run rows for a project
 // and projects them into AssembledDag with EXACTLY the SegmentSpec fields
 // (segment_id, agent_run_id, issue_id, trajectory_id, tensor_ref,
-// closing_event, env_snapshot) - no judge scores, no turn indices, no message
-// text cross this boundary. Real Postgres, tx-rollback (hermetic).
+// closing_event, trajectory_source, trainable, trajectory, env_snapshot) - no
+// judge scores, no turn indices, no message text cross this boundary. Real
+// Postgres, tx-rollback (hermetic).
 func TestAssembleAssembledDag_ProjectsRecordedRows(t *testing.T) {
 	svc, q, ctx, _ := assembleDAGTestService(t)
 
@@ -1014,9 +1020,12 @@ func TestAssembleAssembledDag_ProjectsRecordedRows(t *testing.T) {
 	require.NoError(t, q.InsertInteractionDAGSegmentWithSnapshot(ctx, db.InsertInteractionDAGSegmentWithSnapshotParams{
 		SegmentID: "asm-sess-1-10", ProjectID: proj, AgentRunID: "asm-run-1",
 		IssueID: ptrText("asm-issue-1"), TrajectoryID: pgtype.Int8{Int64: 10, Valid: true},
-		TensorRef:    []byte(`{"input_ids":{"shard_id":"sh-1","node_addr":"10.0.0.1:8000"}}`),
-		ClosingEvent: ptrText("delegation"),
-		SandboxIDs:   []byte(`["sbx-1"]`), IssueSnapshotID: ptrText("snap-1"),
+		TensorRef:        []byte(`{"input_ids":{"shard_id":"sh-1","node_addr":"10.0.0.1:8000"}}`),
+		ClosingEvent:     ptrText("delegation"),
+		TrajectorySource: "areal_tensor",
+		Trainable:        true,
+		Trajectory:       []byte(`[]`),
+		SandboxIDs:       []byte(`["sbx-1"]`), IssueSnapshotID: ptrText("snap-1"),
 		EnvState: []byte(`{"k":"v"}`),
 	}))
 
@@ -1037,6 +1046,9 @@ func TestAssembleAssembledDag_ProjectsRecordedRows(t *testing.T) {
 	assert.JSONEq(t, `{"input_ids":{"shard_id":"sh-1","node_addr":"10.0.0.1:8000"}}`, string(seg.TensorRef))
 	require.NotNil(t, seg.ClosingEvent, "closing_event must be present (non-NULL)")
 	assert.Equal(t, "delegation", *seg.ClosingEvent)
+	assert.Equal(t, "areal_tensor", seg.TrajectorySource)
+	assert.True(t, seg.Trainable)
+	assert.JSONEq(t, `[]`, string(seg.Trajectory))
 
 	// env_snapshot reconstructed from the three env_snapshot columns.
 	assert.JSONEq(t, `["sbx-1"]`, string(seg.EnvSnapshot.SandboxIDs))
@@ -1046,7 +1058,7 @@ func TestAssembleAssembledDag_ProjectsRecordedRows(t *testing.T) {
 
 	// NO judge scores, NO turn indices, NO message text: marshal the segment and
 	// confirm none of the banned SegmentSpec keys leak through (the struct must
-	// carry EXACTLY the 7 keys AReaL's SegmentSpec(**s) accepts - extras would
+	// carry EXACTLY the keys AReaL's SegmentSpec(**s) accepts - extras would
 	// TypeError at parse time on the areal side).
 	raw, err := json.Marshal(seg)
 	require.NoError(t, err)
@@ -1055,6 +1067,7 @@ func TestAssembleAssembledDag_ProjectsRecordedRows(t *testing.T) {
 	expectedSegKeys := map[string]bool{
 		"segment_id": true, "agent_run_id": true, "issue_id": true,
 		"trajectory_id": true, "tensor_ref": true, "closing_event": true,
+		"trajectory_source": true, "trainable": true, "trajectory": true,
 		"env_snapshot": true,
 	}
 	assert.Equal(t, expectedSegKeys, keysOf(segKeys), "segment JSON keys must match SegmentSpec exactly")
@@ -1100,7 +1113,10 @@ func TestAssembleAssembledDag_EdgesTypedAndAcyclic(t *testing.T) {
 		require.NoError(t, q.InsertInteractionDAGSegmentWithSnapshot(ctx, db.InsertInteractionDAGSegmentWithSnapshotParams{
 			SegmentID: s.segID, ProjectID: proj, AgentRunID: s.runID,
 			IssueID: ptrText("iss"), TrajectoryID: pgtype.Int8{Int64: s.trajID, Valid: true},
-			TensorRef: []byte(`{"input_ids":{"shard_id":"sh","node_addr":"h:1"}}`),
+			TensorRef:        []byte(`{"input_ids":{"shard_id":"sh","node_addr":"h:1"}}`),
+			TrajectorySource: "areal_tensor",
+			Trainable:        true,
+			Trajectory:       []byte(`[]`),
 			ClosingEvent: func() pgtype.Text {
 				if s.closing == "" {
 					return pgtype.Text{}

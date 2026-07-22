@@ -109,7 +109,7 @@ import {
   DrawerHeader,
   DrawerTitle,
 } from "@multica/ui/components/ui/drawer";
-import { useIsMobile } from "@multica/ui/hooks/use-mobile";
+import { useIsMobile, useContainerNarrowerThan } from "@multica/ui/hooks/use-mobile";
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -222,6 +222,48 @@ const EMPTY_TYPING_ACTORS: TypingActor[] = [];
 const EMPTY_ACTIVE_TASKS: ChannelActiveTask[] = [];
 const STOPPING_ALL_TASKS_ID = "__all__";
 const identitySearchOptions = { extendedMatch: matchesPinyin };
+
+// #568 — below this, the two-pane desktop layout's conversation pane
+// doesn't reliably have room for the direct action row (member cluster +
+// invite + search) next to the truncating title: the row is all
+// `shrink-0`, so it never yields space back to the title, and once the
+// title has nothing left to give, the row overflows the header for real
+// (`header.scrollWidth > header.clientWidth`).
+//
+// This is a CONTAINER width, not a viewport width — see
+// `useContainerNarrowerThan` (packages/ui/hooks/use-mobile.ts). A global
+// `useIsMobile`/`window.innerWidth` check is wrong here for two reasons
+// that compound: (1) the list↔detail divider is user-draggable, so the
+// conversation pane's width can diverge from the viewport in either
+// direction; (2) docked side panels (`ChannelDetailsPanel` `variant=
+// "panel"`, the thread panel, the agent-files panel) squeeze the SAME
+// conversation pane further when they open, independent of both the
+// viewport and the divider. Measuring the conversation `<main>`'s own
+// rendered box (`detailHeaderContainerRef` below) reacts correctly to all
+// three inputs at once, since each one ultimately shows up as a change to
+// that element's own width.
+//
+// Value: live-measured (agent-browser, local dev server, real qa-bot group
+// channel with the full row — member cluster + invite + search, ~216px
+// natural width). Forced the conversation pane's rendered width through a
+// binary search (bypassing the resizable-panel drag so the container width
+// is controlled directly) to find the exact point where the direct row's
+// `header.scrollWidth` first exceeds `clientWidth` with the title/meta
+// collapsed all the way to zero (`min-w-0 truncate`, which has no minimum —
+// it happily shrinks past legibility to nothing): that hard floor is
+// exactly 256px, and it's independent of the channel's name/member-summary
+// text length, since a fully collapsed `truncate` node renders at 0px
+// regardless of its underlying string. Below 256px, no title width can
+// prevent real overflow; 256px is therefore the highest breakpoint value
+// that would ever be "too low" (guarantee a false negative). This
+// breakpoint isn't set AT that floor, though — a channel name collapsed to
+// nothing is unreadable — so it adds a 104px minimum title slot on top
+// (enough for a handful of legible characters before ellipsis) for 360px
+// total. This value is a fixed measurement of the row's own natural
+// requirement — never the row's current rendered scrollWidth — so a
+// narrow<->wide<->narrow container at/near 360px can't thrash: the same
+// container width always yields the same decision.
+const HEADER_ACTIONS_COMPACT_BREAKPOINT = 360;
 
 // Slack-style presence: up to 4 faces + member-count badge. Opens the
 // members panel (browse). Invite is a separate text button — no hollow "+".
@@ -597,12 +639,36 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
     id: "multica_channels_layout",
   });
-  // Mobile-only: the header's right-side actions collapse into a single "⋯"
-  // that opens a bottom Drawer. Menu items align with ChannelDetailsPanel
-  // tabs (About / Members / Files / Settings) — LRM-210 / LRM-204.
+  // #568 — see `HEADER_ACTIONS_COMPACT_BREAKPOINT` above for the derivation.
+  // `detailHeaderContainerRef` attaches to `channelConversationPane`'s
+  // `<main>` below, so this reacts to viewport resize, the list↔detail
+  // divider, AND a docked side panel opening/closing — all three change
+  // that element's own rendered width.
+  const [isHeaderActionsCompact, detailHeaderContainerRef] = useContainerNarrowerThan(
+    HEADER_ACTIONS_COMPACT_BREAKPOINT,
+  );
+  // Mobile, and desktop-but-too-narrow (`isHeaderActionsCompact`): the
+  // header's right-side actions collapse into a single "⋯" that opens a
+  // bottom Drawer. Menu items align with ChannelDetailsPanel tabs (About /
+  // Members / Files / Settings) — LRM-210 / LRM-204.
   const [mobilePanel, setMobilePanel] = useState<
     "menu" | ChannelDetailsTab | null
   >(null);
+  // #568 — the overflow Drawer only renders while `isMobile ||
+  // isHeaderActionsCompact` (below). If the container widens past the
+  // compact breakpoint while the Drawer is open, that condition alone
+  // going false would unmount the whole `<Drawer>` out from under an
+  // `open={true}` state — an unmount, not a controlled `open={false}` exit
+  // transition — and `mobilePanel` would still hold its last value.
+  // Re-narrowing later would then remount the Drawer already `open={true}`
+  // (ghost reopen), with no user click. Clear the panel state declaratively
+  // as soon as eligibility is lost, so the eligibility-loss path is an
+  // unmount-with-state-already-cleared (Radix's own unmount cleanup runs,
+  // not an open-state exit animation) and a later re-narrow starts from a
+  // genuinely closed state.
+  useEffect(() => {
+    if (!isMobile && !isHeaderActionsCompact) setMobilePanel(null);
+  }, [isMobile, isHeaderActionsCompact]);
   const [removeMemberTarget, setRemoveMemberTarget] = useState<ChannelMember | null>(null);
   // A route transition can remount this page between `/channels/[id]` and the
   // base `/channels` route. Preserve the mobile Back intent long enough for
@@ -2585,7 +2651,10 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       />
     ) : null;
   const channelConversationPane = (
-    <main className="relative flex flex-1 min-h-0 min-w-0 flex-col bg-background">
+    <main
+      ref={detailHeaderContainerRef}
+      className="relative flex flex-1 min-h-0 min-w-0 flex-col bg-background"
+    >
       {!active ? (
         showChannelDetailSkeleton ? (
           <ConversationSwitchSkeleton isMobile={isMobile} />
@@ -2647,13 +2716,18 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                 )}
               </>
             }
-            actions={isMobile ? (
-              // Mobile: ⋯ opens a tab-aligned menu (About/Members/Files/Settings).
-              // size-10 keeps the tap target ≥44px.
+            actions={isMobile || isHeaderActionsCompact ? (
+              // Mobile, and desktop-but-too-narrow (#568): ⋯ opens a
+              // tab-aligned menu (About/Members/Files/Settings). size-10
+              // keeps the true-mobile tap target ≥44px; the desktop-compact
+              // path is pointer-driven (no touch-target minimum) and every
+              // pixel matters in the narrowest containers this triggers for,
+              // so it uses the same size-8 as the direct row's own icon
+              // buttons instead.
               <Button
                 variant="ghost"
                 size="icon"
-                className="size-10 shrink-0 text-muted-foreground"
+                className={cn("shrink-0 text-muted-foreground", isMobile ? "size-10" : "size-8")}
                 aria-label={t(($) => $.header.more_aria)}
                 onClick={() => setMobilePanel("menu")}
               >
@@ -3063,10 +3137,11 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         </ResizablePanelGroup>
       )}
 
-      {/* Mobile overflow drawer — LRM-210: menu items align with Channel
-          details tabs (About / Members / Files / Settings). Selecting a tab
-          swaps the body to ChannelDetailsPanel (shared with desktop). */}
-      {isMobile && active && detailsPanelProps && (
+      {/* Mobile, and desktop-but-too-narrow (#568), overflow drawer —
+          LRM-210: menu items align with Channel details tabs (About /
+          Members / Files / Settings). Selecting a tab swaps the body to
+          ChannelDetailsPanel (shared with desktop). */}
+      {(isMobile || isHeaderActionsCompact) && active && detailsPanelProps && (
         <Drawer
           direction="bottom"
           open={mobilePanel !== null}

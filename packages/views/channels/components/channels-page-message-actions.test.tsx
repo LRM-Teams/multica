@@ -126,7 +126,16 @@ vi.mock("@multica/core/workspace/queries", async (importOriginal) => ({
   agentListOptions: () => ({ queryKey: ["agents"], queryFn: async () => [] }),
 }));
 
-vi.mock("@multica/ui/hooks/use-mobile", () => ({ useIsMobile: () => false }));
+// #568 — `useContainerNarrowerThan` (ResizeObserver-driven) isn't relevant
+// to what this file tests; keep it a no-op ("plenty of room", direct row)
+// so pre-existing desktop-direct-row assumptions here are unaffected.
+// jsdom's default `getBoundingClientRect` is 0x0 for every element and
+// `ResizeObserver` isn't implemented at all, so leaving the real hook
+// running here would default to "compact" instead.
+vi.mock("@multica/ui/hooks/use-mobile", () => ({
+  useIsMobile: () => false,
+  useContainerNarrowerThan: () => [false, () => {}] as const,
+}));
 
 vi.mock("../../navigation/context", () => ({
   useNavigation: () => ({

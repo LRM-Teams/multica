@@ -37,7 +37,7 @@ import {
 } from "@multica/ui/components/ui/dialog";
 import { PropRow } from "../../common/prop-row";
 import { InlineEditPopover } from "./inline-edit-popover";
-import { availabilityConfig } from "../presence";
+import { availabilityConfig, toLiveAvailability } from "../presence";
 import { CharCounter } from "./char-counter";
 import { useT } from "../../i18n";
 import { ConcurrencyPicker } from "./inspector/concurrency-picker";
@@ -554,24 +554,26 @@ function PresenceBadge({
   presence: AgentPresenceDetail | null | undefined;
 }) {
   const { t } = useT("agents");
-  // Archived is carried by the unified presence (deriveAgentPresenceDetail
-  // sets availability="archived" before any runtime/task scan), so the
-  // normal path below renders the gray "Archived" badge with no special
-  // case here — same single source of truth as every other status surface.
   if (!presence) {
     return (
       <span className="inline-flex h-5 w-20 animate-pulse rounded-md bg-muted" />
     );
   }
-  const av = availabilityConfig[presence.availability];
-  return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      <span
-        className={`inline-flex items-center gap-1.5 rounded-md border px-1.5 py-0.5 text-xs ${av.textClass}`}
-      >
-        <span className={`h-1.5 w-1.5 rounded-full ${av.dotClass}`} />
-        {t(($) => $.availability[presence.availability])}
+  // LRM-248: Online/Offline only. Archived is muted secondary copy, not a
+  // live presence chip.
+  if (presence.availability === "archived") {
+    return (
+      <span className="text-xs text-muted-foreground">
+        {t(($) => $.row.archived)}
       </span>
-    </div>
+    );
+  }
+  const live = toLiveAvailability(presence.availability);
+  if (!live) return null;
+  const av = availabilityConfig[live];
+  return (
+    <span className={`text-xs ${av.textClass}`}>
+      {t(($) => $.availability[live])}
+    </span>
   );
 }

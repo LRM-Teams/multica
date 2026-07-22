@@ -2,7 +2,10 @@
 
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import type { AgentPresenceDetail } from "@multica/core/agents";
-import { availabilityConfig, presenceStatusToken, workloadConfig } from "../presence";
+import {
+  availabilityConfig,
+  toLiveAvailability,
+} from "../presence";
 import { useT } from "../../i18n";
 
 interface PresenceIndicatorProps {
@@ -11,24 +14,16 @@ interface PresenceIndicatorProps {
   // views). Keeping this as a prop avoids per-row hook subscriptions in
   // long lists.
   detail: AgentPresenceDetail | null | undefined;
-  // Compact = dot only, no label / no workload chip. Used in dense rows.
+  // Compact = dot only, no label. Used in dense rows.
   compact?: boolean;
 }
 
 /**
- * Renders an agent's two-dimension presence: an availability dot + an
- * optional workload chip. The dot's colour reads only from the
- * availability dimension (3 colours), so a runtime-healthy agent whose
- * last task failed shows a green dot — workload no longer carries
- * historical state at all.
+ * Renders live Online/Offline presence (LRM-248).
  *
- * Compact mode collapses to dot-only — used in dense surfaces where the
- * full chip would crowd the row.
- *
- * Pure presentation — takes the already-derived detail object as a prop.
- * The page-level component is responsible for sourcing it (via
- * `useAgentPresenceDetail` for a single agent, or `useWorkspacePresenceMap`
- * for lists).
+ * Compact mode collapses to dot-only. Full mode is dot + Online/Offline
+ * word — never Unstable / Working / Queued / Idle as live labels.
+ * Archived returns null (caller grays the avatar separately).
  */
 export function AgentPresenceIndicator({
   detail,
@@ -43,77 +38,24 @@ export function AgentPresenceIndicator({
     );
   }
 
-  const av = availabilityConfig[detail.availability];
-  const wl = workloadConfig[detail.workload];
-  const availabilityLabel = t(($) => $.availability[detail.availability]);
-  const workloadLabel = t(($) => $.workload[detail.workload]);
-  // The "workload word only while online" rule lives in ONE place
-  // (presenceStatusToken), shared with the peek card and profile popover so the
-  // three surfaces can never disagree about when a workload word is valid.
-  const showWorkload = presenceStatusToken(detail)?.kind === "workload";
-  const isWorking = detail.workload === "working";
-  const isQueued = detail.workload === "queued";
-  const showQueueBadge = isWorking && detail.queuedCount > 0;
-  // The workload chip renders only when online (see below), so queued here is
-  // always the brief enqueue→claim race on a healthy runtime — mute it rather
-  // than the amber "stuck" tone, which would read as a warning that isn't there.
-  const queuedTone = "text-muted-foreground";
+  const live = toLiveAvailability(detail.availability);
+  if (!live) return null;
+
+  const av = availabilityConfig[live];
+  const availabilityLabel = t(($) => $.availability[live]);
 
   if (compact) {
     return (
-      <span
-        className="inline-flex items-center"
-        title={`${availabilityLabel}${showWorkload && detail.workload !== "idle" ? ` · ${workloadLabel}` : ""}`}
-      >
+      <span className="inline-flex items-center" title={availabilityLabel}>
         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${av.dotClass}`} />
       </span>
     );
   }
 
   return (
-    <span className="inline-flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
-      {/* Availability — dot + label. Single dimension, single colour. */}
-      <span className="inline-flex items-center gap-1.5">
-        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${av.dotClass}`} />
-        <span className={`text-xs ${av.textClass}`}>{availabilityLabel}</span>
-      </span>
-
-      {/* Workload — separator + label, with counts when working/queued.
-          Workload is a modulation on top of "online": it only reads correctly
-          while the agent is reachable. When it's offline/unstable/archived the
-          dot already says the whole story, and appending "· Idle"/"· Working"
-          would contradict it ("Idle" implies available). So the workload chip
-          shows only when online; otherwise the availability label stands alone. */}
-      {showWorkload && (
-      <span className="inline-flex items-center gap-1">
-        <span className="text-xs text-muted-foreground">·</span>
-        <span
-          className={`text-xs ${
-            isQueued ? queuedTone : wl.textClass
-          }`}
-        >
-          {workloadLabel}
-        </span>
-        {isWorking && (
-          <span className="font-mono text-xs tabular-nums text-muted-foreground">
-            {detail.runningCount} / {detail.capacity}
-          </span>
-        )}
-        {showQueueBadge && (
-          <span className="rounded-md bg-muted px-1 py-0 text-xs font-medium text-muted-foreground">
-            {t(($) => $.presence.queue_badge, { count: detail.queuedCount })}
-          </span>
-        )}
-        {/* Queued (no running) — show the queued count directly, since
-            there's no running/capacity ratio to anchor on. Honestly
-            surfaces "stuck" on offline runtimes. */}
-        {isQueued && (
-          <span className="font-mono text-xs tabular-nums text-muted-foreground">
-            {detail.queuedCount}
-          </span>
-        )}
-      </span>
-      )}
+    <span className="inline-flex items-center gap-1.5">
+      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${av.dotClass}`} />
+      <span className={`text-xs ${av.textClass}`}>{availabilityLabel}</span>
     </span>
   );
 }

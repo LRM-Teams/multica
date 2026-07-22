@@ -60,21 +60,27 @@ function renderView(props: Partial<ComponentProps<typeof HealthBlockView>>) {
   );
 }
 
-const STATE_COPY: Record<AgentHealthState, string> = {
-  online: "Online",
-  suspected_disconnect: "Connection unstable",
-  reconnecting: "Reconnecting",
-  recovered: "Recovered",
-  offline: "Offline",
-};
+describe("HealthBlockView — head (LRM-248 Online/Offline live)", () => {
+  it("folds reconnecting / suspected / recovered → Online on the live head", () => {
+    for (const state of [
+      "online",
+      "recovered",
+      "suspected_disconnect",
+      "reconnecting",
+    ] as const) {
+      const { unmount } = renderView({ summary: summary(state), events: [] });
+      expect(screen.getAllByText("Online").length).toBeGreaterThan(0);
+      expect(screen.queryByText("Reconnecting")).not.toBeInTheDocument();
+      expect(screen.queryByText("Connection unstable")).not.toBeInTheDocument();
+      expect(screen.queryByText("Recovered")).not.toBeInTheDocument();
+      unmount();
+    }
+  });
 
-describe("HealthBlockView — head (Iris §3a/§3b)", () => {
-  for (const state of Object.keys(STATE_COPY) as AgentHealthState[]) {
-    it(`renders the state chip + copy for ${state}`, () => {
-      renderView({ summary: summary(state), events: [] });
-      expect(screen.getAllByText(STATE_COPY[state]).length).toBeGreaterThan(0);
-    });
-  }
+  it("shows Offline on the live head when offline", () => {
+    renderView({ summary: summary("offline"), events: [] });
+    expect(screen.getAllByText("Offline").length).toBeGreaterThan(0);
+  });
 
   it("renders state_since as a relative duration", () => {
     renderView({ summary: summary("online"), events: [] });

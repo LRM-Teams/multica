@@ -20,7 +20,7 @@ import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { useT, useTimeAgo } from "../../i18n";
-import { availabilityConfig } from "../presence";
+import { availabilityConfig, toLiveAvailability } from "../presence";
 import type { AgentAvailability } from "@multica/core/agents";
 
 export interface AgentMetric {
@@ -171,7 +171,9 @@ export function AgentDetailOverview({
   const { data: tasks = [] } = useQuery(agentTasksOptions(wsId, agent.id));
   const recentTasks = useMemo(() => tasks.slice(0, 6), [tasks]);
 
-  const availCfg = availability ? availabilityConfig[availability] : null;
+  const live = toLiveAvailability(availability);
+  const availCfg = live ? availabilityConfig[live] : null;
+  const isArchived = !!agent.archived_at;
   const costText = metric.cost === null ? "—" : `$${metric.cost.toFixed(2)}`;
   const successText = metric.successRate === null ? "—" : `${Math.round(metric.successRate)}%`;
 
@@ -180,15 +182,36 @@ export function AgentDetailOverview({
       {/* Header */}
       <div className="flex items-start justify-between gap-3 border-b px-6 py-4">
         <div className="flex min-w-0 items-center gap-3">
-          <ActorAvatar actorType="agent" actorId={agent.id} size={40} className="shrink-0" />
+          <ActorAvatar
+            actorType="agent"
+            actorId={agent.id}
+            size={40}
+            className={cn("shrink-0", isArchived && "opacity-50 grayscale")}
+            showStatusDot={!isArchived}
+          />
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <ActorIdentityRow identity={agent} primaryClassName="truncate text-base font-semibold" className="min-w-0 shrink" />
-              {availCfg && (
-                <span className={cn("inline-flex items-center gap-1 text-xs", availCfg.textClass)}>
-                  <span className={cn("size-1.5 rounded-full", availCfg.dotClass)} />
-                  {t(($) => $.availability[availability!])}
+              <ActorIdentityRow
+                identity={agent}
+                primaryClassName={cn(
+                  "truncate text-base font-semibold",
+                  isArchived && "text-muted-foreground",
+                )}
+                className="min-w-0 shrink"
+              />
+              {/* LRM-248: plain Online/Offline text (no second dot — avatar
+                  badge is the round indicator). Archived = muted secondary. */}
+              {isArchived ? (
+                <span className="text-xs text-muted-foreground">
+                  {t(($) => $.row.archived)}
                 </span>
+              ) : (
+                availCfg &&
+                live && (
+                  <span className={cn("text-xs", availCfg.textClass)}>
+                    {t(($) => $.availability[live])}
+                  </span>
+                )
               )}
             </div>
             <p className="mt-0.5 truncate text-xs text-muted-foreground">

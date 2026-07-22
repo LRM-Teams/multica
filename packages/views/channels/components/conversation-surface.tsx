@@ -56,7 +56,17 @@ export function ConversationHeader({
               it keeps its own weight/color and can shrink on narrow widths. */}
           <div className="flex min-w-0 items-center gap-2">
             <div className="flex min-w-0 items-center gap-1.5 text-sm font-semibold leading-5">
-              <span className="truncate">{title}</span>
+              {/* Plain-string titles (thread) keep truncate here; compound
+                  titles (channel name + ▾) own their own truncate so the
+                  chevron is never clipped. */}
+              <div
+                className={cn(
+                  "min-w-0 max-w-full",
+                  typeof title === "string" && "truncate",
+                )}
+              >
+                {title}
+              </div>
               {badges}
             </div>
             {status}

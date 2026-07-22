@@ -2771,16 +2771,34 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
               </>
             }
             title={
+              // LRM-234 — Slack-like desktop title: bold name + tight ▾
+              // caret, soft rounded hover/open wash (not primary recolor).
+              // Same control still opens Channel details; mobile keeps ⋯.
               <button
                 type="button"
                 onClick={() => toggleChannelDetails("about")}
                 aria-label={t(($) => $.details.open_aria)}
+                aria-expanded={channelDetailsOpen && !isMobile}
                 className={cn(
-                  "truncate text-left hover:text-primary",
-                  channelDetailsOpen && !isMobile && "text-primary",
+                  "-ml-1.5 inline-flex min-w-0 max-w-full items-center gap-0.5 rounded-md px-1.5 py-0.5 text-left text-foreground transition-colors",
+                  "hover:bg-black/[0.04] dark:hover:bg-white/[0.06]",
+                  channelDetailsOpen &&
+                    !isMobile &&
+                    "bg-black/[0.06] dark:bg-white/[0.08]",
                 )}
               >
-                {active.name}
+                <span className="truncate font-bold tracking-tight">{active.name}</span>
+                {!isMobile && (
+                  <ChevronDown
+                    data-testid="channel-title-chevron"
+                    strokeWidth={2.5}
+                    className={cn(
+                      "size-3 shrink-0 opacity-50 transition-transform duration-150",
+                      channelDetailsOpen && "rotate-180 opacity-70",
+                    )}
+                    aria-hidden="true"
+                  />
+                )}
               </button>
             }
             meta={

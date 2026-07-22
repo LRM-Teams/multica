@@ -15,6 +15,7 @@ import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/ac
 import { cn } from "@multica/ui/lib/utils";
 import { ActivityTab } from "../../agents/components/tabs/activity-tab";
 import { AgentPresenceStatusLine } from "../../agents/components/agent-presence-status-line";
+import { AgentXpBurst } from "../../agents/components/agent-xp-burst";
 import { ModelPicker } from "../../agents/components/inspector/model-picker";
 import { RuntimePicker } from "../../agents/components/inspector/runtime-picker";
 import { ThinkingPropRow } from "../../agents/components/inspector/thinking-prop-row";

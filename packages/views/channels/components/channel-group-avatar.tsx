@@ -5,17 +5,16 @@ import type { ChannelMemberBrief } from "@multica/core/types";
 import { ActorAvatar } from "../../common/actor-avatar";
 
 /**
- * WeChat-style composite group avatar: up to 4 members' real, persisted
- * avatars tiled into a single round circle — 1 → full circle, 2 → a
- * centered pair, 3-4 → a 2x2 grid. Members (human or agent) beyond the
- * first 4, in `channel.members`' own order, are dropped — a stable,
- * deterministic selection, not a random sample. Recomputes whenever the
- * member list changes (joins/leaves), since it derives purely from
- * `members`.
+ * Multi-person DM member collage only (LRM-254 A1). Group channels use
+ * {@link ChannelHashLandmark} (`#` + name) — never this collage — so the
+ * landmark does not "drift" when the roster changes.
  *
- * LRM-224: each tile is the identity-first ActorAvatar (sticky cache +
- * directory); `avatar_url` on the member brief only seeds. Missing / failed
- * image → colored glyph (never whole-word text). Empty channel → `#`.
+ * Up to 4 members' real avatars tiled into a round circle — 1 → full,
+ * 2 → centered pair, 3–4 → 2×2. Members beyond the first 4 (stable order)
+ * are dropped. Recomputes on join/leave.
+ *
+ * LRM-224: each tile is identity-first ActorAvatar. Empty roster → `#`
+ * placeholder (DM edge case only; channels must not call this).
  */
 const MAX_TILES = 4;
 

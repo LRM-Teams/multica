@@ -2680,9 +2680,23 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         onShare: () => {
           void handleShare();
         },
-        onArchive: () => setArchiveTarget(active),
+        // LRM-265 — dismiss the mobile "…" Drawer before opening archive /
+        // delete AlertDialogs. Matches the Members entry (closes panel then
+        // opens its dialog). Leaving the Vaul modal open keeps
+        // `body.style.pointerEvents = "none"`; AlertDialog portals to body
+        // (sibling of DrawerContent), so checkbox / actions inherit the lock
+        // and become unclickable. Closing first also avoids stacked-modal
+        // focus traps; AlertDialog itself also sets `pointer-events-auto` as
+        // defense-in-depth while the drawer animates out.
+        onArchive: () => {
+          setMobilePanel(null);
+          setArchiveTarget(active);
+        },
         onDelete: canDeleteChannel(active)
-          ? () => setDeleteTarget(active)
+          ? () => {
+              setMobilePanel(null);
+              setDeleteTarget(active);
+            }
           : undefined,
         onRename: (name: string) => {
           updateChannel.mutate(

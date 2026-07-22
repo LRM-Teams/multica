@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   mentionTokenClassName,
   resolveMentionTokenKind,
+  SELF_MENTION_ROW_CLASS,
+  SELF_MENTION_ROW_MENTION_CLASS,
 } from "./mention-token";
 
 describe("resolveMentionTokenKind", () => {
@@ -52,5 +54,25 @@ describe("mentionTokenClassName", () => {
     expect(cls).toContain("font-bold");
     expect(cls).not.toContain("text-brand");
     expect(cls).not.toContain("rounded-full");
+  });
+});
+
+describe("SELF_MENTION_ROW_CLASS", () => {
+  it("keeps warm wash in light and uses brand bar + cool tint in dark", () => {
+    expect(SELF_MENTION_ROW_CLASS).toContain("bg-[#fef9e8]");
+    expect(SELF_MENTION_ROW_CLASS).toContain("dark:border-l-2");
+    expect(SELF_MENTION_ROW_CLASS).toContain("dark:border-brand");
+    expect(SELF_MENTION_ROW_CLASS).toContain("dark:bg-brand/[0.06]");
+  });
+});
+
+describe("SELF_MENTION_ROW_MENTION_CLASS", () => {
+  it("strips dark mention pill fill on self-mentioned rows", () => {
+    expect(SELF_MENTION_ROW_MENTION_CLASS).toContain(
+      "[&_.mention]:dark:bg-transparent",
+    );
+    expect(SELF_MENTION_ROW_MENTION_CLASS).toContain(
+      "[&_.mention]:dark:hover:bg-brand/[0.08]",
+    );
   });
 });

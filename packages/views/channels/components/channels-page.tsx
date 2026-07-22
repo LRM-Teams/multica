@@ -1022,6 +1022,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   useEffect(() => {
     if (!threadDeepLinkId || threadDeepLinkConsumedRef.current || !activeChannelId) return;
     threadDeepLinkConsumedRef.current = true;
+    // react-doctor-disable-next-line react-doctor/no-derived-state -- one-shot consumption of an external signal (?thread= URL param), deferred until activeChannelId resolves via async route reconciliation; not a value kept in sync with other state (the ref guard makes this fire exactly once, and the user can freely close/reopen sidePanel afterward independent of this).
     setOpenThreadRoot({
       id: threadDeepLinkId,
       channel_id: activeChannelId,

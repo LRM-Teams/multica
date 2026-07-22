@@ -307,7 +307,8 @@ test: ## Run Go tests after ensuring the target DB exists and migrations are app
 	$(REQUIRE_ENV)
 	@bash scripts/ensure-postgres.sh "$(ENV_FILE)"
 	cd server && go run ./cmd/migrate up
-	cd server && go test ./...
+	# Database-backed packages share the configured test database.
+	cd server && go test -p 1 ./...
 
 # Database
 ##@ Database

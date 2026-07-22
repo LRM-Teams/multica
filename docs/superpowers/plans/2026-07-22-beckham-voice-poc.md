@@ -145,3 +145,15 @@ Evidence:
 Boundary:
 
 - Local automated tests cannot exercise a real browser/desktop microphone, speaker autoplay policy, or the deployed provider network path. Those checks must run after this PR is merged and the existing CD workflow deploys it; no server file was modified directly.
+
+### Step 9 — Diagnose and remove the shared-database CI race
+
+Status: complete
+
+Evidence:
+
+- The first post-push frontend CI failure was a transient HTTP/2 `INTERNAL_ERROR` while the GitHub Runner downloaded `go-redis` from `proxy.golang.org`; application compilation had not failed. No product fallback or dependency change was added.
+- The backend failure occurred while a handler test inserted a radar binding for a random temporary workspace. At the same time, the scheduler package's concurrency test calls the production-wide binding repair, which scans every eligible Wendy workspace and can insert the same row.
+- `go test ./...` runs packages in parallel while CI gives every package the same PostgreSQL database. The colliding workspace UUID was random and package-local, proving the second writer came from another package rather than duplicate fixture creation within the failing test.
+- Production Wendy binding serializes on the workspace row and persists with `ON CONFLICT`; the collision came from a test-only raw insert racing a different package. The CI and `make test` commands now use `go test -p 1 ./...`, preserving test behavior while preventing cross-package mutation of a shared integration database.
+- On a fresh isolated PostgreSQL database, `go test -p 1 ./internal/handler ./internal/scheduler -count=1` passed and the temporary database was removed. The workflow YAML parsed, the Make target dry-run resolved to the serial command, and `git diff --check` passed.

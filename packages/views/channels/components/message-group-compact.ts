@@ -1,4 +1,5 @@
 import type { ChannelMessage } from "@multica/core/types";
+import { channelMessageListItemKey } from "@multica/core/channels";
 import { startsNewLocalDay } from "../../i18n/use-message-time";
 
 /** Default Slack-style grouping window — consecutive same-author messages. */
@@ -72,7 +73,7 @@ export function buildMessageGroupCompactMap(
     if (!msg || foldedIds.has(msg.id)) continue;
 
     if (!isGroupableChannelMessage(msg)) {
-      map.set(msg.id, false);
+      map.set(channelMessageListItemKey(msg), false);
       continue;
     }
 
@@ -80,11 +81,11 @@ export function buildMessageGroupCompactMap(
     const compact =
       prev !== null &&
       !shouldStartMessageGroup(prev, msg, {
-        hasDateDivider: dateDividerIds.has(msg.id),
+        hasDateDivider: dateDividerIds.has(msg.id) || dateDividerIds.has(channelMessageListItemKey(msg)),
         tz: options.tz,
         maxGapMs: options.maxGapMs,
       });
-    map.set(msg.id, compact);
+    map.set(channelMessageListItemKey(msg), compact);
   }
 
   return map;

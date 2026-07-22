@@ -290,8 +290,8 @@ export function useSendChannelThreadMessage() {
         : { ...msg, thread_root_message_id: vars.messageId };
       upsertChannelMessageThreadInCache(qc, authoritative, rootId);
       // Upsert is authoritative for this send; avoid an immediate thread refetch
-      // that can race the ACK (LRM-271). Channel-list invalidate preserves any
-      // still-in-flight local sends via preserveLocalSendMessages (LRM-280).
+      // that can race the ACK / flash the list (LRM-271/273). Channel-list
+      // invalidate preserves still-in-flight local sends (LRM-280).
       invalidateChannelMessages(qc, msg.channel_id);
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
       qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });

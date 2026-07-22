@@ -4,6 +4,7 @@ import type { ChannelMessage, ChannelMessagesPage } from "../types";
 import type { InfiniteData } from "@tanstack/react-query";
 import {
   buildOptimisticChannelMessage,
+  channelMessageListItemKey,
   markOptimisticChannelMessageFailed,
   removeOptimisticChannelMessage,
 } from "./optimistic-send";
@@ -150,6 +151,40 @@ describe("optimistic send cache (LRM-222)", () => {
     expect(messages[0]?.local_send_status ?? null).toBeNull();
     // ACK omitted client_message_id — preserve from the optimistic row for retry/identity.
     expect(messages[0]?.client_message_id).toBe("client-thread-1");
+  });
+
+  it("keeps a stable list item key across optimistic → ACK (LRM-273)", () => {
+    const optimistic = buildOptimisticChannelMessage({
+      channelId: "c1",
+      workspaceId: "w1",
+      clientMessageId: "client-stable",
+      content: "hello",
+      authorId: "u1",
+      authorName: "Alice",
+    });
+    const ack: ChannelMessage = {
+      ...optimistic,
+      id: "server-stable",
+      seq: 7,
+      local_send_status: undefined,
+      client_message_id: "client-stable",
+    };
+    expect(channelMessageListItemKey(optimistic)).toBe("client-stable");
+    expect(channelMessageListItemKey(ack)).toBe("client-stable");
+
+    const qc = new QueryClient();
+    seedPage(qc, "c1", [optimistic]);
+    upsertChannelMessageInCache(qc, {
+      ...ack,
+      client_message_id: null,
+      local_send_status: "pending",
+    });
+    const messages =
+      qc.getQueryData<InfiniteData<ChannelMessagesPage>>(channelKeys.messagesPage("c1"))?.pages[0]
+        ?.messages ?? [];
+    expect(messages).toHaveLength(1);
+    expect(channelMessageListItemKey(messages[0]!)).toBe("client-stable");
+    expect(messages[0]?.local_send_status ?? null).toBeNull();
   });
 
   it("preserves pending/failed bubbles across list refetch (LRM-280 silent-loss guard)", () => {

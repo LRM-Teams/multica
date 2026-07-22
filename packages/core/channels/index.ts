@@ -23,6 +23,7 @@ export {
 } from "./queries";
 export {
   buildOptimisticChannelMessage,
+  channelMessageListItemKey,
   isOptimisticChannelMessage,
   markOptimisticChannelMessageFailed,
   removeOptimisticChannelMessage,

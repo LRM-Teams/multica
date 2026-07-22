@@ -183,7 +183,7 @@ describe("useRealtimeSync — ws instance change", () => {
     expect(calls).toContainEqual(["issues", "tasks"]);
   });
 
-  it("upserts thread replies without invalidating the thread query (LRM-271)", () => {
+  it("upserts thread replies without invalidating the thread query (LRM-271/273)", () => {
     const ws = createMockWs();
     renderHook(() => useRealtimeSync(ws, stores), {
       wrapper: createWrapper(qc),
@@ -230,7 +230,7 @@ describe("useRealtimeSync — ws instance change", () => {
     expect(invalidateSpy).toHaveBeenCalledWith({
       queryKey: channelKeys.messagesPage("channel-1"),
     });
-    // Thread panel uses upsert only — no post-ACK invalidate that races pending clear.
+    // Thread panel uses upsert only — no post-ACK invalidate that races/flashes.
     expect(invalidateSpy).not.toHaveBeenCalledWith({
       queryKey: channelKeys.messageThread("channel-1", "root-old"),
     });

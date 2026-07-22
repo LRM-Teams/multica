@@ -221,7 +221,7 @@ export function preserveLocalSendMessages(
  * Match an existing cache row to an incoming message: same `id`, OR same
  * non-empty `client_message_id` (temp optimistic id → authoritative ACK / WS).
  * If the ACK/WS omits `client_message_id`, fall back to the pending/failed
- * optimistic bubble with the same author + content + thread root (LRM-271).
+ * optimistic bubble with the same author + content + thread root (LRM-271/273).
  */
 export function findChannelMessageMatchIndex(
   messages: readonly ChannelMessage[],
@@ -238,8 +238,12 @@ export function findChannelMessageMatchIndex(
     );
     if (byClient >= 0) return byClient;
   }
-  // Authoritative rows never carry local_send_status; only replace a temp bubble.
-  if (isLocalSendRow(message) || !message.author_id) return -1;
+  // Authoritative rows use a server-issued id (not `id === client_message_id`).
+  // Do not require `local_send_status` to be absent — a buggy ACK merge may
+  // leak it, and we still need to retire the temp bubble (LRM-273).
+  const isTempOptimistic =
+    !!message.client_message_id && message.id === message.client_message_id;
+  if (isTempOptimistic || !message.author_id) return -1;
   return messages.findIndex(
     (m) =>
       isLocalSendRow(m) &&
@@ -342,20 +346,24 @@ export function withPreservedAuthorAvatar(
   return { ...incoming, author_avatar_url: fromSibling };
 }
 
-/** Authoritative API/WS rows must never keep client-only pending/failed state. */
+/**
+ * Normalize an API/WS row for the cache: preserve avatar + client_message_id from
+ * the optimistic row, and never keep client-only pending/failed state on an
+ * authoritative server id (LRM-271/273/280).
+ */
 function asCacheMessage(
   incoming: ChannelMessage,
   existing: ChannelMessage | undefined,
   siblings: readonly ChannelMessage[] | undefined,
 ): ChannelMessage {
   let enriched = withPreservedAuthorAvatar(incoming, existing, siblings);
-  // Keep client_message_id so list identity / retry stay stable when ACK omits it.
+  // Keep client_message_id so list identity / keys / retry stay stable when ACK omits it.
   if (!enriched.client_message_id && existing?.client_message_id) {
     enriched = { ...enriched, client_message_id: existing.client_message_id };
   }
   // Temp optimistic rows use `id === client_message_id` and may carry
   // `local_send_status`. Authoritative HTTP ACK / WS rows use a server id and
-  // must never keep a client-only pending/failed badge (LRM-271).
+  // must never keep a client-only pending/failed badge (LRM-271/273).
   const clientId = enriched.client_message_id;
   if (clientId && enriched.id === clientId) return enriched;
   if (enriched.local_send_status == null) return enriched;

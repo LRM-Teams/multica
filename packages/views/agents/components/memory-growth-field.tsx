@@ -42,15 +42,24 @@ export function MemoryGrowthField({
   const [pulse, setPulse] = useState(false);
   const prevTierRef = useRef<string | null>(null);
 
-  useEffect(() => {
-    if (!growth?.tier) return;
+  // Detect tier upgrades during render (same pattern as AgentXpBurst) — do not
+  // sync prop → state inside an effect (react-doctor / LRM-304 CI).
+  const tier = growth?.tier ?? null;
+  if (tier) {
     const prev = prevTierRef.current;
-    prevTierRef.current = growth.tier;
-    if (prev === null || prev === growth.tier) return;
-    setPulse(true);
+    if (prev === null) {
+      prevTierRef.current = tier;
+    } else if (prev !== tier) {
+      prevTierRef.current = tier;
+      if (!pulse) setPulse(true);
+    }
+  }
+
+  useEffect(() => {
+    if (!pulse) return;
     const timer = window.setTimeout(() => setPulse(false), MEMORY_GROWTH_PULSE_MS);
     return () => window.clearTimeout(timer);
-  }, [growth?.tier]);
+  }, [pulse]);
 
   if (!growth || growth.total_writes <= 0) return null;
 

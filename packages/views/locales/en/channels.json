@@ -331,7 +331,9 @@
     "delete_failed_toast": "Couldn't delete message",
     "system_event": {
       "member_added": "{target} was added to this channel by {actor}",
+      "member_added_no_actor": "{target} joined this channel",
       "member_removed": "{target} was removed from this channel by {actor}",
+      "member_removed_no_actor": "{target} was removed from this channel",
       "member_left": "{target} left this channel",
       "issue": {
         "actor_system": "Multica",

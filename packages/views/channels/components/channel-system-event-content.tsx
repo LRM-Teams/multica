@@ -122,11 +122,20 @@ export function MemberSystemEventContent({ event }: { event: MemberSystemEvent }
     />
   ) : undefined;
 
+  // A real `actor` is the sole discriminator (not `source`): old rows predate
+  // the `source` field, and a system-maintained row can't be told apart from a
+  // manual one without it. An actor-less added/removed row is restructured to
+  // drop the "by" clause entirely — never a fabricated "Workspace/System"
+  // token (#661).
   const template =
     event.event === MEMBER_EVENTS.added
-      ? t(($) => $.message.system_event.member_added)
+      ? actor
+        ? t(($) => $.message.system_event.member_added)
+        : t(($) => $.message.system_event.member_added_no_actor)
       : event.event === MEMBER_EVENTS.removed
-        ? t(($) => $.message.system_event.member_removed)
+        ? actor
+          ? t(($) => $.message.system_event.member_removed)
+          : t(($) => $.message.system_event.member_removed_no_actor)
         : t(($) => $.message.system_event.member_left);
 
   return interpolateSlots(template, { target, actor });

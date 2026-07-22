@@ -233,8 +233,8 @@ func (h *Handler) safeHumanReminderAnchor(r *http.Request, userID string, remind
 		WHERE channel.id = $1 AND channel.workspace_id = $2`, reminder.AnchorChannelID, reminder.WorkspaceID, parseUUID(userID)).Scan(&channelName, &channelKind, &workspaceSlug, &archivedAt, &member); err != nil || archivedAt.Valid || !member {
 		return unavailable
 	}
-	var deletedAt pgtype.Timestamptz
-	if err := h.DB.QueryRow(r.Context(), `SELECT deleted_at FROM channel_message WHERE id = $1 AND channel_id = $2 AND workspace_id = $3`, reminder.AnchorMessageID, reminder.AnchorChannelID, reminder.WorkspaceID).Scan(&deletedAt); err != nil || deletedAt.Valid {
+	anchor, err := loadReminderAnchorSnapshot(r.Context(), h.DB, reminder)
+	if err != nil || !anchor.Available {
 		return unavailable
 	}
 	kind := "channel"
@@ -245,10 +245,6 @@ func (h *Handler) safeHumanReminderAnchor(r *http.Request, userID string, remind
 	messageID := reminder.AnchorMessageID
 	query := "message=" + url.QueryEscape(uuidToString(messageID))
 	if reminder.AnchorThreadRootMessageID.Valid {
-		var rootDeletedAt pgtype.Timestamptz
-		if err := h.DB.QueryRow(r.Context(), `SELECT deleted_at FROM channel_message WHERE id = $1 AND channel_id = $2 AND workspace_id = $3`, reminder.AnchorThreadRootMessageID, reminder.AnchorChannelID, reminder.WorkspaceID).Scan(&rootDeletedAt); err != nil || rootDeletedAt.Valid {
-			return unavailable
-		}
 		kind = "thread"
 		if channelKind == "dm" {
 			display = "Thread in direct message"

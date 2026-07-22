@@ -26,7 +26,7 @@ ALTER TABLE agent_reminder
     OR cadence ~ '^weekly:(mon|tue|wed|thu|fri|sat|sun)(,(mon|tue|wed|thu|fri|sat|sun))*@([01][0-9]|2[0-3]):[0-5][0-9]$'
   ),
   ADD CONSTRAINT agent_reminder_cadence_timezone_check CHECK (
-    (cadence IS NULL AND schedule_timezone IS NULL AND cadence_next_at IS NULL)
+    (cadence IS NULL AND cadence_next_at IS NULL)
     OR (cadence LIKE 'every:%' AND cadence_next_at IS NOT NULL)
     OR ((cadence LIKE 'daily@%' OR cadence LIKE 'weekly:%') AND schedule_timezone IS NOT NULL AND cadence_next_at IS NOT NULL)
   );

@@ -44,6 +44,15 @@ type agentReminder struct {
 	TerminalReason            pgtype.Text
 }
 
+type reminderQueryRower interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+type reminderAnchorSnapshot struct {
+	Excerpt   string
+	Available bool
+}
+
 type agentReminderResponse struct {
 	ID                        string  `json:"id"`
 	Title                     string  `json:"title"`
@@ -295,10 +304,11 @@ func (h *Handler) AgentTransportScheduleReminder(w http.ResponseWriter, r *http.
 		return
 	}
 	h.publishAgentReminderChanged(r.Context(), created.WorkspaceID, created.AgentID)
+	targetKind, targetID, targetSlug := reminderActivityTarget(created, true)
 	h.recordAgentActivityEvent(r.Context(), h.DB,
 		origin.workspaceID, task.AgentID, task.RuntimeID, task.ID,
 		activityKindCustom, "reminder_scheduled", "info",
-		reminderTargetKind(threadRootID), origin.channelID, title,
+		targetKind, targetID, targetSlug,
 		"", "Agent scheduled a future self-wake",
 		map[string]any{"reminder_id": uuidToString(created.ID), "fire_at": schedule.FireAt.Format(time.RFC3339)},
 	)
@@ -554,6 +564,11 @@ func (h *Handler) AgentTransportUpdateReminder(w http.ResponseWriter, r *http.Re
 			return
 		}
 		nextFireAt = parsed
+		// An explicit instant replaces the recurrence with a one-shot. Keep the
+		// historical timezone lock so a later calendar recurrence resumes in the
+		// same zone, but do not expose it while the definition is one-shot.
+		nextCadence = nil
+		nextCadenceAt = nil
 	}
 
 	row := tx.QueryRow(r.Context(), `
@@ -734,13 +749,21 @@ func (h *Handler) resolveReminderID(w http.ResponseWriter, ctx context.Context, 
 }
 
 func (h *Handler) recordReminderActivity(ctx context.Context, task db.AgentTaskQueue, reminder agentReminder, eventType, message string) {
+	targetKind, targetID, targetSlug := reminderActivityTarget(reminder, true)
 	h.recordAgentActivityEvent(ctx, h.DB,
 		reminder.WorkspaceID, reminder.AgentID, task.RuntimeID, task.ID,
 		activityKindCustom, eventType, "info",
-		reminderTargetKind(reminder.AnchorThreadRootMessageID), reminder.AnchorChannelID, reminder.Title,
+		targetKind, targetID, targetSlug,
 		"", message,
 		map[string]any{"reminder_id": uuidToString(reminder.ID), "fire_at": timestampToString(reminder.FireAt)},
 	)
+}
+
+func reminderActivityTarget(reminder agentReminder, anchorAvailable bool) (string, pgtype.UUID, string) {
+	if anchorAvailable && reminder.AnchorThreadRootMessageID.Valid {
+		return "thread", reminder.AnchorThreadRootMessageID, uuidToString(reminder.AnchorChannelID)
+	}
+	return "channel", reminder.AnchorChannelID, ""
 }
 
 func reminderTargetKind(threadRootID pgtype.UUID) string {
@@ -928,15 +951,29 @@ func (h *Handler) fireReminderOccurrence(ctx context.Context, reminderID, occurr
 	if !agent.RuntimeID.Valid {
 		return h.terminalizeReminderOccurrence(ctx, tx, reminder, occurrenceID, "agent_runtime_unavailable")
 	}
-	ch := ChannelResponse{ID: uuidToString(reminder.AnchorChannelID), WorkspaceID: uuidToString(reminder.WorkspaceID), Name: channelName, Kind: channelKind}
-	var anchorExcerpt string
-	anchorAvailable := false
-	if reminder.AnchorMessageID.Valid {
-		var deletedAt pgtype.Timestamptz
-		if err := tx.QueryRow(ctx, `SELECT content, deleted_at FROM channel_message WHERE id = $1 AND channel_id = $2 AND workspace_id = $3`, reminder.AnchorMessageID, reminder.AnchorChannelID, reminder.WorkspaceID).Scan(&anchorExcerpt, &deletedAt); err == nil && !deletedAt.Valid {
-			anchorAvailable = true
+	// Serialize fire against channel membership removal. SELECT FOR UPDATE holds
+	// the current membership row until the fire transaction commits, so either
+	// the complete occurrence wins or a remove-first transaction terminalizes
+	// with no receipt, task, or wake.
+	var memberID pgtype.UUID
+	if err := tx.QueryRow(ctx, `
+		SELECT member_id
+		FROM channel_member
+		WHERE channel_id = $1 AND workspace_id = $2
+		  AND member_type = 'agent' AND member_id = $3
+		FOR UPDATE`, reminder.AnchorChannelID, reminder.WorkspaceID, reminder.AgentID).Scan(&memberID); err != nil {
+		if errorsIsNoRows(err) {
+			return h.terminalizeReminderOccurrence(ctx, tx, reminder, occurrenceID, "agent_removed_from_anchor_channel")
 		}
+		return err
 	}
+	ch := ChannelResponse{ID: uuidToString(reminder.AnchorChannelID), WorkspaceID: uuidToString(reminder.WorkspaceID), Name: channelName, Kind: channelKind}
+	anchor, err := loadReminderAnchorSnapshot(ctx, tx, reminder)
+	if err != nil {
+		return err
+	}
+	anchorExcerpt := anchor.Excerpt
+	anchorAvailable := anchor.Available
 
 	eventParams, err := json.Marshal(map[string]any{
 		"reminder_id": uuidToString(reminder.ID), "occurrence_id": uuidToString(occurrenceID),
@@ -946,7 +983,12 @@ func (h *Handler) fireReminderOccurrence(ctx context.Context, reminderID, occurr
 	if err != nil {
 		return err
 	}
-	threadID := reminderThreadID(ctx, tx, reminder.AnchorThreadRootMessageID)
+	receiptThreadRootID := pgtype.UUID{}
+	var threadID *string
+	if anchorAvailable {
+		receiptThreadRootID = reminder.AnchorThreadRootMessageID
+		threadID = reminderThreadID(ctx, tx, reminder.AnchorThreadRootMessageID)
+	}
 	externalID := "reminder_occurrence:" + uuidToString(occurrenceID)
 	receiptContent := "Reminder fired: " + reminder.Title
 	if !anchorAvailable {
@@ -956,7 +998,7 @@ func (h *Handler) fireReminderOccurrence(ctx context.Context, reminderID, occurr
 		"system", pgtype.UUID{}, "system", receiptContent,
 		[]protocol.MessagePart{{Type: protocol.MessagePartTypeSystemEvent, Event: "reminder_fired", EventParams: eventParams}},
 		"multica", &externalID, nil, pgtype.UUID{}, pgtype.UUID{}, nil,
-		reminder.AnchorThreadRootMessageID, threadID, 0)
+		receiptThreadRootID, threadID, 0)
 	if err != nil {
 		return err
 	}
@@ -970,7 +1012,7 @@ func (h *Handler) fireReminderOccurrence(ctx context.Context, reminderID, occurr
 	if anchorAvailable {
 		trigger.ID = uuidToString(reminder.AnchorMessageID)
 	}
-	if reminder.AnchorThreadRootMessageID.Valid {
+	if anchorAvailable && reminder.AnchorThreadRootMessageID.Valid {
 		root := uuidToString(reminder.AnchorThreadRootMessageID)
 		trigger.ThreadRootMessageID = &root
 		trigger.ThreadID = threadID
@@ -1048,14 +1090,48 @@ func (h *Handler) fireReminderOccurrence(ctx context.Context, reminderID, occurr
 	h.publishAgentReminderChanged(ctx, reminder.WorkspaceID, reminder.AgentID)
 	h.publishChannelToMembers(ctx, protocol.EventChannelMessage, uuidToString(reminder.WorkspaceID), "system", "", reminder.AnchorChannelID, receipt)
 	h.TaskService.PublishChatTaskQueued(ctx, task, false)
+	targetKind, targetID, targetSlug := reminderActivityTarget(reminder, anchorAvailable)
 	h.recordAgentActivityEvent(ctx, h.DB,
 		reminder.WorkspaceID, reminder.AgentID, agent.RuntimeID, task.ID,
 		activityKindCustom, "reminder_fired", "info",
-		reminderTargetKind(reminder.AnchorThreadRootMessageID), reminder.AnchorChannelID, reminder.Title,
+		targetKind, targetID, targetSlug,
 		"", "Reminder fired and woke the agent",
 		map[string]any{"reminder_id": uuidToString(reminder.ID), "occurrence_id": uuidToString(occurrenceID)},
 	)
 	return nil
+}
+
+func loadReminderAnchorSnapshot(ctx context.Context, q reminderQueryRower, reminder agentReminder) (reminderAnchorSnapshot, error) {
+	if !reminder.AnchorMessageID.Valid {
+		return reminderAnchorSnapshot{}, nil
+	}
+	var excerpt string
+	err := q.QueryRow(ctx, `
+		SELECT anchor.content
+		FROM channel_message anchor
+		WHERE anchor.id = $1
+		  AND anchor.channel_id = $2
+		  AND anchor.workspace_id = $3
+		  AND anchor.deleted_at IS NULL
+		  AND (
+		    $4::uuid IS NULL
+		    OR EXISTS (
+		      SELECT 1
+		      FROM channel_message root
+		      WHERE root.id = $4
+		        AND root.channel_id = $2
+		        AND root.workspace_id = $3
+		        AND root.deleted_at IS NULL
+		    )
+		  )`, reminder.AnchorMessageID, reminder.AnchorChannelID, reminder.WorkspaceID,
+		reminder.AnchorThreadRootMessageID).Scan(&excerpt)
+	if err != nil {
+		if errorsIsNoRows(err) {
+			return reminderAnchorSnapshot{}, nil
+		}
+		return reminderAnchorSnapshot{}, err
+	}
+	return reminderAnchorSnapshot{Excerpt: excerpt, Available: true}, nil
 }
 
 func reminderFireCreatorID(ctx context.Context, exec db.DBTX, workspaceID, initiatorUserID, agentOwnerID pgtype.UUID) (pgtype.UUID, error) {
@@ -1186,11 +1262,6 @@ func buildReminderPrompt(ch ChannelResponse, reminder agentReminder, occurrenceI
 	fmt.Fprintf(&b, "Reminder id: %s\n", uuidToString(reminder.ID))
 	fmt.Fprintf(&b, "Occurrence id: %s\n", uuidToString(occurrenceID))
 	fmt.Fprintf(&b, "Reminder title: %s\n", reminder.Title)
-	if ch.Kind == "dm" {
-		b.WriteString("Anchored surface: direct message\n")
-	} else {
-		fmt.Fprintf(&b, "Anchored surface: #%s\n", ch.Name)
-	}
 	if reminder.Cadence.Valid {
 		fmt.Fprintf(&b, "Cadence: %s\n", reminder.Cadence.String)
 	}
@@ -1198,14 +1269,23 @@ func buildReminderPrompt(ch ChannelResponse, reminder agentReminder, occurrenceI
 		fmt.Fprintf(&b, "Locked schedule timezone: %s\n", reminder.ScheduleTimezone.String)
 	}
 	if anchorAvailable && reminder.AnchorMessageID.Valid {
+		if ch.Kind == "dm" {
+			b.WriteString("Anchored surface: direct message\n")
+		} else {
+			fmt.Fprintf(&b, "Anchored surface: #%s\n", ch.Name)
+		}
 		fmt.Fprintf(&b, "Current message id: %s\n", uuidToString(reminder.AnchorMessageID))
 	} else {
-		b.WriteString("Anchor message: unavailable (deleted); reply to the preserved channel/thread surface if useful.\n")
+		b.WriteString("Anchor message: unavailable (deleted).\n")
 	}
 	if strings.TrimSpace(anchorExcerpt) != "" {
 		fmt.Fprintf(&b, "Anchor message excerpt: %s\n", truncateForActivity(anchorExcerpt, 500))
 	}
-	b.WriteString("Check the current state now. Reply in the anchored channel/thread only if there is a useful update, decision, follow-up question, or conclusion. If nothing changed, you may reschedule or finish without noise.\n")
+	if anchorAvailable {
+		b.WriteString("Check the current state now. Reply in the anchored channel/thread only if there is a useful update, decision, follow-up question, or conclusion. If nothing changed, you may reschedule or finish without noise.\n")
+	} else {
+		b.WriteString("Check the current state now. Send a message only if there is a useful update, decision, follow-up question, or conclusion. If nothing changed, you may reschedule or finish without noise.\n")
+	}
 	b.WriteString(channelOutputContractInstruction)
 	b.WriteString("\n")
 	b.WriteString(channelContinuationInstruction)

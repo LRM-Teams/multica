@@ -211,12 +211,19 @@ vi.mock("../../i18n/use-t", () => ({
   }),
 }));
 
-function makeMessage(id: string, content: string): ChannelMessage {
+function makeMessage(
+  id: string,
+  content: string,
+  overrides: Partial<ChannelMessage> = {},
+): ChannelMessage {
+  // Space default timestamps 10 minutes apart so Slack-style compact grouping
+  // (5-minute window) does not collapse fixture rows unless a test opts in.
+  const n = Number.parseInt(id.replace(/\D/g, ""), 10) || 1;
   return {
     id,
     channel_id: "c1",
     workspace_id: "w1",
-    seq: 1,
+    seq: n,
     type: "agent",
     author_id: "agent-1",
     author_name: "Research Agent",
@@ -224,7 +231,8 @@ function makeMessage(id: string, content: string): ChannelMessage {
     source: "multica",
     external_message_id: null,
     client_message_id: null,
-    created_at: "2026-06-17T09:15:00Z",
+    created_at: new Date(Date.parse("2026-06-17T09:15:00Z") + (n - 1) * 10 * 60_000).toISOString(),
+    ...overrides,
   };
 }
 
@@ -644,5 +652,76 @@ describe("ChannelMessageList message edit / delete wiring", () => {
     const tombstone = screen.getByTestId("message-tombstone");
     expect(tombstone).toHaveTextContent("This message was deleted");
     expect(screen.queryByText("gone")).not.toBeInTheDocument();
+  });
+});
+
+describe("MessageViewport Slack-style compact grouping (LRM-255)", () => {
+  it("hides avatar+name on same-author continuation within 5 minutes (Frank 11:28→11:29)", () => {
+    render(
+      <MessageViewport
+        messages={[
+          makeMessage("m1", "858 pr怎么还是raft？", {
+            type: "user",
+            author_id: "user-frank",
+            author_name: "Frank An",
+            created_at: "2026-07-22T03:28:00Z",
+          }),
+          makeMessage("m2", "draft？", {
+            type: "user",
+            author_id: "user-frank",
+            author_name: "Frank An",
+            created_at: "2026-07-22T03:29:00Z",
+          }),
+        ]}
+        currentUserId="user-other"
+        emptyLabel="No messages"
+      />,
+    );
+
+    const rows = screen.getAllByTestId("message-row");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).not.toHaveAttribute("data-compact");
+    expect(rows[1]).toHaveAttribute("data-compact", "true");
+
+    const bubbles = screen.getAllByTestId("message-bubble");
+    expect(bubbles[0]).not.toHaveAttribute("data-compact");
+    expect(bubbles[1]).toHaveAttribute("data-compact", "true");
+
+    // Lead keeps the author chrome; continuation drops the name and shows a gutter clock.
+    // List mock resolves display names via useActorName → "Test Actor".
+    expect(screen.getByText("Test Actor")).toBeInTheDocument();
+    expect(screen.getAllByText("Test Actor")).toHaveLength(1);
+    expect(screen.getByTestId("message-gutter-time")).toBeInTheDocument();
+    expect(screen.getByText("858 pr怎么还是raft？")).toBeInTheDocument();
+    expect(screen.getByText("draft？")).toBeInTheDocument();
+  });
+
+  it("keeps separate heads when the gap exceeds 5 minutes", () => {
+    render(
+      <MessageViewport
+        messages={[
+          makeMessage("m1", "first", {
+            type: "user",
+            author_id: "user-frank",
+            author_name: "Frank An",
+            created_at: "2026-07-22T03:28:00Z",
+          }),
+          makeMessage("m2", "later", {
+            type: "user",
+            author_id: "user-frank",
+            author_name: "Frank An",
+            created_at: "2026-07-22T03:34:00Z",
+          }),
+        ]}
+        currentUserId="user-other"
+        emptyLabel="No messages"
+      />,
+    );
+
+    expect(screen.queryByTestId("message-gutter-time")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Test Actor")).toHaveLength(2);
+    for (const row of screen.getAllByTestId("message-row")) {
+      expect(row).not.toHaveAttribute("data-compact");
+    }
   });
 });

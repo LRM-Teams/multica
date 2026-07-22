@@ -455,6 +455,30 @@ describe("ChannelMessageBubble", () => {
     expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-own", "false");
   });
 
+  it("compact continuation hides avatar+name and exposes gutter time (LRM-255)", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          type: "user",
+          author_id: "user-frank",
+          author_name: "Frank An",
+          content: "draft？",
+          created_at: "2026-07-22T03:29:00Z",
+        })}
+        currentUserId="user-1"
+        compact
+      />,
+    );
+
+    const bubble = screen.getByTestId("message-bubble");
+    expect(bubble).toHaveAttribute("data-compact", "true");
+    expect(screen.queryByText("Frank An")).not.toBeInTheDocument();
+    expect(screen.getByText("draft？")).toBeInTheDocument();
+    expect(screen.getByTestId("message-gutter-time")).toBeInTheDocument();
+    // Per-message action bar still mounts (shown on hover via CSS).
+    expect(screen.getByTestId("message-action-bar")).toBeInTheDocument();
+  });
+
   it("shows muted Owner role after a workspace owner name (LRM-232)", () => {
     render(
       <ChannelMessageBubble

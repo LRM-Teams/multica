@@ -18,6 +18,7 @@ import { cn } from "@multica/ui/lib/utils";
 import { ChannelMessageBubble } from "./channel-message-bubble";
 import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
 import { foldedIssueEventIds } from "./channel-system-event";
+import { computeCompactMessageIds } from "./message-grouping";
 import { useMessageDayDividers } from "../../i18n/use-message-time";
 import { useT } from "../../i18n/use-t";
 import { useNewMessagesDivider } from "../hooks/use-new-messages-divider";
@@ -241,6 +242,13 @@ function MessageViewport({
   const channelId = messages[0]?.channel_id;
   const canLoadOlder = !!hasOlder && !loadingOlder && !!onLoadOlder;
   const dayDividers = useMessageDayDividers(messages);
+  // Slack-style compact grouping (LRM-255): same author within 5 minutes shares
+  // one avatar+name lead; continuations hide chrome. Pure presentation — ids
+  // stay in `messages` so Virtuoso anchoring is untouched.
+  const compactMessageIds = useMemo(
+    () => computeCompactMessageIds(messages, { dayDividerIds: dayDividers }),
+    [messages, dayDividers],
+  );
   // Fold redundant consecutive issue-lifecycle rows (item #7): a same-source
   // completed/status→done pair, or an exact repeat, renders once. Derived as a
   // Set (never a filtered array) so Virtuoso's data/indices — and thus the
@@ -409,6 +417,7 @@ function MessageViewport({
     const dividerLabel = dayDividers.get(msg.id);
     const isUnreadAnchor = newMessagesDivider?.anchorMessageId === msg.id;
     const collapseLongContent = lastReadSeq != null && msg.seq <= lastReadSeq;
+    const compact = compactMessageIds.has(msg.id);
     return (
       <Fragment key={msg.id}>
         {dividerLabel && <DateDivider label={dividerLabel} />}
@@ -425,14 +434,16 @@ function MessageViewport({
               messageRefMap.delete(msg.id);
             }
           }}
-          className="px-5 pt-1.5"
+          className={cn("px-5", compact ? "pt-0.5" : "pt-1.5")}
           data-testid="message-row"
+          data-compact={compact ? "true" : undefined}
         >
           <ChannelMessageBubble
             message={msg}
             currentUserId={currentUserId}
             ownName={ownName}
             highlighted={msg.id === highlightMessageId}
+            compact={compact}
             onOpenThread={onOpenThread}
             onScrollTo={onScrollToMessage}
             onReact={onReact}

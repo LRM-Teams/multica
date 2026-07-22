@@ -559,7 +559,7 @@
     "anchor_unavailable": "アンカーは利用できません",
     "one_shot": "一回限り",
     "next_fire_label": "次回",
-    "last_fire_label": "発火",
+    "fired_label": "発火",
     "timezone_label": "タイムゾーン"
   },
   "task_failure": {

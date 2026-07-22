@@ -284,7 +284,7 @@ function FiredRowView({ row }: { row: FiredReminderRow }) {
       </div>
       <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 pl-5 text-muted-foreground">
         <span>
-          {t(($) => $.reminders.last_fire_label)}: {formatInstant(row.firedAt)}
+          {t(($) => $.reminders.fired_label)}: {formatInstant(row.firedAt)}
         </span>
         {/* This describes the DEFINITION's own state, distinct from "this row
             fired" — a recurring definition that's still `scheduled` must not

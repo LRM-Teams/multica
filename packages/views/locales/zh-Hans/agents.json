@@ -567,7 +567,7 @@
     "anchor_unavailable": "锚点不可用",
     "one_shot": "一次性",
     "next_fire_label": "下次",
-    "last_fire_label": "触发于",
+    "fired_label": "触发于",
     "timezone_label": "时区"
   },
   "task_failure": {

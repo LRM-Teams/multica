@@ -579,7 +579,7 @@
     "anchor_unavailable": "앵커를 사용할 수 없음",
     "one_shot": "일회성",
     "next_fire_label": "다음",
-    "last_fire_label": "발생",
+    "fired_label": "발생",
     "timezone_label": "시간대"
   },
   "task_failure": {

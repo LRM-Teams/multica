@@ -579,7 +579,7 @@
     "anchor_unavailable": "Anchor unavailable",
     "one_shot": "One-time",
     "next_fire_label": "Next",
-    "last_fire_label": "Fired",
+    "fired_label": "Fired",
     "timezone_label": "Timezone"
   },
   "task_failure": {

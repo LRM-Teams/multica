@@ -682,7 +682,7 @@ export function ChannelMessageBubble({
         selfMentioned && SELF_MENTION_ROW_CLASS,
         highlighted && "bg-primary/10 ring-1 ring-primary/25 duration-0 hover:bg-primary/10 focus-within:bg-primary/10",
         mobileThreadTapActive && "bg-primary/[0.04] ring-1 ring-primary/45 duration-75",
-        isLocalPending && "opacity-70",
+        // Pending is silent (Slack / LRM-271): no opacity flash on ACK.
         isLocalFailed && "opacity-90",
       )}
       onPointerDown={handlePointerDown}
@@ -885,14 +885,6 @@ export function ChannelMessageBubble({
                 >
                   {t(($) => $.message.retry_send)}
                 </button>
-              </div>
-            )}
-            {isLocalPending && (
-              <div
-                data-testid="message-send-pending"
-                className="mt-1 text-[11px] text-muted-foreground"
-              >
-                {t(($) => $.message.sending)}
               </div>
             )}
             {isContentCollapsed && (

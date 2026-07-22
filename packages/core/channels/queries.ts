@@ -64,7 +64,13 @@ export function archivedChannelsOptions(wsId: string) {
 export function channelMessagesOptions(channelId: string) {
   return queryOptions({
     queryKey: channelKeys.messages(channelId),
-    queryFn: () => api.listChannelMessages(channelId),
+    queryFn: async ({ client, queryKey }) => {
+      const incoming = await api.listChannelMessages(channelId);
+      // Refetch must not wipe in-flight / failed optimistic bubbles (LRM-280).
+      if (!client) return incoming;
+      const previous = client.getQueryData<ChannelMessage[]>(queryKey);
+      return preserveLocalSendMessages(previous, incoming);
+    },
     enabled: !!channelId,
   });
 }
@@ -94,13 +100,23 @@ export function channelMessagesPageOptions(
   const aroundSeq = options.aroundSeq ?? null;
   return infiniteQueryOptions({
     queryKey: channelKeys.messagesPage(channelId),
-    queryFn: ({ pageParam }) =>
-      api.listChannelMessagesPage(
+    queryFn: async ({ pageParam, client, queryKey }) => {
+      const page = await api.listChannelMessagesPage(
         channelId,
         isAroundPageParam(pageParam)
           ? { around: pageParam.around, limit }
           : { before: pageParam, limit },
-      ),
+      );
+      // Optimistic sends live on the latest window (page 0). Older-history pages
+      // must not re-attach them (LRM-280).
+      const isLatestWindow = pageParam == null || isAroundPageParam(pageParam);
+      if (!isLatestWindow || !client) return page;
+      const previous = client.getQueryData<InfiniteData<ChannelMessagesPage>>(queryKey);
+      return {
+        ...page,
+        messages: preserveLocalSendMessages(previous?.pages[0]?.messages, page.messages),
+      };
+    },
     // `around_seq` anchors ONLY the cold first fetch: `initialPageParam` is used
     // only when there is no cached data, so reopening a channel (a cache hit
     // under staleTime:Infinity) reuses the existing window and never
@@ -171,6 +187,34 @@ export function channelMessagesFirstItemIndex(data: InfiniteData<ChannelMessages
 
 function isLocalSendRow(message: ChannelMessage): boolean {
   return message.local_send_status === "pending" || message.local_send_status === "failed";
+}
+
+/**
+ * Keep client-only pending/failed bubbles across list/thread refetches.
+ *
+ * `invalidateChannelMessages` / reaction / thread-send side effects replace the
+ * cache with server pages. Without this merge, an in-flight send disappears; if
+ * HTTP then errors, `markOptimisticChannelMessageFailed` has no row to patch and
+ * the message is silently lost (LRM-280).
+ */
+export function preserveLocalSendMessages(
+  previous: readonly ChannelMessage[] | undefined,
+  incoming: ChannelMessage[],
+): ChannelMessage[] {
+  if (!previous?.length) return incoming;
+  const orphans: ChannelMessage[] = [];
+  for (const row of previous) {
+    if (!isLocalSendRow(row)) continue;
+    const clientId = row.client_message_id;
+    const onServer = incoming.some(
+      (m) =>
+        m.id === row.id ||
+        (!!clientId && (m.client_message_id === clientId || m.id === clientId)),
+    );
+    if (!onServer) orphans.push(row);
+  }
+  if (!orphans.length) return incoming;
+  return [...incoming, ...orphans];
 }
 
 /**
@@ -304,7 +348,11 @@ function asCacheMessage(
   existing: ChannelMessage | undefined,
   siblings: readonly ChannelMessage[] | undefined,
 ): ChannelMessage {
-  const enriched = withPreservedAuthorAvatar(incoming, existing, siblings);
+  let enriched = withPreservedAuthorAvatar(incoming, existing, siblings);
+  // Keep client_message_id so list identity / retry stay stable when ACK omits it.
+  if (!enriched.client_message_id && existing?.client_message_id) {
+    enriched = { ...enriched, client_message_id: existing.client_message_id };
+  }
   // Temp optimistic rows use `id === client_message_id` and may carry
   // `local_send_status`. Authoritative HTTP ACK / WS rows use a server id and
   // must never keep a client-only pending/failed badge (LRM-271).
@@ -342,7 +390,15 @@ export function channelMessageThreadOptions(
       options?.before,
       options?.beforeId,
     ] as const,
-    queryFn: () => api.listChannelMessageThread(channelId, messageId, options),
+    queryFn: async ({ client, queryKey }) => {
+      const page = await api.listChannelMessageThread(channelId, messageId, options);
+      if (!client) return page;
+      const previous = client.getQueryData<ChannelThreadMessagesPage>(queryKey);
+      return {
+        ...page,
+        messages: preserveLocalSendMessages(previous?.messages, page.messages),
+      };
+    },
     enabled: !!channelId && !!messageId,
   });
 }

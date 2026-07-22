@@ -15,25 +15,9 @@ import {
 import { dmKeys } from "../dm/queries";
 import type { DMItem } from "../dm/types";
 import type { ChannelThreadMessagesPage, MessagePart } from "../types";
-import type { QueryClient } from "@tanstack/react-query";
 
 function isConflictError(err: unknown): boolean {
   return err instanceof ApiError && err.status === 409;
-}
-
-/** LRM-271: never leave Sending… past the normal-network budget. */
-const PENDING_SEND_FAIL_MS = 3_000;
-
-function scheduleOptimisticSendWatchdog(
-  qc: QueryClient,
-  channelId: string,
-  clientMessageId: string,
-  threadRootMessageId?: string | null,
-): () => void {
-  const timer = setTimeout(() => {
-    markOptimisticChannelMessageFailed(qc, channelId, clientMessageId, threadRootMessageId);
-  }, PENDING_SEND_FAIL_MS);
-  return () => clearTimeout(timer);
 }
 
 function viewerAuthorFields() {
@@ -167,21 +151,18 @@ export function useSendChannelMessage() {
         status: "pending",
       });
       insertOptimisticChannelMessage(qc, optimistic);
-      return {
-        cancelWatchdog: scheduleOptimisticSendWatchdog(qc, vars.channelId, vars.clientMessageId),
-      };
     },
-    onError: (err, vars, ctx) => {
-      ctx?.cancelWatchdog?.();
+    onError: (err, vars) => {
       if (!vars.clientMessageId) return;
       if (isConflictError(err)) {
         removeOptimisticChannelMessage(qc, vars.channelId, vars.clientMessageId);
         return;
       }
+      // Real transport / server failure only — never auto-fail while the request
+      // is still in flight (LRM-280; API abort budget is SEND_TIMEOUT_MS).
       markOptimisticChannelMessageFailed(qc, vars.channelId, vars.clientMessageId);
     },
-    onSuccess: (msg, _vars, ctx) => {
-      ctx?.cancelWatchdog?.();
+    onSuccess: (msg) => {
       upsertChannelMessageInCache(qc, msg);
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
     },
@@ -291,17 +272,8 @@ export function useSendChannelThreadMessage() {
         status: "pending",
       });
       insertOptimisticThreadMessage(qc, optimistic, vars.messageId);
-      return {
-        cancelWatchdog: scheduleOptimisticSendWatchdog(
-          qc,
-          vars.channelId,
-          vars.clientMessageId,
-          vars.messageId,
-        ),
-      };
     },
-    onError: (err, vars, ctx) => {
-      ctx?.cancelWatchdog?.();
+    onError: (err, vars) => {
       if (!vars.clientMessageId) return;
       if (isConflictError(err)) {
         removeOptimisticChannelMessage(qc, vars.channelId, vars.clientMessageId, vars.messageId);
@@ -309,8 +281,7 @@ export function useSendChannelThreadMessage() {
       }
       markOptimisticChannelMessageFailed(qc, vars.channelId, vars.clientMessageId, vars.messageId);
     },
-    onSuccess: (msg, vars, ctx) => {
-      ctx?.cancelWatchdog?.();
+    onSuccess: (msg, vars) => {
       // Prefer the mutation's thread root — ACK payloads occasionally omit
       // `thread_root_message_id`, which previously left the optimistic row pending forever.
       const rootId = msg.thread_root_message_id ?? vars.messageId;
@@ -319,7 +290,8 @@ export function useSendChannelThreadMessage() {
         : { ...msg, thread_root_message_id: vars.messageId };
       upsertChannelMessageThreadInCache(qc, authoritative, rootId);
       // Upsert is authoritative for this send; avoid an immediate thread refetch
-      // that can race the ACK and prolong the Sending… state (LRM-271).
+      // that can race the ACK (LRM-271). Channel-list invalidate preserves any
+      // still-in-flight local sends via preserveLocalSendMessages (LRM-280).
       invalidateChannelMessages(qc, msg.channel_id);
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
       qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });

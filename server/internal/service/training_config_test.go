@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -147,6 +148,8 @@ func TestNewTrainingSessionDeps_DAGWiredInProductionPath(t *testing.T) {
 	assert.NotNil(t, deps)
 	assert.NotNil(t, deps.DAG, "DAG must be wired in the config-present production path")
 	assert.True(t, deps.DAG.Enabled())
+	require.NotNil(t, deps.DAG.msgs, "production DAG must read local task messages")
+	assert.Equal(t, q, deps.DAG.msgs)
 
 	// Disabled: DAG is still wired (non-nil) but reports disabled.
 	cfg.InteractionDAGEnabled = false

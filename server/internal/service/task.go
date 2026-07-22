@@ -1909,10 +1909,13 @@ func (s *TaskService) completeTask(ctx context.Context, taskID pgtype.UUID, resu
 	// RouteTerminalTrainingTask ends the RL session (CloseSegmentForEvent exports
 	// the just-closed trajectory over the live session). One-segment-per-task;
 	// the delegation edge to the parent is recorded here at the child's close.
-	if task.IssueID.Valid {
-		if issue, err := s.Queries.GetIssue(ctx, task.IssueID); err == nil {
-			s.closeSegmentForTerminal(ctx, task, util.UUIDToString(issue.ProjectID), s.leanEnvSnapshot(ctx, issue.ProjectID))
-		}
+	// Message dispatch roots carry their project through chat_session rather
+	// than issue_id, so resolve both task shapes before recording.
+	if projectID, err := s.terminalTaskProjectID(ctx, task); err != nil {
+		slog.Warn("interaction_dag: terminal task project lookup failed",
+			"task_id", util.UUIDToString(task.ID), "error", err)
+	} else if projectID.Valid {
+		s.closeSegmentForTerminal(ctx, task, util.UUIDToString(projectID), s.leanEnvSnapshot(ctx, projectID))
 	}
 	s.RouteTerminalTrainingTask(ctx, task)
 	s.maybeCleanupEphemeralSandbox(ctx, task)
@@ -2064,6 +2067,24 @@ func (s *TaskService) completeTask(ctx context.Context, taskID pgtype.UUID, resu
 		CompletedNow: true,
 		RadarRun:     radarRun,
 	}, nil
+}
+
+func (s *TaskService) terminalTaskProjectID(ctx context.Context, task db.AgentTaskQueue) (pgtype.UUID, error) {
+	if task.IssueID.Valid {
+		issue, err := s.Queries.GetIssue(ctx, task.IssueID)
+		if err != nil {
+			return pgtype.UUID{}, err
+		}
+		return issue.ProjectID, nil
+	}
+	if task.ChatSessionID.Valid {
+		session, err := s.Queries.GetChatSession(ctx, task.ChatSessionID)
+		if err != nil {
+			return pgtype.UUID{}, err
+		}
+		return session.ProjectID, nil
+	}
+	return pgtype.UUID{}, nil
 }
 
 func isTerminalAgentTaskStatus(status string) bool {

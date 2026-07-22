@@ -167,7 +167,7 @@ func NewTrainingSessionDeps(cfg TrainingConfig, q *db.Queries) *TrainingSessionD
 		Closer:        client,
 		ProxyURL:      cfg.ProxyURL,
 		DefaultReward: cfg.DefaultReward,
-		DAG:           NewInteractionDAGService(q, client, cfg.InteractionDAGEnabled),
+		DAG:           NewInteractionDAGServiceWithMessages(q, q, client, cfg.InteractionDAGEnabled),
 		Diagnosis:     buildDiagnoser(cfg, q),
 	}
 }

@@ -40,6 +40,7 @@ const (
 	EventTaskMessage               = "task:message"
 	EventAgentActivityStep         = "agent_activity:step"
 	EventAgentActivityEvent        = "agent_activity:event"
+	EventAgentMemoryUpdated        = "agent.memory_updated"
 	EventTaskCancelled             = "task:cancelled" // * → cancelled
 
 	// Inbox events

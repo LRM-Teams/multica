@@ -3044,6 +3044,9 @@ func (d *Daemon) reportTaskResultForTask(ctx context.Context, task Task, result 
 			err = d.client.CompleteTask(ctx, taskID, result.Comment, result.BranchName, result.Action, result.Target, result.Type, result.SessionID, result.WorkDir, result.OutputSuppressedReason, result.Parts, result.Reaction, result.RuntimeStats)
 		}
 		if err == nil {
+			if result.Status == "completed" {
+				d.reportAgentMemoryWrites(ctx, task)
+			}
 			return
 		}
 		// CompleteTask retries transient errors internally. A transient

@@ -37,6 +37,7 @@ export function MessageBody({
   highlightQuery,
   compact = false,
   sourceMessageId,
+  consumedAttachmentIds,
 }: {
   content: string;
   parts?: ChannelMessage["parts"];
@@ -44,10 +45,17 @@ export function MessageBody({
   highlightQuery?: string;
   compact?: boolean;
   sourceMessageId?: string;
+  consumedAttachmentIds?: readonly string[];
 }) {
   const { getActorName } = useActorName();
   const resolveMentionPreview = mentionResolverFrom(getActorName);
-  const effectiveParts = resolveMessageParts(content, parts);
+  const resolvedParts = resolveMessageParts(content, parts);
+  const consumedAttachmentIdSet = new Set(consumedAttachmentIds ?? []);
+  const effectiveParts = resolvedParts?.filter(
+    (part) =>
+      part.type !== "attachment" ||
+      !consumedAttachmentIdSet.has(part.attachment_id),
+  );
   const hasAttachmentParts = collectAttachmentParts(effectiveParts).length > 0;
 
   const body = (() => {

@@ -337,6 +337,8 @@ func TestChatRuntimeBriefIsLeanButKeepsFastChatPaths(t *testing.T) {
 		"--sticker <id>",
 		"--voice",
 		"explicitly asks for a spoken/voice reply",
+		"`--voice` is the only supported voice-reply path",
+		"do not synthesize, encode, upload, or attach an audio file",
 		"Common sticker fast path",
 		"greeting `hi`",
 		"multica sticker search <query>",

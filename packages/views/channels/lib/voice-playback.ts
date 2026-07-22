@@ -13,10 +13,17 @@ export type VoicePlayback = {
   stop: () => void;
 };
 
+export type PreparedVoiceAudio = {
+  audio: ArrayBuffer;
+  durationMs: number | null;
+};
+
 let audioContext: AudioContext | null = null;
 let activeSource: AudioBufferSourceNode | null = null;
 const pendingScopes = new Map<string, PendingVoiceScope>();
 const claimedAutoplayMessages = new Map<string, number>();
+const preparedVoiceAudio = new Map<string, Promise<PreparedVoiceAudio>>();
+const MAX_PREPARED_VOICE_AUDIO = 8;
 
 export function voicePlaybackScope(channelId: string, threadRootMessageId?: string | null): string {
   return `${channelId}:${threadRootMessageId ?? "main"}`;
@@ -77,11 +84,31 @@ export function claimVoiceAutoplay(
   return true;
 }
 
-export async function startVoicePlayback(text: string): Promise<VoicePlayback> {
+/** Fetch voice bytes without playing them so the bubble can show real duration. */
+export function prepareVoiceAudio(text: string): Promise<PreparedVoiceAudio> {
+  const transcript = text.trim();
+  if (!transcript) return Promise.reject(new Error("voice transcript is required"));
+  const cached = preparedVoiceAudio.get(transcript);
+  if (cached) return cached;
+
+  const pending = api.synthesizeVoice(transcript).catch((error: unknown) => {
+    preparedVoiceAudio.delete(transcript);
+    throw error;
+  });
+  preparedVoiceAudio.set(transcript, pending);
+  if (preparedVoiceAudio.size > MAX_PREPARED_VOICE_AUDIO) {
+    const oldest = preparedVoiceAudio.keys().next().value as string | undefined;
+    if (oldest && oldest !== transcript) preparedVoiceAudio.delete(oldest);
+  }
+  return pending;
+}
+
+export async function startPreparedVoicePlayback(
+  prepared: PreparedVoiceAudio,
+): Promise<VoicePlayback> {
   const context = getAudioContext();
   await context.resume();
-  const encoded = await api.synthesizeVoice(text);
-  const decoded = await context.decodeAudioData(encoded.slice(0));
+  const decoded = await context.decodeAudioData(prepared.audio.slice(0));
 
   activeSource?.stop();
   const source = context.createBufferSource();
@@ -108,4 +135,8 @@ export async function startVoicePlayback(text: string): Promise<VoicePlayback> {
       if (activeSource === source) source.stop();
     },
   };
+}
+
+export async function startVoicePlayback(text: string): Promise<VoicePlayback> {
+  return startPreparedVoicePlayback(await prepareVoiceAudio(text));
 }

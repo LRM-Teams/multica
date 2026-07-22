@@ -11,6 +11,21 @@ import { ChannelMessageBubble } from "./channel-message-bubble";
 
 const copyTextMock = vi.fn();
 
+vi.mock("../lib/voice-playback", () => ({
+  claimVoiceAutoplay: () => false,
+  prepareVoiceAudio: () => Promise.resolve({
+    audio: new ArrayBuffer(4),
+    durationMs: 3200,
+  }),
+  startPreparedVoicePlayback: () => Promise.resolve({
+    durationMs: 3200,
+    finished: Promise.resolve(),
+    stop: vi.fn(),
+  }),
+  voicePlaybackScope: (channelId: string, threadRootMessageId?: string | null) =>
+    `${channelId}:${threadRootMessageId ?? "main"}`,
+}));
+
 // The author avatar renders an ActorProfileTrigger; on mobile it navigates to
 // the full-page profile (#586), which reads useNavigation. Stub the navigation
 // context (the barrel re-exports it) so these layout/interaction tests don't

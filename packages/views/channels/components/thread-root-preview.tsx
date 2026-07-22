@@ -11,6 +11,7 @@ import { useT } from "../../i18n/use-t";
 import { useMessageTime } from "../../i18n/use-message-time";
 import { resolveChannelAuthorDisplayName } from "./message-preview";
 import { MessageBody } from "./message-body";
+import { resolveVoiceMessagePresentation } from "../lib/voice-message-presentation";
 
 export function ThreadRootPreview({
   message,
@@ -29,6 +30,7 @@ export function ThreadRootPreview({
   const messageTime = useMessageTime();
   const { getActorName } = useActorName();
   const isAgent = message.type === "agent";
+  const voicePresentation = resolveVoiceMessagePresentation(message);
   const displayName = resolveChannelAuthorDisplayName(message, {
     currentUserId,
     ownName,
@@ -116,6 +118,7 @@ export function ThreadRootPreview({
               attachments={message.attachments}
               compact
               sourceMessageId={message.id}
+              consumedAttachmentIds={voicePresentation?.consumedAttachmentIds}
             />
           </div>
           {onViewParent && (

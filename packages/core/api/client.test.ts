@@ -40,11 +40,33 @@ describe("ApiClient", () => {
   it("accepts the self-describing WAV returned by TTS", async () => {
     const wav = new Uint8Array([0x52, 0x49, 0x46, 0x46]).buffer;
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(wav, {
+        status: 200,
+        headers: {
+          "Content-Type": "audio/wav",
+          "X-Voice-Duration-Ms": "2040",
+        },
+      }),
+    ));
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.synthesizeVoice("hello")).resolves.toEqual({
+      audio: wav,
+      durationMs: 2040,
+    });
+  });
+
+  it("keeps TTS audio usable when an older server omits the duration header", async () => {
+    const wav = new Uint8Array([0x52, 0x49, 0x46, 0x46]).buffer;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
       new Response(wav, { status: 200, headers: { "Content-Type": "audio/wav" } }),
     ));
     const client = new ApiClient("https://api.example.test");
 
-    await expect(client.synthesizeVoice("hello")).resolves.toEqual(wav);
+    await expect(client.synthesizeVoice("hello")).resolves.toEqual({
+      audio: wav,
+      durationMs: null,
+    });
   });
 
   it("rejects a malformed ASR response instead of reporting no speech", async () => {

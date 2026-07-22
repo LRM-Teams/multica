@@ -55,6 +55,7 @@ import {
 import { messageMentionsViewer } from "../../common/content-mentions-viewer";
 import { SELF_MENTION_ROW_CLASS } from "../../common/mention-token";
 import { VoiceMessageAudio } from "./voice-message-audio";
+import { resolveVoiceMessagePresentation } from "../lib/voice-message-presentation";
 
 const FullEmojiPicker = lazy(() =>
   import("@multica/ui/components/common/emoji-picker").then((m) => ({
@@ -516,6 +517,7 @@ export function ChannelMessageBubble({
   // the body (see resolveMessageParts for the envelope-unwrap rationale).
   // Non-null for real parts / historical envelopes, null for ordinary content.
   const effectiveParts = resolveMessageParts(message.content, message.parts);
+  const voicePresentation = resolveVoiceMessagePresentation(message);
   const handleCopy = async () => {
     // Copy = take away what I can see (#530, Iris's ruling). The screen says
     // `@小雅`; a clipboard holding `@actor_14` disagrees with it, and that is its
@@ -871,8 +873,9 @@ export function ChannelMessageBubble({
               attachments={message.attachments}
               highlightQuery={searchHighlighted ? searchQuery : undefined}
               sourceMessageId={message.id}
+              consumedAttachmentIds={voicePresentation?.consumedAttachmentIds}
             />
-            <VoiceMessageAudio message={message} />
+            <VoiceMessageAudio message={message} presentation={voicePresentation} />
             {isLocalFailed && onRetrySend && (
               <div
                 data-testid="message-send-failed"

@@ -133,13 +133,14 @@ func TestEnvDispatchAdapterEnqueueChannelRunPersistsPromptWithTask(t *testing.T)
 	require.NoError(t, err)
 
 	taskID, err := adapter.EnqueueEnvDispatchChannelRun(ctx, sessionIn.WorkspaceID, sessionIn.CreatorID, service.ChannelRunInput{
-		AgentID:         sessionIn.AgentID,
-		ChannelID:       sessionIn.ChannelID,
-		ProjectID:       sessionIn.ProjectID,
-		EnvID:           uuid.NewString(),
-		ChatSessionID:   sessionID,
-		RuntimeID:       sessionIn.RuntimeID,
-		SourceMessageID: messageID,
+		AgentID:           sessionIn.AgentID,
+		ChannelID:         sessionIn.ChannelID,
+		ProjectID:         sessionIn.ProjectID,
+		EnvID:             uuid.NewString(),
+		ChatSessionID:     sessionID,
+		SandboxInstanceID: "sandbox-channel-run-test",
+		RuntimeID:         sessionIn.RuntimeID,
+		SourceMessageID:   messageID,
 	}, 0)
 	require.NoError(t, err)
 	t.Cleanup(func() {

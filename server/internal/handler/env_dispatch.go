@@ -890,7 +890,7 @@ func (a *envDispatchDepsAdapter) LinkEnvDispatchTrainingSession(ctx context.Cont
 
 func (a *envDispatchDepsAdapter) EnqueueEnvDispatchChannelRun(ctx context.Context, workspaceID, userID string, in service.ChannelRunInput, _ int) (string, error) {
 	if workspaceID == "" || userID == "" || in.AgentID == "" || in.ChannelID == "" ||
-		in.ProjectID == "" || in.ChatSessionID == "" || in.RuntimeID == "" || in.SourceMessageID == "" {
+		in.ProjectID == "" || in.ChatSessionID == "" || in.SandboxInstanceID == "" || in.RuntimeID == "" || in.SourceMessageID == "" {
 		return "", stackerr.New("enqueue env-dispatch channel run: execution identity is required")
 	}
 	tx, err := a.h.TxStarter.Begin(ctx)

@@ -81,12 +81,17 @@ vi.mock("./actor-profile-popover", () => ({
 vi.mock("../i18n/use-t", () => ({
   useT: () => ({
     t: (selector: (r: {
-      profile_popover: { close_aria: string; no_permission_toast: string };
+      profile_popover: {
+        close_aria: string;
+        no_permission_toast: string;
+        agent_unavailable: string;
+      };
     }) => string) =>
       selector({
         profile_popover: {
           close_aria: "Close profile",
           no_permission_toast: "You don't have permission to view this member's profile",
+          agent_unavailable: "Agent unavailable",
         },
       }),
   }),
@@ -194,7 +199,7 @@ describe("ResolvedAgentSidePanel (LRM-288)", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it("toasts and closes when even identity profile is unavailable", async () => {
+  it("toasts and shows an explicit error panel when profile is unavailable", async () => {
     detailState.isError = true;
     detailState.error = new ApiError("not found", 404, "Not Found");
     identityState.isError = true;
@@ -213,7 +218,12 @@ describe("ResolvedAgentSidePanel (LRM-288)", () => {
       expect(toastError).toHaveBeenCalledWith(
         "You don't have permission to view this member's profile",
       );
-      expect(onClose).toHaveBeenCalled();
     });
+    expect(screen.getByText("Agent unavailable")).toBeInTheDocument();
+    expect(
+      screen.getByText("You don't have permission to view this member's profile"),
+    ).toBeInTheDocument();
+    // Panel stays open with close affordance — never silent null (LRM-238).
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

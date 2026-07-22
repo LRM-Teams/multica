@@ -16,6 +16,23 @@ import { useT } from "../i18n/use-t";
 import { ActorProfileContent } from "./actor-profile-popover";
 import { ConversationSidePanelShell } from "./conversation-side-panel-shell";
 
+const EMPTY_AGENTS: readonly Agent[] = [];
+
+const PANEL_LOADING_LEADING = (
+  <div className="flex items-center gap-2.5">
+    <Skeleton className="size-8 rounded-full" />
+    <Skeleton className="h-4 w-28" />
+  </div>
+);
+
+const PANEL_LOADING_BODY = (
+  <div className="space-y-3 p-4">
+    <Skeleton className="h-3 w-full" />
+    <Skeleton className="h-3 w-4/5" />
+    <Skeleton className="h-3 w-2/3" />
+  </div>
+);
+
 /**
  * Resolves an agent by id for the #349 side panel when the actor may be absent
  * from ListAgents (channel-only discovery — group managers / LRM-233).
@@ -26,11 +43,11 @@ import { ConversationSidePanelShell } from "./conversation-side-panel-shell";
  * 3. On 403, open the identity-only member profile (basic card, sensitive
  *    blocks gated by profile_access) — never a silent no-op.
  * 4. On true failure (404 / network / identity profile also fails), toast
- *    explicitly and close.
+ *    explicitly and show an error panel (close via shell X — no silent null).
  */
 export function ResolvedAgentSidePanel({
   agentId,
-  agents = [],
+  agents = EMPTY_AGENTS,
   currentUserId,
   members,
   onClose,
@@ -75,35 +92,25 @@ export function ResolvedAgentSidePanel({
     enabled: !!agentId && detailForbidden,
   });
 
+  const openFailed =
+    !agent &&
+    !detailPending &&
+    !(detailForbidden && identityPending) &&
+    !(detailForbidden && identityProfile) &&
+    (detailForbidden
+      ? identityIsError || identityFetched
+      : detailIsError);
+
   const toastedRef = useRef(false);
   useEffect(() => {
     toastedRef.current = false;
   }, [agentId]);
 
   useEffect(() => {
-    if (agent || detailPending || identityPending) return;
-    if (detailForbidden) {
-      if (identityProfile) return;
-      if (!identityIsError && !identityFetched) return;
-    } else if (!detailIsError) {
-      return;
-    }
-    if (toastedRef.current) return;
+    if (!openFailed || toastedRef.current) return;
     toastedRef.current = true;
     toast.error(t(($) => $.profile_popover.no_permission_toast));
-    onClose();
-  }, [
-    agent,
-    detailForbidden,
-    detailIsError,
-    detailPending,
-    identityProfile,
-    identityIsError,
-    identityFetched,
-    identityPending,
-    onClose,
-    t,
-  ]);
+  }, [openFailed, t]);
 
   if (agent) {
     return (
@@ -123,31 +130,25 @@ export function ResolvedAgentSidePanel({
         variant={variant}
         onClose={onClose}
         closeAriaLabel={t(($) => $.profile_popover.close_aria)}
-        leading={
-          <div className="flex items-center gap-2.5">
-            <Skeleton className="size-8 rounded-full" />
-            <Skeleton className="h-4 w-28" />
-          </div>
-        }
+        leading={PANEL_LOADING_LEADING}
       >
-        <div className="space-y-3 p-4">
-          <Skeleton className="h-3 w-full" />
-          <Skeleton className="h-3 w-4/5" />
-          <Skeleton className="h-3 w-2/3" />
-        </div>
+        {PANEL_LOADING_BODY}
       </ConversationSidePanelShell>
     );
   }
 
   if (detailForbidden && identityProfile) {
+    const identityName =
+      identityProfile.display_name || identityProfile.name;
     return (
       <ConversationSidePanelShell
         variant={variant}
         onClose={onClose}
         closeAriaLabel={t(($) => $.profile_popover.close_aria)}
+        // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- shell leading slot; name is a string leaf
         leading={
           <p className="min-w-0 truncate text-sm font-semibold">
-            {identityProfile.display_name || identityProfile.name}
+            {identityName}
           </p>
         }
       >
@@ -158,6 +159,25 @@ export function ResolvedAgentSidePanel({
     );
   }
 
-  // Toast + onClose run in the effect; keep the slot empty while it fires.
+  if (openFailed) {
+    return (
+      <ConversationSidePanelShell
+        variant={variant}
+        onClose={onClose}
+        closeAriaLabel={t(($) => $.profile_popover.close_aria)}
+        // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- shell leading slot; static error title
+        leading={
+          <p className="min-w-0 truncate text-sm font-semibold">
+            {t(($) => $.profile_popover.agent_unavailable)}
+          </p>
+        }
+      >
+        <div className="p-4 text-xs text-muted-foreground">
+          {t(($) => $.profile_popover.no_permission_toast)}
+        </div>
+      </ConversationSidePanelShell>
+    );
+  }
+
   return null;
 }

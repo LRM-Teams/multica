@@ -60,7 +60,8 @@ export function useDeleteChannel() {
   const wsId = useWorkspaceId();
   return useMutation({
     mutationFn: (channelId: string) => api.deleteChannel(channelId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: channelKeys.list(wsId) }),
+    // Hard-delete removes the row entirely — refresh active + archived lists.
+    onSuccess: () => qc.invalidateQueries({ queryKey: channelKeys.all(wsId) }),
   });
 }
 

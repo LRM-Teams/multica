@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -34,10 +34,13 @@ export function DeleteChannelDialog({
 }) {
   const { t } = useT("channels");
   const [confirmed, setConfirmed] = useState(false);
-
-  useEffect(() => {
+  // Reset checkbox when `open` flips — adjust during render (not an effect)
+  // so react-doctor doesn't flag prop→state sync (CI blocking).
+  const [prevOpen, setPrevOpen] = useState(open);
+  if (open !== prevOpen) {
+    setPrevOpen(open);
     if (!open) setConfirmed(false);
-  }, [open]);
+  }
 
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>

@@ -1,3 +1,8 @@
+-- name: CountAgentMemoryWriteEventsByAgent :one
+SELECT COUNT(*)::bigint AS count
+FROM agent_memory_write_event
+WHERE agent_id = $1;
+
 -- name: HasRecentAgentMemoryWrite :one
 SELECT EXISTS(
     SELECT 1

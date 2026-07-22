@@ -685,7 +685,8 @@ export function ChannelMessageBubble({
         // was a layout hack that still clipped link/mention/attachment
         // hitboxes in the first line) — content stays in its own track so
         // nothing overlaps regardless of grouped-message author-row state.
-        "group relative grid grid-cols-[28px_minmax(0,1fr)] gap-2.5 rounded-lg px-2 outline-none transition-colors duration-1000 hover:bg-muted/35 focus-within:bg-muted/35 [@media(pointer:coarse)]:grid-cols-[28px_minmax(0,1fr)_44px]",
+        "group relative grid grid-cols-[28px_minmax(0,1fr)] gap-2.5 rounded-lg px-2 outline-none transition-colors duration-1000 [@media(pointer:coarse)]:grid-cols-[28px_minmax(0,1fr)_44px]",
+        !selfMentioned && "hover:bg-muted/35 focus-within:bg-muted/35",
         compact ? "py-0.5" : "py-1.5",
         selfMentioned && SELF_MENTION_ROW_CLASS,
         highlighted && "bg-primary/10 ring-1 ring-primary/25 duration-0 hover:bg-primary/10 focus-within:bg-primary/10",
@@ -898,7 +899,7 @@ export function ChannelMessageBubble({
             )}
             {isContentCollapsed && (
               <div
-                className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-start bg-gradient-to-t from-background via-background/90 to-transparent pb-0.5 pt-10"
+                className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-start bg-gradient-to-t from-background via-background/95 to-transparent pb-0.5 pt-10"
                 data-testid="message-collapse-fade"
               >
                 {/* LRM-302: text link, not centered pill — must not cover body. */}

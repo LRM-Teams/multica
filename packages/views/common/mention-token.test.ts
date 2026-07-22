@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   mentionTokenClassName,
   resolveMentionTokenKind,
+  SELF_MENTION_ROW_CLASS,
 } from "./mention-token";
 
 describe("resolveMentionTokenKind", () => {
@@ -36,6 +37,14 @@ describe("mentionTokenClassName", () => {
     expect(cls).not.toContain("rounded-full");
   });
 
+  it("drops rest fill in dark mode; hover-only brand wash (LRM-320)", () => {
+    const cls = mentionTokenClassName("default");
+    expect(cls).toContain("dark:bg-transparent");
+    expect(cls).toContain("dark:hover:bg-brand/[0.08]");
+    expect(cls).toContain("dark:focus-visible:bg-brand/[0.08]");
+    expect(cls).toContain("text-brand");
+  });
+
   it("keeps @all on the same soft brand token as people/agents/squads", () => {
     const cls = mentionTokenClassName("all");
     expect(cls).toContain("text-brand");
@@ -52,5 +61,20 @@ describe("mentionTokenClassName", () => {
     expect(cls).toContain("font-bold");
     expect(cls).not.toContain("text-brand");
     expect(cls).not.toContain("rounded-full");
+  });
+});
+
+describe("SELF_MENTION_ROW_CLASS", () => {
+  it("uses warm yellow wash in light mode", () => {
+    expect(SELF_MENTION_ROW_CLASS).toContain("bg-[#fef9e8]");
+    expect(SELF_MENTION_ROW_CLASS).toContain("hover:bg-[#fdf3d0]");
+  });
+
+  it("uses brand left rail + subtle tint in dark mode (LRM-320)", () => {
+    expect(SELF_MENTION_ROW_CLASS).toContain("dark:border-l-2");
+    expect(SELF_MENTION_ROW_CLASS).toContain("dark:border-l-brand");
+    expect(SELF_MENTION_ROW_CLASS).toContain("dark:bg-brand/[0.06]");
+    expect(SELF_MENTION_ROW_CLASS).toContain("dark:hover:bg-brand/[0.08]");
+    expect(SELF_MENTION_ROW_CLASS).toContain("dark:focus-within:bg-brand/[0.08]");
   });
 });

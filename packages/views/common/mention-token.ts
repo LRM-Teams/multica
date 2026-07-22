@@ -12,7 +12,7 @@ import { cn } from "@multica/ui/lib/utils";
  * - default / all → brand ink + bold + soft brand rest fill, radius ≤4px, px ≤2px
  * - self → warm yellow fill (#faf0c8) + ink text
  * - hover / focus → slightly stronger wash
- * - self-mentioned row → warm row wash (#fef9e8)
+ * - self-mentioned row → warm row wash (#fef9e8); dark → brand left rail + subtle tint
  */
 export type MentionTokenKind = "default" | "all" | "self";
 
@@ -49,15 +49,16 @@ export function mentionTokenClassName(
     "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-brand/30",
     isSelf
       ? "bg-[#faf0c8] text-foreground hover:bg-[#f5e8a8] focus-visible:bg-[#f5e8a8]"
-      : "bg-brand/[0.10] text-brand hover:bg-brand/[0.14] focus-visible:bg-brand/[0.14]",
+      : "bg-brand/[0.10] text-brand hover:bg-brand/[0.14] focus-visible:bg-brand/[0.14] dark:bg-transparent dark:hover:bg-brand/[0.08] dark:focus-visible:bg-brand/[0.08]",
     className,
   );
 }
 
 /**
  * Message-row wash when the body addresses the viewer (@me / @all).
- * Warm tint matching Slack self-row (#fef9e8). Deep-link highlight layers
- * above via cn order.
+ * Light: warm tint matching Slack self-row (#fef9e8).
+ * Dark: 2px brand left rail + near-background brand tint (LRM-320) — no
+ * uncalibrated light yellow block. Deep-link highlight layers above via cn order.
  */
 export const SELF_MENTION_ROW_CLASS =
-  "bg-[#fef9e8] hover:bg-[#fdf3d0] focus-within:bg-[#fdf3d0]";
+  "bg-[#fef9e8] hover:bg-[#fdf3d0] focus-within:bg-[#fdf3d0] dark:border-l-2 dark:border-l-brand dark:bg-brand/[0.06] dark:hover:bg-brand/[0.08] dark:focus-within:bg-brand/[0.08]";

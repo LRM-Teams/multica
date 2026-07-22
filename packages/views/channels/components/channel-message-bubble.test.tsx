@@ -724,6 +724,9 @@ describe("ChannelMessageBubble", () => {
     const bubble = screen.getByTestId("message-bubble");
     expect(bubble).toHaveAttribute("data-self-mentioned", "true");
     expect(bubble.className).toContain("bg-[#fef9e8]");
+    expect(bubble.className).toContain("dark:border-l-brand");
+    expect(bubble.className).toContain("dark:bg-brand/[0.06]");
+    expect(bubble.className).not.toContain("hover:bg-muted/35");
   });
 
   it("applies the self-mention wash for @all from another author", () => {
@@ -1000,6 +1003,9 @@ describe("ChannelMessageBubble", () => {
     expect(expand.className).not.toMatch(/shadow-sm/);
     expect(screen.getByTestId("message-collapse-fade").className).toMatch(
       /justify-start/,
+    );
+    expect(screen.getByTestId("message-collapse-fade").className).toMatch(
+      /via-background\/95/,
     );
 
     await userEvent.click(expand);

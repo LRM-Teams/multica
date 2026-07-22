@@ -149,6 +149,8 @@ type MessageViewportProps = {
   onEditMessage?: (message: ChannelMessage, content: string) => void;
   /** Soft-delete the viewer's own message; the bubble then renders a tombstone. */
   onDeleteMessage?: (message: ChannelMessage) => void;
+  /** Retry a failed optimistic send (reuses the bubble's `client_message_id`). */
+  onRetrySend?: (message: ChannelMessage) => void;
   /** Opens the side agent file/public-info panel for an agent-authored message. */
   onOpenAgent?: (agentId: string) => void;
   /** Search hit ids - all matching messages get inline keyword marks while search is open. */
@@ -188,6 +190,7 @@ function MessageViewport({
   onQuoteMessage,
   onEditMessage,
   onDeleteMessage,
+  onRetrySend,
   onOpenAgent,
   searchHitIds,
   searchQuery,
@@ -436,6 +439,7 @@ function MessageViewport({
             onQuote={onQuoteMessage}
             onEdit={onEditMessage}
             onDelete={onDeleteMessage}
+            onRetrySend={onRetrySend}
             onOpenAgent={onOpenAgent}
             searchHighlighted={searchHighlighted}
             searchQuery={searchHighlighted ? searchQuery : undefined}

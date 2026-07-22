@@ -20,6 +20,13 @@ export {
   type ChannelIssuesParams,
 } from "./queries";
 export {
+  buildOptimisticChannelMessage,
+  isOptimisticChannelMessage,
+  markOptimisticChannelMessageFailed,
+  removeOptimisticChannelMessage,
+  type LocalSendStatus,
+} from "./optimistic-send";
+export {
   useEnsureMessageLoaded,
   type EnsureMessageLoadedStatus,
 } from "./use-ensure-message-loaded";

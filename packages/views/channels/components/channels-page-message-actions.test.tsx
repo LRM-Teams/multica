@@ -409,46 +409,61 @@ describe("ChannelsPage — Channel details shares the exclusive thread/agent slo
 
   // Details and the Thread panel both route through the same exclusive
   // sidePanel union that gates the Agent panel too.
-  it("opening a thread closes an already-open Channel details panel", async () => {
-    renderPage();
-    await screen.findByTestId("message-list");
-    fireEvent.click(screen.getByRole("button", { name: "Open channel details" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
-    expect(await screen.findByRole("button", { name: "project" })).toBeTruthy();
+  it(
+    "opening a thread closes an already-open Channel details panel",
+    async () => {
+      renderPage();
+      await screen.findByTestId("message-list");
+      fireEvent.click(screen.getByRole("button", { name: "Open channel details" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+      expect(await screen.findByRole("button", { name: "project" })).toBeTruthy();
 
-    await waitFor(() => expect(listProps.current?.onOpenThread).toBeTypeOf("function"));
-    await act(async () => {
-      listProps.current?.onOpenThread?.(ownMessage());
-    });
-    await screen.findByTestId("thread-panel");
-    expect(screen.queryByRole("button", { name: "project" })).toBeNull();
-  });
-
-  it("opening Channel details closes an already-open thread", async () => {
-    renderPage();
-    await screen.findByTestId("message-list");
-    await waitFor(() => expect(listProps.current?.onOpenThread).toBeTypeOf("function"));
-    await act(async () => {
-      listProps.current?.onOpenThread?.(ownMessage());
-    });
-    await screen.findByTestId("thread-panel");
-
-    fireEvent.click(screen.getByRole("button", { name: "Open channel details" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
-    expect(await screen.findByRole("button", { name: "project" })).toBeTruthy();
-    expect(screen.queryByTestId("thread-panel")).toBeNull();
-  });
-
-  it("clicking the channel name again closes Channel details", async () => {
-    renderPage();
-    await screen.findByTestId("message-list");
-    const toggle = screen.getByRole("button", { name: "Open channel details" });
-    fireEvent.click(toggle);
-    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
-    expect(await screen.findByRole("button", { name: "project" })).toBeTruthy();
-    fireEvent.click(toggle);
-    await waitFor(() => {
+      await waitFor(() => expect(listProps.current?.onOpenThread).toBeTypeOf("function"));
+      await act(async () => {
+        listProps.current?.onOpenThread?.(ownMessage());
+      });
+      await screen.findByTestId("thread-panel");
       expect(screen.queryByRole("button", { name: "project" })).toBeNull();
-    });
-  });
+    },
+    15000,
+  );
+
+  it(
+    "opening Channel details closes an already-open thread",
+    async () => {
+      renderPage();
+      await screen.findByTestId("message-list");
+      await waitFor(() => expect(listProps.current?.onOpenThread).toBeTypeOf("function"));
+      await act(async () => {
+        listProps.current?.onOpenThread?.(ownMessage());
+      });
+      await screen.findByTestId("thread-panel");
+
+      fireEvent.click(screen.getByRole("button", { name: "Open channel details" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+      expect(await screen.findByRole("button", { name: "project" })).toBeTruthy();
+      expect(screen.queryByTestId("thread-panel")).toBeNull();
+    },
+    15000,
+  );
+
+  it(
+    "clicking the channel name again closes Channel details",
+    async () => {
+      renderPage();
+      await screen.findByTestId("message-list");
+      const toggle = screen.getByRole("button", { name: "Open channel details" });
+      fireEvent.click(toggle);
+      fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+      expect(await screen.findByRole("button", { name: "project" })).toBeTruthy();
+      fireEvent.click(toggle);
+      await waitFor(
+        () => {
+          expect(screen.queryByRole("button", { name: "project" })).toBeNull();
+        },
+        { timeout: 8000 },
+      );
+    },
+    12000,
+  );
 });

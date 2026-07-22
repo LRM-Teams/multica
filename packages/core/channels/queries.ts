@@ -138,6 +138,27 @@ export function channelMessagesFirstItemIndex(data: InfiniteData<ChannelMessages
   return CHANNEL_MESSAGES_VIRTUOSO_BASE_INDEX - olderCount;
 }
 
+/**
+ * Match an existing cache row to an incoming message: same `id`, OR same
+ * non-empty `client_message_id` (temp optimistic id → authoritative ACK / WS).
+ */
+export function findChannelMessageMatchIndex(
+  messages: readonly ChannelMessage[],
+  message: ChannelMessage,
+): number {
+  const byId = messages.findIndex((m) => m.id === message.id);
+  if (byId >= 0) return byId;
+  const clientId = message.client_message_id;
+  if (!clientId) return -1;
+  return messages.findIndex((m) => m.client_message_id === clientId);
+}
+
+function matchesChannelMessage(existing: ChannelMessage, incoming: ChannelMessage): boolean {
+  if (existing.id === incoming.id) return true;
+  const clientId = incoming.client_message_id;
+  return !!clientId && existing.client_message_id === clientId;
+}
+
 export function upsertChannelMessageInCache(qc: QueryClient, message: ChannelMessage) {
   qc.setQueryData<ChannelMessage[]>(channelKeys.messages(message.channel_id), (old) => upsertChannelMessage(old, message));
   qc.setQueryData<InfiniteData<ChannelMessagesPage>>(channelKeys.messagesPage(message.channel_id), (old) => {
@@ -150,22 +171,25 @@ export function upsertChannelMessageInCache(qc: QueryClient, message: ChannelMes
         ...old,
         pages: old.pages.map((page) => ({
           ...page,
-          messages: page.messages.filter((existing) => existing.id !== message.id),
+          messages: page.messages.filter(
+            (existing) => !matchesChannelMessage(existing, message),
+          ),
         })),
       };
     }
     const siblings = flattenChannelMessagePages(old);
-    const existing = siblings.find((m) => m.id === message.id);
+    const matchIndex = findChannelMessageMatchIndex(siblings, message);
+    const existing = matchIndex >= 0 ? siblings[matchIndex] : undefined;
     const enriched = withPreservedAuthorAvatar(message, existing, siblings);
     const existingPageIndex = old.pages.findIndex((page: ChannelMessagesPage) =>
-      page.messages.some((m: ChannelMessage) => m.id === enriched.id),
+      page.messages.some((m: ChannelMessage) => matchesChannelMessage(m, enriched)),
     );
     const pages = old.pages.map((page, index) => {
       if (existingPageIndex < 0 && index === 0) {
         return { ...page, messages: [...page.messages, enriched] };
       }
       const messages = page.messages.map((m: ChannelMessage) => {
-        if (m.id !== enriched.id) return m;
+        if (!matchesChannelMessage(m, enriched)) return m;
         return enriched;
       });
       return { ...page, messages };
@@ -225,14 +249,14 @@ export function withPreservedAuthorAvatar(
 
 function upsertChannelMessage(old: ChannelMessage[] | undefined, message: ChannelMessage) {
   if (!shouldRenderChannelMessage(message)) {
-    return old?.filter((existing) => existing.id !== message.id);
+    return old?.filter((existing) => !matchesChannelMessage(existing, message));
   }
   if (!old) return [message];
-  const index = old.findIndex((existing) => existing.id === message.id);
+  const index = findChannelMessageMatchIndex(old, message);
   const existing = index >= 0 ? old[index] : undefined;
   const enriched = withPreservedAuthorAvatar(message, existing, old);
   if (index >= 0) {
-    return old.map((m) => (m.id === enriched.id ? enriched : m));
+    return old.map((m, i) => (i === index ? enriched : m));
   }
   return [...old, enriched];
 }

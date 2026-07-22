@@ -181,6 +181,10 @@ vi.mock("../../i18n/use-t", () => ({
           sticker_loading: string;
           sticker_failed: string;
           sticker_unavailable: string;
+          attachment_unavailable: string;
+          send_failed: string;
+          retry_send: string;
+          sending: string;
           edit_action: string;
           actions_menu: string;
           delete_action: string;
@@ -250,6 +254,10 @@ vi.mock("../../i18n/use-t", () => ({
           sticker_loading: "Loading sticker",
           sticker_failed: "Sticker failed to load",
           sticker_unavailable: "Sticker unavailable",
+          attachment_unavailable: "Attachment unavailable",
+          send_failed: "Couldn't send",
+          retry_send: "Retry",
+          sending: "Sending…",
           edit_action: "Edit",
           delete_action: "Delete",
           edited_label: "(edited)",
@@ -1747,5 +1755,56 @@ describe("ChannelMessageBubble", () => {
     expect(onDelete).toHaveBeenCalledTimes(1);
     expect(onDelete).toHaveBeenCalledWith(message);
     expect(onReact).not.toHaveBeenCalled();
+  });
+
+  it("shows pending status on an optimistic bubble and hides the action bar", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          type: "user",
+          author_id: "user-1",
+          author_name: "Alice",
+          id: "client-1",
+          client_message_id: "client-1",
+          local_send_status: "pending",
+          content: "optimistic pending",
+        })}
+        currentUserId="user-1"
+        onReact={vi.fn()}
+        onQuote={vi.fn()}
+        onOpenThread={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-local-send", "pending");
+    expect(screen.getByTestId("message-send-pending")).toHaveTextContent("Sending…");
+    expect(screen.queryByTestId("message-action-bar")).not.toBeInTheDocument();
+  });
+
+  it("shows a failed bar with one-click retry for optimistic send failures", async () => {
+    const onRetrySend = vi.fn();
+    const message = makeMessage({
+      type: "user",
+      author_id: "user-1",
+      author_name: "Alice",
+      id: "client-2",
+      client_message_id: "client-2",
+      local_send_status: "failed",
+      content: "optimistic failed",
+    });
+    render(
+      <ChannelMessageBubble
+        message={message}
+        currentUserId="user-1"
+        onRetrySend={onRetrySend}
+        onReact={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId("message-send-failed")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetrySend).toHaveBeenCalledWith(message);
   });
 });

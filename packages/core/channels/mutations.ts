@@ -1,10 +1,33 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
+import { ApiError } from "../api/client";
+import { useAuthStore } from "../auth";
 import { useWorkspaceId } from "../hooks";
-import { channelKeys, invalidateChannelMessages, upsertChannelMessageInCache } from "./queries";
+import { channelKeys, invalidateChannelMessages, upsertChannelMessageInCache, upsertChannelMessageThreadInCache } from "./queries";
+import {
+  buildOptimisticChannelMessage,
+  insertOptimisticChannelMessage,
+  insertOptimisticThreadMessage,
+  markOptimisticChannelMessageFailed,
+  removeOptimisticChannelMessage,
+  resolveOptimisticSiblings,
+} from "./optimistic-send";
 import { dmKeys } from "../dm/queries";
 import type { DMItem } from "../dm/types";
 import type { ChannelThreadMessagesPage, MessagePart } from "../types";
+
+function isConflictError(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 409;
+}
+
+function viewerAuthorFields() {
+  const user = useAuthStore.getState().user;
+  return {
+    authorId: user?.id ?? "",
+    authorName: user?.display_name || user?.name || "You",
+    authorAvatarUrl: user?.avatar_url ?? null,
+  };
+}
 
 export function useCreateChannel() {
   const qc = useQueryClient();
@@ -108,6 +131,34 @@ export function useSendChannelMessage() {
         clientMessageId,
         quoteMessageId,
       }),
+    onMutate: (vars) => {
+      if (!vars.clientMessageId) return;
+      const author = viewerAuthorFields();
+      if (!author.authorId) return;
+      const siblings = resolveOptimisticSiblings(qc, vars.channelId);
+      const optimistic = buildOptimisticChannelMessage({
+        channelId: vars.channelId,
+        workspaceId: wsId,
+        clientMessageId: vars.clientMessageId,
+        content: vars.content,
+        parts: vars.parts,
+        authorId: author.authorId,
+        authorName: author.authorName,
+        authorAvatarUrl: author.authorAvatarUrl,
+        quoteMessageId: vars.quoteMessageId,
+        siblings,
+        status: "pending",
+      });
+      insertOptimisticChannelMessage(qc, optimistic);
+    },
+    onError: (err, vars) => {
+      if (!vars.clientMessageId) return;
+      if (isConflictError(err)) {
+        removeOptimisticChannelMessage(qc, vars.channelId, vars.clientMessageId);
+        return;
+      }
+      markOptimisticChannelMessageFailed(qc, vars.channelId, vars.clientMessageId);
+    },
     onSuccess: (msg) => {
       upsertChannelMessageInCache(qc, msg);
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
@@ -198,9 +249,39 @@ export function useSendChannelThreadMessage() {
         clientMessageId,
         quoteMessageId,
       }),
+    onMutate: (vars) => {
+      if (!vars.clientMessageId) return;
+      const author = viewerAuthorFields();
+      if (!author.authorId) return;
+      const siblings = resolveOptimisticSiblings(qc, vars.channelId, vars.messageId);
+      const optimistic = buildOptimisticChannelMessage({
+        channelId: vars.channelId,
+        workspaceId: wsId,
+        clientMessageId: vars.clientMessageId,
+        content: vars.content,
+        parts: vars.parts,
+        authorId: author.authorId,
+        authorName: author.authorName,
+        authorAvatarUrl: author.authorAvatarUrl,
+        quoteMessageId: vars.quoteMessageId,
+        threadRootMessageId: vars.messageId,
+        siblings,
+        status: "pending",
+      });
+      insertOptimisticThreadMessage(qc, optimistic, vars.messageId);
+    },
+    onError: (err, vars) => {
+      if (!vars.clientMessageId) return;
+      if (isConflictError(err)) {
+        removeOptimisticChannelMessage(qc, vars.channelId, vars.clientMessageId, vars.messageId);
+        return;
+      }
+      markOptimisticChannelMessageFailed(qc, vars.channelId, vars.clientMessageId, vars.messageId);
+    },
     onSuccess: (msg) => {
       const rootId = msg.thread_root_message_id;
       if (rootId) {
+        upsertChannelMessageThreadInCache(qc, msg, rootId);
         qc.invalidateQueries({ queryKey: channelKeys.messageThread(msg.channel_id, rootId) });
       }
       invalidateChannelMessages(qc, msg.channel_id);

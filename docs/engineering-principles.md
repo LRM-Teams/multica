@@ -173,6 +173,12 @@
 - **切换门**：相关工具覆盖率完整 + 本地落盘/重试 + 幂等去重 + crash resume + shadow 无丢失五门全部通过，才把 hook 切为单一权威；随后删除 native 权威。Shadow 永不写第二份用户事实，不允许永久双真相。
 - **待升档的物**：provider-neutral hook source contract、原子 outbox/spool、ACK/checkpoint、重启恢复、source-selection/cutover 配置与双源差异指标。上述代码和见红测试未落前，本节不得改标 `可执行`。
 
+### 4.7 语音供应商只在 server 边界出现 — `可执行`（③单一 transport + ⑤协议/真实往返测试；owner: @Codex）
+- 豆包 Speech API Key 只进入 backend 环境和 WebSocket header，不进入前端配置、API 响应、日志、fixture 或 Git。ASR/TTS 失败返回明确错误，不换浏览器语音、旧版资源或其他供应商制造假成功。
+- 当前已验证合同固定为 TTS 2.0 `seed-tts-2.0` 和 ASR 2.0 小时版 `volc.seedasr.sauc.duration`；ASR 输入固定为 16 kHz、单声道、signed 16-bit little-endian PCM。切换资源版本或输入格式必须改显式合同和测试，不能在 transport 里试探。
+- HTTP 面必须同时经过登录、workspace membership 和 human-actor guard。语音额度不能由 task token、agent credential 或 cloud PAT 消耗。
+- **物**：`server/internal/integrations/doubaospeech`；`POST /api/voice/asr`、`POST /api/voice/tts`；协议 frame、header、错误脱敏、handler 输入边界测试；可选 live test 用 TTS 生成 PCM 再送 ASR，已用实际账号见过完整往返成功。
+
 ## 5. 验证方法论 — `仅文档`（诚实标注：拦不住人，只能让"猜"显式化）
 
 - **渲染活实体的功能，验收必须含"写入后变更"测例**（fixture 先改后写=永远假绿）。→ 有测试模板后升 `可执行`。

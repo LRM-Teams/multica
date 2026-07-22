@@ -22,6 +22,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/handler"
+	"github.com/multica-ai/multica/server/internal/integrations/doubaospeech"
 	"github.com/multica-ai/multica/server/internal/integrations/lark"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/middleware"
@@ -170,6 +171,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		EvolutionReviewEnabled:                evolutionReviewEnabled,
 	}
 	h := handler.New(queries, pool, hub, bus, emailSvc, store, cfSigner, analyticsClient, signupConfig, daemonHub)
+	h.VoiceProvider = doubaospeech.New(doubaospeech.Config{
+		APIKey:    os.Getenv("DOUBAO_SPEECH_API_KEY"),
+		SpeakerID: os.Getenv("DOUBAO_TTS_SPEAKER_ID"),
+	})
 	h.SandboxHub = sandboxHub
 	handler.ConfigureEphemeralSandboxManager(h)
 	h.StartChannelBridge()
@@ -763,6 +768,16 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		// --- Workspace-scoped routes (all require workspace membership) ---
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RequireWorkspaceMember(queries))
+
+			// Voice synthesis and recognition consume account-level provider
+			// quota. Workspace membership scopes the request; the human-actor
+			// guard prevents task and infrastructure credentials from spending
+			// that quota through this user-facing surface.
+			r.Route("/api/voice", func(r chi.Router) {
+				r.Use(handler.RequireHumanActor)
+				r.Post("/tts", h.SynthesizeVoice)
+				r.Post("/asr", h.TranscribeVoice)
+			})
 
 			// Assignee frequency
 			r.Get("/api/assignee-frequency", h.GetAssigneeFrequency)

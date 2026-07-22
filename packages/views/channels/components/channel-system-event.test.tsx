@@ -392,6 +392,8 @@ describe("parseIssueSystemEvent", () => {
         previous_status: "todo",
         actor_id: "agent-be",
         actor_type: "agent",
+        actor_handle: "bei-duan",
+        actor_name: "后端工程师",
       }),
     );
     expect(event).toMatchObject({
@@ -402,6 +404,8 @@ describe("parseIssueSystemEvent", () => {
       previousStatus: "todo",
       actorId: "agent-be",
       actorType: "agent",
+      actorHandle: "bei-duan",
+      actorName: "后端工程师",
     });
   });
 
@@ -644,6 +648,30 @@ describe("IssueSystemEventContent", () => {
     const links = document.querySelectorAll("a");
     expect(links).toHaveLength(1);
     expect(links[0]).toHaveTextContent("LRM-137");
+  });
+
+  it("uses emit-time actor_name when the agent is absent from ListAgents (group manager)", () => {
+    // 贝克汉姆 is a group manager — ListAgents hides them (LRM-233), so without
+    // actor_name the token used to render as "@Unknown Agent".
+    render(
+      <IssueSystemEventContent
+        event={{
+          event: "issue_assigned",
+          issueId: "issue-uuid",
+          issueIdentifier: "LRM-268",
+          issueStatus: "todo",
+          actorId: "agent-beckham",
+          actorType: "agent",
+          actorName: "贝克汉姆",
+          actorHandle: "bei-ke-han-mu-11",
+          targetId: "agent-fe",
+          targetType: "agent",
+          targetName: "前端工程师",
+        }}
+      />,
+    );
+    expect(document.body.textContent).toBe("@贝克汉姆 将 Issue LRM-268 指派给 前端工程师");
+    expect(document.body.textContent).not.toContain("Unknown Agent");
   });
 
   it("renders issue_created as a fixed verb with the ref as the SOLE link (#610)", () => {

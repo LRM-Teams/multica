@@ -5,7 +5,6 @@ import {
   CircleSlash,
   Clock,
   Loader2,
-  PlugZap,
   type LucideIcon,
 } from "lucide-react";
 import type { TFunction } from "i18next";
@@ -60,11 +59,14 @@ export const availabilityConfig: Record<AgentAvailability, AvailabilityVisual> =
     textClass: "text-success",
     icon: CircleDot,
   },
+  // Raw `unstable` still exists in the derivation model, but live UI maps it
+  // through `toLivePresence` → Online (green). Keep visual parity with online
+  // so any leftover direct lookup cannot paint "Unstable" chrome (LRM-248).
   unstable: {
-    label: "Unstable",
-    dotClass: "bg-muted-foreground/40",
-    textClass: "text-muted-foreground",
-    icon: PlugZap,
+    label: "Online",
+    dotClass: "bg-success",
+    textClass: "text-success",
+    icon: CircleDot,
   },
   offline: {
     label: "Offline",
@@ -72,9 +74,8 @@ export const availabilityConfig: Record<AgentAvailability, AvailabilityVisual> =
     textClass: "text-muted-foreground",
     icon: CircleSlash,
   },
-  // Lifecycle state, not a runtime state — a retired agent. Gray like
-  // offline (it can't take work) but labelled distinctly so the user reads
-  // "this agent is archived", not "temporarily unreachable".
+  // Lifecycle — not a third live presence. Avatar goes grayscale with NO live
+  // dot; detail may show a muted "Archived" subline (LRM-248).
   archived: {
     label: "Archived",
     dotClass: "bg-muted-foreground/40",
@@ -83,13 +84,8 @@ export const availabilityConfig: Record<AgentAvailability, AvailabilityVisual> =
   },
 };
 
-// Order used by availability filter chips so colours read in a natural
-// progression rather than alphabetical.
-export const availabilityOrder: AgentAvailability[] = [
-  "online",
-  "unstable",
-  "offline",
-];
+// Order used by availability filter chips (LRM-248: Online / Offline only).
+export const availabilityOrder: AgentAvailability[] = ["online", "offline"];
 
 export interface WorkloadVisual {
   label: string;
@@ -129,13 +125,19 @@ export const workloadConfig: Record<Workload, WorkloadVisual> = {
 // Order used in any future workload chip group; actionable signals first.
 export const workloadOrder: Workload[] = ["working", "queued", "idle"];
 
-// The single rule for an agent's one-line status *word* on cards/pills: it must
-// agree with the availability dot. A workload word ("Idle"/"Working") only
-// while online; otherwise the availability word ("Offline"/"Unstable"/
-// "Archived"). Returns a discriminated token so every surface localizes (and
-// picks the matching config) from ONE shared decision — never from a raw status
-// string or its own drifting copy of this rule. This is why the presence dot
-// and the pill can never disagree again (#288).
+// LRM-248: live presence is a two-state word (Online / Offline). Backend may
+// still emit `unstable` / workload; those fold here so every card/pill/dot
+// agrees. Activity timeline event rows keep their own non-live vocabulary.
+export type LivePresence = "online" | "offline" | "archived";
+
+/** Map raw availability → user-visible live presence (LRM-248). */
+export function toLivePresence(availability: AgentAvailability): LivePresence {
+  if (availability === "archived") return "archived";
+  if (availability === "offline") return "offline";
+  // `online` and `unstable` (and any reconnecting-equivalent) → Online.
+  return "online";
+}
+
 export type PresenceStatusToken =
   | { kind: "workload"; value: Workload }
   | { kind: "availability"; value: AgentAvailability };
@@ -144,20 +146,15 @@ export function presenceStatusToken(
   presence: AgentPresenceDetail | "loading" | null | undefined,
 ): PresenceStatusToken | null {
   if (!presence || presence === "loading") return null;
-  if (presence.availability !== "online") {
-    return { kind: "availability", value: presence.availability };
+  const live = toLivePresence(presence.availability);
+  // Live status never surfaces workload (Working / Queued / Idle) or Unstable.
+  if (live === "archived") {
+    return { kind: "availability", value: "archived" };
   }
-  // Online: surface the workload word only for the active / anomalous states
-  // (Working / Queued). A plain idle plate — connected, nothing on the plate —
-  // reads as the availability word "Online" (green dot), NOT the workload word
-  // "Idle" (gray): a connected, ready agent is available, not away/inactive
-  // (Frank/Miles 2026-07-15). Green also re-aligns with raft (idle = green).
-  // Scope: this is the presence STATUS word only. The Activity timeline's
-  // historical "Idle" rows are a separate label set (ACTIVITY_LABEL_EN) and
-  // stay unchanged — they record "went idle at time X", not live availability.
-  return presence.workload === "idle"
-    ? { kind: "availability", value: "online" }
-    : { kind: "workload", value: presence.workload };
+  return {
+    kind: "availability",
+    value: live === "online" ? "online" : "offline",
+  };
 }
 
 /**

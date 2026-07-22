@@ -175,9 +175,10 @@ describe("AgentStatusDot", () => {
     expect(dot).toHaveClass("ring-background");
   });
 
-  it("uses the success color when online but never fakes green when offline", () => {
+  it("uses the success color when online but never fakes green when offline (LRM-248)", () => {
     const { rerender } = render(<AgentStatusDot agentId="agent-1" size={28} />);
     expect(screen.getByLabelText(/^Status:/)).toHaveClass("bg-success");
+    expect(screen.getByLabelText(/^Status:/)).toHaveAttribute("aria-label", "Status: Online");
 
     presenceDetailMock.mockReturnValue({
       availability: "offline",
@@ -189,7 +190,9 @@ describe("AgentStatusDot", () => {
     rerender(<AgentStatusDot agentId="agent-1" size={28} />);
     const dot = screen.getByLabelText(/^Status:/);
     expect(dot).not.toHaveClass("bg-success");
-    expect(dot).toHaveClass("bg-muted-foreground/40");
+    expect(dot).toHaveAttribute("aria-label", "Status: Offline");
+    // size 28 → hollow ring (no fill)
+    expect(dot).toHaveClass("bg-transparent");
   });
 
   it("renders nothing while presence is still loading", () => {
@@ -198,12 +201,9 @@ describe("AgentStatusDot", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("derives the dot COLOR from health_summary.state, not availability (#266)", () => {
-    // Availability says online (green), but connectivity health says the link
-    // is wobbling — the dot must follow HEALTH (amber), proving health_summary
-    // is the color source. Pulse stays a workload overlay (idle here → static).
+  it("folds unstable / reconnecting health into Online green (LRM-248)", () => {
     presenceDetailMock.mockReturnValue({
-      availability: "online",
+      availability: "unstable",
       workload: "idle",
       runningCount: 0,
       queuedCount: 0,
@@ -223,12 +223,11 @@ describe("AgentStatusDot", () => {
     });
     render(<AgentStatusDot agentId="agent-1" size={28} />);
     const dot = screen.getByLabelText(/^Status:/);
-    expect(dot).toHaveClass("bg-warning");
-    expect(dot).not.toHaveClass("bg-success");
+    expect(dot).toHaveClass("bg-success");
+    expect(dot).toHaveAttribute("aria-label", "Status: Online");
   });
 
-  it("shows the working pulse only when health is online/recovered (#266, Iris)", () => {
-    // Working on a healthy link → breathing pulse present.
+  it("does not pulse for Working workload (LRM-248 — live is Online/Offline only)", () => {
     presenceDetailMock.mockReturnValue({
       availability: "online",
       workload: "working",
@@ -248,25 +247,9 @@ describe("AgentStatusDot", () => {
       isLoading: false,
       isError: false,
     });
-    const { container, rerender } = render(<AgentStatusDot agentId="agent-1" size={28} />);
-    expect(container.querySelector(".animate-ping")).not.toBeNull();
-
-    // Same "working" workload but the link is offline — a disconnected agent
-    // must NOT appear to be working, so the pulse is suppressed.
-    healthSummaryMock.mockReturnValue({
-      summary: {
-        agent_id: "agent-1",
-        state: "offline",
-        state_since: "2026-07-06T09:00:00Z",
-        last_seen_at: "2026-07-06T09:40:00Z",
-        last_event_at: "2026-07-06T09:40:00Z",
-      },
-      events: undefined,
-      isLoading: false,
-      isError: false,
-    });
-    rerender(<AgentStatusDot agentId="agent-1" size={28} />);
+    const { container } = render(<AgentStatusDot agentId="agent-1" size={28} />);
     expect(container.querySelector(".animate-ping")).toBeNull();
+    expect(screen.getByLabelText(/^Status:/)).toHaveAttribute("aria-label", "Status: Online");
   });
 
   it("renders an OFFLINE dot as a hollow ring at legible sizes, filled on tiny ones (§3-v2)", () => {

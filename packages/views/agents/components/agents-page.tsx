@@ -50,7 +50,7 @@ import { Input } from "@multica/ui/components/ui/input";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { useNavigation } from "../../navigation";
 import { PageHeader } from "../../layout/page-header";
-import { availabilityConfig, availabilityOrder } from "../presence";
+import { availabilityConfig, availabilityOrder, toLivePresence } from "../presence";
 import { CreateAgentDialog } from "./create-agent-dialog";
 import { useT } from "../../i18n";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
@@ -410,7 +410,10 @@ export function AgentsPage({
       // archived agents have no presence to match against.
       if (view === "active" && availabilityFilter !== "all") {
         const detail = presenceMap.get(a.id);
-        if (detail?.availability !== availabilityFilter) return false;
+        if (!detail) return false;
+        // LRM-248: Online chip includes unstable; Offline is offline only.
+        const live = toLivePresence(detail.availability);
+        if (live !== availabilityFilter) return false;
       }
       if (q) {
         if (
@@ -445,14 +448,16 @@ export function AgentsPage({
       online: 0,
       unstable: 0,
       offline: 0,
-      // Active-view scope excludes archived agents, so this bucket stays 0
-      // here; present only to satisfy the exhaustive availability Record.
       archived: 0,
     };
     for (const a of inScopeOnMachine) {
       const detail = presenceMap.get(a.id);
       if (!detail) continue;
-      counts[detail.availability] += 1;
+  // LRM-248: live chips are Online / Offline — fold unstable into online.
+      const live = toLivePresence(detail.availability);
+      if (live === "online" || live === "offline" || live === "archived") {
+        counts[live] += 1;
+      }
     }
     return counts;
   }, [inScopeOnMachine, presenceMap]);

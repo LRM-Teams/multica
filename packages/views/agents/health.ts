@@ -94,6 +94,26 @@ export function resolveHealthDotClass(
   return healthStateConfig[summary.state].dotClass;
 }
 
+/**
+ * LRM-248 live avatar dots: only Online (green) / Offline (gray).
+ * Fold reconnecting / suspected_disconnect / recovered into Online.
+ */
+export function resolveLiveHealthDotClass(
+  summary: AgentHealthSummary | undefined,
+  fallbackDotClass: string,
+): string {
+  if (!summary) return fallbackDotClass;
+  switch (summary.state) {
+    case "offline":
+      return healthStateConfig.offline.dotClass;
+    case "online":
+    case "recovered":
+    case "reconnecting":
+    case "suspected_disconnect":
+      return healthStateConfig.online.dotClass;
+  }
+}
+
 // Compact elapsed-duration formatter for the "在线 3h" / "疑似掉线 2m" head
 // line. Locale-neutral units (m / h / d) so it needs no translation; the
 // state word in front is localized by the caller. Pure — callers pass `now`

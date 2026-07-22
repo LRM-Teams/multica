@@ -217,9 +217,10 @@ describe("AgentLivePeekCard", () => {
 
     renderCard();
 
-    // Active task with no streamed messages → chat stage "Thinking" (same
-    // resolveAgentLiveStatus path as the profile hover card).
-    expect(screen.getByText("Thinking")).toBeInTheDocument();
+    // LRM-248: live name-row word is Online/Offline only (Activity verbs stay
+    // on the Activity timeline / composer strip, not the peek header).
+    expect(screen.getByText("Online")).toBeInTheDocument();
+    expect(screen.queryByText("Thinking")).toBeNull();
     // identifier + title both render under the same link.
     const link = screen.getByRole("link", { name: /MUL-42/ });
     expect(link).toHaveAttribute("href", "/test/issues/issue-42");

@@ -5,21 +5,24 @@ import { cn } from "@multica/ui/lib/utils";
 import type { AgentLiveStatusView } from "../resolve-agent-live-status";
 
 /**
- * Canonical name-row live status chip: coloured dot + localized word.
+ * Live status word next to a name (LRM-248).
  *
- * Used by the profile hover card, DM header, agent side panel, and live
- * peek so every surface paints the same mark from `AgentLiveStatusView`
- * (dot + text-xs label). Icons / pills live elsewhere.
+ * Profile / name rows: **text only** by default — the avatar already carries
+ * the corner live dot; a second dot next to「在线」is the duplicate Frank rejected.
+ * Pass `showDot` for Activity-style strips that are not sitting beside an avatar.
  */
 export function AgentLiveStatusMark({
   status,
   className,
   showSkeleton = false,
+  showDot = false,
 }: {
   status: AgentLiveStatusView | null;
   className?: string;
   /** When status is still resolving, render a width-stable skeleton. */
   showSkeleton?: boolean;
+  /** Include the coloured status dot (default false — LRM-248 no duplicate). */
+  showDot?: boolean;
 }) {
   if (!status) {
     return showSkeleton ? (
@@ -36,10 +39,12 @@ export function AgentLiveStatusMark({
       )}
       data-testid="agent-live-status"
     >
-      <span
-        className={cn("size-1.5 shrink-0 rounded-full", status.dotClass)}
-        aria-hidden
-      />
+      {showDot ? (
+        <span
+          className={cn("size-1.5 shrink-0 rounded-full", status.dotClass)}
+          aria-hidden
+        />
+      ) : null}
       <span className="truncate">{status.label}</span>
     </span>
   );

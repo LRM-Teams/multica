@@ -15,12 +15,12 @@ import {
 } from "@multica/core/agents";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import { useAgentPanelStore } from "@multica/core/agents/stores";
-import { resolveHealthDotClass } from "../agents/health";
+import { resolveLiveHealthDotClass } from "../agents/health";
 import { AgentProfileCard } from "../agents/components/agent-profile-card";
 import { AgentLivePeekCard } from "../agents/components/agent-live-peek-card";
 import { MemberProfileCard } from "../members/member-profile-card";
 import { SquadProfileCard } from "../squads/components/squad-profile-card";
-import { availabilityConfig } from "../agents/presence";
+import { availabilityConfig, toLivePresence } from "../agents/presence";
 import { useNavigation } from "../navigation";
 import { useOpenAgentPanel } from "./agent-panel-context";
 import { resolveIdentityAvatarUrl } from "./identity-avatar-cache";
@@ -337,98 +337,64 @@ export function AgentPresenceOverlay({
   className?: string;
   children: React.ReactNode;
 }) {
-  // Base avatar defaults to 20px when `size` is omitted — keep the box in sync
-  // so it hugs the avatar exactly.
   const boxSize = size ?? 20;
+  const ws = useCurrentWorkspace();
+  const detail = useAgentPresenceDetail(ws?.id, agentId);
+  const archived =
+    detail !== "loading" &&
+    detail != null &&
+    toLivePresence(detail.availability) === "archived";
+
   return (
     <span
       data-slot="agent-presence"
-      className={cn("relative inline-flex shrink-0", className)}
+      data-archived={archived ? "true" : undefined}
+      className={cn(
+        "relative inline-flex shrink-0",
+        // LRM-248: archived / deleted — grayscale avatar, no live corner dot.
+        archived && "grayscale opacity-70",
+        className,
+      )}
       style={{ width: boxSize, height: boxSize }}
     >
       {children}
-      <AgentStatusDot agentId={agentId} size={size} />
+      {!archived ? <AgentStatusDot agentId={agentId} size={size} /> : null}
     </span>
   );
 }
 
-// Small presence indicator overlaid on the bottom-right of an agent avatar.
-// Must live inside a fixed-size container (see `AgentPresenceOverlay`) so its
-// absolute anchoring lands on the avatar, not a stretched grid cell. The dot
-// diameter is proportional to the avatar size (≈28%, clamped to a legible
-// minimum) so it reads correctly on both dense participant stacks (14–18px)
-// and large avatars. Exported for surfaces that render the base avatar
-// directly (e.g. comment trigger chips) but still want the standard dot.
+// LRM-248: only Online (green) / Offline (gray). No Working pulse, no Unstable.
 export function AgentStatusDot({ agentId, size }: { agentId: string; size?: number }) {
   const ws = useCurrentWorkspace();
   const detail = useAgentPresenceDetail(ws?.id, agentId);
-  // COLOR source: connectivity health (Iris §1) — the SAME source as the
-  // Activity tab Health block, so the dot can never drift from the tab.
   const { summary: healthSummary } = useAgentHealth(agentId);
   if (detail === "loading") return null;
 
-  const { dotClass: availabilityDotClass, label } =
-    availabilityConfig[detail.availability];
-  // TODO(#266): once the BE health API is live, health_summary.state is the
-  // SOLE dot color source. Until then the dot degrades to the availability
-  // color when the summary is missing (endpoint not deployed / loading) so it
-  // never blanks or crashes. STRUCTURE (fixed box, proportional dot, cut-out
-  // ring) and PULSE (a workload overlay, below) are unchanged — orthogonal to
-  // color.
-  const dotClass = resolveHealthDotClass(healthSummary, availabilityDotClass);
-  // Diameter tracks the avatar so the indicator is proportional everywhere,
-  // with a floor so it never disappears on the smallest (14–16px) avatars.
+  const live = toLivePresence(detail.availability);
+  if (live === "archived") return null;
+
+  const availabilityDotClass =
+    live === "online"
+      ? availabilityConfig.online.dotClass
+      : availabilityConfig.offline.dotClass;
+  const dotClass = resolveLiveHealthDotClass(healthSummary, availabilityDotClass);
   const diameter = Math.max(5, Math.round((size ?? 24) * 0.28));
   const dotStyle = { width: diameter, height: diameter };
-  // "Working" is a motion cue layered on top of the online color, not a new
-  // color — amber is already taken by `unstable`. A slow breathing pulse
-  // communicates "online + actively running a task" without colliding with
-  // the availability palette. `idle` / `queued` / non-online stay static.
-  //
-  // Gate the pulse on the SAME connectivity axis as the dot color (Iris): a
-  // disconnected agent must never appear to be "working". When health is known,
-  // pulse only on a healthy link (online / recovered); when the summary is
-  // absent (transitional / no record yet) fall back to the availability signal,
-  // consistent with the color fallback above.
-  const connectivityOk = healthSummary
-    ? healthSummary.state === "online" || healthSummary.state === "recovered"
-    : detail.availability === "online";
-  const isWorking = connectivityOk && detail.workload === "working";
-  const statusLabel = isWorking ? `${label} · Working` : label;
+  const statusLabel = live === "online" ? "Online" : "Offline";
 
-  // §3-v2 ①: an OFFLINE agent's dot is a HOLLOW gray ring (ring-only, no fill)
-  // so "unavailable" reads distinctly from the filled active states. On tiny
-  // participant-stack dots (~5px) a hollow ring is unreadable, so those fall
-  // back to the filled gray. Only the known-offline health state is hollow;
-  // the transitional availability fallback and all other states stay filled.
   const HOLLOW_MIN_PX = 8;
-  const isOfflineHollow =
-    healthSummary?.state === "offline" && diameter >= HOLLOW_MIN_PX;
+  const isOfflineHollow = live === "offline" && diameter >= HOLLOW_MIN_PX;
   const dotColorClass = isOfflineHollow
     ? "border-2 border-muted-foreground/50 bg-transparent"
     : dotClass;
 
   return (
     <span className="absolute bottom-0 right-0 inline-flex">
-      {isWorking && (
-        // Motion layer only — hidden under prefers-reduced-motion so the
-        // static dot below remains the sole (accessible) status signal.
-        // aria-hidden: the label on the static dot already conveys "Working".
-        <span
-          aria-hidden="true"
-          style={dotStyle}
-          className={`absolute inline-flex animate-ping rounded-full ${dotClass} opacity-60 motion-reduce:hidden`}
-        />
-      )}
-      {/* `ring-background` is a cut-out ring the color of the surface behind the
-          dot, so it stays legible on dark/light/hover/selected backgrounds. */}
       <span
         aria-label={`Status: ${statusLabel}`}
         title={statusLabel}
         style={dotStyle}
-        className={`relative rounded-full ring-2 ring-background ${dotColorClass} ${
-          isWorking ? "motion-reduce:ring-brand" : ""
-        }`}
+        className={`relative rounded-full ring-2 ring-background ${dotColorClass}`}
       />
     </span>
   );

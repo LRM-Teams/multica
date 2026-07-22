@@ -111,6 +111,7 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
           size={40}
           avatarUrlHint={agent.avatar_url}
           showStatusDot={!isArchived}
+          showXpBurst
           profileLink={false}
           className={isArchived ? "opacity-50 grayscale" : undefined}
         />

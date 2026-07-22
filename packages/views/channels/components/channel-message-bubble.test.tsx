@@ -179,6 +179,8 @@ vi.mock("@multica/core/workspace/hooks", () => ({
 vi.mock("@multica/core/agents/stores", () => ({
   useAgentPanelStore: (selector: (s: { open: (id: string) => void }) => unknown) =>
     selector({ open: vi.fn() }),
+  useAgentXpBurstStore: (selector: (s: { bursts: Record<string, never> }) => unknown) =>
+    selector({ bursts: {} }),
 }));
 
 vi.mock("../../common/agent-panel-context", () => ({
@@ -1897,7 +1899,7 @@ describe("ChannelMessageBubble", () => {
     expect(onReact).not.toHaveBeenCalled();
   });
 
-  it("renders optimistic pending silently (no Sending… chrome) and hides the action bar", () => {
+  it("renders an optimistic pending bubble silently (no Sending…)", () => {
     render(
       <ChannelMessageBubble
         message={makeMessage({
@@ -1918,10 +1920,10 @@ describe("ChannelMessageBubble", () => {
     );
 
     expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-local-send", "pending");
-    expect(screen.getByTestId("message-bubble")).toHaveTextContent("optimistic pending");
-    // LRM-271/280: pending is silent — no Sending… label or opacity flash.
+    expect(screen.getByText("optimistic pending")).toBeInTheDocument();
+    // Slack / LRM-271/280: no Sending… chrome on pending optimistic rows.
     expect(screen.queryByTestId("message-send-pending")).not.toBeInTheDocument();
-    expect(screen.queryByText("Sending…")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Sending/i)).not.toBeInTheDocument();
     expect(screen.queryByTestId("message-action-bar")).not.toBeInTheDocument();
   });
 

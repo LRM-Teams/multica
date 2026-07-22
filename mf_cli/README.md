@@ -1,80 +1,95 @@
 # Modelfactory CLI (`mf`)
 
-Command-line tool to manage inference services and jobs on [Modelfactory](https://modelfactory.lenovo.com).
+Command-line tool to manage services, jobs, and workspaces on [Modelfactory](https://modelfactory.lenovo.com).
 
 ## Install
 
 ```bash
-cd /workspaces/leagent/backend/areal/mf_cli
-# Use the existing playwright venv:
-export VENV=/tmp/mf-bot/.venv/bin/python
-alias mf="PYTHONPATH=/workspaces/leagent/backend/areal $VENV -m mf_cli.cli"
+cd /workspaces/leagent/backend/areal/multica
+alias mf="PYTHONPATH=. /tmp/mf-bot/.venv/bin/python -m mf_cli.cli"
 ```
 
 ## Quick Start
 
 ```bash
-# Login (once per 6 hours)
-mf -u zhoujie22 -p "PWD" login
+# Login (once per 6 hours, or set MF_USERNAME/MF_PASSWORD in mf_cli/.env)
+mf -u USER -p PWD login
 
-# List services
-mf list
+# --- Services ---
+mf list                                              # List services
+mf create -m /dfs/.../model -n my-service -g A800-8  # Create new service
+mf status <SERVICE_ID>                               # Check service status
 
-# Create a service
-mf create -m /dfs/share-groups/letrain/zhoujie/AReaL-main/Qwen3.5-9B -n Qwen3.5-9B -g A800-8
+# --- Jobs ---
+mf job list                                          # List jobs
+mf job create -c "sh /path/script.sh" -n my-job -g A800-8 --gpu-count 2 --cpu 32 --memory 250
+mf job status <JOB_ID>                               # Check job status
 
-# List jobs
-mf job list
-
-# Create a job
-mf job create \
-  -c "sh /dfs/share-groups/letrain/zhoujie/le-agent-dev_new/db_bridge/run_dev.sh" \
-  -n le-agent-dev \
-  -g A800-8 --gpu-count 2 \
-  --cpu 32 --memory 250
+# --- Workspaces ---
+mf ws list                                           # List workspaces
+mf ws create -n my-ws -g A800-8                     # Create workspace (default: PyTorch 2.8.0)
+mf ws restart <WS_ID>                                # Restart workspace
+mf ws stop <WS_ID>                                   # Stop workspace
+mf ws save <WS_ID>                                   # Save workspace (persist current state as an image)
+mf ws delete <WS_ID>                                 # Delete workspace
+mf ws status <WS_ID>                                 # Check workspace status
 ```
 
 ## Commands
 
-### Service Management
+### Service
 
 | Command | Description |
 |---------|-------------|
-| `mf create -m PATH` | Create inference service |
+| `mf create -m PATH` | Create inference service (model, A800/A100/H20, vllm) |
 | `mf list` | List services |
 | `mf status ID` | Service details |
 
-### Job Management
+### Job
 
 | Command | Description |
 |---------|-------------|
-| `mf job create -c CMD` | Create a job |
+| `mf job create -c CMD` | Create a job with custom command |
 | `mf job list` | List jobs |
 | `mf job status ID` | Job details |
 
-### Options
+### Workspace
 
-| Flag | Description |
-|------|-------------|
-| `-u`, `--username` | Modelfactory username |
-| `-p`, `--password` | Modelfactory password |
-| `-v`, `--visible` | Show browser during login |
-| `-g`, `--gpu` | GPU spec (A800-8, A100-8, H20-8, ...) |
-| `-n`, `--name` | Resource name/alias |
-| `-c`, `--command` | Job command (e.g. `"sh /path/script.sh"`) |
+| Command | Description |
+|---------|-------------|
+| `mf ws create` | Create workspace (PyTorch 2.8.0 by default) |
+| `mf ws list` | List workspaces |
+| `mf ws status ID` | Workspace details |
+| `mf ws restart ID` | Restart a running workspace |
+| `mf ws stop ID` | Stop a running workspace |
+| `mf ws save ID` | Save workspace state as an image |
+| `mf ws delete ID` | Delete workspace |
+
+### Workspace options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-n`, `--name` | newWorkspace | Workspace name |
+| `-g`, `--gpu` | A800-8 | GPU spec |
+| `--gpu-count` | 1 | Number of GPUs |
+| `--cpu` | 8 | CPU cores |
+| `--memory` | 80 | Memory GiB |
+| `--image` | pytorch:2.8.0 | Docker image (full registry path auto) |
+| `--ssh` | false | Enable SSH |
 
 ## Architecture
 
 ```
 mf_cli/
-├── cli.py        # CLI entry point (argparse, service + job subcommands)
-├── auth.py       # Playwright login, token caching
+├── cli.py        # CLI entry point (argparse)
+├── auth.py       # Playwright login, token caching, .env loading
 ├── service.py    # Inference service CRUD (pure HTTP)
 ├── job.py        # Job CRUD (pure HTTP)
+├── workspace.py  # Workspace CRUD + actions (pure HTTP)
 ├── config.py     # API endpoints, GPU specs, defaults
 └── pyproject.toml
 ```
 
-- **Login**: Playwright fills the web login form → captures JWT cookie → caches to `~/.mf_cli/token` (6h TTL)
-- **API**: All CRUD operations use `aimaster-token-header` JWT header, no browser needed after login
-- **Billing**: GPU selection auto-generates a price token via `/apis/billing/.../sources-price`
+- **Login**: Playwright fills the web login form → captures JWT cookie → caches to `~/.mf_cli/`
+- **API**: All CRUD uses `aimaster-token-header` JWT; no browser needed after login
+- **Billing**: GPU selection auto-generates price token via billing API

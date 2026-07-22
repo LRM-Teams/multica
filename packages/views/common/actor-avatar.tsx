@@ -24,6 +24,7 @@ import { availabilityConfig, toLiveAvailability } from "../agents/presence";
 import { useNavigation } from "../navigation";
 import { useOpenAgentPanel } from "./agent-panel-context";
 import { resolveIdentityAvatarUrl } from "./identity-avatar-cache";
+import { AgentXpBurst } from "../agents/components/agent-xp-burst";
 
 /**
  * Selects which agent hover-card payload to render when `enableHoverCard` is
@@ -80,6 +81,11 @@ interface ActorAvatarProps {
    * and agents, while picker/menu controls keep their own click behavior.
    */
   profileLink?: boolean;
+  /**
+   * Phase① memory XP burst on this avatar (message rows / profile only — not
+   * sidebar lists). No effect for non-agent actors.
+   */
+  showXpBurst?: boolean;
 }
 
 
@@ -123,6 +129,7 @@ export function ActorAvatar({
   showStatusDot,
   hoverCardVariant = "profile",
   profileLink,
+  showXpBurst = false,
 }: ActorAvatarProps) {
   const { getActorName, getActorInitials, getActorAvatarUrl } = useActorName();
   // LRM-224: identity-first — directory + sticky cache; message URL only seeds.
@@ -164,6 +171,12 @@ export function ActorAvatar({
   ) : (
     avatar
   );
+  const withXpBurst =
+    actorType === "agent" && showXpBurst ? (
+      <AgentXpBurst agentId={actorId}>{dotted}</AgentXpBurst>
+    ) : (
+      dotted
+    );
   const shouldLinkToProfile =
     profileLink ??
     (actorType === "member" || actorType === "agent" || actorType === "squad");
@@ -173,16 +186,16 @@ export function ActorAvatar({
   // to the full agent detail page. Members/squads still route — no side
   // panel exists for those actor types yet.
   const content = !shouldLinkToProfile
-    ? dotted
+    ? withXpBurst
     : actorType === "agent"
-      ? <ActorAvatarPanelTrigger agentId={actorId}>{dotted}</ActorAvatarPanelTrigger>
+      ? <ActorAvatarPanelTrigger agentId={actorId}>{withXpBurst}</ActorAvatarPanelTrigger>
       : actorType === "member" || actorType === "squad"
         ? (
             <ActorAvatarWorkspaceProfileLink actorType={actorType} actorId={actorId}>
-              {dotted}
+              {withXpBurst}
             </ActorAvatarWorkspaceProfileLink>
           )
-        : dotted;
+        : withXpBurst;
 
   if (!enableHoverCard) {
     return content;

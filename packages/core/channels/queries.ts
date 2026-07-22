@@ -305,7 +305,12 @@ function asCacheMessage(
   siblings: readonly ChannelMessage[] | undefined,
 ): ChannelMessage {
   const enriched = withPreservedAuthorAvatar(incoming, existing, siblings);
-  if (isLocalSendRow(incoming) || enriched.local_send_status == null) return enriched;
+  // Temp optimistic rows use `id === client_message_id` and may carry
+  // `local_send_status`. Authoritative HTTP ACK / WS rows use a server id and
+  // must never keep a client-only pending/failed badge (LRM-271).
+  const clientId = enriched.client_message_id;
+  if (clientId && enriched.id === clientId) return enriched;
+  if (enriched.local_send_status == null) return enriched;
   const { local_send_status: _drop, ...rest } = enriched;
   return rest;
 }

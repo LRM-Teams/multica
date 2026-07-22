@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { InfiniteData } from "@tanstack/react-query";
+import { QueryClient, type InfiniteData } from "@tanstack/react-query";
 import type { ChannelMessage, ChannelMessagesPage } from "../types";
 
 const listChannelMessagesPageMock = vi.fn().mockResolvedValue({
@@ -16,11 +16,13 @@ vi.mock("../api", () => ({
 
 import {
   CHANNEL_MESSAGES_VIRTUOSO_BASE_INDEX,
+  channelKeys,
   channelMessagesFirstItemIndex,
   channelMessagesPageOptions,
   enrichChannelMessagesPreservingAvatars,
   findChannelMessageMatchIndex,
   flattenChannelMessagePages,
+  upsertChannelMessageInCache,
   withPreservedAuthorAvatar,
 } from "./queries";
 
@@ -223,5 +225,40 @@ describe("findChannelMessageMatchIndex (optimistic ACK)", () => {
       thread_root_message_id: "root-1",
     } as ChannelMessage;
     expect(findChannelMessageMatchIndex([optimistic], ack)).toBe(0);
+  });
+});
+
+describe("upsertChannelMessageInCache (LRM-271)", () => {
+  it("strips a leaked local_send_status when the authoritative ACK replaces the temp row", () => {
+    const qc = new QueryClient();
+    const optimistic = {
+      id: "client-1",
+      channel_id: "c1",
+      workspace_id: "w1",
+      seq: 1,
+      type: "user",
+      author_id: "u1",
+      author_name: "Alice",
+      content: "hello",
+      source: "multica",
+      external_message_id: null,
+      client_message_id: "client-1",
+      created_at: "2026-07-22T05:00:00Z",
+      local_send_status: "pending",
+    } as ChannelMessage;
+    qc.setQueryData(channelKeys.messages("c1"), [optimistic]);
+
+    upsertChannelMessageInCache(qc, {
+      ...optimistic,
+      id: "server-1",
+      seq: 42,
+      // Simulate a buggy merge that left the client-only flag on the ACK.
+      local_send_status: "pending",
+    });
+
+    const cached = qc.getQueryData<ChannelMessage[]>(channelKeys.messages("c1")) ?? [];
+    expect(cached).toHaveLength(1);
+    expect(cached[0]?.id).toBe("server-1");
+    expect(cached[0]?.local_send_status ?? null).toBeNull();
   });
 });

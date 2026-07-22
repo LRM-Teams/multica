@@ -1,7 +1,7 @@
 {
   "page": {
-    "title": "인박스",
-    "back": "인박스"
+    "title": "활동",
+    "back": "활동"
   },
   "menu": {
     "mark_all_read": "모두 읽음으로 표시",
@@ -67,6 +67,35 @@
     "archive_all_failed": "모두 보관하지 못했습니다",
     "archive_all_read_failed": "읽은 항목을 보관하지 못했습니다",
     "archive_completed_failed": "완료된 항목을 보관하지 못했습니다"
+  },
+  "activity": {
+    "tabs_label": "활동 필터",
+    "tabs": {
+      "all": "전체",
+      "unread": "읽지 않음",
+      "mentions": "멘션"
+    },
+    "new_count": "새 {{count}}개",
+    "replies": "답글 {{count}}개",
+    "access_denied": "이 채널에 더 이상 액세스할 수 없습니다",
+    "load_failed": "활동을 불러오지 못했습니다",
+    "retry": "다시 시도",
+    "open_thread_failed": "이 스레드를 열 수 없습니다",
+    "open_item_failed": "이 활동 항목을 열 수 없습니다",
+    "empty": {
+      "all": {
+        "title": "아직 활동이 없습니다",
+        "description": "팔로우한 스레드, 멘션, 이슈 업데이트가 여기에 표시됩니다."
+      },
+      "unread": {
+        "title": "모두 읽었습니다",
+        "description": "읽지 않은 스레드나 이슈 업데이트가 없습니다. 전체 탭에서 기록을 볼 수 있습니다."
+      },
+      "mentions": {
+        "title": "멘션이 없습니다",
+        "description": "채널이나 이슈에서 나를 @멘션한 메시지가 여기에 표시됩니다."
+      }
+    }
   },
   "mention_popup": {
     "title": "멘션되었습니다",

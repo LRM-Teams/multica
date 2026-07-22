@@ -130,7 +130,9 @@ vi.mock("@multica/core/api", async (importOriginal) => {
     },
   };
 });
-vi.mock("@multica/core/inbox/queries", () => ({ deduplicateInboxItems: (items: unknown[]) => items, inboxKeys: { list: () => ["inbox"] } }));
+vi.mock("@multica/core/user-activity/queries", () => ({
+  useUserActivityUnreadCount: () => 0,
+}));
 vi.mock("@multica/core/issues/queries", () => ({ issueDetailOptions: () => ({ queryKey: ["issue"] }) }));
 vi.mock("@multica/core/issues/stores/create-mode-store", () => ({
   useCreateModeStore: { getState: () => ({ lastMode: "agent" }) },
@@ -188,17 +190,17 @@ describe("AppSidebar navigation", () => {
     detail.current = { isPending: false, isError: false, data: null, error: null };
   });
 
-  it("renders one personal Messages entry directly below Inbox", () => {
+  it("renders one personal Messages entry directly below Activity", () => {
     renderSidebar();
-    const inbox = screen.getByText("Inbox");
+    const activity = screen.getByText("Activity");
     const messages = screen.getByText("Messages");
     const overview = screen.getByText("Overview");
 
     expect(screen.getAllByText("Messages")).toHaveLength(1);
     expect(messages.closest("a")).toHaveAttribute("href", "/acme/channels");
-    // Personal entry order stays Inbox → Messages → Workspace / Overview.
+    // Personal entry order stays Activity → Messages → Workspace / Overview.
     expect(
-      inbox.compareDocumentPosition(messages) & Node.DOCUMENT_POSITION_FOLLOWING,
+      activity.compareDocumentPosition(messages) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(
       messages.compareDocumentPosition(overview) & Node.DOCUMENT_POSITION_FOLLOWING,
@@ -213,7 +215,7 @@ describe("AppSidebar navigation", () => {
   it("does not render the My Issues shortcut row (removed; app leads with Messages)", () => {
     renderSidebar();
     expect(screen.queryByText("My Issues")).toBeNull();
-    // Inbox stays in the top personal section.
-    expect(screen.getByText("Inbox")).toBeInTheDocument();
+    // Activity stays in the top personal section.
+    expect(screen.getByText("Activity")).toBeInTheDocument();
   });
 });

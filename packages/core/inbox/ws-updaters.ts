@@ -1,6 +1,11 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { inboxKeys } from "./queries";
+import { userActivityKeys } from "../user-activity/queries";
 import type { InboxItem, IssueStatus } from "../types";
+
+function invalidateActivity(qc: QueryClient, wsId: string) {
+  qc.invalidateQueries({ queryKey: userActivityKeys.all(wsId) });
+}
 
 export function onInboxNew(
   qc: QueryClient,
@@ -10,6 +15,7 @@ export function onInboxNew(
   // Use invalidateQueries instead of setQueryData — triggers a refetch that
   // reliably notifies all observers. The inbox list is small so this is cheap.
   qc.invalidateQueries({ queryKey: inboxKeys.list(wsId) });
+  invalidateActivity(qc, wsId);
 }
 
 export function onInboxIssueStatusChanged(
@@ -40,4 +46,5 @@ export function onInboxIssueDeleted(
 
 export function onInboxInvalidate(qc: QueryClient, wsId: string) {
   qc.invalidateQueries({ queryKey: inboxKeys.list(wsId) });
+  invalidateActivity(qc, wsId);
 }

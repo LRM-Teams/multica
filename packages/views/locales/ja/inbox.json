@@ -1,7 +1,7 @@
 {
   "page": {
-    "title": "インボックス",
-    "back": "インボックス"
+    "title": "アクティビティ",
+    "back": "アクティビティ"
   },
   "menu": {
     "mark_all_read": "すべて既読にする",
@@ -67,6 +67,35 @@
     "archive_all_failed": "すべてアーカイブできませんでした",
     "archive_all_read_failed": "既読の項目をアーカイブできませんでした",
     "archive_completed_failed": "完了した項目をアーカイブできませんでした"
+  },
+  "activity": {
+    "tabs_label": "アクティビティのフィルター",
+    "tabs": {
+      "all": "すべて",
+      "unread": "未読",
+      "mentions": "メンション"
+    },
+    "new_count": "新着 {{count}} 件",
+    "replies": "返信 {{count}} 件",
+    "access_denied": "このチャンネルにアクセスできません",
+    "load_failed": "アクティビティの読み込みに失敗しました",
+    "retry": "再試行",
+    "open_thread_failed": "このスレッドを開けませんでした",
+    "open_item_failed": "このアクティビティを開けませんでした",
+    "empty": {
+      "all": {
+        "title": "アクティビティはまだありません",
+        "description": "フォロー中のスレッド、メンション、Issue の更新がここに表示されます。"
+      },
+      "unread": {
+        "title": "未読はありません",
+        "description": "未読のスレッドや Issue 更新はありません。「すべて」で履歴を確認できます。"
+      },
+      "mentions": {
+        "title": "メンションはありません",
+        "description": "チャンネルや Issue で @メンション されたメッセージがここに表示されます。"
+      }
+    }
   },
   "mention_popup": {
     "title": "メンションされました",

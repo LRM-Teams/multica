@@ -399,6 +399,112 @@ func TestReminderProjectionReplaySharesPlacementGenerationAndAllowsZeroAck(t *te
 	}
 }
 
+func TestReminderRuntimeResetDefinitionsAndWatermarkShareOneOrderBoundary(t *testing.T) {
+	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
+	agentID := fixture.agentIDs[0]
+	runtimeID := fixture.runtimeIDs[0]
+	identity := daemonws.ClientIdentity{WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
+	anchor := fixture.insertMessage(t, "user", testUserID, "runtime reset boundary", nil)
+	reminderID := seedDueReminder(t, agentID, fixture.channel.ID, anchor.ID, "", "")
+	events, firstEnd, err := fixture.handler.HandleDaemonReminderProjection(context.Background(), identity, protocol.ReminderProjectionRequestPayload{RuntimeCursors: map[string]int64{runtimeID: 0}})
+	if err != nil || len(events) == 0 {
+		t.Fatalf("seed projection events=%d err=%v", len(events), err)
+	}
+	if err := fixture.handler.HandleDaemonReminderProjectionAck(context.Background(), identity, protocol.ReminderProjectionAckPayload{RuntimeCursors: firstEnd.RuntimeCursors}); err != nil {
+		t.Fatal(err)
+	}
+	var generation int64
+	if err := testPool.QueryRow(context.Background(), `SELECT COALESCE(max(placement_generation), 0) FROM agent_reminder_daemon_owner_event WHERE agent_id = $1`, agentID).Scan(&generation); err != nil {
+		t.Fatal(err)
+	}
+
+	holder, err := testPool.Begin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Rollback(context.Background())
+	if _, err := holder.Exec(context.Background(), `SELECT pg_advisory_xact_lock(hashtextextended($1, 210))`, runtimeID); err != nil {
+		t.Fatal(err)
+	}
+	type resetResult struct {
+		reset protocol.ReminderRuntimeReset
+		err   error
+	}
+	resetDone := make(chan resetResult, 1)
+	go func() {
+		reset, err := fixture.handler.buildReminderRuntimeReset(context.Background(), identity, runtimeID, 0, []protocol.ReminderRuntimeResidency{{AgentID: agentID, PlacementGeneration: generation}})
+		resetDone <- resetResult{reset: reset, err: err}
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		var waiting int
+		if err := testPool.QueryRow(context.Background(), `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("reset did not reach runtime advisory boundary")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	mutationDone := make(chan error, 1)
+	go func() {
+		tx, err := testPool.Begin(context.Background())
+		if err == nil {
+			_, err = tx.Exec(context.Background(), `SELECT 1 FROM agent WHERE id = $1 FOR UPDATE`, agentID)
+		}
+		if err == nil {
+			_, err = tx.Exec(context.Background(), `UPDATE agent_reminder SET title = 'after reset boundary', version = version + 1, updated_at = now() WHERE id = $1`, reminderID)
+		}
+		if err == nil {
+			err = tx.Commit(context.Background())
+		} else if tx != nil {
+			_ = tx.Rollback(context.Background())
+		}
+		mutationDone <- err
+	}()
+	select {
+	case err := <-mutationDone:
+		t.Fatalf("mutation crossed locked reset owner before boundary release: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := holder.Commit(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	result := <-resetDone
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	if err := <-mutationDone; err != nil {
+		t.Fatal(err)
+	}
+	if result.reset.ProjectionWatermark != firstEnd.RuntimeCursors[runtimeID] || len(result.reset.Owners) != 1 || len(result.reset.Owners[0].Reminders) != 1 || result.reset.Owners[0].Reminders[0].Version != 1 {
+		t.Fatalf("reset returned mixed definitions/watermark: first=%d reset=%+v", firstEnd.RuntimeCursors[runtimeID], result.reset)
+	}
+	replay, replayEnd, err := fixture.handler.HandleDaemonReminderProjection(context.Background(), identity, protocol.ReminderProjectionRequestPayload{RuntimeCursors: map[string]int64{runtimeID: result.reset.ProjectionWatermark}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dbVersion int64
+	if err := testPool.QueryRow(context.Background(), `SELECT version FROM agent_reminder WHERE id = $1`, reminderID).Scan(&dbVersion); err != nil {
+		t.Fatal(err)
+	}
+	if dbVersion != 2 || replayEnd.RuntimeCursors[runtimeID] <= result.reset.ProjectionWatermark {
+		t.Fatalf("post-reset DB/replay truth version=%d end=%+v reset=%+v", dbVersion, replayEnd, result.reset)
+	}
+	found := false
+	for _, event := range replay {
+		if event.ReminderID == reminderID && event.Version == dbVersion {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("post-reset replay omitted DB truth version=%d events=%+v", dbVersion, replay)
+	}
+}
+
 func TestUpdateAgentMoveWithActiveReminderFailsClosedForIncapableRuntime(t *testing.T) {
 	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}, {omitCapability: true}})
 	anchor := fixture.insertMessage(t, "user", testUserID, "move capability anchor", nil)

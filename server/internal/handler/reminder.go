@@ -1296,8 +1296,16 @@ func (h *Handler) buildReminderRuntimeReset(ctx context.Context, identity daemon
 	}
 	defer tx.Rollback(ctx)
 	sort.Slice(residencies, func(i, j int) bool { return residencies[i].AgentID < residencies[j].AgentID })
+	type lockedResidency struct {
+		request          protocol.ReminderRuntimeResidency
+		agentID          pgtype.UUID
+		workspaceID      pgtype.UUID
+		currentRuntimeID pgtype.UUID
+		archivedAt       pgtype.Timestamptz
+		exists           bool
+	}
 	seen := make(map[string]bool, len(residencies))
-	owners := make([]protocol.ReminderRuntimeResetOwner, 0, len(residencies))
+	locked := make([]lockedResidency, 0, len(residencies))
 	for _, residency := range residencies {
 		if residency.AgentID == "" || residency.PlacementGeneration < 1 || seen[residency.AgentID] {
 			return protocol.ReminderRuntimeReset{}, fmt.Errorf("invalid reminder runtime reset residency")
@@ -1307,24 +1315,35 @@ func (h *Handler) buildReminderRuntimeReset(ctx context.Context, identity daemon
 		if err != nil || !agentID.Valid {
 			return protocol.ReminderRuntimeReset{}, fmt.Errorf("invalid reminder runtime reset agent")
 		}
-		owner := protocol.ReminderRuntimeResetOwner{AgentID: residency.AgentID, PlacementGeneration: residency.PlacementGeneration, Terminal: true}
-		var workspaceID, currentRuntimeID pgtype.UUID
-		var archivedAt pgtype.Timestamptz
-		err = tx.QueryRow(ctx, `SELECT workspace_id, runtime_id, archived_at FROM agent WHERE id = $1 FOR UPDATE`, agentID).Scan(&workspaceID, &currentRuntimeID, &archivedAt)
+		entry := lockedResidency{request: residency, agentID: agentID}
+		err = tx.QueryRow(ctx, `SELECT workspace_id, runtime_id, archived_at FROM agent WHERE id = $1 FOR UPDATE`, agentID).Scan(&entry.workspaceID, &entry.currentRuntimeID, &entry.archivedAt)
 		if err != nil && !errorsIsNoRows(err) {
 			return protocol.ReminderRuntimeReset{}, err
 		}
+		entry.exists = err == nil
+		locked = append(locked, entry)
+	}
+	// Keep the established Agent -> runtime advisory order. Once every local
+	// owner row is locked, the advisory lock makes the definitions read and
+	// projection watermark one indivisible order-domain boundary.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 210))`, runtimeID); err != nil {
+		return protocol.ReminderRuntimeReset{}, err
+	}
+	owners := make([]protocol.ReminderRuntimeResetOwner, 0, len(locked))
+	for _, entry := range locked {
+		residency := entry.request
+		owner := protocol.ReminderRuntimeResetOwner{AgentID: residency.AgentID, PlacementGeneration: residency.PlacementGeneration, Terminal: true}
 		var currentGeneration int64
-		if err == nil {
-			if err := tx.QueryRow(ctx, `SELECT COALESCE(max(placement_generation), 0) FROM agent_reminder_daemon_owner_event WHERE agent_id = $1`, agentID).Scan(&currentGeneration); err != nil {
+		if entry.exists {
+			if err := tx.QueryRow(ctx, `SELECT COALESCE(max(placement_generation), 0) FROM agent_reminder_daemon_owner_event WHERE agent_id = $1`, entry.agentID).Scan(&currentGeneration); err != nil {
 				return protocol.ReminderRuntimeReset{}, err
 			}
 			if currentGeneration > owner.PlacementGeneration {
 				owner.PlacementGeneration = currentGeneration
 			}
-			owner.Terminal = archivedAt.Valid || uuidToString(currentRuntimeID) != runtimeID || currentGeneration != residency.PlacementGeneration || !daemonIdentityOwnsWorkspace(identity, workspaceID)
+			owner.Terminal = entry.archivedAt.Valid || uuidToString(entry.currentRuntimeID) != runtimeID || currentGeneration != residency.PlacementGeneration || !daemonIdentityOwnsWorkspace(identity, entry.workspaceID)
 			if !owner.Terminal {
-				rows, err := tx.Query(ctx, `SELECT `+reminderSelectColumns()+` FROM agent_reminder WHERE workspace_id = $1 AND agent_id = $2 AND status = 'scheduled' ORDER BY fire_at ASC, id ASC`, workspaceID, agentID)
+				rows, err := tx.Query(ctx, `SELECT `+reminderSelectColumns()+` FROM agent_reminder WHERE workspace_id = $1 AND agent_id = $2 AND status = 'scheduled' ORDER BY fire_at ASC, id ASC`, entry.workspaceID, entry.agentID)
 				if err != nil {
 					return protocol.ReminderRuntimeReset{}, err
 				}
@@ -1344,9 +1363,6 @@ func (h *Handler) buildReminderRuntimeReset(ctx context.Context, identity daemon
 			}
 		}
 		owners = append(owners, owner)
-	}
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 210))`, runtimeID); err != nil {
-		return protocol.ReminderRuntimeReset{}, err
 	}
 	var watermark, ack int64
 	if err := tx.QueryRow(ctx, `

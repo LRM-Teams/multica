@@ -337,6 +337,25 @@ func TestReminderProjectionReplaySharesPlacementGenerationAndAllowsZeroAck(t *te
 
 	anchor := fixture.insertMessage(t, "user", testUserID, "projection generation anchor", nil)
 	reminderID := seedDueReminder(t, agentID, fixture.channel.ID, anchor.ID, "", "")
+	var generation int64
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT max(placement_generation)
+		FROM agent_reminder_daemon_owner_event
+		WHERE agent_id = $1 AND runtime_id = $2`, agentID, runtimeID).Scan(&generation); err != nil {
+		t.Fatal(err)
+	}
+	forcedEvents, forcedEnd, err := fixture.handler.HandleDaemonReminderProjection(context.Background(), identity, protocol.ReminderProjectionRequestPayload{
+		RuntimeCursors:       map[string]int64{runtimeID: 0},
+		RuntimeResidencies:   map[string][]protocol.ReminderRuntimeResidency{runtimeID: {{AgentID: agentID, PlacementGeneration: generation}}},
+		RuntimeResetRequired: map[string]bool{runtimeID: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	forcedReset, ok := forcedEnd.RuntimeResets[runtimeID]
+	if len(forcedEvents) != 0 || !ok || forcedReset.ProjectionWatermark < 1 || len(forcedReset.Owners) != 1 || len(forcedReset.Owners[0].Reminders) != 1 || forcedReset.Owners[0].Reminders[0].ReminderID != reminderID {
+		t.Fatalf("forced canonical reset with zero ack events=%+v end=%+v", forcedEvents, forcedEnd)
+	}
 	events, end, err := fixture.handler.HandleDaemonReminderProjection(context.Background(), identity, protocol.ReminderProjectionRequestPayload{
 		RuntimeCursors: map[string]int64{runtimeID: 0},
 	})
@@ -352,13 +371,6 @@ func TestReminderProjectionReplaySharesPlacementGenerationAndAllowsZeroAck(t *te
 	}
 	if projection == nil {
 		t.Fatalf("replay omitted reminder %s: %+v", reminderID, events)
-	}
-	var generation int64
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT max(placement_generation)
-		FROM agent_reminder_daemon_owner_event
-		WHERE agent_id = $1 AND runtime_id = $2`, agentID, runtimeID).Scan(&generation); err != nil {
-		t.Fatal(err)
 	}
 	if projection.PlacementGeneration != generation || generation < 1 {
 		t.Fatalf("projection generation=%d owner generation=%d", projection.PlacementGeneration, generation)
@@ -432,7 +444,7 @@ func TestReminderRuntimeResetDefinitionsAndWatermarkShareOneOrderBoundary(t *tes
 	}
 	resetDone := make(chan resetResult, 1)
 	go func() {
-		reset, err := fixture.handler.buildReminderRuntimeReset(context.Background(), identity, runtimeID, 0, []protocol.ReminderRuntimeResidency{{AgentID: agentID, PlacementGeneration: generation}})
+		reset, err := fixture.handler.buildReminderRuntimeReset(context.Background(), identity, runtimeID, 0, []protocol.ReminderRuntimeResidency{{AgentID: agentID, PlacementGeneration: generation}}, false)
 		resetDone <- resetResult{reset: reset, err: err}
 	}()
 	deadline := time.Now().Add(2 * time.Second)

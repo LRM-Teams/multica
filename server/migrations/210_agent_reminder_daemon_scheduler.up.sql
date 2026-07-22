@@ -228,7 +228,8 @@ BEGIN
   SELECT COALESCE((metadata->'capabilities') @> '["reminder_versioned_cache_v1"]'::jsonb, false)
   INTO target_capable
   FROM agent_runtime
-  WHERE id = NEW.runtime_id AND workspace_id = NEW.workspace_id;
+  WHERE id = NEW.runtime_id AND workspace_id = NEW.workspace_id
+  FOR SHARE;
   IF NOT COALESCE(target_capable, false) THEN
     RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'daemon_outdated';
   END IF;

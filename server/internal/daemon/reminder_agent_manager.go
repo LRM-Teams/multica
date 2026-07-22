@@ -248,6 +248,73 @@ func (m *reminderAgentManager) lifecycleCursors() map[string]int64 {
 	return out
 }
 
+func (m *reminderAgentManager) reconcileRuntimeSet(allowed map[string]bool) (bool, error) {
+	if m == nil {
+		return false, nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	previousAgents := make(map[string]reminderAgentResidency, len(m.agents))
+	for agentID, entry := range m.agents {
+		previousAgents[agentID] = entry
+	}
+	previousHighWatermarks := make(map[string]int64, len(m.placementHighWatermarks))
+	for agentID, generation := range m.placementHighWatermarks {
+		previousHighWatermarks[agentID] = generation
+	}
+	previousCursors := make(map[string]int64, len(m.runtimeLifecycleCursors))
+	for runtimeID, seq := range m.runtimeLifecycleCursors {
+		previousCursors[runtimeID] = seq
+	}
+	changed := false
+	for agentID, entry := range m.agents {
+		if allowed[entry.RuntimeID] {
+			continue
+		}
+		delete(m.agents, agentID)
+		generation := entry.PlacementGeneration
+		if generation < 1 {
+			generation = 1
+		}
+		if generation > m.placementHighWatermarks[agentID] {
+			m.placementHighWatermarks[agentID] = generation
+		}
+		changed = true
+	}
+	for runtimeID := range m.runtimeLifecycleCursors {
+		if !allowed[runtimeID] {
+			delete(m.runtimeLifecycleCursors, runtimeID)
+			changed = true
+		}
+	}
+	if !changed {
+		return false, nil
+	}
+	if err := m.persistLocked(); err != nil {
+		m.agents = previousAgents
+		m.placementHighWatermarks = previousHighWatermarks
+		m.runtimeLifecycleCursors = previousCursors
+		return false, err
+	}
+	return true, nil
+}
+
+func (m *reminderAgentManager) retiredAgentIDs() []string {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ids := make([]string, 0)
+	for agentID := range m.placementHighWatermarks {
+		if _, active := m.agents[agentID]; !active {
+			ids = append(ids, agentID)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
 func (m *reminderAgentManager) advanceLifecycleCursors(cursors map[string]int64) error {
 	if m == nil {
 		return nil

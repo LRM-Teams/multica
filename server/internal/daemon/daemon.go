@@ -118,8 +118,10 @@ type Daemon struct {
 	reminderWSDone                   <-chan struct{}
 	reminderClose                    func() error
 	reminderGateMu                   sync.Mutex
+	reminderLifecycleReplayInFlight  bool
 	reminderReplayComplete           bool
 	reminderProjectionReplayInFlight bool
+	reminderProjectionReplayPending  bool
 	reminderPendingSnapshots         map[string]struct{}
 
 	// runtimeGoneMu guards runtimeGoneInflight, reregisterNextAttempt, and
@@ -282,6 +284,11 @@ func (d *Daemon) removeReminderAgent(agentID, runtimeID string, generation int64
 		if err := d.reminderCache.removeOwner(agentID); err != nil {
 			return err
 		}
+	}
+	if removed {
+		d.reminderGateMu.Lock()
+		delete(d.reminderPendingSnapshots, agentID)
+		d.reminderGateMu.Unlock()
 	}
 	return nil
 }
@@ -482,6 +489,9 @@ func (d *Daemon) removeStaleRuntime(runtimeID string) (string, bool) {
 	d.wsHBMu.Lock()
 	delete(d.wsHBLastAck, runtimeID)
 	d.wsHBMu.Unlock()
+	if d.reminderCache != nil {
+		d.reminderCache.suspend()
+	}
 
 	return workspaceID, true
 }
@@ -1431,6 +1441,9 @@ func (d *Daemon) syncWorkspacesFromAPI(ctx context.Context) error {
 		}
 	}
 	if registered > 0 || removed > 0 {
+		if removed > 0 && d.reminderCache != nil {
+			d.reminderCache.suspend()
+		}
 		d.notifyRuntimeSetChanged()
 	}
 

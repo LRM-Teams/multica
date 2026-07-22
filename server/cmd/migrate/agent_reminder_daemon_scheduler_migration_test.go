@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestAgentReminderDaemonSchedulerMigration210PreservesDefinitionsAcrossDownUp(t *testing.T) {
@@ -199,6 +200,112 @@ func TestAgentReminderDaemonSchedulerMigration210PreservesDefinitionsAcrossDownU
 	var retainedCapability bool
 	if err := conn.QueryRow(ctx, `SELECT COALESCE((metadata->'capabilities') @> '["reminder_versioned_cache_v1"]'::jsonb, false) FROM agent_runtime WHERE id = '30000000-0000-0000-0000-000000000210'`).Scan(&retainedCapability); err != nil || !retainedCapability {
 		t.Fatalf("rejected downgrade mutated registration capability=%v err=%v", retainedCapability, err)
+	}
+	moveConn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer moveConn.Release()
+	downgradeConn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer downgradeConn.Release()
+	for _, testConn := range []*pgxpool.Conn{moveConn, downgradeConn} {
+		if _, err := testConn.Exec(ctx, "SET search_path TO "+quotedSchema); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Move-first: the Agent trigger must hold a share lock on the capable target
+	// runtime until placement commits. A concurrent metadata downgrade then
+	// rechecks the committed active owner and fails without changing metadata.
+	moveFirst, err := moveConn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := moveFirst.Exec(ctx, `UPDATE agent SET runtime_id = '40000000-0000-0000-0000-000000000210' WHERE id = '10000000-0000-0000-0000-000000000210'`); err != nil {
+		t.Fatal(err)
+	}
+	moveFirstDowngrade := make(chan error, 1)
+	go func() {
+		tx, err := downgradeConn.Begin(ctx)
+		if err == nil {
+			_, err = tx.Exec(ctx, `UPDATE agent_runtime SET metadata = '{}'::jsonb WHERE id = '40000000-0000-0000-0000-000000000210'`)
+		}
+		if err == nil {
+			err = tx.Commit(ctx)
+		} else if tx != nil {
+			_ = tx.Rollback(ctx)
+		}
+		moveFirstDowngrade <- err
+	}()
+	select {
+	case err := <-moveFirstDowngrade:
+		t.Fatalf("move-first downgrade did not wait for target runtime share lock: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := moveFirst.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-moveFirstDowngrade; err == nil || !strings.Contains(err.Error(), "daemon_outdated") {
+		t.Fatalf("move-first downgrade error=%v want daemon_outdated", err)
+	}
+	var placementAfterMoveFirst string
+	if err := conn.QueryRow(ctx, `SELECT runtime_id::text FROM agent WHERE id = '10000000-0000-0000-0000-000000000210'`).Scan(&placementAfterMoveFirst); err != nil || placementAfterMoveFirst != "40000000-0000-0000-0000-000000000210" {
+		t.Fatalf("move-first placement=%q err=%v", placementAfterMoveFirst, err)
+	}
+	if err := conn.QueryRow(ctx, `SELECT COALESCE((metadata->'capabilities') @> '["reminder_versioned_cache_v1"]'::jsonb, false) FROM agent_runtime WHERE id = '40000000-0000-0000-0000-000000000210'`).Scan(&retainedCapability); err != nil || !retainedCapability {
+		t.Fatalf("move-first rejected downgrade capability=%v err=%v", retainedCapability, err)
+	}
+	if _, err := conn.Exec(ctx, `UPDATE agent SET runtime_id = '30000000-0000-0000-0000-000000000210' WHERE id = '10000000-0000-0000-0000-000000000210'`); err != nil {
+		t.Fatal(err)
+	}
+
+	// Downgrade-first: an exclusive metadata update held open on the target
+	// runtime must make the Agent move wait. Once downgrade commits, the move
+	// sees the incapable target and fails without changing placement.
+	downgradeFirst, err := downgradeConn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := downgradeFirst.Exec(ctx, `UPDATE agent_runtime SET metadata = '{}'::jsonb WHERE id = '40000000-0000-0000-0000-000000000210'`); err != nil {
+		t.Fatal(err)
+	}
+	downgradeFirstMove := make(chan error, 1)
+	go func() {
+		tx, err := moveConn.Begin(ctx)
+		if err == nil {
+			_, err = tx.Exec(ctx, `UPDATE agent SET runtime_id = '40000000-0000-0000-0000-000000000210' WHERE id = '10000000-0000-0000-0000-000000000210'`)
+		}
+		if err == nil {
+			err = tx.Commit(ctx)
+		} else if tx != nil {
+			_ = tx.Rollback(ctx)
+		}
+		downgradeFirstMove <- err
+	}()
+	select {
+	case err := <-downgradeFirstMove:
+		t.Fatalf("downgrade-first move did not wait for target runtime row: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := downgradeFirst.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-downgradeFirstMove; err == nil || !strings.Contains(err.Error(), "daemon_outdated") {
+		t.Fatalf("downgrade-first move error=%v want daemon_outdated", err)
+	}
+	var placementAfterDowngradeFirst string
+	if err := conn.QueryRow(ctx, `SELECT runtime_id::text FROM agent WHERE id = '10000000-0000-0000-0000-000000000210'`).Scan(&placementAfterDowngradeFirst); err != nil || placementAfterDowngradeFirst != "30000000-0000-0000-0000-000000000210" {
+		t.Fatalf("downgrade-first placement=%q err=%v", placementAfterDowngradeFirst, err)
+	}
+	var downgradedCapability bool
+	if err := conn.QueryRow(ctx, `SELECT COALESCE((metadata->'capabilities') @> '["reminder_versioned_cache_v1"]'::jsonb, false) FROM agent_runtime WHERE id = '40000000-0000-0000-0000-000000000210'`).Scan(&downgradedCapability); err != nil || downgradedCapability {
+		t.Fatalf("downgrade-first capability=%v err=%v", downgradedCapability, err)
+	}
+	if _, err := conn.Exec(ctx, `UPDATE agent_runtime SET metadata = '{"capabilities":["reminder_versioned_cache_v1"]}'::jsonb WHERE id = '40000000-0000-0000-0000-000000000210'`); err != nil {
+		t.Fatal(err)
 	}
 	var deliveredStatus, recurringStatus, retryStatus, partialStatus string
 	var deliveredCurrent, recurringCurrent, retryCurrent, partialCurrent *string

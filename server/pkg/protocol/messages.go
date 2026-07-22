@@ -293,8 +293,9 @@ type ReminderProjectionEvent struct {
 }
 
 type ReminderProjectionRequestPayload struct {
-	RuntimeCursors     map[string]int64                      `json:"runtime_cursors"`
-	RuntimeResidencies map[string][]ReminderRuntimeResidency `json:"runtime_residencies,omitempty"`
+	RuntimeCursors       map[string]int64                      `json:"runtime_cursors"`
+	RuntimeResidencies   map[string][]ReminderRuntimeResidency `json:"runtime_residencies,omitempty"`
+	RuntimeResetRequired map[string]bool                       `json:"runtime_reset_required,omitempty"`
 }
 
 type ReminderProjectionReplayEndPayload struct {

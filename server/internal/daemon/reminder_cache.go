@@ -46,9 +46,10 @@ type reminderVersionFence struct {
 }
 
 type reminderCacheState struct {
-	Fences         map[string]reminderVersionFence `json:"fences"`
-	RuntimeCursors map[string]int64                `json:"runtime_cursors"`
-	RuntimeResets  map[string]bool                 `json:"runtime_resets,omitempty"`
+	Fences           map[string]reminderVersionFence `json:"fences"`
+	RuntimeCursors   map[string]int64                `json:"runtime_cursors"`
+	RuntimeResets    map[string]bool                 `json:"runtime_resets,omitempty"`
+	RecoveryRequired bool                            `json:"recovery_required,omitempty"`
 }
 
 // reminderCache is the owner-daemon timer projection. Entries are ephemeral,
@@ -56,19 +57,20 @@ type reminderCacheState struct {
 // persisted together before an event is ACKed. That makes deleted timers
 // non-resurrectable without retaining unbounded terminal definitions server-side.
 type reminderCache struct {
-	mu             sync.Mutex
-	entries        map[string]reminderCacheEntry
-	fences         map[string]reminderVersionFence
-	runtimeCursors map[string]int64
-	runtimeResets  map[string]bool
-	pendingFires   map[string]int64
-	suspended      bool
-	clock          reminderClock
-	onFire         func(protocol.ReminderTimerJob)
-	logger         *slog.Logger
-	path           string
-	loadErr        error
-	writeState     func(string, []byte) error
+	mu               sync.Mutex
+	entries          map[string]reminderCacheEntry
+	fences           map[string]reminderVersionFence
+	runtimeCursors   map[string]int64
+	runtimeResets    map[string]bool
+	recoveryRequired bool
+	pendingFires     map[string]int64
+	suspended        bool
+	clock            reminderClock
+	onFire           func(protocol.ReminderTimerJob)
+	logger           *slog.Logger
+	path             string
+	loadErr          error
+	writeState       func(string, []byte) error
 }
 
 func newReminderCache(clock reminderClock, logger *slog.Logger, onFire func(protocol.ReminderTimerJob)) *reminderCache {
@@ -100,14 +102,21 @@ func (c *reminderCache) setPersistence(root string) {
 	c.path = filepath.Join(root, ".daemon", reminderCacheStateFile)
 	raw, err := osReadFile(c.path)
 	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			c.loadErr = fmt.Errorf("load reminder cache state: %w", err)
+		if errors.Is(err, os.ErrNotExist) {
+			quarantined, globErr := filepath.Glob(c.path + ".corrupt-*")
+			if globErr != nil {
+				c.loadErr = fmt.Errorf("find quarantined reminder cache state: %w", globErr)
+			} else if len(quarantined) > 0 {
+				c.initializeRecoveryStateLocked(fmt.Errorf("primary reminder cache state missing after quarantine"))
+			}
+		} else {
+			c.recoverCorruptStateLocked(fmt.Errorf("load reminder cache state: %w", err))
 		}
 		return
 	}
 	var state reminderCacheState
 	if err := json.Unmarshal(raw, &state); err != nil {
-		c.loadErr = fmt.Errorf("decode reminder cache state: %w", err)
+		c.recoverCorruptStateLocked(fmt.Errorf("decode reminder cache state: %w", err))
 		return
 	}
 	for id, fence := range state.Fences {
@@ -125,6 +134,32 @@ func (c *reminderCache) setPersistence(root string) {
 			c.runtimeResets[runtimeID] = true
 		}
 	}
+	c.recoveryRequired = state.RecoveryRequired
+}
+
+func (c *reminderCache) recoverCorruptStateLocked(cause error) {
+	quarantinePath := fmt.Sprintf("%s.corrupt-%d", c.path, time.Now().UTC().UnixNano())
+	if err := os.Rename(c.path, quarantinePath); err != nil {
+		c.loadErr = fmt.Errorf("quarantine corrupt reminder cache state: %w", err)
+		return
+	}
+	c.initializeRecoveryStateLocked(cause)
+}
+
+func (c *reminderCache) initializeRecoveryStateLocked(cause error) {
+	clear(c.fences)
+	clear(c.runtimeCursors)
+	clear(c.runtimeResets)
+	clear(c.pendingFires)
+	c.recoveryRequired = true
+	c.loadErr = nil
+	if err := c.persistLocked(); err != nil {
+		c.loadErr = fmt.Errorf("persist reminder cache recovery marker: %w", err)
+		return
+	}
+	if c.logger != nil {
+		c.logger.Warn("reminder cache canonical reset required", "path", c.path, "error", cause)
+	}
 }
 
 // osReadFile is a seam for the state loader without exposing filesystem
@@ -140,7 +175,7 @@ func (c *reminderCache) persistLocked() error {
 	if c.path == "" {
 		return nil
 	}
-	state := reminderCacheState{Fences: c.fences, RuntimeCursors: c.runtimeCursors, RuntimeResets: c.runtimeResets}
+	state := reminderCacheState{Fences: c.fences, RuntimeCursors: c.runtimeCursors, RuntimeResets: c.runtimeResets, RecoveryRequired: c.recoveryRequired}
 	raw, err := json.Marshal(state)
 	if err != nil {
 		return err
@@ -299,6 +334,128 @@ func (c *reminderCache) projectionCursors() map[string]int64 {
 	return cloneReminderCursors(c.runtimeCursors)
 }
 
+func (c *reminderCache) projectionReplayState(runtimeIDs []string) (map[string]int64, map[string]bool, error) {
+	if c == nil {
+		return map[string]int64{}, map[string]bool{}, nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	previousResets := make(map[string]bool, len(c.runtimeResets))
+	for runtimeID, required := range c.runtimeResets {
+		previousResets[runtimeID] = required
+	}
+	previousRecoveryRequired := c.recoveryRequired
+	if c.recoveryRequired && len(runtimeIDs) > 0 {
+		for _, runtimeID := range runtimeIDs {
+			if runtimeID != "" {
+				c.runtimeResets[runtimeID] = true
+			}
+		}
+		c.recoveryRequired = false
+		if err := c.persistLocked(); err != nil {
+			c.runtimeResets = previousResets
+			c.recoveryRequired = previousRecoveryRequired
+			return nil, nil, err
+		}
+	}
+	cursors := make(map[string]int64, len(runtimeIDs))
+	resets := make(map[string]bool)
+	for _, runtimeID := range runtimeIDs {
+		if runtimeID == "" {
+			continue
+		}
+		if c.runtimeResets[runtimeID] {
+			cursors[runtimeID] = 0
+			resets[runtimeID] = true
+			continue
+		}
+		cursors[runtimeID] = c.runtimeCursors[runtimeID]
+	}
+	return cursors, resets, nil
+}
+
+func (c *reminderCache) requiredRuntimeResets() map[string]bool {
+	if c == nil {
+		return map[string]bool{}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	resets := make(map[string]bool, len(c.runtimeResets))
+	for runtimeID, required := range c.runtimeResets {
+		if required {
+			resets[runtimeID] = true
+		}
+	}
+	return resets
+}
+
+func (c *reminderCache) reconcileRuntimeSet(allowed map[string]bool, retiredOwnerIDs []string) (bool, error) {
+	if c == nil {
+		return false, nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	retiredOwners := make(map[string]bool, len(retiredOwnerIDs))
+	for _, agentID := range retiredOwnerIDs {
+		if agentID != "" {
+			retiredOwners[agentID] = true
+		}
+	}
+	previousFences := cloneReminderFences(c.fences)
+	previousCursors := cloneReminderCursors(c.runtimeCursors)
+	previousResets := make(map[string]bool, len(c.runtimeResets))
+	for runtimeID, required := range c.runtimeResets {
+		previousResets[runtimeID] = required
+	}
+	previousPending := clonePendingFires(c.pendingFires)
+	changed := false
+	for reminderID, fence := range c.fences {
+		if retiredOwners[fence.OwnerAgentID] {
+			delete(c.fences, reminderID)
+			delete(c.pendingFires, reminderID)
+			changed = true
+		}
+	}
+	for runtimeID := range c.runtimeCursors {
+		if !allowed[runtimeID] {
+			delete(c.runtimeCursors, runtimeID)
+			changed = true
+		}
+	}
+	for runtimeID := range c.runtimeResets {
+		if !allowed[runtimeID] {
+			delete(c.runtimeResets, runtimeID)
+			changed = true
+		}
+	}
+	for _, entry := range c.entries {
+		if retiredOwners[entry.job.OwnerAgentID] {
+			changed = true
+			break
+		}
+	}
+	if !changed {
+		return false, nil
+	}
+	if err := c.persistLocked(); err != nil {
+		c.fences = previousFences
+		c.runtimeCursors = previousCursors
+		c.runtimeResets = previousResets
+		c.pendingFires = previousPending
+		return false, err
+	}
+	for reminderID, entry := range c.entries {
+		if !retiredOwners[entry.job.OwnerAgentID] {
+			continue
+		}
+		if entry.timer != nil {
+			entry.timer.Stop()
+		}
+		delete(c.entries, reminderID)
+	}
+	return true, nil
+}
+
 func (c *reminderCache) advanceProjectionCursor(runtimeID string, prevSeq, seq int64) error {
 	if c == nil || runtimeID == "" || seq < 1 {
 		return nil
@@ -419,12 +576,31 @@ func (c *reminderCache) beginConnection() {
 	c.mu.Unlock()
 }
 
+func (c *reminderCache) suspend() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for id, entry := range c.entries {
+		if entry.timer != nil {
+			entry.timer.Stop()
+			entry.timer = nil
+			c.entries[id] = entry
+		}
+	}
+	c.suspended = true
+}
+
 func (c *reminderCache) markRuntimeReset(runtimeID string) error {
 	if c == nil || runtimeID == "" {
 		return nil
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.runtimeResets[runtimeID] {
+		return nil
+	}
 	previous := c.runtimeResets[runtimeID]
 	c.runtimeResets[runtimeID] = true
 	if err := c.persistLocked(); err != nil {

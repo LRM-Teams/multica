@@ -1230,6 +1230,12 @@ func (h *Handler) HandleDaemonReminderProjection(ctx context.Context, identity d
 	events := make([]protocol.ReminderProjectionEvent, 0)
 	endCursors := make(map[string]int64, len(payload.RuntimeCursors))
 	resets := make(map[string]protocol.ReminderRuntimeReset)
+	for runtimeID, required := range payload.RuntimeResetRequired {
+		cursor, exists := payload.RuntimeCursors[runtimeID]
+		if required && (!allowed[runtimeID] || !exists || cursor < 0) {
+			return nil, protocol.ReminderProjectionReplayEndPayload{}, fmt.Errorf("reminder runtime reset outside daemon scope")
+		}
+	}
 	for runtimeID, cursor := range payload.RuntimeCursors {
 		if !allowed[runtimeID] || cursor < 0 {
 			return nil, protocol.ReminderProjectionReplayEndPayload{}, fmt.Errorf("reminder projection cursor outside daemon scope")
@@ -1254,8 +1260,9 @@ func (h *Handler) HandleDaemonReminderProjection(ctx context.Context, identity d
 		if cursor > latest {
 			return nil, protocol.ReminderProjectionReplayEndPayload{}, fmt.Errorf("reminder projection cursor exceeds server watermark")
 		}
-		if cursor < ack {
-			reset, err := h.buildReminderRuntimeReset(ctx, identity, runtimeID, cursor, payload.RuntimeResidencies[runtimeID])
+		forceReset := payload.RuntimeResetRequired[runtimeID]
+		if cursor < ack || forceReset {
+			reset, err := h.buildReminderRuntimeReset(ctx, identity, runtimeID, cursor, payload.RuntimeResidencies[runtimeID], forceReset)
 			if err != nil {
 				return nil, protocol.ReminderProjectionReplayEndPayload{}, err
 			}
@@ -1289,7 +1296,7 @@ func (h *Handler) HandleDaemonReminderProjection(ctx context.Context, identity d
 	return events, protocol.ReminderProjectionReplayEndPayload{RuntimeCursors: endCursors, RuntimeResets: resets}, nil
 }
 
-func (h *Handler) buildReminderRuntimeReset(ctx context.Context, identity daemonws.ClientIdentity, runtimeID string, cursor int64, residencies []protocol.ReminderRuntimeResidency) (protocol.ReminderRuntimeReset, error) {
+func (h *Handler) buildReminderRuntimeReset(ctx context.Context, identity daemonws.ClientIdentity, runtimeID string, cursor int64, residencies []protocol.ReminderRuntimeResidency, force bool) (protocol.ReminderRuntimeReset, error) {
 	tx, err := h.TxStarter.Begin(ctx)
 	if err != nil {
 		return protocol.ReminderRuntimeReset{}, err
@@ -1372,7 +1379,7 @@ func (h *Handler) buildReminderRuntimeReset(ctx context.Context, identity daemon
 		WHERE runtime.id::text = $1 AND ($2 = '' OR runtime.workspace_id::text = $2)`, runtimeID, identity.WorkspaceID).Scan(&watermark, &ack); err != nil {
 		return protocol.ReminderRuntimeReset{}, err
 	}
-	if cursor >= ack {
+	if !force && cursor >= ack {
 		return protocol.ReminderRuntimeReset{}, fmt.Errorf("reminder runtime reset no longer required")
 	}
 	if err := tx.Commit(ctx); err != nil {

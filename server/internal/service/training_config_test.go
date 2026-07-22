@@ -158,6 +158,28 @@ func TestNewTrainingSessionDeps_DAGWiredInProductionPath(t *testing.T) {
 	assert.False(t, deps.DAG.Enabled())
 }
 
+// Non-training env-dispatch records trajectories locally and must not depend
+// on AReaL admin credentials. Production commonly configures the bridge URL
+// for other services without an admin key; that guard path still needs a DAG
+// with message access so completed sandbox tasks produce assembled segments.
+func TestNewTrainingSessionDeps_LocalDAGWiredWithoutTrainingCredentials(t *testing.T) {
+	clearTrainingEnv(t)
+
+	q := db.New(nil)
+	cfg := TrainingConfig{
+		BridgeStubURL:         "http://localhost:9100/v1",
+		InteractionDAGEnabled: true,
+	}
+
+	deps := NewTrainingSessionDeps(cfg, q)
+	require.NotNil(t, deps)
+	require.NotNil(t, deps.DAG, "local env-dispatch DAG must not require training credentials")
+	assert.True(t, deps.DAG.Enabled())
+	assert.Equal(t, q, deps.DAG.store)
+	assert.Equal(t, q, deps.DAG.msgs)
+	assert.Nil(t, deps.DAG.client, "local recording must not synthesize an AReaL client")
+}
+
 // INTERACTION_DAG_ENABLED unset -> defaults true; "false"/"0" -> false.
 func TestLoadTrainingConfig_DAGEnabledDefaultAndDisable(t *testing.T) {
 	clearTrainingEnv(t)
@@ -254,21 +276,23 @@ func TestNewTrainingSessionDeps_DiagnosisWiredWhenEnabled(t *testing.T) {
 
 // Diagnosis requires the full bridge path: when bridge config is missing
 // (guard-deps path), deps is non-nil so the open-hook loud-error guard is
-// reachable, but DAG and Diagnosis are both nil - the trigger cannot fire.
+// reachable. The local env-dispatch DAG remains wired, while Diagnosis stays
+// nil because it requires the full training bridge.
 func TestNewTrainingSessionDeps_DiagnosisNilWhenBridgeConfigMissing(t *testing.T) {
 	clearTrainingEnv(t)
 
 	q := db.New(nil)
 
 	// Diagnosis enabled but bridge config missing: guard-deps path returns
-	// non-nil deps with Lookup+Store set and DAG/Diagnosis nil.
+	// non-nil deps with Lookup+Store and a local-only DAG.
 	cfg := TrainingConfig{
 		AdminAPIKey:           "test-key-123", // no BridgeStubURL
 		DiagnosisAgentEnabled: true,
 	}
 	deps := NewTrainingSessionDeps(cfg, q)
 	assert.NotNil(t, deps, "deps non-nil so the open-hook guard is reachable")
-	assert.Nil(t, deps.DAG, "DAG nil when bridge config missing")
+	require.NotNil(t, deps.DAG, "local env-dispatch DAG remains available without bridge config")
+	assert.Nil(t, deps.DAG.client)
 	assert.Nil(t, deps.Diagnosis, "Diagnosis nil when bridge config missing - requires the full path")
 }
 

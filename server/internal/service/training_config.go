@@ -153,6 +153,7 @@ func NewTrainingSessionDeps(cfg TrainingConfig, q *db.Queries) *TrainingSessionD
 			Creator:       q,
 			ProxyURL:      cfg.ProxyURL,
 			DefaultReward: cfg.DefaultReward,
+			DAG:           NewInteractionDAGServiceWithMessages(q, q, nil, cfg.InteractionDAGEnabled),
 			// RL, Closer nil — open hook loud-errors if a training target is hit.
 		}
 	}

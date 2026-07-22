@@ -723,7 +723,10 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   // highlightMessageId/threadDeepLinkId's own later mutations (flash-clear,
   // manually closing the thread) — comparing against those directly would
   // re-apply a still-present URL value right after it legitimately clears.
-  const appliedMessageParamRef = useRef<string | null>(searchParams.get("message"));
+  const appliedMessageParamRef = useRef<string | null | undefined>(undefined);
+  if (appliedMessageParamRef.current === undefined) {
+    appliedMessageParamRef.current = searchParams.get("message");
+  }
   const openedThreadDeepLinkRef = useRef<string | null>(null);
   const searchParamsString = searchParams.toString();
   useEffect(() => {
@@ -733,8 +736,9 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       setHighlightMessageId(urlMessage);
     }
     const urlThread = searchParams.get("thread");
+    // react-doctor-disable-next-line react-doctor/no-event-handler -- syncing local state FROM an external system (the URL) on a genuine change, not faking a user-triggered event handler.
     if (urlThread !== threadDeepLinkId) setThreadDeepLinkId(urlThread);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally keyed on the stable string form, not the searchParams object identity (a new instance every render)
+    // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentionally keyed on the stable string form (searchParamsString), not searchParams/threadDeepLinkId directly; searchParams is a NEW object every render (see apps/web/platform/navigation.tsx) and threadDeepLinkId is read via a ref-equivalent comparison against the URL, not meant to re-run this effect on its own change.
   }, [searchParamsString]);
   const [search, setSearch] = useState("");
   const [createOpen, setCreateOpen] = useState(false);

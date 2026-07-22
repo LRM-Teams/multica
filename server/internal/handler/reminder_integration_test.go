@@ -175,7 +175,7 @@ func TestReminderFireTerminalizesWhenAgentRemovedFromAnchorChannel(t *testing.T)
 	if err := fixture.handler.FireDueReminders(context.Background()); err != nil {
 		t.Fatalf("fire after membership removal: %v", err)
 	}
-	assertReminderMembershipTerminalized(t, reminderID)
+	assertReminderEligibilityTerminalized(t, reminderID, "agent_removed_from_anchor_channel")
 }
 
 func TestReminderFireSerializesAgainstConcurrentMembershipRemoval(t *testing.T) {
@@ -213,14 +213,90 @@ func TestReminderFireSerializesAgainstConcurrentMembershipRemoval(t *testing.T) 
 	case <-time.After(5 * time.Second):
 		t.Fatal("fire did not resume after membership removal committed")
 	}
-	assertReminderMembershipTerminalized(t, reminderID)
+	assertReminderEligibilityTerminalized(t, reminderID, "agent_removed_from_anchor_channel")
 }
 
-func assertReminderMembershipTerminalized(t *testing.T, reminderID string) {
+func TestReminderFireSerializesAgainstConcurrentChannelArchive(t *testing.T) {
+	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
+	anchor := fixture.insertMessage(t, "user", testUserID, "anchor", nil)
+	reminderID := seedDueReminder(t, fixture.agentIDs[0], fixture.channel.ID, anchor.ID, "", "")
+
+	archiveTx, err := testPool.Begin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archiveTx.Rollback(context.Background())
+	if _, err := archiveTx.Exec(context.Background(), `
+		UPDATE channel
+		SET archived_at = now(), archived_by = $2, updated_at = now()
+		WHERE id = $1`, fixture.channel.ID, testUserID); err != nil {
+		t.Fatal(err)
+	}
+
+	fireDone := make(chan error, 1)
+	go func() { fireDone <- fixture.handler.FireDueReminders(context.Background()) }()
+	select {
+	case err := <-fireDone:
+		t.Fatalf("fire crossed uncommitted channel archive: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := archiveTx.Commit(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-fireDone:
+		if err != nil {
+			t.Fatalf("fire after channel archive commit: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("fire did not resume after channel archive committed")
+	}
+	assertReminderEligibilityTerminalized(t, reminderID, "channel_archived")
+}
+
+func TestReminderFireSerializesAgainstConcurrentAgentArchive(t *testing.T) {
+	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
+	anchor := fixture.insertMessage(t, "user", testUserID, "anchor", nil)
+	reminderID := seedDueReminder(t, fixture.agentIDs[0], fixture.channel.ID, anchor.ID, "", "")
+
+	archiveTx, err := testPool.Begin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archiveTx.Rollback(context.Background())
+	if _, err := archiveTx.Exec(context.Background(), `
+		UPDATE agent
+		SET archived_at = now(), archived_by = $2, updated_at = now()
+		WHERE id = $1`, fixture.agentIDs[0], testUserID); err != nil {
+		t.Fatal(err)
+	}
+
+	fireDone := make(chan error, 1)
+	go func() { fireDone <- fixture.handler.FireDueReminders(context.Background()) }()
+	select {
+	case err := <-fireDone:
+		t.Fatalf("fire crossed uncommitted agent archive: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := archiveTx.Commit(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-fireDone:
+		if err != nil {
+			t.Fatalf("fire after agent archive commit: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("fire did not resume after agent archive committed")
+	}
+	assertReminderEligibilityTerminalized(t, reminderID, "agent_archived")
+}
+
+func assertReminderEligibilityTerminalized(t *testing.T, reminderID, wantReason string) {
 	t.Helper()
 	occurrences, receipts, tasks, firedEvents := reminderFireCounts(t, reminderID)
 	if occurrences != 1 || receipts != 0 || tasks != 0 || firedEvents != 0 {
-		t.Fatalf("membership terminal counts = occurrence:%d receipt:%d task:%d fired_event:%d, want 1/0/0/0", occurrences, receipts, tasks, firedEvents)
+		t.Fatalf("eligibility terminal counts = occurrence:%d receipt:%d task:%d fired_event:%d, want 1/0/0/0", occurrences, receipts, tasks, firedEvents)
 	}
 	var definitionStatus, definitionReason, occurrenceStatus, occurrenceReason string
 	if err := testPool.QueryRow(context.Background(), `
@@ -230,8 +306,8 @@ func assertReminderMembershipTerminalized(t *testing.T, reminderID string) {
 		WHERE reminder.id = $1`, reminderID).Scan(&definitionStatus, &definitionReason, &occurrenceStatus, &occurrenceReason); err != nil {
 		t.Fatal(err)
 	}
-	if definitionStatus != "cancelled" || occurrenceStatus != "cancelled" || definitionReason != "agent_removed_from_anchor_channel" || occurrenceReason != definitionReason {
-		t.Fatalf("membership terminal state definition=%s/%s occurrence=%s/%s", definitionStatus, definitionReason, occurrenceStatus, occurrenceReason)
+	if definitionStatus != "cancelled" || occurrenceStatus != "cancelled" || definitionReason != wantReason || occurrenceReason != definitionReason {
+		t.Fatalf("eligibility terminal state definition=%s/%s occurrence=%s/%s want_reason=%s", definitionStatus, definitionReason, occurrenceStatus, occurrenceReason, wantReason)
 	}
 }
 

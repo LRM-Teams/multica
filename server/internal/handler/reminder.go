@@ -927,7 +927,11 @@ func (h *Handler) fireReminderOccurrence(ctx context.Context, reminderID, occurr
 
 	var channelName, channelKind string
 	var channelArchivedAt pgtype.Timestamptz
-	if err := tx.QueryRow(ctx, `SELECT name, kind, archived_at FROM channel WHERE id = $1 AND workspace_id = $2`, reminder.AnchorChannelID, reminder.WorkspaceID).Scan(&channelName, &channelKind, &channelArchivedAt); err != nil {
+	if err := tx.QueryRow(ctx, `
+		SELECT name, kind, archived_at
+		FROM channel
+		WHERE id = $1 AND workspace_id = $2
+		FOR UPDATE`, reminder.AnchorChannelID, reminder.WorkspaceID).Scan(&channelName, &channelKind, &channelArchivedAt); err != nil {
 		if errorsIsNoRows(err) {
 			return h.terminalizeReminderOccurrence(ctx, tx, reminder, occurrenceID, "channel_deleted")
 		}
@@ -937,24 +941,30 @@ func (h *Handler) fireReminderOccurrence(ctx context.Context, reminderID, occurr
 		return h.terminalizeReminderOccurrence(ctx, tx, reminder, occurrenceID, "channel_archived")
 	}
 
-	txQueries := h.Queries.WithTx(tx)
-	agent, err := txQueries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: reminder.AgentID, WorkspaceID: reminder.WorkspaceID})
-	if err != nil {
+	var agentRuntimeID, agentOwnerID pgtype.UUID
+	var agentArchivedAt pgtype.Timestamptz
+	if err := tx.QueryRow(ctx, `
+		SELECT runtime_id, owner_id, archived_at
+		FROM agent
+		WHERE id = $1 AND workspace_id = $2
+		FOR UPDATE`, reminder.AgentID, reminder.WorkspaceID).Scan(&agentRuntimeID, &agentOwnerID, &agentArchivedAt); err != nil {
 		if errorsIsNoRows(err) {
 			return h.terminalizeReminderOccurrence(ctx, tx, reminder, occurrenceID, "agent_deleted")
 		}
 		return err
 	}
-	if agent.ArchivedAt.Valid {
+	if agentArchivedAt.Valid {
 		return h.terminalizeReminderOccurrence(ctx, tx, reminder, occurrenceID, "agent_archived")
 	}
-	if !agent.RuntimeID.Valid {
+	if !agentRuntimeID.Valid {
 		return h.terminalizeReminderOccurrence(ctx, tx, reminder, occurrenceID, "agent_runtime_unavailable")
 	}
-	// Serialize fire against channel membership removal. SELECT FOR UPDATE holds
-	// the current membership row until the fire transaction commits, so either
-	// the complete occurrence wins or a remove-first transaction terminalizes
-	// with no receipt, task, or wake.
+	// Lock eligibility in the fixed channel -> agent -> membership order and hold
+	// every row through the same transaction that creates the receipt and wake.
+	// The archive/remove write paths each lock only their own row, so this order
+	// cannot form a reverse lock cycle with them. Either fire commits the complete
+	// occurrence first, or an eligibility write wins and this transaction
+	// terminalizes with no receipt, task, or wake.
 	var memberID pgtype.UUID
 	if err := tx.QueryRow(ctx, `
 		SELECT member_id
@@ -967,6 +977,7 @@ func (h *Handler) fireReminderOccurrence(ctx context.Context, reminderID, occurr
 		}
 		return err
 	}
+	txQueries := h.Queries.WithTx(tx)
 	ch := ChannelResponse{ID: uuidToString(reminder.AnchorChannelID), WorkspaceID: uuidToString(reminder.WorkspaceID), Name: channelName, Kind: channelKind}
 	anchor, err := loadReminderAnchorSnapshot(ctx, tx, reminder)
 	if err != nil {
@@ -1017,7 +1028,7 @@ func (h *Handler) fireReminderOccurrence(ctx context.Context, reminderID, occurr
 		trigger.ThreadRootMessageID = &root
 		trigger.ThreadID = threadID
 	}
-	creatorID, err := reminderFireCreatorID(ctx, tx, reminder.WorkspaceID, reminder.InitiatorUserID, agent.OwnerID)
+	creatorID, err := reminderFireCreatorID(ctx, tx, reminder.WorkspaceID, reminder.InitiatorUserID, agentOwnerID)
 	if err != nil {
 		return err
 	}
@@ -1092,7 +1103,7 @@ func (h *Handler) fireReminderOccurrence(ctx context.Context, reminderID, occurr
 	h.TaskService.PublishChatTaskQueued(ctx, task, false)
 	targetKind, targetID, targetSlug := reminderActivityTarget(reminder, anchorAvailable)
 	h.recordAgentActivityEvent(ctx, h.DB,
-		reminder.WorkspaceID, reminder.AgentID, agent.RuntimeID, task.ID,
+		reminder.WorkspaceID, reminder.AgentID, agentRuntimeID, task.ID,
 		activityKindCustom, "reminder_fired", "info",
 		targetKind, targetID, targetSlug,
 		"", "Reminder fired and woke the agent",

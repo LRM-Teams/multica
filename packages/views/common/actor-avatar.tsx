@@ -80,6 +80,7 @@ interface ActorAvatarProps {
    * Make the avatar click through to the actor page. Defaults on for members
    * and agents, while picker/menu controls keep their own click behavior.
    */
+  profileLink?: boolean;
   /**
    * Phase① memory XP burst on this avatar (message rows / profile only — not
    * sidebar lists). No effect for non-agent actors.

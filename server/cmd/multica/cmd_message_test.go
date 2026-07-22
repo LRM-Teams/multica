@@ -2,11 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -244,9 +246,40 @@ func TestAgentMessageSendTextFallbackReportsHeld(t *testing.T) {
 	if !strings.Contains(got, "Message held by freshness check") {
 		t.Fatalf("fallback = %q, want held freshness text", got)
 	}
+	if !strings.Contains(got, "exits non-zero") || !strings.Contains(got, "same turn") {
+		t.Fatalf("fallback = %q, want non-zero exit + same-turn decision guidance", got)
+	}
 	got = agentMessageSendTextFallback(map[string]any{"created": true})
 	if got != "Message sent." {
 		t.Fatalf("fallback = %q, want sent text", got)
+	}
+}
+
+func TestPrintAgentTransportOutputHeldReturnsError(t *testing.T) {
+	cmd := newMessageSendCmd()
+	_ = cmd.Flags().Set("output", "json")
+	err := printAgentTransportOutput(cmd, map[string]any{
+		"state":   "held",
+		"outcome": "held",
+		"reason":  "newer_messages_available",
+	}, agentMessageSendTextFallback(map[string]any{"state": "held"}))
+	if !errors.Is(err, errAgentMessageHeld) {
+		t.Fatalf("error = %v, want errAgentMessageHeld", err)
+	}
+	if code := cli.ExitCodeFor(err); code != cli.ExitGeneric {
+		t.Fatalf("ExitCodeFor(held) = %d, want %d", code, cli.ExitGeneric)
+	}
+}
+
+func TestPrintAgentTransportOutputSuccessReturnsNil(t *testing.T) {
+	cmd := newMessageSendCmd()
+	_ = cmd.Flags().Set("output", "json")
+	err := printAgentTransportOutput(cmd, map[string]any{
+		"created": true,
+		"message": map[string]any{"id": "msg-1"},
+	}, "Message sent.")
+	if err != nil {
+		t.Fatalf("error = %v, want nil for successful send", err)
 	}
 }
 

@@ -709,8 +709,20 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 	// to preserve A2A collaboration; members must be in allowed_principals
 	// (agent owner or workspace owner/admin) to see private agents.
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	// Group managers (贝克汉姆) are channel-bound infrastructure: hide them from
+	// the workspace agent directory / invite picker even for owner/admin, who
+	// would otherwise still see private agents (LRM-233). Channel membership and
+	// GetAgent remain available via their own paths.
+	groupManagers, gmErr := h.groupManagerAgentIDs(r.Context(), parseUUID(workspaceID))
+	if gmErr != nil {
+		slog.Warn("failed to load group-manager ids for ListAgents", "workspace_id", workspaceID, "error", gmErr)
+		groupManagers = map[string]bool{}
+	}
 	visible := make([]AgentResponse, 0, len(agents))
 	for _, a := range agents {
+		if groupManagers[uuidToString(a.ID)] {
+			continue
+		}
 		if actorType == "member" && (a.Visibility == "private" || privateAgentOwnerOnly(a)) {
 			if !memberAllowedForPrivateAgent(a, actorID, member.Role) {
 				continue
@@ -1237,7 +1249,6 @@ func (h *Handler) canUpdateAgent(w http.ResponseWriter, r *http.Request, agent d
 		// tuple, not an independently editable agent property.
 		"model_catalog_request_id": {},
 		"thinking_level":           {},
-		"visibility":               {},
 		"max_concurrent_tasks":     {},
 	}
 	for field := range rawFields {
@@ -1387,6 +1398,10 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		targetRuntimeID = runtime.ID
 	}
 	if req.Visibility != nil {
+		if h.isGroupManagerAgent(r.Context(), existing.ID) && *req.Visibility != "private" {
+			writeError(w, http.StatusBadRequest, "group manager (贝克汉姆) visibility must stay private")
+			return
+		}
 		params.Visibility = pgtype.Text{String: *req.Visibility, Valid: true}
 	}
 	if req.Status != nil {

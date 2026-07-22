@@ -362,6 +362,20 @@ func TestRepairWorkspaceRadarSupervisorBindingsIsDeterministicAndConcurrentSafe(
 		t.Fatalf("rank canonical Wendy candidates: %v", err)
 	}
 
+	// repairWorkspaceRadarSupervisorBindings scans the whole DB (LIMIT 200).
+	// In shared CI databases leftover repairable workspaces from other tests can
+	// be claimed via SKIP LOCKED by the losing goroutine, inflating the sum to 2.
+	// Fence foreign eligible supervisors so this assertion stays workspace-local.
+	if _, err := pool.Exec(t.Context(), `
+		UPDATE agent
+		SET display_name = COALESCE(NULLIF(display_name, ''), name) || ' (fenced)'
+		WHERE workspace_id IS DISTINCT FROM $1
+		  AND archived_at IS NULL
+		  AND COALESCE(NULLIF(display_name, ''), name) IN ('Wendy', 'Windy', 'Joe')
+	`, base.workspaceID); err != nil {
+		t.Fatalf("fence foreign Radar supervisor candidates: %v", err)
+	}
+
 	start := make(chan struct{})
 	results := make(chan int64, 2)
 	errs := make(chan error, 2)

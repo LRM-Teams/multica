@@ -59,6 +59,10 @@ func makeMemoryCurationIntentHandler(pool *pgxpool.Pool, stage any, hourOffset i
 		if stageName == "agent_self_review" {
 			enabledColumn = "self_review_enabled"
 		}
+		agentRunTableAvailable, err := memoryCurationAgentRunTableExists(ctx, pool)
+		if err != nil {
+			return HandlerResult{}, err
+		}
 		rows, err := pool.Query(ctx, `
 			SELECT p.id::text, p.workspace_id::text, p.user_id::text,
 			       p.runtime_id::text, p.curator_agent_id::text, p.model_override,
@@ -113,6 +117,36 @@ func makeMemoryCurationIntentHandler(pool *pgxpool.Pool, stage any, hourOffset i
 			if runtimeStatus != "online" {
 				runStatus = "waiting_runtime"
 			}
+			if stageName == "agent_self_review" && agentRunTableAvailable {
+				var inserted int64
+				err = pool.QueryRow(ctx, `
+					WITH inserted AS (
+						INSERT INTO memory_curation_run (
+						  workspace_id, stage, trigger_kind, status, date_from, date_to,
+						  profile_id, owner_user_id, runtime_id, curator_agent_id, curator_model,
+						  curator_mode, confidence_threshold, config_version, target_agent_ids,
+						  execution_owner
+						) VALUES ($1,$2,'scheduled',$3,$4,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::uuid[],'daemon')
+						ON CONFLICT DO NOTHING
+						RETURNING id, workspace_id, runtime_id
+					), child_runs AS (
+						INSERT INTO memory_curation_agent_run (
+						  parent_run_id, workspace_id, agent_id, runtime_id, stage, status
+						)
+						SELECT i.id, i.workspace_id, a.agent_id, i.runtime_id, 'agent_self_review', 'queued'
+						  FROM inserted i
+						 CROSS JOIN unnest($13::uuid[]) AS a(agent_id)
+						ON CONFLICT (parent_run_id, agent_id, stage) DO NOTHING
+						RETURNING 1
+					)
+					SELECT count(*) FROM inserted
+				`, workspaceID, stageName, runStatus, planDate, profileID, userID, runtimeID, curatorAgentID, model, mode, confidenceThreshold, configVersion, agentIDs).Scan(&inserted)
+				if err != nil {
+					return HandlerResult{}, err
+				}
+				created += inserted
+				continue
+			}
 			tag, err := pool.Exec(ctx, `
 				INSERT INTO memory_curation_run (
 				  workspace_id, stage, trigger_kind, status, date_from, date_to,
@@ -135,6 +169,12 @@ func makeMemoryCurationIntentHandler(pool *pgxpool.Pool, stage any, hourOffset i
 		}
 		return HandlerResult{RowsAffected: created, Result: map[string]any{"stage": stageName, "run_intents_created": created}}, nil
 	}
+}
+
+func memoryCurationAgentRunTableExists(ctx context.Context, pool *pgxpool.Pool) (bool, error) {
+	var exists bool
+	err := pool.QueryRow(ctx, `SELECT to_regclass('public.memory_curation_agent_run') IS NOT NULL`).Scan(&exists)
+	return exists, err
 }
 
 func normalizeScheduledMemoryCurationStage(stage any) string {

@@ -342,6 +342,29 @@ export interface MemoryCurationAgentRun {
   curator_output_excerpt?: string;
 }
 
+export interface MemoryCurationChildRun {
+  id: string;
+  parent_run_id: string;
+  workspace_id: string;
+  agent_id: string;
+  agent_name?: string;
+  runtime_id?: string;
+  runtime_name?: string;
+  stage: string;
+  status: string;
+  attempt: number;
+  started_at?: string | null;
+  finished_at?: string | null;
+  error?: string;
+  changed: boolean;
+  daily_files_written: number;
+  review_candidates_added: number;
+  skill_candidates_added: number;
+  evidence_collected: number;
+  conflicts_found: number;
+  output_excerpt?: string;
+}
+
 export interface MemoryCurationRunArtifact {
   kind: string;
   title: string;
@@ -375,6 +398,7 @@ export interface MemoryCurationRunDetail extends MemoryCurationStageStatus {
   target_agents: MemoryCurationTargetAgent[];
   timeline: MemoryCurationRunTimelineItem[];
   agent_results: MemoryCurationAgentRun[];
+  child_runs: MemoryCurationChildRun[];
   artifacts: MemoryCurationRunArtifact[];
 }
 

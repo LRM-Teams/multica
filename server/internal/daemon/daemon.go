@@ -3045,6 +3045,7 @@ func (d *Daemon) reportTaskResultForTask(ctx context.Context, task Task, result 
 		}
 		if err == nil {
 			if result.Status == "completed" {
+				d.maybeAppendDailyCloseoutStub(task, result)
 				d.reportAgentMemoryWrites(ctx, task)
 			}
 			return

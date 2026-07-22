@@ -281,11 +281,19 @@ func (h *Handler) ReportMemoryCurationRunResult(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusInternalServerError, "failed to report curation result")
 		return
 	}
+	if err := h.persistMemoryCurationAgentRunOutputsFromRaw(r.Context(), tx, runID, workspaceID, stage, result); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to persist agent curation runs")
+		return
+	}
 	if status == "succeeded" && !dryRun && !reported.DryRun {
 		if err := h.persistAgenticCurationOutputs(r.Context(), tx, runID, workspaceID, stage, result); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to persist curation outputs")
 			return
 		}
+	}
+	if err := finishUnreportedMemoryCurationAgentRuns(r.Context(), tx, runID, status, req.Error); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to finalize agent curation runs")
+		return
 	}
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit curation result")

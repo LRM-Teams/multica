@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/multica-ai/multica/server/internal/memorycuration"
 	"github.com/multica-ai/multica/server/internal/util"
 )
 
@@ -22,9 +23,12 @@ type selfReviewOutput struct {
 	Candidates []struct {
 		Type         string          `json:"type"`
 		Scope        string          `json:"scope"`
+		ScopeType    string          `json:"scope_type"`
+		ScopeID      string          `json:"scope_id"`
 		Title        string          `json:"title"`
 		Content      string          `json:"content"`
 		Confidence   float64         `json:"confidence"`
+		Sensitivity  string          `json:"sensitivity"`
 		EvidenceRefs json.RawMessage `json:"evidence_refs"`
 		Applies      json.RawMessage `json:"applies"`
 	} `json:"candidates"`
@@ -51,11 +55,11 @@ type teamCurationOutput struct {
 }
 
 func (h *Handler) persistAgenticCurationOutputs(ctx context.Context, exec dbExecutor, runID, workspaceID, stage string, raw json.RawMessage) error {
-	var env curationResultEnvelope
-	if len(raw) == 0 || json.Unmarshal(raw, &env) != nil {
+	var result memorycuration.Result
+	if len(raw) == 0 || json.Unmarshal(raw, &result) != nil {
 		return nil
 	}
-	for _, ar := range env.AgentResults {
+	for _, ar := range result.AgentResults {
 		output := strings.TrimSpace(ar.CuratorOutput)
 		if output == "" {
 			continue
@@ -82,6 +86,90 @@ func (h *Handler) persistAgenticCurationOutputs(ctx context.Context, exec dbExec
 	return nil
 }
 
+func (h *Handler) persistMemoryCurationAgentRunOutputsFromRaw(ctx context.Context, exec dbExecutor, runID, workspaceID, stage string, raw json.RawMessage) error {
+	var result memorycuration.Result
+	if len(raw) == 0 || json.Unmarshal(raw, &result) != nil {
+		return nil
+	}
+	return h.persistMemoryCurationAgentRunOutputs(ctx, exec, runID, workspaceID, stage, result)
+}
+
+func (h *Handler) persistMemoryCurationAgentRunOutputs(ctx context.Context, exec dbExecutor, runID, workspaceID, stage string, result memorycuration.Result) error {
+	if stage != "agent_self_review" && stage != "all" {
+		return nil
+	}
+	errs := map[string]string{}
+	for _, item := range result.Errors {
+		if strings.TrimSpace(item.AgentID) != "" && item.AgentID != "team" {
+			errs[item.AgentID] = strings.TrimSpace(item.Error)
+		}
+	}
+	for _, ar := range result.AgentResults {
+		if strings.TrimSpace(ar.AgentID) == "" || ar.AgentID == "team" {
+			continue
+		}
+		status := "succeeded"
+		errText := errs[ar.AgentID]
+		if errText != "" {
+			status = "failed"
+		}
+		stats, _ := json.Marshal(map[string]any{
+			"changed":                 ar.Changed,
+			"daily_files_written":     ar.DailyFilesWritten,
+			"review_candidates_added": ar.ReviewCandidatesAdded,
+			"skill_candidates_added":  ar.SkillCandidatesAdded,
+			"evidence_collected":      ar.EvidenceCollected,
+			"conflicts_found":         ar.ConflictsFound,
+		})
+		output, _ := json.Marshal(map[string]any{"curator_output": ar.CuratorOutput})
+		if _, err := exec.Exec(ctx, `
+			INSERT INTO memory_curation_agent_run (
+			  parent_run_id, workspace_id, agent_id, runtime_id, stage, status,
+			  stats, output, error, attempt, started_at, finished_at
+			)
+			SELECT $1::uuid, $2::uuid, $3::uuid, r.runtime_id, 'agent_self_review', $4,
+			       $5::jsonb, $6::jsonb, $7, 1, now(), now()
+			  FROM memory_curation_run r
+			 WHERE r.id = $1::uuid
+			ON CONFLICT (parent_run_id, agent_id, stage) DO UPDATE SET
+			  runtime_id = COALESCE(memory_curation_agent_run.runtime_id, EXCLUDED.runtime_id),
+			  status = EXCLUDED.status,
+			  stats = EXCLUDED.stats,
+			  output = EXCLUDED.output,
+			  error = EXCLUDED.error,
+			  attempt = GREATEST(memory_curation_agent_run.attempt, EXCLUDED.attempt),
+			  started_at = COALESCE(memory_curation_agent_run.started_at, EXCLUDED.started_at),
+			  finished_at = EXCLUDED.finished_at,
+			  updated_at = now()
+		`, runID, workspaceID, ar.AgentID, status, stats, output, errText); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func finishUnreportedMemoryCurationAgentRuns(ctx context.Context, exec dbExecutor, runID, parentStatus, parentError string) error {
+	childStatus := "skipped"
+	errText := ""
+	if parentStatus == "failed" {
+		childStatus = "failed"
+		errText = strings.TrimSpace(parentError)
+		if errText == "" {
+			errText = "parent memory curation run failed"
+		}
+	}
+	_, err := exec.Exec(ctx, `
+		UPDATE memory_curation_agent_run
+		   SET status = $2,
+		       error = CASE WHEN $2 = 'failed' THEN $3 ELSE error END,
+		       finished_at = now(),
+		       updated_at = now()
+		 WHERE parent_run_id = $1::uuid
+		   AND status IN ('queued','waiting_runtime','running')
+	`, runID, childStatus, errText)
+	return err
+}
+
 func (h *Handler) persistSelfReviewOutput(ctx context.Context, exec dbExecutor, runID, workspaceID, agentID, output string) error {
 	var parsed selfReviewOutput
 	if !extractJSONObject(output, &parsed) || len(parsed.Candidates) == 0 {
@@ -93,7 +181,7 @@ func (h *Handler) persistSelfReviewOutput(ctx context.Context, exec dbExecutor, 
 			continue
 		}
 		kind := normalizeCandidateType(c.Type)
-		scope := normalizeCandidateScope(c.Scope)
+		scope := normalizeCandidateScope(firstNonEmpty(c.Scope, c.ScopeType))
 		evidence := c.EvidenceRefs
 		if len(evidence) == 0 || string(evidence) == "null" {
 			evidence = json.RawMessage(`[]`)
@@ -102,7 +190,7 @@ func (h *Handler) persistSelfReviewOutput(ctx context.Context, exec dbExecutor, 
 		if confidence <= 0 || confidence > 1 {
 			confidence = 0.5
 		}
-		metadata := curationOutputMetadata(nil, "agent_self_review", c.Applies)
+		metadata := curationOutputMetadata(mapStringAny("scope_id", strings.TrimSpace(c.ScopeID), "sensitivity", strings.TrimSpace(c.Sensitivity)), "agent_self_review", c.Applies)
 		if _, err := exec.Exec(ctx, `
 			INSERT INTO agent_memory_curation_candidate (
 			  workspace_id, source_agent_id, run_id, candidate_type, scope, title,
@@ -197,6 +285,25 @@ func curationOutputMetadata(raw json.RawMessage, source string, appliesRaw json.
 	return payload
 }
 
+func mapStringAny(pairs ...string) json.RawMessage {
+	metadata := map[string]any{}
+	for i := 0; i+1 < len(pairs); i += 2 {
+		key := strings.TrimSpace(pairs[i])
+		value := strings.TrimSpace(pairs[i+1])
+		if key != "" && value != "" {
+			metadata[key] = value
+		}
+	}
+	if len(metadata) == 0 {
+		return nil
+	}
+	encoded, err := json.Marshal(metadata)
+	if err != nil {
+		return nil
+	}
+	return encoded
+}
+
 func normalizeTeamCurationDecisionStatus(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "promoted", "rejected", "merged", "superseded":
@@ -217,7 +324,7 @@ func extractJSONObject(output string, dst any) bool {
 
 func normalizeCandidateType(v string) string {
 	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "memory", "user_preference", "state", "skill", "team_memory", "team_skill", "conflict", "follow_up":
+	case "memory", "user_preference", "relationship", "project_fact", "project_state", "decision", "state", "skill", "team_memory", "team_skill", "conflict", "follow_up":
 		return strings.ToLower(strings.TrimSpace(v))
 	case "preference":
 		return "user_preference"
@@ -230,7 +337,7 @@ func normalizeCandidateType(v string) string {
 
 func normalizeCandidateScope(v string) string {
 	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "agent", "user", "workspace", "team":
+	case "agent", "user", "project", "channel", "workspace", "team":
 		return strings.ToLower(strings.TrimSpace(v))
 	default:
 		return "agent"

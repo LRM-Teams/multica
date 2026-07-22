@@ -370,6 +370,13 @@ func TestMemoryCuratorProfileQueuesAndCompletesDaemonRun(t *testing.T) {
 	if created.Status != "queued" || created.ID == "" {
 		t.Fatalf("created run = %+v", created)
 	}
+	var childCount int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM memory_curation_agent_run WHERE parent_run_id = $1 AND agent_id = $2 AND status = 'queued'`, created.ID, targetAgentID).Scan(&childCount); err != nil {
+		t.Fatal(err)
+	}
+	if childCount != 1 {
+		t.Fatalf("child run count = %d, want 1", childCount)
+	}
 
 	w = httptest.NewRecorder()
 	heartbeatReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/heartbeat", map[string]any{
@@ -430,6 +437,13 @@ func TestMemoryCuratorProfileQueuesAndCompletesDaemonRun(t *testing.T) {
 	}
 	if dryRunCandidates != 0 {
 		t.Fatalf("dry-run persisted %d candidates, want 0", dryRunCandidates)
+	}
+	var childStatus, childOutput string
+	if err := testPool.QueryRow(ctx, `SELECT status, output->>'curator_output' FROM memory_curation_agent_run WHERE parent_run_id = $1 AND agent_id = $2`, created.ID, targetAgentID).Scan(&childStatus, &childOutput); err != nil {
+		t.Fatal(err)
+	}
+	if childStatus != "succeeded" || !strings.Contains(childOutput, "dry run only") {
+		t.Fatalf("child run = status %q output %q, want succeeded with dry-run output", childStatus, childOutput)
 	}
 }
 

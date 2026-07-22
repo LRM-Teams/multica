@@ -154,16 +154,19 @@ export function upsertChannelMessageInCache(qc: QueryClient, message: ChannelMes
         })),
       };
     }
+    const siblings = flattenChannelMessagePages(old);
+    const existing = siblings.find((m) => m.id === message.id);
+    const enriched = withPreservedAuthorAvatar(message, existing, siblings);
     const existingPageIndex = old.pages.findIndex((page: ChannelMessagesPage) =>
-      page.messages.some((existing: ChannelMessage) => existing.id === message.id),
+      page.messages.some((m: ChannelMessage) => m.id === enriched.id),
     );
     const pages = old.pages.map((page, index) => {
       if (existingPageIndex < 0 && index === 0) {
-        return { ...page, messages: [...page.messages, message] };
+        return { ...page, messages: [...page.messages, enriched] };
       }
-      const messages = page.messages.map((existing: ChannelMessage) => {
-        if (existing.id !== message.id) return existing;
-        return message;
+      const messages = page.messages.map((m: ChannelMessage) => {
+        if (m.id !== enriched.id) return m;
+        return enriched;
       });
       return { ...page, messages };
     });
@@ -193,16 +196,45 @@ function shouldRenderChannelMessage(message: ChannelMessage): boolean {
   return !message.deleted_at || (message.thread_reply_count ?? 0) > 0;
 }
 
+/**
+ * WS channel:message payloads sometimes omit `author_avatar_url` (publish path
+ * forgot to attach it) while list fetches include it. Prefer the incoming URL,
+ * else keep the cached row's, else copy from another same-author bubble already
+ * in the thread — so consecutive agent messages don't flicker to initials.
+ */
+export function withPreservedAuthorAvatar(
+  incoming: ChannelMessage,
+  existing: ChannelMessage | undefined,
+  siblings: readonly ChannelMessage[] | undefined,
+): ChannelMessage {
+  if (incoming.author_avatar_url) return incoming;
+  if (existing?.author_avatar_url) {
+    return { ...incoming, author_avatar_url: existing.author_avatar_url };
+  }
+  if (!incoming.author_id || !siblings?.length) return incoming;
+  const fromSibling = siblings.find(
+    (m) =>
+      m.id !== incoming.id &&
+      m.author_id === incoming.author_id &&
+      m.type === incoming.type &&
+      !!m.author_avatar_url,
+  )?.author_avatar_url;
+  if (!fromSibling) return incoming;
+  return { ...incoming, author_avatar_url: fromSibling };
+}
+
 function upsertChannelMessage(old: ChannelMessage[] | undefined, message: ChannelMessage) {
   if (!shouldRenderChannelMessage(message)) {
     return old?.filter((existing) => existing.id !== message.id);
   }
   if (!old) return [message];
   const index = old.findIndex((existing) => existing.id === message.id);
+  const existing = index >= 0 ? old[index] : undefined;
+  const enriched = withPreservedAuthorAvatar(message, existing, old);
   if (index >= 0) {
-    return old.map((existing) => (existing.id === message.id ? message : existing));
+    return old.map((m) => (m.id === enriched.id ? enriched : m));
   }
-  return [...old, message];
+  return [...old, enriched];
 }
 
 export function channelMessageThreadOptions(

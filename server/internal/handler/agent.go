@@ -45,6 +45,11 @@ type AgentResponse struct {
 	AvatarSource  string          `json:"avatar_source"`
 	RuntimeMode   string          `json:"runtime_mode"`
 	RuntimeName   string          `json:"runtime_name"`
+	// Presence-safe projection of the bound runtime. Always filled when the
+	// runtime row exists — even if ListVisibleAgentRuntimes would hide the
+	// private runtime details from this viewer (LRM-248 AC5).
+	RuntimeStatus     string  `json:"runtime_status,omitempty"`
+	RuntimeLastSeenAt *string `json:"runtime_last_seen_at,omitempty"`
 	RuntimeConfig any             `json:"runtime_config"`
 	CustomArgs    []string        `json:"custom_args"`
 	McpConfig     json.RawMessage `json:"mcp_config"`
@@ -188,7 +193,10 @@ func (h *Handler) attachAgentRuntimeNames(ctx context.Context, resps []AgentResp
 	}
 
 	rows, err := h.DB.Query(ctx, `
-		SELECT id, COALESCE(NULLIF(name, ''), CASE WHEN runtime_mode = 'cloud' THEN 'Cloud' ELSE '' END)
+		SELECT id,
+		       COALESCE(NULLIF(name, ''), CASE WHEN runtime_mode = 'cloud' THEN 'Cloud' ELSE '' END),
+		       status,
+		       last_seen_at
 		FROM agent_runtime
 		WHERE id = ANY($1::uuid[])`, runtimeIDs)
 	if err != nil {
@@ -199,12 +207,18 @@ func (h *Handler) attachAgentRuntimeNames(ctx context.Context, resps []AgentResp
 	for rows.Next() {
 		var id pgtype.UUID
 		var name string
-		if err := rows.Scan(&id, &name); err != nil {
+		var status string
+		var lastSeen pgtype.Timestamptz
+		if err := rows.Scan(&id, &name, &status, &lastSeen); err != nil {
 			slog.Warn("failed to scan agent runtime name", "error", err)
 			continue
 		}
 		for _, idx := range byRuntimeID[uuidToString(id)] {
 			resps[idx].RuntimeName = name
+			// Always project connectivity onto the agent so private-runtime
+			// filtering on the runtimes list cannot blank live presence.
+			resps[idx].RuntimeStatus = status
+			resps[idx].RuntimeLastSeenAt = timestampToPtr(lastSeen)
 		}
 	}
 	if err := rows.Err(); err != nil {

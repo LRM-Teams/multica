@@ -6,6 +6,7 @@ import {
   deriveAgentPresenceDetail,
   deriveWorkload,
   deriveWorkloadDetail,
+  runtimeReachabilityFromAgent,
 } from "./derive-presence";
 
 function makeAgent(overrides: Partial<Agent> = {}): Agent {
@@ -296,9 +297,12 @@ describe("deriveAgentPresenceDetail", () => {
     expect(detail.queuedCount).toBe(2);
   });
 
-  it("composes online + working when heartbeat is lagging but a task is in flight (LRM-248 AC5)", () => {
-    // Stale ONLINE heartbeat alone is `unstable`; with a running task we
-    // promote live chrome to Online so Activity/ssh work never reads Offline.
+  it("composes unstable + working — ONLINE runtime with a lagging heartbeat, task in flight", () => {
+    // A still-ONLINE runtime whose heartbeat lagged (last_seen 4 min ago →
+    // recently_lost), with a task recorded as running. Both signals surface
+    // independently — amber dot AND working chip — so the user sees
+    // "connection wobbling" alongside "agent is busy". (Explicit offline is
+    // NEVER unstable post-#571; only a stale online heartbeat is.)
     const detail = deriveAgentPresenceDetail({
       agent: makeAgent(),
       runtime: makeRuntime({
@@ -308,13 +312,14 @@ describe("deriveAgentPresenceDetail", () => {
       tasks: [makeTask({ status: "running" })],
       now: NOW,
     });
-    expect(detail.availability).toBe("online");
+    expect(detail.availability).toBe("unstable");
     expect(detail.workload).toBe("working");
   });
 
-  it("promotes offline → online when a task is actively running (LRM-248 AC5 / su)", () => {
-    // Frank screenshot: orphan/missing runtime + Activity still producing
-    // must not paint Offline. Running work proves live reachability.
+  it("composes offline + working for an EXPLICITLY offline runtime with a residual running task (#571)", () => {
+    // The exact #571 bug shape: the runtime just went offline (last_seen 30s
+    // ago) while a task is still recorded as running. Availability must read
+    // offline (NOT unstable) — offline overrides the residual active task.
     const detail = deriveAgentPresenceDetail({
       agent: makeAgent(),
       runtime: makeRuntime({
@@ -324,18 +329,7 @@ describe("deriveAgentPresenceDetail", () => {
       tasks: [makeTask({ status: "running" })],
       now: NOW,
     });
-    expect(detail.availability).toBe("online");
-    expect(detail.workload).toBe("working");
-  });
-
-  it("promotes missing runtime → online when a task is actively running (LRM-248 AC5)", () => {
-    const detail = deriveAgentPresenceDetail({
-      agent: makeAgent(),
-      runtime: null,
-      tasks: [makeTask({ status: "running" })],
-      now: NOW,
-    });
-    expect(detail.availability).toBe("online");
+    expect(detail.availability).toBe("offline");
     expect(detail.workload).toBe("working");
   });
 
@@ -353,14 +347,14 @@ describe("deriveAgentPresenceDetail", () => {
     expect(detail.workload).toBe("idle");
   });
 
-  it("handles a missing runtime by reporting online when a task is running (LRM-248 AC5)", () => {
+  it("handles a missing runtime by reporting offline + the task-driven workload", () => {
     const detail = deriveAgentPresenceDetail({
       agent: makeAgent(),
       runtime: null,
       tasks: [makeTask({ status: "running" })],
       now: NOW,
     });
-    expect(detail.availability).toBe("online");
+    expect(detail.availability).toBe("offline");
     expect(detail.workload).toBe("working");
   });
 
@@ -430,7 +424,7 @@ describe("buildPresenceMap", () => {
     expect(b?.workload).toBe("queued");
   });
 
-  it("returns online for orphan runtime_id when a task is running (LRM-248 AC5 / su)", () => {
+  it("returns offline availability for agents whose runtime_id has no matching runtime", () => {
     const orphan = makeAgent({ id: "orphan", runtime_id: "missing" });
     const map = buildPresenceMap({
       agents: [orphan],
@@ -439,14 +433,16 @@ describe("buildPresenceMap", () => {
       now: NOW,
     });
     const o = map.get("orphan");
-    expect(o?.availability).toBe("online");
+    expect(o?.availability).toBe("offline");
+    // Workload still resolves independently — running task counts.
     expect(o?.workload).toBe("working");
   });
 
-  it("threads the same `now` so shared-runtime agents share heartbeat buckets", () => {
+  it("threads the same `now` so every agent on a shared runtime gets the same availability", () => {
     // Multi-agent scenario: one local daemon backs N agents, its heartbeat
-    // lags (still ONLINE, last_seen 4 min ago → recently_lost). Queued-only
-    // agents stay unstable; a running agent promotes to Online (LRM-248 AC5).
+    // lags (still ONLINE, last_seen 4 min ago → recently_lost). All dependent
+    // agents should report unstable together — the shared `now` parameter is
+    // what guarantees consistent bucket boundaries.
     const agentA = makeAgent({ id: "a", runtime_id: "rt-1" });
     const agentB = makeAgent({ id: "b", runtime_id: "rt-1" });
     const map = buildPresenceMap({
@@ -464,7 +460,8 @@ describe("buildPresenceMap", () => {
       now: NOW,
     });
     expect(map.get("a")?.availability).toBe("unstable");
-    expect(map.get("b")?.availability).toBe("online");
+    expect(map.get("b")?.availability).toBe("unstable");
+    // Workload remains independent: a is queued (waiting), b is working.
     expect(map.get("a")?.workload).toBe("queued");
     expect(map.get("b")?.workload).toBe("working");
   });
@@ -488,5 +485,48 @@ describe("buildPresenceMap", () => {
       now: NOW,
     });
     expect(map.get("a")?.workload).toBe("idle");
+  });
+});
+
+describe("runtimeReachabilityFromAgent (LRM-248 AC5)", () => {
+  it("projects online/offline from agent fields when the runtime list hides private details", () => {
+    const agent = makeAgent({
+      runtime_status: "online",
+      runtime_last_seen_at: new Date(NOW - 10_000).toISOString(),
+    });
+    const stub = runtimeReachabilityFromAgent(agent);
+    expect(stub).toEqual({
+      status: "online",
+      last_seen_at: agent.runtime_last_seen_at,
+    });
+    expect(deriveAgentAvailability(stub, NOW)).toBe("online");
+  });
+
+  it("buildPresenceMap uses the agent stub when the runtime is absent from the visible list", () => {
+    const agent = makeAgent({
+      runtime_id: "private-rt",
+      runtime_status: "online",
+      runtime_last_seen_at: new Date(NOW - 10_000).toISOString(),
+    });
+    const map = buildPresenceMap({
+      agents: [agent],
+      runtimes: [], // filtered out by ListVisibleAgentRuntimes
+      snapshot: [],
+      now: NOW,
+    });
+    expect(map.get(agent.id)?.availability).toBe("online");
+  });
+
+  it("does not invent reachability when the agent carries no status projection", () => {
+    expect(runtimeReachabilityFromAgent(makeAgent())).toBeNull();
+    const map = buildPresenceMap({
+      agents: [makeAgent({ runtime_id: "missing" })],
+      runtimes: [],
+      snapshot: [makeTask({ status: "running" })],
+      now: NOW,
+    });
+    // Truly missing / unprojected runtime stays offline — workload may still be working.
+    expect(map.get("agent-1")?.availability).toBe("offline");
+    expect(map.get("agent-1")?.workload).toBe("working");
   });
 });

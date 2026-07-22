@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
@@ -36,8 +37,9 @@ type voiceASRResponse struct {
 	Text string `json:"text"`
 }
 
-// SynthesizeVoice converts response text into MP3 using the configured
-// server-side speech provider. The API key never crosses the HTTP boundary.
+// SynthesizeVoice converts response text into a self-describing PCM WAV using
+// the configured server-side speech provider. The API key never crosses the
+// HTTP boundary, and browsers never have to guess raw PCM parameters.
 func (h *Handler) SynthesizeVoice(w http.ResponseWriter, r *http.Request) {
 	if h.VoiceProvider == nil || !h.VoiceProvider.IsConfigured() {
 		writeCodedError(w, http.StatusServiceUnavailable, "voice_not_configured", "voice service is not configured")
@@ -72,18 +74,48 @@ func (h *Handler) SynthesizeVoice(w http.ResponseWriter, r *http.Request) {
 	}
 
 	audio, err := h.VoiceProvider.Synthesize(r.Context(), doubaospeech.SynthesisRequest{
-		Text: request.Text, Format: "mp3", SampleRate: 24000,
+		Text: request.Text, Format: "pcm", SampleRate: 24000,
 	})
 	if err != nil {
 		writeVoiceProviderError(w, "tts", err)
 		return
 	}
-	w.Header().Set("Content-Type", doubaospeech.MP3ContentType)
+	wav, durationMS, err := encodePCM16WAV(audio.Data, audio.SampleRate)
+	if err != nil || audio.Format != "pcm" {
+		writeVoiceProviderError(w, "tts", errors.New("voice provider returned invalid PCM audio"))
+		return
+	}
+	w.Header().Set("Content-Type", "audio/wav")
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Length", strconv.Itoa(len(audio.Data)))
+	w.Header().Set("Content-Length", strconv.Itoa(len(wav)))
 	w.Header().Set("X-Voice-Sample-Rate", strconv.Itoa(audio.SampleRate))
+	w.Header().Set("X-Voice-Duration-Ms", strconv.FormatInt(durationMS, 10))
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(audio.Data)
+	_, _ = w.Write(wav)
+}
+
+func encodePCM16WAV(pcm []byte, sampleRate int) ([]byte, int64, error) {
+	if sampleRate <= 0 || len(pcm) == 0 || len(pcm)%2 != 0 {
+		return nil, 0, errors.New("invalid PCM audio")
+	}
+	const headerBytes = 44
+	wav := make([]byte, headerBytes+len(pcm))
+	copy(wav[0:4], "RIFF")
+	binary.LittleEndian.PutUint32(wav[4:8], uint32(len(wav)-8))
+	copy(wav[8:12], "WAVE")
+	copy(wav[12:16], "fmt ")
+	binary.LittleEndian.PutUint32(wav[16:20], 16)
+	binary.LittleEndian.PutUint16(wav[20:22], 1)
+	binary.LittleEndian.PutUint16(wav[22:24], 1)
+	binary.LittleEndian.PutUint32(wav[24:28], uint32(sampleRate))
+	binary.LittleEndian.PutUint32(wav[28:32], uint32(sampleRate*2))
+	binary.LittleEndian.PutUint16(wav[32:34], 2)
+	binary.LittleEndian.PutUint16(wav[34:36], 16)
+	copy(wav[36:40], "data")
+	binary.LittleEndian.PutUint32(wav[40:44], uint32(len(pcm)))
+	copy(wav[44:], pcm)
+	durationMS := (int64(len(pcm)/2)*1000 + int64(sampleRate)/2) / int64(sampleRate)
+	return wav, durationMS, nil
 }
 
 // TranscribeVoice accepts signed 16-bit little-endian mono PCM at 16 kHz and

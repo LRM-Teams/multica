@@ -2603,7 +2603,7 @@ export class ApiClient {
       extraHeaders: { "Content-Type": "application/json" },
     });
     const contentType = res.headers.get("Content-Type")?.split(";", 1)[0]?.trim().toLowerCase();
-    if (contentType !== "audio/mpeg") {
+    if (contentType !== "audio/wav") {
       throw new ApiError("voice service returned an invalid audio response", 502, "Bad Gateway");
     }
     return res.arrayBuffer();

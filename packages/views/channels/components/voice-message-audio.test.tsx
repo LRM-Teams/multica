@@ -1,4 +1,5 @@
-import { render, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessage } from "@multica/core/types";
 import { VoiceMessageAudio } from "./voice-message-audio";
@@ -56,6 +57,7 @@ describe("VoiceMessageAudio", () => {
     playbackMocks.claimVoiceAutoplay.mockReset().mockReturnValue(true);
     playbackMocks.stop.mockReset();
     playbackMocks.startVoicePlayback.mockReset().mockResolvedValue({
+      durationMs: 3200,
       finished: new Promise<void>(() => {}),
       stop: playbackMocks.stop,
     });
@@ -85,5 +87,19 @@ describe("VoiceMessageAudio", () => {
 
     expect(playbackMocks.stop).not.toHaveBeenCalled();
     expect(playbackMocks.startVoicePlayback).toHaveBeenCalledOnce();
+  });
+
+  it("renders an Agent reply as a playable voice bubble with decoded duration", async () => {
+    playbackMocks.claimVoiceAutoplay.mockReturnValue(false);
+    render(<VoiceMessageAudio message={agentVoiceMessage()} />);
+
+    const bubble = screen.getByRole("button", { name: "Play voice reply" });
+    expect(bubble).toHaveAttribute("data-voice-bubble", "true");
+    expect(bubble).not.toHaveTextContent("Play voice reply");
+
+    await userEvent.click(bubble);
+
+    await waitFor(() => expect(bubble).toHaveTextContent('3″'));
+    expect(playbackMocks.startVoicePlayback).toHaveBeenCalledWith("Spoken answer");
   });
 });

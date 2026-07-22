@@ -8,6 +8,7 @@ type PendingVoiceScope = {
 };
 
 export type VoicePlayback = {
+  durationMs: number;
   finished: Promise<void>;
   stop: () => void;
 };
@@ -101,6 +102,7 @@ export async function startVoicePlayback(text: string): Promise<VoicePlayback> {
   source.start();
 
   return {
+    durationMs: Math.max(0, Math.round(decoded.duration * 1000)),
     finished,
     stop: () => {
       if (activeSource === source) source.stop();

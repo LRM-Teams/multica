@@ -272,6 +272,7 @@
     "voice_processing": "正在识别语音",
     "voice_blocked": "请先清空输入内容和附件再录音",
     "voice_permission_denied": "麦克风权限被拒绝。",
+    "voice_secure_context_required": "浏览器仅允许通过 HTTPS 使用麦克风。请打开 HTTPS 地址后重试。",
     "voice_unavailable": "当前浏览器不支持语音录制。",
     "voice_recording_failed": "语音录制失败，请重试。",
     "voice_transcription_failed": "语音识别失败，请重试。",

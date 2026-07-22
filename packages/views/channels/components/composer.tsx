@@ -105,8 +105,16 @@ export function Composer({
           className={cn("flex items-center justify-between px-2 pb-2", isMobile && "gap-2")}
           data-slot="composer-action-row"
         >
-          <div className="flex min-h-8 min-w-0 flex-1 items-center gap-0.5 overflow-x-auto text-muted-foreground">
+          <div
+            className="flex min-h-8 min-w-0 flex-1 items-center gap-0.5 overflow-x-auto text-muted-foreground"
+            data-slot="composer-leading-actions"
+          >
             {leadingActions}
+          </div>
+          <div
+            className="flex shrink-0 items-center gap-1.5"
+            data-slot="composer-submit-actions"
+          >
             {voicePlaybackScope && onVoiceSend ? (
               <VoiceInputButton
                 disabled={voiceDisabled || sending}
@@ -115,15 +123,15 @@ export function Composer({
                 onVoiceSend={onVoiceSend}
               />
             ) : null}
+            <Button
+              onClick={onSend}
+              disabled={sendDisabled || sending}
+              size="sm"
+              className={cn("shrink-0", isMobile && "min-h-10 px-4")}
+            >
+              <Send className="size-4" /> {sendLabel}
+            </Button>
           </div>
-          <Button
-            onClick={onSend}
-            disabled={sendDisabled || sending}
-            size="sm"
-            className={cn("shrink-0", isMobile && "min-h-10 px-4")}
-          >
-            <Send className="size-4" /> {sendLabel}
-          </Button>
         </div>
       </div>
     </div>

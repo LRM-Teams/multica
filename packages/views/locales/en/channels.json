@@ -272,6 +272,7 @@
     "voice_processing": "Transcribing voice message",
     "voice_blocked": "Clear the current text and attachments before recording",
     "voice_permission_denied": "Microphone permission was denied.",
+    "voice_secure_context_required": "Browsers only allow microphone access over HTTPS. Open the HTTPS address and try again.",
     "voice_unavailable": "Voice recording is not supported in this browser.",
     "voice_recording_failed": "Voice recording failed. Please try again.",
     "voice_transcription_failed": "Voice transcription failed. Please try again.",

@@ -272,6 +272,7 @@
     "voice_processing": "음성을 텍스트로 변환 중",
     "voice_blocked": "녹음 전에 입력 내용과 첨부 파일을 비워 주세요",
     "voice_permission_denied": "마이크 권한이 거부되었습니다.",
+    "voice_secure_context_required": "브라우저에서 마이크를 사용하려면 HTTPS가 필요합니다. HTTPS 주소를 열고 다시 시도하세요.",
     "voice_unavailable": "이 브라우저는 음성 녹음을 지원하지 않습니다.",
     "voice_recording_failed": "음성 녹음에 실패했습니다. 다시 시도해 주세요.",
     "voice_transcription_failed": "음성 인식에 실패했습니다. 다시 시도해 주세요.",

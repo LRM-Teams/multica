@@ -34,10 +34,11 @@ func (f *fakeVoiceProvider) Transcribe(_ context.Context, request doubaospeech.T
 	return f.transcript, f.err
 }
 
-func TestSynthesizeVoiceReturnsProviderMP3(t *testing.T) {
+func TestSynthesizeVoiceWrapsProviderPCMAsWAV(t *testing.T) {
+	pcm := []byte{0x00, 0x00, 0xff, 0x7f}
 	provider := &fakeVoiceProvider{
 		configured: true,
-		audio:      doubaospeech.Audio{Data: []byte("mp3"), Format: "mp3", SampleRate: 24000},
+		audio:      doubaospeech.Audio{Data: pcm, Format: "pcm", SampleRate: 24000},
 	}
 	h := &Handler{VoiceProvider: provider}
 	request := httptest.NewRequest(http.MethodPost, "/api/voice/tts", strings.NewReader(`{"text":" 你好 "}`))
@@ -49,16 +50,21 @@ func TestSynthesizeVoiceReturnsProviderMP3(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
-	if got := response.Header().Get("Content-Type"); got != doubaospeech.MP3ContentType {
+	if got := response.Header().Get("Content-Type"); got != "audio/wav" {
 		t.Fatalf("Content-Type = %q", got)
 	}
 	if got := response.Header().Get("Cache-Control"); got != "no-store" {
 		t.Fatalf("Cache-Control = %q", got)
 	}
-	if response.Body.String() != "mp3" {
-		t.Fatalf("body = %q", response.Body.String())
+	if !bytes.Equal(response.Body.Bytes()[:4], []byte("RIFF")) ||
+		!bytes.Equal(response.Body.Bytes()[8:12], []byte("WAVE")) ||
+		!bytes.Equal(response.Body.Bytes()[44:], pcm) {
+		t.Fatalf("body is not a PCM WAV: %x", response.Body.Bytes())
 	}
-	if provider.synthesisRequest.Text != "你好" || provider.synthesisRequest.Format != "mp3" || provider.synthesisRequest.SampleRate != 24000 {
+	if got := response.Header().Get("X-Voice-Duration-Ms"); got != "0" {
+		t.Fatalf("X-Voice-Duration-Ms = %q", got)
+	}
+	if provider.synthesisRequest.Text != "你好" || provider.synthesisRequest.Format != "pcm" || provider.synthesisRequest.SampleRate != 24000 {
 		t.Fatalf("unexpected provider request: %+v", provider.synthesisRequest)
 	}
 }

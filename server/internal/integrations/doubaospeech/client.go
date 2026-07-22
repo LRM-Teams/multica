@@ -19,7 +19,6 @@ const (
 	ASRResourceID      = "volc.seedasr.sauc.duration"
 
 	PCMContentType = "audio/pcm"
-	MP3ContentType = "audio/mpeg"
 )
 
 type Config struct {

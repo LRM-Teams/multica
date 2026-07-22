@@ -272,6 +272,7 @@
     "voice_processing": "音声を文字起こし中",
     "voice_blocked": "録音する前に入力内容と添付を消去してください",
     "voice_permission_denied": "マイクの使用が許可されませんでした。",
+    "voice_secure_context_required": "ブラウザーでマイクを使用するには HTTPS が必要です。HTTPS のアドレスを開いて再試行してください。",
     "voice_unavailable": "このブラウザは音声録音に対応していません。",
     "voice_recording_failed": "音声の録音に失敗しました。もう一度お試しください。",
     "voice_transcription_failed": "音声の文字起こしに失敗しました。もう一度お試しください。",

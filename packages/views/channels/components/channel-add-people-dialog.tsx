@@ -177,11 +177,7 @@ export function ChannelAddPeopleDialog({
                   />
                   <ActorIdentityRow
                     displayName={c.presentation.displayName}
-                    handle={
-                      c.type === "agent"
-                        ? `${c.presentation.handle} · ${t(($) => $.profile_popover.role.agent)}`
-                        : c.presentation.handle
-                    }
+                    handle={c.presentation.handle}
                     showHandle
                     className="min-w-0 flex-1"
                     primaryClassName="truncate text-sm font-semibold text-ink"

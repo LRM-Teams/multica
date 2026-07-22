@@ -9,9 +9,10 @@ import enCommon from "../locales/en/common.json";
 import enAuth from "../locales/en/auth.json";
 import enSettings from "../locales/en/settings.json";
 import enSearch from "../locales/en/search.json";
+import enChannels from "../locales/en/channels.json";
 
 const TEST_RESOURCES = {
-  en: { common: enCommon, auth: enAuth, settings: enSettings, search: enSearch },
+  en: { common: enCommon, auth: enAuth, settings: enSettings, search: enSearch, channels: enChannels },
 };
 
 function I18nWrapper({ children }: { children: ReactNode }) {
@@ -371,6 +372,45 @@ describe("SearchCommand", () => {
 
     expect(mockPush).toHaveBeenCalledWith("/ws-test/members/user-1");
     expect(useSearchStore.getState().open).toBe(false);
+  });
+
+  it("shows muted owner/admin role on member search rows (LRM-232)", async () => {
+    const user = userEvent.setup();
+    mockMembers.current = [
+      {
+        id: "member-1",
+        workspace_id: "ws-test",
+        user_id: "user-1",
+        role: "owner",
+        created_at: "2026-01-01T00:00:00Z",
+        name: "frank",
+        display_name: "Frank An",
+        email: "frank@example.com",
+        avatar_url: null,
+        profile_description: "",
+      },
+      {
+        id: "member-2",
+        workspace_id: "ws-test",
+        user_id: "user-2",
+        role: "member",
+        created_at: "2026-01-01T00:00:00Z",
+        name: "bob",
+        display_name: "Bob",
+        email: "bob@example.com",
+        avatar_url: null,
+        profile_description: "",
+      },
+    ];
+    renderSearch();
+
+    const input = screen.getByPlaceholderText("Type a command or search...");
+    await user.type(input, "frank");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("search-member-role")).toHaveTextContent("Owner");
+    });
+    expect(screen.queryAllByTestId("search-member-role")).toHaveLength(1);
   });
 
   it("renders recent issues from query cache joined with store visit records", () => {

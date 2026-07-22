@@ -9,7 +9,6 @@ import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { cn } from "@multica/ui/lib/utils";
 import { MessageSquare } from "lucide-react";
 import { ActorAvatar } from "../../common/actor-avatar";
-import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { useT } from "../../i18n";
 
 export type MemberRoleLabel = "owner" | "admin" | "member" | "agent";
@@ -68,7 +67,6 @@ export function ChannelMembersList({
               <Skeleton className="h-3.5 w-28" />
               <Skeleton className="h-3 w-20" />
             </div>
-            <Skeleton className="h-5 w-14 rounded-full" />
           </div>
         ))}
       </div>
@@ -103,7 +101,10 @@ export function ChannelMembersList({
           isAgent ? t(($) => $.message.agent_badge) : t(($) => $.members.title),
         );
         const roleKey = roleForMember(m);
-        const roleLabel = t(($) => $.profile_popover.role[roleKey]);
+        const showMutedRole = !isAgent && (roleKey === "owner" || roleKey === "admin");
+        const mutedRoleLabel = showMutedRole
+          ? t(($) => $.profile_popover.role[roleKey])
+          : null;
         const canDm = Boolean(onOpenDm) && (isAgent || m.member_id !== currentUserId);
         const actorType = isAgent ? "agent" : "member";
 
@@ -120,17 +121,26 @@ export function ChannelMembersList({
               showStatusDot={isAgent}
               profileLink={false}
             />
-            <ActorIdentityRow
-              displayName={presentation.displayName}
-              handle={presentation.handle}
-              showHandle
-              className="min-w-0 flex-1"
-              primaryClassName="truncate text-sm font-semibold text-ink"
-              secondaryClassName="truncate text-xs text-ink-2"
-            />
-            <span className="shrink-0 rounded-full border border-border bg-card px-2 py-0.5 text-[11px] text-ink-3">
-              {roleLabel}
-            </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex min-w-0 items-baseline gap-1.5">
+                <span className="truncate text-sm font-semibold text-ink">
+                  {presentation.displayName}
+                </span>
+                {presentation.showHandleLabel && presentation.handleLabel ? (
+                  <span className="truncate text-xs font-normal text-ink-2">
+                    {presentation.handleLabel}
+                  </span>
+                ) : null}
+                {mutedRoleLabel ? (
+                  <span
+                    data-testid="member-role-label"
+                    className="shrink-0 text-[11px] font-normal leading-none text-muted-foreground"
+                  >
+                    {mutedRoleLabel}
+                  </span>
+                ) : null}
+              </div>
+            </div>
             {canDm && (
               <button
                 type="button"

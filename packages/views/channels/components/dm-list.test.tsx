@@ -368,3 +368,63 @@ describe("DmList unread affordance (read-model)", () => {
     expect(dot).not.toBeNull();
   });
 });
+
+describe("DmList no Ask Wendy promo card (LRM-294)", () => {
+  beforeEach(() => {
+    mockViewport.isMobile = false;
+    mockQueryData.dms = [];
+    mockQueryData.agents = [];
+    mockQueryData.members = [];
+    mockQueryData.squads = [];
+  });
+
+  it("does not render the promo card in the empty DM list", () => {
+    mockQueryData.agents = [
+      {
+        id: "wendy-1",
+        name: "wendy",
+        display_name: "Wendy",
+        archived_at: null,
+        runtime_id: "rt-1",
+      },
+    ];
+
+    renderDmList();
+
+    expect(screen.queryByText("Ask Wendy")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Wendy can help you turn real work into useful agents."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps Wendy as a normal DM row when a conversation exists", () => {
+    mockQueryData.dms = [
+      makeDm({
+        id: "dm-wendy",
+        peer: { type: "agent", id: "wendy-1", name: "Wendy" },
+      }),
+    ];
+
+    renderDmList();
+
+    expect(screen.getByRole("button", { name: /Wendy/i })).toBeInTheDocument();
+    expect(screen.queryByText("Ask Wendy")).not.toBeInTheDocument();
+  });
+
+  it("lists Wendy in the new-DM picker", () => {
+    mockQueryData.agents = [
+      {
+        id: "wendy-1",
+        name: "wendy",
+        display_name: "Wendy",
+        archived_at: null,
+      },
+    ];
+
+    renderDmList();
+    openDesktopPicker();
+
+    expect(screen.getByText("Wendy")).toBeInTheDocument();
+    expect(screen.getByText("Agent")).toBeInTheDocument();
+  });
+});

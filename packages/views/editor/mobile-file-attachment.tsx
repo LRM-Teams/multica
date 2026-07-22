@@ -1,18 +1,19 @@
 "use client";
 
 /**
- * Mobile file attachment entry + fullscreen detail (LRM-216 / LRM-219).
+ * Mobile file attachment entry + fullscreen detail (LRM-216 / LRM-219 / LRM-230).
  *
- * LRM-219 narrows LRM-217: only **images** get content preview.
  * - Image: stream thumbnail → tap → fullscreen big image (Slack chrome)
- * - Other files: compact card → fullscreen filename + Download only (no
- *   HTML/PDF/iframe content preview)
+ * - HTML: compact card → fullscreen sandboxed HTML preview (srcDoc) + Download
+ * - Other files (incl. PDF): compact card → fullscreen filename + Download with
+ *   a readable "can't preview — download / open locally" pane (never blank)
  */
 
 import * as React from "react";
-import { ChevronRight, ChevronLeft } from "lucide-react";
+import { ChevronRight, ChevronLeft, FileWarning } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../i18n";
+import { HtmlPreviewBody } from "./html-preview-body";
 import {
   formatFileSize,
   getFileExtension,
@@ -72,6 +73,7 @@ export function MobileFileAttachment({
   uploading,
   openable = true,
   previewUrl,
+  attachmentId,
   previewMode,
   onDownload,
   className,
@@ -242,17 +244,60 @@ export function MobileFileAttachment({
                   className="max-h-full max-w-full object-contain"
                 />
               </div>
-            ) : (
-              /* Non-image: filename + Download only — no content preview body */
+            ) : mode === "html" && attachmentId ? (
               <div
-                data-testid="mobile-file-preview-empty"
-                className="min-h-0 flex-1 bg-[#f0f0ee]"
-                aria-hidden
-              />
+                data-testid="mobile-file-preview-html-body"
+                className="flex min-h-0 flex-1 flex-col bg-background"
+              >
+                <HtmlPreviewBody
+                  source={{ kind: "attachment", attachmentId }}
+                  title={filename}
+                  className="h-full min-h-0 w-full flex-1"
+                  iframeClassName="rounded-none border-0"
+                  placeholderClassName="h-full min-h-0 w-full flex-1"
+                  errorTestId="mobile-file-preview-html-error"
+                />
+              </div>
+            ) : (
+              <DownloadGuidancePane badge={badge} tone={tone} />
             )}
           </div>
         </dialog>
       )}
     </>
+  );
+}
+
+/** Non-blank fallback when content preview isn't available (PDF / zip / …). */
+function DownloadGuidancePane({
+  badge,
+  tone,
+}: {
+  badge: string;
+  tone: string;
+}) {
+  const { t } = useT("editor");
+  return (
+    <div
+      data-testid="mobile-file-preview-unavailable"
+      className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center"
+    >
+      <span
+        className={cn(
+          "grid size-12 place-items-center rounded-xl text-[11px] font-extrabold",
+          tone,
+        )}
+        aria-hidden
+      >
+        {badge}
+      </span>
+      <FileWarning className="size-5 text-muted-foreground" aria-hidden />
+      <p className="text-[13px] font-semibold text-foreground">
+        {t(($) => $.attachment.preview_unavailable)}
+      </p>
+      <p className="max-w-[18rem] text-[12px] leading-snug text-muted-foreground">
+        {t(($) => $.attachment.preview_unavailable_hint)}
+      </p>
+    </div>
   );
 }

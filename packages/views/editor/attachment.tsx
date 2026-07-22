@@ -346,12 +346,14 @@ export function Attachment({
     handleDownload();
   };
 
-  // LRM-216 / LRM-219 — narrow/mobile: images get stream thumb → fullscreen
-  // big image; other files stay compact card → fullscreen filename + Download
-  // only (no HTML/PDF content preview).
+  // LRM-216 / LRM-219 / LRM-230 — narrow/mobile:
+  //   image → stream thumb → fullscreen big image
+  //   html  → compact card → fullscreen sandboxed HTML preview (restored)
+  //   else  → compact card → fullscreen download guidance (never blank)
   if (isMobile) {
     const canOpen = !!state.url || !!state.attachmentId;
-    const previewMode = kind === "image" ? "image" : "none";
+    const previewMode =
+      kind === "image" ? "image" : kind === "html" ? "html" : "none";
     return (
       <MobileFileAttachment
         filename={state.filename}

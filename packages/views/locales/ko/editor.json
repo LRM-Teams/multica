@@ -67,7 +67,9 @@
     "meta_size": "크기",
     "meta_sender": "보낸 사람",
     "meta_time": "시간",
-    "cannot_preview": "미리볼 수 없음"
+    "cannot_preview": "미리볼 수 없음",
+    "preview_unavailable": "이 파일은 미리볼 수 없습니다",
+    "preview_unavailable_hint": "다운로드한 뒤 브라우저나 다른 앱으로 여세요."
   },
   "link_hover": {
     "copy_link": "링크 복사",

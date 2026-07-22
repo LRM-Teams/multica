@@ -23,6 +23,7 @@ export type WSEventType =
   | "agent:created"
   | "agent:archived"
   | "agent:restored"
+  | "agent.memory_updated"
   | "task:queued"
   | "task:dispatch"
   | "task:running"
@@ -136,6 +137,14 @@ export interface AgentArchivedPayload {
 
 export interface AgentRestoredPayload {
   agent: Agent;
+}
+
+/** Fired when an agent persists a governed memory file (Phase① XP feedback). */
+export interface AgentMemoryUpdatedPayload {
+  agent_id: string;
+  scope_type: string;
+  file_key: string;
+  count: number;
 }
 
 export interface DaemonRuntimeUpdatedPayload {
@@ -522,6 +531,7 @@ export interface WSEventPayloadMap {
   "agent:created": AgentCreatedPayload;
   "agent:archived": AgentArchivedPayload;
   "agent:restored": AgentRestoredPayload;
+  "agent.memory_updated": AgentMemoryUpdatedPayload;
   "task:queued": TaskQueuedPayload;
   "task:dispatch": TaskDispatchPayload;
   "task:running": TaskRunningPayload;

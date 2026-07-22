@@ -15,6 +15,7 @@ import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/ac
 import { cn } from "@multica/ui/lib/utils";
 import { ActivityTab } from "../../agents/components/tabs/activity-tab";
 import { AgentPresenceStatusLine } from "../../agents/components/agent-presence-status-line";
+import { AgentXpBurst } from "../../agents/components/agent-xp-burst";
 import { ModelPicker } from "../../agents/components/inspector/model-picker";
 import { RuntimePicker } from "../../agents/components/inspector/runtime-picker";
 import { ThinkingPropRow } from "../../agents/components/inspector/thinking-prop-row";
@@ -122,16 +123,18 @@ export function AgentSidePanel({
   const leading = useMemo(
     () => (
       <>
-        <AgentPresenceOverlay agentId={agent.id} size={32}>
-          <ActorAvatarBase
-            name={displayName}
-            initials={initials}
-            avatarUrl={resolvePublicFileUrl(agent.avatar_url)}
-            isAgent
-            size={32}
-            className={agent.archived_at ? "opacity-50 grayscale" : undefined}
-          />
-        </AgentPresenceOverlay>
+        <AgentXpBurst agentId={agent.id}>
+          <AgentPresenceOverlay agentId={agent.id} size={32}>
+            <ActorAvatarBase
+              name={displayName}
+              initials={initials}
+              avatarUrl={resolvePublicFileUrl(agent.avatar_url)}
+              isAgent
+              size={32}
+              className={agent.archived_at ? "opacity-50 grayscale" : undefined}
+            />
+          </AgentPresenceOverlay>
+        </AgentXpBurst>
         {/* LRM-248: name + plain Online/Offline text (avatar badge is the
             round indicator — no second dot next to the word). */}
         <div className="flex min-w-0 items-center gap-2">

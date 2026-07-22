@@ -41,6 +41,8 @@ vi.mock("@tanstack/react-query", () => ({
 vi.mock("@multica/core/agents/stores", () => ({
   useAgentPanelStore: (selector: (s: { selectedAgentId: string | null; close: () => void }) => unknown) =>
     selector({ selectedAgentId, close: closeMock }),
+  useAgentXpBurstStore: (selector: (s: { bursts: Record<string, never> }) => unknown) =>
+    selector({ bursts: {} }),
 }));
 
 vi.mock("../navigation", () => ({

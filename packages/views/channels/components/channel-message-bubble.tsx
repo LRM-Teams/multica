@@ -491,6 +491,7 @@ export function ChannelMessageBubble({
         name={displayName}
         avatarUrlHint={message.author_avatar_url}
         showStatusDot={isAgent}
+        showXpBurst={isAgent}
         profileLink={false}
       />
     ) : null;

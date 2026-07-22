@@ -2719,7 +2719,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     active && selectedAgentPanelId ? (
       <ResolvedAgentSidePanel
         agentId={selectedAgentPanelId}
-        agents={agents}
         currentUserId={currentUserId}
         members={workspaceMembers}
         onClose={() => setSelectedAgentPanelId(null)}

@@ -73,8 +73,7 @@ vi.mock("./actor-profile-popover", () => ({
 }));
 
 describe("ActorProfilePage (#586 mobile full page)", () => {
-  it("resolves agents by id even when absent from ListAgents (LRM-288)", () => {
-    agents.splice(0, agents.length);
+  it("opens agents by id via ResolvedAgentSidePanel (LRM-292)", () => {
     render(<ActorProfilePage memberType="agent" memberId="group-manager-1" />);
 
     const agentTabs = screen.getByTestId("agent-tabs");
@@ -83,7 +82,6 @@ describe("ActorProfilePage (#586 mobile full page)", () => {
   });
 
   it("reuses the agent tab surface for agents", () => {
-    agents.splice(0, agents.length, { id: "agent-1" });
     render(<ActorProfilePage memberType="agent" memberId="agent-1" />);
 
     const agentTabs = screen.getByTestId("agent-tabs");
@@ -94,7 +92,6 @@ describe("ActorProfilePage (#586 mobile full page)", () => {
     expect(agentTabs.parentElement).toHaveClass("flex", "min-h-0", "flex-1");
     expect(agentTabs.parentElement?.parentElement).toHaveClass("flex", "min-h-0", "flex-1");
     expect(agentTabs.parentElement?.parentElement).not.toHaveClass("overflow-y-auto");
-    agents.splice(0, agents.length);
   });
 
   it("keeps the generic profile fallback as the page scroll owner", () => {

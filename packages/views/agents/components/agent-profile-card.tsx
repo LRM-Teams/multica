@@ -8,7 +8,7 @@ import {
   memberProfileOptions,
   validateAgentUsername,
 } from "@multica/core/agents";
-import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
+import { memberListOptions } from "@multica/core/workspace/queries";
 import { useAgentPermissions } from "@multica/core/permissions";
 import { useAuthStore } from "@multica/core/auth";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
@@ -41,28 +41,23 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
   const wsId = useWorkspaceId();
   const p = useWorkspacePaths();
   const { openDM, isPending: openingDM } = useOpenDM();
-  const { data: agents = [], isLoading: agentsLoading } = useQuery(agentListOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
   const handleUpdate = useUpdateAgent(wsId);
   const currentUser = useAuthStore((s) => s.user);
   const runtimeHealthLabel = useRuntimeHealthStateLabel();
 
-  const listAgent = agents.find((a) => a.id === agentId) ?? null;
-  // Channel-only agents (group managers) are omitted from ListAgents
-  // (LRM-233) but remain openable — resolve by id (LRM-288).
+  // LRM-292: always resolve via GetAgent — ListAgents is not an open gate.
   const {
-    data: detailAgent,
+    data: agent,
     isPending: detailPending,
     isError: detailIsError,
     error: detailError,
   } = useQuery({
     ...agentDetailOptions(wsId, agentId),
-    enabled: !!agentId && !listAgent && !agentsLoading,
+    enabled: !!agentId,
   });
-  const agent = listAgent ?? detailAgent ?? null;
   const detailForbidden =
-    !listAgent &&
     detailIsError &&
     detailError instanceof ApiError &&
     detailError.status === 403;
@@ -78,10 +73,7 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
   // so the early returns below don't violate the rules of hooks.
   const { canEdit } = useAgentPermissions(agent ?? null, wsId);
 
-  const isLoading =
-    (agentsLoading && !listAgent) ||
-    (!listAgent && detailPending) ||
-    (detailForbidden && identityPending);
+  const isLoading = detailPending || (detailForbidden && identityPending);
 
   if (isLoading) {
     return (

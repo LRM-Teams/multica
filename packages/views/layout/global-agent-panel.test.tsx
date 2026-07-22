@@ -7,11 +7,6 @@ import { GlobalAgentPanel } from "./global-agent-panel";
 // the zustand `useAgentPanelStore` and renders the SAME AgentSidePanel as the
 // docked channels/DM path, so it reads as one panel (Iris #447 parity).
 
-const mockAgents = [
-  { id: "agent-1", name: "Nova" },
-  { id: "agent-2", name: "Atlas" },
-];
-
 let selectedAgentId: string | null = null;
 const closeMock = vi.fn(() => {
   selectedAgentId = null;
@@ -27,15 +22,11 @@ vi.mock("@multica/core/auth", () => ({
 }));
 
 vi.mock("@multica/core/workspace/queries", () => ({
-  agentListOptions: () => ({ queryKey: ["agents"] }),
   memberListOptions: () => ({ queryKey: ["members"] }),
 }));
 
 vi.mock("@tanstack/react-query", () => ({
-  // Both the agent and member queries resolve to a stable list. The member
-  // list only feeds the (mocked) ResolvedAgentSidePanel, so returning the
-  // agent list for both is harmless and keeps the mock trivial.
-  useQuery: () => ({ data: mockAgents }),
+  useQuery: () => ({ data: [] }),
 }));
 
 vi.mock("@multica/core/agents/stores", () => ({
@@ -50,20 +41,11 @@ vi.mock("../navigation", () => ({
 }));
 
 vi.mock("../common/resolved-agent-side-panel", () => ({
-  ResolvedAgentSidePanel: ({
-    agentId,
-    agents = [],
-  }: {
-    agentId: string;
-    agents?: { id: string; name: string }[];
-  }) => {
-    const agent = agents.find((a) => a.id === agentId);
-    return (
-      <div data-testid="agent-side-panel" data-agent-id={agentId}>
-        {agent?.name ?? agentId}
-      </div>
-    );
-  },
+  ResolvedAgentSidePanel: ({ agentId }: { agentId: string }) => (
+    <div data-testid="agent-side-panel" data-agent-id={agentId}>
+      {agentId}
+    </div>
+  ),
 }));
 
 describe("GlobalAgentPanel", () => {
@@ -83,10 +65,9 @@ describe("GlobalAgentPanel", () => {
 
     const panel = screen.getByTestId("agent-side-panel");
     expect(panel).toHaveAttribute("data-agent-id", "agent-2");
-    expect(panel).toHaveTextContent("Atlas");
   });
 
-  it("opens even when the agent is absent from ListAgents (channel-only)", () => {
+  it("opens by id alone without ListAgents (LRM-292)", () => {
     selectedAgentId = "group-manager-1";
     render(<GlobalAgentPanel />);
 

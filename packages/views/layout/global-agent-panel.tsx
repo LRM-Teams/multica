@@ -5,9 +5,8 @@ import { Dialog } from "@base-ui/react/dialog";
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useAuthStore } from "@multica/core/auth";
-import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
+import { memberListOptions } from "@multica/core/workspace/queries";
 import { useAgentPanelStore } from "@multica/core/agents/stores";
-import type { Agent } from "@multica/core/types";
 import { ResolvedAgentSidePanel } from "../common/resolved-agent-side-panel";
 import { useNavigation } from "../navigation";
 
@@ -29,9 +28,8 @@ import { useNavigation } from "../navigation";
  * header+tabs, and uses a TRANSPARENT backdrop (click-outside dismiss, no
  * dimming scrim) so the "overlay vs push" difference stays invisible.
  *
- * LRM-288: opens on selectedAgentId even when the agent is absent from
- * ListAgents (channel-only / group managers); resolution is delegated to
- * ResolvedAgentSidePanel.
+ * LRM-292: opens on selectedAgentId alone; ResolvedAgentSidePanel always
+ * GET /api/agents/:id (no ListAgents.find gate).
  */
 export function GlobalAgentPanel() {
   const wsId = useWorkspaceId();
@@ -39,10 +37,6 @@ export function GlobalAgentPanel() {
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const selectedAgentId = useAgentPanelStore((s) => s.selectedAgentId);
   const close = useAgentPanelStore((s) => s.close);
-  const { data: agents = [] } = useQuery({
-    ...agentListOptions(wsId),
-    enabled: !!selectedAgentId,
-  });
   const { data: members = [] } = useQuery({
     ...memberListOptions(wsId),
     enabled: !!selectedAgentId,
@@ -61,12 +55,8 @@ export function GlobalAgentPanel() {
   // `close()` clears selectedAgentId immediately, so without the latch the
   // panel would slide out empty. Refreshed when a new agent is selected.
   const [displayedId, setDisplayedId] = useState<string | null>(null);
-  const [displayedAgents, setDisplayedAgents] = useState<readonly Agent[]>([]);
   if (selectedAgentId && selectedAgentId !== displayedId) {
     setDisplayedId(selectedAgentId);
-  }
-  if (selectedAgentId && agents.length > 0 && agents !== displayedAgents) {
-    setDisplayedAgents(agents);
   }
 
   const open = !!selectedAgentId;
@@ -92,7 +82,6 @@ export function GlobalAgentPanel() {
           {panelAgentId ? (
             <ResolvedAgentSidePanel
               agentId={panelAgentId}
-              agents={selectedAgentId ? agents : displayedAgents}
               currentUserId={currentUserId}
               members={members}
               onClose={close}

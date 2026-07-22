@@ -8,7 +8,7 @@ import {
   memberProfileOptions,
 } from "@multica/core/agents";
 import { useWorkspaceId } from "@multica/core/hooks";
-import type { Agent, MemberWithUser } from "@multica/core/types";
+import type { MemberWithUser } from "@multica/core/types";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { toast } from "sonner";
 import { AgentSidePanel } from "../channels/components/agent-side-panel";
@@ -16,7 +16,12 @@ import { useT } from "../i18n/use-t";
 import { ActorProfileContent } from "./actor-profile-popover";
 import { ConversationSidePanelShell } from "./conversation-side-panel-shell";
 
-const EMPTY_AGENTS: readonly Agent[] = [];
+/** Optional row/message identity for loading chrome while GetAgent resolves. */
+export type AgentIdentitySnapshot = {
+  name?: string | null;
+  display_name?: string | null;
+  avatar_url?: string | null;
+};
 
 const PANEL_LOADING_LEADING = (
   <div className="flex items-center gap-2.5">
@@ -34,28 +39,28 @@ const PANEL_LOADING_BODY = (
 );
 
 /**
- * Resolves an agent by id for the #349 side panel when the actor may be absent
- * from ListAgents (channel-only discovery — group managers / LRM-233).
+ * Opens the #349 agent side panel from an agentId.
  *
- * Resolution order (LRM-288):
- * 1. Prefer the workspace agent list cache (no extra fetch).
- * 2. Fall back to GET /api/agents/:id (group managers are still readable).
- * 3. On 403, open the identity-only member profile (basic card, sensitive
- *    blocks gated by profile_access) — never a silent no-op.
- * 4. On true failure (404 / network / identity profile also fails), toast
- *    explicitly and show an error panel (close via shell X — no silent null).
+ * LRM-292: ListAgents is directory/invite discovery only (LRM-233 still hides
+ * channel-only / group managers). Panel body always comes from
+ * GET /api/agents/:id — never `agents.find(id)` as an open gate.
+ *
+ * Resolution:
+ * 1. Always GET /api/agents/:id.
+ * 2. On 403 → identity-only member profile (basic card).
+ * 3. On true failure → toast + explicit error panel (no silent null / LRM-238).
  */
 export function ResolvedAgentSidePanel({
   agentId,
-  agents = EMPTY_AGENTS,
+  identitySnapshot = null,
   currentUserId,
   members,
   onClose,
   variant = "panel",
 }: {
   agentId: string;
-  /** Workspace ListAgents cache; may omit channel-only agents. */
-  agents?: readonly Agent[];
+  /** Optional name/avatar for loading chrome; not a substitute for GetAgent. */
+  identitySnapshot?: AgentIdentitySnapshot | null;
   currentUserId: string | null;
   members: readonly MemberWithUser[];
   onClose: () => void;
@@ -63,21 +68,18 @@ export function ResolvedAgentSidePanel({
 }) {
   const { t } = useT("channels");
   const wsId = useWorkspaceId();
-  const listAgent = agents.find((agent) => agent.id === agentId) ?? null;
 
   const {
-    data: detailAgent,
+    data: agent,
     isPending: detailPending,
     isError: detailIsError,
     error: detailError,
   } = useQuery({
     ...agentDetailOptions(wsId, agentId),
-    enabled: !!agentId && !listAgent,
+    enabled: !!agentId,
   });
 
-  const agent = listAgent ?? detailAgent ?? null;
   const detailForbidden =
-    !listAgent &&
     detailIsError &&
     detailError instanceof ApiError &&
     detailError.status === 403;
@@ -125,12 +127,23 @@ export function ResolvedAgentSidePanel({
   }
 
   if (detailPending || (detailForbidden && identityPending)) {
+    const snapshotName =
+      identitySnapshot?.display_name || identitySnapshot?.name || null;
     return (
       <ConversationSidePanelShell
         variant={variant}
         onClose={onClose}
         closeAriaLabel={t(($) => $.profile_popover.close_aria)}
-        leading={PANEL_LOADING_LEADING}
+        // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- shell leading slot
+        leading={
+          snapshotName ? (
+            <p className="min-w-0 truncate text-sm font-semibold">
+              {snapshotName}
+            </p>
+          ) : (
+            PANEL_LOADING_LEADING
+          )
+        }
       >
         {PANEL_LOADING_BODY}
       </ConversationSidePanelShell>

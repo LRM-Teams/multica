@@ -29,7 +29,7 @@ import { useAuthStore } from "@multica/core/auth";
 import { api } from "@multica/core/api";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
+import { memberListOptions } from "@multica/core/workspace/queries";
 import { useWSEvent } from "@multica/core/realtime";
 import type { ChannelActiveTask, ChannelMessage, ChannelMessageSearchResult, ChannelTypingPayload } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
@@ -418,10 +418,6 @@ function DmChannelConversation({
     dispatch({ type: "closeThread" });
     setSelectedAgentPanelId(agentId);
   }, []);
-  const { data: dmAgents = [] } = useQuery({
-    ...agentListOptions(wsId),
-    enabled: !!selectedAgentPanelId,
-  });
   const { data: dmMembers = [] } = useQuery({
     ...memberListOptions(wsId),
     enabled: !!selectedAgentPanelId,
@@ -1318,7 +1314,6 @@ function DmChannelConversation({
     selectedAgentPanelId ? (
       <ResolvedAgentSidePanel
         agentId={selectedAgentPanelId}
-        agents={dmAgents}
         currentUserId={currentUserId}
         members={dmMembers}
         onClose={() => setSelectedAgentPanelId(null)}

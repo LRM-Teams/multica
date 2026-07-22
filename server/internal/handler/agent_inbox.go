@@ -542,6 +542,29 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 	}
 	defer tx.Rollback(r.Context())
 	qtx := h.Queries.WithTx(tx)
+	isChannelOnboarding := event.Reason == channelOnboardingReason
+	var onboardingID pgtype.UUID
+	channelOnboardingActive := false
+	if isChannelOnboarding {
+		onboardingID, err = channelOnboardingIDForInboxEventTx(r.Context(), tx, event.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load channel onboarding")
+			return
+		}
+		if !onboardingID.Valid {
+			writeError(w, http.StatusInternalServerError, "channel onboarding inbox event is missing its canonical event")
+			return
+		}
+		// Eligibility must be locked before AckAgentInboxDelivery updates the
+		// delivery/inbox/session rows. The membership DELETE trigger owns the
+		// membership row first and then expires those rows, so taking delivery
+		// first would recreate a delivery -> membership reverse cycle.
+		channelOnboardingActive, err = channelOnboardingGenerationActiveTx(r.Context(), tx, onboardingID, event.ChannelID, event.AgentID, true)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to lock channel onboarding eligibility")
+			return
+		}
+	}
 
 	acked, err := qtx.AckAgentInboxDelivery(r.Context(), db.AckAgentInboxDeliveryParams{
 		ID:           deliveryID,
@@ -556,7 +579,6 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "failed to complete inbox delivery")
 		return
 	}
-	isChannelOnboarding := event.Reason == channelOnboardingReason
 	var chatDonePayload *protocol.ChatDonePayload
 	if event.ChatSessionID.Valid {
 		var sessionRuntimeID pgtype.UUID
@@ -583,7 +605,7 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 	}
 	terminalOutcome := ""
 	if isChannelOnboarding {
-		terminalOutcome, err = h.completeChannelOnboardingTx(r.Context(), tx, event, deliveryID, req.ChannelOnboardingDecision)
+		terminalOutcome, err = h.completeChannelOnboardingTx(r.Context(), tx, event, deliveryID, onboardingID, channelOnboardingActive, req.ChannelOnboardingDecision)
 		if err != nil {
 			if errors.Is(err, errChannelOnboardingDecisionRequired) {
 				writeError(w, http.StatusConflict, err.Error())

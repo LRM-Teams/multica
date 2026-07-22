@@ -1004,6 +1004,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/activity/{activityId}/steps", h.ListAgentActivitySteps)
 					r.Get("/activity/{activityId}/diagnostic", h.GetAgentActivityDiagnostic)
 					r.Get("/tasks", h.ListAgentTasks)
+					r.Get("/reminders", h.ListAgentReminders)
 					r.Get("/skills", h.ListAgentSkills)
 					r.Put("/skills", h.SetAgentSkills)
 					r.Get("/skill-suggestions", h.ListAgentSkillSuggestions)
@@ -1173,6 +1174,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Post("/api/agent/reminders/snooze", h.AgentTransportSnoozeReminder)
 			r.Post("/api/agent/reminders/update", h.AgentTransportUpdateReminder)
 			r.Post("/api/agent/reminders/cancel", h.AgentTransportCancelReminder)
+			r.Post("/api/agent/reminders/log", h.AgentTransportReminderLog)
 
 			// Unified 1-on-1 DM list (kind='dm' channels ∪ legacy unbound chat
 			// sessions) plus idempotent create-or-find. Sole data source for the

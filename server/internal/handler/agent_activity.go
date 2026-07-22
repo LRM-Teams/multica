@@ -2122,8 +2122,17 @@ func resolveRaftCLIInvocation(toolName string, input map[string]any) (raftCLIInv
 	case "reminder list":
 		invocation.Tool = "list_reminders"
 		invocation.SummaryKind = "none"
+	case "reminder snooze":
+		invocation.Tool = "snooze_reminder"
+		invocation.SummaryKind = "none"
+	case "reminder update":
+		invocation.Tool = "update_reminder"
+		invocation.SummaryKind = "none"
 	case "reminder cancel":
 		invocation.Tool = "cancel_reminder"
+		invocation.SummaryKind = "none"
+	case "reminder log":
+		invocation.Tool = "log_reminder"
 		invocation.SummaryKind = "none"
 	case "issue list":
 		invocation.Tool = "list_issues"
@@ -2539,7 +2548,10 @@ var agentActivityToolAliases = map[string]string{
 	"settodolist":       "todo_write",
 	"schedule_reminder": "schedule_reminder",
 	"list_reminders":    "list_reminders",
+	"snooze_reminder":   "snooze_reminder",
+	"update_reminder":   "update_reminder",
 	"cancel_reminder":   "cancel_reminder",
+	"log_reminder":      "log_reminder",
 	"collab_tool_call":  "collab_tool_call",
 }
 

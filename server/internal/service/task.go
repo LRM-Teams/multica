@@ -1223,6 +1223,14 @@ func (s *TaskService) CreateAmbientChatTaskRow(ctx context.Context, q *db.Querie
 	return s.createChatTaskRow(ctx, q, chatSession, initiatorUserID, true, 1)
 }
 
+// CreateFreshChatTaskRow inserts a normal-priority fresh-session chat task
+// using the supplied query handle without publishing realtime or daemon wake
+// side effects. Transactional callers must call PublishChatTaskQueued only
+// after the transaction commits successfully.
+func (s *TaskService) CreateFreshChatTaskRow(ctx context.Context, q *db.Queries, chatSession db.ChatSession, initiatorUserID pgtype.UUID) (db.AgentTaskQueue, error) {
+	return s.createChatTaskRow(ctx, q, chatSession, initiatorUserID, true, 2)
+}
+
 func (s *TaskService) enqueueChatTask(ctx context.Context, chatSession db.ChatSession, initiatorUserID pgtype.UUID, forceFreshSession bool, priority int32, interruptFollowup bool) (db.AgentTaskQueue, error) {
 	task, err := s.createChatTaskRow(ctx, s.Queries, chatSession, initiatorUserID, forceFreshSession, priority)
 	if err != nil {

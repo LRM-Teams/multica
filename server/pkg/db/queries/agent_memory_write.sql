@@ -24,3 +24,8 @@ ON CONFLICT (agent_id, write_date) DO UPDATE
 SET write_count = agent_memory_write_daily.write_count + 1,
     updated_at = now()
 RETURNING *;
+
+-- name: CountAgentMemoryWrites :one
+SELECT COUNT(*)::bigint AS count
+FROM agent_memory_write_event
+WHERE agent_id = $1;

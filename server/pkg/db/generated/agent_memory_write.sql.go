@@ -112,3 +112,16 @@ func (q *Queries) UpsertAgentMemoryWriteDaily(ctx context.Context, arg UpsertAge
 	)
 	return i, err
 }
+
+const countAgentMemoryWrites = `-- name: CountAgentMemoryWrites :one
+SELECT COUNT(*)::bigint AS count
+FROM agent_memory_write_event
+WHERE agent_id = $1
+`
+
+func (q *Queries) CountAgentMemoryWrites(ctx context.Context, agentID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countAgentMemoryWrites, agentID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}

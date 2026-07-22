@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -22,6 +23,7 @@ type MemberProfileResponse struct {
 	Status         *string                   `json:"status"`
 	RecentActivity []AgentRecentActivityItem `json:"recent_activity"`
 	ProfileAccess  string                    `json:"profile_access"`
+	MemoryGrowth   *service.MemoryGrowth     `json:"memory_growth"`
 }
 
 type AgentRecentActivityItem struct {
@@ -86,6 +88,7 @@ func (h *Handler) getUserMemberProfile(w http.ResponseWriter, r *http.Request, u
 		Status:         nil,
 		RecentActivity: []AgentRecentActivityItem{},
 		ProfileAccess:  "full",
+		MemoryGrowth:   nil,
 	})
 }
 
@@ -109,6 +112,7 @@ func (h *Handler) getAgentMemberProfile(w http.ResponseWriter, r *http.Request, 
 			Status:         nil,
 			RecentActivity: []AgentRecentActivityItem{},
 			ProfileAccess:  "identity_only",
+			MemoryGrowth:   nil,
 		})
 		return
 	}
@@ -119,6 +123,11 @@ func (h *Handler) getAgentMemberProfile(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	status := agent.Status
+	memoryGrowth, err := h.loadAgentMemoryGrowth(r.Context(), agent.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load member profile")
+		return
+	}
 	writeJSON(w, http.StatusOK, MemberProfileResponse{
 		MemberType:     "agent",
 		MemberID:       uuidToString(agent.ID),
@@ -130,7 +139,16 @@ func (h *Handler) getAgentMemberProfile(w http.ResponseWriter, r *http.Request, 
 		Status:         &status,
 		RecentActivity: activity,
 		ProfileAccess:  "full",
+		MemoryGrowth:   memoryGrowth,
 	})
+}
+
+func (h *Handler) loadAgentMemoryGrowth(ctx context.Context, agentID pgtype.UUID) (*service.MemoryGrowth, error) {
+	count, err := h.Queries.CountAgentMemoryWrites(ctx, agentID)
+	if err != nil {
+		return nil, err
+	}
+	return service.ComputeAgentMemoryGrowth(int(count), service.DefaultMemoryGrowthBase, service.DefaultMemoryGrowthRatio), nil
 }
 
 func (h *Handler) listAgentRecentActivity(ctx context.Context, agent db.Agent, limit int) ([]AgentRecentActivityItem, error) {

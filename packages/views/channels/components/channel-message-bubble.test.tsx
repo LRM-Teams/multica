@@ -1584,7 +1584,7 @@ describe("ChannelMessageBubble", () => {
   });
 
   it("projects an issue-lifecycle status change into the item #7 row with a simple inline time (#497)", () => {
-    render(
+    renderWithStickerCatalog(
       <ChannelMessageBubble
         message={makeMessage({
           type: "system",

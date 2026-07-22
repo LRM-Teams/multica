@@ -139,6 +139,86 @@ func TestIssueThreadBackflowLeavesNonMembersUntargeted(t *testing.T) {
 	}
 }
 
+// Group-manager actors must land on issue backflow rows as resolvable actor_id
+// only — never denormalized actor_name/actor_handle (LRM-281). Clients look up
+// the live display name via GET /api/member-profiles/agent/{id}.
+func TestIssueThreadBackflow_GroupManagerActorEmitsIDWithoutNameFallback(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+
+	beckhamDisplay := "贝克汉姆-" + uuid.NewString()[:8]
+	beckhamID := createHandlerTestAgent(t, beckhamDisplay, nil)
+	markGroupManagerForTest(t, beckhamID)
+	beckhamTask := createHandlerTestTaskForAgent(t, beckhamID)
+	assigneeID := createHandlerTestAgent(t, "Issue Backflow GM Assignee", nil)
+
+	channelID := seedChannelForTest(t, "issue-thread-backflow-gm-"+uuid.NewString(), testUserID)
+	for _, agentID := range []string{beckhamID, assigneeID} {
+		if _, err := testPool.Exec(ctx, `
+			INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+			VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+			t.Fatalf("add channel agent %s: %v", agentID, err)
+		}
+	}
+	root, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "Track this discussion as an issue", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("issue-backflow-gm-root-"+uuid.NewString()), 0)
+	if err != nil {
+		t.Fatalf("insert source root: %v", err)
+	}
+
+	var issueID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id, number, position)
+		VALUES ($1, 'Issue backflow group manager actor', 'todo', 'none', 'agent', $2, $3, 0)
+		RETURNING id`, testWorkspaceID, assigneeID, 900000+int(uuid.New().ID()%100000)).Scan(&issueID); err != nil {
+		t.Fatalf("create anchored issue: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID) })
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO issue_source_message (issue_id, workspace_id, channel_id, message_id)
+		VALUES ($1, $2, $3, $4)`, issueID, testWorkspaceID, channelID, root.ID); err != nil {
+		t.Fatalf("persist source anchor: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	req := withURLParam(newRequest(http.MethodPut, "/api/issues/"+issueID+"?workspace_id="+testWorkspaceID, map[string]any{
+		"assignee_type": "agent",
+		"assignee_id":   assigneeID,
+	}), "id", issueID)
+	req.Header.Set("X-Agent-ID", beckhamID)
+	req.Header.Set("X-Task-ID", beckhamTask)
+	testHandler.UpdateIssue(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("UpdateIssue by group manager: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	events := loadIssueThreadBackflowEvents(t, channelID, root.ID)
+	if len(events) != 1 {
+		t.Fatalf("system event count = %d, want 1 (%+v)", len(events), events)
+	}
+	got := events[0]
+	if got.Event != issueThreadAssignedEvent {
+		t.Fatalf("event = %q, want %q", got.Event, issueThreadAssignedEvent)
+	}
+	if got.Params.ActorID != beckhamID || got.Params.ActorType != "agent" {
+		t.Fatalf("actor = %#v, want agent %s", got.Params, beckhamID)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(got.Parts[0].EventParams, &raw); err != nil {
+		t.Fatalf("decode raw params: %v", err)
+	}
+	for _, banned := range []string{"actor_name", "actor_handle"} {
+		if _, ok := raw[banned]; ok {
+			t.Fatalf("params must not denormalize %s (LRM-281): %#v", banned, raw)
+		}
+	}
+	if raw["actor_id"] != beckhamID {
+		t.Fatalf("raw actor_id = %v, want %s", raw["actor_id"], beckhamID)
+	}
+}
+
 type issueThreadBackflowEventForTest struct {
 	Content string
 	Event   string

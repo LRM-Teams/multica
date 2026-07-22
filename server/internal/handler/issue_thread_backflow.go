@@ -22,8 +22,12 @@ const (
 // issueThreadSystemEventParams is deliberately factual: the event identifies
 // the issue and transition, while the optional target is the only agent that
 // may be woken. Clients can render it without parsing the fallback content.
-// Actor/target names are denormalized so the FE does not depend on the
-// workspace agent directory (group managers are hidden from ListAgents — LRM-233).
+//
+// Actor identity is only actor_id + actor_type — never denormalized display
+// names. Clients resolve live names from the DB-backed member-profile API
+// (GET /api/member-profiles/{type}/{id}), which returns identity for private
+// and group-manager agents that ListAgents deliberately omits (LRM-233 /
+// LRM-281). Emit-time actor_name fallbacks are forbidden.
 type issueThreadSystemEventParams struct {
 	IssueID         string `json:"issue_id"`
 	IssueIdentifier string `json:"issue_identifier"`
@@ -31,8 +35,6 @@ type issueThreadSystemEventParams struct {
 	PreviousStatus  string `json:"previous_status,omitempty"`
 	ActorID         string `json:"actor_id,omitempty"`
 	ActorType       string `json:"actor_type,omitempty"`
-	ActorHandle     string `json:"actor_handle,omitempty"`
-	ActorName       string `json:"actor_name,omitempty"`
 	TargetID        string `json:"target_id,omitempty"`
 	TargetType      string `json:"target_type,omitempty"`
 	TargetHandle    string `json:"target_handle,omitempty"`
@@ -147,17 +149,6 @@ func (h *Handler) emitIssueThreadBackflowToScope(ctx context.Context, issue db.I
 		PreviousStatus:  previousStatus,
 		ActorID:         actorID,
 		ActorType:       channelMemberSystemEventPublicType(actorType),
-	}
-	if actorID != "" {
-		// Resolve display facts at emit time. Group managers (贝克汉姆) are
-		// omitted from ListAgents, so the FE cannot look them up live.
-		refMemberType := "user"
-		if actorType == "agent" {
-			refMemberType = "agent"
-		}
-		ref := h.channelMemberSystemEventActorRef(ctx, uuidToString(issue.WorkspaceID), refMemberType, parseUUID(actorID))
-		params.ActorHandle = ref.Handle
-		params.ActorName = ref.DisplayName
 	}
 
 	var targetAgent db.Agent

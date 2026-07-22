@@ -2,6 +2,7 @@
 
 import { Fragment, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { api } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
 import { useActorName } from "@multica/core/workspace/hooks";
@@ -170,6 +171,43 @@ function toActorMentionType(type: string | undefined): "agent" | "member" | null
 }
 
 /**
+ * Live display name from authoritative sources only:
+ * 1. Workspace directory caches (ListAgents / members)
+ * 2. GET /api/member-profiles/{type}/{id} when the directory misses
+ *
+ * Group managers and other private agents are hidden from ListAgents (LRM-233)
+ * but remain resolvable via member-profiles (full or identity_only). Never pass
+ * emit-time actor_name/actor_handle as a FE fallback (LRM-281 / Frank).
+ *
+ * Query key is identity-scoped (not workspace-scoped) so this hook does not
+ * require useWorkspaceId — system rows can render in unit tests that only
+ * provide a QueryClient + a mocked useActorName directory.
+ */
+function useLiveActorDisplayName(
+  mentionType: "agent" | "member" | null,
+  actorId: string | undefined,
+): string {
+  const { getActorName } = useActorName();
+  const directoryName =
+    mentionType && actorId ? getActorName(mentionType, actorId) : "";
+  const directoryMiss =
+    !!mentionType &&
+    !!actorId &&
+    (directoryName === "Unknown Agent" || directoryName === "Unknown");
+  const profileType =
+    mentionType === "agent" ? "agent" : mentionType === "member" ? "user" : null;
+  const { data: profile } = useQuery({
+    queryKey: ["actor-identity", profileType ?? "", actorId ?? ""],
+    queryFn: () => api.getMemberProfile(profileType!, actorId!),
+    enabled: directoryMiss && !!profileType && !!actorId,
+    staleTime: 30 * 1000,
+  });
+  if (!directoryMiss) return directoryName;
+  const live = profile?.display_name?.trim() || profile?.name?.trim();
+  return live || directoryName;
+}
+
+/**
  * Renders an issue-lifecycle backflow row (#497, #603) as the frozen item #7
  * copy: "任务" only, a localized action verb (标记为处理中 / 提交审核 / 完成任务 /
  * 指派给 X), and the issue identifier as its anchored reference. A structured
@@ -185,20 +223,18 @@ export function IssueSystemEventContent({
   sourceMessageId?: string;
 }): ReactNode {
   const { t } = useT("channels");
-  const { getActorName } = useActorName();
 
   const actorType = toActorMentionType(event.actorType);
-  // Prefer live directory name; fall back to emit-time facts. Group managers
-  // (贝克汉姆) are hidden from ListAgents (LRM-233), so without actor_name the
-  // token would render as "@Unknown Agent".
-  const actorFallback = event.actorName ?? event.actorHandle;
+  const actorDisplayName = useLiveActorDisplayName(actorType, event.actorId);
+  const targetMentionType = toActorMentionType(event.targetType);
+  const targetDisplayName = useLiveActorDisplayName(targetMentionType, event.targetId);
   const actor =
     event.actorId && actorType ? (
       <SystemEventActorToken
         actor={{
           type: actorType,
           id: event.actorId,
-          displayName: getActorName(actorType, event.actorId, actorFallback),
+          displayName: actorDisplayName,
         }}
       />
     ) : (
@@ -222,15 +258,14 @@ export function IssueSystemEventContent({
     });
   }
 
-  // Assignment: resolve the assignee's plain name live (falling back to the
-  // backend-supplied handle/name), then to a name-less "changed assignee" copy.
+  // Assignment: resolve the assignee live from directory / member-profile API.
+  // No emit-time target_name fallback (same rule as actors — LRM-281).
   if (event.event === ISSUE_EVENTS.assigned) {
-    const targetName = event.targetId
-      ? getActorName(event.targetType === "agent" ? "agent" : "member", event.targetId, event.targetName)
-      : event.targetName ?? event.targetHandle;
-    const template = targetName
-      ? t(($) => $.message.system_event.issue.assigned, { target: targetName })
-      : t(($) => $.message.system_event.issue.assigned_unknown);
+    const targetName = event.targetId ? targetDisplayName : undefined;
+    const template =
+      targetName && targetName !== "Unknown Agent" && targetName !== "Unknown"
+        ? t(($) => $.message.system_event.issue.assigned, { target: targetName })
+        : t(($) => $.message.system_event.issue.assigned_unknown);
     return interpolateIssueSlots(template, { actor, issue: issueToken });
   }
 

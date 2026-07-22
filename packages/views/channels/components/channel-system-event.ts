@@ -72,9 +72,12 @@ export interface IssueSystemEvent {
   actorId?: string;
   /** Public actor type: "human" | "agent" (see channelMemberSystemEventPublicType). */
   actorType?: string;
-  /** Canonical @handle (username). Present on new backflow rows. */
+  /**
+   * Legacy emit-time name fields (pre-LRM-281). New backflow rows only carry
+   * actor_id/actor_type; display names resolve live via member-profiles.
+   * Kept in the parse surface so historical rows still decode.
+   */
   actorHandle?: string;
-  /** Display name denormalized at emit time (group managers are not in ListAgents). */
   actorName?: string;
   targetId?: string;
   targetType?: string;

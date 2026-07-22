@@ -31,10 +31,26 @@ vi.mock("@multica/core/workspace/queries", () => ({
   memberListOptions: () => ({ queryKey: ["members"] }),
 }));
 
+// Directory caches for ordinary agents/members. Group managers (agent-beckham)
+// and some assignees are intentionally absent — they resolve via member-profiles.
+const mockProfiles: Record<string, { display_name: string; name: string }> = {
+  "agent:agent-beckham": { display_name: "贝克汉姆", name: "bei-ke-han-mu-11" },
+  "agent:agent-fe": { display_name: "前端工程师", name: "frontend" },
+  "agent:agent-private": { display_name: "私有助手", name: "private-bot" },
+};
+
 vi.mock("@tanstack/react-query", () => ({
-  useQuery: (opts: { queryKey: string[] }) => ({
-    data: opts.queryKey[0] === "agents" ? mockAgents : mockMembers,
-  }),
+  useQuery: (opts: { queryKey: unknown[]; enabled?: boolean }) => {
+    const key = opts.queryKey;
+    if (key[0] === "agents") return { data: mockAgents };
+    if (key[0] === "members") return { data: mockMembers };
+    if (key[0] === "actor-identity") {
+      if (opts.enabled === false) return { data: undefined };
+      const profileKey = `${key[1]}:${key[2]}`;
+      return { data: mockProfiles[profileKey] };
+    }
+    return { data: undefined };
+  },
 }));
 
 vi.mock("@multica/core/identity", () => ({
@@ -116,21 +132,20 @@ vi.mock("../../navigation/context", () => ({
   useOptionalNavigation: () => ({ pathname: "/ws/channels", searchParams: new URLSearchParams() }),
 }));
 
-// Issue rows resolve the actor/assignee display name from the identity cache.
+// Issue rows resolve the actor/assignee display name from the identity cache
+// (ListAgents/members), then member-profiles when the directory misses.
 vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({
-    // Mirrors the real resolver's priority: a cache hit (by id, across both
-    // agents and members) wins over whatever display-name fallback the
-    // caller passed in; "agent-be" is an Issue-test-only fixture that's
-    // deliberately absent from mockAgents so it always falls through to the
-    // caller-supplied fallback.
-    getActorName: (_type: string, id: string, fallback?: string) => {
+    getActorName: (type: string, id: string, fallback?: string) => {
       if (id === "agent-be") return "后端工程师";
       const agent = mockAgents.find((a) => a.id === id);
       if (agent) return agent.handle;
       const member = mockMembers.find((m) => m.user_id === id);
       if (member) return member.handle;
-      return fallback ?? "Someone";
+      // No emit-time fallback path — directory miss returns the sentinel so
+      // useLiveActorDisplayName fetches member-profiles (LRM-281).
+      if (fallback !== undefined) return fallback;
+      return type === "agent" ? "Unknown Agent" : "Unknown";
     },
   }),
 }));
@@ -650,9 +665,10 @@ describe("IssueSystemEventContent", () => {
     expect(links[0]).toHaveTextContent("LRM-137");
   });
 
-  it("uses emit-time actor_name when the agent is absent from ListAgents (group manager)", () => {
-    // 贝克汉姆 is a group manager — ListAgents hides them (LRM-233), so without
-    // actor_name the token used to render as "@Unknown Agent".
+  it("resolves group-manager actors via member-profiles, not emit-time actor_name (LRM-281)", () => {
+    // 贝克汉姆 is a group manager — ListAgents hides them (LRM-233). Display
+    // names come from GET /api/member-profiles/agent/{id}, never from
+    // denormalized actor_name on the event (Frank: 不要 fallback，如实查库).
     render(
       <IssueSystemEventContent
         event={{
@@ -662,15 +678,30 @@ describe("IssueSystemEventContent", () => {
           issueStatus: "todo",
           actorId: "agent-beckham",
           actorType: "agent",
-          actorName: "贝克汉姆",
-          actorHandle: "bei-ke-han-mu-11",
+          // Deliberately omit actor_name/actor_handle — they must not be required.
           targetId: "agent-fe",
           targetType: "agent",
-          targetName: "前端工程师",
         }}
       />,
     );
     expect(document.body.textContent).toBe("@贝克汉姆 将 Issue LRM-268 指派给 前端工程师");
+    expect(document.body.textContent).not.toContain("Unknown Agent");
+  });
+
+  it("resolves private agents via member-profiles identity (directory miss)", () => {
+    render(
+      <IssueSystemEventContent
+        event={{
+          event: "issue_status_changed",
+          issueId: "issue-uuid",
+          issueIdentifier: "LRM-270",
+          issueStatus: "in_progress",
+          actorId: "agent-private",
+          actorType: "agent",
+        }}
+      />,
+    );
+    expect(document.body.textContent).toBe("@私有助手 将 Issue LRM-270 标记为处理中");
     expect(document.body.textContent).not.toContain("Unknown Agent");
   });
 

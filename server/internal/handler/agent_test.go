@@ -540,6 +540,70 @@ func TestGetMemberProfile_PrivateAgentReturnsIdentityOnlyForPlainMember(t *testi
 	}
 }
 
+// Group managers (贝克汉姆) are hidden from ListAgents (LRM-233) but must remain
+// resolvable by id via GET /api/member-profiles so issue system rows can render
+// live display names without emit-time actor_name fallbacks (LRM-281).
+func TestGetMemberProfile_GroupManagerResolvableWhenHiddenFromListAgents(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+
+	displayName := "贝克汉姆-" + uuid.NewString()[:8]
+	beckhamID := createHandlerTestAgent(t, displayName, nil)
+	markGroupManagerForTest(t, beckhamID)
+
+	_, _, memberID := privateAgentTestFixture(t)
+
+	listW := httptest.NewRecorder()
+	testHandler.ListAgents(listW, newRequestAs(memberID, http.MethodGet, "/api/agents", nil))
+	if listW.Code != http.StatusOK {
+		t.Fatalf("ListAgents: expected 200, got %d: %s", listW.Code, listW.Body.String())
+	}
+	var listed []AgentResponse
+	if err := json.NewDecoder(listW.Body).Decode(&listed); err != nil {
+		t.Fatalf("decode ListAgents: %v", err)
+	}
+	for _, a := range listed {
+		if a.ID == beckhamID {
+			t.Fatalf("group manager %s leaked into ListAgents for plain member", beckhamID)
+		}
+	}
+
+	// Confirm the agent row still carries the display name in the DB.
+	var dbName string
+	if err := testPool.QueryRow(ctx, `SELECT COALESCE(NULLIF(display_name, ''), name) FROM agent WHERE id = $1`, beckhamID).Scan(&dbName); err != nil {
+		t.Fatalf("load agent display name: %v", err)
+	}
+	if dbName == "" {
+		t.Fatal("group manager display name empty in DB")
+	}
+
+	w := httptest.NewRecorder()
+	req := withRouteParams(
+		newRequestAs(memberID, http.MethodGet, "/api/member-profiles/agent/"+beckhamID, nil),
+		"memberType", "agent",
+		"memberId", beckhamID,
+	)
+	testHandler.GetMemberProfile(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetMemberProfile: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var profile MemberProfileResponse
+	if err := json.NewDecoder(w.Body).Decode(&profile); err != nil {
+		t.Fatalf("decode profile: %v", err)
+	}
+	if profile.MemberID != beckhamID {
+		t.Fatalf("member_id = %q, want %q", profile.MemberID, beckhamID)
+	}
+	if profile.DisplayName != dbName && profile.DisplayName != displayName {
+		t.Fatalf("display_name = %q, want DB name %q (or create display %q)", profile.DisplayName, dbName, displayName)
+	}
+	if profile.DisplayName == "" || profile.DisplayName == "Unknown Agent" {
+		t.Fatalf("display_name = %q, want live group-manager name", profile.DisplayName)
+	}
+}
+
 func TestProjectTextActivity_ProjectsActionWithoutSummary(t *testing.T) {
 	for _, content := range []string{
 		"9a5-d69cd32e15e6)",

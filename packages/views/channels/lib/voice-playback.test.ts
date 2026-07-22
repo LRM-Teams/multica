@@ -102,7 +102,7 @@ describe("voice autoplay eligibility", () => {
     }
     vi.stubGlobal("AudioContext", FakeAudioContext);
     const encoded = new Uint8Array([0x52, 0x49, 0x46, 0x46]).buffer;
-    apiMocks.synthesizeVoice.mockResolvedValue(encoded);
+    apiMocks.synthesizeVoice.mockResolvedValue({ audio: encoded, durationMs: 1980 });
 
     const playback = await startVoicePlayback("Spoken answer");
 

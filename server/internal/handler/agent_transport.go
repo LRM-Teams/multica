@@ -317,6 +317,17 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
+	parts, err = h.normalizeLegacyAgentAudioVoiceReply(r.Context(), source, content, parts)
+	if err != nil {
+		slog.Warn("agent transport audio modality inspection failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to validate message attachments")
+		return
+	}
+	content, parts, err = messageparts.Normalize(content, parts)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid message parts: "+err.Error())
+		return
+	}
 	if strings.TrimSpace(content) == "" && len(parts) == 0 {
 		writeError(w, http.StatusBadRequest, "content, sticker, or attachment is required")
 		return
@@ -405,6 +416,59 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 			"created":    result.Created,
 		},
 	)
+}
+
+// normalizeLegacyAgentAudioVoiceReply upgrades the one message shape emitted
+// by runtimes that predate `message send --voice`. The attachment is inspected
+// only as an owned modality signal; clients synthesize playback from content.
+func (h *Handler) normalizeLegacyAgentAudioVoiceReply(
+	ctx context.Context,
+	source agentTransportSource,
+	content string,
+	parts []protocol.MessagePart,
+) ([]protocol.MessagePart, error) {
+	if strings.TrimSpace(content) == "" || len(parts) != 2 {
+		return parts, nil
+	}
+	var attachmentID string
+	textParts := 0
+	for _, part := range parts {
+		switch part.Type {
+		case protocol.MessagePartTypeText:
+			if strings.TrimSpace(part.Text) != "" {
+				textParts++
+			}
+		case protocol.MessagePartTypeAttachment:
+			attachmentID = strings.TrimSpace(part.AttachmentID)
+		default:
+			return parts, nil
+		}
+	}
+	if textParts != 1 || attachmentID == "" {
+		return parts, nil
+	}
+
+	var contentType string
+	err := h.DB.QueryRow(ctx, `
+		SELECT content_type
+		FROM attachment
+		WHERE id = $1
+		  AND workspace_id = $2
+		  AND uploader_type = 'agent'
+		  AND uploader_id = $3`,
+		parseUUID(attachmentID), source.origin.workspaceID, source.origin.agentID,
+	).Scan(&contentType)
+	if errorsIsNoRows(err) {
+		return parts, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("inspect legacy agent audio attachment: %w", err)
+	}
+	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(contentType)), "audio/") {
+		return parts, nil
+	}
+
+	return append(parts, protocol.MessagePart{Type: protocol.MessagePartTypeVoice}), nil
 }
 
 func (h *Handler) AgentTransportReactMessage(w http.ResponseWriter, r *http.Request) {

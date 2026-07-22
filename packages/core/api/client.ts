@@ -2596,7 +2596,10 @@ export class ApiClient {
     return parsed.text.trim();
   }
 
-  async synthesizeVoice(text: string): Promise<ArrayBuffer> {
+  async synthesizeVoice(text: string): Promise<{
+    audio: ArrayBuffer;
+    durationMs: number | null;
+  }> {
     const res = await this.fetchRaw("/api/voice/tts", {
       method: "POST",
       body: JSON.stringify({ text }),
@@ -2606,7 +2609,14 @@ export class ApiClient {
     if (contentType !== "audio/wav") {
       throw new ApiError("voice service returned an invalid audio response", 502, "Bad Gateway");
     }
-    return res.arrayBuffer();
+    const rawDuration = res.headers.get("X-Voice-Duration-Ms")?.trim() ?? "";
+    const parsedDuration = Number.parseInt(rawDuration, 10);
+    return {
+      audio: await res.arrayBuffer(),
+      durationMs: Number.isFinite(parsedDuration) && parsedDuration > 0
+        ? parsedDuration
+        : null,
+    };
   }
 
   async sendChannelMessage(

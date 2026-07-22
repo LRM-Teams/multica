@@ -1075,6 +1075,50 @@ func TestAgentTransportSendMessageLinksOwnedAttachmentsOnly(t *testing.T) {
 	}
 }
 
+func TestAgentTransportSendMessageNormalizesLegacyOwnedAudioAsVoice(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	target := "#" + channelNameForTransportTest(t, channelID)
+	attachmentID := seedUnboundAgentAttachmentForTest(t, agentID, "nihao.mp3")
+	if _, err := testPool.Exec(ctx, `
+		UPDATE attachment
+		SET content_type = 'audio/mpeg'
+		WHERE id = $1`, attachmentID); err != nil {
+		t.Fatalf("mark attachment as audio: %v", err)
+	}
+
+	response := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":  target,
+		"content": "你好～",
+		"parts": []protocol.MessagePart{
+			{Type: protocol.MessagePartTypeText, Text: "你好～"},
+			{Type: protocol.MessagePartTypeAttachment, AttachmentID: attachmentID},
+		},
+		"client_message_id": "transport-legacy-audio-" + uuid.NewString(),
+	})
+	if response.Code != http.StatusCreated {
+		t.Fatalf("legacy audio transport send: status=%d body=%s", response.Code, response.Body.String())
+	}
+	var body AgentTransportSendResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode legacy audio send: %v", err)
+	}
+	var voiceParts int
+	for _, part := range body.Message.Parts {
+		if part.Type == protocol.MessagePartTypeVoice {
+			voiceParts++
+		}
+	}
+	if voiceParts != 1 {
+		t.Fatalf("voice parts=%d in %+v, want one normalized marker", voiceParts, body.Message.Parts)
+	}
+}
+
 // Regression: `multica attachment upload --target '#channel'` sets channel_id
 // before send. LinkOwned used to require channel_id IS NULL, so the send kept
 // attachment parts but never bound channel_message_id → "Attachment unavailable".
@@ -1108,6 +1152,11 @@ func TestAgentTransportSendMessageLinksChannelPreboundOwnedAttachments(t *testin
 	}
 	if len(body.Message.Attachments) != 1 || body.Message.Attachments[0].ID != preboundID {
 		t.Fatalf("message attachments = %+v, want prebound attachment %s", body.Message.Attachments, preboundID)
+	}
+	for _, part := range body.Message.Parts {
+		if part.Type == protocol.MessagePartTypeVoice {
+			t.Fatalf("image attachment was reclassified as voice: %+v", body.Message.Parts)
+		}
 	}
 
 	var gotChannelID, gotMessageID string

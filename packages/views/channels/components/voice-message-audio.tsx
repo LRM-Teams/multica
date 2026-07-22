@@ -7,16 +7,31 @@ import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
 import {
   claimVoiceAutoplay,
-  startVoicePlayback,
+  prepareVoiceAudio,
+  startPreparedVoicePlayback,
   type VoicePlayback,
   voicePlaybackScope,
 } from "../lib/voice-playback";
+import {
+  resolveVoiceMessagePresentation,
+  voiceBubbleWidthPx,
+  type VoiceMessagePresentation,
+} from "../lib/voice-message-presentation";
 
 type PlaybackState = "idle" | "loading" | "playing" | "error";
 
-export function VoiceMessageAudio({ message }: { message: ChannelMessage }) {
+export function VoiceMessageAudio({
+  message,
+  presentation,
+}: {
+  message: ChannelMessage;
+  presentation?: VoiceMessagePresentation | null;
+}) {
   const { t } = useT("channels");
-  const voicePart = message.parts?.find((part) => part.type === "voice");
+  const resolvedPresentation = presentation === undefined
+    ? resolveVoiceMessagePresentation(message)
+    : presentation;
+  const voicePart = resolvedPresentation?.voicePart;
   const hasVoicePart = Boolean(voicePart);
   const [state, setState] = useState<PlaybackState>("idle");
   const [durationSeconds, setDurationSeconds] = useState<number | null>(() =>
@@ -27,26 +42,49 @@ export function VoiceMessageAudio({ message }: { message: ChannelMessage }) {
   const startRef = useRef<(() => Promise<void>) | null>(null);
 
   const start = useCallback(async () => {
-    if (!voicePart || !message.content.trim() || state === "loading" || state === "playing") return;
+    if (!hasVoicePart || !message.content.trim() || state === "loading" || state === "playing") return;
     setState("loading");
     try {
-      const playback = await startVoicePlayback(message.content);
-      if (!mountedRef.current) {
-        playback.stop();
-        return;
+      const prepared = await prepareVoiceAudio(message.content);
+      if (mountedRef.current) {
+        if (prepared.durationMs) {
+          setDurationSeconds(Math.max(1, Math.round(prepared.durationMs / 1000)));
+        }
+        const playback = await startPreparedVoicePlayback(prepared);
+        if (mountedRef.current) {
+          playbackRef.current = playback;
+          setDurationSeconds(Math.max(1, Math.round(playback.durationMs / 1000)));
+          setState("playing");
+          await playback.finished;
+          playbackRef.current = null;
+          if (mountedRef.current) setState("idle");
+        } else {
+          playback.stop();
+        }
       }
-      playbackRef.current = playback;
-      setDurationSeconds(Math.max(1, Math.round(playback.durationMs / 1000)));
-      setState("playing");
-      await playback.finished;
-      playbackRef.current = null;
-      if (mountedRef.current) setState("idle");
     } catch {
       playbackRef.current = null;
       if (mountedRef.current) setState("error");
     }
-  }, [message.content, state, voicePart]);
+  }, [hasVoicePart, message.content, state]);
   startRef.current = start;
+
+  useEffect(() => {
+    if (!hasVoicePart || message.type !== "agent" || !message.content.trim()) return;
+    let current = true;
+    void prepareVoiceAudio(message.content)
+      .then((prepared) => {
+        if (current && prepared.durationMs) {
+          setDurationSeconds(Math.max(1, Math.round(prepared.durationMs / 1000)));
+        }
+      })
+      .catch(() => {
+        if (current) setState("error");
+      });
+    return () => {
+      current = false;
+    };
+  }, [hasVoicePart, message.content, message.type]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -103,6 +141,7 @@ export function VoiceMessageAudio({ message }: { message: ChannelMessage }) {
       aria-label={label}
       data-testid="voice-reply-control"
       data-voice-bubble="true"
+      style={{ width: voiceBubbleWidthPx(durationSeconds) }}
     >
       {state === "loading" ? (
         <LoaderCircle className="size-3.5 animate-spin" />

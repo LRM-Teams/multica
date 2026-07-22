@@ -24,7 +24,8 @@ func newMessageSendCmd() *cobra.Command {
 			"followed by explanatory text in one message. Attach files with " +
 			"--attachment-id from `multica attachment upload` (repeatable). If the " +
 			"human used voice input or explicitly requested spoken output, add --voice; " +
-			"the message text remains the accessible transcript. If the " +
+			"the message text remains the accessible transcript. Do not generate or " +
+			"attach an audio file for a voice reply; Multica synthesizes the transcript. If the " +
 			"server holds a send because newer messages arrived, review the bounded " +
 			"context and use --send-draft to send the saved draft unchanged.",
 		RunE: runAgentMessageSend,

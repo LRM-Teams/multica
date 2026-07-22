@@ -184,6 +184,29 @@ describe("MessageAttachmentZone", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it("omits an attachment consumed by the voice-message presentation", () => {
+    const attachment = makeAttachment({
+      id: "agent-audio",
+      filename: "nihao.mp3",
+      content_type: "audio/mpeg",
+    });
+    const { container } = render(
+      <MessageBody
+        content="你好～"
+        parts={[
+          { type: "text", text: "你好～" },
+          { type: "attachment", attachment_id: attachment.id },
+        ]}
+        attachments={[attachment]}
+        consumedAttachmentIds={[attachment.id]}
+      />,
+    );
+
+    expect(screen.getByTestId("body-text")).toHaveTextContent("你好～");
+    expect(screen.queryByTestId("message-attachment-zone")).not.toBeInTheDocument();
+    expect(container).not.toHaveTextContent("nihao.mp3");
+  });
+
   it("preserves mixed image/file order from attachment parts", () => {
     const parts: MessagePart[] = [
       { type: "attachment", attachment_id: "img-1" },

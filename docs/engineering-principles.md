@@ -185,6 +185,7 @@
 - 人类语音消息要求 Agent 通过现有 `multica message send --voice` 输出；普通文字仍走文字，文字明确要求语音时由 Agent 语义判断后加 `--voice`。前端不维护“语音回复”关键词表。
 - 自动播放资格只来自本机当前会话的一次发送手势，并由第一条新 Agent 回复消费；文字回复也会消费，防止稍后的无关语音突然播放。所有 Agent 语音消息始终提供手动播放/停止/重试。
 - 当前实现只持久化 transcript 和时长，不上传原始录音。需要回听原声、审计或多人实时通话时必须另立录音存储、生命周期、权限与隐私合同，不能把 transcript 标记冒充原始音频。
+- Agent 语音的播放源只能是 server 根据 canonical transcript 生成的 TTS。旧运行时曾把“文本 + 单个自有音频附件”当语音回复发送；agent transport 将这个精确边界形状补成 `voice` part，显示层同时识别已落库的同形消息、隐藏该附件且不播放其字节。普通用户音频、多个附件和混合文件消息不参与此规则；当前运行时明确禁止自行合成/上传语音附件。
 - **物**：`protocol.MessagePartTypeVoice`、`messageparts.Normalize`、CLI `message send --voice`、共享 `VoiceInputButton`/`VoiceMessageAudio`、channel/DM/thread 发送与渲染回归；完整实现记录见 `docs/superpowers/plans/2026-07-22-beckham-voice-poc.md`。
 
 ## 5. 验证方法论 — `仅文档`（诚实标注：拦不住人，只能让"猜"显式化）

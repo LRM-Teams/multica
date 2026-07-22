@@ -12,7 +12,7 @@ import { cn } from "@multica/ui/lib/utils";
  * - default / all → brand ink + bold + soft brand rest fill, radius ≤4px, px ≤2px
  * - self → warm yellow fill (#faf0c8) + ink text
  * - hover / focus → slightly stronger wash
- * - self-mentioned row → warm row wash (#fef9e8)
+ * - self-mentioned row → light warm wash (#fef9e8); dark cool brand tint + left bar
  */
 export type MentionTokenKind = "default" | "all" | "self";
 
@@ -56,8 +56,15 @@ export function mentionTokenClassName(
 
 /**
  * Message-row wash when the body addresses the viewer (@me / @all).
- * Warm tint matching Slack self-row (#fef9e8). Deep-link highlight layers
- * above via cn order.
+ * Light: warm tint (#fef9e8). Dark: 2px brand bar + cool brand tint (not
+ * the light wash). Deep-link highlight layers above via cn order.
  */
 export const SELF_MENTION_ROW_CLASS =
-  "bg-[#fef9e8] hover:bg-[#fdf3d0] focus-within:bg-[#fdf3d0]";
+  "bg-[#fef9e8] hover:bg-[#fdf3d0] focus-within:bg-[#fdf3d0] dark:border-l-2 dark:border-brand dark:bg-brand/[0.06] dark:hover:bg-brand/[0.08] dark:focus-within:bg-brand/[0.08]";
+
+/**
+ * On dark self-mention rows, inline @mentions drop pill fill for contrast;
+ * hover/focus only adds a light brand wash.
+ */
+export const SELF_MENTION_ROW_MENTION_CLASS =
+  "[&_.mention]:dark:bg-transparent [&_.mention]:dark:hover:bg-brand/[0.08] [&_.mention]:dark:focus-visible:bg-brand/[0.08]";

@@ -726,6 +726,22 @@ describe("ChannelMessageBubble", () => {
     expect(bubble.className).toContain("bg-[#fef9e8]");
   });
 
+  it("applies dark self-mention row tokens for agent @-mentions of the viewer", () => {
+    const msg = makeMessage({
+      type: "agent",
+      author_id: "agent-1",
+      author_name: "Bot",
+      content: "ping [@Alice](mention://member/user-1) check this",
+    });
+    render(<ChannelMessageBubble message={msg} currentUserId="user-1" />);
+
+    const bubble = screen.getByTestId("message-bubble");
+    expect(bubble).toHaveAttribute("data-self-mentioned", "true");
+    expect(bubble.className).toContain("dark:border-brand");
+    expect(bubble.className).toContain("dark:bg-brand/[0.06]");
+    expect(bubble.className).toContain("[&_.mention]:dark:bg-transparent");
+  });
+
   it("applies the self-mention wash for @all from another author", () => {
     const msg = makeMessage({
       type: "user",
@@ -1000,6 +1016,9 @@ describe("ChannelMessageBubble", () => {
     expect(expand.className).not.toMatch(/shadow-sm/);
     expect(screen.getByTestId("message-collapse-fade").className).toMatch(
       /justify-start/,
+    );
+    expect(screen.getByTestId("message-collapse-fade").className).toMatch(
+      /via-background\/95/,
     );
 
     await userEvent.click(expand);

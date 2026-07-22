@@ -203,6 +203,12 @@ vi.mock("../../i18n/use-t", () => ({
           send_failed: string;
           retry_send: string;
           sending: string;
+          voice_input: string;
+          voice_input_duration: string;
+          voice_play: string;
+          voice_loading: string;
+          voice_stop: string;
+          voice_retry: string;
           edit_action: string;
           actions_menu: string;
           delete_action: string;
@@ -276,6 +282,12 @@ vi.mock("../../i18n/use-t", () => ({
           send_failed: "Couldn't send",
           retry_send: "Retry",
           sending: "Sending…",
+          voice_input: "Voice input",
+          voice_input_duration: "Voice input · {{seconds}}s",
+          voice_play: "Play voice reply",
+          voice_loading: "Preparing voice reply…",
+          voice_stop: "Stop voice reply",
+          voice_retry: "Voice playback failed · Retry",
           edit_action: "Edit",
           delete_action: "Delete",
           edited_label: "(edited)",
@@ -1761,5 +1773,43 @@ describe("ChannelMessageBubble", () => {
     expect(screen.getByTestId("message-send-failed")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(onRetrySend).toHaveBeenCalledWith(message);
+  });
+
+  it("labels transcribed human voice input without inventing stored audio", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          type: "user",
+          author_id: "user-1",
+          author_name: "Alice",
+          content: "spoken question",
+          parts: [
+            { type: "text", text: "spoken question" },
+            { type: "voice", duration_ms: 2400 },
+          ],
+        })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.getByTestId("voice-input-label")).toHaveTextContent("Voice input · 2s");
+    expect(screen.queryByTestId("voice-reply-control")).not.toBeInTheDocument();
+  });
+
+  it("renders an explicit replay control for an Agent voice response", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          content: "spoken answer",
+          parts: [
+            { type: "text", text: "spoken answer" },
+            { type: "voice" },
+          ],
+        })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Play voice reply" })).toBeInTheDocument();
   });
 });

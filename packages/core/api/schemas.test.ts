@@ -31,6 +31,8 @@ import {
   UserSchema,
   SandboxNodeTemplatesResponseSchema,
   EMPTY_SANDBOX_NODE_TEMPLATES_RESPONSE,
+  VoiceTranscriptResponseSchema,
+  EMPTY_VOICE_TRANSCRIPT_RESPONSE,
 } from "./schemas";
 import { parseWithFallback } from "./schema";
 
@@ -56,6 +58,20 @@ const baseIssue = {
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",
 };
+
+describe("VoiceTranscriptResponseSchema", () => {
+  it("accepts only the bounded transcript envelope", () => {
+    expect(VoiceTranscriptResponseSchema.parse({ text: "你好" })).toEqual({ text: "你好" });
+    expect(
+      parseWithFallback(
+        { text: 123 },
+        VoiceTranscriptResponseSchema,
+        EMPTY_VOICE_TRANSCRIPT_RESPONSE,
+        { endpoint: "POST /api/voice/asr" },
+      ),
+    ).toEqual(EMPTY_VOICE_TRANSCRIPT_RESPONSE);
+  });
+});
 
 describe("IssueSchema (via ListIssuesResponseSchema)", () => {
   it("accepts a primitive metadata KV map", () => {

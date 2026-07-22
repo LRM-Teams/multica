@@ -11,6 +11,26 @@ vi.mock("@multica/ui/components/ui/drawer", () => ({
   ),
 }));
 
+vi.mock("../../i18n/use-t", () => ({
+  useT: () => ({
+    t: (selector: (resources: {
+      composer: {
+        voice_start: string;
+        voice_stop: string;
+        voice_processing: string;
+        voice_blocked: string;
+      };
+    }) => string) => selector({
+      composer: {
+        voice_start: "Record voice message",
+        voice_stop: "Stop recording",
+        voice_processing: "Processing voice message",
+        voice_blocked: "Finish the current draft first",
+      },
+    }),
+  }),
+}));
+
 describe("Composer", () => {
   const baseProps = {
     editor: <div data-testid="composer-editor">Editor</div>,
@@ -32,6 +52,22 @@ describe("Composer", () => {
     expect(editorScroll).not.toBeNull();
     expect(shell).toHaveAttribute("data-composer-surface", "channel");
     expect(screen.getByRole("button", { name: /send/i })).toBeInTheDocument();
+  });
+
+  it("renders the shared microphone control inside the composer action row", () => {
+    render(
+      <Composer
+        surface="channel"
+        {...baseProps}
+        sendDisabled
+        voicePlaybackScope="channel-1:main"
+        onVoiceSend={vi.fn(() => true)}
+      />,
+    );
+
+    const microphone = screen.getByRole("button", { name: "Record voice message" });
+    expect(microphone).toBeInTheDocument();
+    expect(microphone.closest('[data-slot="composer-action-row"]')).not.toBeNull();
   });
 
   it("tags each of the 4 surfaces so the same shell renders everywhere", () => {

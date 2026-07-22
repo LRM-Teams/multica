@@ -17,6 +17,12 @@ export type MessagePart =
       size_bytes?: number;
     }
   | {
+      /** The visible text is a speech transcript and should be rendered with voice controls. */
+      type: "voice";
+      /** Present for recorded human input; Agent TTS output leaves it unset. */
+      duration_ms?: number;
+    }
+  | {
       type: "reference";
       ref_type: "mention";
       ref_subtype: "member" | "agent" | "squad";

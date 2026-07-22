@@ -174,6 +174,10 @@ func (h *Handler) buildChannelAmbientUnreadPromptWithDB(ctx context.Context, exe
 	b.WriteString(channelStickerReplyInstruction)
 	b.WriteString("\n")
 	b.WriteString(channelContinuationInstruction)
+	if instruction := channelVoiceReplyInstruction(trigger); instruction != "" {
+		b.WriteString("\n")
+		b.WriteString(instruction)
+	}
 	b.WriteString("\nDo not @-mention anyone from this ambient observation.\n\n")
 	fmt.Fprintf(&b, "Reaction target message id: %s\n", trigger.ID)
 	fmt.Fprintf(&b, "Ambient cursor range: seq > %d and seq <= %d\n", cursorSeq, pendingToSeq)

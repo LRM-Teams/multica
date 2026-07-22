@@ -46,6 +46,7 @@ const channelAmbientNoReplyInstruction = "If you should not reply, finish withou
 const channelAmbientGreetingReactionInstruction = "If the current channel message or unread bundle is only a casual greeting or small talk (for example hi, hello, hey, 你好, 在吗) with no @-mention, no question, and no task request, respond with a 👋 reaction to the reaction target only and do not create a text reply. This also applies when you are the only agent in the channel: treat the greeting as directed to you, but keep the action reaction-only unless the user includes a question or request. If reactions are unavailable, finish without visible output rather than explaining that no reply is needed."
 const channelStickerReplyInstruction = "Sticker replies: for directed short social beats (hi/你好, ok/好的, 收到/明白, 谢谢, 赞), use a sticker OR a short text reply — not both. For substantive answers, send text only (no acknowledgement sticker first). For ambient/unaddressed runs, use stickers only when explicitly requested or genuinely welcoming someone; otherwise react or stay silent. Follow the runtime output path and never print protocol text."
 const channelContinuationInstruction = "Collaborative discussion rule: reply only when you move the topic toward a decision, owner, or completed action. For a requested completion/blocker summary in a group chat, you may @-mention the responsible human once. Use @-mentions only for concrete actions, unresolved questions, human escalation, or requested completion/blocker delivery; never for thanks, generic status, future handoffs, or generic opinion invites. If the topic already has an owner and you add nothing immediate, finish without visible output."
+const channelVoiceInputReplyInstruction = "Voice delivery: the current human message came from voice input. If you send a visible answer, use `multica message send --voice` and include the complete answer text as its accessible transcript."
 const channelMessageWakeReason = "channel_message"
 const channelMessageWakePriority int32 = 1
 const channelThreadReplyPriority int32 = 1
@@ -5073,6 +5074,10 @@ func buildChannelAmbientObservationPrompt(ch ChannelResponse, agent db.Agent, tr
 	b.WriteString(channelStickerReplyInstruction)
 	b.WriteString("\n")
 	b.WriteString(channelContinuationInstruction)
+	if instruction := channelVoiceReplyInstruction(trigger); instruction != "" {
+		b.WriteString("\n")
+		b.WriteString(instruction)
+	}
 	b.WriteString("\nDo not @-mention anyone from this ambient observation.\n\n")
 	fmt.Fprintf(&b, "Reaction target message id: %s\n", trigger.ID)
 	fmt.Fprintf(&b, "Your agent name: %s\n", agentDisplayName(agent))
@@ -5106,6 +5111,10 @@ func (h *Handler) buildChannelThreadContinuationPrompt(ctx context.Context, ch C
 	b.WriteString(channelStickerReplyInstruction)
 	b.WriteString("\n")
 	b.WriteString(channelContinuationInstruction)
+	if instruction := channelVoiceReplyInstruction(trigger); instruction != "" {
+		b.WriteString("\n")
+		b.WriteString(instruction)
+	}
 	b.WriteString("\nDo not @-mention anyone unless a concrete action or human escalation is required.\n\n")
 	fmt.Fprintf(&b, "Reaction target message id: %s\n", trigger.ID)
 	fmt.Fprintf(&b, "Your agent name: %s\n", agentDisplayName(agent))
@@ -5160,6 +5169,10 @@ func (h *Handler) buildChannelMentionPrompt(ctx context.Context, ch ChannelRespo
 	b.WriteString("\n")
 	b.WriteString(channelContinuationInstruction)
 	b.WriteString("\n")
+	if instruction := channelVoiceReplyInstruction(trigger); instruction != "" {
+		b.WriteString(instruction)
+		b.WriteString("\n")
+	}
 	appendChannelFacilitatorPromptSection(&b, facilitatorState)
 	// A @mention from the channel's group manager (贝克汉姆/Beckham) is an
 	// authoritative coordination directive, not a weak agent-to-agent ping: the
@@ -5771,6 +5784,22 @@ func channelPartsAllowEmptyContent(parts []protocol.MessagePart) bool {
 		}
 	}
 	return false
+}
+
+func channelMessageHasVoicePart(parts []protocol.MessagePart) bool {
+	for _, part := range parts {
+		if part.Type == protocol.MessagePartTypeVoice {
+			return true
+		}
+	}
+	return false
+}
+
+func channelVoiceReplyInstruction(trigger ChannelMessageResponse) string {
+	if !channelMessageIsHumanAuthored(trigger.Type) || !channelMessageHasVoicePart(trigger.Parts) {
+		return ""
+	}
+	return channelVoiceInputReplyInstruction
 }
 
 func (h *Handler) createUserChannelMessageWithIdempotency(ctx context.Context, in channelMessageInsertInput, attachmentIDs []pgtype.UUID) (channelMessageCreateResult, error) {

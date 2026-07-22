@@ -60,6 +60,8 @@ import {
 } from "../hooks/use-composer-pending-attachments";
 import { useEntryReadCursor } from "../hooks/use-entry-read-cursor";
 import { useEntryAnchor } from "../hooks/use-entry-around-seq";
+import { buildVoiceMessageParts } from "../lib/voice-audio";
+import { prepareVoicePlayback, voicePlaybackScope } from "../lib/voice-playback";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { AgentSidePanel } from "./agent-side-panel";
@@ -816,6 +818,7 @@ function DmChannelConversation({
       },
     });
     if (dispatched) {
+      prepareVoicePlayback(voicePlaybackScope(channelId));
       editorRef.current?.clearContent();
       dmPending.clear();
       setQuoteTarget(null);
@@ -825,6 +828,36 @@ function DmChannelConversation({
         publishTyping(false);
       }
     }
+  };
+
+  const handleVoiceSend = (content: string, durationMs: number): boolean => {
+    if (!draftEmpty || dmPending.pending.length > 0) return false;
+    const parts = buildVoiceMessageParts(content, durationMs);
+    if (parts.length === 0) return false;
+    const dispatched = dmSend.send({
+      payloadKey: composePayloadKey(content, [], `voice:${quoteTarget?.id ?? ""}`),
+      buildVars: (clientMessageId) => ({
+        channelId,
+        content,
+        parts,
+        quoteMessageId: quoteTarget?.id ?? undefined,
+        clientMessageId,
+      }),
+      mutate: sendMessage.mutate,
+      onCommitted: () => {},
+      onVisibleError: (kind) => {
+        if (kind === "conflict") toast.error(t(($) => $.composer.send_failed));
+      },
+    });
+    if (dispatched) {
+      setQuoteTarget(null);
+      onDraftClear?.();
+      if (typingStartedRef.current) {
+        typingStartedRef.current = false;
+        publishTyping(false);
+      }
+    }
+    return dispatched;
   };
 
   const handleThreadSend = () => {
@@ -855,11 +888,43 @@ function DmChannelConversation({
       },
     });
     if (dispatched) {
+      prepareVoicePlayback(voicePlaybackScope(channelId, threadRoot.id));
       threadEditorRef.current?.clearContent();
       threadPending.clear();
       setThreadQuoteTarget(null);
       dispatch({ type: "setThreadDraftEmpty", empty: true });
     }
+  };
+
+  const handleThreadVoiceSend = (content: string, durationMs: number): boolean => {
+    if (!threadRoot || !threadDraftEmpty || threadPending.pending.length > 0) return false;
+    const parts = buildVoiceMessageParts(content, durationMs);
+    if (parts.length === 0) return false;
+    const dispatched = threadSend.send({
+      payloadKey: composePayloadKey(
+        content,
+        [],
+        `${threadRoot.id}:voice:${threadQuoteTarget?.id ?? ""}`,
+      ),
+      buildVars: (clientMessageId) => ({
+        channelId,
+        messageId: threadRoot.id,
+        content,
+        parts,
+        quoteMessageId: threadQuoteTarget?.id ?? undefined,
+        clientMessageId,
+      }),
+      mutate: sendThreadMessage.mutate,
+      onCommitted: () => {},
+      onVisibleError: (kind) => {
+        if (kind === "conflict") toast.error(t(($) => $.thread.send_failed));
+      },
+    });
+    if (dispatched) {
+      setThreadQuoteTarget(null);
+      dispatch({ type: "setThreadDraftEmpty", empty: true });
+    }
+    return dispatched;
   };
 
   const handleRetrySend = useCallback(
@@ -989,6 +1054,9 @@ function DmChannelConversation({
           }
           sending={sendThreadMessage.isPending}
           onSend={handleThreadSend}
+          voicePlaybackScope={voicePlaybackScope(channelId, threadSurfaceRoot.id)}
+          voiceDisabled={!threadDraftEmpty || threadPending.pending.length > 0}
+          onVoiceSend={handleThreadVoiceSend}
           isMobile={isMobile}
           prefix={threadQuoteTarget ? (
             <ComposerQuotePreview
@@ -1184,6 +1252,9 @@ function DmChannelConversation({
         }
         sending={sendMessage.isPending}
         onSend={handleSend}
+        voicePlaybackScope={voicePlaybackScope(channelId)}
+        voiceDisabled={!draftEmpty || dmPending.pending.length > 0}
+        onVoiceSend={handleVoiceSend}
         isMobile={isMobile}
         prefix={quoteTarget ? (
           <ComposerQuotePreview

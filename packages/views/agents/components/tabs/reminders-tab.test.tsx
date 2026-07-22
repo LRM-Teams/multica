@@ -206,7 +206,8 @@ describe("RemindersTab (#656)", () => {
 
   it("does not show a timezone tag for an interval cadence (every:*), distinct from a calendar cadence (daily/weekly)", async () => {
     // `every:*` is a zone-free elapsed interval, not a calendar rule — the
-    // server never populates `schedule_timezone` for it — even though it IS
+    // server never populates `schedule_timezone` for it (`reminderTimezonePtr`
+    // returns nil for anything that isn't daily/weekly) — even though it IS
     // recurring (unlike the one-shot case above), it must not show a
     // timezone tag either. This is the cadence-FAMILY distinction, not a
     // blanket recurring-vs-one-shot split.
@@ -222,6 +223,30 @@ describe("RemindersTab (#656)", () => {
     renderTab();
 
     await screen.findByText("Ping the deploy thread");
+    expect(screen.queryByText("Asia/Tokyo")).toBeNull();
+  });
+
+  it("does not show a timezone tag or calendar cadence on a one-shot reminder that retains a hidden lifetime-locked timezone (recurring→one-shot conversion)", async () => {
+    // Per the locked BE contract: converting a recurring reminder to
+    // one-shot (`update --fire-at`) clears cadence/schedule_kind but RETAINS
+    // the hidden timezone in the DB (so it can restore on a future re-convert
+    // back to recurring). The read API may still surface that retained value
+    // on an otherwise one_shot row — `schedule_kind` must be the only family
+    // authority, never "is schedule_timezone present".
+    mockGetAgentReminders.mockImplementation((_agentId: string, params: { status: string }) => {
+      if (params.status === "scheduled") {
+        return Promise.resolve(
+          definitionsPage([
+            oneShotUpcoming({ schedule_kind: "one_shot", cadence: undefined, schedule_timezone: "Asia/Tokyo" }),
+          ]),
+        );
+      }
+      return Promise.resolve(occurrencesPage([]));
+    });
+
+    renderTab();
+
+    expect(await screen.findByText("One-time")).toBeInTheDocument();
     expect(screen.queryByText("Asia/Tokyo")).toBeNull();
   });
 

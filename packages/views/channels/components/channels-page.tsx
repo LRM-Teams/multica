@@ -704,6 +704,15 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const [highlightMessageId, setHighlightMessageId] = useState<string | null>(
     () => searchParams.get("message"),
   );
+  // ?thread=<rootId> deep-links straight into ThreadPanel (e.g. a Reminder
+  // anchor whose target reply lives inside a thread, not on the main
+  // timeline) — ?message= then names which reply inside it to highlight,
+  // reusing the same highlightMessageId above but routed to the thread
+  // surface instead of the main list (see effectiveHighlightId below and the
+  // threadDeepLinkId-gated clear effect). One-shot: consumed once via the
+  // ref guard so closing the panel afterward never re-triggers it.
+  const [threadDeepLinkId] = useState<string | null>(() => searchParams.get("thread"));
+  const threadDeepLinkConsumedRef = useRef(false);
   const [search, setSearch] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [channelsCollapsed, setChannelsCollapsed] = useState(false);
@@ -1003,6 +1012,37 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     },
     [threadPage?.messages, threadRoot],
   );
+  // Open ThreadPanel from ?thread=<rootId> once the route has resolved the
+  // right channel. Only .id/.channel_id/.workspace_id of this stub matter —
+  // threadRoot/threadSurfaceRoot above fall back to the real fetched message
+  // (or a live one already in `messages`) the instant either resolves;
+  // ThreadPanel itself renders its loading state (not this stub's placeholder
+  // fields) while that's in flight, same as an ordinary click-to-open thread
+  // whose full object hasn't round-tripped yet.
+  useEffect(() => {
+    if (!threadDeepLinkId || threadDeepLinkConsumedRef.current || !activeChannelId) return;
+    threadDeepLinkConsumedRef.current = true;
+    setOpenThreadRoot({
+      id: threadDeepLinkId,
+      channel_id: activeChannelId,
+      workspace_id: wsId,
+      seq: 0,
+      type: "user",
+      author_id: null,
+      author_name: "",
+      content: "",
+      source: "multica",
+      external_message_id: null,
+      client_message_id: null,
+      created_at: new Date(0).toISOString(),
+    });
+  }, [threadDeepLinkId, activeChannelId, wsId, setOpenThreadRoot]);
+  // A thread-deep-linked highlight target is a REPLY, not a main-timeline
+  // message — searching the main list for it would always miss (thread
+  // replies aren't included there) and page through all of history for
+  // nothing. Route the highlight to the thread surface instead (see the
+  // <ThreadPanel highlightMessageId> below) and skip it here.
+  const isThreadDeepLink = !!threadDeepLinkId;
   const { data: channelMembers = [], isPending: membersPending } = useQuery(channelMembersOptions(active?.id ?? ""));
   const { data: channelProjectId = "" } = useQuery(channelProjectOptions(wsId, active?.id ?? ""));
   const { data: activeTasks = [] } = useQuery(activeChannelTasksOptions(active?.id ?? ""));
@@ -1398,7 +1438,9 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const searchHighlightQuery = convSearchOpen ? convSearchQuery.trim() : "";
   const effectiveHighlightId = convSearchOpen
     ? (convSearchResults[convSearchIndex]?.message_id ?? null)
-    : highlightMessageId;
+    : isThreadDeepLink
+      ? null
+      : highlightMessageId;
 
   // A search hit or quote back-reference can point at a message that lives in
   // an older, not-yet-fetched page. The viewport can only scroll to a message
@@ -1419,7 +1461,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   });
 
   useEffect(() => {
-    if (convSearchOpen) return;
+    if (convSearchOpen || isThreadDeepLink) return;
     // Only flash-then-clear a quote highlight once its target is actually on
     // screen — while older pages are still being paged toward it, keep it set
     // so the scroll lands when it loads. The timer's cleanup keeps this a
@@ -1427,7 +1469,17 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     if (!highlightMessageId || !jumpTargetLoaded) return;
     const clear = setTimeout(() => setHighlightMessageId(null), 2500);
     return () => clearTimeout(clear);
-  }, [highlightMessageId, convSearchOpen, jumpTargetLoaded]);
+  }, [highlightMessageId, convSearchOpen, jumpTargetLoaded, isThreadDeepLink]);
+
+  // Thread-panel counterpart of the clear-after-flash effect above — the
+  // target here is a REPLY (threadReplies), never the main list, so it needs
+  // its own "is it actually loaded/visible yet" check.
+  useEffect(() => {
+    if (!isThreadDeepLink || !highlightMessageId) return;
+    if (!threadReplies.some((m) => m.id === highlightMessageId)) return;
+    const clear = setTimeout(() => setHighlightMessageId(null), 2500);
+    return () => clearTimeout(clear);
+  }, [isThreadDeepLink, highlightMessageId, threadReplies]);
 
   // Clear search state when the active channel changes.
   useEffect(() => {
@@ -2540,6 +2592,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         loading={threadLoading}
         loadError={threadError}
         onRetry={() => refetchThread()}
+        highlightMessageId={isThreadDeepLink ? highlightMessageId : undefined}
         onReact={handleReactToMessage}
         onQuoteMessage={setThreadQuoteTarget}
         onRetrySend={handleRetrySend}

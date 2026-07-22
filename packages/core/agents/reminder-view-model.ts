@@ -19,9 +19,12 @@ export type ReminderCadence =
   // "calendar" = `daily@HH:MM` / `weekly:<days>@HH:MM` — resolves against a
   // real IANA timezone, locked at schedule time. "interval" = `every:<N>m|h|d`
   // — a zone-free elapsed-time rule. Derived from whether the server sent a
-  // `schedule_timezone` at all (`reminderTimezonePtr` on the backend only
-  // populates it for daily/weekly cadences) rather than re-parsing the
-  // cadence string ourselves — the server has already made this call.
+  // `schedule_timezone` at all: `reminderTimezonePtr` on the backend returns
+  // nil for anything that isn't a daily/weekly cadence, INCLUDING a one-shot
+  // row that retains a hidden lifetime-locked timezone in the DB (kept only
+  // so a future recurring re-conversion can restore it) — that retained
+  // value never reaches this wire, so presence-of-timezone is a safe signal
+  // here, not a re-parse of the cadence string ourselves.
   | { kind: "recurring"; family: "calendar" | "interval"; description: string; timezone?: string };
 
 export type ReminderAnchor =
@@ -109,13 +112,26 @@ function adaptAnchor(raw: RawReminderAnchor): ReminderAnchor {
   return { available: false };
 }
 
+// `schedule_kind` (server-authoritative) is the only family/display
+// authority — NOT whether `schedule_timezone` happens to be present. A
+// recurring→one-shot conversion clears `cadence`/`schedule_kind` but RETAINS
+// the hidden lifetime-locked timezone in the DB (so it can be restored if the
+// reminder later becomes recurring again); the read API may still surface
+// that retained value on a `one_shot` row. Using presence-of-timezone as the
+// family signal would misclassify that retained-but-inert value as "this is
+// a calendar cadence" and wrongly show a timezone tag on a one-shot reminder.
+// So: only `schedule_kind === "recurring"` even looks at cadence, and even
+// then only a `daily@`/`weekly:` prefix (matching the backend's own
+// `reminderTimezonePtr` prefix check) counts as calendar — `every:*` stays
+// interval and drops any retained timezone, exactly like one-shot does.
 function adaptCadence(scheduleKind: "recurring" | "one_shot", cadence: string | undefined, scheduleTimezone: string | undefined): ReminderCadence {
   if (scheduleKind === "one_shot" || !cadence) return { kind: "one_shot" };
+  const family = cadence.startsWith("daily@") || cadence.startsWith("weekly:") ? "calendar" : "interval";
   return {
     kind: "recurring",
-    family: scheduleTimezone ? "calendar" : "interval",
+    family,
     description: cadence,
-    timezone: scheduleTimezone,
+    timezone: family === "calendar" ? scheduleTimezone : undefined,
   };
 }
 

@@ -226,9 +226,10 @@ function AnchorLink({ anchor }: { anchor: UpcomingReminderRow["anchor"] }) {
   // `href` is a server-computed, already-authorized internal path (never
   // built from raw ids client-side) — `?message=` (kind: "channel") or
   // `?thread=<root>&message=<reply>` (kind: "thread"). Channels' page-mount
-  // deep-link handling resolves either shape into the right surface
-  // (main-timeline highlight vs opening ThreadPanel + highlighting the
-  // reply inside it) — this link needs no special click handling itself.
+  // deep-link handling (channels-page.tsx: threadDeepLinkId) resolves either
+  // shape into the right surface — main-timeline highlight, or opening the
+  // same ThreadPanel and highlighting the reply inside it — no special click
+  // handling needed here, a plain navigation covers both.
   return (
     <a href={anchor.href} className="truncate text-primary hover:underline" title={anchor.label}>
       {anchor.label}

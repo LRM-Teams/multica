@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -55,8 +56,8 @@ func TestEnsureGroupManagerForChannelProvisionsOne(t *testing.T) {
 	if managedRole != managedRoleGroupManager {
 		t.Fatalf("managed_role = %q, want %q", managedRole, managedRoleGroupManager)
 	}
-	if visibility != "workspace" {
-		t.Fatalf("visibility = %q, want workspace", visibility)
+	if visibility != "private" {
+		t.Fatalf("visibility = %q, want private", visibility)
 	}
 	if err := testPool.QueryRow(ctx, `
 		SELECT member_id FROM channel_member
@@ -221,10 +222,25 @@ func TestAddChannelMemberRejectsGroupManager(t *testing.T) {
 	}
 	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, beckham.ID) })
 
-	// It must be hidden from the agent directory / invite picker.
+	// It must be hidden from the agent directory / invite picker (ListAgents),
+	// even for the workspace owner who can otherwise see private agents.
 	ids, err := testHandler.groupManagerAgentIDs(ctx, parseUUID(testWorkspaceID))
 	if err != nil || !ids[uuidToString(beckham.ID)] {
 		t.Fatalf("group manager not in managed set: err=%v", err)
+	}
+	listRec := httptest.NewRecorder()
+	testHandler.ListAgents(listRec, withChannelTestWorkspaceCtx(t, newRequestAs(testUserID, http.MethodGet, "/api/agents", nil), testUserID))
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("ListAgents: status=%d body=%s", listRec.Code, listRec.Body.String())
+	}
+	var listed []AgentResponse
+	if err := json.NewDecoder(listRec.Body).Decode(&listed); err != nil {
+		t.Fatalf("decode ListAgents: %v", err)
+	}
+	for _, a := range listed {
+		if a.ID == uuidToString(beckham.ID) {
+			t.Fatalf("group manager %s appeared in ListAgents invite directory", a.ID)
+		}
 	}
 
 	// And it must not be addable to a different channel.

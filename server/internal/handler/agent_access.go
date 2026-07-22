@@ -36,6 +36,13 @@ func (h *Handler) canAccessPrivateAgent(ctx context.Context, agent db.Agent, act
 	if uuidToString(agent.OwnerID) == actorID {
 		return true
 	}
+	// Group managers (贝克汉姆) are per-channel infrastructure: any workspace
+	// member may open/configure them. Invite/directory discovery is blocked
+	// separately by excluding them from ListAgents (LRM-233).
+	if actorType == "member" && h.isGroupManagerAgent(ctx, agent.ID) {
+		_, err := h.getWorkspaceMember(ctx, actorID, workspaceID)
+		return err == nil
+	}
 	member, err := h.getWorkspaceMember(ctx, actorID, workspaceID)
 	if err != nil {
 		return false

@@ -182,6 +182,29 @@ export const agentTasksKeys = {
     [...agentTasksKeys.all(wsId), agentId] as const,
 };
 
+export const agentDetailKeys = {
+  all: (wsId: string) => ["workspaces", wsId, "agent"] as const,
+  detail: (wsId: string, agentId: string) =>
+    [...agentDetailKeys.all(wsId), agentId] as const,
+};
+
+/**
+ * Single-agent fetch by id. Used when the actor is absent from ListAgents
+ * (LRM-233: group managers / channel-only discovery) but still openable via
+ * message rows, member lists, or direct profile entry points (LRM-288).
+ */
+export function agentDetailOptions(wsId: string, agentId: string) {
+  return queryOptions({
+    queryKey: agentDetailKeys.detail(wsId, agentId),
+    queryFn: () => api.getAgent(agentId),
+    enabled: !!wsId && !!agentId,
+    staleTime: 30 * 1000,
+    gcTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: true,
+    retry: false,
+  });
+}
+
 export const memberProfileKeys = {
   all: (wsId: string) => ["workspaces", wsId, "member-profile"] as const,
   detail: (wsId: string, memberType: "user" | "agent", memberId: string) =>

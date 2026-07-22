@@ -7,7 +7,8 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { useAuthStore } from "@multica/core/auth";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
 import { useAgentPanelStore } from "@multica/core/agents/stores";
-import { AgentSidePanel } from "../channels/components/agent-side-panel";
+import type { Agent } from "@multica/core/types";
+import { ResolvedAgentSidePanel } from "../common/resolved-agent-side-panel";
 import { useNavigation } from "../navigation";
 
 /**
@@ -27,6 +28,10 @@ import { useNavigation } from "../navigation";
  * `defaultSize=440` in channels-page), reuses the same AgentSidePanel
  * header+tabs, and uses a TRANSPARENT backdrop (click-outside dismiss, no
  * dimming scrim) so the "overlay vs push" difference stays invisible.
+ *
+ * LRM-288: opens on selectedAgentId even when the agent is absent from
+ * ListAgents (channel-only / group managers); resolution is delegated to
+ * ResolvedAgentSidePanel.
  */
 export function GlobalAgentPanel() {
   const wsId = useWorkspaceId();
@@ -52,23 +57,24 @@ export function GlobalAgentPanel() {
     close();
   }, [pathname, close]);
 
-  const liveAgent = agents.find((a) => a.id === selectedAgentId) ?? null;
-
-  // Latch the resolved agent so its content survives the slide-out exit
-  // animation: `close()` clears selectedAgentId immediately, so `liveAgent`
-  // drops to null while Base UI is still animating the Popup out. Without the
-  // latch the panel would slide out empty. Refreshed the instant a new agent
-  // resolves (React's sanctioned "adjust state during render" — not an effect,
-  // so no extra commit/paint), so re-opening on a different agent swaps content
-  // cleanly.
-  const [displayed, setDisplayed] = useState<(typeof agents)[number] | null>(null);
-  if (liveAgent && liveAgent.id !== displayed?.id) {
-    setDisplayed(liveAgent);
+  // Latch the selected id so content survives the slide-out exit animation:
+  // `close()` clears selectedAgentId immediately, so without the latch the
+  // panel would slide out empty. Refreshed when a new agent is selected.
+  const [displayedId, setDisplayedId] = useState<string | null>(null);
+  const [displayedAgents, setDisplayedAgents] = useState<readonly Agent[]>([]);
+  if (selectedAgentId && selectedAgentId !== displayedId) {
+    setDisplayedId(selectedAgentId);
   }
+  if (selectedAgentId && agents.length > 0 && agents !== displayedAgents) {
+    setDisplayedAgents(agents);
+  }
+
+  const open = !!selectedAgentId;
+  const panelAgentId = selectedAgentId ?? displayedId;
 
   return (
     <Dialog.Root
-      open={!!liveAgent}
+      open={open}
       onOpenChange={(nextOpen) => {
         if (!nextOpen) close();
       }}
@@ -83,9 +89,10 @@ export function GlobalAgentPanel() {
             translate on real mount/unmount, so it animates without a manual
             rAF two-frame dance. */}
         <Dialog.Popup className="fixed inset-y-0 right-0 z-50 w-[440px] max-w-[90vw] border-l border-border/30 bg-background shadow-2xl transition-transform duration-200 ease-in-out data-starting-style:translate-x-full data-ending-style:translate-x-full">
-          {displayed ? (
-            <AgentSidePanel
-              agent={displayed}
+          {panelAgentId ? (
+            <ResolvedAgentSidePanel
+              agentId={panelAgentId}
+              agents={selectedAgentId ? agents : displayedAgents}
               currentUserId={currentUserId}
               members={members}
               onClose={close}

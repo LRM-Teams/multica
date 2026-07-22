@@ -117,6 +117,14 @@
     "recent_activity": "Recent activity",
     "back": "Back",
     "no_recent_activity": "No recent activity",
+    "close_aria": "Close profile",
+    "no_permission_toast": "You don't have permission to view this member's profile",
+    "restricted": {
+      "runtime": "Runtime",
+      "usage": "Usage",
+      "activity": "Activity",
+      "channel_only": "Channel-only"
+    },
     "role": {
       "owner": "Owner",
       "admin": "Admin",

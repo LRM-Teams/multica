@@ -104,15 +104,15 @@ vi.mock("@tanstack/react-query", async () => {
       const root = key[0];
       const marker = key[2];
       if (root === "workspaces" && marker === "agents") {
-        return { data: mockAgents.current, isLoading: false };
+        return { data: mockAgents.current, isLoading: false, isPending: false };
       }
       if (root === "workspaces" && marker === "members") {
-        return { data: mockMembers.current, isLoading: false };
+        return { data: mockMembers.current, isLoading: false, isPending: false };
       }
       if (root === "runtimes") {
-        return { data: mockRuntimes.current, isLoading: false };
+        return { data: mockRuntimes.current, isLoading: false, isPending: false };
       }
-      return { data: undefined, isLoading: false };
+      return { data: undefined, isLoading: false, isPending: false, isError: false };
     },
   };
 });

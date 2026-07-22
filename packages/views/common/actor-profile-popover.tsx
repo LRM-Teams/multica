@@ -320,11 +320,41 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
           </p>
         </section>
       ) : null}
-      {profile.member_type === "agent" && !isIdentityOnly ? (
-        <ProfileSection title={t(($) => $.profile_popover.recent_activity)}>
-          <AgentRecentActivity agentId={profile.member_id} />
-        </ProfileSection>
+      {profile.member_type === "agent" ? (
+        isIdentityOnly ? (
+          <RestrictedProfileBlocks />
+        ) : (
+          <ProfileSection title={t(($) => $.profile_popover.recent_activity)}>
+            <AgentRecentActivity agentId={profile.member_id} />
+          </ProfileSection>
+        )
       ) : null}
+    </div>
+  );
+}
+
+/** LRM-288: sensitive panels are explicit, never silently omitted (LRM-238). */
+// react-doctor-disable-next-line react-doctor/no-multi-comp -- cohesive actor-profile cluster (see file header)
+function RestrictedProfileBlocks() {
+  const { t } = useT("channels");
+  const labels = [
+    t(($) => $.profile_popover.restricted.runtime),
+    t(($) => $.profile_popover.restricted.usage),
+    t(($) => $.profile_popover.restricted.activity),
+  ];
+  return (
+    <div className="border-t">
+      {labels.map((label) => (
+        <div
+          key={label}
+          className="flex items-center justify-between gap-3 border-b px-3 py-2.5 last:border-b-0"
+        >
+          <span className="text-xs text-muted-foreground/70">{label}</span>
+          <span className="shrink-0 text-[11px] text-muted-foreground/60">
+            {t(($) => $.profile_popover.restricted.channel_only)}
+          </span>
+        </div>
+      ))}
     </div>
   );
 }

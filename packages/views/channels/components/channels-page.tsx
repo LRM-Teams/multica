@@ -205,7 +205,7 @@ import {
 } from "./conversation-muted";
 import { buildPinnedConversationEntries } from "./pinned-conversations";
 import { PinnedConversationsSection } from "./pinned-conversations-section";
-import { AgentSidePanel } from "./agent-side-panel";
+import { ResolvedAgentSidePanel } from "../../common/resolved-agent-side-panel";
 import { AgentPanelProvider } from "../../common/agent-panel-context";
 import { ChannelMembersList, type MemberRoleLabel } from "./channel-members-list";
 import { ChannelMembersDialog } from "./channel-members-dialog";
@@ -917,10 +917,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       ? explicit
       : (explicit ?? channels.find(isImmutableSystemChannel) ?? channels[0] ?? null);
   }, [channels, archivedChannels, activeId, activeDmId, isMobile]);
-  const selectedAgentPanel = useMemo(
-    () => (selectedAgentPanelId ? agents.find((agent) => agent.id === selectedAgentPanelId) ?? null : null),
-    [agents, selectedAgentPanelId],
-  );
   const isActiveArchived = !!active?.archived_at;
   // #642 — the workspace's system #general channel: immutable, auto-managed
   // roster (all human members + active workspace-visible agents, synced
@@ -2142,6 +2138,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         isMobile={isMobile}
         currentUserId={currentUserId ?? ""}
         onOpenDm={openDmWithMember}
+        onOpenAgent={handleOpenAgentPanel}
         onRemove={handleRemoveMemberClick}
         dmPending={createOrFindDm.isPending}
         className="min-h-0 flex-1"
@@ -2719,9 +2716,10 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       />
     ) : null;
   const agentPanel =
-    active && selectedAgentPanel ? (
-      <AgentSidePanel
-        agent={selectedAgentPanel}
+    active && selectedAgentPanelId ? (
+      <ResolvedAgentSidePanel
+        agentId={selectedAgentPanelId}
+        agents={agents}
         currentUserId={currentUserId}
         members={workspaceMembers}
         onClose={() => setSelectedAgentPanelId(null)}
@@ -3414,6 +3412,10 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
             openAddPeopleDialog();
           }}
           onOpenDm={openDmWithMember}
+          onOpenAgent={(agentId) => {
+            setMembersDialogOpen(false);
+            handleOpenAgentPanel(agentId);
+          }}
           onRemove={handleRemoveMemberClick}
           dmPending={createOrFindDm.isPending}
         />

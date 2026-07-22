@@ -117,6 +117,14 @@
     "recent_activity": "最近のアクティビティ",
     "back": "戻る",
     "no_recent_activity": "最近のアクティビティはありません",
+    "close_aria": "プロフィールを閉じる",
+    "no_permission_toast": "このメンバーのプロフィールを表示する権限がありません",
+    "restricted": {
+      "runtime": "Runtime",
+      "usage": "使用量",
+      "activity": "Activity",
+      "channel_only": "チャンネル内のみ"
+    },
     "role": {
       "owner": "オーナー",
       "admin": "管理者",

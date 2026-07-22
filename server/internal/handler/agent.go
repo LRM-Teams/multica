@@ -81,6 +81,9 @@ type AgentResponse struct {
 	UpdatedAt     string              `json:"updated_at"`
 	ArchivedAt    *string             `json:"archived_at"`
 	ArchivedBy    *string             `json:"archived_by"`
+	// Memory growth tier/progress for profile & agent card (LRM-303). Null when
+	// the agent has zero valid Phase① memory writes.
+	MemoryGrowth *AgentMemoryGrowthResponse `json:"memory_growth,omitempty"`
 }
 
 func agentToResponse(a db.Agent) AgentResponse {
@@ -787,6 +790,13 @@ func (h *Handler) GetAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.attachAgentRuntimeName(r.Context(), &resp)
+
+	if growth, err := h.loadAgentMemoryGrowth(r.Context(), agent.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load agent memory growth")
+		return
+	} else {
+		resp.MemoryGrowth = growth
+	}
 
 	// mcp_config redaction (custom_env was removed from this response shape
 	// in MUL-2600; secrets are now fetched via GET /api/agents/{id}/env).

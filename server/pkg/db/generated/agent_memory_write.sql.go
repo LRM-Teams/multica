@@ -10,6 +10,19 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countAgentMemoryWriteEventsByAgent = `-- name: CountAgentMemoryWriteEventsByAgent :one
+SELECT COUNT(*)::bigint AS count
+FROM agent_memory_write_event
+WHERE agent_id = $1
+`
+
+func (q *Queries) CountAgentMemoryWriteEventsByAgent(ctx context.Context, agentID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countAgentMemoryWriteEventsByAgent, agentID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const hasRecentAgentMemoryWrite = `-- name: HasRecentAgentMemoryWrite :one
 SELECT EXISTS(
     SELECT 1

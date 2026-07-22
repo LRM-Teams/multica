@@ -22,6 +22,7 @@ type MemberProfileResponse struct {
 	Status         *string                   `json:"status"`
 	RecentActivity []AgentRecentActivityItem `json:"recent_activity"`
 	ProfileAccess  string                    `json:"profile_access"`
+	MemoryGrowth   *AgentMemoryGrowthResponse `json:"memory_growth,omitempty"`
 }
 
 type AgentRecentActivityItem struct {
@@ -119,6 +120,11 @@ func (h *Handler) getAgentMemberProfile(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	status := agent.Status
+	growth, err := h.loadAgentMemoryGrowth(r.Context(), agent.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load member profile")
+		return
+	}
 	writeJSON(w, http.StatusOK, MemberProfileResponse{
 		MemberType:     "agent",
 		MemberID:       uuidToString(agent.ID),
@@ -130,6 +136,7 @@ func (h *Handler) getAgentMemberProfile(w http.ResponseWriter, r *http.Request, 
 		Status:         &status,
 		RecentActivity: activity,
 		ProfileAccess:  "full",
+		MemoryGrowth:   growth,
 	})
 }
 

@@ -1718,7 +1718,7 @@ func TestEnvDispatchPerAgentEnvSpecs_ShapeValidation(t *testing.T) {
 		{"empty ok", nil, ""},
 		{"valid template ok", []PerAgentEnvSpec{{AgentID: "a", Template: "python"}}, ""},
 		{"valid base_env ok", []PerAgentEnvSpec{{AgentID: "a", BaseEnvID: "base"}}, ""},
-		{"valid runtime only ok", []PerAgentEnvSpec{{AgentID: "a", Runtime: &ExternalModelRuntime{BaseURL: "https://provider.invalid/v1", APIKey: "k", Model: "m"}}}, ""},
+		{"valid anthropic runtime only ok", []PerAgentEnvSpec{{AgentID: "a", Runtime: &ExternalModelRuntime{Provider: " anthropic ", BaseURL: "https://provider.invalid/v1", APIKey: "k", Model: "m"}}}, ""},
 		{"valid runtime with template ok", []PerAgentEnvSpec{{AgentID: "a", Template: "python", Runtime: &ExternalModelRuntime{BaseURL: "https://provider.invalid/v1", APIKey: "k", Model: "m"}}}, ""},
 		{"empty agent_id rejected", []PerAgentEnvSpec{{Template: "python"}}, "validation_failed: per_agent_env agent_id is required"},
 		{"missing template base_env and runtime rejected", []PerAgentEnvSpec{{AgentID: "a"}}, "validation_failed: per_agent_env spec for agent a needs a template, base_env_id, or runtime"},

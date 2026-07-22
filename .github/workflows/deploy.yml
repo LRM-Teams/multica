@@ -1,27 +1,24 @@
 name: Deploy
 
-# Continuous deployment to s89 (Tencent Cloud, Beijing — behind the GFW).
-#
-# Why this shape: inbound SSH from GitHub-hosted runners into a mainland-China
-# box is the throttled/blocked direction across the Great Firewall, so we never
-# connect *into* s89. Instead:
-#
-#   1. Images build on GitHub-hosted runners (outside China), pushed to GHCR.
-#   2. A self-hosted runner *on s89* — which long-polls GitHub outbound through
-#      the box's existing proxy (127.0.0.1:7893) — pulls the images and
-#      restarts the stack locally. Outbound is the only reliable direction.
+# Continuous deployment to the Aliyun host (101.200.210.144, runner label
+# `aliyun`). Images still build on GitHub-hosted runners and push to GHCR; the
+# self-hosted runner on the deploy host pulls images and restarts Compose.
 #
 # Test gate: the CI workflow runs on every PR into `dev`. The team's workflow is
-# feature branch → PR → merge to `dev`, which builds images and deploys to s89.
-# `main` is left as the upstream-tracking branch and never deploys.
+# feature branch → PR → merge to `dev`, which builds images and deploys here.
+# `main` is left as the upstream-tracking branch and never deploys via this
+# workflow.
 #
-# One-time server + repo setup is documented in docs/deploy-s89.md.
+# Host layout: deploy user `dev`, stack under `/data/multica`. GitHub Environment
+# `s89` is kept as the secret store (POSTGRES_PASSWORD / optional voice key) so
+# existing Environment secrets keep working during the cutover.
 
 on:
   # Deploy only from the `dev` integration branch, after a PR has already been
-  # merged. PR events must not deploy to the shared s89 environment; they can
-  # build/test in CI, but s89 must always represent dev or an explicit manual
-  # dispatch from dev. Rollback dispatches must name an existing image tag.
+  # merged. PR events must not deploy to the shared Aliyun/dev environment; they
+  # can build/test in CI, but that host must always represent `dev` or an
+  # explicit manual dispatch from `dev`. Rollback dispatches must name an
+  # existing image tag.
   # Docs-only changes (#354 bug) are excluded — they don't change any code, so
   # triggering a backend rebuild/restart would disconnect all WS connections
   # for zero benefit.
@@ -40,14 +37,14 @@ on:
 
 # Never run two deploys at once; never cancel an in-flight one mid-restart.
 concurrency:
-  group: deploy-s89
+  group: deploy-aliyun
   cancel-in-progress: false
 
 jobs:
   build:
     # Only build/deploy from the team fork — never upstream or other forks.
     # On manual dispatch with an image_tag we skip building and redeploy that tag.
-    # Empty-tag manual builds must also target dev; s89 never builds a feature ref.
+    # Empty-tag manual builds must also target dev; this lane never builds a feature ref.
     if: >-
       github.repository_owner == 'LRM-Teams' &&
       ((github.event_name == 'push' && github.ref == 'refs/heads/dev') ||
@@ -93,7 +90,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # s89 is x86_64, so amd64-only — no QEMU, no multi-arch manifest merge.
+      # Deploy host is x86_64, so amd64-only — no QEMU, no multi-arch manifest merge.
       - name: Build & push backend
         uses: docker/build-push-action@v6
         with:
@@ -162,7 +159,7 @@ jobs:
        (github.event_name == 'workflow_dispatch' &&
         github.ref == 'refs/heads/dev' &&
         github.event.inputs.image_tag != ''))
-    runs-on: [self-hosted, s89]
+    runs-on: [self-hosted, aliyun]
     timeout-minutes: 15
     permissions:
       contents: read

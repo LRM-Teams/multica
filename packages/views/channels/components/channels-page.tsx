@@ -2846,8 +2846,9 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                 onClick={() => toggleChannelDetails("about")}
                 aria-label={t(($) => $.details.open_aria)}
                 aria-expanded={channelDetailsOpen && !isMobile}
+                title={active.name}
                 className={cn(
-                  "-ml-1.5 inline-flex min-w-0 max-w-full items-center gap-0.5 rounded-md px-1.5 py-0.5 text-left text-foreground transition-colors",
+                  "-ml-1.5 flex min-w-0 flex-1 items-center gap-0.5 rounded-md px-1.5 py-0.5 text-left text-foreground transition-colors",
                   "hover:bg-black/[0.04] dark:hover:bg-white/[0.06]",
                   channelDetailsOpen &&
                     !isMobile &&
@@ -2855,7 +2856,9 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                 )}
               >
                 <ChannelHashLandmark size="lg" />
-                <span className="truncate font-bold tracking-tight">{active.name}</span>
+                <span className="min-w-0 flex-1 truncate font-bold tracking-tight">
+                  {active.name}
+                </span>
                 {!isMobile && (
                   <ChevronDown
                     data-testid="channel-title-chevron"

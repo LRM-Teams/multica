@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multica/core/i18n/react";
@@ -105,6 +105,7 @@ function resizeContainerTo(width: number) {
 beforeEach(() => {
   mobile.value = false;
   containerWidth.value = 1024;
+  channelName.value = "general-team";
   roRegistrations.clear();
   vi.stubGlobal("ResizeObserver", FakeResizeObserver as unknown as typeof ResizeObserver);
   // Only the page's own `<main>` (the element `detailHeaderContainerRef`
@@ -150,10 +151,13 @@ vi.mock("@multica/core/api", () => ({ api: apiMock.proxy }));
 
 // A normal (non-system) group channel WITH members, so the header renders
 // its full worst-case direct row: member cluster + Invite + Search.
+const channelName = vi.hoisted(() => ({ value: "general-team" }));
 const channelFixture = {
   id: "chan-1",
   workspace_id: "ws-1",
-  name: "general-team",
+  get name() {
+    return channelName.value;
+  },
   kind: "group" as const,
   description: null,
   lark_chat_id: null,
@@ -603,5 +607,25 @@ describe("ChannelsPage — channel hash landmark (LRM-254)", () => {
     );
     // Title control must not host an <img> collage tile.
     expect(toggle.querySelector("img")).toBeNull();
+  });
+});
+
+// LRM-279 — channel title column must flex to fill header space before the
+// shrink-0 action cluster; # and ▾ stay shrink-0, name truncates with tooltip.
+describe("ChannelsPage header — title column width (LRM-279)", () => {
+  it("uses flex-1 min-w-0 on the title control and exposes the full name via title", async () => {
+    channelName.value = "LRM2.0开发群";
+    resizeContainerTo(1024);
+    renderPage();
+    await screen.findByTestId("message-list");
+
+    const toggle = screen.getByRole("button", { name: "Open channel details" });
+    expect(toggle).toHaveClass("flex-1", "min-w-0");
+    expect(toggle).toHaveAttribute("title", "LRM2.0开发群");
+
+    const nameSpan = within(toggle).getByText("LRM2.0开发群");
+    expect(nameSpan).toHaveClass("flex-1", "min-w-0", "truncate");
+    expect(within(toggle).getByTestId("channel-title-chevron")).toHaveClass("shrink-0");
+    expect(within(toggle).getByTestId("channel-hash-landmark")).toHaveClass("shrink-0");
   });
 });

@@ -35,6 +35,14 @@ export interface MemberSystemEvent {
   /** #456: canonical @handle (username). Absent on older messages. */
   targetHandle?: string;
   targetName?: string;
+  /**
+   * #661: why the membership row changed — "manual" for an authenticated
+   * actor's own action, "system_invariant" for rows the backend maintains on
+   * its own (e.g. the immutable #general roster sync). Absent on rows older
+   * than this field; the content projection falls back to `actorId` presence
+   * either way so no row can render a dangling "by" with no actor.
+   */
+  source?: string;
 }
 
 /**
@@ -203,6 +211,7 @@ export function parseMemberSystemEvent(message: ChannelMessage): MemberSystemEve
       targetType: optString(params, "target_type"),
       targetHandle: optString(params, "target_handle"),
       targetName: optString(params, "target_name"),
+      source: optString(params, "source"),
     };
   }
   return null;

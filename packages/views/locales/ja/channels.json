@@ -331,7 +331,9 @@
     "delete_failed_toast": "メッセージを削除できませんでした",
     "system_event": {
       "member_added": "{target} が {actor} によってチャンネルに追加されました",
+      "member_added_no_actor": "{target} がチャンネルに参加しました",
       "member_removed": "{target} が {actor} によってチャンネルから削除されました",
+      "member_removed_no_actor": "{target} がチャンネルから削除されました",
       "member_left": "{target} がチャンネルから退出しました",
       "issue": {
         "actor_system": "Multica",

@@ -331,7 +331,9 @@
     "delete_failed_toast": "메시지를 삭제하지 못했습니다",
     "system_event": {
       "member_added": "{target}님이 {actor}님에 의해 채널에 추가되었습니다",
+      "member_added_no_actor": "{target}님이 채널에 참여했습니다",
       "member_removed": "{target}님이 {actor}님에 의해 채널에서 제거되었습니다",
+      "member_removed_no_actor": "{target}님이 채널에서 제거되었습니다",
       "member_left": "{target}님이 채널에서 나갔습니다",
       "issue": {
         "actor_system": "Multica",

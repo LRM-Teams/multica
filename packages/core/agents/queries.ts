@@ -71,6 +71,41 @@ export function agentActivityEventsOptions(agentId: string) {
   });
 }
 
+// #656 Agent Card Reminders tab (V2 spec:
+// docs/superpowers/specs/2026-07-22-raft-reminder-parity.md). Two sections,
+// two query shapes: Upcoming is a small, non-paginated "scheduled" list
+// (definitions ordered by next_fire_at — there's no unbounded history to
+// page through); History is cursor-paginated "fired" occurrences,
+// newest-first, same infinite-query shape as `agentActivityEventsOptions`
+// above. Both invalidate on schedule/fire/snooze/update/cancel per the spec
+// ("Live updates invalidate or update the tab") — WS wiring lands with #655.
+export const agentRemindersKeys = {
+  all: (agentId: string) => ["agent-reminders", agentId] as const,
+  upcoming: (agentId: string) => [...agentRemindersKeys.all(agentId), "scheduled"] as const,
+  history: (agentId: string) => [...agentRemindersKeys.all(agentId), "fired"] as const,
+};
+
+export function agentRemindersUpcomingOptions(agentId: string) {
+  return queryOptions({
+    queryKey: agentRemindersKeys.upcoming(agentId),
+    queryFn: () => api.getAgentReminders(agentId, { status: "scheduled" }),
+    enabled: !!agentId,
+    staleTime: 30 * 1000,
+  });
+}
+
+export function agentRemindersHistoryOptions(agentId: string) {
+  return infiniteQueryOptions({
+    queryKey: agentRemindersKeys.history(agentId),
+    queryFn: ({ pageParam }) =>
+      api.getAgentReminders(agentId, { status: "fired", cursor: pageParam ?? undefined }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+    enabled: !!agentId,
+    staleTime: 30 * 1000,
+  });
+}
+
 export const agentTaskFeedKeys = {
   all: (wsId: string) => ["workspaces", wsId, "agent-task-feed"] as const,
   list: (wsId: string) => [...agentTaskFeedKeys.all(wsId), "list"] as const,

@@ -207,6 +207,7 @@
   "tabs": {
     "activity": "활동",
     "profile": "프로필",
+    "reminders": "리마인더",
     "files": "파일",
     "tasks": "작업",
     "instructions": "지침",
@@ -563,6 +564,23 @@
     "info_created": "생성일",
     "info_creator": "생성자",
     "info_status": "상태"
+  },
+  "reminders": {
+    "upcoming_heading": "예정됨",
+    "history_heading": "기록",
+    "empty_all": "아직 리마인더가 없습니다.",
+    "empty_upcoming": "예정된 리마인더가 없습니다.",
+    "empty_history": "아직 발생한 리마인더가 없습니다.",
+    "loading": "리마인더 불러오는 중…",
+    "error_title": "리마인더를 불러오지 못했습니다.",
+    "retry": "다시 시도",
+    "load_more": "더 보기",
+    "inaccessible": "이 Agent의 리마인더를 볼 권한이 없습니다.",
+    "anchor_unavailable": "앵커를 사용할 수 없음",
+    "one_shot": "일회성",
+    "next_fire_label": "다음",
+    "last_fire_label": "발생",
+    "timezone_label": "시간대"
   },
   "task_failure": {
     "agent_error": "에이전트 실행 오류",

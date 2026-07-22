@@ -187,6 +187,7 @@ import type {
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import type { DMItem, CreateOrFindDMBody } from "../dm/types";
+import type { RawReminderPage } from "../agents/reminder-view-model";
 import type {
   CloudRuntimeNode,
   CreateCloudRuntimeNodeRequest,
@@ -933,6 +934,24 @@ export class ApiClient {
     if (before) search.set("before", before);
     const suffix = search.toString() ? `?${search}` : "";
     return this.fetch(`/api/agents/${agentId}/activity/events${suffix}`);
+  }
+
+  // #656 Agent Card Reminders tab: read-only, per the V2 product contract
+  // (docs/superpowers/specs/2026-07-22-raft-reminder-parity.md). `status`
+  // selects which section this page belongs to server-side — "scheduled"
+  // for Upcoming, "fired" for History (individual fire occurrences, cursor-
+  // paginated newest-first) — not a client-side filter of one bigger list.
+  // Placeholder endpoint/shape pending task #655; keep in lockstep with the
+  // real contract once it lands, not speculatively ahead of it.
+  async getAgentReminders(
+    agentId: string,
+    params: { status: "scheduled" | "fired"; cursor?: string; limit?: number },
+  ): Promise<RawReminderPage> {
+    const search = new URLSearchParams();
+    search.set("status", params.status);
+    if (params.cursor) search.set("cursor", params.cursor);
+    if (params.limit) search.set("limit", String(params.limit));
+    return this.fetch(`/api/agents/${agentId}/reminders?${search}`);
   }
 
   async createAgent(data: CreateAgentRequest): Promise<Agent> {

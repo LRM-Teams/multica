@@ -1,5 +1,12 @@
 /**
- * LRM-219: mobile attachment preview dispatch — only images preview.
+ * Mobile attachment preview dispatch (LRM-219 / LRM-230).
+ *
+ * - Images: stream thumb → fullscreen big image
+ * - HTML: compact card → fullscreen sandboxed srcDoc preview (LRM-230 restores
+ *   this after LRM-219's empty-pane regression)
+ * - PDF / other: compact card → fullscreen chrome + download guidance (no
+ *   blank pane; PDF stays out of iframe because app CSP blocks it)
+ *
  * Kept outside the component file so Fast Refresh can preserve state
  * (react-doctor: only-export-components).
  */
@@ -24,13 +31,23 @@ function isImageFile(contentType: string, filename: string): boolean {
   );
 }
 
-/** Only images preview. HTML/PDF (and anything else) → none. */
+function isHtmlFile(contentType: string, filename: string): boolean {
+  const ct = contentType.toLowerCase().split(";")[0]?.trim() ?? "";
+  const ext = getFileExtension(filename);
+  return ct === "text/html" || ext === "html" || ext === "htm";
+}
+
+/** Images and HTML preview; PDF and everything else → none (with UI hint). */
 export function resolveMobilePreviewMode(
   mode: MobilePreviewMode | undefined,
   contentType: string,
   filename: string,
-): "image" | "none" {
+): "html" | "image" | "none" {
   if (mode === "image") return "image";
-  if (mode === "html" || mode === "pdf" || mode === "none") return "none";
-  return isImageFile(contentType, filename) ? "image" : "none";
+  if (mode === "html") return "html";
+  // Explicit pdf/none stay non-content; never iframe PDF under app CSP.
+  if (mode === "pdf" || mode === "none") return "none";
+  if (isImageFile(contentType, filename)) return "image";
+  if (isHtmlFile(contentType, filename)) return "html";
+  return "none";
 }

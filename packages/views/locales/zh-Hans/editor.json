@@ -67,7 +67,9 @@
     "meta_size": "大小",
     "meta_sender": "发送者",
     "meta_time": "时间",
-    "cannot_preview": "无法预览"
+    "cannot_preview": "无法预览",
+    "preview_unavailable": "无法预览此文件",
+    "preview_unavailable_hint": "请下载后用系统浏览器或其他应用打开。"
   },
   "link_hover": {
     "copy_link": "复制链接",

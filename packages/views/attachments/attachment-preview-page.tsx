@@ -47,25 +47,31 @@ export function AttachmentPreviewPage({
   const isLoading = query.isLoading;
   const isError = !isLoading && (!!query.error || !text);
 
+  // Use h-svh (not h-full): this page sits outside the dashboard layout, and
+  // a parent without an explicit height collapses `h-full` → blank viewport
+  // with a zero-height iframe (LRM-230).
   return (
-    <div className="flex h-full w-full flex-col bg-background">
+    <div className="flex h-svh w-full flex-col bg-background">
       {isLoading ? (
         <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
           {t(($) => $.attachment.preview_loading)}
         </div>
       ) : isError ? (
         <div
-          className="flex flex-1 items-center justify-center px-4 text-sm text-muted-foreground"
+          className="flex flex-1 flex-col items-center justify-center gap-2 px-4 text-center text-sm text-muted-foreground"
           data-testid="attachment-preview-page-error"
         >
-          {t(($) => $.attachment.preview_failed)}
+          <p>{t(($) => $.attachment.preview_failed)}</p>
+          <p className="max-w-sm text-xs">
+            {t(($) => $.attachment.preview_unavailable_hint)}
+          </p>
         </div>
       ) : (
         <iframe
           srcDoc={withFragmentNavShim(text)}
           sandbox="allow-scripts"
           title={filename ?? "HTML attachment"}
-          className="flex-1 w-full border-0 bg-background"
+          className="min-h-0 w-full flex-1 border-0 bg-background"
         />
       )}
     </div>

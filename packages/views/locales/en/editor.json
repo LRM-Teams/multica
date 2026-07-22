@@ -67,7 +67,9 @@
     "meta_size": "Size",
     "meta_sender": "Sender",
     "meta_time": "Time",
-    "cannot_preview": "Can't preview"
+    "cannot_preview": "Can't preview",
+    "preview_unavailable": "Can't preview this file",
+    "preview_unavailable_hint": "Download it, then open with your browser or another app."
   },
   "link_hover": {
     "copy_link": "Copy link",

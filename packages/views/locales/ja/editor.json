@@ -67,7 +67,9 @@
     "meta_size": "サイズ",
     "meta_sender": "送信者",
     "meta_time": "日時",
-    "cannot_preview": "プレビューできません"
+    "cannot_preview": "プレビューできません",
+    "preview_unavailable": "このファイルはプレビューできません",
+    "preview_unavailable_hint": "ダウンロードしてからブラウザや他のアプリで開いてください。"
   },
   "link_hover": {
     "copy_link": "リンクをコピー",

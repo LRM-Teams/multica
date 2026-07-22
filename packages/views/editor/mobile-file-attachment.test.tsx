@@ -18,6 +18,9 @@ vi.mock("../i18n", () => ({
           back: "Back",
           cannot_preview: "Can't preview",
           preview_unsupported: "This file type can't be previewed.",
+          preview_unavailable: "Can't preview this file",
+          preview_unavailable_hint:
+            "Download it, then open with your browser or another app.",
           file_type: {
             image: "Image",
             video: "Video",
@@ -41,8 +44,28 @@ vi.mock("../i18n", () => ({
   }),
 }));
 
-describe("resolveMobilePreviewMode (LRM-219)", () => {
-  it("only images preview; html/pdf narrow to none", () => {
+vi.mock("./html-preview-body", () => ({
+  HtmlPreviewBody: ({
+    source,
+    errorTestId,
+  }: {
+    source: { kind: string; attachmentId?: string };
+    errorTestId?: string;
+  }) => (
+    <div
+      data-testid="mobile-file-preview-html-iframe"
+      data-attachment-id={
+        source.kind === "attachment" ? source.attachmentId : undefined
+      }
+      data-error-testid={errorTestId}
+    >
+      html-preview
+    </div>
+  ),
+}));
+
+describe("resolveMobilePreviewMode (LRM-230)", () => {
+  it("images and html preview; pdf and others stay none", () => {
     expect(resolveMobilePreviewMode("image", "image/png", "a.png")).toBe(
       "image",
     );
@@ -50,7 +73,13 @@ describe("resolveMobilePreviewMode (LRM-219)", () => {
       "image",
     );
     expect(resolveMobilePreviewMode("html", "text/html", "a.html")).toBe(
-      "none",
+      "html",
+    );
+    expect(
+      resolveMobilePreviewMode(undefined, "text/html; charset=utf-8", "a.html"),
+    ).toBe("html");
+    expect(resolveMobilePreviewMode(undefined, "application/octet-stream", "a.html")).toBe(
+      "html",
     );
     expect(resolveMobilePreviewMode("pdf", "application/pdf", "a.pdf")).toBe(
       "none",
@@ -61,7 +90,7 @@ describe("resolveMobilePreviewMode (LRM-219)", () => {
   });
 });
 
-describe("MobileFileAttachment (LRM-219 image-only preview)", () => {
+describe("MobileFileAttachment (LRM-230 html + download guidance)", () => {
   beforeEach(() => {
     document.body.innerHTML = "";
   });
@@ -84,20 +113,20 @@ describe("MobileFileAttachment (LRM-219 image-only preview)", () => {
     fireEvent.click(screen.getByTestId("mobile-file-entry"));
     expect(screen.getByTestId("mobile-file-detail")).toBeTruthy();
     expect(screen.getByTestId("mobile-file-preview-image")).toBeTruthy();
-    expect(screen.queryByTestId("mobile-file-preview-empty")).toBeNull();
+    expect(screen.queryByTestId("mobile-file-preview-unavailable")).toBeNull();
     expect(screen.getAllByTestId("mobile-file-detail-download")).toHaveLength(1);
     fireEvent.click(screen.getByTestId("mobile-file-detail-download"));
     expect(onDownload).toHaveBeenCalled();
   });
 
-  it("html: compact card, no content preview (empty pane)", () => {
+  it("html: compact card → fullscreen sandboxed HTML body (not empty pane)", () => {
     render(
       <MobileFileAttachment
-        filename="lrm201-tall-preview.html"
-        contentType="text/html"
-        sizeBytes={606}
+        filename="design-composer-activity.html"
+        contentType="text/html; charset=utf-8"
+        sizeBytes={10070}
         previewMode="html"
-        attachmentId="att-1"
+        attachmentId="att-html-1"
         previewUrl="https://cdn.example/a.html"
         onDownload={() => {}}
       />,
@@ -105,15 +134,19 @@ describe("MobileFileAttachment (LRM-219 image-only preview)", () => {
     expect(screen.getByTestId("mobile-file-entry").getAttribute("data-preview")).toBe(
       "compact-card",
     );
-    expect(screen.getByText("lrm201-tall-preview.html")).toBeTruthy();
-    expect(document.querySelector("iframe")).toBeNull();
+    expect(screen.getByText("design-composer-activity.html")).toBeTruthy();
     fireEvent.click(screen.getByTestId("mobile-file-entry"));
-    expect(screen.getByTestId("mobile-file-preview-empty")).toBeTruthy();
-    expect(screen.queryByTestId("mobile-file-preview-html-body")).toBeNull();
+    expect(screen.getByTestId("mobile-file-preview-html-body")).toBeTruthy();
+    expect(screen.getByTestId("mobile-file-preview-html-iframe")).toHaveAttribute(
+      "data-attachment-id",
+      "att-html-1",
+    );
+    expect(screen.queryByTestId("mobile-file-preview-unavailable")).toBeNull();
+    expect(screen.queryByTestId("mobile-file-preview-empty")).toBeNull();
     expect(screen.queryByTestId("mobile-file-preview-image")).toBeNull();
   });
 
-  it("zip: compact card → fullscreen filename + Download only", () => {
+  it("zip: compact card → fullscreen download guidance (never blank)", () => {
     render(
       <MobileFileAttachment
         filename="archive.zip"
@@ -123,8 +156,14 @@ describe("MobileFileAttachment (LRM-219 image-only preview)", () => {
       />,
     );
     fireEvent.click(screen.getByTestId("mobile-file-entry"));
-    expect(screen.getByTestId("mobile-file-preview-empty")).toBeTruthy();
-    expect(screen.queryByText("Can't preview")).toBeNull();
+    expect(screen.getByTestId("mobile-file-preview-unavailable")).toBeTruthy();
+    expect(screen.getByText("Can't preview this file")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Download it, then open with your browser or another app.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("mobile-file-preview-empty")).toBeNull();
     expect(screen.getByTestId("mobile-file-detail-download")).toBeTruthy();
     const detail = screen.getByTestId("mobile-file-detail");
     expect(detail.textContent).toContain("archive.zip");

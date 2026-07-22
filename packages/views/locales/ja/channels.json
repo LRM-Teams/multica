@@ -43,12 +43,13 @@
     "readonly_notice": "このチャンネルはアーカイブされています"
   },
   "delete_dialog": {
-    "title": "このグループを削除しますか？",
-    "description": "「{{name}}」とそのすべてのメッセージが完全に削除されます。元に戻せません。",
+    "title": "このチャンネルを削除しますか？",
+    "description": "「{{name}}」とそのすべてのメッセージが完全に削除されます。この操作は取り消せません。",
+    "checkbox": "はい、このチャンネルを完全に削除します",
     "cancel": "キャンセル",
-    "confirm": "削除",
-    "toast_success": "グループを削除しました",
-    "toast_failed": "グループの削除に失敗しました"
+    "confirm": "チャンネルを削除",
+    "toast_success": "チャンネルを削除しました",
+    "toast_failed": "チャンネルの削除に失敗しました"
   },
   "empty_state": {
     "title": "グループチャットを作成",
@@ -174,6 +175,10 @@
     "lark_label": "Feishu chat_id",
     "save": "保存",
     "danger_zone": "危険な操作",
+    "archive_channel": "このチャンネルをアーカイブ",
+    "archive_channel_hint": "サイドバーから非表示にします。履歴は保持され、復元できます。",
+    "delete_channel": "このチャンネルを削除",
+    "delete_channel_hint": "チャンネルとすべてのメッセージを完全に削除します。元に戻せません。",
     "archive_disabled_archived": "このチャンネルはすでにアーカイブ済みです。",
     "open_aria": "チャンネル詳細を開く",
     "menu_about": "概要",

@@ -1,7 +1,7 @@
 "use client";
 
 import { type ReactNode, type RefObject, useState } from "react";
-import { Archive, Bell, BellOff } from "lucide-react";
+import { Bell, BellOff } from "lucide-react";
 import type { Channel, ChannelMemberBrief } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
@@ -36,11 +36,14 @@ export function ChannelDetailsPanel({
   projectDisabledReason,
   canManage,
   manageDisabledReason,
+  /** LRM-237 — permanent delete is owner/admin only (stricter than archive). */
+  canDelete = false,
   isArchived,
   onMuteToggle,
   mutePending,
   onShare,
   onArchive,
+  onDelete,
   onRename,
   renamePending,
   onUpdateLarkChatId,
@@ -63,11 +66,13 @@ export function ChannelDetailsPanel({
   projectDisabledReason?: string;
   canManage: boolean;
   manageDisabledReason?: string;
+  canDelete?: boolean;
   isArchived: boolean;
   onMuteToggle: () => void;
   mutePending?: boolean;
   onShare: () => void;
   onArchive: () => void;
+  onDelete?: () => void;
   onRename: (name: string) => void;
   renamePending?: boolean;
   onUpdateLarkChatId: (larkChatId: string | null) => void;
@@ -299,36 +304,53 @@ export function ChannelDetailsPanel({
               portalContainer={portalContainer}
             />
 
-            <div className="border-t p-3 md:p-4">
-              <p className="mb-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                {t(($) => $.details.danger_zone)}
-              </p>
-              {canManage && !isArchived ? (
-                <button
-                  type="button"
-                  onClick={onArchive}
-                  className="flex w-full items-center gap-2 py-2.5 text-left text-sm text-destructive hover:opacity-80"
-                >
-                  <Archive className="size-4 shrink-0" />
-                  {t(($) => $.sidebar.archive)}
-                </button>
-              ) : (
-                <div>
+            {/* LRM-237 — Slack-aligned danger zone: archive (ink) + delete
+                (danger). Delete is owner/admin only and hidden otherwise;
+                archived channels keep delete (Slack). */}
+            <div className="divide-y border-t">
+              <div className="px-3 py-3 md:px-4">
+                {canManage && !isArchived ? (
                   <button
                     type="button"
-                    disabled
-                    className="flex w-full cursor-not-allowed items-center gap-2 py-2.5 text-left text-sm text-destructive opacity-50"
+                    onClick={onArchive}
+                    className="w-full rounded-md px-1 py-1.5 text-left hover:bg-accent/40"
                   >
-                    <Archive className="size-4 shrink-0" />
-                    {t(($) => $.sidebar.archive)}
+                    <p className="text-sm font-semibold text-ink">
+                      {t(($) => $.details.archive_channel)}
+                    </p>
+                    <p className="mt-0.5 text-xs leading-snug text-muted-foreground">
+                      {t(($) => $.details.archive_channel_hint)}
+                    </p>
                   </button>
-                  <p className="text-xs text-muted-foreground">
-                    {isArchived
-                      ? t(($) => $.details.archive_disabled_archived)
-                      : manageDisabledReason ?? t(($) => $.sidebar.archive_permission)}
-                  </p>
+                ) : (
+                  <div className="px-1 py-1.5">
+                    <p className="text-sm font-semibold text-ink opacity-50">
+                      {t(($) => $.details.archive_channel)}
+                    </p>
+                    <p className="mt-0.5 text-xs leading-snug text-muted-foreground">
+                      {isArchived
+                        ? t(($) => $.details.archive_disabled_archived)
+                        : manageDisabledReason ?? t(($) => $.sidebar.archive_permission)}
+                    </p>
+                  </div>
+                )}
+              </div>
+              {canDelete && onDelete ? (
+                <div className="px-3 py-3 md:px-4">
+                  <button
+                    type="button"
+                    onClick={onDelete}
+                    className="w-full rounded-md px-1 py-1.5 text-left hover:bg-accent/40"
+                  >
+                    <p className="text-sm font-semibold text-destructive">
+                      {t(($) => $.details.delete_channel)}
+                    </p>
+                    <p className="mt-0.5 text-xs leading-snug text-muted-foreground">
+                      {t(($) => $.details.delete_channel_hint)}
+                    </p>
+                  </button>
                 </div>
-              )}
+              ) : null}
             </div>
           </div>
         )}

@@ -43,12 +43,13 @@
     "readonly_notice": "此频道已归档"
   },
   "delete_dialog": {
-    "title": "删除这个群组？",
-    "description": "「{{name}}」及其所有消息将被永久删除，且无法恢复。",
+    "title": "删除此频道？",
+    "description": "将永久删除「{{name}}」及其中所有消息。此操作无法撤销。",
+    "checkbox": "是的，永久删除此频道",
     "cancel": "取消",
-    "confirm": "删除",
-    "toast_success": "群组已删除",
-    "toast_failed": "删除群组失败"
+    "confirm": "删除频道",
+    "toast_success": "频道已删除",
+    "toast_failed": "删除频道失败"
   },
   "empty_state": {
     "title": "创建一个群聊",
@@ -174,6 +175,10 @@
     "lark_label": "飞书 chat_id",
     "save": "保存",
     "danger_zone": "危险操作",
+    "archive_channel": "归档此频道",
+    "archive_channel_hint": "从侧栏隐藏，历史保留，可恢复。",
+    "delete_channel": "删除此频道",
+    "delete_channel_hint": "永久移除群组与全部消息，无法恢复。",
     "archive_disabled_archived": "该频道已归档。",
     "open_aria": "打开频道详情",
     "menu_about": "关于",

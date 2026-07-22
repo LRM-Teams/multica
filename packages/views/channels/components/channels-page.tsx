@@ -207,6 +207,7 @@ import { AgentPanelProvider } from "../../common/agent-panel-context";
 import { ChannelMembersList, type MemberRoleLabel } from "./channel-members-list";
 import { ChannelMembersDialog } from "./channel-members-dialog";
 import { ChannelAddPeopleDialog } from "./channel-add-people-dialog";
+import { DeleteChannelDialog } from "./delete-channel-dialog";
 
 export interface TypingActor {
   key: string;
@@ -1251,6 +1252,15 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         currentUserRole === "owner" ||
         currentUserRole === "admin"),
     [currentUserId, currentUserRole],
+  );
+  // LRM-237 — permanent delete is stricter than archive: owner/admin only
+  // (not creator). System channels never expose the entry (Settings tab
+  // already hidden); DMs never hit this group-details surface.
+  const canDeleteChannel = useCallback(
+    (channel: Channel) =>
+      !isImmutableSystemChannel(channel) &&
+      (currentUserRole === "owner" || currentUserRole === "admin"),
+    [currentUserRole],
   );
   // #576 blocker (Iris) — the group-settings Project picker must be gated by
   // the same creator/admin permission as archiving, plus archived-channel and
@@ -2633,6 +2643,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         projectDisabledReason,
         canManage: canArchive(active),
         manageDisabledReason,
+        canDelete: canDeleteChannel(active),
         isArchived: isActiveArchived,
         onMuteToggle: () => handleToggleChannelMute(active),
         mutePending: muteChannel.isPending,
@@ -2640,6 +2651,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
           void handleShare();
         },
         onArchive: () => setArchiveTarget(active),
+        onDelete: () => setDeleteTarget(active),
         onRename: (name: string) => {
           updateChannel.mutate(
             { channelId: active.id, name },
@@ -3358,31 +3370,15 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         </SheetContent>
       </Sheet>
 
-      <AlertDialog
+      <DeleteChannelDialog
         open={deleteTarget !== null}
+        channelName={deleteTarget?.name ?? ""}
+        pending={deleteChannel.isPending}
         onOpenChange={(open) => {
           if (!open) setDeleteTarget(null);
         }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t(($) => $.delete_dialog.title)}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {t(($) => $.delete_dialog.description, { name: deleteTarget?.name ?? "" })}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t(($) => $.delete_dialog.cancel)}</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              onClick={handleDelete}
-              disabled={deleteChannel.isPending}
-            >
-              {t(($) => $.delete_dialog.confirm)}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        onConfirm={handleDelete}
+      />
 
       <AlertDialog
         open={archiveTarget !== null}

@@ -43,12 +43,13 @@
     "readonly_notice": "이 채널은 보관되었습니다"
   },
   "delete_dialog": {
-    "title": "이 그룹을 삭제할까요?",
-    "description": "\"{{name}}\"과(와) 모든 메시지가 영구적으로 삭제됩니다. 되돌릴 수 없습니다.",
+    "title": "이 채널을 삭제할까요?",
+    "description": "\"{{name}}\"과(와) 모든 메시지가 영구적으로 삭제됩니다. 이 작업은 취소할 수 없습니다.",
+    "checkbox": "예, 이 채널을 영구적으로 삭제합니다",
     "cancel": "취소",
-    "confirm": "삭제",
-    "toast_success": "그룹을 삭제했습니다",
-    "toast_failed": "그룹 삭제에 실패했습니다"
+    "confirm": "채널 삭제",
+    "toast_success": "채널을 삭제했습니다",
+    "toast_failed": "채널 삭제에 실패했습니다"
   },
   "empty_state": {
     "title": "그룹 채팅 만들기",
@@ -174,6 +175,10 @@
     "lark_label": "Feishu chat_id",
     "save": "저장",
     "danger_zone": "위험 구역",
+    "archive_channel": "이 채널 보관",
+    "archive_channel_hint": "사이드바에서 숨깁니다. 기록은 유지되며 복원할 수 있습니다.",
+    "delete_channel": "이 채널 삭제",
+    "delete_channel_hint": "채널과 모든 메시지를 영구적으로 제거합니다. 되돌릴 수 없습니다.",
     "archive_disabled_archived": "이 채널은 이미 보관되었습니다.",
     "open_aria": "채널 상세 열기",
     "menu_about": "정보",

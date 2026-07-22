@@ -41,6 +41,8 @@ const CHANNELS = [
 
 const THREAD_ROOT_ID = "root-msg-1";
 const THREAD_REPLY_ID = "reply-msg-1";
+const SECOND_THREAD_ROOT_ID = "root-msg-2";
+const SECOND_THREAD_REPLY_ID = "reply-msg-2";
 
 vi.mock("@multica/core/channels", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@multica/core/channels")>();
@@ -52,43 +54,73 @@ vi.mock("@multica/core/channels", async (importOriginal) => {
     channelMembersOptions: () => options(["channel-members"], []),
     channelProjectOptions: () => options(["channel-project"], ""),
     activeChannelTasksOptions: () => options(["channel-tasks"], []),
-    channelMessageThreadOptions: (_channelId: string, messageId: string) =>
-      options(["channel-thread", messageId], {
-        messages:
-          messageId === THREAD_ROOT_ID
-            ? [
-                {
-                  id: THREAD_ROOT_ID,
-                  channel_id: "chan-1",
-                  workspace_id: "ws-1",
-                  seq: 1,
-                  type: "user",
-                  author_id: "user-2",
-                  author_name: "Bob",
-                  content: "root",
-                  source: "multica",
-                  external_message_id: null,
-                  client_message_id: null,
-                  created_at: "2026-07-20T00:00:00Z",
-                },
-                {
-                  id: THREAD_REPLY_ID,
-                  channel_id: "chan-1",
-                  workspace_id: "ws-1",
-                  seq: 2,
-                  type: "user",
-                  author_id: "user-2",
-                  author_name: "Bob",
-                  content: "the anchored reply",
-                  source: "multica",
-                  external_message_id: null,
-                  client_message_id: null,
-                  thread_root_message_id: THREAD_ROOT_ID,
-                  created_at: "2026-07-21T01:00:00Z",
-                },
-              ]
-            : [],
-      }),
+    channelMessageThreadOptions: (_channelId: string, messageId: string) => {
+      const threads: Record<string, unknown[]> = {
+        [THREAD_ROOT_ID]: [
+          {
+            id: THREAD_ROOT_ID,
+            channel_id: "chan-1",
+            workspace_id: "ws-1",
+            seq: 1,
+            type: "user",
+            author_id: "user-2",
+            author_name: "Bob",
+            content: "root",
+            source: "multica",
+            external_message_id: null,
+            client_message_id: null,
+            created_at: "2026-07-20T00:00:00Z",
+          },
+          {
+            id: THREAD_REPLY_ID,
+            channel_id: "chan-1",
+            workspace_id: "ws-1",
+            seq: 2,
+            type: "user",
+            author_id: "user-2",
+            author_name: "Bob",
+            content: "the anchored reply",
+            source: "multica",
+            external_message_id: null,
+            client_message_id: null,
+            thread_root_message_id: THREAD_ROOT_ID,
+            created_at: "2026-07-21T01:00:00Z",
+          },
+        ],
+        [SECOND_THREAD_ROOT_ID]: [
+          {
+            id: SECOND_THREAD_ROOT_ID,
+            channel_id: "chan-1",
+            workspace_id: "ws-1",
+            seq: 3,
+            type: "user",
+            author_id: "user-2",
+            author_name: "Bob",
+            content: "second root",
+            source: "multica",
+            external_message_id: null,
+            client_message_id: null,
+            created_at: "2026-07-20T00:00:00Z",
+          },
+          {
+            id: SECOND_THREAD_REPLY_ID,
+            channel_id: "chan-1",
+            workspace_id: "ws-1",
+            seq: 4,
+            type: "user",
+            author_id: "user-2",
+            author_name: "Bob",
+            content: "the second anchored reply",
+            source: "multica",
+            external_message_id: null,
+            client_message_id: null,
+            thread_root_message_id: SECOND_THREAD_ROOT_ID,
+            created_at: "2026-07-22T01:00:00Z",
+          },
+        ],
+      };
+      return options(["channel-thread", messageId], { messages: threads[messageId] ?? [] });
+    },
     channelMessagesPageOptions: () => ({
       queryKey: ["channel-messages"],
       queryFn: async () => ({ messages: [], limit: 50, has_more: false, next_cursor: null }),
@@ -141,9 +173,17 @@ vi.mock("@multica/ui/hooks/use-mobile", () => ({
   useContainerNarrowerThan: () => [false, () => {}] as const,
 }));
 
+// Mutable so a test can simulate an AppLink same-pathname client-side push
+// (searchParams changes, component does NOT remount) — a real `useSearchParams()`
+// on web returns a NEW URLSearchParams instance on every render, which is
+// exactly what re-reading this holder on each mock call reproduces.
+const currentSearchParams = vi.hoisted(() => ({
+  value: new URLSearchParams({ thread: "root-msg-1", message: "reply-msg-1" }),
+}));
 vi.mock("../../navigation/context", () => ({
   useNavigation: () => ({
-    searchParams: new URLSearchParams({ thread: THREAD_ROOT_ID, message: THREAD_REPLY_ID }),
+    searchParams: new URLSearchParams(currentSearchParams.value),
+    push: vi.fn(),
     replace: vi.fn(),
     getShareableUrl: (url: string) => url,
   }),
@@ -191,19 +231,21 @@ function renderPage(channelId?: string) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
   });
-  return render(
+  const result = render(
     <I18nProvider locale="en" resources={{ en: { common: enCommon, channels: enChannels } }}>
       <QueryClientProvider client={qc}>
         <ChannelsPage channelId={channelId} />
       </QueryClientProvider>
     </I18nProvider>,
   );
+  return { ...result, qc };
 }
 
 describe("ChannelsPage — Reminder anchor ?thread=&message= deep-link (#656)", () => {
   beforeEach(() => {
     window.sessionStorage.clear();
     useLastSelectedChannelStore.setState({ lastSelectedChannelId: null });
+    currentSearchParams.value = new URLSearchParams({ thread: THREAD_ROOT_ID, message: THREAD_REPLY_ID });
   });
 
   it("opens ThreadPanel (not just a main-timeline highlight) and routes the highlight to the reply inside it", async () => {
@@ -231,5 +273,43 @@ describe("ChannelsPage — Reminder anchor ?thread=&message= deep-link (#656)", 
     // a message that was never in the main list's page.
     const mainList = lists.find((el) => el !== threadList);
     expect(mainList).toHaveAttribute("data-highlight", "");
+  });
+
+  it("opens a SECOND, different thread when a same-pathname AppLink navigation changes ?thread=&message= without remounting (no full reload)", async () => {
+    const { rerender, qc } = renderPage("chan-1");
+
+    await waitFor(() => {
+      expect(
+        screen.getAllByTestId("active-title").some((el) => el.textContent?.includes("general")),
+      ).toBe(true);
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId(`msg-${THREAD_REPLY_ID}`)).toBeInTheDocument();
+    });
+
+    // Simulate an AppLink push: only searchParams changes (new URLSearchParams
+    // instance, same pathname) — the SAME QueryClient/component tree stays
+    // mounted, proving this isn't a full reload. A one-shot mount-time read
+    // would silently miss this.
+    currentSearchParams.value = new URLSearchParams({
+      thread: SECOND_THREAD_ROOT_ID,
+      message: SECOND_THREAD_REPLY_ID,
+    });
+    rerender(
+      <I18nProvider locale="en" resources={{ en: { common: enCommon, channels: enChannels } }}>
+        <QueryClientProvider client={qc}>
+          <ChannelsPage channelId="chan-1" />
+        </QueryClientProvider>
+      </I18nProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByTestId(`msg-${SECOND_THREAD_REPLY_ID}`)).toBeInTheDocument();
+    });
+    const lists = await screen.findAllByTestId("message-list");
+    const secondThreadList = lists.find((el) =>
+      el.querySelector(`[data-testid="msg-${SECOND_THREAD_REPLY_ID}"]`),
+    );
+    expect(secondThreadList).toHaveAttribute("data-highlight", SECOND_THREAD_REPLY_ID);
   });
 });

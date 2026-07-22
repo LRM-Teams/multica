@@ -699,8 +699,9 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   // ahead of the async route commit. `undefined` = not yet reconciled.
   const reconciledRouteIdRef = useRef<string | undefined>(undefined);
   const reconciledBaseRestoreIdRef = useRef<string | null>(null);
-  // ?message= deep-links to a specific message (e.g. from an overview mention).
-  // We scroll to and briefly highlight it, then clear so it fades out.
+  // ?message= deep-links to a specific message (e.g. from an overview mention
+  // or a Reminder anchor). We scroll to and briefly highlight it, then clear
+  // so it fades out.
   const [highlightMessageId, setHighlightMessageId] = useState<string | null>(
     () => searchParams.get("message"),
   );
@@ -708,11 +709,33 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   // anchor whose target reply lives inside a thread, not on the main
   // timeline) — ?message= then names which reply inside it to highlight,
   // reusing the same highlightMessageId above but routed to the thread
-  // surface instead of the main list (see effectiveHighlightId below and the
-  // threadDeepLinkId-gated clear effect). One-shot: consumed once via the
-  // ref guard so closing the panel afterward never re-triggers it.
-  const [threadDeepLinkId] = useState<string | null>(() => searchParams.get("thread"));
-  const threadDeepLinkConsumedRef = useRef(false);
+  // surface instead of the main list (see effectiveHighlightId below).
+  const [threadDeepLinkId, setThreadDeepLinkId] = useState<string | null>(
+    () => searchParams.get("thread"),
+  );
+  // AppLink navigation (e.g. clicking a Reminder anchor while already inside
+  // Channels) is a same-pathname client-side push — it changes `searchParams`
+  // without remounting this component, so a one-shot mount-time read alone
+  // would miss it. `searchParams` itself is a NEW URLSearchParams instance
+  // every render (see apps/web/platform/navigation.tsx), so depend on its
+  // stable string form, not the object identity. These refs track which raw
+  // URL value has already been applied/opened, independent of
+  // highlightMessageId/threadDeepLinkId's own later mutations (flash-clear,
+  // manually closing the thread) — comparing against those directly would
+  // re-apply a still-present URL value right after it legitimately clears.
+  const appliedMessageParamRef = useRef<string | null>(searchParams.get("message"));
+  const openedThreadDeepLinkRef = useRef<string | null>(null);
+  const searchParamsString = searchParams.toString();
+  useEffect(() => {
+    const urlMessage = searchParams.get("message");
+    if (urlMessage && urlMessage !== appliedMessageParamRef.current) {
+      appliedMessageParamRef.current = urlMessage;
+      setHighlightMessageId(urlMessage);
+    }
+    const urlThread = searchParams.get("thread");
+    if (urlThread !== threadDeepLinkId) setThreadDeepLinkId(urlThread);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally keyed on the stable string form, not the searchParams object identity (a new instance every render)
+  }, [searchParamsString]);
   const [search, setSearch] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [channelsCollapsed, setChannelsCollapsed] = useState(false);
@@ -1018,11 +1041,15 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   // (or a live one already in `messages`) the instant either resolves;
   // ThreadPanel itself renders its loading state (not this stub's placeholder
   // fields) while that's in flight, same as an ordinary click-to-open thread
-  // whose full object hasn't round-tripped yet.
+  // whose full object hasn't round-tripped yet. Keyed on the VALUE, not a
+  // fired-once boolean — a same-page AppLink navigation to a DIFFERENT
+  // ?thread= must open the new one; closing the panel (URL unchanged) must
+  // not re-open the same one.
   useEffect(() => {
-    if (!threadDeepLinkId || threadDeepLinkConsumedRef.current || !activeChannelId) return;
-    threadDeepLinkConsumedRef.current = true;
-    // react-doctor-disable-next-line react-doctor/no-derived-state -- one-shot consumption of an external signal (?thread= URL param), deferred until activeChannelId resolves via async route reconciliation; not a value kept in sync with other state (the ref guard makes this fire exactly once, and the user can freely close/reopen sidePanel afterward independent of this).
+    if (!threadDeepLinkId || !activeChannelId) return;
+    if (openedThreadDeepLinkRef.current === threadDeepLinkId) return;
+    openedThreadDeepLinkRef.current = threadDeepLinkId;
+    // react-doctor-disable-next-line react-doctor/no-derived-state -- consumption of an external signal (?thread= URL param), deferred until activeChannelId resolves via async route reconciliation; not a value kept in sync with other state (the ref guard fires exactly once per distinct value, and the user can freely close/reopen sidePanel afterward independent of this).
     setOpenThreadRoot({
       id: threadDeepLinkId,
       channel_id: activeChannelId,

@@ -112,26 +112,24 @@ function adaptAnchor(raw: RawReminderAnchor): ReminderAnchor {
   return { available: false };
 }
 
-// `schedule_kind` (server-authoritative) is the only family/display
-// authority — NOT whether `schedule_timezone` happens to be present. A
-// recurring→one-shot conversion clears `cadence`/`schedule_kind` but RETAINS
-// the hidden lifetime-locked timezone in the DB (so it can be restored if the
-// reminder later becomes recurring again); the read API may still surface
-// that retained value on a `one_shot` row. Using presence-of-timezone as the
-// family signal would misclassify that retained-but-inert value as "this is
-// a calendar cadence" and wrongly show a timezone tag on a one-shot reminder.
-// So: only `schedule_kind === "recurring"` even looks at cadence, and even
-// then only a `daily@`/`weekly:` prefix (matching the backend's own
-// `reminderTimezonePtr` prefix check) counts as calendar — `every:*` stays
-// interval and drops any retained timezone, exactly like one-shot does.
+// `schedule_kind` (server-authoritative) decides one-shot vs recurring; for
+// recurring, whether the server sent a `schedule_timezone` at all is the
+// family signal — NOT a client-side re-parse of the cadence string.
+// `reminderTimezonePtr` on the backend already returns nil for anything that
+// isn't daily/weekly (including a one-shot row that retains a hidden
+// lifetime-locked timezone in the DB, kept only so a future recurring
+// re-conversion can restore it) — that retained value never reaches this
+// wire, so presence-of-timezone is a safe, already-server-decided signal.
+// Re-deriving family from the cadence string here would duplicate grammar
+// the backend owns and risk drifting from it (confirmed with Parker against
+// the committed projection).
 function adaptCadence(scheduleKind: "recurring" | "one_shot", cadence: string | undefined, scheduleTimezone: string | undefined): ReminderCadence {
   if (scheduleKind === "one_shot" || !cadence) return { kind: "one_shot" };
-  const family = cadence.startsWith("daily@") || cadence.startsWith("weekly:") ? "calendar" : "interval";
   return {
     kind: "recurring",
-    family,
+    family: scheduleTimezone ? "calendar" : "interval",
     description: cadence,
-    timezone: family === "calendar" ? scheduleTimezone : undefined,
+    timezone: scheduleTimezone,
   };
 }
 

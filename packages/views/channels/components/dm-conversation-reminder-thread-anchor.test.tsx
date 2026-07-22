@@ -76,6 +76,8 @@ vi.mock("react-virtuoso", async () => {
 
 const ROOT_ID = "dm-root-1";
 const REPLY_ID = "dm-reply-1";
+const SECOND_ROOT_ID = "dm-root-2";
+const SECOND_REPLY_ID = "dm-reply-2";
 
 function rootMessage(): ChannelMessage {
   return {
@@ -113,6 +115,21 @@ function replyMessage(): ChannelMessage {
   };
 }
 
+function secondRootMessage(): ChannelMessage {
+  return { ...rootMessage(), id: SECOND_ROOT_ID, seq: 3, content: "Second root of the thread" };
+}
+
+function secondReplyMessage(): ChannelMessage {
+  return {
+    ...replyMessage(),
+    id: SECOND_REPLY_ID,
+    seq: 4,
+    content: "The second anchored reply",
+    thread_root_message_id: SECOND_ROOT_ID,
+    created_at: "2026-07-22T01:00:00Z",
+  };
+}
+
 vi.mock("@multica/core/channels", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@multica/core/channels")>();
   return {
@@ -120,9 +137,15 @@ vi.mock("@multica/core/channels", async (importOriginal) => {
     activeChannelTasksOptions: () => ({ queryKey: ["channel-tasks"], queryFn: async () => [] }),
     channelMessageThreadOptions: (_channelId: string, messageId: string) => ({
       queryKey: ["channel-thread", messageId],
-      queryFn: async () => ({
-        messages: messageId === ROOT_ID ? [rootMessage(), replyMessage()] : [],
-      }),
+      queryFn: async () => {
+        // Lazily built (not at mock-factory-eval time, which is hoisted
+        // above the top-level ROOT_ID/SECOND_ROOT_ID const declarations).
+        const threads: Record<string, ChannelMessage[]> = {
+          [ROOT_ID]: [rootMessage(), replyMessage()],
+          [SECOND_ROOT_ID]: [secondRootMessage(), secondReplyMessage()],
+        };
+        return { messages: threads[messageId] ?? [] };
+      },
     }),
     channelMessagesPageOptions: () => ({
       queryKey: ["dm-messages"],
@@ -188,13 +211,14 @@ function renderDm(deepLink: { threadDeepLinkId?: string | null; deepLinkMessageI
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
   });
-  return render(
+  const result = render(
     <I18nProvider locale="en" resources={{ en: { common: enCommon, channels: enChannels } }}>
       <QueryClientProvider client={qc}>
         <DmConversation dm={dm} onBack={() => {}} {...deepLink} />
       </QueryClientProvider>
     </I18nProvider>,
   );
+  return { ...result, qc };
 }
 
 describe("DmConversation — Reminder anchor ?thread=&message= deep-link (#656)", () => {
@@ -228,5 +252,33 @@ describe("DmConversation — Reminder anchor ?thread=&message= deep-link (#656)"
     const rootRow = screen.getByText("Root of the thread").closest("[id]");
     expect(rootRow).toHaveAttribute("id", `message-${ROOT_ID}`);
     expect(rootRow?.className).toMatch(/ring/);
+  });
+
+  it("opens a SECOND, different thread when new deep-link props arrive without remounting (same-page navigation, no full reload)", async () => {
+    const { rerender, qc } = renderDm({ threadDeepLinkId: ROOT_ID, deepLinkMessageId: REPLY_ID });
+
+    expect(await screen.findByText("The anchored reply")).toBeInTheDocument();
+
+    // Same DmConversation instance, same QueryClient — only the deep-link
+    // props change (as they would when channels-page.tsx's reactive
+    // searchParams-derived state updates from an AppLink push while this DM
+    // stays the active one).
+    rerender(
+      <I18nProvider locale="en" resources={{ en: { common: enCommon, channels: enChannels } }}>
+        <QueryClientProvider client={qc}>
+          <DmConversation
+            dm={dm}
+            onBack={() => {}}
+            threadDeepLinkId={SECOND_ROOT_ID}
+            deepLinkMessageId={SECOND_REPLY_ID}
+          />
+        </QueryClientProvider>
+      </I18nProvider>,
+    );
+
+    expect(await screen.findByText("The second anchored reply")).toBeInTheDocument();
+    const secondReplyRow = screen.getByText("The second anchored reply").closest("[id]");
+    expect(secondReplyRow).toHaveAttribute("id", `message-${SECOND_REPLY_ID}`);
+    expect(secondReplyRow?.className).toMatch(/ring/);
   });
 });

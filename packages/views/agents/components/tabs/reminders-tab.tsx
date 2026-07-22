@@ -17,6 +17,8 @@ import {
   type FiredReminderRow,
 } from "@multica/core/agents/reminder-view-model";
 import { useT } from "../../../i18n";
+import { AppLink } from "../../../navigation/app-link";
+import { useOptionalNavigation } from "../../../navigation/context";
 import { useAgentRemindersRealtime } from "./use-agent-reminders-realtime";
 
 interface RemindersTabProps {
@@ -159,9 +161,10 @@ export function RemindersTab({ agent }: RemindersTabProps) {
                   type="button"
                   onClick={() => void fetchNextPage()}
                   disabled={isFetchingNextPage}
+                  aria-busy={isFetchingNextPage}
                   className="text-xs font-medium text-muted-foreground hover:text-foreground disabled:opacity-50"
                 >
-                  {t(($) => $.reminders.load_more)}
+                  {isFetchingNextPage ? t(($) => $.reminders.loading) : t(($) => $.reminders.load_more)}
                 </button>
               </div>
             )}
@@ -220,6 +223,7 @@ function CadenceLabel({ row }: { row: { cadence: UpcomingReminderRow["cadence"] 
 
 function AnchorLink({ anchor }: { anchor: UpcomingReminderRow["anchor"] }) {
   const { t } = useT("agents");
+  const navigation = useOptionalNavigation();
   if (!anchor.available) {
     return <span className="text-muted-foreground">{t(($) => $.reminders.anchor_unavailable)}</span>;
   }
@@ -230,10 +234,19 @@ function AnchorLink({ anchor }: { anchor: UpcomingReminderRow["anchor"] }) {
   // (dm-conversation.tsx: same-shaped threadDeepLinkId/deepLinkMessageId
   // props -> its own inline thread reply list) resolve either shape into the
   // right surface — main-timeline highlight, or opening the thread and
-  // highlighting the reply inside it — no special click handling needed
-  // here, a plain navigation covers both.
-  return (
-    <a href={anchor.href} className="truncate text-primary hover:underline" title={anchor.label}>
+  // highlighting the reply inside it. Must go through AppLink's client-side
+  // push, not a plain `<a>`: a full page navigation would defeat "open the
+  // EXISTING conversation surface" (it would remount everything from
+  // scratch) and is visibly slower than the SPA route change. Falls back to
+  // a plain `<a>` only if rendered outside a NavigationProvider (matches
+  // channel-system-event-content.tsx's established pattern).
+  const className = "truncate text-primary hover:underline";
+  return navigation ? (
+    <AppLink href={anchor.href} className={className} title={anchor.label}>
+      {anchor.label}
+    </AppLink>
+  ) : (
+    <a href={anchor.href} className={className} title={anchor.label}>
       {anchor.label}
     </a>
   );

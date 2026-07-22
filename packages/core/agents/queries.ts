@@ -101,7 +101,10 @@ export function agentRemindersHistoryOptions(agentId: string) {
     queryFn: ({ pageParam }) =>
       api.getAgentReminders(agentId, { status: "fired", cursor: pageParam ?? undefined }),
     initialPageParam: null as string | null,
-    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+    // `has_more` is the locked authority, not just "did a cursor come back" —
+    // a stale/residual `next_cursor` alongside `has_more: false` must not
+    // surface a Load more affordance for a page that has nothing after it.
+    getNextPageParam: (lastPage) => (lastPage.has_more ? (lastPage.next_cursor ?? undefined) : undefined),
     enabled: !!agentId,
     staleTime: 30 * 1000,
   });

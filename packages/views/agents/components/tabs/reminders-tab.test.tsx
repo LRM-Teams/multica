@@ -366,6 +366,23 @@ describe("RemindersTab (#656)", () => {
     );
   });
 
+  it("does not show Load more when has_more is false, even if a stale next_cursor is also present", async () => {
+    // `has_more` is the locked authority — a residual/stale cursor string
+    // alongside has_more:false must not surface pagination for a page that
+    // has nothing after it.
+    mockGetAgentReminders.mockImplementation((_agentId: string, params: { status: string }) => {
+      if (params.status === "scheduled") return Promise.resolve(definitionsPage([]));
+      return Promise.resolve(
+        occurrencesPage([recurringFired()], { has_more: false, next_cursor: "stale-cursor" }),
+      );
+    });
+
+    renderTab();
+
+    await screen.findByText("Daily standup follow-up");
+    expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
+  });
+
   it("shows exactly one aggregated 'No reminders yet' message when BOTH Upcoming and History are genuinely empty", async () => {
     mockGetAgentReminders.mockImplementation((_agentId: string, params: { status: string }) =>
       Promise.resolve(params.status === "scheduled" ? definitionsPage([]) : occurrencesPage([])),

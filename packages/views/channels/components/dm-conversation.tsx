@@ -430,7 +430,8 @@ function DmChannelConversation({
     deepLinkHighlightId,
     typingActors,
   }, dispatch] = useReducer(dmChannelReducer, initialDmChannelState);
-  const deepLinkConsumedRef = useRef(false);
+  const appliedDeepLinkMessageRef = useRef<string | null>(null);
+  const appliedThreadDeepLinkRef = useRef<string | null>(null);
   const [stoppingTaskId, setStoppingTaskId] = useState<string | null>(null);
   // #349 agent side panel — same slot as the thread panel (mutually
   // exclusive), matching channels-page.tsx's inline-panel pattern per
@@ -671,18 +672,22 @@ function DmChannelConversation({
     dispatch({ type: "resetForChannel" });
   }, [channelId]);
 
-  // One-shot Reminder-anchor deep link (?thread=&message=), same shape as
-  // channels-page.tsx's group-channel handling — this component remounts
-  // fresh per DM (key={source:id} at the call site), so a plain ref guard is
-  // enough; no risk of it firing again for a DIFFERENT DM's mount.
+  // Reminder-anchor deep link (?thread=&message=), same shape as
+  // channels-page.tsx's group-channel handling. Keyed on the VALUE (not a
+  // fired-once boolean): DmConversation remounts fresh when the ACTIVE DM
+  // changes (key={source:id} at the call site), but clicking a different
+  // Reminder anchor pointing at the SAME DM is a same-pathname AppLink push
+  // that does NOT remount this component — a plain one-shot guard would
+  // silently ignore that second, different deep link.
   useEffect(() => {
-    if (deepLinkConsumedRef.current) return;
-    if (!threadDeepLinkId && !deepLinkMessageId) return;
-    deepLinkConsumedRef.current = true;
-    // react-doctor-disable-next-line react-doctor/no-event-handler -- one-shot consumption of an external signal (props sourced from the URL), gated on a ref guard, not a fake event handler; there is no user event to move this into.
-    if (deepLinkMessageId) dispatch({ type: "setDeepLinkHighlightId", id: deepLinkMessageId });
-    // react-doctor-disable-next-line react-doctor/no-event-handler -- same one-shot deep-link consumption as above.
-    if (threadDeepLinkId) {
+    if (deepLinkMessageId && deepLinkMessageId !== appliedDeepLinkMessageRef.current) {
+      appliedDeepLinkMessageRef.current = deepLinkMessageId;
+      // react-doctor-disable-next-line react-doctor/no-event-handler -- consumption of an external signal (props sourced from the URL), gated on a ref guard, not a fake event handler; there is no user event to move this into.
+      dispatch({ type: "setDeepLinkHighlightId", id: deepLinkMessageId });
+    }
+    // react-doctor-disable-next-line react-doctor/no-event-handler -- same deep-link consumption as above.
+    if (threadDeepLinkId && threadDeepLinkId !== appliedThreadDeepLinkRef.current) {
+      appliedThreadDeepLinkRef.current = threadDeepLinkId;
       dispatch({
         type: "openThread",
         message: {

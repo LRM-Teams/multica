@@ -33,7 +33,8 @@ export function useCreateChannel() {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
   return useMutation({
-    mutationFn: (data: { name: string; description?: string; lark_chat_id?: string }) => api.createChannel(data),
+    mutationFn: (data: { name: string; description?: string; lark_chat_id?: string; project_id?: string | null }) =>
+      api.createChannel(data),
     onSuccess: () => qc.invalidateQueries({ queryKey: channelKeys.list(wsId) }),
   });
 }

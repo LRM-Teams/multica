@@ -371,10 +371,29 @@ export function ChannelMessageBubble({
   measureContentOverflowRef.current = measureContentOverflow;
 
   // Reset expand state when the message identity/content changes so a recycled
-  // row does not keep another message's See-more choice.
-  useEffect(() => {
+  // row does not keep another message's See-more choice. Inline prev-prop reset
+  // avoids an extra stale commit (react-doctor / react.dev adjust-state-on-prop).
+  const prevMessageContentKeyRef = useRef({
+    id: message.id,
+    content: message.content,
+    parts: message.parts,
+    attachments: message.attachments,
+  });
+  const prevMessageContentKey = prevMessageContentKeyRef.current;
+  if (
+    prevMessageContentKey.id !== message.id ||
+    prevMessageContentKey.content !== message.content ||
+    prevMessageContentKey.parts !== message.parts ||
+    prevMessageContentKey.attachments !== message.attachments
+  ) {
+    prevMessageContentKeyRef.current = {
+      id: message.id,
+      content: message.content,
+      parts: message.parts,
+      attachments: message.attachments,
+    };
     setContentExpanded(false);
-  }, [message.id, message.content, message.parts, message.attachments]);
+  }
 
   useLayoutEffect(() => {
     if (!collapseLongContent || message.deleted_at || message.type === "system") {

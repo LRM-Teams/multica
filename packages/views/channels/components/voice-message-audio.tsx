@@ -17,9 +17,11 @@ type PlaybackState = "idle" | "loading" | "playing" | "error";
 export function VoiceMessageAudio({ message }: { message: ChannelMessage }) {
   const { t } = useT("channels");
   const voicePart = message.parts?.find((part) => part.type === "voice");
+  const hasVoicePart = Boolean(voicePart);
   const [state, setState] = useState<PlaybackState>("idle");
   const playbackRef = useRef<VoicePlayback | null>(null);
   const mountedRef = useRef(true);
+  const startRef = useRef<(() => Promise<void>) | null>(null);
 
   const start = useCallback(async () => {
     if (!voicePart || !message.content.trim() || state === "loading" || state === "playing") return;
@@ -40,8 +42,10 @@ export function VoiceMessageAudio({ message }: { message: ChannelMessage }) {
       if (mountedRef.current) setState("error");
     }
   }, [message.content, state, voicePart]);
+  startRef.current = start;
 
   useEffect(() => {
+    mountedRef.current = true;
     if (
       message.type === "agent" &&
       claimVoiceAutoplay(
@@ -50,18 +54,14 @@ export function VoiceMessageAudio({ message }: { message: ChannelMessage }) {
         message.created_at,
       )
     ) {
-      if (voicePart) void start();
+      if (hasVoicePart) void startRef.current?.();
     }
-  }, [message.channel_id, message.created_at, message.id, message.thread_root_message_id, message.type, start, voicePart]);
-
-  useEffect(() => {
-    mountedRef.current = true;
     return () => {
       mountedRef.current = false;
       playbackRef.current?.stop();
       playbackRef.current = null;
     };
-  }, []);
+  }, [hasVoicePart, message.channel_id, message.created_at, message.id, message.thread_root_message_id, message.type]);
 
   if (!voicePart) return null;
   if (message.type !== "agent") {

@@ -126,3 +126,22 @@ Unexpected issue review:
 - Autoplay eligibility originally remained pending after an Agent text reply or a failed recording, allowing a later unrelated voice message to play. The scope is now cancelled on capture/transcription/send failure and consumed by the first new Agent reply regardless of modality.
 - Agent voice history was initially labelled as “voice input.” The formatter now distinguishes human voice input from Agent voice reply, with a regression test.
 - A malformed successful ASR response initially degraded to the same empty string as a valid “no speech” result. It now raises a controlled voice-service error, so the UI reports transcription failure instead of blaming the recording.
+- React lifecycle review found that depending on the complete `voice` part object could stop active playback when an equivalent React Query refresh recreated message parts. Autoplay now depends only on stable message fields and voice-part presence; component tests prove an equivalent refresh does not interrupt playback and unmount still stops it.
+
+### Step 8 — Rebase-equivalent merge and final product verification
+
+Status: complete
+
+Evidence:
+
+- Merged final `origin/dev` commit `0f3e669f4b6784c92d8f378daa29fad548ddd70f` into the feature branch without conflicts, then reviewed the shared group, DM, message-bubble, and Composer wiring that changed on both sides.
+- `pnpm typecheck` passed all six executable workspace typecheck tasks. `pnpm lint` passed all eight tasks with zero errors; the seven warnings are unchanged files outside this feature.
+- `pnpm test` passed all eight workspace tasks after the merge. The affected packages report Core 757/757 and Views 2,281 passed with five pre-existing skips; web and desktop also passed.
+- Voice-specific API, PCM conversion, autoplay eligibility, Composer, group/DM send, message rendering, and lifecycle tests passed. The new lifecycle tests cover Agent autoplay, equivalent message refresh, and stopping playback on unmount.
+- `go test ./internal/messageparts ./cmd/multica ./internal/daemon/execenv -count=1` passed. The three voice handler tests passed against a newly created isolated PostgreSQL database, which was removed afterward.
+- React Doctor scanned the ten changed React files and reported zero issues. `git diff --check`, Compose resolution, and the packaged desktop `NSMicrophoneUsageDescription` assertion passed.
+- GitHub Environment `s89` contains `DOUBAO_SPEECH_API_KEY`, and the workflow maps it into the backend container. Only the secret name and update timestamp were inspected; its value was not read or logged.
+
+Boundary:
+
+- Local automated tests cannot exercise a real browser/desktop microphone, speaker autoplay policy, or the deployed provider network path. Those checks must run after this PR is merged and the existing CD workflow deploys it; no server file was modified directly.

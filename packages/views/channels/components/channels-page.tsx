@@ -3178,6 +3178,13 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       onDraftClear={() => {
         if (dmDraftKey) storeClearComposerDraft(dmDraftKey);
       }}
+      // Same Reminder-anchor deep-link values the group-channel path above
+      // consumes — mutually exclusive in practice (a resolved route is
+      // either activeChannelId or activeDmId, never both), so it's safe to
+      // pass through unconditionally; DmConversation owns its own one-shot
+      // consumption guard.
+      threadDeepLinkId={threadDeepLinkId}
+      deepLinkMessageId={highlightMessageId}
     />
   ) : (
     <ConversationSwitchSkeleton isMobile={isMobile} />

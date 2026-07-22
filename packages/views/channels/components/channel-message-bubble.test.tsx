@@ -483,8 +483,8 @@ describe("ChannelMessageBubble", () => {
     expect(screen.getByTestId("message-action-bar")).toBeInTheDocument();
   });
 
-  it("shows muted Owner role after a workspace owner name (LRM-232)", () => {
-    render(
+  it("does not show Owner/Admin chrome on message author rows (LRM-270)", () => {
+    const { rerender } = render(
       <ChannelMessageBubble
         message={makeMessage({
           type: "user",
@@ -497,14 +497,10 @@ describe("ChannelMessageBubble", () => {
     );
 
     expect(screen.getByText("Frank An")).toBeInTheDocument();
-    const role = screen.getByTestId("message-author-role");
-    expect(role).toHaveTextContent("Owner");
-    expect(role).toHaveClass("text-ink-3");
-    expect(role.className).not.toMatch(/rounded-full|border|bg-/);
-  });
+    expect(screen.queryByTestId("message-author-role")).not.toBeInTheDocument();
+    expect(screen.queryByText("Owner")).not.toBeInTheDocument();
 
-  it("shows muted Admin role and hides ordinary Member role (LRM-232)", () => {
-    const { rerender } = render(
+    rerender(
       <ChannelMessageBubble
         message={makeMessage({
           type: "user",
@@ -515,7 +511,9 @@ describe("ChannelMessageBubble", () => {
         currentUserId="user-1"
       />,
     );
-    expect(screen.getByTestId("message-author-role")).toHaveTextContent("Admin");
+    expect(screen.getByText("Admin User")).toBeInTheDocument();
+    expect(screen.queryByTestId("message-author-role")).not.toBeInTheDocument();
+    expect(screen.queryByText("Admin")).not.toBeInTheDocument();
 
     rerender(
       <ChannelMessageBubble

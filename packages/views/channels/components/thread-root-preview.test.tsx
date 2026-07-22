@@ -179,7 +179,7 @@ describe("ThreadRootPreview", () => {
     expect(onOpenAgent).not.toHaveBeenCalled();
   });
 
-  it("omits the Agent pill and shows muted Owner on human roots (LRM-232)", () => {
+  it("omits Agent pill and Owner/Admin chrome on author rows (LRM-270)", () => {
     const { rerender } = render(
       <ThreadRootPreview message={makeMessage()} currentUserId="user-1" />,
     );
@@ -198,7 +198,8 @@ describe("ThreadRootPreview", () => {
       />,
     );
     expect(screen.getByText("Frank An")).toBeInTheDocument();
-    expect(screen.getByTestId("message-author-role")).toHaveTextContent("Owner");
+    expect(screen.queryByTestId("message-author-role")).not.toBeInTheDocument();
+    expect(screen.queryByText("Owner")).not.toBeInTheDocument();
   });
 
   it("uses the live display name for the root author label", () => {

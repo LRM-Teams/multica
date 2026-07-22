@@ -282,7 +282,26 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	onboarding, isChannelOnboarding, err := channelOnboardingForTransport(r.Context(), h.DB, source)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to validate channel onboarding send")
+		return
+	}
+	if isChannelOnboarding {
+		if err := h.requireActiveChannelOnboardingBeforeTarget(r.Context(), onboarding, source.inboxEventID); err != nil {
+			if errors.Is(err, errChannelOnboardingExpired) {
+				writeError(w, http.StatusConflict, errChannelOnboardingExpired.Error())
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "failed to validate channel onboarding membership generation")
+			return
+		}
+	}
 	if req.SendDraft {
+		if isChannelOnboarding {
+			writeError(w, http.StatusBadRequest, "channel onboarding cannot send a saved draft")
+			return
+		}
 		h.agentTransportSendDraft(w, r, source, req)
 		return
 	}
@@ -307,6 +326,9 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	clientMessageID := strings.TrimSpace(req.ClientMessageID)
+	if isChannelOnboarding {
+		clientMessageID = channelOnboardingClientMessageID(source.inboxEventID)
+	}
 	if clientMessageID == "" {
 		writeError(w, http.StatusBadRequest, "client_message_id is required")
 		return
@@ -320,6 +342,10 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid target; use #channel, #channel:<threadId>, or `dm:@<human-handle>` (for a proactive DM: `multica message send --target dm:@<human-handle> --message-stdin`)")
 		return
 	}
+	if isChannelOnboarding && !channelOnboardingTargetMatches(onboarding, target) {
+		writeError(w, http.StatusBadRequest, "channel onboarding must send to the joined channel main timeline")
+		return
+	}
 	_, err = h.finalizedAgentTransportInsertInput(r.Context(), source, target, content, parts, clientMessageID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -330,11 +356,14 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusForbidden, err.Error())
 		return
 	}
-	seenUpToSeq, err := h.agentTransportSeenUpToSeq(r.Context(), source, target.raw, req.SeenUpToSeq)
-	if err != nil {
-		slog.Warn("agent transport freshness check failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to send message")
-		return
+	seenUpToSeq := int64(-1)
+	if !isChannelOnboarding {
+		seenUpToSeq, err = h.agentTransportSeenUpToSeq(r.Context(), source, target.raw, req.SeenUpToSeq)
+		if err != nil {
+			slog.Warn("agent transport freshness check failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to send message")
+			return
+		}
 	}
 	result, err := h.createAgentTransportMessage(r.Context(), source, target, content, parts, attachmentIDs, clientMessageID, seenUpToSeq, initiatorID, false)
 	if err != nil {
@@ -345,6 +374,10 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		}
 		if errors.Is(err, errChannelClientMessageConflict) {
 			writeError(w, http.StatusConflict, "client_message_id conflicts with an existing channel message")
+			return
+		}
+		if errors.Is(err, errChannelOnboardingExpired) {
+			writeError(w, http.StatusConflict, errChannelOnboardingExpired.Error())
 			return
 		}
 		slog.Warn("agent transport send failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
@@ -916,7 +949,7 @@ func (h *Handler) createAgentTransportMessage(ctx context.Context, source agentT
 	if err != nil {
 		return agentTransportMessageResult{}, err
 	}
-	if seenUpToSeq <= 0 {
+	if seenUpToSeq == 0 {
 		var err error
 		seenUpToSeq, err = h.agentTransportSeenUpToSeq(ctx, source, target.raw, 0)
 		if err != nil {
@@ -990,6 +1023,32 @@ func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, sour
 	if err := h.lockAgentTransportDraftSource(ctx, tx, source, target); err != nil {
 		_ = tx.Rollback(ctx)
 		return agentTransportMessageResult{}, err
+	}
+	onboarding, isChannelOnboarding, err := channelOnboardingForTransport(ctx, tx, source)
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		return agentTransportMessageResult{}, err
+	}
+	if isChannelOnboarding {
+		if !channelOnboardingTargetMatches(onboarding, target) {
+			_ = tx.Rollback(ctx)
+			return agentTransportMessageResult{}, errors.New("channel onboarding target changed before send")
+		}
+		active, err := channelOnboardingGenerationActiveTx(ctx, tx, onboarding.ID, onboarding.ChannelID, onboarding.AgentID, true)
+		if err != nil {
+			_ = tx.Rollback(ctx)
+			return agentTransportMessageResult{}, err
+		}
+		if !active {
+			if err := expireChannelOnboardingForInboxEventTx(ctx, tx, onboarding, source.inboxEventID); err != nil {
+				_ = tx.Rollback(ctx)
+				return agentTransportMessageResult{}, err
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return agentTransportMessageResult{}, err
+			}
+			return agentTransportMessageResult{}, errChannelOnboardingExpired
+		}
 	}
 	var sentDraft *agentTransportDraft
 	if sendSavedDraft {
@@ -1113,6 +1172,31 @@ func (h *Handler) lockAgentTransportDraftSource(ctx context.Context, exec dbExec
 }
 
 func (h *Handler) completeDuplicateAgentTransportMessageWithExec(ctx context.Context, exec dbExecutor, source agentTransportSource, target agentTransportTarget, input channelMessageInsertInput, attachmentIDs []pgtype.UUID, existing ChannelMessageResponse, clientMessageID string, sentDraft *agentTransportDraft) (agentTransportMessageResult, error) {
+	_, isChannelOnboarding, err := channelOnboardingForTransport(ctx, exec, source)
+	if err != nil {
+		return agentTransportMessageResult{}, err
+	}
+	if isChannelOnboarding {
+		// The deterministic onboarding client id represents one canonical
+		// visible decision. A retry after the first transaction committed must
+		// reuse both the message and its audit evidence; recording another audit
+		// would make one decision look like multiple sends.
+		var transportID pgtype.UUID
+		if err := exec.QueryRow(ctx, `
+			SELECT id
+			FROM agent_task_transport_audit
+			WHERE inbox_event_id = $1
+			  AND action = 'message_send'
+			  AND channel_message_id = $2
+			ORDER BY created_at, id
+			LIMIT 1`, source.inboxEventID, parseUUID(existing.ID)).Scan(&transportID); err != nil {
+			return agentTransportMessageResult{}, err
+		}
+		if err := h.deleteAgentTransportDraftWithExec(ctx, exec, source, target.raw); err != nil {
+			return agentTransportMessageResult{}, err
+		}
+		return agentTransportMessageResult{Message: existing, Created: false, TransportID: uuidToString(transportID), SentDraft: sentDraft}, nil
+	}
 	ok, err := h.matchesChannelMessageIdempotencyPayload(ctx, existing, input, attachmentIDs)
 	if err != nil {
 		return agentTransportMessageResult{}, err
@@ -1814,6 +1898,19 @@ func (h *Handler) inboxEventHasAgentTransportVisibleOutput(ctx context.Context, 
 			SELECT 1
 			FROM agent_task_transport_audit
 			WHERE inbox_event_id = $1 AND action IN ('message_send', 'message_react')
+			  AND channel_message_id IS NOT NULL
+		)`, eventID).Scan(&exists)
+	return err == nil && exists
+}
+
+func (h *Handler) inboxEventHasAgentTransportMessageOutput(ctx context.Context, eventID pgtype.UUID) bool {
+	var exists bool
+	err := h.DB.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM agent_task_transport_audit
+			WHERE inbox_event_id = $1
+			  AND action = 'message_send'
 			  AND channel_message_id IS NOT NULL
 		)`, eventID).Scan(&exists)
 	return err == nil && exists

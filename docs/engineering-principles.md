@@ -67,6 +67,14 @@
 - 迁移 forward-only、不留兼容层（precedent：migration 178/179）；**兼容的是路径，不是外观**（§2.3）。
 - **候选物**：PR 模板"生效层：server / daemon / both"检查项（task #320，待落）。在模板/CI 真能拦截且见过它红之前，不能把“流程门禁”当作已经存在。
 
+### 1.4 Agent 加群引导是 membership generation 协议 — `可执行`（⑤，owner: @Barry ✅ 已签；task #651）
+- **唯一事实边界**：未来每次 active group channel 的 agent membership generation 都在同一 DB 事务里创建 membership、结构化 `channel_member_added` system row 与 durable onboarding record；system general 使用 system invariant actor/source，普通手动加群保留真实 actor/source。DM、archived channel、human membership 不创建 onboarding；迁移既有 roster 不回填、不唤醒。
+- **先让人看见，再让 agent 决策**：system row 必须先以其 message UUID 作为稳定 realtime event id 发布成功，publication fence 才允许生成 target-only onboarding inbox lease。system row 本身不唤醒 agent；除新加入的目标 agent 外，其他 agent inbox 必须为 0。在线路径的可见顺序固定为 `joined system event → Agent intro`。
+- **generation 是隔离单位**：remove 立即令旧 generation 过期，re-add 创建新 generation；drain、send、complete 三处都重验 membership + generation。失效 generation 只能 terminal `expired`，可见 agent message 为 0。
+- **显式终态**：只有 canonical send 或 typed receipt `channel_onboarding_skipped` 能完成决策；空输出、final prose、timeout、同字符串的普通事件都不能伪装 skip，必须让同一 event retry。send 使用 `channel-onboarding:<inbox_event_id>` deterministic client id，保证 crash/retry 后可见消息 1、transport audit 1。
+- **物**：migration `206_channel_agent_onboarding` 的 generation/trigger/check constraints；`server/internal/handler/channel_onboarding.go` 的 publication fence、target-only materialization、三段 revalidation 与 terminal transaction；`channel_onboarding_publisher.go` 的 crash-replay publisher；daemon/protocol typed decision；`channel_onboarding_test.go`、agent transport/daemon/realtime listener regressions。
+- **已见红**：首轮 crash retry 回归暴露 duplicate transport audit（2，修成复用原 audit 后为 1）；publication gate 在 system row 尚未发布时拒绝 lease；旧 handler tests 因把 channel 当成“只有业务消息”而被新增 canonical membership row 打红，消费者改为按目标消息/语义断言；draft freshness 回归也证明 joined row 会进入真实 recent context，不能继续沿用旧消息数量假设。
+
 ## 2. 引用与渲染（FE）
 
 （详细规范与验收清单见 Iris 设计稿；此处为契约要点。）

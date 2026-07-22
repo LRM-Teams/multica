@@ -1073,24 +1073,25 @@ func (h *Handler) AddChannelMember(w http.ResponseWriter, r *http.Request) {
 	if !h.validateChannelMemberTarget(w, r, workspaceID, req.MemberType, memberID) {
 		return
 	}
-	tag, err := h.DB.Exec(r.Context(), `
-		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, $3, $4)
-		ON CONFLICT DO NOTHING`, channelID, parseUUID(workspaceID), req.MemberType, memberID)
+	var membershipGenerationID pgtype.UUID
+	err := h.DB.QueryRow(r.Context(), `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, added_by, join_source)
+		VALUES ($1, $2, $3, $4, $5, 'manual')
+		ON CONFLICT DO NOTHING
+		RETURNING generation_id`, channelID, parseUUID(workspaceID), req.MemberType, memberID, parseUUID(userID)).Scan(&membershipGenerationID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to add channel member")
-		return
+		if !errorsIsNoRows(err) {
+			writeError(w, http.StatusInternalServerError, "failed to add channel member")
+			return
+		}
 	}
 	h.publish(protocol.EventChannelUpdated, workspaceID, "member", userID, map[string]any{"id": uuidToString(channelID)})
-	if tag.RowsAffected() > 0 {
+	if membershipGenerationID.Valid && req.MemberType == "user" {
 		h.emitChannelMemberSystemEvent(r.Context(), workspaceID, channelID, channelMemberAddedEvent, parseUUID(userID), req.MemberType, memberID)
-	}
-	// When a NEW human joins, every agent member greets them briefly.
-	// Guarded on RowsAffected so a duplicate re-add never re-welcomes, and on
-	// member_type so adding an agent member (or the creator at channel creation,
-	// which never routes through here) stays silent.
-	if req.MemberType == "user" && tag.RowsAffected() > 0 {
-		h.dispatchChannelMemberWelcome(r.Context(), workspaceID, channelID, memberID, parseUUID(userID))
+	} else if membershipGenerationID.Valid && req.MemberType == "agent" {
+		if err := h.publishChannelOnboardingSystemMessageForGeneration(r.Context(), membershipGenerationID); err != nil {
+			slog.Warn("channel member add: publish agent membership system event failed", "channel", uuidToString(channelID), "agent", uuidToString(memberID), "generation", uuidToString(membershipGenerationID), "error", err)
+		}
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{"status": "ok"})
 }
@@ -4456,94 +4457,6 @@ func (h *Handler) recordChannelAgentPromptWake(ctx context.Context, ch ChannelRe
 	)
 }
 
-// dispatchChannelMemberWelcome makes every agent member of a channel post a
-// short plain-text welcome when a new human joins. Each welcome is an
-// independent one-off agent run on its own fresh thread, driven by a static
-// prompt (no channel history) that forbids @-mentions — so welcomes never react
-// to each other and never chain into the automatic agent-reply discussion loop.
-func (h *Handler) dispatchChannelMemberWelcome(ctx context.Context, workspaceID string, channelID, joinedUserID, initiatorUserID pgtype.UUID) {
-	agents := h.channelAgentMembers(ctx, workspaceID, uuidToString(channelID))
-	if len(agents) == 0 {
-		return
-	}
-	var channelName string
-	if err := h.DB.QueryRow(ctx, `SELECT name FROM channel WHERE id = $1`, channelID).Scan(&channelName); err != nil {
-		slog.Warn("channel welcome: load channel name failed", "channel", uuidToString(channelID), "error", err)
-		return
-	}
-	ch := ChannelResponse{ID: uuidToString(channelID), WorkspaceID: workspaceID, Name: channelName}
-	joinedName := h.channelMemberDisplayName(ctx, joinedUserID)
-	if joinedName == "" {
-		joinedName = "新成员"
-	}
-	prompt := buildChannelWelcomePrompt(ch.Name, joinedName, uuidToString(channelID), uuidToString(joinedUserID))
-	// Synthetic trigger: fresh thread (nil ThreadID) at depth 0, so each welcome
-	// is its own short run rather than a reply within an existing thread.
-	synthetic := ChannelMessageResponse{TriggerDepth: 0}
-	for _, agent := range agents {
-		h.publishChannelAgentTyping(ctx, ch, agent, true)
-		session, err := h.ensureChannelAgentSession(ctx, ch, agent.ID, initiatorUserID)
-		if err != nil {
-			h.publishChannelAgentTyping(ctx, ch, agent, false)
-			slog.Warn("channel welcome: ensure session failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
-			continue
-		}
-		promptMsg, err := h.createChannelAgentPromptMessage(ctx, session.ID, prompt, synthetic)
-		if err != nil {
-			h.publishChannelAgentTyping(ctx, ch, agent, false)
-			slog.Warn("channel welcome: create prompt failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
-			continue
-		}
-		task, err := h.TaskService.EnqueueChatTask(ctx, session, initiatorUserID)
-		if err != nil {
-			h.publishChannelAgentTyping(ctx, ch, agent, false)
-			slog.Warn("channel welcome: enqueue task failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
-			continue
-		}
-		if _, err := h.DB.Exec(ctx, `UPDATE chat_message SET task_id = $1 WHERE id = $2`, task.ID, promptMsg.ID); err != nil {
-			slog.Warn("channel welcome: tag prompt with task failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "task", uuidToString(task.ID), "error", err)
-		}
-	}
-}
-
-// channelMemberDisplayName resolves the name needed for a channel welcome.
-// Keep this lookup with the channel feature: direct-message transport may be
-// removed independently, and channel welcomes must not depend on it.
-func (h *Handler) channelMemberDisplayName(ctx context.Context, userID pgtype.UUID) string {
-	var name string
-	if err := h.DB.QueryRow(ctx, `
-		SELECT COALESCE(NULLIF(to_jsonb(u)->>'display_name', ''), NULLIF(u.name, ''), u.email, '')
-		FROM "user" u
-		WHERE u.id = $1`, userID).Scan(&name); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(name)
-}
-
-// buildChannelWelcomePrompt is a self-contained one-off greeting prompt. Unlike
-// buildChannelMentionPrompt it includes NO channel history and explicitly bans
-// @-mentions and follow-up, so a wall of welcomes never turns into a loop.
-// Visible chat stays a one-line welcome; durable relationship memory is a
-// silent file write using the supplied member/channel UUIDs (never invent IDs).
-func buildChannelWelcomePrompt(channelName, joinedName, channelID, joinedMemberID string) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "A new member just joined the Multica group chat #%s: %s.\n", channelName, joinedName)
-	b.WriteString("Greet them as yourself with a warm, friendly welcome.\n\n")
-	b.WriteString("Rules — follow all of them:\n")
-	b.WriteString("- ")
-	b.WriteString(channelOutputContractInstruction)
-	b.WriteString("\n")
-	b.WriteString("- Keep it to ONE short line, in the language the channel uses (Chinese if the member's name is Chinese).\n")
-	fmt.Fprintf(&b, "- If a sticker-style welcome for %s would be natural, send a greeting sticker via the runtime brief's chat output path; keep any added words to one short line.\n", joinedName)
-	b.WriteString("- Do NOT @-mention anyone — not the new member, not other agents. This is a one-off greeting, not a discussion.\n")
-	b.WriteString("- Do not ask questions, assign work, or start a conversation. Just welcome them in one line and stop.\n")
-	b.WriteString("- After the visible welcome, silently record the new human teammate in local memory (no chat about remembering):\n")
-	fmt.Fprintf(&b, "  - Append a short note to `$MULTICA_AGENT_ROOT/users/%s/RELATIONSHIP.md` that %s (member id `%s`) joined channel `#%s` (channel id `%s`) and is someone you may collaborate with here.\n", joinedMemberID, joinedName, joinedMemberID, channelName, channelID)
-	fmt.Fprintf(&b, "  - If useful for routing, also note their membership in `$MULTICA_CHANNEL_MEMORY_DIR/CONTEXT.md` or `$MULTICA_AGENT_ROOT/channels/%s/CONTEXT.md` (non-secret only).\n", channelID)
-	b.WriteString("  - Prefer updating an existing entry over duplicating. Do not invent other member/agent IDs. Do not write chat transcripts.\n")
-	return b.String()
-}
-
 // notifyChannelMemberMentions creates a "mentioned" inbox item for every human
 // channel member @-mentioned in a channel message (by an agent, another member,
 // or another member), so the mention surfaces in the recipient's overview "for me"
@@ -4668,6 +4581,11 @@ func (h *Handler) channelHumanMemberIDs(ctx context.Context, workspaceID, channe
 func (h *Handler) publishChannelToMembers(ctx context.Context, eventType, workspaceID, actorType, actorID string, channelID pgtype.UUID, payload any) {
 	recipientIDs := recipientUserIDsFromSet(h.channelHumanMemberIDs(ctx, workspaceID, uuidToString(channelID)))
 	h.publishToUsers(eventType, workspaceID, actorType, actorID, recipientIDs, payload)
+}
+
+func (h *Handler) publishChannelToMembersWithID(ctx context.Context, eventType, workspaceID, actorType, actorID string, channelID pgtype.UUID, payload any, realtimeEventID string) {
+	recipientIDs := recipientUserIDsFromSet(h.channelHumanMemberIDs(ctx, workspaceID, uuidToString(channelID)))
+	h.publishToUsersWithID(eventType, workspaceID, actorType, actorID, recipientIDs, payload, realtimeEventID)
 }
 
 func (h *Handler) publishChannelAgentTyping(ctx context.Context, ch ChannelResponse, agent db.Agent, isTyping bool) {

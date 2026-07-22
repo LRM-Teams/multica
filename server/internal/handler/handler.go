@@ -381,6 +381,18 @@ func (h *Handler) publishToUsers(eventType, workspaceID, actorType, actorID stri
 	})
 }
 
+func (h *Handler) publishToUsersWithID(eventType, workspaceID, actorType, actorID string, recipientUserIDs []string, payload any, realtimeEventID string) {
+	h.Bus.Publish(events.Event{
+		Type:             eventType,
+		WorkspaceID:      workspaceID,
+		ActorType:        actorType,
+		ActorID:          actorID,
+		RecipientUserIDs: uniqueRecipientUserIDs(recipientUserIDs),
+		Payload:          payload,
+		RealtimeEventID:  realtimeEventID,
+	})
+}
+
 func (h *Handler) publishChatToCreator(eventType, workspaceID, actorType, actorID, chatSessionID, creatorUserID string, payload any) {
 	h.Bus.Publish(events.Event{
 		Type:             eventType,

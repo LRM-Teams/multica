@@ -174,6 +174,12 @@ func registerListeners(bus *events.Bus, b realtime.Broadcaster) {
 				}
 				seen[recipientID] = true
 				realtime.M.RecordEvent(e.Type)
+				if e.RealtimeEventID != "" {
+					if idempotent, ok := b.(realtime.IdempotentUserBroadcaster); ok {
+						idempotent.SendToUserWithID(recipientID, data, e.RealtimeEventID)
+						continue
+					}
+				}
 				b.SendToUser(recipientID, data)
 			}
 			return

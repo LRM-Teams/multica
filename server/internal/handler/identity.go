@@ -45,8 +45,8 @@ func userDisplayName(u db.User) string {
 
 // userName resolves the display name used by handler-side system messages.
 // It belongs with the shared identity helpers rather than a particular chat
-// transport: channel welcome events continue to need it after the retired
-// agent-DM transport is removed.
+// transport: membership and other system events continue to need it after the
+// retired agent-DM transport is removed.
 func (h *Handler) userName(ctx context.Context, id pgtype.UUID) string {
 	var name string
 	_ = h.DB.QueryRow(ctx, `SELECT COALESCE(NULLIF(to_jsonb(u)->>'display_name', ''), NULLIF(u.name, ''), u.email, '') FROM "user" u WHERE id = $1`, id).Scan(&name)

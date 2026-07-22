@@ -560,11 +560,15 @@ func (h *Hub) BroadcastToWorkspace(workspaceID string, message []byte) {
 // SendToUser delivers a message to every connection belonging to userID,
 // skipping any connections whose workspaceID matches excludeWorkspace.
 func (h *Hub) SendToUser(userID string, message []byte, excludeWorkspace ...string) {
+	h.SendToUserWithID(userID, message, "", excludeWorkspace...)
+}
+
+func (h *Hub) SendToUserWithID(userID string, message []byte, eventID string, excludeWorkspace ...string) {
 	exclude := ""
 	if len(excludeWorkspace) > 0 {
 		exclude = excludeWorkspace[0]
 	}
-	h.fanoutUser(userID, message, exclude, "")
+	h.fanoutUser(userID, message, exclude, eventID)
 }
 
 // Broadcast sends a message to every connected client (daemon events).

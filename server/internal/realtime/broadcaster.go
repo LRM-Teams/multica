@@ -41,6 +41,12 @@ type Broadcaster interface {
 	Broadcast(message []byte)
 }
 
+// IdempotentUserBroadcaster accepts a producer-owned event id. Implementations
+// use it for local/relay deduplication when a durable publication is replayed.
+type IdempotentUserBroadcaster interface {
+	SendToUserWithID(userID string, message []byte, eventID string, excludeWorkspace ...string)
+}
+
 // DaemonRuntimeDeliverer consumes daemon-runtime scoped relay frames.
 type DaemonRuntimeDeliverer interface {
 	DeliverDaemonRuntime(scopeID string, frame []byte, eventID string)

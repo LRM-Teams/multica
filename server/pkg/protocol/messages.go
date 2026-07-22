@@ -12,7 +12,10 @@ const (
 	MessagePartTypeAttachment  = "attachment"
 	MessagePartTypeReference   = "reference"
 	MessagePartTypeSystemEvent = "system_event"
+	MessagePartTypeVoice       = "voice"
 )
+
+const VoiceTranscriptMaxRunes = 4096
 
 type MessagePart struct {
 	Type       string `json:"type"`
@@ -35,6 +38,7 @@ type MessagePart struct {
 	Filename          string          `json:"filename,omitempty"`
 	ContentType       string          `json:"content_type,omitempty"`
 	SizeBytes         int64           `json:"size_bytes,omitempty"`
+	DurationMS        int64           `json:"duration_ms,omitempty"`
 }
 
 // Message is the envelope for all WebSocket messages.

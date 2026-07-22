@@ -13,11 +13,12 @@ import (
 	"unicode/utf8"
 
 	"github.com/multica-ai/multica/server/internal/integrations/doubaospeech"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 const (
 	maxVoiceTTSBodyBytes = 32 << 10
-	maxVoiceTextRunes    = 4096
+	maxVoiceTextRunes    = protocol.VoiceTranscriptMaxRunes
 	maxVoicePCMBytes     = 2 << 20
 )
 

@@ -6,6 +6,58 @@ afterEach(() => {
 });
 
 describe("ApiClient", () => {
+  it("transcribes PCM through the authenticated voice endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ text: " 你好 " }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+    const pcm = new ArrayBuffer(4);
+
+    await expect(client.transcribeVoice(pcm)).resolves.toBe("你好");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.test/api/voice/asr",
+      expect.objectContaining({
+        method: "POST",
+        body: pcm,
+        headers: expect.objectContaining({ "Content-Type": "audio/pcm; rate=16000" }),
+      }),
+    );
+  });
+
+  it("rejects a non-audio TTS response", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("not audio", { status: 200, headers: { "Content-Type": "text/plain" } }),
+    ));
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.synthesizeVoice("hello")).rejects.toMatchObject({ status: 502 });
+  });
+
+  it("rejects a malformed ASR response instead of reporting no speech", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("not-json", { status: 200, headers: { "Content-Type": "application/json" } }),
+    ));
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.transcribeVoice(new ArrayBuffer(2))).rejects.toMatchObject({ status: 502 });
+  });
+
+  it("keeps a valid empty ASR transcript as no speech", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ text: "" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    ));
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.transcribeVoice(new ArrayBuffer(2))).resolves.toBe("");
+  });
+
   it("parses the sticker catalog endpoint through the typed client", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({

@@ -67,6 +67,44 @@ func TestFinalizeAgentChannelMessageDMDropsUnanchoredReferences(t *testing.T) {
 	}
 }
 
+func TestChannelVoiceReplyInstructionUsesStructuredVoicePart(t *testing.T) {
+	voice := ChannelMessageResponse{
+		Type:  "user",
+		Parts: []protocol.MessagePart{{Type: protocol.MessagePartTypeVoice}},
+	}
+	if got := channelVoiceReplyInstruction(voice); !strings.Contains(got, "multica message send --voice") {
+		t.Fatalf("voice instruction = %q", got)
+	}
+	if got := channelVoiceReplyInstruction(ChannelMessageResponse{Type: "user", Content: "请语音回复"}); got != "" {
+		t.Fatalf("plain text must be interpreted by the agent, got server instruction %q", got)
+	}
+	if got := channelVoiceReplyInstruction(ChannelMessageResponse{Type: "agent", Parts: voice.Parts}); got != "" {
+		t.Fatalf("agent-authored voice output must not force another voice reply, got %q", got)
+	}
+}
+
+func TestFormatChannelMessageLineLabelsVoiceDirection(t *testing.T) {
+	voicePart := []protocol.MessagePart{{Type: protocol.MessagePartTypeVoice}}
+	human := formatChannelMessageLine(ChannelMessageResponse{
+		AuthorName: "Frank",
+		Type:       "user",
+		Content:    "question",
+		Parts:      voicePart,
+	})
+	if !strings.Contains(human, "user, voice input") {
+		t.Fatalf("human line = %q, want voice input label", human)
+	}
+	agent := formatChannelMessageLine(ChannelMessageResponse{
+		AuthorName: "Beckham",
+		Type:       "agent",
+		Content:    "answer",
+		Parts:      voicePart,
+	})
+	if !strings.Contains(agent, "agent, voice reply") {
+		t.Fatalf("agent line = %q, want voice reply label", agent)
+	}
+}
+
 func TestCreateChannelDuplicateNameReturnsCodedConflict(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -4391,6 +4429,37 @@ func TestSendChannelMessageStoresStickerParts(t *testing.T) {
 	}
 	if len(decoded) != 1 || decoded[0].StickerID != "hi" || decoded[0].PackID != "builtin" {
 		t.Fatalf("stored parts = %+v, want builtin hi sticker", decoded)
+	}
+}
+
+func TestSendChannelMessageStoresVoiceTranscriptPart(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	channelID := seedChannelForTest(t, "voice-parts-"+uuid.NewString(), testUserID)
+	req := newRequest(http.MethodPost, "/api/channels/"+channelID+"/messages", map[string]any{
+		"content": "spoken question",
+		"parts": []protocol.MessagePart{
+			{Type: protocol.MessagePartTypeText, Text: "spoken question"},
+			{Type: protocol.MessagePartTypeVoice, DurationMS: 2400},
+		},
+	})
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.SendChannelMessage(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("send voice parts: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var created ChannelMessageResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode created message: %v", err)
+	}
+	if created.Content != "spoken question" || len(created.Parts) != 2 ||
+		created.Parts[1].Type != protocol.MessagePartTypeVoice || created.Parts[1].DurationMS != 2400 {
+		t.Fatalf("created message = %+v, want transcript plus voice part", created)
 	}
 }
 

@@ -46,6 +46,9 @@ export interface ThreadPanelProps {
   onSend: () => void;
   sendDisabled: boolean;
   sending?: boolean;
+  voicePlaybackScope?: string;
+  voiceDisabled?: boolean;
+  onVoiceSend?: (transcript: string, durationMs: number) => boolean;
   composerLeadingActions?: ReactNode;
   /** Slack-style attachment tray above the editor (Composer `tray` slot). */
   composerTray?: ReactNode;
@@ -87,6 +90,9 @@ export function ThreadPanel({
   onSend,
   sendDisabled,
   sending,
+  voicePlaybackScope,
+  voiceDisabled,
+  onVoiceSend,
   composerLeadingActions,
   composerTray,
   readOnly = false,
@@ -193,6 +199,9 @@ export function ThreadPanel({
             sendDisabled={sendDisabled}
             sending={sending}
             onSend={onSend}
+            voicePlaybackScope={voicePlaybackScope}
+            voiceDisabled={voiceDisabled}
+            onVoiceSend={onVoiceSend}
             isMobile={isMobile}
             prefix={quoteTarget ? (
               <ComposerQuotePreview

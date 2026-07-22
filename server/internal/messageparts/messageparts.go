@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/multica-ai/multica/server/internal/stickers"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -42,7 +43,33 @@ func Normalize(content string, parts []protocol.MessagePart) (string, []protocol
 	if normalizedContent == "" {
 		normalizedContent = FallbackContent(out)
 	}
+	if hasVoicePart(out) {
+		if !hasTextPart(out) {
+			return "", nil, fmt.Errorf("voice transcript text part is required")
+		}
+		if utf8.RuneCountInString(normalizedContent) > protocol.VoiceTranscriptMaxRunes {
+			return "", nil, fmt.Errorf("voice transcript exceeds %d characters", protocol.VoiceTranscriptMaxRunes)
+		}
+	}
 	return normalizedContent, out, nil
+}
+
+func hasVoicePart(parts []protocol.MessagePart) bool {
+	for _, part := range parts {
+		if part.Type == protocol.MessagePartTypeVoice {
+			return true
+		}
+	}
+	return false
+}
+
+func hasTextPart(parts []protocol.MessagePart) bool {
+	for _, part := range parts {
+		if part.Type == protocol.MessagePartTypeText && strings.TrimSpace(part.Text) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // UnwrapStructuredMessageSend recovers visible text/parts from an agent action
@@ -238,6 +265,7 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 		part.Filename = ""
 		part.ContentType = ""
 		part.SizeBytes = 0
+		part.DurationMS = 0
 		return part, nil
 	case protocol.MessagePartTypeReference:
 		part.RefType = strings.TrimSpace(part.RefType)
@@ -285,6 +313,7 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 		part.Filename = ""
 		part.ContentType = ""
 		part.SizeBytes = 0
+		part.DurationMS = 0
 		return part, nil
 	case protocol.MessagePartTypeSticker:
 		part.Text = ""
@@ -300,6 +329,7 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 		part.Filename = ""
 		part.ContentType = ""
 		part.SizeBytes = 0
+		part.DurationMS = 0
 		part.PackID = strings.TrimSpace(part.PackID)
 		if part.PackID == "" {
 			part.PackID = BuiltinStickerPackID
@@ -341,6 +371,7 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 		part.Filename = ""
 		part.ContentType = ""
 		part.SizeBytes = 0
+		part.DurationMS = 0
 		return part, nil
 	case protocol.MessagePartTypeAttachment:
 		part.AttachmentID = strings.TrimSpace(part.AttachmentID)
@@ -359,9 +390,31 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 		part.PackID = ""
 		part.StickerID = ""
 		part.Alt = ""
+		part.DurationMS = 0
 		part.Filename = strings.TrimSpace(part.Filename)
 		part.ContentType = strings.TrimSpace(part.ContentType)
 		// SizeBytes is optional; keep as provided.
+		return part, nil
+	case protocol.MessagePartTypeVoice:
+		if part.DurationMS < 0 || part.DurationMS > 60_000 {
+			return protocol.MessagePart{}, fmt.Errorf("duration_ms must be between 0 and 60000")
+		}
+		part.Text = ""
+		part.RefType = ""
+		part.RefSubType = ""
+		part.RefID = ""
+		part.Label = ""
+		part.Event = ""
+		part.EventParams = nil
+		part.ContentStartUTF16 = nil
+		part.ContentEndUTF16 = nil
+		part.PackID = ""
+		part.StickerID = ""
+		part.Alt = ""
+		part.AttachmentID = ""
+		part.Filename = ""
+		part.ContentType = ""
+		part.SizeBytes = 0
 		return part, nil
 	default:
 		return protocol.MessagePart{}, fmt.Errorf("unsupported type %q", part.Type)

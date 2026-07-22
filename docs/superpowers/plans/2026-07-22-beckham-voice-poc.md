@@ -89,3 +89,40 @@ Evidence:
 - Opened GitHub PR #868 against `dev`: `feat(beckham): add Doubao ASR/TTS voice transport`.
 - Marked the PR ready for review rather than leaving it as a draft; GitHub reports the branch mergeable with CI checks running.
 - Deployment is intentionally not triggered from the feature branch. The existing workflow deploys after the user merges the PR into `dev`.
+
+### Step 6 — Define the product voice-message contract
+
+Status: complete
+
+Evidence:
+
+- Inspected the production host through its configured `river-v2` SSH alias. The active backend is started by the Actions workspace with `docker-compose.selfhost.yml` plus `docker-compose.s89.yml`; the running pre-merge container correctly has no `DOUBAO_*` variables yet. Server inspection was read-only.
+- Fetched `origin/dev` at `055b37124` and merged its three new commits into the feature branch before changing the product UI.
+- The shared `Composer` renders the group, DM, and thread inputs; channel `parts` are already the durable, idempotency-protected structured-message field; `multica message send` is the only supported visible Agent reply path. These are the interfaces extended by this slice.
+
+Decision:
+
+- A transcribed human recording is stored as ordinary visible text plus a structured `voice` part. The original compressed recording is not uploaded or retained in this slice.
+- A voice-origin message tells the Agent, through its task prompt, to reply with `multica message send --voice`. For typed messages, the Agent applies the user's semantics: ordinary typed requests use normal text sends, while an explicit request for spoken output uses `--voice`. No client keyword list decides intent.
+- `--voice` persists the same structured `voice` part on the Agent message. Clients synthesize that canonical response text through the authenticated backend TTS endpoint, attempt playback only for a reply created after a local send unlocked audio, and always expose an explicit replay control.
+- Browser capture is decoded locally, downmixed, resampled, and converted to the backend's fixed signed 16-bit little-endian mono 16 kHz PCM contract. Recording, decode, ASR, and TTS failures remain visible and retryable; they do not silently switch providers or change the message modality.
+- The existing GitHub Environment secret and Compose injection remain the only credential path. No speech credential is sent to the browser or added to source.
+
+### Step 7 — Implement the shared message voice experience
+
+Status: complete
+
+Evidence:
+
+- Added one microphone control to the shared Composer, so group channels, DMs, and their threads use the same capture and send implementation on web and desktop. It records at most 60 seconds, decodes in the browser, downmixes/resamples to the server's exact PCM contract, calls authenticated ASR, and sends the transcript as text plus a structured voice part through the existing idempotent mutation.
+- Added `multica message send --voice` to the existing Agent delivery command. The runtime brief defines when to use it, and voice-origin prompts reinforce that instruction for directed, ambient, unread, and thread execution paths. Typed content is not classified with server or frontend keyword matching.
+- Added a shared Agent voice control that synthesizes the stored transcript on demand, exposes loading/play/stop/retry states, and attempts autoplay only after the local user initiated a send. A human recording renders its transcript and recorded duration; the original recording is intentionally not retained.
+- The voice protocol requires a non-empty text part and caps its transcript at the TTS limit. Human and Agent voice direction is labelled accurately in Agent history context.
+- Added macOS `NSMicrophoneUsageDescription` to the packaged desktop app. Electron's existing default media-permission handling remains unchanged; no broad permission handler was added.
+
+Unexpected issue review:
+
+- A malformed-ASR JSON guard was initially applied to an unrelated cloud-runtime response while editing the large API client. Review moved it to the ASR boundary and restored the unrelated method exactly.
+- Autoplay eligibility originally remained pending after an Agent text reply or a failed recording, allowing a later unrelated voice message to play. The scope is now cancelled on capture/transcription/send failure and consumed by the first new Agent reply regardless of modality.
+- Agent voice history was initially labelled as “voice input.” The formatter now distinguishes human voice input from Agent voice reply, with a regression test.
+- A malformed successful ASR response initially degraded to the same empty string as a valid “no speech” result. It now raises a controlled voice-service error, so the UI reports transcription failure instead of blaming the recording.

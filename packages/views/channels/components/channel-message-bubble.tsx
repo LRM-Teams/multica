@@ -54,6 +54,7 @@ import {
 } from "./channel-system-event-content";
 import { messageMentionsViewer } from "../../common/content-mentions-viewer";
 import { SELF_MENTION_ROW_CLASS } from "../../common/mention-token";
+import { VoiceMessageAudio } from "./voice-message-audio";
 
 const FullEmojiPicker = lazy(() =>
   import("@multica/ui/components/common/emoji-picker").then((m) => ({
@@ -901,6 +902,7 @@ export function ChannelMessageBubble({
               highlightQuery={searchHighlighted ? searchQuery : undefined}
               sourceMessageId={message.id}
             />
+            <VoiceMessageAudio message={message} />
             {isLocalFailed && onRetrySend && (
               <div
                 data-testid="message-send-failed"

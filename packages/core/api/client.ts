@@ -308,6 +308,8 @@ import {
   SandboxNodeTemplatesResponseSchema,
   SandboxSnapshotSchema,
   SandboxSnapshotListSchema,
+  VoiceTranscriptResponseSchema,
+  EMPTY_VOICE_TRANSCRIPT_RESPONSE,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -2568,6 +2570,43 @@ export class ApiClient {
     return parseWithFallback(raw, ChannelMessageSearchResponseSchema, EMPTY_CHANNEL_MESSAGE_SEARCH_RESPONSE, {
       endpoint: "GET /api/channels/{channelId}/messages/search",
     });
+  }
+
+  async transcribeVoice(pcm: ArrayBuffer): Promise<string> {
+    const res = await this.fetchRaw("/api/voice/asr", {
+      method: "POST",
+      body: pcm,
+      extraHeaders: { "Content-Type": "audio/pcm; rate=16000" },
+    });
+    let raw: unknown;
+    try {
+      raw = await res.json() as unknown;
+    } catch {
+      raw = undefined;
+    }
+    const parsed = parseWithFallback(
+      raw,
+      VoiceTranscriptResponseSchema,
+      EMPTY_VOICE_TRANSCRIPT_RESPONSE,
+      { endpoint: "POST /api/voice/asr" },
+    );
+    if (parsed === EMPTY_VOICE_TRANSCRIPT_RESPONSE) {
+      throw new ApiError("voice service returned an invalid transcript response", 502, "Bad Gateway");
+    }
+    return parsed.text.trim();
+  }
+
+  async synthesizeVoice(text: string): Promise<ArrayBuffer> {
+    const res = await this.fetchRaw("/api/voice/tts", {
+      method: "POST",
+      body: JSON.stringify({ text }),
+      extraHeaders: { "Content-Type": "application/json" },
+    });
+    const contentType = res.headers.get("Content-Type")?.split(";", 1)[0]?.trim().toLowerCase();
+    if (contentType !== "audio/mpeg") {
+      throw new ApiError("voice service returned an invalid audio response", 502, "Bad Gateway");
+    }
+    return res.arrayBuffer();
   }
 
   async sendChannelMessage(

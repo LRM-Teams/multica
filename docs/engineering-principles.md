@@ -179,6 +179,13 @@
 - HTTP 面必须同时经过登录、workspace membership 和 human-actor guard。语音额度不能由 task token、agent credential 或 cloud PAT 消耗。
 - **物**：`server/internal/integrations/doubaospeech`；`POST /api/voice/asr`、`POST /api/voice/tts`；协议 frame、header、错误脱敏、handler 输入边界测试；可选 live test 用 TTS 生成 PCM 再送 ASR，已用实际账号见过完整往返成功。
 
+### 4.8 消息语音形态由结构化 part 决定 — `可执行`（②协议类型 + ③共享 Composer/播放组件 + ⑤消息链回归；owner: @Codex）
+- 人类录音落库为可读 transcript text + `{type:"voice", duration_ms}`；Agent 语音回复落库为完整 transcript text + `{type:"voice"}`。`voice` part 没有非空 text part 时服务端拒绝，不能靠正文关键词猜消息形态。
+- 人类语音消息要求 Agent 通过现有 `multica message send --voice` 输出；普通文字仍走文字，文字明确要求语音时由 Agent 语义判断后加 `--voice`。前端不维护“语音回复”关键词表。
+- 自动播放资格只来自本机当前会话的一次发送手势，并由第一条新 Agent 回复消费；文字回复也会消费，防止稍后的无关语音突然播放。所有 Agent 语音消息始终提供手动播放/停止/重试。
+- 当前实现只持久化 transcript 和时长，不上传原始录音。需要回听原声、审计或多人实时通话时必须另立录音存储、生命周期、权限与隐私合同，不能把 transcript 标记冒充原始音频。
+- **物**：`protocol.MessagePartTypeVoice`、`messageparts.Normalize`、CLI `message send --voice`、共享 `VoiceInputButton`/`VoiceMessageAudio`、channel/DM/thread 发送与渲染回归；完整实现记录见 `docs/superpowers/plans/2026-07-22-beckham-voice-poc.md`。
+
 ## 5. 验证方法论 — `仅文档`（诚实标注：拦不住人，只能让"猜"显式化）
 
 - **渲染活实体的功能，验收必须含"写入后变更"测例**（fixture 先改后写=永远假绿）。→ 有测试模板后升 `可执行`。

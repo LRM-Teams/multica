@@ -16,6 +16,8 @@ asarUnpack:
   - resources/**
 mac:
   entitlementsInherit: build/entitlements.mac.plist
+  extendInfo:
+    NSMicrophoneUsageDescription: Multica uses the microphone when you record a voice message.
   target:
     - dmg
     - zip

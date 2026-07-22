@@ -174,6 +174,21 @@ describe("enrichChannelMessagesPreservingAvatars (LRM-218)", () => {
     expect(enriched).toHaveLength(1);
     expect(enriched[0]?.author_avatar_url).toBe("/uploads/agent.png");
   });
+
+  it("keeps soft-deleted tombstones in the read model", () => {
+    const enriched = enrichChannelMessagesPreservingAvatars([
+      {
+        ...base,
+        id: "m1",
+        author_avatar_url: "/uploads/agent.png",
+        deleted_at: "2026-07-22T04:00:00Z",
+        content: "",
+      } as ChannelMessage,
+    ]);
+    expect(enriched).toHaveLength(1);
+    expect(enriched[0]?.deleted_at).toBe("2026-07-22T04:00:00Z");
+    expect(enriched[0]?.author_avatar_url).toBe("/uploads/agent.png");
+  });
 });
 
 describe("findChannelMessageMatchIndex (optimistic ACK)", () => {

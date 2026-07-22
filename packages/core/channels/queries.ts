@@ -132,22 +132,27 @@ export function flattenChannelMessagePages(data?: InfiniteData<ChannelMessagesPa
  * using the same preserve/sibling rules as WS upserts. Refetches and list
  * payloads that omit avatars must not regress bubbles to glyph placeholders
  * when an earlier row or optimistic ACK already had the face (LRM-218).
+ *
+ * Soft-deleted tombstones (`deleted_at` set) MUST stay in the list — do not
+ * reuse WS upsert's shouldRender filter, which drops them.
  */
 export function enrichChannelMessagesPreservingAvatars(
   messages: readonly ChannelMessage[],
 ): ChannelMessage[] {
-  let acc: ChannelMessage[] | undefined;
+  const out: ChannelMessage[] = [];
   for (const message of messages) {
-    // List/refetch pages (and some test fixtures) can include sparse holes;
-    // never call render/upsert helpers with undefined (LRM-218 CI crash).
+    // List/refetch pages (and some test fixtures) can include sparse holes.
     if (!message) continue;
-    if (!shouldRenderChannelMessage(message)) {
-      acc = acc?.filter((existing) => !matchesChannelMessage(existing, message));
-      continue;
+    const existing = out.find((m) => matchesChannelMessage(m, message));
+    const enriched = withPreservedAuthorAvatar(message, existing, out);
+    if (existing) {
+      const idx = out.findIndex((m) => matchesChannelMessage(m, message));
+      out[idx] = enriched;
+    } else {
+      out.push(enriched);
     }
-    acc = upsertChannelMessage(acc, message) ?? acc;
   }
-  return acc ?? [];
+  return out;
 }
 
 // Virtuoso needs a stable, monotonically-decreasing `firstItemIndex` to prepend

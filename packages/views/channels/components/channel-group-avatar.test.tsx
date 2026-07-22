@@ -1,14 +1,71 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import { act, render } from "@testing-library/react";
 import type { ChannelMemberBrief } from "@multica/core/types";
+import { __resetIdentityAvatarOkCacheForTests } from "../../common/identity-avatar-cache";
 import { ChannelGroupAvatar } from "./channel-group-avatar";
 
 vi.mock("@multica/core/api", () => ({
   api: { getBaseUrl: () => "" },
 }));
 
+vi.mock("@multica/core/workspace/avatar-url", () => ({
+  resolvePublicFileUrl: (url: string | null | undefined) => url ?? null,
+}));
+
+const nameById = new Map<string, string>();
+
+vi.mock("@multica/core/workspace/hooks", () => ({
+  useActorName: () => ({
+    getActorName: (_type: string, id: string) => nameById.get(id) ?? id,
+    getActorInitials: (_type: string, id: string) => {
+      const name = nameById.get(id) ?? id;
+      const c = name.trim().charAt(0);
+      return c ? (/[a-z]/i.test(c) ? c.toUpperCase() : c) : "?";
+    },
+    getActorAvatarUrl: () => null,
+  }),
+}));
+
+vi.mock("@multica/core/paths", () => ({
+  useCurrentWorkspace: () => ({ id: "ws-1" }),
+  useWorkspacePaths: () => ({
+    agentDetail: (id: string) => `/agents/${id}`,
+    memberDetail: (id: string) => `/members/${id}`,
+    squadDetail: (id: string) => `/squads/${id}`,
+  }),
+}));
+
+vi.mock("@multica/core/agents", () => ({
+  useAgentPresenceDetail: () => ({
+    availability: "online",
+    workload: "idle",
+    runningCount: 0,
+    queuedCount: 0,
+    capacity: 1,
+  }),
+  useAgentHealth: () => ({
+    summary: undefined,
+    events: undefined,
+    isLoading: false,
+    isError: false,
+  }),
+}));
+
+vi.mock("@multica/core/agents/stores", () => ({
+  useAgentPanelStore: (selector: (s: { open: (id: string) => void }) => unknown) =>
+    selector({ open: vi.fn() }),
+}));
+
+vi.mock("../../common/agent-panel-context", () => ({
+  useOpenAgentPanel: () => null,
+}));
+
+vi.mock("../../navigation", () => ({
+  useNavigation: () => ({ push: vi.fn(), openInNewTab: vi.fn() }),
+}));
+
 function member(overrides: Partial<ChannelMemberBrief> = {}): ChannelMemberBrief {
-  return {
+  const m: ChannelMemberBrief = {
     member_type: "user",
     member_id: "m-1",
     name: "handle",
@@ -16,9 +73,16 @@ function member(overrides: Partial<ChannelMemberBrief> = {}): ChannelMemberBrief
     avatar_url: "https://cdn.example.test/m-1.png",
     ...overrides,
   };
+  if (m.display_name) nameById.set(m.member_id, m.display_name);
+  return m;
 }
 
 describe("ChannelGroupAvatar", () => {
+  beforeEach(() => {
+    nameById.clear();
+    __resetIdentityAvatarOkCacheForTests();
+  });
+
   it("shows the neutral # glyph when there are no members", () => {
     const { container } = render(<ChannelGroupAvatar members={[]} size={40} />);
     expect(container.querySelector("svg")).toBeTruthy();

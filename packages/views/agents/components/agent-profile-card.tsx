@@ -5,14 +5,12 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { ApiError } from "@multica/core/api";
 import { validateAgentUsername } from "@multica/core/agents";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
-import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
-import { resolveActorDisplayName } from "@multica/core/identity";
 import { useAgentPermissions } from "@multica/core/permissions";
 import { useAuthStore } from "@multica/core/auth";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { runtimeListOptions } from "@multica/core/runtimes/queries";
 import { useWorkspacePaths } from "@multica/core/paths";
-import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
+import { ActorAvatar } from "../../common/actor-avatar";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { MessageSquare, Pencil } from "lucide-react";
 import { AppLink } from "../../navigation/app-link";
@@ -96,13 +94,6 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
     agent.runtime_mode !== "cloud" && runtime
       ? runtimeHealthState(runtime)
       : "ok";
-  const displayName = resolveActorDisplayName(agent, agent.id);
-  const initials = displayName
-    .split(" ")
-    .map((w) => w[0])
-    .join("")
-    .toUpperCase()
-    .slice(0, 2);
 
   return (
     // `group` enables the hover-only Detail link on the top-right —
@@ -114,12 +105,13 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
           availability dot is surfaced here; last-task state lives in the
           agents list and the agent detail page. */}
       <div className="flex items-start gap-3">
-        <ActorAvatarBase
-          name={displayName}
-          initials={initials}
-          avatarUrl={resolvePublicFileUrl(agent.avatar_url)}
-          isAgent
+        <ActorAvatar
+          actorType="agent"
+          actorId={agentId}
           size={40}
+          avatarUrlHint={agent.avatar_url}
+          showStatusDot
+          profileLink={false}
         />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">

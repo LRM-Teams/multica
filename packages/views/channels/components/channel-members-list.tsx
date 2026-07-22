@@ -5,13 +5,11 @@ import {
   type ActorIdentityPresentation,
 } from "@multica/core/identity";
 import type { ChannelMember } from "@multica/core/types";
-import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
-import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { cn } from "@multica/ui/lib/utils";
 import { MessageSquare } from "lucide-react";
+import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
-import { avatarGlyph, avatarToneClass } from "../../common/initials";
 import { useT } from "../../i18n";
 
 export type MemberRoleLabel = "owner" | "admin" | "member" | "agent";
@@ -21,6 +19,9 @@ export type MemberRoleLabel = "owner" | "admin" | "member" | "agent";
  * Channel details 「成员」Tab so there is one list IA, not two.
  * LRM-225 — scroll via flex-1 min-h-0 (dialog) or parent overflow (details);
  * drop the old fixed max-h that clipped the roster on mobile.
+ *
+ * Avatars are identity-first (LRM-224 Option B): actor id → shared Avatar;
+ * agents show the presence status dot on this directory surface.
  */
 export function ChannelMembersList({
   members,
@@ -104,6 +105,7 @@ export function ChannelMembersList({
         const roleKey = roleForMember(m);
         const roleLabel = t(($) => $.profile_popover.role[roleKey]);
         const canDm = Boolean(onOpenDm) && (isAgent || m.member_id !== currentUserId);
+        const actorType = isAgent ? "agent" : "member";
 
         return (
           <div
@@ -111,12 +113,12 @@ export function ChannelMembersList({
             className="group flex min-h-[52px] items-center gap-3 border-b border-border px-5 py-2.5 last:border-b-0 hover:bg-hover"
           >
             <ActorAvatar
-              name={presentation.displayName}
-              initials={avatarGlyph(presentation.displayName || "?")}
-              avatarUrl={resolvePublicFileUrl(m.avatar_url)}
-              isAgent={isAgent}
+              actorType={actorType}
+              actorId={m.member_id}
+              avatarUrlHint={m.avatar_url}
               size={36}
-              className={avatarToneClass(`${m.member_type}:${m.member_id}`)}
+              showStatusDot={isAgent}
+              profileLink={false}
             />
             <ActorIdentityRow
               displayName={presentation.displayName}

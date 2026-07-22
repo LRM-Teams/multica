@@ -15,16 +15,14 @@ import type {
   MemberWithUser,
   SkillSummary,
 } from "@multica/core/types";
-import { useTimeAgo } from "../../i18n";
-import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
+import { useTimeAgo, useT } from "../../i18n";
+import { ActorAvatar } from "../../common/actor-avatar";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@multica/ui/components/ui/tooltip";
 import { readOrigin, isRuntimeManagedOrigin, totalFileCount } from "../lib/origin";
-import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
-import { useT } from "../../i18n";
 
 // Per-row data assembled at the page level. The columns reach into
 // `row.original` and never pull their own queries. `skill` is the list-shape
@@ -159,11 +157,11 @@ function AgentAssignees({ agents }: { agents: Agent[] }) {
             render={
               <span className="inline-flex rounded-full ring-2 ring-background">
                 <ActorAvatar
-                  name={a.name}
-                  initials={a.name.slice(0, 2).toUpperCase()}
-                  avatarUrl={resolvePublicFileUrl(a.avatar_url)}
-                  isAgent
+                  actorType="agent"
+                  actorId={a.id}
                   size={22}
+                  avatarUrlHint={a.avatar_url}
+                  profileLink={false}
                 />
               </span>
             }
@@ -231,10 +229,11 @@ function SourceCell({
       {creator && (
         <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
           <ActorAvatar
-            name={creator.name}
-            initials={creator.name.slice(0, 2).toUpperCase()}
-            avatarUrl={resolvePublicFileUrl(creator.avatar_url)}
+            actorType="member"
+            actorId={creator.user_id}
             size={14}
+            avatarUrlHint={creator.avatar_url}
+            profileLink={false}
           />
           <span className="truncate">{t(($) => $.table.by_creator, { name: creator.name })}</span>
         </div>

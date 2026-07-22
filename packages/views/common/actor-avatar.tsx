@@ -23,6 +23,7 @@ import { SquadProfileCard } from "../squads/components/squad-profile-card";
 import { availabilityConfig } from "../agents/presence";
 import { useNavigation } from "../navigation";
 import { useOpenAgentPanel } from "./agent-panel-context";
+import { resolveIdentityAvatarUrl } from "./identity-avatar-cache";
 
 /**
  * Selects which agent hover-card payload to render when `enableHoverCard` is
@@ -43,6 +44,11 @@ interface ActorAvatarProps {
   actorId: string;
   size?: number;
   className?: string;
+  /**
+   * Optional face URL from a row/message payload (LRM-224). Only accelerates
+   * the identity cache — null / undefined must not clear a known face.
+   */
+  avatarUrlHint?: string | null;
   /**
    * Wrap the avatar in a hover-card preview on dwell. Use for "who is this?"
    * surfaces — comment authors, list rows, subscriber chips. Independent of
@@ -70,6 +76,31 @@ interface ActorAvatarProps {
   profileLink?: boolean;
 }
 
+
+/** Isolated so message bubbles / agent dots never call useWorkspacePaths. */
+function ActorAvatarWorkspaceProfileLink({
+  actorType,
+  actorId,
+  children,
+}: {
+  actorType: "member" | "squad" | string;
+  actorId: string;
+  children: React.ReactNode;
+}) {
+  const workspacePaths = useWorkspacePaths();
+  const href =
+    actorType === "member"
+      ? workspacePaths.memberDetail(actorId)
+      : actorType === "squad"
+        ? workspacePaths.squadDetail(actorId)
+        : null;
+  return href ? (
+    <ActorAvatarProfileLink href={href}>{children}</ActorAvatarProfileLink>
+  ) : (
+    <>{children}</>
+  );
+}
+
 const FOCUSABLE_ANCESTOR_SELECTOR =
   'a[href], button:not([disabled]), [role="button"]:not([aria-disabled="true"]), [tabindex]:not([tabindex="-1"])';
 const PROFILE_LINK_CONTROL_SELECTOR =
@@ -80,22 +111,30 @@ export function ActorAvatar({
   actorId,
   size,
   className,
+  avatarUrlHint,
   enableHoverCard,
   showStatusDot,
   hoverCardVariant = "profile",
   profileLink,
 }: ActorAvatarProps) {
   const { getActorName, getActorInitials, getActorAvatarUrl } = useActorName();
-  const paths = useWorkspacePaths();
+  // LRM-224: identity-first — directory + sticky cache; message URL only seeds.
+  const avatarUrl = resolveIdentityAvatarUrl({
+    actorType,
+    actorId,
+    avatarUrlHint,
+    directoryUrl: getActorAvatarUrl(actorType, actorId),
+  });
   const avatar = (
     <ActorAvatarBase
       name={getActorName(actorType, actorId)}
       initials={getActorInitials(actorType, actorId)}
-      avatarUrl={getActorAvatarUrl(actorType, actorId)}
+      avatarUrl={avatarUrl}
       isAgent={actorType === "agent"}
       isSystem={actorType === "system"}
       isSquad={actorType === "squad"}
       size={size}
+      toneSeed={`${actorType}:${actorId}`}
       className={className}
     />
   );
@@ -124,19 +163,13 @@ export function ActorAvatar({
     ? dotted
     : actorType === "agent"
       ? <ActorAvatarPanelTrigger agentId={actorId}>{dotted}</ActorAvatarPanelTrigger>
-      : (() => {
-          const href =
-            actorType === "member"
-              ? paths.memberDetail(actorId)
-              : actorType === "squad"
-                ? paths.squadDetail(actorId)
-                : null;
-          return href ? (
-            <ActorAvatarProfileLink href={href}>{dotted}</ActorAvatarProfileLink>
-          ) : (
-            dotted
-          );
-        })();
+      : actorType === "member" || actorType === "squad"
+        ? (
+            <ActorAvatarWorkspaceProfileLink actorType={actorType} actorId={actorId}>
+              {dotted}
+            </ActorAvatarWorkspaceProfileLink>
+          )
+        : dotted;
 
   if (!enableHoverCard) {
     return content;

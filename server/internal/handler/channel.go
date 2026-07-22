@@ -829,6 +829,11 @@ func (h *Handler) UpdateChannel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ch)
 }
 
+// DeleteChannel permanently removes a group channel and its cascaded rows
+// (messages, members, attachments, …). Unlike ArchiveChannel this is
+// unrecoverable. Only workspace owner/admin may delete; system #general and
+// DMs are rejected with explicit errors. Archived channels may still be
+// deleted (Slack-aligned).
 func (h *Handler) DeleteChannel(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {
@@ -839,15 +844,57 @@ func (h *Handler) DeleteChannel(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !h.requireChannelManager(w, r, workspaceID, channelID, parseUUID(userID)) {
+
+	var kind string
+	var systemKey pgtype.Text
+	err := h.DB.QueryRow(r.Context(), `
+		SELECT kind, system_key
+		FROM channel
+		WHERE id = $1 AND workspace_id = $2`, channelID, parseUUID(workspaceID)).Scan(&kind, &systemKey)
+	if err != nil {
+		if errorsIsNoRows(err) {
+			writeError(w, http.StatusNotFound, "channel not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load channel")
 		return
 	}
-	if !h.requireChannelNotSystem(w, r.Context(), workspaceID, channelID) {
+	if systemKey.Valid && systemKey.String == "general" {
+		writeSystemChannelProtected(w)
 		return
 	}
-	if _, ok := h.archiveChannel(w, r, workspaceID, channelID, parseUUID(userID)); !ok {
+	if kind == "dm" {
+		writeError(w, http.StatusForbidden, "direct messages cannot be permanently deleted")
 		return
 	}
+	if kind != "group" {
+		writeError(w, http.StatusForbidden, "only group channels can be permanently deleted")
+		return
+	}
+	// Permanent delete is stricter than archive: workspace owner/admin only
+	// (channel creator who is a plain member cannot delete).
+	if _, ok := h.requireWorkspaceRole(w, r, workspaceID, "workspace not found", "owner", "admin"); !ok {
+		return
+	}
+
+	tag, err := h.DB.Exec(r.Context(), `
+		DELETE FROM channel
+		WHERE id = $1 AND workspace_id = $2 AND kind = 'group'`,
+		channelID, parseUUID(workspaceID))
+	if err != nil {
+		if isSystemGeneralGuardError(err) {
+			writeSystemChannelProtected(w)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to delete channel")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "channel not found")
+		return
+	}
+
+	h.publish(protocol.EventChannelDeleted, workspaceID, "member", userID, map[string]any{"id": uuidToString(channelID)})
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -35,9 +35,8 @@ import {
   skillDetailOptions,
   workspaceKeys,
 } from "@multica/core/workspace/queries";
-import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { runtimeListOptions } from "@multica/core/runtimes";
-import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
+import { ActorAvatar } from "../../common/actor-avatar";
 import { Button, buttonVariants } from "@multica/ui/components/ui/button";
 import {
   Dialog,
@@ -164,11 +163,11 @@ function UsedBySection({ agents }: { agents: Agent[] }) {
           className="flex items-center gap-2 rounded-md border bg-card px-2.5 py-1.5"
         >
           <ActorAvatar
-            name={a.name}
-            initials={a.name.slice(0, 2).toUpperCase()}
-            avatarUrl={resolvePublicFileUrl(a.avatar_url)}
-            isAgent
+            actorType="agent"
+            actorId={a.id}
             size={22}
+            avatarUrlHint={a.avatar_url}
+            profileLink={false}
           />
           <div className="min-w-0 flex-1">
             <div className="truncate text-xs font-medium">{a.name}</div>
@@ -734,10 +733,11 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
                   <span aria-hidden>·</span>
                   <span className="inline-flex items-center gap-1">
                     <ActorAvatar
-                      name={creator.name}
-                      initials={creator.name.slice(0, 2).toUpperCase()}
-                      avatarUrl={resolvePublicFileUrl(creator.avatar_url)}
+                      actorType="member"
+                      actorId={creator.user_id}
                       size={14}
+                      avatarUrlHint={creator.avatar_url}
+                      profileLink={false}
                     />
                     {t(($) => $.detail.subline.by_creator, { name: creator.name })}
                   </span>

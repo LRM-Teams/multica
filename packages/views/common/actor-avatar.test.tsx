@@ -58,6 +58,10 @@ const openFromContextMock = vi.fn<(id: string) => void>();
 const openInNewTabMock = vi.fn();
 let contextAvailable = false;
 
+vi.mock("@multica/core/workspace/avatar-url", () => ({
+  resolvePublicFileUrl: (url: string | null | undefined) => url ?? null,
+}));
+
 vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({
     getActorName: () => "Agent One",

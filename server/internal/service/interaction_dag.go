@@ -91,6 +91,7 @@ var _ ArealSegmentClient = (*arealrl.Client)(nil)
 // trained run. The service itself does not panic or swallow errors.
 type InteractionDAGService struct {
 	store   InteractionDAGStore
+	msgs    MessageStore // optional; nil-safe, required only for RecordLocalSegmentForEvent
 	client  ArealSegmentClient
 	enabled bool
 }
@@ -98,8 +99,17 @@ type InteractionDAGService struct {
 // NewInteractionDAGService constructs the recorder. When enabled is false the
 // service is a no-op (RecordSessionAgentRun/AddEdge/CloseSegmentForEvent
 // return nil without touching the DB or bridge).
+//
+// For local trajectory recording (RecordLocalSegmentForEvent), use
+// NewInteractionDAGServiceWithMessages which also injects a MessageStore.
 func NewInteractionDAGService(store InteractionDAGStore, client ArealSegmentClient, enabled bool) *InteractionDAGService {
 	return &InteractionDAGService{store: store, client: client, enabled: enabled}
+}
+
+// NewInteractionDAGServiceWithMessages constructs the recorder with message
+// access for local (non-AReaL) trajectory recording.
+func NewInteractionDAGServiceWithMessages(store InteractionDAGStore, msgs MessageStore, client ArealSegmentClient, enabled bool) *InteractionDAGService {
+	return &InteractionDAGService{store: store, msgs: msgs, client: client, enabled: enabled}
 }
 
 // Enabled reports whether segment-DAG recording is active.
@@ -234,8 +244,11 @@ func (s *InteractionDAGService) CloseSegmentForEvent(
 		ProjectID:       projectID,
 		AgentRunID:      run.AgentRunID,
 		IssueID:         run.IssueID, // carry the looked-up issue_id (do not re-derive)
-		TrajectoryID:    int64(trajectoryID),
+		TrajectoryID:    pgtype.Int8{Int64: int64(trajectoryID), Valid: true},
 		TensorRef:       tensorRef,
+			TrajectorySource: "areal_tensor",
+			Trainable:        true,
+			Trajectory:       []byte("[]"),
 		ClosingEvent:    pgText(closingEvent),
 		StartSeq:        startSeq,
 		EndSeq:          endSeq,
@@ -272,6 +285,141 @@ func (s *InteractionDAGService) AddEdge(ctx context.Context, projectID, srcSegme
 	})
 }
 
+// RecordLocalSegmentForEvent records a non-training segment for an env-dispatch
+// task. It snapshots persisted task_message rows in the closing event's sequence
+// range into a task_messages-source segment. No AReaL lifecycle calls are made.
+//
+// Session identity is deterministic: multica:<agentRunID>. The segment ID equals
+// the session ID (one-segment-per-task, idempotent on repeated close). The
+// recorded segment carries trajectory_source=task_messages, trainable=false, and
+// null AReaL fields. Recording is best-effort: a failure returns an error but does
+// not affect the task's terminal result.
+func (s *InteractionDAGService) RecordLocalSegmentForEvent(
+	ctx context.Context,
+	projectID, agentRunID, issueID, closingEvent string,
+	envSnapshot map[string]any,
+) (string, error) {
+	if !s.enabled {
+		return "", nil
+	}
+	if s.store == nil || s.msgs == nil {
+		return "", errors.New("interaction_dag: RecordLocalSegmentForEvent requires store and message store")
+	}
+	if projectID == "" || agentRunID == "" {
+		return "", errors.New("interaction_dag: RecordLocalSegmentForEvent requires project_id, agent_run_id")
+	}
+
+	sessionID := fmt.Sprintf("multica:%s", agentRunID)
+
+	// Upsert the deterministic local session/run mapping (idempotent).
+	if err := s.store.UpsertInteractionDAGSessionRun(ctx, db.UpsertInteractionDAGSessionRunParams{
+		SessionID:  sessionID,
+		ProjectID:  projectID,
+		AgentRunID: agentRunID,
+		IssueID:    pgText(issueID),
+	}); err != nil {
+		return "", fmt.Errorf("interaction_dag: upsert local session run %s: %w", sessionID, err)
+	}
+
+	// Compute the sequence range for this segment.
+	lastEndSeq, err := s.store.GetLastEndSeqForAgentRun(ctx, agentRunID)
+	if err != nil {
+		return "", fmt.Errorf("interaction_dag: get last end_seq for %s: %w", agentRunID, err)
+	}
+	startSeq := lastEndSeq + 1
+	endSeq, err := s.store.GetMaxTaskMessageSeq(ctx, agentRunID)
+	if err != nil {
+		return "", fmt.Errorf("interaction_dag: get max task_message seq for %s: %w", agentRunID, err)
+	}
+
+	// Read persisted task messages in the range and serialize the allowlisted
+	// fields: sequence, type, tool, content, input, output. Provider API keys and
+	// sandbox runtime configuration never enter this snapshot.
+	msgs, err := s.msgs.MessagesForTaskInRange(ctx, agentRunID, startSeq, endSeq)
+	if err != nil {
+		return "", fmt.Errorf("interaction_dag: read messages for %s [%d,%d]: %w", agentRunID, startSeq, endSeq, err)
+	}
+	trajectory := serializeLocalTrajectory(msgs)
+
+	segmentID := sessionID
+	sandboxIDs, issueSnapshotID, envState := encodeEnvSnapshot(envSnapshot)
+
+	if err := s.store.InsertInteractionDAGSegmentWithSnapshot(ctx, db.InsertInteractionDAGSegmentWithSnapshotParams{
+		SegmentID:        segmentID,
+		ProjectID:        projectID,
+		AgentRunID:       agentRunID,
+		IssueID:          pgText(issueID),
+		TrajectoryID:     pgtype.Int8{Valid: false},
+		TensorRef:        nil,
+		ClosingEvent:     pgText(closingEvent),
+		StartSeq:         startSeq,
+		EndSeq:           endSeq,
+		TrajectorySource: "task_messages",
+		Trainable:        false,
+		Trajectory:       trajectory,
+		SandboxIDs:       sandboxIDs,
+		IssueSnapshotID:  issueSnapshotID,
+		EnvState:         envState,
+	}); err != nil {
+		return "", fmt.Errorf("interaction_dag: insert local segment+env_snapshot %s: %w", segmentID, err)
+	}
+
+	return segmentID, nil
+}
+
+// localTrajectoryEntry is the allowlisted shape for each task_message entry in a
+// local trajectory snapshot. Provider API keys and runtime secrets never appear here.
+type localTrajectoryEntry struct {
+	Seq     int32  `json:"sequence"`
+	Type    string `json:"type"`
+	Tool    string `json:"tool"`
+	Content string `json:"content"`
+	Input   string `json:"input"`
+	Output  string `json:"output"`
+}
+
+// serializeLocalTrajectory converts persisted task_message rows into the
+// allowlisted trajectory JSON array. Only sequence, type, tool, content, input,
+// and output are included; provider keys and runtime configuration are excluded
+// by construction (they are not task_message columns).
+func serializeLocalTrajectory(msgs []db.TaskMessage) []byte {
+	entries := make([]localTrajectoryEntry, 0, len(msgs))
+	for _, m := range msgs {
+		tool := ""
+		if m.Tool.Valid {
+			tool = m.Tool.String
+		}
+		content := ""
+		if m.Content.Valid {
+			content = m.Content.String
+		}
+		output := ""
+		if m.Output.Valid {
+			output = m.Output.String
+		}
+		input := ""
+		if len(m.Input) > 0 {
+			input = string(m.Input)
+		}
+		entries = append(entries, localTrajectoryEntry{
+			Seq:     m.Seq,
+			Type:    m.Type,
+			Tool:    tool,
+			Content: content,
+			Input:   input,
+			Output:  output,
+		})
+	}
+	if len(entries) == 0 {
+		return []byte("[]")
+	}
+	raw, _ := json.Marshal(entries)
+	if raw == nil {
+		return []byte("[]")
+	}
+	return raw
+}
+
 // AssembledDag is the read-only assembled DAG consumed by AReaL. Its JSON shape
 // mirrors areal's AssembledDag.from_dict (SegmentSpec/EdgeSpec dataclasses) so
 // AReaL can parse it with SegmentSpec(**s) / EdgeSpec(**e). The segment/edge
@@ -300,13 +448,16 @@ type AssembledDag struct {
 // is reconstructed from the three interaction_dag_env_snapshot columns. issue_id
 // is a non-optional str on the areal side; a NULL DB issue_id is emitted as "".
 type AssembledSegment struct {
-	SegmentID    string               `json:"segment_id"`
-	AgentRunID   string               `json:"agent_run_id"`
-	IssueID      string               `json:"issue_id"`
-	TrajectoryID int64                `json:"trajectory_id"`
-	TensorRef    json.RawMessage      `json:"tensor_ref"`
-	ClosingEvent *string              `json:"closing_event"`
-	EnvSnapshot  AssembledEnvSnapshot `json:"env_snapshot"`
+	SegmentID        string               `json:"segment_id"`
+	AgentRunID       string               `json:"agent_run_id"`
+	IssueID          string               `json:"issue_id"`
+	TrajectoryID     *int64               `json:"trajectory_id"`
+	TensorRef        json.RawMessage      `json:"tensor_ref"`
+	ClosingEvent     *string              `json:"closing_event"`
+	TrajectorySource string               `json:"trajectory_source"`
+	Trainable        bool                 `json:"trainable"`
+	Trajectory       json.RawMessage      `json:"trajectory"`
+	EnvSnapshot      AssembledEnvSnapshot `json:"env_snapshot"`
 }
 
 // AssembledEnvSnapshot is the inverse of encodeEnvSnapshot: the three
@@ -403,12 +554,15 @@ func (s *InteractionDAGService) AssembleAssembledDag(ctx context.Context, projec
 			closingEvent = &ce
 		}
 		seg := AssembledSegment{
-			SegmentID:    sg.SegmentID,
-			AgentRunID:   sg.AgentRunID,
-			IssueID:      issueID,
-			TrajectoryID: sg.TrajectoryID,
-			TensorRef:    json.RawMessage(sg.TensorRef),
-			ClosingEvent: closingEvent,
+			SegmentID:        sg.SegmentID,
+			AgentRunID:       sg.AgentRunID,
+			IssueID:          issueID,
+						TrajectoryID:     int8Ptr(sg.TrajectoryID),
+						TensorRef:        tensorRefOrEmpty(sg.TensorRef),
+			ClosingEvent:     closingEvent,
+			TrajectorySource: sg.TrajectorySource,
+			Trainable:        sg.Trainable,
+			Trajectory:       json.RawMessage(sg.Trajectory),
 		}
 		if sn, ok := snapBySeg[sg.SegmentID]; ok {
 			seg.EnvSnapshot = assembleEnvSnapshot(sn)
@@ -596,4 +750,23 @@ func pgText(s string) pgtype.Text {
 		return pgtype.Text{Valid: false}
 	}
 	return pgtype.Text{String: s, Valid: true}
+}
+
+
+// int8Ptr converts a pgtype.Int8 to *int64, returning nil when the value is not
+// present (NULL in the DB). Used to emit nullable trajectory_id in AssembledSegment.
+func int8Ptr(v pgtype.Int8) *int64 {
+	if !v.Valid {
+		return nil
+	}
+	return &v.Int64
+}
+
+// tensorRefOrEmpty returns the tensor_ref bytes as json.RawMessage, falling back to
+// json null when the ref is nil (task_messages segments). Absence stays distinguishable.
+func tensorRefOrEmpty(b []byte) json.RawMessage {
+	if b == nil {
+		return json.RawMessage("null")
+	}
+	return json.RawMessage(b)
 }

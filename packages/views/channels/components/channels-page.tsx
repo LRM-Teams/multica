@@ -92,7 +92,7 @@ import type {
   ChannelMessageSearchResult,
   ChannelTypingPayload,
 } from "@multica/core/types";
-import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
+import { ActorAvatar } from "../../common/actor-avatar";
 import { UnicodeSpinner } from "@multica/ui/components/common/unicode-spinner";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
@@ -159,7 +159,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@multica/ui/components
 import { MobileListDetailLayout } from "../../common/mobile-list-detail-layout";
 import { ContentEditor, type ContentEditorRef, type ContentEditorProps } from "../../editor/content-editor";
 import { useNavigation } from "../../navigation/context";
-import { avatarGlyph, avatarToneClass } from "../../common/initials";
 import { useT } from "../../i18n/use-t";
 import { useTimeAgo } from "../../i18n/use-time-ago";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
@@ -177,9 +176,9 @@ import {
   ChannelDetailsPanel,
   type ChannelDetailsTab,
 } from "./channel-details-panel";
+import { DeleteChannelDialog } from "./delete-channel-dialog";
 import { ChannelTasksBoard } from "./channel-tasks-board";
 import { ChannelGroupAvatar } from "./channel-group-avatar";
-import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { ThreadPanel } from "./thread-panel";
 import { ComposerAttachmentTray } from "./composer-attachment-tray";
 import { ComposerQuotePreview } from "./message-quote";
@@ -280,29 +279,22 @@ function MemberPresenceStack({
   const overlap = Math.round(size * 0.28);
   return (
     <span className="inline-flex items-center">
-      {visible.map((m, i) => {
-        const name = resolveActorDisplayName(
-          m,
-          m.member_type === "agent" ? "Agent" : "Member",
-        );
-        const seed = `${m.member_type}:${m.member_id}:${name}`;
-        return (
-          <span
-            key={`${m.member_type}:${m.member_id}`}
-            style={{ marginLeft: i === 0 ? 0 : -overlap }}
-            className="inline-flex rounded-full ring-2 ring-background"
-          >
-            <ActorAvatar
-              name={name}
-              initials={avatarGlyph(name || "?")}
-              avatarUrl={resolvePublicFileUrl(m.avatar_url)}
-              isAgent={m.member_type === "agent"}
-              size={size}
-              className={avatarToneClass(seed)}
-            />
-          </span>
-        );
-      })}
+      {visible.map((m, i) => (
+        <span
+          key={`${m.member_type}:${m.member_id}`}
+          style={{ marginLeft: i === 0 ? 0 : -overlap }}
+          className="inline-flex rounded-full ring-2 ring-background"
+        >
+          <ActorAvatar
+            actorType={m.member_type === "agent" ? "agent" : "member"}
+            actorId={m.member_id}
+            size={size}
+            avatarUrlHint={m.avatar_url}
+            showStatusDot={m.member_type === "agent"}
+            profileLink={false}
+          />
+        </span>
+      ))}
     </span>
   );
 }
@@ -1261,6 +1253,15 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         currentUserRole === "admin"),
     [currentUserId, currentUserRole],
   );
+  // LRM-239 / LRM-235 — permanent delete is stricter than archive: workspace
+  // owner/admin only (channel creator who is a plain member cannot delete).
+  // System channels never get a Settings tab, so this gate is defense-in-depth.
+  const canDeleteChannel = useCallback(
+    (channel: Channel) =>
+      !isImmutableSystemChannel(channel) &&
+      (currentUserRole === "owner" || currentUserRole === "admin"),
+    [currentUserRole],
+  );
   // #576 blocker (Iris) — the group-settings Project picker must be gated by
   // the same creator/admin permission as archiving, plus archived-channel and
   // in-flight-mutation states: a plain member (or anyone viewing an archived
@@ -1666,7 +1667,12 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         toast.success(t(($) => $.delete_dialog.toast_success));
         // If the open channel was the one removed, drop the selection so the
         // `active` memo falls back to the first remaining channel.
-        if (target.id === activeId) setActiveId(null);
+        if (target.id === activeId) {
+          setActiveId(null);
+          replace(wsPaths.channels());
+        }
+        closeChannelDetails();
+        setMobilePanel(null);
         setDeleteTarget(null);
       },
       onError: () => toast.error(t(($) => $.delete_dialog.toast_failed)),
@@ -2649,6 +2655,9 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
           void handleShare();
         },
         onArchive: () => setArchiveTarget(active),
+        onDelete: canDeleteChannel(active)
+          ? () => setDeleteTarget(active)
+          : undefined,
         onRename: (name: string) => {
           updateChannel.mutate(
             { channelId: active.id, name },
@@ -3367,31 +3376,15 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         </SheetContent>
       </Sheet>
 
-      <AlertDialog
+      <DeleteChannelDialog
         open={deleteTarget !== null}
+        channelName={deleteTarget?.name ?? ""}
+        pending={deleteChannel.isPending}
+        onConfirm={handleDelete}
         onOpenChange={(open) => {
           if (!open) setDeleteTarget(null);
         }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t(($) => $.delete_dialog.title)}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {t(($) => $.delete_dialog.description, { name: deleteTarget?.name ?? "" })}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t(($) => $.delete_dialog.cancel)}</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              onClick={handleDelete}
-              disabled={deleteChannel.isPending}
-            >
-              {t(($) => $.delete_dialog.confirm)}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      />
 
       <AlertDialog
         open={archiveTarget !== null}

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/multica-ai/multica/server/internal/util/stackerr"
 )
 
@@ -62,6 +63,12 @@ type EnvDispatchInput struct {
 	TrainAgentID    string // optional training target (spec §4.1): a squad member or the single agent; empty ⇒ no training session
 	CriticAgentID   string // optional critic for trained agent (sub-project E): evaluates the trained agent's output; empty ⇒ unchanged behavior
 	IdempotencyKey  string // optional; dedupes retries (spec §7.7)
+
+	// TrainingMode is the explicit training vs non-training switch (Task 1).
+	// true requires TrainAgentID; false forbids TrainAgentID and CriticAgentID.
+	// The handler dereferences the request pointer and never passes an absent
+	// value (nil is rejected at the HTTP boundary).
+	TrainingMode bool
 
 	// PerAgentEnvSpecs optionally assigns individual squad agents to sandbox
 	// templates or base environments while preserving a shared Multica entity
@@ -332,6 +339,31 @@ type EnvDispatchDeps interface {
 	// reward by project_id. Keyed by projectID (upsert on conflict).
 	SaveTrainingDispatch(ctx context.Context, projectID, workspaceID, trainAgentID, criticAgentID string, defaultReward float64) error
 
+	// CreateEnvDispatchRun persists the durable dispatch root row for a project
+	// (spec: durable dispatch identity independent of training_dispatch). One row
+	// per project, keyed by project_id, carrying workspace_id and training_mode.
+	// root_task_id starts NULL and is bound later via BindEnvDispatchRootTask.
+	// Created after the project exists. Best-effort: a creation failure is
+	// recorded on the rollout but does not fail the dispatch; /dag treats a
+	// missing row as in_progress (no root task yet).
+	CreateEnvDispatchRun(ctx context.Context, projectID, workspaceID string, trainingMode bool) error
+
+	// BindEnvDispatchRootTask binds the enqueued leader task as the dispatch
+	// root (env_dispatch_run.root_task_id = rootTaskID). Called immediately after
+	// the leader task is enqueued (consumes EnvRollout.LeaderRunID / AgentRunID).
+	// Best-effort: a binding failure is recorded but does not fail the dispatch;
+	// /dag treats an unbound root as in_progress until the binding succeeds.
+	BindEnvDispatchRootTask(ctx context.Context, projectID, rootTaskID string) error
+
+	// GetEnvDispatchRootTaskStatus resolves the status of the dispatch's bound
+	// root task for the /dag readiness decision. Readiness is derived
+	// EXCLUSIVELY from this row, not from training_dispatch. Returns
+	// pgx.ErrNoRows when no env_dispatch_run row exists or root_task_id is NULL
+	// (rollout not started / root not enqueued); the caller treats both as
+	// in_progress. Otherwise returns the agent_task_queue.status of the bound
+	// root task.
+	GetEnvDispatchRootTaskStatus(ctx context.Context, projectID, workspaceID string) (string, error)
+
 	// ValidateAgentInWorkspaceOrSquad reports whether agentID is a member of
 	// the workspace, or — when squadID is non-empty — a member of that squad.
 	// Returns a typed error when the agent is unknown or unauthorized; nil when
@@ -346,6 +378,52 @@ type EnvDispatchDeps interface {
 	// SandboxInstanceCreator. Returns a typed error when the template/base_env_id
 	// is unknown or unauthorized, or when the runtime is malformed.
 	ResolvePerAgentEnvSpec(ctx context.Context, workspaceID string, spec PerAgentEnvSpec) (ResolvedPerAgentSandboxPolicy, error)
+}
+
+// rootTaskTerminalStatuses is the terminal subset of agent_task_queue.status
+// (migrations 001 + 109): completed/failed/cancelled are the transitions that
+// fire the terminal hook. The rest are in-progress. Used by GetDagReadiness to
+// decide 202 (still polling) vs proceeding to DAG assembly (200).
+var rootTaskTerminalStatuses = map[string]bool{
+	"completed": true,
+	"failed":    true,
+	"cancelled": true,
+}
+
+// DagReadiness is the /dag readiness decision derived EXCLUSIVELY from the
+// env_dispatch_run root task, independent of training_dispatch.
+type DagReadiness int
+
+const (
+	// DagReadinessInProgress: no env_dispatch_run row exists, no root task is
+	// bound, or the bound root task is non-terminal. The handler returns
+	// 202 {"status":"in_progress"} so AReaL keeps polling.
+	DagReadinessInProgress DagReadiness = iota
+	// DagReadinessTerminal: the bound root task is terminal
+	// (completed/failed/cancelled). The handler proceeds to DAG assembly to
+	// decide 200 {"status":"failed"} (non-dense coverage) vs 200 + assembled DAG
+	// (dense coverage).
+	DagReadinessTerminal
+)
+
+// GetDagReadiness derives the /dag readiness exclusively from the
+// env_dispatch_run root task, independent of training_dispatch. Returns
+// DagReadinessInProgress when no run exists, no root task is bound, or the root
+// task is non-terminal. Returns DagReadinessTerminal when the root task is
+// terminal, signaling the handler to assemble the DAG for the 200 decision.
+// A non-ErrNoRows lookup error is surfaced to the caller (handler -> 503).
+func (s *EnvDispatchService) GetDagReadiness(ctx context.Context, projectID, workspaceID string) (DagReadiness, error) {
+	status, err := s.deps.GetEnvDispatchRootTaskStatus(ctx, projectID, workspaceID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return DagReadinessInProgress, nil
+		}
+		return DagReadinessInProgress, err
+	}
+	if !rootTaskTerminalStatuses[status] {
+		return DagReadinessInProgress, nil
+	}
+	return DagReadinessTerminal, nil
 }
 
 // EnvCollaborationTrigger is the persisted source of truth for a branch to
@@ -583,6 +661,21 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 		return EnvDispatchResult{}, fmt.Errorf("reset_failed: %w", resetErrs[0])
 	}
 
+	// Persist the durable dispatch root row (spec: durable dispatch identity
+	// independent of training_dispatch). One row per project, keyed by
+	// project_id, carrying workspace_id + training_mode. root_task_id starts
+	// NULL and is bound after the leader task is enqueued (below). Best-effort:
+	// a creation failure is recorded on the rollout but does not fail the
+	// dispatch; /dag treats a missing row as in_progress (no root task yet).
+	for i := range rollouts {
+		if rollouts[i].ProjectID == "" {
+			continue
+		}
+		if err := s.deps.CreateEnvDispatchRun(ctx, rollouts[i].ProjectID, in.WorkspaceID, in.TrainingMode); err != nil {
+			rollouts[i].Error = fmt.Sprintf("create env_dispatch_run: %v", err)
+		}
+	}
+
 	// Persist training intent per rollout project (spec §4.1) BEFORE dispatch:
 	// the session-open hook (fired when the trained member's task is created
 	// during dispatch) resolves the training target + default reward by
@@ -615,6 +708,23 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 		}(i)
 	}
 	dispatchWG.Wait()
+
+	// Bind the enqueued leader task as the dispatch root (spec: bind
+	// root_task_id immediately after enqueuing the leader task). The leader task
+	// is the rollout's AgentRunID (set by every dispatchOne path: issue,
+	// self_play, scratch-channel, and branch-channel). Best-effort: a binding
+	// failure is recorded on the rollout but does not fail the dispatch; /dag
+	// treats an unbound root as in_progress until the binding succeeds.
+	for i := range rollouts {
+		if rollouts[i].ProjectID == "" || rollouts[i].AgentRunID == "" {
+			continue
+		}
+		if err := s.deps.BindEnvDispatchRootTask(ctx, rollouts[i].ProjectID, rollouts[i].AgentRunID); err != nil {
+			if rollouts[i].Error == "" {
+				rollouts[i].Error = fmt.Sprintf("bind env_dispatch root task: %v", err)
+			}
+		}
+	}
 
 	// Top-level project_id for the response: the single project the dispatch
 	// produces (group_size=1 today). AReaL consumes one project_id via
@@ -718,6 +828,16 @@ func (s *EnvDispatchService) validate(in EnvDispatchInput) error {
 		return fmt.Errorf("validation_failed: agent_id or squad_id is required")
 	case in.AgentID != "" && in.SquadID != "":
 		return fmt.Errorf("validation_failed: agent_id and squad_id are mutually exclusive")
+	}
+	// training_mode (Task 1): false forbids training IDs; true requires
+	// train_agent_id. The handler rejects an omitted training_mode before
+	// constructing EnvDispatchInput, so the service only sees an explicit
+	// boolean.
+	if !in.TrainingMode && (in.TrainAgentID != "" || in.CriticAgentID != "") {
+		return fmt.Errorf("validation_failed: training_mode=false forbids train_agent_id and critic_agent_id")
+	}
+	if in.TrainingMode && in.TrainAgentID == "" {
+		return fmt.Errorf("validation_failed: training_mode=true requires train_agent_id")
 	}
 	// train_agent_id (spec §4.1): the training target. Allowed when a squad_id
 	// is set (a team member) OR when it equals agent_id (single-agent

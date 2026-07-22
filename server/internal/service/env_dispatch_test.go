@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/multica-ai/multica/server/internal/util/stackerr"
 )
 
@@ -102,6 +103,15 @@ type fakeEnvDispatchDeps struct {
 
 	trainingSaves []trainingSaveCall // every SaveTrainingDispatch call, in order
 
+	// env_dispatch_run durable root: create/bind call recordings + the
+	// in-memory run map keyed by projectID. rootTaskStatusOverride, when
+	// non-empty, is returned by GetEnvDispatchRootTaskStatus for any bound root
+	// (empty -> "completed", the terminal default so a bound root is ready).
+	dispatchRuns          map[string]fakeEnvDispatchRun
+	createRunCalls        []createEnvDispatchRunCall
+	bindRootTaskCalls     []bindRootTaskCall
+	rootTaskStatusOverride string
+
 	forkErr                    error
 	createEnvErr               error
 	copyProjectErr             error
@@ -140,7 +150,68 @@ func newFakeEnvDispatchDeps() *fakeEnvDispatchDeps {
 	return &fakeEnvDispatchDeps{
 		envs: map[string]Env{}, sandboxes: map[string]string{}, projects: map[string]string{},
 		issues: map[string][]IssueRow{}, chatSess: map[string]string{}, channels: map[string]string{},
+		dispatchRuns: map[string]fakeEnvDispatchRun{},
 	}
+}
+
+// fakeEnvDispatchRun is the in-memory env_dispatch_run row for service tests.
+type fakeEnvDispatchRun struct {
+	WorkspaceID  string
+	TrainingMode bool
+	RootTaskID   string
+}
+
+type createEnvDispatchRunCall struct {
+	ProjectID, WorkspaceID string
+	TrainingMode           bool
+}
+
+type bindRootTaskCall struct {
+	ProjectID, RootTaskID string
+}
+
+func (f *fakeEnvDispatchDeps) CreateEnvDispatchRun(_ context.Context, projectID, workspaceID string, trainingMode bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.createRunCalls = append(f.createRunCalls, createEnvDispatchRunCall{
+		ProjectID: projectID, WorkspaceID: workspaceID, TrainingMode: trainingMode,
+	})
+	// Upsert: preserve an existing root_task_id binding across a re-dispatch.
+	existing := f.dispatchRuns[projectID]
+	existing.WorkspaceID = workspaceID
+	existing.TrainingMode = trainingMode
+	f.dispatchRuns[projectID] = existing
+	return nil
+}
+
+func (f *fakeEnvDispatchDeps) BindEnvDispatchRootTask(_ context.Context, projectID, rootTaskID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.bindRootTaskCalls = append(f.bindRootTaskCalls, bindRootTaskCall{
+		ProjectID: projectID, RootTaskID: rootTaskID,
+	})
+	run, ok := f.dispatchRuns[projectID]
+	if !ok {
+		return fmt.Errorf("no env_dispatch_run for project %s", projectID)
+	}
+	run.RootTaskID = rootTaskID
+	f.dispatchRuns[projectID] = run
+	return nil
+}
+
+func (f *fakeEnvDispatchDeps) GetEnvDispatchRootTaskStatus(_ context.Context, projectID, workspaceID string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	run, ok := f.dispatchRuns[projectID]
+	if !ok || run.RootTaskID == "" {
+		return "", pgx.ErrNoRows
+	}
+	if f.rootTaskStatusOverride != "" {
+		return f.rootTaskStatusOverride, nil
+	}
+	// Default: a bound root task is terminal (completed) so a successful
+	// dispatch is ready for DAG assembly.
+	return "completed", nil
 }
 
 func (f *fakeEnvDispatchDeps) ResolveMessageRoster(_ context.Context, _, agentID, _ string) (MessageRoster, error) {
@@ -550,6 +621,7 @@ func TestValidate_TrainAgentID(t *testing.T) {
 	single := base
 	single.AgentID = "ag"
 	single.TrainAgentID = "ag"
+	single.TrainingMode = true
 	if err := svc.validate(single); err != nil {
 		t.Fatalf("train_agent_id == agent_id must be accepted, got %v", err)
 	}
@@ -558,6 +630,7 @@ func TestValidate_TrainAgentID(t *testing.T) {
 	team := base
 	team.SquadID = "sq"
 	team.TrainAgentID = "member"
+	team.TrainingMode = true
 	if err := svc.validate(team); err != nil {
 		t.Fatalf("train_agent_id with squad_id must be accepted, got %v", err)
 	}
@@ -566,6 +639,7 @@ func TestValidate_TrainAgentID(t *testing.T) {
 	bad := base
 	bad.AgentID = "ag"
 	bad.TrainAgentID = "other"
+	bad.TrainingMode = true
 	if err := svc.validate(bad); err == nil {
 		t.Fatal("train_agent_id != agent_id without squad_id must be rejected")
 	}
@@ -636,7 +710,7 @@ func TestDispatch_ScratchMessage_TrainingSessionLinkedAfterEnqueue(t *testing.T)
 	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
 		WorkspaceID: "ws", UserID: "u", Mode: EnvModeScratch, EnvID: baseEnv,
 		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 3,
-		AgentID: "ag", TrainAgentID: "ag", Message: &MessageInput{Content: "q"},
+		AgentID: "ag", TrainAgentID: "ag", TrainingMode: true, Message: &MessageInput{Content: "q"},
 	})
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)
@@ -1423,7 +1497,7 @@ func TestDispatch_PersistsTrainingDispatchWhenTrainAgentSet(t *testing.T) {
 	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
 		WorkspaceID: "ws", UserID: "u", Mode: EnvModeScratch, EnvID: baseEnv,
 		Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue, GroupSize: 3,
-		AgentID: "ag", TrainAgentID: "ag", Issue: &IssueInput{Title: "t"},
+		AgentID: "ag", TrainAgentID: "ag", TrainingMode: true, Issue: &IssueInput{Title: "t"},
 	})
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)
@@ -1487,14 +1561,14 @@ func TestEnvDispatchInput_Validate_CriticAgentID(t *testing.T) {
 		in      EnvDispatchInput
 		wantErr string
 	}{
-		{"empty critic ok (squad)", EnvDispatchInput{WorkspaceID: "ws", SquadID: "sq", TrainAgentID: "train", Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, ""},
-		{"critic with squad+train ok", EnvDispatchInput{WorkspaceID: "ws", SquadID: "sq", TrainAgentID: "train", CriticAgentID: "crit", Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, ""},
-		{"critic without train rejected", EnvDispatchInput{WorkspaceID: "ws", SquadID: "sq", CriticAgentID: "crit", Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, "validation_failed: critic_agent_id requires train_agent_id"},
-		{"critic == train rejected", EnvDispatchInput{WorkspaceID: "ws", SquadID: "sq", TrainAgentID: "same", CriticAgentID: "same", Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, "validation_failed: critic_agent_id must differ from train_agent_id"},
-		{"critic == agent rejected (single agent)", EnvDispatchInput{WorkspaceID: "ws", AgentID: "ag", TrainAgentID: "ag", CriticAgentID: "ag", Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, "validation_failed: critic_agent_id must differ from train_agent_id"},
-		{"critic ok with squad (no agent id)", EnvDispatchInput{WorkspaceID: "ws", SquadID: "sq", TrainAgentID: "train", CriticAgentID: "crit", Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, ""},
-		{"empty critic ok (single agent)", EnvDispatchInput{WorkspaceID: "ws", AgentID: "ag", TrainAgentID: "ag", Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, ""},
-		{"critic with single agent ok", EnvDispatchInput{WorkspaceID: "ws", AgentID: "ag", TrainAgentID: "ag", CriticAgentID: "crit", Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, ""},
+		{"empty critic ok (squad)", EnvDispatchInput{WorkspaceID: "ws", SquadID: "sq", TrainAgentID: "train", TrainingMode: true, Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, ""},
+		{"critic with squad+train ok", EnvDispatchInput{WorkspaceID: "ws", SquadID: "sq", TrainAgentID: "train", CriticAgentID: "crit", TrainingMode: true, Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, ""},
+		{"critic without train rejected", EnvDispatchInput{WorkspaceID: "ws", SquadID: "sq", CriticAgentID: "crit", TrainingMode: true, Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, "validation_failed: training_mode=true requires train_agent_id"},
+		{"critic == train rejected", EnvDispatchInput{WorkspaceID: "ws", SquadID: "sq", TrainAgentID: "same", CriticAgentID: "same", TrainingMode: true, Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, "validation_failed: critic_agent_id must differ from train_agent_id"},
+		{"critic == agent rejected (single agent)", EnvDispatchInput{WorkspaceID: "ws", AgentID: "ag", TrainAgentID: "ag", CriticAgentID: "ag", TrainingMode: true, Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, "validation_failed: critic_agent_id must differ from train_agent_id"},
+		{"critic ok with squad (no agent id)", EnvDispatchInput{WorkspaceID: "ws", SquadID: "sq", TrainAgentID: "train", CriticAgentID: "crit", TrainingMode: true, Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, ""},
+		{"empty critic ok (single agent)", EnvDispatchInput{WorkspaceID: "ws", AgentID: "ag", TrainAgentID: "ag", TrainingMode: true, Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, ""},
+		{"critic with single agent ok", EnvDispatchInput{WorkspaceID: "ws", AgentID: "ag", TrainAgentID: "ag", CriticAgentID: "crit", TrainingMode: true, Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1534,7 +1608,7 @@ func TestEnvDispatchTrainedRolloutCreatesSandboxInstanceRefs(t *testing.T) {
 	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
 		WorkspaceID: "ws", UserID: "u", Mode: EnvModeScratch, EnvID: baseEnv,
 		Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue, GroupSize: 1,
-		AgentID: "ag", TrainAgentID: "ag", Issue: &IssueInput{Title: "t"},
+		AgentID: "ag", TrainAgentID: "ag", TrainingMode: true, Issue: &IssueInput{Title: "t"},
 	})
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)
@@ -1611,7 +1685,7 @@ func TestEnvDispatchSandboxInstanceBranchCreatesFreshFromTemplate(t *testing.T) 
 	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
 		WorkspaceID: "ws", UserID: "u", Mode: EnvModeBranch, EnvID: sourceEnvID,
 		Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue, GroupSize: 1,
-		AgentID: "ag", TrainAgentID: "ag",
+		AgentID: "ag", TrainAgentID: "ag", TrainingMode: true,
 	})
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)
@@ -1946,8 +2020,8 @@ func TestEnvDispatchPerAgentEnvSpecsAssignDistinctSandboxRefs(t *testing.T) {
 	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
 		WorkspaceID: "ws", UserID: "u", SquadID: "sq", Mode: EnvModeScratch, EnvID: baseEnv,
 		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
-		TrainAgentID: "train",
-		Message:      &MessageInput{Content: "hi"},
+		TrainAgentID: "train", TrainingMode: true,
+		Message: &MessageInput{Content: "hi"},
 		PerAgentEnvSpecs: []PerAgentEnvSpec{
 			{AgentID: "a1", Template: "python"},
 			{AgentID: "a2", Template: "node"},
@@ -2204,8 +2278,8 @@ func TestEnvDispatchPerAgentEnvSpecsPartialSquadUsesDefaults(t *testing.T) {
 	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
 		WorkspaceID: "ws", UserID: "u", SquadID: "sq", Mode: EnvModeScratch, EnvID: baseEnv,
 		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
-		TrainAgentID: "train",
-		Message:      &MessageInput{Content: "hi"},
+		TrainAgentID: "train", TrainingMode: true,
+		Message: &MessageInput{Content: "hi"},
 		PerAgentEnvSpecs: []PerAgentEnvSpec{
 			{AgentID: "a1", Template: "python"},
 		},
@@ -2238,6 +2312,7 @@ func TestEnvDispatch_PersistsCriticAgentID(t *testing.T) {
 		AgentID:       "agent-1",
 		TrainAgentID:  "agent-1",
 		CriticAgentID: "critic-1",
+		TrainingMode:  true,
 		Issue: &IssueInput{
 			Title: "Test Issue",
 		},
@@ -2280,6 +2355,7 @@ func TestEnvDispatch_NoCritic_PersistsNull(t *testing.T) {
 		GroupSize:    1,
 		AgentID:      "agent-1",
 		TrainAgentID: "agent-1",
+		TrainingMode: true,
 		Issue: &IssueInput{
 			Title: "Test Issue",
 		},
@@ -2300,5 +2376,238 @@ func TestEnvDispatch_NoCritic_PersistsNull(t *testing.T) {
 	}
 	if fake.trainingSaves[0].projectID != result.Rollouts[0].ProjectID {
 		t.Fatalf("save projectID mismatch: got %q, want %q", fake.trainingSaves[0].projectID, result.Rollouts[0].ProjectID)
+	}
+}
+
+// TestEnvDispatchValidate_TrainingMode exercises the training_mode validation
+// rules (Task 1): training_mode=false forbids train_agent_id/critic_agent_id,
+// and training_mode=true requires train_agent_id. The two valid forms
+// (true + train_agent_id, false + no training IDs) must pass the training_mode
+// rules, proving the exact boolean is honored by the service validation.
+func TestEnvDispatchValidate_TrainingMode(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	svc := NewEnvDispatchService(f, 1)
+	base := EnvDispatchInput{
+		WorkspaceID: "ws", Mode: EnvModeScratch, EnvID: "base",
+		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage,
+		GroupSize: 1, AgentID: "ag", Message: &MessageInput{Content: "hi"},
+	}
+
+	// training_mode=false + train_agent_id -> rejected.
+	falseWithTrain := base
+	falseWithTrain.TrainingMode = false
+	falseWithTrain.TrainAgentID = "ag"
+	if err := svc.validate(falseWithTrain); err == nil {
+		t.Fatal("training_mode=false with train_agent_id must be rejected")
+	}
+
+	// training_mode=false + critic_agent_id -> rejected. train_agent_id is
+	// set to satisfy the existing critic shape rule so the rejection is
+	// attributable to the training_mode rule.
+	falseWithCritic := base
+	falseWithCritic.TrainingMode = false
+	falseWithCritic.TrainAgentID = "ag"
+	falseWithCritic.CriticAgentID = "critic"
+	if err := svc.validate(falseWithCritic); err == nil {
+		t.Fatal("training_mode=false with critic_agent_id must be rejected")
+	}
+
+	// training_mode=true + empty train_agent_id -> rejected.
+	trueNoTrain := base
+	trueNoTrain.TrainingMode = true
+	if err := svc.validate(trueNoTrain); err == nil {
+		t.Fatal("training_mode=true without train_agent_id must be rejected")
+	}
+
+	// Valid form 1: training_mode=true + train_agent_id == agent_id -> accepted.
+	trueWithTrain := base
+	trueWithTrain.TrainingMode = true
+	trueWithTrain.TrainAgentID = "ag"
+	if err := svc.validate(trueWithTrain); err != nil {
+		t.Fatalf("training_mode=true with train_agent_id must be accepted, got %v", err)
+	}
+
+	// Valid form 2: training_mode=false + no training IDs -> accepted.
+	falseNoIDs := base
+	falseNoIDs.TrainingMode = false
+	if err := svc.validate(falseNoIDs); err != nil {
+		t.Fatalf("training_mode=false without training IDs must be accepted, got %v", err)
+	}
+}
+
+// TestEnvDispatch_DispatchPersistsRunAndBindsRootTask asserts the spec's
+// "Dispatch run is created and the root task is bound" scenario: every
+// successful rollout persists an env_dispatch_run row with the training_mode and
+// binds the enqueued leader task (AgentRunID) as root_task_id. This is the
+// durable dispatch identity independent of training_dispatch.
+func TestEnvDispatch_DispatchPersistsRunAndBindsRootTask(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	svc := NewEnvDispatchService(f, 8)
+	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue, GroupSize: 2,
+		AgentID: "ag", TrainAgentID: "ag", TrainingMode: true, Issue: &IssueInput{Title: "t"},
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if len(res.Rollouts) != 2 {
+		t.Fatalf("want 2 rollouts, got %d", len(res.Rollouts))
+	}
+	if len(f.createRunCalls) != len(res.Rollouts) {
+		t.Fatalf("CreateEnvDispatchRun calls: want %d (one per rollout), got %d", len(res.Rollouts), len(f.createRunCalls))
+	}
+	if len(f.bindRootTaskCalls) != len(res.Rollouts) {
+		t.Fatalf("BindEnvDispatchRootTask calls: want %d (one per rollout), got %d", len(res.Rollouts), len(f.bindRootTaskCalls))
+	}
+	for i, c := range f.createRunCalls {
+		if c.WorkspaceID != "ws" {
+			t.Fatalf("call %d: workspaceID = %q, want ws", i, c.WorkspaceID)
+		}
+		if !c.TrainingMode {
+			t.Fatalf("call %d: trainingMode = false, want true", i)
+		}
+		if c.ProjectID == "" {
+			t.Fatalf("call %d: empty projectID", i)
+		}
+	}
+	// Each bound root task must match a rollout's enqueued leader/agent run.
+	boundRoots := make(map[string]bool, len(f.bindRootTaskCalls))
+	for i, c := range f.bindRootTaskCalls {
+		if c.ProjectID == "" || c.RootTaskID == "" {
+			t.Fatalf("call %d: empty projectID/rootTaskID: %+v", i, c)
+		}
+		boundRoots[c.RootTaskID] = true
+	}
+	for i, r := range res.Rollouts {
+		if r.AgentRunID == "" {
+			t.Fatalf("rollout %d: no agent_run_id", i)
+		}
+		if !boundRoots[r.AgentRunID] {
+			t.Fatalf("rollout %d: agent_run_id %q was not bound as root task", i, r.AgentRunID)
+		}
+	}
+}
+
+// TestEnvDispatch_NonTrainingDispatch_PersistsRootWithoutTrainingDispatch
+// asserts the spec's "Non-training dispatch needs no training_dispatch row"
+// scenario: a training_mode=false dispatch still persists env_dispatch_run
+// (training_mode=false) and binds the root task, but makes ZERO
+// SaveTrainingDispatch calls. This is what lets /dag return a complete DAG
+// without any training_dispatch row.
+func TestEnvDispatch_NonTrainingDispatch_PersistsRootWithoutTrainingDispatch(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	svc := NewEnvDispatchService(f, 8)
+	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue, GroupSize: 1,
+		AgentID: "ag", TrainingMode: false, Issue: &IssueInput{Title: "t"},
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if len(res.Rollouts) != 1 {
+		t.Fatalf("want 1 rollout, got %d", len(res.Rollouts))
+	}
+	if len(f.createRunCalls) != 1 {
+		t.Fatalf("CreateEnvDispatchRun calls: want 1, got %d", len(f.createRunCalls))
+	}
+	if f.createRunCalls[0].TrainingMode {
+		t.Fatalf("trainingMode = true, want false")
+	}
+	if len(f.trainingSaves) != 0 {
+		t.Fatalf("non-training dispatch must not save training_dispatch, got %d saves", len(f.trainingSaves))
+	}
+	if len(f.bindRootTaskCalls) != 1 {
+		t.Fatalf("BindEnvDispatchRootTask calls: want 1, got %d", len(f.bindRootTaskCalls))
+	}
+	if f.bindRootTaskCalls[0].RootTaskID != res.Rollouts[0].AgentRunID {
+		t.Fatalf("rootTaskID = %q, want rollout AgentRunID %q", f.bindRootTaskCalls[0].RootTaskID, res.Rollouts[0].AgentRunID)
+	}
+}
+
+// TestEnvDispatch_GetDagReadiness_InProgress asserts /dag returns 202
+// {"status":"in_progress"} for queued/running roots: after a successful
+// dispatch persists the run + binds the root task, a non-terminal root status
+// (queued, running) yields DagReadinessInProgress (the handler's 202 path).
+func TestEnvDispatch_GetDagReadiness_InProgress(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	svc := NewEnvDispatchService(f, 8)
+	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue, GroupSize: 1,
+		AgentID: "ag", TrainingMode: false, Issue: &IssueInput{Title: "t"},
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if len(f.createRunCalls) != 1 || len(f.bindRootTaskCalls) != 1 {
+		t.Fatalf("want run+bind persisted, got create=%d bind=%d", len(f.createRunCalls), len(f.bindRootTaskCalls))
+	}
+	for _, status := range []string{"queued", "running", "dispatched", "waiting_local_directory"} {
+		f.rootTaskStatusOverride = status
+		readiness, rerr := svc.GetDagReadiness(context.Background(), res.ProjectID, "ws")
+		if rerr != nil {
+			t.Fatalf("get dag readiness (%s): %v", status, rerr)
+		}
+		if readiness != DagReadinessInProgress {
+			t.Fatalf("status %q: readiness = %v, want DagReadinessInProgress", status, readiness)
+		}
+	}
+}
+
+// TestEnvDispatch_GetDagReadiness_Terminal_NonTrainingRoot asserts /dag returns
+// assembled data for a completed NON-training root that has NO training_dispatch
+// row: after a training_mode=false dispatch, the bound root task is terminal
+// (completed/failed/cancelled), yielding DagReadinessTerminal (the handler's
+// 200 path that assembles and returns the DAG). Readiness is derived
+// EXCLUSIVELY from env_dispatch_run, not training_dispatch, so the absence of a
+// training_dispatch row does not block the DAG.
+func TestEnvDispatch_GetDagReadiness_Terminal_NonTrainingRoot(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	svc := NewEnvDispatchService(f, 8)
+	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue, GroupSize: 1,
+		AgentID: "ag", TrainingMode: false, Issue: &IssueInput{Title: "t"},
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if len(f.createRunCalls) != 1 || len(f.bindRootTaskCalls) != 1 {
+		t.Fatalf("want run+bind persisted, got create=%d bind=%d", len(f.createRunCalls), len(f.bindRootTaskCalls))
+	}
+	if len(f.trainingSaves) != 0 {
+		t.Fatalf("non-training dispatch must not save training_dispatch, got %d", len(f.trainingSaves))
+	}
+	for _, status := range []string{"completed", "failed", "cancelled"} {
+		f.rootTaskStatusOverride = status
+		readiness, rerr := svc.GetDagReadiness(context.Background(), res.ProjectID, "ws")
+		if rerr != nil {
+			t.Fatalf("get dag readiness (%s): %v", status, rerr)
+		}
+		if readiness != DagReadinessTerminal {
+			t.Fatalf("status %q: readiness = %v, want DagReadinessTerminal", status, readiness)
+		}
+	}
+}
+
+// TestEnvDispatch_GetDagReadiness_NoRun asserts /dag returns 202 in_progress
+// when no env_dispatch_run row exists (no dispatch started / root not
+// enqueued): the GetEnvDispatchRootTaskStatus dep returns pgx.ErrNoRows, which
+// GetDagReadiness maps to DagReadinessInProgress so AReaL keeps polling.
+func TestEnvDispatch_GetDagReadiness_NoRun(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	svc := NewEnvDispatchService(f, 8)
+	readiness, err := svc.GetDagReadiness(context.Background(), "unknown-proj", "ws")
+	if err != nil {
+		t.Fatalf("get dag readiness: %v", err)
+	}
+	if readiness != DagReadinessInProgress {
+		t.Fatalf("readiness = %v, want DagReadinessInProgress for no run", readiness)
 	}
 }

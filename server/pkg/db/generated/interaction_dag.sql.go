@@ -30,12 +30,15 @@ type InteractionDAGSegment struct {
 	AgentRunID                string             `json:"agent_run_id"`
 	IssueID                   pgtype.Text        `json:"issue_id"`
 	TaskID                    pgtype.Text        `json:"task_id"`
-	TrajectoryID              int64              `json:"trajectory_id"`
+	TrajectoryID              pgtype.Int8        `json:"trajectory_id"`
 	TensorRef                 []byte             `json:"tensor_ref"`
 	ClosingEvent              pgtype.Text        `json:"closing_event"`
 	ClosingEventTargetSegment pgtype.Text        `json:"closing_event_target_segment"`
 	StartSeq                  int32              `json:"start_seq"`
 	EndSeq                    int32              `json:"end_seq"`
+	TrajectorySource          string             `json:"trajectory_source"`
+	Trainable                 bool               `json:"trainable"`
+	Trajectory                []byte             `json:"trajectory"`
 	CreatedAt                 pgtype.Timestamptz `json:"created_at"`
 }
 
@@ -104,7 +107,7 @@ func (q *Queries) GetInteractionDAGSessionRun(ctx context.Context, sessionID str
 }
 
 const getInteractionDAGSegmentByAgentRun = `-- name: GetInteractionDAGSegmentByAgentRun :one
-SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, start_seq, end_seq, created_at FROM interaction_dag_segment
+SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, start_seq, end_seq, trajectory_source, trainable, trajectory, created_at FROM interaction_dag_segment
 WHERE agent_run_id = $1
 ORDER BY created_at DESC
 LIMIT 1
@@ -130,13 +133,16 @@ func (q *Queries) GetInteractionDAGSegmentByAgentRun(ctx context.Context, agentR
 		&i.ClosingEventTargetSegment,
 		&i.StartSeq,
 		&i.EndSeq,
+		&i.TrajectorySource,
+		&i.Trainable,
+		&i.Trajectory,
 		&i.CreatedAt,
 	)
 	return i, err
 }
 
 const getInteractionDAGSegmentByID = `-- name: GetInteractionDAGSegmentByID :one
-SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, start_seq, end_seq, created_at FROM interaction_dag_segment
+SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, start_seq, end_seq, trajectory_source, trainable, trajectory, created_at FROM interaction_dag_segment
 WHERE segment_id = $1
 `
 
@@ -157,6 +163,9 @@ func (q *Queries) GetInteractionDAGSegmentByID(ctx context.Context, segmentID st
 		&i.ClosingEventTargetSegment,
 		&i.StartSeq,
 		&i.EndSeq,
+		&i.TrajectorySource,
+		&i.Trainable,
+		&i.Trajectory,
 		&i.CreatedAt,
 	)
 	return i, err
@@ -164,11 +173,11 @@ func (q *Queries) GetInteractionDAGSegmentByID(ctx context.Context, segmentID st
 
 const insertInteractionDAGSegmentWithSnapshot = `-- name: InsertInteractionDAGSegmentWithSnapshot :exec
 WITH seg AS (
-  INSERT INTO interaction_dag_segment (segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, start_seq, end_seq)
-  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+  INSERT INTO interaction_dag_segment (segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, start_seq, end_seq, trajectory_source, trainable, trajectory)
+  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 )
 INSERT INTO interaction_dag_env_snapshot (segment_id, sandbox_ids, issue_snapshot_id, env_state)
-VALUES ($1, $12, $13, $14)
+VALUES ($1, $15, $16, $17)
 `
 
 type InsertInteractionDAGSegmentWithSnapshotParams struct {
@@ -177,12 +186,15 @@ type InsertInteractionDAGSegmentWithSnapshotParams struct {
 	AgentRunID                string      `json:"agent_run_id"`
 	IssueID                   pgtype.Text `json:"issue_id"`
 	TaskID                    pgtype.Text `json:"task_id"`
-	TrajectoryID              int64       `json:"trajectory_id"`
+	TrajectoryID              pgtype.Int8 `json:"trajectory_id"`
 	TensorRef                 []byte      `json:"tensor_ref"`
 	ClosingEvent              pgtype.Text `json:"closing_event"`
 	ClosingEventTargetSegment pgtype.Text `json:"closing_event_target_segment"`
 	StartSeq                  int32       `json:"start_seq"`
 	EndSeq                    int32       `json:"end_seq"`
+	TrajectorySource          string      `json:"trajectory_source"`
+	Trainable                 bool        `json:"trainable"`
+	Trajectory                []byte      `json:"trajectory"`
 	SandboxIDs                []byte      `json:"sandbox_ids"`
 	IssueSnapshotID           pgtype.Text `json:"issue_snapshot_id"`
 	EnvState                  []byte      `json:"env_state"`
@@ -201,6 +213,9 @@ func (q *Queries) InsertInteractionDAGSegmentWithSnapshot(ctx context.Context, a
 		arg.ClosingEventTargetSegment,
 		arg.StartSeq,
 		arg.EndSeq,
+		arg.TrajectorySource,
+		arg.Trainable,
+		arg.Trajectory,
 		arg.SandboxIDs,
 		arg.IssueSnapshotID,
 		arg.EnvState,
@@ -248,7 +263,7 @@ func (q *Queries) InsertInteractionDAGEdge(ctx context.Context, arg InsertIntera
 }
 
 const listInteractionDAGSegmentsForProject = `-- name: ListInteractionDAGSegmentsForProject :many
-SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, start_seq, end_seq, created_at FROM interaction_dag_segment
+SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, start_seq, end_seq, trajectory_source, trainable, trajectory, created_at FROM interaction_dag_segment
 WHERE project_id = $1
 ORDER BY created_at
 `
@@ -279,6 +294,9 @@ func (q *Queries) ListInteractionDAGSegmentsForProject(ctx context.Context, proj
 			&i.ClosingEventTargetSegment,
 			&i.StartSeq,
 			&i.EndSeq,
+			&i.TrajectorySource,
+			&i.Trainable,
+			&i.Trajectory,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err

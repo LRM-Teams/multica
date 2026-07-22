@@ -14,6 +14,17 @@ vi.mock("@multica/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
 }));
 
+vi.mock("@multica/core/paths", () => ({
+  useCurrentWorkspace: () => ({ id: "ws-1", slug: "test" }),
+  useWorkspaceSlug: () => "test",
+  useRequiredWorkspaceSlug: () => "test",
+  useWorkspacePaths: () => ({
+    agentDetail: (id: string) => `/test/agents/${id}`,
+    memberDetail: (id: string) => `/test/members/${id}`,
+    squadDetail: (id: string) => `/test/squads/${id}`,
+  }),
+}));
+
 vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({
     getActorName: (_type: string, id: string) =>

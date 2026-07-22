@@ -4910,6 +4910,212 @@ func TestChannelArchivePlainMemberForbidden(t *testing.T) {
 	}
 }
 
+func TestChannelPermanentDeleteRemovesChannelAndMessages(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "perm-delete-"+uuid.NewString(), testUserID)
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "bye forever", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
+		t.Fatalf("seed message: %v", err)
+	}
+
+	req := newRequest(http.MethodDelete, "/api/channels/"+channelID, nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.DeleteChannel(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete channel: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var exists bool
+	if err := testPool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM channel WHERE id = $1)`, channelID).Scan(&exists); err != nil {
+		t.Fatalf("check channel exists: %v", err)
+	}
+	if exists {
+		t.Fatal("channel row still present after permanent delete")
+	}
+	var messageCount int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM channel_message WHERE channel_id = $1`, channelID).Scan(&messageCount); err != nil {
+		t.Fatalf("count messages: %v", err)
+	}
+	if messageCount != 0 {
+		t.Fatalf("messages remaining after delete: %d", messageCount)
+	}
+	if ch := listedChannelForTest(t, channelID); ch != nil {
+		t.Fatalf("deleted channel still listed: %+v", *ch)
+	}
+	if ch := archivedListedChannelForTest(t, channelID); ch != nil {
+		t.Fatalf("deleted channel still in archived list: %+v", *ch)
+	}
+
+	req = newRequest(http.MethodGet, "/api/channels/"+channelID+"/messages", nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec = httptest.NewRecorder()
+	testHandler.ListChannelMessages(rec, req)
+	if rec.Code != http.StatusNotFound && rec.Code != http.StatusForbidden {
+		t.Fatalf("enter deleted channel: status=%d body=%s, want 404/403", rec.Code, rec.Body.String())
+	}
+}
+
+func TestChannelPermanentDeleteWorksOnArchivedChannel(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	channelID := seedChannelForTest(t, "perm-delete-archived-"+uuid.NewString(), testUserID)
+	req := newRequest(http.MethodPost, "/api/channels/"+channelID+"/archive", nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.ArchiveChannel(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("archive channel: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = newRequest(http.MethodDelete, "/api/channels/"+channelID, nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec = httptest.NewRecorder()
+	testHandler.DeleteChannel(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete archived channel: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var exists bool
+	if err := testPool.QueryRow(context.Background(), `SELECT EXISTS(SELECT 1 FROM channel WHERE id = $1)`, channelID).Scan(&exists); err != nil {
+		t.Fatalf("check channel exists: %v", err)
+	}
+	if exists {
+		t.Fatal("archived channel still present after permanent delete")
+	}
+}
+
+func TestChannelPermanentDeletePlainMemberForbidden(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	memberID := createChannelPlainMember(t)
+	channelID := seedChannelForTest(t, "perm-delete-member-"+uuid.NewString(), testUserID, memberID)
+
+	req := newRequestAs(memberID, http.MethodDelete, "/api/channels/"+channelID, nil)
+	req = withChannelTestWorkspaceCtx(t, req, memberID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.DeleteChannel(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("plain member delete: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var exists bool
+	if err := testPool.QueryRow(context.Background(), `SELECT EXISTS(SELECT 1 FROM channel WHERE id = $1)`, channelID).Scan(&exists); err != nil {
+		t.Fatalf("check channel exists: %v", err)
+	}
+	if !exists {
+		t.Fatal("plain member permanently deleted the channel")
+	}
+}
+
+func TestChannelPermanentDeleteCreatorOnlyForbidden(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	// Channel creator who is only a workspace member may archive, but must not
+	// permanently delete (owner/admin only).
+	creatorID := createChannelPlainMember(t)
+	ctx := context.Background()
+	var channelID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO channel (workspace_id, name, created_by)
+		VALUES ($1, $2, $3)
+		RETURNING id`, testWorkspaceID, "perm-delete-creator-"+uuid.NewString(), creatorID).Scan(&channelID); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, channelID) })
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'user', $3)`, channelID, testWorkspaceID, creatorID); err != nil {
+		t.Fatalf("seed creator membership: %v", err)
+	}
+
+	req := newRequestAs(creatorID, http.MethodDelete, "/api/channels/"+channelID, nil)
+	req = withChannelTestWorkspaceCtx(t, req, creatorID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.DeleteChannel(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("creator-only delete: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var exists bool
+	if err := testPool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM channel WHERE id = $1)`, channelID).Scan(&exists); err != nil {
+		t.Fatalf("check channel exists: %v", err)
+	}
+	if !exists {
+		t.Fatal("creator-only permanently deleted the channel")
+	}
+}
+
+func TestChannelPermanentDeleteAdminAllowed(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	adminID := createChannelWorkspaceAdmin(t)
+	channelID := seedChannelForTest(t, "perm-delete-admin-"+uuid.NewString(), testUserID, adminID)
+
+	req := newRequestAs(adminID, http.MethodDelete, "/api/channels/"+channelID, nil)
+	req = withChannelTestWorkspaceCtx(t, req, adminID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.DeleteChannel(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("admin delete: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var exists bool
+	if err := testPool.QueryRow(context.Background(), `SELECT EXISTS(SELECT 1 FROM channel WHERE id = $1)`, channelID).Scan(&exists); err != nil {
+		t.Fatalf("check channel exists: %v", err)
+	}
+	if exists {
+		t.Fatal("admin delete left channel row")
+	}
+}
+
+func TestChannelPermanentDeleteRejectsDM(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	agentID := createHandlerTestAgent(t, "Perm Delete DM Bot", []byte("[]"))
+	channelID := seedAgentDMChannel(t, agentID)
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, channelID) })
+
+	req := newRequest(http.MethodDelete, "/api/channels/"+channelID, nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.DeleteChannel(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("delete DM: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if body["error"] != "direct messages cannot be permanently deleted" {
+		t.Fatalf("error = %q, want DM rejection message", body["error"])
+	}
+	var exists bool
+	if err := testPool.QueryRow(context.Background(), `SELECT EXISTS(SELECT 1 FROM channel WHERE id = $1)`, channelID).Scan(&exists); err != nil {
+		t.Fatalf("check channel exists: %v", err)
+	}
+	if !exists {
+		t.Fatal("DM channel was deleted")
+	}
+}
+
 func TestChannelPinAndManualUnreadArePerUserListState(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -7100,21 +7306,31 @@ func assertNoThreadRepliesForRoot(t *testing.T, channelID, rootID string) {
 
 func createChannelPlainMember(t *testing.T) string {
 	t.Helper()
+	return createChannelWorkspaceMemberWithRole(t, "member")
+}
+
+func createChannelWorkspaceAdmin(t *testing.T) string {
+	t.Helper()
+	return createChannelWorkspaceMemberWithRole(t, "admin")
+}
+
+func createChannelWorkspaceMemberWithRole(t *testing.T, role string) string {
+	t.Helper()
 	ctx := context.Background()
 	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")
-	name := "channel_plain_" + suffix
-	email := "channel-plain-" + suffix + "@multica.test"
+	name := "channel_" + role + "_" + suffix
+	email := "channel-" + role + "-" + suffix + "@multica.test"
 	var userID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO "user" (name, email)
 		VALUES ($1, $2)
 		RETURNING id`, name, email).Scan(&userID); err != nil {
-		t.Fatalf("create plain member user: %v", err)
+		t.Fatalf("create %s user: %v", role, err)
 	}
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO member (workspace_id, user_id, role)
-		VALUES ($1, $2, 'member')`, testWorkspaceID, userID); err != nil {
-		t.Fatalf("add plain member: %v", err)
+		VALUES ($1, $2, $3)`, testWorkspaceID, userID, role); err != nil {
+		t.Fatalf("add %s member: %v", role, err)
 	}
 	t.Cleanup(func() {
 		testPool.Exec(context.Background(), `DELETE FROM member WHERE workspace_id = $1 AND user_id = $2`, testWorkspaceID, userID)

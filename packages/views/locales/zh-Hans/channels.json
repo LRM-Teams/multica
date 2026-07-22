@@ -338,7 +338,7 @@
       "issue": {
         "actor_system": "Multica",
         "created": "{actor} 创建了 Issue {issue}",
-        "assigned": "{actor} 将 Issue {issue} 指派给 {{target}}",
+        "assigned": "{actor} 将 Issue {issue} 指派给 {target}",
         "assigned_unknown": "{actor} 重新指派了 Issue {issue}",
         "in_progress": "{actor} 将 Issue {issue} 标记为处理中",
         "in_review": "{actor} 将 Issue {issue} 提交审核",

@@ -68,6 +68,22 @@ describe("ConversationActivityStrip", () => {
     expect(onStopTask).toHaveBeenCalledWith(expect.objectContaining({ task_id: "t1" }));
   });
 
+  it("does not render quick_create / issue_create rows (LRM-287)", () => {
+    renderStrip(
+      <ConversationActivityStrip
+        tasks={[
+          task({ kind: "quick_create", agent_name: "Wendy", task_id: "qc-1" }),
+          task({ kind: "issue_create", agent_name: "Beckham", task_id: "ic-1" }),
+          task({ kind: "reply", reason: "mention", agent_name: "Aria", task_id: "t1" }),
+        ]}
+        onStopTask={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Aria is preparing a reply...")).toBeInTheDocument();
+    expect(screen.queryByText(/Wendy/)).toBeNull();
+    expect(screen.queryByText(/Beckham/)).toBeNull();
+  });
+
   it("bulk-stops every running agent from the collapsed row", async () => {
     const onStopAllTasks = vi.fn();
     renderStrip(

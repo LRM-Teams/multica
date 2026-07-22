@@ -25,25 +25,32 @@ describe("resolveMentionTokenKind", () => {
 });
 
 describe("mentionTokenClassName", () => {
-  it("uses brand-ink prose with no rest-state fill", () => {
+  it("uses brand ink + soft rest fill (Slack token, not bare prose)", () => {
     const cls = mentionTokenClassName("default");
     expect(cls).toContain("text-brand");
-    expect(cls).toContain("font-medium");
+    expect(cls).toContain("font-bold");
     expect(cls).toContain("mention");
-    expect(cls.split(/\s+/).some((c) => c.startsWith("bg-"))).toBe(false);
+    expect(cls).toContain("bg-brand/[0.10]");
+    expect(cls).toContain("rounded-sm");
+    expect(cls).toContain("px-0.5");
+    expect(cls).not.toContain("rounded-full");
   });
 
-  it("emphasizes @all with weight only, not a permanent wash", () => {
+  it("keeps @all on the same soft brand token as people/agents/squads", () => {
     const cls = mentionTokenClassName("all");
     expect(cls).toContain("text-brand");
-    expect(cls).toContain("font-semibold");
-    expect(cls.split(/\s+/).some((c) => c.startsWith("bg-"))).toBe(false);
+    expect(cls).toContain("font-bold");
+    expect(cls).toContain("bg-brand/[0.10]");
+    expect(cls).not.toContain("rounded-full");
+    expect(cls).not.toContain("bg-[#faf0c8]");
   });
 
-  it("emphasizes self with weight only (row wash is separate)", () => {
+  it("uses warm yellow fill + ink text for @self (row wash is separate)", () => {
     const cls = mentionTokenClassName("self");
-    expect(cls).toContain("text-brand");
-    expect(cls).toContain("font-semibold");
-    expect(cls.split(/\s+/).some((c) => c.startsWith("bg-"))).toBe(false);
+    expect(cls).toContain("bg-[#faf0c8]");
+    expect(cls).toContain("text-foreground");
+    expect(cls).toContain("font-bold");
+    expect(cls).not.toContain("text-brand");
+    expect(cls).not.toContain("rounded-full");
   });
 });

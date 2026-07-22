@@ -337,16 +337,16 @@ function createComponents(
             if (rendered) return <>{rendered}</>
           }
 
-          // Fallback: brand-ink prose mention (matches views
-          // mentionTokenClassName when the host does not supply renderMention).
+          // Fallback: Slack soft-bg mention (matches views
+          // mentionTokenClassName default when the host does not supply renderMention).
           return (
-            <span className="mention font-medium text-brand">
+            <span className="mention not-prose inline rounded-sm px-0.5 font-bold box-decoration-clone bg-brand/[0.10] text-brand">
               {highlight(children)}
             </span>
           )
         }
         return (
-          <span className="mention font-medium text-brand">
+          <span className="mention not-prose inline rounded-sm px-0.5 font-bold box-decoration-clone bg-brand/[0.10] text-brand">
             {highlight(children)}
           </span>
         )

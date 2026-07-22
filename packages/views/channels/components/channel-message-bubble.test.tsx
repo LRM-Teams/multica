@@ -699,7 +699,7 @@ describe("ChannelMessageBubble", () => {
 
     const bubble = screen.getByTestId("message-bubble");
     expect(bubble).toHaveAttribute("data-self-mentioned", "true");
-    expect(bubble.className).toContain("bg-brand/[0.04]");
+    expect(bubble.className).toContain("bg-[#fef9e8]");
   });
 
   it("applies the self-mention wash for @all from another author", () => {
@@ -731,7 +731,7 @@ describe("ChannelMessageBubble", () => {
       "data-self-mentioned",
     );
     expect(screen.getByTestId("message-bubble").className).not.toContain(
-      "bg-brand/[0.04]",
+      "bg-[#fef9e8]",
     );
 
     const ownAll = makeMessage({
@@ -757,7 +757,7 @@ describe("ChannelMessageBubble", () => {
 
     const bubble = screen.getByTestId("message-bubble");
     expect(bubble).not.toHaveAttribute("data-self-mentioned");
-    expect(bubble.className).not.toContain("bg-brand/[0.04]");
+    expect(bubble.className).not.toContain("bg-[#fef9e8]");
   });
 
   it("lets deep-link highlight take visual priority over the self-mention wash", () => {

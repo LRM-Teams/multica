@@ -3,8 +3,8 @@
 /**
  * MentionView — NodeView for rendering @mentions inline in the editor.
  *
- * Member/agent/squad/@all: brand semantic pill via `mentionTokenClassName`
- * (Iris / Slack-like — not per-actor identity colors).
+ * Member/agent/squad/@all: Slack soft-bg token via `mentionTokenClassName`
+ * (brand ink + light rest fill — not per-actor identity colors, not capsules).
  * Issue mentions: IssueChip inside a custom <a> that supports cmd/shift-click
  * to open in a new tab (AppLink doesn't expose that intent hook).
  *
@@ -56,7 +56,7 @@ export function MentionView({ node }: NodeViewProps) {
     );
   }
 
-  // Member / agent / squad / all → brand-ink prose token. Identity colors stay
+  // Member / agent / squad / all → Slack soft-bg token. Identity colors stay
   // on avatars (`agentColor`), not the token fill.
   // @all is a fixed protocol token (same as message renderer + markdown
   // `[@all](mention://all/all)`). Picker shows the localized "All members"

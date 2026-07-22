@@ -3,24 +3,23 @@ import { cn } from "@multica/ui/lib/utils";
 /**
  * Semantic mention kinds for body @mentions.
  *
- * Mentions are prose emphasis ("someone was addressed"), not chips/tags.
- * Baseline (Linear / GitHub / restrained Slack): brand-ink text in the flow.
- * Permanent fill is reserved for the *message row* when the viewer is
- * addressed — not every token. Per-actor rainbow colors (`agentColor`) stay
- * on avatars only.
+ * Mentions are Slack-style soft-background emphasis links — not heavy
+ * capsules and not bare brand ink. Person / agent / squad / @all share one
+ * token; only @self uses a warm yellow wash. Per-actor rainbow colors
+ * (`agentColor`) stay on avatars only.
  *
- * Visual language:
- * - default / agent / squad → brand ink, medium weight, no rest fill
- * - @all / self → same ink, semibold only (no permanent wash)
- * - hover / focus → soft brand wash (progressive)
- * - self-mentioned row → cool brand row wash (the real "you" signal)
+ * Visual language (design-mention-slack-token.html / LRM-269):
+ * - default / all → brand ink + bold + soft brand rest fill, radius ≤4px, px ≤2px
+ * - self → warm yellow fill (#faf0c8) + ink text
+ * - hover / focus → slightly stronger wash
+ * - self-mentioned row → warm row wash (#fef9e8)
  */
 export type MentionTokenKind = "default" | "all" | "self";
 
 /**
  * Resolve the visual kind for a mention:// token.
- * - `all` → broadcast emphasis (weight only at token level)
- * - member id matching the viewer → self emphasis (weight; row wash elsewhere)
+ * - `all` → same token as default (broadcast uses weight+fill already shared)
+ * - member id matching the viewer → self emphasis (yellow token + row wash)
  * - everything else (member/agent/squad/…) → default
  */
 export function resolveMentionTokenKind(
@@ -35,27 +34,30 @@ export function resolveMentionTokenKind(
 
 /**
  * Shared class string for body/editor mention text.
- * Reads as inline brand-ink prose — no chip padding, no rest-state fill.
+ * Slack soft-bg token — brand ink + light rest fill; self is warm yellow.
+ * Keep padding thin (≤2px) and radius small (≤4px); never `rounded-full`.
  */
 export function mentionTokenClassName(
   kind: MentionTokenKind = "default",
   className?: string,
 ): string {
+  const isSelf = kind === "self";
   return cn(
-    "mention not-prose inline rounded-sm",
-    "font-medium text-brand",
+    "mention not-prose inline rounded-sm px-0.5",
+    "font-bold box-decoration-clone",
     "transition-colors duration-100",
-    "hover:bg-brand/[0.08]",
-    "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-brand/30 focus-visible:bg-brand/[0.08]",
-    // @all / self: weight step only — the row wash carries "you were addressed".
-    (kind === "all" || kind === "self") && "font-semibold",
+    "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-brand/30",
+    isSelf
+      ? "bg-[#faf0c8] text-foreground hover:bg-[#f5e8a8] focus-visible:bg-[#f5e8a8]"
+      : "bg-brand/[0.10] text-brand hover:bg-brand/[0.14] focus-visible:bg-brand/[0.14]",
     className,
   );
 }
 
 /**
  * Message-row wash when the body addresses the viewer (@me / @all).
- * Cool brand tint — product family. Deep-link highlight layers above via cn order.
+ * Warm tint matching Slack self-row (#fef9e8). Deep-link highlight layers
+ * above via cn order.
  */
 export const SELF_MENTION_ROW_CLASS =
-  "bg-brand/[0.04] hover:bg-brand/[0.07] focus-within:bg-brand/[0.07]";
+  "bg-[#fef9e8] hover:bg-[#fdf3d0] focus-within:bg-[#fdf3d0]";

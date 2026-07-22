@@ -166,7 +166,11 @@ vi.mock("@multica/core/hooks/use-file-upload", () => ({
 // Bubble avatar internals (agent presence + current workspace + actor names) —
 // stub so the real bubble renders without QueryClient/workspace-provider wiring.
 vi.mock("@multica/core/workspace/hooks", () => ({
-  useActorName: () => ({ getActorAvatarUrl: () => null, getActorName: () => null }),
+  useActorName: () => ({
+    getActorAvatarUrl: () => null,
+    getActorName: () => null,
+    getMemberRole: () => null,
+  }),
 }));
 vi.mock("@multica/core/agents", () => ({ useAgentPresenceDetail: () => "loading" }));
 vi.mock("@multica/core/paths", async (importOriginal) => ({

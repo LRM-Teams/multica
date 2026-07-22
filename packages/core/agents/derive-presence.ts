@@ -108,8 +108,19 @@ export function deriveAgentPresenceDetail(input: DerivePresenceInput): AgentPres
     };
   }
 
-  const availability = deriveAgentAvailability(input.runtime, input.now);
+  let availability = deriveAgentAvailability(input.runtime, input.now);
   const detail = deriveWorkloadDetail(input.tasks);
+
+  // LRM-248 AC5 / Frank su screenshot: a live running task proves the agent is
+  // reachable for live chrome. Orphan/missing runtime_id, stale heartbeat, or
+  // an explicitly-offline row must not paint Offline while work is in flight.
+  // Queued-only on a dead runtime still stays offline (#571 stuck case).
+  if (
+    detail.runningCount > 0 &&
+    (availability === "offline" || availability === "unstable")
+  ) {
+    availability = "online";
+  }
 
   return {
     availability,

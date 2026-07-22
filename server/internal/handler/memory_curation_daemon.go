@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -463,6 +464,7 @@ func (h *Handler) ReportMemoryCurationRunResult(w http.ResponseWriter, r *http.R
 	}
 	if status == "succeeded" && !dryRun && !reported.DryRun {
 		if err := h.persistAgenticCurationOutputs(r.Context(), tx, runID, workspaceID, stage, result); err != nil {
+			slog.Error("failed to persist curation outputs", "run_id", runID, "runtime_id", runtimeID, "stage", stage, "error", err)
 			writeError(w, http.StatusInternalServerError, "failed to persist curation outputs")
 			return
 		}

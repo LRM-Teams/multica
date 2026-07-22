@@ -1,7 +1,7 @@
 {
   "page": {
-    "title": "Inbox",
-    "back": "Inbox"
+    "title": "Activity",
+    "back": "Activity"
   },
   "menu": {
     "mark_all_read": "Mark all as read",
@@ -67,6 +67,35 @@
     "archive_all_failed": "Failed to archive all",
     "archive_all_read_failed": "Failed to archive read items",
     "archive_completed_failed": "Failed to archive completed"
+  },
+  "activity": {
+    "tabs_label": "Activity filters",
+    "tabs": {
+      "all": "All",
+      "unread": "Unread",
+      "mentions": "Mentions"
+    },
+    "new_count": "{{count}} new",
+    "replies": "{{count}} replies",
+    "access_denied": "You no longer have access to this channel",
+    "load_failed": "Failed to load activity",
+    "retry": "Retry",
+    "open_thread_failed": "Could not open this thread",
+    "open_item_failed": "Could not open this activity item",
+    "empty": {
+      "all": {
+        "title": "No activity yet",
+        "description": "Threads you follow, @mentions, and issue updates will show up here."
+      },
+      "unread": {
+        "title": "You're all caught up",
+        "description": "No unread threads or issue updates. Switch to All to browse history."
+      },
+      "mentions": {
+        "title": "No mentions yet",
+        "description": "Messages that @mention you in channels or issues will appear here."
+      }
+    }
   },
   "mention_popup": {
     "title": "You were mentioned",

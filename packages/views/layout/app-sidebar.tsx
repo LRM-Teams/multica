@@ -18,7 +18,7 @@ import {
 import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
-  Inbox,
+  Activity,
   ListTodo,
   LayoutDashboard,
   Bot,
@@ -72,7 +72,7 @@ import { useAuthStore } from "@multica/core/auth";
 import { useCurrentWorkspace, useWorkspacePaths, paths } from "@multica/core/paths";
 import { workspaceListOptions, myInvitationListOptions, workspaceKeys } from "@multica/core/workspace/queries";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { inboxKeys, deduplicateInboxItems } from "@multica/core/inbox/queries";
+import { useUserActivityUnreadCount } from "@multica/core/user-activity/queries";
 import { api, ApiError } from "@multica/core/api";
 import { useModalStore } from "@multica/core/modals";
 import { useConfigStore } from "@multica/core/config";
@@ -102,7 +102,6 @@ function isNavActive(pathname: string, href: string): boolean {
 const EMPTY_PINS: PinnedItem[] = [];
 const EMPTY_WORKSPACES: Awaited<ReturnType<typeof api.listWorkspaces>> = [];
 const EMPTY_INVITATIONS: Awaited<ReturnType<typeof api.listMyInvitations>> = [];
-const EMPTY_INBOX: Awaited<ReturnType<typeof api.listInbox>> = [];
 
 // Nav items reference WorkspacePaths method names so they can be resolved
 // against the current workspace slug at render time (see AppSidebar body).
@@ -142,14 +141,14 @@ type NavLabelKey =
   | "skills"
   | "settings";
 
-const personalNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] = [
-  { key: "inbox", labelKey: "inbox", icon: Inbox },
+const personalNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Activity }[] = [
+  { key: "inbox", labelKey: "inbox", icon: Activity },
   { key: "channels", labelKey: "channels", icon: MessageCircle },
 ];
 
 // Workspace navigation starts with the workspace dashboard. Personal messaging
 // lives alongside Inbox above this group, rather than as a second entry here.
-const workspaceNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] = [
+const workspaceNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Activity }[] = [
   { key: "overview", labelKey: "overview", icon: LayoutDashboard },
   { key: "issues", labelKey: "issues", icon: ListTodo },
   { key: "projects", labelKey: "projects", icon: FolderKanban },
@@ -161,7 +160,7 @@ const workspaceNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[]
   { key: "planBilling", labelKey: "plan_billing", icon: CreditCard },
 ];
 
-const configureNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] = [
+const configureNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Activity }[] = [
   { key: "runtimes", labelKey: "runtimes", icon: Monitor },
   { key: "sandboxes", labelKey: "sandboxes", icon: Box },
   { key: "skills", labelKey: "skills", icon: BookOpenText },
@@ -363,15 +362,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
   const workspaceCreationDisabled = useConfigStore((s) => s.workspaceCreationDisabled);
 
   const wsId = workspace?.id;
-  const { data: inboxItems = EMPTY_INBOX } = useQuery({
-    queryKey: wsId ? inboxKeys.list(wsId) : ["inbox", "disabled"],
-    queryFn: () => api.listInbox(),
-    enabled: !!wsId,
-  });
-  const unreadCount = React.useMemo(
-    () => deduplicateInboxItems(inboxItems).filter((i) => !i.read).length,
-    [inboxItems],
-  );
+  const unreadCount = useUserActivityUnreadCount(wsId);
   const hasRuntimeHealthAttention = useMyRuntimeHealthAttention(wsId);
   const { data: pinnedItems = EMPTY_PINS } = useQuery({
     ...pinListOptions(wsId ?? "", userId ?? ""),

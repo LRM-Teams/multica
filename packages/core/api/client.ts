@@ -59,6 +59,8 @@ import type {
   AgentRunCount,
   AgentRuntime,
   InboxItem,
+  UserActivityListResponse,
+  UserActivityTab,
   IssueSubscriber,
   Comment,
   CommentTriggerPreview,
@@ -1652,6 +1654,23 @@ export class ApiClient {
 
   async archiveCompletedInbox(): Promise<{ count: number }> {
     return this.fetch("/api/inbox/archive-completed", { method: "POST" });
+  }
+
+  // Member Activity feed (threads + inbox)
+  async listUserActivity(params: {
+    tab: UserActivityTab;
+    cursor?: string;
+    limit?: number;
+  }): Promise<UserActivityListResponse> {
+    const search = new URLSearchParams({ tab: params.tab });
+    if (params.cursor) search.set("cursor", params.cursor);
+    if (params.limit != null) search.set("limit", String(params.limit));
+    const suffix = search.toString();
+    return this.fetch(`/api/activity${suffix ? `?${suffix}` : ""}`);
+  }
+
+  async markAllUserActivityRead(): Promise<{ thread_count: number; inbox_count: number }> {
+    return this.fetch("/api/activity/mark-all-read", { method: "POST" });
   }
 
   // Notification preferences

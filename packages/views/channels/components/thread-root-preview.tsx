@@ -27,20 +27,15 @@ export function ThreadRootPreview({
 }) {
   const { t } = useT("channels");
   const messageTime = useMessageTime();
-  const { getActorName, getMemberRole } = useActorName();
+  const { getActorName } = useActorName();
   const isAgent = message.type === "agent";
   const displayName = resolveChannelAuthorDisplayName(message, {
     currentUserId,
     ownName,
     getActorName,
   });
-  // LRM-232 Phase 1: match bubble chrome — muted owner/admin; no Agent pill.
-  const authorMemberRole =
-    message.type === "user" && message.author_id
-      ? getMemberRole(message.author_id)
-      : null;
-  const showAuthorRole =
-    authorMemberRole === "owner" || authorMemberRole === "admin";
+  // LRM-270 (Slack align): thread author row — name + time only; no Owner/Admin
+  // chrome; no Agent pill. Member-list muted role is unchanged.
   const profileActorType =
     message.type === "agent"
       ? "agent"
@@ -106,14 +101,6 @@ export function ThreadRootPreview({
               </ActorProfileTrigger>
             ) : (
               nameNode
-            )}
-            {showAuthorRole && authorMemberRole && (
-              <span
-                data-testid="message-author-role"
-                className="shrink-0 text-[11px] font-normal leading-none text-muted-foreground"
-              >
-                {t(($) => $.profile_popover.role[authorMemberRole])}
-              </span>
             )}
             <span
               className="text-[11px] text-muted-foreground"

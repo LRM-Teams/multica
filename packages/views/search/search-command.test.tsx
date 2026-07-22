@@ -374,7 +374,7 @@ describe("SearchCommand", () => {
     expect(useSearchStore.getState().open).toBe(false);
   });
 
-  it("shows muted owner/admin role on member search rows (LRM-232)", async () => {
+  it("does not show Owner/Admin chrome on member search author rows (LRM-270)", async () => {
     const user = userEvent.setup();
     mockMembers.current = [
       {
@@ -408,9 +408,12 @@ describe("SearchCommand", () => {
     await user.type(input, "frank");
 
     await waitFor(() => {
-      expect(screen.getByTestId("search-member-role")).toHaveTextContent("Owner");
+      expect(
+        screen.getByText((_, el) => el?.textContent === "Frank An" && el?.tagName === "DIV"),
+      ).toBeInTheDocument();
     });
-    expect(screen.queryAllByTestId("search-member-role")).toHaveLength(1);
+    expect(screen.queryByTestId("search-member-role")).not.toBeInTheDocument();
+    expect(screen.queryByText("Owner")).not.toBeInTheDocument();
   });
 
   it("renders recent issues from query cache joined with store visit records", () => {

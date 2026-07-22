@@ -1,6 +1,11 @@
 export type { Issue, IssueStatus, IssuePriority, IssueAssigneeType, IssueMetadata, IssueMetadataValue, IssueReaction, IssueReviewStats, IssueSourceMessageRef, IssueSourceRefs, IssueSourceChannelRef, ProjectChannel } from "./issue";
 export type {
   Agent,
+  AgentMemoryGrowth,
+  AgentMemoryGrowthTier,
+  AgentMemoryGrowthSegment,
+  AgentMemoryGrowthSegmentStatus,
+  AgentMemoryGrowthNext,
   AgentStatus,
   AgentRuntimeMode,
   AgentVisibility,

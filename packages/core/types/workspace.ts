@@ -1,3 +1,5 @@
+import type { AgentMemoryGrowth } from "./agent";
+
 export type MemberRole = "owner" | "admin" | "member";
 
 export interface WorkspaceRepo {
@@ -114,6 +116,11 @@ export interface MemberProfile {
   recent_activity: MemberProfileActivityItem[];
   /** full when live panels are allowed; identity_only exposes only basic identity fields. */
   profile_access: "full" | "identity_only";
+  /**
+   * Agent Memory growth (LRM-303). Only on full-access agent profiles with
+   * ≥1 valid write; omitted for users, identity_only, and zero writes.
+   */
+  memory_growth?: AgentMemoryGrowth | null;
 }
 
 export interface Invitation {

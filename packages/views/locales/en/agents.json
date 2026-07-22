@@ -502,6 +502,11 @@
     "username_error_too_long": "Username is too long",
     "username_taken": "That @handle is already taken"
   },
+  "memory_growth": {
+    "label": "Memory growth",
+    "next_tier": "Next · {{tier}}",
+    "writes_progress": "{{current}} / {{required}} writes"
+  },
   "execution_config": {
     "applies_next_run": "Changes take effect on the next run — the current run is unaffected."
   },

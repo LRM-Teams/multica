@@ -30,6 +30,7 @@ import {
   shouldShowActorHandleLabel,
 } from "@multica/core/identity";
 import { AgentLiveStatusMark } from "../agents/components/agent-live-status-mark";
+import { MemoryGrowthField } from "../agents/components/memory-growth-field";
 import { useAgentLiveStatus } from "../agents/use-agent-live-status";
 import { AgentPresenceOverlay } from "./actor-avatar";
 import { ActivityTimeline } from "../agents/components/tabs/activity-timeline";
@@ -318,6 +319,12 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
           <p className="line-clamp-2 text-xs leading-5 text-foreground/85">
             {description}
           </p>
+        </section>
+      ) : null}
+      {/* LRM-304: agent member card — growth only on full-access profiles. */}
+      {isAgent && !isIdentityOnly && profile.memory_growth ? (
+        <section className="border-b p-3 last:border-b-0">
+          <MemoryGrowthField growth={profile.memory_growth} />
         </section>
       ) : null}
       {profile.member_type === "agent" ? (

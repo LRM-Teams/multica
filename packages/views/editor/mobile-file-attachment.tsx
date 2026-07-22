@@ -1,12 +1,12 @@
 "use client";
 
 /**
- * Mobile file attachment entry + fullscreen detail (LRM-216).
+ * Mobile file attachment entry + fullscreen detail (LRM-216 / LRM-219).
  *
- * Narrow screens: compact stream card (no inline preview). Tap pushes a
- * Slack-style fullscreen sheet — top bar is back · filename · one Download;
- * the rest is the preview pane (HTML / image / PDF) or「无法预览」. No
- * metadata form and no bottom Download / Open buttons (Frank Slack 定稿).
+ * LRM-219 narrows LRM-217: only **images** get content preview.
+ * - Image: stream thumbnail → tap → fullscreen big image (Slack chrome)
+ * - Other files: compact card → fullscreen filename + Download only (no
+ *   HTML/PDF/iframe content preview)
  */
 
 import * as React from "react";
@@ -18,9 +18,10 @@ import {
   getFileExtension,
   getFileTypeCategory,
 } from "./utils/file-meta";
-import { HtmlPreviewBody } from "./html-preview-body";
-
-export type MobilePreviewMode = "html" | "image" | "pdf" | "none";
+import {
+  resolveMobilePreviewMode,
+  type MobilePreviewMode,
+} from "./mobile-preview-mode";
 
 export interface MobileFileAttachmentProps {
   filename: string;
@@ -64,25 +65,6 @@ function badgeTone(filename: string, contentType: string): string {
   return "bg-[#2b2d31] text-white";
 }
 
-function resolvePreviewMode(
-  mode: MobilePreviewMode | undefined,
-  contentType: string,
-  filename: string,
-): MobilePreviewMode {
-  if (mode) return mode;
-  const ct = contentType.toLowerCase();
-  const ext = getFileExtension(filename);
-  if (ct.includes("html") || ext === "html" || ext === "htm") return "html";
-  if (
-    ct.startsWith("image/") ||
-    ["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext)
-  ) {
-    return "image";
-  }
-  if (ct.includes("pdf") || ext === "pdf") return "pdf";
-  return "none";
-}
-
 export function MobileFileAttachment({
   filename,
   contentType = "",
@@ -90,7 +72,6 @@ export function MobileFileAttachment({
   uploading,
   openable = true,
   previewUrl,
-  attachmentId,
   previewMode,
   onDownload,
   className,
@@ -107,7 +88,9 @@ export function MobileFileAttachment({
   const sub = [typeLabel, sizeLabel].filter(Boolean).join(" · ");
   const badge = typeBadge(filename, contentType);
   const tone = badgeTone(filename, contentType);
-  const mode = resolvePreviewMode(previewMode, contentType, filename);
+  const mode = resolveMobilePreviewMode(previewMode, contentType, filename);
+  const showImageThumb =
+    mode === "image" && !!previewUrl && !uploading;
 
   const bindDialog = React.useCallback((dialog: HTMLDialogElement | null) => {
     dialogRef.current = dialog;
@@ -141,48 +124,73 @@ export function MobileFileAttachment({
   return (
     <>
       <div className={cn("my-1 min-w-0 w-full max-w-full", className)}>
-        <button
-          type="button"
-          data-testid="mobile-file-entry"
-          disabled={!openable || uploading}
-          aria-label={t(($) => $.attachment.open_file, { filename })}
-          onClick={openDetail}
-          className={cn(
-            "flex w-full min-h-14 max-w-full items-center gap-2.5 rounded-lg border border-border bg-background px-3 py-2.5 text-left transition-colors",
-            openable && !uploading
-              ? "cursor-pointer hover:bg-muted/50 active:bg-muted/70"
-              : "cursor-default opacity-70",
-          )}
-        >
-          <span
+        {showImageThumb ? (
+          <button
+            type="button"
+            data-testid="mobile-file-entry"
+            data-preview="image-thumb"
+            disabled={!openable}
+            aria-label={t(($) => $.attachment.open_file, { filename })}
+            onClick={openDetail}
             className={cn(
-              "grid size-10 shrink-0 place-items-center rounded-lg text-[10px] font-extrabold tracking-wide",
-              tone,
+              "block w-full max-w-full overflow-hidden rounded-lg border border-border bg-muted/30 text-left",
+              openable
+                ? "cursor-zoom-in hover:bg-muted/50 active:bg-muted/70"
+                : "cursor-default opacity-70",
             )}
-            aria-hidden
           >
-            {uploading ? "…" : badge}
-          </span>
-          <span className="min-w-0 flex-1">
-            <span
-              className="block truncate text-[13px] font-semibold leading-tight text-[#1264a3]"
-              title={filename}
-            >
-              {uploading
-                ? t(($) => $.file_card.uploading, { filename })
-                : filename}
-            </span>
-            {sub && !uploading && (
-              <span className="mt-0.5 block truncate text-[11px] leading-tight text-muted-foreground">
-                {sub}
-              </span>
+            <img
+              data-testid="mobile-file-stream-thumb"
+              src={previewUrl}
+              alt={filename}
+              className="max-h-56 w-full object-contain"
+            />
+          </button>
+        ) : (
+          <button
+            type="button"
+            data-testid="mobile-file-entry"
+            data-preview="compact-card"
+            disabled={!openable || uploading}
+            aria-label={t(($) => $.attachment.open_file, { filename })}
+            onClick={openDetail}
+            className={cn(
+              "flex w-full min-h-14 max-w-full items-center gap-2.5 rounded-lg border border-border bg-background px-3 py-2.5 text-left transition-colors",
+              openable && !uploading
+                ? "cursor-pointer hover:bg-muted/50 active:bg-muted/70"
+                : "cursor-default opacity-70",
             )}
-          </span>
-          <ChevronRight
-            className="size-5 shrink-0 text-muted-foreground"
-            aria-hidden
-          />
-        </button>
+          >
+            <span
+              className={cn(
+                "grid size-10 shrink-0 place-items-center rounded-lg text-[10px] font-extrabold tracking-wide",
+                tone,
+              )}
+              aria-hidden
+            >
+              {uploading ? "…" : badge}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span
+                className="block truncate text-[13px] font-semibold leading-tight text-[#1264a3]"
+                title={filename}
+              >
+                {uploading
+                  ? t(($) => $.file_card.uploading, { filename })
+                  : filename}
+              </span>
+              {sub && !uploading && (
+                <span className="mt-0.5 block truncate text-[11px] leading-tight text-muted-foreground">
+                  {sub}
+                </span>
+              )}
+            </span>
+            <ChevronRight
+              className="size-5 shrink-0 text-muted-foreground"
+              aria-hidden
+            />
+          </button>
+        )}
       </div>
 
       {open && (
@@ -197,7 +205,7 @@ export function MobileFileAttachment({
           }}
           onClose={() => setOpen(false)}
         >
-          {/* Slack chrome: back · filename · one Download — no type/size/meta */}
+          {/* Slack chrome: back · filename · one Download */}
           <div className="flex min-h-12 shrink-0 items-center gap-0.5 border-b border-border bg-background px-1">
             <button
               type="button"
@@ -225,102 +233,26 @@ export function MobileFileAttachment({
             data-testid="mobile-file-preview-pane"
             className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[#f0f0ee]"
           >
-            <MobilePreviewBody
-              mode={mode}
-              filename={filename}
-              previewUrl={previewUrl}
-              attachmentId={attachmentId}
-            />
+            {mode === "image" && previewUrl ? (
+              <div className="flex h-full min-h-0 flex-1 items-center justify-center overflow-auto p-3">
+                <img
+                  data-testid="mobile-file-preview-image"
+                  src={previewUrl}
+                  alt={filename}
+                  className="max-h-full max-w-full object-contain"
+                />
+              </div>
+            ) : (
+              /* Non-image: filename + Download only — no content preview body */
+              <div
+                data-testid="mobile-file-preview-empty"
+                className="min-h-0 flex-1 bg-[#f0f0ee]"
+                aria-hidden
+              />
+            )}
           </div>
         </dialog>
       )}
     </>
-  );
-}
-
-function MobilePreviewBody({
-  mode,
-  filename,
-  previewUrl,
-  attachmentId,
-}: {
-  mode: MobilePreviewMode;
-  filename: string;
-  previewUrl?: string | null;
-  attachmentId?: string | null;
-}) {
-  const { t } = useT("editor");
-
-  if (mode === "html" && attachmentId) {
-    return (
-      <HtmlPreviewBody
-        source={{ kind: "attachment", attachmentId }}
-        title={filename}
-        className="h-full min-h-0 w-full flex-1"
-        iframeClassName="rounded-none border-0"
-        placeholderClassName="h-full min-h-[12rem]"
-        errorTestId="mobile-file-preview-error"
-      />
-    );
-  }
-
-  if (mode === "html" && previewUrl) {
-    return (
-      <iframe
-        data-testid="mobile-file-preview-html"
-        title={filename}
-        src={previewUrl}
-        sandbox="allow-scripts"
-        className="h-full min-h-0 w-full flex-1 border-0 bg-background"
-      />
-    );
-  }
-
-  if (mode === "image" && previewUrl) {
-    return (
-      <div className="flex h-full min-h-0 flex-1 items-center justify-center overflow-auto p-3">
-        <img
-          data-testid="mobile-file-preview-image"
-          src={previewUrl}
-          alt={filename}
-          className="max-h-full max-w-full object-contain"
-        />
-      </div>
-    );
-  }
-
-  if (mode === "pdf" && previewUrl) {
-    return (
-      <object
-        data={previewUrl}
-        type="application/pdf"
-        data-testid="mobile-file-preview-pdf"
-        aria-label={filename}
-        className="h-full min-h-0 w-full flex-1 bg-background"
-      >
-        <div className="flex h-full min-h-[12rem] flex-col items-center justify-center gap-2 px-6 text-center">
-          <p className="text-[15px] font-semibold">
-            {t(($) => $.attachment.cannot_preview)}
-          </p>
-          <p className="text-[12px] text-muted-foreground">
-            {t(($) => $.attachment.preview_unsupported)}
-          </p>
-        </div>
-      </object>
-    );
-  }
-
-  return (
-    <div
-      data-testid="mobile-file-preview-unavailable"
-      className="flex h-full min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 text-center"
-    >
-      <p className="text-[15px] font-semibold text-foreground">
-        {t(($) => $.attachment.cannot_preview)}
-      </p>
-      <p className="text-[12px] text-muted-foreground">
-        {t(($) => $.attachment.preview_unsupported)}
-      </p>
-    </div>
   );
 }

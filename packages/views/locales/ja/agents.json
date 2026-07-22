@@ -510,7 +510,9 @@
     "usage_tokens": "トークン",
     "reasoning_default": "デフォルト",
     "runtime_section": "ランタイム設定",
-    "config_shared_hint": "ワークスペースのどのメンバーもこのグループマネージャーのランタイム設定を変更できます。"
+    "config_shared_hint": "ワークスペースのどのメンバーもこのグループマネージャーのランタイム設定を変更できます。",
+    "message_button": "メッセージ",
+    "message_opening": "開いています…"
   },
   "live_peek": {
     "current_issue_label": "現在の作業",

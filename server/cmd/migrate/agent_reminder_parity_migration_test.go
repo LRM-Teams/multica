@@ -102,6 +102,7 @@ func TestAgentReminderParityMigration208PreservesFourV1StatesAcrossDownUp(t *tes
 		{id: "00000000-0000-0011-0000-000000000208", title: "firing without task", status: "firing", fireAt: base.Add(2 * time.Hour), createdAt: base.Add(time.Minute), updatedAt: base.Add(2 * time.Minute), snoozeCount: 1},
 		{id: "00000000-0000-0012-0000-000000000208", title: "firing with task", status: "firing", fireAt: base.Add(3 * time.Hour), createdAt: base.Add(2 * time.Minute), updatedAt: base.Add(3 * time.Minute), firedTaskID: stringPointer(taskID), snoozeCount: 2},
 		{id: "00000000-0000-0013-0000-000000000208", title: "fired", status: "fired", fireAt: base.Add(4 * time.Hour), createdAt: base.Add(3 * time.Minute), updatedAt: base.Add(4 * time.Minute), firedAt: timePointer(base.Add(5 * time.Minute)), firedTaskID: stringPointer(taskID), snoozeCount: 3},
+		{id: "00000000-0000-0014-0000-000000000208", title: "cancelled", status: "cancelled", fireAt: base.Add(5 * time.Hour), createdAt: base.Add(4 * time.Minute), updatedAt: base.Add(5 * time.Minute), firedAt: timePointer(base.Add(6 * time.Minute)), snoozeCount: 4},
 	}
 	for _, row := range rows {
 		if _, err := conn.Exec(ctx, `
@@ -172,8 +173,20 @@ func TestAgentReminderParityMigration208PreservesFourV1StatesAcrossDownUp(t *tes
 		`).Scan(&definitions, &scheduledEvents, &occurrences, &firedEvents, &claimedCurrent); err != nil {
 			t.Fatalf("%s read V2 ledger counts: %v", label, err)
 		}
-		if definitions != 4 || scheduledEvents != 4 || occurrences != 3 || firedEvents != 2 || claimedCurrent != 1 {
+		if definitions != 5 || scheduledEvents != 5 || occurrences != 3 || firedEvents != 2 || claimedCurrent != 1 {
 			t.Fatalf("%s V2 ledger counts definitions/scheduled/occurrences/fired/current=%d/%d/%d/%d/%d", label, definitions, scheduledEvents, occurrences, firedEvents, claimedCurrent)
+		}
+		var cancelledOccurrences, cancelledFiredEvents, cancelledCurrent int
+		if err := conn.QueryRow(ctx, `
+			SELECT
+			  (SELECT count(*) FROM agent_reminder_occurrence WHERE reminder_id = $1),
+			  (SELECT count(*) FROM agent_reminder_lifecycle_event WHERE reminder_id = $1 AND event_type = 'fired'),
+			  (SELECT count(*) FROM agent_reminder WHERE id = $1 AND current_occurrence_id IS NOT NULL)
+		`, rows[4].id).Scan(&cancelledOccurrences, &cancelledFiredEvents, &cancelledCurrent); err != nil {
+			t.Fatalf("%s read cancelled V2 ledger state: %v", label, err)
+		}
+		if cancelledOccurrences != 0 || cancelledFiredEvents != 0 || cancelledCurrent != 0 {
+			t.Fatalf("%s cancelled reminder generated occurrence/fired/current=%d/%d/%d, want 0/0/0", label, cancelledOccurrences, cancelledFiredEvents, cancelledCurrent)
 		}
 	}
 

@@ -150,6 +150,12 @@ export interface ChannelMessage {
    * a tombstone placeholder; deleted messages without replies can be omitted.
    */
   deleted_at?: string | null;
+  /**
+   * Client-only send lifecycle for optimistic bubbles (LRM-222). Never set by
+   * the API — pending until HTTP/WS ACK replaces the temp id, or failed with
+   * one-click retry reusing `client_message_id`.
+   */
+  local_send_status?: "pending" | "failed" | null;
 }
 
 export interface ChannelMessagesCursor {

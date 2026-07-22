@@ -810,19 +810,20 @@ function DmChannelConversation({
         clientMessageId,
       }),
       mutate: sendMessage.mutate,
-      onCommitted: () => {
-        editorRef.current?.clearContent();
-        dmPending.clear();
-        setQuoteTarget(null);
-        onDraftClear?.();
+      onCommitted: () => {},
+      onVisibleError: (kind) => {
+        if (kind === "conflict") toast.error(t(($) => $.composer.send_failed));
       },
-      // 200-dedup is silent (handled by onCommitted); 409/other always surface,
-      // so a silent conflict isn't mistaken for a sent message.
-      onVisibleError: () => toast.error(t(($) => $.composer.send_failed)),
     });
-    if (dispatched && typingStartedRef.current) {
-      typingStartedRef.current = false;
-      publishTyping(false);
+    if (dispatched) {
+      editorRef.current?.clearContent();
+      dmPending.clear();
+      setQuoteTarget(null);
+      onDraftClear?.();
+      if (typingStartedRef.current) {
+        typingStartedRef.current = false;
+        publishTyping(false);
+      }
     }
   };
 
@@ -833,7 +834,7 @@ function DmChannelConversation({
     const parts = buildChatMessageParts(content, threadPending.readyAttachmentParts);
     if (parts.length === 0) return;
     const attachmentIds = threadPending.readyAttachmentParts.map((p) => p.attachment_id);
-    threadSend.send({
+    const dispatched = threadSend.send({
       payloadKey: composePayloadKey(
         content,
         attachmentIds,
@@ -848,15 +849,43 @@ function DmChannelConversation({
         clientMessageId,
       }),
       mutate: sendThreadMessage.mutate,
-      onCommitted: () => {
-        threadEditorRef.current?.clearContent();
-        threadPending.clear();
-        setThreadQuoteTarget(null);
-        dispatch({ type: "setThreadDraftEmpty", empty: true });
+      onCommitted: () => {},
+      onVisibleError: (kind) => {
+        if (kind === "conflict") toast.error(t(($) => $.thread.send_failed));
       },
-      onVisibleError: () => toast.error(t(($) => $.thread.send_failed)),
     });
+    if (dispatched) {
+      threadEditorRef.current?.clearContent();
+      threadPending.clear();
+      setThreadQuoteTarget(null);
+      dispatch({ type: "setThreadDraftEmpty", empty: true });
+    }
   };
+
+  const handleRetrySend = useCallback(
+    (message: ChannelMessage) => {
+      if (!message.client_message_id || message.local_send_status !== "failed") return;
+      if (message.thread_root_message_id) {
+        sendThreadMessage.mutate({
+          channelId,
+          messageId: message.thread_root_message_id,
+          content: message.content,
+          parts: message.parts,
+          quoteMessageId: message.quote_message_id ?? undefined,
+          clientMessageId: message.client_message_id,
+        });
+        return;
+      }
+      sendMessage.mutate({
+        channelId,
+        content: message.content,
+        parts: message.parts,
+        quoteMessageId: message.quote_message_id ?? undefined,
+        clientMessageId: message.client_message_id,
+      });
+    },
+    [channelId, sendMessage, sendThreadMessage],
+  );
 
   const handleOpenThread = (message: ChannelMessage) => {
     focusThreadComposerOnOpenRef.current = true;
@@ -944,6 +973,7 @@ function DmChannelConversation({
           onQuoteMessage={setThreadQuoteTarget}
           onEditMessage={handleEditMessage}
           onDeleteMessage={handleDeleteMessage}
+          onRetrySend={handleRetrySend}
         />
         <ConversationActivityStrip
           tasks={activeTasks}
@@ -1129,6 +1159,7 @@ function DmChannelConversation({
         onQuoteMessage={setQuoteTarget}
         onEditMessage={handleEditMessage}
         onDeleteMessage={handleDeleteMessage}
+        onRetrySend={handleRetrySend}
       />
       <ConversationActivityStrip
         typingActors={activeTypingActors}

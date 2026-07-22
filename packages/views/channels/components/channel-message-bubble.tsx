@@ -270,6 +270,7 @@ export function ChannelMessageBubble({
   onEdit,
   onDelete,
   onOpenAgent,
+  onRetrySend,
   searchHighlighted = false,
   searchQuery,
   collapseLongContent = false,
@@ -297,6 +298,8 @@ export function ChannelMessageBubble({
   onDelete?: (message: ChannelMessage) => void;
   /** Opens the side agent file/public-info panel for agent-authored messages. */
   onOpenAgent?: (agentId: string) => void;
+  /** One-click retry for a failed optimistic send (reuses `client_message_id`). */
+  onRetrySend?: (message: ChannelMessage) => void;
   /** Search hit: marks matching visible text while search is open. */
   searchHighlighted?: boolean;
   /** Trimmed conversation search phrase to mark inside this hit's visible text. */
@@ -441,7 +444,11 @@ export function ChannelMessageBubble({
     <span className="truncate font-bold text-ink">{displayName}</span>
   );
 
-  const canOpenThread = !!onOpenThread && !message.thread_root_message_id;
+  const localSendStatus = message.local_send_status ?? null;
+  const isLocalPending = localSendStatus === "pending";
+  const isLocalFailed = localSendStatus === "failed";
+  const isLocalSend = isLocalPending || isLocalFailed;
+  const canOpenThread = !!onOpenThread && !message.thread_root_message_id && !isLocalSend;
   const threadReplyCount = message.thread_reply_count ?? 0;
   const threadUnreadCount = message.thread_unread_count ?? 0;
   const hasThreadActivity = threadReplyCount > 0 || threadUnreadCount > 0;
@@ -482,7 +489,7 @@ export function ChannelMessageBubble({
   // unified composer (#258 backlog). onEdit/MessageInlineEditor kept dormant for
   // that rebuild. Delete stays.
   const canEdit = false;
-  const canDelete = isOwn && !!onDelete;
+  const canDelete = isOwn && !!onDelete && !isLocalSend;
   const isEdited = !!message.edited_at;
   const collapseText =
     projectReferencesToText(message.content, message.parts, resolveMentionPreview) ??
@@ -610,6 +617,7 @@ export function ChannelMessageBubble({
       data-testid="message-bubble"
       data-own={isOwn}
       data-self-mentioned={selfMentioned ? "true" : undefined}
+      data-local-send={localSendStatus ?? undefined}
       className={cn(
         // Coarse pointers get a dedicated 44px action column (Parker #568:
         // an absolutely-positioned More button compensated by body padding
@@ -620,6 +628,8 @@ export function ChannelMessageBubble({
         selfMentioned && SELF_MENTION_ROW_CLASS,
         highlighted && "bg-primary/10 ring-1 ring-primary/25 duration-0 hover:bg-primary/10 focus-within:bg-primary/10",
         mobileThreadTapActive && "bg-primary/[0.04] ring-1 ring-primary/45 duration-75",
+        isLocalPending && "opacity-70",
+        isLocalFailed && "opacity-90",
       )}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
@@ -685,7 +695,7 @@ export function ChannelMessageBubble({
             </span>
           )}
         </div>
-        {!isEditing && (
+        {!isEditing && !isLocalSend && (
           <div
             data-testid="message-action-bar"
             data-message-action-surface="true"
@@ -797,6 +807,29 @@ export function ChannelMessageBubble({
               highlightQuery={searchHighlighted ? searchQuery : undefined}
               sourceMessageId={message.id}
             />
+            {isLocalFailed && onRetrySend && (
+              <div
+                data-testid="message-send-failed"
+                className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-destructive"
+              >
+                <span>{t(($) => $.message.send_failed)}</span>
+                <button
+                  type="button"
+                  onClick={() => onRetrySend(message)}
+                  className="inline-flex h-7 items-center rounded-md border border-destructive/40 bg-destructive/10 px-2.5 font-medium text-destructive transition-colors hover:bg-destructive/15 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                >
+                  {t(($) => $.message.retry_send)}
+                </button>
+              </div>
+            )}
+            {isLocalPending && (
+              <div
+                data-testid="message-send-pending"
+                className="mt-1 text-[11px] text-muted-foreground"
+              >
+                {t(($) => $.message.sending)}
+              </div>
+            )}
             {isContentCollapsed && (
               <div
                 className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center bg-gradient-to-t from-background via-background/95 to-transparent pb-1.5 pt-12"
@@ -983,7 +1016,7 @@ export function ChannelMessageBubble({
           </div>
         )}
       </div>
-      {!isEditing && (onReact || onQuote || canOpenThread) && (
+      {!isEditing && !isLocalSend && (onReact || onQuote || canOpenThread) && (
         <button
           type="button"
           data-testid="message-mobile-more-trigger"
@@ -999,7 +1032,7 @@ export function ChannelMessageBubble({
     </div>
   );
 
-  if (!onQuote || isEditing) return bubble;
+  if (!onQuote || isEditing || isLocalSend) return bubble;
 
   return (
     <ContextMenu>

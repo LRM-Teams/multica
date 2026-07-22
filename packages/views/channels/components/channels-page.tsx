@@ -1838,20 +1838,24 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         clientMessageId,
       }),
       mutate: sendMessage.mutate,
-      onCommitted: () => {
-        editorRef.current?.clearContent();
-        channelPending.clear();
-        setQuoteTarget(null);
-        if (activeDraftKey) storeClearComposerDraft(activeDraftKey);
+      // Composer clears on optimistic dispatch (LRM-222); onCommitted stays a
+      // no-op safety net if a future path skips the early clear.
+      onCommitted: () => {},
+      // Conflict (409) needs a toast — the optimistic bubble is dropped. Retry
+      // failures keep the failed bubble with one-click retry (no toast noise).
+      onVisibleError: (kind) => {
+        if (kind === "conflict") toast.error(t(($) => $.composer.send_failed));
       },
-      // 200-dedup is silent (onCommitted); a 409 or any other failure always
-      // surfaces — the draft is kept, but the user must know this send did NOT
-      // land (a silent 409 reads as a sent message).
-      onVisibleError: () => toast.error(t(($) => $.composer.send_failed)),
     });
-    if (dispatched && typingStartedRef.current) {
-      typingStartedRef.current = false;
-      publishTyping(false);
+    if (dispatched) {
+      editorRef.current?.clearContent();
+      channelPending.clear();
+      setQuoteTarget(null);
+      if (activeDraftKey) storeClearComposerDraft(activeDraftKey);
+      if (typingStartedRef.current) {
+        typingStartedRef.current = false;
+        publishTyping(false);
+      }
     }
   };
 
@@ -1862,7 +1866,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     const parts = buildChatMessageParts(content, threadPending.readyAttachmentParts);
     if (parts.length === 0) return;
     const attachmentIds = threadPending.readyAttachmentParts.map((p) => p.attachment_id);
-    threadSend.send({
+    const dispatched = threadSend.send({
       payloadKey: composePayloadKey(
         content,
         attachmentIds,
@@ -1877,15 +1881,43 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         clientMessageId,
       }),
       mutate: sendThreadMessage.mutate,
-      onCommitted: () => {
-        threadEditorRef.current?.clearContent();
-        threadPending.clear();
-        setThreadQuoteTarget(null);
-        setThreadDraftEmpty(true);
+      onCommitted: () => {},
+      onVisibleError: (kind) => {
+        if (kind === "conflict") toast.error(t(($) => $.thread.send_failed));
       },
-      onVisibleError: () => toast.error(t(($) => $.thread.send_failed)),
     });
+    if (dispatched) {
+      threadEditorRef.current?.clearContent();
+      threadPending.clear();
+      setThreadQuoteTarget(null);
+      setThreadDraftEmpty(true);
+    }
   };
+
+  const handleRetrySend = useCallback(
+    (message: ChannelMessage) => {
+      if (!active || !message.client_message_id || message.local_send_status !== "failed") return;
+      if (message.thread_root_message_id) {
+        sendThreadMessage.mutate({
+          channelId: active.id,
+          messageId: message.thread_root_message_id,
+          content: message.content,
+          parts: message.parts,
+          quoteMessageId: message.quote_message_id ?? undefined,
+          clientMessageId: message.client_message_id,
+        });
+        return;
+      }
+      sendMessage.mutate({
+        channelId: active.id,
+        content: message.content,
+        parts: message.parts,
+        quoteMessageId: message.quote_message_id ?? undefined,
+        clientMessageId: message.client_message_id,
+      });
+    },
+    [active, sendMessage, sendThreadMessage],
+  );
 
   const handleOpenThread = (message: ChannelMessage) => {
     focusThreadComposerOnOpenRef.current = true;
@@ -2510,6 +2542,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         onRetry={() => refetchThread()}
         onReact={handleReactToMessage}
         onQuoteMessage={setThreadQuoteTarget}
+        onRetrySend={handleRetrySend}
         onOpenAgent={handleOpenAgentPanel}
         quoteTarget={threadQuoteTarget}
         onClearQuote={() => setThreadQuoteTarget(null)}
@@ -2921,6 +2954,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                 onQuoteMessage={isActiveArchived ? undefined : setQuoteTarget}
                 onEditMessage={isActiveArchived ? undefined : handleEditMessage}
                 onDeleteMessage={isActiveArchived ? undefined : handleDeleteMessage}
+                onRetrySend={isActiveArchived ? undefined : handleRetrySend}
                 onOpenAgent={handleOpenAgentPanel}
               />
 

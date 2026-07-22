@@ -83,6 +83,9 @@ func TestMain(m *testing.M) {
 	testHandler.WebhookRateLimiter = NewMemoryWebhookRateLimiter(WebhookRateLimit{Limit: 1_000_000, Window: time.Minute})
 	testHandler.WebhookIPRateLimiter = NewMemoryWebhookIPRateLimiter(WebhookRateLimit{Limit: 1_000_000, Window: time.Minute})
 	testHandler.RuntimeReleaseSource = nil
+	// Keep post-ack agent wake/Feishu work synchronous in tests so
+	// SendChannelMessage* handlers still finish side effects before return.
+	testHandler.SyncChannelMessageSideEffects = true
 	testPool = pool
 
 	testUserID, testWorkspaceID, err = setupHandlerTestFixture(ctx, pool)

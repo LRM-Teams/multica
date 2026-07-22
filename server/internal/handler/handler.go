@@ -182,7 +182,13 @@ type Handler struct {
 	// process exit indefinitely if the pool is frozen — at worst the
 	// next replica waits the full TTL.
 	LarkHub *lark.Hub
-	cfg     Config
+	// SyncChannelMessageSideEffects forces agent-wake / Feishu work that
+	// normally runs after the HTTP send ack to execute inline. Tests set
+	// this so assertions immediately after SendChannelMessage* still see
+	// inbox events; production leaves it false so O(agents) fanout does
+	// not inflate send latency / Sending... time.
+	SyncChannelMessageSideEffects bool
+	cfg                           Config
 }
 
 func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *events.Bus, emailService *service.EmailService, store storage.Storage, cfSigner *auth.CloudFrontSigner, analyticsClient analytics.Client, cfg Config, daemonHubs ...*daemonws.Hub) *Handler {

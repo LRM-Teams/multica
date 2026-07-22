@@ -2841,13 +2841,16 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 		h.clearDMHiddenForChannelMembers(r.Context(), workspaceID, channelID)
 	}
 	h.publishChannelToMembers(r.Context(), protocol.EventChannelMessage, workspaceID, "member", userID, channelID, msg)
-	if ch.Kind == "dm" {
-		h.dispatchDMThreadReply(r.Context(), ch, msg, parseUUID(userID))
-	} else {
-		h.dispatchChannelThreadReplyMentions(r.Context(), ch, msg, parseUUID(userID))
-	}
-	h.sendChannelMessageToFeishu(r.Context(), ch, authorName, content)
+	// Ack first — see SendChannelMessage: wake/Feishu must not block send RTT.
 	writeJSON(w, http.StatusCreated, msg)
+	h.runAfterChannelMessageAck(r.Context(), func(ctx context.Context) {
+		if ch.Kind == "dm" {
+			h.dispatchDMThreadReply(ctx, ch, msg, parseUUID(userID))
+		} else {
+			h.dispatchChannelThreadReplyMentions(ctx, ch, msg, parseUUID(userID))
+		}
+		h.sendChannelMessageToFeishu(ctx, ch, authorName, content)
+	})
 }
 
 func (h *Handler) MarkChannelThreadRead(w http.ResponseWriter, r *http.Request) {
@@ -3542,16 +3545,20 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 		h.clearDMHiddenForChannelMembers(r.Context(), workspaceID, channelID)
 	}
 	h.publishChannelToMembers(r.Context(), protocol.EventChannelMessage, workspaceID, "member", userID, channelID, msg)
-	if ch.Kind == "dm" {
-		// 1-on-1 DM: the agent peer (if any) replies to every user message
-		// without an @-mention. Human↔human DMs have no agent member → no-op.
-		h.dispatchDMAgentReply(r.Context(), ch, msg, parseUUID(userID))
-	} else {
-		h.ingestWendyHumanGroupMessage(r.Context(), ch, msg)
-		h.dispatchChannelMessageToAgents(r.Context(), ch, msg, parseUUID(userID))
-	}
-	h.sendChannelMessageToFeishu(r.Context(), ch, authorName, content)
+	// Ack first: agent wake fanout (and Feishu sync) are O(agents)/network and
+	// must not inflate the client's send latency / Sending... state.
 	writeJSON(w, http.StatusCreated, msg)
+	h.runAfterChannelMessageAck(r.Context(), func(ctx context.Context) {
+		if ch.Kind == "dm" {
+			// 1-on-1 DM: the agent peer (if any) replies to every user message
+			// without an @-mention. Human↔human DMs have no agent member → no-op.
+			h.dispatchDMAgentReply(ctx, ch, msg, parseUUID(userID))
+		} else {
+			h.ingestWendyHumanGroupMessage(ctx, ch, msg)
+			h.dispatchChannelMessageToAgents(ctx, ch, msg, parseUUID(userID))
+		}
+		h.sendChannelMessageToFeishu(ctx, ch, authorName, content)
+	})
 }
 
 func (h *Handler) ingestWendyHumanGroupMessage(ctx context.Context, ch ChannelResponse, msg ChannelMessageResponse) {
@@ -3700,8 +3707,10 @@ func (h *Handler) ImportLarkChannelMessage(w http.ResponseWriter, r *http.Reques
 	msg = h.attachSingleChannelMessageDetails(r.Context(), workspaceID, parseUUID(userID), msg)
 	_, _ = h.DB.Exec(r.Context(), `UPDATE channel SET updated_at = now() WHERE id = $1`, parseUUID(msg.ChannelID))
 	h.publishChannelToMembers(r.Context(), protocol.EventChannelMessage, workspaceID, "member", userID, parseUUID(ch.ID), msg)
-	h.dispatchChannelMessageToAgents(r.Context(), ch, msg, parseUUID(userID))
 	writeJSON(w, http.StatusCreated, msg)
+	h.runAfterChannelMessageAck(r.Context(), func(ctx context.Context) {
+		h.dispatchChannelMessageToAgents(ctx, ch, msg, parseUUID(userID))
+	})
 }
 
 func (h *Handler) validateChannelMemberTarget(w http.ResponseWriter, r *http.Request, workspaceID, memberType string, memberID pgtype.UUID) bool {
@@ -4581,6 +4590,30 @@ func (h *Handler) channelHumanMemberIDs(ctx context.Context, workspaceID, channe
 func (h *Handler) publishChannelToMembers(ctx context.Context, eventType, workspaceID, actorType, actorID string, channelID pgtype.UUID, payload any) {
 	recipientIDs := recipientUserIDsFromSet(h.channelHumanMemberIDs(ctx, workspaceID, uuidToString(channelID)))
 	h.publishToUsers(eventType, workspaceID, actorType, actorID, recipientIDs, payload)
+}
+
+// runAfterChannelMessageAck runs send side effects that must not block the HTTP
+// create acknowledgment (agent wake fanout, Feishu sync). Production detaches
+// the request context and runs asynchronously; tests set
+// SyncChannelMessageSideEffects so assertions after the handler still observe
+// inbox/session rows.
+func (h *Handler) runAfterChannelMessageAck(ctx context.Context, fn func(context.Context)) {
+	if fn == nil {
+		return
+	}
+	bg := context.WithoutCancel(ctx)
+	if h != nil && h.SyncChannelMessageSideEffects {
+		fn(bg)
+		return
+	}
+	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("channel message post-ack side effect panicked", "recover", rec)
+			}
+		}()
+		fn(bg)
+	}()
 }
 
 func (h *Handler) publishChannelToMembersWithID(ctx context.Context, eventType, workspaceID, actorType, actorID string, channelID pgtype.UUID, payload any, realtimeEventID string) error {

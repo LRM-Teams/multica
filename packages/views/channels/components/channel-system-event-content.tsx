@@ -18,6 +18,7 @@ import {
   type IssueSystemEvent,
   PROJECT_EVENTS,
   type ProjectSystemEvent,
+  type ReminderSystemEvent,
 } from "./channel-system-event";
 
 /**
@@ -360,4 +361,34 @@ export function ProjectSystemEventContent({ event }: { event: ProjectSystemEvent
     actor,
     previous: projectNode(event.previousProjectTitle, event.previousProjectId, true),
   });
+}
+
+/**
+ * Renders the composed, localized copy for a Reminder-fired system row
+ * (parsed by channel-system-event.ts). No actor token — the row is always
+ * system-authored, never attributed to a human/agent. `title` can be
+ * arbitrarily long (a user-authored reminder title, unlike the short
+ * identifiers/names other system events interpolate), so it truncates to a
+ * single line with the full text kept on `title=` for accessibility/hover —
+ * matching this component's existing single-line row convention.
+ */
+export function ReminderSystemEventContent({ event }: { event: ReminderSystemEvent }): ReactNode {
+  const { t } = useT("channels");
+  const titleNode = (
+    <span className="max-w-[60ch] truncate align-bottom" title={event.title}>
+      {event.title}
+    </span>
+  );
+  const template = t(($) => $.message.system_event.reminder.fired);
+  const body = template.split(/(\{title\})/g).map((segment, index) => {
+    if (segment === "{title}") return <Fragment key={index}>{titleNode}</Fragment>;
+    if (!segment) return null;
+    return <Fragment key={index}>{segment}</Fragment>;
+  });
+  return (
+    <>
+      {body}
+      {!event.anchorAvailable && t(($) => $.message.system_event.reminder.anchor_unavailable_suffix)}
+    </>
+  );
 }

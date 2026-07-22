@@ -328,6 +328,10 @@
         "bound": "{actor} 把本群关联到项目「{project}」",
         "changed": "{actor} 把关联项目从「{previous}」改为「{project}」",
         "unbound": "{actor} 解除了与项目「{previous}」的关联"
+      },
+      "reminder": {
+        "fired": "提醒已触发：{title}",
+        "anchor_unavailable_suffix": " · 来源不可用"
       }
     }
   },

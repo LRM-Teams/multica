@@ -328,6 +328,10 @@
         "bound": "{actor}님이 이 채널을 프로젝트 「{project}」에 연결했습니다",
         "changed": "{actor}님이 이 채널의 연결 프로젝트를 「{previous}」에서 「{project}」(으)로 변경했습니다",
         "unbound": "{actor}님이 이 채널과 프로젝트 「{previous}」의 연결을 해제했습니다"
+      },
+      "reminder": {
+        "fired": "리마인더가 발생했습니다: {title}",
+        "anchor_unavailable_suffix": " · 앵커 사용 불가"
       }
     }
   },

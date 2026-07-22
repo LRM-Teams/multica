@@ -6,6 +6,7 @@ import { useWorkspaceId } from "../hooks";
 import { memberListOptions, agentListOptions, squadListOptions } from "./queries";
 import { resolvePublicFileUrl } from "./avatar-url";
 import { resolveActorDisplayName, resolveActorHandle } from "../identity";
+import type { MemberRole } from "../types/workspace";
 
 export function useActorName() {
   const wsId = useWorkspaceId();
@@ -25,6 +26,12 @@ export function useActorName() {
   const getMemberHandle = useCallback((userId: string, fallback?: string) => {
     const m = members.find((m) => m.user_id === userId);
     return resolveActorHandle(m, fallback);
+  }, [members]);
+
+  // LRM-232: bubble chrome looks up workspace role by user id (owner/admin
+  // muted label). Missing members return null so ordinary/unknown stay quiet.
+  const getMemberRole = useCallback((userId: string): MemberRole | null => {
+    return members.find((m) => m.user_id === userId)?.role ?? null;
   }, [members]);
 
   const getAgentName = useCallback((agentId: string, fallback?: string) => {
@@ -77,6 +84,7 @@ export function useActorName() {
     () => ({
       getMemberName,
       getMemberHandle,
+      getMemberRole,
       getAgentName,
       getAgentHandle,
       getSquadName,
@@ -94,6 +102,7 @@ export function useActorName() {
       getAgentName,
       getMemberHandle,
       getMemberName,
+      getMemberRole,
       getSquadName,
     ],
   );

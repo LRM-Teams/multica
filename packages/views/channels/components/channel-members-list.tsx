@@ -19,6 +19,8 @@ export type MemberRoleLabel = "owner" | "admin" | "member" | "agent";
 /**
  * Shared Members list (LRM-211) — used by the Members dialog and the
  * Channel details 「成员」Tab so there is one list IA, not two.
+ * LRM-225 — scroll via flex-1 min-h-0 (dialog) or parent overflow (details);
+ * drop the old fixed max-h that clipped the roster on mobile.
  */
 export function ChannelMembersList({
   members,
@@ -51,7 +53,13 @@ export function ChannelMembersList({
 
   if (loading) {
     return (
-      <div className={cn("space-y-2 px-5 py-3", className)} aria-busy="true">
+      <div
+        className={cn(
+          "min-h-0 space-y-2 overflow-y-auto overscroll-contain px-5 py-3 [-webkit-overflow-scrolling:touch]",
+          className,
+        )}
+        aria-busy="true"
+      >
         {Array.from({ length: 4 }).map((_, i) => (
           <div key={i} className="flex items-center gap-3">
             <Skeleton className="size-9 shrink-0 rounded-full" />
@@ -68,14 +76,25 @@ export function ChannelMembersList({
 
   if (members.length === 0) {
     return (
-      <p className={cn("px-5 py-10 text-center text-sm text-muted-foreground", className)}>
+      <p
+        className={cn(
+          "min-h-0 px-5 py-10 text-center text-sm text-muted-foreground",
+          className,
+        )}
+      >
         {emptyLabel || noResultsLabel}
       </p>
     );
   }
 
   return (
-    <div className={cn("max-h-[min(280px,40vh)] overflow-y-auto pb-2", className)}>
+    <div
+      className={cn(
+        "min-h-0 overflow-y-auto overscroll-contain pb-2 [-webkit-overflow-scrolling:touch]",
+        className,
+      )}
+      data-testid="channel-members-list"
+    >
       {members.map((m) => {
         const isAgent = m.member_type === "agent";
         const presentation: ActorIdentityPresentation = resolveActorIdentityPresentation(
@@ -89,7 +108,7 @@ export function ChannelMembersList({
         return (
           <div
             key={`${m.member_type}:${m.member_id}`}
-            className="group flex min-h-[52px] items-center gap-3 px-5 py-2.5 hover:bg-accent/60"
+            className="group flex min-h-[52px] items-center gap-3 border-b border-border/40 px-5 py-2.5 last:border-b-0 hover:bg-accent/60"
           >
             <ActorAvatar
               name={presentation.displayName}
@@ -104,7 +123,7 @@ export function ChannelMembersList({
               handle={presentation.handle}
               showHandle
               className="min-w-0 flex-1"
-              primaryClassName="truncate text-sm font-semibold"
+              primaryClassName="truncate text-sm font-semibold text-foreground"
             />
             <span className="shrink-0 rounded-full border border-border bg-background px-2 py-0.5 text-[11px] text-muted-foreground">
               {roleLabel}

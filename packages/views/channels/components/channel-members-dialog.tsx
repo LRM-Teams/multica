@@ -11,6 +11,7 @@ import {
   DialogTitle,
 } from "@multica/ui/components/ui/dialog";
 import { Input } from "@multica/ui/components/ui/input";
+import { cn } from "@multica/ui/lib/utils";
 import { Search } from "lucide-react";
 import { useT } from "../../i18n";
 import {
@@ -21,6 +22,7 @@ import {
 /**
  * LRM-211 — Slack-style centered Members dialog (~520).
  * Opened from the header avatar stack / member count.
+ * LRM-225 — mobile: bottom sheet + flex-1 list so the roster can scroll.
  */
 export function ChannelMembersDialog({
   open,
@@ -65,10 +67,17 @@ export function ChannelMembersDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="flex max-h-[min(85dvh,640px)] w-full flex-col gap-0 overflow-hidden p-0 sm:max-w-[520px]"
+        className={cn(
+          "flex w-full flex-col gap-0 overflow-hidden bg-background p-0 sm:max-w-[520px]",
+          // Definite height so the flex-1 list can shrink and scroll (connect-remote pattern).
+          "h-[min(85dvh,640px)] max-h-[min(85dvh,640px)]",
+          // Mobile: bottom sheet — avoid translate-centered popup (iOS nested scroll breaks).
+          "max-sm:top-auto max-sm:bottom-0 max-sm:left-1/2 max-sm:right-auto max-sm:max-w-[calc(100%-0px)] max-sm:w-full max-sm:translate-x-[-50%] max-sm:translate-y-0 max-sm:rounded-b-none max-sm:rounded-t-2xl",
+          "max-sm:h-[min(90dvh,640px)] max-sm:max-h-[min(90dvh,640px)]",
+        )}
         showCloseButton
       >
-        <DialogHeader className="gap-1 px-5 pb-2 pt-5 text-left">
+        <DialogHeader className="shrink-0 gap-1 px-5 pb-2 pt-5 text-left">
           <DialogTitle className="text-lg font-bold tracking-tight">
             {t(($) => $.members.dialog_title)}
           </DialogTitle>
@@ -81,20 +90,20 @@ export function ChannelMembersDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex items-center gap-2.5 px-5 pb-3">
+        <div className="flex shrink-0 items-center gap-2.5 px-5 pb-3">
           <div className="relative min-w-0 flex-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               value={query}
               onChange={(e) => onQueryChange(e.target.value)}
               placeholder={t(($) => $.members.find_members)}
-              className="h-10 bg-muted/40 pl-9"
+              className="h-10 rounded-lg border-border bg-muted/40 pl-9"
             />
           </div>
           {canManage && onAddPeople && (
             <Button
               type="button"
-              className="h-9 shrink-0 bg-[#1264a3] px-3.5 text-sm font-semibold text-white hover:bg-[#1264a3]/90"
+              className="h-9 shrink-0 rounded-lg bg-[#1264a3] px-3.5 text-sm font-semibold text-white hover:bg-[#1264a3]/90"
               onClick={onAddPeople}
             >
               {t(($) => $.members.add_people)}
@@ -102,7 +111,7 @@ export function ChannelMembersDialog({
           )}
         </div>
 
-        <p className="px-5 pb-1 text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+        <p className="shrink-0 px-5 pb-1 text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
           {t(($) => $.members.in_channel, { count: total })}
         </p>
 
@@ -122,9 +131,10 @@ export function ChannelMembersDialog({
           onOpenDm={onOpenDm}
           onRemove={onRemove}
           dmPending={dmPending}
+          className="min-h-0 flex-1"
         />
 
-        <DialogFooter className="mx-0 mb-0 mt-0 flex-row items-center justify-between gap-2 rounded-none border-t bg-muted/30 px-5 py-3 sm:justify-between">
+        <DialogFooter className="mx-0 mb-0 mt-0 shrink-0 flex-row items-center justify-between gap-2 rounded-none border-t border-border bg-muted/30 px-5 py-3 sm:justify-between max-sm:pb-[max(0.75rem,env(safe-area-inset-bottom))]">
           <span className="text-xs text-muted-foreground">
             {t(($) => $.members.footer_count, { count: total })}
           </span>

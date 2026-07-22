@@ -1979,24 +1979,24 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   );
 
   // LRM-211 — Channel details Members tab reuses the same list as the
-  // Members dialog (no dual-tab Popover).
+  // Members dialog (no dual-tab Popover). LRM-225 — match dialog chrome
+  // (search + Add people colors) so mobile/desktop don't diverge.
   const memberPanelBody = active ? (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center gap-2 border-b px-3 py-2">
+      <div className="flex shrink-0 items-center gap-2.5 border-b border-border px-4 py-3">
         <div className="relative min-w-0 flex-1">
-          <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={membersQuery}
             onChange={(e) => setMembersQuery(e.target.value)}
             placeholder={t(($) => $.members.find_members)}
-            className="h-8 pl-7"
+            className="h-10 rounded-lg border-border bg-muted/40 pl-9"
           />
         </div>
         {!isActiveSystemChannel && canArchive(active) && (
           <Button
             type="button"
-            size="sm"
-            className="h-8 shrink-0"
+            className="h-9 shrink-0 rounded-lg bg-[#1264a3] px-3.5 text-sm font-semibold text-white hover:bg-[#1264a3]/90"
             onClick={openAddPeopleDialog}
           >
             {t(($) => $.members.add_people)}
@@ -2019,7 +2019,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         onOpenDm={openDmWithMember}
         onRemove={handleRemoveMemberClick}
         dmPending={createOrFindDm.isPending}
-        className="max-h-none"
+        className="min-h-0 flex-1"
       />
     </div>
   ) : null;

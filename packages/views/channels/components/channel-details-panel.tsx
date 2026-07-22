@@ -164,7 +164,14 @@ export function ChannelDetailsPanel({
         ))}
       </div>
 
-      <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
+      <div
+        className={cn(
+          "min-h-0 min-w-0 flex-1",
+          // Members tab hosts its own flex-1 scroll list (LRM-225); other
+          // tabs scroll the whole pane.
+          tab === "members" ? "flex flex-col overflow-hidden" : "overflow-y-auto",
+        )}
+      >
         {tab === "about" && (
           <div className="p-4">
             <div className="mb-4 flex items-center gap-3">
@@ -215,7 +222,9 @@ export function ChannelDetailsPanel({
           </div>
         )}
 
-        {tab === "members" && <div>{membersBody}</div>}
+        {tab === "members" && (
+          <div className="flex min-h-0 flex-1 flex-col">{membersBody}</div>
+        )}
 
         {tab === "files" && (
           <div className="p-3">

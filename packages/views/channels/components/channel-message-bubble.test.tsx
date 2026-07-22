@@ -343,7 +343,7 @@ vi.mock("../../i18n/use-t", () => ({
             issue: {
               actor_system: "Multica",
               created: "{actor} created {issue}",
-              assigned: "{actor} assigned {issue} to {{target}}",
+              assigned: "{actor} assigned {issue} to {target}",
               assigned_unknown: "{actor} changed the assignee of {issue}",
               in_progress: "{actor} started {issue}",
               in_review: "{actor} sent {issue} for review",

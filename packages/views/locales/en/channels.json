@@ -43,12 +43,13 @@
     "readonly_notice": "This channel is archived"
   },
   "delete_dialog": {
-    "title": "Delete this group?",
+    "title": "Delete this channel?",
     "description": "\"{{name}}\" and all its messages will be permanently deleted. This can't be undone.",
     "cancel": "Cancel",
-    "confirm": "Delete",
-    "toast_success": "Group deleted",
-    "toast_failed": "Failed to delete group"
+    "confirm": "Delete channel",
+    "confirm_checkbox": "Yes, permanently delete this channel",
+    "toast_success": "Channel deleted",
+    "toast_failed": "Failed to delete channel"
   },
   "empty_state": {
     "title": "Create a group chat",
@@ -174,6 +175,10 @@
     "lark_label": "Feishu chat_id",
     "save": "Save",
     "danger_zone": "Danger zone",
+    "archive_title": "Archive this channel",
+    "archive_description": "Hide it from the sidebar. History is kept and can be restored.",
+    "delete_title": "Delete this channel",
+    "delete_description": "Permanently remove the channel and all messages. This can't be undone.",
     "archive_disabled_archived": "This channel is already archived.",
     "open_aria": "Open channel details",
     "menu_about": "About",

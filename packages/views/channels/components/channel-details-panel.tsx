@@ -1,7 +1,7 @@
 "use client";
 
 import { type ReactNode, type RefObject, useState } from "react";
-import { Archive, Bell, BellOff } from "lucide-react";
+import { Bell, BellOff } from "lucide-react";
 import type { Channel, ChannelMemberBrief } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
@@ -36,11 +36,13 @@ export function ChannelDetailsPanel({
   projectDisabledReason,
   canManage,
   manageDisabledReason,
+  canDelete,
   isArchived,
   onMuteToggle,
   mutePending,
   onShare,
   onArchive,
+  onDelete,
   onRename,
   renamePending,
   onUpdateLarkChatId,
@@ -63,11 +65,14 @@ export function ChannelDetailsPanel({
   projectDisabledReason?: string;
   canManage: boolean;
   manageDisabledReason?: string;
+  /** Permanent delete — owner/admin only (stricter than archive). */
+  canDelete: boolean;
   isArchived: boolean;
   onMuteToggle: () => void;
   mutePending?: boolean;
   onShare: () => void;
   onArchive: () => void;
+  onDelete: () => void;
   onRename: (name: string) => void;
   renamePending?: boolean;
   onUpdateLarkChatId: (larkChatId: string | null) => void;
@@ -299,36 +304,59 @@ export function ChannelDetailsPanel({
               portalContainer={portalContainer}
             />
 
+            {/* LRM-239 — Slack-aligned danger zone: archive + permanent delete.
+                Delete is owner/admin only and stays available on archived
+                channels; system channels never reach this tab. */}
             <div className="border-t p-3 md:p-4">
               <p className="mb-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
                 {t(($) => $.details.danger_zone)}
               </p>
-              {canManage && !isArchived ? (
-                <button
-                  type="button"
-                  onClick={onArchive}
-                  className="flex w-full items-center gap-2 py-2.5 text-left text-sm text-destructive hover:opacity-80"
-                >
-                  <Archive className="size-4 shrink-0" />
-                  {t(($) => $.sidebar.archive)}
-                </button>
-              ) : (
-                <div>
-                  <button
-                    type="button"
-                    disabled
-                    className="flex w-full cursor-not-allowed items-center gap-2 py-2.5 text-left text-sm text-destructive opacity-50"
-                  >
-                    <Archive className="size-4 shrink-0" />
-                    {t(($) => $.sidebar.archive)}
-                  </button>
-                  <p className="text-xs text-muted-foreground">
-                    {isArchived
-                      ? t(($) => $.details.archive_disabled_archived)
-                      : manageDisabledReason ?? t(($) => $.sidebar.archive_permission)}
-                  </p>
+              <div className="divide-y">
+                <div className="py-2.5">
+                  {canManage && !isArchived ? (
+                    <button
+                      type="button"
+                      onClick={onArchive}
+                      className="w-full text-left hover:opacity-80"
+                    >
+                      <p className="text-sm font-semibold text-ink">
+                        {t(($) => $.details.archive_title)}
+                      </p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        {t(($) => $.details.archive_description)}
+                      </p>
+                    </button>
+                  ) : (
+                    <div>
+                      <p className="text-sm font-semibold text-ink opacity-50">
+                        {t(($) => $.details.archive_title)}
+                      </p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        {isArchived
+                          ? t(($) => $.details.archive_disabled_archived)
+                          : manageDisabledReason ??
+                            t(($) => $.sidebar.archive_permission)}
+                      </p>
+                    </div>
+                  )}
                 </div>
-              )}
+                {canDelete ? (
+                  <div className="py-2.5">
+                    <button
+                      type="button"
+                      onClick={onDelete}
+                      className="w-full text-left hover:opacity-80"
+                    >
+                      <p className="text-sm font-semibold text-destructive">
+                        {t(($) => $.details.delete_title)}
+                      </p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        {t(($) => $.details.delete_description)}
+                      </p>
+                    </button>
+                  </div>
+                ) : null}
+              </div>
             </div>
           </div>
         )}

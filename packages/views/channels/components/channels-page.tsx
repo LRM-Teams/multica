@@ -176,6 +176,7 @@ import {
   ChannelDetailsPanel,
   type ChannelDetailsTab,
 } from "./channel-details-panel";
+import { DeleteChannelDialog } from "./delete-channel-dialog";
 import { ChannelTasksBoard } from "./channel-tasks-board";
 import { ChannelGroupAvatar } from "./channel-group-avatar";
 import { ThreadPanel } from "./thread-panel";
@@ -1252,6 +1253,15 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         currentUserRole === "admin"),
     [currentUserId, currentUserRole],
   );
+  // LRM-239 / LRM-235 — permanent delete is stricter than archive: workspace
+  // owner/admin only (channel creator who is a plain member cannot delete).
+  // System channels never get a Settings tab, so this gate is defense-in-depth.
+  const canDeleteChannel = useCallback(
+    (channel: Channel) =>
+      !isImmutableSystemChannel(channel) &&
+      (currentUserRole === "owner" || currentUserRole === "admin"),
+    [currentUserRole],
+  );
   // #576 blocker (Iris) — the group-settings Project picker must be gated by
   // the same creator/admin permission as archiving, plus archived-channel and
   // in-flight-mutation states: a plain member (or anyone viewing an archived
@@ -1657,7 +1667,12 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         toast.success(t(($) => $.delete_dialog.toast_success));
         // If the open channel was the one removed, drop the selection so the
         // `active` memo falls back to the first remaining channel.
-        if (target.id === activeId) setActiveId(null);
+        if (target.id === activeId) {
+          setActiveId(null);
+          replace(wsPaths.channels());
+        }
+        closeChannelDetails();
+        setMobilePanel(null);
         setDeleteTarget(null);
       },
       onError: () => toast.error(t(($) => $.delete_dialog.toast_failed)),
@@ -2633,6 +2648,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         projectDisabledReason,
         canManage: canArchive(active),
         manageDisabledReason,
+        canDelete: canDeleteChannel(active),
         isArchived: isActiveArchived,
         onMuteToggle: () => handleToggleChannelMute(active),
         mutePending: muteChannel.isPending,
@@ -2640,6 +2656,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
           void handleShare();
         },
         onArchive: () => setArchiveTarget(active),
+        onDelete: () => setDeleteTarget(active),
         onRename: (name: string) => {
           updateChannel.mutate(
             { channelId: active.id, name },
@@ -3358,31 +3375,15 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         </SheetContent>
       </Sheet>
 
-      <AlertDialog
+      <DeleteChannelDialog
         open={deleteTarget !== null}
+        channelName={deleteTarget?.name ?? ""}
+        pending={deleteChannel.isPending}
+        onConfirm={handleDelete}
         onOpenChange={(open) => {
           if (!open) setDeleteTarget(null);
         }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t(($) => $.delete_dialog.title)}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {t(($) => $.delete_dialog.description, { name: deleteTarget?.name ?? "" })}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t(($) => $.delete_dialog.cancel)}</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              onClick={handleDelete}
-              disabled={deleteChannel.isPending}
-            >
-              {t(($) => $.delete_dialog.confirm)}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      />
 
       <AlertDialog
         open={archiveTarget !== null}

@@ -303,7 +303,7 @@ export function ChannelMessageBubble({
   collapseLongContent?: boolean;
 }) {
   const { t } = useT("channels");
-  const { getActorName } = useActorName();
+  const { getActorName, getMemberRole } = useActorName();
   const resolveMentionPreview = mentionResolverFrom(getActorName);
   const messageTime = useMessageTime();
   const [editDraft, setEditDraft] = useState<string | null>(null);
@@ -387,6 +387,15 @@ export function ChannelMessageBubble({
     message.author_id === currentUserId;
   const isAgent = message.type === "agent";
   const isExternal = message.source === "lark";
+  // LRM-232 Phase 1 (Frank freeze): muted owner/admin next to human names;
+  // ordinary members stay quiet. No Agent/APP type pill on any surface.
+  // Radar / Feishu functional badges stay.
+  const authorMemberRole =
+    message.type === "user" && message.author_id
+      ? getMemberRole(message.author_id)
+      : null;
+  const showAuthorRole =
+    authorMemberRole === "owner" || authorMemberRole === "admin";
   const displayName = resolveChannelAuthorDisplayName(message, {
     currentUserId,
     ownName,
@@ -654,9 +663,12 @@ export function ChannelMessageBubble({
           ) : (
             nameLabel
           )}
-          {isAgent && (
-            <span className="shrink-0 rounded-full border border-primary/20 bg-primary/[0.08] px-2 py-0.5 text-[11px] font-normal leading-none text-primary">
-              {t(($) => $.message.agent_badge)}
+          {showAuthorRole && authorMemberRole && (
+            <span
+              data-testid="message-author-role"
+              className="shrink-0 text-[11px] font-normal leading-none text-ink-3"
+            >
+              {t(($) => $.profile_popover.role[authorMemberRole])}
             </span>
           )}
           {isRadarMessage && (

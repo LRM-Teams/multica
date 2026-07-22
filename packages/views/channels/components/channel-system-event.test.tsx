@@ -48,11 +48,18 @@ vi.mock("@multica/core/workspace/queries", () => ({
 }));
 
 vi.mock("@tanstack/react-query", () => ({
-  useQuery: (opts: { queryKey: string[] }) => {
-    if (opts.queryKey[0] === "agents") return { data: mockAgents, isPending: false, isError: false };
-    if (opts.queryKey[0] === "members") return { data: mockMembers, isPending: false, isError: false };
-    if (opts.queryKey[2] === "member-profiles") {
-      const id = opts.queryKey[4];
+  useQuery: (opts: { queryKey: readonly unknown[] }) => {
+    const key = opts.queryKey as string[];
+    // workspaceKeys.* → ["workspaces", wsId, "agents"|"members"|...]
+    if (key[0] === "agents" || key[2] === "agents") {
+      return { data: mockAgents, isPending: false, isError: false };
+    }
+    if (key[0] === "members" || key[2] === "members") {
+      return { data: mockMembers, isPending: false, isError: false };
+    }
+    if (key[2] === "member-profiles") {
+      const id = key[4];
+      if (!id) return { data: undefined, isPending: false, isError: false };
       const profile = mockProfiles[id];
       return { data: profile, isPending: false, isError: !profile };
     }
@@ -143,12 +150,20 @@ vi.mock("../../navigation/context", () => ({
 // or member-profile API (LRM-281) — never emit-time name fallbacks.
 vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({
-    getActorName: (_type: string, id: string, fallback?: string) => {
-      const agent = mockAgents.find((a) => a.id === id);
-      if (agent) return agent.display_name || agent.handle;
-      const member = mockMembers.find((m) => m.user_id === id);
-      if (member) return member.display_name || member.handle;
-      return fallback ?? "Unknown Agent";
+    getActorName: (type: string, id: string, fallback?: string) => {
+      // Respect type the same way production getActorName does — a member probe
+      // must not resolve an agent id (and vice versa), or untyped rows mis-tag.
+      if (type === "agent") {
+        const agent = mockAgents.find((a) => a.id === id);
+        if (agent) return agent.display_name || agent.handle;
+        return fallback ?? "Unknown Agent";
+      }
+      if (type === "member") {
+        const member = mockMembers.find((m) => m.user_id === id);
+        if (member) return member.display_name || member.handle;
+        return fallback ?? "Unknown";
+      }
+      return fallback ?? "Unknown";
     },
   }),
 }));

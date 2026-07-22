@@ -3,11 +3,7 @@
 import { Fragment, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
-import {
-  agentListOptions,
-  memberListOptions,
-  memberProfileOptions,
-} from "@multica/core/workspace/queries";
+import { memberProfileOptions } from "@multica/core/workspace/queries";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { ActorMention } from "../../common/markdown";
@@ -184,39 +180,38 @@ function toActorMentionType(type: string | undefined): "agent" | "member" | null
 }
 
 /**
- * LRM-281 / LRM-238: resolve display names from live workspace lists or a
- * dedicated member-profile fetch (DB). Never use emit-time actor_name /
- * target_name as a silent fallback — ListAgents hides group managers
- * (LRM-233), so denormalized params would paper over an incomplete directory.
+ * LRM-281 / LRM-238: resolve display names from the live actor directory
+ * (`useActorName` / ListAgents+members) or a dedicated member-profile fetch
+ * (DB). Never use emit-time actor_name / target_name as a silent fallback —
+ * ListAgents hides group managers (LRM-233), so denormalized params would
+ * paper over an incomplete directory.
+ *
+ * Prefer `getActorName` (same cache the rest of chat uses). Only when that
+ * returns the honest unknown sentinel do we hit `GET /member-profiles`.
  */
 function useResolvedActorDisplayName(
   actorId: string | undefined,
   mentionType: "agent" | "member" | null,
 ): string | null {
-  const wsId = useWorkspaceId();
   const { getActorName } = useActorName();
-  const { data: agents = [] } = useQuery(agentListOptions(wsId));
-  const { data: members = [] } = useQuery(memberListOptions(wsId));
+  const fromDirectory =
+    actorId && mentionType
+      ? (() => {
+          // No fallback arg — a miss must not invent a display name.
+          const name = getActorName(mentionType, actorId).trim();
+          return name && name !== "Unknown Agent" && name !== "Unknown" ? name : null;
+        })()
+      : null;
 
-  const inDirectory =
-    !!actorId &&
-    mentionType != null &&
-    (mentionType === "agent"
-      ? agents.some((a) => a.id === actorId)
-      : members.some((m) => m.user_id === actorId));
-
+  const wsId = useWorkspaceId();
   const profileType = mentionType === "member" ? "user" : "agent";
   const { data: profile } = useQuery({
-    ...memberProfileOptions(wsId, profileType, actorId),
-    enabled: !!wsId && !!actorId && mentionType != null && !inDirectory,
+    ...memberProfileOptions(wsId, profileType, actorId ?? ""),
+    enabled: !!wsId && !!actorId && mentionType != null && !fromDirectory,
   });
 
   if (!actorId || !mentionType) return null;
-  if (inDirectory) {
-    // Directory hit: resolve without a fallback arg so a miss cannot invent a name.
-    const name = getActorName(mentionType, actorId).trim();
-    return name && name !== "Unknown Agent" && name !== "Unknown" ? name : null;
-  }
+  if (fromDirectory) return fromDirectory;
   if (profile) {
     const name = (profile.display_name || profile.name || "").trim();
     return name || null;

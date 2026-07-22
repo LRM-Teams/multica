@@ -198,10 +198,9 @@ describe("AgentStatusDot", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("derives the dot COLOR from health_summary.state, not availability (#266)", () => {
-    // Availability says online (green), but connectivity health says the link
-    // is wobbling — the dot must follow HEALTH (amber), proving health_summary
-    // is the color source. Pulse stays a workload overlay (idle here → static).
+  it("folds suspected_disconnect health into Online green (LRM-248)", () => {
+    // Availability online + health wobbling used to paint amber (#266). LRM-248
+    // collapses live badge to Online/Offline only — suspected_disconnect → green.
     presenceDetailMock.mockReturnValue({
       availability: "online",
       workload: "idle",
@@ -223,8 +222,8 @@ describe("AgentStatusDot", () => {
     });
     render(<AgentStatusDot agentId="agent-1" size={28} />);
     const dot = screen.getByLabelText(/^Status:/);
-    expect(dot).toHaveClass("bg-warning");
-    expect(dot).not.toHaveClass("bg-success");
+    expect(dot).toHaveClass("bg-success");
+    expect(dot).not.toHaveClass("bg-warning");
   });
 
   it("shows the working pulse only when health is online/recovered (#266, Iris)", () => {

@@ -22,8 +22,13 @@ vi.mock("@multica/core/api", () => ({
 }));
 
 vi.mock("@multica/core/paths", () => ({
+  useCurrentWorkspace: () => ({ id: "ws-1", slug: "test" }),
+  useWorkspaceSlug: () => "test",
+  useRequiredWorkspaceSlug: () => "test",
   useWorkspacePaths: () => ({
     agentDetail: (id: string) => `/test/agents/${id}`,
+    memberDetail: (id: string) => `/test/members/${id}`,
+    squadDetail: (id: string) => `/test/squads/${id}`,
   }),
 }));
 

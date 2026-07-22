@@ -88,7 +88,8 @@ vi.mock("../../common/markdown", () => ({
 vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({
     getActorAvatarUrl: () => null,
-    getActorName: () => null,
+    getActorName: () => "Test Actor",
+    getActorInitials: () => "TA",
   }),
 }));
 
@@ -115,7 +116,14 @@ vi.mock("@multica/core/agents", () => ({
 }));
 
 vi.mock("@multica/core/paths", () => ({
-  useCurrentWorkspace: () => ({ id: "ws-1" }),
+  useCurrentWorkspace: () => ({ id: "ws-1", slug: "test" }),
+  useWorkspaceSlug: () => "test",
+  useRequiredWorkspaceSlug: () => "test",
+  useWorkspacePaths: () => ({
+    memberDetail: (id: string) => `/test/members/${id}`,
+    squadDetail: (id: string) => `/test/squads/${id}`,
+    agentDetail: (id: string) => `/test/agents/${id}`,
+  }),
 }));
 
 vi.mock("../../i18n", () => ({

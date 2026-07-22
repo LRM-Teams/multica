@@ -76,6 +76,31 @@ interface ActorAvatarProps {
   profileLink?: boolean;
 }
 
+
+/** Isolated so message bubbles / agent dots never call useWorkspacePaths. */
+function ActorAvatarWorkspaceProfileLink({
+  actorType,
+  actorId,
+  children,
+}: {
+  actorType: "member" | "squad" | string;
+  actorId: string;
+  children: React.ReactNode;
+}) {
+  const workspacePaths = useWorkspacePaths();
+  const href =
+    actorType === "member"
+      ? workspacePaths.memberDetail(actorId)
+      : actorType === "squad"
+        ? workspacePaths.squadDetail(actorId)
+        : null;
+  return href ? (
+    <ActorAvatarProfileLink href={href}>{children}</ActorAvatarProfileLink>
+  ) : (
+    <>{children}</>
+  );
+}
+
 const FOCUSABLE_ANCESTOR_SELECTOR =
   'a[href], button:not([disabled]), [role="button"]:not([aria-disabled="true"]), [tabindex]:not([tabindex="-1"])';
 const PROFILE_LINK_CONTROL_SELECTOR =
@@ -93,7 +118,6 @@ export function ActorAvatar({
   profileLink,
 }: ActorAvatarProps) {
   const { getActorName, getActorInitials, getActorAvatarUrl } = useActorName();
-  const paths = useWorkspacePaths();
   // LRM-224: identity-first — directory + sticky cache; message URL only seeds.
   const avatarUrl = resolveIdentityAvatarUrl({
     actorType,
@@ -139,19 +163,13 @@ export function ActorAvatar({
     ? dotted
     : actorType === "agent"
       ? <ActorAvatarPanelTrigger agentId={actorId}>{dotted}</ActorAvatarPanelTrigger>
-      : (() => {
-          const href =
-            actorType === "member"
-              ? paths.memberDetail(actorId)
-              : actorType === "squad"
-                ? paths.squadDetail(actorId)
-                : null;
-          return href ? (
-            <ActorAvatarProfileLink href={href}>{dotted}</ActorAvatarProfileLink>
-          ) : (
-            dotted
-          );
-        })();
+      : actorType === "member" || actorType === "squad"
+        ? (
+            <ActorAvatarWorkspaceProfileLink actorType={actorType} actorId={actorId}>
+              {dotted}
+            </ActorAvatarWorkspaceProfileLink>
+          )
+        : dotted;
 
   if (!enableHoverCard) {
     return content;

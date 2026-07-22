@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { cn } from "@multica/ui/lib/utils";
 import {
   type AgentXpBurstSnapshot,
@@ -26,10 +26,10 @@ export function AgentXpBurst({
 }) {
   const burst = useAgentXpBurstStore((s) => s.bursts[agentId]);
   const [displayBurst, setDisplayBurst] = useState<AgentXpBurstSnapshot | null>(null);
-  const [trackedKey, setTrackedKey] = useState(0);
+  const lastBurstKeyRef = useRef(0);
 
-  if (burst && burst.burstKey !== trackedKey) {
-    setTrackedKey(burst.burstKey);
+  if (burst && burst.burstKey !== lastBurstKeyRef.current) {
+    lastBurstKeyRef.current = burst.burstKey;
     setDisplayBurst(burst);
   }
 
@@ -40,7 +40,7 @@ export function AgentXpBurst({
       AGENT_XP_BURST_ANIMATION_MS,
     );
     return () => window.clearTimeout(timer);
-  }, [displayBurst?.burstKey]);
+  }, [displayBurst]);
 
   const visible = displayBurst !== null;
   const delta = displayBurst?.delta ?? 1;

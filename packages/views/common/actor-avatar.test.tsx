@@ -73,6 +73,8 @@ vi.mock("@multica/core/workspace/hooks", () => ({
 vi.mock("@multica/core/agents/stores", () => ({
   useAgentPanelStore: (selector: (s: { open: (id: string) => void }) => unknown) =>
     selector({ open: openFromStoreMock }),
+  useAgentXpBurstStore: (selector: (s: { bursts: Record<string, never> }) => unknown) =>
+    selector({ bursts: {} }),
 }));
 
 vi.mock("./agent-panel-context", () => ({

@@ -52,6 +52,8 @@ vi.mock("../../common/agent-panel-context", () => ({
 vi.mock("@multica/core/agents/stores", () => ({
   useAgentPanelStore: (selector: (s: { open: (id: string) => void }) => unknown) =>
     selector({ open: openPanelMock }),
+  useAgentXpBurstStore: (selector: (s: { bursts: Record<string, never> }) => unknown) =>
+    selector({ bursts: {} }),
 }));
 
 // System rows render actors through the ordinary @mention component (#603),

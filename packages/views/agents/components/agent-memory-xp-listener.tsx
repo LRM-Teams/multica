@@ -3,7 +3,7 @@
 import { useCallback, useEffect } from "react";
 import { useWSEvent } from "@multica/core/realtime";
 import type { AgentMemoryUpdatedPayload } from "@multica/core/types";
-import { useAgentXpBurstStore } from "@multica/core/agents/stores/xp-burst-store";
+import { useAgentXpBurstStore } from "@multica/core/agents/stores";
 
 declare global {
   interface Window {

@@ -1,7 +1,7 @@
 import { act, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentXpBurst } from "./agent-xp-burst";
-import { useAgentXpBurstStore } from "@multica/core/agents/stores/xp-burst-store";
+import { useAgentXpBurstStore } from "@multica/core/agents/stores";
 
 describe("AgentXpBurst", () => {
   beforeEach(() => {

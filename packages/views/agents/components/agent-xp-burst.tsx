@@ -5,7 +5,7 @@ import { cn } from "@multica/ui/lib/utils";
 import {
   type AgentXpBurstSnapshot,
   useAgentXpBurstStore,
-} from "@multica/core/agents/stores/xp-burst-store";
+} from "@multica/core/agents/stores";
 
 /** Ring + float label duration (design-memory-feedback-phase1-v2). */
 export const AGENT_XP_BURST_ANIMATION_MS = 1100;

@@ -20,6 +20,7 @@ import { ModelPicker } from "../../agents/components/inspector/model-picker";
 import { RuntimePicker } from "../../agents/components/inspector/runtime-picker";
 import { ThinkingPropRow } from "../../agents/components/inspector/thinking-prop-row";
 import { VisibilityPicker } from "../../agents/components/inspector/visibility-picker";
+import { MemoryGrowthField } from "../../agents/components/memory-growth-field";
 import { useUpdateAgent } from "../../agents/hooks/use-update-agent";
 import { useRuntimeHealthStateLabel } from "../../runtimes/components/shared";
 import { PropRow } from "../../common/prop-row";
@@ -311,6 +312,13 @@ function AgentProfileTabContent({
         <InfoRow label={t(($) => $.side_panel.created_label)} value={formatDate(agent.created_at)} />
         <InfoRow label={t(($) => $.side_panel.owner_label)} value={ownerName(agent, members)} />
       </div>
+
+      {/* LRM-304: Slack Memory growth field — only when LRM-303 returns data. */}
+      {agent.memory_growth ? (
+        <div className="border-b p-3 md:p-4">
+          <MemoryGrowthField growth={agent.memory_growth} />
+        </div>
+      ) : null}
 
       <AgentUsageSection agent={agent} />
 

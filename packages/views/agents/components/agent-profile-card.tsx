@@ -27,6 +27,7 @@ import { InlineEditPopover } from "./inline-edit-popover";
 import { useUpdateAgent } from "../hooks/use-update-agent";
 import { useT } from "../../i18n/use-t";
 import { ActorProfileContentLoaded } from "../../common/actor-profile-popover";
+import { MemoryGrowthField } from "./memory-growth-field";
 
 interface AgentProfileCardProps {
   agentId: string;
@@ -189,6 +190,9 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
           {agent.description}
         </p>
       )}
+
+      {/* LRM-304: Memory growth — profile/card only; omitted when zero writes. */}
+      <MemoryGrowthField growth={agent.memory_growth} />
 
       {/* Meta rows. Runtime / model / thinking are the SAME inline pickers
           the detail inspector uses (reused, not reimplemented): editable for

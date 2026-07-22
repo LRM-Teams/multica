@@ -228,3 +228,31 @@ describe("AgentProfileCard username / @handle", () => {
     ).not.toBeInTheDocument();
   });
 });
+
+describe("AgentProfileCard Memory growth (LRM-304)", () => {
+  it("shows Memory growth when GetAgent returns memory_growth", () => {
+    mockAgent.current = makeAgent({
+      memory_growth: {
+        total_writes: 5,
+        tier: "silver",
+        tier_label: "Silver",
+        segments: [
+          { tier: "bronze", tier_label: "Bronze", status: "complete" },
+          { tier: "silver", tier_label: "Silver", status: "current" },
+          { tier: "gold", tier_label: "Gold", status: "upcoming" },
+          { tier: "platinum", tier_label: "Platinum", status: "upcoming" },
+        ],
+        next: { tier: "gold", tier_label: "Gold", current: 5, required: 6 },
+      },
+    });
+    renderCard();
+    expect(screen.getByTestId("memory-growth-field")).toBeInTheDocument();
+    expect(screen.getByTestId("memory-growth-tier")).toHaveTextContent("Silver");
+  });
+
+  it("hides Memory growth when memory_growth is omitted (zero writes)", () => {
+    mockAgent.current = makeAgent({ memory_growth: undefined });
+    renderCard();
+    expect(screen.queryByTestId("memory-growth-field")).not.toBeInTheDocument();
+  });
+});

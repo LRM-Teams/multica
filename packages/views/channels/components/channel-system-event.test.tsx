@@ -788,9 +788,10 @@ describe("IssueSystemEventContent", () => {
     expect(document.body.textContent).not.toContain("ALSO_WRONG");
     const tokens = screen.getAllByTestId("actor-token");
     expect(tokens).toHaveLength(2);
-    expect(tokens[1]).toHaveAttribute("data-member-type", "agent");
-    expect(tokens[1]).toHaveAttribute("data-member-id", "agent-fe");
-    fireEvent.click(tokens[1]);
+    const assigneeToken = tokens[1]!;
+    expect(assigneeToken).toHaveAttribute("data-member-type", "agent");
+    expect(assigneeToken).toHaveAttribute("data-member-id", "agent-fe");
+    fireEvent.click(assigneeToken);
     expect(openPanelMock).toHaveBeenCalledWith("agent-fe");
   });
 

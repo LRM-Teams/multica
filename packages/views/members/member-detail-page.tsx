@@ -6,10 +6,9 @@ import type { MemberRole } from "@multica/core/types";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useCurrentWorkspace } from "@multica/core/paths";
 import { memberListOptions } from "@multica/core/workspace/queries";
-import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import { ActorIdentityRow } from "../common/actor-identity-row";
-import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
+import { ActorAvatar } from "../common/actor-avatar";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { PageHeader } from "../layout/page-header";
 import { WorkspaceAvatar } from "../workspace/workspace-avatar";
@@ -45,23 +44,18 @@ export function MemberDetailPage({ userId }: { userId: string }) {
   }
 
   const displayName = resolveActorDisplayName(member, member.user_id);
-  const initials = displayName
-    .split(" ")
-    .map((w) => w[0])
-    .join("")
-    .toUpperCase()
-    .slice(0, 2);
 
   return (
     <div className="flex flex-1 min-h-0 flex-col">
       <MemberBreadcrumb workspaceName={workspace?.name} workspaceAvatarUrl={workspace?.avatar_url} title={displayName} />
 
       <div className="flex shrink-0 items-center gap-3 border-b px-6 py-4">
-        <ActorAvatarBase
-          name={displayName}
-          initials={initials}
-          avatarUrl={resolvePublicFileUrl(member.avatar_url)}
+        <ActorAvatar
+          actorType="member"
+          actorId={userId}
           size={44}
+          avatarUrlHint={member.avatar_url}
+          profileLink={false}
           className="rounded-full"
         />
         <div className="min-w-0 flex-1">

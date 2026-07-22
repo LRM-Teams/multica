@@ -9,7 +9,9 @@ export function resolvePublicFileUrlWithBase(rawUrl: string | null | undefined, 
 }
 
 export function resolvePublicFileUrl(rawUrl: string | null | undefined): string | null {
-  return resolvePublicFileUrlWithBase(rawUrl, api.getBaseUrl());
+  // Optional-chain: unit tests often partial-mock `@multica/core/api` without
+  // getBaseUrl. Empty base keeps relative `/uploads/...` paths as-is on web.
+  return resolvePublicFileUrlWithBase(rawUrl, api.getBaseUrl?.() ?? "");
 }
 
 /**

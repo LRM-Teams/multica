@@ -60,6 +60,14 @@ vi.mock("@multica/core/workspace/avatar-url", () => ({
   resolvePublicFileUrl: (url: string | null | undefined) => url ?? null,
 }));
 
+// LRM-224: ChannelMembersList renders identity ActorAvatar (useActorName /
+// QueryClient). Layout tests only care about scroll/chrome classes.
+vi.mock("../../common/actor-avatar", () => ({
+  ActorAvatar: ({ actorId }: { actorId: string }) => (
+    <span data-testid="actor-avatar">{actorId}</span>
+  ),
+}));
+
 function member(
   id: string,
   name: string,

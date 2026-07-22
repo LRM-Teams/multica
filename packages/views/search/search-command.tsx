@@ -44,13 +44,11 @@ import { useWorkspacePaths } from "@multica/core/paths";
 import type { WorkspacePaths } from "@multica/core/paths";
 import { useModalStore } from "@multica/core/modals";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
-import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { StatusIcon } from "../issues/components";
 import { ProjectIcon } from "../projects/components/project-icon";
 import { PROJECT_STATUS_CONFIG } from "@multica/core/projects/config";
 import type { ProjectStatus } from "@multica/core/types";
 import { ActorAvatar } from "../common/actor-avatar";
-import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
 import {
   Dialog,
   DialogContent,
@@ -94,15 +92,6 @@ interface NavPage {
 }
 
 type ThemeValue = "light" | "dark" | "system";
-
-function memberInitials(name: string) {
-  return name
-    .split(" ")
-    .map((word) => word[0])
-    .join("")
-    .toUpperCase()
-    .slice(0, 2);
-}
 
 // Trailing "Send message" affordance on member / agent rows. Stops propagation
 // so clicking it opens the DM instead of triggering the row's default select
@@ -634,11 +623,12 @@ export function SearchCommand() {
                     onSelect={() => handleMemberSelect(member.user_id)}
                     className="flex cursor-default select-none items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm outline-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-selected:bg-accent"
                   >
-                    <ActorAvatarBase
-                      name={presentation.displayName}
-                      initials={memberInitials(presentation.displayName)}
-                      avatarUrl={resolvePublicFileUrl(member.avatar_url)}
+                    <ActorAvatar
+                      actorType="member"
+                      actorId={member.user_id}
                       size={22}
+                      avatarUrlHint={member.avatar_url}
+                      profileLink={false}
                     />
                     <div className="min-w-0 flex-1">
                       <div className="truncate">
@@ -682,12 +672,13 @@ export function SearchCommand() {
                     onSelect={() => handleSendMessage("agent", agent.id)}
                     className="flex cursor-default select-none items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm outline-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-selected:bg-accent"
                   >
-                    <ActorAvatarBase
-                      name={presentation.displayName}
-                      initials={memberInitials(presentation.displayName)}
-                      avatarUrl={resolvePublicFileUrl(agent.avatar_url)}
-                      isAgent
+                    <ActorAvatar
+                      actorType="agent"
+                      actorId={agent.id}
                       size={22}
+                      avatarUrlHint={agent.avatar_url}
+                      showStatusDot
+                      profileLink={false}
                     />
                     <div className="min-w-0 flex-1">
                       <div className="truncate">

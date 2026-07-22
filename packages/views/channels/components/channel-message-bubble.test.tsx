@@ -110,6 +110,9 @@ vi.mock("@multica/core/paths", () => ({
     issueDetail: (issueId: string) => `/acme/issues/${issueId}`,
     actorProfile: (memberType: string, memberId: string) =>
       `/acme/profile/${memberType}/${memberId}`,
+    agentDetail: (id: string) => `/acme/agents/${id}`,
+    memberDetail: (id: string) => `/acme/members/${id}`,
+    squadDetail: (id: string) => `/acme/squads/${id}`,
   }),
 }));
 
@@ -137,18 +140,33 @@ vi.mock("../../navigation/app-link", () => ({
   ),
 }));
 
-// The bubble may fall back to the members/agents directory (profile-card source)
-// when the message payload omits author_avatar_url (LRM-218 / LRM-221). Stub the
-// hook so layout tests don't need a QueryClient/workspace; override per-case.
-const getActorAvatarUrlMock = vi.fn(
-  (_type: string, _id: string): string | null => null,
-);
+// The bubble resolves the author's live avatar from the members/agents cache.
+// Stub it so these layout/identity tests don't need a QueryClient/workspace.
 vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({
-    getActorAvatarUrl: getActorAvatarUrlMock,
-    getActorName: (_type: string, id: string, fallback?: string) =>
-      id === "user-1" ? "Alice Display" : id === "user-2" ? "Bob Display" : fallback,
+    getActorAvatarUrl: () => null,
+    getActorInitials: (_type: string, id: string) => {
+      if (id === "user-1") return "A";
+      if (id === "user-2") return "B";
+      if (id === "agent-1") return "R";
+      return "?";
+    },
+    getActorName: (_type: string, id: string, fallback?: string) => {
+      if (id === "user-1") return "Alice Display";
+      if (id === "user-2") return "Bob Display";
+      if (id === "agent-1") return "Research Agent";
+      return fallback ?? id;
+    },
   }),
+}));
+
+vi.mock("@multica/core/agents/stores", () => ({
+  useAgentPanelStore: (selector: (s: { open: (id: string) => void }) => unknown) =>
+    selector({ open: vi.fn() }),
+}));
+
+vi.mock("../../common/agent-panel-context", () => ({
+  useOpenAgentPanel: () => null,
 }));
 
 // The bubble reads the author avatar straight from the payload (#453/#574) via
@@ -390,8 +408,6 @@ describe("ChannelMessageBubble", () => {
 
   beforeEach(() => {
     copyTextMock.mockReset();
-    getActorAvatarUrlMock.mockReset();
-    getActorAvatarUrlMock.mockReturnValue(null);
     vi.mocked(toast.success).mockReset();
     vi.mocked(toast.error).mockReset();
     __resetAuthorAvatarOkCacheForTests();
@@ -427,8 +443,9 @@ describe("ChannelMessageBubble", () => {
         currentUserId="user-1"
       />,
     );
-    // Prefer payload `author_avatar_url` (BE-aggregated for every viewer, #574).
-    // Directory fallback is only used when payload + sticky cache both miss.
+    // The avatar image comes from the payload's `author_avatar_url` (aggregated
+    // by the BE for every viewer, #574) — so a group member sees the author's
+    // real avatar instead of the default bot; no `getActorAvatarUrl` guess.
     const img = screen.getByRole("img", { name: /Research Agent/i });
     expect(img).toHaveAttribute("src", "/uploads/agent-avatar.png");
   });
@@ -462,66 +479,6 @@ describe("ChannelMessageBubble", () => {
     expect(screen.getByRole("img", { name: /Research Agent/i })).toHaveAttribute(
       "src",
       "/uploads/agent-avatar.png",
-    );
-  });
-
-  it("LRM-221: falls back to actor-directory avatar (profile card source) when payload omits URL", () => {
-    getActorAvatarUrlMock.mockImplementation((type, id) =>
-      type === "agent" && id === "agent-1" ? "/agent-avatars/human-02.jpg" : null,
-    );
-    render(
-      <ChannelMessageBubble
-        message={makeMessage({
-          author_id: "agent-1",
-          author_avatar_url: null,
-          content: "no payload avatar",
-        })}
-        currentUserId="user-1"
-      />,
-    );
-    expect(screen.getByRole("img", { name: /Research Agent/i })).toHaveAttribute(
-      "src",
-      "/agent-avatars/human-02.jpg",
-    );
-  });
-
-  it("LRM-221: directory fallback seeds sticky cache for consecutive same-author bubbles", () => {
-    getActorAvatarUrlMock.mockImplementation((type, id) =>
-      type === "agent" && id === "agent-1" ? "/agent-avatars/human-02.jpg" : null,
-    );
-    const { rerender } = render(
-      <ChannelMessageBubble
-        message={makeMessage({
-          id: "msg-1",
-          author_id: "agent-1",
-          author_avatar_url: null,
-          content: "first",
-        })}
-        currentUserId="user-1"
-      />,
-    );
-    expect(screen.getByRole("img", { name: /Research Agent/i })).toHaveAttribute(
-      "src",
-      "/agent-avatars/human-02.jpg",
-    );
-
-    // Directory goes empty (e.g. agents list not hydrated on a remount path) —
-    // sticky cache from the first bubble must still keep the real face.
-    getActorAvatarUrlMock.mockReturnValue(null);
-    rerender(
-      <ChannelMessageBubble
-        message={makeMessage({
-          id: "msg-2",
-          author_id: "agent-1",
-          author_avatar_url: null,
-          content: "second",
-        })}
-        currentUserId="user-1"
-      />,
-    );
-    expect(screen.getByRole("img", { name: /Research Agent/i })).toHaveAttribute(
-      "src",
-      "/agent-avatars/human-02.jpg",
     );
   });
 
@@ -654,15 +611,13 @@ describe("ChannelMessageBubble", () => {
     expect(bubble.className).toContain("ring-primary/25");
   });
 
-  it("never shows a live presence dot on message avatars (presence 不进消息历史, #477)", () => {
-    // A message is history — pinning "online right now" onto a historical row is
-    // both the noisiest column in the view and semantically wrong. Presence now
-    // lives only on directory surfaces (sidebar / member list) and the header
-    // status word, never the message stream (Parker/Iris final principle).
+  it("LRM-224: agent message avatars show status dots; member bubbles do not", () => {
+    // LRM-223 option B supersedes #477 for chat bubbles: agent status dots are
+    // in-scope on the frozen long-term avatar. Members still have no presence.
     const { rerender } = render(
       <ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />,
     );
-    expect(screen.queryByLabelText(/^Status:/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/^Status:/)).toBeInTheDocument();
 
     rerender(
       <ChannelMessageBubble

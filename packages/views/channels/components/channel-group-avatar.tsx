@@ -1,10 +1,8 @@
 "use client";
 
 import { Hash } from "lucide-react";
-import { resolveActorDisplayName } from "@multica/core/identity";
 import type { ChannelMemberBrief } from "@multica/core/types";
-import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
-import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
+import { ActorAvatar } from "../../common/actor-avatar";
 
 /**
  * WeChat-style composite group avatar: up to 4 members' real, persisted
@@ -15,21 +13,11 @@ import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
  * member list changes (joins/leaves), since it derives purely from
  * `members`.
  *
- * Each tile renders that member's own persisted `avatar_url`; a missing or
- * failed-to-load image falls back to that member's initials (never a random
- * or synthesized avatar — see `ActorAvatar`'s own fallback). Only an empty
- * channel (no members at all) falls back to the neutral `#` glyph.
+ * LRM-224: each tile is the identity-first ActorAvatar (sticky cache +
+ * directory); `avatar_url` on the member brief only seeds. Missing / failed
+ * image → colored glyph (never whole-word text). Empty channel → `#`.
  */
 const MAX_TILES = 4;
-
-function firstLetter(name: string): string {
-  const c = name.trim().charAt(0);
-  return c ? c.toUpperCase() : "?";
-}
-
-function memberLabel(member: ChannelMemberBrief): string {
-  return resolveActorDisplayName(member, "?");
-}
 
 export function ChannelGroupAvatar({
   members,
@@ -58,19 +46,17 @@ export function ChannelGroupAvatar({
       style={{ width: size, height: size }}
       className="flex shrink-0 flex-wrap content-center items-center justify-center overflow-hidden rounded-full bg-background"
     >
-      {shown.map((m) => {
-        const label = memberLabel(m);
-        return (
-          <ActorAvatar
-            key={`${m.member_type}:${m.member_id}`}
-            name={label}
-            initials={firstLetter(label)}
-            avatarUrl={resolvePublicFileUrl(m.avatar_url)}
-            size={tile}
-            className="rounded-none"
-          />
-        );
-      })}
+      {shown.map((m) => (
+        <ActorAvatar
+          key={`${m.member_type}:${m.member_id}`}
+          actorType={m.member_type === "agent" ? "agent" : "member"}
+          actorId={m.member_id}
+          size={tile}
+          className="rounded-none"
+          avatarUrlHint={m.avatar_url}
+          profileLink={false}
+        />
+      ))}
     </span>
   );
 }

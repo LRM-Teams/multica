@@ -116,4 +116,36 @@ describe("optimistic send cache (LRM-222)", () => {
         ?.messages ?? [];
     expect(messages).toHaveLength(0);
   });
+
+  it("matches a pending thread bubble when ACK omits client_message_id (LRM-271)", () => {
+    const optimistic = buildOptimisticChannelMessage({
+      channelId: "c1",
+      workspaceId: "w1",
+      clientMessageId: "client-thread-1",
+      content: "hello thread",
+      authorId: "u1",
+      authorName: "Alice",
+      threadRootMessageId: "root-1",
+    });
+    const ack: ChannelMessage = {
+      ...optimistic,
+      id: "server-thread-1",
+      seq: 9,
+      local_send_status: undefined,
+      client_message_id: null,
+      thread_root_message_id: "root-1",
+    };
+
+    expect(findChannelMessageMatchIndex([optimistic], ack)).toBe(0);
+
+    const qc = new QueryClient();
+    seedPage(qc, "c1", [optimistic]);
+    upsertChannelMessageInCache(qc, ack);
+    const messages =
+      qc.getQueryData<InfiniteData<ChannelMessagesPage>>(channelKeys.messagesPage("c1"))?.pages[0]
+        ?.messages ?? [];
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.id).toBe("server-thread-1");
+    expect(messages[0]?.local_send_status ?? null).toBeNull();
+  });
 });

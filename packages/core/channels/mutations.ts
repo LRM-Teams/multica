@@ -15,9 +15,25 @@ import {
 import { dmKeys } from "../dm/queries";
 import type { DMItem } from "../dm/types";
 import type { ChannelThreadMessagesPage, MessagePart } from "../types";
+import type { QueryClient } from "@tanstack/react-query";
 
 function isConflictError(err: unknown): boolean {
   return err instanceof ApiError && err.status === 409;
+}
+
+/** LRM-271: never leave Sending… past the normal-network budget. */
+const PENDING_SEND_FAIL_MS = 3_000;
+
+function scheduleOptimisticSendWatchdog(
+  qc: QueryClient,
+  channelId: string,
+  clientMessageId: string,
+  threadRootMessageId?: string | null,
+): () => void {
+  const timer = setTimeout(() => {
+    markOptimisticChannelMessageFailed(qc, channelId, clientMessageId, threadRootMessageId);
+  }, PENDING_SEND_FAIL_MS);
+  return () => clearTimeout(timer);
 }
 
 function viewerAuthorFields() {
@@ -151,8 +167,12 @@ export function useSendChannelMessage() {
         status: "pending",
       });
       insertOptimisticChannelMessage(qc, optimistic);
+      return {
+        cancelWatchdog: scheduleOptimisticSendWatchdog(qc, vars.channelId, vars.clientMessageId),
+      };
     },
-    onError: (err, vars) => {
+    onError: (err, vars, ctx) => {
+      ctx?.cancelWatchdog?.();
       if (!vars.clientMessageId) return;
       if (isConflictError(err)) {
         removeOptimisticChannelMessage(qc, vars.channelId, vars.clientMessageId);
@@ -160,7 +180,8 @@ export function useSendChannelMessage() {
       }
       markOptimisticChannelMessageFailed(qc, vars.channelId, vars.clientMessageId);
     },
-    onSuccess: (msg) => {
+    onSuccess: (msg, _vars, ctx) => {
+      ctx?.cancelWatchdog?.();
       upsertChannelMessageInCache(qc, msg);
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
     },
@@ -270,8 +291,17 @@ export function useSendChannelThreadMessage() {
         status: "pending",
       });
       insertOptimisticThreadMessage(qc, optimistic, vars.messageId);
+      return {
+        cancelWatchdog: scheduleOptimisticSendWatchdog(
+          qc,
+          vars.channelId,
+          vars.clientMessageId,
+          vars.messageId,
+        ),
+      };
     },
-    onError: (err, vars) => {
+    onError: (err, vars, ctx) => {
+      ctx?.cancelWatchdog?.();
       if (!vars.clientMessageId) return;
       if (isConflictError(err)) {
         removeOptimisticChannelMessage(qc, vars.channelId, vars.clientMessageId, vars.messageId);
@@ -279,12 +309,17 @@ export function useSendChannelThreadMessage() {
       }
       markOptimisticChannelMessageFailed(qc, vars.channelId, vars.clientMessageId, vars.messageId);
     },
-    onSuccess: (msg) => {
-      const rootId = msg.thread_root_message_id;
-      if (rootId) {
-        upsertChannelMessageThreadInCache(qc, msg, rootId);
-        qc.invalidateQueries({ queryKey: channelKeys.messageThread(msg.channel_id, rootId) });
-      }
+    onSuccess: (msg, vars, ctx) => {
+      ctx?.cancelWatchdog?.();
+      // Prefer the mutation's thread root — ACK payloads occasionally omit
+      // `thread_root_message_id`, which previously left the optimistic row pending forever.
+      const rootId = msg.thread_root_message_id ?? vars.messageId;
+      const authoritative = msg.thread_root_message_id
+        ? msg
+        : { ...msg, thread_root_message_id: vars.messageId };
+      upsertChannelMessageThreadInCache(qc, authoritative, rootId);
+      // Upsert is authoritative for this send; avoid an immediate thread refetch
+      // that can race the ACK and prolong the Sending… state (LRM-271).
       invalidateChannelMessages(qc, msg.channel_id);
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
       qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });

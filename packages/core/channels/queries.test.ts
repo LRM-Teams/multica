@@ -205,4 +205,23 @@ describe("findChannelMessageMatchIndex (optimistic ACK)", () => {
     } as ChannelMessage;
     expect(findChannelMessageMatchIndex([optimistic], ack)).toBe(0);
   });
+
+  it("matches a pending bubble by author+content when ACK omits client_message_id", () => {
+    const optimistic = {
+      id: "client-9",
+      client_message_id: "client-9",
+      author_id: "u1",
+      content: "hi",
+      local_send_status: "pending",
+      thread_root_message_id: "root-1",
+    } as ChannelMessage;
+    const ack = {
+      id: "server-9",
+      author_id: "u1",
+      content: "hi",
+      client_message_id: null,
+      thread_root_message_id: "root-1",
+    } as ChannelMessage;
+    expect(findChannelMessageMatchIndex([optimistic], ack)).toBe(0);
+  });
 });

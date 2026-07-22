@@ -32,7 +32,10 @@ pre.rich-text-editor {
   border-radius: var(--radius);
   padding: 0.75rem 1rem;
   margin: 0.75rem 0;
+  /* LRM-268: Slack-style long code — scroll inside the block, not the bubble. */
+  max-height: 300px;
   overflow-x: auto;
+  overflow-y: auto;
 }
 
 .rich-text-editor pre code,

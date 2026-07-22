@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelMessage } from "@multica/core/types";
@@ -174,7 +174,8 @@ vi.mock("../../i18n/use-t", () => ({
           agent_badge: "Agent",
           feishu_badge: "Feishu",
           copy_action: "Copy",
-          expand_action: "Show full message",
+          expand_action: "See more",
+          collapse_action: "See less",
           copied_toast: "Copied",
           copy_failed_toast: "Copy failed",
           edit_action: "Edit",
@@ -393,8 +394,8 @@ describe("MessageViewport", () => {
     expect(screen.getByTestId("unread-divider")).toHaveTextContent("2 new");
   });
 
-  it("only collapses already-read history messages, never unread messages", () => {
-    const longText = Array.from({ length: 13 }, (_, index) => `History line ${index}`).join("\n");
+  it("collapses long messages for both already-read and unread (Slack parity)", async () => {
+    const longText = Array.from({ length: 20 }, (_, index) => `History line ${index}`).join("\n");
     const messages = [
       { ...makeMessage("m1", longText), seq: 1 },
       { ...makeMessage("m2", longText), seq: 2 },
@@ -409,10 +410,20 @@ describe("MessageViewport", () => {
     );
 
     const bodies = screen.getAllByTestId("message-body");
-    expect(bodies[0]).toHaveTextContent("History line 12");
-    expect(bodies[0]).toHaveAttribute("data-collapsed", "true");
-    expect(bodies[1]).toHaveTextContent("History line 12");
-    expect(bodies[1]).not.toHaveAttribute("data-collapsed");
+    for (const body of bodies) {
+      Object.defineProperties(body, {
+        scrollHeight: { configurable: true, value: 420 },
+        clientHeight: { configurable: true, value: 160 },
+      });
+    }
+    fireEvent(window, new Event("resize"));
+
+    await waitFor(() => {
+      expect(bodies[0]).toHaveAttribute("data-collapsed", "true");
+      expect(bodies[1]).toHaveAttribute("data-collapsed", "true");
+    });
+    expect(bodies[0]).toHaveTextContent("History line 19");
+    expect(bodies[1]).toHaveTextContent("History line 19");
   });
 
   it("renders no divider when the cursor is unknown (BE field absent)", () => {

@@ -171,6 +171,10 @@ type Handler struct {
 	// UI consults IsConfigured() to decide whether to surface install
 	// entry points.
 	LarkAPIClient lark.APIClient
+	// VoiceProvider owns Doubao Speech credentials and transport. It is nil
+	// only in focused unit tests; the router always wires a client whose
+	// IsConfigured result reflects deployment environment variables.
+	VoiceProvider VoiceProvider
 	// LarkHub owns the per-installation supervisor goroutines that
 	// hold the §4.4 WS lease and run the EventConnector. Nil only
 	// when the master at-rest key (MULTICA_LARK_SECRET_KEY) is unset.

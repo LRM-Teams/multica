@@ -455,6 +455,28 @@ describe("ChannelMessageBubble", () => {
     expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-own", "false");
   });
 
+  it("renders compact continuations without author chrome but keeps body and gutter time (LRM-255)", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          type: "user",
+          author_id: "user-a",
+          author_name: "Alice",
+          content: "follow-up",
+          created_at: "2026-06-17T09:16:00Z",
+        })}
+        currentUserId="user-1"
+        compact
+      />,
+    );
+
+    expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-message-group", "compact");
+    expect(screen.queryByText("Alice")).not.toBeInTheDocument();
+    expect(screen.getByTestId("message-gutter-time")).toHaveTextContent("09:16");
+    expect(screen.getByText("follow-up")).toBeInTheDocument();
+    expect(screen.getByTestId("message-action-bar")).toBeInTheDocument();
+  });
+
   it("shows muted Owner role after a workspace owner name (LRM-232)", () => {
     render(
       <ChannelMessageBubble

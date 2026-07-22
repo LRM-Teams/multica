@@ -280,6 +280,7 @@ type ReminderFireAttemptPayload struct {
 // and persisting the version fence for this event.
 type ReminderProjectionEvent struct {
 	Seq                 int64            `json:"seq"`
+	PrevSeq             int64            `json:"prev_seq"`
 	RuntimeID           string           `json:"runtime_id"`
 	AgentID             string           `json:"agent_id"`
 	PlacementGeneration int64            `json:"placement_generation"`
@@ -292,11 +293,33 @@ type ReminderProjectionEvent struct {
 }
 
 type ReminderProjectionRequestPayload struct {
-	RuntimeCursors map[string]int64 `json:"runtime_cursors"`
+	RuntimeCursors     map[string]int64                      `json:"runtime_cursors"`
+	RuntimeResidencies map[string][]ReminderRuntimeResidency `json:"runtime_residencies,omitempty"`
 }
 
 type ReminderProjectionReplayEndPayload struct {
-	RuntimeCursors map[string]int64 `json:"runtime_cursors"`
+	RuntimeCursors map[string]int64                `json:"runtime_cursors"`
+	RuntimeResets  map[string]ReminderRuntimeReset `json:"runtime_resets,omitempty"`
+}
+
+// ReminderRuntimeResidency is daemon-local ownership submitted only when a
+// projection cursor must be reset after server-side ACK/GC. The server
+// validates this set; it never inventories additional owners into the daemon.
+type ReminderRuntimeResidency struct {
+	AgentID             string `json:"agent_id"`
+	PlacementGeneration int64  `json:"placement_generation"`
+}
+
+type ReminderRuntimeResetOwner struct {
+	AgentID             string             `json:"agent_id"`
+	PlacementGeneration int64              `json:"placement_generation"`
+	Terminal            bool               `json:"terminal"`
+	Reminders           []ReminderTimerJob `json:"reminders,omitempty"`
+}
+
+type ReminderRuntimeReset struct {
+	ProjectionWatermark int64                       `json:"projection_watermark"`
+	Owners              []ReminderRuntimeResetOwner `json:"owners"`
 }
 
 type ReminderProjectionAckPayload struct {

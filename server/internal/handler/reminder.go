@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -909,7 +910,7 @@ func (h *Handler) projectReminderCancel(ctx context.Context, reminder agentRemin
 func scanReminderProjection(row rowScanner) (protocol.ReminderProjectionEvent, error) {
 	var event protocol.ReminderProjectionEvent
 	var fireAt pgtype.Timestamptz
-	err := row.Scan(&event.Seq, &event.RuntimeID, &event.AgentID, &event.PlacementGeneration, &event.EventType, &event.ReminderID, &event.Version, &fireAt, &event.Terminal)
+	err := row.Scan(&event.Seq, &event.PrevSeq, &event.RuntimeID, &event.AgentID, &event.PlacementGeneration, &event.EventType, &event.ReminderID, &event.Version, &fireAt, &event.Terminal)
 	if err != nil {
 		return event, err
 	}
@@ -921,7 +922,7 @@ func scanReminderProjection(row rowScanner) (protocol.ReminderProjectionEvent, e
 }
 
 func reminderProjectionSelectColumns() string {
-	return `seq, runtime_id::text, agent_id::text, placement_generation, event_type, reminder_id::text, version, fire_at, terminal`
+	return `seq, prev_seq, runtime_id::text, agent_id::text, placement_generation, event_type, reminder_id::text, version, fire_at, terminal`
 }
 
 func (h *Handler) latestReminderProjection(ctx context.Context, reminderID pgtype.UUID) (protocol.ReminderProjectionEvent, error) {
@@ -1074,10 +1075,12 @@ func (h *Handler) HandleDaemonReminderSnapshot(ctx context.Context, identity dae
 		}
 		return nil, err
 	}
-	_ = tx.QueryRow(ctx, `
+	if err := tx.QueryRow(ctx, `
 		SELECT COALESCE(max(placement_generation), 0)
 		FROM agent_reminder_daemon_owner_event
-		WHERE agent_id = $1`, agentID).Scan(&placementGeneration)
+		WHERE agent_id = $1`, agentID).Scan(&placementGeneration); err != nil {
+		return nil, err
+	}
 	if !daemonIdentityOwnsWorkspace(identity, workspaceID) {
 		return nil, fmt.Errorf("reminder snapshot owner is outside daemon scope")
 	}
@@ -1219,18 +1222,19 @@ func (h *Handler) HandleDaemonReminderOwnerLifecycleAck(ctx context.Context, ide
 	return nil
 }
 
-func (h *Handler) HandleDaemonReminderProjection(ctx context.Context, identity daemonws.ClientIdentity, payload protocol.ReminderProjectionRequestPayload) ([]protocol.ReminderProjectionEvent, map[string]int64, error) {
+func (h *Handler) HandleDaemonReminderProjection(ctx context.Context, identity daemonws.ClientIdentity, payload protocol.ReminderProjectionRequestPayload) ([]protocol.ReminderProjectionEvent, protocol.ReminderProjectionReplayEndPayload, error) {
 	allowed := make(map[string]bool, len(identity.RuntimeIDs))
 	for _, runtimeID := range identity.RuntimeIDs {
 		allowed[runtimeID] = true
 	}
 	events := make([]protocol.ReminderProjectionEvent, 0)
 	endCursors := make(map[string]int64, len(payload.RuntimeCursors))
+	resets := make(map[string]protocol.ReminderRuntimeReset)
 	for runtimeID, cursor := range payload.RuntimeCursors {
 		if !allowed[runtimeID] || cursor < 0 {
-			return nil, nil, fmt.Errorf("reminder projection cursor outside daemon scope")
+			return nil, protocol.ReminderProjectionReplayEndPayload{}, fmt.Errorf("reminder projection cursor outside daemon scope")
 		}
-		var latest int64
+		var latest, ack int64
 		if err := h.DB.QueryRow(ctx, `
 			SELECT COALESCE((
 			  SELECT cursor.latest_seq
@@ -1238,11 +1242,26 @@ func (h *Handler) HandleDaemonReminderProjection(ctx context.Context, identity d
 			  JOIN agent_runtime runtime ON runtime.id = cursor.runtime_id
 			  WHERE cursor.runtime_id::text = $1
 			    AND ($2 = '' OR runtime.workspace_id::text = $2)
-			), 0)`, runtimeID, identity.WorkspaceID).Scan(&latest); err != nil {
-			return nil, nil, err
+			), 0), COALESCE((
+			  SELECT cursor.ack_seq
+			  FROM agent_reminder_daemon_projection_cursor cursor
+			  JOIN agent_runtime runtime ON runtime.id = cursor.runtime_id
+			  WHERE cursor.runtime_id::text = $1
+			    AND ($2 = '' OR runtime.workspace_id::text = $2)
+			), 0)`, runtimeID, identity.WorkspaceID).Scan(&latest, &ack); err != nil {
+			return nil, protocol.ReminderProjectionReplayEndPayload{}, err
 		}
 		if cursor > latest {
-			return nil, nil, fmt.Errorf("reminder projection cursor exceeds server watermark")
+			return nil, protocol.ReminderProjectionReplayEndPayload{}, fmt.Errorf("reminder projection cursor exceeds server watermark")
+		}
+		if cursor < ack {
+			reset, err := h.buildReminderRuntimeReset(ctx, identity, runtimeID, cursor, payload.RuntimeResidencies[runtimeID])
+			if err != nil {
+				return nil, protocol.ReminderProjectionReplayEndPayload{}, err
+			}
+			resets[runtimeID] = reset
+			endCursors[runtimeID] = reset.ProjectionWatermark
+			continue
 		}
 		rows, err := h.DB.Query(ctx, `SELECT `+reminderProjectionSelectColumns()+`
 			FROM agent_reminder_daemon_projection_event
@@ -1250,24 +1269,100 @@ func (h *Handler) HandleDaemonReminderProjection(ctx context.Context, identity d
 			  AND ($3 = '' OR workspace_id::text = $3)
 			ORDER BY seq ASC`, runtimeID, cursor, identity.WorkspaceID)
 		if err != nil {
-			return nil, nil, err
+			return nil, protocol.ReminderProjectionReplayEndPayload{}, err
 		}
 		for rows.Next() {
 			event, err := scanReminderProjection(rows)
 			if err != nil {
 				rows.Close()
-				return nil, nil, err
+				return nil, protocol.ReminderProjectionReplayEndPayload{}, err
 			}
 			events = append(events, event)
 		}
 		if err := rows.Err(); err != nil {
 			rows.Close()
-			return nil, nil, err
+			return nil, protocol.ReminderProjectionReplayEndPayload{}, err
 		}
 		rows.Close()
 		endCursors[runtimeID] = latest
 	}
-	return events, endCursors, nil
+	return events, protocol.ReminderProjectionReplayEndPayload{RuntimeCursors: endCursors, RuntimeResets: resets}, nil
+}
+
+func (h *Handler) buildReminderRuntimeReset(ctx context.Context, identity daemonws.ClientIdentity, runtimeID string, cursor int64, residencies []protocol.ReminderRuntimeResidency) (protocol.ReminderRuntimeReset, error) {
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return protocol.ReminderRuntimeReset{}, err
+	}
+	defer tx.Rollback(ctx)
+	sort.Slice(residencies, func(i, j int) bool { return residencies[i].AgentID < residencies[j].AgentID })
+	seen := make(map[string]bool, len(residencies))
+	owners := make([]protocol.ReminderRuntimeResetOwner, 0, len(residencies))
+	for _, residency := range residencies {
+		if residency.AgentID == "" || residency.PlacementGeneration < 1 || seen[residency.AgentID] {
+			return protocol.ReminderRuntimeReset{}, fmt.Errorf("invalid reminder runtime reset residency")
+		}
+		seen[residency.AgentID] = true
+		agentID, err := parseUUIDString(residency.AgentID)
+		if err != nil || !agentID.Valid {
+			return protocol.ReminderRuntimeReset{}, fmt.Errorf("invalid reminder runtime reset agent")
+		}
+		owner := protocol.ReminderRuntimeResetOwner{AgentID: residency.AgentID, PlacementGeneration: residency.PlacementGeneration, Terminal: true}
+		var workspaceID, currentRuntimeID pgtype.UUID
+		var archivedAt pgtype.Timestamptz
+		err = tx.QueryRow(ctx, `SELECT workspace_id, runtime_id, archived_at FROM agent WHERE id = $1 FOR UPDATE`, agentID).Scan(&workspaceID, &currentRuntimeID, &archivedAt)
+		if err != nil && !errorsIsNoRows(err) {
+			return protocol.ReminderRuntimeReset{}, err
+		}
+		var currentGeneration int64
+		if err == nil {
+			if err := tx.QueryRow(ctx, `SELECT COALESCE(max(placement_generation), 0) FROM agent_reminder_daemon_owner_event WHERE agent_id = $1`, agentID).Scan(&currentGeneration); err != nil {
+				return protocol.ReminderRuntimeReset{}, err
+			}
+			if currentGeneration > owner.PlacementGeneration {
+				owner.PlacementGeneration = currentGeneration
+			}
+			owner.Terminal = archivedAt.Valid || uuidToString(currentRuntimeID) != runtimeID || currentGeneration != residency.PlacementGeneration || !daemonIdentityOwnsWorkspace(identity, workspaceID)
+			if !owner.Terminal {
+				rows, err := tx.Query(ctx, `SELECT `+reminderSelectColumns()+` FROM agent_reminder WHERE workspace_id = $1 AND agent_id = $2 AND status = 'scheduled' ORDER BY fire_at ASC, id ASC`, workspaceID, agentID)
+				if err != nil {
+					return protocol.ReminderRuntimeReset{}, err
+				}
+				for rows.Next() {
+					reminder, err := scanAgentReminder(rows)
+					if err != nil {
+						rows.Close()
+						return protocol.ReminderRuntimeReset{}, err
+					}
+					owner.Reminders = append(owner.Reminders, protocol.ReminderTimerJob{ReminderID: uuidToString(reminder.ID), OwnerAgentID: residency.AgentID, Version: reminder.Version, FireAt: reminder.FireAt.Time.UTC().Format(time.RFC3339Nano)})
+				}
+				if err := rows.Err(); err != nil {
+					rows.Close()
+					return protocol.ReminderRuntimeReset{}, err
+				}
+				rows.Close()
+			}
+		}
+		owners = append(owners, owner)
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 210))`, runtimeID); err != nil {
+		return protocol.ReminderRuntimeReset{}, err
+	}
+	var watermark, ack int64
+	if err := tx.QueryRow(ctx, `
+		SELECT COALESCE(cursor.latest_seq, 0), COALESCE(cursor.ack_seq, 0)
+		FROM agent_runtime runtime
+		LEFT JOIN agent_reminder_daemon_projection_cursor cursor ON cursor.runtime_id = runtime.id
+		WHERE runtime.id::text = $1 AND ($2 = '' OR runtime.workspace_id::text = $2)`, runtimeID, identity.WorkspaceID).Scan(&watermark, &ack); err != nil {
+		return protocol.ReminderRuntimeReset{}, err
+	}
+	if cursor >= ack {
+		return protocol.ReminderRuntimeReset{}, fmt.Errorf("reminder runtime reset no longer required")
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return protocol.ReminderRuntimeReset{}, err
+	}
+	return protocol.ReminderRuntimeReset{ProjectionWatermark: watermark, Owners: owners}, nil
 }
 
 func (h *Handler) HandleDaemonReminderProjectionAck(ctx context.Context, identity daemonws.ClientIdentity, payload protocol.ReminderProjectionAckPayload) error {
@@ -1372,7 +1467,9 @@ func (h *Handler) HandleDaemonReminderFireAttempt(ctx context.Context, identity 
 		return nil, err
 	}
 	var placementGeneration int64
-	_ = tx.QueryRow(ctx, `SELECT COALESCE(max(placement_generation), 0) FROM agent_reminder_daemon_owner_event WHERE agent_id = $1`, agentID).Scan(&placementGeneration)
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(max(placement_generation), 0) FROM agent_reminder_daemon_owner_event WHERE agent_id = $1`, agentID).Scan(&placementGeneration); err != nil {
+		return nil, err
+	}
 	if archivedAt.Valid || runtimeID != requestRuntimeID || payload.PlacementGeneration != placementGeneration || !daemonIdentityOwnsWorkspace(identity, workspaceID) {
 		if placementGeneration < 1 {
 			placementGeneration = 1

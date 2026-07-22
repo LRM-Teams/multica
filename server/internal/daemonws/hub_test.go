@@ -3,6 +3,7 @@ package daemonws
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -338,6 +339,44 @@ func TestHeartbeatRejectsUnauthorizedRuntime(t *testing.T) {
 	}
 }
 
+func TestReminderSnapshotTransientErrorClosesConnectionWithoutTerminalStop(t *testing.T) {
+	hub := NewHub()
+	hub.SetReminderHandlers(func(context.Context, ClientIdentity, protocol.ReminderSnapshotRequestPayload) (*protocol.ReminderSnapshotPayload, error) {
+		return nil, errors.New("transient snapshot query failure")
+	}, nil, nil, nil)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, ClientIdentity{WorkspaceID: "workspace-1", RuntimeIDs: []string{"runtime-1"}})
+	}))
+	defer server.Close()
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	request, err := json.Marshal(protocol.Message{
+		Type: protocol.EventReminderSnapshotRequest,
+		Payload: mustMarshalRaw(protocol.ReminderSnapshotRequestPayload{
+			AgentID: "agent-1", RuntimeID: "runtime-1", PlacementGeneration: 1,
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, request); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, raw, err := conn.ReadMessage(); err == nil {
+		var msg protocol.Message
+		if json.Unmarshal(raw, &msg) == nil && msg.Type == protocol.EventDaemonAgentStop {
+			t.Fatalf("transient snapshot error emitted terminal stop: %s", raw)
+		}
+		t.Fatalf("transient snapshot error left connection open: %s", raw)
+	}
+}
+
 func TestReminderLifecycleReplayDrainsMoreThanSendBufferInOrder(t *testing.T) {
 	hub := NewHub()
 	const eventCount = 40
@@ -416,7 +455,7 @@ func TestReminderLifecycleReplayDrainsMoreThanSendBufferInOrder(t *testing.T) {
 func TestReminderProjectionReplayDrainsMoreThanSendBufferInOrder(t *testing.T) {
 	hub := NewHub()
 	const eventCount = 40
-	hub.SetReminderProjectionHandlers(func(_ context.Context, identity ClientIdentity, payload protocol.ReminderProjectionRequestPayload) ([]protocol.ReminderProjectionEvent, map[string]int64, error) {
+	hub.SetReminderProjectionHandlers(func(_ context.Context, identity ClientIdentity, payload protocol.ReminderProjectionRequestPayload) ([]protocol.ReminderProjectionEvent, protocol.ReminderProjectionReplayEndPayload, error) {
 		if len(identity.RuntimeIDs) != 1 || identity.RuntimeIDs[0] != "runtime-1" {
 			t.Fatalf("identity runtimes = %#v", identity.RuntimeIDs)
 		}
@@ -431,7 +470,7 @@ func TestReminderProjectionReplayDrainsMoreThanSendBufferInOrder(t *testing.T) {
 				FireAt: time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano),
 			})
 		}
-		return events, map[string]int64{"runtime-1": eventCount}, nil
+		return events, protocol.ReminderProjectionReplayEndPayload{RuntimeCursors: map[string]int64{"runtime-1": eventCount}}, nil
 	}, nil)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

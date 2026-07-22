@@ -15,6 +15,8 @@ import (
 
 const reminderCacheStateFile = "reminder_cache.json"
 
+var errReminderProjectionGap = errors.New("reminder projection sequence gap")
+
 type reminderTimer interface {
 	Stop() bool
 }
@@ -46,6 +48,7 @@ type reminderVersionFence struct {
 type reminderCacheState struct {
 	Fences         map[string]reminderVersionFence `json:"fences"`
 	RuntimeCursors map[string]int64                `json:"runtime_cursors"`
+	RuntimeResets  map[string]bool                 `json:"runtime_resets,omitempty"`
 }
 
 // reminderCache is the owner-daemon timer projection. Entries are ephemeral,
@@ -57,7 +60,9 @@ type reminderCache struct {
 	entries        map[string]reminderCacheEntry
 	fences         map[string]reminderVersionFence
 	runtimeCursors map[string]int64
+	runtimeResets  map[string]bool
 	pendingFires   map[string]int64
+	suspended      bool
 	clock          reminderClock
 	onFire         func(protocol.ReminderTimerJob)
 	logger         *slog.Logger
@@ -77,6 +82,7 @@ func newReminderCache(clock reminderClock, logger *slog.Logger, onFire func(prot
 		entries:        make(map[string]reminderCacheEntry),
 		fences:         make(map[string]reminderVersionFence),
 		runtimeCursors: make(map[string]int64),
+		runtimeResets:  make(map[string]bool),
 		pendingFires:   make(map[string]int64),
 		clock:          clock,
 		onFire:         onFire,
@@ -114,6 +120,11 @@ func (c *reminderCache) setPersistence(root string) {
 			c.runtimeCursors[runtimeID] = seq
 		}
 	}
+	for runtimeID, required := range state.RuntimeResets {
+		if runtimeID != "" && required {
+			c.runtimeResets[runtimeID] = true
+		}
+	}
 }
 
 // osReadFile is a seam for the state loader without exposing filesystem
@@ -129,7 +140,7 @@ func (c *reminderCache) persistLocked() error {
 	if c.path == "" {
 		return nil
 	}
-	state := reminderCacheState{Fences: c.fences, RuntimeCursors: c.runtimeCursors}
+	state := reminderCacheState{Fences: c.fences, RuntimeCursors: c.runtimeCursors, RuntimeResets: c.runtimeResets}
 	raw, err := json.Marshal(state)
 	if err != nil {
 		return err
@@ -194,6 +205,9 @@ func (c *reminderCache) applyProjection(event protocol.ReminderProjectionEvent) 
 	if event.Seq <= c.runtimeCursors[event.RuntimeID] {
 		return false, nil
 	}
+	if event.PrevSeq != c.runtimeCursors[event.RuntimeID] {
+		return false, fmt.Errorf("%w: runtime %s has %d, event %d follows %d", errReminderProjectionGap, event.RuntimeID, c.runtimeCursors[event.RuntimeID], event.Seq, event.PrevSeq)
+	}
 	previousFences := cloneReminderFences(c.fences)
 	previousCursors := cloneReminderCursors(c.runtimeCursors)
 	previousPending, hadPending := c.pendingFires[event.ReminderID]
@@ -234,7 +248,9 @@ func (c *reminderCache) applyProjection(event protocol.ReminderProjectionEvent) 
 	if !event.Terminal {
 		fireAt, _ := time.Parse(time.RFC3339, event.Reminder.FireAt)
 		c.entries[event.ReminderID] = reminderCacheEntry{job: event.Reminder}
-		c.armLocked(event.Reminder, fireAt)
+		if !c.suspended {
+			c.armLocked(event.Reminder, fireAt)
+		}
 	}
 	return true, nil
 }
@@ -242,14 +258,16 @@ func (c *reminderCache) applyProjection(event protocol.ReminderProjectionEvent) 
 // upsert/cancel remain small unit-test helpers. Production frames always use
 // applyProjection so sequence and durable ACK fencing cannot be bypassed.
 func (c *reminderCache) upsert(job protocol.ReminderTimerJob) bool {
-	event := protocol.ReminderProjectionEvent{Seq: c.nextTestSeq(), RuntimeID: "test", AgentID: job.OwnerAgentID, EventType: "upsert", ReminderID: job.ReminderID, Version: job.Version, FireAt: job.FireAt, Reminder: job}
+	seq := c.nextTestSeq()
+	event := protocol.ReminderProjectionEvent{Seq: seq, PrevSeq: seq - 1, RuntimeID: "test", AgentID: job.OwnerAgentID, EventType: "upsert", ReminderID: job.ReminderID, Version: job.Version, FireAt: job.FireAt, Reminder: job}
 	ok, _ := c.applyProjection(event)
 	return ok
 }
 
 func (c *reminderCache) cancel(reminderID string, version int64) bool {
 	fence := c.highWatermark(reminderID)
-	event := protocol.ReminderProjectionEvent{Seq: c.nextTestSeq(), RuntimeID: "test", AgentID: fence.OwnerAgentID, EventType: "cancel", ReminderID: reminderID, Version: version, Terminal: true}
+	seq := c.nextTestSeq()
+	event := protocol.ReminderProjectionEvent{Seq: seq, PrevSeq: seq - 1, RuntimeID: "test", AgentID: fence.OwnerAgentID, EventType: "cancel", ReminderID: reminderID, Version: version, Terminal: true}
 	if event.AgentID == "" {
 		event.AgentID = "test"
 	}
@@ -281,7 +299,7 @@ func (c *reminderCache) projectionCursors() map[string]int64 {
 	return cloneReminderCursors(c.runtimeCursors)
 }
 
-func (c *reminderCache) advanceProjectionCursor(runtimeID string, seq int64) error {
+func (c *reminderCache) advanceProjectionCursor(runtimeID string, prevSeq, seq int64) error {
 	if c == nil || runtimeID == "" || seq < 1 {
 		return nil
 	}
@@ -289,6 +307,9 @@ func (c *reminderCache) advanceProjectionCursor(runtimeID string, seq int64) err
 	defer c.mu.Unlock()
 	if seq <= c.runtimeCursors[runtimeID] {
 		return nil
+	}
+	if prevSeq != c.runtimeCursors[runtimeID] {
+		return fmt.Errorf("%w: runtime %s has %d, event %d follows %d", errReminderProjectionGap, runtimeID, c.runtimeCursors[runtimeID], seq, prevSeq)
 	}
 	previous := c.runtimeCursors[runtimeID]
 	c.runtimeCursors[runtimeID] = seq
@@ -309,7 +330,6 @@ func (c *reminderCache) snapshot(runtimeID, agentID string, watermark int64, job
 		return 0, nil
 	}
 	previousFences := cloneReminderFences(c.fences)
-	previousCursors := cloneReminderCursors(c.runtimeCursors)
 	acceptedJobs := make(map[string]protocol.ReminderTimerJob)
 	for _, job := range jobs {
 		if job.OwnerAgentID != agentID || job.ReminderID == "" || job.Version < 1 {
@@ -343,10 +363,8 @@ func (c *reminderCache) snapshot(runtimeID, agentID string, watermark int64, job
 			c.fences[id] = fence
 		}
 	}
-	c.runtimeCursors[runtimeID] = watermark
 	if err := c.persistLocked(); err != nil {
 		c.fences = previousFences
-		c.runtimeCursors = previousCursors
 		return 0, err
 	}
 	accepted := 0
@@ -361,7 +379,9 @@ func (c *reminderCache) snapshot(runtimeID, agentID string, watermark int64, job
 	for _, job := range acceptedJobs {
 		fireAt, _ := time.Parse(time.RFC3339, job.FireAt)
 		c.entries[job.ReminderID] = reminderCacheEntry{job: job}
-		c.armLocked(job, fireAt)
+		if !c.suspended {
+			c.armLocked(job, fireAt)
+		}
 		accepted++
 	}
 	return accepted, nil
@@ -378,6 +398,7 @@ func (c *reminderCache) clear() {
 			entry.timer.Stop()
 		}
 	}
+	c.suspended = true
 	clear(c.entries)
 	clear(c.pendingFires)
 }
@@ -387,8 +408,125 @@ func (c *reminderCache) beginConnection() {
 		return
 	}
 	c.mu.Lock()
+	for _, entry := range c.entries {
+		if entry.timer != nil {
+			entry.timer.Stop()
+		}
+	}
+	c.suspended = true
+	clear(c.entries)
 	clear(c.pendingFires)
 	c.mu.Unlock()
+}
+
+func (c *reminderCache) markRuntimeReset(runtimeID string) error {
+	if c == nil || runtimeID == "" {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	previous := c.runtimeResets[runtimeID]
+	c.runtimeResets[runtimeID] = true
+	if err := c.persistLocked(); err != nil {
+		if previous {
+			c.runtimeResets[runtimeID] = true
+		} else {
+			delete(c.runtimeResets, runtimeID)
+		}
+		return err
+	}
+	return nil
+}
+
+func (c *reminderCache) resetRuntime(runtimeID string, reset protocol.ReminderRuntimeReset) error {
+	if c == nil || runtimeID == "" || reset.ProjectionWatermark < 0 {
+		return nil
+	}
+	ownerIDs := make(map[string]bool, len(reset.Owners))
+	jobs := make([]protocol.ReminderTimerJob, 0)
+	for _, owner := range reset.Owners {
+		if owner.AgentID == "" || owner.PlacementGeneration < 1 {
+			return errors.New("invalid reminder runtime reset owner")
+		}
+		ownerIDs[owner.AgentID] = true
+		if owner.Terminal && len(owner.Reminders) > 0 {
+			return errors.New("terminal reminder runtime reset owner has jobs")
+		}
+		for _, job := range owner.Reminders {
+			if job.OwnerAgentID != owner.AgentID || job.ReminderID == "" || job.Version < 1 {
+				return errors.New("invalid reminder runtime reset job")
+			}
+			if _, err := time.Parse(time.RFC3339, job.FireAt); err != nil {
+				return err
+			}
+			jobs = append(jobs, job)
+		}
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	previousFences := cloneReminderFences(c.fences)
+	previousCursors := cloneReminderCursors(c.runtimeCursors)
+	previousResets := make(map[string]bool, len(c.runtimeResets))
+	for id, required := range c.runtimeResets {
+		previousResets[id] = required
+	}
+	previousPending := clonePendingFires(c.pendingFires)
+	for id, fence := range c.fences {
+		if ownerIDs[fence.OwnerAgentID] {
+			delete(c.fences, id)
+			delete(c.pendingFires, id)
+		}
+	}
+	for _, job := range jobs {
+		c.fences[job.ReminderID] = reminderVersionFence{
+			OwnerAgentID: job.OwnerAgentID, Version: job.Version, LastSeq: reset.ProjectionWatermark,
+		}
+	}
+	c.runtimeCursors[runtimeID] = reset.ProjectionWatermark
+	delete(c.runtimeResets, runtimeID)
+	if err := c.persistLocked(); err != nil {
+		c.fences = previousFences
+		c.runtimeCursors = previousCursors
+		c.runtimeResets = previousResets
+		c.pendingFires = previousPending
+		return err
+	}
+	for id, entry := range c.entries {
+		if !ownerIDs[entry.job.OwnerAgentID] {
+			continue
+		}
+		if entry.timer != nil {
+			entry.timer.Stop()
+		}
+		delete(c.entries, id)
+	}
+	for _, job := range jobs {
+		fireAt, _ := time.Parse(time.RFC3339, job.FireAt)
+		c.entries[job.ReminderID] = reminderCacheEntry{job: job}
+		if !c.suspended {
+			c.armLocked(job, fireAt)
+		}
+	}
+	return nil
+}
+
+func (c *reminderCache) resume() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.suspended {
+		return
+	}
+	c.suspended = false
+	for _, entry := range c.entries {
+		fireAt, err := time.Parse(time.RFC3339, entry.job.FireAt)
+		if err == nil {
+			c.armLocked(entry.job, fireAt)
+		}
+	}
 }
 
 func (c *reminderCache) removeOwner(agentID string) error {

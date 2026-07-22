@@ -130,6 +130,26 @@ func TestAgentReminderDaemonSchedulerMigration210PreservesDefinitionsAcrossDownU
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := conn.Exec(ctx, `
+		INSERT INTO agent_reminder (id, workspace_id, agent_id, title, fire_at, status, fired_task_id, snooze_count, created_at, updated_at, cadence, schedule_timezone, cadence_next_at, current_occurrence_id)
+		VALUES ('00000000-0000-0016-0000-000000000210', '20000000-0000-0000-0000-000000000210', '10000000-0000-0000-0000-000000000210', 'calendar recurring delivered', '2026-07-22T15:00:00Z', 'firing', '70000000-0000-0000-0000-000000000216', 7, '2026-07-22T08:06:00Z', '2026-07-22T08:36:00Z', 'daily@15:00', 'UTC', '2026-07-22T15:00:00Z', '60000000-0000-0000-0000-000000000216');
+		INSERT INTO agent_reminder_occurrence (id, reminder_id, status, fired_task_id, receipt_message_id)
+		VALUES ('60000000-0000-0000-0000-000000000216', '00000000-0000-0016-0000-000000000210', 'claimed', '70000000-0000-0000-0000-000000000216', '80000000-0000-0000-0000-000000000216');
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, string(upSQL)); err == nil || !strings.Contains(err.Error(), "reminder_cutover_recurring_requires_recovery") {
+		t.Fatalf("calendar recurring cutover error = %v, want recovery preflight", err)
+	}
+	if _, err := conn.Exec(ctx, `ROLLBACK`); err != nil {
+		t.Fatalf("rollback failed recurring preflight: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `
+		DELETE FROM agent_reminder_occurrence WHERE id = '60000000-0000-0000-0000-000000000216';
+		DELETE FROM agent_reminder WHERE id = '00000000-0000-0016-0000-000000000210';
+	`); err != nil {
+		t.Fatal(err)
+	}
 	assertDefinitions := func(label string) {
 		t.Helper()
 		var count int
@@ -158,6 +178,10 @@ func TestAgentReminderDaemonSchedulerMigration210PreservesDefinitionsAcrossDownU
 		t.Fatal(err)
 	}
 
+	var migrationStartedAt time.Time
+	if err := conn.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&migrationStartedAt); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := conn.Exec(ctx, string(upSQL)); err != nil {
 		t.Fatalf("apply migration 210 up: %v", err)
 	}
@@ -168,6 +192,13 @@ func TestAgentReminderDaemonSchedulerMigration210PreservesDefinitionsAcrossDownU
 	}
 	if _, err := conn.Exec(ctx, `UPDATE agent_reminder SET version = 7 WHERE status = 'scheduled'`); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `UPDATE agent_runtime SET metadata = '{}'::jsonb WHERE id = '30000000-0000-0000-0000-000000000210'`); err == nil || !strings.Contains(err.Error(), "daemon_outdated") {
+		t.Fatalf("active reminder capability downgrade error = %v, want daemon_outdated", err)
+	}
+	var retainedCapability bool
+	if err := conn.QueryRow(ctx, `SELECT COALESCE((metadata->'capabilities') @> '["reminder_versioned_cache_v1"]'::jsonb, false) FROM agent_runtime WHERE id = '30000000-0000-0000-0000-000000000210'`).Scan(&retainedCapability); err != nil || !retainedCapability {
+		t.Fatalf("rejected downgrade mutated registration capability=%v err=%v", retainedCapability, err)
 	}
 	var deliveredStatus, recurringStatus, retryStatus, partialStatus string
 	var deliveredCurrent, recurringCurrent, retryCurrent, partialCurrent *string
@@ -185,6 +216,21 @@ func TestAgentReminderDaemonSchedulerMigration210PreservesDefinitionsAcrossDownU
 	}
 	if deliveredStatus != "fired" || recurringStatus != "scheduled" || retryStatus != "scheduled" || partialStatus != "scheduled" || deliveredCurrent != nil || recurringCurrent != nil || retryCurrent != nil || partialCurrent != nil {
 		t.Fatalf("legacy firing convergence statuses/current = %s/%v %s/%v %s/%v %s/%v", deliveredStatus, deliveredCurrent, recurringStatus, recurringCurrent, retryStatus, retryCurrent, partialStatus, partialCurrent)
+	}
+	var recurringFireAt, recurringCadenceNextAt time.Time
+	if err := conn.QueryRow(ctx, `SELECT fire_at, cadence_next_at FROM agent_reminder WHERE id = '00000000-0000-0012-0000-000000000210'`).Scan(&recurringFireAt, &recurringCadenceNextAt); err != nil {
+		t.Fatal(err)
+	}
+	if !recurringFireAt.Equal(recurringCadenceNextAt) || !recurringFireAt.After(migrationStartedAt) {
+		t.Fatalf("delivered recurring next slot fire=%s cadence=%s migration_start=%s", recurringFireAt, recurringCadenceNextAt, migrationStartedAt)
+	}
+	seedSlot := time.Date(2026, 7, 22, 11, 0, 0, 0, time.UTC)
+	if delta := recurringFireAt.Sub(seedSlot); delta <= 0 || delta%time.Hour != 0 {
+		t.Fatalf("delivered recurring next slot delta = %s, want positive whole hours", delta)
+	}
+	var immediatelyDue int
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM agent_reminder WHERE id = '00000000-0000-0012-0000-000000000210' AND fire_at <= clock_timestamp()`).Scan(&immediatelyDue); err != nil || immediatelyDue != 0 {
+		t.Fatalf("delivered recurring reconnect due count=%d err=%v", immediatelyDue, err)
 	}
 	var firedOccurrences, cancelledOccurrences int
 	if err := conn.QueryRow(ctx, `SELECT count(*) FILTER (WHERE status='fired'), count(*) FILTER (WHERE status='cancelled' AND terminal_reason='daemon_cutover_rearm') FROM agent_reminder_occurrence`).Scan(&firedOccurrences, &cancelledOccurrences); err != nil || firedOccurrences != 2 || cancelledOccurrences != 2 {

@@ -778,6 +778,46 @@ func TestDaemonRegister_ReplacesReminderCapabilityOnReconnect(t *testing.T) {
 	}
 }
 
+func TestDaemonRegister_RejectsReminderCapabilityDowngradeWithActiveDefinition(t *testing.T) {
+	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
+	anchor := fixture.insertMessage(t, "user", testUserID, "capability downgrade anchor", nil)
+	seedDueReminder(t, fixture.agentIDs[0], fixture.channel.ID, anchor.ID, "", "")
+	daemonID := "test-daemon-capability-fence-" + uuid.NewString()
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent_runtime SET daemon_id = $2, provider = 'pi' WHERE id = $1`, fixture.runtimeIDs[0], daemonID); err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	req := newDaemonTokenRequest("POST", "/api/daemon/register", map[string]any{
+		"workspace_id": testWorkspaceID,
+		"daemon_id":    daemonID,
+		"device_name":  "test-device",
+		"cli_version":  "v0.3.0",
+		"capabilities": []string{},
+		"runtimes":     []map[string]any{{"name": "fenced", "type": "pi", "version": "1.0.0", "status": "online"}},
+	}, testWorkspaceID, daemonID)
+	fixture.handler.DaemonRegister(w, req)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "daemon_outdated") {
+		t.Fatalf("capability downgrade status=%d body=%s", w.Code, w.Body.String())
+	}
+	var capable bool
+	if err := testPool.QueryRow(context.Background(), `SELECT COALESCE((metadata->'capabilities') @> '["reminder_versioned_cache_v1"]'::jsonb, false) FROM agent_runtime WHERE id = $1`, fixture.runtimeIDs[0]).Scan(&capable); err != nil || !capable {
+		t.Fatalf("rejected registration mutated capability=%v err=%v", capable, err)
+	}
+	recovery := httptest.NewRecorder()
+	recoveryReq := newDaemonTokenRequest("POST", "/api/daemon/register", map[string]any{
+		"workspace_id": testWorkspaceID,
+		"daemon_id":    daemonID,
+		"device_name":  "test-device",
+		"cli_version":  "v0.3.0",
+		"capabilities": []string{protocol.DaemonCapabilityReminderVersionedCache},
+		"runtimes":     []map[string]any{{"name": "fenced", "type": "pi", "version": "1.0.1", "status": "online"}},
+	}, testWorkspaceID, daemonID)
+	fixture.handler.DaemonRegister(recovery, recoveryReq)
+	if recovery.Code != http.StatusOK {
+		t.Fatalf("capable recovery registration status=%d body=%s", recovery.Code, recovery.Body.String())
+	}
+}
+
 func TestDaemonRegister_ProfileTokenReturnsDaemonToken(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

@@ -318,10 +318,13 @@ func TestReminderOwnerLifecycleReplayFencesRuntimeMigrationAndCompactsAckedHisto
 }
 
 func TestReminderProjectionReplaySharesPlacementGenerationAndAllowsZeroAck(t *testing.T) {
-	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
+	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}, {}})
 	agentID := fixture.agentIDs[0]
 	runtimeID := fixture.runtimeIDs[0]
 	identity := daemonws.ClientIdentity{WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent SET runtime_id = $2 WHERE id = $1`, fixture.agentIDs[1], runtimeID); err != nil {
+		t.Fatal(err)
+	}
 
 	// A newly registered runtime with no timer mutations must still be able to
 	// durably ACK cursor zero. Otherwise reconnect repeats an empty replay
@@ -360,19 +363,39 @@ func TestReminderProjectionReplaySharesPlacementGenerationAndAllowsZeroAck(t *te
 	if projection.PlacementGeneration != generation || generation < 1 {
 		t.Fatalf("projection generation=%d owner generation=%d", projection.PlacementGeneration, generation)
 	}
-	if end[runtimeID] < projection.Seq {
-		t.Fatalf("replay watermark=%d before projection=%d", end[runtimeID], projection.Seq)
+	if end.RuntimeCursors[runtimeID] < projection.Seq {
+		t.Fatalf("replay watermark=%d before projection=%d", end.RuntimeCursors[runtimeID], projection.Seq)
 	}
 	if err := fixture.handler.HandleDaemonReminderProjectionAck(context.Background(), identity, protocol.ReminderProjectionAckPayload{
-		RuntimeCursors: map[string]int64{runtimeID: end[runtimeID]},
+		RuntimeCursors: map[string]int64{runtimeID: end.RuntimeCursors[runtimeID]},
 	}); err != nil {
 		t.Fatalf("projection ack: %v", err)
 	}
 	var remaining int
 	if err := testPool.QueryRow(context.Background(), `
 		SELECT count(*) FROM agent_reminder_daemon_projection_event
-		WHERE runtime_id = $1 AND seq <= $2`, runtimeID, end[runtimeID]).Scan(&remaining); err != nil || remaining != 0 {
+		WHERE runtime_id = $1 AND seq <= $2`, runtimeID, end.RuntimeCursors[runtimeID]).Scan(&remaining); err != nil || remaining != 0 {
 		t.Fatalf("acked projection rows=%d err=%v", remaining, err)
+	}
+	resetEvents, resetEnd, err := fixture.handler.HandleDaemonReminderProjection(context.Background(), identity, protocol.ReminderProjectionRequestPayload{
+		RuntimeCursors:     map[string]int64{runtimeID: 0},
+		RuntimeResidencies: map[string][]protocol.ReminderRuntimeResidency{runtimeID: {{AgentID: agentID, PlacementGeneration: generation}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resetEvents) != 0 {
+		t.Fatalf("cursor-loss reset replayed GC events: %+v", resetEvents)
+	}
+	reset, ok := resetEnd.RuntimeResets[runtimeID]
+	if !ok || reset.ProjectionWatermark != end.RuntimeCursors[runtimeID] || len(reset.Owners) != 1 {
+		t.Fatalf("cursor-loss reset=%+v end=%+v", reset, resetEnd)
+	}
+	if reset.Owners[0].AgentID != agentID || reset.Owners[0].Terminal || len(reset.Owners[0].Reminders) != 1 || reset.Owners[0].Reminders[0].ReminderID != reminderID {
+		t.Fatalf("cursor-loss reset owner=%+v", reset.Owners[0])
+	}
+	if reset.Owners[0].AgentID == fixture.agentIDs[1] {
+		t.Fatal("server injected an unsubmitted resident owner")
 	}
 }
 

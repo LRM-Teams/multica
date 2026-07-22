@@ -418,7 +418,6 @@ func (d *Daemon) handleReminderSnapshot(payload protocol.ReminderSnapshotPayload
 		if _, err := d.reminderCache.snapshot(payload.RuntimeID, payload.AgentID, payload.ProjectionWatermark, payload.Reminders); err != nil {
 			return err
 		}
-		return d.ackReminderProjectionCursors(d.reminderCache.projectionCursors())
 	}
 	return nil
 }
@@ -429,12 +428,20 @@ func (d *Daemon) handleReminderProjection(payload protocol.ReminderProjectionEve
 	}
 	owner, ok := d.reminderAgents.get(payload.AgentID)
 	if !ok || owner.RuntimeID != payload.RuntimeID || owner.PlacementGeneration != payload.PlacementGeneration {
-		if err := d.reminderCache.advanceProjectionCursor(payload.RuntimeID, payload.Seq); err != nil {
+		if err := d.reminderCache.advanceProjectionCursor(payload.RuntimeID, payload.PrevSeq, payload.Seq); err != nil {
+			if errors.Is(err, errReminderProjectionGap) {
+				d.requestReminderProjectionReplay()
+				return nil
+			}
 			return err
 		}
 		return d.ackReminderProjectionCursors(d.reminderCache.projectionCursors())
 	}
 	if _, err := d.reminderCache.applyProjection(payload); err != nil {
+		if errors.Is(err, errReminderProjectionGap) {
+			d.requestReminderProjectionReplay()
+			return nil
+		}
 		return err
 	}
 	return d.ackReminderProjectionCursors(d.reminderCache.projectionCursors())
@@ -608,12 +615,18 @@ func (d *Daemon) startReminderProjectionReplay() bool {
 		storedCursors = d.reminderCache.projectionCursors()
 	}
 	cursors := map[string]int64{}
+	residencies := map[string][]protocol.ReminderRuntimeResidency{}
+	if d.reminderAgents != nil {
+		residencies = d.reminderAgents.runtimeResidencies()
+	}
 	d.mu.Lock()
 	for runtimeID := range d.runtimeIndex {
 		cursors[runtimeID] = storedCursors[runtimeID]
 	}
 	d.mu.Unlock()
-	if !d.queueReminderFrame(protocol.EventReminderProjectionReq, protocol.ReminderProjectionRequestPayload{RuntimeCursors: cursors}) {
+	if !d.queueReminderFrame(protocol.EventReminderProjectionReq, protocol.ReminderProjectionRequestPayload{
+		RuntimeCursors: cursors, RuntimeResidencies: residencies,
+	}) {
 		d.reminderGateMu.Lock()
 		d.reminderProjectionReplayInFlight = false
 		d.reminderGateMu.Unlock()
@@ -648,6 +661,44 @@ func (d *Daemon) handleReminderProjectionReplayEnd(payload protocol.ReminderProj
 	if d.reminderCache == nil {
 		return nil
 	}
+	localResidencies := d.reminderAgents.runtimeResidencies()
+	for runtimeID, reset := range payload.RuntimeResets {
+		end, ok := payload.RuntimeCursors[runtimeID]
+		if !ok || end != reset.ProjectionWatermark {
+			return fmt.Errorf("invalid reminder runtime reset watermark %s", runtimeID)
+		}
+		local := make(map[string]int64, len(localResidencies[runtimeID]))
+		for _, owner := range localResidencies[runtimeID] {
+			local[owner.AgentID] = owner.PlacementGeneration
+		}
+		if len(reset.Owners) != len(local) {
+			return fmt.Errorf("reminder runtime reset owner set mismatch %s", runtimeID)
+		}
+		for _, owner := range reset.Owners {
+			generation, exists := local[owner.AgentID]
+			if !exists || (!owner.Terminal && owner.PlacementGeneration != generation) || (owner.Terminal && owner.PlacementGeneration < generation) {
+				return fmt.Errorf("reminder runtime reset owner mismatch %s:%s", runtimeID, owner.AgentID)
+			}
+			delete(local, owner.AgentID)
+		}
+		if len(local) != 0 {
+			return fmt.Errorf("reminder runtime reset omitted local owners %s", runtimeID)
+		}
+		if err := d.reminderCache.markRuntimeReset(runtimeID); err != nil {
+			return err
+		}
+		if err := d.reminderCache.resetRuntime(runtimeID, reset); err != nil {
+			return err
+		}
+		for _, owner := range reset.Owners {
+			if !owner.Terminal {
+				continue
+			}
+			if _, _, err := d.reminderAgents.applyStop(owner.AgentID, runtimeID, owner.PlacementGeneration); err != nil {
+				return err
+			}
+		}
+	}
 	cursors := d.reminderCache.projectionCursors()
 	for runtimeID, end := range payload.RuntimeCursors {
 		if cursors[runtimeID] < end {
@@ -674,6 +725,7 @@ func (d *Daemon) handleReminderProjectionReplayEnd(payload protocol.ReminderProj
 		ids = append(ids, agentID)
 	}
 	d.reminderGateMu.Unlock()
+	d.reminderCache.resume()
 	sort.Strings(ids)
 	for _, agentID := range ids {
 		owner, ok := d.reminderAgents.get(agentID)

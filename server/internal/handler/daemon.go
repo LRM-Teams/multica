@@ -386,6 +386,10 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 			OwnerID:     ownerID,
 		})
 		if err != nil {
+			if isReminderDaemonOutdatedError(err) {
+				writeCodedError(w, http.StatusConflict, "daemon_outdated", "runtime must keep reminder support while active reminders exist")
+				return
+			}
 			obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.RuntimeFailed(
 				uuidToString(ownerID),
 				req.WorkspaceID,

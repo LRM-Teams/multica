@@ -83,7 +83,7 @@ type ReminderSnapshotHandler func(ctx context.Context, identity ClientIdentity, 
 type ReminderFireAttemptHandler func(ctx context.Context, identity ClientIdentity, payload protocol.ReminderFireAttemptPayload) (*protocol.ReminderFireResultPayload, error)
 type ReminderOwnerLifecycleHandler func(ctx context.Context, identity ClientIdentity, payload protocol.DaemonAgentLifecycleRequestPayload) ([]protocol.DaemonAgentLifecycleEvent, map[string]int64, error)
 type ReminderOwnerLifecycleAckHandler func(ctx context.Context, identity ClientIdentity, payload protocol.DaemonAgentLifecycleAckPayload) error
-type ReminderProjectionHandler func(ctx context.Context, identity ClientIdentity, payload protocol.ReminderProjectionRequestPayload) ([]protocol.ReminderProjectionEvent, map[string]int64, error)
+type ReminderProjectionHandler func(ctx context.Context, identity ClientIdentity, payload protocol.ReminderProjectionRequestPayload) ([]protocol.ReminderProjectionEvent, protocol.ReminderProjectionReplayEndPayload, error)
 type ReminderProjectionAckHandler func(ctx context.Context, identity ClientIdentity, payload protocol.ReminderProjectionAckPayload) error
 
 type ReminderOwnerGoneError struct {
@@ -659,6 +659,7 @@ func (c *client) handleReminderSnapshotRequest(raw json.RawMessage) {
 			return
 		}
 		slog.Warn("daemon websocket reminder snapshot failed", "error", err, "daemon_id", c.identity.DaemonID, "agent_id", payload.AgentID)
+		_ = c.conn.Close()
 		return
 	}
 	if snapshot == nil {
@@ -714,7 +715,7 @@ func (c *client) handleReminderProjectionRequest(raw json.RawMessage) {
 		_ = c.conn.Close()
 		return
 	}
-	events, cursors, err := handler(context.Background(), c.identity, payload)
+	events, end, err := handler(context.Background(), c.identity, payload)
 	if err != nil {
 		slog.Warn("daemon websocket reminder projection replay failed", "error", err, "daemon_id", c.identity.DaemonID)
 		_ = c.conn.Close()
@@ -725,7 +726,7 @@ func (c *client) handleReminderProjectionRequest(raw json.RawMessage) {
 			return
 		}
 	}
-	_ = c.sendReminderFrame(protocol.EventReminderProjectionEnd, protocol.ReminderProjectionReplayEndPayload{RuntimeCursors: cursors})
+	_ = c.sendReminderFrame(protocol.EventReminderProjectionEnd, end)
 }
 
 func (c *client) handleReminderProjectionAck(raw json.RawMessage) {

@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 const reminderAgentStateFile = "reminder_agents.json"
@@ -168,6 +170,29 @@ func (m *reminderAgentManager) residentAgentIDs() []string {
 	m.mu.Unlock()
 	sort.Strings(ids)
 	return ids
+}
+
+func (m *reminderAgentManager) runtimeResidencies() map[string][]protocol.ReminderRuntimeResidency {
+	result := make(map[string][]protocol.ReminderRuntimeResidency)
+	if m == nil {
+		return result
+	}
+	m.mu.Lock()
+	for _, entry := range m.agents {
+		if entry.RuntimeID == "" || entry.AgentID == "" || entry.PlacementGeneration < 1 {
+			continue
+		}
+		result[entry.RuntimeID] = append(result[entry.RuntimeID], protocol.ReminderRuntimeResidency{
+			AgentID: entry.AgentID, PlacementGeneration: entry.PlacementGeneration,
+		})
+	}
+	m.mu.Unlock()
+	for runtimeID := range result {
+		sort.Slice(result[runtimeID], func(i, j int) bool {
+			return result[runtimeID][i].AgentID < result[runtimeID][j].AgentID
+		})
+	}
+	return result
 }
 
 func (m *reminderAgentManager) get(agentID string) (reminderAgentResidency, bool) {

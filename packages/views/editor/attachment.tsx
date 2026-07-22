@@ -346,12 +346,12 @@ export function Attachment({
     handleDownload();
   };
 
-  // LRM-216 / LRM-217 — narrow/mobile: compact info card (no inline preview)
-  // → fullscreen shell with preview pane (HTML / image / PDF) or「无法预览」.
+  // LRM-216 / LRM-219 — narrow/mobile: images get stream thumb → fullscreen
+  // big image; other files stay compact card → fullscreen filename + Download
+  // only (no HTML/PDF content preview).
   if (isMobile) {
     const canOpen = !!state.url || !!state.attachmentId;
-    const previewMode =
-      kind === "html" || kind === "image" || kind === "pdf" ? kind : "none";
+    const previewMode = kind === "image" ? "image" : "none";
     return (
       <MobileFileAttachment
         filename={state.filename}

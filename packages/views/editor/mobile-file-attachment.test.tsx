@@ -1,6 +1,9 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
-import { MobileFileAttachment } from "./mobile-file-attachment";
+import {
+  MobileFileAttachment,
+  resolvePreviewMode,
+} from "./mobile-file-attachment";
 
 vi.mock("../i18n", () => ({
   useT: () => ({
@@ -34,25 +37,54 @@ vi.mock("../i18n", () => ({
       };
       const raw = sel(dict as never);
       return typeof raw === "string"
-        ? raw.replace("{{filename}}", "lrm201-tall-preview.html")
+        ? raw.replace("{{filename}}", "shot.png")
         : raw;
     },
   }),
 }));
 
-vi.mock("./html-preview-body", () => ({
-  HtmlPreviewBody: (props: { title: string }) => (
-    <div data-testid="mobile-file-preview-html-body">{props.title}</div>
-  ),
-}));
+describe("resolvePreviewMode (LRM-219)", () => {
+  it("only images preview; html/pdf narrow to none", () => {
+    expect(resolvePreviewMode("image", "image/png", "a.png")).toBe("image");
+    expect(resolvePreviewMode(undefined, "image/jpeg", "a.jpg")).toBe("image");
+    expect(resolvePreviewMode("html", "text/html", "a.html")).toBe("none");
+    expect(resolvePreviewMode("pdf", "application/pdf", "a.pdf")).toBe("none");
+    expect(resolvePreviewMode(undefined, "application/zip", "a.zip")).toBe(
+      "none",
+    );
+  });
+});
 
-describe("MobileFileAttachment (LRM-216 Slack chrome)", () => {
+describe("MobileFileAttachment (LRM-219 image-only preview)", () => {
   beforeEach(() => {
     document.body.innerHTML = "";
   });
   afterEach(() => cleanup());
 
-  it("renders a compact entry with type · size subtitle and no stream iframe", () => {
+  it("image: stream thumbnail, opens fullscreen big image", () => {
+    const onDownload = vi.fn();
+    render(
+      <MobileFileAttachment
+        filename="shot.png"
+        contentType="image/png"
+        sizeBytes={1200}
+        previewMode="image"
+        previewUrl="https://cdn.example/shot.png"
+        onDownload={onDownload}
+      />,
+    );
+    expect(screen.getByTestId("mobile-file-stream-thumb")).toBeTruthy();
+    expect(screen.queryByText("shot.png")).toBeNull(); // filename not on compact card
+    fireEvent.click(screen.getByTestId("mobile-file-entry"));
+    expect(screen.getByTestId("mobile-file-detail")).toBeTruthy();
+    expect(screen.getByTestId("mobile-file-preview-image")).toBeTruthy();
+    expect(screen.queryByTestId("mobile-file-preview-empty")).toBeNull();
+    expect(screen.getAllByTestId("mobile-file-detail-download")).toHaveLength(1);
+    fireEvent.click(screen.getByTestId("mobile-file-detail-download"));
+    expect(onDownload).toHaveBeenCalled();
+  });
+
+  it("html: compact card, no content preview (empty pane)", () => {
     render(
       <MobileFileAttachment
         filename="lrm201-tall-preview.html"
@@ -60,54 +92,22 @@ describe("MobileFileAttachment (LRM-216 Slack chrome)", () => {
         sizeBytes={606}
         previewMode="html"
         attachmentId="att-1"
+        previewUrl="https://cdn.example/a.html"
         onDownload={() => {}}
       />,
     );
-    expect(screen.getByTestId("mobile-file-entry")).toBeTruthy();
-    expect(screen.getByText("lrm201-tall-preview.html")).toBeTruthy();
-    expect(screen.getByText(/Code · /)).toBeTruthy();
-    expect(document.querySelector("iframe")).toBeNull();
-  });
-
-  it("opens Slack chrome: filename + one Download, preview, no meta/footer buttons", () => {
-    const onDownload = vi.fn();
-    render(
-      <MobileFileAttachment
-        filename="lrm201-tall-preview.html"
-        contentType="text/html; charset=utf-8"
-        sizeBytes={606}
-        createdAt="2026-07-21T14:45:23Z"
-        uploaderName="Frank An"
-        previewMode="html"
-        attachmentId="att-1"
-        onDownload={onDownload}
-        onOpen={() => {}}
-      />,
+    expect(screen.getByTestId("mobile-file-entry").getAttribute("data-preview")).toBe(
+      "compact-card",
     );
+    expect(screen.getByText("lrm201-tall-preview.html")).toBeTruthy();
+    expect(document.querySelector("iframe")).toBeNull();
     fireEvent.click(screen.getByTestId("mobile-file-entry"));
-    expect(screen.getByTestId("mobile-file-detail")).toBeTruthy();
-    expect(screen.getByTestId("mobile-file-preview-pane")).toBeTruthy();
-    expect(screen.getByTestId("mobile-file-preview-html-body")).toBeTruthy();
-
-    // One download only (nav)
-    expect(screen.getAllByTestId("mobile-file-detail-download")).toHaveLength(1);
-    expect(screen.queryByTestId("mobile-file-detail-open")).toBeNull();
-    expect(screen.queryByText("Frank An")).toBeNull();
-    expect(screen.queryByText(/Sender|发送者/)).toBeNull();
-
-    // Nav shows filename, not type·size subtitle
-    const detail = screen.getByTestId("mobile-file-detail");
-    expect(detail.textContent).toContain("lrm201-tall-preview.html");
-    expect(detail.querySelector(".text-muted-foreground")).toBeNull();
-
-    fireEvent.click(screen.getByTestId("mobile-file-detail-download"));
-    expect(onDownload).toHaveBeenCalled();
-
-    fireEvent.click(screen.getByTestId("mobile-file-detail-back"));
-    expect(screen.queryByTestId("mobile-file-detail")).toBeNull();
+    expect(screen.getByTestId("mobile-file-preview-empty")).toBeTruthy();
+    expect(screen.queryByTestId("mobile-file-preview-html-body")).toBeNull();
+    expect(screen.queryByTestId("mobile-file-preview-image")).toBeNull();
   });
 
-  it("shows cannot-preview placeholder for other types", () => {
+  it("zip: compact card → fullscreen filename + Download only", () => {
     render(
       <MobileFileAttachment
         filename="archive.zip"
@@ -117,17 +117,20 @@ describe("MobileFileAttachment (LRM-216 Slack chrome)", () => {
       />,
     );
     fireEvent.click(screen.getByTestId("mobile-file-entry"));
-    expect(screen.getByTestId("mobile-file-preview-unavailable")).toBeTruthy();
-    expect(screen.getByText("Can't preview")).toBeTruthy();
+    expect(screen.getByTestId("mobile-file-preview-empty")).toBeTruthy();
+    expect(screen.queryByText("Can't preview")).toBeNull();
     expect(screen.getByTestId("mobile-file-detail-download")).toBeTruthy();
+    const detail = screen.getByTestId("mobile-file-detail");
+    expect(detail.textContent).toContain("archive.zip");
   });
 
   it("does not open detail when not openable", () => {
     render(
       <MobileFileAttachment
-        filename="gone.html"
-        contentType="text/html"
+        filename="gone.png"
+        contentType="image/png"
         openable={false}
+        previewUrl="https://cdn.example/gone.png"
         onDownload={() => {}}
       />,
     );

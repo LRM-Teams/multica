@@ -703,8 +703,8 @@ function MessageRowsSkeleton() {
   ];
   return (
     <div className="space-y-1.5" aria-hidden="true" data-testid="message-rows-skeleton">
-      {rows.map((widths, index) => (
-        <div key={index} className="grid grid-cols-[28px_minmax(0,1fr)] gap-2.5 px-2 py-1.5 md:px-5">
+      {rows.map((widths) => (
+        <div key={widths.join("-")} className="grid grid-cols-[28px_minmax(0,1fr)] gap-2.5 px-2 py-1.5 md:px-5">
           <Skeleton className="size-8 shrink-0 rounded-full opacity-60" />
           <div className="min-w-0 space-y-2">
             <Skeleton className={`${widths[0]} h-3 max-w-full opacity-50`} />

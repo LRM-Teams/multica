@@ -20,22 +20,20 @@ import { useT } from "../../i18n";
  * must patch BOTH caches so picker chips refresh without a full page reload.
  *
  * Returns `handleUpdate(id, data)`:
- *  - Optimistically patches the matching agent in the cached
- *    `workspaceKeys.agents(wsId)` list AND `agentDetailKeys.detail(wsId, id)`
- *    BEFORE the network round-trip so the picker chips flip to the new value
- *    immediately on click, instead of waiting 0.5-2s for the API response +
- *    invalidate + refetch.
+ *  - Cancels in-flight list/detail fetches, then optimistically patches
+ *    `workspaceKeys.agents(wsId)` AND `agentDetailKeys.detail(wsId, id)`
+ *    BEFORE the network round-trip so the picker chips flip immediately.
  *    The request's `username` key maps to the cached `Agent.name` (the
  *    @handle the UI reads), not a literal `agent.username`.
- *  - On success: `api.updateAgent` + write the server's canonical values for
- *    the touched fields back into both caches + invalidate + success toast.
- *  - On error: rolls back ONLY the fields THIS call wrote (leaving any
- *    other concurrently-mutated fields untouched), invalidates so the cache
- *    converges with the server, shows an error toast, and rethrows so the
- *    caller's own catch (e.g. an edit dialog) can react. A whole-list
- *    snapshot rollback would clobber a concurrent successful mutation if the
- *    failing call resolves last (e.g. flipping visibility then runtime
- *    simultaneously and only the visibility PATCH fails).
+ *  - On success: write the server's canonical touched fields into both
+ *    caches. Detail uses the PATCH payload as authority — we do NOT
+ *    invalidate+refetch detail (that race can briefly restore the pre-PATCH
+ *    agent and leave Runtime Config stale until a hard reload — LRM-296).
+ *    List is still invalidated so directory consumers converge.
+ *  - On error: rolls back ONLY the fields THIS call wrote, invalidates so
+ *    the cache converges with the server, shows an error toast, and
+ *    rethrows so the caller's own catch can react. Never silently keep
+ *    pre-mutation values without an error (LRM-238).
  */
 export function useUpdateAgent(wsId: string) {
   const qc = useQueryClient();
@@ -81,6 +79,12 @@ export function useUpdateAgent(wsId: string) {
       );
     };
 
+    // Drop in-flight GET /agents/:id so a late response cannot overwrite the
+    // optimistic / PATCH write (toast success + stale Runtime chip). Fire-and-
+    // forget so the chip flip stays synchronous for the click frame.
+    void qc.cancelQueries({ queryKey: listKey });
+    void qc.cancelQueries({ queryKey: detailKey });
+
     patchList(optimistic);
     patchDetail(optimistic);
     try {
@@ -94,10 +98,15 @@ export function useUpdateAgent(wsId: string) {
       const updated = await api.updateAgent(id, data as UpdateAgentRequest);
       const serverPatch: Record<string, unknown> = {};
       for (const field of Object.keys(optimistic)) {
-        serverPatch[field] = (updated as unknown as Record<string, unknown>)[
+        const serverValue = (updated as unknown as Record<string, unknown>)[
           field
         ];
+        // Prefer server echo; if a field is omitted, keep the optimistic
+        // value rather than writing `undefined` over a good chip.
+        serverPatch[field] =
+          serverValue !== undefined ? serverValue : optimistic[field];
       }
+      await qc.cancelQueries({ queryKey: detailKey });
       patchList(serverPatch);
       // Detail cache may be empty for list-only surfaces — seed it from the
       // server payload so a later open of the profile card is already fresh.
@@ -106,8 +115,8 @@ export function useUpdateAgent(wsId: string) {
           ? ({ ...old, ...serverPatch } as Agent)
           : ({ ...updated } as Agent),
       );
+      // List directory can refetch; panel body must NOT — PATCH is authority.
       qc.invalidateQueries({ queryKey: listKey });
-      qc.invalidateQueries({ queryKey: detailKey });
       toast.success(t(($) => $.detail.agent_updated_toast));
     } catch (e) {
       if (prevAgentFromList || prevAgentFromDetail) {

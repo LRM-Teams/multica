@@ -193,4 +193,41 @@ describe("useUpdateAgent — agent detail cache (LRM-292 profile / panel)", () =
     // Seeds detail from the server payload so a later profile open is fresh.
     expect(cachedDetail(qc, "agent-1")!.runtime_id).toBe("rt-2");
   });
+
+  it("keeps PATCH detail write when a late GET would have restored the old runtime", async () => {
+    const { qc, result } = setup([makeAgent()]);
+    mockUpdateAgent.mockResolvedValue(makeAgent({ runtime_id: "rt-2" }));
+
+    // Simulate an in-flight GetAgent that resolves AFTER the mutation with
+    // stale pre-PATCH data (the toast-success / chip-stale race in LRM-296).
+    const lateGet = qc.fetchQuery({
+      queryKey: agentDetailKeys.detail(WS, "agent-1"),
+      queryFn: async () => {
+        await new Promise((r) => setTimeout(r, 30));
+        return makeAgent({ runtime_id: "rt-1" });
+      },
+    });
+
+    await result.current("agent-1", { runtime_id: "rt-2" });
+    await lateGet.catch(() => undefined);
+
+    expect(cachedDetail(qc, "agent-1")!.runtime_id).toBe("rt-2");
+  });
+
+  it("does not leave undefined over a good runtime when the PATCH omits the field", async () => {
+    const { qc, result } = setup([makeAgent()]);
+    // Server echoes agent without runtime_id key — must not wipe the chip.
+    mockUpdateAgent.mockResolvedValue(
+      makeAgent({ runtime_id: undefined as unknown as string }),
+    );
+    // Force the returned object to omit runtime_id entirely.
+    mockUpdateAgent.mockResolvedValue({
+      ...makeAgent(),
+      runtime_id: undefined,
+    });
+
+    await result.current("agent-1", { runtime_id: "rt-2" });
+
+    expect(cachedDetail(qc, "agent-1")!.runtime_id).toBe("rt-2");
+  });
 });

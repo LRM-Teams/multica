@@ -198,6 +198,7 @@ import {
   ConversationHeader,
   ReadOnlyConversationBanner,
 } from "./conversation-surface";
+import { filterComposerStripTasks } from "./conversation-activity-tasks";
 import { DmConversationRow, DmList, useDmRowActions } from "./dm-list";
 import { DmConversation } from "./dm-conversation";
 import { type MentionPreviewResolver } from "./message-preview";
@@ -441,7 +442,7 @@ export function ConversationActivityStrip({
   // collapse behind a single count + chevron.
   const stoppableTasks = useMemo(() => {
     const next: ChannelActiveTask[] = [];
-    for (const task of tasks) {
+    for (const task of filterComposerStripTasks(tasks)) {
       if (isTerminalChannelActiveTask(task)) continue;
       next.push(task);
     }

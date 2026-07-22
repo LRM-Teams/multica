@@ -335,9 +335,11 @@ export function AgentCreatePanel({
       setLastProjectId(projectId);
       clearPrompt();
       setLastMode("agent");
-      toast.success(t(($) => $.create_issue.agent.toast_sent), {
-        duration: 4000,
-      });
+      if (!source?.channel_id) {
+        toast.success(t(($) => $.create_issue.agent.toast_sent), {
+          duration: 4000,
+        });
+      }
       if (keepOpen) {
         // Stay open for continuous creation — clear the editor so the
         // user can immediately type the next prompt.

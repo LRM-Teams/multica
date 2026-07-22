@@ -281,6 +281,13 @@ export interface ChannelActiveTask {
   agent_name: string;
   task_id: string;
   status: string;
+  /**
+   * Composer-strip discriminator (LRM-287). `reply` = in-conversation agent
+   * wake; `quick_create` / `issue_create` must not render above the composer.
+   */
+  kind?: "reply" | "quick_create" | "issue_create" | string;
+  /** Inbox wake reason when the row comes from agent_inbox_event. */
+  reason?: string;
   outcome?: "replied" | "no_reply" | "failed" | string | null;
   retryable?: boolean | null;
   inbox_event_id?: string | null;

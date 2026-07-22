@@ -183,6 +183,7 @@ interface SearchResults {
 
 export function SearchCommand() {
   const { t } = useT("search");
+  const { t: tChannels } = useT("channels");
   const navPages = useMemo<NavPage[]>(
     () => [
       { key: "inbox", label: t(($) => $.pages.inbox), icon: Inbox, keywords: ["inbox", "notifications", "收件箱"] },
@@ -616,6 +617,8 @@ export function SearchCommand() {
                 </div>
                 {filteredMembers.map((member) => {
                   const presentation = resolveActorIdentityPresentation(member, member.name);
+                  const showMutedRole =
+                    member.role === "owner" || member.role === "admin";
                   return (
                   <CommandPrimitive.Item
                     key={member.user_id}
@@ -633,6 +636,14 @@ export function SearchCommand() {
                     <div className="min-w-0 flex-1">
                       <div className="truncate">
                         <HighlightText text={presentation.displayName} query={query} />
+                        {showMutedRole ? (
+                          <span
+                            data-testid="search-member-role"
+                            className="ml-1.5 text-[11px] font-normal text-muted-foreground"
+                          >
+                            {tChannels(($) => $.profile_popover.role[member.role])}
+                          </span>
+                        ) : null}
                       </div>
                       <div className="truncate text-xs text-muted-foreground">
                         {presentation.showHandleLabel && presentation.handleLabel ? (

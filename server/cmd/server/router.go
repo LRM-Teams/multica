@@ -1242,6 +1242,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				})
 			})
 
+			// Activity (member feed: related threads + inbox)
+			r.Route("/api/activity", func(r chi.Router) {
+				r.Get("/", h.ListUserActivity)
+				r.Post("/mark-all-read", h.MarkAllUserActivityRead)
+			})
+
 			// Inbox
 			r.Route("/api/inbox", func(r chi.Router) {
 				r.Get("/", h.ListInbox)

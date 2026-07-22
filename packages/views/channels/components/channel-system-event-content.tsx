@@ -3,7 +3,7 @@
 import { Fragment, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
+import { memberProfileOptions } from "@multica/core/workspace/queries";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { ActorMention } from "../../common/markdown";
@@ -71,44 +71,54 @@ function interpolateSlots(
 
 export function MemberSystemEventContent({ event }: { event: MemberSystemEvent }): ReactNode {
   const { t } = useT("channels");
-  const { getActorName } = useActorName();
-  const wsId = useWorkspaceId();
-  const { data: agents = [] } = useQuery(agentListOptions(wsId));
-  const { data: members = [] } = useQuery(memberListOptions(wsId));
 
-  const resolveActor = (
-    id: string,
-    factType?: string,
-    factHandle?: string,
-    fallbackName?: string,
-  ): ResolvedActor => {
-    // The canonical handle wins over the display-name fallback: it's a stable
-    // routable identity, while the display name is just prose the backend
-    // happened to send with this particular event.
-    const fallback = factHandle ?? fallbackName ?? id;
-    // The typed fact is authoritative even when a former member has fallen out
-    // of the live list. `human` maps to the standard member mention route.
-    if (factType === "human" || factType === "agent") {
-      const type = factType === "agent" ? "agent" : "member";
-      return { type, id, displayName: getActorName(type, id, fallback) };
-    }
-    // Older bridge rows do not carry actor_type. Resolve only from identity
-    // caches, never from prose; a real cache miss stays a non-interactive label.
-    const agent = agents.find((a) => a.id === id);
-    if (agent) return { type: "agent", id, displayName: getActorName("agent", id, fallback) };
-    const member = members.find((m) => m.user_id === id);
-    if (member) return { type: "member", id, displayName: getActorName("member", id, fallback) };
-    return { type: null, id, displayName: fallback };
-  };
+  // Prefer typed facts; older bridge rows may omit type — probe member then agent.
+  const resolvedTargetType = toActorMentionType(event.targetType);
+  const targetAsMember = useResolvedActorDisplayName(
+    event.targetId,
+    resolvedTargetType ?? "member",
+  );
+  const targetAsAgent = useResolvedActorDisplayName(
+    resolvedTargetType ? undefined : event.targetId,
+    resolvedTargetType ? null : "agent",
+  );
+  const targetDisplayName = resolvedTargetType
+    ? targetAsMember
+    : (targetAsMember ?? targetAsAgent);
+  const targetMentionType: "agent" | "member" | null =
+    resolvedTargetType ?? (targetAsAgent && !targetAsMember ? "agent" : targetAsMember ? "member" : null);
+
+  const resolvedActorType = toActorMentionType(event.actorType);
+  const actorAsMember = useResolvedActorDisplayName(
+    event.actorId,
+    resolvedActorType ?? "member",
+  );
+  const actorAsAgent = useResolvedActorDisplayName(
+    resolvedActorType ? undefined : event.actorId,
+    resolvedActorType ? null : "agent",
+  );
+  const actorDisplayName = resolvedActorType
+    ? actorAsMember
+    : (actorAsMember ?? actorAsAgent);
+  const actorMentionType: "agent" | "member" | null =
+    resolvedActorType ?? (actorAsAgent && !actorAsMember ? "agent" : actorAsMember ? "member" : null);
 
   const target = (
     <SystemEventActorToken
-      actor={resolveActor(event.targetId, event.targetType, event.targetHandle, event.targetName)}
+      actor={{
+        type: targetMentionType,
+        id: event.targetId,
+        displayName: targetDisplayName ?? event.targetId,
+      }}
     />
   );
   const actor = event.actorId ? (
     <SystemEventActorToken
-      actor={resolveActor(event.actorId, event.actorType, event.actorHandle, event.actorName)}
+      actor={{
+        type: actorMentionType,
+        id: event.actorId,
+        displayName: actorDisplayName ?? event.actorId,
+      }}
     />
   ) : undefined;
 
@@ -170,6 +180,47 @@ function toActorMentionType(type: string | undefined): "agent" | "member" | null
 }
 
 /**
+ * LRM-281 / LRM-238: resolve display names from the live actor directory
+ * (`useActorName` / ListAgents+members) or a dedicated member-profile fetch
+ * (DB). Never use emit-time actor_name / target_name as a silent fallback —
+ * ListAgents hides group managers (LRM-233), so denormalized params would
+ * paper over an incomplete directory.
+ *
+ * Prefer `getActorName` (same cache the rest of chat uses). Only when that
+ * returns the honest unknown sentinel do we hit `GET /member-profiles`.
+ */
+function useResolvedActorDisplayName(
+  actorId: string | undefined,
+  mentionType: "agent" | "member" | null,
+): string | null {
+  const { getActorName } = useActorName();
+  const fromDirectory =
+    actorId && mentionType
+      ? (() => {
+          // No fallback arg — a miss must not invent a display name.
+          const name = getActorName(mentionType, actorId).trim();
+          return name && name !== "Unknown Agent" && name !== "Unknown" ? name : null;
+        })()
+      : null;
+
+  const wsId = useWorkspaceId();
+  const profileType = mentionType === "member" ? "user" : "agent";
+  const { data: profile } = useQuery({
+    ...memberProfileOptions(wsId, profileType, actorId ?? ""),
+    enabled: !!wsId && !!actorId && mentionType != null && !fromDirectory,
+  });
+
+  if (!actorId || !mentionType) return null;
+  if (fromDirectory) return fromDirectory;
+  if (profile) {
+    const name = (profile.display_name || profile.name || "").trim();
+    return name || null;
+  }
+  // Pending / error: do not invent display copy from emit-time params.
+  return null;
+}
+
+/**
  * Renders an issue-lifecycle backflow row (#497, #603) as the frozen item #7
  * copy: "任务" only, a localized action verb (标记为处理中 / 提交审核 / 完成任务 /
  * 指派给 X), and the issue identifier as its anchored reference. A structured
@@ -185,21 +236,26 @@ export function IssueSystemEventContent({
   sourceMessageId?: string;
 }): ReactNode {
   const { t } = useT("channels");
-  const { getActorName } = useActorName();
 
   const actorType = toActorMentionType(event.actorType);
-  // Prefer live directory name; fall back to emit-time facts. Group managers
-  // (贝克汉姆) are hidden from ListAgents (LRM-233), so without actor_name the
-  // token would render as "@Unknown Agent".
-  const actorFallback = event.actorName ?? event.actorHandle;
+  const actorDisplayName = useResolvedActorDisplayName(event.actorId, actorType);
+  const targetMentionType = toActorMentionType(event.targetType);
+  const targetDisplayName = useResolvedActorDisplayName(event.targetId, targetMentionType);
+
   const actor =
-    event.actorId && actorType ? (
+    event.actorId && actorType && actorDisplayName ? (
       <SystemEventActorToken
         actor={{
           type: actorType,
           id: event.actorId,
-          displayName: getActorName(actorType, event.actorId, actorFallback),
+          displayName: actorDisplayName,
         }}
+      />
+    ) : event.actorId && actorType ? (
+      // Profile/list still loading or failed — keep a non-fake typed token with
+      // the stable id until the DB-backed name arrives (never emit-time name).
+      <SystemEventActorToken
+        actor={{ type: actorType, id: event.actorId, displayName: event.actorId }}
       />
     ) : (
       t(($) => $.message.system_event.issue.actor_system)
@@ -222,14 +278,11 @@ export function IssueSystemEventContent({
     });
   }
 
-  // Assignment: resolve the assignee's plain name live (falling back to the
-  // backend-supplied handle/name), then to a name-less "changed assignee" copy.
+  // Assignment: resolve assignee from directory / member-profile (DB), not
+  // emit-time target_name. Missing name → name-less "changed assignee" copy.
   if (event.event === ISSUE_EVENTS.assigned) {
-    const targetName = event.targetId
-      ? getActorName(event.targetType === "agent" ? "agent" : "member", event.targetId, event.targetName)
-      : event.targetName ?? event.targetHandle;
-    const template = targetName
-      ? t(($) => $.message.system_event.issue.assigned, { target: targetName })
+    const template = targetDisplayName
+      ? t(($) => $.message.system_event.issue.assigned, { target: targetDisplayName })
       : t(($) => $.message.system_event.issue.assigned_unknown);
     return interpolateIssueSlots(template, { actor, issue: issueToken });
   }
@@ -310,22 +363,26 @@ function interpolateProjectSlots(
  */
 export function ProjectSystemEventContent({ event }: { event: ProjectSystemEvent }): ReactNode {
   const { t } = useT("channels");
-  const { getActorName } = useActorName();
   const paths = useWorkspacePaths();
   const navigation = useOptionalNavigation();
 
   const actorType = toActorMentionType(event.actorType);
+  const actorDisplayName = useResolvedActorDisplayName(event.actorId, actorType);
   const actor =
-    event.actorId && actorType ? (
+    event.actorId && actorType && actorDisplayName ? (
       <SystemEventActorToken
         actor={{
           type: actorType,
           id: event.actorId,
-          displayName: getActorName(actorType, event.actorId, event.actorName),
+          displayName: actorDisplayName,
         }}
       />
+    ) : event.actorId && actorType ? (
+      <SystemEventActorToken
+        actor={{ type: actorType, id: event.actorId, displayName: event.actorId }}
+      />
     ) : (
-      event.actorName ?? t(($) => $.message.system_event.project.actor_system)
+      t(($) => $.message.system_event.project.actor_system)
     );
 
   // A project name → clickable token when we can route to it, else plain text.

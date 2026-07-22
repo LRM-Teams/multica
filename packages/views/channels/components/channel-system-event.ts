@@ -74,7 +74,7 @@ export interface IssueSystemEvent {
   actorType?: string;
   /** Canonical @handle (username). Present on new backflow rows. */
   actorHandle?: string;
-  /** Display name denormalized at emit time (group managers are not in ListAgents). */
+  /** Optional emit-time display name (diagnostics only — FE must not fallback; LRM-281). */
   actorName?: string;
   targetId?: string;
   targetType?: string;

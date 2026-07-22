@@ -146,6 +146,13 @@ vi.mock("../../navigation/app-link", () => ({
 const getActorAvatarUrlMock = vi.fn(
   (_type: string, _id: string): string | null => null,
 );
+// LRM-281 system rows may call useWorkspaceId + useQuery(member-profiles).
+// Layout tests stub the actor directory; give them a stable workspace id so
+// profile resolution does not throw outside a workspace route.
+vi.mock("@multica/core/hooks", () => ({
+  useWorkspaceId: () => "ws-1",
+}));
+
 vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({
     getActorAvatarUrl: getActorAvatarUrlMock,
@@ -1586,7 +1593,10 @@ describe("ChannelMessageBubble", () => {
   });
 
   it("projects an issue-lifecycle status change into the item #7 row with a simple inline time (#497)", () => {
-    render(
+    // QueryClient required: LRM-281 may enable member-profiles useQuery when
+    // the directory misses; Alice is in the stubbed directory so the query
+    // stays disabled, but useQuery still needs a provider.
+    renderWithStickerCatalog(
       <ChannelMessageBubble
         message={makeMessage({
           type: "system",

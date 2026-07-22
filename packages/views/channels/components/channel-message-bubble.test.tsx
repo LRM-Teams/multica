@@ -181,6 +181,10 @@ vi.mock("../../i18n/use-t", () => ({
           sticker_loading: string;
           sticker_failed: string;
           sticker_unavailable: string;
+          attachment_unavailable: string;
+          send_failed: string;
+          retry_send: string;
+          sending: string;
           edit_action: string;
           actions_menu: string;
           delete_action: string;

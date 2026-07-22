@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import type { Channel, ChannelMemberBrief } from "@multica/core/types";
 import { ConversationSidePanelShell } from "../../common/conversation-side-panel-shell";
-import { ChannelGroupAvatar } from "./channel-group-avatar";
+import { ChannelHashMark } from "./channel-hash-mark";
 import { ChannelProjectSettingsPanel } from "./channel-project-settings-panel";
 import { useT } from "../../i18n";
 
@@ -17,10 +17,12 @@ import { useT } from "../../i18n";
  * Only the Project section exists today; future settings (members,
  * integrations, ...) are additional sections in the body, not new header
  * chrome.
+ *
+ * LRM-254: channel landmark is text `#` + name (no member collage).
  */
 export function ChannelSettingsSidePanel({
   channel,
-  members,
+  members: _members,
   wsId,
   projectId,
   onChangeProject,
@@ -44,14 +46,14 @@ export function ChannelSettingsSidePanel({
   const leading = useMemo(
     () => (
       <>
-        <ChannelGroupAvatar members={members} size={32} />
+        <ChannelHashMark size="header" />
         <div className="flex min-w-0 flex-col">
           <p className="min-w-0 truncate text-sm font-semibold">{channel.name}</p>
           <p className="truncate text-xs text-muted-foreground">{settingsLabel}</p>
         </div>
       </>
     ),
-    [members, channel.name, settingsLabel],
+    [channel.name, settingsLabel],
   );
 
   return (

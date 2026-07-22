@@ -181,7 +181,7 @@ import {
 } from "./channel-details-panel";
 import { DeleteChannelDialog } from "./delete-channel-dialog";
 import { ChannelTasksBoard } from "./channel-tasks-board";
-import { ChannelGroupAvatar } from "./channel-group-avatar";
+import { ChannelHashMark } from "./channel-hash-mark";
 import { ThreadPanel } from "./thread-panel";
 import { ComposerAttachmentTray } from "./composer-attachment-tray";
 import { ComposerQuotePreview } from "./message-quote";
@@ -2170,9 +2170,9 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
           <button
             type="button"
             onClick={() => selectChannel(channel.id)}
-            className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 pr-7 text-left"
+            className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 pr-7 text-left"
           >
-            <ChannelGroupAvatar members={channel.members ?? []} size={40} />
+            <ChannelHashMark size="sidebar" />
             <div className="min-w-0 flex-1">
               <div className="flex items-center justify-between gap-2">
                 <span
@@ -2480,9 +2480,9 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                             <button
                               type="button"
                               onClick={() => selectChannel(channel.id)}
-                              className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 pr-7 text-left opacity-60 hover:opacity-100"
+                              className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 pr-7 text-left opacity-60 hover:opacity-100"
                             >
-                              <ChannelGroupAvatar members={channel.members ?? []} size={40} />
+                              <ChannelHashMark size="sidebar" />
                               <div className="min-w-0 flex-1">
                                 <span className="truncate text-sm font-medium text-muted-foreground">
                                   {channel.name}
@@ -2767,7 +2767,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                     <ArrowLeft className="size-5" />
                   </Button>
                 )}
-                <ChannelGroupAvatar members={channelMembers} size={28} />
+                <ChannelHashMark size="header" />
               </>
             }
             title={

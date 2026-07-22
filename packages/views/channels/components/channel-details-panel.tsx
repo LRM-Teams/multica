@@ -10,7 +10,7 @@ import { cn } from "@multica/ui/lib/utils";
 import { ConversationSidePanelShell } from "../../common/conversation-side-panel-shell";
 import { useT } from "../../i18n";
 import { ChannelFilesPanel } from "./channel-files-panel";
-import { ChannelGroupAvatar } from "./channel-group-avatar";
+import { ChannelHashMark } from "./channel-hash-mark";
 import { ChannelProjectSettingsPanel } from "./channel-project-settings-panel";
 import { isConversationMuted } from "./conversation-muted";
 
@@ -27,7 +27,7 @@ export type ChannelDetailsTab = "about" | "members" | "files" | "settings";
  */
 export function ChannelDetailsPanel({
   channel,
-  members,
+  members: _members,
   wsId,
   projectId,
   projectBound,
@@ -181,9 +181,9 @@ export function ChannelDetailsPanel({
         {tab === "about" && (
           <div className="p-4">
             <div className="mb-4 flex items-center gap-3">
-              <ChannelGroupAvatar members={members} size={48} />
+              <ChannelHashMark size="details" />
               <div className="min-w-0">
-                <p className="truncate text-sm font-semibold">#{channel.name}</p>
+                <p className="truncate text-sm font-semibold">{channel.name}</p>
                 <p className="mt-0.5 truncate text-xs text-muted-foreground">
                   {channel.description?.trim()
                     ? channel.description

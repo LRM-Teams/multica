@@ -5,17 +5,12 @@ import type { ChannelMemberBrief } from "@multica/core/types";
 import { ActorAvatar } from "../../common/actor-avatar";
 
 /**
- * WeChat-style composite group avatar: up to 4 members' real, persisted
- * avatars tiled into a single round circle — 1 → full circle, 2 → a
- * centered pair, 3-4 → a 2x2 grid. Members (human or agent) beyond the
- * first 4, in `channel.members`' own order, are dropped — a stable,
- * deterministic selection, not a random sample. Recomputes whenever the
- * member list changes (joins/leaves), since it derives purely from
- * `members`.
+ * Multi-party DM collage only (LRM-254): up to 4 members' avatars tiled into
+ * a round circle — 1 → full circle, 2 → centered pair, 3–4 → 2×2 grid.
+ * Group **channels** use `ChannelHashMark` (text `#` + name), not this.
  *
- * LRM-224: each tile is the identity-first ActorAvatar (sticky cache +
- * directory); `avatar_url` on the member brief only seeds. Missing / failed
- * image → colored glyph (never whole-word text). Empty channel → `#`.
+ * Members beyond the first 4 (stable `members` order) are dropped.
+ * LRM-224: each tile is identity-first ActorAvatar; empty → `#` fallback.
  */
 const MAX_TILES = 4;
 

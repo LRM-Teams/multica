@@ -4,6 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { Agent, UpdateAgentRequest } from "@multica/core/types";
 import { api } from "@multica/core/api";
+import { agentDetailKeys } from "@multica/core/agents";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import { useT } from "../../i18n";
 
@@ -15,30 +16,36 @@ import { useT } from "../../i18n";
  * rollback logic.
  *
  * Returns `handleUpdate(id, data)`:
- *  - Optimistically patches the matching agent in the cached
- *    `workspaceKeys.agents(wsId)` list BEFORE the network round-trip so the
- *    picker chips flip to the new value immediately on click, instead of
- *    waiting 0.5-2s for the API response + invalidate + refetch.
+ *  - Optimistically patches the matching agent in BOTH:
+ *      1. `workspaceKeys.agents(wsId)` list (detail page / directory)
+ *      2. `agentDetailKeys.detail(wsId, id)` single-agent cache
+ *        (profile panel / profile card — LRM-292 body source)
+ *    BEFORE the network round-trip so the picker chips flip to the new
+ *    value immediately on click, instead of waiting 0.5-2s for the API
+ *    response + invalidate + refetch.
  *    The request's `username` key maps to the cached `Agent.name` (the
  *    @handle the UI reads), not a literal `agent.username`.
  *  - On success: `api.updateAgent` + write the server's canonical values for
- *    the touched fields back into the cache + invalidate + success toast.
+ *    the touched fields back into both caches + invalidate both + success toast.
  *  - On error: rolls back ONLY the fields THIS call wrote (leaving any
  *    other concurrently-mutated fields untouched), invalidates so the cache
  *    converges with the server, shows an error toast, and rethrows so the
  *    caller's own catch (e.g. an edit dialog) can react. A whole-list
  *    snapshot rollback would clobber a concurrent successful mutation if the
  *    failing call resolves last (e.g. flipping visibility then runtime
- *    simultaneously and only the visibility PATCH fails).
+ *    simultaneously and only the visibility PATCH fails). Never silently
+ *    keep pre-mutation values without an error (LRM-238 / LRM-296).
  */
 export function useUpdateAgent(wsId: string) {
   const qc = useQueryClient();
   const { t } = useT("agents");
 
   return async (id: string, data: Record<string, unknown>): Promise<void> => {
-    const queryKey = workspaceKeys.agents(wsId);
-    const prevAgents = qc.getQueryData<Agent[]>(queryKey);
+    const listKey = workspaceKeys.agents(wsId);
+    const detailKey = agentDetailKeys.detail(wsId, id);
+    const prevAgents = qc.getQueryData<Agent[]>(listKey);
     const prevAgent = prevAgents?.find((a) => a.id === id);
+    const prevDetail = qc.getQueryData<Agent>(detailKey);
 
     // Request keys are API field names; the cached `Agent` is keyed by its
     // OWN field names, which are 1:1 EXCEPT for the @handle: the request sends
@@ -50,19 +57,33 @@ export function useUpdateAgent(wsId: string) {
     // flash), and reverting the WRONG field if the update fails.
     const cacheField = (key: string) => (key === "username" ? "name" : key);
     const optimistic: Record<string, unknown> = {};
-    const prevFields: Record<string, unknown> = {};
+    const prevListFields: Record<string, unknown> = {};
+    const prevDetailFields: Record<string, unknown> = {};
     for (const key of Object.keys(data)) {
       const field = cacheField(key);
       optimistic[field] = data[key];
       if (prevAgent) {
-        prevFields[field] = (prevAgent as unknown as Record<string, unknown>)[
+        prevListFields[field] = (prevAgent as unknown as Record<string, unknown>)[
           field
         ];
       }
+      if (prevDetail) {
+        prevDetailFields[field] = (
+          prevDetail as unknown as Record<string, unknown>
+        )[field];
+      }
     }
 
-    qc.setQueryData<Agent[]>(queryKey, (old) =>
-      old?.map((a) => (a.id === id ? ({ ...a, ...optimistic } as Agent) : a)),
+    const patchAgent = (agent: Agent, patch: Record<string, unknown>): Agent =>
+      ({ ...agent, ...patch }) as Agent;
+
+    qc.setQueryData<Agent[]>(listKey, (old) =>
+      old?.map((a) => (a.id === id ? patchAgent(a, optimistic) : a)),
+    );
+    // Profile panel / card body is `agentDetailOptions` (LRM-292), not the
+    // list — patch only when present so we never invent a partial Agent.
+    qc.setQueryData<Agent>(detailKey, (old) =>
+      old ? patchAgent(old, optimistic) : old,
     );
     try {
       // The server returns the persisted `Agent`; write back its canonical
@@ -73,29 +94,36 @@ export function useUpdateAgent(wsId: string) {
       // are patched (not the whole agent) so a concurrent successful mutation
       // to a DIFFERENT field on the same agent is never clobbered.
       const updated = await api.updateAgent(id, data as UpdateAgentRequest);
-      qc.setQueryData<Agent[]>(queryKey, (old) =>
-        old?.map((a) => {
-          if (a.id !== id) return a;
-          const serverPatch: Record<string, unknown> = {};
-          for (const field of Object.keys(optimistic)) {
-            serverPatch[field] = (
-              updated as unknown as Record<string, unknown>
-            )[field];
-          }
-          return { ...a, ...serverPatch } as Agent;
-        }),
+      const serverPatch: Record<string, unknown> = {};
+      for (const field of Object.keys(optimistic)) {
+        serverPatch[field] = (updated as unknown as Record<string, unknown>)[
+          field
+        ];
+      }
+      qc.setQueryData<Agent[]>(listKey, (old) =>
+        old?.map((a) => (a.id === id ? patchAgent(a, serverPatch) : a)),
       );
-      qc.invalidateQueries({ queryKey });
+      qc.setQueryData<Agent>(detailKey, (old) =>
+        old ? patchAgent(old, serverPatch) : old,
+      );
+      qc.invalidateQueries({ queryKey: listKey });
+      qc.invalidateQueries({ queryKey: detailKey });
       toast.success(t(($) => $.detail.agent_updated_toast));
     } catch (e) {
       if (prevAgent) {
-        qc.setQueryData<Agent[]>(queryKey, (old) =>
+        qc.setQueryData<Agent[]>(listKey, (old) =>
           old?.map((a) =>
-            a.id === id ? ({ ...a, ...prevFields } as Agent) : a,
+            a.id === id ? patchAgent(a, prevListFields) : a,
           ),
         );
       }
-      qc.invalidateQueries({ queryKey });
+      if (prevDetail) {
+        qc.setQueryData<Agent>(detailKey, (old) =>
+          old ? patchAgent(old, prevDetailFields) : old,
+        );
+      }
+      qc.invalidateQueries({ queryKey: listKey });
+      qc.invalidateQueries({ queryKey: detailKey });
       toast.error(
         e instanceof Error ? e.message : t(($) => $.detail.update_failed_toast),
       );

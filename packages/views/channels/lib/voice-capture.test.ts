@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { voiceCaptureUnavailableReason } from "./voice-input-button";
+import { voiceCaptureUnavailableReason } from "./voice-capture";
 
 const supported = {
   secureContext: true,

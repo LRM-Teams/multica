@@ -61,6 +61,11 @@ Evidence:
 - Server inspection remained read-only. The running backend logged no voice-provider failures; its image is the merged voice feature SHA.
 - `leagent.me` remains unusable externally because Tencent redirects HTTP to its web-block page and closes HTTPS before Caddy. The application now reports this condition accurately, but microphone capture cannot pass a real-browser deployment check until a trusted HTTPS entrypoint exists.
 
+CI follow-up:
+
+- The first final-SHA frontend job stopped at React Doctor before the normal build because `voiceCaptureUnavailableReason` was exported from the React component file. This would force Fast Refresh to reload component state during development.
+- Moved the pure capability detector and its tests into `channels/lib/voice-capture.ts`; the component file now exports only the component/type contract expected by the existing codebase.
+
 ## Step 5 — Push and open a PR against `dev`
 
 Status: complete

@@ -15,18 +15,20 @@ var reminderCmd = &cobra.Command{
 	Short: "Schedule and manage future agent self-wakes",
 }
 
-var reminderScheduleCmd = &cobra.Command{Use: "schedule", Short: "Schedule a one-shot self-wake", RunE: runReminderSchedule}
+var reminderScheduleCmd = &cobra.Command{Use: "schedule", Short: "Schedule a self-wake", RunE: runReminderSchedule}
 var reminderListCmd = &cobra.Command{Use: "list", Short: "List your reminders", RunE: runReminderList}
 var reminderSnoozeCmd = &cobra.Command{Use: "snooze", Short: "Snooze a reminder", RunE: runReminderSnooze}
 var reminderUpdateCmd = &cobra.Command{Use: "update", Short: "Update a scheduled reminder", RunE: runReminderUpdate}
 var reminderCancelCmd = &cobra.Command{Use: "cancel", Short: "Cancel a scheduled reminder", RunE: runReminderCancel}
+var reminderLogCmd = &cobra.Command{Use: "log", Short: "Show a reminder's immutable lifecycle log", RunE: runReminderLog}
 
 func init() {
-	reminderCmd.AddCommand(reminderScheduleCmd, reminderListCmd, reminderSnoozeCmd, reminderUpdateCmd, reminderCancelCmd)
+	reminderCmd.AddCommand(reminderScheduleCmd, reminderListCmd, reminderSnoozeCmd, reminderUpdateCmd, reminderCancelCmd, reminderLogCmd)
 
 	reminderScheduleCmd.Flags().String("title", "", "Reminder title")
 	reminderScheduleCmd.Flags().Int64("delay-seconds", 0, "Delay before waking (60 seconds to 90 days)")
 	reminderScheduleCmd.Flags().String("fire-at", "", "Absolute RFC3339 wake time")
+	reminderScheduleCmd.Flags().String("repeat", "", "Recurring rule: every:Nm|Nh|Nd, daily@HH:MM, or weekly:days@HH:MM")
 	reminderScheduleCmd.Flags().String("message-id", "", "Anchor channel message ID (defaults to current trigger)")
 	reminderScheduleCmd.Flags().String("output", "json", "Output format: json")
 	_ = reminderScheduleCmd.MarkFlagRequired("title")
@@ -34,7 +36,7 @@ func init() {
 	reminderListCmd.Flags().String("status", "active", "Filter: active, scheduled, firing, fired, cancelled, or all")
 	reminderListCmd.Flags().String("output", "json", "Output format: json")
 
-	for _, cmd := range []*cobra.Command{reminderSnoozeCmd, reminderUpdateCmd, reminderCancelCmd} {
+	for _, cmd := range []*cobra.Command{reminderSnoozeCmd, reminderUpdateCmd, reminderCancelCmd, reminderLogCmd} {
 		cmd.Flags().String("id", "", "Reminder UUID or unique prefix")
 		cmd.Flags().String("output", "json", "Output format: json")
 		_ = cmd.MarkFlagRequired("id")
@@ -44,6 +46,7 @@ func init() {
 	reminderUpdateCmd.Flags().String("title", "", "New reminder title")
 	reminderUpdateCmd.Flags().Int64("delay-seconds", 0, "New delay before waking")
 	reminderUpdateCmd.Flags().String("fire-at", "", "New absolute RFC3339 wake time")
+	reminderUpdateCmd.Flags().String("cadence", "", "New recurring rule: every:Nm|Nh|Nd, daily@HH:MM, or weekly:days@HH:MM")
 }
 
 func reminderScheduleBody(cmd *cobra.Command, includeTitle bool) (map[string]any, error) {
@@ -56,13 +59,32 @@ func reminderScheduleBody(cmd *cobra.Command, includeTitle bool) (map[string]any
 	}
 	delay, _ := cmd.Flags().GetInt64("delay-seconds")
 	fireAt, _ := cmd.Flags().GetString("fire-at")
-	if (delay > 0) == (fireAt != "") {
+	repeat := ""
+	if cmd.Flags().Lookup("repeat") != nil {
+		repeat, _ = cmd.Flags().GetString("repeat")
+	}
+	selected := 0
+	if delay > 0 {
+		selected++
+	}
+	if fireAt != "" {
+		selected++
+	}
+	if repeat != "" {
+		selected++
+	}
+	if selected != 1 {
+		if cmd.Flags().Lookup("repeat") != nil {
+			return nil, fmt.Errorf("provide exactly one of --delay-seconds, --fire-at, or --repeat")
+		}
 		return nil, fmt.Errorf("provide exactly one of --delay-seconds or --fire-at")
 	}
 	if delay > 0 {
 		body["delay_seconds"] = delay
-	} else {
+	} else if fireAt != "" {
 		body["fire_at"] = fireAt
+	} else {
+		body["repeat"] = repeat
 	}
 	return body, nil
 }
@@ -109,8 +131,15 @@ func runReminderUpdate(cmd *cobra.Command, _ []string) error {
 	if fireAt != "" {
 		body["fire_at"] = fireAt
 	}
+	cadence, _ := cmd.Flags().GetString("cadence")
+	if cadence != "" {
+		body["cadence"] = cadence
+	}
+	if cadence != "" && (delay > 0 || fireAt != "") {
+		return fmt.Errorf("--cadence cannot be combined with --delay-seconds or --fire-at")
+	}
 	if len(body) == 1 {
-		return fmt.Errorf("provide --title, --delay-seconds, or --fire-at")
+		return fmt.Errorf("provide --title, --delay-seconds, --fire-at, or --cadence")
 	}
 	return postReminder(cmd, "/api/agent/reminders/update", body)
 }
@@ -118,6 +147,11 @@ func runReminderUpdate(cmd *cobra.Command, _ []string) error {
 func runReminderCancel(cmd *cobra.Command, _ []string) error {
 	id, _ := cmd.Flags().GetString("id")
 	return postReminder(cmd, "/api/agent/reminders/cancel", map[string]any{"id": id})
+}
+
+func runReminderLog(cmd *cobra.Command, _ []string) error {
+	id, _ := cmd.Flags().GetString("id")
+	return postReminder(cmd, "/api/agent/reminders/log", map[string]any{"id": id})
 }
 
 func postReminder(cmd *cobra.Command, path string, body map[string]any) error {

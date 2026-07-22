@@ -20,10 +20,11 @@ const (
 	EventIssueReactionRemoved = "issue_reaction:removed"
 
 	// Agent events
-	EventAgentStatus   = "agent:status"
-	EventAgentCreated  = "agent:created"
-	EventAgentArchived = "agent:archived"
-	EventAgentRestored = "agent:restored"
+	EventAgentStatus          = "agent:status"
+	EventAgentCreated         = "agent:created"
+	EventAgentArchived        = "agent:archived"
+	EventAgentRestored        = "agent:restored"
+	EventAgentReminderChanged = "agent_reminder:changed"
 
 	// Task events (server <-> daemon).
 	// Each event maps to a status transition on agent_task_queue. Front-end

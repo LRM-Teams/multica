@@ -7,6 +7,7 @@ func TestReminderScheduleBodyValidation(t *testing.T) {
 	cmd.Flags().Set("title", "check CI")
 	cmd.Flags().Set("delay-seconds", "300")
 	cmd.Flags().Set("fire-at", "")
+	cmd.Flags().Set("repeat", "")
 	body, err := reminderScheduleBody(cmd, true)
 	if err != nil {
 		t.Fatalf("delay body: %v", err)
@@ -19,11 +20,22 @@ func TestReminderScheduleBodyValidation(t *testing.T) {
 	cmd.Flags().Set("title", "check CI")
 	cmd.Flags().Set("delay-seconds", "0")
 	cmd.Flags().Set("fire-at", "2026-07-10T04:00:00Z")
+	cmd.Flags().Set("repeat", "")
 	body, err = reminderScheduleBody(cmd, true)
 	if err != nil {
 		t.Fatalf("absolute body: %v", err)
 	}
 	if body["fire_at"] != "2026-07-10T04:00:00Z" {
+		t.Fatalf("unexpected body: %#v", body)
+	}
+
+	cmd.Flags().Set("fire-at", "")
+	cmd.Flags().Set("repeat", "weekly:mon,fri@09:00")
+	body, err = reminderScheduleBody(cmd, true)
+	if err != nil {
+		t.Fatalf("repeat body: %v", err)
+	}
+	if body["repeat"] != "weekly:mon,fri@09:00" {
 		t.Fatalf("unexpected body: %#v", body)
 	}
 }
@@ -33,6 +45,7 @@ func TestReminderScheduleBodyRequiresExactlyOneSchedule(t *testing.T) {
 	cmd.Flags().Set("title", "check CI")
 	cmd.Flags().Set("delay-seconds", "0")
 	cmd.Flags().Set("fire-at", "")
+	cmd.Flags().Set("repeat", "")
 	if _, err := reminderScheduleBody(cmd, true); err == nil {
 		t.Fatal("expected validation error when schedule is missing")
 	}

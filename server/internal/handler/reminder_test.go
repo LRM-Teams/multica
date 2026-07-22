@@ -44,18 +44,38 @@ func TestBuildReminderPromptCarriesAnchorAndNoNoiseBoundary(t *testing.T) {
 		Title:           "回来看讨论是否已收敛",
 		AnchorMessageID: parseUUID("22222222-2222-2222-2222-222222222222"),
 	}
-	prompt := buildReminderPrompt(ChannelResponse{Name: "产品讨论"}, reminder, "请给项目起一个名字")
+	prompt := buildReminderPrompt(ChannelResponse{Name: "产品讨论", Kind: "group"}, reminder,
+		parseUUID("33333333-3333-3333-3333-333333333333"), "请给项目起一个名字", true)
 	for _, want := range []string{
 		"self-scheduled reminder is due",
 		"回来看讨论是否已收敛",
 		"#产品讨论",
 		"22222222-2222-2222-2222-222222222222",
+		"33333333-3333-3333-3333-333333333333",
 		"请给项目起一个名字",
 		"If nothing changed",
 		"runtime brief",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("reminder prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestBuildReminderPromptHidesDMCanonicalChannelName(t *testing.T) {
+	reminder := agentReminder{
+		ID:              parseUUID("11111111-1111-1111-1111-111111111111"),
+		Title:           "follow up privately",
+		AnchorMessageID: parseUUID("22222222-2222-2222-2222-222222222222"),
+	}
+	prompt := buildReminderPrompt(ChannelResponse{Name: "dm:internal-user-a:internal-user-b", Kind: "dm"}, reminder,
+		parseUUID("33333333-3333-3333-3333-333333333333"), "private anchor", true)
+	if !strings.Contains(prompt, "Anchored surface: direct message") {
+		t.Fatalf("DM prompt missing neutral surface:\n%s", prompt)
+	}
+	for _, forbidden := range []string{"dm:internal", "#dm:"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("DM prompt leaked canonical channel identity %q:\n%s", forbidden, prompt)
 		}
 	}
 }

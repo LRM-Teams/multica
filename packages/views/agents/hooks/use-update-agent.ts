@@ -4,25 +4,31 @@ import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { Agent, UpdateAgentRequest } from "@multica/core/types";
 import { api } from "@multica/core/api";
+import { agentDetailKeys } from "@multica/core/agents";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import { useT } from "../../i18n";
 
 /**
  * Shared agent-update mutation used by BOTH the agent detail inspector and
- * the compact profile card. Extracted from `agent-detail-page` so every
- * surface that flips runtime / model / thinking / visibility / concurrency
- * goes through ONE optimistic code path — no duplicated cache-patch or
- * rollback logic.
+ * the compact profile card / side panel. Extracted from `agent-detail-page`
+ * so every surface that flips runtime / model / thinking / visibility /
+ * concurrency goes through ONE optimistic code path — no duplicated
+ * cache-patch or rollback logic.
+ *
+ * After LRM-292, profile/panel body is authoritative on
+ * `agentDetailKeys.detail` (GET /api/agents/:id), not ListAgents. This hook
+ * must patch BOTH caches so picker chips refresh without a full page reload.
  *
  * Returns `handleUpdate(id, data)`:
  *  - Optimistically patches the matching agent in the cached
- *    `workspaceKeys.agents(wsId)` list BEFORE the network round-trip so the
- *    picker chips flip to the new value immediately on click, instead of
- *    waiting 0.5-2s for the API response + invalidate + refetch.
+ *    `workspaceKeys.agents(wsId)` list AND `agentDetailKeys.detail(wsId, id)`
+ *    BEFORE the network round-trip so the picker chips flip to the new value
+ *    immediately on click, instead of waiting 0.5-2s for the API response +
+ *    invalidate + refetch.
  *    The request's `username` key maps to the cached `Agent.name` (the
  *    @handle the UI reads), not a literal `agent.username`.
  *  - On success: `api.updateAgent` + write the server's canonical values for
- *    the touched fields back into the cache + invalidate + success toast.
+ *    the touched fields back into both caches + invalidate + success toast.
  *  - On error: rolls back ONLY the fields THIS call wrote (leaving any
  *    other concurrently-mutated fields untouched), invalidates so the cache
  *    converges with the server, shows an error toast, and rethrows so the
@@ -36,9 +42,12 @@ export function useUpdateAgent(wsId: string) {
   const { t } = useT("agents");
 
   return async (id: string, data: Record<string, unknown>): Promise<void> => {
-    const queryKey = workspaceKeys.agents(wsId);
-    const prevAgents = qc.getQueryData<Agent[]>(queryKey);
-    const prevAgent = prevAgents?.find((a) => a.id === id);
+    const listKey = workspaceKeys.agents(wsId);
+    const detailKey = agentDetailKeys.detail(wsId, id);
+    const prevAgents = qc.getQueryData<Agent[]>(listKey);
+    const prevAgentFromList = prevAgents?.find((a) => a.id === id);
+    const prevAgentFromDetail = qc.getQueryData<Agent>(detailKey);
+    const prevAgent = prevAgentFromList ?? prevAgentFromDetail;
 
     // Request keys are API field names; the cached `Agent` is keyed by its
     // OWN field names, which are 1:1 EXCEPT for the @handle: the request sends
@@ -61,9 +70,19 @@ export function useUpdateAgent(wsId: string) {
       }
     }
 
-    qc.setQueryData<Agent[]>(queryKey, (old) =>
-      old?.map((a) => (a.id === id ? ({ ...a, ...optimistic } as Agent) : a)),
-    );
+    const patchList = (patch: Record<string, unknown>) => {
+      qc.setQueryData<Agent[]>(listKey, (old) =>
+        old?.map((a) => (a.id === id ? ({ ...a, ...patch } as Agent) : a)),
+      );
+    };
+    const patchDetail = (patch: Record<string, unknown>) => {
+      qc.setQueryData<Agent>(detailKey, (old) =>
+        old ? ({ ...old, ...patch } as Agent) : old,
+      );
+    };
+
+    patchList(optimistic);
+    patchDetail(optimistic);
     try {
       // The server returns the persisted `Agent`; write back its canonical
       // values for the fields THIS call touched (e.g. `name` for a `username`
@@ -73,29 +92,32 @@ export function useUpdateAgent(wsId: string) {
       // are patched (not the whole agent) so a concurrent successful mutation
       // to a DIFFERENT field on the same agent is never clobbered.
       const updated = await api.updateAgent(id, data as UpdateAgentRequest);
-      qc.setQueryData<Agent[]>(queryKey, (old) =>
-        old?.map((a) => {
-          if (a.id !== id) return a;
-          const serverPatch: Record<string, unknown> = {};
-          for (const field of Object.keys(optimistic)) {
-            serverPatch[field] = (
-              updated as unknown as Record<string, unknown>
-            )[field];
-          }
-          return { ...a, ...serverPatch } as Agent;
-        }),
+      const serverPatch: Record<string, unknown> = {};
+      for (const field of Object.keys(optimistic)) {
+        serverPatch[field] = (updated as unknown as Record<string, unknown>)[
+          field
+        ];
+      }
+      patchList(serverPatch);
+      // Detail cache may be empty for list-only surfaces — seed it from the
+      // server payload so a later open of the profile card is already fresh.
+      qc.setQueryData<Agent>(detailKey, (old) =>
+        old
+          ? ({ ...old, ...serverPatch } as Agent)
+          : ({ ...updated } as Agent),
       );
-      qc.invalidateQueries({ queryKey });
+      qc.invalidateQueries({ queryKey: listKey });
+      qc.invalidateQueries({ queryKey: detailKey });
       toast.success(t(($) => $.detail.agent_updated_toast));
     } catch (e) {
-      if (prevAgent) {
-        qc.setQueryData<Agent[]>(queryKey, (old) =>
-          old?.map((a) =>
-            a.id === id ? ({ ...a, ...prevFields } as Agent) : a,
-          ),
-        );
+      if (prevAgentFromList || prevAgentFromDetail) {
+        patchList(prevFields);
+        if (prevAgentFromDetail) {
+          patchDetail(prevFields);
+        }
       }
-      qc.invalidateQueries({ queryKey });
+      qc.invalidateQueries({ queryKey: listKey });
+      qc.invalidateQueries({ queryKey: detailKey });
       toast.error(
         e instanceof Error ? e.message : t(($) => $.detail.update_failed_toast),
       );

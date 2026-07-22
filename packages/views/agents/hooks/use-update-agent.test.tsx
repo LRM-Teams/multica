@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import { renderHook } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Agent } from "@multica/core/types";
+import { agentDetailKeys } from "@multica/core/agents";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 
 // `api.updateAgent` is the single network call; the test controls whether it
@@ -52,11 +53,16 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
 // A real QueryClient so assertions read the ACTUAL cache the UI renders,
 // rather than a stubbed setQueryData spy. Retries off so a rejected mutation
 // surfaces immediately.
-function setup(seed: Agent[]) {
+function setup(seed: Agent[], options?: { seedDetail?: boolean }) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   qc.setQueryData(workspaceKeys.agents(WS), seed);
+  if (options?.seedDetail !== false) {
+    for (const agent of seed) {
+      qc.setQueryData(agentDetailKeys.detail(WS, agent.id), agent);
+    }
+  }
   const wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={qc}>{children}</QueryClientProvider>
   );
@@ -68,6 +74,10 @@ function cachedAgent(qc: QueryClient, id: string): Agent | undefined {
   return qc
     .getQueryData<Agent[]>(workspaceKeys.agents(WS))
     ?.find((a) => a.id === id);
+}
+
+function cachedDetail(qc: QueryClient, id: string): Agent | undefined {
+  return qc.getQueryData<Agent>(agentDetailKeys.detail(WS, id));
 }
 
 beforeEach(() => {
@@ -143,5 +153,44 @@ describe("useUpdateAgent — username → name mapping", () => {
       result.current("agent-1", { model: "claude-haiku" }),
     ).rejects.toThrow();
     expect(cachedAgent(qc, "agent-1")!.model).toBe("claude-opus-4-8");
+  });
+});
+
+describe("useUpdateAgent — agent detail cache (LRM-292 profile / panel)", () => {
+  it("optimistically patches GET /agents/:id cache so profile runtime refreshes without reload", async () => {
+    const { qc, result } = setup([makeAgent()]);
+    mockUpdateAgent.mockResolvedValue(makeAgent({ runtime_id: "rt-2" }));
+
+    const pending = result.current("agent-1", { runtime_id: "rt-2" });
+
+    expect(cachedDetail(qc, "agent-1")!.runtime_id).toBe("rt-2");
+    expect(cachedAgent(qc, "agent-1")!.runtime_id).toBe("rt-2");
+
+    await pending;
+
+    expect(cachedDetail(qc, "agent-1")!.runtime_id).toBe("rt-2");
+  });
+
+  it("rolls back the detail cache when the update fails", async () => {
+    const { qc, result } = setup([makeAgent()]);
+    mockUpdateAgent.mockRejectedValue(new Error("boom"));
+
+    await expect(
+      result.current("agent-1", { runtime_id: "rt-2" }),
+    ).rejects.toThrow();
+
+    expect(cachedDetail(qc, "agent-1")!.runtime_id).toBe("rt-1");
+    expect(cachedAgent(qc, "agent-1")!.runtime_id).toBe("rt-1");
+  });
+
+  it("still updates the list when detail cache is cold", async () => {
+    const { qc, result } = setup([makeAgent()], { seedDetail: false });
+    mockUpdateAgent.mockResolvedValue(makeAgent({ runtime_id: "rt-2" }));
+
+    await result.current("agent-1", { runtime_id: "rt-2" });
+
+    expect(cachedAgent(qc, "agent-1")!.runtime_id).toBe("rt-2");
+    // Seeds detail from the server payload so a later profile open is fresh.
+    expect(cachedDetail(qc, "agent-1")!.runtime_id).toBe("rt-2");
   });
 });

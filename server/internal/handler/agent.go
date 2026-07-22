@@ -1237,8 +1237,10 @@ func (h *Handler) canUpdateAgent(w http.ResponseWriter, r *http.Request, agent d
 		// tuple, not an independently editable agent property.
 		"model_catalog_request_id": {},
 		"thinking_level":           {},
-		"visibility":               {},
-		"max_concurrent_tasks":     {},
+		// Visibility is locked to private for group managers (LRM-233); plain
+		// members may omit it or send "private", but not flip it to workspace.
+		"visibility":           {},
+		"max_concurrent_tasks": {},
 	}
 	for field := range rawFields {
 		if _, ok := allowed[field]; !ok {
@@ -1387,6 +1389,12 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		targetRuntimeID = runtime.ID
 	}
 	if req.Visibility != nil {
+		// Group managers stay private for invite/discover (LRM-233). Owners and
+		// plain members alike cannot reopen them as workspace-visible.
+		if h.isGroupManagerAgent(r.Context(), existing.ID) && *req.Visibility != "private" {
+			writeError(w, http.StatusBadRequest, "group manager visibility is locked to private")
+			return
+		}
 		params.Visibility = pgtype.Text{String: *req.Visibility, Valid: true}
 	}
 	if req.Status != nil {

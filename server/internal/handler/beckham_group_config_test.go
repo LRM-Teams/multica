@@ -11,11 +11,11 @@ import (
 )
 
 // markGroupManagerForTest flags an agent as a per-group Beckham and makes it
-// workspace-visible (mirrors how Beckham is actually provisioned).
+// private (mirrors how Beckham is actually provisioned after LRM-233).
 func markGroupManagerForTest(t *testing.T, agentID string) {
 	t.Helper()
 	if _, err := testPool.Exec(context.Background(),
-		`UPDATE agent SET managed_role = 'group_manager', visibility = 'workspace' WHERE id = $1`, agentID,
+		`UPDATE agent SET managed_role = 'group_manager', visibility = 'private' WHERE id = $1`, agentID,
 	); err != nil {
 		t.Fatalf("mark group manager: %v", err)
 	}
@@ -53,6 +53,34 @@ func TestUpdateAgent_GroupManagerEditableByPlainMember(t *testing.T) {
 	}
 }
 
+// Group manager visibility is locked to private — even owners cannot reopen it
+// as workspace-discoverable (LRM-233).
+func TestUpdateAgent_GroupManagerRejectsWorkspaceVisibility(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	agentID := createHandlerTestAgent(t, "beckham-vis-"+uuid.NewString(), nil)
+	markGroupManagerForTest(t, agentID)
+
+	req := newRequest(http.MethodPut, "/api/agents/"+agentID, map[string]any{
+		"visibility": "workspace",
+	})
+	req = withURLParam(req, "id", agentID)
+	w := httptest.NewRecorder()
+	testHandler.UpdateAgent(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("owner flipping group manager to workspace: expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var visibility string
+	if err := testPool.QueryRow(context.Background(), `SELECT visibility FROM agent WHERE id = $1`, agentID).Scan(&visibility); err != nil {
+		t.Fatalf("reload visibility: %v", err)
+	}
+	if visibility != "private" {
+		t.Fatalf("visibility = %q after rejected update, want private", visibility)
+	}
+}
+
 // Keep the side-panel payload contract explicit: a plain workspace member may
 // send exactly the five runtime properties. model_catalog_request_id is the
 // transient proof carried by the later #559 discovery flow, not a privilege
@@ -75,7 +103,7 @@ func TestCanUpdateAgent_GroupManagerAllowsRuntimePayloadFields(t *testing.T) {
 		"model":                    json.RawMessage(`"model-id"`),
 		"model_catalog_request_id": json.RawMessage(`"catalog-proof"`),
 		"thinking_level":           json.RawMessage(`"high"`),
-		"visibility":               json.RawMessage(`"workspace"`),
+		"visibility":               json.RawMessage(`"private"`),
 		"max_concurrent_tasks":     json.RawMessage(`3`),
 	}
 	w := httptest.NewRecorder()

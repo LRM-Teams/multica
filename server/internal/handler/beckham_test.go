@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -55,8 +56,8 @@ func TestEnsureGroupManagerForChannelProvisionsOne(t *testing.T) {
 	if managedRole != managedRoleGroupManager {
 		t.Fatalf("managed_role = %q, want %q", managedRole, managedRoleGroupManager)
 	}
-	if visibility != "workspace" {
-		t.Fatalf("visibility = %q, want workspace", visibility)
+	if visibility != "private" {
+		t.Fatalf("visibility = %q, want private", visibility)
 	}
 	if err := testPool.QueryRow(ctx, `
 		SELECT member_id FROM channel_member
@@ -175,8 +176,8 @@ func TestEnsureGroupManagerRefreshesStalePersona(t *testing.T) {
 	}
 	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agent.ID) })
 
-	// Make it stale (old English persona + old avatar).
-	if _, err := testPool.Exec(ctx, `UPDATE agent SET instructions = 'You are Beckham (old english persona)', avatar_url = '/agent-avatars/human-04.jpg' WHERE id = $1`, agent.ID); err != nil {
+	// Make it stale (old English persona + old avatar + workspace visibility).
+	if _, err := testPool.Exec(ctx, `UPDATE agent SET instructions = 'You are Beckham (old english persona)', avatar_url = '/agent-avatars/human-04.jpg', visibility = 'workspace' WHERE id = $1`, agent.ID); err != nil {
 		t.Fatalf("make stale: %v", err)
 	}
 
@@ -185,8 +186,8 @@ func TestEnsureGroupManagerRefreshesStalePersona(t *testing.T) {
 		t.Fatalf("reuse ensure: created=%v id=%s err=%v", created, uuidToString(again.ID), err)
 	}
 
-	var instr, avatar string
-	if err := testPool.QueryRow(ctx, `SELECT instructions, avatar_url FROM agent WHERE id = $1`, agent.ID).Scan(&instr, &avatar); err != nil {
+	var instr, avatar, visibility string
+	if err := testPool.QueryRow(ctx, `SELECT instructions, avatar_url, visibility FROM agent WHERE id = $1`, agent.ID).Scan(&instr, &avatar, &visibility); err != nil {
 		t.Fatalf("reload agent: %v", err)
 	}
 	if !strings.Contains(instr, beckhamInstructionsMarker) {
@@ -194,6 +195,9 @@ func TestEnsureGroupManagerRefreshesStalePersona(t *testing.T) {
 	}
 	if avatar != beckhamAvatarURL {
 		t.Fatalf("avatar = %q, want %q", avatar, beckhamAvatarURL)
+	}
+	if visibility != "private" {
+		t.Fatalf("visibility = %q, want private after refresh", visibility)
 	}
 }
 
@@ -244,5 +248,64 @@ func TestAddChannelMemberRejectsGroupManager(t *testing.T) {
 	}
 	if n != 0 {
 		t.Fatalf("group manager was added to channel B (%d rows), want 0", n)
+	}
+}
+
+// LRM-233: Beckham is private — plain members do not see it in ListAgents
+// (invite picker source), but can still GetAgent for channel-side profile/config.
+func TestListAgentsHidesPrivateGroupManagerFromPlainMember(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	var rtID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (workspace_id, owner_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
+		VALUES ($1, $2, $3, 'cloud', 'beckham_test', 'online', '', '{}'::jsonb, now())
+		RETURNING id
+	`, testWorkspaceID, testUserID, "beckham-rt-list-"+uuid.NewString()).Scan(&rtID); err != nil {
+		t.Fatalf("seed runtime: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, rtID) })
+
+	channelID := seedChannelForTest(t, "beckham-list-"+uuid.NewString(), testUserID)
+	beckham, _, err := testHandler.EnsureGroupManagerForChannel(ctx, parseUUID(testWorkspaceID), parseUUID(channelID), parseUUID(testUserID))
+	if err != nil {
+		t.Fatalf("provision beckham: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, beckham.ID) })
+	beckhamID := uuidToString(beckham.ID)
+
+	memberID := createWorkspaceMemberUser(t, "beckham-list-member", "beckham-list-"+uuid.NewString()+"@example.com")
+
+	listContains := func(userID string) bool {
+		w := httptest.NewRecorder()
+		testHandler.ListAgents(w, newRequestAs(userID, http.MethodGet, "/api/agents", nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("ListAgents as %s: expected 200, got %d: %s", userID, w.Code, w.Body.String())
+		}
+		var agents []AgentResponse
+		if err := json.NewDecoder(w.Body).Decode(&agents); err != nil {
+			t.Fatalf("decode ListAgents: %v", err)
+		}
+		for _, a := range agents {
+			if a.ID == beckhamID {
+				return true
+			}
+		}
+		return false
+	}
+
+	if !listContains(testUserID) {
+		t.Fatalf("owner ListAgents missing private group manager %s", beckhamID)
+	}
+	if listContains(memberID) {
+		t.Fatalf("plain member ListAgents leaked private group manager %s", beckhamID)
+	}
+
+	getW := httptest.NewRecorder()
+	testHandler.GetAgent(getW, withURLParam(newRequestAs(memberID, http.MethodGet, "/api/agents/"+beckhamID, nil), "id", beckhamID))
+	if getW.Code != http.StatusOK {
+		t.Fatalf("plain member GetAgent group manager: expected 200, got %d: %s", getW.Code, getW.Body.String())
 	}
 }

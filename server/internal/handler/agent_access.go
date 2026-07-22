@@ -27,6 +27,19 @@ func (h *Handler) canAccessPrivateAgent(ctx context.Context, agent db.Agent, act
 	if privateAgentOwnerOnly(agent) && actorType == "member" {
 		return uuidToString(agent.OwnerID) == actorID
 	}
+	// Group managers (Beckham) are private for ListAgents / invite discovery,
+	// but remain readable by any workspace member so channel-side profile and
+	// shared runtime-config edits keep working (LRM-233).
+	if h.isGroupManagerAgent(ctx, agent.ID) {
+		if actorType == "agent" {
+			return true
+		}
+		if actorType != "member" {
+			return false
+		}
+		_, err := h.getWorkspaceMember(ctx, actorID, workspaceID)
+		return err == nil
+	}
 	if agent.Visibility != "private" {
 		return true
 	}

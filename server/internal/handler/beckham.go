@@ -104,10 +104,13 @@ var errGroupManagerNoRuntime = errors.New("no runtime available to run the group
 const beckhamInstructionsMarker = "规格错还是实现错"
 
 // refreshGroupManagerIfStale updates an existing Beckham's instructions,
-// description, and avatar to the current values when they are out of date.
+// description, avatar, and visibility to the current values when they are out
+// of date. Visibility is locked to private (LRM-233) so invite/discover lists
+// stop treating Beckham as a workspace-public agent.
 func (h *Handler) refreshGroupManagerIfStale(ctx context.Context, agent db.Agent) db.Agent {
 	fresh := strings.Contains(agent.Instructions, beckhamInstructionsMarker) &&
-		agent.AvatarUrl.Valid && agent.AvatarUrl.String == beckhamAvatarURL
+		agent.AvatarUrl.Valid && agent.AvatarUrl.String == beckhamAvatarURL &&
+		agent.Visibility == "private"
 	if fresh {
 		return agent
 	}
@@ -118,6 +121,7 @@ func (h *Handler) refreshGroupManagerIfStale(ctx context.Context, agent db.Agent
 		AvatarSelectionSet: true,
 		AvatarUrl:          pgtype.Text{String: beckhamAvatarURL, Valid: true},
 		AvatarSource:       agentAvatarSourceAssigned,
+		Visibility:         pgtype.Text{String: "private", Valid: true},
 	})
 	if err != nil {
 		slog.Warn("refresh group manager persona failed", "agent_id", uuidToString(agent.ID), "error", err)
@@ -228,7 +232,9 @@ func (h *Handler) EnsureGroupManagerForChannel(ctx context.Context, workspaceID,
 		RuntimeMode:        runtime.RuntimeMode,
 		RuntimeConfig:      []byte("{}"),
 		RuntimeID:          runtime.ID,
-		Visibility:         "workspace",
+		// Private: not listed as a workspace-discoverable / inviteable agent
+		// (LRM-233). Still auto-joined to its own group via ensureChannelAgentMember.
+		Visibility:         "private",
 		MaxConcurrentTasks: 6,
 		OwnerID:            creatorUserID,
 		CustomEnv:          []byte("{}"),

@@ -8,6 +8,11 @@ import { AgentSidePanel } from "./agent-side-panel";
 
 const filesPanelProps = vi.fn();
 
+const openDMMocks = vi.hoisted(() => ({
+  openDM: vi.fn(),
+  isPending: false,
+}));
+
 // Per-test permission decision for the merged runtime-config section. Group
 // managers override this to always-editable inside the component, so leaving
 // it denied by default lets us assert the read-only path for ordinary agents.
@@ -81,6 +86,9 @@ vi.mock("../../common/prop-row", () => ({
 vi.mock("../../agents/hooks/use-update-agent", () => ({
   useUpdateAgent: () => vi.fn(),
 }));
+vi.mock("../../common/use-open-dm", () => ({
+  useOpenDM: () => openDMMocks,
+}));
 vi.mock("@multica/core/permissions", () => ({
   useAgentPermissions: () => ({ canEdit: permission }),
 }));
@@ -135,6 +143,8 @@ const RESOURCES = {
     usage_cost_unavailable: "Unavailable",
     usage_tokens: "Tokens",
     runtime_section: "Runtime Config",
+    message_button: "Message",
+    message_opening: "Opening…",
   },
   inspector: {
     section_properties: "Properties",
@@ -223,6 +233,17 @@ describe("AgentSidePanel", () => {
     expect(screen.getByText("Atlas")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Activity" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Files" })).not.toBeInTheDocument();
+  });
+
+  it("shows the full-width Message button between header and tabs (LRM-283)", () => {
+    renderPanel();
+    const messageBtn = screen.getByTestId("agent-profile-message-button");
+    expect(messageBtn).toHaveTextContent("Message");
+    fireEvent.click(messageBtn);
+    expect(openDMMocks.openDM).toHaveBeenCalledWith({
+      peer_type: "agent",
+      peer_id: "agent-1",
+    });
   });
 
   it("temporarily exposes Activity, but not Files, to a workspace-member viewer", () => {

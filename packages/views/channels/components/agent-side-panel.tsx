@@ -21,6 +21,7 @@ import { RuntimePicker } from "../../agents/components/inspector/runtime-picker"
 import { ThinkingPropRow } from "../../agents/components/inspector/thinking-prop-row";
 import { VisibilityPicker } from "../../agents/components/inspector/visibility-picker";
 import { MemoryGrowthField } from "../../agents/components/memory-growth-field";
+import { AgentProfileMessageButton } from "../../agents/components/agent-profile-message-button";
 import { useUpdateAgent } from "../../agents/hooks/use-update-agent";
 import { useRuntimeHealthStateLabel } from "../../runtimes/components/shared";
 import { PropRow } from "../../common/prop-row";
@@ -163,6 +164,9 @@ export function AgentSidePanel({
       closeAriaLabel={t(($) => $.side_panel.close_aria)}
       leading={leading}
     >
+      {!agent.archived_at ? (
+        <AgentProfileMessageButton agentId={agent.id} />
+      ) : null}
       {showTabBar ? (
         <>
           <div

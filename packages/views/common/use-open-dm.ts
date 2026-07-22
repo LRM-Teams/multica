@@ -2,6 +2,7 @@
 
 import { useCallback } from "react";
 import { toast } from "sonner";
+import { ApiError } from "@multica/core/api";
 import { useCreateOrFindDM } from "@multica/core/dm";
 import type { CreateOrFindDMBody, DMItem } from "@multica/core/dm";
 import { useWorkspacePaths } from "@multica/core/paths";
@@ -32,8 +33,12 @@ export function useOpenDM(): {
         const dm = await createOrFind.mutateAsync(body);
         push(paths.channelDetail(dm.id));
         return dm;
-      } catch {
-        toast.error(t(($) => $.dm.open_failed));
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 403) {
+          toast.error(t(($) => $.dm.open_forbidden));
+        } else {
+          toast.error(t(($) => $.dm.open_failed));
+        }
         return null;
       }
     },

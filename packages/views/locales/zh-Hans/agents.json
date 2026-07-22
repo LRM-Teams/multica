@@ -518,7 +518,9 @@
     "usage_tokens": "Token",
     "reasoning_default": "默认",
     "runtime_section": "运行配置",
-    "config_shared_hint": "任何工作区成员都可以修改该群管理（贝克汉姆）的运行时设置。"
+    "config_shared_hint": "任何工作区成员都可以修改该群管理（贝克汉姆）的运行时设置。",
+    "message_button": "私聊",
+    "message_opening": "打开中…"
   },
   "live_peek": {
     "current_issue_label": "正在处理",

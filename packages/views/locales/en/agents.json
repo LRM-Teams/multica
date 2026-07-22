@@ -528,7 +528,9 @@
     "usage_tokens": "Tokens",
     "reasoning_default": "Default",
     "runtime_section": "Runtime Config",
-    "config_shared_hint": "Any workspace member can adjust this group manager's runtime settings."
+    "config_shared_hint": "Any workspace member can adjust this group manager's runtime settings.",
+    "message_button": "Message",
+    "message_opening": "Opening…"
   },
   "live_peek": {
     "current_issue_label": "Now on",

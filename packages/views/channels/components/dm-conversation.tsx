@@ -1009,7 +1009,7 @@ function DmChannelConversation({
           }
         />
         <ChannelMessageList
-          key={`dm-thread:${threadSurfaceRoot.id}:${threadLoading ? "loading" : "ready"}`}
+          key={`thread:${threadSurfaceRoot.id}`}
           messages={threadReplies}
           currentUserId={currentUserId}
           ownName={currentUserName ?? undefined}

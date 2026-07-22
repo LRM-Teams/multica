@@ -25,6 +25,7 @@
  * hints (selected, editable, onDelete).
  */
 
+import type { CSSProperties } from "react";
 import {
   Download,
   Link as LinkIcon,
@@ -532,6 +533,11 @@ function ImageAttachmentView({
   // cursor: zoom-in }` keys off this same flag for the cursor affordance.
   const clickable = !editable && !uploading;
 
+  const aspectRatioStyle =
+    width && height && width > 0 && height > 0
+      ? ({ aspectRatio: `${width} / ${height}` } as CSSProperties)
+      : undefined;
+
   // DOM mirrors the original ReadonlyImage (span-only chain so it stays
   // valid HTML5 when rendered inside a markdown <p>). In editor surfaces
   // the NodeViewWrapper still emits its own outer .image-node div around
@@ -544,6 +550,7 @@ function ImageAttachmentView({
           selected && editable && "image-selected",
           className,
         )}
+        style={aspectRatioStyle}
         data-clickable={clickable || undefined}
         contentEditable={false}
         onClick={clickable ? onView : undefined}

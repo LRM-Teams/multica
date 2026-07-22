@@ -644,6 +644,29 @@ describe("ChannelMessageList message edit / delete wiring", () => {
     expect(onOpenThread).not.toHaveBeenCalled();
   });
 
+  it("shows skeleton only on cold load (loading with no cached rows)", () => {
+    const { rerender } = render(
+      <ChannelMessageList
+        messages={[]}
+        currentUserId="user-1"
+        emptyLabel="No messages"
+        loading
+      />,
+    );
+    expect(screen.getByTestId("message-rows-skeleton")).toBeInTheDocument();
+
+    rerender(
+      <ChannelMessageList
+        messages={[makeMessage("m1", "Cached while refetching")]}
+        currentUserId="user-1"
+        emptyLabel="No messages"
+        loading
+      />,
+    );
+    expect(screen.queryByTestId("message-rows-skeleton")).not.toBeInTheDocument();
+    expect(screen.getByTestId("message-bubble")).toBeInTheDocument();
+  });
+
   it("deletes through onDeleteMessage and renders a tombstone (non-empty row) for a deleted message", async () => {
     const onDeleteMessage = vi.fn();
     const message = makeOwnUserMessage();

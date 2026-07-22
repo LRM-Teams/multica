@@ -93,6 +93,14 @@
   border: 1px solid color-mix(in srgb, var(--foreground) 10%, transparent);
 }
 
+/* LRM-273 — reserve inline image box before decode (mobile layout shift). */
+.message-surface .image-figure[style*="aspect-ratio"] .image-content {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  object-fit: contain;
+}
+
 /* LRM-201 — phone web: keep image thumbs readable without dominating the stream. */
 @media (max-width: 767px) {
   .message-surface .image-figure {

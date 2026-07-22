@@ -1456,17 +1456,22 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   }, [highlightMessageId, convSearchOpen, jumpTargetLoaded]);
 
   // Activity page deep-links with ?thread=<rootMessageId> to open ThreadPanel.
-  useEffect(() => {
-    if (!threadDeepLinkId || !active) return;
-    if (reconciledThreadDeepLinkRef.current === `${active.id}:${threadDeepLinkId}`) {
-      return;
-    }
-    const rootMessage = messages.find((m) => m.id === threadDeepLinkId);
-    if (!rootMessage) return;
-    reconciledThreadDeepLinkRef.current = `${active.id}:${threadDeepLinkId}`;
+  const threadDeepLinkMessage =
+    threadDeepLinkId && active
+      ? messages.find((m) => m.id === threadDeepLinkId) ?? null
+      : null;
+  const threadDeepLinkKey = threadDeepLinkMessage
+    ? `${active.id}:${threadDeepLinkId}`
+    : null;
+  if (
+    threadDeepLinkMessage &&
+    threadDeepLinkKey &&
+    threadDeepLinkKey !== reconciledThreadDeepLinkRef.current
+  ) {
+    reconciledThreadDeepLinkRef.current = threadDeepLinkKey;
     focusThreadComposerOnOpenRef.current = false;
-    setSidePanel({ kind: "thread", message: rootMessage });
-  }, [threadDeepLinkId, active, messages]);
+    setSidePanel({ kind: "thread", message: threadDeepLinkMessage });
+  }
 
   // Clear search state when the active channel changes.
   useEffect(() => {

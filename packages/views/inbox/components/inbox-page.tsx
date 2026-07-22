@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useEffect, useCallback, useRef } from "react";
 import { useDefaultLayout } from "react-resizable-panels";
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -52,18 +52,30 @@ function activitySelectionKey(item: UserActivityItem): string {
   return item.id;
 }
 
+function parseActivityTab(raw: string | null): UserActivityTab {
+  if (raw === "unread" || raw === "mentions") return raw;
+  return "all";
+}
+
+function inboxActivityUrl(
+  inboxPath: string,
+  params: { tab?: UserActivityTab; issue?: string },
+): string {
+  const search = new URLSearchParams();
+  if (params.tab && params.tab !== "all") search.set("tab", params.tab);
+  if (params.issue) search.set("issue", params.issue);
+  const qs = search.toString();
+  return qs ? `${inboxPath}?${qs}` : inboxPath;
+}
+
 export function InboxPage() {
   const { t } = useT("inbox");
   const { searchParams, replace, push } = useNavigation();
   const urlIssue = searchParams.get("issue") ?? "";
+  const tab = parseActivityTab(searchParams.get("tab"));
+  const selectedKey = urlIssue;
   const wsPaths = useWorkspacePaths();
-
-  const [tab, setTab] = useState<UserActivityTab>("all");
-  const [selectedKey, setSelectedKeyState] = useState(() => urlIssue);
-
-  useEffect(() => {
-    setSelectedKeyState(urlIssue);
-  }, [urlIssue]);
+  const inboxPath = wsPaths.inbox();
 
   const wsId = useWorkspaceId();
   const {
@@ -86,12 +98,16 @@ export function InboxPage() {
 
   const setSelectedKey = useCallback(
     (key: string) => {
-      setSelectedKeyState(key);
-      const inboxPath = wsPaths.inbox();
-      const url = key ? `${inboxPath}?issue=${key}` : inboxPath;
-      replace(url);
+      replace(inboxActivityUrl(inboxPath, { tab, issue: key || undefined }));
     },
-    [replace, wsPaths],
+    [replace, inboxPath, tab],
+  );
+
+  const setTab = useCallback(
+    (next: UserActivityTab) => {
+      replace(inboxActivityUrl(inboxPath, { tab: next, issue: urlIssue || undefined }));
+    },
+    [replace, inboxPath, urlIssue],
   );
 
   useEffect(() => {

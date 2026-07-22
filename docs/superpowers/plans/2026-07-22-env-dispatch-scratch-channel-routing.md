@@ -22,8 +22,8 @@
 ### Task 1: Suppress onboarding for synthetic env-dispatch memberships
 
 **Files:**
-- Create: `server/migrations/208_env_dispatch_channel_join_source.up.sql`
-- Create: `server/migrations/208_env_dispatch_channel_join_source.down.sql`
+- Create: `server/migrations/209_env_dispatch_channel_join_source.up.sql`
+- Create: `server/migrations/209_env_dispatch_channel_join_source.down.sql`
 - Modify: `server/internal/handler/env_dispatch.go:782-823`
 - Test: `server/internal/handler/env_dispatch_channel_store_test.go`
 
@@ -166,8 +166,8 @@ Expected: PASS; ordinary onboarding remains green.
 - [ ] **Step 6: Commit Task 1**
 
 ```bash
-git add server/migrations/208_env_dispatch_channel_join_source.up.sql \
-  server/migrations/208_env_dispatch_channel_join_source.down.sql \
+git add server/migrations/209_env_dispatch_channel_join_source.up.sql \
+  server/migrations/209_env_dispatch_channel_join_source.down.sql \
   server/internal/handler/env_dispatch.go \
   server/internal/handler/env_dispatch_channel_store_test.go
 git commit -m "fix(env-dispatch): suppress synthetic channel onboarding"

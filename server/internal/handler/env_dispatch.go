@@ -779,6 +779,8 @@ func (a *envDispatchDepsAdapter) ResolveMessageRoster(ctx context.Context, works
 	return service.MessageRoster{LeaderID: ids[0], AgentIDs: ids}, nil
 }
 
+const envDispatchChannelJoinSource = "env_dispatch"
+
 func (a *envDispatchDepsAdapter) CreateEnvDispatchChannel(ctx context.Context, workspaceID, userID, projectID, envID string, roster service.MessageRoster, specs map[string]service.ResolvedPerAgentSandboxPolicy) (string, error) {
 	tx, err := a.h.TxStarter.Begin(ctx)
 	if err != nil {
@@ -797,7 +799,11 @@ func (a *envDispatchDepsAdapter) CreateEnvDispatchChannel(ctx context.Context, w
 	}
 	store := envDispatchChannelStore{}
 	for _, agentID := range roster.AgentIDs {
-		if _, err := tx.Exec(ctx, `INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id) VALUES ($1, $2, 'agent', $3)`, channelID, workspaceID, agentID); err != nil {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO channel_member (
+				channel_id, workspace_id, member_type, member_id, join_source
+			) VALUES ($1, $2, 'agent', $3, $4)`,
+			channelID, workspaceID, agentID, envDispatchChannelJoinSource); err != nil {
 			return "", err
 		}
 		config := json.RawMessage(`{}`)

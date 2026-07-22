@@ -288,3 +288,42 @@ func TestMigration198DownReversesDerivedAgentSchema(t *testing.T) {
 		}
 	}
 }
+
+func TestMigration209SuppressesEnvDispatchChannelOnboarding(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	migrationsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
+	read := func(name string) string {
+		t.Helper()
+		body, err := os.ReadFile(filepath.Join(migrationsDir, name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		return string(body)
+	}
+
+	up := read("209_env_dispatch_channel_join_source.up.sql")
+	for _, required := range []string{
+		"'env_dispatch'",
+		"WHEN (NEW.join_source <> 'env_dispatch')",
+		"trg_maintain_channel_agent_onboarding_insert",
+		"trg_maintain_channel_agent_onboarding_delete",
+	} {
+		if !strings.Contains(up, required) {
+			t.Errorf("migration 209 up missing %q", required)
+		}
+	}
+
+	down := read("209_env_dispatch_channel_join_source.down.sql")
+	for _, required := range []string{
+		"SET join_source = 'system'",
+		"AFTER INSERT OR DELETE ON channel_member",
+		"trg_maintain_channel_agent_onboarding",
+	} {
+		if !strings.Contains(down, required) {
+			t.Errorf("migration 209 down missing %q", required)
+		}
+	}
+}

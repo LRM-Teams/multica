@@ -188,10 +188,15 @@ type Handler struct {
 	LarkHub *lark.Hub
 	// SyncChannelMessageSideEffects forces agent-wake / Feishu work that
 	// normally runs after the HTTP send ack to execute inline. Tests set
-	// this so assertions immediately after SendChannelMessage* still see
-	// inbox events; production leaves it false so O(agents) fanout does
-	// not inflate send latency / Sending... time.
+	// this so assertions immediately after SendChannelMessage* /
+	// AgentTransportSendMessage still see inbox events; production leaves
+	// it false so O(agents) fanout does not inflate human or agent send
+	// latency (LRM-272 / LRM-297).
 	SyncChannelMessageSideEffects bool
+	// channelMessagePostAckTestHook runs at the start of every post-ack
+	// callback when set. Tests use it to prove send returns while fanout
+	// is still blocked (LRM-297).
+	channelMessagePostAckTestHook func(context.Context)
 	cfg                           Config
 }
 

@@ -474,6 +474,8 @@ type DaemonHeartbeatPendingLocalSkillImport struct {
 // agent roots and reports the structured engine result back to the server.
 type DaemonHeartbeatPendingMemoryCuration struct {
 	ID                   string                               `json:"id"`
+	ParentRunID          string                               `json:"parent_run_id,omitempty"`
+	AgentRunID           string                               `json:"agent_run_id,omitempty"`
 	WorkspaceID          string                               `json:"workspace_id"`
 	Stage                string                               `json:"stage"`
 	DateFrom             string                               `json:"date_from"`
@@ -515,10 +517,10 @@ type DaemonMemoryCurationEvidenceItem struct {
 // AgentMemoryWriteReport is sent by the daemon after a task when whitelisted
 // agent-local memory files changed.
 type AgentMemoryWriteReport struct {
-	AgentID   string                    `json:"agent_id"`
-	RuntimeID string                    `json:"runtime_id"`
-	TaskID    string                    `json:"task_id,omitempty"`
-	Writes    []AgentMemoryWriteEntry   `json:"writes"`
+	AgentID   string                  `json:"agent_id"`
+	RuntimeID string                  `json:"runtime_id"`
+	TaskID    string                  `json:"task_id,omitempty"`
+	Writes    []AgentMemoryWriteEntry `json:"writes"`
 }
 
 type AgentMemoryWriteEntry struct {

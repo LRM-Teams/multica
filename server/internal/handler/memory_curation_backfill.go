@@ -247,8 +247,16 @@ func insertMemoryCurationAgentRuns(ctx context.Context, exec dbExecutor, runID, 
 		if _, err := exec.Exec(ctx, `
 			INSERT INTO memory_curation_agent_run (
 			  parent_run_id, workspace_id, agent_id, runtime_id, stage, status
-			) VALUES ($1::uuid,$2::uuid,$3::uuid,NULLIF($4,'')::uuid,'agent_self_review','queued')
-			ON CONFLICT (parent_run_id, agent_id, stage) DO NOTHING
+			)
+			SELECT $1::uuid, $2::uuid, a.id, COALESCE(a.runtime_id, NULLIF($4,'')::uuid), 'agent_self_review',
+			       CASE WHEN rt.status = 'online' THEN 'queued' ELSE 'waiting_runtime' END
+			  FROM agent a
+			  LEFT JOIN agent_runtime rt ON rt.id = COALESCE(a.runtime_id, NULLIF($4,'')::uuid)
+			 WHERE a.id = $3::uuid AND a.workspace_id = $2::uuid
+			ON CONFLICT (parent_run_id, agent_id, stage) DO UPDATE SET
+			  runtime_id = EXCLUDED.runtime_id,
+			  status = CASE WHEN memory_curation_agent_run.status IN ('queued','waiting_runtime') THEN EXCLUDED.status ELSE memory_curation_agent_run.status END,
+			  updated_at = now()
 		`, runID, workspaceID, agentID, runtimeID); err != nil {
 			return err
 		}

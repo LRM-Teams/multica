@@ -392,8 +392,11 @@ func TestMemoryCuratorProfileQueuesAndCompletesDaemonRun(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&heartbeat); err != nil {
 		t.Fatal(err)
 	}
-	if heartbeat.Pending == nil || heartbeat.Pending.ID != created.ID || heartbeat.Pending.ClaimToken == "" {
+	if heartbeat.Pending == nil || heartbeat.Pending.ParentRunID != created.ID || heartbeat.Pending.AgentRunID == "" || heartbeat.Pending.ID != heartbeat.Pending.AgentRunID || heartbeat.Pending.ClaimToken == "" {
 		t.Fatalf("pending = %+v", heartbeat.Pending)
+	}
+	if len(heartbeat.Pending.AgentIDs) != 1 || heartbeat.Pending.AgentIDs[0] != targetAgentID || heartbeat.Pending.CuratorAgentID != targetAgentID {
+		t.Fatalf("pending target identity = %+v", heartbeat.Pending)
 	}
 	if heartbeat.Pending.Mode != "auto_safe" || heartbeat.Pending.ConfidenceThreshold != 0.9 {
 		t.Fatalf("pending policy = %+v", heartbeat.Pending)
@@ -401,9 +404,9 @@ func TestMemoryCuratorProfileQueuesAndCompletesDaemonRun(t *testing.T) {
 
 	w = httptest.NewRecorder()
 	staleResultReq := withURLParams(newDaemonTokenRequest(http.MethodPost,
-		"/api/daemon/runtimes/"+runtimeID+"/memory-curation/"+created.ID+"/result",
+		"/api/daemon/runtimes/"+runtimeID+"/memory-curation/"+heartbeat.Pending.ID+"/result",
 		map[string]any{"status": "succeeded", "claim_token": "00000000-0000-0000-0000-000000000001", "result": map[string]any{}},
-		testWorkspaceID, "memory-curator-test-daemon"), "runtimeId", runtimeID, "runId", created.ID)
+		testWorkspaceID, "memory-curator-test-daemon"), "runtimeId", runtimeID, "runId", heartbeat.Pending.ID)
 	testHandler.ReportMemoryCurationRunResult(w, staleResultReq)
 	if w.Code != http.StatusConflict {
 		t.Fatalf("stale ReportMemoryCurationRunResult: status=%d body=%s", w.Code, w.Body.String())
@@ -411,7 +414,7 @@ func TestMemoryCuratorProfileQueuesAndCompletesDaemonRun(t *testing.T) {
 
 	w = httptest.NewRecorder()
 	resultReq := withURLParams(newDaemonTokenRequest(http.MethodPost,
-		"/api/daemon/runtimes/"+runtimeID+"/memory-curation/"+created.ID+"/result",
+		"/api/daemon/runtimes/"+runtimeID+"/memory-curation/"+heartbeat.Pending.ID+"/result",
 		map[string]any{"status": "succeeded", "claim_token": heartbeat.Pending.ClaimToken, "result": map[string]any{
 			"agents_scanned": 1,
 			"agent_results": []map[string]any{{
@@ -419,7 +422,7 @@ func TestMemoryCuratorProfileQueuesAndCompletesDaemonRun(t *testing.T) {
 				"curator_output": `{"candidates":[{"type":"memory","scope":"agent","title":"dry run only","content":"must not persist","confidence":0.9}]}`,
 			}},
 		}},
-		testWorkspaceID, "memory-curator-test-daemon"), "runtimeId", runtimeID, "runId", created.ID)
+		testWorkspaceID, "memory-curator-test-daemon"), "runtimeId", runtimeID, "runId", heartbeat.Pending.ID)
 	testHandler.ReportMemoryCurationRunResult(w, resultReq)
 	if w.Code != http.StatusOK {
 		t.Fatalf("ReportMemoryCurationRunResult: status=%d body=%s", w.Code, w.Body.String())

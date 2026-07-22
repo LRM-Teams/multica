@@ -133,9 +133,11 @@ func makeMemoryCurationIntentHandler(pool *pgxpool.Pool, stage any, hourOffset i
 						INSERT INTO memory_curation_agent_run (
 						  parent_run_id, workspace_id, agent_id, runtime_id, stage, status
 						)
-						SELECT i.id, i.workspace_id, a.agent_id, i.runtime_id, 'agent_self_review', 'queued'
+						SELECT i.id, i.workspace_id, a.id, COALESCE(a.runtime_id, i.runtime_id), 'agent_self_review',
+						       CASE WHEN rt.status = 'online' THEN 'queued' ELSE 'waiting_runtime' END
 						  FROM inserted i
-						 CROSS JOIN unnest($13::uuid[]) AS a(agent_id)
+						  JOIN agent a ON a.workspace_id = i.workspace_id AND a.id = ANY($13::uuid[])
+						  LEFT JOIN agent_runtime rt ON rt.id = COALESCE(a.runtime_id, i.runtime_id)
 						ON CONFLICT (parent_run_id, agent_id, stage) DO NOTHING
 						RETURNING 1
 					)

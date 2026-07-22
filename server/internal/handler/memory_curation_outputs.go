@@ -170,6 +170,196 @@ func finishUnreportedMemoryCurationAgentRuns(ctx context.Context, exec dbExecuto
 	return err
 }
 
+type memoryCurationAgentRunStatsAggregate struct {
+	Changed               bool `json:"changed"`
+	DailyFilesWritten     int  `json:"daily_files_written"`
+	ReviewCandidatesAdded int  `json:"review_candidates_added"`
+	SkillCandidatesAdded  int  `json:"skill_candidates_added"`
+	EvidenceCollected     int  `json:"evidence_collected"`
+	ConflictsFound        int  `json:"conflicts_found"`
+}
+
+type memoryCurationAgentRunStatusCounts struct{ pending, success, failed int }
+
+func aggregateMemoryCurationAgentRunStats(ctx context.Context, exec dbExecutor, parentRunID string) (memoryCurationAgentRunStatsAggregate, memoryCurationAgentRunStatusCounts, error) {
+	rows, err := exec.Query(ctx, `
+		SELECT status,
+		       COALESCE(stats, '{}'::jsonb)
+		  FROM memory_curation_agent_run
+		 WHERE parent_run_id = $1::uuid
+	`, parentRunID)
+	if err != nil {
+		return memoryCurationAgentRunStatsAggregate{}, memoryCurationAgentRunStatusCounts{}, err
+	}
+	defer rows.Close()
+	counts := memoryCurationAgentRunStatusCounts{}
+	aggregate := memoryCurationAgentRunStatsAggregate{}
+	for rows.Next() {
+		var childStatus string
+		var raw []byte
+		if err := rows.Scan(&childStatus, &raw); err != nil {
+			return aggregate, counts, err
+		}
+		if raw != nil {
+			var cs memoryCurationAgentRunStatsAggregate
+			_ = json.Unmarshal(raw, &cs)
+			aggregate.Changed = aggregate.Changed || cs.Changed
+			aggregate.DailyFilesWritten += cs.DailyFilesWritten
+			aggregate.ReviewCandidatesAdded += cs.ReviewCandidatesAdded
+			aggregate.SkillCandidatesAdded += cs.SkillCandidatesAdded
+			aggregate.EvidenceCollected += cs.EvidenceCollected
+			aggregate.ConflictsFound += cs.ConflictsFound
+		}
+		switch childStatus {
+		case "succeeded":
+			counts.success++
+		case "failed", "cancelled":
+			counts.failed++
+		default:
+			counts.pending++
+		}
+	}
+	return aggregate, counts, rows.Err()
+}
+
+func mergeMemoryCurationParentStatsWithAgentRuns(ctx context.Context, exec dbExecutor, parentRunID string) error {
+	var raw []byte
+	if err := exec.QueryRow(ctx, `SELECT stats FROM memory_curation_run WHERE id = $1::uuid`, parentRunID).Scan(&raw); err != nil {
+		return err
+	}
+	stats := map[string]any{}
+	_ = json.Unmarshal(raw, &stats)
+	child, counts, err := aggregateMemoryCurationAgentRunStats(ctx, exec, parentRunID)
+	if err != nil {
+		return err
+	}
+	stats["agents_scanned"] = intFromStats(stats, "agents_scanned") + counts.success + counts.failed + counts.pending
+	stats["agents_changed"] = intFromStats(stats, "agents_changed") + boolToInt(child.Changed)
+	stats["daily_files_written"] = intFromStats(stats, "daily_files_written") + child.DailyFilesWritten
+	stats["review_candidates_added"] = intFromStats(stats, "review_candidates_added") + child.ReviewCandidatesAdded
+	stats["skill_candidates_added"] = intFromStats(stats, "skill_candidates_added") + child.SkillCandidatesAdded
+	stats["evidence_collected"] = intFromStats(stats, "evidence_collected") + child.EvidenceCollected
+	stats["conflicts_found"] = intFromStats(stats, "conflicts_found") + child.ConflictsFound
+	stats["child_success_count"] = counts.success
+	stats["child_failed_count"] = counts.failed
+	stats["child_pending_count"] = counts.pending
+	merged, _ := json.Marshal(stats)
+	_, err = exec.Exec(ctx, `UPDATE memory_curation_run SET stats = $2::jsonb WHERE id = $1::uuid`, parentRunID, merged)
+	return err
+}
+
+func finalizeMemoryCurationParentFromAgentRuns(ctx context.Context, exec dbExecutor, parentRunID string) error {
+	var stage, status string
+	if err := exec.QueryRow(ctx, `SELECT stage, status FROM memory_curation_run WHERE id = $1::uuid`, parentRunID).Scan(&stage, &status); err != nil {
+		return err
+	}
+	rows, err := exec.Query(ctx, `
+		SELECT status,
+		       COALESCE(stats, '{}'::jsonb)
+		  FROM memory_curation_agent_run
+		 WHERE parent_run_id = $1::uuid
+	`, parentRunID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	type childStats struct {
+		Changed               bool `json:"changed"`
+		DailyFilesWritten     int  `json:"daily_files_written"`
+		ReviewCandidatesAdded int  `json:"review_candidates_added"`
+		SkillCandidatesAdded  int  `json:"skill_candidates_added"`
+		EvidenceCollected     int  `json:"evidence_collected"`
+		ConflictsFound        int  `json:"conflicts_found"`
+	}
+	counts := struct{ pending, success, failed int }{}
+	aggregate := childStats{}
+	for rows.Next() {
+		var childStatus string
+		var raw []byte
+		if err := rows.Scan(&childStatus, &raw); err != nil {
+			return err
+		}
+		if raw != nil {
+			var cs childStats
+			_ = json.Unmarshal(raw, &cs)
+			aggregate.Changed = aggregate.Changed || cs.Changed
+			aggregate.DailyFilesWritten += cs.DailyFilesWritten
+			aggregate.ReviewCandidatesAdded += cs.ReviewCandidatesAdded
+			aggregate.SkillCandidatesAdded += cs.SkillCandidatesAdded
+			aggregate.EvidenceCollected += cs.EvidenceCollected
+			aggregate.ConflictsFound += cs.ConflictsFound
+		}
+		switch childStatus {
+		case "succeeded":
+			counts.success++
+		case "failed", "cancelled":
+			counts.failed++
+		default:
+			counts.pending++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	stats, _ := json.Marshal(map[string]any{
+		"agents_scanned":          counts.success + counts.failed + counts.pending,
+		"agents_changed":          boolToInt(aggregate.Changed),
+		"daily_files_written":     aggregate.DailyFilesWritten,
+		"review_candidates_added": aggregate.ReviewCandidatesAdded,
+		"skill_candidates_added":  aggregate.SkillCandidatesAdded,
+		"evidence_collected":      aggregate.EvidenceCollected,
+		"conflicts_found":         aggregate.ConflictsFound,
+		"child_success_count":     counts.success,
+		"child_failed_count":      counts.failed,
+		"child_pending_count":     counts.pending,
+	})
+	if stage == "agent_self_review" {
+		parentStatus := "failed"
+		errorText := "all self-review child runs failed"
+		if counts.success > 0 && counts.pending == 0 {
+			parentStatus = "succeeded"
+			errorText = ""
+		} else if counts.pending > 0 {
+			parentStatus = ""
+			errorText = ""
+		}
+		_, err = exec.Exec(ctx, `
+			UPDATE memory_curation_run
+			   SET stats = $2::jsonb,
+			       status = CASE WHEN $3 = '' THEN status ELSE $3 END,
+			       error = $4,
+			       finished_at = CASE WHEN $3 <> '' THEN now() ELSE finished_at END
+			 WHERE id = $1::uuid
+		`, parentRunID, stats, parentStatus, errorText)
+		return err
+	}
+	if stage == "all" {
+		if counts.pending > 0 {
+			_, err = exec.Exec(ctx, `
+				UPDATE memory_curation_run
+				   SET stats = $2::jsonb
+				 WHERE id = $1::uuid
+			`, parentRunID, stats)
+			return err
+		}
+		if counts.success == 0 {
+			_, err = exec.Exec(ctx, `
+				UPDATE memory_curation_run
+				   SET stats = $2::jsonb, status = 'failed', error = 'no successful self-review child runs', finished_at = now()
+				 WHERE id = $1::uuid
+			`, parentRunID, stats)
+			return err
+		}
+		_, err = exec.Exec(ctx, `
+			UPDATE memory_curation_run
+			   SET stats = $2::jsonb
+			 WHERE id = $1::uuid
+		`, parentRunID, stats)
+		return err
+	}
+	return nil
+}
+
 func (h *Handler) persistSelfReviewOutput(ctx context.Context, exec dbExecutor, runID, workspaceID, agentID, output string) error {
 	var parsed selfReviewOutput
 	if !extractJSONObject(output, &parsed) || len(parsed.Candidates) == 0 {
@@ -283,6 +473,29 @@ func curationOutputMetadata(raw json.RawMessage, source string, appliesRaw json.
 		return json.RawMessage(`{"source":"` + source + `"}`)
 	}
 	return payload
+}
+
+func boolToInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func intFromStats(stats map[string]any, key string) int {
+	switch value := stats[key].(type) {
+	case int:
+		return value
+	case int64:
+		return int(value)
+	case float64:
+		return int(value)
+	case json.Number:
+		if i, err := value.Int64(); err == nil {
+			return int(i)
+		}
+	}
+	return 0
 }
 
 func mapStringAny(pairs ...string) json.RawMessage {

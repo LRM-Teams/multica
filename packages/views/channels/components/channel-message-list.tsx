@@ -11,6 +11,7 @@ import {
   type Ref,
   type ReactNode,
 } from "react";
+// react-doctor-disable-next-line react-doctor/no-flush-sync -- intentional: sync Virtuoso scroll parent before paint (LRM-273).
 import { flushSync } from "react-dom";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { ChannelMessage } from "@multica/core/types";

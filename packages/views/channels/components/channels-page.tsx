@@ -2724,16 +2724,31 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
               </>
             }
             title={
+              // LRM-234 — desktop needs a visible ▾ next to the channel
+              // name so settings aren't "click the title if you know".
+              // Entry model unchanged: same control still opens Channel
+              // details (Settings tab reachable inside). Mobile keeps ⋯.
               <button
                 type="button"
                 onClick={() => toggleChannelDetails("about")}
                 aria-label={t(($) => $.details.open_aria)}
+                aria-expanded={channelDetailsOpen && !isMobile}
                 className={cn(
-                  "truncate text-left hover:text-primary",
+                  "inline-flex min-w-0 max-w-full items-center gap-0.5 text-left hover:text-primary",
                   channelDetailsOpen && !isMobile && "text-primary",
                 )}
               >
-                {active.name}
+                <span className="truncate">{active.name}</span>
+                {!isMobile && (
+                  <ChevronDown
+                    data-testid="channel-title-chevron"
+                    className={cn(
+                      "size-3.5 shrink-0 text-muted-foreground transition-transform",
+                      channelDetailsOpen && "rotate-180",
+                    )}
+                    aria-hidden="true"
+                  />
+                )}
               </button>
             }
             meta={

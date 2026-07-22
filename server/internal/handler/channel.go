@@ -41,12 +41,13 @@ const channelThreadDefaultLimit = 50
 const channelThreadMaxLimit = 100
 const channelClientMessageIDMaxLen = 128
 const channelOutputContractInstruction = "Channel output contract: use the runtime brief as the source of truth for visible output. Never print JSON envelopes, action objects, no_reply/stay_silent tokens, tool intent, analysis, missing-tool diagnostics, or described commands as the final answer."
-const channelDirectedReplyInstruction = "This run is directly addressed to you. Human DMs, human @mentions, direct questions, assigned tasks, and DM-style continuations require a visible result. Agent-to-agent channel @mentions are weak notifications unless they ask for an immediate deliverable, review, decision, or direct answer; weak notifications should finish without visible output. Reply only to the Message target for chat transport supplied below: it is the current message's source location. A top-level group message stays in the main channel, a thread message stays in that thread, and a DM stays in that DM. Never create or switch to a thread based on message content or tone. Pure greetings (hi/你好/在吗) get a greeting sticker only. Substantive requests get a helpful text answer (no acknowledgement sticker first). Never return no_reply, stay_silent, JSON, or other protocol text."
+const channelDirectedReplyInstruction = "This run is directly addressed to you. Human DMs, human @mentions, direct questions, assigned tasks, and DM-style continuations require a visible result. Agent-to-agent channel @mentions are weak notifications unless they ask for an immediate deliverable, review, decision, or direct answer; weak notifications should finish without visible output. Reply only to the Message target for chat transport supplied below: it is the current message's source location. A top-level group message stays in the main channel, a thread message stays in that thread, and a DM stays in that DM. Never create or switch to a thread based on message content or tone. Pure greetings (hi/你好/在吗) get a greeting sticker only. Substantive requests get a helpful answer using the requested supported delivery modality (no acknowledgement sticker first). Never return no_reply, stay_silent, JSON, or other protocol text."
 const channelAmbientNoReplyInstruction = "If you should not reply, finish without a visible reply. Do not use the visible-output path, and do not print no_reply, stay_silent, JSON, or CLI/protocol text."
 const channelAmbientGreetingReactionInstruction = "If the current channel message or unread bundle is only a casual greeting or small talk (for example hi, hello, hey, 你好, 在吗) with no @-mention, no question, and no task request, respond with a 👋 reaction to the reaction target only and do not create a text reply. This also applies when you are the only agent in the channel: treat the greeting as directed to you, but keep the action reaction-only unless the user includes a question or request. If reactions are unavailable, finish without visible output rather than explaining that no reply is needed."
-const channelStickerReplyInstruction = "Sticker replies: for directed short social beats (hi/你好, ok/好的, 收到/明白, 谢谢, 赞), use a sticker OR a short text reply — not both. For substantive answers, send text only (no acknowledgement sticker first). For ambient/unaddressed runs, use stickers only when explicitly requested or genuinely welcoming someone; otherwise react or stay silent. Follow the runtime output path and never print protocol text."
+const channelStickerReplyInstruction = "Sticker replies: for directed short social beats (hi/你好, ok/好的, 收到/明白, 谢谢, 赞), use a sticker OR a short reply — not both. For substantive answers, do not add an acknowledgement sticker; preserve the requested supported delivery modality. For ambient/unaddressed runs, use stickers only when explicitly requested or genuinely welcoming someone; otherwise react or stay silent. Follow the runtime output path and never print protocol text."
 const channelContinuationInstruction = "Collaborative discussion rule: reply only when you move the topic toward a decision, owner, or completed action. For a requested completion/blocker summary in a group chat, you may @-mention the responsible human once. Use @-mentions only for concrete actions, unresolved questions, human escalation, or requested completion/blocker delivery; never for thanks, generic status, future handoffs, or generic opinion invites. If the topic already has an owner and you add nothing immediate, finish without visible output."
 const channelVoiceInputReplyInstruction = "Voice delivery: the current human message came from voice input. If you send a visible answer, use `multica message send --voice` and include the complete answer text as its accessible transcript."
+const channelTypedVoiceReplyInstruction = "Voice delivery is supported: if the current human message explicitly asks for a spoken/voice reply, follow the runtime brief's voice-delivery path and include the complete answer text as its accessible transcript. Otherwise preserve the requested non-voice modality. Never claim that Multica group chat lacks voice delivery."
 const channelMessageWakeReason = "channel_message"
 const channelMessageWakePriority int32 = 1
 const channelThreadReplyPriority int32 = 1
@@ -5029,7 +5030,7 @@ func buildChannelAmbientObservationPrompt(ch ChannelResponse, agent db.Agent, tr
 	b.WriteString(channelAmbientGreetingReactionInstruction)
 	b.WriteString("\n")
 	b.WriteString("Decide whether your own role/profile makes a response useful. If it is not clearly relevant to you, finish without visible output; do not print no_reply or protocol text.\n")
-	b.WriteString("If the message directly addresses your agent name, role, description, instructions, or an unmistakable task for you, treat it as directed to you: write a visible plain-text reply or acknowledgement, and do not return no_reply.\n")
+	b.WriteString("If the message directly addresses your agent name, role, description, instructions, or an unmistakable task for you, treat it as directed to you: write a visible reply or acknowledgement using the requested supported delivery modality, and do not return no_reply.\n")
 	b.WriteString("If the message asks a category of members to react (for example directors, reviewers, designers, backend engineers), respond only if your agent name/description/instructions match that category.\n")
 	b.WriteString("If a lightweight acknowledgement is enough outside an all-hands welcome/greeting request, use a reaction when the runtime brief supports reactions and a reaction is sufficient; otherwise send a short acknowledgement.\n")
 	b.WriteString(channelStickerReplyInstruction)
@@ -5757,10 +5758,13 @@ func channelMessageHasVoicePart(parts []protocol.MessagePart) bool {
 }
 
 func channelVoiceReplyInstruction(trigger ChannelMessageResponse) string {
-	if !channelMessageIsHumanAuthored(trigger.Type) || !channelMessageHasVoicePart(trigger.Parts) {
+	if !channelMessageIsHumanAuthored(trigger.Type) {
 		return ""
 	}
-	return channelVoiceInputReplyInstruction
+	if channelMessageHasVoicePart(trigger.Parts) {
+		return channelVoiceInputReplyInstruction
+	}
+	return channelTypedVoiceReplyInstruction
 }
 
 func (h *Handler) createUserChannelMessageWithIdempotency(ctx context.Context, in channelMessageInsertInput, attachmentIDs []pgtype.UUID) (channelMessageCreateResult, error) {

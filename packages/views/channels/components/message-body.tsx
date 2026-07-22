@@ -14,6 +14,8 @@ import {
   unwrapStructuredPreviewContent,
 } from "./message-parts-preview";
 
+type MessageBodyContentMode = "all" | "transcript" | "non-transcript";
+
 /**
  * Shared renderer for a channel/thread/DM message body. Resolves the message's
  * structured parts (own `parts`, or a historical structured-action envelope
@@ -38,6 +40,7 @@ export function MessageBody({
   compact = false,
   sourceMessageId,
   consumedAttachmentIds,
+  contentMode = "all",
 }: {
   content: string;
   parts?: ChannelMessage["parts"];
@@ -46,6 +49,7 @@ export function MessageBody({
   compact?: boolean;
   sourceMessageId?: string;
   consumedAttachmentIds?: readonly string[];
+  contentMode?: MessageBodyContentMode;
 }) {
   const { getActorName } = useActorName();
   const resolveMentionPreview = mentionResolverFrom(getActorName);
@@ -56,27 +60,39 @@ export function MessageBody({
       part.type !== "attachment" ||
       !consumedAttachmentIdSet.has(part.attachment_id),
   );
-  const hasAttachmentParts = collectAttachmentParts(effectiveParts).length > 0;
+  const presentedParts = effectiveParts?.filter((part) => {
+    if (contentMode === "all") return true;
+    const isTranscriptPart = part.type === "text" || part.type === "reference";
+    return contentMode === "transcript"
+      ? isTranscriptPart
+      : !isTranscriptPart && part.type !== "voice";
+  });
+  const hasAttachmentParts = collectAttachmentParts(presentedParts).length > 0;
 
   const body = (() => {
     if (compact) {
       // A sticker-bearing message renders its parts (image + any text) height-
       // capped; sticker-free content stays a clamped text preview so a long agent
       // message never expands the parent header.
-      if (effectiveParts?.some((part) => part.type === "sticker")) {
+      if (presentedParts?.some((part) => part.type === "sticker")) {
         return (
           <div className="max-h-40 overflow-hidden">
-            <MessagePartsRenderer parts={effectiveParts} />
+            <MessagePartsRenderer parts={presentedParts} />
           </div>
         );
       }
+      if (contentMode === "non-transcript") return null;
       // Project reference spans first (#530): post-#463 a mention lives in `parts`
       // with a span into `content`, so formatMessagePartsPreview yields nothing and
       // the raw `content` below would render the internal handle — a thread root or
       // parent header would read `@actor_14` while the message itself reads `@小雅`.
       const compactBody =
-        projectReferencesToText(content, parts, resolveMentionPreview) ??
-        formatMessagePartsPreview(effectiveParts) ??
+        projectReferencesToText(
+          content,
+          contentMode === "all" ? parts : presentedParts,
+          resolveMentionPreview,
+        ) ??
+        formatMessagePartsPreview(presentedParts) ??
         unwrapStructuredPreviewContent(content);
       // Attachment-only compact messages have no text body chrome.
       if (!compactBody && hasAttachmentParts) {
@@ -95,10 +111,10 @@ export function MessageBody({
       );
     }
 
-    if (effectiveParts) {
+    if (presentedParts) {
       // Text + sticker only in the body stream; attachment parts are rendered
       // exclusively by MessageAttachmentZone under the body.
-      const bodyParts = effectiveParts.filter((part) => part.type !== "attachment");
+      const bodyParts = presentedParts.filter((part) => part.type !== "attachment");
       const hasReferenceParts = bodyParts.some((part) => part.type === "reference");
       // Reference parts (#463 structured mentions / issue-refs) are overlays on
       // the canonical `content`, so a message can have reference-only `parts` yet
@@ -122,7 +138,7 @@ export function MessageBody({
           <>
             <InlineReferenceContent
               content={content}
-              parts={effectiveParts}
+              parts={presentedParts}
               highlightQuery={highlightQuery}
               sourceMessageId={sourceMessageId}
             />
@@ -133,6 +149,7 @@ export function MessageBody({
       return <MessagePartsRenderer parts={bodyParts} highlightQuery={highlightQuery} />;
     }
 
+    if (contentMode !== "all") return null;
     return (
       <MemoizedMarkdown
         attachments={attachments}
@@ -147,7 +164,7 @@ export function MessageBody({
 
   const zone = hasAttachmentParts ? (
     <MessageAttachmentZone
-      parts={effectiveParts}
+      parts={presentedParts}
       attachments={attachments}
       compact={compact}
     />
@@ -156,9 +173,9 @@ export function MessageBody({
   if (!body && !zone) {
     // Empty message with neither body nor zone — still render nothing useful.
     // Callers (tombstones etc.) handle truly empty cases elsewhere.
-    if (!content && !effectiveParts?.length) return null;
+    if (!content && !presentedParts?.length) return null;
     // Legacy empty-parts envelope path: fall through to markdown of content.
-    if (!effectiveParts) {
+    if (!presentedParts && contentMode === "all") {
       return (
         <MemoizedMarkdown
           attachments={attachments}

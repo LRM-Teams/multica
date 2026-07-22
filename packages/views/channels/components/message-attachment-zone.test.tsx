@@ -207,6 +207,42 @@ describe("MessageAttachmentZone", () => {
     expect(container).not.toHaveTextContent("nihao.mp3");
   });
 
+  it("separates a voice transcript from a real attachment without dropping either", () => {
+    const attachment = makeAttachment({
+      id: "supporting-file",
+      filename: "details.pdf",
+      content_type: "application/pdf",
+    });
+    const parts: MessagePart[] = [
+      { type: "text", text: "spoken answer" },
+      { type: "voice" },
+      { type: "attachment", attachment_id: attachment.id },
+    ];
+    const { rerender } = render(
+      <MessageBody
+        content="spoken answer"
+        parts={parts}
+        attachments={[attachment]}
+        contentMode="non-transcript"
+      />,
+    );
+
+    expect(screen.queryByText("spoken answer")).not.toBeInTheDocument();
+    expect(screen.getByTestId("attachment-file")).toHaveTextContent("details.pdf");
+
+    rerender(
+      <MessageBody
+        content="spoken answer"
+        parts={parts}
+        attachments={[attachment]}
+        contentMode="transcript"
+      />,
+    );
+
+    expect(screen.getByTestId("body-text")).toHaveTextContent("spoken answer");
+    expect(screen.queryByTestId("message-attachment-zone")).not.toBeInTheDocument();
+  });
+
   it("preserves mixed image/file order from attachment parts", () => {
     const parts: MessagePart[] = [
       { type: "attachment", attachment_id: "img-1" },

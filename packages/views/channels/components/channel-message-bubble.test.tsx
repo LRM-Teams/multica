@@ -250,6 +250,9 @@ vi.mock("../../i18n/use-t", () => ({
           voice_loading: string;
           voice_stop: string;
           voice_retry: string;
+          voice_show_transcript: string;
+          voice_hide_transcript: string;
+          voice_transcript_label: string;
           edit_action: string;
           actions_menu: string;
           delete_action: string;
@@ -333,6 +336,9 @@ vi.mock("../../i18n/use-t", () => ({
           voice_loading: "Preparing voice reply…",
           voice_stop: "Stop voice reply",
           voice_retry: "Voice playback failed · Retry",
+          voice_show_transcript: "Show transcript",
+          voice_hide_transcript: "Hide transcript",
+          voice_transcript_label: "Voice transcript",
           edit_action: "Edit",
           delete_action: "Delete",
           edited_label: "(edited)",
@@ -2028,7 +2034,39 @@ describe("ChannelMessageBubble", () => {
     expect(screen.queryByTestId("voice-reply-control")).not.toBeInTheDocument();
   });
 
-  it("keeps the Agent voice replay control in a compact message group", () => {
+  it("hides an Agent voice transcript until its attached text control is opened", async () => {
+    const transcript = "One day, the teacher asked what echo means.";
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          content: transcript,
+          parts: [
+            { type: "text", text: transcript },
+            { type: "voice" },
+          ],
+        })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.queryByText(transcript)).not.toBeInTheDocument();
+    const toggle = screen.getByRole("button", { name: "Show transcript" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    await userEvent.click(toggle);
+
+    const panel = screen.getByTestId("voice-reply-transcript");
+    expect(screen.getByRole("region", { name: "Voice transcript" })).toBe(panel);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(toggle).toHaveAttribute("aria-controls", panel.id);
+    expect(within(panel).getByText("Voice transcript")).toBeInTheDocument();
+    expect(within(panel).getByText(transcript)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Hide transcript" }));
+    expect(screen.queryByTestId("voice-reply-transcript")).not.toBeInTheDocument();
+  });
+
+  it("keeps the Agent voice replay control in a compact message group", async () => {
     render(
       <ChannelMessageBubble
         message={makeMessage({
@@ -2045,5 +2083,6 @@ describe("ChannelMessageBubble", () => {
 
     expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-message-group", "compact");
     expect(screen.getByRole("button", { name: "Play voice reply" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("voice-reply-control")).toHaveTextContent('3″'));
   });
 });

@@ -1897,7 +1897,7 @@ describe("ChannelMessageBubble", () => {
     expect(onReact).not.toHaveBeenCalled();
   });
 
-  it("shows pending status on an optimistic bubble and hides the action bar", () => {
+  it("renders an optimistic pending bubble silently (no Sending…)", () => {
     render(
       <ChannelMessageBubble
         message={makeMessage({
@@ -1918,7 +1918,10 @@ describe("ChannelMessageBubble", () => {
     );
 
     expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-local-send", "pending");
-    expect(screen.getByTestId("message-send-pending")).toHaveTextContent("Sending…");
+    expect(screen.getByText("optimistic pending")).toBeInTheDocument();
+    // Slack / LRM-271: no Sending… chrome on pending optimistic rows.
+    expect(screen.queryByTestId("message-send-pending")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Sending/i)).not.toBeInTheDocument();
     expect(screen.queryByTestId("message-action-bar")).not.toBeInTheDocument();
   });
 

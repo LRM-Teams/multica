@@ -40,34 +40,50 @@ export function RemindersTab({ agent }: RemindersTabProps) {
   const { t } = useT("agents");
   const queryClient = useQueryClient();
 
-  const upcoming = useQuery(agentRemindersUpcomingOptions(agent.id));
-  const history = useInfiniteQuery(agentRemindersHistoryOptions(agent.id));
+  const {
+    data: upcomingData,
+    isLoading: upcomingLoading,
+    isError: upcomingIsError,
+    error: upcomingError,
+  } = useQuery(agentRemindersUpcomingOptions(agent.id));
+  const {
+    data: historyData,
+    isLoading: historyLoading,
+    isError: historyIsError,
+    error: historyError,
+    hasNextPage,
+    isFetchingNextPage,
+    fetchNextPage,
+  } = useInfiniteQuery(agentRemindersHistoryOptions(agent.id));
 
   const upcomingRows = useMemo<UpcomingReminderRow[]>(
     () =>
-      (upcoming.data?.reminders ?? [])
+      (upcomingData?.reminders ?? [])
         .map(adaptUpcomingRow)
         .filter((row): row is UpcomingReminderRow => row !== null),
-    [upcoming.data],
+    [upcomingData],
   );
   const historyRows = useMemo<FiredReminderRow[]>(
     () =>
-      (history.data?.pages ?? [])
-        .flatMap((page) => page.reminders)
-        .map(adaptFiredRow)
-        .filter((row): row is FiredReminderRow => row !== null),
-    [history.data],
+      (historyData?.pages ?? []).reduce<FiredReminderRow[]>((rows, page) => {
+        for (const raw of page.reminders) {
+          const row = adaptFiredRow(raw);
+          if (row) rows.push(row);
+        }
+        return rows;
+      }, []),
+    [historyData],
   );
 
   const inaccessible =
-    (upcoming.error instanceof ApiError && upcoming.error.status === 403) ||
-    (history.error instanceof ApiError && history.error.status === 403);
+    (upcomingError instanceof ApiError && upcomingError.status === 403) ||
+    (historyError instanceof ApiError && historyError.status === 403);
 
   if (inaccessible) {
     return (
-      <div className="p-4 text-xs text-muted-foreground" role="status">
+      <output className="block p-4 text-xs text-muted-foreground">
         {t(($) => $.reminders.inaccessible)}
-      </div>
+      </output>
     );
   }
 
@@ -82,8 +98,8 @@ export function RemindersTab({ agent }: RemindersTabProps) {
   // once one section has real content does the other's specific empty
   // copy become meaningful (it's now telling you something the other
   // section's content doesn't already imply).
-  const upcomingSettled = !upcoming.isLoading && !upcoming.isError;
-  const historySettled = !history.isLoading && !history.isError;
+  const upcomingSettled = !upcomingLoading && !upcomingIsError;
+  const historySettled = !historyLoading && !historyIsError;
   const bothGenuinelyEmpty =
     upcomingSettled && historySettled && upcomingRows.length === 0 && historyRows.length === 0;
 
@@ -97,11 +113,11 @@ export function RemindersTab({ agent }: RemindersTabProps) {
     <div className="flex min-w-0 flex-col">
       <section aria-label={t(($) => $.reminders.upcoming_heading)}>
         <SectionHeading label={t(($) => $.reminders.upcoming_heading)} />
-        {upcoming.isLoading ? (
+        {upcomingLoading ? (
           <p className="px-3 py-3 text-xs text-muted-foreground md:px-4">
             {t(($) => $.reminders.loading)}
           </p>
-        ) : upcoming.isError ? (
+        ) : upcomingIsError ? (
           <ErrorState onRetry={retry} label={t(($) => $.reminders.error_title)} retryLabel={t(($) => $.reminders.retry)} />
         ) : upcomingRows.length === 0 ? (
           <p className="px-3 py-3 text-xs text-muted-foreground md:px-4">
@@ -118,11 +134,11 @@ export function RemindersTab({ agent }: RemindersTabProps) {
 
       <section aria-label={t(($) => $.reminders.history_heading)}>
         <SectionHeading label={t(($) => $.reminders.history_heading)} />
-        {history.isLoading ? (
+        {historyLoading ? (
           <p className="px-3 py-3 text-xs text-muted-foreground md:px-4">
             {t(($) => $.reminders.loading)}
           </p>
-        ) : history.isError ? (
+        ) : historyIsError ? (
           <ErrorState onRetry={retry} label={t(($) => $.reminders.error_title)} retryLabel={t(($) => $.reminders.retry)} />
         ) : historyRows.length === 0 ? (
           <p className="px-3 py-3 text-xs text-muted-foreground md:px-4">
@@ -135,12 +151,12 @@ export function RemindersTab({ agent }: RemindersTabProps) {
                 <FiredRowView key={`${row.id}:${row.firedAt}`} row={row} />
               ))}
             </ul>
-            {history.hasNextPage && (
+            {hasNextPage && (
               <div className="px-3 py-3 md:px-4">
                 <button
                   type="button"
-                  onClick={() => void history.fetchNextPage()}
-                  disabled={history.isFetchingNextPage}
+                  onClick={() => void fetchNextPage()}
+                  disabled={isFetchingNextPage}
                   className="text-xs font-medium text-muted-foreground hover:text-foreground disabled:opacity-50"
                 >
                   {t(($) => $.reminders.load_more)}

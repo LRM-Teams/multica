@@ -140,11 +140,15 @@ vi.mock("../../navigation/app-link", () => ({
   ),
 }));
 
-// The bubble resolves the author's live avatar from the members/agents cache.
-// Stub it so these layout/identity tests don't need a QueryClient/workspace.
+// The bubble may fall back to the members/agents directory (profile-card source)
+// when the message payload omits author_avatar_url (LRM-218). Stub the hook so
+// layout tests don't need a QueryClient/workspace; override per-case when needed.
+const getActorAvatarUrlMock = vi.fn(
+  (_type: string, _id: string): string | null => null,
+);
 vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({
-    getActorAvatarUrl: () => null,
+    getActorAvatarUrl: getActorAvatarUrlMock,
     getActorInitials: (_type: string, id: string) => {
       if (id === "user-1") return "A";
       if (id === "user-2") return "B";
@@ -426,6 +430,8 @@ describe("ChannelMessageBubble", () => {
 
   beforeEach(() => {
     copyTextMock.mockReset();
+    getActorAvatarUrlMock.mockReset();
+    getActorAvatarUrlMock.mockReturnValue(null);
     vi.mocked(toast.success).mockReset();
     vi.mocked(toast.error).mockReset();
     __resetAuthorAvatarOkCacheForTests();
@@ -534,8 +540,8 @@ describe("ChannelMessageBubble", () => {
       />,
     );
     // The avatar image comes from the payload's `author_avatar_url` (aggregated
-    // by the BE for every viewer, #574) — so a group member sees the author's
-    // real avatar instead of the default bot; no `getActorAvatarUrl` guess.
+    // by the BE for every viewer, #574). Directory fallback is only used when
+    // payload + sticky cache both miss.
     const img = screen.getByRole("img", { name: /Research Agent/i });
     expect(img).toHaveAttribute("src", "/uploads/agent-avatar.png");
   });
@@ -569,6 +575,64 @@ describe("ChannelMessageBubble", () => {
     expect(screen.getByRole("img", { name: /Research Agent/i })).toHaveAttribute(
       "src",
       "/uploads/agent-avatar.png",
+    );
+  });
+
+  it("LRM-218: falls back to actor-directory avatar when payload omits URL", () => {
+    getActorAvatarUrlMock.mockImplementation((type, id) =>
+      type === "agent" && id === "agent-1" ? "/agent-avatars/human-02.jpg" : null,
+    );
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          author_id: "agent-1",
+          author_avatar_url: null,
+          content: "no payload avatar",
+        })}
+        currentUserId="user-1"
+      />,
+    );
+    expect(screen.getByRole("img", { name: /Research Agent/i })).toHaveAttribute(
+      "src",
+      "/agent-avatars/human-02.jpg",
+    );
+  });
+
+  it("LRM-218: directory fallback seeds sticky cache for consecutive same-author bubbles", () => {
+    getActorAvatarUrlMock.mockImplementation((type, id) =>
+      type === "agent" && id === "agent-1" ? "/agent-avatars/human-02.jpg" : null,
+    );
+    const { rerender } = render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          id: "msg-1",
+          author_id: "agent-1",
+          author_avatar_url: null,
+          content: "first",
+        })}
+        currentUserId="user-1"
+      />,
+    );
+    expect(screen.getByRole("img", { name: /Research Agent/i })).toHaveAttribute(
+      "src",
+      "/agent-avatars/human-02.jpg",
+    );
+
+    getActorAvatarUrlMock.mockReturnValue(null);
+    rerender(
+      <ChannelMessageBubble
+        message={makeMessage({
+          id: "msg-2",
+          author_id: "agent-1",
+          author_avatar_url: null,
+          content: "second",
+        })}
+        currentUserId="user-1"
+      />,
+    );
+    expect(screen.getByRole("img", { name: /Research Agent/i })).toHaveAttribute(
+      "src",
+      "/agent-avatars/human-02.jpg",
     );
   });
 

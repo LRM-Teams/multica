@@ -35,6 +35,7 @@ import {
   channelMessagesPageOptions,
   channelMessagesFirstItemIndex,
   flattenChannelMessagePages,
+  enrichChannelMessagesPreservingAvatars,
   useEnsureMessageLoaded,
   channelsOptions,
   archivedChannelsOptions,
@@ -1003,7 +1004,8 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const threadReplies = useMemo(
     () => {
       const messages = threadPage?.messages ?? [];
-      return threadRoot ? messages.filter((msg) => msg.id !== threadRoot.id) : messages;
+      const filtered = threadRoot ? messages.filter((msg) => msg.id !== threadRoot.id) : messages;
+      return enrichChannelMessagesPreservingAvatars(filtered);
     },
     [threadPage?.messages, threadRoot],
   );

@@ -121,7 +121,38 @@ export function channelMessagesPageOptions(
 }
 
 export function flattenChannelMessagePages(data?: InfiniteData<ChannelMessagesPage>): ChannelMessage[] {
-  return data ? [...data.pages].reverse().flatMap((page) => page.messages) : [];
+  const flat = data
+    ? [...data.pages].reverse().flatMap((page) => page.messages ?? []).filter(Boolean)
+    : [];
+  return enrichChannelMessagesPreservingAvatars(flat);
+}
+
+/**
+ * Backfill `author_avatar_url` across a read-model list (API refetch / flatten)
+ * using the same preserve/sibling rules as WS upserts. Refetches and list
+ * payloads that omit avatars must not regress bubbles to glyph placeholders
+ * when an earlier row or optimistic ACK already had the face (LRM-218).
+ *
+ * Soft-deleted tombstones (`deleted_at` set) MUST stay in the list — do not
+ * reuse WS upsert's shouldRender filter, which drops them.
+ */
+export function enrichChannelMessagesPreservingAvatars(
+  messages: readonly ChannelMessage[],
+): ChannelMessage[] {
+  const out: ChannelMessage[] = [];
+  for (const message of messages) {
+    // List/refetch pages (and some test fixtures) can include sparse holes.
+    if (!message) continue;
+    const existing = out.find((m) => matchesChannelMessage(m, message));
+    const enriched = withPreservedAuthorAvatar(message, existing, out);
+    if (existing) {
+      const idx = out.findIndex((m) => matchesChannelMessage(m, message));
+      out[idx] = enriched;
+    } else {
+      out.push(enriched);
+    }
+  }
+  return out;
 }
 
 // Virtuoso needs a stable, monotonically-decreasing `firstItemIndex` to prepend
@@ -150,13 +181,18 @@ export function findChannelMessageMatchIndex(
   if (byId >= 0) return byId;
   const clientId = message.client_message_id;
   if (!clientId) return -1;
-  return messages.findIndex((m) => m.client_message_id === clientId);
+  // Optimistic rows use `client_message_id` as temp `id`; ACK/WS may only carry
+  // the client id on the incoming payload.
+  return messages.findIndex(
+    (m) => m.client_message_id === clientId || m.id === clientId,
+  );
 }
 
 function matchesChannelMessage(existing: ChannelMessage, incoming: ChannelMessage): boolean {
   if (existing.id === incoming.id) return true;
   const clientId = incoming.client_message_id;
-  return !!clientId && existing.client_message_id === clientId;
+  if (!clientId) return false;
+  return existing.client_message_id === clientId || existing.id === clientId;
 }
 
 export function upsertChannelMessageInCache(qc: QueryClient, message: ChannelMessage) {
@@ -216,7 +252,8 @@ export function invalidateChannelMessages(qc: QueryClient, channelId: string) {
   qc.invalidateQueries({ queryKey: channelKeys.messagesPage(channelId) });
 }
 
-function shouldRenderChannelMessage(message: ChannelMessage): boolean {
+function shouldRenderChannelMessage(message: ChannelMessage | null | undefined): boolean {
+  if (!message) return false;
   return !message.deleted_at || (message.thread_reply_count ?? 0) > 0;
 }
 
@@ -238,7 +275,7 @@ export function withPreservedAuthorAvatar(
   if (!incoming.author_id || !siblings?.length) return incoming;
   const fromSibling = siblings.find(
     (m) =>
-      m.id !== incoming.id &&
+      !matchesChannelMessage(m, incoming) &&
       m.author_id === incoming.author_id &&
       m.type === incoming.type &&
       !!m.author_avatar_url,

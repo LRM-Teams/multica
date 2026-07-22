@@ -206,7 +206,7 @@ function useResolvedActorDisplayName(
       : members.some((m) => m.user_id === actorId));
 
   const profileType = mentionType === "member" ? "user" : "agent";
-  const profileQuery = useQuery({
+  const { data: profile } = useQuery({
     ...memberProfileOptions(wsId, profileType, actorId),
     enabled: !!wsId && !!actorId && mentionType != null && !inDirectory,
   });
@@ -217,8 +217,8 @@ function useResolvedActorDisplayName(
     const name = getActorName(mentionType, actorId).trim();
     return name && name !== "Unknown Agent" && name !== "Unknown" ? name : null;
   }
-  if (profileQuery.data) {
-    const name = (profileQuery.data.display_name || profileQuery.data.name || "").trim();
+  if (profile) {
+    const name = (profile.display_name || profile.name || "").trim();
     return name || null;
   }
   // Pending / error: do not invent display copy from emit-time params.

@@ -434,6 +434,7 @@ export function ChannelMessageBubble({
         actorId={message.author_id}
         size={28}
         className="select-none"
+        name={displayName}
         avatarUrlHint={message.author_avatar_url}
         showStatusDot={isAgent}
         profileLink={false}

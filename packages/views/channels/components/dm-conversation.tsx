@@ -681,8 +681,8 @@ function DmChannelConversation({
     deepLinkConsumedRef.current = true;
     // react-doctor-disable-next-line react-doctor/no-event-handler -- one-shot consumption of an external signal (props sourced from the URL), gated on a ref guard, not a fake event handler; there is no user event to move this into.
     if (deepLinkMessageId) dispatch({ type: "setDeepLinkHighlightId", id: deepLinkMessageId });
+    // react-doctor-disable-next-line react-doctor/no-event-handler -- same one-shot deep-link consumption as above.
     if (threadDeepLinkId) {
-      // react-doctor-disable-next-line react-doctor/no-event-handler -- same one-shot deep-link consumption as above.
       dispatch({
         type: "openThread",
         message: {

@@ -323,7 +323,11 @@ export function ChannelMessageBubble({
   const mobileActionsOpen = mobileOverlay === "actions";
   const mobileReactionOpen = mobileOverlay === "reaction" || mobileOverlay === "reaction-full";
   const mobileReactionShowFull = mobileOverlay === "reaction-full";
-  const [contentExpanded, setContentExpanded] = useState(false);
+  // Key expansion to the message identity so a recycled row cannot keep another
+  // bubble's See-more choice (no prop→state effect; LRM-268 / react-doctor).
+  const collapseIdentity = `${message.id}\0${message.content ?? ""}\0${message.parts?.length ?? 0}\0${message.attachments?.length ?? 0}`;
+  const [expandedForIdentity, setExpandedForIdentity] = useState<string | null>(null);
+  const contentExpanded = expandedForIdentity === collapseIdentity;
   const [contentOverflows, setContentOverflows] = useState(false);
   const [mobileThreadTapActive, setMobileThreadTapActive] = useState(false);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -370,31 +374,6 @@ export function ChannelMessageBubble({
     setContentOverflows((previous) => (previous === overflows ? previous : overflows));
   }, [collapseLongContent]);
   measureContentOverflowRef.current = measureContentOverflow;
-
-  // Reset expand state when the message identity/content changes so a recycled
-  // row does not keep another message's See-more choice. Inline prev-prop reset
-  // avoids an extra stale commit (react-doctor / react.dev adjust-state-on-prop).
-  const prevMessageContentKeyRef = useRef({
-    id: message.id,
-    content: message.content,
-    parts: message.parts,
-    attachments: message.attachments,
-  });
-  const prevMessageContentKey = prevMessageContentKeyRef.current;
-  if (
-    prevMessageContentKey.id !== message.id ||
-    prevMessageContentKey.content !== message.content ||
-    prevMessageContentKey.parts !== message.parts ||
-    prevMessageContentKey.attachments !== message.attachments
-  ) {
-    prevMessageContentKeyRef.current = {
-      id: message.id,
-      content: message.content,
-      parts: message.parts,
-      attachments: message.attachments,
-    };
-    setContentExpanded(false);
-  }
 
   useLayoutEffect(() => {
     if (!collapseLongContent || message.deleted_at || message.type === "system") {
@@ -934,7 +913,7 @@ export function ChannelMessageBubble({
                 <button
                   type="button"
                   className="pointer-events-auto inline-flex min-h-11 items-center rounded-full border border-primary/25 bg-background px-3 text-xs font-semibold text-primary shadow-sm transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring md:min-h-8"
-                  onClick={() => setContentExpanded(true)}
+                  onClick={() => setExpandedForIdentity(collapseIdentity)}
                 >
                   {t(($) => $.message.expand_action)}
                 </button>
@@ -945,7 +924,7 @@ export function ChannelMessageBubble({
                 <button
                   type="button"
                   className="inline-flex min-h-11 items-center rounded-full border border-primary/25 bg-background px-3 text-xs font-semibold text-primary shadow-sm transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring md:min-h-8"
-                  onClick={() => setContentExpanded(false)}
+                  onClick={() => setExpandedForIdentity(null)}
                 >
                   {t(($) => $.message.collapse_action)}
                 </button>

@@ -305,7 +305,7 @@ export function ChannelMessageBubble({
   collapseLongContent?: boolean;
 }) {
   const { t } = useT("channels");
-  const { getActorName } = useActorName();
+  const { getActorName, getActorAvatarUrl } = useActorName();
   const resolveMentionPreview = mentionResolverFrom(getActorName);
   const messageTime = useMessageTime();
   const [editDraft, setEditDraft] = useState<string | null>(null);
@@ -389,10 +389,18 @@ export function ChannelMessageBubble({
     message.author_id === currentUserId;
   const isAgent = message.type === "agent";
   const isExternal = message.source === "lark";
-  // Read the author avatar from the message payload (#453/#574), with an
-  // author-scoped sticky cache (LRM-202) so consecutive same-author bubbles
-  // keep the real face when a later payload omits `author_avatar_url`.
-  const avatarUrl = resolveCachedAuthorAvatarUrl(message);
+  // Avatar resolution (LRM-202 / LRM-218 / LRM-221): payload → sticky
+  // same-author cache → actor directory (same source as the profile card).
+  // WS upserts also preserve URLs in `withPreservedAuthorAvatar` so consecutive
+  // bubbles don't regress to glyph placeholders when a publish path omits
+  // `author_avatar_url` (Frank: realtime payloads need not include the face).
+  const directoryActorType =
+    message.type === "agent" ? "agent" : message.type === "user" ? "member" : null;
+  const directoryAvatarUrl =
+    directoryActorType && message.author_id
+      ? getActorAvatarUrl(directoryActorType, message.author_id)
+      : null;
+  const avatarUrl = resolveCachedAuthorAvatarUrl(message, directoryAvatarUrl);
   const displayName = resolveChannelAuthorDisplayName(message, {
     currentUserId,
     ownName,

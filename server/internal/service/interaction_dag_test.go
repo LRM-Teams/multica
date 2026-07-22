@@ -19,6 +19,46 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
+// fakeMessageStore is an in-memory MessageStore for unit tests.
+type fakeMessageStore struct {
+	mu       sync.Mutex
+	messages map[string][]db.TaskMessage // taskID -> messages
+}
+
+func newFakeMessageStore() *fakeMessageStore {
+	return &fakeMessageStore{messages: map[string][]db.TaskMessage{}}
+}
+
+func (f *fakeMessageStore) MessagesForTaskInRange(_ context.Context, taskID string, startSeq, endSeq int32) ([]db.TaskMessage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	msgs := f.messages[taskID]
+	var out []db.TaskMessage
+	for _, m := range msgs {
+		if m.Seq >= startSeq && m.Seq <= endSeq {
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeMessageStore) addTaskMessage(taskID string, msg db.TaskMessage) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.messages[taskID] = append(f.messages[taskID], msg)
+}
+
+func (f *fakeMessageStore) GetProjectInWorkspace(_ context.Context, arg db.GetProjectInWorkspaceParams) (db.Project, error) {
+	return db.Project{}, errors.New("not implemented in fake")
+}
+
+func (f *fakeMessageStore) GetIssueForTask(_ context.Context, taskID string) (db.Issue, error) {
+	return db.Issue{}, errors.New("not implemented in fake")
+}
+
+// Compile-time interface compliance check.
+var _ MessageStore = (*fakeMessageStore)(nil)
+
 // fakeInteractionDAGStore is an in-memory InteractionDAGStore for unit tests.
 type fakeInteractionDAGStore struct {
 	mu               sync.Mutex
@@ -507,7 +547,8 @@ func TestInteractionDAG_CloseSegmentForEvent_RecordsSegment(t *testing.T) {
 	assert.Equal(t, "proj-1", row.ProjectID)
 	assert.Equal(t, "run-1", row.AgentRunID, "agent_run_id must come from the session lookup, not the caller")
 	assert.Equal(t, ptrText("issue-1"), row.IssueID, "issue_id must come from the session lookup")
-	assert.EqualValues(t, 7, row.TrajectoryID)
+	assert.EqualValues(t, int64(7), row.TrajectoryID.Int64)
+	assert.True(t, row.TrajectoryID.Valid)
 	assert.JSONEq(t, `{"input_ids":{"shard_id":"shard-1","node_addr":"10.0.0.1:8000"},"attention_mask":{"shard_id":"shard-2","node_addr":"10.0.0.1:8000"}}`, string(row.TensorRef))
 	assert.Equal(t, ptrText("delegation"), row.ClosingEvent)
 	// Env-snapshot fields are 1:1 with the segment (atomic insert).
@@ -915,7 +956,7 @@ func TestInteractionDAGQueries_Integration(t *testing.T) {
 	segID := "int-sess-1-42"
 	require.NoError(t, q.InsertInteractionDAGSegmentWithSnapshot(ctx, db.InsertInteractionDAGSegmentWithSnapshotParams{
 		SegmentID: segID, ProjectID: "int-proj", AgentRunID: "int-run",
-		IssueID: ptrText("int-issue"), TrajectoryID: 42,
+		IssueID: ptrText("int-issue"), TrajectoryID: pgtype.Int8{Int64: 42, Valid: true},
 		TensorRef: []byte(`{"shard_id":"int-shard"}`), ClosingEvent: ptrText("delegation"),
 		SandboxIDs: []byte(`["sbx"]`), EnvState: []byte(`{}`),
 	}))
@@ -972,7 +1013,7 @@ func TestAssembleAssembledDag_ProjectsRecordedRows(t *testing.T) {
 	}))
 	require.NoError(t, q.InsertInteractionDAGSegmentWithSnapshot(ctx, db.InsertInteractionDAGSegmentWithSnapshotParams{
 		SegmentID: "asm-sess-1-10", ProjectID: proj, AgentRunID: "asm-run-1",
-		IssueID: ptrText("asm-issue-1"), TrajectoryID: 10,
+		IssueID: ptrText("asm-issue-1"), TrajectoryID: pgtype.Int8{Int64: 10, Valid: true},
 		TensorRef:    []byte(`{"input_ids":{"shard_id":"sh-1","node_addr":"10.0.0.1:8000"}}`),
 		ClosingEvent: ptrText("delegation"),
 		SandboxIDs:   []byte(`["sbx-1"]`), IssueSnapshotID: ptrText("snap-1"),
@@ -991,7 +1032,8 @@ func TestAssembleAssembledDag_ProjectsRecordedRows(t *testing.T) {
 	assert.Equal(t, "asm-sess-1-10", seg.SegmentID)
 	assert.Equal(t, "asm-run-1", seg.AgentRunID)
 	assert.Equal(t, "asm-issue-1", seg.IssueID)
-	assert.EqualValues(t, 10, seg.TrajectoryID)
+	require.NotNil(t, seg.TrajectoryID)
+	assert.EqualValues(t, int64(10), *seg.TrajectoryID)
 	assert.JSONEq(t, `{"input_ids":{"shard_id":"sh-1","node_addr":"10.0.0.1:8000"}}`, string(seg.TensorRef))
 	require.NotNil(t, seg.ClosingEvent, "closing_event must be present (non-NULL)")
 	assert.Equal(t, "delegation", *seg.ClosingEvent)
@@ -1057,7 +1099,7 @@ func TestAssembleAssembledDag_EdgesTypedAndAcyclic(t *testing.T) {
 	} {
 		require.NoError(t, q.InsertInteractionDAGSegmentWithSnapshot(ctx, db.InsertInteractionDAGSegmentWithSnapshotParams{
 			SegmentID: s.segID, ProjectID: proj, AgentRunID: s.runID,
-			IssueID: ptrText("iss"), TrajectoryID: s.trajID,
+			IssueID: ptrText("iss"), TrajectoryID: pgtype.Int8{Int64: s.trajID, Valid: true},
 			TensorRef: []byte(`{"input_ids":{"shard_id":"sh","node_addr":"h:1"}}`),
 			ClosingEvent: func() pgtype.Text {
 				if s.closing == "" {

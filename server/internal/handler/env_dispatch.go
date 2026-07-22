@@ -34,6 +34,12 @@ type EnvDispatchRequest struct {
 	TrainAgentID   string `json:"train_agent_id,omitempty"`
 	CriticAgentID  string `json:"critic_agent_id,omitempty"`
 	IdempotencyKey string `json:"idempotency_key,omitempty"`
+	// TrainingMode explicitly selects training vs non-training dispatch. It is
+	// required (nil is rejected at the handler boundary before the service is
+	// constructed) so the dispatch mode is an explicit caller choice, never
+	// inferred from the presence of train_agent_id. A pointer distinguishes an
+	// omitted JSON field (nil) from an explicit false.
+	TrainingMode *bool `json:"training_mode"`
 	// Template optionally overrides the server's default self_play sandbox
 	// template (MULTICA_DEFAULT_SELF_PLAY_TEMPLATE) for the auto-created default
 	// base env. Only consulted when env_id is empty and no default is configured
@@ -115,6 +121,14 @@ func (h *Handler) EnvDispatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "malformed request body")
 		return
 	}
+	// training_mode is required (Task 1): nil means the caller omitted it.
+	// Reject before constructing EnvDispatchInput so the service never sees an
+	// absent training mode. The pointer distinguishes omitted (nil) from an
+	// explicit false.
+	if req.TrainingMode == nil {
+		writeError(w, http.StatusBadRequest, "training_mode is required")
+		return
+	}
 
 	// UUID-shape validation (spec §6.3). Do it here so malformed IDs return a
 	// 400 instead of panicking deep in the adapter (parseUUID is MustParseUUID).
@@ -180,6 +194,7 @@ func (h *Handler) EnvDispatch(w http.ResponseWriter, r *http.Request) {
 		TrainAgentID:        req.TrainAgentID,
 		CriticAgentID:       req.CriticAgentID,
 		IdempotencyKey:      req.IdempotencyKey,
+		TrainingMode:        *req.TrainingMode,
 		DefaultBaseTemplate: template,
 		Issue:               mapIssueInput(req.Issue),
 		Message:             mapMessageInput(req.Message),
@@ -214,26 +229,14 @@ func (h *Handler) DeleteEnvDispatchProject(w http.ResponseWriter, r *http.Reques
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// rootTrainingTaskTerminal statuses: agent_task_queue.status is CHECK-constrained
-// to ('queued','dispatched','running','waiting_local_directory','completed',
-// 'failed','cancelled') (migrations 001 + 109). The terminal set (the rollout is
-// done) is completed/failed/cancelled - these are the transitions that fire
-// RouteTerminalTrainingTask (training.go:433), the terminal hook. The rest are
-// in-progress. A lookup miss (no training_dispatch / no root task enqueued yet)
-// is also treated as in-progress: the rollout has not produced a terminal root
-// task, so AReaL should keep polling rather than receive a partial DAG.
-var rootTrainingTaskTerminalStatuses = map[string]bool{
-	"completed": true,
-	"failed":    true,
-	"cancelled": true,
-}
-
 // GetDag handles GET /api/v1/env-dispatch/{projectID}/dag, the read-only
 // assembled segment-DAG endpoint AReaL polls (Task 9, U8). Contract:
 //   - 404 when the project does not exist at all.
 //   - 403 when the project exists but in another workspace (cross-workspace).
-//   - 202 + {"status":"in_progress"} when the rollout's root training task is
-//     not yet terminal (or has not been enqueued yet).
+//   - 202 + {"status":"in_progress"} when the dispatch root task
+//     (env_dispatch_run.root_task_id) is not yet terminal, not yet bound, or no
+//     env_dispatch_run row exists. Readiness is derived EXCLUSIVELY from
+//     env_dispatch_run, independent of training_dispatch.
 //   - 200 + {"status":"failed"} when the root task is terminal but the recorded
 //     segments do NOT densely cover every session - D14: never serve a partial
 //     DAG, and never serve a failed rollout's partial data as if it were whole.
@@ -298,22 +301,21 @@ func (h *Handler) getEnvDispatchDagForProject(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Status decision (decision 3): the root training task is the
-	// agent_task_queue row whose issue belongs to this project and whose
-	// agent_id equals training_dispatch.train_agent_id (the dispatch's
-	// EnqueueAgentRun creates it). ErrNoRows = no training_dispatch / no root
-	// task yet -> in_progress (keep polling). A non-terminal status -> in_progress.
-	status, err := h.Queries.GetRootTrainingTaskStatusForProject(r.Context(), projectUUID)
+	// Readiness decision (spec: durable dispatch identity independent of
+	// training_dispatch): derive the /dag readiness EXCLUSIVELY from the
+	// env_dispatch_run root task, not from training_dispatch. The service's
+	// GetDagReadiness wraps the GetEnvDispatchRootTaskStatus dep seam:
+	//   - no env_dispatch_run / no root_task_id / non-terminal root ->
+	//     DagReadinessInProgress -> 202 {"status":"in_progress"} (keep polling).
+	//   - terminal root (completed/failed/cancelled) -> DagReadinessTerminal ->
+	//     proceed to DAG assembly below (200 failed or 200 assembled DAG).
+	svc := service.NewEnvDispatchService(newEnvDispatchDepsAdapter(h), envDispatchConcurrency())
+	readiness, err := svc.GetDagReadiness(r.Context(), projectID, workspaceID)
 	if err != nil {
-		if !errors.Is(err, pgx.ErrNoRows) {
-			writeError(w, http.StatusServiceUnavailable, "lookup root training task: "+err.Error())
-			return
-		}
-		// No training rollout / root task not enqueued yet: rollout not done.
-		writeJSON(w, http.StatusAccepted, map[string]any{"status": "in_progress"})
+		writeError(w, http.StatusServiceUnavailable, "lookup dispatch root: "+err.Error())
 		return
 	}
-	if !rootTrainingTaskTerminalStatuses[status] {
+	if readiness == service.DagReadinessInProgress {
 		writeJSON(w, http.StatusAccepted, map[string]any{"status": "in_progress"})
 		return
 	}
@@ -487,7 +489,26 @@ func newEnvDispatchDepsAdapter(h *Handler) service.EnvDispatchDeps {
 	if h.Queries == nil {
 		return &stubEnvDispatchDeps{}
 	}
-	return &envDispatchDepsAdapter{h: h}
+	adapter := &envDispatchDepsAdapter{h: h}
+	// Wire the env-dispatch run checker so interaction-dag seams can route
+	// non-training env-dispatch tasks to local task_messages recording.
+	if h.TaskService != nil {
+		h.TaskService.EnvDispatchCheck = adapter
+	}
+	return adapter
+}
+
+// HasEnvDispatchRun reports whether the project has an env_dispatch_run row,
+// indicating it was created via env-dispatch. Used by interaction-dag seams
+// to gate local trajectory recording for non-training dispatch tasks.
+func (a *envDispatchDepsAdapter) HasEnvDispatchRun(ctx context.Context, projectID string) (bool, error) {
+	pid := parseUUID(projectID)
+	var exists bool
+	err := a.h.DB.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM env_dispatch_run WHERE project_id = $1)", pid).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
 }
 
 // envDispatchDepsAdapter bridges service.EnvDispatchDeps to *Handler.Queries
@@ -1615,6 +1636,43 @@ func (a *envDispatchDepsAdapter) SaveTrainingDispatch(ctx context.Context, proje
 	return nil
 }
 
+// CreateEnvDispatchRun persists the durable dispatch root row for a project
+// (spec: durable dispatch identity independent of training_dispatch). One row
+// per project, keyed by project_id. Created after the project exists.
+func (a *envDispatchDepsAdapter) CreateEnvDispatchRun(ctx context.Context, projectID, workspaceID string, trainingMode bool) error {
+	if err := a.h.Queries.CreateEnvDispatchRun(ctx, db.CreateEnvDispatchRunParams{
+		ProjectID:    parseUUID(projectID),
+		WorkspaceID:  parseUUID(workspaceID),
+		TrainingMode: trainingMode,
+	}); err != nil {
+		return stackerr.Wrap(err, "create env_dispatch_run")
+	}
+	return nil
+}
+
+// BindEnvDispatchRootTask binds the enqueued leader task as the dispatch root
+// (env_dispatch_run.root_task_id = rootTaskID), called immediately after the
+// leader task is enqueued.
+func (a *envDispatchDepsAdapter) BindEnvDispatchRootTask(ctx context.Context, projectID, rootTaskID string) error {
+	if err := a.h.Queries.BindEnvDispatchRootTask(ctx, db.BindEnvDispatchRootTaskParams{
+		ProjectID:  parseUUID(projectID),
+		RootTaskID: parseUUID(rootTaskID),
+	}); err != nil {
+		return stackerr.Wrap(err, "bind env_dispatch root task")
+	}
+	return nil
+}
+
+// GetEnvDispatchRootTaskStatus resolves the status of the dispatch's bound root
+// task for the /dag readiness decision. Readiness is derived EXCLUSIVELY from
+// env_dispatch_run, not from training_dispatch.
+func (a *envDispatchDepsAdapter) GetEnvDispatchRootTaskStatus(ctx context.Context, projectID, workspaceID string) (string, error) {
+	return a.h.Queries.GetEnvDispatchRootTaskStatus(ctx, db.GetEnvDispatchRootTaskStatusParams{
+		ProjectID:   parseUUID(projectID),
+		WorkspaceID: parseUUID(workspaceID),
+	})
+}
+
 // ValidateAgentInWorkspaceOrSquad reports whether agentID is a member of the
 // squad (when squadID is set) or the workspace. Returns a typed error when the
 // agent is unknown or unauthorized.
@@ -1828,6 +1886,15 @@ func (s *stubEnvDispatchDeps) SetDefaultSelfPlayEnv(context.Context, string, str
 }
 func (s *stubEnvDispatchDeps) SaveTrainingDispatch(context.Context, string, string, string, string, float64) error {
 	return nil
+}
+func (s *stubEnvDispatchDeps) CreateEnvDispatchRun(context.Context, string, string, bool) error {
+	return nil
+}
+func (s *stubEnvDispatchDeps) BindEnvDispatchRootTask(context.Context, string, string) error {
+	return nil
+}
+func (s *stubEnvDispatchDeps) GetEnvDispatchRootTaskStatus(context.Context, string, string) (string, error) {
+	return "", pgx.ErrNoRows
 }
 func (s *stubEnvDispatchDeps) ValidateAgentInWorkspaceOrSquad(context.Context, string, string, string) error {
 	return nil

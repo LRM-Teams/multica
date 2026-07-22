@@ -11,6 +11,22 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const bindEnvDispatchRootTask = `-- name: BindEnvDispatchRootTask :exec
+UPDATE env_dispatch_run
+SET root_task_id = $2
+WHERE project_id = $1
+`
+
+type BindEnvDispatchRootTaskParams struct {
+	ProjectID  pgtype.UUID `json:"project_id"`
+	RootTaskID pgtype.UUID `json:"root_task_id"`
+}
+
+func (q *Queries) BindEnvDispatchRootTask(ctx context.Context, arg BindEnvDispatchRootTaskParams) error {
+	_, err := q.db.Exec(ctx, bindEnvDispatchRootTask, arg.ProjectID, arg.RootTaskID)
+	return err
+}
+
 const createEnvDispatchRequest = `-- name: CreateEnvDispatchRequest :exec
 INSERT INTO env_dispatch_request (workspace_id, idempotency_key, response)
 VALUES ($1, $2, $3)
@@ -24,6 +40,25 @@ type CreateEnvDispatchRequestParams struct {
 
 func (q *Queries) CreateEnvDispatchRequest(ctx context.Context, arg CreateEnvDispatchRequestParams) error {
 	_, err := q.db.Exec(ctx, createEnvDispatchRequest, arg.WorkspaceID, arg.IdempotencyKey, arg.Response)
+	return err
+}
+
+const createEnvDispatchRun = `-- name: CreateEnvDispatchRun :exec
+INSERT INTO env_dispatch_run (project_id, workspace_id, training_mode)
+VALUES ($1, $2, $3)
+ON CONFLICT (project_id) DO UPDATE SET
+  workspace_id = EXCLUDED.workspace_id,
+  training_mode = EXCLUDED.training_mode
+`
+
+type CreateEnvDispatchRunParams struct {
+	ProjectID    pgtype.UUID `json:"project_id"`
+	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+	TrainingMode bool        `json:"training_mode"`
+}
+
+func (q *Queries) CreateEnvDispatchRun(ctx context.Context, arg CreateEnvDispatchRunParams) error {
+	_, err := q.db.Exec(ctx, createEnvDispatchRun, arg.ProjectID, arg.WorkspaceID, arg.TrainingMode)
 	return err
 }
 
@@ -98,6 +133,25 @@ func (q *Queries) GetEnvDispatchRequest(ctx context.Context, arg GetEnvDispatchR
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const getEnvDispatchRootTaskStatus = `-- name: GetEnvDispatchRootTaskStatus :one
+SELECT atq.status
+FROM env_dispatch_run r
+JOIN agent_task_queue atq ON atq.id = r.root_task_id
+WHERE r.project_id = $1 AND r.workspace_id = $2
+`
+
+type GetEnvDispatchRootTaskStatusParams struct {
+	ProjectID   pgtype.UUID `json:"project_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) GetEnvDispatchRootTaskStatus(ctx context.Context, arg GetEnvDispatchRootTaskStatusParams) (string, error) {
+	row := q.db.QueryRow(ctx, getEnvDispatchRootTaskStatus, arg.ProjectID, arg.WorkspaceID)
+	var status string
+	err := row.Scan(&status)
+	return status, err
 }
 
 const getEnvironment = `-- name: GetEnvironment :one

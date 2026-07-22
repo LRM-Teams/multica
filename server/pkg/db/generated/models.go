@@ -529,6 +529,14 @@ type EnvDispatchRequest struct {
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 }
 
+type EnvDispatchRun struct {
+	ProjectID    pgtype.UUID        `json:"project_id"`
+	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
+	TrainingMode bool               `json:"training_mode"`
+	RootTaskID   pgtype.UUID        `json:"root_task_id"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
 type Environment struct {
 	ID          pgtype.UUID        `json:"id"`
 	WorkspaceID pgtype.UUID        `json:"workspace_id"`

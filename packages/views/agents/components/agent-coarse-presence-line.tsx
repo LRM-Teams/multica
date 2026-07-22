@@ -13,21 +13,10 @@ import type { AgentLiveStatusView } from "../resolve-agent-live-status";
 import { AgentLiveStatusMark } from "./agent-live-status-mark";
 
 /**
- * Coarse presence line for the DM header: the agent name row shows only "is
- * the agent around" — Online / Working / Queued / Offline / … — never the
- * FINE live action verb (Running command… / Reading… / Writing…).
+ * Coarse Online/Offline line for the DM header (LRM-248).
  *
- * The fine verb lives on exactly ONE surface: the `ConversationAgentActivityLine`
- * above the composer. Splitting the granularity this way stops the header and
- * that line from echoing the same word twice (Iris split-semantics 2026-07-17):
- * header = presence ("is she around"), composer line = live action ("what is
- * she doing this second").
- *
- * Reuses the shared #288 presence-token helpers (`formatPresenceStatus` /
- * `presenceStatusVisual` / `presenceStatusDotClass`) so the coarse word always
- * agrees with the avatar presence dot, and the `AgentLiveStatusMark` visual
- * (coloured dot + text-xs word + width-stable skeleton) so this chip matches
- * every other presence chip.
+ * Avatar badge carries the round indicator; this chip is plain text only
+ * (no second dot). Never Working / Queued / Idle / Unstable / activity verbs.
  */
 export function AgentCoarsePresenceLine({
   agentId,
@@ -48,6 +37,11 @@ export function AgentCoarsePresenceLine({
   }, [presence, t]);
 
   return (
-    <AgentLiveStatusMark status={status} className={className} showSkeleton />
+    <AgentLiveStatusMark
+      status={status}
+      className={className}
+      showSkeleton
+      showDot={false}
+    />
   );
 }

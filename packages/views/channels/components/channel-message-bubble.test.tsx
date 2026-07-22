@@ -148,15 +148,27 @@ vi.mock("@multica/core/workspace/hooks", () => ({
     getActorInitials: (_type: string, id: string) => {
       if (id === "user-1") return "A";
       if (id === "user-2") return "B";
+      if (id === "user-owner") return "F";
+      if (id === "user-admin") return "Ad";
       if (id === "agent-1") return "R";
       return "?";
     },
     getActorName: (_type: string, id: string, fallback?: string) => {
       if (id === "user-1") return "Alice Display";
       if (id === "user-2") return "Bob Display";
+      if (id === "user-owner") return "Frank An";
+      if (id === "user-admin") return "Admin User";
       if (id === "agent-1") return "Research Agent";
       return fallback ?? id;
     },
+    getMemberRole: (id: string) =>
+      id === "user-owner"
+        ? ("owner" as const)
+        : id === "user-admin"
+          ? ("admin" as const)
+          : id === "user-1" || id === "user-2"
+            ? ("member" as const)
+            : null,
   }),
 }));
 
@@ -258,6 +270,9 @@ vi.mock("../../i18n/use-t", () => ({
         };
         thread: { reply: string; reply_count: string };
         time: { today: string; yesterday: string };
+        profile_popover: {
+          role: { owner: string; admin: string; member: string; agent: string };
+        };
       }) => string,
       options?: Record<string, unknown>,
     ) => {
@@ -339,6 +354,9 @@ vi.mock("../../i18n/use-t", () => ({
           reply_count: "2 replies",
         },
         time: { today: "Today", yesterday: "Yesterday" },
+        profile_popover: {
+          role: { owner: "Owner", admin: "Admin", member: "Member", agent: "Agent" },
+        },
       });
       return options
         ? raw.replace(/\{\{(\w+)\}\}/g, (_, key: string) => String(options[key] ?? ""))
@@ -439,13 +457,63 @@ describe("ChannelMessageBubble", () => {
     });
   });
 
-  it("renders an agent message left-aligned with an Agent pill, name and body", () => {
+  it("renders an agent message with name and body but no Agent pill (LRM-232)", () => {
     render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
 
     expect(screen.getByText("Research Agent")).toBeInTheDocument();
-    expect(screen.getByText("Agent")).toBeInTheDocument();
+    expect(screen.queryByText("Agent")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("message-author-role")).not.toBeInTheDocument();
     expect(screen.getByText("Here is the data.")).toBeInTheDocument();
     expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-own", "false");
+  });
+
+  it("shows muted Owner role after a workspace owner name (LRM-232)", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          type: "user",
+          author_id: "user-owner",
+          author_name: "frank",
+          content: "hello from owner",
+        })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.getByText("Frank An")).toBeInTheDocument();
+    const role = screen.getByTestId("message-author-role");
+    expect(role).toHaveTextContent("Owner");
+    expect(role).toHaveClass("text-ink-3");
+    expect(role.className).not.toMatch(/rounded-full|border|bg-/);
+  });
+
+  it("shows muted Admin role and hides ordinary Member role (LRM-232)", () => {
+    const { rerender } = render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          type: "user",
+          author_id: "user-admin",
+          author_name: "admin",
+          content: "admin note",
+        })}
+        currentUserId="user-1"
+      />,
+    );
+    expect(screen.getByTestId("message-author-role")).toHaveTextContent("Admin");
+
+    rerender(
+      <ChannelMessageBubble
+        message={makeMessage({
+          type: "user",
+          author_id: "user-2",
+          author_name: "bob",
+          content: "member note",
+        })}
+        currentUserId="user-1"
+      />,
+    );
+    expect(screen.getByText("Bob Display")).toBeInTheDocument();
+    expect(screen.queryByTestId("message-author-role")).not.toBeInTheDocument();
   });
 
   it("renders the author avatar straight from the message payload (#453), not a viewer-scoped lookup", () => {

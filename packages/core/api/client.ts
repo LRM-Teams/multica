@@ -2403,7 +2403,7 @@ export class ApiClient {
     return this.fetch(options?.archived ? "/api/channels?archived=true" : "/api/channels");
   }
 
-  async createChannel(data: { name: string; description?: string; lark_chat_id?: string }): Promise<Channel> {
+  async createChannel(data: { name: string; description?: string; lark_chat_id?: string; project_id?: string | null }): Promise<Channel> {
     return this.fetch("/api/channels", {
       method: "POST",
       body: JSON.stringify(data),

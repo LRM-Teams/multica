@@ -24,6 +24,7 @@ import { useRuntimeHealthStateLabel } from "../../runtimes/components/shared";
 import { PropRow } from "../../common/prop-row";
 import { initialsOf } from "../../common/initials";
 import { ConversationSidePanelShell } from "../../common/conversation-side-panel-shell";
+import { AgentPresenceOverlay } from "../../common/actor-avatar";
 import { AgentFilesPanel } from "./agent-files-panel";
 import { useT } from "../../i18n/use-t";
 import { estimateCost, formatTokens, isModelPriced } from "../../runtimes/utils";
@@ -121,22 +122,31 @@ export function AgentSidePanel({
   const leading = useMemo(
     () => (
       <>
-        <ActorAvatarBase
-          name={displayName}
-          initials={initials}
-          avatarUrl={resolvePublicFileUrl(agent.avatar_url)}
-          isAgent
-          size={32}
-        />
-        {/* #371: name + live presence tight together (matches DM header /
-            profile hover card). Visible before opening the Activity tab. */}
+        <AgentPresenceOverlay agentId={agent.id} size={32}>
+          <ActorAvatarBase
+            name={displayName}
+            initials={initials}
+            avatarUrl={resolvePublicFileUrl(agent.avatar_url)}
+            isAgent
+            size={32}
+            className={agent.archived_at ? "opacity-50 grayscale" : undefined}
+          />
+        </AgentPresenceOverlay>
+        {/* LRM-248: name + plain Online/Offline text (avatar badge is the
+            round indicator — no second dot next to the word). */}
         <div className="flex min-w-0 items-center gap-2">
           <p className="min-w-0 truncate text-sm font-semibold">{displayName}</p>
-          <AgentPresenceStatusLine agentId={agent.id} className="max-w-[9rem]" />
+          {!agent.archived_at ? (
+            <AgentPresenceStatusLine agentId={agent.id} className="max-w-[9rem]" />
+          ) : (
+            <span className="shrink-0 text-xs text-muted-foreground">
+              {t(($) => $.row.archived)}
+            </span>
+          )}
         </div>
       </>
     ),
-    [displayName, initials, agent.avatar_url, agent.id],
+    [displayName, initials, agent.avatar_url, agent.id, agent.archived_at, t],
   );
 
   return (

@@ -76,6 +76,7 @@ import { useWorkspacePaths } from "@multica/core/paths";
 import { useWSEvent } from "@multica/core/realtime";
 import { toast } from "sonner";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
+import { projectListOptions } from "@multica/core/projects/queries";
 import {
   matchesActorIdentitySearch,
   resolveActorDisplayName,
@@ -162,6 +163,8 @@ import { useNavigation } from "../../navigation/context";
 import { useT } from "../../i18n/use-t";
 import { useTimeAgo } from "../../i18n/use-time-ago";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
+import { ProjectPickerButton } from "../../common/project-picker-button";
+import { PropRow } from "../../common/prop-row";
 import { composePayloadKey } from "../hooks/use-compose-send-intent";
 import { useComposerSend } from "../hooks/use-composer-send";
 import {
@@ -180,7 +183,7 @@ import {
 } from "./channel-details-panel";
 import { DeleteChannelDialog } from "./delete-channel-dialog";
 import { ChannelTasksBoard } from "./channel-tasks-board";
-import { ChannelGroupAvatar } from "./channel-group-avatar";
+import { ChannelHashLandmark } from "./channel-hash-landmark";
 import { ThreadPanel } from "./thread-panel";
 import { ComposerAttachmentTray } from "./composer-attachment-tray";
 import { ComposerQuotePreview } from "./message-quote";
@@ -711,6 +714,10 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const [typingActors, setTypingActors] = useState<Record<string, TypingActor>>({});
   const [newName, setNewName] = useState("");
   const [newLarkChatId, setNewLarkChatId] = useState("");
+  // #576 — optional project binding, set at creation time via the same
+  // ProjectPickerButton the group-settings panel uses (channel-project-settings-panel.tsx).
+  // `null` means unbound, which is the pre-existing default create behavior.
+  const [newProjectId, setNewProjectId] = useState<string | null>(null);
   // Inline "name required" hint for the create popover. Empty names used to
   // silently default to "general", which collided with an existing general
   // channel and surfaced as an opaque failure (#216).
@@ -803,6 +810,15 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const { data: archivedChannels = [] } = useQuery(archivedChannelsOptions(wsId));
   const { data: workspaceMembers = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  // #576 — resolves the create-popover's selected project title, same query the
+  // group-settings Project section (ChannelProjectSettingsPanel) uses. Keep it
+  // dormant while the popover is closed: the project list is not rendered or
+  // needed then, and ChannelsPage should not add a background request merely
+  // because the optional create field exists.
+  const { data: workspaceProjects = [] } = useQuery({
+    ...projectListOptions(wsId),
+    enabled: createOpen,
+  });
   const resolveMentionPreview = useMemo<MentionPreviewResolver>(
     () => (type, id, fallbackLabel) => {
       if (type === "agent") {
@@ -1594,12 +1610,20 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       return;
     }
     createChannel.mutate(
-      { name, lark_chat_id: newLarkChatId.trim() || undefined },
+      {
+        name,
+        lark_chat_id: newLarkChatId.trim() || undefined,
+        // Omit entirely (not null) when unset, so the request body doesn't
+        // carry a `project_id` key at all — matching the pre-existing create
+        // flow exactly when no project is picked.
+        project_id: newProjectId ?? undefined,
+      },
       {
         onSuccess: (channel: Channel) => {
           selectChannel(channel.id);
           setNewName("");
           setNewLarkChatId("");
+          setNewProjectId(null);
           setCreateNameError(false);
           setCreateOpen(false);
         },
@@ -2213,7 +2237,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
             onClick={() => selectChannel(channel.id)}
             className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 pr-7 text-left"
           >
-            <ChannelGroupAvatar members={channel.members ?? []} size={40} />
             <div className="min-w-0 flex-1">
               <div className="flex items-center justify-between gap-2">
                 <span
@@ -2227,6 +2250,8 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                   {pinned && (
                     <Pin className="size-3 shrink-0 -rotate-45 fill-muted-foreground/70 text-muted-foreground/70" />
                   )}
+                  {/* LRM-254 A1 — text-level # landmark; no member collage. */}
+                  <ChannelHashLandmark size="sm" />
                   <span className="truncate">{channel.name}</span>
                   {isMuted && (
                     <MutedIndicator label={t(($) => $.sidebar.muted_label)} />
@@ -2440,6 +2465,29 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                       value={newLarkChatId}
                       onChange={(e) => setNewLarkChatId(e.target.value)}
                     />
+                    {/* #576 — optional project binding at creation time. Same
+                        ProjectPickerButton + PropRow pattern the group-settings
+                        Project section uses (ChannelProjectSettingsPanel);
+                        leaving it unset behaves exactly like the pre-existing
+                        create flow. */}
+                    <div className="grid min-w-0 grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+                      <PropRow label={t(($) => $.composer.project_label)} interactive={false}>
+                        <div className="flex min-w-0 items-center gap-1.5">
+                          <span className="min-w-0 truncate text-xs text-foreground">
+                            {workspaceProjects.find((p) => p.id === newProjectId)?.title ??
+                              t(($) => $.composer.project_none)}
+                          </span>
+                          <ProjectPickerButton
+                            wsId={wsId}
+                            value={newProjectId}
+                            onChange={setNewProjectId}
+                            label={t(($) => $.composer.project_label)}
+                            noneLabel={t(($) => $.composer.project_none)}
+                            tooltip={t(($) => $.composer.project_tooltip)}
+                          />
+                        </div>
+                      </PropRow>
+                    </div>
                     <Button className="w-full" onClick={handleCreate} disabled={createChannel.isPending}>
                       {t(($) => $.sidebar.create_aria)}
                     </Button>
@@ -2500,10 +2548,10 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                               onClick={() => selectChannel(channel.id)}
                               className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 pr-7 text-left opacity-60 hover:opacity-100"
                             >
-                              <ChannelGroupAvatar members={channel.members ?? []} size={40} />
                               <div className="min-w-0 flex-1">
-                                <span className="truncate text-sm font-medium text-muted-foreground">
-                                  {channel.name}
+                                <span className="flex min-w-0 items-center gap-1 truncate text-sm font-medium text-muted-foreground">
+                                  <ChannelHashLandmark size="sm" />
+                                  <span className="truncate">{channel.name}</span>
                                 </span>
                               </div>
                             </button>
@@ -2776,32 +2824,49 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
           <ConversationHeader
             isMobile={isMobile}
             leading={
-              <>
-                {isMobile && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-10 shrink-0 text-muted-foreground"
-                    aria-label={t(($) => $.header.back)}
-                    onClick={mobileBackToList}
-                  >
-                    <ArrowLeft className="size-5" />
-                  </Button>
-                )}
-                <ChannelGroupAvatar members={channelMembers} size={28} />
-              </>
+              isMobile ? (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-10 shrink-0 text-muted-foreground"
+                  aria-label={t(($) => $.header.back)}
+                  onClick={mobileBackToList}
+                >
+                  <ArrowLeft className="size-5" />
+                </Button>
+              ) : null
             }
             title={
+              // LRM-234 — Slack-like desktop title: bold name + tight ▾
+              // caret, soft rounded hover/open wash (not primary recolor).
+              // LRM-254 A1 — text-level # landmark (no member collage).
+              // Same control still opens Channel details; mobile keeps ⋯.
               <button
                 type="button"
                 onClick={() => toggleChannelDetails("about")}
                 aria-label={t(($) => $.details.open_aria)}
+                aria-expanded={channelDetailsOpen && !isMobile}
                 className={cn(
-                  "truncate text-left hover:text-primary",
-                  channelDetailsOpen && !isMobile && "text-primary",
+                  "-ml-1.5 inline-flex min-w-0 max-w-full items-center gap-0.5 rounded-md px-1.5 py-0.5 text-left text-foreground transition-colors",
+                  "hover:bg-black/[0.04] dark:hover:bg-white/[0.06]",
+                  channelDetailsOpen &&
+                    !isMobile &&
+                    "bg-black/[0.06] dark:bg-white/[0.08]",
                 )}
               >
-                {active.name}
+                <ChannelHashLandmark size="lg" />
+                <span className="truncate font-bold tracking-tight">{active.name}</span>
+                {!isMobile && (
+                  <ChevronDown
+                    data-testid="channel-title-chevron"
+                    strokeWidth={2.5}
+                    className={cn(
+                      "size-3 shrink-0 opacity-50 transition-transform duration-150",
+                      channelDetailsOpen && "rotate-180 opacity-70",
+                    )}
+                    aria-hidden="true"
+                  />
+                )}
               </button>
             }
             meta={

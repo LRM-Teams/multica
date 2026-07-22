@@ -555,3 +555,53 @@ describe("ChannelsPage header actions — container-driven overflow (#568)", () 
     expectCompact();
   });
 });
+
+// LRM-234 — desktop channel title must show a visible ▾ affordance so
+// Channel details / Settings aren't discoverable only by "knowing to click
+// the name". Entry model unchanged (same control opens details).
+describe("ChannelsPage header — desktop title chevron (LRM-234)", () => {
+  it("shows a visible chevron next to the channel title on desktop", async () => {
+    resizeContainerTo(1024);
+    renderPage();
+    await screen.findByTestId("message-list");
+    expect(screen.getByTestId("channel-title-chevron")).toBeInTheDocument();
+    const toggle = screen.getByRole("button", { name: "Open channel details" });
+    expect(toggle).toContainElement(screen.getByTestId("channel-title-chevron"));
+  });
+
+  it("opens Channel details (Settings reachable) from the title+chevron control", async () => {
+    resizeContainerTo(1024);
+    renderPage();
+    await screen.findByTestId("message-list");
+    fireEvent.click(screen.getByRole("button", { name: "Open channel details" }));
+    expect(await screen.findByText("Channel details")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Settings" })).toBeInTheDocument();
+  });
+
+  it("hides the title chevron on mobile (⋯ remains the overflow path)", async () => {
+    mobile.value = true;
+    resizeContainerTo(1024);
+    renderPage();
+    await screen.findByTestId("message-list");
+    expect(screen.queryByTestId("channel-title-chevron")).toBeNull();
+    expect(screen.getByRole("button", { name: "More" })).toBeInTheDocument();
+  });
+});
+
+// LRM-254 A1 — channel landmark is text-level # (sidebar + header), never a
+// member collage avatar slot that drifts when the roster changes.
+describe("ChannelsPage — channel hash landmark (LRM-254)", () => {
+  it("puts a text-level # in the desktop title (no leading collage avatar)", async () => {
+    resizeContainerTo(1024);
+    renderPage();
+    await screen.findByTestId("message-list");
+    const toggle = screen.getByRole("button", { name: "Open channel details" });
+    const hashes = screen.getAllByTestId("channel-hash-landmark");
+    expect(hashes.length).toBeGreaterThan(0);
+    expect(toggle).toContainElement(
+      hashes.find((el) => el.getAttribute("data-size") === "lg")!,
+    );
+    // Title control must not host an <img> collage tile.
+    expect(toggle.querySelector("img")).toBeNull();
+  });
+});

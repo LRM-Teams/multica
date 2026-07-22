@@ -172,13 +172,14 @@ function AgentNameCell({ row }: { row: AgentRow }) {
   const isPrivate = agent.visibility === "private";
   return (
     <div className="flex min-w-0 items-center gap-3">
-      <ActorAvatar
-        actorType="agent"
-        actorId={agent.id}
-        size={28}
-        className={`shrink-0 rounded-md ${isArchived ? "opacity-50 grayscale" : ""}`}
-        showStatusDot
-      />
+        <ActorAvatar
+          actorType="agent"
+          actorId={agent.id}
+          size={28}
+          className={`shrink-0 rounded-md ${isArchived ? "opacity-50 grayscale" : ""}`}
+          // LRM-248: archived → gray avatar, no live badge.
+          showStatusDot={!isArchived}
+        />
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-2">
           <ActorIdentityRow

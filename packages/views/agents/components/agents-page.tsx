@@ -13,7 +13,6 @@ import {
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Agent, AgentRuntime, CreateAgentRequest, AgentCreationDraft } from "@multica/core/types";
 import {
-  type AgentAvailability,
   agentRunCounts30dOptions,
   summarizeActivityWindow,
   useWorkspaceActivityMap,
@@ -50,7 +49,12 @@ import { Input } from "@multica/ui/components/ui/input";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { useNavigation } from "../../navigation";
 import { PageHeader } from "../../layout/page-header";
-import { availabilityConfig, availabilityOrder } from "../presence";
+import {
+  availabilityConfig,
+  availabilityOrder,
+  matchesLiveAvailabilityFilter,
+  type LiveAvailability,
+} from "../presence";
 import { CreateAgentDialog } from "./create-agent-dialog";
 import { useT } from "../../i18n";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
@@ -83,7 +87,7 @@ import { toast } from "sonner";
 //                    meaningless once Failed left the workload model.
 type View = "active" | "archived";
 type Scope = "all" | "mine";
-type AvailabilityFilter = "all" | AgentAvailability;
+type AvailabilityFilter = "all" | LiveAvailability;
 
 type SortKey = "recent" | "name" | "runs" | "created";
 const SORT_KEYS: SortKey[] = ["recent", "name", "runs", "created"];
@@ -410,7 +414,9 @@ export function AgentsPage({
       // archived agents have no presence to match against.
       if (view === "active" && availabilityFilter !== "all") {
         const detail = presenceMap.get(a.id);
-        if (detail?.availability !== availabilityFilter) return false;
+        if (!matchesLiveAvailabilityFilter(detail?.availability, availabilityFilter)) {
+          return false;
+        }
       }
       if (q) {
         if (
@@ -441,18 +447,19 @@ export function AgentsPage({
   // would match on the currently-selected machine" rather than
   // collapsing to 0 for the unselected chips.
   const availabilityCounts = useMemo(() => {
-    const counts: Record<AgentAvailability, number> = {
+    // LRM-248: Online / Offline only — unstable folds into Online.
+    const counts: Record<LiveAvailability, number> = {
       online: 0,
-      unstable: 0,
       offline: 0,
-      // Active-view scope excludes archived agents, so this bucket stays 0
-      // here; present only to satisfy the exhaustive availability Record.
-      archived: 0,
     };
     for (const a of inScopeOnMachine) {
       const detail = presenceMap.get(a.id);
       if (!detail) continue;
-      counts[detail.availability] += 1;
+      if (matchesLiveAvailabilityFilter(detail.availability, "online")) {
+        counts.online += 1;
+      } else if (matchesLiveAvailabilityFilter(detail.availability, "offline")) {
+        counts.offline += 1;
+      }
     }
     return counts;
   }, [inScopeOnMachine, presenceMap]);
@@ -741,7 +748,6 @@ export function AgentsPage({
                   <AgentRailRow
                     key={agent.id}
                     agent={agent}
-                    availability={presenceMap.get(agent.id)?.availability ?? null}
                     selected={selectedAgent?.id === agent.id}
                     onClick={() => setSelectedId(agent.id)}
                   />
@@ -1049,19 +1055,17 @@ function AvailabilityChip({
 
 function AgentRailRow({
   agent,
-  availability,
   selected,
   onClick,
 }: {
   agent: Agent;
-  availability: AgentAvailability | null;
   selected: boolean;
   onClick: () => void;
 }) {
   const { t } = useT("agents");
   const { openDM, isPending: openingDM } = useOpenDM();
-  const cfg = availability ? availabilityConfig[availability] : null;
   const displayName = resolveActorDisplayName(agent, agent.name);
+  const isArchived = !!agent.archived_at;
   return (
     // Outer div (not a button) lets us nest two independent buttons:
     // the avatar (→ open DM) and the content area (→ select in detail).
@@ -1087,8 +1091,11 @@ function AgentRailRow({
           actorType="agent"
           actorId={agent.id}
           size={32}
-          showStatusDot
+          // LRM-248: list rows — avatar badge only; no name-row status word.
+          // Archived: gray avatar, no live badge (AgentStatusDot returns null).
+          showStatusDot={!isArchived}
           profileLink={false}
+          className={isArchived ? "opacity-50 grayscale" : undefined}
         />
       </button>
       <button
@@ -1097,17 +1104,18 @@ function AgentRailRow({
         className="flex min-w-0 flex-1 items-center gap-3 py-2.5 pl-1.5 pr-3 text-left"
       >
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium text-foreground">{displayName}</p>
+          <p
+            className={cn(
+              "truncate text-sm font-medium",
+              isArchived ? "text-muted-foreground" : "text-foreground",
+            )}
+          >
+            {displayName}
+          </p>
           <p className="truncate text-xs text-muted-foreground">
             {agent.description?.trim() || "—"}
           </p>
         </div>
-        {cfg && (
-          <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px]">
-            <span className={cn("size-1.5 rounded-full", cfg.dotClass)} />
-            <span className={cfg.textClass}>{t(($) => $.availability[availability!])}</span>
-          </span>
-        )}
       </button>
     </div>
   );

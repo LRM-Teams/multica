@@ -31,6 +31,7 @@ import {
 } from "@multica/core/identity";
 import { AgentLiveStatusMark } from "../agents/components/agent-live-status-mark";
 import { useAgentLiveStatus } from "../agents/use-agent-live-status";
+import { AgentPresenceOverlay } from "./actor-avatar";
 import { ActivityTimeline } from "../agents/components/tabs/activity-timeline";
 import { useAgentActivityEvents } from "../agents/components/tabs/use-agent-activity-events";
 import { useNavigation } from "../navigation";
@@ -232,11 +233,8 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
   // panels the BE still gates (`canAccessPrivateAgent`). `full` keeps everything.
   // Never a blank "Agent unavailable" card again.
   const isIdentityOnly = profile.profile_access === "identity_only";
-  // Agents (full access only): stage-detail live status (Thinking / Running
-  // command… / …) when a task is active; coarse presence word (Idle / Offline)
-  // when idle. Same snapshot + activity caches as the chat status pill / avatar
-  // presence dot, so the three surfaces stay in lockstep via WS. Passing
-  // `undefined` for identity_only skips the fetch entirely (no access anyway).
+  // Agents (full access only): Online/Offline plain text (LRM-248). Avatar
+  // badge carries the round indicator — no second dot next to the word.
   const liveStatus = useAgentLiveStatus(
     wsId,
     profile.member_type === "agent" && !isIdentityOnly ? profile.member_id : undefined,
@@ -248,8 +246,8 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
   const presentation = resolveActorIdentityPresentation(identity, "");
   const displayName = presentation.displayName || presentation.handle || t(($) => $.profile_popover.unknown);
   const description = profile.description?.trim() || "";
-  // Members: role text on the name row. Agents: live status immediately
-  // after the name (dot + word) — not a far-right filler and not a pill.
+  // Members: role text on the name row. Agents: live Online/Offline text
+  // immediately after the name (no second dot).
   const memberRole =
     profile.member_type === "user"
       ? roleLabel(profile.role, t)
@@ -258,23 +256,33 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
   const handleLabel = formatActorHandleLabel(handle);
   const showHandle =
     handleLabel !== null && shouldShowActorHandleLabel(displayName, handle);
+  const isAgent = profile.member_type === "agent";
+  const avatar = (
+    <ActorAvatarBase
+      name={displayName}
+      initials={avatarGlyph(displayName)}
+      avatarUrl={resolvePublicFileUrl(profile.avatar_url)}
+      isAgent={isAgent}
+      size={48}
+      toneSeed={`${profile.member_type}:${profile.member_id}`}
+    />
+  );
 
   return (
     <div className="text-left">
       <div
         className={cn(
           "flex items-start gap-3 p-3",
-          (description || profile.member_type === "agent") && "border-b",
+          (description || isAgent) && "border-b",
         )}
       >
-        <ActorAvatarBase
-          name={displayName}
-          initials={avatarGlyph(displayName)}
-          avatarUrl={resolvePublicFileUrl(profile.avatar_url)}
-          isAgent={profile.member_type === "agent"}
-          size={48}
-          toneSeed={`${profile.member_type}:${profile.member_id}`}
-        />
+        {isAgent && !isIdentityOnly ? (
+          <AgentPresenceOverlay agentId={profile.member_id} size={48}>
+            {avatar}
+          </AgentPresenceOverlay>
+        ) : (
+          avatar
+        )}
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-1.5">
             {/* No flex-1 on the name — status must sit right after the name
@@ -282,8 +290,12 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
             <span className="min-w-0 truncate text-sm font-semibold text-foreground">
               {displayName}
             </span>
-            {isIdentityOnly ? null : (
-              <AgentLiveStatusMark status={liveStatus} className="shrink-0" />
+            {isIdentityOnly || !isAgent ? null : (
+              <AgentLiveStatusMark
+                status={liveStatus}
+                className="shrink-0"
+                showDot={false}
+              />
             )}
             {memberRole ? (
               <span className="shrink-0 text-xs text-muted-foreground">

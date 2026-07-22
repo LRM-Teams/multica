@@ -188,13 +188,17 @@ export function IssueSystemEventContent({
   const { getActorName } = useActorName();
 
   const actorType = toActorMentionType(event.actorType);
+  // Prefer live directory name; fall back to emit-time facts. Group managers
+  // (贝克汉姆) are hidden from ListAgents (LRM-233), so without actor_name the
+  // token would render as "@Unknown Agent".
+  const actorFallback = event.actorName ?? event.actorHandle;
   const actor =
     event.actorId && actorType ? (
       <SystemEventActorToken
         actor={{
           type: actorType,
           id: event.actorId,
-          displayName: getActorName(actorType, event.actorId),
+          displayName: getActorName(actorType, event.actorId, actorFallback),
         }}
       />
     ) : (

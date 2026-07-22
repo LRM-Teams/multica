@@ -72,6 +72,10 @@ export interface IssueSystemEvent {
   actorId?: string;
   /** Public actor type: "human" | "agent" (see channelMemberSystemEventPublicType). */
   actorType?: string;
+  /** Canonical @handle (username). Present on new backflow rows. */
+  actorHandle?: string;
+  /** Display name denormalized at emit time (group managers are not in ListAgents). */
+  actorName?: string;
   targetId?: string;
   targetType?: string;
   targetHandle?: string;
@@ -114,6 +118,8 @@ export function parseIssueSystemEvent(message: ChannelMessage): IssueSystemEvent
       previousStatus: optString(params, "previous_status"),
       actorId: optString(params, "actor_id"),
       actorType: optString(params, "actor_type"),
+      actorHandle: optString(params, "actor_handle"),
+      actorName: optString(params, "actor_name"),
       targetId: optString(params, "target_id"),
       targetType: optString(params, "target_type"),
       targetHandle: optString(params, "target_handle"),

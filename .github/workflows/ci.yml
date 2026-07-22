@@ -123,7 +123,10 @@ jobs:
         run: cd server && go run ./cmd/migrate up
 
       - name: Test
-        run: cd server && go test ./...
+        # Integration packages share this job's Postgres service. Run packages
+        # serially so a global scheduler repair cannot mutate another package's
+        # temporary workspace while its fixture is still being assembled.
+        run: cd server && go test -p 1 ./...
 
   installer:
     # Stub-driven shell tests for scripts/install.sh. Kept off the heavy

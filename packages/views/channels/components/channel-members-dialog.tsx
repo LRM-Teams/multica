@@ -1,6 +1,7 @@
 "use client";
 
 import type { ChannelMember } from "@multica/core/types";
+import type { OpenAgentPanelFn } from "@multica/core/agents";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   Dialog,
@@ -59,7 +60,7 @@ export function ChannelMembersDialog({
   currentUserId: string;
   onAddPeople?: () => void;
   onOpenDm?: (member: ChannelMember) => void;
-  onOpenAgent?: (agentId: string) => void;
+  onOpenAgent?: OpenAgentPanelFn;
   onRemove?: (member: ChannelMember) => void;
   dmPending?: boolean;
 }) {

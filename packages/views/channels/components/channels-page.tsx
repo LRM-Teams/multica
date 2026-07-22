@@ -78,6 +78,10 @@ import { useWSEvent } from "@multica/core/realtime";
 import { toast } from "sonner";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
 import { projectListOptions } from "@multica/core/projects/queries";
+import type {
+  AgentPanelIdentitySnapshot,
+  OpenAgentPanelFn,
+} from "@multica/core/agents";
 import {
   matchesActorIdentitySearch,
   resolveActorDisplayName,
@@ -752,12 +756,18 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const [sidePanel, setSidePanel] = useState<
     | { kind: "none" }
     | { kind: "thread"; message: ChannelMessage }
-    | { kind: "agent"; agentId: string }
+    | {
+        kind: "agent";
+        agentId: string;
+        snapshot?: AgentPanelIdentitySnapshot;
+      }
     | { kind: "channel-details"; tab: ChannelDetailsTab }
   >({ kind: "none" });
   const [threadDraftEmpty, setThreadDraftEmpty] = useState(true);
   const openThreadRoot = sidePanel.kind === "thread" ? sidePanel.message : null;
   const selectedAgentPanelId = sidePanel.kind === "agent" ? sidePanel.agentId : null;
+  const selectedAgentPanelSnapshot =
+    sidePanel.kind === "agent" ? (sidePanel.snapshot ?? null) : null;
   const channelDetailsOpen = sidePanel.kind === "channel-details";
   const channelDetailsTab =
     sidePanel.kind === "channel-details" ? sidePanel.tab : "about";
@@ -2013,8 +2023,8 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     setSidePanel({ kind: "thread", message });
   };
 
-  const handleOpenAgentPanel = (agentId: string) => {
-    setSidePanel({ kind: "agent", agentId });
+  const handleOpenAgentPanel: OpenAgentPanelFn = (agentId, snapshot) => {
+    setSidePanel({ kind: "agent", agentId, snapshot });
   };
 
   // #645 — toggles the same exclusive slot; opening it always wins over
@@ -2719,7 +2729,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     active && selectedAgentPanelId ? (
       <ResolvedAgentSidePanel
         agentId={selectedAgentPanelId}
-        agents={agents}
+        identitySnapshot={selectedAgentPanelSnapshot}
         currentUserId={currentUserId}
         members={workspaceMembers}
         onClose={() => setSelectedAgentPanelId(null)}
@@ -3412,9 +3422,9 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
             openAddPeopleDialog();
           }}
           onOpenDm={openDmWithMember}
-          onOpenAgent={(agentId) => {
+          onOpenAgent={(agentId, snapshot) => {
             setMembersDialogOpen(false);
-            handleOpenAgentPanel(agentId);
+            handleOpenAgentPanel(agentId, snapshot);
           }}
           onRemove={handleRemoveMemberClick}
           dmPending={createOrFindDm.isPending}

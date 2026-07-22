@@ -15,6 +15,7 @@ import {
 import { flushSync } from "react-dom";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { ChannelMessage } from "@multica/core/types";
+import type { OpenAgentPanelFn } from "@multica/core/agents";
 import { channelMessageListItemKey } from "@multica/core/channels";
 
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
@@ -157,8 +158,9 @@ type MessageViewportProps = {
   onDeleteMessage?: (message: ChannelMessage) => void;
   /** Retry a failed optimistic send (reuses the bubble's `client_message_id`). */
   onRetrySend?: (message: ChannelMessage) => void;
-  /** Opens the side agent file/public-info panel for an agent-authored message. */
-  onOpenAgent?: (agentId: string) => void;
+  /** Opens the side agent file/public-info panel for an agent-authored message
+   *  (LRM-292: agentId + optional row identity snapshot). */
+  onOpenAgent?: OpenAgentPanelFn;
   /** Search hit ids - all matching messages get inline keyword marks while search is open. */
   searchHitIds?: Set<string>;
   /** Conversation search phrase used for inline keyword marks within search hits. */

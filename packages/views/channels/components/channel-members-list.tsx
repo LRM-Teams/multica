@@ -5,6 +5,7 @@ import {
   type ActorIdentityPresentation,
 } from "@multica/core/identity";
 import type { ChannelMember } from "@multica/core/types";
+import type { OpenAgentPanelFn } from "@multica/core/agents";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { cn } from "@multica/ui/lib/utils";
 import { MessageSquare } from "lucide-react";
@@ -50,8 +51,7 @@ export function ChannelMembersList({
   isMobile: boolean;
   currentUserId: string;
   onOpenDm?: (member: ChannelMember) => void;
-  /** Opens the agent side panel (channel-only agents included). */
-  onOpenAgent?: (agentId: string) => void;
+  onOpenAgent?: OpenAgentPanelFn;
   onRemove?: (member: ChannelMember) => void;
   dmPending?: boolean;
   className?: string;
@@ -118,7 +118,11 @@ export function ChannelMembersList({
         const openAgentCapture =
           isAgent && onOpenAgent
             ? () => {
-                onOpenAgent(m.member_id);
+                onOpenAgent(m.member_id, {
+                  name: m.name,
+                  display_name: m.display_name,
+                  avatar_url: m.avatar_url ?? null,
+                });
               }
             : undefined;
 

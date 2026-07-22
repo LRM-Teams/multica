@@ -4,6 +4,7 @@ import { useMemo, type ReactNode } from "react";
 import { ArrowLeft, MessageSquare, X } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import type { ChannelMessage } from "@multica/core/types";
+import type { OpenAgentPanelFn } from "@multica/core/agents";
 import { useT } from "../../i18n/use-t";
 import { ChannelMessageList } from "./channel-message-list";
 import { ComposerQuotePreview } from "./message-quote";
@@ -37,8 +38,9 @@ export interface ThreadPanelProps {
   onRetrySend?: (message: ChannelMessage) => void;
   /** Click an agent author's avatar/name → open the agent side panel (parity
    *  with the main channel list, which passes the same handler). Without it,
-   *  thread avatars only show the hover card, never open the panel (#488). */
-  onOpenAgent?: (agentId: string) => void;
+   *  thread avatars only show the hover card, never open the panel (#488).
+   *  LRM-292: id + optional identity snapshot from the message row. */
+  onOpenAgent?: OpenAgentPanelFn;
   quoteTarget?: QuoteTarget | null;
   onClearQuote?: () => void;
   // Composer (surface="thread") wiring — the surface owns the editor + send.

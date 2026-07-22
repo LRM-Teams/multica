@@ -13,6 +13,7 @@ const detailState = vi.hoisted(() => ({
   isError: false,
   error: null as unknown,
   isFetched: true,
+  enabled: true as boolean | undefined,
 }));
 const identityState = vi.hoisted(() => ({
   data: undefined as
@@ -52,7 +53,10 @@ vi.mock("@tanstack/react-query", () => ({
       };
     }
     const key = opts.queryKey;
-    if (key[2] === "agent") return detailState;
+    if (key[2] === "agent") {
+      detailState.enabled = opts.enabled;
+      return detailState;
+    }
     if (key[2] === "member-profile") return identityState;
     return {
       data: undefined,
@@ -125,7 +129,7 @@ function makeAgent(id = "agent-1"): Agent {
   } as Agent;
 }
 
-describe("ResolvedAgentSidePanel (LRM-288)", () => {
+describe("ResolvedAgentSidePanel (LRM-292)", () => {
   const onClose = vi.fn();
 
   beforeEach(() => {
@@ -136,34 +140,36 @@ describe("ResolvedAgentSidePanel (LRM-288)", () => {
     detailState.isError = false;
     detailState.error = null;
     detailState.isFetched = true;
+    detailState.enabled = true;
     identityState.data = undefined;
     identityState.isPending = false;
     identityState.isError = false;
     identityState.isFetched = true;
   });
 
-  it("uses the ListAgents cache when the agent is present", () => {
+  it("always fetches GetAgent (does not gate on ListAgents.find)", () => {
+    detailState.data = makeAgent();
+
     render(
       <ResolvedAgentSidePanel
         agentId="agent-1"
-        agents={[makeAgent()]}
         currentUserId="user-1"
         members={[]}
         onClose={onClose}
       />,
     );
 
+    expect(detailState.enabled).not.toBe(false);
     expect(screen.getByTestId("agent-side-panel")).toHaveAttribute("data-agent-id", "agent-1");
     expect(toastError).not.toHaveBeenCalled();
   });
 
-  it("fetches by id when the agent is absent from ListAgents (channel-only)", () => {
+  it("opens channel-only / group-manager agents via GetAgent 200", () => {
     detailState.data = makeAgent("gm-1");
 
     render(
       <ResolvedAgentSidePanel
         agentId="gm-1"
-        agents={[]}
         currentUserId="user-1"
         members={[]}
         onClose={onClose}
@@ -171,10 +177,28 @@ describe("ResolvedAgentSidePanel (LRM-288)", () => {
     );
 
     expect(screen.getByTestId("agent-side-panel")).toHaveAttribute("data-agent-id", "gm-1");
+    expect(screen.getByTestId("agent-side-panel")).toHaveTextContent("贝克汉姆");
     expect(toastError).not.toHaveBeenCalled();
   });
 
-  it("opens identity-only profile on 403 instead of silent no-op", () => {
+  it("shows optimistic snapshot name while GetAgent is pending", () => {
+    detailState.isPending = true;
+
+    render(
+      <ResolvedAgentSidePanel
+        agentId="gm-1"
+        identitySnapshot={{ display_name: "贝克汉姆" }}
+        currentUserId="user-1"
+        members={[]}
+        onClose={onClose}
+      />,
+    );
+
+    expect(screen.getByText("贝克汉姆")).toBeInTheDocument();
+    expect(screen.queryByTestId("agent-side-panel")).toBeNull();
+  });
+
+  it("opens identity-only profile on GetAgent 403 instead of silent no-op", () => {
     detailState.isError = true;
     detailState.error = new ApiError("forbidden", 403, "Forbidden");
     identityState.data = {
@@ -186,7 +210,6 @@ describe("ResolvedAgentSidePanel (LRM-288)", () => {
     render(
       <ResolvedAgentSidePanel
         agentId="private-1"
-        agents={[]}
         currentUserId="user-1"
         members={[]}
         onClose={onClose}
@@ -207,7 +230,6 @@ describe("ResolvedAgentSidePanel (LRM-288)", () => {
     render(
       <ResolvedAgentSidePanel
         agentId="missing-1"
-        agents={[]}
         currentUserId="user-1"
         members={[]}
         onClose={onClose}

@@ -189,9 +189,11 @@ export const agentDetailKeys = {
 };
 
 /**
- * Single-agent fetch by id. Used when the actor is absent from ListAgents
- * (LRM-233: group managers / channel-only discovery) but still openable via
- * message rows, member lists, or direct profile entry points (LRM-288).
+ * Authoritative single-agent fetch by id (LRM-292).
+ *
+ * Panel hosts always use this for body data. ListAgents remains the
+ * workspace directory / invite discovery surface only (LRM-233 still hides
+ * group managers / channel-only agents from that list) — never the open gate.
  */
 export function agentDetailOptions(wsId: string, agentId: string) {
   return queryOptions({

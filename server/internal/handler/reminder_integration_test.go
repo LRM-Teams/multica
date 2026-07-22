@@ -1112,12 +1112,25 @@ func TestAgentReminderUpdateRejectsMultipleMutations(t *testing.T) {
 		{name: "delay and fire at", body: map[string]any{"id": scheduled.ID, "delay_seconds": 300, "fire_at": time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339)}},
 		{name: "delay and cadence", body: map[string]any{"id": scheduled.ID, "delay_seconds": 300, "cadence": "every:2h"}},
 		{name: "fire at and cadence", body: map[string]any{"id": scheduled.ID, "fire_at": time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339), "cadence": "every:2h"}},
+		{name: "empty title and delay", body: map[string]any{"id": scheduled.ID, "title": "", "delay_seconds": 300}},
+		{name: "empty title and fire at", body: map[string]any{"id": scheduled.ID, "title": "", "fire_at": time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339)}},
+		{name: "empty title and cadence", body: map[string]any{"id": scheduled.ID, "title": "", "cadence": "every:2h"}},
+		{name: "zero delay and fire at", body: map[string]any{"id": scheduled.ID, "delay_seconds": 0, "fire_at": time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339)}},
+		{name: "zero delay and cadence", body: map[string]any{"id": scheduled.ID, "delay_seconds": 0, "cadence": "every:2h"}},
+		{name: "empty fire at and cadence", body: map[string]any{"id": scheduled.ID, "fire_at": "", "cadence": "every:2h"}},
+		{name: "empty title", body: map[string]any{"id": scheduled.ID, "title": ""}},
+		{name: "zero delay", body: map[string]any{"id": scheduled.ID, "delay_seconds": 0}},
+		{name: "negative delay", body: map[string]any{"id": scheduled.ID, "delay_seconds": -1}},
+		{name: "empty fire at", body: map[string]any{"id": scheduled.ID, "fire_at": ""}},
+		{name: "invalid fire at", body: map[string]any{"id": scheduled.ID, "fire_at": "not-a-time"}},
+		{name: "empty cadence", body: map[string]any{"id": scheduled.ID, "cadence": ""}},
+		{name: "invalid cadence", body: map[string]any{"id": scheduled.ID, "cadence": "monthly@09:00"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := agentTransportRequest(t, http.MethodPost, "/api/agent/reminders/update", taskID, agentID, tc.body)
 			rec := httptest.NewRecorder()
 			testHandler.AgentTransportUpdateReminder(rec, req)
-			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "provide exactly one") {
+			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 			}
 		})

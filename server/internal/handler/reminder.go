@@ -91,11 +91,11 @@ type agentReminderSnoozeRequest struct {
 }
 
 type agentReminderUpdateRequest struct {
-	ID           string `json:"id"`
-	Title        string `json:"title,omitempty"`
-	DelaySeconds *int64 `json:"delay_seconds,omitempty"`
-	FireAt       string `json:"fire_at,omitempty"`
-	Cadence      string `json:"cadence,omitempty"`
+	ID           string  `json:"id"`
+	Title        *string `json:"title,omitempty"`
+	DelaySeconds *int64  `json:"delay_seconds,omitempty"`
+	FireAt       *string `json:"fire_at,omitempty"`
+	Cadence      *string `json:"cadence,omitempty"`
 }
 
 type agentReminderListRequest struct {
@@ -489,30 +489,77 @@ func (h *Handler) AgentTransportUpdateReminder(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	title := strings.TrimSpace(req.Title)
 	mutationCount := 0
-	if title != "" {
+	if req.Title != nil {
 		mutationCount++
 	}
 	if req.DelaySeconds != nil {
 		mutationCount++
 	}
-	if strings.TrimSpace(req.FireAt) != "" {
+	if req.FireAt != nil {
 		mutationCount++
 	}
-	if strings.TrimSpace(req.Cadence) != "" {
+	if req.Cadence != nil {
 		mutationCount++
 	}
 	if mutationCount != 1 {
 		writeError(w, http.StatusBadRequest, "provide exactly one of title, delay_seconds, fire_at, or cadence")
 		return
 	}
-	id, ok := h.resolveReminderID(w, r.Context(), origin.workspaceID, task.AgentID, req.ID)
-	if !ok {
-		return
+	title := ""
+	if req.Title != nil {
+		title = strings.TrimSpace(*req.Title)
+		if title == "" {
+			writeError(w, http.StatusBadRequest, "title must not be empty")
+			return
+		}
 	}
 	if len([]rune(title)) > 500 {
 		writeError(w, http.StatusBadRequest, "title must be at most 500 characters")
+		return
+	}
+	now := time.Now().UTC()
+	rawFireAt := ""
+	var explicitFireAt *time.Time
+	if req.DelaySeconds != nil {
+		parsed, parseErr := parseReminderFireAt(now, req.DelaySeconds, "")
+		if parseErr != nil {
+			writeError(w, http.StatusBadRequest, parseErr.Error())
+			return
+		}
+		explicitFireAt = &parsed
+	}
+	if req.FireAt != nil {
+		rawFireAt = strings.TrimSpace(*req.FireAt)
+		if rawFireAt == "" {
+			writeError(w, http.StatusBadRequest, "fire_at must not be empty")
+			return
+		}
+		parsed, parseErr := parseReminderFireAt(now, nil, rawFireAt)
+		if parseErr != nil {
+			writeError(w, http.StatusBadRequest, parseErr.Error())
+			return
+		}
+		explicitFireAt = &parsed
+	}
+	rawCadence := ""
+	if req.Cadence != nil {
+		rawCadence = strings.ToLower(strings.TrimSpace(*req.Cadence))
+		if rawCadence == "" {
+			writeError(w, http.StatusBadRequest, "cadence must not be empty")
+			return
+		}
+		validationTimezone := ""
+		if strings.HasPrefix(rawCadence, "daily@") || strings.HasPrefix(rawCadence, "weekly:") {
+			validationTimezone = "UTC"
+		}
+		if _, parseErr := parseReminderCadence(rawCadence, validationTimezone); parseErr != nil {
+			writeError(w, http.StatusBadRequest, parseErr.Error())
+			return
+		}
+	}
+	id, ok := h.resolveReminderID(w, r.Context(), origin.workspaceID, task.AgentID, req.ID)
+	if !ok {
 		return
 	}
 	tx, err := h.TxStarter.Begin(r.Context())
@@ -538,9 +585,7 @@ func (h *Handler) AgentTransportUpdateReminder(w http.ResponseWriter, r *http.Re
 	if previous.CadenceNextAt.Valid {
 		nextCadenceAt = previous.CadenceNextAt.Time
 	}
-	now := time.Now().UTC()
-	if strings.TrimSpace(req.Cadence) != "" {
-		rawCadence := strings.ToLower(strings.TrimSpace(req.Cadence))
+	if rawCadence != "" {
 		calendarRule := strings.HasPrefix(rawCadence, "daily@") || strings.HasPrefix(rawCadence, "weekly:")
 		timezone := ""
 		if calendarRule {
@@ -566,13 +611,8 @@ func (h *Handler) AgentTransportUpdateReminder(w http.ResponseWriter, r *http.Re
 		if calendarRule {
 			nextTimezone = cadence.Location.String()
 		}
-	} else if req.DelaySeconds != nil || strings.TrimSpace(req.FireAt) != "" {
-		parsed, parseErr := parseReminderFireAt(now, req.DelaySeconds, req.FireAt)
-		if parseErr != nil {
-			writeError(w, http.StatusBadRequest, parseErr.Error())
-			return
-		}
-		nextFireAt = parsed
+	} else if explicitFireAt != nil {
+		nextFireAt = *explicitFireAt
 		// An explicit instant replaces the recurrence with a one-shot. Keep the
 		// historical timezone lock so a later calendar recurrence resumes in the
 		// same zone, but do not expose it while the definition is one-shot.

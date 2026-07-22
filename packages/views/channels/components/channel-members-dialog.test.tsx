@@ -60,34 +60,12 @@ vi.mock("@multica/core/workspace/avatar-url", () => ({
   resolvePublicFileUrl: (url: string | null | undefined) => url ?? null,
 }));
 
-// Shared views ActorAvatar (LRM-224) pulls presence + workspace query hooks.
-vi.mock("@multica/core/agents", () => ({
-  useAgentPresenceDetail: () => "loading",
-  useAgentHealth: () => ({
-    summary: undefined,
-    events: undefined,
-    isLoading: false,
-    isError: false,
-  }),
-}));
-
-vi.mock("@multica/core/paths", () => ({
-  useCurrentWorkspace: () => ({ id: "ws-1", slug: "test" }),
-  useWorkspaceSlug: () => "test",
-  useRequiredWorkspaceSlug: () => "test",
-  useWorkspacePaths: () => ({
-    memberDetail: (id: string) => `/test/members/${id}`,
-    squadDetail: (id: string) => `/test/squads/${id}`,
-    agentDetail: (id: string) => `/test/agents/${id}`,
-  }),
-}));
-
-vi.mock("@multica/core/workspace/hooks", () => ({
-  useActorName: () => ({
-    getActorAvatarUrl: () => null,
-    getActorName: (_t: string, id: string) => id,
-    getActorInitials: () => "P",
-  }),
+// LRM-224: ChannelMembersList renders identity ActorAvatar (useActorName /
+// QueryClient). Layout tests only care about scroll/chrome classes.
+vi.mock("../../common/actor-avatar", () => ({
+  ActorAvatar: ({ actorId }: { actorId: string }) => (
+    <span data-testid="actor-avatar">{actorId}</span>
+  ),
 }));
 
 function member(

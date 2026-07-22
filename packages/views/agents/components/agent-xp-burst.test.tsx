@@ -27,6 +27,6 @@ describe("AgentXpBurst", () => {
     });
 
     expect(screen.getByTestId("agent-xp-burst-ring")).toBeInTheDocument();
-    expect(screen.getByTestId("agent-xp-burst-chip")).toHaveTextContent("记忆+2");
+    expect(screen.getByTestId("agent-xp-burst-chip")).toHaveTextContent("+2");
   });
 });

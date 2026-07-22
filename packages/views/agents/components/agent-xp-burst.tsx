@@ -2,16 +2,15 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { cn } from "@multica/ui/lib/utils";
-import {
-  AGENT_XP_BURST_DURATION_MS,
-  formatMemoryFileKeyLabel,
-  useAgentXpBurstStore,
-} from "@multica/core/agents/stores/xp-burst-store";
+import { useAgentXpBurstStore } from "@multica/core/agents/stores/xp-burst-store";
+
+/** Ring + float label duration (design-memory-feedback-phase1-v2). */
+export const AGENT_XP_BURST_ANIMATION_MS = 1100;
 
 /**
- * Phase① memory XP feedback — gradient ring + floating「记忆 +N」on the agent
- * avatar. Subscribes to the shared burst store so every surface showing the
- * same agent animates in sync.
+ * Phase① memory XP feedback — neutral outline ring + weak gray「+N」on the
+ * agent avatar. Subscribes to the shared burst store so every opted-in
+ * surface for the same agent animates in sync.
  */
 export function AgentXpBurst({
   agentId,
@@ -30,11 +29,10 @@ export function AgentXpBurst({
     if (!burst?.burstKey) return;
     setActiveKey(burst.burstKey);
     setVisible(true);
-    const timer = window.setTimeout(() => setVisible(false), AGENT_XP_BURST_DURATION_MS);
+    const timer = window.setTimeout(() => setVisible(false), AGENT_XP_BURST_ANIMATION_MS);
     return () => window.clearTimeout(timer);
   }, [burst?.burstKey]);
 
-  const label = burst ? formatMemoryFileKeyLabel(burst.fileKey) : "记忆";
   const delta = burst?.delta ?? 1;
 
   return (
@@ -50,29 +48,26 @@ export function AgentXpBurst({
           <span
             aria-hidden
             data-testid="agent-xp-burst-ring"
-            className="pointer-events-none absolute inset-0 rounded-full motion-safe:animate-[agent-xp-ring_1.2s_ease-out_forwards] motion-reduce:animate-none motion-reduce:opacity-0"
-            style={{
-              boxShadow: "0 0 0 2px color-mix(in srgb, var(--color-brand) 55%, transparent)",
-            }}
+            className="pointer-events-none absolute inset-0 rounded-full border border-muted-foreground/35 motion-safe:animate-[agent-xp-ring_1.1s_ease-out_forwards] motion-reduce:animate-none motion-reduce:opacity-0"
           />
           <span
             data-testid="agent-xp-burst-chip"
-            className="pointer-events-none absolute -right-1 -top-1 z-10 select-none whitespace-nowrap rounded-full bg-brand px-1.5 py-px text-[10px] font-semibold leading-tight text-brand-foreground shadow-sm motion-safe:animate-[agent-xp-chip_1.2s_ease-out_forwards] motion-reduce:animate-none"
+            className="pointer-events-none absolute -right-0.5 -top-1 z-10 select-none text-[10px] font-medium tabular-nums leading-none text-muted-foreground motion-safe:animate-[agent-xp-chip_1.1s_ease-out_forwards] motion-reduce:animate-none"
           >
-            {label}+{delta}
+            +{delta}
           </span>
         </>
       ) : null}
       <style>{`
         @keyframes agent-xp-ring {
-          0% { opacity: 1; transform: scale(1); }
-          100% { opacity: 0; transform: scale(1.22); }
+          0% { opacity: 0.85; transform: scale(1); }
+          100% { opacity: 0; transform: scale(1.18); }
         }
         @keyframes agent-xp-chip {
-          0% { opacity: 0; transform: translateY(4px) scale(0.92); }
-          12% { opacity: 1; transform: translateY(0) scale(1); }
-          70% { opacity: 1; transform: translateY(-6px) scale(1); }
-          100% { opacity: 0; transform: translateY(-12px) scale(0.96); }
+          0% { opacity: 0; transform: translateY(3px); }
+          15% { opacity: 1; transform: translateY(0); }
+          65% { opacity: 0.9; transform: translateY(-5px); }
+          100% { opacity: 0; transform: translateY(-10px); }
         }
       `}</style>
     </span>

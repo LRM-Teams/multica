@@ -80,7 +80,11 @@ interface ActorAvatarProps {
    * Make the avatar click through to the actor page. Defaults on for members
    * and agents, while picker/menu controls keep their own click behavior.
    */
-  profileLink?: boolean;
+  /**
+   * Phase① memory XP burst on this avatar (message rows / profile only — not
+   * sidebar lists). No effect for non-agent actors.
+   */
+  showXpBurst?: boolean;
 }
 
 
@@ -124,6 +128,7 @@ export function ActorAvatar({
   showStatusDot,
   hoverCardVariant = "profile",
   profileLink,
+  showXpBurst = false,
 }: ActorAvatarProps) {
   const { getActorName, getActorInitials, getActorAvatarUrl } = useActorName();
   // LRM-224: identity-first — directory + sticky cache; message URL only seeds.
@@ -166,7 +171,7 @@ export function ActorAvatar({
     avatar
   );
   const withXpBurst =
-    actorType === "agent" ? (
+    actorType === "agent" && showXpBurst ? (
       <AgentXpBurst agentId={actorId}>{dotted}</AgentXpBurst>
     ) : (
       dotted

@@ -27,12 +27,12 @@ export function AgentMemoryXpListener() {
     (payload: unknown) => {
       const data = payload as AgentMemoryUpdatedPayload;
       if (!data?.agent_id || !data.file_key) return;
-      ingest(data.agent_id, data.file_key, data.delta ?? 1);
+      ingest(data.agent_id, data.file_key, data.count ?? 1);
     },
     [ingest],
   );
 
-  useWSEvent("agent:memory_updated", handleMemoryUpdated);
+  useWSEvent("agent.memory_updated", handleMemoryUpdated);
 
   useEffect(() => {
     if (process.env.NODE_ENV === "production") return;

@@ -17,7 +17,10 @@ const FIVE_MINUTES_MS = 5 * 60 * 1000;
 // before it disappears silently.
 const ABOUT_TO_GC_THRESHOLD_MS = 6 * 24 * 3600 * 1000; // 6 days
 
-export function deriveRuntimeHealth(runtime: AgentRuntime, now: number): RuntimeHealth {
+export function deriveRuntimeHealth(
+  runtime: Pick<AgentRuntime, "status" | "last_seen_at">,
+  now: number,
+): RuntimeHealth {
   const lastSeen = runtime.last_seen_at ? new Date(runtime.last_seen_at).getTime() : null;
 
   // EXPLICITLY offline: the server has marked this runtime disconnected. This

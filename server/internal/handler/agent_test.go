@@ -998,6 +998,12 @@ func TestAgentResponseIncludesRuntimeName(t *testing.T) {
 	if getResp.RuntimeName != runtimeName {
 		t.Fatalf("GetAgent runtime_name = %q, want %q", getResp.RuntimeName, runtimeName)
 	}
+	if getResp.RuntimeStatus != "online" {
+		t.Fatalf("GetAgent runtime_status = %q, want online", getResp.RuntimeStatus)
+	}
+	if getResp.RuntimeLastSeenAt == nil || *getResp.RuntimeLastSeenAt == "" {
+		t.Fatalf("GetAgent runtime_last_seen_at missing")
+	}
 
 	listW := httptest.NewRecorder()
 	testHandler.ListAgents(listW, newRequest(http.MethodGet, "/api/agents", nil))
@@ -1012,6 +1018,12 @@ func TestAgentResponseIncludesRuntimeName(t *testing.T) {
 		if agent.ID == agentID {
 			if agent.RuntimeName != runtimeName {
 				t.Fatalf("ListAgents runtime_name = %q, want %q", agent.RuntimeName, runtimeName)
+			}
+			if agent.RuntimeStatus != "online" {
+				t.Fatalf("ListAgents runtime_status = %q, want online", agent.RuntimeStatus)
+			}
+			if agent.RuntimeLastSeenAt == nil || *agent.RuntimeLastSeenAt == "" {
+				t.Fatalf("ListAgents runtime_last_seen_at missing")
 			}
 			return
 		}

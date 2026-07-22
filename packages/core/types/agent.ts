@@ -280,6 +280,14 @@ export interface Agent {
   runtime_mode: AgentRuntimeMode;
   /** Display name for the bound runtime, denormalized by the API. */
   runtime_name?: string | null;
+  /**
+   * Presence-safe projection of the bound runtime's connectivity. Always
+   * attached when the runtime row exists — even if ListVisibleAgentRuntimes
+   * hides private runtime *details* from this viewer (LRM-248 AC5).
+   */
+  runtime_status?: "online" | "offline" | null;
+  /** ISO heartbeat from the bound runtime; pairs with `runtime_status`. */
+  runtime_last_seen_at?: string | null;
   runtime_config: Record<string, unknown>;
   custom_args: string[];
   /**

@@ -159,3 +159,15 @@ Evidence:
 - On a fresh isolated PostgreSQL database, `go test -p 1 ./internal/handler ./internal/scheduler -count=1` passed and the temporary database was removed. The workflow YAML parsed, the Make target dry-run resolved to the serial command, and `git diff --check` passed.
 - The first serial CI run then exposed three `internal/service` sandbox tests that selected an arbitrary pre-existing user with `FROM "user" LIMIT 1`. They had passed only while another package left a user visible. The tests now create unique users and issues inside their own rollback transactions.
 - On a second fresh isolated database, all three sandbox cleanup tests passed, followed by serial `internal/handler`, `internal/scheduler`, and `internal/service` package tests. The temporary database was removed.
+
+### Step 10 — Integrate the latest dev changes before handoff
+
+Status: complete
+
+Evidence:
+
+- Fetched `origin/dev` again after the first all-green CI run and found six new commits, including Beckham private-visibility changes and the channel sidebar preview removal. Merged final `origin/dev` commit `3c47df554` into the feature branch without conflicts.
+- Reviewed the overlapping shared `ChannelsPage` change. The upstream edit only removes sidebar message previews; the shared Composer, voice input, structured voice parts, Agent playback, group/DM/thread routing, and autoplay ownership remain intact.
+- The five focused Composer, voice audio/playback, Agent voice message, and channel sidebar tests passed (20/20). `@multica/views` TypeScript checking also passed.
+- Reusing an old local handler database exposed an inconsistent test-only migration history: migration 204 was absent while a trigger it expected to remove was already absent. No production migration was changed for that dirty local state.
+- Created a new isolated database, applied the full migration history through both migration 205 files and `206_beckham_private`, then passed all handler tests matching voice, Beckham, and group-manager behavior. The temporary database was removed afterward.

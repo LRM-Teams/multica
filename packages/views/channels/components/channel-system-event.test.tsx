@@ -184,7 +184,7 @@ vi.mock("../../i18n/use-t", () => ({
             issue: {
               actor_system: "Multica",
               created: "{actor} 创建了 Issue {issue}",
-              assigned: "{actor} 将 Issue {issue} 指派给 {{target}}",
+              assigned: "{actor} 将 Issue {issue} 指派给 {target}",
               assigned_unknown: "{actor} 重新指派了 Issue {issue}",
               in_progress: "{actor} 将 Issue {issue} 标记为处理中",
               in_review: "{actor} 将 Issue {issue} 提交审核",
@@ -670,6 +670,8 @@ describe("foldedIssueEventIds", () => {
 });
 
 describe("IssueSystemEventContent", () => {
+  beforeEach(() => openPanelMock.mockClear());
+
   const inProgressEvent: IssueSystemEvent = {
     event: "issue_status_changed",
     issueId: "issue-uuid",
@@ -727,7 +729,7 @@ describe("IssueSystemEventContent", () => {
     expect(text).not.toContain("triaging_v2");
   });
 
-  it("names the assignee for an assignment, still with only the ref linked", () => {
+  it("renders assignee as a clickable @mention, with issue ref still its own link (LRM-306)", () => {
     render(
       <IssueSystemEventContent
         event={{
@@ -743,10 +745,20 @@ describe("IssueSystemEventContent", () => {
         }}
       />,
     );
-    expect(document.body.textContent).toBe("@后端工程师 将 Issue LRM-137 指派给 wendy");
+    expect(document.body.textContent).toBe("@后端工程师 将 Issue LRM-137 指派给 @wendy");
+    // Issue ref stays its own <a>; actor + assignee are ActorMention tokens.
     const links = document.querySelectorAll("a");
     expect(links).toHaveLength(1);
     expect(links[0]).toHaveTextContent("LRM-137");
+    expect(links[0]).toHaveAttribute("data-issue-ref", "");
+    const tokens = screen.getAllByTestId("actor-token");
+    expect(tokens).toHaveLength(2);
+    expect(tokens[0]).toHaveAttribute("data-member-type", "agent");
+    expect(tokens[0]).toHaveAttribute("data-member-id", "agent-be");
+    expect(tokens[0]).toHaveTextContent("@后端工程师");
+    expect(tokens[1]).toHaveAttribute("data-member-type", "member");
+    expect(tokens[1]).toHaveAttribute("data-member-id", "user-2");
+    expect(tokens[1]).toHaveTextContent("@wendy");
   });
 
   it("resolves group-manager actors via member-profile (DB), not emit-time actor_name", () => {
@@ -770,10 +782,64 @@ describe("IssueSystemEventContent", () => {
         }}
       />,
     );
-    expect(document.body.textContent).toBe("@贝克汉姆 将 Issue LRM-268 指派给 前端工程师");
+    expect(document.body.textContent).toBe("@贝克汉姆 将 Issue LRM-268 指派给 @前端工程师");
     expect(document.body.textContent).not.toContain("Unknown Agent");
     expect(document.body.textContent).not.toContain("SHOULD_NOT_APPEAR");
     expect(document.body.textContent).not.toContain("ALSO_WRONG");
+    const tokens = screen.getAllByTestId("actor-token");
+    expect(tokens).toHaveLength(2);
+    expect(tokens[1]).toHaveAttribute("data-member-type", "agent");
+    expect(tokens[1]).toHaveAttribute("data-member-id", "agent-fe");
+    fireEvent.click(tokens[1]);
+    expect(openPanelMock).toHaveBeenCalledWith("agent-fe");
+  });
+
+  it("uses assigned_unknown when typed target facts are missing (LRM-306 / LRM-238)", () => {
+    render(
+      <IssueSystemEventContent
+        event={{
+          event: "issue_assigned",
+          issueId: "issue-uuid",
+          issueIdentifier: "LRM-137",
+          issueStatus: "todo",
+          actorId: "agent-be",
+          actorType: "agent",
+          // No targetId / targetType — never invent a clickable identity.
+          targetName: "Wendy",
+        }}
+      />,
+    );
+    expect(document.body.textContent).toBe("@后端工程师 重新指派了 Issue LRM-137");
+    expect(document.body.textContent).not.toContain("Wendy");
+    expect(document.body.textContent).not.toContain("@wendy");
+    const tokens = screen.getAllByTestId("actor-token");
+    expect(tokens).toHaveLength(1);
+    expect(tokens[0]).toHaveAttribute("data-member-id", "agent-be");
+  });
+
+  it("keeps a typed assignee clickable when directory/profile miss (no name fallback)", () => {
+    render(
+      <IssueSystemEventContent
+        event={{
+          event: "issue_assigned",
+          issueId: "issue-uuid",
+          issueIdentifier: "LRM-137",
+          issueStatus: "todo",
+          actorId: "agent-be",
+          actorType: "agent",
+          targetId: "ghost-x",
+          targetType: "human",
+          targetHandle: "ghost",
+          targetName: "Ghost",
+        }}
+      />,
+    );
+    expect(document.body.textContent).toBe("@后端工程师 将 Issue LRM-137 指派给 @ghost-x");
+    expect(document.body.textContent).not.toContain("Ghost");
+    const tokens = screen.getAllByTestId("actor-token");
+    expect(tokens).toHaveLength(2);
+    expect(tokens[1]).toHaveAttribute("data-member-type", "member");
+    expect(tokens[1]).toHaveAttribute("data-member-id", "ghost-x");
   });
 
   it("renders issue_created as a fixed verb with the ref as the SOLE link (#610)", () => {

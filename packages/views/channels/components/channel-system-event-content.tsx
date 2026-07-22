@@ -141,18 +141,19 @@ export function MemberSystemEventContent({ event }: { event: MemberSystemEvent }
   return interpolateSlots(template, { target, actor });
 }
 
-// Issue rows carry both structured actor and issue facts (#603). Keep their
-// relative word order in each locale while making the actor the same real
-// @mention token used elsewhere in the conversation — the issue identifier
-// stays its own separately-hoverable anchored reference (Iris: actor and
-// issue each own their hover/link semantics, never one mixed click region).
+// Issue rows carry structured actor, issue, and (for assignments) assignee
+// facts (#603 / LRM-306). Keep relative word order per locale while making
+// actor + assignee the same real @mention tokens used elsewhere — the issue
+// identifier stays its own separately-hoverable anchored reference (Iris:
+// each object owns its hover/link semantics, never one mixed click region).
 function interpolateIssueSlots(
   template: string,
-  slots: { actor: ReactNode; issue: ReactNode },
+  slots: { actor: ReactNode; issue: ReactNode; target?: ReactNode },
 ): ReactNode {
-  return template.split(/(\{actor\}|\{issue\})/g).map((segment, index) => {
+  return template.split(/(\{actor\}|\{issue\}|\{target\})/g).map((segment, index) => {
     if (segment === "{actor}") return <Fragment key={index}>{slots.actor}</Fragment>;
     if (segment === "{issue}") return <Fragment key={index}>{slots.issue}</Fragment>;
+    if (segment === "{target}") return <Fragment key={index}>{slots.target}</Fragment>;
     if (!segment) return null;
     return <Fragment key={index}>{segment}</Fragment>;
   });
@@ -230,12 +231,13 @@ function useResolvedActorDisplayName(
 }
 
 /**
- * Renders an issue-lifecycle backflow row (#497, #603) as the frozen item #7
- * copy: "任务" only, a localized action verb (标记为处理中 / 提交审核 / 完成任务 /
- * 指派给 X), and the issue identifier as its anchored reference. A structured
- * actor is rendered as the ordinary clickable @display-name mention (#603);
- * assignee and status stay plain localized text — never colored, never a raw
- * enum. The row itself owns the simple time and quiet centered layout.
+ * Renders an issue-lifecycle backflow row (#497, #603, LRM-306) as the frozen
+ * item #7 copy: "任务" only, a localized action verb (标记为处理中 / 提交审核 /
+ * 完成任务 / 指派给 X), and the issue identifier as its anchored reference.
+ * Structured actor and assignee are ordinary clickable @display-name mentions
+ * (same SystemEventActorToken / ActorMention as member rows); status stays
+ * plain localized text — never colored, never a raw enum. The row itself owns
+ * the simple time and quiet centered layout.
  */
 export function IssueSystemEventContent({
   event,
@@ -287,13 +289,32 @@ export function IssueSystemEventContent({
     });
   }
 
-  // Assignment: resolve assignee from directory / member-profile (DB), not
-  // emit-time target_name. Missing name → name-less "changed assignee" copy.
+  // Assignment (LRM-306): assignee is a clickable @mention from target_id +
+  // target_type (same SystemEventActorToken as actor / member rows) — never
+  // i18n {{target}} plain-text interpolation. Display name from directory /
+  // member-profile (DB), never emit-time target_name (LRM-238). Missing typed
+  // target facts → name-less "changed assignee" copy.
   if (event.event === ISSUE_EVENTS.assigned) {
-    const template = targetDisplayName
-      ? t(($) => $.message.system_event.issue.assigned, { target: targetDisplayName })
-      : t(($) => $.message.system_event.issue.assigned_unknown);
-    return interpolateIssueSlots(template, { actor, issue: issueToken });
+    if (event.targetId && targetMentionType) {
+      const target = (
+        <SystemEventActorToken
+          actor={{
+            type: targetMentionType,
+            id: event.targetId,
+            displayName: targetDisplayName ?? event.targetId,
+          }}
+        />
+      );
+      return interpolateIssueSlots(t(($) => $.message.system_event.issue.assigned), {
+        actor,
+        issue: issueToken,
+        target,
+      });
+    }
+    return interpolateIssueSlots(t(($) => $.message.system_event.issue.assigned_unknown), {
+      actor,
+      issue: issueToken,
+    });
   }
 
   // Completion (BE emits this instead of a status→done row).

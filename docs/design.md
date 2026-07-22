@@ -2,8 +2,10 @@
 
 本文档定义 Multica 的视觉语言和交互规范。所有 UI 开发以此为准。
 
-> **产品表面冻结规范（2026-07-22）**：聊天 / 成员 / 设置色板与 Members 手机滚动壳见  
-> [`design-product-surfaces.md`](./design-product-surfaces.md)（Frank：颜色定稿后全站一致；设计文档入库）。
+> **产品表面冻结规范（2026-07-22 · LRM-226）**：聊天 / 成员 / 设置色板、字号与 Members 手机滚动壳见  
+> [`design-product-surfaces.md`](./design-product-surfaces.md)  
+> 可点对照：[`visual-tokens-spec.html`](./assets/design/visual-tokens-spec.html) · [`visual-tokens-compare.html`](./assets/design/visual-tokens-compare.html)  
+> （Frank：颜色定稿后全站一致；本期实现可小步；设计文档入库为规范源。）
 
 ---
 

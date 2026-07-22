@@ -1460,9 +1460,10 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     threadDeepLinkId && active
       ? messages.find((m) => m.id === threadDeepLinkId) ?? null
       : null;
-  const threadDeepLinkKey = threadDeepLinkMessage
-    ? `${active.id}:${threadDeepLinkId}`
-    : null;
+  const threadDeepLinkKey =
+    threadDeepLinkMessage && active
+      ? `${active.id}:${threadDeepLinkId}`
+      : null;
   if (
     threadDeepLinkMessage &&
     threadDeepLinkKey &&

@@ -2648,7 +2648,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         projectDisabledReason,
         canManage: canArchive(active),
         manageDisabledReason,
-        canDelete: canDeleteChannel(active),
         isArchived: isActiveArchived,
         onMuteToggle: () => handleToggleChannelMute(active),
         mutePending: muteChannel.isPending,
@@ -2656,7 +2655,9 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
           void handleShare();
         },
         onArchive: () => setArchiveTarget(active),
-        onDelete: () => setDeleteTarget(active),
+        onDelete: canDeleteChannel(active)
+          ? () => setDeleteTarget(active)
+          : undefined,
         onRename: (name: string) => {
           updateChannel.mutate(
             { channelId: active.id, name },

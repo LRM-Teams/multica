@@ -50,7 +50,6 @@ function renderPanel(
           onChangeProject={() => {}}
           projectEditable={false}
           canManage
-          canDelete
           isArchived={false}
           onMuteToggle={() => {}}
           onShare={() => {}}
@@ -70,7 +69,7 @@ function renderPanel(
 }
 
 describe("ChannelDetailsPanel danger zone (LRM-239)", () => {
-  it("shows archive and red delete entries for owner/admin", () => {
+  it("shows archive and red delete entries when onDelete is provided", () => {
     renderPanel();
     expect(screen.getByRole("button", { name: /Archive this channel/i })).toBeInTheDocument();
     const deleteBtn = screen.getByRole("button", { name: /Delete this channel/i });
@@ -78,17 +77,16 @@ describe("ChannelDetailsPanel danger zone (LRM-239)", () => {
     expect(deleteBtn.querySelector(".text-destructive")).toBeTruthy();
   });
 
-  it("hides delete when canDelete is false (member / creator-member)", () => {
-    renderPanel({ canDelete: false, canManage: true });
+  it("hides delete when onDelete is omitted (member / creator-member)", () => {
+    renderPanel({ onDelete: undefined, canManage: true });
     expect(screen.getByText("Archive this channel")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Delete this channel/i })).not.toBeInTheDocument();
   });
 
-  it("keeps delete available on archived channels for owner/admin", async () => {
+  it("keeps delete available on archived channels when onDelete is set", async () => {
     const user = userEvent.setup();
     const { onDelete, onArchive } = renderPanel({
       canManage: true,
-      canDelete: true,
       isArchived: true,
     });
     // Archive is not clickable when already archived.

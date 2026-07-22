@@ -36,7 +36,6 @@ export function ChannelDetailsPanel({
   projectDisabledReason,
   canManage,
   manageDisabledReason,
-  canDelete,
   isArchived,
   onMuteToggle,
   mutePending,
@@ -65,14 +64,16 @@ export function ChannelDetailsPanel({
   projectDisabledReason?: string;
   canManage: boolean;
   manageDisabledReason?: string;
-  /** Permanent delete — owner/admin only (stricter than archive). */
-  canDelete: boolean;
   isArchived: boolean;
   onMuteToggle: () => void;
   mutePending?: boolean;
   onShare: () => void;
   onArchive: () => void;
-  onDelete: () => void;
+  /**
+   * LRM-239 — permanent delete (owner/admin only). Omit to hide the delete
+   * entry entirely (members / creator-members / system surfaces).
+   */
+  onDelete?: () => void;
   onRename: (name: string) => void;
   renamePending?: boolean;
   onUpdateLarkChatId: (larkChatId: string | null) => void;
@@ -340,7 +341,7 @@ export function ChannelDetailsPanel({
                     </div>
                   )}
                 </div>
-                {canDelete ? (
+                {onDelete ? (
                   <div className="py-2.5">
                     <button
                       type="button"

@@ -48,12 +48,10 @@ function MobileSettingsDrawer({ onChange }: { onChange: (projectId: string | nul
           onChangeProject={onChange}
           projectEditable
           canManage
-          canDelete={false}
           isArchived={false}
           onMuteToggle={() => {}}
           onShare={() => {}}
           onArchive={() => {}}
-          onDelete={() => {}}
           onRename={() => {}}
           onUpdateLarkChatId={() => {}}
           membersBody={null}

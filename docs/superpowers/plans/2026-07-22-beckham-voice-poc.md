@@ -166,8 +166,9 @@ Status: complete
 
 Evidence:
 
-- Fetched `origin/dev` again after the first all-green CI run and found six new commits, including Beckham private-visibility changes and the channel sidebar preview removal. Merged final `origin/dev` commit `3c47df554` into the feature branch without conflicts.
-- Reviewed the overlapping shared `ChannelsPage` change. The upstream edit only removes sidebar message previews; the shared Composer, voice input, structured voice parts, Agent playback, group/DM/thread routing, and autoplay ownership remain intact.
-- The five focused Composer, voice audio/playback, Agent voice message, and channel sidebar tests passed (20/20). `@multica/views` TypeScript checking also passed.
+- Fetched `origin/dev` twice after the first all-green CI run because it advanced during verification. Merged twelve upstream commits through final `origin/dev` commit `ae54c2132`, including Beckham private visibility, channel sidebar cleanup, full-surface identity, runtime reachability, and consecutive-message grouping.
+- Reviewed both overlapping channel changes. Sidebar cleanup leaves the shared Composer and voice routing untouched. Consecutive-message grouping changes the voice message bubble/list, so the Agent voice regression now renders its replay control in the new compact group layout.
+- The first merge passed five focused Composer, voice audio/playback, Agent voice message, and channel sidebar files (20/20). After the grouping merge, seven message bubble/list/grouping, voice, and Composer files passed 105 tests with three existing skips. `@multica/views` TypeScript checking passed after both merges.
 - Reusing an old local handler database exposed an inconsistent test-only migration history: migration 204 was absent while a trigger it expected to remove was already absent. No production migration was changed for that dirty local state.
-- Created a new isolated database, applied the full migration history through both migration 205 files and `206_beckham_private`, then passed all handler tests matching voice, Beckham, and group-manager behavior. The temporary database was removed afterward.
+- Created a new isolated database, applied the full migration history through both migration 205 files and `206_beckham_private`, then passed all handler tests matching voice, Beckham, and group-manager behavior after the first merge.
+- Repeated the clean migration after the second merge and passed the complete `internal/handler` package. Both temporary databases were removed afterward.

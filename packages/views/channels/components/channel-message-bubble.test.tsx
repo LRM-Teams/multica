@@ -1971,7 +1971,7 @@ describe("ChannelMessageBubble", () => {
     expect(screen.queryByTestId("voice-reply-control")).not.toBeInTheDocument();
   });
 
-  it("renders an explicit replay control for an Agent voice response", () => {
+  it("keeps the Agent voice replay control in a compact message group", () => {
     render(
       <ChannelMessageBubble
         message={makeMessage({
@@ -1982,9 +1982,11 @@ describe("ChannelMessageBubble", () => {
           ],
         })}
         currentUserId="user-1"
+        compact
       />,
     );
 
+    expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-message-group", "compact");
     expect(screen.getByRole("button", { name: "Play voice reply" })).toBeInTheDocument();
   });
 });

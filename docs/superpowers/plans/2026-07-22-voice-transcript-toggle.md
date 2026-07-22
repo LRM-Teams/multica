@@ -58,7 +58,7 @@ Operational requirement:
 
 ### Step 4 — Verify frontend behavior and repository checks
 
-Status: in progress
+Status: complete
 
 Evidence so far:
 
@@ -68,7 +68,9 @@ Evidence so far:
 - React Doctor passed with zero findings after removing JSX-as-prop and using a semantic transcript region.
 - A fresh disposable database applied every migration. The reused local database remains unable to replay migration 204 because it lacks its historical trigger; production already has migrations 169 and 204 plus the enabled trigger, so this is local fixture drift rather than a deploy defect.
 - The fresh full check reached Go tests and exposed one unrelated macOS path assertion (`/var` versus `/private/var`) in `TestSecureSkillDraftBundleDirRejectsEscapes`; the isolated daemon test reproduces it. No product execution path was changed for that test-only canonical-path mismatch.
+- After rebasing onto `origin/dev`, the newly merged env-dispatch persistence test failed independently because its direct adapter fixture omitted `SandboxInstanceID` while asserting that an instance marker was saved. Production service callers already supply the value. The fixture now supplies a unique instance ID and verifies that exact ID; the isolated regression and full handler suite pass.
+- Rebase verification passed: 86 focused views tests (two skipped), views TypeScript, React Doctor, `cmd/multica`, `internal/messageparts`, and the complete handler suite on a fresh database. Both disposable databases were deleted after their runs.
 
 ### Step 5 — Publish PR and verify CI
 
-Status: pending
+Status: in progress

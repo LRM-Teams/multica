@@ -127,6 +127,7 @@ func TestEnvDispatchAdapterEnqueueChannelRunPersistsPromptWithTask(t *testing.T)
 
 	adapter := &envDispatchDepsAdapter{h: testHandler}
 	const prompt = "complete this task inside the sandbox"
+	sandboxInstanceID := "sandbox-" + uuid.NewString()
 	messageID, err := adapter.CreateChannelMessage(
 		ctx, sessionIn.ChannelID, sessionIn.WorkspaceID, sessionIn.CreatorID, prompt,
 	)
@@ -138,7 +139,7 @@ func TestEnvDispatchAdapterEnqueueChannelRunPersistsPromptWithTask(t *testing.T)
 		ProjectID:         sessionIn.ProjectID,
 		EnvID:             uuid.NewString(),
 		ChatSessionID:     sessionID,
-		SandboxInstanceID: "sandbox-channel-run-test",
+		SandboxInstanceID: sandboxInstanceID,
 		RuntimeID:         sessionIn.RuntimeID,
 		SourceMessageID:   messageID,
 	}, 0)
@@ -163,6 +164,7 @@ func TestEnvDispatchAdapterEnqueueChannelRunPersistsPromptWithTask(t *testing.T)
 	require.Equal(t, sessionID, gotSessionID)
 	marker, ok := service.ExtractEphemeralSandbox(gotContext)
 	require.True(t, ok)
+	require.Equal(t, sandboxInstanceID, marker.SandboxInstanceID)
 	require.NotNil(t, marker.CleanupOnTerminal)
 	require.False(t, *marker.CleanupOnTerminal, "env-dispatch channel owns sandbox cleanup")
 }

@@ -2245,3 +2245,106 @@ func transportSearchResultsContain(results []ChannelMessageSearchResult, id, con
 	}
 	return false
 }
+
+// TestRunAfterChannelMessageAckAsyncDoesNotBlock documents the LRM-272/297
+// contract: when SyncChannelMessageSideEffects is false, the caller proceeds
+// while post-ack fanout is still blocked.
+func TestRunAfterChannelMessageAckAsyncDoesNotBlock(t *testing.T) {
+	h := &Handler{SyncChannelMessageSideEffects: false}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	finished := make(chan struct{})
+
+	start := time.Now()
+	h.runAfterChannelMessageAck(context.Background(), func(context.Context) {
+		close(entered)
+		<-release
+		close(finished)
+	})
+	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
+		t.Fatalf("runAfterChannelMessageAck blocked for %v", elapsed)
+	}
+
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("async post-ack side effect did not start")
+	}
+
+	select {
+	case <-finished:
+		t.Fatal("async post-ack finished before release")
+	default:
+	}
+
+	close(release)
+	select {
+	case <-finished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("async post-ack did not finish after release")
+	}
+}
+
+func TestRunAfterChannelMessageAckSyncRunsInline(t *testing.T) {
+	h := &Handler{SyncChannelMessageSideEffects: true}
+	order := make([]string, 0, 2)
+	h.runAfterChannelMessageAck(context.Background(), func(context.Context) {
+		order = append(order, "side")
+	})
+	order = append(order, "after")
+	if len(order) != 2 || order[0] != "side" || order[1] != "after" {
+		t.Fatalf("order = %v, want [side after]", order)
+	}
+}
+
+func TestAgentTransportSendReturnsWhilePostAckBlocked(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	prevSync := testHandler.SyncChannelMessageSideEffects
+	testHandler.SyncChannelMessageSideEffects = false
+	defer func() { testHandler.SyncChannelMessageSideEffects = prevSync }()
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	prevHook := testHandler.channelMessagePostAckTestHook
+	testHandler.channelMessagePostAckTestHook = func(context.Context) {
+		once.Do(func() { close(entered) })
+		<-release
+	}
+	defer func() {
+		testHandler.channelMessagePostAckTestHook = prevHook
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	target := "#" + channelNameForTransportTest(t, channelID)
+
+	start := time.Now()
+	rec := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":            target,
+		"content":           "lrm-297 ack-before-fanout " + uuid.NewString(),
+		"client_message_id": "lrm297-" + uuid.NewString(),
+	})
+	elapsed := time.Since(start)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("transport send: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("agent transport send blocked on post-ack for %v (channel=%s)", elapsed, channelID)
+	}
+
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("post-ack side effect did not start after agent send")
+	}
+}
+

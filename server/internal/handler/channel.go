@@ -4594,17 +4594,27 @@ func (h *Handler) publishChannelToMembers(ctx context.Context, eventType, worksp
 }
 
 // runAfterChannelMessageAck runs send side effects that must not block the HTTP
-// create acknowledgment (agent wake fanout, Feishu sync). Production detaches
-// the request context and runs asynchronously; tests set
-// SyncChannelMessageSideEffects so assertions after the handler still observe
-// inbox/session rows.
+// create acknowledgment (agent wake fanout, Feishu sync). Used by human
+// SendChannelMessage* (LRM-272) and agent transport / chat-output inserts
+// (LRM-297). Production detaches the request context and runs asynchronously;
+// tests set SyncChannelMessageSideEffects so assertions after the handler
+// still observe inbox/session rows.
 func (h *Handler) runAfterChannelMessageAck(ctx context.Context, fn func(context.Context)) {
 	if fn == nil {
 		return
 	}
 	bg := context.WithoutCancel(ctx)
+	run := fn
+	if h != nil && h.channelMessagePostAckTestHook != nil {
+		hook := h.channelMessagePostAckTestHook
+		userFn := fn
+		run = func(ctx context.Context) {
+			hook(ctx)
+			userFn(ctx)
+		}
+	}
 	if h != nil && h.SyncChannelMessageSideEffects {
-		fn(bg)
+		run(bg)
 		return
 	}
 	go func() {
@@ -4613,7 +4623,7 @@ func (h *Handler) runAfterChannelMessageAck(ctx context.Context, fn func(context
 				slog.Error("channel message post-ack side effect panicked", "recover", rec)
 			}
 		}()
-		fn(bg)
+		run(bg)
 	}()
 }
 

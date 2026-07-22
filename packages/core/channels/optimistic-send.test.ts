@@ -10,6 +10,7 @@ import {
 import {
   channelKeys,
   findChannelMessageMatchIndex,
+  preserveLocalSendMessages,
   upsertChannelMessageInCache,
 } from "./queries";
 
@@ -147,5 +148,63 @@ describe("optimistic send cache (LRM-222)", () => {
     expect(messages).toHaveLength(1);
     expect(messages[0]?.id).toBe("server-thread-1");
     expect(messages[0]?.local_send_status ?? null).toBeNull();
+    // ACK omitted client_message_id — preserve from the optimistic row for retry/identity.
+    expect(messages[0]?.client_message_id).toBe("client-thread-1");
+  });
+
+  it("preserves pending/failed bubbles across list refetch (LRM-280 silent-loss guard)", () => {
+    const pending = buildOptimisticChannelMessage({
+      channelId: "c1",
+      workspaceId: "w1",
+      clientMessageId: "client-inflight",
+      content: "still sending",
+      authorId: "u1",
+      authorName: "Alice",
+    });
+    const failed = buildOptimisticChannelMessage({
+      channelId: "c1",
+      workspaceId: "w1",
+      clientMessageId: "client-failed",
+      content: "was failed",
+      authorId: "u1",
+      authorName: "Alice",
+      status: "failed",
+    });
+    const serverOnly: ChannelMessage = {
+      ...pending,
+      id: "server-old",
+      seq: 1,
+      client_message_id: null,
+      local_send_status: undefined,
+      content: "already on server",
+    };
+
+    const merged = preserveLocalSendMessages([pending, failed, serverOnly], [serverOnly]);
+    expect(merged.map((m) => m.id)).toEqual(["server-old", "client-inflight", "client-failed"]);
+    expect(merged.find((m) => m.id === "client-inflight")?.local_send_status).toBe("pending");
+    expect(merged.find((m) => m.id === "client-failed")?.local_send_status).toBe("failed");
+  });
+
+  it("drops preserved pending when the server already has the committed row (LRM-280)", () => {
+    const pending = buildOptimisticChannelMessage({
+      channelId: "c1",
+      workspaceId: "w1",
+      clientMessageId: "client-done",
+      content: "landed",
+      authorId: "u1",
+      authorName: "Alice",
+    });
+    const committed: ChannelMessage = {
+      ...pending,
+      id: "server-done",
+      seq: 10,
+      local_send_status: undefined,
+      client_message_id: "client-done",
+    };
+
+    const merged = preserveLocalSendMessages([pending], [committed]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.id).toBe("server-done");
+    expect(merged[0]?.local_send_status ?? null).toBeNull();
   });
 });

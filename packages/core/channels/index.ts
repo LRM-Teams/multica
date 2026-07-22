@@ -9,6 +9,7 @@ export {
   channelMessagesFirstItemIndex,
   upsertChannelMessageInCache,
   invalidateChannelMessages,
+  preserveLocalSendMessages,
   channelMessageThreadOptions,
   channelMessageSearchOptions,
   channelMembersOptions,

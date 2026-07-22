@@ -88,6 +88,8 @@ export interface MemberWithUser {
   profile_description: string;
 }
 
+import type { AgentMemoryGrowth } from "./memory-growth";
+
 export interface MemberProfileActivityItem {
   id: string;
   kind: "command" | "tool_use" | "text" | "queued" | "working" | "failed" | "cancelled" | "task";
@@ -114,6 +116,11 @@ export interface MemberProfile {
   recent_activity: MemberProfileActivityItem[];
   /** full when live panels are allowed; identity_only exposes only basic identity fields. */
   profile_access: "full" | "identity_only";
+  /**
+   * LRM-303 Memory growth (agents only, full access). Omitted for users,
+   * identity_only profiles, and zero valid Phase① writes.
+   */
+  memory_growth?: AgentMemoryGrowth | null;
 }
 
 export interface Invitation {

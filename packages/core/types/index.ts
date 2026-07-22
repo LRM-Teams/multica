@@ -86,6 +86,13 @@ export type {
   IssueUsageSummary,
 } from "./agent";
 export type {
+  AgentMemoryGrowth,
+  MemoryGrowthNextProgress,
+  MemoryGrowthSegment,
+  MemoryGrowthSegmentStatus,
+  MemoryGrowthTierId,
+} from "./memory-growth";
+export type {
   EvolutionReviewDecision,
   EvolutionReviewDecisionRequest,
   EvolutionDailyMetric,

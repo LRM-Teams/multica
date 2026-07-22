@@ -10,3 +10,4 @@ export * from "./constants";
 export * from "./visibility-label";
 export * from "./use-workspace-agent-availability";
 export * from "./mcp-support";
+export * from "./memory-growth";

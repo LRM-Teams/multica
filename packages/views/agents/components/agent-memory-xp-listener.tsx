@@ -1,9 +1,15 @@
 "use client";
 
 import { useCallback, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useWSEvent } from "@multica/core/realtime";
 import type { AgentMemoryUpdatedPayload } from "@multica/core/types";
+import {
+  agentDetailKeys,
+  memberProfileKeys,
+} from "@multica/core/agents";
 import { useAgentXpBurstStore } from "@multica/core/agents/stores";
+import { useWorkspaceId } from "@multica/core/hooks";
 
 declare global {
   interface Window {
@@ -18,18 +24,29 @@ declare global {
 
 /**
  * Subscribes to `agent:memory_updated` and feeds the shared XP burst store.
+ * Also invalidates profile caches so Memory growth (LRM-304) refreshes quietly.
  * Mount once under the workspace shell (DashboardLayout).
  */
 export function AgentMemoryXpListener() {
   const ingest = useAgentXpBurstStore((s) => s.ingestMemoryUpdate);
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
 
   const handleMemoryUpdated = useCallback(
     (payload: unknown) => {
       const data = payload as AgentMemoryUpdatedPayload;
       if (!data?.agent_id || !data.file_key) return;
       ingest(data.agent_id, data.file_key, data.count ?? 1);
+      if (wsId) {
+        void qc.invalidateQueries({
+          queryKey: agentDetailKeys.detail(wsId, data.agent_id),
+        });
+        void qc.invalidateQueries({
+          queryKey: memberProfileKeys.detail(wsId, "agent", data.agent_id),
+        });
+      }
     },
-    [ingest],
+    [ingest, qc, wsId],
   );
 
   useWSEvent("agent.memory_updated", handleMemoryUpdated);
@@ -38,11 +55,19 @@ export function AgentMemoryXpListener() {
     if (process.env.NODE_ENV === "production") return;
     window.__multicaSimulateAgentMemoryXp = (agentId, fileKey = "memory", delta = 1) => {
       ingest(agentId, fileKey, delta);
+      if (wsId) {
+        void qc.invalidateQueries({
+          queryKey: agentDetailKeys.detail(wsId, agentId),
+        });
+        void qc.invalidateQueries({
+          queryKey: memberProfileKeys.detail(wsId, "agent", agentId),
+        });
+      }
     };
     return () => {
       delete window.__multicaSimulateAgentMemoryXp;
     };
-  }, [ingest]);
+  }, [ingest, qc, wsId]);
 
   return null;
 }

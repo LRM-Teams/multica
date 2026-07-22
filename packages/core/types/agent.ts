@@ -1,3 +1,5 @@
+import type { AgentMemoryGrowth } from "./memory-growth";
+
 export type AgentStatus = "idle" | "working" | "blocked" | "error" | "offline";
 
 export type AgentRuntimeMode = "local" | "cloud";
@@ -359,6 +361,11 @@ export interface Agent {
   updated_at: string;
   archived_at: string | null;
   archived_by: string | null;
+  /**
+   * LRM-303 Memory growth for profile / agent card. Omitted when the agent has
+   * zero valid Phase① memory writes (or on pre-LRM-303 backends).
+   */
+  memory_growth?: AgentMemoryGrowth | null;
 }
 
 /**

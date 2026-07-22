@@ -29,6 +29,7 @@ import { AgentPresenceOverlay } from "../../common/actor-avatar";
 import { AgentFilesPanel } from "./agent-files-panel";
 import { useT } from "../../i18n/use-t";
 import { estimateCost, formatTokens, isModelPriced } from "../../runtimes/utils";
+import { MemoryGrowthSection } from "../../agents/components/memory-growth-section";
 
 type OwnerTab = "activity" | "profile" | "files";
 
@@ -307,6 +308,10 @@ function AgentProfileTabContent({
           {agent.description || t(($) => $.side_panel.no_description)}
         </p>
       </div>
+      <MemoryGrowthSection
+        growth={agent.memory_growth}
+        className="border-b px-3 py-3 md:px-4"
+      />
       <div className="space-y-2 border-b p-3 text-xs md:p-4">
         <InfoRow label={t(($) => $.side_panel.created_label)} value={formatDate(agent.created_at)} />
         <InfoRow label={t(($) => $.side_panel.owner_label)} value={ownerName(agent, members)} />

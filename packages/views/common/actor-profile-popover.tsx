@@ -23,6 +23,7 @@ import type { MemberProfile } from "@multica/core/types";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
+import { MemoryGrowthSection } from "../agents/components/memory-growth-section";
 import {
   formatActorHandleLabel,
   resolveActorHandle,
@@ -319,6 +320,12 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
             {description}
           </p>
         </section>
+      ) : null}
+      {profile.member_type === "agent" && !isIdentityOnly ? (
+        <MemoryGrowthSection
+          growth={profile.memory_growth}
+          className="border-b p-3 last:border-b-0"
+        />
       ) : null}
       {profile.member_type === "agent" ? (
         isIdentityOnly ? (

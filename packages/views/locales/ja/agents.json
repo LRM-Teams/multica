@@ -484,6 +484,11 @@
     "username_error_too_long": "ユーザー名が長すぎます",
     "username_taken": "その @handle はすでに使用されています"
   },
+  "memory_growth": {
+    "title": "Memory growth",
+    "next": "Next · {{tier}}",
+    "writes": "{{current}} / {{required}} writes"
+  },
   "execution_config": {
     "applies_next_run": "変更は次回の実行から反映されます。実行中のセッションには影響しません。"
   },

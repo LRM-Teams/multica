@@ -3,7 +3,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { ApiError } from "@multica/core/api";
-import { validateAgentUsername } from "@multica/core/agents";
+import {
+  agentDetailOptions,
+  memberProfileOptions,
+  validateAgentUsername,
+} from "@multica/core/agents";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
 import { useAgentPermissions } from "@multica/core/permissions";
 import { useAuthStore } from "@multica/core/auth";
@@ -26,6 +30,7 @@ import { ThinkingPropRow } from "./inspector/thinking-prop-row";
 import { InlineEditPopover } from "./inline-edit-popover";
 import { useUpdateAgent } from "../hooks/use-update-agent";
 import { useT } from "../../i18n/use-t";
+import { ActorProfileContentLoaded } from "../../common/actor-profile-popover";
 
 interface AgentProfileCardProps {
   agentId: string;
@@ -43,13 +48,34 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
   const currentUser = useAuthStore((s) => s.user);
   const runtimeHealthLabel = useRuntimeHealthStateLabel();
 
-  const agent = agents.find((a) => a.id === agentId);
+  const listAgent = agents.find((a) => a.id === agentId) ?? null;
+  // Channel-only agents (group managers) are omitted from ListAgents
+  // (LRM-233) but remain openable — resolve by id (LRM-288).
+  const detailQuery = useQuery({
+    ...agentDetailOptions(wsId, agentId),
+    enabled: !!agentId && !listAgent && !agentsLoading,
+  });
+  const agent = listAgent ?? detailQuery.data ?? null;
+  const detailForbidden =
+    !listAgent &&
+    detailQuery.isError &&
+    detailQuery.error instanceof ApiError &&
+    detailQuery.error.status === 403;
+  const identityQuery = useQuery({
+    ...memberProfileOptions(wsId, "agent", agentId),
+    enabled: !!agentId && detailForbidden,
+  });
   // Same permission gate as the detail inspector — owner/admin only. Called
   // unconditionally (its `agent | null` signature handles the loading case)
   // so the early returns below don't violate the rules of hooks.
   const { canEdit } = useAgentPermissions(agent ?? null, wsId);
 
-  if (agentsLoading && !agent) {
+  const isLoading =
+    (agentsLoading && !listAgent) ||
+    (!listAgent && detailQuery.isPending) ||
+    (detailForbidden && identityQuery.isPending);
+
+  if (isLoading) {
     return (
       <div className="flex items-center gap-3">
         <Skeleton className="h-10 w-10 rounded-full" />
@@ -62,6 +88,9 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
   }
 
   if (!agent) {
+    if (identityQuery.data) {
+      return <ActorProfileContentLoaded profile={identityQuery.data} />;
+    }
     return (
       <div className="text-xs text-muted-foreground">{t(($) => $.profile_card.unavailable)}</div>
     );

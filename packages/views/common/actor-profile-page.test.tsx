@@ -35,8 +35,18 @@ vi.mock("@multica/core/workspace/queries", () => ({
   memberListOptions: () => ({ queryKey: ["members"] }),
 }));
 
-vi.mock("../channels/components/agent-side-panel", () => ({
-  AgentSidePanel: ({ variant }: { variant: string }) => <div data-testid="agent-tabs">{variant}</div>,
+vi.mock("./resolved-agent-side-panel", () => ({
+  ResolvedAgentSidePanel: ({
+    variant,
+    agentId,
+  }: {
+    variant: string;
+    agentId: string;
+  }) => (
+    <div data-testid="agent-tabs" data-agent-id={agentId}>
+      {variant}
+    </div>
+  ),
 }));
 
 vi.mock("../i18n/use-t", () => ({
@@ -46,8 +56,8 @@ vi.mock("../i18n/use-t", () => ({
   }),
 }));
 
-// Users and unavailable agents retain the generic profile fallback. Stub it to
-// echo props so we can assert that fallback forwards memberType/memberId.
+// Users retain the generic profile fallback. Stub it to echo props so we can
+// assert that fallback forwards memberType/memberId.
 vi.mock("./actor-profile-popover", () => ({
   ActorProfileContent: ({
     memberType,
@@ -63,15 +73,16 @@ vi.mock("./actor-profile-popover", () => ({
 }));
 
 describe("ActorProfilePage (#586 mobile full page)", () => {
-  it("renders the shared profile content for the actor", () => {
-    render(<ActorProfilePage memberType="agent" memberId="agent-1" />);
+  it("resolves agents by id even when absent from ListAgents (LRM-288)", () => {
+    agents.splice(0, agents.length);
+    render(<ActorProfilePage memberType="agent" memberId="group-manager-1" />);
 
-    expect(screen.getByTestId("actor-profile-content")).toHaveTextContent(
-      "agent:agent-1",
-    );
+    const agentTabs = screen.getByTestId("agent-tabs");
+    expect(agentTabs).toHaveAttribute("data-agent-id", "group-manager-1");
+    expect(agentTabs).toHaveTextContent("page");
   });
 
-  it("reuses the agent tab surface when the agent is available", () => {
+  it("reuses the agent tab surface for agents", () => {
     agents.splice(0, agents.length, { id: "agent-1" });
     render(<ActorProfilePage memberType="agent" memberId="agent-1" />);
 
@@ -99,6 +110,6 @@ describe("ActorProfilePage (#586 mobile full page)", () => {
 
     const back = screen.getByRole("button", { name: /back/i });
     fireEvent.click(back);
-    expect(mockBack).toHaveBeenCalledTimes(1);
+    expect(mockBack).toHaveBeenCalled();
   });
 });

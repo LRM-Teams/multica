@@ -33,8 +33,8 @@ vi.mock("@multica/core/workspace/queries", () => ({
 
 vi.mock("@tanstack/react-query", () => ({
   // Both the agent and member queries resolve to a stable list. The member
-  // list only feeds the (mocked) AgentSidePanel, so returning the agent list
-  // for both is harmless and keeps the mock trivial.
+  // list only feeds the (mocked) ResolvedAgentSidePanel, so returning the
+  // agent list for both is harmless and keeps the mock trivial.
   useQuery: () => ({ data: mockAgents }),
 }));
 
@@ -49,12 +49,21 @@ vi.mock("../navigation", () => ({
   useNavigation: () => ({ pathname: "/agents" }),
 }));
 
-vi.mock("../channels/components/agent-side-panel", () => ({
-  AgentSidePanel: ({ agent }: { agent: { id: string; name: string } }) => (
-    <div data-testid="agent-side-panel" data-agent-id={agent.id}>
-      {agent.name}
-    </div>
-  ),
+vi.mock("../common/resolved-agent-side-panel", () => ({
+  ResolvedAgentSidePanel: ({
+    agentId,
+    agents = [],
+  }: {
+    agentId: string;
+    agents?: { id: string; name: string }[];
+  }) => {
+    const agent = agents.find((a) => a.id === agentId);
+    return (
+      <div data-testid="agent-side-panel" data-agent-id={agentId}>
+        {agent?.name ?? agentId}
+      </div>
+    );
+  },
 }));
 
 describe("GlobalAgentPanel", () => {
@@ -75,6 +84,14 @@ describe("GlobalAgentPanel", () => {
     const panel = screen.getByTestId("agent-side-panel");
     expect(panel).toHaveAttribute("data-agent-id", "agent-2");
     expect(panel).toHaveTextContent("Atlas");
+  });
+
+  it("opens even when the agent is absent from ListAgents (channel-only)", () => {
+    selectedAgentId = "group-manager-1";
+    render(<GlobalAgentPanel />);
+
+    const panel = screen.getByTestId("agent-side-panel");
+    expect(panel).toHaveAttribute("data-agent-id", "group-manager-1");
   });
 
   it("keeps the panel at the docked panel width (440px) for one-panel parity", () => {

@@ -74,6 +74,12 @@ vi.mock("../i18n/use-t", () => {
       description: "Description",
       recent_activity: "Recent activity",
       no_recent_activity: "No recent activity",
+      restricted: {
+        runtime: "Runtime",
+        usage: "Usage",
+        activity: "Activity",
+        channel_only: "Channel-only",
+      },
       role: { agent: "Agent", owner: "Owner", admin: "Admin", member: "Member" },
     },
   };
@@ -215,10 +221,11 @@ describe("ActorProfileContentLoaded", () => {
     expect(screen.getByText("Builds and reviews changes.")).toBeInTheDocument();
   });
 
-  it("identity_only: keeps name + description, hides live status and recent activity", () => {
+  it("identity_only: keeps name + description, greys sensitive blocks (LRM-288)", () => {
     // #2: a private/removed agent surfaced via a readable message returns only
     // basic identity (profile_access=identity_only). Show the identity card —
-    // never a blank "Agent unavailable" — but hide the panels the BE still gates.
+    // never a blank "Agent unavailable" — and grey sensitive panels with an
+    // explicit "Channel-only" label (LRM-238: no silent omission).
     const profile = makeProfile();
     profile.profile_access = "identity_only";
     mockActivity.current = {
@@ -232,10 +239,14 @@ describe("ActorProfileContentLoaded", () => {
     // Identity stays visible.
     expect(screen.getByText("Aegis")).toBeInTheDocument();
     expect(screen.getByText("Builds and reviews changes.")).toBeInTheDocument();
-    // Protected live panels are gone (not just empty) — no live mark, no Recent
-    // activity timeline, even though the activity stub has events.
+    // Protected live panels are not live-rendered — no live mark, no timeline —
+    // even though the activity stub has events.
     expect(screen.queryByTestId("agent-live-status")).toBeNull();
     expect(screen.queryByTestId("activity-timeline")).toBeNull();
     expect(screen.queryByText("Recent activity")).toBeNull();
+    // Sensitive blocks are explicit (greyed + channel-only), not silent.
+    expect(screen.getByText("Runtime")).toBeInTheDocument();
+    expect(screen.getByText("Usage")).toBeInTheDocument();
+    expect(screen.getAllByText("Channel-only")).toHaveLength(3);
   });
 });

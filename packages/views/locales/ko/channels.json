@@ -117,6 +117,14 @@
     "recent_activity": "최근 활동",
     "back": "뒤로",
     "no_recent_activity": "최근 활동이 없습니다",
+    "close_aria": "프로필 닫기",
+    "no_permission_toast": "이 멤버의 프로필을 볼 권한이 없습니다",
+    "restricted": {
+      "runtime": "Runtime",
+      "usage": "사용량",
+      "activity": "Activity",
+      "channel_only": "채널 내에서만 표시"
+    },
     "role": {
       "owner": "소유자",
       "admin": "관리자",

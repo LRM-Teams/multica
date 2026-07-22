@@ -65,7 +65,7 @@ import { buildVoiceMessageParts } from "../lib/voice-audio";
 import { prepareVoicePlayback, voicePlaybackScope } from "../lib/voice-playback";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
-import { AgentSidePanel } from "./agent-side-panel";
+import { ResolvedAgentSidePanel } from "../../common/resolved-agent-side-panel";
 import { Composer, ConversationHeader } from "./conversation-surface";
 import { ComposerAttachmentTray } from "./composer-attachment-tray";
 import { ThreadRootPreview } from "./thread-root-preview";
@@ -426,9 +426,6 @@ function DmChannelConversation({
     ...memberListOptions(wsId),
     enabled: !!selectedAgentPanelId,
   });
-  const selectedAgentPanel = selectedAgentPanelId
-    ? dmAgents.find((a) => a.id === selectedAgentPanelId) ?? null
-    : null;
   const setQuoteTarget = useCallback((message: QuoteTarget | null) => {
     dispatch({ type: "setQuote", message });
   }, []);
@@ -1318,9 +1315,10 @@ function DmChannelConversation({
   // #349: the agent side panel shares the thread-panel slot (opening one
   // closes the other — see handleOpenThread / handleOpenAgentPanel).
   const agentPanel =
-    selectedAgentPanel ? (
-      <AgentSidePanel
-        agent={selectedAgentPanel}
+    selectedAgentPanelId ? (
+      <ResolvedAgentSidePanel
+        agentId={selectedAgentPanelId}
+        agents={dmAgents}
         currentUserId={currentUserId}
         members={dmMembers}
         onClose={() => setSelectedAgentPanelId(null)}

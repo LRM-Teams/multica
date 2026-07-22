@@ -117,6 +117,14 @@
     "recent_activity": "最近活动",
     "back": "返回",
     "no_recent_activity": "暂无最近活动",
+    "close_aria": "关闭资料卡",
+    "no_permission_toast": "当前无权查看该成员资料",
+    "restricted": {
+      "runtime": "Runtime",
+      "usage": "用量",
+      "activity": "Activity",
+      "channel_only": "仅频道内可见"
+    },
     "role": {
       "owner": "所有者",
       "admin": "管理员",

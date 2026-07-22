@@ -9,6 +9,7 @@ import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { cn } from "@multica/ui/lib/utils";
 import { MessageSquare } from "lucide-react";
 import { ActorAvatar } from "../../common/actor-avatar";
+import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { useT } from "../../i18n";
 
 export type MemberRoleLabel = "owner" | "admin" | "member" | "agent";
@@ -21,6 +22,9 @@ export type MemberRoleLabel = "owner" | "admin" | "member" | "agent";
  *
  * Avatars are identity-first (LRM-224 Option B): actor id → shared Avatar;
  * agents show the presence status dot on this directory surface.
+ * LRM-288 — row identity is clickable: agents open the agent panel (including
+ * channel-only / group-manager agents absent from ListAgents); humans open
+ * the shared profile trigger.
  */
 export function ChannelMembersList({
   members,
@@ -32,6 +36,7 @@ export function ChannelMembersList({
   isMobile,
   currentUserId,
   onOpenDm,
+  onOpenAgent,
   onRemove,
   dmPending,
   className,
@@ -45,6 +50,8 @@ export function ChannelMembersList({
   isMobile: boolean;
   currentUserId: string;
   onOpenDm?: (member: ChannelMember) => void;
+  /** Opens the agent side panel (channel-only agents included). */
+  onOpenAgent?: (agentId: string) => void;
   onRemove?: (member: ChannelMember) => void;
   dmPending?: boolean;
   className?: string;
@@ -107,40 +114,56 @@ export function ChannelMembersList({
           : null;
         const canDm = Boolean(onOpenDm) && (isAgent || m.member_id !== currentUserId);
         const actorType = isAgent ? "agent" : "member";
+        const profileMemberType = isAgent ? "agent" : "user";
+        const openAgentCapture =
+          isAgent && onOpenAgent
+            ? () => {
+                onOpenAgent(m.member_id);
+              }
+            : undefined;
 
         return (
           <div
             key={`${m.member_type}:${m.member_id}`}
             className="group flex min-h-[52px] items-center gap-3 border-b border-border px-5 py-2.5 last:border-b-0 hover:bg-hover"
           >
-            <ActorAvatar
-              actorType={actorType}
-              actorId={m.member_id}
-              avatarUrlHint={m.avatar_url}
-              size={36}
-              showStatusDot={isAgent}
-              profileLink={false}
-            />
-            <div className="min-w-0 flex-1">
-              <div className="flex min-w-0 items-baseline gap-1.5">
-                <span className="truncate text-sm font-semibold text-ink">
-                  {presentation.displayName}
-                </span>
-                {presentation.showHandleLabel && presentation.handleLabel ? (
-                  <span className="truncate text-xs font-normal text-ink-2">
-                    {presentation.handleLabel}
+            <ActorProfileTrigger
+              memberType={profileMemberType}
+              memberId={m.member_id}
+              side="left"
+              sideOffset={8}
+              className="min-w-0 flex-1 items-center gap-3"
+              onClickCapture={openAgentCapture}
+            >
+              <ActorAvatar
+                actorType={actorType}
+                actorId={m.member_id}
+                avatarUrlHint={m.avatar_url}
+                size={36}
+                showStatusDot={isAgent}
+                profileLink={false}
+              />
+              <div className="min-w-0 flex-1">
+                <div className="flex min-w-0 items-baseline gap-1.5">
+                  <span className="truncate text-sm font-semibold text-ink">
+                    {presentation.displayName}
                   </span>
-                ) : null}
-                {mutedRoleLabel ? (
-                  <span
-                    data-testid="member-role-label"
-                    className="shrink-0 text-[11px] font-normal leading-none text-muted-foreground"
-                  >
-                    {mutedRoleLabel}
-                  </span>
-                ) : null}
+                  {presentation.showHandleLabel && presentation.handleLabel ? (
+                    <span className="truncate text-xs font-normal text-ink-2">
+                      {presentation.handleLabel}
+                    </span>
+                  ) : null}
+                  {mutedRoleLabel ? (
+                    <span
+                      data-testid="member-role-label"
+                      className="shrink-0 text-[11px] font-normal leading-none text-muted-foreground"
+                    >
+                      {mutedRoleLabel}
+                    </span>
+                  ) : null}
+                </div>
               </div>
-            </div>
+            </ActorProfileTrigger>
             {canDm && (
               <button
                 type="button"

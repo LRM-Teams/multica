@@ -853,13 +853,18 @@ func TestMemoryOperatingGuidePrioritizesExplicitUserPreferences(t *testing.T) {
 	out := buildMetaSkillContent("codex", ctx)
 
 	for _, want := range []string{
-		"### Memory Operating Guide (v0.6)",
+		"### Memory Operating Guide (v0.7)",
 		"Use high-strength auto-write for human preferences and durable work arrangements",
 		"treat human speech as high-signal by default",
 		"A verbal acknowledgment such as \"got it\" does not count as remembering",
 		"current user's isolated `USER.md`",
 		"likely to matter in a future run",
+		"Write target map",
+		"MULTICA_AGENT_MEMORY_DIR/daily/YYYY-MM-DD.md",
+		"only the most important long-lived cross-project rules",
 		"memory/MEMORY.md",
+		"should follow this agent into unrelated DMs, channels, and projects",
+		"If no project directory is present, do not create or infer one",
 		"MULTICA_USER_MEMORY_DIR",
 		"current member's durable preferences and standing working style",
 		"Relationships, handoffs, and work arrangements",
@@ -867,10 +872,13 @@ func TestMemoryOperatingGuidePrioritizesExplicitUserPreferences(t *testing.T) {
 		"notes/relationship-map.md",
 		"not only at welcome/introduction",
 		"Pure social greetings",
+		"Human feedback first",
+		"corrections, rework requests, confirmations, and explicit dissatisfaction",
 		"Daily journal (hot path) vs self-review/curator (cold path)",
 		"memory/daily/YYYY-MM-DD.md",
 		"Do **not** run a full self-review or curator-style promotion inside every chat/task turn",
-		"never leave durable facts only in Daily",
+		"Only promote the most durable, broadly reusable facts out of Daily into `MEMORY.md`",
+		"project-specific durable facts belong in project files, not agent-global memory",
 		"must not block chat latency",
 		"Source is not scope",
 		"who said a memory is provenance",
@@ -943,7 +951,7 @@ func TestMemoryOperatingGuideRequiresAgentLocalScope(t *testing.T) {
 		ChatSessionID: "chat-1",
 		AgentRoot:     "/tmp/multica/workspace-1/.multica/agents/agent-1",
 	})
-	if !strings.Contains(withRoot, "### Memory Operating Guide (v0.6)") {
+	if !strings.Contains(withRoot, "### Memory Operating Guide (v0.7)") {
 		t.Fatalf("memory operating guide missing when an agent-local root exists:\n%s", withRoot)
 	}
 

@@ -546,31 +546,44 @@ func TestTeamCurationPersistsKnowledgeAndAppliesDecisionAtomically(t *testing.T)
 	}
 
 	rollbackTitle := "Rollback verification " + suffix
-	invalidOutput, _ := json.Marshal(map[string]any{
+	// Non-UUID decision ids (file-slug style) and unknown candidates must not
+	// fail the whole team curation persist — otherwise runs stay stuck running.
+	slugOutput, _ := json.Marshal(map[string]any{
 		"team_knowledge": []map[string]any{{
-			"kind": "policy", "title": rollbackTitle, "content": "This insert must roll back.",
-			"source_candidate_ids": []string{},
+			"kind": "policy", "title": rollbackTitle, "content": "Slug ids should not abort persist.",
+			"source_candidate_ids": []string{"1864763b:2026-07-08:slack-mobile-message-ux", candidateID},
 		}},
-		"decisions": []map[string]any{{"candidate_id": "not-a-uuid", "status": "promoted"}},
+		"decisions": []map[string]any{
+			{"candidate_id": "not-a-uuid", "status": "promoted"},
+			{"candidate_id": "00000000-0000-4000-8000-000000000099", "status": "promoted", "reason": "missing"},
+		},
 	})
 	tx, err = testPool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := testHandler.persistTeamCurationOutput(ctx, tx, runID, testWorkspaceID, string(invalidOutput)); err == nil {
+	if err := testHandler.persistTeamCurationOutput(ctx, tx, runID, testWorkspaceID, string(slugOutput)); err != nil {
 		_ = tx.Rollback(ctx)
-		t.Fatal("invalid decision unexpectedly succeeded")
+		t.Fatalf("slug decision should be skipped, got %v", err)
 	}
-	if err := tx.Rollback(ctx); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	var rollbackCount int
-	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM team_knowledge_item WHERE workspace_id=$1 AND title=$2`, testWorkspaceID, rollbackTitle).Scan(&rollbackCount); err != nil {
+	var slugKnowledgeCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM team_knowledge_item
+		 WHERE workspace_id=$1 AND title=$2
+		   AND $3::uuid = ANY(source_candidate_ids)
+		   AND metadata ? 'source_candidate_refs'
+	`, testWorkspaceID, rollbackTitle, candidateID).Scan(&slugKnowledgeCount); err != nil {
 		t.Fatal(err)
 	}
-	if rollbackCount != 0 {
-		t.Fatalf("failed transaction left %d team knowledge rows", rollbackCount)
+	if slugKnowledgeCount != 1 {
+		t.Fatalf("slug-tolerant team knowledge count = %d, want 1", slugKnowledgeCount)
 	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM team_knowledge_item WHERE workspace_id=$1 AND title=$2`, testWorkspaceID, rollbackTitle)
+	})
 }
 
 func TestDeleteRuntimeFailsIncompleteMemoryCurationRuns(t *testing.T) {

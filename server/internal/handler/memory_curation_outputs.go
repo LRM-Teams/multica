@@ -3,7 +3,6 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"strings"
 
 	"github.com/multica-ai/multica/server/internal/memorycuration"
@@ -393,6 +392,27 @@ func (h *Handler) persistSelfReviewOutput(ctx context.Context, exec dbExecutor, 
 	return nil
 }
 
+// uuidStringsFromAny keeps only parseable UUIDs. Curator models often emit
+// file-slug ids like "agentPrefix:date:slug"; those must not fail the whole run
+// when writing team_knowledge_item.source_candidate_ids (uuid[]).
+func uuidStringsFromAny(ids []string) []string {
+	if len(ids) == 0 {
+		return []string{}
+	}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, err := util.ParseUUID(id); err != nil {
+			continue
+		}
+		out = append(out, id)
+	}
+	return out
+}
+
 func (h *Handler) persistTeamCurationOutput(ctx context.Context, exec dbExecutor, runID, workspaceID, output string) error {
 	var parsed teamCurationOutput
 	if !extractJSONObject(output, &parsed) {
@@ -406,6 +426,11 @@ func (h *Handler) persistTeamCurationOutput(ctx context.Context, exec dbExecutor
 		}
 		kind := normalizeTeamKnowledgeKind(item.Kind)
 		metadata := curationOutputMetadata(item.Metadata, "team_curation", item.Applies)
+		// Preserve non-UUID source refs in metadata for audit; only real UUIDs
+		// go into the uuid[] column.
+		if refs := nonUUIDStrings(item.SourceCandidateIDs); len(refs) > 0 {
+			metadata = appendJSONObjectField(metadata, "source_candidate_refs", refs)
+		}
 		if _, err := exec.Exec(ctx, `
 			INSERT INTO team_knowledge_item (
 			  workspace_id, kind, title, content, source_candidate_ids,
@@ -413,20 +438,24 @@ func (h *Handler) persistTeamCurationOutput(ctx context.Context, exec dbExecutor
 			)
 			SELECT $1,$2,$3,$4,$5::uuid[], curator_agent_id, $6::jsonb
 			  FROM memory_curation_run WHERE id = $7
-		`, workspaceID, kind, title, content, item.SourceCandidateIDs, metadata, runID); err != nil {
+		`, workspaceID, kind, title, content, uuidStringsFromAny(item.SourceCandidateIDs), metadata, runID); err != nil {
 			return err
 		}
 	}
 	for _, decision := range parsed.Decisions {
+		// Skip slug / file-local ids (agentPrefix:date:slug). Only DB candidate
+		// UUIDs can update agent_memory_curation_candidate rows.
 		candidateID, err := util.ParseUUID(strings.TrimSpace(decision.CandidateID))
 		if err != nil {
-			return fmt.Errorf("invalid team curation candidate_id %q", decision.CandidateID)
+			continue
 		}
 		status := normalizeTeamCurationDecisionStatus(decision.Status)
 		if status == "" {
-			return fmt.Errorf("invalid team curation decision status %q", decision.Status)
+			continue
 		}
-		tag, err := exec.Exec(ctx, `
+		// Missing / already-resolved candidates are best-effort skips. Hard-fail
+		// here used to leave runs stuck in running when curator cited slug ids.
+		if _, err := exec.Exec(ctx, `
 			UPDATE agent_memory_curation_candidate
 			   SET status = $1,
 			       metadata = metadata || jsonb_build_object(
@@ -434,12 +463,8 @@ func (h *Handler) persistTeamCurationOutput(ctx context.Context, exec dbExecutor
 			       ),
 			       updated_at = now()
 			 WHERE id = $4 AND workspace_id = $5 AND status = 'pending'
-		`, status, runID, strings.TrimSpace(decision.Reason), candidateID, workspaceID)
-		if err != nil {
+		`, status, runID, strings.TrimSpace(decision.Reason), candidateID, workspaceID); err != nil {
 			return err
-		}
-		if tag.RowsAffected() != 1 {
-			return fmt.Errorf("team curation candidate %s is not pending in this workspace", decision.CandidateID)
 		}
 	}
 	for _, conflict := range parsed.Conflicts {
@@ -456,6 +481,34 @@ func (h *Handler) persistTeamCurationOutput(ctx context.Context, exec dbExecutor
 		}
 	}
 	return nil
+}
+
+func nonUUIDStrings(ids []string) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, err := util.ParseUUID(id); err == nil {
+			continue
+		}
+		out = append(out, id)
+	}
+	return out
+}
+
+func appendJSONObjectField(raw json.RawMessage, key string, value any) json.RawMessage {
+	metadata := map[string]any{}
+	if len(raw) > 0 && string(raw) != "null" {
+		_ = json.Unmarshal(raw, &metadata)
+	}
+	metadata[key] = value
+	payload, err := json.Marshal(metadata)
+	if err != nil {
+		return raw
+	}
+	return payload
 }
 
 func curationOutputMetadata(raw json.RawMessage, source string, appliesRaw json.RawMessage) json.RawMessage {

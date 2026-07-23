@@ -21,6 +21,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/daemon/repocache"
+	skillpkg "github.com/multica-ai/multica/server/internal/skill"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 	"github.com/multica-ai/multica/server/pkg/taskfailure"
@@ -4926,9 +4927,18 @@ func convertSkillsForEnv(skills []SkillData) []execenv.SkillContextForEnv {
 	}
 	result := make([]execenv.SkillContextForEnv, len(skills))
 	for i, s := range skills {
+		desc := strings.TrimSpace(s.Description)
+		if desc == "" && strings.TrimSpace(s.Content) != "" {
+			// Progressive skill index needs a description to decide when to
+			// open SKILL.md. Older/manual rows sometimes store description
+			// only inside frontmatter — recover it so the brief is useful.
+			if _, fmDesc := skillpkg.ParseSkillFrontmatter(s.Content); strings.TrimSpace(fmDesc) != "" {
+				desc = strings.TrimSpace(fmDesc)
+			}
+		}
 		result[i] = execenv.SkillContextForEnv{
 			Name:        s.Name,
-			Description: s.Description,
+			Description: desc,
 			Content:     s.Content,
 		}
 		for _, f := range s.Files {

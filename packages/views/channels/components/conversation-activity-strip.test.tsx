@@ -104,6 +104,19 @@ describe("ConversationActivityStrip", () => {
     ]);
   });
 
+  it("LRM-447: without stop handlers, preparing text is status-only (no Stop buttons)", () => {
+    renderStrip(
+      <ConversationActivityStrip
+        tasks={[
+          task({ agent_name: "Aria", task_id: "t1" }),
+          task({ agent_name: "Bo", task_id: "t2" }),
+        ]}
+      />,
+    );
+    expect(screen.getByText("2 agents are preparing replies...")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /stop/i })).toBeNull();
+  });
+
   it("does NOT render terminal outcomes (no_reply / failed) — those live in Activity", () => {
     renderStrip(
       <ConversationActivityStrip

@@ -16,7 +16,7 @@ function renderDialog(
   );
 }
 
-describe("StopAllAgentsDialog (LRM-405)", () => {
+describe("StopAllAgentsDialog (LRM-405 / LRM-447)", () => {
   it("shows Frank's confirm copy with the channel name and does not confirm on cancel/close", async () => {
     const onConfirm = vi.fn();
     const onOpenChange = vi.fn();
@@ -35,6 +35,9 @@ describe("StopAllAgentsDialog (LRM-405)", () => {
     expect(warning).toHaveTextContent(/immediately stop all running agents/i);
     expect(warning).toHaveTextContent("#ai-research");
     expect(warning.querySelector("strong")).toHaveTextContent("#ai-research");
+    // LRM-447 design A — token destructive wash, not hardcoded cream/coral.
+    expect(warning.className).toMatch(/destructive/);
+    expect(warning.className).not.toMatch(/#FCE8E4|#E8916A/);
 
     await userEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
     expect(onOpenChange).toHaveBeenCalledWith(false);
@@ -58,7 +61,11 @@ describe("StopAllAgentsDialog (LRM-405)", () => {
     expect(warning).toHaveTextContent("#ops");
     expect(warning).not.toHaveTextContent("##ops");
 
-    await userEvent.click(screen.getByTestId("stop-all-agents-confirm"));
+    const confirm = screen.getByTestId("stop-all-agents-confirm");
+    expect(confirm.className).not.toMatch(/shadow-\[2px_2px_0/);
+    expect(confirm.className).toMatch(/destructive/);
+
+    await userEvent.click(confirm);
     expect(onOpenChange).toHaveBeenCalledWith(false);
     expect(onConfirm).toHaveBeenCalledTimes(1);
   });

@@ -18,6 +18,11 @@ export function ConversationHeader({
   badges,
   status,
   actions,
+  /**
+   * LRM-447 design gate A — desktop group header: left meta · center title ·
+   * right action rail. Mobile keeps the existing flex row (back + title + ⋯).
+   */
+  layout = "default",
 }: {
   isMobile: boolean;
   leading: ReactNode;
@@ -32,7 +37,54 @@ export function ConversationHeader({
    */
   status?: ReactNode;
   actions?: ReactNode;
+  layout?: "default" | "slots3";
 }) {
+  const titleBlock = (
+    <div className="min-w-0 flex-1">
+      {/* Name + badges share the semibold cluster; status sits outside so
+          it keeps its own weight/color and can shrink on narrow widths. */}
+      <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 flex-1 items-center gap-1.5 text-sm font-semibold leading-5">
+          {/* Plain-string titles (thread) keep truncate here; compound
+              titles (channel name + ▾) own their own truncate so the
+              chevron is never clipped. */}
+          <div
+            className={cn(
+              "min-w-0 flex-1",
+              typeof title === "string" && "truncate",
+            )}
+          >
+            {title}
+          </div>
+          {badges}
+        </div>
+        {status}
+      </div>
+      {meta && (
+        <p className="truncate text-[11px] leading-4 text-muted-foreground/75">
+          {meta}
+        </p>
+      )}
+    </div>
+  );
+
+  // LRM-447 — three-slot desktop shell (left meta tile · center title · right
+  // rail). Mobile stays on the flex row so back + ⋯ keep their tap targets.
+  if (layout === "slots3" && !isMobile) {
+    return (
+      <header
+        className="grid min-h-14 shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 border-b border-border/25 bg-background/95 px-5 py-1.5"
+        data-testid="conversation-header-slots3"
+      >
+        <div className="flex items-center justify-start pl-2">{leading}</div>
+        {titleBlock}
+        {actions ? (
+          <div className="flex shrink-0 items-center text-muted-foreground">{actions}</div>
+        ) : null}
+      </header>
+    );
+  }
+
   return (
     <header
       className={cn(
@@ -53,32 +105,7 @@ export function ConversationHeader({
         )}
       >
         {leading}
-        <div className="min-w-0 flex-1">
-          {/* Name + badges share the semibold cluster; status sits outside so
-              it keeps its own weight/color and can shrink on narrow widths. */}
-          <div className="flex min-w-0 items-center gap-2">
-            <div className="flex min-w-0 flex-1 items-center gap-1.5 text-sm font-semibold leading-5">
-              {/* Plain-string titles (thread) keep truncate here; compound
-                  titles (channel name + ▾) own their own truncate so the
-                  chevron is never clipped. */}
-              <div
-                className={cn(
-                  "min-w-0 flex-1",
-                  typeof title === "string" && "truncate",
-                )}
-              >
-                {title}
-              </div>
-              {badges}
-            </div>
-            {status}
-          </div>
-          {meta && (
-            <p className="truncate text-[11px] leading-4 text-muted-foreground/75">
-              {meta}
-            </p>
-          )}
-        </div>
+        {titleBlock}
       </div>
       {actions && (
         <div className="flex shrink-0 items-center gap-1 text-muted-foreground">

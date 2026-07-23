@@ -24,6 +24,7 @@ import {
   Smartphone,
   Square,
   Users,
+  UserPlus,
   X,
 } from "lucide-react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -285,12 +286,12 @@ const identitySearchOptions = { extendedMatch: matchesPinyin };
 // container width always yields the same decision.
 const HEADER_ACTIONS_COMPACT_BREAKPOINT = 360;
 
-// Slack-style presence: up to 4 faces + member-count badge. Opens the
-// members panel (browse). Invite is a separate text button — no hollow "+".
+// LRM-447 design A — up to 3 faces inside the Members chip (Invite lives in
+// the Members dialog, not the header rail).
 function MemberPresenceStack({
   members,
-  max = 4,
-  size = 26,
+  max = 3,
+  size = 22,
 }: {
   members: ChannelMemberBrief[];
   max?: number;
@@ -2944,14 +2945,6 @@ export function ChannelsPage({
             <span>{t(($) => $.archive_dialog.readonly_notice)}</span>
           </>
         }
-        activitySlot={
-          <ConversationActivityStrip
-            tasks={activeTasks}
-            stoppingTaskId={stoppingChannelTaskId}
-            onStopTask={handleStopChannelTask}
-            onStopAllTasks={handleStopAllChannelTasks}
-          />
-        }
       />
     ) : null;
   const agentPanel =
@@ -3052,6 +3045,7 @@ export function ChannelsPage({
         <>
           <ConversationHeader
             isMobile={isMobile}
+            layout="slots3"
             leading={
               isMobile ? (
                 <Button
@@ -3063,13 +3057,22 @@ export function ChannelsPage({
                 >
                   <ArrowLeft className="size-5" />
                 </Button>
-              ) : null
+              ) : (
+                // LRM-447 slots3 left meta — brand-tinted # tile (design A).
+                <span
+                  aria-hidden="true"
+                  data-testid="channel-header-meta-tile"
+                  className="inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-primary/30 bg-primary/10 text-sm font-extrabold text-primary"
+                >
+                  #
+                </span>
+              )
             }
             title={
               // LRM-234 — Slack-like desktop title: bold name + tight ▾
               // caret, soft rounded hover/open wash (not primary recolor).
-              // LRM-254 A1 — text-level # landmark (no member collage).
-              // Same control still opens Channel details; mobile keeps ⋯.
+              // LRM-447 — hash moves to left meta slot on desktop; mobile
+              // keeps the inline # landmark beside the name.
               <button
                 type="button"
                 onClick={() => toggleChannelDetails("about")}
@@ -3084,7 +3087,7 @@ export function ChannelsPage({
                     "bg-black/[0.06] dark:bg-white/[0.08]",
                 )}
               >
-                <ChannelHashLandmark size="lg" />
+                {isMobile ? <ChannelHashLandmark size="lg" /> : null}
                 <span className="min-w-0 flex-1 truncate font-bold tracking-tight">
                   {active.name}
                 </span>
@@ -3124,73 +3127,38 @@ export function ChannelsPage({
               </>
             }
             actions={
-              <>
-                {/* LRM-405 — desktop always shows icon+tooltip in the top-right
-                    action cluster (including the #568 compact ⋯ path). Mobile
-                    uses the overflow menu row below instead. */}
-                {!isMobile && canPostInChannel ? (
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <span className="inline-flex">
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            className={cn(
-                              "shrink-0 text-muted-foreground",
-                              isMobile ? "size-10" : "size-8",
-                            )}
-                            aria-label={t(($) => $.stop_all_agents.aria)}
-                            disabled={!hasStoppableChannelTasks || isStoppingAllChannelTasks}
-                            onClick={openStopAllAgentsConfirm}
-                            data-testid="stop-all-agents-header"
-                          >
-                            <Square className="size-4 fill-current" />
-                          </Button>
-                        </span>
-                      }
-                    />
-                    <TooltipContent side="bottom">
-                      {hasStoppableChannelTasks
-                        ? t(($) => $.stop_all_agents.tooltip)
-                        : t(($) => $.stop_all_agents.empty_tooltip)}
-                    </TooltipContent>
-                  </Tooltip>
-                ) : null}
-                {isMobile || isHeaderActionsCompact ? (
-              // Mobile, and desktop-but-too-narrow (#568): ⋯ opens a
-              // tab-aligned menu (About/Members/Files/Settings). size-10
-              // keeps the true-mobile tap target ≥44px; the desktop-compact
-              // path is pointer-driven (no touch-target minimum) and every
-              // pixel matters in the narrowest containers this triggers for,
-              // so it uses the same size-8 as the direct row's own icon
-              // buttons instead.
-              <Button
-                variant="ghost"
-                size="icon"
-                className={cn("shrink-0 text-muted-foreground", isMobile ? "size-10" : "size-8")}
-                aria-label={t(($) => $.header.more_aria)}
-                onClick={() => setMobilePanel("menu")}
-              >
-                <MoreHorizontal className="size-5" />
-              </Button>
-            ) : (
-              <>
-                {/* LRM-211: faces + count → Members dialog; Invite → Add people dialog. */}
-                <div className="flex items-center gap-2">
+              isMobile || isHeaderActionsCompact ? (
+                // Mobile / narrow (#568): ⋯ menu. Stop / Members / Search live
+                // inside the drawer — no desktop More in the wide rail (LRM-447).
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className={cn("shrink-0 text-muted-foreground", isMobile ? "size-10" : "size-8")}
+                  aria-label={t(($) => $.header.more_aria)}
+                  onClick={() => setMobilePanel("menu")}
+                >
+                  <MoreHorizontal className="size-5" />
+                </Button>
+              ) : (
+                // LRM-447 design A — right action rail: Members · Search · Stop.
+                // Invite moves into Members dialog; no More/⋯ on the wide rail.
+                <div
+                  className="flex items-center gap-1 rounded-lg border border-border bg-foreground/[0.02] p-0.5"
+                  data-testid="channel-header-action-rail"
+                >
                   <button
                     type="button"
                     onClick={openMembersDialog}
                     className={cn(
-                      "flex items-center gap-1.5 rounded-md px-1 py-0.5 transition-colors hover:bg-accent",
+                      "inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-background py-0 pl-1 pr-1.5 transition-colors hover:bg-accent",
                       membersDialogOpen && "bg-accent",
                     )}
                     aria-label={t(($) => $.header.view_members_aria)}
+                    data-testid="channel-header-members-chip"
                   >
                     <MemberPresenceStack members={channelMembers} />
                     <span
-                      className="inline-flex h-[26px] min-w-[26px] items-center justify-center rounded-md border border-border bg-background px-2 text-xs font-semibold text-muted-foreground"
+                      className="text-xs font-semibold text-muted-foreground"
                       aria-label={t(($) => $.header.member_count_aria, {
                         count: channelMembers.length,
                       })}
@@ -3198,31 +3166,44 @@ export function ChannelsPage({
                       {channelMembers.length}
                     </span>
                   </button>
-                  {!isActiveSystemChannel && (
-                    <button
-                      type="button"
-                      onClick={openAddPeopleDialog}
-                      className="inline-flex h-[26px] items-center justify-center rounded-md bg-primary px-2.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
-                      aria-label={t(($) => $.header.invite_members_aria)}
-                    >
-                      {t(($) => $.members.invite)}
-                    </button>
-                  )}
-                </div>
-                <div className="flex items-center gap-1">
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="size-8"
+                    className="size-7 rounded-md border border-border bg-background text-foreground hover:bg-accent"
                     aria-label={t(($) => $.conv_search.search_aria)}
                     onClick={() => setConvSearchOpen(true)}
                   >
-                    <Search className="size-4" />
+                    <Search className="size-3.5" />
                   </Button>
+                  {canPostInChannel ? (
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <span className="inline-flex">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="size-7 rounded-md border border-border bg-background text-foreground hover:bg-accent disabled:opacity-40"
+                              aria-label={t(($) => $.stop_all_agents.aria)}
+                              disabled={!hasStoppableChannelTasks || isStoppingAllChannelTasks}
+                              onClick={openStopAllAgentsConfirm}
+                              data-testid="stop-all-agents-header"
+                            >
+                              <Square className="size-3.5 fill-current" />
+                            </Button>
+                          </span>
+                        }
+                      />
+                      <TooltipContent side="bottom">
+                        {hasStoppableChannelTasks
+                          ? t(($) => $.stop_all_agents.tooltip)
+                          : t(($) => $.stop_all_agents.empty_tooltip)}
+                      </TooltipContent>
+                    </Tooltip>
+                  ) : null}
                 </div>
-              </>
-            )}
-              </>
+              )
             }
           />
               {/* #562 — channel main-content tab switch: Chat (message list) and
@@ -3411,13 +3392,9 @@ export function ChannelsPage({
                 </ReadOnlyConversationBanner>
               ) : (
                 <>
-                  <ConversationActivityStrip
-                    typingActors={activeTypingActors}
-                    tasks={activeTasks}
-                    stoppingTaskId={stoppingChannelTaskId}
-                    onStopTask={handleStopChannelTask}
-                    onStopAllTasks={handleStopAllChannelTasks}
-                  />
+                  {/* LRM-447 — Header owns Stop. Composer strip keeps human
+                      typing only; preparing + Stop all rail is gone. */}
+                  <ConversationActivityStrip typingActors={activeTypingActors} />
                   <Composer
                     surface="channel"
                     sendLabel={t(($) => $.composer.send)}
@@ -3668,7 +3645,7 @@ export function ChannelsPage({
                   <DrawerTitle>{active.name}</DrawerTitle>
                 </DrawerHeader>
                 <div className="flex flex-col py-1">
-                  {isMobile && canPostInChannel ? (
+                  {canPostInChannel ? (
                     <button
                       type="button"
                       disabled={!hasStoppableChannelTasks || isStoppingAllChannelTasks}
@@ -3701,15 +3678,6 @@ export function ChannelsPage({
                   ) : null}
                   <button
                     type="button"
-                    onClick={() => setMobilePanel("about")}
-                    className="flex min-h-[44px] items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-accent"
-                  >
-                    <Info className="size-5 shrink-0 text-muted-foreground" />
-                    <span className="flex-1">{t(($) => $.details.menu_about)}</span>
-                    <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
-                  </button>
-                  <button
-                    type="button"
                     onClick={() => {
                       setMobilePanel(null);
                       openMembersDialog();
@@ -3725,6 +3693,41 @@ export function ChannelsPage({
                       )}
                     </span>
                     <span className="text-xs text-muted-foreground">{channelMembers.length}</span>
+                    <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMobilePanel(null);
+                      setConvSearchOpen(true);
+                    }}
+                    className="flex min-h-[44px] items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-accent"
+                  >
+                    <Search className="size-5 shrink-0 text-muted-foreground" />
+                    <span className="flex-1">{t(($) => $.conv_search.search_aria)}</span>
+                    <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+                  </button>
+                  {!isActiveSystemChannel && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMobilePanel(null);
+                        openAddPeopleDialog();
+                      }}
+                      className="flex min-h-[44px] items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-accent"
+                    >
+                      <UserPlus className="size-5 shrink-0 text-muted-foreground" />
+                      <span className="flex-1">{t(($) => $.members.invite)}</span>
+                      <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setMobilePanel("about")}
+                    className="flex min-h-[44px] items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-accent"
+                  >
+                    <Info className="size-5 shrink-0 text-muted-foreground" />
+                    <span className="flex-1">{t(($) => $.details.menu_about)}</span>
                     <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
                   </button>
                   <button

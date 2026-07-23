@@ -55,6 +55,42 @@ describe("ConversationHeader — title column flex (LRM-279)", () => {
   });
 });
 
+describe("ConversationHeader — slots3 layout (LRM-447)", () => {
+  it("uses a three-column grid on desktop slots3", () => {
+    render(
+      <ConversationHeader
+        isMobile={false}
+        layout="slots3"
+        leading={<span data-testid="meta-tile">#</span>}
+        title={<button type="button">Dev group</button>}
+        meta="12 members · 3 agents"
+        actions={<div data-testid="action-rail">rail</div>}
+      />,
+    );
+
+    const header = screen.getByTestId("conversation-header-slots3");
+    expect(header).toHaveClass("grid");
+    expect(screen.getByTestId("meta-tile")).toBeInTheDocument();
+    expect(screen.getByTestId("action-rail")).toBeInTheDocument();
+    expect(screen.getByText("12 members · 3 agents")).toBeInTheDocument();
+  });
+
+  it("keeps the flex row on mobile even when layout=slots3", () => {
+    const { container } = render(
+      <ConversationHeader
+        isMobile
+        layout="slots3"
+        leading={<span data-testid="leading">←</span>}
+        title="Mobile title"
+        actions={<button type="button">More</button>}
+      />,
+    );
+
+    expect(screen.queryByTestId("conversation-header-slots3")).toBeNull();
+    expect(container.querySelector("header")).toHaveClass("flex");
+  });
+});
+
 describe("Composer (re-exported from conversation-surface)", () => {
   it("keeps editor media in the scroll area while actions stay fixed below it", () => {
     render(

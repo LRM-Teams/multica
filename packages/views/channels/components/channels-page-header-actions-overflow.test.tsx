@@ -150,7 +150,7 @@ const apiMock = vi.hoisted(() => {
 vi.mock("@multica/core/api", () => ({ api: apiMock.proxy }));
 
 // A normal (non-system) group channel WITH members, so the header renders
-// its full worst-case direct row: member cluster + Invite + Search.
+// its LRM-447 wide rail: Members chip + Search + Stop (Invite is not on-rail).
 const channelName = vi.hoisted(() => ({ value: "general-team" }));
 const channelFixture = {
   id: "chan-1",
@@ -287,7 +287,9 @@ function expectCompact() {
 
 function expectDirect() {
   expect(screen.getByRole("button", { name: "Search in conversation" })).toBeInTheDocument();
+  expect(screen.getByTestId("channel-header-action-rail")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "More" })).toBeNull();
+  expect(screen.queryByLabelText("Invite people")).toBeNull();
 }
 
 describe("ChannelsPage header actions — container-driven overflow (#568)", () => {
@@ -592,26 +594,24 @@ describe("ChannelsPage header — desktop title chevron (LRM-234)", () => {
   });
 });
 
-// LRM-254 A1 — channel landmark is text-level # (sidebar + header), never a
-// member collage avatar slot that drifts when the roster changes.
-describe("ChannelsPage — channel hash landmark (LRM-254)", () => {
-  it("puts a text-level # in the desktop title (no leading collage avatar)", async () => {
+// LRM-254 / LRM-447 — channel landmark stays a # glyph (never a roster collage).
+// Design gate A moves the desktop # into the left meta tile; mobile keeps the
+// inline ChannelHashLandmark beside the name.
+describe("ChannelsPage — channel hash landmark (LRM-254 / LRM-447)", () => {
+  it("puts a # meta tile left of the desktop title (no leading collage avatar)", async () => {
     resizeContainerTo(1024);
     renderPage();
     await screen.findByTestId("message-list");
     const toggle = screen.getByRole("button", { name: "Open channel details" });
-    const hashes = screen.getAllByTestId("channel-hash-landmark");
-    expect(hashes.length).toBeGreaterThan(0);
-    expect(toggle).toContainElement(
-      hashes.find((el) => el.getAttribute("data-size") === "lg")!,
-    );
-    // Title control must not host an <img> collage tile.
+    expect(screen.getByTestId("channel-header-meta-tile")).toHaveTextContent("#");
+    // Title control must not host an <img> collage tile or the hash landmark.
     expect(toggle.querySelector("img")).toBeNull();
+    expect(within(toggle).queryByTestId("channel-hash-landmark")).toBeNull();
   });
 });
 
 // LRM-279 — channel title column must flex to fill header space before the
-// shrink-0 action cluster; # and ▾ stay shrink-0, name truncates with tooltip.
+// shrink-0 action cluster; name truncates with tooltip; ▾ stays shrink-0.
 describe("ChannelsPage header — title column width (LRM-279)", () => {
   it("uses flex-1 min-w-0 on the title control and exposes the full name via title", async () => {
     channelName.value = "LRM2.0开发群";
@@ -626,6 +626,6 @@ describe("ChannelsPage header — title column width (LRM-279)", () => {
     const nameSpan = within(toggle).getByText("LRM2.0开发群");
     expect(nameSpan).toHaveClass("flex-1", "min-w-0", "truncate");
     expect(within(toggle).getByTestId("channel-title-chevron")).toHaveClass("shrink-0");
-    expect(within(toggle).getByTestId("channel-hash-landmark")).toHaveClass("shrink-0");
+    expect(screen.getByTestId("channel-header-meta-tile")).toBeInTheDocument();
   });
 });

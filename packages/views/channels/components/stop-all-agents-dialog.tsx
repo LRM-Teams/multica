@@ -13,10 +13,10 @@ import { Button } from "@multica/ui/components/ui/button";
 import { useT } from "../../i18n";
 
 /**
- * LRM-405 — confirm step for the channel-header "Stop all agents" entry.
- * Matches Frank's attached mock: uppercase title, warning callout with the
- * current channel name, Cancel / Stop All Agents, and an X close. Confirm
- * is the only path that stops; cancel/close must be side-effect free.
+ * LRM-405 / LRM-447 — confirm step for the channel-header "Stop all agents"
+ * entry. Function copy stays frozen (uppercase title, warning with channel
+ * name, Cancel / Stop All Agents, X close). LRM-447 design gate A: 1px token
+ * border + destructive wash — no neo-brutal offset shadow or hardcoded coral.
  */
 export interface StopAllAgentsDialogProps {
   open: boolean;
@@ -39,7 +39,7 @@ export function StopAllAgentsDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="gap-0 sm:max-w-md"
+        className="gap-0 border-border sm:max-w-md"
         data-testid="stop-all-agents-dialog"
         // Clicks inside must not bubble to any clickable ancestor (header
         // actions / drawer rows).
@@ -58,9 +58,9 @@ export function StopAllAgentsDialog({
 
         <div
           role="alert"
-          className="mt-4 flex items-start gap-2.5 rounded-md border border-foreground/80 bg-[#FCE8E4] px-3 py-2.5 text-sm leading-5 text-foreground dark:border-destructive/50 dark:bg-destructive/10"
+          className="mt-4 flex items-start gap-2.5 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-sm leading-5 text-foreground"
         >
-          <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-destructive" aria-hidden="true" />
           <span>
             {t(($) => $.stop_all_agents.dialog_warning_before)}
             <strong className="font-semibold">{channelLabel}</strong>
@@ -72,7 +72,6 @@ export function StopAllAgentsDialog({
           <Button
             type="button"
             variant="outline"
-            className="border-foreground/80 shadow-[2px_2px_0_0_var(--foreground)]"
             onClick={() => onOpenChange(false)}
             disabled={confirming}
           >
@@ -80,7 +79,8 @@ export function StopAllAgentsDialog({
           </Button>
           <Button
             type="button"
-            className="border border-foreground/80 bg-[#E8916A] text-foreground shadow-[2px_2px_0_0_var(--foreground)] hover:bg-[#E07F55] hover:text-foreground"
+            variant="outline"
+            className="border-destructive/35 bg-destructive/10 text-foreground hover:bg-destructive/15 hover:text-foreground"
             disabled={confirming}
             onClick={() => {
               onOpenChange(false);

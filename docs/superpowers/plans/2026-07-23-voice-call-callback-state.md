@@ -32,6 +32,9 @@ session.
 - [x] Added PostgreSQL tests for callback/start ordering, duplicate activity,
   duplicate failure, late activity, late failure, and failure during hangup.
 - [x] Ran the database tests in disposable databases and dropped them.
+- [x] Committed, pushed, and opened independent ready PR
+  [#1087](https://github.com/LRM-Teams/multica/pull/1087), stacked on
+  [#1086](https://github.com/LRM-Teams/multica/pull/1086).
 
 ## Verification note
 

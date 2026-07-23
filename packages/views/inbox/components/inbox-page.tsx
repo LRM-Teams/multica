@@ -38,6 +38,15 @@ import { getInboxDisplayTitle } from "./inbox-display";
 import { ActivityListRow } from "./activity-list-row";
 import { ActivityTabs, ActivityEmptyState } from "./activity-tabs";
 import { ActivityListSkeleton } from "./activity-list-skeleton";
+
+/** Static Suspense fallback — hoist so React Doctor does not rebuild each render (LRM-424). */
+const ACTIVITY_DETAIL_FALLBACK = (
+  <div className="space-y-3 p-6" data-testid="activity-detail-fallback">
+    <Skeleton className="h-6 w-48" />
+    <Skeleton className="h-4 w-32" />
+    <Skeleton className="h-24 w-full" />
+  </div>
+);
 import { useT } from "../../i18n";
 import { MobileListDetailLayout } from "../../common/mobile-list-detail-layout";
 
@@ -290,17 +299,9 @@ export function InboxPage() {
     </div>
   );
 
-  const detailFallback = (
-    <div className="space-y-3 p-6" data-testid="activity-detail-fallback">
-      <Skeleton className="h-6 w-48" />
-      <Skeleton className="h-4 w-32" />
-      <Skeleton className="h-24 w-full" />
-    </div>
-  );
-
   const detailContent = selectedInbox?.issue_id ? (
     <ErrorBoundary resetKeys={[selectedInbox.issue_id]}>
-      <Suspense fallback={detailFallback}>
+      <Suspense fallback={ACTIVITY_DETAIL_FALLBACK}>
         <IssueDetail
           key={selectedInbox.issue_id}
           issueId={selectedInbox.issue_id}

@@ -206,7 +206,7 @@ func (h *Handler) loadChannelVoiceRecording(ctx context.Context, job claimedChan
 
 func (h *Handler) readChannelVoicePCM(ctx context.Context, recording channelVoiceRecording) ([]byte, error) {
 	mediaType, _, err := mime.ParseMediaType(recording.ContentType)
-	if err != nil || mediaType != "audio/wav" {
+	if err != nil || !isWAVMediaType(mediaType) {
 		return nil, fmt.Errorf("recorded voice content type %q is not audio/wav", recording.ContentType)
 	}
 	if recording.SizeBytes <= 0 || recording.SizeBytes > maxVoiceWAVBytes {
@@ -225,6 +225,15 @@ func (h *Handler) readChannelVoicePCM(ctx context.Context, recording channelVoic
 		return nil, errors.New("recorded voice exceeds size limit")
 	}
 	return voiceaudio.DecodePCM16MonoWAV(body, 16000, maxVoicePCMBytes)
+}
+
+func isWAVMediaType(mediaType string) bool {
+	switch strings.ToLower(strings.TrimSpace(mediaType)) {
+	case "audio/wav", "audio/wave", "audio/x-wav", "audio/vnd.wave":
+		return true
+	default:
+		return false
+	}
 }
 
 func (h *Handler) persistChannelVoiceTranscript(ctx context.Context, job claimedChannelVoiceTranscription, transcript string) error {

@@ -36,6 +36,7 @@ type issueThreadSystemEventItem struct {
 	IssueIdentifier string `json:"issue_identifier"`
 	IssueStatus     string `json:"issue_status,omitempty"`
 	PreviousStatus  string `json:"previous_status,omitempty"`
+	OccurredAt      string `json:"occurred_at,omitempty"`
 	TargetID        string `json:"target_id,omitempty"`
 	TargetType      string `json:"target_type,omitempty"`
 	TargetHandle    string `json:"target_handle,omitempty"`
@@ -224,6 +225,7 @@ func (h *Handler) emitIssueThreadBackflowToScope(ctx context.Context, issue db.I
 			IssueIdentifier: params.IssueIdentifier,
 			IssueStatus:     params.IssueStatus,
 			PreviousStatus:  params.PreviousStatus,
+			OccurredAt:      time.Now().UTC().Format(time.RFC3339),
 			TargetID:        params.TargetID,
 			TargetType:      params.TargetType,
 			TargetHandle:    params.TargetHandle,
@@ -436,7 +438,16 @@ func mergeIssueThreadAggregationParams(existing, incoming issueThreadSystemEvent
 			TargetName:      out.TargetName,
 		}}
 	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	for i := range out.Items {
+		if out.Items[i].OccurredAt == "" {
+			out.Items[i].OccurredAt = now
+		}
+	}
 	for _, item := range incoming.Items {
+		if item.OccurredAt == "" {
+			item.OccurredAt = now
+		}
 		replaced := false
 		for i := range out.Items {
 			if out.Items[i].IssueID == item.IssueID {

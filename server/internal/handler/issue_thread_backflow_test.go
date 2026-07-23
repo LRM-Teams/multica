@@ -374,6 +374,9 @@ func TestIssueThreadBackflowAggregatesCrossIssueCompletedWithinWindow(t *testing
 		if item.IssueStatus != "done" || item.IssueIdentifier == "" {
 			t.Fatalf("item = %+v, want done + identifier", item)
 		}
+		if item.OccurredAt == "" {
+			t.Fatalf("item = %+v, want occurred_at for FE expansion contract", item)
+		}
 	}
 	for _, id := range []string{issueA, issueB, issueC} {
 		if !seen[id] {

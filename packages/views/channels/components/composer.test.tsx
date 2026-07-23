@@ -42,6 +42,24 @@ describe("Composer", () => {
     isMobile: false,
   };
 
+  it("keeps empty-state editor scroll short (LRM-491 Slack density)", () => {
+    const { rerender } = render(
+      <Composer surface="channel" {...baseProps} sendDisabled={false} isMobile />,
+    );
+    let editorScroll = screen
+      .getByTestId("composer-editor")
+      .closest('[data-slot="composer-editor-scroll"]');
+    expect(editorScroll?.className).toContain("min-h-11");
+    expect(editorScroll?.className).not.toContain("min-h-16");
+
+    rerender(<Composer surface="channel" {...baseProps} sendDisabled={false} isMobile={false} />);
+    editorScroll = screen
+      .getByTestId("composer-editor")
+      .closest('[data-slot="composer-editor-scroll"]');
+    expect(editorScroll?.className).toContain("min-h-12");
+    expect(editorScroll?.className).not.toContain("min-h-16");
+  });
+
   it("renders the editor, action row and send control for a surface", () => {
     render(<Composer surface="channel" {...baseProps} sendDisabled={false} />);
 

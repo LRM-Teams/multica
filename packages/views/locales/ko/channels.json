@@ -284,7 +284,7 @@
     "dialog_confirm": "모두 중지"
   },
   "composer": {
-    "placeholder": "필요한 내용을 입력하세요…  @에이전트이름 으로 답장을 요청하세요.",
+    "placeholder": "#{{name}}에 메시지",
     "attach_aria": "첨부",
     "mention_aria": "에이전트 멘션",
     "send": "전송",

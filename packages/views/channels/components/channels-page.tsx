@@ -3409,7 +3409,13 @@ export function ChannelsPage({
                         // (#531/#542) — made clickable on the read side, not here.
                         plainUrls
                         defaultValue={activeDraft}
-                        placeholder={t(($) => $.composer.placeholder)}
+                        // LRM-491: Slack-style one-line "Message #channel" (no
+                        // @agent tutorial copy). Name is interpolated so the
+                        // empty state stays a single short line.
+                        placeholder={t(($) => $.composer.placeholder, {
+                          name: active.name,
+                        })}
+                        className={isMobile ? "text-[15px] leading-5" : undefined}
                         onUpdate={handleEditorUpdate}
                         debounceMs={0}
                         onSubmit={handleSend}

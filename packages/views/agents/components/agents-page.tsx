@@ -762,7 +762,6 @@ export function AgentsPage({
               key={selectedAgent.id}
               agent={selectedAgent}
               runtime={runtimesById.get(selectedAgent.runtime_id) ?? null}
-              availability={presenceMap.get(selectedAgent.id)?.availability ?? null}
               metric={selectedMetric}
               canManage={selectedCanManage}
               onEdit={() => navigation.push(paths.agentDetail(selectedAgent.id))}

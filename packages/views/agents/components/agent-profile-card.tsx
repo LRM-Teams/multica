@@ -17,7 +17,6 @@ import { AppLink } from "../../navigation/app-link";
 import { useOpenDM } from "../../common/use-open-dm";
 import { PropRow } from "../../common/prop-row";
 import { VisibilityBadge } from "./visibility-badge";
-import { AgentPresenceStatusLine } from "./agent-presence-status-line";
 import { runtimeHealthState } from "@multica/core/runtimes";
 import { useRuntimeHealthStateLabel } from "../../runtimes/components/shared";
 import { RuntimePicker } from "./inspector/runtime-picker";
@@ -153,15 +152,12 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
             />
             {!isArchived && <VisibilityBadge value={agent.visibility} compact />}
           </div>
-          {/* LRM-248: live Online/Offline plain text (no second dot); archived
-              is muted secondary copy, not a third presence state. */}
+          {/* LRM-248: archived is muted secondary copy; live presence is avatar badge only. */}
           {isArchived ? (
             <p className="mt-0.5 text-xs text-muted-foreground">
               {t(($) => $.row.archived)}
             </p>
-          ) : (
-            <AgentAvailabilityLine agentId={agent.id} />
-          )}
+          ) : null}
         </div>
         {!isArchived && (
           <div className="mr-1 mt-0.5 flex shrink-0 items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100">
@@ -293,17 +289,6 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
           <SkillsRow skills={agent.skills.map((s) => s.name)} />
         )}
       </div>
-    </div>
-  );
-}
-
-// Live name-row status under the agent name — same mark as the profile
-// hover card / DM header (dot + word via useAgentLiveStatus). Coarse when
-// idle; stage-detail when a task is active.
-function AgentAvailabilityLine({ agentId }: { agentId: string }) {
-  return (
-    <div className="mt-0.5">
-      <AgentPresenceStatusLine agentId={agentId} className="max-w-[12rem]" />
     </div>
   );
 }

@@ -52,7 +52,6 @@ import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
 import { ContentEditor, type ContentEditorRef } from "../../editor/content-editor";
 import { ActorAvatar } from "../../common/actor-avatar";
-import { AgentCoarsePresenceLine } from "../../agents/components/agent-coarse-presence-line";
 import { ConversationAgentActivityLine } from "../../agents/components/conversation-agent-activity-line";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { AgentPanelProvider, useOpenAgentPanel } from "../../common/agent-panel-context";
@@ -278,23 +277,8 @@ function DmHeader({
   const actorType = peerType === "agent" ? "agent" : "member";
   const memberType = peerType === "agent" ? "agent" : "user";
   const isAgentPeer = peerType === "agent";
-  // LRM-248: agent peers show plain Online/Offline text (no second dot — the
-  // avatar badge is the round indicator). Activity verbs live on
-  // ConversationAgentActivityLine above the composer. Human peers keep the
-  // static "Human" meta under the name. Memoized so the `status` prop is a
-  // stable element (react-doctor jsx-no-jsx-as-prop).
-  const agentStatus = useMemo(
-    () =>
-      isAgentPeer ? (
-        <AgentCoarsePresenceLine
-          agentId={peerId}
-          // Cap width so long localized presence words don't shove the title
-          // (or the search/files cluster) off a narrow header.
-          className="max-w-[9rem]"
-        />
-      ) : null,
-    [isAgentPeer, peerId],
-  );
+  // LRM-248: agent peers use avatar badge only; activity verbs live on
+  // ConversationAgentActivityLine above the composer.
   const meta = isAgentPeer ? undefined : t(($) => $.dm.human_meta);
   const mutedBadge = useMemo(
     () => (isMuted ? <MutedIndicator label={t(($) => $.dm.muted_label)} /> : null),
@@ -353,7 +337,6 @@ function DmHeader({
       }
       title={wrapPeerTrigger(<span className="truncate">{dm.peer.name}</span>)}
       meta={meta}
-      status={agentStatus}
       badges={mutedBadge}
       actions={
         <>

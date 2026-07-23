@@ -14,7 +14,6 @@ import { useCustomPricingStore } from "@multica/core/runtimes/custom-pricing-sto
 import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
 import { cn } from "@multica/ui/lib/utils";
 import { ActivityTab } from "../../agents/components/tabs/activity-tab";
-import { AgentPresenceStatusLine } from "../../agents/components/agent-presence-status-line";
 import { AgentXpBurst } from "../../agents/components/agent-xp-burst";
 import { ModelPicker } from "../../agents/components/inspector/model-picker";
 import { RuntimePicker } from "../../agents/components/inspector/runtime-picker";
@@ -140,17 +139,14 @@ export function AgentSidePanel({
             />
           </AgentPresenceOverlay>
         </AgentXpBurst>
-        {/* LRM-248: name + plain Online/Offline text (avatar badge is the
-            round indicator — no second dot next to the word). */}
+        {/* LRM-248: avatar badge is the live indicator — no name-row text. */}
         <div className="flex min-w-0 items-center gap-2">
           <p className="min-w-0 truncate text-sm font-semibold">{displayName}</p>
-          {!agent.archived_at ? (
-            <AgentPresenceStatusLine agentId={agent.id} className="max-w-[9rem]" />
-          ) : (
+          {agent.archived_at ? (
             <span className="shrink-0 text-xs text-muted-foreground">
               {t(($) => $.row.archived)}
             </span>
-          )}
+          ) : null}
         </div>
       </>
     ),

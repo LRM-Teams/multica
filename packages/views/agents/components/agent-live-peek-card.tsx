@@ -16,8 +16,6 @@ import type { AgentTask } from "@multica/core/types";
 import { AlertTriangle } from "lucide-react";
 import { AppLink } from "../../navigation";
 import { useT, useTimeAgo } from "../../i18n";
-import { AgentPresenceStatusLine } from "./agent-presence-status-line";
-
 interface AgentLivePeekCardProps {
   agentId: string;
 }
@@ -93,7 +91,6 @@ export function AgentLivePeekCard({ agentId }: AgentLivePeekCardProps) {
               primaryClassName="truncate text-sm font-semibold"
               className="min-w-0 shrink"
             />
-            <AgentPresenceStatusLine agentId={agentId} className="max-w-[9rem] shrink-0" />
           </div>
         </div>
       </div>

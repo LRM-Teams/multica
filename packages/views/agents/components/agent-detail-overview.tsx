@@ -20,8 +20,6 @@ import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { useT, useTimeAgo } from "../../i18n";
-import { availabilityConfig, toLiveAvailability } from "../presence";
-import type { AgentAvailability } from "@multica/core/agents";
 
 export interface AgentMetric {
   /** Cumulative runs in the last 30d. */
@@ -152,7 +150,6 @@ function ExecLogRow({ task }: { task: AgentTask }) {
 export function AgentDetailOverview({
   agent,
   runtime,
-  availability,
   metric,
   canManage,
   onEdit,
@@ -160,7 +157,6 @@ export function AgentDetailOverview({
 }: {
   agent: Agent;
   runtime: AgentRuntime | null;
-  availability: AgentAvailability | null;
   metric: AgentMetric;
   canManage: boolean;
   onEdit: () => void;
@@ -171,8 +167,6 @@ export function AgentDetailOverview({
   const { data: tasks = [] } = useQuery(agentTasksOptions(wsId, agent.id));
   const recentTasks = useMemo(() => tasks.slice(0, 6), [tasks]);
 
-  const live = toLiveAvailability(availability);
-  const availCfg = live ? availabilityConfig[live] : null;
   const isArchived = !!agent.archived_at;
   const costText = metric.cost === null ? "—" : `$${metric.cost.toFixed(2)}`;
   const successText = metric.successRate === null ? "—" : `${Math.round(metric.successRate)}%`;
@@ -199,20 +193,11 @@ export function AgentDetailOverview({
                 )}
                 className="min-w-0 shrink"
               />
-              {/* LRM-248: plain Online/Offline text (no second dot — avatar
-                  badge is the round indicator). Archived = muted secondary. */}
               {isArchived ? (
                 <span className="text-xs text-muted-foreground">
                   {t(($) => $.row.archived)}
                 </span>
-              ) : (
-                availCfg &&
-                live && (
-                  <span className={cn("text-xs", availCfg.textClass)}>
-                    {t(($) => $.availability[live])}
-                  </span>
-                )
-              )}
+              ) : null}
             </div>
             <p className="mt-0.5 truncate text-xs text-muted-foreground">
               {agent.description?.trim() || (runtime?.name ?? t(($) => $.dashboard.no_description))}

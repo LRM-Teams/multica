@@ -33,13 +33,9 @@ vi.mock("@multica/core/workspace/avatar-url", () => ({
   resolvePublicFileUrl: () => null,
 }));
 
-vi.mock("../../agents/components/agent-presence-status-line", () => ({
-  AgentPresenceStatusLine: () => <span data-testid="presence-status" />,
-}));
-
 vi.mock("../../common/actor-avatar", () => ({
   AgentPresenceOverlay: ({ children }: { children: React.ReactNode }) => (
-    <>{children}</>
+    <div data-testid="agent-presence-overlay">{children}</div>
   ),
 }));
 
@@ -233,6 +229,16 @@ describe("AgentSidePanel", () => {
     expect(screen.getByText("Atlas")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Activity" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Files" })).not.toBeInTheDocument();
+  });
+
+  it("header shows avatar badge only — no Online/Offline name-row text (LRM-248)", () => {
+    renderPanel();
+    expect(screen.getByText("Atlas")).toBeInTheDocument();
+    expect(screen.getByTestId("agent-presence-overlay")).toBeInTheDocument();
+    expect(screen.queryByText("Online")).toBeNull();
+    expect(screen.queryByText("Offline")).toBeNull();
+    expect(screen.queryByTestId("presence-status")).toBeNull();
+    expect(screen.queryByTestId("agent-live-status")).toBeNull();
   });
 
   it("shows the full-width Message button between header and tabs (LRM-283)", () => {

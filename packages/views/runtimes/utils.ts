@@ -132,6 +132,7 @@ export function formatTokens(n: number): string {
 //   DeepSeek:  https://api-docs.deepseek.com/quick_start/pricing
 //   Moonshot:  https://www.kimi.com/resources/kimi-k2-6-pricing
 //   Zhipu:     https://docs.z.ai/guides/overview/pricing
+//   Cursor:    https://cursor.com/docs/models-and-pricing
 //
 // Anthropic's cacheWrite reflects the 5-minute cache TTL (1.25x input); the
 // daemon reports cache_creation_input_tokens without TTL metadata, so 5m is
@@ -231,6 +232,15 @@ const MODEL_PRICING: Record<
   "glm-4.5-air":        { input: 0.2,  output: 1.1,  cacheRead: 0.03,   cacheWrite: 0.2 },
   "glm-4.5-airx":       { input: 1.1,  output: 4.5,  cacheRead: 0.22,   cacheWrite: 1.1 },
   "glm-4.5-flash":      { input: 0,    output: 0,    cacheRead: 0,      cacheWrite: 0 },
+
+  // -- Cursor first-party models. Cache-write rates are not published for
+  //    Composer 2.5, so keep that dimension at 0 instead of inventing spend.
+  //    Auto Cost explicitly prices cache writes at the input rate. Generic
+  //    `auto` is intentionally not mapped because Auto Balance/Intelligence
+  //    are billed at the routed model's rate. --
+  "composer-2.5":       { input: 0.5,  output: 2.5,  cacheRead: 0.2,  cacheWrite: 0 },
+  "composer-2.5-fast":  { input: 3,    output: 15,   cacheRead: 0.5,  cacheWrite: 0 },
+  "auto-cost":          { input: 1.25, output: 6,    cacheRead: 0.25, cacheWrite: 1.25 },
 };
 
 // Resolve a model string to its pricing tier. Exact match, with four

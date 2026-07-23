@@ -35,6 +35,21 @@ sleep 10
 	}
 }
 
+func TestCursorExecuteReportsCurrentUsageUnderInitModel(t *testing.T) {
+	t.Parallel()
+
+	script := `#!/bin/sh
+printf '%s\n' '{"type":"system","subtype":"init","session_id":"sess-usage","model":"composer-2.5-fast"}'
+printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"sess-usage","usage":{"inputTokens":26640,"outputTokens":40,"cacheReadTokens":467,"cacheWriteTokens":12}}'
+`
+	result := executeFakeCursor(t, script)
+
+	want := TokenUsage{InputTokens: 26640, OutputTokens: 40, CacheReadTokens: 467, CacheWriteTokens: 12}
+	if got := result.Usage["composer-2.5-fast"]; got != want {
+		t.Fatalf("usage = %+v, want %+v; all=%+v", got, want, result.Usage)
+	}
+}
+
 func TestCursorExecuteStopsAfterTerminalErrorResult(t *testing.T) {
 	t.Parallel()
 

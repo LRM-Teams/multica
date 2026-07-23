@@ -87,6 +87,29 @@ describe("isSelfHealingRuntime", () => {
 });
 
 describe("estimateCost", () => {
+  it("prices current Cursor Composer and Auto Cost models", () => {
+    const usage = {
+      ...zeroUsage,
+      input_tokens: 1_000_000,
+      output_tokens: 1_000_000,
+      cache_read_tokens: 1_000_000,
+      cache_write_tokens: 1_000_000,
+    };
+
+    expect(estimateCost({ ...usage, model: "composer-2.5" })).toBeCloseTo(
+      0.5 + 2.5 + 0.2,
+      5,
+    );
+    expect(
+      estimateCost({ ...usage, model: "composer-2.5-fast" }),
+    ).toBeCloseTo(3 + 15 + 0.5, 5);
+    expect(estimateCost({ ...usage, model: "auto-cost" })).toBeCloseTo(
+      1.25 + 6 + 0.25 + 1.25,
+      5,
+    );
+    expect(isModelPriced("auto")).toBe(false);
+  });
+
   it("prices the canonical Anthropic Sonnet 4.6 SKU", () => {
     const cost = estimateCost({
       ...zeroUsage,

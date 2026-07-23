@@ -29,7 +29,8 @@ credentials as durable state.
 - [x] Ran the full `@multica/core` suite: 87 files and 830 tests passed.
 - [x] Ran core typecheck and lint.
 - [x] Ran React Doctor: 0 issues.
-- [ ] Commit, push, and open an independent ready PR stacked on
+- [x] Committed, pushed, and opened independent ready PR
+  [#1095](https://github.com/LRM-Teams/multica/pull/1095), stacked on
   [#1093](https://github.com/LRM-Teams/multica/pull/1093).
 
 ## Boundary

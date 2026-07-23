@@ -19,6 +19,9 @@ workflow logs or this repository.
 | Runner diagnostics | `/home/gha/actions-runner/_diag` |
 | Outbound proxy service | `sing-box.service` |
 | Outbound proxy address | `http://127.0.0.1:7893` |
+| Browser entrypoint | `https://82.157.184.89` |
+| Daemon/API HTTP entrypoint | `http://82.157.184.89:8090` (HTML browser navigations redirect to HTTPS) |
+| Caddy config source | `deploy/s89/Caddyfile` |
 
 The deploy workflow runs only after `dev` changes (or an explicit manual
 dispatch). A failure during `Set up job` happens before checkout and before any
@@ -137,7 +140,24 @@ transport:
 docker compose -p multica ps
 curl -fsS http://127.0.0.1:8080/readyz
 curl -fsS http://127.0.0.1:8090/api/config
+curl --connect-to 82.157.184.89:443:127.0.0.1:443 \
+  -fsS https://82.157.184.89/healthz
 ```
+
+The HTTPS probe validates the public-IP certificate while connecting over
+loopback, so provider NAT hairpin behavior cannot create a false failure. Caddy
+uses Let's Encrypt's `shortlived` profile; the certificate lasts about six days
+and is renewed automatically from the persistent `multica_caddy_data` volume.
+Ports 80 and 443 must remain publicly reachable for HTTP-01 validation and
+browser traffic. Do not replace the public certificate with Caddy's internal
+CA: browsers that do not trust that private root would still reject microphone
+capture.
+
+Old `:8090` browser bookmarks receive a permanent redirect to the HTTPS origin,
+while non-HTML daemon and API requests remain available on HTTP. Google Web
+OAuth cannot use a non-localhost raw IP callback and is disabled on this IP-only
+entrypoint. Enabling it requires a DNS browser origin, a matching Caddy site and
+certificate, and a registered callback for that same origin.
 
 For a migration-sensitive change, also read the exact `schema_migrations` row;
 `/readyz` proves the current migration gate is healthy but is not a substitute

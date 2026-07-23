@@ -73,3 +73,54 @@ export const SELF_MENTION_ROW_CLASS =
  */
 export const SELF_MENTION_ROW_MENTION_CLASS =
   "[&_.mention]:dark:bg-transparent [&_.mention]:dark:hover:bg-brand/[0.08] [&_.mention]:dark:focus-visible:bg-brand/[0.08]";
+
+export type MessageCollapseFadeVariant =
+  | "default"
+  | "self-mention"
+  | "highlighted"
+  | "search";
+
+export function resolveMessageCollapseFadeVariant(options: {
+  selfMentioned: boolean;
+  highlighted: boolean;
+  searchHighlighted: boolean;
+}): MessageCollapseFadeVariant {
+  if (options.searchHighlighted) return "search";
+  if (options.highlighted) return "highlighted";
+  if (options.selfMentioned) return "self-mention";
+  return "default";
+}
+
+/**
+ * Bottom fade for collapsed long messages (LRM-302 / LRM-368). Must match the
+ * visible message-row background — never hard-bind `background` on rows that
+ * use a different wash (self-mention cream, deep-link ring, search tint).
+ */
+export function messageCollapseFadeClassName(
+  variant: MessageCollapseFadeVariant,
+): string {
+  const layout =
+    "pointer-events-none absolute inset-x-0 bottom-0 flex justify-start pb-0.5 pt-10";
+  switch (variant) {
+    case "search":
+      return cn(
+        layout,
+        "bg-gradient-to-t from-primary/5 via-primary/5/95 to-transparent",
+      );
+    case "highlighted":
+      return cn(
+        layout,
+        "bg-gradient-to-t from-primary/10 via-primary/10/95 to-transparent",
+      );
+    case "self-mention":
+      return cn(
+        layout,
+        "bg-gradient-to-t from-[#fef9e8] via-[#fef9e8]/95 to-transparent dark:from-brand/[0.06] dark:via-brand/[0.06]/95",
+      );
+    default:
+      return cn(
+        layout,
+        "bg-gradient-to-t from-background via-background/95 to-transparent",
+      );
+  }
+}

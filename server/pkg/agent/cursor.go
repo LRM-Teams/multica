@@ -99,6 +99,8 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		}()
 
 		startTime := time.Now()
+		configuredModel := strings.TrimSpace(opts.Model)
+		streamModel := ""
 		var output strings.Builder
 		var sessionID string
 		finalStatus := "completed"
@@ -175,6 +177,9 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 			switch evt.Type {
 			case "system":
 				if evt.Subtype == "init" {
+					if model := strings.TrimSpace(evt.Model); model != "" {
+						streamModel = model
+					}
 					trySend(msgCh, Message{Type: MessageStatus, Status: "running"})
 				}
 				if evt.Subtype == "error" {
@@ -196,8 +201,8 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 				if evt.ResultText != "" && output.Len() == 0 {
 					output.WriteString(evt.ResultText)
 				}
-				b.accumulateResultUsage(resultUsage, &evt)
-				if evt.Usage != nil {
+				b.accumulateResultUsage(resultUsage, &evt, streamModel, configuredModel)
+				if evt.hasResultUsage() {
 					hasResultUsage = true
 				}
 				// Current Cursor Agent versions can emit the terminal result
@@ -226,10 +231,7 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 				if evt.Part != nil {
 					var part cursorStepFinishPart
 					_ = json.Unmarshal(evt.Part, &part)
-					model := evt.Model
-					if model == "" {
-						model = "cursor"
-					}
+					model := cursorUsageModel(evt.Model, streamModel, configuredModel)
 					u := stepUsage[model]
 					u.InputTokens += int64(part.Tokens.Input)
 					u.OutputTokens += int64(part.Tokens.Output)
@@ -323,18 +325,29 @@ func (b *cursorBackend) handleCursorAssistant(evt *cursorStreamEvent, ch chan<- 
 	}
 }
 
-func (b *cursorBackend) accumulateResultUsage(usage map[string]TokenUsage, evt *cursorStreamEvent) {
-	if evt.Usage == nil {
+func cursorUsageModel(models ...string) string {
+	for _, candidate := range models {
+		if model := strings.TrimSpace(candidate); model != "" {
+			return model
+		}
+	}
+	return "cursor"
+}
+
+func (b *cursorBackend) accumulateResultUsage(usage map[string]TokenUsage, evt *cursorStreamEvent, fallbackModels ...string) {
+	if !evt.hasResultUsage() {
 		return
 	}
-	model := evt.Model
-	if model == "" {
-		model = "cursor"
-	}
+	model := cursorUsageModel(append([]string{evt.Model}, fallbackModels...)...)
 	u := usage[model]
-	u.InputTokens += evt.Usage.InputTokens
-	u.OutputTokens += evt.Usage.OutputTokens
-	u.CacheReadTokens += evt.Usage.CacheReadInputTokens
+	nested := cursorUsage{}
+	if evt.Usage != nil {
+		nested = *evt.Usage
+	}
+	u.InputTokens += firstNonZeroInt64(evt.InputTokens, nested.InputTokens)
+	u.OutputTokens += firstNonZeroInt64(evt.OutputTokens, nested.OutputTokens)
+	u.CacheReadTokens += firstNonZeroInt64(evt.CacheReadTokens, nested.CacheReadInputTokens)
+	u.CacheWriteTokens += firstNonZeroInt64(evt.CacheWriteTokens, nested.CacheWriteInputTokens)
 	usage[model] = u
 }
 
@@ -363,10 +376,14 @@ type cursorStreamEvent struct {
 	Output string `json:"output,omitempty"`
 
 	// result fields
-	ResultText string       `json:"result,omitempty"`
-	IsError    bool         `json:"is_error,omitempty"`
-	Usage      *cursorUsage `json:"usage,omitempty"`
-	TotalCost  float64      `json:"total_cost_usd,omitempty"`
+	ResultText       string       `json:"result,omitempty"`
+	IsError          bool         `json:"is_error,omitempty"`
+	InputTokens      int64        `json:"inputTokens,omitempty"`
+	OutputTokens     int64        `json:"outputTokens,omitempty"`
+	CacheReadTokens  int64        `json:"cacheReadTokens,omitempty"`
+	CacheWriteTokens int64        `json:"cacheWriteTokens,omitempty"`
+	Usage            *cursorUsage `json:"usage,omitempty"`
+	TotalCost        float64      `json:"total_cost_usd,omitempty"`
 
 	// error fields
 	ErrorMsg string `json:"error,omitempty"`
@@ -383,10 +400,59 @@ func (evt *cursorStreamEvent) readSessionID() string {
 	return ""
 }
 
+func (evt *cursorStreamEvent) hasResultUsage() bool {
+	return evt.Usage != nil || evt.InputTokens != 0 || evt.OutputTokens != 0 || evt.CacheReadTokens != 0 || evt.CacheWriteTokens != 0
+}
+
 type cursorUsage struct {
-	InputTokens          int64 `json:"input_tokens"`
-	OutputTokens         int64 `json:"output_tokens"`
-	CacheReadInputTokens int64 `json:"cached_input_tokens"`
+	InputTokens           int64
+	OutputTokens          int64
+	CacheReadInputTokens  int64
+	CacheWriteInputTokens int64
+}
+
+func (u *cursorUsage) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		InputTokensSnake              int64 `json:"input_tokens"`
+		InputTokensCamel              int64 `json:"inputTokens"`
+		OutputTokensSnake             int64 `json:"output_tokens"`
+		OutputTokensCamel             int64 `json:"outputTokens"`
+		CachedInputTokensSnake        int64 `json:"cached_input_tokens"`
+		CachedInputTokensCamel        int64 `json:"cachedInputTokens"`
+		CacheReadTokensCamel          int64 `json:"cacheReadTokens"`
+		CacheReadInputTokensSnake     int64 `json:"cache_read_input_tokens"`
+		CacheReadInputTokensCamel     int64 `json:"cacheReadInputTokens"`
+		CacheWriteTokensCamel         int64 `json:"cacheWriteTokens"`
+		CacheCreationInputTokensSnake int64 `json:"cache_creation_input_tokens"`
+		CacheCreationInputTokensCamel int64 `json:"cacheCreationInputTokens"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	u.InputTokens = firstNonZeroInt64(raw.InputTokensCamel, raw.InputTokensSnake)
+	u.OutputTokens = firstNonZeroInt64(raw.OutputTokensCamel, raw.OutputTokensSnake)
+	u.CacheReadInputTokens = firstNonZeroInt64(
+		raw.CacheReadTokensCamel,
+		raw.CachedInputTokensCamel,
+		raw.CachedInputTokensSnake,
+		raw.CacheReadInputTokensCamel,
+		raw.CacheReadInputTokensSnake,
+	)
+	u.CacheWriteInputTokens = firstNonZeroInt64(
+		raw.CacheWriteTokensCamel,
+		raw.CacheCreationInputTokensCamel,
+		raw.CacheCreationInputTokensSnake,
+	)
+	return nil
+}
+
+func firstNonZeroInt64(values ...int64) int64 {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 type cursorAssistantMessage struct {

@@ -22,6 +22,13 @@ topology and stop reporting a removed service as unhealthy.
   `db-bridge-executor-multica` or `BRIDGE_MULTICA_UPSTREAM_URL` reference.
 - [x] Pushed `fix/deploy-obsolete-bridge-executor` and opened ready-for-review
   PR #957 into `dev`: <https://github.com/LRM-Teams/multica/pull/957>.
+- [x] After #948/#951/#952 changed the same deployment block on `dev`,
+  reproduced GitHub's merge conflict in `.github/workflows/deploy.yml`.
+- [x] Merged current `dev`, retained the repository-managed Caddy/HTTPS startup,
+  and reapplied only the obsolete-executor removal around the surviving bridge
+  stub.
+- [x] Re-ran the self-host configuration test, workflow lint, and diff checks
+  after resolving the conflict.
 
 ## Boundaries
 

@@ -734,6 +734,11 @@ export const WorkspaceMemoryCurationStatusSchema = z.object({
   pending_runs: z.number().default(0),
   failed_runs_24h: z.number().default(0),
   stages: z.array(MemoryCurationStageStatusSchema).default([]),
+  local_proposals: z.number().default(0),
+  pending_candidates: z.number().default(0),
+  pending_skills: z.number().default(0),
+  promoted_candidates: z.number().default(0),
+  team_knowledge_items: z.number().default(0),
 }).loose();
 
 export const EMPTY_WORKSPACE_MEMORY_CURATION_STATUS: WorkspaceMemoryCurationStatus = {
@@ -741,6 +746,11 @@ export const EMPTY_WORKSPACE_MEMORY_CURATION_STATUS: WorkspaceMemoryCurationStat
   pending_runs: 0,
   failed_runs_24h: 0,
   stages: [],
+  local_proposals: 0,
+  pending_candidates: 0,
+  pending_skills: 0,
+  promoted_candidates: 0,
+  team_knowledge_items: 0,
 };
 
 export const MemoryCuratorProfileSchema = z.object({

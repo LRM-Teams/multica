@@ -106,7 +106,8 @@ const COPY = {
   learningQueue: "Learning queue",
   learningQueueHint: "Review-first memory and skill candidates waiting for a human decision.",
   memoryOps: "Memory curation",
-  memoryOpsHint: "Active agents self-review first; team curation then promotes clean shared knowledge.",
+  memoryOpsHint: "Active agents self-review first; team curation then promotes clean shared knowledge. The top three stats are the workspace funnel: local proposals → DB pending → team knowledge.",
+  funnelHint: "Funnel: left = latest self-review candidates; middle = DB pending candidates ({skills} skills); right = team_knowledge registry rows (not copied to every agent).",
   curatorOps: "Curator operations",
   curatorOpsHint: "Multi-agent curation, promotion, sharing, and safety checks.",
   starAgents: "Star agents",
@@ -572,10 +573,11 @@ export function EvolutionCenterPage() {
   const latestStage = (curationStatus?.stages ?? [])
     .toSorted((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
   const memorySubmissions = submissions.filter((item) => isMemoryLikeUnitType(item.unit_type));
-  const sharedMemoryCandidates = memorySubmissions.filter(
-    (item) => item.status === "candidate" || item.status === "needs_review",
-  ).length;
-  const promotedSharedMemory = memorySubmissions.filter((item) => item.status === "promoted").length;
+  const sharedMemoryCandidates = curationStatus?.pending_candidates
+    ?? memorySubmissions.filter((item) => item.status === "candidate" || item.status === "needs_review").length;
+  const promotedSharedMemory = curationStatus?.team_knowledge_items
+    ?? curationStatus?.promoted_candidates
+    ?? memorySubmissions.filter((item) => item.status === "promoted").length;
   const curationHealth = curationStatusUnavailable
     ? copy("unavailable")
     : (curationStatus?.pending_runs ?? 0) > 0
@@ -689,7 +691,6 @@ export function EvolutionCenterPage() {
                   runtimes={runtimes}
                 />
                 <MemoryCurationCard
-                  submissions={submissions}
                   status={curationStatus}
                   loading={curationStatusLoading}
                   unavailable={curationStatusUnavailable}
@@ -1216,24 +1217,25 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 }
 
 function MemoryCurationCard({
-  submissions,
   status,
   loading,
   unavailable,
   onSelectRun,
 }: {
-  submissions: EvolutionReviewSubmission[];
   status: WorkspaceMemoryCurationStatus | undefined;
   loading: boolean;
   unavailable: boolean;
   onSelectRun: (runId: string) => void;
 }) {
   const copy = useEvolutionCopy();
-  const memorySubmissions = submissions.filter((item) => isMemoryLikeUnitType(item.unit_type));
-  const sharedCandidates = memorySubmissions.filter((item) => item.status === "candidate" || item.status === "needs_review").length;
-  const promotedSharedMemory = memorySubmissions.filter((item) => item.status === "promoted").length;
   const runs = new Map((status?.stages ?? []).map((run) => [run.stage, run] as const));
-  const localPromotions = runs.get("agent_self_review")?.stats.review_candidates_added ?? 0;
+  const localPromotions = status?.local_proposals
+    ?? runs.get("agent_self_review")?.stats.review_candidates_added
+    ?? runs.get("all")?.stats.review_candidates_added
+    ?? 0;
+  const sharedCandidates = status?.pending_candidates ?? 0;
+  const promotedSharedMemory = status?.team_knowledge_items ?? status?.promoted_candidates ?? 0;
+  const pendingSkills = status?.pending_skills ?? 0;
 
   return (
     <Card className="bg-background/85 backdrop-blur">
@@ -1244,11 +1246,12 @@ function MemoryCurationCard({
       <CardContent className="space-y-3">
         <div className="grid grid-cols-3 gap-2">
           <MiniStat label={copy("localPromotion")} value={loading ? "…" : String(localPromotions)} />
-          <MiniStat label={copy("sharedCandidates")} value={String(sharedCandidates)} />
-          <MiniStat label={copy("sharedMemory")} value={String(promotedSharedMemory)} />
+          <MiniStat label={copy("sharedCandidates")} value={loading ? "…" : String(sharedCandidates)} />
+          <MiniStat label={copy("sharedMemory")} value={loading ? "…" : String(promotedSharedMemory)} />
         </div>
         <div className="rounded-2xl border bg-muted/30 p-3 text-sm text-muted-foreground">
           <div>{copy("insight4")}</div>
+          <div className="mt-2 text-xs">{copy("funnelHint").replace("{skills}", String(pendingSkills))}</div>
           <div className="mt-2 flex items-start gap-2 text-xs"><ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brand" />{copy("notBroadcast")}</div>
         </div>
         {MEMORY_CURATION_STAGES.map(([stageName, stageLabel, time, title, detail]) => {

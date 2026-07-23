@@ -407,6 +407,16 @@ export interface WorkspaceMemoryCurationStatus {
   pending_runs: number;
   failed_runs_24h: number;
   stages: MemoryCurationStageStatus[];
+  /** Latest self-review run's review_candidates_added (local proposals). */
+  local_proposals?: number;
+  /** Workspace DB pending candidates awaiting team curation. */
+  pending_candidates?: number;
+  /** Subset of pending candidates typed as skill / team_skill. */
+  pending_skills?: number;
+  /** Candidates already marked promoted in the registry. */
+  promoted_candidates?: number;
+  /** Shared team_knowledge_item rows in the workspace registry. */
+  team_knowledge_items?: number;
 }
 
 export type MemoryCuratorMode = "observe" | "review" | "auto_safe" | "auto";

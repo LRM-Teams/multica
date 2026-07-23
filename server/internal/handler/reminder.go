@@ -269,10 +269,11 @@ func parseReminderFireAt(now time.Time, delaySeconds *int64, rawFireAt string) (
 }
 
 func (h *Handler) AgentTransportScheduleReminder(w http.ResponseWriter, r *http.Request) {
-	task, origin, ok := h.requireAgentTransportTask(w, r)
+	source, ok := h.requireAgentTransportSource(w, r)
 	if !ok {
 		return
 	}
+	task, origin := source.task, source.origin
 	var req agentReminderScheduleRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -283,14 +284,19 @@ func (h *Handler) AgentTransportScheduleReminder(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusBadRequest, "title must be between 1 and 500 characters")
 		return
 	}
-	timezone := reminderInitiatorTimezone(r.Context(), h.DB, task.InitiatorUserID)
+	anchorMessageID, threadRootID, ok := h.resolveReminderAnchor(w, r.Context(), origin, req.MessageID)
+	if !ok {
+		return
+	}
+	initiatorUserID, ok := h.agentTransportInitiatorUserID(r, source)
+	if !ok {
+		writeError(w, http.StatusForbidden, "reminder initiator is not available")
+		return
+	}
+	timezone := reminderInitiatorTimezone(r.Context(), h.DB, initiatorUserID)
 	schedule, err := parseReminderSchedule(time.Now().UTC(), req.DelaySeconds, req.FireAt, req.Repeat, timezone)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	anchorMessageID, threadRootID, ok := h.resolveReminderAnchor(w, r.Context(), origin, req.MessageID)
-	if !ok {
 		return
 	}
 	tx, err := h.TxStarter.Begin(r.Context())
@@ -332,7 +338,7 @@ func (h *Handler) AgentTransportScheduleReminder(w http.ResponseWriter, r *http.
 		)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING `+reminderSelectColumns(),
-		origin.workspaceID, task.AgentID, nullableUUID(task.InitiatorUserID), title, origin.channelID,
+		origin.workspaceID, task.AgentID, initiatorUserID, title, origin.channelID,
 		anchorMessageID, nullableUUID(threadRootID), schedule.FireAt, cadence, scheduleTimezone, cadenceNextAt)
 	created, err := scanAgentReminder(row)
 	if err != nil {
@@ -357,7 +363,7 @@ func (h *Handler) AgentTransportScheduleReminder(w http.ResponseWriter, r *http.
 	h.projectReminderUpsert(r.Context(), created)
 	targetKind, targetID, targetSlug := reminderActivityTarget(created, true)
 	h.recordAgentActivityEvent(r.Context(), h.DB,
-		origin.workspaceID, task.AgentID, task.RuntimeID, task.ID,
+		origin.workspaceID, task.AgentID, task.RuntimeID, reminderTransportActivityTaskID(source),
 		activityKindCustom, "reminder_scheduled", "info",
 		targetKind, targetID, targetSlug,
 		"", "Agent scheduled a future self-wake",
@@ -367,10 +373,11 @@ func (h *Handler) AgentTransportScheduleReminder(w http.ResponseWriter, r *http.
 }
 
 func (h *Handler) AgentTransportListReminders(w http.ResponseWriter, r *http.Request) {
-	task, origin, ok := h.requireAgentTransportTask(w, r)
+	source, ok := h.requireAgentTransportSource(w, r)
 	if !ok {
 		return
 	}
+	task, origin := source.task, source.origin
 	var req agentReminderListRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -415,10 +422,11 @@ func (h *Handler) AgentTransportListReminders(w http.ResponseWriter, r *http.Req
 }
 
 func (h *Handler) AgentTransportReminderLog(w http.ResponseWriter, r *http.Request) {
-	task, origin, ok := h.requireAgentTransportTask(w, r)
+	source, ok := h.requireAgentTransportSource(w, r)
 	if !ok {
 		return
 	}
+	task, origin := source.task, source.origin
 	var req agentReminderIDRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -469,10 +477,11 @@ func (h *Handler) AgentTransportReminderLog(w http.ResponseWriter, r *http.Reque
 }
 
 func (h *Handler) AgentTransportSnoozeReminder(w http.ResponseWriter, r *http.Request) {
-	task, origin, ok := h.requireAgentTransportTask(w, r)
+	source, ok := h.requireAgentTransportSource(w, r)
 	if !ok {
 		return
 	}
+	task, origin := source.task, source.origin
 	var req agentReminderSnoozeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -531,15 +540,16 @@ func (h *Handler) AgentTransportSnoozeReminder(w http.ResponseWriter, r *http.Re
 	}
 	h.publishAgentReminderChanged(r.Context(), updated.WorkspaceID, updated.AgentID)
 	h.projectReminderUpsert(r.Context(), updated)
-	h.recordReminderActivity(r.Context(), task, updated, "reminder_snoozed", "Agent snoozed a reminder")
+	h.recordReminderActivity(r.Context(), source, updated, "reminder_snoozed", "Agent snoozed a reminder")
 	writeJSON(w, http.StatusOK, reminderResponse(updated))
 }
 
 func (h *Handler) AgentTransportUpdateReminder(w http.ResponseWriter, r *http.Request) {
-	task, origin, ok := h.requireAgentTransportTask(w, r)
+	source, ok := h.requireAgentTransportSource(w, r)
 	if !ok {
 		return
 	}
+	task, origin := source.task, source.origin
 	var req agentReminderUpdateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -652,7 +662,16 @@ func (h *Handler) AgentTransportUpdateReminder(w http.ResponseWriter, r *http.Re
 			if previous.ScheduleTimezone.Valid {
 				timezone = previous.ScheduleTimezone.String
 			} else {
-				timezone = reminderInitiatorTimezone(r.Context(), tx, task.InitiatorUserID)
+				initiatorUserID := previous.InitiatorUserID
+				if !initiatorUserID.Valid {
+					var initiatorOK bool
+					initiatorUserID, initiatorOK = h.agentTransportInitiatorUserID(r, source)
+					if !initiatorOK {
+						writeError(w, http.StatusForbidden, "reminder initiator is not available")
+						return
+					}
+				}
+				timezone = reminderInitiatorTimezone(r.Context(), tx, initiatorUserID)
 			}
 		}
 		cadence, parseErr := parseReminderCadence(rawCadence, timezone)
@@ -710,15 +729,16 @@ func (h *Handler) AgentTransportUpdateReminder(w http.ResponseWriter, r *http.Re
 	}
 	h.publishAgentReminderChanged(r.Context(), updated.WorkspaceID, updated.AgentID)
 	h.projectReminderUpsert(r.Context(), updated)
-	h.recordReminderActivity(r.Context(), task, updated, "reminder_updated", "Agent updated a reminder")
+	h.recordReminderActivity(r.Context(), source, updated, "reminder_updated", "Agent updated a reminder")
 	writeJSON(w, http.StatusOK, reminderResponse(updated))
 }
 
 func (h *Handler) AgentTransportCancelReminder(w http.ResponseWriter, r *http.Request) {
-	task, origin, ok := h.requireAgentTransportTask(w, r)
+	source, ok := h.requireAgentTransportSource(w, r)
 	if !ok {
 		return
 	}
+	task, origin := source.task, source.origin
 	var req agentReminderIDRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -762,7 +782,7 @@ func (h *Handler) AgentTransportCancelReminder(w http.ResponseWriter, r *http.Re
 	}
 	h.publishAgentReminderChanged(r.Context(), cancelled.WorkspaceID, cancelled.AgentID)
 	h.projectReminderCancel(r.Context(), cancelled)
-	h.recordReminderActivity(r.Context(), task, cancelled, "reminder_cancelled", "Agent cancelled a reminder")
+	h.recordReminderActivity(r.Context(), source, cancelled, "reminder_cancelled", "Agent cancelled a reminder")
 	writeJSON(w, http.StatusOK, reminderResponse(cancelled))
 }
 
@@ -831,10 +851,17 @@ func (h *Handler) resolveReminderID(w http.ResponseWriter, ctx context.Context, 
 	return ids[0], true
 }
 
-func (h *Handler) recordReminderActivity(ctx context.Context, task db.AgentTaskQueue, reminder agentReminder, eventType, message string) {
+func reminderTransportActivityTaskID(source agentTransportSource) pgtype.UUID {
+	if source.inboxEventID.Valid {
+		return pgtype.UUID{}
+	}
+	return source.task.ID
+}
+
+func (h *Handler) recordReminderActivity(ctx context.Context, source agentTransportSource, reminder agentReminder, eventType, message string) {
 	targetKind, targetID, targetSlug := reminderActivityTarget(reminder, true)
 	h.recordAgentActivityEvent(ctx, h.DB,
-		reminder.WorkspaceID, reminder.AgentID, task.RuntimeID, task.ID,
+		reminder.WorkspaceID, reminder.AgentID, source.task.RuntimeID, reminderTransportActivityTaskID(source),
 		activityKindCustom, eventType, "info",
 		targetKind, targetID, targetSlug,
 		"", message,

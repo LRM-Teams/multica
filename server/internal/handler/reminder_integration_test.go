@@ -12,11 +12,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/events"
+	"github.com/multica-ai/multica/server/internal/middleware"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -1299,6 +1303,357 @@ func TestAgentReminderScheduleRequiresExplicitMessageIDWithoutPromptFallback(t *
 	}
 }
 
+type reminderModernTransportFixture struct {
+	actorSource      string
+	bearerToken      string
+	agentID          string
+	channelID        string
+	initiatorUserID  string
+	anchorMessageID  string
+	inboxEventID     string
+	deliveryID       string
+	deliveryLeaseKey string
+}
+
+func seedReminderModernTransportFixture(t *testing.T, actorSource string) reminderModernTransportFixture {
+	t.Helper()
+	ctx := context.Background()
+	capabilities := []string{protocol.DaemonCapabilityReminderVersionedCache}
+	if actorSource == "agent_credential" {
+		capabilities = append(capabilities, protocol.DaemonCapabilityAgentCredentialTransport)
+	}
+	seedHandlerTestRuntimeCapabilities(t, capabilities)
+	seedHandlerTestRuntimeOwner(t, testUserID)
+
+	initiatorUserID := seedWorkspaceUserForTransportTargetTest(t, "reminder_initiator_"+uuid.NewString()[:8])
+	if _, err := testPool.Exec(ctx, `UPDATE "user" SET timezone = 'Asia/Shanghai' WHERE id = $1`, initiatorUserID); err != nil {
+		t.Fatalf("set reminder initiator timezone: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `UPDATE "user" SET timezone = 'America/New_York' WHERE id = $1`, testUserID); err != nil {
+		t.Fatalf("set runtime owner timezone: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `UPDATE "user" SET timezone = NULL WHERE id = $1`, testUserID)
+	})
+
+	agentName := "Reminder Modern Auth " + uuid.NewString()[:8]
+	agentID := createHandlerTestAgent(t, agentName, nil)
+	channelID := seedChannelForTest(t, "reminder-modern-auth-"+uuid.NewString(), initiatorUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed reminder agent channel member: %v", err)
+	}
+	channel, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("reminder modern auth channel not found")
+	}
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID),
+		"user", parseUUID(initiatorUserID), "Reminder Initiator",
+		"[@"+agentName+"](mention://agent/"+agentID+") schedule a reminder",
+		"multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("reminder-modern-auth"), 0)
+	if err != nil {
+		t.Fatalf("insert reminder modern auth trigger: %v", err)
+	}
+	testHandler.dispatchChannelMessageToAgents(ctx, channel, trigger, parseUUID(initiatorUserID))
+
+	runtimeID := handlerTestRuntimeID(t)
+	drainReq := newDaemonTokenRequest(http.MethodPost,
+		"/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil,
+		testWorkspaceID, "reminder-modern-auth-daemon")
+	drainReq = withURLParam(drainReq, "runtimeId", runtimeID)
+	drainRec := httptest.NewRecorder()
+	testHandler.DrainAgentInboxByRuntime(drainRec, drainReq)
+	if drainRec.Code != http.StatusOK {
+		t.Fatalf("drain reminder modern auth inbox: status=%d body=%s", drainRec.Code, drainRec.Body.String())
+	}
+	var drainResp DrainAgentInboxResponse
+	if err := json.Unmarshal(drainRec.Body.Bytes(), &drainResp); err != nil {
+		t.Fatalf("decode reminder modern auth drain: %v", err)
+	}
+	if len(drainResp.Events) != 1 || drainResp.Events[0].Task == nil {
+		t.Fatalf("reminder modern auth drain events=%d body=%s", len(drainResp.Events), drainRec.Body.String())
+	}
+	event := drainResp.Events[0]
+	bearerToken := event.Task.AuthToken
+	if actorSource == "agent_inbox_token" {
+		if bearerToken == "" {
+			t.Fatal("agent inbox fixture did not mint a delivery token")
+		}
+	} else {
+		rawToken, err := auth.GenerateAgentCredentialToken()
+		if err != nil {
+			t.Fatalf("generate reminder agent credential: %v", err)
+		}
+		if _, err := testHandler.Queries.CreateAgentCredential(ctx, db.CreateAgentCredentialParams{
+			TokenHash:   auth.HashToken(rawToken),
+			TokenPrefix: tokenPrefixForTest(rawToken),
+			AgentID:     parseUUID(agentID),
+			WorkspaceID: parseUUID(testWorkspaceID),
+			UserID:      parseUUID(testUserID),
+			ExpiresAt:   pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
+		}); err != nil {
+			t.Fatalf("create reminder agent credential: %v", err)
+		}
+		bearerToken = rawToken
+	}
+
+	return reminderModernTransportFixture{
+		actorSource:      actorSource,
+		bearerToken:      bearerToken,
+		agentID:          agentID,
+		channelID:        channelID,
+		initiatorUserID:  initiatorUserID,
+		anchorMessageID:  trigger.ID,
+		inboxEventID:     event.ID,
+		deliveryID:       event.DeliveryID,
+		deliveryLeaseKey: event.LeaseToken,
+	}
+}
+
+func reminderModernTransportRouter() http.Handler {
+	router := chi.NewRouter()
+	router.Group(func(r chi.Router) {
+		r.Use(middleware.Auth(testHandler.Queries, nil, nil))
+		r.Use(middleware.RequireWorkspaceMember(testHandler.Queries))
+		r.Post("/api/agent/reminders/schedule", testHandler.AgentTransportScheduleReminder)
+		r.Post("/api/agent/reminders/list", testHandler.AgentTransportListReminders)
+		r.Post("/api/agent/reminders/update", testHandler.AgentTransportUpdateReminder)
+		r.Post("/api/agent/reminders/snooze", testHandler.AgentTransportSnoozeReminder)
+		r.Post("/api/agent/reminders/log", testHandler.AgentTransportReminderLog)
+		r.Post("/api/agent/reminders/cancel", testHandler.AgentTransportCancelReminder)
+	})
+	return router
+}
+
+func serveReminderModernTransport(t *testing.T, router http.Handler, fixture reminderModernTransportFixture, path string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+	req := newRequest(http.MethodPost, path, body)
+	req.Header.Set("Authorization", "Bearer "+fixture.bearerToken)
+	req.Header.Set("X-Workspace-ID", testWorkspaceID)
+	req.Header.Set("X-Agent-Inbox-Event-ID", fixture.inboxEventID)
+	req.Header.Set("X-Agent-Inbox-Delivery-ID", fixture.deliveryID)
+	if fixture.actorSource == "agent_credential" {
+		req.Header.Set("X-Agent-Inbox-Lease-Token", fixture.deliveryLeaseKey)
+	}
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestAgentReminderHandlersAcceptModernAgentTransportSources(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	for _, actorSource := range []string{"agent_inbox_token", "agent_credential"} {
+		t.Run(actorSource, func(t *testing.T) {
+			fixture := seedReminderModernTransportFixture(t, actorSource)
+			router := reminderModernTransportRouter()
+
+			scheduleRec := serveReminderModernTransport(t, router, fixture, "/api/agent/reminders/schedule", map[string]any{
+				"title": "modern auth reminder", "repeat": "daily@09:00", "message_id": fixture.anchorMessageID,
+			})
+			if scheduleRec.Code != http.StatusCreated {
+				t.Fatalf("schedule status=%d body=%s", scheduleRec.Code, scheduleRec.Body.String())
+			}
+			var scheduled agentReminderResponse
+			if err := json.NewDecoder(scheduleRec.Body).Decode(&scheduled); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_reminder WHERE id = $1`, scheduled.ID)
+			})
+			var initiatorUserID string
+			var activityRows, activityTaskRows int
+			if err := testPool.QueryRow(context.Background(), `
+				SELECT initiator_user_id
+				FROM agent_reminder
+				WHERE id = $1`, scheduled.ID).Scan(&initiatorUserID); err != nil {
+				t.Fatalf("load reminder initiator: %v", err)
+			}
+			if initiatorUserID != fixture.initiatorUserID || scheduled.ScheduleTimezone == nil || *scheduled.ScheduleTimezone != "Asia/Shanghai" {
+				t.Fatalf("schedule initiator/timezone=%s/%v want=%s/Asia/Shanghai", initiatorUserID, scheduled.ScheduleTimezone, fixture.initiatorUserID)
+			}
+
+			listRec := serveReminderModernTransport(t, router, fixture, "/api/agent/reminders/list", map[string]any{"status": "active"})
+			if listRec.Code != http.StatusOK || !strings.Contains(listRec.Body.String(), scheduled.ID) {
+				t.Fatalf("list status=%d body=%s", listRec.Code, listRec.Body.String())
+			}
+			updateRec := serveReminderModernTransport(t, router, fixture, "/api/agent/reminders/update", map[string]any{
+				"id": scheduled.ID, "cadence": "weekly:mon,fri@10:30",
+			})
+			if updateRec.Code != http.StatusOK || !strings.Contains(updateRec.Body.String(), "Asia/Shanghai") {
+				t.Fatalf("update status=%d body=%s", updateRec.Code, updateRec.Body.String())
+			}
+			snoozeRec := serveReminderModernTransport(t, router, fixture, "/api/agent/reminders/snooze", map[string]any{
+				"id": scheduled.ID, "delay_seconds": 300,
+			})
+			if snoozeRec.Code != http.StatusOK {
+				t.Fatalf("snooze status=%d body=%s", snoozeRec.Code, snoozeRec.Body.String())
+			}
+			logRec := serveReminderModernTransport(t, router, fixture, "/api/agent/reminders/log", map[string]any{"id": scheduled.ID})
+			if logRec.Code != http.StatusOK || !strings.Contains(logRec.Body.String(), `"event_type":"snoozed"`) {
+				t.Fatalf("log status=%d body=%s", logRec.Code, logRec.Body.String())
+			}
+			cancelRec := serveReminderModernTransport(t, router, fixture, "/api/agent/reminders/cancel", map[string]any{"id": scheduled.ID})
+			if cancelRec.Code != http.StatusOK {
+				t.Fatalf("cancel status=%d body=%s", cancelRec.Code, cancelRec.Body.String())
+			}
+
+			if err := testPool.QueryRow(context.Background(), `
+				SELECT count(*), count(*) FILTER (WHERE task_id IS NOT NULL)
+				FROM agent_activity_event
+				WHERE agent_id = $1
+				  AND details->>'reminder_id' = $2
+				  AND event_type IN ('reminder_scheduled', 'reminder_updated', 'reminder_snoozed', 'reminder_cancelled')`,
+				fixture.agentID, scheduled.ID).Scan(&activityRows, &activityTaskRows); err != nil {
+				t.Fatalf("load reminder activity rows: %v", err)
+			}
+			if activityRows != 4 || activityTaskRows != 0 {
+				t.Fatalf("modern reminder activity rows/task rows=%d/%d, want 4/0", activityRows, activityTaskRows)
+			}
+		})
+	}
+}
+
+func TestAgentReminderModernTransportFireFallsBackToOwnerWithoutTimezoneDrift(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	for _, actorSource := range []string{"agent_inbox_token", "agent_credential"} {
+		t.Run(actorSource, func(t *testing.T) {
+			fixture := seedReminderModernTransportFixture(t, actorSource)
+			scheduleRec := serveReminderModernTransport(t, reminderModernTransportRouter(), fixture, "/api/agent/reminders/schedule", map[string]any{
+				"title": "modern auth recurring fire", "repeat": "daily@09:00", "message_id": fixture.anchorMessageID,
+			})
+			if scheduleRec.Code != http.StatusCreated {
+				t.Fatalf("schedule status=%d body=%s", scheduleRec.Code, scheduleRec.Body.String())
+			}
+			var scheduled agentReminderResponse
+			if err := json.NewDecoder(scheduleRec.Body).Decode(&scheduled); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_reminder WHERE id = $1`, scheduled.ID)
+			})
+
+			due := time.Now().UTC().Add(-time.Minute)
+			if _, err := testPool.Exec(context.Background(), `
+				UPDATE agent_reminder
+				SET fire_at = $2, cadence_next_at = $2
+				WHERE id = $1`, scheduled.ID, due); err != nil {
+				t.Fatalf("make modern reminder due: %v", err)
+			}
+			if _, err := testPool.Exec(context.Background(), `
+				DELETE FROM member
+				WHERE workspace_id = $1 AND user_id = $2`, testWorkspaceID, fixture.initiatorUserID); err != nil {
+				t.Fatalf("remove reminder initiator membership: %v", err)
+			}
+
+			if err := fireReminderAttempt(testHandler, scheduled.ID); err != nil {
+				t.Fatalf("fire modern reminder after initiator removal: %v", err)
+			}
+			var taskInitiatorID, status, cadence, timezone string
+			var nextFireAt time.Time
+			if err := testPool.QueryRow(context.Background(), `
+				SELECT task.initiator_user_id, reminder.status, reminder.cadence,
+				       reminder.schedule_timezone, reminder.fire_at
+				FROM agent_reminder reminder
+				JOIN agent_reminder_occurrence occurrence ON occurrence.reminder_id = reminder.id
+				JOIN agent_task_queue task ON task.id = occurrence.fired_task_id
+				WHERE reminder.id = $1`, scheduled.ID).Scan(
+				&taskInitiatorID, &status, &cadence, &timezone, &nextFireAt,
+			); err != nil {
+				t.Fatalf("load modern reminder fire result: %v", err)
+			}
+			if taskInitiatorID != testUserID {
+				t.Fatalf("fallback task creator=%s, want current owner %s", taskInitiatorID, testUserID)
+			}
+			if status != "scheduled" || cadence != "daily@09:00" || timezone != "Asia/Shanghai" {
+				t.Fatalf("recurrence state=%s/%s/%s, want scheduled/daily@09:00/Asia/Shanghai", status, cadence, timezone)
+			}
+			shanghai, err := time.LoadLocation("Asia/Shanghai")
+			if err != nil {
+				t.Fatal(err)
+			}
+			newYork, err := time.LoadLocation("America/New_York")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := nextFireAt.In(shanghai).Format("15:04"); got != "09:00" {
+				t.Fatalf("next fire in locked timezone=%s, want 09:00", got)
+			}
+			if got := nextFireAt.In(newYork).Format("15:04"); got == "09:00" {
+				t.Fatalf("next fire drifted to owner timezone: %s", got)
+			}
+		})
+	}
+}
+
+func TestAgentReminderModernTransportSourcesRemainFailClosed(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	t.Run("expired delivery", func(t *testing.T) {
+		fixture := seedReminderModernTransportFixture(t, "agent_inbox_token")
+		if _, err := testPool.Exec(context.Background(), `
+			UPDATE agent_event_delivery
+			SET lease_expires_at = now() - interval '1 second'
+			WHERE id = $1`, fixture.deliveryID); err != nil {
+			t.Fatal(err)
+		}
+		rec := serveReminderModernTransport(t, reminderModernTransportRouter(), fixture, "/api/agent/reminders/schedule", map[string]any{
+			"title": "must fail", "delay_seconds": 300, "message_id": fixture.anchorMessageID,
+		})
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("expired delivery status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	})
+	t.Run("cross agent event", func(t *testing.T) {
+		credential := seedReminderModernTransportFixture(t, "agent_credential")
+		other := seedReminderModernTransportFixture(t, "agent_credential")
+		credential.inboxEventID = other.inboxEventID
+		credential.deliveryID = other.deliveryID
+		credential.deliveryLeaseKey = other.deliveryLeaseKey
+		rec := serveReminderModernTransport(t, reminderModernTransportRouter(), credential, "/api/agent/reminders/schedule", map[string]any{
+			"title": "must fail", "delay_seconds": 300, "message_id": other.anchorMessageID,
+		})
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("cross agent event status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	})
+	t.Run("cross origin anchor", func(t *testing.T) {
+		fixture := seedReminderModernTransportFixture(t, "agent_credential")
+		foreignChannelID := seedChannelForTest(t, "reminder-foreign-origin-"+uuid.NewString(), fixture.initiatorUserID)
+		foreignMessage, err := testHandler.insertChannelMessage(context.Background(), parseUUID(foreignChannelID), parseUUID(testWorkspaceID),
+			"user", parseUUID(fixture.initiatorUserID), "Reminder Initiator", "wrong origin",
+			"multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec := serveReminderModernTransport(t, reminderModernTransportRouter(), fixture, "/api/agent/reminders/schedule", map[string]any{
+			"title": "must fail", "delay_seconds": 300, "message_id": foreignMessage.ID,
+		})
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("cross origin status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	})
+	t.Run("cross workspace", func(t *testing.T) {
+		fixture := seedReminderModernTransportFixture(t, "agent_inbox_token")
+		req := newRequest(http.MethodPost, "/api/agent/reminders/list", map[string]any{"status": "active"})
+		req.Header.Set("X-Actor-Source", "agent_inbox_token")
+		req.Header.Set("X-Agent-ID", fixture.agentID)
+		req.Header.Set("X-Agent-Inbox-Event-ID", fixture.inboxEventID)
+		req.Header.Set("X-Agent-Inbox-Delivery-ID", fixture.deliveryID)
+		req = req.WithContext(middleware.SetMemberContext(req.Context(), uuid.NewString(), db.Member{}))
+		rec := httptest.NewRecorder()
+		testHandler.AgentTransportListReminders(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("cross workspace status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	})
+}
+
 func TestAgentReminderTransportLocksTimezoneAndLogsLifecycle(t *testing.T) {
 	taskID, channelID := createChannelCompletionTaskWithCapabilities(t, "group", []string{
 		protocol.DaemonCapabilityChannelOutputActions,
@@ -1534,6 +1889,9 @@ func TestAgentReminderUpdateRejectsMultipleMutations(t *testing.T) {
 		protocol.DaemonCapabilityReminderVersionedCache,
 	})
 	agentID := agentIDForTask(t, taskID)
+	if _, err := testPool.Exec(context.Background(), `UPDATE agent_task_queue SET initiator_user_id = $2 WHERE id = $1`, taskID, testUserID); err != nil {
+		t.Fatal(err)
+	}
 	message, err := testHandler.insertChannelMessage(context.Background(), parseUUID(channelID), parseUUID(testWorkspaceID),
 		"user", parseUUID(testUserID), "Tester", "single mutation anchor", "multica", nil,
 		pgtype.UUID{}, pgtype.UUID{}, nil, 0)

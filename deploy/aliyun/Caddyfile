@@ -1,0 +1,25 @@
+(multica_app) {
+	@multica_ws path /ws /ws/* /api/daemon/ws /api/sandbox/node/ws
+	reverse_proxy @multica_ws backend:8080 {
+		flush_interval -1
+	}
+
+	@multica_health path /health
+	reverse_proxy @multica_health backend:8080
+
+	reverse_proxy frontend:3000
+}
+
+leagent.me, www.leagent.me {
+	import multica_app
+}
+
+# Preserve the IP:8090 endpoint for daemon compatibility and deployment
+# verification. Browser navigation uses the secure canonical origin so cookies,
+# microphone access, and other secure-context browser APIs remain available.
+:8090 {
+	@browser_navigation header Accept *text/html*
+	redir @browser_navigation https://leagent.me{uri} 308
+
+	import multica_app
+}

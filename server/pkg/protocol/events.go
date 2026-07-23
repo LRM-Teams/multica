@@ -56,9 +56,10 @@ const (
 	EventWorkspaceDeleted = "workspace:deleted"
 
 	// Member events
-	EventMemberAdded   = "member:added"
-	EventMemberUpdated = "member:updated"
-	EventMemberRemoved = "member:removed"
+	EventMemberAdded    = "member:added"
+	EventMemberUpdated  = "member:updated"
+	EventMemberRemoved  = "member:removed"
+	EventMemberPresence = "member:presence" // LRM-462: human online/offline from WS sessions
 
 	// Subscriber events
 	EventSubscriberAdded   = "subscriber:added"

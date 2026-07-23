@@ -385,7 +385,7 @@ function DmPickerContent({ onClose }: { onClose: () => void }) {
                 actorType={item.kind === "agent" ? "agent" : "member"}
                 actorId={item.id}
                 size={28}
-                showStatusDot={item.kind === "agent"}
+                showStatusDot
                 profileLink={false}
               />
               <ActorIdentityRow
@@ -494,7 +494,7 @@ export function DmConversationRow({
             actorType={actorType}
             actorId={dm.peer.id}
             size={40}
-            showStatusDot={dm.peer.type === "agent"}
+            showStatusDot
             profileLink={false}
           />
           <div className="min-w-0 flex-1">

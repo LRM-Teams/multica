@@ -263,6 +263,10 @@ func (c *Client) markSeen(eventID string) bool {
 // demand.
 type SubscriptionCallback func(scopeType, scopeID string)
 
+// MemberPresenceCallback fires when a human member's WS session count for a
+// workspace crosses 0↔1 (LRM-462 common-IM online).
+type MemberPresenceCallback func(workspaceID, userID string)
+
 // Hub manages WebSocket connections organized into scope-based rooms.
 type Hub struct {
 	rooms      map[scopeKey]map[*Client]bool
@@ -277,17 +281,45 @@ type Hub struct {
 	// Subscription lifecycle hooks. Both can be nil.
 	onFirstSubscriber SubscriptionCallback
 	onLastSubscriber  SubscriptionCallback
+
+	// Member presence (human WS sessions). Both can be nil.
+	memberSessions   map[string]int // workspaceID\x00userID -> open WS count on this node
+	onMemberOnline   MemberPresenceCallback
+	onMemberOffline  MemberPresenceCallback
+	onMemberPresence MemberPresenceCallback // optional touch/refresh hook (pong)
 }
 
 // NewHub creates a new Hub instance.
 func NewHub() *Hub {
 	return &Hub{
-		rooms:      make(map[scopeKey]map[*Client]bool),
-		clients:    make(map[*Client]bool),
-		broadcast:  make(chan []byte),
-		register:   make(chan *Client),
-		unregister: make(chan *Client),
+		rooms:          make(map[scopeKey]map[*Client]bool),
+		clients:        make(map[*Client]bool),
+		broadcast:      make(chan []byte),
+		register:       make(chan *Client),
+		unregister:     make(chan *Client),
+		memberSessions: make(map[string]int),
 	}
+}
+
+// SetMemberPresenceCallbacks registers hooks for human-member online/offline
+// transitions driven by WebSocket connect/disconnect (LRM-462).
+func (h *Hub) SetMemberPresenceCallbacks(onOnline, onOffline MemberPresenceCallback) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.onMemberOnline = onOnline
+	h.onMemberOffline = onOffline
+}
+
+// SetMemberPresenceTouchCallback registers a refresh hook invoked on WS pong
+// so Redis TTLs stay alive while the tab is open.
+func (h *Hub) SetMemberPresenceTouchCallback(onTouch MemberPresenceCallback) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.onMemberPresence = onTouch
+}
+
+func memberSessionKey(workspaceID, userID string) string {
+	return workspaceID + "\x00" + userID
 }
 
 // SetAuthorizer wires a ScopeAuthorizer into the hub. Safe to call before Run.
@@ -315,6 +347,15 @@ func (h *Hub) Run() {
 			h.mu.Lock()
 			h.clients[client] = true
 			total := len(h.clients)
+			var becameOnline bool
+			var onOnline MemberPresenceCallback
+			if client.userID != "" && client.workspaceID != "" {
+				sk := memberSessionKey(client.workspaceID, client.userID)
+				prev := h.memberSessions[sk]
+				h.memberSessions[sk] = prev + 1
+				becameOnline = prev == 0
+				onOnline = h.onMemberOnline
+			}
 			h.mu.Unlock()
 			M.ConnectsTotal.Add(1)
 			M.ActiveConnections.Add(1)
@@ -322,6 +363,9 @@ func (h *Hub) Run() {
 			h.subscribe(client, ScopeWorkspace, client.workspaceID)
 			if client.userID != "" {
 				h.subscribe(client, ScopeUser, client.userID)
+			}
+			if becameOnline && onOnline != nil {
+				onOnline(client.workspaceID, client.userID)
 			}
 			slog.Info("ws client connected", "workspace_id", client.workspaceID, "user_id", client.userID, "total_clients", total)
 
@@ -357,6 +401,19 @@ func (h *Hub) removeClient(client *Client) {
 	close(client.send)
 	cb := h.onLastSubscriber
 	total := len(h.clients)
+	var becameOffline bool
+	var onOffline MemberPresenceCallback
+	if client.userID != "" && client.workspaceID != "" {
+		sk := memberSessionKey(client.workspaceID, client.userID)
+		prev := h.memberSessions[sk]
+		if prev <= 1 {
+			delete(h.memberSessions, sk)
+			becameOffline = prev > 0
+		} else {
+			h.memberSessions[sk] = prev - 1
+		}
+		onOffline = h.onMemberOffline
+	}
 	h.mu.Unlock()
 
 	M.DisconnectsTotal.Add(1)
@@ -368,6 +425,9 @@ func (h *Hub) removeClient(client *Client) {
 	}
 	for _, key := range emptied {
 		M.DecRoom(key.Type)
+	}
+	if becameOffline && onOffline != nil {
+		onOffline(client.workspaceID, client.userID)
 	}
 	slog.Info("ws client disconnected", "workspace_id", client.workspaceID, "user_id", client.userID, "total_clients", total)
 }
@@ -868,6 +928,12 @@ func (c *Client) readPump() {
 	c.conn.SetReadDeadline(time.Now().Add(pongWait))
 	c.conn.SetPongHandler(func(string) error {
 		c.conn.SetReadDeadline(time.Now().Add(pongWait))
+		c.hub.mu.RLock()
+		touch := c.hub.onMemberPresence
+		c.hub.mu.RUnlock()
+		if touch != nil && c.userID != "" && c.workspaceID != "" {
+			touch(c.workspaceID, c.userID)
+		}
 		return nil
 	})
 

@@ -45,6 +45,7 @@ export type WSEventType =
   | "member:added"
   | "member:updated"
   | "member:removed"
+  | "member:presence"
   | "daemon:heartbeat"
   | "daemon:register"
   | "daemon:runtime_updated"
@@ -507,6 +508,14 @@ export interface DaemonRuntimeUpdatedPayload {
   runtime: AgentRuntime;
 }
 
+/** LRM-462: human member online/offline from WS sessions. */
+export interface MemberPresencePayload {
+  user_id: string;
+  status: "online" | "offline";
+  observed_at?: string;
+  workspace_id?: string;
+}
+
 /**
  * Maps every WSEventType to its payload interface. Events whose payload
  * shape isn't formally typed (server emits an object the client doesn't
@@ -560,6 +569,7 @@ export interface WSEventPayloadMap {
   "member:added": MemberAddedPayload;
   "member:updated": MemberUpdatedPayload;
   "member:removed": MemberRemovedPayload;
+  "member:presence": MemberPresencePayload;
   "subscriber:added": SubscriberAddedPayload;
   "subscriber:removed": SubscriberRemovedPayload;
   "activity:created": ActivityCreatedPayload;

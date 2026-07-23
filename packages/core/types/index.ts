@@ -142,6 +142,8 @@ export type {
   MemberRole,
   User,
   MemberWithUser,
+  MemberPresenceEntry,
+  MemberPresenceResponse,
   MemberProfile,
   MemberProfileActivityItem,
   Invitation,

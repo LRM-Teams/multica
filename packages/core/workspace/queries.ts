@@ -6,6 +6,7 @@ export const workspaceKeys = {
   all: (wsId: string) => ["workspaces", wsId] as const,
   list: () => ["workspaces", "list"] as const,
   members: (wsId: string) => ["workspaces", wsId, "members"] as const,
+  memberPresence: (wsId: string) => ["workspaces", wsId, "member-presence"] as const,
   memberProfile: (wsId: string, memberType: "user" | "agent", memberId: string) =>
     ["workspaces", wsId, "member-profiles", memberType, memberId] as const,
   invitations: (wsId: string) => ["workspaces", wsId, "invitations"] as const,
@@ -40,6 +41,14 @@ export function memberListOptions(wsId: string) {
   return queryOptions({
     queryKey: workspaceKeys.members(wsId),
     queryFn: () => api.listMembers(wsId),
+  });
+}
+
+export function memberPresenceOptions(wsId: string) {
+  return queryOptions({
+    queryKey: workspaceKeys.memberPresence(wsId),
+    queryFn: () => api.listMemberPresence(wsId),
+    staleTime: 15_000,
   });
 }
 

@@ -69,6 +69,7 @@ import type {
   Workspace,
   WorkspaceRepo,
   MemberWithUser,
+  MemberPresenceResponse,
   MemberProfile,
   User,
   Skill,
@@ -1938,6 +1939,11 @@ export class ApiClient {
   // Members
   async listMembers(workspaceId: string): Promise<MemberWithUser[]> {
     return this.fetch(`/api/workspaces/${workspaceId}/members`);
+  }
+
+  /** LRM-462: currently-online human members (offline omitted). */
+  async listMemberPresence(workspaceId: string): Promise<MemberPresenceResponse> {
+    return this.fetch(`/api/workspaces/${workspaceId}/member-presence`);
   }
 
   async getMemberProfile(memberType: "user" | "agent", memberId: string): Promise<MemberProfile> {

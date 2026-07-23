@@ -64,6 +64,8 @@ export interface ThreadPanelProps {
   readOnlyContent?: ReactNode;
   /** Activity strip rendered between the reply list and the composer. */
   activitySlot?: ReactNode;
+  /** Deep-link target reply id (e.g. from a Reminder anchor) - scrolls to and ring-highlights that bubble in the reply list. */
+  highlightMessageId?: string | null;
 }
 
 /**
@@ -105,6 +107,7 @@ export function ThreadPanel({
   readOnly = false,
   readOnlyContent,
   activitySlot,
+  highlightMessageId,
 }: ThreadPanelProps) {
   const { t } = useT("channels");
 
@@ -190,6 +193,7 @@ export function ThreadPanel({
         ownName={currentUserName}
         emptyLabel={t(($) => $.thread.empty_replies)}
         initialScroll="top"
+        highlightMessageId={highlightMessageId}
         header={
           <ThreadRootPreview
             message={root}

@@ -367,6 +367,10 @@
         "bound": "{actor} linked this channel to project «{project}»",
         "changed": "{actor} moved this channel from project «{previous}» to project «{project}»",
         "unbound": "{actor} unlinked this channel from project «{previous}»"
+      },
+      "reminder": {
+        "fired": "Reminder fired: {title}",
+        "anchor_unavailable_suffix": " · Anchor unavailable"
       }
     }
   },

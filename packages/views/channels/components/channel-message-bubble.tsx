@@ -51,11 +51,13 @@ import {
   parseMemberSystemEvent,
   parseIssueSystemEvent,
   parseProjectSystemEvent,
+  parseReminderSystemEvent,
 } from "./channel-system-event";
 import {
   MemberSystemEventContent,
   IssueSystemEventContent,
   ProjectSystemEventContent,
+  ReminderSystemEventContent,
 } from "./channel-system-event-content";
 import { messageMentionsViewer } from "../../common/content-mentions-viewer";
 import {
@@ -128,6 +130,10 @@ function ChannelSystemMessageRow({
   // Channel↔project association events (#610): bind/change/unbind, projected into
   // a localized row whose sole clickable object is the project name.
   const projectEvent = parseProjectSystemEvent(message);
+  // #656/#655 Reminder-fired receipts: localized ×4 "Reminder fired: <title>"
+  // (+ "Anchor unavailable" when the anchored message/thread no longer
+  // exists), read-only — never the backend's hard-coded English fallback.
+  const reminderEvent = parseReminderSystemEvent(message);
   // Older backflow rows without the `system_event` part still carry an anchored
   // `reference`, so project those into tokens rather than the raw string (#469).
   const hasReferenceParts = message.parts?.some((part) => part.type === "reference") ?? false;
@@ -159,6 +165,8 @@ function ChannelSystemMessageRow({
           <MemberSystemEventContent event={memberEvent} />
         ) : projectEvent ? (
           <ProjectSystemEventContent event={projectEvent} />
+        ) : reminderEvent ? (
+          <ReminderSystemEventContent event={reminderEvent} />
         ) : hasReferenceParts ? (
           // Spans are anchored to the RAW `message.content`; feeding the trimmed
           // `systemText` would shift every offset and misplace the tokens.

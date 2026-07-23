@@ -43,6 +43,10 @@ vi.mock("../../agents/components/tabs/activity-tab", () => ({
   ActivityTab: () => <div>Activity content</div>,
 }));
 
+vi.mock("../../agents/components/tabs/reminders-tab", () => ({
+  RemindersTab: () => <div>Reminders content</div>,
+}));
+
 vi.mock("./agent-files-panel", () => ({
   AgentFilesPanel: (props: {
     canReadFiles?: boolean;
@@ -123,6 +127,7 @@ const RESOURCES = {
   tabs: {
     profile: "Profile",
     activity: "Activity",
+    reminders: "Reminders",
     files: "Files",
     config: "Config",
   },
@@ -297,6 +302,64 @@ describe("AgentSidePanel", () => {
 
     expect(screen.queryByRole("button", { name: "Activity" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Files" })).not.toBeInTheDocument();
+  });
+
+  // #656 — Reminders reuses the exact same visibility gate as Activity per
+  // the V2 spec, and must always render as a direct tab (this panel has no
+  // "More" overflow menu to hide it behind).
+  it("shows Reminders as a direct tab to a workspace-member viewer, same gate as Activity", () => {
+    const workspaceMember: MemberWithUser = {
+      ...ownerMember,
+      id: "m-viewer",
+      user_id: "user-other",
+      name: "Viewer",
+      display_name: "Viewer",
+      email: "viewer@example.com",
+    };
+
+    render(
+      <AgentSidePanel
+        agent={makeAgent()}
+        currentUserId="user-other"
+        members={[...members, workspaceMember]}
+        onClose={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Reminders" }));
+    expect(screen.getByText("Reminders content")).toBeInTheDocument();
+  });
+
+  it("does not advertise Reminders to a non-owner of a private agent", () => {
+    const workspaceMember: MemberWithUser = {
+      ...ownerMember,
+      id: "m-viewer",
+      user_id: "user-other",
+      name: "Viewer",
+      display_name: "Viewer",
+      email: "viewer@example.com",
+    };
+
+    render(
+      <AgentSidePanel
+        agent={makeAgent("user-owner", undefined, "private")}
+        currentUserId="user-other"
+        members={[...members, workspaceMember]}
+        onClose={() => {}}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Reminders" })).not.toBeInTheDocument();
+  });
+
+  it("shows Profile, Activity, Reminders, and Files as four equally-reachable direct tabs for the owner — none hidden behind a 'More' menu", () => {
+    renderPanel("user-owner");
+
+    expect(screen.getByRole("button", { name: "Profile" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Activity" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reminders" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Files" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "More" })).not.toBeInTheDocument();
   });
 
   it("shows a standalone reported-usage card instead of a fake session-token baseline", () => {

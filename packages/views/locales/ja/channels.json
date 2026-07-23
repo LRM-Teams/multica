@@ -367,6 +367,10 @@
         "bound": "{actor} がこのチャンネルをプロジェクト「{project}」に関連付けました",
         "changed": "{actor} がこのチャンネルの関連プロジェクトを「{previous}」から「{project}」に変更しました",
         "unbound": "{actor} がこのチャンネルとプロジェクト「{previous}」の関連付けを解除しました"
+      },
+      "reminder": {
+        "fired": "リマインダーが発火しました：{title}",
+        "anchor_unavailable_suffix": " · アンカー利用不可"
       }
     }
   },

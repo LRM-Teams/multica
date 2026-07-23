@@ -194,6 +194,7 @@
   "tabs": {
     "activity": "アクティビティ",
     "profile": "プロフィール",
+    "reminders": "リマインダー",
     "files": "ファイル",
     "tasks": "タスク",
     "instructions": "指示",
@@ -554,6 +555,23 @@
     "info_created": "作成日",
     "info_creator": "作成者",
     "info_status": "ステータス"
+  },
+  "reminders": {
+    "upcoming_heading": "予定",
+    "history_heading": "履歴",
+    "empty_all": "リマインダーはまだありません。",
+    "empty_upcoming": "予定されているリマインダーはありません。",
+    "empty_history": "まだ発火したリマインダーはありません。",
+    "loading": "リマインダーを読み込み中…",
+    "error_title": "リマインダーを読み込めませんでした。",
+    "retry": "再試行",
+    "load_more": "もっと読み込む",
+    "inaccessible": "このAgentのリマインダーを表示する権限がありません。",
+    "anchor_unavailable": "アンカーは利用できません",
+    "one_shot": "一回限り",
+    "next_fire_label": "次回",
+    "fired_label": "発火",
+    "timezone_label": "タイムゾーン"
   },
   "task_failure": {
     "agent_error": "エージェント実行エラー",

@@ -1,7 +1,7 @@
 "use client";
 
 import { type ReactNode, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Activity, FileText, User } from "lucide-react";
+import { Activity, Bell, FileText, User } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useConfigStore } from "@multica/core/config";
 import type { Agent, DashboardUsageByAgent, MemberWithUser } from "@multica/core/types";
@@ -14,6 +14,7 @@ import { useCustomPricingStore } from "@multica/core/runtimes/custom-pricing-sto
 import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
 import { cn } from "@multica/ui/lib/utils";
 import { ActivityTab } from "../../agents/components/tabs/activity-tab";
+import { RemindersTab } from "../../agents/components/tabs/reminders-tab";
 import { AgentXpBurst } from "../../agents/components/agent-xp-burst";
 import { ModelPicker } from "../../agents/components/inspector/model-picker";
 import { RuntimePicker } from "../../agents/components/inspector/runtime-picker";
@@ -31,11 +32,12 @@ import { AgentFilesPanel } from "./agent-files-panel";
 import { useT } from "../../i18n/use-t";
 import { estimateCost, formatTokens, isModelPriced } from "../../runtimes/utils";
 
-type OwnerTab = "activity" | "profile" | "files";
+type OwnerTab = "activity" | "profile" | "reminders" | "files";
 
 const TAB_ICONS: Record<OwnerTab, typeof Activity> = {
   profile: User,
   activity: Activity,
+  reminders: Bell,
   files: FileText,
 };
 
@@ -93,6 +95,12 @@ export function AgentSidePanel({
     (isWorkspaceMember && isGroupManager);
   const availableTabs: OwnerTab[] = ["profile"];
   if (canViewActivity) availableTabs.push("activity");
+  // #656 — same read-only visibility boundary as Activity per the V2 spec:
+  // workspace members may view Reminders for workspace-visible Agents;
+  // private Agents stay owner/authorized-inspector only. Always rendered as
+  // a direct tab alongside the others (this panel has no "More" overflow
+  // menu to hide it in) — Frank's explicit requirement.
+  if (canViewActivity) availableTabs.push("reminders");
   if (canInspectAgent) availableTabs.push("files");
   const showTabBar = availableTabs.length > 1;
   const [tab, setTab] = useState<OwnerTab>("profile");
@@ -207,6 +215,11 @@ export function AgentSidePanel({
                   members={members}
                   currentUserId={currentUserId}
                 />
+              </div>
+            ) : null}
+            {renderTab("reminders") && canViewActivity ? (
+              <div className={tab === "reminders" ? undefined : "hidden"}>
+                <RemindersTab agent={agent} />
               </div>
             ) : null}
             {renderTab("files") && canInspectAgent ? (

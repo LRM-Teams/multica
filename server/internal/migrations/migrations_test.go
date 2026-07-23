@@ -201,6 +201,104 @@ func TestMigration203PersistsAgentAvatarTruthAtWriteBoundary(t *testing.T) {
 	}
 }
 
+func TestMigration215CreatesCanonicalAgentRuntimeStateWithoutQueueDependency(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	migrationsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
+
+	up, err := os.ReadFile(filepath.Join(migrationsDir, "215_agent_runtime_state.up.sql"))
+	if err != nil {
+		t.Fatalf("read migration 215 up: %v", err)
+	}
+	contents := string(up)
+	for _, required := range []string{
+		"CREATE TABLE agent_runtime_state",
+		"PRIMARY KEY (agent_id, runtime_id)",
+		"provider_session_id TEXT",
+		"work_dir TEXT",
+		"provider_config_fingerprint TEXT",
+		"generation BIGINT NOT NULL DEFAULT 1",
+		"last_turn_id UUID",
+		"fresh_session_notice_reason TEXT",
+		"fresh_session_notice_reason IN ('cutover', 'reset')",
+		"legacy_resume_archived_at TIMESTAMPTZ",
+		"agent_runtime_state_notice_session_check",
+		"agent_runtime_state_archived_empty_notice_check",
+		"CHECK (generation >= 1)",
+		"INSERT INTO agent_runtime_state",
+		"a.runtime_id",
+		"'cutover'",
+		"'cutover',\n    NULL",
+		"ON CONFLICT (agent_id, runtime_id) DO NOTHING",
+	} {
+		if !strings.Contains(contents, required) {
+			t.Errorf("migration 215 up missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"REFERENCES agent_task_queue",
+		"UPDATE agent_task_queue",
+		"UPDATE chat_session",
+		"DELETE FROM agent_task_queue",
+		"DELETE FROM chat_session",
+	} {
+		if strings.Contains(contents, forbidden) {
+			t.Errorf("migration 215 up must leave legacy resume evidence untouched; found %q", forbidden)
+		}
+	}
+
+	down, err := os.ReadFile(filepath.Join(migrationsDir, "215_agent_runtime_state.down.sql"))
+	if err != nil {
+		t.Fatalf("read migration 215 down: %v", err)
+	}
+	if !strings.Contains(string(down), "DROP TABLE IF EXISTS agent_runtime_state") {
+		t.Error("migration 215 down does not drop agent_runtime_state")
+	}
+}
+
+func TestCanonicalAgentRuntimeStateQueriesStayQueueIndependent(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	queryPath := filepath.Join(
+		filepath.Dir(thisFile),
+		"..", "..", "pkg", "db", "queries", "agent_runtime_state.sql",
+	)
+	body, err := os.ReadFile(queryPath)
+	if err != nil {
+		t.Fatalf("read canonical runtime-state queries: %v", err)
+	}
+	contents := string(body)
+	for _, required := range []string{
+		"-- name: EnsureAgentRuntimeState :one",
+		"-- name: GetCurrentAgentRuntimeState :one",
+		"-- name: AdvanceAgentRuntimeStateCAS :one",
+		"-- name: ClearAgentRuntimeSessionCAS :one",
+		"state.generation = sqlc.arg('expected_generation')",
+		"state.generation + 1",
+		"current.runtime_id = state.runtime_id",
+		"sqlc.arg('notice_reason')::text = 'reset'",
+	} {
+		if !strings.Contains(contents, required) {
+			t.Errorf("canonical runtime-state query contract missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"agent_task_queue",
+		"chat_session",
+		"task_id",
+		"issue_id",
+		"channel_id",
+	} {
+		if strings.Contains(contents, forbidden) {
+			t.Errorf("canonical runtime state must not inherit wake/surface semantics; found %q", forbidden)
+		}
+	}
+}
+
 func TestResolveDirSkipsNonMigrationDirectory(t *testing.T) {
 	root := t.TempDir()
 	internalMigrations := filepath.Join(root, "server", "internal", "migrations")

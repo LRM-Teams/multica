@@ -876,13 +876,56 @@ func (h *Handler) DeleteChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tag, err := h.DB.Exec(r.Context(), `
+	ctx := r.Context()
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete channel")
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	wsUUID := parseUUID(workspaceID)
+
+	// agent.home_channel_id is ON DELETE RESTRICT and pairs with visibility=channel
+	// via CHECK — clear the binding (promote to workspace) before channel DELETE.
+	if _, err := tx.Exec(ctx, `
+		UPDATE agent
+		SET visibility = 'workspace',
+		    home_channel_id = NULL,
+		    updated_at = now()
+		WHERE workspace_id = $1
+		  AND home_channel_id = $2`,
+		wsUUID, channelID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to clear agent home channel bindings")
+		return
+	}
+
+	// voice_call_session.channel_id has no ON DELETE clause (default RESTRICT).
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM voice_call_session
+		WHERE channel_id = $1 AND workspace_id = $2`,
+		channelID, wsUUID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to clear voice call sessions for channel")
+		return
+	}
+
+	tag, err := tx.Exec(ctx, `
 		DELETE FROM channel
 		WHERE id = $1 AND workspace_id = $2 AND kind = 'group'`,
-		channelID, parseUUID(workspaceID))
+		channelID, wsUUID)
 	if err != nil {
 		if isSystemGeneralGuardError(err) {
 			writeSystemChannelProtected(w)
+			return
+		}
+		if fkViolation23503(err) {
+			var pgErr *pgconn.PgError
+			_ = errors.As(err, &pgErr)
+			msg := "cannot delete channel: it is still referenced by other records"
+			if pgErr != nil && pgErr.ConstraintName != "" {
+				msg = fmt.Sprintf("cannot delete channel: blocked by %s", pgErr.ConstraintName)
+			}
+			writeCodedError(w, http.StatusConflict, "channel_delete_blocked", msg)
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "failed to delete channel")
@@ -890,6 +933,10 @@ func (h *Handler) DeleteChannel(w http.ResponseWriter, r *http.Request) {
 	}
 	if tag.RowsAffected() == 0 {
 		writeError(w, http.StatusNotFound, "channel not found")
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete channel")
 		return
 	}
 

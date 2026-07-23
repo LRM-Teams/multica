@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -17,6 +17,10 @@ import { useT } from "../../i18n";
 /**
  * LRM-239 — Slack-aligned permanent delete confirm: the destructive action
  * stays disabled until the caller checks "Yes, permanently delete…".
+ * LRM-449 — sync ref lock so a double-click cannot fire two DELETE requests /
+ * stacked failure toasts while the dialog stays open (AlertDialogAction is
+ * not a Close). Reset the lock when `pending` flips false (parent re-render),
+ * not via a prop→state effect (React Doctor).
  */
 export function DeleteChannelDialog({
   open,
@@ -33,12 +37,25 @@ export function DeleteChannelDialog({
 }) {
   const { t } = useT("channels");
   const [confirmed, setConfirmed] = useState(false);
+  const lockedRef = useRef(false);
+  const prevPendingRef = useRef(!!pending);
+
+  // Clear the click lock when the mutation settles (pending true → false).
+  if (prevPendingRef.current && !pending) {
+    lockedRef.current = false;
+  }
+  prevPendingRef.current = !!pending;
+
+  const busy = !!pending || lockedRef.current;
 
   return (
     <AlertDialog
       open={open}
       onOpenChange={(next) => {
-        if (!next) setConfirmed(false);
+        if (!next) {
+          setConfirmed(false);
+          lockedRef.current = false;
+        }
         onOpenChange(next);
       }}
     >
@@ -54,16 +71,20 @@ export function DeleteChannelDialog({
             className="mt-0.5"
             checked={confirmed}
             onCheckedChange={(next) => setConfirmed(next === true)}
-            disabled={pending}
+            disabled={busy}
           />
           <span className="leading-5">{t(($) => $.delete_dialog.confirm_checkbox)}</span>
         </label>
         <AlertDialogFooter>
-          <AlertDialogCancel>{t(($) => $.delete_dialog.cancel)}</AlertDialogCancel>
+          <AlertDialogCancel disabled={busy}>{t(($) => $.delete_dialog.cancel)}</AlertDialogCancel>
           <AlertDialogAction
             variant="destructive"
-            onClick={onConfirm}
-            disabled={!confirmed || !!pending}
+            onClick={() => {
+              if (!confirmed || lockedRef.current || pending) return;
+              lockedRef.current = true;
+              onConfirm();
+            }}
+            disabled={!confirmed || busy}
           >
             {t(($) => $.delete_dialog.confirm)}
           </AlertDialogAction>

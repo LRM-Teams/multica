@@ -72,6 +72,9 @@ func TestRunAllInvokesSelfReviewThenTeamCurationWithDBEvidence(t *testing.T) {
 	if err := ensureMemoryRoot(agentRoot); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(agentRoot, "memory", "REVIEW.md"), []byte("# Memory Review\n\n- pending team fact\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	agent := &recordingStageAgent{}
 	res, err := NewEngine().Run(Options{
 		WorkspacesRoot: root,
@@ -92,8 +95,17 @@ func TestRunAllInvokesSelfReviewThenTeamCurationWithDBEvidence(t *testing.T) {
 	if strings.Join(stageNames(agent.calls), ",") != strings.Join(stageNames(want), ",") {
 		t.Fatalf("stage calls = %v, want %v", agent.calls, want)
 	}
-	if len(agent.evidenceCounts) == 0 || agent.evidenceCounts[0] != 1 {
-		t.Fatalf("agent did not receive DB evidence: %#v", agent.evidenceCounts)
+	if len(agent.evidenceCounts) < 2 {
+		t.Fatalf("expected self-review + team curation evidence counts: %#v", agent.evidenceCounts)
+	}
+	if agent.evidenceCounts[0] != 1 {
+		t.Fatalf("self-review did not receive DB evidence: %#v", agent.evidenceCounts)
+	}
+	if agent.evidenceCounts[1] != 0 {
+		t.Fatalf("team curation must not receive raw chat DB evidence: %#v", agent.evidenceCounts)
+	}
+	if len(agent.localFileCounts) < 2 || agent.localFileCounts[1] == 0 {
+		t.Fatalf("team curation should receive self-review local files: %#v", agent.localFileCounts)
 	}
 	if res.DailyFilesWritten != 1 || res.ReviewCandidatesAdded != 1 || res.SharedCandidatesAdded != 1 {
 		t.Fatalf("agentic run stats = %#v", res)
@@ -108,6 +120,63 @@ func TestRunAllInvokesSelfReviewThenTeamCurationWithDBEvidence(t *testing.T) {
 	}
 }
 
+func TestTeamCurationUsesPendingCandidatesNotRawChat(t *testing.T) {
+	root := t.TempDir()
+	agentRoot := filepath.Join(root, "ws-1", ".multica", "agents", "agent-1")
+	if err := ensureMemoryRoot(agentRoot); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentRoot, "memory", "MEMORY.md"), []byte("# Agent Memory\n\nStable team-useful fact.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(agentRoot, "skills", "drafts", "shareable-runbook"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentRoot, "skills", "drafts", "shareable-runbook", "SKILL.md"), []byte("# Shareable Runbook\n\nSteps...\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	agent := &recordingStageAgent{}
+	_, err := NewEngine().Run(Options{
+		WorkspacesRoot: root,
+		WorkspaceID:    "ws-1",
+		AgentIDs:       []string{"agent-1"},
+		Stage:          StageTeamCuration,
+		Since:          mustDate("2026-07-08"),
+		Until:          mustDate("2026-07-08"),
+		Now:            mustDateTime("2026-07-09T05:00:00Z"),
+		Mode:           "auto",
+		DBEvidence: map[string][]EvidenceItem{
+			"agent-1": {
+				{Kind: "curation_candidate", ID: "cand-1", Title: "Pending", Snippet: "promote me"},
+				{Kind: "channel_message", ID: "msg-should-not-matter", Title: "Raw chat", Snippet: "should still be passed if server sent it, but product path should not collect these"},
+			},
+		},
+		StageAgent: agent,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(agent.calls) != 1 || agent.calls[0] != StageTeamCuration {
+		t.Fatalf("calls = %v", agent.calls)
+	}
+	if agent.localFileCounts[0] < 2 {
+		t.Fatalf("expected MEMORY + skill draft in local files, got %#v", agent.localFileCounts)
+	}
+	if agent.evidenceCounts[0] != 1 {
+		t.Fatalf("team curation should keep only curation_candidate rows, got %#v", agent.evidenceCounts)
+	}
+	foundSkill := false
+	for name := range agent.lastLocalFiles {
+		if strings.Contains(name, "skills/drafts/shareable-runbook/SKILL.md") {
+			foundSkill = true
+			break
+		}
+	}
+	if !foundSkill {
+		t.Fatalf("skill draft missing from team local files: %#v", agent.lastLocalFiles)
+	}
+}
+
 func hasRunEvent(events []RunEvent, key, agentID, status string) bool {
 	for _, ev := range events {
 		if ev.Key == key && ev.AgentID == agentID && ev.Status == status {
@@ -118,13 +187,17 @@ func hasRunEvent(events []RunEvent, key, agentID, status string) bool {
 }
 
 type recordingStageAgent struct {
-	calls          []Stage
-	evidenceCounts []int
+	calls           []Stage
+	evidenceCounts  []int
+	localFileCounts []int
+	lastLocalFiles  map[string]string
 }
 
 func (r *recordingStageAgent) RunStage(_ context.Context, input StageAgentInput) (StageAgentOutput, error) {
 	r.calls = append(r.calls, input.Stage)
 	r.evidenceCounts = append(r.evidenceCounts, len(input.DBEvidence))
+	r.localFileCounts = append(r.localFileCounts, len(input.LocalFiles))
+	r.lastLocalFiles = input.LocalFiles
 	switch input.Stage {
 	case StageAgentSelfReview:
 		return StageAgentOutput{Provider: "test", Model: "stage", Content: `{"summary":"wrote daily","candidates":[{"type":"memory","scope":"agent","title":"Direct updates","content":"User likes direct updates.","confidence":0.95,"evidence_refs":["channel_message:msg-1"]}]}`}, nil

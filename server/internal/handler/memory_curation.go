@@ -689,9 +689,21 @@ func buildMemoryCurationTimeline(resp memoryCurationRunResponse, raw []byte, cre
 		memoryCurationRunTimelineItem{Key: "resolved_targets", Label: "Resolved target agents", Status: "done", Timestamp: started, Detail: strings.Join(resp.TargetAgentIDs, ", ")},
 	)
 	if resp.StatsSummary.EvidenceCollected > 0 {
-		items = append(items, memoryCurationRunTimelineItem{Key: "collected_evidence", Label: "Collected DB evidence", Status: "done", Timestamp: started, Detail: plural(resp.StatsSummary.EvidenceCollected, "evidence item")})
+		evidenceLabel := "Collected DB evidence"
+		evidenceDetail := plural(resp.StatsSummary.EvidenceCollected, "evidence item")
+		if resp.Stage == string(memorycuration.StageTeamCuration) {
+			evidenceLabel = "Loaded self-review artifacts"
+			evidenceDetail = plural(resp.StatsSummary.EvidenceCollected, "artifact")
+		}
+		items = append(items, memoryCurationRunTimelineItem{Key: "collected_evidence", Label: evidenceLabel, Status: "done", Timestamp: started, Detail: evidenceDetail})
 	} else {
-		items = append(items, memoryCurationRunTimelineItem{Key: "collected_evidence", Label: "Collected DB evidence", Status: "skipped", Timestamp: started, Detail: "0 evidence items"})
+		evidenceLabel := "Collected DB evidence"
+		evidenceDetail := "0 evidence items"
+		if resp.Stage == string(memorycuration.StageTeamCuration) {
+			evidenceLabel = "Loaded self-review artifacts"
+			evidenceDetail = "0 artifacts"
+		}
+		items = append(items, memoryCurationRunTimelineItem{Key: "collected_evidence", Label: evidenceLabel, Status: "skipped", Timestamp: started, Detail: evidenceDetail})
 	}
 	if resp.StatsSummary.AgentsScanned > 0 {
 		items = append(items, memoryCurationRunTimelineItem{Key: "read_local_files", Label: "Read local memory files", Status: "done", Timestamp: started, Detail: plural(resp.StatsSummary.AgentsScanned, "agent")})

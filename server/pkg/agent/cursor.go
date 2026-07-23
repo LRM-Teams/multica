@@ -36,7 +36,7 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 
 	args := buildCursorArgs(prompt, opts, b.cfg.Logger)
 	var promptFile string
-	if cursorArgsSize(args) > maxCursorArgvBytes {
+	if shouldSpillCursorPrompt(prompt, args) {
 		file, err := os.CreateTemp("", "multica-cursor-prompt-*.txt")
 		if err != nil {
 			cancel()
@@ -55,6 +55,8 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 			return nil, fmt.Errorf("cursor prompt temp file close: %w", err)
 		}
 		args = buildCursorArgs("Read the full task JSON from this local file, then execute it exactly: "+promptFile, opts, b.cfg.Logger)
+		b.cfg.Logger.Info("cursor prompt spilled to temp file to avoid argv overflow",
+			"prompt_bytes", len(prompt), "argv_bytes", cursorArgsSize(args), "path", promptFile)
 	}
 	argv0, cmdArgs := chooseCursorInvocation(execName, lookedUp, args, b.cfg.Logger)
 
@@ -617,7 +619,20 @@ var cursorBlockedArgs = map[string]blockedArgMode{
 	"--yolo":          blockedStandalone, // auto-approval for autonomous operation
 }
 
-const maxCursorArgvBytes = 128 * 1024
+// maxCursorArgvBytes is intentionally below common Linux ARG_MAX headroom once
+// environment variables and the cursor-agent wrapper are included. Memory
+// curation payloads with hundreds of evidence rows used to blow past this and
+// fail with "argument list too long" before the process started.
+const maxCursorArgvBytes = 64 * 1024
+
+// maxCursorPromptBytes forces large task JSON onto a temp file even when the
+// assembled argv looks "small enough". Curation prompts are mostly one -p
+// argument, so measuring the prompt itself is the reliable signal.
+const maxCursorPromptBytes = 48 * 1024
+
+func shouldSpillCursorPrompt(prompt string, args []string) bool {
+	return len(prompt) > maxCursorPromptBytes || cursorArgsSize(args) > maxCursorArgvBytes
+}
 
 func cursorArgsSize(args []string) int {
 	size := 0

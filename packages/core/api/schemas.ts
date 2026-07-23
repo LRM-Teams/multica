@@ -40,6 +40,10 @@ import type {
   WebhookDelivery,
   SandboxNodeTemplatesResponse,
   SandboxSnapshot,
+  VoiceCall,
+  VoiceCallMedia,
+  CreateVoiceCallResponse,
+  GetVoiceCallResponse,
 } from "../types";
 import type { CloudRuntimeNode } from "../runtimes/cloud-runtime";
 import type { RawReminderPage } from "../agents/reminder-view-model";
@@ -1949,6 +1953,70 @@ export const VoiceTranscriptResponseSchema = z.object({
 
 export const EMPTY_VOICE_TRANSCRIPT_RESPONSE = {
   text: "",
+};
+
+export const VoiceCallSchema = z.object({
+  id: z.string().min(1),
+  channel_id: z.string().min(1),
+  agent_id: z.string().min(1),
+  status: z.string().min(1),
+  started_at: z.string().min(1),
+  connected_at: z.string().nullable().optional().default(null),
+  ended_at: z.string().nullable().optional().default(null),
+  end_reason: z.string().optional().default(""),
+  error_code: z.string().optional().default(""),
+  input_audio_ms: z.number().int().nonnegative(),
+  output_audio_ms: z.number().int().nonnegative(),
+  updated_at: z.string().min(1),
+}).loose();
+
+export const VoiceCallMediaSchema = z.object({
+  app_id: z.string().min(1),
+  room_id: z.string().min(1),
+  user_id: z.string().min(1),
+  token: z.string().min(1),
+  expires_at: z.string().min(1),
+}).loose();
+
+export const CreateVoiceCallResponseSchema = z.object({
+  call: VoiceCallSchema,
+  media: VoiceCallMediaSchema,
+}).loose();
+
+export const GetVoiceCallResponseSchema = z.object({
+  call: VoiceCallSchema,
+}).loose();
+
+export const EMPTY_VOICE_CALL: VoiceCall = {
+  id: "",
+  channel_id: "",
+  agent_id: "",
+  status: "unknown",
+  started_at: "",
+  connected_at: null,
+  ended_at: null,
+  end_reason: "",
+  error_code: "",
+  input_audio_ms: 0,
+  output_audio_ms: 0,
+  updated_at: "",
+};
+
+export const EMPTY_VOICE_CALL_MEDIA: VoiceCallMedia = {
+  app_id: "",
+  room_id: "",
+  user_id: "",
+  token: "",
+  expires_at: "",
+};
+
+export const EMPTY_CREATE_VOICE_CALL_RESPONSE: CreateVoiceCallResponse = {
+  call: EMPTY_VOICE_CALL,
+  media: EMPTY_VOICE_CALL_MEDIA,
+};
+
+export const EMPTY_GET_VOICE_CALL_RESPONSE: GetVoiceCallResponse = {
+  call: EMPTY_VOICE_CALL,
 };
 
 export const EMPTY_SANDBOX_SNAPSHOT: SandboxSnapshot = {

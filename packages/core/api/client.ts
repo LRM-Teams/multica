@@ -186,6 +186,9 @@ import type {
   CreateSandboxRequest,
   UpdateSandboxRequest,
   ProjectChannel,
+  CreateVoiceCallRequest,
+  CreateVoiceCallResponse,
+  GetVoiceCallResponse,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import type { DMItem, CreateOrFindDMBody } from "../dm/types";
@@ -313,6 +316,10 @@ import {
   SandboxSnapshotListSchema,
   VoiceTranscriptResponseSchema,
   EMPTY_VOICE_TRANSCRIPT_RESPONSE,
+  CreateVoiceCallResponseSchema,
+  GetVoiceCallResponseSchema,
+  EMPTY_CREATE_VOICE_CALL_RESPONSE,
+  EMPTY_GET_VOICE_CALL_RESPONSE,
   RawReminderPageSchema,
   EMPTY_REMINDER_PAGE,
 } from "./schemas";
@@ -2691,6 +2698,65 @@ export class ApiClient {
         ? parsedDuration
         : null,
     };
+  }
+
+  async createVoiceCall(
+    workspaceId: string,
+    input: CreateVoiceCallRequest,
+  ): Promise<CreateVoiceCallResponse> {
+    const path = `/api/workspaces/${encodeURIComponent(workspaceId)}/voice-calls`;
+    const raw = await this.fetch<unknown>(path, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+    const parsed = parseWithFallback(
+      raw,
+      CreateVoiceCallResponseSchema,
+      EMPTY_CREATE_VOICE_CALL_RESPONSE,
+      {
+        endpoint: "POST /api/workspaces/{workspaceId}/voice-calls",
+        receivedForLog: "[redacted voice call response]",
+      },
+    );
+    if (parsed === EMPTY_CREATE_VOICE_CALL_RESPONSE) {
+      throw new ApiError(
+        "voice call service returned invalid media credentials",
+        502,
+        "Bad Gateway",
+      );
+    }
+    return parsed;
+  }
+
+  async getVoiceCall(
+    workspaceId: string,
+    callId: string,
+  ): Promise<GetVoiceCallResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/voice-calls/${encodeURIComponent(callId)}`,
+    );
+    return parseWithFallback(
+      raw,
+      GetVoiceCallResponseSchema,
+      EMPTY_GET_VOICE_CALL_RESPONSE,
+      { endpoint: "GET /api/workspaces/{workspaceId}/voice-calls/{callId}" },
+    );
+  }
+
+  async stopVoiceCall(
+    workspaceId: string,
+    callId: string,
+  ): Promise<GetVoiceCallResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/voice-calls/${encodeURIComponent(callId)}/stop`,
+      { method: "POST" },
+    );
+    return parseWithFallback(
+      raw,
+      GetVoiceCallResponseSchema,
+      EMPTY_GET_VOICE_CALL_RESPONSE,
+      { endpoint: "POST /api/workspaces/{workspaceId}/voice-calls/{callId}/stop" },
+    );
   }
 
   async sendChannelMessage(

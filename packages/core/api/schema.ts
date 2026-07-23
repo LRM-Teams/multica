@@ -14,6 +14,9 @@ export interface ParseOptions {
   /** Endpoint identifier used in the warning log so we can grep for which
    *  contract drifted in production telemetry. */
   endpoint: string;
+  /** Optional redacted representation for responses containing credentials or
+   *  private content. Validation still receives the original value. */
+  receivedForLog?: unknown;
 }
 
 /**
@@ -48,7 +51,7 @@ export function parseWithFallback<T>(
     {
       endpoint: opts.endpoint,
       issues: result.error.issues,
-      received: data,
+      received: opts.receivedForLog ?? data,
     },
   );
   return fallback;

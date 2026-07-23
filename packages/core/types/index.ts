@@ -182,6 +182,13 @@ export type {
 } from "./chat";
 export type { StorageAdapter } from "./storage";
 export type {
+  VoiceCall,
+  VoiceCallMedia,
+  CreateVoiceCallRequest,
+  CreateVoiceCallResponse,
+  GetVoiceCallResponse,
+} from "./voice-call";
+export type {
   Project,
   ProjectStatus,
   ProjectPriority,

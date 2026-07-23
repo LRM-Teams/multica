@@ -228,6 +228,7 @@
     "reply_count": "{{count}} 条回复",
     "meta_count": "{{count}} 条回复",
     "close_aria": "关闭线程",
+    "open_in_main_aria": "在主列打开",
     "context_label": "原消息",
     "view_parent": "返回主会话",
     "show_full_message": "查看完整消息",

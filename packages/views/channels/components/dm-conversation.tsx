@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { ArrowLeft, ChevronDown, ChevronUp, FileText, MessageSquare, Paperclip, Search, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronUp, FileText, Maximize2, MessageSquare, Paperclip, Search, X } from "lucide-react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   activeChannelTasksKeys,
@@ -988,6 +988,20 @@ function DmChannelConversation({
                 }
                 onFollowChange={handleThreadFollowChange}
               />
+              {/* LRM-384 — desktop 28px ghost open-in-main; no dark float capsule / download. */}
+              {!isMobile && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-7 text-muted-foreground hover:bg-muted hover:text-foreground"
+                  aria-label={t(($) => $.thread.open_in_main_aria)}
+                  onClick={() => {
+                    dispatch({ type: "setThreadParentHighlightId", id: threadSurfaceRoot.id });
+                  }}
+                >
+                  <Maximize2 className="size-3.5" />
+                </Button>
+              )}
               {!isMobile && (
                 <Button
                   variant="ghost"

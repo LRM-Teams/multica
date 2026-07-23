@@ -228,6 +228,7 @@
     "reply_count": "{{count}} 件の返信",
     "meta_count": "{{count}} 件の返信",
     "close_aria": "スレッドを閉じる",
+    "open_in_main_aria": "メイン列で開く",
     "context_label": "元のメッセージ",
     "view_parent": "メイン会話へ戻る",
     "show_full_message": "全文を表示",

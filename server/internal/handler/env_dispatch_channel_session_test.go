@@ -158,7 +158,9 @@ func TestEnvDispatchAdapterEnqueueChannelRunPersistsPromptWithTask(t *testing.T)
 		WHERE task.id = $1 AND message.role = 'user'`, taskID).Scan(
 		&gotPrompt, &gotAgentID, &gotRuntimeID, &gotSessionID, &gotContext,
 	))
-	require.Equal(t, prompt, gotPrompt)
+	require.Contains(t, gotPrompt, prompt, "framed prompt must carry the raw channel message")
+	require.Contains(t, gotPrompt, "Multica group chat", "prompt must frame the run as a channel message")
+	require.NotContains(t, gotPrompt, "dm:@", "prompt must not steer the agent to a DM reply")
 	require.Equal(t, sessionIn.AgentID, gotAgentID)
 	require.Equal(t, sessionIn.RuntimeID, gotRuntimeID)
 	require.Equal(t, sessionID, gotSessionID)

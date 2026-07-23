@@ -923,6 +923,18 @@ WHERE id = $1 AND channel_id = $2 AND workspace_id = $3 AND deleted_at IS NULL`,
 		return "", stackerr.New("enqueue env-dispatch channel run: channel prompt is empty")
 	}
 
+	// Frame the raw channel message as a group-chat prompt so the derived agent
+	// replies INTO this env-dispatch channel (like a frontend channel message)
+	// instead of guessing a dm:@<user> target — which would land the reply in a
+	// DM the dispatcher never sees. See buildEnvDispatchChannelPrompt.
+	var channelName string
+	if err := tx.QueryRow(ctx, `
+SELECT name FROM channel WHERE id = $1 AND workspace_id = $2`,
+		parseUUID(in.ChannelID), parseUUID(workspaceID)).Scan(&channelName); err != nil {
+		return "", stackerr.Wrap(err, "load env-dispatch channel name")
+	}
+	framedPrompt := buildEnvDispatchChannelPrompt(channelName, prompt)
+
 	targetAgent, err := qtx.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
 		ID:          parseUUID(in.AgentID),
 		WorkspaceID: parseUUID(workspaceID),
@@ -949,15 +961,21 @@ WHERE id = $1 AND channel_id = $2 AND workspace_id = $3 AND deleted_at IS NULL`,
 	if err != nil {
 		return "", stackerr.Wrap(err, "create env-dispatch channel task")
 	}
+	// Insert the framed prompt as the agent's user-role message. This mirrors
+	// the frontend channel wake (createChannelAgentPromptMessageWithDB persists
+	// buildChannelMentionPrompt as content with no parts). parts is intentionally
+	// left NULL so the framed content — not the raw channel text — is what the
+	// agent reads; otherwise a copied text part would re-introduce the
+	// unframed prompt and the agent would again default to a DM reply.
 	tag, err := tx.Exec(ctx, `
 INSERT INTO chat_message (
-    chat_session_id, role, content, parts, task_id, thread_id, trigger_depth
+    chat_session_id, role, content, task_id, thread_id, trigger_depth
 )
-SELECT $1, 'user', content, parts, $2, COALESCE(thread_id, id::text), trigger_depth
+SELECT $1, 'user', $6, $2, COALESCE(thread_id, id::text), trigger_depth
 FROM channel_message
 WHERE id = $3 AND channel_id = $4 AND workspace_id = $5 AND deleted_at IS NULL`,
 		parseUUID(in.ChatSessionID), task.ID, parseUUID(in.SourceMessageID),
-		parseUUID(in.ChannelID), parseUUID(workspaceID))
+		parseUUID(in.ChannelID), parseUUID(workspaceID), framedPrompt)
 	if err != nil {
 		return "", stackerr.Wrap(err, "create env-dispatch channel prompt")
 	}
@@ -971,6 +989,32 @@ WHERE id = $3 AND channel_id = $4 AND workspace_id = $5 AND deleted_at IS NULL`,
 	taskID := util.UUIDToString(task.ID)
 	a.maybeOpenTrainingSession(ctx, taskID, in.AgentID, in.ProjectID, in.EnvID)
 	return taskID, nil
+}
+
+// buildEnvDispatchChannelPrompt frames a raw env-dispatch channel message as a
+// group-chat prompt so the derived agent replies INTO the env-dispatch channel
+// (analogous to a frontend channel message) instead of guessing a
+// `dm:@<human>` target and delivering its reply into a private DM the
+// dispatcher never sees.
+//
+// Constraint: the derived execution agent is intentionally NOT a channel_member
+// (ReplaceDispatchChannelMember keeps the source agent as the stable @ alias),
+// so an explicit `multica message send --target #<channel>` is rejected by
+// resolveChannelOutputTarget's membership check. The reliable, membership-
+// independent route is the plain final answer: handleResolvedChannelChatDone
+// resolves an empty output target to the origin channel and posts the agent's
+// reply without a membership check. The prompt therefore steers the agent to
+// answer directly in this channel and explicitly forbids DM / thread / target
+// switching.
+func buildEnvDispatchChannelPrompt(channelName, rawContent string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "You are participating in the Multica group chat #%s. Respond only as yourself.\n", channelName)
+	b.WriteString(channelOutputContractInstruction)
+	b.WriteString("\n")
+	b.WriteString("Reply to the message below directly in THIS channel as your normal final answer. Do NOT send a direct message (dm:@...) to anyone, do NOT open a new thread, and do NOT switch to a different channel or target — your final answer is delivered to this channel automatically.\n\n")
+	b.WriteString("Current message to respond to:\n")
+	fmt.Fprintf(&b, "Env Dispatch (user): %s", rawContent)
+	return b.String()
 }
 
 func (a *envDispatchDepsAdapter) SaveCollaborationTrigger(ctx context.Context, envID string, trigger service.EnvCollaborationTrigger) error {

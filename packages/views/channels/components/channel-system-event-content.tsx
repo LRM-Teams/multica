@@ -160,8 +160,10 @@ function interpolateIssueSlots(
 }
 
 /**
- * LRM-423 — title primary (clickable), identifier muted secondary.
- * Missing title → identifier alone (never invent a title; LRM-238).
+ * LRM-423 / LRM-508 — main-line ink is **title only** (clickable). Identifier
+ * stays out of the row (Frank: 编号分不清 / 主行不说 LRM-xxx); peek still
+ * shows it. Missing title → identifier alone as honest interim (never invent
+ * a title; LRM-238).
  */
 function IssueEventSubject({
   issueId,
@@ -176,21 +178,13 @@ function IssueEventSubject({
 }): ReactNode {
   const trimmedTitle = title?.trim();
   const primary = trimmedTitle || identifier;
-  const showMutedId = Boolean(trimmedTitle) && trimmedTitle !== identifier;
   return (
-    <span className="inline-flex max-w-full min-w-0 flex-wrap items-baseline gap-x-1">
-      <IssueRefLink
-        issueId={issueId}
-        text={primary}
-        source="anchor"
-        sourceMessageId={sourceMessageId}
-      />
-      {showMutedId ? (
-        <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-          {identifier}
-        </span>
-      ) : null}
-    </span>
+    <IssueRefLink
+      issueId={issueId}
+      text={primary}
+      source="anchor"
+      sourceMessageId={sourceMessageId}
+    />
   );
 }
 

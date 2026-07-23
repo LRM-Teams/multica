@@ -1,17 +1,21 @@
 import { isIssueUuid } from "./issue-chip";
 
 /**
- * Prefer the author's link text / live identifier over a bare UUID.
+ * Resolve the interim / unresolved ink for an issue mention.
  *
- * LRM-493 / LRM-238: never silently paint a truncated UUID (`fe57cec6-…`) when
- * we have (or can resolve) an LRM-id. Author label wins when it is already a
- * human identifier; otherwise the live `issue.identifier` wins once resolved.
+ * LRM-508: once `title` is known it wins (title-first; LRM-xxx is not primary
+ * ink). Until then prefer a non-UUID author label or live identifier.
+ *
+ * LRM-493 / LRM-238: never silently paint a truncated UUID (`fe57cec6-…`).
  */
 export function resolveIssueMentionDisplayText(
   issueId: string,
   fallbackLabel: string | undefined,
   identifier: string | undefined,
+  title?: string | undefined,
 ): string | null {
+  const trimmedTitle = title?.trim();
+  if (trimmedTitle) return trimmedTitle;
   const label = fallbackLabel?.trim();
   if (label && !isIssueUuid(label)) return label;
   if (identifier) return identifier;

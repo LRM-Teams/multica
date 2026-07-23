@@ -42,6 +42,7 @@ export function IssueMentionCard({ issueId, fallbackLabel, sourceMessageId }: Is
     issueId,
     fallbackLabel,
     issue?.identifier,
+    issue?.title,
   );
 
   if (!isUuid && !issue) {

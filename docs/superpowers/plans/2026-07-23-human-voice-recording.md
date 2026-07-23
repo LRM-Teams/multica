@@ -21,7 +21,7 @@ Send a human recording as a real voice message. The sender, other members, and a
 - [x] Store and bind the WAV recording while retaining the ASR transcript for agent context.
 - [x] Render human recordings with the shared voice bubble and on-demand transcript.
 - [x] Run focused and package-wide frontend tests, backend unit tests, handler compilation, lint, and repository TypeScript checks.
-- [ ] Review the final diff, push the branch, and open one ready pull request to `dev`.
+- [x] Reviewed the final diff, pushed `fix/human-voice-recording`, and opened ready PR #940 to `dev`.
 
 ## Verification evidence
 
@@ -32,6 +32,7 @@ Send a human recording as a real voice message. The sender, other members, and a
 - Views/core lint passed with no errors; views reported three pre-existing unrelated unused-disable warnings.
 - `server/pkg/protocol` and `server/internal/messageparts` passed; `server/internal/handler` compiled with `go test -c`.
 - Handler integration execution is locally blocked before test selection by the pre-existing test database migration failure in `204_system_general_channel` (`trg_journal_workspace_radar_channel` does not exist). This is a local test-database bootstrap condition; handler compilation and CI remain required before merge.
+- GitHub PR #940 CI passed: frontend, backend, Ubuntu installer, and macOS installer.
 
 ## Root-cause record
 

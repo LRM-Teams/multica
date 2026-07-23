@@ -456,7 +456,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
         className="select-none"
         name={displayName}
         avatarUrlHint={message.author_avatar_url}
-        showStatusDot={isAgent || message.author_type === "member"}
+        showStatusDot={isAgent || message.type === "user"}
         showXpBurst={isAgent}
         profileLink={false}
       />

@@ -523,6 +523,7 @@ export function ChannelMessageBubble({
   // Non-null for real parts / historical envelopes, null for ordinary content.
   const effectiveParts = resolveMessageParts(message.content, message.parts);
   const voicePresentation = resolveVoiceMessagePresentation(message);
+  const isAgentVoiceReply = message.type === "agent" && voicePresentation !== null;
   const handleCopy = async () => {
     // Copy = take away what I can see (#530, Iris's ruling). The screen says
     // `@小雅`; a clipboard holding `@actor_14` disagrees with it, and that is its
@@ -883,8 +884,13 @@ export function ChannelMessageBubble({
               highlightQuery={searchHighlighted ? searchQuery : undefined}
               sourceMessageId={message.id}
               consumedAttachmentIds={voicePresentation?.consumedAttachmentIds}
+              contentMode={isAgentVoiceReply ? "non-transcript" : "all"}
             />
-            <VoiceMessageAudio message={message} presentation={voicePresentation} />
+            <VoiceMessageAudio
+              message={message}
+              presentation={voicePresentation}
+              highlightQuery={searchHighlighted ? searchQuery : undefined}
+            />
             {isLocalFailed && onRetrySend && (
               <div
                 data-testid="message-send-failed"

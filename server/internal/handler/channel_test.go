@@ -75,11 +75,32 @@ func TestChannelVoiceReplyInstructionUsesStructuredVoicePart(t *testing.T) {
 	if got := channelVoiceReplyInstruction(voice); !strings.Contains(got, "multica message send --voice") {
 		t.Fatalf("voice instruction = %q", got)
 	}
-	if got := channelVoiceReplyInstruction(ChannelMessageResponse{Type: "user", Content: "请语音回复"}); got != "" {
-		t.Fatalf("plain text must be interpreted by the agent, got server instruction %q", got)
+	typed := channelVoiceReplyInstruction(ChannelMessageResponse{Type: "user", Content: "请语音回复"})
+	if !strings.Contains(typed, "explicitly asks") || !strings.Contains(typed, "runtime brief's voice-delivery path") {
+		t.Fatalf("typed human message instruction = %q, want semantic voice-request guidance", typed)
 	}
 	if got := channelVoiceReplyInstruction(ChannelMessageResponse{Type: "agent", Parts: voice.Parts}); got != "" {
 		t.Fatalf("agent-authored voice output must not force another voice reply, got %q", got)
+	}
+}
+
+func TestChannelDirectedReplyInstructionDoesNotForceTextModality(t *testing.T) {
+	if strings.Contains(channelDirectedReplyInstruction, "text answer") {
+		t.Fatalf("directed reply instruction forces text and conflicts with voice requests: %q", channelDirectedReplyInstruction)
+	}
+	if strings.Contains(channelStickerReplyInstruction, "send text only") {
+		t.Fatalf("sticker instruction forces text and conflicts with voice requests: %q", channelStickerReplyInstruction)
+	}
+	if !strings.Contains(channelDirectedReplyInstruction, "requested supported delivery modality") {
+		t.Fatalf("directed reply instruction = %q, want requested-modality guidance", channelDirectedReplyInstruction)
+	}
+	prompt := buildChannelAmbientObservationPrompt(
+		ChannelResponse{Name: "voice-test"},
+		db.Agent{},
+		ChannelMessageResponse{ID: "message-1", Type: "user", Content: "请用语音回复"},
+	)
+	if strings.Contains(prompt, "plain-text reply") || !strings.Contains(prompt, "runtime brief's voice-delivery path") {
+		t.Fatalf("ambient prompt has conflicting voice delivery guidance: %q", prompt)
 	}
 }
 

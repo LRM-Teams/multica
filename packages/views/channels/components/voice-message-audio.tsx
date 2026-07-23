@@ -1,10 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AudioLines, LoaderCircle, Mic, Play, RotateCcw, Square } from "lucide-react";
+import { AudioLines, Captions, LoaderCircle, Mic, Play, RotateCcw, Square } from "lucide-react";
 import type { ChannelMessage } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
+import { MessageBody } from "./message-body";
 import {
   claimVoiceAutoplay,
   prepareVoiceAudio,
@@ -23,9 +24,11 @@ type PlaybackState = "idle" | "loading" | "playing" | "error";
 export function VoiceMessageAudio({
   message,
   presentation,
+  highlightQuery,
 }: {
   message: ChannelMessage;
   presentation?: VoiceMessagePresentation | null;
+  highlightQuery?: string;
 }) {
   const { t } = useT("channels");
   const resolvedPresentation = presentation === undefined
@@ -37,6 +40,7 @@ export function VoiceMessageAudio({
   const [durationSeconds, setDurationSeconds] = useState<number | null>(() =>
     voicePart?.duration_ms ? Math.max(1, Math.round(voicePart.duration_ms / 1000)) : null,
   );
+  const [transcriptExpanded, setTranscriptExpanded] = useState(false);
   const playbackRef = useRef<VoicePlayback | null>(null);
   const mountedRef = useRef(true);
   const startRef = useRef<(() => Promise<void>) | null>(null);
@@ -128,37 +132,87 @@ export function VoiceMessageAudio({
       : state === "error"
         ? t(($) => $.message.voice_retry)
         : t(($) => $.message.voice_play);
+  const transcriptToggleLabel = transcriptExpanded
+    ? t(($) => $.message.voice_hide_transcript)
+    : t(($) => $.message.voice_show_transcript);
+  const transcriptPanelId = `voice-transcript-${message.id}`;
+  const transcriptLabelId = `voice-transcript-label-${message.id}`;
 
   return (
-    <button
-      type="button"
-      className={cn(
-        "mt-1.5 inline-flex min-h-10 min-w-28 items-center justify-between gap-2 rounded-2xl rounded-bl-sm border border-primary/20 bg-primary/[0.08] px-3 py-2 text-xs font-medium text-primary shadow-sm transition-colors hover:bg-primary/[0.12] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        state === "error" && "border-destructive/30 bg-destructive/5 text-destructive hover:bg-destructive/10",
-      )}
-      onClick={state === "playing" ? stop : () => void start()}
-      disabled={state === "loading"}
-      aria-label={label}
-      data-testid="voice-reply-control"
-      data-voice-bubble="true"
-      style={{ width: voiceBubbleWidthPx(durationSeconds) }}
-    >
-      {state === "loading" ? (
-        <LoaderCircle className="size-3.5 animate-spin" />
-      ) : state === "playing" ? (
-        <Square className="size-3 fill-current" />
-      ) : state === "error" ? (
-        <RotateCcw className="size-3.5" />
-      ) : (
-        <Play className="size-3.5 fill-current" />
-      )}
-      <AudioLines
-        className={cn("size-5", state === "playing" && "animate-pulse")}
-        aria-hidden="true"
-      />
-      <span className="min-w-5 text-right tabular-nums" aria-hidden="true">
-        {durationSeconds ? `${durationSeconds}″` : "…"}
-      </span>
-    </button>
+    <div className="mt-1.5 flex max-w-full flex-col items-start" data-testid="voice-reply">
+      <div className="flex max-w-full flex-wrap items-center gap-1.5">
+        <button
+          type="button"
+          className={cn(
+            "inline-flex min-h-10 min-w-28 items-center justify-between gap-2 rounded-2xl rounded-bl-sm border border-primary/20 bg-primary/[0.08] px-3 py-2 text-xs font-medium text-primary shadow-sm transition-colors hover:bg-primary/[0.12] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            state === "error" && "border-destructive/30 bg-destructive/5 text-destructive hover:bg-destructive/10",
+          )}
+          onClick={state === "playing" ? stop : () => void start()}
+          disabled={state === "loading"}
+          aria-label={label}
+          data-testid="voice-reply-control"
+          data-voice-bubble="true"
+          style={{ width: voiceBubbleWidthPx(durationSeconds) }}
+        >
+          {state === "loading" ? (
+            <LoaderCircle className="size-3.5 animate-spin" />
+          ) : state === "playing" ? (
+            <Square className="size-3 fill-current" />
+          ) : state === "error" ? (
+            <RotateCcw className="size-3.5" />
+          ) : (
+            <Play className="size-3.5 fill-current" />
+          )}
+          <AudioLines
+            className={cn("size-5", state === "playing" && "animate-pulse")}
+            aria-hidden="true"
+          />
+          <span className="min-w-5 text-right tabular-nums" aria-hidden="true">
+            {durationSeconds ? `${durationSeconds}″` : "…"}
+          </span>
+        </button>
+        <button
+          type="button"
+          className={cn(
+            "inline-flex min-h-9 shrink-0 items-center gap-1 rounded-lg px-2.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            transcriptExpanded && "bg-primary/[0.08] text-primary hover:bg-primary/[0.12] hover:text-primary",
+          )}
+          onClick={() => setTranscriptExpanded((expanded) => !expanded)}
+          aria-expanded={transcriptExpanded}
+          aria-controls={transcriptPanelId}
+          aria-label={transcriptToggleLabel}
+        >
+          <Captions className="size-3.5" aria-hidden="true" />
+          <span>{transcriptToggleLabel}</span>
+        </button>
+      </div>
+      {transcriptExpanded ? (
+        <section
+          id={transcriptPanelId}
+          data-testid="voice-reply-transcript"
+          className="ml-3 mt-2 w-fit max-w-[min(36rem,calc(100vw-6rem))] border-l-2 border-primary/25 pl-3"
+          aria-labelledby={transcriptLabelId}
+        >
+          <div className="rounded-xl rounded-tl-sm border border-border/70 bg-muted/30 px-3 py-2.5 shadow-sm">
+            <div
+              id={transcriptLabelId}
+              className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold text-primary/80"
+            >
+              <Captions className="size-3.5" aria-hidden="true" />
+              <span>{t(($) => $.message.voice_transcript_label)}</span>
+            </div>
+            <div className="text-sm leading-6 text-ink">
+              <MessageBody
+                content={message.content}
+                parts={message.parts}
+                highlightQuery={highlightQuery}
+                sourceMessageId={message.id}
+                contentMode="transcript"
+              />
+            </div>
+          </div>
+        </section>
+      ) : null}
+    </div>
   );
 }

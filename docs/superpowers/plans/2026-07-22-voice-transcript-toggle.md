@@ -80,3 +80,4 @@ Evidence:
 - Branch `fix/voice-transcript-toggle` was rebased onto the latest `origin/dev` and pushed.
 - Ready-for-review PR: https://github.com/LRM-Teams/multica/pull/918 targeting `dev`; GitHub reports it mergeable and not a draft.
 - CI run `29910704430` passed on PR head `5d79296a2`: frontend, backend, Ubuntu installer, and macOS installer all completed successfully.
+- On 2026-07-23 the branch was rebased again after `dev` advanced. The only conflict was an env-dispatch test fixture that upstream had also repaired; the resolved test retains the stricter exact sandbox-ID assertion. Post-rebase validation passed: 87 focused views tests (two skipped), views TypeScript, React Doctor, `cmd/multica`, `internal/messageparts`, and the full handler suite on a fresh disposable database.

@@ -73,3 +73,45 @@ export const SELF_MENTION_ROW_CLASS =
  */
 export const SELF_MENTION_ROW_MENTION_CLASS =
   "[&_.mention]:dark:bg-transparent [&_.mention]:dark:hover:bg-brand/[0.08] [&_.mention]:dark:focus-visible:bg-brand/[0.08]";
+
+/** Shared gradient tail for long-message See more fade (LRM-302 / LRM-368). */
+export const MESSAGE_COLLAPSE_FADE_GRADIENT_BASE =
+  "bg-gradient-to-t to-transparent";
+
+/** Default row: channel/page background (not self-mention cream). */
+export const MESSAGE_COLLAPSE_FADE_DEFAULT =
+  "from-background via-background/95";
+
+/**
+ * Self-mention row fade — must match {@link SELF_MENTION_ROW_CLASS} fills so
+ * the wash does not read as a white film over cream in light mode (LRM-368).
+ */
+export const SELF_MENTION_COLLAPSE_FADE =
+  "from-[#fef9e8] via-[#fef9e8]/95 dark:from-brand/[0.06] dark:via-brand/[0.06]";
+
+/** Deep-link highlight on the bubble row. */
+export const MESSAGE_COLLAPSE_FADE_HIGHLIGHTED =
+  "from-primary/10 via-primary/10";
+
+/** In-channel search hit wash on the message body. */
+export const MESSAGE_COLLAPSE_FADE_SEARCH = "from-primary/5 via-primary/5";
+
+/**
+ * Resolve See more fade stops from the visible row/body background tokens.
+ * Never hard-bind `from-background` when the row carries its own wash.
+ */
+export function messageCollapseFadeClassName(options: {
+  selfMentioned?: boolean;
+  highlighted?: boolean;
+  searchHighlighted?: boolean;
+}): string {
+  const { selfMentioned, highlighted, searchHighlighted } = options;
+  const stops = highlighted
+    ? MESSAGE_COLLAPSE_FADE_HIGHLIGHTED
+    : searchHighlighted
+      ? MESSAGE_COLLAPSE_FADE_SEARCH
+      : selfMentioned
+        ? SELF_MENTION_COLLAPSE_FADE
+        : MESSAGE_COLLAPSE_FADE_DEFAULT;
+  return cn(MESSAGE_COLLAPSE_FADE_GRADIENT_BASE, stops);
+}

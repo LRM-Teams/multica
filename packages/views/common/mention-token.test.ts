@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   mentionTokenClassName,
+  messageCollapseFadeClassName,
+  MESSAGE_COLLAPSE_FADE_DEFAULT,
   resolveMentionTokenKind,
+  SELF_MENTION_COLLAPSE_FADE,
   SELF_MENTION_ROW_CLASS,
   SELF_MENTION_ROW_MENTION_CLASS,
 } from "./mention-token";
@@ -84,5 +87,30 @@ describe("SELF_MENTION_ROW_MENTION_CLASS", () => {
     expect(SELF_MENTION_ROW_MENTION_CLASS).toContain(
       "[&_.mention]:dark:hover:bg-brand/[0.08]",
     );
+  });
+});
+
+describe("messageCollapseFadeClassName", () => {
+  it("uses page background stops for normal rows", () => {
+    const cls = messageCollapseFadeClassName({});
+    expect(cls).toContain(MESSAGE_COLLAPSE_FADE_DEFAULT);
+    expect(cls).not.toContain("from-[#fef9e8]");
+  });
+
+  it("matches self-mention row cream / dark tint instead of background (LRM-368)", () => {
+    const cls = messageCollapseFadeClassName({ selfMentioned: true });
+    expect(cls).toContain(SELF_MENTION_COLLAPSE_FADE);
+    expect(cls).toContain("from-[#fef9e8]");
+    expect(cls).toContain("dark:from-brand/[0.06]");
+    expect(cls).not.toContain("from-background");
+  });
+
+  it("prefers deep-link highlight stops over self-mention wash", () => {
+    const cls = messageCollapseFadeClassName({
+      selfMentioned: true,
+      highlighted: true,
+    });
+    expect(cls).toContain("from-primary/10");
+    expect(cls).not.toContain("from-[#fef9e8]");
   });
 });

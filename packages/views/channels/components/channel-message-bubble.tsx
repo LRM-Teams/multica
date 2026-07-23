@@ -57,6 +57,7 @@ import {
 } from "./channel-system-event-content";
 import { messageMentionsViewer } from "../../common/content-mentions-viewer";
 import {
+  messageCollapseFadeClassName,
   SELF_MENTION_ROW_CLASS,
   SELF_MENTION_ROW_MENTION_CLASS,
 } from "../../common/mention-token";
@@ -914,7 +915,14 @@ function ChannelMessageBubbleInner({
             )}
             {isContentCollapsed && (
               <div
-                className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-start bg-gradient-to-t from-background via-background/95 to-transparent pb-0.5 pt-10"
+                className={cn(
+                  "pointer-events-none absolute inset-x-0 bottom-0 flex justify-start pb-0.5 pt-10",
+                  messageCollapseFadeClassName({
+                    selfMentioned,
+                    highlighted,
+                    searchHighlighted,
+                  }),
+                )}
                 data-testid="message-collapse-fade"
               >
                 {/* LRM-302: text link, not centered pill — must not cover body. */}

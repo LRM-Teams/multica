@@ -1038,6 +1038,37 @@ describe("ChannelMessageBubble", () => {
     expect(screen.getByRole("button", { name: "See more" })).toBeInTheDocument();
   });
 
+  it("uses self-mention row tokens for See more fade instead of page background (LRM-368)", async () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          type: "user",
+          author_id: "user-2",
+          author_name: "bob",
+          content: `hey [@Alice](mention://member/user-1)\n${Array.from({ length: 20 }, (_, index) => `Line ${index}`).join("\n")}`,
+        })}
+        currentUserId="user-1"
+      />,
+    );
+
+    const body = screen.getByTestId("message-body");
+    Object.defineProperties(body, {
+      scrollHeight: { configurable: true, value: 420 },
+      clientHeight: { configurable: true, value: 160 },
+    });
+    fireEvent(window, new Event("resize"));
+
+    await waitFor(() => {
+      expect(body).toHaveAttribute("data-collapsed", "true");
+    });
+
+    const fade = screen.getByTestId("message-collapse-fade");
+    expect(fade.className).toMatch(/from-\[#fef9e8\]/);
+    expect(fade.className).toMatch(/via-\[#fef9e8\]\/95/);
+    expect(fade.className).toMatch(/dark:from-brand\/\[0\.06\]/);
+    expect(fade.className).not.toMatch(/from-background/);
+  });
+
   it("does not show the collapse affordance for short messages", () => {
     render(
       <ChannelMessageBubble

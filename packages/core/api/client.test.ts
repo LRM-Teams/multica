@@ -417,6 +417,32 @@ describe("ApiClient", () => {
     expect(headers["X-Client-OS"]).toBeUndefined();
   });
 
+  it("sends channel_id on listAgents when set (LRM-370/399 invite scope)", async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new ApiClient("https://api.example.test");
+    await client.listAgents({
+      workspace_id: "ws-1",
+      include_archived: true,
+      channel_id: "ch-c",
+    });
+    const url = String(fetchMock.mock.calls[0]![0]);
+    expect(url).toContain("channel_id=ch-c");
+    expect(url).toContain("workspace_id=ws-1");
+
+    fetchMock.mockClear();
+    await client.listAgents({ workspace_id: "ws-1" });
+    expect(String(fetchMock.mock.calls[0]![0])).not.toContain("channel_id");
+  });
+
   it("sends source_channel_id as a query param on listIssues, and omits it when unset (#476)", async () => {
     const fetchMock = vi.fn().mockImplementation(() =>
       Promise.resolve(

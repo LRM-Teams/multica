@@ -76,7 +76,12 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { useWSEvent } from "@multica/core/realtime";
 import { toast } from "sonner";
-import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
+import {
+  agentListForChannelOptions,
+  agentListOptions,
+  memberListOptions,
+} from "@multica/core/workspace/queries";
+import { filterAgentsForChannelInvite } from "@multica/core/agents/channel-invite-filter";
 import { projectListOptions } from "@multica/core/projects/queries";
 import type {
   AgentPanelIdentitySnapshot,
@@ -975,6 +980,12 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       ? explicit
       : (explicit ?? channels.find(isImmutableSystemChannel) ?? channels[0] ?? null);
   }, [channels, archivedChannels, activeId, activeDmId, isMobile]);
+  // Invite panel: ListAgents(?channel_id=) so other groups' channel agents stay
+  // out (LRM-399). Workspace directory above stays unscoped for mention preview.
+  const { data: inviteScopedAgents = [] } = useQuery({
+    ...agentListForChannelOptions(wsId, active?.id ?? ""),
+    enabled: !!wsId && !!active?.id,
+  });
   const isActiveArchived = !!active?.archived_at;
   // #642 — the workspace's system #general channel: immutable, auto-managed
   // roster (all human members + active workspace-visible agents, synced
@@ -1212,7 +1223,12 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     [channelMembers],
   );
   const availableMembers = workspaceMembers.filter((m) => !memberIds.has(m.user_id));
-  const availableAgents = agents.filter((a) => !agentIds.has(a.id) && !a.archived_at);
+  // LRM-399: prefer channel-scoped ListAgents; client guard drops any stray
+  // channel-visibility agents whose home ≠ this group (no silent include).
+  const availableAgents = filterAgentsForChannelInvite(
+    inviteScopedAgents,
+    active?.id ?? "",
+  ).filter((a) => !agentIds.has(a.id));
   // Flat candidate list (users + agents) for Add people; chips use the
   // unfiltered pool so selections survive search.
   const allInviteCandidates = useMemo(() => {

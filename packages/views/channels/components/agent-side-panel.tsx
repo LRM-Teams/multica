@@ -524,6 +524,7 @@ function ProfileDescriptionEditorBody({
       </DialogHeader>
       <textarea
         value={draft}
+        aria-label={t(($) => $.side_panel.description_label)}
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Escape") onClose();

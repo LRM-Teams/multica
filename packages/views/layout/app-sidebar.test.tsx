@@ -16,7 +16,7 @@ function renderSidebar() {
   );
 }
 
-const { detail, deletePin, pins } = vi.hoisted(() => ({
+const { detail, deletePin, pins, unreadActivity } = vi.hoisted(() => ({
   detail: { current: { isPending: false, isError: false, data: null as unknown, error: null as unknown } },
   deletePin: vi.fn(),
   pins: {
@@ -32,6 +32,7 @@ const { detail, deletePin, pins } = vi.hoisted(() => ({
       },
     ],
   },
+  unreadActivity: { current: 0 },
 }));
 
 vi.mock("@dnd-kit/core", () => ({
@@ -131,7 +132,7 @@ vi.mock("@multica/core/api", async (importOriginal) => {
   };
 });
 vi.mock("@multica/core/user-activity/queries", () => ({
-  useUserActivityUnreadCount: () => 0,
+  useUserActivityUnreadCount: () => unreadActivity.current,
 }));
 vi.mock("@multica/core/issues/queries", () => ({ issueDetailOptions: () => ({ queryKey: ["issue"] }) }));
 vi.mock("@multica/core/issues/stores/create-mode-store", () => ({
@@ -188,6 +189,7 @@ describe("PinRow", () => {
 describe("AppSidebar navigation", () => {
   beforeEach(() => {
     detail.current = { isPending: false, isError: false, data: null, error: null };
+    unreadActivity.current = 0;
   });
 
   it("renders one personal Messages entry directly below Activity", () => {
@@ -217,5 +219,13 @@ describe("AppSidebar navigation", () => {
     expect(screen.queryByText("My Issues")).toBeNull();
     // Activity stays in the top personal section.
     expect(screen.getByText("Activity")).toBeInTheDocument();
+  });
+
+  it("renders Activity unread as a brand pill (LRM-354 contrast)", () => {
+    unreadActivity.current = 3;
+    const { container } = renderSidebar();
+    const badge = container.querySelector("span.bg-brand-solid.text-brand-solid-foreground");
+    expect(badge).not.toBeNull();
+    expect(badge).toHaveTextContent("3");
   });
 });

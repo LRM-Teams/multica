@@ -211,6 +211,11 @@ import {
   MutedIndicator,
   sumUnmutedUnreadCounts,
 } from "./conversation-muted";
+import {
+  CONVERSATION_SIDEBAR_ROW_ACTIVE,
+  CONVERSATION_SIDEBAR_ROW_IDLE,
+  CONVERSATION_SIDEBAR_UNREAD_BADGE,
+} from "./conversation-sidebar-styles";
 import { buildPinnedConversationEntries } from "./pinned-conversations";
 import { PinnedConversationsSection } from "./pinned-conversations-section";
 import { ResolvedAgentSidePanel } from "../../common/resolved-agent-side-panel";
@@ -312,12 +317,14 @@ function MemberPresenceStack({
 function EmptyState({ onCreate }: { onCreate: () => void }) {
   const { t } = useT("channels");
   return (
-    <div className="flex h-full items-center justify-center p-8">
-      <div className="max-w-md rounded-3xl border bg-card p-8 text-center shadow-sm">
-        <div className="mx-auto flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+    <div className="flex h-full items-center justify-center bg-background p-8">
+      <div className="max-w-md rounded-3xl border border-border bg-card p-8 text-center shadow-sm">
+        <div className="mx-auto flex size-12 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
           <MessageCircle className="size-6" />
         </div>
-        <h2 className="mt-5 text-xl font-semibold">{t(($) => $.empty_state.title)}</h2>
+        <h2 className="mt-5 text-xl font-semibold text-foreground">
+          {t(($) => $.empty_state.title)}
+        </h2>
         <p className="mt-2 text-sm leading-6 text-muted-foreground">
           {t(($) => $.empty_state.description)}
         </p>
@@ -2253,7 +2260,9 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
               data-pinned={pinned ? "true" : undefined}
               className={cn(
                 "group/row relative mb-0.5 rounded-lg transition-colors",
-                active?.id === channel.id ? "bg-primary/[0.08]" : "hover:bg-accent",
+                active?.id === channel.id
+                  ? CONVERSATION_SIDEBAR_ROW_ACTIVE
+                  : CONVERSATION_SIDEBAR_ROW_IDLE,
               )}
             />
           }
@@ -2368,7 +2377,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const listPane = (
     <aside
       className={cn(
-        "flex flex-1 min-h-0 flex-col bg-muted/20",
+        "flex flex-1 min-h-0 flex-col bg-sidebar",
         isMobile ? "min-w-0" : "border-r",
       )}
     >
@@ -2438,7 +2447,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                   )}
                   <span className="flex-1 text-left">{t(($) => $.sidebar.groups)}</span>
                   {channelsCollapsed && aggregateChannelUnread > 0 && (
-                    <span className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
+                    <span className={CONVERSATION_SIDEBAR_UNREAD_BADGE}>
                       {aggregateChannelUnread > 99 ? "99+" : aggregateChannelUnread}
                     </span>
                   )}

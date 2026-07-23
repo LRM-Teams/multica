@@ -33,6 +33,9 @@
     --color-brand: var(--brand);
     --color-brand-foreground: var(--brand-foreground);
     --color-brand-soft: var(--brand-soft);
+    /* Solid brand fills (unread pills) — separate from --brand text-on-dark */
+    --color-brand-solid: var(--brand-solid);
+    --color-brand-solid-foreground: var(--brand-solid-foreground);
     --color-accent-foreground: var(--accent-foreground);
     --color-accent: var(--accent);
     --color-muted-foreground: var(--muted-foreground);
@@ -65,7 +68,10 @@
     --radius-4xl: calc(var(--radius) * 2.6);
 }
 
-:root {
+/* `.light` re-applies the same values so nested light scopes (e.g. theme
+ * preference WindowMockup) stay correct when the document root is dark. */
+:root,
+.light {
     /* —— Frozen product-surface palette (LRM-226) —— */
     --ink: #1d1c1d;
     --ink-2: #616061;
@@ -78,6 +84,9 @@
     --brand: #1264a3;
     --brand-foreground: #ffffff;
     --brand-soft: #e8f5fa;
+    /* Filled brand chips/pills (white label) — same as --brand in light */
+    --brand-solid: var(--brand);
+    --brand-solid-foreground: var(--brand-foreground);
     --ok: #007a5a;
     --danger: #e01e5a;
     --online: #2bac76;
@@ -116,7 +125,8 @@
     --sidebar-foreground: var(--ink);
     --sidebar-primary: var(--ink);
     --sidebar-primary-foreground: #ffffff;
-    --sidebar-accent: var(--hover);
+    /* LRM-354: selected/hover row = surface (white) on page-bg sidebar — Slack-clear, not near-identical hover gray */
+    --sidebar-accent: var(--surface);
     --sidebar-accent-foreground: var(--ink);
     --sidebar-border: var(--line);
     --sidebar-ring: var(--ink-3);
@@ -161,6 +171,10 @@
     --brand: #3d8ec4;
     --brand-foreground: oklch(0.985 0 0);
     --brand-soft: oklch(0.35 0.04 240);
+    /* LRM-354: solid pills keep saturated fill so brand-foreground ≥4.5:1;
+       --brand stays lightened for text/links on dark panes */
+    --brand-solid: #1264a3;
+    --brand-solid-foreground: #ffffff;
     --ink: oklch(0.985 0 0);
     --ink-2: oklch(0.705 0.015 286.067);
     --ink-3: oklch(0.55 0.01 286);

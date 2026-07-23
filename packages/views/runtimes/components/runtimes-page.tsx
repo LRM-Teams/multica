@@ -741,7 +741,7 @@ function EmptyState({ onConnectRemote }: { onConnectRemote: () => void }) {
       <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
         <Server className="h-6 w-6 text-muted-foreground" />
       </div>
-      <h2 className="mt-4 text-base font-semibold">{t(($) => $.page.empty.title)}</h2>
+      <h2 className="mt-4 text-base font-semibold text-foreground">{t(($) => $.page.empty.title)}</h2>
       <p className="mt-1 max-w-md text-sm text-muted-foreground">
         {t(($) => $.page.empty.hint)}
       </p>

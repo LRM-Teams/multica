@@ -8,6 +8,7 @@ import {
   sumUnmutedUnreadCounts,
 } from "./conversation-muted";
 import type { PinnedConversationEntry } from "./pinned-conversations";
+import { CONVERSATION_SIDEBAR_UNREAD_BADGE } from "./conversation-sidebar-styles";
 
 /**
  * Slack-style unified PINNED section at the top of the Messages sidebar.
@@ -56,7 +57,7 @@ export function PinnedConversationsSection({
           )}
           <span className="flex-1 text-left">{t(($) => $.sidebar.pinned_section)}</span>
           {collapsed && aggregateUnread > 0 && (
-            <span className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
+            <span className={CONVERSATION_SIDEBAR_UNREAD_BADGE}>
               {aggregateUnread > 99 ? "99+" : aggregateUnread}
             </span>
           )}

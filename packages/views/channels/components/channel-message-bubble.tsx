@@ -2,6 +2,7 @@
 
 import {
   lazy,
+  memo,
   Suspense,
   useCallback,
   useEffect,
@@ -41,6 +42,7 @@ import {
   unwrapStructuredPreviewContent,
 } from "./message-parts-preview";
 import { MessageBody } from "./message-body";
+import { areChannelMessageBubblePropsEqual } from "./channel-message-render-equality";
 import { MessageQuoteCard } from "./message-quote";
 import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
 import {
@@ -189,6 +191,7 @@ function ChannelSystemMessageRow({
  * a save calls back into the bubble's onEdit (a PATCH), never a re-send, so an
  * edit can never produce a new agent wake (H5).
  */
+// react-doctor-disable-next-line react-doctor/no-multi-comp -- bubble-local editor; split would orphan edit chrome from the bubble
 function MessageInlineEditor({
   value,
   onChange,
@@ -256,7 +259,8 @@ function MessageInlineEditor({
  * as an IM-style message item, while quote/attachment/code-like content keeps
  * local structure inside the shared Markdown pipeline.
  */
-export function ChannelMessageBubble({
+// react-doctor-disable-next-line react-doctor/no-multi-comp -- memo wrapper keeps export name; Inner stays file-local for equality compare
+function ChannelMessageBubbleInner({
   message,
   currentUserId,
   ownName,
@@ -1136,3 +1140,8 @@ export function ChannelMessageBubble({
     </ContextMenu>
   );
 }
+
+export const ChannelMessageBubble = memo(
+  ChannelMessageBubbleInner,
+  areChannelMessageBubblePropsEqual,
+);

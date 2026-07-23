@@ -1,6 +1,7 @@
 "use client";
 
 import { Loader2, Send } from "lucide-react";
+import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import { useOpenDM } from "../../common/use-open-dm";
 import { useT } from "../../i18n/use-t";
@@ -11,9 +12,10 @@ interface AgentProfileMessageButtonProps {
 }
 
 /**
- * LRM-283 · Slack Profile → Message: full-width outlined primary between the
- * agent header and Profile/Activity/Files tabs. Offline agents stay tappable;
- * only the in-flight create/find DM blocks re-clicks.
+ * LRM-283 / LRM-351 · Profile → Message CTA between the agent header and
+ * Profile/Activity/Files tabs. Uses the shared primary Button tokens so light
+ * and dark both keep ≥4.5:1 label/icon contrast (no Slack light-only hex fills).
+ * Offline agents stay tappable; only the in-flight create/find DM blocks re-clicks.
  */
 export function AgentProfileMessageButton({
   agentId,
@@ -24,16 +26,15 @@ export function AgentProfileMessageButton({
 
   return (
     <div className={cn("shrink-0 px-4 pb-3", className)}>
-      <button
+      <Button
         type="button"
+        variant="default"
+        size="lg"
         data-testid="agent-profile-message-button"
         aria-busy={isPending}
         disabled={isPending}
         onClick={() => void openDM({ peer_type: "agent", peer_id: agentId })}
-        className={cn(
-          "flex h-9 w-full items-center justify-center gap-2 rounded-md border border-[rgba(29,28,29,0.3)] bg-background text-sm font-bold text-foreground transition-colors",
-          "hover:bg-[#f4f4f4] disabled:cursor-wait",
-        )}
+        className="h-9 w-full gap-2 rounded-md font-bold disabled:cursor-wait disabled:opacity-100"
       >
         {isPending ? (
           <>
@@ -46,7 +47,7 @@ export function AgentProfileMessageButton({
             <span>{t(($) => $.side_panel.message_button)}</span>
           </>
         )}
-      </button>
+      </Button>
     </div>
   );
 }

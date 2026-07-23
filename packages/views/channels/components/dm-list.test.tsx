@@ -129,6 +129,7 @@ vi.mock("@multica/ui/components/ui/drawer", () => ({
 }));
 
 import { DmList } from "./dm-list";
+import { CONVERSATION_SIDEBAR_ROW_ACTIVE } from "./conversation-sidebar-styles";
 
 function makeDm(overrides: Partial<DMItem> = {}): DMItem {
   return {
@@ -426,5 +427,45 @@ describe("DmList no Ask Wendy promo card (LRM-294)", () => {
 
     expect(screen.getByText("Wendy")).toBeInTheDocument();
     expect(screen.getByText("Agent")).toBeInTheDocument();
+  });
+});
+
+describe("DmList sidebar contrast (LRM-354)", () => {
+  beforeEach(() => {
+    mockViewport.isMobile = false;
+    mockQueryData.dms = [];
+    mockQueryData.agents = [];
+    mockQueryData.members = [];
+    mockQueryData.squads = [];
+  });
+
+  it("marks the active DM row with sidebar-accent (not primary wash)", () => {
+    mockQueryData.dms = [
+      makeDm({
+        id: "dm-active",
+        peer: { type: "user", id: "peer-1", name: "Active Peer" },
+      }),
+    ];
+
+    const { container } = renderDmList({ activeId: "dm-active" });
+    const activeRow = container.querySelector(`.${CONVERSATION_SIDEBAR_ROW_ACTIVE}`);
+    expect(activeRow).not.toBeNull();
+    expect(container.querySelector(".bg-primary\\/\\[0\\.08\\]")).toBeNull();
+  });
+
+  it("shows collapsed section unread as a brand pill", () => {
+    mockQueryData.dms = [
+      makeDm({
+        unread: 5,
+        real_unread: 5,
+        peer: { type: "user", id: "peer-1", name: "Unread Peer" },
+      }),
+    ];
+
+    const { container } = renderDmList();
+    fireEvent.click(screen.getByRole("button", { name: /Direct messages/i }));
+    const badge = container.querySelector("span.bg-brand-solid.text-brand-solid-foreground");
+    expect(badge).not.toBeNull();
+    expect(badge).toHaveTextContent("5");
   });
 });

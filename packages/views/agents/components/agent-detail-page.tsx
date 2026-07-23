@@ -47,7 +47,6 @@ import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { AppLink, useNavigation } from "../../navigation";
 import { BreadcrumbHeader } from "../../layout/breadcrumb-header";
 import { PageHeader } from "../../layout/page-header";
-import { availabilityConfig, toLiveAvailability } from "../presence";
 import { AgentDetailInspector } from "./agent-detail-inspector";
 import { AgentOverviewPane, type DetailTab } from "./agent-overview-pane";
 import { useUpdateAgent } from "../hooks/use-update-agent";
@@ -208,7 +207,6 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
     <div className="flex flex-1 min-h-0 flex-col">
       <DetailHeader
         agent={agent}
-        presence={presence}
         backHref={paths.agents()}
         canArchive={canEdit.allowed}
         onArchive={() => setConfirmArchive(true)}
@@ -314,13 +312,11 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
 
 function DetailHeader({
   agent,
-  presence,
   backHref,
   canArchive,
   onArchive,
 }: {
   agent: Agent;
-  presence: AgentPresenceDetail | null;
   backHref: string;
   canArchive: boolean;
   onArchive: () => void;
@@ -328,14 +324,9 @@ function DetailHeader({
   const { t } = useT("agents");
   const isArchived = !!agent.archived_at;
   const displayName = resolveActorDisplayName(agent, agent.id);
-  const live = presence ? toLiveAvailability(presence.availability) : null;
-  const av = live
-    ? { ...availabilityConfig[live], label: t(($) => $.availability[live]) }
-    : null;
-  // Last-task state is intentionally not surfaced in the header — the
-  // Recent work section on this page already shows the same information
-  // (and richer: titles, timestamps, error messages). Showing "Completed"
-  // up here was redundant chrome.
+  // LRM-248: live Online/Offline is avatar-badge only on profile surfaces —
+  // breadcrumb leaf keeps name (+ muted Archived), never Online/Offline text.
+  // Last-task state stays in Recent work, not the header.
 
   return (
     <BreadcrumbHeader
@@ -347,13 +338,7 @@ function DetailHeader({
             <span className="shrink-0 text-xs text-muted-foreground">
               {t(($) => $.row.archived)}
             </span>
-          ) : (
-            av && (
-              <span className={`shrink-0 text-xs ${av.textClass}`}>
-                {av.label}
-              </span>
-            )
-          )}
+          ) : null}
         </>
       }
       actions={

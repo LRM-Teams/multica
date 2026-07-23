@@ -200,18 +200,14 @@ function ReadonlyLink({
       return <ProjectMentionLink projectId={match[2]} label={label} />;
     }
     // Member / agent — shared ActorMention (LRM-515 display_name ink + peek handle).
+    // Do not typeof-check `children` here (react-doctor no-polymorphic-children);
+    // ActorMention resolves display_name via identity — emit label not required.
     // @all / squad stay pill-only (broadcast / group keywords, Slack-style).
     if (match?.[1] && match[2]) {
       const type = match[1];
       const id = match[2];
-      const label =
-        typeof children === "string"
-          ? children
-          : Array.isArray(children)
-            ? children.join("")
-            : undefined;
       if (type === "member" || type === "agent") {
-        return <ActorMention type={type} id={id} label={label} />;
+        return <ActorMention type={type} id={id} />;
       }
       const kind = resolveMentionTokenKind(type, id, viewerUserId);
       return (

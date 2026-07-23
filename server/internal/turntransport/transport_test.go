@@ -279,6 +279,11 @@ func TestSplitEnvironmentSeparatesReusableProcessFromTurn(t *testing.T) {
 			t.Fatalf("SplitEnvironment accepted %s in provider process env", key)
 		}
 	}
+	if _, _, err := SplitEnvironment(map[string]string{
+		"MULTICA_FUTURE_TURN_FIELD": "would silently leak without classification",
+	}); err == nil {
+		t.Fatal("SplitEnvironment accepted an unclassified Multica key")
+	}
 }
 
 func TestBindRejectsEnvironmentOutsideExplicitAllowlist(t *testing.T) {

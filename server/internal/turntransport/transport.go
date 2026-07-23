@@ -54,6 +54,21 @@ var turnEnvironmentKeys = map[string]struct{}{
 	"MULTICA_QUICK_CREATE_SOURCE_MESSAGE_ID": {},
 }
 
+var stableMulticaEnvironmentKeys = map[string]struct{}{
+	"MULTICA_SERVER_URL":           {},
+	"MULTICA_DAEMON_PORT":          {},
+	"MULTICA_WORKSPACE_ID":         {},
+	"MULTICA_AGENT_NAME":           {},
+	"MULTICA_AGENT_ID":             {},
+	"MULTICA_WORKSPACES_ROOT":      {},
+	"MULTICA_AGENT_ROOT":           {},
+	"MULTICA_AGENT_MEMORY_DIR":     {},
+	"MULTICA_AGENT_NOTES_DIR":      {},
+	"MULTICA_AGENT_PROFILE_DIR":    {},
+	"MULTICA_AGENT_FEEDBACK_DIR":   {},
+	"MULTICA_AGENT_SYNC_QUEUE_DIR": {},
+}
+
 var transportLocks sync.Map // absolute transport root -> *sync.Mutex
 
 // Transport is an agent-scoped, fixed CLI transport. Its wrapper and current
@@ -284,6 +299,11 @@ func SplitEnvironment(environment map[string]string) (stable, currentTurn map[st
 		if IsTurnEnvironmentKey(key) {
 			currentTurn[key] = value
 			continue
+		}
+		if strings.HasPrefix(key, "MULTICA_") {
+			if _, ok := stableMulticaEnvironmentKeys[key]; !ok {
+				return nil, nil, fmt.Errorf("unclassified Multica environment key %s", key)
+			}
 		}
 		stable[key] = value
 	}

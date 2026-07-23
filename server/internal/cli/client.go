@@ -549,9 +549,12 @@ func (c *APIClient) UploadFileWithURL(ctx context.Context, fileData []byte, file
 	if result.URL == "" {
 		return "", "", fmt.Errorf("upload response missing attachment url")
 	}
-	// Allow empty ID: the server returns id="" in the fallback path where
-	// S3 upload succeeded but the attachment DB record failed. The file
-	// is still usable via its URL.
+	if result.ID == "" {
+		// Server used to soft-return id="" when S3 succeeded but the DB
+		// insert failed; that path now returns 5xx (LRM-426). Still guard
+		// so callers never treat an empty id as a usable attachment.
+		return "", "", fmt.Errorf("upload response missing attachment id")
+	}
 	return result.ID, result.URL, nil
 }
 

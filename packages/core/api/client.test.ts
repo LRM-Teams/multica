@@ -1051,9 +1051,23 @@ describe("ApiClient", () => {
   });
 
   describe("chat attachment wiring", () => {
+    const uploadOkBody = {
+      id: "att-1",
+      url: "https://cdn/x",
+      download_url: "/api/attachments/att-1/download",
+      markdown_url: "https://cdn/x.md",
+      filename: "hi.png",
+      content_type: "image/png",
+      size_bytes: 2,
+      created_at: "2026-01-01T00:00:00Z",
+      workspace_id: "ws",
+      uploader_type: "member",
+      uploader_id: "u1",
+    };
+
     it("uploadFile includes chat_session_id in the FormData body", async () => {
       const fetchMock = vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ id: "att-1", url: "https://cdn/x" }), {
+        new Response(JSON.stringify(uploadOkBody), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         }),
@@ -1062,8 +1076,9 @@ describe("ApiClient", () => {
 
       const client = new ApiClient("https://api.example.test");
       const file = new File(["hi"], "hi.png", { type: "image/png" });
-      await client.uploadFile(file, { chatSessionId: "session-123" });
+      const att = await client.uploadFile(file, { chatSessionId: "session-123" });
 
+      expect(att.id).toBe("att-1");
       expect(fetchMock).toHaveBeenCalledTimes(1);
       const [url, init] = fetchMock.mock.calls[0]!;
       expect(url).toBe("https://api.example.test/api/upload-file");
@@ -1073,6 +1088,79 @@ describe("ApiClient", () => {
       expect(body.get("chat_session_id")).toBe("session-123");
       expect(body.get("issue_id")).toBeNull();
       expect(body.get("comment_id")).toBeNull();
+    });
+
+    it("uploadFile includes channel_id in the FormData body", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ ...uploadOkBody, channel_id: "ch-1" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const client = new ApiClient("https://api.example.test");
+      const file = new File(["hi"], "hi.png", { type: "image/png" });
+      await client.uploadFile(file, { channelId: "ch-1" });
+
+      const body = fetchMock.mock.calls[0]![1]?.body as FormData;
+      expect(body.get("channel_id")).toBe("ch-1");
+    });
+
+    it("uploadFile throws on schema mismatch instead of EMPTY_ATTACHMENT (LRM-426)", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(JSON.stringify({ id: "att-1", url: "https://cdn/x" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        ),
+      );
+
+      const client = new ApiClient("https://api.example.test");
+      const file = new File(["hi"], "hi.png", { type: "image/png" });
+      await expect(client.uploadFile(file)).rejects.toThrow(/Upload response invalid/);
+    });
+
+    it("uploadFile throws when the API returns an empty attachment id", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(
+            JSON.stringify({
+              ...uploadOkBody,
+              id: "",
+            }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          ),
+        ),
+      );
+
+      const client = new ApiClient("https://api.example.test");
+      const file = new File(["hi"], "hi.png", { type: "image/png" });
+      await expect(client.uploadFile(file)).rejects.toThrow(/missing attachment id/);
+    });
+
+    it("uploadFile surfaces the API error body message on non-2xx", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(JSON.stringify({ error: "not a channel member" }), {
+            status: 403,
+            headers: { "Content-Type": "application/json" },
+          }),
+        ),
+      );
+
+      const client = new ApiClient("https://api.example.test");
+      const file = new File(["hi"], "hi.png", { type: "image/png" });
+      await expect(client.uploadFile(file, { channelId: "ch-1" })).rejects.toThrow(
+        "not a channel member",
+      );
     });
 
     it("sendChatMessage serialises attachment_ids onto the JSON body when present", async () => {

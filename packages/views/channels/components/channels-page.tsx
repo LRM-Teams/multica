@@ -1217,7 +1217,10 @@ export function ChannelsPage({
   const addMembers = useAddChannelMembers();
   const removeMember = useRemoveChannelMember();
   const createOrFindDm = useCreateOrFindDM();
-  const { uploadWithToast } = useFileUpload(api);
+  // Use throwing `upload` (not uploadWithToast): the tray chip owns the error
+  // UI. Swallowing into null produced the English-only "Upload failed" chip
+  // with no API reason (LRM-426).
+  const { upload } = useFileUpload(api);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const threadFileInputRef = useRef<HTMLInputElement | null>(null);
   // #576 — the mobile "..." Drawer's Settings tab (LRM-210's
@@ -1238,10 +1241,12 @@ export function ChannelsPage({
 
   const uploadForActiveChannel = useCallback(
     async (file: File) => {
-      if (!active) return null;
-      return uploadWithToast(file, { channelId: active.id });
+      if (!active) {
+        throw new Error("No active channel");
+      }
+      return upload(file, { channelId: active.id });
     },
-    [active, uploadWithToast],
+    [active, upload],
   );
 
   const channelPending = useComposerPendingAttachments({

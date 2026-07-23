@@ -2322,10 +2322,31 @@ export class ApiClient {
     }
 
     this.logger.info(`← ${res.status} /api/upload-file`, { rid, duration: `${Date.now() - start}ms` });
+    // Strict validation (LRM-238 / LRM-426): do not parseWithFallback to
+    // EMPTY_ATTACHMENT — an empty id looks like success to callers that only
+    // check res.ok, then surfaces as a silent "Upload failed" chip. Mobile
+    // already throws on shape mismatch for the same reason.
     const raw = (await res.json()) as unknown;
-    return parseWithFallback(raw, AttachmentResponseSchema, EMPTY_ATTACHMENT, {
-      endpoint: "POST /api/upload-file",
-    });
+    const parsed = AttachmentResponseSchema.safeParse(raw);
+    if (!parsed.success) {
+      this.logger.error(`← shape mismatch /api/upload-file`, {
+        rid,
+        duration: `${Date.now() - start}ms`,
+        issues: parsed.error.issues,
+      });
+      throw new Error("Upload response invalid");
+    }
+    if (!parsed.data.id) {
+      throw new Error("Upload response missing attachment id");
+    }
+    // Response schema is a subset of Attachment; fill remaining fields from
+    // EMPTY_ATTACHMENT so callers get a typed Attachment without a unsafe cast.
+    return {
+      ...EMPTY_ATTACHMENT,
+      ...parsed.data,
+      chat_session_id: parsed.data.chat_session_id ?? null,
+      chat_message_id: parsed.data.chat_message_id ?? null,
+    };
   }
 
   // Chat Sessions

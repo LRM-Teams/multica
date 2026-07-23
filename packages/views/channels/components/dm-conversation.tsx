@@ -483,7 +483,8 @@ function DmChannelConversation({
     }
   }, [addChannelReaction, currentUserId, removeChannelReaction]);
   const setTyping = useSetChannelTyping();
-  const { uploadWithToast } = useFileUpload(api);
+  // Throwing `upload` so tray chips show the real API error (LRM-426).
+  const { upload } = useFileUpload(api);
 
   // #340: freeze the entry read cursor + true unread count (sidebar-same source)
   // per DM — anchors the cold load on the unread divider and gives the divider
@@ -557,8 +558,8 @@ function DmChannelConversation({
   const threadFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const uploadForDm = useCallback(
-    async (file: File) => uploadWithToast(file, { channelId }),
-    [channelId, uploadWithToast],
+    async (file: File) => upload(file, { channelId }),
+    [channelId, upload],
   );
   const dmPending = useComposerPendingAttachments({
     upload: uploadForDm,

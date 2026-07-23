@@ -300,6 +300,8 @@ describe("Markdown", () => {
     expect(self).toHaveClass("font-bold");
     expect(self).toHaveClass("bg-[#faf0c8]");
     expect(self).toHaveClass("text-foreground");
+    expect(self).toHaveClass("dark:bg-brand/[0.14]");
+    expect(self).toHaveClass("dark:text-brand");
     expect(self).not.toHaveClass("text-brand");
   });
 

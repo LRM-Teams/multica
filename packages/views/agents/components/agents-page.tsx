@@ -142,7 +142,7 @@ export function AgentsPage({
     isLoading,
     error: listError,
     refetch: refetchList,
-  } = useQuery(agentListOptions(wsId));
+  } = useQuery(agentListOptions(wsId, { includeArchived: true }));
   const { data: runtimes = [], isLoading: runtimesLoading } = useQuery(
     runtimeListOptions(wsId),
   );

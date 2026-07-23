@@ -290,6 +290,13 @@ function expectDirect() {
   expect(screen.getByTestId("channel-header-action-rail")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "More" })).toBeNull();
   expect(screen.queryByLabelText("Invite people")).toBeNull();
+  // LRM-452 — members chip / rail must not carry tray bg+border chrome.
+  const chip = screen.getByTestId("channel-header-members-chip");
+  expect(chip.className).not.toMatch(/\bborder-border\b/);
+  expect(chip.className).not.toMatch(/\bbg-background\b/);
+  const rail = screen.getByTestId("channel-header-action-rail");
+  expect(rail.className).not.toMatch(/\bborder-border\b/);
+  expect(rail.className).not.toMatch(/bg-foreground\/\[0\.02\]/);
 }
 
 describe("ChannelsPage header actions — container-driven overflow (#568)", () => {

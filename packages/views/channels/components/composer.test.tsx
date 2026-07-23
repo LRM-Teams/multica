@@ -4,7 +4,11 @@ import { fileURLToPath } from "node:url";
 import type { CSSProperties, ReactNode } from "react";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { COMPOSER_SHELL_CLASSNAME, Composer } from "./composer";
+import {
+  COMPOSER_EDITOR_SCROLL_CLASSNAME,
+  COMPOSER_SHELL_CLASSNAME,
+  Composer,
+} from "./composer";
 
 vi.mock("@multica/ui/components/ui/drawer", () => ({
   DrawerContent: ({ children, style }: { children: ReactNode; style?: CSSProperties }) => (
@@ -98,6 +102,34 @@ describe("Composer", () => {
 
     rerender(<Composer surface="channel" {...baseProps} sendDisabled={false} sending />);
     expect(screen.getByRole("button", { name: /send/i })).toBeDisabled();
+  });
+
+  // LRM-491 — empty gray / armed brand; editor density ~one line.
+  it("LRM-491: Send is muted when empty and brand when armed", () => {
+    const { rerender } = render(
+      <Composer surface="channel" {...baseProps} sendDisabled />,
+    );
+    const emptySend = screen.getByRole("button", { name: /send/i });
+    expect(emptySend).toHaveAttribute("data-send-armed", "false");
+    expect(emptySend.className).toContain("bg-muted");
+    expect(emptySend.className).not.toContain("bg-brand");
+
+    rerender(<Composer surface="channel" {...baseProps} sendDisabled={false} />);
+    const armedSend = screen.getByRole("button", { name: /send/i });
+    expect(armedSend).toHaveAttribute("data-send-armed", "true");
+    expect(armedSend.className).toContain("bg-brand");
+    expect(armedSend.className).toContain("text-brand-foreground");
+  });
+
+  it("LRM-491: editor scroll uses compact min-h (not min-h-16)", () => {
+    expect(COMPOSER_EDITOR_SCROLL_CLASSNAME).toContain("min-h-10");
+    expect(COMPOSER_EDITOR_SCROLL_CLASSNAME).not.toContain("min-h-16");
+    render(<Composer surface="channel" {...baseProps} sendDisabled={false} />);
+    const editorScroll = screen
+      .getByTestId("composer-editor")
+      .closest('[data-slot="composer-editor-scroll"]');
+    expect(editorScroll?.className).toContain("min-h-10");
+    expect(editorScroll?.className).not.toContain("min-h-16");
   });
 
   it("read-only surface shows a banner instead of an editable input", () => {
@@ -201,12 +233,15 @@ describe("Composer", () => {
       expect(composerSrc).not.toMatch(/hover:bg-\[#/);
       expect(composerSrc).toContain("border-input");
       expect(composerSrc).toContain("bg-card");
+      expect(composerSrc).toContain("bg-brand");
+      expect(composerSrc).not.toMatch(/#1264a3/);
 
       const placeholderCss = readFileSync(
         resolve(here, "../../editor/styles/shell.css"),
         "utf8",
       );
       expect(placeholderCss).toMatch(/color:\s*var\(--muted-foreground\)/);
+      expect(placeholderCss).toMatch(/font-size:\s*15px/);
     });
 
     it("leading actions inherit muted-foreground for attach/mic icons", () => {

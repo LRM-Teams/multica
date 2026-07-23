@@ -196,6 +196,7 @@ import { ChannelTasksBoard } from "./channel-tasks-board";
 import { ChannelHashLandmark } from "./channel-hash-landmark";
 import { ThreadPanel } from "./thread-panel";
 import { ComposerAttachmentTray } from "./composer-attachment-tray";
+import { ComposerMentionHint } from "./composer-mention-hint";
 import { ComposerQuotePreview } from "./message-quote";
 import type { QuoteTarget } from "./message-quote-types";
 import {
@@ -3371,6 +3372,8 @@ export function ChannelsPage({
                   {/* LRM-447 — Header owns Stop. Composer strip keeps human
                       typing only; preparing + Stop all rail is gone. */}
                   <ConversationActivityStrip typingActors={activeTypingActors} />
+                  {/* LRM-491 — @agent tip lives outside the Slack-short placeholder. */}
+                  <ComposerMentionHint className={isMobile ? "mx-3" : "mx-5"} />
                   <Composer
                     surface="channel"
                     sendLabel={t(($) => $.composer.send)}
@@ -3409,7 +3412,9 @@ export function ChannelsPage({
                         // (#531/#542) — made clickable on the read side, not here.
                         plainUrls
                         defaultValue={activeDraft}
-                        placeholder={t(($) => $.composer.placeholder)}
+                        placeholder={t(($) => $.composer.placeholder, {
+                          name: active.name,
+                        })}
                         onUpdate={handleEditorUpdate}
                         debounceMs={0}
                         onSubmit={handleSend}

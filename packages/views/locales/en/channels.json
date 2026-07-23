@@ -284,7 +284,9 @@
     "dialog_confirm": "Stop All Agents"
   },
   "composer": {
-    "placeholder": "Describe what you need…  @mention an agent to trigger its reply.",
+    "placeholder": "Message #{{name}}",
+    "mention_hint": "Type @agent to trigger a reply.",
+    "mention_hint_dismiss": "Got it",
     "attach_aria": "Attach",
     "mention_aria": "Mention an agent",
     "send": "Send",

@@ -12,6 +12,19 @@
   word-break: break-word;
 }
 
+/* LRM-491 — channel/DM/thread composer: Slack-density ~15px single-line placeholder. */
+.composer-shell .rich-text-editor.ProseMirror {
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+.composer-shell .rich-text-editor .is-editor-empty:first-child::before {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
 .rich-text-editor.ProseMirror:focus {
   outline: none;
 }

@@ -61,6 +61,13 @@ export const COMPOSER_SHELL_CLASSNAME =
   "focus-within:border-ring focus-within:ring-1 focus-within:ring-brand/30";
 
 /**
+ * LRM-491 — Slack-short single-line density: ~one line of 15px text, not min-h-16.
+ * Max height still grows with multi-line drafts.
+ */
+export const COMPOSER_EDITOR_SCROLL_CLASSNAME =
+  "composer-editor-scroll min-h-10 overflow-y-auto px-3 pt-2 overscroll-contain";
+
+/**
  * The one composer shell reused across channel / dm_channel / legacy_dm /
  * thread. Owns layout only: input scroll area, tray mount point, action row and
  * the Send control (disabled while empty or a send is in flight). The send
@@ -88,6 +95,8 @@ export function Composer({
   if (readOnly) {
     return <ReadOnlyConversationBanner>{readOnlyContent}</ReadOnlyConversationBanner>;
   }
+  // LRM-491 — empty = muted gray; has content = brand blue (semantic --brand).
+  const sendArmed = !sendDisabled;
   return (
     <div
       className={cn(
@@ -110,7 +119,7 @@ export function Composer({
         ) : null}
         <div
           className={cn(
-            "composer-editor-scroll min-h-16 overflow-y-auto px-4 pt-3 overscroll-contain",
+            COMPOSER_EDITOR_SCROLL_CLASSNAME,
             isMobile ? "max-h-[28dvh]" : "max-h-40",
           )}
           data-slot="composer-editor-scroll"
@@ -140,12 +149,19 @@ export function Composer({
                 onVoiceSend={onVoiceSend}
               />
             ) : null}
-            {/* Primary Send owns primary-foreground; parent muted only tints mic chrome. */}
             <Button
               onClick={onSend}
               disabled={sendDisabled || sending}
               size="sm"
-              className={cn("shrink-0", isMobile && "min-h-10 px-4")}
+              data-slot="composer-send"
+              data-send-armed={sendArmed ? "true" : "false"}
+              className={cn(
+                "shrink-0 disabled:opacity-100",
+                isMobile && "min-h-10 px-4",
+                sendArmed
+                  ? "bg-brand text-brand-foreground hover:bg-brand/90"
+                  : "bg-muted text-muted-foreground hover:bg-muted",
+              )}
             >
               <Send className="size-4" /> {sendLabel}
             </Button>

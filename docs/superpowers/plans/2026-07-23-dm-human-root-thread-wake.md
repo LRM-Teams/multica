@@ -25,6 +25,8 @@ from an earlier human-authored message.
   against a new temporary database; both passed, and only that temporary
   database was removed afterward.
 - [x] Ran `gofmt` and `git diff --check`.
+- [x] Pushed `fix/dm-human-root-thread-wake` and opened ready-for-review PR #966
+  into `dev`: <https://github.com/LRM-Teams/multica/pull/966>.
 
 ## Boundaries
 

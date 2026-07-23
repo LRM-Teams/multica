@@ -42,7 +42,9 @@ export function InlineFieldEditor({
 }) {
   const { t } = useT("agents");
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(value);
+  // Draft is seeded in startEdit (not from props) so react-doctor
+  // no-derived-useState stays clean and mid-edit prop updates cannot clobber.
+  const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);

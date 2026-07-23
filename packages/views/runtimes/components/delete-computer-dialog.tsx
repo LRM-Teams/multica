@@ -4,8 +4,6 @@ import { useMemo, useRef, useState } from "react";
 import { Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
-import { ApiError } from "@multica/core/api";
-import type { Agent } from "@multica/core/types";
 import { useAuthStore } from "@multica/core/auth";
 import { useDeleteRuntimesByDaemon } from "@multica/core/runtimes/mutations";
 import { memberListOptions } from "@multica/core/workspace/queries";
@@ -23,18 +21,10 @@ import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { AppLink } from "../../navigation/app-link";
 import { useT } from "../../i18n";
 import type { RuntimeMachine } from "./runtime-machines";
-
-export type ComputerDeleteConflictCode =
-  | "computer_has_online_runtimes"
-  | "computer_has_active_agents"
-  | "computer_has_active_squads"
-  | "computer_has_active_tasks";
-
-interface ComputerDeleteConflict {
-  code: ComputerDeleteConflictCode;
-  activeAgents: Agent[];
-  message: string;
-}
+import {
+  parseComputerDeleteConflict,
+  type ComputerDeleteConflict,
+} from "./delete-computer-conflict";
 
 /**
  * Machine-header control for Computer one-click delete (LRM-439).
@@ -335,48 +325,4 @@ function BlockedBody({
       </div>
     </>
   );
-}
-
-const CONFLICT_CODES = new Set<string>([
-  "computer_has_online_runtimes",
-  "computer_has_active_agents",
-  "computer_has_active_squads",
-  "computer_has_active_tasks",
-]);
-
-export function parseComputerDeleteConflict(
-  err: unknown,
-): ComputerDeleteConflict | null {
-  if (!(err instanceof ApiError)) return null;
-  if (err.status !== 409) return null;
-  const body = err.body;
-  if (!body || typeof body !== "object") return null;
-  const record = body as Record<string, unknown>;
-  const code = record.code;
-  if (typeof code !== "string" || !CONFLICT_CODES.has(code)) return null;
-
-  const message =
-    typeof record.error === "string" && record.error
-      ? record.error
-      : err.message;
-
-  let activeAgents: Agent[] = [];
-  if (code === "computer_has_active_agents") {
-    const rawAgents = record.active_agents;
-    if (Array.isArray(rawAgents)) {
-      activeAgents = rawAgents.filter(
-        (a): a is Agent =>
-          typeof a === "object" &&
-          a !== null &&
-          typeof (a as Record<string, unknown>).id === "string" &&
-          typeof (a as Record<string, unknown>).name === "string",
-      );
-    }
-  }
-
-  return {
-    code: code as ComputerDeleteConflictCode,
-    activeAgents,
-    message,
-  };
 }

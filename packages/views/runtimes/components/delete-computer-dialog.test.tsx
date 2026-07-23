@@ -8,10 +8,8 @@ import { I18nProvider } from "@multica/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
 import enRuntimes from "../../locales/en/runtimes.json";
 import enAgents from "../../locales/en/agents.json";
-import {
-  DeleteComputerDialog,
-  parseComputerDeleteConflict,
-} from "./delete-computer-dialog";
+import { DeleteComputerDialog } from "./delete-computer-dialog";
+import { parseComputerDeleteConflict } from "./delete-computer-conflict";
 import type { RuntimeMachine } from "./runtime-machines";
 
 const TEST_RESOURCES = {

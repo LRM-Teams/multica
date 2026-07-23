@@ -110,10 +110,7 @@ func (h *Handler) processChannelVoiceSynthesis(ctx context.Context, messageID st
 	if err != nil {
 		return h.failChannelVoiceSynthesis(ctx, job, "provider_failed", true, err)
 	}
-	if audio.Format != "pcm" || len(audio.Data) > maxVoicePCMBytes {
-		return h.failChannelVoiceSynthesis(ctx, job, "invalid_audio", false, errors.New("voice provider returned invalid PCM audio"))
-	}
-	wav, durationMS, err := encodePCM16WAV(audio.Data, audio.SampleRate)
+	wav, durationMS, err := encodeSynthesizedPCM16WAV(audio)
 	if err != nil {
 		return h.failChannelVoiceSynthesis(ctx, job, "invalid_audio", false, err)
 	}

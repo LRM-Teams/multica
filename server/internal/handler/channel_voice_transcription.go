@@ -23,7 +23,7 @@ const (
 	channelVoiceTranscriptionBatchLimit  = int32(4)
 	channelVoiceTranscriptionMaxAttempts = 3
 	channelVoiceClaimStaleAfter          = 2 * time.Minute
-	maxVoiceWAVBytes                     = maxVoicePCMBytes + 64*1024
+	maxVoiceWAVBytes                     = maxVoiceRecordingPCMBytes + 64*1024
 )
 
 var errInvalidChannelVoiceTranscript = errors.New("invalid channel voice transcript")
@@ -224,7 +224,7 @@ func (h *Handler) readChannelVoicePCM(ctx context.Context, recording channelVoic
 	if len(body) > maxVoiceWAVBytes {
 		return nil, errors.New("recorded voice exceeds size limit")
 	}
-	return voiceaudio.DecodePCM16MonoWAV(body, 16000, maxVoicePCMBytes)
+	return voiceaudio.DecodePCM16MonoWAV(body, 16000, maxVoiceRecordingPCMBytes)
 }
 
 func (h *Handler) persistChannelVoiceTranscript(ctx context.Context, job claimedChannelVoiceTranscription, transcript string) error {

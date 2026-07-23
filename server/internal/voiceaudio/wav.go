@@ -5,6 +5,33 @@ import (
 	"errors"
 )
 
+// EncodePCM16MonoWAV wraps complete signed 16-bit mono samples in a
+// self-describing WAV container. Output size policy belongs to the caller:
+// inbound recordings and provider-generated speech have different limits.
+func EncodePCM16MonoWAV(pcm []byte, sampleRate int) ([]byte, int64, error) {
+	if sampleRate <= 0 || len(pcm) == 0 || len(pcm)%2 != 0 {
+		return nil, 0, errors.New("invalid PCM audio")
+	}
+	const headerBytes = 44
+	wav := make([]byte, headerBytes+len(pcm))
+	copy(wav[0:4], "RIFF")
+	binary.LittleEndian.PutUint32(wav[4:8], uint32(len(wav)-8))
+	copy(wav[8:12], "WAVE")
+	copy(wav[12:16], "fmt ")
+	binary.LittleEndian.PutUint32(wav[16:20], 16)
+	binary.LittleEndian.PutUint16(wav[20:22], 1)
+	binary.LittleEndian.PutUint16(wav[22:24], 1)
+	binary.LittleEndian.PutUint32(wav[24:28], uint32(sampleRate))
+	binary.LittleEndian.PutUint32(wav[28:32], uint32(sampleRate*2))
+	binary.LittleEndian.PutUint16(wav[32:34], 2)
+	binary.LittleEndian.PutUint16(wav[34:36], 16)
+	copy(wav[36:40], "data")
+	binary.LittleEndian.PutUint32(wav[40:44], uint32(len(pcm)))
+	copy(wav[44:], pcm)
+	durationMS := (int64(len(pcm)/2)*1000 + int64(sampleRate)/2) / int64(sampleRate)
+	return wav, durationMS, nil
+}
+
 // DecodePCM16MonoWAV validates and extracts one PCM data chunk. The caller
 // supplies the only accepted sample rate and payload limit so provider
 // contracts stay explicit at the boundary.

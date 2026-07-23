@@ -429,11 +429,70 @@ func TestHandleUpdateRestartsWhenStableBinaryVerifiedAndIdle(t *testing.T) {
 	if restartCalls.Load() != 1 {
 		t.Fatalf("restart calls = %d, want 1", restartCalls.Load())
 	}
-	if len(reports) != 1 {
-		t.Fatalf("reports = %d, want running only before re-register: %#v", len(reports), reports)
+	if len(reports) != 2 {
+		t.Fatalf("reports = %d, want running + ready_to_apply before restart: %#v", len(reports), reports)
 	}
 	if got := reports[0]["status"]; got != "running" {
-		t.Fatalf("status = %v, want running", got)
+		t.Fatalf("first status = %v, want running", got)
+	}
+	if got := reports[1]["status"]; got != "ready_to_apply" {
+		t.Fatalf("second status = %v, want ready_to_apply", got)
+	}
+}
+
+func TestHandleUpdateDoesNotRestartUntilReadyToApplyIsDurablyAcknowledged(t *testing.T) {
+	withFastUpdateReportBackoffs(t)
+
+	var reports []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode report payload: %v", err)
+		}
+		reports = append(reports, payload)
+		if payload["status"] == "ready_to_apply" {
+			http.Error(w, `{"error":"database unavailable"}`, http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	var restartCalls atomic.Int32
+	d := &Daemon{
+		client: NewClient(srv.URL),
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runUpdateFn: func(string) (string, error) {
+			return "updated", nil
+		},
+		verifyUpdatedBinaryFn: func(string, string) (string, error) {
+			return "0.3.36", nil
+		},
+		cancelFunc: func() {
+			restartCalls.Add(1)
+		},
+	}
+
+	d.handleUpdate(context.Background(), "rt-1", &PendingUpdate{
+		ID:                   "upd-1",
+		TargetVersion:        "v0.3.36",
+		SupportsReadyToApply: true,
+	})
+
+	if restartCalls.Load() != 0 {
+		t.Fatalf("restart calls without durable ready_to_apply ack = %d, want 0", restartCalls.Load())
+	}
+	if len(reports) != 1+len(updateReportBackoffs) {
+		t.Fatalf("reports = %d, want running + %d ready retries: %#v", len(reports), len(updateReportBackoffs), reports)
+	}
+	if reports[0]["status"] != "running" {
+		t.Fatalf("first status = %v, want running", reports[0]["status"])
+	}
+	for i, report := range reports[1:] {
+		if report["status"] != "ready_to_apply" {
+			t.Fatalf("retry %d status = %v, want ready_to_apply", i+1, report["status"])
+		}
 	}
 }
 
@@ -541,6 +600,204 @@ func TestHandleUpdateReportsReadyToApplyWhenBusyAndServerSupportsIt(t *testing.T
 	if got := reports[1]["status"]; got != "ready_to_apply" {
 		t.Fatalf("second status = %v, want ready_to_apply", got)
 	}
+}
+
+func TestWaitForSafeRestartAllowsClaimsBeforeDeadlineThenStopsAndDrains(t *testing.T) {
+	var restartCalls atomic.Int32
+	d := &Daemon{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		cancelFunc: func() {
+			restartCalls.Add(1)
+		},
+	}
+	d.activeTasks.Store(1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	done := make(chan bool, 1)
+	go func() {
+		done <- d.waitForSafeRestartWithWindow(
+			ctx,
+			"rt-1",
+			"upd-1",
+			"staged",
+			120*time.Millisecond,
+			2*time.Millisecond,
+		)
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	if !d.tryEnterClaim() {
+		t.Fatal("claim rejected before staged-update deadline")
+	}
+	d.exitClaim()
+	if restartCalls.Load() != 0 {
+		t.Fatalf("restart calls before deadline = %d, want 0", restartCalls.Load())
+	}
+
+	waitForClaimBarrierState(t, d, true)
+	if d.tryEnterClaim() {
+		d.exitClaim()
+		t.Fatal("claim admitted after staged-update deadline")
+	}
+	if restartCalls.Load() != 0 {
+		t.Fatalf("restart calls while active task drains = %d, want 0", restartCalls.Load())
+	}
+
+	d.activeTasks.Store(0)
+	select {
+	case restarted := <-done:
+		if !restarted {
+			t.Fatal("wait returned without restarting after the active task drained")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for restart after active task drained")
+	}
+	if restartCalls.Load() != 1 {
+		t.Fatalf("restart calls after drain = %d, want 1", restartCalls.Load())
+	}
+}
+
+func TestWaitForSafeRestartDeadlineDrainsClaimAlreadyInFlight(t *testing.T) {
+	var restartCalls atomic.Int32
+	d := &Daemon{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		cancelFunc: func() {
+			restartCalls.Add(1)
+		},
+	}
+	if !d.tryEnterClaim() {
+		t.Fatal("initial claim unexpectedly rejected")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	done := make(chan bool, 1)
+	go func() {
+		done <- d.waitForSafeRestartWithWindow(
+			ctx,
+			"rt-1",
+			"upd-1",
+			"staged",
+			20*time.Millisecond,
+			2*time.Millisecond,
+		)
+	}()
+
+	waitForClaimBarrierState(t, d, true)
+	if restartCalls.Load() != 0 {
+		t.Fatalf("restart calls with claim in flight = %d, want 0", restartCalls.Load())
+	}
+	d.exitClaim()
+
+	select {
+	case restarted := <-done:
+		if !restarted {
+			t.Fatal("wait returned without restarting after in-flight claim drained")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for restart after in-flight claim drained")
+	}
+	if restartCalls.Load() != 1 {
+		t.Fatalf("restart calls after claim drain = %d, want 1", restartCalls.Load())
+	}
+}
+
+func TestWaitForSafeRestartContextCancellationNeverForcesActiveTaskRestart(t *testing.T) {
+	var restartCalls atomic.Int32
+	d := &Daemon{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		cancelFunc: func() {
+			restartCalls.Add(1)
+		},
+	}
+	d.activeTasks.Store(1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan bool, 1)
+	go func() {
+		done <- d.waitForSafeRestartWithWindow(
+			ctx,
+			"rt-1",
+			"upd-1",
+			"staged",
+			20*time.Millisecond,
+			2*time.Millisecond,
+		)
+	}()
+
+	waitForClaimBarrierState(t, d, true)
+	cancel()
+	select {
+	case restarted := <-done:
+		if restarted {
+			t.Fatal("wait reported restart after context cancellation")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for canceled restart wait")
+	}
+	if restartCalls.Load() != 0 {
+		t.Fatalf("restart calls after cancellation with active task = %d, want 0", restartCalls.Load())
+	}
+	waitForClaimBarrierState(t, d, false)
+}
+
+func TestWaitForSafeRestartUsesIdleOpportunityBeforeDeadline(t *testing.T) {
+	var restartCalls atomic.Int32
+	d := &Daemon{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		cancelFunc: func() {
+			restartCalls.Add(1)
+		},
+	}
+	d.activeTasks.Store(1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	done := make(chan bool, 1)
+	startedAt := time.Now()
+	go func() {
+		done <- d.waitForSafeRestartWithWindow(
+			ctx,
+			"rt-1",
+			"upd-1",
+			"staged",
+			500*time.Millisecond,
+			2*time.Millisecond,
+		)
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	d.activeTasks.Store(0)
+	select {
+	case restarted := <-done:
+		if !restarted {
+			t.Fatal("wait returned without restarting at an idle opportunity")
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("idle opportunity did not restart before the staged-update deadline")
+	}
+	if elapsed := time.Since(startedAt); elapsed >= 500*time.Millisecond {
+		t.Fatalf("idle restart elapsed = %s, want before 500ms deadline", elapsed)
+	}
+	if restartCalls.Load() != 1 {
+		t.Fatalf("restart calls = %d, want 1", restartCalls.Load())
+	}
+}
+
+func waitForClaimBarrierState(t *testing.T, d *Daemon, want bool) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		d.claimMu.Lock()
+		got := d.pauseClaims
+		d.claimMu.Unlock()
+		if got == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("pauseClaims did not become %v", want)
 }
 
 func TestHandleUpdateFailsSafelyWhenBusyAndServerDoesNotSupportReadyToApply(t *testing.T) {

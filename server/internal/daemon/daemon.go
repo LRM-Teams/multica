@@ -1906,37 +1906,43 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 
 	d.logger.Info("CLI update staged successfully", "output", output, "verified_version", verifiedVersion)
 	stagedOutput := fmt.Sprintf("Staged %s (verified stable binary %s)", update.TargetVersion, verifiedVersion)
-	if !d.trySetClaimBarrier() {
-		if !update.SupportsReadyToApply {
-			d.logger.Warn("CLI update staged but server does not support deferred apply; refusing to restart a busy daemon", "runtime_id", runtimeID, "update_id", update.ID)
-			d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
-				"status": "failed",
-				"error":  "update_ready_to_apply_but_server_does_not_support_deferred_restart",
-			})
-			return
-		}
-		d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
+	if update.SupportsReadyToApply {
+		if err := d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
 			"status": "ready_to_apply",
 			"output": stagedOutput,
-		})
+		}); err != nil {
+			d.logger.Error("CLI update staged but ready-to-apply state was not durably acknowledged; refusing restart", "runtime_id", runtimeID, "update_id", update.ID, "error", err)
+			return
+		}
+		if d.trySetClaimBarrier() {
+			restartTriggered = true
+			d.triggerRestart()
+			return
+		}
 		restartCtx := d.rootCtx
 		if restartCtx == nil {
 			restartCtx = context.Background()
 		}
-		d.logger.Info("CLI update ready; waiting for idle daemon before restart", "runtime_id", runtimeID, "update_id", update.ID)
+		d.logger.Info("CLI update ready; waiting for an idle opportunity before the stop-claim deadline", "runtime_id", runtimeID, "update_id", update.ID)
 		restartTriggered = d.waitForSafeRestart(restartCtx, runtimeID, update.ID, stagedOutput)
 		return
 	}
-	if !update.SupportsReadyToApply {
-		// Older servers do not complete a still-running update when the daemon
-		// re-registers on the target version. Preserve the old idle-only wire
-		// behavior for that mixed-version window, while still refusing to send
-		// completed from a busy daemon above.
+
+	if !d.trySetClaimBarrier() {
+		d.logger.Warn("CLI update staged but server does not support deferred apply; refusing to restart a busy daemon", "runtime_id", runtimeID, "update_id", update.ID)
 		d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
-			"status": "completed",
-			"output": stagedOutput,
+			"status": "failed",
+			"error":  "update_ready_to_apply_but_server_does_not_support_deferred_restart",
 		})
+		return
 	}
+	// Older servers do not complete a still-running update when the daemon
+	// re-registers on the target version. Preserve the old idle-only wire
+	// behavior for that mixed-version window.
+	d.reportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
+		"status": "completed",
+		"output": stagedOutput,
+	})
 	restartTriggered = true
 	d.triggerRestart()
 }
@@ -1964,19 +1970,60 @@ func (d *Daemon) waitForSafeRestart(ctx context.Context, runtimeID, updateID, ou
 	if interval <= 0 || interval > 15*time.Second {
 		interval = 5 * time.Second
 	}
+	return d.waitForSafeRestartWithWindow(
+		ctx,
+		runtimeID,
+		updateID,
+		output,
+		stagedUpdateOpportunisticIdleWindow,
+		interval,
+	)
+}
+
+const stagedUpdateOpportunisticIdleWindow = 10 * time.Minute
+
+func (d *Daemon) waitForSafeRestartWithWindow(
+	ctx context.Context,
+	runtimeID, updateID, output string,
+	opportunisticWindow, interval time.Duration,
+) bool {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	deadline := time.NewTimer(opportunisticWindow)
+	defer deadline.Stop()
+	draining := false
 
 	for {
 		select {
 		case <-ctx.Done():
-			d.logger.Warn("CLI update ready but restart wait ended before daemon became idle", "runtime_id", runtimeID, "update_id", updateID, "error", ctx.Err())
+			if draining {
+				d.releaseClaimBarrier()
+			}
+			d.logger.Warn("CLI update ready but restart wait ended before the daemon drained", "runtime_id", runtimeID, "update_id", updateID, "error", ctx.Err())
 			return false
+		case <-deadline.C:
+			d.setClaimBarrier()
+			draining = true
+			d.logger.Info("CLI update stop-claim deadline reached; draining already-claimed tasks before restart", "runtime_id", runtimeID, "update_id", updateID)
+			if !d.claimBarrierDrained() {
+				continue
+			}
+			d.logger.Info("CLI update ready; daemon drained, restarting", "runtime_id", runtimeID, "update_id", updateID, "output", output)
+			d.triggerRestart()
+			return true
 		case <-ticker.C:
+			if draining {
+				if !d.claimBarrierDrained() {
+					continue
+				}
+				d.logger.Info("CLI update ready; daemon drained, restarting", "runtime_id", runtimeID, "update_id", updateID, "output", output)
+				d.triggerRestart()
+				return true
+			}
 			if !d.trySetClaimBarrier() {
 				continue
 			}
-			d.logger.Info("CLI update ready; daemon is idle, restarting", "runtime_id", runtimeID, "update_id", updateID, "output", output)
+			d.logger.Info("CLI update ready; daemon reached an idle opportunity before the deadline, restarting", "runtime_id", runtimeID, "update_id", updateID, "output", output)
 			d.triggerRestart()
 			return true
 		}
@@ -2067,13 +2114,13 @@ func compactUpdateOutput(output string) string {
 // Overridable for tests to avoid real sleeps.
 var updateReportBackoffs = []time.Duration{0, 500 * time.Millisecond, 2 * time.Second, 4 * time.Second}
 
-func (d *Daemon) reportUpdateResult(ctx context.Context, runtimeID, updateID string, payload map[string]any) {
-	d.reportUpdateResultWithRetry(ctx, runtimeID, updateID, func(ctx context.Context) error {
+func (d *Daemon) reportUpdateResult(ctx context.Context, runtimeID, updateID string, payload map[string]any) error {
+	return d.reportUpdateResultWithRetry(ctx, runtimeID, updateID, func(ctx context.Context) error {
 		return d.client.ReportUpdateResult(ctx, runtimeID, updateID, payload)
 	})
 }
 
-func (d *Daemon) reportUpdateResultWithRetry(ctx context.Context, runtimeID, updateID string, fn func(context.Context) error) {
+func (d *Daemon) reportUpdateResultWithRetry(ctx context.Context, runtimeID, updateID string, fn func(context.Context) error) error {
 	var lastErr error
 	for attempt, wait := range updateReportBackoffs {
 		if wait > 0 {
@@ -2082,7 +2129,7 @@ func (d *Daemon) reportUpdateResultWithRetry(ctx context.Context, runtimeID, upd
 				d.logger.Error("CLI update report cancelled",
 					"runtime_id", runtimeID, "update_id", updateID,
 					"attempt", attempt, "error", ctx.Err())
-				return
+				return ctx.Err()
 			case <-time.After(wait):
 			}
 		}
@@ -2094,7 +2141,7 @@ func (d *Daemon) reportUpdateResultWithRetry(ctx context.Context, runtimeID, upd
 					"runtime_id", runtimeID, "update_id", updateID,
 					"attempt", attempt+1)
 			}
-			return
+			return nil
 		}
 		lastErr = err
 
@@ -2103,7 +2150,7 @@ func (d *Daemon) reportUpdateResultWithRetry(ctx context.Context, runtimeID, upd
 			d.logger.Error("CLI update report rejected — not retrying",
 				"runtime_id", runtimeID, "update_id", updateID,
 				"status", reqErr.StatusCode, "error", err)
-			return
+			return err
 		}
 
 		d.logger.Warn("CLI update report failed — will retry",
@@ -2112,6 +2159,7 @@ func (d *Daemon) reportUpdateResultWithRetry(ctx context.Context, runtimeID, upd
 	}
 	d.logger.Error("CLI update report exhausted retries",
 		"runtime_id", runtimeID, "update_id", updateID, "error", lastErr)
+	return lastErr
 }
 
 // tryEnterClaim records the intent to call ClaimTask. Returns true if the
@@ -2151,6 +2199,26 @@ func (d *Daemon) trySetClaimBarrier() bool {
 	}
 	d.pauseClaims = true
 	return true
+}
+
+// setClaimBarrier atomically prevents any new ClaimTask call. Unlike
+// trySetClaimBarrier, it deliberately does not require the daemon to be idle:
+// callers use it at a staged-update deadline, then wait for every claim that
+// crossed the barrier and every active task to drain before restarting.
+func (d *Daemon) setClaimBarrier() {
+	d.claimMu.Lock()
+	defer d.claimMu.Unlock()
+	d.pauseClaims = true
+}
+
+// claimBarrierDrained reports whether the stop-claim barrier is held and all
+// work admitted before it has left both the claim handoff and active-task
+// phases. Reading the counters under claimMu preserves the handoff boundary
+// established by tryEnterClaim/exitClaim.
+func (d *Daemon) claimBarrierDrained() bool {
+	d.claimMu.Lock()
+	defer d.claimMu.Unlock()
+	return d.pauseClaims && d.claimsInFlight == 0 && d.activeTasks.Load() == 0
 }
 
 // releaseClaimBarrier clears the auto-update claim barrier so pollers may

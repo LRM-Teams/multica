@@ -21,13 +21,13 @@ export function useCreateVoiceCall(workspaceId: string) {
   });
 }
 
-export function useStopVoiceCall(workspaceId: string, callId: string) {
+export function useStopVoiceCall(workspaceId: string) {
   const queryClient = useQueryClient();
-  const queryKey = voiceCallKeys.detail(workspaceId, callId);
   return useMutation({
-    mutationKey: [...queryKey, "stop"],
-    mutationFn: () => api.stopVoiceCall(workspaceId, callId),
-    onMutate: async () => {
+    mutationKey: [...voiceCallKeys.all(workspaceId), "stop"],
+    mutationFn: (callId: string) => api.stopVoiceCall(workspaceId, callId),
+    onMutate: async (callId) => {
+      const queryKey = voiceCallKeys.detail(workspaceId, callId);
       await queryClient.cancelQueries({ queryKey });
       const previous = queryClient.getQueryData<GetVoiceCallResponse>(queryKey);
       queryClient.setQueryData<GetVoiceCallResponse>(
@@ -42,18 +42,23 @@ export function useStopVoiceCall(workspaceId: string, callId: string) {
           }
           : current,
       );
-      return { previous };
+      return { previous, queryKey };
     },
     onError: (_error, _variables, context) => {
-      if (context?.previous) {
-        queryClient.setQueryData(queryKey, context.previous);
+      if (context?.previous && context.queryKey) {
+        queryClient.setQueryData(context.queryKey, context.previous);
       }
     },
-    onSuccess: (stopped) => {
-      queryClient.setQueryData(queryKey, stopped);
+    onSuccess: (stopped, callId) => {
+      queryClient.setQueryData(
+        voiceCallKeys.detail(workspaceId, callId),
+        stopped,
+      );
     },
-    onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey });
+    onSettled: (_data, _error, callId) => {
+      void queryClient.invalidateQueries({
+        queryKey: voiceCallKeys.detail(workspaceId, callId),
+      });
     },
   });
 }

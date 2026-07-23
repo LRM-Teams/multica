@@ -102,12 +102,12 @@ describe("voice call mutations", () => {
     const key = voiceCallKeys.detail("workspace-1", "call-1");
     queryClient.setQueryData(key, activeCall);
     const { result } = renderHook(
-      () => useStopVoiceCall("workspace-1", "call-1"),
+      () => useStopVoiceCall("workspace-1"),
       { wrapper: wrapper(queryClient) },
     );
 
     act(() => {
-      result.current.mutate();
+      result.current.mutate("call-1");
     });
     await waitFor(() => {
       expect(queryClient.getQueryData<GetVoiceCallResponse>(key)?.call.status)
@@ -136,14 +136,32 @@ describe("voice call mutations", () => {
     const key = voiceCallKeys.detail("workspace-1", "call-1");
     queryClient.setQueryData(key, activeCall);
     const { result } = renderHook(
-      () => useStopVoiceCall("workspace-1", "call-1"),
+      () => useStopVoiceCall("workspace-1"),
       { wrapper: wrapper(queryClient) },
     );
 
     await act(async () => {
-      await result.current.mutateAsync();
+      await result.current.mutateAsync("call-1");
     });
 
     expect(queryClient.getQueryData(key)).toEqual(ended);
+  });
+
+  it("targets the call ID supplied when the stop begins", async () => {
+    const stopVoiceCall = vi.fn().mockResolvedValue(activeCall);
+    setApiInstance({ stopVoiceCall } as unknown as ApiClient);
+    const { result } = renderHook(
+      () => useStopVoiceCall("workspace-1"),
+      { wrapper: wrapper(queryClient) },
+    );
+
+    await act(async () => {
+      await result.current.mutateAsync("call-created-after-render");
+    });
+
+    expect(stopVoiceCall).toHaveBeenCalledWith(
+      "workspace-1",
+      "call-created-after-render",
+    );
   });
 });

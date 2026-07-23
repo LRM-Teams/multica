@@ -106,10 +106,38 @@ export function formatReminderCadence(
 }
 
 /**
- * Bare Raft-style `#multica:<shortid>` must never surface as the anchor
+ * Bare Raft/workspace-style short ids must never surface as the anchor
  * label — humans need a channel/session name. Server already projects
- * readable `display`; this is a last-line FE guard.
+ * readable `display`; this is a last-line FE guard for both
+ * `#multica:<hex>` and `#workspace:<hex>` (AC + Morgan).
  */
+export function isBareShortIdAnchorLabel(label: string): boolean {
+  return /^#(multica|workspace):[0-9a-f]+$/i.test(label.trim());
+}
+
+/** @deprecated Prefer `isBareShortIdAnchorLabel` — kept as a thin alias. */
 export function isBareMulticaAnchorLabel(label: string): boolean {
-  return /^#multica:[0-9a-f]+$/i.test(label.trim());
+  return isBareShortIdAnchorLabel(label);
+}
+
+/** Card status chip — AC: scheduled / 过期 / 取消 (+ fired for History). */
+export type ReminderStatusChip = "scheduled" | "overdue" | "fired" | "cancelled";
+
+/**
+ * Derive the visible status chip from definition lifecycle + fire instant.
+ * Upcoming past-due (`next_fire_at` < now while still scheduled/firing) → overdue.
+ * History occurrences → fired, unless the parent definition is cancelled.
+ */
+export function deriveReminderStatusChip(input: {
+  section: "upcoming" | "history";
+  definitionStatus: "scheduled" | "firing" | "fired" | "cancelled";
+  fireAtIso: string;
+  nowMs?: number;
+}): ReminderStatusChip {
+  if (input.definitionStatus === "cancelled") return "cancelled";
+  if (input.section === "history") return "fired";
+  const fireMs = Date.parse(input.fireAtIso);
+  const now = input.nowMs ?? Date.now();
+  if (!Number.isNaN(fireMs) && fireMs < now) return "overdue";
+  return "scheduled";
 }

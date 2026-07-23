@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import { useQuery, useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
-import { Bell, Repeat } from "lucide-react";
+import { Bell, Clock, Link2, Repeat } from "lucide-react";
 import type { Agent } from "@multica/core/types";
 import { ApiError } from "@multica/core/api";
 import {
@@ -22,11 +22,13 @@ import { AppLink } from "../../../navigation/app-link";
 import { useOptionalNavigation } from "../../../navigation/context";
 import { useAgentRemindersRealtime } from "./use-agent-reminders-realtime";
 import {
+  deriveReminderStatusChip,
   formatReminderAbsolute,
   formatReminderCadence,
   formatReminderRelative,
-  isBareMulticaAnchorLabel,
+  isBareShortIdAnchorLabel,
   type ReminderCadenceLabels,
+  type ReminderStatusChip,
 } from "./reminder-display";
 
 interface RemindersTabProps {
@@ -239,10 +241,9 @@ function useReminderCadenceLabels(): ReminderCadenceLabels {
 
 function CadenceLabel({ row }: { row: { cadence: UpcomingReminderRow["cadence"] } }) {
   const labels = useReminderCadenceLabels();
+  // AC: recurring shows cadence+tz as one chip; one-shot does NOT show this chip.
+  if (row.cadence.kind === "one_shot") return null;
   const text = formatReminderCadence(row.cadence, labels);
-  if (row.cadence.kind === "one_shot") {
-    return <span className="text-muted-foreground">{text}</span>;
-  }
   return (
     <span className="inline-flex items-center gap-1 text-muted-foreground">
       <Repeat className="size-3 shrink-0" aria-hidden />
@@ -251,16 +252,33 @@ function CadenceLabel({ row }: { row: { cadence: UpcomingReminderRow["cadence"] 
   );
 }
 
+function StatusChip({ chip }: { chip: ReminderStatusChip }) {
+  const { t } = useT("agents");
+  const label =
+    chip === "scheduled"
+      ? t(($) => $.reminders.status_scheduled)
+      : chip === "overdue"
+        ? t(($) => $.reminders.status_overdue)
+        : chip === "fired"
+          ? t(($) => $.reminders.status_fired)
+          : t(($) => $.reminders.status_cancelled);
+  return (
+    <span className="inline-flex w-fit items-center rounded-sm bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+      {label}
+    </span>
+  );
+}
+
 function AnchorLink({ anchor }: { anchor: UpcomingReminderRow["anchor"] }) {
   const { t } = useT("agents");
   const navigation = useOptionalNavigation();
-  // Frank hard requirement: never show bare `#multica:<shortid>` — humans
-  // need a channel/session readable name. Server `display` already projects
-  // `#channel` / DM labels; treat any residual Raft-style id as unavailable.
+  // AC: never show bare `#multica:<shortid>` / `#workspace:<shortid>` — humans
+  // need a channel/session readable name. Server `display` projects `#channel`
+  // / DM labels (LRM-507 completes name quality); residual short ids → unavailable.
   if (!anchor.available) {
     return <span className="text-muted-foreground">{t(($) => $.reminders.anchor_unavailable)}</span>;
   }
-  if (isBareMulticaAnchorLabel(anchor.label)) {
+  if (isBareShortIdAnchorLabel(anchor.label)) {
     return <span className="text-muted-foreground">{t(($) => $.reminders.anchor_unavailable)}</span>;
   }
   // `href` is a server-computed, already-authorized internal path (never
@@ -276,19 +294,25 @@ function AnchorLink({ anchor }: { anchor: UpcomingReminderRow["anchor"] }) {
   // scratch) and is visibly slower than the SPA route change. Falls back to
   // a plain `<a>` only if rendered outside a NavigationProvider (matches
   // channel-system-event-content.tsx's established pattern).
-  const className = "truncate text-primary hover:underline";
+  const className = "inline-flex min-w-0 items-center gap-1 truncate text-primary hover:underline";
+  const body = (
+    <>
+      <Link2 className="size-3 shrink-0" aria-hidden />
+      <span className="truncate">{anchor.label}</span>
+    </>
+  );
   return navigation ? (
     <AppLink href={anchor.href} className={className} title={anchor.label}>
-      {anchor.label}
+      {body}
     </AppLink>
   ) : (
     <a href={anchor.href} className={className} title={anchor.label}>
-      {anchor.label}
+      {body}
     </a>
   );
 }
 
-/** Relative + absolute on one meta line — Frank field IA (not neo-brutal skin). */
+/** Relative + absolute on one meta line — Frank field IA (Clock icon, not neo-brutal). */
 function ReminderTimeLine({ iso }: { iso: string }) {
   const { t, i18n } = useT("agents");
   const timeZone = useViewingTimezone();
@@ -301,17 +325,25 @@ function ReminderTimeLine({ iso }: { iso: string }) {
     t(($) => $.reminders.at_word),
   );
   return (
-    <span className="text-muted-foreground">
-      <span>{relative}</span>
-      <span aria-hidden className="mx-1.5 text-muted-foreground/50">
-        ·
+    <span className="inline-flex min-w-0 items-center gap-1 text-muted-foreground">
+      <Clock className="size-3 shrink-0" aria-hidden />
+      <span className="min-w-0">
+        <span>{relative}</span>
+        <span aria-hidden className="mx-1.5 text-muted-foreground/50">
+          ·
+        </span>
+        <span>{absolute}</span>
       </span>
-      <span>{absolute}</span>
     </span>
   );
 }
 
 function UpcomingRowView({ row }: { row: UpcomingReminderRow }) {
+  const chip = deriveReminderStatusChip({
+    section: "upcoming",
+    definitionStatus: row.status,
+    fireAtIso: row.nextFireAt,
+  });
   return (
     <li className="flex flex-col gap-1 px-3 py-3 text-xs md:px-4">
       <div className="flex items-start gap-1.5">
@@ -322,6 +354,7 @@ function UpcomingRowView({ row }: { row: UpcomingReminderRow }) {
         </p>
       </div>
       <div className="flex flex-col gap-0.5 pl-5">
+        <StatusChip chip={chip} />
         <ReminderTimeLine iso={row.nextFireAt} />
         <CadenceLabel row={row} />
         <AnchorLink anchor={row.anchor} />
@@ -331,6 +364,11 @@ function UpcomingRowView({ row }: { row: UpcomingReminderRow }) {
 }
 
 function FiredRowView({ row }: { row: FiredReminderRow }) {
+  const chip = deriveReminderStatusChip({
+    section: "history",
+    definitionStatus: row.definitionStatus,
+    fireAtIso: row.firedAt,
+  });
   return (
     <li className="flex flex-col gap-1 px-3 py-3 text-xs md:px-4">
       <div className="flex items-start gap-1.5">
@@ -342,7 +380,9 @@ function FiredRowView({ row }: { row: FiredReminderRow }) {
       <div className="flex flex-col gap-0.5 pl-5">
         {/* Relative+absolute describe THIS occurrence's fire time. Cadence
             still describes the DEFINITION (recurring stays labeled recurring
-            even after a past fire — must not read as "this reminder is done"). */}
+            even after a past fire — must not read as "this reminder is done").
+            Status chip surfaces scheduled/过期/取消 (History → fired|cancelled). */}
+        <StatusChip chip={chip} />
         <ReminderTimeLine iso={row.firedAt} />
         <CadenceLabel row={row} />
         <AnchorLink anchor={row.anchor} />

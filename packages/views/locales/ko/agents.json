@@ -628,6 +628,10 @@
     "cadence_every_days": "{{count}}일마다",
     "cadence_raw": "{{description}}{{timezone}}",
     "cadence_timezone_suffix": " {{timezone}}",
+    "status_scheduled": "예정됨",
+    "status_overdue": "기한 지남",
+    "status_fired": "발생함",
+    "status_cancelled": "취소됨",
     "next_fire_label": "다음",
     "fired_label": "발생",
     "timezone_label": "시간대"

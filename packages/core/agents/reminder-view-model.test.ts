@@ -53,6 +53,7 @@ describe("adaptUpcomingRow", () => {
       },
       anchor: { available: false },
       nextFireAt: "2026-07-24T09:00:00Z",
+      status: "scheduled",
     });
   });
 

@@ -608,6 +608,10 @@
     "cadence_every_days": "{{count}} 日ごと",
     "cadence_raw": "{{description}}{{timezone}}",
     "cadence_timezone_suffix": " {{timezone}}",
+    "status_scheduled": "予定",
+    "status_overdue": "期限切れ",
+    "status_fired": "発火済み",
+    "status_cancelled": "キャンセル",
     "next_fire_label": "次回",
     "fired_label": "発火",
     "timezone_label": "タイムゾーン"

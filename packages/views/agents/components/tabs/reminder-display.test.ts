@@ -3,7 +3,8 @@ import {
   formatReminderAbsolute,
   formatReminderCadence,
   formatReminderRelative,
-  isBareMulticaAnchorLabel,
+  isBareShortIdAnchorLabel,
+  deriveReminderStatusChip,
   type ReminderCadenceLabels,
 } from "./reminder-display";
 
@@ -92,15 +93,61 @@ describe("formatReminderCadence", () => {
   });
 });
 
-describe("isBareMulticaAnchorLabel", () => {
-  it("rejects Raft-style bare #multica:<shortid>", () => {
-    expect(isBareMulticaAnchorLabel("#multica:1c5652c2")).toBe(true);
-    expect(isBareMulticaAnchorLabel("  #multica:528d7cee  ")).toBe(true);
+describe("isBareShortIdAnchorLabel", () => {
+  it("rejects Raft-style bare #multica:<shortid> and #workspace:<shortid>", () => {
+    expect(isBareShortIdAnchorLabel("#multica:1c5652c2")).toBe(true);
+    expect(isBareShortIdAnchorLabel("  #multica:528d7cee  ")).toBe(true);
+    expect(isBareShortIdAnchorLabel("#workspace:abcdef12")).toBe(true);
   });
 
   it("allows readable channel / DM labels", () => {
-    expect(isBareMulticaAnchorLabel("#deploys")).toBe(false);
-    expect(isBareMulticaAnchorLabel("Direct message")).toBe(false);
-    expect(isBareMulticaAnchorLabel("Thread in #standup")).toBe(false);
+    expect(isBareShortIdAnchorLabel("#deploys")).toBe(false);
+    expect(isBareShortIdAnchorLabel("Direct message")).toBe(false);
+    expect(isBareShortIdAnchorLabel("Thread in #standup")).toBe(false);
+  });
+});
+
+describe("deriveReminderStatusChip", () => {
+  const now = Date.parse("2026-07-23T14:26:00Z");
+
+  it("marks upcoming future fires as scheduled", () => {
+    expect(
+      deriveReminderStatusChip({
+        section: "upcoming",
+        definitionStatus: "scheduled",
+        fireAtIso: "2026-07-23T14:29:00Z",
+        nowMs: now,
+      }),
+    ).toBe("scheduled");
+  });
+
+  it("marks upcoming past-due fires as overdue", () => {
+    expect(
+      deriveReminderStatusChip({
+        section: "upcoming",
+        definitionStatus: "scheduled",
+        fireAtIso: "2026-07-23T14:00:00Z",
+        nowMs: now,
+      }),
+    ).toBe("overdue");
+  });
+
+  it("marks history occurrences as fired unless the definition is cancelled", () => {
+    expect(
+      deriveReminderStatusChip({
+        section: "history",
+        definitionStatus: "scheduled",
+        fireAtIso: "2026-07-21T01:00:00Z",
+        nowMs: now,
+      }),
+    ).toBe("fired");
+    expect(
+      deriveReminderStatusChip({
+        section: "history",
+        definitionStatus: "cancelled",
+        fireAtIso: "2026-07-21T01:00:00Z",
+        nowMs: now,
+      }),
+    ).toBe("cancelled");
   });
 });

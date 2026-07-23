@@ -71,7 +71,9 @@ function oneShotUpcoming(overrides: Partial<RawReminderDefinition> = {}): RawRem
     title: "Ping the deploy thread",
     status: "scheduled",
     schedule_kind: "one_shot",
-    next_fire_at: "2026-07-23T09:00:00Z",
+    // Far-future default so status chip stays "Scheduled" unless a test
+    // intentionally pins a past next_fire_at for the Overdue path.
+    next_fire_at: "2099-07-23T09:00:00Z",
     snooze_count: 0,
     anchor: {
       available: true,
@@ -210,8 +212,11 @@ describe("RemindersTab (#656)", () => {
 
     renderTab();
 
-    expect(await screen.findByText("One-time")).toBeInTheDocument();
+    await screen.findByText("Ping the deploy thread");
+    // AC: one-shot does NOT show the recurrence chip (no "One-time" label either).
+    expect(screen.queryByText("One-time")).toBeNull();
     expect(screen.queryByText(/Asia\/Tokyo/)).toBeNull();
+    expect(screen.getByText("Scheduled")).toBeInTheDocument();
   });
 
   it("does not invent a timezone for an interval cadence (every:*), distinct from a calendar cadence", async () => {
@@ -252,7 +257,9 @@ describe("RemindersTab (#656)", () => {
 
     renderTab();
 
-    expect(await screen.findByText("One-time")).toBeInTheDocument();
+    await screen.findByText("Ping the deploy thread");
+    // AC: one-shot hides the recurrence chip entirely (no One-time label).
+    expect(screen.queryByText("One-time")).toBeNull();
     expect(screen.queryByText(/Asia\/Tokyo/)).toBeNull();
   });
 
@@ -294,17 +301,29 @@ describe("RemindersTab (#656)", () => {
     expect(title.className).not.toMatch(/line-clamp/);
   });
 
-  it("treats a bare #multica:<shortid> anchor label as unavailable (never dump Raft ids)", async () => {
+  it("treats a bare #multica:<shortid> or #workspace:<shortid> anchor label as unavailable", async () => {
     mockGetAgentReminders.mockImplementation((_agentId: string, params: { status: string }) => {
       if (params.status === "scheduled") {
         return Promise.resolve(
           definitionsPage([
             oneShotUpcoming({
+              id: "rem-a",
+              title: "Raft id",
               anchor: {
                 available: true,
                 kind: "channel",
                 display: "#multica:1c5652c2",
                 href: "/acme/channels/chan-1?message=msg-1",
+              },
+            }),
+            oneShotUpcoming({
+              id: "rem-b",
+              title: "Workspace id",
+              anchor: {
+                available: true,
+                kind: "channel",
+                display: "#workspace:abcdef12",
+                href: "/acme/channels/chan-2?message=msg-2",
               },
             }),
           ]),
@@ -315,9 +334,22 @@ describe("RemindersTab (#656)", () => {
 
     renderTab();
 
-    expect(await screen.findByText("Anchor unavailable")).toBeInTheDocument();
+    expect(await screen.findAllByText("Anchor unavailable")).toHaveLength(2);
     expect(screen.queryByText(/#multica:1c5652c2/)).toBeNull();
+    expect(screen.queryByText(/#workspace:abcdef12/)).toBeNull();
     expect(screen.queryByRole("link")).toBeNull();
+  });
+
+  it("surfaces status chips for scheduled upcoming and fired history rows", async () => {
+    mockGetAgentReminders.mockImplementation((_agentId: string, params: { status: string }) => {
+      if (params.status === "scheduled") return Promise.resolve(definitionsPage([oneShotUpcoming()]));
+      return Promise.resolve(occurrencesPage([recurringFired()]));
+    });
+
+    renderTab();
+
+    expect(await screen.findByText("Scheduled")).toBeInTheDocument();
+    expect(screen.getByText("Fired")).toBeInTheDocument();
   });
   it("accepts a transient 'firing' definition status as-is, without coercing it to fired", async () => {
     mockGetAgentReminders.mockImplementation((_agentId: string, params: { status: string }) => {

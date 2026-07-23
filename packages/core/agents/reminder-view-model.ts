@@ -47,6 +47,8 @@ export interface ReminderRow {
 
 export interface UpcomingReminderRow extends ReminderRow {
   nextFireAt: string;
+  /** Definition lifecycle from the wire — `scheduled` | `firing` mid-lifecycle only. */
+  status: ReminderDefinitionStatus;
 }
 
 export interface FiredReminderRow extends ReminderRow {
@@ -185,6 +187,7 @@ export function adaptUpcomingRow(raw: RawReminderDefinition): UpcomingReminderRo
     cadence,
     anchor: adaptAnchor(raw.anchor),
     nextFireAt: raw.next_fire_at,
+    status: raw.status as ReminderDefinitionStatus,
   };
 }
 

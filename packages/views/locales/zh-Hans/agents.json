@@ -616,6 +616,10 @@
     "cadence_every_days": "每 {{count}} 天",
     "cadence_raw": "{{description}}{{timezone}}",
     "cadence_timezone_suffix": " {{timezone}}",
+    "status_scheduled": "已排期",
+    "status_overdue": "已过期",
+    "status_fired": "已触发",
+    "status_cancelled": "已取消",
     "next_fire_label": "下次",
     "fired_label": "触发于",
     "timezone_label": "时区"

@@ -234,4 +234,24 @@ describe("ChannelsPage create-group popover — optional project field (#576)", 
     // drops an `undefined` value), matching the pre-#576 create request shape.
     expect(payload.project_id).toBeUndefined();
   });
+
+  it("LRM-399: create-group popover has no auto-Beckham / group-manager affordance", async () => {
+    renderPage();
+    openCreatePopover();
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText("Channel name")).toBeInTheDocument();
+    });
+    const body = document.body.textContent ?? "";
+    expect(body).not.toMatch(/自动带上|贝克汉姆|Beckham|group.?manager|auto.?provision/i);
+    fireEvent.change(screen.getByPlaceholderText("Channel name"), {
+      target: { value: "Solo Group" },
+    });
+    fireEvent.click(screen.getAllByRole("button", { name: "Create channel" }).at(-1)!);
+    await waitFor(() => expect(apiMock.createChannel).toHaveBeenCalled());
+    const createPayload = apiMock.createChannel.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(createPayload).not.toHaveProperty("group_manager");
+    expect(createPayload).not.toHaveProperty("provision_group_manager");
+    expect(createPayload).not.toHaveProperty("with_beckham");
+  });
 });

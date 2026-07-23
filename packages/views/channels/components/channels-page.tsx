@@ -76,12 +76,17 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { useWSEvent } from "@multica/core/realtime";
 import { toast } from "sonner";
-import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
+import {
+  agentListForChannelOptions,
+  agentListOptions,
+  memberListOptions,
+} from "@multica/core/workspace/queries";
 import { projectListOptions } from "@multica/core/projects/queries";
 import type {
   AgentPanelIdentitySnapshot,
   OpenAgentPanelFn,
 } from "@multica/core/agents";
+import { isAgentInviteDiscoverableInChannel } from "@multica/core/agents";
 import {
   matchesActorIdentitySearch,
   resolveActorDisplayName,
@@ -975,6 +980,13 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       ? explicit
       : (explicit ?? channels.find(isImmutableSystemChannel) ?? channels[0] ?? null);
   }, [channels, archivedChannels, activeId, activeDmId, isMobile]);
+  // Invite/discover directory for the open group (LRM-399). Separate cache from
+  // the workspace agent list so channel-scoped filtering does not poison global
+  // consumers (assignee pickers, Agents page, etc.).
+  const { data: inviteDirectoryAgents = [] } = useQuery({
+    ...agentListForChannelOptions(wsId, active?.id ?? ""),
+    enabled: !!wsId && !!active?.id && active.kind === "group",
+  });
   const isActiveArchived = !!active?.archived_at;
   // #642 — the workspace's system #general channel: immutable, auto-managed
   // roster (all human members + active workspace-visible agents, synced
@@ -1212,7 +1224,17 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     [channelMembers],
   );
   const availableMembers = workspaceMembers.filter((m) => !memberIds.has(m.user_id));
-  const availableAgents = agents.filter((a) => !agentIds.has(a.id) && !a.archived_at);
+  // LRM-399: invite directory is channel-scoped (ListAgents?channel_id=…) plus
+  // client filter — never show other groups' channel agents / group managers.
+  const availableAgents = useMemo(
+    () =>
+      inviteDirectoryAgents.filter(
+        (a) =>
+          !agentIds.has(a.id) &&
+          isAgentInviteDiscoverableInChannel(a, active?.id),
+      ),
+    [inviteDirectoryAgents, agentIds, active?.id],
+  );
   // Flat candidate list (users + agents) for Add people; chips use the
   // unfiltered pool so selections survive search.
   const allInviteCandidates = useMemo(() => {

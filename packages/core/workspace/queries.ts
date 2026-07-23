@@ -11,6 +11,9 @@ export const workspaceKeys = {
   invitations: (wsId: string) => ["workspaces", wsId, "invitations"] as const,
   myInvitations: () => ["invitations", "mine"] as const,
   agents: (wsId: string) => ["workspaces", wsId, "agents"] as const,
+  /** ListAgents with channel_id — invite/discover for one group (LRM-370/399). */
+  agentsForChannel: (wsId: string, channelId: string) =>
+    ["workspaces", wsId, "agents", "channel", channelId] as const,
   squads: (wsId: string) => ["workspaces", wsId, "squads"] as const,
   // Per-squad member status. Lives under the workspace key tree so
   // workspace switches naturally drop the cache, and so a broad
@@ -63,6 +66,24 @@ export function agentListOptions(wsId: string) {
     queryKey: workspaceKeys.agents(wsId),
     queryFn: () =>
       api.listAgents({ workspace_id: wsId, include_archived: true }),
+  });
+}
+
+/**
+ * Channel-scoped agent directory for invite / discover (LRM-399).
+ * Backend filters `visibility=channel` to this home and always omits
+ * group managers; FE still applies `isAgentInviteDiscoverableInChannel`.
+ */
+export function agentListForChannelOptions(wsId: string, channelId: string) {
+  return queryOptions({
+    queryKey: workspaceKeys.agentsForChannel(wsId, channelId),
+    queryFn: () =>
+      api.listAgents({
+        workspace_id: wsId,
+        include_archived: true,
+        channel_id: channelId,
+      }),
+    enabled: !!wsId && !!channelId,
   });
 }
 

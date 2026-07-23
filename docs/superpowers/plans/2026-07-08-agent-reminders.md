@@ -11,12 +11,12 @@ root is `server/`. TDD per task: failing test → minimal impl → targeted `go 
   ListRemindersForAgent :many (status filter), CountScheduledRemindersForAgent :one,
   ClaimDueReminders :many (atomic status transition, RETURNING *),
   MarkReminderFired :exec, SnoozeReminder :one, UpdateReminderSchedule :one,
-  CancelReminder :one, LegacyStaleFiringRecovery :exec,
+  CancelReminder :one,
   FindReminderByIDPrefix :many (workspace+agent scoped, `id::text LIKE $prefix || '%'`).
 - `make sqlc`; commit `feat(reminder): schema + queries`.
 
 ## T2 — Fire path + scheduler (depends T1)
-- `server/internal/handler/reminder_fire.go`: legacy due-row scanner (removed by V3) — claim,
+- `server/internal/handler/reminder_fire.go`: historical V1 due-row scanner (removed by V3) — claim,
   per row: resolve channel+agent (gone → cancel + activity event `anchor_gone`); insert system
   receipt via `insertChannelMessageWithParts`; `ensureChannelAgentSession` → reminder prompt
   chat_message → `TaskService.EnqueueChatTask` (priority 2) → tag task_id → MarkReminderFired →
@@ -27,7 +27,7 @@ root is `server/`. TDD per task: failing test → minimal impl → targeted `go 
   bundle format; receipt path never calls wake dispatch (by construction) — add regression
   test. Tests: receipt visible on timeline read; receipt present in an agent unread bundle
   marked system; receipt alone causes zero new tasks and no ambient pending bump.
-- `server/cmd/server/reminder_scheduler.go`: legacy 30s ticker + startup recovery (removed by V3),
+- `server/cmd/server/reminder_scheduler.go`: historical V1 30s ticker + startup recovery (removed by V3),
   modeled on `autopilot_scheduler.go`. Wire in `main.go` background block (~:354); expose the
   handler from router construction in the least invasive way.
 - Tests (`reminder_fire_test.go`, DB-backed like channel_ambient wake tests): due row fires
@@ -38,7 +38,7 @@ root is `server/`. TDD per task: failing test → minimal impl → targeted `go 
 ## T3 — Agent transport endpoints (depends T1; after T2 to serialize router/main edits)
 - `server/internal/handler/reminder.go`: schedule/list/snooze/update/cancel per design —
   `requireAgentTransportTask` auth, delay/fire_at validation (60s..90d), cap 25 → 409
-  `reminder_cap_exceeded`, message_id omitted → task trigger fallback, id prefix resolution,
+  `reminder_cap_exceeded`, required explicit message_id, id prefix resolution,
   activity events. Follow UUID-parsing convention (`parseUUIDOrBadRequest` for body UUIDs).
 - Routes in `router.go` beside `/api/agent/messages/*`.
 - Handler tests: happy paths, cap, bounds, prefix ambiguity, wrong-agent 404, non-task-token 403.

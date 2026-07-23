@@ -503,7 +503,7 @@ func TestChatRuntimeBriefRendersReplyRequirementForDirectedRun(t *testing.T) {
 	if !strings.Contains(out, "multica message send") {
 		t.Errorf("directed brief should contain CLI send instruction")
 	}
-	for _, want := range []string{"multica reminder schedule", "durable self-wake", "--repeat RULE", "weekly:days@HH:MM", "reminder schedule|list|snooze|update|cancel|log"} {
+	for _, want := range []string{"multica reminder schedule", "durable self-wake", "--repeat RULE", "--message-id <id>", "does not infer one from task text", "weekly:days@HH:MM", "reminder schedule|list|snooze|update|cancel|log"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("directed brief missing reminder capability %q", want)
 		}

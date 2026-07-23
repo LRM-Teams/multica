@@ -289,7 +289,7 @@ func (h *Handler) AgentTransportScheduleReminder(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	anchorMessageID, threadRootID, ok := h.resolveReminderAnchor(w, r.Context(), task.ChatSessionID, task.ID, origin, req.MessageID)
+	anchorMessageID, threadRootID, ok := h.resolveReminderAnchor(w, r.Context(), origin, req.MessageID)
 	if !ok {
 		return
 	}
@@ -766,19 +766,14 @@ func (h *Handler) AgentTransportCancelReminder(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, reminderResponse(cancelled))
 }
 
-func (h *Handler) resolveReminderAnchor(w http.ResponseWriter, ctx context.Context, chatSessionID, taskID pgtype.UUID, origin chatOutputOrigin, rawMessageID string) (pgtype.UUID, pgtype.UUID, bool) {
-	var messageID pgtype.UUID
-	if strings.TrimSpace(rawMessageID) != "" {
-		parsed, ok := parseUUIDOrBadRequest(w, strings.TrimSpace(rawMessageID), "message_id")
-		if !ok {
-			return pgtype.UUID{}, pgtype.UUID{}, false
-		}
-		messageID = parsed
-	} else {
-		messageID = h.channelTriggerMessageFromPrompt(ctx, chatSessionID, taskID)
+func (h *Handler) resolveReminderAnchor(w http.ResponseWriter, ctx context.Context, origin chatOutputOrigin, rawMessageID string) (pgtype.UUID, pgtype.UUID, bool) {
+	rawMessageID = strings.TrimSpace(rawMessageID)
+	if rawMessageID == "" {
+		writeError(w, http.StatusBadRequest, "message_id is required")
+		return pgtype.UUID{}, pgtype.UUID{}, false
 	}
-	if !messageID.Valid {
-		writeError(w, http.StatusBadRequest, "message_id is required when the current task has no channel anchor")
+	messageID, ok := parseUUIDOrBadRequest(w, rawMessageID, "message_id")
+	if !ok {
 		return pgtype.UUID{}, pgtype.UUID{}, false
 	}
 	var threadRootID pgtype.UUID
@@ -792,30 +787,6 @@ func (h *Handler) resolveReminderAnchor(w http.ResponseWriter, ctx context.Conte
 		return pgtype.UUID{}, pgtype.UUID{}, false
 	}
 	return messageID, threadRootID, true
-}
-
-func (h *Handler) channelTriggerMessageFromPrompt(ctx context.Context, chatSessionID, taskID pgtype.UUID) pgtype.UUID {
-	if !taskID.Valid {
-		return pgtype.UUID{}
-	}
-	var content string
-	if err := h.DB.QueryRow(ctx, `
-		SELECT content FROM chat_message
-		WHERE chat_session_id = $1 AND task_id = $2 AND role = 'user'
-		ORDER BY created_at DESC
-		LIMIT 1`, chatSessionID, taskID).Scan(&content); err != nil {
-		return pgtype.UUID{}
-	}
-	for _, prefix := range []string{"Current message id: ", "Reaction target message id: "} {
-		for _, line := range strings.Split(content, "\n") {
-			if target, ok := strings.CutPrefix(strings.TrimSpace(line), prefix); ok {
-				if parsed, err := parseUUIDString(strings.TrimSpace(target)); err == nil {
-					return parsed
-				}
-			}
-		}
-	}
-	return pgtype.UUID{}
 }
 
 func (h *Handler) resolveReminderID(w http.ResponseWriter, ctx context.Context, workspaceID, agentID pgtype.UUID, raw string) (pgtype.UUID, bool) {
@@ -1586,12 +1557,11 @@ func (h *Handler) fireReminderOccurrenceWithTx(ctx context.Context, tx pgx.Tx, r
 	if occurrenceStatus == "fired" || occurrenceStatus == "cancelled" {
 		return tx.Commit(ctx)
 	}
-	// A durable task is the wake source of truth. This state can exist for a
-	// legacy V1 firing row or a deliberately injected recovery fixture. Never
-	// create a second task; finish the occurrence/definition ledger around the
-	// already queued wake instead.
+	// Migration 210 converges every pre-cutover firing row before this runtime
+	// can serve. A non-terminal occurrence with a task therefore violates the
+	// post-cutover state machine; fail closed instead of repairing it here.
 	if existingTaskID.Valid {
-		return h.finalizeReminderOccurrenceWithExistingTask(ctx, tx, reminder, occurrenceID, cadenceSlot, existingTaskID)
+		return fmt.Errorf("reminder occurrence invariant violation: non-terminal occurrence has fired_task_id")
 	}
 
 	var channelName, channelKind string
@@ -1889,69 +1859,6 @@ func (h *Handler) terminalizeReminderOccurrence(ctx context.Context, tx pgx.Tx, 
 	h.publishAgentReminderChanged(ctx, reminder.WorkspaceID, reminder.AgentID)
 	reminder.Status = "cancelled"
 	h.projectReminderCancel(ctx, reminder)
-	return nil
-}
-
-func (h *Handler) finalizeReminderOccurrenceWithExistingTask(ctx context.Context, tx pgx.Tx, reminder agentReminder, occurrenceID pgtype.UUID, cadenceSlot pgtype.Timestamptz, taskID pgtype.UUID) error {
-	if _, err := tx.Exec(ctx, `
-		UPDATE agent_reminder_occurrence
-		SET status = 'fired', fired_at = COALESCE(fired_at, now()), updated_at = now()
-		WHERE id = $1 AND status IN ('pending', 'claimed')`, occurrenceID); err != nil {
-		return err
-	}
-	resultingState := "fired"
-	var nextFireAt any
-	if reminder.Cadence.Valid {
-		cadence, err := parseReminderCadence(reminder.Cadence.String, reminderCadenceTimezone(reminder))
-		if err != nil {
-			return err
-		}
-		next, err := nextReminderCadenceAfterSlot(cadence, cadenceSlot.Time, time.Now().UTC())
-		if err != nil {
-			return err
-		}
-		resultingState = "scheduled"
-		nextFireAt = next
-		if err := tx.QueryRow(ctx, `
-			UPDATE agent_reminder
-			SET status = 'scheduled', fire_at = $2, cadence_next_at = $2,
-			    current_occurrence_id = NULL, fired_task_id = $3,
-			    fired_at = COALESCE(fired_at, now()), version = version + 1, updated_at = now()
-			WHERE id = $1
-			RETURNING version`, reminder.ID, next, taskID).Scan(&reminder.Version); err != nil {
-			return err
-		}
-	} else if err := tx.QueryRow(ctx, `
-		UPDATE agent_reminder
-		SET status = 'fired', current_occurrence_id = NULL, fired_task_id = $2,
-		    fired_at = COALESCE(fired_at, now()), version = version + 1, updated_at = now()
-		WHERE id = $1
-		RETURNING version`, reminder.ID, taskID).Scan(&reminder.Version); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO agent_reminder_lifecycle_event (
-			reminder_id, workspace_id, agent_id, occurrence_id, event_type,
-			actor_type, previous_fire_at, next_fire_at, title_snapshot,
-			cadence_snapshot, timezone_snapshot, resulting_state, reason_code
-		) VALUES ($1, $2, $3, $4, 'fired', 'system', $5, $6, $7, $8, $9, $10, 'recovered_existing_task')
-		ON CONFLICT (occurrence_id, event_type) WHERE occurrence_id IS NOT NULL AND event_type IN ('fired', 'cancelled') DO NOTHING`,
-		reminder.ID, reminder.WorkspaceID, reminder.AgentID, occurrenceID, reminder.FireAt,
-		nextFireAt, reminder.Title, nullableText(reminder.Cadence), reminderTimezoneValue(reminder.Cadence, reminder.ScheduleTimezone), resultingState); err != nil {
-		return err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return err
-	}
-	h.publishAgentReminderChanged(ctx, reminder.WorkspaceID, reminder.AgentID)
-	if resultingState == "scheduled" {
-		reminder.Status = "scheduled"
-		reminder.FireAt = pgtype.Timestamptz{Time: nextFireAt.(time.Time), Valid: true}
-		h.projectReminderUpsert(ctx, reminder)
-	} else {
-		reminder.Status = "fired"
-		h.projectReminderCancel(ctx, reminder)
-	}
 	return nil
 }
 

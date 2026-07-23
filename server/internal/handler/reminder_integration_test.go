@@ -243,6 +243,85 @@ func TestDaemonReminderFireAttemptIsIdempotentAcrossConnections(t *testing.T) {
 	}
 }
 
+func TestFireReminderOccurrenceFailsClosedWhenExistingTaskIsNonTerminal(t *testing.T) {
+	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
+	anchor := fixture.insertMessage(t, "user", testUserID, "anchor", nil)
+	reminderID := seedDueReminder(t, fixture.agentIDs[0], fixture.channel.ID, anchor.ID, "", "")
+
+	ctx := context.Background()
+	var taskID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority)
+		VALUES ($1, $2, 'queued', 0)
+		RETURNING id`, fixture.agentIDs[0], fixture.runtimeIDs[0]).Scan(&taskID); err != nil {
+		t.Fatalf("seed impossible reminder task: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID)
+	})
+
+	var occurrenceID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_reminder_occurrence (
+			reminder_id, workspace_id, agent_id, cadence_scheduled_for, due_at,
+			status, title_snapshot, claimed_at, fired_task_id
+		)
+		SELECT id, workspace_id, agent_id, fire_at, fire_at,
+		       'claimed', title, now(), $2
+		FROM agent_reminder
+		WHERE id = $1
+		RETURNING id`, reminderID, taskID).Scan(&occurrenceID); err != nil {
+		t.Fatalf("seed impossible reminder occurrence: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_reminder
+		SET status = 'firing', current_occurrence_id = $2, updated_at = now()
+		WHERE id = $1`, reminderID, occurrenceID); err != nil {
+		t.Fatalf("seed impossible reminder definition: %v", err)
+	}
+
+	tx, err := testPool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	reminder, err := scanAgentReminder(tx.QueryRow(ctx, `SELECT `+reminderSelectColumns()+` FROM agent_reminder WHERE id = $1 FOR UPDATE`, reminderID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = fixture.handler.fireReminderOccurrenceWithTx(ctx, tx, reminder, parseUUID(occurrenceID))
+	if err == nil || !strings.Contains(err.Error(), "reminder occurrence invariant violation") {
+		t.Fatalf("fire impossible occurrence error = %v, want invariant violation", err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	var occurrenceStatus, reminderStatus string
+	var currentOccurrenceID, firedTaskID string
+	var firedAt *time.Time
+	if err := testPool.QueryRow(ctx, `
+		SELECT occurrence.status, occurrence.fired_task_id, occurrence.fired_at,
+		       reminder.status, reminder.current_occurrence_id
+		FROM agent_reminder_occurrence occurrence
+		JOIN agent_reminder reminder ON reminder.id = occurrence.reminder_id
+		WHERE occurrence.id = $1`, occurrenceID).Scan(
+		&occurrenceStatus, &firedTaskID, &firedAt, &reminderStatus, &currentOccurrenceID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if occurrenceStatus != "claimed" || firedTaskID != taskID || firedAt != nil ||
+		reminderStatus != "firing" || currentOccurrenceID != occurrenceID {
+		t.Fatalf("impossible state mutated: occurrence=%s task=%s fired_at=%v reminder=%s current=%s",
+			occurrenceStatus, firedTaskID, firedAt, reminderStatus, currentOccurrenceID)
+	}
+	occurrences, receipts, tasks, firedEvents := reminderFireCounts(t, reminderID)
+	if occurrences != 1 || receipts != 0 || tasks != 1 || firedEvents != 0 {
+		t.Fatalf("fail-closed counts = occurrence:%d receipt:%d task:%d event:%d, want 1/0/1/0",
+			occurrences, receipts, tasks, firedEvents)
+	}
+}
+
 func TestReminderOwnerLifecycleReplayFencesRuntimeMigrationAndCompactsAckedHistory(t *testing.T) {
 	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
 	agentID := fixture.agentIDs[0]
@@ -1178,6 +1257,45 @@ func TestListAgentRemindersReturnsLayeredSafeProjection(t *testing.T) {
 	}
 	if dmAnchor.Display == nil || *dmAnchor.Display != "Thread in direct message" || strings.Contains(string(dmEncoded), fixture.channel.Name) {
 		t.Fatalf("DM anchor leaked canonical channel name: %s", dmEncoded)
+	}
+}
+
+func TestAgentReminderScheduleRequiresExplicitMessageIDWithoutPromptFallback(t *testing.T) {
+	taskID, channelID := createChannelCompletionTaskWithCapabilities(t, "group", []string{
+		protocol.DaemonCapabilityChannelOutputActions,
+		protocol.DaemonCapabilityReminderVersionedCache,
+	})
+	agentID := agentIDForTask(t, taskID)
+	message, err := testHandler.insertChannelMessage(context.Background(), parseUUID(channelID), parseUUID(testWorkspaceID),
+		"user", parseUUID(testUserID), "Tester", "explicit reminder anchor", "multica", nil,
+		pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var chatSessionID string
+	if err := testPool.QueryRow(context.Background(), `SELECT chat_session_id FROM agent_task_queue WHERE id = $1`, taskID).Scan(&chatSessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO chat_message (chat_session_id, role, content, task_id)
+		VALUES ($1, 'user', $2, $3)`, chatSessionID, "Current message id: "+message.ID, taskID); err != nil {
+		t.Fatal(err)
+	}
+
+	req := agentTransportRequest(t, http.MethodPost, "/api/agent/reminders/schedule", taskID, agentID, map[string]any{
+		"title": "must not infer anchor", "delay_seconds": 300,
+	})
+	rec := httptest.NewRecorder()
+	testHandler.AgentTransportScheduleReminder(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "message_id is required") {
+		t.Fatalf("missing explicit message_id status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var reminders int
+	if err := testPool.QueryRow(context.Background(), `SELECT count(*) FROM agent_reminder WHERE agent_id = $1`, agentID).Scan(&reminders); err != nil {
+		t.Fatal(err)
+	}
+	if reminders != 0 {
+		t.Fatalf("missing explicit message_id created %d reminders, want 0", reminders)
 	}
 }
 

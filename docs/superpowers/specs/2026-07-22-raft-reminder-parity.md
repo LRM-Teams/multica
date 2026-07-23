@@ -150,7 +150,7 @@ Transport requirements:
 
 - Agent task credentials scope every mutation/read to the task's Agent and workspace.
 - Short-ID resolution remains Agent-scoped and rejects ambiguous prefixes.
-- Agent-created schedule always sends the anchor explicitly; trigger fallback may remain for compatibility inside the handler, but runtime guidance must teach explicit anchors.
+- Agent-created schedule always sends the anchor explicitly. The CLI requires `--message-id`, and the handler rejects an omitted `message_id`; neither layer infers an anchor from task prompt text.
 - List/log output provides stable machine-readable JSON plus human-readable canonical text where the CLI convention supports it.
 - Capability/runtime brief lists all six operations and recurring syntax only when both the connected server and daemon advertise the versioned Reminder transport/cache capability.
 

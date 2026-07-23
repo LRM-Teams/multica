@@ -139,7 +139,7 @@ Flat routes beside `/api/agent/messages/*` (router.go ~:1074), all POST, all res
 
 | Route | Body | Notes |
 |---|---|---|
-| `/api/agent/reminders/schedule` | `{title, delay_seconds? \| fire_at?, message_id?}` | `delay_seconds` preferred (server clock, tz-safe); `fire_at` ISO-8601 UTC. `message_id` omitted → the task's trigger message when resolvable, else 400. Cap: max **25** `scheduled` per (workspace, agent) → 409 coded `reminder_cap_exceeded`. Delay bounds: 60s … 90d. |
+| `/api/agent/reminders/schedule` | `{title, delay_seconds? \| fire_at?, message_id}` | `delay_seconds` preferred (server clock, tz-safe); `fire_at` ISO-8601 UTC. `message_id` is required and must resolve to a readable channel message or thread; the handler never infers it from task prompt text. Cap: max **25** `scheduled` per (workspace, agent) → 409 coded `reminder_cap_exceeded`. Delay bounds: 60s … 90d. |
 | `/api/agent/reminders/list` | `{status?}` | Own reminders only; default `scheduled`+`firing`. |
 | `/api/agent/reminders/snooze` | `{id, delay_seconds \| fire_at}` | `scheduled` or `fired` → back to `scheduled`, `snooze_count+1`. |
 | `/api/agent/reminders/update` | `{id, title? , delay_seconds? \| fire_at?}` | `scheduled` only. |

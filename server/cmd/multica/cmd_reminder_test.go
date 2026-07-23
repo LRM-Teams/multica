@@ -12,11 +12,12 @@ func TestReminderScheduleBodyValidation(t *testing.T) {
 	cmd.Flags().Set("delay-seconds", "300")
 	cmd.Flags().Set("fire-at", "")
 	cmd.Flags().Set("repeat", "")
+	cmd.Flags().Set("message-id", "00000000-0000-0000-0000-000000000001")
 	body, err := reminderScheduleBody(cmd, true)
 	if err != nil {
 		t.Fatalf("delay body: %v", err)
 	}
-	if body["title"] != "check CI" || body["delay_seconds"] != int64(300) {
+	if body["title"] != "check CI" || body["delay_seconds"] != int64(300) || body["message_id"] != "00000000-0000-0000-0000-000000000001" {
 		t.Fatalf("unexpected body: %#v", body)
 	}
 
@@ -50,6 +51,7 @@ func TestReminderScheduleBodyRequiresExactlyOneSchedule(t *testing.T) {
 	cmd.Flags().Set("delay-seconds", "0")
 	cmd.Flags().Set("fire-at", "")
 	cmd.Flags().Set("repeat", "")
+	cmd.Flags().Set("message-id", "00000000-0000-0000-0000-000000000001")
 	if _, err := reminderScheduleBody(cmd, true); err == nil {
 		t.Fatal("expected validation error when schedule is missing")
 	}
@@ -57,6 +59,18 @@ func TestReminderScheduleBodyRequiresExactlyOneSchedule(t *testing.T) {
 	cmd.Flags().Set("fire-at", "2026-07-10T04:00:00Z")
 	if _, err := reminderScheduleBody(cmd, true); err == nil {
 		t.Fatal("expected validation error when both schedule forms are present")
+	}
+}
+
+func TestReminderScheduleBodyRequiresMessageID(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.Flags().String("title", "check CI", "")
+	cmd.Flags().Int64("delay-seconds", 300, "")
+	cmd.Flags().String("fire-at", "", "")
+	cmd.Flags().String("repeat", "", "")
+	cmd.Flags().String("message-id", "", "")
+	if _, err := reminderScheduleBody(cmd, true); err == nil || err.Error() != "--message-id is required" {
+		t.Fatalf("missing message id error = %v, want required", err)
 	}
 }
 

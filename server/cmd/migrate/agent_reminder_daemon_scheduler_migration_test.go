@@ -322,7 +322,7 @@ func TestAgentReminderDaemonSchedulerMigration210PreservesDefinitionsAcrossDownU
 		t.Fatal(err)
 	}
 	if deliveredStatus != "fired" || recurringStatus != "scheduled" || retryStatus != "scheduled" || partialStatus != "scheduled" || deliveredCurrent != nil || recurringCurrent != nil || retryCurrent != nil || partialCurrent != nil {
-		t.Fatalf("legacy firing convergence statuses/current = %s/%v %s/%v %s/%v %s/%v", deliveredStatus, deliveredCurrent, recurringStatus, recurringCurrent, retryStatus, retryCurrent, partialStatus, partialCurrent)
+		t.Fatalf("cutover firing convergence statuses/current = %s/%v %s/%v %s/%v %s/%v", deliveredStatus, deliveredCurrent, recurringStatus, recurringCurrent, retryStatus, retryCurrent, partialStatus, partialCurrent)
 	}
 	var recurringFireAt, recurringCadenceNextAt time.Time
 	if err := conn.QueryRow(ctx, `SELECT fire_at, cadence_next_at FROM agent_reminder WHERE id = '00000000-0000-0012-0000-000000000210'`).Scan(&recurringFireAt, &recurringCadenceNextAt); err != nil {
@@ -341,7 +341,7 @@ func TestAgentReminderDaemonSchedulerMigration210PreservesDefinitionsAcrossDownU
 	}
 	var firedOccurrences, cancelledOccurrences int
 	if err := conn.QueryRow(ctx, `SELECT count(*) FILTER (WHERE status='fired'), count(*) FILTER (WHERE status='cancelled' AND terminal_reason='daemon_cutover_rearm') FROM agent_reminder_occurrence`).Scan(&firedOccurrences, &cancelledOccurrences); err != nil || firedOccurrences != 2 || cancelledOccurrences != 2 {
-		t.Fatalf("legacy occurrence convergence fired/cancelled=%d/%d err=%v", firedOccurrences, cancelledOccurrences, err)
+		t.Fatalf("cutover occurrence convergence fired/cancelled=%d/%d err=%v", firedOccurrences, cancelledOccurrences, err)
 	}
 	if _, err := conn.Exec(ctx, `
 		UPDATE agent SET runtime_id = '40000000-0000-0000-0000-000000000210' WHERE id = '10000000-0000-0000-0000-000000000210';

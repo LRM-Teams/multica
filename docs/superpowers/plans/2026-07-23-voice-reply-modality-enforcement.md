@@ -36,6 +36,8 @@ when the runtime omits `multica message send --voice`.
   a new temporary local database, ran the two focused tests successfully, and
   removed only that temporary database afterward.
 - [x] Ran `gofmt` and `git diff --check`.
+- [x] Pushed `fix/voice-reply-modality` and opened ready-for-review PR #963 into
+  `dev`: <https://github.com/LRM-Teams/multica/pull/963>.
 
 ## Boundaries
 

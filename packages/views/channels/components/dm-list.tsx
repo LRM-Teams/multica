@@ -42,7 +42,6 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@multica/ui/components/ui/popover";
-import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
 import {
@@ -69,6 +68,7 @@ import {
   MutedIndicator,
   sumUnmutedUnreadCounts,
 } from "./conversation-muted";
+import { DmListSkeleton } from "./conversation-sidebar-list-skeleton";
 import {
   CONVERSATION_SIDEBAR_ROW_ACTIVE,
   CONVERSATION_SIDEBAR_ROW_IDLE,
@@ -108,7 +108,9 @@ export function DmList({
   const timeAgo = useTimeAgo();
   const isMobile = useIsMobile();
   const wsId = useWorkspaceId();
-  const { data: dms = [], isLoading } = useQuery(dmListOptions(wsId));
+  // LRM-459: gate on isPending so disabled / pre-fetch idle never paints empty
+  // CTA (isLoading is false when isPending && !isFetching).
+  const { data: dms = [], isPending: dmsPending } = useQuery(dmListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const [collapsed, setCollapsed] = useState(false);
@@ -151,17 +153,14 @@ export function DmList({
 
   // Header "+" still available when the only DMs are pinned (they live above).
   // LRM-294: no Ask Wendy promo card — Wendy stays a normal DM row / picker entry.
-  const showHeaderTrigger = isLoading || dms.length > 0;
+  const showHeaderTrigger = dmsPending || dms.length > 0;
   const openPicker = () => setPickerOpen(true);
   const closePicker = () => setPickerOpen(false);
 
   const listBody =
     !collapsed &&
-    (isLoading ? (
-      <div className="space-y-2 p-2">
-        <Skeleton className="h-12" />
-        <Skeleton className="h-12" />
-      </div>
+    (dmsPending ? (
+      <DmListSkeleton />
     ) : hasSearchQuery && filteredDms.length === 0 && unpinnedDms.length > 0 ? (
       <div className="space-y-1 px-3 py-4 text-xs text-muted-foreground">
         <p className="font-medium text-foreground">

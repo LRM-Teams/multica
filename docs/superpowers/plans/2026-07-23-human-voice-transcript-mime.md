@@ -26,7 +26,8 @@ already persisted with Go's detected `audio/wave` media type.
 - [x] Accept registered WAV MIME aliases at the transcription boundary.
 - [x] Requeue only failed jobs caused by this exact historical MIME mismatch.
 - [x] Run targeted tests, Go vet, and migration verification.
-- [ ] Commit, push, and open an independent ready PR.
+- [x] Commit, push, and open independent ready PR
+  [#1030](https://github.com/LRM-Teams/multica/pull/1030).
 
 ## Validation
 

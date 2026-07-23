@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Copy, Terminal } from "lucide-react";
 import { toast } from "sonner";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -100,9 +100,11 @@ export function DeleteRuntimeDialog({
   // attempt's notice/override doesn't leak into the next one. Adjusted
   // inline during render (prev-prop comparison) rather than in an effect,
   // so there's no extra render with stale state between open and reset.
-  const [prevOpen, setPrevOpen] = useState(open);
-  if (open !== prevOpen) {
-    setPrevOpen(open);
+  // `prevOpenRef` is a comparison sentinel only — it's never rendered — so
+  // a ref avoids the wasted re-render a useState copy would cost.
+  const prevOpenRef = useRef(open);
+  if (open !== prevOpenRef.current) {
+    prevOpenRef.current = open;
     if (open) {
       setServerActiveAgents(null);
       setSubmitting(false);

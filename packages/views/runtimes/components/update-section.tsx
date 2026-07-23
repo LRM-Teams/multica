@@ -19,6 +19,7 @@ import {
   DialogTitle,
 } from "@multica/ui/components/ui/dialog";
 import { api } from "@multica/core/api";
+import { deriveUpdateStatus } from "@multica/core/runtimes";
 import {
   MULTICA_INSTALL_COMMAND,
   MULTICA_POWERSHELL_INSTALL_COMMAND,
@@ -56,24 +57,6 @@ const statusConfig: Record<
   failed: { icon: XCircle, color: "text-destructive" },
   timeout: { icon: XCircle, color: "text-warning" },
 };
-
-function statusFromUpdateState(
-  state: RuntimeUpdateState | undefined,
-): RuntimeUpdateStatus | null {
-  switch (state) {
-    case "pending":
-    case "running":
-    case "completed":
-    case "ready_to_apply":
-    case "failed":
-      return state;
-    case "timed_out":
-      return "timeout";
-    case "idle":
-    case undefined:
-      return null;
-  }
-}
 
 interface UpdateSectionProps {
   runtimeId: string;
@@ -197,20 +180,11 @@ export function UpdateSection({
     }
   };
 
-  const contractStatus = statusFromUpdateState(updateState);
-  const derivedStatus =
-    status ??
-    (contractStatus === "ready_to_apply"
-      ? "ready_to_apply"
-      : runtimeHealth === "updating"
-      ? contractStatus === "pending"
-        ? "pending"
-        : "running"
-      : runtimeHealth === "failed"
-        ? contractStatus === "timeout"
-          ? "timeout"
-          : "failed"
-        : null);
+  const derivedStatus = deriveUpdateStatus({
+    pollStatus: status,
+    updateState,
+    runtimeHealth,
+  });
   const hasUpdate = runtimeHealth === "update_available" && !!targetVersion;
   const rawContractError =
     runtimeHealth === "failed" ? (updateError?.trim() ?? "") : "";

@@ -13,6 +13,8 @@ import { Loader2 } from "lucide-react";
 import { api } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
 import {
+  deriveUpdateStatus,
+  isTerminalUpdateStatus,
   runtimeCanStartSelfUpdate,
   runtimeCurrentVersion,
   runtimeTargetVersion,
@@ -133,12 +135,21 @@ export function RuntimeUpdateDialog({ wsId }: RuntimeUpdateDialogProps) {
     updateState.promptKey === promptKey
       ? updateState
       : EMPTY_PROMPT_UPDATE_STATE;
-  const status = promptUpdateState.status;
+  const pollStatus = promptUpdateState.status;
   const error = promptUpdateState.error;
-  const output = promptUpdateState.output;
   const starting = promptUpdateState.starting;
   const open = !!prompt;
+  // Single display status: an in-flight poll wins, otherwise derive from the
+  // runtime projection so a daemon already downloading/staged reads correctly
+  // without waiting for the first poll tick (the "clicked, nothing happened" gap).
+  const status = deriveUpdateStatus({
+    pollStatus,
+    updateState: activeRuntime?.update_state,
+    runtimeHealth: activeRuntime?.runtime_health,
+  });
   const isActive = status === "pending" || status === "running" || starting;
+  const isTerminalSuccess = status === "completed" || status === "ready_to_apply";
+  const isTerminalError = status === "failed" || status === "timeout";
   const activeTargetVersion = activeRuntime
     ? runtimeTargetVersion(activeRuntime)
     : null;
@@ -165,15 +176,18 @@ export function RuntimeUpdateDialog({ wsId }: RuntimeUpdateDialogProps) {
     window.dispatchEvent(new Event(DISMISSED_PROMPT_KEYS_EVENT));
   }, [dismissStorageKey]);
 
-  const dismiss = useCallback(() => {
-    if (!promptKey) return;
-    rememberDismissedKey(promptKey);
-  }, [promptKey, rememberDismissedKey]);
-
   const refreshRuntimes = useCallback(() => {
     if (!wsId) return;
     qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
   }, [qc, wsId]);
+
+  const dismiss = useCallback(() => {
+    // "Later" is the only user action that remembers a dismissed key; it just
+    // defers, so there is nothing to refresh. Any in-flight poll is cleaned up.
+    if (promptKey) rememberDismissedKey(promptKey);
+    cleanupUpdatePoll();
+    setUpdateState(EMPTY_PROMPT_UPDATE_STATE);
+  }, [promptKey, rememberDismissedKey, cleanupUpdatePoll]);
 
   const pollUpdate = useCallback(
     (key: string, runtimeId: string, nextUpdateId: string) => {
@@ -181,31 +195,28 @@ export function RuntimeUpdateDialog({ wsId }: RuntimeUpdateDialogProps) {
       pollRef.current = setInterval(async () => {
         try {
           const result = await api.getUpdateResult(runtimeId, nextUpdateId);
+          const staged =
+            result.status === "completed" || result.status === "ready_to_apply";
+          const errored =
+            result.status === "failed" || result.status === "timeout";
           setUpdateState((current) => ({
             ...current,
             promptKey: key,
             status: result.status,
+            starting: false,
+            output: staged
+              ? result.output ?? t(($) => $.update.status[result.status])
+              : current.output,
+            error: errored
+              ? result.error ?? t(($) => $.update.unknown_error)
+              : current.error,
           }));
-          if (result.status === "completed") {
-            setUpdateState((current) => ({
-              ...current,
-              promptKey: key,
-              status: result.status,
-              output:
-                result.output ?? t(($) => $.update_prompt.status.completed),
-              starting: false,
-            }));
+          // `ready_to_apply` is terminal (staged, applies when idle) — stop here
+          // instead of polling forever, and refresh so the global surfaces reflect
+          // the final health/update_state. The prompt itself has already handed off.
+          if (isTerminalUpdateStatus(result.status)) {
             cleanupUpdatePoll();
             refreshRuntimes();
-          } else if (result.status === "failed" || result.status === "timeout") {
-            setUpdateState((current) => ({
-              ...current,
-              promptKey: key,
-              status: result.status,
-              error: result.error ?? t(($) => $.update.unknown_error),
-              starting: false,
-            }));
-            cleanupUpdatePoll();
           }
         } catch {
           // Keep polling through transient network or restart gaps.
@@ -227,9 +238,6 @@ export function RuntimeUpdateDialog({ wsId }: RuntimeUpdateDialogProps) {
     });
     try {
       const update = await api.initiateUpdate(activeRuntime.id, activeTargetVersion);
-      // The operation has started; keep subsequent status in AppShell/Runtimes
-      // instead of reopening this blocking prompt for the same daemon+target.
-      rememberDismissedKey(promptKey);
       setUpdateState({
         promptKey,
         status: update.status,
@@ -237,6 +245,12 @@ export function RuntimeUpdateDialog({ wsId }: RuntimeUpdateDialogProps) {
         output: "",
         starting: false,
       });
+      // Natural handoff: refresh the projection now so health flips to "updating".
+      // That drops the runtime from `runtimeCanStartSelfUpdate` eligibility, so the
+      // prompt self-dismisses and the global surfaces (AppShell / sidebar / Runtimes)
+      // take over showing progress — we never pin a modal over a multi-hour drain.
+      // We deliberately do NOT remember a dismissed key here; only "Later" does.
+      refreshRuntimes();
       pollUpdate(promptKey, activeRuntime.id, update.id);
     } catch (err) {
       setUpdateState({
@@ -284,29 +298,54 @@ export function RuntimeUpdateDialog({ wsId }: RuntimeUpdateDialogProps) {
           </p>
         )}
 
-        {status === "completed" && (
-          <p className="text-xs leading-relaxed text-success">
-            {output || t(($) => $.update_prompt.status.completed)}
-          </p>
-        )}
-        {(status === "failed" || status === "timeout") && (
-          <p className="text-xs leading-relaxed text-destructive">
-            {error || t(($) => $.update.status[status])}
-          </p>
-        )}
+        {/* Brief, in-place feedback so the click is never a black window. In the
+            normal path the projection flips to "updating" and the prompt hands off
+            to the global surfaces before any terminal shows. The ready/completed
+            branches are a stale-projection fallback: if the poll reaches a terminal
+            status while the runtime query still reports "update_available", we show
+            the outcome here (existing copy) rather than silently reverting to
+            "Update now". "Not now" is the only dismiss — we never pin a modal. */}
+        <output aria-live="polite" className="block text-xs leading-relaxed empty:hidden">
+          {isActive && (
+            <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              {t(($) => $.update.status[status === "pending" ? "pending" : "running"])}
+            </span>
+          )}
+          {status === "ready_to_apply" && (
+            <span className="text-warning">
+              {t(($) => $.update.status.ready_to_apply)}
+            </span>
+          )}
+          {status === "completed" && (
+            <span className="text-success">
+              {t(($) => $.update.status.completed)}
+            </span>
+          )}
+          {isTerminalError && (
+            <span className="text-destructive">
+              {error || t(($) => $.update.status[status])}
+            </span>
+          )}
+        </output>
 
         <DialogFooter>
           <Button variant="ghost" onClick={dismiss} disabled={isActive}>
             {t(($) => $.update_prompt.later)}
           </Button>
-          <Button onClick={startUpdate} disabled={isActive || status === "completed"}>
-            {isActive && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-            {isActive
-              ? t(($) => $.update.status.running)
-              : status === "failed" || status === "timeout"
-              ? t(($) => $.update.retry)
-              : t(($) => $.update_prompt.update_now)}
-          </Button>
+          {/* No action button at terminal success — the outcome is shown and the
+              only thing left to do is dismiss. Never revert to "Update now" (that
+              would invite a pointless re-click on an already-staged update). */}
+          {!isTerminalSuccess && (
+            <Button onClick={startUpdate} disabled={isActive}>
+              {isActive && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              {isActive
+                ? t(($) => $.update.status.running)
+                : isTerminalError
+                ? t(($) => $.update.retry)
+                : t(($) => $.update_prompt.update_now)}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

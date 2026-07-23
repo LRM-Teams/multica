@@ -1,11 +1,12 @@
 import {
-  aggregateRuntimeHealthState,
+  aggregateRuntimeHealthPresentation,
   deriveRuntimeHealth,
   runtimeCurrentVersion,
   runtimeTargetVersion,
   type RuntimeHealth,
+  type RuntimeHealthPresentation,
 } from "@multica/core/runtimes";
-import type { AgentRuntime, RuntimeHealthState } from "@multica/core/types";
+import type { AgentRuntime } from "@multica/core/types";
 import { formatDeviceInfo } from "../utils";
 
 export type RuntimeMachineSection = "local" | "remote" | "cloud";
@@ -27,7 +28,7 @@ export interface RuntimeMachine {
   section: RuntimeMachineSection;
   isCurrent: boolean;
   health: RuntimeHealth;
-  runtimeHealth: RuntimeHealthState | null;
+  runtimeHealth: RuntimeHealthPresentation | null;
   updateError: string | null;
   updateTargetVersion: string | null;
   runtimes: AgentRuntime[];
@@ -259,7 +260,7 @@ function finalizeRuntimeMachine(
     section: isCurrent ? "local" : draft.mode === "cloud" ? "cloud" : "remote",
     isCurrent,
     health,
-    runtimeHealth: aggregateRuntimeHealthState(runtimes),
+    runtimeHealth: aggregateRuntimeHealthPresentation(runtimes),
     updateError: updateIssueRuntime?.update_error?.trim() || null,
     updateTargetVersion: updateIssueRuntime
       ? runtimeTargetVersion(updateIssueRuntime)

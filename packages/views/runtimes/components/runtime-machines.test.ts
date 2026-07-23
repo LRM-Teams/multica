@@ -310,6 +310,48 @@ describe("runtime machine grouping", () => {
   });
 });
 
+describe("machine health presentation (#687)", () => {
+  it("surfaces a staged runtime's ready_to_apply on the machine header (agrees with the row)", () => {
+    // Backend collapses ready_to_apply into runtime_health=update_available; the
+    // machine aggregate must still read ready_to_apply so the header does not
+    // contradict the row-level HealthCell.
+    const machines = buildRuntimeMachines(
+      [
+        makeRuntime({
+          id: "rt-staged",
+          runtime_health: "update_available",
+          update_state: "ready_to_apply",
+        }),
+      ],
+      { now: NOW, localDaemonId: "daemon-1" },
+    );
+
+    expect(machines).toHaveLength(1);
+    expect(machines[0]?.runtimeHealth).toBe("ready_to_apply");
+  });
+
+  it("keeps offline dominating a sibling staged runtime on the header", () => {
+    const machines = buildRuntimeMachines(
+      [
+        makeRuntime({
+          id: "rt-staged",
+          runtime_health: "update_available",
+          update_state: "ready_to_apply",
+        }),
+        makeRuntime({
+          id: "rt-off",
+          runtime_health: "offline",
+          status: "offline",
+          last_seen_at: new Date(NOW - 10 * 60_000).toISOString(),
+        }),
+      ],
+      { now: NOW, localDaemonId: "daemon-1" },
+    );
+
+    expect(machines[0]?.runtimeHealth).toBe("offline");
+  });
+});
+
 describe("splitRuntimeName", () => {
   it("separates daemon host suffix from provider name", () => {
     expect(splitRuntimeName("Claude (build-server-01)")).toEqual({

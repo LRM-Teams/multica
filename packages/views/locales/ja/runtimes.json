@@ -117,6 +117,7 @@
   "runtime_health": {
     "ok": "正常",
     "update_available": "更新あり",
+    "ready_to_apply": "適用待ち",
     "updating": "更新中",
     "failed": "更新失敗",
     "offline": "オフライン"

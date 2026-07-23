@@ -121,6 +121,7 @@
   "runtime_health": {
     "ok": "OK",
     "update_available": "Update available",
+    "ready_to_apply": "Ready to apply",
     "updating": "Updating",
     "failed": "Update failed",
     "offline": "Offline"

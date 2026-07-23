@@ -117,6 +117,7 @@
   "runtime_health": {
     "ok": "正常",
     "update_available": "可更新",
+    "ready_to_apply": "已下载待应用",
     "updating": "更新中",
     "failed": "更新失败",
     "offline": "离线"

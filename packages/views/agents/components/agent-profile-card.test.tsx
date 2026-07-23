@@ -6,9 +6,10 @@ import { I18nProvider } from "@multica/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
 import enAgents from "../../locales/en/agents.json";
 import enIssues from "../../locales/en/issues.json";
+import enRuntimes from "../../locales/en/runtimes.json";
 
 const TEST_RESOURCES = {
-  en: { common: enCommon, agents: enAgents, issues: enIssues },
+  en: { common: enCommon, agents: enAgents, issues: enIssues, runtimes: enRuntimes },
 };
 
 vi.mock("@multica/core/hooks", () => ({
@@ -204,6 +205,23 @@ describe("AgentProfileCard execution controls", () => {
     expect(screen.getByTestId("thinking-picker")).toHaveTextContent(
       "thinking:readonly",
     );
+  });
+});
+
+describe("AgentProfileCard runtime update presentation (#687)", () => {
+  it("shows 'Ready to apply' for a staged local runtime, not 'Update available'", () => {
+    mockRuntimes.current = [
+      {
+        id: "rt-1",
+        name: "Claude (host.local)",
+        status: "online",
+        runtime_health: "update_available",
+        update_state: "ready_to_apply",
+      },
+    ];
+    renderCard();
+    expect(screen.getByText("Ready to apply")).toBeInTheDocument();
+    expect(screen.queryByText("Update available")).toBeNull();
   });
 });
 

@@ -123,8 +123,9 @@ type CreateAgentFromTemplateRequest struct {
 	DisplayName        string `json:"display_name"`
 	RuntimeID          string `json:"runtime_id"`
 	Model              string `json:"model,omitempty"`
-	Visibility         string `json:"visibility,omitempty"`
-	MaxConcurrentTasks int32  `json:"max_concurrent_tasks,omitempty"`
+	Visibility         string  `json:"visibility,omitempty"`
+	HomeChannelID      *string `json:"home_channel_id,omitempty"`
+	MaxConcurrentTasks int32   `json:"max_concurrent_tasks,omitempty"`
 	// Optional overrides — let the picker UI customise the template before
 	// creation without forcing a second round-trip to the detail page.
 	// When nil/empty, the template's own values are used.
@@ -191,6 +192,11 @@ func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request
 	}
 
 	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
+	if !ok {
+		return
+	}
+	homeProvided := req.HomeChannelID != nil
+	binding, ok := h.resolveAgentVisibilityBinding(r.Context(), w, workspaceID, req.Visibility, req.HomeChannelID, homeProvided)
 	if !ok {
 		return
 	}
@@ -445,7 +451,7 @@ func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request
 		RuntimeMode:        runtime.RuntimeMode,
 		RuntimeConfig:      rc,
 		RuntimeID:          runtime.ID,
-		Visibility:         req.Visibility,
+		Visibility:         insertSafeAgentVisibility(binding),
 		MaxConcurrentTasks: req.MaxConcurrentTasks,
 		OwnerID:            creatorUUID,
 		CustomEnv:          ce,
@@ -527,6 +533,18 @@ func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "commit failed: "+err.Error())
 		return
 	}
+	if err := h.applyAgentHomeChannel(r.Context(), agent.ID, binding); err != nil {
+		slog.Warn("agent-template create: apply home channel failed",
+			append(logger.RequestAttrs(r), "error", err, "agent_id", uuidToString(agent.ID))...)
+		_, _ = h.Queries.ArchiveAgent(r.Context(), db.ArchiveAgentParams{ID: agent.ID, ArchivedBy: creatorUUID})
+		writeError(w, http.StatusInternalServerError, "failed to bind home_channel_id")
+		return
+	}
+	agent, err = h.reloadAgentAfterHomeChannelRefresh(r.Context(), agent.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to reload agent")
+		return
+	}
 
 	if runtime.Status == "online" {
 		h.TaskService.ReconcileAgentStatus(r.Context(), agent.ID)
@@ -534,6 +552,10 @@ func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request
 	}
 
 	resp := agentToResponse(agent)
+	if binding.Visibility == agentVisibilityChannel {
+		home := uuidToString(binding.HomeChannelID)
+		resp.HomeChannelID = &home
+	}
 	// Templates attach skills via AddAgentSkill above, so the freshly built
 	// AgentResponse must reload them — otherwise the create response (and
 	// the agent:created broadcast) would tell clients the agent has no

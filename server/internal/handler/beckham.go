@@ -105,12 +105,15 @@ const beckhamInstructionsMarker = "规格错还是实现错"
 
 // refreshGroupManagerIfStale updates an existing Beckham's instructions,
 // description, avatar, and visibility to the current values when they are out
-// of date. Visibility must stay private so Beckham is not workspace-discoverable
-// or invite-picker listed (LRM-233).
+// of date. Visibility must stay channel + home_channel_id so Beckham is only
+// discoverable inside its bound group (LRM-240 / LRM-370; supersedes LRM-233
+// private-only hide for the visibility axis — ListAgents still excludes
+// managed_role=group_manager from the invite directory).
 func (h *Handler) refreshGroupManagerIfStale(ctx context.Context, agent db.Agent) db.Agent {
+	home, hasHome := h.loadAgentHomeChannelID(ctx, agent.ID)
 	fresh := strings.Contains(agent.Instructions, beckhamInstructionsMarker) &&
 		agent.AvatarUrl.Valid && agent.AvatarUrl.String == beckhamAvatarURL &&
-		agent.Visibility == "private"
+		agent.Visibility == agentVisibilityChannel && hasHome
 	if fresh {
 		return agent
 	}
@@ -118,7 +121,6 @@ func (h *Handler) refreshGroupManagerIfStale(ctx context.Context, agent db.Agent
 		ID:                 agent.ID,
 		Instructions:       pgtype.Text{String: beckhamInstructions, Valid: true},
 		Description:        pgtype.Text{String: beckhamDescription, Valid: true},
-		Visibility:         pgtype.Text{String: "private", Valid: true},
 		AvatarSelectionSet: true,
 		AvatarUrl:          pgtype.Text{String: beckhamAvatarURL, Valid: true},
 		AvatarSource:       agentAvatarSourceAssigned,
@@ -127,7 +129,33 @@ func (h *Handler) refreshGroupManagerIfStale(ctx context.Context, agent db.Agent
 		slog.Warn("refresh group manager persona failed", "agent_id", uuidToString(agent.ID), "error", err)
 		return agent
 	}
+	if !hasHome {
+		// Resolve home from the channel that binds this manager.
+		var channelID pgtype.UUID
+		if err := h.DB.QueryRow(ctx, `
+			SELECT id FROM channel
+			WHERE group_manager_agent_id = $1 AND workspace_id = $2
+			LIMIT 1
+		`, agent.ID, agent.WorkspaceID).Scan(&channelID); err == nil && channelID.Valid {
+			home = channelID
+			hasHome = true
+		}
+	}
+	if hasHome {
+		if err := h.applyAgentHomeChannel(ctx, updated.ID, agentChannelVisibilityBinding{
+			Visibility:    agentVisibilityChannel,
+			HomeChannelID: home,
+		}); err != nil {
+			slog.Warn("refresh group manager channel visibility failed", "agent_id", uuidToString(agent.ID), "error", err)
+		} else if reloaded, rerr := h.reloadAgentAfterHomeChannelRefresh(ctx, updated.ID); rerr == nil {
+			updated = reloaded
+		}
+	}
 	resp := agentToResponse(updated)
+	if hasHome {
+		homeID := uuidToString(home)
+		resp.HomeChannelID = &homeID
+	}
 	h.publishAgentVisibilityEvent(protocol.EventAgentStatus, uuidToString(updated.WorkspaceID), "member", "", updated, map[string]any{"agent": broadcastAgentResponse(resp)})
 	return updated
 }
@@ -223,6 +251,8 @@ func (h *Handler) EnsureGroupManagerForChannel(ctx context.Context, workspaceID,
 
 	// Create the agent outside any transaction so the identity retry-on-collision
 	// loop works (the Chinese display name collides on the derived handle).
+	// Insert as private first, then bind channel visibility + home_channel_id
+	// (CHECK requires both together; LRM-370).
 	agent, err := h.createAgentWithIdentity(ctx, h.Queries, db.CreateAgentParams{
 		WorkspaceID:        workspaceID,
 		Description:        beckhamDescription,
@@ -232,7 +262,7 @@ func (h *Handler) EnsureGroupManagerForChannel(ctx context.Context, workspaceID,
 		RuntimeMode:        runtime.RuntimeMode,
 		RuntimeConfig:      []byte("{}"),
 		RuntimeID:          runtime.ID,
-		Visibility:         "private",
+		Visibility:         agentVisibilityPrivate,
 		MaxConcurrentTasks: 6,
 		OwnerID:            creatorUserID,
 		CustomEnv:          []byte("{}"),
@@ -241,6 +271,17 @@ func (h *Handler) EnsureGroupManagerForChannel(ctx context.Context, workspaceID,
 		Model:              pgtype.Text{},
 		ThinkingLevel:      pgtype.Text{},
 	}, beckhamAgentName, beckhamAgentName)
+	if err != nil {
+		return db.Agent{}, false, err
+	}
+	if err := h.applyAgentHomeChannel(ctx, agent.ID, agentChannelVisibilityBinding{
+		Visibility:    agentVisibilityChannel,
+		HomeChannelID: channelID,
+	}); err != nil {
+		_, _ = h.DB.Exec(ctx, `UPDATE agent SET archived_at = now() WHERE id = $1`, agent.ID)
+		return db.Agent{}, false, err
+	}
+	agent, err = h.reloadAgentAfterHomeChannelRefresh(ctx, agent.ID)
 	if err != nil {
 		return db.Agent{}, false, err
 	}

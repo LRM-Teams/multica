@@ -1072,7 +1072,7 @@ func (h *Handler) AddChannelMember(w http.ResponseWriter, r *http.Request) {
 	if !h.requireChannelNotSystem(w, r.Context(), workspaceID, channelID) {
 		return
 	}
-	if !h.validateChannelMemberTarget(w, r, workspaceID, req.MemberType, memberID) {
+	if !h.validateChannelMemberTarget(w, r, workspaceID, channelID, req.MemberType, memberID) {
 		return
 	}
 	var membershipGenerationID pgtype.UUID
@@ -3715,7 +3715,7 @@ func (h *Handler) ImportLarkChannelMessage(w http.ResponseWriter, r *http.Reques
 	})
 }
 
-func (h *Handler) validateChannelMemberTarget(w http.ResponseWriter, r *http.Request, workspaceID, memberType string, memberID pgtype.UUID) bool {
+func (h *Handler) validateChannelMemberTarget(w http.ResponseWriter, r *http.Request, workspaceID string, channelID pgtype.UUID, memberType string, memberID pgtype.UUID) bool {
 	switch memberType {
 	case "user":
 		if _, err := h.getWorkspaceMember(r.Context(), uuidToString(memberID), workspaceID); err != nil {
@@ -3733,6 +3733,14 @@ func (h *Handler) validateChannelMemberTarget(w http.ResponseWriter, r *http.Req
 		actorType, actorID := h.resolveActor(r, userID, workspaceID)
 		if !h.canAccessPrivateAgent(r.Context(), agent, actorType, actorID, workspaceID) {
 			writeError(w, http.StatusForbidden, "you do not have access to this agent")
+			return false
+		}
+		homeChannelID := ""
+		if home, ok := h.loadAgentHomeChannelID(r.Context(), agent.ID); ok {
+			homeChannelID = uuidToString(home)
+		}
+		if ok, msg := canInviteAgentToChannel(agent, homeChannelID, uuidToString(channelID)); !ok {
+			writeError(w, http.StatusBadRequest, msg)
 			return false
 		}
 		// Group managers (贝克汉姆) are one-per-group and auto-managed; they must

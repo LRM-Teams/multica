@@ -114,7 +114,9 @@ func (h *Handler) channelMentionCandidates(ctx context.Context, workspaceID, cha
 	rows, err := h.DB.Query(ctx, `
 		SELECT cm.member_type, cm.member_id,
 		       COALESCE(u.name, a.name, ''),
-		       COALESCE(NULLIF(u.display_name, ''), NULLIF(a.display_name, ''), '')
+		       COALESCE(NULLIF(u.display_name, ''), NULLIF(a.display_name, ''), ''),
+		       COALESCE(a.visibility, ''),
+		       a.home_channel_id
 		FROM channel_member cm
 		LEFT JOIN "user" u ON cm.member_type = 'user' AND u.id = cm.member_id
 		LEFT JOIN agent a ON cm.member_type = 'agent' AND a.id = cm.member_id
@@ -129,14 +131,26 @@ func (h *Handler) channelMentionCandidates(ctx context.Context, workspaceID, cha
 	candidates := map[string]channelMentionCandidate{}
 	ambiguous := map[string]bool{}
 	for rows.Next() {
-		var memberType, name, displayName string
-		var memberID pgtype.UUID
-		if err := rows.Scan(&memberType, &memberID, &name, &displayName); err != nil {
+		var memberType, name, displayName, visibility string
+		var memberID, homeChannelID pgtype.UUID
+		if err := rows.Scan(&memberType, &memberID, &name, &displayName, &visibility, &homeChannelID); err != nil {
 			continue
 		}
 		mentionType := "member"
 		if memberType == "agent" {
 			mentionType = "agent"
+			// Channel-visibility agents only appear in @mention candidates in
+			// their home channel. Existing memberships elsewhere are retained
+			// but not discoverable via @ (LRM-240 / LRM-370).
+			if visibility == agentVisibilityChannel {
+				home := ""
+				if homeChannelID.Valid {
+					home = uuidToString(homeChannelID)
+				}
+				if home == "" || home != channelID {
+					continue
+				}
+			}
 		}
 		handle := strings.TrimSpace(name)
 		if mentionType == "agent" && validateIdentityHandle(handle) != nil {

@@ -1,7 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AudioLines, Captions, LoaderCircle, Mic, Play, RotateCcw, Square } from "lucide-react";
+import {
+  AudioLines,
+  Captions,
+  CaptionsOff,
+  LoaderCircle,
+  Mic,
+  Play,
+  RotateCcw,
+  Square,
+} from "lucide-react";
 import type { ChannelMessage } from "@multica/core/types";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { cn } from "@multica/ui/lib/utils";
@@ -36,6 +45,11 @@ export function VoiceMessageAudio({
     ? resolveVoiceMessagePresentation(message)
     : presentation;
   const voicePart = resolvedPresentation?.voicePart;
+  const transcriptionStatus = voicePart?.transcription_status;
+  const transcriptAvailable =
+    Boolean(message.content.trim()) &&
+    transcriptionStatus !== "pending" &&
+    transcriptionStatus !== "failed";
   const hasVoicePart = Boolean(voicePart);
   const recordingAttachment = resolvedPresentation?.source === "recording"
     ? resolvedPresentation.recordingAttachment
@@ -231,7 +245,26 @@ export function VoiceMessageAudio({
             {durationSeconds ? `${durationSeconds}″` : "…"}
           </span>
         </button>
-        {message.content.trim() ? (
+        {transcriptionStatus === "pending" ? (
+          <output
+            className="inline-flex min-h-9 shrink-0 items-center gap-1.5 px-2 text-[11px] font-medium text-muted-foreground"
+            aria-live="polite"
+          >
+            <LoaderCircle
+              className="size-3.5 animate-spin motion-reduce:animate-none"
+              aria-hidden="true"
+            />
+            {t(($) => $.message.voice_transcribing)}
+          </output>
+        ) : transcriptionStatus === "failed" ? (
+          <output
+            className="inline-flex min-h-9 shrink-0 items-center gap-1.5 px-2 text-[11px] font-medium text-muted-foreground"
+            aria-live="polite"
+          >
+            <CaptionsOff className="size-3.5" aria-hidden="true" />
+            {t(($) => $.message.voice_transcription_unavailable)}
+          </output>
+        ) : transcriptAvailable ? (
           <button
             type="button"
             className={cn(
@@ -248,7 +281,7 @@ export function VoiceMessageAudio({
           </button>
         ) : null}
       </div>
-      {transcriptExpanded ? (
+      {transcriptExpanded && transcriptAvailable ? (
         <section
           id={transcriptPanelId}
           data-testid="voice-reply-transcript"

@@ -1,7 +1,7 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelMessage } from "@multica/core/types";
+import type { Attachment, ChannelMessage } from "@multica/core/types";
 import { VoiceMessageAudio } from "./voice-message-audio";
 import { voiceBubbleWidthPx } from "../lib/voice-message-presentation";
 
@@ -34,6 +34,8 @@ vi.mock("../../i18n/use-t", () => ({
           voice_show_transcript: "Show transcript",
           voice_hide_transcript: "Hide transcript",
           voice_transcript_label: "Voice transcript",
+          voice_transcribing: "Transcribing",
+          voice_transcription_unavailable: "Transcript unavailable",
         },
       }),
   }),
@@ -56,6 +58,46 @@ function agentVoiceMessage(overrides: Partial<ChannelMessage> = {}): ChannelMess
     parts: [{ type: "text", text: "Spoken answer" }, { type: "voice" }],
     ...overrides,
   };
+}
+
+function humanRecordingMessage(
+  transcriptionStatus: "pending" | "completed" | "failed",
+): ChannelMessage {
+  const attachment: Attachment = {
+    id: "recording-status",
+    workspace_id: "workspace-1",
+    issue_id: null,
+    comment_id: null,
+    chat_session_id: null,
+    chat_message_id: null,
+    uploader_type: "member",
+    uploader_id: "user-1",
+    filename: "voice-status.wav",
+    url: "/uploads/voice-status.wav",
+    download_url: "/api/attachments/recording-status/download",
+    markdown_url: "/api/attachments/recording-status/download",
+    content_type: "audio/wav",
+    size_bytes: 48,
+    created_at: "2026-07-23T10:00:00.000Z",
+  };
+  return agentVoiceMessage({
+    type: "user",
+    author_id: "user-1",
+    author_name: "Alice",
+    content: transcriptionStatus === "completed" ? "Recorded question" : "",
+    parts: [
+      ...(transcriptionStatus === "completed"
+        ? [{ type: "text" as const, text: "Recorded question" }]
+        : []),
+      {
+        type: "voice",
+        duration_ms: 1800,
+        attachment_id: attachment.id,
+        transcription_status: transcriptionStatus,
+      },
+    ],
+    attachments: [attachment],
+  });
 }
 
 describe("VoiceMessageAudio", () => {
@@ -209,6 +251,32 @@ describe("VoiceMessageAudio", () => {
 
     expect(mediaPlay).toHaveBeenCalledOnce();
     expect(playbackMocks.prepareVoiceAudio).not.toHaveBeenCalled();
+  });
+
+  it("shows pending transcription beside the voice bubble", () => {
+    playbackMocks.claimVoiceAutoplay.mockReturnValue(false);
+    render(<VoiceMessageAudio message={humanRecordingMessage("pending")} />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("Transcribing");
+    expect(screen.getByRole("button", { name: "Play voice reply" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Show transcript" })).not.toBeInTheDocument();
+  });
+
+  it("scopes a transcription failure to the transcript action", () => {
+    playbackMocks.claimVoiceAutoplay.mockReturnValue(false);
+    render(<VoiceMessageAudio message={humanRecordingMessage("failed")} />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("Transcript unavailable");
+    expect(screen.getByRole("button", { name: "Play voice reply" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Show transcript" })).not.toBeInTheDocument();
+  });
+
+  it("shows the transcript action only after server transcription completes", () => {
+    playbackMocks.claimVoiceAutoplay.mockReturnValue(false);
+    render(<VoiceMessageAudio message={humanRecordingMessage("completed")} />);
+
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show transcript" })).toBeEnabled();
   });
 
   it("does not synthesize a human recording when its media URL is unavailable", async () => {

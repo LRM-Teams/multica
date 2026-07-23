@@ -38,7 +38,16 @@ SET provider_session_id = COALESCE(
 WHERE state.agent_id = $5
   AND state.runtime_id = $6
   AND state.generation = $7
-  AND (state.last_turn_id IS NULL OR state.last_turn_id <> $4::uuid)
+  AND (
+      state.last_turn_id IS NULL
+      OR state.last_turn_id <> $4::uuid
+      OR (
+          state.last_turn_id = $4::uuid
+          AND state.provider_session_id IS NULL
+          AND state.fresh_session_notice_reason = 'reset'
+          AND NULLIF(btrim($1::text), '') IS NOT NULL
+      )
+  )
   AND EXISTS (
       SELECT 1
       FROM agent current
@@ -63,6 +72,11 @@ type AdvanceAgentRuntimeStateCASParams struct {
 // session. Nullable pointer inputs preserve their current canonical values.
 // The first-wake notice is consumed only after a real provider session exists;
 // a failed first wake therefore sees the notice again on retry.
+// A reset is the one deliberate same-turn successor: the daemon may discover
+// a poisoned resume, clear it, then establish a fresh provider session during
+// the same wake. That successor must present the generation produced by the
+// clear, and only an empty row carrying the reset notice qualifies. Generation
+// CAS still rejects the pre-clear writer and all concurrent late results.
 func (q *Queries) AdvanceAgentRuntimeStateCAS(ctx context.Context, arg AdvanceAgentRuntimeStateCASParams) (AgentRuntimeState, error) {
 	row := q.db.QueryRow(ctx, advanceAgentRuntimeStateCAS,
 		arg.ProviderSessionID,

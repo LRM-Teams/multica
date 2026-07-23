@@ -281,6 +281,8 @@ func TestCanonicalAgentRuntimeStateQueriesStayQueueIndependent(t *testing.T) {
 		"state.generation + 1",
 		"current.runtime_id = state.runtime_id",
 		"sqlc.arg('notice_reason')::text = 'reset'",
+		"state.fresh_session_notice_reason = 'reset'",
+		"NULLIF(btrim(sqlc.narg('provider_session_id')::text), '') IS NOT NULL",
 	} {
 		if !strings.Contains(contents, required) {
 			t.Errorf("canonical runtime-state query contract missing %q", required)

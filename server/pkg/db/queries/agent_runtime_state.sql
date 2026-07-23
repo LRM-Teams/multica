@@ -46,6 +46,11 @@ WHERE state.agent_id = sqlc.arg('agent_id')
 -- session. Nullable pointer inputs preserve their current canonical values.
 -- The first-wake notice is consumed only after a real provider session exists;
 -- a failed first wake therefore sees the notice again on retry.
+-- A reset is the one deliberate same-turn successor: the daemon may discover
+-- a poisoned resume, clear it, then establish a fresh provider session during
+-- the same wake. That successor must present the generation produced by the
+-- clear, and only an empty row carrying the reset notice qualifies. Generation
+-- CAS still rejects the pre-clear writer and all concurrent late results.
 UPDATE agent_runtime_state state
 SET provider_session_id = COALESCE(
         NULLIF(btrim(sqlc.narg('provider_session_id')::text), ''),
@@ -72,7 +77,16 @@ SET provider_session_id = COALESCE(
 WHERE state.agent_id = sqlc.arg('agent_id')
   AND state.runtime_id = sqlc.arg('runtime_id')
   AND state.generation = sqlc.arg('expected_generation')
-  AND (state.last_turn_id IS NULL OR state.last_turn_id <> sqlc.arg('turn_id')::uuid)
+  AND (
+      state.last_turn_id IS NULL
+      OR state.last_turn_id <> sqlc.arg('turn_id')::uuid
+      OR (
+          state.last_turn_id = sqlc.arg('turn_id')::uuid
+          AND state.provider_session_id IS NULL
+          AND state.fresh_session_notice_reason = 'reset'
+          AND NULLIF(btrim(sqlc.narg('provider_session_id')::text), '') IS NOT NULL
+      )
+  )
   AND EXISTS (
       SELECT 1
       FROM agent current

@@ -336,6 +336,8 @@
     "voice_transcript_label": "语音转写",
     "voice_transcribing": "转写中",
     "voice_transcription_unavailable": "无法转文字",
+    "voice_synthesizing": "正在生成语音",
+    "voice_synthesis_unavailable": "语音生成失败",
     "voice_preview": "语音消息",
     "voice_preview_duration": "语音消息 · {{seconds}} 秒",
     "agent_badge": "Agent",

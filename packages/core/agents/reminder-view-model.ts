@@ -120,16 +120,17 @@ export interface RawReminderPage {
 // stays visible, only the anchor link is dropped.
 /**
  * Bare `#workspace:shortId` labels are the Frank anti-pattern (IMG_3124
- * counter-example). Prefer readable channel/DM names from LRM-507
- * (`display_name`); never paint the bare short id as primary ink.
+ * counter-example). Primary ink is `display_name` only (LRM-238 / LRM-507);
+ * missing name or bare short id → unavailable — never fall back to legacy
+ * `display`.
  */
 export function isBareWorkspaceShortIdLabel(label: string): boolean {
   return /^#[^\s#:]+:[0-9a-fA-F-]{4,36}$/.test(label.trim());
 }
 
-/** LRM-505/507: `display_name` first, then legacy `display`. */
+/** LRM-505/238: primary ink reads `display_name` only — no `display` fallback. */
 export function reminderAnchorLabel(raw: RawReminderAnchor): string | undefined {
-  const label = (raw.display_name || raw.display || "").trim();
+  const label = (raw.display_name || "").trim();
   return label || undefined;
 }
 

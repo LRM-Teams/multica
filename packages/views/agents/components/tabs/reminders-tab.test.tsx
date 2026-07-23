@@ -72,7 +72,7 @@ function oneShotUpcoming(overrides: Partial<RawReminderDefinition> = {}): RawRem
     anchor: {
       available: true,
       kind: "channel",
-      display: "#deploys",
+      display_name: "#deploys",
       href: "/acme/channels/chan-1?message=msg-1",
     },
     ...overrides,
@@ -97,7 +97,7 @@ function recurringFired(overrides: Partial<RawReminderOccurrence> = {}): RawRemi
     anchor: {
       available: true,
       kind: "channel",
-      display: "#standup",
+      display_name: "#standup",
       href: "/acme/channels/chan-2?message=msg-2",
     },
     ...overrides,

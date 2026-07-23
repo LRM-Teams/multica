@@ -71,7 +71,7 @@ describe("adaptUpcomingRow", () => {
     expect(row?.anchor).toEqual({ available: false });
   });
 
-  it("prefers display_name over legacy display (LRM-507)", () => {
+  it("uses display_name only and ignores legacy display (LRM-238)", () => {
     const row = adaptUpcomingRow(
       makeDefinition({
         anchor: {
@@ -105,7 +105,7 @@ describe("adaptUpcomingRow", () => {
     expect(row?.anchor).toEqual({ available: false });
   });
 
-  it("falls back to legacy display when display_name is absent", () => {
+  it("does not fall back to legacy display when display_name is absent (LRM-238)", () => {
     const row = adaptUpcomingRow(
       makeDefinition({
         anchor: {
@@ -116,12 +116,7 @@ describe("adaptUpcomingRow", () => {
         },
       }),
     );
-    expect(row?.anchor).toEqual({
-      available: true,
-      kind: "thread",
-      label: "Thread in #deploys",
-      href: "/acme/channels/chan-1?message=msg-1",
-    });
+    expect(row?.anchor).toEqual({ available: false });
   });
 
   it("adapts a well-formed one_shot row", () => {

@@ -988,15 +988,18 @@ func (h *Handler) agentInboxInitiatorUserID(r *http.Request, workspaceID pgtype.
 	return target, err == nil && target.Valid
 }
 
-func (h *Handler) MarkAgentDraftUsed(r *http.Request, workspaceID, targetUserID string, draftID pgtype.UUID, usedAgentID pgtype.UUID) {
-	if h == nil || h.DB == nil || !draftID.Valid || !usedAgentID.Valid || strings.TrimSpace(targetUserID) == "" {
+func (h *Handler) MarkAgentDraftUsed(r *http.Request, workspaceID string, draftID pgtype.UUID, usedAgentID pgtype.UUID) {
+	// Match GetAgentDraft / loadAgentDraftSeed: any workspace member who can
+	// open the hiring card may consume it. Do not gate on target_user_id —
+	// that field is requester provenance from Wendy, not exclusive create ACL.
+	if h == nil || h.DB == nil || !draftID.Valid || !usedAgentID.Valid {
 		return
 	}
 	_, _ = h.DB.Exec(r.Context(), `
 		UPDATE agent_creation_draft
 		SET status = 'used', used_agent_id = $2, used_at = now(), updated_at = now()
-		WHERE id = $1 AND workspace_id = $3 AND target_user_id = $4 AND status = 'draft'`,
-		draftID, usedAgentID, parseUUID(workspaceID), parseUUID(targetUserID))
+		WHERE id = $1 AND workspace_id = $3 AND status = 'draft'`,
+		draftID, usedAgentID, parseUUID(workspaceID))
 }
 
 type agentDraftSeed struct {
@@ -1005,25 +1008,31 @@ type agentDraftSeed struct {
 	AvatarURL     pgtype.Text
 }
 
-func (h *Handler) loadAgentDraftSeed(r *http.Request, workspaceID, targetUserID string, draftID pgtype.UUID) (agentDraftSeed, bool) {
-	if h == nil || h.DB == nil || !draftID.Valid || strings.TrimSpace(targetUserID) == "" {
-		return agentDraftSeed{}, false
+// loadAgentDraftSeed loads a still-open hiring draft for CreateAgent.
+// Lookup matches GetAgentDraft (workspace-scoped id), then requires status=draft.
+// status is returned even when ok=false so callers can distinguish missing vs used.
+func (h *Handler) loadAgentDraftSeed(r *http.Request, workspaceID string, draftID pgtype.UUID) (seed agentDraftSeed, status string, ok bool) {
+	if h == nil || h.DB == nil || !draftID.Valid {
+		return agentDraftSeed{}, "", false
 	}
 	var initialNotesRaw, initialMemoryRaw []byte
 	var avatarURL pgtype.Text
 	err := h.DB.QueryRow(r.Context(), `
-		SELECT initial_notes, initial_memory, avatar_url
+		SELECT initial_notes, initial_memory, avatar_url, status
 		FROM agent_creation_draft
-		WHERE id = $1 AND workspace_id = $2 AND target_user_id = $3 AND status = 'draft'`,
-		draftID, parseUUID(workspaceID), parseUUID(targetUserID)).Scan(&initialNotesRaw, &initialMemoryRaw, &avatarURL)
+		WHERE id = $1 AND workspace_id = $2`,
+		draftID, parseUUID(workspaceID)).Scan(&initialNotesRaw, &initialMemoryRaw, &avatarURL, &status)
 	if err != nil {
-		return agentDraftSeed{}, false
+		return agentDraftSeed{}, "", false
+	}
+	if status != "draft" {
+		return agentDraftSeed{}, status, false
 	}
 	return agentDraftSeed{
 		InitialNotes:  decodeStringMap(initialNotesRaw),
 		InitialMemory: decodeStringMap(initialMemoryRaw),
 		AvatarURL:     avatarURL,
-	}, true
+	}, status, true
 }
 
 func extractDraftID(rawFields map[string]json.RawMessage) (pgtype.UUID, bool, error) {

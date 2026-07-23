@@ -38,7 +38,7 @@ import { ThinkingDropdown } from "../agents/components/thinking-dropdown";
 import { HomeChannelBindChip } from "../agents/components/home-channel-bind-chip";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../i18n";
-import { listParam, parseWindyCreateAgentURL } from "./windy-create-agent-link-utils";
+import { listParam, parseWindyCreateAgentURL, isAgentDraftUnavailableError } from "./windy-create-agent-link-utils";
 
 function VisibilityOptionIcon({
   value,
@@ -67,6 +67,7 @@ export function WindyCreateAgentLink({
   children: React.ReactNode;
   className?: string;
 }) {
+  const { t } = useT("agents");
   const [creatingDraft, setCreatingDraft] = React.useState(false);
   const [draft, setDraft] = React.useState<AgentCreationDraft | null>(null);
   const [createdAgentName, setCreatedAgentName] = React.useState<string | null>(null);
@@ -101,9 +102,18 @@ export function WindyCreateAgentLink({
             suggested_channels: listParam(url, "suggested_channel"),
             recommended_tools: listParam(url, "tool"),
           });
+      if (createdDraft.status && createdDraft.status !== "draft") {
+        toast.error(t(($) => $.windy.draft_unavailable));
+        return;
+      }
       setDraft(createdDraft);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to load agent draft");
+      const message = err instanceof Error ? err.message : "";
+      toast.error(
+        isAgentDraftUnavailableError(message)
+          ? t(($) => $.windy.draft_unavailable)
+          : message || "Failed to load agent draft",
+      );
     } finally {
       setCreatingDraft(false);
     }
@@ -243,7 +253,12 @@ function InlineCreateAgentDialog({
       onCreated(created.display_name || draft.name);
       onClose();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to create agent");
+      const message = err instanceof Error ? err.message : "";
+      toast.error(
+        isAgentDraftUnavailableError(message)
+          ? t(($) => $.windy.draft_unavailable)
+          : message || "Failed to create agent",
+      );
     } finally {
       setCreating(false);
     }

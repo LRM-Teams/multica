@@ -22,3 +22,8 @@ export function listParam(url: URL, key: string): string[] {
 export function isWindyCreateAgentLink(href: string | undefined): boolean {
   return !!href && parseWindyCreateAgentURL(href) != null;
 }
+
+/** Server CreateAgent / GetAgentDraft errors that mean reopen Wendy's hiring card. */
+export function isAgentDraftUnavailableError(message: string): boolean {
+  return /agent draft (not found|already used|is no longer available)/i.test(message);
+}

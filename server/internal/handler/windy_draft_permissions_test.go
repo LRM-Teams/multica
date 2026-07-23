@@ -182,3 +182,95 @@ func TestGetAgentDraft_AllowsWorkspaceMemberViewer(t *testing.T) {
 		t.Fatalf("loaded draft = {id:%q target:%q}, want {id:%q target:%q}", loaded.ID, loaded.TargetUserID, created.ID, created.TargetUserID)
 	}
 }
+
+func TestCreateAgent_FromDraftAllowsNonTargetWorkspaceMember(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	targetID := createWindyDraftTestMember(t, "Wendy Draft Target")
+	marker := strings.ReplaceAll(uuid.NewString(), "-", "")[:10]
+	var draftID string
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO agent_creation_draft (
+			workspace_id, target_user_id, name, description, instructions, visibility
+		) VALUES ($1, $2, $3, $4, $5, 'private')
+		RETURNING id
+	`, testWorkspaceID, targetID, "hire-non-target-"+marker, "desc", "instructions").Scan(&draftID); err != nil {
+		t.Fatalf("insert draft: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_creation_draft WHERE id = $1`, draftID)
+	})
+
+	// Creator is testUserID (runtime owner), target is a different member —
+	// mirrors group hiring cards where Get succeeds for any member but
+	// Create previously failed on target_user_id mismatch (LRM-444).
+	if targetID == testUserID {
+		t.Fatal("test setup needs draft target != creator")
+	}
+
+	rec := httptest.NewRecorder()
+	testHandler.CreateAgent(rec, newRequest(http.MethodPost, "/api/agents", map[string]any{
+		"display_name":         "from-non-target-draft-" + marker,
+		"runtime_id":           testRuntimeID,
+		"visibility":           "private",
+		"max_concurrent_tasks": 1,
+		"draft_id":             draftID,
+	}))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("CreateAgent from non-target draft: expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var created AgentResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, created.ID)
+	})
+
+	var status string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT status FROM agent_creation_draft WHERE id = $1
+	`, draftID).Scan(&status); err != nil {
+		t.Fatalf("reload draft status: %v", err)
+	}
+	if status != "used" {
+		t.Fatalf("draft status = %q, want used", status)
+	}
+}
+
+func TestCreateAgent_FromUsedDraftReturnsRecoverableError(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	marker := strings.ReplaceAll(uuid.NewString(), "-", "")[:10]
+	var draftID string
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO agent_creation_draft (
+			workspace_id, target_user_id, name, visibility, status, used_at
+		) VALUES ($1, $2, $3, 'private', 'used', now())
+		RETURNING id
+	`, testWorkspaceID, testUserID, "used-draft-"+marker).Scan(&draftID); err != nil {
+		t.Fatalf("insert used draft: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_creation_draft WHERE id = $1`, draftID)
+	})
+
+	rec := httptest.NewRecorder()
+	testHandler.CreateAgent(rec, newRequest(http.MethodPost, "/api/agents", map[string]any{
+		"display_name":         "from-used-draft-" + marker,
+		"runtime_id":           testRuntimeID,
+		"visibility":           "private",
+		"max_concurrent_tasks": 1,
+		"draft_id":             draftID,
+	}))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("CreateAgent from used draft: expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "already used") || !strings.Contains(rec.Body.String(), "hiring card") {
+		t.Fatalf("expected recoverable used-draft error, got %s", rec.Body.String())
+	}
+}

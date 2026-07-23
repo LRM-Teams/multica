@@ -30,6 +30,7 @@ import type {
   AgentCreationDraft,
 } from "@multica/core/types";
 import { isImeComposing } from "@multica/core/utils";
+import { isAgentDraftUnavailableError } from "../../common/windy-create-agent-link-utils";
 import {
   Dialog,
   DialogContent,
@@ -312,7 +313,12 @@ export function CreateAgentDialog({
       }
       onClose();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : t(($) => $.create_dialog.create_failed_toast));
+      const message = err instanceof Error ? err.message : "";
+      toast.error(
+        isAgentDraftUnavailableError(message)
+          ? t(($) => $.windy.draft_unavailable)
+          : message || t(($) => $.create_dialog.create_failed_toast),
+      );
       setCreating(false);
     }
   };

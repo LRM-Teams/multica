@@ -1023,9 +1023,16 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	initialMemory := cleanInitialContextMap(req.InitialMemory, allowedInitialMemorySeedPath)
 	var draftAvatar resolvedAgentAvatar
 	if hasDraftID {
-		draftSeed, found := h.loadAgentDraftSeed(r, workspaceID, ownerID, draftID)
+		draftSeed, draftStatus, found := h.loadAgentDraftSeed(r, workspaceID, draftID)
 		if !found {
-			writeError(w, http.StatusBadRequest, "agent draft not found")
+			switch draftStatus {
+			case "used":
+				writeError(w, http.StatusBadRequest, "agent draft already used; reopen the Wendy hiring card")
+			case "":
+				writeError(w, http.StatusBadRequest, "agent draft not found; reopen the Wendy hiring card")
+			default:
+				writeError(w, http.StatusBadRequest, "agent draft is no longer available; reopen the Wendy hiring card")
+			}
 			return
 		}
 		if len(draftSeed.InitialNotes) > 0 || len(draftSeed.InitialMemory) > 0 {
@@ -1106,7 +1113,7 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	slog.Info("agent created", append(logger.RequestAttrs(r), "agent_id", uuidToString(created.ID), "name", created.Name, "workspace_id", workspaceID)...)
 	if hasDraftID {
-		h.MarkAgentDraftUsed(r, workspaceID, ownerID, draftID, created.ID)
+		h.MarkAgentDraftUsed(r, workspaceID, draftID, created.ID)
 	}
 	if len(initialNotes) > 0 || len(initialMemory) > 0 {
 		h.seedAgentInitialContext(r, created, initialNotes, initialMemory)

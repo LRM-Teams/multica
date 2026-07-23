@@ -48,6 +48,7 @@ import {
 import { Input } from "@multica/ui/components/ui/input";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { useNavigation } from "../../navigation";
+import { isAgentDraftUnavailableError } from "../../common/windy-create-agent-link-utils";
 import { PageHeader } from "../../layout/page-header";
 import {
   availabilityConfig,
@@ -204,19 +205,28 @@ export function AgentsPage({
       try {
         const draft = await api.getAgentDraft(draftId);
         if (cancelled) return;
+        if (draft.status && draft.status !== "draft") {
+          toast.error(t(($) => $.windy.draft_unavailable));
+          return;
+        }
         setCreateDraft(draft);
         setDuplicateTemplate(null);
         setShowCreate(true);
       } catch (err) {
         if (!cancelled) {
-          toast.error(err instanceof Error ? err.message : "Failed to load Wendy draft");
+          const message = err instanceof Error ? err.message : "";
+          toast.error(
+            isAgentDraftUnavailableError(message)
+              ? t(($) => $.windy.draft_unavailable)
+              : message || "Failed to load Wendy draft",
+          );
         }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [navigation.searchParams]);
+  }, [navigation.searchParams, t]);
 
   const runtimesById = useMemo(() => {
     const m = new Map<string, AgentRuntime>();

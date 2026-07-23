@@ -20,7 +20,7 @@ type AgentRepoParams struct {
 	TurnID              string
 	RepoURL             string
 	Ref                 string
-	AgentName           string
+	AgentName           string // display metadata only; never part of filesystem or branch identity
 	CoAuthoredByEnabled bool
 }
 
@@ -90,7 +90,7 @@ func (c *Cache) MaterializeAgentRepo(params AgentRepoParams) (*AgentRepoResult, 
 	if err := ensureDurableCheckout(barePath, durablePath, baseRef, c.logger); err != nil {
 		return nil, err
 	}
-	branchName := fmt.Sprintf("agent/%s/%s", sanitizeName(params.AgentName), params.TurnID)
+	branchName := fmt.Sprintf("agent/%s/%s", params.AgentID, params.TurnID)
 	actualBranch, err := ensureTurnWorktree(barePath, worktreePath, branchName, baseRef)
 	if err != nil {
 		return nil, err

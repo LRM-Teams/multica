@@ -98,6 +98,65 @@ func TestMaterializeAgentRepoSeparatesDurableAndTurnWorktrees(t *testing.T) {
 	}
 }
 
+func TestMaterializeAgentRepoReplayIgnoresAgentRenameAndPreservesChanges(t *testing.T) {
+	sourceRepo := createTestRepo(t)
+	workspacesRoot := t.TempDir()
+	workspaceID := uuid.NewString()
+	agentID := uuid.NewString()
+	turnID := uuid.NewString()
+
+	cache := New(filepath.Join(workspacesRoot, ".repos"), testLogger())
+	if err := cache.Sync(workspaceID, []RepoInfo{{URL: sourceRepo}}); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	params := AgentRepoParams{
+		WorkspacesRoot: workspacesRoot,
+		WorkspaceID:    workspaceID,
+		AgentID:        agentID,
+		TurnID:         turnID,
+		RepoURL:        sourceRepo,
+		AgentName:      "Old Display Name",
+	}
+	first, err := cache.MaterializeAgentRepo(params)
+	if err != nil {
+		t.Fatalf("MaterializeAgentRepo first: %v", err)
+	}
+	wantBranch := "agent/" + agentID + "/" + turnID
+	if first.BranchName != wantBranch {
+		t.Fatalf("first branch = %q, want immutable identity %q", first.BranchName, wantBranch)
+	}
+
+	trackedPath := filepath.Join(first.Path, "README.md")
+	if err := os.WriteFile(trackedPath, []byte("dirty tracked change\n"), 0o644); err != nil {
+		t.Fatalf("write dirty tracked file: %v", err)
+	}
+	untrackedPath := filepath.Join(first.Path, "untracked.txt")
+	if err := os.WriteFile(untrackedPath, []byte("preserve untracked\n"), 0o644); err != nil {
+		t.Fatalf("write untracked file: %v", err)
+	}
+
+	params.AgentName = "New Display Name"
+	replayed, err := cache.MaterializeAgentRepo(params)
+	if err != nil {
+		t.Fatalf("MaterializeAgentRepo after rename: %v", err)
+	}
+	if *replayed != *first {
+		t.Fatalf("rename changed replay result: first=%+v replayed=%+v", first, replayed)
+	}
+	for path, want := range map[string]string{
+		trackedPath:   "dirty tracked change\n",
+		untrackedPath: "preserve untracked\n",
+	} {
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read preserved file %s: %v", path, err)
+		}
+		if string(got) != want {
+			t.Errorf("preserved file %s = %q, want %q", path, got, want)
+		}
+	}
+}
+
 func TestMaterializeAgentRepoConcurrentTurnsSerializeBareRepoMutation(t *testing.T) {
 	sourceRepo := createTestRepo(t)
 	workspacesRoot := t.TempDir()

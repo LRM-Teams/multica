@@ -1,14 +1,8 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
-import { useWorkspaceId } from "@multica/core/hooks";
-import { memberProfileOptions } from "@multica/core/workspace/queries";
-import { useActorName } from "@multica/core/workspace/hooks";
 import {
-  directoryActorDisplayName,
-  profileActorDisplayName,
-  toMemberProfileType,
-} from "@multica/core/workspace/resolved-actor-name";
+  useResolvedActorIdentity,
+} from "./use-resolved-actor-identity";
 
 /**
  * LRM-281 / LRM-238: resolve display names from the live actor directory
@@ -22,25 +16,13 @@ import {
  *
  * Returns null while pending / on hard miss — callers must not invent copy
  * from emit-time params (use a typed id placeholder if a label is required).
+ *
+ * LRM-391: same path also powers comment / Activity author chrome via
+ * {@link useResolvedActorIdentity} (name + avatar).
  */
 export function useResolvedActorDisplayName(
   actorId: string | undefined,
   mentionType: "agent" | "member" | null,
 ): string | null {
-  const { getActorName } = useActorName();
-  const fromDirectory =
-    actorId && mentionType
-      ? directoryActorDisplayName(getActorName, mentionType, actorId)
-      : null;
-
-  const wsId = useWorkspaceId();
-  const profileType = mentionType ? toMemberProfileType(mentionType) : "user";
-  const { data: profile } = useQuery({
-    ...memberProfileOptions(wsId, profileType, actorId ?? ""),
-    enabled: !!wsId && !!actorId && mentionType != null && !fromDirectory,
-  });
-
-  if (!actorId || !mentionType) return null;
-  if (fromDirectory) return fromDirectory;
-  return profileActorDisplayName(profile);
+  return useResolvedActorIdentity(actorId, mentionType).displayName;
 }

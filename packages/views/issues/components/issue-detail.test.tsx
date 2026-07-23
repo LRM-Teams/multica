@@ -67,6 +67,12 @@ vi.mock("@multica/core/workspace/queries", () => ({
     queryKey: ["workspaces", "ws-1", "members"],
     queryFn: () => Promise.resolve([{ user_id: "user-1", name: "Test User", email: "test@test.com", role: "admin" }]),
   }),
+  // LRM-391: ActivityActorName / comment authors may hit member-profiles on
+  // directory miss. Always return null (never undefined) for React Query.
+  memberProfileOptions: (_wsId: string, type: string, id: string) => ({
+    queryKey: ["workspaces", "ws-1", "member-profiles", type, id],
+    queryFn: () => Promise.resolve(null),
+  }),
   agentListOptions: () => ({
     queryKey: ["workspaces", "ws-1", "agents"],
     queryFn: () => Promise.resolve([]),

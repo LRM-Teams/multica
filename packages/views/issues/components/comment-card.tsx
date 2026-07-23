@@ -29,8 +29,12 @@ import { ReactionBar } from "@multica/ui/components/common/reaction-bar";
 import { QuickEmojiPicker } from "@multica/ui/components/common/quick-emoji-picker";
 import { cn } from "@multica/ui/lib/utils";
 import { copyText } from "@multica/ui/lib/clipboard";
-import { useActorName } from "@multica/core/workspace/hooks";
 import { useReactionActorName } from "../../common/use-reaction-actor-name";
+import {
+  mentionTypeFromActorType,
+  resolvedActorLabel,
+  useResolvedActorIdentity,
+} from "../../common/use-resolved-actor-identity";
 import { useTimeAgo } from "../../i18n";
 import { ContentEditor, type ContentEditorRef, ReadonlyContent, useFileDropZone, FileDropOverlay, Attachment as AttachmentRenderer, AttachmentDownloadProvider } from "../../editor";
 import { FileUploadButton } from "@multica/ui/components/common/file-upload-button";
@@ -391,7 +395,12 @@ function CommentRow({
 }) {
   const { t } = useT("issues");
   const timeAgo = useTimeAgo();
-  const { getActorName } = useActorName();
+  // LRM-391: visibility-filtered agents must still show real names on comments.
+  const authorIdentity = useResolvedActorIdentity(
+    entry.actor_id,
+    mentionTypeFromActorType(entry.actor_type),
+  );
+  const authorName = resolvedActorLabel(authorIdentity, entry.actor_id);
 
   const edit = useEditAttachmentState(issueId, entry, onEdit);
 
@@ -415,9 +424,17 @@ function CommentRow({
         highlighted={isHighlighted}
         className="flex items-center gap-2.5 px-4 pt-1 pb-1.5"
       >
-        <ActorAvatar actorType={entry.actor_type} actorId={entry.actor_id} size={24} enableHoverCard showStatusDot />
+        <ActorAvatar
+          actorType={entry.actor_type}
+          actorId={entry.actor_id}
+          size={24}
+          enableHoverCard
+          showStatusDot
+          name={authorName}
+          avatarUrlHint={authorIdentity.avatarUrl}
+        />
         <span className="cursor-pointer text-sm font-medium">
-          {getActorName(entry.actor_type, entry.actor_id)}
+          {authorName}
         </span>
         <Tooltip>
           <TooltipTrigger
@@ -596,7 +613,12 @@ function CommentCardImpl({
 }: CommentCardProps) {
   const { t } = useT("issues");
   const timeAgo = useTimeAgo();
-  const { getActorName } = useActorName();
+  // LRM-391: visibility-filtered agents must still show real names on comments.
+  const authorIdentity = useResolvedActorIdentity(
+    entry.actor_id,
+    mentionTypeFromActorType(entry.actor_type),
+  );
+  const authorName = resolvedActorLabel(authorIdentity, entry.actor_id);
   const isCollapsed = useCommentCollapseStore((s) => s.isCollapsed(issueId, entry.id));
   const toggleCollapse = useCommentCollapseStore((s) => s.toggle);
   const open = !isCollapsed;
@@ -682,9 +704,17 @@ function CommentCardImpl({
             <CollapsibleTrigger className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors">
               <ChevronRight className={cn("h-3.5 w-3.5 transition-transform", open && "rotate-90")} />
             </CollapsibleTrigger>
-            <ActorAvatar actorType={entry.actor_type} actorId={entry.actor_id} size={24} enableHoverCard showStatusDot />
+            <ActorAvatar
+              actorType={entry.actor_type}
+              actorId={entry.actor_id}
+              size={24}
+              enableHoverCard
+              showStatusDot
+              name={authorName}
+              avatarUrlHint={authorIdentity.avatarUrl}
+            />
             <span className="shrink-0 cursor-pointer text-sm font-medium">
-              {getActorName(entry.actor_type, entry.actor_id)}
+              {authorName}
             </span>
             <Tooltip>
               <TooltipTrigger

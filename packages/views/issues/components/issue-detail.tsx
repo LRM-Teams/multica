@@ -70,6 +70,11 @@ import { useAuthStore } from "@multica/core/auth";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { useReactionActorName } from "../../common/use-reaction-actor-name";
+import {
+  mentionTypeFromActorType,
+  resolvedActorLabel,
+  useResolvedActorIdentity,
+} from "../../common/use-resolved-actor-identity";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useRecentContextStore } from "@multica/core/chat";
 import { issueListOptions, issueDetailOptions, childIssuesOptions, issueUsageOptions, issueAttachmentsOptions } from "@multica/core/issues/queries";
@@ -412,6 +417,26 @@ const LAST_ACTIVITY_BLOCK_VISIBLE_LIMIT = 8;
 // priority / assignee churn; the trailing block stays expanded because it
 // usually answers "what just happened?". Expansion state is owned by the
 // parent so it survives Virtuoso's mount/unmount on scroll.
+function ActivityActorName({
+  actorType,
+  actorId,
+  className = "shrink-0 font-medium",
+}: {
+  actorType: string;
+  actorId: string;
+  className?: string;
+}) {
+  const identity = useResolvedActorIdentity(
+    actorId,
+    mentionTypeFromActorType(actorType),
+  );
+  return (
+    <span className={className}>
+      {resolvedActorLabel(identity, actorId)}
+    </span>
+  );
+}
+
 function ActivityBlock({
   entries,
   expanded,
@@ -526,7 +551,7 @@ function ActivityBlock({
               {leadIcon}
             </div>
             <div className="flex min-w-0 flex-1 items-center gap-1">
-              <span className="shrink-0 font-medium">{getActorName(entry.actor_type, entry.actor_id)}</span>
+              <ActivityActorName actorType={entry.actor_type} actorId={entry.actor_id} />
               <span className="truncate">{label}</span>
               {runHref && (
                 <AppLink
@@ -1664,7 +1689,11 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
         {detailsOpen && <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 pl-2">
           <PropRow label={t(($) => $.detail.prop_created_by)}>
             <ActorAvatar actorType={issue.creator_type} actorId={issue.creator_id} size={18} enableHoverCard />
-            <span className="cursor-pointer truncate">{getActorName(issue.creator_type, issue.creator_id)}</span>
+            <ActivityActorName
+              actorType={issue.creator_type}
+              actorId={issue.creator_id}
+              className="cursor-pointer truncate"
+            />
           </PropRow>
           <PropRow label={t(($) => $.detail.prop_created)}>
             <span className="text-muted-foreground">{shortDate(issue.created_at)}</span>

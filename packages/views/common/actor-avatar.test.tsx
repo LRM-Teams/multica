@@ -70,6 +70,19 @@ vi.mock("@multica/core/workspace/hooks", () => ({
   }),
 }));
 
+vi.mock("./use-resolved-actor-identity", () => ({
+  mentionTypeFromActorType: (type: string) =>
+    type === "agent" ? "agent" : type === "member" ? "member" : null,
+  useResolvedActorIdentity: () => ({
+    displayName: "Agent One",
+    avatarUrl: null,
+  }),
+  resolvedActorLabel: (
+    identity: { displayName: string | null },
+    actorId: string,
+  ) => identity.displayName ?? actorId,
+}));
+
 vi.mock("@multica/core/agents/stores", () => ({
   useAgentPanelStore: (selector: (s: { open: (id: string) => void }) => unknown) =>
     selector({ open: openFromStoreMock }),

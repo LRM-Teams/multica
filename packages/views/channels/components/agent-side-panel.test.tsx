@@ -517,11 +517,16 @@ describe("AgentSidePanel", () => {
 
   it("renders EDITABLE runtime pickers in Profile for a group manager (any member)", () => {
     // permission stays denied — the group_manager override is what grants edit.
+    // Visibility stays read-only: API locks Beckham to visibility=channel (LRM-387).
     renderPanel("user-other", "group_manager");
 
-    for (const id of ["runtime-picker", "model-picker", "thinking-picker", "visibility-picker"]) {
+    for (const id of ["runtime-picker", "model-picker", "thinking-picker"]) {
       expect(screen.getByTestId(id)).toHaveAttribute("data-can-edit", "true");
     }
+    expect(screen.getByTestId("visibility-picker")).toHaveAttribute(
+      "data-can-edit",
+      "false",
+    );
   });
 
   it("renders READ-ONLY runtime pickers in Profile for a non-owner, non-group-manager", () => {

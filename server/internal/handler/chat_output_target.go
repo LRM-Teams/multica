@@ -167,7 +167,16 @@ func (h *Handler) resolveChannelOutputTarget(ctx context.Context, origin chatOut
 	if err != nil {
 		return resolvedChatOutputTarget{}, errChatOutputInvalidTarget
 	}
-	if !h.channelHasAgentMember(ctx, origin.workspaceID, parseUUID(ch.ID), origin.agentID) {
+	// A direct channel_member match is the common case. Env-dispatch is the
+	// exception: the derived execution agent that actually runs the task is
+	// intentionally NOT the channel_member — ReplaceDispatchChannelMember keeps
+	// the source agent as the stable @alias while the derived agent owns the
+	// channel_agent_session. Without the source-agent fallback the derived
+	// agent's `#channel` reply is rejected as an invalid target and it can only
+	// fall back to dm:@<user>, landing the reply in a DM the dispatcher never
+	// sees.
+	if !h.channelHasAgentMember(ctx, origin.workspaceID, parseUUID(ch.ID), origin.agentID) &&
+		!h.channelHasSourceAgentMember(ctx, origin.workspaceID, parseUUID(ch.ID), origin.agentID) {
 		return resolvedChatOutputTarget{}, errChatOutputInvalidTarget
 	}
 	if !hasMessageID {
@@ -200,6 +209,31 @@ func (h *Handler) channelHasAgentMember(ctx context.Context, workspaceID, channe
 			SELECT 1
 			FROM channel_member
 			WHERE workspace_id = $1 AND channel_id = $2 AND member_type = 'agent' AND member_id = $3
+		)`, workspaceID, channelID, agentID).Scan(&exists)
+	return err == nil && exists
+}
+
+// channelHasSourceAgentMember reports whether agentID is an env-dispatch derived
+// execution agent whose *source* agent is a member of the channel. Env-dispatch
+// keeps the source agent as the stable channel_member alias (see
+// ReplaceDispatchChannelMember) while the derived agent actually executes the
+// run, so a derived agent replying with `#channel` would otherwise be rejected
+// by channelHasAgentMember even though it legitimately owns the channel's
+// env-dispatch task. Scope is deliberately narrow: only an agent that has a
+// non-null source_agent_id whose source is a channel member is admitted, so
+// ordinary (non-derived) agents gain no additional access.
+func (h *Handler) channelHasSourceAgentMember(ctx context.Context, workspaceID, channelID, agentID pgtype.UUID) bool {
+	var exists bool
+	err := h.DB.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM agent a
+			JOIN channel_member cm
+			  ON cm.workspace_id = a.workspace_id
+			 AND cm.channel_id = $2
+			 AND cm.member_type = 'agent'
+			 AND cm.member_id = a.source_agent_id
+			WHERE a.id = $3 AND a.workspace_id = $1 AND a.source_agent_id IS NOT NULL
 		)`, workspaceID, channelID, agentID).Scan(&exists)
 	return err == nil && exists
 }

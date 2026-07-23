@@ -53,7 +53,70 @@ describe("adaptUpcomingRow", () => {
       },
       anchor: { available: false },
       nextFireAt: "2026-07-24T09:00:00Z",
+      status: "scheduled",
     });
+  });
+
+  it("degrades bare #workspace:shortId anchor labels to unavailable", () => {
+    const row = adaptUpcomingRow(
+      makeDefinition({
+        anchor: {
+          available: true,
+          kind: "channel",
+          display: "#multica:a1b2c3d4",
+          href: "/acme/channels/chan-1?message=msg-1",
+        },
+      }),
+    );
+    expect(row?.anchor).toEqual({ available: false });
+  });
+
+  it("uses display_name only and ignores legacy display (LRM-238)", () => {
+    const row = adaptUpcomingRow(
+      makeDefinition({
+        anchor: {
+          available: true,
+          kind: "channel",
+          display_name: "#deploys",
+          display: "#multica:a1b2c3d4",
+          href: "/acme/channels/chan-1?message=msg-1",
+        },
+      }),
+    );
+    expect(row?.anchor).toEqual({
+      available: true,
+      kind: "channel",
+      label: "#deploys",
+      href: "/acme/channels/chan-1?message=msg-1",
+    });
+  });
+
+  it("degrades when display_name itself is a bare short id", () => {
+    const row = adaptUpcomingRow(
+      makeDefinition({
+        anchor: {
+          available: true,
+          kind: "channel",
+          display_name: "#multica:deadbeef",
+          href: "/acme/channels/chan-1?message=msg-1",
+        },
+      }),
+    );
+    expect(row?.anchor).toEqual({ available: false });
+  });
+
+  it("does not fall back to legacy display when display_name is absent (LRM-238)", () => {
+    const row = adaptUpcomingRow(
+      makeDefinition({
+        anchor: {
+          available: true,
+          kind: "thread",
+          display: "Thread in #deploys",
+          href: "/acme/channels/chan-1?message=msg-1",
+        },
+      }),
+    );
+    expect(row?.anchor).toEqual({ available: false });
   });
 
   it("adapts a well-formed one_shot row", () => {

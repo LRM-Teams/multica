@@ -622,7 +622,12 @@
     "one_shot": "일회성",
     "next_fire_label": "다음",
     "fired_label": "발생",
-    "timezone_label": "시간대"
+    "timezone_label": "시간대",
+    "status_scheduled": "예약됨",
+    "status_firing": "실행 중",
+    "status_overdue": "기한 초과",
+    "status_cancelled": "취소됨",
+    "status_fired": "발생됨"
   },
   "task_failure": {
     "agent_error": "에이전트 실행 오류",

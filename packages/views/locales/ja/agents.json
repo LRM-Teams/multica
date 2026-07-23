@@ -602,7 +602,12 @@
     "one_shot": "一回限り",
     "next_fire_label": "次回",
     "fired_label": "発火",
-    "timezone_label": "タイムゾーン"
+    "timezone_label": "タイムゾーン",
+    "status_scheduled": "予定",
+    "status_firing": "発火中",
+    "status_overdue": "期限切れ",
+    "status_cancelled": "キャンセル",
+    "status_fired": "発火済み"
   },
   "task_failure": {
     "agent_error": "エージェント実行エラー",

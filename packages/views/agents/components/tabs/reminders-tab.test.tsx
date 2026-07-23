@@ -65,12 +65,14 @@ function oneShotUpcoming(overrides: Partial<RawReminderDefinition> = {}): RawRem
     title: "Ping the deploy thread",
     status: "scheduled",
     schedule_kind: "one_shot",
-    next_fire_at: "2026-07-23T09:00:00Z",
+    // Keep Upcoming fixtures in the future so status resolves to Scheduled
+    // (not Overdue) unless a test intentionally backdates next_fire_at.
+    next_fire_at: "2099-07-23T09:00:00Z",
     snooze_count: 0,
     anchor: {
       available: true,
       kind: "channel",
-      display: "#deploys",
+      display_name: "#deploys",
       href: "/acme/channels/chan-1?message=msg-1",
     },
     ...overrides,
@@ -95,7 +97,7 @@ function recurringFired(overrides: Partial<RawReminderOccurrence> = {}): RawRemi
     anchor: {
       available: true,
       kind: "channel",
-      display: "#standup",
+      display_name: "#standup",
       href: "/acme/channels/chan-2?message=msg-2",
     },
     ...overrides,
@@ -154,7 +156,8 @@ describe("RemindersTab (#656)", () => {
               title: "Daily standup follow-up",
               schedule_kind: "recurring",
               cadence: "daily@09:00",
-              next_fire_at: "2026-07-22T01:00:00Z",
+              schedule_timezone: "Asia/Shanghai",
+              next_fire_at: "2099-07-22T01:00:00Z",
             }),
           ]),
         );
@@ -173,12 +176,16 @@ describe("RemindersTab (#656)", () => {
     expect(await within(historySection).findByText("Daily standup follow-up")).toBeInTheDocument();
   });
 
-  it("shows the locked schedule timezone for a recurring reminder, not the viewer's own zone", async () => {
+  it("shows a single cadence+timezone chip for a recurring calendar reminder", async () => {
     mockGetAgentReminders.mockImplementation((_agentId: string, params: { status: string }) => {
       if (params.status === "scheduled") {
         return Promise.resolve(
           definitionsPage([
-            oneShotUpcoming({ schedule_kind: "recurring", cadence: "daily@09:00", schedule_timezone: "Asia/Tokyo" }),
+            oneShotUpcoming({
+              schedule_kind: "recurring",
+              cadence: "daily@09:00",
+              schedule_timezone: "Asia/Tokyo",
+            }),
           ]),
         );
       }
@@ -187,10 +194,11 @@ describe("RemindersTab (#656)", () => {
 
     renderTab();
 
-    expect(await screen.findByText("Asia/Tokyo")).toBeInTheDocument();
+    expect(await screen.findByText("daily at 09:00 Asia/Tokyo")).toBeInTheDocument();
+    expect(screen.getByText("Scheduled")).toBeInTheDocument();
   });
 
-  it("does not show a timezone tag for a one-shot reminder (an instant, not a recurring calendar rule)", async () => {
+  it("does not show a recurrence chip for a one-shot reminder", async () => {
     mockGetAgentReminders.mockImplementation((_agentId: string, params: { status: string }) => {
       if (params.status === "scheduled") {
         return Promise.resolve(definitionsPage([oneShotUpcoming({ schedule_kind: "one_shot" })]));
@@ -201,16 +209,14 @@ describe("RemindersTab (#656)", () => {
     renderTab();
 
     await screen.findByText("Ping the deploy thread");
-    expect(screen.queryByText("Asia/Tokyo")).toBeNull();
+    expect(screen.queryByText(/daily at/i)).toBeNull();
+    expect(screen.queryByText(/One-time/i)).toBeNull();
+    expect(screen.getByText("Scheduled")).toBeInTheDocument();
   });
 
-  it("does not show a timezone tag for an interval cadence (every:*), distinct from a calendar cadence (daily/weekly)", async () => {
-    // `every:*` is a zone-free elapsed interval, not a calendar rule — the
-    // server never populates `schedule_timezone` for it (`reminderTimezonePtr`
-    // returns nil for anything that isn't daily/weekly) — even though it IS
-    // recurring (unlike the one-shot case above), it must not show a
-    // timezone tag either. This is the cadence-FAMILY distinction, not a
-    // blanket recurring-vs-one-shot split.
+  it("shows an interval cadence chip without a timezone", async () => {
+    // `every:*` is a zone-free elapsed interval — chip shows the interval,
+    // not a calendar timezone.
     mockGetAgentReminders.mockImplementation((_agentId: string, params: { status: string }) => {
       if (params.status === "scheduled") {
         return Promise.resolve(
@@ -222,11 +228,11 @@ describe("RemindersTab (#656)", () => {
 
     renderTab();
 
-    await screen.findByText("Ping the deploy thread");
-    expect(screen.queryByText("Asia/Tokyo")).toBeNull();
+    expect(await screen.findByText("every 30m")).toBeInTheDocument();
+    expect(screen.queryByText(/Asia\/Tokyo/)).toBeNull();
   });
 
-  it("does not show a timezone tag or calendar cadence on a one-shot reminder that retains a hidden lifetime-locked timezone (recurring→one-shot conversion)", async () => {
+  it("does not show a recurrence chip on a one-shot that retains a hidden lifetime-locked timezone", async () => {
     // Per the locked BE contract: converting a recurring reminder to
     // one-shot (`update --fire-at`) clears cadence/schedule_kind but RETAINS
     // the hidden timezone in the DB (so it can restore on a future re-convert
@@ -246,8 +252,25 @@ describe("RemindersTab (#656)", () => {
 
     renderTab();
 
-    expect(await screen.findByText("One-time")).toBeInTheDocument();
-    expect(screen.queryByText("Asia/Tokyo")).toBeNull();
+    await screen.findByText("Ping the deploy thread");
+    expect(screen.queryByText(/Asia\/Tokyo/)).toBeNull();
+    expect(screen.queryByText(/daily at/i)).toBeNull();
+  });
+
+  it("pairs relative and absolute time on each row", async () => {
+    const nextFireAt = new Date(Date.now() + 3 * 60 * 1000).toISOString();
+    mockGetAgentReminders.mockImplementation((_agentId: string, params: { status: string }) => {
+      if (params.status === "scheduled") {
+        return Promise.resolve(definitionsPage([oneShotUpcoming({ next_fire_at: nextFireAt })]));
+      }
+      return Promise.resolve(occurrencesPage([]));
+    });
+
+    renderTab();
+
+    await screen.findByText("Ping the deploy thread");
+    expect(screen.getByText(/in 3 minutes|in 2 minutes|in 4 minutes/i)).toBeInTheDocument();
+    expect(screen.getByText(/ at /)).toBeInTheDocument();
   });
 
   it("accepts a transient 'firing' definition status as-is, without coercing it to fired", async () => {

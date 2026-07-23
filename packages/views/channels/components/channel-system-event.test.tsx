@@ -736,9 +736,10 @@ describe("IssueAggregateSystemEventContent", () => {
     );
     expect(document.body.textContent).toContain("@前端工程师 完成了");
     expect(document.body.textContent).toContain("Fix contrast");
-    expect(document.body.textContent).toContain("LRM-360");
     expect(document.body.textContent).toContain("Empty tokens");
     expect(document.body.textContent).toContain("Composer density");
+    // LRM-508 / tightened LRM-423: identifier stays out of the main row.
+    expect(document.body.textContent).not.toContain("LRM-360");
     expect(document.body.textContent).not.toMatch(/3 个 Issue/);
     expect(screen.queryByTestId("issue-aggregate-expand")).toBeNull();
   });
@@ -760,7 +761,7 @@ describe("IssueAggregateSystemEventContent", () => {
       />,
     );
     expect(document.body.textContent).toContain("A");
-    expect(document.body.textContent).toContain("LRM-360");
+    expect(document.body.textContent).not.toContain("LRM-360");
     expect(document.body.textContent).not.toContain("B");
     expect(screen.getByTestId("issue-aggregate-expand").textContent).toContain("+3");
     fireEvent.click(screen.getByTestId("issue-aggregate-expand"));
@@ -791,7 +792,7 @@ describe("IssueAggregateSystemEventContent", () => {
     expect(screen.queryByTestId("issue-aggregate-expand")).toBeNull();
     expect(document.body.textContent).toContain("@前端工程师 完成了");
     expect(document.body.textContent).toContain("Solo title");
-    expect(document.body.textContent).toContain("LRM-360");
+    expect(document.body.textContent).not.toContain("LRM-360");
     expect(document.body.textContent).not.toMatch(/1 个 Issue/);
   });
 });

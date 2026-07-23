@@ -96,10 +96,10 @@ describe("IssueRefLink title-first (LRM-508)", () => {
 
     render(<IssueRefLink issueId="issue-1" text="LRM-487" />);
 
-    const link = screen.getByRole("link");
-    expect(link).toHaveTextContent("Soft-ask density");
-    expect(link).toHaveTextContent("LRM-487");
-    expect(link.textContent?.startsWith("Soft-ask density")).toBe(true);
+    const link = screen.getByRole("link", { name: "Soft-ask density" });
+    expect(link).toBeInTheDocument();
+    // Identifier stays out of the main-line link (peek only).
+    expect(link).not.toHaveTextContent("LRM-487");
   });
 
   it("keeps author text as interim when the issue has not resolved yet", () => {

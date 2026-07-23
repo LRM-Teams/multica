@@ -90,9 +90,10 @@ function toIssuePriority(value: string | undefined): IssuePriority | null {
  * `issueId` may be a uuid OR an identifier ("LRM-126") — `useResolvedIssue` accepts
  * both, which is how the old chip showed a title for `mention://issue/LRM-126`.
  *
- * LRM-508 (Frank): once the issue resolves, the **title** is primary ink — never
- * leave a bare `LRM-xxx` as the main visible label. Identifier may sit muted
- * beside it. Until resolve lands, `text` (author span) is interim only.
+ * LRM-508 (Frank): once the issue resolves, the **title** is the only main-line
+ * ink — never leave a bare `LRM-xxx` as the visible label. Identifier may still
+ * appear in the peek eyebrow. Until resolve lands, `text` (author span) is
+ * interim only.
  */
 export function IssueRefLink({
   issueId,
@@ -129,23 +130,11 @@ export function IssueRefLink({
       : issuePath;
 
   const title = issue?.title?.trim() || undefined;
-  // Title-first when resolved; author `text` is only the pre-resolve interim.
-  // Identifier secondary for chat mentions lives as muted ink beside the title
-  // (LRM-508). System-event rows keep their own payload-backed muted id via
-  // IssueEventSubject — if both fire, the reader still sees title as primary.
-  const primaryLabel = title || text;
   const identifier = issue?.identifier?.trim() || undefined;
-  const showMutedIdentifier =
-    Boolean(title) && Boolean(identifier) && identifier !== title && text !== title;
-
-  const linkChildren = showMutedIdentifier ? (
-    <>
-      {primaryLabel}
-      <span className="ml-1 text-[11px] tabular-nums text-muted-foreground">{identifier}</span>
-    </>
-  ) : (
-    primaryLabel
-  );
+  // LRM-508 / tightened LRM-423: main-line ink is title only once resolved.
+  // Author `text` (often LRM-xxx) is interim until then; identifier stays in
+  // the peek eyebrow, not beside the link.
+  const primaryLabel = title || text;
 
   const linkProps = {
     href,
@@ -165,9 +154,9 @@ export function IssueRefLink({
     "data-ref-source": source,
   };
   const link = navigation ? (
-    <AppLink {...linkProps}>{linkChildren}</AppLink>
+    <AppLink {...linkProps}>{primaryLabel}</AppLink>
   ) : (
-    <a {...linkProps}>{linkChildren}</a>
+    <a {...linkProps}>{primaryLabel}</a>
   );
 
   // Nothing resolved (loading / deleted / other workspace / no permission) → plain

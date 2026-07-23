@@ -104,17 +104,17 @@ var errGroupManagerNoRuntime = errors.New("no runtime available to run the group
 const beckhamInstructionsMarker = "规格错还是实现错"
 
 // refreshGroupManagerIfStale updates an existing Beckham's instructions,
-// description, avatar, and visibility to the current values when they are out
-// of date. Visibility must stay channel + home_channel_id so Beckham is only
-// discoverable inside its bound group (LRM-240 / LRM-370; supersedes LRM-233
-// private-only hide for the visibility axis — ListAgents still excludes
-// managed_role=group_manager from the invite directory).
+// description, and avatar when they are out of date. Visibility is NOT
+// rewritten here (LRM-387): operators may change Workspace / Personal /
+// 仅本群 from the profile picker; forcing channel on every refresh would
+// undo that. Create/ensure still binds channel+home as the default.
+// ListAgents continues to exclude managed_role=group_manager from the
+// invite directory regardless of visibility.
 func (h *Handler) refreshGroupManagerIfStale(ctx context.Context, agent db.Agent) db.Agent {
 	home, hasHome := h.loadAgentHomeChannelID(ctx, agent.ID)
-	fresh := strings.Contains(agent.Instructions, beckhamInstructionsMarker) &&
-		agent.AvatarUrl.Valid && agent.AvatarUrl.String == beckhamAvatarURL &&
-		agent.Visibility == agentVisibilityChannel && hasHome
-	if fresh {
+	personaFresh := strings.Contains(agent.Instructions, beckhamInstructionsMarker) &&
+		agent.AvatarUrl.Valid && agent.AvatarUrl.String == beckhamAvatarURL
+	if personaFresh {
 		return agent
 	}
 	updated, err := h.Queries.UpdateAgent(ctx, db.UpdateAgentParams{
@@ -129,8 +129,9 @@ func (h *Handler) refreshGroupManagerIfStale(ctx context.Context, agent db.Agent
 		slog.Warn("refresh group manager persona failed", "agent_id", uuidToString(agent.ID), "error", err)
 		return agent
 	}
-	if !hasHome {
-		// Resolve home from the channel that binds this manager.
+	// If still on channel visibility but home is missing, re-bind from the
+	// owning group — do not flip workspace/private back to channel.
+	if updated.Visibility == agentVisibilityChannel && !hasHome {
 		var channelID pgtype.UUID
 		if err := h.DB.QueryRow(ctx, `
 			SELECT id FROM channel
@@ -139,20 +140,18 @@ func (h *Handler) refreshGroupManagerIfStale(ctx context.Context, agent db.Agent
 		`, agent.ID, agent.WorkspaceID).Scan(&channelID); err == nil && channelID.Valid {
 			home = channelID
 			hasHome = true
-		}
-	}
-	if hasHome {
-		if err := h.applyAgentHomeChannel(ctx, updated.ID, agentChannelVisibilityBinding{
-			Visibility:    agentVisibilityChannel,
-			HomeChannelID: home,
-		}); err != nil {
-			slog.Warn("refresh group manager channel visibility failed", "agent_id", uuidToString(agent.ID), "error", err)
-		} else if reloaded, rerr := h.reloadAgentAfterHomeChannelRefresh(ctx, updated.ID); rerr == nil {
-			updated = reloaded
+			if err := h.applyAgentHomeChannel(ctx, updated.ID, agentChannelVisibilityBinding{
+				Visibility:    agentVisibilityChannel,
+				HomeChannelID: home,
+			}); err != nil {
+				slog.Warn("refresh group manager channel visibility failed", "agent_id", uuidToString(agent.ID), "error", err)
+			} else if reloaded, rerr := h.reloadAgentAfterHomeChannelRefresh(ctx, updated.ID); rerr == nil {
+				updated = reloaded
+			}
 		}
 	}
 	resp := agentToResponse(updated)
-	if hasHome {
+	if home, ok := h.loadAgentHomeChannelID(ctx, updated.ID); ok {
 		homeID := uuidToString(home)
 		resp.HomeChannelID = &homeID
 	}

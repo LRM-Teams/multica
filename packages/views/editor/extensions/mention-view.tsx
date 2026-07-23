@@ -17,7 +17,7 @@
 
 import { NodeViewWrapper } from "@tiptap/react";
 import type { NodeViewProps } from "@tiptap/react";
-import type { JSX } from "react";
+import type { ReactNode } from "react";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { useAuthStore } from "@multica/core/auth";
 import { useNavigation } from "../../navigation";
@@ -89,7 +89,7 @@ function ActorMentionEditorChip({
   label?: string;
   viewerUserId: string | null;
   openAgentPanel: ((id: string) => void) | null | undefined;
-}): JSX.Element {
+}): ReactNode {
   const { name, unresolved, handlePeek } = useActorMentionChipLabel(type, id, label);
   const kind = resolveMentionTokenKind(type, id, viewerUserId);
   const chip = (

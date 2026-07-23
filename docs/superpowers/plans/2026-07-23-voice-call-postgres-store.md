@@ -28,7 +28,8 @@ scoping and atomic state decisions.
 - [x] Add failing UUID-mapping, workspace-scope, and real PostgreSQL state tests.
 - [x] Implement the PostgreSQL lifecycle store.
 - [x] Run unit tests, optional database integration tests, vet, and diff checks.
-- [ ] Commit, push, and open an independent ready PR stacked on #1043.
+- [x] Commit, push, and open independent ready PR
+  [#1047](https://github.com/LRM-Teams/multica/pull/1047), stacked on #1043.
 
 ## Verification
 

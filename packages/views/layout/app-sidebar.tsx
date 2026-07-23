@@ -72,7 +72,10 @@ import { useAuthStore } from "@multica/core/auth";
 import { useCurrentWorkspace, useWorkspacePaths, paths } from "@multica/core/paths";
 import { workspaceListOptions, myInvitationListOptions, workspaceKeys } from "@multica/core/workspace/queries";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useUserActivityUnreadCount } from "@multica/core/user-activity/queries";
+import {
+  useUserActivityUnreadCount,
+  userActivityListOptions,
+} from "@multica/core/user-activity/queries";
 import { api, ApiError } from "@multica/core/api";
 import { useModalStore } from "@multica/core/modals";
 import { useConfigStore } from "@multica/core/config";
@@ -603,12 +606,22 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
                 {personalNav.map((item) => {
                   const href = p[item.key]();
                   const isActive = isNavActive(pathname, href);
+                  const prefetchActivity =
+                    item.key === "inbox" && wsId
+                      ? () => {
+                          void queryClient.prefetchQuery(
+                            userActivityListOptions(wsId, "all"),
+                          );
+                        }
+                      : undefined;
                   return (
                     <SidebarMenuItem key={item.key}>
                       <SidebarMenuButton
                         isActive={isActive}
                         render={<AppLink href={href} />}
                         className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground"
+                        onMouseEnter={prefetchActivity}
+                        onFocus={prefetchActivity}
                       >
                         {item.key === "inbox" ? <InboxNavIcon icon={item.icon} /> : <item.icon />}
                         <span>{t(($) => $.nav[item.labelKey])}</span>

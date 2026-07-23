@@ -106,13 +106,15 @@ func TestNormalizeVoicePart(t *testing.T) {
 	content, parts, err := Normalize("spoken question", []protocol.MessagePart{
 		{Type: protocol.MessagePartTypeText, Text: "spoken question"},
 		{
-			Type:         protocol.MessagePartTypeVoice,
-			DurationMS:   1234,
-			Text:         "must clear",
-			AttachmentID: "11111111-1111-1111-1111-111111111111",
-			Filename:     " recording.wav ",
-			ContentType:  " audio/wav ",
-			SizeBytes:    48,
+			Type:                protocol.MessagePartTypeVoice,
+			DurationMS:          1234,
+			Text:                "must clear",
+			TranscriptionStatus: protocol.VoiceTranscriptionFailed,
+			SynthesisStatus:     protocol.VoiceSynthesisCompleted,
+			AttachmentID:        "11111111-1111-1111-1111-111111111111",
+			Filename:            " recording.wav ",
+			ContentType:         " audio/wav ",
+			SizeBytes:           48,
 		},
 	})
 	if err != nil {
@@ -128,6 +130,9 @@ func TestNormalizeVoicePart(t *testing.T) {
 	if voice.Text != "" || voice.AttachmentID != "11111111-1111-1111-1111-111111111111" ||
 		voice.Filename != "recording.wav" || voice.ContentType != "audio/wav" || voice.SizeBytes != 48 {
 		t.Fatalf("voice part did not preserve recording metadata: %+v", voice)
+	}
+	if voice.TranscriptionStatus != protocol.VoiceTranscriptionCompleted || voice.SynthesisStatus != "" {
+		t.Fatalf("voice part retained caller-owned lifecycle state: %+v", voice)
 	}
 	if voice.TranscriptionStatus != protocol.VoiceTranscriptionCompleted {
 		t.Fatalf("voice transcription status = %q, want completed", voice.TranscriptionStatus)

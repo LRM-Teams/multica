@@ -276,11 +276,7 @@ func (s *PostgresUpdateStore) transition(
 	if changed || currentStatus == "" || currentStatus == string(status) {
 		return nil
 	}
-	return fmt.Errorf(
-		"invalid daemon runtime update transition %s -> %s",
-		currentStatus,
-		status,
-	)
+	return invalidUpdateTransition(UpdateStatus(currentStatus), status)
 }
 
 func (s *PostgresUpdateStore) expireStale(

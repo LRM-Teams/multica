@@ -496,6 +496,108 @@ func TestHandleUpdateDoesNotRestartUntilReadyToApplyIsDurablyAcknowledged(t *tes
 	}
 }
 
+func TestHandleUpdateDoesNotRestartWhenReadyToApplyConflictsWithPersistedState(t *testing.T) {
+	withFastUpdateReportBackoffs(t)
+
+	var reports []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode report payload: %v", err)
+		}
+		reports = append(reports, payload)
+		if payload["status"] == "ready_to_apply" {
+			http.Error(w, `{"error":"update status conflict"}`, http.StatusConflict)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	var restartCalls atomic.Int32
+	d := &Daemon{
+		client: NewClient(srv.URL),
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runUpdateFn: func(string) (string, error) {
+			return "updated", nil
+		},
+		verifyUpdatedBinaryFn: func(string, string) (string, error) {
+			return "0.3.36", nil
+		},
+		cancelFunc: func() {
+			restartCalls.Add(1)
+		},
+	}
+
+	d.handleUpdate(context.Background(), "rt-1", &PendingUpdate{
+		ID:                   "upd-1",
+		TargetVersion:        "v0.3.36",
+		SupportsReadyToApply: true,
+	})
+
+	if restartCalls.Load() != 0 {
+		t.Fatalf("restart calls after ready_to_apply conflict = %d, want 0", restartCalls.Load())
+	}
+	if len(reports) != 2 {
+		t.Fatalf("reports = %d, want one running + one non-retried ready conflict: %#v", len(reports), reports)
+	}
+	if reports[0]["status"] != "running" || reports[1]["status"] != "ready_to_apply" {
+		t.Fatalf("report statuses = %#v, want running then ready_to_apply", reports)
+	}
+}
+
+func TestHandleUpdateDoesNotRestartWhenRootCanceledAfterReadyAck(t *testing.T) {
+	withFastUpdateReportBackoffs(t)
+
+	rootCtx, cancelRoot := context.WithCancel(context.Background())
+	t.Cleanup(cancelRoot)
+	var reports []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode report payload: %v", err)
+		}
+		reports = append(reports, payload)
+		if payload["status"] == "ready_to_apply" {
+			cancelRoot()
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	var restartCalls atomic.Int32
+	d := &Daemon{
+		client:  NewClient(srv.URL),
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		rootCtx: rootCtx,
+		runUpdateFn: func(string) (string, error) {
+			return "updated", nil
+		},
+		verifyUpdatedBinaryFn: func(string, string) (string, error) {
+			return "0.3.36", nil
+		},
+		cancelFunc: func() {
+			restartCalls.Add(1)
+		},
+	}
+
+	d.handleUpdate(context.Background(), "rt-1", &PendingUpdate{
+		ID:                   "upd-1",
+		TargetVersion:        "v0.3.36",
+		SupportsReadyToApply: true,
+	})
+
+	if len(reports) != 2 || reports[0]["status"] != "running" || reports[1]["status"] != "ready_to_apply" {
+		t.Fatalf("report statuses = %#v, want running then ready_to_apply", reports)
+	}
+	if restartCalls.Load() != 0 {
+		t.Fatalf("restart calls after root cancellation = %d, want 0", restartCalls.Load())
+	}
+	waitForClaimBarrierState(t, d, false)
+}
+
 func TestHandleUpdateReportsCompletedBeforeRestartForOldServerWhenIdle(t *testing.T) {
 	withFastUpdateReportBackoffs(t)
 
@@ -740,6 +842,82 @@ func TestWaitForSafeRestartContextCancellationNeverForcesActiveTaskRestart(t *te
 		t.Fatalf("restart calls after cancellation with active task = %d, want 0", restartCalls.Load())
 	}
 	waitForClaimBarrierState(t, d, false)
+}
+
+func TestWaitForSafeRestartPreCanceledZeroDeadlineNeverRestarts(t *testing.T) {
+	for iteration := range 100 {
+		var restartCalls atomic.Int32
+		d := &Daemon{
+			logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+			cancelFunc: func() {
+				restartCalls.Add(1)
+			},
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		restarted := d.waitForSafeRestartWithWindow(
+			ctx,
+			"rt-1",
+			"upd-1",
+			"staged",
+			0,
+			time.Microsecond,
+		)
+		if restarted || restartCalls.Load() != 0 {
+			t.Fatalf(
+				"iteration %d: pre-canceled wait restarted=%v calls=%d, want false/0",
+				iteration,
+				restarted,
+				restartCalls.Load(),
+			)
+		}
+		waitForClaimBarrierState(t, d, false)
+	}
+}
+
+func TestWaitForSafeRestartCancelRacingFinalDrainNeverRestarts(t *testing.T) {
+	for iteration := range 100 {
+		var restartCalls atomic.Int32
+		d := &Daemon{
+			logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+			cancelFunc: func() {
+				restartCalls.Add(1)
+			},
+		}
+		d.activeTasks.Store(1)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan bool, 1)
+		go func() {
+			done <- d.waitForSafeRestartWithWindow(
+				ctx,
+				"rt-1",
+				"upd-1",
+				"staged",
+				0,
+				time.Microsecond,
+			)
+		}()
+		waitForClaimBarrierState(t, d, true)
+
+		cancel()
+		d.activeTasks.Store(0)
+		select {
+		case restarted := <-done:
+			if restarted || restartCalls.Load() != 0 {
+				t.Fatalf(
+					"iteration %d: canceled final drain restarted=%v calls=%d, want false/0",
+					iteration,
+					restarted,
+					restartCalls.Load(),
+				)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("iteration %d: canceled final drain did not return", iteration)
+		}
+		waitForClaimBarrierState(t, d, false)
+	}
 }
 
 func TestWaitForSafeRestartUsesIdleOpportunityBeforeDeadline(t *testing.T) {

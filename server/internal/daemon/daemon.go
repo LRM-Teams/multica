@@ -1914,14 +1914,20 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 			d.logger.Error("CLI update staged but ready-to-apply state was not durably acknowledged; refusing restart", "runtime_id", runtimeID, "update_id", update.ID, "error", err)
 			return
 		}
-		if d.trySetClaimBarrier() {
-			restartTriggered = true
-			d.triggerRestart()
-			return
-		}
 		restartCtx := d.rootCtx
 		if restartCtx == nil {
 			restartCtx = context.Background()
+		}
+		if d.abortStagedRestartIfCanceled(restartCtx, runtimeID, update.ID, false) {
+			return
+		}
+		if d.trySetClaimBarrier() {
+			if d.abortStagedRestartIfCanceled(restartCtx, runtimeID, update.ID, true) {
+				return
+			}
+			restartTriggered = true
+			d.triggerRestart()
+			return
 		}
 		d.logger.Info("CLI update ready; waiting for an idle opportunity before the stop-claim deadline", "runtime_id", runtimeID, "update_id", update.ID)
 		restartTriggered = d.waitForSafeRestart(restartCtx, runtimeID, update.ID, stagedOutput)
@@ -1982,11 +1988,30 @@ func (d *Daemon) waitForSafeRestart(ctx context.Context, runtimeID, updateID, ou
 
 const stagedUpdateOpportunisticIdleWindow = 10 * time.Minute
 
+func (d *Daemon) abortStagedRestartIfCanceled(
+	ctx context.Context,
+	runtimeID, updateID string,
+	barrierHeld bool,
+) bool {
+	if ctx.Err() == nil {
+		return false
+	}
+	if barrierHeld {
+		d.releaseClaimBarrier()
+	}
+	d.logger.Warn("CLI update ready but restart wait ended before the daemon drained", "runtime_id", runtimeID, "update_id", updateID, "error", ctx.Err())
+	return true
+}
+
 func (d *Daemon) waitForSafeRestartWithWindow(
 	ctx context.Context,
 	runtimeID, updateID, output string,
 	opportunisticWindow, interval time.Duration,
 ) bool {
+	if d.abortStagedRestartIfCanceled(ctx, runtimeID, updateID, false) {
+		return false
+	}
+
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	deadline := time.NewTimer(opportunisticWindow)
@@ -1996,17 +2021,20 @@ func (d *Daemon) waitForSafeRestartWithWindow(
 	for {
 		select {
 		case <-ctx.Done():
-			if draining {
-				d.releaseClaimBarrier()
-			}
-			d.logger.Warn("CLI update ready but restart wait ended before the daemon drained", "runtime_id", runtimeID, "update_id", updateID, "error", ctx.Err())
+			d.abortStagedRestartIfCanceled(ctx, runtimeID, updateID, draining)
 			return false
 		case <-deadline.C:
 			d.setClaimBarrier()
 			draining = true
+			if d.abortStagedRestartIfCanceled(ctx, runtimeID, updateID, true) {
+				return false
+			}
 			d.logger.Info("CLI update stop-claim deadline reached; draining already-claimed tasks before restart", "runtime_id", runtimeID, "update_id", updateID)
 			if !d.claimBarrierDrained() {
 				continue
+			}
+			if d.abortStagedRestartIfCanceled(ctx, runtimeID, updateID, true) {
+				return false
 			}
 			d.logger.Info("CLI update ready; daemon drained, restarting", "runtime_id", runtimeID, "update_id", updateID, "output", output)
 			d.triggerRestart()
@@ -2016,12 +2044,18 @@ func (d *Daemon) waitForSafeRestartWithWindow(
 				if !d.claimBarrierDrained() {
 					continue
 				}
+				if d.abortStagedRestartIfCanceled(ctx, runtimeID, updateID, true) {
+					return false
+				}
 				d.logger.Info("CLI update ready; daemon drained, restarting", "runtime_id", runtimeID, "update_id", updateID, "output", output)
 				d.triggerRestart()
 				return true
 			}
 			if !d.trySetClaimBarrier() {
 				continue
+			}
+			if d.abortStagedRestartIfCanceled(ctx, runtimeID, updateID, true) {
+				return false
 			}
 			d.logger.Info("CLI update ready; daemon reached an idle opportunity before the deadline, restarting", "runtime_id", runtimeID, "update_id", updateID, "output", output)
 			d.triggerRestart()

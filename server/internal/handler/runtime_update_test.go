@@ -271,6 +271,27 @@ func TestReportUpdateResult_CompletedLeavesCurrentVersionUntilRegisterConfirms(t
 		t.Fatalf("ReportUpdateResult: expected 200, got %d: %s", reportW.Code, reportW.Body.String())
 	}
 
+	duplicateReq := newDaemonTokenRequest(
+		http.MethodPost,
+		"/api/daemon/runtimes/"+runtimeID+"/update/"+update.ID+"/result",
+		map[string]any{"status": "completed", "output": "late duplicate"},
+		testWorkspaceID,
+		daemonID,
+	)
+	duplicateReq = withURLParams(duplicateReq, "runtimeId", runtimeID, "updateId", update.ID)
+	duplicateW := httptest.NewRecorder()
+	testHandler.ReportUpdateResult(duplicateW, duplicateReq)
+	if duplicateW.Code != http.StatusOK {
+		t.Fatalf("duplicate completed report: expected 200, got %d: %s", duplicateW.Code, duplicateW.Body.String())
+	}
+	persistedUpdate, err := testHandler.UpdateStore.Get(context.Background(), update.ID)
+	if err != nil {
+		t.Fatalf("get update after duplicate completion: %v", err)
+	}
+	if persistedUpdate == nil || persistedUpdate.Status != UpdateCompleted || persistedUpdate.Output != "ok" {
+		t.Fatalf("duplicate completion overwrote winner: %+v", persistedUpdate)
+	}
+
 	var cliVersion string
 	if err := testPool.QueryRow(context.Background(), `SELECT metadata->>'cli_version' FROM agent_runtime WHERE id = $1`, runtimeID).Scan(&cliVersion); err != nil {
 		t.Fatalf("read runtime cli_version: %v", err)
@@ -325,6 +346,81 @@ func TestReportUpdateResult_CompletedLeavesCurrentVersionUntilRegisterConfirms(t
 	}
 	if resp.RuntimeHealth != "ok" {
 		t.Fatalf("runtime_health after reconnect = %q, want ok", resp.RuntimeHealth)
+	}
+}
+
+func TestReportUpdateResultReadyToApplyRejectsExpiredRunningUpdate(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	daemonID := "update-ready-timeout-" + randomID()
+	registerW := httptest.NewRecorder()
+	registerReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/register", map[string]any{
+		"workspace_id": testWorkspaceID,
+		"daemon_id":    daemonID,
+		"device_name":  "update-ready-timeout-device",
+		"cli_version":  "v0.3.0",
+		"runtimes": []map[string]any{
+			{"name": "update-ready-timeout-runtime", "type": "claude", "version": "1.0.0", "status": "online"},
+		},
+	}, testWorkspaceID, daemonID)
+	testHandler.DaemonRegister(registerW, registerReq)
+	if registerW.Code != http.StatusOK {
+		t.Fatalf("DaemonRegister: expected 200, got %d: %s", registerW.Code, registerW.Body.String())
+	}
+
+	var registerResp struct {
+		Runtimes []struct {
+			ID string `json:"id"`
+		} `json:"runtimes"`
+	}
+	if err := json.NewDecoder(registerW.Body).Decode(&registerResp); err != nil {
+		t.Fatalf("decode register response: %v", err)
+	}
+	if len(registerResp.Runtimes) != 1 {
+		t.Fatalf("registered runtimes = %d, want 1", len(registerResp.Runtimes))
+	}
+	runtimeID := registerResp.Runtimes[0].ID
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+	})
+
+	update, err := testHandler.UpdateStore.Create(context.Background(), runtimeID, "v0.3.1")
+	if err != nil {
+		t.Fatalf("create update: %v", err)
+	}
+	if _, err := testHandler.UpdateStore.PopPending(context.Background(), runtimeID); err != nil {
+		t.Fatalf("pop update: %v", err)
+	}
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE daemon_runtime_update
+		SET run_started_at = now() - ($2 * interval '1 second')
+		WHERE id = $1
+	`, update.ID, (updateRunningTimeout + time.Second).Seconds()); err != nil {
+		t.Fatalf("age running update: %v", err)
+	}
+
+	reportReq := newDaemonTokenRequest(
+		http.MethodPost,
+		"/api/daemon/runtimes/"+runtimeID+"/update/"+update.ID+"/result",
+		map[string]any{"status": "ready_to_apply", "output": "verified"},
+		testWorkspaceID,
+		daemonID,
+	)
+	reportReq = withURLParams(reportReq, "runtimeId", runtimeID, "updateId", update.ID)
+	reportW := httptest.NewRecorder()
+	testHandler.ReportUpdateResult(reportW, reportReq)
+	if reportW.Code < 400 {
+		t.Fatalf("ReportUpdateResult: got %d, want non-2xx for timeout -> ready conflict: %s", reportW.Code, reportW.Body.String())
+	}
+
+	got, err := testHandler.UpdateStore.Get(context.Background(), update.ID)
+	if err != nil {
+		t.Fatalf("get expired update: %v", err)
+	}
+	if got == nil || got.Status != UpdateTimeout {
+		t.Fatalf("update after conflicting ready report = %+v, want timeout", got)
 	}
 }
 

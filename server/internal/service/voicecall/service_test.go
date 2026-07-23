@@ -103,6 +103,12 @@ func TestServiceStartRecordsContextAndProviderFailures(t *testing.T) {
 			if err == nil {
 				t.Fatal("start call succeeded")
 			}
+			if testCase.name == "provider" && !errors.Is(err, ErrProviderFailure) {
+				t.Fatalf("provider error = %v, want ErrProviderFailure", err)
+			}
+			if testCase.name == "context" && errors.Is(err, ErrProviderFailure) {
+				t.Fatalf("context error = %v, must not be classified as provider failure", err)
+			}
 			if deps.store.session.Status != StatusFailed ||
 				deps.store.session.ErrorCode != testCase.wantCode {
 				t.Fatalf("session = %+v, want failed/%s", deps.store.session, testCase.wantCode)
@@ -122,6 +128,9 @@ func TestServiceStartLeavesSessionRecoverableWhenProviderStartIsUncertain(t *tes
 	var uncertain *ProviderStartUncertainError
 	if !errors.As(err, &uncertain) {
 		t.Fatalf("error = %v, want ProviderStartUncertainError", err)
+	}
+	if !errors.Is(err, ErrProviderFailure) {
+		t.Fatalf("error = %v, want ErrProviderFailure", err)
 	}
 	if deps.store.session.Status != StatusStarting {
 		t.Fatalf("status = %q, want recoverable starting", deps.store.session.Status)
@@ -263,6 +272,9 @@ func TestServiceStopLeavesEndingForRetryWhenProviderFails(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "provider stop failed") {
 		t.Fatalf("error = %v", err)
+	}
+	if !errors.Is(err, ErrProviderFailure) {
+		t.Fatalf("error = %v, want ErrProviderFailure", err)
 	}
 	if deps.store.session.Status != StatusEnding || deps.store.markEndedCalls != 0 {
 		t.Fatalf("session=%+v ended calls=%d", deps.store.session, deps.store.markEndedCalls)

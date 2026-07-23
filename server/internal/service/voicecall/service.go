@@ -11,9 +11,12 @@ import (
 type Status string
 
 var (
-	ErrScopeNotFound    = errors.New("voice call scope not found")
-	ErrScopeForbidden   = errors.New("voice call scope forbidden")
-	ErrScopeUnavailable = errors.New("voice call scope unavailable")
+	ErrScopeNotFound     = errors.New("voice call scope not found")
+	ErrScopeForbidden    = errors.New("voice call scope forbidden")
+	ErrScopeUnavailable  = errors.New("voice call scope unavailable")
+	ErrCallNotFound      = errors.New("voice call not found")
+	ErrCallAlreadyActive = errors.New("voice call already active")
+	ErrProviderFailure   = errors.New("voice call provider failure")
 )
 
 const (
@@ -275,15 +278,28 @@ func (service *Service) Start(ctx context.Context, input StartInput) (StartResul
 	if err != nil {
 		var uncertain *ProviderStartUncertainError
 		if errors.As(err, &uncertain) {
-			return StartResult{}, fmt.Errorf("start voice call provider: %w", err)
+			return StartResult{}, providerFailure(
+				fmt.Errorf("start voice call provider: %w", err),
+			)
 		}
-		return StartResult{}, service.recordFailed(
-			ctx, session, "provider_start_failed", fmt.Errorf("start voice call provider: %w", err),
+		return StartResult{}, providerFailure(
+			service.recordFailed(
+				ctx,
+				session,
+				"provider_start_failed",
+				fmt.Errorf("start voice call provider: %w", err),
+			),
 		)
 	}
 	if err := validateProviderStartResult(providerResult); err != nil {
-		return StartResult{}, service.compensateStarted(
-			ctx, session, providerIdentity, "provider_response_invalid", err,
+		return StartResult{}, providerFailure(
+			service.compensateStarted(
+				ctx,
+				session,
+				providerIdentity,
+				"provider_response_invalid",
+				err,
+			),
 		)
 	}
 
@@ -359,7 +375,9 @@ func (service *Service) Stop(ctx context.Context, input StopInput) (Session, err
 		RoomID: ending.Session.RoomID,
 		TaskID: ending.Session.ProviderTaskID,
 	}); err != nil {
-		return Session{}, fmt.Errorf("stop voice call provider: %w", err)
+		return Session{}, providerFailure(
+			fmt.Errorf("stop voice call provider: %w", err),
+		)
 	}
 	session, err = service.store.MarkEnded(
 		cleanupContext, ending.Session.WorkspaceID, ending.Session.ID, ending.Session.EndReason,
@@ -410,6 +428,13 @@ func (service *Service) recordFailed(
 
 func (service *Service) newCleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(ctx), service.cleanupTimeout)
+}
+
+func providerFailure(err error) error {
+	if err == nil {
+		return nil
+	}
+	return errors.Join(ErrProviderFailure, err)
 }
 
 func validateStartInput(input StartInput) (Scope, error) {

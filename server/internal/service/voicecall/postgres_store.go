@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -92,6 +94,12 @@ func (store *PostgresStore) CreateStarting(
 		RoomID:         pgtype.Text{String: roomID, Valid: true},
 	})
 	if err != nil {
+		if voiceCallConstraintViolation(err, "voice_call_session_active_pair_idx") {
+			return Session{}, errors.Join(
+				ErrCallAlreadyActive,
+				fmt.Errorf("insert voice call session: %w", err),
+			)
+		}
 		return Session{}, fmt.Errorf("insert voice call session: %w", err)
 	}
 	return voiceCallSessionFromDB(row)
@@ -112,6 +120,12 @@ func (store *PostgresStore) Get(
 		db.GetVoiceCallSessionForMemberParams(params),
 	)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Session{}, errors.Join(
+				ErrCallNotFound,
+				fmt.Errorf("select voice call session: %w", err),
+			)
+		}
 		return Session{}, fmt.Errorf("select voice call session: %w", err)
 	}
 	return voiceCallSessionFromDB(row)
@@ -192,6 +206,12 @@ func (store *PostgresStore) BeginEnding(
 		},
 	)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return BeginEndingResult{}, errors.Join(
+				ErrCallNotFound,
+				fmt.Errorf("update voice call to ending: %w", err),
+			)
+		}
 		return BeginEndingResult{}, fmt.Errorf("update voice call to ending: %w", err)
 	}
 	session, err := voiceCallSessionFromDB(db.VoiceCallSession{
@@ -360,4 +380,11 @@ func optionalVoiceCallTime(value pgtype.Timestamptz) *time.Time {
 	}
 	result := value.Time
 	return &result
+}
+
+func voiceCallConstraintViolation(err error, constraint string) bool {
+	var postgresError *pgconn.PgError
+	return errors.As(err, &postgresError) &&
+		postgresError.Code == "23505" &&
+		postgresError.ConstraintName == constraint
 }

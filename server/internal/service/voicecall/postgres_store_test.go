@@ -2,6 +2,7 @@ package voicecall
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -126,6 +128,60 @@ func TestPostgresStoreRejectsInvalidUUIDBeforeQuery(t *testing.T) {
 	}
 }
 
+func TestPostgresStoreClassifiesMemberVisibleErrors(t *testing.T) {
+	t.Run("active pair conflict", func(t *testing.T) {
+		queries := &fakeVoiceCallQueries{
+			session: testDBVoiceCallSession(),
+			createErr: &pgconn.PgError{
+				Code:           "23505",
+				ConstraintName: "voice_call_session_active_pair_idx",
+			},
+		}
+		store, err := NewPostgresStore(queries)
+		if err != nil {
+			t.Fatalf("new store: %v", err)
+		}
+		_, err = store.CreateStarting(context.Background(), NewSession{
+			WorkspaceID:    testVoiceWorkspaceID,
+			ChannelID:      testVoiceChannelID,
+			AgentID:        testVoiceAgentID,
+			UserID:         testVoiceUserID,
+			Provider:       "volcengine",
+			ProviderTaskID: "voice-task-conflict",
+			RoomID:         "voice-room-conflict",
+		})
+		if !errors.Is(err, ErrCallAlreadyActive) {
+			t.Fatalf("error = %v, want ErrCallAlreadyActive", err)
+		}
+	})
+
+	t.Run("scoped session not found", func(t *testing.T) {
+		queries := &fakeVoiceCallQueries{
+			session:        testDBVoiceCallSession(),
+			getErr:         pgx.ErrNoRows,
+			beginEndingErr: pgx.ErrNoRows,
+		}
+		store, err := NewPostgresStore(queries)
+		if err != nil {
+			t.Fatalf("new store: %v", err)
+		}
+		if _, err := store.Get(
+			context.Background(), testVoiceWorkspaceID, testVoiceUserID, testVoiceCallID,
+		); !errors.Is(err, ErrCallNotFound) {
+			t.Fatalf("get error = %v, want ErrCallNotFound", err)
+		}
+		if _, err := store.BeginEnding(
+			context.Background(),
+			testVoiceWorkspaceID,
+			testVoiceUserID,
+			testVoiceCallID,
+			"user_hangup",
+		); !errors.Is(err, ErrCallNotFound) {
+			t.Fatalf("ending error = %v, want ErrCallNotFound", err)
+		}
+	})
+}
+
 func TestPostgresStoreStateQueriesAgainstMigration(t *testing.T) {
 	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
 	if databaseURL == "" {
@@ -200,8 +256,8 @@ func TestPostgresStoreStateQueriesAgainstMigration(t *testing.T) {
 		Provider:       "volcengine",
 		ProviderTaskID: "voice-task-integration-duplicate",
 		RoomID:         "voice-call-integration-duplicate",
-	}); err == nil {
-		t.Fatal("duplicate active member/agent pair was accepted")
+	}); !errors.Is(err, ErrCallAlreadyActive) {
+		t.Fatalf("duplicate active member/agent pair error = %v, want ErrCallAlreadyActive", err)
 	}
 	if _, err := store.MarkConnecting(ctx, testVoiceWorkspaceID, session.ID); err != nil {
 		t.Fatalf("mark connecting: %v", err)
@@ -242,15 +298,18 @@ const (
 )
 
 type fakeVoiceCallQueries struct {
-	session     db.VoiceCallSession
-	ending      db.BeginVoiceCallEndingRow
-	create      db.CreateVoiceCallSessionParams
-	get         db.GetVoiceCallSessionForMemberParams
-	connecting  db.MarkVoiceCallConnectingParams
-	failed      db.MarkVoiceCallFailedParams
-	beginEnding db.BeginVoiceCallEndingParams
-	ended       db.MarkVoiceCallEndedParams
-	getCalls    int
+	session        db.VoiceCallSession
+	ending         db.BeginVoiceCallEndingRow
+	create         db.CreateVoiceCallSessionParams
+	get            db.GetVoiceCallSessionForMemberParams
+	connecting     db.MarkVoiceCallConnectingParams
+	failed         db.MarkVoiceCallFailedParams
+	beginEnding    db.BeginVoiceCallEndingParams
+	ended          db.MarkVoiceCallEndedParams
+	getCalls       int
+	createErr      error
+	getErr         error
+	beginEndingErr error
 }
 
 func (queries *fakeVoiceCallQueries) CreateVoiceCallSession(
@@ -258,6 +317,9 @@ func (queries *fakeVoiceCallQueries) CreateVoiceCallSession(
 	params db.CreateVoiceCallSessionParams,
 ) (db.VoiceCallSession, error) {
 	queries.create = params
+	if queries.createErr != nil {
+		return db.VoiceCallSession{}, queries.createErr
+	}
 	return queries.session, nil
 }
 
@@ -267,6 +329,9 @@ func (queries *fakeVoiceCallQueries) GetVoiceCallSessionForMember(
 ) (db.VoiceCallSession, error) {
 	queries.get = params
 	queries.getCalls++
+	if queries.getErr != nil {
+		return db.VoiceCallSession{}, queries.getErr
+	}
 	return queries.session, nil
 }
 
@@ -291,6 +356,9 @@ func (queries *fakeVoiceCallQueries) BeginVoiceCallEnding(
 	params db.BeginVoiceCallEndingParams,
 ) (db.BeginVoiceCallEndingRow, error) {
 	queries.beginEnding = params
+	if queries.beginEndingErr != nil {
+		return db.BeginVoiceCallEndingRow{}, queries.beginEndingErr
+	}
 	return queries.ending, nil
 }
 

@@ -228,6 +228,7 @@ import { AgentPanelProvider } from "../../common/agent-panel-context";
 import { ChannelMembersList, type MemberRoleLabel } from "./channel-members-list";
 import { ChannelMembersDialog } from "./channel-members-dialog";
 import { ChannelAddPeopleDialog } from "./channel-add-people-dialog";
+import { StopAllAgentsHeaderButton } from "./stop-all-agents-control";
 import { StopAllAgentsDialog } from "./stop-all-agents-dialog";
 
 export interface TypingActor {
@@ -3227,31 +3228,11 @@ export function ChannelsPage({
                     <Search className="size-3.5" />
                   </Button>
                   {canPostInChannel ? (
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
-                          <span className="inline-flex">
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              className="size-7 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
-                              aria-label={t(($) => $.stop_all_agents.aria)}
-                              disabled={!hasStoppableChannelTasks || isStoppingAllChannelTasks}
-                              onClick={openStopAllAgentsConfirm}
-                              data-testid="stop-all-agents-header"
-                            >
-                              <Square className="size-3.5 fill-current" />
-                            </Button>
-                          </span>
-                        }
-                      />
-                      <TooltipContent side="bottom">
-                        {hasStoppableChannelTasks
-                          ? t(($) => $.stop_all_agents.tooltip)
-                          : t(($) => $.stop_all_agents.empty_tooltip)}
-                      </TooltipContent>
-                    </Tooltip>
+                    <StopAllAgentsHeaderButton
+                      hasRunning={hasStoppableChannelTasks}
+                      stopping={isStoppingAllChannelTasks}
+                      onOpenConfirm={openStopAllAgentsConfirm}
+                    />
                   ) : null}
                 </div>
               )

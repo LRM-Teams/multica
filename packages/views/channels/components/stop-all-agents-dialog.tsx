@@ -13,10 +13,11 @@ import { Button } from "@multica/ui/components/ui/button";
 import { useT } from "../../i18n";
 
 /**
- * LRM-405 / LRM-447 — confirm step for the channel-header "Stop all agents"
- * entry. Function copy stays frozen (uppercase title, warning with channel
- * name, Cancel / Stop All Agents, X close). LRM-447 design gate A: 1px token
- * border + destructive wash — no neo-brutal offset shadow or hardcoded coral.
+ * LRM-405 / LRM-447 / LRM-480 — confirm step for the channel-header
+ * "Stop all agents" entry. Function copy stays frozen (uppercase title,
+ * warning with channel name, Cancel / Stop All Agents, X close).
+ * Visual: destructive token wash + 1px border — never Frank-fixture pink
+ * (#FCE8E4) / coral (#E8916A) neo-brutal chrome (LRM-480 / 447 A).
  */
 export interface StopAllAgentsDialogProps {
   open: boolean;

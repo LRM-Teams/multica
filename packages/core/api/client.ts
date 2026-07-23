@@ -313,6 +313,8 @@ import {
   SandboxSnapshotListSchema,
   VoiceTranscriptResponseSchema,
   EMPTY_VOICE_TRANSCRIPT_RESPONSE,
+  RawReminderPageSchema,
+  EMPTY_REMINDER_PAGE,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -963,7 +965,10 @@ export class ApiClient {
     search.set("status", params.status);
     if (params.cursor) search.set("cursor", params.cursor);
     if (params.limit) search.set("limit", String(params.limit));
-    return this.fetch(`/api/agents/${agentId}/reminders?${search}`);
+    const raw = await this.fetch<unknown>(`/api/agents/${agentId}/reminders?${search}`);
+    return parseWithFallback(raw, RawReminderPageSchema, EMPTY_REMINDER_PAGE, {
+      endpoint: "GET /api/agents/{agentId}/reminders",
+    });
   }
 
   async createAgent(data: CreateAgentRequest): Promise<Agent> {

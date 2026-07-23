@@ -47,6 +47,8 @@ export interface ReminderRow {
 
 export interface UpcomingReminderRow extends ReminderRow {
   nextFireAt: string;
+  /** Definition lifecycle for Upcoming (`scheduled` | `firing`). */
+  status: Extract<ReminderDefinitionStatus, "scheduled" | "firing">;
 }
 
 export interface FiredReminderRow extends ReminderRow {
@@ -116,11 +118,31 @@ export interface RawReminderPage {
 // just this row's anchor, not reject the whole page). An anchor with an
 // unrecognized kind still degrades to unavailable — the Reminder row itself
 // stays visible, only the anchor link is dropped.
+/**
+ * Bare `#workspace:shortId` labels are the Frank anti-pattern (IMG_3124
+ * counter-example). Prefer readable channel/DM names from LRM-507; until
+ * then, degrade the anchor rather than render the bare short id.
+ */
+export function isBareWorkspaceShortIdLabel(label: string): boolean {
+  return /^#[^\s#:]+:[0-9a-fA-F-]{4,36}$/.test(label.trim());
+}
+
 function adaptAnchor(raw: RawReminderAnchor): ReminderAnchor {
   const kind = raw.kind;
+<<<<<<< HEAD
   const label = raw.display_name ?? raw.display;
   if (raw.available && (kind === "channel" || kind === "thread") && label && raw.href) {
     return { available: true, kind, label, href: raw.href };
+=======
+  if (
+    raw.available &&
+    (kind === "channel" || kind === "thread") &&
+    raw.display &&
+    raw.href &&
+    !isBareWorkspaceShortIdLabel(raw.display)
+  ) {
+    return { available: true, kind, label: raw.display, href: raw.href };
+>>>>>>> 51ae031c5 (LRM-505: align Agent Reminders list fields with Frank IA)
   }
   return { available: false };
 }
@@ -188,6 +210,7 @@ export function adaptUpcomingRow(raw: RawReminderDefinition): UpcomingReminderRo
     cadence,
     anchor: adaptAnchor(raw.anchor),
     nextFireAt: raw.next_fire_at,
+    status: raw.status as Extract<ReminderDefinitionStatus, "scheduled" | "firing">,
   };
 }
 

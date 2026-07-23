@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import { useQuery, useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
-import { Bell, Repeat } from "lucide-react";
+import { Clock, Link2, Repeat } from "lucide-react";
 import type { Agent } from "@multica/core/types";
 import { ApiError } from "@multica/core/api";
 import {
@@ -15,6 +15,8 @@ import {
   adaptFiredRow,
   type UpcomingReminderRow,
   type FiredReminderRow,
+  type ReminderCadence,
+  type ReminderDefinitionStatus,
 } from "@multica/core/agents/reminder-view-model";
 import { useT } from "../../../i18n";
 import { AppLink } from "../../../navigation/app-link";
@@ -38,6 +40,10 @@ interface RemindersTabProps {
  * describes one past OCCURRENCE, not the parent definition's current state;
  * a still-recurring reminder's past fire must not read as "this reminder is
  * done."
+ *
+ * LRM-505 field/IA alignment (not neo-brutal skin): title; clock + relative
+ * + absolute time; recurring cadence chip (one-shot: no chip); readable
+ * anchor (bare `#workspace:shortId` suppressed upstream); status badge.
  */
 export function RemindersTab({ agent }: RemindersTabProps) {
   const { t } = useT("agents");
@@ -208,15 +214,29 @@ function ErrorState({
   );
 }
 
-function CadenceLabel({ row }: { row: { cadence: UpcomingReminderRow["cadence"] } }) {
-  const { t } = useT("agents");
-  if (row.cadence.kind === "one_shot") {
-    return <span className="text-muted-foreground">{t(($) => $.reminders.one_shot)}</span>;
+/** Wire `daily@09:00` / `weekly:mon,fri@10:30` / `every:30m` → readable chip text. */
+export function formatCadenceChipLabel(cadence: Extract<ReminderCadence, { kind: "recurring" }>): string {
+  const raw = cadence.description;
+  let body = raw;
+  const daily = /^daily@(\d{2}:\d{2})$/i.exec(raw);
+  const weekly = /^weekly:([^@]+)@(\d{2}:\d{2})$/i.exec(raw);
+  const every = /^every:(.+)$/i.exec(raw);
+  if (daily) body = `daily at ${daily[1]}`;
+  else if (weekly) body = `weekly ${weekly[1]} at ${weekly[2]}`;
+  else if (every) body = `every ${every[1]}`;
+  if (cadence.family === "calendar" && cadence.timezone) {
+    return `${body} ${cadence.timezone}`;
   }
+  return body;
+}
+
+function RecurrenceChip({ cadence }: { cadence: ReminderCadence }) {
+  // AC: recurring shows one cadence+timezone chip; one-shot does not show it.
+  if (cadence.kind !== "recurring") return null;
   return (
-    <span className="inline-flex items-center gap-1 text-muted-foreground">
-      <Repeat className="size-3" aria-hidden />
-      {row.cadence.description}
+    <span className="inline-flex max-w-full items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+      <Repeat className="size-3 shrink-0" aria-hidden />
+      <span className="truncate">{formatCadenceChipLabel(cadence)}</span>
     </span>
   );
 }
@@ -225,7 +245,12 @@ function AnchorLink({ anchor }: { anchor: UpcomingReminderRow["anchor"] }) {
   const { t } = useT("agents");
   const navigation = useOptionalNavigation();
   if (!anchor.available) {
-    return <span className="text-muted-foreground">{t(($) => $.reminders.anchor_unavailable)}</span>;
+    return (
+      <span className="inline-flex items-center gap-1 text-muted-foreground">
+        <Link2 className="size-3 shrink-0" aria-hidden />
+        {t(($) => $.reminders.anchor_unavailable)}
+      </span>
+    );
   }
   // `href` is a server-computed, already-authorized internal path (never
   // built from raw ids client-side) — `?message=` (kind: "channel") or
@@ -240,49 +265,111 @@ function AnchorLink({ anchor }: { anchor: UpcomingReminderRow["anchor"] }) {
   // scratch) and is visibly slower than the SPA route change. Falls back to
   // a plain `<a>` only if rendered outside a NavigationProvider (matches
   // channel-system-event-content.tsx's established pattern).
-  const className = "truncate text-primary hover:underline";
+  const className =
+    "inline-flex max-w-full items-center gap-1 truncate rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-primary hover:underline";
+  const body = (
+    <>
+      <Link2 className="size-3 shrink-0" aria-hidden />
+      <span className="truncate">{anchor.label}</span>
+    </>
+  );
   return navigation ? (
     <AppLink href={anchor.href} className={className} title={anchor.label}>
-      {anchor.label}
+      {body}
     </AppLink>
   ) : (
     <a href={anchor.href} className={className} title={anchor.label}>
-      {anchor.label}
+      {body}
     </a>
   );
 }
 
-function TimezoneTag({ cadence }: { cadence: UpcomingReminderRow["cadence"] }) {
-  const { t } = useT("agents");
-  // Only a calendar cadence (daily/weekly) resolves against a schedule-time-
-  // locked timezone in a way that's meaningfully different from "just a
-  // moment" — an interval cadence or a one-shot fire-at instant has none.
-  if (cadence.kind !== "recurring" || cadence.family !== "calendar" || !cadence.timezone) return null;
+function formatAbsoluteInstant(iso: string, locale = "en"): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  const datePart = date.toLocaleDateString(locale, { month: "short", day: "numeric" });
+  const timePart = date.toLocaleTimeString(locale, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  return `${datePart} at ${timePart}`;
+}
+
+function formatRelativeInstant(iso: string, nowMs = Date.now(), locale = "en"): string {
+  const target = new Date(iso).getTime();
+  if (Number.isNaN(target)) return iso;
+  const diffSec = Math.round((target - nowMs) / 1000);
+  const abs = Math.abs(diffSec);
+  const rtf = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
+  if (abs < 60) return rtf.format(diffSec, "second");
+  const diffMin = Math.round(diffSec / 60);
+  if (Math.abs(diffMin) < 60) return rtf.format(diffMin, "minute");
+  const diffHour = Math.round(diffSec / 3600);
+  if (Math.abs(diffHour) < 48) return rtf.format(diffHour, "hour");
+  const diffDay = Math.round(diffSec / 86400);
+  return rtf.format(diffDay, "day");
+}
+
+function TimeRow({ iso }: { iso: string }) {
   return (
-    <span className="text-[10px] text-muted-foreground" title={t(($) => $.reminders.timezone_label)}>
-      {cadence.timezone}
+    <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-muted-foreground">
+      <Clock className="size-3.5 shrink-0" aria-hidden />
+      <span className="font-medium text-foreground">{formatRelativeInstant(iso)}</span>
+      <span aria-hidden>·</span>
+      <span>{formatAbsoluteInstant(iso)}</span>
+    </div>
+  );
+}
+
+type DisplayStatus = "scheduled" | "firing" | "overdue" | "cancelled" | "fired";
+
+function resolveUpcomingStatus(row: UpcomingReminderRow, nowMs = Date.now()): DisplayStatus {
+  if (row.status === "firing") return "firing";
+  const fireAt = new Date(row.nextFireAt).getTime();
+  if (!Number.isNaN(fireAt) && fireAt < nowMs) return "overdue";
+  return "scheduled";
+}
+
+function StatusBadge({ status }: { status: DisplayStatus }) {
+  const { t } = useT("agents");
+  const label =
+    status === "scheduled"
+      ? t(($) => $.reminders.status_scheduled)
+      : status === "firing"
+        ? t(($) => $.reminders.status_firing)
+        : status === "overdue"
+          ? t(($) => $.reminders.status_overdue)
+          : status === "cancelled"
+            ? t(($) => $.reminders.status_cancelled)
+            : t(($) => $.reminders.status_fired);
+  return (
+    <span className="inline-flex shrink-0 rounded-md border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+      {label}
     </span>
   );
 }
 
+function historyStatus(definitionStatus: ReminderDefinitionStatus): DisplayStatus | null {
+  if (definitionStatus === "cancelled") return "cancelled";
+  if (definitionStatus === "fired") return "fired";
+  // Recurring definitions stay `scheduled` after a fire — don't stamp every
+  // History row as "scheduled" (noise). Terminal states only.
+  return null;
+}
+
 function UpcomingRowView({ row }: { row: UpcomingReminderRow }) {
-  const { t } = useT("agents");
+  const displayStatus = resolveUpcomingStatus(row);
   return (
-    <li className="flex flex-col gap-1 px-3 py-3 text-xs md:px-4">
-      <div className="flex items-center gap-1.5">
-        <Bell className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-        <p className="min-w-0 line-clamp-2 font-medium text-foreground" title={row.title}>
+    <li className="flex flex-col gap-1.5 px-3 py-3 text-xs md:px-4">
+      <div className="flex items-start justify-between gap-2">
+        <p className="min-w-0 whitespace-pre-wrap font-medium text-foreground" title={row.title}>
           {row.title}
         </p>
+        <StatusBadge status={displayStatus} />
       </div>
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 pl-5 text-muted-foreground">
-        <span>
-          {t(($) => $.reminders.next_fire_label)}: {formatInstant(row.nextFireAt)}
-        </span>
-        <CadenceLabel row={row} />
-        <TimezoneTag cadence={row.cadence} />
-      </div>
-      <div className="pl-5">
+      <TimeRow iso={row.nextFireAt} />
+      <div className="flex flex-wrap items-center gap-1.5">
+        <RecurrenceChip cadence={row.cadence} />
         <AnchorLink anchor={row.anchor} />
       </div>
     </li>
@@ -290,37 +377,23 @@ function UpcomingRowView({ row }: { row: UpcomingReminderRow }) {
 }
 
 function FiredRowView({ row }: { row: FiredReminderRow }) {
-  const { t } = useT("agents");
+  const status = historyStatus(row.definitionStatus);
   return (
-    <li className="flex flex-col gap-1 px-3 py-3 text-xs md:px-4">
-      <div className="flex items-center gap-1.5">
-        <Bell className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-        <p className="min-w-0 line-clamp-2 font-medium text-foreground" title={row.title}>
+    <li className="flex flex-col gap-1.5 px-3 py-3 text-xs md:px-4">
+      <div className="flex items-start justify-between gap-2">
+        <p className="min-w-0 whitespace-pre-wrap font-medium text-foreground" title={row.title}>
           {row.title}
         </p>
+        {status ? <StatusBadge status={status} /> : null}
       </div>
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 pl-5 text-muted-foreground">
-        <span>
-          {t(($) => $.reminders.fired_label)}: {formatInstant(row.firedAt)}
-        </span>
-        {/* This describes the DEFINITION's own state, distinct from "this row
+      <TimeRow iso={row.firedAt} />
+      <div className="flex flex-wrap items-center gap-1.5">
+        {/* This describes the DEFINITION's own cadence, distinct from "this row
             fired" — a recurring definition that's still `scheduled` must not
             read as if this past occurrence terminated it. */}
-        <CadenceLabel row={row} />
-        <TimezoneTag cadence={row.cadence} />
-      </div>
-      <div className="pl-5">
+        <RecurrenceChip cadence={row.cadence} />
         <AnchorLink anchor={row.anchor} />
       </div>
     </li>
   );
-}
-
-function formatInstant(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  // Viewer's own locale/zone for the human-readable instant — the LOCKED
-  // schedule timezone is shown separately via `TimezoneTag`, never implied
-  // by this formatted string.
-  return date.toLocaleString();
 }

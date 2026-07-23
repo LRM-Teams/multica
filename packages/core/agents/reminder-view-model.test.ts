@@ -53,7 +53,22 @@ describe("adaptUpcomingRow", () => {
       },
       anchor: { available: false },
       nextFireAt: "2026-07-24T09:00:00Z",
+      status: "scheduled",
     });
+  });
+
+  it("degrades bare #workspace:shortId anchor labels to unavailable", () => {
+    const row = adaptUpcomingRow(
+      makeDefinition({
+        anchor: {
+          available: true,
+          kind: "channel",
+          display: "#multica:a1b2c3d4",
+          href: "/acme/channels/chan-1?message=msg-1",
+        },
+      }),
+    );
+    expect(row?.anchor).toEqual({ available: false });
   });
 
   it("adapts a well-formed one_shot row", () => {

@@ -622,7 +622,12 @@
     "one_shot": "One-time",
     "next_fire_label": "Next",
     "fired_label": "Fired",
-    "timezone_label": "Timezone"
+    "timezone_label": "Timezone",
+    "status_scheduled": "Scheduled",
+    "status_firing": "Firing",
+    "status_overdue": "Overdue",
+    "status_cancelled": "Cancelled",
+    "status_fired": "Fired"
   },
   "task_failure": {
     "agent_error": "Agent execution error",

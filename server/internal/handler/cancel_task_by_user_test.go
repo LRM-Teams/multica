@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -142,7 +143,7 @@ func cancelTaskByUserRequest(t *testing.T, userID, taskID string) *http.Request 
 	return withChatTestWorkspaceCtx(t, req)
 }
 
-func TestCancelTaskByUser_AgentInboxEvent_CancelsNewChainTask(t *testing.T) {
+func TestCancelTaskByUser_AgentInboxEvent_ChannelScoped_ReturnsConflict(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -158,76 +159,24 @@ func TestCancelTaskByUser_AgentInboxEvent_CancelsNewChainTask(t *testing.T) {
 	root := dispatchThreadMentionForTest(t, channelID, agentID, "cancel-inbox-event-"+uuid.NewString())
 	eventID := latestChannelAgentInboxEventForRootForTest(t, root.ID, agentID)
 
-	var deliveryID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_event_delivery (
-			workspace_id,
-			agent_session_id,
-			inbox_event_id,
-			runtime_id,
-			status
-		)
-		SELECT workspace_id,
-		       agent_session_id,
-		       id,
-		       $2,
-		       'leased'
-		FROM agent_inbox_event
-		WHERE id = $1
-		RETURNING id`, eventID, handlerTestRuntimeID(t)).Scan(&deliveryID); err != nil {
-		t.Fatalf("seed inbox delivery: %v", err)
-	}
-
 	w := httptest.NewRecorder()
 	testHandler.CancelTaskByUser(w, cancelTaskByUserRequest(t, testUserID, eventID))
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409 for channel inbox via tasks-cancel, got %d: %s", w.Code, w.Body.String())
 	}
-	var resp CancelTaskByUserResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode cancel response: %v", err)
-	}
-	if resp.ID != eventID || resp.Status != "cancelled" || resp.Kind != "chat" || resp.CompletedAt == nil {
-		t.Fatalf("cancel inbox response = %+v, want cancelled chat inbox event", resp.AgentTaskResponse)
+	if !strings.Contains(w.Body.String(), "agent-inbox/events") {
+		t.Fatalf("expected explicit new-contract error, got %s", w.Body.String())
 	}
 
-	var eventStatus, terminalOutcome, terminalDeliveryID string
-	var retryable bool
+	var eventStatus, terminalOutcome string
 	if err := testPool.QueryRow(ctx, `
-		SELECT status,
-		       COALESCE(terminal_outcome, ''),
-		       COALESCE(terminal_delivery_id::text, ''),
-		       retryable
+		SELECT status, COALESCE(terminal_outcome, '')
 		FROM agent_inbox_event
-		WHERE id = $1`, eventID).Scan(&eventStatus, &terminalOutcome, &terminalDeliveryID, &retryable); err != nil {
-		t.Fatalf("load cancelled inbox event: %v", err)
+		WHERE id = $1`, eventID).Scan(&eventStatus, &terminalOutcome); err != nil {
+		t.Fatalf("load inbox event: %v", err)
 	}
-	if eventStatus != "suppressed" || terminalOutcome != "no_reply" || terminalDeliveryID != deliveryID || retryable {
-		t.Fatalf("cancelled inbox event status=%q outcome=%q delivery=%q retryable=%v", eventStatus, terminalOutcome, terminalDeliveryID, retryable)
-	}
-	var deliveryStatus string
-	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_event_delivery WHERE id = $1`, deliveryID).Scan(&deliveryStatus); err != nil {
-		t.Fatalf("load cancelled delivery: %v", err)
-	}
-	if deliveryStatus != "failed" {
-		t.Fatalf("delivery status = %q, want failed", deliveryStatus)
-	}
-
-	activeReq := withURLParam(newRequest(http.MethodGet, "/api/channels/"+channelID+"/active-tasks", nil), "channelId", channelID)
-	activeReq = withChannelTestWorkspaceCtx(t, activeReq, testUserID)
-	activeRec := httptest.NewRecorder()
-	testHandler.ListChannelActiveTasks(activeRec, activeReq)
-	if activeRec.Code != http.StatusOK {
-		t.Fatalf("list active tasks after cancel: status=%d body=%s", activeRec.Code, activeRec.Body.String())
-	}
-	var activeResp ChannelActiveTasksResponse
-	if err := json.NewDecoder(activeRec.Body).Decode(&activeResp); err != nil {
-		t.Fatalf("decode active tasks after cancel: %v", err)
-	}
-	for _, task := range activeResp.Tasks {
-		if task.TaskID == eventID {
-			t.Fatalf("cancelled inbox event still appears in active strip: %+v", activeResp.Tasks)
-		}
+	if eventStatus == "suppressed" || terminalOutcome != "" {
+		t.Fatalf("tasks-cancel must not cancel channel inbox: status=%q outcome=%q", eventStatus, terminalOutcome)
 	}
 }
 

@@ -918,6 +918,272 @@ func (h *Handler) completeFailedAgentInboxEvent(w http.ResponseWriter, r *http.R
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "acked_seq": acked.SeqTo})
 }
 
+var errAgentInboxEventNotCancellable = errors.New("agent inbox event is not cancellable")
+
+// cancelledAgentInboxEventRow is the DB result of suppressing a wake event.
+type cancelledAgentInboxEventRow struct {
+	ID            pgtype.UUID
+	AgentID       pgtype.UUID
+	RuntimeID     pgtype.UUID
+	Priority      int32
+	CreatedAt     pgtype.Timestamptz
+	TerminalAt    pgtype.Timestamptz
+	ChatSessionID pgtype.UUID
+	ChannelID     pgtype.UUID
+}
+
+type ChannelCancelAgentInboxEventResponse struct {
+	OK           bool   `json:"ok"`
+	InboxEventID string `json:"inbox_event_id"`
+	AgentID      string `json:"agent_id"`
+	Status       string `json:"status"`
+}
+
+type ChannelCancelActiveAgentInboxResponse struct {
+	OK             bool                                  `json:"ok"`
+	CancelledCount int                                   `json:"cancelled_count"`
+	Cancelled      []ChannelCancelAgentInboxEventResponse `json:"cancelled"`
+}
+
+func (h *Handler) cancelAgentInboxEventCore(ctx context.Context, workspaceUUID, inboxEventID pgtype.UUID) (cancelledAgentInboxEventRow, error) {
+	var row cancelledAgentInboxEventRow
+	err := h.DB.QueryRow(ctx, `
+		WITH latest_delivery AS (
+			SELECT d.id, d.runtime_id
+			FROM agent_event_delivery d
+			WHERE d.inbox_event_id = $1
+			ORDER BY d.created_at DESC, d.id DESC
+			LIMIT 1
+		),
+		cancelled_delivery AS (
+			UPDATE agent_event_delivery d
+			SET status = 'failed',
+			    last_error = 'cancelled by user',
+			    updated_at = now()
+			WHERE d.inbox_event_id = $1
+			  AND d.status IN ('leased', 'processing')
+			RETURNING d.id, d.runtime_id
+		),
+		chosen_delivery AS (
+			SELECT id, runtime_id FROM cancelled_delivery
+			UNION ALL
+			SELECT id, runtime_id FROM latest_delivery
+			LIMIT 1
+		),
+		cancelled_event AS (
+			UPDATE agent_inbox_event e
+			SET status = 'suppressed',
+			    terminal_outcome = 'no_reply',
+			    terminal_delivery_id = (SELECT id FROM chosen_delivery LIMIT 1),
+			    retryable = false,
+			    terminal_at = now(),
+			    acked_at = now(),
+			    last_error = 'cancelled by user',
+			    updated_at = now()
+			WHERE e.id = $1
+			  AND e.workspace_id = $2
+			  AND e.requires_wake
+			  AND e.status IN ('pending', 'draining', 'failed')
+			  AND e.terminal_outcome IS NULL
+			RETURNING e.id, e.agent_id, e.agent_session_id, e.priority, e.created_at, e.terminal_at, e.chat_session_id, e.channel_id
+		)
+		SELECT e.id,
+		       e.agent_id,
+		       COALESCE((SELECT runtime_id FROM chosen_delivery LIMIT 1), s.runtime_id),
+		       e.priority,
+		       e.created_at,
+		       e.terminal_at,
+		       e.chat_session_id,
+		       e.channel_id
+		FROM cancelled_event e
+		LEFT JOIN agent_session s ON s.id = e.agent_session_id`, inboxEventID, workspaceUUID).Scan(
+		&row.ID, &row.AgentID, &row.RuntimeID, &row.Priority, &row.CreatedAt, &row.TerminalAt, &row.ChatSessionID, &row.ChannelID,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return cancelledAgentInboxEventRow{}, errAgentInboxEventNotCancellable
+		}
+		return cancelledAgentInboxEventRow{}, err
+	}
+	return row, nil
+}
+
+func (h *Handler) cancelledInboxEventTaskResponse(row cancelledAgentInboxEventRow, workspaceID string) AgentTaskResponse {
+	resp := AgentTaskResponse{
+		ID:            uuidToString(row.ID),
+		AgentID:       uuidToString(row.AgentID),
+		RuntimeID:     uuidToString(row.RuntimeID),
+		WorkspaceID:   workspaceID,
+		Status:        "cancelled",
+		Priority:      row.Priority,
+		CompletedAt:   timestampToPtr(row.TerminalAt),
+		Attempt:       1,
+		MaxAttempts:   1,
+		CreatedAt:     timestampToString(row.CreatedAt),
+		ChatSessionID: uuidToString(row.ChatSessionID),
+		Kind:          "chat",
+	}
+	if row.ChannelID.Valid {
+		resp.ChannelID = uuidToString(row.ChannelID)
+	}
+	return resp
+}
+
+func (h *Handler) publishCancelledAgentInboxEvent(workspaceID, actorType, actorID string, row cancelledAgentInboxEventRow, payload AgentTaskResponse) {
+	h.publishTask(protocol.EventTaskCancelled, workspaceID, actorType, actorID, uuidToString(row.ID), payload)
+}
+
+func (h *Handler) listCancellableChannelActiveInboxEventIDs(ctx context.Context, workspaceUUID, channelID pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := h.DB.Query(ctx, `
+		SELECT e.id
+		FROM agent_inbox_event e
+		WHERE e.channel_id = $1
+		  AND e.workspace_id = $2
+		  AND e.requires_wake
+		  AND e.status IN ('pending', 'draining', 'failed')
+		  AND e.terminal_outcome IS NULL
+		  AND e.reason NOT IN ('ambient', 'channel_onboarding')
+		ORDER BY e.created_at ASC, e.id ASC`, channelID, workspaceUUID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	ids := make([]pgtype.UUID, 0)
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// CancelChannelAgentInboxEvent stops one channel wake by inbox_event_id
+// (LRM-425 single-stop contract). Authoritative id matches active-tasks.
+func (h *Handler) CancelChannelAgentInboxEvent(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	workspaceUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
+	if !ok {
+		return
+	}
+	channelID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "channelId"), "channel id")
+	if !ok {
+		return
+	}
+	eventID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "eventId"), "inbox event id")
+	if !ok {
+		return
+	}
+	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
+		return
+	}
+	if !h.requireChannelWritable(w, r.Context(), workspaceID, channelID) {
+		return
+	}
+
+	var exists bool
+	if err := h.DB.QueryRow(r.Context(), `
+		SELECT EXISTS (
+			SELECT 1
+			FROM agent_inbox_event e
+			WHERE e.id = $1
+			  AND e.workspace_id = $2
+			  AND e.channel_id = $3
+			  AND e.requires_wake
+		)`, eventID, workspaceUUID, channelID).Scan(&exists); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to resolve inbox event")
+		return
+	}
+	if !exists {
+		writeError(w, http.StatusNotFound, "inbox event not found")
+		return
+	}
+
+	row, err := h.cancelAgentInboxEventCore(r.Context(), workspaceUUID, eventID)
+	if err != nil {
+		if errors.Is(err, errAgentInboxEventNotCancellable) {
+			writeError(w, http.StatusConflict, "inbox event is not cancellable")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to cancel inbox event")
+		return
+	}
+
+	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	payload := h.cancelledInboxEventTaskResponse(row, workspaceID)
+	h.publishCancelledAgentInboxEvent(workspaceID, actorType, actorID, row, payload)
+	writeJSON(w, http.StatusOK, ChannelCancelAgentInboxEventResponse{
+		OK:           true,
+		InboxEventID: uuidToString(row.ID),
+		AgentID:      uuidToString(row.AgentID),
+		Status:       "cancelled",
+	})
+}
+
+// CancelChannelActiveAgentInboxEvents stops every active (cancellable) wake in
+// the channel in one request — Stop All must not loop single cancel (LRM-425).
+func (h *Handler) CancelChannelActiveAgentInboxEvents(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	workspaceUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
+	if !ok {
+		return
+	}
+	channelID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "channelId"), "channel id")
+	if !ok {
+		return
+	}
+	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
+		return
+	}
+	if !h.requireChannelWritable(w, r.Context(), workspaceID, channelID) {
+		return
+	}
+
+	eventIDs, err := h.listCancellableChannelActiveInboxEventIDs(r.Context(), workspaceUUID, channelID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list active inbox events")
+		return
+	}
+
+	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	cancelled := make([]ChannelCancelAgentInboxEventResponse, 0, len(eventIDs))
+	for _, eventID := range eventIDs {
+		row, err := h.cancelAgentInboxEventCore(r.Context(), workspaceUUID, eventID)
+		if err != nil {
+			if errors.Is(err, errAgentInboxEventNotCancellable) {
+				// Race: event terminated between list and cancel — skip.
+				continue
+			}
+			writeError(w, http.StatusInternalServerError, "failed to cancel active inbox events")
+			return
+		}
+		payload := h.cancelledInboxEventTaskResponse(row, workspaceID)
+		h.publishCancelledAgentInboxEvent(workspaceID, actorType, actorID, row, payload)
+		cancelled = append(cancelled, ChannelCancelAgentInboxEventResponse{
+			OK:           true,
+			InboxEventID: uuidToString(row.ID),
+			AgentID:      uuidToString(row.AgentID),
+			Status:       "cancelled",
+		})
+	}
+
+	writeJSON(w, http.StatusOK, ChannelCancelActiveAgentInboxResponse{
+		OK:             true,
+		CancelledCount: len(cancelled),
+		Cancelled:      cancelled,
+	})
+}
+
 func (h *Handler) RetryChannelAgentInboxEvent(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {

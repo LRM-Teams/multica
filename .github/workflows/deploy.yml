@@ -1,24 +1,23 @@
 name: Deploy
 
-# Continuous deployment to the Aliyun host (101.200.210.144, runner label
-# `aliyun`). Images still build on GitHub-hosted runners and push to GHCR; the
-# self-hosted runner on the deploy host pulls images and restarts Compose.
+# Continuous deployment to s89 (82.157.184.89, runner label `s89`). Images
+# build on GitHub-hosted runners and push to GHCR; the self-hosted runner on
+# s89 pulls images and restarts Compose locally.
 #
 # Test gate: the CI workflow runs on every PR into `dev`. The team's workflow is
-# feature branch → PR → merge to `dev`, which builds images and deploys here.
+# feature branch → PR → merge to `dev`, which builds images and deploys to s89.
 # `main` is left as the upstream-tracking branch and never deploys via this
 # workflow.
 #
-# Host layout: deploy user `dev`, stack under `/data/multica`. GitHub Environment
-# `s89` is kept as the secret store (POSTGRES_PASSWORD / optional voice key) so
-# existing Environment secrets keep working during the cutover.
+# Host layout: stack under `/data/multica`. GitHub Environment `s89` stores
+# POSTGRES_PASSWORD and the optional voice key.
 
 on:
   # Deploy only from the `dev` integration branch, after a PR has already been
-  # merged. PR events must not deploy to the shared Aliyun/dev environment; they
-  # can build/test in CI, but that host must always represent `dev` or an
-  # explicit manual dispatch from `dev`. Rollback dispatches must name an
-  # existing image tag.
+  # merged. PR events must not deploy to the shared s89/dev environment; they
+  # can build/test in CI, but s89 must always represent `dev` or an explicit
+  # manual dispatch from `dev`. Rollback dispatches must name an existing image
+  # tag.
   # Docs-only changes (#354 bug) are excluded — they don't change any code, so
   # triggering a backend rebuild/restart would disconnect all WS connections
   # for zero benefit.
@@ -37,7 +36,7 @@ on:
 
 # Never run two deploys at once; never cancel an in-flight one mid-restart.
 concurrency:
-  group: deploy-aliyun
+  group: deploy-s89
   cancel-in-progress: false
 
 jobs:
@@ -159,7 +158,7 @@ jobs:
        (github.event_name == 'workflow_dispatch' &&
         github.ref == 'refs/heads/dev' &&
         github.event.inputs.image_tag != ''))
-    runs-on: [self-hosted, aliyun]
+    runs-on: [self-hosted, s89]
     timeout-minutes: 15
     permissions:
       contents: read
@@ -210,7 +209,7 @@ jobs:
           export MULTICA_WEB_IMAGE="ghcr.io/${owner_lc}/multica-web"
           export MULTICA_DB_BRIDGE_IMAGE="ghcr.io/${owner_lc}/multica-db-bridge"
           export MULTICA_IMAGE_TAG="${IMAGE_TAG}"
-          # Aliyun/dev is the shared integration environment; keep this off by
+          # s89/dev is the shared integration environment; keep this off by
           # default in docker-compose.selfhost.yml and opt in only for this lane.
           export MULTICA_DEV_AGENT_PROFILE_ACCESS=true
           if [ -z "${POSTGRES_PASSWORD:-}" ]; then
@@ -233,6 +232,16 @@ jobs:
           # DNS race that caused intermittent 'no such host' errors (#324).
           compose up -d frontend
           compose up -d backend
+          # Caddy is intentionally managed outside these Compose files on s89,
+          # but the deploy health boundary depends on it. Start the exact
+          # pre-provisioned container instead of assuming it survived previous
+          # host maintenance.
+          if docker container inspect multica-caddy >/dev/null 2>&1; then
+            docker start multica-caddy >/dev/null
+          else
+            echo "::error::Required s89 proxy container multica-caddy does not exist."
+            exit 1
+          fi
           # db-bridge-stub-multica + db-bridge-executor-multica are profile-gated
           # in the compose file, so naming them explicitly is what starts them.
           # They share the multica-db-bridge image (the public run_multica server

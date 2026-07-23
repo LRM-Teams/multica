@@ -134,6 +134,72 @@ func (q *Queries) MarkWebPushSubscriptionsFailed(ctx context.Context, arg MarkWe
 	return result.RowsAffected(), nil
 }
 
+const getWebPushChannelRecipientInfo = `-- name: GetWebPushChannelRecipientInfo :one
+SELECT ch.name, ch.kind, COALESCE(vcm.muted_at, cm.muted_at) IS NOT NULL AS muted
+FROM channel ch
+JOIN channel_member cm
+  ON cm.channel_id = ch.id
+ AND cm.workspace_id = ch.workspace_id
+ AND cm.member_type = 'user'
+ AND cm.member_id = $3
+JOIN conversation conv ON conv.channel_id = ch.id
+LEFT JOIN conversation_member vcm
+  ON vcm.conversation_id = conv.id
+ AND vcm.member_type = 'user'
+ AND vcm.member_id = $3
+WHERE ch.workspace_id = $1 AND ch.id = $2
+`
+
+type GetWebPushChannelRecipientInfoParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ChannelID   pgtype.UUID `json:"channel_id"`
+	MemberID    pgtype.UUID `json:"member_id"`
+}
+
+type GetWebPushChannelRecipientInfoRow struct {
+	Name  string `json:"name"`
+	Kind  string `json:"kind"`
+	Muted bool   `json:"muted"`
+}
+
+func (q *Queries) GetWebPushChannelRecipientInfo(ctx context.Context, arg GetWebPushChannelRecipientInfoParams) (GetWebPushChannelRecipientInfoRow, error) {
+	row := q.db.QueryRow(ctx, getWebPushChannelRecipientInfo, arg.WorkspaceID, arg.ChannelID, arg.MemberID)
+	var i GetWebPushChannelRecipientInfoRow
+	err := row.Scan(&i.Name, &i.Kind, &i.Muted)
+	return i, err
+}
+
+const listWebPushChannelHumanMemberIDs = `-- name: ListWebPushChannelHumanMemberIDs :many
+SELECT member_id::text
+FROM channel_member
+WHERE workspace_id = $1 AND channel_id = $2 AND member_type = 'user'
+`
+
+type ListWebPushChannelHumanMemberIDsParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ChannelID   pgtype.UUID `json:"channel_id"`
+}
+
+func (q *Queries) ListWebPushChannelHumanMemberIDs(ctx context.Context, arg ListWebPushChannelHumanMemberIDsParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, listWebPushChannelHumanMemberIDs, arg.WorkspaceID, arg.ChannelID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var memberID string
+		if err := rows.Scan(&memberID); err != nil {
+			return nil, err
+		}
+		items = append(items, memberID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const upsertWebPushSubscription = `-- name: UpsertWebPushSubscription :one
 INSERT INTO web_push_subscription (
     workspace_id, user_id, endpoint, p256dh, auth,

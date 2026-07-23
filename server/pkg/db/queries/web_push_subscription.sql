@@ -38,3 +38,23 @@ WHERE user_id = $1 AND endpoint = ANY($2::text[]);
 UPDATE web_push_subscription
 SET last_error = $3, revoked_at = now(), updated_at = now()
 WHERE user_id = $1 AND endpoint = ANY($2::text[]) AND revoked_at IS NULL;
+
+-- name: GetWebPushChannelRecipientInfo :one
+SELECT ch.name, ch.kind, COALESCE(vcm.muted_at, cm.muted_at) IS NOT NULL AS muted
+FROM channel ch
+JOIN channel_member cm
+  ON cm.channel_id = ch.id
+ AND cm.workspace_id = ch.workspace_id
+ AND cm.member_type = 'user'
+ AND cm.member_id = $3
+JOIN conversation conv ON conv.channel_id = ch.id
+LEFT JOIN conversation_member vcm
+  ON vcm.conversation_id = conv.id
+ AND vcm.member_type = 'user'
+ AND vcm.member_id = $3
+WHERE ch.workspace_id = $1 AND ch.id = $2;
+
+-- name: ListWebPushChannelHumanMemberIDs :many
+SELECT member_id::text
+FROM channel_member
+WHERE workspace_id = $1 AND channel_id = $2 AND member_type = 'user';

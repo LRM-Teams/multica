@@ -177,7 +177,7 @@ func encryptPayload(payload []byte, sub Subscription) ([]byte, []byte, []byte, e
 	}
 	header := make([]byte, 0, 16+4+1+len(serverPublic))
 	header = append(header, salt...)
-	header = append(header, byte(maxRecordSize>>24), byte(maxRecordSize>>16), byte(maxRecordSize>>8), byte(maxRecordSize))
+	header = append(header, byte(maxRecordSize>>24), byte(maxRecordSize>>16), byte(maxRecordSize>>8), byte(maxRecordSize&0xff))
 	header = append(header, byte(len(serverPublic)))
 	header = append(header, serverPublic...)
 	return append(header, block.Seal(nil, nonce, record, nil)...), salt, serverPublic, nil

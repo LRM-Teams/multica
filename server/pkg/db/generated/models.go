@@ -1267,6 +1267,10 @@ type SandboxSnapshot struct {
 	Status         string             `json:"status"`
 	Error          pgtype.Text        `json:"error"`
 	Metadata       []byte             `json:"metadata"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
 type WebPushSubscription struct {
 	ID             pgtype.UUID        `json:"id"`
 	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
@@ -1280,10 +1284,6 @@ type WebPushSubscription struct {
 	LastActiveAt   pgtype.Timestamptz `json:"last_active_at"`
 	LastError      pgtype.Text        `json:"last_error"`
 	RevokedAt      pgtype.Timestamptz `json:"revoked_at"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
-}
-
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }

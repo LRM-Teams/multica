@@ -98,8 +98,8 @@ func (h *Handler) UpsertWebPushSubscription(w http.ResponseWriter, r *http.Reque
 		P256dh:         strings.TrimSpace(sub.Keys.P256dh),
 		Auth:           strings.TrimSpace(sub.Keys.Auth),
 		ExpirationTime: subscriptionExpirationTime(sub.ExpirationTime),
-		DeviceID:       nullableText(deviceID),
-		UserAgent:      nullableText(userAgent),
+		DeviceID:       optionalPgText(deviceID),
+		UserAgent:      optionalPgText(userAgent),
 	})
 	if err != nil {
 		slog.Warn("UpsertWebPushSubscription failed", append(logger.RequestAttrs(r), "error", err)...)
@@ -155,7 +155,7 @@ func firstNonEmptyPtr(values ...*string) *string {
 	return nil
 }
 
-func nullableText(value *string) pgtype.Text {
+func optionalPgText(value *string) pgtype.Text {
 	if value == nil {
 		return pgtype.Text{}
 	}

@@ -66,7 +66,17 @@ export function useDeleteChannel() {
   const wsId = useWorkspaceId();
   return useMutation({
     mutationFn: (channelId: string) => api.deleteChannel(channelId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: channelKeys.list(wsId) }),
+    // LRM-485: hard-delete removes the row entirely — refresh active AND
+    // archived lists. Invalidating only `list` left ghost entries under
+    // Archived (N) after permanently deleting an already-archived channel
+    // (Delete ≠ Archive; must not look like soft-delete residue).
+    onSuccess: (_data, channelId) => {
+      const drop = <T extends { id: string }>(prev: T[] | undefined) =>
+        prev ? prev.filter((c) => c.id !== channelId) : prev;
+      qc.setQueryData(channelKeys.list(wsId), drop);
+      qc.setQueryData(channelKeys.archivedList(wsId), drop);
+      qc.invalidateQueries({ queryKey: channelKeys.all(wsId) });
+    },
   });
 }
 

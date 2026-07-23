@@ -5141,6 +5141,7 @@ func TestChannelPermanentDeleteRemovesChannelAndMessages(t *testing.T) {
 	if ch := listedChannelForTest(t, channelID); ch != nil {
 		t.Fatalf("deleted channel still listed: %+v", *ch)
 	}
+	// LRM-485 regression: permanent Delete must not soft-archive into Archived.
 	if ch := archivedListedChannelForTest(t, channelID); ch != nil {
 		t.Fatalf("deleted channel still in archived list: %+v", *ch)
 	}

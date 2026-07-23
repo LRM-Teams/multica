@@ -830,9 +830,9 @@ func (h *Handler) UpdateChannel(w http.ResponseWriter, r *http.Request) {
 
 // DeleteChannel permanently removes a group channel and its cascaded rows
 // (messages, members, attachments, …). Unlike ArchiveChannel this is
-// unrecoverable. Only workspace owner/admin may delete; system #general and
-// DMs are rejected with explicit errors. Archived channels may still be
-// deleted (Slack-aligned).
+// unrecoverable hard delete — never soft-archive (LRM-485: Delete ≠ Archive).
+// Only workspace owner/admin may delete; system #general and DMs are rejected
+// with explicit errors. Archived channels may still be deleted (Slack-aligned).
 func (h *Handler) DeleteChannel(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {

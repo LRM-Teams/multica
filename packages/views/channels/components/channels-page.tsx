@@ -1737,11 +1737,18 @@ export function ChannelsPage({
     qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
   });
 
-  // Another client deleted a channel — drop it from the list. If it was the
-  // open one, `active` falls back to the first remaining channel via the memo.
+  // Another client permanently deleted a channel — drop it from active AND
+  // archived lists (LRM-485). If it was the open one, `active` falls back to
+  // the first remaining channel via the memo.
   useWSEvent("channel:deleted", (payload) => {
     const e = payload as { id?: string };
-    qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
+    if (e.id) {
+      const drop = <T extends { id: string }>(prev: T[] | undefined) =>
+        prev ? prev.filter((c) => c.id !== e.id) : prev;
+      qc.setQueryData(channelKeys.list(wsId), drop);
+      qc.setQueryData(channelKeys.archivedList(wsId), drop);
+    }
+    qc.invalidateQueries({ queryKey: channelKeys.all(wsId) });
     if (e.id && e.id === activeId) setActiveId(null);
   });
 

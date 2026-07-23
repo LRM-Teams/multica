@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -154,6 +155,15 @@ func updateIssueForBackflowTest(t *testing.T, issueID string, body map[string]an
 	if w.Code != http.StatusOK {
 		t.Fatalf("UpdateIssue(%v) = %d: %s", body, w.Code, w.Body.String())
 	}
+}
+
+func mustGetIssueForBackflowTest(t *testing.T, issueID string) db.Issue {
+	t.Helper()
+	issue, err := testHandler.Queries.GetIssue(context.Background(), parseUUID(issueID))
+	if err != nil {
+		t.Fatalf("GetIssue(%s): %v", issueID, err)
+	}
+	return issue
 }
 
 func loadIssueThreadBackflowEvents(t *testing.T, channelID, rootID string) []issueThreadBackflowEventForTest {
@@ -404,6 +414,71 @@ func TestIssueThreadBackflowAggregatesCrossIssueCompletedWithinWindow(t *testing
 	}
 }
 
+func TestIssueThreadBackflowAggregatesCrossIssueCreatedAndStartedWithinWindow(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "issue-backflow-created-started-agg-"+uuid.NewString(), testUserID)
+
+	createAnchoredIssue := func(title, status string) string {
+		t.Helper()
+		var issueID string
+		if err := testPool.QueryRow(ctx, `
+			INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id, number, position)
+			VALUES ($1, $2, $3, 'none', 'member', $4, $5, 0)
+			RETURNING id`, testWorkspaceID, title, status, testUserID, 900000+int(uuid.New().ID()%100000)).Scan(&issueID); err != nil {
+			t.Fatalf("create issue %q: %v", title, err)
+		}
+		t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID) })
+		if _, err := testPool.Exec(ctx, `
+			INSERT INTO issue_source_message (issue_id, workspace_id, channel_id, message_id)
+			VALUES ($1, $2, $3, NULL)`, issueID, testWorkspaceID, channelID); err != nil {
+			t.Fatalf("anchor issue %s: %v", issueID, err)
+		}
+		return issueID
+	}
+
+	createdA := createAnchoredIssue("created agg A", "todo")
+	createdB := createAnchoredIssue("created agg B", "todo")
+	testHandler.emitIssueThreadBackflow(ctx, mustGetIssueForBackflowTest(t, createdA), "member", testUserID, issueThreadCreatedEvent, "", issueThreadBackflowTarget{})
+	testHandler.emitIssueThreadBackflow(ctx, mustGetIssueForBackflowTest(t, createdB), "member", testUserID, issueThreadCreatedEvent, "", issueThreadBackflowTarget{})
+
+	startedA := createAnchoredIssue("started agg A", "todo")
+	startedB := createAnchoredIssue("started agg B", "todo")
+	updateIssueForBackflowTest(t, startedA, map[string]any{"status": "in_progress"})
+	updateIssueForBackflowTest(t, startedB, map[string]any{"status": "in_progress"})
+
+	events := loadIssueChannelBackflowEvents(t, channelID)
+	var created, started []issueThreadBackflowEventForTest
+	for _, event := range events {
+		switch event.Event {
+		case issueThreadCreatedEvent:
+			created = append(created, event)
+		case issueThreadStatusChangedEvent:
+			started = append(started, event)
+		}
+	}
+	if len(created) != 1 {
+		t.Fatalf("created system rows = %d (%+v), want 1 aggregated bubble", len(created), created)
+	}
+	if len(started) != 1 {
+		t.Fatalf("started system rows = %d (%+v), want 1 aggregated bubble", len(started), started)
+	}
+	for _, group := range [][]issueThreadBackflowEventForTest{created, started} {
+		got := group[0]
+		if len(got.Params.Items) != 2 {
+			t.Fatalf("%s items = %+v, want 2", got.Event, got.Params.Items)
+		}
+		for _, item := range got.Params.Items {
+			if item.IssueTitle == "" || item.IssueIdentifier == "" || item.OccurredAt == "" {
+				t.Fatalf("%s item = %+v, want title + identifier + occurred_at", got.Event, item)
+			}
+			assertIssueThreadBackflowReference(t, got, item.IssueID)
+		}
+	}
+}
+
 func TestIssueThreadBackflowDoesNotAggregateDifferentActorsOrTypes(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -457,7 +532,7 @@ func TestIssueThreadBackflowDoesNotAggregateDifferentActorsOrTypes(t *testing.T)
 		}
 	}
 	if statusChanged != 1 {
-		t.Fatalf("status_changed rows = %d, want 1 (non-done stays unaggregated)", statusChanged)
+		t.Fatalf("status_changed rows = %d, want 1 (different type from completed)", statusChanged)
 	}
 	if completed != 2 {
 		t.Fatalf("completed rows = %d, want 2 (different actors)", completed)

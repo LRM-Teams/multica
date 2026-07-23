@@ -20,6 +20,9 @@ member's database UUID.
   the call-scoped member identity while the stored session still belongs to
   the authenticated Multica member.
 - [x] Ran the complete voice-call service test package and `go vet`.
+- [x] Committed, pushed, and opened independent ready PR
+  [#1088](https://github.com/LRM-Teams/multica/pull/1088), stacked on
+  [#1087](https://github.com/LRM-Teams/multica/pull/1087).
 
 ## Reason for the split
 

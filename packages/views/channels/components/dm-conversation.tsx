@@ -1428,26 +1428,27 @@ function DmChannelConversation({
   );
 
   if (!isMobile) {
+    // LRM-400 — same as ChannelsPage: only mount ResizablePanelGroup when a
+    // side panel is open; a lone conversation panel left a blank right shell.
+    if (!detailPanel) {
+      return withProvider(conversationPane);
+    }
     return withProvider(
       <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
         <ResizablePanel id="dm-conversation" minSize="50%" className="flex min-h-0 flex-col">
           {conversationPane}
         </ResizablePanel>
-        {detailPanel ? (
-          <>
-            <ResizableHandle />
-            <ResizablePanel
-              id="dm-thread"
-              defaultSize={440}
-              minSize={360}
-              maxSize={640}
-              groupResizeBehavior="preserve-pixel-size"
-              className="border-l border-border/30 bg-background"
-            >
-              {detailPanel}
-            </ResizablePanel>
-          </>
-        ) : null}
+        <ResizableHandle />
+        <ResizablePanel
+          id="dm-thread"
+          defaultSize={440}
+          minSize={360}
+          maxSize={640}
+          groupResizeBehavior="preserve-pixel-size"
+          className="border-l border-border/30 bg-background"
+        >
+          {detailPanel}
+        </ResizablePanel>
       </ResizablePanelGroup>,
     );
   }

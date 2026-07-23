@@ -68,6 +68,24 @@ describe("ConversationActivityStrip", () => {
     expect(onStopTask).toHaveBeenCalledWith(expect.objectContaining({ task_id: "t1" }));
   });
 
+  it("keeps Stop all beside the status text (LRM-400 — not far-right justify-between)", () => {
+    renderStrip(
+      <ConversationActivityStrip
+        tasks={[
+          task({ agent_name: "Aria", task_id: "t1" }),
+          task({ agent_name: "Bo", task_id: "t2" }),
+        ]}
+        onStopAllTasks={vi.fn()}
+      />,
+    );
+    const strip = screen.getByTestId("conversation-activity-strip");
+    expect(strip.className).toMatch(/max-w-\[min\(52rem/);
+    const stopAll = screen.getByRole("button", { name: /stop all/i });
+    const row = stopAll.parentElement;
+    expect(row?.className).toMatch(/\bw-fit\b/);
+    expect(row?.className).not.toMatch(/justify-between/);
+  });
+
   it("does not render quick_create / issue_create rows (LRM-287)", () => {
     renderStrip(
       <ConversationActivityStrip

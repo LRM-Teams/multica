@@ -470,9 +470,12 @@ export function ConversationActivityStrip({
 
   if (!typingLabel && stoppableTasks.length === 0) return null;
 
+  // LRM-400 — keep the strip in the message column (avatar + max-w 760px), not
+  // full conversation width. Ultrawide `justify-between` parked Stop all alone
+  // in the empty right half Frank boxed as a CSS leak.
   return (
     <div
-      className="flex min-h-6 flex-col gap-1 px-5 pb-2 text-xs text-muted-foreground"
+      className="flex min-h-6 max-w-[min(52rem,100%)] flex-col gap-1 px-5 pb-2 text-xs text-muted-foreground"
       aria-live="polite"
       data-testid="conversation-activity-strip"
     >
@@ -483,7 +486,7 @@ export function ConversationActivityStrip({
         </span>
       ) : null}
       {stoppableTasks.length === 1 ? (
-        <div className="flex min-w-0 items-center justify-between gap-2">
+        <div className="flex w-fit max-w-full min-w-0 items-center gap-2">
           <span className="flex min-w-0 items-center gap-1.5 truncate">
             <UnicodeSpinner className="shrink-0 text-muted-foreground/60" />
             <span className="truncate">
@@ -503,12 +506,12 @@ export function ConversationActivityStrip({
         <div className="flex flex-col gap-1">
           {/* Multiple agents collapse to one running summary. Keep Stop all
               outside the disclosure button so one click can cancel the whole group. */}
-          <div className="flex min-w-0 items-center justify-between gap-2">
+          <div className="flex w-fit max-w-full min-w-0 items-center gap-2">
             <button
               type="button"
               onClick={() => setExpanded((value) => !value)}
               aria-expanded={expanded}
-              className="flex min-w-0 flex-1 items-center justify-between gap-2 text-left hover:text-foreground"
+              className="flex min-w-0 items-center gap-2 text-left hover:text-foreground"
             >
               <span className="flex min-w-0 items-center gap-1.5 truncate">
                 <UnicodeSpinner className="shrink-0 text-muted-foreground/60" />
@@ -537,10 +540,10 @@ export function ConversationActivityStrip({
             ) : null}
           </div>
           {expanded ? (
-            <div className="flex flex-col gap-1 pl-5">
+            <div className="flex max-w-full flex-col gap-1 pl-5">
               {stoppableTasks.map((task) => (
-                <div key={task.task_id} className="flex min-w-0 items-center justify-between gap-2">
-                  <span className="min-w-0 flex-1 truncate">{task.agent_name}</span>
+                <div key={task.task_id} className="flex w-fit max-w-full min-w-0 items-center gap-2">
+                  <span className="min-w-0 truncate">{task.agent_name}</span>
                   {onStopTask ? (
                     <StopTaskButton
                       task={task}
@@ -668,8 +671,10 @@ export function ChannelsPage({
   const currentUserName = useAuthStore((s) => s.user?.name ?? null);
   const { mutate: markChannelRead } = useMarkChannelRead();
   const isMobile = useIsMobile();
+  // LRM-400 — embedded Activity must not read/write the main Channels list|detail
+  // layout (shared id would leak pane sizes into /channels).
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
-    id: "multica_channels_layout",
+    id: embedded ? "multica_channels_layout_embedded" : "multica_channels_layout",
   });
   // Embedded Activity pane never auto-picks a neighbor channel (LRM-238).
   const listFirstSelection = isMobile || embedded;
@@ -3423,27 +3428,31 @@ export function ChannelsPage({
           )}
         </main>
   );
+  // LRM-400 — when no side panel is open, render the conversation full-bleed.
+  // A single-child ResizablePanelGroup can leave a blank right region that looks
+  // like an empty shell (Frank red-box on normal channel Chat).
+  const sidePanelSurface = threadPanel || agentPanel || detailsPanel;
   const detailPane = !isMobile ? (
-    <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
-      <ResizablePanel id="conversation" minSize="50%" className="flex min-h-0 flex-col">
-        {channelConversationPane}
-      </ResizablePanel>
-      {threadPanel || agentPanel || detailsPanel ? (
-        <>
-          <ResizableHandle />
-          <ResizablePanel
-            id={threadPanel ? "thread" : agentPanel ? "agent-files" : "channel-details"}
-            defaultSize={360}
-            minSize={300}
-            maxSize={480}
-            groupResizeBehavior="preserve-pixel-size"
-            className="border-l border-border/30 bg-background"
-          >
-            {threadPanel ?? agentPanel ?? detailsPanel}
-          </ResizablePanel>
-        </>
-      ) : null}
-    </ResizablePanelGroup>
+    sidePanelSurface ? (
+      <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
+        <ResizablePanel id="conversation" minSize="50%" className="flex min-h-0 flex-col">
+          {channelConversationPane}
+        </ResizablePanel>
+        <ResizableHandle />
+        <ResizablePanel
+          id={threadPanel ? "thread" : agentPanel ? "agent-files" : "channel-details"}
+          defaultSize={360}
+          minSize={300}
+          maxSize={480}
+          groupResizeBehavior="preserve-pixel-size"
+          className="border-l border-border/30 bg-background"
+        >
+          {threadPanel ?? agentPanel ?? detailsPanel}
+        </ResizablePanel>
+      </ResizablePanelGroup>
+    ) : (
+      channelConversationPane
+    )
   ) : (
     threadPanel ?? channelConversationPane
   );
@@ -3514,7 +3523,7 @@ export function ChannelsPage({
     return (
       <AgentPanelProvider onOpenAgent={handleOpenAgentPanel}>
         <div
-          className="flex h-full min-h-0 flex-col"
+          className="flex h-full min-h-0 w-full flex-col"
           data-testid="channels-page-embedded"
           data-embedded-surface={embeddedSurface ?? "auto"}
         >
@@ -3525,7 +3534,7 @@ export function ChannelsPage({
               </p>
             </div>
           ) : (
-            detailSurface
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">{detailSurface}</div>
           )}
         </div>
       </AgentPanelProvider>

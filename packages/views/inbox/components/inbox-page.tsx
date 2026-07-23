@@ -24,7 +24,7 @@ import { ChannelsPage } from "../../channels";
 import { ErrorBoundary } from "@multica/ui/components/common/error-boundary";
 import { useNavigation } from "../../navigation";
 import { toast } from "sonner";
-import { Activity, Archive, ArrowLeft, ExternalLink } from "lucide-react";
+import { Archive, ArrowLeft, ExternalLink } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   ResizablePanelGroup,
@@ -147,8 +147,13 @@ export function InboxPage() {
     urlChannel,
   ]);
 
+  // LRM-400 — right pane only mounts when a row is selected (no empty white shell).
+  const hasDetail = !!(selectedInbox || selectedThread);
+
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
     id: "multica_inbox_layout",
+    // LRM-400 — detail only mounts when selected; declare both ids for restore.
+    panelIds: ["list", "detail"],
   });
 
   const isMobile = useIsMobile();
@@ -338,7 +343,7 @@ export function InboxPage() {
               </Button>
             </div>
           ) : null}
-          <div className="min-h-0 flex-1">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             <ChannelsPage
               channelId={sessionChannelId}
               embedded
@@ -423,8 +428,6 @@ export function InboxPage() {
     </div>
   ) : null;
 
-  const hasDetail = !!(selectedInbox || selectedThread);
-
   if (isMobile) {
     if (loading) {
       return (
@@ -478,44 +481,32 @@ export function InboxPage() {
 
   if (loading) {
     return (
-      <ResizablePanelGroup
-        orientation="horizontal"
-        className="min-h-0 flex-1"
-        defaultLayout={defaultLayout}
-        onLayoutChanged={onLayoutChanged}
-      >
-        <ResizablePanel
-          id="list"
-          defaultSize={320}
-          minSize={240}
-          maxSize={480}
-          groupResizeBehavior="preserve-pixel-size"
-        >
-          <div className="flex h-full flex-col border-r">
-            <div className="flex h-12 shrink-0 items-center border-b px-4">
-              <Skeleton className="h-5 w-20" />
+      <div className="flex h-full min-h-0 flex-col border-r">
+        <div className="flex h-12 shrink-0 items-center border-b px-4">
+          <Skeleton className="h-5 w-20" />
+        </div>
+        <div className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="flex items-center gap-3 px-4 py-2.5">
+              <Skeleton className="h-7 w-7 shrink-0 rounded-full" />
+              <div className="flex-1 space-y-2">
+                <Skeleton className="h-4 w-3/4" />
+                <Skeleton className="h-3 w-1/2" />
+              </div>
             </div>
-            <div className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <div key={i} className="flex items-center gap-3 px-4 py-2.5">
-                  <Skeleton className="h-7 w-7 shrink-0 rounded-full" />
-                  <div className="flex-1 space-y-2">
-                    <Skeleton className="h-4 w-3/4" />
-                    <Skeleton className="h-3 w-1/2" />
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </ResizablePanel>
-        <ResizableHandle />
-        <ResizablePanel id="detail" minSize="40%">
-          <div className="p-6">
-            <Skeleton className="h-6 w-48" />
-            <Skeleton className="mt-4 h-4 w-32" />
-          </div>
-        </ResizablePanel>
-      </ResizablePanelGroup>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // LRM-400 — unselected: list fills the page (no empty right shell / Select prompt pane).
+  if (!hasDetail) {
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        {listHeader}
+        <div className="min-h-0 flex-1 overflow-y-auto">{listBody}</div>
+      </div>
     );
   }
 
@@ -540,18 +531,7 @@ export function InboxPage() {
       </ResizablePanel>
       <ResizableHandle />
       <ResizablePanel id="detail" minSize="40%">
-        <div className="flex h-full min-h-0 flex-col">
-          {detailContent ?? (
-            <div className="flex h-full flex-col items-center justify-center text-muted-foreground">
-              <Activity className="mb-3 h-10 w-10 text-muted-foreground/30" />
-              <p className="text-sm">
-                {items.length === 0
-                  ? t(($) => $.activity.empty.all.title)
-                  : t(($) => $.detail.select_prompt)}
-              </p>
-            </div>
-          )}
-        </div>
+        <div className="flex h-full min-h-0 flex-col">{detailContent}</div>
       </ResizablePanel>
     </ResizablePanelGroup>
   );

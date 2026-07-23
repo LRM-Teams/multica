@@ -73,7 +73,12 @@ function TabsContent({ className, ...props }: TabsPrimitive.Panel.Props) {
   return (
     <TabsPrimitive.Panel
       data-slot="tabs-content"
-      className={cn("flex-1 text-sm outline-none", className)}
+      className={cn(
+        // Base UI sets `hidden` + `data-hidden` on inactive panels; `flex` on
+        // callers must not keep them in layout (LRM-400 blank-pane guard).
+        "flex-1 text-sm outline-none data-hidden:hidden",
+        className,
+      )}
       {...props}
     />
   )

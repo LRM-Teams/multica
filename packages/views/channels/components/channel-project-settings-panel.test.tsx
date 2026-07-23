@@ -44,11 +44,15 @@ function MobileSettingsDrawer({ onChange }: { onChange: (projectId: string | nul
           members={[]}
           wsId="ws-1"
           projectId={null}
-          projectBound={false}
           onChangeProject={onChange}
-          projectEditable
-          canManage
-          isArchived={false}
+          access={{
+            canManage: true,
+            canInvite: false,
+            isArchived: false,
+            hideSettingsTab: false,
+            projectBound: false,
+            projectEditable: true,
+          }}
           onMuteToggle={() => {}}
           onShare={() => {}}
           onArchive={() => {}}
@@ -59,6 +63,7 @@ function MobileSettingsDrawer({ onChange }: { onChange: (projectId: string | nul
           variant="page"
           onClose={() => {}}
           portalContainer={bodyRef}
+          notifyPrefLabel="All"
         />
       </DrawerContent>
     </Drawer>

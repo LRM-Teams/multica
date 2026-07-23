@@ -18,12 +18,18 @@ vi.mock("@multica/core/projects/queries", async (importOriginal) => ({
   }),
 }));
 
+vi.mock("../../common/actor-avatar", () => ({
+  ActorAvatar: ({ actorId }: { actorId: string }) => (
+    <span data-testid={`avatar-${actorId}`}>{actorId}</span>
+  ),
+}));
+
 const testChannel: Channel = {
   id: "chan-1",
   workspace_id: "ws-1",
   name: "multica-frank",
   kind: "group",
-  description: null,
+  description: "R&D channel",
   lark_chat_id: null,
   created_by: "user-1",
   created_at: "2026-01-01T00:00:00Z",
@@ -35,6 +41,7 @@ function renderPanel(
 ) {
   const onArchive = vi.fn();
   const onDelete = vi.fn();
+  const onStopAllAgents = vi.fn();
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
   });
@@ -43,65 +50,129 @@ function renderPanel(
       <QueryClientProvider client={qc}>
         <ChannelDetailsPanel
           channel={testChannel}
-          members={[]}
+          members={[
+            {
+              member_type: "user",
+              member_id: "u-1",
+              name: "alice",
+              display_name: "Alice",
+              avatar_url: null,
+            },
+            {
+              member_type: "agent",
+              member_id: "a-1",
+              name: "bot",
+              display_name: "Bot",
+              avatar_url: null,
+            },
+          ]}
           wsId="ws-1"
           projectId={null}
-          projectBound={false}
           onChangeProject={() => {}}
-          projectEditable={false}
-          canManage
-          isArchived={false}
+          access={{
+            canManage: true,
+            canInvite: false,
+            isArchived: false,
+            hideSettingsTab: false,
+            projectBound: false,
+            projectEditable: false,
+          }}
           onMuteToggle={() => {}}
           onShare={() => {}}
           onArchive={onArchive}
           onDelete={onDelete}
           onRename={() => {}}
           onUpdateLarkChatId={() => {}}
-          membersBody={null}
-          initialTab="settings"
+          membersBody={<div>Members body</div>}
+          initialTab="about"
           onClose={() => {}}
+          onStopAllAgents={onStopAllAgents}
+          notifyPrefLabel="All"
           {...overrides}
         />
       </QueryClientProvider>
     </I18nProvider>,
   );
-  return { onArchive, onDelete };
+  return { onArchive, onDelete, onStopAllAgents };
 }
 
-describe("ChannelDetailsPanel danger zone (LRM-239)", () => {
-  it("shows archive and red delete entries when onDelete is provided", () => {
+describe("ChannelDetailsPanel danger zone (LRM-239 / LRM-494)", () => {
+  it("shows Stop + Delete on the home overview, archive under Settings", async () => {
+    const user = userEvent.setup();
     renderPanel();
+    expect(screen.getByTestId("channel-details-home")).toBeTruthy();
+    expect(screen.getByTestId("channel-details-stop-all")).toBeTruthy();
+    expect(screen.getByTestId("channel-details-delete")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Archive this channel/i })).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId("channel-details-settings"));
     expect(screen.getByRole("button", { name: /Archive this channel/i })).toBeInTheDocument();
-    const deleteBtn = screen.getByRole("button", { name: /Delete this channel/i });
-    expect(deleteBtn).toBeInTheDocument();
-    expect(deleteBtn.querySelector(".text-destructive")).toBeTruthy();
   });
 
   it("hides delete when onDelete is omitted (member / creator-member)", () => {
-    renderPanel({ onDelete: undefined, canManage: true });
-    expect(screen.getByText("Archive this channel")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Delete this channel/i })).not.toBeInTheDocument();
+    renderPanel({ onDelete: undefined });
+    expect(screen.getByTestId("channel-details-stop-all")).toBeTruthy();
+    expect(screen.queryByTestId("channel-details-delete")).not.toBeInTheDocument();
   });
 
-  it("keeps delete available on archived channels when onDelete is set", async () => {
+  it("invokes onDelete from the danger card", async () => {
     const user = userEvent.setup();
-    const { onDelete, onArchive } = renderPanel({
-      canManage: true,
-      isArchived: true,
-    });
-    // Archive is not clickable when already archived.
-    expect(screen.queryByRole("button", { name: /Archive this channel/i })).not.toBeInTheDocument();
-    expect(screen.getByText(/already archived/i)).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: /Delete this channel/i }));
+    const { onDelete } = renderPanel();
+    await user.click(screen.getByTestId("channel-details-delete"));
     expect(onDelete).toHaveBeenCalledTimes(1);
-    expect(onArchive).not.toHaveBeenCalled();
   });
 
-  it("invokes onArchive from the archive entry", async () => {
+  it("invokes onArchive from Settings", async () => {
     const user = userEvent.setup();
     const { onArchive } = renderPanel();
+    await user.click(screen.getByTestId("channel-details-settings"));
     await user.click(screen.getByRole("button", { name: /Archive this channel/i }));
     expect(onArchive).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps archive disabled copy on archived channels in Settings", async () => {
+    const user = userEvent.setup();
+    renderPanel({
+      access: {
+        canManage: true,
+        canInvite: false,
+        isArchived: true,
+        hideSettingsTab: false,
+        projectBound: false,
+        projectEditable: false,
+      },
+    });
+    await user.click(screen.getByTestId("channel-details-settings"));
+    expect(screen.queryByRole("button", { name: /Archive this channel/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/already archived/i)).toBeInTheDocument();
+  });
+});
+
+describe("ChannelDetailsPanel Slack overview (LRM-494)", () => {
+  it("renders hero meta, member stack, sections, and Done on page variant", () => {
+    renderPanel({ variant: "page" });
+    expect(screen.getByTestId("channel-details-hero-avatar")).toBeTruthy();
+    expect(screen.getByText(/1 members · 1 agents/i)).toBeTruthy();
+    expect(screen.getByText("R&D channel")).toBeTruthy();
+    expect(screen.getByTestId("channel-details-member-stack")).toBeTruthy();
+    expect(screen.getByTestId("channel-details-notify-pref")).toBeTruthy();
+    expect(screen.getByText("All")).toBeTruthy();
+    expect(screen.getByTestId("channel-details-mute-switch")).toBeTruthy();
+    expect(screen.getByTestId("channel-details-done")).toHaveTextContent("Done");
+  });
+
+  it("disables invite when canInvite is false", () => {
+    renderPanel({
+      onInvite: () => {},
+      access: {
+        canManage: true,
+        canInvite: false,
+        isArchived: false,
+        hideSettingsTab: false,
+        projectBound: false,
+        projectEditable: false,
+      },
+    });
+    expect(screen.getByTestId("channel-details-invite")).toBeDisabled();
   });
 });

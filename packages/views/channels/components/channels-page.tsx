@@ -10,8 +10,6 @@ import {
   ChevronDown,
   ChevronRight,
   ChevronUp,
-  FileText,
-  Info,
   Mail,
   MessageCircle,
   MoreHorizontal,
@@ -20,12 +18,9 @@ import {
   PinOff,
   Plus,
   Search,
-  Settings,
   Smartphone,
   Square,
   Trash2,
-  Users,
-  UserPlus,
   X,
 } from "lucide-react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -76,6 +71,7 @@ import { ApiError, api } from "@multica/core/api";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
+import { notificationPreferenceOptions } from "@multica/core/notification-preferences/queries";
 import { useWSEvent } from "@multica/core/realtime";
 import { toast } from "sonner";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
@@ -115,8 +111,6 @@ import {
 import {
   Drawer,
   DrawerContent,
-  DrawerHeader,
-  DrawerTitle,
 } from "@multica/ui/components/ui/drawer";
 import { useIsMobile, useContainerNarrowerThan } from "@multica/ui/hooks/use-mobile";
 import {
@@ -653,7 +647,12 @@ export function ChannelsPage({
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
   const wsPaths = useWorkspacePaths();
-  const { searchParams, replace, getShareableUrl } = useNavigation();
+  const { searchParams, replace, getShareableUrl, push } = useNavigation();
+  const { data: notifyPrefData } = useQuery(notificationPreferenceOptions(wsId));
+  const channelNotifyPrefLabel =
+    notifyPrefData?.preferences?.system_notifications === "muted"
+      ? t(($) => $.details.notify_pref_off)
+      : t(($) => $.details.notify_pref_all);
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const currentUserName = useAuthStore((s) => s.user?.name ?? null);
   const { mutate: markChannelRead } = useMarkChannelRead();
@@ -679,12 +678,10 @@ export function ChannelsPage({
     HEADER_ACTIONS_COMPACT_BREAKPOINT,
   );
   // Mobile, and desktop-but-too-narrow (`isHeaderActionsCompact`): the
-  // header's right-side actions collapse into a single "⋯" that opens a
-  // bottom Drawer. Menu items align with ChannelDetailsPanel tabs (About /
-  // Members / Files / Settings) — LRM-210 / LRM-204.
-  const [mobilePanel, setMobilePanel] = useState<
-    "menu" | ChannelDetailsTab | null
-  >(null);
+  // header's right-side actions collapse into a single "⋯" that opens the
+  // LRM-494 Slack channel-details page (full-height Drawer), not a flat
+  // bottom-sheet menu.
+  const [mobilePanel, setMobilePanel] = useState<ChannelDetailsTab | null>(null);
   // #568 — the overflow Drawer only renders while `isMobile ||
   // isHeaderActionsCompact` (below). If the container widens past the
   // compact breakpoint while the Drawer is open, that condition alone
@@ -849,13 +846,18 @@ export function ChannelsPage({
   }, []);
   const openChannelDetails = useCallback(
     (tab: ChannelDetailsTab = "about") => {
-      if (isMobile) {
+      if (isMobile || isHeaderActionsCompact) {
+        // LRM-494 — mobile/compact uses the full-page Drawer; drop any docked
+        // details panel so home/settings rows aren't duplicated in the DOM.
+        setSidePanel((current) =>
+          current.kind === "channel-details" ? { kind: "none" } : current,
+        );
         setMobilePanel(tab);
         return;
       }
       setSidePanel({ kind: "channel-details", tab });
     },
-    [isMobile],
+    [isMobile, isHeaderActionsCompact],
   );
   const closeChannelDetails = useCallback(() => {
     setSidePanel((current) =>
@@ -2227,7 +2229,11 @@ export function ChannelsPage({
   // otherwise Settings → title would only switch back to About and leave
   // keep-alive TabsContent (LRM-400) still exposing Settings controls.
   const toggleChannelDetails = (tab: ChannelDetailsTab = "about") => {
-    if (isMobile) {
+    if (isMobile || isHeaderActionsCompact) {
+      if (mobilePanel !== null) {
+        setMobilePanel(null);
+        return;
+      }
       openChannelDetails(tab);
       return;
     }
@@ -2976,15 +2982,23 @@ export function ChannelsPage({
         members: channelMembers,
         wsId,
         projectId: channelProjectId || null,
-        projectBound: !!channelProjectId,
         onChangeProject: (projectId: string | null) => setChannelProject.mutate(projectId),
-        projectEditable,
         projectDisabledReason,
-        canManage: canArchive(active),
+        access: {
+          canManage: canArchive(active),
+          canInvite: !isActiveSystemChannel && canArchive(active),
+          isArchived: isActiveArchived,
+          hideSettingsTab: isActiveSystemChannel,
+          projectBound: !!channelProjectId,
+          projectEditable,
+          mutePending: muteChannel.isPending,
+          renamePending: updateChannel.isPending,
+          descriptionPending: updateChannel.isPending,
+          larkPending: updateChannel.isPending,
+          stopAllDisabled: !hasStoppableChannelTasks || isStoppingAllChannelTasks,
+        },
         manageDisabledReason,
-        isArchived: isActiveArchived,
         onMuteToggle: () => handleToggleChannelMute(active),
-        mutePending: muteChannel.isPending,
         onShare: () => {
           void handleShare();
         },
@@ -3015,7 +3029,15 @@ export function ChannelsPage({
             },
           );
         },
-        renamePending: updateChannel.isPending,
+        onUpdateDescription: (description: string | null) => {
+          updateChannel.mutate(
+            { channelId: active.id, description },
+            {
+              onSuccess: () => toast.success(t(($) => $.settings.description_success)),
+              onError: () => toast.error(t(($) => $.settings.description_failed)),
+            },
+          );
+        },
         onUpdateLarkChatId: (larkChatId: string | null) => {
           updateChannel.mutate(
             { channelId: active.id, lark_chat_id: larkChatId },
@@ -3025,10 +3047,26 @@ export function ChannelsPage({
             },
           );
         },
-        larkPending: updateChannel.isPending,
         membersBody: memberPanelBody,
-        hideSettingsTab: isActiveSystemChannel,
         onClose: closeChannelDetails,
+        onOpenSearch: () => setConvSearchOpen(true),
+        onInvite: isActiveSystemChannel
+          ? undefined
+          : () => {
+              openAddPeopleDialog();
+            },
+        onStopAllAgents: canPostInChannel
+          ? () => {
+              openStopAllAgentsConfirm();
+            }
+          : undefined,
+        stopAllDisabledReason: hasStoppableChannelTasks
+          ? undefined
+          : t(($) => $.stop_all_agents.empty_tooltip),
+        notifyPrefLabel: channelNotifyPrefLabel,
+        onOpenNotificationPrefs: () => {
+          push(`${wsPaths.settings()}?tab=notifications`);
+        },
       }
     : null;
   const detailsPanel =
@@ -3145,7 +3183,8 @@ export function ChannelsPage({
                   size="icon"
                   className={cn("shrink-0 text-muted-foreground", isMobile ? "size-10" : "size-8")}
                   aria-label={t(($) => $.header.more_aria)}
-                  onClick={() => setMobilePanel("menu")}
+                  onClick={() => openChannelDetails("about")}
+                  data-testid="channel-header-more"
                 >
                   <MoreHorizontal className="size-5" />
                 </Button>
@@ -3666,10 +3705,9 @@ export function ChannelsPage({
         </ResizablePanelGroup>
       )}
 
-      {/* Mobile, and desktop-but-too-narrow (#568), overflow drawer —
-          LRM-210: menu items align with Channel details tabs (About /
-          Members / Files / Settings). Selecting a tab swaps the body to
-          ChannelDetailsPanel (shared with desktop). */}
+      {/* Mobile / narrow (#568) — LRM-494: full-page Slack channel details
+          (not a flat bottom-sheet menu). Selecting ⋯ or the header title
+          opens ChannelDetailsPanel overview; drill-downs stay inside. */}
       {(isMobile || isHeaderActionsCompact) && active && detailsPanelProps && (
         <Drawer
           direction="bottom"
@@ -3678,121 +3716,11 @@ export function ChannelsPage({
             if (!open) setMobilePanel(null);
           }}
         >
-          <DrawerContent className="flex max-h-[85dvh] flex-col gap-0 overflow-hidden p-0">
-            {mobilePanel === "menu" ? (
-              <>
-                <DrawerHeader className="border-b py-3">
-                  <DrawerTitle>{active.name}</DrawerTitle>
-                </DrawerHeader>
-                <div className="flex flex-col py-1">
-                  {canPostInChannel ? (
-                    <button
-                      type="button"
-                      disabled={!hasStoppableChannelTasks || isStoppingAllChannelTasks}
-                      onClick={() => {
-                        if (!hasStoppableChannelTasks || isStoppingAllChannelTasks) return;
-                        setMobilePanel(null);
-                        openStopAllAgentsConfirm();
-                      }}
-                      aria-label={
-                        hasStoppableChannelTasks
-                          ? t(($) => $.stop_all_agents.aria)
-                          : t(($) => $.stop_all_agents.empty_tooltip)
-                      }
-                      className={cn(
-                        "flex min-h-[44px] items-center gap-3 px-4 py-2.5 text-left text-sm",
-                        hasStoppableChannelTasks
-                          ? "hover:bg-accent"
-                          : "cursor-not-allowed opacity-50",
-                      )}
-                      data-testid="stop-all-agents-mobile-menu"
-                    >
-                      <Square className="size-5 shrink-0 fill-current text-muted-foreground" />
-                      <span className="flex-1">{t(($) => $.stop_all_agents.menu_label)}</span>
-                      {!hasStoppableChannelTasks ? (
-                        <span className="text-xs text-muted-foreground">
-                          {t(($) => $.stop_all_agents.empty_tooltip)}
-                        </span>
-                      ) : null}
-                    </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMobilePanel(null);
-                      openMembersDialog();
-                    }}
-                    className="flex min-h-[44px] items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-accent"
-                  >
-                    <Users className="size-5 shrink-0 text-muted-foreground" />
-                    <span className="flex-1">
-                      {t(($) =>
-                        isActiveSystemChannel
-                          ? $.header.view_members_aria
-                          : $.details.menu_members,
-                      )}
-                    </span>
-                    <span className="text-xs text-muted-foreground">{channelMembers.length}</span>
-                    <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMobilePanel(null);
-                      setConvSearchOpen(true);
-                    }}
-                    className="flex min-h-[44px] items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-accent"
-                  >
-                    <Search className="size-5 shrink-0 text-muted-foreground" />
-                    <span className="flex-1">{t(($) => $.conv_search.search_aria)}</span>
-                    <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
-                  </button>
-                  {!isActiveSystemChannel && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setMobilePanel(null);
-                        openAddPeopleDialog();
-                      }}
-                      className="flex min-h-[44px] items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-accent"
-                    >
-                      <UserPlus className="size-5 shrink-0 text-muted-foreground" />
-                      <span className="flex-1">{t(($) => $.members.invite)}</span>
-                      <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => setMobilePanel("about")}
-                    className="flex min-h-[44px] items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-accent"
-                  >
-                    <Info className="size-5 shrink-0 text-muted-foreground" />
-                    <span className="flex-1">{t(($) => $.details.menu_about)}</span>
-                    <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setMobilePanel("files")}
-                    className="flex min-h-[44px] items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-accent"
-                  >
-                    <FileText className="size-5 shrink-0 text-muted-foreground" />
-                    <span className="flex-1">{t(($) => $.details.menu_files)}</span>
-                    <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
-                  </button>
-                  {!isActiveSystemChannel && (
-                    <button
-                      type="button"
-                      onClick={() => setMobilePanel("settings")}
-                      className="flex min-h-[44px] items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-accent"
-                    >
-                      <Settings className="size-5 shrink-0 text-muted-foreground" />
-                      <span className="flex-1">{t(($) => $.details.menu_settings)}</span>
-                      <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
-                    </button>
-                  )}
-                </div>
-              </>
-            ) : mobilePanel ? (
+          <DrawerContent
+            className="flex h-[100dvh] max-h-[100dvh] flex-col gap-0 overflow-hidden rounded-none p-0"
+            data-testid="channel-details-page-drawer"
+          >
+            {mobilePanel ? (
               <ChannelDetailsPanel
                 key={`${active.id}:${mobilePanel}`}
                 {...detailsPanelProps}

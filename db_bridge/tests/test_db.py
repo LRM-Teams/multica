@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from db_bridge import codec
@@ -479,3 +481,213 @@ async def test_redact_headers(db: BridgeDB):
     assert db.client.tables[SET_REWARD.table][row_id]["request_headers"] == {
         "authorization": "REDACTED"
     }
+
+
+# ---------------------------------------------------------------------------
+# Streaming (SSE) relay
+# ---------------------------------------------------------------------------
+
+
+async def _claimed_stream_row(db: BridgeDB, *, user_id: str = USER_A) -> str:
+    row_id = await db.insert_request(
+        CHAT,
+        user_id=user_id,
+        method="POST",
+        path="/chat/completions",
+        headers={},
+        content_type="application/json",
+        body=b'{"model": "areal/x", "stream": true}',
+    )
+    claimed = await db.claim_next(CHAT, "w1", user_id=user_id)
+    assert claimed is not None and claimed.id == row_id
+    started = await db.start_stream(
+        CHAT,
+        row_id,
+        worker_id="w1",
+        response_status=200,
+        response_headers={"content-type": "text/event-stream"},
+    )
+    assert started is True
+    return row_id
+
+
+async def test_start_stream_sets_streaming_status_and_meta(db: BridgeDB):
+    row_id = await _claimed_stream_row(db)
+    start = await db.wait_for_stream_start(CHAT, row_id, 1.0, user_id=USER_A)
+    assert start is not None
+    assert start.status == "streaming"
+    assert start.response_status == 200
+    assert start.headers["content-type"] == "text/event-stream"
+
+
+async def test_start_stream_requires_owner_and_claimed(db: BridgeDB):
+    row_id = await _claimed_stream_row(db)
+    # Already streaming; a second start (even by owner) must not re-apply.
+    assert (
+        await db.start_stream(
+            CHAT, row_id, worker_id="w1", response_status=200, response_headers={}
+        )
+        is False
+    )
+    # A fresh claimed row cannot be started by a non-owner worker.
+    row2 = await db.insert_request(
+        CHAT,
+        user_id=USER_A,
+        method="POST",
+        path="/chat/completions",
+        headers={},
+        content_type=None,
+        body=b"{}",
+    )
+    await db.claim_next(CHAT, "w1", user_id=USER_A)
+    assert (
+        await db.start_stream(
+            CHAT, row2, worker_id="other", response_status=200, response_headers={}
+        )
+        is False
+    )
+
+
+async def test_append_and_stream_chunks_in_order(db: BridgeDB):
+    row_id = await _claimed_stream_row(db)
+    await db.append_chunk(
+        CHAT, row_id, worker_id="w1", user_id=USER_A, seq=0, body=b"data: a\n\n"
+    )
+    await db.append_chunk(
+        CHAT, row_id, worker_id="w1", user_id=USER_A, seq=1, body=b"data: b\n\n"
+    )
+    await db.append_chunk(
+        CHAT, row_id, worker_id="w1", user_id=USER_A, seq=2, body=b"", is_final=True
+    )
+    out = [
+        chunk
+        async for chunk in db.stream_chunks(
+            CHAT,
+            row_id,
+            user_id=USER_A,
+            first_chunk_timeout=1.0,
+            inter_chunk_timeout=1.0,
+        )
+    ]
+    assert b"".join(out) == b"data: a\n\ndata: b\n\n"
+
+
+async def test_append_chunk_rejects_non_owner_and_non_streaming(db: BridgeDB):
+    row_id = await _claimed_stream_row(db)
+    # Wrong worker cannot append.
+    assert (
+        await db.append_chunk(
+            CHAT, row_id, worker_id="intruder", user_id=USER_A, seq=0, body=b"x"
+        )
+        is False
+    )
+    # Idempotent on seq: a duplicate seq is accepted but not duplicated.
+    assert (
+        await db.append_chunk(
+            CHAT, row_id, worker_id="w1", user_id=USER_A, seq=0, body=b"data: a\n\n"
+        )
+        is True
+    )
+    assert (
+        await db.append_chunk(
+            CHAT, row_id, worker_id="w1", user_id=USER_A, seq=0, body=b"data: dup\n\n"
+        )
+        is True
+    )
+    chunks = await db.poll_chunks(CHAT, row_id, user_id=USER_A, after_seq=-1)
+    assert len(chunks) == 1
+    assert chunks[0].body == b"data: a\n\n"
+
+
+async def test_poll_chunks_is_user_scoped(db: BridgeDB):
+    row_id = await _claimed_stream_row(db)
+    await db.append_chunk(
+        CHAT, row_id, worker_id="w1", user_id=USER_A, seq=0, body=b"secret"
+    )
+    assert await db.poll_chunks(CHAT, row_id, user_id=USER_B, after_seq=-1) == []
+    mine = await db.poll_chunks(CHAT, row_id, user_id=USER_A, after_seq=-1)
+    assert [c.body for c in mine] == [b"secret"]
+
+
+async def test_stream_chunks_stops_on_terminal_row_without_final(db: BridgeDB):
+    row_id = await _claimed_stream_row(db)
+    await db.append_chunk(
+        CHAT, row_id, worker_id="w1", user_id=USER_A, seq=0, body=b"data: a\n\n"
+    )
+    # Simulate a crash finalized by the sweep: row errored, no is_final chunk.
+    db.client.tables[CHAT.table][row_id]["status"] = "error"
+    out = [
+        chunk
+        async for chunk in db.stream_chunks(
+            CHAT,
+            row_id,
+            user_id=USER_A,
+            first_chunk_timeout=1.0,
+            inter_chunk_timeout=0.05,
+        )
+    ]
+    assert out == [b"data: a\n\n"]
+
+
+async def test_stream_chunks_first_chunk_timeout(db: BridgeDB):
+    row_id = await _claimed_stream_row(db)  # streaming, no chunks
+    out = [
+        chunk
+        async for chunk in db.stream_chunks(
+            CHAT,
+            row_id,
+            user_id=USER_A,
+            first_chunk_timeout=0.05,
+            inter_chunk_timeout=0.05,
+            poll_interval=0.01,
+        )
+    ]
+    assert out == []
+
+
+async def test_wait_for_stream_start_returns_none_on_timeout(db: BridgeDB):
+    # Pending (never claimed/started) → wait times out.
+    row_id = await db.insert_request(
+        CHAT,
+        user_id=USER_A,
+        method="POST",
+        path="/chat/completions",
+        headers={},
+        content_type=None,
+        body=b"{}",
+    )
+    start = await db.wait_for_stream_start(
+        CHAT, row_id, 0.05, user_id=USER_A, poll_interval=0.01
+    )
+    assert start is None
+
+
+async def test_wait_for_stream_start_reports_error(db: BridgeDB):
+    row_id = await db.insert_request(
+        CHAT,
+        user_id=USER_A,
+        method="POST",
+        path="/chat/completions",
+        headers={},
+        content_type=None,
+        body=b"{}",
+    )
+    await db.abandon(CHAT, row_id, user_id=USER_A, error="boom")
+    start = await db.wait_for_stream_start(CHAT, row_id, 1.0, user_id=USER_A)
+    assert start is not None
+    assert start.status == "error"
+    assert start.error == "boom"
+
+
+async def test_sweep_stale_streams_marks_error(db: BridgeDB):
+    row_id = await _claimed_stream_row(db)
+    # Age the heartbeat well past the stale window.
+    db.client.tables[CHAT.table][row_id]["claimed_epoch"] = time.time() - 10_000
+    swept = await db.sweep_stale_streams(CHAT, stale_seconds=300)
+    assert swept == 1
+    row = db.client.tables[CHAT.table][row_id]
+    assert row["status"] == "error"
+    # A healthy (recently heartbeated) stream is not swept.
+    row2 = await _claimed_stream_row(db)
+    assert await db.sweep_stale_streams(CHAT, stale_seconds=300) == 0
+    assert db.client.tables[CHAT.table][row2]["status"] == "streaming"

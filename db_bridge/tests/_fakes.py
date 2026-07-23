@@ -23,7 +23,7 @@ class _Result:
 
 
 class _TableQuery:
-    def __init__(self, client: "FakeSupabaseClient", table: str):
+    def __init__(self, client: FakeSupabaseClient, table: str):
         self._client = client
         self._table = table
         self._op: str | None = None
@@ -33,23 +33,23 @@ class _TableQuery:
         self._filters: list[tuple[str, Any]] = []
         self._single = False
 
-    def insert(self, payload: dict[str, Any]) -> "_TableQuery":
+    def insert(self, payload: dict[str, Any]) -> _TableQuery:
         self._op = "insert"
         self._payload = payload
         return self
 
-    def select(self, columns: str = "*", count: str | None = None) -> "_TableQuery":
+    def select(self, columns: str = "*", count: str | None = None) -> _TableQuery:
         self._op = "select"
         self._columns = columns
         self._count = count
         self._client.last_select_columns = columns
         return self
 
-    def eq(self, column: str, value: Any) -> "_TableQuery":
+    def eq(self, column: str, value: Any) -> _TableQuery:
         self._filters.append((column, value))
         return self
 
-    def single(self) -> "_TableQuery":
+    def single(self) -> _TableQuery:
         self._single = True
         return self
 
@@ -84,7 +84,7 @@ class _TableQuery:
 
 
 class _RpcQuery:
-    def __init__(self, client: "FakeSupabaseClient", fn: str, params: dict[str, Any]):
+    def __init__(self, client: FakeSupabaseClient, fn: str, params: dict[str, Any]):
         self._client = client
         self._fn = fn
         self._params = params
@@ -101,6 +101,8 @@ class FakeSupabaseClient:
         self.seq = itertools.count()
         self.last_select_columns: str | None = None
         self.rpc_calls: list[tuple[str, dict[str, Any]]] = []
+        # Streaming chunks keyed by (request_table, request_id).
+        self.stream_chunks: dict[tuple[str, str], list[dict[str, Any]]] = {}
 
     def table(self, name: str) -> _TableQuery:
         return _TableQuery(self, name)
@@ -122,6 +124,14 @@ class FakeSupabaseClient:
             return self._cleanup_stale(params)
         if fn == "bridge_redact_headers":
             return self._redact(params)
+        if fn == "bridge_start_stream":
+            return self._start_stream(params)
+        if fn == "bridge_append_chunk":
+            return self._append_chunk(params)
+        if fn == "bridge_poll_chunks":
+            return self._poll_chunks(params)
+        if fn == "bridge_sweep_stale_streams":
+            return self._sweep_stale_streams(params)
         if fn == "areal_shell_claim_next":
             return self._shell_claim_next(params)
         if fn == "areal_shell_mark_running":
@@ -168,7 +178,7 @@ class FakeSupabaseClient:
         row = store.get(params["p_id"])
         if row is None:
             return False
-        if row.get("status") != "claimed":
+        if row.get("status") not in {"claimed", "streaming"}:
             return False
         if row.get("worker_id") != params["p_worker_id"]:
             return False
@@ -227,6 +237,79 @@ class FakeSupabaseClient:
             row["request_headers"] = headers
         return None
 
+    # -- emulated streaming functions --------------------------------------
+
+    def _start_stream(self, params: dict[str, Any]) -> bool:
+        store = self.tables.setdefault(params["p_table"], {})
+        row = store.get(params["p_id"])
+        if row is None or row.get("status") != "claimed":
+            return False
+        if row.get("worker_id") != params["p_worker_id"]:
+            return False
+        row["status"] = "streaming"
+        row["response_status"] = params.get("p_response_status")
+        row["response_headers"] = params.get("p_response_headers")
+        row["claimed_epoch"] = time.time()
+        row["claimed_at"] = time.time()
+        return True
+
+    def _append_chunk(self, params: dict[str, Any]) -> bool:
+        store = self.tables.setdefault(params["p_table"], {})
+        row = store.get(params["p_id"])
+        if row is None or row.get("status") != "streaming":
+            return False
+        if row.get("worker_id") != params["p_worker_id"]:
+            return False
+        # Heartbeat the parent row (mirrors claimed_at refresh in SQL).
+        row["claimed_epoch"] = time.time()
+        row["claimed_at"] = time.time()
+        key = (params["p_table"], params["p_id"])
+        chunks = self.stream_chunks.setdefault(key, [])
+        seq = params["p_seq"]
+        if any(c["seq"] == seq for c in chunks):
+            return True  # on conflict (request_table, request_id, seq) do nothing
+        chunks.append(
+            {
+                "seq": seq,
+                "user_id": params.get("p_user_id"),
+                "chunk_body": params.get("p_chunk_body"),
+                "chunk_body_encoding": params.get("p_chunk_body_encoding") or "raw",
+                "is_final": bool(params.get("p_is_final")),
+            }
+        )
+        return True
+
+    def _poll_chunks(self, params: dict[str, Any]) -> list[dict[str, Any]]:
+        key = (params["p_table"], params["p_id"])
+        chunks = self.stream_chunks.get(key, [])
+        after = params.get("p_after_seq", -1)
+        user_id = params.get("p_user_id")
+        out = [
+            dict(c)
+            for c in chunks
+            if c["seq"] > after and (user_id is None or c.get("user_id") == user_id)
+        ]
+        out.sort(key=lambda c: c["seq"])
+        return out
+
+    def _sweep_stale_streams(self, params: dict[str, Any]) -> int:
+        store = self.tables.setdefault(params["p_table"], {})
+        stale = params.get("p_stale_seconds", 300)
+        limit = params.get("p_limit", 100)
+        now = time.time()
+        candidates = [
+            row
+            for row in sorted(store.values(), key=lambda r: r.get("claimed_epoch") or 0)
+            if row.get("status") == "streaming"
+            and row.get("claimed_epoch") is not None
+            and now - row["claimed_epoch"] > stale
+        ][:limit]
+        for row in candidates:
+            row["status"] = "error"
+            row["error"] = row.get("error") or "stream worker lease expired"
+            row["completed_at"] = now
+        return len(candidates)
+
     # -- emulated areal_remote_commands functions --------------------------
 
     _SHELL_TABLE = "areal_remote_commands"
@@ -258,7 +341,9 @@ class FakeSupabaseClient:
                 for row in store.values()
             )
 
-        candidates = [r for r in store.values() if claimable(r) and not tmux_has_active(r)]
+        candidates = [
+            r for r in store.values() if claimable(r) and not tmux_has_active(r)
+        ]
         first_per_tmux: dict[str, dict[str, Any]] = {}
         for candidate in sorted(candidates, key=lambda r: r["created_at"]):
             first_per_tmux.setdefault(candidate["tmux_id"], candidate)

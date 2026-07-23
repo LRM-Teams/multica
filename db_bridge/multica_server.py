@@ -24,7 +24,7 @@ import time
 from typing import Any, Final
 
 from fastapi import APIRouter, Depends, FastAPI, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from supabase import AsyncClient, create_async_client
 from supabase.lib.client_options import AsyncClientOptions
 
@@ -76,7 +76,7 @@ class MulticaShellDB:
     def config(self) -> MulticaConfig:
         return self._config
 
-    async def connect(self) -> "MulticaShellDB":
+    async def connect(self) -> MulticaShellDB:
         if self._client is None:
             self._httpx = _build_httpx_pool()
             self._client = await create_async_client(
@@ -181,6 +181,71 @@ def create_llm_router(db: BridgeDB, config: MulticaConfig) -> APIRouter:
     timeout = config.chat_timeout_s
     max_body = config.max_body_bytes
     user_id = config.bridge_user_id
+    first_chunk_timeout = config.stream_first_chunk_timeout_s
+    inter_chunk_timeout = config.stream_inter_chunk_timeout_s
+    stream_poll = config.stream_poll_interval_s
+
+    async def _serve_stream(request: Request, row_id: str, started: float) -> Response:
+        """Wait for the stream to begin, then relay chunks as an SSE response."""
+        start = await db.wait_for_stream_start(
+            channel,
+            row_id,
+            first_chunk_timeout,
+            user_id=user_id,
+            poll_interval=stream_poll,
+        )
+        if start is None:
+            error = (
+                f"bridge timed out after {first_chunk_timeout:.0f}s waiting for the "
+                f"chat completion stream to begin (request {row_id})"
+            )
+            logger.warning("multica stream start timeout id=%s", row_id)
+            try:
+                await db.abandon(channel, row_id, user_id=user_id, error=error)
+            except Exception as exc:  # noqa: BLE001 -- response must still return
+                logger.warning("multica failed to abandon id=%s: %s", row_id, exc)
+            return JSONResponse(status_code=504, content={"detail": error})
+        if start.status == "error":
+            logger.warning("multica stream relay error id=%s: %s", row_id, start.error)
+            return JSONResponse(
+                status_code=502,
+                content={"detail": start.error or "bridge relay error"},
+            )
+
+        resp_headers = relay.filter_response_headers(start.headers)
+        # StreamingResponse owns the Content-Type via media_type; drop any
+        # captured content-type header to avoid emitting it twice.
+        media_type = resp_headers.pop("content-type", None) or "text/event-stream"
+
+        async def _body_iter():
+            try:
+                async for chunk in db.stream_chunks(
+                    channel,
+                    row_id,
+                    user_id=user_id,
+                    first_chunk_timeout=inter_chunk_timeout,
+                    inter_chunk_timeout=inter_chunk_timeout,
+                    poll_interval=stream_poll,
+                ):
+                    if await request.is_disconnected():
+                        logger.info("multica stream client disconnected id=%s", row_id)
+                        break
+                    yield chunk
+            except Exception as exc:  # noqa: BLE001 -- never crash the ASGI stream
+                logger.warning("multica stream body error id=%s: %s", row_id, exc)
+
+        logger.info(
+            "multica streaming chat completion id=%s status=%s latency_ms=%.1f",
+            row_id,
+            start.response_status or 200,
+            (time.monotonic() - started) * 1000,
+        )
+        return StreamingResponse(
+            _body_iter(),
+            status_code=start.response_status or 200,
+            headers=resp_headers,
+            media_type=media_type,
+        )
 
     async def chat_completions(
         request: Request, _key: str = Depends(guard)
@@ -191,8 +256,7 @@ def create_llm_router(db: BridgeDB, config: MulticaConfig) -> APIRouter:
                 status_code=413,
                 content={
                     "detail": (
-                        f"request body {len(body)} bytes exceeds limit "
-                        f"{max_body} bytes"
+                        f"request body {len(body)} bytes exceeds limit {max_body} bytes"
                     )
                 },
             )
@@ -201,11 +265,6 @@ def create_llm_router(db: BridgeDB, config: MulticaConfig) -> APIRouter:
         if payload is None:
             return JSONResponse(
                 status_code=400, content={"detail": "request body must be JSON object"}
-            )
-        if payload.get("stream"):
-            return JSONResponse(
-                status_code=400,
-                content={"detail": "streaming responses are not supported"},
             )
         model = payload.get("model")
         if not isinstance(model, str) or not model.strip().lower().startswith(
@@ -220,6 +279,7 @@ def create_llm_router(db: BridgeDB, config: MulticaConfig) -> APIRouter:
                     )
                 },
             )
+        is_stream = bool(payload.get("stream"))
 
         headers = _upstream_headers(request, config)
         started = time.monotonic()
@@ -231,14 +291,22 @@ def create_llm_router(db: BridgeDB, config: MulticaConfig) -> APIRouter:
             headers=headers,
             content_type=request.headers.get("content-type"),
             body=body,
-            meta={"content_length": len(body), "source": "multica"},
+            meta={
+                "content_length": len(body),
+                "source": "multica",
+                "stream": is_stream,
+            },
         )
         logger.info(
-            "multica enqueued chat completion id=%s model=%s bytes=%d",
+            "multica enqueued chat completion id=%s model=%s bytes=%d stream=%s",
             row_id,
             model,
             len(body),
+            is_stream,
         )
+
+        if is_stream:
+            return await _serve_stream(request, row_id, started)
 
         result = await db.wait_for_response(channel, row_id, timeout, user_id=user_id)
         if result is None:
@@ -297,9 +365,7 @@ def create_shell_router(db: MulticaShellDB, config: MulticaConfig) -> APIRouter:
     guard = require_api_key(config.shell_api_keys, surface="shell")
     user_id = config.bridge_user_id
 
-    async def create_command(
-        request: Request, _key: str = Depends(guard)
-    ) -> Response:
+    async def create_command(request: Request, _key: str = Depends(guard)) -> Response:
         try:
             payload = await request.json()
         except Exception:  # noqa: BLE001 -- any parse failure is a client error
@@ -352,20 +418,20 @@ def create_shell_router(db: MulticaShellDB, config: MulticaConfig) -> APIRouter:
         )
         return JSONResponse(status_code=201, content=result)
 
-    async def get_command(
-        command_id: str, _key: str = Depends(guard)
-    ) -> Response:
+    async def get_command(command_id: str, _key: str = Depends(guard)) -> Response:
         row = await db.get_command(command_id, user_id=user_id)
         if row is None:
-            return JSONResponse(status_code=404, content={"detail": "command not found"})
+            return JSONResponse(
+                status_code=404, content={"detail": "command not found"}
+            )
         return JSONResponse(status_code=200, content=row)
 
-    async def cancel_command(
-        command_id: str, _key: str = Depends(guard)
-    ) -> Response:
+    async def cancel_command(command_id: str, _key: str = Depends(guard)) -> Response:
         result = await db.request_cancel(command_id, user_id=user_id)
         if result is None:
-            return JSONResponse(status_code=404, content={"detail": "command not found"})
+            return JSONResponse(
+                status_code=404, content={"detail": "command not found"}
+            )
         return JSONResponse(status_code=200, content=result)
 
     router.add_api_route(
@@ -426,9 +492,7 @@ def create_multica_app(
             await shell_db.aclose()
             logger.info("multica server stopped")
 
-    app = FastAPI(
-        title="db_bridge multica server", version="0.1.0", lifespan=lifespan
-    )
+    app = FastAPI(title="db_bridge multica server", version="0.1.0", lifespan=lifespan)
     app.include_router(create_llm_router(bridge_db, config))
     app.include_router(create_shell_router(shell_db, config))
 

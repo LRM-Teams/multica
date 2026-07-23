@@ -68,6 +68,60 @@ async def _executor_complete_one(db: BridgeDB, *, status, headers, body):
         await asyncio.sleep(0.005)
 
 
+async def _executor_stream_one(
+    db: BridgeDB,
+    *,
+    chunks,
+    status: int = 200,
+    headers: dict | None = None,
+):
+    """Simulate the AReaL-side executor relaying an SSE stream via the DB."""
+    headers = headers or {"content-type": "text/event-stream"}
+    while True:
+        req = await db.claim_next(CHAT, "test-exec")
+        if req is not None:
+            break
+        await asyncio.sleep(0.005)
+    await db.start_stream(
+        CHAT,
+        req.id,
+        worker_id=req.worker_id,
+        response_status=status,
+        response_headers=headers,
+    )
+    seq = 0
+    for chunk in chunks:
+        await db.append_chunk(
+            CHAT,
+            req.id,
+            worker_id=req.worker_id,
+            user_id=req.user_id,
+            seq=seq,
+            body=chunk,
+            is_final=False,
+        )
+        seq += 1
+        await asyncio.sleep(0.001)
+    await db.append_chunk(
+        CHAT,
+        req.id,
+        worker_id=req.worker_id,
+        user_id=req.user_id,
+        seq=seq,
+        body=b"",
+        is_final=True,
+    )
+    await db.complete(
+        CHAT,
+        req.id,
+        worker_id=req.worker_id,
+        response_status=status,
+        response_headers=headers,
+        body=b"",
+    )
+    return req
+
+
 async def test_areal_model_enqueues_and_relays():
     cfg = _config()
     db = _bridge_db(cfg, FakeSupabaseClient())
@@ -85,7 +139,10 @@ async def test_areal_model_enqueues_and_relays():
         resp = await client.post(
             "/v1/chat/completions",
             headers=_auth(),
-            json={"model": "areal/qwen3", "messages": [{"role": "user", "content": "hi"}]},
+            json={
+                "model": "areal/qwen3",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
         )
     claimed = await exec_task
 
@@ -149,18 +206,74 @@ async def test_non_areal_model_rejected_400():
     assert db.client.tables.get(CHAT.table, {}) == {}
 
 
-async def test_stream_true_rejected_400():
+async def test_stream_true_streams_chunks():
     cfg = _config()
     db = _bridge_db(cfg, FakeSupabaseClient())
     app = create_multica_app(cfg, bridge_db=db)
+    chunks = [
+        b'data: {"delta":"a"}\n\n',
+        b'data: {"delta":"b"}\n\n',
+        b"data: [DONE]\n\n",
+    ]
+    exec_task = asyncio.create_task(_executor_stream_one(db, chunks=chunks))
     async with _client(app) as client:
         resp = await client.post(
             "/v1/chat/completions",
             headers=_auth(),
             json={"model": "areal/qwen3", "messages": [], "stream": True},
         )
-    assert resp.status_code == 400
-    assert db.client.tables.get(CHAT.table, {}) == {}
+    await exec_task
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    assert resp.content == b"".join(chunks)
+    # The parent row records the streamed request for auditing.
+    row = next(iter(db.client.tables[CHAT.table].values()))
+    assert row["request_meta"]["stream"] is True
+
+
+async def test_stream_first_chunk_timeout_returns_504():
+    cfg = _config(MULTICA_STREAM_FIRST_CHUNK_TIMEOUT="0.05")
+    db = _bridge_db(cfg, FakeSupabaseClient())
+    app = create_multica_app(cfg, bridge_db=db)
+    # No executor ever starts the stream → the caller times out waiting.
+    async with _client(app) as client:
+        resp = await client.post(
+            "/v1/chat/completions",
+            headers=_auth(),
+            json={"model": "areal/qwen3", "messages": [], "stream": True},
+        )
+    assert resp.status_code == 504
+    # The pending row is abandoned so no executor serves it after the 504.
+    row = next(iter(db.client.tables[CHAT.table].values()))
+    assert row["status"] == "error"
+
+
+async def test_stream_error_before_start_returns_502():
+    cfg = _config()
+    db = _bridge_db(cfg, FakeSupabaseClient())
+    app = create_multica_app(cfg, bridge_db=db)
+
+    async def _fail_one():
+        while True:
+            req = await db.claim_next(CHAT, "test-exec")
+            if req is not None:
+                await db.fail(
+                    CHAT, req.id, worker_id=req.worker_id, error="upstream down"
+                )
+                return
+            await asyncio.sleep(0.005)
+
+    exec_task = asyncio.create_task(_fail_one())
+    async with _client(app) as client:
+        resp = await client.post(
+            "/v1/chat/completions",
+            headers=_auth(),
+            json={"model": "areal/qwen3", "messages": [], "stream": True},
+        )
+    await exec_task
+    assert resp.status_code == 502
+    assert resp.json()["detail"] == "upstream down"
 
 
 async def test_missing_key_returns_401():
@@ -183,7 +296,10 @@ async def test_oversized_body_returns_413():
         resp = await client.post(
             "/v1/chat/completions",
             headers=_auth(),
-            json={"model": "areal/qwen3", "messages": [{"role": "user", "content": "x" * 200}]},
+            json={
+                "model": "areal/qwen3",
+                "messages": [{"role": "user", "content": "x" * 200}],
+            },
         )
     assert resp.status_code == 413
     assert db.client.tables.get(CHAT.table, {}) == {}

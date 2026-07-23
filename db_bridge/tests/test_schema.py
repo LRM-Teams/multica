@@ -63,7 +63,50 @@ def test_cleanup_has_terminal_status_index_and_limit():
 
 
 def test_status_check_constraint():
-    assert "check (status in ('pending', 'claimed', 'done', 'error'))" in _SCHEMA
+    assert (
+        "check (status in ('pending', 'claimed', 'streaming', 'done', 'error'))"
+        in _SCHEMA
+    )
+
+
+def test_streaming_chunk_table_exists():
+    assert "create table if not exists public.bridge_stream_chunks" in _SCHEMA
+    assert "request_table        text not null" in _SCHEMA
+    assert "request_id           uuid not null" in _SCHEMA
+    assert "is_final             boolean not null default false" in _SCHEMA
+    # Ordered per-request read path + user-scoped index.
+    assert "bridge_stream_chunks_request_seq_idx" in _SCHEMA
+    assert "(request_table, request_id, seq)" in _SCHEMA
+
+
+def test_streaming_rpcs_exist():
+    for fn in (
+        "public.bridge_start_stream",
+        "public.bridge_append_chunk",
+        "public.bridge_poll_chunks",
+        "public.bridge_sweep_stale_streams",
+    ):
+        assert f"create or replace function {fn}" in _SCHEMA, f"{fn} missing"
+
+
+def test_streaming_rpcs_are_owner_and_status_guarded():
+    # start_stream / append_chunk must only act on an owned, correctly-statused row.
+    assert "status = 'claimed'" in _SCHEMA
+    assert "set status           = 'streaming'" in _SCHEMA
+    assert "where id = $1\n           and status = 'streaming'" in _SCHEMA
+    # sweep only touches stuck streaming rows via a heartbeat lease.
+    assert "where status = 'streaming'" in _SCHEMA
+    assert "claimed_at < now() - make_interval(secs => $1)" in _SCHEMA
+
+
+def test_streaming_functions_are_locked_down():
+    assert "public.bridge_start_stream(text, uuid, text, integer, jsonb)" in _SCHEMA
+    assert (
+        "public.bridge_append_chunk(text, uuid, text, uuid, integer, text, text, boolean)"
+        in _SCHEMA
+    )
+    assert "public.bridge_poll_chunks(text, uuid, uuid, integer)" in _SCHEMA
+    assert "public.bridge_sweep_stale_streams(text, integer, integer)" in _SCHEMA
 
 
 def test_rls_enabled_and_functions_locked_down():

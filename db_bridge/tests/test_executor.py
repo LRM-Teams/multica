@@ -247,3 +247,141 @@ async def test_multica_api_redacts_authorization_after_transport_failure():
     row = db.client.tables[ENV_DISPATCH_DAG.table][row_id]
     assert row["status"] == "error"
     assert row["request_headers"]["authorization"] == "REDACTED"
+
+
+# ---------------------------------------------------------------------------
+# Streaming (SSE) relay
+# ---------------------------------------------------------------------------
+
+CHAT = CHANNELS_BY_NAME["chat_completions"]
+
+
+def _sse_handler(chunks, *, status: int = 200, headers: dict | None = None):
+    """MockTransport handler streaming ``chunks`` as an async byte stream."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        async def _body():
+            for chunk in chunks:
+                yield chunk
+
+        return httpx.Response(
+            status,
+            headers=headers or {"content-type": "text/event-stream"},
+            content=_body(),
+        )
+
+    return handler
+
+
+def _failing_sse_handler(pre_chunks):
+    def handler(request: httpx.Request) -> httpx.Response:
+        async def _body():
+            for chunk in pre_chunks:
+                yield chunk
+            raise httpx.ReadError("stream broke", request=request)
+
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=_body()
+        )
+
+    return handler
+
+
+async def _insert_stream_request(db: BridgeDB) -> str:
+    return await db.insert_request(
+        CHAT,
+        user_id=USER_ID,
+        method="POST",
+        path="/chat/completions",
+        headers={"content-type": "application/json"},
+        content_type="application/json",
+        body=b'{"model":"areal/x","stream":true}',
+    )
+
+
+async def test_stream_forwards_chunks_and_completes():
+    cfg = _config(BRIDGE_STREAM_FLUSH_BYTES="0")
+    db = BridgeDB(cfg, client=FakeSupabaseClient())
+    chunks = [
+        b'data: {"a":1}\n\n',
+        b'data: {"b":2}\n\n',
+        b"data: [DONE]\n\n",
+    ]
+    ex = Executor(db, "areal", config=cfg, client=_exec_client(_sse_handler(chunks)))
+    row_id = await _insert_stream_request(db)
+
+    assert await ex.process_one(CHAT, "w0") is True
+
+    row = db.client.tables[CHAT.table][row_id]
+    assert row["status"] == "done"
+    assert row["response_status"] == 200
+    assert row["response_headers"]["content-type"] == "text/event-stream"
+
+    stored = await db.poll_chunks(CHAT, row_id, user_id=USER_ID, after_seq=-1)
+    assert b"".join(c.body for c in stored) == b"".join(chunks)
+    assert stored[-1].is_final is True
+    # Every non-final chunk ends on an SSE event boundary.
+    for chunk in stored[:-1]:
+        assert chunk.body.endswith(b"\n\n")
+
+
+async def test_stream_mid_failure_marks_error():
+    cfg = _config()
+    db = BridgeDB(cfg, client=FakeSupabaseClient())
+    ex = Executor(
+        db,
+        "areal",
+        config=cfg,
+        client=_exec_client(_failing_sse_handler([b"data: a\n\n"])),
+    )
+    row_id = await _insert_stream_request(db)
+
+    assert await ex.process_one(CHAT, "w0") is True
+
+    row = db.client.tables[CHAT.table][row_id]
+    assert row["status"] == "error"
+    stored = await db.poll_chunks(CHAT, row_id, user_id=USER_ID, after_seq=-1)
+    # First event delivered, then a final marker terminates the caller's stream.
+    assert stored[0].body == b"data: a\n\n"
+    assert stored[-1].is_final is True
+
+
+async def test_stream_non_2xx_relays_error_body():
+    cfg = _config()
+    db = BridgeDB(cfg, client=FakeSupabaseClient())
+    body = b'{"detail":"no capacity"}'
+    handler = _sse_handler(
+        [body], status=429, headers={"content-type": "application/json"}
+    )
+    ex = Executor(db, "areal", config=cfg, client=_exec_client(handler))
+    row_id = await _insert_stream_request(db)
+
+    assert await ex.process_one(CHAT, "w0") is True
+
+    row = db.client.tables[CHAT.table][row_id]
+    assert row["status"] == "done"
+    assert row["response_status"] == 429
+    stored = await db.poll_chunks(CHAT, row_id, user_id=USER_ID, after_seq=-1)
+    assert b"".join(c.body for c in stored) == body
+    assert stored[-1].is_final is True
+
+
+async def test_stream_flush_bytes_batches_multiple_events():
+    # With a large flush threshold, several complete events coalesce into one
+    # chunk row while still respecting SSE boundaries.
+    cfg = _config(
+        BRIDGE_STREAM_FLUSH_BYTES="1000000",
+        BRIDGE_STREAM_FLUSH_INTERVAL="1000",
+    )
+    db = BridgeDB(cfg, client=FakeSupabaseClient())
+    chunks = [b"data: a\n\n", b"data: b\n\n", b"data: c\n\n"]
+    ex = Executor(db, "areal", config=cfg, client=_exec_client(_sse_handler(chunks)))
+    row_id = await _insert_stream_request(db)
+
+    assert await ex.process_one(CHAT, "w0") is True
+
+    stored = await db.poll_chunks(CHAT, row_id, user_id=USER_ID, after_seq=-1)
+    # All events held until the final flush → a single final chunk.
+    assert len(stored) == 1
+    assert stored[0].is_final is True
+    assert stored[0].body == b"".join(chunks)

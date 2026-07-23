@@ -122,6 +122,23 @@ async def test_end_session_response_shape():
     assert resp.json() == {"interaction_count": 7}
 
 
+async def test_chat_completions_stream_true_rejected_on_stub():
+    # The loopback stub does not serve streaming; it rejects stream=true before
+    # touching the DB (streaming is served only by the multica public server).
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("upstream must not be reached for a rejected stream")
+
+    async with gateway_harness(handler) as (client, db):
+        resp = await client.post(
+            "/chat/completions",
+            headers={"Authorization": "Bearer k"},
+            json={"model": "areal/x", "messages": [], "stream": True},
+        )
+
+    assert resp.status_code == 400
+    assert db.client.tables.get(CHAT.table, {}) == {}
+
+
 async def test_chat_completions_large_logprobs_roundtrip():
     # Build a sizable OpenAI-style completion with logprobs/top_logprobs.
     content_tokens = [

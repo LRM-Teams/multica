@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from db_bridge import channels
 from db_bridge.config import BridgeConfig
 
@@ -27,6 +26,48 @@ def test_minimal_from_env_applies_defaults():
     assert cfg.row_retention_seconds == 86400
     assert cfg.cleanup_batch_limit == 1000
     assert cfg.bridge_user_id is None
+
+
+def test_streaming_defaults():
+    cfg = BridgeConfig.from_env(_MINIMAL)
+    assert cfg.stream_first_chunk_timeout_s == pytest.approx(60.0)
+    assert cfg.stream_inter_chunk_timeout_s == pytest.approx(120.0)
+    assert cfg.stream_poll_interval_s == pytest.approx(0.05)
+    assert cfg.stream_flush_bytes == 0
+    assert cfg.stream_flush_interval_s == pytest.approx(0.05)
+    assert cfg.stream_sweep_interval_s == pytest.approx(30.0)
+    assert cfg.stream_chunk_retention_seconds == 86400
+
+
+def test_streaming_overrides():
+    cfg = BridgeConfig.from_env(
+        {
+            **_MINIMAL,
+            "BRIDGE_STREAM_FIRST_CHUNK_TIMEOUT": "5",
+            "BRIDGE_STREAM_INTER_CHUNK_TIMEOUT": "7",
+            "BRIDGE_STREAM_POLL_INTERVAL": "0.02",
+            "BRIDGE_STREAM_FLUSH_BYTES": "4096",
+            "BRIDGE_STREAM_FLUSH_INTERVAL": "0.1",
+            "BRIDGE_STREAM_SWEEP_INTERVAL": "0",
+            "BRIDGE_STREAM_CHUNK_RETENTION_SECONDS": "3600",
+        }
+    )
+    assert cfg.stream_first_chunk_timeout_s == pytest.approx(5.0)
+    assert cfg.stream_inter_chunk_timeout_s == pytest.approx(7.0)
+    assert cfg.stream_poll_interval_s == pytest.approx(0.02)
+    assert cfg.stream_flush_bytes == 4096
+    assert cfg.stream_flush_interval_s == pytest.approx(0.1)
+    assert cfg.stream_sweep_interval_s == 0.0  # 0 disables the sweep loop
+    assert cfg.stream_chunk_retention_seconds == 3600
+
+
+def test_streaming_validation_rejects_bad_values():
+    with pytest.raises(ValueError):
+        BridgeConfig.from_env({**_MINIMAL, "BRIDGE_STREAM_FIRST_CHUNK_TIMEOUT": "0"})
+    with pytest.raises(ValueError):
+        BridgeConfig.from_env({**_MINIMAL, "BRIDGE_STREAM_POLL_INTERVAL": "-1"})
+    with pytest.raises(ValueError):
+        BridgeConfig.from_env({**_MINIMAL, "BRIDGE_STREAM_FLUSH_BYTES": "-1"})
 
 
 def test_anon_key_is_not_accepted_for_bridge():

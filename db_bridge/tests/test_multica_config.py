@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from db_bridge.config import MulticaConfig
 
 USER_ID = "00000000-0000-0000-0000-0000000000ff"
@@ -33,6 +32,28 @@ def test_from_env_defaults():
     # Fail-closed: no keys configured means no caller is authorized.
     assert cfg.llm_api_keys == frozenset()
     assert cfg.shell_api_keys == frozenset()
+
+
+def test_streaming_defaults():
+    cfg = MulticaConfig.from_env(_env())
+    assert cfg.stream_first_chunk_timeout_s == pytest.approx(60.0)
+    assert cfg.stream_inter_chunk_timeout_s == pytest.approx(120.0)
+    assert cfg.stream_poll_interval_s == pytest.approx(0.05)
+
+
+def test_streaming_overrides_and_validation():
+    cfg = MulticaConfig.from_env(
+        _env(
+            MULTICA_STREAM_FIRST_CHUNK_TIMEOUT="10",
+            MULTICA_STREAM_INTER_CHUNK_TIMEOUT="20",
+            MULTICA_STREAM_POLL_INTERVAL="0.01",
+        )
+    )
+    assert cfg.stream_first_chunk_timeout_s == pytest.approx(10.0)
+    assert cfg.stream_inter_chunk_timeout_s == pytest.approx(20.0)
+    assert cfg.stream_poll_interval_s == pytest.approx(0.01)
+    with pytest.raises(ValueError):
+        MulticaConfig.from_env(_env(MULTICA_STREAM_POLL_INTERVAL="0"))
 
 
 def test_missing_supabase_raises():

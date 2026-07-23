@@ -91,8 +91,20 @@ begin
                 response_body_encoding text default 'raw',
                 error                  text,
                 constraint %2$I
-                    check (status in ('pending', 'claimed', 'done', 'error'))
+                    check (status in ('pending', 'claimed', 'streaming', 'done', 'error'))
             )
+        $q$, tbl, tbl || '_status_chk');
+
+        -- Existing installs created the check constraint before the 'streaming'
+        -- status existed; drop and re-add so re-applying the migration widens
+        -- the allowed statuses. Safe because no row is ever in an invalid state.
+        execute format(
+            'alter table public.%1$I drop constraint if exists %2$I',
+            tbl, tbl || '_status_chk'
+        );
+        execute format($q$
+            alter table public.%1$I add constraint %2$I
+                check (status in ('pending', 'claimed', 'streaming', 'done', 'error'))
         $q$, tbl, tbl || '_status_chk');
 
         -- Existing installs may need the column added outside create table.
@@ -136,6 +148,54 @@ begin
     end loop;
 end;
 $bridge$;
+
+
+-- ----------------------------------------------------------------------------
+-- Streaming chunk store
+--
+-- For streaming (SSE) chat completions the executor cannot buffer the whole
+-- response body; instead it relays ordered chunks into this table while the
+-- parent request row sits in the new 'streaming' status. The caller polls
+-- chunks by ascending `seq` and stops at the row flagged `is_final`.
+--
+-- The table is intentionally generic (keyed by request_table + request_id) so
+-- any rpc_* channel can stream without a per-channel chunk table. Chunk bodies
+-- reuse the same text/codec storage as request/response bodies.
+-- ----------------------------------------------------------------------------
+create table if not exists public.bridge_stream_chunks (
+    id                   uuid primary key default gen_random_uuid(),
+    request_table        text not null,
+    request_id           uuid not null,
+    user_id              uuid not null,
+    seq                  integer not null,
+    chunk_body           text,
+    chunk_body_encoding  text not null default 'raw',
+    is_final             boolean not null default false,
+    created_at           timestamptz not null default now()
+);
+
+-- Ordered per-request read path (caller polls seq > after_seq).
+create unique index if not exists bridge_stream_chunks_request_seq_idx
+    on public.bridge_stream_chunks (request_table, request_id, seq);
+-- User-scoped lookups mirror the per-user isolation of the queue tables.
+create index if not exists bridge_stream_chunks_user_idx
+    on public.bridge_stream_chunks (user_id, created_at);
+
+alter table public.bridge_stream_chunks enable row level security;
+grant all on table public.bridge_stream_chunks to service_role;
+do $chunks_policy$
+begin
+    if not exists (
+        select 1 from pg_policies
+         where schemaname = 'public'
+           and tablename = 'bridge_stream_chunks'
+           and policyname = 'allow_service_role'
+    ) then
+        create policy allow_service_role on public.bridge_stream_chunks
+            for all to service_role using (true) with check (true);
+    end if;
+end;
+$chunks_policy$;
 
 
 -- ----------------------------------------------------------------------------
@@ -245,7 +305,7 @@ begin
                error                  = $7,
                completed_at           = now()
          where id = $1
-           and status = 'claimed'
+           and status in ('claimed', 'streaming')
            and worker_id = $8
     $q$, p_table)
     using p_id, p_status, p_response_status, p_response_headers,
@@ -347,6 +407,17 @@ begin
     $q$, p_table)
     using p_retention_seconds, p_limit;
     get diagnostics v_deleted = row_count;
+
+    -- Drop any stream chunks orphaned by the deletion above (their parent
+    -- request row is gone). Bounded implicitly by the request deletion.
+    execute format($q$
+        delete from public.bridge_stream_chunks c
+         where c.request_table = %1$L
+           and not exists (
+                select 1 from public.%2$I r where r.id = c.request_id
+           )
+    $q$, p_table, p_table);
+
     return v_deleted;
 end;
 $$;
@@ -389,6 +460,202 @@ $$;
 
 
 -- ----------------------------------------------------------------------------
+-- start_stream: transition a claimed row to 'streaming' and record the
+-- upstream response status/headers (known once the streaming response begins).
+-- Owner-guarded like bridge_complete; refreshes claimed_at so the stale sweep
+-- and reclaim treat an actively streaming worker as alive.
+-- ----------------------------------------------------------------------------
+create or replace function public.bridge_start_stream(
+    p_table            text,
+    p_id               uuid,
+    p_worker_id        text,
+    p_response_status  integer default null,
+    p_response_headers jsonb   default null
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+    v_updated integer;
+begin
+    if p_table !~ '^rpc_[a-z0-9_]+$' then
+        raise exception 'invalid bridge table name: %', p_table;
+    end if;
+    if to_regclass('public.' || quote_ident(p_table)) is null then
+        raise exception 'unknown bridge table: %', p_table;
+    end if;
+
+    execute format($q$
+        update public.%1$I
+           set status           = 'streaming',
+               response_status  = $2,
+               response_headers = $3,
+               claimed_at       = now()
+         where id = $1
+           and status = 'claimed'
+           and worker_id = $4
+    $q$, p_table)
+    using p_id, p_response_status, p_response_headers, p_worker_id;
+    get diagnostics v_updated = row_count;
+    return v_updated > 0;
+end;
+$$;
+
+
+-- ----------------------------------------------------------------------------
+-- append_chunk: append one ordered stream chunk and heartbeat the parent row.
+--
+-- Only appends while the parent row is still 'streaming' and owned by the
+-- worker, so a stale-swept / reclaimed stream can never keep writing. Each
+-- append refreshes claimed_at, extending the sweep lease for a live stream.
+-- Idempotent on (request_table, request_id, seq): a retried append with the
+-- same seq is ignored rather than duplicated.
+-- ----------------------------------------------------------------------------
+create or replace function public.bridge_append_chunk(
+    p_table               text,
+    p_id                  uuid,
+    p_worker_id           text,
+    p_user_id             uuid,
+    p_seq                 integer,
+    p_chunk_body          text default null,
+    p_chunk_body_encoding text default 'raw',
+    p_is_final            boolean default false
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+    v_owned integer;
+begin
+    if p_table !~ '^rpc_[a-z0-9_]+$' then
+        raise exception 'invalid bridge table name: %', p_table;
+    end if;
+    if to_regclass('public.' || quote_ident(p_table)) is null then
+        raise exception 'unknown bridge table: %', p_table;
+    end if;
+
+    -- Verify ownership + streaming state and heartbeat in one update.
+    execute format($q$
+        update public.%1$I
+           set claimed_at = now()
+         where id = $1
+           and status = 'streaming'
+           and worker_id = $2
+    $q$, p_table)
+    using p_id, p_worker_id;
+    get diagnostics v_owned = row_count;
+    if v_owned = 0 then
+        return false;
+    end if;
+
+    insert into public.bridge_stream_chunks (
+        request_table, request_id, user_id, seq,
+        chunk_body, chunk_body_encoding, is_final
+    )
+    values (
+        p_table, p_id, p_user_id, p_seq,
+        p_chunk_body, coalesce(p_chunk_body_encoding, 'raw'), p_is_final
+    )
+    on conflict (request_table, request_id, seq) do nothing;
+
+    return true;
+end;
+$$;
+
+
+-- ----------------------------------------------------------------------------
+-- poll_chunks: return ordered chunks with seq > p_after_seq for a request the
+-- caller owns. Deliberately user-scoped to preserve per-user isolation.
+-- ----------------------------------------------------------------------------
+create or replace function public.bridge_poll_chunks(
+    p_table     text,
+    p_id        uuid,
+    p_user_id   uuid,
+    p_after_seq integer default -1
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+    v_rows jsonb;
+begin
+    if p_table !~ '^rpc_[a-z0-9_]+$' then
+        raise exception 'invalid bridge table name: %', p_table;
+    end if;
+
+    select coalesce(jsonb_agg(to_jsonb(c) order by c.seq), '[]'::jsonb)
+      into v_rows
+      from public.bridge_stream_chunks c
+     where c.request_table = p_table
+       and c.request_id = p_id
+       and c.user_id = p_user_id
+       and c.seq > p_after_seq;
+
+    return v_rows;
+end;
+$$;
+
+
+-- ----------------------------------------------------------------------------
+-- sweep_stale_streams: mark 'streaming' rows whose worker stopped heartbeating
+-- (claimed_at older than p_stale_seconds) as 'error'. A crashed streaming
+-- executor otherwise leaves the row stuck in 'streaming' (claim_next never
+-- reclaims it, since it only considers 'pending'/'claimed').
+-- ----------------------------------------------------------------------------
+create or replace function public.bridge_sweep_stale_streams(
+    p_table         text,
+    p_stale_seconds integer default 300,
+    p_limit         integer default 100
+)
+returns integer
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+    v_updated integer;
+begin
+    if p_table !~ '^rpc_[a-z0-9_]+$' then
+        raise exception 'invalid bridge table name: %', p_table;
+    end if;
+    if to_regclass('public.' || quote_ident(p_table)) is null then
+        raise exception 'unknown bridge table: %', p_table;
+    end if;
+    if p_limit <= 0 then
+        raise exception 'sweep limit must be positive: %', p_limit;
+    end if;
+
+    execute format($q$
+        with doomed as (
+            select id
+              from public.%1$I
+             where status = 'streaming'
+               and claimed_at < now() - make_interval(secs => $1)
+             order by claimed_at
+             for update skip locked
+             limit $2
+        )
+        update public.%1$I t
+           set status       = 'error',
+               error        = coalesce(t.error, 'stream worker lease expired'),
+               completed_at = now()
+          from doomed
+         where t.id = doomed.id
+    $q$, p_table)
+    using p_stale_seconds, p_limit;
+    get diagnostics v_updated = row_count;
+    return v_updated;
+end;
+$$;
+
+
+-- ----------------------------------------------------------------------------
 -- Permissions: only the service role may execute the bridge functions.
 -- ----------------------------------------------------------------------------
 do $perm$
@@ -399,7 +666,11 @@ declare
         'public.bridge_complete(text, uuid, text, text, integer, jsonb, text, text, text)',
         'public.bridge_abandon(text, uuid, uuid, text)',
         'public.bridge_cleanup_stale(text, integer, integer)',
-        'public.bridge_redact_headers(text, uuid)'
+        'public.bridge_redact_headers(text, uuid)',
+        'public.bridge_start_stream(text, uuid, text, integer, jsonb)',
+        'public.bridge_append_chunk(text, uuid, text, uuid, integer, text, text, boolean)',
+        'public.bridge_poll_chunks(text, uuid, uuid, integer)',
+        'public.bridge_sweep_stale_streams(text, integer, integer)'
     ];
 begin
     foreach fn in array fns loop

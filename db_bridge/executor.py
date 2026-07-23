@@ -14,6 +14,7 @@ failures mark a row ``error``.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 
@@ -26,6 +27,21 @@ from .db import BridgeDB
 from .metrics import get_metrics
 
 logger = logging.getLogger("db_bridge.executor")
+
+# SSE events are separated by a blank line; flush on this boundary so a batched
+# chunk never splits a `data: ...` event mid-record.
+_SSE_BOUNDARY = b"\n\n"
+
+
+def _is_streaming_request(body: bytes) -> bool:
+    """True when the OpenAI request body opts into streaming (``stream: true``)."""
+    if not body:
+        return False
+    try:
+        payload = json.loads(body)
+    except (ValueError, TypeError):
+        return False
+    return isinstance(payload, dict) and bool(payload.get("stream"))
 
 
 def _build_httpx_client() -> httpx.AsyncClient:
@@ -58,13 +74,12 @@ class Executor:
         self._stop = asyncio.Event()
         self._cipher = self._config.build_cipher(
             required=any(
-                channel.group == "multica_api"
-                for channel in executor_channels(side)
+                channel.group == "multica_api" for channel in executor_channels(side)
             )
         )
         self._metrics = get_metrics()
 
-    async def connect(self) -> "Executor":
+    async def connect(self) -> Executor:
         if self._client is None:
             self._client = _build_httpx_client()
         return self
@@ -76,7 +91,7 @@ class Executor:
             finally:
                 self._client = None
 
-    async def __aenter__(self) -> "Executor":
+    async def __aenter__(self) -> Executor:
         return await self.connect()
 
     async def __aexit__(self, *exc: object) -> None:
@@ -86,6 +101,17 @@ class Executor:
 
     async def _forward(self, channel: Channel, req) -> httpx.Response:
         assert self._client is not None
+        url, headers = self._prepare(channel, req)
+        return await self._client.request(
+            req.method,
+            url,
+            headers=headers,
+            content=req.body,
+            timeout=self._config.timeout_for(channel),
+        )
+
+    def _prepare(self, channel: Channel, req) -> tuple[str, dict[str, str]]:
+        """Build the upstream URL + replay headers for a claimed request."""
         url = self._config.upstream_for_group(channel.group) + req.path
         # Decrypt any at-rest-encrypted tokens just before replay.
         headers = relay.filter_request_headers(
@@ -101,18 +127,11 @@ class Executor:
                 headers["x-bridge-user-id"] = self._config.bridge_user_id
         elif channel.group == "multica_api":
             headers = relay.strip_alternate_credentials(headers)
-        return await self._client.request(
-            req.method,
-            url,
-            headers=headers,
-            content=req.body,
-            timeout=self._config.timeout_for(channel),
-        )
+        return url, headers
 
     def _must_redact(self, channel: Channel) -> bool:
         return (
-            channel.group == "multica_api"
-            or self._config.redact_tokens_after_complete
+            channel.group == "multica_api" or self._config.redact_tokens_after_complete
         )
 
     async def _redact_if_required(self, channel: Channel, row_id: str) -> None:
@@ -134,6 +153,13 @@ class Executor:
         )
         if req is None:
             return False
+        if _is_streaming_request(req.body):
+            await self._process_stream(channel, req)
+        else:
+            await self._process_buffered(channel, req)
+        return True
+
+    async def _process_buffered(self, channel: Channel, req) -> None:
         started = time.monotonic()
         try:
             resp = await self._forward(channel, req)
@@ -162,7 +188,7 @@ class Executor:
                 )
             if completed:
                 await self._redact_if_required(channel, req.id)
-            return True
+            return
 
         completed = await self._db.complete(
             channel,
@@ -179,7 +205,7 @@ class Executor:
                 req.id,
                 req.worker_id,
             )
-            return True
+            return
         self._metrics.record_forward(
             channel.name, ok=True, latency_s=time.monotonic() - started
         )
@@ -191,7 +217,155 @@ class Executor:
             resp.status_code,
             len(resp.content),
         )
-        return True
+
+    async def _process_stream(self, channel: Channel, req) -> None:
+        """Relay a streaming (SSE) upstream response chunk-by-chunk via the DB.
+
+        Buffers upstream bytes until an SSE event boundary and flushes a chunk
+        row when the buffered complete-event bytes reach ``stream_flush_bytes``
+        or ``stream_flush_interval_s`` elapses (``flush_bytes == 0`` flushes on
+        every boundary). Each append heartbeats the parent row. On completion a
+        final chunk (``is_final=True``) carries any remainder and the row is
+        marked done; transport failures mark it error.
+        """
+        assert self._client is not None
+        started = time.monotonic()
+        url, headers = self._prepare(channel, req)
+        flush_bytes = self._config.stream_flush_bytes
+        flush_interval = self._config.stream_flush_interval_s
+        seq = 0
+        buffer = bytearray()
+        streaming = False
+        response_headers: dict[str, str] = {}
+        response_status = 502
+        try:
+            async with self._client.stream(
+                req.method,
+                url,
+                headers=headers,
+                content=req.body,
+                timeout=self._config.timeout_for(channel),
+            ) as resp:
+                response_status = resp.status_code
+                response_headers = relay.filter_response_headers(resp.headers)
+                if not await self._db.start_stream(
+                    channel,
+                    req.id,
+                    worker_id=req.worker_id,
+                    response_status=response_status,
+                    response_headers=response_headers,
+                ):
+                    logger.info(
+                        "executor stream lost ownership at start channel=%s id=%s",
+                        channel.name,
+                        req.id,
+                    )
+                    return
+                streaming = True
+                last_flush = time.monotonic()
+                async for raw in resp.aiter_bytes():
+                    if not raw:
+                        continue
+                    buffer.extend(raw)
+                    boundary = buffer.rfind(_SSE_BOUNDARY)
+                    if boundary == -1:
+                        continue
+                    ready = boundary + len(_SSE_BOUNDARY)
+                    now = time.monotonic()
+                    if (
+                        flush_bytes > 0
+                        and ready < flush_bytes
+                        and (now - last_flush) < flush_interval
+                    ):
+                        continue
+                    chunk = bytes(buffer[:ready])
+                    del buffer[:ready]
+                    if not await self._db.append_chunk(
+                        channel,
+                        req.id,
+                        worker_id=req.worker_id,
+                        user_id=req.user_id,
+                        seq=seq,
+                        body=chunk,
+                        is_final=False,
+                    ):
+                        logger.info(
+                            "executor stream aborted (ownership lost) "
+                            "channel=%s id=%s seq=%d",
+                            channel.name,
+                            req.id,
+                            seq,
+                        )
+                        return
+                    seq += 1
+                    last_flush = now
+        except Exception as exc:  # noqa: BLE001 -- record any transport failure
+            logger.warning(
+                "executor stream failed channel=%s id=%s: %s",
+                channel.name,
+                req.id,
+                exc,
+            )
+            self._metrics.record_forward(
+                channel.name, ok=False, latency_s=time.monotonic() - started
+            )
+            error = f"{type(exc).__name__}: {exc}"
+            if streaming:
+                # Terminate the caller's stream promptly, then finalize error.
+                await self._db.append_chunk(
+                    channel,
+                    req.id,
+                    worker_id=req.worker_id,
+                    user_id=req.user_id,
+                    seq=seq,
+                    body=b"",
+                    is_final=True,
+                )
+            await self._db.fail(channel, req.id, worker_id=req.worker_id, error=error)
+            return
+
+        # Flush the remaining buffer as the final chunk and finalize the row.
+        if not await self._db.append_chunk(
+            channel,
+            req.id,
+            worker_id=req.worker_id,
+            user_id=req.user_id,
+            seq=seq,
+            body=bytes(buffer),
+            is_final=True,
+        ):
+            logger.info(
+                "executor stream final append lost ownership channel=%s id=%s",
+                channel.name,
+                req.id,
+            )
+            return
+        completed = await self._db.complete(
+            channel,
+            req.id,
+            worker_id=req.worker_id,
+            response_status=response_status,
+            response_headers=response_headers,
+            body=b"",
+        )
+        if not completed:
+            logger.info(
+                "executor stream finalize skipped (stale) channel=%s id=%s",
+                channel.name,
+                req.id,
+            )
+            return
+        self._metrics.record_forward(
+            channel.name, ok=True, latency_s=time.monotonic() - started
+        )
+        await self._redact_if_required(channel, req.id)
+        logger.info(
+            "executor streamed response channel=%s id=%s status=%s chunks=%d",
+            channel.name,
+            req.id,
+            response_status,
+            seq + 1,
+        )
 
     # -- worker pool -------------------------------------------------------
 
@@ -234,6 +408,33 @@ class Executor:
                     deleted[channel.name] = count
             if deleted:
                 logger.info("executor cleanup side=%s deleted=%s", self._side, deleted)
+
+    async def _stream_sweep_loop(self, channels) -> None:
+        """Periodically mark crashed streaming rows (no heartbeat) as errored."""
+        interval = self._config.stream_sweep_interval_s
+        while not self._stop.is_set():
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=interval)
+                return  # stopped
+            except TimeoutError:
+                pass
+            swept: dict[str, int] = {}
+            for channel in channels:
+                try:
+                    count = await self._db.sweep_stale_streams(
+                        channel,
+                        stale_seconds=self._config.stale_seconds,
+                        limit=self._config.cleanup_batch_limit,
+                    )
+                except Exception:  # noqa: BLE001 -- sweep must never crash the pool
+                    logger.exception(
+                        "executor stream sweep failed channel=%s", channel.name
+                    )
+                    continue
+                if count:
+                    swept[channel.name] = count
+            if swept:
+                logger.info("executor stream sweep side=%s swept=%s", self._side, swept)
 
     async def _stats_loop(self, channels) -> None:
         interval = self._config.stats_interval_s
@@ -288,6 +489,8 @@ class Executor:
             tasks.append(asyncio.create_task(self._stats_loop(channels)))
         if self._config.cleanup_interval_s > 0:
             tasks.append(asyncio.create_task(self._cleanup_loop(channels)))
+        if self._config.stream_sweep_interval_s > 0:
+            tasks.append(asyncio.create_task(self._stream_sweep_loop(channels)))
         logger.info(
             "executor ready side=%s channels=%s workers=%d",
             self._side,

@@ -70,6 +70,23 @@ def _should_bypass_chat_completions(channel: Channel, body: bytes) -> bool:
     return bool(model and not model.strip().lower().startswith(_AREAL_MODEL_PREFIX))
 
 
+def _is_streaming_chat(channel: Channel, body: bytes) -> bool:
+    """True when a chat_completions request opts into SSE streaming.
+
+    The loopback stub relays buffered request/response bodies only; streaming
+    is served exclusively by the multica public server (which owns the
+    bridge_stream_chunks relay). Rejecting ``stream: true`` here keeps the
+    shared rpc_chat_completions table's buffered path well-defined.
+    """
+    if channel.name != "chat_completions":
+        return False
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return False
+    return isinstance(payload, dict) and bool(payload.get("stream"))
+
+
 def _build_direct_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(trust_env=False, follow_redirects=False)
 
@@ -158,6 +175,23 @@ def _make_handler(db: BridgeDB, channel: Channel, config: BridgeConfig, cipher):
                     "detail": (
                         f"request body {len(body)} bytes exceeds bridge limit "
                         f"{max_body} bytes for channel {channel.name}"
+                    )
+                },
+            )
+
+        if _is_streaming_chat(channel, body):
+            logger.info(
+                "stub rejecting streaming chat completion channel=%s path=%s",
+                channel.name,
+                _full_path(request),
+            )
+            metrics.record_result(channel.name, "error")
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "detail": (
+                        "streaming responses are not supported on the loopback "
+                        "stub; use the multica server for stream=true"
                     )
                 },
             )
@@ -316,9 +350,7 @@ def create_stub_app(
     """
     config = config or db.config
     cipher = config.build_cipher(
-        required=any(
-            channel.group == "multica_api" for channel in stub_channels(side)
-        )
+        required=any(channel.group == "multica_api" for channel in stub_channels(side))
     )
 
     @contextlib.asynccontextmanager

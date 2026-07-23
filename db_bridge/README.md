@@ -138,6 +138,32 @@ The le-agent SSE stream (`/api/tasks/{id}/stream`) is intentionally **not**
 bridged: AReaL's `_wait_for_agent_run` already falls back to polling the shared
 `agent_runs` / `tasks` tables directly.
 
+### Streaming chat completions (SSE)
+
+The multica public server (`POST /v1/chat/completions`) supports OpenAI
+`stream: true`, relayed end-to-end through the database:
+
+1. The caller's request is parked in `rpc_chat_completions` as usual.
+2. The AReaL-side executor claims it, opens a streaming upstream request, moves
+   the row to a new `streaming` status (recording the response status/headers),
+   and relays the upstream SSE into the `bridge_stream_chunks` table one ordered
+   chunk at a time. Chunks are flushed on SSE event boundaries (`\n\n`), so a
+   `data: …` event is never split; batching is tunable via
+   `BRIDGE_STREAM_FLUSH_BYTES` / `BRIDGE_STREAM_FLUSH_INTERVAL`.
+3. The multica server returns a `text/event-stream` `StreamingResponse` that
+   polls `bridge_stream_chunks` and replays each chunk to the caller until the
+   final chunk (or a terminal row).
+
+Each chunk append heartbeats the parent row; a background sweep
+(`BRIDGE_STREAM_SWEEP_INTERVAL`) marks crashed streams (no heartbeat past
+`BRIDGE_STALE_SECONDS`) as errored so they are not stuck forever. Caller-side
+timeouts are `MULTICA_STREAM_FIRST_CHUNK_TIMEOUT` (stream must begin) and
+`MULTICA_STREAM_INTER_CHUNK_TIMEOUT` (max gap between chunks).
+
+Streaming is served **only** by the multica public server. The loopback stub
+(`db_bridge.run_stub`) relays buffered bodies only and rejects `stream: true`
+with HTTP 400.
+
 ## Setup
 
 Copy this `db_bridge/` directory to **both** hosts, then install dependencies:

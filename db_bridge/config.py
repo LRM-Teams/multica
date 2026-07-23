@@ -50,6 +50,15 @@ ENV_CLEANUP_INTERVAL: Final = "BRIDGE_CLEANUP_INTERVAL"
 ENV_ROW_RETENTION_SECONDS: Final = "BRIDGE_ROW_RETENTION_SECONDS"
 ENV_CLEANUP_BATCH_LIMIT: Final = "BRIDGE_CLEANUP_BATCH_LIMIT"
 
+# Streaming (SSE chat completions relayed through bridge_stream_chunks)
+ENV_STREAM_FIRST_CHUNK_TIMEOUT: Final = "BRIDGE_STREAM_FIRST_CHUNK_TIMEOUT"
+ENV_STREAM_INTER_CHUNK_TIMEOUT: Final = "BRIDGE_STREAM_INTER_CHUNK_TIMEOUT"
+ENV_STREAM_POLL_INTERVAL: Final = "BRIDGE_STREAM_POLL_INTERVAL"
+ENV_STREAM_FLUSH_BYTES: Final = "BRIDGE_STREAM_FLUSH_BYTES"
+ENV_STREAM_FLUSH_INTERVAL: Final = "BRIDGE_STREAM_FLUSH_INTERVAL"
+ENV_STREAM_SWEEP_INTERVAL: Final = "BRIDGE_STREAM_SWEEP_INTERVAL"
+ENV_STREAM_CHUNK_RETENTION_SECONDS: Final = "BRIDGE_STREAM_CHUNK_RETENTION_SECONDS"
+
 _DEFAULT_POLL_INTERVAL: Final = 1.0
 _DEFAULT_STALE_SECONDS: Final = 300
 _DEFAULT_CODEC_THRESHOLD: Final = 2048
@@ -67,6 +76,16 @@ _DEFAULT_STATS_INTERVAL: Final = 0.0
 _DEFAULT_CLEANUP_INTERVAL: Final = 300.0
 _DEFAULT_ROW_RETENTION_SECONDS: Final = 24 * 60 * 60
 _DEFAULT_CLEANUP_BATCH_LIMIT: Final = 1000
+
+# Streaming defaults. Small poll/flush intervals keep per-chunk latency low;
+# FLUSH_BYTES=0 flushes on every complete SSE event boundary.
+_DEFAULT_STREAM_FIRST_CHUNK_TIMEOUT: Final = 60.0
+_DEFAULT_STREAM_INTER_CHUNK_TIMEOUT: Final = 120.0
+_DEFAULT_STREAM_POLL_INTERVAL: Final = 0.05
+_DEFAULT_STREAM_FLUSH_BYTES: Final = 0
+_DEFAULT_STREAM_FLUSH_INTERVAL: Final = 0.05
+_DEFAULT_STREAM_SWEEP_INTERVAL: Final = 30.0
+_DEFAULT_STREAM_CHUNK_RETENTION_SECONDS: Final = 24 * 60 * 60
 
 
 def _get(src: Mapping[str, str], name: str) -> str | None:
@@ -144,6 +163,14 @@ class BridgeConfig:
     cleanup_interval_s: float = _DEFAULT_CLEANUP_INTERVAL
     row_retention_seconds: int = _DEFAULT_ROW_RETENTION_SECONDS
     cleanup_batch_limit: int = _DEFAULT_CLEANUP_BATCH_LIMIT
+    # Streaming (SSE) relay knobs.
+    stream_first_chunk_timeout_s: float = _DEFAULT_STREAM_FIRST_CHUNK_TIMEOUT
+    stream_inter_chunk_timeout_s: float = _DEFAULT_STREAM_INTER_CHUNK_TIMEOUT
+    stream_poll_interval_s: float = _DEFAULT_STREAM_POLL_INTERVAL
+    stream_flush_bytes: int = _DEFAULT_STREAM_FLUSH_BYTES
+    stream_flush_interval_s: float = _DEFAULT_STREAM_FLUSH_INTERVAL
+    stream_sweep_interval_s: float = _DEFAULT_STREAM_SWEEP_INTERVAL
+    stream_chunk_retention_seconds: int = _DEFAULT_STREAM_CHUNK_RETENTION_SECONDS
     bridge_user_id: str | None = None
     # Per-channel overrides, keyed by channel name.
     timeout_overrides: dict[str, float] = field(default_factory=dict)
@@ -201,6 +228,30 @@ class BridgeConfig:
             src, ENV_CLEANUP_BATCH_LIMIT, _DEFAULT_CLEANUP_BATCH_LIMIT
         )
 
+        stream_first_chunk_timeout_s = _env_float(
+            src, ENV_STREAM_FIRST_CHUNK_TIMEOUT, _DEFAULT_STREAM_FIRST_CHUNK_TIMEOUT
+        )
+        stream_inter_chunk_timeout_s = _env_float(
+            src, ENV_STREAM_INTER_CHUNK_TIMEOUT, _DEFAULT_STREAM_INTER_CHUNK_TIMEOUT
+        )
+        stream_poll_interval_s = _env_float(
+            src, ENV_STREAM_POLL_INTERVAL, _DEFAULT_STREAM_POLL_INTERVAL
+        )
+        stream_flush_bytes = _env_int(
+            src, ENV_STREAM_FLUSH_BYTES, _DEFAULT_STREAM_FLUSH_BYTES
+        )
+        stream_flush_interval_s = _env_float(
+            src, ENV_STREAM_FLUSH_INTERVAL, _DEFAULT_STREAM_FLUSH_INTERVAL
+        )
+        stream_sweep_interval_s = _env_float(
+            src, ENV_STREAM_SWEEP_INTERVAL, _DEFAULT_STREAM_SWEEP_INTERVAL
+        )
+        stream_chunk_retention_seconds = _env_int(
+            src,
+            ENV_STREAM_CHUNK_RETENTION_SECONDS,
+            _DEFAULT_STREAM_CHUNK_RETENTION_SECONDS,
+        )
+
         _require_positive(ENV_POLL_INTERVAL, poll_interval_s)
         _require_positive(ENV_STALE_SECONDS, stale_seconds)
         _require_non_negative(ENV_CODEC_THRESHOLD, codec_threshold)
@@ -211,6 +262,15 @@ class BridgeConfig:
         _require_non_negative(ENV_CLEANUP_INTERVAL, cleanup_interval_s)
         _require_positive(ENV_ROW_RETENTION_SECONDS, row_retention_seconds)
         _require_positive(ENV_CLEANUP_BATCH_LIMIT, cleanup_batch_limit)
+        _require_positive(ENV_STREAM_FIRST_CHUNK_TIMEOUT, stream_first_chunk_timeout_s)
+        _require_positive(ENV_STREAM_INTER_CHUNK_TIMEOUT, stream_inter_chunk_timeout_s)
+        _require_positive(ENV_STREAM_POLL_INTERVAL, stream_poll_interval_s)
+        _require_non_negative(ENV_STREAM_FLUSH_BYTES, stream_flush_bytes)
+        _require_non_negative(ENV_STREAM_FLUSH_INTERVAL, stream_flush_interval_s)
+        _require_non_negative(ENV_STREAM_SWEEP_INTERVAL, stream_sweep_interval_s)
+        _require_positive(
+            ENV_STREAM_CHUNK_RETENTION_SECONDS, stream_chunk_retention_seconds
+        )
 
         return cls(
             supabase_url=supabase_url,
@@ -238,6 +298,13 @@ class BridgeConfig:
             cleanup_interval_s=cleanup_interval_s,
             row_retention_seconds=row_retention_seconds,
             cleanup_batch_limit=cleanup_batch_limit,
+            stream_first_chunk_timeout_s=stream_first_chunk_timeout_s,
+            stream_inter_chunk_timeout_s=stream_inter_chunk_timeout_s,
+            stream_poll_interval_s=stream_poll_interval_s,
+            stream_flush_bytes=stream_flush_bytes,
+            stream_flush_interval_s=stream_flush_interval_s,
+            stream_sweep_interval_s=stream_sweep_interval_s,
+            stream_chunk_retention_seconds=stream_chunk_retention_seconds,
             bridge_user_id=_env_uuid(src, ENV_BRIDGE_USER_ID),
             timeout_overrides=timeout_overrides,
             concurrency_overrides=concurrency_overrides,
@@ -473,6 +540,11 @@ ENV_MULTICA_CHAT_TIMEOUT: Final = "MULTICA_CHAT_TIMEOUT"
 # multica API key is stripped and no Authorization is forwarded upstream.
 ENV_MULTICA_UPSTREAM_API_KEY: Final = "MULTICA_UPSTREAM_API_KEY"
 
+# Streaming (SSE) relay: caller-side timeouts + chunk poll cadence.
+ENV_MULTICA_STREAM_FIRST_CHUNK_TIMEOUT: Final = "MULTICA_STREAM_FIRST_CHUNK_TIMEOUT"
+ENV_MULTICA_STREAM_INTER_CHUNK_TIMEOUT: Final = "MULTICA_STREAM_INTER_CHUNK_TIMEOUT"
+ENV_MULTICA_STREAM_POLL_INTERVAL: Final = "MULTICA_STREAM_POLL_INTERVAL"
+
 # Remote-shell enqueue
 ENV_MULTICA_SHELL_DEFAULT_TIMEOUT: Final = "MULTICA_SHELL_DEFAULT_TIMEOUT"
 ENV_MULTICA_SHELL_MAX_TIMEOUT: Final = "MULTICA_SHELL_MAX_TIMEOUT"
@@ -514,6 +586,10 @@ class MulticaConfig:
     shell_max_timeout_s: int = _DEFAULT_MULTICA_SHELL_MAX_TIMEOUT
     shell_default_cwd: str | None = None
     poll_interval_s: float = _DEFAULT_POLL_INTERVAL
+    # Streaming (SSE) relay knobs (caller side).
+    stream_first_chunk_timeout_s: float = _DEFAULT_STREAM_FIRST_CHUNK_TIMEOUT
+    stream_inter_chunk_timeout_s: float = _DEFAULT_STREAM_INTER_CHUNK_TIMEOUT
+    stream_poll_interval_s: float = _DEFAULT_STREAM_POLL_INTERVAL
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> MulticaConfig:
@@ -548,12 +624,33 @@ class MulticaConfig:
         )
         poll_interval_s = _env_float(src, ENV_POLL_INTERVAL, _DEFAULT_POLL_INTERVAL)
 
+        stream_first_chunk_timeout_s = _env_float(
+            src,
+            ENV_MULTICA_STREAM_FIRST_CHUNK_TIMEOUT,
+            _DEFAULT_STREAM_FIRST_CHUNK_TIMEOUT,
+        )
+        stream_inter_chunk_timeout_s = _env_float(
+            src,
+            ENV_MULTICA_STREAM_INTER_CHUNK_TIMEOUT,
+            _DEFAULT_STREAM_INTER_CHUNK_TIMEOUT,
+        )
+        stream_poll_interval_s = _env_float(
+            src, ENV_MULTICA_STREAM_POLL_INTERVAL, _DEFAULT_STREAM_POLL_INTERVAL
+        )
+
         _require_positive(ENV_MULTICA_PORT, port)
         _require_positive(ENV_MULTICA_CHAT_TIMEOUT, chat_timeout_s)
         _require_positive(ENV_MAX_BODY_BYTES, max_body_bytes)
         _require_positive(ENV_MULTICA_SHELL_DEFAULT_TIMEOUT, shell_default_timeout_s)
         _require_positive(ENV_MULTICA_SHELL_MAX_TIMEOUT, shell_max_timeout_s)
         _require_positive(ENV_POLL_INTERVAL, poll_interval_s)
+        _require_positive(
+            ENV_MULTICA_STREAM_FIRST_CHUNK_TIMEOUT, stream_first_chunk_timeout_s
+        )
+        _require_positive(
+            ENV_MULTICA_STREAM_INTER_CHUNK_TIMEOUT, stream_inter_chunk_timeout_s
+        )
+        _require_positive(ENV_MULTICA_STREAM_POLL_INTERVAL, stream_poll_interval_s)
         if shell_default_timeout_s > shell_max_timeout_s:
             raise ValueError(
                 f"{ENV_MULTICA_SHELL_DEFAULT_TIMEOUT} ({shell_default_timeout_s}) must "
@@ -575,6 +672,9 @@ class MulticaConfig:
             shell_max_timeout_s=shell_max_timeout_s,
             shell_default_cwd=_get(src, ENV_MULTICA_SHELL_DEFAULT_CWD),
             poll_interval_s=poll_interval_s,
+            stream_first_chunk_timeout_s=stream_first_chunk_timeout_s,
+            stream_inter_chunk_timeout_s=stream_inter_chunk_timeout_s,
+            stream_poll_interval_s=stream_poll_interval_s,
         )
 
     def resolve_shell_timeout(self, requested: int | None) -> int:

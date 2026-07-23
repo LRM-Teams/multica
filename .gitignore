@@ -73,3 +73,4 @@ data/
 
 # Delve debugger binaries (created by Go debug sessions)
 **/__debug_bin*
+.pyc

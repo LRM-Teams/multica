@@ -162,7 +162,17 @@ describe("ChannelDetailsPanel Slack overview (LRM-494)", () => {
   });
 
   it("disables invite when canInvite is false", () => {
-    renderPanel({ canInvite: false, onInvite: () => {} });
+    renderPanel({
+      onInvite: () => {},
+      access: {
+        canManage: true,
+        canInvite: false,
+        isArchived: false,
+        hideSettingsTab: false,
+        projectBound: false,
+        projectEditable: false,
+      },
+    });
     expect(screen.getByTestId("channel-details-invite")).toBeDisabled();
   });
 });

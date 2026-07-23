@@ -386,6 +386,10 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 			OwnerID:     ownerID,
 		})
 		if err != nil {
+			if isReminderDaemonOutdatedError(err) {
+				writeCodedError(w, http.StatusConflict, "daemon_outdated", "runtime must keep reminder support while active reminders exist")
+				return
+			}
 			obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.RuntimeFailed(
 				uuidToString(ownerID),
 				req.WorkspaceID,
@@ -473,7 +477,17 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		"settings":                repoResp.Settings,
 		"daemon_token":            daemonToken,
 		"daemon_token_expires_at": daemonTokenExpiresAt.UTC().Format(time.RFC3339Nano),
+		"server_capabilities":     negotiatedDaemonCapabilities(capabilities),
 	})
+}
+
+func negotiatedDaemonCapabilities(capabilities []string) []string {
+	for _, capability := range capabilities {
+		if capability == protocol.DaemonCapabilityReminderVersionedCache {
+			return []string{protocol.DaemonCapabilityReminderVersionedCache}
+		}
+	}
+	return []string{}
 }
 
 func (h *Handler) completeRuntimeUpdateOnTargetRegister(r *http.Request, rt db.AgentRuntime, cliVersion string) {

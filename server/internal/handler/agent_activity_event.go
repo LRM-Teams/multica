@@ -163,7 +163,14 @@ func customActivityEventIsNarrative(eventType, reasonCode string) bool {
 		return true
 	}
 	switch eventType {
-	case agentInboxStatusChangedEventType, "radar_action_executed", "radar_action_failed":
+	case agentInboxStatusChangedEventType,
+		"radar_action_executed",
+		"radar_action_failed",
+		"reminder_scheduled",
+		"reminder_snoozed",
+		"reminder_updated",
+		"reminder_cancelled",
+		"reminder_fired":
 		return true
 	default:
 		return false

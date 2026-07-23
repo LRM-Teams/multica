@@ -796,6 +796,7 @@ type RegisterResponse struct {
 	Settings             json.RawMessage `json:"settings,omitempty"`
 	DaemonToken          string          `json:"daemon_token,omitempty"`
 	DaemonTokenExpiresAt string          `json:"daemon_token_expires_at,omitempty"`
+	ServerCapabilities   []string        `json:"server_capabilities,omitempty"`
 }
 
 func (c *Client) Register(ctx context.Context, req map[string]any) (*RegisterResponse, error) {

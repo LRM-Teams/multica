@@ -34,25 +34,25 @@ import (
 const maxAgentDescriptionLength = 255
 
 type AgentResponse struct {
-	ID            string          `json:"id"`
-	WorkspaceID   string          `json:"workspace_id"`
-	RuntimeID     string          `json:"runtime_id"`
-	Name          string          `json:"name"`
-	DisplayName   string          `json:"display_name"`
-	Description   string          `json:"description"`
-	Instructions  string          `json:"instructions"`
-	AvatarURL     *string         `json:"avatar_url"`
-	AvatarSource  string          `json:"avatar_source"`
-	RuntimeMode   string          `json:"runtime_mode"`
-	RuntimeName   string          `json:"runtime_name"`
+	ID           string  `json:"id"`
+	WorkspaceID  string  `json:"workspace_id"`
+	RuntimeID    string  `json:"runtime_id"`
+	Name         string  `json:"name"`
+	DisplayName  string  `json:"display_name"`
+	Description  string  `json:"description"`
+	Instructions string  `json:"instructions"`
+	AvatarURL    *string `json:"avatar_url"`
+	AvatarSource string  `json:"avatar_source"`
+	RuntimeMode  string  `json:"runtime_mode"`
+	RuntimeName  string  `json:"runtime_name"`
 	// Presence-safe projection of the bound runtime. Always filled when the
 	// runtime row exists — even if ListVisibleAgentRuntimes would hide the
 	// private runtime details from this viewer (LRM-248 AC5).
-	RuntimeStatus     string  `json:"runtime_status,omitempty"`
-	RuntimeLastSeenAt *string `json:"runtime_last_seen_at,omitempty"`
-	RuntimeConfig any             `json:"runtime_config"`
-	CustomArgs    []string        `json:"custom_args"`
-	McpConfig     json.RawMessage `json:"mcp_config"`
+	RuntimeStatus     string          `json:"runtime_status,omitempty"`
+	RuntimeLastSeenAt *string         `json:"runtime_last_seen_at,omitempty"`
+	RuntimeConfig     any             `json:"runtime_config"`
+	CustomArgs        []string        `json:"custom_args"`
+	McpConfig         json.RawMessage `json:"mcp_config"`
 	// custom_env is intentionally NOT serialized on agent resources. The
 	// agent_list/get/create/update/archive/restore responses and WS events
 	// only expose coarse metadata (has_custom_env, custom_env_key_count) so
@@ -1074,6 +1074,9 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	h.attachAgentRuntimeName(r.Context(), &resp)
 	actorType, actorID := h.resolveActor(r, ownerID, workspaceID)
 	h.publishAgentVisibilityEvent(protocol.EventAgentCreated, workspaceID, actorType, actorID, created, map[string]any{"agent": broadcastAgentResponse(resp)})
+	if created.RuntimeID.Valid {
+		h.projectReminderOwnerStart(r.Context(), uuidToString(created.ID), uuidToString(created.RuntimeID))
+	}
 
 	obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.AgentCreated(
 		ownerID,
@@ -1417,6 +1420,21 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, "this runtime is private; only its owner or a workspace admin can move agents onto it")
 			return
 		}
+		if runtime.ID != existing.RuntimeID && !agentRuntimeHasCapability(runtime, protocol.DaemonCapabilityReminderVersionedCache) {
+			var hasActiveReminders bool
+			if err := h.DB.QueryRow(r.Context(), `
+				SELECT EXISTS (
+				  SELECT 1 FROM agent_reminder
+				  WHERE agent_id = $1 AND status IN ('scheduled', 'firing')
+				)`, existing.ID).Scan(&hasActiveReminders); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to validate reminder runtime capability")
+				return
+			}
+			if hasActiveReminders {
+				writeCodedError(w, http.StatusConflict, "daemon_outdated", "target runtime must upgrade before moving an agent with active reminders")
+				return
+			}
+		}
 		params.RuntimeID = runtime.ID
 		params.RuntimeMode = pgtype.Text{String: runtime.RuntimeMode, Valid: true}
 		targetRuntimeID = runtime.ID
@@ -1516,6 +1534,10 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 
 	updated, err := h.Queries.UpdateAgent(r.Context(), params)
 	if err != nil {
+		if isReminderDaemonOutdatedError(err) {
+			writeCodedError(w, http.StatusConflict, "daemon_outdated", "target runtime must upgrade before moving an agent with active reminders")
+			return
+		}
 		if identityUniqueViolation(err, "agent_workspace_name_unique") {
 			writeError(w, http.StatusConflict, "username is already in use")
 			return
@@ -1568,6 +1590,10 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	userID := requestUserID(r)
 	actorType, actorID := h.resolveActor(r, userID, uuidToString(updated.WorkspaceID))
 	h.publishAgentVisibilityEvent(protocol.EventAgentStatus, uuidToString(updated.WorkspaceID), actorType, actorID, updated, map[string]any{"agent": broadcastAgentResponse(resp)})
+	if existing.RuntimeID.Valid && updated.RuntimeID.Valid && existing.RuntimeID != updated.RuntimeID && h.ReminderNotifier != nil {
+		h.projectReminderOwnerStop(r.Context(), uuidToString(updated.ID), uuidToString(existing.RuntimeID))
+		h.projectReminderOwnerStart(r.Context(), uuidToString(updated.ID), uuidToString(updated.RuntimeID))
+	}
 	redactAgentResponseForActor(&resp, actorType)
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -1748,6 +1774,9 @@ func (h *Handler) ArchiveAgent(w http.ResponseWriter, r *http.Request) {
 	h.attachAgentRuntimeName(r.Context(), &resp)
 	actorType, actorID := h.resolveActor(r, userID, wsID)
 	h.publish(protocol.EventAgentArchived, wsID, actorType, actorID, map[string]any{"agent": broadcastAgentResponse(resp)})
+	if archived.RuntimeID.Valid {
+		h.projectReminderOwnerStop(r.Context(), uuidToString(archived.ID), uuidToString(archived.RuntimeID))
+	}
 	redactAgentResponseForActor(&resp, actorType)
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -1785,6 +1814,9 @@ func (h *Handler) RestoreAgent(w http.ResponseWriter, r *http.Request) {
 	userID := requestUserID(r)
 	actorType, actorID := h.resolveActor(r, userID, wsID)
 	h.publish(protocol.EventAgentRestored, wsID, actorType, actorID, map[string]any{"agent": broadcastAgentResponse(resp)})
+	if restored.RuntimeID.Valid {
+		h.projectReminderOwnerStart(r.Context(), uuidToString(restored.ID), uuidToString(restored.RuntimeID))
+	}
 	redactAgentResponseForActor(&resp, actorType)
 	writeJSON(w, http.StatusOK, resp)
 }

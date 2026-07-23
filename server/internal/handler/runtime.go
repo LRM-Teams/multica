@@ -1244,6 +1244,7 @@ func (h *Handler) ArchiveAgentsAndDeleteRuntime(w http.ResponseWriter, r *http.R
 		h.publish(protocol.EventAgentArchived, wsID, "member", userID, map[string]any{
 			"agent": agentToResponse(a),
 		})
+		h.projectReminderOwnerStop(r.Context(), uuidToString(a.ID), uuidToString(rt.ID))
 	}
 	h.publish(protocol.EventDaemonRegister, wsID, "member", userID, map[string]any{
 		"action": "delete",

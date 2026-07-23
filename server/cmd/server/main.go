@@ -206,6 +206,7 @@ func main() {
 	go hub.Run()
 	daemonHub := daemonws.NewHub()
 	var daemonWakeup service.TaskWakeupNotifier = daemonHub
+	var reminderNotifier daemonws.ReminderNotifier = daemonHub
 
 	// MUL-1138: when REDIS_URL is set, route fanout through a Redis relay so
 	// multiple API nodes can deliver each other's events. Without it the hub
@@ -257,13 +258,17 @@ func main() {
 				sharded.SetDaemonRuntimeDeliverer(daemonHub)
 				legacy := realtime.NewRedisRelayWithClients(hub, relayWriteRedis, legacyReadRedis)
 				relay = realtime.NewMirroredRelay(sharded, legacy)
-				daemonWakeup = daemonws.NewRelayNotifier(daemonHub, sharded)
+				relayNotifier := daemonws.NewRelayNotifier(daemonHub, sharded)
+				daemonWakeup = relayNotifier
+				reminderNotifier = relayNotifier
 			default:
 				relayReadRedis = newNamedRedisClient(opts, "realtime-read")
 				sharded := realtime.NewShardedStreamRelay(hub, relayWriteRedis, relayReadRedis, relayConfig)
 				sharded.SetDaemonRuntimeDeliverer(daemonHub)
 				relay = sharded
-				daemonWakeup = daemonws.NewRelayNotifier(daemonHub, sharded)
+				relayNotifier := daemonws.NewRelayNotifier(daemonHub, sharded)
+				daemonWakeup = relayNotifier
+				reminderNotifier = relayNotifier
 			}
 			relay.Start(relayCtx)
 			broadcaster = realtime.NewDualWriteBroadcaster(hub, relay)
@@ -359,6 +364,7 @@ func main() {
 		DaemonWakeup:       daemonWakeup,
 		HeartbeatScheduler: heartbeatScheduler,
 	})
+	h.ReminderNotifier = reminderNotifier
 
 	srv := &http.Server{
 		Addr:    ":" + port,
@@ -451,8 +457,13 @@ func main() {
 	} else {
 		schedulerRegistered = true
 	}
-	if err := schedulerMgr.Register(scheduler.AgentReminderFireJob(h, pool)); err != nil {
-		slog.Warn("scheduler: failed to register agent reminder job", "error", err)
+	if err := schedulerMgr.Register(scheduler.ChannelVoiceTranscriptionJob(h)); err != nil {
+		slog.Warn("scheduler: failed to register channel voice transcription job", "error", err)
+	} else {
+		schedulerRegistered = true
+	}
+	if err := schedulerMgr.Register(scheduler.ChannelVoiceSynthesisJob(h)); err != nil {
+		slog.Warn("scheduler: failed to register channel voice synthesis job", "error", err)
 	} else {
 		schedulerRegistered = true
 	}

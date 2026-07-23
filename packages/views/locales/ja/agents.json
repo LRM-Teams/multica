@@ -194,6 +194,7 @@
   "tabs": {
     "activity": "アクティビティ",
     "profile": "プロフィール",
+    "reminders": "リマインダー",
     "files": "ファイル",
     "tasks": "タスク",
     "instructions": "指示",
@@ -461,12 +462,28 @@
   "visibility": {
     "private": {
       "label": "個人",
-      "tooltip": "個人 · 本人とワークスペースの admin のみがこのエージェントを使用できます"
+      "tooltip": "個人 · 本人と admin のみが発見・招待・@ できます"
+    },
+    "channel": {
+      "label": "仅本群",
+      "tooltip": "仅本群 · バインドしたグループ内のみで発見・招待・@"
     },
     "workspace": {
       "label": "ワークスペース",
-      "tooltip": "ワークスペース · このワークスペースの全員がこのエージェントを使用できます"
+      "tooltip": "ワークスペース · メンバーが発見・招待・@ できます"
     }
+  },
+  "visibility_bind": {
+    "pick_channel": "グループを選択",
+    "search_placeholder": "グループを検索…",
+    "loading": "グループを読み込み中…",
+    "load_failed": "グループを読み込めません",
+    "retry": "再試行",
+    "no_groups": "「仅本群」を使うには、先にグループに参加または作成してください",
+    "no_match": "一致するグループがありません",
+    "home_required": "「仅本群」には home_channel_id のバインドが必要です",
+    "channel_unavailable": "ホームグループを利用できません",
+    "not_channel_permission_hint": "これはエージェント可視性（発見/招待/@）であり、チャンネルサイドバー権限ではありません。他のグループには表示されず、既存の席は維持されます。"
   },
   "profile_card": {
     "unavailable": "エージェントを利用できません",
@@ -550,6 +567,23 @@
     "info_created": "作成日",
     "info_creator": "作成者",
     "info_status": "ステータス"
+  },
+  "reminders": {
+    "upcoming_heading": "予定",
+    "history_heading": "履歴",
+    "empty_all": "リマインダーはまだありません。",
+    "empty_upcoming": "予定されているリマインダーはありません。",
+    "empty_history": "まだ発火したリマインダーはありません。",
+    "loading": "リマインダーを読み込み中…",
+    "error_title": "リマインダーを読み込めませんでした。",
+    "retry": "再試行",
+    "load_more": "もっと読み込む",
+    "inaccessible": "このAgentのリマインダーを表示する権限がありません。",
+    "anchor_unavailable": "アンカーは利用できません",
+    "one_shot": "一回限り",
+    "next_fire_label": "次回",
+    "fired_label": "発火",
+    "timezone_label": "タイムゾーン"
   },
   "task_failure": {
     "agent_error": "エージェント実行エラー",

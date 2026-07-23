@@ -58,11 +58,43 @@ export function memberProfileOptions(
   });
 }
 
-export function agentListOptions(wsId: string) {
+/**
+ * Workspace agent directory. Default excludes archived agents (LRM-409/410) —
+ * Members / Graph / invite·@ / hiring lists treat archived as absent.
+ *
+ * Pass `includeArchived: true` only for explicit archive manage/restore
+ * surfaces (Agents page Archived tab). That uses a separate cache key so it
+ * cannot leak into the default directory key shared by list pickers.
+ *
+ * Pass `channelId` for invite/discovery in a group so channel-visibility
+ * agents are scoped to that home channel (LRM-370/399). Keep the bare
+ * workspace key when both opts are omitted — do not collide caches.
+ */
+export function agentListOptions(
+  wsId: string,
+  opts?: { channelId?: string | null; includeArchived?: boolean },
+) {
+  const channelId = opts?.channelId?.trim() || undefined;
+  const includeArchived = !!opts?.includeArchived;
+  const baseKey = workspaceKeys.agents(wsId);
+  const queryKey = channelId
+    ? ([
+        ...baseKey,
+        "channel",
+        channelId,
+        ...(includeArchived ? (["include_archived"] as const) : []),
+      ] as const)
+    : includeArchived
+      ? ([...baseKey, "include_archived"] as const)
+      : baseKey;
   return queryOptions({
-    queryKey: workspaceKeys.agents(wsId),
+    queryKey,
     queryFn: () =>
-      api.listAgents({ workspace_id: wsId, include_archived: true }),
+      api.listAgents({
+        workspace_id: wsId,
+        ...(includeArchived ? { include_archived: true } : {}),
+        ...(channelId ? { channel_id: channelId } : {}),
+      }),
   });
 }
 

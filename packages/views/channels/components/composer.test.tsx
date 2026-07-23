@@ -20,14 +20,14 @@ vi.mock("../../i18n/use-t", () => ({
       composer: {
         voice_start: string;
         voice_stop: string;
-        voice_processing: string;
+        voice_uploading: string;
         voice_blocked: string;
       };
     }) => string) => selector({
       composer: {
         voice_start: "Record voice message",
         voice_stop: "Stop recording",
-        voice_processing: "Processing voice message",
+        voice_uploading: "Uploading voice message",
         voice_blocked: "Finish the current draft first",
       },
     }),
@@ -216,6 +216,7 @@ describe("Composer", () => {
           {...baseProps}
           sendDisabled={false}
           leadingActions={<button type="button" aria-label="Attach">📎</button>}
+          voiceChannelId="thread-1"
           voicePlaybackScope="thread-1"
           onVoiceSend={vi.fn(() => true)}
         />,

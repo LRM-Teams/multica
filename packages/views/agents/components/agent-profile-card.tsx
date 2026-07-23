@@ -150,7 +150,13 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
               }`}
               className="min-w-0 shrink"
             />
-            {!isArchived && <VisibilityBadge value={agent.visibility} compact />}
+            {!isArchived && (
+              <VisibilityBadge
+                value={agent.visibility}
+                homeChannelId={agent.home_channel_id ?? null}
+                compact
+              />
+            )}
           </div>
           {/* LRM-248: archived is muted secondary copy; live presence is avatar badge only. */}
           {isArchived ? (

@@ -73,6 +73,9 @@ func jitterDuration(d time.Duration) time.Duration {
 }
 
 func (d *Daemon) runTaskWakeupConnection(ctx context.Context, runtimeIDs []string, taskWakeups chan<- taskWakeup, runtimeSetCh <-chan struct{}) error {
+	if err := d.reconcileReminderRuntimeSet(runtimeIDs); err != nil {
+		return fmt.Errorf("reconcile reminder runtime set: %w", err)
+	}
 	wsURL, err := taskWakeupURL(d.cfg.ServerBaseURL, runtimeIDs)
 	if err != nil {
 		return err
@@ -119,6 +122,8 @@ func (d *Daemon) runTaskWakeupConnection(ctx context.Context, runtimeIDs []strin
 	writes := make(chan []byte, writeBufSize)
 	writerDone := make(chan struct{})
 	go d.runWSWriter(conn, writes, writerDone)
+	d.setReminderWS(writes, writerDone, conn.Close)
+	d.requestAgentLifecycleReplay()
 
 	heartbeatCtx, cancelHeartbeat := context.WithCancel(ctx)
 	hbDone := make(chan struct{})
@@ -145,6 +150,7 @@ func (d *Daemon) runTaskWakeupConnection(ctx context.Context, runtimeIDs []strin
 	defer func() {
 		cancelHeartbeat()
 		<-hbDone
+		d.clearReminderWS(writes)
 		close(writes)
 		<-writerDone
 	}()
@@ -157,6 +163,42 @@ func (d *Daemon) runTaskWakeupConnection(ctx context.Context, runtimeIDs []strin
 	case err := <-errCh:
 		return err
 	}
+}
+
+func (d *Daemon) reconcileReminderRuntimeSet(runtimeIDs []string) error {
+	allowed := make(map[string]bool, len(runtimeIDs))
+	for _, runtimeID := range runtimeIDs {
+		if runtimeID != "" {
+			allowed[runtimeID] = true
+		}
+	}
+	if d.reminderCache != nil {
+		d.reminderCache.suspend()
+	}
+	managerChanged := false
+	if d.reminderAgents != nil {
+		var err error
+		managerChanged, err = d.reminderAgents.reconcileRuntimeSet(allowed)
+		if err != nil {
+			return err
+		}
+	}
+	cacheChanged := false
+	if d.reminderCache != nil {
+		retiredOwners := []string(nil)
+		if d.reminderAgents != nil {
+			retiredOwners = d.reminderAgents.retiredAgentIDs()
+		}
+		var err error
+		cacheChanged, err = d.reminderCache.reconcileRuntimeSet(allowed, retiredOwners)
+		if err != nil {
+			return err
+		}
+		if !managerChanged && !cacheChanged {
+			d.reminderCache.resume()
+		}
+	}
+	return nil
 }
 
 // runWSWriter funnels writes from the heartbeat sender (and any future
@@ -230,6 +272,7 @@ func (d *Daemon) sendWSHeartbeats(ctx context.Context, runtimeIDs []string, writ
 			d.logger.Debug("ws heartbeat dropped: writer backlog", "runtime_id", rid)
 		}
 	}
+	d.requestAgentLifecycleReplay()
 }
 
 func marshalRaw(v any) json.RawMessage {
@@ -302,6 +345,71 @@ func (d *Daemon) readTaskWakeupMessages(conn *websocket.Conn, taskWakeups chan<-
 				continue
 			}
 			d.handleWSHeartbeatAck(context.Background(), &ack)
+		case protocol.EventReminderProjection:
+			var payload protocol.ReminderProjectionEvent
+			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+				d.logger.Debug("reminder projection invalid payload", "error", err)
+				continue
+			}
+			if err := d.handleReminderProjection(payload); err != nil {
+				return err
+			}
+		case protocol.EventReminderFireResult:
+			var payload protocol.ReminderFireResultPayload
+			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+				d.logger.Debug("reminder fire result invalid payload", "error", err)
+				continue
+			}
+			if err := d.handleReminderProjection(payload.Projection); err != nil {
+				return err
+			}
+		case protocol.EventReminderSnapshot:
+			var payload protocol.ReminderSnapshotPayload
+			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+				d.logger.Debug("reminder snapshot invalid payload", "error", err)
+				continue
+			}
+			if err := d.handleReminderSnapshot(payload); err != nil {
+				return err
+			}
+		case protocol.EventDaemonAgentStop:
+			var payload protocol.DaemonAgentStopPayload
+			if err := json.Unmarshal(msg.Payload, &payload); err != nil || strings.TrimSpace(payload.AgentID) == "" {
+				d.logger.Debug("daemon agent stop invalid payload", "error", err)
+				continue
+			}
+			if err := d.handleDaemonAgentStop(payload); err != nil {
+				d.logger.Warn("persist daemon agent stop failed; reconnecting", "error", err, "agent_id", payload.AgentID)
+				return err
+			}
+		case protocol.EventDaemonAgentStart:
+			var payload protocol.DaemonAgentStartPayload
+			if err := json.Unmarshal(msg.Payload, &payload); err != nil || strings.TrimSpace(payload.AgentID) == "" || strings.TrimSpace(payload.RuntimeID) == "" || strings.TrimSpace(payload.WorkspaceID) == "" {
+				d.logger.Debug("daemon agent start invalid payload", "error", err)
+				continue
+			}
+			if err := d.handleDaemonAgentStart(payload); err != nil {
+				d.logger.Warn("persist daemon agent start failed; reconnecting", "error", err, "agent_id", payload.AgentID)
+				return err
+			}
+		case protocol.EventDaemonAgentLifecycleEnd:
+			var payload protocol.DaemonAgentLifecycleReplayEndPayload
+			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+				d.logger.Debug("daemon agent lifecycle replay end invalid payload", "error", err)
+				continue
+			}
+			if err := d.handleDaemonAgentLifecycleReplayEnd(payload); err != nil {
+				d.logger.Warn("persist daemon lifecycle cursor failed; reconnecting", "error", err)
+				return err
+			}
+		case protocol.EventReminderProjectionEnd:
+			var payload protocol.ReminderProjectionReplayEndPayload
+			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+				return err
+			}
+			if err := d.handleReminderProjectionReplayEnd(payload); err != nil {
+				return err
+			}
 		case protocol.EventDaemonListFilesRequest:
 			var req protocol.ListWorkdirFilesRequestPayload
 			if err := json.Unmarshal(msg.Payload, &req); err != nil {
@@ -332,6 +440,511 @@ func (d *Daemon) readTaskWakeupMessages(conn *websocket.Conn, taskWakeups chan<-
 			d.handleSeedAgentContextRequest(req, writes)
 		}
 	}
+}
+
+func (d *Daemon) handleReminderSnapshot(payload protocol.ReminderSnapshotPayload) error {
+	if d == nil || d.reminderAgents == nil {
+		return nil
+	}
+	owner, ok := d.reminderAgents.get(payload.AgentID)
+	if !ok || owner.RuntimeID != payload.RuntimeID || owner.PlacementGeneration != payload.PlacementGeneration {
+		if d.logger != nil {
+			d.logger.Warn("reminder snapshot rejected unknown local owner", "agent_id", payload.AgentID)
+		}
+		return nil
+	}
+	if d.reminderCache != nil {
+		if _, err := d.reminderCache.snapshot(payload.RuntimeID, payload.AgentID, payload.ProjectionWatermark, payload.Reminders); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (d *Daemon) handleReminderProjection(payload protocol.ReminderProjectionEvent) error {
+	if d == nil || d.reminderCache == nil || d.reminderAgents == nil {
+		return nil
+	}
+	owner, ok := d.reminderAgents.get(payload.AgentID)
+	if !ok || owner.RuntimeID != payload.RuntimeID || owner.PlacementGeneration != payload.PlacementGeneration {
+		if err := d.reminderCache.advanceProjectionCursor(payload.RuntimeID, payload.PrevSeq, payload.Seq); err != nil {
+			if errors.Is(err, errReminderProjectionGap) {
+				d.requestReminderProjectionReplay()
+				return nil
+			}
+			return err
+		}
+		d.reminderGateMu.Lock()
+		replaying := d.reminderProjectionReplayInFlight
+		d.reminderGateMu.Unlock()
+		if replaying {
+			return nil
+		}
+		return d.ackReminderProjectionCursors(d.reminderCache.projectionCursors())
+	}
+	if _, err := d.reminderCache.applyProjection(payload); err != nil {
+		if errors.Is(err, errReminderProjectionGap) {
+			d.requestReminderProjectionReplay()
+			return nil
+		}
+		return err
+	}
+	d.reminderGateMu.Lock()
+	replaying := d.reminderProjectionReplayInFlight
+	d.reminderGateMu.Unlock()
+	if replaying {
+		return nil
+	}
+	return d.ackReminderProjectionCursors(d.reminderCache.projectionCursors())
+}
+
+func (d *Daemon) handleDaemonAgentStop(payload protocol.DaemonAgentStopPayload) error {
+	if d == nil || strings.TrimSpace(payload.AgentID) == "" || strings.TrimSpace(payload.RuntimeID) == "" || payload.PlacementGeneration < 1 {
+		return nil
+	}
+	return d.removeReminderAgent(payload.AgentID, payload.RuntimeID, payload.PlacementGeneration)
+}
+
+func (d *Daemon) handleDaemonAgentStart(payload protocol.DaemonAgentStartPayload) error {
+	if d == nil || d.reminderAgents == nil || !d.workspaceReminderCapabilityEnabled(payload.WorkspaceID) {
+		return nil
+	}
+	d.mu.Lock()
+	_, runtimeKnown := d.runtimeIndex[payload.RuntimeID]
+	d.mu.Unlock()
+	if !runtimeKnown {
+		d.logger.Warn("daemon agent start rejected unknown local runtime", "agent_id", payload.AgentID, "runtime_id", payload.RuntimeID)
+		return nil
+	}
+	changed, accepted, err := d.reminderAgents.applyStart(payload.AgentID, payload.RuntimeID, payload.WorkspaceID, payload.PlacementGeneration)
+	if err != nil {
+		return err
+	}
+	if accepted && changed && !payload.Replay {
+		d.requestReminderSnapshot(payload.AgentID)
+	} else if accepted && changed {
+		d.reminderGateMu.Lock()
+		if d.reminderPendingSnapshots == nil {
+			d.reminderPendingSnapshots = make(map[string]struct{})
+		}
+		d.reminderPendingSnapshots[payload.AgentID] = struct{}{}
+		d.reminderGateMu.Unlock()
+	}
+	return nil
+}
+
+func (d *Daemon) handleDaemonAgentLifecycleReplayEnd(payload protocol.DaemonAgentLifecycleReplayEndPayload) error {
+	if d == nil || d.reminderAgents == nil {
+		return nil
+	}
+	d.mu.Lock()
+	for runtimeID := range payload.RuntimeCursors {
+		if _, ok := d.runtimeIndex[runtimeID]; !ok {
+			d.mu.Unlock()
+			return fmt.Errorf("agent lifecycle replay runtime outside current daemon set %s", runtimeID)
+		}
+	}
+	d.mu.Unlock()
+	if err := d.reminderAgents.advanceLifecycleCursors(payload.RuntimeCursors); err != nil {
+		return err
+	}
+	if !d.queueReminderFrame(protocol.EventDaemonAgentLifecycleAck, protocol.DaemonAgentLifecycleAckPayload{RuntimeCursors: payload.RuntimeCursors}) {
+		return errors.New("queue reminder lifecycle ack")
+	}
+	if !d.startReminderProjectionReplay() {
+		return errors.New("queue reminder projection replay")
+	}
+	d.reminderGateMu.Lock()
+	d.reminderLifecycleReplayInFlight = false
+	d.reminderGateMu.Unlock()
+	return nil
+}
+
+func (d *Daemon) setReminderWS(writes chan<- []byte, done <-chan struct{}, closeFn func() error) {
+	d.reminderWSMu.Lock()
+	d.reminderWrites = writes
+	d.reminderWSDone = done
+	d.reminderClose = closeFn
+	d.reminderWSMu.Unlock()
+	d.reminderGateMu.Lock()
+	d.reminderLifecycleReplayInFlight = false
+	d.reminderReplayComplete = false
+	d.reminderProjectionReplayInFlight = false
+	d.reminderProjectionReplayPending = false
+	if d.reminderPendingSnapshots == nil {
+		d.reminderPendingSnapshots = make(map[string]struct{})
+	}
+	d.reminderGateMu.Unlock()
+	if d.reminderCache != nil {
+		d.reminderCache.beginConnection()
+	}
+}
+
+func (d *Daemon) clearReminderWS(writes chan<- []byte) {
+	d.reminderWSMu.Lock()
+	if d.reminderWrites == writes {
+		d.reminderWrites = nil
+		d.reminderWSDone = nil
+		d.reminderClose = nil
+	}
+	d.reminderWSMu.Unlock()
+	d.reminderGateMu.Lock()
+	d.reminderLifecycleReplayInFlight = false
+	d.reminderReplayComplete = false
+	d.reminderProjectionReplayInFlight = false
+	d.reminderProjectionReplayPending = false
+	d.reminderGateMu.Unlock()
+}
+
+func (d *Daemon) queueReminderFrame(eventType string, payload any) bool {
+	frame, err := json.Marshal(protocol.Message{Type: eventType, Payload: marshalRaw(payload)})
+	if err != nil {
+		d.logger.Warn("reminder websocket marshal failed", "type", eventType, "error", err)
+		return false
+	}
+	d.reminderWSMu.RLock()
+	defer d.reminderWSMu.RUnlock()
+	if d.reminderWrites == nil {
+		return false
+	}
+	select {
+	case d.reminderWrites <- frame:
+		return true
+	case <-d.reminderWSDone:
+		return false
+	default:
+		if d.reminderClose != nil {
+			go d.reminderClose()
+		}
+		d.logger.Warn("reminder websocket writer backlog; reconnecting for snapshot recovery", "type", eventType)
+		return false
+	}
+}
+
+func (d *Daemon) requestReminderSnapshot(agentID string) {
+	if strings.TrimSpace(agentID) == "" || !d.reminderCapabilityEnabled() {
+		return
+	}
+	owner, ok := d.reminderAgents.get(agentID)
+	if !ok {
+		return
+	}
+	d.reminderGateMu.Lock()
+	if !d.reminderReplayComplete || d.reminderLifecycleReplayInFlight || d.reminderProjectionReplayInFlight {
+		if d.reminderPendingSnapshots == nil {
+			d.reminderPendingSnapshots = make(map[string]struct{})
+		}
+		d.reminderPendingSnapshots[agentID] = struct{}{}
+		d.reminderGateMu.Unlock()
+		return
+	}
+	d.reminderGateMu.Unlock()
+	d.requestReminderSnapshotNow(agentID, owner)
+}
+
+func (d *Daemon) requestReminderSnapshotNow(agentID string, owner reminderAgentResidency) bool {
+	d.mu.Lock()
+	_, authorized := d.runtimeIndex[owner.RuntimeID]
+	d.mu.Unlock()
+	if !authorized {
+		return false
+	}
+	return d.queueReminderFrame(protocol.EventReminderSnapshotRequest, protocol.ReminderSnapshotRequestPayload{
+		AgentID: agentID, RuntimeID: owner.RuntimeID, PlacementGeneration: owner.PlacementGeneration,
+	})
+}
+
+func (d *Daemon) requestAgentLifecycleReplay() bool {
+	if !d.reminderCapabilityEnabled() {
+		return true
+	}
+	d.reminderGateMu.Lock()
+	if d.reminderLifecycleReplayInFlight || d.reminderProjectionReplayInFlight {
+		d.reminderGateMu.Unlock()
+		return true
+	}
+	d.reminderLifecycleReplayInFlight = true
+	d.reminderGateMu.Unlock()
+	storedCursors := map[string]int64{}
+	if d.reminderAgents != nil {
+		storedCursors = d.reminderAgents.lifecycleCursors()
+	}
+	cursors := map[string]int64{}
+	d.mu.Lock()
+	for runtimeID := range d.runtimeIndex {
+		cursors[runtimeID] = storedCursors[runtimeID]
+	}
+	d.mu.Unlock()
+	if !d.queueReminderFrame(protocol.EventDaemonAgentLifecycleReq, protocol.DaemonAgentLifecycleRequestPayload{RuntimeCursors: cursors}) {
+		d.reminderGateMu.Lock()
+		d.reminderLifecycleReplayInFlight = false
+		d.reminderGateMu.Unlock()
+		return false
+	}
+	return true
+}
+
+func (d *Daemon) requestReminderSnapshots() {
+	if d.reminderAgents == nil || !d.reminderCapabilityEnabled() {
+		return
+	}
+	for _, agentID := range d.reminderAgents.residentAgentIDs() {
+		d.requestReminderSnapshot(agentID)
+	}
+}
+
+func (d *Daemon) startReminderProjectionReplay() bool {
+	d.reminderGateMu.Lock()
+	if d.reminderProjectionReplayInFlight {
+		d.reminderGateMu.Unlock()
+		return true
+	}
+	d.reminderProjectionReplayInFlight = true
+	d.reminderGateMu.Unlock()
+	runtimeIDs := make([]string, 0)
+	residencies := map[string][]protocol.ReminderRuntimeResidency{}
+	if d.reminderAgents != nil {
+		storedResidencies := d.reminderAgents.runtimeResidencies()
+		d.mu.Lock()
+		for runtimeID := range d.runtimeIndex {
+			if owners := storedResidencies[runtimeID]; len(owners) > 0 {
+				residencies[runtimeID] = owners
+			}
+		}
+		d.mu.Unlock()
+	}
+	d.mu.Lock()
+	for runtimeID := range d.runtimeIndex {
+		runtimeIDs = append(runtimeIDs, runtimeID)
+	}
+	d.mu.Unlock()
+	sort.Strings(runtimeIDs)
+	cursors := make(map[string]int64, len(runtimeIDs))
+	for _, runtimeID := range runtimeIDs {
+		cursors[runtimeID] = 0
+	}
+	resetRequired := make(map[string]bool)
+	if d.reminderCache != nil {
+		var err error
+		cursors, resetRequired, err = d.reminderCache.projectionReplayState(runtimeIDs)
+		if err != nil {
+			d.reminderGateMu.Lock()
+			d.reminderProjectionReplayInFlight = false
+			d.reminderGateMu.Unlock()
+			if d.logger != nil {
+				d.logger.Warn("persist reminder recovery request failed", "error", err)
+			}
+			return false
+		}
+	}
+	if !d.queueReminderFrame(protocol.EventReminderProjectionReq, protocol.ReminderProjectionRequestPayload{
+		RuntimeCursors: cursors, RuntimeResidencies: residencies, RuntimeResetRequired: resetRequired,
+	}) {
+		d.reminderGateMu.Lock()
+		d.reminderProjectionReplayInFlight = false
+		d.reminderGateMu.Unlock()
+		return false
+	}
+	return true
+}
+
+func (d *Daemon) requestReminderProjectionReplay() {
+	if d.reminderCache != nil {
+		d.reminderCache.suspend()
+	}
+	d.reminderGateMu.Lock()
+	ready := d.reminderReplayComplete && !d.reminderLifecycleReplayInFlight && !d.reminderProjectionReplayInFlight
+	d.reminderReplayComplete = false
+	if !ready {
+		d.reminderProjectionReplayPending = true
+		d.reminderGateMu.Unlock()
+		return
+	}
+	d.reminderGateMu.Unlock()
+	if !d.startReminderProjectionReplay() {
+		d.reminderGateMu.Lock()
+		d.reminderProjectionReplayPending = true
+		d.reminderGateMu.Unlock()
+	}
+}
+
+func (d *Daemon) ackReminderProjectionCursors(cursors map[string]int64) error {
+	filtered := make(map[string]int64)
+	d.mu.Lock()
+	for runtimeID := range d.runtimeIndex {
+		filtered[runtimeID] = cursors[runtimeID]
+	}
+	d.mu.Unlock()
+	if !d.queueReminderFrame(protocol.EventReminderProjectionAck, protocol.ReminderProjectionAckPayload{RuntimeCursors: filtered}) {
+		return errors.New("queue reminder projection ack")
+	}
+	return nil
+}
+
+func (d *Daemon) handleReminderProjectionReplayEnd(payload protocol.ReminderProjectionReplayEndPayload) error {
+	if d.reminderCache == nil {
+		return nil
+	}
+	localResidencies := d.reminderAgents.runtimeResidencies()
+	d.mu.Lock()
+	for runtimeID := range payload.RuntimeCursors {
+		if _, ok := d.runtimeIndex[runtimeID]; !ok {
+			d.mu.Unlock()
+			return fmt.Errorf("reminder projection runtime outside current daemon set %s", runtimeID)
+		}
+	}
+	for runtimeID := range localResidencies {
+		if _, ok := d.runtimeIndex[runtimeID]; !ok {
+			delete(localResidencies, runtimeID)
+		}
+	}
+	d.mu.Unlock()
+	for runtimeID := range d.reminderCache.requiredRuntimeResets() {
+		if _, ok := payload.RuntimeResets[runtimeID]; !ok {
+			return fmt.Errorf("reminder runtime reset required but omitted %s", runtimeID)
+		}
+	}
+	for runtimeID, reset := range payload.RuntimeResets {
+		end, ok := payload.RuntimeCursors[runtimeID]
+		if !ok || end != reset.ProjectionWatermark {
+			return fmt.Errorf("invalid reminder runtime reset watermark %s", runtimeID)
+		}
+		local := make(map[string]int64, len(localResidencies[runtimeID]))
+		for _, owner := range localResidencies[runtimeID] {
+			local[owner.AgentID] = owner.PlacementGeneration
+		}
+		if len(reset.Owners) != len(local) {
+			return fmt.Errorf("reminder runtime reset owner set mismatch %s", runtimeID)
+		}
+		for _, owner := range reset.Owners {
+			generation, exists := local[owner.AgentID]
+			if !exists || (!owner.Terminal && owner.PlacementGeneration != generation) || (owner.Terminal && owner.PlacementGeneration < generation) {
+				return fmt.Errorf("reminder runtime reset owner mismatch %s:%s", runtimeID, owner.AgentID)
+			}
+			delete(local, owner.AgentID)
+		}
+		if len(local) != 0 {
+			return fmt.Errorf("reminder runtime reset omitted local owners %s", runtimeID)
+		}
+		if err := d.reminderCache.markRuntimeReset(runtimeID); err != nil {
+			return err
+		}
+		if err := d.reminderCache.resetRuntime(runtimeID, reset); err != nil {
+			return err
+		}
+		for _, owner := range reset.Owners {
+			if !owner.Terminal {
+				continue
+			}
+			if _, _, err := d.reminderAgents.applyStop(owner.AgentID, runtimeID, owner.PlacementGeneration); err != nil {
+				return err
+			}
+		}
+	}
+	cursors := d.reminderCache.projectionCursors()
+	for runtimeID, end := range payload.RuntimeCursors {
+		if cursors[runtimeID] < end {
+			return fmt.Errorf("reminder projection replay ended before cursor %s:%d", runtimeID, end)
+		}
+	}
+	d.reminderGateMu.Lock()
+	if d.reminderProjectionReplayPending {
+		d.reminderProjectionReplayPending = false
+		d.reminderProjectionReplayInFlight = false
+		d.reminderGateMu.Unlock()
+		if !d.startReminderProjectionReplay() {
+			return errors.New("queue successor reminder projection replay")
+		}
+		return nil
+	}
+	d.reminderGateMu.Unlock()
+	if err := d.ackReminderProjectionCursors(cursors); err != nil {
+		return err
+	}
+	d.reminderGateMu.Lock()
+	initialReplay := !d.reminderReplayComplete
+	d.reminderProjectionReplayInFlight = false
+	d.reminderReplayComplete = true
+	if d.reminderPendingSnapshots == nil {
+		d.reminderPendingSnapshots = make(map[string]struct{})
+	}
+	if initialReplay {
+		for _, agentID := range d.reminderAgents.residentAgentIDs() {
+			owner, ok := d.reminderAgents.get(agentID)
+			if !ok {
+				continue
+			}
+			d.mu.Lock()
+			_, authorized := d.runtimeIndex[owner.RuntimeID]
+			d.mu.Unlock()
+			if authorized {
+				d.reminderPendingSnapshots[agentID] = struct{}{}
+			}
+		}
+	}
+	ids := make([]string, 0, len(d.reminderPendingSnapshots))
+	for agentID := range d.reminderPendingSnapshots {
+		ids = append(ids, agentID)
+	}
+	d.reminderGateMu.Unlock()
+	d.reminderCache.resume()
+	sort.Strings(ids)
+	for _, agentID := range ids {
+		owner, ok := d.reminderAgents.get(agentID)
+		if !ok {
+			continue
+		}
+		if !d.requestReminderSnapshotNow(agentID, owner) {
+			return errors.New("queue reminder snapshot after replay")
+		}
+		d.reminderGateMu.Lock()
+		delete(d.reminderPendingSnapshots, agentID)
+		d.reminderGateMu.Unlock()
+	}
+	return nil
+}
+
+func (d *Daemon) onReminderTimer(job protocol.ReminderTimerJob) {
+	owner, ok := d.reminderAgents.get(job.OwnerAgentID)
+	if !ok {
+		return
+	}
+	d.queueReminderFrame(protocol.EventReminderFireAttempt, protocol.ReminderFireAttemptPayload{
+		AgentID:             job.OwnerAgentID,
+		RuntimeID:           owner.RuntimeID,
+		PlacementGeneration: owner.PlacementGeneration,
+		ReminderID:          job.ReminderID,
+		Version:             job.Version,
+		FiredAtClient:       time.Now().UTC().Format(time.RFC3339Nano),
+	})
+}
+
+func (d *Daemon) reminderCapabilityEnabled() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, ws := range d.workspaces {
+		for _, capability := range ws.serverCapabilities {
+			if capability == protocol.DaemonCapabilityReminderVersionedCache {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (d *Daemon) workspaceReminderCapabilityEnabled(workspaceID string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	ws := d.workspaces[workspaceID]
+	if ws == nil {
+		return false
+	}
+	for _, capability := range ws.serverCapabilities {
+		if capability == protocol.DaemonCapabilityReminderVersionedCache {
+			return true
+		}
+	}
+	return false
 }
 
 func signalTaskWakeup(taskWakeups chan<- taskWakeup, runtimeID string) {

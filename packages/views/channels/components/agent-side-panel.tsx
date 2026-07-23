@@ -1,7 +1,7 @@
 "use client";
 
 import { type ReactNode, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Activity, FileText, User } from "lucide-react";
+import { Activity, Bell, FileText, User } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useConfigStore } from "@multica/core/config";
 import type { Agent, DashboardUsageByAgent, MemberWithUser } from "@multica/core/types";
@@ -14,6 +14,7 @@ import { useCustomPricingStore } from "@multica/core/runtimes/custom-pricing-sto
 import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
 import { cn } from "@multica/ui/lib/utils";
 import { ActivityTab } from "../../agents/components/tabs/activity-tab";
+import { RemindersTab } from "../../agents/components/tabs/reminders-tab";
 import { AgentXpBurst } from "../../agents/components/agent-xp-burst";
 import { ModelPicker } from "../../agents/components/inspector/model-picker";
 import { RuntimePicker } from "../../agents/components/inspector/runtime-picker";
@@ -31,11 +32,12 @@ import { AgentFilesPanel } from "./agent-files-panel";
 import { useT } from "../../i18n/use-t";
 import { estimateCost, formatTokens, isModelPriced } from "../../runtimes/utils";
 
-type OwnerTab = "activity" | "profile" | "files";
+type OwnerTab = "activity" | "profile" | "reminders" | "files";
 
 const TAB_ICONS: Record<OwnerTab, typeof Activity> = {
   profile: User,
   activity: Activity,
+  reminders: Bell,
   files: FileText,
 };
 
@@ -93,6 +95,12 @@ export function AgentSidePanel({
     (isWorkspaceMember && isGroupManager);
   const availableTabs: OwnerTab[] = ["profile"];
   if (canViewActivity) availableTabs.push("activity");
+  // #656 — same read-only visibility boundary as Activity per the V2 spec:
+  // workspace members may view Reminders for workspace-visible Agents;
+  // private Agents stay owner/authorized-inspector only. Always rendered as
+  // a direct tab alongside the others (this panel has no "More" overflow
+  // menu to hide it in) — Frank's explicit requirement.
+  if (canViewActivity) availableTabs.push("reminders");
   if (canInspectAgent) availableTabs.push("files");
   const showTabBar = availableTabs.length > 1;
   const [tab, setTab] = useState<OwnerTab>("profile");
@@ -209,6 +217,11 @@ export function AgentSidePanel({
                 />
               </div>
             ) : null}
+            {renderTab("reminders") && canViewActivity ? (
+              <div className={tab === "reminders" ? undefined : "hidden"}>
+                <RemindersTab agent={agent} />
+              </div>
+            ) : null}
             {renderTab("files") && canInspectAgent ? (
               <div className={tab === "files" ? undefined : "hidden"}>
                 <AgentFilesPanel
@@ -259,13 +272,14 @@ function formatDate(value: string): string {
  * pickers are editable when `canEditRuntime` is true. For a per-group manager
  * (Beckham) that is ALWAYS true — group managers are shared team
  * infrastructure and the backend `canUpdateAgent` gate lets any member edit
- * these five runtime fields (identity + lifecycle via `canManageAgent` stays
- * owner/admin only). This preserves the old Config-tab behavior. For every other agent it
- * falls back to `useAgentPermissions(agent).canEdit.allowed`, i.e. owner /
- * workspace-admin only — so an ordinary non-owner viewer keeps a READ-ONLY
- * Profile (the inspector pickers self-render static when `canEdit=false`).
- * Identity fields stay read-only for everyone here (name/description/
- * instructions editing lives on the owner/admin-gated detail page).
+ * these runtime fields including Visibility (LRM-387: Frank — must stay
+ * editable; identity + lifecycle via `canManageAgent` stays owner/admin
+ * only). For every other agent it falls back to
+ * `useAgentPermissions(agent).canEdit.allowed`, i.e. owner / workspace-admin
+ * only — so an ordinary non-owner viewer keeps a READ-ONLY Profile (the
+ * inspector pickers self-render static when `canEdit=false`). Identity
+ * fields stay read-only for everyone here (name/description/instructions
+ * editing lives on the owner/admin-gated detail page).
  */
 function AgentProfileTabContent({
   agent,
@@ -300,77 +314,82 @@ function AgentProfileTabContent({
     // min-w-0 so nothing inside can force the panel wider than its column —
     // the docked panel is 360-440px on desktop and a ~90vw / full-width sheet
     // on mobile (breakpoint 768). Every leaf below truncates instead.
-    <div className="flex min-w-0 flex-col">
-      {/* Identity (read-only): who / what this agent is. Tighter horizontal
-          padding under md (mobile) to give the values more room at 375px. */}
-      <div className="border-b p-3 md:p-4">
+    //
+    // LRM-360 dividers: only Tabs bottom (in the shell above) + one line
+    // between the human block (bio / created / owner / memory) and the system
+    // block (Usage + Runtime). No per-section border-b; Usage↔Runtime is gap.
+    <div className="flex min-w-0 flex-col" data-testid="agent-profile-tab-content">
+      <div className="space-y-3 border-b p-3 md:p-4">
         <p className="text-xs leading-5 text-foreground/85">
           {agent.description || t(($) => $.side_panel.no_description)}
         </p>
-      </div>
-      <div className="space-y-2 border-b p-3 text-xs md:p-4">
-        <InfoRow label={t(($) => $.side_panel.created_label)} value={formatDate(agent.created_at)} />
-        <InfoRow label={t(($) => $.side_panel.owner_label)} value={ownerName(agent, members)} />
-      </div>
-
-      {/* LRM-304: Slack Memory growth field — only when LRM-303 returns data. */}
-      {agent.memory_growth ? (
-        <div className="border-b p-3 md:p-4">
-          <MemoryGrowthField growth={agent.memory_growth} />
+        <div className="space-y-2 text-xs">
+          <InfoRow label={t(($) => $.side_panel.created_label)} value={formatDate(agent.created_at)} />
+          <InfoRow label={t(($) => $.side_panel.owner_label)} value={ownerName(agent, members)} />
         </div>
-      ) : null}
+        {/* LRM-304: Slack Memory growth field — only when LRM-303 returns data. */}
+        {agent.memory_growth ? <MemoryGrowthField growth={agent.memory_growth} /> : null}
+      </div>
 
-      <AgentUsageSection agent={agent} />
+      <div className="space-y-3.5 p-3 md:p-4">
+        <AgentUsageSection agent={agent} />
 
-      {/* Runtime config (editable/gated): the execution attributes the old
-          standalone Config tab exposed, merged here so Profile no longer shows
-          them read-only while a separate tab edited them. */}
-      <ConfigSection label={t(($) => $.side_panel.runtime_section)}>
-        <PropRow label={t(($) => $.inspector.prop_runtime)} interactive={false}>
-          {/* flex-wrap so the version-outdated (过期) badge drops below the
-              runtime chip instead of being squeezed off at 375px — it must
-              stay visible per Barry's mobile check. */}
-          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-            <RuntimePicker
-              value={agent.runtime_id}
-              runtimes={runtimes}
-              members={[...members]}
-              currentUserId={currentUserId}
+        {/* Runtime config (editable/gated): the execution attributes the old
+            standalone Config tab exposed, merged here so Profile no longer shows
+            them read-only while a separate tab edited them. */}
+        <ConfigSection label={t(($) => $.side_panel.runtime_section)}>
+          <PropRow label={t(($) => $.inspector.prop_runtime)} interactive={false}>
+            {/* flex-wrap so the version-outdated (过期) badge drops below the
+                runtime chip instead of being squeezed off at 375px — it must
+                stay visible per Barry's mobile check. */}
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+              <RuntimePicker
+                value={agent.runtime_id}
+                runtimes={runtimes}
+                members={[...members]}
+                currentUserId={currentUserId}
+                canEdit={canEditRuntime}
+                onChange={(id) => update({ runtime_id: id })}
+              />
+              {runtimeUpdateHealth !== "ok" && (
+                <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                  {runtimeHealthLabel(runtimeUpdateHealth)}
+                </span>
+              )}
+            </div>
+          </PropRow>
+          <PropRow label={t(($) => $.inspector.prop_model)} interactive={false}>
+            <ModelPicker
+              runtimeId={agent.runtime_id}
+              runtimeOnline={!!isOnline}
+              value={agent.model ?? ""}
               canEdit={canEditRuntime}
-              onChange={(id) => update({ runtime_id: id })}
+              onChange={(m) => update({ model: m })}
             />
-            {runtimeUpdateHealth !== "ok" && (
-              <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                {runtimeHealthLabel(runtimeUpdateHealth)}
-              </span>
-            )}
-          </div>
-        </PropRow>
-        <PropRow label={t(($) => $.inspector.prop_model)} interactive={false}>
-          <ModelPicker
+          </PropRow>
+          <ThinkingPropRow
             runtimeId={agent.runtime_id}
             runtimeOnline={!!isOnline}
-            value={agent.model ?? ""}
+            model={agent.model ?? ""}
+            value={agent.thinking_level ?? ""}
             canEdit={canEditRuntime}
-            onChange={(m) => update({ model: m })}
+            onChange={(v) => update({ thinking_level: v })}
           />
-        </PropRow>
-        <ThinkingPropRow
-          runtimeId={agent.runtime_id}
-          runtimeOnline={!!isOnline}
-          model={agent.model ?? ""}
-          value={agent.thinking_level ?? ""}
-          canEdit={canEditRuntime}
-          onChange={(v) => update({ thinking_level: v })}
-        />
-        <PropRow label={t(($) => $.inspector.prop_visibility)} interactive={false}>
-          <VisibilityPicker
-            value={agent.visibility}
-            canEdit={canEditRuntime}
-            onChange={(v) => update({ visibility: v })}
-          />
-        </PropRow>
-      </ConfigSection>
+          <PropRow label={t(($) => $.inspector.prop_visibility)} interactive={false}>
+            <VisibilityPicker
+              value={agent.visibility}
+              homeChannelId={agent.home_channel_id ?? null}
+              canEdit={canEditRuntime}
+              onChange={(next) =>
+                update({
+                  visibility: next.visibility,
+                  home_channel_id: next.home_channel_id,
+                })
+              }
+            />
+          </PropRow>
+        </ConfigSection>
+      </div>
     </div>
   );
 }
@@ -404,23 +423,22 @@ function AgentUsageSection({ agent }: { agent: Agent }) {
   const canEstimateCost = usage.every((row) => isModelPriced(row.model));
 
   return (
-    <section className="border-b px-3 py-4 md:px-4" aria-label={t(($) => $.side_panel.usage_section)}>
-      <div className="mb-3">
-        <h3 className="text-sm font-medium text-foreground">{t(($) => $.side_panel.usage_section)}</h3>
-        <p className="mt-0.5 text-xs text-muted-foreground">
-          {t(($) => $.side_panel.usage_reported_window)}
-        </p>
-      </div>
+    <section aria-label={t(($) => $.side_panel.usage_section)}>
+      {/* LRM-360: secondary section title + optional window on one muted line. */}
+      <h3 className="mb-2 text-xs font-medium text-muted-foreground">
+        {t(($) => $.side_panel.usage_section)}
+        <span> · {t(($) => $.side_panel.usage_reported_window)}</span>
+      </h3>
 
       {isLoading ? (
         <p className="text-xs text-muted-foreground">{t(($) => $.side_panel.usage_loading)}</p>
       ) : usage.length === 0 ? (
         <p className="text-xs text-muted-foreground">{t(($) => $.side_panel.usage_empty)}</p>
       ) : (
-        <div className="space-y-2 text-xs">
+        <div className="space-y-1.5 text-xs">
           <div className="flex items-baseline justify-between gap-3">
             <span className="text-muted-foreground">{t(($) => $.side_panel.usage_estimated_cost)}</span>
-            <span className="text-base font-semibold tabular-nums text-foreground">
+            <span className="text-sm tabular-nums text-foreground">
               {canEstimateCost
                 ? usdFormatter.format(cost)
                 : t(($) => $.side_panel.usage_cost_unavailable)}
@@ -428,7 +446,7 @@ function AgentUsageSection({ agent }: { agent: Agent }) {
           </div>
           <div className="flex items-baseline justify-between gap-3">
             <span className="text-muted-foreground">{t(($) => $.side_panel.usage_tokens)}</span>
-            <span className="tabular-nums text-muted-foreground">{formatTokens(tokens)}</span>
+            <span className="text-sm tabular-nums text-muted-foreground">{formatTokens(tokens)}</span>
           </div>
         </div>
       )}
@@ -457,13 +475,10 @@ function InfoRow({ label, value, mono = false }: { label: string; value: string;
 
 function ConfigSection({ label, children }: { label: string; children: ReactNode }) {
   return (
-    // Tighter horizontal padding under md (mobile) widens the picker column at
-    // 375px; the auto/1fr grid keeps the label + picker on one row (same info
-    // hierarchy at every breakpoint), with every picker chip truncating.
-    <div className="border-b px-3 py-4 md:px-4">
-      <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-        {label}
-      </div>
+    // LRM-360: Title Case muted section title (no uppercase scream). Padding
+    // lives on the parent system block so Usage↔Runtime share one gutter.
+    <div>
+      <div className="mb-2 text-xs font-medium text-muted-foreground">{label}</div>
       <div className="grid min-w-0 grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">{children}</div>
     </div>
   );

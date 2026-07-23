@@ -411,6 +411,16 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	// Wire WS heartbeat after stores are finalized so the WS path uses the
 	// same (possibly Redis-backed) stores as the HTTP path.
 	daemonHub.SetHeartbeatHandler(h.HandleDaemonWSHeartbeat)
+	daemonHub.SetReminderHandlers(
+		h.HandleDaemonReminderSnapshot,
+		h.HandleDaemonReminderFireAttempt,
+		h.HandleDaemonReminderOwnerLifecycle,
+		h.HandleDaemonReminderOwnerLifecycleAck,
+	)
+	daemonHub.SetReminderProjectionHandlers(
+		h.HandleDaemonReminderProjection,
+		h.HandleDaemonReminderProjectionAck,
+	)
 	health := newServerHealth(pool)
 
 	r := chi.NewRouter()
@@ -1225,6 +1235,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/messages", h.ListChannelMessages)
 					r.Get("/messages/search", h.SearchChannelMessages)
 					r.Post("/messages", h.SendChannelMessage)
+					// LRM-425: channel Stop uses inbox_event_id (active-tasks), not /api/tasks/{id}/cancel.
+					r.Post("/agent-inbox/events/{eventId}/cancel", h.CancelChannelAgentInboxEvent)
+					r.Post("/agent-inbox/cancel-active", h.CancelChannelActiveAgentInboxEvents)
 					r.Post("/agent-inbox/events/{eventId}/retry", h.RetryChannelAgentInboxEvent)
 					r.Patch("/messages/{messageId}", h.UpdateChannelMessage)
 					r.Delete("/messages/{messageId}", h.DeleteChannelMessage)

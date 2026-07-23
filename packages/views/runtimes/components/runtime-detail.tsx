@@ -39,7 +39,7 @@ import { BreadcrumbHeader } from "../../layout/breadcrumb-header";
 import { AppLink } from "../../navigation/app-link";
 import { useNavigation } from "../../navigation/context";
 import { availabilityConfig, workloadConfig } from "../../agents/presence";
-import { formatLastSeen, isSelfHealingRuntime } from "../utils";
+import { formatLastSeen } from "../utils";
 import { HealthBadge } from "./shared";
 import { ProviderLogo } from "./provider-logo";
 import { UpdateSection } from "./update-section";
@@ -443,7 +443,6 @@ function DiagnosticsCard({
 }) {
   const { t } = useT("runtimes");
   const isLocal = runtime.runtime_mode === "local";
-  const selfHealing = isSelfHealingRuntime(runtime);
   // canDelete here doubles as the "can edit runtime" predicate — it already
   // means "workspace owner/admin OR runtime owner", which is the same gate
   // the server enforces for the visibility PATCH.
@@ -483,41 +482,19 @@ function DiagnosticsCard({
         )}
         {canDelete && (
           <div className="border-t pt-3">
-            {selfHealing ? (
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    // Wrapping span keeps the trigger hoverable — a disabled
-                    // <button> swallows pointer events, so the tooltip would
-                    // never open if it were the trigger itself.
-                    <span className="block w-full">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        disabled
-                        className="h-8 w-full justify-start gap-2 text-destructive"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                        {t(($) => $.detail.delete_button)}
-                      </Button>
-                    </span>
-                  }
-                />
-                <TooltipContent>
-                  {t(($) => $.detail.delete_disabled_tooltip)}
-                </TooltipContent>
-              </Tooltip>
-            ) : (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 w-full justify-start gap-2 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                onClick={onDelete}
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-                {t(($) => $.detail.delete_button)}
-              </Button>
-            )}
+            {/* Always enabled — #666: hiding this for an online local daemon
+                made the feature look broken. DeleteRuntimeDialog guides the
+                user through stopping the daemon (or clearing bound agents)
+                instead of pretending the action doesn't exist. */}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 w-full justify-start gap-2 text-destructive hover:bg-destructive/10 hover:text-destructive"
+              onClick={onDelete}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              {t(($) => $.detail.delete_button)}
+            </Button>
           </div>
         )}
       </div>

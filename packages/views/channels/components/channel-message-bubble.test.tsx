@@ -198,6 +198,20 @@ vi.mock("@multica/core/workspace/hooks", () => ({
   }),
 }));
 
+// LRM-364: layout tests stub the reaction resolver so they don't need a live
+// member-profile QueryClient path. Dedicated hook tests cover profile fetch.
+vi.mock("../../common/use-reaction-actor-name", () => ({
+  useReactionActorName: () => (_type: string, id: string, fallback?: string) => {
+    if (id === "user-1") return "Alice Display";
+    if (id === "user-2") return "Bob Display";
+    if (id === "user-owner") return "Frank An";
+    if (id === "user-admin") return "Admin User";
+    if (id === "agent-1") return "Research Agent";
+    if (id === "agent-beckham") return "贝克汉姆";
+    return fallback ?? id;
+  },
+}));
+
 vi.mock("@multica/core/agents/stores", () => ({
   useAgentPanelStore: (selector: (s: { open: (id: string) => void }) => unknown) =>
     selector({ open: vi.fn() }),
@@ -1038,6 +1052,32 @@ describe("ChannelMessageBubble", () => {
     expect(screen.getByRole("button", { name: "See more" })).toBeInTheDocument();
   });
 
+  it("uses self-mention row tokens on the collapse fade (LRM-368)", async () => {
+    const longBody = Array.from({ length: 20 }, (_, index) => `Line ${index}`).join("\n");
+    const msg = makeMessage({
+      type: "user",
+      author_id: "user-2",
+      author_name: "bob",
+      content: `hey [@Alice](mention://member/user-1)\n${longBody}`,
+    });
+    render(<ChannelMessageBubble message={msg} currentUserId="user-1" />);
+
+    const body = screen.getByTestId("message-body");
+    Object.defineProperties(body, {
+      scrollHeight: { configurable: true, value: 420 },
+      clientHeight: { configurable: true, value: 160 },
+    });
+    fireEvent(window, new Event("resize"));
+
+    await waitFor(() => {
+      expect(body).toHaveAttribute("data-collapsed", "true");
+    });
+
+    const fade = screen.getByTestId("message-collapse-fade");
+    expect(fade.className).toContain("from-[#fef9e8]");
+    expect(fade.className).not.toContain("from-background");
+  });
+
   it("does not show the collapse affordance for short messages", () => {
     render(
       <ChannelMessageBubble
@@ -1409,6 +1449,34 @@ describe("ChannelMessageBubble", () => {
 
     await user.hover(pill);
     expect(await screen.findByText("You, Bob Display")).toBeInTheDocument();
+  });
+
+  it("LRM-364: reaction hover shows group-manager display name, never Unknown Agent", async () => {
+    const user = userEvent.setup();
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          reactions: [
+            {
+              id: "reaction-beckham",
+              channel_id: "c1",
+              message_id: "m1",
+              actor_type: "agent",
+              actor_id: "agent-beckham",
+              emoji: "👍",
+              created_at: "2026-06-17T09:16:00Z",
+            },
+          ],
+        })}
+        currentUserId="user-1"
+        onReact={vi.fn()}
+      />,
+    );
+
+    const pill = screen.getByRole("button", { name: "👍1" });
+    await user.hover(pill);
+    expect(await screen.findByText("贝克汉姆")).toBeInTheDocument();
+    expect(screen.queryByText("Unknown Agent")).not.toBeInTheDocument();
   });
 
   // B4 (#242) — reaction 4-carrier consistency. Channel / dm_channel / thread

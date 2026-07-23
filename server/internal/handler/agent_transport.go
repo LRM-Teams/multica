@@ -357,6 +357,17 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "channel onboarding must send to the joined channel main timeline")
 		return
 	}
+	parts, err = h.enforceAgentTransportVoiceReply(r.Context(), source, target, content, parts)
+	if err != nil {
+		slog.Warn("agent transport voice modality inspection failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to preserve reply modality")
+		return
+	}
+	content, parts, err = messageparts.Normalize(content, parts)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid message parts: "+err.Error())
+		return
+	}
 	_, err = h.finalizedAgentTransportInsertInput(r.Context(), source, target, content, parts, clientMessageID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -624,6 +635,17 @@ func (h *Handler) agentTransportSendDraft(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "invalid saved draft: "+err.Error())
 		return
 	}
+	parts, err = h.enforceAgentTransportVoiceReply(r.Context(), source, target, content, parts)
+	if err != nil {
+		slog.Warn("agent transport draft voice modality inspection failed", "agent_id", uuidToString(source.task.AgentID), "target", draft.Target, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to preserve reply modality")
+		return
+	}
+	content, parts, err = messageparts.Normalize(content, parts)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid saved draft: "+err.Error())
+		return
+	}
 	if _, err := h.finalizedAgentTransportInsertInput(r.Context(), source, target, content, parts, draft.ClientMessageID); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -689,6 +711,103 @@ func (h *Handler) agentTransportSendDraft(w http.ResponseWriter, r *http.Request
 			"decision_fact_id": sentDraft.DecisionFactID,
 		},
 	)
+}
+
+// enforceAgentTransportVoiceReply preserves the delivery modality selected by
+// a human voice message at the final visible-message boundary. Prompt guidance
+// remains useful for the model, but it cannot be the only guarantee: runtimes
+// may omit --voice while still producing a valid text send.
+//
+// The source and destination must be the same timeline. This prevents a voice
+// trigger from changing proactive output to another channel or thread.
+func (h *Handler) enforceAgentTransportVoiceReply(
+	ctx context.Context,
+	source agentTransportSource,
+	target agentTransportTarget,
+	content string,
+	parts []protocol.MessagePart,
+) ([]protocol.MessagePart, error) {
+	if strings.TrimSpace(content) == "" || channelMessageHasVoicePart(parts) {
+		return parts, nil
+	}
+
+	sourceMessageID, err := h.agentTransportSourceMessageID(ctx, source)
+	if err != nil {
+		return nil, err
+	}
+	if !sourceMessageID.Valid {
+		return parts, nil
+	}
+	trigger, found := h.channelMessageByID(
+		ctx,
+		uuidToString(source.origin.workspaceID),
+		uuidToString(source.origin.channelID),
+		uuidToString(sourceMessageID),
+	)
+	if !found {
+		return nil, fmt.Errorf("source channel message %s not found", uuidToString(sourceMessageID))
+	}
+	return agentTransportVoiceReplyParts(trigger, target, content, parts), nil
+}
+
+func (h *Handler) agentTransportSourceMessageID(ctx context.Context, source agentTransportSource) (pgtype.UUID, error) {
+	if !source.inboxEventID.Valid {
+		return h.channelReactionTargetFromPrompt(ctx, source.task.ChatSessionID, source.task.ID), nil
+	}
+	var sourceMessageID pgtype.UUID
+	if err := h.DB.QueryRow(ctx, `
+		SELECT source_message_id
+		FROM agent_inbox_event
+		WHERE id = $1`, source.inboxEventID).Scan(&sourceMessageID); err != nil {
+		return pgtype.UUID{}, fmt.Errorf("load inbox source message: %w", err)
+	}
+	return sourceMessageID, nil
+}
+
+func agentTransportVoiceReplyTargetMatches(trigger ChannelMessageResponse, target agentTransportTarget) bool {
+	if !channelMessageIsHumanAuthored(trigger.Type) || !channelMessageHasVoicePart(trigger.Parts) || trigger.ChannelID != target.channel.ID {
+		return false
+	}
+	if trigger.ThreadRootMessageID == nil {
+		if target.kind != chatOutputTargetThread {
+			return true
+		}
+		return trigger.ID != "" && trigger.ID == uuidToString(target.threadRootMessageID)
+	}
+	return target.kind == chatOutputTargetThread && *trigger.ThreadRootMessageID == uuidToString(target.threadRootMessageID)
+}
+
+func agentTransportVoiceReplyParts(trigger ChannelMessageResponse, target agentTransportTarget, content string, parts []protocol.MessagePart) []protocol.MessagePart {
+	if !agentTransportHasReplyText(content, parts) || channelMessageHasVoicePart(parts) || !agentTransportVoiceReplyTargetMatches(trigger, target) {
+		return parts
+	}
+	out := append([]protocol.MessagePart(nil), parts...)
+	if !agentTransportPartsHaveText(out) {
+		out = append(out, protocol.MessagePart{Type: protocol.MessagePartTypeText, Text: content})
+	}
+	return append(out, protocol.MessagePart{Type: protocol.MessagePartTypeVoice})
+}
+
+func agentTransportHasReplyText(content string, parts []protocol.MessagePart) bool {
+	if strings.TrimSpace(content) == "" {
+		return false
+	}
+	if agentTransportPartsHaveText(parts) {
+		return true
+	}
+	// Normalize derives content from sticker alt text for sticker-only sends.
+	// That label is not an answer transcript and must not be synthesized as
+	// speech. Explicit text alongside a sticker differs from the fallback.
+	return strings.TrimSpace(content) != messageparts.FallbackContent(parts)
+}
+
+func agentTransportPartsHaveText(parts []protocol.MessagePart) bool {
+	for _, part := range parts {
+		if part.Type == protocol.MessagePartTypeText && strings.TrimSpace(part.Text) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *Handler) AgentTransportSearchMessages(w http.ResponseWriter, r *http.Request) {

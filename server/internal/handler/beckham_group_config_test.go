@@ -10,14 +10,21 @@ import (
 	"github.com/google/uuid"
 )
 
-// markGroupManagerForTest flags an agent as a per-group Beckham and makes it
-// private (mirrors how Beckham is actually provisioned — LRM-233).
+// markGroupManagerForTest flags an agent as a per-group Beckham with
+// visibility=channel bound to a home group (LRM-370).
 func markGroupManagerForTest(t *testing.T, agentID string) {
 	t.Helper()
+	channelID := seedChannelForTest(t, "beckham-home-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(context.Background(),
-		`UPDATE agent SET managed_role = 'group_manager', visibility = 'private' WHERE id = $1`, agentID,
+		`UPDATE agent SET managed_role = 'group_manager', visibility = 'channel', home_channel_id = $2 WHERE id = $1`,
+		agentID, channelID,
 	); err != nil {
 		t.Fatalf("mark group manager: %v", err)
+	}
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE channel SET group_manager_agent_id = $2 WHERE id = $1`, channelID, agentID,
+	); err != nil {
+		t.Fatalf("bind group manager channel: %v", err)
 	}
 }
 

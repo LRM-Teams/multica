@@ -228,6 +228,7 @@
     "reply_count": "{{count}} 条回复",
     "meta_count": "{{count}} 条回复",
     "close_aria": "关闭线程",
+    "open_in_main_aria": "在主列打开",
     "context_label": "原消息",
     "view_parent": "返回主会话",
     "show_full_message": "查看完整消息",
@@ -235,6 +236,7 @@
     "jump_to_parent": "定位到原消息",
     "empty_replies": "暂无回复。",
     "load_failed": "线程加载失败。",
+    "view_in_channel_failed": "无法在频道中打开该会话。",
     "send_failed": "发送线程回复失败。",
     "follow": "关注",
     "following": "已关注",
@@ -269,6 +271,17 @@
     "stop_all_success": "已停止 {{count}} 个 Agent",
     "stop_all_partial": "已停止 {{stopped}}/{{total}} 个 Agent"
   },
+  "stop_all_agents": {
+    "tooltip": "停止全部 Agent",
+    "aria": "停止全部 Agent",
+    "empty_tooltip": "当前没有运行中的 Agent",
+    "menu_label": "停止全部 Agent",
+    "dialog_title": "停止全部 Agent",
+    "dialog_warning_before": "这将立即停止 ",
+    "dialog_warning_after": " 中所有正在运行的 Agent。你可以在它们恢复前给出新的指引。",
+    "dialog_cancel": "取消",
+    "dialog_confirm": "停止全部 Agent"
+  },
   "composer": {
     "placeholder": "描述你需要什么帮助...  @ 智能体名称会触发它回复。",
     "attach_aria": "附件",
@@ -277,14 +290,14 @@
     "send_failed": "消息发送失败，请重试。",
     "voice_start": "录制语音消息",
     "voice_stop": "停止录音，已录制 {{seconds}} 秒",
-    "voice_processing": "正在识别语音",
+    "voice_uploading": "正在上传语音",
     "voice_blocked": "请先清空输入内容和附件再录音",
     "voice_permission_denied": "麦克风权限被拒绝。",
     "voice_secure_context_required": "浏览器仅允许通过 HTTPS 使用麦克风。请打开 HTTPS 地址后重试。",
     "voice_unavailable": "当前浏览器不支持语音录制。",
     "voice_recording_failed": "语音录制失败，请重试。",
     "voice_transcription_failed": "语音识别失败，请重试。",
-    "voice_processing_failed": "语音消息处理失败，请重试。",
+    "voice_upload_failed": "语音上传失败，请重试。",
     "voice_no_speech": "没有识别到语音内容。",
     "issue_ref_aria": "引用 Issue",
     "project_label": "项目",
@@ -322,6 +335,12 @@
     "voice_show_transcript": "转文字",
     "voice_hide_transcript": "收起文字",
     "voice_transcript_label": "语音转写",
+    "voice_transcribing": "转写中",
+    "voice_transcription_unavailable": "无法转文字",
+    "voice_synthesizing": "正在生成语音",
+    "voice_synthesis_unavailable": "语音生成失败",
+    "voice_preview": "语音消息",
+    "voice_preview_duration": "语音消息 · {{seconds}} 秒",
     "agent_badge": "Agent",
     "radar_badge": "主动发现",
     "feishu_badge": "飞书",
@@ -364,6 +383,10 @@
         "bound": "{actor} 把本群关联到项目「{project}」",
         "changed": "{actor} 把关联项目从「{previous}」改为「{project}」",
         "unbound": "{actor} 解除了与项目「{previous}」的关联"
+      },
+      "reminder": {
+        "fired": "提醒已触发：{title}",
+        "anchor_unavailable_suffix": " · 来源不可用"
       }
     }
   },

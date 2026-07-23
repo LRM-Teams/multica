@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { ArrowLeft, ChevronDown, ChevronUp, FileText, MessageSquare, Paperclip, Search, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronUp, FileText, Maximize2, MessageSquare, Paperclip, Search, X } from "lucide-react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   activeChannelTasksKeys,
@@ -38,6 +38,11 @@ import { useWSEvent } from "@multica/core/realtime";
 import type { ChannelActiveTask, ChannelMessage, ChannelMessageSearchResult, ChannelTypingPayload } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@multica/ui/components/ui/tooltip";
+import {
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
@@ -65,7 +70,7 @@ import {
 import { useEntryReadCursor } from "../hooks/use-entry-read-cursor";
 import { useEntryAnchor } from "../hooks/use-entry-around-seq";
 import {
-  buildVoiceMessageParts,
+  buildRecordedVoiceMessageParts,
   type VoiceRecordingAttachment,
 } from "../lib/voice-audio";
 import { prepareVoicePlayback, voicePlaybackScope } from "../lib/voice-playback";
@@ -102,6 +107,10 @@ interface DmConversationProps {
   draft?: string;
   onDraftChange?: (value: string) => void;
   onDraftClear?: () => void;
+  /** ?thread=<rootId> from a Reminder anchor deep-link — opens this DM's thread panel (same shape as channels-page.tsx's group-channel handling). One-shot: consumed on mount only. */
+  threadDeepLinkId?: string | null;
+  /** ?message=<id> from a Reminder anchor deep-link — highlights this message in the main list, or in the open thread's reply list when threadDeepLinkId is also set. */
+  deepLinkMessageId?: string | null;
 }
 
 interface ConversationSearchState {
@@ -119,6 +128,8 @@ interface DmChannelState {
   threadQuoteTarget: QuoteTarget | null;
   convSearch: ConversationSearchState;
   threadParentHighlightId: string | null;
+  /** Deep-link target from a Reminder anchor (?message=, routed to the main list or the open thread's reply list depending on whether ?thread= is also present). Distinct from threadParentHighlightId, which is always "jump back to the root in the main list", never a reply. */
+  deepLinkHighlightId: string | null;
   typingActors: Record<string, TypingActor>;
 }
 
@@ -130,6 +141,7 @@ type DmChannelAction =
   | { type: "setThreadQuote"; message: QuoteTarget | null }
   | { type: "setThreadDraftEmpty"; empty: boolean }
   | { type: "setThreadParentHighlightId"; id: string | null }
+  | { type: "setDeepLinkHighlightId"; id: string | null }
   | { type: "openSearch" }
   | { type: "closeSearch" }
   | { type: "setSearchQuery"; query: string }
@@ -155,6 +167,7 @@ const initialDmChannelState: DmChannelState = {
   threadQuoteTarget: null,
   convSearch: initialConversationSearchState,
   threadParentHighlightId: null,
+  deepLinkHighlightId: null,
   typingActors: {},
 };
 
@@ -174,6 +187,8 @@ function dmChannelReducer(state: DmChannelState, action: DmChannelAction): DmCha
       return state.threadDraftEmpty === action.empty ? state : { ...state, threadDraftEmpty: action.empty };
     case "setThreadParentHighlightId":
       return state.threadParentHighlightId === action.id ? state : { ...state, threadParentHighlightId: action.id };
+    case "setDeepLinkHighlightId":
+      return state.deepLinkHighlightId === action.id ? state : { ...state, deepLinkHighlightId: action.id };
     case "openSearch":
       return { ...state, convSearch: { ...state.convSearch, open: true } };
     case "closeSearch":
@@ -245,6 +260,8 @@ export function DmConversation({
   draft = "",
   onDraftChange,
   onDraftClear,
+  threadDeepLinkId,
+  deepLinkMessageId,
 }: DmConversationProps) {
   return (
     <DmChannelConversation
@@ -253,6 +270,8 @@ export function DmConversation({
       draft={draft}
       onDraftChange={onDraftChange}
       onDraftClear={onDraftClear}
+      threadDeepLinkId={threadDeepLinkId}
+      deepLinkMessageId={deepLinkMessageId}
     />
   );
 }
@@ -382,6 +401,8 @@ function DmChannelConversation({
   draft = "",
   onDraftChange,
   onDraftClear,
+  threadDeepLinkId,
+  deepLinkMessageId,
 }: DmConversationProps) {
   const { t } = useT("channels");
   const qc = useQueryClient();
@@ -397,8 +418,11 @@ function DmChannelConversation({
     threadQuoteTarget,
     convSearch,
     threadParentHighlightId,
+    deepLinkHighlightId,
     typingActors,
   }, dispatch] = useReducer(dmChannelReducer, initialDmChannelState);
+  const appliedDeepLinkMessageRef = useRef<string | null>(null);
+  const appliedThreadDeepLinkRef = useRef<string | null>(null);
   const [stoppingTaskId, setStoppingTaskId] = useState<string | null>(null);
   // #349 agent side panel — same slot as the thread panel (mutually
   // exclusive), matching channels-page.tsx's inline-panel pattern per
@@ -579,7 +603,12 @@ function DmChannelConversation({
   const searchHighlightId = convSearch.open
     ? (convSearch.results[convSearch.index]?.message_id ?? null)
     : null;
-  const highlightMessageId = threadParentHighlightId ?? searchHighlightId;
+  // deepLinkHighlightId only belongs on the main list when no thread is open
+  // — when a thread IS open, the deep-linked id is a REPLY that lives in the
+  // thread's own reply list instead (passed to that ChannelMessageList
+  // separately below), never the main timeline.
+  const highlightMessageId =
+    threadParentHighlightId ?? searchHighlightId ?? (openThreadRoot ? null : deepLinkHighlightId);
 
   // A search hit or "view parent" jump can target a message in an older,
   // not-yet-fetched page. Page older history until it loads (found) or history
@@ -630,6 +659,42 @@ function DmChannelConversation({
   useEffect(() => {
     dispatch({ type: "resetForChannel" });
   }, [channelId]);
+
+  // Reminder-anchor deep link (?thread=&message=), same shape as
+  // channels-page.tsx's group-channel handling. Keyed on the VALUE (not a
+  // fired-once boolean): DmConversation remounts fresh when the ACTIVE DM
+  // changes (key={source:id} at the call site), but clicking a different
+  // Reminder anchor pointing at the SAME DM is a same-pathname AppLink push
+  // that does NOT remount this component — a plain one-shot guard would
+  // silently ignore that second, different deep link.
+  useEffect(() => {
+    if (deepLinkMessageId && deepLinkMessageId !== appliedDeepLinkMessageRef.current) {
+      appliedDeepLinkMessageRef.current = deepLinkMessageId;
+      // react-doctor-disable-next-line react-doctor/no-event-handler -- consumption of an external signal (props sourced from the URL), gated on a ref guard, not a fake event handler; there is no user event to move this into.
+      dispatch({ type: "setDeepLinkHighlightId", id: deepLinkMessageId });
+    }
+    // react-doctor-disable-next-line react-doctor/no-event-handler -- same deep-link consumption as above.
+    if (threadDeepLinkId && threadDeepLinkId !== appliedThreadDeepLinkRef.current) {
+      appliedThreadDeepLinkRef.current = threadDeepLinkId;
+      dispatch({
+        type: "openThread",
+        message: {
+          id: threadDeepLinkId,
+          channel_id: channelId,
+          workspace_id: wsId,
+          seq: 0,
+          type: "user",
+          author_id: null,
+          author_name: "",
+          content: "",
+          source: "multica",
+          external_message_id: null,
+          client_message_id: null,
+          created_at: new Date(0).toISOString(),
+        },
+      });
+    }
+  }, [threadDeepLinkId, deepLinkMessageId, channelId, wsId]);
 
   useEffect(() => {
     if (!threadRoot) return;
@@ -812,13 +877,12 @@ function DmChannelConversation({
   };
 
   const handleVoiceSend = (
-    content: string,
     durationMs: number,
     attachment: VoiceRecordingAttachment,
   ): boolean => {
     if (!draftEmpty || dmPending.pending.length > 0) return false;
-    const parts = buildVoiceMessageParts(content, durationMs, attachment);
-    if (parts.length === 0) return false;
+    const content = "";
+    const parts = buildRecordedVoiceMessageParts(durationMs, attachment);
     const dispatched = dmSend.send({
       payloadKey: composePayloadKey(content, [attachment.id], `voice:${quoteTarget?.id ?? ""}`),
       buildVars: (clientMessageId) => ({
@@ -882,13 +946,12 @@ function DmChannelConversation({
   };
 
   const handleThreadVoiceSend = (
-    content: string,
     durationMs: number,
     attachment: VoiceRecordingAttachment,
   ): boolean => {
     if (!threadRoot || !threadDraftEmpty || threadPending.pending.length > 0) return false;
-    const parts = buildVoiceMessageParts(content, durationMs, attachment);
-    if (parts.length === 0) return false;
+    const content = "";
+    const parts = buildRecordedVoiceMessageParts(durationMs, attachment);
     const dispatched = threadSend.send({
       payloadKey: composePayloadKey(
         content,
@@ -988,6 +1051,35 @@ function DmChannelConversation({
                 }
                 onFollowChange={handleThreadFollowChange}
               />
+              {/* LRM-384 — desktop 28px ghost open-in-main; no dark float capsule / download.
+                  LRM-389 — tooltip + close thread so parent list actually opens. */}
+              {!isMobile && (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="size-7 text-muted-foreground hover:bg-muted hover:text-foreground"
+                        aria-label={t(($) => $.thread.open_in_main_aria)}
+                        onClick={() => {
+                          dispatch({
+                            type: "setThreadParentHighlightId",
+                            id: threadSurfaceRoot.id,
+                          });
+                          dispatch({ type: "closeThread" });
+                        }}
+                      />
+                    }
+                  >
+                    <Maximize2 className="size-3.5" />
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    {t(($) => $.thread.open_in_main_aria)}
+                  </TooltipContent>
+                </Tooltip>
+              )}
               {!isMobile && (
                 <Button
                   variant="ghost"
@@ -1009,6 +1101,7 @@ function DmChannelConversation({
           ownName={currentUserName ?? undefined}
           emptyLabel={t(($) => $.thread.empty_replies)}
           initialScroll="top"
+          highlightMessageId={deepLinkHighlightId}
           header={
             <ThreadRootPreview
               message={threadSurfaceRoot}
@@ -1016,7 +1109,7 @@ function DmChannelConversation({
               ownName={currentUserName ?? undefined}
               onViewParent={() => {
                 dispatch({ type: "setThreadParentHighlightId", id: threadSurfaceRoot.id });
-                if (isMobile) dispatch({ type: "closeThread" });
+                dispatch({ type: "closeThread" });
               }}
             />
           }

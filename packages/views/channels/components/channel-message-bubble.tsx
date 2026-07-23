@@ -24,6 +24,7 @@ import {
   ContextMenuTrigger,
 } from "@multica/ui/components/ui/context-menu";
 import { useActorName } from "@multica/core/workspace/hooks";
+import { useReactionActorName } from "../../common/use-reaction-actor-name";
 import type { ChannelMessage } from "@multica/core/types";
 import type { OpenAgentPanelFn } from "@multica/core/agents";
 import { ActorAvatar } from "../../common/actor-avatar";
@@ -42,6 +43,7 @@ import {
   unwrapStructuredPreviewContent,
 } from "./message-parts-preview";
 import { MessageBody } from "./message-body";
+import { MessageInlineEditor } from "./message-inline-editor";
 import { areChannelMessageBubblePropsEqual } from "./channel-message-render-equality";
 import { MessageQuoteCard } from "./message-quote";
 import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
@@ -49,14 +51,18 @@ import {
   parseMemberSystemEvent,
   parseIssueSystemEvent,
   parseProjectSystemEvent,
+  parseReminderSystemEvent,
 } from "./channel-system-event";
 import {
   MemberSystemEventContent,
   IssueSystemEventContent,
   ProjectSystemEventContent,
+  ReminderSystemEventContent,
 } from "./channel-system-event-content";
 import { messageMentionsViewer } from "../../common/content-mentions-viewer";
 import {
+  messageCollapseFadeClassName,
+  resolveMessageCollapseFadeVariant,
   SELF_MENTION_ROW_CLASS,
   SELF_MENTION_ROW_MENTION_CLASS,
 } from "../../common/mention-token";
@@ -124,6 +130,10 @@ function ChannelSystemMessageRow({
   // Channel↔project association events (#610): bind/change/unbind, projected into
   // a localized row whose sole clickable object is the project name.
   const projectEvent = parseProjectSystemEvent(message);
+  // #656/#655 Reminder-fired receipts: localized ×4 "Reminder fired: <title>"
+  // (+ "Anchor unavailable" when the anchored message/thread no longer
+  // exists), read-only — never the backend's hard-coded English fallback.
+  const reminderEvent = parseReminderSystemEvent(message);
   // Older backflow rows without the `system_event` part still carry an anchored
   // `reference`, so project those into tokens rather than the raw string (#469).
   const hasReferenceParts = message.parts?.some((part) => part.type === "reference") ?? false;
@@ -155,6 +165,8 @@ function ChannelSystemMessageRow({
           <MemberSystemEventContent event={memberEvent} />
         ) : projectEvent ? (
           <ProjectSystemEventContent event={projectEvent} />
+        ) : reminderEvent ? (
+          <ReminderSystemEventContent event={reminderEvent} />
         ) : hasReferenceParts ? (
           // Spans are anchored to the RAW `message.content`; feeding the trimmed
           // `systemText` would shift every offset and misplace the tokens.
@@ -187,80 +199,11 @@ function ChannelSystemMessageRow({
 }
 
 /**
- * Inline single-message editor. Enter (without Shift) saves, Escape cancels —
- * a save calls back into the bubble's onEdit (a PATCH), never a re-send, so an
- * edit can never produce a new agent wake (H5).
- */
-// react-doctor-disable-next-line react-doctor/no-multi-comp -- bubble-local editor; split would orphan edit chrome from the bubble
-function MessageInlineEditor({
-  value,
-  onChange,
-  onSave,
-  onCancel,
-  editLabel,
-  saveLabel,
-  cancelLabel,
-}: {
-  value: string;
-  onChange: (next: string) => void;
-  onSave: () => void;
-  onCancel: () => void;
-  editLabel: string;
-  saveLabel: string;
-  cancelLabel: string;
-}) {
-  // Move focus into the editor the user just opened (the Edit trigger it
-  // replaced has unmounted). A stable ref callback focuses once on mount —
-  // no autoFocus prop, no effect.
-  const focusOnMount = useCallback((node: HTMLTextAreaElement | null) => {
-    node?.focus();
-  }, []);
-  return (
-    <div data-testid="message-editor" className="mt-0.5">
-      <textarea
-        ref={focusOnMount}
-        aria-label={editLabel}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" && !event.shiftKey) {
-            event.preventDefault();
-            onSave();
-          } else if (event.key === "Escape") {
-            event.preventDefault();
-            onCancel();
-          }
-        }}
-        rows={2}
-        className="w-full resize-none rounded-md border border-input bg-card px-2 py-1.5 text-sm leading-6 text-ink outline-none focus-visible:ring-1 focus-visible:ring-ring"
-      />
-      <div className="mt-1.5 flex items-center gap-2">
-        <button
-          type="button"
-          onClick={onSave}
-          className="inline-flex h-7 items-center rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        >
-          {saveLabel}
-        </button>
-        <button
-          type="button"
-          onClick={onCancel}
-          className="inline-flex h-7 items-center rounded-md px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        >
-          {cancelLabel}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-/**
  * One message in the shared Channel/DM/Thread timeline. Ordinary text renders
  * as an IM-style message item, while quote/attachment/code-like content keeps
  * local structure inside the shared Markdown pipeline.
  */
-// react-doctor-disable-next-line react-doctor/no-multi-comp -- memo wrapper keeps export name; Inner stays file-local for equality compare
-function ChannelMessageBubbleInner({
+export const ChannelMessageBubble = memo(function ChannelMessageBubble({
   message,
   currentUserId,
   ownName,
@@ -324,6 +267,9 @@ function ChannelMessageBubbleInner({
 }) {
   const { t } = useT("channels");
   const { getActorName } = useActorName();
+  // LRM-364: group managers miss ListAgents → resolve via member-profile, never
+  // surface "Unknown Agent" in the reaction hover card.
+  const getReactionActorName = useReactionActorName(message.reactions ?? []);
   const resolveMentionPreview = mentionResolverFrom(getActorName);
   const messageTime = useMessageTime();
   const [editDraft, setEditDraft] = useState<string | null>(null);
@@ -679,6 +625,11 @@ function ChannelMessageBubbleInner({
     message.parts,
   );
   const selfMentioned = addressedToViewer && !isOwn;
+  const collapseFadeVariant = resolveMessageCollapseFadeVariant({
+    selfMentioned,
+    highlighted: Boolean(highlighted),
+    searchHighlighted: Boolean(searchHighlighted),
+  });
   const showAuthor = !compact;
 
   const bubble = (
@@ -914,7 +865,7 @@ function ChannelMessageBubbleInner({
             )}
             {isContentCollapsed && (
               <div
-                className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-start bg-gradient-to-t from-background via-background/95 to-transparent pb-0.5 pt-10"
+                className={messageCollapseFadeClassName(collapseFadeVariant)}
                 data-testid="message-collapse-fade"
               >
                 {/* LRM-302: text link, not centered pill — must not cover body. */}
@@ -1102,7 +1053,7 @@ function ChannelMessageBubbleInner({
                 reactions={message.reactions ?? []}
                 currentUserId={currentUserId ?? undefined}
                 onToggle={(emoji) => onReact(message, emoji)}
-                getActorName={getActorName}
+                getActorName={getReactionActorName}
                 hideAddButton
                 showQuickReactions={false}
               />
@@ -1139,9 +1090,4 @@ function ChannelMessageBubbleInner({
       </ContextMenuContent>
     </ContextMenu>
   );
-}
-
-export const ChannelMessageBubble = memo(
-  ChannelMessageBubbleInner,
-  areChannelMessageBubblePropsEqual,
-);
+}, areChannelMessageBubblePropsEqual);

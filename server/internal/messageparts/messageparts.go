@@ -44,10 +44,32 @@ func Normalize(content string, parts []protocol.MessagePart) (string, []protocol
 		normalizedContent = FallbackContent(out)
 	}
 	if hasVoicePart(out) {
-		if !hasTextPart(out) {
-			return "", nil, fmt.Errorf("voice transcript text part is required")
+		hasText := hasTextPart(out)
+		voiceCount := 0
+		recordedVoiceCount := 0
+		for i := range out {
+			if out[i].Type != protocol.MessagePartTypeVoice {
+				continue
+			}
+			voiceCount++
+			if out[i].AttachmentID != "" {
+				recordedVoiceCount++
+				if hasText {
+					out[i].TranscriptionStatus = protocol.VoiceTranscriptionCompleted
+				} else {
+					out[i].TranscriptionStatus = protocol.VoiceTranscriptionPending
+				}
+				continue
+			}
+			out[i].TranscriptionStatus = ""
 		}
-		if utf8.RuneCountInString(normalizedContent) > protocol.VoiceTranscriptMaxRunes {
+		if !hasText && normalizedContent != "" {
+			return "", nil, fmt.Errorf("voice transcript text part is required when content is supplied")
+		}
+		if !hasText && (voiceCount != 1 || recordedVoiceCount != 1) {
+			return "", nil, fmt.Errorf("one recorded voice attachment is required when transcript text is absent")
+		}
+		if hasText && utf8.RuneCountInString(normalizedContent) > protocol.VoiceTranscriptMaxRunes {
 			return "", nil, fmt.Errorf("voice transcript exceeds %d characters", protocol.VoiceTranscriptMaxRunes)
 		}
 	}
@@ -244,6 +266,10 @@ func FallbackContent(parts []protocol.MessagePart) string {
 
 func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 	part.Type = strings.TrimSpace(part.Type)
+	part.SynthesisStatus = ""
+	if part.Type != protocol.MessagePartTypeVoice {
+		part.TranscriptionStatus = ""
+	}
 	switch part.Type {
 	case protocol.MessagePartTypeText:
 		part.Text = strings.TrimSpace(part.Text)
@@ -412,6 +438,9 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 		part.StickerID = ""
 		part.Alt = ""
 		part.AttachmentID = strings.TrimSpace(part.AttachmentID)
+		// The server derives this value from transcript/attachment presence.
+		// Ignore client-supplied states so callers cannot skip ASR dispatch.
+		part.TranscriptionStatus = ""
 		if part.AttachmentID == "" {
 			part.Filename = ""
 			part.ContentType = ""

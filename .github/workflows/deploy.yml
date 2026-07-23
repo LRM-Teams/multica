@@ -1,22 +1,25 @@
 name: Deploy
 
 # Continuous deployment to the Aliyun host (101.200.210.144, runner label
-# `aliyun`). Images still build on GitHub-hosted runners and push to GHCR; the
-# self-hosted runner on the deploy host pulls images and restarts Compose.
+# `aliyun`). Images build on GitHub-hosted runners and push to GHCR; the
+# self-hosted runner on that host pulls images and restarts Compose locally.
 #
 # Test gate: the CI workflow runs on every PR into `dev`. The team's workflow is
-# feature branch → PR → merge to `dev`, which builds images and deploys here.
+# feature branch → PR → merge to `dev`, which builds images and deploys
+# to the Aliyun host.
 # `main` is left as the upstream-tracking branch and never deploys via this
 # workflow.
 #
-# Host layout: deploy user `dev`, stack under `/data/multica`. GitHub Environment
-# `s89` is kept as the secret store (POSTGRES_PASSWORD / optional voice key) so
-# existing Environment secrets keep working during the cutover.
+# Host layout: deploy/runner user `dev`, stack under `/data/multica`. The
+# protected `aliyun-dev` Environment is the deployment boundary. Database
+# identity stays in the host-owned `/data/multica/.env`; the speech API key is
+# injected from that Environment so host migrations cannot silently disable
+# voice.
 
 on:
   # Deploy only from the `dev` integration branch, after a PR has already been
-  # merged. PR events must not deploy to the shared Aliyun/dev environment; they
-  # can build/test in CI, but that host must always represent `dev` or an
+  # merged. PR events must not deploy to the shared Aliyun/dev environment;
+  # they can build/test in CI, but that host must always represent `dev` or an
   # explicit manual dispatch from `dev`. Rollback dispatches must name an
   # existing image tag.
   # Docs-only changes (#354 bug) are excluded — they don't change any code, so
@@ -41,6 +44,58 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  prepare:
+    # Package the exact committed deployment contract on a GitHub-hosted runner.
+    # The Aliyun runner deliberately does not git-fetch the repository: mainland
+    # GitHub fetches are slow and unreliable, and a deploy checkout is an unsafe
+    # place for operators or privileged commands to reuse as a worktree.
+    if: >-
+      github.repository_owner == 'LRM-Teams' &&
+      ((github.event_name == 'push' && github.ref == 'refs/heads/dev') ||
+       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/dev'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage immutable deploy bundle
+        run: |
+          set -euo pipefail
+          bundle="${RUNNER_TEMP}/multica-deploy-bundle"
+          install -d "${bundle}/deploy/aliyun" "${bundle}/scripts"
+          install -m 0644 docker-compose.selfhost.yml "${bundle}/docker-compose.selfhost.yml"
+          install -m 0644 docker-compose.aliyun.yml "${bundle}/docker-compose.aliyun.yml"
+          install -m 0644 deploy/aliyun/Caddyfile "${bundle}/deploy/aliyun/Caddyfile"
+          install -m 0644 scripts/assert-runner-workspace-ownership.sh "${bundle}/scripts/assert-runner-workspace-ownership.sh"
+          install -m 0644 scripts/assert-served-app-image-provenance.sh "${bundle}/scripts/assert-served-app-image-provenance.sh"
+          install -m 0644 scripts/compose-environment-value.sh "${bundle}/scripts/compose-environment-value.sh"
+
+      - name: Validate deploy bundle
+        run: |
+          set -euo pipefail
+          bundle="${RUNNER_TEMP}/multica-deploy-bundle"
+          docker compose \
+            --project-name multica \
+            --project-directory "$bundle" \
+            --env-file .env.example \
+            -f "${bundle}/docker-compose.selfhost.yml" \
+            -f "${bundle}/docker-compose.aliyun.yml" \
+            config -q
+          docker run --rm \
+            -v "${bundle}/deploy/aliyun/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2.11.3@sha256:ec18ee54aab3315c22e25f3b2babda73ff8007d39b13b3bd1bfffa2f0444c7d9 \
+            caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
+      - name: Upload deploy bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-bundle-${{ github.sha }}
+          path: ${{ runner.temp }}/multica-deploy-bundle
+          if-no-files-found: error
+          retention-days: 1
+
   build:
     # Only build/deploy from the team fork — never upstream or other forks.
     # On manual dispatch with an image_tag we skip building and redeploy that tag.
@@ -143,18 +198,16 @@ jobs:
           cache-to: type=gha,mode=max,scope=deploy-db-bridge
 
   deploy:
-    needs: build
-    # Bind the `s89` Environment so `secrets.POSTGRES_PASSWORD` is available.
-    # That secret is the single source of truth for the DB password; injecting
-    # it here (see the Pull & restart step) stops the server's /data/multica/.env
-    # from silently drifting out of sync with the Postgres role and crash-looping
-    # the backend on every deploy.
-    environment: s89
+    needs: [prepare, build]
+    # The Environment is the protected Aliyun deployment boundary. Runtime
+    # secrets remain host-local and are validated before any container changes.
+    environment: aliyun-dev
     # Run after a successful build (push / dispatch-without-tag), OR straight
     # away on a dev dispatch that names an existing tag to roll back to.
     if: >-
       always() &&
       github.repository_owner == 'LRM-Teams' &&
+      needs.prepare.result == 'success' &&
       (needs.build.result == 'success' ||
        (github.event_name == 'workflow_dispatch' &&
         github.ref == 'refs/heads/dev' &&
@@ -162,27 +215,68 @@ jobs:
     runs-on: [self-hosted, aliyun]
     timeout-minutes: 15
     permissions:
-      contents: read
+      actions: read
       packages: read
     env:
       DEPLOY_DIR: /data/multica
+      RUNNER_EXPECTED_USER: dev
+      # Secret values are never copied into the host dotenv. Compose propagates
+      # this ambient value into the backend container.
+      DOUBAO_SPEECH_API_KEY: ${{ secrets.DOUBAO_SPEECH_API_KEY }}
       # The tag to deploy: a rollback input if given, otherwise the freshly built one.
       IMAGE_TAG: >-
         ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.image_tag != '')
             && github.event.inputs.image_tag
             || needs.build.outputs.tag }}
     steps:
-      # Pull only the compose file from the deployed commit, so the running
-      # topology always matches the repo. Non-secret config comes from the
-      # server's own /data/multica/.env (never in git); the DB password is
-      # injected from the `s89` Environment secret below and overrides whatever
-      # /data/multica/.env holds, so it can never drift.
-      - uses: actions/checkout@v4
+      # This runs before any artifact extraction. It catches contamination left
+      # by a previous job or host-side command at the first observable phase.
+      - name: Preflight runner work root ownership
+        run: |
+          set -euo pipefail
+          phase=pre-artifact
+          actual_user="$(id -un)"
+          if [ "$actual_user" != "$RUNNER_EXPECTED_USER" ]; then
+            echo "::error title=Unexpected runner identity::phase=${phase} expected=${RUNNER_EXPECTED_USER} actual=${actual_user}"
+            exit 1
+          fi
+          runner_work_root="$(dirname -- "$RUNNER_WORKSPACE")"
+          ownership_report="$(mktemp "${RUNNER_TEMP}/runner-ownership-preflight.XXXXXX")"
+          find_errors="$(mktemp "${RUNNER_TEMP}/runner-ownership-preflight-errors.XXXXXX")"
+          trap 'rm -f "$ownership_report" "$find_errors"' EXIT
+          cd /
+          find_status=0
+          if find "$runner_work_root" -xdev ! -user "$RUNNER_EXPECTED_USER" -print0 >"$ownership_report" 2>"$find_errors"; then
+            :
+          else
+            find_status=$?
+          fi
+          offender_count=0
+          while IFS= read -r -d '' path; do
+            metadata="$(stat -c '%U:%G mode=%a' -- "$path")"
+            echo "::error title=Runner workspace ownership violation::phase=${phase} owner=${metadata} path=${path}"
+            offender_count=$((offender_count + 1))
+          done <"$ownership_report"
+          if [ "$find_status" -ne 0 ]; then
+            echo "::error title=Runner ownership scan failed::phase=${phase} root=${runner_work_root}"
+            sed 's/^/  /' "$find_errors"
+            exit 1
+          fi
+          if [ "$offender_count" -gt 0 ]; then
+            echo "::error title=Runner workspace ownership violation::phase=${phase} root=${runner_work_root} expected_owner=${RUNNER_EXPECTED_USER} offenders=${offender_count}"
+            exit 1
+          fi
+          echo "Runner workspace ownership OK: phase=${phase} root=${runner_work_root} owner=${RUNNER_EXPECTED_USER}"
+
+      - name: Download immutable deploy bundle
+        uses: actions/download-artifact@v4
         with:
-          sparse-checkout: |
-            docker-compose.selfhost.yml
-            docker-compose.s89.yml
-          sparse-checkout-cone-mode: false
+          name: deploy-bundle-${{ github.sha }}
+          path: ${{ runner.temp }}/multica-deploy-bundle
+
+      - name: Verify runner ownership after artifact extraction
+        id: ownership_after_artifact
+        run: bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/assert-runner-workspace-ownership.sh" post-artifact
 
       - name: Log in to GHCR
         env:
@@ -190,19 +284,7 @@ jobs:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 
-      - name: Pull & restart backend + frontend
-        # POSTGRES_PASSWORD comes from the s89 Environment secret and is the
-        # single source of truth for the DB password. Docker Compose gives shell
-        # env vars precedence over --env-file, so this value overrides the one in
-        # /data/multica/.env for the `${POSTGRES_PASSWORD}` interpolation the
-        # compose file uses to build the backend's DATABASE_URL. GitHub masks the
-        # secret in logs; never echo it. Keep the secret URL-safe — it is used
-        # verbatim inside postgres://user:PASSWORD@host, which is not URL-encoded.
-        env:
-          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
-          # Optional s89 Environment secret. Empty keeps voice endpoints
-          # disabled; the value is passed directly to Compose and never echoed.
-          DOUBAO_SPEECH_API_KEY: ${{ secrets.DOUBAO_SPEECH_API_KEY }}
+      - name: Pull & restart backend + frontend + Caddy
         run: |
           set -euo pipefail
           owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
@@ -213,19 +295,76 @@ jobs:
           # Aliyun/dev is the shared integration environment; keep this off by
           # default in docker-compose.selfhost.yml and opt in only for this lane.
           export MULTICA_DEV_AGENT_PROFILE_ACCESS=true
-          if [ -z "${POSTGRES_PASSWORD:-}" ]; then
-            echo "::error::POSTGRES_PASSWORD secret is empty — s89 Environment secret not wired. Aborting to avoid deploying with the wrong DB password."
+          if [ ! -r "${DEPLOY_DIR}/.env" ]; then
+            echo "::error::${DEPLOY_DIR}/.env is not readable by deploy user $(id -un)."
             exit 1
           fi
-          echo "Deploying ${MULTICA_BACKEND_IMAGE}:${MULTICA_IMAGE_TAG} (+ web) on $(hostname)"
           compose() {
-            docker compose \
+            # Compose gives ambient process variables precedence over --env-file.
+            # Keep the DB identity in one namespace: the host dotenv (plus the
+            # explicit defaults below) is authoritative for both preflight and
+            # every runtime mutation.
+            env -u POSTGRES_USER -u POSTGRES_DB -u POSTGRES_PASSWORD \
+              docker compose \
+              --project-name multica \
               --project-directory "${DEPLOY_DIR}" \
               --env-file "${DEPLOY_DIR}/.env" \
-              -f "${GITHUB_WORKSPACE}/docker-compose.selfhost.yml" \
-              -f "${GITHUB_WORKSPACE}/docker-compose.s89.yml" "$@"
+              -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.selfhost.yml" \
+              -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.aliyun.yml" "$@"
           }
-          # postgres + caddy are left running; only the app services roll.
+          compose_environment="$(compose config --environment)"
+          compose_env_value() {
+            printf '%s\n' "$compose_environment" |
+              bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/compose-environment-value.sh" "$@"
+          }
+          # These defaults exactly match docker-compose.selfhost.yml. The
+          # password intentionally has no production default and must exist in
+          # the host dotenv.
+          db_user="$(compose_env_value POSTGRES_USER multica)"
+          db_name="$(compose_env_value POSTGRES_DB multica)"
+          db_password="$(compose_env_value POSTGRES_PASSWORD)"
+          voice_api_key="$(compose_env_value DOUBAO_SPEECH_API_KEY)"
+          unset compose_environment
+          if [ -z "$db_user" ] || [ -z "$db_name" ] || [ -z "$db_password" ]; then
+            echo "::error::POSTGRES_USER, POSTGRES_DB, and POSTGRES_PASSWORD must all be non-empty in ${DEPLOY_DIR}/.env. Aborting before runtime changes."
+            exit 1
+          fi
+          if [ -z "$voice_api_key" ]; then
+            echo "::error::DOUBAO_SPEECH_API_KEY must be configured in the aliyun-dev Environment. Aborting before runtime changes."
+            exit 1
+          fi
+          postgres_id="$(compose ps -q postgres)"
+          if [ -z "$postgres_id" ]; then
+            echo "::error::PostgreSQL container is not running. Aborting before runtime changes."
+            exit 1
+          fi
+          if ! printf '%s\n%s\n%s\n' "$db_user" "$db_name" "$db_password" |
+            docker exec -i "$postgres_id" sh -ceu '
+              IFS= read -r target_user
+              IFS= read -r target_db
+              IFS= read -r target_password
+              PGPASSWORD="$target_password" psql \
+                -h 127.0.0.1 \
+                -U "$target_user" \
+                -d "$target_db" \
+              -Atqc "SELECT 1"
+            ' >/dev/null; then
+            echo "::error::Host PostgreSQL user/database/password failed an authenticated TCP query. Aborting before runtime changes."
+            exit 1
+          fi
+          unset db_user db_name db_password voice_api_key
+          echo "Host-local database identity and protected speech configuration preflight passed."
+          echo "Deploying ${MULTICA_BACKEND_IMAGE}:${MULTICA_IMAGE_TAG} (+ web) on $(hostname)"
+          # Validate the immutable artifact source before touching the runtime
+          # file. A bad config must not be left behind for the next host restart.
+          docker run --rm \
+            -v "${RUNNER_TEMP}/multica-deploy-bundle/deploy/aliyun/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2.11.3@sha256:ec18ee54aab3315c22e25f3b2babda73ff8007d39b13b3bd1bfffa2f0444c7d9 \
+            caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          # The runtime path is stable; the Actions artifact is ephemeral.
+          # Install through a sibling file and rename it atomically.
+          install -m 0644 "${RUNNER_TEMP}/multica-deploy-bundle/deploy/aliyun/Caddyfile" "${DEPLOY_DIR}/Caddyfile.next"
+          mv -f "${DEPLOY_DIR}/Caddyfile.next" "${DEPLOY_DIR}/Caddyfile"
           # The backend container runs `migrate up` on start (entrypoint.sh).
           compose pull frontend backend
           # Start frontend before backend so Caddy can resolve the frontend DNS name
@@ -233,65 +372,104 @@ jobs:
           # DNS race that caused intermittent 'no such host' errors (#324).
           compose up -d frontend
           compose up -d backend
-          # db-bridge-stub-multica + db-bridge-executor-multica are profile-gated
-          # in the compose file, so naming them explicitly is what starts them.
-          # They share the multica-db-bridge image (the public run_multica server
-          # was dropped - no external LLM relay is needed; only the internal stub
-          # + executor remain). The pull is best-effort: a rollback dispatch that
-          # names a tag predating the db-bridge image must NOT abort the
-          # backend/frontend roll, so warn and leave any existing containers
-          # running.
-          if compose pull db-bridge-stub-multica db-bridge-executor-multica; then
+          # Adopt the one legacy proxy container created before Caddy became a
+          # Compose service. Resolve both its exact name and ownership label
+          # before removal; certificate/config volumes are preserved.
+          if docker container inspect multica-caddy >/dev/null 2>&1; then
+            caddy_service="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' multica-caddy 2>/dev/null || true)"
+            if [ "${caddy_service}" != "caddy" ]; then
+              docker rm -f multica-caddy
+            fi
+          fi
+          # The Caddyfile is a single-file bind mount. Atomic rename changes its
+          # inode, so recreate only Caddy to remount the new file; reload alone
+          # would keep reading the old inode.
+          compose up -d --no-deps --force-recreate caddy
+          # The retained multica-side bridge stub is profile-gated, so naming it
+          # explicitly starts it. AReaL calls Multica directly; the obsolete
+          # multica-side executor was removed in 501dc2861. The pull remains
+          # best-effort so rollback tags predating the bridge image do not abort
+          # an otherwise healthy backend/frontend roll.
+          if compose pull db-bridge-stub-multica; then
             # Gateway stub for multica -> AReaL RL calls (start_session /
             # set_reward / close_segment / chat_completions); run_stub --side
             # multica. Best-effort: a stub failure must not roll back the
             # backend/frontend that already succeeded - warn and leave any
             # existing stub container running.
             compose up -d db-bridge-stub-multica || echo "::warning::db-bridge-stub-multica failed to start; multica -> AReaL RL calls will fail until it runs."
-            # Executor for areal -> multica env-dispatch / DAG fetch;
-            # run_executor --side multica. Best-effort, same as above.
-            compose up -d db-bridge-executor-multica || echo "::warning::db-bridge-executor-multica failed to start; areal -> multica DAG fetch will not be drained."
           else
             echo "::warning::db-bridge image not found at tag ${MULTICA_IMAGE_TAG}; skipping bridge roll (existing containers, if any, keep running). Use a tag built with the db-bridge CD change for a full bridge rollback."
           fi
           # Prune unused Docker images to prevent disk from filling up (#327).
           docker image prune -af
 
-      - name: Verify app containers + Caddy proxy
+      # Run even when the deploy step failed. The deploy user owns both the
+      # runner work root and /data; any unexpected owner in _work is a hard
+      # boundary violation, not something for a later checkout to discover.
+      - name: Verify runner ownership after deploy step
+        id: ownership_after_deploy
+        if: always() && steps.ownership_after_artifact.outcome == 'success'
+        run: bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/assert-runner-workspace-ownership.sh" post-deploy
+
+      - name: Verify served app image provenance before health checks
+        run: |
+          set -euo pipefail
+          owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
+          bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/assert-served-app-image-provenance.sh" \
+            pre-health \
+            "${DEPLOY_DIR}" \
+            "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.selfhost.yml" \
+            "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.aliyun.yml" \
+            "ghcr.io/${owner_lc}/multica-backend:${IMAGE_TAG}" \
+            "ghcr.io/${owner_lc}/multica-web:${IMAGE_TAG}"
+
+      - name: Verify app containers + Caddy HTTP and HTTPS proxies
         run: |
           set -euo pipefail
 
           compose() {
-            docker compose \
+            env -u POSTGRES_USER -u POSTGRES_DB -u POSTGRES_PASSWORD \
+              docker compose \
+              --project-name multica \
               --project-directory "${DEPLOY_DIR}" \
               --env-file "${DEPLOY_DIR}/.env" \
-              -f "${GITHUB_WORKSPACE}/docker-compose.selfhost.yml" \
-              -f "${GITHUB_WORKSPACE}/docker-compose.s89.yml" "$@"
+              -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.selfhost.yml" \
+              -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.aliyun.yml" "$@"
           }
 
           # Caddy reaches both app services only through their Docker service
           # names. These probes therefore validate the running container,
           # Compose DNS, Caddy upstream routing, and the externally served dev
-          # listener as one boundary. /healthz is served by the frontend itself;
-          # /health is proxied to the backend. Both must be 200.
-          for i in $(seq 1 30); do
+          # listeners as one boundary. The HTTPS probe connects to loopback
+          # while retaining leagent.me as the TLS identity, avoiding dependence
+          # on provider NAT hairpin behavior.
+          for i in $(seq 1 45); do
             frontend_id="$(compose ps -q frontend)"
             backend_id="$(compose ps -q backend)"
+            caddy_id="$(compose ps -q caddy)"
             frontend_status="$(docker inspect --format '{{.State.Status}}' "$frontend_id" 2>/dev/null || true)"
             frontend_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$frontend_id" 2>/dev/null || true)"
             backend_status="$(docker inspect --format '{{.State.Status}}' "$backend_id" 2>/dev/null || true)"
-            if [ "$frontend_status" = running ] && [ "$frontend_health" = healthy ] && [ "$backend_status" = running ] && \
+            backend_voice_configured="$(
+              (docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$backend_id" 2>/dev/null || true) |
+                awk -F= '$1 == "DOUBAO_SPEECH_API_KEY" && length($2) > 0 { print "true"; exit }'
+            )"
+            caddy_status="$(docker inspect --format '{{.State.Status}}' "$caddy_id" 2>/dev/null || true)"
+            if [ "$frontend_status" = running ] && [ "$frontend_health" = healthy ] && [ "$backend_status" = running ] && [ "$backend_voice_configured" = true ] && [ "$caddy_status" = running ] && \
               curl -fsS --max-time 5 http://127.0.0.1:8090/ >/dev/null 2>&1 && \
               curl -fsS --max-time 5 http://127.0.0.1:8090/healthz >/dev/null 2>&1 && \
-              curl -fsS --max-time 5 http://127.0.0.1:8090/health >/dev/null 2>&1; then
-              echo "Frontend healthcheck, backend, and Caddy proxy healthy after $((i * 2))s."
+              curl -fsS --max-time 5 http://127.0.0.1:8090/health >/dev/null 2>&1 && \
+              [ "$(curl -fsS -o /dev/null -w '%{redirect_url}' --max-time 5 -H 'Accept: text/html' http://127.0.0.1:8090/)" = "https://leagent.me/" ] && \
+              curl --resolve leagent.me:443:127.0.0.1 -fsS --max-time 5 https://leagent.me/healthz >/dev/null 2>&1 && \
+              curl --resolve leagent.me:443:127.0.0.1 -fsS --max-time 5 https://leagent.me/health >/dev/null 2>&1; then
+              echo "Frontend, backend, Caddy HTTP, and leagent.me HTTPS healthy after $((i * 2))s."
               exit 0
             fi
-            echo "waiting for frontend health/backend/Caddy proxy readiness... ($i/30) frontend=${frontend_status}/${frontend_health:-none} backend=${backend_status:-none}"
+            echo "waiting for frontend/backend/Caddy/HTTPS readiness... ($i/45) frontend=${frontend_status}/${frontend_health:-none} backend=${backend_status:-none} voice_configured=${backend_voice_configured:-false} caddy=${caddy_status:-none}"
             sleep 2
           done
-          echo "::error::frontend healthcheck/Caddy proxy did not pass root + /healthz + /health within 60s."
-          compose ps frontend backend || true
+          echo "::error::frontend/backend/Caddy HTTP redirect + leagent.me HTTPS did not pass within 90s."
+          compose ps frontend backend caddy || true
           docker logs --tail 100 multica-caddy || true
           docker logs --tail 80 multica-frontend-1 || true
           docker logs --tail 80 multica-backend-1 || true
@@ -325,8 +503,15 @@ jobs:
             echo "db-bridge-stub-multica container not running - skipping /healthz check."
             exit 0
           fi
-          set -a; . "${DEPLOY_DIR}/.env" 2>/dev/null || true; set +a
-          port="${BRIDGE_GATEWAY_STUB_PORT:-9100}"
+          port="$(
+            docker inspect \
+              --format '{{with (index .NetworkSettings.Ports "9100/tcp")}}{{(index . 0).HostPort}}{{end}}' \
+              multica-db-bridge-stub-multica-1
+          )"
+          if [ -z "$port" ]; then
+            echo "::warning::db-bridge-stub-multica has no published 9100/tcp host port; skipping /healthz check."
+            exit 0
+          fi
           for i in $(seq 1 30); do
             if curl -fsS "http://127.0.0.1:${port}/healthz" >/dev/null 2>&1; then
               echo "db-bridge-stub-multica healthy after $((i * 2))s."
@@ -338,28 +523,18 @@ jobs:
           echo "::warning::db-bridge-stub-multica did not pass /healthz within 60s - investigate the stub container."
           docker logs --tail 80 multica-db-bridge-stub-multica-1 || true
 
-      - name: Health check (db-bridge-executor-multica)
-        # The multica-side executor (areal -> multica env-dispatch / DAG
-        # direction). It is a DB-polling worker with NO HTTP listener, so the
-        # check confirms the container is running and logged "executor ready"
-        # rather than curling a port. Warning-not-error, like the other bridge
-        # services. Skipped when no container is running.
-        if: always()
+      - name: Verify served app image provenance after health checks
         run: |
-          set -uo pipefail
-          name='multica-db-bridge-executor-multica-1'
-          if ! docker ps --format '{{.Names}}' | grep -q "^${name}$"; then
-            echo "::warning::db-bridge-executor-multica container not running - areal -> multica env-dispatch/DAG fetch will not be drained."
-            docker logs --tail 40 "$name" 2>/dev/null || true
-            exit 0
-          fi
-          for i in $(seq 1 15); do
-            if docker logs --tail 50 "$name" 2>&1 | grep -q "executor ready"; then
-              echo "db-bridge-executor-multica ready after $((i * 2))s."
-              exit 0
-            fi
-            echo "waiting for executor readiness... ($i/15)"
-            sleep 2
-          done
-          echo "::warning::db-bridge-executor-multica did not log 'executor ready' within 30s - investigate the executor container (check SUPABASE_URL / BRIDGE_MULTICA_UPSTREAM_URL)."
-          docker logs --tail 80 "$name" || true
+          set -euo pipefail
+          owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
+          bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/assert-served-app-image-provenance.sh" \
+            post-health \
+            "${DEPLOY_DIR}" \
+            "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.selfhost.yml" \
+            "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.aliyun.yml" \
+            "ghcr.io/${owner_lc}/multica-backend:${IMAGE_TAG}" \
+            "ghcr.io/${owner_lc}/multica-web:${IMAGE_TAG}"
+
+      - name: Final runner ownership postflight
+        if: always() && steps.ownership_after_artifact.outcome == 'success'
+        run: bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/assert-runner-workspace-ownership.sh" final

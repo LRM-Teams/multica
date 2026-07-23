@@ -34,25 +34,25 @@ import (
 const maxAgentDescriptionLength = 255
 
 type AgentResponse struct {
-	ID            string          `json:"id"`
-	WorkspaceID   string          `json:"workspace_id"`
-	RuntimeID     string          `json:"runtime_id"`
-	Name          string          `json:"name"`
-	DisplayName   string          `json:"display_name"`
-	Description   string          `json:"description"`
-	Instructions  string          `json:"instructions"`
-	AvatarURL     *string         `json:"avatar_url"`
-	AvatarSource  string          `json:"avatar_source"`
-	RuntimeMode   string          `json:"runtime_mode"`
-	RuntimeName   string          `json:"runtime_name"`
+	ID           string  `json:"id"`
+	WorkspaceID  string  `json:"workspace_id"`
+	RuntimeID    string  `json:"runtime_id"`
+	Name         string  `json:"name"`
+	DisplayName  string  `json:"display_name"`
+	Description  string  `json:"description"`
+	Instructions string  `json:"instructions"`
+	AvatarURL    *string `json:"avatar_url"`
+	AvatarSource string  `json:"avatar_source"`
+	RuntimeMode  string  `json:"runtime_mode"`
+	RuntimeName  string  `json:"runtime_name"`
 	// Presence-safe projection of the bound runtime. Always filled when the
 	// runtime row exists — even if ListVisibleAgentRuntimes would hide the
 	// private runtime details from this viewer (LRM-248 AC5).
-	RuntimeStatus     string  `json:"runtime_status,omitempty"`
-	RuntimeLastSeenAt *string `json:"runtime_last_seen_at,omitempty"`
-	RuntimeConfig any             `json:"runtime_config"`
-	CustomArgs    []string        `json:"custom_args"`
-	McpConfig     json.RawMessage `json:"mcp_config"`
+	RuntimeStatus     string          `json:"runtime_status,omitempty"`
+	RuntimeLastSeenAt *string         `json:"runtime_last_seen_at,omitempty"`
+	RuntimeConfig     any             `json:"runtime_config"`
+	CustomArgs        []string        `json:"custom_args"`
+	McpConfig         json.RawMessage `json:"mcp_config"`
 	// custom_env is intentionally NOT serialized on agent resources. The
 	// agent_list/get/create/update/archive/restore responses and WS events
 	// only expose coarse metadata (has_custom_env, custom_env_key_count) so
@@ -64,7 +64,11 @@ type AgentResponse struct {
 	CustomEnvKeyCount int    `json:"custom_env_key_count"`
 	McpConfigRedacted bool   `json:"mcp_config_redacted"`
 	Visibility        string `json:"visibility"`
-	Status            string `json:"status"`
+	// HomeChannelID is set when visibility=channel (LRM-240 / LRM-370). Null
+	// for workspace/private. Encodes the single group the agent may be
+	// discovered/invited/@-mentioned in.
+	HomeChannelID *string `json:"home_channel_id"`
+	Status        string  `json:"status"`
 	// ManagedRole marks agents the platform manages specially. Empty for
 	// ordinary agents; "group_manager" for a per-group Beckham. The UI keys
 	// the channel-panel config tab (and its any-member editability) off this.
@@ -735,9 +739,24 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("failed to load group-manager ids for ListAgents", "workspace_id", workspaceID, "error", gmErr)
 		groupManagers = map[string]bool{}
 	}
+	listChannelID := strings.TrimSpace(r.URL.Query().Get("channel_id"))
+	if listChannelID != "" {
+		if _, ok := parseUUIDOrBadRequest(w, listChannelID, "channel_id"); !ok {
+			return
+		}
+	}
+	agentIDs := make([]pgtype.UUID, 0, len(agents))
+	for _, a := range agents {
+		agentIDs = append(agentIDs, a.ID)
+	}
+	homeByAgent := h.loadAgentHomeChannelIDs(r.Context(), agentIDs)
 	visible := make([]AgentResponse, 0, len(agents))
 	for _, a := range agents {
 		if groupManagers[uuidToString(a.ID)] {
+			continue
+		}
+		homeID := homeByAgent[uuidToString(a.ID)]
+		if !agentVisibleInChannelContext(a.Visibility, homeID, listChannelID) {
 			continue
 		}
 		if actorType == "member" && (a.Visibility == "private" || privateAgentOwnerOnly(a)) {
@@ -746,6 +765,10 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		resp := agentToResponse(a)
+		if homeID != "" {
+			h := homeID
+			resp.HomeChannelID = &h
+		}
 		if skills, ok := skillMap[resp.ID]; ok {
 			resp.Skills = skills
 		}
@@ -781,6 +804,10 @@ func (h *Handler) GetAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := agentToResponse(agent)
+	if home, ok := h.loadAgentHomeChannelID(r.Context(), agent.ID); ok {
+		homeID := uuidToString(home)
+		resp.HomeChannelID = &homeID
+	}
 	// Use the summary query (no `content` column) — the embedded
 	// AgentSkillSummary only needs id/name/description, and reading large
 	// SKILL.md bodies just to discard them is the exact regression we fixed
@@ -835,6 +862,9 @@ type CreateAgentRequest struct {
 	CustomArgs         []string              `json:"custom_args"`
 	McpConfig          json.RawMessage       `json:"mcp_config"`
 	Visibility         string                `json:"visibility"`
+	// HomeChannelID binds a channel-visibility agent to exactly one group
+	// (LRM-370). Required when visibility=channel; forbidden otherwise.
+	HomeChannelID      *string               `json:"home_channel_id"`
 	MaxConcurrentTasks int32                 `json:"max_concurrent_tasks"`
 	Model              string                `json:"model"`
 	ThinkingLevel      string                `json:"thinking_level"`
@@ -917,6 +947,12 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
+	if !ok {
+		return
+	}
+
+	_, homeChannelProvided := rawFields["home_channel_id"]
+	binding, ok := h.resolveAgentVisibilityBinding(r.Context(), w, workspaceID, req.Visibility, req.HomeChannelID, homeChannelProvided)
 	if !ok {
 		return
 	}
@@ -1015,7 +1051,9 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		RuntimeMode:        runtime.RuntimeMode,
 		RuntimeConfig:      rc,
 		RuntimeID:          runtime.ID,
-		Visibility:         req.Visibility,
+		// Insert-safe visibility: channel requires home_channel_id which is
+		// applied immediately after insert (CHECK forbids channel without home).
+		Visibility:         insertSafeAgentVisibility(binding),
 		MaxConcurrentTasks: req.MaxConcurrentTasks,
 		OwnerID:            parseUUID(ownerID),
 		CustomEnv:          ce,
@@ -1055,6 +1093,17 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to create agent: "+err.Error())
 		return
 	}
+	if err := h.applyAgentHomeChannel(r.Context(), created.ID, binding); err != nil {
+		slog.Warn("apply agent home channel failed", append(logger.RequestAttrs(r), "error", err, "agent_id", uuidToString(created.ID))...)
+		_, _ = h.Queries.ArchiveAgent(r.Context(), db.ArchiveAgentParams{ID: created.ID, ArchivedBy: parseUUID(ownerID)})
+		writeError(w, http.StatusInternalServerError, "failed to bind home_channel_id")
+		return
+	}
+	created, err = h.reloadAgentAfterHomeChannelRefresh(r.Context(), created.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to reload agent")
+		return
+	}
 	slog.Info("agent created", append(logger.RequestAttrs(r), "agent_id", uuidToString(created.ID), "name", created.Name, "workspace_id", workspaceID)...)
 	if hasDraftID {
 		h.MarkAgentDraftUsed(r, workspaceID, ownerID, draftID, created.ID)
@@ -1071,9 +1120,16 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := agentToResponse(created)
+	if binding.Visibility == agentVisibilityChannel {
+		home := uuidToString(binding.HomeChannelID)
+		resp.HomeChannelID = &home
+	}
 	h.attachAgentRuntimeName(r.Context(), &resp)
 	actorType, actorID := h.resolveActor(r, ownerID, workspaceID)
 	h.publishAgentVisibilityEvent(protocol.EventAgentCreated, workspaceID, actorType, actorID, created, map[string]any{"agent": broadcastAgentResponse(resp)})
+	if created.RuntimeID.Valid {
+		h.projectReminderOwnerStart(r.Context(), uuidToString(created.ID), uuidToString(created.RuntimeID))
+	}
 
 	obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.AgentCreated(
 		ownerID,
@@ -1132,6 +1188,10 @@ type UpdateAgentRequest struct {
 	CustomArgs         *[]string        `json:"custom_args"`
 	McpConfig          *json.RawMessage `json:"mcp_config"`
 	Visibility         *string          `json:"visibility"`
+	// HomeChannelID follows the same pointer semantics as Visibility: omitted
+	// means no change; when Visibility becomes channel it is required; when
+	// Visibility becomes workspace/private it must be omitted/empty.
+	HomeChannelID      *string          `json:"home_channel_id"`
 	Status             *string          `json:"status"`
 	MaxConcurrentTasks *int32           `json:"max_concurrent_tasks"`
 	Model              *string          `json:"model"`
@@ -1417,16 +1477,55 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, "this runtime is private; only its owner or a workspace admin can move agents onto it")
 			return
 		}
+		if runtime.ID != existing.RuntimeID && !agentRuntimeHasCapability(runtime, protocol.DaemonCapabilityReminderVersionedCache) {
+			var hasActiveReminders bool
+			if err := h.DB.QueryRow(r.Context(), `
+				SELECT EXISTS (
+				  SELECT 1 FROM agent_reminder
+				  WHERE agent_id = $1 AND status IN ('scheduled', 'firing')
+				)`, existing.ID).Scan(&hasActiveReminders); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to validate reminder runtime capability")
+				return
+			}
+			if hasActiveReminders {
+				writeCodedError(w, http.StatusConflict, "daemon_outdated", "target runtime must upgrade before moving an agent with active reminders")
+				return
+			}
+		}
 		params.RuntimeID = runtime.ID
 		params.RuntimeMode = pgtype.Text{String: runtime.RuntimeMode, Valid: true}
 		targetRuntimeID = runtime.ID
 	}
-	if req.Visibility != nil {
-		if h.isGroupManagerAgent(r.Context(), existing.ID) && *req.Visibility != "private" {
-			writeError(w, http.StatusBadRequest, "group manager (贝克汉姆) visibility must stay private")
+	var visibilityBinding *agentChannelVisibilityBinding
+	if req.Visibility != nil || rawFields["home_channel_id"] != nil {
+		targetVisibility := existing.Visibility
+		if req.Visibility != nil {
+			targetVisibility = *req.Visibility
+		}
+		// Group managers (贝克汉姆) may change visibility like any other agent
+		// (Frank / LRM-387): the previous "must stay channel" gate made the
+		// profile picker look broken. Default create still binds channel+home.
+		_, homeProvided := rawFields["home_channel_id"]
+		var homePtr *string
+		if homeProvided {
+			homePtr = req.HomeChannelID
+		} else if existing.Visibility == agentVisibilityChannel && targetVisibility == agentVisibilityChannel {
+			// Keep existing home when staying on channel and home_channel_id omitted.
+			if existingHome, ok := h.loadAgentHomeChannelID(r.Context(), existing.ID); ok {
+				home := uuidToString(existingHome)
+				homePtr = &home
+				homeProvided = true
+			}
+		}
+		binding, ok := h.resolveAgentVisibilityBinding(
+			r.Context(), w, uuidToString(existing.WorkspaceID), targetVisibility, homePtr, homeProvided || targetVisibility == agentVisibilityChannel,
+		)
+		if !ok {
 			return
 		}
-		params.Visibility = pgtype.Text{String: *req.Visibility, Valid: true}
+		visibilityBinding = &binding
+		// Visibility is applied with home_channel_id after UpdateAgent so a
+		// failed metadata update cannot leave a half-applied visibility row.
 	}
 	if req.Status != nil {
 		params.Status = pgtype.Text{String: *req.Status, Valid: true}
@@ -1516,6 +1615,10 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 
 	updated, err := h.Queries.UpdateAgent(r.Context(), params)
 	if err != nil {
+		if isReminderDaemonOutdatedError(err) {
+			writeCodedError(w, http.StatusConflict, "daemon_outdated", "target runtime must upgrade before moving an agent with active reminders")
+			return
+		}
 		if identityUniqueViolation(err, "agent_workspace_name_unique") {
 			writeError(w, http.StatusConflict, "username is already in use")
 			return
@@ -1548,8 +1651,24 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if visibilityBinding != nil {
+		if err := h.applyAgentHomeChannel(r.Context(), updated.ID, *visibilityBinding); err != nil {
+			slog.Warn("update agent home channel failed", append(logger.RequestAttrs(r), "error", err, "agent_id", id)...)
+			writeError(w, http.StatusInternalServerError, "failed to update visibility/home_channel_id")
+			return
+		}
+		updated, err = h.reloadAgentAfterHomeChannelRefresh(r.Context(), updated.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to reload agent")
+			return
+		}
+	}
 
 	resp := agentToResponse(updated)
+	if home, ok := h.loadAgentHomeChannelID(r.Context(), updated.ID); ok {
+		homeID := uuidToString(home)
+		resp.HomeChannelID = &homeID
+	}
 	// agentToResponse always initialises Skills as []; junction-table rows
 	// are untouched by the SQL update, so we reload them here to keep the
 	// response (and the broadcast that mirrors it) in sync with reality.
@@ -1568,6 +1687,10 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	userID := requestUserID(r)
 	actorType, actorID := h.resolveActor(r, userID, uuidToString(updated.WorkspaceID))
 	h.publishAgentVisibilityEvent(protocol.EventAgentStatus, uuidToString(updated.WorkspaceID), actorType, actorID, updated, map[string]any{"agent": broadcastAgentResponse(resp)})
+	if existing.RuntimeID.Valid && updated.RuntimeID.Valid && existing.RuntimeID != updated.RuntimeID && h.ReminderNotifier != nil {
+		h.projectReminderOwnerStop(r.Context(), uuidToString(updated.ID), uuidToString(existing.RuntimeID))
+		h.projectReminderOwnerStart(r.Context(), uuidToString(updated.ID), uuidToString(updated.RuntimeID))
+	}
 	redactAgentResponseForActor(&resp, actorType)
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -1748,6 +1871,9 @@ func (h *Handler) ArchiveAgent(w http.ResponseWriter, r *http.Request) {
 	h.attachAgentRuntimeName(r.Context(), &resp)
 	actorType, actorID := h.resolveActor(r, userID, wsID)
 	h.publish(protocol.EventAgentArchived, wsID, actorType, actorID, map[string]any{"agent": broadcastAgentResponse(resp)})
+	if archived.RuntimeID.Valid {
+		h.projectReminderOwnerStop(r.Context(), uuidToString(archived.ID), uuidToString(archived.RuntimeID))
+	}
 	redactAgentResponseForActor(&resp, actorType)
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -1785,6 +1911,9 @@ func (h *Handler) RestoreAgent(w http.ResponseWriter, r *http.Request) {
 	userID := requestUserID(r)
 	actorType, actorID := h.resolveActor(r, userID, wsID)
 	h.publish(protocol.EventAgentRestored, wsID, actorType, actorID, map[string]any{"agent": broadcastAgentResponse(resp)})
+	if restored.RuntimeID.Valid {
+		h.projectReminderOwnerStart(r.Context(), uuidToString(restored.ID), uuidToString(restored.RuntimeID))
+	}
 	redactAgentResponseForActor(&resp, actorType)
 	writeJSON(w, http.StatusOK, resp)
 }

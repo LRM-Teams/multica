@@ -1,15 +1,26 @@
 "use client";
 
 import * as React from "react";
-import { Bot, CheckCircle2, Loader2, Sparkles, X } from "lucide-react";
+import { Bot, CheckCircle2, Globe, Hash, Lock, Loader2, Sparkles, X } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api } from "@multica/core/api";
+import {
+  VISIBILITY_DESCRIPTION,
+  VISIBILITY_LABEL,
+  VISIBILITY_OPTIONS,
+} from "@multica/core/agents";
+import { channelsOptions } from "@multica/core/channels";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useAuthStore } from "@multica/core/auth";
 import { memberListOptions, workspaceKeys } from "@multica/core/workspace/queries";
 import { runtimeListOptions } from "@multica/core/runtimes";
-import type { Agent, AgentCreationDraft, CreateAgentRequest } from "@multica/core/types";
+import type {
+  Agent,
+  AgentCreationDraft,
+  AgentVisibility,
+  CreateAgentRequest,
+} from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   Dialog,
@@ -20,13 +31,33 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@multica/ui/components/ui/dialog";
+import { Label } from "@multica/ui/components/ui/label";
 import { RuntimePicker, isRuntimeUsableForUser } from "../agents/components/runtime-picker";
 import { ModelDropdown } from "../agents/components/model-dropdown";
 import { ThinkingDropdown } from "../agents/components/thinking-dropdown";
+import { HomeChannelBindChip } from "../agents/components/home-channel-bind-chip";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../i18n";
 import { listParam, parseWindyCreateAgentURL } from "./windy-create-agent-link-utils";
 
+function VisibilityOptionIcon({
+  value,
+  className,
+}: {
+  value: AgentVisibility;
+  className?: string;
+}) {
+  if (value === "private") return <Lock className={className} />;
+  if (value === "channel") return <Hash className={className} />;
+  return <Globe className={className} />;
+}
+
+function seedVisibility(draft: AgentCreationDraft): AgentVisibility {
+  const seed = draft.visibility;
+  return seed === "channel" || seed === "private" || seed === "workspace"
+    ? seed
+    : "workspace";
+}
 export function WindyCreateAgentLink({
   href,
   children,
@@ -59,7 +90,11 @@ export function WindyCreateAgentLink({
             // real agent as trusted `assigned` avatar via draft_id — a raw
             // URL bypass of the avatar_selection contract. Never forward it;
             // the created agent gets the server's concrete assigned default.
-            visibility: url.searchParams.get("visibility") === "workspace" ? "workspace" : "private",
+            visibility: (() => {
+              const v = url.searchParams.get("visibility");
+              if (v === "workspace" || v === "channel" || v === "private") return v;
+              return "private";
+            })(),
             project_id: url.searchParams.get("project_id") || null,
             channel_id: url.searchParams.get("channel_id") || null,
             can_execute_code: url.searchParams.get("can_execute_code") === "true",
@@ -116,6 +151,9 @@ function InlineCreateAgentDialog({
   draft: AgentCreationDraft;
   onCreated: (name: string) => void;
   onClose: () => void;
+  // Hire card fields are independent (visibility/home vs runtime/model);
+  // reducer would obscure pickVisibility/submit guards without reducing churn.
+  // react-doctor-disable-next-line react-doctor/prefer-useReducer
 }) {
   const { t } = useT("agents");
   const { t: tModals } = useT("modals");
@@ -124,6 +162,21 @@ function InlineCreateAgentDialog({
   const qc = useQueryClient();
   const { data: runtimes = [], isLoading: runtimesLoading } = useQuery(runtimeListOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
+  const { data: channels = [], isLoading: channelsLoading } = useQuery(channelsOptions(wsId));
+  const groups = React.useMemo(
+    () => channels.filter((c) => c.kind === "group" && !c.archived_at),
+    [channels],
+  );
+  const channelOptionDisabled = !channelsLoading && groups.length === 0;
+
+  const [visibility, setVisibility] = React.useState<AgentVisibility>(() =>
+    seedVisibility(draft),
+  );
+  const [homeChannelId, setHomeChannelId] = React.useState<string | null>(() => {
+    if (draft.channel_id) return draft.channel_id;
+    return null;
+  });
+  const [homeInvalid, setHomeInvalid] = React.useState(false);
   const [selectedRuntimeId, setSelectedRuntimeId] = React.useState(() => {
     const firstUsable = runtimes.find((r) => isRuntimeUsableForUser(r, currentUser?.id ?? null));
     return firstUsable?.id ?? "";
@@ -141,8 +194,30 @@ function InlineCreateAgentDialog({
   const selectedRuntime = runtimes.find((r) => r.id === effectiveRuntimeId) ?? null;
   const hasUsableRuntime = runtimes.some((r) => isRuntimeUsableForUser(r, currentUser?.id ?? null));
 
+  const pickVisibility = (next: AgentVisibility) => {
+    if (next === "channel" && channelOptionDisabled) return;
+    setVisibility(next);
+    setHomeInvalid(false);
+    if (next === "channel") {
+      setHomeChannelId((prev) => {
+        if (prev) return prev;
+        if (draft.channel_id) return draft.channel_id;
+        return groups[0]?.id ?? null;
+      });
+    } else {
+      setHomeChannelId(null);
+    }
+  };
+
   const handleCreate = async () => {
     if (!selectedRuntime || creating) return;
+    // Channel without home is an explicit hard stop — never silently
+    // rewrite to private/workspace (LRM-238 / LRM-399).
+    if (visibility === "channel" && !homeChannelId) {
+      setHomeInvalid(true);
+      toast.error(t(($) => $.visibility_bind.home_required));
+      return;
+    }
     setCreating(true);
     try {
       const payload: CreateAgentRequest = {
@@ -153,7 +228,8 @@ function InlineCreateAgentDialog({
         // resolves the draft's suggested avatar itself via draft_id and
         // records it as `assigned`. draft.avatar_url is a preview-only
         // suggestion string; it must never be resubmitted as a raw URL.
-        visibility: draft.visibility,
+        visibility,
+        home_channel_id: visibility === "channel" ? homeChannelId : undefined,
         runtime_id: selectedRuntime.id,
         model: model.trim() || undefined,
         thinking_level: thinkingLevel || undefined,
@@ -212,14 +288,9 @@ function InlineCreateAgentDialog({
         </DialogHeader>
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 sm:space-y-5 sm:px-6 sm:py-5">
           <div className="rounded-2xl border bg-card p-4 shadow-sm">
-            <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div className="min-w-0">
-                <p className="break-words text-sm font-semibold">{draft.description || draft.name}</p>
-                <p className="mt-0.5 text-xs text-muted-foreground">{t(($) => $.windy.generated_hint)}</p>
-              </div>
-              <span className="w-fit shrink-0 rounded-full border bg-muted/40 px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
-                {draft.visibility === "workspace" ? "Workspace" : "Private"}
-              </span>
+            <div className="mb-3 min-w-0">
+              <p className="break-words text-sm font-semibold">{draft.description || draft.name}</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">{t(($) => $.windy.generated_hint)}</p>
             </div>
             {draft.instructions && (
               <p className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words rounded-xl border bg-muted/25 px-3 py-2 text-xs leading-5 text-muted-foreground">
@@ -227,6 +298,82 @@ function InlineCreateAgentDialog({
               </p>
             )}
           </div>
+
+          <div>
+            <Label className="text-xs text-muted-foreground">
+              {t(($) => $.create_dialog.visibility_label)}
+            </Label>
+            <div
+              className="mt-1.5 flex flex-col gap-2"
+              role="radiogroup"
+              aria-label={t(($) => $.create_dialog.visibility_label)}
+            >
+              {VISIBILITY_OPTIONS.map((option) => {
+                const selected = visibility === option;
+                const disabled = option === "channel" && channelOptionDisabled;
+                return (
+                  <button
+                    key={option}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    disabled={disabled}
+                    onClick={() => pickVisibility(option)}
+                    className={cn(
+                      "flex items-start gap-2.5 rounded-lg border px-3 py-2.5 text-sm transition-colors",
+                      selected
+                        ? "border-primary bg-primary/5"
+                        : "border-border hover:bg-muted",
+                      disabled && "cursor-not-allowed opacity-50",
+                    )}
+                  >
+                    <span
+                      aria-hidden
+                      className={cn(
+                        "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2",
+                        selected ? "border-primary" : "border-muted-foreground/50",
+                      )}
+                    >
+                      {selected ? (
+                        <span className="h-2 w-2 rounded-full bg-primary" />
+                      ) : null}
+                    </span>
+                    <VisibilityOptionIcon
+                      value={option}
+                      className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground"
+                    />
+                    <div className="min-w-0 flex-1 text-left">
+                      <div className="font-medium">{VISIBILITY_LABEL[option]}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {VISIBILITY_DESCRIPTION[option]}
+                      </div>
+                      {option === "channel" && selected ? (
+                        <div className="mt-2">
+                          <HomeChannelBindChip
+                            value={homeChannelId}
+                            invalid={homeInvalid}
+                            onChange={(id) => {
+                              setHomeChannelId(id);
+                              setHomeInvalid(false);
+                            }}
+                          />
+                        </div>
+                      ) : null}
+                      {option === "channel" && disabled ? (
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          {t(($) => $.visibility_bind.no_groups)}
+                        </div>
+                      ) : null}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              {t(($) => $.visibility_bind.not_channel_permission_hint)}
+            </p>
+          </div>
+
           {!hasUsableRuntime && !runtimesLoading ? (
             <div className="rounded-2xl border border-dashed bg-muted/20 px-4 py-6 text-center text-sm text-muted-foreground">
               {t(($) => $.windy.runtime_required)}

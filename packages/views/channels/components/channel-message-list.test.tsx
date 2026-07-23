@@ -116,6 +116,13 @@ vi.mock("@multica/core/agents", () => ({
   }),
 }));
 
+// LRM-364: bubble reaction hover resolves names via member-profile queries.
+// Viewport tests are not about reactor attribution — stub the hook so we stay
+// free of QueryClientProvider (same rationale as agents/paths stubs above).
+vi.mock("../../common/use-reaction-actor-name", () => ({
+  useReactionActorName: () => (type: string, id: string) => id || type,
+}));
+
 vi.mock("@multica/core/paths", () => ({
   useCurrentWorkspace: () => ({ id: "ws-1", slug: "test" }),
   useWorkspaceSlug: () => "test",

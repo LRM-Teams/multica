@@ -2,7 +2,13 @@ export type AgentStatus = "idle" | "working" | "blocked" | "error" | "offline";
 
 export type AgentRuntimeMode = "local" | "cloud";
 
-export type AgentVisibility = "workspace" | "private";
+/**
+ * Agent discoverability / invite / @mention surface (LRM-240).
+ * - `workspace` — visible workspace-wide
+ * - `private` — Personal; owner + workspace admins
+ * - `channel` — 「仅本群」; must bind a single `home_channel_id`
+ */
+export type AgentVisibility = "workspace" | "private" | "channel";
 
 export type RuntimeUpdateState =
   | "idle"
@@ -331,6 +337,12 @@ export interface Agent {
    */
   mcp_config_redacted?: boolean;
   visibility: AgentVisibility;
+  /**
+   * Bound home group when `visibility === "channel"` (LRM-240 / LRM-370).
+   * Required for channel visibility; omit/null for workspace/private.
+   * Illegal combinations must 4xx — never silently remap to private (LRM-238).
+   */
+  home_channel_id?: string | null;
   status: AgentStatus;
   /**
    * Platform-managed role marker. Empty/absent for ordinary agents;
@@ -479,6 +491,11 @@ export interface CreateAgentRequest {
   custom_env?: Record<string, string>;
   custom_args?: string[];
   visibility?: AgentVisibility;
+  /**
+   * Required when `visibility === "channel"`. Omitted for other tiers.
+   * Server rejects channel-without-home and home-without-channel (LRM-370).
+   */
+  home_channel_id?: string | null;
   max_concurrent_tasks?: number;
   model?: string;
   /** Optional runtime-native reasoning/effort token. See `Agent.thinking_level`. */
@@ -601,6 +618,13 @@ export interface UpdateAgentRequest {
    */
   mcp_config?: unknown | null;
   visibility?: AgentVisibility;
+  /**
+   * Tri-state with `visibility` (LRM-370):
+   * - omit → no change when visibility unchanged
+   * - `null` → clear (only valid when leaving `channel`)
+   * - string → bind home group (required when setting `visibility: "channel"`)
+   */
+  home_channel_id?: string | null;
   status?: AgentStatus;
   max_concurrent_tasks?: number;
   model?: string;

@@ -17,8 +17,9 @@ import (
 
 // 贝克汉姆 (Beckham) is the per-group manager agent: one and only one per group,
 // a brand-new agent independent of Wendy. It owns proactive group behavior
-// (ambient review, coordination handoffs). New groups auto-provision one; old
-// groups can invite one on demand (no bulk backfill).
+// (ambient review, coordination handoffs). Groups do not auto-create one on
+// channel create (LRM-397/398); hire via Wendy or InviteGroupManager, which
+// binds visibility=channel + home_channel_id to that group.
 const (
 	beckhamAgentName        = "贝克汉姆"
 	managedRoleGroupManager = "group_manager"
@@ -104,21 +105,23 @@ var errGroupManagerNoRuntime = errors.New("no runtime available to run the group
 const beckhamInstructionsMarker = "规格错还是实现错"
 
 // refreshGroupManagerIfStale updates an existing Beckham's instructions,
-// description, avatar, and visibility to the current values when they are out
-// of date. Visibility must stay private so Beckham is not workspace-discoverable
-// or invite-picker listed (LRM-233).
+// description, and avatar when they are out of date. Visibility is NOT
+// rewritten here (LRM-387): operators may change Workspace / Personal /
+// 仅本群 from the profile picker; forcing channel on every refresh would
+// undo that. Create/ensure still binds channel+home as the default.
+// ListAgents continues to exclude managed_role=group_manager from the
+// invite directory regardless of visibility.
 func (h *Handler) refreshGroupManagerIfStale(ctx context.Context, agent db.Agent) db.Agent {
-	fresh := strings.Contains(agent.Instructions, beckhamInstructionsMarker) &&
-		agent.AvatarUrl.Valid && agent.AvatarUrl.String == beckhamAvatarURL &&
-		agent.Visibility == "private"
-	if fresh {
+	home, hasHome := h.loadAgentHomeChannelID(ctx, agent.ID)
+	personaFresh := strings.Contains(agent.Instructions, beckhamInstructionsMarker) &&
+		agent.AvatarUrl.Valid && agent.AvatarUrl.String == beckhamAvatarURL
+	if personaFresh {
 		return agent
 	}
 	updated, err := h.Queries.UpdateAgent(ctx, db.UpdateAgentParams{
 		ID:                 agent.ID,
 		Instructions:       pgtype.Text{String: beckhamInstructions, Valid: true},
 		Description:        pgtype.Text{String: beckhamDescription, Valid: true},
-		Visibility:         pgtype.Text{String: "private", Valid: true},
 		AvatarSelectionSet: true,
 		AvatarUrl:          pgtype.Text{String: beckhamAvatarURL, Valid: true},
 		AvatarSource:       agentAvatarSourceAssigned,
@@ -127,7 +130,32 @@ func (h *Handler) refreshGroupManagerIfStale(ctx context.Context, agent db.Agent
 		slog.Warn("refresh group manager persona failed", "agent_id", uuidToString(agent.ID), "error", err)
 		return agent
 	}
+	// If still on channel visibility but home is missing, re-bind from the
+	// owning group — do not flip workspace/private back to channel.
+	if updated.Visibility == agentVisibilityChannel && !hasHome {
+		var channelID pgtype.UUID
+		if err := h.DB.QueryRow(ctx, `
+			SELECT id FROM channel
+			WHERE group_manager_agent_id = $1 AND workspace_id = $2
+			LIMIT 1
+		`, agent.ID, agent.WorkspaceID).Scan(&channelID); err == nil && channelID.Valid {
+			home = channelID
+			hasHome = true
+			if err := h.applyAgentHomeChannel(ctx, updated.ID, agentChannelVisibilityBinding{
+				Visibility:    agentVisibilityChannel,
+				HomeChannelID: home,
+			}); err != nil {
+				slog.Warn("refresh group manager channel visibility failed", "agent_id", uuidToString(agent.ID), "error", err)
+			} else if reloaded, rerr := h.reloadAgentAfterHomeChannelRefresh(ctx, updated.ID); rerr == nil {
+				updated = reloaded
+			}
+		}
+	}
 	resp := agentToResponse(updated)
+	if home, ok := h.loadAgentHomeChannelID(ctx, updated.ID); ok {
+		homeID := uuidToString(home)
+		resp.HomeChannelID = &homeID
+	}
 	h.publishAgentVisibilityEvent(protocol.EventAgentStatus, uuidToString(updated.WorkspaceID), "member", "", updated, map[string]any{"agent": broadcastAgentResponse(resp)})
 	return updated
 }
@@ -223,6 +251,8 @@ func (h *Handler) EnsureGroupManagerForChannel(ctx context.Context, workspaceID,
 
 	// Create the agent outside any transaction so the identity retry-on-collision
 	// loop works (the Chinese display name collides on the derived handle).
+	// Insert as private first, then bind channel visibility + home_channel_id
+	// (CHECK requires both together; LRM-370).
 	agent, err := h.createAgentWithIdentity(ctx, h.Queries, db.CreateAgentParams{
 		WorkspaceID:        workspaceID,
 		Description:        beckhamDescription,
@@ -232,7 +262,7 @@ func (h *Handler) EnsureGroupManagerForChannel(ctx context.Context, workspaceID,
 		RuntimeMode:        runtime.RuntimeMode,
 		RuntimeConfig:      []byte("{}"),
 		RuntimeID:          runtime.ID,
-		Visibility:         "private",
+		Visibility:         agentVisibilityPrivate,
 		MaxConcurrentTasks: 6,
 		OwnerID:            creatorUserID,
 		CustomEnv:          []byte("{}"),
@@ -241,6 +271,17 @@ func (h *Handler) EnsureGroupManagerForChannel(ctx context.Context, workspaceID,
 		Model:              pgtype.Text{},
 		ThinkingLevel:      pgtype.Text{},
 	}, beckhamAgentName, beckhamAgentName)
+	if err != nil {
+		return db.Agent{}, false, err
+	}
+	if err := h.applyAgentHomeChannel(ctx, agent.ID, agentChannelVisibilityBinding{
+		Visibility:    agentVisibilityChannel,
+		HomeChannelID: channelID,
+	}); err != nil {
+		_, _ = h.DB.Exec(ctx, `UPDATE agent SET archived_at = now() WHERE id = $1`, agent.ID)
+		return db.Agent{}, false, err
+	}
+	agent, err = h.reloadAgentAfterHomeChannelRefresh(ctx, agent.ID)
 	if err != nil {
 		return db.Agent{}, false, err
 	}
@@ -291,30 +332,9 @@ func (h *Handler) ensureChannelAgentMember(ctx context.Context, workspaceID, cha
 	}
 }
 
-// provisionGroupManagerForNewChannel is the fire-and-forget hook for new group
-// channels. Never fails channel creation; logs and moves on (e.g. no runtime).
-func (h *Handler) provisionGroupManagerForNewChannel(ctx context.Context, workspaceID string, channelID, creatorUserID pgtype.UUID) {
-	wsUUID := parseUUID(workspaceID)
-	agent, created, err := h.EnsureGroupManagerForChannel(ctx, wsUUID, channelID, creatorUserID)
-	if err != nil {
-		if errors.Is(err, errGroupManagerNoRuntime) {
-			slog.Info("group manager not provisioned: no runtime yet", "channel_id", uuidToString(channelID), "workspace_id", workspaceID)
-			return
-		}
-		slog.Warn("provision group manager for new channel failed", "channel_id", uuidToString(channelID), "workspace_id", workspaceID, "error", err)
-		return
-	}
-	if created {
-		resp := agentToResponse(agent)
-		h.publishAgentVisibilityEvent(protocol.EventAgentCreated, workspaceID, "member", uuidToString(creatorUserID), agent, map[string]any{"agent": broadcastAgentResponse(resp)})
-		if h.TaskService != nil {
-			h.TaskService.ReconcileAgentStatus(ctx, agent.ID)
-		}
-	}
-}
-
-// InviteGroupManager is the manual entrypoint for existing groups: a member asks
-// to add Beckham to a group that predates auto-provisioning.
+// InviteGroupManager is the hire entrypoint for a group: create (or reuse) the
+// single Beckham for this channel with visibility=channel + home_channel_id.
+// Channel create never calls this (LRM-398); Wendy / owners invite explicitly.
 func (h *Handler) InviteGroupManager(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {
@@ -347,12 +367,20 @@ func (h *Handler) InviteGroupManager(w http.ResponseWriter, r *http.Request) {
 	}
 	if created {
 		resp := agentToResponse(agent)
+		if home, ok := h.loadAgentHomeChannelID(r.Context(), agent.ID); ok {
+			homeID := uuidToString(home)
+			resp.HomeChannelID = &homeID
+		}
 		h.publishAgentVisibilityEvent(protocol.EventAgentCreated, workspaceID, "member", userID, agent, map[string]any{"agent": broadcastAgentResponse(resp)})
 		if h.TaskService != nil {
 			h.TaskService.ReconcileAgentStatus(r.Context(), agent.ID)
 		}
 	}
 	resp := agentToResponse(agent)
+	if home, ok := h.loadAgentHomeChannelID(r.Context(), agent.ID); ok {
+		homeID := uuidToString(home)
+		resp.HomeChannelID = &homeID
+	}
 	redactAgentResponseForActor(&resp, "member")
 	writeJSON(w, http.StatusOK, map[string]any{"agent": resp, "created": created})
 }

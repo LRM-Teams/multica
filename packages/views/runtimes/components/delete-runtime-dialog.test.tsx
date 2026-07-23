@@ -18,7 +18,7 @@ const TEST_RESOURCES = {
 // mocked api throws. vi.hoisted is required because vi.mock is hoisted above
 // imports — a top-level class declaration would not be visible to the mock
 // factory at hoist time.
-const { ApiError, apiDeleteRuntime, apiArchiveAgentsAndDeleteRuntime } = vi.hoisted(() => {
+const { ApiError, apiDeleteRuntime } = vi.hoisted(() => {
   class ApiError extends Error {
     status: number;
     body: unknown;
@@ -31,35 +31,23 @@ const { ApiError, apiDeleteRuntime, apiArchiveAgentsAndDeleteRuntime } = vi.hois
   return {
     ApiError,
     apiDeleteRuntime: vi.fn(),
-    apiArchiveAgentsAndDeleteRuntime: vi.fn(),
   };
 });
 
 vi.mock("@multica/core/api", () => ({
   api: {
     deleteRuntime: (...args: unknown[]) => apiDeleteRuntime(...args),
-    archiveAgentsAndDeleteRuntime: (...args: unknown[]) =>
-      apiArchiveAgentsAndDeleteRuntime(...args),
     listAgents: vi.fn(),
     listMembers: vi.fn(),
   },
   ApiError,
 }));
 
-// The mutations file imports api lazily via the mock above; the mocked
-// hooks below thread directly to the api stubs so the dialog's mode
-// transitions are deterministic in this test.
 vi.mock("@multica/core/runtimes/mutations", () => ({
   useDeleteRuntime: () => ({
     isPending: false,
     mutate: vi.fn(),
     mutateAsync: (...args: unknown[]) => apiDeleteRuntime(...args),
-  }),
-  useArchiveAgentsAndDeleteRuntime: () => ({
-    isPending: false,
-    mutate: vi.fn(),
-    mutateAsync: (vars: { runtimeId: string; expectedActiveAgentIds: string[] }) =>
-      apiArchiveAgentsAndDeleteRuntime(vars.runtimeId, vars.expectedActiveAgentIds),
   }),
 }));
 
@@ -70,9 +58,9 @@ vi.mock("@tanstack/react-query", async () => {
     );
   return {
     ...actual,
-    // The dialog reads agentListOptions / memberListOptions through useQuery.
-    // The default returns an empty list — individual tests override
-    // mockUseQuery to return populated agents when they want cascade-from-cache.
+    // The dialog reads agentListOptions through useQuery. The default
+    // returns an empty list — individual tests override mockUseQuery to
+    // return populated agents when they want the blocked-by-agents step.
     useQuery: vi.fn(() => ({ data: [], isLoading: false })),
   };
 });
@@ -83,9 +71,26 @@ vi.mock("@multica/core/agents", () => ({
   useWorkspacePresenceMap: () => ({ byAgent: new Map(), loading: false }),
 }));
 
-vi.mock("@multica/core/auth", () => ({
-  useAuthStore: (sel: (s: { user: { id: string } }) => unknown) =>
-    sel({ user: { id: "user-me" } }),
+vi.mock("@multica/core/paths", () => ({
+  useWorkspacePaths: () => ({
+    agentDetail: (id: string) => `/agents/${id}`,
+  }),
+}));
+
+vi.mock("../../navigation/app-link", () => ({
+  AppLink: ({
+    href,
+    children,
+    className,
+  }: {
+    href: string;
+    children: React.ReactNode;
+    className?: string;
+  }) => (
+    <a href={href} className={className}>
+      {children}
+    </a>
+  ),
 }));
 
 vi.mock("../../common/actor-avatar", () => ({ ActorAvatar: () => null }));
@@ -172,8 +177,6 @@ function renderDialog(opts: {
   const onOpenChange = vi.fn();
   const onDeleted = opts.onDeleted ?? vi.fn();
 
-  // Wire useQuery mock: agentListOptions returns the cached agents,
-  // memberListOptions returns an empty list (Owner cell renders the dash).
   mockedUseQuery.mockImplementation(((queryArg: unknown) => {
     const q = queryArg as { queryKey?: readonly unknown[] };
     const key = q?.queryKey ?? [];
@@ -184,20 +187,29 @@ function renderDialog(opts: {
     return { data: [], isLoading: false } as unknown as ReturnType<typeof useQuery>;
   }) as unknown as typeof useQuery);
 
-  const utils = render(
+  const tree = (runtime: AgentRuntime) => (
     <I18nProvider locale="en" resources={TEST_RESOURCES}>
       <QueryClientProvider client={qc}>
         <DeleteRuntimeDialog
           open
           onOpenChange={onOpenChange}
-          runtime={opts.runtime ?? makeRuntime()}
+          runtime={runtime}
           wsId="ws-1"
           onDeleted={onDeleted}
         />
       </QueryClientProvider>
-    </I18nProvider>,
+    </I18nProvider>
   );
-  return { ...utils, onOpenChange, onDeleted };
+
+  const initialRuntime = opts.runtime ?? makeRuntime();
+  const utils = render(tree(initialRuntime));
+  // Simulates the parent (list/detail page) re-rendering this same open
+  // dialog with a fresh `runtime` prop, as it would after the runtime-list
+  // query refetches from a poll-triggered invalidation — without remounting
+  // the dialog.
+  const rerenderWithRuntime = (next: AgentRuntime) => utils.rerender(tree(next));
+
+  return { ...utils, onOpenChange, onDeleted, qc, rerenderWithRuntime };
 }
 
 describe("DeleteRuntimeDialog", () => {
@@ -205,17 +217,24 @@ describe("DeleteRuntimeDialog", () => {
     vi.clearAllMocks();
   });
 
-  it("renders the light-mode prompt when no agents are bound", () => {
+  it("renders the final confirm prompt when no agents are bound and the runtime isn't a self-healing local daemon", () => {
     renderDialog({ cachedAgents: [] });
 
     expect(screen.getByText("Delete Runtime?")).toBeInTheDocument();
     expect(screen.getByText("Delete runtime")).toBeInTheDocument();
-    // No checkbox, no agent table in light mode.
-    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
-    expect(screen.queryByText(/Archive .* and delete this Runtime/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/still on this runtime/)).not.toBeInTheDocument();
   });
 
-  it("opens directly in cascade mode when local cache shows bound agents, with the destructive button gated by the checkbox", async () => {
+  it("calls the strict DELETE and reports success", async () => {
+    apiDeleteRuntime.mockResolvedValueOnce(undefined);
+    const { onDeleted } = renderDialog({ cachedAgents: [] });
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete runtime" }));
+    await waitFor(() => expect(apiDeleteRuntime).toHaveBeenCalledWith("rt-1"));
+    await waitFor(() => expect(onDeleted).toHaveBeenCalled());
+  });
+
+  it("blocks deletion and lists bound agents with a link to each, instead of offering to cascade-archive them", () => {
     renderDialog({
       cachedAgents: [
         makeAgent("a-1", { name: "Alpha" }),
@@ -224,33 +243,107 @@ describe("DeleteRuntimeDialog", () => {
     });
 
     expect(
-      screen.getByText(/Archive 2 agents and delete this Runtime/),
+      screen.getByText(/2 agents are still on this runtime/),
     ).toBeInTheDocument();
-    // Destructive confirm starts disabled until the user ticks the checkbox.
-    const confirm = screen.getByRole("button", {
-      name: /Archive 2 agents and delete runtime/,
-    }) as HTMLButtonElement;
-    expect(confirm.disabled).toBe(true);
-
-    const checkbox = screen.getByRole("checkbox") as HTMLInputElement;
-    fireEvent.click(checkbox);
-    await waitFor(() => expect(confirm.disabled).toBe(false));
-
-    apiArchiveAgentsAndDeleteRuntime.mockResolvedValueOnce({
-      status: "ok",
-      agents_archived: 2,
-      tasks_cancelled: 0,
-    });
-    fireEvent.click(confirm);
-    await waitFor(() =>
-      expect(apiArchiveAgentsAndDeleteRuntime).toHaveBeenCalledWith("rt-1", [
-        "a-1",
-        "a-2",
-      ]),
-    );
+    expect(screen.getByText("Alpha")).toBeInTheDocument();
+    expect(screen.getByText("Beta")).toBeInTheDocument();
+    // Never offers to archive/cascade — only a way out (Close) and a link
+    // per agent to go handle it there.
+    expect(
+      screen.queryByRole("button", { name: /archive/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    const alphaLink = screen.getByText("Alpha").closest("a");
+    expect(alphaLink).toHaveAttribute("href", "/agents/a-1");
+    expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
   });
 
-  it("pivots from light to cascade mode when the strict DELETE returns runtime_has_active_agents", async () => {
+  it("shows the stop-daemon guidance for a self-healing local runtime with no bound agents", () => {
+    renderDialog({
+      runtime: makeRuntime({ runtime_mode: "local", status: "online" }),
+      cachedAgents: [],
+    });
+
+    expect(screen.getByText("Stop the daemon first")).toBeInTheDocument();
+    expect(screen.getByText("multica daemon stop")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Delete runtime" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("resolves the stop-daemon step's device label from the runtime's hostname suffix, not its provider-branded name", () => {
+    renderDialog({
+      runtime: makeRuntime({
+        runtime_mode: "local",
+        status: "online",
+        name: "Claude (build-server-01)",
+      }),
+      cachedAgents: [],
+    });
+
+    expect(screen.getByText("build-server-01")).toBeInTheDocument();
+    expect(screen.queryByText("Claude (build-server-01)")).not.toBeInTheDocument();
+  });
+
+  it("falls back to device_info's leading segment when the runtime name has no hostname suffix", () => {
+    renderDialog({
+      runtime: makeRuntime({
+        runtime_mode: "local",
+        status: "online",
+        name: "Claude",
+        device_info: "host.local · 2.1.121 (Claude Code)",
+      }),
+      cachedAgents: [],
+    });
+
+    expect(screen.getByText("host.local")).toBeInTheDocument();
+  });
+
+  it("polls for a runtime-list refresh while the stop-daemon step is showing, and auto-advances to the final confirm once the same open dialog receives an offline runtime", async () => {
+    vi.useFakeTimers();
+    try {
+      const online = makeRuntime({ runtime_mode: "local", status: "online" });
+      const { qc, rerenderWithRuntime } = renderDialog({
+        runtime: online,
+        cachedAgents: [],
+      });
+      const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+
+      expect(screen.getByText("Stop the daemon first")).toBeInTheDocument();
+      expect(invalidateSpy).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(invalidateSpy).toHaveBeenCalledWith({
+        queryKey: ["runtimes", "ws-1"],
+      });
+
+      // Simulates the poll-triggered refetch resolving to "offline" and the
+      // parent re-rendering this SAME open dialog with the fresh runtime —
+      // it must advance without the user reopening anything.
+      rerenderWithRuntime({ ...online, status: "offline" });
+
+      expect(screen.queryByText("Stop the daemon first")).not.toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Delete runtime" }),
+      ).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("prioritizes the agents-blocking step over the stop-daemon step when both apply", () => {
+    renderDialog({
+      runtime: makeRuntime({ runtime_mode: "local", status: "online" }),
+      cachedAgents: [makeAgent("a-1", { name: "Alpha" })],
+    });
+
+    expect(
+      screen.getByText(/1 agent is still on this runtime/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Stop the daemon first")).not.toBeInTheDocument();
+  });
+
+  it("falls back to the agents-blocking step when the strict DELETE returns runtime_has_active_agents", async () => {
     const fresh = makeAgent("a-9", { name: "FreshAgent" });
     apiDeleteRuntime.mockRejectedValueOnce(
       new ApiError("conflict", 409, {
@@ -261,66 +354,16 @@ describe("DeleteRuntimeDialog", () => {
 
     renderDialog({ cachedAgents: [] });
 
-    // We open in light mode, hit Delete, and expect the dialog to pivot to
-    // cascade mode using the server-supplied agent list.
-    const lightConfirm = screen.getByRole("button", { name: "Delete runtime" });
-    fireEvent.click(lightConfirm);
+    fireEvent.click(screen.getByRole("button", { name: "Delete runtime" }));
 
     await waitFor(() =>
       expect(
-        screen.getByText(/Archive 1 agent and delete this Runtime/),
+        screen.getByText(/1 agent is still on this runtime/),
       ).toBeInTheDocument(),
     );
     expect(screen.getByText("FreshAgent")).toBeInTheDocument();
-    // Notice should be visible explaining the pivot.
     expect(
       screen.getByText(/Active agents were added since you opened this dialog/),
-    ).toBeInTheDocument();
-  });
-
-  it("re-prompts when the cascade returns runtime_delete_plan_changed", async () => {
-    apiArchiveAgentsAndDeleteRuntime.mockRejectedValueOnce(
-      new ApiError("plan changed", 409, {
-        code: "runtime_delete_plan_changed",
-        active_agents: [
-          makeAgent("a-1", { name: "Alpha" }),
-          makeAgent("a-2", { name: "Beta" }),
-          makeAgent("a-3", { name: "Gamma" }),
-        ],
-      }),
-    );
-
-    renderDialog({
-      cachedAgents: [
-        makeAgent("a-1", { name: "Alpha" }),
-        makeAgent("a-2", { name: "Beta" }),
-      ],
-    });
-
-    // Tick the checkbox and confirm.
-    fireEvent.click(screen.getByRole("checkbox"));
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: /Archive 2 agents and delete runtime/,
-      }),
-    );
-
-    await waitFor(() =>
-      expect(
-        screen.getByText(/Archive 3 agents and delete this Runtime/),
-      ).toBeInTheDocument(),
-    );
-    // The new third agent shows in the plan.
-    expect(screen.getByText("Gamma")).toBeInTheDocument();
-    // Checkbox is unchecked again so the user must re-confirm. The base-ui
-    // Checkbox renders as a <button role="checkbox"> with aria-checked, so
-    // we read that attribute rather than `.checked`.
-    expect(screen.getByRole("checkbox").getAttribute("aria-checked")).toBe(
-      "false",
-    );
-    // Notice copy explains why the dialog re-prompted.
-    expect(
-      screen.getByText(/active agent set changed/i),
     ).toBeInTheDocument();
   });
 });

@@ -228,6 +228,7 @@
     "reply_count": "{{count}} 件の返信",
     "meta_count": "{{count}} 件の返信",
     "close_aria": "スレッドを閉じる",
+    "open_in_main_aria": "メイン列で開く",
     "context_label": "元のメッセージ",
     "view_parent": "メイン会話へ戻る",
     "show_full_message": "全文を表示",
@@ -235,6 +236,7 @@
     "jump_to_parent": "元のメッセージへ移動",
     "empty_replies": "返信はまだありません。",
     "load_failed": "スレッドの読み込みに失敗しました。",
+    "view_in_channel_failed": "チャンネルでこの会話を開けませんでした。",
     "send_failed": "スレッド返信の送信に失敗しました。",
     "follow": "フォロー",
     "following": "フォロー中",
@@ -269,6 +271,17 @@
     "stop_all_success": "{{count}} 件のエージェントを停止しました",
     "stop_all_partial": "{{total}} 件中 {{stopped}} 件のエージェントを停止しました"
   },
+  "stop_all_agents": {
+    "tooltip": "すべてのエージェントを停止",
+    "aria": "すべてのエージェントを停止",
+    "empty_tooltip": "実行中のエージェントはありません",
+    "menu_label": "すべてのエージェントを停止",
+    "dialog_title": "すべてのエージェントを停止",
+    "dialog_warning_before": "これにより ",
+    "dialog_warning_after": " で実行中のすべてのエージェントが直ちに停止します。再開する前に新しい指示を出せます。",
+    "dialog_cancel": "キャンセル",
+    "dialog_confirm": "すべて停止"
+  },
   "composer": {
     "placeholder": "必要なことを入力してください…  @エージェント名 で返信を促します。",
     "attach_aria": "添付",
@@ -277,14 +290,14 @@
     "send_failed": "メッセージの送信に失敗しました。もう一度お試しください。",
     "voice_start": "音声メッセージを録音",
     "voice_stop": "録音を停止（{{seconds}} 秒）",
-    "voice_processing": "音声を文字起こし中",
+    "voice_uploading": "音声メッセージをアップロード中",
     "voice_blocked": "録音する前に入力内容と添付を消去してください",
     "voice_permission_denied": "マイクの使用が許可されませんでした。",
     "voice_secure_context_required": "ブラウザーでマイクを使用するには HTTPS が必要です。HTTPS のアドレスを開いて再試行してください。",
     "voice_unavailable": "このブラウザは音声録音に対応していません。",
     "voice_recording_failed": "音声の録音に失敗しました。もう一度お試しください。",
     "voice_transcription_failed": "音声の文字起こしに失敗しました。もう一度お試しください。",
-    "voice_processing_failed": "音声メッセージの処理に失敗しました。もう一度お試しください。",
+    "voice_upload_failed": "音声メッセージのアップロードに失敗しました。もう一度お試しください。",
     "voice_no_speech": "音声を検出できませんでした。",
     "issue_ref_aria": "Issue を参照",
     "project_label": "プロジェクト",
@@ -322,6 +335,12 @@
     "voice_show_transcript": "文字に変換",
     "voice_hide_transcript": "文字を閉じる",
     "voice_transcript_label": "音声の文字起こし",
+    "voice_transcribing": "文字起こし中",
+    "voice_transcription_unavailable": "文字起こしを利用できません",
+    "voice_synthesizing": "音声を生成中",
+    "voice_synthesis_unavailable": "音声を生成できません",
+    "voice_preview": "音声メッセージ",
+    "voice_preview_duration": "音声メッセージ · {{seconds}}秒",
     "agent_badge": "Agent",
     "radar_badge": "Project Radar",
     "feishu_badge": "Feishu",
@@ -364,6 +383,10 @@
         "bound": "{actor} がこのチャンネルをプロジェクト「{project}」に関連付けました",
         "changed": "{actor} がこのチャンネルの関連プロジェクトを「{previous}」から「{project}」に変更しました",
         "unbound": "{actor} がこのチャンネルとプロジェクト「{previous}」の関連付けを解除しました"
+      },
+      "reminder": {
+        "fired": "リマインダーが発火しました：{title}",
+        "anchor_unavailable_suffix": " · アンカー利用不可"
       }
     }
   },

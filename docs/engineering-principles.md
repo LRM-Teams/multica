@@ -130,13 +130,14 @@
 
 ## 4. Provider / 环境（daemon）
 
-### 4.0 s89 双部署环境（2026-07-16 当天进档——此前是隐性知识，烧过一小时考古）
-- **`:8090` = dev 自动部署**（`/data/multica`，APP_ENV=dev；`deploy.yml` on push→dev，已验证）：**测试/验收/日常一律用这套**；lrm-team 等真实工作区在这套的 `multica-postgres-1`。
-- **浏览器麦克风例外**（2026-07-22 实测）：`:8090` 是 HTTP，Chrome/Edge 必须隐藏 `getUserMedia`，所以它不能用于录音验收。现有 `leagent.me` 在腾讯云公网入口被转到 `dnspod.qcloud.com/static/webblock.html`，HTTPS 握手被关闭；Caddy 本机证书和反代正常也改变不了这个外部拦截。语音录入上线前必须提供浏览器信任的 HTTPS（已备案域名，或自动续期的公网 IP 证书），客户端只报告真实的 secure-context 错误，不尝试绕过浏览器安全策略。
-- **`:18090` = main 分支部署**（`/data/multica-main`，APP_ENV=production，独立 PostgreSQL/卷/端口，独立用户/工作区宇宙——同邮箱在两套里是两个人；海鹏搭建）。**触发机制已确认（Nash 三方对账）**：`.github/workflows/deploy-main.yml` + `docs/deploy-s89-main.md` **只存在于 `main` 分支**——dev→main PR 合并触发部署（最近 run 29302499173，7/14 成功，s89 镜像=origin/main 一致；无 cron/watchtower，CI/CD 唯一入口）。"停在 7/14"只是因为 main 自那以后没再合并过。
-- **⚠️ 元教训**：workflow 文件可以只活在别的分支上——只扫 `origin/dev` 会把存在的机制误报为"缺失"（deploy-main.yml 留在 main 是 trigger 设计的一部分）。更深一层（Felix 自拆）：**"永远读 X"式规矩本身就是待爆假设**——他上午栽在"读了陈旧 main"后给自己立了"一律读 origin/dev"，两小时后这条规矩让他在"什么部署 main"的问题上扫错了树。正确形态是**读对这个问题有权威性的那棵树**（产品代码→dev；"什么部署 main"→main；"线上跑什么"→部署的那个 SHA）——把依赖上下文的判断压成常量默认值，和 `[a-z0-9]`/终止符表是同一个病：一条规矩能修好上一次的错，同时制造下一次的错。
-- **两条铁则（Frank）**：不要手改 :18090；一切变更走 CI/CD 部署。
-- 事故记录：2026-07-16 Iris 从 :18090 登录被建新号、误判为重号 bug（task #548）。**从错误的门进去，所有对比都失义。**（本节初版把"main 触发"写成了已证事实，20 分钟内被 Felix 的 workflow 扫描纠正——权威位置的因果句必须与验证状态同标。）
+### 4.0 Aliyun 单一正式 CD 与 runner ownership — `可执行`（③单一部署链 + ⑤ workflow/host gate；owner: @Barry）
+- **唯一正式 dev 环境**：`dev` 只部署到 Aliyun `101.200.210.144`，canonical browser origin 是 `https://leagent.me`；`:8090` 只保留 daemon 兼容与部署探针。腾讯 s89 已退出正式 release path，只保留离线回滚资料；workflow 不得有 s89 runner、环境或 fallback 分支。
+- **构建与部署分界**：镜像和最小 deploy bundle 在 GitHub-hosted runner 生成；Aliyun self-hosted runner 只下载同一 `github.sha` 的 immutable artifact、拉固定 SHA 镜像并在本机执行 Compose/Caddy/readyz。self-hosted deploy job 禁止 `actions/checkout`/git fetch，避免大陆网络 partial clone 失败，也避免把 Actions checkout 变成人工/agent 共用源码树。
+- **runner ownership**：Aliyun runner/deploy user 是 `dev`，`/home/dev/actions-runner/_work/**` 必须全为 `dev`。artifact 前、artifact 后、deploy 后、终局四个 phase 都扫描整棵 work root；任何异主路径立即报 phase + owner/mode + exact path，禁止 broad chown。人工/agent 永远不得在 `_work/**` 建 branch/worktree。
+- **runtime owner 与 secrets**：`/data/multica` 由 deploy owner `dev` 管理，Caddyfile 从 runner-owned artifact 先校验，再通过 sibling + atomic rename 安装；不 sudo、不回写 runner work root。runtime secrets 只在 host-owned `/data/multica/.env`，受保护 GitHub Environment `aliyun-dev` 只做部署边界；Compose dotenv 永远只作为数据解析，禁止 `source`/`eval`，不能覆盖 workflow 控制变量。每次 restart 前必须用同一份 host 目标 user/database/password 三元组做真实 PostgreSQL TCP `SELECT 1`，不把“文件有值”或旧容器 identity 当 credential 有效。
+- **终局证据**：连续两次 cumulative Deploy（clean + reuse）成功；每次 postflight non-`dev`=0；served backend/frontend SHA 对应 cumulative `dev`；host-local `/readyz` 与外部 `leagent.me` HTTPS 都通过。CI/merge 或公网 `:8090/health` 单独都不能宣称部署完成。
+- **事故依据**：2026-07-23 腾讯 s89 checkout 的 6 个 root-owned refs/logs 来自宿主机 root Git 复用 Actions worktree；同日 Aliyun 首次 cutover run `29979928059` 又因 `actions/checkout` 的 GnuTLS/partial-clone promisor fetch 失败。两起事故共同证明：长期修复不是清一次目录或多重试，而是让 self-hosted deploy 根本不拥有 Git worktree。
+- **branch source-of-truth 元教训**：workflow 可以只存在于特定 branch。产品代码看 `dev`；“什么部署 main”看 `main`；线上跑什么看部署 SHA/容器。不要把“永远读某一 branch”写成无上下文常量。
 
 ### 4.1 子进程环境合同 — `可执行`（task #512，进行中）
 - 全局宿主私有变量禁继承（Raft SEA 标记等）+ per-provider 声明允许/禁止清单 + 显式 `custom_env` 最后叠加最优先 + 全 provider 矩阵回归。首刀已落：中央 provider-aware sanitizer（#627，Pi 声明 `PI_PACKAGE_DIR` 宿主私有）。
@@ -181,14 +182,14 @@
 - **物**：`server/internal/integrations/doubaospeech`；`POST /api/voice/asr`、`POST /api/voice/tts`；协议 frame、header、错误脱敏、handler 输入边界测试；可选 live test 用 TTS 生成 PCM 再送 ASR，已用实际账号见过完整往返成功。
 
 ### 4.8 消息语音形态由结构化 part 决定 — `可执行`（②协议类型 + ③共享 Composer/播放组件 + ⑤消息链回归；owner: @Codex）
-- 人类录音落库为可读 transcript text + `{type:"voice", duration_ms, attachment_id}`，附件保存与 ASR 相同波形的 16 kHz 单声道 PCM WAV；Agent 语音回复落库为完整 transcript text + `{type:"voice"}`。`voice` part 没有非空 text part 时服务端拒绝，不能靠正文关键词猜消息形态。
+- 人类录音先以空正文 + `{type:"voice", duration_ms, attachment_id, transcription_status:"pending"}` 原子落库，附件是 16 kHz 单声道 PCM WAV。server 在持久队列中完成 ASR 后，把同一消息更新为 transcript text + `transcription_status:"completed"`，再触发 Agent；永久失败标为 `failed`，原声仍可播放。客户端不得在发送前调用 ASR，避免 provider 短暂故障使录音本身无法发送。Agent 语音回复先落库为完整 transcript text + `{type:"voice", synthesis_status:"pending"}`，server 生成一次 24 kHz PCM WAV 并作为同一消息的私有附件持久化，再把 part 更新为 `synthesis_status:"completed"`；重启由持久队列恢复，永久失败标为 `failed`。除 pending 人类录音这一种形状外，`voice` part 没有非空 text part 时服务端拒绝；消息形态不能靠正文关键词猜。
 - 人类语音消息要求 Agent 通过现有 `multica message send --voice` 输出；普通文字仍走文字，文字明确要求语音时由 Agent 语义判断后加 `--voice`。前端不维护“语音回复”关键词表。
 - 所有人类发言的频道执行提示都必须保留用户请求的交付形式，不得另外注入 `text only` / `plain-text reply` 之类相互冲突的规则。普通文字消息只注入语义意图与能力说明，具体 CLI 语法继续以 runtime brief 为单一权威源；结构化语音输入可以在当轮强化已有的 `--voice` 路径。
 - 语音回复依赖支持 `message send --voice` 的运行时版本。服务端与前端已支持语音不代表旧 daemon 自动获得该命令；发布后必须确认目标智能体重新注册的 `cli_version` 已包含语音合同。
 - 自动播放资格只来自本机当前会话的一次发送手势，并由第一条新 Agent 回复消费；文字回复也会消费，防止稍后的无关语音突然播放。所有 Agent 语音消息始终提供手动播放/停止/重试。
 - Agent 语音回复与新的人类录音默认只显示同一种语音气泡；canonical transcript 仍保留在消息中用于 Agent 上下文、可访问性、复制和 Agent TTS，但正文需由气泡旁的显式“转文字”操作展开。展开区必须与对应气泡同组并有可感知的“语音转写”标识。历史人类语音 part 没有 `attachment_id` 时继续显示不可播放标记，不能用 TTS 冒充用户原声。
-- 人类录音先解码为同一份 PCM，ASR 与 WAV 附件上传并行执行；ASR 失败或发送前被拒绝时删除未绑定附件。录音附件沿用频道附件的 membership、写权限、消息绑定、下载和删除合同，不另造公开音频地址。这里保存的是重采样后的真实语音波形，不是浏览器原始 WebM/MP4 容器；实时通话仍需另立媒体传输合同。
-- Agent 语音的播放源只能是 server 根据 canonical transcript 生成的 TTS。旧运行时曾把“文本 + 单个自有音频附件”当语音回复发送；agent transport 将这个精确边界形状补成 `voice` part，显示层同时识别已落库的同形消息、隐藏该附件且不播放其字节。普通用户音频、多个附件和混合文件消息不参与此规则；当前运行时明确禁止自行合成/上传语音附件。
+- 人类录音在浏览器解码、重采样并上传 WAV 后立即发送；server 只从已经绑定到该消息、频道和工作区的私有附件读取音频并异步 ASR。录音附件沿用频道附件的 membership、写权限、消息绑定、下载和删除合同，不另造公开音频地址。这里保存的是重采样后的真实语音波形，不是浏览器原始 WebM/MP4 容器；实时通话仍需另立媒体传输合同。
+- Agent 语音的播放源只能是 server 根据 canonical transcript 生成并绑定到消息的 TTS 附件；每条消息使用固定队列和附件 ID，provider 或进程失败只能重试同一产物，不能让每个浏览器重新合成。旧运行时曾把“文本 + 单个自有音频附件”当语音回复发送；agent transport 将这个精确边界形状补成 `voice` part，但 server 会丢弃运行时提供的音频元数据并重新生成可信 WAV。普通用户音频、多个附件和混合文件消息不参与此规则；当前运行时明确禁止自行合成/上传语音附件。
 - **物**：`protocol.MessagePartTypeVoice`、`messageparts.Normalize`、CLI `message send --voice`、共享 `VoiceInputButton`/`VoiceMessageAudio`、channel/DM/thread 发送与渲染回归；语音基础实现见 `docs/superpowers/plans/2026-07-22-beckham-voice-poc.md`，人类原声附件实现见 `docs/superpowers/plans/2026-07-23-human-voice-recording.md`。
 
 ## 5. 验证方法论 — `仅文档`（诚实标注：拦不住人，只能让"猜"显式化）

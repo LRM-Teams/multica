@@ -146,6 +146,29 @@ describe("MobileFileAttachment (LRM-230 html + download guidance)", () => {
     expect(screen.queryByTestId("mobile-file-preview-image")).toBeNull();
   });
 
+  // LRM-359 — mobile compact chip mirrors desktop semantic tokens.
+  it("compact card uses muted surface + foreground filename (no wash / link hex)", () => {
+    render(
+      <MobileFileAttachment
+        filename="design-agent-profile-polish.html"
+        contentType="text/html"
+        sizeBytes={2048}
+        previewMode="html"
+        attachmentId="att-1"
+        onDownload={() => {}}
+      />,
+    );
+    const entry = screen.getByTestId("mobile-file-entry");
+    expect(entry.className).toContain("bg-muted");
+    expect(entry.className).toContain("border-border");
+    expect(entry.className).toContain("text-foreground");
+    expect(entry.className).not.toMatch(/bg-muted\/\d+|bg-\[#|text-\[#/);
+
+    const filename = screen.getByTestId("mobile-file-filename");
+    expect(filename.className).toContain("text-foreground");
+    expect(filename.className).not.toMatch(/text-\[#|text-muted|text-gray/);
+  });
+
   it("zip: compact card → fullscreen download guidance (never blank)", () => {
     render(
       <MobileFileAttachment

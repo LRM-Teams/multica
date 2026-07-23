@@ -37,3 +37,24 @@ export function filterComposerStripTasks(tasks: readonly ChannelActiveTask[]): C
   }
   return next;
 }
+
+/** Terminal outcome rows are history facts — they are not cancelable. */
+export function isTerminalChannelActiveTask(task: ChannelActiveTask): boolean {
+  return typeof task.outcome === "string";
+}
+
+/**
+ * LRM-405 — every non-terminal active task in the channel (all kinds).
+ * Used by the header Stop-all entry so "stop all running agents" covers
+ * reply runs and issue-create work alike — no silent subset.
+ */
+export function listStoppableChannelTasks(
+  tasks: readonly ChannelActiveTask[],
+): ChannelActiveTask[] {
+  const next: ChannelActiveTask[] = [];
+  for (const task of tasks) {
+    if (isTerminalChannelActiveTask(task)) continue;
+    next.push(task);
+  }
+  return next;
+}

@@ -228,6 +228,7 @@
     "reply_count": "{{count}} replies",
     "meta_count": "{{count}} replies",
     "close_aria": "Close thread",
+    "open_in_main_aria": "Open in main chat",
     "context_label": "Original message",
     "view_parent": "Back to main chat",
     "show_full_message": "Show full message",
@@ -235,6 +236,7 @@
     "jump_to_parent": "Jump to original message",
     "empty_replies": "No replies yet.",
     "load_failed": "Failed to load thread.",
+    "view_in_channel_failed": "Could not open this conversation in Channels.",
     "send_failed": "Failed to send thread reply.",
     "follow": "Follow",
     "following": "Following",
@@ -269,6 +271,17 @@
     "stop_all_success": "Stopped {{count}} agents",
     "stop_all_partial": "Stopped {{stopped}} of {{total}} agents"
   },
+  "stop_all_agents": {
+    "tooltip": "Stop all agents",
+    "aria": "Stop all agents",
+    "empty_tooltip": "No agents currently running",
+    "menu_label": "Stop all agents",
+    "dialog_title": "Stop all agents",
+    "dialog_warning_before": "This will immediately stop all running agents in ",
+    "dialog_warning_after": ". You can provide new guidance before resuming them.",
+    "dialog_cancel": "Cancel",
+    "dialog_confirm": "Stop All Agents"
+  },
   "composer": {
     "placeholder": "Describe what you need…  @mention an agent to trigger its reply.",
     "attach_aria": "Attach",
@@ -277,14 +290,14 @@
     "send_failed": "Failed to send message. Please try again.",
     "voice_start": "Record voice message",
     "voice_stop": "Stop recording at {{seconds}} seconds",
-    "voice_processing": "Transcribing voice message",
+    "voice_uploading": "Uploading voice message",
     "voice_blocked": "Clear the current text and attachments before recording",
     "voice_permission_denied": "Microphone permission was denied.",
     "voice_secure_context_required": "Browsers only allow microphone access over HTTPS. Open the HTTPS address and try again.",
     "voice_unavailable": "Voice recording is not supported in this browser.",
     "voice_recording_failed": "Voice recording failed. Please try again.",
     "voice_transcription_failed": "Voice transcription failed. Please try again.",
-    "voice_processing_failed": "Voice message processing failed. Please try again.",
+    "voice_upload_failed": "Voice message upload failed. Please try again.",
     "voice_no_speech": "No speech was detected.",
     "issue_ref_aria": "Reference issue",
     "project_label": "Project",
@@ -322,6 +335,12 @@
     "voice_show_transcript": "Show transcript",
     "voice_hide_transcript": "Hide transcript",
     "voice_transcript_label": "Voice transcript",
+    "voice_transcribing": "Transcribing",
+    "voice_transcription_unavailable": "Transcript unavailable",
+    "voice_synthesizing": "Generating voice",
+    "voice_synthesis_unavailable": "Voice unavailable",
+    "voice_preview": "Voice message",
+    "voice_preview_duration": "Voice message · {{seconds}}s",
     "agent_badge": "Agent",
     "radar_badge": "Project Radar",
     "feishu_badge": "Feishu",
@@ -364,6 +383,10 @@
         "bound": "{actor} linked this channel to project «{project}»",
         "changed": "{actor} moved this channel from project «{previous}» to project «{project}»",
         "unbound": "{actor} unlinked this channel from project «{previous}»"
+      },
+      "reminder": {
+        "fired": "Reminder fired: {title}",
+        "anchor_unavailable_suffix": " · Anchor unavailable"
       }
     }
   },

@@ -3,6 +3,11 @@ import { api } from "../api";
 import { inboxKeys } from "./queries";
 import { useWorkspaceId } from "../hooks";
 import type { InboxItem } from "../types";
+import { userActivityKeys } from "../user-activity/queries";
+import {
+  optimisticallyMarkActivityInboxRead,
+  restoreActivityQueries,
+} from "../user-activity/mutations";
 
 export function useMarkInboxRead() {
   const qc = useQueryClient();
@@ -15,13 +20,16 @@ export function useMarkInboxRead() {
       qc.setQueryData<InboxItem[]>(inboxKeys.list(wsId), (old) =>
         old?.map((item) => (item.id === id ? { ...item, read: true } : item)),
       );
-      return { prev };
+      const prevActivity = await optimisticallyMarkActivityInboxRead(qc, wsId, id);
+      return { prev, prevActivity };
     },
     onError: (_err, _id, ctx) => {
       if (ctx?.prev) qc.setQueryData(inboxKeys.list(wsId), ctx.prev);
+      restoreActivityQueries(qc, ctx?.prevActivity);
     },
     onSettled: () => {
       qc.invalidateQueries({ queryKey: inboxKeys.list(wsId) });
+      qc.invalidateQueries({ queryKey: userActivityKeys.all(wsId) });
     },
   });
 }

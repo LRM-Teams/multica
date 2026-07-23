@@ -207,6 +207,7 @@
   "tabs": {
     "activity": "활동",
     "profile": "프로필",
+    "reminders": "리마인더",
     "files": "파일",
     "tasks": "작업",
     "instructions": "지침",
@@ -479,12 +480,28 @@
   "visibility": {
     "private": {
       "label": "개인",
-      "tooltip": "개인 · 본인과 워크스페이스 관리자만 이 에이전트를 사용할 수 있습니다"
+      "tooltip": "개인 · 본인과 워크스페이스 관리자만 발견·초대·@ 가능"
+    },
+    "channel": {
+      "label": "仅本群",
+      "tooltip": "仅本群 · 바인딩된 그룹에서만 발견·초대·@"
     },
     "workspace": {
       "label": "워크스페이스",
-      "tooltip": "워크스페이스 · 이 워크스페이스의 모든 사람이 이 에이전트를 사용할 수 있습니다"
+      "tooltip": "워크스페이스 · 멤버가 발견·초대·@ 가능"
     }
+  },
+  "visibility_bind": {
+    "pick_channel": "그룹 선택",
+    "search_placeholder": "그룹 검색…",
+    "loading": "그룹 불러오는 중…",
+    "load_failed": "그룹을 불러올 수 없습니다",
+    "retry": "다시 시도",
+    "no_groups": "仅本群을 쓰려면 먼저 그룹에 가입하거나 만드세요",
+    "no_match": "일치하는 그룹 없음",
+    "home_required": "仅本群에는 home_channel_id 바인딩이 필요합니다",
+    "channel_unavailable": "홈 그룹을 사용할 수 없음",
+    "not_channel_permission_hint": "에이전트 가시성(발견/초대/@)이며 채널 사이드바 권한이 아닙니다. 다른 그룹에는 보이지 않으며, 기존 자리는 유지됩니다."
   },
   "profile_card": {
     "unavailable": "에이전트를 사용할 수 없습니다",
@@ -570,6 +587,23 @@
     "info_created": "생성일",
     "info_creator": "생성자",
     "info_status": "상태"
+  },
+  "reminders": {
+    "upcoming_heading": "예정됨",
+    "history_heading": "기록",
+    "empty_all": "아직 리마인더가 없습니다.",
+    "empty_upcoming": "예정된 리마인더가 없습니다.",
+    "empty_history": "아직 발생한 리마인더가 없습니다.",
+    "loading": "리마인더 불러오는 중…",
+    "error_title": "리마인더를 불러오지 못했습니다.",
+    "retry": "다시 시도",
+    "load_more": "더 보기",
+    "inaccessible": "이 Agent의 리마인더를 볼 권한이 없습니다.",
+    "anchor_unavailable": "앵커를 사용할 수 없음",
+    "one_shot": "일회성",
+    "next_fire_label": "다음",
+    "fired_label": "발생",
+    "timezone_label": "시간대"
   },
   "task_failure": {
     "agent_error": "에이전트 실행 오류",

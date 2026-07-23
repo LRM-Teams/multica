@@ -17,7 +17,7 @@ import { deliverVoiceRecording } from "../lib/voice-recording-delivery";
 import { voiceCaptureUnavailableReason } from "../lib/voice-capture";
 import { cancelVoicePlayback, prepareVoicePlayback } from "../lib/voice-playback";
 
-type RecordingState = "idle" | "starting" | "recording" | "transcribing";
+type RecordingState = "idle" | "starting" | "recording" | "uploading";
 
 export interface VoiceInputButtonProps {
   channelId: string;
@@ -25,7 +25,6 @@ export interface VoiceInputButtonProps {
   isMobile: boolean;
   playbackScope: string;
   onVoiceSend: (
-    transcript: string,
     durationMs: number,
     attachment: VoiceRecordingAttachment,
   ) => boolean;
@@ -82,7 +81,7 @@ export function VoiceInputButton({
     const recorder = recorderRef.current;
     if (!recorder || recorder.state === "inactive") return;
     clearMaxTimer();
-    setState("transcribing");
+    setState("uploading");
     recorder.stop();
     stopStream(streamRef.current);
     streamRef.current = null;
@@ -97,18 +96,14 @@ export function VoiceInputButton({
         toast.error(t(($) => $.composer.voice_no_speech));
         return;
       }
-      const { transcript, attachment } = await deliverVoiceRecording(pcm, channelId);
+      const { attachment } = await deliverVoiceRecording(pcm, channelId);
       uploadedAttachmentId = attachment.id;
-      if (!mountedRef.current || !transcript) {
+      if (!mountedRef.current) {
         if (attachment.id) await api.deleteAttachment(attachment.id).catch(() => undefined);
         uploadedAttachmentId = null;
-        if (mountedRef.current) {
-          cancelVoicePlayback(playbackScope);
-          toast.error(t(($) => $.composer.voice_no_speech));
-        }
         return;
       }
-      if (!onVoiceSendRef.current(transcript, durationMs, attachment)) {
+      if (!onVoiceSendRef.current(durationMs, attachment)) {
         if (attachment.id) await api.deleteAttachment(attachment.id).catch(() => undefined);
         uploadedAttachmentId = null;
         cancelVoicePlayback(playbackScope);
@@ -119,7 +114,7 @@ export function VoiceInputButton({
         await api.deleteAttachment(uploadedAttachmentId).catch(() => undefined);
       }
       cancelVoicePlayback(playbackScope);
-      if (mountedRef.current) toast.error(t(($) => $.composer.voice_processing_failed));
+      if (mountedRef.current) toast.error(t(($) => $.composer.voice_upload_failed));
     } finally {
       if (mountedRef.current) {
         setElapsedSeconds(0);
@@ -223,12 +218,12 @@ export function VoiceInputButton({
     };
   }, [clearMaxTimer, playbackScope]);
 
-  const busy = state === "starting" || state === "transcribing";
+  const busy = state === "starting" || state === "uploading";
   const recording = state === "recording";
   const label = recording
     ? t(($) => $.composer.voice_stop, { seconds: elapsedSeconds })
     : busy
-      ? t(($) => $.composer.voice_processing)
+      ? t(($) => $.composer.voice_uploading)
       : t(($) => $.composer.voice_start);
 
   return (
@@ -242,19 +237,24 @@ export function VoiceInputButton({
         !recording && (isMobile ? "w-10" : "w-8"),
       )}
       aria-label={label}
+      aria-live="polite"
+      aria-busy={busy}
       title={disabled ? t(($) => $.composer.voice_blocked) : label}
       disabled={(disabled && !recording) || busy}
       onClick={recording ? finishCapture : startCapture}
     >
       {busy ? (
-        <LoaderCircle className="size-4 animate-spin" />
+        <LoaderCircle
+          className="size-4 animate-spin motion-reduce:animate-none"
+          aria-hidden="true"
+        />
       ) : recording ? (
         <>
-          <Square className="size-3.5 fill-current" />
+          <Square className="size-3.5 fill-current" aria-hidden="true" />
           <span className="tabular-nums">0:{String(elapsedSeconds).padStart(2, "0")}</span>
         </>
       ) : (
-        <Mic className={cn(isMobile ? "size-5" : "size-4")} />
+        <Mic className={cn(isMobile ? "size-5" : "size-4")} aria-hidden="true" />
       )}
     </Button>
   );

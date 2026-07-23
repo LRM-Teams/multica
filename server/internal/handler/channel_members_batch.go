@@ -60,7 +60,7 @@ func (h *Handler) AddChannelMembers(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			continue
 		}
-		if !h.validateChannelMemberTarget(w, r, workspaceID, m.MemberType, memberID) {
+		if !h.validateChannelMemberTarget(w, r, workspaceID, channelID, m.MemberType, memberID) {
 			return
 		}
 		types = append(types, m.MemberType)

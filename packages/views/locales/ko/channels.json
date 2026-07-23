@@ -228,6 +228,7 @@
     "reply_count": "답글 {{count}}개",
     "meta_count": "답글 {{count}}개",
     "close_aria": "스레드 닫기",
+    "open_in_main_aria": "메인 열에서 열기",
     "context_label": "원본 메시지",
     "view_parent": "메인 대화로 돌아가기",
     "show_full_message": "전체 메시지 보기",
@@ -235,6 +236,7 @@
     "jump_to_parent": "원본 메시지로 이동",
     "empty_replies": "아직 답글이 없습니다.",
     "load_failed": "스레드를 불러오지 못했습니다.",
+    "view_in_channel_failed": "채널에서 이 대화를 열 수 없습니다.",
     "send_failed": "스레드 답글을 보내지 못했습니다.",
     "follow": "팔로우",
     "following": "팔로우 중",
@@ -269,6 +271,17 @@
     "stop_all_success": "에이전트 {{count}}개를 중지했습니다",
     "stop_all_partial": "에이전트 {{total}}개 중 {{stopped}}개를 중지했습니다"
   },
+  "stop_all_agents": {
+    "tooltip": "모든 에이전트 중지",
+    "aria": "모든 에이전트 중지",
+    "empty_tooltip": "실행 중인 에이전트가 없습니다",
+    "menu_label": "모든 에이전트 중지",
+    "dialog_title": "모든 에이전트 중지",
+    "dialog_warning_before": "이렇게 하면 ",
+    "dialog_warning_after": "에서 실행 중인 모든 에이전트가 즉시 중지됩니다. 다시 시작하기 전에 새 지침을 제공할 수 있습니다.",
+    "dialog_cancel": "취소",
+    "dialog_confirm": "모두 중지"
+  },
   "composer": {
     "placeholder": "필요한 내용을 입력하세요…  @에이전트이름 으로 답장을 요청하세요.",
     "attach_aria": "첨부",
@@ -277,14 +290,14 @@
     "send_failed": "메시지 전송에 실패했습니다. 다시 시도해 주세요.",
     "voice_start": "음성 메시지 녹음",
     "voice_stop": "녹음 중지 ({{seconds}}초)",
-    "voice_processing": "음성을 텍스트로 변환 중",
+    "voice_uploading": "음성 메시지 업로드 중",
     "voice_blocked": "녹음 전에 입력 내용과 첨부 파일을 비워 주세요",
     "voice_permission_denied": "마이크 권한이 거부되었습니다.",
     "voice_secure_context_required": "브라우저에서 마이크를 사용하려면 HTTPS가 필요합니다. HTTPS 주소를 열고 다시 시도하세요.",
     "voice_unavailable": "이 브라우저는 음성 녹음을 지원하지 않습니다.",
     "voice_recording_failed": "음성 녹음에 실패했습니다. 다시 시도해 주세요.",
     "voice_transcription_failed": "음성 인식에 실패했습니다. 다시 시도해 주세요.",
-    "voice_processing_failed": "음성 메시지 처리에 실패했습니다. 다시 시도해 주세요.",
+    "voice_upload_failed": "음성 메시지 업로드에 실패했습니다. 다시 시도해 주세요.",
     "voice_no_speech": "음성이 감지되지 않았습니다.",
     "issue_ref_aria": "이슈 참조",
     "project_label": "프로젝트",
@@ -322,6 +335,12 @@
     "voice_show_transcript": "텍스트로 보기",
     "voice_hide_transcript": "텍스트 닫기",
     "voice_transcript_label": "음성 텍스트",
+    "voice_transcribing": "텍스트 변환 중",
+    "voice_transcription_unavailable": "텍스트 변환을 사용할 수 없음",
+    "voice_synthesizing": "음성 생성 중",
+    "voice_synthesis_unavailable": "음성 생성 실패",
+    "voice_preview": "음성 메시지",
+    "voice_preview_duration": "음성 메시지 · {{seconds}}초",
     "agent_badge": "Agent",
     "radar_badge": "Project Radar",
     "feishu_badge": "Feishu",
@@ -364,6 +383,10 @@
         "bound": "{actor}님이 이 채널을 프로젝트 「{project}」에 연결했습니다",
         "changed": "{actor}님이 이 채널의 연결 프로젝트를 「{previous}」에서 「{project}」(으)로 변경했습니다",
         "unbound": "{actor}님이 이 채널과 프로젝트 「{previous}」의 연결을 해제했습니다"
+      },
+      "reminder": {
+        "fired": "리마인더가 발생했습니다: {title}",
+        "anchor_unavailable_suffix": " · 앵커 사용 불가"
       }
     }
   },

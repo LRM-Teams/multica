@@ -328,6 +328,38 @@ function notificationBody(author: string, content: string): string {
   return text ? `${author}: ${text}` : author;
 }
 
+/**
+ * LRM-411 / LRM-414 channel+DM system-notification gate (client WS path).
+ *
+ * Locked product rules:
+ * - Unmuted group/DM: every new message may notify (when authorized / unfocused).
+ * - Muted: suppress ambient messages; still notify on @me / @all.
+ * - Self-sent user messages never self-notify.
+ * - `type=system` channel events never notify (LRM-414).
+ * - Issue assignment still notifies via `inbox:new` → `handleInboxNew` (not gated here).
+ */
+export function shouldNotifyChannelMessage(
+  message: ChannelMessage,
+  opts: {
+    myUserId?: string;
+    channelMuted?: boolean;
+    mentionsViewer?: boolean;
+  },
+): boolean {
+  if (message.edited_at || message.deleted_at) return false;
+  if (message.type === "system") return false;
+  if (message.type === "user" && message.author_id === opts.myUserId) return false;
+
+  const mentionsViewer =
+    opts.mentionsViewer ??
+    messageMentionsViewer(message.content, opts.myUserId, message.parts);
+
+  // Mute suppresses ambient traffic only; @me / @all still ring (LRM-411).
+  if (opts.channelMuted && !mentionsViewer) return false;
+
+  return true;
+}
+
 export async function handleChannelMessageNotification(
   qc: QueryClient,
   message: ChannelMessage,
@@ -335,24 +367,30 @@ export async function handleChannelMessageNotification(
 ): Promise<void> {
   const sourceWsId = message.workspace_id;
   if (!sourceWsId) return;
-  if (message.edited_at || message.deleted_at) return;
-  if (message.type === "user" && message.author_id === myUserId) return;
 
   const channels = qc.getQueryData<Channel[]>(channelKeys.list(sourceWsId)) ?? [];
   const channel = channels.find((c) => c.id === message.channel_id) ?? null;
   const dmItems = qc.getQueryData<DMItem[]>(dmKeys.list(sourceWsId)) ?? [];
   const dmItem = dmItems.find((d) => d.id === message.channel_id) ?? null;
   const isDM = channel?.kind === "dm" || dmItem != null;
+  const channelMuted = !!(
+    channel?.muted ||
+    channel?.muted_at ||
+    dmItem?.muted ||
+    dmItem?.muted_at
+  );
+  const mentionsViewer = messageMentionsViewer(
+    message.content,
+    myUserId,
+    message.parts,
+  );
 
-  // WeChat-style mute: suppress banners for muted group channels / DMs.
-  if (channel?.muted || channel?.muted_at || dmItem?.muted || dmItem?.muted_at) {
-    return;
-  }
-
-  // Group (and unknown) chats only banner on @me / @all; DMs banner every message.
   if (
-    !isDM &&
-    !messageMentionsViewer(message.content, myUserId, message.parts)
+    !shouldNotifyChannelMessage(message, {
+      myUserId,
+      channelMuted,
+      mentionsViewer,
+    })
   ) {
     return;
   }
@@ -1198,6 +1236,22 @@ export function useRealtimeSync(
       void handleChannelMessageNotification(qc, payload, authStore.getState().user?.id);
     });
 
+    // Server-owned enrichment replaces the existing row without generating a
+    // second message notification.
+    const unsubChannelMessageUpdated = ws.on("channel:message_updated", (p) => {
+      const payload = p as ChannelMessage;
+      if (payload.channel_id && payload.id && !payload.thread_root_message_id) {
+        upsertChannelMessageInCache(qc, payload);
+      } else if (payload.channel_id) {
+        invalidateChannelMessages(qc, payload.channel_id);
+      }
+      if (payload.thread_root_message_id) {
+        upsertChannelMessageThreadInCache(qc, payload, payload.thread_root_message_id);
+      }
+      const id = getCurrentWsId();
+      if (id) qc.invalidateQueries({ queryKey: channelKeys.list(id) });
+    });
+
     const unsubChannelReactionAdded = ws.on("channel_reaction:added", (p) => {
       const payload = p as { channel_id?: string; message_id?: string };
       if (payload.channel_id) {
@@ -1261,6 +1315,7 @@ export function useRealtimeSync(
       unsubChatSessionDeleted();
       unsubChatSessionUpdated();
       unsubChannelMessage();
+      unsubChannelMessageUpdated();
       unsubChannelReactionAdded();
       unsubChannelReactionRemoved();
       unsubChannelUpdated();

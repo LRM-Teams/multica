@@ -21,7 +21,7 @@
     }
   },
   "detail": {
-    "select_prompt": "Select a notification to view details",
+    "select_prompt": "Select an activity from the left",
     "empty": "Your inbox is empty",
     "original_input": "Original input",
     "edit_advanced": "Edit as advanced form",
@@ -82,6 +82,7 @@
     "retry": "Retry",
     "open_thread_failed": "Could not open this thread",
     "open_item_failed": "Could not open this activity item",
+    "open_in_channels": "Open in Channels",
     "empty": {
       "all": {
         "title": "No activity yet",

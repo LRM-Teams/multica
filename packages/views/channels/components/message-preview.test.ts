@@ -113,6 +113,38 @@ describe("formatChannelMessagePreview", () => {
     ).toBe("Atlas: [Sticker]");
   });
 
+  it("summarizes a voice message without leaking its hidden transcript", () => {
+    const transcript = "private spoken transcript";
+    const result = formatChannelMessagePreview(
+      "Wendy",
+      transcript,
+      resolveMention,
+      [
+        { type: "text", text: transcript },
+        { type: "voice", duration_ms: 2400 },
+      ],
+      {
+        formatVoice: (seconds) => `语音消息 · ${seconds} 秒`,
+      },
+    );
+
+    expect(result).toBe("Wendy: 语音消息 · 2 秒");
+    expect(result).not.toContain(transcript);
+  });
+
+  it("uses a safe generic voice summary when a reading surface omits localization", () => {
+    const transcript = "another hidden transcript";
+    const result = formatChannelMessagePreview(
+      "Wendy",
+      transcript,
+      resolveMention,
+      [{ type: "text", text: transcript }, { type: "voice" }],
+    );
+
+    expect(result).toBe("Wendy: Voice message");
+    expect(result).not.toContain(transcript);
+  });
+
   it("unwraps a raw structured-action envelope in content when parts are empty (never leaks JSON)", () => {
     const raw =
       '{"action":"message_send","output":"hi","parts":[{"type":"text","text":"hi there"}]}';

@@ -716,12 +716,9 @@ func (h *Handler) CreateChannel(w http.ResponseWriter, r *http.Request) {
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'user', $3)
 		ON CONFLICT DO NOTHING`, parseUUID(ch.ID), parseUUID(workspaceID), parseUUID(userID))
-	// New groups automatically get their single 贝克汉姆 (Beckham) group manager.
-	// Old groups are untouched (users invite one on demand). Best-effort: never
-	// fail channel creation if provisioning is not possible (e.g. no runtime).
-	if ch.Kind == "group" {
-		h.provisionGroupManagerForNewChannel(r.Context(), workspaceID, parseUUID(ch.ID), parseUUID(userID))
-	}
+	// LRM-397/398: do NOT auto-provision 贝克汉姆 / group_manager on channel create.
+	// Group managers enter via Wendy hire or POST .../group-manager (InviteGroupManager),
+	// with visibility=channel + home_channel_id bound to that group.
 	if projectID.Valid {
 		// Creating an already-bound group is still a project/channel association.
 		// Record the same typed system fact as a later settings change so the
@@ -1072,7 +1069,7 @@ func (h *Handler) AddChannelMember(w http.ResponseWriter, r *http.Request) {
 	if !h.requireChannelNotSystem(w, r.Context(), workspaceID, channelID) {
 		return
 	}
-	if !h.validateChannelMemberTarget(w, r, workspaceID, req.MemberType, memberID) {
+	if !h.validateChannelMemberTarget(w, r, workspaceID, channelID, req.MemberType, memberID) {
 		return
 	}
 	var membershipGenerationID pgtype.UUID
@@ -2828,6 +2825,13 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 	msg = h.attachSingleChannelMessageDetails(r.Context(), workspaceID, parseUUID(userID), msg)
 	if !result.Created {
 		writeJSON(w, http.StatusOK, msg)
+		if channelMessageNeedsVoiceTranscription(msg.Parts) {
+			h.runAfterChannelMessageAck(r.Context(), func(ctx context.Context) {
+				if err := h.processChannelVoiceTranscription(ctx, msg.ID); err != nil {
+					slog.Error("resume channel thread voice transcription failed", "message_id", msg.ID, "error", err)
+				}
+			})
+		}
 		return
 	}
 	h.followChannelThreadUser(r.Context(), channelID, rootID, parseUUID(userID), true)
@@ -2836,6 +2840,14 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 	}
 	if root.Type == "agent" && root.AuthorID != nil {
 		h.followChannelThreadAgentUnlessExplicitlyUnfollowed(r.Context(), channelID, rootID, parseUUID(*root.AuthorID))
+	}
+	if ch.Kind == "dm" && root.Type == "user" {
+		// A one-to-one agent DM remains addressed to its agent peer even when
+		// the human opens a thread on an earlier human-authored message. Keep an
+		// explicit agent unfollow sticky, matching mention/thread semantics.
+		for _, agent := range h.channelAgentMembers(r.Context(), ch.WorkspaceID, ch.ID) {
+			h.followChannelThreadAgentUnlessExplicitlyUnfollowed(r.Context(), channelID, rootID, agent.ID)
+		}
 	}
 	h.followChannelThreadMentionedUsers(r.Context(), ch, msg)
 	_, _ = h.DB.Exec(r.Context(), `UPDATE channel SET updated_at = now() WHERE id = $1`, channelID)
@@ -2846,12 +2858,13 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 	// Ack first — see SendChannelMessage: wake/Feishu must not block send RTT.
 	writeJSON(w, http.StatusCreated, msg)
 	h.runAfterChannelMessageAck(r.Context(), func(ctx context.Context) {
-		if ch.Kind == "dm" {
-			h.dispatchDMThreadReply(ctx, ch, msg, parseUUID(userID))
-		} else {
-			h.dispatchChannelThreadReplyMentions(ctx, ch, msg, parseUUID(userID))
+		if channelMessageNeedsVoiceTranscription(msg.Parts) {
+			if err := h.processChannelVoiceTranscription(ctx, msg.ID); err != nil {
+				slog.Error("channel thread voice transcription failed", "message_id", msg.ID, "error", err)
+			}
+			return
 		}
-		h.sendChannelMessageToFeishu(ctx, ch, authorName, content)
+		h.dispatchHumanChannelMessageSideEffects(ctx, ch, msg, parseUUID(userID))
 	})
 }
 
@@ -3540,6 +3553,13 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 	msg = h.attachSingleChannelMessageDetails(r.Context(), workspaceID, parseUUID(userID), msg)
 	if !result.Created {
 		writeJSON(w, http.StatusOK, msg)
+		if channelMessageNeedsVoiceTranscription(msg.Parts) {
+			h.runAfterChannelMessageAck(r.Context(), func(ctx context.Context) {
+				if err := h.processChannelVoiceTranscription(ctx, msg.ID); err != nil {
+					slog.Error("resume channel voice transcription failed", "message_id", msg.ID, "error", err)
+				}
+			})
+		}
 		return
 	}
 	_, _ = h.DB.Exec(r.Context(), `UPDATE channel SET updated_at = now() WHERE id = $1`, channelID)
@@ -3551,15 +3571,13 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 	// must not inflate the client's send latency / Sending... state.
 	writeJSON(w, http.StatusCreated, msg)
 	h.runAfterChannelMessageAck(r.Context(), func(ctx context.Context) {
-		if ch.Kind == "dm" {
-			// 1-on-1 DM: the agent peer (if any) replies to every user message
-			// without an @-mention. Human↔human DMs have no agent member → no-op.
-			h.dispatchDMAgentReply(ctx, ch, msg, parseUUID(userID))
-		} else {
-			h.ingestWendyHumanGroupMessage(ctx, ch, msg)
-			h.dispatchChannelMessageToAgents(ctx, ch, msg, parseUUID(userID))
+		if channelMessageNeedsVoiceTranscription(msg.Parts) {
+			if err := h.processChannelVoiceTranscription(ctx, msg.ID); err != nil {
+				slog.Error("channel voice transcription failed", "message_id", msg.ID, "error", err)
+			}
+			return
 		}
-		h.sendChannelMessageToFeishu(ctx, ch, authorName, content)
+		h.dispatchHumanChannelMessageSideEffects(ctx, ch, msg, parseUUID(userID))
 	})
 }
 
@@ -3715,7 +3733,7 @@ func (h *Handler) ImportLarkChannelMessage(w http.ResponseWriter, r *http.Reques
 	})
 }
 
-func (h *Handler) validateChannelMemberTarget(w http.ResponseWriter, r *http.Request, workspaceID, memberType string, memberID pgtype.UUID) bool {
+func (h *Handler) validateChannelMemberTarget(w http.ResponseWriter, r *http.Request, workspaceID string, channelID pgtype.UUID, memberType string, memberID pgtype.UUID) bool {
 	switch memberType {
 	case "user":
 		if _, err := h.getWorkspaceMember(r.Context(), uuidToString(memberID), workspaceID); err != nil {
@@ -3733,6 +3751,14 @@ func (h *Handler) validateChannelMemberTarget(w http.ResponseWriter, r *http.Req
 		actorType, actorID := h.resolveActor(r, userID, workspaceID)
 		if !h.canAccessPrivateAgent(r.Context(), agent, actorType, actorID, workspaceID) {
 			writeError(w, http.StatusForbidden, "you do not have access to this agent")
+			return false
+		}
+		homeChannelID := ""
+		if home, ok := h.loadAgentHomeChannelID(r.Context(), agent.ID); ok {
+			homeChannelID = uuidToString(home)
+		}
+		if ok, msg := canInviteAgentToChannel(agent, homeChannelID, uuidToString(channelID)); !ok {
+			writeError(w, http.StatusBadRequest, msg)
 			return false
 		}
 		// Group managers (贝克汉姆) are one-per-group and auto-managed; they must
@@ -4592,6 +4618,18 @@ func (h *Handler) channelHumanMemberIDs(ctx context.Context, workspaceID, channe
 func (h *Handler) publishChannelToMembers(ctx context.Context, eventType, workspaceID, actorType, actorID string, channelID pgtype.UUID, payload any) {
 	recipientIDs := recipientUserIDsFromSet(h.channelHumanMemberIDs(ctx, workspaceID, uuidToString(channelID)))
 	h.publishToUsers(eventType, workspaceID, actorType, actorID, recipientIDs, payload)
+	if eventType != protocol.EventChannelMessage || h.DB == nil {
+		return
+	}
+	msg, ok := payload.(ChannelMessageResponse)
+	if !ok || msg.Type != "agent" || !channelMessageNeedsVoiceSynthesis(msg.Parts) {
+		return
+	}
+	h.runAfterChannelMessageAck(ctx, func(ctx context.Context) {
+		if err := h.processChannelVoiceSynthesis(ctx, msg.ID); err != nil {
+			slog.Error("immediate channel voice synthesis failed", "message_id", msg.ID, "error", err)
+		}
+	})
 }
 
 // runAfterChannelMessageAck runs send side effects that must not block the HTTP
@@ -5063,7 +5101,11 @@ func (h *Handler) buildChannelThreadContinuationPrompt(ctx context.Context, ch C
 	messages = channelContextMessagesExcludingTrigger(messages, trigger.ID)
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "You are a participant in a thread inside Multica group chat #%s. A follow-up arrived without @-mentioning you.\n", ch.Name)
+	if ch.Kind == "dm" {
+		b.WriteString("You are a participant in a thread inside a Multica DM. A follow-up arrived without @-mentioning you.\n")
+	} else {
+		fmt.Fprintf(&b, "You are a participant in a thread inside Multica group chat #%s. A follow-up arrived without @-mentioning you.\n", ch.Name)
+	}
 	b.WriteString("This is participant delivery, not a must-reply directed mention: reply only when you add a concrete decision, owner, answer, or completed action; otherwise finish without visible output.\n")
 	b.WriteString("Use ONLY the thread context below for this decision. Do not assume older channel context unless you explicitly fetch/search it.\n")
 	b.WriteString(channelOutputContractInstruction)
@@ -5079,6 +5121,9 @@ func (h *Handler) buildChannelThreadContinuationPrompt(ctx context.Context, ch C
 	}
 	b.WriteString("\nDo not @-mention anyone unless a concrete action or human escalation is required.\n\n")
 	fmt.Fprintf(&b, "Reaction target message id: %s\n", trigger.ID)
+	if target := h.agentMessageTargetForPrompt(ctx, ch, trigger); target != "" {
+		fmt.Fprintf(&b, "Message target for chat transport: %s\n", target)
+	}
 	fmt.Fprintf(&b, "Your agent name: %s\n", agentDisplayName(agent))
 	if strings.TrimSpace(agent.Description) != "" {
 		fmt.Fprintf(&b, "Your agent description: %s\n", strings.TrimSpace(agent.Description))
@@ -5725,8 +5770,7 @@ func normalizeChannelClientMessageID(w http.ResponseWriter, raw *string) (*strin
 }
 
 // attachmentIDsFromParts collects attachment_id values from file and recorded
-// voice parts
-// in order. This is the sole bind source for channel/DM/thread message sends.
+// voice parts in order. This is the sole bind source for channel/DM/thread sends.
 func attachmentIDsFromParts(parts []protocol.MessagePart) []string {
 	var ids []string
 	for _, p := range parts {
@@ -5737,13 +5781,17 @@ func attachmentIDsFromParts(parts []protocol.MessagePart) []string {
 	return ids
 }
 
-// channelPartsAllowEmptyContent reports whether empty body content is allowed
-// because parts already carry a sticker or attachment.
+// channelPartsAllowEmptyContent reports whether parts carry their own visible
+// payload, including a recorded voice that is waiting for server-side ASR.
 func channelPartsAllowEmptyContent(parts []protocol.MessagePart) bool {
 	for _, p := range parts {
 		switch p.Type {
 		case protocol.MessagePartTypeSticker, protocol.MessagePartTypeAttachment:
 			return true
+		case protocol.MessagePartTypeVoice:
+			if p.TranscriptionStatus == protocol.VoiceTranscriptionPending && p.AttachmentID != "" {
+				return true
+			}
 		}
 	}
 	return false
@@ -5790,6 +5838,27 @@ func (h *Handler) createUserChannelMessageWithIdempotency(ctx context.Context, i
 		}); err != nil {
 			_ = tx.Rollback(ctx)
 			return channelMessageCreateResult{}, err
+		}
+	}
+	if voiceAttachmentID, ok := pendingChannelVoiceAttachmentID(in.Parts); ok {
+		tag, err := tx.Exec(ctx, `
+			INSERT INTO channel_voice_transcription (
+			  message_id, workspace_id, channel_id, attachment_id
+			)
+			SELECT $1, $2, $3, attachment.id
+			FROM attachment
+			WHERE attachment.id = $4
+			  AND attachment.workspace_id = $2
+			  AND attachment.channel_id = $3
+			  AND attachment.channel_message_id = $1`,
+			parseUUID(msg.ID), in.WorkspaceID, in.ChannelID, parseUUID(voiceAttachmentID))
+		if err != nil {
+			_ = tx.Rollback(ctx)
+			return channelMessageCreateResult{}, fmt.Errorf("enqueue channel voice transcription: %w", err)
+		}
+		if tag.RowsAffected() != 1 {
+			_ = tx.Rollback(ctx)
+			return channelMessageCreateResult{}, errors.New("recorded voice attachment was not bound to the created message")
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {

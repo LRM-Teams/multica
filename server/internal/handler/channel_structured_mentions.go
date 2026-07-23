@@ -36,6 +36,7 @@ type channelMentionOccurrence struct {
 // anchors. This keeps persistence, dispatch, realtime, and Feishu on one
 // canonical set of parts.
 func (h *Handler) finalizeAgentChannelMessage(ctx context.Context, ch ChannelResponse, content string, parts []protocol.MessagePart) (string, []protocol.MessagePart, error) {
+	parts = markAgentVoiceSynthesisPending(parts)
 	if ch.Kind != "group" {
 		// Direct messages have no group-member resolver. Keep ordinary parts, but
 		// never persist a caller-supplied reference sidecar without a server
@@ -43,6 +44,28 @@ func (h *Handler) finalizeAgentChannelMessage(ctx context.Context, ch ChannelRes
 		return content, appendReferenceOccurrences(parts, nil), nil
 	}
 	return h.enrichChannelMessageMentions(ctx, ch, content, parts)
+}
+
+func markAgentVoiceSynthesisPending(parts []protocol.MessagePart) []protocol.MessagePart {
+	if !channelMessageHasVoicePart(parts) {
+		return parts
+	}
+	out := append([]protocol.MessagePart(nil), parts...)
+	for i := range out {
+		if out[i].Type != protocol.MessagePartTypeVoice {
+			continue
+		}
+		// Runtime-supplied audio is not a trusted TTS artifact. The canonical
+		// server synthesizes from the finalized transcript and owns metadata.
+		out[i].AttachmentID = ""
+		out[i].Filename = ""
+		out[i].ContentType = ""
+		out[i].SizeBytes = 0
+		out[i].DurationMS = 0
+		out[i].TranscriptionStatus = ""
+		out[i].SynthesisStatus = protocol.VoiceSynthesisPending
+	}
+	return out
 }
 
 func (h *Handler) enrichChannelMessageMentions(ctx context.Context, ch ChannelResponse, content string, parts []protocol.MessagePart) (string, []protocol.MessagePart, error) {
@@ -114,7 +137,9 @@ func (h *Handler) channelMentionCandidates(ctx context.Context, workspaceID, cha
 	rows, err := h.DB.Query(ctx, `
 		SELECT cm.member_type, cm.member_id,
 		       COALESCE(u.name, a.name, ''),
-		       COALESCE(NULLIF(u.display_name, ''), NULLIF(a.display_name, ''), '')
+		       COALESCE(NULLIF(u.display_name, ''), NULLIF(a.display_name, ''), ''),
+		       COALESCE(a.visibility, ''),
+		       a.home_channel_id
 		FROM channel_member cm
 		LEFT JOIN "user" u ON cm.member_type = 'user' AND u.id = cm.member_id
 		LEFT JOIN agent a ON cm.member_type = 'agent' AND a.id = cm.member_id
@@ -129,14 +154,26 @@ func (h *Handler) channelMentionCandidates(ctx context.Context, workspaceID, cha
 	candidates := map[string]channelMentionCandidate{}
 	ambiguous := map[string]bool{}
 	for rows.Next() {
-		var memberType, name, displayName string
-		var memberID pgtype.UUID
-		if err := rows.Scan(&memberType, &memberID, &name, &displayName); err != nil {
+		var memberType, name, displayName, visibility string
+		var memberID, homeChannelID pgtype.UUID
+		if err := rows.Scan(&memberType, &memberID, &name, &displayName, &visibility, &homeChannelID); err != nil {
 			continue
 		}
 		mentionType := "member"
 		if memberType == "agent" {
 			mentionType = "agent"
+			// Channel-visibility agents only appear in @mention candidates in
+			// their home channel. Existing memberships elsewhere are retained
+			// but not discoverable via @ (LRM-240 / LRM-370).
+			if visibility == agentVisibilityChannel {
+				home := ""
+				if homeChannelID.Valid {
+					home = uuidToString(homeChannelID)
+				}
+				if home == "" || home != channelID {
+					continue
+				}
+			}
 		}
 		handle := strings.TrimSpace(name)
 		if mentionType == "agent" && validateIdentityHandle(handle) != nil {

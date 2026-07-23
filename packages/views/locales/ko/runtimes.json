@@ -92,7 +92,6 @@
     "all_runtimes": "모든 런타임",
     "read_only": "읽기 전용",
     "delete_button": "런타임 삭제",
-    "delete_disabled_tooltip": "이 런타임은 실행 중인 로컬 데몬이 관리하며 몇 초 안에 다시 등록됩니다. 영구 제거하려면 데몬 프로세스를 중지하세요.",
     "last_seen": "마지막 확인 {{when}}",
     "fact_owner": "소유자",
     "fact_device": "기기",
@@ -118,45 +117,38 @@
     "visibility_toast_updated": "공개 범위를 {{visibility}}(으)로 설정했습니다",
     "visibility_toast_failed": "공개 범위를 업데이트하지 못했습니다",
     "delete_dialog": {
-      "light": {
+      "final": {
         "title": "런타임을 삭제할까요?",
         "description": "\"{{name}}\"을(를) 삭제할까요? 이 작업은 되돌릴 수 없습니다.",
         "cancel": "취소",
         "confirm": "런타임 삭제",
         "submitting": "삭제하는 중..."
       },
-      "cascade": {
-        "title_one": "에이전트 {{count}}개를 보관하고 이 런타임을 삭제할까요?",
-        "title_other": "에이전트 {{count}}개를 보관하고 이 런타임을 삭제할까요?",
-        "description": "\"{{name}}\"을(를) 삭제합니다. 아래 에이전트는 보관되어 활성 워크플로에서 제거되고, 대기 중이거나 실행 중인 작업은 취소된 뒤 런타임이 삭제됩니다.",
-        "warning": "파괴적인 작업입니다. 보관된 에이전트는 활성 워크플로에서 제거되고 대기 중이거나 실행 중인 작업은 취소됩니다.",
-        "notice_runtime_has_active_agents": "이 대화상자를 연 뒤 활성 에이전트가 추가되었습니다. 새 계획을 확인한 뒤 승인하세요.",
-        "notice_runtime_delete_plan_changed": "대화상자가 열린 동안 활성 에이전트 목록이 바뀌었습니다. 새 계획을 확인한 뒤 승인하세요.",
-        "checkbox_one": "에이전트 {{count}}개가 보관되고 대기 중이거나 실행 중인 작업이 취소된다는 점을 이해했습니다.",
-        "checkbox_other": "에이전트 {{count}}개가 보관되고 대기 중이거나 실행 중인 작업이 취소된다는 점을 이해했습니다.",
-        "cancel": "취소",
-        "confirm_one": "에이전트 {{count}}개 보관 및 런타임 삭제",
-        "confirm_other": "에이전트 {{count}}개 보관 및 런타임 삭제",
-        "submitting": "보관하고 삭제하는 중...",
-        "self_healing_blocked_toast": "이 런타임은 실행 중인 로컬 데몬이 관리하며 다시 등록됩니다.",
-        "delete_failed_toast": "런타임을 삭제하지 못했습니다",
+      "blocked_by_agents": {
+        "title_one": "이 런타임에 아직 에이전트 {{count}}개가 연결되어 있습니다",
+        "title_other": "이 런타임에 아직 에이전트 {{count}}개가 연결되어 있습니다",
+        "description": "\"{{name}}\"을(를) 삭제하려면 먼저 아래 에이전트를 삭제하거나 보관하세요.",
+        "notice_runtime_has_active_agents": "이 대화상자를 연 뒤 활성 에이전트가 추가되었습니다 — 최신 목록을 표시합니다.",
+        "close": "닫기",
+        "view_agent": "에이전트 보기",
         "table": {
-          "header_agent": "에이전트",
-          "header_owner": "소유자",
-          "header_status": "상태",
-          "header_visibility": "공개 범위",
-          "header_model": "모델",
-          "owner_self": "나",
-          "owner_unassigned": "—",
-          "model_unset": "—",
           "presence_unknown": "—",
           "workload_idle": "유휴",
           "workload_working": "작업 중",
-          "workload_queued": "대기 중",
-          "visibility_workspace": "워크스페이스",
-          "visibility_private": "비공개"
+          "workload_queued": "대기 중"
         }
-      }
+      },
+      "blocked_by_online_daemon": {
+        "title": "먼저 데몬을 중지하세요",
+        "description": "\"{{name}}\"은(는) 실행 중인 로컬 데몬으로, 여기서 삭제해도 몇 초 안에 자동으로 다시 등록됩니다. 먼저 해당 기기에서 중지하세요.",
+        "device_label": "기기",
+        "stop_command_label": "기기에서 이 명령을 실행하세요",
+        "waiting_hint": "오프라인이 되면 감지해서 삭제를 완료할 수 있게 해드립니다.",
+        "close": "닫기",
+        "copy_aria": "명령 복사"
+      },
+      "self_healing_blocked_toast": "이 런타임은 실행 중인 로컬 데몬이 관리하며 다시 등록됩니다.",
+      "delete_failed_toast": "런타임을 삭제하지 못했습니다"
     },
     "toast_deleted": "런타임을 삭제했습니다",
     "toast_delete_failed": "런타임을 삭제하지 못했습니다",

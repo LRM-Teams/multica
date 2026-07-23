@@ -42,6 +42,7 @@ import type {
   SandboxSnapshot,
 } from "../types";
 import type { CloudRuntimeNode } from "../runtimes/cloud-runtime";
+import type { RawReminderPage } from "../agents/reminder-view-model";
 
 export interface AppConfigResponse {
   cdn_domain: string;
@@ -1960,4 +1961,64 @@ export const EMPTY_SANDBOX_SNAPSHOT: SandboxSnapshot = {
   status: "creating",
   created_at: "",
   updated_at: "",
+};
+
+// Reminders (task #655/#656, `agent_reminder_read.go`'s `humanReminder*`
+// shapes). `status`/`schedule_kind`/`definition_status` stay `z.string()`
+// (never `z.enum()`) so an unrecognized value still parses the row instead
+// of rejecting the whole page — `adaptUpcomingRow`/`adaptFiredRow` in
+// reminder-view-model.ts are the boundary that narrows to the app's strict
+// literal unions and drops a row it can't safely classify, never
+// misrendering an unknown value as one of the known states.
+const RawReminderAnchorSchema = z.object({
+  available: z.boolean(),
+  // Not `z.enum()` — an unrecognized future anchor kind must degrade just
+  // this row's anchor (see `adaptAnchor`), not fail the whole array element
+  // and, transitively, the entire page.
+  kind: z.string().optional(),
+  display: z.string().optional(),
+  href: z.string().optional(),
+}).loose();
+
+const RawReminderDefinitionSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  status: z.string(),
+  schedule_kind: z.string(),
+  next_fire_at: z.string(),
+  last_fire_at: z.string().optional(),
+  cadence: z.string().optional(),
+  schedule_timezone: z.string().optional(),
+  snooze_count: z.number().default(0),
+  anchor: RawReminderAnchorSchema,
+}).loose();
+
+const RawReminderOccurrenceSchema = z.object({
+  id: z.string(),
+  reminder_id: z.string(),
+  title: z.string(),
+  status: z.string(),
+  definition_status: z.string(),
+  schedule_kind: z.string(),
+  cadence_scheduled_for: z.string(),
+  due_at: z.string(),
+  fired_at: z.string(),
+  cadence: z.string().optional(),
+  schedule_timezone: z.string().optional(),
+  anchor: RawReminderAnchorSchema,
+}).loose();
+
+export const RawReminderPageSchema = z.object({
+  definitions: z.array(RawReminderDefinitionSchema).default([]),
+  occurrences: z.array(RawReminderOccurrenceSchema).default([]),
+  limit: z.number().default(0),
+  has_more: z.boolean().default(false),
+  next_cursor: z.string().optional(),
+}).loose();
+
+export const EMPTY_REMINDER_PAGE: RawReminderPage = {
+  definitions: [],
+  occurrences: [],
+  limit: 0,
+  has_more: false,
 };

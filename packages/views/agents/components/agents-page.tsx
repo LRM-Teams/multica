@@ -142,7 +142,7 @@ export function AgentsPage({
     isLoading,
     error: listError,
     refetch: refetchList,
-  } = useQuery(agentListOptions(wsId));
+  } = useQuery(agentListOptions(wsId, { includeArchived: true }));
   const { data: runtimes = [], isLoading: runtimesLoading } = useQuery(
     runtimeListOptions(wsId),
   );
@@ -791,6 +791,7 @@ export function AgentsPage({
           currentUserId={currentUser?.id ?? null}
           template={duplicateTemplate}
           draft={createDraft}
+          defaultHomeChannelId={createDraft?.channel_id ?? null}
           onClose={() => {
             setShowCreate(false);
             setCreateDraft(null);

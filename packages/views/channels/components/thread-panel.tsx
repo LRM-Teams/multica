@@ -1,8 +1,13 @@
 "use client";
 
 import { useMemo, type ReactNode } from "react";
-import { ArrowLeft, MessageSquare, X } from "lucide-react";
+import { ArrowLeft, Maximize2, MessageSquare, X } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@multica/ui/components/ui/tooltip";
 import type { ChannelMessage } from "@multica/core/types";
 import type { OpenAgentPanelFn } from "@multica/core/agents";
 import { useT } from "../../i18n/use-t";
@@ -52,7 +57,6 @@ export interface ThreadPanelProps {
   voicePlaybackScope?: string;
   voiceDisabled?: boolean;
   onVoiceSend?: (
-    transcript: string,
     durationMs: number,
     attachment: VoiceRecordingAttachment,
   ) => boolean;
@@ -64,6 +68,8 @@ export interface ThreadPanelProps {
   readOnlyContent?: ReactNode;
   /** Activity strip rendered between the reply list and the composer. */
   activitySlot?: ReactNode;
+  /** Deep-link target reply id (e.g. from a Reminder anchor) - scrolls to and ring-highlights that bubble in the reply list. */
+  highlightMessageId?: string | null;
 }
 
 /**
@@ -105,6 +111,7 @@ export function ThreadPanel({
   readOnly = false,
   readOnlyContent,
   activitySlot,
+  highlightMessageId,
 }: ThreadPanelProps) {
   const { t } = useT("channels");
 
@@ -131,6 +138,12 @@ export function ThreadPanel({
     [isMobile, onBack, t],
   );
 
+  // LRM-384 / scheme A — no dark floating Maximize+Download capsule on the
+  // thread surface. Desktop keeps a 28px ghost "open in main" control in the
+  // header; download stays out of the main UI (no ⋯ export entry yet).
+  // LRM-389 — Tooltip must spell “open parent / main column” (Maximize2 alone
+  // reads as expand); omit the control when onViewParent is absent.
+  const openInMainLabel = t(($) => $.thread.open_in_main_aria);
   const headerActions = useMemo(
     () => (
       <>
@@ -139,6 +152,25 @@ export function ThreadPanel({
           disabled={followDisabled}
           onFollowChange={onFollowChange}
         />
+        {!isMobile && onViewParent && (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-7 text-muted-foreground hover:bg-muted hover:text-foreground"
+                  aria-label={openInMainLabel}
+                  onClick={onViewParent}
+                />
+              }
+            >
+              <Maximize2 className="size-3.5" />
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{openInMainLabel}</TooltipContent>
+          </Tooltip>
+        )}
         {!isMobile && (
           <Button
             variant="ghost"
@@ -152,7 +184,7 @@ export function ThreadPanel({
         )}
       </>
     ),
-    [followDisabled, followed, isMobile, onBack, onFollowChange, t],
+    [followDisabled, followed, isMobile, onBack, onFollowChange, onViewParent, openInMainLabel, t],
   );
 
   const composerActions = useMemo(() => composerLeadingActions, [composerLeadingActions]);
@@ -176,6 +208,7 @@ export function ThreadPanel({
         ownName={currentUserName}
         emptyLabel={t(($) => $.thread.empty_replies)}
         initialScroll="top"
+        highlightMessageId={highlightMessageId}
         header={
           <ThreadRootPreview
             message={root}

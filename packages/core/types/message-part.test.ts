@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildChannelMessageParts } from "./message-part";
+import { buildChannelMessageParts, type MessagePart } from "./message-part";
 
 describe("buildChannelMessageParts", () => {
   it("builds text + attachment parts in order and skips empty ids", () => {
@@ -24,5 +24,27 @@ describe("buildChannelMessageParts", () => {
     ]);
     expect(buildChannelMessageParts("", [])).toEqual([]);
     expect(buildChannelMessageParts("")).toEqual([]);
+  });
+});
+
+describe("MessagePart voice lifecycle contract", () => {
+  it("represents server-owned Agent synthesis states", () => {
+    const parts = [
+      { type: "voice", synthesis_status: "pending" },
+      {
+        type: "voice",
+        synthesis_status: "completed",
+        attachment_id: "tts-audio-1",
+        content_type: "audio/wav",
+        duration_ms: 1250,
+      },
+      { type: "voice", synthesis_status: "failed" },
+    ] satisfies MessagePart[];
+
+    expect(parts.map((part) => part.synthesis_status)).toEqual([
+      "pending",
+      "completed",
+      "failed",
+    ]);
   });
 });

@@ -3,14 +3,17 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/daemonws"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -20,6 +23,50 @@ const (
 	reminderMaxDelay  = 90 * 24 * time.Hour
 	reminderActiveCap = 25
 )
+
+var errReminderDaemonOutdated = fmt.Errorf("daemon_outdated")
+
+func isReminderDaemonOutdatedError(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "P0001" && pgErr.Message == "daemon_outdated"
+}
+
+func lockReminderOwnerCapability(ctx context.Context, tx pgx.Tx, workspaceID, agentID pgtype.UUID) (pgtype.UUID, error) {
+	var runtimeID pgtype.UUID
+	err := tx.QueryRow(ctx, `
+		SELECT agent.runtime_id
+		FROM agent
+		WHERE agent.id = $1 AND agent.workspace_id = $2 AND agent.archived_at IS NULL
+		FOR UPDATE`, agentID, workspaceID).Scan(&runtimeID)
+	if err != nil {
+		return pgtype.UUID{}, err
+	}
+	if !runtimeID.Valid {
+		return pgtype.UUID{}, errReminderDaemonOutdated
+	}
+
+	var capable bool
+	err = tx.QueryRow(ctx, `
+		SELECT COALESCE((metadata->'capabilities') @> '["reminder_versioned_cache_v1"]'::jsonb, false)
+		FROM agent_runtime
+		WHERE id = $1 AND workspace_id = $2
+		FOR SHARE`, runtimeID, workspaceID).Scan(&capable)
+	if errors.Is(err, pgx.ErrNoRows) || !capable {
+		return pgtype.UUID{}, errReminderDaemonOutdated
+	}
+	if err != nil {
+		return pgtype.UUID{}, err
+	}
+	return runtimeID, nil
+}
+
+func writeReminderMutationError(w http.ResponseWriter, operation string, err error) {
+	if errors.Is(err, errReminderDaemonOutdated) {
+		writeCodedError(w, http.StatusConflict, "daemon_outdated", "owner runtime must upgrade before changing reminders")
+		return
+	}
+	writeError(w, http.StatusInternalServerError, "failed to "+operation+" reminder")
+}
 
 type agentReminder struct {
 	ID                        pgtype.UUID
@@ -42,6 +89,7 @@ type agentReminder struct {
 	CadenceNextAt             pgtype.Timestamptz
 	CurrentOccurrenceID       pgtype.UUID
 	TerminalReason            pgtype.Text
+	Version                   int64
 }
 
 type reminderQueryRower interface {
@@ -70,6 +118,7 @@ type agentReminderResponse struct {
 	CadenceNextAt             *string `json:"cadence_next_at,omitempty"`
 	CurrentOccurrenceID       *string `json:"current_occurrence_id,omitempty"`
 	TerminalReason            *string `json:"terminal_reason,omitempty"`
+	Version                   int64   `json:"version"`
 }
 
 type agentReminderScheduleRequest struct {
@@ -137,6 +186,7 @@ func reminderResponse(r agentReminder) agentReminderResponse {
 		CadenceNextAt:             timestampToPtr(r.CadenceNextAt),
 		CurrentOccurrenceID:       uuidPtr(r.CurrentOccurrenceID),
 		TerminalReason:            nullableTextPtr(r.TerminalReason),
+		Version:                   r.Version,
 	}
 }
 
@@ -185,7 +235,7 @@ func scanAgentReminder(row rowScanner) (agentReminder, error) {
 		&out.FireAt, &out.Status, &out.FiredTaskID, &out.SnoozeCount,
 		&out.CreatedAt, &out.UpdatedAt, &out.FiredAt, &out.Cadence,
 		&out.ScheduleTimezone, &out.CadenceNextAt, &out.CurrentOccurrenceID,
-		&out.TerminalReason,
+		&out.TerminalReason, &out.Version,
 	)
 	return out, err
 }
@@ -194,7 +244,7 @@ func reminderSelectColumns() string {
 	return `id, workspace_id, agent_id, initiator_user_id, title, anchor_channel_id, anchor_message_id,
 		anchor_thread_root_message_id, fire_at, status, fired_task_id, snooze_count,
 		created_at, updated_at, fired_at, cadence, schedule_timezone, cadence_next_at,
-		current_occurrence_id, terminal_reason`
+		current_occurrence_id, terminal_reason, version`
 }
 
 func parseReminderFireAt(now time.Time, delaySeconds *int64, rawFireAt string) (time.Time, error) {
@@ -239,7 +289,7 @@ func (h *Handler) AgentTransportScheduleReminder(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	anchorMessageID, threadRootID, ok := h.resolveReminderAnchor(w, r.Context(), task.ChatSessionID, task.ID, origin, req.MessageID)
+	anchorMessageID, threadRootID, ok := h.resolveReminderAnchor(w, r.Context(), origin, req.MessageID)
 	if !ok {
 		return
 	}
@@ -249,8 +299,8 @@ func (h *Handler) AgentTransportScheduleReminder(w http.ResponseWriter, r *http.
 		return
 	}
 	defer tx.Rollback(r.Context())
-	if _, err := tx.Exec(r.Context(), `SELECT pg_advisory_xact_lock(hashtext($1))`, uuidToString(task.AgentID)); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to schedule reminder")
+	if _, err := lockReminderOwnerCapability(r.Context(), tx, origin.workspaceID, task.AgentID); err != nil {
+		writeReminderMutationError(w, "schedule", err)
 		return
 	}
 	var activeCount int
@@ -304,6 +354,7 @@ func (h *Handler) AgentTransportScheduleReminder(w http.ResponseWriter, r *http.
 		return
 	}
 	h.publishAgentReminderChanged(r.Context(), created.WorkspaceID, created.AgentID)
+	h.projectReminderUpsert(r.Context(), created)
 	targetKind, targetID, targetSlug := reminderActivityTarget(created, true)
 	h.recordAgentActivityEvent(r.Context(), h.DB,
 		origin.workspaceID, task.AgentID, task.RuntimeID, task.ID,
@@ -442,6 +493,10 @@ func (h *Handler) AgentTransportSnoozeReminder(w http.ResponseWriter, r *http.Re
 		return
 	}
 	defer tx.Rollback(r.Context())
+	if _, err := lockReminderOwnerCapability(r.Context(), tx, origin.workspaceID, task.AgentID); err != nil {
+		writeReminderMutationError(w, "snooze", err)
+		return
+	}
 	previous, err := scanAgentReminder(tx.QueryRow(r.Context(), `SELECT `+reminderSelectColumns()+` FROM agent_reminder WHERE id = $1 AND workspace_id = $2 AND agent_id = $3 FOR UPDATE`, id, origin.workspaceID, task.AgentID))
 	if err != nil || (previous.Status != "scheduled" && previous.Status != "fired") {
 		writeError(w, http.StatusConflict, "reminder cannot be snoozed in its current state")
@@ -451,7 +506,7 @@ func (h *Handler) AgentTransportSnoozeReminder(w http.ResponseWriter, r *http.Re
 		UPDATE agent_reminder
 		SET fire_at = $4, status = 'scheduled', fired_at = NULL, fired_task_id = NULL,
 		    current_occurrence_id = NULL, terminal_reason = NULL,
-		    snooze_count = snooze_count + 1, updated_at = now()
+		    snooze_count = snooze_count + 1, version = version + 1, updated_at = now()
 		WHERE id = $1 AND workspace_id = $2 AND agent_id = $3 AND status IN ('scheduled', 'fired')
 		RETURNING `+reminderSelectColumns(), id, origin.workspaceID, task.AgentID, fireAt)
 	updated, err := scanAgentReminder(row)
@@ -475,6 +530,7 @@ func (h *Handler) AgentTransportSnoozeReminder(w http.ResponseWriter, r *http.Re
 		return
 	}
 	h.publishAgentReminderChanged(r.Context(), updated.WorkspaceID, updated.AgentID)
+	h.projectReminderUpsert(r.Context(), updated)
 	h.recordReminderActivity(r.Context(), task, updated, "reminder_snoozed", "Agent snoozed a reminder")
 	writeJSON(w, http.StatusOK, reminderResponse(updated))
 }
@@ -568,6 +624,10 @@ func (h *Handler) AgentTransportUpdateReminder(w http.ResponseWriter, r *http.Re
 		return
 	}
 	defer tx.Rollback(r.Context())
+	if _, err := lockReminderOwnerCapability(r.Context(), tx, origin.workspaceID, task.AgentID); err != nil {
+		writeReminderMutationError(w, "update", err)
+		return
+	}
 	previous, err := scanAgentReminder(tx.QueryRow(r.Context(), `SELECT `+reminderSelectColumns()+` FROM agent_reminder WHERE id = $1 AND workspace_id = $2 AND agent_id = $3 FOR UPDATE`, id, origin.workspaceID, task.AgentID))
 	if err != nil || previous.Status != "scheduled" {
 		writeError(w, http.StatusConflict, "reminder cannot be updated in its current state")
@@ -624,7 +684,7 @@ func (h *Handler) AgentTransportUpdateReminder(w http.ResponseWriter, r *http.Re
 		UPDATE agent_reminder
 		SET title = $4, fire_at = $5, cadence = $6, schedule_timezone = $7,
 		    cadence_next_at = $8,
-		    updated_at = now()
+		    version = version + 1, updated_at = now()
 		WHERE id = $1 AND workspace_id = $2 AND agent_id = $3 AND status = 'scheduled'
 		RETURNING `+reminderSelectColumns(), id, origin.workspaceID, task.AgentID,
 		nextTitle, nextFireAt, nextCadence, nextTimezone, nextCadenceAt)
@@ -649,6 +709,7 @@ func (h *Handler) AgentTransportUpdateReminder(w http.ResponseWriter, r *http.Re
 		return
 	}
 	h.publishAgentReminderChanged(r.Context(), updated.WorkspaceID, updated.AgentID)
+	h.projectReminderUpsert(r.Context(), updated)
 	h.recordReminderActivity(r.Context(), task, updated, "reminder_updated", "Agent updated a reminder")
 	writeJSON(w, http.StatusOK, reminderResponse(updated))
 }
@@ -675,7 +736,8 @@ func (h *Handler) AgentTransportCancelReminder(w http.ResponseWriter, r *http.Re
 	defer tx.Rollback(r.Context())
 	row := tx.QueryRow(r.Context(), `
 		UPDATE agent_reminder
-		SET status = 'cancelled', terminal_reason = 'cancelled_by_author', current_occurrence_id = NULL, updated_at = now()
+		SET status = 'cancelled', terminal_reason = 'cancelled_by_author', current_occurrence_id = NULL,
+		    version = version + 1, updated_at = now()
 		WHERE id = $1 AND workspace_id = $2 AND agent_id = $3 AND status = 'scheduled'
 		RETURNING `+reminderSelectColumns(), id, origin.workspaceID, task.AgentID)
 	cancelled, err := scanAgentReminder(row)
@@ -699,23 +761,19 @@ func (h *Handler) AgentTransportCancelReminder(w http.ResponseWriter, r *http.Re
 		return
 	}
 	h.publishAgentReminderChanged(r.Context(), cancelled.WorkspaceID, cancelled.AgentID)
+	h.projectReminderCancel(r.Context(), cancelled)
 	h.recordReminderActivity(r.Context(), task, cancelled, "reminder_cancelled", "Agent cancelled a reminder")
 	writeJSON(w, http.StatusOK, reminderResponse(cancelled))
 }
 
-func (h *Handler) resolveReminderAnchor(w http.ResponseWriter, ctx context.Context, chatSessionID, taskID pgtype.UUID, origin chatOutputOrigin, rawMessageID string) (pgtype.UUID, pgtype.UUID, bool) {
-	var messageID pgtype.UUID
-	if strings.TrimSpace(rawMessageID) != "" {
-		parsed, ok := parseUUIDOrBadRequest(w, strings.TrimSpace(rawMessageID), "message_id")
-		if !ok {
-			return pgtype.UUID{}, pgtype.UUID{}, false
-		}
-		messageID = parsed
-	} else {
-		messageID = h.channelTriggerMessageFromPrompt(ctx, chatSessionID, taskID)
+func (h *Handler) resolveReminderAnchor(w http.ResponseWriter, ctx context.Context, origin chatOutputOrigin, rawMessageID string) (pgtype.UUID, pgtype.UUID, bool) {
+	rawMessageID = strings.TrimSpace(rawMessageID)
+	if rawMessageID == "" {
+		writeError(w, http.StatusBadRequest, "message_id is required")
+		return pgtype.UUID{}, pgtype.UUID{}, false
 	}
-	if !messageID.Valid {
-		writeError(w, http.StatusBadRequest, "message_id is required when the current task has no channel anchor")
+	messageID, ok := parseUUIDOrBadRequest(w, rawMessageID, "message_id")
+	if !ok {
 		return pgtype.UUID{}, pgtype.UUID{}, false
 	}
 	var threadRootID pgtype.UUID
@@ -729,30 +787,6 @@ func (h *Handler) resolveReminderAnchor(w http.ResponseWriter, ctx context.Conte
 		return pgtype.UUID{}, pgtype.UUID{}, false
 	}
 	return messageID, threadRootID, true
-}
-
-func (h *Handler) channelTriggerMessageFromPrompt(ctx context.Context, chatSessionID, taskID pgtype.UUID) pgtype.UUID {
-	if !taskID.Valid {
-		return pgtype.UUID{}
-	}
-	var content string
-	if err := h.DB.QueryRow(ctx, `
-		SELECT content FROM chat_message
-		WHERE chat_session_id = $1 AND task_id = $2 AND role = 'user'
-		ORDER BY created_at DESC
-		LIMIT 1`, chatSessionID, taskID).Scan(&content); err != nil {
-		return pgtype.UUID{}
-	}
-	for _, prefix := range []string{"Current message id: ", "Reaction target message id: "} {
-		for _, line := range strings.Split(content, "\n") {
-			if target, ok := strings.CutPrefix(strings.TrimSpace(line), prefix); ok {
-				if parsed, err := parseUUIDString(strings.TrimSpace(target)); err == nil {
-					return parsed
-				}
-			}
-		}
-	}
-	return pgtype.UUID{}
 }
 
 func (h *Handler) resolveReminderID(w http.ResponseWriter, ctx context.Context, workspaceID, agentID pgtype.UUID, raw string) (pgtype.UUID, bool) {
@@ -822,6 +856,103 @@ func reminderTargetKind(threadRootID pgtype.UUID) string {
 	return "channel"
 }
 
+func (h *Handler) reminderOwnerRuntime(ctx context.Context, reminder agentReminder) (string, bool) {
+	if h == nil || h.ReminderNotifier == nil {
+		return "", false
+	}
+	var runtimeID pgtype.UUID
+	if err := h.DB.QueryRow(ctx, `
+		SELECT runtime_id
+		FROM agent
+		WHERE id = $1 AND workspace_id = $2 AND archived_at IS NULL`, reminder.AgentID, reminder.WorkspaceID).Scan(&runtimeID); err != nil || !runtimeID.Valid {
+		return "", false
+	}
+	return uuidToString(runtimeID), true
+}
+
+func (h *Handler) projectReminderUpsert(ctx context.Context, reminder agentReminder) {
+	h.publishLatestReminderProjection(ctx, reminder)
+}
+
+func (h *Handler) projectReminderCancel(ctx context.Context, reminder agentReminder) {
+	h.publishLatestReminderProjection(ctx, reminder)
+}
+
+func scanReminderProjection(row rowScanner) (protocol.ReminderProjectionEvent, error) {
+	var event protocol.ReminderProjectionEvent
+	var fireAt pgtype.Timestamptz
+	err := row.Scan(&event.Seq, &event.PrevSeq, &event.RuntimeID, &event.AgentID, &event.PlacementGeneration, &event.EventType, &event.ReminderID, &event.Version, &fireAt, &event.Terminal)
+	if err != nil {
+		return event, err
+	}
+	if fireAt.Valid {
+		event.FireAt = fireAt.Time.UTC().Format(time.RFC3339Nano)
+		event.Reminder = protocol.ReminderTimerJob{ReminderID: event.ReminderID, OwnerAgentID: event.AgentID, Version: event.Version, FireAt: event.FireAt}
+	}
+	return event, nil
+}
+
+func reminderProjectionSelectColumns() string {
+	return `seq, prev_seq, runtime_id::text, agent_id::text, placement_generation, event_type, reminder_id::text, version, fire_at, terminal`
+}
+
+func (h *Handler) latestReminderProjection(ctx context.Context, reminderID pgtype.UUID) (protocol.ReminderProjectionEvent, error) {
+	return scanReminderProjection(h.DB.QueryRow(ctx, `SELECT `+reminderProjectionSelectColumns()+`
+		FROM agent_reminder_daemon_projection_event
+		WHERE reminder_id = $1 ORDER BY seq DESC LIMIT 1`, reminderID))
+}
+
+func (h *Handler) publishLatestReminderProjection(ctx context.Context, reminder agentReminder) {
+	if h == nil || h.ReminderNotifier == nil {
+		return
+	}
+	event, err := h.latestReminderProjection(ctx, reminder.ID)
+	if err != nil {
+		return
+	}
+	h.ReminderNotifier.NotifyReminderProjection(event.RuntimeID, event)
+}
+
+func (h *Handler) latestReminderOwnerLifecycle(ctx context.Context, agentID, runtimeID, eventType string) (protocol.DaemonAgentLifecycleEvent, bool) {
+	var event protocol.DaemonAgentLifecycleEvent
+	err := h.DB.QueryRow(ctx, `
+		SELECT event_type, agent_id::text, runtime_id::text, workspace_id::text, seq, placement_generation
+		FROM agent_reminder_daemon_owner_event
+		WHERE agent_id::text = $1 AND runtime_id::text = $2 AND event_type = $3
+		ORDER BY seq DESC LIMIT 1`, agentID, runtimeID, eventType).Scan(
+		&event.EventType, &event.AgentID, &event.RuntimeID, &event.WorkspaceID, &event.LifecycleSeq, &event.PlacementGeneration,
+	)
+	return event, err == nil
+}
+
+func (h *Handler) projectReminderOwnerStart(ctx context.Context, agentID, runtimeID string) {
+	if h == nil || h.ReminderNotifier == nil {
+		return
+	}
+	event, ok := h.latestReminderOwnerLifecycle(ctx, agentID, runtimeID, "start")
+	if !ok {
+		return
+	}
+	h.ReminderNotifier.NotifyReminderOwnerAdded(runtimeID, protocol.DaemonAgentStartPayload{
+		AgentID: event.AgentID, RuntimeID: event.RuntimeID, WorkspaceID: event.WorkspaceID,
+		PlacementGeneration: event.PlacementGeneration, LifecycleSeq: event.LifecycleSeq,
+	})
+}
+
+func (h *Handler) projectReminderOwnerStop(ctx context.Context, agentID, runtimeID string) {
+	if h == nil || h.ReminderNotifier == nil {
+		return
+	}
+	event, ok := h.latestReminderOwnerLifecycle(ctx, agentID, runtimeID, "stop")
+	if !ok {
+		return
+	}
+	h.ReminderNotifier.NotifyReminderOwnerRemoved(runtimeID, protocol.DaemonAgentStopPayload{
+		AgentID: event.AgentID, RuntimeID: event.RuntimeID,
+		PlacementGeneration: event.PlacementGeneration, LifecycleSeq: event.LifecycleSeq,
+	})
+}
+
 type agentReminderChangedPayload struct {
 	AgentID string `json:"agent_id"`
 }
@@ -868,91 +999,551 @@ func (h *Handler) publishAgentReminderChanged(ctx context.Context, workspaceID, 
 	h.publishToUsers(protocol.EventAgentReminderChanged, workspace, "system", "", recipientUserIDsFromSet(recipients), payload)
 }
 
-func (h *Handler) FireDueReminders(ctx context.Context) error {
+func daemonIdentityOwnsRuntime(identity daemonws.ClientIdentity, runtimeID pgtype.UUID) bool {
+	if !runtimeID.Valid {
+		return false
+	}
+	want := uuidToString(runtimeID)
+	for _, candidate := range identity.RuntimeIDs {
+		if candidate == want {
+			return true
+		}
+	}
+	return false
+}
+
+func daemonIdentityOwnsWorkspace(identity daemonws.ClientIdentity, workspaceID pgtype.UUID) bool {
+	return strings.TrimSpace(identity.WorkspaceID) == "" || identity.WorkspaceID == uuidToString(workspaceID)
+}
+
+func (h *Handler) HandleDaemonReminderSnapshot(ctx context.Context, identity daemonws.ClientIdentity, payload protocol.ReminderSnapshotRequestPayload) (*protocol.ReminderSnapshotPayload, error) {
+	agentID, err := parseUUIDString(strings.TrimSpace(payload.AgentID))
+	if err != nil || !agentID.Valid {
+		return nil, fmt.Errorf("invalid reminder snapshot agent_id")
+	}
+	requestRuntimeID, err := parseUUIDString(strings.TrimSpace(payload.RuntimeID))
+	if err != nil || !requestRuntimeID.Valid || payload.PlacementGeneration < 0 || !daemonIdentityOwnsRuntime(identity, requestRuntimeID) {
+		return nil, fmt.Errorf("invalid reminder snapshot placement")
+	}
 	tx, err := h.TxStarter.Begin(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer tx.Rollback(ctx)
-	rows, err := tx.Query(ctx, `
-		SELECT `+reminderSelectColumns()+`
-		FROM agent_reminder
-		WHERE status = 'scheduled' AND fire_at <= now()
-		ORDER BY fire_at ASC
-		FOR UPDATE SKIP LOCKED
-		LIMIT 100`)
-	if err != nil {
-		return err
-	}
-	type claimedReminder struct {
-		reminderID   pgtype.UUID
-		occurrenceID pgtype.UUID
-	}
-	var due []agentReminder
-	var claimed []claimedReminder
-	for rows.Next() {
-		reminder, scanErr := scanAgentReminder(rows)
-		if scanErr != nil {
-			rows.Close()
-			return scanErr
+	placementGeneration := payload.PlacementGeneration
+	var workspaceID, runtimeID pgtype.UUID
+	var archivedAt pgtype.Timestamptz
+	if err := tx.QueryRow(ctx, `
+		SELECT workspace_id, runtime_id, archived_at
+		FROM agent
+		WHERE id = $1
+		FOR UPDATE`, agentID).Scan(&workspaceID, &runtimeID, &archivedAt); err != nil {
+		if errorsIsNoRows(err) {
+			if placementGeneration < 1 {
+				placementGeneration = 1
+			}
+			return nil, &daemonws.ReminderOwnerGoneError{AgentID: payload.AgentID, RuntimeID: payload.RuntimeID, PlacementGeneration: placementGeneration}
 		}
-		due = append(due, reminder)
+		return nil, err
+	}
+	if err := tx.QueryRow(ctx, `
+		SELECT COALESCE(max(placement_generation), 0)
+		FROM agent_reminder_daemon_owner_event
+		WHERE agent_id = $1`, agentID).Scan(&placementGeneration); err != nil {
+		return nil, err
+	}
+	if !daemonIdentityOwnsWorkspace(identity, workspaceID) {
+		return nil, fmt.Errorf("reminder snapshot owner is outside daemon scope")
+	}
+	if runtimeID != requestRuntimeID || !daemonIdentityOwnsRuntime(identity, runtimeID) || archivedAt.Valid || payload.PlacementGeneration != placementGeneration {
+		if placementGeneration < 1 {
+			placementGeneration = 1
+		}
+		return nil, &daemonws.ReminderOwnerGoneError{AgentID: payload.AgentID, RuntimeID: payload.RuntimeID, PlacementGeneration: placementGeneration}
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 210))`, uuidToString(runtimeID)); err != nil {
+		return nil, err
+	}
+	var projectionWatermark int64
+	if err := tx.QueryRow(ctx, `
+		SELECT COALESCE((SELECT latest_seq FROM agent_reminder_daemon_projection_cursor WHERE runtime_id = $1), 0)`, runtimeID).Scan(&projectionWatermark); err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, `SELECT `+reminderSelectColumns()+`
+		FROM agent_reminder
+		WHERE workspace_id = $1 AND agent_id = $2 AND status = 'scheduled'
+		ORDER BY fire_at ASC, id ASC`, workspaceID, agentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	jobs := make([]protocol.ReminderTimerJob, 0)
+	for rows.Next() {
+		reminder, err := scanAgentReminder(rows)
+		if err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, protocol.ReminderTimerJob{
+			ReminderID:   uuidToString(reminder.ID),
+			OwnerAgentID: payload.AgentID,
+			Version:      reminder.Version,
+			FireAt:       reminder.FireAt.Time.UTC().Format(time.RFC3339Nano),
+		})
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
-		return err
-	}
-	rows.Close()
-	for _, reminder := range due {
-		cadenceSlot := reminder.FireAt
-		if reminder.CadenceNextAt.Valid {
-			cadenceSlot = reminder.CadenceNextAt
-		}
-		var occurrenceID pgtype.UUID
-		if err := tx.QueryRow(ctx, `
-			INSERT INTO agent_reminder_occurrence (
-				reminder_id, workspace_id, agent_id, cadence_scheduled_for, due_at,
-				status, title_snapshot, cadence_snapshot, timezone_snapshot, claimed_at
-			) VALUES ($1, $2, $3, $4, $5, 'claimed', $6, $7, $8, now())
-			ON CONFLICT (reminder_id, cadence_scheduled_for) DO UPDATE
-			SET claimed_at = CASE
-				WHEN agent_reminder_occurrence.status IN ('pending', 'claimed')
-				THEN now() ELSE agent_reminder_occurrence.claimed_at END,
-				updated_at = now()
-			RETURNING id`, reminder.ID, reminder.WorkspaceID, reminder.AgentID,
-			cadenceSlot, reminder.FireAt, reminder.Title, nullableText(reminder.Cadence),
-			reminderTimezoneValue(reminder.Cadence, reminder.ScheduleTimezone)).Scan(&occurrenceID); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE agent_reminder
-			SET status = 'firing', current_occurrence_id = $2, updated_at = now()
-			WHERE id = $1 AND status = 'scheduled'`, reminder.ID, occurrenceID); err != nil {
-			return err
-		}
-		claimed = append(claimed, claimedReminder{reminderID: reminder.ID, occurrenceID: occurrenceID})
+		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return err
+		return nil, err
 	}
-	for _, item := range claimed {
-		if err := h.fireReminderOccurrence(ctx, item.reminderID, item.occurrenceID); err != nil {
-			slog.Warn("reminder occurrence fire failed", "reminder_id", uuidToString(item.reminderID), "occurrence_id", uuidToString(item.occurrenceID), "error", err)
+	return &protocol.ReminderSnapshotPayload{
+		AgentID: payload.AgentID, RuntimeID: uuidToString(runtimeID), PlacementGeneration: placementGeneration,
+		ProjectionWatermark: projectionWatermark, Reminders: jobs,
+	}, nil
+}
+
+func (h *Handler) HandleDaemonReminderOwnerLifecycle(ctx context.Context, identity daemonws.ClientIdentity, payload protocol.DaemonAgentLifecycleRequestPayload) ([]protocol.DaemonAgentLifecycleEvent, map[string]int64, error) {
+	if h == nil || len(identity.RuntimeIDs) == 0 {
+		return nil, map[string]int64{}, nil
+	}
+	allowed := make(map[string]bool, len(identity.RuntimeIDs))
+	for _, runtimeID := range identity.RuntimeIDs {
+		allowed[runtimeID] = true
+	}
+	events := make([]protocol.DaemonAgentLifecycleEvent, 0)
+	endCursors := make(map[string]int64, len(payload.RuntimeCursors))
+	for runtimeID, cursor := range payload.RuntimeCursors {
+		if !allowed[runtimeID] || cursor < 0 {
+			return nil, nil, fmt.Errorf("agent lifecycle cursor outside daemon scope")
+		}
+		query := `
+			SELECT event_type, agent_id::text, runtime_id::text, workspace_id::text, seq, placement_generation
+			FROM agent_reminder_daemon_owner_event
+			WHERE ($1 = '' OR workspace_id::text = $1) AND runtime_id::text = $2 AND seq > $3
+			ORDER BY seq ASC`
+		args := []any{identity.WorkspaceID, runtimeID, cursor}
+		if cursor == 0 {
+			query = `
+				SELECT event_type, agent_id::text, runtime_id::text, workspace_id::text, seq, placement_generation
+				FROM (
+					SELECT DISTINCT ON (agent_id) event_type, agent_id, runtime_id, workspace_id, seq, placement_generation
+					FROM agent_reminder_daemon_owner_event
+					WHERE ($1 = '' OR workspace_id::text = $1) AND runtime_id::text = $2
+					ORDER BY agent_id, seq DESC
+				) latest
+				ORDER BY seq ASC`
+			args = []any{identity.WorkspaceID, runtimeID}
+		}
+		rows, err := h.DB.Query(ctx, query, args...)
+		if err != nil {
+			return nil, nil, err
+		}
+		endCursor := cursor
+		for rows.Next() {
+			var event protocol.DaemonAgentLifecycleEvent
+			if err := rows.Scan(&event.EventType, &event.AgentID, &event.RuntimeID, &event.WorkspaceID, &event.LifecycleSeq, &event.PlacementGeneration); err != nil {
+				rows.Close()
+				return nil, nil, err
+			}
+			if event.LifecycleSeq > endCursor {
+				endCursor = event.LifecycleSeq
+			}
+			events = append(events, event)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, nil, err
+		}
+		rows.Close()
+		endCursors[runtimeID] = endCursor
+	}
+	return events, endCursors, nil
+}
+
+func (h *Handler) HandleDaemonReminderOwnerLifecycleAck(ctx context.Context, identity daemonws.ClientIdentity, payload protocol.DaemonAgentLifecycleAckPayload) error {
+	allowed := make(map[string]bool, len(identity.RuntimeIDs))
+	for _, runtimeID := range identity.RuntimeIDs {
+		allowed[runtimeID] = true
+	}
+	for runtimeID, seq := range payload.RuntimeCursors {
+		if !allowed[runtimeID] || seq < 0 {
+			return fmt.Errorf("agent lifecycle ack outside daemon scope")
+		}
+		result, err := h.DB.Exec(ctx, `
+			INSERT INTO agent_reminder_daemon_owner_cursor (runtime_id, ack_seq)
+			SELECT id, $2 FROM agent_runtime WHERE id::text = $1 AND ($3 = '' OR workspace_id::text = $3)
+			ON CONFLICT (runtime_id) DO UPDATE
+			SET ack_seq = GREATEST(agent_reminder_daemon_owner_cursor.ack_seq, EXCLUDED.ack_seq), updated_at = now()`, runtimeID, seq, identity.WorkspaceID)
+		if err != nil {
+			return err
+		}
+		if result.RowsAffected() != 1 {
+			return fmt.Errorf("agent lifecycle ack runtime outside workspace")
+		}
+		if _, err := h.DB.Exec(ctx, `
+			DELETE FROM agent_reminder_daemon_owner_event e
+			WHERE e.runtime_id::text = $1 AND e.seq <= $2
+			  AND EXISTS (
+				SELECT 1 FROM agent_reminder_daemon_owner_event newer
+				WHERE newer.runtime_id = e.runtime_id AND newer.agent_id = e.agent_id AND newer.seq > e.seq
+			  )`, runtimeID, seq); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-func (h *Handler) fireReminderOccurrence(ctx context.Context, reminderID, occurrenceID pgtype.UUID) error {
+func (h *Handler) HandleDaemonReminderProjection(ctx context.Context, identity daemonws.ClientIdentity, payload protocol.ReminderProjectionRequestPayload) ([]protocol.ReminderProjectionEvent, protocol.ReminderProjectionReplayEndPayload, error) {
+	allowed := make(map[string]bool, len(identity.RuntimeIDs))
+	for _, runtimeID := range identity.RuntimeIDs {
+		allowed[runtimeID] = true
+	}
+	events := make([]protocol.ReminderProjectionEvent, 0)
+	endCursors := make(map[string]int64, len(payload.RuntimeCursors))
+	resets := make(map[string]protocol.ReminderRuntimeReset)
+	for runtimeID, required := range payload.RuntimeResetRequired {
+		cursor, exists := payload.RuntimeCursors[runtimeID]
+		if required && (!allowed[runtimeID] || !exists || cursor < 0) {
+			return nil, protocol.ReminderProjectionReplayEndPayload{}, fmt.Errorf("reminder runtime reset outside daemon scope")
+		}
+	}
+	for runtimeID, cursor := range payload.RuntimeCursors {
+		if !allowed[runtimeID] || cursor < 0 {
+			return nil, protocol.ReminderProjectionReplayEndPayload{}, fmt.Errorf("reminder projection cursor outside daemon scope")
+		}
+		var latest, ack int64
+		if err := h.DB.QueryRow(ctx, `
+			SELECT COALESCE((
+			  SELECT cursor.latest_seq
+			  FROM agent_reminder_daemon_projection_cursor cursor
+			  JOIN agent_runtime runtime ON runtime.id = cursor.runtime_id
+			  WHERE cursor.runtime_id::text = $1
+			    AND ($2 = '' OR runtime.workspace_id::text = $2)
+			), 0), COALESCE((
+			  SELECT cursor.ack_seq
+			  FROM agent_reminder_daemon_projection_cursor cursor
+			  JOIN agent_runtime runtime ON runtime.id = cursor.runtime_id
+			  WHERE cursor.runtime_id::text = $1
+			    AND ($2 = '' OR runtime.workspace_id::text = $2)
+			), 0)`, runtimeID, identity.WorkspaceID).Scan(&latest, &ack); err != nil {
+			return nil, protocol.ReminderProjectionReplayEndPayload{}, err
+		}
+		if cursor > latest {
+			return nil, protocol.ReminderProjectionReplayEndPayload{}, fmt.Errorf("reminder projection cursor exceeds server watermark")
+		}
+		forceReset := payload.RuntimeResetRequired[runtimeID]
+		if cursor < ack || forceReset {
+			reset, err := h.buildReminderRuntimeReset(ctx, identity, runtimeID, cursor, payload.RuntimeResidencies[runtimeID], forceReset)
+			if err != nil {
+				return nil, protocol.ReminderProjectionReplayEndPayload{}, err
+			}
+			resets[runtimeID] = reset
+			endCursors[runtimeID] = reset.ProjectionWatermark
+			continue
+		}
+		rows, err := h.DB.Query(ctx, `SELECT `+reminderProjectionSelectColumns()+`
+			FROM agent_reminder_daemon_projection_event
+			WHERE runtime_id::text = $1 AND seq > $2
+			  AND ($3 = '' OR workspace_id::text = $3)
+			ORDER BY seq ASC`, runtimeID, cursor, identity.WorkspaceID)
+		if err != nil {
+			return nil, protocol.ReminderProjectionReplayEndPayload{}, err
+		}
+		for rows.Next() {
+			event, err := scanReminderProjection(rows)
+			if err != nil {
+				rows.Close()
+				return nil, protocol.ReminderProjectionReplayEndPayload{}, err
+			}
+			events = append(events, event)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, protocol.ReminderProjectionReplayEndPayload{}, err
+		}
+		rows.Close()
+		endCursors[runtimeID] = latest
+	}
+	return events, protocol.ReminderProjectionReplayEndPayload{RuntimeCursors: endCursors, RuntimeResets: resets}, nil
+}
+
+func (h *Handler) buildReminderRuntimeReset(ctx context.Context, identity daemonws.ClientIdentity, runtimeID string, cursor int64, residencies []protocol.ReminderRuntimeResidency, force bool) (protocol.ReminderRuntimeReset, error) {
 	tx, err := h.TxStarter.Begin(ctx)
 	if err != nil {
-		return err
+		return protocol.ReminderRuntimeReset{}, err
 	}
 	defer tx.Rollback(ctx)
+	sort.Slice(residencies, func(i, j int) bool { return residencies[i].AgentID < residencies[j].AgentID })
+	type lockedResidency struct {
+		request          protocol.ReminderRuntimeResidency
+		agentID          pgtype.UUID
+		workspaceID      pgtype.UUID
+		currentRuntimeID pgtype.UUID
+		archivedAt       pgtype.Timestamptz
+		exists           bool
+	}
+	seen := make(map[string]bool, len(residencies))
+	locked := make([]lockedResidency, 0, len(residencies))
+	for _, residency := range residencies {
+		if residency.AgentID == "" || residency.PlacementGeneration < 1 || seen[residency.AgentID] {
+			return protocol.ReminderRuntimeReset{}, fmt.Errorf("invalid reminder runtime reset residency")
+		}
+		seen[residency.AgentID] = true
+		agentID, err := parseUUIDString(residency.AgentID)
+		if err != nil || !agentID.Valid {
+			return protocol.ReminderRuntimeReset{}, fmt.Errorf("invalid reminder runtime reset agent")
+		}
+		entry := lockedResidency{request: residency, agentID: agentID}
+		err = tx.QueryRow(ctx, `SELECT workspace_id, runtime_id, archived_at FROM agent WHERE id = $1 FOR UPDATE`, agentID).Scan(&entry.workspaceID, &entry.currentRuntimeID, &entry.archivedAt)
+		if err != nil && !errorsIsNoRows(err) {
+			return protocol.ReminderRuntimeReset{}, err
+		}
+		entry.exists = err == nil
+		locked = append(locked, entry)
+	}
+	// Keep the established Agent -> runtime advisory order. Once every local
+	// owner row is locked, the advisory lock makes the definitions read and
+	// projection watermark one indivisible order-domain boundary.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 210))`, runtimeID); err != nil {
+		return protocol.ReminderRuntimeReset{}, err
+	}
+	owners := make([]protocol.ReminderRuntimeResetOwner, 0, len(locked))
+	for _, entry := range locked {
+		residency := entry.request
+		owner := protocol.ReminderRuntimeResetOwner{AgentID: residency.AgentID, PlacementGeneration: residency.PlacementGeneration, Terminal: true}
+		var currentGeneration int64
+		if entry.exists {
+			if err := tx.QueryRow(ctx, `SELECT COALESCE(max(placement_generation), 0) FROM agent_reminder_daemon_owner_event WHERE agent_id = $1`, entry.agentID).Scan(&currentGeneration); err != nil {
+				return protocol.ReminderRuntimeReset{}, err
+			}
+			if currentGeneration > owner.PlacementGeneration {
+				owner.PlacementGeneration = currentGeneration
+			}
+			owner.Terminal = entry.archivedAt.Valid || uuidToString(entry.currentRuntimeID) != runtimeID || currentGeneration != residency.PlacementGeneration || !daemonIdentityOwnsWorkspace(identity, entry.workspaceID)
+			if !owner.Terminal {
+				rows, err := tx.Query(ctx, `SELECT `+reminderSelectColumns()+` FROM agent_reminder WHERE workspace_id = $1 AND agent_id = $2 AND status = 'scheduled' ORDER BY fire_at ASC, id ASC`, entry.workspaceID, entry.agentID)
+				if err != nil {
+					return protocol.ReminderRuntimeReset{}, err
+				}
+				for rows.Next() {
+					reminder, err := scanAgentReminder(rows)
+					if err != nil {
+						rows.Close()
+						return protocol.ReminderRuntimeReset{}, err
+					}
+					owner.Reminders = append(owner.Reminders, protocol.ReminderTimerJob{ReminderID: uuidToString(reminder.ID), OwnerAgentID: residency.AgentID, Version: reminder.Version, FireAt: reminder.FireAt.Time.UTC().Format(time.RFC3339Nano)})
+				}
+				if err := rows.Err(); err != nil {
+					rows.Close()
+					return protocol.ReminderRuntimeReset{}, err
+				}
+				rows.Close()
+			}
+		}
+		owners = append(owners, owner)
+	}
+	var watermark, ack int64
+	if err := tx.QueryRow(ctx, `
+		SELECT COALESCE(cursor.latest_seq, 0), COALESCE(cursor.ack_seq, 0)
+		FROM agent_runtime runtime
+		LEFT JOIN agent_reminder_daemon_projection_cursor cursor ON cursor.runtime_id = runtime.id
+		WHERE runtime.id::text = $1 AND ($2 = '' OR runtime.workspace_id::text = $2)`, runtimeID, identity.WorkspaceID).Scan(&watermark, &ack); err != nil {
+		return protocol.ReminderRuntimeReset{}, err
+	}
+	if !force && cursor >= ack {
+		return protocol.ReminderRuntimeReset{}, fmt.Errorf("reminder runtime reset no longer required")
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return protocol.ReminderRuntimeReset{}, err
+	}
+	return protocol.ReminderRuntimeReset{ProjectionWatermark: watermark, Owners: owners}, nil
+}
+
+func (h *Handler) HandleDaemonReminderProjectionAck(ctx context.Context, identity daemonws.ClientIdentity, payload protocol.ReminderProjectionAckPayload) error {
+	allowed := make(map[string]bool, len(identity.RuntimeIDs))
+	for _, runtimeID := range identity.RuntimeIDs {
+		allowed[runtimeID] = true
+	}
+	for runtimeID, seq := range payload.RuntimeCursors {
+		if !allowed[runtimeID] || seq < 0 {
+			return fmt.Errorf("reminder projection ack outside daemon scope")
+		}
+		tx, err := h.TxStarter.Begin(ctx)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 210))`, runtimeID); err != nil {
+			_ = tx.Rollback(ctx)
+			return err
+		}
+		result, err := tx.Exec(ctx, `
+			INSERT INTO agent_reminder_daemon_projection_cursor (runtime_id, latest_seq, ack_seq)
+			SELECT runtime.id, COALESCE(cursor.latest_seq, 0), $2
+			FROM agent_runtime runtime
+			LEFT JOIN agent_reminder_daemon_projection_cursor cursor ON cursor.runtime_id = runtime.id
+			WHERE runtime.id::text = $1
+			  AND ($3 = '' OR runtime.workspace_id::text = $3)
+			  AND $2 <= COALESCE(cursor.latest_seq, 0)
+			ON CONFLICT (runtime_id) DO UPDATE
+			SET ack_seq = GREATEST(agent_reminder_daemon_projection_cursor.ack_seq, $2),
+			    updated_at = now()
+			WHERE $2 <= agent_reminder_daemon_projection_cursor.latest_seq`, runtimeID, seq, identity.WorkspaceID)
+		if err != nil || result.RowsAffected() != 1 {
+			_ = tx.Rollback(ctx)
+			return fmt.Errorf("invalid reminder projection ack")
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM agent_reminder_daemon_projection_event WHERE runtime_id::text = $1 AND seq <= $2`, runtimeID, seq); err != nil {
+			_ = tx.Rollback(ctx)
+			return err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (h *Handler) enqueueReminderFireResultTx(ctx context.Context, tx pgx.Tx, runtimeID, workspaceID, agentID, reminderID pgtype.UUID, placementGeneration, version int64, fireAt pgtype.Timestamptz, terminal bool) (protocol.ReminderProjectionEvent, error) {
+	var seq int64
+	var fireAtValue any
+	if fireAt.Valid && !terminal {
+		fireAtValue = fireAt
+	}
+	if err := tx.QueryRow(ctx, `SELECT enqueue_agent_reminder_daemon_projection($1,$2,$3,$4,$5,'fire_result',$6,$7,$8)`,
+		runtimeID, workspaceID, agentID, reminderID, placementGeneration, version, fireAtValue, terminal).Scan(&seq); err != nil {
+		return protocol.ReminderProjectionEvent{}, err
+	}
+	return scanReminderProjection(tx.QueryRow(ctx, `SELECT `+reminderProjectionSelectColumns()+` FROM agent_reminder_daemon_projection_event WHERE seq = $1`, seq))
+}
+
+func (h *Handler) HandleDaemonReminderFireAttempt(ctx context.Context, identity daemonws.ClientIdentity, payload protocol.ReminderFireAttemptPayload) (*protocol.ReminderFireResultPayload, error) {
+	agentID, err := parseUUIDString(strings.TrimSpace(payload.AgentID))
+	if err != nil || !agentID.Valid {
+		return nil, fmt.Errorf("invalid reminder fire agent_id")
+	}
+	requestRuntimeID, err := parseUUIDString(strings.TrimSpace(payload.RuntimeID))
+	if err != nil || !requestRuntimeID.Valid || payload.PlacementGeneration < 1 || !daemonIdentityOwnsRuntime(identity, requestRuntimeID) {
+		return nil, fmt.Errorf("invalid reminder fire placement")
+	}
+	reminderID, err := parseUUIDString(strings.TrimSpace(payload.ReminderID))
+	if err != nil || !reminderID.Valid || payload.Version < 1 {
+		return nil, fmt.Errorf("invalid reminder fire payload")
+	}
+	if raw := strings.TrimSpace(payload.FiredAtClient); raw != "" {
+		if _, err := time.Parse(time.RFC3339Nano, raw); err != nil {
+			return nil, fmt.Errorf("invalid reminder fire client timestamp")
+		}
+	}
+	preliminary, preliminaryErr := scanAgentReminder(h.DB.QueryRow(ctx, `SELECT `+reminderSelectColumns()+` FROM agent_reminder WHERE id = $1`, reminderID))
+	if preliminaryErr != nil && !errorsIsNoRows(preliminaryErr) {
+		return nil, preliminaryErr
+	}
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	// Keep the established channel -> agent -> reminder lock prefix. Agent
+	// archive/move owns the agent row before its trigger touches definitions;
+	// taking channel first also remains compatible with onboarding eligibility.
+	if preliminaryErr == nil && preliminary.AnchorChannelID.Valid {
+		var ignored pgtype.UUID
+		if err := tx.QueryRow(ctx, `SELECT id FROM channel WHERE id = $1 AND workspace_id = $2 FOR UPDATE`, preliminary.AnchorChannelID, preliminary.WorkspaceID).Scan(&ignored); err != nil && !errorsIsNoRows(err) {
+			return nil, err
+		}
+	}
+	var runtimeID, workspaceID pgtype.UUID
+	var archivedAt pgtype.Timestamptz
+	if err := tx.QueryRow(ctx, `SELECT runtime_id, workspace_id, archived_at FROM agent WHERE id = $1 FOR UPDATE`, agentID).Scan(&runtimeID, &workspaceID, &archivedAt); err != nil {
+		if errorsIsNoRows(err) {
+			return nil, &daemonws.ReminderOwnerGoneError{AgentID: payload.AgentID, RuntimeID: payload.RuntimeID, PlacementGeneration: payload.PlacementGeneration}
+		}
+		return nil, err
+	}
+	var placementGeneration int64
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(max(placement_generation), 0) FROM agent_reminder_daemon_owner_event WHERE agent_id = $1`, agentID).Scan(&placementGeneration); err != nil {
+		return nil, err
+	}
+	if archivedAt.Valid || runtimeID != requestRuntimeID || payload.PlacementGeneration != placementGeneration || !daemonIdentityOwnsWorkspace(identity, workspaceID) {
+		if placementGeneration < 1 {
+			placementGeneration = 1
+		}
+		return nil, &daemonws.ReminderOwnerGoneError{AgentID: payload.AgentID, RuntimeID: payload.RuntimeID, PlacementGeneration: placementGeneration}
+	}
 	reminder, err := scanAgentReminder(tx.QueryRow(ctx, `SELECT `+reminderSelectColumns()+` FROM agent_reminder WHERE id = $1 FOR UPDATE`, reminderID))
 	if err != nil {
-		return err
+		if errorsIsNoRows(err) {
+			event, eventErr := h.enqueueReminderFireResultTx(ctx, tx, runtimeID, workspaceID, agentID, reminderID, placementGeneration, payload.Version, pgtype.Timestamptz{}, true)
+			if eventErr != nil {
+				return nil, eventErr
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return nil, err
+			}
+			return &protocol.ReminderFireResultPayload{Projection: event}, nil
+		}
+		return nil, err
 	}
+	if reminder.AgentID != agentID || reminder.WorkspaceID != workspaceID {
+		return nil, fmt.Errorf("reminder fire owner mismatch")
+	}
+	if reminder.Version != payload.Version || reminder.Status != "scheduled" || reminder.FireAt.Time.After(time.Now().UTC().Add(5*time.Second)) {
+		terminal := reminder.Status != "scheduled"
+		event, eventErr := h.enqueueReminderFireResultTx(ctx, tx, runtimeID, workspaceID, agentID, reminderID, placementGeneration, reminder.Version, reminder.FireAt, terminal)
+		if eventErr != nil {
+			return nil, eventErr
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, err
+		}
+		return &protocol.ReminderFireResultPayload{Projection: event}, nil
+	}
+	cadenceSlot := reminder.FireAt
+	if reminder.CadenceNextAt.Valid {
+		cadenceSlot = reminder.CadenceNextAt
+	}
+	var occurrenceID pgtype.UUID
+	err = tx.QueryRow(ctx, `
+		INSERT INTO agent_reminder_occurrence (
+			reminder_id, workspace_id, agent_id, cadence_scheduled_for, due_at,
+			status, title_snapshot, cadence_snapshot, timezone_snapshot, claimed_at
+		) VALUES ($1, $2, $3, $4, $5, 'claimed', $6, $7, $8, now())
+		ON CONFLICT (reminder_id, cadence_scheduled_for) DO NOTHING
+		RETURNING id`, reminder.ID, reminder.WorkspaceID, reminder.AgentID,
+		cadenceSlot, reminder.FireAt, reminder.Title, nullableText(reminder.Cadence),
+		reminderTimezoneValue(reminder.Cadence, reminder.ScheduleTimezone)).Scan(&occurrenceID)
+	if errorsIsNoRows(err) {
+		event, eventErr := h.enqueueReminderFireResultTx(ctx, tx, runtimeID, workspaceID, agentID, reminderID, placementGeneration, reminder.Version, reminder.FireAt, false)
+		if eventErr != nil {
+			return nil, eventErr
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, err
+		}
+		return &protocol.ReminderFireResultPayload{Projection: event}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE agent_reminder
+		SET status = 'firing', current_occurrence_id = $2, updated_at = now()
+		WHERE id = $1 AND status = 'scheduled' AND version = $3`, reminder.ID, occurrenceID, payload.Version); err != nil {
+		return nil, err
+	}
+	reminder.Status = "firing"
+	reminder.CurrentOccurrenceID = occurrenceID
+	if err := h.fireReminderOccurrenceWithTx(ctx, tx, reminder, occurrenceID); err != nil {
+		return nil, err
+	}
+	event, err := h.latestReminderProjection(ctx, reminder.ID)
+	if err != nil {
+		return nil, err
+	}
+	return &protocol.ReminderFireResultPayload{Projection: event}, nil
+}
+
+func (h *Handler) fireReminderOccurrenceWithTx(ctx context.Context, tx pgx.Tx, reminder agentReminder, occurrenceID pgtype.UUID) error {
 	var occurrenceStatus string
 	var cadenceSlot pgtype.Timestamptz
 	var existingTaskID pgtype.UUID
@@ -960,18 +1551,17 @@ func (h *Handler) fireReminderOccurrence(ctx context.Context, reminderID, occurr
 		SELECT status, cadence_scheduled_for, fired_task_id
 		FROM agent_reminder_occurrence
 		WHERE id = $1 AND reminder_id = $2
-		FOR UPDATE`, occurrenceID, reminderID).Scan(&occurrenceStatus, &cadenceSlot, &existingTaskID); err != nil {
+		FOR UPDATE`, occurrenceID, reminder.ID).Scan(&occurrenceStatus, &cadenceSlot, &existingTaskID); err != nil {
 		return err
 	}
 	if occurrenceStatus == "fired" || occurrenceStatus == "cancelled" {
 		return tx.Commit(ctx)
 	}
-	// A durable task is the wake source of truth. This state can exist for a
-	// legacy V1 firing row or a deliberately injected recovery fixture. Never
-	// create a second task; finish the occurrence/definition ledger around the
-	// already queued wake instead.
+	// Migration 210 converges every pre-cutover firing row before this runtime
+	// can serve. A non-terminal occurrence with a task therefore violates the
+	// post-cutover state machine; fail closed instead of repairing it here.
 	if existingTaskID.Valid {
-		return h.finalizeReminderOccurrenceWithExistingTask(ctx, tx, reminder, occurrenceID, cadenceSlot, existingTaskID)
+		return fmt.Errorf("reminder occurrence invariant violation: non-terminal occurrence has fired_task_id")
 	}
 
 	var channelName, channelKind string
@@ -1119,19 +1709,22 @@ func (h *Handler) fireReminderOccurrence(ctx context.Context, reminderID, occurr
 		}
 		resultingState = "scheduled"
 		nextFireAt = next
-		if _, err := tx.Exec(ctx, `
+		if err := tx.QueryRow(ctx, `
 			UPDATE agent_reminder
 			SET status = 'scheduled', fire_at = $2, cadence_next_at = $2,
-			    current_occurrence_id = NULL, fired_task_id = $3, fired_at = now(), updated_at = now()
-			WHERE id = $1 AND status = 'firing' AND current_occurrence_id = $4`, reminder.ID, next, task.ID, occurrenceID); err != nil {
+			    current_occurrence_id = NULL, fired_task_id = $3, fired_at = now(),
+			    version = version + 1, updated_at = now()
+			WHERE id = $1 AND status = 'firing' AND current_occurrence_id = $4
+			RETURNING version`, reminder.ID, next, task.ID, occurrenceID).Scan(&reminder.Version); err != nil {
 			return err
 		}
 	} else {
-		if _, err := tx.Exec(ctx, `
+		if err := tx.QueryRow(ctx, `
 			UPDATE agent_reminder
 			SET status = 'fired', current_occurrence_id = NULL,
-			    fired_task_id = $2, fired_at = now(), updated_at = now()
-			WHERE id = $1 AND status = 'firing' AND current_occurrence_id = $3`, reminder.ID, task.ID, occurrenceID); err != nil {
+			    fired_task_id = $2, fired_at = now(), version = version + 1, updated_at = now()
+			WHERE id = $1 AND status = 'firing' AND current_occurrence_id = $3
+			RETURNING version`, reminder.ID, task.ID, occurrenceID).Scan(&reminder.Version); err != nil {
 			return err
 		}
 	}
@@ -1149,6 +1742,14 @@ func (h *Handler) fireReminderOccurrence(ctx context.Context, reminderID, occurr
 		return err
 	}
 	h.publishAgentReminderChanged(ctx, reminder.WorkspaceID, reminder.AgentID)
+	if resultingState == "scheduled" {
+		reminder.Status = "scheduled"
+		reminder.FireAt = pgtype.Timestamptz{Time: nextFireAt.(time.Time), Valid: true}
+		h.projectReminderUpsert(ctx, reminder)
+	} else {
+		reminder.Status = "fired"
+		h.projectReminderCancel(ctx, reminder)
+	}
 	h.publishChannelToMembers(ctx, protocol.EventChannelMessage, uuidToString(reminder.WorkspaceID), "system", "", reminder.AnchorChannelID, receipt)
 	h.TaskService.PublishChatTaskQueued(ctx, task, false)
 	targetKind, targetID, targetSlug := reminderActivityTarget(reminder, anchorAvailable)
@@ -1234,10 +1835,12 @@ func (h *Handler) terminalizeReminderOccurrence(ctx context.Context, tx pgx.Tx, 
 		WHERE id = $1 AND status IN ('pending', 'claimed')`, occurrenceID, reason); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `
+	if err := tx.QueryRow(ctx, `
 		UPDATE agent_reminder
-		SET status = 'cancelled', terminal_reason = $2, current_occurrence_id = NULL, updated_at = now()
-		WHERE id = $1`, reminder.ID, reason); err != nil {
+		SET status = 'cancelled', terminal_reason = $2, current_occurrence_id = NULL,
+		    version = version + 1, updated_at = now()
+		WHERE id = $1
+		RETURNING version`, reminder.ID, reason).Scan(&reminder.Version); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `
@@ -1254,59 +1857,8 @@ func (h *Handler) terminalizeReminderOccurrence(ctx context.Context, tx pgx.Tx, 
 		return err
 	}
 	h.publishAgentReminderChanged(ctx, reminder.WorkspaceID, reminder.AgentID)
-	return nil
-}
-
-func (h *Handler) finalizeReminderOccurrenceWithExistingTask(ctx context.Context, tx pgx.Tx, reminder agentReminder, occurrenceID pgtype.UUID, cadenceSlot pgtype.Timestamptz, taskID pgtype.UUID) error {
-	if _, err := tx.Exec(ctx, `
-		UPDATE agent_reminder_occurrence
-		SET status = 'fired', fired_at = COALESCE(fired_at, now()), updated_at = now()
-		WHERE id = $1 AND status IN ('pending', 'claimed')`, occurrenceID); err != nil {
-		return err
-	}
-	resultingState := "fired"
-	var nextFireAt any
-	if reminder.Cadence.Valid {
-		cadence, err := parseReminderCadence(reminder.Cadence.String, reminderCadenceTimezone(reminder))
-		if err != nil {
-			return err
-		}
-		next, err := nextReminderCadenceAfterSlot(cadence, cadenceSlot.Time, time.Now().UTC())
-		if err != nil {
-			return err
-		}
-		resultingState = "scheduled"
-		nextFireAt = next
-		if _, err := tx.Exec(ctx, `
-			UPDATE agent_reminder
-			SET status = 'scheduled', fire_at = $2, cadence_next_at = $2,
-			    current_occurrence_id = NULL, fired_task_id = $3,
-			    fired_at = COALESCE(fired_at, now()), updated_at = now()
-			WHERE id = $1`, reminder.ID, next, taskID); err != nil {
-			return err
-		}
-	} else if _, err := tx.Exec(ctx, `
-		UPDATE agent_reminder
-		SET status = 'fired', current_occurrence_id = NULL, fired_task_id = $2,
-		    fired_at = COALESCE(fired_at, now()), updated_at = now()
-		WHERE id = $1`, reminder.ID, taskID); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO agent_reminder_lifecycle_event (
-			reminder_id, workspace_id, agent_id, occurrence_id, event_type,
-			actor_type, previous_fire_at, next_fire_at, title_snapshot,
-			cadence_snapshot, timezone_snapshot, resulting_state, reason_code
-		) VALUES ($1, $2, $3, $4, 'fired', 'system', $5, $6, $7, $8, $9, $10, 'recovered_existing_task')
-		ON CONFLICT (occurrence_id, event_type) WHERE occurrence_id IS NOT NULL AND event_type IN ('fired', 'cancelled') DO NOTHING`,
-		reminder.ID, reminder.WorkspaceID, reminder.AgentID, occurrenceID, reminder.FireAt,
-		nextFireAt, reminder.Title, nullableText(reminder.Cadence), reminderTimezoneValue(reminder.Cadence, reminder.ScheduleTimezone), resultingState); err != nil {
-		return err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return err
-	}
-	h.publishAgentReminderChanged(ctx, reminder.WorkspaceID, reminder.AgentID)
+	reminder.Status = "cancelled"
+	h.projectReminderCancel(ctx, reminder)
 	return nil
 }
 
@@ -1351,39 +1903,4 @@ func buildReminderPrompt(ch ChannelResponse, reminder agentReminder, occurrenceI
 	b.WriteString("\n")
 	b.WriteString(channelContinuationInstruction)
 	return b.String()
-}
-
-func (h *Handler) RecoverStuckFiringReminders(ctx context.Context) error {
-	rows, err := h.DB.Query(ctx, `
-		SELECT reminder.id, occurrence.id
-		FROM agent_reminder reminder
-		JOIN agent_reminder_occurrence occurrence ON occurrence.id = reminder.current_occurrence_id
-		WHERE reminder.status = 'firing'
-		  AND occurrence.status = 'claimed'
-		  AND occurrence.claimed_at < now() - interval '5 minutes'
-		ORDER BY occurrence.claimed_at ASC
-		LIMIT 100`)
-	if err != nil {
-		return err
-	}
-	var stale [][2]pgtype.UUID
-	for rows.Next() {
-		var reminderID, occurrenceID pgtype.UUID
-		if err := rows.Scan(&reminderID, &occurrenceID); err != nil {
-			rows.Close()
-			return err
-		}
-		stale = append(stale, [2]pgtype.UUID{reminderID, occurrenceID})
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return err
-	}
-	rows.Close()
-	for _, item := range stale {
-		if err := h.fireReminderOccurrence(ctx, item[0], item[1]); err != nil {
-			slog.Warn("stale reminder occurrence recovery failed", "reminder_id", uuidToString(item[0]), "occurrence_id", uuidToString(item[1]), "error", err)
-		}
-	}
-	return nil
 }

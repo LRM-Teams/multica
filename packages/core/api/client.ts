@@ -189,6 +189,7 @@ import type {
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import type { DMItem, CreateOrFindDMBody } from "../dm/types";
+import type { RawReminderPage } from "../agents/reminder-view-model";
 import type {
   CloudRuntimeNode,
   CreateCloudRuntimeNodeRequest,
@@ -312,6 +313,8 @@ import {
   SandboxSnapshotListSchema,
   VoiceTranscriptResponseSchema,
   EMPTY_VOICE_TRANSCRIPT_RESPONSE,
+  RawReminderPageSchema,
+  EMPTY_REMINDER_PAGE,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -905,10 +908,16 @@ export class ApiClient {
   }
 
   // Agents
-  async listAgents(params?: { workspace_id?: string; include_archived?: boolean }): Promise<Agent[]> {
+  async listAgents(params?: {
+    workspace_id?: string;
+    include_archived?: boolean;
+    /** When set, channel-visibility agents are filtered to this home channel (LRM-370). */
+    channel_id?: string;
+  }): Promise<Agent[]> {
     const search = new URLSearchParams();
     if (params?.workspace_id) search.set("workspace_id", params.workspace_id);
     if (params?.include_archived) search.set("include_archived", "true");
+    if (params?.channel_id) search.set("channel_id", params.channel_id);
     return this.fetch(`/api/agents?${search}`);
   }
 
@@ -937,6 +946,29 @@ export class ApiClient {
     if (before) search.set("before", before);
     const suffix = search.toString() ? `?${search}` : "";
     return this.fetch(`/api/agents/${agentId}/activity/events${suffix}`);
+  }
+
+  // #656 Agent Card Reminders tab: read-only, per the V2 product contract
+  // (docs/superpowers/specs/2026-07-22-raft-reminder-parity.md). `status`
+  // selects which section this page belongs to server-side — "scheduled"
+  // populates only `definitions` (Upcoming), "fired" populates only
+  // `occurrences` (History, cursor-paginated newest-first) — not a
+  // client-side filter of one bigger list. Matches task #655's committed
+  // `ListAgentReminders` read-page contract (product baseline
+  // `product/654-reminder-parity@4937f3841`) — locked independent of #870's
+  // open fire/migration-correctness review.
+  async getAgentReminders(
+    agentId: string,
+    params: { status: "scheduled" | "fired"; cursor?: string; limit?: number },
+  ): Promise<RawReminderPage> {
+    const search = new URLSearchParams();
+    search.set("status", params.status);
+    if (params.cursor) search.set("cursor", params.cursor);
+    if (params.limit) search.set("limit", String(params.limit));
+    const raw = await this.fetch<unknown>(`/api/agents/${agentId}/reminders?${search}`);
+    return parseWithFallback(raw, RawReminderPageSchema, EMPTY_REMINDER_PAGE, {
+      endpoint: "GET /api/agents/{agentId}/reminders",
+    });
   }
 
   async createAgent(data: CreateAgentRequest): Promise<Agent> {
@@ -2778,6 +2810,36 @@ export class ApiClient {
 
   async listChannelActiveTasks(channelId: string): Promise<{ tasks: ChannelActiveTask[] }> {
     return this.fetch(`/api/channels/${channelId}/active-tasks`);
+  }
+
+  /**
+   * LRM-425: cancel one channel wake by inbox_event_id (active-tasks authority).
+   * Do not use cancelTaskById for channel strip / Stop — that dual path returns 409.
+   */
+  async cancelChannelInboxEvent(
+    channelId: string,
+    inboxEventId: string,
+  ): Promise<{ ok: boolean; inbox_event_id: string; agent_id: string; status: string }> {
+    return this.fetch(
+      `/api/channels/${channelId}/agent-inbox/events/${inboxEventId}/cancel`,
+      { method: "POST" },
+    );
+  }
+
+  /**
+   * LRM-425 Stop All: one request cancels every active channel wake.
+   * Frontend must not for-in / Promise.all single cancel.
+   */
+  async cancelChannelActiveInboxEvents(
+    channelId: string,
+  ): Promise<{
+    ok: boolean;
+    cancelled_count: number;
+    cancelled: Array<{ ok: boolean; inbox_event_id: string; agent_id: string; status: string }>;
+  }> {
+    return this.fetch(`/api/channels/${channelId}/agent-inbox/cancel-active`, {
+      method: "POST",
+    });
   }
 
   /**

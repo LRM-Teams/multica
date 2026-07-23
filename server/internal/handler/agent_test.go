@@ -16,7 +16,22 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
+
+type recordingReminderNotifier struct {
+	starts []protocol.DaemonAgentStartPayload
+	stops  []protocol.DaemonAgentStopPayload
+}
+
+func (*recordingReminderNotifier) NotifyReminderProjection(string, protocol.ReminderProjectionEvent) {
+}
+func (n *recordingReminderNotifier) NotifyReminderOwnerAdded(_ string, payload protocol.DaemonAgentStartPayload) {
+	n.starts = append(n.starts, payload)
+}
+func (n *recordingReminderNotifier) NotifyReminderOwnerRemoved(_ string, payload protocol.DaemonAgentStopPayload) {
+	n.stops = append(n.stops, payload)
+}
 
 // TestListWorkspaceAgentTaskSnapshot covers the agent presence snapshot endpoint:
 // every active task (queued/dispatched/running) PLUS each agent's most recent
@@ -1629,6 +1644,10 @@ func TestArchiveRestoreAgent_PreservesSkillsInResponse(t *testing.T) {
 		t.Skip("database not available")
 	}
 	ctx := context.Background()
+	previousNotifier := testHandler.ReminderNotifier
+	notifier := &recordingReminderNotifier{}
+	testHandler.ReminderNotifier = notifier
+	t.Cleanup(func() { testHandler.ReminderNotifier = previousNotifier })
 
 	agentID := createHandlerTestAgent(t, "archive-preserves-skills-agent", nil)
 	skillID := insertHandlerTestSkill(t, "archive-preserve", "body")
@@ -1667,6 +1686,9 @@ func TestArchiveRestoreAgent_PreservesSkillsInResponse(t *testing.T) {
 	}
 	if len(restored.Skills) != 1 || restored.Skills[0].ID != skillID {
 		t.Errorf("RestoreAgent: expected 1 skill %s, got %+v", skillID, restored.Skills)
+	}
+	if len(notifier.starts) != 1 || notifier.starts[0].AgentID != agentID || notifier.starts[0].LifecycleSeq < 1 || notifier.starts[0].PlacementGeneration < 1 {
+		t.Fatalf("RestoreAgent owner start projection = %+v", notifier.starts)
 	}
 }
 

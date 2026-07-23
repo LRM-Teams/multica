@@ -208,6 +208,12 @@ import {
   MutedIndicator,
   sumUnmutedUnreadCounts,
 } from "./conversation-muted";
+import {
+  CONVERSATION_LIST_ROW_IDLE_CLASS,
+  CONVERSATION_LIST_ROW_SELECTED_CLASS,
+  SIDEBAR_UNREAD_COUNT_BADGE_CLASS,
+} from "./conversation-list-row-tokens";
+
 import { buildPinnedConversationEntries } from "./pinned-conversations";
 import { PinnedConversationsSection } from "./pinned-conversations-section";
 import { ResolvedAgentSidePanel } from "../../common/resolved-agent-side-panel";
@@ -2242,7 +2248,9 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
               data-pinned={pinned ? "true" : undefined}
               className={cn(
                 "group/row relative mb-0.5 rounded-lg transition-colors",
-                active?.id === channel.id ? "bg-primary/[0.08]" : "hover:bg-accent",
+                active?.id === channel.id
+                  ? CONVERSATION_LIST_ROW_SELECTED_CLASS
+                  : CONVERSATION_LIST_ROW_IDLE_CLASS,
               )}
             />
           }
@@ -2427,7 +2435,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                   )}
                   <span className="flex-1 text-left">{t(($) => $.sidebar.groups)}</span>
                   {channelsCollapsed && aggregateChannelUnread > 0 && (
-                    <span className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
+                    <span className={SIDEBAR_UNREAD_COUNT_BADGE_CLASS}>
                       {aggregateChannelUnread > 99 ? "99+" : aggregateChannelUnread}
                     </span>
                   )}

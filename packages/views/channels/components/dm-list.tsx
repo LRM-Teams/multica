@@ -69,6 +69,12 @@ import {
   MutedIndicator,
   sumUnmutedUnreadCounts,
 } from "./conversation-muted";
+import {
+  CONVERSATION_LIST_ROW_IDLE_CLASS,
+  CONVERSATION_LIST_ROW_SELECTED_CLASS,
+  SIDEBAR_UNREAD_COUNT_BADGE_CLASS,
+} from "./conversation-list-row-tokens";
+
 
 const identitySearchOptions = { extendedMatch: matchesPinyin };
 
@@ -232,7 +238,7 @@ export function DmList({
             )}
             <span className="flex-1 text-left">{t(($) => $.dm.heading)}</span>
             {collapsed && aggregateUnread > 0 && (
-              <span className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
+              <span className={SIDEBAR_UNREAD_COUNT_BADGE_CLASS}>
                 {aggregateUnread > 99 ? "99+" : aggregateUnread}
               </span>
             )}
@@ -470,7 +476,9 @@ export function DmConversationRow({
             data-pinned={pinned ? "true" : undefined}
             className={cn(
               "group/row relative mb-0.5 rounded-lg transition-colors",
-              active ? "bg-primary/[0.08]" : "hover:bg-accent",
+              active
+                ? CONVERSATION_LIST_ROW_SELECTED_CLASS
+                : CONVERSATION_LIST_ROW_IDLE_CLASS,
             )}
           />
         }

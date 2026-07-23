@@ -7,6 +7,7 @@ import {
   isConversationMuted,
   sumUnmutedUnreadCounts,
 } from "./conversation-muted";
+import { SIDEBAR_UNREAD_COUNT_BADGE_CLASS } from "./conversation-list-row-tokens";
 import type { PinnedConversationEntry } from "./pinned-conversations";
 
 /**
@@ -56,7 +57,7 @@ export function PinnedConversationsSection({
           )}
           <span className="flex-1 text-left">{t(($) => $.sidebar.pinned_section)}</span>
           {collapsed && aggregateUnread > 0 && (
-            <span className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
+            <span className={SIDEBAR_UNREAD_COUNT_BADGE_CLASS}>
               {aggregateUnread > 99 ? "99+" : aggregateUnread}
             </span>
           )}

@@ -52,7 +52,8 @@ export function memberProfileOptions(
   const id = memberId ?? "";
   return queryOptions({
     queryKey: workspaceKeys.memberProfile(wsId, type, id),
-    queryFn: () => api.getMemberProfile(type, id),
+    // React Query forbids undefined; coalesce missing profiles to null.
+    queryFn: async () => (await api.getMemberProfile(type, id)) ?? null,
     enabled: !!wsId && !!memberType && !!memberId,
     staleTime: 30 * 1000,
   });

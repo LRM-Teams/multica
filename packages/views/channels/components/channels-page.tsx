@@ -70,7 +70,7 @@ import {
 import { useAuthStore } from "@multica/core/auth";
 import { dmKeys, dmListOptions, useCreateOrFindDM } from "@multica/core/dm";
 import type { DMItem } from "@multica/core/dm";
-import { api } from "@multica/core/api";
+import { ApiError, api } from "@multica/core/api";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
@@ -1880,7 +1880,13 @@ export function ChannelsPage({
         setMobilePanel(null);
         setDeleteTarget(null);
       },
-      onError: () => toast.error(t(($) => $.delete_dialog.toast_failed)),
+      // LRM-449 / LRM-238 — surface API reason (403/409/500 body.error); never
+      // collapse every failure to a bare "Failed to delete channel".
+      onError: (err) => {
+        const reason =
+          err instanceof ApiError && err.message.trim() ? err.message.trim() : null;
+        toast.error(reason ?? t(($) => $.delete_dialog.toast_failed));
+      },
     });
   };
 

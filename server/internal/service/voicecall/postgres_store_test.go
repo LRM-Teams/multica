@@ -17,7 +17,10 @@ import (
 )
 
 func TestPostgresStoreMapsSessionAndScopesEveryMutation(t *testing.T) {
-	queries := &fakeVoiceCallQueries{session: testDBVoiceCallSession()}
+	queries := &fakeVoiceCallQueries{
+		session: testDBVoiceCallSession(),
+		turn:    testDBVoiceCallTurn(),
+	}
 	store, err := NewPostgresStore(queries)
 	if err != nil {
 		t.Fatalf("new store: %v", err)
@@ -56,6 +59,32 @@ func TestPostgresStoreMapsSessionAndScopesEveryMutation(t *testing.T) {
 		uuidStringForTest(queries.get.UserID) != testVoiceUserID ||
 		uuidStringForTest(queries.get.ID) != testVoiceCallID {
 		t.Fatalf("get params = %+v", queries.get)
+	}
+
+	turn, err := store.UpsertProviderTurn(context.Background(), ProviderTurnInput{
+		Provider:       "volcengine",
+		ProviderTaskID: "voice-task-1",
+		Sequence:       1,
+		Speaker:        SpeakerMember,
+		Transcript:     " 你好。 ",
+		IsInterrupted:  false,
+		ProviderTurnID: "voice-member-1:3",
+	})
+	if err != nil {
+		t.Fatalf("upsert provider turn: %v", err)
+	}
+	if turn.ID != testVoiceTurnID ||
+		turn.CallSessionID != testVoiceCallID ||
+		turn.Transcript != " 你好。 " {
+		t.Fatalf("turn = %+v", turn)
+	}
+	if queries.providerTurn.Provider != "volcengine" ||
+		queries.providerTurn.ProviderTaskID.String != "voice-task-1" ||
+		queries.providerTurn.Sequence != 1 ||
+		queries.providerTurn.Speaker != "member" ||
+		queries.providerTurn.Transcript != " 你好。 " ||
+		queries.providerTurn.ProviderTurnID.String != "voice-member-1:3" {
+		t.Fatalf("provider turn params = %+v", queries.providerTurn)
 	}
 
 	if _, err := store.MarkConnecting(
@@ -149,6 +178,69 @@ func TestPostgresStoreRejectsInvalidUUIDBeforeQuery(t *testing.T) {
 	}
 }
 
+func TestPostgresStoreRejectsInvalidProviderTurnBeforeQuery(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*ProviderTurnInput)
+	}{
+		{
+			name: "sequence",
+			mutate: func(input *ProviderTurnInput) {
+				input.Sequence = 0
+			},
+		},
+		{
+			name: "speaker",
+			mutate: func(input *ProviderTurnInput) {
+				input.Speaker = "system"
+			},
+		},
+		{
+			name: "transcript",
+			mutate: func(input *ProviderTurnInput) {
+				input.Transcript = " "
+			},
+		},
+		{
+			name: "provider turn identity",
+			mutate: func(input *ProviderTurnInput) {
+				input.ProviderTurnID = ""
+			},
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			queries := &fakeVoiceCallQueries{
+				session: testDBVoiceCallSession(),
+				turn:    testDBVoiceCallTurn(),
+			}
+			store, err := NewPostgresStore(queries)
+			if err != nil {
+				t.Fatalf("new store: %v", err)
+			}
+			input := ProviderTurnInput{
+				Provider:       "volcengine",
+				ProviderTaskID: "voice-task-1",
+				Sequence:       1,
+				Speaker:        SpeakerMember,
+				Transcript:     "你好。",
+				ProviderTurnID: "voice-member-1:3",
+			}
+			testCase.mutate(&input)
+
+			if _, err := store.UpsertProviderTurn(
+				context.Background(),
+				input,
+			); err == nil {
+				t.Fatal("invalid provider turn accepted")
+			}
+			if queries.providerTurnCalls != 0 {
+				t.Fatalf("invalid turn reached query %d times", queries.providerTurnCalls)
+			}
+		})
+	}
+}
+
 func TestPostgresStoreClassifiesMemberVisibleErrors(t *testing.T) {
 	t.Run("active pair conflict", func(t *testing.T) {
 		queries := &fakeVoiceCallQueries{
@@ -205,6 +297,19 @@ func TestPostgresStoreClassifiesMemberVisibleErrors(t *testing.T) {
 			context.Background(), "volcengine", "missing-task",
 		); !errors.Is(err, ErrCallNotFound) {
 			t.Fatalf("provider callback error = %v, want ErrCallNotFound", err)
+		}
+		if _, err := store.UpsertProviderTurn(
+			context.Background(),
+			ProviderTurnInput{
+				Provider:       "volcengine",
+				ProviderTaskID: "missing-task",
+				Sequence:       1,
+				Speaker:        SpeakerMember,
+				Transcript:     "你好。",
+				ProviderTurnID: "voice-member-1:3",
+			},
+		); !errors.Is(err, ErrCallNotFound) {
+			t.Fatalf("provider turn error = %v, want ErrCallNotFound", err)
 		}
 	})
 }
@@ -274,6 +379,50 @@ func TestPostgresStoreStateQueriesAgainstMigration(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("create starting: %v", err)
+	}
+	memberTurn, err := store.UpsertProviderTurn(ctx, ProviderTurnInput{
+		Provider:       "volcengine",
+		ProviderTaskID: session.ProviderTaskID,
+		Sequence:       1,
+		Speaker:        SpeakerMember,
+		Transcript:     "你好。",
+		ProviderTurnID: "voice-member-integration:1",
+	})
+	if err != nil || memberTurn.Sequence != 1 {
+		t.Fatalf("member turn = %+v error=%v", memberTurn, err)
+	}
+	correctedTurn, err := store.UpsertProviderTurn(ctx, ProviderTurnInput{
+		Provider:       "volcengine",
+		ProviderTaskID: session.ProviderTaskID,
+		Sequence:       1,
+		Speaker:        SpeakerMember,
+		Transcript:     "你好，贝克汉姆。",
+		ProviderTurnID: "voice-member-integration:1",
+	})
+	if err != nil ||
+		correctedTurn.ID != memberTurn.ID ||
+		correctedTurn.Sequence != memberTurn.Sequence ||
+		correctedTurn.Transcript != "你好，贝克汉姆。" {
+		t.Fatalf("corrected turn = %+v error=%v", correctedTurn, err)
+	}
+	agentTurn, err := store.UpsertProviderTurn(ctx, ProviderTurnInput{
+		Provider:       "volcengine",
+		ProviderTaskID: session.ProviderTaskID,
+		Sequence:       2,
+		Speaker:        SpeakerAgent,
+		Transcript:     "你好，有什么需要我处理？",
+		ProviderTurnID: "voice-agent-integration:1",
+	})
+	if err != nil || agentTurn.Sequence != 2 {
+		t.Fatalf("agent turn = %+v error=%v", agentTurn, err)
+	}
+	var turnCount int
+	if err := connection.QueryRow(
+		ctx,
+		"SELECT count(*) FROM voice_call_turn WHERE call_session_id = $1",
+		session.ID,
+	).Scan(&turnCount); err != nil || turnCount != 2 {
+		t.Fatalf("turn count = %d error=%v", turnCount, err)
 	}
 	if _, err := store.CreateStarting(ctx, NewSession{
 		WorkspaceID:    testVoiceWorkspaceID,
@@ -423,24 +572,28 @@ const (
 	testVoiceChannelID   = "10000000-0000-4000-8000-000000000003"
 	testVoiceAgentID     = "10000000-0000-4000-8000-000000000004"
 	testVoiceUserID      = "10000000-0000-4000-8000-000000000005"
+	testVoiceTurnID      = "10000000-0000-4000-8000-000000000006"
 )
 
 type fakeVoiceCallQueries struct {
-	session         db.VoiceCallSession
-	ending          db.BeginVoiceCallEndingRow
-	create          db.CreateVoiceCallSessionParams
-	get             db.GetVoiceCallSessionForMemberParams
-	connecting      db.MarkVoiceCallConnectingParams
-	failed          db.MarkVoiceCallFailedParams
-	beginEnding     db.BeginVoiceCallEndingParams
-	ended           db.MarkVoiceCallEndedParams
-	providerActive  db.ApplyVoiceCallProviderActiveParams
-	providerFailure db.ApplyVoiceCallProviderFailureParams
-	getCalls        int
-	createErr       error
-	getErr          error
-	beginEndingErr  error
-	providerErr     error
+	session           db.VoiceCallSession
+	turn              db.UpsertVoiceCallProviderTurnRow
+	ending            db.BeginVoiceCallEndingRow
+	create            db.CreateVoiceCallSessionParams
+	get               db.GetVoiceCallSessionForMemberParams
+	connecting        db.MarkVoiceCallConnectingParams
+	failed            db.MarkVoiceCallFailedParams
+	beginEnding       db.BeginVoiceCallEndingParams
+	ended             db.MarkVoiceCallEndedParams
+	providerActive    db.ApplyVoiceCallProviderActiveParams
+	providerFailure   db.ApplyVoiceCallProviderFailureParams
+	providerTurn      db.UpsertVoiceCallProviderTurnParams
+	getCalls          int
+	createErr         error
+	getErr            error
+	beginEndingErr    error
+	providerErr       error
+	providerTurnCalls int
 }
 
 func (queries *fakeVoiceCallQueries) CreateVoiceCallSession(
@@ -464,6 +617,18 @@ func (queries *fakeVoiceCallQueries) GetVoiceCallSessionForMember(
 		return db.VoiceCallSession{}, queries.getErr
 	}
 	return queries.session, nil
+}
+
+func (queries *fakeVoiceCallQueries) UpsertVoiceCallProviderTurn(
+	_ context.Context,
+	params db.UpsertVoiceCallProviderTurnParams,
+) (db.UpsertVoiceCallProviderTurnRow, error) {
+	queries.providerTurn = params
+	queries.providerTurnCalls++
+	if queries.providerErr != nil {
+		return db.UpsertVoiceCallProviderTurnRow{}, queries.providerErr
+	}
+	return queries.turn, nil
 }
 
 func (queries *fakeVoiceCallQueries) MarkVoiceCallConnecting(
@@ -540,6 +705,18 @@ func testDBVoiceCallSession() db.VoiceCallSession {
 		OutputAudioMs:  34,
 		CreatedAt:      pgtype.Timestamptz{Time: startedAt, Valid: true},
 		UpdatedAt:      pgtype.Timestamptz{Time: startedAt, Valid: true},
+	}
+}
+
+func testDBVoiceCallTurn() db.UpsertVoiceCallProviderTurnRow {
+	return db.UpsertVoiceCallProviderTurnRow{
+		ID:             testPGUUID(testVoiceTurnID),
+		CallSessionID:  testPGUUID(testVoiceCallID),
+		Sequence:       1,
+		Speaker:        string(SpeakerMember),
+		Transcript:     " 你好。 ",
+		IsInterrupted:  false,
+		ProviderTurnID: pgtype.Text{String: "voice-member-1:3", Valid: true},
 	}
 }
 

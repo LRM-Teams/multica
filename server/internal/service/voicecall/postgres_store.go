@@ -23,6 +23,10 @@ type VoiceCallQueries interface {
 		ctx context.Context,
 		params db.GetVoiceCallSessionForMemberParams,
 	) (db.VoiceCallSession, error)
+	UpsertVoiceCallProviderTurn(
+		ctx context.Context,
+		params db.UpsertVoiceCallProviderTurnParams,
+	) (db.UpsertVoiceCallProviderTurnRow, error)
 	MarkVoiceCallConnecting(
 		ctx context.Context,
 		params db.MarkVoiceCallConnectingParams,
@@ -137,6 +141,52 @@ func (store *PostgresStore) Get(
 		return Session{}, fmt.Errorf("select voice call session: %w", err)
 	}
 	return voiceCallSessionFromDB(row)
+}
+
+func (store *PostgresStore) UpsertProviderTurn(
+	ctx context.Context,
+	input ProviderTurnInput,
+) (Turn, error) {
+	provider, providerTaskID, err := validateProviderIdentity(
+		input.Provider,
+		input.ProviderTaskID,
+	)
+	if err != nil {
+		return Turn{}, err
+	}
+	if input.Sequence <= 0 {
+		return Turn{}, errors.New("voice call turn sequence must be positive")
+	}
+	if input.Speaker != SpeakerMember && input.Speaker != SpeakerAgent {
+		return Turn{}, errors.New("voice call turn speaker must be member or agent")
+	}
+	if strings.TrimSpace(input.Transcript) == "" {
+		return Turn{}, errors.New("voice call turn transcript is required")
+	}
+	providerTurnID := strings.TrimSpace(input.ProviderTurnID)
+	if providerTurnID == "" {
+		return Turn{}, errors.New("voice call provider turn ID is required")
+	}
+
+	row, err := store.queries.UpsertVoiceCallProviderTurn(
+		ctx,
+		db.UpsertVoiceCallProviderTurnParams{
+			Sequence:       input.Sequence,
+			Speaker:        string(input.Speaker),
+			Transcript:     input.Transcript,
+			IsInterrupted:  input.IsInterrupted,
+			ProviderTurnID: pgtype.Text{String: providerTurnID, Valid: true},
+			Provider:       provider,
+			ProviderTaskID: pgtype.Text{String: providerTaskID, Valid: true},
+		},
+	)
+	if err != nil {
+		return Turn{}, classifyProviderCallbackStoreError(
+			err,
+			"upsert voice call provider turn",
+		)
+	}
+	return voiceCallTurnFromDB(row)
 }
 
 func (store *PostgresStore) MarkConnecting(
@@ -461,6 +511,29 @@ func optionalVoiceCallTime(value pgtype.Timestamptz) *time.Time {
 	}
 	result := value.Time
 	return &result
+}
+
+func voiceCallTurnFromDB(row db.UpsertVoiceCallProviderTurnRow) (Turn, error) {
+	id, err := voiceCallUUIDString("turn id", row.ID)
+	if err != nil {
+		return Turn{}, err
+	}
+	callSessionID, err := voiceCallUUIDString("turn call_session_id", row.CallSessionID)
+	if err != nil {
+		return Turn{}, err
+	}
+	if !row.ProviderTurnID.Valid {
+		return Turn{}, errors.New("voice call database row has no provider turn identity")
+	}
+	return Turn{
+		ID:             id,
+		CallSessionID:  callSessionID,
+		Sequence:       row.Sequence,
+		Speaker:        Speaker(row.Speaker),
+		Transcript:     row.Transcript,
+		IsInterrupted:  row.IsInterrupted,
+		ProviderTurnID: row.ProviderTurnID.String,
+	}, nil
 }
 
 func voiceCallConstraintViolation(err error, constraint string) bool {

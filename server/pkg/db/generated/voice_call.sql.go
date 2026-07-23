@@ -485,3 +485,89 @@ func (q *Queries) MarkVoiceCallFailed(ctx context.Context, arg MarkVoiceCallFail
 	)
 	return i, err
 }
+
+const upsertVoiceCallProviderTurn = `-- name: UpsertVoiceCallProviderTurn :one
+WITH target_session AS (
+  SELECT id
+  FROM voice_call_session
+  WHERE provider = $6
+    AND provider_task_id = $7
+)
+INSERT INTO voice_call_turn (
+  call_session_id,
+  sequence,
+  speaker,
+  transcript,
+  started_at,
+  ended_at,
+  is_interrupted,
+  provider_turn_id
+)
+SELECT
+  target_session.id,
+  $1,
+  $2,
+  $3,
+  now(),
+  now(),
+  $4,
+  $5
+FROM target_session
+ON CONFLICT (call_session_id, provider_turn_id)
+  WHERE provider_turn_id IS NOT NULL
+DO UPDATE SET
+  transcript = EXCLUDED.transcript,
+  ended_at = GREATEST(voice_call_turn.ended_at, EXCLUDED.ended_at),
+  is_interrupted = EXCLUDED.is_interrupted
+RETURNING
+  id,
+  call_session_id,
+  sequence,
+  speaker,
+  transcript,
+  is_interrupted,
+  provider_turn_id
+`
+
+type UpsertVoiceCallProviderTurnParams struct {
+	Sequence       int64       `json:"sequence"`
+	Speaker        string      `json:"speaker"`
+	Transcript     string      `json:"transcript"`
+	IsInterrupted  bool        `json:"is_interrupted"`
+	ProviderTurnID pgtype.Text `json:"provider_turn_id"`
+	Provider       string      `json:"provider"`
+	ProviderTaskID pgtype.Text `json:"provider_task_id"`
+}
+
+type UpsertVoiceCallProviderTurnRow struct {
+	ID             pgtype.UUID `json:"id"`
+	CallSessionID  pgtype.UUID `json:"call_session_id"`
+	Sequence       int64       `json:"sequence"`
+	Speaker        string      `json:"speaker"`
+	Transcript     string      `json:"transcript"`
+	IsInterrupted  bool        `json:"is_interrupted"`
+	ProviderTurnID pgtype.Text `json:"provider_turn_id"`
+}
+
+func (q *Queries) UpsertVoiceCallProviderTurn(ctx context.Context, arg UpsertVoiceCallProviderTurnParams) (UpsertVoiceCallProviderTurnRow, error) {
+	row := q.db.QueryRow(ctx, upsertVoiceCallProviderTurn,
+		arg.Sequence,
+		arg.Speaker,
+		arg.Transcript,
+		arg.IsInterrupted,
+		arg.ProviderTurnID,
+		arg.Provider,
+		arg.ProviderTaskID,
+	)
+	var i UpsertVoiceCallProviderTurnRow
+	err := row.Scan(
+		&i.ID,
+		&i.CallSessionID,
+		&i.Sequence,
+		&i.Speaker,
+		&i.Transcript,
+		&i.IsInterrupted,
+		&i.ProviderTurnID,
+	)
+	return i, err
+}

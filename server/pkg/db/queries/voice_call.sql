@@ -27,6 +27,48 @@ WHERE id = sqlc.arg('id')
   AND workspace_id = sqlc.arg('workspace_id')
   AND user_id = sqlc.arg('user_id');
 
+-- name: UpsertVoiceCallProviderTurn :one
+WITH target_session AS (
+  SELECT id
+  FROM voice_call_session
+  WHERE provider = sqlc.arg('provider')
+    AND provider_task_id = sqlc.arg('provider_task_id')
+)
+INSERT INTO voice_call_turn (
+  call_session_id,
+  sequence,
+  speaker,
+  transcript,
+  started_at,
+  ended_at,
+  is_interrupted,
+  provider_turn_id
+)
+SELECT
+  target_session.id,
+  sqlc.arg('sequence'),
+  sqlc.arg('speaker'),
+  sqlc.arg('transcript'),
+  now(),
+  now(),
+  sqlc.arg('is_interrupted'),
+  sqlc.arg('provider_turn_id')
+FROM target_session
+ON CONFLICT (call_session_id, provider_turn_id)
+  WHERE provider_turn_id IS NOT NULL
+DO UPDATE SET
+  transcript = EXCLUDED.transcript,
+  ended_at = GREATEST(voice_call_turn.ended_at, EXCLUDED.ended_at),
+  is_interrupted = EXCLUDED.is_interrupted
+RETURNING
+  id,
+  call_session_id,
+  sequence,
+  speaker,
+  transcript,
+  is_interrupted,
+  provider_turn_id;
+
 -- name: MarkVoiceCallConnecting :one
 UPDATE voice_call_session
 SET

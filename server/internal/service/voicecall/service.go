@@ -64,6 +64,33 @@ type Session struct {
 	UpdatedAt      time.Time
 }
 
+type Speaker string
+
+const (
+	SpeakerMember Speaker = "member"
+	SpeakerAgent  Speaker = "agent"
+)
+
+type Turn struct {
+	ID             string
+	CallSessionID  string
+	Sequence       int64
+	Speaker        Speaker
+	Transcript     string
+	IsInterrupted  bool
+	ProviderTurnID string
+}
+
+type ProviderTurnInput struct {
+	Provider       string
+	ProviderTaskID string
+	Sequence       int64
+	Speaker        Speaker
+	Transcript     string
+	IsInterrupted  bool
+	ProviderTurnID string
+}
+
 type NewSession struct {
 	WorkspaceID    string
 	ChannelID      string

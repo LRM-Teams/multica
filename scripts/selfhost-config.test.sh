@@ -80,6 +80,7 @@ require_config "$deploy_workflow" 'RUNNER_EXPECTED_USER: dev'
 require_config "$deploy_workflow" 'uses: actions/upload-artifact@v4'
 require_config "$deploy_workflow" 'uses: actions/download-artifact@v4'
 require_config "$deploy_workflow" 'scripts/assert-runner-workspace-ownership.sh'
+require_config "$deploy_workflow" 'scripts/assert-served-app-image-provenance.sh'
 require_config "$deploy_workflow" 'scripts/compose-environment-value.sh'
 require_config "$deploy_workflow" 'Host-local database identity and protected speech configuration preflight passed.'
 require_config "$deploy_workflow" '--project-name multica'
@@ -126,8 +127,17 @@ if grep -Eq '(^|[;&|[:space:]])\.[[:space:]]+.*\.env|(^|[;&|[:space:]])source[[:
   echo "Compose dotenv files are data and must never be sourced by the deploy shell."
   exit 1
 fi
+if [[ $(grep -Fc 'scripts/assert-served-app-image-provenance.sh' <<<"$deploy_job") -ne 2 ]]; then
+  echo "Aliyun deploy must verify served app image provenance before and after health checks."
+  exit 1
+fi
+require_config "$deploy_job" 'pre-health'
+require_config "$deploy_job" 'post-health'
+require_config "$deploy_job" '"ghcr.io/${owner_lc}/multica-backend:${IMAGE_TAG}"'
+require_config "$deploy_job" '"ghcr.io/${owner_lc}/multica-web:${IMAGE_TAG}"'
 
 bash scripts/runner-workspace-ownership.test.sh
+bash scripts/served-app-image-provenance.test.sh
 bash scripts/compose-environment-value.test.sh
 
 if [[ ${SELFHOST_CONFIG_STATIC_ONLY:-false} == true ]]; then

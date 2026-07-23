@@ -69,6 +69,7 @@ jobs:
           install -m 0644 docker-compose.aliyun.yml "${bundle}/docker-compose.aliyun.yml"
           install -m 0644 deploy/aliyun/Caddyfile "${bundle}/deploy/aliyun/Caddyfile"
           install -m 0644 scripts/assert-runner-workspace-ownership.sh "${bundle}/scripts/assert-runner-workspace-ownership.sh"
+          install -m 0644 scripts/assert-served-app-image-provenance.sh "${bundle}/scripts/assert-served-app-image-provenance.sh"
           install -m 0644 scripts/compose-environment-value.sh "${bundle}/scripts/compose-environment-value.sh"
 
       - name: Validate deploy bundle
@@ -410,6 +411,18 @@ jobs:
         if: always() && steps.ownership_after_artifact.outcome == 'success'
         run: bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/assert-runner-workspace-ownership.sh" post-deploy
 
+      - name: Verify served app image provenance before health checks
+        run: |
+          set -euo pipefail
+          owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
+          bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/assert-served-app-image-provenance.sh" \
+            pre-health \
+            "${DEPLOY_DIR}" \
+            "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.selfhost.yml" \
+            "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.aliyun.yml" \
+            "ghcr.io/${owner_lc}/multica-backend:${IMAGE_TAG}" \
+            "ghcr.io/${owner_lc}/multica-web:${IMAGE_TAG}"
+
       - name: Verify app containers + Caddy HTTP and HTTPS proxies
         run: |
           set -euo pipefail
@@ -509,6 +522,18 @@ jobs:
           done
           echo "::warning::db-bridge-stub-multica did not pass /healthz within 60s - investigate the stub container."
           docker logs --tail 80 multica-db-bridge-stub-multica-1 || true
+
+      - name: Verify served app image provenance after health checks
+        run: |
+          set -euo pipefail
+          owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
+          bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/assert-served-app-image-provenance.sh" \
+            post-health \
+            "${DEPLOY_DIR}" \
+            "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.selfhost.yml" \
+            "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.aliyun.yml" \
+            "ghcr.io/${owner_lc}/multica-backend:${IMAGE_TAG}" \
+            "ghcr.io/${owner_lc}/multica-web:${IMAGE_TAG}"
 
       - name: Final runner ownership postflight
         if: always() && steps.ownership_after_artifact.outcome == 'success'

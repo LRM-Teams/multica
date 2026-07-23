@@ -58,8 +58,23 @@ Completed.
 
 ## Step 5 — Delivery verification
 
-Pending until the PR is merged.
+The first merged cutover run exposed a second boundary and did not deploy.
 
-- Confirm the deploy job selects runner `aliyun-144`.
-- Confirm the deployed image tag matches the merged `dev` SHA.
-- Confirm backend `/readyz`, Caddy HTTP compatibility listener, domain HTTPS, and container logs on `101.200.210.144`.
+- PR #970 merged as `0a16618f8`; run `29979928059` selected
+  `aliyun-144` under `/home/dev/actions-runner/_work`.
+- The GitHub-hosted build completed, but the Aliyun deploy job failed in
+  `actions/checkout`: two fetches ended with GnuTLS recv `-110`, then a partial
+  clone checkout could not fetch a promised blob after 132 seconds.
+- No runtime, Caddy, migration, or readyz step ran. Build success therefore did
+  not prove the cutover.
+
+Task #668 owns the successor:
+
+- package and validate the exact deploy files on a GitHub-hosted runner;
+- upload an immutable artifact keyed by `github.sha`;
+- make the Aliyun runner consume that artifact without checkout/git fetch;
+- enforce `dev` ownership across the whole runner work root before and after
+  artifact extraction and runtime operations;
+- validate the host-local database credential before touching containers;
+- require two consecutive clean/reuse deploys, ownership postflights, served
+  image SHA, host-local `/readyz`, and external HTTPS before closure.

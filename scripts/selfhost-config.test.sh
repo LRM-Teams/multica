@@ -8,7 +8,7 @@ require_config() {
   local config=$1
   local expected=$2
 
-  if ! grep -Fq "$expected" <<<"$config"; then
+  if ! grep -Fq -- "$expected" <<<"$config"; then
     echo "Missing expected docker compose config value:"
     echo "  $expected"
     exit 1
@@ -73,6 +73,59 @@ for obsolete in \
   fi
 done
 
+require_config "$deploy_workflow" 'compose up -d --no-deps --force-recreate caddy'
+require_config "$deploy_workflow" 'environment: aliyun-dev'
+require_config "$deploy_workflow" 'runs-on: [self-hosted, aliyun]'
+require_config "$deploy_workflow" 'RUNNER_EXPECTED_USER: dev'
+require_config "$deploy_workflow" 'uses: actions/upload-artifact@v4'
+require_config "$deploy_workflow" 'uses: actions/download-artifact@v4'
+require_config "$deploy_workflow" 'scripts/assert-runner-workspace-ownership.sh'
+require_config "$deploy_workflow" 'scripts/compose-environment-value.sh'
+require_config "$deploy_workflow" 'Host-local database identity preflight passed.'
+require_config "$deploy_workflow" '--project-name multica'
+require_config "$deploy_workflow" 'db_user="$(compose_env_value POSTGRES_USER multica)"'
+require_config "$deploy_workflow" 'db_name="$(compose_env_value POSTGRES_DB multica)"'
+require_config "$deploy_workflow" 'db_password="$(compose_env_value POSTGRES_PASSWORD)"'
+require_config "$deploy_workflow" '-U "$target_user"'
+require_config "$deploy_workflow" '-d "$target_db"'
+require_config "$deploy_workflow" 'env -u POSTGRES_USER -u POSTGRES_DB -u POSTGRES_PASSWORD'
+require_config "$deploy_workflow" 'compose_environment="$(compose config --environment)"'
+if [[ $(grep -Fc 'env -u POSTGRES_USER -u POSTGRES_DB -u POSTGRES_PASSWORD' <<<"$deploy_workflow") -ne 2 ]]; then
+  echo "Every Aliyun deploy/verify Compose wrapper must clear ambient POSTGRES_* values."
+  exit 1
+fi
+if grep -Fq 'compose exec -T caddy caddy reload' <<<"$deploy_workflow"; then
+  echo "Caddy reload cannot observe an atomically replaced single-file bind mount."
+  exit 1
+fi
+if grep -Fq 'environment: s89' <<<"$deploy_workflow"; then
+  echo "Aliyun deploy workflow must not bind the retired s89 Environment."
+  exit 1
+fi
+if grep -Fq 'secrets.POSTGRES_PASSWORD' <<<"$deploy_workflow"; then
+  echo "Aliyun runtime secrets must remain in the host-owned .env."
+  exit 1
+fi
+
+deploy_job="$(awk '/^  deploy:/{capture=1} capture{print}' .github/workflows/deploy.yml)"
+if grep -Fq 'uses: actions/checkout' <<<"$deploy_job"; then
+  echo "Aliyun self-hosted deploy job must consume the immutable deploy artifact, not git checkout."
+  exit 1
+fi
+for forbidden_command in git sudo chown; do
+  if grep -Eq "(^|[^[:alnum:]_.-])${forbidden_command}[[:space:]]" <<<"$deploy_job"; then
+    echo "Aliyun self-hosted deploy job must not execute ${forbidden_command}."
+    exit 1
+  fi
+done
+if grep -Eq '(^|[;&|[:space:]])\.[[:space:]]+.*\.env|(^|[;&|[:space:]])source[[:space:]]+.*\.env' <<<"$deploy_job"; then
+  echo "Compose dotenv files are data and must never be sourced by the deploy shell."
+  exit 1
+fi
+
+bash scripts/runner-workspace-ownership.test.sh
+bash scripts/compose-environment-value.test.sh
+
 if [[ ${SELFHOST_CONFIG_STATIC_ONLY:-false} == true ]]; then
   echo "self-host static topology ok"
   exit 0
@@ -134,12 +187,80 @@ require_config "$s89_caddyfile" 'redir @browser_navigation https://82.157.184.89
 require_config "$s89_caddyfile" '/api/daemon/ws'
 require_config "$s89_caddyfile" '/api/sandbox/node/ws'
 
-deploy_workflow="$(<.github/workflows/deploy.yml)"
-require_config "$deploy_workflow" 'compose up -d --no-deps --force-recreate caddy'
-if grep -Fq 'compose exec -T caddy caddy reload' <<<"$deploy_workflow"; then
-  echo "Caddy reload cannot observe an atomically replaced single-file bind mount."
+aliyun_config="$(
+  docker compose \
+    --project-directory "$ROOT_DIR" \
+    --env-file .env.example \
+    -f docker-compose.selfhost.yml \
+    -f docker-compose.aliyun.yml \
+    config
+)"
+aliyun_backend_config="$(
+  docker compose \
+    --project-directory "$ROOT_DIR" \
+    --env-file .env.example \
+    -f docker-compose.selfhost.yml \
+    -f docker-compose.aliyun.yml \
+    config backend
+)"
+
+require_config "$aliyun_config" 'container_name: multica-caddy'
+require_config "$aliyun_config" 'FRONTEND_ORIGIN: https://leagent.me'
+require_config "$aliyun_config" 'GOOGLE_REDIRECT_URI: https://leagent.me/auth/callback'
+require_config "$aliyun_config" 'MULTICA_APP_URL: https://leagent.me'
+require_config "$aliyun_config" 'MULTICA_PUBLIC_URL: https://leagent.me'
+require_config "$aliyun_config" 'target: /etc/caddy/Caddyfile'
+require_config "$aliyun_backend_config" 'host_ip: 127.0.0.1'
+if grep -Fq 'host_ip: 0.0.0.0' <<<"$aliyun_backend_config"; then
+  echo "Aliyun backend must not publish its raw API port on all interfaces."
   exit 1
 fi
+require_config "$aliyun_config" 'published: "80"'
+require_config "$aliyun_config" 'published: "443"'
+require_config "$aliyun_config" 'published: "8090"'
+
+# A self-hosted runner service may carry ambient POSTGRES_* values. Compose
+# gives those values precedence over --env-file, so prove the deploy wrapper
+# removes them and renders the same host-dotenv identity used by preflight.
+aliyun_ambient_config="$(
+  POSTGRES_USER=runner_user \
+    POSTGRES_DB=runner_db \
+    POSTGRES_PASSWORD=runner_secret \
+    docker compose \
+      --project-directory "$ROOT_DIR" \
+      --env-file .env.example \
+      -f docker-compose.selfhost.yml \
+      -f docker-compose.aliyun.yml \
+      config postgres backend
+)"
+require_config "$aliyun_ambient_config" 'POSTGRES_USER: runner_user'
+require_config "$aliyun_ambient_config" 'POSTGRES_DB: runner_db'
+require_config "$aliyun_ambient_config" 'POSTGRES_PASSWORD: runner_secret'
+require_config "$aliyun_ambient_config" 'DATABASE_URL: postgres://runner_user:runner_secret@postgres:5432/runner_db?sslmode=disable'
+
+aliyun_controlled_config="$(
+  POSTGRES_USER=runner_user \
+    POSTGRES_DB=runner_db \
+    POSTGRES_PASSWORD=runner_secret \
+    env -u POSTGRES_USER -u POSTGRES_DB -u POSTGRES_PASSWORD \
+      docker compose \
+        --project-directory "$ROOT_DIR" \
+        --env-file .env.example \
+        -f docker-compose.selfhost.yml \
+        -f docker-compose.aliyun.yml \
+        config postgres backend
+)"
+require_config "$aliyun_controlled_config" 'POSTGRES_USER: multica'
+require_config "$aliyun_controlled_config" 'POSTGRES_DB: multica'
+require_config "$aliyun_controlled_config" 'POSTGRES_PASSWORD: multica'
+require_config "$aliyun_controlled_config" 'DATABASE_URL: postgres://multica:multica@postgres:5432/multica?sslmode=disable'
+
+aliyun_caddyfile="$(<deploy/aliyun/Caddyfile)"
+require_config "$aliyun_caddyfile" 'leagent.me, www.leagent.me'
+require_config "$aliyun_caddyfile" '@browser_navigation header Accept *text/html*'
+require_config "$aliyun_caddyfile" 'redir @browser_navigation https://leagent.me{uri} 308'
+require_config "$aliyun_caddyfile" '/api/daemon/ws'
+require_config "$aliyun_caddyfile" '/api/sandbox/node/ws'
 
 for script in scripts/dev.sh scripts/check.sh; do
   if ! grep -Fq '. scripts/local-env.sh' "$script"; then

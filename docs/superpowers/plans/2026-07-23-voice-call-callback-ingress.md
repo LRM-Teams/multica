@@ -36,6 +36,9 @@ processor without exposing the endpoint to unauthenticated state changes.
 - [x] Added handler, decoder, error-stage, size-limit, and route-presence tests.
 - [x] Ran targeted tests with a disposable database migrated through version
   215, then dropped it.
+- [x] Committed, pushed, and opened independent ready PR
+  [#1086](https://github.com/LRM-Teams/multica/pull/1086), stacked on
+  [#1084](https://github.com/LRM-Teams/multica/pull/1084).
 
 ## Boundary
 

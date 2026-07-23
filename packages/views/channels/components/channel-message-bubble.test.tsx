@@ -1038,6 +1038,32 @@ describe("ChannelMessageBubble", () => {
     expect(screen.getByRole("button", { name: "See more" })).toBeInTheDocument();
   });
 
+  it("uses self-mention row tokens on the collapse fade (LRM-368)", async () => {
+    const longBody = Array.from({ length: 20 }, (_, index) => `Line ${index}`).join("\n");
+    const msg = makeMessage({
+      type: "user",
+      author_id: "user-2",
+      author_name: "bob",
+      content: `hey [@Alice](mention://member/user-1)\n${longBody}`,
+    });
+    render(<ChannelMessageBubble message={msg} currentUserId="user-1" />);
+
+    const body = screen.getByTestId("message-body");
+    Object.defineProperties(body, {
+      scrollHeight: { configurable: true, value: 420 },
+      clientHeight: { configurable: true, value: 160 },
+    });
+    fireEvent(window, new Event("resize"));
+
+    await waitFor(() => {
+      expect(body).toHaveAttribute("data-collapsed", "true");
+    });
+
+    const fade = screen.getByTestId("message-collapse-fade");
+    expect(fade.className).toContain("from-[#fef9e8]");
+    expect(fade.className).not.toContain("from-background");
+  });
+
   it("does not show the collapse affordance for short messages", () => {
     render(
       <ChannelMessageBubble

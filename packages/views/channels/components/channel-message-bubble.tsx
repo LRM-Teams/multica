@@ -57,6 +57,8 @@ import {
 } from "./channel-system-event-content";
 import { messageMentionsViewer } from "../../common/content-mentions-viewer";
 import {
+  messageCollapseFadeClassName,
+  resolveMessageCollapseFadeVariant,
   SELF_MENTION_ROW_CLASS,
   SELF_MENTION_ROW_MENTION_CLASS,
 } from "../../common/mention-token";
@@ -679,6 +681,11 @@ function ChannelMessageBubbleInner({
     message.parts,
   );
   const selfMentioned = addressedToViewer && !isOwn;
+  const collapseFadeVariant = resolveMessageCollapseFadeVariant({
+    selfMentioned,
+    highlighted: Boolean(highlighted),
+    searchHighlighted: Boolean(searchHighlighted),
+  });
   const showAuthor = !compact;
 
   const bubble = (
@@ -914,7 +921,7 @@ function ChannelMessageBubbleInner({
             )}
             {isContentCollapsed && (
               <div
-                className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-start bg-gradient-to-t from-background via-background/95 to-transparent pb-0.5 pt-10"
+                className={messageCollapseFadeClassName(collapseFadeVariant)}
                 data-testid="message-collapse-fade"
               >
                 {/* LRM-302: text link, not centered pill — must not cover body. */}

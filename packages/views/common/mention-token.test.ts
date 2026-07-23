@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   mentionTokenClassName,
+  messageCollapseFadeClassName,
+  resolveMessageCollapseFadeVariant,
   resolveMentionTokenKind,
   SELF_MENTION_ROW_CLASS,
   SELF_MENTION_ROW_MENTION_CLASS,
@@ -84,5 +86,45 @@ describe("SELF_MENTION_ROW_MENTION_CLASS", () => {
     expect(SELF_MENTION_ROW_MENTION_CLASS).toContain(
       "[&_.mention]:dark:hover:bg-brand/[0.08]",
     );
+  });
+});
+
+describe("messageCollapseFadeClassName", () => {
+  it("uses row-background tokens per variant (LRM-368)", () => {
+    expect(messageCollapseFadeClassName("default")).toContain("from-background");
+    expect(messageCollapseFadeClassName("self-mention")).toContain(
+      "from-[#fef9e8]",
+    );
+    expect(messageCollapseFadeClassName("self-mention")).toContain(
+      "dark:from-brand/[0.06]",
+    );
+    expect(messageCollapseFadeClassName("highlighted")).toContain(
+      "from-primary/10",
+    );
+    expect(messageCollapseFadeClassName("search")).toContain("from-primary/5");
+  });
+
+  it("prioritizes search, then highlight, then self-mention", () => {
+    expect(
+      resolveMessageCollapseFadeVariant({
+        selfMentioned: true,
+        highlighted: true,
+        searchHighlighted: true,
+      }),
+    ).toBe("search");
+    expect(
+      resolveMessageCollapseFadeVariant({
+        selfMentioned: true,
+        highlighted: true,
+        searchHighlighted: false,
+      }),
+    ).toBe("highlighted");
+    expect(
+      resolveMessageCollapseFadeVariant({
+        selfMentioned: true,
+        highlighted: false,
+        searchHighlighted: false,
+      }),
+    ).toBe("self-mention");
   });
 });

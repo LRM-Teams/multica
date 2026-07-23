@@ -175,6 +175,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		APIKey:    os.Getenv("DOUBAO_SPEECH_API_KEY"),
 		SpeakerID: os.Getenv("DOUBAO_TTS_SPEAKER_ID"),
 	})
+	if err := configureVoiceCallService(h, queries, os.Getenv); err != nil {
+		slog.Error("voice call integration disabled", "error", err)
+	} else if h.VoiceCallService != nil {
+		slog.Info("voice call integration enabled", "provider", "volcengine")
+	}
 	h.SandboxHub = sandboxHub
 	handler.ConfigureEphemeralSandboxManager(h)
 	h.StartChannelBridge()

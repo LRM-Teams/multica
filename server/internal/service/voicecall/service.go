@@ -1,0 +1,447 @@
+package voicecall
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+)
+
+type Status string
+
+const (
+	StatusStarting     Status = "starting"
+	StatusConnecting   Status = "connecting"
+	StatusActive       Status = "active"
+	StatusReconnecting Status = "reconnecting"
+	StatusEnding       Status = "ending"
+	StatusEnded        Status = "ended"
+	StatusFailed       Status = "failed"
+)
+
+type Scope struct {
+	WorkspaceID string
+	ChannelID   string
+	AgentID     string
+	UserID      string
+}
+
+type Session struct {
+	ID             string
+	WorkspaceID    string
+	ChannelID      string
+	AgentID        string
+	UserID         string
+	Provider       string
+	ProviderTaskID string
+	RoomID         string
+	Status         Status
+	StartedAt      time.Time
+	ConnectedAt    *time.Time
+	EndedAt        *time.Time
+	EndReason      string
+	ErrorCode      string
+	InputAudioMS   int64
+	OutputAudioMS  int64
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+type NewSession struct {
+	WorkspaceID    string
+	ChannelID      string
+	AgentID        string
+	UserID         string
+	Provider       string
+	ProviderTaskID string
+	RoomID         string
+}
+
+type StartInput struct {
+	WorkspaceID string
+	ChannelID   string
+	AgentID     string
+	UserID      string
+}
+
+type StopInput struct {
+	WorkspaceID string
+	UserID      string
+	CallID      string
+	Reason      string
+}
+
+type ConversationContext struct {
+	WelcomeMessage string
+	SystemMessages []string
+}
+
+type ProviderStartInput struct {
+	RoomID         string
+	TaskID         string
+	TargetUserID   string
+	AgentUserID    string
+	WelcomeMessage string
+	SystemMessages []string
+}
+
+type ProviderStartResult struct {
+	AppID     string
+	Token     string
+	ExpiresAt time.Time
+}
+
+type ProviderCallIdentity struct {
+	RoomID string
+	TaskID string
+}
+
+type MediaCredentials struct {
+	AppID     string
+	RoomID    string
+	UserID    string
+	Token     string
+	ExpiresAt time.Time
+}
+
+type StartResult struct {
+	Session Session
+	Media   MediaCredentials
+}
+
+type BeginEndingResult struct {
+	Session              Session
+	ProviderStopRequired bool
+}
+
+type Store interface {
+	CreateStarting(ctx context.Context, input NewSession) (Session, error)
+	Get(ctx context.Context, workspaceID, userID, callID string) (Session, error)
+	MarkConnecting(ctx context.Context, workspaceID, callID string) (Session, error)
+	MarkFailed(ctx context.Context, workspaceID, callID, errorCode string) (Session, error)
+	BeginEnding(ctx context.Context, workspaceID, userID, callID, reason string) (BeginEndingResult, error)
+	MarkEnded(ctx context.Context, workspaceID, callID, reason string) (Session, error)
+}
+
+type Authorizer interface {
+	Authorize(ctx context.Context, scope Scope) error
+}
+
+type ContextBuilder interface {
+	Build(ctx context.Context, scope Scope) (ConversationContext, error)
+}
+
+// Provider.Start must either return usable media credentials or return with no
+// provider task left running. It owns compensation for ambiguous transport
+// failures inside its protocol boundary.
+type Provider interface {
+	Start(ctx context.Context, input ProviderStartInput) (ProviderStartResult, error)
+	Stop(ctx context.Context, identity ProviderCallIdentity) error
+}
+
+type ServiceConfig struct {
+	ProviderName   string
+	IDGenerator    func() string
+	CleanupTimeout time.Duration
+}
+
+type Service struct {
+	providerName   string
+	idGenerator    func() string
+	cleanupTimeout time.Duration
+	store          Store
+	authorizer     Authorizer
+	contextBuilder ContextBuilder
+	provider       Provider
+}
+
+func NewService(
+	config ServiceConfig,
+	store Store,
+	authorizer Authorizer,
+	contextBuilder ContextBuilder,
+	provider Provider,
+) (*Service, error) {
+	providerName := strings.TrimSpace(config.ProviderName)
+	if providerName == "" {
+		return nil, errors.New("voice call provider name is required")
+	}
+	if config.IDGenerator == nil {
+		return nil, errors.New("voice call ID generator is required")
+	}
+	if config.CleanupTimeout <= 0 {
+		return nil, errors.New("voice call cleanup timeout must be positive")
+	}
+	if store == nil {
+		return nil, errors.New("voice call store is required")
+	}
+	if authorizer == nil {
+		return nil, errors.New("voice call authorizer is required")
+	}
+	if contextBuilder == nil {
+		return nil, errors.New("voice call context builder is required")
+	}
+	if provider == nil {
+		return nil, errors.New("voice call provider is required")
+	}
+	return &Service{
+		providerName:   providerName,
+		idGenerator:    config.IDGenerator,
+		cleanupTimeout: config.CleanupTimeout,
+		store:          store,
+		authorizer:     authorizer,
+		contextBuilder: contextBuilder,
+		provider:       provider,
+	}, nil
+}
+
+func (service *Service) Start(ctx context.Context, input StartInput) (StartResult, error) {
+	scope, err := validateStartInput(input)
+	if err != nil {
+		return StartResult{}, err
+	}
+	if err := service.authorizer.Authorize(ctx, scope); err != nil {
+		return StartResult{}, fmt.Errorf("authorize voice call: %w", err)
+	}
+
+	nonce := strings.TrimSpace(service.idGenerator())
+	if err := validateNonce(nonce); err != nil {
+		return StartResult{}, err
+	}
+	roomID := "voice-call-" + nonce
+	taskID := "voice-task-" + nonce
+	agentUserID := "voice-agent-" + nonce
+
+	session, err := service.store.CreateStarting(ctx, NewSession{
+		WorkspaceID:    scope.WorkspaceID,
+		ChannelID:      scope.ChannelID,
+		AgentID:        scope.AgentID,
+		UserID:         scope.UserID,
+		Provider:       service.providerName,
+		ProviderTaskID: taskID,
+		RoomID:         roomID,
+	})
+	if err != nil {
+		return StartResult{}, fmt.Errorf("create starting voice call: %w", err)
+	}
+
+	conversationContext, err := service.contextBuilder.Build(ctx, scope)
+	if err != nil {
+		return StartResult{}, service.recordFailed(
+			ctx, session, "context_failed", fmt.Errorf("build voice call context: %w", err),
+		)
+	}
+	if err := validateConversationContext(conversationContext); err != nil {
+		return StartResult{}, service.recordFailed(ctx, session, "context_failed", err)
+	}
+
+	providerIdentity := ProviderCallIdentity{RoomID: roomID, TaskID: taskID}
+	providerResult, err := service.provider.Start(ctx, ProviderStartInput{
+		RoomID:         roomID,
+		TaskID:         taskID,
+		TargetUserID:   scope.UserID,
+		AgentUserID:    agentUserID,
+		WelcomeMessage: conversationContext.WelcomeMessage,
+		SystemMessages: append([]string(nil), conversationContext.SystemMessages...),
+	})
+	if err != nil {
+		return StartResult{}, service.recordFailed(
+			ctx, session, "provider_start_failed", fmt.Errorf("start voice call provider: %w", err),
+		)
+	}
+	if err := validateProviderStartResult(providerResult); err != nil {
+		return StartResult{}, service.compensateStarted(
+			ctx, session, providerIdentity, "provider_response_invalid", err,
+		)
+	}
+
+	connectingSession, err := service.store.MarkConnecting(ctx, session.WorkspaceID, session.ID)
+	if err != nil {
+		return StartResult{}, service.compensateStarted(
+			ctx,
+			session,
+			providerIdentity,
+			"state_transition_failed",
+			fmt.Errorf("mark voice call connecting: %w", err),
+		)
+	}
+	session = connectingSession
+	return StartResult{
+		Session: session,
+		Media: MediaCredentials{
+			AppID:     strings.TrimSpace(providerResult.AppID),
+			RoomID:    roomID,
+			UserID:    scope.UserID,
+			Token:     strings.TrimSpace(providerResult.Token),
+			ExpiresAt: providerResult.ExpiresAt,
+		},
+	}, nil
+}
+
+func (service *Service) Get(ctx context.Context, workspaceID, userID, callID string) (Session, error) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	userID = strings.TrimSpace(userID)
+	callID = strings.TrimSpace(callID)
+	if workspaceID == "" || userID == "" || callID == "" {
+		return Session{}, errors.New("voice call workspace, user, and call IDs are required")
+	}
+	session, err := service.store.Get(ctx, workspaceID, userID, callID)
+	if err != nil {
+		return Session{}, fmt.Errorf("get voice call: %w", err)
+	}
+	if err := service.authorizer.Authorize(ctx, sessionScope(session)); err != nil {
+		return Session{}, fmt.Errorf("authorize voice call: %w", err)
+	}
+	return session, nil
+}
+
+func (service *Service) Stop(ctx context.Context, input StopInput) (Session, error) {
+	input.WorkspaceID = strings.TrimSpace(input.WorkspaceID)
+	input.UserID = strings.TrimSpace(input.UserID)
+	input.CallID = strings.TrimSpace(input.CallID)
+	input.Reason = strings.TrimSpace(input.Reason)
+	if input.WorkspaceID == "" || input.UserID == "" || input.CallID == "" || input.Reason == "" {
+		return Session{}, errors.New("voice call workspace, user, call IDs, and stop reason are required")
+	}
+
+	cleanupContext, cancel := service.newCleanupContext(ctx)
+	defer cancel()
+	session, err := service.store.Get(cleanupContext, input.WorkspaceID, input.UserID, input.CallID)
+	if err != nil {
+		return Session{}, fmt.Errorf("get voice call for stop: %w", err)
+	}
+	if err := service.authorizer.Authorize(cleanupContext, sessionScope(session)); err != nil {
+		return Session{}, fmt.Errorf("authorize voice call stop: %w", err)
+	}
+	ending, err := service.store.BeginEnding(
+		cleanupContext, input.WorkspaceID, input.UserID, input.CallID, input.Reason,
+	)
+	if err != nil {
+		return Session{}, fmt.Errorf("begin ending voice call: %w", err)
+	}
+	if !ending.ProviderStopRequired {
+		return ending.Session, nil
+	}
+
+	if err := service.provider.Stop(cleanupContext, ProviderCallIdentity{
+		RoomID: ending.Session.RoomID,
+		TaskID: ending.Session.ProviderTaskID,
+	}); err != nil {
+		return Session{}, fmt.Errorf("stop voice call provider: %w", err)
+	}
+	session, err = service.store.MarkEnded(
+		cleanupContext, ending.Session.WorkspaceID, ending.Session.ID, ending.Session.EndReason,
+	)
+	if err != nil {
+		return Session{}, fmt.Errorf("mark voice call ended: %w", err)
+	}
+	return session, nil
+}
+
+func (service *Service) compensateStarted(
+	ctx context.Context,
+	session Session,
+	identity ProviderCallIdentity,
+	errorCode string,
+	cause error,
+) error {
+	cleanupContext, cancel := service.newCleanupContext(ctx)
+	defer cancel()
+	if err := service.provider.Stop(cleanupContext, identity); err != nil {
+		return errors.Join(cause, fmt.Errorf("compensate voice call provider: %w", err))
+	}
+	_, err := service.store.MarkFailed(
+		cleanupContext, session.WorkspaceID, session.ID, errorCode,
+	)
+	if err != nil {
+		return errors.Join(cause, fmt.Errorf("mark voice call failed after compensation: %w", err))
+	}
+	return cause
+}
+
+func (service *Service) recordFailed(
+	ctx context.Context,
+	session Session,
+	errorCode string,
+	cause error,
+) error {
+	cleanupContext, cancel := service.newCleanupContext(ctx)
+	defer cancel()
+	_, err := service.store.MarkFailed(
+		cleanupContext, session.WorkspaceID, session.ID, errorCode,
+	)
+	if err != nil {
+		return errors.Join(cause, fmt.Errorf("mark voice call failed: %w", err))
+	}
+	return cause
+}
+
+func (service *Service) newCleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), service.cleanupTimeout)
+}
+
+func validateStartInput(input StartInput) (Scope, error) {
+	scope := Scope{
+		WorkspaceID: strings.TrimSpace(input.WorkspaceID),
+		ChannelID:   strings.TrimSpace(input.ChannelID),
+		AgentID:     strings.TrimSpace(input.AgentID),
+		UserID:      strings.TrimSpace(input.UserID),
+	}
+	if scope.WorkspaceID == "" ||
+		scope.ChannelID == "" ||
+		scope.AgentID == "" ||
+		scope.UserID == "" {
+		return Scope{}, errors.New("voice call workspace, channel, agent, and user IDs are required")
+	}
+	return scope, nil
+}
+
+func validateNonce(value string) error {
+	if value == "" {
+		return errors.New("voice call ID generator returned an empty value")
+	}
+	if len(value) > 96 {
+		return errors.New("voice call ID generator returned a value longer than 96 characters")
+	}
+	for _, character := range []byte(value) {
+		if (character >= 'a' && character <= 'z') ||
+			(character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9') ||
+			character == '_' || character == '-' {
+			continue
+		}
+		return errors.New("voice call ID generator returned an unsupported character")
+	}
+	return nil
+}
+
+func validateConversationContext(callContext ConversationContext) error {
+	if len(callContext.SystemMessages) == 0 {
+		return errors.New("voice call context requires at least one system message")
+	}
+	for _, message := range callContext.SystemMessages {
+		if strings.TrimSpace(message) == "" {
+			return errors.New("voice call context contains a blank system message")
+		}
+	}
+	return nil
+}
+
+func validateProviderStartResult(result ProviderStartResult) error {
+	if strings.TrimSpace(result.AppID) == "" ||
+		strings.TrimSpace(result.Token) == "" ||
+		result.ExpiresAt.IsZero() {
+		return errors.New("voice call provider returned incomplete media credentials")
+	}
+	return nil
+}
+
+func sessionScope(session Session) Scope {
+	return Scope{
+		WorkspaceID: session.WorkspaceID,
+		ChannelID:   session.ChannelID,
+		AgentID:     session.AgentID,
+		UserID:      session.UserID,
+	}
+}

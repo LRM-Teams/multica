@@ -5,6 +5,7 @@
  * packages/ui/styles/tokens.css so CI fails if tokens drift below WCAG AA
  * (4.5:1) for normal text.
  */
+import { describe, expect, it } from "vitest";
 
 function srgbToLin(c: number): number {
   const s = c / 255;

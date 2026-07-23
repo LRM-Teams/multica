@@ -8,9 +8,16 @@
 # may publish FRONTEND_PORT for direct browser access.
 services:
   backend:
+    ports: !override
+      - "127.0.0.1:${BACKEND_PORT:-${API_PORT:-${SERVER_PORT:-${PORT:-8080}}}}:8080"
     environment:
       FRONTEND_ORIGIN: https://82.157.184.89
-      GOOGLE_REDIRECT_URI: https://82.157.184.89/auth/callback
+      # Google rejects non-localhost raw-IP OAuth callbacks. The web client
+      # derives its callback from window.location.origin, so the IP-only s89
+      # entrypoint must keep Google login disabled.
+      GOOGLE_CLIENT_ID: ""
+      GOOGLE_CLIENT_SECRET: ""
+      GOOGLE_REDIRECT_URI: ""
       MULTICA_APP_URL: https://82.157.184.89
       MULTICA_PUBLIC_URL: https://82.157.184.89
 

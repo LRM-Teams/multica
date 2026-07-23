@@ -24,8 +24,12 @@
 	import multica_app
 }
 
-# Preserve the existing HTTP entrypoint for daemon compatibility and rollout
-# verification. Browser microphone capture must use the HTTPS address above.
+# Preserve the existing HTTP entrypoint for daemon/API compatibility and
+# rollout verification. Browser navigations are migrated to the secure origin
+# so old :8090 bookmarks cannot remain on a UI with unusable Secure cookies.
 :8090 {
+	@browser_navigation header Accept *text/html*
+	redir @browser_navigation https://82.157.184.89{uri} 308
+
 	import multica_app
 }

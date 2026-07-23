@@ -88,7 +88,6 @@
     "all_runtimes": "すべてのランタイム",
     "read_only": "読み取り専用",
     "delete_button": "ランタイムを削除",
-    "delete_disabled_tooltip": "このランタイムは実行中のローカルデーモンが管理しており、数秒以内に自分で再登録します。完全に削除するには、デーモンプロセスを停止してください。",
     "last_seen": "最終確認 {{when}}",
     "fact_owner": "所有者",
     "fact_device": "デバイス",
@@ -113,42 +112,37 @@
     "visibility_toast_updated": "公開範囲を {{visibility}} に設定しました",
     "visibility_toast_failed": "公開範囲を更新できませんでした",
     "delete_dialog": {
-      "light": {
+      "final": {
         "title": "ランタイムを削除しますか?",
         "description": "「{{name}}」を削除してもよろしいですか? この操作は元に戻せません。",
         "cancel": "キャンセル",
         "confirm": "ランタイムを削除",
         "submitting": "削除中..."
       },
-      "cascade": {
-        "title_other": "エージェント {{count}} 個をアーカイブして、このランタイムを削除しますか?",
-        "description": "「{{name}}」を削除します。下のエージェントはアーカイブされてアクティブなワークフローから除外され、キュー待ちまたは実行中のタスクはキャンセルされ、その後ランタイムが削除されます。",
-        "warning": "これは破壊的な操作です。アーカイブされたエージェントはアクティブなワークフローから除外され、キュー待ちまたは実行中のタスクはキャンセルされます。",
-        "notice_runtime_has_active_agents": "このダイアログを開いてからアクティブなエージェントが追加されました。新しい計画を確認して承認してください。",
-        "notice_runtime_delete_plan_changed": "このダイアログを開いている間にアクティブなエージェントの一覧が変わりました。新しい計画を確認して承認してください。",
-        "checkbox_other": "エージェント {{count}} 個がアーカイブされ、キュー待ちまたは実行中のタスクがキャンセルされることを理解しました。",
-        "cancel": "キャンセル",
-        "confirm_other": "エージェント {{count}} 個をアーカイブしてランタイムを削除",
-        "submitting": "アーカイブして削除中...",
-        "self_healing_blocked_toast": "このランタイムは実行中のローカルデーモンが管理しており、自分で再登録します。",
-        "delete_failed_toast": "ランタイムを削除できませんでした",
+      "blocked_by_agents": {
+        "title_other": "このランタイムにはまだ {{count}} 個のエージェントが紐づいています",
+        "description": "「{{name}}」を削除する前に、下のエージェントを削除またはアーカイブしてください。",
+        "notice_runtime_has_active_agents": "このダイアログを開いてからアクティブなエージェントが追加されました — 最新の一覧を表示しています。",
+        "close": "閉じる",
+        "view_agent": "エージェントを表示",
         "table": {
-          "header_agent": "エージェント",
-          "header_owner": "所有者",
-          "header_status": "ステータス",
-          "header_visibility": "公開範囲",
-          "header_model": "モデル",
-          "owner_self": "あなた",
-          "owner_unassigned": "—",
-          "model_unset": "—",
           "presence_unknown": "—",
           "workload_idle": "アイドル",
           "workload_working": "作業中",
-          "workload_queued": "キュー待ち",
-          "visibility_workspace": "ワークスペース",
-          "visibility_private": "非公開"
+          "workload_queued": "キュー待ち"
         }
-      }
+      },
+      "blocked_by_online_daemon": {
+        "title": "先にデーモンを停止してください",
+        "description": "「{{name}}」は実行中のローカルデーモンで、ここで削除すると数秒以内に自動で再登録されます。先にそのデバイスで停止してください。",
+        "device_label": "デバイス",
+        "stop_command_label": "デバイスでこのコマンドを実行",
+        "waiting_hint": "オフラインになったことを検出したら、削除を完了できるようにします。",
+        "close": "閉じる",
+        "copy_aria": "コマンドをコピー"
+      },
+      "self_healing_blocked_toast": "このランタイムは実行中のローカルデーモンが管理しており、自分で再登録します。",
+      "delete_failed_toast": "ランタイムを削除できませんでした"
     },
     "toast_deleted": "ランタイムを削除しました",
     "toast_delete_failed": "ランタイムを削除できませんでした",

@@ -123,8 +123,28 @@ function adaptAnchor(raw: RawReminderAnchor): ReminderAnchor {
 // Re-deriving family from the cadence string here would duplicate grammar
 // the backend owns and risk drifting from it (confirmed with Parker against
 // the committed projection).
-function adaptCadence(scheduleKind: "recurring" | "one_shot", cadence: string | undefined, scheduleTimezone: string | undefined): ReminderCadence {
-  if (scheduleKind === "one_shot" || !cadence) return { kind: "one_shot" };
+const KNOWN_DEFINITION_STATUSES = new Set<ReminderDefinitionStatus>([
+  "scheduled",
+  "firing",
+  "fired",
+  "cancelled",
+]);
+
+function isKnownDefinitionStatus(status: string): status is ReminderDefinitionStatus {
+  return KNOWN_DEFINITION_STATUSES.has(status as ReminderDefinitionStatus);
+}
+
+// `schedule_kind` arrives from the network as a plain `string` (the runtime
+// schema deliberately doesn't `z.enum()` it — see RawReminderPageSchema) so
+// an unrecognized third value still parses instead of rejecting the whole
+// page. This is the boundary that narrows it back down: an unknown value
+// returns `null` (caller drops the row) rather than silently falling through
+// to either known state — misclassifying an unknown kind as "recurring" or
+// "one_shot" would render a wrong-but-plausible-looking row.
+function adaptCadence(scheduleKind: string, cadence: string | undefined, scheduleTimezone: string | undefined): ReminderCadence | null {
+  if (scheduleKind === "one_shot") return { kind: "one_shot" };
+  if (scheduleKind !== "recurring") return null;
+  if (!cadence) return { kind: "one_shot" };
   return {
     kind: "recurring",
     family: scheduleTimezone ? "calendar" : "interval",
@@ -133,25 +153,30 @@ function adaptCadence(scheduleKind: "recurring" | "one_shot", cadence: string | 
   };
 }
 
-/** Adapts one Upcoming-section definition row. Returns `null` for a malformed row rather than rendering a broken one. */
+/** Adapts one Upcoming-section definition row. Returns `null` for a malformed row (missing required field or an unrecognized `schedule_kind`) rather than rendering a broken one. */
 export function adaptUpcomingRow(raw: RawReminderDefinition): UpcomingReminderRow | null {
   if (!raw.next_fire_at) return null;
+  const cadence = adaptCadence(raw.schedule_kind, raw.cadence, raw.schedule_timezone);
+  if (!cadence) return null;
   return {
     id: raw.id,
     title: raw.title,
-    cadence: adaptCadence(raw.schedule_kind, raw.cadence, raw.schedule_timezone),
+    cadence,
     anchor: adaptAnchor(raw.anchor),
     nextFireAt: raw.next_fire_at,
   };
 }
 
-/** Adapts one History-section occurrence row. Returns `null` for a malformed row rather than rendering a broken one. */
+/** Adapts one History-section occurrence row. Returns `null` for a malformed row (missing required field, an unrecognized `schedule_kind`, or an unrecognized `definition_status`) rather than rendering a broken one. */
 export function adaptFiredRow(raw: RawReminderOccurrence): FiredReminderRow | null {
   if (!raw.fired_at) return null;
+  const cadence = adaptCadence(raw.schedule_kind, raw.cadence, raw.schedule_timezone);
+  if (!cadence) return null;
+  if (!isKnownDefinitionStatus(raw.definition_status)) return null;
   return {
     id: raw.id,
     title: raw.title,
-    cadence: adaptCadence(raw.schedule_kind, raw.cadence, raw.schedule_timezone),
+    cadence,
     anchor: adaptAnchor(raw.anchor),
     firedAt: raw.fired_at,
     definitionStatus: raw.definition_status,

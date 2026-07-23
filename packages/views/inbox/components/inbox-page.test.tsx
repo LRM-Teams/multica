@@ -61,6 +61,12 @@ vi.mock("@multica/core/channels/mutations", () => ({
   useMarkChannelThreadRead: () => ({ mutate: vi.fn() }),
 }));
 
+vi.mock("../../channels/components/channels-page", () => ({
+  ChannelsPage: ({ channelId }: { channelId: string }) => (
+    <div data-testid="mock-channels-page">channel:{channelId}</div>
+  ),
+}));
+
 vi.mock("@multica/ui/hooks/use-mobile", () => ({
   useIsMobile: () => false,
 }));
@@ -117,6 +123,7 @@ vi.mock("../../i18n", () => ({
           retry: "Retry",
           open_thread_failed: "open thread failed",
           open_item_failed: "open item failed",
+          open_in_channels: "Open in channel",
           empty: {
             all: { title: "Empty all", description: "desc" },
             unread: { title: "Empty unread", description: "desc" },
@@ -217,5 +224,30 @@ describe("InboxPage entry paint (LRM-424)", () => {
     });
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Activity" })).toBeInTheDocument();
+  });
+});
+
+describe("InboxPage unread session deep-link (LRM-388)", () => {
+  beforeEach(() => {
+    nav.searchParams = new URLSearchParams();
+    nav.replace.mockReset();
+    nav.push.mockReset();
+    listUserActivity.mockReset();
+  });
+
+  it("keeps thread session pane when Unread feed no longer lists the row", async () => {
+    // Simulate post-click Unread: URL already deep-linked, feed empty after mark-read.
+    nav.searchParams = new URLSearchParams(
+      "tab=unread&channel=ch-1&thread=root-1",
+    );
+    listUserActivity.mockResolvedValue({ items: [] });
+
+    renderInbox();
+
+    expect(await screen.findByTestId("activity-session-pane")).toBeInTheDocument();
+    // Suspense may still be resolving ChannelsPage; the pane itself proves we
+    // did not clear the deep-link back to the empty select prompt.
+    expect(screen.queryByText("Select a notification")).not.toBeInTheDocument();
+    expect(nav.replace).not.toHaveBeenCalled();
   });
 });

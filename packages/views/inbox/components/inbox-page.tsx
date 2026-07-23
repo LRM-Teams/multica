@@ -39,7 +39,7 @@ import { ActivityListRow } from "./activity-list-row";
 import { ActivityTabs, ActivityEmptyState } from "./activity-tabs";
 import { ActivityListSkeleton } from "./activity-list-skeleton";
 import {
-  activitySelectionKey,
+  activityItemMatchesSelection,
   activitySessionParams,
   activitySessionUrl,
   resolveActivitySessionSurface,
@@ -106,9 +106,20 @@ export function InboxPage() {
   const showListSkeleton = isLoading;
 
   const selectedKey = urlIssue || urlThread || urlMessage;
-  const selectedItem = selectedKey
-    ? (items.find((item) => activitySelectionKey(item) === selectedKey) ?? null)
+  // Sticky session: Unread tab mark-read optimistically drops the row from the
+  // feed (LRM-379). Keep the last selected item so the right pane / mobile
+  // push still opens thread|channel instead of clearing back to empty.
+  const stickySelectedRef = useRef<UserActivityItem | null>(null);
+  const selectedFromList = selectedKey
+    ? (items.find((item) => activityItemMatchesSelection(item, selectedKey)) ??
+      null)
     : null;
+  const stickySelected = stickySelectedRef.current;
+  const stickyMatches =
+    !!selectedKey &&
+    !!stickySelected &&
+    activityItemMatchesSelection(stickySelected, selectedKey);
+  const selectedItem = selectedFromList ?? (stickyMatches ? stickySelected : null);
   const selectedInbox = selectedItem ? inboxItemFromActivity(selectedItem) : null;
   const selectedThread =
     selectedItem?.kind === "thread" ? selectedItem : null;
@@ -117,6 +128,9 @@ export function InboxPage() {
     : null;
 
   const lastResolvedKeyRef = useRef<string>("");
+  useEffect(() => {
+    if (selectedFromList) stickySelectedRef.current = selectedFromList;
+  }, [selectedFromList]);
   useEffect(() => {
     if (selectedInbox || selectedThread) lastResolvedKeyRef.current = selectedKey;
   }, [selectedInbox, selectedThread, selectedKey]);
@@ -129,6 +143,7 @@ export function InboxPage() {
   );
 
   const clearSelection = useCallback(() => {
+    stickySelectedRef.current = null;
     replaceActivityUrl(tab !== "all" ? { tab } : {});
   }, [replaceActivityUrl, tab]);
 
@@ -153,6 +168,9 @@ export function InboxPage() {
     if (isLoading || isFetching) return;
     if (!selectedKey) return;
     if (selectedInbox || selectedThread) return;
+    // Channel/thread/message deep-link: keep the URL even when Unread mark-read
+    // dropped the row (sticky or ChannelsPage resolves the session from params).
+    if (urlChannel && (urlThread || urlMessage)) return;
     if (lastResolvedKeyRef.current === selectedKey) {
       clearSelection();
       return;
@@ -175,6 +193,8 @@ export function InboxPage() {
     wsPaths,
     urlIssue,
     urlChannel,
+    urlThread,
+    urlMessage,
   ]);
 
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
@@ -217,6 +237,8 @@ export function InboxPage() {
         toast.error(t(($) => $.activity.open_thread_failed));
         return;
       }
+      // Pin before URL/mark-read so Unread optimistic drop cannot blank the pane.
+      stickySelectedRef.current = item;
       // Mark read on click (LRM-379): do not rely solely on ThreadPanel open —
       // deep-link may miss the root in the loaded message window, and Activity
       // cache was previously never invalidated after thread/read.
@@ -242,6 +264,7 @@ export function InboxPage() {
       toast.error(t(($) => $.activity.open_item_failed));
       return;
     }
+    stickySelectedRef.current = item;
     replaceActivityUrl(activitySessionParams(item, tab));
   };
 
@@ -329,7 +352,9 @@ export function InboxPage() {
         <ActivityListRow
           key={`${item.kind}-${item.id}`}
           item={item}
-          isSelected={activitySelectionKey(item) === selectedKey}
+          isSelected={
+            !!selectedKey && activityItemMatchesSelection(item, selectedKey)
+          }
           onClick={() => handleSelect(item)}
           timeAgo={timeAgo}
         />
@@ -339,17 +364,31 @@ export function InboxPage() {
 
   const sessionChannelId =
     selectedThread?.channel_id ?? (urlChannel || null);
+  // Prefer feed/sticky surface; if the Unread row is gone, derive from URL
+  // (`message` → channel stream, `thread` → let ChannelsPage read ?thread=).
+  const urlOnlySurface =
+    !sessionSurface && urlChannel
+      ? urlMessage
+        ? ("channel" as const)
+        : urlThread
+          ? ("thread" as const)
+          : null
+      : null;
+  const effectiveSurface = sessionSurface ?? urlOnlySurface;
+  const hasChannelSession = !!(
+    sessionChannelId &&
+    (selectedThread || (urlChannel && (urlThread || urlMessage)))
+  );
 
-  const sessionDetail =
-    selectedThread && sessionChannelId && sessionSurface ? (
+  const sessionDetail = hasChannelSession && sessionChannelId ? (
       <ErrorBoundary
-        resetKeys={[sessionChannelId, urlThread, urlMessage, sessionSurface]}
+        resetKeys={[sessionChannelId, urlThread, urlMessage, effectiveSurface ?? ""]}
       >
         <div className="flex h-full min-h-0 flex-col" data-testid="activity-session-pane">
-          {sessionSurface === "channel" ? (
+          {effectiveSurface === "channel" ? (
             <div className="flex h-10 shrink-0 items-center justify-between gap-2 border-b px-3">
               <span className="truncate text-sm font-semibold">
-                {selectedThread.channel_name
+                {selectedThread?.channel_name
                   ? `#${selectedThread.channel_name}`
                   : t(($) => $.page.title)}
               </span>
@@ -361,7 +400,7 @@ export function InboxPage() {
                 onClick={() =>
                   openInChannels({
                     channelId: sessionChannelId,
-                    messageId: urlMessage || selectedThread.id,
+                    messageId: urlMessage || selectedThread?.id,
                   })
                 }
               >
@@ -376,7 +415,9 @@ export function InboxPage() {
                 channelId={sessionChannelId}
                 embedded
                 embeddedSurface={
-                  sessionSurface === "dm" ? undefined : sessionSurface
+                  effectiveSurface === "dm" || !effectiveSurface
+                    ? undefined
+                    : effectiveSurface
                 }
                 onOpenInChannels={openInChannels}
               />
@@ -459,7 +500,7 @@ export function InboxPage() {
     </div>
   ) : null;
 
-  const hasDetail = !!(selectedInbox || selectedThread);
+  const hasDetail = !!(selectedInbox || hasChannelSession);
 
   if (isMobile) {
     return (

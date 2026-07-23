@@ -519,9 +519,14 @@ describe("AgentSidePanel", () => {
     // permission stays denied — the group_manager override is what grants edit.
     renderPanel("user-other", "group_manager");
 
-    for (const id of ["runtime-picker", "model-picker", "thinking-picker", "visibility-picker"]) {
+    for (const id of ["runtime-picker", "model-picker", "thinking-picker"]) {
       expect(screen.getByTestId(id)).toHaveAttribute("data-can-edit", "true");
     }
+    // LRM-387: Visibility stays locked to channel — no Workspace/Personal picker.
+    expect(screen.getByTestId("visibility-picker")).toHaveAttribute(
+      "data-can-edit",
+      "false",
+    );
   });
 
   it("renders READ-ONLY runtime pickers in Profile for a non-owner, non-group-manager", () => {

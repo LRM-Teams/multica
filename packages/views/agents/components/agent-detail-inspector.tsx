@@ -155,10 +155,12 @@ export function AgentDetailInspector({
           onChange={(v) => update({ thinking_level: v })}
         />
         <PropRow label={t(($) => $.inspector.prop_visibility)} interactive={false}>
+          {/* LRM-387: group managers must stay visibility=channel (backend
+              UpdateAgent 400). Even owner/admin get a read-only badge. */}
           <VisibilityPicker
             value={agent.visibility}
             homeChannelId={agent.home_channel_id ?? null}
-            canEdit={canEdit}
+            canEdit={canEdit && agent.managed_role !== "group_manager"}
             onChange={(next) =>
               update({
                 visibility: next.visibility,

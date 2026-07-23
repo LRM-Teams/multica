@@ -2837,6 +2837,14 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 	if root.Type == "agent" && root.AuthorID != nil {
 		h.followChannelThreadAgentUnlessExplicitlyUnfollowed(r.Context(), channelID, rootID, parseUUID(*root.AuthorID))
 	}
+	if ch.Kind == "dm" && root.Type == "user" {
+		// A one-to-one agent DM remains addressed to its agent peer even when
+		// the human opens a thread on an earlier human-authored message. Keep an
+		// explicit agent unfollow sticky, matching mention/thread semantics.
+		for _, agent := range h.channelAgentMembers(r.Context(), ch.WorkspaceID, ch.ID) {
+			h.followChannelThreadAgentUnlessExplicitlyUnfollowed(r.Context(), channelID, rootID, agent.ID)
+		}
+	}
 	h.followChannelThreadMentionedUsers(r.Context(), ch, msg)
 	_, _ = h.DB.Exec(r.Context(), `UPDATE channel SET updated_at = now() WHERE id = $1`, channelID)
 	if ch.Kind == "dm" {

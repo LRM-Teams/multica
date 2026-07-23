@@ -474,6 +474,10 @@
     "workspace": {
       "label": "工作区",
       "tooltip": "工作区 · 工作区内所有人都可以使用该智能体"
+    },
+    "channel": {
+      "label": "仅本群",
+      "tooltip": "仅本群 · 只在绑定频道内可发现、可邀请"
     }
   },
   "profile_card": {

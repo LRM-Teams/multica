@@ -2,7 +2,7 @@ export type AgentStatus = "idle" | "working" | "blocked" | "error" | "offline";
 
 export type AgentRuntimeMode = "local" | "cloud";
 
-export type AgentVisibility = "workspace" | "private";
+export type AgentVisibility = "workspace" | "private" | "channel";
 
 export type RuntimeUpdateState =
   | "idle"
@@ -331,6 +331,11 @@ export interface Agent {
    */
   mcp_config_redacted?: boolean;
   visibility: AgentVisibility;
+  /**
+   * Bound group when visibility=channel (LRM-370). Null/absent for
+   * workspace and private agents.
+   */
+  home_channel_id?: string | null;
   status: AgentStatus;
   /**
    * Platform-managed role marker. Empty/absent for ordinary agents;
@@ -479,6 +484,8 @@ export interface CreateAgentRequest {
   custom_env?: Record<string, string>;
   custom_args?: string[];
   visibility?: AgentVisibility;
+  /** Required when visibility=channel; forbidden otherwise (LRM-370). */
+  home_channel_id?: string | null;
   max_concurrent_tasks?: number;
   model?: string;
   /** Optional runtime-native reasoning/effort token. See `Agent.thinking_level`. */
@@ -601,6 +608,8 @@ export interface UpdateAgentRequest {
    */
   mcp_config?: unknown | null;
   visibility?: AgentVisibility;
+  /** Required when switching to channel; forbidden for workspace/private (LRM-370). */
+  home_channel_id?: string | null;
   status?: AgentStatus;
   max_concurrent_tasks?: number;
   model?: string;

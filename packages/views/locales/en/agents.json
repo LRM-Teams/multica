@@ -484,6 +484,10 @@
     "workspace": {
       "label": "Workspace",
       "tooltip": "Workspace · everyone in this workspace can use this agent"
+    },
+    "channel": {
+      "label": "This channel only",
+      "tooltip": "This channel only · discoverable and invitable only in the bound group"
     }
   },
   "profile_card": {

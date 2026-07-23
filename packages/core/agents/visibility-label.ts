@@ -8,6 +8,7 @@ import type { AgentVisibility } from "../types";
 export const VISIBILITY_LABEL: Record<AgentVisibility, string> = {
   workspace: "Workspace",
   private: "Personal",
+  channel: "This channel only",
 };
 
 /**
@@ -18,12 +19,14 @@ export const VISIBILITY_LABEL: Record<AgentVisibility, string> = {
 export const VISIBILITY_DESCRIPTION: Record<AgentVisibility, string> = {
   workspace: "All members can assign",
   private: "Only you and workspace admins can assign",
+  channel: "Only discoverable and invitable in the bound channel",
 };
 
 /** Tooltip suitable for read-only badges on hover/list rows. */
 export const VISIBILITY_TOOLTIP: Record<AgentVisibility, string> = {
   workspace: "Workspace — all members can assign",
   private: "Personal — only you and workspace admins can assign",
+  channel: "This channel only — hidden outside the bound group",
 };
 
 export function visibilityLabel(v: AgentVisibility): string {

@@ -2825,6 +2825,13 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 	msg = h.attachSingleChannelMessageDetails(r.Context(), workspaceID, parseUUID(userID), msg)
 	if !result.Created {
 		writeJSON(w, http.StatusOK, msg)
+		if channelMessageNeedsVoiceTranscription(msg.Parts) {
+			h.runAfterChannelMessageAck(r.Context(), func(ctx context.Context) {
+				if err := h.processChannelVoiceTranscription(ctx, msg.ID); err != nil {
+					slog.Error("resume channel thread voice transcription failed", "message_id", msg.ID, "error", err)
+				}
+			})
+		}
 		return
 	}
 	h.followChannelThreadUser(r.Context(), channelID, rootID, parseUUID(userID), true)
@@ -2851,12 +2858,13 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 	// Ack first — see SendChannelMessage: wake/Feishu must not block send RTT.
 	writeJSON(w, http.StatusCreated, msg)
 	h.runAfterChannelMessageAck(r.Context(), func(ctx context.Context) {
-		if ch.Kind == "dm" {
-			h.dispatchDMThreadReply(ctx, ch, msg, parseUUID(userID))
-		} else {
-			h.dispatchChannelThreadReplyMentions(ctx, ch, msg, parseUUID(userID))
+		if channelMessageNeedsVoiceTranscription(msg.Parts) {
+			if err := h.processChannelVoiceTranscription(ctx, msg.ID); err != nil {
+				slog.Error("channel thread voice transcription failed", "message_id", msg.ID, "error", err)
+			}
+			return
 		}
-		h.sendChannelMessageToFeishu(ctx, ch, authorName, content)
+		h.dispatchHumanChannelMessageSideEffects(ctx, ch, msg, parseUUID(userID))
 	})
 }
 
@@ -3545,6 +3553,13 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 	msg = h.attachSingleChannelMessageDetails(r.Context(), workspaceID, parseUUID(userID), msg)
 	if !result.Created {
 		writeJSON(w, http.StatusOK, msg)
+		if channelMessageNeedsVoiceTranscription(msg.Parts) {
+			h.runAfterChannelMessageAck(r.Context(), func(ctx context.Context) {
+				if err := h.processChannelVoiceTranscription(ctx, msg.ID); err != nil {
+					slog.Error("resume channel voice transcription failed", "message_id", msg.ID, "error", err)
+				}
+			})
+		}
 		return
 	}
 	_, _ = h.DB.Exec(r.Context(), `UPDATE channel SET updated_at = now() WHERE id = $1`, channelID)
@@ -3556,15 +3571,13 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 	// must not inflate the client's send latency / Sending... state.
 	writeJSON(w, http.StatusCreated, msg)
 	h.runAfterChannelMessageAck(r.Context(), func(ctx context.Context) {
-		if ch.Kind == "dm" {
-			// 1-on-1 DM: the agent peer (if any) replies to every user message
-			// without an @-mention. Human↔human DMs have no agent member → no-op.
-			h.dispatchDMAgentReply(ctx, ch, msg, parseUUID(userID))
-		} else {
-			h.ingestWendyHumanGroupMessage(ctx, ch, msg)
-			h.dispatchChannelMessageToAgents(ctx, ch, msg, parseUUID(userID))
+		if channelMessageNeedsVoiceTranscription(msg.Parts) {
+			if err := h.processChannelVoiceTranscription(ctx, msg.ID); err != nil {
+				slog.Error("channel voice transcription failed", "message_id", msg.ID, "error", err)
+			}
+			return
 		}
-		h.sendChannelMessageToFeishu(ctx, ch, authorName, content)
+		h.dispatchHumanChannelMessageSideEffects(ctx, ch, msg, parseUUID(userID))
 	})
 }
 
@@ -5745,8 +5758,7 @@ func normalizeChannelClientMessageID(w http.ResponseWriter, raw *string) (*strin
 }
 
 // attachmentIDsFromParts collects attachment_id values from file and recorded
-// voice parts
-// in order. This is the sole bind source for channel/DM/thread message sends.
+// voice parts in order. This is the sole bind source for channel/DM/thread sends.
 func attachmentIDsFromParts(parts []protocol.MessagePart) []string {
 	var ids []string
 	for _, p := range parts {
@@ -5757,13 +5769,17 @@ func attachmentIDsFromParts(parts []protocol.MessagePart) []string {
 	return ids
 }
 
-// channelPartsAllowEmptyContent reports whether empty body content is allowed
-// because parts already carry a sticker or attachment.
+// channelPartsAllowEmptyContent reports whether parts carry their own visible
+// payload, including a recorded voice that is waiting for server-side ASR.
 func channelPartsAllowEmptyContent(parts []protocol.MessagePart) bool {
 	for _, p := range parts {
 		switch p.Type {
 		case protocol.MessagePartTypeSticker, protocol.MessagePartTypeAttachment:
 			return true
+		case protocol.MessagePartTypeVoice:
+			if p.TranscriptionStatus == protocol.VoiceTranscriptionPending && p.AttachmentID != "" {
+				return true
+			}
 		}
 	}
 	return false
@@ -5810,6 +5826,27 @@ func (h *Handler) createUserChannelMessageWithIdempotency(ctx context.Context, i
 		}); err != nil {
 			_ = tx.Rollback(ctx)
 			return channelMessageCreateResult{}, err
+		}
+	}
+	if voiceAttachmentID, ok := pendingChannelVoiceAttachmentID(in.Parts); ok {
+		tag, err := tx.Exec(ctx, `
+			INSERT INTO channel_voice_transcription (
+			  message_id, workspace_id, channel_id, attachment_id
+			)
+			SELECT $1, $2, $3, attachment.id
+			FROM attachment
+			WHERE attachment.id = $4
+			  AND attachment.workspace_id = $2
+			  AND attachment.channel_id = $3
+			  AND attachment.channel_message_id = $1`,
+			parseUUID(msg.ID), in.WorkspaceID, in.ChannelID, parseUUID(voiceAttachmentID))
+		if err != nil {
+			_ = tx.Rollback(ctx)
+			return channelMessageCreateResult{}, fmt.Errorf("enqueue channel voice transcription: %w", err)
+		}
+		if tag.RowsAffected() != 1 {
+			_ = tx.Rollback(ctx)
+			return channelMessageCreateResult{}, errors.New("recorded voice attachment was not bound to the created message")
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {

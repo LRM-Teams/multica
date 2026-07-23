@@ -2339,7 +2339,14 @@ export class ApiClient {
     if (!parsed.data.id) {
       throw new Error("Upload response missing attachment id");
     }
-    return parsed.data as Attachment;
+    // Response schema is a subset of Attachment; fill remaining fields from
+    // EMPTY_ATTACHMENT so callers get a typed Attachment without a unsafe cast.
+    return {
+      ...EMPTY_ATTACHMENT,
+      ...parsed.data,
+      chat_session_id: parsed.data.chat_session_id ?? null,
+      chat_message_id: parsed.data.chat_message_id ?? null,
+    };
   }
 
   // Chat Sessions

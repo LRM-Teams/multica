@@ -69,6 +69,7 @@ const RESOURCES = {
     load_failed: "Failed to load thread.",
     view_parent: "Back to main chat",
     close_aria: "Close thread",
+    open_in_main_aria: "Open in main chat",
     back_to_conversation: "Back to conversation",
     follow: "Follow",
     following: "Following",
@@ -200,6 +201,32 @@ describe("ThreadPanel", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Follow thread" }));
     expect(mobileToggle).toHaveBeenCalledWith(true);
+  });
+
+  // LRM-384 scheme A — header 28px ghost open-in-main; no dark float Maximize/Download.
+  it("exposes a desktop header open-in-main control and hides it on mobile", () => {
+    const onViewParent = vi.fn();
+    const { unmount } = render(
+      <ThreadPanel {...baseProps()} onViewParent={onViewParent} />,
+    );
+
+    const openInMain = screen.getByRole("button", { name: "Open in main chat" });
+    expect(openInMain.className).toMatch(/size-7/);
+    expect(openInMain.className).toMatch(/text-muted-foreground/);
+    expect(openInMain.className).toMatch(/hover:bg-muted/);
+    fireEvent.click(openInMain);
+    expect(onViewParent).toHaveBeenCalledTimes(1);
+    // Download stays out of the thread header main path.
+    expect(screen.queryByRole("button", { name: /download/i })).toBeNull();
+
+    unmount();
+    render(<ThreadPanel {...baseProps()} isMobile onViewParent={onViewParent} />);
+    expect(screen.queryByRole("button", { name: "Open in main chat" })).toBeNull();
+  });
+
+  it("omits the open-in-main control when onViewParent is not provided", () => {
+    render(<ThreadPanel {...baseProps()} />);
+    expect(screen.queryByRole("button", { name: "Open in main chat" })).toBeNull();
   });
 });
 

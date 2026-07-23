@@ -89,6 +89,10 @@ function toIssuePriority(value: string | undefined): IssuePriority | null {
  *
  * `issueId` may be a uuid OR an identifier ("LRM-126") — `useResolvedIssue` accepts
  * both, which is how the old chip showed a title for `mention://issue/LRM-126`.
+ *
+ * LRM-508 (Frank): once the issue resolves, the **title** is primary ink — never
+ * leave a bare `LRM-xxx` as the main visible label. Identifier may sit muted
+ * beside it. Until resolve lands, `text` (author span) is interim only.
  */
 export function IssueRefLink({
   issueId,
@@ -97,7 +101,11 @@ export function IssueRefLink({
   sourceMessageId,
 }: {
   issueId: string;
-  /** Rendered verbatim — the author's own span substring; never rewritten (#467/#600). */
+  /**
+   * Author span / interim label. Once `useResolvedIssue` returns a title,
+   * LRM-508 rewrites the visible primary to that title (supersedes #467/#600
+   * "never rewrite" for reading).
+   */
   text: string;
   source?: IssueRefSource;
   /** Source row id when this reference is rendered inside a Messages timeline. */
@@ -120,6 +128,25 @@ export function IssueRefLink({
         )
       : issuePath;
 
+  const title = issue?.title?.trim() || undefined;
+  // Title-first when resolved; author `text` is only the pre-resolve interim.
+  // Identifier secondary for chat mentions lives as muted ink beside the title
+  // (LRM-508). System-event rows keep their own payload-backed muted id via
+  // IssueEventSubject — if both fire, the reader still sees title as primary.
+  const primaryLabel = title || text;
+  const identifier = issue?.identifier?.trim() || undefined;
+  const showMutedIdentifier =
+    Boolean(title) && Boolean(identifier) && identifier !== title && text !== title;
+
+  const linkChildren = showMutedIdentifier ? (
+    <>
+      {primaryLabel}
+      <span className="ml-1 text-[11px] tabular-nums text-muted-foreground">{identifier}</span>
+    </>
+  ) : (
+    primaryLabel
+  );
+
   const linkProps = {
     href,
     className: "text-brand hover:underline",
@@ -138,9 +165,9 @@ export function IssueRefLink({
     "data-ref-source": source,
   };
   const link = navigation ? (
-    <AppLink {...linkProps}>{text}</AppLink>
+    <AppLink {...linkProps}>{linkChildren}</AppLink>
   ) : (
-    <a {...linkProps}>{text}</a>
+    <a {...linkProps}>{linkChildren}</a>
   );
 
   // Nothing resolved (loading / deleted / other workspace / no permission) → plain
@@ -148,9 +175,10 @@ export function IssueRefLink({
   // high-frequency, low-intent gesture (the pointer just sweeps across), so a
   // skeleton that flashes and refills is worse than a card that opens 100ms later
   // (Iris's #504 spec §3.3).
-  const title = issue?.title;
   const status = toIssueStatus(issue?.status);
   if (!title && !status) return link;
+
+  const peekEyebrow = identifier || text;
 
   return (
     <HoverCard>
@@ -159,7 +187,7 @@ export function IssueRefLink({
       </HoverCardTrigger>
       <HoverCardContent side="top" sideOffset={8} className="w-[320px] p-3">
         <div className="min-w-0">
-          <div className="text-[11px] leading-none text-muted-foreground">{text}</div>
+          <div className="text-[11px] leading-none text-muted-foreground">{peekEyebrow}</div>
           {title ? (
             <div className="mt-1 line-clamp-2 text-sm font-semibold leading-snug text-foreground">
               {title}

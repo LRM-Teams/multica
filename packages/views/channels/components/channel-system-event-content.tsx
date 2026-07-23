@@ -160,8 +160,11 @@ function interpolateIssueSlots(
 }
 
 /**
- * LRM-423 — title primary (clickable), identifier muted secondary.
- * Missing title → identifier alone (never invent a title; LRM-238).
+ * LRM-423 — title primary (clickable), identifier muted secondary from the
+ * event payload (available even before live resolve). {@link IssueRefLink}
+ * LRM-508 may also rewrite the link ink to the live title; the muted id here
+ * stays payload-backed so aggregates keep a stable secondary without waiting
+ * on the issue cache.
  */
 function IssueEventSubject({
   issueId,

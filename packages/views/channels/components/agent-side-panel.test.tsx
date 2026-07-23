@@ -13,9 +13,10 @@ const openDMMocks = vi.hoisted(() => ({
   isPending: false,
 }));
 
-// Per-test permission decision for the merged runtime-config section. Group
-// managers override this to always-editable inside the component, so leaving
-// it denied by default lets us assert the read-only path for ordinary agents.
+// Per-test permission decision for the Profile Runtime Config section.
+// Group managers override this to always-editable inside the component, so
+// leaving it denied by default lets us assert the read-only path for ordinary
+// agents.
 const { permission, usageRows } = vi.hoisted(() => ({
   permission: { allowed: false },
   usageRows: [] as Array<{
@@ -192,6 +193,7 @@ const RESOURCES = {
     section_properties: "Properties",
     prop_runtime: "Runtime",
     prop_model: "Model",
+    prop_thinking: "Thinking",
     prop_visibility: "Visibility",
     display_name_title: "Edit display name",
     display_name_placeholder: "Agent display name",
@@ -530,15 +532,28 @@ describe("AgentSidePanel", () => {
     expect(activityTab.parentElement).not.toHaveClass("w-full", "px-0");
   });
 
-  it("never renders a separate Config tab (merged into Profile Info, #565 / LRM-448)", () => {
+  it("never renders a separate Config tab; Runtime Config is its own Profile section (LRM-470)", () => {
     renderPanel("user-owner", "group_manager");
     expect(screen.queryByRole("button", { name: "Config" })).not.toBeInTheDocument();
     expect(screen.getByText("Info")).toBeInTheDocument();
-    expect(screen.queryByText("Runtime Config")).not.toBeInTheDocument();
+    expect(screen.getByText("Runtime Config")).toBeInTheDocument();
+    expect(screen.getByTestId("agent-profile-runtime-config")).toBeInTheDocument();
     expect(screen.queryByText("Properties")).not.toBeInTheDocument();
     expect(screen.getByTestId("runtime-picker")).toBeInTheDocument();
     expect(screen.getByTestId("visibility-picker")).toBeInTheDocument();
     expect(screen.queryByTestId("concurrency-picker")).not.toBeInTheDocument();
+  });
+
+  it("LRM-470: Runtime Config shows runtime/status pickers and next-run hint", () => {
+    permission.allowed = true;
+    renderPanel("user-owner");
+    const section = screen.getByTestId("agent-profile-runtime-config");
+    expect(section.querySelector("h3")?.textContent).toBe("Runtime Config");
+    expect(section).toContainElement(screen.getByTestId("runtime-picker"));
+    expect(section).toContainElement(screen.getByTestId("model-picker"));
+    expect(section).toContainElement(screen.getByTestId("thinking-picker"));
+    expect(section).toContainElement(screen.getByTestId("visibility-picker"));
+    expect(section).toHaveTextContent("Changes take effect on the next run");
   });
 
   it("LRM-448: Actions stack + Info field labels; Usage lives on its tab", () => {
@@ -547,6 +562,7 @@ describe("AgentSidePanel", () => {
     expect(screen.getByText("Display name")).toBeInTheDocument();
     expect(screen.getByText("Description")).toBeInTheDocument();
     expect(screen.getByText("Info")).toBeInTheDocument();
+    expect(screen.getByText("Runtime Config")).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Usage" })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Usage" }));

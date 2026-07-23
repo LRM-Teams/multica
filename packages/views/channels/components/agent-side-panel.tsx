@@ -31,6 +31,7 @@ import { InlineFieldEditor } from "../../agents/components/inline-field-editor";
 import { useUpdateAgent } from "../../agents/hooks/use-update-agent";
 import { useRuntimeHealthStateLabel } from "../../runtimes/components/shared";
 import { initialsOf } from "../../common/initials";
+import { PropRow } from "../../common/prop-row";
 import { ConversationSidePanelShell } from "../../common/conversation-side-panel-shell";
 import { AgentPresenceOverlay } from "../../common/actor-avatar";
 import { AgentFilesPanel } from "./agent-files-panel";
@@ -63,7 +64,8 @@ interface AgentSidePanelProps {
  *
  * LRM-448 Profile v4 (locked A): Computer IA + Multica tokens.
  * Header is Close-only (no Message+⋯). Identity sits under the chrome.
- * Profile tab: editable Display name / Description, Info, vertical Actions.
+ * Profile tab: editable Display name / Description, Info, Runtime Config
+ * (LRM-470 — own section, not jammed into Info), vertical Actions.
  * Usage is its own tab — never stacked in Profile.
  */
 export function AgentSidePanel({
@@ -351,23 +353,37 @@ function AgentProfileTabContent({
             <span className="truncate" title={ownerName(agent, members)}>
               {ownerName(agent, members)}
             </span>
-            <span className="pt-0.5 text-muted-foreground">
-              {t(($) => $.inspector.prop_runtime)}
-            </span>
-            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-              <RuntimePicker
-                value={agent.runtime_id}
-                runtimes={runtimes}
-                members={[...members]}
-                currentUserId={currentUserId}
-                canEdit={canEditRuntime}
-                onChange={(id) => update({ runtime_id: id })}
-              />
-              {runtimeUpdateHealth !== "ok" && (
-                <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                  {runtimeHealthLabel(runtimeUpdateHealth)}
-                </span>
-              )}
+          </div>
+        </div>
+
+        {/* LRM-470: Runtime Config is its own titled section — not jammed into
+            Info's Runtime row. Same density tokens as Info / Usage. Desktop
+            panel + mobile page share this body. */}
+        <div className="border-t border-border pt-3" data-testid="agent-profile-runtime-config">
+          <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            {t(($) => $.side_panel.runtime_section)}
+          </h3>
+          <div className="grid min-w-0 grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+            <PropRow label={t(($) => $.inspector.prop_runtime)} interactive={false}>
+              {/* flex-wrap keeps the outdated badge visible at ~375px instead
+                  of clipping beside the runtime chip. */}
+              <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                <RuntimePicker
+                  value={agent.runtime_id}
+                  runtimes={runtimes}
+                  members={[...members]}
+                  currentUserId={currentUserId}
+                  canEdit={canEditRuntime}
+                  onChange={(id) => update({ runtime_id: id })}
+                />
+                {runtimeUpdateHealth !== "ok" && (
+                  <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                    {runtimeHealthLabel(runtimeUpdateHealth)}
+                  </span>
+                )}
+              </div>
+            </PropRow>
+            <PropRow label={t(($) => $.inspector.prop_model)} interactive={false}>
               <ModelPicker
                 runtimeId={agent.runtime_id}
                 runtimeOnline={!!isOnline}
@@ -375,6 +391,16 @@ function AgentProfileTabContent({
                 canEdit={canEditRuntime}
                 onChange={(m) => update({ model: m })}
               />
+            </PropRow>
+            <ThinkingPropRow
+              runtimeId={agent.runtime_id}
+              runtimeOnline={!!isOnline}
+              model={agent.model ?? ""}
+              value={agent.thinking_level ?? ""}
+              canEdit={canEditRuntime}
+              onChange={(v) => update({ thinking_level: v })}
+            />
+            <PropRow label={t(($) => $.inspector.prop_visibility)} interactive={false}>
               <VisibilityPicker
                 value={agent.visibility}
                 homeChannelId={agent.home_channel_id ?? null}
@@ -386,17 +412,7 @@ function AgentProfileTabContent({
                   })
                 }
               />
-            </div>
-          </div>
-          <div className="mt-2 grid min-w-0 grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
-            <ThinkingPropRow
-              runtimeId={agent.runtime_id}
-              runtimeOnline={!!isOnline}
-              model={agent.model ?? ""}
-              value={agent.thinking_level ?? ""}
-              canEdit={canEditRuntime}
-              onChange={(v) => update({ thinking_level: v })}
-            />
+            </PropRow>
           </div>
           {canEditRuntime ? (
             <p className="mt-2 text-[10px] leading-tight text-muted-foreground">

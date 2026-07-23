@@ -1003,8 +1003,7 @@ export function ChannelsPage({
     return listFirstSelection
       ? explicit
       : (explicit ?? channels.find(isImmutableSystemChannel) ?? channels[0] ?? null);
-<<<<<<< HEAD
-  }, [channels, archivedChannels, activeId, activeDmId, isMobile]);
+  }, [channels, archivedChannels, activeId, activeDmId, listFirstSelection]);
   // Invite / discovery for a group must pass channel_id so channel-visibility
   // agents from OTHER homes stay out (LRM-399; mirrors ListAgents filter).
   const inviteDiscoverChannelId =
@@ -1013,9 +1012,6 @@ export function ChannelsPage({
     ...agentListOptions(wsId, { channelId: inviteDiscoverChannelId }),
     enabled: !!wsId && !!inviteDiscoverChannelId,
   });
-=======
-  }, [channels, archivedChannels, activeId, activeDmId, listFirstSelection]);
->>>>>>> f12964ae2 (fix(LRM-388): open Activity sessions in the right pane)
   const isActiveArchived = !!active?.archived_at;
   // #642 — the workspace's system #general channel: immutable, auto-managed
   // roster (all human members + active workspace-visible agents, synced
@@ -3428,26 +3424,30 @@ export function ChannelsPage({
         </main>
   );
   const detailPane = !isMobile ? (
-    <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
-      <ResizablePanel id="conversation" minSize="50%" className="flex min-h-0 flex-col">
-        {channelConversationPane}
-      </ResizablePanel>
-      {threadPanel || agentPanel || detailsPanel ? (
-        <>
-          <ResizableHandle />
-          <ResizablePanel
-            id={threadPanel ? "thread" : agentPanel ? "agent-files" : "channel-details"}
-            defaultSize={360}
-            minSize={300}
-            maxSize={480}
-            groupResizeBehavior="preserve-pixel-size"
-            className="border-l border-border/30 bg-background"
-          >
-            {threadPanel ?? agentPanel ?? detailsPanel}
-          </ResizablePanel>
-        </>
-      ) : null}
-    </ResizablePanelGroup>
+    threadPanel || agentPanel || detailsPanel ? (
+      <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
+        <ResizablePanel id="conversation" minSize="50%" className="flex min-h-0 flex-col">
+          {channelConversationPane}
+        </ResizablePanel>
+        <ResizableHandle />
+        <ResizablePanel
+          id={threadPanel ? "thread" : agentPanel ? "agent-files" : "channel-details"}
+          defaultSize={360}
+          minSize={300}
+          maxSize={480}
+          groupResizeBehavior="preserve-pixel-size"
+          className="border-l border-border/30 bg-background"
+        >
+          {threadPanel ?? agentPanel ?? detailsPanel}
+        </ResizablePanel>
+      </ResizablePanelGroup>
+    ) : (
+      // LRM-400: with no side panel, render the conversation full-width.
+      // A lone ResizablePanel (minSize 50%) inside PanelGroup left a blank
+      // right half — Stop all sat on the chat column edge and looked like it
+      // floated in an empty shell (Frank screenshot).
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">{channelConversationPane}</div>
+    )
   ) : (
     threadPanel ?? channelConversationPane
   );
@@ -3487,18 +3487,18 @@ export function ChannelsPage({
   // mutually exclusive, but this also covers the deep-link-before-list-loads
   // window where `activeDmId` is set but the DM row hasn't resolved yet).
   //
-  // Activity embed (LRM-388): pin to thread-only or channel-stream-only so the
-  // Activity right pane does not grow a cramped dual pane. DMs keep the full
-  // DmConversation shell (Chat tab default is inside that component).
+  // Activity embed (LRM-388 / LRM-400): pin to thread-only or channel-stream-only
+  // so the Activity right pane never mounts the desktop dual-pane (blank half +
+  // stranded Stop all). DMs keep the full DmConversation shell.
   const detailSurface = activeDmId
     ? dmDetailPane
-    : embedded && embeddedSurface === "thread"
-      ? (threadPanel ?? (
-          <ConversationSwitchSkeleton isMobile={isMobile} />
-        ))
-      : embedded && embeddedSurface === "channel"
-        ? channelConversationPane
-        : detailPane;
+    : embedded
+      ? embeddedSurface === "thread"
+        ? (threadPanel ?? (
+            <ConversationSwitchSkeleton isMobile={isMobile} />
+          ))
+        : channelConversationPane
+      : detailPane;
 
   // Embedded + resolved route id but channel/DM missing from lists → explicit
   // error (no silent swap to another conversation — LRM-238).

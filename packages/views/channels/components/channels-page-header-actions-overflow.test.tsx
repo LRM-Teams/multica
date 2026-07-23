@@ -366,7 +366,7 @@ describe("ChannelsPage header actions — container-driven overflow (#568)", () 
     // already open — proving the two entry points (title / compact
     // trigger) aren't fighting each other.
     fireEvent.click(screen.getByRole("button", { name: "More" }));
-    expect(await screen.findByRole("button", { name: "Settings" })).toBeInTheDocument();
+    expect(await screen.findByTestId("channel-details-settings")).toBeInTheDocument();
   });
 
   // Coordinator requirement: the decision must be a pure function of the
@@ -420,11 +420,9 @@ describe("ChannelsPage header actions — container-driven overflow (#568)", () 
     expectDirect();
   });
 
-  // Reachability guard: the compact trigger must actually open the same
-  // overflow Drawer the true-mobile flow already uses, and its "Settings"
-  // menu item must reach the same ChannelDetailsPanel settings tab (project
-  // binding etc.) the direct row's title/member click reaches on a wide
-  // container — not just render inertly.
+  // Reachability guard: the compact trigger must open the LRM-494 Slack
+  // channel-details page, and its Settings row must reach the same
+  // ChannelDetailsPanel settings body (project binding etc.).
   it("reaches channel settings through the compact trigger when the container is narrow", async () => {
     resizeContainerTo(300);
     renderPage();
@@ -433,7 +431,7 @@ describe("ChannelsPage header actions — container-driven overflow (#568)", () 
     const trigger = screen.getByRole("button", { name: "More" });
     fireEvent.click(trigger);
 
-    const settingsRow = await screen.findByRole("button", { name: "Settings" });
+    const settingsRow = await screen.findByTestId("channel-details-settings");
     fireEvent.click(settingsRow);
 
     expect(await screen.findByRole("button", { name: "project" })).toBeInTheDocument();
@@ -508,7 +506,7 @@ describe("ChannelsPage header actions — container-driven overflow (#568)", () 
 
     // Open the Drawer and drill into Settings while compact.
     fireEvent.click(screen.getByRole("button", { name: "More" }));
-    const settingsRow = await screen.findByRole("button", { name: "Settings" });
+    const settingsRow = await screen.findByTestId("channel-details-settings");
     fireEvent.click(settingsRow);
     expect(await screen.findByRole("button", { name: "project" })).toBeInTheDocument();
 
@@ -517,7 +515,7 @@ describe("ChannelsPage header actions — container-driven overflow (#568)", () 
     resizeContainerTo(1024);
     expectDirect();
     expect(screen.queryByRole("button", { name: "project" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Settings" })).toBeNull();
+    expect(screen.queryByTestId("channel-details-settings")).toBeNull();
     // Cleanup guard: the real (unmocked) Vaul overlay/backdrop must not be
     // left in the document, and Radix/Vaul's own body scroll-lock attribute
     // must not linger — both are real Vaul-driven DOM side effects (not
@@ -531,12 +529,12 @@ describe("ChannelsPage header actions — container-driven overflow (#568)", () 
     resizeContainerTo(300);
     expectCompact();
     expect(screen.queryByRole("button", { name: "project" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Settings" })).toBeNull();
+    expect(screen.queryByTestId("channel-details-settings")).toBeNull();
 
     // A fresh click still reaches the panel normally — the guard only
     // prevents an AUTOMATIC reopen, it doesn't disable the entry point.
     fireEvent.click(screen.getByRole("button", { name: "More" }));
-    expect(await screen.findByRole("button", { name: "Settings" })).toBeInTheDocument();
+    expect(await screen.findByTestId("channel-details-settings")).toBeInTheDocument();
   });
 
   // First-paint guard: once the header actually mounts on a narrow
@@ -580,8 +578,8 @@ describe("ChannelsPage header — desktop title chevron (LRM-234)", () => {
     renderPage();
     await screen.findByTestId("message-list");
     fireEvent.click(screen.getByRole("button", { name: "Open channel details" }));
-    expect(await screen.findByText("Channel details")).toBeInTheDocument();
-    expect(await screen.findByRole("button", { name: "Settings" })).toBeInTheDocument();
+    expect(await screen.findByTestId("channel-details-home")).toBeInTheDocument();
+    expect(await screen.findByTestId("channel-details-settings")).toBeInTheDocument();
   });
 
   it("hides the title chevron on mobile (⋯ remains the overflow path)", async () => {

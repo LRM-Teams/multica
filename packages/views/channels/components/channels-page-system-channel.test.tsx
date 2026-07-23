@@ -263,23 +263,23 @@ describe("ChannelsPage — system #general channel (#642)", () => {
     });
   });
 
-  it("hides the Settings tab for the system channel in Channel details", async () => {
+  it("hides the Settings entry for the system channel in Channel details", async () => {
     renderPage("chan-general");
     await waitFor(() => {
       expect(screen.getByTestId("active-title")).toHaveTextContent("general");
     });
     fireEvent.click(screen.getByLabelText("Open channel details"));
-    expect(await screen.findByText("Channel details")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Settings" })).toBeNull();
+    expect(await screen.findByTestId("channel-details-home")).toBeTruthy();
+    expect(screen.queryByTestId("channel-details-settings")).toBeNull();
   });
 
-  it("shows the Settings tab for a normal channel in Channel details", async () => {
+  it("shows the Settings entry for a normal channel in Channel details", async () => {
     renderPage("chan-random");
     await waitFor(() => {
       expect(screen.getByTestId("active-title")).toHaveTextContent("random");
     });
     fireEvent.click(screen.getByLabelText("Open channel details"));
-    expect(await screen.findByRole("button", { name: "Settings" })).toBeTruthy();
+    expect(await screen.findByTestId("channel-details-settings")).toBeTruthy();
   });
 
   it("hides the per-member remove button in the system channel's member panel", async () => {
@@ -306,29 +306,27 @@ describe("ChannelsPage — system #general channel (#642)", () => {
     expect(screen.getByLabelText("Remove member")).toBeTruthy();
   });
 
-  it("hides the mobile Drawer's Settings row for the system channel", async () => {
+  it("hides the mobile details Settings row for the system channel", async () => {
     mobileViewport.value = true;
     renderPage("chan-general");
     await waitFor(() => {
       expect(screen.getByTestId("active-title")).toHaveTextContent("general");
     });
     fireEvent.click(screen.getByLabelText("More"));
-    expect(screen.queryByText("Settings")).toBeNull();
-    // Normal behavior preserved: Members/Files stay reachable — but
-    // #642 follow-up (Parker/Iris): the read-only auto-managed roster
-    // must not say "Manage" (that implies add/remove that doesn't exist).
-    expect(screen.getByText("View members")).toBeTruthy();
-    expect(screen.queryByText("Manage members")).toBeNull();
+    expect(await screen.findByTestId("channel-details-home")).toBeTruthy();
+    expect(screen.queryByTestId("channel-details-settings")).toBeNull();
+    // Members stay reachable from the Slack members row.
+    expect(screen.getByTestId("channel-details-members-row")).toBeTruthy();
   });
 
-  it("keeps the mobile Drawer's Settings row for a normal channel", async () => {
+  it("keeps the mobile details Settings row for a normal channel", async () => {
     mobileViewport.value = true;
     renderPage("chan-random");
     await waitFor(() => {
       expect(screen.getByTestId("active-title")).toHaveTextContent("random");
     });
     fireEvent.click(screen.getByLabelText("More"));
-    expect(screen.getByText("Settings")).toBeTruthy();
+    expect(await screen.findByTestId("channel-details-settings")).toBeTruthy();
   });
 
   // Slack-style header: faces + count open View-members (browse). System
@@ -434,7 +432,7 @@ describe("ChannelsPage — system #general channel (#642)", () => {
       expect(screen.getByTestId("active-title")).toHaveTextContent("nokey");
     });
     fireEvent.click(screen.getByLabelText("Open channel details"));
-    expect(await screen.findByRole("button", { name: "Settings" })).toBeTruthy();
+    expect(await screen.findByTestId("channel-details-settings")).toBeTruthy();
     fireEvent.click(screen.getByLabelText("View members"));
     await screen.findByText("Bob");
     expect(screen.getByLabelText("Remove member")).toBeTruthy();

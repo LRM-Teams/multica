@@ -59,6 +59,7 @@ function MobileSettingsDrawer({ onChange }: { onChange: (projectId: string | nul
           variant="page"
           onClose={() => {}}
           portalContainer={bodyRef}
+          notifyPrefLabel="All"
         />
       </DrawerContent>
     </Drawer>

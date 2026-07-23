@@ -13,21 +13,23 @@ import { cn } from "@multica/ui/lib/utils";
  * Group Settings reads as the same surface family instead of a
  * one-off card, per Frank/Iris's "布局要收敛" direction.
  *
- * `"page"` variant drops the close button — used when the same body is
- * hosted full-width (a mobile Drawer sub-page) instead of docked next to
- * the conversation.
+ * `"page"` variant — LRM-494 Slack channel details: full-page mobile
+ * surface uses a text 「完成」/Done trailing control instead of X.
  */
 export function ConversationSidePanelShell({
   leading,
   onClose,
   variant = "panel",
   closeAriaLabel,
+  doneLabel,
   children,
 }: {
   leading: ReactNode;
   onClose: () => void;
   variant?: "panel" | "page";
   closeAriaLabel: string;
+  /** When set with `variant="page"`, renders a text Done control. */
+  doneLabel?: string;
   children: ReactNode;
 }) {
   return (
@@ -37,7 +39,7 @@ export function ConversationSidePanelShell({
         variant === "panel" && "border-l",
       )}
     >
-      <div className="flex items-center justify-between gap-3 border-b p-4">
+      <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
         <div className="flex min-w-0 items-center gap-2.5">{leading}</div>
         {variant === "panel" ? (
           <Button
@@ -48,6 +50,17 @@ export function ConversationSidePanelShell({
             aria-label={closeAriaLabel}
           >
             <X className="size-4" />
+          </Button>
+        ) : doneLabel ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={onClose}
+            className="shrink-0 px-2 font-semibold text-primary"
+            data-testid="channel-details-done"
+          >
+            {doneLabel}
           </Button>
         ) : null}
       </div>

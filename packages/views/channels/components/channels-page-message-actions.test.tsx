@@ -341,7 +341,7 @@ describe("ChannelsPage — project picker relocated to group settings (#576)", (
     renderPage();
     await screen.findByTestId("message-list");
     fireEvent.click(screen.getByRole("button", { name: "Open channel details" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+    fireEvent.click(await screen.findByTestId("channel-details-settings"));
     expect(await screen.findByRole("button", { name: "project" })).toBeTruthy();
   });
 
@@ -355,7 +355,7 @@ describe("ChannelsPage — project picker relocated to group settings (#576)", (
     renderPage();
     await screen.findByTestId("message-list");
     fireEvent.click(screen.getByRole("button", { name: "Open channel details" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+    fireEvent.click(await screen.findByTestId("channel-details-settings"));
     expect(await screen.findByRole("button", { name: "project" })).toBeEnabled();
   });
 
@@ -365,7 +365,7 @@ describe("ChannelsPage — project picker relocated to group settings (#576)", (
     renderPage();
     await screen.findByTestId("message-list");
     fireEvent.click(screen.getByRole("button", { name: "Open channel details" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+    fireEvent.click(await screen.findByTestId("channel-details-settings"));
     expect(await screen.findByRole("button", { name: "project" })).toBeEnabled();
   });
 
@@ -375,7 +375,7 @@ describe("ChannelsPage — project picker relocated to group settings (#576)", (
     renderPage();
     await screen.findByTestId("message-list");
     fireEvent.click(screen.getByRole("button", { name: "Open channel details" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+    fireEvent.click(await screen.findByTestId("channel-details-settings"));
     expect(await screen.findByRole("button", { name: "project" })).toBeDisabled();
   });
 
@@ -384,7 +384,7 @@ describe("ChannelsPage — project picker relocated to group settings (#576)", (
     renderPage();
     await screen.findByTestId("message-list");
     fireEvent.click(screen.getByRole("button", { name: "Open channel details" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+    fireEvent.click(await screen.findByTestId("channel-details-settings"));
     expect(await screen.findByRole("button", { name: "project" })).toBeDisabled();
   });
 });
@@ -415,7 +415,7 @@ describe("ChannelsPage — Channel details shares the exclusive thread/agent slo
       renderPage();
       await screen.findByTestId("message-list");
       fireEvent.click(screen.getByRole("button", { name: "Open channel details" }));
-      fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+      fireEvent.click(await screen.findByTestId("channel-details-settings"));
       expect(await screen.findByRole("button", { name: "project" })).toBeTruthy();
 
       await waitFor(() => expect(listProps.current?.onOpenThread).toBeTypeOf("function"));
@@ -440,7 +440,7 @@ describe("ChannelsPage — Channel details shares the exclusive thread/agent slo
       await screen.findByTestId("thread-panel");
 
       fireEvent.click(screen.getByRole("button", { name: "Open channel details" }));
-      fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+      fireEvent.click(await screen.findByTestId("channel-details-settings"));
       expect(await screen.findByRole("button", { name: "project" })).toBeTruthy();
       expect(screen.queryByTestId("thread-panel")).toBeNull();
     },
@@ -454,7 +454,7 @@ describe("ChannelsPage — Channel details shares the exclusive thread/agent slo
       await screen.findByTestId("message-list");
       const toggle = screen.getByRole("button", { name: "Open channel details" });
       fireEvent.click(toggle);
-      fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+      fireEvent.click(await screen.findByTestId("channel-details-settings"));
       expect(await screen.findByRole("button", { name: "project" })).toBeTruthy();
       // Re-query: opening the dock must not invalidate the title control.
       fireEvent.click(screen.getByRole("button", { name: "Open channel details" }));

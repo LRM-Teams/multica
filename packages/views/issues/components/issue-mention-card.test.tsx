@@ -81,10 +81,10 @@ describe("IssueMentionCard (#520 — the unanchored fallback)", () => {
     };
     const { container } = render(<IssueMentionCard issueId="LRM-126" fallbackLabel="LRM-126" />);
 
-    // The identifier appears twice — the link and the peek's eyebrow — so select
-    // the anchor itself rather than by text.
+    // LRM-508: resolved main-line ink is the live title (identifier stays in peek).
     const link = container.querySelector("a[data-ref-source]");
-    expect(link).toHaveTextContent("LRM-126");
+    expect(link).toHaveTextContent("Fix the login bug");
+    expect(link).not.toHaveTextContent("LRM-126");
     expect(link).toHaveClass("text-brand");
     // The chip's own class must not appear anywhere in a message body.
     expect(container.querySelector(".issue-chip")).toBeNull();
@@ -168,7 +168,7 @@ describe("IssueMentionCard (#520 — the unanchored fallback)", () => {
     expect(link).not.toHaveTextContent("fe57cec6");
   });
 
-  it("prefers live identifier over a UUID-shaped label once resolved (LRM-238)", () => {
+  it("prefers live title over a UUID-shaped label once resolved (LRM-508)", () => {
     resolvedIssue = {
       id: "fe57cec6-0a45-4d90-9ef6-6571f429c047",
       identifier: "LRM-487",
@@ -181,7 +181,10 @@ describe("IssueMentionCard (#520 — the unanchored fallback)", () => {
         fallbackLabel="fe57cec6-0a45-4d90-9ef6-6571f429c047"
       />,
     );
-    expect(container.querySelector("a[data-ref-source]")).toHaveTextContent("LRM-487");
+    const link = container.querySelector("a[data-ref-source]");
+    expect(link).toHaveTextContent("Soft-ask design");
+    expect(link).not.toHaveTextContent("LRM-487");
+    expect(link).not.toHaveTextContent("fe57cec6");
   });
 
   it("renders nothing rather than a bare UUID while unresolved (LRM-493)", () => {

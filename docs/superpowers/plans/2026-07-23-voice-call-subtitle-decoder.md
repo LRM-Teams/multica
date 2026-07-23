@@ -28,6 +28,9 @@ length, subtitle fields, and final-paragraph storage rule:
   speaker identity, and negative sequence/round values.
 - [x] Preserved the existing status-only decoder API for current callers.
 - [x] Ran the complete integration decoder test package and `go vet`.
+- [x] Committed, pushed, and opened independent ready PR
+  [#1089](https://github.com/LRM-Teams/multica/pull/1089), stacked on
+  [#1088](https://github.com/LRM-Teams/multica/pull/1088).
 
 ## Boundary
 

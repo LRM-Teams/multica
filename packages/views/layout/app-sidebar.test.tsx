@@ -133,6 +133,10 @@ vi.mock("@multica/core/api", async (importOriginal) => {
 });
 vi.mock("@multica/core/user-activity/queries", () => ({
   useUserActivityUnreadCount: () => unreadActivity.current,
+  userActivityListOptions: (wsId: string, tab: string) => ({
+    queryKey: ["user-activity", wsId, "list", tab],
+    queryFn: async () => ({ items: [] }),
+  }),
 }));
 vi.mock("@multica/core/issues/queries", () => ({ issueDetailOptions: () => ({ queryKey: ["issue"] }) }));
 vi.mock("@multica/core/issues/stores/create-mode-store", () => ({

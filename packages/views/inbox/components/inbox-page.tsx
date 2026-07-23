@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useCallback, useRef } from "react";
+import { useEffect, useCallback, useRef, lazy, Suspense } from "react";
 import { useDefaultLayout } from "react-resizable-panels";
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -19,8 +19,6 @@ import {
 import { useMarkChannelThreadRead } from "@multica/core/channels/mutations";
 import type { InboxItem, UserActivityItem, UserActivityTab } from "@multica/core/types";
 
-import { IssueDetail } from "../../issues/components";
-import { ChannelsPage } from "../../channels";
 import { ErrorBoundary } from "@multica/ui/components/common/error-boundary";
 import { useNavigation } from "../../navigation";
 import { toast } from "sonner";
@@ -39,6 +37,7 @@ import { useTypeLabels } from "./inbox-detail-label";
 import { getInboxDisplayTitle } from "./inbox-display";
 import { ActivityListRow } from "./activity-list-row";
 import { ActivityTabs, ActivityEmptyState } from "./activity-tabs";
+import { ActivityListSkeleton } from "./activity-list-skeleton";
 import {
   activitySelectionKey,
   activitySessionParams,
@@ -47,6 +46,30 @@ import {
 } from "./activity-session";
 import { useT } from "../../i18n";
 import { MobileListDetailLayout } from "../../common/mobile-list-detail-layout";
+
+/** Static Suspense fallback — hoist so React Doctor does not rebuild each render (LRM-424). */
+const ACTIVITY_DETAIL_FALLBACK = (
+  <div className="space-y-3 p-6" data-testid="activity-detail-fallback">
+    <Skeleton className="h-6 w-48" />
+    <Skeleton className="h-4 w-32" />
+    <Skeleton className="h-24 w-full" />
+  </div>
+);
+
+// LRM-424: IssueDetail / ChannelsPage are heavy. Lazy-load so the list shell
+// paints without waiting on those graphs (also avoids regressing LRM-400 when
+// a session is already selected on re-entry).
+const IssueDetail = lazy(() =>
+  import("../../issues/components/issue-detail").then((m) => ({
+    default: m.IssueDetail,
+  })),
+);
+
+const ChannelsPage = lazy(() =>
+  import("../../channels/components/channels-page").then((m) => ({
+    default: m.ChannelsPage,
+  })),
+);
 
 function inboxItemFromActivity(item: UserActivityItem): InboxItem | null {
   return item.kind === "inbox" ? item.inbox ?? null : null;
@@ -71,12 +94,16 @@ export function InboxPage() {
   const wsId = useWorkspaceId();
   const {
     data: activityData,
-    isLoading: loading,
+    isLoading,
     isError,
     error,
     refetch,
+    isFetching,
   } = useQuery(userActivityListOptions(wsId, tab));
   const items = activityData?.items ?? [];
+  // isLoading = pending && fetching with no data yet. Cached / placeholder rows
+  // keep the list painted while refetchOnMount silently refreshes (LRM-424).
+  const showListSkeleton = isLoading;
 
   const selectedKey = urlIssue || urlThread || urlMessage;
   const selectedItem = selectedKey
@@ -121,7 +148,9 @@ export function InboxPage() {
   );
 
   useEffect(() => {
-    if (loading) return;
+    // Wait out cold load + in-flight refetch (incl. keepPreviousData placeholders)
+    // before treating a deep-link as missing from the feed.
+    if (isLoading || isFetching) return;
     if (!selectedKey) return;
     if (selectedInbox || selectedThread) return;
     if (lastResolvedKeyRef.current === selectedKey) {
@@ -136,7 +165,8 @@ export function InboxPage() {
     }
     clearSelection();
   }, [
-    loading,
+    isLoading,
+    isFetching,
     selectedKey,
     selectedInbox,
     selectedThread,
@@ -278,7 +308,7 @@ export function InboxPage() {
     </>
   );
 
-  const listBody = isError ? (
+  const listBody = isError && !activityData ? (
     <div className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
       <p className="text-sm text-destructive">
         {error instanceof Error && error.message
@@ -289,6 +319,8 @@ export function InboxPage() {
         {t(($) => $.activity.retry)}
       </Button>
     </div>
+  ) : showListSkeleton ? (
+    <ActivityListSkeleton />
   ) : items.length === 0 ? (
     <ActivityEmptyState tab={tab} />
   ) : (
@@ -339,14 +371,16 @@ export function InboxPage() {
             </div>
           ) : null}
           <div className="flex min-h-0 flex-1 flex-col">
-            <ChannelsPage
-              channelId={sessionChannelId}
-              embedded
-              embeddedSurface={
-                sessionSurface === "dm" ? undefined : sessionSurface
-              }
-              onOpenInChannels={openInChannels}
-            />
+            <Suspense fallback={ACTIVITY_DETAIL_FALLBACK}>
+              <ChannelsPage
+                channelId={sessionChannelId}
+                embedded
+                embeddedSurface={
+                  sessionSurface === "dm" ? undefined : sessionSurface
+                }
+                onOpenInChannels={openInChannels}
+              />
+            </Suspense>
           </div>
         </div>
       </ErrorBoundary>
@@ -356,19 +390,21 @@ export function InboxPage() {
     sessionDetail
   ) : selectedInbox?.issue_id ? (
     <ErrorBoundary resetKeys={[selectedInbox.issue_id]}>
-      <IssueDetail
-        key={selectedInbox.issue_id}
-        issueId={selectedInbox.issue_id}
-        defaultSidebarOpen={false}
-        layoutId="multica_inbox_issue_detail_layout"
-        highlightCommentId={selectedInbox.details?.comment_id ?? undefined}
-        onDelete={() => {
-          clearSelection();
-        }}
-        onDone={() => {
-          if (selectedInbox) handleArchive(selectedInbox.id);
-        }}
-      />
+      <Suspense fallback={ACTIVITY_DETAIL_FALLBACK}>
+        <IssueDetail
+          key={selectedInbox.issue_id}
+          issueId={selectedInbox.issue_id}
+          defaultSidebarOpen={false}
+          layoutId="multica_inbox_issue_detail_layout"
+          highlightCommentId={selectedInbox.details?.comment_id ?? undefined}
+          onDelete={() => {
+            clearSelection();
+          }}
+          onDone={() => {
+            if (selectedInbox) handleArchive(selectedInbox.id);
+          }}
+        />
+      </Suspense>
     </ErrorBoundary>
   ) : selectedInbox ? (
     <div className="p-6">
@@ -426,27 +462,6 @@ export function InboxPage() {
   const hasDetail = !!(selectedInbox || selectedThread);
 
   if (isMobile) {
-    if (loading) {
-      return (
-        <div className="flex min-h-0 flex-1 flex-col">
-          <div className="flex h-12 shrink-0 items-center border-b px-4">
-            <Skeleton className="h-5 w-20" />
-          </div>
-          <div className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2">
-            {Array.from({ length: 5 }).map((_, i) => (
-              <div key={i} className="flex items-center gap-3 px-4 py-2.5">
-                <Skeleton className="h-7 w-7 shrink-0 rounded-full" />
-                <div className="flex-1 space-y-2">
-                  <Skeleton className="h-4 w-3/4" />
-                  <Skeleton className="h-3 w-1/2" />
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      );
-    }
-
     return (
       <MobileListDetailLayout
         showDetail={hasDetail}
@@ -476,49 +491,6 @@ export function InboxPage() {
     );
   }
 
-  if (loading) {
-    return (
-      <ResizablePanelGroup
-        orientation="horizontal"
-        className="min-h-0 flex-1"
-        defaultLayout={defaultLayout}
-        onLayoutChanged={onLayoutChanged}
-      >
-        <ResizablePanel
-          id="list"
-          defaultSize={320}
-          minSize={240}
-          maxSize={480}
-          groupResizeBehavior="preserve-pixel-size"
-        >
-          <div className="flex h-full flex-col border-r">
-            <div className="flex h-12 shrink-0 items-center border-b px-4">
-              <Skeleton className="h-5 w-20" />
-            </div>
-            <div className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <div key={i} className="flex items-center gap-3 px-4 py-2.5">
-                  <Skeleton className="h-7 w-7 shrink-0 rounded-full" />
-                  <div className="flex-1 space-y-2">
-                    <Skeleton className="h-4 w-3/4" />
-                    <Skeleton className="h-3 w-1/2" />
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </ResizablePanel>
-        <ResizableHandle />
-        <ResizablePanel id="detail" minSize="40%">
-          <div className="p-6">
-            <Skeleton className="h-6 w-48" />
-            <Skeleton className="mt-4 h-4 w-32" />
-          </div>
-        </ResizablePanel>
-      </ResizablePanelGroup>
-    );
-  }
-
   return (
     <ResizablePanelGroup
       orientation="horizontal"
@@ -545,9 +517,11 @@ export function InboxPage() {
             <div className="flex h-full flex-col items-center justify-center text-muted-foreground">
               <Activity className="mb-3 h-10 w-10 text-muted-foreground/30" />
               <p className="text-sm">
-                {items.length === 0
-                  ? t(($) => $.activity.empty.all.title)
-                  : t(($) => $.detail.select_prompt)}
+                {showListSkeleton
+                  ? t(($) => $.detail.select_prompt)
+                  : items.length === 0
+                    ? t(($) => $.activity.empty.all.title)
+                    : t(($) => $.detail.select_prompt)}
               </p>
             </div>
           )}

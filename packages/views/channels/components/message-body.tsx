@@ -34,6 +34,7 @@ type MessageBodyContentMode = "all" | "transcript" | "non-transcript";
  * while sticker-free content collapses to a single clamped preview line so the
  * header stays short. Attachment zone stays light (height-capped) in compact mode.
  */
+// react-doctor-disable-next-line react-doctor/no-multi-comp -- memo export keeps MessageBody name; Inner is file-local for equality compare
 function MessageBodyInner({
   content,
   parts,

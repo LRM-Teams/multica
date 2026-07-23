@@ -24,4 +24,5 @@ pending.
   cursor has advanced.
 - [x] Run related channel voice tests and `go vet ./internal/handler` against a
   fresh fully migrated PostgreSQL database.
-- [ ] Commit, push, and open an independent ready PR against `dev`.
+- [x] Commit, push, and open independent ready PR
+  [#1080](https://github.com/LRM-Teams/multica/pull/1080) against `dev`.

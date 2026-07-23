@@ -11,7 +11,7 @@ import {
   useState,
   type PointerEvent,
 } from "react";
-import { Copy, MessageSquare, MoreHorizontal, Pencil, Quote, Trash2, SmilePlus } from "lucide-react";
+import { Copy, MessageSquare, Pencil, Quote, Trash2, SmilePlus } from "lucide-react";
 import { toast } from "sonner";
 import { ReactionBar } from "@multica/ui/components/common/reaction-bar";
 import { QuickEmojiPicker } from "@multica/ui/components/common/quick-emoji-picker";
@@ -79,6 +79,9 @@ const FullEmojiPicker = lazy(() =>
 
 const LONG_PRESS_MS = 450;
 const TOUCH_MOVE_CANCEL_PX = 8;
+/** LRM-495 — Slack-style left swipe opens the same mobile action sheet as long-press. */
+const SWIPE_LEFT_OPEN_PX = 48;
+const SWIPE_VERTICAL_CANCEL_PX = 24;
 const MOBILE_THREAD_TAP_FEEDBACK_MS = 120;
 /** LRM-268 / design-long-message-slack-vs-multica.html — Slack collapsed body height. */
 export const MESSAGE_COLLAPSE_MAX_HEIGHT_PX = 160;
@@ -308,6 +311,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
   const measureContentOverflowRef = useRef<() => void>(() => {});
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const touchCancelledRef = useRef(false);
+  const swipeLeftCandidateRef = useRef(false);
 
 
   // react-doctor-disable-next-line react-doctor/exhaustive-deps -- unmount needs to clear whichever touch timers are currently pending.
@@ -584,29 +588,66 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
   const handlePointerDown = (event: PointerEvent<HTMLDivElement>) => {
     if (event.pointerType !== "touch" || isInteractiveMessageTarget(event.target)) return;
     touchCancelledRef.current = false;
+    swipeLeftCandidateRef.current = false;
     touchStartRef.current = { x: event.clientX, y: event.clientY };
     clearLongPressTimer();
     longPressTimerRef.current = setTimeout(() => {
       longPressTimerRef.current = null;
       touchCancelledRef.current = true;
+      swipeLeftCandidateRef.current = false;
       if (!hasActiveTextSelection()) openMobileActions();
     }, LONG_PRESS_MS);
   };
   const handlePointerMove = (event: PointerEvent<HTMLDivElement>) => {
     const start = touchStartRef.current;
     if (!start) return;
-    const moved = Math.hypot(event.clientX - start.x, event.clientY - start.y);
-    if (moved > TOUCH_MOVE_CANCEL_PX) {
+    const dx = event.clientX - start.x;
+    const dy = event.clientY - start.y;
+    const absDx = Math.abs(dx);
+    const absDy = Math.abs(dy);
+    // Vertical scroll dominates → abandon long-press / swipe.
+    if (absDy > TOUCH_MOVE_CANCEL_PX && absDy >= absDx) {
       touchCancelledRef.current = true;
+      swipeLeftCandidateRef.current = false;
       clearLongPressTimer();
+      return;
+    }
+    if (absDx > TOUCH_MOVE_CANCEL_PX) {
+      clearLongPressTimer();
+      if (dx < 0) {
+        swipeLeftCandidateRef.current = true;
+      } else {
+        touchCancelledRef.current = true;
+        swipeLeftCandidateRef.current = false;
+      }
     }
   };
   const handlePointerEnd = (event: PointerEvent<HTMLDivElement>) => {
-    const wasTouch = event.pointerType === "touch" && touchStartRef.current;
+    const start = touchStartRef.current;
+    const wasTouch = event.pointerType === "touch" && start;
+    const dx = start ? event.clientX - start.x : 0;
+    const dy = start ? event.clientY - start.y : 0;
+    const wasSwipeLeft =
+      swipeLeftCandidateRef.current &&
+      dx <= -SWIPE_LEFT_OPEN_PX &&
+      Math.abs(dy) < SWIPE_VERTICAL_CANCEL_PX;
     touchStartRef.current = null;
+    swipeLeftCandidateRef.current = false;
     clearLongPressTimer();
 
-    if (!wasTouch || touchCancelledRef.current || !isMobileActionViewport()) {
+    if (!wasTouch || !isMobileActionViewport()) {
+      touchCancelledRef.current = false;
+      return;
+    }
+    // LRM-495: left swipe opens the action sheet (Slack mobile convention).
+    if (wasSwipeLeft) {
+      touchCancelledRef.current = false;
+      if (!isInteractiveMessageTarget(event.target) && !hasActiveTextSelection()) {
+        openMobileActions();
+      }
+      return;
+    }
+    if (touchCancelledRef.current) {
       touchCancelledRef.current = false;
       return;
     }
@@ -620,6 +661,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
   };
   const cancelTouchGesture = () => {
     touchCancelledRef.current = true;
+    swipeLeftCandidateRef.current = false;
     touchStartRef.current = null;
     clearLongPressTimer();
   };
@@ -651,13 +693,12 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
       data-self-mentioned={selfMentioned ? "true" : undefined}
       data-local-send={localSendStatus ?? undefined}
       className={cn(
-        // Coarse pointers get a dedicated 44px action column (Parker #568:
-        // an absolutely-positioned More button compensated by body padding
-        // was a layout hack that still clipped link/mention/attachment
-        // hitboxes in the first line) — content stays in its own track so
-        // nothing overlaps regardless of grouped-message author-row state.
-        "group relative grid grid-cols-[28px_minmax(0,1fr)] gap-2.5 rounded-lg px-2 outline-none transition-colors duration-1000 hover:bg-muted/35 focus-within:bg-muted/35 [@media(pointer:coarse)]:grid-cols-[28px_minmax(0,1fr)_44px]",
-        compact ? "py-0.5" : "py-1.5",
+        // LRM-495: no permanent mobile ⋯ column — coarse pointers open actions
+        // via long-press / left-swipe; fine pointers keep the hover action bar.
+        "group relative grid grid-cols-[28px_minmax(0,1fr)] gap-2.5 rounded-lg px-2 outline-none transition-colors duration-1000 hover:bg-muted/35 focus-within:bg-muted/35",
+        // Tighten lead-row vertical rhythm one notch (py-1.5 → py-1); keep
+        // avatar / name / time alignment. Compact continuations stay tighter.
+        compact ? "py-0" : "py-1",
         selfMentioned && SELF_MENTION_ROW_CLASS,
         selfMentioned && SELF_MENTION_ROW_MENTION_CLASS,
         highlighted && "bg-primary/10 ring-1 ring-primary/25 duration-0 hover:bg-primary/10 focus-within:bg-primary/10",
@@ -695,7 +736,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
       )}
       <div className="min-w-0 max-w-[min(760px,100%)]">
         {showAuthor && (
-          <div className="mb-0.5 flex select-none items-baseline gap-2 pr-40 text-sm md:pr-24">
+          <div className="mb-0.5 flex select-none items-baseline gap-2 md:pr-24 text-sm">
             {profileActorType && profileActorId ? (
               <ActorProfileTrigger
                 memberType={profileActorType}
@@ -1071,19 +1112,6 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
           </div>
         )}
       </div>
-      {!isEditing && !isLocalSend && (onReact || onQuote || canOpenThread) && (
-        <button
-          type="button"
-          data-testid="message-mobile-more-trigger"
-          data-message-action-surface="true"
-          onClick={openMobileActions}
-          aria-label={t(($) => $.message.more_actions)}
-          title={t(($) => $.message.more_actions)}
-          className="hidden h-11 w-11 shrink-0 items-center justify-center self-start justify-self-end rounded-full text-muted-foreground/50 transition-colors [@media(pointer:coarse)]:flex hover:bg-background/70 hover:text-foreground active:bg-background/70"
-        >
-          <MoreHorizontal className="size-[18px]" />
-        </button>
-      )}
     </div>
   );
 

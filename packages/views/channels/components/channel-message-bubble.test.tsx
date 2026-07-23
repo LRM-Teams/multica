@@ -1655,7 +1655,7 @@ describe("ChannelMessageBubble", () => {
     );
   });
 
-  it("shows a low-emphasis More trigger that opens the mobile action sheet without a long press (#568)", async () => {
+  it("hides the permanent mobile More trigger; long-press and left-swipe open the action sheet (LRM-495)", async () => {
     setMobileViewport();
     render(
       <ChannelMessageBubble
@@ -1666,8 +1666,16 @@ describe("ChannelMessageBubble", () => {
       />,
     );
 
+    expect(screen.queryByRole("button", { name: "More actions" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("message-mobile-more-trigger")).not.toBeInTheDocument();
+    expect(screen.getByTestId("message-bubble").className).toMatch(/\bpy-1\b/);
+    expect(screen.getByTestId("message-bubble").className).not.toMatch(/_44px/);
     expect(screen.queryByRole("dialog", { name: "Message actions" })).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "More actions" }));
+
+    const bubble = screen.getByTestId("message-bubble");
+    fireEvent.pointerDown(bubble, { pointerType: "touch", clientX: 80, clientY: 40 });
+    fireEvent.pointerMove(bubble, { pointerType: "touch", clientX: 20, clientY: 42 });
+    fireEvent.pointerUp(bubble, { pointerType: "touch", clientX: 20, clientY: 42 });
 
     expect(await screen.findByRole("dialog", { name: "Message actions" })).toBeInTheDocument();
   });

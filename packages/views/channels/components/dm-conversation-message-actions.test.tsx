@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -320,12 +320,10 @@ describe.sequential("DmConversation message edit / delete wiring (#241 B3)", () 
     expect(await screen.findByTestId("message-tombstone")).toBeInTheDocument();
   });
 
-  // #568 — the mobile Reply/React entry point and single-overlay reaction
-  // sheet live in the shared ChannelMessageBubble, but DM was a separate
-  // regression Frank hit live (task #630) — this proves the fix reaches the
-  // DM consumer specifically, not just the channel path (Parker/Iris: "共用
-  // 组件不能假定双面 PASS").
-  it("shows the mobile More trigger and reaction sheet through the real DM path (#568)", async () => {
+  // #568 reaction-sheet exclusivity + LRM-495 (no permanent More): DM still
+  // reaches the shared bubble's long-press / swipe action sheet (Parker/Iris:
+  // "共用组件不能假定双面 PASS").
+  it("opens the mobile action + reaction sheets through the real DM path without a permanent More (LRM-495)", async () => {
     const user = userEvent.setup();
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 390 });
     Object.defineProperty(window, "matchMedia", {
@@ -343,9 +341,11 @@ describe.sequential("DmConversation message edit / delete wiring (#241 B3)", () 
     });
     currentPageMessages = [peerMessage()];
     renderDm();
-    await screen.findByTestId("message-bubble");
+    const bubble = await screen.findByTestId("message-bubble");
+    expect(screen.queryByRole("button", { name: "More actions" })).not.toBeInTheDocument();
 
-    await user.click(await screen.findByRole("button", { name: "More actions" }));
+    // Long-press (hold without pointerUp) — same gesture as channel bubble tests.
+    fireEvent.pointerDown(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
     const sheet = await screen.findByRole("dialog", { name: "Message actions" });
     await user.click(within(sheet).getByRole("button", { name: "Add reaction" }));
 

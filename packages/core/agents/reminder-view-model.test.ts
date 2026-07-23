@@ -71,6 +71,59 @@ describe("adaptUpcomingRow", () => {
     expect(row?.anchor).toEqual({ available: false });
   });
 
+  it("prefers display_name over legacy display (LRM-507)", () => {
+    const row = adaptUpcomingRow(
+      makeDefinition({
+        anchor: {
+          available: true,
+          kind: "channel",
+          display_name: "#deploys",
+          display: "#multica:a1b2c3d4",
+          href: "/acme/channels/chan-1?message=msg-1",
+        },
+      }),
+    );
+    expect(row?.anchor).toEqual({
+      available: true,
+      kind: "channel",
+      label: "#deploys",
+      href: "/acme/channels/chan-1?message=msg-1",
+    });
+  });
+
+  it("degrades when display_name itself is a bare short id", () => {
+    const row = adaptUpcomingRow(
+      makeDefinition({
+        anchor: {
+          available: true,
+          kind: "channel",
+          display_name: "#multica:deadbeef",
+          href: "/acme/channels/chan-1?message=msg-1",
+        },
+      }),
+    );
+    expect(row?.anchor).toEqual({ available: false });
+  });
+
+  it("falls back to legacy display when display_name is absent", () => {
+    const row = adaptUpcomingRow(
+      makeDefinition({
+        anchor: {
+          available: true,
+          kind: "thread",
+          display: "Thread in #deploys",
+          href: "/acme/channels/chan-1?message=msg-1",
+        },
+      }),
+    );
+    expect(row?.anchor).toEqual({
+      available: true,
+      kind: "thread",
+      label: "Thread in #deploys",
+      href: "/acme/channels/chan-1?message=msg-1",
+    });
+  });
+
   it("adapts a well-formed one_shot row", () => {
     const row = adaptUpcomingRow(
       makeDefinition({ schedule_kind: "one_shot", cadence: undefined, schedule_timezone: undefined }),

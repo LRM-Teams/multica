@@ -120,29 +120,30 @@ export interface RawReminderPage {
 // stays visible, only the anchor link is dropped.
 /**
  * Bare `#workspace:shortId` labels are the Frank anti-pattern (IMG_3124
- * counter-example). Prefer readable channel/DM names from LRM-507; until
- * then, degrade the anchor rather than render the bare short id.
+ * counter-example). Prefer readable channel/DM names from LRM-507
+ * (`display_name`); never paint the bare short id as primary ink.
  */
 export function isBareWorkspaceShortIdLabel(label: string): boolean {
   return /^#[^\s#:]+:[0-9a-fA-F-]{4,36}$/.test(label.trim());
 }
 
+/** LRM-505/507: `display_name` first, then legacy `display`. */
+export function reminderAnchorLabel(raw: RawReminderAnchor): string | undefined {
+  const label = (raw.display_name || raw.display || "").trim();
+  return label || undefined;
+}
+
 function adaptAnchor(raw: RawReminderAnchor): ReminderAnchor {
   const kind = raw.kind;
-<<<<<<< HEAD
-  const label = raw.display_name ?? raw.display;
-  if (raw.available && (kind === "channel" || kind === "thread") && label && raw.href) {
-    return { available: true, kind, label, href: raw.href };
-=======
+  const label = reminderAnchorLabel(raw);
   if (
     raw.available &&
     (kind === "channel" || kind === "thread") &&
-    raw.display &&
+    label &&
     raw.href &&
-    !isBareWorkspaceShortIdLabel(raw.display)
+    !isBareWorkspaceShortIdLabel(label)
   ) {
-    return { available: true, kind, label: raw.display, href: raw.href };
->>>>>>> 51ae031c5 (LRM-505: align Agent Reminders list fields with Frank IA)
+    return { available: true, kind, label, href: raw.href };
   }
   return { available: false };
 }

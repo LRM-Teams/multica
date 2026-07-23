@@ -2017,6 +2017,7 @@ const RawReminderAnchorSchema = z.object({
   // this row's anchor (see `adaptAnchor`), not fail the whole array element
   // and, transitively, the entire page.
   kind: z.string().optional(),
+  // LRM-507: readable channel/DM name (preferred over legacy `display`).
   display_name: z.string().optional(),
   display: z.string().optional(),
   href: z.string().optional(),

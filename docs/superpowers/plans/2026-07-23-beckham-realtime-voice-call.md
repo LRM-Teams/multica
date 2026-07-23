@@ -42,6 +42,8 @@ own speech recognition, conversation state, tools, or memory.
 
 Use Volcengine RTC AI audio/video interaction for the first production
 transport and speech orchestration. Do not add LiveKit to the first release.
+The server integration targets the current `2025-06-01` RTC OpenAPI contract;
+the official demo's older default is not the implementation contract.
 
 Reasons:
 
@@ -156,10 +158,16 @@ Add `voice_call_session`:
 Allowed status transitions:
 
 ```text
-starting -> connecting -> active -> ending -> ended
-starting|connecting|active|ending -> failed
-active -> reconnecting -> active|failed
+starting -> connecting -> active
+active -> reconnecting -> active
+starting|connecting|active|reconnecting -> ending -> ended
+starting|connecting|active|reconnecting|ending -> failed
 ```
+
+The user may hang up before media becomes active or while the SDK is
+reconnecting. Those paths must still call the provider stop operation and
+converge through `ending`; the UI must not wait for `active` before enabling
+hang-up.
 
 Add `voice_call_turn`:
 

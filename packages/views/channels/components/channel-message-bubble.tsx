@@ -24,6 +24,7 @@ import {
   ContextMenuTrigger,
 } from "@multica/ui/components/ui/context-menu";
 import { useActorName } from "@multica/core/workspace/hooks";
+import { useReactionActorName } from "../../common/use-reaction-actor-name";
 import type { ChannelMessage } from "@multica/core/types";
 import type { OpenAgentPanelFn } from "@multica/core/agents";
 import { ActorAvatar } from "../../common/actor-avatar";
@@ -258,6 +259,9 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
 }) {
   const { t } = useT("channels");
   const { getActorName } = useActorName();
+  // LRM-364: group managers miss ListAgents → resolve via member-profile, never
+  // surface "Unknown Agent" in the reaction hover card.
+  const getReactionActorName = useReactionActorName(message.reactions ?? []);
   const resolveMentionPreview = mentionResolverFrom(getActorName);
   const messageTime = useMessageTime();
   const [editDraft, setEditDraft] = useState<string | null>(null);
@@ -1041,7 +1045,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
                 reactions={message.reactions ?? []}
                 currentUserId={currentUserId ?? undefined}
                 onToggle={(emoji) => onReact(message, emoji)}
-                getActorName={getActorName}
+                getActorName={getReactionActorName}
                 hideAddButton
                 showQuickReactions={false}
               />

@@ -69,6 +69,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { useActorName } from "@multica/core/workspace/hooks";
+import { useReactionActorName } from "../../common/use-reaction-actor-name";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useRecentContextStore } from "@multica/core/chat";
 import { issueListOptions, issueDetailOptions, childIssuesOptions, issueUsageOptions, issueAttachmentsOptions } from "@multica/core/issues/queries";
@@ -1065,6 +1066,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     reactions: issueReactions,
     toggleReaction: handleToggleIssueReaction,
   } = useIssueReactions(id, user?.id);
+  const getReactionActorName = useReactionActorName(issueReactions);
 
   const {
     subscribers, isSubscribed, toggleSubscribe: handleToggleSubscribe, toggleSubscriber,
@@ -2089,7 +2091,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                 reactions={issueReactions}
                 currentUserId={user?.id}
                 onToggle={handleToggleIssueReaction}
-                getActorName={getActorName}
+                getActorName={getReactionActorName}
               />
               {descEditing && (
                 <FileUploadButton

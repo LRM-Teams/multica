@@ -176,6 +176,10 @@ type Handler struct {
 	// only in focused unit tests; the router always wires a client whose
 	// IsConfigured result reflects deployment environment variables.
 	VoiceProvider VoiceProvider
+	// VoiceCallService owns authenticated one-to-one RTC call lifecycle. It is
+	// nil when the deployment has not configured the RTC provider, and the
+	// member API then returns a typed 503 without exposing credentials.
+	VoiceCallService VoiceCallServiceAPI
 	// LarkHub owns the per-installation supervisor goroutines that
 	// hold the §4.4 WS lease and run the EventConnector. Nil only
 	// when the master at-rest key (MULTICA_LARK_SECRET_KEY) is unset.

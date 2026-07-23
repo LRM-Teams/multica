@@ -641,6 +641,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/memory-curation/status", h.GetWorkspaceMemoryCurationStatus)
 					r.Get("/memory-curation/profile", h.GetMemoryCuratorProfile)
 					r.Put("/memory-curation/profile", h.UpdateMemoryCuratorProfile)
+					r.Route("/voice-calls", func(r chi.Router) {
+						r.Use(handler.RequireHumanActor)
+						r.Post("/", h.CreateVoiceCall)
+						r.Get("/{callId}", h.GetVoiceCall)
+						r.Post("/{callId}/stop", h.StopVoiceCall)
+					})
 					r.Post("/leave", h.LeaveWorkspace)
 					r.Get("/invitations", h.ListWorkspaceInvitations)
 					// Listing GitHub installations is member-visible so the

@@ -46,6 +46,16 @@ export interface ComposerProps {
 }
 
 /**
+ * LRM-353 — composer chrome uses semantic tokens only (no light-only hex fills).
+ * Light: border = `--input` (line-strong); surface = `--card` (slightly raised).
+ * Dark: same classes; hover/focus stay on muted / brand — never a light gray hex wash.
+ * Focus ring: brand/30 so both themes keep a readable focus cue.
+ */
+export const COMPOSER_SHELL_CLASSNAME =
+  "composer-shell min-w-0 rounded-lg border border-input bg-card text-foreground shadow-none " +
+  "focus-within:border-ring focus-within:ring-1 focus-within:ring-brand/30";
+
+/**
  * The one composer shell reused across channel / dm_channel / legacy_dm /
  * thread. Owns layout only: input scroll area, tray mount point, action row and
  * the Send control (disabled while empty or a send is in flight). The send
@@ -80,7 +90,7 @@ export function Composer({
       )}
     >
       <div
-        className="composer-shell min-w-0 rounded-lg border border-input bg-card shadow-none"
+        className={COMPOSER_SHELL_CLASSNAME}
         data-slot="composer-shell"
         data-composer-surface={surface}
       >
@@ -106,7 +116,7 @@ export function Composer({
           data-slot="composer-action-row"
         >
           <div
-            className="flex min-h-8 min-w-0 flex-1 items-center gap-0.5 overflow-x-auto text-muted-foreground"
+            className="flex min-h-8 min-w-0 flex-1 items-center gap-0.5 overflow-x-auto text-muted-foreground [&_svg]:text-current"
             data-slot="composer-leading-actions"
           >
             {leadingActions}

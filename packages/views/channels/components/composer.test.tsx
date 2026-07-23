@@ -1,7 +1,10 @@
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { CSSProperties, ReactNode } from "react";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { Composer } from "./composer";
+import { COMPOSER_SHELL_CLASSNAME, Composer } from "./composer";
 
 vi.mock("@multica/ui/components/ui/drawer", () => ({
   DrawerContent: ({ children, style }: { children: ReactNode; style?: CSSProperties }) => (
@@ -171,5 +174,53 @@ describe("Composer", () => {
     expect(row).not.toBeNull();
     expect(screen.queryByRole("button", { name: /reference issue|#|警/i })).toBeNull();
     expect(screen.getByRole("button", { name: /send/i })).toBeInTheDocument();
+  });
+
+  describe("LRM-353 semantic tokens", () => {
+    it("shell uses border-input + bg-card + brand focus ring (no light-only hex)", () => {
+      expect(COMPOSER_SHELL_CLASSNAME).toContain("border-input");
+      expect(COMPOSER_SHELL_CLASSNAME).toContain("bg-card");
+      expect(COMPOSER_SHELL_CLASSNAME).toContain("focus-within:ring-brand/30");
+      expect(COMPOSER_SHELL_CLASSNAME).not.toMatch(/#f4f4f4/);
+      expect(COMPOSER_SHELL_CLASSNAME).not.toMatch(/rgba\(29/);
+
+      render(<Composer surface="channel" {...baseProps} sendDisabled={false} />);
+      const shell = screen
+        .getByTestId("composer-editor")
+        .closest('[data-slot="composer-shell"]');
+      expect(shell?.className).toContain("border-input");
+      expect(shell?.className).toContain("bg-card");
+      expect(shell?.className).toContain("focus-within:ring-brand/30");
+    });
+
+    it("composer source and placeholder CSS stay on semantic tokens", () => {
+      const here = dirname(fileURLToPath(import.meta.url));
+      const composerSrc = readFileSync(resolve(here, "composer.tsx"), "utf8");
+      expect(composerSrc).not.toMatch(/#f4f4f4/);
+      expect(composerSrc).not.toMatch(/hover:bg-\[#/);
+      expect(composerSrc).toContain("border-input");
+      expect(composerSrc).toContain("bg-card");
+
+      const placeholderCss = readFileSync(
+        resolve(here, "../../editor/styles/shell.css"),
+        "utf8",
+      );
+      expect(placeholderCss).toMatch(/color:\s*var\(--muted-foreground\)/);
+    });
+
+    it("leading actions inherit muted-foreground for attach/mic icons", () => {
+      render(
+        <Composer
+          surface="thread"
+          {...baseProps}
+          sendDisabled={false}
+          leadingActions={<button type="button" aria-label="Attach">📎</button>}
+        />,
+      );
+      const leading = screen
+        .getByRole("button", { name: /attach/i })
+        .closest('[data-slot="composer-leading-actions"]');
+      expect(leading?.className).toContain("text-muted-foreground");
+    });
   });
 });

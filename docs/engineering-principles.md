@@ -192,6 +192,14 @@
 - Agent 语音的播放源只能是 server 根据 canonical transcript 生成并绑定到消息的 TTS 附件；每条消息使用固定队列和附件 ID，provider 或进程失败只能重试同一产物，不能让每个浏览器重新合成。旧运行时曾把“文本 + 单个自有音频附件”当语音回复发送；agent transport 将这个精确边界形状补成 `voice` part，但 server 会丢弃运行时提供的音频元数据并重新生成可信 WAV。普通用户音频、多个附件和混合文件消息不参与此规则；当前运行时明确禁止自行合成/上传语音附件。
 - **物**：`protocol.MessagePartTypeVoice`、`messageparts.Normalize`、CLI `message send --voice`、共享 `VoiceInputButton`/`VoiceMessageAudio`、channel/DM/thread 发送与渲染回归；语音基础实现见 `docs/superpowers/plans/2026-07-22-beckham-voice-poc.md`，人类原声附件实现见 `docs/superpowers/plans/2026-07-23-human-voice-recording.md`。
 
+### 4.9 实时通话与语音消息使用不同媒体合同 — `仅文档`（实现尚未落地）
+- 第一版是贝克汉姆 DM 内的一对一应用内语音通话，不包含群聊会议、PSTN、摄像头或数字人视频。数字人以后只能作为同一通话的展示参与者，不能持有 ASR、会话状态、工具或 Memory。
+- 首版媒体面选火山 RTC AI 音视频互动；它负责 RTC、流式 ASR/TTS、VAD、打断和字幕。Multica server 负责鉴权、房间短 Token、贝克汉姆上下文、工具权限、持久状态和回调幂等。供应商密钥不得进入前端。
+- 通话不能把现有“录完上传”的语音消息队列改成高频媒体通道。语音消息继续执行 4.7/4.8；通话只在结束后写最终 turn 和一张 DM 通话记录。
+- 贝克汉姆的实时口语模型只负责低延迟对话和获准的 Function Calling；开发执行仍进入现有 Agent task queue 和守护进程。实时模型不能声称未执行的代码、GitHub 或服务器操作已经完成。
+- 通话上下文必须抽取并复用现有 channel/DM/project assembler，不得另建 voice-only prompt 或 Memory 真相源。部分 ASR 不持久化、不触发模型和工具；被打断的 Agent turn 只保存用户实际听到的前缀。
+- **目标物**：`voice_call_session` / `voice_call_turn`、provider-neutral call service、火山 RTC transport、typed realtime events、共享 call UI、回调与工具幂等测试。实施与 PR 顺序见 `docs/superpowers/plans/2026-07-23-beckham-realtime-voice-call.md`。
+
 ## 5. 验证方法论 — `仅文档`（诚实标注：拦不住人，只能让"猜"显式化）
 
 - **渲染活实体的功能，验收必须含"写入后变更"测例**（fixture 先改后写=永远假绿）。→ 有测试模板后升 `可执行`。

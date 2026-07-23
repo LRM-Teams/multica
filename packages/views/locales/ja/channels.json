@@ -236,6 +236,7 @@
     "jump_to_parent": "元のメッセージへ移動",
     "empty_replies": "返信はまだありません。",
     "load_failed": "スレッドの読み込みに失敗しました。",
+    "view_in_channel_failed": "チャンネルでこの会話を開けませんでした。",
     "send_failed": "スレッド返信の送信に失敗しました。",
     "follow": "フォロー",
     "following": "フォロー中",

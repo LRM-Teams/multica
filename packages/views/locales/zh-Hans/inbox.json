@@ -21,7 +21,7 @@
     }
   },
   "detail": {
-    "select_prompt": "选择一条通知查看详情",
+    "select_prompt": "从左侧选择一条动态",
     "empty": "收件箱为空",
     "original_input": "原始输入",
     "edit_advanced": "在完整表单中编辑",
@@ -82,6 +82,7 @@
     "retry": "重试",
     "open_thread_failed": "无法打开该讨论串",
     "open_item_failed": "无法打开该活动项",
+    "open_in_channels": "打开主列",
     "empty": {
       "all": {
         "title": "暂无相关活动",

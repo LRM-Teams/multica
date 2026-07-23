@@ -456,7 +456,8 @@ describe("ChannelsPage — Channel details shares the exclusive thread/agent slo
       fireEvent.click(toggle);
       fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
       expect(await screen.findByRole("button", { name: "project" })).toBeTruthy();
-      fireEvent.click(toggle);
+      // Re-query: opening the dock must not invalidate the title control.
+      fireEvent.click(screen.getByRole("button", { name: "Open channel details" }));
       await waitFor(
         () => {
           expect(screen.queryByRole("button", { name: "project" })).toBeNull();

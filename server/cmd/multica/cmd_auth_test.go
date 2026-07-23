@@ -70,14 +70,14 @@ func TestResolveAppURL(t *testing.T) {
 		t.Setenv("HOME", t.TempDir())
 		t.Setenv("MULTICA_APP_URL", "http://localhost:3000")
 		if err := cli.SaveCLIConfig(cli.CLIConfig{
-			ServerURL: "http://82.157.184.89:8090",
-			AppURL:    "http://82.157.184.89:8090",
+			ServerURL: "https://leagent.me",
+			AppURL:    "https://leagent.me",
 		}); err != nil {
 			t.Fatalf("SaveCLIConfig: %v", err)
 		}
 
-		if got := resolveAppURL(cmd); got != "http://82.157.184.89:8090" {
-			t.Fatalf("resolveAppURL() = %q, want %q", got, "http://82.157.184.89:8090")
+		if got := resolveAppURL(cmd); got != "https://leagent.me" {
+			t.Fatalf("resolveAppURL() = %q, want %q", got, "https://leagent.me")
 		}
 	})
 

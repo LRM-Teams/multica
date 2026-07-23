@@ -172,6 +172,15 @@ type workspaceMemoryCurationStatusResponse struct {
 	PendingRuns   int                                 `json:"pending_runs"`
 	FailedRuns24h int                                 `json:"failed_runs_24h"`
 	Stages        []memoryCurationStageStatusResponse `json:"stages"`
+	// Funnel registry counts — workspace-scoped, independent of the last run's
+	// evolution-review submissions. The Evolution Center memory card uses these
+	// so "awaiting shared review" reflects DB pending candidates, not an empty
+	// cross-product with skill/memory review queues.
+	LocalProposals     int `json:"local_proposals"`
+	PendingCandidates  int `json:"pending_candidates"`
+	PendingSkills      int `json:"pending_skills"`
+	PromotedCandidates int `json:"promoted_candidates"`
+	TeamKnowledgeItems int `json:"team_knowledge_items"`
 }
 
 func (h *Handler) StartMemoryCurationRun(w http.ResponseWriter, r *http.Request) {
@@ -389,6 +398,35 @@ func (h *Handler) GetWorkspaceMemoryCurationStatus(w http.ResponseWriter, r *htt
 		writeError(w, http.StatusInternalServerError, "failed to load memory curation stages")
 		return
 	}
+
+	// Prefer the latest successful self-review candidate count so the top
+	// funnel step matches what operators just saw in the stage card.
+	for _, stage := range response.Stages {
+		if stage.Stage == "agent_self_review" || stage.Stage == "all" {
+			if stage.Stats.ReviewCandidatesAdded > response.LocalProposals {
+				response.LocalProposals = stage.Stats.ReviewCandidatesAdded
+			}
+		}
+	}
+
+	if err := h.DB.QueryRow(r.Context(), `
+		SELECT
+		  COALESCE(count(*) FILTER (WHERE status = 'pending'), 0),
+		  COALESCE(count(*) FILTER (WHERE status = 'pending' AND candidate_type IN ('skill', 'team_skill')), 0),
+		  COALESCE(count(*) FILTER (WHERE status = 'promoted'), 0)
+		  FROM agent_memory_curation_candidate
+		 WHERE workspace_id = $1
+	`, workspaceID).Scan(&response.PendingCandidates, &response.PendingSkills, &response.PromotedCandidates); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load memory curation candidate funnel")
+		return
+	}
+	if err := h.DB.QueryRow(r.Context(), `
+		SELECT count(*) FROM team_knowledge_item WHERE workspace_id = $1
+	`, workspaceID).Scan(&response.TeamKnowledgeItems); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load team knowledge funnel")
+		return
+	}
+
 	writeJSON(w, http.StatusOK, response)
 }
 

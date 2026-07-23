@@ -3,11 +3,15 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/messageparts"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -17,7 +21,26 @@ const (
 	issueThreadAssignedEvent      = "issue_assigned"
 	issueThreadStatusChangedEvent = "issue_status_changed"
 	issueThreadCompletedEvent     = "issue_completed"
+
+	// Same actor + same aggregatable event type merge into one system row for
+	// this window (LRM-418 / LRM-422). Window is anchored on the open bubble's
+	// created_at — later same-key events update that row instead of inserting.
+	issueThreadAggregationWindow = 5 * time.Minute
 )
+
+// issueThreadSystemEventItem is one retained transition inside an aggregated
+// system row. FE expand (LRM-423) renders this list; never drop an item to
+// shrink the bubble (LRM-238).
+type issueThreadSystemEventItem struct {
+	IssueID         string `json:"issue_id"`
+	IssueIdentifier string `json:"issue_identifier"`
+	IssueStatus     string `json:"issue_status,omitempty"`
+	PreviousStatus  string `json:"previous_status,omitempty"`
+	TargetID        string `json:"target_id,omitempty"`
+	TargetType      string `json:"target_type,omitempty"`
+	TargetHandle    string `json:"target_handle,omitempty"`
+	TargetName      string `json:"target_name,omitempty"`
+}
 
 // issueThreadSystemEventParams is deliberately factual: the event identifies
 // the issue and transition, while the optional target is the only agent that
@@ -27,19 +50,24 @@ const (
 // must not use them as a silent display fallback (LRM-281 / LRM-238) — group
 // managers are hidden from ListAgents (LRM-233) and must be looked up via the
 // profile API instead.
+//
+// For aggregatable events (completed / assigned), `items` always carries every
+// merged transition (N>=1). Top-level issue_* / target_* mirror the latest item
+// so older single-issue readers keep working.
 type issueThreadSystemEventParams struct {
-	IssueID         string `json:"issue_id"`
-	IssueIdentifier string `json:"issue_identifier"`
-	IssueStatus     string `json:"issue_status"`
-	PreviousStatus  string `json:"previous_status,omitempty"`
-	ActorID         string `json:"actor_id,omitempty"`
-	ActorType       string `json:"actor_type,omitempty"`
-	ActorHandle     string `json:"actor_handle,omitempty"`
-	ActorName       string `json:"actor_name,omitempty"`
-	TargetID        string `json:"target_id,omitempty"`
-	TargetType      string `json:"target_type,omitempty"`
-	TargetHandle    string `json:"target_handle,omitempty"`
-	TargetName      string `json:"target_name,omitempty"`
+	IssueID         string                       `json:"issue_id"`
+	IssueIdentifier string                       `json:"issue_identifier"`
+	IssueStatus     string                       `json:"issue_status"`
+	PreviousStatus  string                       `json:"previous_status,omitempty"`
+	ActorID         string                       `json:"actor_id,omitempty"`
+	ActorType       string                       `json:"actor_type,omitempty"`
+	ActorHandle     string                       `json:"actor_handle,omitempty"`
+	ActorName       string                       `json:"actor_name,omitempty"`
+	TargetID        string                       `json:"target_id,omitempty"`
+	TargetType      string                       `json:"target_type,omitempty"`
+	TargetHandle    string                       `json:"target_handle,omitempty"`
+	TargetName      string                       `json:"target_name,omitempty"`
+	Items           []issueThreadSystemEventItem `json:"items,omitempty"`
 }
 
 type issueThreadBackflowTarget struct {
@@ -190,40 +218,28 @@ func (h *Handler) emitIssueThreadBackflowToScope(ctx context.Context, issue db.I
 		}
 	}
 
-	paramsJSON, err := json.Marshal(params)
+	if issueThreadEventAggregatable(event) {
+		item := issueThreadSystemEventItem{
+			IssueID:         params.IssueID,
+			IssueIdentifier: params.IssueIdentifier,
+			IssueStatus:     params.IssueStatus,
+			PreviousStatus:  params.PreviousStatus,
+			TargetID:        params.TargetID,
+			TargetType:      params.TargetType,
+			TargetHandle:    params.TargetHandle,
+			TargetName:      params.TargetName,
+		}
+		params.Items = []issueThreadSystemEventItem{item}
+		if h.tryMergeIssueThreadBackflow(ctx, ch, issue, event, params, targetAgent, scope) {
+			return
+		}
+	}
+
+	content := issueThreadBackflowContentFromParams(event, params)
+	parts, err := issueThreadBackflowParts(event, params, content)
 	if err != nil {
 		slog.Warn("issue thread backflow: marshal event params", "issue", identifier, "event", event, "error", err)
 		return
-	}
-	content := issueThreadBackflowContent(event, identifier, issue.Status, previousStatus, params.TargetHandle)
-	// Every backflow sentence starts with the canonical issue identifier (see
-	// issueThreadBackflowContent). Persist the issue entity as an anchored
-	// reference alongside the system event so the channel projector can render
-	// the same inline issue token/hover contract as an authored group message.
-	// The system event remains the factual transition source; the reference only
-	// decorates the exact visible identifier span and never changes wake routing.
-	issueRefStart, issueRefEnd := contentUTF16Span(content, 0, len(identifier))
-	parts := []protocol.MessagePart{{
-		Type:        protocol.MessagePartTypeSystemEvent,
-		Event:       event,
-		EventParams: paramsJSON,
-	}, {
-		Type:              protocol.MessagePartTypeReference,
-		RefType:           "issue-ref",
-		RefSubType:        "issue",
-		RefID:             uuidToString(issue.ID),
-		Label:             identifier,
-		ContentStartUTF16: &issueRefStart,
-		ContentEndUTF16:   &issueRefEnd,
-	}}
-	if params.TargetID != "" {
-		parts = append(parts, protocol.MessagePart{
-			Type:       protocol.MessagePartTypeReference,
-			RefType:    "mention",
-			RefSubType: "agent",
-			RefID:      params.TargetID,
-			Label:      "@" + firstNonEmpty(params.TargetHandle, params.TargetName),
-		})
 	}
 	msg, err := h.insertChannelMessageWithParts(ctx, scope.ChannelID, issue.WorkspaceID, "system", pgtype.UUID{}, "system", content, parts, "multica", nil, pgtype.UUID{}, scope.RootID, nil, 0)
 	if err != nil {
@@ -241,6 +257,304 @@ func (h *Handler) emitIssueThreadBackflowToScope(ctx context.Context, issue db.I
 			slog.Warn("issue thread backflow: dispatch target agent", "issue", identifier, "event", event, "agent", uuidToString(targetAgent.ID), "error", err)
 		}
 	}
+}
+
+// tryMergeIssueThreadBackflow folds a new aggregatable transition into an open
+// same-key bubble in this scope (channel + thread root + actor + event) when
+// that bubble's created_at is still inside the 5-minute window. Returns true
+// when the event was recorded on an existing row (insert skipped). On any
+// failure it returns false so the caller can insert — never silently drop
+// (LRM-238).
+func (h *Handler) tryMergeIssueThreadBackflow(ctx context.Context, ch ChannelResponse, issue db.Issue, event string, incoming issueThreadSystemEventParams, targetAgent db.Agent, scope issueThreadBackflowScope) bool {
+	if h.TxStarter == nil || len(incoming.Items) == 0 {
+		return false
+	}
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		slog.Warn("issue thread backflow: begin aggregation tx", "issue", incoming.IssueIdentifier, "event", event, "error", err)
+		return false
+	}
+	defer tx.Rollback(ctx)
+
+	lockKey := issueThreadAggregationLockKey(scope, incoming.ActorType, incoming.ActorID, event)
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))`, lockKey); err != nil {
+		slog.Warn("issue thread backflow: aggregation lock", "issue", incoming.IssueIdentifier, "event", event, "error", err)
+		return false
+	}
+
+	var (
+		msgID    pgtype.UUID
+		rawParts []byte
+	)
+	err = tx.QueryRow(ctx, `
+		SELECT id, parts
+		FROM channel_message
+		WHERE channel_id = $1
+		  AND workspace_id = $2
+		  AND author_type = 'system'
+		  AND deleted_at IS NULL
+		  AND created_at > now() - ($3::double precision * interval '1 second')
+		  AND (
+		        ($4::uuid IS NULL AND thread_root_message_id IS NULL)
+		     OR thread_root_message_id = $4
+		  )
+		  AND EXISTS (
+		        SELECT 1
+		        FROM jsonb_array_elements(parts) AS part
+		        WHERE part->>'type' = 'system_event'
+		          AND part->>'event' = $5
+		          AND COALESCE(part->'event_params'->>'actor_id', '') = $6
+		          AND COALESCE(part->'event_params'->>'actor_type', '') = $7
+		  )
+		ORDER BY created_at DESC
+		LIMIT 1
+		FOR UPDATE`,
+		scope.ChannelID,
+		issue.WorkspaceID,
+		issueThreadAggregationWindow.Seconds(),
+		nullableUUID(scope.RootID),
+		event,
+		incoming.ActorID,
+		incoming.ActorType,
+	).Scan(&msgID, &rawParts)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false
+		}
+		slog.Warn("issue thread backflow: lookup open aggregation", "issue", incoming.IssueIdentifier, "event", event, "error", err)
+		return false
+	}
+
+	existingParts := messageparts.Decode(rawParts)
+	existingParams, ok := issueThreadParamsFromParts(existingParts, event)
+	if !ok {
+		return false
+	}
+	merged := mergeIssueThreadAggregationParams(existingParams, incoming)
+	content := issueThreadBackflowContentFromParams(event, merged)
+	parts, err := issueThreadBackflowParts(event, merged, content)
+	if err != nil {
+		slog.Warn("issue thread backflow: marshal merged params", "issue", incoming.IssueIdentifier, "event", event, "error", err)
+		return false
+	}
+
+	msg, err := scanChannelMessage(tx.QueryRow(ctx, `
+		UPDATE channel_message
+		SET content = $2, parts = $3::jsonb, edited_at = now()
+		WHERE id = $1
+		RETURNING id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at`,
+		msgID, content, messageparts.MustJSON(parts)))
+	if err != nil {
+		slog.Warn("issue thread backflow: update aggregated message", "issue", incoming.IssueIdentifier, "event", event, "error", err)
+		return false
+	}
+	if err := tx.Commit(ctx); err != nil {
+		slog.Warn("issue thread backflow: commit aggregation", "issue", incoming.IssueIdentifier, "event", event, "error", err)
+		return false
+	}
+
+	h.publishChannelToMembers(ctx, protocol.EventChannelMessageUpdated, ch.WorkspaceID, "system", "", scope.ChannelID, msg)
+
+	// Only the newly added item may wake its directed target (if any).
+	if scope.DirectSource && targetAgent.ID.Valid && scope.InitiatorUserID.Valid {
+		if _, err := h.dispatchChannelAgentReplyWithReason(ctx, ch, targetAgent, msg, scope.InitiatorUserID, "mention"); err != nil {
+			slog.Warn("issue thread backflow: dispatch target agent on merge", "issue", incoming.IssueIdentifier, "event", event, "agent", uuidToString(targetAgent.ID), "error", err)
+		}
+	}
+	return true
+}
+
+func issueThreadEventAggregatable(event string) bool {
+	switch event {
+	case issueThreadCompletedEvent, issueThreadAssignedEvent:
+		return true
+	default:
+		return false
+	}
+}
+
+func issueThreadAggregationLockKey(scope issueThreadBackflowScope, actorType, actorID, event string) string {
+	root := "timeline"
+	if scope.RootID.Valid {
+		root = uuidToString(scope.RootID)
+	}
+	return fmt.Sprintf("issue-thread-backflow:%s:%s:%s:%s:%s", uuidToString(scope.ChannelID), root, actorType, actorID, event)
+}
+
+func issueThreadParamsFromParts(parts []protocol.MessagePart, event string) (issueThreadSystemEventParams, bool) {
+	for _, part := range parts {
+		if part.Type != protocol.MessagePartTypeSystemEvent || part.Event != event {
+			continue
+		}
+		var params issueThreadSystemEventParams
+		if err := json.Unmarshal(part.EventParams, &params); err != nil {
+			return issueThreadSystemEventParams{}, false
+		}
+		if len(params.Items) == 0 && params.IssueID != "" {
+			params.Items = []issueThreadSystemEventItem{{
+				IssueID:         params.IssueID,
+				IssueIdentifier: params.IssueIdentifier,
+				IssueStatus:     params.IssueStatus,
+				PreviousStatus:  params.PreviousStatus,
+				TargetID:        params.TargetID,
+				TargetType:      params.TargetType,
+				TargetHandle:    params.TargetHandle,
+				TargetName:      params.TargetName,
+			}}
+		}
+		return params, params.IssueID != "" || len(params.Items) > 0
+	}
+	return issueThreadSystemEventParams{}, false
+}
+
+// mergeIssueThreadAggregationParams appends (or replaces same issue_id) the
+// incoming item, keeps actor fields from the open bubble, and mirrors the
+// latest item onto top-level issue/target fields.
+func mergeIssueThreadAggregationParams(existing, incoming issueThreadSystemEventParams) issueThreadSystemEventParams {
+	out := existing
+	if out.ActorID == "" {
+		out.ActorID = incoming.ActorID
+	}
+	if out.ActorType == "" {
+		out.ActorType = incoming.ActorType
+	}
+	if out.ActorHandle == "" {
+		out.ActorHandle = incoming.ActorHandle
+	}
+	if out.ActorName == "" {
+		out.ActorName = incoming.ActorName
+	}
+	if len(out.Items) == 0 && out.IssueID != "" {
+		out.Items = []issueThreadSystemEventItem{{
+			IssueID:         out.IssueID,
+			IssueIdentifier: out.IssueIdentifier,
+			IssueStatus:     out.IssueStatus,
+			PreviousStatus:  out.PreviousStatus,
+			TargetID:        out.TargetID,
+			TargetType:      out.TargetType,
+			TargetHandle:    out.TargetHandle,
+			TargetName:      out.TargetName,
+		}}
+	}
+	for _, item := range incoming.Items {
+		replaced := false
+		for i := range out.Items {
+			if out.Items[i].IssueID == item.IssueID {
+				out.Items[i] = item
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			out.Items = append(out.Items, item)
+		}
+	}
+	if len(out.Items) > 0 {
+		latest := out.Items[len(out.Items)-1]
+		out.IssueID = latest.IssueID
+		out.IssueIdentifier = latest.IssueIdentifier
+		out.IssueStatus = latest.IssueStatus
+		out.PreviousStatus = latest.PreviousStatus
+		out.TargetID = latest.TargetID
+		out.TargetType = latest.TargetType
+		out.TargetHandle = latest.TargetHandle
+		out.TargetName = latest.TargetName
+	}
+	return out
+}
+
+func issueThreadBackflowContentFromParams(event string, params issueThreadSystemEventParams) string {
+	items := params.Items
+	if len(items) == 0 {
+		return issueThreadBackflowContent(event, params.IssueIdentifier, params.IssueStatus, params.PreviousStatus, params.TargetHandle)
+	}
+	if len(items) == 1 {
+		return issueThreadBackflowContent(event, items[0].IssueIdentifier, items[0].IssueStatus, items[0].PreviousStatus, items[0].TargetHandle)
+	}
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		if item.IssueIdentifier != "" {
+			ids = append(ids, item.IssueIdentifier)
+		}
+	}
+	list := strings.Join(ids, ", ")
+	switch event {
+	case issueThreadAssignedEvent:
+		return fmt.Sprintf("%s assignment changed", list)
+	case issueThreadCompletedEvent:
+		return fmt.Sprintf("%s completed", list)
+	default:
+		if params.PreviousStatus != "" {
+			return fmt.Sprintf("%s moved from %s to %s", list, params.PreviousStatus, params.IssueStatus)
+		}
+		return fmt.Sprintf("%s moved to %s", list, params.IssueStatus)
+	}
+}
+
+func issueThreadBackflowParts(event string, params issueThreadSystemEventParams, content string) ([]protocol.MessagePart, error) {
+	paramsJSON, err := json.Marshal(params)
+	if err != nil {
+		return nil, err
+	}
+	parts := []protocol.MessagePart{{
+		Type:        protocol.MessagePartTypeSystemEvent,
+		Event:       event,
+		EventParams: paramsJSON,
+	}}
+
+	items := params.Items
+	if len(items) == 0 && params.IssueID != "" {
+		items = []issueThreadSystemEventItem{{
+			IssueID:         params.IssueID,
+			IssueIdentifier: params.IssueIdentifier,
+		}}
+	}
+	searchFrom := 0
+	for _, item := range items {
+		if item.IssueID == "" || item.IssueIdentifier == "" {
+			continue
+		}
+		rel := strings.Index(content[searchFrom:], item.IssueIdentifier)
+		if rel < 0 {
+			continue
+		}
+		byteStart := searchFrom + rel
+		start, end := contentUTF16Span(content, byteStart, byteStart+len(item.IssueIdentifier))
+		startCopy, endCopy := start, end
+		parts = append(parts, protocol.MessagePart{
+			Type:              protocol.MessagePartTypeReference,
+			RefType:           "issue-ref",
+			RefSubType:        "issue",
+			RefID:             item.IssueID,
+			Label:             item.IssueIdentifier,
+			ContentStartUTF16: &startCopy,
+			ContentEndUTF16:   &endCopy,
+		})
+		searchFrom = byteStart + len(item.IssueIdentifier)
+	}
+
+	seenTargets := make(map[string]struct{})
+	appendMention := func(targetID, targetHandle, targetName string) {
+		if targetID == "" {
+			return
+		}
+		if _, ok := seenTargets[targetID]; ok {
+			return
+		}
+		seenTargets[targetID] = struct{}{}
+		parts = append(parts, protocol.MessagePart{
+			Type:       protocol.MessagePartTypeReference,
+			RefType:    "mention",
+			RefSubType: "agent",
+			RefID:      targetID,
+			Label:      "@" + firstNonEmpty(targetHandle, targetName),
+		})
+	}
+	for _, item := range items {
+		appendMention(item.TargetID, item.TargetHandle, item.TargetName)
+	}
+	appendMention(params.TargetID, params.TargetHandle, params.TargetName)
+	return parts, nil
 }
 
 func issueThreadBackflowContent(event, identifier, status, previousStatus, targetHandle string) string {

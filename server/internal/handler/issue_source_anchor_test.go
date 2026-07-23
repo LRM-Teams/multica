@@ -299,7 +299,7 @@ func TestCreateIssueWithGroupChannelDoesNotInferProjectAndCanClearAnchor(t *test
 func assertIssueChannelEvent(t *testing.T, channelID, issueID, wantEvent string) {
 	t.Helper()
 	for _, event := range loadIssueChannelBackflowEvents(t, channelID) {
-		if event.Event == wantEvent && event.Params.IssueID == issueID {
+		if event.Event == wantEvent && issueThreadEventContainsIssue(event, issueID) {
 			assertIssueThreadBackflowReference(t, event, issueID)
 			return
 		}
@@ -311,13 +311,25 @@ func assertIssueChannelEventCount(t *testing.T, channelID, issueID, wantEvent st
 	t.Helper()
 	count := 0
 	for _, event := range loadIssueChannelBackflowEvents(t, channelID) {
-		if event.Event == wantEvent && event.Params.IssueID == issueID {
+		if event.Event == wantEvent && issueThreadEventContainsIssue(event, issueID) {
 			count++
 		}
 	}
 	if count != wantCount {
 		t.Fatalf("channel %s has %d %s system events for issue %s, want %d", channelID, count, wantEvent, issueID, wantCount)
 	}
+}
+
+func issueThreadEventContainsIssue(event issueThreadBackflowEventForTest, issueID string) bool {
+	if event.Params.IssueID == issueID {
+		return true
+	}
+	for _, item := range event.Params.Items {
+		if item.IssueID == issueID {
+			return true
+		}
+	}
+	return false
 }
 
 func TestIssueSourceChannelAgentTaskTokenSeesOwnAnchorAndPublishesAgentActor(t *testing.T) {

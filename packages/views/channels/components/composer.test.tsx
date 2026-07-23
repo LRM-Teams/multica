@@ -60,6 +60,7 @@ describe("Composer", () => {
         surface="channel"
         {...baseProps}
         sendDisabled
+        voiceChannelId="channel-1"
         voicePlaybackScope="channel-1:main"
         onVoiceSend={vi.fn(() => true)}
       />,

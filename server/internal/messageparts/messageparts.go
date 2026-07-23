@@ -411,10 +411,15 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 		part.PackID = ""
 		part.StickerID = ""
 		part.Alt = ""
-		part.AttachmentID = ""
-		part.Filename = ""
-		part.ContentType = ""
-		part.SizeBytes = 0
+		part.AttachmentID = strings.TrimSpace(part.AttachmentID)
+		if part.AttachmentID == "" {
+			part.Filename = ""
+			part.ContentType = ""
+			part.SizeBytes = 0
+		} else {
+			part.Filename = strings.TrimSpace(part.Filename)
+			part.ContentType = strings.TrimSpace(part.ContentType)
+		}
 		return part, nil
 	default:
 		return protocol.MessagePart{}, fmt.Errorf("unsupported type %q", part.Type)

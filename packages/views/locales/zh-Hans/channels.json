@@ -284,6 +284,7 @@
     "voice_unavailable": "当前浏览器不支持语音录制。",
     "voice_recording_failed": "语音录制失败，请重试。",
     "voice_transcription_failed": "语音识别失败，请重试。",
+    "voice_processing_failed": "语音消息处理失败，请重试。",
     "voice_no_speech": "没有识别到语音内容。",
     "issue_ref_aria": "引用 Issue",
     "project_label": "项目",

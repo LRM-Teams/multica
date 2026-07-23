@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AudioLines, Captions, LoaderCircle, Mic, Play, RotateCcw, Square } from "lucide-react";
 import type { ChannelMessage } from "@multica/core/types";
+import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
 import { MessageBody } from "./message-body";
@@ -36,12 +37,19 @@ export function VoiceMessageAudio({
     : presentation;
   const voicePart = resolvedPresentation?.voicePart;
   const hasVoicePart = Boolean(voicePart);
+  const recordingAttachment = resolvedPresentation?.source === "recording"
+    ? resolvedPresentation.recordingAttachment
+    : null;
+  const recordingURL = recordingAttachment
+    ? resolvePublicFileUrl(recordingAttachment.download_url) ?? recordingAttachment.download_url
+    : null;
   const [state, setState] = useState<PlaybackState>("idle");
   const [durationSeconds, setDurationSeconds] = useState<number | null>(() =>
     voicePart?.duration_ms ? Math.max(1, Math.round(voicePart.duration_ms / 1000)) : null,
   );
   const [transcriptExpanded, setTranscriptExpanded] = useState(false);
   const playbackRef = useRef<VoicePlayback | null>(null);
+  const recordingAudioRef = useRef<HTMLAudioElement | null>(null);
   const mountedRef = useRef(true);
   const startRef = useRef<(() => Promise<void>) | null>(null);
 
@@ -49,6 +57,30 @@ export function VoiceMessageAudio({
     if (!hasVoicePart || !message.content.trim() || state === "loading" || state === "playing") return;
     setState("loading");
     try {
+      if (recordingAttachment) {
+        if (!recordingURL) throw new Error("voice recording URL is unavailable");
+        let audio = recordingAudioRef.current;
+        if (!audio) {
+          const created = new Audio(recordingURL);
+          created.preload = "metadata";
+          created.onended = () => {
+            if (mountedRef.current) setState("idle");
+          };
+          created.onerror = () => {
+            if (mountedRef.current) setState("error");
+          };
+          created.ondurationchange = () => {
+            if (mountedRef.current && Number.isFinite(created.duration) && created.duration > 0) {
+              setDurationSeconds(Math.max(1, Math.round(created.duration)));
+            }
+          };
+          recordingAudioRef.current = created;
+          audio = created;
+        }
+        await audio.play();
+        if (mountedRef.current) setState("playing");
+        return;
+      }
       const prepared = await prepareVoiceAudio(message.content);
       if (mountedRef.current) {
         if (prepared.durationMs) {
@@ -70,11 +102,11 @@ export function VoiceMessageAudio({
       playbackRef.current = null;
       if (mountedRef.current) setState("error");
     }
-  }, [hasVoicePart, message.content, state]);
+  }, [hasVoicePart, message.content, recordingAttachment, recordingURL, state]);
   startRef.current = start;
 
   useEffect(() => {
-    if (!hasVoicePart || message.type !== "agent" || !message.content.trim()) return;
+    if (!hasVoicePart || recordingAttachment || message.type !== "agent" || !message.content.trim()) return;
     let current = true;
     void prepareVoiceAudio(message.content)
       .then((prepared) => {
@@ -88,7 +120,7 @@ export function VoiceMessageAudio({
     return () => {
       current = false;
     };
-  }, [hasVoicePart, message.content, message.type]);
+  }, [hasVoicePart, message.content, message.type, recordingAttachment]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -106,11 +138,19 @@ export function VoiceMessageAudio({
       mountedRef.current = false;
       playbackRef.current?.stop();
       playbackRef.current = null;
+      const recording = recordingAudioRef.current;
+      recordingAudioRef.current = null;
+      if (recording) {
+        recording.pause();
+        recording.onended = null;
+        recording.onerror = null;
+        recording.ondurationchange = null;
+      }
     };
   }, [hasVoicePart, message.channel_id, message.created_at, message.id, message.thread_root_message_id, message.type]);
 
   if (!voicePart) return null;
-  if (message.type !== "agent") {
+  if (message.type !== "agent" && !recordingAttachment) {
     const seconds = voicePart.duration_ms ? Math.max(1, Math.round(voicePart.duration_ms / 1000)) : null;
     return (
       <div className="mt-1 inline-flex items-center gap-1.5 text-xs text-muted-foreground" data-testid="voice-input-label">
@@ -124,7 +164,14 @@ export function VoiceMessageAudio({
     );
   }
 
-  const stop = () => playbackRef.current?.stop();
+  const stop = () => {
+    if (recordingAudioRef.current) {
+      recordingAudioRef.current.pause();
+      setState("idle");
+      return;
+    }
+    playbackRef.current?.stop();
+  };
   const label = state === "loading"
     ? t(($) => $.message.voice_loading)
     : state === "playing"

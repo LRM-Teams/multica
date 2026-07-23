@@ -1,6 +1,6 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessage } from "@multica/core/types";
 import { VoiceMessageAudio } from "./voice-message-audio";
 import { voiceBubbleWidthPx } from "../lib/voice-message-presentation";
@@ -59,6 +59,8 @@ function agentVoiceMessage(overrides: Partial<ChannelMessage> = {}): ChannelMess
 }
 
 describe("VoiceMessageAudio", () => {
+  let mediaPlay: ReturnType<typeof vi.spyOn>;
+
   beforeEach(() => {
     playbackMocks.claimVoiceAutoplay.mockReset().mockReturnValue(true);
     playbackMocks.stop.mockReset();
@@ -66,11 +68,18 @@ describe("VoiceMessageAudio", () => {
       audio: new ArrayBuffer(4),
       durationMs: 3200,
     });
+    mediaPlay = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
     playbackMocks.startPreparedVoicePlayback.mockReset().mockResolvedValue({
       durationMs: 3200,
       finished: new Promise<void>(() => {}),
       stop: playbackMocks.stop,
     });
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
   });
 
   it("autoplays an eligible Agent voice reply and stops it on unmount", async () => {
@@ -113,6 +122,89 @@ describe("VoiceMessageAudio", () => {
     await waitFor(() => expect(bubble).toHaveTextContent('3″'));
     expect(playbackMocks.startPreparedVoicePlayback).toHaveBeenCalledOnce();
     expect(bubble).toHaveStyle({ width: "136px" });
+  });
+
+  it("plays a human recording attachment without calling TTS", async () => {
+    playbackMocks.claimVoiceAutoplay.mockReturnValue(false);
+    const attachment = {
+      id: "recording-1",
+      workspace_id: "workspace-1",
+      issue_id: null,
+      comment_id: null,
+      chat_session_id: null,
+      chat_message_id: null,
+      uploader_type: "member" as const,
+      uploader_id: "user-1",
+      filename: "voice-recording.wav",
+      url: "/uploads/voice-recording.wav",
+      download_url: "/api/attachments/recording-1/download",
+      markdown_url: "/api/attachments/recording-1/download",
+      content_type: "audio/wav",
+      size_bytes: 48,
+      created_at: "2026-07-22T10:00:01.000Z",
+    };
+    render(<VoiceMessageAudio message={agentVoiceMessage({
+      type: "user",
+      author_id: "user-1",
+      author_name: "Alice",
+      content: "Recorded question",
+      parts: [
+        { type: "text", text: "Recorded question" },
+        {
+          type: "voice",
+          duration_ms: 1800,
+          attachment_id: attachment.id,
+          filename: attachment.filename,
+          content_type: attachment.content_type,
+          size_bytes: attachment.size_bytes,
+        },
+      ],
+      attachments: [attachment],
+    })} />);
+
+    expect(screen.queryByText("Recorded question")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Play voice reply" }));
+    expect(mediaPlay).toHaveBeenCalledOnce();
+    expect(playbackMocks.prepareVoiceAudio).not.toHaveBeenCalled();
+
+  });
+
+  it("does not synthesize a human recording when its media URL is unavailable", async () => {
+    playbackMocks.claimVoiceAutoplay.mockReturnValue(false);
+    render(<VoiceMessageAudio message={agentVoiceMessage({
+      type: "user",
+      author_id: "user-1",
+      content: "Recorded question",
+      parts: [
+        { type: "text", text: "Recorded question" },
+        { type: "voice", duration_ms: 1800, attachment_id: "recording-1" },
+      ],
+      attachments: [{
+        id: "recording-1",
+        workspace_id: "workspace-1",
+        issue_id: null,
+        comment_id: null,
+        chat_session_id: null,
+        chat_message_id: null,
+        uploader_type: "member",
+        uploader_id: "user-1",
+        filename: "voice-recording.wav",
+        url: "",
+        download_url: "",
+        markdown_url: "",
+        content_type: "audio/wav",
+        size_bytes: 48,
+        created_at: "2026-07-22T10:00:01.000Z",
+      }],
+    })} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Play voice reply" }));
+
+    expect(await screen.findByRole("button", {
+      name: "Voice playback failed · Retry",
+    })).toBeInTheDocument();
+    expect(mediaPlay).not.toHaveBeenCalled();
+    expect(playbackMocks.prepareVoiceAudio).not.toHaveBeenCalled();
   });
 
   it("renders the production Agent audio attachment as a TTS voice bubble", async () => {

@@ -284,6 +284,7 @@
     "voice_unavailable": "이 브라우저는 음성 녹음을 지원하지 않습니다.",
     "voice_recording_failed": "음성 녹음에 실패했습니다. 다시 시도해 주세요.",
     "voice_transcription_failed": "음성 인식에 실패했습니다. 다시 시도해 주세요.",
+    "voice_processing_failed": "음성 메시지 처리에 실패했습니다. 다시 시도해 주세요.",
     "voice_no_speech": "음성이 감지되지 않았습니다.",
     "issue_ref_aria": "이슈 참조",
     "project_label": "프로젝트",

@@ -47,6 +47,39 @@ function productionMessage(overrides: Partial<ChannelMessage> = {}): ChannelMess
 }
 
 describe("resolveVoiceMessagePresentation", () => {
+  it("resolves a structured human recording from its voice attachment", () => {
+    const attachment = {
+      ...audioAttachment(),
+      uploader_type: "member" as const,
+      uploader_id: "user-1",
+      filename: "voice-recording.wav",
+      content_type: "audio/wav",
+    };
+    const presentation = resolveVoiceMessagePresentation(productionMessage({
+      type: "user",
+      author_id: "user-1",
+      parts: [
+        { type: "text", text: "你好" },
+        {
+          type: "voice",
+          duration_ms: 1800,
+          attachment_id: attachment.id,
+          filename: attachment.filename,
+          content_type: attachment.content_type,
+          size_bytes: attachment.size_bytes,
+        },
+      ],
+      attachments: [attachment],
+    }));
+
+    expect(presentation).toEqual({
+      voicePart: expect.objectContaining({ attachment_id: attachment.id }),
+      recordingAttachment: attachment,
+      consumedAttachmentIds: [attachment.id],
+      source: "recording",
+    });
+  });
+
   it("projects the exact production Agent audio attachment shape as server TTS", () => {
     const presentation = resolveVoiceMessagePresentation(productionMessage());
 

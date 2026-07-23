@@ -64,7 +64,10 @@ import {
 } from "../hooks/use-composer-pending-attachments";
 import { useEntryReadCursor } from "../hooks/use-entry-read-cursor";
 import { useEntryAnchor } from "../hooks/use-entry-around-seq";
-import { buildVoiceMessageParts } from "../lib/voice-audio";
+import {
+  buildVoiceMessageParts,
+  type VoiceRecordingAttachment,
+} from "../lib/voice-audio";
 import { prepareVoicePlayback, voicePlaybackScope } from "../lib/voice-playback";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
@@ -808,12 +811,16 @@ function DmChannelConversation({
     }
   };
 
-  const handleVoiceSend = (content: string, durationMs: number): boolean => {
+  const handleVoiceSend = (
+    content: string,
+    durationMs: number,
+    attachment: VoiceRecordingAttachment,
+  ): boolean => {
     if (!draftEmpty || dmPending.pending.length > 0) return false;
-    const parts = buildVoiceMessageParts(content, durationMs);
+    const parts = buildVoiceMessageParts(content, durationMs, attachment);
     if (parts.length === 0) return false;
     const dispatched = dmSend.send({
-      payloadKey: composePayloadKey(content, [], `voice:${quoteTarget?.id ?? ""}`),
+      payloadKey: composePayloadKey(content, [attachment.id], `voice:${quoteTarget?.id ?? ""}`),
       buildVars: (clientMessageId) => ({
         channelId,
         content,
@@ -874,14 +881,18 @@ function DmChannelConversation({
     }
   };
 
-  const handleThreadVoiceSend = (content: string, durationMs: number): boolean => {
+  const handleThreadVoiceSend = (
+    content: string,
+    durationMs: number,
+    attachment: VoiceRecordingAttachment,
+  ): boolean => {
     if (!threadRoot || !threadDraftEmpty || threadPending.pending.length > 0) return false;
-    const parts = buildVoiceMessageParts(content, durationMs);
+    const parts = buildVoiceMessageParts(content, durationMs, attachment);
     if (parts.length === 0) return false;
     const dispatched = threadSend.send({
       payloadKey: composePayloadKey(
         content,
-        [],
+        [attachment.id],
         `${threadRoot.id}:voice:${threadQuoteTarget?.id ?? ""}`,
       ),
       buildVars: (clientMessageId) => ({
@@ -1032,6 +1043,7 @@ function DmChannelConversation({
           }
           sending={sendThreadMessage.isPending}
           onSend={handleThreadSend}
+          voiceChannelId={channelId}
           voicePlaybackScope={voicePlaybackScope(channelId, threadSurfaceRoot.id)}
           voiceDisabled={!threadDraftEmpty || threadPending.pending.length > 0}
           onVoiceSend={handleThreadVoiceSend}
@@ -1230,6 +1242,7 @@ function DmChannelConversation({
         }
         sending={sendMessage.isPending}
         onSend={handleSend}
+        voiceChannelId={channelId}
         voicePlaybackScope={voicePlaybackScope(channelId)}
         voiceDisabled={!draftEmpty || dmPending.pending.length > 0}
         onVoiceSend={handleVoiceSend}

@@ -1,9 +1,18 @@
-import type { MessagePart } from "@multica/core/types";
+import type { Attachment, MessagePart } from "@multica/core/types";
 
 export const VOICE_SAMPLE_RATE = 16_000;
 export const MAX_VOICE_RECORDING_MS = 60_000;
 
-export function buildVoiceMessageParts(transcript: string, durationMs: number): MessagePart[] {
+export type VoiceRecordingAttachment = Pick<
+  Attachment,
+  "id" | "filename" | "content_type" | "size_bytes"
+>;
+
+export function buildVoiceMessageParts(
+  transcript: string,
+  durationMs: number,
+  recording?: VoiceRecordingAttachment,
+): MessagePart[] {
   const text = transcript.trim();
   if (!text) return [];
   return [
@@ -11,8 +20,45 @@ export function buildVoiceMessageParts(transcript: string, durationMs: number): 
     {
       type: "voice",
       duration_ms: Math.max(0, Math.min(MAX_VOICE_RECORDING_MS, Math.round(durationMs))),
+      ...(recording
+        ? {
+            attachment_id: recording.id,
+            filename: recording.filename,
+            content_type: recording.content_type,
+            size_bytes: recording.size_bytes,
+          }
+        : {}),
     },
   ];
+}
+
+/** Wrap backend-compatible PCM in a browser-playable 16 kHz mono PCM WAV. */
+export function encodeVoiceWAV(pcm: ArrayBuffer): ArrayBuffer {
+  const headerSize = 44;
+  const wav = new ArrayBuffer(headerSize + pcm.byteLength);
+  const bytes = new Uint8Array(wav);
+  const view = new DataView(wav);
+  const writeASCII = (offset: number, value: string) => {
+    for (let index = 0; index < value.length; index += 1) {
+      bytes[offset + index] = value.charCodeAt(index);
+    }
+  };
+
+  writeASCII(0, "RIFF");
+  view.setUint32(4, wav.byteLength - 8, true);
+  writeASCII(8, "WAVE");
+  writeASCII(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, VOICE_SAMPLE_RATE, true);
+  view.setUint32(28, VOICE_SAMPLE_RATE * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeASCII(36, "data");
+  view.setUint32(40, pcm.byteLength, true);
+  bytes.set(new Uint8Array(pcm), headerSize);
+  return wav;
 }
 
 /** Downmix every decoded channel into one mono track without clipping the sum. */

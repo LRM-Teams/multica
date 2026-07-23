@@ -1650,7 +1650,7 @@ func (h *Handler) attachChannelMessageAttachments(ctx context.Context, workspace
 			have[att.ID] = struct{}{}
 		}
 		for _, part := range msg.Parts {
-			if part.Type != protocol.MessagePartTypeAttachment {
+			if part.Type != protocol.MessagePartTypeAttachment && part.Type != protocol.MessagePartTypeVoice {
 				continue
 			}
 			id := strings.TrimSpace(part.AttachmentID)
@@ -1711,7 +1711,7 @@ func (h *Handler) attachChannelMessageAttachments(ctx context.Context, workspace
 			have[att.ID] = struct{}{}
 		}
 		for _, part := range messages[i].Parts {
-			if part.Type != protocol.MessagePartTypeAttachment {
+			if part.Type != protocol.MessagePartTypeAttachment && part.Type != protocol.MessagePartTypeVoice {
 				continue
 			}
 			id := strings.TrimSpace(part.AttachmentID)
@@ -5724,12 +5724,13 @@ func normalizeChannelClientMessageID(w http.ResponseWriter, raw *string) (*strin
 	return &value, true
 }
 
-// attachmentIDsFromParts collects attachment_id values from attachment parts
+// attachmentIDsFromParts collects attachment_id values from file and recorded
+// voice parts
 // in order. This is the sole bind source for channel/DM/thread message sends.
 func attachmentIDsFromParts(parts []protocol.MessagePart) []string {
 	var ids []string
 	for _, p := range parts {
-		if p.Type == protocol.MessagePartTypeAttachment && p.AttachmentID != "" {
+		if (p.Type == protocol.MessagePartTypeAttachment || p.Type == protocol.MessagePartTypeVoice) && p.AttachmentID != "" {
 			ids = append(ids, p.AttachmentID)
 		}
 	}

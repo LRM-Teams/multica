@@ -14,6 +14,7 @@ import { Composer } from "./composer";
 import { ReadOnlyConversationBanner } from "./read-only-conversation-banner";
 import { ConversationHeader } from "./conversation-surface";
 import { ThreadFollowButton } from "./thread-follow-button";
+import type { VoiceRecordingAttachment } from "../lib/voice-audio";
 
 export interface ThreadPanelProps {
   root: ChannelMessage;
@@ -50,7 +51,11 @@ export interface ThreadPanelProps {
   sending?: boolean;
   voicePlaybackScope?: string;
   voiceDisabled?: boolean;
-  onVoiceSend?: (transcript: string, durationMs: number) => boolean;
+  onVoiceSend?: (
+    transcript: string,
+    durationMs: number,
+    attachment: VoiceRecordingAttachment,
+  ) => boolean;
   composerLeadingActions?: ReactNode;
   /** Slack-style attachment tray above the editor (Composer `tray` slot). */
   composerTray?: ReactNode;
@@ -201,6 +206,7 @@ export function ThreadPanel({
             sendDisabled={sendDisabled}
             sending={sending}
             onSend={onSend}
+            voiceChannelId={root.channel_id}
             voicePlaybackScope={voicePlaybackScope}
             voiceDisabled={voiceDisabled}
             onVoiceSend={onVoiceSend}

@@ -11,17 +11,24 @@ import {
   downmixAudioBuffer,
   encodeVoicePCM,
   MAX_VOICE_RECORDING_MS,
+  type VoiceRecordingAttachment,
 } from "../lib/voice-audio";
+import { deliverVoiceRecording } from "../lib/voice-recording-delivery";
 import { voiceCaptureUnavailableReason } from "../lib/voice-capture";
 import { cancelVoicePlayback, prepareVoicePlayback } from "../lib/voice-playback";
 
 type RecordingState = "idle" | "starting" | "recording" | "transcribing";
 
 export interface VoiceInputButtonProps {
+  channelId: string;
   disabled?: boolean;
   isMobile: boolean;
   playbackScope: string;
-  onVoiceSend: (transcript: string, durationMs: number) => boolean;
+  onVoiceSend: (
+    transcript: string,
+    durationMs: number,
+    attachment: VoiceRecordingAttachment,
+  ) => boolean;
 }
 
 function preferredRecordingMimeType(): string | undefined {
@@ -48,6 +55,7 @@ async function decodeRecording(blob: Blob): Promise<ArrayBuffer> {
 }
 
 export function VoiceInputButton({
+  channelId,
   disabled = false,
   isMobile,
   playbackScope,
@@ -81,6 +89,7 @@ export function VoiceInputButton({
   }, [clearMaxTimer]);
 
   const processRecording = useCallback(async (blob: Blob, durationMs: number) => {
+    let uploadedAttachmentId: string | null = null;
     try {
       const pcm = await decodeRecording(blob);
       if (pcm.byteLength === 0) {
@@ -88,28 +97,36 @@ export function VoiceInputButton({
         toast.error(t(($) => $.composer.voice_no_speech));
         return;
       }
-      const transcript = await api.transcribeVoice(pcm);
+      const { transcript, attachment } = await deliverVoiceRecording(pcm, channelId);
+      uploadedAttachmentId = attachment.id;
       if (!mountedRef.current || !transcript) {
+        if (attachment.id) await api.deleteAttachment(attachment.id).catch(() => undefined);
+        uploadedAttachmentId = null;
         if (mountedRef.current) {
           cancelVoicePlayback(playbackScope);
           toast.error(t(($) => $.composer.voice_no_speech));
         }
         return;
       }
-      if (!onVoiceSendRef.current(transcript, durationMs)) {
+      if (!onVoiceSendRef.current(transcript, durationMs, attachment)) {
+        if (attachment.id) await api.deleteAttachment(attachment.id).catch(() => undefined);
+        uploadedAttachmentId = null;
         cancelVoicePlayback(playbackScope);
         toast.error(t(($) => $.composer.send_failed));
       }
     } catch {
+      if (uploadedAttachmentId) {
+        await api.deleteAttachment(uploadedAttachmentId).catch(() => undefined);
+      }
       cancelVoicePlayback(playbackScope);
-      if (mountedRef.current) toast.error(t(($) => $.composer.voice_transcription_failed));
+      if (mountedRef.current) toast.error(t(($) => $.composer.voice_processing_failed));
     } finally {
       if (mountedRef.current) {
         setElapsedSeconds(0);
         setState("idle");
       }
     }
-  }, [playbackScope, t]);
+  }, [channelId, playbackScope, t]);
 
   const startCapture = useCallback(async () => {
     if (disabled || state !== "idle") return;

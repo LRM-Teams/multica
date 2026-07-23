@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentRuntime } from "../types";
 import {
   aggregateRuntimeHealthState,
+  aggregateRuntimeHealthPresentation,
   deriveRuntimeHealthPresentation,
   runtimeCanStartSelfUpdate,
   runtimeCurrentVersion,
@@ -201,5 +202,58 @@ describe("deriveRuntimeHealthPresentation (#687)", () => {
     expect(
       deriveRuntimeHealthPresentation(makeRuntime({ runtime_health: "ok" })),
     ).toBe("ok");
+  });
+
+  it("fails closed to offline before any lifecycle override", () => {
+    // A disconnected daemon can't actually be downloading or staged, whatever the
+    // last-seen update_state said — offline must win (mirrors server precedence).
+    expect(
+      deriveRuntimeHealthPresentation(
+        makeRuntime({ runtime_health: "offline", update_state: "ready_to_apply" }),
+      ),
+    ).toBe("offline");
+    expect(
+      deriveRuntimeHealthPresentation(
+        makeRuntime({ runtime_health: "offline", update_state: "running" }),
+      ),
+    ).toBe("offline");
+  });
+});
+
+describe("aggregateRuntimeHealthPresentation (#687)", () => {
+  it("returns null for no runtimes", () => {
+    expect(aggregateRuntimeHealthPresentation([])).toBeNull();
+  });
+
+  it("surfaces a staged runtime as ready_to_apply over another that is update_available", () => {
+    // Header must agree with its rows: a staged runtime reads ready_to_apply at
+    // both levels, not the raw update_available a sibling runtime reports.
+    expect(
+      aggregateRuntimeHealthPresentation([
+        makeRuntime({ runtime_health: "update_available", update_state: "idle" }),
+        makeRuntime({
+          runtime_health: "update_available",
+          update_state: "ready_to_apply",
+        }),
+      ]),
+    ).toBe("ready_to_apply");
+  });
+
+  it("lets offline and failed dominate progress states", () => {
+    expect(
+      aggregateRuntimeHealthPresentation([
+        makeRuntime({
+          runtime_health: "update_available",
+          update_state: "ready_to_apply",
+        }),
+        makeRuntime({ runtime_health: "offline", update_state: "idle" }),
+      ]),
+    ).toBe("offline");
+    expect(
+      aggregateRuntimeHealthPresentation([
+        makeRuntime({ runtime_health: "offline", update_state: "idle" }),
+        makeRuntime({ runtime_health: "failed", update_state: "failed" }),
+      ]),
+    ).toBe("failed");
   });
 });

@@ -143,6 +143,27 @@ Regressions: `isUpdateLifecycleActive` + `deriveRuntimeHealthPresentation` +
 core; Runtime-list `HealthCell`, `AgentProfileCard`, `AgentSidePanel` each prove
 the ready copy; Dialog proves no re-prompt for a staged runtime.
 
+## Review round 3 (Barry)
+
+1. **Machine header vs row contradiction**: `runtime-machines.ts` aggregated raw
+   `aggregateRuntimeHealthState`, so a machine header showed "Update available"
+   while its row's `HealthCell` showed "Ready to apply". Fix: shared
+   `aggregateRuntimeHealthPresentation` (per-runtime `deriveRuntimeHealthPresentation`
+   then highest presentation priority `ok < update_available < ready_to_apply <
+   updating < offline < failed`); `runtime-machines` consumes it and
+   `machine.runtimeHealth` is now `RuntimeHealthPresentation | null`.
+2. **Offline precedence**: `deriveRuntimeHealthPresentation` checked the lifecycle
+   before health, so `offline + ready_to_apply|running` mis-read as staged/updating.
+   Fix: **fail closed to `offline` first**, then lifecycle override — a
+   disconnected daemon can't be downloading or staged (mirrors the server's
+   offline-first `deriveRuntimeHealth`).
+
+Regressions: core `offline+ready`/`offline+running` → offline;
+`aggregateRuntimeHealthPresentation` (staged surfaces ready_to_apply over a
+sibling update_available; offline/failed dominate); real `buildRuntimeMachines`
+machine header shows `ready_to_apply` for a staged runtime and `offline` when a
+sibling is offline. `completed`/newer-release eligibility unchanged.
+
 ## #686 parallelism
 
 Build strictly on the current public enums (unchanged). If #686 adds wire fields,

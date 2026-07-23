@@ -101,10 +101,46 @@ export function runtimeCanStartSelfUpdate(
 export function deriveRuntimeHealthPresentation(
   runtime: AgentRuntime,
 ): RuntimeHealthPresentation {
+  const health = runtimeHealthState(runtime);
+  // Offline wins (fail-closed), mirroring the server's offline-first precedence:
+  // a disconnected daemon cannot actually be mid-download or staged regardless of
+  // the last-seen `update_state`, so we must not paint it "Updating"/"Ready".
+  if (health === "offline") return "offline";
   const state = runtime.update_state;
   if (state === "ready_to_apply") return "ready_to_apply";
   if (state === "pending" || state === "running") return "updating";
-  return runtimeHealthState(runtime);
+  return health;
+}
+
+const PRESENTATION_PRIORITY: Record<RuntimeHealthPresentation, number> = {
+  ok: 0,
+  update_available: 1,
+  ready_to_apply: 2,
+  updating: 3,
+  offline: 4,
+  failed: 5,
+};
+
+/**
+ * Aggregate the highest-severity {@link RuntimeHealthPresentation} across a
+ * machine's runtimes, so a machine header agrees with its rows (a staged runtime
+ * reads "ready to apply" at both levels instead of the header showing the raw
+ * "update available"). Offline/failed still dominate progress states.
+ */
+export function aggregateRuntimeHealthPresentation(
+  runtimes: AgentRuntime[],
+): RuntimeHealthPresentation | null {
+  let selected: RuntimeHealthPresentation | null = null;
+  for (const runtime of runtimes) {
+    const presentation = deriveRuntimeHealthPresentation(runtime);
+    if (
+      !selected ||
+      PRESENTATION_PRIORITY[presentation] > PRESENTATION_PRIORITY[selected]
+    ) {
+      selected = presentation;
+    }
+  }
+  return selected;
 }
 
 export function aggregateRuntimeHealthState(

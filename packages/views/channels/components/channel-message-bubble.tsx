@@ -42,6 +42,7 @@ import {
   unwrapStructuredPreviewContent,
 } from "./message-parts-preview";
 import { MessageBody } from "./message-body";
+import { MessageInlineEditor } from "./message-inline-editor";
 import { areChannelMessageBubblePropsEqual } from "./channel-message-render-equality";
 import { MessageQuoteCard } from "./message-quote";
 import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
@@ -189,80 +190,11 @@ function ChannelSystemMessageRow({
 }
 
 /**
- * Inline single-message editor. Enter (without Shift) saves, Escape cancels —
- * a save calls back into the bubble's onEdit (a PATCH), never a re-send, so an
- * edit can never produce a new agent wake (H5).
- */
-// react-doctor-disable-next-line react-doctor/no-multi-comp -- bubble-local editor; split would orphan edit chrome from the bubble
-function MessageInlineEditor({
-  value,
-  onChange,
-  onSave,
-  onCancel,
-  editLabel,
-  saveLabel,
-  cancelLabel,
-}: {
-  value: string;
-  onChange: (next: string) => void;
-  onSave: () => void;
-  onCancel: () => void;
-  editLabel: string;
-  saveLabel: string;
-  cancelLabel: string;
-}) {
-  // Move focus into the editor the user just opened (the Edit trigger it
-  // replaced has unmounted). A stable ref callback focuses once on mount —
-  // no autoFocus prop, no effect.
-  const focusOnMount = useCallback((node: HTMLTextAreaElement | null) => {
-    node?.focus();
-  }, []);
-  return (
-    <div data-testid="message-editor" className="mt-0.5">
-      <textarea
-        ref={focusOnMount}
-        aria-label={editLabel}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" && !event.shiftKey) {
-            event.preventDefault();
-            onSave();
-          } else if (event.key === "Escape") {
-            event.preventDefault();
-            onCancel();
-          }
-        }}
-        rows={2}
-        className="w-full resize-none rounded-md border border-input bg-card px-2 py-1.5 text-sm leading-6 text-ink outline-none focus-visible:ring-1 focus-visible:ring-ring"
-      />
-      <div className="mt-1.5 flex items-center gap-2">
-        <button
-          type="button"
-          onClick={onSave}
-          className="inline-flex h-7 items-center rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        >
-          {saveLabel}
-        </button>
-        <button
-          type="button"
-          onClick={onCancel}
-          className="inline-flex h-7 items-center rounded-md px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        >
-          {cancelLabel}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-/**
  * One message in the shared Channel/DM/Thread timeline. Ordinary text renders
  * as an IM-style message item, while quote/attachment/code-like content keeps
  * local structure inside the shared Markdown pipeline.
  */
-// react-doctor-disable-next-line react-doctor/no-multi-comp -- memo wrapper keeps export name; Inner stays file-local for equality compare
-function ChannelMessageBubbleInner({
+export const ChannelMessageBubble = memo(function ChannelMessageBubble({
   message,
   currentUserId,
   ownName,
@@ -1146,9 +1078,4 @@ function ChannelMessageBubbleInner({
       </ContextMenuContent>
     </ContextMenu>
   );
-}
-
-export const ChannelMessageBubble = memo(
-  ChannelMessageBubbleInner,
-  areChannelMessageBubblePropsEqual,
-);
+}, areChannelMessageBubblePropsEqual);

@@ -796,7 +796,8 @@ func TestInjectRuntimeConfigClaude(t *testing.T) {
 		"multica issue comment list",
 		"Go Conventions",
 		"PR Review",
-		"discovered automatically",
+		"Progressive loading is required",
+		".claude/skills/",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("CLAUDE.md missing %q", want)
@@ -939,7 +940,7 @@ func TestInjectRuntimeConfigCodex(t *testing.T) {
 		"Coding",
 		"Use when writing code.",
 		"location: `$CODEX_HOME/skills/coding/SKILL.md`",
-		"load the complete skill file only when needed",
+		"Progressive loading is required",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("AGENTS.md missing %q", want)
@@ -1266,8 +1267,11 @@ func TestInjectRuntimeConfigOpencode(t *testing.T) {
 	if !strings.Contains(s, "Coding") {
 		t.Error("AGENTS.md missing skill name")
 	}
-	if !strings.Contains(s, "discovered automatically") {
-		t.Error("AGENTS.md missing native skill discovery hint")
+	if !strings.Contains(s, "Progressive loading is required") {
+		t.Error("AGENTS.md missing progressive loading hint")
+	}
+	if !strings.Contains(s, ".opencode/skills/") {
+		t.Error("AGENTS.md missing OpenCode skill path")
 	}
 
 	// CLAUDE.md should NOT exist.
@@ -1301,14 +1305,17 @@ func TestInjectRuntimeConfigKiro(t *testing.T) {
 	if !strings.Contains(s, "Coding") {
 		t.Error("AGENTS.md missing skill name")
 	}
-	if !strings.Contains(s, "discovered automatically") {
-		t.Error("AGENTS.md missing native skill discovery hint")
+	if !strings.Contains(s, "Progressive loading is required") {
+		t.Error("AGENTS.md missing progressive loading hint")
+	}
+	if !strings.Contains(s, ".kiro/skills/") {
+		t.Error("AGENTS.md missing Kiro skill path")
 	}
 }
 
 // TestInjectRuntimeConfigAntigravity pins that AGENTS.md for Antigravity
-// advertises native skill discovery (rather than the .agent_context fallback)
-// — the CLI inherits Gemini CLI's workspace skill layout at .agents/skills/.
+// lists the native .agents/skills/ path and requires progressive SKILL.md
+// loading — the CLI inherits Gemini CLI's workspace skill layout.
 func TestInjectRuntimeConfigAntigravity(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -1334,8 +1341,11 @@ func TestInjectRuntimeConfigAntigravity(t *testing.T) {
 	if !strings.Contains(s, "Coding") {
 		t.Error("AGENTS.md missing skill name")
 	}
-	if !strings.Contains(s, "discovered automatically") {
-		t.Error("AGENTS.md for Antigravity should advertise native skill discovery")
+	if !strings.Contains(s, "Progressive loading is required") {
+		t.Error("AGENTS.md for Antigravity missing progressive loading hint")
+	}
+	if !strings.Contains(s, ".agents/skills/") {
+		t.Error("AGENTS.md for Antigravity should list .agents/skills/ path")
 	}
 	if strings.Contains(s, ".agent_context/skills/") {
 		t.Error("AGENTS.md for Antigravity must not reference the .agent_context/skills/ fallback")

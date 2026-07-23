@@ -505,16 +505,27 @@ func renderIssueContext(provider string, ctx TaskContextForEnv) string {
 	b.WriteString("## Quick Start\n\n")
 	fmt.Fprintf(&b, "Run `multica issue get %s --output json` to fetch the full issue details.\n\n", ctx.IssueID)
 
-	if len(ctx.AgentSkills) > 0 {
-		b.WriteString("## Agent Skills\n\n")
-		b.WriteString("The following skills are available to you:\n\n")
-		for _, skill := range ctx.AgentSkills {
-			fmt.Fprintf(&b, "- **%s**\n", skill.Name)
-		}
-		b.WriteString("\n")
-	}
+	writeAgentSkillsIndex(&b, ctx.AgentSkills)
 
 	return b.String()
+}
+
+// writeAgentSkillsIndex appends a progressive skill index (name + description).
+// Full SKILL.md bodies live on disk; the agent must open matching files.
+func writeAgentSkillsIndex(b *strings.Builder, skills []SkillContextForEnv) {
+	if len(skills) == 0 {
+		return
+	}
+	b.WriteString("## Agent Skills\n\n")
+	b.WriteString("The following skills are available. When a name/description matches the task, open the corresponding `SKILL.md` and follow it:\n\n")
+	for _, skill := range skills {
+		if desc := strings.TrimSpace(skill.Description); desc != "" {
+			fmt.Fprintf(b, "- **%s** — %s\n", skill.Name, desc)
+		} else {
+			fmt.Fprintf(b, "- **%s**\n", skill.Name)
+		}
+	}
+	b.WriteString("\n")
 }
 
 // renderQuickCreateContext renders issue_context.md for quick-create tasks.
@@ -534,13 +545,7 @@ func renderQuickCreateContext(ctx TaskContextForEnv) string {
 		b.WriteString(renderQuickCreateSourceContext(ctx.QuickCreateSource))
 		b.WriteString("\n\n")
 	}
-	if len(ctx.AgentSkills) > 0 {
-		b.WriteString("## Agent Skills\n\n")
-		for _, skill := range ctx.AgentSkills {
-			fmt.Fprintf(&b, "- **%s**\n", skill.Name)
-		}
-		b.WriteString("\n")
-	}
+	writeAgentSkillsIndex(&b, ctx.AgentSkills)
 	return b.String()
 }
 
@@ -612,14 +617,7 @@ func renderAutopilotContext(ctx TaskContextForEnv) string {
 		b.WriteString("\n\n")
 	}
 
-	if len(ctx.AgentSkills) > 0 {
-		b.WriteString("## Agent Skills\n\n")
-		b.WriteString("The following skills are available to you:\n\n")
-		for _, skill := range ctx.AgentSkills {
-			fmt.Fprintf(&b, "- **%s**\n", skill.Name)
-		}
-		b.WriteString("\n")
-	}
+	writeAgentSkillsIndex(&b, ctx.AgentSkills)
 
 	return b.String()
 }

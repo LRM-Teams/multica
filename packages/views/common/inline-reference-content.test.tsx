@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MessagePart } from "@multica/core/types";
 import { InlineReferenceContent } from "./inline-reference-content";
@@ -214,11 +214,12 @@ describe("InlineReferenceContent (#463 projector consumer)", () => {
     resolvedIssue = { id: "issue-uuid", title: "Fix the login bug", status: "in_progress" };
     render(<InlineReferenceContent content="see #MUL-9 pls" parts={[issueRef(4, 10)]} />);
 
-    expect(screen.getByTestId("issue-hover-content")).toBeInTheDocument();
-    expect(screen.getByText("Fix the login bug")).toBeInTheDocument();
-    // The token itself stays a plain clickable link — status lives in the peek.
-    // (The identifier appears twice: once as the token, once inside the peek.)
-    expect(screen.getAllByText("#MUL-9").some((el) => el.closest("a"))).toBe(true);
+    const peek = screen.getByTestId("issue-hover-content");
+    expect(peek).toBeInTheDocument();
+    expect(within(peek).getByText("Fix the login bug")).toBeInTheDocument();
+    // LRM-508: resolved main-line ink is the live title (author #MUL-9 is interim only).
+    expect(screen.getByRole("link", { name: "Fix the login bug" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "#MUL-9" })).toBeNull();
   });
 
   // THE regression for #504. The persisted part is anchor/identity only; all
@@ -228,7 +229,8 @@ describe("InlineReferenceContent (#463 projector consumer)", () => {
 
     render(<InlineReferenceContent content="see #MUL-9 pls" parts={[issueRef(4, 10)]} />);
 
-    expect(screen.getByText("Current title")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Current title" })).toBeInTheDocument();
+    expect(within(screen.getByTestId("issue-hover-content")).getByText("Current title")).toBeInTheDocument();
     expect(screen.getByTestId("status-icon")).toHaveAttribute("data-status", "in_progress");
   });
 
@@ -261,14 +263,13 @@ describe("InlineReferenceContent (#463 projector consumer)", () => {
     // `anchor`; a `fallback` means the server skipped one. Invisible to readers,
     // visible to tests — see IssueRefLink's IssueRefSource docs.
     resolvedIssue = { id: "issue-uuid", title: "Fix the login bug", status: "todo" };
-    // The identifier appears twice — the link and the peek's eyebrow — so select the
-    // anchor itself rather than by text.
     const { container } = render(
       <InlineReferenceContent content="see #MUL-9 pls" parts={[issueRef(4, 10)]} />,
     );
 
     const link = container.querySelector("a[data-ref-source]");
-    expect(link).toHaveTextContent("#MUL-9");
+    // LRM-508: resolved link ink is the live title; provenance attr is unchanged.
+    expect(link).toHaveTextContent("Fix the login bug");
     expect(link).toHaveAttribute("data-ref-source", "anchor");
   });
 
@@ -333,7 +334,8 @@ describe("InlineReferenceContent (#463 projector consumer)", () => {
     resolvedProject = undefined;
     render(<InlineReferenceContent content="see #MUL-9 pls" parts={[issueRef(4, 10)]} />);
 
-    expect(screen.getByText("Fix the login bug")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Fix the login bug" })).toBeInTheDocument();
+    expect(within(screen.getByTestId("issue-hover-content")).getByText("Fix the login bug")).toBeInTheDocument();
     expect(screen.queryByTestId("project-icon")).toBeNull();
   });
 
@@ -350,7 +352,7 @@ describe("InlineReferenceContent (#463 projector consumer)", () => {
     render(<InlineReferenceContent content="see #MUL-9 pls" parts={[issueRef(4, 10)]} />);
 
     // Card still renders; the unknown priority is simply dropped.
-    expect(screen.getByText("Fix the login bug")).toBeInTheDocument();
+    expect(within(screen.getByTestId("issue-hover-content")).getByText("Fix the login bug")).toBeInTheDocument();
     expect(screen.getByText("Todo")).toBeInTheDocument();
     expect(screen.queryByTestId("priority-icon")).toBeNull();
   });
@@ -382,8 +384,10 @@ describe("InlineReferenceContent (#463 projector consumer)", () => {
     render(<InlineReferenceContent content="see #MUL-9 pls" parts={[issueRef(4, 10)]} />);
 
     // Unknown status is ignored (no bogus icon) but the title still peeks.
-    expect(screen.getByTestId("issue-hover-content")).toBeInTheDocument();
-    expect(screen.getByText("Fix the login bug")).toBeInTheDocument();
+    const peek = screen.getByTestId("issue-hover-content");
+    expect(peek).toBeInTheDocument();
+    expect(within(peek).getByText("Fix the login bug")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Fix the login bug" })).toBeInTheDocument();
     expect(screen.queryByTestId("status-icon")).toBeNull();
   });
 

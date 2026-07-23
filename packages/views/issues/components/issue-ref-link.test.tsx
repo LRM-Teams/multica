@@ -21,10 +21,19 @@ vi.mock("@multica/core/hooks", () => ({
   useWorkspaceId: () => "workspace-1",
 }));
 
-const mockUseResolvedIssue = vi.fn(() => null);
+type ResolvedIssueStub = {
+  id: string;
+  identifier?: string;
+  title?: string;
+  status?: string;
+};
+
+const mockUseResolvedIssue = vi.hoisted(() =>
+  vi.fn((_issueId: string): ResolvedIssueStub | null => null),
+);
 
 vi.mock("./issue-chip", () => ({
-  useResolvedIssue: (...args: unknown[]) => mockUseResolvedIssue(...args),
+  useResolvedIssue: (issueId: string) => mockUseResolvedIssue(issueId),
 }));
 
 describe("IssueRefLink navigation context", () => {

@@ -243,6 +243,48 @@ describe("useRealtimeSync — ws instance change", () => {
     ).toEqual(["root-old", "reply-1"]);
   });
 
+  it("upserts server-enriched voice messages without a second message event", () => {
+    const ws = createMockWs();
+    renderHook(() => useRealtimeSync(ws, stores), {
+      wrapper: createWrapper(qc),
+    });
+    const updatedHandler = (ws.on as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([eventName]) => eventName === "channel:message_updated",
+    )?.[1] as ((payload: ChannelMessage) => void) | undefined;
+    expect(updatedHandler).toBeDefined();
+
+    qc.setQueryData<ChannelMessage[]>(channelKeys.messages("channel-1"), [
+      channelMessage("voice-1", {
+        content: "",
+        parts: [{
+          type: "voice",
+          attachment_id: "audio-1",
+          transcription_status: "pending",
+        }],
+      }),
+    ]);
+
+    updatedHandler?.(channelMessage("voice-1", {
+      content: "server transcript",
+      parts: [
+        { type: "text", text: "server transcript" },
+        {
+          type: "voice",
+          attachment_id: "audio-1",
+          transcription_status: "completed",
+        },
+      ],
+    }));
+
+    expect(qc.getQueryData<ChannelMessage[]>(channelKeys.messages("channel-1"))?.[0]).toMatchObject({
+      id: "voice-1",
+      content: "server transcript",
+      parts: expect.arrayContaining([
+        expect.objectContaining({ type: "voice", transcription_status: "completed" }),
+      ]),
+    });
+  });
+
   it("removes deleted root messages without replies but keeps tombstone roots with replies", () => {
     const ws = createMockWs();
     renderHook(() => useRealtimeSync(ws, stores), {

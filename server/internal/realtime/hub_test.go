@@ -441,3 +441,86 @@ func TestCheckOrigin(t *testing.T) {
 		})
 	}
 }
+
+type recordingPresenceToucher struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func (r *recordingPresenceToucher) Touch(_ context.Context, userID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, userID)
+	return nil
+}
+
+func (r *recordingPresenceToucher) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.calls)
+}
+
+func TestHandleWebSocket_TouchesUserPresenceOnConnect(t *testing.T) {
+	hub, server := newTestHub(t)
+	defer server.Close()
+
+	toucher := &recordingPresenceToucher{}
+	hub.SetUserPresenceToucher(toucher, time.Millisecond)
+
+	conn := connectWS(t, server)
+	defer conn.Close()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if toucher.count() >= 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if toucher.count() < 1 {
+		t.Fatal("expected user presence Touch on WebSocket connect")
+	}
+	toucher.mu.Lock()
+	got := toucher.calls[0]
+	toucher.mu.Unlock()
+	if got != testUserID {
+		t.Fatalf("Touch userID = %q, want %q", got, testUserID)
+	}
+}
+
+func TestClient_AppPingTouchesUserPresence(t *testing.T) {
+	hub, server := newTestHub(t)
+	defer server.Close()
+
+	toucher := &recordingPresenceToucher{}
+	hub.SetUserPresenceToucher(toucher, time.Millisecond)
+
+	conn := connectWS(t, server)
+	defer conn.Close()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && toucher.count() < 1 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	before := toucher.count()
+
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"ping"}`)); err != nil {
+		t.Fatalf("write ping: %v", err)
+	}
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, msg, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read pong: %v", err)
+	}
+	if !strings.Contains(string(msg), `"pong"`) {
+		t.Fatalf("expected pong, got %s", msg)
+	}
+
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && toucher.count() <= before {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if toucher.count() <= before {
+		t.Fatal("expected app-level ping to Touch user presence")
+	}
+}

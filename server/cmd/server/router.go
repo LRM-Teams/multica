@@ -198,8 +198,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		h.LocalSkillListStore = handler.NewRedisLocalSkillListStore(rdb)
 		h.LocalSkillImportStore = handler.NewRedisLocalSkillImportStore(rdb)
 		h.LivenessStore = handler.NewRedisLivenessStore(rdb)
+		h.UserPresenceStore = handler.NewRedisUserPresenceStore(rdb)
 		h.WebhookRateLimiter = handler.NewRedisWebhookRateLimiter(rdb, handler.DefaultWebhookRateLimit())
 		h.WebhookIPRateLimiter = handler.NewRedisWebhookIPRateLimiter(rdb, handler.DefaultWebhookIPRateLimit())
+		// Human member presence: WS connect / pong / ping → Redis last_seen
+		// (LRM-462). Distinct from daemon runtime liveness.
+		hub.SetUserPresenceToucher(h.UserPresenceStore, handler.UserPresenceTouchMinGap)
 	}
 
 	// Lark integration. Only wired when MULTICA_LARK_SECRET_KEY is set:

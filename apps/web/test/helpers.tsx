@@ -50,6 +50,8 @@ export const mockMembers: MemberWithUser[] = [
     email: "test@multica.ai",
     avatar_url: null,
     profile_description: "",
+    presence: "offline",
+    last_seen_at: null,
   },
 ];
 

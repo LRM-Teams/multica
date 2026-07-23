@@ -65,6 +65,8 @@ const members: MemberWithUser[] = [
     email: "me@example.com",
     avatar_url: null,
     profile_description: "",
+    presence: "offline",
+    last_seen_at: null,
     created_at: "2026-01-01T00:00:00Z",
   },
   {
@@ -77,6 +79,8 @@ const members: MemberWithUser[] = [
     email: "other@example.com",
     avatar_url: null,
     profile_description: "",
+    presence: "offline",
+    last_seen_at: null,
     created_at: "2026-01-01T00:00:00Z",
   },
 ];

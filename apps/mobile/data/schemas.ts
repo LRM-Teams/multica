@@ -544,6 +544,9 @@ export const MemberWithUserSchema: z.ZodType<MemberWithUser> = z.object({
   email: z.string().default(""),
   avatar_url: z.string().nullable().default(null),
   profile_description: z.string().default(""),
+  // LRM-462: default offline when an older backend omits the field (LRM-238).
+  presence: z.enum(["online", "offline"]).default("offline"),
+  last_seen_at: z.string().nullable().default(null),
 }).loose();
 
 export const MemberListSchema = z.array(MemberWithUserSchema).default([]);

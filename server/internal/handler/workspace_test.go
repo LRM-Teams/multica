@@ -72,6 +72,13 @@ func TestListMembersWithUser_IncludesProfileDescription(t *testing.T) {
 			if member.ProfileDescription != profileDescription {
 				t.Fatalf("profile_description = %q, want %q", member.ProfileDescription, profileDescription)
 			}
+			// Noop presence store → offline (LRM-238: never invent online).
+			if member.Presence != "offline" {
+				t.Fatalf("presence = %q, want offline when store has no heartbeat", member.Presence)
+			}
+			if member.LastSeenAt != nil {
+				t.Fatalf("last_seen_at = %v, want nil when offline", member.LastSeenAt)
+			}
 			return
 		}
 	}
@@ -125,6 +132,12 @@ func TestGetMemberProfile_UserOmitsEmailAndUsesProfileDescription(t *testing.T) 
 	}
 	if profile.Status != nil {
 		t.Fatalf("user profile status = %q, want nil", *profile.Status)
+	}
+	if profile.Presence == nil || *profile.Presence != "offline" {
+		t.Fatalf("user profile presence = %v, want offline when store has no heartbeat", profile.Presence)
+	}
+	if profile.LastSeenAt != nil {
+		t.Fatalf("user profile last_seen_at = %v, want nil when offline", profile.LastSeenAt)
 	}
 	if len(profile.RecentActivity) != 0 {
 		t.Fatalf("user profile recent_activity = %#v, want empty", profile.RecentActivity)

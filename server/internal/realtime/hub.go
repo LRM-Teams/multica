@@ -229,9 +229,47 @@ type Client struct {
 	dedupMu  sync.Mutex
 	seenIDs  map[string]struct{}
 	seenList []string
+
+	// lastPresenceTouch throttles Redis writes from WS pong / app ping.
+	presenceMu         sync.Mutex
+	lastPresenceTouch  time.Time
 }
 
 const dedupCapacity = 128
+
+// touchUserPresence records that this connection's user is still online.
+// force=true skips the per-connection throttle (used on connect). Best-effort:
+// Redis failures are logged and ignored so WS stay-alive is never blocked.
+func (c *Client) touchUserPresence(force bool) {
+	if c == nil || c.userID == "" || c.hub == nil {
+		return
+	}
+	c.hub.mu.RLock()
+	toucher := c.hub.userPresence
+	minGap := c.hub.userPresenceMinGap
+	c.hub.mu.RUnlock()
+	if toucher == nil {
+		return
+	}
+	if minGap <= 0 {
+		minGap = 25 * time.Second
+	}
+
+	now := time.Now()
+	c.presenceMu.Lock()
+	if !force && !c.lastPresenceTouch.IsZero() && now.Sub(c.lastPresenceTouch) < minGap {
+		c.presenceMu.Unlock()
+		return
+	}
+	c.lastPresenceTouch = now
+	c.presenceMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := toucher.Touch(ctx, c.userID); err != nil {
+		slog.Debug("ws user presence touch failed", "error", err, "user_id", c.userID)
+	}
+}
 
 // markSeen records eventID as already delivered to this client. Returns true
 // if it was the first time we saw this id (caller should deliver), false if
@@ -263,6 +301,13 @@ func (c *Client) markSeen(eventID string) bool {
 // demand.
 type SubscriptionCallback func(scopeType, scopeID string)
 
+// UserPresenceToucher records that a human user currently has Multica open
+// (LRM-462). Wired from the router to a Redis-backed store; nil is fine in
+// tests and when Redis is unavailable (members then read as offline).
+type UserPresenceToucher interface {
+	Touch(ctx context.Context, userID string) error
+}
+
 // Hub manages WebSocket connections organized into scope-based rooms.
 type Hub struct {
 	rooms      map[scopeKey]map[*Client]bool
@@ -277,6 +322,12 @@ type Hub struct {
 	// Subscription lifecycle hooks. Both can be nil.
 	onFirstSubscriber SubscriptionCallback
 	onLastSubscriber  SubscriptionCallback
+
+	// Optional human-member presence heartbeat (LRM-462). Touched on connect
+	// and on WS pong / app-level ping; never Forget on disconnect so multi-
+	// device sessions share one Redis key and TTL handles true offline.
+	userPresence       UserPresenceToucher
+	userPresenceMinGap time.Duration
 }
 
 // NewHub creates a new Hub instance.
@@ -307,6 +358,19 @@ func (h *Hub) SetSubscriptionCallbacks(onFirst, onLast SubscriptionCallback) {
 	h.onLastSubscriber = onLast
 }
 
+// SetUserPresenceToucher wires the human-member presence store used by
+// WebSocket connect / pong / ping. minGap throttles Redis writes (pass 0 to
+// use the default 25s). Safe to call before Run.
+func (h *Hub) SetUserPresenceToucher(t UserPresenceToucher, minGap time.Duration) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.userPresence = t
+	if minGap <= 0 {
+		minGap = 25 * time.Second
+	}
+	h.userPresenceMinGap = minGap
+}
+
 // Run starts the hub event loop.
 func (h *Hub) Run() {
 	for {
@@ -323,6 +387,8 @@ func (h *Hub) Run() {
 			if client.userID != "" {
 				h.subscribe(client, ScopeUser, client.userID)
 			}
+			// Mark the human member online as soon as the WS is up (LRM-462).
+			client.touchUserPresence(true)
 			slog.Info("ws client connected", "workspace_id", client.workspaceID, "user_id", client.userID, "total_clients", total)
 
 		case client := <-h.unregister:
@@ -868,6 +934,9 @@ func (c *Client) readPump() {
 	c.conn.SetReadDeadline(time.Now().Add(pongWait))
 	c.conn.SetPongHandler(func(string) error {
 		c.conn.SetReadDeadline(time.Now().Add(pongWait))
+		// Protocol-level pong (~every 54s) is the primary human presence
+		// heartbeat — clients do not need an app-level ping for MVP.
+		c.touchUserPresence(false)
 		return nil
 	})
 
@@ -909,6 +978,7 @@ func (c *Client) handleFrame(raw []byte) {
 			c.handleUnsubscribe(p.Scope, p.ID)
 		}
 	case "ping":
+		c.touchUserPresence(false)
 		c.sendJSON(map[string]string{"type": "pong"})
 	default:
 		// Unknown frame — ignore silently for forward compat.

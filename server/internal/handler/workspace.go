@@ -404,6 +404,12 @@ type MemberWithUserResponse struct {
 	Email              string  `json:"email"`
 	AvatarURL          *string `json:"avatar_url"`
 	ProfileDescription string  `json:"profile_description"`
+	// Presence is "online" | "offline" from the human WebSocket heartbeat
+	// (LRM-462). Redis-unavailable / no key → "offline" (LRM-238).
+	Presence string `json:"presence"`
+	// LastSeenAt is the last successful WS touch (RFC3339). Null when offline
+	// or when the store has no timestamp.
+	LastSeenAt *string `json:"last_seen_at"`
 }
 
 func (h *Handler) ListMembersWithUser(w http.ResponseWriter, r *http.Request) {
@@ -419,12 +425,20 @@ func (h *Handler) ListMembersWithUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	userIDs := make([]string, len(members))
+	for i, m := range members {
+		userIDs[i] = uuidToString(m.UserID)
+	}
+	presenceByUser := h.userPresenceBatch(r.Context(), userIDs)
+
 	resp := make([]MemberWithUserResponse, len(members))
 	for i, m := range members {
+		userID := uuidToString(m.UserID)
+		p := presenceByUser[userID]
 		resp[i] = MemberWithUserResponse{
 			ID:                 uuidToString(m.ID),
 			WorkspaceID:        uuidToString(m.WorkspaceID),
-			UserID:             uuidToString(m.UserID),
+			UserID:             userID,
 			Role:               m.Role,
 			CreatedAt:          timestampToString(m.CreatedAt),
 			Name:               m.UserName,
@@ -432,6 +446,8 @@ func (h *Handler) ListMembersWithUser(w http.ResponseWriter, r *http.Request) {
 			Email:              m.UserEmail,
 			AvatarURL:          textToPtr(m.UserAvatarUrl),
 			ProfileDescription: m.UserProfileDescription,
+			Presence:           presenceLabel(p),
+			LastSeenAt:         userPresenceLastSeenPtr(p),
 		}
 	}
 
@@ -455,6 +471,10 @@ func memberWithUserResponse(member db.Member, user db.User) MemberWithUserRespon
 		Email:              user.Email,
 		AvatarURL:          textToPtr(user.AvatarUrl),
 		ProfileDescription: user.ProfileDescription,
+		// Create/invite paths have not consulted Redis yet; default offline
+		// so we never fabricate Online on the write response (LRM-238).
+		Presence:   userPresenceOffline,
+		LastSeenAt: nil,
 	}
 }
 

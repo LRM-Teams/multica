@@ -20,6 +20,10 @@ type MemberProfileResponse struct {
 	Description    string                    `json:"description"`
 	Role           string                    `json:"role"`
 	Status         *string                   `json:"status"`
+	// Presence is human online|offline (LRM-462). Set for user profiles;
+	// omitted/null for agents (agents use Status + runtime presence).
+	Presence       *string                   `json:"presence,omitempty"`
+	LastSeenAt     *string                   `json:"last_seen_at,omitempty"`
 	RecentActivity []AgentRecentActivityItem `json:"recent_activity"`
 	ProfileAccess  string                    `json:"profile_access"`
 	MemoryGrowth   *AgentMemoryGrowthResponse `json:"memory_growth,omitempty"`
@@ -76,6 +80,8 @@ func (h *Handler) getUserMemberProfile(w http.ResponseWriter, r *http.Request, u
 		return
 	}
 
+	p := h.lookupUserPresence(r.Context(), uuidToString(user.ID))
+	presence := presenceLabel(p)
 	writeJSON(w, http.StatusOK, MemberProfileResponse{
 		MemberType:     "user",
 		MemberID:       uuidToString(user.ID),
@@ -84,7 +90,11 @@ func (h *Handler) getUserMemberProfile(w http.ResponseWriter, r *http.Request, u
 		AvatarURL:      textToPtr(user.AvatarUrl),
 		Description:    user.ProfileDescription,
 		Role:           member.Role,
+		// Keep Status nil for humans — agent Status is lifecycle (active/…);
+		// human session presence lives in Presence (LRM-462).
 		Status:         nil,
+		Presence:       &presence,
+		LastSeenAt:     userPresenceLastSeenPtr(p),
 		RecentActivity: []AgentRecentActivityItem{},
 		ProfileAccess:  "full",
 	})

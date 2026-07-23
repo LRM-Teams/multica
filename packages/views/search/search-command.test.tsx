@@ -63,6 +63,8 @@ const {
       email: string;
       avatar_url: string | null;
       profile_description: string;
+      presence: "online" | "offline";
+      last_seen_at: string | null;
     }>,
   },
   mockAgents: {
@@ -335,6 +337,8 @@ describe("SearchCommand", () => {
         email: "alice@example.com",
         avatar_url: null,
         profile_description: "",
+        presence: "offline",
+        last_seen_at: null,
       },
       {
         id: "member-2",
@@ -347,6 +351,8 @@ describe("SearchCommand", () => {
         email: "bob@example.com",
         avatar_url: null,
         profile_description: "",
+        presence: "offline",
+        last_seen_at: null,
       },
     ];
     renderSearch();
@@ -388,6 +394,8 @@ describe("SearchCommand", () => {
         email: "frank@example.com",
         avatar_url: null,
         profile_description: "",
+        presence: "offline",
+        last_seen_at: null,
       },
       {
         id: "member-2",
@@ -400,6 +408,8 @@ describe("SearchCommand", () => {
         email: "bob@example.com",
         avatar_url: null,
         profile_description: "",
+        presence: "offline",
+        last_seen_at: null,
       },
     ];
     renderSearch();
@@ -601,6 +611,8 @@ describe("SearchCommand", () => {
         email: "alice@example.com",
         avatar_url: null,
         profile_description: "",
+        presence: "offline",
+        last_seen_at: null,
       },
     ];
     mockSearchIssues.mockResolvedValue({

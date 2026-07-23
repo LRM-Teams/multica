@@ -213,6 +213,8 @@ const ownerMember: MemberWithUser = {
   email: "owner@example.com",
   avatar_url: null,
   profile_description: "",
+  presence: "offline",
+  last_seen_at: null,
   created_at: "2026-01-01T00:00:00Z",
 };
 

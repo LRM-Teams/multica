@@ -88,6 +88,14 @@ export interface MemberWithUser {
   email: string;
   avatar_url: string | null;
   profile_description: string;
+  /**
+   * Human session presence from WebSocket heartbeat (LRM-462).
+   * `"online"` when Multica is open; `"offline"` when Redis has no fresh key
+   * or the presence store is unavailable (never invent online — LRM-238).
+   */
+  presence: "online" | "offline";
+  /** Last successful WS touch (ISO). Null when offline / unknown. */
+  last_seen_at: string | null;
 }
 
 export interface MemberProfileActivityItem {
@@ -110,8 +118,15 @@ export interface MemberProfile {
   description: string;
   /** Workspace role for users; "Agent" for agent profiles. */
   role: string;
-  /** null for user profiles in v1. */
+  /**
+   * Agent lifecycle status for agents; null for user profiles.
+   * Human session online/offline lives in `presence` (LRM-462).
+   */
   status: string | null;
+  /** Human session presence; set for user profiles, omitted for agents. */
+  presence?: "online" | "offline" | null;
+  /** Last WS touch for users; omitted/null when offline or for agents. */
+  last_seen_at?: string | null;
   /** Empty for user profiles in v1; max 5 safe items for agents. */
   recent_activity: MemberProfileActivityItem[];
   /** full when live panels are allowed; identity_only exposes only basic identity fields. */

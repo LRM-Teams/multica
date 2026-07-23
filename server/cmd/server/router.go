@@ -531,6 +531,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	// only forward the bytes + the Stripe-Signature header; see
 	// HandleCloudBillingStripeWebhook for the rationale).
 	r.Post("/api/webhooks/stripe", h.HandleCloudBillingStripeWebhook)
+	// Volcengine RTC callback (no Multica auth). The provider echoes the
+	// server-configured signature in the JSON body; the handler validates it
+	// before decoding the binary conversation event.
+	r.Post(voiceCallCallbackPath, h.HandleVoiceCallCallback)
 
 	// Daemon API routes (require daemon token or valid user token)
 	r.Route("/api/daemon", func(r chi.Router) {

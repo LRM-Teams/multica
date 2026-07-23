@@ -14,6 +14,24 @@ export function useDeleteRuntime(wsId: string) {
   });
 }
 
+// Computer / host one-click delete (LRM-438). Prefer this over looping
+// useDeleteRuntime — per-row DELETE is explicitly not the product path.
+export function useDeleteRuntimesByDaemon(wsId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      daemonId,
+      runtimeMode,
+    }: {
+      daemonId: string;
+      runtimeMode?: string;
+    }) => api.deleteRuntimesByDaemon(daemonId, { runtimeMode }),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
+    },
+  });
+}
+
 // Cascade-mode counterpart to useDeleteRuntime. The dialog routes here when
 // the strict DELETE refused with `runtime_has_active_agents` (or when the
 // caller already knows the runtime has active agents and wants to skip the

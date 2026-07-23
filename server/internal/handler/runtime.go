@@ -942,55 +942,10 @@ func (h *Handler) DeleteAgentRuntime(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(r.Context())
 	qtx := h.Queries.WithTx(tx)
 
-	// Pause autopilots pointing at the archived agents BEFORE we delete
-	// them. Migration 096 dropped the autopilot.assignee_id agent FK, so a
-	// hard-delete here would otherwise leave dangling rows that subsequent
-	// scheduler ticks would skip with "assignee agent no longer exists" —
-	// quiet, but burning a run record every tick until an operator notices.
-	// Pausing makes the breakage visible in the autopilot list so the owner
-	// can re-point or delete the row instead. This runs inside the teardown
-	// transaction so a pause that lands but is followed by a failed delete
-	// rolls back with everything else, matching ArchiveAgentsAndDeleteRuntime.
-	archivedAgentIDs, err := qtx.ListArchivedAgentIDsByRuntime(r.Context(), rt.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to enumerate archived agents")
-		return
-	}
-	if len(archivedAgentIDs) > 0 {
-		if err := qtx.PauseAutopilotsByAgentAssignees(r.Context(), archivedAgentIDs); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to pause autopilots")
-			return
-		}
-	}
-
-	// Remove archived squads whose leader is an archived agent on this runtime
-	// so the RESTRICT FK on squad.leader_id won't block the subsequent agent
-	// deletion. Active squads are handled by the 409 guard above instead.
-	if err := qtx.DeleteSquadsByArchivedAgentsOnRuntime(r.Context(), rt.ID); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to clean up squads referencing archived agents")
-		return
-	}
-
-	// Remove archived agents so the FK constraint (ON DELETE RESTRICT) won't block deletion.
-	if err := qtx.DeleteArchivedAgentsByRuntime(r.Context(), rt.ID); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to clean up archived agents")
-		return
-	}
-
-	// Fail incomplete memory curation runs before deleting the runtime row.
-	// The runtime_id FK is ON DELETE SET NULL, so without this cleanup any
-	// queued/waiting_runtime/running run would have its runtime_id nulled and
-	// linger forever — no daemon can claim a run whose runtime_id is NULL.
-	if _, err := tx.Exec(r.Context(), `
-		UPDATE memory_curation_run
-		   SET status = 'failed', error = 'runtime deleted', finished_at = now()
-		 WHERE runtime_id = $1 AND status IN ('queued', 'waiting_runtime', 'running')
-	`, rt.ID); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to clean up memory curation runs")
-		return
-	}
-
-	if err := qtx.DeleteAgentRuntime(r.Context(), rt.ID); err != nil {
+	// Shared teardown with computer bulk-delete (DeleteRuntimesByDaemon):
+	// pause autopilots → drop archived squads/agents → fail memory curation
+	// → delete the runtime row. Active squads are already refused above.
+	if err := teardownRuntimeWithoutActiveAgents(r.Context(), qtx, tx, rt.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete runtime")
 		return
 	}

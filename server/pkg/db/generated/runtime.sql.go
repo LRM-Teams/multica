@@ -1160,3 +1160,86 @@ func (q *Queries) PrecreateAgentRuntime(ctx context.Context, arg PrecreateAgentR
 	)
 	return i, err
 }
+
+const listAgentRuntimesByDaemonID = `-- name: ListAgentRuntimesByDaemonID :many
+SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility FROM agent_runtime
+WHERE workspace_id = $1
+  AND daemon_id IS NOT NULL
+  AND LOWER(daemon_id) = LOWER($2)
+  AND (
+    $3::text = ''
+    OR runtime_mode = $3
+  )
+ORDER BY created_at ASC
+`
+
+type ListAgentRuntimesByDaemonIDParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	DaemonID    string      `json:"daemon_id"`
+	RuntimeMode string      `json:"runtime_mode"`
+}
+
+// Computer / host scope: every runtime row sharing a daemon_id inside a
+// workspace. Case-insensitive match matches FindLegacyRuntimesByDaemonID —
+// os.Hostname()-derived ids have drifted in casing across reboots. Optional
+// runtime_mode narrows to the FE machine key (`local:<daemon>` vs
+// `cloud:<daemon>`). Empty RuntimeMode means "any mode".
+//
+// Hand-written (sqlc generate is broken in this repo) — keep in sync with
+// queries/runtime.sql ListAgentRuntimesByDaemonID.
+func (q *Queries) ListAgentRuntimesByDaemonID(ctx context.Context, arg ListAgentRuntimesByDaemonIDParams) ([]AgentRuntime, error) {
+	rows, err := q.db.Query(ctx, listAgentRuntimesByDaemonID, arg.WorkspaceID, arg.DaemonID, arg.RuntimeMode)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AgentRuntime{}
+	for rows.Next() {
+		var i AgentRuntime
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.DaemonID,
+			&i.Name,
+			&i.RuntimeMode,
+			&i.Provider,
+			&i.Status,
+			&i.DeviceInfo,
+			&i.Metadata,
+			&i.LastSeenAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.OwnerID,
+			&i.LegacyDaemonID,
+			&i.Visibility,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const countActiveTasksByRuntimeIDs = `-- name: CountActiveTasksByRuntimeIDs :one
+SELECT count(*)::bigint
+FROM agent_task_queue
+WHERE runtime_id = ANY($1::uuid[])
+  AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+`
+
+// Active (queued/dispatched/running/waiting_local_directory) tasks pinned to
+// any of the given runtimes. Used by computer-level bulk delete to refuse
+// with a structured 4xx when the machine still has live work (LRM-238 /
+// LRM-438) instead of silently leaving orphaned tasks.
+//
+// Hand-written (sqlc generate is broken in this repo) — keep in sync with
+// queries/runtime.sql CountActiveTasksByRuntimeIDs.
+func (q *Queries) CountActiveTasksByRuntimeIDs(ctx context.Context, runtimeIds []pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countActiveTasksByRuntimeIDs, runtimeIds)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}

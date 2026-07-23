@@ -355,3 +355,30 @@ WHERE workspace_id = @workspace_id
   AND status = 'online'
   AND metadata->>'sandbox_instance_id' = @sandbox_instance_id
 LIMIT 1;
+
+-- name: ListAgentRuntimesByDaemonID :many
+-- Computer / host scope: every runtime row sharing a daemon_id inside a
+-- workspace. Case-insensitive match matches FindLegacyRuntimesByDaemonID —
+-- os.Hostname()-derived ids have drifted in casing across reboots. Optional
+-- runtime_mode narrows to the FE machine key (`local:<daemon>` vs
+-- `cloud:<daemon>`). Empty @runtime_mode means "any mode".
+SELECT *
+FROM agent_runtime
+WHERE workspace_id = @workspace_id
+  AND daemon_id IS NOT NULL
+  AND LOWER(daemon_id) = LOWER(@daemon_id)
+  AND (
+    @runtime_mode::text = ''
+    OR runtime_mode = @runtime_mode
+  )
+ORDER BY created_at ASC;
+
+-- name: CountActiveTasksByRuntimeIDs :one
+-- Active (queued/dispatched/running/waiting_local_directory) tasks pinned to
+-- any of the given runtimes. Used by computer-level bulk delete to refuse
+-- with a structured 4xx when the machine still has live work (LRM-238 /
+-- LRM-438) instead of silently leaving orphaned tasks.
+SELECT count(*)::bigint
+FROM agent_task_queue
+WHERE runtime_id = ANY(@runtime_ids::uuid[])
+  AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory');

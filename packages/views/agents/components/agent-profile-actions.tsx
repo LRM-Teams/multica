@@ -1,28 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import {
-  AlertCircle,
-  Bug,
-  ClipboardList,
-  Loader2,
-  MessageSquare,
-  RotateCcw,
-  Trash2,
-} from "lucide-react";
+import { AlertCircle, Loader2, MessageSquare, Trash2 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { Agent, AgentRuntime, MemberWithUser } from "@multica/core/types";
 import { api } from "@multica/core/api";
-import { useModalStore } from "@multica/core/modals";
-import { useIssueDraftStore } from "@multica/core/issues/stores/draft-store";
 import { workspaceKeys } from "@multica/core/workspace/queries";
-import {
-  formatActorHandleLabel,
-  resolveActorDisplayName,
-  resolveActorHandle,
-} from "@multica/core/identity";
-import { copyText } from "@multica/ui/lib/clipboard";
+import { resolveActorDisplayName } from "@multica/core/identity";
 import { cn } from "@multica/ui/lib/utils";
 import {
   AlertDialog,
@@ -38,14 +23,14 @@ import { useOpenDM } from "../../common/use-open-dm";
 import { useT } from "../../i18n/use-t";
 
 /**
- * LRM-448 · Profile v4 locked Actions stack (Computer IA + Multica tokens).
- * Vertical named actions — no header Message+⋯, no More overflow.
- * Tone: default / warn / danger via border+tint (not neo-brutal solids).
+ * LRM-448 / LRM-468 · Profile Actions stack.
+ * Vertical named actions — Message (primary) + Archive (danger).
+ * Restart/Reset · Copy diagnostic · Report removed for this period (LRM-468).
  */
 export function AgentProfileActions({
   agent,
-  runtime,
-  members,
+  runtime: _runtime,
+  members: _members,
   canManage,
 }: {
   agent: Agent;
@@ -56,9 +41,7 @@ export function AgentProfileActions({
   const { t } = useT("agents");
   const qc = useQueryClient();
   const { openDM, isPending: openingDM } = useOpenDM();
-  const [confirmReset, setConfirmReset] = useState(false);
   const [confirmArchive, setConfirmArchive] = useState(false);
-  const [resetting, setResetting] = useState(false);
   const [archiving, setArchiving] = useState(false);
 
   const isArchived = !!agent.archived_at;
@@ -66,65 +49,6 @@ export function AgentProfileActions({
 
   const invalidateAgents = () => {
     qc.invalidateQueries({ queryKey: workspaceKeys.agents(agent.workspace_id) });
-  };
-
-  const buildDiagnosticText = () => {
-    const handle = formatActorHandleLabel(resolveActorHandle(agent)) || `@${agent.name}`;
-    const owner =
-      members.find((m) => m.user_id === agent.owner_id)?.display_name ||
-      members.find((m) => m.user_id === agent.owner_id)?.name ||
-      agent.owner_id ||
-      "—";
-    const lines = [
-      `Agent: ${displayName} (${handle})`,
-      `ID: ${agent.id}`,
-      `Workspace: ${agent.workspace_id}`,
-      `Owner: ${owner}`,
-      `Runtime: ${runtime?.name ?? agent.runtime_id ?? "—"}`,
-      `Model: ${agent.model || "—"}`,
-      `Thinking: ${agent.thinking_level || "—"}`,
-      `Visibility: ${agent.visibility}`,
-      `Status: ${agent.status}`,
-      `Archived: ${agent.archived_at ? "yes" : "no"}`,
-    ];
-    return lines.join("\n");
-  };
-
-  const handleCopyDiagnostic = async () => {
-    const ok = await copyText(buildDiagnosticText());
-    if (ok) {
-      toast.success(t(($) => $.side_panel.actions_copy_success));
-    } else {
-      toast.error(t(($) => $.side_panel.actions_copy_failed));
-    }
-  };
-
-  const handleReport = () => {
-    const diagnostic = buildDiagnosticText();
-    useIssueDraftStore.getState().setDraft({
-      title: t(($) => $.side_panel.actions_report_title, { name: displayName }),
-      description: `${t(($) => $.side_panel.actions_report_body_intro)}\n\n\`\`\`\n${diagnostic}\n\`\`\``,
-    });
-    useModalStore.getState().open("create-issue");
-  };
-
-  const handleReset = async () => {
-    setResetting(true);
-    try {
-      const { cancelled } = await api.cancelAgentTasks(agent.id);
-      invalidateAgents();
-      toast.success(
-        cancelled === 0
-          ? t(($) => $.row_actions.no_tasks_to_cancel_toast)
-          : t(($) => $.row_actions.cancelled_tasks_toast, { count: cancelled }),
-      );
-    } catch (e) {
-      toast.error(
-        e instanceof Error ? e.message : t(($) => $.row_actions.cancel_failed_toast),
-      );
-    } finally {
-      setResetting(false);
-    }
   };
 
   const handleArchive = async () => {
@@ -167,34 +91,6 @@ export function AgentProfileActions({
         ) : null}
 
         {canManage && !isArchived ? (
-          <ActionButton
-            testId="agent-profile-action-reset"
-            disabled={resetting}
-            onClick={() => setConfirmReset(true)}
-          >
-            <RotateCcw className="size-4 shrink-0" aria-hidden />
-            {t(($) => $.side_panel.actions_restart)}
-          </ActionButton>
-        ) : null}
-
-        <ActionButton
-          testId="agent-profile-action-copy"
-          onClick={() => void handleCopyDiagnostic()}
-        >
-          <ClipboardList className="size-4 shrink-0" aria-hidden />
-          {t(($) => $.side_panel.actions_copy_diagnostic)}
-        </ActionButton>
-
-        <ActionButton
-          variant="warn"
-          testId="agent-profile-action-report"
-          onClick={handleReport}
-        >
-          <Bug className="size-4 shrink-0" aria-hidden />
-          {t(($) => $.side_panel.actions_report)}
-        </ActionButton>
-
-        {canManage && !isArchived ? (
           <div className="mt-1 border-t border-border pt-3">
             <ActionButton
               variant="danger"
@@ -208,34 +104,6 @@ export function AgentProfileActions({
           </div>
         ) : null}
       </div>
-
-      {confirmReset ? (
-        <AlertDialog open onOpenChange={(v) => { if (!v) setConfirmReset(false); }}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>
-                {t(($) => $.side_panel.actions_restart_dialog_title, { name: displayName })}
-              </AlertDialogTitle>
-              <AlertDialogDescription>
-                {t(($) => $.side_panel.actions_restart_dialog_description)}
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>
-                {t(($) => $.row_actions.cancel_dialog_keep)}
-              </AlertDialogCancel>
-              <AlertDialogAction
-                onClick={() => {
-                  setConfirmReset(false);
-                  void handleReset();
-                }}
-              >
-                {t(($) => $.side_panel.actions_restart)}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      ) : null}
 
       {confirmArchive ? (
         <AlertDialog open onOpenChange={(v) => { if (!v) setConfirmArchive(false); }}>

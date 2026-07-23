@@ -23,7 +23,8 @@ message window supplied to Agents.
 - [x] Filter `deleted_at IS NULL` before ordering and limiting both queries.
 - [x] Run the regression against a fresh fully migrated PostgreSQL database.
 - [x] Run handler vet and diff checks.
-- [ ] Commit, push, and open an independent ready PR stacked on #1049.
+- [x] Commit, push, and open independent ready PR
+  [#1053](https://github.com/LRM-Teams/multica/pull/1053), stacked on #1049.
 
 ## Verification
 

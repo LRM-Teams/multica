@@ -68,8 +68,13 @@ export interface IssueSystemEvent {
   event: IssueSystemEventKind;
   /** Issue uuid — the ref_id the inline token links/hovers on. */
   issueId: string;
-  /** Canonical identifier ("LRM-137") — the token's verbatim text. */
+  /** Canonical identifier ("LRM-137") — muted secondary when title is present. */
   issueIdentifier: string;
+  /**
+   * Human title from BE (`issue_title`, LRM-422/496). Primary ink when present;
+   * never invent client-side (LRM-238 / LRM-423).
+   */
+  issueTitle?: string;
   /**
    * New status enum (never rendered raw; drives the localized verb). Absent for
    * `issue_created` (#610), whose verb is fixed ("创建了这个 issue") and carries no
@@ -100,6 +105,8 @@ export interface IssueSystemEvent {
 export interface IssueAggregateSystemEventItem {
   issueId: string;
   issueIdentifier: string;
+  /** Optional BE stamp (`issue_title`) — title-primary when present (LRM-423). */
+  issueTitle?: string;
   issueStatus?: string;
   previousStatus?: string;
   targetId?: string;
@@ -144,6 +151,7 @@ function parseIssueAggregateItems(
     items.push({
       issueId,
       issueIdentifier,
+      issueTitle: optString(row, "issue_title"),
       issueStatus: optString(row, "issue_status"),
       previousStatus: optString(row, "previous_status"),
       targetId: optString(row, "target_id"),
@@ -222,6 +230,7 @@ export function parseIssueSystemEvent(message: ChannelMessage): IssueSystemEvent
       event: part.event as IssueSystemEventKind,
       issueId,
       issueIdentifier,
+      issueTitle: optString(params, "issue_title"),
       issueStatus,
       previousStatus: optString(params, "previous_status"),
       actorId: optString(params, "actor_id"),

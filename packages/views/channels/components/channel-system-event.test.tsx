@@ -188,19 +188,22 @@ vi.mock("../../i18n/use-t", () => ({
             member_left: "{target} left this channel",
             issue: {
               actor_system: "Multica",
-              created: "{actor} 创建了 Issue {issue}",
-              assigned: "{actor} 将 Issue {issue} 指派给 {target}",
-              assigned_unknown: "{actor} 重新指派了 Issue {issue}",
-              in_progress: "{actor} 将 Issue {issue} 标记为处理中",
-              in_review: "{actor} 将 Issue {issue} 提交审核",
-              done: "{actor} 完成了 Issue {issue}",
-              updated: "{actor} 更新了 Issue {issue}",
-              status: "{actor} 将 Issue {issue} 标记为{{status}}",
-              aggregate_done: "{actor} 完成了 {count} 个 Issue",
-              aggregate_assigned: "{actor} 重新指派了 {count} 个 Issue",
-              aggregate_updated: "{actor} 更新了 {count} 个 Issue",
-              aggregate_expand: "展开 Issue 列表",
-              aggregate_collapse: "收起 Issue 列表",
+              created: "{actor} 创建了 {issue}",
+              assigned: "{actor} 将 {issue} 指派给 {target}",
+              assigned_unknown: "{actor} 重新指派了 {issue}",
+              in_progress: "{actor} 开始了 {issue}",
+              in_review: "{actor} 将 {issue} 移至「评审」",
+              done: "{actor} 完成了 {issue}",
+              updated: "{actor} 更新了 {issue}",
+              status: "{actor} 将 {issue} 移至「{{status}}」",
+              aggregate_created: "{actor} 创建了 {issues}",
+              aggregate_done: "{actor} 完成了 {issues}",
+              aggregate_assigned: "{actor} 指派了 {issues}",
+              aggregate_started: "{actor} 开始了 {issues}",
+              aggregate_in_review: "{actor} 将 {issues} 移至「评审」",
+              aggregate_updated: "{actor} 更新了 {issues}",
+              aggregate_expand: "展开更多事项",
+              aggregate_collapse: "收起事项列表",
             },
             issue_status: {
               backlog: "待办事项",
@@ -587,8 +590,18 @@ describe("parseIssueAggregateSystemEvent", () => {
         actor_id: "agent-fe",
         actor_type: "agent",
         items: [
-          { issue_id: "i1", issue_identifier: "LRM-360", issue_status: "done" },
-          { issue_id: "i2", issue_identifier: "LRM-357", issue_status: "done" },
+          {
+            issue_id: "i1",
+            issue_identifier: "LRM-360",
+            issue_title: "Attachment contrast",
+            issue_status: "done",
+          },
+          {
+            issue_id: "i2",
+            issue_identifier: "LRM-357",
+            issue_title: "Empty tokens",
+            issue_status: "done",
+          },
         ],
       }),
     );
@@ -597,8 +610,18 @@ describe("parseIssueAggregateSystemEvent", () => {
       actorId: "agent-fe",
       actorType: "agent",
       items: [
-        { issueId: "i1", issueIdentifier: "LRM-360", issueStatus: "done" },
-        { issueId: "i2", issueIdentifier: "LRM-357", issueStatus: "done" },
+        {
+          issueId: "i1",
+          issueIdentifier: "LRM-360",
+          issueTitle: "Attachment contrast",
+          issueStatus: "done",
+        },
+        {
+          issueId: "i2",
+          issueIdentifier: "LRM-357",
+          issueTitle: "Empty tokens",
+          issueStatus: "done",
+        },
       ],
     });
   });
@@ -680,7 +703,7 @@ describe("parseIssueAggregateSystemEvent", () => {
 });
 
 describe("IssueAggregateSystemEventContent", () => {
-  it("renders summary + expands to every issue link", () => {
+  it("inlines titles for N=2–3 without a fold control (LRM-423)", () => {
     render(
       <IssueAggregateSystemEventContent
         event={{
@@ -688,21 +711,63 @@ describe("IssueAggregateSystemEventContent", () => {
           actorId: "agent-fe",
           actorType: "agent",
           items: [
-            { issueId: "i1", issueIdentifier: "LRM-360", issueStatus: "done" },
-            { issueId: "i2", issueIdentifier: "LRM-357", issueStatus: "done" },
-            { issueId: "i3", issueIdentifier: "LRM-353", issueStatus: "done" },
+            {
+              issueId: "i1",
+              issueIdentifier: "LRM-360",
+              issueTitle: "Fix contrast",
+              issueStatus: "done",
+            },
+            {
+              issueId: "i2",
+              issueIdentifier: "LRM-357",
+              issueTitle: "Empty tokens",
+              issueStatus: "done",
+            },
+            {
+              issueId: "i3",
+              issueIdentifier: "LRM-353",
+              issueTitle: "Composer density",
+              issueStatus: "done",
+            },
           ],
         }}
         sourceMessageId="msg-agg"
       />,
     );
-    expect(document.body.textContent).toContain("@前端工程师 完成了 3 个 Issue");
-    expect(screen.queryByTestId("issue-aggregate-items")).toBeNull();
+    expect(document.body.textContent).toContain("@前端工程师 完成了");
+    expect(document.body.textContent).toContain("Fix contrast");
+    expect(document.body.textContent).toContain("LRM-360");
+    expect(document.body.textContent).toContain("Empty tokens");
+    expect(document.body.textContent).toContain("Composer density");
+    expect(document.body.textContent).not.toMatch(/3 个 Issue/);
+    expect(screen.queryByTestId("issue-aggregate-expand")).toBeNull();
+  });
+
+  it("folds N≥4 behind +N and expands remaining titles (LRM-423)", () => {
+    render(
+      <IssueAggregateSystemEventContent
+        event={{
+          event: "issue_completed",
+          actorId: "agent-fe",
+          actorType: "agent",
+          items: [
+            { issueId: "i1", issueIdentifier: "LRM-360", issueTitle: "A", issueStatus: "done" },
+            { issueId: "i2", issueIdentifier: "LRM-357", issueTitle: "B", issueStatus: "done" },
+            { issueId: "i3", issueIdentifier: "LRM-353", issueTitle: "C", issueStatus: "done" },
+            { issueId: "i4", issueIdentifier: "LRM-350", issueTitle: "D", issueStatus: "done" },
+          ],
+        }}
+      />,
+    );
+    expect(document.body.textContent).toContain("A");
+    expect(document.body.textContent).toContain("LRM-360");
+    expect(document.body.textContent).not.toContain("B");
+    expect(screen.getByTestId("issue-aggregate-expand").textContent).toContain("+3");
     fireEvent.click(screen.getByTestId("issue-aggregate-expand"));
     const list = screen.getByTestId("issue-aggregate-items");
-    expect(list.textContent).toContain("LRM-360");
-    expect(list.textContent).toContain("LRM-357");
-    expect(list.textContent).toContain("LRM-353");
+    expect(list.textContent).toContain("B");
+    expect(list.textContent).toContain("C");
+    expect(list.textContent).toContain("D");
   });
 
   it("hides the expand control for a single-item aggregate", () => {
@@ -712,12 +777,22 @@ describe("IssueAggregateSystemEventContent", () => {
           event: "issue_completed",
           actorId: "agent-fe",
           actorType: "agent",
-          items: [{ issueId: "i1", issueIdentifier: "LRM-360", issueStatus: "done" }],
+          items: [
+            {
+              issueId: "i1",
+              issueIdentifier: "LRM-360",
+              issueTitle: "Solo title",
+              issueStatus: "done",
+            },
+          ],
         }}
       />,
     );
     expect(screen.queryByTestId("issue-aggregate-expand")).toBeNull();
-    expect(document.body.textContent).toContain("@前端工程师 完成了 1 个 Issue");
+    expect(document.body.textContent).toContain("@前端工程师 完成了");
+    expect(document.body.textContent).toContain("Solo title");
+    expect(document.body.textContent).toContain("LRM-360");
+    expect(document.body.textContent).not.toMatch(/1 个 Issue/);
   });
 });
 
@@ -909,8 +984,8 @@ describe("IssueSystemEventContent", () => {
   it("renders the frozen Issue copy with the issue ref as the SOLE link (item #7)", () => {
     render(<IssueSystemEventContent event={inProgressEvent} />);
 
-    // Canonical example: "@后端工程师 将 Issue LRM-137 标记为处理中".
-    expect(document.body.textContent).toBe("@后端工程师 将 Issue LRM-137 标记为处理中");
+    // Canonical example: "@后端工程师 开始了 LRM-137".
+    expect(document.body.textContent).toBe("@后端工程师 开始了 LRM-137");
 
     // The issue identifier is the one and only clickable token.
     const links = document.querySelectorAll("a");
@@ -926,10 +1001,10 @@ describe("IssueSystemEventContent", () => {
 
   it("maps each transition to its frozen action verb", () => {
     const cases: Array<[Partial<IssueSystemEvent>, string]> = [
-      [{ event: "issue_status_changed", issueStatus: "in_review" }, "@后端工程师 将 Issue LRM-137 提交审核"],
-      [{ event: "issue_completed", issueStatus: "done" }, "@后端工程师 完成了 Issue LRM-137"],
-      [{ event: "issue_status_changed", issueStatus: "done" }, "@后端工程师 完成了 Issue LRM-137"],
-      [{ event: "issue_status_changed", issueStatus: "blocked" }, "@后端工程师 将 Issue LRM-137 标记为已阻塞"],
+      [{ event: "issue_status_changed", issueStatus: "in_review" }, "@后端工程师 将 LRM-137 移至「评审」"],
+      [{ event: "issue_completed", issueStatus: "done" }, "@后端工程师 完成了 LRM-137"],
+      [{ event: "issue_status_changed", issueStatus: "done" }, "@后端工程师 完成了 LRM-137"],
+      [{ event: "issue_status_changed", issueStatus: "blocked" }, "@后端工程师 将 LRM-137 移至「已阻塞」"],
     ];
     for (const [patch, expected] of cases) {
       const { unmount } = render(
@@ -948,7 +1023,7 @@ describe("IssueSystemEventContent", () => {
     );
     const text = document.body.textContent ?? "";
     // Generic, status-less localized action…
-    expect(text).toBe("@后端工程师 更新了 Issue LRM-137");
+    expect(text).toBe("@后端工程师 更新了 LRM-137");
     // …and the raw enum never reaches the user face.
     expect(text).not.toContain("triaging_v2");
   });
@@ -969,7 +1044,7 @@ describe("IssueSystemEventContent", () => {
         }}
       />,
     );
-    expect(document.body.textContent).toBe("@后端工程师 将 Issue LRM-137 指派给 @wendy");
+    expect(document.body.textContent).toBe("@后端工程师 将 LRM-137 指派给 @wendy");
     // Issue ref stays its own <a>; actor + assignee are ActorMention tokens.
     const links = document.querySelectorAll("a");
     expect(links).toHaveLength(1);
@@ -1006,7 +1081,7 @@ describe("IssueSystemEventContent", () => {
         }}
       />,
     );
-    expect(document.body.textContent).toBe("@贝克汉姆 将 Issue LRM-268 指派给 @前端工程师");
+    expect(document.body.textContent).toBe("@贝克汉姆 将 LRM-268 指派给 @前端工程师");
     expect(document.body.textContent).not.toContain("Unknown Agent");
     expect(document.body.textContent).not.toContain("SHOULD_NOT_APPEAR");
     expect(document.body.textContent).not.toContain("ALSO_WRONG");
@@ -1034,7 +1109,7 @@ describe("IssueSystemEventContent", () => {
         }}
       />,
     );
-    expect(document.body.textContent).toBe("@后端工程师 重新指派了 Issue LRM-137");
+    expect(document.body.textContent).toBe("@后端工程师 重新指派了 LRM-137");
     expect(document.body.textContent).not.toContain("Wendy");
     expect(document.body.textContent).not.toContain("@wendy");
     const tokens = screen.getAllByTestId("actor-token");
@@ -1059,7 +1134,7 @@ describe("IssueSystemEventContent", () => {
         }}
       />,
     );
-    expect(document.body.textContent).toBe("@后端工程师 将 Issue LRM-137 指派给 @ghost-x");
+    expect(document.body.textContent).toBe("@后端工程师 将 LRM-137 指派给 @ghost-x");
     expect(document.body.textContent).not.toContain("Ghost");
     const tokens = screen.getAllByTestId("actor-token");
     expect(tokens).toHaveLength(2);
@@ -1079,7 +1154,7 @@ describe("IssueSystemEventContent", () => {
         }}
       />,
     );
-    expect(document.body.textContent).toBe("@后端工程师 创建了 Issue LRM-200");
+    expect(document.body.textContent).toBe("@后端工程师 创建了 LRM-200");
     const links = document.querySelectorAll("a");
     expect(links).toHaveLength(1);
     expect(links[0]).toHaveTextContent("LRM-200");

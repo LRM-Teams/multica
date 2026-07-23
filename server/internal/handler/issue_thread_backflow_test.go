@@ -248,20 +248,256 @@ func assertIssueThreadBackflowEvent(t *testing.T, got issueThreadBackflowEventFo
 
 func assertIssueThreadBackflowReference(t *testing.T, got issueThreadBackflowEventForTest, wantIssueID string) {
 	t.Helper()
-	if len(got.Parts) < 2 {
-		t.Fatalf("parts = %+v, want anchored issue reference", got.Parts)
+	var ref *protocol.MessagePart
+	var label string
+	for i := range got.Parts {
+		part := &got.Parts[i]
+		if part.Type != protocol.MessagePartTypeReference || part.RefType != "issue-ref" || part.RefSubType != "issue" {
+			continue
+		}
+		if part.RefID == wantIssueID {
+			ref = part
+			label = part.Label
+			break
+		}
 	}
-	ref := got.Parts[1]
-	if ref.Type != protocol.MessagePartTypeReference || ref.RefType != "issue-ref" || ref.RefSubType != "issue" {
-		t.Fatalf("issue reference part = %+v, want typed issue-ref", ref)
+	if ref == nil {
+		t.Fatalf("parts = %+v, want anchored issue-ref for %s", got.Parts, wantIssueID)
 	}
-	if ref.RefID != wantIssueID || ref.Label != got.Params.IssueIdentifier {
-		t.Fatalf("issue reference part = %+v, want id=%s label=%s", ref, wantIssueID, got.Params.IssueIdentifier)
+	if label == "" {
+		t.Fatalf("issue reference part = %+v, want non-empty label", ref)
 	}
-	if ref.ContentStartUTF16 == nil || ref.ContentEndUTF16 == nil || *ref.ContentStartUTF16 != 0 || *ref.ContentEndUTF16 != len(got.Params.IssueIdentifier) {
-		t.Fatalf("issue reference span = %+v, want exact leading identifier span [0,%d)", ref, len(got.Params.IssueIdentifier))
+	if ref.ContentStartUTF16 == nil || ref.ContentEndUTF16 == nil {
+		t.Fatalf("issue reference span = %+v, want anchored utf16 range", ref)
 	}
-	if !strings.HasPrefix(got.Content, got.Params.IssueIdentifier) {
-		t.Fatalf("backflow content = %q, want issue identifier %q at anchored prefix", got.Content, got.Params.IssueIdentifier)
+	if !strings.Contains(got.Content, label) {
+		t.Fatalf("backflow content = %q, want issue identifier %q", got.Content, label)
+	}
+}
+
+func TestMergeIssueThreadAggregationParamsKeepsAllIssues(t *testing.T) {
+	existing := issueThreadSystemEventParams{
+		IssueID:         "a",
+		IssueIdentifier: "LRM-1",
+		IssueStatus:     "done",
+		ActorID:         "actor-1",
+		ActorType:       "agent",
+		Items: []issueThreadSystemEventItem{{
+			IssueID: "a", IssueIdentifier: "LRM-1", IssueStatus: "done",
+		}},
+	}
+	incoming := issueThreadSystemEventParams{
+		IssueID:         "b",
+		IssueIdentifier: "LRM-2",
+		IssueStatus:     "done",
+		ActorID:         "actor-1",
+		ActorType:       "agent",
+		Items: []issueThreadSystemEventItem{{
+			IssueID: "b", IssueIdentifier: "LRM-2", IssueStatus: "done", PreviousStatus: "in_review",
+		}},
+	}
+	merged := mergeIssueThreadAggregationParams(existing, incoming)
+	if len(merged.Items) != 2 {
+		t.Fatalf("items = %+v, want 2", merged.Items)
+	}
+	if merged.IssueID != "b" || merged.IssueIdentifier != "LRM-2" {
+		t.Fatalf("top-level = %#v, want latest issue b/LRM-2", merged)
+	}
+	if merged.Items[0].IssueID != "a" || merged.Items[1].IssueID != "b" {
+		t.Fatalf("item order = %+v, want a then b", merged.Items)
+	}
+
+	// Same issue_id replaces in place (no silent duplicate / drop).
+	again := mergeIssueThreadAggregationParams(merged, issueThreadSystemEventParams{
+		Items: []issueThreadSystemEventItem{{
+			IssueID: "a", IssueIdentifier: "LRM-1", IssueStatus: "done", PreviousStatus: "todo",
+		}},
+	})
+	if len(again.Items) != 2 {
+		t.Fatalf("after replace items = %+v, want still 2", again.Items)
+	}
+	if again.Items[0].PreviousStatus != "todo" {
+		t.Fatalf("replaced item = %+v, want previous_status=todo", again.Items[0])
+	}
+}
+
+func TestIssueThreadBackflowAggregatesCrossIssueCompletedWithinWindow(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "issue-backflow-agg-"+uuid.NewString(), testUserID)
+
+	createAnchoredIssue := func(title string) string {
+		t.Helper()
+		var issueID string
+		if err := testPool.QueryRow(ctx, `
+			INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id, number, position)
+			VALUES ($1, $2, 'in_review', 'none', 'member', $3, $4, 0)
+			RETURNING id`, testWorkspaceID, title, testUserID, 900000+int(uuid.New().ID()%100000)).Scan(&issueID); err != nil {
+			t.Fatalf("create issue %q: %v", title, err)
+		}
+		t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID) })
+		if _, err := testPool.Exec(ctx, `
+			INSERT INTO issue_source_message (issue_id, workspace_id, channel_id, message_id)
+			VALUES ($1, $2, $3, NULL)`, issueID, testWorkspaceID, channelID); err != nil {
+			t.Fatalf("anchor issue %s: %v", issueID, err)
+		}
+		return issueID
+	}
+
+	issueA := createAnchoredIssue("agg A")
+	issueB := createAnchoredIssue("agg B")
+	issueC := createAnchoredIssue("agg C")
+
+	updateIssueForBackflowTest(t, issueA, map[string]any{"status": "done"})
+	updateIssueForBackflowTest(t, issueB, map[string]any{"status": "done"})
+	updateIssueForBackflowTest(t, issueC, map[string]any{"status": "done"})
+
+	events := loadIssueChannelBackflowEvents(t, channelID)
+	var completed []issueThreadBackflowEventForTest
+	for _, event := range events {
+		if event.Event == issueThreadCompletedEvent {
+			completed = append(completed, event)
+		}
+	}
+	if len(completed) != 1 {
+		t.Fatalf("completed system rows = %d (%+v), want 1 aggregated bubble", len(completed), completed)
+	}
+	got := completed[0]
+	if len(got.Params.Items) != 3 {
+		t.Fatalf("aggregated items = %+v, want 3", got.Params.Items)
+	}
+	seen := map[string]bool{}
+	for _, item := range got.Params.Items {
+		seen[item.IssueID] = true
+		if item.IssueStatus != "done" || item.IssueIdentifier == "" {
+			t.Fatalf("item = %+v, want done + identifier", item)
+		}
+		if item.OccurredAt == "" {
+			t.Fatalf("item = %+v, want occurred_at for FE expansion contract", item)
+		}
+	}
+	for _, id := range []string{issueA, issueB, issueC} {
+		if !seen[id] {
+			t.Fatalf("aggregated items missing issue %s: %+v", id, got.Params.Items)
+		}
+		assertIssueThreadBackflowReference(t, got, id)
+	}
+	if got.Params.IssueID != issueC {
+		t.Fatalf("top-level issue_id = %s, want latest %s", got.Params.IssueID, issueC)
+	}
+	if !strings.Contains(got.Content, "completed") {
+		t.Fatalf("content = %q, want completed summary", got.Content)
+	}
+}
+
+func TestIssueThreadBackflowDoesNotAggregateDifferentActorsOrTypes(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	otherUserID := createChannelPlainMember(t)
+	channelID := seedChannelForTest(t, "issue-backflow-no-mix-"+uuid.NewString(), testUserID, otherUserID)
+
+	createAnchoredIssue := func(title string) string {
+		t.Helper()
+		var issueID string
+		if err := testPool.QueryRow(ctx, `
+			INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id, number, position)
+			VALUES ($1, $2, 'todo', 'none', 'member', $3, $4, 0)
+			RETURNING id`, testWorkspaceID, title, testUserID, 900000+int(uuid.New().ID()%100000)).Scan(&issueID); err != nil {
+			t.Fatalf("create issue %q: %v", title, err)
+		}
+		t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID) })
+		if _, err := testPool.Exec(ctx, `
+			INSERT INTO issue_source_message (issue_id, workspace_id, channel_id, message_id)
+			VALUES ($1, $2, $3, NULL)`, issueID, testWorkspaceID, channelID); err != nil {
+			t.Fatalf("anchor issue %s: %v", issueID, err)
+		}
+		return issueID
+	}
+
+	issueA := createAnchoredIssue("no-mix A")
+	issueB := createAnchoredIssue("no-mix B")
+	issueC := createAnchoredIssue("no-mix C")
+
+	// Same actor, different event types — must not merge.
+	updateIssueForBackflowTest(t, issueA, map[string]any{"status": "in_progress"})
+	updateIssueForBackflowTest(t, issueB, map[string]any{"status": "done"})
+
+	// Different actor, same completed type — must not merge into B's bubble.
+	w := httptest.NewRecorder()
+	req := withURLParam(newRequestAs(otherUserID, http.MethodPut, "/api/issues/"+issueC+"?workspace_id="+testWorkspaceID, map[string]any{"status": "done"}), "id", issueC)
+	testHandler.UpdateIssue(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("UpdateIssue as other user = %d: %s", w.Code, w.Body.String())
+	}
+
+	events := loadIssueChannelBackflowEvents(t, channelID)
+	var statusChanged, completed int
+	for _, event := range events {
+		switch event.Event {
+		case issueThreadStatusChangedEvent:
+			statusChanged++
+		case issueThreadCompletedEvent:
+			completed++
+		}
+	}
+	if statusChanged != 1 {
+		t.Fatalf("status_changed rows = %d, want 1 (non-done stays unaggregated)", statusChanged)
+	}
+	if completed != 2 {
+		t.Fatalf("completed rows = %d, want 2 (different actors)", completed)
+	}
+}
+
+func TestIssueThreadBackflowAggregatesAssigneeAcrossIssues(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	assigneeID := createHandlerTestAgent(t, "Agg Assignee", nil)
+	channelID := seedChannelForTest(t, "issue-backflow-assign-agg-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, assigneeID); err != nil {
+		t.Fatalf("add assignee member: %v", err)
+	}
+
+	createAnchoredIssue := func(title string) string {
+		t.Helper()
+		var issueID string
+		if err := testPool.QueryRow(ctx, `
+			INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id, number, position)
+			VALUES ($1, $2, 'todo', 'none', 'member', $3, $4, 0)
+			RETURNING id`, testWorkspaceID, title, testUserID, 900000+int(uuid.New().ID()%100000)).Scan(&issueID); err != nil {
+			t.Fatalf("create issue %q: %v", title, err)
+		}
+		t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID) })
+		if _, err := testPool.Exec(ctx, `
+			INSERT INTO issue_source_message (issue_id, workspace_id, channel_id, message_id)
+			VALUES ($1, $2, $3, NULL)`, issueID, testWorkspaceID, channelID); err != nil {
+			t.Fatalf("anchor issue %s: %v", issueID, err)
+		}
+		return issueID
+	}
+
+	issueA := createAnchoredIssue("assign agg A")
+	issueB := createAnchoredIssue("assign agg B")
+	updateIssueForBackflowTest(t, issueA, map[string]any{"assignee_type": "agent", "assignee_id": assigneeID})
+	updateIssueForBackflowTest(t, issueB, map[string]any{"assignee_type": "agent", "assignee_id": assigneeID})
+
+	var assigned []issueThreadBackflowEventForTest
+	for _, event := range loadIssueChannelBackflowEvents(t, channelID) {
+		if event.Event == issueThreadAssignedEvent {
+			assigned = append(assigned, event)
+		}
+	}
+	if len(assigned) != 1 {
+		t.Fatalf("assigned system rows = %d, want 1 aggregated bubble", len(assigned))
+	}
+	if len(assigned[0].Params.Items) != 2 {
+		t.Fatalf("assigned items = %+v, want 2", assigned[0].Params.Items)
 	}
 }

@@ -120,11 +120,14 @@ export function AttachmentCard({
           </span>
         )}
       </span>
-      {/* Two-line meta — phrasing-only markup so it can live inside a button. */}
+      {/* Two-line meta — phrasing-only markup so it can live inside a button.
+          LRM-359: filename locks to text-foreground (no inherit wash / UA button
+          color); meta stays muted-foreground for secondary hierarchy. */}
       <span className="min-w-0 flex-1 text-left">
         <span
-          className="block truncate text-[13.5px] font-semibold leading-tight"
+          className="block truncate text-[13.5px] font-semibold leading-tight text-foreground"
           title={filename}
+          data-testid="attachment-card-filename"
         >
           {uploading
             ? t(($) => $.file_card.uploading, { filename })
@@ -141,21 +144,25 @@ export function AttachmentCard({
 
   return (
     <div className="my-1 min-w-0 w-full max-w-[340px]">
+      {/* LRM-359: solid bg-muted + border-border — no bg-muted/40 light wash. */}
       <div
-        className="group inline-flex w-full max-w-full items-center gap-2 rounded-xl border border-border bg-muted/40 px-3 py-2.5 transition-colors hover:bg-muted/70"
+        className="group inline-flex w-full max-w-full items-center gap-2 rounded-xl border border-border bg-muted px-3 py-2.5 text-foreground transition-colors hover:bg-accent"
+        data-testid="attachment-card-chip"
         onMouseDown={(e) => e.stopPropagation()}
       >
         {openable ? (
           <button
             type="button"
-            className="flex min-h-11 min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-lg text-left outline-none focus-visible:ring-2 focus-visible:ring-brand/50 md:min-h-0"
+            className="flex min-h-11 min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-lg text-left text-foreground outline-none focus-visible:ring-2 focus-visible:ring-brand/50 md:min-h-0"
             aria-label={openLabel}
             onClick={canPreview ? onPreview : onDownload}
           >
             {body}
           </button>
         ) : (
-          <div className="flex min-w-0 flex-1 items-center gap-3">{body}</div>
+          <div className="flex min-w-0 flex-1 items-center gap-3 text-foreground">
+            {body}
+          </div>
         )}
 
         {/* Actions — always visible on narrow / coarse pointers; hover-reveal on fine desktop.

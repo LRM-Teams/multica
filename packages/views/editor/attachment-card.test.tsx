@@ -57,6 +57,32 @@ describe("AttachmentCard — chrome row", () => {
     expect(document.querySelector("iframe")).toBeNull();
   });
 
+  // LRM-359 — Frank washed chip: light gray name on washed muted surface.
+  // Lock semantic tokens so light/dark both keep ≥4.5:1 name contrast.
+  it("uses solid muted chip + foreground filename (no muted/40 wash, no gray hex)", () => {
+    render(
+      <AttachmentCard
+        filename="design-agent-profile-polish.html"
+        contentType="text/html"
+        attachmentId="att-1"
+        href="https://cdn.example/design-agent-profile-polish.html"
+        sizeBytes={2048}
+        onPreview={() => {}}
+        onDownload={() => {}}
+      />,
+    );
+    const chip = screen.getByTestId("attachment-card-chip");
+    expect(chip.className).toContain("bg-muted");
+    expect(chip.className).toContain("border-border");
+    expect(chip.className).not.toMatch(/bg-muted\/\d+/);
+    expect(chip.className).not.toMatch(/bg-\[#|text-\[#/);
+
+    const filename = screen.getByTestId("attachment-card-filename");
+    expect(filename.className).toContain("text-foreground");
+    expect(filename.className).not.toMatch(/text-muted|text-\[#|text-gray|text-slate/);
+    expect(filename.textContent).toBe("design-agent-profile-polish.html");
+  });
+
   it("HTML URL-only source downloads from the primary card body", () => {
     // Text kinds need an attachmentId for the /content proxy, but a reachable
     // URL still needs a primary touch target that downloads the file.

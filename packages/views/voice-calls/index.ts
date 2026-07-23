@@ -17,7 +17,7 @@ export {
   type VoiceCallMediaSessionFactory,
 } from "./use-voice-call-controller";
 export {
-  formatVoiceCallDuration,
   VoiceCallPanel,
   type VoiceCallPanelProps,
 } from "./voice-call-panel";
+export { formatVoiceCallDuration } from "./voice-call-format";

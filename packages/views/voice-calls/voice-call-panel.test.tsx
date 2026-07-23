@@ -4,8 +4,8 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import enChannels from "../locales/en/channels.json";
+import { formatVoiceCallDuration } from "./voice-call-format";
 import {
-  formatVoiceCallDuration,
   VoiceCallPanel,
   type VoiceCallPanelProps,
 } from "./voice-call-panel";

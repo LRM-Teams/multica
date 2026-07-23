@@ -3123,18 +3123,20 @@ export function ChannelsPage({
                   <MoreHorizontal className="size-5" />
                 </Button>
               ) : (
-                // LRM-447 design A — right action rail: Members · Search · Stop.
+                // LRM-447 / LRM-452 — right action rail: Members · Search · Stop.
+                // Equal-weight ghost controls: no outer stacked bg/border, no
+                // per-control chip chrome; transparent default, muted on hover.
                 // Invite moves into Members dialog; no More/⋯ on the wide rail.
                 <div
-                  className="flex items-center gap-1 rounded-lg border border-border bg-foreground/[0.02] p-0.5"
+                  className="flex items-center gap-0.5"
                   data-testid="channel-header-action-rail"
                 >
                   <button
                     type="button"
                     onClick={openMembersDialog}
                     className={cn(
-                      "inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-background py-0 pl-1 pr-1.5 transition-colors hover:bg-accent",
-                      membersDialogOpen && "bg-accent",
+                      "inline-flex h-7 items-center gap-1.5 rounded-md py-0 pl-1 pr-1.5 text-foreground transition-colors hover:bg-muted",
+                      membersDialogOpen && "bg-muted",
                     )}
                     aria-label={t(($) => $.header.view_members_aria)}
                     data-testid="channel-header-members-chip"
@@ -3152,7 +3154,7 @@ export function ChannelsPage({
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="size-7 rounded-md border border-border bg-background text-foreground hover:bg-accent"
+                    className="size-7 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
                     aria-label={t(($) => $.conv_search.search_aria)}
                     onClick={() => setConvSearchOpen(true)}
                   >
@@ -3167,7 +3169,7 @@ export function ChannelsPage({
                               type="button"
                               variant="ghost"
                               size="icon"
-                              className="size-7 rounded-md border border-border bg-background text-foreground hover:bg-accent disabled:opacity-40"
+                              className="size-7 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
                               aria-label={t(($) => $.stop_all_agents.aria)}
                               disabled={!hasStoppableChannelTasks || isStoppingAllChannelTasks}
                               onClick={openStopAllAgentsConfirm}

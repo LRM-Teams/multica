@@ -139,6 +139,7 @@ export function HomeChannelBindChip({
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder={t(($) => $.visibility_bind.search_placeholder)}
+            aria-label={t(($) => $.visibility_bind.search_placeholder)}
             className="w-full rounded-md border border-border bg-background px-2 py-1 text-xs outline-none focus:border-primary"
           />
         </div>

@@ -53,7 +53,9 @@ export function VisibilityPicker({
 }) {
   const { t } = useT("agents");
   const [open, setOpen] = useState(false);
-  const [draftHome, setDraftHome] = useState<string | null>(homeChannelId);
+  // Draft only while the picker is open — synced from props in onOpenChange
+  // (do not mirror homeChannelId into useState; that goes stale on prop change).
+  const [draftHome, setDraftHome] = useState<string | null>(null);
   const wsId = useWorkspaceId();
   const { data: channels = [], isLoading: channelsLoading } = useQuery(
     channelsOptions(wsId),

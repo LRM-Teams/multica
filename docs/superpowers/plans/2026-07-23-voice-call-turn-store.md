@@ -24,6 +24,9 @@ final callback to correct the transcript without creating a second turn.
 - [x] Added a PostgreSQL test proving final-turn insertion, corrected retry
   upsert, distinct member/agent order, and exactly two stored rows.
 - [x] Ran the database test in a disposable database and dropped it.
+- [x] Committed, pushed, and opened independent ready PR
+  [#1090](https://github.com/LRM-Teams/multica/pull/1090), stacked on
+  [#1089](https://github.com/LRM-Teams/multica/pull/1089).
 
 ## Ordering rule
 

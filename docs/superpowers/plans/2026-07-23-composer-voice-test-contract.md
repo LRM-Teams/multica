@@ -20,7 +20,8 @@ voice control needs a channel ID, playback scope, and send callback.
   is unchanged.
 - [x] Ran the focused Composer suite (11/11), `@multica/views` typecheck, and
   `git diff --check`; all passed.
-- [ ] Push the branch and open a ready-for-review PR into `dev`.
+- [x] Pushed `fix/composer-secure-context-test` and opened ready-for-review PR
+  #952 into `dev`: <https://github.com/LRM-Teams/multica/pull/952>.
 
 ## Boundaries
 

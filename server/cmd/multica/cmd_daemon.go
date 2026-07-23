@@ -747,7 +747,11 @@ func runDaemonDiskUsage(cmd *cobra.Command, _ []string) error {
 func printDiskUsageTaskTable(w io.Writer, report daemon.DiskUsageReport) {
 	fmt.Fprintf(w, "Workspaces root: %s\n", report.WorkspacesRoot)
 	if report.TotalTaskCount == 0 {
-		fmt.Fprintln(w, "(no task directories)")
+		if report.TotalManagedSizeBytes > 0 {
+			fmt.Fprintf(w, "(no legacy task directories; durable agent state: %s)\n", formatBytes(report.TotalManagedSizeBytes))
+		} else {
+			fmt.Fprintln(w, "(no task directories)")
+		}
 		return
 	}
 	rows := make([][]string, 0, len(report.Tasks))
@@ -770,16 +774,16 @@ func printDiskUsageTaskTable(w io.Writer, report daemon.DiskUsageReport) {
 		// Report-wide totals stay anchored to the full scan; the displayed
 		// row is what the user is currently looking at. Calling these out
 		// separately keeps `--top N` from misleading at-a-glance triage.
-		fmt.Fprintf(w, "\nShowing top %d of %d task(s). Displayed: %s (%s artifacts). Scan total: %s (%s artifacts, %.1f%% reclaimable).\n",
+		fmt.Fprintf(w, "\nShowing top %d of %d task(s). Displayed: %s (%s artifacts). Scan total: %s, including %s durable agent state (%s artifacts, %.1f%% reclaimable).\n",
 			len(report.Tasks), report.TotalTaskCount,
 			formatBytes(displayedSize), formatBytes(displayedArtifact),
-			formatBytes(report.TotalSizeBytes), formatBytes(report.TotalArtifactSizeBytes),
+			formatBytes(report.TotalSizeBytes), formatBytes(report.TotalManagedSizeBytes), formatBytes(report.TotalArtifactSizeBytes),
 			report.TotalArtifactRatio*100)
 		return
 	}
-	fmt.Fprintf(w, "\nTotal: %s across %d task(s); %s reclaimable as artifacts (%.1f%%).\n",
+	fmt.Fprintf(w, "\nTotal: %s across %d task(s), including %s durable agent state; %s reclaimable as artifacts (%.1f%%).\n",
 		formatBytes(report.TotalSizeBytes), report.TotalTaskCount,
-		formatBytes(report.TotalArtifactSizeBytes), report.TotalArtifactRatio*100)
+		formatBytes(report.TotalManagedSizeBytes), formatBytes(report.TotalArtifactSizeBytes), report.TotalArtifactRatio*100)
 }
 
 func printDiskUsageWorkspaceTable(w io.Writer, report daemon.DiskUsageReport) {
@@ -797,24 +801,25 @@ func printDiskUsageWorkspaceTable(w io.Writer, report daemon.DiskUsageReport) {
 			ws.WorkspaceShort,
 			strconv.Itoa(ws.TaskCount),
 			formatBytes(ws.SizeBytes),
+			formatBytes(ws.ManagedSizeBytes),
 			formatBytes(ws.ArtifactSizeBytes),
 			formatRatio(ws.ArtifactRatio),
 			formatAge(ws.OldestAgeSeconds),
 		})
 	}
-	cli.PrintTable(w, []string{"WORKSPACE", "TASKS", "SIZE", "ARTIFACTS", "ARTIFACT %", "OLDEST"}, rows)
+	cli.PrintTable(w, []string{"WORKSPACE", "TASKS", "SIZE", "AGENT STATE", "ARTIFACTS", "ARTIFACT %", "OLDEST"}, rows)
 
 	if len(report.Workspaces) < report.TotalWorkspaceCount {
-		fmt.Fprintf(w, "\nShowing top %d of %d workspace(s). Displayed: %s (%s artifacts). Scan total: %s (%s artifacts, %.1f%% reclaimable).\n",
+		fmt.Fprintf(w, "\nShowing top %d of %d workspace(s). Displayed: %s (%s artifacts). Scan total: %s, including %s durable agent state (%s artifacts, %.1f%% reclaimable).\n",
 			len(report.Workspaces), report.TotalWorkspaceCount,
 			formatBytes(displayedSize), formatBytes(displayedArtifact),
-			formatBytes(report.TotalSizeBytes), formatBytes(report.TotalArtifactSizeBytes),
+			formatBytes(report.TotalSizeBytes), formatBytes(report.TotalManagedSizeBytes), formatBytes(report.TotalArtifactSizeBytes),
 			report.TotalArtifactRatio*100)
 		return
 	}
-	fmt.Fprintf(w, "\nTotal: %s across %d workspace(s); %s reclaimable as artifacts (%.1f%%).\n",
+	fmt.Fprintf(w, "\nTotal: %s across %d workspace(s), including %s durable agent state; %s reclaimable as artifacts (%.1f%%).\n",
 		formatBytes(report.TotalSizeBytes), report.TotalWorkspaceCount,
-		formatBytes(report.TotalArtifactSizeBytes), report.TotalArtifactRatio*100)
+		formatBytes(report.TotalManagedSizeBytes), formatBytes(report.TotalArtifactSizeBytes), report.TotalArtifactRatio*100)
 }
 
 func printDiskUsageEmptyHint(w io.Writer, report daemon.DiskUsageReport, profile, rootOverride string) {

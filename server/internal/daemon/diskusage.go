@@ -24,7 +24,10 @@ type TaskDiskUsage struct {
 	ArtifactSizeBytes int64  `json:"artifact_size_bytes"`
 }
 
-// WorkspaceDiskUsage aggregates per-workspace footprint across all tasks.
+// WorkspaceDiskUsage aggregates the legacy task footprint plus durable
+// managed-agent state for one workspace. ManagedSizeBytes is included in
+// SizeBytes but excluded from TaskCount and ArtifactSizeBytes because only the
+// explicit managed-turn/full-reset lifecycle may reclaim it.
 // ArtifactRatio is the fraction (0..1) of SizeBytes that the GC artifact
 // cleanup could reclaim — kept here so the JSON consumer doesn't have to
 // re-derive it (and so the table view can render the column without dividing
@@ -33,6 +36,7 @@ type WorkspaceDiskUsage struct {
 	WorkspaceID       string  `json:"workspace_id"`
 	WorkspaceShort    string  `json:"workspace_short"`
 	TaskCount         int     `json:"task_count"`
+	ManagedSizeBytes  int64   `json:"managed_size_bytes"`
 	SizeBytes         int64   `json:"size_bytes"`
 	ArtifactSizeBytes int64   `json:"artifact_size_bytes"`
 	ArtifactRatio     float64 `json:"artifact_ratio"`
@@ -50,6 +54,7 @@ type DiskUsageReport struct {
 	Workspaces             []WorkspaceDiskUsage `json:"workspaces"`
 	TotalTaskCount         int                  `json:"total_task_count"`
 	TotalWorkspaceCount    int                  `json:"total_workspace_count"`
+	TotalManagedSizeBytes  int64                `json:"total_managed_size_bytes"`
 	TotalSizeBytes         int64                `json:"total_size_bytes"`
 	TotalArtifactSizeBytes int64                `json:"total_artifact_size_bytes"`
 	TotalArtifactRatio     float64              `json:"total_artifact_ratio"`
@@ -60,7 +65,9 @@ type DiskUsageReport struct {
 // treats them — present on disk, but no parent record we can lock onto.
 const DiskUsageKindUnknown = "unknown"
 
-// ScanDiskUsage walks workspacesRoot and returns the disk-usage report. The
+// ScanDiskUsage walks workspacesRoot and returns the disk-usage report. Stable
+// .multica agent state contributes to capacity totals without masquerading as
+// a legacy task directory or generic artifact-cleanup candidate. The
 // walk is read-only and follows the same safety contract as the GC artifact
 // cleaner: it never enters .git, never follows symlinks, and counts only
 // regular files. artifactPatterns is filtered through the basename-only check
@@ -108,6 +115,25 @@ func ScanDiskUsage(workspacesRoot string, artifactPatterns []string) (DiskUsageR
 				continue
 			}
 			taskDir := filepath.Join(wsDir, t.Name())
+			if t.Name() == managedAgentWorkspaceNamespace {
+				// Stable per-agent state is not a legacy task directory and
+				// must never appear reclaimable through task GC. It still
+				// counts toward workspace/daemon capacity.
+				managedBytes, _ := taskSize(taskDir, map[string]struct{}{})
+				report.TotalManagedSizeBytes += managedBytes
+				report.TotalSizeBytes += managedBytes
+				ws, ok := wsAgg[wsID]
+				if !ok {
+					ws = &WorkspaceDiskUsage{
+						WorkspaceID:    wsID,
+						WorkspaceShort: ShortID(wsID),
+					}
+					wsAgg[wsID] = ws
+				}
+				ws.ManagedSizeBytes += managedBytes
+				ws.SizeBytes += managedBytes
+				continue
+			}
 			usage := buildTaskUsage(taskDir, wsID, t.Name(), patternSet)
 
 			report.Tasks = append(report.Tasks, usage)

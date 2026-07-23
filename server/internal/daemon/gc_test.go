@@ -304,6 +304,35 @@ func TestGcWorkspace_CleansEmptyWorkspaceDir(t *testing.T) {
 	}
 }
 
+func TestGCWorkspaceNeverTreatsMulticaAgentStateAsLegacyTaskDir(t *testing.T) {
+	t.Parallel()
+	d := newGCTestDaemon(t, http.NewServeMux())
+	d.cfg.GCOrphanTTL = 0
+	wsID := "11111111-1111-1111-1111-111111111111"
+	wsDir := filepath.Join(d.cfg.WorkspacesRoot, wsID)
+	agentRoot := filepath.Join(wsDir, managedAgentWorkspaceNamespace, "agents", "22222222-2222-2222-2222-222222222222")
+	memoryPath := filepath.Join(agentRoot, "memory", "MEMORY.md")
+	if err := os.MkdirAll(filepath.Dir(memoryPath), 0o755); err != nil {
+		t.Fatalf("create agent memory dir: %v", err)
+	}
+	if err := os.WriteFile(memoryPath, []byte("durable memory"), 0o644); err != nil {
+		t.Fatalf("write memory: %v", err)
+	}
+	legacyOrphan := createTaskDir(t, d.cfg.WorkspacesRoot, wsID, "legacy-orphan", nil)
+
+	d.gcWorkspace(context.Background(), wsDir, &gcStats{byPattern: map[string]int{}})
+
+	if got, err := os.ReadFile(memoryPath); err != nil || string(got) != "durable memory" {
+		t.Fatalf("managed agent state was changed by legacy GC: content=%q err=%v", got, err)
+	}
+	if _, err := os.Stat(legacyOrphan); !os.IsNotExist(err) {
+		t.Fatalf("legacy orphan was not cleaned: %v", err)
+	}
+	if _, err := os.Stat(wsDir); err != nil {
+		t.Fatalf("workspace containing managed agent state was removed: %v", err)
+	}
+}
+
 func TestShouldCleanTaskDir_OpenIssueArtifactCleanup(t *testing.T) {
 	t.Parallel()
 	issueID := "88888888-8888-8888-8888-888888888888"

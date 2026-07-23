@@ -13,6 +13,8 @@ import (
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 )
 
+const managedAgentWorkspaceNamespace = ".multica"
+
 // gcLoop periodically scans local workspace directories and removes those
 // whose issue is done/cancelled and hasn't been updated within the configured TTL.
 func (d *Daemon) gcLoop(ctx context.Context) {
@@ -108,7 +110,7 @@ func (d *Daemon) gcWorkspace(ctx context.Context, wsDir string, stats *gcStats) 
 		if ctx.Err() != nil {
 			return
 		}
-		if !entry.IsDir() {
+		if !entry.IsDir() || entry.Name() == managedAgentWorkspaceNamespace {
 			continue
 		}
 		taskDir := filepath.Join(wsDir, entry.Name())

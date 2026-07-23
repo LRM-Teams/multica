@@ -96,6 +96,43 @@ func TestPrintDaemonStatusOmitsVersionWhenMissing(t *testing.T) {
 	}
 }
 
+func TestPrintDiskUsageTaskTableShowsManagedStateWithoutLegacyTasks(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	printDiskUsageTaskTable(&out, daemon.DiskUsageReport{
+		WorkspacesRoot:        "/tmp/workspaces",
+		TotalManagedSizeBytes: 2048,
+		TotalSizeBytes:        2048,
+	})
+	got := out.String()
+	if !strings.Contains(got, "no legacy task directories") || !strings.Contains(got, "durable agent state") {
+		t.Fatalf("managed-only task output hid durable agent state: %q", got)
+	}
+}
+
+func TestPrintDiskUsageWorkspaceTableSeparatesManagedState(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	printDiskUsageWorkspaceTable(&out, daemon.DiskUsageReport{
+		WorkspacesRoot:        "/tmp/workspaces",
+		TotalWorkspaceCount:   1,
+		TotalManagedSizeBytes: 1024,
+		TotalSizeBytes:        1124,
+		Workspaces: []daemon.WorkspaceDiskUsage{{
+			WorkspaceShort:   "workspace",
+			TaskCount:        1,
+			ManagedSizeBytes: 1024,
+			SizeBytes:        1124,
+		}},
+	})
+	got := out.String()
+	for _, want := range []string{"AGENT STATE", "durable agent state"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("workspace output missing %q: %q", want, got)
+		}
+	}
+}
+
 // TestPrintDaemonStatusAlignsValuesWithProfileLabel guards the alignment fix:
 // before, a "Daemon [profile]" label was wider than the other keys, so the
 // Daemon row's value started further right than every subsequent row. The

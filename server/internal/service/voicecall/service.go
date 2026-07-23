@@ -10,6 +10,12 @@ import (
 
 type Status string
 
+var (
+	ErrScopeNotFound    = errors.New("voice call scope not found")
+	ErrScopeForbidden   = errors.New("voice call scope forbidden")
+	ErrScopeUnavailable = errors.New("voice call scope unavailable")
+)
+
 const (
 	StatusStarting     Status = "starting"
 	StatusConnecting   Status = "connecting"

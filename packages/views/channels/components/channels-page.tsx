@@ -180,7 +180,7 @@ import {
 import { useEntryReadCursor } from "../hooks/use-entry-read-cursor";
 import { useEntryAnchor } from "../hooks/use-entry-around-seq";
 import {
-  buildVoiceMessageParts,
+  buildRecordedVoiceMessageParts,
   type VoiceRecordingAttachment,
 } from "../lib/voice-audio";
 import { prepareVoicePlayback, voicePlaybackScope } from "../lib/voice-playback";
@@ -2021,13 +2021,12 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   };
 
   const handleVoiceSend = (
-    content: string,
     durationMs: number,
     attachment: VoiceRecordingAttachment,
   ): boolean => {
     if (!active || !activeDraftEmpty || channelPending.pending.length > 0) return false;
-    const parts = buildVoiceMessageParts(content, durationMs, attachment);
-    if (parts.length === 0) return false;
+    const content = "";
+    const parts = buildRecordedVoiceMessageParts(durationMs, attachment);
     const dispatched = channelSend.send({
       payloadKey: composePayloadKey(content, [attachment.id], `voice:${quoteTarget?.id ?? ""}`),
       buildVars: (clientMessageId) => ({
@@ -2091,13 +2090,12 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   };
 
   const handleThreadVoiceSend = (
-    content: string,
     durationMs: number,
     attachment: VoiceRecordingAttachment,
   ): boolean => {
     if (!active || !threadRoot || !threadDraftEmpty || threadPending.pending.length > 0) return false;
-    const parts = buildVoiceMessageParts(content, durationMs, attachment);
-    if (parts.length === 0) return false;
+    const content = "";
+    const parts = buildRecordedVoiceMessageParts(durationMs, attachment);
     const dispatched = threadSend.send({
       payloadKey: composePayloadKey(
         content,

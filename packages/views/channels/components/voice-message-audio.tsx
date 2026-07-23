@@ -54,7 +54,12 @@ export function VoiceMessageAudio({
   const startRef = useRef<(() => Promise<void>) | null>(null);
 
   const start = useCallback(async () => {
-    if (!hasVoicePart || !message.content.trim() || state === "loading" || state === "playing") return;
+    if (
+      !hasVoicePart ||
+      (!recordingAttachment && !message.content.trim()) ||
+      state === "loading" ||
+      state === "playing"
+    ) return;
     setState("loading");
     try {
       if (recordingAttachment) {
@@ -197,41 +202,51 @@ export function VoiceMessageAudio({
           onClick={state === "playing" ? stop : () => void start()}
           disabled={state === "loading"}
           aria-label={label}
+          aria-live="polite"
+          aria-busy={state === "loading"}
           data-testid="voice-reply-control"
           data-voice-bubble="true"
           style={{ width: voiceBubbleWidthPx(durationSeconds) }}
         >
           {state === "loading" ? (
-            <LoaderCircle className="size-3.5 animate-spin" />
+            <LoaderCircle
+              className="size-3.5 animate-spin motion-reduce:animate-none"
+              aria-hidden="true"
+            />
           ) : state === "playing" ? (
-            <Square className="size-3 fill-current" />
+            <Square className="size-3 fill-current" aria-hidden="true" />
           ) : state === "error" ? (
-            <RotateCcw className="size-3.5" />
+            <RotateCcw className="size-3.5" aria-hidden="true" />
           ) : (
-            <Play className="size-3.5 fill-current" />
+            <Play className="size-3.5 fill-current" aria-hidden="true" />
           )}
           <AudioLines
-            className={cn("size-5", state === "playing" && "animate-pulse")}
+            className={cn(
+              "size-5",
+              state === "playing" && "animate-pulse motion-reduce:animate-none",
+            )}
             aria-hidden="true"
           />
           <span className="min-w-5 text-right tabular-nums" aria-hidden="true">
             {durationSeconds ? `${durationSeconds}″` : "…"}
           </span>
         </button>
-        <button
-          type="button"
-          className={cn(
-            "inline-flex min-h-9 shrink-0 items-center gap-1 rounded-lg px-2.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            transcriptExpanded && "bg-primary/[0.08] text-primary hover:bg-primary/[0.12] hover:text-primary",
-          )}
-          onClick={() => setTranscriptExpanded((expanded) => !expanded)}
-          aria-expanded={transcriptExpanded}
-          aria-controls={transcriptPanelId}
-          aria-label={transcriptToggleLabel}
-        >
-          <Captions className="size-3.5" aria-hidden="true" />
-          <span>{transcriptToggleLabel}</span>
-        </button>
+        {message.content.trim() ? (
+          <button
+            type="button"
+            className={cn(
+              "inline-flex min-h-9 shrink-0 items-center gap-1 rounded-lg px-2.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              transcriptExpanded && "bg-primary/[0.08] text-primary hover:bg-primary/[0.12] hover:text-primary",
+            )}
+            onClick={() => setTranscriptExpanded((expanded) => !expanded)}
+            aria-expanded={transcriptExpanded}
+            aria-controls={transcriptPanelId}
+            aria-label={transcriptToggleLabel}
+          >
+            <Captions className="size-3.5" aria-hidden="true" />
+            <span>{transcriptToggleLabel}</span>
+          </button>
+        ) : null}
       </div>
       {transcriptExpanded ? (
         <section

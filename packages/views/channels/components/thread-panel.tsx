@@ -57,7 +57,6 @@ export interface ThreadPanelProps {
   voicePlaybackScope?: string;
   voiceDisabled?: boolean;
   onVoiceSend?: (
-    transcript: string,
     durationMs: number,
     attachment: VoiceRecordingAttachment,
   ) => boolean;

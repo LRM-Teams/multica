@@ -36,7 +36,6 @@ export interface ComposerProps {
   voicePlaybackScope?: string;
   voiceDisabled?: boolean;
   onVoiceSend?: (
-    transcript: string,
     durationMs: number,
     attachment: VoiceRecordingAttachment,
   ) => boolean;

@@ -123,6 +123,19 @@ vi.mock("../../common/use-reaction-actor-name", () => ({
   useReactionActorName: () => (type: string, id: string) => id || type,
 }));
 
+// LRM-391: ActorAvatar may call useResolvedActorIdentity → useQuery(member-profiles).
+// Viewport composition is not about identity resolution — stub to stay QC-free.
+vi.mock("../../common/use-resolved-actor-identity", () => ({
+  useResolvedActorIdentity: () => ({ displayName: "Test Actor", avatarUrl: null }),
+  mentionTypeFromActorType: (actorType: string | null | undefined) => {
+    if (actorType === "agent") return "agent";
+    if (actorType === "member" || actorType === "human" || actorType === "user") return "member";
+    return null;
+  },
+  resolvedActorLabel: (identity: { displayName: string | null }, actorId?: string) =>
+    identity.displayName ?? actorId ?? "",
+}));
+
 vi.mock("@multica/core/paths", () => ({
   useCurrentWorkspace: () => ({ id: "ws-1", slug: "test" }),
   useWorkspaceSlug: () => "test",

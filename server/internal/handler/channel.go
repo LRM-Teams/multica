@@ -1026,7 +1026,10 @@ func (h *Handler) archiveChannel(w http.ResponseWriter, r *http.Request, workspa
 		writeError(w, http.StatusInternalServerError, "failed to archive channel")
 		return ChannelResponse{}, false
 	}
-	h.publish(protocol.EventChannelDeleted, workspaceID, "member", uuidToString(userID), map[string]any{"id": uuidToString(channelID)})
+	// LRM-485 — Archive ≠ Delete. Clients must refresh both active and
+	// archived lists; never emit channel:deleted here (that left the row in
+	// Archived while other tabs thought it was gone).
+	h.publish(protocol.EventChannelUpdated, workspaceID, "member", uuidToString(userID), ch)
 	return ch, true
 }
 

@@ -211,6 +211,11 @@ import {
   MutedIndicator,
   sumUnmutedUnreadCounts,
 } from "./conversation-muted";
+import {
+  CONVERSATION_SIDEBAR_ROW_ACTIVE,
+  CONVERSATION_SIDEBAR_ROW_IDLE,
+  CONVERSATION_SIDEBAR_UNREAD_BADGE,
+} from "./conversation-sidebar-styles";
 import { buildPinnedConversationEntries } from "./pinned-conversations";
 import { PinnedConversationsSection } from "./pinned-conversations-section";
 import { ResolvedAgentSidePanel } from "../../common/resolved-agent-side-panel";
@@ -2253,7 +2258,9 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
               data-pinned={pinned ? "true" : undefined}
               className={cn(
                 "group/row relative mb-0.5 rounded-lg transition-colors",
-                active?.id === channel.id ? "bg-primary/[0.08]" : "hover:bg-accent",
+                active?.id === channel.id
+                  ? CONVERSATION_SIDEBAR_ROW_ACTIVE
+                  : CONVERSATION_SIDEBAR_ROW_IDLE,
               )}
             />
           }
@@ -2368,7 +2375,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const listPane = (
     <aside
       className={cn(
-        "flex flex-1 min-h-0 flex-col bg-muted/20",
+        "flex flex-1 min-h-0 flex-col bg-sidebar",
         isMobile ? "min-w-0" : "border-r",
       )}
     >
@@ -2438,7 +2445,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                   )}
                   <span className="flex-1 text-left">{t(($) => $.sidebar.groups)}</span>
                   {channelsCollapsed && aggregateChannelUnread > 0 && (
-                    <span className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
+                    <span className={CONVERSATION_SIDEBAR_UNREAD_BADGE}>
                       {aggregateChannelUnread > 99 ? "99+" : aggregateChannelUnread}
                     </span>
                   )}

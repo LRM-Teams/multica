@@ -26,8 +26,16 @@ vi.mock("@multica/core/workspace/hooks", () => ({
 }));
 
 vi.mock("../issues/components/issue-mention-card", () => ({
-  IssueMentionCard: ({ issueId }: { issueId: string }) => (
-    <span data-testid="issue-mention-card">{issueId}</span>
+  IssueMentionCard: ({
+    issueId,
+    fallbackLabel,
+  }: {
+    issueId: string;
+    fallbackLabel?: string;
+  }) => (
+    <span data-testid="issue-mention-card" data-fallback-label={fallbackLabel ?? ""}>
+      {fallbackLabel ?? issueId}
+    </span>
   ),
 }));
 
@@ -142,6 +150,20 @@ describe("Markdown", () => {
 
     expect(screen.getByTestId("project-chip")).toHaveTextContent("project-123");
     expect(screen.getByRole("link")).toHaveAttribute("href", "/projects/project-123");
+  });
+
+  it("forwards issue mention link text as fallbackLabel (LRM-493)", () => {
+    // `[LRM-487](mention://issue/<uuid>)` must not drop the author label — that
+    // is what made mobile paint a truncated bare UUID.
+    render(
+      <Markdown>
+        {"[LRM-487](mention://issue/fe57cec6-0a45-4d90-9ef6-6571f429c047)"}
+      </Markdown>,
+    );
+
+    const card = screen.getByTestId("issue-mention-card");
+    expect(card).toHaveAttribute("data-fallback-label", "LRM-487");
+    expect(card).toHaveTextContent("LRM-487");
   });
 
   it("renders a :sticker:<id>: token as a sticker image", () => {

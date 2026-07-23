@@ -47,6 +47,32 @@ vi.mock("../../agents/components/tabs/reminders-tab", () => ({
   RemindersTab: () => <div>Reminders content</div>,
 }));
 
+vi.mock("../../agents/components/agent-profile-actions", () => ({
+  AgentProfileActions: ({ canManage }: { canManage: boolean }) => (
+    <div data-testid="agent-profile-actions" data-can-manage={String(canManage)}>
+      <button type="button" data-testid="agent-profile-action-message">
+        Message
+      </button>
+    </div>
+  ),
+}));
+
+vi.mock("../../agents/components/inline-edit-popover", () => ({
+  InlineEditPopover: ({
+    children,
+  }: {
+    children: (p: { onClick: () => void }) => React.ReactNode;
+  }) => <>{children({ onClick: () => {} })}</>,
+}));
+
+vi.mock("../../agents/components/agent-xp-burst", () => ({
+  AgentXpBurst: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
+vi.mock("../../agents/components/char-counter", () => ({
+  CharCounter: () => null,
+}));
+
 vi.mock("./agent-files-panel", () => ({
   AgentFilesPanel: (props: {
     canReadFiles?: boolean;
@@ -129,6 +155,7 @@ const RESOURCES = {
     activity: "Activity",
     reminders: "Reminders",
     files: "Files",
+    usage: "Usage",
     config: "Config",
   },
   side_panel: {
@@ -146,12 +173,29 @@ const RESOURCES = {
     runtime_section: "Runtime Config",
     message_button: "Message",
     message_opening: "Opening…",
+    display_name_label: "Display name",
+    description_label: "Description",
+    info_section: "Info",
+    role_label: "Role",
+    role_agent: "Agent",
+    actions_section: "Actions",
   },
   inspector: {
     section_properties: "Properties",
     prop_runtime: "Runtime",
     prop_model: "Model",
     prop_visibility: "Visibility",
+    display_name_title: "Edit display name",
+    display_name_placeholder: "Agent display name",
+    display_name_required: "Display name is required",
+    save: "Save",
+    cancel: "Cancel",
+  },
+  execution_config: {
+    applies_next_run: "Changes take effect on the next run",
+  },
+  row: {
+    archived: "Archived",
   },
 };
 
@@ -231,14 +275,14 @@ describe("AgentSidePanel", () => {
 
   it("keeps non-owner access to profile only by default", () => {
     renderPanel("user-other");
-    expect(screen.getByText("Atlas")).toBeInTheDocument();
+    expect(screen.getAllByText("Atlas").length).toBeGreaterThan(0);
     expect(screen.queryByRole("button", { name: "Activity" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Files" })).not.toBeInTheDocument();
   });
 
   it("header shows avatar badge only — no Online/Offline name-row text (LRM-248)", () => {
     renderPanel();
-    expect(screen.getByText("Atlas")).toBeInTheDocument();
+    expect(screen.getByTestId("agent-profile-identity")).toHaveTextContent("Atlas");
     expect(screen.getByTestId("agent-presence-overlay")).toBeInTheDocument();
     expect(screen.queryByText("Online")).toBeNull();
     expect(screen.queryByText("Offline")).toBeNull();
@@ -246,15 +290,23 @@ describe("AgentSidePanel", () => {
     expect(screen.queryByTestId("agent-live-status")).toBeNull();
   });
 
-  it("shows the full-width Message button between header and tabs (LRM-283)", () => {
+  it("puts Message in vertical Actions — not between header and tabs (LRM-448)", () => {
     renderPanel();
-    const messageBtn = screen.getByTestId("agent-profile-message-button");
-    expect(messageBtn).toHaveTextContent("Message");
-    fireEvent.click(messageBtn);
-    expect(openDMMocks.openDM).toHaveBeenCalledWith({
-      peer_type: "agent",
-      peer_id: "agent-1",
-    });
+    expect(screen.queryByTestId("agent-profile-message-button")).not.toBeInTheDocument();
+    expect(screen.getByTestId("agent-profile-actions")).toBeInTheDocument();
+    expect(screen.getByTestId("agent-profile-action-message")).toHaveTextContent("Message");
+    expect(screen.queryByRole("button", { name: "More" })).not.toBeInTheDocument();
+  });
+
+  it("shows Usage as its own tab — not stacked in Profile (LRM-448)", () => {
+    renderPanel("user-owner");
+    expect(screen.getByRole("button", { name: "Usage" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Usage" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Usage" }));
+    expect(screen.getByRole("region", { name: "Usage" })).toBeInTheDocument();
+    expect(screen.getByText(/Last 30 days · reported usage only/)).toBeInTheDocument();
+    expect(screen.getByText("No reported usage yet")).toBeInTheDocument();
   });
 
   it("temporarily exposes Activity, but not Files, to a workspace-member viewer", () => {
@@ -352,18 +404,20 @@ describe("AgentSidePanel", () => {
     expect(screen.queryByRole("button", { name: "Reminders" })).not.toBeInTheDocument();
   });
 
-  it("shows Profile, Activity, Reminders, and Files as four equally-reachable direct tabs for the owner — none hidden behind a 'More' menu", () => {
+  it("shows Profile, Activity, Reminders, Files, and Usage as direct tabs for the owner — none hidden behind a 'More' menu", () => {
     renderPanel("user-owner");
 
     expect(screen.getByRole("button", { name: "Profile" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Activity" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reminders" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Files" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Usage" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "More" })).not.toBeInTheDocument();
   });
 
-  it("shows a standalone reported-usage card instead of a fake session-token baseline", () => {
+  it("shows a standalone reported-usage card on the Usage tab instead of a fake session-token baseline", () => {
     renderPanel("user-owner");
+    fireEvent.click(screen.getByRole("button", { name: "Usage" }));
     expect(screen.getByRole("region", { name: "Usage" })).toBeInTheDocument();
     expect(screen.getByText(/Last 30 days · reported usage only/)).toBeInTheDocument();
     expect(screen.getByText("No reported usage yet")).toBeInTheDocument();
@@ -382,9 +436,9 @@ describe("AgentSidePanel", () => {
     });
 
     renderPanel("user-owner");
+    fireEvent.click(screen.getByRole("button", { name: "Usage" }));
 
     expect(screen.getByText("Estimated cost")).toBeInTheDocument();
-    // LRM-360: compact tabular amount — not dashboard-sized semibold.
     expect(screen.getByText("$3.00")).toHaveClass("text-sm", "tabular-nums");
     expect(screen.getByText("Tokens")).toBeInTheDocument();
     expect(screen.getByText("1M")).toHaveClass("text-sm", "tabular-nums", "text-muted-foreground");
@@ -402,6 +456,7 @@ describe("AgentSidePanel", () => {
     });
 
     renderPanel("user-owner");
+    fireEvent.click(screen.getByRole("button", { name: "Usage" }));
 
     expect(screen.getByText("Unavailable")).toBeInTheDocument();
     expect(screen.getByText("1K")).toBeInTheDocument();
@@ -467,44 +522,28 @@ describe("AgentSidePanel", () => {
     expect(activityTab.parentElement).not.toHaveClass("w-full", "px-0");
   });
 
-  it("never renders a separate Config tab (merged into Profile, #565)", () => {
+  it("never renders a separate Config tab (merged into Profile Info, #565 / LRM-448)", () => {
     renderPanel("user-owner", "group_manager");
     expect(screen.queryByRole("button", { name: "Config" })).not.toBeInTheDocument();
-    // Runtime config now lives inside the Profile view, not a separate tab, under
-    // a Profile-specific "Runtime Config" title (not the shared "Properties").
-    const runtimeTitle = screen.getByText("Runtime Config");
-    expect(runtimeTitle).toBeInTheDocument();
-    // LRM-360: Title Case muted label — no uppercase scream.
-    expect(runtimeTitle.className).toMatch(/text-xs/);
-    expect(runtimeTitle.className).toMatch(/text-muted-foreground/);
-    expect(runtimeTitle.className).not.toMatch(/uppercase/);
+    expect(screen.getByText("Info")).toBeInTheDocument();
+    expect(screen.queryByText("Runtime Config")).not.toBeInTheDocument();
     expect(screen.queryByText("Properties")).not.toBeInTheDocument();
     expect(screen.getByTestId("runtime-picker")).toBeInTheDocument();
     expect(screen.getByTestId("visibility-picker")).toBeInTheDocument();
-    // Concurrency was dropped from the Profile runtime section (#565 fix-forward).
     expect(screen.queryByTestId("concurrency-picker")).not.toBeInTheDocument();
   });
 
-  it("LRM-360: outline Message CTA + one human/system divider (no Usage↔Runtime line)", () => {
+  it("LRM-448: Actions stack + Info field labels; Usage lives on its tab", () => {
     renderPanel("user-owner");
-    const messageBtn = screen.getByTestId("agent-profile-message-button");
-    expect(messageBtn.className).toMatch(/bg-background/);
-    expect(messageBtn.className).toMatch(/text-foreground/);
-    expect(messageBtn.className).toMatch(/font-semibold/);
-    expect(messageBtn.className).not.toMatch(/bg-primary/);
+    expect(screen.getByTestId("agent-profile-actions")).toBeInTheDocument();
+    expect(screen.getByText("Display name")).toBeInTheDocument();
+    expect(screen.getByText("Description")).toBeInTheDocument();
+    expect(screen.getByText("Info")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Usage" })).not.toBeInTheDocument();
 
+    fireEvent.click(screen.getByRole("button", { name: "Usage" }));
     const usage = screen.getByRole("region", { name: "Usage" });
-    expect(usage.querySelector("h3")?.className).toMatch(/text-xs/);
     expect(usage.querySelector("h3")?.className).toMatch(/text-muted-foreground/);
-
-    // Profile body: human block carries the sole content divider (border-b);
-    // system stack is padding-only (Usage↔Runtime use spacing, not a line).
-    const profileRoot = screen.getByTestId("agent-profile-tab-content");
-    const humanBlock = profileRoot.children[0] as HTMLElement;
-    const systemBlock = profileRoot.children[1] as HTMLElement;
-    expect(humanBlock.className).toMatch(/border-b/);
-    expect(systemBlock.className).toMatch(/space-y-3\.5/);
-    expect(systemBlock.className).not.toMatch(/border-b/);
   });
 
   it("renders exactly the 4 runtime pickers, no Concurrency (#565 fix-forward)", () => {

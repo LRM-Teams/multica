@@ -73,6 +73,35 @@ for obsolete in \
   fi
 done
 
+require_config "$deploy_workflow" 'compose up -d --no-deps --force-recreate caddy'
+require_config "$deploy_workflow" 'environment: aliyun-dev'
+require_config "$deploy_workflow" 'runs-on: [self-hosted, aliyun]'
+require_config "$deploy_workflow" 'RUNNER_EXPECTED_USER: dev'
+require_config "$deploy_workflow" 'uses: actions/upload-artifact@v4'
+require_config "$deploy_workflow" 'uses: actions/download-artifact@v4'
+require_config "$deploy_workflow" 'scripts/assert-runner-workspace-ownership.sh'
+require_config "$deploy_workflow" 'Host-local database credential preflight passed.'
+if grep -Fq 'compose exec -T caddy caddy reload' <<<"$deploy_workflow"; then
+  echo "Caddy reload cannot observe an atomically replaced single-file bind mount."
+  exit 1
+fi
+if grep -Fq 'environment: s89' <<<"$deploy_workflow"; then
+  echo "Aliyun deploy workflow must not bind the retired s89 Environment."
+  exit 1
+fi
+if grep -Fq 'secrets.POSTGRES_PASSWORD' <<<"$deploy_workflow"; then
+  echo "Aliyun runtime secrets must remain in the host-owned .env."
+  exit 1
+fi
+
+deploy_job="$(awk '/^  deploy:/{capture=1} capture{print}' .github/workflows/deploy.yml)"
+if grep -Fq 'uses: actions/checkout' <<<"$deploy_job"; then
+  echo "Aliyun self-hosted deploy job must consume the immutable deploy artifact, not git checkout."
+  exit 1
+fi
+
+bash scripts/runner-workspace-ownership.test.sh
+
 if [[ ${SELFHOST_CONFIG_STATIC_ONLY:-false} == true ]]; then
   echo "self-host static topology ok"
   exit 0
@@ -134,12 +163,44 @@ require_config "$s89_caddyfile" 'redir @browser_navigation https://82.157.184.89
 require_config "$s89_caddyfile" '/api/daemon/ws'
 require_config "$s89_caddyfile" '/api/sandbox/node/ws'
 
-deploy_workflow="$(<.github/workflows/deploy.yml)"
-require_config "$deploy_workflow" 'compose up -d --no-deps --force-recreate caddy'
-if grep -Fq 'compose exec -T caddy caddy reload' <<<"$deploy_workflow"; then
-  echo "Caddy reload cannot observe an atomically replaced single-file bind mount."
+aliyun_config="$(
+  docker compose \
+    --project-directory "$ROOT_DIR" \
+    --env-file .env.example \
+    -f docker-compose.selfhost.yml \
+    -f docker-compose.aliyun.yml \
+    config
+)"
+aliyun_backend_config="$(
+  docker compose \
+    --project-directory "$ROOT_DIR" \
+    --env-file .env.example \
+    -f docker-compose.selfhost.yml \
+    -f docker-compose.aliyun.yml \
+    config backend
+)"
+
+require_config "$aliyun_config" 'container_name: multica-caddy'
+require_config "$aliyun_config" 'FRONTEND_ORIGIN: https://leagent.me'
+require_config "$aliyun_config" 'GOOGLE_REDIRECT_URI: https://leagent.me/auth/callback'
+require_config "$aliyun_config" 'MULTICA_APP_URL: https://leagent.me'
+require_config "$aliyun_config" 'MULTICA_PUBLIC_URL: https://leagent.me'
+require_config "$aliyun_config" 'target: /etc/caddy/Caddyfile'
+require_config "$aliyun_backend_config" 'host_ip: 127.0.0.1'
+if grep -Fq 'host_ip: 0.0.0.0' <<<"$aliyun_backend_config"; then
+  echo "Aliyun backend must not publish its raw API port on all interfaces."
   exit 1
 fi
+require_config "$aliyun_config" 'published: "80"'
+require_config "$aliyun_config" 'published: "443"'
+require_config "$aliyun_config" 'published: "8090"'
+
+aliyun_caddyfile="$(<deploy/aliyun/Caddyfile)"
+require_config "$aliyun_caddyfile" 'leagent.me, www.leagent.me'
+require_config "$aliyun_caddyfile" '@browser_navigation header Accept *text/html*'
+require_config "$aliyun_caddyfile" 'redir @browser_navigation https://leagent.me{uri} 308'
+require_config "$aliyun_caddyfile" '/api/daemon/ws'
+require_config "$aliyun_caddyfile" '/api/sandbox/node/ws'
 
 for script in scripts/dev.sh scripts/check.sh; do
   if ! grep -Fq '. scripts/local-env.sh' "$script"; then

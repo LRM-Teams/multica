@@ -130,13 +130,14 @@
 
 ## 4. Provider / 环境（daemon）
 
-### 4.0 s89 双部署环境（2026-07-16 当天进档——此前是隐性知识，烧过一小时考古）
-- **`:8090` = dev 自动部署**（`/data/multica`，APP_ENV=dev；`deploy.yml` on push→dev，已验证）：**测试/验收/日常一律用这套**；lrm-team 等真实工作区在这套的 `multica-postgres-1`。
-- **浏览器麦克风例外**（2026-07-22 实测，2026-07-23 修复）：`:8090` 是 HTTP，Chrome/Edge 必须隐藏 `getUserMedia`，所以它不能用于录音验收。现有 `leagent.me` 在腾讯云公网入口被转到 `dnspod.qcloud.com/static/webblock.html`，HTTPS 握手被关闭；Caddy 本机证书和反代正常也改变不了这个外部拦截。s89 现由仓库内 `deploy/s89/Caddyfile` 管理 `https://82.157.184.89`，使用 Let's Encrypt `shortlived` profile 自动签发/续期公网 IPv4 证书；`:8090` 只为 daemon 兼容与回滚验收保留。客户端只报告真实的 secure-context 错误，不尝试绕过浏览器安全策略。
-- **`:18090` = main 分支部署**（`/data/multica-main`，APP_ENV=production，独立 PostgreSQL/卷/端口，独立用户/工作区宇宙——同邮箱在两套里是两个人；海鹏搭建）。**触发机制已确认（Nash 三方对账）**：`.github/workflows/deploy-main.yml` + `docs/deploy-s89-main.md` **只存在于 `main` 分支**——dev→main PR 合并触发部署（最近 run 29302499173，7/14 成功，s89 镜像=origin/main 一致；无 cron/watchtower，CI/CD 唯一入口）。"停在 7/14"只是因为 main 自那以后没再合并过。
-- **⚠️ 元教训**：workflow 文件可以只活在别的分支上——只扫 `origin/dev` 会把存在的机制误报为"缺失"（deploy-main.yml 留在 main 是 trigger 设计的一部分）。更深一层（Felix 自拆）：**"永远读 X"式规矩本身就是待爆假设**——他上午栽在"读了陈旧 main"后给自己立了"一律读 origin/dev"，两小时后这条规矩让他在"什么部署 main"的问题上扫错了树。正确形态是**读对这个问题有权威性的那棵树**（产品代码→dev；"什么部署 main"→main；"线上跑什么"→部署的那个 SHA）——把依赖上下文的判断压成常量默认值，和 `[a-z0-9]`/终止符表是同一个病：一条规矩能修好上一次的错，同时制造下一次的错。
-- **两条铁则（Frank）**：不要手改 :18090；一切变更走 CI/CD 部署。
-- 事故记录：2026-07-16 Iris 从 :18090 登录被建新号、误判为重号 bug（task #548）。**从错误的门进去，所有对比都失义。**（本节初版把"main 触发"写成了已证事实，20 分钟内被 Felix 的 workflow 扫描纠正——权威位置的因果句必须与验证状态同标。）
+### 4.0 Aliyun 单一正式 CD 与 runner ownership — `可执行`（③单一部署链 + ⑤ workflow/host gate；owner: @Barry）
+- **唯一正式 dev 环境**：`dev` 只部署到 Aliyun `101.200.210.144`，canonical browser origin 是 `https://leagent.me`；`:8090` 只保留 daemon 兼容与部署探针。腾讯 s89 已退出正式 release path，只保留离线回滚资料；workflow 不得有 s89 runner、环境或 fallback 分支。
+- **构建与部署分界**：镜像和最小 deploy bundle 在 GitHub-hosted runner 生成；Aliyun self-hosted runner 只下载同一 `github.sha` 的 immutable artifact、拉固定 SHA 镜像并在本机执行 Compose/Caddy/readyz。self-hosted deploy job 禁止 `actions/checkout`/git fetch，避免大陆网络 partial clone 失败，也避免把 Actions checkout 变成人工/agent 共用源码树。
+- **runner ownership**：Aliyun runner/deploy user 是 `dev`，`/home/dev/actions-runner/_work/**` 必须全为 `dev`。artifact 前、artifact 后、deploy 后、终局四个 phase 都扫描整棵 work root；任何异主路径立即报 phase + owner/mode + exact path，禁止 broad chown。人工/agent 永远不得在 `_work/**` 建 branch/worktree。
+- **runtime owner 与 secrets**：`/data/multica` 由 deploy owner `dev` 管理，Caddyfile 从 runner-owned artifact 先校验，再通过 sibling + atomic rename 安装；不 sudo、不回写 runner work root。runtime secrets 只在 host-owned `/data/multica/.env`，受保护 GitHub Environment `aliyun-dev` 只做部署边界；每次 restart 前必须用该密码做真实 PostgreSQL TCP `SELECT 1`，不把“文件有值”当 credential 有效。
+- **终局证据**：连续两次 cumulative Deploy（clean + reuse）成功；每次 postflight non-`dev`=0；served backend/frontend SHA 对应 cumulative `dev`；host-local `/readyz` 与外部 `leagent.me` HTTPS 都通过。CI/merge 或公网 `:8090/health` 单独都不能宣称部署完成。
+- **事故依据**：2026-07-23 腾讯 s89 checkout 的 6 个 root-owned refs/logs 来自宿主机 root Git 复用 Actions worktree；同日 Aliyun 首次 cutover run `29979928059` 又因 `actions/checkout` 的 GnuTLS/partial-clone promisor fetch 失败。两起事故共同证明：长期修复不是清一次目录或多重试，而是让 self-hosted deploy 根本不拥有 Git worktree。
+- **branch source-of-truth 元教训**：workflow 可以只存在于特定 branch。产品代码看 `dev`；“什么部署 main”看 `main`；线上跑什么看部署 SHA/容器。不要把“永远读某一 branch”写成无上下文常量。
 
 ### 4.1 子进程环境合同 — `可执行`（task #512，进行中）
 - 全局宿主私有变量禁继承（Raft SEA 标记等）+ per-provider 声明允许/禁止清单 + 显式 `custom_env` 最后叠加最优先 + 全 provider 矩阵回归。首刀已落：中央 provider-aware sanitizer（#627，Pi 声明 `PI_PACKAGE_DIR` 宿主私有）。

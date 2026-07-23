@@ -37,8 +37,41 @@ describe("channelMessageRenderEqual", () => {
   });
 
   it("detects reaction changes", () => {
-    const prev = baseMessage({ reactions: [{ emoji: "👍", count: 1, user_ids: ["u1"] }] });
-    const next = baseMessage({ reactions: [{ emoji: "👍", count: 2, user_ids: ["u1", "u2"] }] });
+    const prev = baseMessage({
+      reactions: [
+        {
+          id: "r1",
+          channel_id: "ch-1",
+          message_id: "msg-1",
+          actor_type: "user",
+          actor_id: "u1",
+          emoji: "👍",
+          created_at: "2026-07-22T00:00:00.000Z",
+        },
+      ],
+    });
+    const next = baseMessage({
+      reactions: [
+        {
+          id: "r1",
+          channel_id: "ch-1",
+          message_id: "msg-1",
+          actor_type: "user",
+          actor_id: "u1",
+          emoji: "👍",
+          created_at: "2026-07-22T00:00:00.000Z",
+        },
+        {
+          id: "r2",
+          channel_id: "ch-1",
+          message_id: "msg-1",
+          actor_type: "user",
+          actor_id: "u2",
+          emoji: "👍",
+          created_at: "2026-07-22T00:01:00.000Z",
+        },
+      ],
+    });
     expect(channelMessageRenderEqual(prev, next)).toBe(false);
   });
 });

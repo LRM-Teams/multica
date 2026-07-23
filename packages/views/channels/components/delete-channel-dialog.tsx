@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -17,9 +17,10 @@ import { useT } from "../../i18n";
 /**
  * LRM-239 — Slack-aligned permanent delete confirm: the destructive action
  * stays disabled until the caller checks "Yes, permanently delete…".
- * LRM-449 — sync lock + pending disable so a double-click cannot fire two
- * DELETE requests / stacked failure toasts while the dialog stays open
- * (AlertDialogAction is not a Close).
+ * LRM-449 — sync ref lock so a double-click cannot fire two DELETE requests /
+ * stacked failure toasts while the dialog stays open (AlertDialogAction is
+ * not a Close). Reset the lock when `pending` flips false (parent re-render),
+ * not via a prop→state effect (React Doctor).
  */
 export function DeleteChannelDialog({
   open,
@@ -36,16 +37,16 @@ export function DeleteChannelDialog({
 }) {
   const { t } = useT("channels");
   const [confirmed, setConfirmed] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
   const lockedRef = useRef(false);
-  const busy = !!pending || submitting;
+  const prevPendingRef = useRef(!!pending);
 
-  useEffect(() => {
-    if (!pending) {
-      lockedRef.current = false;
-      setSubmitting(false);
-    }
-  }, [pending]);
+  // Clear the click lock when the mutation settles (pending true → false).
+  if (prevPendingRef.current && !pending) {
+    lockedRef.current = false;
+  }
+  prevPendingRef.current = !!pending;
+
+  const busy = !!pending || lockedRef.current;
 
   return (
     <AlertDialog
@@ -53,7 +54,6 @@ export function DeleteChannelDialog({
       onOpenChange={(next) => {
         if (!next) {
           setConfirmed(false);
-          setSubmitting(false);
           lockedRef.current = false;
         }
         onOpenChange(next);
@@ -80,9 +80,8 @@ export function DeleteChannelDialog({
           <AlertDialogAction
             variant="destructive"
             onClick={() => {
-              if (!confirmed || lockedRef.current || busy) return;
+              if (!confirmed || lockedRef.current || pending) return;
               lockedRef.current = true;
-              setSubmitting(true);
               onConfirm();
             }}
             disabled={!confirmed || busy}

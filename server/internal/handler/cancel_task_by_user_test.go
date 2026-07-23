@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -142,7 +143,7 @@ func cancelTaskByUserRequest(t *testing.T, userID, taskID string) *http.Request 
 	return withChatTestWorkspaceCtx(t, req)
 }
 
-func TestCancelTaskByUser_AgentInboxEvent_CancelsNewChainTask(t *testing.T) {
+func TestCancelTaskByUser_AgentInboxEvent_ChannelBound_ReturnsConflict(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -156,6 +157,43 @@ func TestCancelTaskByUser_AgentInboxEvent_CancelsNewChainTask(t *testing.T) {
 		t.Fatalf("seed agent member: %v", err)
 	}
 	root := dispatchThreadMentionForTest(t, channelID, agentID, "cancel-inbox-event-"+uuid.NewString())
+	eventID := latestChannelAgentInboxEventForRootForTest(t, root.ID, agentID)
+
+	w := httptest.NewRecorder()
+	testHandler.CancelTaskByUser(w, cancelTaskByUserRequest(t, testUserID, eventID))
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409 for channel inbox via /api/tasks cancel, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "agent-inbox") {
+		t.Fatalf("expected explicit inbox cancel contract error, got %s", w.Body.String())
+	}
+
+	var eventStatus, terminalOutcome string
+	if err := testPool.QueryRow(ctx, `
+		SELECT status, COALESCE(terminal_outcome, '')
+		FROM agent_inbox_event
+		WHERE id = $1`, eventID).Scan(&eventStatus, &terminalOutcome); err != nil {
+		t.Fatalf("load inbox event: %v", err)
+	}
+	if terminalOutcome != "" || eventStatus == "suppressed" {
+		t.Fatalf("channel inbox event was mutated via deprecated path: status=%q outcome=%q", eventStatus, terminalOutcome)
+	}
+}
+
+func TestCancelChannelAgentInboxEvent_CancelsActiveWake(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "CancelChannelInboxAgent", []byte("[]"))
+	channelID := seedChannelForTest(t, "cancel-channel-inbox-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed agent member: %v", err)
+	}
+	root := dispatchThreadMentionForTest(t, channelID, agentID, "cancel-channel-inbox-"+uuid.NewString())
 	eventID := latestChannelAgentInboxEventForRootForTest(t, root.ID, agentID)
 
 	var deliveryID string
@@ -178,17 +216,20 @@ func TestCancelTaskByUser_AgentInboxEvent_CancelsNewChainTask(t *testing.T) {
 		t.Fatalf("seed inbox delivery: %v", err)
 	}
 
+	req := newRequestAs(testUserID, http.MethodPost, "/api/channels/"+channelID+"/agent-inbox/events/"+eventID+"/cancel", nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParams(req, "channelId", channelID, "eventId", eventID)
 	w := httptest.NewRecorder()
-	testHandler.CancelTaskByUser(w, cancelTaskByUserRequest(t, testUserID, eventID))
+	testHandler.CancelChannelAgentInboxEvent(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	var resp CancelTaskByUserResponse
+	var resp ChannelAgentInboxCancelResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode cancel response: %v", err)
 	}
-	if resp.ID != eventID || resp.Status != "cancelled" || resp.Kind != "chat" || resp.CompletedAt == nil {
-		t.Fatalf("cancel inbox response = %+v, want cancelled chat inbox event", resp.AgentTaskResponse)
+	if resp.InboxEventID != eventID || resp.Status != "cancelled" || resp.Kind != "chat" || resp.CompletedAt == nil {
+		t.Fatalf("cancel inbox response = %+v, want cancelled chat inbox event", resp)
 	}
 
 	var eventStatus, terminalOutcome, terminalDeliveryID string
@@ -228,6 +269,80 @@ func TestCancelTaskByUser_AgentInboxEvent_CancelsNewChainTask(t *testing.T) {
 		if task.TaskID == eventID {
 			t.Fatalf("cancelled inbox event still appears in active strip: %+v", activeResp.Tasks)
 		}
+	}
+}
+
+func TestCancelChannelActiveAgentInboxEvents_BulkStopsAllActive(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "cancel-active-bulk-"+uuid.NewString(), testUserID)
+	agentA := createHandlerTestAgent(t, "CancelActiveAgentA", []byte("[]"))
+	agentB := createHandlerTestAgent(t, "CancelActiveAgentB", []byte("[]"))
+	for _, agentID := range []string{agentA, agentB} {
+		if _, err := testPool.Exec(ctx, `
+			INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+			VALUES ($1, $2, 'agent', $3)`, channelID, testWorkspaceID, agentID); err != nil {
+			t.Fatalf("seed agent member: %v", err)
+		}
+	}
+
+	rootA := dispatchThreadMentionForTest(t, channelID, agentA, "cancel-active-a-"+uuid.NewString())
+	rootB := dispatchThreadMentionForTest(t, channelID, agentB, "cancel-active-b-"+uuid.NewString())
+	eventA := latestChannelAgentInboxEventForRootForTest(t, rootA.ID, agentA)
+	eventB := latestChannelAgentInboxEventForRootForTest(t, rootB.ID, agentB)
+
+	req := withURLParam(newRequestAs(testUserID, http.MethodPost, "/api/channels/"+channelID+"/agent-inbox/cancel-active", nil), "channelId", channelID)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	w := httptest.NewRecorder()
+	testHandler.CancelChannelActiveAgentInboxEvents(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp ChannelAgentInboxCancelActiveResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode cancel-active response: %v", err)
+	}
+	if resp.CancelledCount != 2 || len(resp.Cancelled) != 2 {
+		t.Fatalf("cancel-active response = %+v, want 2 cancelled", resp)
+	}
+	got := map[string]bool{}
+	for _, item := range resp.Cancelled {
+		got[item.InboxEventID] = true
+		if item.Status != "cancelled" {
+			t.Fatalf("item status = %q, want cancelled", item.Status)
+		}
+	}
+	if !got[eventA] || !got[eventB] {
+		t.Fatalf("cancelled ids = %v, want %s and %s", got, eventA, eventB)
+	}
+
+	for _, eventID := range []string{eventA, eventB} {
+		var terminalOutcome string
+		if err := testPool.QueryRow(ctx, `
+			SELECT COALESCE(terminal_outcome, '')
+			FROM agent_inbox_event WHERE id = $1`, eventID).Scan(&terminalOutcome); err != nil {
+			t.Fatalf("load event %s: %v", eventID, err)
+		}
+		if terminalOutcome != "no_reply" {
+			t.Fatalf("event %s outcome=%q, want no_reply", eventID, terminalOutcome)
+		}
+	}
+
+	// Idempotent second Stop All: nothing left to cancel.
+	w2 := httptest.NewRecorder()
+	testHandler.CancelChannelActiveAgentInboxEvents(w2, req)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("second cancel-active expected 200, got %d: %s", w2.Code, w2.Body.String())
+	}
+	var resp2 ChannelAgentInboxCancelActiveResponse
+	if err := json.Unmarshal(w2.Body.Bytes(), &resp2); err != nil {
+		t.Fatalf("decode second cancel-active: %v", err)
+	}
+	if resp2.CancelledCount != 0 || len(resp2.Cancelled) != 0 {
+		t.Fatalf("second cancel-active = %+v, want empty", resp2)
 	}
 }
 

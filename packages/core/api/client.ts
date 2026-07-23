@@ -2828,6 +2828,54 @@ export class ApiClient {
     );
   }
 
+  /**
+   * LRM-425 — single Stop for a channel agent wake. Authority id is
+   * `inbox_event_id` from `listChannelActiveTasks` (also exposed as `task_id`).
+   * Do not use `cancelTaskById` for channel runs.
+   */
+  async cancelChannelInboxEvent(
+    channelId: string,
+    inboxEventId: string,
+  ): Promise<{
+    inbox_event_id: string;
+    agent_id: string;
+    runtime_id?: string;
+    status: string;
+    priority: number;
+    completed_at?: string | null;
+    created_at: string;
+    chat_session_id?: string;
+    kind: string;
+  }> {
+    return this.fetch(`/api/channels/${channelId}/agent-inbox/events/${inboxEventId}/cancel`, {
+      method: "POST",
+    });
+  }
+
+  /**
+   * LRM-425 — Stop All for a channel in one request. Scope matches non-terminal
+   * rows from `listChannelActiveTasks`. Frontend must not for-in / Promise.all
+   * single cancel.
+   */
+  async cancelChannelActiveInboxEvents(channelId: string): Promise<{
+    cancelled: Array<{
+      inbox_event_id: string;
+      agent_id: string;
+      runtime_id?: string;
+      status: string;
+      priority: number;
+      completed_at?: string | null;
+      created_at: string;
+      chat_session_id?: string;
+      kind: string;
+    }>;
+    cancelled_count: number;
+  }> {
+    return this.fetch(`/api/channels/${channelId}/agent-inbox/cancel-active`, {
+      method: "POST",
+    });
+  }
+
   async markChannelRead(channelId: string): Promise<MarkChannelReadResult> {
     return this.fetch<MarkChannelReadResult>(`/api/channels/${channelId}/read`, {
       method: "POST",

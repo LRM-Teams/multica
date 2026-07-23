@@ -22,6 +22,8 @@ required by the chat transport CLI.
 - [x] Ran both focused handler tests against a new temporary database and
   removed only that database afterward; both passed.
 - [x] Ran `gofmt` and `git diff --check`.
+- [x] Pushed `fix/thread-continuation-target` and opened ready-for-review PR
+  #965 into `dev`: <https://github.com/LRM-Teams/multica/pull/965>.
 
 ## Boundaries
 

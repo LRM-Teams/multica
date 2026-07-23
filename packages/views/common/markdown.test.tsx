@@ -22,7 +22,27 @@ vi.mock("@multica/core/auth", () => ({
 vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({
     getActorName: (_type: string, _id: string, fallback?: string) => fallback ?? "Alice",
+    getActorHandle: (_type: string, _id: string, fallback?: string) => fallback ?? "alice",
   }),
+}));
+
+vi.mock("./use-resolved-actor-identity", () => ({
+  useResolvedActorIdentity: (actorId: string | undefined, mentionType: string | null) => {
+    if (!actorId || !mentionType) return { displayName: null, avatarUrl: null };
+    if (mentionType === "member" && actorId === "user-1") {
+      return { displayName: "me", avatarUrl: null };
+    }
+    if (mentionType === "member" && actorId === "user-2") {
+      return { displayName: "Alice", avatarUrl: null };
+    }
+    if (mentionType === "agent" && (actorId === "agent-9" || actorId === "agent-1")) {
+      return { displayName: "Bot", avatarUrl: null };
+    }
+    if (mentionType === "agent" && actorId === "agent-beckham") {
+      return { displayName: "贝克汉姆", avatarUrl: null };
+    }
+    return { displayName: null, avatarUrl: null };
+  },
 }));
 
 vi.mock("../issues/components/issue-mention-card", () => ({
@@ -230,7 +250,7 @@ describe("Markdown", () => {
 
   it("highlights member mention text without breaking the mention chip", () => {
     const { container } = render(
-      <Markdown highlightQuery="ali">{"Ping [@Alice](mention://member/user-1)"}</Markdown>,
+      <Markdown highlightQuery="ali">{"Ping [@Alice](mention://member/user-2)"}</Markdown>,
     );
 
     expect(container.textContent).toContain("@Alice");
@@ -238,11 +258,11 @@ describe("Markdown", () => {
   });
 
   it("wraps member mentions in the full profile popover trigger", () => {
-    render(<Markdown>{"Ping [@Alice](mention://member/user-1)"}</Markdown>);
+    render(<Markdown>{"Ping [@Alice](mention://member/user-2)"}</Markdown>);
 
     const trigger = screen.getByTestId("actor-profile-trigger");
     expect(trigger).toHaveAttribute("data-member-type", "user");
-    expect(trigger).toHaveAttribute("data-member-id", "user-1");
+    expect(trigger).toHaveAttribute("data-member-id", "user-2");
     expect(trigger.textContent).toContain("@Alice");
   });
 
@@ -266,7 +286,7 @@ describe("Markdown", () => {
 
   it("does not open the panel for a rendered human member mention (v1: agents only)", () => {
     openAgentPanelMock.mockClear();
-    render(<Markdown>{"Ping [@Alice](mention://member/user-1)"}</Markdown>);
+    render(<Markdown>{"Ping [@Alice](mention://member/user-2)"}</Markdown>);
     fireEvent.click(screen.getByTestId("actor-profile-trigger"));
     expect(openAgentPanelMock).not.toHaveBeenCalled();
   });
@@ -325,6 +345,36 @@ describe("Markdown", () => {
     expect(self).toHaveClass("dark:bg-brand/[0.14]");
     expect(self).toHaveClass("dark:text-brand");
     expect(self).not.toHaveClass("text-brand");
+  });
+
+  // LRM-515: channel/group-manager agents are often absent from ListAgents;
+  // emit-time slug must not become branded main ink (Frank IMG_3126).
+  it("paints live display_name for an agent mention, not the emit slug (LRM-515)", () => {
+    const { container } = render(
+      <Markdown>
+        {"继续清 [@bei-ke-han-mu-11](mention://agent/agent-beckham)"}
+      </Markdown>,
+    );
+
+    const agent = container.querySelector('[data-mention-type="agent"]');
+    expect(agent?.textContent).toBe("@贝克汉姆");
+    expect(agent?.textContent).not.toContain("bei-ke-han-mu-11");
+    expect(agent).toHaveAttribute("data-mention-kind", "default");
+    expect(agent).toHaveClass("text-brand");
+  });
+
+  it("grays @handle when display_name cannot be resolved (LRM-515)", () => {
+    const { container } = render(
+      <Markdown>
+        {"ping [@missing-slug](mention://agent/agent-missing)"}
+      </Markdown>,
+    );
+
+    const agent = container.querySelector('[data-mention-type="agent"]');
+    expect(agent?.textContent).toBe("@missing-slug");
+    expect(agent).toHaveAttribute("data-mention-kind", "unresolved");
+    expect(agent).toHaveClass("text-muted-foreground");
+    expect(agent).not.toHaveClass("text-brand");
   });
 
   it("does not highlight inline code text", () => {

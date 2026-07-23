@@ -19,6 +19,7 @@ import { NodeViewWrapper } from "@tiptap/react";
 import type { NodeViewProps } from "@tiptap/react";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { useAuthStore } from "@multica/core/auth";
+import { useActorName } from "@multica/core/workspace/hooks";
 import { useNavigation } from "../../navigation";
 import { IssueChip } from "../../issues/components/issue-chip";
 import { ProjectChip } from "../../projects/components/project-chip";
@@ -29,16 +30,28 @@ import {
   mentionTokenClassName,
   resolveMentionTokenKind,
 } from "../../common/mention-token";
+import { useResolvedActorIdentity } from "../../common/use-resolved-actor-identity";
+import { resolveActorMentionInk } from "../../common/actor-mention-display-text";
 
 export function MentionView({ node }: NodeViewProps) {
   const viewerUserId = useAuthStore((s) => s.user?.id ?? null);
+  const { getActorHandle } = useActorName();
   // Same context-or-global-store fallback as ActorAvatarPanelTrigger, so an
   // @mention opens the panel whether it renders inside channels/DM (context)
   // or anywhere else an editor can render one (issue comments, etc.).
   const openAgentPanelFromContext = useOpenAgentPanel();
   const openAgentPanelFromStore = useAgentPanelStore((s) => s.open);
   const openAgentPanel = openAgentPanelFromContext ?? openAgentPanelFromStore;
-  const { type, id, label } = node.attrs;
+  const { type, id, label, handle: attrHandle } = node.attrs;
+
+  // Hooks must run unconditionally (issue/project early-return below).
+  // LRM-515: person mentions resolve live display_name; handle only on miss
+  // (muted) and in the profile peek — never brand the routing slug.
+  const mentionType = type === "agent" || type === "member" ? type : null;
+  const identity = useResolvedActorIdentity(
+    mentionType ? id : undefined,
+    mentionType,
+  );
 
   if (type === "issue") {
     return (
@@ -61,8 +74,28 @@ export function MentionView({ node }: NodeViewProps) {
   // @all is a fixed protocol token (same as message renderer + markdown
   // `[@all](mention://all/all)`). Picker shows the localized "All members"
   // description; the chip always reads `@all`.
-  const displayLabel = type === "all" ? "all" : (label ?? id);
-  const kind = resolveMentionTokenKind(type, id, viewerUserId);
+  const emitLabel =
+    typeof label === "string" ? label.replace(/^@+/, "").trim() || undefined : undefined;
+  const handle =
+    (typeof attrHandle === "string" && attrHandle.trim()) ||
+    (mentionType ? getActorHandle(mentionType, id, emitLabel) : emitLabel);
+
+  let displayLabel: string;
+  let kind = resolveMentionTokenKind(type, id, viewerUserId);
+  if (type === "all") {
+    displayLabel = "all";
+  } else if (mentionType) {
+    const ink = resolveActorMentionInk({
+      displayName: identity.displayName,
+      handle,
+      emitLabel,
+    });
+    displayLabel = ink?.primary ?? "";
+    if (!ink || ink.unresolved) kind = "unresolved";
+  } else {
+    displayLabel = emitLabel ?? id;
+  }
+
   const chip = (
     <span
       className={mentionTokenClassName(kind)}

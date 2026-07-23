@@ -35,14 +35,12 @@ import type { Attachment } from "@multica/core/types";
 import { useNavigation } from "../navigation";
 import { IssueMentionCard } from "../issues/components/issue-mention-card";
 import { ProjectChip } from "../projects/components/project-chip";
-import { ActorProfileTrigger } from "../common/actor-profile-popover";
-import { useOpenAgentPanel } from "../common/agent-panel-context";
+import { ActorMention } from "../common/markdown";
 import {
   mentionTokenClassName,
   resolveMentionTokenKind,
 } from "../common/mention-token";
 import { useAuthStore } from "@multica/core/auth";
-import { useAgentPanelStore } from "@multica/core/agents/stores";
 import { useLinkHover, LinkHoverCard } from "./link-hover-card";
 import { openLink, isMentionHref } from "./utils/link-handler";
 import { isAllowedFileCardHref } from "@multica/ui/markdown";
@@ -176,12 +174,6 @@ function ReadonlyLink({
 }) {
   const slug = useWorkspaceSlug();
   const viewerUserId = useAuthStore((s) => s.user?.id ?? null);
-  // #349/#447 parity: a rendered @agent mention opens the side panel on click,
-  // same as markdown.tsx's ActorMention and the editor MentionView. Context
-  // (channels/DM) preferred, global store fallback everywhere else.
-  const openAgentPanelFromContext = useOpenAgentPanel();
-  const openAgentPanelFromStore = useAgentPanelStore((s) => s.open);
-  const openAgentPanel = openAgentPanelFromContext ?? openAgentPanelFromStore;
 
   if (href?.startsWith("slash://skill/")) {
     return <span className="slash-command">{children}</span>;
@@ -207,14 +199,22 @@ function ReadonlyLink({
             : undefined;
       return <ProjectMentionLink projectId={match[2]} label={label} />;
     }
-    // Member / agent — full profile popover (parity with editor MentionView
-    // and message author hover). Brand semantic token (not per-actor color).
+    // Member / agent — shared ActorMention (LRM-515 display_name ink + peek handle).
     // @all / squad stay pill-only (broadcast / group keywords, Slack-style).
     if (match?.[1] && match[2]) {
       const type = match[1];
       const id = match[2];
+      const label =
+        typeof children === "string"
+          ? children
+          : Array.isArray(children)
+            ? children.join("")
+            : undefined;
+      if (type === "member" || type === "agent") {
+        return <ActorMention type={type} id={id} label={label} />;
+      }
       const kind = resolveMentionTokenKind(type, id, viewerUserId);
-      const chip = (
+      return (
         <span
           className={mentionTokenClassName(kind)}
           data-mention-kind={kind}
@@ -223,21 +223,6 @@ function ReadonlyLink({
           {children}
         </span>
       );
-      if (type === "member" || type === "agent") {
-        return (
-          <ActorProfileTrigger
-            memberType={type === "agent" ? "agent" : "user"}
-            memberId={id}
-            triggerElement="span"
-            onClickCapture={
-              type === "agent" && openAgentPanel ? () => openAgentPanel(id) : undefined
-            }
-          >
-            {chip}
-          </ActorProfileTrigger>
-        );
-      }
-      return chip;
     }
     return <span className="mention">{children}</span>;
   }

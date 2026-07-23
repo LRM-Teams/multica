@@ -27,6 +27,8 @@ import {
   mentionTokenClassName,
   resolveMentionTokenKind,
 } from "./mention-token";
+import { useResolvedActorIdentity } from "./use-resolved-actor-identity";
+import { resolveActorMentionInk } from "./actor-mention-display-text";
 
 export type { RenderMode };
 
@@ -86,8 +88,7 @@ export function ActorMention({
   label?: string;
   highlightQuery?: string;
 }): React.JSX.Element {
-  const actorNames = useActorName();
-  const { getActorName } = actorNames;
+  const { getActorName, getActorHandle } = useActorName();
   const viewerUserId = useAuthStore((s) => s.user?.id ?? null);
   // #349/#447 parity for RENDERED messages: a rendered @agent mention opens the
   // side panel on click, same as the editor's MentionView and agent avatars.
@@ -95,18 +96,50 @@ export function ActorMention({
   const openAgentPanelFromContext = useOpenAgentPanel();
   const openAgentPanelFromStore = useAgentPanelStore((s) => s.open);
   const openAgentPanel = openAgentPanelFromContext ?? openAgentPanelFromStore;
-  // The link text is usually "@Name"; strip the leading @ so we don't double
-  // it, and use it as the fallback when the id isn't in the workspace cache.
-  const fallback = label ? label.replace(/^@+/, "").trim() || undefined : undefined;
-  const name = type === "all" ? "all" : getActorName(type, id, fallback);
-  const kind = resolveMentionTokenKind(type, id, viewerUserId);
+
+  const mentionType = type === "agent" || type === "member" ? type : null;
+  // LRM-515 / LRM-391: ListAgents hides channel / group-manager agents, so a
+  // bare `@slug` span must resolve via member-profile — never brand the emit
+  // handle as if it were display_name (Frank IMG_3126 / LRM-238).
+  const identity = useResolvedActorIdentity(
+    mentionType ? id : undefined,
+    mentionType,
+  );
+  const emitLabel = label ? label.replace(/^@+/, "").trim() || undefined : undefined;
+  const handle = mentionType
+    ? getActorHandle(mentionType, id, emitLabel)
+    : emitLabel;
+
+  let name: string;
+  let kind = resolveMentionTokenKind(type, id, viewerUserId);
+  if (type === "all") {
+    name = "all";
+  } else if (mentionType) {
+    const ink = resolveActorMentionInk({
+      displayName: identity.displayName,
+      handle,
+      emitLabel,
+    });
+    if (ink) {
+      name = ink.primary;
+      if (ink.unresolved) kind = "unresolved";
+    } else {
+      // Hard miss with nothing safe to paint — keep token shape, stay muted.
+      name = "";
+      kind = "unresolved";
+    }
+  } else {
+    // Squad / other non-person keywords: directory name only (no profile path).
+    name = getActorName(type, id, emitLabel);
+  }
+
   const chip = (
     <span
       className={mentionTokenClassName(kind)}
       data-mention-kind={kind}
       data-mention-type={type}
     >
-      {highlightSearchText(`@${name}`, highlightQuery)}
+      {highlightSearchText(name ? `@${name}` : "@", highlightQuery)}
     </span>
   );
 

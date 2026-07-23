@@ -15,13 +15,16 @@ import { cn } from "@multica/ui/lib/utils";
  * - hover / focus → slightly stronger wash
  * - self-mentioned row → light warm wash (#fef9e8); dark cool brand tint + left bar
  */
-export type MentionTokenKind = "default" | "all" | "self";
+export type MentionTokenKind = "default" | "all" | "self" | "unresolved";
 
 /**
  * Resolve the visual kind for a mention:// token.
  * - `all` → same token as default (broadcast uses weight+fill already shared)
  * - member id matching the viewer → self emphasis (yellow token + row wash)
  * - everything else (member/agent/squad/…) → default
+ *
+ * Callers that only resolved a handle (LRM-515 miss) should pass
+ * `unresolved` explicitly — do not derive it here from the id.
  */
 export function resolveMentionTokenKind(
   type: string,
@@ -37,6 +40,7 @@ export function resolveMentionTokenKind(
  * Shared class string for body/editor mention text.
  * Slack soft-bg token — brand ink + light rest fill; self is warm yellow in
  * light mode and brand tint + brand ink in dark (LRM-350).
+ * Unresolved (LRM-515): muted @handle only — never brand a slug as a name.
  * Keep padding thin (≤2px) and radius small (≤4px); never `rounded-full`.
  */
 export function mentionTokenClassName(
@@ -44,17 +48,20 @@ export function mentionTokenClassName(
   className?: string,
 ): string {
   const isSelf = kind === "self";
+  const isUnresolved = kind === "unresolved";
   return cn(
     "mention not-prose inline rounded-sm px-0.5",
     "font-bold box-decoration-clone",
     "transition-colors duration-100",
     "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-brand/30",
-    isSelf
-      ? [
-          "bg-[#faf0c8] text-foreground hover:bg-[#f5e8a8] focus-visible:bg-[#f5e8a8]",
-          "dark:bg-brand/[0.14] dark:text-brand dark:hover:bg-brand/[0.18] dark:focus-visible:bg-brand/[0.18]",
-        ]
-      : "bg-brand/[0.10] text-brand hover:bg-brand/[0.14] focus-visible:bg-brand/[0.14]",
+    isUnresolved
+      ? "bg-muted/60 text-muted-foreground hover:bg-muted focus-visible:bg-muted"
+      : isSelf
+        ? [
+            "bg-[#faf0c8] text-foreground hover:bg-[#f5e8a8] focus-visible:bg-[#f5e8a8]",
+            "dark:bg-brand/[0.14] dark:text-brand dark:hover:bg-brand/[0.18] dark:focus-visible:bg-brand/[0.18]",
+          ]
+        : "bg-brand/[0.10] text-brand hover:bg-brand/[0.14] focus-visible:bg-brand/[0.14]",
     className,
   );
 }

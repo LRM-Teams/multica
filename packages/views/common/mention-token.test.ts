@@ -67,6 +67,14 @@ describe("mentionTokenClassName", () => {
     expect(cls).not.toContain("dark:bg-[#faf0c8]");
     expect(cls).not.toContain("dark:text-foreground");
   });
+
+  it("mutes unresolved handle ink (LRM-515)", () => {
+    const cls = mentionTokenClassName("unresolved");
+    expect(cls).toContain("text-muted-foreground");
+    expect(cls).toContain("bg-muted/60");
+    expect(cls).not.toContain("text-brand");
+    expect(cls).not.toContain("bg-brand/[0.10]");
+  });
 });
 
 describe("SELF_MENTION_ROW_CLASS", () => {

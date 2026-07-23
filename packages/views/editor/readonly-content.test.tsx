@@ -26,6 +26,22 @@ vi.mock("@multica/core/paths", () => ({
   useWorkspaceSlug: () => "test",
 }));
 
+vi.mock("@multica/core/workspace/hooks", () => ({
+  useActorName: () => ({
+    getActorName: (_type: string, _id: string, fallback?: string) => fallback ?? "Alice",
+    getActorHandle: (_type: string, _id: string, fallback?: string) => fallback ?? "alice",
+  }),
+}));
+
+vi.mock("../common/use-resolved-actor-identity", () => ({
+  useResolvedActorIdentity: (actorId: string | undefined, mentionType: string | null) => {
+    if (!actorId || !mentionType) return { displayName: null, avatarUrl: null };
+    if (mentionType === "agent") return { displayName: "Bot", avatarUrl: null };
+    if (mentionType === "member") return { displayName: "Alice", avatarUrl: null };
+    return { displayName: null, avatarUrl: null };
+  },
+}));
+
 vi.mock("../navigation", () => ({
   useNavigation: () => ({ push: vi.fn(), openInNewTab: vi.fn() }),
 }));

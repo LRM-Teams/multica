@@ -23,7 +23,8 @@ canonical human-Agent DM and reuse the current private-Agent access rules.
   membership, DM peer, and private-Agent checks.
 - [x] Run the database regressions in a fresh isolated PostgreSQL database.
 - [x] Run voice-call unit tests, vet, and diff checks.
-- [ ] Commit, push, and open an independent ready PR stacked on #1047.
+- [x] Commit, push, and open independent ready PR
+  [#1049](https://github.com/LRM-Teams/multica/pull/1049), stacked on #1047.
 
 ## Verification
 

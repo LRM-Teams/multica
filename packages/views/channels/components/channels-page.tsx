@@ -82,6 +82,7 @@ import type {
   AgentPanelIdentitySnapshot,
   OpenAgentPanelFn,
 } from "@multica/core/agents";
+import { isAgentDiscoverableInChannelContext } from "@multica/core/agents";
 import {
   matchesActorIdentitySearch,
   resolveActorDisplayName,
@@ -975,6 +976,14 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       ? explicit
       : (explicit ?? channels.find(isImmutableSystemChannel) ?? channels[0] ?? null);
   }, [channels, archivedChannels, activeId, activeDmId, isMobile]);
+  // Invite / discovery for a group must pass channel_id so channel-visibility
+  // agents from OTHER homes stay out (LRM-399; mirrors ListAgents filter).
+  const inviteDiscoverChannelId =
+    active?.kind === "group" && !active.archived_at ? active.id : null;
+  const { data: channelInviteAgents = [] } = useQuery({
+    ...agentListOptions(wsId, { channelId: inviteDiscoverChannelId }),
+    enabled: !!wsId && !!inviteDiscoverChannelId,
+  });
   const isActiveArchived = !!active?.archived_at;
   // #642 — the workspace's system #general channel: immutable, auto-managed
   // roster (all human members + active workspace-visible agents, synced
@@ -1212,7 +1221,15 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     [channelMembers],
   );
   const availableMembers = workspaceMembers.filter((m) => !memberIds.has(m.user_id));
-  const availableAgents = agents.filter((a) => !agentIds.has(a.id) && !a.archived_at);
+  // Prefer channel-scoped ListAgents for group invite. Defense-in-depth: also
+  // drop channel agents whose home is not this group (LRM-238: no silent keep).
+  const inviteAgentPool = inviteDiscoverChannelId ? channelInviteAgents : agents;
+  const availableAgents = inviteAgentPool.filter(
+    (a) =>
+      !agentIds.has(a.id) &&
+      !a.archived_at &&
+      isAgentDiscoverableInChannelContext(a, inviteDiscoverChannelId),
+  );
   // Flat candidate list (users + agents) for Add people; chips use the
   // unfiltered pool so selections survive search.
   const allInviteCandidates = useMemo(() => {

@@ -58,11 +58,27 @@ export function memberProfileOptions(
   });
 }
 
-export function agentListOptions(wsId: string) {
+/**
+ * Workspace agent directory. Pass `channelId` for invite/discovery in a group
+ * so channel-visibility agents are scoped to that home channel (LRM-370/399).
+ * Keep the bare workspace key when `channelId` is omitted — do not collide
+ * caches (channel-scoped lists are a different shape).
+ */
+export function agentListOptions(
+  wsId: string,
+  opts?: { channelId?: string | null },
+) {
+  const channelId = opts?.channelId?.trim() || undefined;
   return queryOptions({
-    queryKey: workspaceKeys.agents(wsId),
+    queryKey: channelId
+      ? ([...workspaceKeys.agents(wsId), "channel", channelId] as const)
+      : workspaceKeys.agents(wsId),
     queryFn: () =>
-      api.listAgents({ workspace_id: wsId, include_archived: true }),
+      api.listAgents({
+        workspace_id: wsId,
+        include_archived: true,
+        ...(channelId ? { channel_id: channelId } : {}),
+      }),
   });
 }
 

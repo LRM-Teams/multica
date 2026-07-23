@@ -62,6 +62,12 @@ vi.mock("../../common/agent-panel-context", () => ({
   useOpenAgentPanel: () => null,
 }));
 
+vi.mock("../../common/use-resolved-actor-identity", () => ({
+  mentionTypeFromActorType: (actorType: string | null | undefined) =>
+    actorType === "agent" ? "agent" : actorType === "member" || actorType === "user" ? "member" : null,
+  useResolvedActorIdentity: () => ({ displayName: null, avatarUrl: null }),
+}));
+
 vi.mock("../../navigation", () => ({
   useNavigation: () => ({ push: vi.fn(), openInNewTab: vi.fn() }),
 }));

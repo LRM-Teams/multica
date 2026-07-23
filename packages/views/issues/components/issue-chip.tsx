@@ -6,11 +6,7 @@ import { issueListOptions, issueDetailOptions } from "@multica/core/issues/queri
 import { useWorkspaceId } from "@multica/core/hooks";
 import { StatusIcon } from "./status-icon";
 
-/** True when `s` is a canonical UUID (an explicit mention) rather than a
- *  human identifier like "MUL-123" (an auto-linked reference). */
-export function isIssueUuid(s: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
-}
+export { isIssueUuid, resolveIssueRefDisplayText } from "./issue-ref-display";
 
 /**
  * Resolve an issue by UUID **or** human identifier ("MUL-123"). Looks in the

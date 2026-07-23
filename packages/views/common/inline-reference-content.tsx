@@ -6,6 +6,7 @@ import { MemoizedMarkdown, ActorMention } from "./markdown";
 import { cn } from "@multica/ui/lib/utils";
 import { mentionTokenClassName } from "./mention-token";
 import { IssueRefLink } from "../issues/components/issue-ref-link";
+import { resolveIssueRefDisplayText } from "../issues/components/issue-ref-display";
 import { projectInlineReferences, type ReferencePart } from "./inline-references";
 
 /**
@@ -152,7 +153,10 @@ function ReferenceToken({
   // text and must NOT resolve the issue — returning here keeps the live-issue
   // query out of those rows entirely.
   if (!interactive) {
-    return <span className="text-brand">{text}</span>;
+    // Prefer structured label when the span is a raw UUID (LRM-493). Non-interactive
+    // surfaces still must not leak fe57cec6-… — and still skip the live-issue query.
+    const display = resolveIssueRefDisplayText({ text, label: reference.label });
+    return <span className="text-brand">{display || text}</span>;
   }
   return <IssueRefToken reference={reference} text={text} sourceMessageId={sourceMessageId} />;
 }
@@ -178,6 +182,7 @@ function IssueRefToken({
     <IssueRefLink
       issueId={reference.ref_id}
       text={text}
+      label={reference.label}
       source="anchor"
       sourceMessageId={sourceMessageId}
     />

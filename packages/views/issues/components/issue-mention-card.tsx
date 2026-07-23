@@ -1,6 +1,7 @@
 "use client";
 
-import { isIssueUuid, useResolvedIssue } from "./issue-chip";
+import { useResolvedIssue } from "./issue-chip";
+import { isIssueUuid, resolveIssueRefDisplayText } from "./issue-ref-display";
 import { IssueRefLink } from "./issue-ref-link";
 
 interface IssueMentionCardProps {
@@ -37,10 +38,16 @@ interface IssueMentionCardProps {
 export function IssueMentionCard({ issueId, fallbackLabel, sourceMessageId }: IssueMentionCardProps) {
   const isUuid = isIssueUuid(issueId);
   const issue = useResolvedIssue(issueId);
+  const displayText = resolveIssueRefDisplayText({
+    text: fallbackLabel,
+    label: fallbackLabel,
+    issue,
+  });
 
   if (!isUuid && !issue) {
     // Auto-linked identifier that doesn't resolve — keep it as plain text.
-    return <span className="not-prose">{fallbackLabel ?? issueId}</span>;
+    // Prefer the author's label; never truncate a UUID stand-in (LRM-238).
+    return <span className="not-prose">{displayText || fallbackLabel || issueId}</span>;
   }
 
   // `source="fallback"` is invisible to the reader, deliberately: it exists only so a
@@ -53,6 +60,7 @@ export function IssueMentionCard({ issueId, fallbackLabel, sourceMessageId }: Is
     <IssueRefLink
       issueId={issueId}
       text={fallbackLabel ?? issueId}
+      label={fallbackLabel}
       source="fallback"
       sourceMessageId={sourceMessageId}
     />

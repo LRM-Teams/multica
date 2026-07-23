@@ -20,6 +20,7 @@ import { ProjectIcon } from "../../projects/components/project-icon";
 import { StatusIcon } from "./status-icon";
 import { PriorityIcon } from "./priority-icon";
 import { useResolvedIssue } from "./issue-chip";
+import { resolveIssueRefDisplayText } from "./issue-ref-display";
 import { issueDetailHrefFromChannel } from "./issue-return-link";
 
 /**
@@ -93,12 +94,19 @@ function toIssuePriority(value: string | undefined): IssuePriority | null {
 export function IssueRefLink({
   issueId,
   text,
+  label,
   source = "anchor",
   sourceMessageId,
 }: {
   issueId: string;
-  /** Rendered verbatim — the author's own span substring; never rewritten (#467/#600). */
+  /**
+   * Author span / markdown link text. Kept verbatim when it is already a human
+   * identifier (#467/#600). UUID-shaped tokens are upgraded to the live
+   * identifier (LRM-493 / LRM-238) — never shown truncated.
+   */
   text: string;
+  /** Structured `reference.label` when the span itself is a raw UUID. */
+  label?: string;
   source?: IssueRefSource;
   /** Source row id when this reference is rendered inside a Messages timeline. */
   sourceMessageId?: string;
@@ -108,6 +116,7 @@ export function IssueRefLink({
   // Mutable issue state is resolved live (#504/#622), never from a write-time
   // snapshot — the part carries identity (ref_id + span), not state.
   const issue = useResolvedIssue(issueId);
+  const displayText = resolveIssueRefDisplayText({ text, label, issue });
   const issuePath = paths.issueDetail(issue?.id ?? issueId);
   const href =
     navigation && typeof paths.channels === "function"
@@ -136,11 +145,13 @@ export function IssueRefLink({
     // test even asserted the class was GONE — green, and wrong.
     "data-issue-ref": "",
     "data-ref-source": source,
+    // Keep a stable accessible name while displayText is empty (unresolved UUID).
+    "aria-label": displayText || label || text || issue?.identifier || issueId,
   };
   const link = navigation ? (
-    <AppLink {...linkProps}>{text}</AppLink>
+    <AppLink {...linkProps}>{displayText}</AppLink>
   ) : (
-    <a {...linkProps}>{text}</a>
+    <a {...linkProps}>{displayText}</a>
   );
 
   // Nothing resolved (loading / deleted / other workspace / no permission) → plain
@@ -152,6 +163,8 @@ export function IssueRefLink({
   const status = toIssueStatus(issue?.status);
   if (!title && !status) return link;
 
+  const peekEyebrow = displayText || issue?.identifier || label || text;
+
   return (
     <HoverCard>
       <HoverCardTrigger render={<span />} className="inline">
@@ -159,7 +172,7 @@ export function IssueRefLink({
       </HoverCardTrigger>
       <HoverCardContent side="top" sideOffset={8} className="w-[320px] p-3">
         <div className="min-w-0">
-          <div className="text-[11px] leading-none text-muted-foreground">{text}</div>
+          <div className="text-[11px] leading-none text-muted-foreground">{peekEyebrow}</div>
           {title ? (
             <div className="mt-1 line-clamp-2 text-sm font-semibold leading-snug text-foreground">
               {title}

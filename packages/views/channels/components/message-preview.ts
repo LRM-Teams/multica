@@ -2,6 +2,7 @@ import { preprocessMentionShortcodes } from "@multica/ui/markdown";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import type { Agent, MemberWithUser, MessagePart } from "@multica/core/types";
 import { projectInlineReferences } from "../../common/inline-references";
+import { resolveIssueRefDisplayText } from "../../issues/components/issue-ref-display";
 import {
   formatMessagePartsPreview,
   unwrapStructuredPreviewContent,
@@ -106,9 +107,9 @@ export function resolveChannelAuthorDisplayName(
  * handle and all. That helper predates #463; the meaning of `parts` changed under it.
  *
  * A mention resolves to the actor's live display name — the same rule the body's
- * `ActorMention` follows, which is exactly why the body reads `@小雅`. Everything
- * else (issue refs) renders its span substring verbatim: the projector decorates,
- * it never rewrites the author's words (#467/#600).
+ * `ActorMention` follows, which is exactly why the body reads `@小雅`. Issue refs
+ * keep a human identifier when the span is already one (#467/#600); UUID-shaped
+ * spans prefer `part.label` so list previews don't leak fe57cec6-… (LRM-493).
  */
 export function projectReferencesToText(
   content: string,
@@ -125,6 +126,9 @@ export function projectReferencesToText(
       if (ref.ref_type === "mention" && (ref.ref_subtype === "member" || ref.ref_subtype === "agent")) {
         const resolved = resolveMention(ref.ref_subtype, ref.ref_id, ref.label ?? seg.text);
         return `@${resolved.replace(/^@+/, "")}`;
+      }
+      if (ref.ref_type === "issue-ref") {
+        return resolveIssueRefDisplayText({ text: seg.text, label: ref.label }) || seg.text;
       }
       return seg.text;
     })

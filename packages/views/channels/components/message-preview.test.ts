@@ -73,6 +73,25 @@ describe("formatChannelMessagePreview", () => {
     ).toBe("Atlas: fix MUL-9 today");
   });
 
+  it("prefers issue-ref label over a UUID span in the preview (LRM-493)", () => {
+    const uuid = "fe57cec6-0a45-4d90-9ef6-6571f429c047";
+    const content = `新图已挂 ${uuid}`;
+    const start = content.indexOf(uuid);
+    expect(
+      formatChannelMessagePreview("Morgan", content, resolveMention, [
+        {
+          type: "reference",
+          ref_type: "issue-ref",
+          ref_subtype: "issue",
+          ref_id: uuid,
+          label: "LRM-487",
+          content_start_utf16: start,
+          content_end_utf16: start + uuid.length,
+        },
+      ] as never),
+    ).toBe("Morgan: 新图已挂 LRM-487");
+  });
+
   it("still renders plain text when nothing is anchored — the control (#530)", () => {
     // Without this, a projection that returned "" for everything would make the
     // leak tests pass while destroying every ordinary preview.

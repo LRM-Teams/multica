@@ -4,12 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { IssueMentionCard } from "./issue-mention-card";
 
 let resolvedIssue:
-  | { id: string; title: string; status?: string; priority?: string }
+  | { id: string; identifier?: string; title: string; status?: string; priority?: string }
   | undefined;
 
 vi.mock("./issue-chip", () => ({
   useResolvedIssue: () => resolvedIssue,
-  isIssueUuid: (v: string) => /^[0-9a-f-]{36}$/i.test(v),
 }));
 
 vi.mock("@multica/core/paths", () => ({
@@ -131,5 +130,24 @@ describe("IssueMentionCard (#520 — the unanchored fallback)", () => {
     const text = screen.getByText("LRM-999");
     expect(text.tagName).toBe("SPAN");
     expect(text).not.toHaveAttribute("href");
+  });
+
+  it("upgrades a mention:// UUID label to the live identifier (LRM-493)", () => {
+    resolvedIssue = {
+      id: "fe57cec6-0a45-4d90-9ef6-6571f429c047",
+      identifier: "LRM-487",
+      title: "通知授权 soft-ask",
+      status: "todo",
+    };
+    const { container } = render(
+      <IssueMentionCard
+        issueId="fe57cec6-0a45-4d90-9ef6-6571f429c047"
+        fallbackLabel="fe57cec6-0a45-4d90-9ef6-6571f429c047"
+      />,
+    );
+
+    const link = container.querySelector("a[data-ref-source]");
+    expect(link).toHaveTextContent("LRM-487");
+    expect(link).not.toHaveTextContent("fe57cec6");
   });
 });

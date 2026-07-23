@@ -39,6 +39,7 @@ vi.mock("@multica/ui/components/ui/hover-card", () => ({
 let resolvedIssue:
   | {
       id: string;
+      identifier?: string;
       title: string;
       status: string;
       priority?: string;
@@ -169,13 +170,13 @@ function mention(start: number, end: number): MessagePart {
     content_end_utf16: end,
   } as MessagePart;
 }
-function issueRef(start: number, end: number): MessagePart {
+function issueRef(start: number, end: number, label = "MUL-9"): MessagePart {
   return {
     type: "reference",
     ref_type: "issue-ref",
     ref_subtype: "issue",
     ref_id: "issue-uuid",
-    label: "MUL-9",
+    label,
     content_start_utf16: start,
     content_end_utf16: end,
   } as MessagePart;
@@ -201,6 +202,27 @@ describe("InlineReferenceContent (#463 projector consumer)", () => {
     const link = screen.getByText("#MUL-9").closest("a");
     expect(link).not.toBeNull();
     expect(link).toHaveAttribute("href", expect.stringContaining("issues/issue-uuid"));
+  });
+
+  it("upgrades a UUID-shaped issue span to the live identifier (LRM-493)", () => {
+    const uuid = "fe57cec6-0a45-4d90-9ef6-6571f429c047";
+    resolvedIssue = {
+      id: uuid,
+      identifier: "LRM-487",
+      title: "通知授权 soft-ask",
+      status: "todo",
+    };
+    const content = `新图已挂 ${uuid}`;
+    const start = content.indexOf(uuid);
+    const { container } = render(
+      <InlineReferenceContent
+        content={content}
+        parts={[issueRef(start, start + uuid.length, "LRM-487")]}
+      />,
+    );
+    const link = container.querySelector("a[data-issue-ref]");
+    expect(link).toHaveTextContent("LRM-487");
+    expect(link).not.toHaveTextContent("fe57cec6");
   });
 
   it("renders the author's span substring verbatim — never synthesizes a `#` prefix (#467/#600 content-as-is)", () => {

@@ -143,7 +143,15 @@ function defaultRenderMention(
   sourceMessageId?: string,
 ): React.ReactNode {
   if (type === "issue") {
-    return <IssueMentionCard issueId={id} sourceMessageId={sourceMessageId} />;
+    // Pass markdown link text (e.g. "LRM-487") so UUID hrefs still render a
+    // human identifier — dropping the label forced fe57cec6-… (LRM-493).
+    return (
+      <IssueMentionCard
+        issueId={id}
+        fallbackLabel={label}
+        sourceMessageId={sourceMessageId}
+      />
+    );
   }
   if (type === "project") {
     return <ProjectMentionCard projectId={id} />;

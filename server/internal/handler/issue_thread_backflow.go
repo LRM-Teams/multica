@@ -53,9 +53,9 @@ type issueThreadSystemEventItem struct {
 // managers are hidden from ListAgents (LRM-233) and must be looked up via the
 // profile API instead.
 //
-// For aggregatable events (completed / assigned), `items` always carries every
-// merged transition (N>=1). Top-level issue_* / target_* mirror the latest item
-// so older single-issue readers keep working.
+// For aggregatable issue events, `items` always carries every merged transition
+// (N>=1). Top-level issue_* / target_* mirror the latest item so older
+// single-issue readers keep working.
 type issueThreadSystemEventParams struct {
 	IssueID         string                       `json:"issue_id"`
 	IssueIdentifier string                       `json:"issue_identifier"`
@@ -377,7 +377,7 @@ func (h *Handler) tryMergeIssueThreadBackflow(ctx context.Context, ch ChannelRes
 
 func issueThreadEventAggregatable(event string) bool {
 	switch event {
-	case issueThreadCompletedEvent, issueThreadAssignedEvent:
+	case issueThreadCreatedEvent, issueThreadStatusChangedEvent, issueThreadCompletedEvent, issueThreadAssignedEvent:
 		return true
 	default:
 		return false

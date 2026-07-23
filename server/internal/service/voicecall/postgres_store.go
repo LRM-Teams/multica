@@ -31,6 +31,14 @@ type VoiceCallQueries interface {
 		ctx context.Context,
 		params db.MarkVoiceCallFailedParams,
 	) (db.VoiceCallSession, error)
+	ApplyVoiceCallProviderActive(
+		ctx context.Context,
+		params db.ApplyVoiceCallProviderActiveParams,
+	) (db.VoiceCallSession, error)
+	ApplyVoiceCallProviderFailure(
+		ctx context.Context,
+		params db.ApplyVoiceCallProviderFailureParams,
+	) (db.VoiceCallSession, error)
 	BeginVoiceCallEnding(
 		ctx context.Context,
 		params db.BeginVoiceCallEndingParams,
@@ -181,6 +189,62 @@ func (store *PostgresStore) MarkFailed(
 	return voiceCallSessionFromDB(row)
 }
 
+func (store *PostgresStore) ApplyProviderActive(
+	ctx context.Context,
+	provider string,
+	providerTaskID string,
+) (Session, error) {
+	provider, providerTaskID, err := validateProviderIdentity(provider, providerTaskID)
+	if err != nil {
+		return Session{}, err
+	}
+	row, err := store.queries.ApplyVoiceCallProviderActive(
+		ctx,
+		db.ApplyVoiceCallProviderActiveParams{
+			Provider:       provider,
+			ProviderTaskID: pgtype.Text{String: providerTaskID, Valid: true},
+		},
+	)
+	if err != nil {
+		return Session{}, classifyProviderCallbackStoreError(
+			err,
+			"apply voice call provider activity",
+		)
+	}
+	return voiceCallSessionFromDB(row)
+}
+
+func (store *PostgresStore) ApplyProviderFailure(
+	ctx context.Context,
+	provider string,
+	providerTaskID string,
+	errorCode string,
+) (Session, error) {
+	provider, providerTaskID, err := validateProviderIdentity(provider, providerTaskID)
+	if err != nil {
+		return Session{}, err
+	}
+	errorCode = strings.TrimSpace(errorCode)
+	if errorCode == "" {
+		return Session{}, errors.New("voice call provider error_code is required")
+	}
+	row, err := store.queries.ApplyVoiceCallProviderFailure(
+		ctx,
+		db.ApplyVoiceCallProviderFailureParams{
+			ErrorCode:      errorCode,
+			Provider:       provider,
+			ProviderTaskID: pgtype.Text{String: providerTaskID, Valid: true},
+		},
+	)
+	if err != nil {
+		return Session{}, classifyProviderCallbackStoreError(
+			err,
+			"apply voice call provider failure",
+		)
+	}
+	return voiceCallSessionFromDB(row)
+}
+
 func (store *PostgresStore) BeginEnding(
 	ctx context.Context,
 	workspaceID string,
@@ -269,6 +333,23 @@ func (store *PostgresStore) MarkEnded(
 		return Session{}, fmt.Errorf("update voice call to ended: %w", err)
 	}
 	return voiceCallSessionFromDB(row)
+}
+
+func validateProviderIdentity(provider string, providerTaskID string) (string, string, error) {
+	provider = strings.TrimSpace(provider)
+	providerTaskID = strings.TrimSpace(providerTaskID)
+	if provider == "" || providerTaskID == "" {
+		return "", "", errors.New("voice call provider and provider task ID are required")
+	}
+	return provider, providerTaskID, nil
+}
+
+func classifyProviderCallbackStoreError(err error, operation string) error {
+	wrapped := fmt.Errorf("%s: %w", operation, err)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return errors.Join(ErrCallNotFound, wrapped)
+	}
+	return wrapped
 }
 
 func scopedVoiceCallParams(

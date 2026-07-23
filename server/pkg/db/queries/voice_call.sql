@@ -30,23 +30,87 @@ WHERE id = sqlc.arg('id')
 -- name: MarkVoiceCallConnecting :one
 UPDATE voice_call_session
 SET
-  status = 'connecting',
-  updated_at = now()
+  status = CASE
+    WHEN status = 'starting' THEN 'connecting'
+    WHEN status = 'connecting' AND connected_at IS NOT NULL THEN 'active'
+    ELSE status
+  END,
+  updated_at = CASE
+    WHEN status = 'starting'
+      OR (status = 'connecting' AND connected_at IS NOT NULL)
+      THEN now()
+    ELSE updated_at
+  END
 WHERE id = sqlc.arg('id')
   AND workspace_id = sqlc.arg('workspace_id')
-  AND status = 'starting'
+  AND status IN ('starting', 'connecting', 'active')
 RETURNING *;
 
 -- name: MarkVoiceCallFailed :one
 UPDATE voice_call_session
 SET
-  status = 'failed',
-  ended_at = now(),
-  error_code = sqlc.arg('error_code'),
-  updated_at = now()
+  status = CASE
+    WHEN status IN ('ended', 'failed') THEN status
+    ELSE 'failed'
+  END,
+  ended_at = CASE
+    WHEN status IN ('ended', 'failed') THEN ended_at
+    ELSE now()
+  END,
+  error_code = CASE
+    WHEN status IN ('ended', 'failed') THEN error_code
+    ELSE sqlc.arg('error_code')
+  END,
+  updated_at = CASE
+    WHEN status IN ('ended', 'failed') THEN updated_at
+    ELSE now()
+  END
 WHERE id = sqlc.arg('id')
   AND workspace_id = sqlc.arg('workspace_id')
-  AND status NOT IN ('ended', 'failed')
+RETURNING *;
+
+-- name: ApplyVoiceCallProviderActive :one
+UPDATE voice_call_session
+SET
+  status = CASE
+    WHEN status = 'starting' THEN 'connecting'
+    WHEN status IN ('connecting', 'reconnecting') THEN 'active'
+    ELSE status
+  END,
+  connected_at = CASE
+    WHEN status IN ('starting', 'connecting', 'reconnecting')
+      THEN COALESCE(connected_at, now())
+    ELSE connected_at
+  END,
+  updated_at = CASE
+    WHEN status IN ('starting', 'connecting', 'reconnecting') THEN now()
+    ELSE updated_at
+  END
+WHERE provider = sqlc.arg('provider')
+  AND provider_task_id = sqlc.arg('provider_task_id')
+RETURNING *;
+
+-- name: ApplyVoiceCallProviderFailure :one
+UPDATE voice_call_session
+SET
+  status = CASE
+    WHEN status IN ('ended', 'failed') THEN status
+    ELSE 'failed'
+  END,
+  ended_at = CASE
+    WHEN status IN ('ended', 'failed') THEN ended_at
+    ELSE now()
+  END,
+  error_code = CASE
+    WHEN status IN ('ended', 'failed') THEN error_code
+    ELSE sqlc.arg('error_code')
+  END,
+  updated_at = CASE
+    WHEN status IN ('ended', 'failed') THEN updated_at
+    ELSE now()
+  END
+WHERE provider = sqlc.arg('provider')
+  AND provider_task_id = sqlc.arg('provider_task_id')
 RETURNING *;
 
 -- name: BeginVoiceCallEnding :one
@@ -85,11 +149,23 @@ FROM updated;
 -- name: MarkVoiceCallEnded :one
 UPDATE voice_call_session
 SET
-  status = 'ended',
-  ended_at = now(),
-  end_reason = sqlc.arg('end_reason'),
-  updated_at = now()
+  status = CASE
+    WHEN status = 'ending' THEN 'ended'
+    ELSE status
+  END,
+  ended_at = CASE
+    WHEN status = 'ending' THEN COALESCE(ended_at, now())
+    ELSE ended_at
+  END,
+  end_reason = CASE
+    WHEN status = 'ending' THEN sqlc.arg('end_reason')
+    ELSE end_reason
+  END,
+  updated_at = CASE
+    WHEN status = 'ending' THEN now()
+    ELSE updated_at
+  END
 WHERE id = sqlc.arg('id')
   AND workspace_id = sqlc.arg('workspace_id')
-  AND status = 'ending'
+  AND status IN ('ending', 'ended', 'failed')
 RETURNING *;

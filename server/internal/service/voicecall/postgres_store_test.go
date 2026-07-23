@@ -79,6 +79,27 @@ func TestPostgresStoreMapsSessionAndScopesEveryMutation(t *testing.T) {
 		t.Fatalf("failed params = %+v", queries.failed)
 	}
 
+	if _, err := store.ApplyProviderActive(
+		context.Background(), "volcengine", "voice-task-1",
+	); err != nil {
+		t.Fatalf("apply provider active: %v", err)
+	}
+	if queries.providerActive.Provider != "volcengine" ||
+		queries.providerActive.ProviderTaskID.String != "voice-task-1" {
+		t.Fatalf("provider active params = %+v", queries.providerActive)
+	}
+
+	if _, err := store.ApplyProviderFailure(
+		context.Background(), "volcengine", "voice-task-1", "volcengine_1005002",
+	); err != nil {
+		t.Fatalf("apply provider failure: %v", err)
+	}
+	if queries.providerFailure.Provider != "volcengine" ||
+		queries.providerFailure.ProviderTaskID.String != "voice-task-1" ||
+		queries.providerFailure.ErrorCode != "volcengine_1005002" {
+		t.Fatalf("provider failure params = %+v", queries.providerFailure)
+	}
+
 	queries.ending = testDBBeginEndingRow(true)
 	ending, err := store.BeginEnding(
 		context.Background(),
@@ -160,6 +181,7 @@ func TestPostgresStoreClassifiesMemberVisibleErrors(t *testing.T) {
 			session:        testDBVoiceCallSession(),
 			getErr:         pgx.ErrNoRows,
 			beginEndingErr: pgx.ErrNoRows,
+			providerErr:    pgx.ErrNoRows,
 		}
 		store, err := NewPostgresStore(queries)
 		if err != nil {
@@ -178,6 +200,11 @@ func TestPostgresStoreClassifiesMemberVisibleErrors(t *testing.T) {
 			"user_hangup",
 		); !errors.Is(err, ErrCallNotFound) {
 			t.Fatalf("ending error = %v, want ErrCallNotFound", err)
+		}
+		if _, err := store.ApplyProviderActive(
+			context.Background(), "volcengine", "missing-task",
+		); !errors.Is(err, ErrCallNotFound) {
+			t.Fatalf("provider callback error = %v, want ErrCallNotFound", err)
 		}
 	})
 }
@@ -259,8 +286,21 @@ func TestPostgresStoreStateQueriesAgainstMigration(t *testing.T) {
 	}); !errors.Is(err, ErrCallAlreadyActive) {
 		t.Fatalf("duplicate active member/agent pair error = %v, want ErrCallAlreadyActive", err)
 	}
-	if _, err := store.MarkConnecting(ctx, testVoiceWorkspaceID, session.ID); err != nil {
+	callbackConnecting, err := store.ApplyProviderActive(
+		ctx, "volcengine", session.ProviderTaskID,
+	)
+	if err != nil ||
+		callbackConnecting.Status != StatusConnecting ||
+		callbackConnecting.ConnectedAt == nil {
+		t.Fatalf("early provider callback = %+v error=%v", callbackConnecting, err)
+	}
+	active, err := store.MarkConnecting(ctx, testVoiceWorkspaceID, session.ID)
+	if err != nil || active.Status != StatusActive {
 		t.Fatalf("mark connecting: %v", err)
+	}
+	active, err = store.ApplyProviderActive(ctx, "volcengine", session.ProviderTaskID)
+	if err != nil || active.Status != StatusActive {
+		t.Fatalf("duplicate provider callback = %+v error=%v", active, err)
 	}
 	firstEnding, err := store.BeginEnding(
 		ctx, testVoiceWorkspaceID, testVoiceUserID, session.ID, "user_hangup",
@@ -287,6 +327,94 @@ func TestPostgresStoreStateQueriesAgainstMigration(t *testing.T) {
 	if err != nil || terminal.ProviderStopRequired || terminal.Session.Status != StatusEnded {
 		t.Fatalf("terminal ending = %+v error=%v", terminal, err)
 	}
+	lateFailure, err := store.ApplyProviderFailure(
+		ctx, "volcengine", session.ProviderTaskID, "volcengine_1005002",
+	)
+	if err != nil ||
+		lateFailure.Status != StatusEnded ||
+		lateFailure.ErrorCode != "" {
+		t.Fatalf("late provider failure = %+v error=%v", lateFailure, err)
+	}
+
+	failing, err := store.CreateStarting(ctx, NewSession{
+		WorkspaceID:    testVoiceWorkspaceID,
+		ChannelID:      testVoiceChannelID,
+		AgentID:        testVoiceAgentID,
+		UserID:         testVoiceUserID,
+		Provider:       "volcengine",
+		ProviderTaskID: "voice-task-integration-failure",
+		RoomID:         "voice-call-integration-failure",
+	})
+	if err != nil {
+		t.Fatalf("create failing session: %v", err)
+	}
+	failed, err := store.ApplyProviderFailure(
+		ctx, "volcengine", failing.ProviderTaskID, "volcengine_1005002",
+	)
+	if err != nil ||
+		failed.Status != StatusFailed ||
+		failed.ErrorCode != "volcengine_1005002" ||
+		failed.EndedAt == nil {
+		t.Fatalf("provider failure = %+v error=%v", failed, err)
+	}
+	failed, err = store.ApplyProviderFailure(
+		ctx, "volcengine", failing.ProviderTaskID, "volcengine_1005003",
+	)
+	if err != nil ||
+		failed.Status != StatusFailed ||
+		failed.ErrorCode != "volcengine_1005002" {
+		t.Fatalf("duplicate provider failure = %+v error=%v", failed, err)
+	}
+	failed, err = store.ApplyProviderActive(ctx, "volcengine", failing.ProviderTaskID)
+	if err != nil || failed.Status != StatusFailed {
+		t.Fatalf("late provider activity = %+v error=%v", failed, err)
+	}
+	failed, err = store.MarkFailed(
+		ctx, testVoiceWorkspaceID, failing.ID, "state_transition_failed",
+	)
+	if err != nil || failed.ErrorCode != "volcengine_1005002" {
+		t.Fatalf("duplicate local failure = %+v error=%v", failed, err)
+	}
+
+	stopRace, err := store.CreateStarting(ctx, NewSession{
+		WorkspaceID:    testVoiceWorkspaceID,
+		ChannelID:      testVoiceChannelID,
+		AgentID:        testVoiceAgentID,
+		UserID:         testVoiceUserID,
+		Provider:       "volcengine",
+		ProviderTaskID: "voice-task-integration-stop-race",
+		RoomID:         "voice-call-integration-stop-race",
+	})
+	if err != nil {
+		t.Fatalf("create stop-race session: %v", err)
+	}
+	if _, err := store.MarkConnecting(
+		ctx, testVoiceWorkspaceID, stopRace.ID,
+	); err != nil {
+		t.Fatalf("connect stop-race session: %v", err)
+	}
+	if _, err := store.BeginEnding(
+		ctx,
+		testVoiceWorkspaceID,
+		testVoiceUserID,
+		stopRace.ID,
+		"user_hangup",
+	); err != nil {
+		t.Fatalf("begin stop-race ending: %v", err)
+	}
+	if _, err := store.ApplyProviderFailure(
+		ctx, "volcengine", stopRace.ProviderTaskID, "volcengine_1005004",
+	); err != nil {
+		t.Fatalf("provider failure during stop: %v", err)
+	}
+	stopResult, err := store.MarkEnded(
+		ctx, testVoiceWorkspaceID, stopRace.ID, "user_hangup",
+	)
+	if err != nil ||
+		stopResult.Status != StatusFailed ||
+		stopResult.ErrorCode != "volcengine_1005004" {
+		t.Fatalf("provider failure during stop = %+v error=%v", stopResult, err)
+	}
 }
 
 const (
@@ -298,18 +426,21 @@ const (
 )
 
 type fakeVoiceCallQueries struct {
-	session        db.VoiceCallSession
-	ending         db.BeginVoiceCallEndingRow
-	create         db.CreateVoiceCallSessionParams
-	get            db.GetVoiceCallSessionForMemberParams
-	connecting     db.MarkVoiceCallConnectingParams
-	failed         db.MarkVoiceCallFailedParams
-	beginEnding    db.BeginVoiceCallEndingParams
-	ended          db.MarkVoiceCallEndedParams
-	getCalls       int
-	createErr      error
-	getErr         error
-	beginEndingErr error
+	session         db.VoiceCallSession
+	ending          db.BeginVoiceCallEndingRow
+	create          db.CreateVoiceCallSessionParams
+	get             db.GetVoiceCallSessionForMemberParams
+	connecting      db.MarkVoiceCallConnectingParams
+	failed          db.MarkVoiceCallFailedParams
+	beginEnding     db.BeginVoiceCallEndingParams
+	ended           db.MarkVoiceCallEndedParams
+	providerActive  db.ApplyVoiceCallProviderActiveParams
+	providerFailure db.ApplyVoiceCallProviderFailureParams
+	getCalls        int
+	createErr       error
+	getErr          error
+	beginEndingErr  error
+	providerErr     error
 }
 
 func (queries *fakeVoiceCallQueries) CreateVoiceCallSession(
@@ -348,6 +479,28 @@ func (queries *fakeVoiceCallQueries) MarkVoiceCallFailed(
 	params db.MarkVoiceCallFailedParams,
 ) (db.VoiceCallSession, error) {
 	queries.failed = params
+	return queries.session, nil
+}
+
+func (queries *fakeVoiceCallQueries) ApplyVoiceCallProviderActive(
+	_ context.Context,
+	params db.ApplyVoiceCallProviderActiveParams,
+) (db.VoiceCallSession, error) {
+	queries.providerActive = params
+	if queries.providerErr != nil {
+		return db.VoiceCallSession{}, queries.providerErr
+	}
+	return queries.session, nil
+}
+
+func (queries *fakeVoiceCallQueries) ApplyVoiceCallProviderFailure(
+	_ context.Context,
+	params db.ApplyVoiceCallProviderFailureParams,
+) (db.VoiceCallSession, error) {
+	queries.providerFailure = params
+	if queries.providerErr != nil {
+		return db.VoiceCallSession{}, queries.providerErr
+	}
 	return queries.session, nil
 }
 

@@ -256,6 +256,12 @@ func configureVoiceCallService(
 	if err != nil {
 		return fmt.Errorf("initialize voice call service: %w", err)
 	}
+	callbackService, err := voicecall.NewCallbackService("volcengine", store)
+	if err != nil {
+		return fmt.Errorf("initialize voice call callback service: %w", err)
+	}
 	h.VoiceCallService = callService
+	h.VoiceCallCallbackProcessor = callbackService
+	h.VoiceCallCallbackSignature = config.CallbackSignature
 	return nil
 }

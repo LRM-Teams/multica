@@ -11,6 +11,115 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const applyVoiceCallProviderActive = `-- name: ApplyVoiceCallProviderActive :one
+UPDATE voice_call_session
+SET
+  status = CASE
+    WHEN status = 'starting' THEN 'connecting'
+    WHEN status IN ('connecting', 'reconnecting') THEN 'active'
+    ELSE status
+  END,
+  connected_at = CASE
+    WHEN status IN ('starting', 'connecting', 'reconnecting')
+      THEN COALESCE(connected_at, now())
+    ELSE connected_at
+  END,
+  updated_at = CASE
+    WHEN status IN ('starting', 'connecting', 'reconnecting') THEN now()
+    ELSE updated_at
+  END
+WHERE provider = $1
+  AND provider_task_id = $2
+RETURNING id, workspace_id, channel_id, agent_id, user_id, provider, provider_task_id, room_id, status, started_at, connected_at, ended_at, end_reason, error_code, input_audio_ms, output_audio_ms, created_at, updated_at
+`
+
+type ApplyVoiceCallProviderActiveParams struct {
+	Provider       string      `json:"provider"`
+	ProviderTaskID pgtype.Text `json:"provider_task_id"`
+}
+
+func (q *Queries) ApplyVoiceCallProviderActive(ctx context.Context, arg ApplyVoiceCallProviderActiveParams) (VoiceCallSession, error) {
+	row := q.db.QueryRow(ctx, applyVoiceCallProviderActive, arg.Provider, arg.ProviderTaskID)
+	var i VoiceCallSession
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ChannelID,
+		&i.AgentID,
+		&i.UserID,
+		&i.Provider,
+		&i.ProviderTaskID,
+		&i.RoomID,
+		&i.Status,
+		&i.StartedAt,
+		&i.ConnectedAt,
+		&i.EndedAt,
+		&i.EndReason,
+		&i.ErrorCode,
+		&i.InputAudioMs,
+		&i.OutputAudioMs,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const applyVoiceCallProviderFailure = `-- name: ApplyVoiceCallProviderFailure :one
+UPDATE voice_call_session
+SET
+  status = CASE
+    WHEN status IN ('ended', 'failed') THEN status
+    ELSE 'failed'
+  END,
+  ended_at = CASE
+    WHEN status IN ('ended', 'failed') THEN ended_at
+    ELSE now()
+  END,
+  error_code = CASE
+    WHEN status IN ('ended', 'failed') THEN error_code
+    ELSE $1
+  END,
+  updated_at = CASE
+    WHEN status IN ('ended', 'failed') THEN updated_at
+    ELSE now()
+  END
+WHERE provider = $2
+  AND provider_task_id = $3
+RETURNING id, workspace_id, channel_id, agent_id, user_id, provider, provider_task_id, room_id, status, started_at, connected_at, ended_at, end_reason, error_code, input_audio_ms, output_audio_ms, created_at, updated_at
+`
+
+type ApplyVoiceCallProviderFailureParams struct {
+	ErrorCode      string      `json:"error_code"`
+	Provider       string      `json:"provider"`
+	ProviderTaskID pgtype.Text `json:"provider_task_id"`
+}
+
+func (q *Queries) ApplyVoiceCallProviderFailure(ctx context.Context, arg ApplyVoiceCallProviderFailureParams) (VoiceCallSession, error) {
+	row := q.db.QueryRow(ctx, applyVoiceCallProviderFailure, arg.ErrorCode, arg.Provider, arg.ProviderTaskID)
+	var i VoiceCallSession
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ChannelID,
+		&i.AgentID,
+		&i.UserID,
+		&i.Provider,
+		&i.ProviderTaskID,
+		&i.RoomID,
+		&i.Status,
+		&i.StartedAt,
+		&i.ConnectedAt,
+		&i.EndedAt,
+		&i.EndReason,
+		&i.ErrorCode,
+		&i.InputAudioMs,
+		&i.OutputAudioMs,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const beginVoiceCallEnding = `-- name: BeginVoiceCallEnding :one
 WITH current_session AS (
   SELECT session.id, session.status
@@ -216,11 +325,20 @@ func (q *Queries) GetVoiceCallSessionForMember(ctx context.Context, arg GetVoice
 const markVoiceCallConnecting = `-- name: MarkVoiceCallConnecting :one
 UPDATE voice_call_session
 SET
-  status = 'connecting',
-  updated_at = now()
+  status = CASE
+    WHEN status = 'starting' THEN 'connecting'
+    WHEN status = 'connecting' AND connected_at IS NOT NULL THEN 'active'
+    ELSE status
+  END,
+  updated_at = CASE
+    WHEN status = 'starting'
+      OR (status = 'connecting' AND connected_at IS NOT NULL)
+      THEN now()
+    ELSE updated_at
+  END
 WHERE id = $1
   AND workspace_id = $2
-  AND status = 'starting'
+  AND status IN ('starting', 'connecting', 'active')
 RETURNING id, workspace_id, channel_id, agent_id, user_id, provider, provider_task_id, room_id, status, started_at, connected_at, ended_at, end_reason, error_code, input_audio_ms, output_audio_ms, created_at, updated_at
 `
 
@@ -258,13 +376,25 @@ func (q *Queries) MarkVoiceCallConnecting(ctx context.Context, arg MarkVoiceCall
 const markVoiceCallEnded = `-- name: MarkVoiceCallEnded :one
 UPDATE voice_call_session
 SET
-  status = 'ended',
-  ended_at = now(),
-  end_reason = $1,
-  updated_at = now()
+  status = CASE
+    WHEN status = 'ending' THEN 'ended'
+    ELSE status
+  END,
+  ended_at = CASE
+    WHEN status = 'ending' THEN COALESCE(ended_at, now())
+    ELSE ended_at
+  END,
+  end_reason = CASE
+    WHEN status = 'ending' THEN $1
+    ELSE end_reason
+  END,
+  updated_at = CASE
+    WHEN status = 'ending' THEN now()
+    ELSE updated_at
+  END
 WHERE id = $2
   AND workspace_id = $3
-  AND status = 'ending'
+  AND status IN ('ending', 'ended', 'failed')
 RETURNING id, workspace_id, channel_id, agent_id, user_id, provider, provider_task_id, room_id, status, started_at, connected_at, ended_at, end_reason, error_code, input_audio_ms, output_audio_ms, created_at, updated_at
 `
 
@@ -303,13 +433,24 @@ func (q *Queries) MarkVoiceCallEnded(ctx context.Context, arg MarkVoiceCallEnded
 const markVoiceCallFailed = `-- name: MarkVoiceCallFailed :one
 UPDATE voice_call_session
 SET
-  status = 'failed',
-  ended_at = now(),
-  error_code = $1,
-  updated_at = now()
+  status = CASE
+    WHEN status IN ('ended', 'failed') THEN status
+    ELSE 'failed'
+  END,
+  ended_at = CASE
+    WHEN status IN ('ended', 'failed') THEN ended_at
+    ELSE now()
+  END,
+  error_code = CASE
+    WHEN status IN ('ended', 'failed') THEN error_code
+    ELSE $1
+  END,
+  updated_at = CASE
+    WHEN status IN ('ended', 'failed') THEN updated_at
+    ELSE now()
+  END
 WHERE id = $2
   AND workspace_id = $3
-  AND status NOT IN ('ended', 'failed')
 RETURNING id, workspace_id, channel_id, agent_id, user_id, provider, provider_task_id, room_id, status, started_at, connected_at, ended_at, end_reason, error_code, input_audio_ms, output_audio_ms, created_at, updated_at
 `
 

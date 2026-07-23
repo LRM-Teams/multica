@@ -121,8 +121,10 @@ func TestConfigureVoiceCallServiceBuildsCompleteRuntimeStack(t *testing.T) {
 		nil,
 		RouterOptions{},
 	)
-	if handler.VoiceCallService != nil {
-		t.Fatal("voice call service unexpectedly configured before explicit opt-in")
+	if handler.VoiceCallService != nil ||
+		handler.VoiceCallCallbackProcessor != nil ||
+		handler.VoiceCallCallbackSignature != "" {
+		t.Fatal("voice call runtime unexpectedly configured before explicit opt-in")
 	}
 
 	err := configureVoiceCallService(
@@ -135,6 +137,12 @@ func TestConfigureVoiceCallServiceBuildsCompleteRuntimeStack(t *testing.T) {
 	}
 	if handler.VoiceCallService == nil {
 		t.Fatal("complete voice call runtime stack was not attached to handler")
+	}
+	if handler.VoiceCallCallbackProcessor == nil {
+		t.Fatal("voice call callback processor was not attached to handler")
+	}
+	if handler.VoiceCallCallbackSignature != values["VOLCENGINE_RTC_CALLBACK_SIGNATURE"] {
+		t.Fatal("voice call callback signature was not attached to handler")
 	}
 }
 

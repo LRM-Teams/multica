@@ -24,7 +24,11 @@ export type PendingAttachment = {
 export type AttachmentMessagePart = Extract<MessagePart, { type: "attachment" }>;
 
 export type UseComposerPendingAttachmentsOptions = {
-  /** Upload one file; return null on soft failure (e.g. toast already shown). */
+  /**
+   * Upload one file. Prefer throwing on failure so the tray chip can show the
+   * real API/error message (LRM-426). Returning null is treated as a soft
+   * failure with no detail — avoid it for channel/DM composers.
+   */
   upload: (file: File) => Promise<UploadResult | null>;
   /**
    * When this identity changes (channel id, thread root, …), pending tray
@@ -97,13 +101,16 @@ export function useComposerPendingAttachments(
       const result = await uploadRef.current(file);
       if (!liveIdsRef.current.has(localId)) return;
       if (!result?.id) {
+        // Leave errorMessage unset so ComposerAttachmentTray can show the
+        // localized tray_upload_failed string — do not hardcode English
+        // "Upload failed" (that was the only signal in LRM-426 screenshots).
         setPending((prev) =>
           prev.map((item) =>
             item.localId === localId
               ? {
                   ...item,
                   status: "error" as const,
-                  errorMessage: "Upload failed",
+                  errorMessage: undefined,
                   attachmentId: undefined,
                 }
               : item,
@@ -136,7 +143,9 @@ export function useComposerPendingAttachments(
       );
     } catch (err) {
       if (!liveIdsRef.current.has(localId)) return;
-      const message = err instanceof Error ? err.message : "Upload failed";
+      // Prefer the thrown message (API/CSRF/size/schema). Empty → tray i18n.
+      const raw = err instanceof Error ? err.message.trim() : "";
+      const message = raw.length > 0 ? raw : undefined;
       setPending((prev) =>
         prev.map((item) =>
           item.localId === localId

@@ -221,6 +221,40 @@ describe("useComposerPendingAttachments", () => {
     expect(result.current.pending[0]?.attachmentId).toBe("recovered");
   });
 
+  it("surfaces thrown API errors on the chip (does not hardcode Upload failed)", async () => {
+    const upload = vi.fn().mockRejectedValue(new Error("not a channel member"));
+
+    const { result } = renderHook(() =>
+      useComposerPendingAttachments({ upload }),
+    );
+
+    await act(async () => {
+      result.current.addFiles([makeFile("doc.pdf", "application/pdf")]);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.pending[0]?.status).toBe("error");
+    expect(result.current.pending[0]?.errorMessage).toBe("not a channel member");
+  });
+
+  it("soft-null upload leaves errorMessage unset for tray i18n fallback", async () => {
+    const upload = vi.fn().mockResolvedValue(null);
+
+    const { result } = renderHook(() =>
+      useComposerPendingAttachments({ upload }),
+    );
+
+    await act(async () => {
+      result.current.addFiles([makeFile("soft.png")]);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.pending[0]?.status).toBe("error");
+    expect(result.current.pending[0]?.errorMessage).toBeUndefined();
+  });
+
   it("clear empties the tray and revokes blob previews still held", async () => {
     // Keep uploads pending so previewUrl stays a blob: URL (ready swaps to remote).
     const upload = vi.fn(() => new Promise<UploadResult | null>(() => {}));

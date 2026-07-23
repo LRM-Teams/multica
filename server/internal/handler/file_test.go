@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/auth"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -372,6 +373,114 @@ func TestUploadFile_RejectsForeignChatSession(t *testing.T) {
 	testHandler.UploadFile(w, req)
 	if w.Code != http.StatusNotFound && w.Code != http.StatusForbidden && w.Code != http.StatusBadRequest {
 		t.Fatalf("UploadFile with unknown chat_session_id: expected 4xx, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestUploadFile_AttachesToChannel verifies multipart upload with channel_id
+// binds the attachment row (channel_message_id stays NULL until send).
+func TestUploadFile_AttachesToChannel(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	origStorage := testHandler.Storage
+	testHandler.Storage = &mockStorage{}
+	defer func() { testHandler.Storage = origStorage }()
+
+	ctx := context.Background()
+	var channelID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO channel (workspace_id, name, created_by)
+		VALUES ($1, $2, $3)
+		RETURNING id`, testWorkspaceID, "upload-channel-"+uuid.NewString()[:8], testUserID).Scan(&channelID); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, channelID) })
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'user', $3)`, channelID, testWorkspaceID, testUserID); err != nil {
+		t.Fatalf("seed channel member: %v", err)
+	}
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", "H908锂源-spec.pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	part.Write([]byte("%PDF-1.4 channel-upload"))
+	if err := writer.WriteField("channel_id", channelID); err != nil {
+		t.Fatal(err)
+	}
+	writer.Close()
+
+	req := httptest.NewRequest("POST", "/api/upload-file", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("X-User-ID", testUserID)
+	req.Header.Set("X-Workspace-ID", testWorkspaceID)
+
+	w := httptest.NewRecorder()
+	testHandler.UploadFile(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("UploadFile with channel_id: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp AttachmentResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v; body: %s", err, w.Body.String())
+	}
+	if resp.ID == "" {
+		t.Fatal("expected non-empty attachment id")
+	}
+	if resp.ChannelID == nil || *resp.ChannelID != channelID {
+		t.Fatalf("channel_id in response: want %s, got %v", channelID, resp.ChannelID)
+	}
+	if resp.ChannelMessageID != nil {
+		t.Fatalf("channel_message_id should be NULL before send, got %v", resp.ChannelMessageID)
+	}
+	if resp.DownloadURL == "" {
+		t.Fatal("expected download_url so FE schema validation succeeds")
+	}
+	if resp.Filename != "H908锂源-spec.pdf" {
+		t.Fatalf("filename = %q", resp.Filename)
+	}
+}
+
+// TestUploadFile_RejectsNonMemberChannel verifies channel_id uploads require membership.
+func TestUploadFile_RejectsNonMemberChannel(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	origStorage := testHandler.Storage
+	testHandler.Storage = &mockStorage{}
+	defer func() { testHandler.Storage = origStorage }()
+
+	ctx := context.Background()
+	var channelID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO channel (workspace_id, name, created_by)
+		VALUES ($1, $2, $3)
+		RETURNING id`, testWorkspaceID, "upload-deny-"+uuid.NewString()[:8], testUserID).Scan(&channelID); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, channelID) })
+	// Intentionally no channel_member row for testUserID.
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, _ := writer.CreateFormFile("file", "nope.txt")
+	part.Write([]byte("payload"))
+	writer.WriteField("channel_id", channelID)
+	writer.Close()
+
+	req := httptest.NewRequest("POST", "/api/upload-file", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("X-User-ID", testUserID)
+	req.Header.Set("X-Workspace-ID", testWorkspaceID)
+
+	w := httptest.NewRecorder()
+	testHandler.UploadFile(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for non-member channel upload, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

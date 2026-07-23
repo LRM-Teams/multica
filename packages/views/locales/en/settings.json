@@ -404,18 +404,31 @@
     "remove_action": "Remove from workspace",
     "cannot_demote_last_owner_title": "Promote another member to owner first — a workspace must keep at least one owner.",
     "cannot_demote_last_owner": "Cannot demote the last owner",
+    "roles_entry": "Roles",
+    "roles_entry_aria": "Open workspace roles",
+    "roles_dialog": {
+      "title": "Roles",
+      "description": "Controls what members can do in this workspace. Unrelated to Agent identity.",
+      "close": "Close",
+      "cancel": "Cancel",
+      "save": "Save",
+      "saving": "Saving…"
+    },
     "roles": {
       "owner": {
         "label": "Owner",
-        "description": "Full access, manage all settings"
+        "badge": "Workspace owner",
+        "description": "Full access and all settings. At least one owner must remain."
       },
       "admin": {
         "label": "Admin",
-        "description": "Manage members and settings"
+        "badge": "Administrator",
+        "description": "Manage members and settings (channels, members, invites)."
       },
       "member": {
         "label": "Member",
-        "description": "Create and work on issues"
+        "badge": "Member",
+        "description": "Create and work on issues; use authorized channels and DMs."
       }
     }
   }

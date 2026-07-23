@@ -404,18 +404,31 @@
     "remove_action": "从工作区移除",
     "cannot_demote_last_owner_title": "请先把另一位成员升级为所有者——工作区必须至少保留一位所有者。",
     "cannot_demote_last_owner": "不能降级最后一位所有者",
+    "roles_entry": "角色",
+    "roles_entry_aria": "打开工作区角色说明",
+    "roles_dialog": {
+      "title": "Roles · 工作区角色",
+      "description": "决定成员在工作区内能做什么。与 Agent 身份无关。",
+      "close": "关闭",
+      "cancel": "取消",
+      "save": "保存",
+      "saving": "保存中…"
+    },
     "roles": {
       "owner": {
-        "label": "所有者",
-        "description": "完全访问权限，可管理所有设置"
+        "label": "Owner",
+        "badge": "工作区所有者",
+        "description": "完全访问，管理全部设置；至少保留一名。"
       },
       "admin": {
-        "label": "管理员",
-        "description": "管理成员与设置"
+        "label": "Admin",
+        "badge": "管理员",
+        "description": "管理成员与设置（频道、成员、邀请）。"
       },
       "member": {
-        "label": "成员",
-        "description": "创建并处理 issue"
+        "label": "Member",
+        "badge": "成员",
+        "description": "创建与处理任务；可用被授权的频道、私信。"
       }
     }
   }

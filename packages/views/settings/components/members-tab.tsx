@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Crown, Shield, User, Plus, MoreHorizontal, UserMinus, Users, Clock, X, Mail } from "lucide-react";
+import { Crown, Shield, User, Plus, MoreHorizontal, UserMinus, Users, Clock, X, Mail, Info } from "lucide-react";
 import { ActorAvatar } from "../../common/actor-avatar";
 import type { MemberWithUser, MemberRole, Invitation } from "@multica/core/types";
 import { Input } from "@multica/ui/components/ui/input";
@@ -31,9 +31,6 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubTrigger,
-  DropdownMenuSubContent,
 } from "@multica/ui/components/ui/dropdown-menu";
 import { toast } from "sonner";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -45,6 +42,7 @@ import { api } from "@multica/core/api";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { useT } from "../../i18n";
+import { RolesDialog } from "./roles-dialog";
 
 const ROLE_ICONS: Record<MemberRole, typeof Crown> = {
   owner: Crown,
@@ -80,7 +78,7 @@ function MemberRow({
   ownerCount,
   isSelf,
   busy,
-  onRoleChange,
+  onOpenRolePicker,
   onRemove,
 }: {
   member: MemberWithUser;
@@ -91,7 +89,7 @@ function MemberRow({
   ownerCount: number;
   isSelf: boolean;
   busy: boolean;
-  onRoleChange: (role: MemberRole) => void;
+  onOpenRolePicker: () => void;
   onRemove: () => void;
 }) {
   const { t } = useT("settings");
@@ -123,49 +121,18 @@ function MemberRow({
           />
           <DropdownMenuContent align="end" className="w-auto">
             {canEditRole && (
-              <DropdownMenuSub>
-                <DropdownMenuSubTrigger>
-                  <Shield className="h-3.5 w-3.5" />
-                  {t(($) => $.members.change_role)}
-                </DropdownMenuSubTrigger>
-                <DropdownMenuSubContent className="w-auto">
-                  {(Object.entries(roleConfig) as [MemberRole, (typeof roleConfig)[MemberRole]][]).map(
-                    ([role, config]) => {
-                      if (role === "owner" && !canManageOwners) return null;
-                      const Icon = config.icon;
-                      const wouldDemoteLastOwner =
-                        isLastOwner && role !== "owner";
-                      return (
-                        <DropdownMenuItem
-                          key={role}
-                          onClick={() =>
-                            wouldDemoteLastOwner ? undefined : onRoleChange(role)
-                          }
-                          disabled={wouldDemoteLastOwner}
-                          title={
-                            wouldDemoteLastOwner
-                              ? t(($) => $.members.cannot_demote_last_owner_title)
-                              : undefined
-                          }
-                        >
-                          <Icon className="h-3.5 w-3.5" />
-                          <div className="flex flex-col">
-                            <span>{config.label}</span>
-                            <span className="text-xs text-muted-foreground font-normal">
-                              {wouldDemoteLastOwner
-                                ? t(($) => $.members.cannot_demote_last_owner)
-                                : config.description}
-                            </span>
-                          </div>
-                          {member.role === role && (
-                            <span className="ml-auto text-xs text-muted-foreground">{"✓"}</span>
-                          )}
-                        </DropdownMenuItem>
-                      );
-                    }
-                  )}
-                </DropdownMenuSubContent>
-              </DropdownMenuSub>
+              <DropdownMenuItem
+                onClick={onOpenRolePicker}
+                disabled={isLastOwner && !canManageOwners}
+                title={
+                  isLastOwner
+                    ? t(($) => $.members.cannot_demote_last_owner_title)
+                    : undefined
+                }
+              >
+                <Shield className="h-3.5 w-3.5" />
+                {t(($) => $.members.change_role)}
+              </DropdownMenuItem>
             )}
             {canEditRole && canRemove && <DropdownMenuSeparator />}
             {canRemove && (
@@ -245,6 +212,8 @@ export function MembersTab() {
   const [inviteLoading, setInviteLoading] = useState(false);
   const [memberActionId, setMemberActionId] = useState<string | null>(null);
   const [invitationActionId, setInvitationActionId] = useState<string | null>(null);
+  const [rolesInfoOpen, setRolesInfoOpen] = useState(false);
+  const [rolePickerMember, setRolePickerMember] = useState<MemberWithUser | null>(null);
   const [confirmAction, setConfirmAction] = useState<{
     title: string;
     description: string;
@@ -304,6 +273,7 @@ export function MembersTab() {
       await api.updateMember(workspace.id, memberId, { role });
       qc.invalidateQueries({ queryKey: workspaceKeys.members(wsId) });
       toast.success(t(($) => $.members.toast_role_updated));
+      setRolePickerMember(null);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : t(($) => $.members.toast_role_failed));
     } finally {
@@ -341,6 +311,18 @@ export function MembersTab() {
         <div className="flex items-center gap-2">
           <Users className="h-4 w-4 text-muted-foreground" />
           <h2 className="text-sm font-semibold">{t(($) => $.members.section_title, { count: members.length })}</h2>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="ml-auto h-8 gap-1.5 px-2 text-xs text-muted-foreground hover:text-foreground"
+            aria-label={t(($) => $.members.roles_entry_aria)}
+            data-testid="members-roles-entry"
+            onClick={() => setRolesInfoOpen(true)}
+          >
+            <Info className="size-3.5" aria-hidden />
+            {t(($) => $.members.roles_entry)}
+          </Button>
         </div>
 
         {canManageWorkspace && (
@@ -391,7 +373,7 @@ export function MembersTab() {
                   ownerCount={ownerCount}
                   isSelf={m.user_id === user?.id}
                   busy={memberActionId === m.id}
-                  onRoleChange={(role) => handleRoleChange(m.id, role)}
+                  onOpenRolePicker={() => setRolePickerMember(m)}
                   onRemove={() => handleRemoveMember(m)}
                 />
               </div>
@@ -422,6 +404,41 @@ export function MembersTab() {
           </div>
         </section>
       )}
+
+      <RolesDialog
+        open={rolesInfoOpen}
+        onOpenChange={setRolesInfoOpen}
+        mode="info"
+      />
+
+      <RolesDialog
+        open={!!rolePickerMember}
+        onOpenChange={(open) => {
+          if (!open) setRolePickerMember(null);
+        }}
+        mode="select"
+        value={rolePickerMember?.role ?? "member"}
+        roles={
+          isOwner
+            ? (["owner", "admin", "member"] as MemberRole[])
+            : (["admin", "member"] as MemberRole[])
+        }
+        saving={
+          !!rolePickerMember && memberActionId === rolePickerMember.id
+        }
+        onSave={(role) => {
+          if (!rolePickerMember) return;
+          if (
+            rolePickerMember.role === "owner" &&
+            ownerCount <= 1 &&
+            role !== "owner"
+          ) {
+            toast.error(t(($) => $.members.cannot_demote_last_owner));
+            return;
+          }
+          void handleRoleChange(rolePickerMember.id, role);
+        }}
+      />
 
       <AlertDialog open={!!confirmAction} onOpenChange={(v) => { if (!v) setConfirmAction(null); }}>
         <AlertDialogContent>

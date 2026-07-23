@@ -404,18 +404,31 @@
     "remove_action": "ワークスペースから削除",
     "cannot_demote_last_owner_title": "先に別のメンバーを owner に昇格させてください。ワークスペースには少なくとも 1 人の owner が必要です。",
     "cannot_demote_last_owner": "最後の owner は降格できません",
+    "roles_entry": "Roles",
+    "roles_entry_aria": "ワークスペースの役割を開く",
+    "roles_dialog": {
+      "title": "Roles",
+      "description": "メンバーがこのワークスペースでできることを決めます。Agent の身分とは無関係です。",
+      "close": "閉じる",
+      "cancel": "キャンセル",
+      "save": "保存",
+      "saving": "保存中…"
+    },
     "roles": {
       "owner": {
-        "label": "オーナー",
-        "description": "フルアクセス、すべての設定を管理"
+        "label": "Owner",
+        "badge": "ワークスペース所有者",
+        "description": "フルアクセス、すべての設定を管理。少なくとも 1 名必要。"
       },
       "admin": {
-        "label": "管理者",
-        "description": "メンバーと設定を管理"
+        "label": "Admin",
+        "badge": "管理者",
+        "description": "メンバーと設定を管理（チャンネル、メンバー、招待）。"
       },
       "member": {
-        "label": "メンバー",
-        "description": "イシューの作成と作業"
+        "label": "Member",
+        "badge": "メンバー",
+        "description": "イシューの作成と作業。許可されたチャンネルと DM を利用。"
       }
     }
   }

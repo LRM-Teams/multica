@@ -3,14 +3,27 @@ import type {
   RuntimeUsage,
   RuntimeUsageByAgent,
 } from "@multica/core/types";
+import { deriveRuntimeHealth } from "@multica/core/runtimes";
 import { getCustomPricing } from "@multica/core/runtimes/custom-pricing-store";
 
 // A live local daemon re-registers itself within seconds of a server-side
 // delete (daemon self-heal, #2404), so deleting an online local runtime from
-// the UI has no lasting effect. Both the detail page and the list row menu
-// gate their Delete affordance on this same predicate.
-export function isSelfHealingRuntime(runtime: AgentRuntime): boolean {
-  return runtime.runtime_mode === "local" && runtime.status === "online";
+// the UI has no lasting effect. Gate the delete dialog's "stop daemon" step
+// on derived health — NOT raw `status === "online"`.
+//
+// Why derived: the Health column already treats a stale ONLINE heartbeat as
+// Offline (`deriveRuntimeHealth`). If we keyed off the raw status flag, a
+// dead Mac that never reported disconnect would still open the stop-daemon
+// step (Frank / LRM-437: UI says Offline + no agents, delete still blocked).
+// recently_lost counts as self-healing too — the daemon may still be alive
+// and would re-register on delete.
+export function isSelfHealingRuntime(
+  runtime: Pick<AgentRuntime, "runtime_mode" | "status" | "last_seen_at">,
+  now: number = Date.now(),
+): boolean {
+  if (runtime.runtime_mode !== "local") return false;
+  const health = deriveRuntimeHealth(runtime, now);
+  return health === "online" || health === "recently_lost";
 }
 
 // ---------------------------------------------------------------------------

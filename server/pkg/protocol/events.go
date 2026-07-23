@@ -123,11 +123,26 @@ const (
 	EventSquadDeleted = "squad:deleted"
 
 	// Daemon events
-	EventDaemonHeartbeat      = "daemon:heartbeat"
-	EventDaemonHeartbeatAck   = "daemon:heartbeat_ack"
-	EventDaemonRegister       = "daemon:register"
-	EventDaemonRuntimeUpdated = "daemon:runtime_updated"
-	EventDaemonTaskAvailable  = "daemon:task_available"
+	EventDaemonHeartbeat         = "daemon:heartbeat"
+	EventDaemonHeartbeatAck      = "daemon:heartbeat_ack"
+	EventDaemonRegister          = "daemon:register"
+	EventDaemonRuntimeUpdated    = "daemon:runtime_updated"
+	EventDaemonTaskAvailable     = "daemon:task_available"
+	EventDaemonAgentStart        = "agent:start"
+	EventDaemonAgentStop         = "agent:stop"
+	EventDaemonAgentLifecycleReq = "agent:lifecycle.request"
+	EventDaemonAgentLifecycleEnd = "agent:lifecycle.replay_end"
+	EventDaemonAgentLifecycleAck = "agent:lifecycle.ack"
+	EventReminderUpsert          = "reminder.upsert"
+	EventReminderCancel          = "reminder.cancel"
+	EventReminderSnapshotRequest = "reminder.snapshot.request"
+	EventReminderSnapshot        = "reminder.snapshot"
+	EventReminderFireAttempt     = "reminder.fire_attempt"
+	EventReminderFireResult      = "reminder.fire_result"
+	EventReminderProjection      = "reminder.projection"
+	EventReminderProjectionReq   = "reminder.projection.request"
+	EventReminderProjectionEnd   = "reminder.projection.replay_end"
+	EventReminderProjectionAck   = "reminder.projection.ack"
 
 	// Sandbox events. Node-facing events wake shared sandbox infrastructure;
 	// instance events are broadcast to workspace clients for UI refresh.

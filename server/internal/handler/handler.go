@@ -117,6 +117,7 @@ type Handler struct {
 	TxStarter             txStarter
 	Hub                   *realtime.Hub
 	DaemonHub             *daemonws.Hub
+	ReminderNotifier      daemonws.ReminderNotifier
 	SandboxHub            *sandboxws.Hub
 	Bus                   *events.Bus
 	TaskService           *service.TaskService

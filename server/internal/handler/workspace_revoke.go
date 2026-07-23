@@ -168,6 +168,9 @@ func (h *Handler) publishRevocation(ctx context.Context, result revocationResult
 		h.publish(protocol.EventAgentArchived, workspaceIDStr, actorType, actorIDStr, map[string]any{
 			"agent": agentToResponse(agent),
 		})
+		if agent.RuntimeID.Valid {
+			h.projectReminderOwnerStop(ctx, uuidToString(agent.ID), uuidToString(agent.RuntimeID))
+		}
 	}
 
 	// Tell connected clients to refresh the runtime list. We piggyback on

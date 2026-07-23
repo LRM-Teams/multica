@@ -480,16 +480,28 @@
   "visibility": {
     "private": {
       "label": "Personal",
-      "tooltip": "Personal · only you and workspace admins can use this agent"
+      "tooltip": "Personal · only you and workspace admins can discover, invite, or @mention"
+    },
+    "channel": {
+      "label": "仅本群",
+      "tooltip": "仅本群 · only in the bound group for discover, invite, or @mention"
     },
     "workspace": {
       "label": "Workspace",
-      "tooltip": "Workspace · everyone in this workspace can use this agent"
-    },
-    "channel": {
-      "label": "This channel only",
-      "tooltip": "This channel only · discoverable and invitable only in the bound group"
+      "tooltip": "Workspace · everyone in this workspace can discover, invite, or @mention"
     }
+  },
+  "visibility_bind": {
+    "pick_channel": "Choose a group",
+    "search_placeholder": "Search groups…",
+    "loading": "Loading groups…",
+    "load_failed": "Couldn't load groups",
+    "retry": "Retry",
+    "no_groups": "Join or create a group first to use 仅本群",
+    "no_match": "No matching groups",
+    "home_required": "Bind a home group for 仅本群 — cannot create without home_channel_id",
+    "channel_unavailable": "Home group unavailable",
+    "not_channel_permission_hint": "This is agent visibility (discover / invite / @), not channel sidebar permissions. Other groups won't see this agent; existing seats elsewhere are kept."
   },
   "profile_card": {
     "unavailable": "Agent unavailable",

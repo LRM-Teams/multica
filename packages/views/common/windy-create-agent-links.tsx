@@ -5,6 +5,7 @@ import { Bot, CheckCircle2, Loader2, Sparkles, X } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api } from "@multica/core/api";
+import { VISIBILITY_LABEL } from "@multica/core/agents";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useAuthStore } from "@multica/core/auth";
 import { memberListOptions, workspaceKeys } from "@multica/core/workspace/queries";
@@ -59,7 +60,11 @@ export function WindyCreateAgentLink({
             // real agent as trusted `assigned` avatar via draft_id — a raw
             // URL bypass of the avatar_selection contract. Never forward it;
             // the created agent gets the server's concrete assigned default.
-            visibility: url.searchParams.get("visibility") === "workspace" ? "workspace" : "private",
+            visibility: (() => {
+              const v = url.searchParams.get("visibility");
+              if (v === "workspace" || v === "channel" || v === "private") return v;
+              return "private";
+            })(),
             project_id: url.searchParams.get("project_id") || null,
             channel_id: url.searchParams.get("channel_id") || null,
             can_execute_code: url.searchParams.get("can_execute_code") === "true",
@@ -154,12 +159,20 @@ function InlineCreateAgentDialog({
         // records it as `assigned`. draft.avatar_url is a preview-only
         // suggestion string; it must never be resubmitted as a raw URL.
         visibility: draft.visibility,
+        home_channel_id:
+          draft.visibility === "channel"
+            ? draft.channel_id ?? null
+            : undefined,
         runtime_id: selectedRuntime.id,
         model: model.trim() || undefined,
         thinking_level: thinkingLevel || undefined,
         max_concurrent_tasks: 6,
         draft_id: draft.id,
       };
+      if (payload.visibility === "channel" && !payload.home_channel_id) {
+        toast.error(t(($) => $.visibility_bind.home_required));
+        return;
+      }
       const created = await api.createAgent(payload);
       qc.setQueryData<Agent[]>(workspaceKeys.agents(wsId), (current = []) => [...current, created]);
       qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
@@ -218,7 +231,7 @@ function InlineCreateAgentDialog({
                 <p className="mt-0.5 text-xs text-muted-foreground">{t(($) => $.windy.generated_hint)}</p>
               </div>
               <span className="w-fit shrink-0 rounded-full border bg-muted/40 px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
-                {draft.visibility === "workspace" ? "Workspace" : "Private"}
+                {VISIBILITY_LABEL[draft.visibility] ?? draft.visibility}
               </span>
             </div>
             {draft.instructions && (

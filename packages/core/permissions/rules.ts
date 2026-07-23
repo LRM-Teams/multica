@@ -53,7 +53,10 @@ export function canAssignAgentToIssue(
   if (ctx.userId === null) {
     return deny("not_authenticated", "Sign in to assign agents.");
   }
-  if (agent.visibility === "workspace") {
+  if (agent.visibility === "workspace" || agent.visibility === "channel") {
+    // `channel` discoverability is filtered by home_channel on ListAgents /
+    // invite / @ (LRM-240). When the agent is already in this client's list,
+    // treat assignability like workspace — do not silently remap to private.
     if (ctx.role === null) {
       return deny("not_member", "Join this workspace to assign agents.");
     }

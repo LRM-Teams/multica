@@ -1,8 +1,8 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { Globe, Lock } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useMemo, useRef, useState } from "react";
+import { Globe, Hash, Lock } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ModelDropdown } from "./model-dropdown";
 import { ThinkingDropdown } from "./thinking-dropdown";
 import { RuntimePicker, isRuntimeUsableForUser } from "./runtime-picker";
@@ -10,6 +10,13 @@ import { InstructionsEditor } from "./instructions-editor";
 import { SkillMultiSelect } from "./skill-multi-select";
 import { AvatarPicker, type AvatarPickerSelection } from "./avatar-picker";
 import { api } from "@multica/core/api";
+import {
+  AGENT_DESCRIPTION_MAX_LENGTH,
+  VISIBILITY_DESCRIPTION,
+  VISIBILITY_LABEL,
+  VISIBILITY_OPTIONS,
+} from "@multica/core/agents";
+import { channelsOptions } from "@multica/core/channels";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import { workspaceKeys } from "@multica/core/workspace/queries";
@@ -34,13 +41,21 @@ import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
 import { toast } from "sonner";
-import {
-  AGENT_DESCRIPTION_MAX_LENGTH,
-  VISIBILITY_DESCRIPTION,
-  VISIBILITY_LABEL,
-} from "@multica/core/agents";
 import { CharCounter } from "./char-counter";
+import { HomeChannelBindChip } from "./home-channel-bind-chip";
 import { useT } from "../../i18n";
+
+function VisibilityOptionIcon({
+  value,
+  className,
+}: {
+  value: AgentVisibility;
+  className?: string;
+}) {
+  if (value === "private") return <Lock className={className} />;
+  if (value === "channel") return <Hash className={className} />;
+  return <Globe className={className} />;
+}
 
 export function CreateAgentDialog({
   runtimes,
@@ -50,6 +65,7 @@ export function CreateAgentDialog({
   template,
   draft,
   squadId,
+  defaultHomeChannelId,
   onClose,
   onCreate,
 }: {
@@ -74,6 +90,8 @@ export function CreateAgentDialog({
   // surfaces a warning toast — the user can add it manually from the
   // Members tab.
   squadId?: string;
+  /** Prefer this group as home when opening on「仅本群」(channel context). */
+  defaultHomeChannelId?: string | null;
   onClose: () => void;
   // Returns the created Agent so the dialog can run a follow-up
   // setAgentSkills with the IDs the user picked in the form. Pre-skill-
@@ -86,6 +104,16 @@ export function CreateAgentDialog({
   const isDraft = !!draft && !isDuplicate;
   const queryClient = useQueryClient();
   const wsId = useWorkspaceId();
+  const { data: channels = [], isLoading: channelsLoading } = useQuery(
+    channelsOptions(wsId),
+  );
+  const groups = useMemo(
+    () => channels.filter((c) => c.kind === "group" && !c.archived_at),
+    [channels],
+  );
+  // Only disable after a successful empty load — never while still fetching
+  // (that would block 仅本群 before home can be bound).
+  const channelOptionDisabled = !channelsLoading && groups.length === 0;
 
   // Display-name defaults: duplicate uses "<original> copy". Manual-create starts blank.
   const [name, setName] = useState(
@@ -94,9 +122,21 @@ export function CreateAgentDialog({
       : draft?.name ?? "",
   );
   const [description, setDescription] = useState(template?.description ?? draft?.description ?? "");
-  const [visibility, setVisibility] = useState<AgentVisibility>(
-    template?.visibility ?? draft?.visibility ?? "workspace",
-  );
+  const [visibility, setVisibility] = useState<AgentVisibility>(() => {
+    const seed = template?.visibility ?? draft?.visibility ?? "workspace";
+    // Older drafts/templates may only carry workspace|private; never invent channel.
+    return seed === "channel" || seed === "private" || seed === "workspace"
+      ? seed
+      : "workspace";
+  });
+  const [homeChannelId, setHomeChannelId] = useState<string | null>(() => {
+    if (template?.visibility === "channel" && template.home_channel_id) {
+      return template.home_channel_id;
+    }
+    if (draft?.channel_id) return draft.channel_id;
+    return defaultHomeChannelId ?? null;
+  });
+  const [homeInvalid, setHomeInvalid] = useState(false);
   const [model, setModel] = useState(template?.model ?? "");
   const [thinkingLevel, setThinkingLevel] = useState(template?.thinking_level ?? "");
   const [instructions, setInstructions] = useState(template?.instructions ?? draft?.instructions ?? "");
@@ -180,8 +220,32 @@ export function CreateAgentDialog({
     }
   };
 
+  const pickVisibility = (next: AgentVisibility) => {
+    if (next === "channel" && channelOptionDisabled) return;
+    setVisibility(next);
+    setHomeInvalid(false);
+    if (next === "channel") {
+      setHomeChannelId((prev) => {
+        // Keep an existing/default bind while the channel list is still
+        // loading — never wipe home just because groups[] is empty yet.
+        if (prev) return prev;
+        if (defaultHomeChannelId) return defaultHomeChannelId;
+        return groups[0]?.id ?? null;
+      });
+    } else {
+      setHomeChannelId(null);
+    }
+  };
+
   const handleSubmit = async () => {
     if (!name.trim() || !selectedRuntime || selectedRuntimeLocked) return;
+    // Channel without home is an explicit hard stop — never silently
+    // rewrite to private/workspace (LRM-238 / LRM-371 AC).
+    if (visibility === "channel" && !homeChannelId) {
+      setHomeInvalid(true);
+      toast.error(t(($) => $.visibility_bind.home_required));
+      return;
+    }
     setCreating(true);
 
     try {
@@ -191,6 +255,8 @@ export function CreateAgentDialog({
         description: description.trim(),
         runtime_id: selectedRuntime.id,
         visibility,
+        home_channel_id:
+          visibility === "channel" ? homeChannelId : undefined,
         model: model.trim() || undefined,
         thinking_level: thinkingLevel || undefined,
         instructions: trimmedInstructions || undefined,
@@ -331,42 +397,69 @@ export function CreateAgentDialog({
 
             <div>
               <Label className="text-xs text-muted-foreground">{t(($) => $.create_dialog.visibility_label)}</Label>
-              <div className="mt-1.5 flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setVisibility("workspace")}
-                  className={`flex flex-1 items-center gap-2 rounded-lg border px-3 py-2.5 text-sm transition-colors ${
-                    visibility === "workspace"
-                      ? "border-primary bg-primary/5"
-                      : "border-border hover:bg-muted"
-                  }`}
-                >
-                  <Globe className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  <div className="text-left">
-                    <div className="font-medium">{VISIBILITY_LABEL.workspace}</div>
-                    <div className="text-xs text-muted-foreground">
-                      {VISIBILITY_DESCRIPTION.workspace}
-                    </div>
-                  </div>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setVisibility("private")}
-                  className={`flex flex-1 items-center gap-2 rounded-lg border px-3 py-2.5 text-sm transition-colors ${
-                    visibility === "private"
-                      ? "border-primary bg-primary/5"
-                      : "border-border hover:bg-muted"
-                  }`}
-                >
-                  <Lock className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  <div className="text-left">
-                    <div className="font-medium">{VISIBILITY_LABEL.private}</div>
-                    <div className="text-xs text-muted-foreground">
-                      {VISIBILITY_DESCRIPTION.private}
-                    </div>
-                  </div>
-                </button>
+              {/* 方案 A: vertical radio list;「仅本群」expands #home chip inline. */}
+              <div className="mt-1.5 flex flex-col gap-2" role="radiogroup" aria-label={t(($) => $.create_dialog.visibility_label)}>
+                {VISIBILITY_OPTIONS.map((option) => {
+                  const selected = visibility === option;
+                  const disabled = option === "channel" && channelOptionDisabled;
+                  return (
+                    <button
+                      key={option}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      disabled={disabled}
+                      onClick={() => pickVisibility(option)}
+                      className={`flex items-start gap-2.5 rounded-lg border px-3 py-2.5 text-sm transition-colors ${
+                        selected
+                          ? "border-primary bg-primary/5"
+                          : "border-border hover:bg-muted"
+                      } ${disabled ? "cursor-not-allowed opacity-50" : ""}`}
+                    >
+                      <span
+                        aria-hidden
+                        className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 ${
+                          selected ? "border-primary" : "border-muted-foreground/50"
+                        }`}
+                      >
+                        {selected ? (
+                          <span className="h-2 w-2 rounded-full bg-primary" />
+                        ) : null}
+                      </span>
+                      <VisibilityOptionIcon
+                        value={option}
+                        className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground"
+                      />
+                      <div className="min-w-0 flex-1 text-left">
+                        <div className="font-medium">{VISIBILITY_LABEL[option]}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {VISIBILITY_DESCRIPTION[option]}
+                        </div>
+                        {option === "channel" && selected ? (
+                          <div className="mt-2">
+                            <HomeChannelBindChip
+                              value={homeChannelId}
+                              invalid={homeInvalid}
+                              onChange={(id) => {
+                                setHomeChannelId(id);
+                                setHomeInvalid(false);
+                              }}
+                            />
+                          </div>
+                        ) : null}
+                        {option === "channel" && disabled ? (
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            {t(($) => $.visibility_bind.no_groups)}
+                          </div>
+                        ) : null}
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
+              <p className="mt-2 text-xs text-muted-foreground">
+                {t(($) => $.visibility_bind.not_channel_permission_hint)}
+              </p>
             </div>
 
             <RuntimePicker

@@ -17,9 +17,17 @@ import {
   type FiredReminderRow,
 } from "@multica/core/agents/reminder-view-model";
 import { useT } from "../../../i18n";
+import { useViewingTimezone } from "../../../common/use-viewing-timezone";
 import { AppLink } from "../../../navigation/app-link";
 import { useOptionalNavigation } from "../../../navigation/context";
 import { useAgentRemindersRealtime } from "./use-agent-reminders-realtime";
+import {
+  formatReminderAbsolute,
+  formatReminderCadence,
+  formatReminderRelative,
+  isBareMulticaAnchorLabel,
+  type ReminderCadenceLabels,
+} from "./reminder-display";
 
 interface RemindersTabProps {
   agent: Agent;
@@ -208,15 +216,37 @@ function ErrorState({
   );
 }
 
-function CadenceLabel({ row }: { row: { cadence: UpcomingReminderRow["cadence"] } }) {
+function useReminderCadenceLabels(): ReminderCadenceLabels {
   const { t } = useT("agents");
+  const withTz = (timezone: string | undefined) =>
+    timezone ? t(($) => $.reminders.cadence_timezone_suffix, { timezone }) : "";
+  return {
+    oneShot: t(($) => $.reminders.one_shot),
+    daily: (time, timezone) =>
+      t(($) => $.reminders.cadence_daily, { time, timezone: withTz(timezone) }),
+    weekly: (days, time, timezone) =>
+      t(($) => $.reminders.cadence_weekly, { days, time, timezone: withTz(timezone) }),
+    everyMinutes: (count) => t(($) => $.reminders.cadence_every_minutes, { count }),
+    everyHours: (count) => t(($) => $.reminders.cadence_every_hours, { count }),
+    everyDays: (count) => t(($) => $.reminders.cadence_every_days, { count }),
+    raw: (description, timezone) =>
+      t(($) => $.reminders.cadence_raw, {
+        description,
+        timezone: withTz(timezone),
+      }),
+  };
+}
+
+function CadenceLabel({ row }: { row: { cadence: UpcomingReminderRow["cadence"] } }) {
+  const labels = useReminderCadenceLabels();
+  const text = formatReminderCadence(row.cadence, labels);
   if (row.cadence.kind === "one_shot") {
-    return <span className="text-muted-foreground">{t(($) => $.reminders.one_shot)}</span>;
+    return <span className="text-muted-foreground">{text}</span>;
   }
   return (
     <span className="inline-flex items-center gap-1 text-muted-foreground">
-      <Repeat className="size-3" aria-hidden />
-      {row.cadence.description}
+      <Repeat className="size-3 shrink-0" aria-hidden />
+      {text}
     </span>
   );
 }
@@ -224,7 +254,13 @@ function CadenceLabel({ row }: { row: { cadence: UpcomingReminderRow["cadence"] 
 function AnchorLink({ anchor }: { anchor: UpcomingReminderRow["anchor"] }) {
   const { t } = useT("agents");
   const navigation = useOptionalNavigation();
+  // Frank hard requirement: never show bare `#multica:<shortid>` — humans
+  // need a channel/session readable name. Server `display` already projects
+  // `#channel` / DM labels; treat any residual Raft-style id as unavailable.
   if (!anchor.available) {
+    return <span className="text-muted-foreground">{t(($) => $.reminders.anchor_unavailable)}</span>;
+  }
+  if (isBareMulticaAnchorLabel(anchor.label)) {
     return <span className="text-muted-foreground">{t(($) => $.reminders.anchor_unavailable)}</span>;
   }
   // `href` is a server-computed, already-authorized internal path (never
@@ -252,37 +288,42 @@ function AnchorLink({ anchor }: { anchor: UpcomingReminderRow["anchor"] }) {
   );
 }
 
-function TimezoneTag({ cadence }: { cadence: UpcomingReminderRow["cadence"] }) {
-  const { t } = useT("agents");
-  // Only a calendar cadence (daily/weekly) resolves against a schedule-time-
-  // locked timezone in a way that's meaningfully different from "just a
-  // moment" — an interval cadence or a one-shot fire-at instant has none.
-  if (cadence.kind !== "recurring" || cadence.family !== "calendar" || !cadence.timezone) return null;
+/** Relative + absolute on one meta line — Frank field IA (not neo-brutal skin). */
+function ReminderTimeLine({ iso }: { iso: string }) {
+  const { t, i18n } = useT("agents");
+  const timeZone = useViewingTimezone();
+  const locale = i18n?.language || "en";
+  const relative = formatReminderRelative(iso, locale);
+  const absolute = formatReminderAbsolute(
+    iso,
+    locale,
+    timeZone,
+    t(($) => $.reminders.at_word),
+  );
   return (
-    <span className="text-[10px] text-muted-foreground" title={t(($) => $.reminders.timezone_label)}>
-      {cadence.timezone}
+    <span className="text-muted-foreground">
+      <span>{relative}</span>
+      <span aria-hidden className="mx-1.5 text-muted-foreground/50">
+        ·
+      </span>
+      <span>{absolute}</span>
     </span>
   );
 }
 
 function UpcomingRowView({ row }: { row: UpcomingReminderRow }) {
-  const { t } = useT("agents");
   return (
     <li className="flex flex-col gap-1 px-3 py-3 text-xs md:px-4">
-      <div className="flex items-center gap-1.5">
-        <Bell className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-        <p className="min-w-0 line-clamp-2 font-medium text-foreground" title={row.title}>
+      <div className="flex items-start gap-1.5">
+        <Bell className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+        {/* Full title — no line-clamp; Frank hard requirement: 标题正文完整可读. */}
+        <p className="min-w-0 whitespace-pre-wrap break-words font-medium text-foreground">
           {row.title}
         </p>
       </div>
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 pl-5 text-muted-foreground">
-        <span>
-          {t(($) => $.reminders.next_fire_label)}: {formatInstant(row.nextFireAt)}
-        </span>
+      <div className="flex flex-col gap-0.5 pl-5">
+        <ReminderTimeLine iso={row.nextFireAt} />
         <CadenceLabel row={row} />
-        <TimezoneTag cadence={row.cadence} />
-      </div>
-      <div className="pl-5">
         <AnchorLink anchor={row.anchor} />
       </div>
     </li>
@@ -290,37 +331,22 @@ function UpcomingRowView({ row }: { row: UpcomingReminderRow }) {
 }
 
 function FiredRowView({ row }: { row: FiredReminderRow }) {
-  const { t } = useT("agents");
   return (
     <li className="flex flex-col gap-1 px-3 py-3 text-xs md:px-4">
-      <div className="flex items-center gap-1.5">
-        <Bell className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-        <p className="min-w-0 line-clamp-2 font-medium text-foreground" title={row.title}>
+      <div className="flex items-start gap-1.5">
+        <Bell className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+        <p className="min-w-0 whitespace-pre-wrap break-words font-medium text-foreground">
           {row.title}
         </p>
       </div>
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 pl-5 text-muted-foreground">
-        <span>
-          {t(($) => $.reminders.fired_label)}: {formatInstant(row.firedAt)}
-        </span>
-        {/* This describes the DEFINITION's own state, distinct from "this row
-            fired" — a recurring definition that's still `scheduled` must not
-            read as if this past occurrence terminated it. */}
+      <div className="flex flex-col gap-0.5 pl-5">
+        {/* Relative+absolute describe THIS occurrence's fire time. Cadence
+            still describes the DEFINITION (recurring stays labeled recurring
+            even after a past fire — must not read as "this reminder is done"). */}
+        <ReminderTimeLine iso={row.firedAt} />
         <CadenceLabel row={row} />
-        <TimezoneTag cadence={row.cadence} />
-      </div>
-      <div className="pl-5">
         <AnchorLink anchor={row.anchor} />
       </div>
     </li>
   );
-}
-
-function formatInstant(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  // Viewer's own locale/zone for the human-readable instant — the LOCKED
-  // schedule timezone is shown separately via `TimezoneTag`, never implied
-  // by this formatted string.
-  return date.toLocaleString();
 }

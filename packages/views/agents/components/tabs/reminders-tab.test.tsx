@@ -32,6 +32,12 @@ vi.mock("@multica/core/realtime", () => ({
   useWSReconnect: () => {},
 }));
 
+// Absolute time formatting reads the viewing timezone via the auth store —
+// pin UTC so reminder meta lines stay deterministic in CI.
+vi.mock("../../../common/use-viewing-timezone", () => ({
+  useViewingTimezone: () => "UTC",
+}));
+
 import { RemindersTab } from "./reminders-tab";
 import { ApiError } from "@multica/core/api";
 
@@ -173,12 +179,16 @@ describe("RemindersTab (#656)", () => {
     expect(await within(historySection).findByText("Daily standup follow-up")).toBeInTheDocument();
   });
 
-  it("shows the locked schedule timezone for a recurring reminder, not the viewer's own zone", async () => {
+  it("shows the locked schedule timezone folded into the human cadence line, not as a separate tag", async () => {
     mockGetAgentReminders.mockImplementation((_agentId: string, params: { status: string }) => {
       if (params.status === "scheduled") {
         return Promise.resolve(
           definitionsPage([
-            oneShotUpcoming({ schedule_kind: "recurring", cadence: "daily@09:00", schedule_timezone: "Asia/Tokyo" }),
+            oneShotUpcoming({
+              schedule_kind: "recurring",
+              cadence: "daily@09:00",
+              schedule_timezone: "Asia/Tokyo",
+            }),
           ]),
         );
       }
@@ -187,10 +197,10 @@ describe("RemindersTab (#656)", () => {
 
     renderTab();
 
-    expect(await screen.findByText("Asia/Tokyo")).toBeInTheDocument();
+    expect(await screen.findByText(/daily at 09:00 Asia\/Tokyo/)).toBeInTheDocument();
   });
 
-  it("does not show a timezone tag for a one-shot reminder (an instant, not a recurring calendar rule)", async () => {
+  it("does not show a timezone on a one-shot reminder (an instant, not a recurring calendar rule)", async () => {
     mockGetAgentReminders.mockImplementation((_agentId: string, params: { status: string }) => {
       if (params.status === "scheduled") {
         return Promise.resolve(definitionsPage([oneShotUpcoming({ schedule_kind: "one_shot" })]));
@@ -200,17 +210,13 @@ describe("RemindersTab (#656)", () => {
 
     renderTab();
 
-    await screen.findByText("Ping the deploy thread");
-    expect(screen.queryByText("Asia/Tokyo")).toBeNull();
+    expect(await screen.findByText("One-time")).toBeInTheDocument();
+    expect(screen.queryByText(/Asia\/Tokyo/)).toBeNull();
   });
 
-  it("does not show a timezone tag for an interval cadence (every:*), distinct from a calendar cadence (daily/weekly)", async () => {
-    // `every:*` is a zone-free elapsed interval, not a calendar rule — the
-    // server never populates `schedule_timezone` for it (`reminderTimezonePtr`
-    // returns nil for anything that isn't daily/weekly) — even though it IS
-    // recurring (unlike the one-shot case above), it must not show a
-    // timezone tag either. This is the cadence-FAMILY distinction, not a
-    // blanket recurring-vs-one-shot split.
+  it("does not invent a timezone for an interval cadence (every:*), distinct from a calendar cadence", async () => {
+    // `every:*` is a zone-free elapsed interval — the server never populates
+    // `schedule_timezone` for it. Human line is "every 30 minutes", no tz.
     mockGetAgentReminders.mockImplementation((_agentId: string, params: { status: string }) => {
       if (params.status === "scheduled") {
         return Promise.resolve(
@@ -222,11 +228,11 @@ describe("RemindersTab (#656)", () => {
 
     renderTab();
 
-    await screen.findByText("Ping the deploy thread");
-    expect(screen.queryByText("Asia/Tokyo")).toBeNull();
+    expect(await screen.findByText(/every 30 minutes/)).toBeInTheDocument();
+    expect(screen.queryByText(/Asia\/Tokyo/)).toBeNull();
   });
 
-  it("does not show a timezone tag or calendar cadence on a one-shot reminder that retains a hidden lifetime-locked timezone (recurring→one-shot conversion)", async () => {
+  it("does not show a timezone or calendar cadence on a one-shot reminder that retains a hidden lifetime-locked timezone (recurring→one-shot conversion)", async () => {
     // Per the locked BE contract: converting a recurring reminder to
     // one-shot (`update --fire-at`) clears cadence/schedule_kind but RETAINS
     // the hidden timezone in the DB (so it can restore on a future re-convert
@@ -247,9 +253,72 @@ describe("RemindersTab (#656)", () => {
     renderTab();
 
     expect(await screen.findByText("One-time")).toBeInTheDocument();
-    expect(screen.queryByText("Asia/Tokyo")).toBeNull();
+    expect(screen.queryByText(/Asia\/Tokyo/)).toBeNull();
   });
 
+  it("renders relative + absolute time (Frank field IA) instead of a bare toLocaleString", async () => {
+    // Freeze "now" so relative stays deterministic across CI locales/clocks.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2026-07-23T08:57:00Z"));
+    mockGetAgentReminders.mockImplementation((_agentId: string, params: { status: string }) => {
+      if (params.status === "scheduled") {
+        return Promise.resolve(
+          definitionsPage([oneShotUpcoming({ next_fire_at: "2026-07-23T09:00:00Z" })]),
+        );
+      }
+      return Promise.resolve(occurrencesPage([]));
+    });
+
+    renderTab();
+
+    expect(await screen.findByText(/in 3 minutes/)).toBeInTheDocument();
+    // Viewer tz mocked to UTC → 09:00 absolute with en "at" connector.
+    expect(screen.getByText(/Jul 23 at 09:00/)).toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
+  it("shows the full title without line-clamp truncation", async () => {
+    const longTitle =
+      "Ronan R7 initiator/timezone DB 查证回了吗? UTC 属实 -> #655 回 done、我取消 #681、闭环终结并知会 Frank; 不符 -> 真 blocker 走 initiator resolution 修复线并重开 #654";
+    mockGetAgentReminders.mockImplementation((_agentId: string, params: { status: string }) => {
+      if (params.status === "scheduled") {
+        return Promise.resolve(definitionsPage([oneShotUpcoming({ title: longTitle })]));
+      }
+      return Promise.resolve(occurrencesPage([]));
+    });
+
+    renderTab();
+
+    const title = await screen.findByText(longTitle);
+    expect(title).toBeInTheDocument();
+    expect(title.className).not.toMatch(/line-clamp/);
+  });
+
+  it("treats a bare #multica:<shortid> anchor label as unavailable (never dump Raft ids)", async () => {
+    mockGetAgentReminders.mockImplementation((_agentId: string, params: { status: string }) => {
+      if (params.status === "scheduled") {
+        return Promise.resolve(
+          definitionsPage([
+            oneShotUpcoming({
+              anchor: {
+                available: true,
+                kind: "channel",
+                display: "#multica:1c5652c2",
+                href: "/acme/channels/chan-1?message=msg-1",
+              },
+            }),
+          ]),
+        );
+      }
+      return Promise.resolve(occurrencesPage([]));
+    });
+
+    renderTab();
+
+    expect(await screen.findByText("Anchor unavailable")).toBeInTheDocument();
+    expect(screen.queryByText(/#multica:1c5652c2/)).toBeNull();
+    expect(screen.queryByRole("link")).toBeNull();
+  });
   it("accepts a transient 'firing' definition status as-is, without coercing it to fired", async () => {
     mockGetAgentReminders.mockImplementation((_agentId: string, params: { status: string }) => {
       if (params.status === "scheduled") return Promise.resolve(definitionsPage([]));

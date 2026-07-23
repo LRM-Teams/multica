@@ -1,7 +1,6 @@
 import { Cloud, Monitor, Wifi, WifiHigh, WifiOff } from "lucide-react";
 import { Badge } from "@multica/ui/components/ui/badge";
-import type { RuntimeHealth } from "@multica/core/runtimes";
-import type { RuntimeHealthState } from "@multica/core/types";
+import type { RuntimeHealth, RuntimeHealthPresentation } from "@multica/core/runtimes";
 import { ProviderLogo } from "./provider-logo";
 import { useT } from "../../i18n/use-t";
 
@@ -135,18 +134,21 @@ export function HealthBadge({
 }
 
 const RUNTIME_HEALTH_STATE_VISUAL: Record<
-  RuntimeHealthState,
+  RuntimeHealthPresentation,
   { dot: string; tone: string }
 > = {
   ok: { dot: "bg-success", tone: "bg-success/10 text-success" },
   update_available: { dot: "bg-warning", tone: "bg-warning/10 text-warning" },
+  // Staged: downloaded, applies when idle — brand tone like "updating", since the
+  // work is effectively done and just waiting, not a pending user action.
+  ready_to_apply: { dot: "bg-brand", tone: "bg-brand/10 text-brand" },
   updating: { dot: "bg-brand", tone: "bg-brand/10 text-brand" },
   failed: { dot: "bg-destructive", tone: "bg-destructive/10 text-destructive" },
   offline: { dot: "bg-muted-foreground/40", tone: "bg-muted text-muted-foreground" },
 };
 
 export function useRuntimeHealthStateLabel(): (
-  health: RuntimeHealthState,
+  health: RuntimeHealthPresentation,
 ) => string {
   const { t } = useT("runtimes");
   return (health) => t(($) => $.runtime_health[health]);
@@ -155,7 +157,7 @@ export function useRuntimeHealthStateLabel(): (
 export function RuntimeHealthStateBadge({
   health,
 }: {
-  health: RuntimeHealthState;
+  health: RuntimeHealthPresentation;
 }) {
   const labelOf = useRuntimeHealthStateLabel();
   const v = RUNTIME_HEALTH_STATE_VISUAL[health];

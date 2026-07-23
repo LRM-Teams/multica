@@ -98,6 +98,17 @@ describe("RuntimeUpdateDialog (#687)", () => {
     expect(screen.queryByText("Updating...")).toBeNull();
   });
 
+  it("does NOT re-prompt for a staged runtime (update_available + ready_to_apply)", async () => {
+    // The durable projection after a completed download: health still reads
+    // update_available but update_state is ready_to_apply. The prompt must not
+    // re-open and pin a terminal modal — the global surfaces show the staged state.
+    mockRuntimes.current = [makeRuntime({ updateState: "ready_to_apply" })];
+    renderDialog();
+    await flush();
+    expect(screen.queryByText("Update Multica CLI")).toBeNull();
+    expect(screen.queryByText("Update now")).toBeNull();
+  });
+
   it("shows brief labeled progress in an aria-live region after clicking (no black window)", async () => {
     initiateUpdate.mockResolvedValue({ id: "upd-1", status: "running" });
     getUpdateResult.mockResolvedValue({ status: "running" });

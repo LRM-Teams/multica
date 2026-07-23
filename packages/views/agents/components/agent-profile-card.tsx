@@ -17,7 +17,7 @@ import { AppLink } from "../../navigation/app-link";
 import { useOpenDM } from "../../common/use-open-dm";
 import { PropRow } from "../../common/prop-row";
 import { VisibilityBadge } from "./visibility-badge";
-import { runtimeHealthState } from "@multica/core/runtimes";
+import { deriveRuntimeHealthPresentation } from "@multica/core/runtimes";
 import { useRuntimeHealthStateLabel } from "../../runtimes/components/shared";
 import { RuntimePicker } from "./inspector/runtime-picker";
 import { ModelPicker } from "./inspector/model-picker";
@@ -118,7 +118,7 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
   // Cloud runtimes never report an outdated local binary.
   const runtimeUpdateHealth =
     agent.runtime_mode !== "cloud" && runtime
-      ? runtimeHealthState(runtime)
+      ? deriveRuntimeHealthPresentation(runtime)
       : "ok";
 
   return (

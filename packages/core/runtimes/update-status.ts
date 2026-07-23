@@ -56,6 +56,28 @@ export function isTerminalUpdateStatus(
   return !!status && UPDATE_TERMINAL_STATUSES.has(status);
 }
 
+/**
+ * `update_state` values that mean a self-update is genuinely underway or staged.
+ * A new update must NOT be offered while the runtime is in one of these, even if
+ * the backend still reports `runtime_health: "update_available"` for a staged
+ * (`ready_to_apply`) daemon — otherwise the AppShell prompt re-opens on a staged
+ * runtime and pins a terminal modal.
+ *
+ * `completed` is deliberately NOT here: a terminal `completed` row lingers (~6h),
+ * and if a newer version releases during that window the server projects
+ * `update_available + completed`, which must stay eligible so consecutive
+ * upgrades are not blocked by stale terminal history. `failed`/`timed_out` are
+ * handled by the existing failed/retry surface, not the AppShell auto-prompt.
+ */
+export const ACTIVE_UPDATE_LIFECYCLE_STATES: ReadonlySet<RuntimeUpdateState> =
+  new Set<RuntimeUpdateState>(["pending", "running", "ready_to_apply"]);
+
+export function isUpdateLifecycleActive(
+  state: RuntimeUpdateState | undefined,
+): boolean {
+  return !!state && ACTIVE_UPDATE_LIFECYCLE_STATES.has(state);
+}
+
 export interface DeriveUpdateStatusInput {
   /** Status from an in-flight `getUpdateResult` poll, if one is running. */
   pollStatus?: RuntimeUpdateStatus | null;

@@ -113,6 +113,36 @@ have both surfaces consume it.**
    Plus `core/runtimes/update-status.test.ts` for the pure derivation +
    terminal-set (table-driven over all `RuntimeUpdateState`/`RuntimeHealthState`).
 
+## Eligibility + same-source presentation (Barry review round 2)
+
+The BE collapses `ready_to_apply` into `runtime_health: "update_available"`, and
+`runtimeCanStartSelfUpdate` only read health — two consequences, one root cause
+(`update_state` was ignored at the canonical boundaries):
+
+1. **Prompt re-pin**: once the durable `ready_to_apply` projection arrives, the
+   staged runtime re-enters eligibility and the prompt re-opens, pinning a
+   terminal modal. Fix: `runtimeCanStartSelfUpdate` excludes
+   `isUpdateLifecycleActive(update_state)` = `{pending, running, ready_to_apply}`.
+   `completed` and `idle` stay eligible (a newer release during the ~6h terminal
+   `completed` window must be startable); `failed`/`timed_out` are handled by the
+   existing retry surface, not the auto-prompt.
+2. **Divergent badges**: `runtime-columns HealthCell`, `agent-profile-card`,
+   `agent-side-panel` read raw `runtime_health`, so a staged runtime shows
+   "Update available" instead of "Ready to apply". Fix: shared
+   `deriveRuntimeHealthPresentation(runtime): RuntimeHealthState | "ready_to_apply"`
+   — `ready_to_apply` overrides; `pending`/`running` → `updating`;
+   `idle`/`completed`/`failed`/`offline` fall through to `runtime_health`. The
+   badge visual/label layer (`RUNTIME_HEALTH_STATE_VISUAL`,
+   `useRuntimeHealthStateLabel`, `RuntimeHealthStateBadge`) accepts the extended
+   presentation; all three surfaces + `UpdateSection` now read from one source.
+   One new i18n key `runtime_health.ready_to_apply` ×4 (concise badge label; the
+   full "applies when idle" sentence stays in `update.status.ready_to_apply`).
+
+Regressions: `isUpdateLifecycleActive` + `deriveRuntimeHealthPresentation` +
+`runtimeCanStartSelfUpdate` (ready_to_apply ineligible, completed eligible) in
+core; Runtime-list `HealthCell`, `AgentProfileCard`, `AgentSidePanel` each prove
+the ready copy; Dialog proves no re-prompt for a staged runtime.
+
 ## #686 parallelism
 
 Build strictly on the current public enums (unchanged). If #686 adds wire fields,

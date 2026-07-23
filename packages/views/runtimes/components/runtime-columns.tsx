@@ -10,8 +10,8 @@ import { deriveWorkload } from "@multica/core/agents";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import {
   deriveRuntimeHealth,
+  deriveRuntimeHealthPresentation,
   runtimeCurrentVersion,
-  runtimeHealthState,
   runtimeTargetVersion,
   runtimeUsageOptions,
 } from "@multica/core/runtimes";
@@ -85,6 +85,7 @@ interface CreateColumnsArgs {
   t: RuntimesT;
 }
 
+// react-doctor-disable-next-line only-export-components -- table-column factory colocated with its cell components (HealthCell et al.); splitting it out would separate tightly-coupled column defs from their cells.
 export function createRuntimeColumns({
   showOwner,
   wsId,
@@ -237,7 +238,7 @@ function VisibilityBadge({ runtime }: { runtime: AgentRuntime }) {
   );
 }
 
-function HealthCell({
+export function HealthCell({
   runtime,
   now,
 }: {
@@ -247,7 +248,7 @@ function HealthCell({
   const labelOf = useHealthLabel();
   const { t } = useT("runtimes");
   const health = deriveRuntimeHealth(runtime, now);
-  const updateHealth = runtimeHealthState(runtime);
+  const updateHealth = deriveRuntimeHealthPresentation(runtime);
   const lastSeen = formatLastSeen(runtime.last_seen_at);
   if (updateHealth !== "ok") {
     const updateIssue = formatRuntimeUpdateError({

@@ -6,7 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useConfigStore } from "@multica/core/config";
 import { AGENT_DESCRIPTION_MAX_LENGTH } from "@multica/core/agents";
 import type { Agent, DashboardUsageByAgent, MemberWithUser } from "@multica/core/types";
-import { runtimeHealthState, runtimeListOptions } from "@multica/core/runtimes";
+import { deriveRuntimeHealthPresentation, runtimeListOptions } from "@multica/core/runtimes";
 import { useAgentPermissions } from "@multica/core/permissions";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import {
@@ -286,7 +286,7 @@ function AgentProfileTabContent({
   const selectedRuntime = runtimes.find((r) => r.id === agent.runtime_id) ?? null;
   const isOnline = selectedRuntime?.status === "online";
   const runtimeUpdateHealth =
-    agent.runtime_mode !== "cloud" && selectedRuntime ? runtimeHealthState(selectedRuntime) : "ok";
+    agent.runtime_mode !== "cloud" && selectedRuntime ? deriveRuntimeHealthPresentation(selectedRuntime) : "ok";
 
   const update = (data: Record<string, unknown>) => handleUpdate(agent.id, data);
   const displayName = resolveActorDisplayName(agent, agent.id);

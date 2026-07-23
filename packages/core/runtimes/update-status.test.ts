@@ -8,6 +8,7 @@ import {
   statusFromUpdateState,
   isTerminalUpdateStatus,
   UPDATE_TERMINAL_STATUSES,
+  isUpdateLifecycleActive,
   deriveUpdateStatus,
 } from "./update-status";
 
@@ -44,6 +45,22 @@ describe("isTerminalUpdateStatus / UPDATE_TERMINAL_STATUSES", () => {
     expect(isTerminalUpdateStatus("running")).toBe(false);
     expect(isTerminalUpdateStatus(null)).toBe(false);
     expect(isTerminalUpdateStatus(undefined)).toBe(false);
+  });
+});
+
+describe("isUpdateLifecycleActive", () => {
+  it("is active while an update is underway or staged (blocks a new update)", () => {
+    expect(isUpdateLifecycleActive("pending")).toBe(true);
+    expect(isUpdateLifecycleActive("running")).toBe(true);
+    expect(isUpdateLifecycleActive("ready_to_apply")).toBe(true);
+  });
+
+  it("is NOT active for idle/completed — a newer release must stay startable", () => {
+    expect(isUpdateLifecycleActive("idle")).toBe(false);
+    expect(isUpdateLifecycleActive("completed")).toBe(false);
+    expect(isUpdateLifecycleActive("failed")).toBe(false);
+    expect(isUpdateLifecycleActive("timed_out")).toBe(false);
+    expect(isUpdateLifecycleActive(undefined)).toBe(false);
   });
 });
 

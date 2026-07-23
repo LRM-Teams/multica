@@ -16,7 +16,7 @@ const openDMMocks = vi.hoisted(() => ({
 // Per-test permission decision for the merged runtime-config section. Group
 // managers override this to always-editable inside the component, so leaving
 // it denied by default lets us assert the read-only path for ordinary agents.
-const { permission, usageRows } = vi.hoisted(() => ({
+const { permission, usageRows, mockRuntimes } = vi.hoisted(() => ({
   permission: { allowed: false },
   usageRows: [] as Array<{
     agent_id: string;
@@ -27,6 +27,9 @@ const { permission, usageRows } = vi.hoisted(() => ({
     cache_write_tokens: number;
     task_count: number;
   }>,
+  // Runtimes returned by the mocked runtime-list query. Empty by default so the
+  // existing tests see no selected runtime; a #687 test loads a staged one.
+  mockRuntimes: { current: [] as Array<Record<string, unknown>> },
 }));
 
 vi.mock("@multica/core/workspace/avatar-url", () => ({
@@ -130,14 +133,26 @@ vi.mock("../../runtimes/components/shared", () => ({
   useRuntimeHealthStateLabel: () => (state: string) => state,
 }));
 vi.mock("@tanstack/react-query", () => ({
-  useQuery: (options: { kind?: string }) => ({
-    data: options.kind === "usage-by-agent" ? usageRows : [],
+  useQuery: (options: { kind?: string; queryKey?: unknown[] }) => ({
+    data:
+      options.kind === "usage-by-agent"
+        ? usageRows
+        : options.queryKey?.[0] === "runtimes"
+          ? mockRuntimes.current
+          : [],
     isLoading: false,
   }),
 }));
 vi.mock("@multica/core/runtimes", () => ({
   runtimeListOptions: () => ({ queryKey: ["runtimes"] }),
-  runtimeHealthState: () => "ok",
+  // Real staged-override behavior so the panel proves it consumes the shared
+  // presentation (update_state) rather than raw runtime_health.
+  deriveRuntimeHealthPresentation: (rt: { update_state?: string; runtime_health?: string }) =>
+    rt?.update_state === "ready_to_apply"
+      ? "ready_to_apply"
+      : rt?.update_state === "pending" || rt?.update_state === "running"
+        ? "updating"
+        : (rt?.runtime_health ?? "ok"),
 }));
 vi.mock("@multica/core/dashboard/queries", () => ({
   dashboardUsageByAgentOptions: () => ({ kind: "usage-by-agent" }),
@@ -280,6 +295,18 @@ describe("AgentSidePanel", () => {
     configStore.setState({ agentProfileDevAccessEnabled: false });
     permission.allowed = false;
     usageRows.length = 0;
+    mockRuntimes.current = [];
+  });
+
+  it("shows the staged (ready_to_apply) presentation for the agent's runtime (#687)", () => {
+    // Staged projection: backend still reports health update_available, but the
+    // panel must present the ready_to_apply lifecycle via the shared derive
+    // (the label mock echoes the presentation it was handed).
+    mockRuntimes.current = [
+      { id: "runtime-1", status: "online", runtime_health: "update_available", update_state: "ready_to_apply" },
+    ];
+    renderPanel();
+    expect(screen.getByText("ready_to_apply")).toBeInTheDocument();
   });
 
   it("keeps non-owner access to profile only by default", () => {

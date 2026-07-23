@@ -121,6 +121,7 @@
   "runtime_health": {
     "ok": "정상",
     "update_available": "업데이트 가능",
+    "ready_to_apply": "적용 대기",
     "updating": "업데이트 중",
     "failed": "업데이트 실패",
     "offline": "오프라인"

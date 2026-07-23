@@ -1,4 +1,15 @@
 import type { AgentRuntime, RuntimeHealthState } from "../types";
+import { isUpdateLifecycleActive } from "./update-status";
+
+/**
+ * How a runtime's update lifecycle should be *presented* on health badges/labels.
+ * Extends {@link RuntimeHealthState} with `ready_to_apply`, which is an
+ * `update_state` the backend collapses into `runtime_health: "update_available"`.
+ * Surfaces must derive this (via {@link deriveRuntimeHealthPresentation}) rather
+ * than read `runtime_health` directly, so a staged daemon reads "downloaded,
+ * applies when idle" instead of the generic "update available".
+ */
+export type RuntimeHealthPresentation = RuntimeHealthState | "ready_to_apply";
 
 const ATTENTION_HEALTH_STATES = new Set<RuntimeHealthState>([
   "update_available",
@@ -67,10 +78,33 @@ export function runtimeCanStartSelfUpdate(
   if (!isCurrentUserLocalRuntime(runtime, userId)) return false;
   if (isDesktopManagedRuntime(runtime)) return false;
   if (runtime.status !== "online") return false;
+  // Don't offer a new update while one is genuinely underway or staged. The
+  // backend keeps `runtime_health: "update_available"` through `ready_to_apply`,
+  // so health alone would re-open the prompt on a staged daemon (pinning a
+  // terminal modal). `completed` stays eligible so a newer release during the
+  // terminal window is not blocked.
+  if (isUpdateLifecycleActive(runtime.update_state)) return false;
   return (
     runtimeHealthState(runtime) === "update_available" &&
     runtimeTargetVersion(runtime) !== null
   );
+}
+
+/**
+ * Presentation state for health badges/labels: `ready_to_apply` (staged) and
+ * in-progress `update_state`s override the coarse `runtime_health` the backend
+ * reports, so all runtime surfaces show the same three-phase lifecycle from one
+ * source. `completed`/`idle`/`failed`/`offline` fall through to `runtime_health`
+ * (e.g. `completed + update_available` reads as "update available" — a newer
+ * release the user can start).
+ */
+export function deriveRuntimeHealthPresentation(
+  runtime: AgentRuntime,
+): RuntimeHealthPresentation {
+  const state = runtime.update_state;
+  if (state === "ready_to_apply") return "ready_to_apply";
+  if (state === "pending" || state === "running") return "updating";
+  return runtimeHealthState(runtime);
 }
 
 export function aggregateRuntimeHealthState(

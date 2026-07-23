@@ -16,11 +16,15 @@ vi.mock("./message-parts-renderer", () => ({
     parts: { type: string; text?: string; sticker_id?: string; alt?: string }[];
   }) => (
     <div data-testid="message-parts-renderer">
-      {parts.map((part, index) =>
+      {parts.map((part) =>
         part.type === "sticker" ? (
-          <img key={index} data-testid="message-sticker" alt={part.alt ?? ""} />
+          <img
+            key={`sticker:${part.sticker_id ?? part.alt ?? ""}`}
+            data-testid="message-sticker"
+            alt={part.alt ?? ""}
+          />
         ) : part.type === "text" ? (
-          <span key={index}>{part.text}</span>
+          <span key={`text:${part.text ?? ""}`}>{part.text}</span>
         ) : null,
       )}
     </div>

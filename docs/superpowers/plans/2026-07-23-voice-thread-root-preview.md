@@ -26,6 +26,18 @@ only through the transcript control.
 - [x] Pushed `fix/voice-thread-root-preview` and opened ready-for-review PR #967
   into `dev`: <https://github.com/LRM-Teams/multica/pull/967>.
 
+## CI follow-up
+
+- [x] Reproduced the blocking React Doctor warning from PR #967 locally.
+- [x] Traced it to array-index keys in this test's `MessagePartsRenderer` mock
+  after the mock gained text rendering; production rendering was not the
+  reported location.
+- [x] Replaced index keys with stable keys derived from the rendered sticker or
+  text part.
+- [x] Re-ran the full views suite (246 files, 2414 passing tests, 5 existing
+  skips), React Doctor (0 issues), typecheck, and diff checks before updating
+  the PR.
+
 ## Boundaries
 
 - The DM conversation-list summary is a separate UI surface and will be fixed

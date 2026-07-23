@@ -202,7 +202,12 @@ import {
   ConversationHeader,
   ReadOnlyConversationBanner,
 } from "./conversation-surface";
-import { filterComposerStripTasks } from "./conversation-activity-tasks";
+import { listStoppableChannelTasks } from "./conversation-activity-tasks";
+import {
+  StopAllAgentsHeaderButton,
+  StopAllAgentsMenuItem,
+} from "./stop-all-agents-control";
+import { StopAllAgentsConfirmDialog } from "./stop-all-agents-dialog";
 import { DmConversationRow, DmList, useDmRowActions } from "./dm-list";
 import { DmConversation } from "./dm-conversation";
 import { type MentionPreviewResolver } from "./message-preview";
@@ -273,12 +278,13 @@ const identitySearchOptions = { extendedMatch: matchesPinyin };
 // that would ever be "too low" (guarantee a false negative). This
 // breakpoint isn't set AT that floor, though — a channel name collapsed to
 // nothing is unreadable — so it adds a 104px minimum title slot on top
-// (enough for a handful of legible characters before ellipsis) for 360px
-// total. This value is a fixed measurement of the row's own natural
+// (enough for a handful of legible characters before ellipsis) for 360px,
+// plus LRM-405 Stop-all header icon (~36px including gap) → 396px total.
+// This value is a fixed measurement of the row's own natural
 // requirement — never the row's current rendered scrollWidth — so a
-// narrow<->wide<->narrow container at/near 360px can't thrash: the same
-// container width always yields the same decision.
-const HEADER_ACTIONS_COMPACT_BREAKPOINT = 360;
+// narrow<->wide<->narrow container at/near the breakpoint can't thrash: the
+// same container width always yields the same decision.
+export const HEADER_ACTIONS_COMPACT_BREAKPOINT = 396;
 
 // Slack-style presence: up to 4 faces + member-count badge. Opens the
 // members panel (browse). Invite is a separate text button — no hollow "+".
@@ -451,14 +457,10 @@ export function ConversationActivityStrip({
   // Terminal rows are excluded here — multiple agents used to stack the Stop
   // buttons horizontally (`overflow-x-auto`, no wrap) and garble; now they
   // collapse behind a single count + chevron.
-  const stoppableTasks = useMemo(() => {
-    const next: ChannelActiveTask[] = [];
-    for (const task of filterComposerStripTasks(tasks)) {
-      if (isTerminalChannelActiveTask(task)) continue;
-      next.push(task);
-    }
-    return next;
-  }, [tasks]);
+  const stoppableTasks = useMemo(
+    () => listStoppableChannelTasks(tasks),
+    [tasks],
+  );
   const typingLabel =
     typingNames.length === 0
       ? null
@@ -584,10 +586,6 @@ function StopTaskButton({
       {t(($) => $.agent_status.stop)}
     </Button>
   );
-}
-
-function isTerminalChannelActiveTask(task: ChannelActiveTask) {
-  return typeof task.outcome === "string";
 }
 
 function TypingDots() {
@@ -1114,6 +1112,13 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const { data: channelProjectId = "" } = useQuery(channelProjectOptions(wsId, active?.id ?? ""));
   const { data: activeTasks = [] } = useQuery(activeChannelTasksOptions(active?.id ?? ""));
   const [stoppingChannelTaskId, setStoppingChannelTaskId] = useState<string | null>(null);
+  const [stopAllConfirmOpen, setStopAllConfirmOpen] = useState(false);
+  const stoppableChannelTasks = useMemo(
+    () => listStoppableChannelTasks(activeTasks),
+    [activeTasks],
+  );
+  // LRM-403/405 — can-send members only (archived → read-only composer).
+  const canSendInActiveChannel = !!active && !isActiveArchived;
   const setChannelProject = useSetChannelProject(wsId, active?.id ?? "");
   const createChannel = useCreateChannel();
   const updateChannel = useUpdateChannel();
@@ -1883,7 +1888,22 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
     qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
     setStoppingChannelTaskId(null);
+    // LRM-403/405 — after stop, focus composer (no auto-@).
+    editorRef.current?.focus();
   }, [active?.id, qc, t, wsId]);
+
+  const openStopAllAgentsConfirm = useCallback(() => {
+    if (!canSendInActiveChannel || stoppableChannelTasks.length === 0) return;
+    setMobilePanel(null);
+    setStopAllConfirmOpen(true);
+  }, [canSendInActiveChannel, stoppableChannelTasks.length]);
+
+  const confirmStopAllAgents = useCallback(() => {
+    const tasks = stoppableChannelTasks;
+    setStopAllConfirmOpen(false);
+    if (tasks.length === 0) return;
+    void handleStopAllChannelTasks(tasks);
+  }, [handleStopAllChannelTasks, stoppableChannelTasks]);
 
   const handleToggleChannelPin = (channel: Channel) => {
     setChannelPin.mutate(
@@ -3032,12 +3052,12 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
             }
             actions={isMobile || isHeaderActionsCompact ? (
               // Mobile, and desktop-but-too-narrow (#568): ⋯ opens a
-              // tab-aligned menu (About/Members/Files/Settings). size-10
-              // keeps the true-mobile tap target ≥44px; the desktop-compact
-              // path is pointer-driven (no touch-target minimum) and every
-              // pixel matters in the narrowest containers this triggers for,
-              // so it uses the same size-8 as the direct row's own icon
-              // buttons instead.
+              // tab-aligned menu (About/Members/Files/Settings + LRM-405
+              // Stop all). size-10 keeps the true-mobile tap target ≥44px;
+              // the desktop-compact path is pointer-driven (no touch-target
+              // minimum) and every pixel matters in the narrowest containers
+              // this triggers for, so it uses the same size-8 as the direct
+              // row's own icon buttons instead.
               <Button
                 variant="ghost"
                 size="icon"
@@ -3082,6 +3102,14 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                   )}
                 </div>
                 <div className="flex items-center gap-1">
+                  {canSendInActiveChannel ? (
+                    <StopAllAgentsHeaderButton
+                      hasRunning={stoppableChannelTasks.length > 0}
+                      stopping={stoppingChannelTaskId === STOPPING_ALL_TASKS_ID}
+                      className="size-8"
+                      onOpenConfirm={openStopAllAgentsConfirm}
+                    />
+                  ) : null}
                   <Button
                     variant="ghost"
                     size="icon"
@@ -3482,6 +3510,13 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                   <DrawerTitle>{active.name}</DrawerTitle>
                 </DrawerHeader>
                 <div className="flex flex-col py-1">
+                  {canSendInActiveChannel ? (
+                    <StopAllAgentsMenuItem
+                      hasRunning={stoppableChannelTasks.length > 0}
+                      stopping={stoppingChannelTaskId === STOPPING_ALL_TASKS_ID}
+                      onOpenConfirm={openStopAllAgentsConfirm}
+                    />
+                  ) : null}
                   <button
                     type="button"
                     onClick={() => setMobilePanel("about")}
@@ -3697,6 +3732,14 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <StopAllAgentsConfirmDialog
+        open={stopAllConfirmOpen}
+        onOpenChange={setStopAllConfirmOpen}
+        channelName={active?.name ?? ""}
+        confirming={stoppingChannelTaskId === STOPPING_ALL_TASKS_ID}
+        onConfirm={confirmStopAllAgents}
+      />
     </div>
     </AgentPanelProvider>
   );

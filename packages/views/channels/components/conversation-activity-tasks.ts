@@ -37,3 +37,23 @@ export function filterComposerStripTasks(tasks: readonly ChannelActiveTask[]): C
   }
   return next;
 }
+
+/** Terminal outcomes are Activity history, not stoppable "running now" work. */
+export function isTerminalChannelActiveTask(task: ChannelActiveTask) {
+  return typeof task.outcome === "string";
+}
+
+/**
+ * LRM-405 / activity strip — agents currently working in this channel that
+ * Stop / Stop all can cancel (composer-strip kinds, non-terminal only).
+ */
+export function listStoppableChannelTasks(
+  tasks: readonly ChannelActiveTask[],
+): ChannelActiveTask[] {
+  const next: ChannelActiveTask[] = [];
+  for (const task of filterComposerStripTasks(tasks)) {
+    if (isTerminalChannelActiveTask(task)) continue;
+    next.push(task);
+  }
+  return next;
+}

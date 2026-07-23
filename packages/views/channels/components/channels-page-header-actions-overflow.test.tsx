@@ -19,7 +19,7 @@ import { ChannelsPage } from "./channels-page";
 // Fix: `useContainerNarrowerThan` (packages/ui/hooks/use-mobile.ts, a
 // `ResizeObserver`-driven sibling of `useIsMobile`) attached to the
 // conversation `<main>` (`detailHeaderContainerRef` in channels-page.tsx),
-// compared against `HEADER_ACTIONS_COMPACT_BREAKPOINT` (360) — a FIXED
+// compared against `HEADER_ACTIONS_COMPACT_BREAKPOINT` (396) — a FIXED
 // constant derived from a live binary-search measurement of the direct row's
 // own natural/worst-case width requirement (see the constant's comment in
 // channels-page.tsx), never from the row's own current rendered
@@ -300,7 +300,7 @@ describe("ChannelsPage header actions — container-driven overflow (#568)", () 
 
     // Same container narrows below the threshold — same (unmocked)
     // viewport, only the container's own rendered width changed. 300px is
-    // comfortably below HEADER_ACTIONS_COMPACT_BREAKPOINT (360 — see the
+    // comfortably below HEADER_ACTIONS_COMPACT_BREAKPOINT (396 — see the
     // comment on the constant in channels-page.tsx for the live-measured
     // derivation).
     resizeContainerTo(300);
@@ -341,7 +341,7 @@ describe("ChannelsPage header actions — container-driven overflow (#568)", () 
   // `<main>` the header lives in. Open it through the real UI (not by
   // poking internal state), then simulate the resulting container squeeze
   // (768px-viewport-equivalent — live-measured 61-145px, well under the
-  // 360px breakpoint) exactly like the docked aside taking width would.
+  // 396px breakpoint) exactly like the docked aside taking width would.
   it("stays overflow-safe (collapses to the compact trigger) once the real Channel Details panel is opened and squeezes the conversation pane", async () => {
     resizeContainerTo(1024);
     renderPage();
@@ -438,57 +438,57 @@ describe("ChannelsPage header actions — container-driven overflow (#568)", () 
   });
 
   // Exact-boundary guard: the contract is `< HEADER_ACTIONS_COMPACT_BREAKPOINT`
-  // (360), so 359 must collapse and 360/361 must not — and each side must be
+  // (396), so 395 must collapse and 396/397 must not — and each side must be
   // stable under repeated same-width ResizeObserver ticks right at the edge,
   // not just "far from the boundary" (which the earlier no-flap test only
   // proved at 300/1024).
-  it("resolves the exact 360px boundary correctly and stays stable under repeated ticks at 359/360/361", async () => {
+  it("resolves the exact 396px boundary correctly and stays stable under repeated ticks at 395/396/397", async () => {
     resizeContainerTo(1024);
     renderPage();
     await screen.findByTestId("message-list");
     expectDirect();
 
-    // 359 — one px below the breakpoint — must collapse, and stay collapsed
+    // 395 — one px below the breakpoint — must collapse, and stay collapsed
     // across repeated identical-width ticks.
-    resizeContainerTo(359);
+    resizeContainerTo(395);
     expectCompact();
-    resizeContainerTo(359);
+    resizeContainerTo(395);
     expectCompact();
-    resizeContainerTo(359);
+    resizeContainerTo(395);
     expectCompact();
 
-    // 360 — exactly at the breakpoint — contract is `< 360`, so this is
+    // 396 — exactly at the breakpoint — contract is `< 396`, so this is
     // "enough room," must be direct, and stay direct across repeated ticks.
-    resizeContainerTo(360);
+    resizeContainerTo(396);
     expectDirect();
-    resizeContainerTo(360);
+    resizeContainerTo(396);
     expectDirect();
-    resizeContainerTo(360);
+    resizeContainerTo(396);
     expectDirect();
 
-    // 361 — one px above — must also be direct, stable across repeated ticks.
-    resizeContainerTo(361);
+    // 397 — one px above — must also be direct, stable across repeated ticks.
+    resizeContainerTo(397);
     expectDirect();
-    resizeContainerTo(361);
+    resizeContainerTo(397);
     expectDirect();
   });
 
   // Single-flip guard right at the edge: crossing the boundary in either
   // direction switches exactly once per crossing — no double-fire, no
   // settling on the wrong side after the second tick.
-  it("flips exactly once when crossing the boundary 359 → 360 → 359", async () => {
+  it("flips exactly once when crossing the boundary 395 → 396 → 395", async () => {
     resizeContainerTo(1024);
     renderPage();
     await screen.findByTestId("message-list");
     expectDirect();
 
-    resizeContainerTo(359);
+    resizeContainerTo(395);
     expectCompact();
 
-    resizeContainerTo(360);
+    resizeContainerTo(396);
     expectDirect();
 
-    resizeContainerTo(359);
+    resizeContainerTo(395);
     expectCompact();
   });
 

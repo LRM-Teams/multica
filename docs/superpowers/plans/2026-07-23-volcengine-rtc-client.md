@@ -33,7 +33,8 @@ service `rtc`, version `2025-06-01`, not from the older demo default.
 - [x] Reuse the official Volcengine Go SDK signer (`v1.2.43`).
 - [x] Implement bounded Start/Update/Stop calls.
 - [x] Run unit tests, vet, and dependency review.
-- [ ] Commit, push, and open an independent ready PR.
+- [x] Commit, push, and open independent ready PR
+  [#1033](https://github.com/LRM-Teams/multica/pull/1033).
 
 ## Validation
 

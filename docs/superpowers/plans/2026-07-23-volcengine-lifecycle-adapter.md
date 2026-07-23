@@ -28,7 +28,8 @@ duplicating provider rules in handlers.
 - [x] Expose the token signer's AppId as the single AppId source.
 - [x] Implement the Volcengine lifecycle adapter.
 - [x] Run package tests, vet, and diff checks.
-- [ ] Commit, push, and open an independent ready PR stacked on #1041.
+- [x] Commit, push, and open independent ready PR
+  [#1043](https://github.com/LRM-Teams/multica/pull/1043), stacked on #1041.
 
 ## Verification
 

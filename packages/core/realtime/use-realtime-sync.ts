@@ -54,6 +54,7 @@ import {
 } from "../channels/queries";
 import { messageMentionsViewer } from "../channels/mentions-viewer";
 import { dmKeys } from "../dm/queries";
+import { voiceCallKeys } from "../voice-calls/queries";
 import type { DMItem } from "../dm/types";
 import { useChatStore } from "../chat";
 import { resolvePostAuthDestination, useHasOnboarded } from "../paths";
@@ -97,6 +98,7 @@ import type {
   Channel,
   ChannelMessage,
   InvitationCreatedPayload,
+  VoiceCallUpdatedPayload,
 } from "../types";
 
 const chatWsLogger = createLogger("chat.ws");
@@ -109,6 +111,16 @@ export function invalidateChatMessageQueries(
 ) {
   qc.invalidateQueries({ queryKey: chatKeys.messages(sessionId) });
   qc.invalidateQueries({ queryKey: chatKeys.messagesPage(sessionId) });
+}
+
+export function invalidateVoiceCallFromRealtime(
+  qc: QueryClient,
+  payload: VoiceCallUpdatedPayload,
+) {
+  if (!payload.workspace_id || !payload.call_id) return;
+  qc.invalidateQueries({
+    queryKey: voiceCallKeys.detail(payload.workspace_id, payload.call_id),
+  });
 }
 
 export function applyChatDoneToCache(
@@ -447,6 +459,7 @@ function invalidateWorkspaceScopedQueries(qc: QueryClient): void {
     qc.invalidateQueries({ queryKey: agentRunCountsKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: chatKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: labelKeys.all(wsId) });
+    qc.invalidateQueries({ queryKey: voiceCallKeys.all(wsId) });
   }
   // Per-issue caches are keyed without wsId, so the issueKeys.all(wsId)
   // prefix above does not reach them. They rely entirely on WS events for
@@ -687,6 +700,7 @@ export function useRealtimeSync(
       // Chat events are handled explicitly below; do not double-invalidate.
       "chat:message", "chat:done", "chat:session_read", "chat:session_deleted",
       "chat:session_updated",
+      "voice_call:updated",
       // task:message stays out of the prefix path because it fires per
       // streamed message during a long run — invalidating the snapshot on
       // every message would flood the network. Specific chat handlers below
@@ -1273,6 +1287,10 @@ export function useRealtimeSync(
       if (id) qc.invalidateQueries({ queryKey: channelKeys.list(id) });
     });
 
+    const unsubVoiceCallUpdated = ws.on("voice_call:updated", (payload) => {
+      invalidateVoiceCallFromRealtime(qc, payload as VoiceCallUpdatedPayload);
+    });
+
     return () => {
       unsubAny();
       unsubIssueUpdated();
@@ -1319,6 +1337,7 @@ export function useRealtimeSync(
       unsubChannelReactionAdded();
       unsubChannelReactionRemoved();
       unsubChannelUpdated();
+      unsubVoiceCallUpdated();
       timers.forEach(clearTimeout);
       timers.clear();
     };

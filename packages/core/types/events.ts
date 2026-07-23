@@ -70,6 +70,7 @@ export type WSEventType =
   | "channel_reaction:removed"
   | "channel:updated"
   | "channel:deleted"
+  | "voice_call:updated"
   | "project:created"
   | "project:updated"
   | "project:deleted"
@@ -151,6 +152,11 @@ export interface AgentMemoryUpdatedPayload {
 
 export interface DaemonRuntimeUpdatedPayload {
   runtime: AgentRuntime;
+}
+
+export interface VoiceCallUpdatedPayload {
+  workspace_id: string;
+  call_id: string;
 }
 
 export interface InboxNewPayload {
@@ -575,6 +581,7 @@ export interface WSEventPayloadMap {
   "channel_reaction:removed": { channel_id: string; message_id: string; emoji: string; actor_type: string; actor_id: string };
   "channel:updated": unknown;
   "channel:deleted": { id: string };
+  "voice_call:updated": VoiceCallUpdatedPayload;
   "project:created": ProjectCreatedPayload;
   "project:updated": ProjectUpdatedPayload;
   "project:deleted": ProjectDeletedPayload;

@@ -48,43 +48,45 @@ func NewCallbackService(providerName string, store CallbackStore) (*CallbackServ
 func (service *CallbackService) HandleConversationStatus(
 	ctx context.Context,
 	status volcenginertc.ConversationStatus,
-) error {
+) (Session, error) {
 	taskID := strings.TrimSpace(status.TaskID)
 	if taskID == "" {
-		return errors.New("voice call callback task ID is required")
+		return Session{}, errors.New("voice call callback task ID is required")
 	}
 
 	switch status.Stage.Code {
 	case volcenginertc.ConversationStageError:
 		if status.ErrorInfo == nil || status.ErrorInfo.ErrorCode <= 0 {
-			return errors.New("voice call provider error details are required")
+			return Session{}, errors.New("voice call provider error details are required")
 		}
 		errorCode := service.providerName + "_" +
 			strconv.FormatInt(status.ErrorInfo.ErrorCode, 10)
-		if _, err := service.store.ApplyProviderFailure(
+		session, err := service.store.ApplyProviderFailure(
 			ctx,
 			service.providerName,
 			taskID,
 			errorCode,
-		); err != nil {
-			return fmt.Errorf("apply voice call provider failure: %w", err)
+		)
+		if err != nil {
+			return Session{}, fmt.Errorf("apply voice call provider failure: %w", err)
 		}
-		return nil
+		return session, nil
 	case volcenginertc.ConversationStageListening,
 		volcenginertc.ConversationStageThinking,
 		volcenginertc.ConversationStageAnswering,
 		volcenginertc.ConversationStageInterrupted,
 		volcenginertc.ConversationStageAnswerFinished:
-		if _, err := service.store.ApplyProviderActive(
+		session, err := service.store.ApplyProviderActive(
 			ctx,
 			service.providerName,
 			taskID,
-		); err != nil {
-			return fmt.Errorf("apply voice call provider activity: %w", err)
+		)
+		if err != nil {
+			return Session{}, fmt.Errorf("apply voice call provider activity: %w", err)
 		}
-		return nil
+		return session, nil
 	default:
-		return fmt.Errorf(
+		return Session{}, fmt.Errorf(
 			"unsupported voice call provider stage %d",
 			status.Stage.Code,
 		)

@@ -11,6 +11,7 @@ import (
 	"net/http"
 
 	"github.com/multica-ai/multica/server/internal/integrations/volcenginertc"
+	"github.com/multica-ai/multica/server/internal/service/voicecall"
 )
 
 const maxVoiceCallCallbackRequestBytes = 128 << 10
@@ -19,7 +20,7 @@ type VoiceCallCallbackProcessor interface {
 	HandleConversationStatus(
 		ctx context.Context,
 		status volcenginertc.ConversationStatus,
-	) error
+	) (voicecall.Session, error)
 	HandleConversationSubtitle(
 		ctx context.Context,
 		subtitle volcenginertc.ConversationSubtitle,
@@ -108,10 +109,15 @@ func (h *Handler) processVoiceCallServerCallback(
 		if callback.ConversationStatus == nil {
 			return errors.New("voice call status callback is missing its payload")
 		}
-		return h.VoiceCallCallbackProcessor.HandleConversationStatus(
+		session, err := h.VoiceCallCallbackProcessor.HandleConversationStatus(
 			ctx,
 			*callback.ConversationStatus,
 		)
+		if err != nil {
+			return err
+		}
+		h.publishVoiceCallUpdated(session)
+		return nil
 	case volcenginertc.ServerCallbackSubtitle:
 		if callback.Subtitle == nil {
 			return errors.New("voice call subtitle callback is missing its payload")

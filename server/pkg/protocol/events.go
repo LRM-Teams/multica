@@ -86,6 +86,9 @@ const (
 	EventChannelUpdated         = "channel:updated"
 	EventChannelDeleted         = "channel:deleted"
 
+	// Voice call events
+	EventVoiceCallUpdated = "voice_call:updated"
+
 	// Project events
 	EventProjectCreated         = "project:created"
 	EventProjectUpdated         = "project:updated"
@@ -187,3 +190,8 @@ const (
 	EventLarkInstallationCreated = "lark_installation:created"
 	EventLarkInstallationRevoked = "lark_installation:revoked"
 )
+
+type VoiceCallUpdatedPayload struct {
+	WorkspaceID string `json:"workspace_id"`
+	CallID      string `json:"call_id"`
+}

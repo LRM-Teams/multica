@@ -10,14 +10,29 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/integrations/volcenginertc"
+	"github.com/multica-ai/multica/server/internal/service/voicecall"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 func TestVoiceCallCallbackAuthenticatesAndProcessesStatusWithoutContentType(t *testing.T) {
-	processor := &fakeVoiceCallCallbackProcessor{}
+	processor := &fakeVoiceCallCallbackProcessor{
+		statusResult: voicecall.Session{
+			ID:          testVoiceAPICallID,
+			WorkspaceID: testVoiceAPIWorkspaceID,
+			UserID:      testVoiceAPIUserID,
+		},
+	}
+	bus := events.New()
+	var published events.Event
+	bus.Subscribe(protocol.EventVoiceCallUpdated, func(event events.Event) {
+		published = event
+	})
 	handler := &Handler{
 		VoiceCallCallbackProcessor: processor,
 		VoiceCallCallbackSignature: "expected-signature",
+		Bus:                        bus,
 	}
 	body := `{"message":"` + voiceCallCallbackPayloadForTest(
 		"conv",
@@ -40,6 +55,13 @@ func TestVoiceCallCallbackAuthenticatesAndProcessesStatusWithoutContentType(t *t
 		processor.status.Stage.Code != volcenginertc.ConversationStageListening {
 		t.Fatalf("processor = %#v", processor)
 	}
+	assertVoiceCallUpdatedEvent(
+		t,
+		published,
+		testVoiceAPIWorkspaceID,
+		testVoiceAPICallID,
+		testVoiceAPIUserID,
+	)
 }
 
 func TestVoiceCallCallbackAuthenticatesAndProcessesSubtitleWithoutContentType(t *testing.T) {
@@ -170,16 +192,17 @@ type fakeVoiceCallCallbackProcessor struct {
 	subtitleCalls int
 	status        volcenginertc.ConversationStatus
 	subtitle      volcenginertc.ConversationSubtitle
+	statusResult  voicecall.Session
 	err           error
 }
 
 func (processor *fakeVoiceCallCallbackProcessor) HandleConversationStatus(
 	_ context.Context,
 	status volcenginertc.ConversationStatus,
-) error {
+) (voicecall.Session, error) {
 	processor.statusCalls++
 	processor.status = status
-	return processor.err
+	return processor.statusResult, processor.err
 }
 
 func (processor *fakeVoiceCallCallbackProcessor) HandleConversationSubtitle(

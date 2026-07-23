@@ -21,13 +21,14 @@ func TestCallbackServiceMapsConversationStagesToSessionState(t *testing.T) {
 	}
 	for _, stage := range nonErrorStages {
 		t.Run(stageNameForTest(stage), func(t *testing.T) {
-			store := &fakeCallbackStore{}
+			wantSession := Session{ID: "call-1", Status: StatusActive}
+			store := &fakeCallbackStore{session: wantSession}
 			service, err := NewCallbackService("volcengine", store)
 			if err != nil {
 				t.Fatalf("new callback service: %v", err)
 			}
 
-			err = service.HandleConversationStatus(
+			session, err := service.HandleConversationStatus(
 				context.Background(),
 				volcenginertc.ConversationStatus{
 					TaskID: "voice-task-1",
@@ -36,6 +37,9 @@ func TestCallbackServiceMapsConversationStagesToSessionState(t *testing.T) {
 			)
 			if err != nil {
 				t.Fatalf("handle callback: %v", err)
+			}
+			if session != wantSession {
+				t.Fatalf("session = %+v, want %+v", session, wantSession)
 			}
 			if store.activeCalls != 1 ||
 				store.provider != "volcengine" ||
@@ -48,13 +52,14 @@ func TestCallbackServiceMapsConversationStagesToSessionState(t *testing.T) {
 }
 
 func TestCallbackServiceRecordsProviderErrorCode(t *testing.T) {
-	store := &fakeCallbackStore{}
+	wantSession := Session{ID: "call-1", Status: StatusFailed}
+	store := &fakeCallbackStore{session: wantSession}
 	service, err := NewCallbackService("volcengine", store)
 	if err != nil {
 		t.Fatalf("new callback service: %v", err)
 	}
 
-	err = service.HandleConversationStatus(
+	session, err := service.HandleConversationStatus(
 		context.Background(),
 		volcenginertc.ConversationStatus{
 			TaskID: "voice-task-1",
@@ -69,6 +74,9 @@ func TestCallbackServiceRecordsProviderErrorCode(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf("handle callback: %v", err)
+	}
+	if session != wantSession {
+		t.Fatalf("session = %+v, want %+v", session, wantSession)
 	}
 	if store.failureCalls != 1 ||
 		store.provider != "volcengine" ||
@@ -92,7 +100,7 @@ func TestCallbackServiceRejectsInvalidAndPropagatesStoreErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new callback service: %v", err)
 	}
-	err = service.HandleConversationStatus(
+	_, err = service.HandleConversationStatus(
 		context.Background(),
 		volcenginertc.ConversationStatus{
 			TaskID: "voice-task-1",
@@ -105,7 +113,7 @@ func TestCallbackServiceRejectsInvalidAndPropagatesStoreErrors(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 
-	err = service.HandleConversationStatus(
+	_, err = service.HandleConversationStatus(
 		context.Background(),
 		volcenginertc.ConversationStatus{
 			TaskID: "voice-task-1",
@@ -336,6 +344,7 @@ func TestCallbackServicePropagatesSubtitleStoreError(t *testing.T) {
 type fakeCallbackStore struct {
 	activeCalls  int
 	failureCalls int
+	session      Session
 	provider     string
 	taskID       string
 	errorCode    string
@@ -352,7 +361,7 @@ func (store *fakeCallbackStore) ApplyProviderActive(
 	store.activeCalls++
 	store.provider = provider
 	store.taskID = taskID
-	return Session{}, store.err
+	return store.session, store.err
 }
 
 func (store *fakeCallbackStore) ApplyProviderFailure(
@@ -365,7 +374,7 @@ func (store *fakeCallbackStore) ApplyProviderFailure(
 	store.provider = provider
 	store.taskID = taskID
 	store.errorCode = errorCode
-	return Session{}, store.err
+	return store.session, store.err
 }
 
 func (store *fakeCallbackStore) UpsertProviderTurn(

@@ -10,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/service/voicecall"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 const (
@@ -49,7 +51,12 @@ func TestCreateVoiceCallReturnsScopedMediaWithoutProviderIdentity(t *testing.T) 
 			},
 		},
 	}
-	handler := &Handler{VoiceCallService: service}
+	bus := events.New()
+	var published events.Event
+	bus.Subscribe(protocol.EventVoiceCallUpdated, func(event events.Event) {
+		published = event
+	})
+	handler := &Handler{VoiceCallService: service, Bus: bus}
 	request := voiceCallAPIRequest(
 		http.MethodPost,
 		"/api/workspaces/"+testVoiceAPIWorkspaceID+"/voice-calls",
@@ -91,6 +98,13 @@ func TestCreateVoiceCallReturnsScopedMediaWithoutProviderIdentity(t *testing.T) 
 		media["user_id"] != testVoiceAPIUserID {
 		t.Fatalf("media = %#v", body["media"])
 	}
+	assertVoiceCallUpdatedEvent(
+		t,
+		published,
+		testVoiceAPIWorkspaceID,
+		testVoiceAPICallID,
+		testVoiceAPIUserID,
+	)
 }
 
 func TestVoiceCallHandlersUseAuthenticatedScopeAndServerStopReason(t *testing.T) {
@@ -106,7 +120,12 @@ func TestVoiceCallHandlersUseAuthenticatedScopeAndServerStopReason(t *testing.T)
 		UpdatedAt:   time.Now(),
 	}
 	service := &fakeVoiceCallService{session: session}
-	handler := &Handler{VoiceCallService: service}
+	bus := events.New()
+	var published events.Event
+	bus.Subscribe(protocol.EventVoiceCallUpdated, func(event events.Event) {
+		published = event
+	})
+	handler := &Handler{VoiceCallService: service, Bus: bus}
 
 	getRequest := voiceCallAPIRequest(
 		http.MethodGet,
@@ -161,6 +180,13 @@ func TestVoiceCallHandlersUseAuthenticatedScopeAndServerStopReason(t *testing.T)
 	}) {
 		t.Fatalf("stop input = %+v", service.stopInput)
 	}
+	assertVoiceCallUpdatedEvent(
+		t,
+		published,
+		testVoiceAPIWorkspaceID,
+		testVoiceAPICallID,
+		testVoiceAPIUserID,
+	)
 }
 
 func TestCreateVoiceCallRejectsAmbiguousOrUntrustedInput(t *testing.T) {
@@ -279,6 +305,31 @@ func voiceCallAPIRequest(method string, path string, body string) *http.Request 
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("X-User-ID", testVoiceAPIUserID)
 	return request
+}
+
+func assertVoiceCallUpdatedEvent(
+	t *testing.T,
+	event events.Event,
+	workspaceID string,
+	callID string,
+	userID string,
+) {
+	t.Helper()
+	if event.Type != protocol.EventVoiceCallUpdated ||
+		event.WorkspaceID != workspaceID ||
+		event.ActorType != "system" {
+		t.Fatalf("event routing = %+v", event)
+	}
+	if len(event.RecipientUserIDs) != 1 || event.RecipientUserIDs[0] != userID {
+		t.Fatalf("event recipients = %#v, want [%s]", event.RecipientUserIDs, userID)
+	}
+	payload, ok := event.Payload.(protocol.VoiceCallUpdatedPayload)
+	if !ok {
+		t.Fatalf("event payload type = %T", event.Payload)
+	}
+	if payload.WorkspaceID != workspaceID || payload.CallID != callID {
+		t.Fatalf("event payload = %+v", payload)
+	}
 }
 
 type fakeVoiceCallService struct {

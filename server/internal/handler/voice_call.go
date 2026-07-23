@@ -137,6 +137,7 @@ func (h *Handler) CreateVoiceCall(w http.ResponseWriter, r *http.Request) {
 		writeVoiceCallServiceError(w, "create", err)
 		return
 	}
+	h.publishVoiceCallUpdated(result.Session)
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusCreated, createVoiceCallResponse{
 		Call: voiceCallResponseFromSession(result.Session),
@@ -212,6 +213,7 @@ func (h *Handler) StopVoiceCall(w http.ResponseWriter, r *http.Request) {
 		writeVoiceCallServiceError(w, "stop", err)
 		return
 	}
+	h.publishVoiceCallUpdated(session)
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, getVoiceCallResponse{
 		Call: voiceCallResponseFromSession(session),

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -22,6 +23,10 @@ type CallbackStore interface {
 		providerTaskID string,
 		errorCode string,
 	) (Session, error)
+	UpsertProviderTurn(
+		ctx context.Context,
+		input ProviderTurnInput,
+	) (Turn, error)
 }
 
 type CallbackService struct {
@@ -84,4 +89,91 @@ func (service *CallbackService) HandleConversationStatus(
 			status.Stage.Code,
 		)
 	}
+}
+
+func (service *CallbackService) HandleConversationSubtitle(
+	ctx context.Context,
+	subtitle volcenginertc.ConversationSubtitle,
+) error {
+	inputs := make([]ProviderTurnInput, 0, len(subtitle.Data))
+	callbackTaskID := ""
+	for index, segment := range subtitle.Data {
+		if !segment.Paragraph {
+			continue
+		}
+		if !segment.Definite {
+			return fmt.Errorf(
+				"voice call subtitle data[%d] final paragraph is not definite",
+				index,
+			)
+		}
+		if strings.TrimSpace(segment.Text) == "" {
+			continue
+		}
+
+		taskID, speaker, err := providerSubtitleIdentity(segment.UserID)
+		if err != nil {
+			return fmt.Errorf("voice call subtitle data[%d]: %w", index, err)
+		}
+		if callbackTaskID == "" {
+			callbackTaskID = taskID
+		} else if taskID != callbackTaskID {
+			return errors.New("voice call subtitle callback mixes multiple calls")
+		}
+		sequence, err := providerSubtitleTurnSequence(segment.RoundID, speaker)
+		if err != nil {
+			return fmt.Errorf("voice call subtitle data[%d]: %w", index, err)
+		}
+		inputs = append(inputs, ProviderTurnInput{
+			Provider:       service.providerName,
+			ProviderTaskID: taskID,
+			Sequence:       sequence,
+			Speaker:        speaker,
+			Transcript:     segment.Text,
+			ProviderTurnID: segment.UserID + ":" + strconv.FormatInt(segment.RoundID, 10),
+		})
+	}
+
+	for _, input := range inputs {
+		if _, err := service.store.UpsertProviderTurn(ctx, input); err != nil {
+			return fmt.Errorf("upsert voice call provider subtitle turn: %w", err)
+		}
+	}
+	return nil
+}
+
+func providerSubtitleIdentity(userID string) (string, Speaker, error) {
+	userID = strings.TrimSpace(userID)
+	var nonce string
+	var speaker Speaker
+	switch {
+	case strings.HasPrefix(userID, providerMemberIDPrefix):
+		nonce = strings.TrimPrefix(userID, providerMemberIDPrefix)
+		speaker = SpeakerMember
+	case strings.HasPrefix(userID, providerAgentIDPrefix):
+		nonce = strings.TrimPrefix(userID, providerAgentIDPrefix)
+		speaker = SpeakerAgent
+	default:
+		return "", "", errors.New("speaker identity is not scoped to a voice call")
+	}
+	if err := validateNonce(nonce); err != nil {
+		return "", "", fmt.Errorf("speaker identity has an invalid call nonce: %w", err)
+	}
+	return providerTaskIDPrefix + nonce, speaker, nil
+}
+
+func providerSubtitleTurnSequence(roundID int64, speaker Speaker) (int64, error) {
+	var offset int64
+	switch speaker {
+	case SpeakerMember:
+		offset = 1
+	case SpeakerAgent:
+		offset = 2
+	default:
+		return 0, errors.New("speaker must be member or agent")
+	}
+	if roundID < 0 || roundID > (math.MaxInt64-offset)/2 {
+		return 0, errors.New("round ID cannot be represented as a call turn sequence")
+	}
+	return roundID*2 + offset, nil
 }

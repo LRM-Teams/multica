@@ -20,6 +20,7 @@ func TestVoiceCallCallbackAuthenticatesAndProcessesStatusWithoutContentType(t *t
 		VoiceCallCallbackSignature: "expected-signature",
 	}
 	body := `{"message":"` + voiceCallCallbackPayloadForTest(
+		"conv",
 		`{"TaskId":"task-1","UserID":"agent-1","RoundID":2,"EventTime":1765769502847,"Stage":{"Code":1,"Description":"listening"}}`,
 	) + `","binary":true,"signature":"expected-signature"}`
 	request := httptest.NewRequest(
@@ -34,10 +35,43 @@ func TestVoiceCallCallbackAuthenticatesAndProcessesStatusWithoutContentType(t *t
 	if response.Code != http.StatusOK || response.Body.String() != "ok" {
 		t.Fatalf("response = %d %q", response.Code, response.Body.String())
 	}
-	if processor.calls != 1 ||
+	if processor.statusCalls != 1 ||
 		processor.status.TaskID != "task-1" ||
 		processor.status.Stage.Code != volcenginertc.ConversationStageListening {
 		t.Fatalf("processor = %#v", processor)
+	}
+}
+
+func TestVoiceCallCallbackAuthenticatesAndProcessesSubtitleWithoutContentType(t *testing.T) {
+	processor := &fakeVoiceCallCallbackProcessor{}
+	handler := &Handler{
+		VoiceCallCallbackProcessor: processor,
+		VoiceCallCallbackSignature: "expected-signature",
+	}
+	body := `{"message":"` + voiceCallCallbackPayloadForTest(
+		"subv",
+		`{"type":"subtitle","data":[{"definite":true,"paragraph":true,"language":"zh-CN","sequence":5,"text":"请检查群聊。","userId":"voice-member-call-1","roundId":2,"firstCharPos":0,"lastCharPos":5}]}`,
+	) + `","binary":true,"signature":"expected-signature"}`
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/voice-calls/callback",
+		strings.NewReader(body),
+	)
+	response := httptest.NewRecorder()
+
+	handler.HandleVoiceCallCallback(response, request)
+
+	if response.Code != http.StatusOK || response.Body.String() != "ok" {
+		t.Fatalf("response = %d %q", response.Code, response.Body.String())
+	}
+	if processor.subtitleCalls != 1 ||
+		processor.subtitle.Type != "subtitle" ||
+		len(processor.subtitle.Data) != 1 ||
+		processor.subtitle.Data[0].Text != "请检查群聊。" {
+		t.Fatalf("processor = %#v", processor)
+	}
+	if processor.statusCalls != 0 {
+		t.Fatalf("status processor called %d times", processor.statusCalls)
 	}
 }
 
@@ -61,8 +95,8 @@ func TestVoiceCallCallbackRejectsWrongSignatureBeforeDecoding(t *testing.T) {
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", response.Code)
 	}
-	if processor.calls != 0 {
-		t.Fatalf("processor called %d times", processor.calls)
+	if processor.statusCalls != 0 || processor.subtitleCalls != 0 {
+		t.Fatalf("processor = %#v", processor)
 	}
 }
 
@@ -132,23 +166,34 @@ func TestVoiceCallCallbackReturnsUnavailableUntilConfigured(t *testing.T) {
 }
 
 type fakeVoiceCallCallbackProcessor struct {
-	calls  int
-	status volcenginertc.ConversationStatus
-	err    error
+	statusCalls   int
+	subtitleCalls int
+	status        volcenginertc.ConversationStatus
+	subtitle      volcenginertc.ConversationSubtitle
+	err           error
 }
 
 func (processor *fakeVoiceCallCallbackProcessor) HandleConversationStatus(
 	_ context.Context,
 	status volcenginertc.ConversationStatus,
 ) error {
-	processor.calls++
+	processor.statusCalls++
 	processor.status = status
 	return processor.err
 }
 
-func voiceCallCallbackPayloadForTest(payload string) string {
+func (processor *fakeVoiceCallCallbackProcessor) HandleConversationSubtitle(
+	_ context.Context,
+	subtitle volcenginertc.ConversationSubtitle,
+) error {
+	processor.subtitleCalls++
+	processor.subtitle = subtitle
+	return processor.err
+}
+
+func voiceCallCallbackPayloadForTest(magic string, payload string) string {
 	data := make([]byte, 8+len(payload))
-	copy(data[:4], "conv")
+	copy(data[:4], magic)
 	binary.BigEndian.PutUint32(data[4:8], uint32(len(payload)))
 	copy(data[8:], payload)
 	return base64.StdEncoding.EncodeToString(data)

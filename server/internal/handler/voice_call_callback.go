@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -18,6 +19,10 @@ type VoiceCallCallbackProcessor interface {
 	HandleConversationStatus(
 		ctx context.Context,
 		status volcenginertc.ConversationStatus,
+	) error
+	HandleConversationSubtitle(
+		ctx context.Context,
+		subtitle volcenginertc.ConversationSubtitle,
 	) error
 }
 
@@ -74,20 +79,16 @@ func (h *Handler) HandleVoiceCallCallback(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	status, err := volcenginertc.DecodeConversationStatusCallback(envelope.Message)
+	callback, err := volcenginertc.DecodeServerCallback(envelope.Message)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid voice call callback payload")
 		return
 	}
-	if err := h.VoiceCallCallbackProcessor.HandleConversationStatus(r.Context(), status); err != nil {
+	if err := h.processVoiceCallServerCallback(r.Context(), callback); err != nil {
 		slog.Error(
 			"process voice call callback",
-			"provider_task_id",
-			status.TaskID,
-			"stage_code",
-			status.Stage.Code,
-			"error",
-			err,
+			"callback_kind", callback.Kind,
+			"error", err,
 		)
 		writeError(w, http.StatusInternalServerError, "voice call callback processing failed")
 		return
@@ -96,6 +97,32 @@ func (h *Handler) HandleVoiceCallCallback(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("ok"))
+}
+
+func (h *Handler) processVoiceCallServerCallback(
+	ctx context.Context,
+	callback volcenginertc.ServerCallback,
+) error {
+	switch callback.Kind {
+	case volcenginertc.ServerCallbackConversationStatus:
+		if callback.ConversationStatus == nil {
+			return errors.New("voice call status callback is missing its payload")
+		}
+		return h.VoiceCallCallbackProcessor.HandleConversationStatus(
+			ctx,
+			*callback.ConversationStatus,
+		)
+	case volcenginertc.ServerCallbackSubtitle:
+		if callback.Subtitle == nil {
+			return errors.New("voice call subtitle callback is missing its payload")
+		}
+		return h.VoiceCallCallbackProcessor.HandleConversationSubtitle(
+			ctx,
+			*callback.Subtitle,
+		)
+	default:
+		return fmt.Errorf("unsupported voice call callback kind %q", callback.Kind)
+	}
 }
 
 func requireVoiceCallCallbackEOF(decoder *json.Decoder) error {

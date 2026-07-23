@@ -39,7 +39,7 @@ func TestServiceStartCreatesProviderCallAndMarksConnecting(t *testing.T) {
 	}
 	if result.Media.AppID != "rtc-app" ||
 		result.Media.RoomID != "voice-call-nonce-1" ||
-		result.Media.UserID != "member-1" ||
+		result.Media.UserID != "voice-member-nonce-1" ||
 		result.Media.Token != "room-token" ||
 		!result.Media.ExpiresAt.Equal(expiresAt) {
 		t.Fatalf("media = %+v", result.Media)
@@ -47,7 +47,7 @@ func TestServiceStartCreatesProviderCallAndMarksConnecting(t *testing.T) {
 	wantProviderInput := ProviderStartInput{
 		RoomID:         "voice-call-nonce-1",
 		TaskID:         "voice-task-nonce-1",
-		TargetUserID:   "member-1",
+		TargetUserID:   "voice-member-nonce-1",
 		AgentUserID:    "voice-agent-nonce-1",
 		WelcomeMessage: "你好，我是贝克汉姆。",
 		SystemMessages: []string{"You are Beckham.", "Use the current DM context."},

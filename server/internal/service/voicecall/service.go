@@ -29,6 +29,13 @@ const (
 	StatusFailed       Status = "failed"
 )
 
+const (
+	providerRoomIDPrefix   = "voice-call-"
+	providerTaskIDPrefix   = "voice-task-"
+	providerMemberIDPrefix = "voice-member-"
+	providerAgentIDPrefix  = "voice-agent-"
+)
+
 type Scope struct {
 	WorkspaceID string
 	ChannelID   string
@@ -239,9 +246,10 @@ func (service *Service) Start(ctx context.Context, input StartInput) (StartResul
 	if err := validateNonce(nonce); err != nil {
 		return StartResult{}, err
 	}
-	roomID := "voice-call-" + nonce
-	taskID := "voice-task-" + nonce
-	agentUserID := "voice-agent-" + nonce
+	roomID := providerRoomIDPrefix + nonce
+	taskID := providerTaskIDPrefix + nonce
+	memberUserID := providerMemberIDPrefix + nonce
+	agentUserID := providerAgentIDPrefix + nonce
 
 	session, err := service.store.CreateStarting(ctx, NewSession{
 		WorkspaceID:    scope.WorkspaceID,
@@ -270,7 +278,7 @@ func (service *Service) Start(ctx context.Context, input StartInput) (StartResul
 	providerResult, err := service.provider.Start(ctx, ProviderStartInput{
 		RoomID:         roomID,
 		TaskID:         taskID,
-		TargetUserID:   scope.UserID,
+		TargetUserID:   memberUserID,
 		AgentUserID:    agentUserID,
 		WelcomeMessage: conversationContext.WelcomeMessage,
 		SystemMessages: append([]string(nil), conversationContext.SystemMessages...),
@@ -319,7 +327,7 @@ func (service *Service) Start(ctx context.Context, input StartInput) (StartResul
 		Media: MediaCredentials{
 			AppID:     strings.TrimSpace(providerResult.AppID),
 			RoomID:    roomID,
-			UserID:    scope.UserID,
+			UserID:    memberUserID,
 			Token:     strings.TrimSpace(providerResult.Token),
 			ExpiresAt: providerResult.ExpiresAt,
 		},

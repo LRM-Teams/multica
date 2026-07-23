@@ -1972,7 +1972,10 @@ export const EMPTY_SANDBOX_SNAPSHOT: SandboxSnapshot = {
 // misrendering an unknown value as one of the known states.
 const RawReminderAnchorSchema = z.object({
   available: z.boolean(),
-  kind: z.enum(["channel", "thread"]).optional(),
+  // Not `z.enum()` — an unrecognized future anchor kind must degrade just
+  // this row's anchor (see `adaptAnchor`), not fail the whole array element
+  // and, transitively, the entire page.
+  kind: z.string().optional(),
   display: z.string().optional(),
   href: z.string().optional(),
 }).loose();

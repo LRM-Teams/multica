@@ -68,15 +68,33 @@ describe("adaptUpcomingRow", () => {
   });
 
   // #656 API Response Compatibility hardening (Parker review): the runtime
-  // schema deliberately keeps schedule_kind as a plain string so an
-  // unrecognized future value doesn't reject the WHOLE page — this proves
-  // the row-level boundary drops it instead of misclassifying it as either
-  // known state.
+  // schema deliberately keeps schedule_kind/status as plain strings so an
+  // unrecognized future value doesn't reject the WHOLE page — these prove
+  // the row-level boundary drops the row instead of misclassifying it.
   it("drops the row instead of misclassifying an unrecognized schedule_kind", () => {
-    // @ts-expect-error -- exercising a value outside the narrow TS union to
-    // prove the runtime guard, not just the type system.
     const row = adaptUpcomingRow(makeDefinition({ schedule_kind: "some_future_kind" }));
     expect(row).toBeNull();
+  });
+
+  it("drops a recurring row with no cadence string instead of downgrading it to one_shot", () => {
+    const row = adaptUpcomingRow(makeDefinition({ schedule_kind: "recurring", cadence: undefined }));
+    expect(row).toBeNull();
+  });
+
+  it("drops the row when status is outside the Upcoming section's scheduled|firing contract", () => {
+    expect(adaptUpcomingRow(makeDefinition({ status: "fired" }))).toBeNull();
+    expect(adaptUpcomingRow(makeDefinition({ status: "cancelled" }))).toBeNull();
+    expect(adaptUpcomingRow(makeDefinition({ status: "some_future_status" }))).toBeNull();
+  });
+
+  it("keeps the row but degrades the anchor to unavailable for an unrecognized anchor kind", () => {
+    const row = adaptUpcomingRow(
+      makeDefinition({
+        anchor: { available: true, kind: "some_future_kind", display: "x", href: "/x" },
+      }),
+    );
+    expect(row).not.toBeNull();
+    expect(row?.anchor).toEqual({ available: false });
   });
 });
 
@@ -103,14 +121,32 @@ describe("adaptFiredRow", () => {
   });
 
   it("drops the row instead of misclassifying an unrecognized schedule_kind", () => {
-    // @ts-expect-error -- see the equivalent adaptUpcomingRow case above.
     const row = adaptFiredRow(makeOccurrence({ schedule_kind: "some_future_kind" }));
     expect(row).toBeNull();
   });
 
+  it("drops a recurring row with no cadence string instead of downgrading it to one_shot", () => {
+    const row = adaptFiredRow(makeOccurrence({ schedule_kind: "recurring", cadence: undefined }));
+    expect(row).toBeNull();
+  });
+
   it("drops the row instead of misclassifying an unrecognized definition_status", () => {
-    // @ts-expect-error -- see the equivalent adaptUpcomingRow case above.
     const row = adaptFiredRow(makeOccurrence({ definition_status: "some_future_status" }));
     expect(row).toBeNull();
+  });
+
+  it("drops the row when occurrence status is anything other than fired (the History section's own contract)", () => {
+    expect(adaptFiredRow(makeOccurrence({ status: "scheduled" }))).toBeNull();
+    expect(adaptFiredRow(makeOccurrence({ status: "some_future_status" }))).toBeNull();
+  });
+
+  it("keeps the row but degrades the anchor to unavailable for an unrecognized anchor kind", () => {
+    const row = adaptFiredRow(
+      makeOccurrence({
+        anchor: { available: true, kind: "some_future_kind", display: "x", href: "/x" },
+      }),
+    );
+    expect(row).not.toBeNull();
+    expect(row?.anchor).toEqual({ available: false });
   });
 });

@@ -31,6 +31,10 @@ export type ReminderAnchor =
   | { available: true; kind: "channel" | "thread"; label: string; href: string }
   | { available: false };
 
+/** Upcoming only ever queries `status=scheduled`, so a definition row must be
+ * mid-lifecycle (not yet fired, not cancelled) to belong there. */
+const KNOWN_UPCOMING_DEFINITION_STATUSES = new Set(["scheduled", "firing"]);
+
 /** The reminder DEFINITION's own lifecycle state — independent of any one occurrence row. `"firing"` is a real transient state (mid-fire-transaction) the FE must accept as-is, never coerced to `"fired"`. */
 export type ReminderDefinitionStatus = "scheduled" | "firing" | "fired" | "cancelled";
 
@@ -58,20 +62,20 @@ export interface FiredReminderRow extends ReminderRow {
   definitionStatus: ReminderDefinitionStatus;
 }
 
-/** `humanReminderAnchor` (Go: `server/internal/handler/agent_reminder_read.go`). Server computes a fully-authorized, ready-to-navigate internal href — FE never constructs one from raw ids. */
+/** `humanReminderAnchor` (Go: `server/internal/handler/agent_reminder_read.go`). Server computes a fully-authorized, ready-to-navigate internal href — FE never constructs one from raw ids. `kind` stays a plain `string` (not narrowed) — see `adaptAnchor` for why. */
 export interface RawReminderAnchor {
   available: boolean;
-  kind?: "channel" | "thread";
+  kind?: string;
   display?: string;
   href?: string;
 }
 
-/** `humanReminderDefinition` — one row in the Upcoming section. */
+/** `humanReminderDefinition` — one row in the Upcoming section. `status`/`schedule_kind` stay plain `string` (not narrowed) — see the `adapt*` functions for why. */
 export interface RawReminderDefinition {
   id: string;
   title: string;
-  status: ReminderDefinitionStatus;
-  schedule_kind: "recurring" | "one_shot";
+  status: string;
+  schedule_kind: string;
   next_fire_at: string;
   last_fire_at?: string;
   cadence?: string;
@@ -80,14 +84,14 @@ export interface RawReminderDefinition {
   anchor: RawReminderAnchor;
 }
 
-/** `humanReminderOccurrence` — one row in the History section. */
+/** `humanReminderOccurrence` — one row in the History section. `status`/`definition_status`/`schedule_kind` stay plain `string` (not narrowed) — see the `adapt*` functions for why. */
 export interface RawReminderOccurrence {
   id: string;
   reminder_id: string;
   title: string;
   status: string;
-  definition_status: ReminderDefinitionStatus;
-  schedule_kind: "recurring" | "one_shot";
+  definition_status: string;
+  schedule_kind: string;
   cadence_scheduled_for: string;
   due_at: string;
   fired_at: string;
@@ -105,9 +109,15 @@ export interface RawReminderPage {
   next_cursor?: string;
 }
 
+// `kind` arrives as a plain `string` (the runtime schema deliberately
+// doesn't `z.enum()` it — an unrecognized future anchor kind must degrade
+// just this row's anchor, not reject the whole page). An anchor with an
+// unrecognized kind still degrades to unavailable — the Reminder row itself
+// stays visible, only the anchor link is dropped.
 function adaptAnchor(raw: RawReminderAnchor): ReminderAnchor {
-  if (raw.available && raw.kind && raw.display && raw.href) {
-    return { available: true, kind: raw.kind, label: raw.display, href: raw.href };
+  const kind = raw.kind;
+  if (raw.available && (kind === "channel" || kind === "thread") && raw.display && raw.href) {
+    return { available: true, kind, label: raw.display, href: raw.href };
   }
   return { available: false };
 }
@@ -141,10 +151,14 @@ function isKnownDefinitionStatus(status: string): status is ReminderDefinitionSt
 // returns `null` (caller drops the row) rather than silently falling through
 // to either known state — misclassifying an unknown kind as "recurring" or
 // "one_shot" would render a wrong-but-plausible-looking row.
+// A `schedule_kind==="recurring"` row without a `cadence` string is
+// malformed, not legitimately one-shot — a real recurring definition always
+// carries its cadence grammar. Silently downgrading it to one_shot would
+// misrepresent the row rather than drop it.
 function adaptCadence(scheduleKind: string, cadence: string | undefined, scheduleTimezone: string | undefined): ReminderCadence | null {
   if (scheduleKind === "one_shot") return { kind: "one_shot" };
   if (scheduleKind !== "recurring") return null;
-  if (!cadence) return { kind: "one_shot" };
+  if (!cadence) return null;
   return {
     kind: "recurring",
     family: scheduleTimezone ? "calendar" : "interval",
@@ -153,9 +167,16 @@ function adaptCadence(scheduleKind: string, cadence: string | undefined, schedul
   };
 }
 
-/** Adapts one Upcoming-section definition row. Returns `null` for a malformed row (missing required field or an unrecognized `schedule_kind`) rather than rendering a broken one. */
+/**
+ * Adapts one Upcoming-section definition row. Returns `null` for a
+ * malformed row (missing required field, an unrecognized `schedule_kind`,
+ * or a `status` outside the mid-lifecycle set this section's `GET
+ * ?status=scheduled` query actually promises) rather than rendering a
+ * broken or contract-violating one.
+ */
 export function adaptUpcomingRow(raw: RawReminderDefinition): UpcomingReminderRow | null {
   if (!raw.next_fire_at) return null;
+  if (!KNOWN_UPCOMING_DEFINITION_STATUSES.has(raw.status)) return null;
   const cadence = adaptCadence(raw.schedule_kind, raw.cadence, raw.schedule_timezone);
   if (!cadence) return null;
   return {
@@ -167,9 +188,17 @@ export function adaptUpcomingRow(raw: RawReminderDefinition): UpcomingReminderRo
   };
 }
 
-/** Adapts one History-section occurrence row. Returns `null` for a malformed row (missing required field, an unrecognized `schedule_kind`, or an unrecognized `definition_status`) rather than rendering a broken one. */
+/**
+ * Adapts one History-section occurrence row. Returns `null` for a
+ * malformed row (missing required field, an unrecognized `schedule_kind`,
+ * an unrecognized `definition_status`, or an occurrence `status` other than
+ * `fired` — this section's `GET ?status=fired` query only ever returns
+ * already-fired occurrences) rather than rendering a broken or
+ * contract-violating one.
+ */
 export function adaptFiredRow(raw: RawReminderOccurrence): FiredReminderRow | null {
   if (!raw.fired_at) return null;
+  if (raw.status !== "fired") return null;
   const cadence = adaptCadence(raw.schedule_kind, raw.cadence, raw.schedule_timezone);
   if (!cadence) return null;
   if (!isKnownDefinitionStatus(raw.definition_status)) return null;

@@ -346,16 +346,16 @@ describe("ChannelsPage — system #general channel (#642)", () => {
     expect(trigger.querySelector("svg.lucide-plus")).toBeNull();
   });
 
-  it("desktop header keeps View-members + Invite text button for a normal channel (no hollow +)", async () => {
+  // LRM-447 — Invite left the wide header rail (Members · Search · Stop only).
+  // Normal channels still reach Invite via Members dialog / overflow menu.
+  it("desktop header keeps View-members without Invite on the action rail (LRM-447)", async () => {
     renderPage("chan-random");
     await waitFor(() => {
       expect(screen.getByTestId("active-title")).toHaveTextContent("random");
     });
     expect(screen.getByLabelText("View members")).toBeTruthy();
-    expect(screen.getByLabelText("Invite people")).toBeTruthy();
+    expect(screen.queryByLabelText("Invite people")).toBeNull();
     expect(screen.queryByLabelText("Manage members")).toBeNull();
-    const invite = screen.getByLabelText("Invite people");
-    expect(invite.querySelector("svg.lucide-plus")).toBeNull();
   });
 
   // Iris/Parker review of PR #810's first head: code/design PASS on the

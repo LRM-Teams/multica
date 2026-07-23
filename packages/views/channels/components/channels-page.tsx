@@ -1867,9 +1867,16 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
 
   const handleStopChannelTask = useCallback(async (task: ChannelActiveTask) => {
     if (!active?.id) return;
+    // LRM-425 / LRM-238 — authoritative id is inbox_event_id; never fall back
+    // to /api/tasks/{id}/cancel for channel wakes (that path returns 409).
+    const inboxEventId = task.inbox_event_id?.trim();
+    if (!inboxEventId) {
+      toast.error(t(($) => $.agent_status.stop_failed));
+      return;
+    }
     setStoppingChannelTaskId(task.task_id);
     try {
-      await api.cancelTaskById(task.task_id);
+      await api.cancelChannelInboxEvent(active.id, inboxEventId);
       toast.success(t(($) => $.agent_status.stop_success, { name: task.agent_name }));
       qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(active.id) });
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
@@ -1883,14 +1890,17 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
 
   const handleStopAllChannelTasks = useCallback(async (tasks: ChannelActiveTask[]) => {
     if (!active?.id || tasks.length === 0) return;
+    // LRM-425 — one bulk request; never for-in / Promise.all N× cancel.
     setStoppingChannelTaskId(STOPPING_ALL_TASKS_ID);
-    const results = await Promise.allSettled(tasks.map((task) => api.cancelTaskById(task.task_id)));
-    const stopped = results.filter((result) => result.status === "fulfilled").length;
-    if (stopped === tasks.length) {
-      toast.success(t(($) => $.agent_status.stop_all_success, { count: stopped }));
-    } else if (stopped > 0) {
-      toast.warning(t(($) => $.agent_status.stop_all_partial, { stopped, total: tasks.length }));
-    } else {
+    try {
+      const result = await api.cancelChannelActiveInboxEvents(active.id);
+      const stopped = result.cancelled_count;
+      if (stopped > 0) {
+        toast.success(t(($) => $.agent_status.stop_all_success, { count: stopped }));
+      } else {
+        toast.error(t(($) => $.agent_status.stop_failed));
+      }
+    } catch {
       toast.error(t(($) => $.agent_status.stop_failed));
     }
     qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(active.id) });

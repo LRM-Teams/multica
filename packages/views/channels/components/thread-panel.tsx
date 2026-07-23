@@ -3,6 +3,11 @@
 import { useMemo, type ReactNode } from "react";
 import { ArrowLeft, Maximize2, MessageSquare, X } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@multica/ui/components/ui/tooltip";
 import type { ChannelMessage } from "@multica/core/types";
 import type { OpenAgentPanelFn } from "@multica/core/agents";
 import { useT } from "../../i18n/use-t";
@@ -137,6 +142,9 @@ export function ThreadPanel({
   // LRM-384 / scheme A — no dark floating Maximize+Download capsule on the
   // thread surface. Desktop keeps a 28px ghost "open in main" control in the
   // header; download stays out of the main UI (no ⋯ export entry yet).
+  // LRM-389 — Tooltip must spell “open parent / main column” (Maximize2 alone
+  // reads as expand); omit the control when onViewParent is absent.
+  const openInMainLabel = t(($) => $.thread.open_in_main_aria);
   const headerActions = useMemo(
     () => (
       <>
@@ -146,15 +154,23 @@ export function ThreadPanel({
           onFollowChange={onFollowChange}
         />
         {!isMobile && onViewParent && (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-7 text-muted-foreground hover:bg-muted hover:text-foreground"
-            aria-label={t(($) => $.thread.open_in_main_aria)}
-            onClick={onViewParent}
-          >
-            <Maximize2 className="size-3.5" />
-          </Button>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-7 text-muted-foreground hover:bg-muted hover:text-foreground"
+                  aria-label={openInMainLabel}
+                  onClick={onViewParent}
+                />
+              }
+            >
+              <Maximize2 className="size-3.5" />
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{openInMainLabel}</TooltipContent>
+          </Tooltip>
         )}
         {!isMobile && (
           <Button
@@ -169,7 +185,7 @@ export function ThreadPanel({
         )}
       </>
     ),
-    [followDisabled, followed, isMobile, onBack, onFollowChange, onViewParent, t],
+    [followDisabled, followed, isMobile, onBack, onFollowChange, onViewParent, openInMainLabel, t],
   );
 
   const composerActions = useMemo(() => composerLeadingActions, [composerLeadingActions]);

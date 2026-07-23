@@ -38,6 +38,11 @@ import { useWSEvent } from "@multica/core/realtime";
 import type { ChannelActiveTask, ChannelMessage, ChannelMessageSearchResult, ChannelTypingPayload } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@multica/ui/components/ui/tooltip";
+import {
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
@@ -1048,19 +1053,34 @@ function DmChannelConversation({
                 }
                 onFollowChange={handleThreadFollowChange}
               />
-              {/* LRM-384 — desktop 28px ghost open-in-main; no dark float capsule / download. */}
+              {/* LRM-384 — desktop 28px ghost open-in-main; no dark float capsule / download.
+                  LRM-389 — tooltip + close thread so parent list actually opens. */}
               {!isMobile && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="size-7 text-muted-foreground hover:bg-muted hover:text-foreground"
-                  aria-label={t(($) => $.thread.open_in_main_aria)}
-                  onClick={() => {
-                    dispatch({ type: "setThreadParentHighlightId", id: threadSurfaceRoot.id });
-                  }}
-                >
-                  <Maximize2 className="size-3.5" />
-                </Button>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="size-7 text-muted-foreground hover:bg-muted hover:text-foreground"
+                        aria-label={t(($) => $.thread.open_in_main_aria)}
+                        onClick={() => {
+                          dispatch({
+                            type: "setThreadParentHighlightId",
+                            id: threadSurfaceRoot.id,
+                          });
+                          dispatch({ type: "closeThread" });
+                        }}
+                      />
+                    }
+                  >
+                    <Maximize2 className="size-3.5" />
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    {t(($) => $.thread.open_in_main_aria)}
+                  </TooltipContent>
+                </Tooltip>
               )}
               {!isMobile && (
                 <Button
@@ -1091,7 +1111,7 @@ function DmChannelConversation({
               ownName={currentUserName ?? undefined}
               onViewParent={() => {
                 dispatch({ type: "setThreadParentHighlightId", id: threadSurfaceRoot.id });
-                if (isMobile) dispatch({ type: "closeThread" });
+                dispatch({ type: "closeThread" });
               }}
             />
           }

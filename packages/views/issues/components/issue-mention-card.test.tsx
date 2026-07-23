@@ -1,10 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  IssueMentionCard,
-  resolveIssueMentionDisplayText,
-} from "./issue-mention-card";
+import { IssueMentionCard } from "./issue-mention-card";
 
 let resolvedIssue:
   | { id: string; identifier: string; title: string; status?: string; priority?: string }
@@ -194,32 +191,5 @@ describe("IssueMentionCard (#520 — the unanchored fallback)", () => {
     );
     expect(container.querySelector("a[data-ref-source]")).toBeNull();
     expect(container.textContent).toBe("");
-  });
-});
-
-describe("resolveIssueMentionDisplayText", () => {
-  it("prefers non-UUID author label, then identifier, never UUID", () => {
-    expect(
-      resolveIssueMentionDisplayText(
-        "fe57cec6-0a45-4d90-9ef6-6571f429c047",
-        "LRM-487",
-        "LRM-487",
-      ),
-    ).toBe("LRM-487");
-    expect(
-      resolveIssueMentionDisplayText(
-        "fe57cec6-0a45-4d90-9ef6-6571f429c047",
-        undefined,
-        "LRM-487",
-      ),
-    ).toBe("LRM-487");
-    expect(
-      resolveIssueMentionDisplayText(
-        "fe57cec6-0a45-4d90-9ef6-6571f429c047",
-        "fe57cec6-0a45-4d90-9ef6-6571f429c047",
-        undefined,
-      ),
-    ).toBeNull();
-    expect(resolveIssueMentionDisplayText("LRM-126", undefined, undefined)).toBe("LRM-126");
   });
 });

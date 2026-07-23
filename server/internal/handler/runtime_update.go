@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -69,13 +70,6 @@ func updateRequestBlocksNewRequest(status UpdateStatus) bool {
 	return status == UpdatePending || status == UpdateRunning || status == UpdateReady
 }
 
-func updateRequestRetention(status UpdateStatus) time.Duration {
-	if updateRequestTerminal(status) || status == UpdateReady {
-		return updateTerminalRetention
-	}
-	return updateStoreRetention
-}
-
 func applyUpdateTimeout(req *UpdateRequest, now time.Time) bool {
 	switch req.Status {
 	case UpdatePending:
@@ -96,9 +90,9 @@ func applyUpdateTimeout(req *UpdateRequest, now time.Time) bool {
 	return false
 }
 
-// InMemoryUpdateStore is the single-node implementation. Multi-node deploys
-// must use RedisUpdateStore so Web POST, daemon heartbeat, daemon report, and
-// UI polling agree on the same request lifecycle.
+// InMemoryUpdateStore is a deterministic unit-test implementation. Production
+// handlers always use PostgresUpdateStore so Web POST, daemon heartbeat,
+// daemon report, UI polling, and API process replacement share one lifecycle.
 type InMemoryUpdateStore struct {
 	mu       sync.Mutex
 	requests map[string]*UpdateRequest // keyed by update ID
@@ -117,7 +111,8 @@ func (s *InMemoryUpdateStore) Create(_ context.Context, runtimeID, targetVersion
 	// Clean up old requests.
 	now := time.Now()
 	for id, req := range s.requests {
-		if now.Sub(req.UpdatedAt) > updateRequestRetention(req.Status) {
+		applyUpdateTimeout(req, now)
+		if updateRequestTerminal(req.Status) && now.Sub(req.UpdatedAt) > updateTerminalRetention {
 			delete(s.requests, id)
 		}
 	}
@@ -220,8 +215,15 @@ func (s *InMemoryUpdateStore) Complete(_ context.Context, id string, output stri
 	defer s.mu.Unlock()
 
 	if req, ok := s.requests[id]; ok {
+		if req.Status == UpdateCompleted {
+			return nil
+		}
+		if req.Status != UpdateRunning && req.Status != UpdateReady {
+			return invalidUpdateTransition(req.Status, UpdateCompleted)
+		}
 		req.Status = UpdateCompleted
 		req.Output = output
+		req.Error = ""
 		req.UpdatedAt = time.Now()
 	}
 	return nil
@@ -232,8 +234,15 @@ func (s *InMemoryUpdateStore) ReadyToApply(_ context.Context, id string, output 
 	defer s.mu.Unlock()
 
 	if req, ok := s.requests[id]; ok {
+		if req.Status == UpdateReady {
+			return nil
+		}
+		if req.Status != UpdateRunning {
+			return invalidUpdateTransition(req.Status, UpdateReady)
+		}
 		req.Status = UpdateReady
 		req.Output = output
+		req.Error = ""
 		req.UpdatedAt = time.Now()
 	}
 	return nil
@@ -244,11 +253,31 @@ func (s *InMemoryUpdateStore) Fail(_ context.Context, id string, errMsg string) 
 	defer s.mu.Unlock()
 
 	if req, ok := s.requests[id]; ok {
+		if req.Status == UpdateFailed {
+			return nil
+		}
+		if req.Status != UpdateRunning {
+			return invalidUpdateTransition(req.Status, UpdateFailed)
+		}
 		req.Status = UpdateFailed
+		req.Output = ""
 		req.Error = errMsg
 		req.UpdatedAt = time.Now()
 	}
 	return nil
+}
+
+type updateTransitionError struct {
+	from UpdateStatus
+	to   UpdateStatus
+}
+
+func (e *updateTransitionError) Error() string {
+	return "invalid daemon runtime update transition " + string(e.from) + " -> " + string(e.to)
+}
+
+func invalidUpdateTransition(from, to UpdateStatus) error {
+	return &updateTransitionError{from: from, to: to}
 }
 
 // ---------------------------------------------------------------------------
@@ -352,21 +381,6 @@ func (h *Handler) ReportUpdateResult(w http.ResponseWriter, r *http.Request) {
 
 	updateID := chi.URLParam(r, "updateId")
 
-	existing, err := h.UpdateStore.Get(r.Context(), updateID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load update: "+err.Error())
-		return
-	}
-	if existing == nil || existing.RuntimeID != runtimeID {
-		writeError(w, http.StatusNotFound, "update not found")
-		return
-	}
-	if updateRequestTerminal(existing.Status) {
-		slog.Debug("ignoring stale update report", "runtime_id", runtimeID, "update_id", updateID, "status", existing.Status)
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-		return
-	}
-
 	var req struct {
 		Status string `json:"status"` // "running", "completed", "ready_to_apply", or "failed"
 		Output string `json:"output"`
@@ -376,10 +390,41 @@ func (h *Handler) ReportUpdateResult(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	requestedStatus := UpdateStatus(req.Status)
+	switch requestedStatus {
+	case UpdateRunning, UpdateCompleted, UpdateReady, UpdateFailed:
+	default:
+		writeError(w, http.StatusBadRequest, "invalid status: "+req.Status)
+		return
+	}
 
-	switch req.Status {
-	case "completed":
+	existing, err := h.UpdateStore.Get(r.Context(), updateID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load update: "+err.Error())
+		return
+	}
+	if existing == nil || existing.RuntimeID != runtimeID {
+		writeError(w, http.StatusNotFound, "update not found")
+		return
+	}
+	if existing.Status == requestedStatus {
+		slog.Debug("ignoring idempotent update report", "runtime_id", runtimeID, "update_id", updateID, "status", existing.Status)
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		return
+	}
+	if !updateReportTransitionAllowed(existing.Status, requestedStatus) {
+		writeError(w, http.StatusConflict, invalidUpdateTransition(existing.Status, requestedStatus).Error())
+		return
+	}
+
+	switch requestedStatus {
+	case UpdateCompleted:
 		if err := h.UpdateStore.Complete(r.Context(), updateID, req.Output); err != nil {
+			var transitionErr *updateTransitionError
+			if errors.As(err, &transitionErr) {
+				writeError(w, http.StatusConflict, transitionErr.Error())
+				return
+			}
 			slog.Error("UpdateStore Complete failed", "error", err, "update_id", updateID)
 			writeError(w, http.StatusInternalServerError, "failed to persist completion")
 			return
@@ -387,8 +432,13 @@ func (h *Handler) ReportUpdateResult(w http.ResponseWriter, r *http.Request) {
 		h.publish(protocol.EventDaemonRuntimeUpdated, uuidToString(rt.WorkspaceID), "system", "", map[string]any{
 			"runtime": h.runtimeToResponse(r.Context(), rt),
 		})
-	case "ready_to_apply":
+	case UpdateReady:
 		if err := h.UpdateStore.ReadyToApply(r.Context(), updateID, req.Output); err != nil {
+			var transitionErr *updateTransitionError
+			if errors.As(err, &transitionErr) {
+				writeError(w, http.StatusConflict, transitionErr.Error())
+				return
+			}
 			slog.Error("UpdateStore ReadyToApply failed", "error", err, "update_id", updateID)
 			writeError(w, http.StatusInternalServerError, "failed to persist ready-to-apply state")
 			return
@@ -396,8 +446,13 @@ func (h *Handler) ReportUpdateResult(w http.ResponseWriter, r *http.Request) {
 		h.publish(protocol.EventDaemonRuntimeUpdated, uuidToString(rt.WorkspaceID), "system", "", map[string]any{
 			"runtime": h.runtimeToResponse(r.Context(), rt),
 		})
-	case "failed":
+	case UpdateFailed:
 		if err := h.UpdateStore.Fail(r.Context(), updateID, req.Error); err != nil {
+			var transitionErr *updateTransitionError
+			if errors.As(err, &transitionErr) {
+				writeError(w, http.StatusConflict, transitionErr.Error())
+				return
+			}
 			slog.Error("UpdateStore Fail failed", "error", err, "update_id", updateID)
 			writeError(w, http.StatusInternalServerError, "failed to persist failure")
 			return
@@ -405,14 +460,25 @@ func (h *Handler) ReportUpdateResult(w http.ResponseWriter, r *http.Request) {
 		h.publish(protocol.EventDaemonRuntimeUpdated, uuidToString(rt.WorkspaceID), "system", "", map[string]any{
 			"runtime": h.runtimeToResponse(r.Context(), rt),
 		})
-	case "running":
+	case UpdateRunning:
 		// No-op: status is already "running" from PopPending. This call is
 		// just a progress signal from the daemon to confirm it received the
 		// update command and is executing it.
-	default:
-		writeError(w, http.StatusBadRequest, "invalid status: "+req.Status)
-		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func updateReportTransitionAllowed(from, to UpdateStatus) bool {
+	if from == to {
+		return true
+	}
+	switch from {
+	case UpdateRunning:
+		return to == UpdateReady || to == UpdateCompleted || to == UpdateFailed
+	case UpdateReady:
+		return to == UpdateCompleted
+	default:
+		return false
+	}
 }

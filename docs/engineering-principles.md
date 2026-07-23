@@ -200,6 +200,12 @@
 - 通话上下文必须抽取并复用现有 channel/DM/project assembler，不得另建 voice-only prompt 或 Memory 真相源。部分 ASR 不持久化、不触发模型和工具；被打断的 Agent turn 只保存用户实际听到的前缀。
 - **目标物**：`voice_call_session` / `voice_call_turn`、provider-neutral call service、火山 RTC transport、typed realtime events、共享 call UI、回调与工具幂等测试。实施与 PR 顺序见 `docs/superpowers/plans/2026-07-23-beckham-realtime-voice-call.md`。
 
+### 4.10 Staged daemon update 先停 claim、再 drain — `可执行`（① PostgreSQL lifecycle + ⑤ barrier/持久化回归；owner: @Nash）
+- 新二进制校验成功后，server 的更新生命周期必须先持久化为 `ready_to_apply`，再进入重启等待；生产单一真相是 PostgreSQL，不能因 API 进程替换、未配置 Redis 或内存实例切换丢失。`ready_to_apply` 的 2xx ACK 必须表示数据库已处于同态；若 lazy timeout/并发 winner 已把状态变成 `timeout|failed|completed`，冲突 report 必须 non-2xx，让 daemon fail closed。每个 runtime 同时最多一个 `pending|running|ready_to_apply` 更新。
+- 前 10 分钟是 opportunistic idle window：daemon 继续接受新 ClaimTask，只要某个 tick 同时看到 `claims_in_flight=0` 且 `active_tasks=0`，就原子设 claim barrier 并走既有 graceful restart。
+- 10 分钟 deadline 到达时，无论当前是否繁忙，都必须在 `claimMu` 下原子设置 claim barrier；从这一刻起拒绝所有新 ClaimTask，只等待 barrier 前已经进入 claim/handoff/active 的工作全部归零。只有 `claims_in_flight=0 && active_tasks=0` 后才能调用 `triggerRestart`；禁止靠提前 cancel root context 强杀活跃 Agent。函数入口、deadline/ticker 分支和 durable ACK 后的 immediate-idle 分支都必须在 restart 前 fail-closed 复查 root context；等待上下文取消只终止等待并释放已持有 barrier，不触发 restart。
+- **物**：migration 217 的 `daemon_runtime_update` 表与 active partial unique index（①②）；`PostgresUpdateStore` 的 create/exclusion/atomic pop/ready/complete/fail/timeout/latest 与 pool replacement 回归；`waitForSafeRestartWithWindow` 的 deadline stop-claim、claim-handoff drain、active-task drain、cancel-no-restart、deadline 前 idle opportunity 回归（⑤）。旧实现“只等全 idle、期间永久继续 claim”会使这些 deadline 回归见红。
+
 ## 5. 验证方法论 — `仅文档`（诚实标注：拦不住人，只能让"猜"显式化）
 
 - **渲染活实体的功能，验收必须含"写入后变更"测例**（fixture 先改后写=永远假绿）。→ 有测试模板后升 `可执行`。

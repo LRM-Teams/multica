@@ -81,11 +81,15 @@ require_config "$deploy_workflow" 'uses: actions/upload-artifact@v4'
 require_config "$deploy_workflow" 'uses: actions/download-artifact@v4'
 require_config "$deploy_workflow" 'scripts/assert-runner-workspace-ownership.sh'
 require_config "$deploy_workflow" 'scripts/compose-environment-value.sh'
-require_config "$deploy_workflow" 'Host-local database identity preflight passed.'
+require_config "$deploy_workflow" 'Host-local database identity and protected speech configuration preflight passed.'
 require_config "$deploy_workflow" '--project-name multica'
 require_config "$deploy_workflow" 'db_user="$(compose_env_value POSTGRES_USER multica)"'
 require_config "$deploy_workflow" 'db_name="$(compose_env_value POSTGRES_DB multica)"'
 require_config "$deploy_workflow" 'db_password="$(compose_env_value POSTGRES_PASSWORD)"'
+require_config "$deploy_workflow" 'DOUBAO_SPEECH_API_KEY: ${{ secrets.DOUBAO_SPEECH_API_KEY }}'
+require_config "$deploy_workflow" 'voice_api_key="$(compose_env_value DOUBAO_SPEECH_API_KEY)"'
+require_config "$deploy_workflow" 'DOUBAO_SPEECH_API_KEY must be configured in the aliyun-dev Environment.'
+require_config "$deploy_workflow" 'backend_voice_configured="$('
 require_config "$deploy_workflow" '-U "$target_user"'
 require_config "$deploy_workflow" '-d "$target_db"'
 require_config "$deploy_workflow" 'env -u POSTGRES_USER -u POSTGRES_DB -u POSTGRES_PASSWORD'
@@ -103,7 +107,7 @@ if grep -Fq 'environment: s89' <<<"$deploy_workflow"; then
   exit 1
 fi
 if grep -Fq 'secrets.POSTGRES_PASSWORD' <<<"$deploy_workflow"; then
-  echo "Aliyun runtime secrets must remain in the host-owned .env."
+  echo "Aliyun database identity must remain in the host-owned .env."
   exit 1
 fi
 

@@ -11,8 +11,10 @@ name: Deploy
 # workflow.
 #
 # Host layout: deploy/runner user `dev`, stack under `/data/multica`. The
-# protected `aliyun-dev` Environment is the deployment boundary; runtime
-# secrets stay in the host-owned `/data/multica/.env`.
+# protected `aliyun-dev` Environment is the deployment boundary. Database
+# identity stays in the host-owned `/data/multica/.env`; the speech API key is
+# injected from that Environment so host migrations cannot silently disable
+# voice.
 
 on:
   # Deploy only from the `dev` integration branch, after a PR has already been
@@ -217,6 +219,9 @@ jobs:
     env:
       DEPLOY_DIR: /data/multica
       RUNNER_EXPECTED_USER: dev
+      # Secret values are never copied into the host dotenv. Compose propagates
+      # this ambient value into the backend container.
+      DOUBAO_SPEECH_API_KEY: ${{ secrets.DOUBAO_SPEECH_API_KEY }}
       # The tag to deploy: a rollback input if given, otherwise the freshly built one.
       IMAGE_TAG: >-
         ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.image_tag != '')
@@ -317,9 +322,14 @@ jobs:
           db_user="$(compose_env_value POSTGRES_USER multica)"
           db_name="$(compose_env_value POSTGRES_DB multica)"
           db_password="$(compose_env_value POSTGRES_PASSWORD)"
+          voice_api_key="$(compose_env_value DOUBAO_SPEECH_API_KEY)"
           unset compose_environment
           if [ -z "$db_user" ] || [ -z "$db_name" ] || [ -z "$db_password" ]; then
             echo "::error::POSTGRES_USER, POSTGRES_DB, and POSTGRES_PASSWORD must all be non-empty in ${DEPLOY_DIR}/.env. Aborting before runtime changes."
+            exit 1
+          fi
+          if [ -z "$voice_api_key" ]; then
+            echo "::error::DOUBAO_SPEECH_API_KEY must be configured in the aliyun-dev Environment. Aborting before runtime changes."
             exit 1
           fi
           postgres_id="$(compose ps -q postgres)"
@@ -341,8 +351,8 @@ jobs:
             echo "::error::Host PostgreSQL user/database/password failed an authenticated TCP query. Aborting before runtime changes."
             exit 1
           fi
-          unset db_user db_name db_password
-          echo "Host-local database identity preflight passed."
+          unset db_user db_name db_password voice_api_key
+          echo "Host-local database identity and protected speech configuration preflight passed."
           echo "Deploying ${MULTICA_BACKEND_IMAGE}:${MULTICA_IMAGE_TAG} (+ web) on $(hostname)"
           # Validate the immutable artifact source before touching the runtime
           # file. A bad config must not be left behind for the next host restart.
@@ -427,8 +437,12 @@ jobs:
             frontend_status="$(docker inspect --format '{{.State.Status}}' "$frontend_id" 2>/dev/null || true)"
             frontend_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$frontend_id" 2>/dev/null || true)"
             backend_status="$(docker inspect --format '{{.State.Status}}' "$backend_id" 2>/dev/null || true)"
+            backend_voice_configured="$(
+              (docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$backend_id" 2>/dev/null || true) |
+                awk -F= '$1 == "DOUBAO_SPEECH_API_KEY" && length($2) > 0 { print "true"; exit }'
+            )"
             caddy_status="$(docker inspect --format '{{.State.Status}}' "$caddy_id" 2>/dev/null || true)"
-            if [ "$frontend_status" = running ] && [ "$frontend_health" = healthy ] && [ "$backend_status" = running ] && [ "$caddy_status" = running ] && \
+            if [ "$frontend_status" = running ] && [ "$frontend_health" = healthy ] && [ "$backend_status" = running ] && [ "$backend_voice_configured" = true ] && [ "$caddy_status" = running ] && \
               curl -fsS --max-time 5 http://127.0.0.1:8090/ >/dev/null 2>&1 && \
               curl -fsS --max-time 5 http://127.0.0.1:8090/healthz >/dev/null 2>&1 && \
               curl -fsS --max-time 5 http://127.0.0.1:8090/health >/dev/null 2>&1 && \
@@ -438,7 +452,7 @@ jobs:
               echo "Frontend, backend, Caddy HTTP, and leagent.me HTTPS healthy after $((i * 2))s."
               exit 0
             fi
-            echo "waiting for frontend/backend/Caddy/HTTPS readiness... ($i/45) frontend=${frontend_status}/${frontend_health:-none} backend=${backend_status:-none} caddy=${caddy_status:-none}"
+            echo "waiting for frontend/backend/Caddy/HTTPS readiness... ($i/45) frontend=${frontend_status}/${frontend_health:-none} backend=${backend_status:-none} voice_configured=${backend_voice_configured:-false} caddy=${caddy_status:-none}"
             sleep 2
           done
           echo "::error::frontend/backend/Caddy HTTP redirect + leagent.me HTTPS did not pass within 90s."

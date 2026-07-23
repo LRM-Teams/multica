@@ -13,7 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-func TestAgentRuntimeStateMigration215BackfillsCurrentPairWithoutMutatingLegacyResume(t *testing.T) {
+func TestAgentRuntimeStateMigration218BackfillsCurrentPairWithoutMutatingLegacyResume(t *testing.T) {
 	pool := openTestPool(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -68,19 +68,19 @@ func TestAgentRuntimeStateMigration215BackfillsCurrentPairWithoutMutatingLegacyR
 		);
 
 		INSERT INTO agent_runtime (id, name)
-		VALUES ('10000000-0000-4000-8000-000000000215', 'current runtime');
+		VALUES ('10000000-0000-4000-8000-000000000218', 'current runtime');
 		INSERT INTO agent (id, runtime_id, name)
 		VALUES (
-			'20000000-0000-4000-8000-000000000215',
-			'10000000-0000-4000-8000-000000000215',
+			'20000000-0000-4000-8000-000000000218',
+			'10000000-0000-4000-8000-000000000218',
 			'existing agent'
 		);
 		INSERT INTO chat_session (
 			id, agent_id, runtime_id, session_id, work_dir, updated_at
 		) VALUES (
-			'30000000-0000-4000-8000-000000000215',
-			'20000000-0000-4000-8000-000000000215',
-			'10000000-0000-4000-8000-000000000215',
+			'30000000-0000-4000-8000-000000000218',
+			'20000000-0000-4000-8000-000000000218',
+			'10000000-0000-4000-8000-000000000218',
 			'legacy-chat-session',
 			'/legacy/chat',
 			'2026-07-23 00:00:00+00'
@@ -90,21 +90,21 @@ func TestAgentRuntimeStateMigration215BackfillsCurrentPairWithoutMutatingLegacyR
 			session_id, work_dir, status, updated_at
 		) VALUES
 		(
-			'40000000-0000-4000-8000-000000000215',
-			'20000000-0000-4000-8000-000000000215',
-			'10000000-0000-4000-8000-000000000215',
+			'40000000-0000-4000-8000-000000000218',
+			'20000000-0000-4000-8000-000000000218',
+			'10000000-0000-4000-8000-000000000218',
 			NULL,
-			'30000000-0000-4000-8000-000000000215',
+			'30000000-0000-4000-8000-000000000218',
 			'legacy-chat-task-session',
 			'/legacy/chat-task',
 			'completed',
 			'2026-07-23 00:01:00+00'
 		),
 		(
-			'50000000-0000-4000-8000-000000000215',
-			'20000000-0000-4000-8000-000000000215',
-			'10000000-0000-4000-8000-000000000215',
-			'60000000-0000-4000-8000-000000000215',
+			'50000000-0000-4000-8000-000000000218',
+			'20000000-0000-4000-8000-000000000218',
+			'10000000-0000-4000-8000-000000000218',
+			'60000000-0000-4000-8000-000000000218',
 			NULL,
 			'legacy-issue-session',
 			'/legacy/issue',
@@ -112,14 +112,14 @@ func TestAgentRuntimeStateMigration215BackfillsCurrentPairWithoutMutatingLegacyR
 			'2026-07-23 00:02:00+00'
 		);
 	`); err != nil {
-		t.Fatalf("create pre-215 fixture: %v", err)
+		t.Fatalf("create pre-218 fixture: %v", err)
 	}
 
 	var chatBefore, tasksBefore string
 	if err := conn.QueryRow(ctx, `
 		SELECT to_jsonb(chat_session.*)::text
 		FROM chat_session
-		WHERE id = '30000000-0000-4000-8000-000000000215'
+		WHERE id = '30000000-0000-4000-8000-000000000218'
 	`).Scan(&chatBefore); err != nil {
 		t.Fatalf("capture legacy chat resume row: %v", err)
 	}
@@ -127,16 +127,16 @@ func TestAgentRuntimeStateMigration215BackfillsCurrentPairWithoutMutatingLegacyR
 		SELECT jsonb_agg(to_jsonb(agent_task_queue.*) ORDER BY id)::text
 		FROM agent_task_queue
 		WHERE id IN (
-			'40000000-0000-4000-8000-000000000215',
-			'50000000-0000-4000-8000-000000000215'
+			'40000000-0000-4000-8000-000000000218',
+			'50000000-0000-4000-8000-000000000218'
 		)
 	`).Scan(&tasksBefore); err != nil {
 		t.Fatalf("capture legacy chat/issue task rows: %v", err)
 	}
 
-	upSQL := readAgentRuntimeStateMigrationSQL(t, "215_agent_runtime_state.up.sql")
+	upSQL := readAgentRuntimeStateMigrationSQL(t, "218_agent_runtime_state.up.sql")
 	if _, err := conn.Exec(ctx, upSQL); err != nil {
-		t.Fatalf("apply migration 215 up: %v", err)
+		t.Fatalf("apply migration 218 up: %v", err)
 	}
 
 	var (
@@ -158,8 +158,8 @@ func TestAgentRuntimeStateMigration215BackfillsCurrentPairWithoutMutatingLegacyR
 			fresh_session_notice_reason,
 			legacy_resume_archived_at
 		FROM agent_runtime_state
-		WHERE agent_id = '20000000-0000-4000-8000-000000000215'
-		  AND runtime_id = '10000000-0000-4000-8000-000000000215'
+		WHERE agent_id = '20000000-0000-4000-8000-000000000218'
+		  AND runtime_id = '10000000-0000-4000-8000-000000000218'
 	`).Scan(
 		&providerSessionID,
 		&workDir,
@@ -202,7 +202,7 @@ func TestAgentRuntimeStateMigration215BackfillsCurrentPairWithoutMutatingLegacyR
 	if err := conn.QueryRow(ctx, `
 		SELECT to_jsonb(chat_session.*)::text
 		FROM chat_session
-		WHERE id = '30000000-0000-4000-8000-000000000215'
+		WHERE id = '30000000-0000-4000-8000-000000000218'
 	`).Scan(&chatAfter); err != nil {
 		t.Fatalf("read legacy chat resume row after migration: %v", err)
 	}
@@ -210,17 +210,17 @@ func TestAgentRuntimeStateMigration215BackfillsCurrentPairWithoutMutatingLegacyR
 		SELECT jsonb_agg(to_jsonb(agent_task_queue.*) ORDER BY id)::text
 		FROM agent_task_queue
 		WHERE id IN (
-			'40000000-0000-4000-8000-000000000215',
-			'50000000-0000-4000-8000-000000000215'
+			'40000000-0000-4000-8000-000000000218',
+			'50000000-0000-4000-8000-000000000218'
 		)
 	`).Scan(&tasksAfter); err != nil {
 		t.Fatalf("read legacy chat/issue task rows after migration: %v", err)
 	}
 	if chatAfter != chatBefore {
-		t.Fatalf("migration 215 mutated legacy chat resume evidence:\nbefore=%s\nafter=%s", chatBefore, chatAfter)
+		t.Fatalf("migration 218 mutated legacy chat resume evidence:\nbefore=%s\nafter=%s", chatBefore, chatAfter)
 	}
 	if tasksAfter != tasksBefore {
-		t.Fatalf("migration 215 mutated legacy chat/issue task resume evidence:\nbefore=%s\nafter=%s", tasksBefore, tasksAfter)
+		t.Fatalf("migration 218 mutated legacy chat/issue task resume evidence:\nbefore=%s\nafter=%s", tasksBefore, tasksAfter)
 	}
 }
 

@@ -201,16 +201,16 @@ func TestMigration203PersistsAgentAvatarTruthAtWriteBoundary(t *testing.T) {
 	}
 }
 
-func TestMigration215CreatesCanonicalAgentRuntimeStateWithoutQueueDependency(t *testing.T) {
+func TestMigration218CreatesCanonicalAgentRuntimeStateWithoutQueueDependency(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("resolve current test file")
 	}
 	migrationsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
 
-	up, err := os.ReadFile(filepath.Join(migrationsDir, "215_agent_runtime_state.up.sql"))
+	up, err := os.ReadFile(filepath.Join(migrationsDir, "218_agent_runtime_state.up.sql"))
 	if err != nil {
-		t.Fatalf("read migration 215 up: %v", err)
+		t.Fatalf("read migration 218 up: %v", err)
 	}
 	contents := string(up)
 	for _, required := range []string{
@@ -234,7 +234,7 @@ func TestMigration215CreatesCanonicalAgentRuntimeStateWithoutQueueDependency(t *
 		"ON CONFLICT (agent_id, runtime_id) DO NOTHING",
 	} {
 		if !strings.Contains(contents, required) {
-			t.Errorf("migration 215 up missing %q", required)
+			t.Errorf("migration 218 up missing %q", required)
 		}
 	}
 	for _, forbidden := range []string{
@@ -245,16 +245,16 @@ func TestMigration215CreatesCanonicalAgentRuntimeStateWithoutQueueDependency(t *
 		"DELETE FROM chat_session",
 	} {
 		if strings.Contains(contents, forbidden) {
-			t.Errorf("migration 215 up must leave legacy resume evidence untouched; found %q", forbidden)
+			t.Errorf("migration 218 up must leave legacy resume evidence untouched; found %q", forbidden)
 		}
 	}
 
-	down, err := os.ReadFile(filepath.Join(migrationsDir, "215_agent_runtime_state.down.sql"))
+	down, err := os.ReadFile(filepath.Join(migrationsDir, "218_agent_runtime_state.down.sql"))
 	if err != nil {
-		t.Fatalf("read migration 215 down: %v", err)
+		t.Fatalf("read migration 218 down: %v", err)
 	}
 	if !strings.Contains(string(down), "DROP TABLE IF EXISTS agent_runtime_state") {
-		t.Error("migration 215 down does not drop agent_runtime_state")
+		t.Error("migration 218 down does not drop agent_runtime_state")
 	}
 }
 

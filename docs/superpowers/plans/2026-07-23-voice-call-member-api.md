@@ -31,4 +31,5 @@ without accepting identity authority or provider credentials from the client.
 - [x] Run all voice-call handler tests against a fresh fully migrated
   PostgreSQL database, all lifecycle service tests, router compilation, vet,
   and diff checks.
-- [ ] Commit, push, and open an independent ready PR stacked on #1081.
+- [x] Commit, push, and open independent ready PR
+  [#1082](https://github.com/LRM-Teams/multica/pull/1082), stacked on #1081.

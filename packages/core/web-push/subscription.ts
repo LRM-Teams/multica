@@ -15,8 +15,19 @@ type PushSubscriptionJSONValue = {
   keys?: { p256dh?: string; auth?: string };
 };
 
-function browserWindow(): Window | null {
-  return typeof window === "undefined" ? null : window;
+type NotificationAPI = Pick<typeof Notification, "permission" | "requestPermission">;
+
+type WebPushWindow = Window & {
+  Notification?: NotificationAPI;
+  PushManager?: unknown;
+};
+
+function browserWindow(): WebPushWindow | null {
+  return typeof window === "undefined" ? null : (window as WebPushWindow);
+}
+
+function getNotificationAPI(win = browserWindow()): NotificationAPI | null {
+  return win?.Notification ?? null;
 }
 
 function isStandaloneDisplay(): boolean {
@@ -37,10 +48,11 @@ export function getWebPushSupportState(): WebPushSupportState {
   const win = browserWindow();
   if (!win) return "unsupported";
   if (isIOS() && !isStandaloneDisplay()) return "ios_requires_pwa";
-  if (!("serviceWorker" in win.navigator) || !("PushManager" in win) || !("Notification" in win)) {
+  const notification = getNotificationAPI(win);
+  if (!("serviceWorker" in win.navigator) || !("PushManager" in win) || !notification) {
     return "unsupported";
   }
-  if (win.Notification.permission === "denied") return "permission_denied";
+  if (notification.permission === "denied") return "permission_denied";
   return "supported";
 }
 
@@ -57,7 +69,11 @@ export async function requestAndBindWebPushSubscription(): Promise<WebPushSubscr
   if (!win || getWebPushSupportState() !== "supported") {
     throw new Error("Web Push is not supported on this device");
   }
-  const permission = await win.Notification.requestPermission();
+  const notification = getNotificationAPI(win);
+  if (!notification) {
+    throw new Error("Notification permission API is not supported");
+  }
+  const permission = await notification.requestPermission();
   if (permission !== "granted") {
     throw new Error("Notification permission was not granted");
   }
@@ -111,11 +127,11 @@ function subscriptionToPayload(subscription: PushSubscription): WebPushSubscript
   };
 }
 
-function urlBase64ToUint8Array(value: string): Uint8Array {
+function urlBase64ToUint8Array(value: string): Uint8Array<ArrayBuffer> {
   const padding = "=".repeat((4 - (value.length % 4)) % 4);
   const base64 = (value + padding).replace(/-/g, "+").replace(/_/g, "/");
   const raw = atob(base64);
-  const output = new Uint8Array(raw.length);
+  const output = new Uint8Array<ArrayBuffer>(raw.length);
   for (let i = 0; i < raw.length; i += 1) output[i] = raw.charCodeAt(i);
   return output;
 }

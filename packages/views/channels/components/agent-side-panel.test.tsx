@@ -302,7 +302,7 @@ describe("AgentSidePanel", () => {
   it("shows a standalone reported-usage card instead of a fake session-token baseline", () => {
     renderPanel("user-owner");
     expect(screen.getByRole("region", { name: "Usage" })).toBeInTheDocument();
-    expect(screen.getByText("Last 30 days · reported usage only")).toBeInTheDocument();
+    expect(screen.getByText(/Last 30 days · reported usage only/)).toBeInTheDocument();
     expect(screen.getByText("No reported usage yet")).toBeInTheDocument();
     expect(screen.queryByText("0 tokens")).not.toBeInTheDocument();
   });
@@ -321,9 +321,10 @@ describe("AgentSidePanel", () => {
     renderPanel("user-owner");
 
     expect(screen.getByText("Estimated cost")).toBeInTheDocument();
-    expect(screen.getByText("$3.00")).toHaveClass("text-base", "font-semibold");
+    // LRM-360: compact tabular amount — not dashboard-sized semibold.
+    expect(screen.getByText("$3.00")).toHaveClass("text-sm", "tabular-nums");
     expect(screen.getByText("Tokens")).toBeInTheDocument();
-    expect(screen.getByText("1M")).toHaveClass("text-muted-foreground");
+    expect(screen.getByText("1M")).toHaveClass("text-sm", "tabular-nums", "text-muted-foreground");
   });
 
   it("does not invent a cost when a reported model has no pricing", () => {
@@ -408,12 +409,39 @@ describe("AgentSidePanel", () => {
     expect(screen.queryByRole("button", { name: "Config" })).not.toBeInTheDocument();
     // Runtime config now lives inside the Profile view, not a separate tab, under
     // a Profile-specific "Runtime Config" title (not the shared "Properties").
-    expect(screen.getByText("Runtime Config")).toBeInTheDocument();
+    const runtimeTitle = screen.getByText("Runtime Config");
+    expect(runtimeTitle).toBeInTheDocument();
+    // LRM-360: Title Case muted label — no uppercase scream.
+    expect(runtimeTitle.className).toMatch(/text-xs/);
+    expect(runtimeTitle.className).toMatch(/text-muted-foreground/);
+    expect(runtimeTitle.className).not.toMatch(/uppercase/);
     expect(screen.queryByText("Properties")).not.toBeInTheDocument();
     expect(screen.getByTestId("runtime-picker")).toBeInTheDocument();
     expect(screen.getByTestId("visibility-picker")).toBeInTheDocument();
     // Concurrency was dropped from the Profile runtime section (#565 fix-forward).
     expect(screen.queryByTestId("concurrency-picker")).not.toBeInTheDocument();
+  });
+
+  it("LRM-360: outline Message CTA + one human/system divider (no Usage↔Runtime line)", () => {
+    renderPanel("user-owner");
+    const messageBtn = screen.getByTestId("agent-profile-message-button");
+    expect(messageBtn.className).toMatch(/bg-background/);
+    expect(messageBtn.className).toMatch(/text-foreground/);
+    expect(messageBtn.className).toMatch(/font-semibold/);
+    expect(messageBtn.className).not.toMatch(/bg-primary/);
+
+    const usage = screen.getByRole("region", { name: "Usage" });
+    expect(usage.querySelector("h3")?.className).toMatch(/text-xs/);
+    expect(usage.querySelector("h3")?.className).toMatch(/text-muted-foreground/);
+
+    // Profile body: human block carries the sole content divider (border-b);
+    // system stack is padding-only (Usage↔Runtime use spacing, not a line).
+    const profileRoot = screen.getByTestId("agent-profile-tab-content");
+    const humanBlock = profileRoot.children[0] as HTMLElement;
+    const systemBlock = profileRoot.children[1] as HTMLElement;
+    expect(humanBlock.className).toMatch(/border-b/);
+    expect(systemBlock.className).toMatch(/space-y-3\.5/);
+    expect(systemBlock.className).not.toMatch(/border-b/);
   });
 
   it("renders exactly the 4 runtime pickers, no Concurrency (#565 fix-forward)", () => {

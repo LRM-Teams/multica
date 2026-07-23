@@ -122,7 +122,7 @@ export function Composer({
             {leadingActions}
           </div>
           <div
-            className="flex shrink-0 items-center gap-1.5"
+            className="flex shrink-0 items-center gap-1.5 text-muted-foreground"
             data-slot="composer-submit-actions"
           >
             {voicePlaybackScope && onVoiceSend ? (
@@ -133,6 +133,7 @@ export function Composer({
                 onVoiceSend={onVoiceSend}
               />
             ) : null}
+            {/* Primary Send owns primary-foreground; parent muted only tints mic chrome. */}
             <Button
               onClick={onSend}
               disabled={sendDisabled || sending}

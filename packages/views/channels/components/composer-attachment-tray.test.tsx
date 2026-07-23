@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -201,5 +204,37 @@ describe("ComposerAttachmentTray", () => {
     // Must not rely on group-hover opacity-0 for the only remove control.
     expect(remove.className).toMatch(/\bopacity-100\b/);
     expect(remove.className).not.toMatch(/\bopacity-0\b/);
+  });
+
+  // LRM-353 — tray chrome stays on background / muted / border tokens (no light hex).
+  it("LRM-353: tray chips use semantic surface tokens only", () => {
+    const src = readFileSync(
+      resolve(dirname(fileURLToPath(import.meta.url)), "composer-attachment-tray.tsx"),
+      "utf8",
+    );
+    expect(src).not.toMatch(/#f4f4f4/);
+    expect(src).not.toMatch(/hover:bg-\[#/);
+    expect(src).toMatch(/border-border/);
+    expect(src).toMatch(/bg-muted/);
+    expect(src).toMatch(/bg-background/);
+
+    render(
+      <ComposerAttachmentTray
+        pending={[
+          item({
+            localId: "file-tok",
+            status: "uploading",
+            filename: "draft.pdf",
+            contentType: "application/pdf",
+            previewUrl: undefined,
+          }),
+        ]}
+        onRemove={vi.fn()}
+        onRetry={vi.fn()}
+      />,
+    );
+    const chip = screen.getByTestId("composer-tray-item-file-tok");
+    expect(chip.className).toMatch(/border-border/);
+    expect(chip.className).toMatch(/bg-muted/);
   });
 });

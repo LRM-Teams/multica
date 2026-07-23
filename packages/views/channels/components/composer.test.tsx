@@ -215,12 +215,19 @@ describe("Composer", () => {
           {...baseProps}
           sendDisabled={false}
           leadingActions={<button type="button" aria-label="Attach">📎</button>}
+          voicePlaybackScope="thread-1"
+          onVoiceSend={vi.fn(() => true)}
         />,
       );
       const leading = screen
         .getByRole("button", { name: /attach/i })
         .closest('[data-slot="composer-leading-actions"]');
       expect(leading?.className).toContain("text-muted-foreground");
+      const submit = screen
+        .getByRole("button", { name: "Record voice message" })
+        .closest('[data-slot="composer-submit-actions"]');
+      expect(submit?.className).toContain("text-muted-foreground");
+      expect(screen.getByRole("button", { name: /send/i })).toBeInTheDocument();
     });
   });
 });

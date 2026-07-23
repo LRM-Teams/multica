@@ -193,4 +193,49 @@ describe("AgentFilesPanel", () => {
     expect(fileName.closest("button")).toHaveClass("min-w-0", "w-full");
     expect(container.querySelector(".overflow-auto")).toHaveClass("min-w-0");
   });
+
+  // LRM-453: DialogContent's default absolute ✕ used to stack beside the
+  // header Close editor control (two X). Keep a single card close; Esc /
+  // backdrop still dismiss via Dialog onOpenChange.
+  it("file preview dialog exposes a single close control (no outer Dialog ✕)", async () => {
+    renderPanel(makeAgent());
+    fireEvent.click(await screen.findByRole("button", { name: "memory" }));
+    fireEvent.click(await screen.findByText("MEMORY.md"));
+
+    expect(await screen.findByRole("button", { name: "Close editor" })).toBeInTheDocument();
+    // DialogContent's built-in close uses data-slot="dialog-close".
+    expect(document.querySelectorAll('[data-slot="dialog-close"]')).toHaveLength(0);
+    // While the dialog is open the panel is aria-hidden; only the card close
+    // remains in the accessible tree (no second Dialog ✕).
+    expect(screen.getAllByRole("button", { name: /close/i })).toHaveLength(1);
+  });
+
+  it("closes the file preview via header Close editor, Escape, and backdrop", async () => {
+    renderPanel(makeAgent());
+    fireEvent.click(await screen.findByRole("button", { name: "memory" }));
+    fireEvent.click(await screen.findByText("MEMORY.md"));
+
+    const closeEditor = await screen.findByRole("button", { name: "Close editor" });
+    fireEvent.click(closeEditor);
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Close editor" })).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(await screen.findByText("MEMORY.md"));
+    expect(await screen.findByRole("button", { name: "Close editor" })).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Close editor" })).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(await screen.findByText("MEMORY.md"));
+    expect(await screen.findByRole("button", { name: "Close editor" })).toBeInTheDocument();
+    const backdrop = document.querySelector('[data-slot="dialog-overlay"]');
+    expect(backdrop).not.toBeNull();
+    fireEvent.click(backdrop!);
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Close editor" })).not.toBeInTheDocument();
+    });
+  });
 });

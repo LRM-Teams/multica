@@ -425,8 +425,6 @@ function AgentProfileTabContent({
         <div className="border-t border-border pt-3">
           <AgentProfileActions
             agent={agent}
-            runtime={selectedRuntime}
-            members={members}
             canManage={canEdit.allowed}
           />
         </div>

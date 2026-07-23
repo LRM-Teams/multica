@@ -92,6 +92,27 @@ type ProviderStartResult struct {
 	ExpiresAt time.Time
 }
 
+// ProviderStartUncertainError means the provider start result is unknown and a
+// compensating provider stop also failed. The session must stay non-terminal
+// so recovery can find the possibly running task.
+type ProviderStartUncertainError struct {
+	Err error
+}
+
+func (failure *ProviderStartUncertainError) Error() string {
+	if failure == nil || failure.Err == nil {
+		return "voice call provider start result is uncertain"
+	}
+	return failure.Err.Error()
+}
+
+func (failure *ProviderStartUncertainError) Unwrap() error {
+	if failure == nil {
+		return nil
+	}
+	return failure.Err
+}
+
 type ProviderCallIdentity struct {
 	RoomID string
 	TaskID string
@@ -246,6 +267,10 @@ func (service *Service) Start(ctx context.Context, input StartInput) (StartResul
 		SystemMessages: append([]string(nil), conversationContext.SystemMessages...),
 	})
 	if err != nil {
+		var uncertain *ProviderStartUncertainError
+		if errors.As(err, &uncertain) {
+			return StartResult{}, fmt.Errorf("start voice call provider: %w", err)
+		}
 		return StartResult{}, service.recordFailed(
 			ctx, session, "provider_start_failed", fmt.Errorf("start voice call provider: %w", err),
 		)

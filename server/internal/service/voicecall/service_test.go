@@ -111,6 +111,26 @@ func TestServiceStartRecordsContextAndProviderFailures(t *testing.T) {
 	}
 }
 
+func TestServiceStartLeavesSessionRecoverableWhenProviderStartIsUncertain(t *testing.T) {
+	deps := newTestDependencies()
+	deps.provider.startErr = &ProviderStartUncertainError{
+		Err: errors.New("start timed out and compensating stop failed"),
+	}
+	service := newTestService(t, deps)
+
+	_, err := service.Start(context.Background(), validStartInput())
+	var uncertain *ProviderStartUncertainError
+	if !errors.As(err, &uncertain) {
+		t.Fatalf("error = %v, want ProviderStartUncertainError", err)
+	}
+	if deps.store.session.Status != StatusStarting {
+		t.Fatalf("status = %q, want recoverable starting", deps.store.session.Status)
+	}
+	if deps.store.markFailedCalls != 0 {
+		t.Fatalf("failed transition calls = %d, want 0", deps.store.markFailedCalls)
+	}
+}
+
 func TestServiceStartCompensatesProviderWhenConnectingTransitionFails(t *testing.T) {
 	deps := newTestDependencies()
 	deps.store.markConnectingErr = errors.New("database unavailable")

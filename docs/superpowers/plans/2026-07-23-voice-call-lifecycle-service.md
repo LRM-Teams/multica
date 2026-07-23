@@ -16,6 +16,8 @@ implementations in the orchestration logic.
   conversation context.
 - Context or provider start failure records a terminal failed session with a
   bounded error code.
+- If provider start and its compensating stop both have uncertain outcomes, the
+  session remains non-terminal for recovery.
 - If the provider starts but the database cannot mark the call connecting, the
   service stops the provider before marking the session failed.
 - If that compensating stop fails, the session remains non-terminal so a
@@ -32,6 +34,8 @@ implementations in the orchestration logic.
 - [x] Implement the provider-neutral lifecycle service.
 - [x] Preserve the original session identity when the connecting transition
   fails so compensation can update the correct row.
+- [x] Preserve starting state when the provider reports an uncertain start
+  outcome.
 - [x] Run package tests, vet, and diff checks.
 - [x] Commit, push, and open independent ready PR
   [#1041](https://github.com/LRM-Teams/multica/pull/1041), stacked on #1040.
@@ -43,6 +47,7 @@ implementations in the orchestration logic.
   transition; the regression test now proves provider stop happens before the
   correct session is marked failed.
 - Context/provider failure, failed compensation, active/ending/terminal stop,
-  repeated stop, and canceled browser request paths have deterministic tests.
+  uncertain provider start, repeated stop, and canceled browser request paths
+  have deterministic tests.
 - `go test ./internal/service/... -count=1`,
   `go vet ./internal/service/...`, and `git diff --check` pass.

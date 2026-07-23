@@ -334,6 +334,8 @@
     "voice_show_transcript": "文字に変換",
     "voice_hide_transcript": "文字を閉じる",
     "voice_transcript_label": "音声の文字起こし",
+    "voice_transcribing": "文字起こし中",
+    "voice_transcription_unavailable": "文字起こしを利用できません",
     "voice_preview": "音声メッセージ",
     "voice_preview_duration": "音声メッセージ · {{seconds}}秒",
     "agent_badge": "Agent",

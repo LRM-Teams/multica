@@ -24,6 +24,9 @@ func TestRoomTokenSignerMatchesOfficialWireFormat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new room token signer: %v", err)
 	}
+	if signer.AppID() != "123456781234567812345678" {
+		t.Fatalf("AppID = %q", signer.AppID())
+	}
 	signer.now = func() time.Time { return clockTime }
 	signer.random = bytes.NewReader([]byte{0x04, 0x03, 0x02, 0x01})
 
@@ -64,6 +67,13 @@ func TestRoomTokenSignerMatchesOfficialWireFormat(t *testing.T) {
 		if got := parsed.privileges[privilege]; got != wantExpiry {
 			t.Fatalf("privilege %d expiry = %d, want %d", privilege, got, wantExpiry)
 		}
+	}
+}
+
+func TestRoomTokenSignerNilAppIDIsEmpty(t *testing.T) {
+	var signer *RoomTokenSigner
+	if signer.AppID() != "" {
+		t.Fatalf("nil signer AppID = %q", signer.AppID())
 	}
 }
 

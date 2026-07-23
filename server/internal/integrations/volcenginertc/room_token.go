@@ -75,6 +75,13 @@ func NewRoomTokenSigner(config RoomTokenConfig) (*RoomTokenSigner, error) {
 	}, nil
 }
 
+func (signer *RoomTokenSigner) AppID() string {
+	if signer == nil {
+		return ""
+	}
+	return signer.appID
+}
+
 func (signer *RoomTokenSigner) Sign(roomID, userID string) (SignedRoomToken, error) {
 	if signer == nil || signer.now == nil || signer.random == nil {
 		return SignedRoomToken{}, errors.New("volcengine RTC room token signer is not initialized")

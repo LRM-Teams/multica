@@ -46,6 +46,9 @@ func TestInMemoryUpdateStore_LatestForRuntimeIncludesTerminalHistory(t *testing.
 	if latest, err := store.LatestForRuntime(ctx, "rt-1"); err != nil || latest == nil || latest.ID != first.ID || latest.Status != UpdatePending {
 		t.Fatalf("latest after create = %+v err=%v", latest, err)
 	}
+	if _, err := store.PopPending(ctx, "rt-1"); err != nil {
+		t.Fatalf("pop first: %v", err)
+	}
 	if err := store.Complete(ctx, first.ID, "done"); err != nil {
 		t.Fatalf("complete first: %v", err)
 	}
@@ -93,6 +96,37 @@ func TestInMemoryUpdateStore_RetainsTerminalHistoryBeyondActiveWindow(t *testing
 	}
 }
 
+func TestInMemoryUpdateStoreReadyToApplyDoesNotExpireWhileDrainIsActive(t *testing.T) {
+	ctx := context.Background()
+	store := NewInMemoryUpdateStore()
+
+	ready, err := store.Create(ctx, "rt-ready", "v1.2.3")
+	if err != nil {
+		t.Fatalf("create ready update: %v", err)
+	}
+	if _, err := store.PopPending(ctx, "rt-ready"); err != nil {
+		t.Fatalf("pop ready update: %v", err)
+	}
+	if err := store.ReadyToApply(ctx, ready.ID, "verified"); err != nil {
+		t.Fatalf("mark ready: %v", err)
+	}
+	ready.UpdatedAt = time.Now().Add(-(updateTerminalRetention + time.Hour))
+
+	if _, err := store.Create(ctx, "rt-unrelated", "v1.2.4"); err != nil {
+		t.Fatalf("create unrelated update: %v", err)
+	}
+	got, err := store.Get(ctx, ready.ID)
+	if err != nil {
+		t.Fatalf("get aged ready update: %v", err)
+	}
+	if got == nil || got.Status != UpdateReady {
+		t.Fatalf("aged ready update was pruned: %+v", got)
+	}
+	if _, err := store.Create(ctx, "rt-ready", "v1.2.5"); err != errUpdateInProgress {
+		t.Fatalf("create for draining runtime error = %v, want errUpdateInProgress", err)
+	}
+}
+
 func TestInMemoryUpdateStore_PopPendingIgnoresTerminalHistory(t *testing.T) {
 	ctx := context.Background()
 	store := NewInMemoryUpdateStore()
@@ -100,6 +134,9 @@ func TestInMemoryUpdateStore_PopPendingIgnoresTerminalHistory(t *testing.T) {
 	first, err := store.Create(ctx, "rt-1", "v1.2.3")
 	if err != nil {
 		t.Fatalf("create first: %v", err)
+	}
+	if _, err := store.PopPending(ctx, "rt-1"); err != nil {
+		t.Fatalf("pop first: %v", err)
 	}
 	if err := store.Fail(ctx, first.ID, "allow next request"); err != nil {
 		t.Fatalf("fail first: %v", err)
@@ -163,6 +200,9 @@ func TestInMemoryUpdateStore_RejectsConcurrentActiveUntilTerminal(t *testing.T) 
 	if _, err := store.Create(ctx, "rt-1", "v1.2.4"); err != errUpdateInProgress {
 		t.Fatalf("second create error = %v, want errUpdateInProgress", err)
 	}
+	if _, err := store.PopPending(ctx, "rt-1"); err != nil {
+		t.Fatalf("pop: %v", err)
+	}
 	if err := store.Complete(ctx, req.ID, "done"); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
@@ -211,6 +251,9 @@ func TestReportUpdateResult_CompletedLeavesCurrentVersionUntilRegisterConfirms(t
 	update, err := testHandler.UpdateStore.Create(context.Background(), runtimeID, "v0.3.1")
 	if err != nil {
 		t.Fatalf("create update: %v", err)
+	}
+	if _, err := testHandler.UpdateStore.PopPending(context.Background(), runtimeID); err != nil {
+		t.Fatalf("pop update: %v", err)
 	}
 
 	reportReq := newDaemonTokenRequest(

@@ -215,6 +215,10 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 	if candidate, ok := txStarter.(dbExecutor); ok {
 		executor = candidate
 	}
+	var updateDB updatePostgresDB
+	if candidate, ok := txStarter.(updatePostgresDB); ok {
+		updateDB = candidate
+	}
 
 	if analyticsClient == nil {
 		analyticsClient = analytics.NoopClient{}
@@ -267,7 +271,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		IssueService:          service.NewIssueService(queries, txStarter, bus, analyticsClient, taskSvc),
 		AutopilotService:      service.NewAutopilotService(queries, txStarter, bus, taskSvc),
 		EmailService:          emailService,
-		UpdateStore:           NewInMemoryUpdateStore(),
+		UpdateStore:           NewPostgresUpdateStore(updateDB),
 		RuntimeReleaseSource:  NewCachedRuntimeReleaseSource(DefaultRuntimeReleaseCacheTTL),
 		ModelListStore:        NewInMemoryModelListStore(),
 		LocalSkillListStore:   NewInMemoryLocalSkillListStore(),

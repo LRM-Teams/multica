@@ -109,7 +109,10 @@ func TestNormalizeVoicePart(t *testing.T) {
 			Type:         protocol.MessagePartTypeVoice,
 			DurationMS:   1234,
 			Text:         "must clear",
-			AttachmentID: "must clear",
+			AttachmentID: "11111111-1111-1111-1111-111111111111",
+			Filename:     " recording.wav ",
+			ContentType:  " audio/wav ",
+			SizeBytes:    48,
 		},
 	})
 	if err != nil {
@@ -122,8 +125,22 @@ func TestNormalizeVoicePart(t *testing.T) {
 	if voice.Type != protocol.MessagePartTypeVoice || voice.DurationMS != 1234 {
 		t.Fatalf("voice part = %+v", voice)
 	}
-	if voice.Text != "" || voice.AttachmentID != "" {
-		t.Fatalf("voice part retained unrelated fields: %+v", voice)
+	if voice.Text != "" || voice.AttachmentID != "11111111-1111-1111-1111-111111111111" ||
+		voice.Filename != "recording.wav" || voice.ContentType != "audio/wav" || voice.SizeBytes != 48 {
+		t.Fatalf("voice part did not preserve recording metadata: %+v", voice)
+	}
+}
+
+func TestNormalizeAgentVoicePartWithoutAttachment(t *testing.T) {
+	_, parts, err := Normalize("spoken answer", []protocol.MessagePart{
+		{Type: protocol.MessagePartTypeText, Text: "spoken answer"},
+		{Type: protocol.MessagePartTypeVoice},
+	})
+	if err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+	if len(parts) != 2 || parts[1].AttachmentID != "" {
+		t.Fatalf("parts = %+v, want attachment-free Agent voice", parts)
 	}
 }
 

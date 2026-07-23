@@ -178,7 +178,10 @@ import {
 } from "../hooks/use-composer-pending-attachments";
 import { useEntryReadCursor } from "../hooks/use-entry-read-cursor";
 import { useEntryAnchor } from "../hooks/use-entry-around-seq";
-import { buildVoiceMessageParts } from "../lib/voice-audio";
+import {
+  buildVoiceMessageParts,
+  type VoiceRecordingAttachment,
+} from "../lib/voice-audio";
 import { prepareVoicePlayback, voicePlaybackScope } from "../lib/voice-playback";
 import { isChannelNameTakenError } from "../channel-create-error";
 import { ChannelMessageList } from "./channel-message-list";
@@ -1918,12 +1921,16 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     }
   };
 
-  const handleVoiceSend = (content: string, durationMs: number): boolean => {
+  const handleVoiceSend = (
+    content: string,
+    durationMs: number,
+    attachment: VoiceRecordingAttachment,
+  ): boolean => {
     if (!active || !activeDraftEmpty || channelPending.pending.length > 0) return false;
-    const parts = buildVoiceMessageParts(content, durationMs);
+    const parts = buildVoiceMessageParts(content, durationMs, attachment);
     if (parts.length === 0) return false;
     const dispatched = channelSend.send({
-      payloadKey: composePayloadKey(content, [], `voice:${quoteTarget?.id ?? ""}`),
+      payloadKey: composePayloadKey(content, [attachment.id], `voice:${quoteTarget?.id ?? ""}`),
       buildVars: (clientMessageId) => ({
         channelId: active.id,
         content,
@@ -1984,14 +1991,18 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     }
   };
 
-  const handleThreadVoiceSend = (content: string, durationMs: number): boolean => {
+  const handleThreadVoiceSend = (
+    content: string,
+    durationMs: number,
+    attachment: VoiceRecordingAttachment,
+  ): boolean => {
     if (!active || !threadRoot || !threadDraftEmpty || threadPending.pending.length > 0) return false;
-    const parts = buildVoiceMessageParts(content, durationMs);
+    const parts = buildVoiceMessageParts(content, durationMs, attachment);
     if (parts.length === 0) return false;
     const dispatched = threadSend.send({
       payloadKey: composePayloadKey(
         content,
-        [],
+        [attachment.id],
         `${threadRoot.id}:voice:${threadQuoteTarget?.id ?? ""}`,
       ),
       buildVars: (clientMessageId) => ({
@@ -3175,6 +3186,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                     }
                     sending={sendMessage.isPending}
                     onSend={handleSend}
+                    voiceChannelId={active.id}
                     voicePlaybackScope={voicePlaybackScope(active.id)}
                     voiceDisabled={!activeDraftEmpty || channelPending.pending.length > 0}
                     onVoiceSend={handleVoiceSend}

@@ -4484,6 +4484,70 @@ func TestSendChannelMessageStoresVoiceTranscriptPart(t *testing.T) {
 	}
 }
 
+func TestSendChannelMessageBindsVoiceRecordingAttachment(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "voice-recording-"+uuid.NewString(), testUserID)
+	var attachmentID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO attachment (workspace_id, channel_id, uploader_type, uploader_id, filename, url, content_type, size_bytes)
+		VALUES ($1, $2, 'member', $3, 'voice-recording.wav', 's3://voice-recording.wav', 'audio/wav', 48)
+		RETURNING id`, testWorkspaceID, channelID, testUserID).Scan(&attachmentID); err != nil {
+		t.Fatalf("seed voice recording: %v", err)
+	}
+
+	rec := sendChannelMessageForTest(t, channelID, testUserID, map[string]any{
+		"content": "spoken question",
+		"parts": []protocol.MessagePart{
+			{Type: protocol.MessagePartTypeText, Text: "spoken question"},
+			{
+				Type:         protocol.MessagePartTypeVoice,
+				DurationMS:   1800,
+				AttachmentID: attachmentID,
+				Filename:     "voice-recording.wav",
+				ContentType:  "audio/wav",
+				SizeBytes:    48,
+			},
+		},
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("send recorded voice: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var created ChannelMessageResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode created message: %v", err)
+	}
+	if len(created.Parts) != 2 || created.Parts[1].AttachmentID != attachmentID {
+		t.Fatalf("created parts = %+v, want voice attachment %s", created.Parts, attachmentID)
+	}
+	if len(created.Attachments) != 1 || created.Attachments[0].ID != attachmentID {
+		t.Fatalf("created attachments = %+v, want recording %s", created.Attachments, attachmentID)
+	}
+
+	var boundMessageID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT channel_message_id::text FROM attachment WHERE id = $1`, attachmentID).Scan(&boundMessageID); err != nil {
+		t.Fatalf("load recording binding: %v", err)
+	}
+	if boundMessageID != created.ID {
+		t.Fatalf("recording bound to %q, want %q", boundMessageID, created.ID)
+	}
+}
+
+func TestAttachmentIDsFromPartsIncludesVoiceRecording(t *testing.T) {
+	ids := attachmentIDsFromParts([]protocol.MessagePart{
+		{Type: protocol.MessagePartTypeText, Text: "transcript"},
+		{Type: protocol.MessagePartTypeVoice, AttachmentID: "recording-id"},
+	})
+	if len(ids) != 1 || ids[0] != "recording-id" {
+		t.Fatalf("attachmentIDsFromParts = %v, want voice recording id", ids)
+	}
+}
+
 func TestSendChannelMessageRejectsUnknownStickerPart(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

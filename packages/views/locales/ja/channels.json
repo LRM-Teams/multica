@@ -284,6 +284,7 @@
     "voice_unavailable": "このブラウザは音声録音に対応していません。",
     "voice_recording_failed": "音声の録音に失敗しました。もう一度お試しください。",
     "voice_transcription_failed": "音声の文字起こしに失敗しました。もう一度お試しください。",
+    "voice_processing_failed": "音声メッセージの処理に失敗しました。もう一度お試しください。",
     "voice_no_speech": "音声を検出できませんでした。",
     "issue_ref_aria": "Issue を参照",
     "project_label": "プロジェクト",

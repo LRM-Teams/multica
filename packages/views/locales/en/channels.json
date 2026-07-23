@@ -284,6 +284,7 @@
     "voice_unavailable": "Voice recording is not supported in this browser.",
     "voice_recording_failed": "Voice recording failed. Please try again.",
     "voice_transcription_failed": "Voice transcription failed. Please try again.",
+    "voice_processing_failed": "Voice message processing failed. Please try again.",
     "voice_no_speech": "No speech was detected.",
     "issue_ref_aria": "Reference issue",
     "project_label": "Project",

@@ -2034,6 +2034,54 @@ describe("ChannelMessageBubble", () => {
     expect(screen.queryByTestId("voice-reply-control")).not.toBeInTheDocument();
   });
 
+  it("hides a recorded human voice transcript until the user asks for it", async () => {
+    const transcript = "question spoken by Alice";
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          type: "user",
+          author_id: "user-1",
+          author_name: "Alice",
+          content: transcript,
+          parts: [
+            { type: "text", text: transcript },
+            {
+              type: "voice",
+              duration_ms: 2400,
+              attachment_id: "recording-1",
+              filename: "voice-recording.wav",
+              content_type: "audio/wav",
+              size_bytes: 48,
+            },
+          ],
+          attachments: [{
+            id: "recording-1",
+            workspace_id: "workspace-1",
+            issue_id: null,
+            comment_id: null,
+            chat_session_id: null,
+            chat_message_id: null,
+            uploader_type: "member",
+            uploader_id: "user-1",
+            filename: "voice-recording.wav",
+            url: "/uploads/voice-recording.wav",
+            download_url: "/api/attachments/recording-1/download",
+            markdown_url: "/api/attachments/recording-1/download",
+            content_type: "audio/wav",
+            size_bytes: 48,
+            created_at: "2026-07-23T00:00:00Z",
+          }],
+        })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.queryByText(transcript)).not.toBeInTheDocument();
+    expect(screen.getByTestId("voice-reply-control")).toHaveTextContent('2″');
+    await userEvent.click(screen.getByRole("button", { name: "Show transcript" }));
+    expect(screen.getByTestId("voice-reply-transcript")).toHaveTextContent(transcript);
+  });
+
   it("hides an Agent voice transcript until its attached text control is opened", async () => {
     const transcript = "One day, the teacher asked what echo means.";
     render(

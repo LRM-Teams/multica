@@ -6,6 +6,7 @@ import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import { ReadOnlyConversationBanner } from "./read-only-conversation-banner";
 import { VoiceInputButton } from "./voice-input-button";
+import type { VoiceRecordingAttachment } from "../lib/voice-audio";
 
 /**
  * The conversation surface a composer belongs to. The composer shell is
@@ -31,9 +32,14 @@ export interface ComposerProps {
   /** Action-row controls left of Send (attach, mention, issue-ref, project). */
   leadingActions?: ReactNode;
   /** Optional speech input shared by channel, DM, and thread composers. */
+  voiceChannelId?: string;
   voicePlaybackScope?: string;
   voiceDisabled?: boolean;
-  onVoiceSend?: (transcript: string, durationMs: number) => boolean;
+  onVoiceSend?: (
+    transcript: string,
+    durationMs: number,
+    attachment: VoiceRecordingAttachment,
+  ) => boolean;
   /**
    * Attachment tray mount point (#151/#154). Rendered above the input and never
    * over the Send control, so touch targets stay reachable; the Attachment lane
@@ -62,6 +68,7 @@ export function Composer({
   isMobile,
   prefix,
   leadingActions,
+  voiceChannelId,
   voicePlaybackScope,
   voiceDisabled = false,
   onVoiceSend,
@@ -115,8 +122,9 @@ export function Composer({
             className="flex shrink-0 items-center gap-1.5"
             data-slot="composer-submit-actions"
           >
-            {voicePlaybackScope && onVoiceSend ? (
+            {voiceChannelId && voicePlaybackScope && onVoiceSend ? (
               <VoiceInputButton
+                channelId={voiceChannelId}
                 disabled={voiceDisabled || sending}
                 isMobile={isMobile}
                 playbackScope={voicePlaybackScope}

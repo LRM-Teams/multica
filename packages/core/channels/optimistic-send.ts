@@ -41,7 +41,7 @@ function stubAttachmentsFromParts(
   if (!parts?.length) return undefined;
   const stubs: Attachment[] = [];
   for (const part of parts) {
-    if (part.type !== "attachment" || !part.attachment_id) continue;
+    if ((part.type !== "attachment" && part.type !== "voice") || !part.attachment_id) continue;
     const download = `/api/attachments/${part.attachment_id}/download`;
     stubs.push({
       id: part.attachment_id,

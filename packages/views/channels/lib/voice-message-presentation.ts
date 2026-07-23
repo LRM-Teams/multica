@@ -1,12 +1,19 @@
-import type { ChannelMessage, MessagePart } from "@multica/core/types";
+import type { Attachment, ChannelMessage, MessagePart } from "@multica/core/types";
 
 type VoicePart = Extract<MessagePart, { type: "voice" }>;
 
-export type VoiceMessagePresentation = {
-  voicePart: VoicePart;
-  consumedAttachmentIds: string[];
-  source: "structured" | "legacy-agent-audio";
-};
+export type VoiceMessagePresentation =
+  | {
+      voicePart: VoicePart;
+      recordingAttachment: Attachment;
+      consumedAttachmentIds: string[];
+      source: "recording";
+    }
+  | {
+      voicePart: VoicePart;
+      consumedAttachmentIds: string[];
+      source: "structured" | "legacy-agent-audio";
+    };
 
 export function voiceBubbleWidthPx(durationSeconds: number | null): number {
   if (!durationSeconds) return 112;
@@ -28,6 +35,19 @@ export function resolveVoiceMessagePresentation(
     (part): part is VoicePart => part.type === "voice",
   );
   if (voicePart) {
+    const recordingAttachment = message.attachments?.find(
+      (candidate) =>
+        candidate.id === voicePart.attachment_id &&
+        candidate.content_type.toLowerCase().startsWith("audio/"),
+    );
+    if (recordingAttachment) {
+      return {
+        voicePart,
+        recordingAttachment,
+        consumedAttachmentIds: [recordingAttachment.id],
+        source: "recording",
+      };
+    }
     const legacyAudio = resolveLegacyAgentAudioAttachment(message, true);
     return {
       voicePart,

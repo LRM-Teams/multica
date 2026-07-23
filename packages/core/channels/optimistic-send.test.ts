@@ -27,6 +27,37 @@ function seedPage(qc: QueryClient, channelId: string, messages: ChannelMessage[]
 }
 
 describe("optimistic send cache (LRM-222)", () => {
+  it("hydrates a voice recording attachment in the optimistic bubble", () => {
+    const optimistic = buildOptimisticChannelMessage({
+      channelId: "c1",
+      workspaceId: "w1",
+      clientMessageId: "voice-client-1",
+      content: "spoken question",
+      parts: [
+        { type: "text", text: "spoken question" },
+        {
+          type: "voice",
+          duration_ms: 1800,
+          attachment_id: "recording-1",
+          filename: "voice-recording.wav",
+          content_type: "audio/wav",
+          size_bytes: 64,
+        },
+      ],
+      authorId: "u1",
+      authorName: "Alice",
+    });
+
+    expect(optimistic.attachments).toEqual([
+      expect.objectContaining({
+        id: "recording-1",
+        filename: "voice-recording.wav",
+        content_type: "audio/wav",
+        size_bytes: 64,
+      }),
+    ]);
+  });
+
   it("matches by client_message_id so ACK replaces the temp bubble without a duplicate", () => {
     const optimistic = buildOptimisticChannelMessage({
       channelId: "c1",

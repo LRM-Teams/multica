@@ -20,12 +20,7 @@ import {
   Search,
   Smartphone,
   Square,
-<<<<<<< HEAD
   Trash2,
-  Users,
-  UserPlus,
-=======
->>>>>>> 0277cb09e (feat(LRM-494): Slack-style channel details page)
   X,
 } from "lucide-react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";

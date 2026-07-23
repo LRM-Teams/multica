@@ -157,7 +157,8 @@
     "edit_description_title": "编辑描述",
     "description_placeholder": "这个智能体做什么？",
     "save": "保存",
-    "cancel": "取消"
+    "cancel": "取消",
+    "save_failed": "保存失败"
   },
   "skill_attach": {
     "trigger_aria": "附加工作区 skill",

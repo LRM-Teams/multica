@@ -162,7 +162,8 @@
     "edit_description_title": "설명 수정",
     "description_placeholder": "이 에이전트는 무엇을 하나요?",
     "save": "저장",
-    "cancel": "취소"
+    "cancel": "취소",
+    "save_failed": "저장하지 못했습니다"
   },
   "skill_attach": {
     "trigger_aria": "워크스페이스 스킬 연결",

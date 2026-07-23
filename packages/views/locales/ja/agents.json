@@ -149,7 +149,8 @@
     "edit_description_title": "説明を編集",
     "description_placeholder": "このエージェントは何をしますか？",
     "save": "保存",
-    "cancel": "キャンセル"
+    "cancel": "キャンセル",
+    "save_failed": "保存に失敗しました"
   },
   "skill_attach": {
     "trigger_aria": "ワークスペースのスキルを追加",

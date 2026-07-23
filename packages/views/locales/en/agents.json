@@ -162,7 +162,8 @@
     "edit_description_title": "Edit description",
     "description_placeholder": "What does this agent do?",
     "save": "Save",
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "save_failed": "Failed to save"
   },
   "skill_attach": {
     "trigger_aria": "Attach a workspace skill",

@@ -1338,6 +1338,36 @@ export class ApiClient {
     });
   }
 
+  // Computer-level bulk delete (LRM-438): tear down every runtime sharing a
+  // daemon_id. Strict path — 409 + active_agents when any agent is still
+  // bound; use archiveAgentsAndDeleteRuntimesByDaemon after the user confirms.
+  async deleteRuntimesByDaemon(
+    daemonId: string,
+  ): Promise<{ status: string; deleted_runtime_ids: string[] }> {
+    return this.fetch(`/api/runtimes/delete-by-daemon`, {
+      method: "POST",
+      body: JSON.stringify({ daemon_id: daemonId }),
+    });
+  }
+
+  async archiveAgentsAndDeleteRuntimesByDaemon(
+    daemonId: string,
+    expectedActiveAgentIds: string[],
+  ): Promise<{
+    status: string;
+    deleted_runtime_ids: string[];
+    agents_archived: number;
+    tasks_cancelled: number;
+  }> {
+    return this.fetch(`/api/runtimes/archive-agents-and-delete-by-daemon`, {
+      method: "POST",
+      body: JSON.stringify({
+        daemon_id: daemonId,
+        expected_active_agent_ids: expectedActiveAgentIds,
+      }),
+    });
+  }
+
   async updateRuntime(
     runtimeId: string,
     patch: { visibility?: "private" | "public" },

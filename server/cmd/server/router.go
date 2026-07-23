@@ -1075,6 +1075,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Runtimes
 			r.Route("/api/runtimes", func(r chi.Router) {
 				r.Get("/", h.ListAgentRuntimes)
+				// Computer-level bulk delete (LRM-438): tear down every
+				// runtime sharing a daemon_id. Registered before /{runtimeId}
+				// so "delete-by-daemon" is not captured as a runtime id.
+				r.Post("/delete-by-daemon", h.DeleteAgentRuntimesByDaemon)
+				r.Post("/archive-agents-and-delete-by-daemon", h.ArchiveAgentsAndDeleteRuntimesByDaemon)
 				r.Route("/{runtimeId}", func(r chi.Router) {
 					r.Patch("/", h.UpdateAgentRuntime)
 					r.Get("/usage", h.GetRuntimeUsage)

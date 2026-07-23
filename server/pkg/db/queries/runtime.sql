@@ -288,6 +288,17 @@ WHERE leader_id IN (
 )
   AND archived_at IS NOT NULL;
 
+-- name: ListAgentRuntimesByDaemonID :many
+-- Returns every runtime row in a workspace keyed to the same daemon_id
+-- (case-insensitive). Backs Computer-level "delete this machine" so the
+-- handler can tear down Claude/Codex/Cursor/... providers in one shot.
+-- LOWER() matches FindLegacyRuntimesByDaemonID: os.Hostname() casing can
+-- drift across reboots without changing the underlying machine.
+SELECT * FROM agent_runtime
+WHERE workspace_id = @workspace_id
+  AND LOWER(daemon_id) = LOWER(@daemon_id)
+ORDER BY provider ASC, created_at ASC;
+
 -- name: FindLegacyRuntimesByDaemonID :many
 -- Looks up runtime rows keyed on a prior (hostname-derived) daemon_id. Used
 -- at register-time to find rows owned by the same machine under its old

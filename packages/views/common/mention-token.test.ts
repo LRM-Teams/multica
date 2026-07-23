@@ -47,13 +47,23 @@ describe("mentionTokenClassName", () => {
     expect(cls).not.toContain("bg-[#faf0c8]");
   });
 
-  it("uses warm yellow fill + ink text for @self (row wash is separate)", () => {
+  it("uses warm yellow fill + ink text for @self in light (row wash is separate)", () => {
     const cls = mentionTokenClassName("self");
     expect(cls).toContain("bg-[#faf0c8]");
     expect(cls).toContain("text-foreground");
     expect(cls).toContain("font-bold");
-    expect(cls).not.toContain("text-brand");
     expect(cls).not.toContain("rounded-full");
+  });
+
+  it("uses brand tint + brand ink for @self in dark (no cream yellow)", () => {
+    const cls = mentionTokenClassName("self");
+    expect(cls).toContain("dark:bg-brand/[0.14]");
+    expect(cls).toContain("dark:text-brand");
+    expect(cls).toContain("dark:hover:bg-brand/[0.18]");
+    expect(cls).toContain("dark:focus-visible:bg-brand/[0.18]");
+    // Dark path must not keep the light cream wash under dark:
+    expect(cls).not.toContain("dark:bg-[#faf0c8]");
+    expect(cls).not.toContain("dark:text-foreground");
   });
 });
 

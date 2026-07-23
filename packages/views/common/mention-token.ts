@@ -8,9 +8,10 @@ import { cn } from "@multica/ui/lib/utils";
  * token; only @self uses a warm yellow wash. Per-actor rainbow colors
  * (`agentColor`) stay on avatars only.
  *
- * Visual language (design-mention-slack-token.html / LRM-269):
+ * Visual language (design-mention-slack-token.html / LRM-269 / LRM-350):
  * - default / all → brand ink + bold + soft brand rest fill, radius ≤4px, px ≤2px
- * - self → warm yellow fill (#faf0c8) + ink text
+ * - self (light) → warm yellow fill (#faf0c8) + ink text
+ * - self (dark) → brand tint fill + brand ink (never cream yellow on light text)
  * - hover / focus → slightly stronger wash
  * - self-mentioned row → light warm wash (#fef9e8); dark cool brand tint + left bar
  */
@@ -34,7 +35,8 @@ export function resolveMentionTokenKind(
 
 /**
  * Shared class string for body/editor mention text.
- * Slack soft-bg token — brand ink + light rest fill; self is warm yellow.
+ * Slack soft-bg token — brand ink + light rest fill; self is warm yellow in
+ * light mode and brand tint + brand ink in dark (LRM-350).
  * Keep padding thin (≤2px) and radius small (≤4px); never `rounded-full`.
  */
 export function mentionTokenClassName(
@@ -48,7 +50,10 @@ export function mentionTokenClassName(
     "transition-colors duration-100",
     "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-brand/30",
     isSelf
-      ? "bg-[#faf0c8] text-foreground hover:bg-[#f5e8a8] focus-visible:bg-[#f5e8a8]"
+      ? [
+          "bg-[#faf0c8] text-foreground hover:bg-[#f5e8a8] focus-visible:bg-[#f5e8a8]",
+          "dark:bg-brand/[0.14] dark:text-brand dark:hover:bg-brand/[0.18] dark:focus-visible:bg-brand/[0.18]",
+        ]
       : "bg-brand/[0.10] text-brand hover:bg-brand/[0.14] focus-visible:bg-brand/[0.14]",
     className,
   );

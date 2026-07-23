@@ -37,7 +37,6 @@ import {
 } from "@multica/ui/components/ui/dialog";
 import { PropRow } from "../../common/prop-row";
 import { InlineEditPopover } from "./inline-edit-popover";
-import { availabilityConfig, toLiveAvailability } from "../presence";
 import { CharCounter } from "./char-counter";
 import { useT } from "../../i18n";
 import { ConcurrencyPicker } from "./inspector/concurrency-picker";
@@ -115,7 +114,13 @@ export function AgentDetailInspector({
           canEdit={canEdit}
           onUpdate={update}
         />
-        <PresenceBadge presence={presence} />
+        {/* LRM-248: live Online/Offline is avatar-badge only — no name-row text.
+            Archived stays muted secondary copy under the identity. */}
+        {agent.archived_at || presence?.availability === "archived" ? (
+          <span className="text-xs text-muted-foreground">
+            {t(($) => $.row.archived)}
+          </span>
+        ) : null}
       </div>
 
       {/* Properties — editable when canEdit. When the current user lacks
@@ -290,6 +295,7 @@ function AvatarEditor({
           actorId={agent.id}
           size={56}
           className="rounded-none"
+          showStatusDot={!agent.archived_at}
         />
       </div>
     );
@@ -325,6 +331,7 @@ function AvatarEditor({
           actorId={agent.id}
           size={56}
           className="rounded-none"
+          showStatusDot={!agent.archived_at}
         />
         <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity group-hover:opacity-100">
           {uploading ? (
@@ -544,36 +551,4 @@ function DescriptionEditorBody({
 
 
 
-// ---------------------------------------------------------------------------
-// Presence badge — unchanged from the previous version
-// ---------------------------------------------------------------------------
 
-function PresenceBadge({
-  presence,
-}: {
-  presence: AgentPresenceDetail | null | undefined;
-}) {
-  const { t } = useT("agents");
-  if (!presence) {
-    return (
-      <span className="inline-flex h-5 w-20 animate-pulse rounded-md bg-muted" />
-    );
-  }
-  // LRM-248: Online/Offline only. Archived is muted secondary copy, not a
-  // live presence chip.
-  if (presence.availability === "archived") {
-    return (
-      <span className="text-xs text-muted-foreground">
-        {t(($) => $.row.archived)}
-      </span>
-    );
-  }
-  const live = toLiveAvailability(presence.availability);
-  if (!live) return null;
-  const av = availabilityConfig[live];
-  return (
-    <span className={`text-xs ${av.textClass}`}>
-      {t(($) => $.availability[live])}
-    </span>
-  );
-}

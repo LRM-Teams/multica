@@ -1,23 +1,24 @@
 name: Deploy
 
-# Continuous deployment to s89 (82.157.184.89, runner label `s89`). Images
-# build on GitHub-hosted runners and push to GHCR; the self-hosted runner on
-# s89 pulls images and restarts Compose locally.
+# Continuous deployment to the Aliyun host (101.200.210.144, runner label
+# `aliyun`). Images build on GitHub-hosted runners and push to GHCR; the
+# self-hosted runner on that host pulls images and restarts Compose locally.
 #
 # Test gate: the CI workflow runs on every PR into `dev`. The team's workflow is
-# feature branch → PR → merge to `dev`, which builds images and deploys to s89.
+# feature branch → PR → merge to `dev`, which builds images and deploys
+# to the Aliyun host.
 # `main` is left as the upstream-tracking branch and never deploys via this
 # workflow.
 #
-# Host layout: stack under `/data/multica`. GitHub Environment `s89` stores
-# POSTGRES_PASSWORD and the optional voice key.
+# Host layout: deploy user `dev`, stack under `/data/multica`. GitHub
+# Environment `s89` remains the existing secret store during the host cutover.
 
 on:
   # Deploy only from the `dev` integration branch, after a PR has already been
-  # merged. PR events must not deploy to the shared s89/dev environment; they
-  # can build/test in CI, but s89 must always represent `dev` or an explicit
-  # manual dispatch from `dev`. Rollback dispatches must name an existing image
-  # tag.
+  # merged. PR events must not deploy to the shared Aliyun/dev environment;
+  # they can build/test in CI, but that host must always represent `dev` or an
+  # explicit manual dispatch from `dev`. Rollback dispatches must name an
+  # existing image tag.
   # Docs-only changes (#354 bug) are excluded — they don't change any code, so
   # triggering a backend rebuild/restart would disconnect all WS connections
   # for zero benefit.
@@ -36,7 +37,7 @@ on:
 
 # Never run two deploys at once; never cancel an in-flight one mid-restart.
 concurrency:
-  group: deploy-s89
+  group: deploy-aliyun
   cancel-in-progress: false
 
 jobs:
@@ -158,7 +159,7 @@ jobs:
        (github.event_name == 'workflow_dispatch' &&
         github.ref == 'refs/heads/dev' &&
         github.event.inputs.image_tag != ''))
-    runs-on: [self-hosted, s89]
+    runs-on: [self-hosted, aliyun]
     timeout-minutes: 15
     permissions:
       contents: read
@@ -180,8 +181,8 @@ jobs:
         with:
           sparse-checkout: |
             docker-compose.selfhost.yml
-            docker-compose.s89.yml
-            deploy/s89/Caddyfile
+            docker-compose.aliyun.yml
+            deploy/aliyun/Caddyfile
           sparse-checkout-cone-mode: false
 
       - name: Log in to GHCR
@@ -210,7 +211,7 @@ jobs:
           export MULTICA_WEB_IMAGE="ghcr.io/${owner_lc}/multica-web"
           export MULTICA_DB_BRIDGE_IMAGE="ghcr.io/${owner_lc}/multica-db-bridge"
           export MULTICA_IMAGE_TAG="${IMAGE_TAG}"
-          # s89/dev is the shared integration environment; keep this off by
+          # Aliyun/dev is the shared integration environment; keep this off by
           # default in docker-compose.selfhost.yml and opt in only for this lane.
           export MULTICA_DEV_AGENT_PROFILE_ACCESS=true
           if [ -z "${POSTGRES_PASSWORD:-}" ]; then
@@ -223,17 +224,17 @@ jobs:
               --project-directory "${DEPLOY_DIR}" \
               --env-file "${DEPLOY_DIR}/.env" \
               -f "${GITHUB_WORKSPACE}/docker-compose.selfhost.yml" \
-              -f "${GITHUB_WORKSPACE}/docker-compose.s89.yml" "$@"
+              -f "${GITHUB_WORKSPACE}/docker-compose.aliyun.yml" "$@"
           }
           # Validate the immutable checkout source before touching the runtime
           # file. A bad config must not be left behind for the next host restart.
           docker run --rm \
-            -v "${GITHUB_WORKSPACE}/deploy/s89/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            -v "${GITHUB_WORKSPACE}/deploy/aliyun/Caddyfile:/etc/caddy/Caddyfile:ro" \
             caddy:2.11.3@sha256:ec18ee54aab3315c22e25f3b2babda73ff8007d39b13b3bd1bfffa2f0444c7d9 \
             caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
           # The runtime path is stable; the Actions checkout is ephemeral.
           # Install through a sibling file and rename it atomically.
-          install -m 0644 "${GITHUB_WORKSPACE}/deploy/s89/Caddyfile" "${DEPLOY_DIR}/Caddyfile.next"
+          install -m 0644 "${GITHUB_WORKSPACE}/deploy/aliyun/Caddyfile" "${DEPLOY_DIR}/Caddyfile.next"
           mv -f "${DEPLOY_DIR}/Caddyfile.next" "${DEPLOY_DIR}/Caddyfile"
           # The backend container runs `migrate up` on start (entrypoint.sh).
           compose pull frontend backend
@@ -282,15 +283,15 @@ jobs:
               --project-directory "${DEPLOY_DIR}" \
               --env-file "${DEPLOY_DIR}/.env" \
               -f "${GITHUB_WORKSPACE}/docker-compose.selfhost.yml" \
-              -f "${GITHUB_WORKSPACE}/docker-compose.s89.yml" "$@"
+              -f "${GITHUB_WORKSPACE}/docker-compose.aliyun.yml" "$@"
           }
 
           # Caddy reaches both app services only through their Docker service
           # names. These probes therefore validate the running container,
           # Compose DNS, Caddy upstream routing, and the externally served dev
           # listeners as one boundary. The HTTPS probe connects to loopback
-          # while retaining the public IP as the certificate identity, avoiding
-          # dependence on provider NAT hairpin behavior.
+          # while retaining leagent.me as the TLS identity, avoiding dependence
+          # on provider NAT hairpin behavior.
           for i in $(seq 1 45); do
             frontend_id="$(compose ps -q frontend)"
             backend_id="$(compose ps -q backend)"
@@ -303,16 +304,16 @@ jobs:
               curl -fsS --max-time 5 http://127.0.0.1:8090/ >/dev/null 2>&1 && \
               curl -fsS --max-time 5 http://127.0.0.1:8090/healthz >/dev/null 2>&1 && \
               curl -fsS --max-time 5 http://127.0.0.1:8090/health >/dev/null 2>&1 && \
-              [ "$(curl -fsS -o /dev/null -w '%{redirect_url}' --max-time 5 -H 'Accept: text/html' http://127.0.0.1:8090/)" = "https://82.157.184.89/" ] && \
-              curl --connect-to 82.157.184.89:443:127.0.0.1:443 -fsS --max-time 5 https://82.157.184.89/healthz >/dev/null 2>&1 && \
-              curl --connect-to 82.157.184.89:443:127.0.0.1:443 -fsS --max-time 5 https://82.157.184.89/health >/dev/null 2>&1; then
-              echo "Frontend, backend, Caddy HTTP, and trusted IP HTTPS healthy after $((i * 2))s."
+              [ "$(curl -fsS -o /dev/null -w '%{redirect_url}' --max-time 5 -H 'Accept: text/html' http://127.0.0.1:8090/)" = "https://leagent.me/" ] && \
+              curl --resolve leagent.me:443:127.0.0.1 -fsS --max-time 5 https://leagent.me/healthz >/dev/null 2>&1 && \
+              curl --resolve leagent.me:443:127.0.0.1 -fsS --max-time 5 https://leagent.me/health >/dev/null 2>&1; then
+              echo "Frontend, backend, Caddy HTTP, and leagent.me HTTPS healthy after $((i * 2))s."
               exit 0
             fi
             echo "waiting for frontend/backend/Caddy/HTTPS readiness... ($i/45) frontend=${frontend_status}/${frontend_health:-none} backend=${backend_status:-none} caddy=${caddy_status:-none}"
             sleep 2
           done
-          echo "::error::frontend/backend/Caddy HTTP redirect + trusted IP HTTPS did not pass within 90s."
+          echo "::error::frontend/backend/Caddy HTTP redirect + leagent.me HTTPS did not pass within 90s."
           compose ps frontend backend caddy || true
           docker logs --tail 100 multica-caddy || true
           docker logs --tail 80 multica-frontend-1 || true

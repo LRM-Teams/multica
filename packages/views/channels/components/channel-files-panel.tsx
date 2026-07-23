@@ -2,10 +2,12 @@
 
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { X } from "lucide-react";
 import { channelProjectFilesOptions } from "@multica/core/channels";
 import { api } from "@multica/core/api";
 import { CodeBlock } from "@multica/ui/markdown";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
+import { Button } from "@multica/ui/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -108,11 +110,29 @@ function FilePreviewDialog({
     );
   };
 
+  // LRM-453: DialogContent defaults to an absolute corner ✕ that stacks on the
+  // header chrome (double close). Keep one close in the preview header; Esc +
+  // overlay still dismiss via onOpenChange.
   return (
     <Dialog open={!!path} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="flex h-[85vh] w-[92vw] max-w-[1400px] sm:max-w-[1400px] flex-col gap-0 overflow-hidden p-0">
-        <DialogHeader className="shrink-0 border-b px-4 py-3">
-          <DialogTitle className="truncate font-mono text-sm">{name}</DialogTitle>
+      <DialogContent
+        showCloseButton={false}
+        className="flex h-[85vh] w-[92vw] max-w-[1400px] sm:max-w-[1400px] flex-col gap-0 overflow-hidden p-0"
+      >
+        <DialogHeader className="flex shrink-0 flex-row items-center gap-2 space-y-0 border-b px-4 py-3">
+          <DialogTitle className="min-w-0 flex-1 truncate font-mono text-sm">
+            {name}
+          </DialogTitle>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className="shrink-0 text-muted-foreground hover:text-foreground"
+            aria-label={t(($) => $.files.preview_close_aria)}
+            onClick={onClose}
+          >
+            <X className="size-4" />
+          </Button>
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-auto">{path ? renderBody() : null}</div>
       </DialogContent>

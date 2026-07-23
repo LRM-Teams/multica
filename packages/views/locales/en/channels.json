@@ -152,7 +152,8 @@
     "preview_truncated": "Large file — showing a partial preview",
     "preview_error": "Failed to load file content",
     "preview_empty": "(empty file)",
-    "preview_too_large": "File too large to preview"
+    "preview_too_large": "File too large to preview",
+    "preview_close_aria": "Close preview"
   },
   "settings": {
     "title": "Group settings",

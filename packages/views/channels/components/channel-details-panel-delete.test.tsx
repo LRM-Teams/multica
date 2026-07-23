@@ -68,11 +68,15 @@ function renderPanel(
           ]}
           wsId="ws-1"
           projectId={null}
-          projectBound={false}
           onChangeProject={() => {}}
-          projectEditable={false}
-          canManage
-          isArchived={false}
+          access={{
+            canManage: true,
+            canInvite: false,
+            isArchived: false,
+            hideSettingsTab: false,
+            projectBound: false,
+            projectEditable: false,
+          }}
           onMuteToggle={() => {}}
           onShare={() => {}}
           onArchive={onArchive}
@@ -106,7 +110,7 @@ describe("ChannelDetailsPanel danger zone (LRM-239 / LRM-494)", () => {
   });
 
   it("hides delete when onDelete is omitted (member / creator-member)", () => {
-    renderPanel({ onDelete: undefined, canManage: true });
+    renderPanel({ onDelete: undefined });
     expect(screen.getByTestId("channel-details-stop-all")).toBeTruthy();
     expect(screen.queryByTestId("channel-details-delete")).not.toBeInTheDocument();
   });
@@ -128,7 +132,16 @@ describe("ChannelDetailsPanel danger zone (LRM-239 / LRM-494)", () => {
 
   it("keeps archive disabled copy on archived channels in Settings", async () => {
     const user = userEvent.setup();
-    renderPanel({ isArchived: true });
+    renderPanel({
+      access: {
+        canManage: true,
+        canInvite: false,
+        isArchived: true,
+        hideSettingsTab: false,
+        projectBound: false,
+        projectEditable: false,
+      },
+    });
     await user.click(screen.getByTestId("channel-details-settings"));
     expect(screen.queryByRole("button", { name: /Archive this channel/i })).not.toBeInTheDocument();
     expect(screen.getByText(/already archived/i)).toBeInTheDocument();

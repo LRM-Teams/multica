@@ -20,10 +20,12 @@ import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
 import { Switch } from "@multica/ui/components/ui/switch";
 import { Textarea } from "@multica/ui/components/ui/textarea";
-import { cn } from "@multica/ui/lib/utils";
-import { ActorAvatar } from "../../common/actor-avatar";
 import { ConversationSidePanelShell } from "../../common/conversation-side-panel-shell";
 import { useT } from "../../i18n";
+import { ChannelDetailsDetailRow } from "./channel-details-detail-row";
+import { ChannelDetailsHeroAvatar } from "./channel-details-hero-avatar";
+import { ChannelDetailsMemberStack } from "./channel-details-member-stack";
+import { ChannelDetailsSectionCard } from "./channel-details-section-card";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelProjectSettingsPanel } from "./channel-project-settings-panel";
 import { isConversationMuted } from "./conversation-muted";
@@ -37,7 +39,20 @@ import { isConversationMuted } from "./conversation-muted";
 export type ChannelDetailsTab = "about" | "members" | "files" | "settings";
 type DetailsView = "home" | ChannelDetailsTab | "about-edit" | "avatar";
 
-const MEMBER_STACK_MAX = 5;
+/** Caps capability / pending flags so the panel avoids many boolean props (react-doctor). */
+export type ChannelDetailsAccess = {
+  canManage: boolean;
+  canInvite: boolean;
+  isArchived: boolean;
+  hideSettingsTab: boolean;
+  projectBound: boolean;
+  projectEditable: boolean;
+  stopAllDisabled?: boolean;
+  mutePending?: boolean;
+  renamePending?: boolean;
+  descriptionPending?: boolean;
+  larkPending?: boolean;
+};
 
 function resolveInitialView(
   initialTab: ChannelDetailsTab,
@@ -48,193 +63,31 @@ function resolveInitialView(
   return initialTab;
 }
 
-function ChannelHeroAvatar({ name }: { name: string }) {
-  const glyph = (name.trim().charAt(0) || "#").toUpperCase();
-  return (
-    <span
-      data-testid="channel-details-hero-avatar"
-      className="flex size-16 shrink-0 items-center justify-center rounded-full border border-border bg-muted text-xl font-bold text-foreground"
-      aria-hidden="true"
-    >
-      {glyph}
-    </span>
-  );
-}
-
-function MemberAvatarStack({
-  members,
-  overflowText,
-}: {
-  members: ChannelMemberBrief[];
-  overflowText: (count: number) => string;
-}) {
-  const visible = members.slice(0, MEMBER_STACK_MAX);
-  const overflow = Math.max(0, members.length - visible.length);
-  const overlap = 10;
-  return (
-    <span className="inline-flex items-center" data-testid="channel-details-member-stack">
-      {visible.map((m, i) => (
-        <span
-          key={`${m.member_type}:${m.member_id}`}
-          style={{ marginLeft: i === 0 ? 0 : -overlap }}
-          className="inline-flex rounded-full ring-2 ring-card"
-        >
-          <ActorAvatar
-            actorType={m.member_type === "agent" ? "agent" : "member"}
-            actorId={m.member_id}
-            size={28}
-            avatarUrlHint={m.avatar_url}
-            profileLink={false}
-          />
-        </span>
-      ))}
-      {overflow > 0 ? (
-        <span
-          style={{ marginLeft: -overlap }}
-          className="inline-flex size-7 items-center justify-center rounded-full bg-muted text-[10px] font-semibold text-muted-foreground ring-2 ring-card"
-        >
-          {overflowText(overflow)}
-        </span>
-      ) : null}
-    </span>
-  );
-}
-
-function SectionCard({
-  title,
-  children,
-}: {
-  title?: string;
-  children: ReactNode;
-}) {
-  return (
-    <section className="overflow-hidden rounded-xl border border-border bg-card">
-      {title ? (
-        <p className="border-b border-border px-3.5 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-          {title}
-        </p>
-      ) : null}
-      <div className="divide-y divide-border">{children}</div>
-    </section>
-  );
-}
-
-function DetailRow({
-  icon,
-  label,
-  value,
-  onClick,
-  disabled,
-  trailing,
-  destructive,
-  testId,
-}: {
-  icon: ReactNode;
-  label: string;
-  value?: string;
-  onClick?: () => void;
-  disabled?: boolean;
-  trailing?: ReactNode;
-  destructive?: boolean;
-  testId?: string;
-}) {
-  const content = (
-    <>
-      <span
-        className={cn(
-          "flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground",
-          destructive && "bg-destructive/10 text-destructive",
-          disabled && "opacity-50",
-        )}
-      >
-        {icon}
-      </span>
-      <span className="min-w-0 flex-1 text-left">
-        <span
-          className={cn(
-            "block truncate text-sm font-medium",
-            destructive ? "text-destructive" : "text-foreground",
-            disabled && "text-muted-foreground",
-          )}
-        >
-          {label}
-        </span>
-      </span>
-      {value ? (
-        <span className="shrink-0 text-sm text-muted-foreground">{value}</span>
-      ) : null}
-      {trailing}
-      {onClick && !trailing ? (
-        <ChevronRight
-          className={cn("size-4 shrink-0 text-muted-foreground", disabled && "opacity-40")}
-          aria-hidden="true"
-        />
-      ) : null}
-    </>
-  );
-
-  if (!onClick) {
-    return (
-      <div
-        data-testid={testId}
-        className="flex min-h-11 items-center gap-3 px-3.5 py-2.5"
-      >
-        {content}
-      </div>
-    );
-  }
-
-  return (
-    <button
-      type="button"
-      data-testid={testId}
-      disabled={disabled}
-      onClick={onClick}
-      className={cn(
-        "flex min-h-11 w-full items-center gap-3 px-3.5 py-2.5 text-left transition-colors",
-        disabled ? "cursor-not-allowed opacity-60" : "hover:bg-muted/60",
-      )}
-    >
-      {content}
-    </button>
-  );
-}
-
 export function ChannelDetailsPanel({
   channel,
   members,
   wsId,
   projectId,
-  projectBound,
   onChangeProject,
-  projectEditable,
   projectDisabledReason,
-  canManage,
+  access,
   manageDisabledReason,
-  isArchived,
   onMuteToggle,
-  mutePending,
   onShare: _onShare,
   onArchive,
   onDelete,
   onRename,
-  renamePending,
   onUpdateDescription,
-  descriptionPending,
   onUpdateLarkChatId,
-  larkPending,
   membersBody,
   initialTab = "about",
-  hideSettingsTab = false,
   onClose,
   variant = "panel",
   portalContainer,
   onOpenSearch,
   onInvite,
   onStopAllAgents,
-  stopAllDisabled,
   stopAllDisabledReason,
-  canInvite = false,
   notifyPrefLabel,
   onOpenNotificationPrefs,
 }: {
@@ -242,16 +95,11 @@ export function ChannelDetailsPanel({
   members: ChannelMemberBrief[];
   wsId: string;
   projectId: string | null;
-  /** Whether a project is currently bound — drives the header subtitle. */
-  projectBound: boolean;
   onChangeProject: (projectId: string | null) => void;
-  projectEditable: boolean;
   projectDisabledReason?: string;
-  canManage: boolean;
+  access: ChannelDetailsAccess;
   manageDisabledReason?: string;
-  isArchived: boolean;
   onMuteToggle: () => void;
-  mutePending?: boolean;
   onShare: () => void;
   onArchive: () => void;
   /**
@@ -260,14 +108,10 @@ export function ChannelDetailsPanel({
    */
   onDelete?: () => void;
   onRename: (name: string) => void;
-  renamePending?: boolean;
   onUpdateDescription?: (description: string | null) => void;
-  descriptionPending?: boolean;
   onUpdateLarkChatId: (larkChatId: string | null) => void;
-  larkPending?: boolean;
   membersBody: ReactNode;
   initialTab?: ChannelDetailsTab;
-  hideSettingsTab?: boolean;
   onClose: () => void;
   variant?: "panel" | "page";
   /**
@@ -280,26 +124,37 @@ export function ChannelDetailsPanel({
   onOpenSearch?: () => void;
   onInvite?: () => void;
   onStopAllAgents?: () => void;
-  stopAllDisabled?: boolean;
   stopAllDisabledReason?: string;
-  canInvite?: boolean;
   /** LRM-494 — live preference label from workspace notify settings (LRM-414). */
   notifyPrefLabel: string;
   onOpenNotificationPrefs?: () => void;
 }) {
   const { t } = useT("channels");
+  const {
+    canManage,
+    canInvite,
+    isArchived,
+    hideSettingsTab,
+    stopAllDisabled,
+    mutePending,
+    renamePending,
+    descriptionPending,
+    larkPending,
+    projectBound,
+    projectEditable,
+  } = access;
 
-  // Local UI state only — parent remounts this panel via key when channel/tab
-  // opener changes, so these are not kept in sync through effects.
-  // react-doctor-disable-next-line react-doctor/no-derived-state -- intentional editable draft + active view; remount keyed by channel/initialTab
+  // Parent remounts via key when channel/tab opener changes — drafts/view
+  // reset with that remount (not synced through effects).
+  // react-doctor-disable-next-line react-doctor/no-derived-state -- remount keyed by channel/initialTab
   const [view, setView] = useState<DetailsView>(() =>
     resolveInitialView(initialTab, hideSettingsTab),
   );
-  // react-doctor-disable-next-line react-doctor/no-derived-useState, react-doctor/no-derived-state -- rename/lark drafts; remount keyed by channel.id
+  // react-doctor-disable-next-line react-doctor/no-derived-useState, react-doctor/no-derived-state -- remount keyed by channel.id
   const [nameDraft, setNameDraft] = useState(channel.name);
-  // react-doctor-disable-next-line react-doctor/no-derived-useState, react-doctor/no-derived-state -- rename/lark drafts; remount keyed by channel.id
+  // react-doctor-disable-next-line react-doctor/no-derived-useState, react-doctor/no-derived-state -- remount keyed by channel.id
   const [descriptionDraft, setDescriptionDraft] = useState(channel.description ?? "");
-  // react-doctor-disable-next-line react-doctor/no-derived-useState, react-doctor/no-derived-state -- rename/lark drafts; remount keyed by channel.id
+  // react-doctor-disable-next-line react-doctor/no-derived-useState, react-doctor/no-derived-state -- remount keyed by channel.id
   const [larkDraft, setLarkDraft] = useState(channel.lark_chat_id ?? "");
 
   const muted = isConversationMuted(channel);
@@ -353,7 +208,7 @@ export function ChannelDetailsPanel({
       onClose={onClose}
       closeAriaLabel={t(($) => $.details.close_aria)}
       doneLabel={variant === "page" ? t(($) => $.details.done) : undefined}
-      // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- shell leading slot; remount keyed by channel/tab
+      // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- shell title slot; remount keyed by channel/tab
       leading={leading}
     >
       {view === "home" ? (
@@ -363,7 +218,7 @@ export function ChannelDetailsPanel({
         >
           <section className="rounded-xl border border-border bg-card p-4">
             <div className="flex items-start gap-3">
-              <ChannelHeroAvatar name={channel.name} />
+              <ChannelDetailsHeroAvatar name={channel.name} />
               <div className="min-w-0 flex-1">
                 <p className="truncate text-base font-bold tracking-tight">
                   <span className="text-muted-foreground">#</span>
@@ -390,7 +245,7 @@ export function ChannelDetailsPanel({
             data-testid="channel-details-members-row"
             className="flex w-full items-center gap-3 rounded-xl border border-border bg-card px-3.5 py-3 text-left transition-colors hover:bg-muted/60"
           >
-            <MemberAvatarStack
+            <ChannelDetailsMemberStack
               members={members}
               overflowText={(count) => t(($) => $.details.member_overflow, { count })}
             />
@@ -400,25 +255,25 @@ export function ChannelDetailsPanel({
             <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
           </button>
 
-          <SectionCard title={t(($) => $.details.section_about)}>
-            <DetailRow
+          <ChannelDetailsSectionCard title={t(($) => $.details.section_about)}>
+            <ChannelDetailsDetailRow
               icon={<Tag className="size-4" />}
               label={t(($) => $.details.row_name_description)}
               onClick={() => setView("about-edit")}
               disabled={!settingsEditable}
               testId="channel-details-about-name"
             />
-            <DetailRow
+            <ChannelDetailsDetailRow
               icon={<ImageIcon className="size-4" />}
               label={t(($) => $.details.row_avatar)}
               onClick={() => setView("avatar")}
               disabled={!settingsEditable}
               testId="channel-details-about-avatar"
             />
-          </SectionCard>
+          </ChannelDetailsSectionCard>
 
-          <SectionCard title={t(($) => $.details.section_notifications)}>
-            <DetailRow
+          <ChannelDetailsSectionCard title={t(($) => $.details.section_notifications)}>
+            <ChannelDetailsDetailRow
               icon={<Bell className="size-4" />}
               label={t(($) => $.details.row_notify_pref)}
               value={notifyPrefLabel}
@@ -432,9 +287,10 @@ export function ChannelDetailsPanel({
               }
               testId="channel-details-notify-pref"
             />
-            <DetailRow
+            <ChannelDetailsDetailRow
               icon={<VolumeX className="size-4" />}
               label={t(($) => $.details.row_mute)}
+              // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- Switch is the row control, not a memoized child tree
               trailing={
                 <Switch
                   checked={muted}
@@ -450,10 +306,10 @@ export function ChannelDetailsPanel({
               }
               testId="channel-details-mute"
             />
-          </SectionCard>
+          </ChannelDetailsSectionCard>
 
-          <SectionCard title={t(($) => $.details.section_content)}>
-            <DetailRow
+          <ChannelDetailsSectionCard title={t(($) => $.details.section_content)}>
+            <ChannelDetailsDetailRow
               icon={<Search className="size-4" />}
               label={t(($) => $.details.row_search)}
               onClick={() => {
@@ -462,13 +318,13 @@ export function ChannelDetailsPanel({
               }}
               testId="channel-details-search"
             />
-            <DetailRow
+            <ChannelDetailsDetailRow
               icon={<FileText className="size-4" />}
               label={t(($) => $.details.row_files)}
               onClick={() => setView("files")}
               testId="channel-details-files"
             />
-            <DetailRow
+            <ChannelDetailsDetailRow
               icon={<UserPlus className="size-4" />}
               label={t(($) => $.details.row_invite)}
               onClick={() => {
@@ -479,22 +335,22 @@ export function ChannelDetailsPanel({
               disabled={!canInvite || !onInvite}
               testId="channel-details-invite"
             />
-          </SectionCard>
+          </ChannelDetailsSectionCard>
 
           {!hideSettingsTab ? (
-            <SectionCard title={t(($) => $.details.section_system)}>
-              <DetailRow
+            <ChannelDetailsSectionCard title={t(($) => $.details.section_system)}>
+              <ChannelDetailsDetailRow
                 icon={<Settings className="size-4" />}
                 label={t(($) => $.details.row_settings)}
                 onClick={() => setView("settings")}
                 testId="channel-details-settings"
               />
-            </SectionCard>
+            </ChannelDetailsSectionCard>
           ) : null}
 
-          <SectionCard>
+          <ChannelDetailsSectionCard>
             {onStopAllAgents ? (
-              <DetailRow
+              <ChannelDetailsDetailRow
                 icon={<Square className="size-3.5 fill-current" />}
                 label={t(($) => $.stop_all_agents.menu_label)}
                 onClick={() => {
@@ -508,7 +364,7 @@ export function ChannelDetailsPanel({
               />
             ) : null}
             {onDelete ? (
-              <DetailRow
+              <ChannelDetailsDetailRow
                 icon={<Trash2 className="size-4" />}
                 label={t(($) => $.details.delete_group)}
                 onClick={() => {
@@ -519,7 +375,7 @@ export function ChannelDetailsPanel({
                 testId="channel-details-delete"
               />
             ) : null}
-          </SectionCard>
+          </ChannelDetailsSectionCard>
 
           {stopAllDisabled && stopAllDisabledReason && onStopAllAgents ? (
             <p className="px-1 text-xs text-muted-foreground">{stopAllDisabledReason}</p>
@@ -606,7 +462,7 @@ export function ChannelDetailsPanel({
       {view === "avatar" ? (
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
           <div className="flex flex-col items-center gap-3 rounded-xl border border-border bg-card p-6">
-            <ChannelHeroAvatar name={channel.name} />
+            <ChannelDetailsHeroAvatar name={channel.name} />
             <p className="text-center text-sm text-muted-foreground">
               {t(($) => $.details.avatar_pending)}
             </p>

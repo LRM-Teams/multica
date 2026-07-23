@@ -648,9 +648,9 @@ export function ChannelsPage({
   const wsId = useWorkspaceId();
   const wsPaths = useWorkspacePaths();
   const { searchParams, replace, getShareableUrl, push } = useNavigation();
-  const notifyPrefQuery = useQuery(notificationPreferenceOptions(wsId));
+  const { data: notifyPrefData } = useQuery(notificationPreferenceOptions(wsId));
   const channelNotifyPrefLabel =
-    notifyPrefQuery.data?.preferences?.system_notifications === "muted"
+    notifyPrefData?.preferences?.system_notifications === "muted"
       ? t(($) => $.details.notify_pref_off)
       : t(($) => $.details.notify_pref_all);
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
@@ -2970,15 +2970,23 @@ export function ChannelsPage({
         members: channelMembers,
         wsId,
         projectId: channelProjectId || null,
-        projectBound: !!channelProjectId,
         onChangeProject: (projectId: string | null) => setChannelProject.mutate(projectId),
-        projectEditable,
         projectDisabledReason,
-        canManage: canArchive(active),
+        access: {
+          canManage: canArchive(active),
+          canInvite: !isActiveSystemChannel && canArchive(active),
+          isArchived: isActiveArchived,
+          hideSettingsTab: isActiveSystemChannel,
+          projectBound: !!channelProjectId,
+          projectEditable,
+          mutePending: muteChannel.isPending,
+          renamePending: updateChannel.isPending,
+          descriptionPending: updateChannel.isPending,
+          larkPending: updateChannel.isPending,
+          stopAllDisabled: !hasStoppableChannelTasks || isStoppingAllChannelTasks,
+        },
         manageDisabledReason,
-        isArchived: isActiveArchived,
         onMuteToggle: () => handleToggleChannelMute(active),
-        mutePending: muteChannel.isPending,
         onShare: () => {
           void handleShare();
         },
@@ -3009,7 +3017,6 @@ export function ChannelsPage({
             },
           );
         },
-        renamePending: updateChannel.isPending,
         onUpdateDescription: (description: string | null) => {
           updateChannel.mutate(
             { channelId: active.id, description },
@@ -3019,7 +3026,6 @@ export function ChannelsPage({
             },
           );
         },
-        descriptionPending: updateChannel.isPending,
         onUpdateLarkChatId: (larkChatId: string | null) => {
           updateChannel.mutate(
             { channelId: active.id, lark_chat_id: larkChatId },
@@ -3029,9 +3035,7 @@ export function ChannelsPage({
             },
           );
         },
-        larkPending: updateChannel.isPending,
         membersBody: memberPanelBody,
-        hideSettingsTab: isActiveSystemChannel,
         onClose: closeChannelDetails,
         onOpenSearch: () => setConvSearchOpen(true),
         onInvite: isActiveSystemChannel
@@ -3039,13 +3043,11 @@ export function ChannelsPage({
           : () => {
               openAddPeopleDialog();
             },
-        canInvite: !isActiveSystemChannel && canArchive(active),
         onStopAllAgents: canPostInChannel
           ? () => {
               openStopAllAgentsConfirm();
             }
           : undefined,
-        stopAllDisabled: !hasStoppableChannelTasks || isStoppingAllChannelTasks,
         stopAllDisabledReason: hasStoppableChannelTasks
           ? undefined
           : t(($) => $.stop_all_agents.empty_tooltip),

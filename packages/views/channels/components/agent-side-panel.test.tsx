@@ -57,20 +57,24 @@ vi.mock("../../agents/components/agent-profile-actions", () => ({
   ),
 }));
 
-vi.mock("../../agents/components/inline-edit-popover", () => ({
-  InlineEditPopover: ({
-    children,
+vi.mock("../../agents/components/inline-field-editor", () => ({
+  InlineFieldEditor: ({
+    displayValue,
+    value,
+    emptyLabel,
   }: {
-    children: (p: { onClick: () => void }) => React.ReactNode;
-  }) => <>{children({ onClick: () => {} })}</>,
+    displayValue?: string;
+    value: string;
+    emptyLabel?: string;
+  }) => (
+    <div data-testid="inline-field-editor-stub">
+      {(displayValue ?? value) || emptyLabel}
+    </div>
+  ),
 }));
 
 vi.mock("../../agents/components/agent-xp-burst", () => ({
   AgentXpBurst: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-}));
-
-vi.mock("../../agents/components/char-counter", () => ({
-  CharCounter: () => null,
 }));
 
 vi.mock("./agent-files-panel", () => ({

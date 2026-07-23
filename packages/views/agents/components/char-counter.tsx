@@ -3,7 +3,7 @@
 import { useT } from "../../i18n";
 
 // Soft warn at 90 % of the cap, hard error past it. Shared between the
-// description editor (modal) and the create-agent dialog so both surfaces
+// description inline editor and the create-agent dialog so both surfaces
 // read the same way. Renders a single inline line so it can sit under any
 // textarea / input without disturbing surrounding spacing.
 export function CharCounter({ length, max }: { length: number; max: number }) {

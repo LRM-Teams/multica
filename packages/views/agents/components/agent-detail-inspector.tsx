@@ -2,10 +2,9 @@
 
 import {
   useRef,
-  useState,
   type ReactNode,
 } from "react";
-import { Camera, Loader2, Pencil } from "lucide-react";
+import { Camera, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import type {
   Agent,
@@ -18,9 +17,7 @@ import {
 } from "@multica/core/agents";
 import { api } from "@multica/core/api";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
-import { isImeComposing } from "@multica/core/utils";
 import { useTimeAgo } from "../../i18n";
-import { Button } from "@multica/ui/components/ui/button";
 import {
   formatActorHandleLabel,
   resolveActorDisplayName,
@@ -28,16 +25,8 @@ import {
 } from "@multica/core/identity";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@multica/ui/components/ui/dialog";
 import { PropRow } from "../../common/prop-row";
-import { InlineEditPopover } from "./inline-edit-popover";
-import { CharCounter } from "./char-counter";
+import { InlineFieldEditor } from "./inline-field-editor";
 import { useT } from "../../i18n";
 import { ConcurrencyPicker } from "./inspector/concurrency-picker";
 import { ModelPicker } from "./inspector/model-picker";
@@ -394,167 +383,37 @@ function NameAndDescription({
 
   return (
     <div className="flex flex-col gap-1">
-      <InlineEditPopover
+      <InlineFieldEditor
         value={displayName}
-        onSave={(v) => onUpdate({ display_name: v.trim() })}
+        displayValue={displayName}
         kind="input"
-        title={t(($) => $.inspector.display_name_title)}
+        ariaLabel={t(($) => $.inspector.display_name_title)}
         placeholder={t(($) => $.inspector.display_name_placeholder)}
-        validate={(v) => (v.trim().length > 0 ? null : t(($) => $.inspector.display_name_required))}
-      >
-        {(triggerProps) => (
-          <button
-            type="button"
-            {...triggerProps}
-            className="group -mx-1 inline-flex items-center gap-1.5 self-start rounded px-1 text-left text-base font-semibold leading-tight transition-colors hover:bg-accent/50"
-          >
-            <span>{displayName}</span>
-            <Pencil className="h-3 w-3 shrink-0 text-muted-foreground/0 transition-colors group-hover:text-muted-foreground" />
-          </button>
-        )}
-      </InlineEditPopover>
+        validate={(v) =>
+          v.trim().length > 0 ? null : t(($) => $.inspector.display_name_required)
+        }
+        onSave={(v) => onUpdate({ display_name: v.trim() })}
+        triggerClassName="w-auto self-start text-base font-semibold leading-tight"
+        pencilClassName="size-3 text-muted-foreground/0 group-hover:text-muted-foreground"
+      />
       {handleLabel ? (
         <span className="text-xs leading-tight text-muted-foreground">{handleLabel}</span>
       ) : null}
 
-      <DescriptionEditor
+      <InlineFieldEditor
         value={agent.description ?? ""}
+        kind="textarea"
+        ariaLabel={t(($) => $.inspector.edit_description_title)}
+        placeholder={t(($) => $.inspector.description_placeholder)}
+        emptyLabel={t(($) => $.inspector.no_description_placeholder)}
+        maxLength={AGENT_DESCRIPTION_MAX_LENGTH}
         onSave={(v) => onUpdate({ description: v })}
+        triggerClassName="w-auto self-start text-xs leading-relaxed"
+        readClassName="text-muted-foreground"
+        pencilClassName="size-3 text-muted-foreground/0 group-hover:text-muted-foreground"
       />
     </div>
   );
 }
-
-// Description editor — modal because the description benefits from a roomy
-// composition surface (the inline popover was 288 px wide × 3 rows, too
-// cramped to read or edit anything substantial). Name stays in the inline
-// popover above: a single line is the right shape for it.
-//
-// The editor body is split into a child component that mounts only while
-// the dialog is open. That way the draft state is initialised from `value`
-// at mount time and never reset by an external update mid-edit — closing
-// the dialog unmounts the body, reopening starts fresh with the latest
-// value. This is the React-recommended replacement for the
-// `useEffect(reset, [value])` anti-pattern (see "You Might Not Need an
-// Effect" — Resetting state with a key / mount).
-function DescriptionEditor({
-  value,
-  onSave,
-}: {
-  value: string;
-  onSave: (next: string) => Promise<void>;
-}) {
-  const { t } = useT("agents");
-  const [open, setOpen] = useState(false);
-
-  return (
-    <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="group -mx-1 inline-flex items-start gap-1.5 self-start rounded px-1 text-left text-xs leading-relaxed transition-colors hover:bg-accent/50"
-      >
-        {value ? (
-          <span className="text-muted-foreground">{value}</span>
-        ) : (
-          <span className="italic text-muted-foreground/50">{t(($) => $.inspector.no_description_placeholder)}</span>
-        )}
-        <Pencil className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground/0 transition-colors group-hover:text-muted-foreground" />
-      </button>
-
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="sm:max-w-lg">
-          {open && (
-            <DescriptionEditorBody
-              initialValue={value}
-              onSave={onSave}
-              onClose={() => setOpen(false)}
-            />
-          )}
-        </DialogContent>
-      </Dialog>
-    </>
-  );
-}
-
-function DescriptionEditorBody({
-  initialValue,
-  onSave,
-  onClose,
-}: {
-  initialValue: string;
-  onSave: (next: string) => Promise<void>;
-  onClose: () => void;
-}) {
-  const { t } = useT("agents");
-  const [draft, setDraft] = useState(initialValue);
-  const [saving, setSaving] = useState(false);
-
-  const length = [...draft].length;
-  const overLimit = length > AGENT_DESCRIPTION_MAX_LENGTH;
-  const dirty = draft !== initialValue;
-
-  const commit = async () => {
-    if (overLimit || !dirty) return;
-    setSaving(true);
-    try {
-      await onSave(draft);
-      onClose();
-    } catch {
-      // toast handled by parent's onUpdate
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <>
-      <DialogHeader>
-        <DialogTitle>{t(($) => $.inspector.edit_description_title)}</DialogTitle>
-      </DialogHeader>
-      <div className="flex flex-col gap-2">
-        <textarea
-          autoFocus
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder={t(($) => $.inspector.description_placeholder)}
-          rows={6}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") {
-              onClose();
-              return;
-            }
-            if (isImeComposing(e)) return;
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-              e.preventDefault();
-              void commit();
-            }
-          }}
-          className="w-full resize-none rounded-md border bg-transparent px-3 py-2 text-sm outline-none focus-visible:border-input"
-        />
-        <CharCounter length={length} max={AGENT_DESCRIPTION_MAX_LENGTH} />
-      </div>
-      <DialogFooter>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onClose}
-          disabled={saving}
-        >
-          {t(($) => $.inspector.cancel)}
-        </Button>
-        <Button
-          size="sm"
-          onClick={() => void commit()}
-          disabled={saving || overLimit || !dirty}
-        >
-          {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : t(($) => $.inspector.save)}
-        </Button>
-      </DialogFooter>
-    </>
-  );
-}
-
-
 
 

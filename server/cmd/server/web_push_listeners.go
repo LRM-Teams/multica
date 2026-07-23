@@ -18,12 +18,13 @@ import (
 )
 
 type webPushInboxPayload struct {
-	Slug     string `json:"slug"`
-	ItemID   string `json:"item_id"`
-	IssueKey string `json:"issue_key"`
-	Title    string `json:"title"`
-	Body     string `json:"body"`
-	URL      string `json:"url"`
+	Slug      string `json:"slug"`
+	ItemID    string `json:"item_id"`
+	ChannelID string `json:"channel_id,omitempty"`
+	IssueKey  string `json:"issue_key,omitempty"`
+	Title     string `json:"title"`
+	Body      string `json:"body"`
+	URL       string `json:"url"`
 }
 
 type webPushChannelInfo struct {
@@ -227,11 +228,12 @@ func buildWebPushChannelPayload(ctx context.Context, queries *db.Queries, msg ha
 		title = "#" + info.Name
 	}
 	return webPushInboxPayload{
-		Slug:   slug,
-		ItemID: msg.ID,
-		Title:  title,
-		Body:   notificationBody(msg.AuthorName, msg.Content),
-		URL:    webPushAbsoluteURL(cfg, path),
+		Slug:      slug,
+		ItemID:    msg.ID,
+		ChannelID: msg.ChannelID,
+		Title:     title,
+		Body:      notificationBody(msg.AuthorName, msg.Content),
+		URL:       webPushAbsoluteURL(cfg, path),
 	}
 }
 

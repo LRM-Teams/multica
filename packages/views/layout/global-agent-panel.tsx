@@ -11,6 +11,10 @@ import {
 } from "@multica/core/agents/stores";
 import type { AgentPanelIdentitySnapshot } from "@multica/core/agents";
 import { ResolvedAgentSidePanel } from "../common/resolved-agent-side-panel";
+import {
+  CONVERSATION_SIDE_PANEL_DEFAULT_PX,
+  readConversationSidePanelWidth,
+} from "../common/conversation-side-panel-width";
 import { useNavigation } from "../navigation";
 
 /**
@@ -26,10 +30,12 @@ import { useNavigation } from "../navigation";
  *
  * Visual parity (Iris #447 finalization): this must read as the SAME profile
  * panel as the docked one in channels/DM, not a distinct modal drawer. So it
- * slides in from the right at the docked panel's width (ResizablePanel
- * `defaultSize=440` in channels-page), reuses the same AgentSidePanel
- * header+tabs, and uses a TRANSPARENT backdrop (click-outside dismiss, no
- * dimming scrim) so the "overlay vs push" difference stays invisible.
+ * slides in from the right at the docked panel width (shared
+ * `multica:conversation-side-panel-width` / default 360px; overlay is not
+ * drag-resized — LRM-481 restores drag on the docked channel slot), reuses
+ * the same AgentSidePanel header+tabs, and uses a TRANSPARENT backdrop
+ * (click-outside dismiss, no dimming scrim) so the "overlay vs push"
+ * difference stays invisible.
  *
  * LRM-292: opens on selectedAgentId; panel body always from GetAgent via
  * ResolvedAgentSidePanel — ListAgents is not consulted.
@@ -70,6 +76,13 @@ export function GlobalAgentPanel() {
   const panelAgentId = selectedAgentId ?? displayedId;
   const panelSnapshot = selectedAgentId ? identitySnapshot : displayedSnapshot;
 
+  // Match docked Profile width (including a remembered drag width). Overlay
+  // itself is not drag-resized — that lives on ConversationSideDock.
+  const [panelWidth, setPanelWidth] = useState(CONVERSATION_SIDE_PANEL_DEFAULT_PX);
+  useEffect(() => {
+    if (open) setPanelWidth(readConversationSidePanelWidth());
+  }, [open]);
+
   return (
     <Dialog.Root
       open={open}
@@ -86,7 +99,10 @@ export function GlobalAgentPanel() {
             data-starting-style / data-ending-style drive the enter/exit
             translate on real mount/unmount, so it animates without a manual
             rAF two-frame dance. */}
-        <Dialog.Popup className="fixed inset-y-0 right-0 z-50 w-[440px] max-w-[90vw] border-l border-border/30 bg-background shadow-2xl transition-transform duration-200 ease-in-out data-starting-style:translate-x-full data-ending-style:translate-x-full">
+        <Dialog.Popup
+          className="fixed inset-y-0 right-0 z-50 max-w-[90vw] border-l border-border/30 bg-background shadow-2xl transition-transform duration-200 ease-in-out data-starting-style:translate-x-full data-ending-style:translate-x-full"
+          style={{ width: panelWidth }}
+        >
           {panelAgentId ? (
             <ResolvedAgentSidePanel
               agentId={panelAgentId}

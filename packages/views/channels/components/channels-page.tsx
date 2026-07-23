@@ -230,6 +230,7 @@ import {
 import { buildPinnedConversationEntries } from "./pinned-conversations";
 import { PinnedConversationsSection } from "./pinned-conversations-section";
 import { ResolvedAgentSidePanel } from "../../common/resolved-agent-side-panel";
+import { ConversationSideDock } from "../../common/conversation-side-dock";
 import { AgentPanelProvider } from "../../common/agent-panel-context";
 import { ChannelMembersList, type MemberRoleLabel } from "./channel-members-list";
 import { ChannelMembersDialog } from "./channel-members-dialog";
@@ -3487,29 +3488,25 @@ export function ChannelsPage({
         </main>
   );
   // Desktop detail: keep the conversation tree mounted when the side panel
-  // opens/closes (LRM-400). Swapping PanelGroup ↔ plain div remounted the
-  // chat column (lost scroll/composer + stale title-button refs in tests).
-  // Flex row + optional fixed side column still fills width with no blank
-  // half-pane (the lone ResizablePanel minSize=50% bug).
+  // opens/closes (LRM-400 / LRM-388). Swapping PanelGroup ↔ plain div remounted
+  // the chat column; a lone ResizablePanel(minSize 50%) left a blank half-pane.
+  // ConversationSideDock keeps the flex row + optional dock, and restores
+  // left-edge drag resize (LRM-481) with localStorage width memory.
   const desktopSidePanel = threadPanel ?? agentPanel ?? detailsPanel;
   const detailPane = !isMobile ? (
-    <div className="flex min-h-0 min-w-0 flex-1">
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">{channelConversationPane}</div>
-      {desktopSidePanel ? (
-        <div
-          data-testid={
-            threadPanel
-              ? "thread-side-slot"
-              : agentPanel
-                ? "agent-side-slot"
-                : "channel-details-side-slot"
-          }
-          className="flex w-[360px] max-w-[min(480px,45%)] min-w-[300px] shrink-0 flex-col border-l border-border/30 bg-background"
-        >
-          {desktopSidePanel}
-        </div>
-      ) : null}
-    </div>
+    <ConversationSideDock
+      conversation={channelConversationPane}
+      sidePanel={desktopSidePanel}
+      sidePanelTestId={
+        threadPanel
+          ? "thread-side-slot"
+          : agentPanel
+            ? "agent-side-slot"
+            : desktopSidePanel
+              ? "channel-details-side-slot"
+              : undefined
+      }
+    />
   ) : (
     threadPanel ?? channelConversationPane
   );

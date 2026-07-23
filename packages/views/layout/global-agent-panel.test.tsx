@@ -100,13 +100,13 @@ describe("GlobalAgentPanel", () => {
     expect(panel).toHaveAttribute("data-agent-id", "group-manager-1");
   });
 
-  it("keeps the panel at the docked panel width (440px) for one-panel parity", () => {
+  it("keeps the panel at the docked panel width for one-panel parity", () => {
     selectedAgentId = "agent-1";
     render(<GlobalAgentPanel />);
 
     // The Base UI Popup is portaled to the body; the panel is its direct child,
-    // so the Popup carries the docked-parity width class.
+    // so the Popup carries the docked-parity width (default 360px / remembered).
     const popup = screen.getByTestId("agent-side-panel").parentElement;
-    expect(popup?.className).toContain("w-[440px]");
+    expect(popup?.style.width).toBe("360px");
   });
 });

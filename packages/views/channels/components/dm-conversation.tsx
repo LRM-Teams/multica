@@ -43,11 +43,6 @@ import {
   TooltipTrigger,
 } from "@multica/ui/components/ui/tooltip";
 import {
-  ResizableHandle,
-  ResizablePanel,
-  ResizablePanelGroup,
-} from "@multica/ui/components/ui/resizable";
-import {
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -60,6 +55,7 @@ import { ActorAvatar } from "../../common/actor-avatar";
 import { ConversationAgentActivityLine } from "../../agents/components/conversation-agent-activity-line";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { AgentPanelProvider, useOpenAgentPanel } from "../../common/agent-panel-context";
+import { ConversationSideDock } from "../../common/conversation-side-dock";
 import { useT } from "../../i18n/use-t";
 import { composePayloadKey } from "../hooks/use-compose-send-intent";
 import { useComposerSend } from "../hooks/use-composer-send";
@@ -1434,26 +1430,17 @@ function DmChannelConversation({
 
   if (!isMobile) {
     return withProvider(
-      <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
-        <ResizablePanel id="dm-conversation" minSize="50%" className="flex min-h-0 flex-col">
-          {conversationPane}
-        </ResizablePanel>
-        {detailPanel ? (
-          <>
-            <ResizableHandle />
-            <ResizablePanel
-              id="dm-thread"
-              defaultSize={440}
-              minSize={360}
-              maxSize={640}
-              groupResizeBehavior="preserve-pixel-size"
-              className="border-l border-border/30 bg-background"
-            >
-              {detailPanel}
-            </ResizablePanel>
-          </>
-        ) : null}
-      </ResizablePanelGroup>,
+      <ConversationSideDock
+        conversation={conversationPane}
+        sidePanel={detailPanel}
+        sidePanelTestId={
+          threadPanel
+            ? "dm-thread-side-slot"
+            : agentPanel
+              ? "dm-agent-side-slot"
+              : undefined
+        }
+      />,
     );
   }
 

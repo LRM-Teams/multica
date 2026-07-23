@@ -45,7 +45,8 @@ speaker `userId`, dialogue `roundId`, and the `paragraph` final-turn marker:
   database.
 - [x] Ran `go vet` for the integration, service, handler, and server wiring
   packages.
-- [ ] Commit, push, and open an independent ready PR stacked on
+- [x] Committed, pushed, and opened independent ready PR
+  [#1091](https://github.com/LRM-Teams/multica/pull/1091), stacked on
   [#1090](https://github.com/LRM-Teams/multica/pull/1090).
 
 ## Ordering rule

@@ -12,10 +12,11 @@ interface AgentProfileMessageButtonProps {
 }
 
 /**
- * LRM-283 / LRM-351 · Profile → Message CTA between the agent header and
- * Profile/Activity/Files tabs. Uses the shared primary Button tokens so light
- * and dark both keep ≥4.5:1 label/icon contrast (no Slack light-only hex fills).
- * Offline agents stay tappable; only the in-flight create/find DM blocks re-clicks.
+ * LRM-283 / LRM-360 · Profile → Message CTA between the agent header and
+ * Profile/Activity/Files tabs. Slack-style outline (1px border + background
+ * fill) so light and dark both keep ≥4.5:1 label/icon contrast without a
+ * solid primary block (corrects LRM-351 overshoot). Offline agents stay
+ * tappable; only the in-flight create/find DM blocks re-clicks.
  */
 export function AgentProfileMessageButton({
   agentId,
@@ -28,13 +29,13 @@ export function AgentProfileMessageButton({
     <div className={cn("shrink-0 px-4 pb-3", className)}>
       <Button
         type="button"
-        variant="default"
+        variant="outline"
         size="lg"
         data-testid="agent-profile-message-button"
         aria-busy={isPending}
         disabled={isPending}
         onClick={() => void openDM({ peer_type: "agent", peer_id: agentId })}
-        className="h-9 w-full gap-2 rounded-md font-bold disabled:cursor-wait disabled:opacity-100"
+        className="h-9 w-full gap-1.5 rounded-md border-border bg-background font-semibold text-foreground hover:bg-muted dark:border-input dark:bg-background dark:hover:bg-muted disabled:cursor-wait disabled:opacity-100"
       >
         {isPending ? (
           <>

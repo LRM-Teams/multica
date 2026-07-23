@@ -5063,7 +5063,11 @@ func (h *Handler) buildChannelThreadContinuationPrompt(ctx context.Context, ch C
 	messages = channelContextMessagesExcludingTrigger(messages, trigger.ID)
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "You are a participant in a thread inside Multica group chat #%s. A follow-up arrived without @-mentioning you.\n", ch.Name)
+	if ch.Kind == "dm" {
+		b.WriteString("You are a participant in a thread inside a Multica DM. A follow-up arrived without @-mentioning you.\n")
+	} else {
+		fmt.Fprintf(&b, "You are a participant in a thread inside Multica group chat #%s. A follow-up arrived without @-mentioning you.\n", ch.Name)
+	}
 	b.WriteString("This is participant delivery, not a must-reply directed mention: reply only when you add a concrete decision, owner, answer, or completed action; otherwise finish without visible output.\n")
 	b.WriteString("Use ONLY the thread context below for this decision. Do not assume older channel context unless you explicitly fetch/search it.\n")
 	b.WriteString(channelOutputContractInstruction)
@@ -5079,6 +5083,9 @@ func (h *Handler) buildChannelThreadContinuationPrompt(ctx context.Context, ch C
 	}
 	b.WriteString("\nDo not @-mention anyone unless a concrete action or human escalation is required.\n\n")
 	fmt.Fprintf(&b, "Reaction target message id: %s\n", trigger.ID)
+	if target := h.agentMessageTargetForPrompt(ctx, ch, trigger); target != "" {
+		fmt.Fprintf(&b, "Message target for chat transport: %s\n", target)
+	}
 	fmt.Fprintf(&b, "Your agent name: %s\n", agentDisplayName(agent))
 	if strings.TrimSpace(agent.Description) != "" {
 		fmt.Fprintf(&b, "Your agent description: %s\n", strings.TrimSpace(agent.Description))

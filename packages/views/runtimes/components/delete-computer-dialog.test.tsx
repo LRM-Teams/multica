@@ -9,7 +9,6 @@ import enCommon from "../../locales/en/common.json";
 import enRuntimes from "../../locales/en/runtimes.json";
 import enAgents from "../../locales/en/agents.json";
 import { DeleteComputerDialog } from "./delete-computer-dialog";
-import { parseComputerDeleteConflict } from "./delete-computer-conflict";
 import type { RuntimeMachine } from "./runtime-machines";
 
 const TEST_RESOURCES = {
@@ -145,8 +144,8 @@ function renderDialog(
           open
           onOpenChange={vi.fn()}
           machine={machine}
-          daemonId={machine.daemonId ?? "daemon-1"}
           wsId="ws-1"
+          canDelete
           onDeleted={vi.fn()}
           {...props}
         />
@@ -155,40 +154,12 @@ function renderDialog(
   );
 }
 
-describe("parseComputerDeleteConflict", () => {
-  it("maps structured 409 codes", () => {
-    const err = new ApiError("conflict", 409, "Conflict", {
-      code: "computer_has_online_runtimes",
-      error: "still online",
-    });
-    expect(parseComputerDeleteConflict(err)?.code).toBe(
-      "computer_has_online_runtimes",
-    );
-  });
-
-  it("extracts active agents for computer_has_active_agents", () => {
-    const err = new ApiError("conflict", 409, "Conflict", {
-      code: "computer_has_active_agents",
-      active_agents: [{ id: "a1", name: "Agent One" }],
-    });
-    const parsed = parseComputerDeleteConflict(err);
-    expect(parsed?.activeAgents).toHaveLength(1);
-    expect(parsed?.activeAgents[0]?.id).toBe("a1");
-  });
-
-  it("returns null for non-409", () => {
-    expect(
-      parseComputerDeleteConflict(new ApiError("nope", 500, "Error", {})),
-    ).toBeNull();
-  });
-});
-
 describe("DeleteComputerDialog", () => {
   beforeEach(() => {
     apiDeleteByDaemon.mockReset();
   });
 
-  it("calls deleteRuntimesByDaemon with daemon id + runtime mode", async () => {
+  it("calls deleteRuntimesByDaemon once with daemon id + mode (not N× row delete)", async () => {
     apiDeleteByDaemon.mockResolvedValue({
       status: "ok",
       daemon_id: "daemon-1",
@@ -198,11 +169,10 @@ describe("DeleteComputerDialog", () => {
     const onDeleted = vi.fn();
     renderDialog({ onDeleted });
 
-    fireEvent.click(
-      screen.getByRole("button", { name: /delete computer/i }),
-    );
+    fireEvent.click(screen.getByTestId("delete-computer-confirm"));
 
     await waitFor(() => {
+      expect(apiDeleteByDaemon).toHaveBeenCalledTimes(1);
       expect(apiDeleteByDaemon).toHaveBeenCalledWith({
         daemonId: "daemon-1",
         runtimeMode: "local",
@@ -220,15 +190,17 @@ describe("DeleteComputerDialog", () => {
     );
     renderDialog();
 
-    fireEvent.click(
-      screen.getByRole("button", { name: /delete computer/i }),
-    );
+    fireEvent.click(screen.getByTestId("delete-computer-confirm"));
 
     await waitFor(() => {
-      expect(
-        screen.getByText(/active tasks still running/i),
-      ).toBeTruthy();
+      expect(screen.getByText(/active tasks still running/i)).toBeTruthy();
     });
     expect(apiDeleteByDaemon).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks machines without daemon id without calling the API", () => {
+    renderDialog({ machine: makeMachine({ daemonId: null }) });
+    expect(screen.getByText(/no daemon id/i)).toBeTruthy();
+    expect(apiDeleteByDaemon).not.toHaveBeenCalled();
   });
 });

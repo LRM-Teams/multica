@@ -1,11 +1,17 @@
 import { ApiError } from "@multica/core/api";
 import type { Agent } from "@multica/core/types";
 
+/**
+ * Structured 409 codes from DELETE /api/runtimes/by-daemon/{daemonId}
+ * (LRM-438 / #1017). FE must surface these explicitly — never fall back to
+ * N× per-runtime DELETE (LRM-238).
+ */
 export type ComputerDeleteConflictCode =
   | "computer_has_online_runtimes"
   | "computer_has_active_agents"
   | "computer_has_active_squads"
-  | "computer_has_active_tasks";
+  | "computer_has_active_tasks"
+  | "missing_daemon_id";
 
 export interface ComputerDeleteConflict {
   code: ComputerDeleteConflictCode;
@@ -18,6 +24,7 @@ const CONFLICT_CODES = new Set<string>([
   "computer_has_active_agents",
   "computer_has_active_squads",
   "computer_has_active_tasks",
+  "missing_daemon_id",
 ]);
 
 export function parseComputerDeleteConflict(
@@ -53,6 +60,14 @@ export function parseComputerDeleteConflict(
   return {
     code: code as ComputerDeleteConflictCode,
     activeAgents,
+    message,
+  };
+}
+
+export function missingDaemonIdConflict(message: string): ComputerDeleteConflict {
+  return {
+    code: "missing_daemon_id",
+    activeAgents: [],
     message,
   };
 }

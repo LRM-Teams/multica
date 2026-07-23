@@ -93,6 +93,10 @@
       "blocked_tasks": {
         "title": "활성 작업이 남아 있습니다",
         "description": "「{{name}}」에 아직 활성 작업이 있습니다. 취소하거나 완료될 때까지 기다린 후 다시 시도하세요."
+      },
+      "blocked_missing_daemon": {
+        "title": "이 컴퓨터를 삭제할 수 없습니다",
+        "description": "「{{name}}」에 daemon id가 없어 일괄 삭제를 사용할 수 없습니다. 행 단위 삭제로 대체하지 않습니다."
       }
     }
   },

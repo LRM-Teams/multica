@@ -93,6 +93,10 @@
       "blocked_tasks": {
         "title": "Active tasks still running",
         "description": "\"{{name}}\" still has active tasks. Cancel or wait for them to finish, then try again."
+      },
+      "blocked_missing_daemon": {
+        "title": "Cannot delete this computer",
+        "description": "\"{{name}}\" has no daemon id, so one-click delete is unavailable. Per-runtime delete is not used as a substitute."
       }
     }
   },

@@ -639,7 +639,7 @@ function MachineDetail({
   }
 
   const headerActions =
-    actions || machine.daemonId ? (
+    actions || machine.runtimes.length > 0 ? (
       <div className="flex flex-wrap items-center justify-end gap-2">
         {actions}
         <MachineDeleteControl

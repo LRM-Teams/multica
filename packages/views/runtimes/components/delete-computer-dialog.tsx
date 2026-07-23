@@ -4,6 +4,7 @@ import { useMemo, useRef, useState } from "react";
 import { Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
+import type { Agent } from "@multica/core/types";
 import { useAuthStore } from "@multica/core/auth";
 import { useDeleteRuntimesByDaemon } from "@multica/core/runtimes/mutations";
 import { memberListOptions } from "@multica/core/workspace/queries";
@@ -22,6 +23,7 @@ import { AppLink } from "../../navigation/app-link";
 import { useT } from "../../i18n";
 import type { RuntimeMachine } from "./runtime-machines";
 import {
+  missingDaemonIdConflict,
   parseComputerDeleteConflict,
   type ComputerDeleteConflict,
 } from "./delete-computer-conflict";
@@ -29,6 +31,10 @@ import {
 /**
  * Machine-header control for Computer one-click delete (LRM-439).
  * Calls `DELETE /api/runtimes/by-daemon/{daemonId}` — never N× row DELETE.
+ *
+ * Always visible when the machine has runtimes (LRM-238: do not silently
+ * hide for online/agents; those refuse with an explicit dialog after confirm).
+ * Ownership still gates the destructive confirm path.
  */
 export function MachineDeleteControl({
   machine,
@@ -45,7 +51,7 @@ export function MachineDeleteControl({
   const [open, setOpen] = useState(false);
 
   const canDelete = useMemo(() => {
-    if (!machine.daemonId || machine.runtimes.length === 0) return false;
+    if (machine.runtimes.length === 0) return false;
     const currentMember = user
       ? members.find((m) => m.user_id === user.id)
       : null;
@@ -55,9 +61,9 @@ export function MachineDeleteControl({
     if (isAdmin) return true;
     if (!user) return false;
     return machine.runtimes.every((r) => r.owner_id === user.id);
-  }, [machine.daemonId, machine.runtimes, members, user]);
+  }, [machine.runtimes, members, user]);
 
-  if (!canDelete || !machine.daemonId) return null;
+  if (machine.runtimes.length === 0) return null;
 
   return (
     <>
@@ -67,6 +73,13 @@ export function MachineDeleteControl({
         size="sm"
         className="gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
         onClick={() => setOpen(true)}
+        data-testid="delete-computer-button"
+        aria-label={t(($) => $.machine.delete_computer.button)}
+        title={
+          canDelete
+            ? undefined
+            : t(($) => $.list.delete_permission_hint)
+        }
       >
         <Trash2 className="h-3.5 w-3.5" aria-hidden />
         {t(($) => $.machine.delete_computer.button)}
@@ -75,8 +88,8 @@ export function MachineDeleteControl({
         open={open}
         onOpenChange={setOpen}
         machine={machine}
-        daemonId={machine.daemonId}
         wsId={wsId}
+        canDelete={canDelete}
         onDeleted={() => {
           setOpen(false);
           onDeleted?.();
@@ -90,8 +103,8 @@ export interface DeleteComputerDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   machine: RuntimeMachine;
-  daemonId: string;
   wsId: string;
+  canDelete: boolean;
   onDeleted: () => void;
 }
 
@@ -99,8 +112,8 @@ export function DeleteComputerDialog({
   open,
   onOpenChange,
   machine,
-  daemonId,
   wsId,
+  canDelete,
   onDeleted,
 }: DeleteComputerDialogProps) {
   const { t } = useT("runtimes");
@@ -108,22 +121,46 @@ export function DeleteComputerDialog({
   const [submitting, setSubmitting] = useState(false);
   const [conflict, setConflict] = useState<ComputerDeleteConflict | null>(null);
 
-  const prevOpenRef = useRef(open);
+  // Seed closed so mount-with-open=true still resets (missing daemon id).
+  const prevOpenRef = useRef(false);
   if (open !== prevOpenRef.current) {
     prevOpenRef.current = open;
     if (open) {
       setSubmitting(false);
-      setConflict(null);
+      setConflict(
+        machine.daemonId
+          ? null
+          : missingDaemonIdConflict(
+              t(($) => $.machine.delete_computer.blocked_missing_daemon.description, {
+                name: machine.title,
+              }),
+            ),
+      );
     }
   }
 
   const deleteMutation = useDeleteRuntimesByDaemon(wsId);
 
   const handleConfirm = async () => {
+    if (!canDelete) {
+      toast.error(t(($) => $.list.delete_permission_hint));
+      return;
+    }
+    if (!machine.daemonId) {
+      setConflict(
+        missingDaemonIdConflict(
+          t(($) => $.machine.delete_computer.blocked_missing_daemon.description, {
+            name: machine.title,
+          }),
+        ),
+      );
+      return;
+    }
+
     setSubmitting(true);
     try {
       const result = await deleteMutation.mutateAsync({
-        daemonId,
+        daemonId: machine.daemonId,
         runtimeMode: machine.mode,
       });
       toast.success(
@@ -164,6 +201,7 @@ export function DeleteComputerDialog({
             : "w-[calc(100vw-2rem)] !max-w-[440px] gap-0 overflow-hidden rounded-lg p-0"
         }
         onClick={(e) => e.stopPropagation()}
+        data-testid="delete-computer-dialog"
       >
         {conflict ? (
           <BlockedBody
@@ -202,6 +240,7 @@ export function DeleteComputerDialog({
                   className="w-full sm:w-auto"
                   onClick={() => void handleConfirm()}
                   disabled={submitting}
+                  data-testid="delete-computer-confirm"
                 >
                   {submitting
                     ? t(($) => $.machine.delete_computer.confirm.submitting)
@@ -262,6 +301,13 @@ function BlockedBody({
         { name: machineTitle },
       );
       break;
+    case "missing_daemon_id":
+      title = t(($) => $.machine.delete_computer.blocked_missing_daemon.title);
+      description = t(
+        ($) => $.machine.delete_computer.blocked_missing_daemon.description,
+        { name: machineTitle },
+      );
+      break;
   }
 
   return (
@@ -276,44 +322,7 @@ function BlockedBody({
 
         {conflict.code === "computer_has_active_agents" &&
           conflict.activeAgents.length > 0 && (
-            <div className="mt-3 overflow-hidden rounded-md border divide-y">
-              {conflict.activeAgents.map((agent) => {
-                const presentation = resolveActorIdentityPresentation(
-                  agent,
-                  agent.id,
-                );
-                return (
-                  <AppLink
-                    key={agent.id}
-                    href={agentHref(agent.id)}
-                    className="flex items-center justify-between gap-3 px-3 py-2.5 text-xs hover:bg-muted/40"
-                  >
-                    <span className="inline-flex min-w-0 items-center gap-2">
-                      <ActorAvatar
-                        actorType="agent"
-                        actorId={agent.id}
-                        size={20}
-                        enableHoverCard
-                      />
-                      <ActorIdentityRow
-                        displayName={presentation.displayName}
-                        handle={presentation.handle}
-                        showHandle={presentation.showHandleLabel}
-                        primaryClassName="truncate font-medium text-foreground"
-                        secondaryClassName="truncate text-[11px] text-muted-foreground"
-                      />
-                    </span>
-                    <span className="shrink-0 text-primary">
-                      {t(
-                        ($) =>
-                          $.machine.delete_computer.blocked_by_agents
-                            .view_agent,
-                      )}
-                    </span>
-                  </AppLink>
-                );
-              })}
-            </div>
+            <AgentList agents={conflict.activeAgents} agentHref={agentHref} />
           )}
       </div>
       <div className="border-t bg-muted/25 px-5 py-3">
@@ -324,5 +333,48 @@ function BlockedBody({
         </div>
       </div>
     </>
+  );
+}
+
+function AgentList({
+  agents,
+  agentHref,
+}: {
+  agents: Agent[];
+  agentHref: (agentId: string) => string;
+}) {
+  const { t } = useT("runtimes");
+  return (
+    <div className="mt-3 overflow-hidden rounded-md border divide-y">
+      {agents.map((agent) => {
+        const presentation = resolveActorIdentityPresentation(agent, agent.id);
+        return (
+          <AppLink
+            key={agent.id}
+            href={agentHref(agent.id)}
+            className="flex items-center justify-between gap-3 px-3 py-2.5 text-xs hover:bg-muted/40"
+          >
+            <span className="inline-flex min-w-0 items-center gap-2">
+              <ActorAvatar
+                actorType="agent"
+                actorId={agent.id}
+                size={20}
+                enableHoverCard
+              />
+              <ActorIdentityRow
+                displayName={presentation.displayName}
+                handle={presentation.handle}
+                showHandle={presentation.showHandleLabel}
+                primaryClassName="truncate font-medium text-foreground"
+                secondaryClassName="truncate text-[11px] text-muted-foreground"
+              />
+            </span>
+            <span className="shrink-0 text-primary">
+              {t(($) => $.machine.delete_computer.blocked_by_agents.view_agent)}
+            </span>
+          </AppLink>
+        );
+      })}
+    </div>
   );
 }

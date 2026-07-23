@@ -89,6 +89,10 @@
       "blocked_tasks": {
         "title": "アクティブなタスクが残っています",
         "description": "「{{name}}」にはまだアクティブなタスクがあります。キャンセルするか完了を待ってから再試行してください。"
+      },
+      "blocked_missing_daemon": {
+        "title": "このコンピュータは削除できません",
+        "description": "「{{name}}」には daemon id がないため、一括削除は利用できません。行ごとの削除で代替しません。"
       }
     }
   },

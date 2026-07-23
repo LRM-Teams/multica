@@ -19,4 +19,5 @@ PostgreSQL or RTC provider details.
 - [x] Prove context/database failures are not mislabeled as provider failures.
 - [x] Run all `server/internal/service/voicecall` tests, the real migration
   store test in an isolated PostgreSQL database, `go vet`, and diff checks.
-- [ ] Commit, push, and open an independent ready PR stacked on #1079.
+- [x] Commit, push, and open independent ready PR
+  [#1081](https://github.com/LRM-Teams/multica/pull/1081), stacked on #1079.

@@ -270,15 +270,17 @@ function formatDate(value: string): string {
  *
  * Permission split (the one real risk — no privilege widening): the runtime
  * pickers are editable when `canEditRuntime` is true. For a per-group manager
- * (Beckham) that is ALWAYS true — group managers are shared team
- * infrastructure and the backend `canUpdateAgent` gate lets any member edit
- * these five runtime fields (identity + lifecycle via `canManageAgent` stays
- * owner/admin only). This preserves the old Config-tab behavior. For every other agent it
- * falls back to `useAgentPermissions(agent).canEdit.allowed`, i.e. owner /
- * workspace-admin only — so an ordinary non-owner viewer keeps a READ-ONLY
- * Profile (the inspector pickers self-render static when `canEdit=false`).
- * Identity fields stay read-only for everyone here (name/description/
- * instructions editing lives on the owner/admin-gated detail page).
+ * (Beckham) that is ALWAYS true for Runtime/Model/Thinking — group managers
+ * are shared team infrastructure and the backend `canUpdateAgent` gate lets
+ * any member edit those fields (identity + lifecycle via `canManageAgent`
+ * stays owner/admin only). Visibility is the exception: the API locks
+ * group managers to `visibility=channel`, so the picker is read-only for
+ * them (LRM-387). For every other agent, editability falls back to
+ * `useAgentPermissions(agent).canEdit.allowed`, i.e. owner / workspace-admin
+ * only — so an ordinary non-owner viewer keeps a READ-ONLY Profile (the
+ * inspector pickers self-render static when `canEdit=false`). Identity
+ * fields stay read-only for everyone here (name/description/instructions
+ * editing lives on the owner/admin-gated detail page).
  */
 function AgentProfileTabContent({
   agent,
@@ -298,6 +300,11 @@ function AgentProfileTabContent({
 
   const isGroupManager = agent.managed_role === "group_manager";
   const canEditRuntime = isGroupManager ? true : canEdit.allowed;
+  // Backend rejects non-channel visibility for group managers
+  // (`group manager visibility must stay channel`). Offering Workspace/
+  // Personal in the picker looks broken — clicks 400 and roll back. Keep
+  // runtime/model/thinking editable; lock Visibility to the read-only badge.
+  const canEditVisibility = canEditRuntime && !isGroupManager;
 
   const selectedRuntime = runtimes.find((r) => r.id === agent.runtime_id) ?? null;
   const isOnline = selectedRuntime?.status === "online";
@@ -378,7 +385,7 @@ function AgentProfileTabContent({
             <VisibilityPicker
               value={agent.visibility}
               homeChannelId={agent.home_channel_id ?? null}
-              canEdit={canEditRuntime}
+              canEdit={canEditVisibility}
               onChange={(next) =>
                 update({
                   visibility: next.visibility,

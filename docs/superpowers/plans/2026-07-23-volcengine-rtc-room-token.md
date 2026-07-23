@@ -16,7 +16,8 @@ Beckham's audio without receiving the RTC AppKey.
   `version + 24-byte AppID + base64(length-prefixed payload and HMAC-SHA256)`.
 - Publishing expands to audio, video, and data privilege codes in the official
   format; subscribing uses privilege code `4`.
-- RTC IDs are 1-128 characters from `A-Z`, `a-z`, `0-9`, `@`, `_`, or `.`.
+- RTC IDs are 1-128 characters from `A-Z`, `a-z`, `0-9`, `@`, `_`, `-`, or
+  `.`.
 - This product path rejects wildcard rooms and caps token lifetime at two
   hours.
 
@@ -25,7 +26,7 @@ Sources:
 - Volcengine/BytePlus RTC token documentation:
   <https://docs.byteplus.com/en/docs/byteplus-rtc/docs-70121>
 - RTC ID naming contract:
-  <https://docs.byteplus.com/en/docs/byteplus-rtc/docs-70114>
+  <https://www.volcengine.com/docs/6348/70105>
 - Official `RTC_Token.zip`, SHA-256
   `d8c3f18b6c70c7c662a4d4f6114f1ed2bf4828069d0a6a7893055e0f4b9ef0e7`.
 - Official AIGC demo token implementation:
@@ -40,6 +41,7 @@ Sources:
 - [x] Commit, push, and open independent ready PR
   [#1037](https://github.com/LRM-Teams/multica/pull/1037), stacked on RTC client
   PR #1033.
+- [x] Accept the current provider's documented hyphenated RoomId/UserId form.
 
 ## Verification
 
@@ -51,5 +53,7 @@ Sources:
 - IDs outside the current provider alphabet, wildcard rooms, lifetimes over two
   hours, subsecond lifetimes, and unavailable cryptographic entropy fail before
   a token is returned.
+- Hyphenated RoomId/UserId values pass validation, matching the current
+  Volcengine naming contract.
 - `go test ./internal/integrations/volcenginertc -count=1`,
   `go vet ./internal/integrations/volcenginertc`, and `git diff --check` pass.

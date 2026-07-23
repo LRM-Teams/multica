@@ -104,9 +104,9 @@ func TestRoomTokenSignerRejectsInvalidConfigurationAndIdentity(t *testing.T) {
 	}{
 		{name: "empty room", userID: "user_1"},
 		{name: "wildcard room", roomID: "*", userID: "user_1"},
-		{name: "room punctuation", roomID: "room-1", userID: "user_1"},
+		{name: "room punctuation", roomID: "room/1", userID: "user_1"},
 		{name: "empty user", roomID: "room_1"},
-		{name: "user punctuation", roomID: "room_1", userID: "user-1"},
+		{name: "user punctuation", roomID: "room_1", userID: "user:1"},
 		{name: "long room", roomID: strings.Repeat("r", 129), userID: "user_1"},
 		{name: "long user", roomID: "room_1", userID: strings.Repeat("u", 129)},
 	} {
@@ -115,6 +115,21 @@ func TestRoomTokenSignerRejectsInvalidConfigurationAndIdentity(t *testing.T) {
 				t.Fatal("invalid identity was accepted")
 			}
 		})
+	}
+}
+
+func TestRoomTokenSignerAcceptsHyphenatedIdentity(t *testing.T) {
+	signer, err := NewRoomTokenSigner(RoomTokenConfig{
+		AppID:  "123456781234567812345678",
+		AppKey: "key",
+		TTL:    time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("new room token signer: %v", err)
+	}
+
+	if _, err := signer.Sign("voice-call-1", "member-1"); err != nil {
+		t.Fatalf("sign hyphenated identity: %v", err)
 	}
 }
 

@@ -20,7 +20,8 @@ topology and stop reporting a removed service as unhealthy.
 - [x] Validated static and rendered self-host configuration, actionlint v1.7.7,
   `git diff --check`, and confirmed the workflow/Compose files contain no
   `db-bridge-executor-multica` or `BRIDGE_MULTICA_UPSTREAM_URL` reference.
-- [ ] Push the branch and open a ready-for-review PR into `dev`.
+- [x] Pushed `fix/deploy-obsolete-bridge-executor` and opened ready-for-review
+  PR #957 into `dev`: <https://github.com/LRM-Teams/multica/pull/957>.
 
 ## Boundaries
 

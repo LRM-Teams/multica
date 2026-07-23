@@ -284,7 +284,7 @@
     "dialog_confirm": "すべて停止"
   },
   "composer": {
-    "placeholder": "必要なことを入力してください…  @エージェント名 で返信を促します。",
+    "placeholder": "#{{name}} にメッセージ",
     "attach_aria": "添付",
     "mention_aria": "エージェントをメンション",
     "send": "送信",

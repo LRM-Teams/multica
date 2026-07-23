@@ -284,7 +284,7 @@
     "dialog_confirm": "停止全部 Agent"
   },
   "composer": {
-    "placeholder": "描述你需要什么帮助...  @ 智能体名称会触发它回复。",
+    "placeholder": "发消息给 #{{name}}",
     "attach_aria": "附件",
     "mention_aria": "提及智能体",
     "send": "发送",

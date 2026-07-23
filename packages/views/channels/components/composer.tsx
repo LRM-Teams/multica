@@ -110,8 +110,10 @@ export function Composer({
         ) : null}
         <div
           className={cn(
-            "composer-editor-scroll min-h-16 overflow-y-auto px-4 pt-3 overscroll-contain",
-            isMobile ? "max-h-[28dvh]" : "max-h-40",
+            // LRM-491: shorter empty min-height so a one-line Slack-style
+            // placeholder is not propped up by a 64px box (was min-h-16).
+            "composer-editor-scroll overflow-y-auto px-4 pt-3 overscroll-contain",
+            isMobile ? "min-h-11 max-h-[28dvh]" : "min-h-12 max-h-40",
           )}
           data-slot="composer-editor-scroll"
         >

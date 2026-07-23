@@ -89,7 +89,8 @@ describe("ConversationUnreadAffordance", () => {
     // The `@` glyph is the primary, colour-blind-safe cue (A6); emphasis colour secondary.
     const pill = getByText("@2");
     // Mention accent is brand blue now (red is reserved for errors only, #1).
-    expect(pill).toHaveClass("bg-brand");
+    expect(pill).toHaveClass("bg-brand-solid");
+    expect(pill).toHaveClass("text-brand-solid-foreground");
     expect(pill).not.toHaveClass("bg-destructive");
     expect(pill).toHaveAttribute("aria-label", "You were mentioned");
     // Only @N shows — the plain unread count (5) is NOT stacked alongside it.
@@ -122,7 +123,8 @@ describe("ConversationUnreadAffordance", () => {
     // A direct @ surfaces the pill even when muted — mute silences ambient noise,
     // not direct mentions. The ambient unread (3) is NOT shown alongside the pill.
     const pill = getByText("@2");
-    expect(pill).toHaveClass("bg-brand");
+    expect(pill).toHaveClass("bg-brand-solid");
+    expect(pill).toHaveClass("text-brand-solid-foreground");
     expect(pill).not.toHaveClass("bg-destructive");
     expect(container).not.toHaveTextContent("3");
   });
@@ -141,7 +143,7 @@ describe("ConversationUnreadAffordance", () => {
     expect(dot).toHaveClass("size-2");
     expect(dot).toHaveClass("bg-muted-foreground");
     expect(dot).not.toHaveClass("bg-primary");
-    expect(container.querySelector(".bg-brand")).toBeNull();
+    expect(container.querySelector(".bg-brand-solid")).toBeNull();
     expect(container.querySelector(".bg-destructive")).toBeNull();
   });
 

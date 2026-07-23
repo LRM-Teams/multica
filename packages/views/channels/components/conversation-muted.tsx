@@ -96,7 +96,7 @@ export function ConversationUnreadAffordance({
           render={
             <span
               aria-label={mentionLabel}
-              className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-brand px-1 text-[10px] font-semibold text-brand-foreground"
+              className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-brand-solid px-1 text-[10px] font-semibold text-brand-solid-foreground"
             />
           }
         >

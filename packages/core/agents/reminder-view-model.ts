@@ -66,6 +66,8 @@ export interface FiredReminderRow extends ReminderRow {
 export interface RawReminderAnchor {
   available: boolean;
   kind?: string;
+  /** Canonical readable anchor label from backend; `display` remains as a legacy alias. */
+  display_name?: string;
   display?: string;
   href?: string;
 }
@@ -116,8 +118,9 @@ export interface RawReminderPage {
 // stays visible, only the anchor link is dropped.
 function adaptAnchor(raw: RawReminderAnchor): ReminderAnchor {
   const kind = raw.kind;
-  if (raw.available && (kind === "channel" || kind === "thread") && raw.display && raw.href) {
-    return { available: true, kind, label: raw.display, href: raw.href };
+  const label = raw.display_name ?? raw.display;
+  if (raw.available && (kind === "channel" || kind === "thread") && label && raw.href) {
+    return { available: true, kind, label, href: raw.href };
   }
   return { available: false };
 }

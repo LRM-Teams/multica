@@ -1903,29 +1903,6 @@ export function ChannelsPage({
     });
   };
 
-  const handleStopChannelTask = useCallback(async (task: ChannelActiveTask) => {
-    if (!active?.id) return;
-    // LRM-425 / LRM-238 — authoritative id is inbox_event_id; never fall back
-    // to /api/tasks/{id}/cancel for channel wakes (that path returns 409).
-    const inboxEventId = task.inbox_event_id?.trim();
-    if (!inboxEventId) {
-      toast.error(t(($) => $.agent_status.stop_failed));
-      return;
-    }
-    setStoppingChannelTaskId(task.task_id);
-    try {
-      await api.cancelChannelInboxEvent(active.id, inboxEventId);
-      toast.success(t(($) => $.agent_status.stop_success, { name: task.agent_name }));
-      qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(active.id) });
-      qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
-      qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
-    } catch {
-      toast.error(t(($) => $.agent_status.stop_failed));
-    } finally {
-      setStoppingChannelTaskId((current) => (current === task.task_id ? null : current));
-    }
-  }, [active?.id, qc, t, wsId]);
-
   const handleStopAllChannelTasks = useCallback(async (tasks: ChannelActiveTask[]) => {
     if (!active?.id || tasks.length === 0) return;
     // LRM-425 — one bulk request; never for-in / Promise.all N× cancel.

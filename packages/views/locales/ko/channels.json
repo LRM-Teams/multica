@@ -323,6 +323,8 @@
     "voice_show_transcript": "텍스트로 보기",
     "voice_hide_transcript": "텍스트 닫기",
     "voice_transcript_label": "음성 텍스트",
+    "voice_preview": "음성 메시지",
+    "voice_preview_duration": "음성 메시지 · {{seconds}}초",
     "agent_badge": "Agent",
     "radar_badge": "Project Radar",
     "feishu_badge": "Feishu",

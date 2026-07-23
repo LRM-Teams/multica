@@ -451,6 +451,12 @@ export function DmConversationRow({
         last.content,
         resolveMentionPreview,
         last.parts,
+        {
+          formatVoice: (seconds) =>
+            seconds === null
+              ? t(($) => $.message.voice_preview)
+              : t(($) => $.message.voice_preview_duration, { seconds }),
+        },
       )
     : "";
   // Surface mentions of the viewer at full foreground weight (no bold) so an

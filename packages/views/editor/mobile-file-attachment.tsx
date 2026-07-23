@@ -157,9 +157,11 @@ export function MobileFileAttachment({
             aria-label={t(($) => $.attachment.open_file, { filename })}
             onClick={openDetail}
             className={cn(
-              "flex w-full min-h-14 max-w-full items-center gap-2.5 rounded-lg border border-border bg-background px-3 py-2.5 text-left transition-colors",
+              // LRM-359: chip surface uses muted + border tokens; filename is
+              // text-foreground (no Slack link hex — contrast ≥4.5:1 light/dark).
+              "flex w-full min-h-14 max-w-full items-center gap-2.5 rounded-lg border border-border bg-muted px-3 py-2.5 text-left text-foreground transition-colors",
               openable && !uploading
-                ? "cursor-pointer hover:bg-muted/50 active:bg-muted/70"
+                ? "cursor-pointer hover:bg-accent active:bg-accent"
                 : "cursor-default opacity-70",
             )}
           >
@@ -174,8 +176,9 @@ export function MobileFileAttachment({
             </span>
             <span className="min-w-0 flex-1">
               <span
-                className="block truncate text-[13px] font-semibold leading-tight text-[#1264a3]"
+                className="block truncate text-[13px] font-semibold leading-tight text-foreground"
                 title={filename}
+                data-testid="mobile-file-filename"
               >
                 {uploading
                   ? t(($) => $.file_card.uploading, { filename })
@@ -224,7 +227,7 @@ export function MobileFileAttachment({
             <button
               type="button"
               data-testid="mobile-file-detail-download"
-              className="shrink-0 px-3 py-2 text-[13px] font-bold text-[#1264a3] hover:bg-muted/50"
+              className="shrink-0 px-3 py-2 text-[13px] font-bold text-brand hover:bg-muted"
               onClick={runDownload}
             >
               {t(($) => $.image.download)}

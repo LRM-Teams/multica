@@ -532,9 +532,8 @@ func issueThreadBackflowContentFromParams(event string, params issueThreadSystem
 	case issueThreadCompletedEvent:
 		return fmt.Sprintf("%s completed", list)
 	default:
-		if params.PreviousStatus != "" {
-			return fmt.Sprintf("%s moved from %s to %s", list, params.PreviousStatus, params.IssueStatus)
-		}
+		// Aggregated rows may contain different previous statuses; keep the summary factual
+		// and let the expandable items carry per-issue from/to details.
 		return fmt.Sprintf("%s moved to %s", list, params.IssueStatus)
 	}
 }

@@ -34,6 +34,7 @@ const (
 type issueThreadSystemEventItem struct {
 	IssueID         string `json:"issue_id"`
 	IssueIdentifier string `json:"issue_identifier"`
+	IssueTitle      string `json:"issue_title"`
 	IssueStatus     string `json:"issue_status,omitempty"`
 	PreviousStatus  string `json:"previous_status,omitempty"`
 	OccurredAt      string `json:"occurred_at,omitempty"`
@@ -58,6 +59,7 @@ type issueThreadSystemEventItem struct {
 type issueThreadSystemEventParams struct {
 	IssueID         string                       `json:"issue_id"`
 	IssueIdentifier string                       `json:"issue_identifier"`
+	IssueTitle      string                       `json:"issue_title,omitempty"`
 	IssueStatus     string                       `json:"issue_status"`
 	PreviousStatus  string                       `json:"previous_status,omitempty"`
 	ActorID         string                       `json:"actor_id,omitempty"`
@@ -172,9 +174,11 @@ func (h *Handler) emitIssueThreadBackflowToScope(ctx context.Context, issue db.I
 
 	prefix := h.getIssuePrefix(ctx, issue.WorkspaceID)
 	identifier := fmt.Sprintf("%s-%d", prefix, issue.Number)
+	issueTitle := strings.TrimSpace(issue.Title)
 	params := issueThreadSystemEventParams{
 		IssueID:         uuidToString(issue.ID),
 		IssueIdentifier: identifier,
+		IssueTitle:      issueTitle,
 		IssueStatus:     issue.Status,
 		PreviousStatus:  previousStatus,
 		ActorID:         actorID,
@@ -220,20 +224,25 @@ func (h *Handler) emitIssueThreadBackflowToScope(ctx context.Context, issue db.I
 	}
 
 	if issueThreadEventAggregatable(event) {
-		item := issueThreadSystemEventItem{
-			IssueID:         params.IssueID,
-			IssueIdentifier: params.IssueIdentifier,
-			IssueStatus:     params.IssueStatus,
-			PreviousStatus:  params.PreviousStatus,
-			OccurredAt:      time.Now().UTC().Format(time.RFC3339),
-			TargetID:        params.TargetID,
-			TargetType:      params.TargetType,
-			TargetHandle:    params.TargetHandle,
-			TargetName:      params.TargetName,
-		}
-		params.Items = []issueThreadSystemEventItem{item}
-		if h.tryMergeIssueThreadBackflow(ctx, ch, issue, event, params, targetAgent, scope) {
-			return
+		if params.IssueTitle == "" {
+			slog.Warn("issue thread backflow: skip aggregation without issue_title", "issue", identifier, "event", event)
+		} else {
+			item := issueThreadSystemEventItem{
+				IssueID:         params.IssueID,
+				IssueIdentifier: params.IssueIdentifier,
+				IssueTitle:      params.IssueTitle,
+				IssueStatus:     params.IssueStatus,
+				PreviousStatus:  params.PreviousStatus,
+				OccurredAt:      time.Now().UTC().Format(time.RFC3339),
+				TargetID:        params.TargetID,
+				TargetType:      params.TargetType,
+				TargetHandle:    params.TargetHandle,
+				TargetName:      params.TargetName,
+			}
+			params.Items = []issueThreadSystemEventItem{item}
+			if h.tryMergeIssueThreadBackflow(ctx, ch, issue, event, params, targetAgent, scope) {
+				return
+			}
 		}
 	}
 
@@ -396,6 +405,7 @@ func issueThreadParamsFromParts(parts []protocol.MessagePart, event string) (iss
 			params.Items = []issueThreadSystemEventItem{{
 				IssueID:         params.IssueID,
 				IssueIdentifier: params.IssueIdentifier,
+				IssueTitle:      params.IssueTitle,
 				IssueStatus:     params.IssueStatus,
 				PreviousStatus:  params.PreviousStatus,
 				TargetID:        params.TargetID,
@@ -403,6 +413,9 @@ func issueThreadParamsFromParts(parts []protocol.MessagePart, event string) (iss
 				TargetHandle:    params.TargetHandle,
 				TargetName:      params.TargetName,
 			}}
+		}
+		if issueThreadEventAggregatable(event) && !issueThreadItemsHaveTitles(params.Items) {
+			return issueThreadSystemEventParams{}, false
 		}
 		return params, params.IssueID != "" || len(params.Items) > 0
 	}
@@ -430,6 +443,7 @@ func mergeIssueThreadAggregationParams(existing, incoming issueThreadSystemEvent
 		out.Items = []issueThreadSystemEventItem{{
 			IssueID:         out.IssueID,
 			IssueIdentifier: out.IssueIdentifier,
+			IssueTitle:      out.IssueTitle,
 			IssueStatus:     out.IssueStatus,
 			PreviousStatus:  out.PreviousStatus,
 			TargetID:        out.TargetID,
@@ -464,6 +478,7 @@ func mergeIssueThreadAggregationParams(existing, incoming issueThreadSystemEvent
 		latest := out.Items[len(out.Items)-1]
 		out.IssueID = latest.IssueID
 		out.IssueIdentifier = latest.IssueIdentifier
+		out.IssueTitle = latest.IssueTitle
 		out.IssueStatus = latest.IssueStatus
 		out.PreviousStatus = latest.PreviousStatus
 		out.TargetID = latest.TargetID
@@ -480,15 +495,15 @@ func issueThreadBackflowContentFromParams(event string, params issueThreadSystem
 		return issueThreadBackflowContent(event, params.IssueIdentifier, params.IssueStatus, params.PreviousStatus, params.TargetHandle)
 	}
 	if len(items) == 1 {
-		return issueThreadBackflowContent(event, items[0].IssueIdentifier, items[0].IssueStatus, items[0].PreviousStatus, items[0].TargetHandle)
+		return issueThreadBackflowContent(event, issueThreadItemContentLabel(items[0]), items[0].IssueStatus, items[0].PreviousStatus, items[0].TargetHandle)
 	}
-	ids := make([]string, 0, len(items))
+	labels := make([]string, 0, len(items))
 	for _, item := range items {
-		if item.IssueIdentifier != "" {
-			ids = append(ids, item.IssueIdentifier)
+		if label := issueThreadItemContentLabel(item); label != "" {
+			labels = append(labels, label)
 		}
 	}
-	list := strings.Join(ids, ", ")
+	list := strings.Join(labels, ", ")
 	switch event {
 	case issueThreadAssignedEvent:
 		return fmt.Sprintf("%s assignment changed", list)
@@ -500,6 +515,30 @@ func issueThreadBackflowContentFromParams(event string, params issueThreadSystem
 		}
 		return fmt.Sprintf("%s moved to %s", list, params.IssueStatus)
 	}
+}
+
+func issueThreadItemsHaveTitles(items []issueThreadSystemEventItem) bool {
+	if len(items) == 0 {
+		return false
+	}
+	for _, item := range items {
+		if strings.TrimSpace(item.IssueTitle) == "" {
+			return false
+		}
+	}
+	return true
+}
+
+func issueThreadItemContentLabel(item issueThreadSystemEventItem) string {
+	title := strings.TrimSpace(item.IssueTitle)
+	identifier := strings.TrimSpace(item.IssueIdentifier)
+	if title == "" {
+		return ""
+	}
+	if identifier == "" {
+		return title
+	}
+	return fmt.Sprintf("%s · %s", title, identifier)
 }
 
 func issueThreadBackflowParts(event string, params issueThreadSystemEventParams, content string) ([]protocol.MessagePart, error) {
@@ -518,6 +557,7 @@ func issueThreadBackflowParts(event string, params issueThreadSystemEventParams,
 		items = []issueThreadSystemEventItem{{
 			IssueID:         params.IssueID,
 			IssueIdentifier: params.IssueIdentifier,
+			IssueTitle:      params.IssueTitle,
 		}}
 	}
 	searchFrom := 0

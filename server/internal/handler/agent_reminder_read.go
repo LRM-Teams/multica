@@ -163,7 +163,7 @@ func (h *Handler) ListAgentReminders(w http.ResponseWriter, r *http.Request) {
 				&reminder.FireAt, &reminder.Status, &reminder.FiredTaskID, &reminder.SnoozeCount,
 				&reminder.CreatedAt, &reminder.UpdatedAt, &reminder.FiredAt, &reminder.Cadence,
 				&reminder.ScheduleTimezone, &reminder.CadenceNextAt, &reminder.CurrentOccurrenceID,
-				&reminder.TerminalReason); err != nil {
+				&reminder.TerminalReason, &reminder.Version); err != nil {
 				rows.Close()
 				writeError(w, http.StatusInternalServerError, "failed to load reminder history")
 				return

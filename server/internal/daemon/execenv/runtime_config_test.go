@@ -432,6 +432,44 @@ func TestChatRuntimeBriefPinsRaftThreadUnfollowDecisionBoundary(t *testing.T) {
 	}
 }
 
+func TestChatRuntimeBriefPinsReminderDecisionBoundary(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name     string
+		directed bool
+	}{
+		{name: "ambient", directed: false},
+		{name: "directed", directed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			out := buildMetaSkillContent("codex", TaskContextForEnv{
+				ChatSessionID: "chat-1",
+				Directed:      tc.directed,
+			})
+
+			for _, want := range []string{
+				"cannot close the work now because it depends on a future time or external state",
+				"CI or deployment completion",
+				"a human reply",
+				"a daemon reconnect",
+				"a scheduled recheck",
+				"a periodic report",
+				"can finish in the current run",
+				"within about one minute",
+				"briefly poll instead",
+				"anchored to the current message or thread",
+				"owned by this agent",
+			} {
+				if !strings.Contains(out, want) {
+					t.Errorf("%s chat brief missing reminder decision boundary %q\n---\n%s", tc.name, want, out)
+				}
+			}
+		})
+	}
+}
+
 func TestChatRuntimeBriefRendersReplyRequirementForDirectedRun(t *testing.T) {
 	t.Parallel()
 	ctx := TaskContextForEnv{
@@ -465,7 +503,7 @@ func TestChatRuntimeBriefRendersReplyRequirementForDirectedRun(t *testing.T) {
 	if !strings.Contains(out, "multica message send") {
 		t.Errorf("directed brief should contain CLI send instruction")
 	}
-	for _, want := range []string{"multica reminder schedule", "durable self-wake", "--repeat RULE", "weekly:days@HH:MM", "reminder schedule|list|snooze|update|cancel|log"} {
+	for _, want := range []string{"multica reminder schedule", "durable self-wake", "--repeat RULE", "--message-id <id>", "does not infer one from task text", "weekly:days@HH:MM", "reminder schedule|list|snooze|update|cancel|log"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("directed brief missing reminder capability %q", want)
 		}

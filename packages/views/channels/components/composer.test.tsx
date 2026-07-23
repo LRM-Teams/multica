@@ -216,6 +216,7 @@ describe("Composer", () => {
           {...baseProps}
           sendDisabled={false}
           leadingActions={<button type="button" aria-label="Attach">📎</button>}
+          voiceChannelId="thread-1"
           voicePlaybackScope="thread-1"
           onVoiceSend={vi.fn(() => true)}
         />,

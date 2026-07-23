@@ -716,6 +716,13 @@ func (h *Handler) queryAgentActivityEventRows(ctx context.Context, reqCtx agentA
 		      AND (
 		        aae.event_type = 'agent_status_changed'
 		        OR aae.event_type LIKE '%subagent%'
+		        OR aae.event_type IN (
+		          'reminder_scheduled',
+		          'reminder_snoozed',
+		          'reminder_updated',
+		          'reminder_cancelled',
+		          'reminder_fired'
+		        )
 		        OR (
 		          aae.event_type IN ('radar_action_executed', 'radar_action_failed')
 		          AND COALESCE(aae.reason_code, '') <> 'radar_untrusted_target'

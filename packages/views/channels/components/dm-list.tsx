@@ -166,7 +166,7 @@ export function DmList({
       </div>
     ) : dms.length === 0 ? (
       <div className="flex flex-col items-center gap-2 px-3 py-3">
-        <p className="text-xs text-muted-foreground">{t(($) => $.dm.empty)}</p>
+        <p className="text-xs text-foreground">{t(($) => $.dm.empty)}</p>
         {isMobile ? (
           <Button
             type="button"

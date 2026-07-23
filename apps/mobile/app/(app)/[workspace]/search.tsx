@@ -46,6 +46,8 @@ import {
 import { issueDetailOptions } from "@/data/queries/issues";
 import { STATUS_LABEL } from "@/lib/issue-status";
 import { projectStatusLabel } from "@/lib/project-status";
+import { useColorScheme } from "@/lib/use-color-scheme";
+import { THEME } from "@/lib/theme";
 
 const DEBOUNCE_MS = 300;
 const ISSUE_LIMIT = 20;
@@ -161,6 +163,8 @@ function SearchIssueRow({ item, query, slug }: SearchIssueRowProps) {
   // (packages/views/search/search-command.tsx:632) and the backend only
   // populates `matched_snippet` for comment matches anyway
   // (server/internal/handler/issue.go:592). Keep mobile strictly aligned.
+  const { colorScheme } = useColorScheme();
+  const mutedIcon = THEME[colorScheme].mutedForeground;
   const showSnippet =
     item.match_source === "comment" && !!item.matched_snippet;
   const statusLabel = STATUS_LABEL[item.status as IssueStatus] ?? item.status;
@@ -192,7 +196,7 @@ function SearchIssueRow({ item, query, slug }: SearchIssueRowProps) {
           <Ionicons
             name="chatbubble-outline"
             size={12}
-            color="#71717a"
+            color={mutedIcon}
             style={{ marginTop: 2 }}
           />
           <View className="flex-1">
@@ -298,6 +302,8 @@ const EMPTY_RESULTS: SearchResultsState = { issues: [], projects: [] };
 export default function SearchModal() {
   const wsId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const slug = useWorkspaceStore((s) => s.currentWorkspaceSlug);
+  const { colorScheme } = useColorScheme();
+  const mutedIcon = THEME[colorScheme].mutedForeground;
 
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResultsState>(EMPTY_RESULTS);
@@ -445,14 +451,14 @@ export default function SearchModal() {
         className="flex-1"
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
-        {/* Search input row */}
+        {/* Search input row — icons/placeholder from muted-foreground token (LRM-357) */}
         <View className="flex-row items-center gap-3 border-b border-border px-4 py-2">
-          <Ionicons name="search" size={20} color="#71717a" />
+          <Ionicons name="search" size={20} color={mutedIcon} />
           <TextInput
             value={query}
             onChangeText={handleChange}
             placeholder="Search issues and projects"
-            placeholderTextColor="#a1a1aa"
+            placeholderTextColor={mutedIcon}
             autoFocus
             autoCorrect={false}
             autoCapitalize="none"
@@ -472,7 +478,7 @@ export default function SearchModal() {
           ListEmptyComponent={
             isLoading ? (
               <View className="items-center justify-center py-12">
-                <ActivityIndicator color="#71717a" />
+                <ActivityIndicator color={mutedIcon} />
               </View>
             ) : trimmedQuery && !hasResults ? (
               <View className="items-center justify-center py-12 px-6">
@@ -491,7 +497,7 @@ export default function SearchModal() {
           ListFooterComponent={
             isLoading && hasResults ? (
               <View className="items-center justify-center py-4">
-                <ActivityIndicator color="#71717a" />
+                <ActivityIndicator color={mutedIcon} />
               </View>
             ) : null
           }

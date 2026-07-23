@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -350,6 +351,12 @@ func TestReminderOwnerLifecycleReplayFencesRuntimeMigrationAndCompactsAckedHisto
 		t.Fatalf("initial lifecycle = %+v cursors=%v err=%v", initial, cursors, err)
 	}
 	initialGeneration := initial[0].PlacementGeneration
+	quiet, quietCursors, err := fixture.handler.HandleDaemonReminderOwnerLifecycle(context.Background(), identityA, protocol.DaemonAgentLifecycleRequestPayload{
+		RuntimeCursors: map[string]int64{runtimeA: cursors[runtimeA]},
+	})
+	if err != nil || len(quiet) != 0 || quietCursors[runtimeA] != cursors[runtimeA] {
+		t.Fatalf("lifecycle without scheduled owner = %+v cursors=%v err=%v", quiet, quietCursors, err)
+	}
 	if _, err := testPool.Exec(context.Background(), `UPDATE agent SET runtime_id = $2 WHERE id = $1`, agentID, runtimeB); err != nil {
 		t.Fatal(err)
 	}
@@ -397,6 +404,71 @@ func TestReminderOwnerLifecycleReplayFencesRuntimeMigrationAndCompactsAckedHisto
 		RuntimeCursors: map[string]int64{runtimeB: 0},
 	}); err == nil {
 		t.Fatal("cross-runtime lifecycle replay accepted")
+	}
+}
+
+func TestReminderCurrentOwnerCheckpointRecoversAckedDefinitionToOccurrenceHistory(t *testing.T) {
+	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
+	agentID := fixture.agentIDs[0]
+	runtimeID := fixture.runtimeIDs[0]
+	identity := daemonws.ClientIdentity{WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
+	anchor := fixture.insertMessage(t, "user", testUserID, "acked reminder recovery anchor", nil)
+	reminderID := seedDueReminder(t, agentID, fixture.channel.ID, anchor.ID, "", "")
+
+	var generation, lifecycleCursor, projectionCursor int64
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT COALESCE(max(placement_generation), 0), COALESCE(max(seq), 0)
+		FROM agent_reminder_daemon_owner_event
+		WHERE agent_id = $1 AND runtime_id = $2`, agentID, runtimeID).Scan(&generation, &lifecycleCursor); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT COALESCE(max(seq), 0)
+		FROM agent_reminder_daemon_projection_event
+		WHERE reminder_id = $1 AND runtime_id = $2`, reminderID, runtimeID).Scan(&projectionCursor); err != nil {
+		t.Fatal(err)
+	}
+	if generation < 1 || lifecycleCursor < 1 || projectionCursor < 1 {
+		t.Fatalf("seed owner/projection generation=%d lifecycle=%d projection=%d", generation, lifecycleCursor, projectionCursor)
+	}
+	if err := fixture.handler.HandleDaemonReminderProjectionAck(context.Background(), identity, protocol.ReminderProjectionAckPayload{
+		RuntimeCursors: map[string]int64{runtimeID: projectionCursor},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var remainingProjectionRows int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*) FROM agent_reminder_daemon_projection_event
+		WHERE reminder_id = $1 AND runtime_id = $2 AND seq <= $3`,
+		reminderID, runtimeID, projectionCursor).Scan(&remainingProjectionRows); err != nil || remainingProjectionRows != 0 {
+		t.Fatalf("acked reminder projections=%d err=%v, want zero", remainingProjectionRows, err)
+	}
+
+	checkpoints, cursors, err := fixture.handler.HandleDaemonReminderOwnerLifecycle(context.Background(), identity, protocol.DaemonAgentLifecycleRequestPayload{
+		RuntimeCursors: map[string]int64{runtimeID: lifecycleCursor},
+	})
+	if err != nil || len(checkpoints) != 1 || checkpoints[0].EventType != "start" ||
+		checkpoints[0].AgentID != agentID || checkpoints[0].PlacementGeneration != generation ||
+		cursors[runtimeID] != lifecycleCursor {
+		t.Fatalf("authoritative owner checkpoint=%+v cursors=%v err=%v", checkpoints, cursors, err)
+	}
+	snapshot, err := fixture.handler.HandleDaemonReminderSnapshot(context.Background(), identity, protocol.ReminderSnapshotRequestPayload{
+		AgentID: agentID, RuntimeID: runtimeID, PlacementGeneration: generation,
+	})
+	if err != nil || snapshot.ProjectionWatermark != projectionCursor || len(snapshot.Reminders) != 1 ||
+		snapshot.Reminders[0].ReminderID != reminderID {
+		t.Fatalf("acked reminder snapshot=%+v err=%v", snapshot, err)
+	}
+	if _, err := fixture.handler.HandleDaemonReminderFireAttempt(context.Background(), identity, protocol.ReminderFireAttemptPayload{
+		AgentID: agentID, RuntimeID: runtimeID, PlacementGeneration: generation,
+		ReminderID: reminderID, Version: snapshot.Reminders[0].Version,
+		FiredAtClient: time.Now().UTC().Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	occurrences, receipts, tasks, firedEvents := reminderFireCounts(t, reminderID)
+	if occurrences != 1 || receipts != 1 || tasks != 1 || firedEvents != 1 {
+		t.Fatalf("recovered reminder history=%d/%d/%d/%d, want one each", occurrences, receipts, tasks, firedEvents)
 	}
 }
 
@@ -1439,6 +1511,45 @@ func serveReminderModernTransport(t *testing.T, router http.Handler, fixture rem
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	return rec
+}
+
+func TestAgentReminderUpsertPublishesAuthoritativeOwnerBeforeProjection(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	fixture := seedReminderModernTransportFixture(t, "agent_inbox_token")
+	previousNotifier := testHandler.ReminderNotifier
+	notifier := &recordingReminderNotifier{}
+	testHandler.ReminderNotifier = notifier
+	t.Cleanup(func() { testHandler.ReminderNotifier = previousNotifier })
+
+	scheduleRec := serveReminderModernTransport(t, reminderModernTransportRouter(), fixture, "/api/agent/reminders/schedule", map[string]any{
+		"title": "owner before projection", "delay_seconds": 300, "message_id": fixture.anchorMessageID,
+	})
+	if scheduleRec.Code != http.StatusCreated {
+		t.Fatalf("schedule status=%d body=%s", scheduleRec.Code, scheduleRec.Body.String())
+	}
+	var scheduled agentReminderResponse
+	if err := json.NewDecoder(scheduleRec.Body).Decode(&scheduled); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_reminder WHERE id = $1`, scheduled.ID)
+	})
+
+	if !reflect.DeepEqual(notifier.order, []string{"start", "projection"}) {
+		t.Fatalf("reminder notifier order=%v, want [start projection]", notifier.order)
+	}
+	if len(notifier.starts) != 1 || len(notifier.projections) != 1 {
+		t.Fatalf("reminder notifier start/projection=%d/%d", len(notifier.starts), len(notifier.projections))
+	}
+	start := notifier.starts[0]
+	projection := notifier.projections[0]
+	if start.AgentID != fixture.agentID || start.RuntimeID != projection.RuntimeID ||
+		start.PlacementGeneration < 1 || start.PlacementGeneration != projection.PlacementGeneration ||
+		projection.AgentID != fixture.agentID || projection.ReminderID != scheduled.ID || projection.Terminal {
+		t.Fatalf("owner/projection mismatch start=%+v projection=%+v", start, projection)
+	}
 }
 
 func TestAgentReminderHandlersAcceptModernAgentTransportSources(t *testing.T) {

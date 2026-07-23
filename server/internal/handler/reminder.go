@@ -898,7 +898,20 @@ func (h *Handler) reminderOwnerRuntime(ctx context.Context, reminder agentRemind
 }
 
 func (h *Handler) projectReminderUpsert(ctx context.Context, reminder agentReminder) {
-	h.publishLatestReminderProjection(ctx, reminder)
+	if h == nil || h.ReminderNotifier == nil {
+		return
+	}
+	event, err := h.latestReminderProjection(ctx, reminder.ID)
+	if err != nil {
+		return
+	}
+	// A timer projection is only meaningful after the daemon has learned the
+	// authoritative owner generation. Re-publishing the current start is
+	// idempotent for a healthy residency, repairs locally bootstrapped
+	// generation-zero residencies, and causes the daemon to request a current
+	// snapshot if the projection was already ACKed or arrives out of order.
+	h.projectReminderOwnerStart(ctx, event.AgentID, event.RuntimeID)
+	h.ReminderNotifier.NotifyReminderProjection(event.RuntimeID, event)
 }
 
 func (h *Handler) projectReminderCancel(ctx context.Context, reminder agentReminder) {
@@ -1143,25 +1156,39 @@ func (h *Handler) HandleDaemonReminderOwnerLifecycle(ctx context.Context, identi
 		if !allowed[runtimeID] || cursor < 0 {
 			return nil, nil, fmt.Errorf("agent lifecycle cursor outside daemon scope")
 		}
+		// Lifecycle replay is both an incremental event tail and an
+		// authoritative checkpoint for current timer owners. Re-sending the
+		// latest start for agents that still have scheduled Reminders lets an
+		// existing daemon repair a locally bootstrapped generation-zero
+		// residency even after its lifecycle cursor has advanced past the
+		// original start. The scheduled-owner filter avoids replaying an
+		// unbounded history of terminal placements on every heartbeat.
 		query := `
+			WITH latest AS (
+				SELECT DISTINCT ON (agent_id)
+				       event_type, agent_id, runtime_id, workspace_id, seq, placement_generation
+				FROM agent_reminder_daemon_owner_event
+				WHERE ($1 = '' OR workspace_id::text = $1) AND runtime_id::text = $2
+				ORDER BY agent_id, seq DESC
+			)
 			SELECT event_type, agent_id::text, runtime_id::text, workspace_id::text, seq, placement_generation
-			FROM agent_reminder_daemon_owner_event
-			WHERE ($1 = '' OR workspace_id::text = $1) AND runtime_id::text = $2 AND seq > $3
+			FROM (
+				SELECT event_type, agent_id, runtime_id, workspace_id, seq, placement_generation
+				FROM agent_reminder_daemon_owner_event
+				WHERE ($1 = '' OR workspace_id::text = $1) AND runtime_id::text = $2 AND seq > $3
+				UNION ALL
+				SELECT event_type, agent_id, runtime_id, workspace_id, seq, placement_generation
+				FROM latest
+				WHERE event_type = 'start' AND seq <= $3
+				  AND EXISTS (
+					SELECT 1
+					FROM agent_reminder
+					WHERE agent_reminder.agent_id = latest.agent_id
+					  AND agent_reminder.status = 'scheduled'
+				  )
+			) replay
 			ORDER BY seq ASC`
-		args := []any{identity.WorkspaceID, runtimeID, cursor}
-		if cursor == 0 {
-			query = `
-				SELECT event_type, agent_id::text, runtime_id::text, workspace_id::text, seq, placement_generation
-				FROM (
-					SELECT DISTINCT ON (agent_id) event_type, agent_id, runtime_id, workspace_id, seq, placement_generation
-					FROM agent_reminder_daemon_owner_event
-					WHERE ($1 = '' OR workspace_id::text = $1) AND runtime_id::text = $2
-					ORDER BY agent_id, seq DESC
-				) latest
-				ORDER BY seq ASC`
-			args = []any{identity.WorkspaceID, runtimeID}
-		}
-		rows, err := h.DB.Query(ctx, query, args...)
+		rows, err := h.DB.Query(ctx, query, identity.WorkspaceID, runtimeID, cursor)
 		if err != nil {
 			return nil, nil, err
 		}

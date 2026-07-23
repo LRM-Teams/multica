@@ -148,6 +148,7 @@ export function RuntimeUpdateDialog({ wsId }: RuntimeUpdateDialogProps) {
     runtimeHealth: activeRuntime?.runtime_health,
   });
   const isActive = status === "pending" || status === "running" || starting;
+  const isTerminalSuccess = status === "completed" || status === "ready_to_apply";
   const isTerminalError = status === "failed" || status === "timeout";
   const activeTargetVersion = activeRuntime
     ? runtimeTargetVersion(activeRuntime)
@@ -297,15 +298,28 @@ export function RuntimeUpdateDialog({ wsId }: RuntimeUpdateDialogProps) {
           </p>
         )}
 
-        {/* Brief, in-place feedback so the click is never a black window. Once the
-            projection flips to "updating" the prompt hands off to the global
-            surfaces; terminal states (ready_to_apply / completed) are shown there,
-            not pinned here. Only a synchronous initiate failure surfaces below. */}
+        {/* Brief, in-place feedback so the click is never a black window. In the
+            normal path the projection flips to "updating" and the prompt hands off
+            to the global surfaces before any terminal shows. The ready/completed
+            branches are a stale-projection fallback: if the poll reaches a terminal
+            status while the runtime query still reports "update_available", we show
+            the outcome here (existing copy) rather than silently reverting to
+            "Update now". "Not now" is the only dismiss — we never pin a modal. */}
         <output aria-live="polite" className="block text-xs leading-relaxed empty:hidden">
           {isActive && (
             <span className="inline-flex items-center gap-1.5 text-muted-foreground">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
               {t(($) => $.update.status[status === "pending" ? "pending" : "running"])}
+            </span>
+          )}
+          {status === "ready_to_apply" && (
+            <span className="text-warning">
+              {t(($) => $.update.status.ready_to_apply)}
+            </span>
+          )}
+          {status === "completed" && (
+            <span className="text-success">
+              {t(($) => $.update.status.completed)}
             </span>
           )}
           {isTerminalError && (
@@ -319,14 +333,19 @@ export function RuntimeUpdateDialog({ wsId }: RuntimeUpdateDialogProps) {
           <Button variant="ghost" onClick={dismiss} disabled={isActive}>
             {t(($) => $.update_prompt.later)}
           </Button>
-          <Button onClick={startUpdate} disabled={isActive}>
-            {isActive && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-            {isActive
-              ? t(($) => $.update.status.running)
-              : isTerminalError
-              ? t(($) => $.update.retry)
-              : t(($) => $.update_prompt.update_now)}
-          </Button>
+          {/* No action button at terminal success — the outcome is shown and the
+              only thing left to do is dismiss. Never revert to "Update now" (that
+              would invite a pointless re-click on an already-staged update). */}
+          {!isTerminalSuccess && (
+            <Button onClick={startUpdate} disabled={isActive}>
+              {isActive && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              {isActive
+                ? t(($) => $.update.status.running)
+                : isTerminalError
+                ? t(($) => $.update.retry)
+                : t(($) => $.update_prompt.update_now)}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

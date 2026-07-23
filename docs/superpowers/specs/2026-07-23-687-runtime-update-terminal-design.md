@@ -84,6 +84,13 @@ have both surfaces consume it.**
      still-open prompt; poll-driven failures surface on the global health state.
    - a11y: the brief feedback lives in an `<output>` (implicit `role="status"` +
      `aria-live="polite"`) so the click is never a silent black window.
+   - **Stale-projection fallback** (Barry's block): if the hidden poll reaches a
+     terminal status *while the runtime query still reports `update_available`*
+     (refresh lagged / abnormal), the prompt is still open. It then shows the
+     `ready_to_apply`/`completed` outcome (existing `update.status.*` copy) and
+     **hides the action button** — never reverting to `Update now` (which would
+     invite a pointless re-click on an already-staged update). `Not now` is the
+     only dismiss; still no pinned modal and no new key.
 
 4. **a11y** — wrap the live status line in `aria-live="polite"` (+ `role="status"`)
    so the state transition is announced; the black window is a feedback vacuum for

@@ -108,6 +108,11 @@ describe("RuntimeUpdateDialog (#687)", () => {
 
     const status = screen.getByRole("status");
     expect(within(status).getByText("Updating...")).toBeInTheDocument();
+    // Initiate success must NOT write a dismissed key — only "Later" does. The
+    // prompt hands off via the projection flip, not by dismissing itself.
+    expect(
+      window.localStorage.getItem("multica_runtime_update_prompt:ws-1:user-1"),
+    ).toBeNull();
   });
 
   it("hands off naturally: refreshing flips eligibility so the prompt self-dismisses", async () => {
@@ -128,8 +133,10 @@ describe("RuntimeUpdateDialog (#687)", () => {
     );
   });
 
-  it("treats ready_to_apply as terminal: stops the hidden poll and refreshes the projection", async () => {
+  it("stale-projection fallback: poll ready_to_apply while still update_available shows the result (no revert to Update now), stops, refreshes", async () => {
     vi.useFakeTimers();
+    // Projection stays deliberately stale (still update_available) — the prompt
+    // is still open when the poll reaches the terminal status.
     initiateUpdate.mockResolvedValue({ id: "upd-1", status: "running" });
     getUpdateResult.mockResolvedValue({ status: "ready_to_apply" });
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -145,6 +152,12 @@ describe("RuntimeUpdateDialog (#687)", () => {
       await vi.advanceTimersByTimeAsync(2000); // one poll tick -> ready_to_apply
     });
 
+    // The outcome is visible — not a silent vanish.
+    expect(
+      screen.getByText("Update is ready. It will apply when this runtime is idle."),
+    ).toBeInTheDocument();
+    // And the misleading re-click affordance is gone.
+    expect(screen.queryByText("Update now")).toBeNull();
     // Refreshed on terminal so global surfaces reflect the staged state.
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["runtimes", "ws-1"] });
 

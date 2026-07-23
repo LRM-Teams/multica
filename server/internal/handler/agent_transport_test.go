@@ -20,6 +20,178 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
+func TestAgentTransportVoiceReplyPartsRequireSameTimeline(t *testing.T) {
+	channelID := uuid.NewString()
+	otherChannelID := uuid.NewString()
+	rootID := uuid.NewString()
+	otherRootID := uuid.NewString()
+	threadRootID := rootID
+	voiceTrigger := ChannelMessageResponse{
+		ID:        rootID,
+		Type:      "user",
+		ChannelID: channelID,
+		Parts: []protocol.MessagePart{
+			{Type: protocol.MessagePartTypeText, Text: "语音问题"},
+			{Type: protocol.MessagePartTypeVoice, DurationMS: 1000},
+		},
+	}
+	threadTrigger := voiceTrigger
+	threadTrigger.ThreadRootMessageID = &threadRootID
+	agentTrigger := voiceTrigger
+	agentTrigger.Type = "agent"
+	textTrigger := voiceTrigger
+	textTrigger.Parts = []protocol.MessagePart{{Type: protocol.MessagePartTypeText, Text: "文字问题"}}
+
+	tests := []struct {
+		name    string
+		trigger ChannelMessageResponse
+		target  agentTransportTarget
+		want    bool
+	}{
+		{
+			name:    "channel main reply",
+			trigger: voiceTrigger,
+			target:  agentTransportTarget{kind: chatOutputTargetChannel, channel: ChannelResponse{ID: channelID}},
+			want:    true,
+		},
+		{
+			name:    "dm main reply",
+			trigger: voiceTrigger,
+			target:  agentTransportTarget{kind: chatOutputTargetDM, channel: ChannelResponse{ID: channelID}},
+			want:    true,
+		},
+		{
+			name:    "matching thread reply",
+			trigger: threadTrigger,
+			target:  agentTransportTarget{kind: chatOutputTargetThread, channel: ChannelResponse{ID: channelID}, threadRootMessageID: parseUUID(rootID)},
+			want:    true,
+		},
+		{
+			name:    "proactive other channel",
+			trigger: voiceTrigger,
+			target:  agentTransportTarget{kind: chatOutputTargetChannel, channel: ChannelResponse{ID: otherChannelID}},
+		},
+		{
+			name:    "different thread",
+			trigger: threadTrigger,
+			target:  agentTransportTarget{kind: chatOutputTargetThread, channel: ChannelResponse{ID: channelID}, threadRootMessageID: parseUUID(otherRootID)},
+		},
+		{
+			name:    "main trigger to its own thread",
+			trigger: voiceTrigger,
+			target:  agentTransportTarget{kind: chatOutputTargetThread, channel: ChannelResponse{ID: channelID}, threadRootMessageID: parseUUID(rootID)},
+			want:    true,
+		},
+		{
+			name:    "main trigger to unrelated thread",
+			trigger: voiceTrigger,
+			target:  agentTransportTarget{kind: chatOutputTargetThread, channel: ChannelResponse{ID: channelID}, threadRootMessageID: parseUUID(otherRootID)},
+		},
+		{
+			name:    "agent voice does not force response",
+			trigger: agentTrigger,
+			target:  agentTransportTarget{kind: chatOutputTargetChannel, channel: ChannelResponse{ID: channelID}},
+		},
+		{
+			name:    "human text does not force voice",
+			trigger: textTrigger,
+			target:  agentTransportTarget{kind: chatOutputTargetChannel, channel: ChannelResponse{ID: channelID}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := agentTransportVoiceReplyParts(tt.trigger, tt.target, "完整回答", nil)
+			if channelMessageHasVoicePart(got) != tt.want {
+				t.Fatalf("voice part=%v, want %v: %+v", channelMessageHasVoicePart(got), tt.want, got)
+			}
+			if tt.want && !agentTransportPartsHaveText(got) {
+				t.Fatalf("enforced voice reply lacks transcript text part: %+v", got)
+			}
+		})
+	}
+
+	sameTimeline := agentTransportTarget{kind: chatOutputTargetChannel, channel: ChannelResponse{ID: channelID}}
+	sticker := []protocol.MessagePart{{Type: protocol.MessagePartTypeSticker, Alt: "打招呼"}}
+	if got := agentTransportVoiceReplyParts(voiceTrigger, sameTimeline, "打招呼", sticker); channelMessageHasVoicePart(got) {
+		t.Fatalf("sticker fallback was converted to speech: %+v", got)
+	}
+	if got := agentTransportVoiceReplyParts(voiceTrigger, sameTimeline, "这是文字回答", sticker); !channelMessageHasVoicePart(got) {
+		t.Fatalf("explicit text with sticker did not preserve voice modality: %+v", got)
+	}
+	alreadyVoice := []protocol.MessagePart{
+		{Type: protocol.MessagePartTypeText, Text: "已有语音"},
+		{Type: protocol.MessagePartTypeVoice},
+	}
+	if got := agentTransportVoiceReplyParts(voiceTrigger, sameTimeline, "已有语音", alreadyVoice); len(got) != len(alreadyVoice) {
+		t.Fatalf("existing voice part duplicated: %+v", got)
+	}
+}
+
+func TestAgentTransportSendMessageEnforcesVoiceReplyForVoiceTrigger(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	trigger, err := testHandler.insertChannelMessageWithParts(
+		ctx,
+		parseUUID(channelID),
+		parseUUID(testWorkspaceID),
+		"user",
+		parseUUID(testUserID),
+		"Tester",
+		"请回答这个语音问题",
+		[]protocol.MessagePart{
+			{Type: protocol.MessagePartTypeText, Text: "请回答这个语音问题"},
+			{Type: protocol.MessagePartTypeVoice, DurationMS: 1200},
+		},
+		"multica",
+		nil,
+		pgtype.UUID{},
+		pgtype.UUID{},
+		nil,
+		0,
+	)
+	if err != nil {
+		t.Fatalf("seed voice trigger: %v", err)
+	}
+	var chatSessionID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT chat_session_id
+		FROM agent_task_queue
+		WHERE id = $1`, taskID).Scan(&chatSessionID); err != nil {
+		t.Fatalf("load task chat session: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO chat_message (chat_session_id, role, content, task_id)
+		VALUES ($1, 'user', $2, $3)`, chatSessionID, "Reaction target message id: "+trigger.ID, taskID); err != nil {
+		t.Fatalf("seed task source prompt: %v", err)
+	}
+
+	content := "这是智能体的完整回答"
+	rec := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":            "#" + channelNameForTransportTest(t, channelID),
+		"content":           content,
+		"client_message_id": "voice-enforced-" + uuid.NewString(),
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("transport send: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body AgentTransportSendResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode transport response: %v", err)
+	}
+	if !channelMessageHasVoicePart(body.Message.Parts) || !agentTransportPartsHaveText(body.Message.Parts) {
+		t.Fatalf("message parts=%+v, want accessible voice reply", body.Message.Parts)
+	}
+	if body.Message.Content != content {
+		t.Fatalf("message content=%q, want %q", body.Message.Content, content)
+	}
+}
+
 func TestAgentTransportSendMessageIdempotentAndSuppressesFinalOutput(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -2347,4 +2519,3 @@ func TestAgentTransportSendReturnsWhilePostAckBlocked(t *testing.T) {
 		t.Fatal("post-ack side effect did not start after agent send")
 	}
 }
-

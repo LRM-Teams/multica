@@ -1749,8 +1749,13 @@ export function ChannelsPage({
   // If it was the open one, `active` falls back via the memo.
   useWSEvent("channel:deleted", (payload) => {
     const e = payload as { id?: string };
-    // LRM-485 — archived-list is separate from list; invalidating only list
-    // left permanently-deleted channels stuck under Archived (N).
+    // LRM-485 — drop both caches immediately; invalidate-only left ghosts.
+    if (e.id) {
+      const drop = <T extends { id: string }>(prev: T[] | undefined) =>
+        prev ? prev.filter((c) => c.id !== e.id) : prev;
+      qc.setQueryData(channelKeys.list(wsId), drop);
+      qc.setQueryData(channelKeys.archivedList(wsId), drop);
+    }
     qc.invalidateQueries({ queryKey: channelKeys.all(wsId) });
     if (e.id && e.id === activeId) setActiveId(null);
   });

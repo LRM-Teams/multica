@@ -16,6 +16,7 @@ import {
   useMarkInboxRead,
   useArchiveInbox,
 } from "@multica/core/inbox/mutations";
+import { useMarkChannelThreadRead } from "@multica/core/channels/mutations";
 import type { InboxItem, UserActivityItem, UserActivityTab } from "@multica/core/types";
 
 import { IssueDetail } from "../../issues/components";
@@ -131,10 +132,12 @@ export function InboxPage() {
   const markReadMutation = useMarkInboxRead();
   const archiveMutation = useArchiveInbox();
   const markAllReadMutation = useMarkAllUserActivityRead();
+  const markThreadReadMutation = useMarkChannelThreadRead();
   const timeAgo = useTimeAgo();
   const typeLabels = useTypeLabels();
 
   const markReadMutate = markReadMutation.mutate;
+  const markThreadReadMutate = markThreadReadMutation.mutate;
   const selectedInboxId = selectedInbox?.id;
   const selectedInboxRead = selectedInbox?.read;
   useEffect(() => {
@@ -158,6 +161,22 @@ export function InboxPage() {
       if (!channelId) {
         toast.error(t(($) => $.activity.open_thread_failed));
         return;
+      }
+      // Mark read on click (LRM-379): do not rely solely on ThreadPanel open —
+      // deep-link may miss the root in the loaded message window, and Activity
+      // cache was previously never invalidated after thread/read.
+      if (item.unread_count > 0) {
+        markThreadReadMutate(
+          { channelId, messageId: rootId },
+          {
+            onError: (err) =>
+              toast.error(
+                err instanceof Error && err.message
+                  ? err.message
+                  : t(($) => $.errors.mark_read_failed),
+              ),
+          },
+        );
       }
       push(`${wsPaths.channelDetail(channelId)}?thread=${encodeURIComponent(rootId)}`);
       return;

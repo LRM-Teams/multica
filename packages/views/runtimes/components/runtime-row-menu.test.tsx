@@ -29,11 +29,16 @@ vi.mock("@tanstack/react-query", async () => {
 
 vi.mock("@multica/core/runtimes/mutations", () => ({
   useDeleteRuntime: () => ({ mutate: vi.fn(), isPending: false, mutateAsync: vi.fn() }),
-  useArchiveAgentsAndDeleteRuntime: () => ({
-    mutate: vi.fn(),
-    isPending: false,
-    mutateAsync: vi.fn(),
+}));
+
+vi.mock("@multica/core/paths", () => ({
+  useWorkspacePaths: () => ({
+    agentDetail: (id: string) => `/agents/${id}`,
   }),
+}));
+
+vi.mock("../../navigation/app-link", () => ({
+  AppLink: () => null,
 }));
 
 vi.mock("@multica/core/runtimes", () => ({
@@ -57,7 +62,6 @@ vi.mock("@multica/core/auth", () => ({
 vi.mock("@multica/core/api", () => ({
   api: {
     deleteRuntime: vi.fn(),
-    archiveAgentsAndDeleteRuntime: vi.fn(),
   },
   ApiError: class ApiError extends Error {},
 }));
@@ -153,13 +157,11 @@ function renderActionsCell(row: RuntimeRow) {
 describe("runtime list row menu", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("hides the kebab menu for an online local runtime (self-healing)", () => {
-    // Deleting an online local runtime is a no-op (daemon re-registers in
-    // seconds), so the row menu drops the only action — Delete — entirely.
+  it("still renders the kebab menu for an online local runtime (self-healing) — #666: the guided dialog explains why, it never just disappears", () => {
     renderActionsCell(
       makeRow(makeRuntime({ runtime_mode: "local", status: "online" })),
     );
-    expect(screen.queryByLabelText("Row actions")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Row actions")).toBeInTheDocument();
   });
 
   it("renders the kebab menu for an offline local runtime", () => {

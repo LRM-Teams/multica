@@ -38,6 +38,8 @@ import { getInboxDisplayTitle } from "./inbox-display";
 import { ActivityListRow } from "./activity-list-row";
 import { ActivityTabs, ActivityEmptyState } from "./activity-tabs";
 import { ActivityListSkeleton } from "./activity-list-skeleton";
+import { useT } from "../../i18n";
+import { MobileListDetailLayout } from "../../common/mobile-list-detail-layout";
 
 /** Static Suspense fallback — hoist so React Doctor does not rebuild each render (LRM-424). */
 const ACTIVITY_DETAIL_FALLBACK = (
@@ -47,8 +49,6 @@ const ACTIVITY_DETAIL_FALLBACK = (
     <Skeleton className="h-24 w-full" />
   </div>
 );
-import { useT } from "../../i18n";
-import { MobileListDetailLayout } from "../../common/mobile-list-detail-layout";
 
 // LRM-424: IssueDetail pulls ~50+ modules into the Activity route. Lazy-load so
 // list shell paints without waiting on the issue detail graph. Session embed

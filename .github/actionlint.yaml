@@ -1,6 +1,6 @@
 # Custom labels for self-hosted runners, so actionlint doesn't flag them as
-# unknown. `aliyun` is the Aliyun deploy host for deploy.yml (dev). `s89` is
-# retained so older workflow revisions still lint cleanly during cutover.
+# unknown. `s89` is the current dev deploy host. `aliyun` remains registered
+# for workflows or revisions that explicitly target the Aliyun runner.
 self-hosted-runner:
   labels:
     - aliyun

@@ -49,4 +49,15 @@ describe("DeleteChannelDialog (LRM-239)", () => {
     expect(onConfirm).not.toHaveBeenCalled();
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
+
+  it("ignores a second click while the first delete is in flight", async () => {
+    const user = userEvent.setup();
+    const { onConfirm } = renderDialog({ pending: false });
+
+    await user.click(screen.getByRole("checkbox"));
+    const confirm = screen.getByRole("button", { name: "Delete channel" });
+    await user.click(confirm);
+    await user.click(confirm);
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
 });

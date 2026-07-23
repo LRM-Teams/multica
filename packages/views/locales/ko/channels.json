@@ -49,7 +49,13 @@
     "confirm": "채널 삭제",
     "confirm_checkbox": "네, 이 채널을 영구적으로 삭제합니다",
     "toast_success": "채널을 삭제했습니다",
-    "toast_failed": "채널 삭제에 실패했습니다"
+    "toast_failed": "채널 삭제에 실패했습니다",
+    "toast_forbidden": "이 채널을 삭제할 권한이 없습니다",
+    "toast_system_protected": "시스템 채널은 삭제할 수 없습니다",
+    "toast_dm_forbidden": "다이렉트 메시지는 영구 삭제할 수 없습니다",
+    "toast_not_group": "그룹 채널만 영구 삭제할 수 있습니다",
+    "toast_blocked": "지금 이 채널을 삭제할 수 없습니다",
+    "toast_not_found": "채널을 찾을 수 없습니다"
   },
   "empty_state": {
     "title": "그룹 채팅 만들기",

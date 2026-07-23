@@ -186,6 +186,7 @@ import {
 } from "../lib/voice-audio";
 import { prepareVoicePlayback, voicePlaybackScope } from "../lib/voice-playback";
 import { isChannelNameTakenError } from "../channel-create-error";
+import { resolveDeleteChannelErrorKey } from "../channel-delete-error";
 import { ChannelMessageList } from "./channel-message-list";
 import {
   ChannelDetailsPanel,
@@ -1881,7 +1882,30 @@ export function ChannelsPage({
         setMobilePanel(null);
         setDeleteTarget(null);
       },
-      onError: () => toast.error(t(($) => $.delete_dialog.toast_failed)),
+      onError: (err) => {
+        switch (resolveDeleteChannelErrorKey(err)) {
+          case "toast_forbidden":
+            toast.error(t(($) => $.delete_dialog.toast_forbidden));
+            break;
+          case "toast_system_protected":
+            toast.error(t(($) => $.delete_dialog.toast_system_protected));
+            break;
+          case "toast_dm_forbidden":
+            toast.error(t(($) => $.delete_dialog.toast_dm_forbidden));
+            break;
+          case "toast_not_group":
+            toast.error(t(($) => $.delete_dialog.toast_not_group));
+            break;
+          case "toast_blocked":
+            toast.error(t(($) => $.delete_dialog.toast_blocked));
+            break;
+          case "toast_not_found":
+            toast.error(t(($) => $.delete_dialog.toast_not_found));
+            break;
+          default:
+            toast.error(t(($) => $.delete_dialog.toast_failed));
+        }
+      },
     });
   };
 

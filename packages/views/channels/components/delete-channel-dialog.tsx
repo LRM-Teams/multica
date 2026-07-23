@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -33,12 +33,31 @@ export function DeleteChannelDialog({
 }) {
   const { t } = useT("channels");
   const [confirmed, setConfirmed] = useState(false);
+  // LRM-449 — AlertDialogAction is a plain Button (does not auto-close). Local
+  // submitted flag disables the action before React Query flips `pending`.
+  const [submitted, setSubmitted] = useState(false);
+
+  useEffect(() => {
+    if (!open) {
+      setConfirmed(false);
+      setSubmitted(false);
+    }
+  }, [open]);
+
+  useEffect(() => {
+    if (!pending) setSubmitted(false);
+  }, [pending]);
+
+  const busy = !!pending || submitted;
 
   return (
     <AlertDialog
       open={open}
       onOpenChange={(next) => {
-        if (!next) setConfirmed(false);
+        if (!next) {
+          setConfirmed(false);
+          setSubmitted(false);
+        }
         onOpenChange(next);
       }}
     >
@@ -54,16 +73,20 @@ export function DeleteChannelDialog({
             className="mt-0.5"
             checked={confirmed}
             onCheckedChange={(next) => setConfirmed(next === true)}
-            disabled={pending}
+            disabled={busy}
           />
           <span className="leading-5">{t(($) => $.delete_dialog.confirm_checkbox)}</span>
         </label>
         <AlertDialogFooter>
-          <AlertDialogCancel>{t(($) => $.delete_dialog.cancel)}</AlertDialogCancel>
+          <AlertDialogCancel disabled={!!pending}>{t(($) => $.delete_dialog.cancel)}</AlertDialogCancel>
           <AlertDialogAction
             variant="destructive"
-            onClick={onConfirm}
-            disabled={!confirmed || !!pending}
+            onClick={() => {
+              if (!confirmed || busy) return;
+              setSubmitted(true);
+              onConfirm();
+            }}
+            disabled={!confirmed || busy}
           >
             {t(($) => $.delete_dialog.confirm)}
           </AlertDialogAction>

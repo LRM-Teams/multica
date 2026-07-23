@@ -28,6 +28,14 @@ import (
 )
 
 const channelNameMaxLen = 80
+
+// Stable machine codes for permanent channel delete (LRM-449). FE maps these
+// to i18n; do not branch on the English `error` string alone.
+const (
+	channelDeleteDMCode       = "channel_delete_dm"
+	channelDeleteNotGroupCode = "channel_delete_not_group"
+	channelDeleteBlockedCode  = "channel_delete_blocked"
+)
 const channelMessageMaxLen = 20000
 const channelContextMessageLimit = 12
 const channelAgentDirectedContextMessageLimit = 4
@@ -833,6 +841,11 @@ func (h *Handler) UpdateChannel(w http.ResponseWriter, r *http.Request) {
 // unrecoverable. Only workspace owner/admin may delete; system #general and
 // DMs are rejected with explicit errors. Archived channels may still be
 // deleted (Slack-aligned).
+//
+// LRM-449: agents with visibility=channel bind home_channel_id ON DELETE
+// RESTRICT. Before deleting the channel we unbind + archive those agents
+// (and drop voice_call_session rows that lack CASCADE) so owner/admin delete
+// succeeds instead of a silent 500 "failed to delete channel".
 func (h *Handler) DeleteChannel(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {
@@ -863,11 +876,11 @@ func (h *Handler) DeleteChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if kind == "dm" {
-		writeError(w, http.StatusForbidden, "direct messages cannot be permanently deleted")
+		writeCodedError(w, http.StatusForbidden, channelDeleteDMCode, "direct messages cannot be permanently deleted")
 		return
 	}
 	if kind != "group" {
-		writeError(w, http.StatusForbidden, "only group channels can be permanently deleted")
+		writeCodedError(w, http.StatusForbidden, channelDeleteNotGroupCode, "only group channels can be permanently deleted")
 		return
 	}
 	// Permanent delete is stricter than archive: workspace owner/admin only
@@ -876,7 +889,40 @@ func (h *Handler) DeleteChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tag, err := h.DB.Exec(r.Context(), `
+	if h.TxStarter == nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete channel")
+		return
+	}
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete channel")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	// CHECK (visibility=channel ↔ home_channel_id NOT NULL): clear both in one
+	// UPDATE, then archive so channel-only agents do not linger as active.
+	if _, err := tx.Exec(r.Context(), `
+		UPDATE agent
+		SET visibility = 'private',
+		    home_channel_id = NULL,
+		    archived_at = COALESCE(archived_at, now()),
+		    archived_by = COALESCE(archived_by, $3),
+		    updated_at = now()
+		WHERE workspace_id = $1 AND home_channel_id = $2`,
+		parseUUID(workspaceID), channelID, parseUUID(userID)); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to release channel-scoped agents")
+		return
+	}
+
+	// voice_call_session.channel_id historically had no ON DELETE action.
+	if _, err := tx.Exec(r.Context(), `
+		DELETE FROM voice_call_session WHERE channel_id = $1`, channelID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete channel voice sessions")
+		return
+	}
+
+	tag, err := tx.Exec(r.Context(), `
 		DELETE FROM channel
 		WHERE id = $1 AND workspace_id = $2 AND kind = 'group'`,
 		channelID, parseUUID(workspaceID))
@@ -885,11 +931,19 @@ func (h *Handler) DeleteChannel(w http.ResponseWriter, r *http.Request) {
 			writeSystemChannelProtected(w)
 			return
 		}
+		if fkViolation23503(err) {
+			writeCodedError(w, http.StatusConflict, channelDeleteBlockedCode, "channel still has dependent records and cannot be deleted")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "failed to delete channel")
 		return
 	}
 	if tag.RowsAffected() == 0 {
 		writeError(w, http.StatusNotFound, "channel not found")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete channel")
 		return
 	}
 

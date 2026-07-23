@@ -49,7 +49,13 @@
     "confirm": "チャンネルを削除",
     "confirm_checkbox": "はい、このチャンネルを完全に削除します",
     "toast_success": "チャンネルを削除しました",
-    "toast_failed": "チャンネルの削除に失敗しました"
+    "toast_failed": "チャンネルの削除に失敗しました",
+    "toast_forbidden": "このチャンネルを削除する権限がありません",
+    "toast_system_protected": "システムチャンネルは削除できません",
+    "toast_dm_forbidden": "ダイレクトメッセージは完全削除できません",
+    "toast_not_group": "グループチャンネルのみ完全削除できます",
+    "toast_blocked": "このチャンネルは現在削除できません",
+    "toast_not_found": "チャンネルが見つかりません"
   },
   "empty_state": {
     "title": "グループチャットを作成",

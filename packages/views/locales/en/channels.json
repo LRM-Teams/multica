@@ -49,7 +49,13 @@
     "confirm": "Delete channel",
     "confirm_checkbox": "Yes, permanently delete this channel",
     "toast_success": "Channel deleted",
-    "toast_failed": "Failed to delete channel"
+    "toast_failed": "Failed to delete channel",
+    "toast_forbidden": "You don't have permission to delete this channel",
+    "toast_system_protected": "The system channel can't be deleted",
+    "toast_dm_forbidden": "Direct messages can't be permanently deleted",
+    "toast_not_group": "Only group channels can be permanently deleted",
+    "toast_blocked": "This channel can't be deleted right now",
+    "toast_not_found": "Channel not found"
   },
   "empty_state": {
     "title": "Create a group chat",

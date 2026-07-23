@@ -49,7 +49,13 @@
     "confirm": "删除频道",
     "confirm_checkbox": "是的，永久删除此频道",
     "toast_success": "频道已删除",
-    "toast_failed": "删除频道失败"
+    "toast_failed": "删除频道失败",
+    "toast_forbidden": "你没有权限删除此频道",
+    "toast_system_protected": "系统频道无法删除",
+    "toast_dm_forbidden": "私信不能永久删除",
+    "toast_not_group": "只有群组频道可以永久删除",
+    "toast_blocked": "此频道当前无法删除",
+    "toast_not_found": "频道不存在"
   },
   "empty_state": {
     "title": "创建一个群聊",

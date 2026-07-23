@@ -5301,12 +5301,81 @@ func TestChannelPermanentDeleteRejectsDM(t *testing.T) {
 	if body["error"] != "direct messages cannot be permanently deleted" {
 		t.Fatalf("error = %q, want DM rejection message", body["error"])
 	}
+	if body["code"] != channelDeleteDMCode {
+		t.Fatalf("code = %q, want %q", body["code"], channelDeleteDMCode)
+	}
 	var exists bool
 	if err := testPool.QueryRow(context.Background(), `SELECT EXISTS(SELECT 1 FROM channel WHERE id = $1)`, channelID).Scan(&exists); err != nil {
 		t.Fatalf("check channel exists: %v", err)
 	}
 	if !exists {
 		t.Fatal("DM channel was deleted")
+	}
+}
+
+func TestChannelPermanentDeleteReleasesHomeChannelAgents(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	// Regression for LRM-449: visibility=channel agents hold home_channel_id
+	// with ON DELETE RESTRICT. Permanent delete must unbind+archive them and
+	// still remove the channel (no generic 500).
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "perm-delete-home-"+uuid.NewString(), testUserID)
+
+	createReq := newRequest(http.MethodPost, "/api/agents", map[string]any{
+		"display_name":    "Home Bound " + uuid.NewString()[:8],
+		"runtime_id":      testRuntimeID,
+		"visibility":      "channel",
+		"home_channel_id": channelID,
+	})
+	createRec := httptest.NewRecorder()
+	testHandler.CreateAgent(createRec, createReq)
+	if createRec.Code != http.StatusCreated && createRec.Code != http.StatusOK {
+		t.Fatalf("create channel agent: status=%d body=%s", createRec.Code, createRec.Body.String())
+	}
+	var created AgentResponse
+	if err := json.Unmarshal(createRec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, created.ID)
+	})
+
+	req := newRequest(http.MethodDelete, "/api/channels/"+channelID, nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.DeleteChannel(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete channel with home-bound agent: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var exists bool
+	if err := testPool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM channel WHERE id = $1)`, channelID).Scan(&exists); err != nil {
+		t.Fatalf("check channel exists: %v", err)
+	}
+	if exists {
+		t.Fatal("channel row still present after permanent delete with home-bound agent")
+	}
+
+	var visibility string
+	var home pgtype.UUID
+	var archivedAt pgtype.Timestamptz
+	if err := testPool.QueryRow(ctx, `
+		SELECT visibility, home_channel_id, archived_at
+		FROM agent WHERE id = $1`, created.ID).Scan(&visibility, &home, &archivedAt); err != nil {
+		t.Fatalf("load agent after delete: %v", err)
+	}
+	if visibility != "private" {
+		t.Fatalf("visibility=%q want private", visibility)
+	}
+	if home.Valid {
+		t.Fatalf("home_channel_id still set: %s", uuidToString(home))
+	}
+	if !archivedAt.Valid {
+		t.Fatal("expected channel-scoped agent to be archived after home channel delete")
 	}
 }
 

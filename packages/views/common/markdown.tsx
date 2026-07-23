@@ -11,7 +11,6 @@ import { useConfigStore } from "@multica/core/config";
 import { api } from "@multica/core/api";
 import type { Attachment as AttachmentRecord } from "@multica/core/types";
 import { useWorkspacePaths, useCurrentWorkspace } from "@multica/core/paths";
-import { useActorName } from "@multica/core/workspace/hooks";
 import { useAuthStore } from "@multica/core/auth";
 import { useAgentPanelStore } from "@multica/core/agents/stores";
 import { ActorProfileTrigger } from "./actor-profile-popover";
@@ -23,6 +22,7 @@ import { Attachment as AttachmentRenderer } from "../editor/attachment";
 import { AttachmentDownloadProvider } from "../editor/attachment-download-context";
 import { WindyCreateAgentLink } from "./windy-create-agent-links";
 import { isWindyCreateAgentLink } from "./windy-create-agent-link-utils";
+import { useActorMentionChipLabel } from "./actor-mention-chip-label";
 import {
   mentionTokenClassName,
   resolveMentionTokenKind,
@@ -86,8 +86,6 @@ export function ActorMention({
   label?: string;
   highlightQuery?: string;
 }): React.JSX.Element {
-  const actorNames = useActorName();
-  const { getActorName } = actorNames;
   const viewerUserId = useAuthStore((s) => s.user?.id ?? null);
   // #349/#447 parity for RENDERED messages: a rendered @agent mention opens the
   // side panel on click, same as the editor's MentionView and agent avatars.
@@ -95,16 +93,22 @@ export function ActorMention({
   const openAgentPanelFromContext = useOpenAgentPanel();
   const openAgentPanelFromStore = useAgentPanelStore((s) => s.open);
   const openAgentPanel = openAgentPanelFromContext ?? openAgentPanelFromStore;
-  // The link text is usually "@Name"; strip the leading @ so we don't double
-  // it, and use it as the fallback when the id isn't in the workspace cache.
-  const fallback = label ? label.replace(/^@+/, "").trim() || undefined : undefined;
-  const name = type === "all" ? "all" : getActorName(type, id, fallback);
+  // LRM-515: render-time display_name (not authored @handle slug). Handle is
+  // peek-only via title when we resolved a real name.
+  const { name, unresolved, handlePeek } = useActorMentionChipLabel(type, id, label);
   const kind = resolveMentionTokenKind(type, id, viewerUserId);
   const chip = (
     <span
-      className={mentionTokenClassName(kind)}
+      className={mentionTokenClassName(
+        kind,
+        unresolved
+          ? "bg-muted text-muted-foreground hover:bg-muted focus-visible:bg-muted"
+          : undefined,
+      )}
       data-mention-kind={kind}
       data-mention-type={type}
+      data-mention-unresolved={unresolved ? "true" : undefined}
+      title={handlePeek ? `@${handlePeek}` : undefined}
     >
       {highlightSearchText(`@${name}`, highlightQuery)}
     </span>

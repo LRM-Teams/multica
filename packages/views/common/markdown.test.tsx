@@ -25,6 +25,21 @@ vi.mock("@multica/core/workspace/hooks", () => ({
   }),
 }));
 
+vi.mock("./use-resolved-actor-identity", () => ({
+  useResolvedActorIdentity: (actorId: string | undefined, mentionType: string | null) => {
+    if (!actorId || !mentionType) return { displayName: null, avatarUrl: null };
+    // LRM-515: directory miss (group manager) → member-profiles display_name
+    if (actorId === "cb7e5c89-beckham") {
+      return { displayName: "贝克汉姆", avatarUrl: null };
+    }
+    if (actorId === "agent-unresolved") {
+      return { displayName: null, avatarUrl: null };
+    }
+    if (mentionType === "agent") return { displayName: "Bot", avatarUrl: null };
+    return { displayName: "Alice", avatarUrl: null };
+  },
+}));
+
 vi.mock("../issues/components/issue-mention-card", () => ({
   IssueMentionCard: ({
     issueId,
@@ -252,6 +267,35 @@ describe("Markdown", () => {
     const trigger = screen.getByTestId("actor-profile-trigger");
     expect(trigger).toHaveAttribute("data-member-type", "agent");
     expect(trigger).toHaveAttribute("data-member-id", "agent-9");
+  });
+
+  // LRM-515: authored label is the routing handle; chip primary ink is display_name.
+  it("renders agent mention display_name instead of authored handle slug (LRM-515)", () => {
+    render(
+      <Markdown>
+        {"清 [@bei-ke-han-mu-11](mention://agent/cb7e5c89-beckham)"}
+      </Markdown>,
+    );
+
+    const trigger = screen.getByTestId("actor-profile-trigger");
+    expect(trigger).toHaveTextContent("@贝克汉姆");
+    expect(trigger).not.toHaveTextContent("bei-ke-han-mu-11");
+    const chip = trigger.querySelector(".mention");
+    expect(chip).toHaveAttribute("title", "@bei-ke-han-mu-11");
+    expect(chip).not.toHaveAttribute("data-mention-unresolved");
+  });
+
+  it("grays unresolved agent mentions and keeps handle (never UUID) (LRM-515)", () => {
+    render(
+      <Markdown>
+        {"Ping [@bei-ke-han-mu-11](mention://agent/agent-unresolved)"}
+      </Markdown>,
+    );
+
+    const trigger = screen.getByTestId("actor-profile-trigger");
+    expect(trigger).toHaveTextContent("@bei-ke-han-mu-11");
+    expect(trigger).not.toHaveTextContent("agent-unresolved");
+    expect(trigger.querySelector(".mention")).toHaveAttribute("data-mention-unresolved", "true");
   });
 
   // #349/#447 gap fix: a rendered (read-only message) @agent mention must open

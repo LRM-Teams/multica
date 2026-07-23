@@ -5,6 +5,7 @@ import type { MessagePart } from "@multica/core/types";
 import { MemoizedMarkdown, ActorMention } from "./markdown";
 import { cn } from "@multica/ui/lib/utils";
 import { mentionTokenClassName } from "./mention-token";
+import { useActorMentionChipLabel } from "./actor-mention-chip-label";
 import { IssueRefLink } from "../issues/components/issue-ref-link";
 import { projectInlineReferences, type ReferencePart } from "./inline-references";
 
@@ -124,13 +125,14 @@ function ReferenceToken({
   if (reference.ref_type === "mention") {
     // Non-interactive surfaces (e.g. the excerpt row, itself a link) render the
     // mention as styled text only — ActorMention would nest a link/hover card.
-    // Display the span substring VERBATIM — the projector decorates, never
-    // rewrites the author's content (#467/#600 contract).
+    // LRM-515: still resolve display_name at render-time (not authored slug).
     if (!interactive) {
       return (
-        <span className={mentionTokenClassName("default")} data-mention-type={reference.ref_subtype}>
-          {text}
-        </span>
+        <NonInteractiveActorMention
+          type={reference.ref_subtype ?? "member"}
+          id={reference.ref_id}
+          label={reference.label ?? text}
+        />
       );
     }
     // Interactive: reuse the ONE mention token (brand ink + hover profile card +
@@ -158,6 +160,34 @@ function ReferenceToken({
 }
 
 type IssueRefPart = Extract<ReferencePart, { ref_type: "issue-ref" }>;
+
+/** Non-clickable mention chip with LRM-515 display_name primary ink. */
+function NonInteractiveActorMention({
+  type,
+  id,
+  label,
+}: {
+  type: string;
+  id: string;
+  label?: string;
+}): React.JSX.Element {
+  const { name, unresolved, handlePeek } = useActorMentionChipLabel(type, id, label);
+  return (
+    <span
+      className={mentionTokenClassName(
+        "default",
+        unresolved
+          ? "bg-muted text-muted-foreground hover:bg-muted focus-visible:bg-muted"
+          : undefined,
+      )}
+      data-mention-type={type}
+      data-mention-unresolved={unresolved ? "true" : undefined}
+      title={handlePeek ? `@${handlePeek}` : undefined}
+    >
+      @{name}
+    </span>
+  );
+}
 
 /**
  * An anchored issue reference. The rendering itself lives in {@link IssueRefLink} —

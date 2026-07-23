@@ -2,8 +2,13 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { ChannelMessage } from "@multica/core/types";
+import { TooltipProvider } from "@multica/ui/components/ui/tooltip";
 import { ThreadPanel } from "./thread-panel";
 import { deriveThreadParticipants } from "./thread-participants";
+
+function renderPanel(ui: ReactNode) {
+  return render(<TooltipProvider delay={0}>{ui}</TooltipProvider>);
+}
 
 // Capture the props ThreadPanel hands the reply list so the "no nesting"
 // contract (a reply inside a thread gets no open-thread affordance) can be
@@ -204,9 +209,10 @@ describe("ThreadPanel", () => {
   });
 
   // LRM-384 scheme A — header 28px ghost open-in-main; no dark float Maximize/Download.
-  it("exposes a desktop header open-in-main control and hides it on mobile", () => {
+  // LRM-389 — tooltip labels “open in main”; omitted when no handler.
+  it("exposes a desktop header open-in-main control and hides it on mobile", async () => {
     const onViewParent = vi.fn();
-    const { unmount } = render(
+    const { unmount } = renderPanel(
       <ThreadPanel {...baseProps()} onViewParent={onViewParent} />,
     );
 
@@ -214,18 +220,22 @@ describe("ThreadPanel", () => {
     expect(openInMain.className).toMatch(/size-7/);
     expect(openInMain.className).toMatch(/text-muted-foreground/);
     expect(openInMain.className).toMatch(/hover:bg-muted/);
+    // Focus opens the tooltip so Maximize2 is not misread as “expand”.
+    fireEvent.focus(openInMain);
+    expect(openInMain).toHaveAttribute("data-popup-open");
+    expect(await screen.findByText("Open in main chat", { selector: "[data-slot=tooltip-content]" })).toBeInTheDocument();
     fireEvent.click(openInMain);
     expect(onViewParent).toHaveBeenCalledTimes(1);
     // Download stays out of the thread header main path.
     expect(screen.queryByRole("button", { name: /download/i })).toBeNull();
 
     unmount();
-    render(<ThreadPanel {...baseProps()} isMobile onViewParent={onViewParent} />);
+    renderPanel(<ThreadPanel {...baseProps()} isMobile onViewParent={onViewParent} />);
     expect(screen.queryByRole("button", { name: "Open in main chat" })).toBeNull();
   });
 
   it("omits the open-in-main control when onViewParent is not provided", () => {
-    render(<ThreadPanel {...baseProps()} />);
+    renderPanel(<ThreadPanel {...baseProps()} />);
     expect(screen.queryByRole("button", { name: "Open in main chat" })).toBeNull();
   });
 });

@@ -1503,9 +1503,14 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     [convSearchOpen, convSearchResults],
   );
   const searchHighlightQuery = convSearchOpen ? convSearchQuery.trim() : "";
+  // While a ?thread= deep-link keeps the side panel open, ?message= names a
+  // REPLY and must not drive the main timeline. Once the panel is closed
+  // (e.g. LRM-389 open-in-main → view parent), the same highlightMessageId
+  // can be the ROOT and belongs on the main list — do not keep nulling it
+  // just because the URL still carries ?thread=.
   const effectiveHighlightId = convSearchOpen
     ? (convSearchResults[convSearchIndex]?.message_id ?? null)
-    : isThreadDeepLink
+    : isThreadDeepLink && openThreadRoot
       ? null
       : highlightMessageId;
 
@@ -1528,7 +1533,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   });
 
   useEffect(() => {
-    if (convSearchOpen || isThreadDeepLink) return;
+    if (convSearchOpen || (isThreadDeepLink && openThreadRoot)) return;
     // Only flash-then-clear a quote highlight once its target is actually on
     // screen — while older pages are still being paged toward it, keep it set
     // so the scroll lands when it loads. The timer's cleanup keeps this a
@@ -1536,17 +1541,23 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     if (!highlightMessageId || !jumpTargetLoaded) return;
     const clear = setTimeout(() => setHighlightMessageId(null), 2500);
     return () => clearTimeout(clear);
-  }, [highlightMessageId, convSearchOpen, jumpTargetLoaded, isThreadDeepLink]);
+  }, [
+    highlightMessageId,
+    convSearchOpen,
+    jumpTargetLoaded,
+    isThreadDeepLink,
+    openThreadRoot,
+  ]);
 
   // Thread-panel counterpart of the clear-after-flash effect above — the
   // target here is a REPLY (threadReplies), never the main list, so it needs
   // its own "is it actually loaded/visible yet" check.
   useEffect(() => {
-    if (!isThreadDeepLink || !highlightMessageId) return;
+    if (!isThreadDeepLink || !openThreadRoot || !highlightMessageId) return;
     if (!threadReplies.some((m) => m.id === highlightMessageId)) return;
     const clear = setTimeout(() => setHighlightMessageId(null), 2500);
     return () => clearTimeout(clear);
-  }, [isThreadDeepLink, highlightMessageId, threadReplies]);
+  }, [isThreadDeepLink, openThreadRoot, highlightMessageId, threadReplies]);
 
   // Clear search state when the active channel changes.
   useEffect(() => {
@@ -2744,8 +2755,11 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         }
         onFollowChange={handleThreadFollowChange}
         onViewParent={() => {
+          // LRM-389 — close the side panel so the parent main column is
+          // actually opened (desktop used to only set highlight behind the
+          // still-open thread, which felt like a dead Maximize click).
           setHighlightMessageId(threadSurfaceRoot.id);
-          if (isMobile) setOpenThreadRoot(null);
+          setOpenThreadRoot(null);
         }}
         loading={threadLoading}
         loadError={threadError}

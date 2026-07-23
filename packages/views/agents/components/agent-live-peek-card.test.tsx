@@ -223,9 +223,10 @@ describe("AgentLivePeekCard", () => {
 
     renderCard();
 
-    // LRM-248: live peek header is Online/Offline only — never Thinking /
-    // Working as presence. Activity verbs live on the composer strip.
-    expect(screen.getByText("Online")).toBeInTheDocument();
+    // LRM-248: live peek header is avatar-badge only — no Online/Offline text.
+    expect(screen.queryByText("Online")).toBeNull();
+    expect(screen.queryByText("Offline")).toBeNull();
+    expect(screen.getByText("Squirtle")).toBeInTheDocument();
     // identifier + title both render under the same link.
     const link = screen.getByRole("link", { name: /MUL-42/ });
     expect(link).toHaveAttribute("href", "/test/issues/issue-42");
@@ -250,7 +251,7 @@ describe("AgentLivePeekCard", () => {
 
     renderCard();
 
-    expect(screen.getByText("Online")).toBeInTheDocument();
+    expect(screen.queryByText("Online")).toBeNull();
     expect(screen.getByText(enAgents.live_peek.no_current_issue)).toBeInTheDocument();
     // "5m ago" — proves last activity falls back to the most recent terminal
     // task in the snapshot.
@@ -259,9 +260,7 @@ describe("AgentLivePeekCard", () => {
     expect(screen.queryByText(enAgents.live_peek.failed_indicator)).toBeNull();
   });
 
-  it("shows the availability word (Offline), not a workload word, when the agent is not online", () => {
-    // Offline + idle is a valid derivation, but "Idle" would falsely read as
-    // "available". The word must agree with the (gray) dot — surface "Offline".
+  it("does not render Online/Offline name-row text (avatar badge only, LRM-248)", () => {
     mockPresence.current = {
       availability: "offline",
       workload: "idle",
@@ -272,7 +271,8 @@ describe("AgentLivePeekCard", () => {
 
     renderCard();
 
-    expect(screen.getByText("Offline")).toBeInTheDocument();
+    expect(screen.queryByText("Offline")).toBeNull();
+    expect(screen.queryByText("Online")).toBeNull();
     expect(screen.queryByText("Idle")).toBeNull();
   });
 
@@ -297,7 +297,7 @@ describe("AgentLivePeekCard", () => {
 
     renderCard();
 
-    expect(screen.getByText("Online")).toBeInTheDocument();
+    expect(screen.queryByText("Online")).toBeNull();
     expect(screen.getByText(enAgents.live_peek.failed_indicator)).toBeInTheDocument();
   });
 });

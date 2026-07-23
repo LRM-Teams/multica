@@ -29,9 +29,7 @@ import {
   resolveActorIdentityPresentation,
   shouldShowActorHandleLabel,
 } from "@multica/core/identity";
-import { AgentLiveStatusMark } from "../agents/components/agent-live-status-mark";
 import { MemoryGrowthField } from "../agents/components/memory-growth-field";
-import { useAgentLiveStatus } from "../agents/use-agent-live-status";
 import { AgentPresenceOverlay } from "./actor-avatar";
 import { ActivityTimeline } from "../agents/components/tabs/activity-timeline";
 import { useAgentActivityEvents } from "../agents/components/tabs/use-agent-activity-events";
@@ -226,7 +224,6 @@ export function ActorProfileContent({
 // react-doctor-disable-next-line react-doctor/no-multi-comp -- cohesive actor-profile cluster (see file header)
 export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile }) {
   const { t } = useT("channels");
-  const wsId = useWorkspaceId();
   // #2 identity-only card: when the server returns just basic identity
   // (`profile_access=identity_only` — a private agent surfaced via a message you
   // can read, or a removed/deactivated one), render name/handle/avatar/description
@@ -234,12 +231,6 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
   // panels the BE still gates (`canAccessPrivateAgent`). `full` keeps everything.
   // Never a blank "Agent unavailable" card again.
   const isIdentityOnly = profile.profile_access === "identity_only";
-  // Agents (full access only): Online/Offline plain text (LRM-248). Avatar
-  // badge carries the round indicator — no second dot next to the word.
-  const liveStatus = useAgentLiveStatus(
-    wsId,
-    profile.member_type === "agent" && !isIdentityOnly ? profile.member_id : undefined,
-  );
   const identity = {
     name: profile.name,
     display_name: profile.display_name,
@@ -247,8 +238,7 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
   const presentation = resolveActorIdentityPresentation(identity, "");
   const displayName = presentation.displayName || presentation.handle || t(($) => $.profile_popover.unknown);
   const description = profile.description?.trim() || "";
-  // Members: role text on the name row. Agents: live Online/Offline text
-  // immediately after the name (no second dot).
+  // Members: role text on the name row. Agents: avatar badge only (LRM-248).
   const memberRole =
     profile.member_type === "user"
       ? roleLabel(profile.role, t)
@@ -291,13 +281,6 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
             <span className="min-w-0 truncate text-sm font-semibold text-foreground">
               {displayName}
             </span>
-            {isIdentityOnly || !isAgent ? null : (
-              <AgentLiveStatusMark
-                status={liveStatus}
-                className="shrink-0"
-                showDot={false}
-              />
-            )}
             {memberRole ? (
               <span className="shrink-0 text-xs text-muted-foreground">
                 {memberRole}

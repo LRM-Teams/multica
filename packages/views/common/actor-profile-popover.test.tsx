@@ -165,44 +165,14 @@ describe("ActorProfileContentLoaded", () => {
     expect(screen.queryByTestId("activity-timeline")).toBeNull();
   });
 
-  it("name-row status shows Offline when the live hook reports Offline", () => {
+  it("does not render a name-row Online/Offline label (avatar badge only, LRM-248)", () => {
     mockLiveStatus.current = live("Offline");
 
     render(<ActorProfileContentLoaded profile={makeProfile()} />);
 
-    expect(screen.getByText("Offline")).toBeInTheDocument();
-    expect(screen.queryByText(/Idle/)).toBeNull();
-    expect(screen.queryByText(/Working/)).toBeNull();
-  });
-
-  it("name-row status shows Online/Offline plain text without a second status dot (LRM-248)", () => {
-    mockLiveStatus.current = live("Online", {
-      textClass: "text-success",
-      dotClass: "bg-success",
-    });
-
-    render(<ActorProfileContentLoaded profile={makeProfile()} />);
-
-    const mark = screen.getByTestId("agent-live-status");
-    expect(mark).toHaveTextContent("Online");
-    expect(mark.querySelector(".rounded-full")).toBeNull();
-  });
-
-  it("places live status immediately after the display name (not far-right)", () => {
-    mockLiveStatus.current = live("Online", {
-      textClass: "text-success",
-      dotClass: "bg-success",
-    });
-
-    render(<ActorProfileContentLoaded profile={makeProfile()} />);
-
-    const name = screen.getByText("Aegis");
-    const status = screen.getByTestId("agent-live-status");
-    // Name and status share a flex row; the name must not flex-grow, or a
-    // short name would shove status to the far edge of the card.
-    expect(name.parentElement).toBe(status.parentElement);
-    expect(name.className).not.toMatch(/\bflex-1\b/);
-    expect(status).toHaveTextContent("Online");
+    expect(screen.queryByTestId("agent-live-status")).toBeNull();
+    expect(screen.queryByText("Offline")).toBeNull();
+    expect(screen.getByText("Aegis")).toBeInTheDocument();
   });
 
   it("omits the description section when the profile has no description", () => {

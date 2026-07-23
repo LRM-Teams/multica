@@ -111,12 +111,22 @@ export function deriveAgentPresenceDetail(input: DerivePresenceInput): AgentPres
     };
   }
 
-  // Availability comes only from runtime reachability — never from workload.
-  // LRM-248 AC5: when a private runtime is filtered from the list, callers
-  // must still pass a reachability stub (status + last_seen) so "can't see
-  // runtime details" does not collapse to offline.
-  const availability = deriveAgentAvailability(input.runtime, input.now);
+  // Availability comes from runtime reachability (heartbeat). LRM-248 AC5:
+  // when a private runtime is filtered from the list, callers must still pass
+  // a reachability stub (status + last_seen) so "can't see runtime details"
+  // does not collapse to offline.
+  let availability = deriveAgentAvailability(input.runtime, input.now);
   const detail = deriveWorkloadDetail(input.tasks);
+
+  // LRM-248: unstable/reconnecting/running → online for live chrome. An
+  // in-flight running task proves the agent is reachable even when heartbeat
+  // lags or the runtime row is missing from the visible list.
+  if (
+    detail.runningCount > 0 &&
+    (availability === "offline" || availability === "unstable")
+  ) {
+    availability = "online";
+  }
 
   return {
     availability,

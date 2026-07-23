@@ -31,9 +31,6 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubTrigger,
-  DropdownMenuSubContent,
 } from "@multica/ui/components/ui/dropdown-menu";
 import { toast } from "sonner";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -45,6 +42,7 @@ import { api } from "@multica/core/api";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { useT } from "../../i18n";
+import { RolesDialog } from "./roles-dialog";
 
 const ROLE_ICONS: Record<MemberRole, typeof Crown> = {
   owner: Crown,
@@ -77,21 +75,17 @@ function MemberRow({
   member,
   canManage,
   canManageOwners,
-  ownerCount,
   isSelf,
   busy,
-  onRoleChange,
+  onChangeRole,
   onRemove,
 }: {
   member: MemberWithUser;
   canManage: boolean;
   canManageOwners: boolean;
-  /** Total number of owners in this workspace — needed to gate demoting the
-   *  last owner per `workspace.go:497-507`. */
-  ownerCount: number;
   isSelf: boolean;
   busy: boolean;
-  onRoleChange: (role: MemberRole) => void;
+  onChangeRole: () => void;
   onRemove: () => void;
 }) {
   const { t } = useT("settings");
@@ -100,7 +94,6 @@ function MemberRow({
   const RoleIcon = rc.icon;
   const canEditRole = canManage && !isSelf && (member.role !== "owner" || canManageOwners);
   const canRemove = canManage && !isSelf && (member.role !== "owner" || canManageOwners);
-  const isLastOwner = member.role === "owner" && ownerCount <= 1;
   const showMenu = canEditRole || canRemove;
   return (
     <div className="flex items-center gap-3 border-b border-border px-4 py-3 last:border-b-0 hover:bg-hover">
@@ -123,49 +116,10 @@ function MemberRow({
           />
           <DropdownMenuContent align="end" className="w-auto">
             {canEditRole && (
-              <DropdownMenuSub>
-                <DropdownMenuSubTrigger>
-                  <Shield className="h-3.5 w-3.5" />
-                  {t(($) => $.members.change_role)}
-                </DropdownMenuSubTrigger>
-                <DropdownMenuSubContent className="w-auto">
-                  {(Object.entries(roleConfig) as [MemberRole, (typeof roleConfig)[MemberRole]][]).map(
-                    ([role, config]) => {
-                      if (role === "owner" && !canManageOwners) return null;
-                      const Icon = config.icon;
-                      const wouldDemoteLastOwner =
-                        isLastOwner && role !== "owner";
-                      return (
-                        <DropdownMenuItem
-                          key={role}
-                          onClick={() =>
-                            wouldDemoteLastOwner ? undefined : onRoleChange(role)
-                          }
-                          disabled={wouldDemoteLastOwner}
-                          title={
-                            wouldDemoteLastOwner
-                              ? t(($) => $.members.cannot_demote_last_owner_title)
-                              : undefined
-                          }
-                        >
-                          <Icon className="h-3.5 w-3.5" />
-                          <div className="flex flex-col">
-                            <span>{config.label}</span>
-                            <span className="text-xs text-muted-foreground font-normal">
-                              {wouldDemoteLastOwner
-                                ? t(($) => $.members.cannot_demote_last_owner)
-                                : config.description}
-                            </span>
-                          </div>
-                          {member.role === role && (
-                            <span className="ml-auto text-xs text-muted-foreground">{"✓"}</span>
-                          )}
-                        </DropdownMenuItem>
-                      );
-                    }
-                  )}
-                </DropdownMenuSubContent>
-              </DropdownMenuSub>
+              <DropdownMenuItem onClick={onChangeRole}>
+                <Shield className="h-3.5 w-3.5" />
+                {t(($) => $.members.change_role)}
+              </DropdownMenuItem>
             )}
             {canEditRole && canRemove && <DropdownMenuSeparator />}
             {canRemove && (
@@ -245,6 +199,8 @@ export function MembersTab() {
   const [inviteLoading, setInviteLoading] = useState(false);
   const [memberActionId, setMemberActionId] = useState<string | null>(null);
   const [invitationActionId, setInvitationActionId] = useState<string | null>(null);
+  const [rolesInfoOpen, setRolesInfoOpen] = useState(false);
+  const [roleEditMember, setRoleEditMember] = useState<MemberWithUser | null>(null);
   const [confirmAction, setConfirmAction] = useState<{
     title: string;
     description: string;
@@ -304,12 +260,29 @@ export function MembersTab() {
       await api.updateMember(workspace.id, memberId, { role });
       qc.invalidateQueries({ queryKey: workspaceKeys.members(wsId) });
       toast.success(t(($) => $.members.toast_role_updated));
+      setRoleEditMember(null);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : t(($) => $.members.toast_role_failed));
     } finally {
       setMemberActionId(null);
     }
   };
+
+  const roleEditAllowed: MemberRole[] | undefined = roleEditMember
+    ? isOwner
+      ? ["owner", "admin", "member"]
+      : ["admin", "member"]
+    : undefined;
+
+  const roleEditDisabledReasons: Partial<Record<MemberRole, string>> | undefined =
+    roleEditMember &&
+    roleEditMember.role === "owner" &&
+    ownerCount <= 1
+      ? {
+          admin: t(($) => $.members.cannot_demote_last_owner),
+          member: t(($) => $.members.cannot_demote_last_owner),
+        }
+      : undefined;
 
   const handleRemoveMember = (member: MemberWithUser) => {
     if (!workspace) return;
@@ -341,6 +314,15 @@ export function MembersTab() {
         <div className="flex items-center gap-2">
           <Users className="h-4 w-4 text-muted-foreground" />
           <h2 className="text-sm font-semibold">{t(($) => $.members.section_title, { count: members.length })}</h2>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="ml-auto h-8 px-2 text-xs font-medium text-muted-foreground"
+            onClick={() => setRolesInfoOpen(true)}
+          >
+            {t(($) => $.members.roles_entry)}
+          </Button>
         </div>
 
         {canManageWorkspace && (
@@ -388,10 +370,9 @@ export function MembersTab() {
                   member={m}
                   canManage={canManageWorkspace}
                   canManageOwners={isOwner}
-                  ownerCount={ownerCount}
                   isSelf={m.user_id === user?.id}
                   busy={memberActionId === m.id}
-                  onRoleChange={(role) => handleRoleChange(m.id, role)}
+                  onChangeRole={() => setRoleEditMember(m)}
                   onRemove={() => handleRemoveMember(m)}
                 />
               </div>
@@ -443,6 +424,28 @@ export function MembersTab() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <RolesDialog
+        open={rolesInfoOpen}
+        onOpenChange={setRolesInfoOpen}
+        mode="info"
+      />
+
+      <RolesDialog
+        open={!!roleEditMember}
+        onOpenChange={(open) => {
+          if (!open) setRoleEditMember(null);
+        }}
+        mode="select"
+        value={roleEditMember?.role ?? "member"}
+        allowedRoles={roleEditAllowed}
+        disabledReasons={roleEditDisabledReasons}
+        saving={roleEditMember != null && memberActionId === roleEditMember.id}
+        onSave={async (role) => {
+          if (!roleEditMember) return;
+          await handleRoleChange(roleEditMember.id, role);
+        }}
+      />
     </div>
   );
 }

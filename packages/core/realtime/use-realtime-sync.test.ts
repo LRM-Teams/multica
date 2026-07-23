@@ -25,6 +25,7 @@ import {
   handleInboxNew,
   invalidateChatMessageQueries,
   resolveInboxSourceSlug,
+  shouldNotifyChannelMessage,
 } from "./use-realtime-sync";
 
 const sessionId = "session-1";
@@ -607,7 +608,73 @@ describe("handleInboxNew", () => {
     };
   }
 
-  it("shows a group-channel browser banner only for @mentions", async () => {
+  describe("shouldNotifyChannelMessage (LRM-411)", () => {
+    it("notifies ambient unmuted traffic and self-suppresses", () => {
+      expect(
+        shouldNotifyChannelMessage(channelMessage(), {
+          myUserId: "member-1",
+          channelMuted: false,
+        }),
+      ).toBe(true);
+      expect(
+        shouldNotifyChannelMessage(
+          channelMessage({ type: "user", author_id: "member-1" }),
+          { myUserId: "member-1", channelMuted: false },
+        ),
+      ).toBe(false);
+    });
+
+    it("muted ambient is silent; muted @me still rings", () => {
+      expect(
+        shouldNotifyChannelMessage(channelMessage(), {
+          myUserId: "member-1",
+          channelMuted: true,
+        }),
+      ).toBe(false);
+      expect(
+        shouldNotifyChannelMessage(
+          channelMessage({
+            content: "hey [@Alice](mention://member/member-1)",
+          }),
+          { myUserId: "member-1", channelMuted: true },
+        ),
+      ).toBe(true);
+    });
+
+    it("never notifies type=system channel events (LRM-414)", () => {
+      expect(
+        shouldNotifyChannelMessage(
+          channelMessage({ type: "system", content: "Alice joined" }),
+          { myUserId: "member-1", channelMuted: false },
+        ),
+      ).toBe(false);
+    });
+  });
+
+  it("shows a group-channel browser banner for ordinary unmuted messages (LRM-411)", async () => {
+    const qc = createQueryClient();
+    qc.setQueryData<Workspace[]>(workspaceKeys.list(), [workspace()]);
+    qc.setQueryData(notificationPreferenceKeys.all("ws-a"), {
+      preferences: { system_notifications: "all" },
+    });
+    qc.setQueryData<Channel[]>(channelKeys.list("ws-a"), [channel()]);
+    installBrowserNotification("granted");
+
+    await handleChannelMessageNotification(qc, channelMessage(), "member-1");
+
+    expect(webBanners).toHaveLength(1);
+    expect(webBanners[0]?.title).toBe("#general");
+    expect(webBanners[0]?.options).toMatchObject({
+      body: "Agent Bot: I finished the work",
+      tag: "channel-1",
+      data: expect.objectContaining({
+        channelId: "channel-1",
+        url: "/workspace-a/channels/channel-1",
+      }),
+    });
+  });
+
+  it("still shows a group-channel banner for @mentions when unmuted", async () => {
     const qc = createQueryClient();
     qc.setQueryData<Workspace[]>(workspaceKeys.list(), [workspace()]);
     qc.setQueryData(notificationPreferenceKeys.all("ws-a"), {
@@ -636,20 +703,6 @@ describe("handleInboxNew", () => {
     });
   });
 
-  it("suppresses ordinary group messages without an @mention", async () => {
-    const qc = createQueryClient();
-    qc.setQueryData<Workspace[]>(workspaceKeys.list(), [workspace()]);
-    qc.setQueryData(notificationPreferenceKeys.all("ws-a"), {
-      preferences: { system_notifications: "all" },
-    });
-    qc.setQueryData<Channel[]>(channelKeys.list("ws-a"), [channel()]);
-    installBrowserNotification("granted");
-
-    await handleChannelMessageNotification(qc, channelMessage(), "member-1");
-
-    expect(webBanners).toHaveLength(0);
-  });
-
   it("routes DM channel banners to the same channel detail path", async () => {
     const qc = createQueryClient();
     qc.setQueryData<Workspace[]>(workspaceKeys.list(), [workspace()]);
@@ -671,7 +724,7 @@ describe("handleInboxNew", () => {
     });
   });
 
-  it("suppresses banners for muted channels and self-sent user messages", async () => {
+  it("suppresses ambient banners for muted channels but still rings on @mention", async () => {
     const qc = createQueryClient();
     qc.setQueryData<Workspace[]>(workspaceKeys.list(), [workspace()]);
     qc.setQueryData(notificationPreferenceKeys.all("ws-a"), {
@@ -680,6 +733,9 @@ describe("handleInboxNew", () => {
     qc.setQueryData<Channel[]>(channelKeys.list("ws-a"), [channel({ muted: true })]);
     installBrowserNotification("granted");
 
+    await handleChannelMessageNotification(qc, channelMessage(), "member-1");
+    expect(webBanners).toHaveLength(0);
+
     await handleChannelMessageNotification(
       qc,
       channelMessage({
@@ -687,6 +743,19 @@ describe("handleInboxNew", () => {
       }),
       "member-1",
     );
+    expect(webBanners).toHaveLength(1);
+    expect(webBanners[0]?.title).toBe("#general");
+  });
+
+  it("suppresses self-sent user messages even when unmuted", async () => {
+    const qc = createQueryClient();
+    qc.setQueryData<Workspace[]>(workspaceKeys.list(), [workspace()]);
+    qc.setQueryData(notificationPreferenceKeys.all("ws-a"), {
+      preferences: { system_notifications: "all" },
+    });
+    qc.setQueryData<Channel[]>(channelKeys.list("ws-a"), [channel()]);
+    installBrowserNotification("granted");
+
     await handleChannelMessageNotification(
       qc,
       channelMessage({ type: "user", author_id: "member-1" }),
@@ -694,6 +763,33 @@ describe("handleInboxNew", () => {
     );
 
     expect(webBanners).toHaveLength(0);
+  });
+
+  it("suppresses banners for muted DMs unless @mentioned", async () => {
+    const qc = createQueryClient();
+    qc.setQueryData<Workspace[]>(workspaceKeys.list(), [workspace()]);
+    qc.setQueryData(notificationPreferenceKeys.all("ws-a"), {
+      preferences: { system_notifications: "all" },
+    });
+    qc.setQueryData<Channel[]>(channelKeys.list("ws-a"), [
+      channel({ kind: "dm", muted: true }),
+    ]);
+    installBrowserNotification("granted");
+
+    await handleChannelMessageNotification(qc, channelMessage(), "member-1");
+    expect(webBanners).toHaveLength(0);
+
+    await handleChannelMessageNotification(
+      qc,
+      channelMessage({
+        content: "ping [@Alice](mention://member/member-1)",
+      }),
+      "member-1",
+    );
+    expect(webBanners).toHaveLength(1);
+    expect(webBanners[0]?.options).toMatchObject({
+      data: expect.objectContaining({ dmId: "channel-1" }),
+    });
   });
 
   it("suppresses banners for channel message edits and deletes", async () => {

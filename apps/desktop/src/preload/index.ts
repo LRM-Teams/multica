@@ -113,8 +113,10 @@ const desktopAPI = {
    */
   showNotification: (payload: {
     slug: string;
-    itemId: string;
-    issueKey: string;
+    itemId?: string;
+    issueKey?: string;
+    channelId?: string;
+    dmId?: string;
     title: string;
     body: string;
   }) => ipcRenderer.send("notification:show", payload),
@@ -125,21 +127,29 @@ const desktopAPI = {
   setUnreadBadge: (count: number) =>
     ipcRenderer.send("badge:set", Math.max(0, Math.floor(count))),
   /**
-   * Subscribe to "open this inbox row" requests sent by the main process
+   * Subscribe to "open this inbox/channel" requests sent by the main process
    * when the user clicks an OS notification banner. Returns an unsubscribe
-   * function. The payload echoes the `slug`, `itemId`, and `issueKey` that
-   * were passed to `showNotification`.
+   * function. Echoes the fields passed to `showNotification` (including
+   * LRM-414 `channelId` / `dmId` for conversation banners).
    */
   onInboxOpen: (
     callback: (payload: {
       slug: string;
-      itemId: string;
-      issueKey: string;
+      itemId?: string;
+      issueKey?: string;
+      channelId?: string;
+      dmId?: string;
     }) => void,
   ) => {
     const handler = (
       _event: Electron.IpcRendererEvent,
-      payload: { slug: string; itemId: string; issueKey: string },
+      payload: {
+        slug: string;
+        itemId?: string;
+        issueKey?: string;
+        channelId?: string;
+        dmId?: string;
+      },
     ) => callback(payload);
     ipcRenderer.on("inbox:open", handler);
     return () => {

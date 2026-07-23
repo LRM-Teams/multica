@@ -69,10 +69,7 @@ describe("IssueMentionCard (#520 — the unanchored fallback)", () => {
     resolvedIssue = undefined;
   });
 
-  it("renders the SAME zero-decoration link as an anchored reference — never a chip", () => {
-    // Frank caught one message rendering LRM-126 three times in two looks: two
-    // anchored (plain link) and one unanchored (a bordered chip). A compat path may
-    // survive; it may not grow a second face.
+  it("renders title as primary ink — never LRM-xxx as main text (LRM-508)", () => {
     resolvedIssue = {
       id: "issue-uuid",
       identifier: "LRM-126",
@@ -81,25 +78,17 @@ describe("IssueMentionCard (#520 — the unanchored fallback)", () => {
     };
     const { container } = render(<IssueMentionCard issueId="LRM-126" fallbackLabel="LRM-126" />);
 
-    // The identifier appears twice — the link and the peek's eyebrow — so select
-    // the anchor itself rather than by text.
     const link = container.querySelector("a[data-ref-source]");
-    expect(link).toHaveTextContent("LRM-126");
+    expect(link).toHaveTextContent("Fix the login bug");
+    expect(link).not.toHaveTextContent("LRM-126");
     expect(link).toHaveClass("text-brand");
-    // The chip's own class must not appear anywhere in a message body.
+    // Muted identifier is secondary only (LRM-423 parity).
+    expect(container.textContent).toContain("LRM-126");
     expect(container.querySelector(".issue-chip")).toBeNull();
-    // NOTE: `.issue-mention` is deliberately absent here — inside `.rich-text-editor`
-    // that class forces `color: inherit; text-decoration: none`, i.e. the very
-    // decoration #520 removed. Its OTHER job (suppressing the generic URL hover) is
-    // carried by `data-issue-ref` below. Dropping the class without noticing it did
-    // two jobs is what shipped Frank's double-hover bug.
     expect(container.querySelector(".issue-mention")).toBeNull();
   });
 
   it("declares itself an issue ref so generic link affordances stand down", () => {
-    // Frank: hovering LRM-127 popped the peek AND a URL preview. The suppression is
-    // an attribute — it says what the link IS, so a restyle cannot silently take the
-    // behaviour with it (see link-hover-card.test.tsx for the other half).
     resolvedIssue = {
       id: "issue-uuid",
       identifier: "LRM-126",
@@ -112,9 +101,6 @@ describe("IssueMentionCard (#520 — the unanchored fallback)", () => {
   });
 
   it("carries the peek card, so the fallback is indistinguishable to a reader (#520)", () => {
-    // Parker's ruling: don't use a degraded UX as a bug detector. The fallback holds
-    // only an identifier, but useResolvedIssue accepts identifiers — which is exactly
-    // how the old chip showed a title for mention://issue/LRM-126.
     resolvedIssue = {
       id: "issue-uuid",
       identifier: "LRM-126",
@@ -127,9 +113,6 @@ describe("IssueMentionCard (#520 — the unanchored fallback)", () => {
   });
 
   it("marks itself provenance `fallback` — the only remaining tell of a missed anchor", () => {
-    // Invisible to readers, visible to assertions. Iris's acceptance: N occurrences
-    // of one identifier in a message must ALL be `anchor`; a `fallback` = the parser
-    // skipped one (#521). Scaffolding — deleted with this path once #521 lands.
     resolvedIssue = {
       id: "issue-uuid",
       identifier: "LRM-126",
@@ -153,22 +136,7 @@ describe("IssueMentionCard (#520 — the unanchored fallback)", () => {
     expect(text).not.toHaveAttribute("href");
   });
 
-  it("paints the author link label for mention://issue/<uuid> — never the UUID (LRM-493)", () => {
-    // Morgan: `[LRM-487](mention://issue/fe57cec6-…)` must read LRM-487 on mobile,
-    // not a truncated UUID. Label comes from markdown link text.
-    resolvedIssue = undefined;
-    const { container } = render(
-      <IssueMentionCard
-        issueId="fe57cec6-0a45-4d90-9ef6-6571f429c047"
-        fallbackLabel="LRM-487"
-      />,
-    );
-    const link = container.querySelector("a[data-ref-source]");
-    expect(link).toHaveTextContent("LRM-487");
-    expect(link).not.toHaveTextContent("fe57cec6");
-  });
-
-  it("prefers live identifier over a UUID-shaped label once resolved (LRM-238)", () => {
+  it("paints title for mention://issue/<uuid> — never LRM-xxx or UUID (LRM-508)", () => {
     resolvedIssue = {
       id: "fe57cec6-0a45-4d90-9ef6-6571f429c047",
       identifier: "LRM-487",
@@ -178,16 +146,36 @@ describe("IssueMentionCard (#520 — the unanchored fallback)", () => {
     const { container } = render(
       <IssueMentionCard
         issueId="fe57cec6-0a45-4d90-9ef6-6571f429c047"
-        fallbackLabel="fe57cec6-0a45-4d90-9ef6-6571f429c047"
+        fallbackLabel="LRM-487"
       />,
     );
-    expect(container.querySelector("a[data-ref-source]")).toHaveTextContent("LRM-487");
+    const link = container.querySelector("a[data-ref-source]");
+    expect(link).toHaveTextContent("Soft-ask design");
+    expect(link).not.toHaveTextContent("LRM-487");
+    expect(link).not.toHaveTextContent("fe57cec6");
   });
 
-  it("renders nothing rather than a bare UUID while unresolved (LRM-493)", () => {
+  it("renders nothing when resolved without a title — no silent LRM-xxx (LRM-508/238)", () => {
+    resolvedIssue = {
+      id: "fe57cec6-0a45-4d90-9ef6-6571f429c047",
+      identifier: "LRM-487",
+      title: "   ",
+      status: "todo",
+    };
+    const { container } = render(
+      <IssueMentionCard
+        issueId="fe57cec6-0a45-4d90-9ef6-6571f429c047"
+        fallbackLabel="LRM-487"
+      />,
+    );
+    expect(container.querySelector("a[data-ref-source]")).toBeNull();
+    expect(container.textContent).toBe("");
+  });
+
+  it("renders nothing rather than a bare UUID while unresolved (LRM-508)", () => {
     resolvedIssue = undefined;
     const { container } = render(
-      <IssueMentionCard issueId="fe57cec6-0a45-4d90-9ef6-6571f429c047" />,
+      <IssueMentionCard issueId="fe57cec6-0a45-4d90-9ef6-6571f429c047" fallbackLabel="LRM-487" />,
     );
     expect(container.querySelector("a[data-ref-source]")).toBeNull();
     expect(container.textContent).toBe("");

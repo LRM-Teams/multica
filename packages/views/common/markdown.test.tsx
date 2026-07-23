@@ -152,9 +152,9 @@ describe("Markdown", () => {
     expect(screen.getByRole("link")).toHaveAttribute("href", "/projects/project-123");
   });
 
-  it("forwards issue mention link text as fallbackLabel (LRM-493)", () => {
-    // `[LRM-487](mention://issue/<uuid>)` must not drop the author label — that
-    // is what made mobile paint a truncated bare UUID.
+  it("forwards issue mention link text as fallbackLabel (LRM-508)", () => {
+    // Label still forwarded for the auto-link miss path; titled display is
+    // owned by IssueMentionCard once the issue resolves.
     render(
       <Markdown>
         {"[LRM-487](mention://issue/fe57cec6-0a45-4d90-9ef6-6571f429c047)"}
@@ -163,7 +163,6 @@ describe("Markdown", () => {
 
     const card = screen.getByTestId("issue-mention-card");
     expect(card).toHaveAttribute("data-fallback-label", "LRM-487");
-    expect(card).toHaveTextContent("LRM-487");
   });
 
   it("renders a :sticker:<id>: token as a sticker image", () => {

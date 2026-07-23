@@ -22,6 +22,8 @@
  * Pipeline:
  *
  *   content
+ *     ↓ rewriteIssueMentionLabels   title-first labels (LRM-508; enriched
+ *                                   cannot inject React for links)
  *     ↓ preprocessMobileMarkdown    legacy mention shortcodes + file
  *                                   cards + HTML strip with `<br>` →
  *                                   "  \n" (canonical CommonMark hard
@@ -32,22 +34,27 @@
  * Mention chip note: mobile renders `mention://` links via enriched's
  * default link styling (brand-colored, underlined), matching web's
  * fallback behavior when no `renderMention` is provided
- * (`packages/ui/markdown/Markdown.tsx:173-178`). The avatar pill
- * variant only ever existed on web in specific contexts that supplied
- * a custom renderer — mobile doesn't lose anything that exists by
- * default elsewhere.
+ * (`packages/ui/markdown/Markdown.tsx:173-178`). Issue mention labels are
+ * rewritten to the live title before render (LRM-508) — enriched cannot
+ * resolve React chips the way web's IssueMentionCard does.
  */
 import { useCallback, useMemo } from "react";
 import { Linking, View } from "react-native";
 import { router } from "expo-router";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { EnrichedMarkdownText } from "react-native-enriched-markdown";
-import type { Attachment } from "@multica/core/types";
+import type { Attachment, Issue } from "@multica/core/types";
 import { useWorkspaceStore } from "@/data/workspace-store";
+import { issueDetailOptions, issueListOptions } from "@/data/queries/issues";
 import { preprocessMobileMarkdown } from "./preprocess";
 import { useMarkdownStyle } from "./markdown-style";
 import { splitMarkdown } from "./split-markdown";
 import { CodeBlock } from "./code-block";
 import { MarkdownImage } from "./markdown-image";
+import {
+  collectIssueMentionIds,
+  rewriteIssueMentionLabels,
+} from "./rewrite-issue-mention-labels";
 
 interface Props {
   content: string;
@@ -105,6 +112,10 @@ interface Props {
   compact?: boolean;
 }
 
+function findCachedIssue(issues: Issue[], key: string): Issue | undefined {
+  return issues.find((i) => i.id === key || i.identifier === key);
+}
+
 export function Markdown({
   content,
   attachments,
@@ -112,6 +123,7 @@ export function Markdown({
   compact = false,
 }: Props) {
   const wsSlug = useWorkspaceStore((s) => s.currentWorkspaceSlug);
+  const wsId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const baseStyle = useMarkdownStyle();
   const markdownStyle = useMemo(
     () =>
@@ -128,10 +140,60 @@ export function Markdown({
     [baseStyle, compact],
   );
 
+  const mentionIds = useMemo(() => collectIssueMentionIds(content), [content]);
+  const { data: listIssues = [] } = useQuery(issueListOptions(wsId));
+
+  const missingIds = useMemo(
+    () => mentionIds.filter((id) => !findCachedIssue(listIssues, id)),
+    [mentionIds, listIssues],
+  );
+
+  const detailQueries = useQueries({
+    queries: missingIds.map((id) => ({
+      ...issueDetailOptions(wsId, id),
+    })),
+  });
+
+  // Serialize detail results so Map identity is stable across renders when
+  // nothing changed (useQueries returns a fresh array every time).
+  const detailSnapshot = detailQueries
+    .map((q, idx) => {
+      const id = missingIds[idx] ?? "";
+      if (q.isPending || q.isLoading) return `${id}:pending`;
+      const title = (q.data as Issue | undefined)?.title?.trim() ?? "";
+      return `${id}:${title}`;
+    })
+    .join("\n");
+
+  const titleById = useMemo(() => {
+    const map = new Map<string, string | null>();
+    for (const issue of listIssues) {
+      const title = issue.title?.trim() || null;
+      map.set(issue.id, title);
+      if (issue.identifier) map.set(issue.identifier, title);
+    }
+    for (const row of detailSnapshot.split("\n")) {
+      if (!row) continue;
+      const colon = row.indexOf(":");
+      if (colon < 0) continue;
+      const id = row.slice(0, colon);
+      const value = row.slice(colon + 1);
+      if (!id || value === "pending" || map.has(id)) continue;
+      map.set(id, value || null);
+    }
+    return map;
+    // listIssues identity changes on cache updates; detailSnapshot is the
+    // stable fingerprint for detail fetches.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- detailSnapshot
+  }, [listIssues, detailSnapshot]);
+
   const segments = useMemo(() => {
-    const processed = preprocessMobileMarkdown(content);
+    const titled = rewriteIssueMentionLabels(content, (id) =>
+      titleById.has(id) ? titleById.get(id) : undefined,
+    );
+    const processed = preprocessMobileMarkdown(titled);
     return splitMarkdown(processed);
-  }, [content]);
+  }, [content, titleById]);
 
   const onLinkPress = useCallback(
     ({ url }: { url: string }) => {

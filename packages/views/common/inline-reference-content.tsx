@@ -5,7 +5,9 @@ import type { MessagePart } from "@multica/core/types";
 import { MemoizedMarkdown, ActorMention } from "./markdown";
 import { cn } from "@multica/ui/lib/utils";
 import { mentionTokenClassName } from "./mention-token";
+import { useResolvedIssue } from "../issues/components/issue-chip";
 import { IssueRefLink } from "../issues/components/issue-ref-link";
+import { resolveIssueMentionDisplayText } from "../issues/components/issue-mention-display-text";
 import { projectInlineReferences, type ReferencePart } from "./inline-references";
 
 /**
@@ -154,7 +156,7 @@ function ReferenceToken({
   if (!interactive) {
     return <span className="text-brand">{text}</span>;
   }
-  return <IssueRefToken reference={reference} text={text} sourceMessageId={sourceMessageId} />;
+  return <IssueRefToken reference={reference} sourceMessageId={sourceMessageId} />;
 }
 
 type IssueRefPart = Extract<ReferencePart, { ref_type: "issue-ref" }>;
@@ -162,24 +164,43 @@ type IssueRefPart = Extract<ReferencePart, { ref_type: "issue-ref" }>;
 /**
  * An anchored issue reference. The rendering itself lives in {@link IssueRefLink} —
  * shared with the unanchored linkify fallback (#520) so the two cannot drift into
- * two different looks. This component only supplies what the projector knows: the
- * anchored id and the author's exact span substring.
+ * two different looks.
+ *
+ * Display (LRM-508): live title is primary ink (clickable); optional muted
+ * identifier secondary — same title-first口径 as LRM-423 / IssueMentionCard.
+ * Author span substring is identity for projection only; reading surfaces do
+ * not paint LRM-xxx as main text.
  */
 function IssueRefToken({
   reference,
-  text,
   sourceMessageId,
 }: {
   reference: IssueRefPart;
-  text: string;
   sourceMessageId?: string;
-}): React.JSX.Element {
+}): React.JSX.Element | null {
+  const issue = useResolvedIssue(reference.ref_id);
+  const displayText = resolveIssueMentionDisplayText(issue?.title);
+
+  // Loading / missing title — explicit empty (LRM-508 / LRM-238). Do not fall
+  // back to the author's LRM-xxx span or a UUID.
+  if (!displayText) return null;
+
+  const identifier = issue?.identifier?.trim();
+  const showMutedId = Boolean(identifier) && identifier !== displayText;
+
   return (
-    <IssueRefLink
-      issueId={reference.ref_id}
-      text={text}
-      source="anchor"
-      sourceMessageId={sourceMessageId}
-    />
+    <span className="inline-flex max-w-full min-w-0 flex-wrap items-baseline gap-x-1">
+      <IssueRefLink
+        issueId={reference.ref_id}
+        text={displayText}
+        source="anchor"
+        sourceMessageId={sourceMessageId}
+      />
+      {showMutedId ? (
+        <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+          {identifier}
+        </span>
+      ) : null}
+    </span>
   );
 }

@@ -1,22 +1,15 @@
-import { isIssueUuid } from "./issue-chip";
-
 /**
- * Prefer the author's link text / live identifier over a bare UUID.
+ * Visible primary ink for an issue mention in message bodies (LRM-508).
  *
- * LRM-493 / LRM-238: never silently paint a truncated UUID (`fe57cec6-…`) when
- * we have (or can resolve) an LRM-id. Author label wins when it is already a
- * human identifier; otherwise the live `issue.identifier` wins once resolved.
+ * Title-first — same口径 as LRM-423 system events. Never paint `LRM-xxx` or a
+ * bare UUID as the main token (overrides LRM-493's identifier-primary).
+ *
+ * Missing / empty title → `null` (explicit empty; LRM-238 forbids silent
+ * identifier/UUID stand-ins). Callers render nothing rather than fake ink.
  */
 export function resolveIssueMentionDisplayText(
-  issueId: string,
-  fallbackLabel: string | undefined,
-  identifier: string | undefined,
+  title: string | undefined | null,
 ): string | null {
-  const label = fallbackLabel?.trim();
-  if (label && !isIssueUuid(label)) return label;
-  if (identifier) return identifier;
-  if (!isIssueUuid(issueId)) return issueId;
-  // Explicit UUID mention with no author label and no resolve yet — refuse to
-  // paint the UUID rather than truncate it as a fake identifier.
-  return null;
+  const trimmed = title?.trim();
+  return trimmed || null;
 }

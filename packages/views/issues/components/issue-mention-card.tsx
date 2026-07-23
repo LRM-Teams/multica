@@ -6,7 +6,7 @@ import { resolveIssueMentionDisplayText } from "./issue-mention-display-text";
 
 interface IssueMentionCardProps {
   issueId: string;
-  /** Fallback text when issue is not in store (e.g. "MUL-7") */
+  /** Fallback text when issue is not in store (e.g. "MUL-7") — auto-link miss only. */
   fallbackLabel?: string;
   /** Source row id when this legacy reference is rendered in a Messages timeline. */
   sourceMessageId?: string;
@@ -28,9 +28,11 @@ interface IssueMentionCardProps {
  * correctly: there you operate on the reference, so its box is a functional signal
  * that it is one atomic token. Here you are reading it, so it is clickable text.
  *
+ * Display (LRM-508): title primary (clickable); optional muted identifier secondary
+ * — same title-first口径 as LRM-423. No title → render nothing (never LRM-xxx/UUID).
+ *
  * Two sources feed this:
- *   - Explicit mentions (`mention://issue/<uuid>`) — always navigable, even before
- *     the issue resolves (the author deliberately picked it).
+ *   - Explicit mentions (`mention://issue/<uuid>`) — always navigable once titled.
  *   - Auto-linked bare identifiers (`MUL-123` in prose) — only navigable once they
  *     resolve to a real issue; an unresolved identifier renders as plain text so we
  *     never produce a dead link for a false match.
@@ -38,22 +40,23 @@ interface IssueMentionCardProps {
 export function IssueMentionCard({ issueId, fallbackLabel, sourceMessageId }: IssueMentionCardProps) {
   const isUuid = isIssueUuid(issueId);
   const issue = useResolvedIssue(issueId);
-  const displayText = resolveIssueMentionDisplayText(
-    issueId,
-    fallbackLabel,
-    issue?.identifier,
-  );
+  const displayText = resolveIssueMentionDisplayText(issue?.title);
 
   if (!isUuid && !issue) {
     // Auto-linked identifier that doesn't resolve — keep it as plain text.
+    // This is a false-match path, not a titled mention; LRM-xxx here is the
+    // author's bare token, not a silent stand-in for a missing title.
     return <span className="not-prose">{fallbackLabel ?? issueId}</span>;
   }
 
-  // UUID mention still loading / deleted with no human label — do not flash UUID
-  // ink (LRM-493). Once `useResolvedIssue` lands, we re-render with the identifier.
+  // Loading / deleted / resolved-without-title — do not flash LRM-xxx or UUID
+  // (LRM-508 / LRM-238). Once title lands, we re-render.
   if (!displayText) {
     return null;
   }
+
+  const identifier = issue?.identifier?.trim();
+  const showMutedId = Boolean(identifier) && identifier !== displayText;
 
   // `source="fallback"` is invisible to the reader, deliberately: it exists only so a
   // test can assert that every occurrence of an identifier in one message was
@@ -62,11 +65,18 @@ export function IssueMentionCard({ issueId, fallbackLabel, sourceMessageId }: Is
   // so the signal moved to where assertions can see it and users cannot. It gets
   // deleted along with this whole path once #521 lands (#463/#510 tail).
   return (
-    <IssueRefLink
-      issueId={issueId}
-      text={displayText}
-      source="fallback"
-      sourceMessageId={sourceMessageId}
-    />
+    <span className="inline-flex max-w-full min-w-0 flex-wrap items-baseline gap-x-1">
+      <IssueRefLink
+        issueId={issueId}
+        text={displayText}
+        source="fallback"
+        sourceMessageId={sourceMessageId}
+      />
+      {showMutedId ? (
+        <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+          {identifier}
+        </span>
+      ) : null}
+    </span>
   );
 }

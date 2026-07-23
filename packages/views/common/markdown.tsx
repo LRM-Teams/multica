@@ -144,8 +144,8 @@ function defaultRenderMention(
 ): React.ReactNode {
   if (type === "issue") {
     // Link text is the author's label (e.g. `[LRM-487](mention://issue/<uuid>)`).
-    // Dropping it forced IssueMentionCard to paint the raw UUID — on mobile that
-    // truncates to `fe57cec6-…` (LRM-493). Pass it through as fallbackLabel.
+    // IssueMentionCard resolves live title as primary ink (LRM-508); the label is
+    // only used for the auto-link miss plain-text path.
     return (
       <IssueMentionCard
         issueId={id}

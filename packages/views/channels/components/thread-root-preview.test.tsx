@@ -13,12 +13,14 @@ vi.mock("./message-parts-renderer", () => ({
   MessagePartsRenderer: ({
     parts,
   }: {
-    parts: { type: string; sticker_id?: string; alt?: string }[];
+    parts: { type: string; text?: string; sticker_id?: string; alt?: string }[];
   }) => (
     <div data-testid="message-parts-renderer">
       {parts.map((part, index) =>
         part.type === "sticker" ? (
           <img key={index} data-testid="message-sticker" alt={part.alt ?? ""} />
+        ) : part.type === "text" ? (
+          <span key={index}>{part.text}</span>
         ) : null,
       )}
     </div>
@@ -75,7 +77,18 @@ vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
     t: (
       selector: (resources: {
-        message: { agent_badge: string };
+        message: {
+          agent_badge: string;
+          voice_loading: string;
+          voice_stop: string;
+          voice_retry: string;
+          voice_play: string;
+          voice_hide_transcript: string;
+          voice_show_transcript: string;
+          voice_transcript_label: string;
+          voice_input: string;
+          voice_input_duration: string;
+        };
         profile_popover: {
           role: { owner: string; admin: string; member: string; agent: string };
         };
@@ -84,7 +97,18 @@ vi.mock("../../i18n/use-t", () => ({
       }) => string,
     ) =>
       selector({
-        message: { agent_badge: "Agent" },
+        message: {
+          agent_badge: "Agent",
+          voice_loading: "Loading voice",
+          voice_stop: "Stop voice",
+          voice_retry: "Retry voice",
+          voice_play: "Play voice",
+          voice_hide_transcript: "Hide transcript",
+          voice_show_transcript: "Show transcript",
+          voice_transcript_label: "Voice transcript",
+          voice_input: "Voice input",
+          voice_input_duration: "Voice input duration",
+        },
         profile_popover: {
           role: { owner: "Owner", admin: "Admin", member: "Member", agent: "Agent" },
         },
@@ -239,6 +263,54 @@ describe("ThreadRootPreview", () => {
     expect(screen.getByTestId("message-sticker")).toBeInTheDocument();
     expect(screen.queryByText("[Sticker] Hi sticker")).not.toBeInTheDocument();
     expect(screen.queryByText(":sticker:hi:")).not.toBeInTheDocument();
+  });
+
+  it("keeps a recorded voice root as a playable bubble until its transcript is opened", () => {
+    const transcript = "question spoken in the thread root";
+    render(
+      <ThreadRootPreview
+        message={makeMessage({
+          type: "user",
+          author_id: "user-1",
+          author_name: "Alice",
+          content: transcript,
+          parts: [
+            { type: "text", text: transcript },
+            {
+              type: "voice",
+              duration_ms: 2400,
+              attachment_id: "recording-1",
+              filename: "voice-recording.wav",
+              content_type: "audio/wav",
+              size_bytes: 48,
+            },
+          ],
+          attachments: [{
+            id: "recording-1",
+            workspace_id: "w1",
+            issue_id: null,
+            comment_id: null,
+            chat_session_id: null,
+            chat_message_id: null,
+            uploader_type: "member",
+            uploader_id: "user-1",
+            filename: "voice-recording.wav",
+            url: "/uploads/voice-recording.wav",
+            download_url: "/api/attachments/recording-1/download",
+            markdown_url: "/api/attachments/recording-1/download",
+            content_type: "audio/wav",
+            size_bytes: 48,
+            created_at: "2026-07-23T00:00:00Z",
+          }],
+        })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.queryByText(transcript)).not.toBeInTheDocument();
+    expect(screen.getByTestId("voice-reply-control")).toHaveTextContent('2″');
+    fireEvent.click(screen.getByRole("button", { name: "Show transcript" }));
+    expect(screen.getByTestId("voice-reply-transcript")).toHaveTextContent(transcript);
   });
 
   // GAP 2 — load-bearing invariant. A structured-action envelope with no

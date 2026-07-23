@@ -129,10 +129,10 @@ WHERE run_id = $1 AND status IN ('running', 'compacting');
 -- name: CompleteInteractionDAGDiagnosisRun :execrows
 -- CAS: completes only while active AND every segment checkpoint is completed,
 -- so the run can never be marked done with outstanding coverage.
-UPDATE interaction_dag_diagnosis_run
+UPDATE interaction_dag_diagnosis_run run
 SET status = 'completed', completed_at = now(), updated_at = now()
-WHERE run_id = $1
-  AND status IN ('running', 'compacting')
+WHERE run.run_id = $1
+  AND run.status IN ('running', 'compacting')
   AND NOT EXISTS (
     SELECT 1 FROM interaction_dag_diagnosis_segment s
     WHERE s.run_id = $1 AND s.status <> 'completed'

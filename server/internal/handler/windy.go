@@ -988,15 +988,19 @@ func (h *Handler) agentInboxInitiatorUserID(r *http.Request, workspaceID pgtype.
 	return target, err == nil && target.Valid
 }
 
-func (h *Handler) MarkAgentDraftUsed(r *http.Request, workspaceID, targetUserID string, draftID pgtype.UUID, usedAgentID pgtype.UUID) {
-	if h == nil || h.DB == nil || !draftID.Valid || !usedAgentID.Valid || strings.TrimSpace(targetUserID) == "" {
+func (h *Handler) MarkAgentDraftUsed(r *http.Request, workspaceID, _targetUserID string, draftID pgtype.UUID, usedAgentID pgtype.UUID) {
+	if h == nil || h.DB == nil || !draftID.Valid || !usedAgentID.Valid {
 		return
 	}
+	// Match GetAgentDraft / loadAgentDraftForCreate: any workspace member who
+	// can materialize the hiring card may consume it. Do not gate on
+	// target_user_id — Wendy may stamp the wrong target when inbox initiator
+	// resolution fails (LRM-444).
 	_, _ = h.DB.Exec(r.Context(), `
 		UPDATE agent_creation_draft
 		SET status = 'used', used_agent_id = $2, used_at = now(), updated_at = now()
-		WHERE id = $1 AND workspace_id = $3 AND target_user_id = $4 AND status = 'draft'`,
-		draftID, usedAgentID, parseUUID(workspaceID), parseUUID(targetUserID))
+		WHERE id = $1 AND workspace_id = $3 AND status = 'draft'`,
+		draftID, usedAgentID, parseUUID(workspaceID))
 }
 
 type agentDraftSeed struct {
@@ -1005,25 +1009,46 @@ type agentDraftSeed struct {
 	AvatarURL     pgtype.Text
 }
 
-func (h *Handler) loadAgentDraftSeed(r *http.Request, workspaceID, targetUserID string, draftID pgtype.UUID) (agentDraftSeed, bool) {
-	if h == nil || h.DB == nil || !draftID.Valid || strings.TrimSpace(targetUserID) == "" {
-		return agentDraftSeed{}, false
+// agentDraftLookup codes for CreateAgent(draft_id=...).
+const (
+	agentDraftLookupOK          = ""
+	agentDraftLookupNotFound    = "agent_draft_not_found"
+	agentDraftLookupAlreadyUsed = "agent_draft_already_used"
+)
+
+// loadAgentDraftForCreate loads a still-open hiring draft by id+workspace.
+// Intentionally does NOT filter by target_user_id: GetAgentDraft is already
+// workspace-visible, and Create must match that contract (LRM-444).
+func (h *Handler) loadAgentDraftForCreate(r *http.Request, workspaceID string, draftID pgtype.UUID) (agentDraftSeed, string) {
+	if h == nil || h.DB == nil || !draftID.Valid || strings.TrimSpace(workspaceID) == "" {
+		return agentDraftSeed{}, agentDraftLookupNotFound
 	}
 	var initialNotesRaw, initialMemoryRaw []byte
 	var avatarURL pgtype.Text
+	var status string
 	err := h.DB.QueryRow(r.Context(), `
-		SELECT initial_notes, initial_memory, avatar_url
+		SELECT initial_notes, initial_memory, avatar_url, status
 		FROM agent_creation_draft
-		WHERE id = $1 AND workspace_id = $2 AND target_user_id = $3 AND status = 'draft'`,
-		draftID, parseUUID(workspaceID), parseUUID(targetUserID)).Scan(&initialNotesRaw, &initialMemoryRaw, &avatarURL)
+		WHERE id = $1 AND workspace_id = $2`,
+		draftID, parseUUID(workspaceID)).Scan(&initialNotesRaw, &initialMemoryRaw, &avatarURL, &status)
 	if err != nil {
-		return agentDraftSeed{}, false
+		return agentDraftSeed{}, agentDraftLookupNotFound
+	}
+	if status != "draft" {
+		return agentDraftSeed{}, agentDraftLookupAlreadyUsed
 	}
 	return agentDraftSeed{
 		InitialNotes:  decodeStringMap(initialNotesRaw),
 		InitialMemory: decodeStringMap(initialMemoryRaw),
 		AvatarURL:     avatarURL,
-	}, true
+	}, agentDraftLookupOK
+}
+
+// loadAgentDraftSeed is kept for call sites that only need the happy-path seed.
+// Prefer loadAgentDraftForCreate when callers must distinguish used vs missing.
+func (h *Handler) loadAgentDraftSeed(r *http.Request, workspaceID, _targetUserID string, draftID pgtype.UUID) (agentDraftSeed, bool) {
+	seed, code := h.loadAgentDraftForCreate(r, workspaceID, draftID)
+	return seed, code == agentDraftLookupOK
 }
 
 func extractDraftID(rawFields map[string]json.RawMessage) (pgtype.UUID, bool, error) {

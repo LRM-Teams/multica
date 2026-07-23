@@ -182,3 +182,110 @@ func TestGetAgentDraft_AllowsWorkspaceMemberViewer(t *testing.T) {
 		t.Fatalf("loaded draft = {id:%q target:%q}, want {id:%q target:%q}", loaded.ID, loaded.TargetUserID, created.ID, created.TargetUserID)
 	}
 }
+
+func TestCreateAgent_FromDraftAllowsNonTargetWorkspaceMember(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	// LRM-444: GetAgentDraft is workspace-visible, but Create used to require
+	// target_user_id == creator. Hiring cards posted in channels then fail
+	// with "agent draft not found" for the member who clicks Create.
+	// Create as the fixture owner (owns the shared test runtime); draft is
+	// stamped for a different target.
+	targetID := createWindyDraftTestMember(t, "Wendy Draft Target")
+	if targetID == testUserID {
+		t.Fatal("test setup needs a non-fixture target")
+	}
+
+	marker := strings.ReplaceAll(uuid.NewString(), "-", "")[:10]
+	var draftID string
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO agent_creation_draft (
+			workspace_id, target_user_id, name, description, instructions,
+			initial_notes, initial_memory, status
+		) VALUES (
+			$1, $2, $3, 'hiring card', 'help the requester',
+			'{"notes/context.md":"from-draft"}'::jsonb, '{}'::jsonb, 'draft'
+		)
+		RETURNING id
+	`, testWorkspaceID, targetID, "Mira "+marker).Scan(&draftID); err != nil {
+		t.Fatalf("insert draft: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_creation_draft WHERE id = $1`, draftID)
+	})
+
+	req := newRequest(http.MethodPost, "/api/agents", map[string]any{
+		"display_name":         "from-draft-" + marker,
+		"runtime_id":           handlerTestRuntimeID(t),
+		"visibility":           "private",
+		"max_concurrent_tasks": 1,
+		"draft_id":             draftID,
+	})
+	rec := httptest.NewRecorder()
+	testHandler.CreateAgent(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("CreateAgent as non-target member: expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var created AgentResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode created agent: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, created.ID)
+	})
+	if created.OwnerID == nil || *created.OwnerID != testUserID {
+		t.Fatalf("created owner = %v, want fixture user %q", created.OwnerID, testUserID)
+	}
+
+	var status string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT status FROM agent_creation_draft WHERE id = $1
+	`, draftID).Scan(&status); err != nil {
+		t.Fatalf("reload draft status: %v", err)
+	}
+	if status != "used" {
+		t.Fatalf("draft status = %q, want used", status)
+	}
+}
+
+func TestCreateAgent_FromDraftAlreadyUsedReturnsConflict(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	marker := strings.ReplaceAll(uuid.NewString(), "-", "")[:10]
+	var draftID string
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO agent_creation_draft (
+			workspace_id, target_user_id, name, status
+		) VALUES ($1, $2, $3, 'used')
+		RETURNING id
+	`, testWorkspaceID, testUserID, "used-draft-"+marker).Scan(&draftID); err != nil {
+		t.Fatalf("insert used draft: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_creation_draft WHERE id = $1`, draftID)
+	})
+
+	req := newRequest(http.MethodPost, "/api/agents", map[string]any{
+		"display_name":         "reuse-draft-" + marker,
+		"runtime_id":           handlerTestRuntimeID(t),
+		"visibility":           "private",
+		"max_concurrent_tasks": 1,
+		"draft_id":             draftID,
+	})
+	rec := httptest.NewRecorder()
+	testHandler.CreateAgent(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("CreateAgent with used draft: expected 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if body["code"] != agentDraftLookupAlreadyUsed {
+		t.Fatalf("error code = %q, want %q", body["code"], agentDraftLookupAlreadyUsed)
+	}
+}

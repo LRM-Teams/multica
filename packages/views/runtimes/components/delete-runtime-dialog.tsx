@@ -59,7 +59,9 @@ function resolveDeviceLabel(runtime: AgentRuntime): string {
 //      silently cascade-archive agents from this dialog (#666, explicit
 //      product directive) — the user does that deliberately, elsewhere.
 //   2. No agents, but the runtime is a running local daemon (self-healing
-//      — see isSelfHealingRuntime) → block. Show the device name and a
+//      — see isSelfHealingRuntime, which uses derived health so a stale
+//      ONLINE status that the Health column already shows as Offline does
+//      NOT trap the user here) → block. Show the device name and a
 //      copyable `multica daemon stop` command; poll the runtime list
 //      while this step is showing so the dialog advances the moment the
 //      daemon actually goes offline, without the user needing to reopen it.

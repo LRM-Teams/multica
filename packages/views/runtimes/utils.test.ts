@@ -29,6 +29,8 @@ const zeroUsage = {
 };
 
 describe("isSelfHealingRuntime", () => {
+  const NOW = Date.parse("2026-07-23T08:00:00Z");
+
   function makeRuntime(overrides: Partial<AgentRuntime>): AgentRuntime {
     return {
       id: "rt-1",
@@ -46,27 +48,72 @@ describe("isSelfHealingRuntime", () => {
       runtime_health: "ok",
       owner_id: null,
       visibility: "private",
-      last_seen_at: null,
+      last_seen_at: new Date(NOW - 1_000).toISOString(),
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z",
       ...overrides,
     };
   }
 
-  it("flags an online local runtime as self-healing", () => {
+  it("flags a local runtime with a fresh online heartbeat as self-healing", () => {
     expect(
       isSelfHealingRuntime(
         makeRuntime({ runtime_mode: "local", status: "online" }),
+        NOW,
       ),
     ).toBe(true);
   });
 
-  it("treats an offline local runtime as safe to delete", () => {
+  it("flags recently_lost (stale but <5min online heartbeat) as self-healing", () => {
+    // Daemon may still be alive — deleting would get re-registered.
+    expect(
+      isSelfHealingRuntime(
+        makeRuntime({
+          runtime_mode: "local",
+          status: "online",
+          last_seen_at: new Date(NOW - 180_000).toISOString(),
+        }),
+        NOW,
+      ),
+    ).toBe(true);
+  });
+
+  it("treats an explicitly offline local runtime as safe to delete", () => {
     // Daemon isn't running, so the server-side delete is final — no
     // re-registration race to worry about.
     expect(
       isSelfHealingRuntime(
         makeRuntime({ runtime_mode: "local", status: "offline" }),
+        NOW,
+      ),
+    ).toBe(false);
+  });
+
+  it("treats a stale ONLINE status (UI Offline) as safe to delete — LRM-437", () => {
+    // Server never flipped status to offline, but heartbeat is long dead.
+    // Health column already shows Offline; delete must not open stop-daemon.
+    expect(
+      isSelfHealingRuntime(
+        makeRuntime({
+          runtime_mode: "local",
+          status: "online",
+          last_seen_at: new Date(NOW - 30 * 60_000).toISOString(),
+        }),
+        NOW,
+      ),
+    ).toBe(false);
+  });
+
+  it("treats online-with-no-heartbeat as safe to delete", () => {
+    // deriveRuntimeHealth: missing last_seen → offline.
+    expect(
+      isSelfHealingRuntime(
+        makeRuntime({
+          runtime_mode: "local",
+          status: "online",
+          last_seen_at: null,
+        }),
+        NOW,
       ),
     ).toBe(false);
   });
@@ -76,11 +123,13 @@ describe("isSelfHealingRuntime", () => {
     expect(
       isSelfHealingRuntime(
         makeRuntime({ runtime_mode: "cloud", status: "online" }),
+        NOW,
       ),
     ).toBe(false);
     expect(
       isSelfHealingRuntime(
         makeRuntime({ runtime_mode: "cloud", status: "offline" }),
+        NOW,
       ),
     ).toBe(false);
   });

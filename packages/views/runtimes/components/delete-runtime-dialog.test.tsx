@@ -116,6 +116,10 @@ import { DeleteRuntimeDialog } from "./delete-runtime-dialog";
 
 const mockedUseQuery = vi.mocked(useQuery);
 
+// Fresh heartbeat so local+online runtimes still count as self-healing under
+// deriveRuntimeHealth (stale/missing last_seen reads as Offline — LRM-437).
+const FRESH_LAST_SEEN = new Date().toISOString();
+
 function makeRuntime(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
   return {
     id: "rt-1",
@@ -138,6 +142,17 @@ function makeRuntime(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
     updated_at: "2026-01-01T00:00:00Z",
     ...overrides,
   };
+}
+
+function makeLiveLocalRuntime(
+  overrides: Partial<AgentRuntime> = {},
+): AgentRuntime {
+  return makeRuntime({
+    runtime_mode: "local",
+    status: "online",
+    last_seen_at: FRESH_LAST_SEEN,
+    ...overrides,
+  });
 }
 
 function makeAgent(id: string, overrides: Partial<Agent> = {}): Agent {
@@ -260,7 +275,7 @@ describe("DeleteRuntimeDialog", () => {
 
   it("shows the stop-daemon guidance for a self-healing local runtime with no bound agents", () => {
     renderDialog({
-      runtime: makeRuntime({ runtime_mode: "local", status: "online" }),
+      runtime: makeLiveLocalRuntime(),
       cachedAgents: [],
     });
 
@@ -271,11 +286,30 @@ describe("DeleteRuntimeDialog", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("resolves the stop-daemon step's device label from the runtime's hostname suffix, not its provider-branded name", () => {
+  it("allows final confirm when status is still online but heartbeat is stale (UI Offline) — LRM-437", () => {
+    // Frank's Mac: Health column Offline, AGENTS —, raw status still "online"
+    // because the daemon never reported disconnect. Must not trap in stop-daemon.
+    const staleIso = new Date(Date.now() - 30 * 60_000).toISOString();
     renderDialog({
       runtime: makeRuntime({
         runtime_mode: "local",
         status: "online",
+        last_seen_at: staleIso,
+        name: "Claude (FrankAns-MacBook-Pro.local)",
+      }),
+      cachedAgents: [],
+    });
+
+    expect(screen.getByText("Delete Runtime?")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Delete runtime" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Stop the daemon first")).not.toBeInTheDocument();
+  });
+
+  it("resolves the stop-daemon step's device label from the runtime's hostname suffix, not its provider-branded name", () => {
+    renderDialog({
+      runtime: makeLiveLocalRuntime({
         name: "Claude (build-server-01)",
       }),
       cachedAgents: [],
@@ -287,9 +321,7 @@ describe("DeleteRuntimeDialog", () => {
 
   it("falls back to device_info's leading segment when the runtime name has no hostname suffix", () => {
     renderDialog({
-      runtime: makeRuntime({
-        runtime_mode: "local",
-        status: "online",
+      runtime: makeLiveLocalRuntime({
         name: "Claude",
         device_info: "host.local · 2.1.121 (Claude Code)",
       }),
@@ -302,7 +334,7 @@ describe("DeleteRuntimeDialog", () => {
   it("polls for a runtime-list refresh while the stop-daemon step is showing, and auto-advances to the final confirm once the same open dialog receives an offline runtime", async () => {
     vi.useFakeTimers();
     try {
-      const online = makeRuntime({ runtime_mode: "local", status: "online" });
+      const online = makeLiveLocalRuntime();
       const { qc, rerenderWithRuntime } = renderDialog({
         runtime: online,
         cachedAgents: [],
@@ -333,7 +365,7 @@ describe("DeleteRuntimeDialog", () => {
 
   it("prioritizes the agents-blocking step over the stop-daemon step when both apply", () => {
     renderDialog({
-      runtime: makeRuntime({ runtime_mode: "local", status: "online" }),
+      runtime: makeLiveLocalRuntime(),
       cachedAgents: [makeAgent("a-1", { name: "Alpha" })],
     });
 

@@ -67,12 +67,14 @@ jobs:
           install -m 0644 docker-compose.aliyun.yml "${bundle}/docker-compose.aliyun.yml"
           install -m 0644 deploy/aliyun/Caddyfile "${bundle}/deploy/aliyun/Caddyfile"
           install -m 0644 scripts/assert-runner-workspace-ownership.sh "${bundle}/scripts/assert-runner-workspace-ownership.sh"
+          install -m 0644 scripts/compose-environment-value.sh "${bundle}/scripts/compose-environment-value.sh"
 
       - name: Validate deploy bundle
         run: |
           set -euo pipefail
           bundle="${RUNNER_TEMP}/multica-deploy-bundle"
           docker compose \
+            --project-name multica \
             --project-directory "$bundle" \
             --env-file .env.example \
             -f "${bundle}/docker-compose.selfhost.yml" \
@@ -291,39 +293,56 @@ jobs:
             echo "::error::${DEPLOY_DIR}/.env is not readable by deploy user $(id -un)."
             exit 1
           fi
-          set -a
-          # shellcheck disable=SC1091
-          . "${DEPLOY_DIR}/.env"
-          set +a
-          if [ -z "${POSTGRES_PASSWORD:-}" ]; then
-            echo "::error::POSTGRES_PASSWORD is empty in ${DEPLOY_DIR}/.env. Aborting before runtime changes."
-            exit 1
-          fi
           compose() {
-            docker compose \
+            # Compose gives ambient process variables precedence over --env-file.
+            # Keep the DB identity in one namespace: the host dotenv (plus the
+            # explicit defaults below) is authoritative for both preflight and
+            # every runtime mutation.
+            env -u POSTGRES_USER -u POSTGRES_DB -u POSTGRES_PASSWORD \
+              docker compose \
+              --project-name multica \
               --project-directory "${DEPLOY_DIR}" \
               --env-file "${DEPLOY_DIR}/.env" \
               -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.selfhost.yml" \
               -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.aliyun.yml" "$@"
           }
+          compose_environment="$(compose config --environment)"
+          compose_env_value() {
+            printf '%s\n' "$compose_environment" |
+              bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/compose-environment-value.sh" "$@"
+          }
+          # These defaults exactly match docker-compose.selfhost.yml. The
+          # password intentionally has no production default and must exist in
+          # the host dotenv.
+          db_user="$(compose_env_value POSTGRES_USER multica)"
+          db_name="$(compose_env_value POSTGRES_DB multica)"
+          db_password="$(compose_env_value POSTGRES_PASSWORD)"
+          unset compose_environment
+          if [ -z "$db_user" ] || [ -z "$db_name" ] || [ -z "$db_password" ]; then
+            echo "::error::POSTGRES_USER, POSTGRES_DB, and POSTGRES_PASSWORD must all be non-empty in ${DEPLOY_DIR}/.env. Aborting before runtime changes."
+            exit 1
+          fi
           postgres_id="$(compose ps -q postgres)"
           if [ -z "$postgres_id" ]; then
             echo "::error::PostgreSQL container is not running. Aborting before runtime changes."
             exit 1
           fi
-          if ! printf '%s\n' "$POSTGRES_PASSWORD" |
+          if ! printf '%s\n%s\n%s\n' "$db_user" "$db_name" "$db_password" |
             docker exec -i "$postgres_id" sh -ceu '
-              IFS= read -r candidate
-              PGPASSWORD="$candidate" psql \
+              IFS= read -r target_user
+              IFS= read -r target_db
+              IFS= read -r target_password
+              PGPASSWORD="$target_password" psql \
                 -h 127.0.0.1 \
-                -U "${POSTGRES_USER:-multica}" \
-                -d "${POSTGRES_DB:-multica}" \
+                -U "$target_user" \
+                -d "$target_db" \
               -Atqc "SELECT 1"
             ' >/dev/null; then
-            echo "::error::Host POSTGRES_PASSWORD failed an authenticated TCP query. Aborting before runtime changes."
+            echo "::error::Host PostgreSQL user/database/password failed an authenticated TCP query. Aborting before runtime changes."
             exit 1
           fi
-          echo "Host-local database credential preflight passed."
+          unset db_user db_name db_password
+          echo "Host-local database identity preflight passed."
           echo "Deploying ${MULTICA_BACKEND_IMAGE}:${MULTICA_IMAGE_TAG} (+ web) on $(hostname)"
           # Validate the immutable artifact source before touching the runtime
           # file. A bad config must not be left behind for the next host restart.
@@ -386,7 +405,9 @@ jobs:
           set -euo pipefail
 
           compose() {
-            docker compose \
+            env -u POSTGRES_USER -u POSTGRES_DB -u POSTGRES_PASSWORD \
+              docker compose \
+              --project-name multica \
               --project-directory "${DEPLOY_DIR}" \
               --env-file "${DEPLOY_DIR}/.env" \
               -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.selfhost.yml" \
@@ -455,8 +476,15 @@ jobs:
             echo "db-bridge-stub-multica container not running - skipping /healthz check."
             exit 0
           fi
-          set -a; . "${DEPLOY_DIR}/.env" 2>/dev/null || true; set +a
-          port="${BRIDGE_GATEWAY_STUB_PORT:-9100}"
+          port="$(
+            docker inspect \
+              --format '{{with (index .NetworkSettings.Ports "9100/tcp")}}{{(index . 0).HostPort}}{{end}}' \
+              multica-db-bridge-stub-multica-1
+          )"
+          if [ -z "$port" ]; then
+            echo "::warning::db-bridge-stub-multica has no published 9100/tcp host port; skipping /healthz check."
+            exit 0
+          fi
           for i in $(seq 1 30); do
             if curl -fsS "http://127.0.0.1:${port}/healthz" >/dev/null 2>&1; then
               echo "db-bridge-stub-multica healthy after $((i * 2))s."

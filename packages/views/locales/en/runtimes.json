@@ -61,6 +61,43 @@
       "cli": "CLI",
       "cloud_worker": "Cloud worker",
       "local_daemon": "Local daemon"
+    },
+    "delete_computer": {
+      "button": "Delete computer",
+      "toast_deleted_one": "Deleted {{count}} runtime from this computer",
+      "toast_deleted_other": "Deleted {{count}} runtimes from this computer",
+      "delete_failed_toast": "Failed to delete computer",
+      "close": "Close",
+      "confirm": {
+        "title": "Delete this computer?",
+        "description_one": "This will permanently delete all {{count}} runtime on \"{{name}}\". The machine will disappear from Remote. This cannot be undone.",
+        "description_other": "This will permanently delete all {{count}} runtimes on \"{{name}}\". The machine will disappear from Remote. This cannot be undone.",
+        "cancel": "Cancel",
+        "confirm": "Delete computer",
+        "submitting": "Deleting…"
+      },
+      "blocked_online": {
+        "title": "Computer still online",
+        "description": "\"{{name}}\" has one or more runtimes still online. Wait until the machine is offline, then try again."
+      },
+      "blocked_by_agents": {
+        "title_one": "{{count}} agent is still on this computer",
+        "title_other": "{{count}} agents are still on this computer",
+        "description": "Archive or reassign the agents below before you can delete \"{{name}}\".",
+        "view_agent": "View agent"
+      },
+      "blocked_squads": {
+        "title": "Active squads still use this computer",
+        "description": "\"{{name}}\" has active squads led by archived agents. Archive those squads or assign a new leader first."
+      },
+      "blocked_tasks": {
+        "title": "Active tasks still running",
+        "description": "\"{{name}}\" still has active tasks. Cancel or wait for them to finish, then try again."
+      },
+      "blocked_missing_daemon": {
+        "title": "Cannot delete this computer",
+        "description": "\"{{name}}\" has no daemon id, so one-click delete is unavailable. Per-runtime delete is not used as a substitute."
+      }
     }
   },
   "health": {

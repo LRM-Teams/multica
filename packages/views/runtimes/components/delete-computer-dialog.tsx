@@ -1,0 +1,380 @@
+"use client";
+
+import { useMemo, useRef, useState } from "react";
+import { Trash2 } from "lucide-react";
+import { toast } from "sonner";
+import { useQuery } from "@tanstack/react-query";
+import type { Agent } from "@multica/core/types";
+import { useAuthStore } from "@multica/core/auth";
+import { useDeleteRuntimesByDaemon } from "@multica/core/runtimes/mutations";
+import { memberListOptions } from "@multica/core/workspace/queries";
+import { useWorkspacePaths } from "@multica/core/paths";
+import { resolveActorIdentityPresentation } from "@multica/core/identity";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogTitle,
+} from "@multica/ui/components/ui/alert-dialog";
+import { Button } from "@multica/ui/components/ui/button";
+import { ActorAvatar } from "../../common/actor-avatar";
+import { ActorIdentityRow } from "../../common/actor-identity-row";
+import { AppLink } from "../../navigation/app-link";
+import { useT } from "../../i18n";
+import type { RuntimeMachine } from "./runtime-machines";
+import {
+  missingDaemonIdConflict,
+  parseComputerDeleteConflict,
+  type ComputerDeleteConflict,
+} from "./delete-computer-conflict";
+
+/**
+ * Machine-header control for Computer one-click delete (LRM-439).
+ * Calls `DELETE /api/runtimes/by-daemon/{daemonId}` — never N× row DELETE.
+ *
+ * Always visible when the machine has runtimes (LRM-238: do not silently
+ * hide for online/agents; those refuse with an explicit dialog after confirm).
+ * Ownership still gates the destructive confirm path.
+ */
+export function MachineDeleteControl({
+  machine,
+  wsId,
+  onDeleted,
+}: {
+  machine: RuntimeMachine;
+  wsId: string;
+  onDeleted?: () => void;
+}) {
+  const { t } = useT("runtimes");
+  const user = useAuthStore((s) => s.user);
+  const { data: members = [] } = useQuery(memberListOptions(wsId));
+  const [open, setOpen] = useState(false);
+
+  const canDelete = useMemo(() => {
+    if (machine.runtimes.length === 0) return false;
+    const currentMember = user
+      ? members.find((m) => m.user_id === user.id)
+      : null;
+    const isAdmin = currentMember
+      ? currentMember.role === "owner" || currentMember.role === "admin"
+      : false;
+    if (isAdmin) return true;
+    if (!user) return false;
+    return machine.runtimes.every((r) => r.owner_id === user.id);
+  }, [machine.runtimes, members, user]);
+
+  if (machine.runtimes.length === 0) return null;
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
+        onClick={() => setOpen(true)}
+        data-testid="delete-computer-button"
+        aria-label={t(($) => $.machine.delete_computer.button)}
+        title={
+          canDelete
+            ? undefined
+            : t(($) => $.list.delete_permission_hint)
+        }
+      >
+        <Trash2 className="h-3.5 w-3.5" aria-hidden />
+        {t(($) => $.machine.delete_computer.button)}
+      </Button>
+      <DeleteComputerDialog
+        open={open}
+        onOpenChange={setOpen}
+        machine={machine}
+        wsId={wsId}
+        canDelete={canDelete}
+        onDeleted={() => {
+          setOpen(false);
+          onDeleted?.();
+        }}
+      />
+    </>
+  );
+}
+
+export interface DeleteComputerDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  machine: RuntimeMachine;
+  wsId: string;
+  canDelete: boolean;
+  onDeleted: () => void;
+}
+
+export function DeleteComputerDialog({
+  open,
+  onOpenChange,
+  machine,
+  wsId,
+  canDelete,
+  onDeleted,
+}: DeleteComputerDialogProps) {
+  const { t } = useT("runtimes");
+  const paths = useWorkspacePaths();
+  const [submitting, setSubmitting] = useState(false);
+  const [conflict, setConflict] = useState<ComputerDeleteConflict | null>(null);
+
+  // Seed closed so mount-with-open=true still resets (missing daemon id).
+  const prevOpenRef = useRef(false);
+  if (open !== prevOpenRef.current) {
+    prevOpenRef.current = open;
+    if (open) {
+      setSubmitting(false);
+      setConflict(
+        machine.daemonId
+          ? null
+          : missingDaemonIdConflict(
+              t(($) => $.machine.delete_computer.blocked_missing_daemon.description, {
+                name: machine.title,
+              }),
+            ),
+      );
+    }
+  }
+
+  const deleteMutation = useDeleteRuntimesByDaemon(wsId);
+
+  const handleConfirm = async () => {
+    if (!canDelete) {
+      toast.error(t(($) => $.list.delete_permission_hint));
+      return;
+    }
+    if (!machine.daemonId) {
+      setConflict(
+        missingDaemonIdConflict(
+          t(($) => $.machine.delete_computer.blocked_missing_daemon.description, {
+            name: machine.title,
+          }),
+        ),
+      );
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const result = await deleteMutation.mutateAsync({
+        daemonId: machine.daemonId,
+        runtimeMode: machine.mode,
+      });
+      toast.success(
+        t(($) => $.machine.delete_computer.toast_deleted, {
+          count: result.deleted_count,
+        }),
+      );
+      onDeleted();
+    } catch (err) {
+      const parsed = parseComputerDeleteConflict(err);
+      if (parsed) {
+        setConflict(parsed);
+        return;
+      }
+      const message =
+        err instanceof Error && err.message
+          ? err.message
+          : t(($) => $.machine.delete_computer.delete_failed_toast);
+      toast.error(message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleOpenChange = (next: boolean) => {
+    if (submitting) return;
+    onOpenChange(next);
+  };
+
+  const runtimeCount = machine.runtimes.length;
+
+  return (
+    <AlertDialog open={open} onOpenChange={handleOpenChange}>
+      <AlertDialogContent
+        className={
+          conflict?.code === "computer_has_active_agents"
+            ? "w-[calc(100vw-2rem)] !max-w-[560px] gap-0 overflow-hidden rounded-lg p-0"
+            : "w-[calc(100vw-2rem)] !max-w-[440px] gap-0 overflow-hidden rounded-lg p-0"
+        }
+        onClick={(e) => e.stopPropagation()}
+        data-testid="delete-computer-dialog"
+      >
+        {conflict ? (
+          <BlockedBody
+            machineTitle={machine.title}
+            conflict={conflict}
+            agentHref={(id) => paths.agentDetail(id)}
+            onClose={() => handleOpenChange(false)}
+          />
+        ) : (
+          <>
+            <div className="px-5 pb-4 pt-5">
+              <AlertDialogTitle className="text-base font-semibold">
+                {t(($) => $.machine.delete_computer.confirm.title)}
+              </AlertDialogTitle>
+              <AlertDialogDescription className="mt-1 text-sm leading-5 text-muted-foreground">
+                {t(($) => $.machine.delete_computer.confirm.description, {
+                  name: machine.title,
+                  count: runtimeCount,
+                })}
+              </AlertDialogDescription>
+            </div>
+            <div className="border-t bg-muted/25 px-5 py-3">
+              <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full sm:w-auto"
+                  onClick={() => handleOpenChange(false)}
+                  disabled={submitting}
+                >
+                  {t(($) => $.machine.delete_computer.confirm.cancel)}
+                </Button>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  className="w-full sm:w-auto"
+                  onClick={() => void handleConfirm()}
+                  disabled={submitting}
+                  data-testid="delete-computer-confirm"
+                >
+                  {submitting
+                    ? t(($) => $.machine.delete_computer.confirm.submitting)
+                    : t(($) => $.machine.delete_computer.confirm.confirm)}
+                </Button>
+              </div>
+            </div>
+          </>
+        )}
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+function BlockedBody({
+  machineTitle,
+  conflict,
+  agentHref,
+  onClose,
+}: {
+  machineTitle: string;
+  conflict: ComputerDeleteConflict;
+  agentHref: (agentId: string) => string;
+  onClose: () => void;
+}) {
+  const { t } = useT("runtimes");
+
+  let title: string;
+  let description: string;
+  switch (conflict.code) {
+    case "computer_has_online_runtimes":
+      title = t(($) => $.machine.delete_computer.blocked_online.title);
+      description = t(
+        ($) => $.machine.delete_computer.blocked_online.description,
+        { name: machineTitle },
+      );
+      break;
+    case "computer_has_active_agents":
+      title = t(($) => $.machine.delete_computer.blocked_by_agents.title, {
+        count: conflict.activeAgents.length || 1,
+      });
+      description = t(
+        ($) => $.machine.delete_computer.blocked_by_agents.description,
+        { name: machineTitle },
+      );
+      break;
+    case "computer_has_active_squads":
+      title = t(($) => $.machine.delete_computer.blocked_squads.title);
+      description = t(
+        ($) => $.machine.delete_computer.blocked_squads.description,
+        { name: machineTitle },
+      );
+      break;
+    case "computer_has_active_tasks":
+      title = t(($) => $.machine.delete_computer.blocked_tasks.title);
+      description = t(
+        ($) => $.machine.delete_computer.blocked_tasks.description,
+        { name: machineTitle },
+      );
+      break;
+    case "missing_daemon_id":
+      title = t(($) => $.machine.delete_computer.blocked_missing_daemon.title);
+      description = t(
+        ($) => $.machine.delete_computer.blocked_missing_daemon.description,
+        { name: machineTitle },
+      );
+      break;
+  }
+
+  return (
+    <>
+      <div className="px-5 pb-4 pt-5">
+        <AlertDialogTitle className="text-base font-semibold">
+          {title}
+        </AlertDialogTitle>
+        <AlertDialogDescription className="mt-1 text-sm leading-5 text-muted-foreground">
+          {description}
+        </AlertDialogDescription>
+
+        {conflict.code === "computer_has_active_agents" &&
+          conflict.activeAgents.length > 0 && (
+            <AgentList agents={conflict.activeAgents} agentHref={agentHref} />
+          )}
+      </div>
+      <div className="border-t bg-muted/25 px-5 py-3">
+        <div className="flex justify-end">
+          <Button type="button" variant="outline" onClick={onClose}>
+            {t(($) => $.machine.delete_computer.close)}
+          </Button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function AgentList({
+  agents,
+  agentHref,
+}: {
+  agents: Agent[];
+  agentHref: (agentId: string) => string;
+}) {
+  const { t } = useT("runtimes");
+  return (
+    <div className="mt-3 overflow-hidden rounded-md border divide-y">
+      {agents.map((agent) => {
+        const presentation = resolveActorIdentityPresentation(agent, agent.id);
+        return (
+          <AppLink
+            key={agent.id}
+            href={agentHref(agent.id)}
+            className="flex items-center justify-between gap-3 px-3 py-2.5 text-xs hover:bg-muted/40"
+          >
+            <span className="inline-flex min-w-0 items-center gap-2">
+              <ActorAvatar
+                actorType="agent"
+                actorId={agent.id}
+                size={20}
+                enableHoverCard
+              />
+              <ActorIdentityRow
+                displayName={presentation.displayName}
+                handle={presentation.handle}
+                showHandle={presentation.showHandleLabel}
+                primaryClassName="truncate font-medium text-foreground"
+                secondaryClassName="truncate text-[11px] text-muted-foreground"
+              />
+            </span>
+            <span className="shrink-0 text-primary">
+              {t(($) => $.machine.delete_computer.blocked_by_agents.view_agent)}
+            </span>
+          </AppLink>
+        );
+      })}
+    </div>
+  );
+}

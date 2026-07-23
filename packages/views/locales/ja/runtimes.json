@@ -57,6 +57,43 @@
       "cli": "CLI",
       "cloud_worker": "クラウドワーカー",
       "local_daemon": "ローカルデーモン"
+    },
+    "delete_computer": {
+      "button": "コンピューターを削除",
+      "toast_deleted_one": "このコンピューターから {{count}} 件のランタイムを削除しました",
+      "toast_deleted_other": "このコンピューターから {{count}} 件のランタイムを削除しました",
+      "delete_failed_toast": "コンピューターの削除に失敗しました",
+      "close": "閉じる",
+      "confirm": {
+        "title": "このコンピューターを削除しますか？",
+        "description_one": "「{{name}}」上の {{count}} 件のランタイムをすべて完全に削除します。Remote から消えます。元に戻せません。",
+        "description_other": "「{{name}}」上の {{count}} 件のランタイムをすべて完全に削除します。Remote から消えます。元に戻せません。",
+        "cancel": "キャンセル",
+        "confirm": "コンピューターを削除",
+        "submitting": "削除中…"
+      },
+      "blocked_online": {
+        "title": "コンピューターがオンラインです",
+        "description": "「{{name}}」にはまだオンラインのランタイムがあります。オフラインになってから再試行してください。"
+      },
+      "blocked_by_agents": {
+        "title_one": "このコンピューターに {{count}} 件のエージェントが残っています",
+        "title_other": "このコンピューターに {{count}} 件のエージェントが残っています",
+        "description": "「{{name}}」を削除する前に、以下のエージェントをアーカイブまたは再割り当てしてください。",
+        "view_agent": "エージェントを表示"
+      },
+      "blocked_squads": {
+        "title": "アクティブなスクワッドが残っています",
+        "description": "「{{name}}」にはアーカイブ済みリーダーのアクティブなスクワッドがあります。スクワッドをアーカイブするかリーダーを変更してください。"
+      },
+      "blocked_tasks": {
+        "title": "アクティブなタスクが残っています",
+        "description": "「{{name}}」にはまだアクティブなタスクがあります。キャンセルするか完了を待ってから再試行してください。"
+      },
+      "blocked_missing_daemon": {
+        "title": "このコンピュータは削除できません",
+        "description": "「{{name}}」には daemon id がないため、一括削除は利用できません。行ごとの削除で代替しません。"
+      }
     }
   },
   "health": {

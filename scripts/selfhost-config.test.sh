@@ -41,6 +41,13 @@ for obsolete in \
   fi
 done
 
+deploy_workflow="$(<.github/workflows/deploy.yml)"
+require_config "$deploy_workflow" 'db-bridge-stub-multica'
+if grep -Fq 'db-bridge-executor-multica' <<<"$deploy_workflow"; then
+  echo "Deploy workflow still manages the removed Multica-side bridge executor."
+  exit 1
+fi
+
 areal_env_example="$(<db_bridge/.env.areal.example)"
 require_config "$areal_env_example" 'MULTICA_BASE_URL=https://multica.example.com'
 require_config "$areal_env_example" 'MULTICA_API_KEY=mul_your-multica-personal-access-token'

@@ -255,24 +255,18 @@ jobs:
           # inode, so recreate only Caddy to remount the new file; reload alone
           # would keep reading the old inode.
           compose up -d --no-deps --force-recreate caddy
-          # db-bridge-stub-multica + db-bridge-executor-multica are profile-gated
-          # in the compose file, so naming them explicitly is what starts them.
-          # They share the multica-db-bridge image (the public run_multica server
-          # was dropped - no external LLM relay is needed; only the internal stub
-          # + executor remain). The pull is best-effort: a rollback dispatch that
-          # names a tag predating the db-bridge image must NOT abort the
-          # backend/frontend roll, so warn and leave any existing containers
-          # running.
-          if compose pull db-bridge-stub-multica db-bridge-executor-multica; then
+          # The retained multica-side bridge stub is profile-gated, so naming it
+          # explicitly starts it. AReaL calls Multica directly; the obsolete
+          # multica-side executor was removed in 501dc2861. The pull remains
+          # best-effort so rollback tags predating the bridge image do not abort
+          # an otherwise healthy backend/frontend roll.
+          if compose pull db-bridge-stub-multica; then
             # Gateway stub for multica -> AReaL RL calls (start_session /
             # set_reward / close_segment / chat_completions); run_stub --side
             # multica. Best-effort: a stub failure must not roll back the
             # backend/frontend that already succeeded - warn and leave any
             # existing stub container running.
             compose up -d db-bridge-stub-multica || echo "::warning::db-bridge-stub-multica failed to start; multica -> AReaL RL calls will fail until it runs."
-            # Executor for areal -> multica env-dispatch / DAG fetch;
-            # run_executor --side multica. Best-effort, same as above.
-            compose up -d db-bridge-executor-multica || echo "::warning::db-bridge-executor-multica failed to start; areal -> multica DAG fetch will not be drained."
           else
             echo "::warning::db-bridge image not found at tag ${MULTICA_IMAGE_TAG}; skipping bridge roll (existing containers, if any, keep running). Use a tag built with the db-bridge CD change for a full bridge rollback."
           fi
@@ -365,29 +359,3 @@ jobs:
           done
           echo "::warning::db-bridge-stub-multica did not pass /healthz within 60s - investigate the stub container."
           docker logs --tail 80 multica-db-bridge-stub-multica-1 || true
-
-      - name: Health check (db-bridge-executor-multica)
-        # The multica-side executor (areal -> multica env-dispatch / DAG
-        # direction). It is a DB-polling worker with NO HTTP listener, so the
-        # check confirms the container is running and logged "executor ready"
-        # rather than curling a port. Warning-not-error, like the other bridge
-        # services. Skipped when no container is running.
-        if: always()
-        run: |
-          set -uo pipefail
-          name='multica-db-bridge-executor-multica-1'
-          if ! docker ps --format '{{.Names}}' | grep -q "^${name}$"; then
-            echo "::warning::db-bridge-executor-multica container not running - areal -> multica env-dispatch/DAG fetch will not be drained."
-            docker logs --tail 40 "$name" 2>/dev/null || true
-            exit 0
-          fi
-          for i in $(seq 1 15); do
-            if docker logs --tail 50 "$name" 2>&1 | grep -q "executor ready"; then
-              echo "db-bridge-executor-multica ready after $((i * 2))s."
-              exit 0
-            fi
-            echo "waiting for executor readiness... ($i/15)"
-            sleep 2
-          done
-          echo "::warning::db-bridge-executor-multica did not log 'executor ready' within 30s - investigate the executor container (check SUPABASE_URL / BRIDGE_MULTICA_UPSTREAM_URL)."
-          docker logs --tail 80 "$name" || true

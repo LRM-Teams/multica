@@ -1531,10 +1531,14 @@ export function ChannelsPage({
   }, [viewportReady, isMobile, activeId, activeDmId, channels, embedded]);
 
   useEffect(() => {
+    // Activity embed must never rewrite the browser URL to /channels/... —
+    // that jumps the user out of Activity into the Messages main column
+    // (Frank / LRM-388 AC: 禁止跳进频道主列).
+    if (embedded) return;
     if (restoredBaseChannelId) {
       replace(wsPaths.channelDetail(restoredBaseChannelId));
     }
-  }, [replace, restoredBaseChannelId, wsPaths]);
+  }, [embedded, replace, restoredBaseChannelId, wsPaths]);
 
   // Bottom-stick on new messages and open-at-latest on switch are handled by
   // ChannelMessageList (react-virtuoso followOutput + initialTopMostItemIndex).
@@ -1801,13 +1805,15 @@ export function ChannelsPage({
 
   // Select a channel and reflect it in the URL so the address is shareable.
   // Clears any DM selection — the two regions are mutually exclusive.
+  // Embedded Activity owns the URL (/inbox?channel=…); never replace to
+  // /channels/[id] from an embed (LRM-388 — stay on the Activity right pane).
   const selectChannel = (id: string) => {
     resetSidePanelState();
     suppressBaseRouteRestoreRef.current = false;
     setActiveDmId(null);
     setActiveId(id);
     setLastSelectedChannelId(id);
-    replace(wsPaths.channelDetail(id));
+    if (!embedded) replace(wsPaths.channelDetail(id));
   };
 
   // Select a DM (from the DIRECT MESSAGES region). Clears the group selection
@@ -1816,7 +1822,7 @@ export function ChannelsPage({
     resetSidePanelState();
     setActiveId(null);
     setActiveDmId(dm.id);
-    replace(wsPaths.channelDetail(dm.id));
+    if (!embedded) replace(wsPaths.channelDetail(dm.id));
   };
 
   // "Send message" entry point on a channel member row: create-or-find the DM
@@ -1841,7 +1847,7 @@ export function ChannelsPage({
     setActiveId(null);
     setActiveDmId(null);
     setMobilePanel(null);
-    replace(wsPaths.channels());
+    if (!embedded) replace(wsPaths.channels());
   };
 
   const handleDelete = () => {
@@ -1854,7 +1860,7 @@ export function ChannelsPage({
         // `active` memo falls back to the first remaining channel.
         if (target.id === activeId) {
           setActiveId(null);
-          replace(wsPaths.channels());
+          if (!embedded) replace(wsPaths.channels());
         }
         closeChannelDetails();
         setMobilePanel(null);
@@ -2192,12 +2198,15 @@ export function ChannelsPage({
 
   // #645 — toggles the same exclusive slot; opening it always wins over
   // thread/agent (mirrors handleOpenAgentPanel), closing just clears it.
+  // Desktop title click collapses the dock whenever it is open (any tab) —
+  // otherwise Settings → title would only switch back to About and leave
+  // keep-alive TabsContent (LRM-400) still exposing Settings controls.
   const toggleChannelDetails = (tab: ChannelDetailsTab = "about") => {
     if (isMobile) {
       openChannelDetails(tab);
       return;
     }
-    if (channelDetailsOpen && channelDetailsTab === tab) {
+    if (channelDetailsOpen) {
       closeChannelDetails();
       return;
     }
@@ -3423,31 +3432,30 @@ export function ChannelsPage({
           )}
         </main>
   );
+  // Desktop detail: keep the conversation tree mounted when the side panel
+  // opens/closes (LRM-400). Swapping PanelGroup ↔ plain div remounted the
+  // chat column (lost scroll/composer + stale title-button refs in tests).
+  // Flex row + optional fixed side column still fills width with no blank
+  // half-pane (the lone ResizablePanel minSize=50% bug).
+  const desktopSidePanel = threadPanel ?? agentPanel ?? detailsPanel;
   const detailPane = !isMobile ? (
-    threadPanel || agentPanel || detailsPanel ? (
-      <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
-        <ResizablePanel id="conversation" minSize="50%" className="flex min-h-0 flex-col">
-          {channelConversationPane}
-        </ResizablePanel>
-        <ResizableHandle />
-        <ResizablePanel
-          id={threadPanel ? "thread" : agentPanel ? "agent-files" : "channel-details"}
-          defaultSize={360}
-          minSize={300}
-          maxSize={480}
-          groupResizeBehavior="preserve-pixel-size"
-          className="border-l border-border/30 bg-background"
-        >
-          {threadPanel ?? agentPanel ?? detailsPanel}
-        </ResizablePanel>
-      </ResizablePanelGroup>
-    ) : (
-      // LRM-400: with no side panel, render the conversation full-width.
-      // A lone ResizablePanel (minSize 50%) inside PanelGroup left a blank
-      // right half — Stop all sat on the chat column edge and looked like it
-      // floated in an empty shell (Frank screenshot).
+    <div className="flex min-h-0 min-w-0 flex-1">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">{channelConversationPane}</div>
-    )
+      {desktopSidePanel ? (
+        <div
+          data-testid={
+            threadPanel
+              ? "thread-side-slot"
+              : agentPanel
+                ? "agent-side-slot"
+                : "channel-details-side-slot"
+          }
+          className="flex w-[360px] max-w-[min(480px,45%)] min-w-[300px] shrink-0 flex-col border-l border-border/30 bg-background"
+        >
+          {desktopSidePanel}
+        </div>
+      ) : null}
+    </div>
   ) : (
     threadPanel ?? channelConversationPane
   );

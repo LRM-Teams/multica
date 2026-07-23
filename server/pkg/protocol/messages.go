@@ -21,6 +21,9 @@ const (
 	VoiceTranscriptionPending   = "pending"
 	VoiceTranscriptionCompleted = "completed"
 	VoiceTranscriptionFailed    = "failed"
+	VoiceSynthesisPending       = "pending"
+	VoiceSynthesisCompleted     = "completed"
+	VoiceSynthesisFailed        = "failed"
 )
 
 type MessagePart struct {
@@ -48,6 +51,9 @@ type MessagePart struct {
 	// TranscriptionStatus is exposed only for recorded human voice messages.
 	// Agent TTS parts have no attachment and leave it empty.
 	TranscriptionStatus string `json:"transcription_status,omitempty"`
+	// SynthesisStatus is server-owned lifecycle state for Agent TTS output.
+	// Recorded human voice messages leave it empty.
+	SynthesisStatus string `json:"synthesis_status,omitempty"`
 }
 
 // Message is the envelope for all WebSocket messages.

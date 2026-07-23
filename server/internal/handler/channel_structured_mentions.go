@@ -36,6 +36,7 @@ type channelMentionOccurrence struct {
 // anchors. This keeps persistence, dispatch, realtime, and Feishu on one
 // canonical set of parts.
 func (h *Handler) finalizeAgentChannelMessage(ctx context.Context, ch ChannelResponse, content string, parts []protocol.MessagePart) (string, []protocol.MessagePart, error) {
+	parts = markAgentVoiceSynthesisPending(parts)
 	if ch.Kind != "group" {
 		// Direct messages have no group-member resolver. Keep ordinary parts, but
 		// never persist a caller-supplied reference sidecar without a server
@@ -43,6 +44,28 @@ func (h *Handler) finalizeAgentChannelMessage(ctx context.Context, ch ChannelRes
 		return content, appendReferenceOccurrences(parts, nil), nil
 	}
 	return h.enrichChannelMessageMentions(ctx, ch, content, parts)
+}
+
+func markAgentVoiceSynthesisPending(parts []protocol.MessagePart) []protocol.MessagePart {
+	if !channelMessageHasVoicePart(parts) {
+		return parts
+	}
+	out := append([]protocol.MessagePart(nil), parts...)
+	for i := range out {
+		if out[i].Type != protocol.MessagePartTypeVoice {
+			continue
+		}
+		// Runtime-supplied audio is not a trusted TTS artifact. The canonical
+		// server synthesizes from the finalized transcript and owns metadata.
+		out[i].AttachmentID = ""
+		out[i].Filename = ""
+		out[i].ContentType = ""
+		out[i].SizeBytes = 0
+		out[i].DurationMS = 0
+		out[i].TranscriptionStatus = ""
+		out[i].SynthesisStatus = protocol.VoiceSynthesisPending
+	}
+	return out
 }
 
 func (h *Handler) enrichChannelMessageMentions(ctx context.Context, ch ChannelResponse, content string, parts []protocol.MessagePart) (string, []protocol.MessagePart, error) {

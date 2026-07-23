@@ -266,6 +266,7 @@ func FallbackContent(parts []protocol.MessagePart) string {
 
 func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 	part.Type = strings.TrimSpace(part.Type)
+	part.SynthesisStatus = ""
 	if part.Type != protocol.MessagePartTypeVoice {
 		part.TranscriptionStatus = ""
 	}

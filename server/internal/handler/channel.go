@@ -4618,6 +4618,18 @@ func (h *Handler) channelHumanMemberIDs(ctx context.Context, workspaceID, channe
 func (h *Handler) publishChannelToMembers(ctx context.Context, eventType, workspaceID, actorType, actorID string, channelID pgtype.UUID, payload any) {
 	recipientIDs := recipientUserIDsFromSet(h.channelHumanMemberIDs(ctx, workspaceID, uuidToString(channelID)))
 	h.publishToUsers(eventType, workspaceID, actorType, actorID, recipientIDs, payload)
+	if eventType != protocol.EventChannelMessage || h.DB == nil {
+		return
+	}
+	msg, ok := payload.(ChannelMessageResponse)
+	if !ok || msg.Type != "agent" || !channelMessageNeedsVoiceSynthesis(msg.Parts) {
+		return
+	}
+	h.runAfterChannelMessageAck(ctx, func(ctx context.Context) {
+		if err := h.processChannelVoiceSynthesis(ctx, msg.ID); err != nil {
+			slog.Error("immediate channel voice synthesis failed", "message_id", msg.ID, "error", err)
+		}
+	})
 }
 
 // runAfterChannelMessageAck runs send side effects that must not block the HTTP

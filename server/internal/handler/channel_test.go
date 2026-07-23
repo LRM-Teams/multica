@@ -67,6 +67,41 @@ func TestFinalizeAgentChannelMessageDMDropsUnanchoredReferences(t *testing.T) {
 	}
 }
 
+func TestFinalizeAgentChannelMessageOwnsVoiceSynthesisState(t *testing.T) {
+	attachmentID := uuid.NewString()
+	_, parts, err := (&Handler{}).finalizeAgentChannelMessage(
+		context.Background(),
+		ChannelResponse{Kind: "dm"},
+		"spoken answer",
+		[]protocol.MessagePart{
+			{Type: protocol.MessagePartTypeText, Text: "spoken answer"},
+			{
+				Type:                protocol.MessagePartTypeVoice,
+				AttachmentID:        attachmentID,
+				Filename:            "runtime.mp3",
+				ContentType:         "audio/mpeg",
+				SizeBytes:           42,
+				DurationMS:          900,
+				TranscriptionStatus: protocol.VoiceTranscriptionCompleted,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("finalize dm voice message: %v", err)
+	}
+	if len(parts) != 2 {
+		t.Fatalf("parts = %+v, want text and voice", parts)
+	}
+	voice := parts[1]
+	if voice.SynthesisStatus != protocol.VoiceSynthesisPending {
+		t.Fatalf("synthesis status = %q, want pending", voice.SynthesisStatus)
+	}
+	if voice.AttachmentID != "" || voice.Filename != "" || voice.ContentType != "" ||
+		voice.SizeBytes != 0 || voice.DurationMS != 0 || voice.TranscriptionStatus != "" {
+		t.Fatalf("finalizer retained runtime-owned voice artifact metadata: %+v", voice)
+	}
+}
+
 func TestChannelVoiceReplyInstructionUsesStructuredVoicePart(t *testing.T) {
 	voice := ChannelMessageResponse{
 		Type:  "user",

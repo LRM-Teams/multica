@@ -1289,6 +1289,9 @@ func TestListAgentRemindersReturnsLayeredSafeProjection(t *testing.T) {
 	if !definition.Anchor.Available || definition.Anchor.Href == nil || *definition.Anchor.Href != wantHref {
 		t.Fatalf("missing safe anchor href: got=%+v want=%s", definition.Anchor, wantHref)
 	}
+	if definition.Anchor.DisplayName == nil || *definition.Anchor.DisplayName != "# "+fixture.channel.Name || definition.Anchor.Display == nil || *definition.Anchor.Display != *definition.Anchor.DisplayName {
+		t.Fatalf("anchor display = %+v, want readable channel display_name", definition.Anchor)
+	}
 	encoded, err := json.Marshal(definition.Anchor)
 	if err != nil {
 		t.Fatal(err)
@@ -1331,8 +1334,8 @@ func TestListAgentRemindersReturnsLayeredSafeProjection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if dmAnchor.Display == nil || *dmAnchor.Display != "Thread in direct message" || strings.Contains(string(dmEncoded), fixture.channel.Name) {
-		t.Fatalf("DM anchor leaked canonical channel name: %s", dmEncoded)
+	if dmAnchor.DisplayName == nil || !strings.HasPrefix(*dmAnchor.DisplayName, "Thread in ") || dmAnchor.Display == nil || *dmAnchor.Display != *dmAnchor.DisplayName || strings.Contains(string(dmEncoded), fixture.channel.Name) {
+		t.Fatalf("DM anchor leaked canonical channel name or missed display_name: %s", dmEncoded)
 	}
 }
 

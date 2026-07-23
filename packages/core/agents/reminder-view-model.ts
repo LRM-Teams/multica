@@ -67,6 +67,7 @@ export interface RawReminderAnchor {
   available: boolean;
   kind?: string;
   display?: string;
+  display_name?: string;
   href?: string;
 }
 
@@ -116,8 +117,9 @@ export interface RawReminderPage {
 // stays visible, only the anchor link is dropped.
 function adaptAnchor(raw: RawReminderAnchor): ReminderAnchor {
   const kind = raw.kind;
-  if (raw.available && (kind === "channel" || kind === "thread") && raw.display && raw.href) {
-    return { available: true, kind, label: raw.display, href: raw.href };
+  const label = raw.display_name ?? raw.display;
+  if (raw.available && (kind === "channel" || kind === "thread") && label && raw.href) {
+    return { available: true, kind, label, href: raw.href };
   }
   return { available: false };
 }

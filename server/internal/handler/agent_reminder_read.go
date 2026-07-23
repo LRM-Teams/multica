@@ -14,10 +14,11 @@ import (
 )
 
 type humanReminderAnchor struct {
-	Available bool    `json:"available"`
-	Kind      *string `json:"kind,omitempty"`
-	Display   *string `json:"display,omitempty"`
-	Href      *string `json:"href,omitempty"`
+	Available   bool    `json:"available"`
+	Kind        *string `json:"kind,omitempty"`
+	Display     *string `json:"display,omitempty"`
+	DisplayName *string `json:"display_name,omitempty"`
+	Href        *string `json:"href,omitempty"`
 }
 
 type humanReminderDefinition struct {
@@ -238,27 +239,68 @@ func (h *Handler) safeHumanReminderAnchor(r *http.Request, userID string, remind
 		return unavailable
 	}
 	kind := "channel"
-	display := "#" + channelName
+	displayName, ok := reminderAnchorDisplayName(channelKind, channelName, false)
 	if channelKind == "dm" {
-		display = "Direct message"
+		displayName, ok = h.reminderDMDisplayName(r, reminder, userID, false)
 	}
+	if !ok {
+		return unavailable
+	}
+	display := displayName
 	messageID := reminder.AnchorMessageID
 	query := "message=" + url.QueryEscape(uuidToString(messageID))
 	if reminder.AnchorThreadRootMessageID.Valid {
 		kind = "thread"
+		displayName, ok = reminderAnchorDisplayName(channelKind, channelName, true)
 		if channelKind == "dm" {
-			display = "Thread in direct message"
-		} else {
-			display = "Thread in #" + channelName
+			displayName, ok = h.reminderDMDisplayName(r, reminder, userID, true)
 		}
+		if !ok {
+			return unavailable
+		}
+		display = displayName
 		query = "thread=" + url.QueryEscape(uuidToString(reminder.AnchorThreadRootMessageID)) +
 			"&message=" + url.QueryEscape(uuidToString(reminder.AnchorMessageID))
 	}
 	href := fmt.Sprintf("/%s/channels/%s?%s", url.PathEscape(workspaceSlug),
 		url.PathEscape(uuidToString(reminder.AnchorChannelID)), query)
 	return humanReminderAnchor{
-		Available: true, Kind: &kind, Display: &display, Href: &href,
+		Available: true, Kind: &kind, Display: &display, DisplayName: &displayName, Href: &href,
 	}
+}
+
+func (h *Handler) reminderDMDisplayName(r *http.Request, reminder agentReminder, userID string, threaded bool) (string, bool) {
+	var peerName string
+	if err := h.DB.QueryRow(r.Context(), `
+		SELECT COALESCE(NULLIF(u.display_name, ''), u.name, u.email, NULLIF(a.display_name, ''), a.name, '') AS peer_name
+		FROM channel_member peer
+		LEFT JOIN "user" u ON peer.member_type = 'user' AND u.id = peer.member_id
+		LEFT JOIN agent a ON peer.member_type = 'agent' AND a.id = peer.member_id
+		WHERE peer.channel_id = $1
+		  AND peer.workspace_id = $2
+		  AND NOT (peer.member_type = 'user' AND peer.member_id = $3)
+		ORDER BY CASE peer.member_type WHEN 'user' THEN 0 ELSE 1 END, peer.created_at ASC
+		LIMIT 1`, reminder.AnchorChannelID, reminder.WorkspaceID, parseUUID(userID)).Scan(&peerName); err != nil || strings.TrimSpace(peerName) == "" {
+		return "", false
+	}
+	if threaded {
+		return "Thread in " + strings.TrimSpace(peerName), true
+	}
+	return strings.TrimSpace(peerName), true
+}
+
+func reminderAnchorDisplayName(channelKind, channelName string, threaded bool) (string, bool) {
+	name := strings.TrimSpace(channelName)
+	if channelKind == "dm" {
+		return "", false
+	}
+	if name == "" {
+		return "", false
+	}
+	if threaded {
+		return "Thread in # " + name, true
+	}
+	return "# " + name, true
 }
 
 func encodeHumanReminderCursor(cursor humanReminderCursor) *string {

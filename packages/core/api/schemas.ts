@@ -2018,6 +2018,7 @@ const RawReminderAnchorSchema = z.object({
   // and, transitively, the entire page.
   kind: z.string().optional(),
   display: z.string().optional(),
+  display_name: z.string().optional(),
   href: z.string().optional(),
 }).loose();
 

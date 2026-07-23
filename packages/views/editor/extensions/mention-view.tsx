@@ -17,6 +17,7 @@
 
 import { NodeViewWrapper } from "@tiptap/react";
 import type { NodeViewProps } from "@tiptap/react";
+import type { JSX } from "react";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { useAuthStore } from "@multica/core/auth";
 import { useNavigation } from "../../navigation";
@@ -25,6 +26,7 @@ import { ProjectChip } from "../../projects/components/project-chip";
 import { useAgentPanelStore } from "@multica/core/agents/stores";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { useOpenAgentPanel } from "../../common/agent-panel-context";
+import { useActorMentionChipLabel } from "../../common/actor-mention-chip-label";
 import {
   mentionTokenClassName,
   resolveMentionTokenKind,
@@ -61,40 +63,68 @@ export function MentionView({ node }: NodeViewProps) {
   // @all is a fixed protocol token (same as message renderer + markdown
   // `[@all](mention://all/all)`). Picker shows the localized "All members"
   // description; the chip always reads `@all`.
-  const displayLabel = type === "all" ? "all" : (label ?? id);
+  // LRM-515: same render-time display_name path as ActorMention (not slug).
+  return (
+    <NodeViewWrapper as="span" className="inline">
+      <ActorMentionEditorChip
+        type={type}
+        id={id}
+        label={label}
+        viewerUserId={viewerUserId}
+        openAgentPanel={openAgentPanel}
+      />
+    </NodeViewWrapper>
+  );
+}
+
+function ActorMentionEditorChip({
+  type,
+  id,
+  label,
+  viewerUserId,
+  openAgentPanel,
+}: {
+  type: string;
+  id: string;
+  label?: string;
+  viewerUserId: string | null;
+  openAgentPanel: ((id: string) => void) | null | undefined;
+}): JSX.Element {
+  const { name, unresolved, handlePeek } = useActorMentionChipLabel(type, id, label);
   const kind = resolveMentionTokenKind(type, id, viewerUserId);
   const chip = (
     <span
-      className={mentionTokenClassName(kind)}
+      className={mentionTokenClassName(
+        kind,
+        unresolved
+          ? "bg-muted text-muted-foreground hover:bg-muted focus-visible:bg-muted"
+          : undefined,
+      )}
       data-mention-kind={kind}
       data-mention-type={type}
+      data-mention-unresolved={unresolved ? "true" : undefined}
+      title={handlePeek ? `@${handlePeek}` : undefined}
     >
-      @{displayLabel}
+      @{name}
     </span>
   );
 
   if (type === "member" || type === "agent") {
     return (
-      <NodeViewWrapper as="span" className="inline">
-        <ActorProfileTrigger
-          memberType={type === "agent" ? "agent" : "user"}
-          memberId={id}
-          triggerElement="span"
-          onClickCapture={
-            type === "agent" && openAgentPanel ? () => openAgentPanel(id) : undefined
-          }
-        >
-          {chip}
-        </ActorProfileTrigger>
-      </NodeViewWrapper>
+      <ActorProfileTrigger
+        memberType={type === "agent" ? "agent" : "user"}
+        memberId={id}
+        triggerElement="span"
+        onClickCapture={
+          type === "agent" && openAgentPanel ? () => openAgentPanel(id) : undefined
+        }
+      >
+        {chip}
+      </ActorProfileTrigger>
     );
   }
 
-  return (
-    <NodeViewWrapper as="span" className="inline">
-      {chip}
-    </NodeViewWrapper>
-  );
+  return chip;
 }
 
 function ProjectMention({

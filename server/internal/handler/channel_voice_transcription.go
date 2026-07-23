@@ -403,7 +403,7 @@ func (h *Handler) dispatchTranscribedChannelVoiceMessage(ctx context.Context, jo
 		return errors.New("transcribed channel voice channel no longer exists")
 	}
 	h.followChannelThreadMentionedUsers(ctx, ch, msg)
-	h.dispatchHumanChannelMessageSideEffects(ctx, ch, msg, parseUUID(*msg.AuthorID))
+	h.dispatchTranscribedChannelVoiceMessageSideEffects(ctx, ch, msg, parseUUID(*msg.AuthorID))
 	tag, err := h.DB.Exec(ctx, `
 		UPDATE channel_voice_transcription
 		SET status = 'completed', claimed_at = NULL, updated_at = now()
@@ -419,6 +419,14 @@ func (h *Handler) dispatchTranscribedChannelVoiceMessage(ctx context.Context, jo
 }
 
 func (h *Handler) dispatchHumanChannelMessageSideEffects(ctx context.Context, ch ChannelResponse, msg ChannelMessageResponse, initiatorUserID pgtype.UUID) {
+	h.dispatchHumanChannelMessageSideEffectsWithVoiceReplay(ctx, ch, msg, initiatorUserID, false)
+}
+
+func (h *Handler) dispatchTranscribedChannelVoiceMessageSideEffects(ctx context.Context, ch ChannelResponse, msg ChannelMessageResponse, initiatorUserID pgtype.UUID) {
+	h.dispatchHumanChannelMessageSideEffectsWithVoiceReplay(ctx, ch, msg, initiatorUserID, true)
+}
+
+func (h *Handler) dispatchHumanChannelMessageSideEffectsWithVoiceReplay(ctx context.Context, ch ChannelResponse, msg ChannelMessageResponse, initiatorUserID pgtype.UUID, replayTranscribedVoice bool) {
 	if msg.ThreadRootMessageID != nil {
 		if ch.Kind == "dm" {
 			h.dispatchDMThreadReply(ctx, ch, msg, initiatorUserID)
@@ -429,7 +437,11 @@ func (h *Handler) dispatchHumanChannelMessageSideEffects(ctx context.Context, ch
 		h.dispatchDMAgentReply(ctx, ch, msg, initiatorUserID)
 	} else {
 		h.ingestWendyHumanGroupMessage(ctx, ch, msg)
-		h.dispatchChannelMessageToAgents(ctx, ch, msg, initiatorUserID)
+		if replayTranscribedVoice {
+			h.dispatchTranscribedChannelMessageToAgents(ctx, ch, msg, initiatorUserID)
+		} else {
+			h.dispatchChannelMessageToAgents(ctx, ch, msg, initiatorUserID)
+		}
 	}
 	h.sendChannelMessageToFeishu(ctx, ch, msg.AuthorName, msg.Content)
 }

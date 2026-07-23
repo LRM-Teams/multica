@@ -3827,6 +3827,21 @@ func (h *Handler) validateChannelMemberTarget(w http.ResponseWriter, r *http.Req
 }
 
 func (h *Handler) dispatchChannelMessageToAgents(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
+	h.dispatchChannelMessageToAgentsWithCursorPolicy(ctx, ch, trigger, initiatorUserID, false)
+}
+
+// dispatchTranscribedChannelMessageToAgents treats the newly available
+// transcript as unread even when later channel traffic already advanced an
+// agent's normal ambient cursor beyond this message's sequence.
+func (h *Handler) dispatchTranscribedChannelMessageToAgents(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
+	h.dispatchChannelMessageToAgentsWithCursorPolicy(ctx, ch, trigger, initiatorUserID, true)
+}
+
+func (h *Handler) dispatchChannelMessageToAgentsWithCursorPolicy(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, replayTrigger bool) {
+	dispatchWakeExcept := h.dispatchChannelMessageWakeExcept
+	if replayTrigger {
+		dispatchWakeExcept = h.dispatchTranscribedChannelMessageWakeExcept
+	}
 	// Notify mentioned humans regardless of the agent trigger limit — surfacing a
 	// mention to a person never feeds the automatic agent-reply loop.
 	h.notifyChannelMemberMentions(ctx, ch, trigger)
@@ -3848,7 +3863,7 @@ func (h *Handler) dispatchChannelMessageToAgents(ctx context.Context, ch Channel
 			// must-reply wake. Every other joined, unmuted agent still receives
 			// the message through the ordinary coalesced channel wake path so the
 			// mention does not make shared channel context disappear.
-			h.dispatchChannelMessageWakeExcept(ctx, ch, trigger, initiatorUserID, targetAgentIDs)
+			dispatchWakeExcept(ctx, ch, trigger, initiatorUserID, targetAgentIDs)
 		} else {
 			// Preserve the existing loop boundary for agent-authored messages:
 			// non-targets observe without starting another agent run.
@@ -3863,14 +3878,14 @@ func (h *Handler) dispatchChannelMessageToAgents(ctx context.Context, ch Channel
 	// with a silent-capable ambient run (Andong wake-all) and let each agent
 	// decide whether to reply.
 	if groupCommand {
-		h.dispatchChannelMessageWake(ctx, ch, trigger, initiatorUserID)
+		dispatchWakeExcept(ctx, ch, trigger, initiatorUserID, nil)
 		return
 	}
 	if !channelMessageIsHumanAuthored(trigger.Type) {
 		h.dispatchChannelAmbientDelivery(ctx, ch, trigger)
 		return
 	}
-	h.dispatchChannelMessageWake(ctx, ch, trigger, initiatorUserID)
+	dispatchWakeExcept(ctx, ch, trigger, initiatorUserID, nil)
 }
 
 func (h *Handler) dispatchChannelMentions(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) {
@@ -3925,6 +3940,14 @@ func (h *Handler) dispatchChannelMessageWake(ctx context.Context, ch ChannelResp
 }
 
 func (h *Handler) dispatchChannelMessageWakeExcept(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, skipAgentIDs map[string]struct{}) {
+	h.dispatchChannelMessageWakeExceptWithCursorPolicy(ctx, ch, trigger, initiatorUserID, skipAgentIDs, false)
+}
+
+func (h *Handler) dispatchTranscribedChannelMessageWakeExcept(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, skipAgentIDs map[string]struct{}) {
+	h.dispatchChannelMessageWakeExceptWithCursorPolicy(ctx, ch, trigger, initiatorUserID, skipAgentIDs, true)
+}
+
+func (h *Handler) dispatchChannelMessageWakeExceptWithCursorPolicy(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, skipAgentIDs map[string]struct{}, replayTrigger bool) {
 	if trigger.Type == "agent" || trigger.Type == "system" {
 		return
 	}
@@ -3935,7 +3958,7 @@ func (h *Handler) dispatchChannelMessageWakeExcept(ctx context.Context, ch Chann
 		if h.isChannelAgentMuted(ctx, parseUUID(ch.ID), parseUUID(ch.WorkspaceID), agent.ID) {
 			continue
 		}
-		h.dispatchSingleChannelMessageWake(ctx, ch, trigger, initiatorUserID, agent)
+		h.dispatchSingleChannelMessageWakeWithCursorPolicy(ctx, ch, trigger, initiatorUserID, agent, replayTrigger)
 		h.recordChannelUnmentionedFullWake()
 		if h.Metrics != nil {
 			h.Metrics.RecordChannelFullExecutionWake("legacy_full")
@@ -3944,6 +3967,10 @@ func (h *Handler) dispatchChannelMessageWakeExcept(ctx context.Context, ch Chann
 }
 
 func (h *Handler) dispatchSingleChannelMessageWake(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, agent db.Agent) {
+	h.dispatchSingleChannelMessageWakeWithCursorPolicy(ctx, ch, trigger, initiatorUserID, agent, false)
+}
+
+func (h *Handler) dispatchSingleChannelMessageWakeWithCursorPolicy(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, agent db.Agent, replayTrigger bool) {
 	if h.TxStarter == nil {
 		slog.Warn("channel message wake: transaction starter missing", "channel", ch.ID, "agent", uuidToString(agent.ID))
 		return
@@ -3962,7 +3989,14 @@ func (h *Handler) dispatchSingleChannelMessageWake(ctx context.Context, ch Chann
 	if !ok {
 		return
 	}
-	if pendingToSeq <= cursorSeq {
+	if replayTrigger {
+		if trigger.Seq <= 0 {
+			slog.Warn("transcribed channel message wake: trigger sequence missing", "channel", ch.ID, "message", trigger.ID)
+			return
+		}
+		cursorSeq = trigger.Seq - 1
+		pendingToSeq = trigger.Seq
+	} else if pendingToSeq <= cursorSeq {
 		if err := tx.Commit(ctx); err != nil {
 			slog.Warn("channel message wake: commit empty cursor failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
 		}

@@ -172,6 +172,128 @@ func TestCreateUserChannelMessagePersistsVoiceTranscriptionJob(t *testing.T) {
 	}
 }
 
+func TestDelayedChannelVoiceTranscriptDispatchesAfterAgentCursorAdvanced(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "late-voice-dispatch-"+uuid.NewString(), testUserID)
+	agentID := createHandlerTestAgent(t, "Late Voice Agent "+uuid.NewString()[:8], nil)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)`,
+		channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed channel agent: %v", err)
+	}
+
+	var attachmentID string
+	recordingURL := "late-voice-" + uuid.NewString() + ".wav"
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO attachment (
+		  workspace_id, channel_id, uploader_type, uploader_id,
+		  filename, url, content_type, size_bytes
+		)
+		VALUES ($1, $2, 'member', $3, 'voice.wav', $4, 'audio/wave', 48)
+		RETURNING id`,
+		testWorkspaceID, channelID, testUserID, recordingURL).Scan(&attachmentID); err != nil {
+		t.Fatalf("seed delayed voice attachment: %v", err)
+	}
+	voice, err := testHandler.createUserChannelMessageWithIdempotency(ctx, channelMessageInsertInput{
+		ChannelID:   parseUUID(channelID),
+		WorkspaceID: parseUUID(testWorkspaceID),
+		AuthorID:    parseUUID(testUserID),
+		AuthorName:  "Voice Tester",
+		Parts: []protocol.MessagePart{{
+			Type:                protocol.MessagePartTypeVoice,
+			AttachmentID:        attachmentID,
+			DurationMS:          1000,
+			TranscriptionStatus: protocol.VoiceTranscriptionPending,
+		}},
+		ClientMessageID: strPtr("late-voice-" + uuid.NewString()),
+	}, []pgtype.UUID{parseUUID(attachmentID)})
+	if err != nil {
+		t.Fatalf("create delayed voice message: %v", err)
+	}
+
+	later, err := testHandler.insertChannelMessage(
+		ctx,
+		parseUUID(channelID),
+		parseUUID(testWorkspaceID),
+		"user",
+		parseUUID(testUserID),
+		"Voice Tester",
+		"message sent while speech recognition is delayed",
+		"multica",
+		nil,
+		pgtype.UUID{},
+		pgtype.UUID{},
+		strPtr("later-message-"+uuid.NewString()),
+		0,
+	)
+	if err != nil {
+		t.Fatalf("create later channel message: %v", err)
+	}
+	channel, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found after seed")
+	}
+	testHandler.dispatchChannelMessageToAgents(ctx, channel, later, parseUUID(testUserID))
+
+	var eventID, agentSessionID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT id::text, agent_session_id::text
+		FROM agent_inbox_event
+		WHERE channel_id = $1 AND agent_id = $2 AND source_message_id = $3
+		ORDER BY created_at DESC
+		LIMIT 1`,
+		channelID, agentID, later.ID).Scan(&eventID, &agentSessionID); err != nil {
+		t.Fatalf("load later message wake: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_inbox_event
+		SET status = 'acked', acked_at = now(), terminal_outcome = 'no_reply',
+		    retryable = false, terminal_at = now(), updated_at = now()
+		WHERE id = $1`,
+		eventID); err != nil {
+		t.Fatalf("complete later message wake: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_session
+		SET last_drained_seq = $1, updated_at = now()
+		WHERE id = $2`,
+		later.Seq, agentSessionID); err != nil {
+		t.Fatalf("advance agent beyond delayed voice message: %v", err)
+	}
+
+	pcm := []byte{0x00, 0x00, 0xff, 0x7f}
+	processor := *testHandler
+	processor.Storage = &mockStorage{files: map[string][]byte{
+		recordingURL: testPCM16MonoWAV(pcm, 16000),
+	}}
+	processor.VoiceProvider = &fakeVoiceProvider{
+		configured: true,
+		transcript: doubaospeech.Transcript{Text: "can any agent hear this voice message"},
+	}
+	if err := processor.processChannelVoiceTranscription(ctx, voice.Message.ID); err != nil {
+		t.Fatalf("process delayed voice message: %v", err)
+	}
+
+	var wakeCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM agent_inbox_event
+		WHERE channel_id = $1
+		  AND agent_id = $2
+		  AND source_message_id = $3
+		  AND status = 'pending'`,
+		channelID, agentID, voice.Message.ID).Scan(&wakeCount); err != nil {
+		t.Fatalf("count delayed voice wakes: %v", err)
+	}
+	if wakeCount != 1 {
+		t.Fatalf("delayed voice wake count = %d, want 1 after the ambient cursor advanced", wakeCount)
+	}
+}
+
 func testPCM16MonoWAV(pcm []byte, sampleRate uint32) []byte {
 	wav := make([]byte, 44+len(pcm))
 	copy(wav[0:4], "RIFF")

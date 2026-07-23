@@ -131,8 +131,8 @@ WHERE run_id = $1 AND status IN ('running', 'compacting');
 -- so the run can never be marked done with outstanding coverage.
 UPDATE interaction_dag_diagnosis_run
 SET status = 'completed', completed_at = now(), updated_at = now()
-WHERE run_id = $1
-  AND status IN ('running', 'compacting')
+WHERE interaction_dag_diagnosis_run.run_id = $1
+  AND interaction_dag_diagnosis_run.status IN ('running', 'compacting')
   AND NOT EXISTS (
     SELECT 1 FROM interaction_dag_diagnosis_segment s
     WHERE s.run_id = $1 AND s.status <> 'completed'

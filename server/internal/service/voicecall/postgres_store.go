@@ -1,0 +1,363 @@
+package voicecall
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
+)
+
+type VoiceCallQueries interface {
+	CreateVoiceCallSession(
+		ctx context.Context,
+		params db.CreateVoiceCallSessionParams,
+	) (db.VoiceCallSession, error)
+	GetVoiceCallSessionForMember(
+		ctx context.Context,
+		params db.GetVoiceCallSessionForMemberParams,
+	) (db.VoiceCallSession, error)
+	MarkVoiceCallConnecting(
+		ctx context.Context,
+		params db.MarkVoiceCallConnectingParams,
+	) (db.VoiceCallSession, error)
+	MarkVoiceCallFailed(
+		ctx context.Context,
+		params db.MarkVoiceCallFailedParams,
+	) (db.VoiceCallSession, error)
+	BeginVoiceCallEnding(
+		ctx context.Context,
+		params db.BeginVoiceCallEndingParams,
+	) (db.BeginVoiceCallEndingRow, error)
+	MarkVoiceCallEnded(
+		ctx context.Context,
+		params db.MarkVoiceCallEndedParams,
+	) (db.VoiceCallSession, error)
+}
+
+type PostgresStore struct {
+	queries VoiceCallQueries
+}
+
+var (
+	_ Store            = (*PostgresStore)(nil)
+	_ VoiceCallQueries = (*db.Queries)(nil)
+)
+
+func NewPostgresStore(queries VoiceCallQueries) (*PostgresStore, error) {
+	if queries == nil {
+		return nil, errors.New("voice call queries are required")
+	}
+	return &PostgresStore{queries: queries}, nil
+}
+
+func (store *PostgresStore) CreateStarting(
+	ctx context.Context,
+	input NewSession,
+) (Session, error) {
+	workspaceID, err := parseVoiceCallUUID("workspace_id", input.WorkspaceID)
+	if err != nil {
+		return Session{}, err
+	}
+	channelID, err := parseVoiceCallUUID("channel_id", input.ChannelID)
+	if err != nil {
+		return Session{}, err
+	}
+	agentID, err := parseVoiceCallUUID("agent_id", input.AgentID)
+	if err != nil {
+		return Session{}, err
+	}
+	userID, err := parseVoiceCallUUID("user_id", input.UserID)
+	if err != nil {
+		return Session{}, err
+	}
+	provider := strings.TrimSpace(input.Provider)
+	providerTaskID := strings.TrimSpace(input.ProviderTaskID)
+	roomID := strings.TrimSpace(input.RoomID)
+	if provider == "" || providerTaskID == "" || roomID == "" {
+		return Session{}, errors.New("voice call provider, provider task, and room IDs are required")
+	}
+
+	row, err := store.queries.CreateVoiceCallSession(ctx, db.CreateVoiceCallSessionParams{
+		WorkspaceID:    workspaceID,
+		ChannelID:      channelID,
+		AgentID:        agentID,
+		UserID:         userID,
+		Provider:       provider,
+		ProviderTaskID: pgtype.Text{String: providerTaskID, Valid: true},
+		RoomID:         pgtype.Text{String: roomID, Valid: true},
+	})
+	if err != nil {
+		return Session{}, fmt.Errorf("insert voice call session: %w", err)
+	}
+	return voiceCallSessionFromDB(row)
+}
+
+func (store *PostgresStore) Get(
+	ctx context.Context,
+	workspaceID string,
+	userID string,
+	callID string,
+) (Session, error) {
+	params, err := scopedVoiceCallParams(workspaceID, userID, callID)
+	if err != nil {
+		return Session{}, err
+	}
+	row, err := store.queries.GetVoiceCallSessionForMember(
+		ctx,
+		db.GetVoiceCallSessionForMemberParams(params),
+	)
+	if err != nil {
+		return Session{}, fmt.Errorf("select voice call session: %w", err)
+	}
+	return voiceCallSessionFromDB(row)
+}
+
+func (store *PostgresStore) MarkConnecting(
+	ctx context.Context,
+	workspaceID string,
+	callID string,
+) (Session, error) {
+	parsedWorkspaceID, parsedCallID, err := workspaceCallUUIDs(workspaceID, callID)
+	if err != nil {
+		return Session{}, err
+	}
+	row, err := store.queries.MarkVoiceCallConnecting(
+		ctx,
+		db.MarkVoiceCallConnectingParams{
+			ID:          parsedCallID,
+			WorkspaceID: parsedWorkspaceID,
+		},
+	)
+	if err != nil {
+		return Session{}, fmt.Errorf("update voice call to connecting: %w", err)
+	}
+	return voiceCallSessionFromDB(row)
+}
+
+func (store *PostgresStore) MarkFailed(
+	ctx context.Context,
+	workspaceID string,
+	callID string,
+	errorCode string,
+) (Session, error) {
+	parsedWorkspaceID, parsedCallID, err := workspaceCallUUIDs(workspaceID, callID)
+	if err != nil {
+		return Session{}, err
+	}
+	errorCode = strings.TrimSpace(errorCode)
+	if errorCode == "" {
+		return Session{}, errors.New("voice call error_code is required")
+	}
+	row, err := store.queries.MarkVoiceCallFailed(
+		ctx,
+		db.MarkVoiceCallFailedParams{
+			ErrorCode:   errorCode,
+			ID:          parsedCallID,
+			WorkspaceID: parsedWorkspaceID,
+		},
+	)
+	if err != nil {
+		return Session{}, fmt.Errorf("update voice call to failed: %w", err)
+	}
+	return voiceCallSessionFromDB(row)
+}
+
+func (store *PostgresStore) BeginEnding(
+	ctx context.Context,
+	workspaceID string,
+	userID string,
+	callID string,
+	reason string,
+) (BeginEndingResult, error) {
+	params, err := scopedVoiceCallParams(workspaceID, userID, callID)
+	if err != nil {
+		return BeginEndingResult{}, err
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return BeginEndingResult{}, errors.New("voice call end_reason is required")
+	}
+	row, err := store.queries.BeginVoiceCallEnding(
+		ctx,
+		db.BeginVoiceCallEndingParams{
+			ID:          params.ID,
+			WorkspaceID: params.WorkspaceID,
+			UserID:      params.UserID,
+			EndReason:   reason,
+		},
+	)
+	if err != nil {
+		return BeginEndingResult{}, fmt.Errorf("update voice call to ending: %w", err)
+	}
+	session, err := voiceCallSessionFromDB(db.VoiceCallSession{
+		ID:             row.ID,
+		WorkspaceID:    row.WorkspaceID,
+		ChannelID:      row.ChannelID,
+		AgentID:        row.AgentID,
+		UserID:         row.UserID,
+		Provider:       row.Provider,
+		ProviderTaskID: row.ProviderTaskID,
+		RoomID:         row.RoomID,
+		Status:         row.Status,
+		StartedAt:      row.StartedAt,
+		ConnectedAt:    row.ConnectedAt,
+		EndedAt:        row.EndedAt,
+		EndReason:      row.EndReason,
+		ErrorCode:      row.ErrorCode,
+		InputAudioMs:   row.InputAudioMs,
+		OutputAudioMs:  row.OutputAudioMs,
+		CreatedAt:      row.CreatedAt,
+		UpdatedAt:      row.UpdatedAt,
+	})
+	if err != nil {
+		return BeginEndingResult{}, err
+	}
+	return BeginEndingResult{
+		Session:              session,
+		ProviderStopRequired: row.ProviderStopRequired,
+	}, nil
+}
+
+func (store *PostgresStore) MarkEnded(
+	ctx context.Context,
+	workspaceID string,
+	callID string,
+	reason string,
+) (Session, error) {
+	parsedWorkspaceID, parsedCallID, err := workspaceCallUUIDs(workspaceID, callID)
+	if err != nil {
+		return Session{}, err
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return Session{}, errors.New("voice call end_reason is required")
+	}
+	row, err := store.queries.MarkVoiceCallEnded(
+		ctx,
+		db.MarkVoiceCallEndedParams{
+			EndReason:   reason,
+			ID:          parsedCallID,
+			WorkspaceID: parsedWorkspaceID,
+		},
+	)
+	if err != nil {
+		return Session{}, fmt.Errorf("update voice call to ended: %w", err)
+	}
+	return voiceCallSessionFromDB(row)
+}
+
+func scopedVoiceCallParams(
+	workspaceID string,
+	userID string,
+	callID string,
+) (db.GetVoiceCallSessionForMemberParams, error) {
+	parsedWorkspaceID, err := parseVoiceCallUUID("workspace_id", workspaceID)
+	if err != nil {
+		return db.GetVoiceCallSessionForMemberParams{}, err
+	}
+	parsedUserID, err := parseVoiceCallUUID("user_id", userID)
+	if err != nil {
+		return db.GetVoiceCallSessionForMemberParams{}, err
+	}
+	parsedCallID, err := parseVoiceCallUUID("call_id", callID)
+	if err != nil {
+		return db.GetVoiceCallSessionForMemberParams{}, err
+	}
+	return db.GetVoiceCallSessionForMemberParams{
+		ID:          parsedCallID,
+		WorkspaceID: parsedWorkspaceID,
+		UserID:      parsedUserID,
+	}, nil
+}
+
+func workspaceCallUUIDs(
+	workspaceID string,
+	callID string,
+) (pgtype.UUID, pgtype.UUID, error) {
+	parsedWorkspaceID, err := parseVoiceCallUUID("workspace_id", workspaceID)
+	if err != nil {
+		return pgtype.UUID{}, pgtype.UUID{}, err
+	}
+	parsedCallID, err := parseVoiceCallUUID("call_id", callID)
+	if err != nil {
+		return pgtype.UUID{}, pgtype.UUID{}, err
+	}
+	return parsedWorkspaceID, parsedCallID, nil
+}
+
+func parseVoiceCallUUID(field string, value string) (pgtype.UUID, error) {
+	parsed, err := uuid.Parse(strings.TrimSpace(value))
+	if err != nil {
+		return pgtype.UUID{}, fmt.Errorf("voice call %s must be a UUID: %w", field, err)
+	}
+	return pgtype.UUID{Bytes: parsed, Valid: true}, nil
+}
+
+func voiceCallSessionFromDB(row db.VoiceCallSession) (Session, error) {
+	id, err := voiceCallUUIDString("id", row.ID)
+	if err != nil {
+		return Session{}, err
+	}
+	workspaceID, err := voiceCallUUIDString("workspace_id", row.WorkspaceID)
+	if err != nil {
+		return Session{}, err
+	}
+	channelID, err := voiceCallUUIDString("channel_id", row.ChannelID)
+	if err != nil {
+		return Session{}, err
+	}
+	agentID, err := voiceCallUUIDString("agent_id", row.AgentID)
+	if err != nil {
+		return Session{}, err
+	}
+	userID, err := voiceCallUUIDString("user_id", row.UserID)
+	if err != nil {
+		return Session{}, err
+	}
+	if !row.StartedAt.Valid || !row.CreatedAt.Valid || !row.UpdatedAt.Valid {
+		return Session{}, errors.New("voice call database row has invalid required timestamps")
+	}
+	if !row.ProviderTaskID.Valid || !row.RoomID.Valid {
+		return Session{}, errors.New("voice call database row has no provider identity")
+	}
+	return Session{
+		ID:             id,
+		WorkspaceID:    workspaceID,
+		ChannelID:      channelID,
+		AgentID:        agentID,
+		UserID:         userID,
+		Provider:       row.Provider,
+		ProviderTaskID: row.ProviderTaskID.String,
+		RoomID:         row.RoomID.String,
+		Status:         Status(row.Status),
+		StartedAt:      row.StartedAt.Time,
+		ConnectedAt:    optionalVoiceCallTime(row.ConnectedAt),
+		EndedAt:        optionalVoiceCallTime(row.EndedAt),
+		EndReason:      row.EndReason,
+		ErrorCode:      row.ErrorCode,
+		InputAudioMS:   row.InputAudioMs,
+		OutputAudioMS:  row.OutputAudioMs,
+		CreatedAt:      row.CreatedAt.Time,
+		UpdatedAt:      row.UpdatedAt.Time,
+	}, nil
+}
+
+func voiceCallUUIDString(field string, value pgtype.UUID) (string, error) {
+	if !value.Valid {
+		return "", fmt.Errorf("voice call database row has invalid %s", field)
+	}
+	return uuid.UUID(value.Bytes).String(), nil
+}
+
+func optionalVoiceCallTime(value pgtype.Timestamptz) *time.Time {
+	if !value.Valid {
+		return nil
+	}
+	result := value.Time
+	return &result
+}

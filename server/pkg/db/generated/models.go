@@ -1156,6 +1156,27 @@ type VerificationCode struct {
 	Attempts  int32              `json:"attempts"`
 }
 
+type VoiceCallSession struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	ChannelID      pgtype.UUID        `json:"channel_id"`
+	AgentID        pgtype.UUID        `json:"agent_id"`
+	UserID         pgtype.UUID        `json:"user_id"`
+	Provider       string             `json:"provider"`
+	ProviderTaskID pgtype.Text        `json:"provider_task_id"`
+	RoomID         pgtype.Text        `json:"room_id"`
+	Status         string             `json:"status"`
+	StartedAt      pgtype.Timestamptz `json:"started_at"`
+	ConnectedAt    pgtype.Timestamptz `json:"connected_at"`
+	EndedAt        pgtype.Timestamptz `json:"ended_at"`
+	EndReason      string             `json:"end_reason"`
+	ErrorCode      string             `json:"error_code"`
+	InputAudioMs   int64              `json:"input_audio_ms"`
+	OutputAudioMs  int64              `json:"output_audio_ms"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
 type WebhookDelivery struct {
 	ID                     pgtype.UUID        `json:"id"`
 	WorkspaceID            pgtype.UUID        `json:"workspace_id"`

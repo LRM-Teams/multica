@@ -8,26 +8,18 @@ export type VoiceRecordingAttachment = Pick<
   "id" | "filename" | "content_type" | "size_bytes"
 >;
 
-export function buildVoiceMessageParts(
-  transcript: string,
+export function buildRecordedVoiceMessageParts(
   durationMs: number,
-  recording?: VoiceRecordingAttachment,
+  recording: VoiceRecordingAttachment,
 ): MessagePart[] {
-  const text = transcript.trim();
-  if (!text) return [];
   return [
-    { type: "text", text },
     {
       type: "voice",
       duration_ms: Math.max(0, Math.min(MAX_VOICE_RECORDING_MS, Math.round(durationMs))),
-      ...(recording
-        ? {
-            attachment_id: recording.id,
-            filename: recording.filename,
-            content_type: recording.content_type,
-            size_bytes: recording.size_bytes,
-          }
-        : {}),
+      attachment_id: recording.id,
+      filename: recording.filename,
+      content_type: recording.content_type,
+      size_bytes: recording.size_bytes,
     },
   ];
 }

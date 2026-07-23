@@ -1,29 +1,26 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildVoiceMessageParts,
+  buildRecordedVoiceMessageParts,
   encodeVoicePCM,
   encodeVoiceWAV,
   VOICE_SAMPLE_RATE,
 } from "./voice-audio";
 
-describe("buildVoiceMessageParts", () => {
-  it("keeps the transcript accessible and marks its source modality", () => {
-    expect(buildVoiceMessageParts("  hello  ", 1234, {
+describe("buildRecordedVoiceMessageParts", () => {
+  it("sends the recording without inventing a browser-owned transcript", () => {
+    expect(buildRecordedVoiceMessageParts(1234, {
       id: "recording-1",
       filename: "voice-recording.wav",
       content_type: "audio/wav",
       size_bytes: 48,
-    })).toEqual([
-      { type: "text", text: "hello" },
-      {
+    })).toEqual([{
         type: "voice",
         duration_ms: 1234,
         attachment_id: "recording-1",
         filename: "voice-recording.wav",
         content_type: "audio/wav",
         size_bytes: 48,
-      },
-    ]);
+    }]);
   });
 });
 

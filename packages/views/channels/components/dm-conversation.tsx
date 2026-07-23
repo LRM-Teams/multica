@@ -70,7 +70,7 @@ import {
 import { useEntryReadCursor } from "../hooks/use-entry-read-cursor";
 import { useEntryAnchor } from "../hooks/use-entry-around-seq";
 import {
-  buildVoiceMessageParts,
+  buildRecordedVoiceMessageParts,
   type VoiceRecordingAttachment,
 } from "../lib/voice-audio";
 import { prepareVoicePlayback, voicePlaybackScope } from "../lib/voice-playback";
@@ -877,13 +877,12 @@ function DmChannelConversation({
   };
 
   const handleVoiceSend = (
-    content: string,
     durationMs: number,
     attachment: VoiceRecordingAttachment,
   ): boolean => {
     if (!draftEmpty || dmPending.pending.length > 0) return false;
-    const parts = buildVoiceMessageParts(content, durationMs, attachment);
-    if (parts.length === 0) return false;
+    const content = "";
+    const parts = buildRecordedVoiceMessageParts(durationMs, attachment);
     const dispatched = dmSend.send({
       payloadKey: composePayloadKey(content, [attachment.id], `voice:${quoteTarget?.id ?? ""}`),
       buildVars: (clientMessageId) => ({
@@ -947,13 +946,12 @@ function DmChannelConversation({
   };
 
   const handleThreadVoiceSend = (
-    content: string,
     durationMs: number,
     attachment: VoiceRecordingAttachment,
   ): boolean => {
     if (!threadRoot || !threadDraftEmpty || threadPending.pending.length > 0) return false;
-    const parts = buildVoiceMessageParts(content, durationMs, attachment);
-    if (parts.length === 0) return false;
+    const content = "";
+    const parts = buildRecordedVoiceMessageParts(durationMs, attachment);
     const dispatched = threadSend.send({
       payloadKey: composePayloadKey(
         content,

@@ -169,6 +169,48 @@ describe("VoiceMessageAudio", () => {
 
   });
 
+  it("plays a newly sent recording before its server transcript exists", async () => {
+    playbackMocks.claimVoiceAutoplay.mockReturnValue(false);
+    const attachment = {
+      id: "recording-pending",
+      workspace_id: "workspace-1",
+      issue_id: null,
+      comment_id: null,
+      chat_session_id: null,
+      chat_message_id: null,
+      uploader_type: "member" as const,
+      uploader_id: "user-1",
+      filename: "voice-pending.wav",
+      url: "/uploads/voice-pending.wav",
+      download_url: "/api/attachments/recording-pending/download",
+      markdown_url: "/api/attachments/recording-pending/download",
+      content_type: "audio/wav",
+      size_bytes: 48,
+      created_at: "2026-07-22T10:00:01.000Z",
+    };
+    render(<VoiceMessageAudio message={agentVoiceMessage({
+      type: "user",
+      author_id: "user-1",
+      author_name: "Alice",
+      content: "",
+      parts: [{
+        type: "voice",
+        duration_ms: 1800,
+        attachment_id: attachment.id,
+        filename: attachment.filename,
+        content_type: attachment.content_type,
+        size_bytes: attachment.size_bytes,
+      }],
+      attachments: [attachment],
+    })} />);
+
+    expect(screen.queryByRole("button", { name: "Show transcript" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Play voice reply" }));
+
+    expect(mediaPlay).toHaveBeenCalledOnce();
+    expect(playbackMocks.prepareVoiceAudio).not.toHaveBeenCalled();
+  });
+
   it("does not synthesize a human recording when its media URL is unavailable", async () => {
     playbackMocks.claimVoiceAutoplay.mockReturnValue(false);
     render(<VoiceMessageAudio message={agentVoiceMessage({

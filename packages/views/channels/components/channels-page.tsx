@@ -316,7 +316,7 @@ function MemberPresenceStack({
             actorId={m.member_id}
             size={size}
             avatarUrlHint={m.avatar_url}
-            showStatusDot={m.member_type === "agent"}
+            showStatusDot
             profileLink={false}
           />
         </span>

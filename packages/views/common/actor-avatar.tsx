@@ -10,6 +10,7 @@ import {
 } from "@multica/ui/components/ui/hover-card";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { isDirectoryActorMiss } from "@multica/core/workspace/resolved-actor-name";
+import { useMemberOnline } from "@multica/core/workspace/use-member-presence";
 import {
   useAgentHealth,
   useAgentPresenceDetail,
@@ -68,9 +69,8 @@ interface ActorAvatarProps {
    */
   enableHoverCard?: boolean;
   /**
-   * Overlay an agent-presence dot at the avatar's bottom-right. Use at
-   * decision moments (picker rows, current-assignee display, agent-centric
-   * surfaces). Has no effect for non-agent actors. Independent of
+   * Overlay a presence status dot at the avatar's bottom-right. Agents use
+   * runtime/task presence; members use WS online (LRM-462). Independent of
    * `enableHoverCard` so picker rows can show the dot without nesting a
    * popover inside the dropdown.
    */
@@ -171,18 +171,22 @@ export function ActorAvatar({
     />
   );
 
-  // Optional presence dot overlay. Only meaningful for agents — members have
-  // no presence backbone. Wrapping unconditionally would create extra DOM for
-  // every avatar; we only wrap when a dot is asked for. `AgentPresenceOverlay`
-  // is the single, stretch-proof presence container (see its doc comment).
-  const wrapDot = showStatusDot && actorType === "agent";
-  const dotted = wrapDot ? (
-    <AgentPresenceOverlay agentId={actorId} size={size}>
-      {avatar}
-    </AgentPresenceOverlay>
-  ) : (
-    avatar
-  );
+  // Optional presence dot overlay. Agents use runtime presence; members use
+  // WS online (LRM-462). Wrapping unconditionally would create extra DOM for
+  // every avatar; we only wrap when a dot is asked for.
+  const wrapDot =
+    !!showStatusDot && (actorType === "agent" || actorType === "member");
+  const dotted = !wrapDot
+    ? avatar
+    : actorType === "agent" ? (
+        <AgentPresenceOverlay agentId={actorId} size={size}>
+          {avatar}
+        </AgentPresenceOverlay>
+      ) : (
+        <MemberPresenceOverlay userId={actorId} size={size}>
+          {avatar}
+        </MemberPresenceOverlay>
+      );
   const withXpBurst =
     actorType === "agent" && showXpBurst ? (
       <AgentXpBurst agentId={actorId}>{dotted}</AgentXpBurst>
@@ -460,6 +464,59 @@ export function AgentStatusDot({ agentId, size }: { agentId: string; size?: numb
         className={`relative rounded-full ring-2 ring-background ${dotColorClass} ${
           isWorking ? "motion-reduce:ring-brand" : ""
         }`}
+      />
+    </span>
+  );
+}
+
+/** Stretch-proof wrapper for human-member presence dots (LRM-462). */
+export function MemberPresenceOverlay({
+  userId,
+  size,
+  className,
+  children,
+}: {
+  userId: string;
+  size?: number;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  const boxSize = size ?? 20;
+  return (
+    <span
+      data-slot="member-presence"
+      className={cn("relative inline-flex shrink-0", className)}
+      style={{ width: boxSize, height: boxSize }}
+    >
+      {children}
+      <MemberStatusDot userId={userId} size={size} />
+    </span>
+  );
+}
+
+/** Common-IM online/offline dot for human members (WS session presence). */
+export function MemberStatusDot({ userId, size }: { userId: string; size?: number }) {
+  const ws = useCurrentWorkspace();
+  const online = useMemberOnline(ws?.id, userId);
+  if (online === "loading") return null;
+
+  const live = online ? "online" : "offline";
+  const { dotClass, label } = availabilityConfig[live];
+  const diameter = Math.max(5, Math.round((size ?? 24) * 0.28));
+  const dotStyle = { width: diameter, height: diameter };
+  const HOLLOW_MIN_PX = 8;
+  const isOfflineHollow = !online && diameter >= HOLLOW_MIN_PX;
+  const dotColorClass = isOfflineHollow
+    ? "border-2 border-muted-foreground/50 bg-transparent"
+    : dotClass;
+
+  return (
+    <span className="absolute bottom-0 right-0 inline-flex">
+      <span
+        aria-label={`Status: ${label}`}
+        title={label}
+        style={dotStyle}
+        className={`relative rounded-full ring-2 ring-background ${dotColorClass}`}
       />
     </span>
   );

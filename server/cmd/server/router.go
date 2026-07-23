@@ -202,9 +202,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		h.LocalSkillListStore = handler.NewRedisLocalSkillListStore(rdb)
 		h.LocalSkillImportStore = handler.NewRedisLocalSkillImportStore(rdb)
 		h.LivenessStore = handler.NewRedisLivenessStore(rdb)
+		h.MemberPresenceStore = handler.NewRedisMemberPresenceStore(rdb)
 		h.WebhookRateLimiter = handler.NewRedisWebhookRateLimiter(rdb, handler.DefaultWebhookRateLimit())
 		h.WebhookIPRateLimiter = handler.NewRedisWebhookIPRateLimiter(rdb, handler.DefaultWebhookIPRateLimit())
 	}
+	// LRM-462: human member presence from browser/app WS sessions.
+	h.WireMemberPresenceHooks()
 
 	// Lark integration. Only wired when MULTICA_LARK_SECRET_KEY is set:
 	// the InstallationService refuses to fall back to plaintext storage
@@ -642,6 +645,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Use(middleware.RequireWorkspaceMemberFromURL(queries, "id"))
 					r.Get("/", h.GetWorkspace)
 					r.Get("/members", h.ListMembersWithUser)
+					r.Get("/member-presence", h.ListMemberPresence)
 					r.Get("/memory-curation/status", h.GetWorkspaceMemoryCurationStatus)
 					r.Get("/memory-curation/profile", h.GetMemoryCuratorProfile)
 					r.Put("/memory-curation/profile", h.UpdateMemoryCuratorProfile)

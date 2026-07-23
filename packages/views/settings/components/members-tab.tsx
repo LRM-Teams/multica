@@ -104,7 +104,7 @@ function MemberRow({
   const showMenu = canEditRole || canRemove;
   return (
     <div className="flex items-center gap-3 border-b border-border px-4 py-3 last:border-b-0 hover:bg-hover">
-      <ActorAvatar actorType="member" actorId={member.user_id} size={32} />
+      <ActorAvatar actorType="member" actorId={member.user_id} size={32} showStatusDot />
       <div className="min-w-0 flex-1">
         <ActorIdentityRow
           identity={member}

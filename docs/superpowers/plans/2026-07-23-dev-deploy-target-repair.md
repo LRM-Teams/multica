@@ -19,7 +19,8 @@ traffic at `http://82.157.184.89:8090`.
   the workflow comments to name the actual user-facing target.
 - [x] Validated workflow syntax with actionlint v1.7.7; `git diff --check`
   also passed and the diff is limited to deploy target metadata plus this log.
-- [ ] Push the branch and open a ready-for-review PR into `dev`.
+- [x] Pushed `fix/deploy-dev-s89` and opened ready-for-review PR #948 into
+  `dev`: <https://github.com/LRM-Teams/multica/pull/948>.
 - [ ] After merge, confirm the deployment executes on s89 and that `:8090`
   serves the deployed SHA.
 

@@ -21,3 +21,7 @@ export {
   type VoiceCallPanelProps,
 } from "./voice-call-panel";
 export { formatVoiceCallDuration } from "./voice-call-format";
+export {
+  DmAgentVoiceCall,
+  type DmAgentVoiceCallProps,
+} from "./dm-agent-voice-call";

@@ -1,6 +1,7 @@
 "use client";
 
-import { Fragment, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { useResolvedActorDisplayName } from "../../common/use-resolved-actor-display-name";
 import { ActorMention } from "../../common/markdown";
@@ -13,6 +14,7 @@ import {
   type MemberSystemEvent,
   ISSUE_EVENTS,
   type IssueSystemEvent,
+  type IssueAggregateSystemEvent,
   PROJECT_EVENTS,
   type ProjectSystemEvent,
   type ReminderSystemEvent,
@@ -315,6 +317,113 @@ export function IssueSystemEventContent({
       status: t(($) => $.message.system_event.issue_status[statusKey]),
     }),
     { actor, issue: issueToken },
+  );
+}
+
+function interpolateAggregateSlots(
+  template: string,
+  slots: { actor: ReactNode; count: ReactNode },
+): ReactNode {
+  return template.split(/(\{actor\}|\{count\})/g).map((segment, index) => {
+    if (segment === "{actor}") return <Fragment key={index}>{slots.actor}</Fragment>;
+    if (segment === "{count}") return <Fragment key={index}>{slots.count}</Fragment>;
+    if (!segment) return null;
+    return <Fragment key={index}>{segment}</Fragment>;
+  });
+}
+
+/**
+ * Server-aggregated issue system row (LRM-418 / LRM-423): one summary line
+ * ("@actor completed N issues") with an optional expand that lists every
+ * constituent issue ref. Only renders when the BE stamped a valid `items`
+ * array — FE never invents the group from consecutive singles.
+ */
+export function IssueAggregateSystemEventContent({
+  event,
+  sourceMessageId,
+}: {
+  event: IssueAggregateSystemEvent;
+  sourceMessageId?: string;
+}): ReactNode {
+  const { t } = useT("channels");
+  const [expanded, setExpanded] = useState(false);
+  const count = event.items.length;
+  const canExpand = count > 1;
+
+  const actorType = toActorMentionType(event.actorType);
+  const actorDisplayName = useResolvedActorDisplayName(event.actorId, actorType);
+
+  const actor =
+    event.actorId && actorType && actorDisplayName ? (
+      <SystemEventActorToken
+        actor={{
+          type: actorType,
+          id: event.actorId,
+          displayName: actorDisplayName,
+        }}
+      />
+    ) : event.actorId && actorType ? (
+      <SystemEventActorToken
+        actor={{ type: actorType, id: event.actorId, displayName: event.actorId }}
+      />
+    ) : (
+      t(($) => $.message.system_event.issue.actor_system)
+    );
+
+  const summaryTemplate =
+    event.event === ISSUE_EVENTS.assigned
+      ? t(($) => $.message.system_event.issue.aggregate_assigned)
+      : event.event === ISSUE_EVENTS.completed ||
+          event.items.every((item) => item.issueStatus === "done" || !item.issueStatus)
+        ? t(($) => $.message.system_event.issue.aggregate_done)
+        : t(($) => $.message.system_event.issue.aggregate_updated);
+
+  return (
+    <span className="inline-flex max-w-full flex-col items-center gap-1">
+      <span className="inline-flex flex-wrap items-baseline justify-center gap-x-1">
+        {interpolateAggregateSlots(summaryTemplate, {
+          actor,
+          count: <span className="tabular-nums">{count}</span>,
+        })}
+        {canExpand ? (
+          <button
+            type="button"
+            data-testid="issue-aggregate-expand"
+            aria-expanded={expanded}
+            aria-label={
+              expanded
+                ? t(($) => $.message.system_event.issue.aggregate_collapse)
+                : t(($) => $.message.system_event.issue.aggregate_expand)
+            }
+            onClick={() => setExpanded((open) => !open)}
+            className="inline-flex items-center gap-0.5 rounded px-0.5 text-muted-foreground transition-colors hover:text-foreground"
+          >
+            {expanded ? (
+              <ChevronDown className="size-3 shrink-0" aria-hidden />
+            ) : (
+              <ChevronRight className="size-3 shrink-0" aria-hidden />
+            )}
+          </button>
+        ) : null}
+      </span>
+      {canExpand && expanded ? (
+        <ul
+          data-testid="issue-aggregate-items"
+          className="m-0 flex list-none flex-col items-center gap-0.5 p-0 text-xs text-muted-foreground"
+        >
+          {event.items.map((item) => (
+            <li key={item.issueId} className="min-w-0">
+              <IssueRefLink
+                issueId={item.issueId}
+                text={item.issueIdentifier}
+                source="anchor"
+                sourceMessageId={sourceMessageId}
+              />
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </span>
   );
 }
 

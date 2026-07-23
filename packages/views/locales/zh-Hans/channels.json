@@ -367,7 +367,12 @@
         "in_review": "{actor} 将 Issue {issue} 提交审核",
         "done": "{actor} 完成了 Issue {issue}",
         "updated": "{actor} 更新了 Issue {issue}",
-        "status": "{actor} 将 Issue {issue} 标记为{{status}}"
+        "status": "{actor} 将 Issue {issue} 标记为{{status}}",
+        "aggregate_done": "{actor} 完成了 {count} 个 Issue",
+        "aggregate_assigned": "{actor} 重新指派了 {count} 个 Issue",
+        "aggregate_updated": "{actor} 更新了 {count} 个 Issue",
+        "aggregate_expand": "展开 Issue 列表",
+        "aggregate_collapse": "收起 Issue 列表"
       },
       "issue_status": {
         "backlog": "待办事项",

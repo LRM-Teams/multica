@@ -5,6 +5,7 @@ import type { ChannelMessage, MessagePart } from "@multica/core/types";
 import {
   parseMemberSystemEvent,
   parseIssueSystemEvent,
+  parseIssueAggregateSystemEvent,
   parseProjectSystemEvent,
   parseReminderSystemEvent,
   foldedIssueEventIds,
@@ -15,6 +16,7 @@ import {
 import {
   MemberSystemEventContent,
   IssueSystemEventContent,
+  IssueAggregateSystemEventContent,
   ProjectSystemEventContent,
   ReminderSystemEventContent,
 } from "./channel-system-event-content";
@@ -194,6 +196,11 @@ vi.mock("../../i18n/use-t", () => ({
               done: "{actor} 完成了 Issue {issue}",
               updated: "{actor} 更新了 Issue {issue}",
               status: "{actor} 将 Issue {issue} 标记为{{status}}",
+              aggregate_done: "{actor} 完成了 {count} 个 Issue",
+              aggregate_assigned: "{actor} 重新指派了 {count} 个 Issue",
+              aggregate_updated: "{actor} 更新了 {count} 个 Issue",
+              aggregate_expand: "展开 Issue 列表",
+              aggregate_collapse: "收起 Issue 列表",
             },
             issue_status: {
               backlog: "待办事项",
@@ -555,6 +562,162 @@ describe("parseIssueSystemEvent", () => {
     expect(
       parseIssueSystemEvent(issueMsg("m1", "issue_created", { issue_id: "issue-uuid" })),
     ).toBeNull();
+  });
+
+  it("skips rows that carry an items[] aggregate (owned by parseIssueAggregateSystemEvent)", () => {
+    expect(
+      parseIssueSystemEvent(
+        issueMsg("m1", "issue_completed", {
+          actor_id: "agent-fe",
+          actor_type: "agent",
+          items: [
+            { issue_id: "i1", issue_identifier: "LRM-360", issue_status: "done" },
+            { issue_id: "i2", issue_identifier: "LRM-357", issue_status: "done" },
+          ],
+        }),
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("parseIssueAggregateSystemEvent", () => {
+  it("parses a server-authored multi-issue completed aggregate", () => {
+    const event = parseIssueAggregateSystemEvent(
+      issueMsg("m1", "issue_completed", {
+        actor_id: "agent-fe",
+        actor_type: "agent",
+        items: [
+          { issue_id: "i1", issue_identifier: "LRM-360", issue_status: "done" },
+          { issue_id: "i2", issue_identifier: "LRM-357", issue_status: "done" },
+        ],
+      }),
+    );
+    expect(event).toMatchObject({
+      event: "issue_completed",
+      actorId: "agent-fe",
+      actorType: "agent",
+      items: [
+        { issueId: "i1", issueIdentifier: "LRM-360", issueStatus: "done" },
+        { issueId: "i2", issueIdentifier: "LRM-357", issueStatus: "done" },
+      ],
+    });
+  });
+
+  it("returns null when items is missing — no client-side fake aggregation", () => {
+    expect(
+      parseIssueAggregateSystemEvent(
+        issueMsg("m1", "issue_completed", {
+          issue_id: "i1",
+          issue_identifier: "LRM-360",
+          issue_status: "done",
+          actor_id: "agent-fe",
+          actor_type: "agent",
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("returns null when any item is missing issue_id/identifier (refuse whole group)", () => {
+    expect(
+      parseIssueAggregateSystemEvent(
+        issueMsg("m1", "issue_completed", {
+          actor_id: "agent-fe",
+          actor_type: "agent",
+          items: [
+            { issue_id: "i1", issue_identifier: "LRM-360", issue_status: "done" },
+            { issue_identifier: "LRM-357", issue_status: "done" },
+          ],
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("returns null for an empty items array", () => {
+    expect(
+      parseIssueAggregateSystemEvent(
+        issueMsg("m1", "issue_completed", {
+          actor_id: "agent-fe",
+          actor_type: "agent",
+          items: [],
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("orders items by occurred_at then issue_id (LRM-422 stamp)", () => {
+    const event = parseIssueAggregateSystemEvent(
+      issueMsg("m1", "issue_completed", {
+        actor_id: "agent-fe",
+        actor_type: "agent",
+        items: [
+          {
+            issue_id: "i2",
+            issue_identifier: "LRM-357",
+            issue_status: "done",
+            occurred_at: "2026-07-23T08:02:00Z",
+          },
+          {
+            issue_id: "i1",
+            issue_identifier: "LRM-360",
+            issue_status: "done",
+            occurred_at: "2026-07-23T08:00:00Z",
+          },
+          {
+            issue_id: "i3",
+            issue_identifier: "LRM-361",
+            issue_status: "done",
+            occurred_at: "2026-07-23T08:01:00Z",
+          },
+        ],
+      }),
+    );
+    expect(event?.items.map((item) => item.issueIdentifier)).toEqual([
+      "LRM-360",
+      "LRM-361",
+      "LRM-357",
+    ]);
+  });
+});
+
+describe("IssueAggregateSystemEventContent", () => {
+  it("renders summary + expands to every issue link", () => {
+    render(
+      <IssueAggregateSystemEventContent
+        event={{
+          event: "issue_completed",
+          actorId: "agent-fe",
+          actorType: "agent",
+          items: [
+            { issueId: "i1", issueIdentifier: "LRM-360", issueStatus: "done" },
+            { issueId: "i2", issueIdentifier: "LRM-357", issueStatus: "done" },
+            { issueId: "i3", issueIdentifier: "LRM-353", issueStatus: "done" },
+          ],
+        }}
+        sourceMessageId="msg-agg"
+      />,
+    );
+    expect(document.body.textContent).toContain("@前端工程师 完成了 3 个 Issue");
+    expect(screen.queryByTestId("issue-aggregate-items")).toBeNull();
+    fireEvent.click(screen.getByTestId("issue-aggregate-expand"));
+    const list = screen.getByTestId("issue-aggregate-items");
+    expect(list.textContent).toContain("LRM-360");
+    expect(list.textContent).toContain("LRM-357");
+    expect(list.textContent).toContain("LRM-353");
+  });
+
+  it("hides the expand control for a single-item aggregate", () => {
+    render(
+      <IssueAggregateSystemEventContent
+        event={{
+          event: "issue_completed",
+          actorId: "agent-fe",
+          actorType: "agent",
+          items: [{ issueId: "i1", issueIdentifier: "LRM-360", issueStatus: "done" }],
+        }}
+      />,
+    );
+    expect(screen.queryByTestId("issue-aggregate-expand")).toBeNull();
+    expect(document.body.textContent).toContain("@前端工程师 完成了 1 个 Issue");
   });
 });
 

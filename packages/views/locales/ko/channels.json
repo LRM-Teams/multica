@@ -367,7 +367,12 @@
         "in_review": "{actor}님이 {issue}을(를) 검토 요청했습니다",
         "done": "{actor}님이 {issue}을(를) 완료했습니다",
         "updated": "{actor}님이 {issue}을(를) 업데이트했습니다",
-        "status": "{actor}님이 {issue}을(를) {{status}}(으)로 표시했습니다"
+        "status": "{actor}님이 {issue}을(를) {{status}}(으)로 표시했습니다",
+        "aggregate_done": "{actor}님이 {count}개 이슈를 완료했습니다",
+        "aggregate_assigned": "{actor}님이 {count}개 이슈를 재할당했습니다",
+        "aggregate_updated": "{actor}님이 {count}개 이슈를 업데이트했습니다",
+        "aggregate_expand": "이슈 목록 펼치기",
+        "aggregate_collapse": "이슈 목록 접기"
       },
       "issue_status": {
         "backlog": "백로그",

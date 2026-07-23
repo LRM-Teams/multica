@@ -50,12 +50,14 @@ import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
 import {
   parseMemberSystemEvent,
   parseIssueSystemEvent,
+  parseIssueAggregateSystemEvent,
   parseProjectSystemEvent,
   parseReminderSystemEvent,
 } from "./channel-system-event";
 import {
   MemberSystemEventContent,
   IssueSystemEventContent,
+  IssueAggregateSystemEventContent,
   ProjectSystemEventContent,
   ReminderSystemEventContent,
 } from "./channel-system-event-content";
@@ -126,7 +128,9 @@ function ChannelSystemMessageRow({
   // `system_event` part the FE projects into the frozen "任务" copy — a localized
   // action verb with the issue identifier as the sole clickable token — instead
   // of dumping the raw English "moved to In Progress" string.
-  const issueEvent = parseIssueSystemEvent(message);
+  // LRM-423: server aggregates (non-empty `items`) win over the single-issue path.
+  const issueAggregateEvent = parseIssueAggregateSystemEvent(message);
+  const issueEvent = issueAggregateEvent ? null : parseIssueSystemEvent(message);
   // Channel↔project association events (#610): bind/change/unbind, projected into
   // a localized row whose sole clickable object is the project name.
   const projectEvent = parseProjectSystemEvent(message);
@@ -137,6 +141,7 @@ function ChannelSystemMessageRow({
   // Older backflow rows without the `system_event` part still carry an anchored
   // `reference`, so project those into tokens rather than the raw string (#469).
   const hasReferenceParts = message.parts?.some((part) => part.type === "reference") ?? false;
+  const showIssueTime = Boolean(issueEvent || issueAggregateEvent);
   return (
     <div
       id={`message-${message.id}`}
@@ -147,7 +152,7 @@ function ChannelSystemMessageRow({
       // REVEALED on hover ("系统事件 hover 出时间"), so `title` carries the full
       // local date-time. Issue rows (item #7口径) show a SIMPLE inline time and
       // NEVER a full timestamp, so they opt out of the hover-full treatment.
-      title={issueEvent ? undefined : messageTime.full(message.created_at)}
+      title={showIssueTime ? undefined : messageTime.full(message.created_at)}
       className={cn(
         // Lightweight CENTERED service notice (#369, Iris §8): a top-left row
         // reads like "a message that lost its avatar" against Multica's heavy
@@ -159,7 +164,12 @@ function ChannelSystemMessageRow({
       )}
     >
       <span className="min-w-0 break-words">
-        {issueEvent ? (
+        {issueAggregateEvent ? (
+          <IssueAggregateSystemEventContent
+            event={issueAggregateEvent}
+            sourceMessageId={message.id}
+          />
+        ) : issueEvent ? (
           <IssueSystemEventContent event={issueEvent} sourceMessageId={message.id} />
         ) : memberEvent ? (
           <MemberSystemEventContent event={memberEvent} />
@@ -179,7 +189,7 @@ function ChannelSystemMessageRow({
           systemText
         )}
       </span>
-      {issueEvent ? (
+      {showIssueTime ? (
         // Simple, always-visible time — "· 10:16" (item #7口径), the bucketed
         // inline clock the rest of the list uses, never a full timestamp.
         <span className="shrink-0 tabular-nums text-muted-foreground/60">

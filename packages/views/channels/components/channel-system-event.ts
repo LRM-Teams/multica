@@ -90,9 +90,103 @@ export interface IssueSystemEvent {
   targetName?: string;
 }
 
+/**
+ * One constituent transition inside a server-aggregated issue system event
+ * (LRM-418 / LRM-422 / LRM-423). The BE merges same-actor + same-type events
+ * across issues inside a 5-minute window into a single `system_event` row whose
+ * `event_params.items` lists every surviving fact — FE must NEVER invent this
+ * list client-side (LRM-238).
+ */
+export interface IssueAggregateSystemEventItem {
+  issueId: string;
+  issueIdentifier: string;
+  issueStatus?: string;
+  previousStatus?: string;
+  targetId?: string;
+  targetType?: string;
+  /** ISO timestamp of the original transition when the BE stamps it. */
+  occurredAt?: string;
+}
+
+/**
+ * Server-authored aggregate of N same-kind issue transitions. Present only when
+ * `event_params.items` is a non-empty array of valid items — missing/empty/
+ * malformed `items` is NOT treated as an aggregate (no silent fake merge).
+ */
+export interface IssueAggregateSystemEvent {
+  event: IssueSystemEventKind;
+  items: IssueAggregateSystemEventItem[];
+  actorId?: string;
+  actorType?: string;
+  actorHandle?: string;
+  actorName?: string;
+}
+
 function optString(params: Record<string, unknown>, key: string): string | undefined {
   const value = params[key];
   return typeof value === "string" && value ? value : undefined;
+}
+
+function parseIssueAggregateItems(
+  params: Record<string, unknown>,
+): IssueAggregateSystemEventItem[] | null {
+  const raw = params.items;
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const items: IssueAggregateSystemEventItem[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") return null;
+    const row = entry as Record<string, unknown>;
+    const issueId = optString(row, "issue_id");
+    const issueIdentifier = optString(row, "issue_identifier");
+    // Every item must carry a resolvable issue token — refuse the whole
+    // aggregate rather than silently drop a fact (LRM-238).
+    if (!issueId || !issueIdentifier) return null;
+    items.push({
+      issueId,
+      issueIdentifier,
+      issueStatus: optString(row, "issue_status"),
+      previousStatus: optString(row, "previous_status"),
+      targetId: optString(row, "target_id"),
+      targetType: optString(row, "target_type"),
+      occurredAt: optString(row, "occurred_at"),
+    });
+  }
+  // LRM-422 stamps occurred_at per item — expand list stays chronological.
+  items.sort((a, b) => {
+    if (a.occurredAt && b.occurredAt && a.occurredAt !== b.occurredAt) {
+      return a.occurredAt < b.occurredAt ? -1 : 1;
+    }
+    if (a.occurredAt && !b.occurredAt) return -1;
+    if (!a.occurredAt && b.occurredAt) return 1;
+    return a.issueId < b.issueId ? -1 : a.issueId > b.issueId ? 1 : 0;
+  });
+  return items;
+}
+
+/**
+ * Extract a server-aggregated issue-lifecycle event (LRM-423). Returns null
+ * unless the BE stamped a non-empty, fully-valid `items` array on a known issue
+ * event — FE does not fold consecutive single-issue rows into a fake group.
+ */
+export function parseIssueAggregateSystemEvent(
+  message: ChannelMessage,
+): IssueAggregateSystemEvent | null {
+  if (message.type !== "system" || !Array.isArray(message.parts)) return null;
+  for (const part of message.parts) {
+    if (part.type !== "system_event" || !ISSUE_EVENT_KINDS.has(part.event)) continue;
+    const params = part.event_params;
+    const items = parseIssueAggregateItems(params);
+    if (!items) continue;
+    return {
+      event: part.event as IssueSystemEventKind,
+      items,
+      actorId: optString(params, "actor_id"),
+      actorType: optString(params, "actor_type"),
+      actorHandle: optString(params, "actor_handle"),
+      actorName: optString(params, "actor_name"),
+    };
+  }
+  return null;
 }
 
 /**
@@ -102,12 +196,18 @@ function optString(params: Record<string, unknown>, key: string): string | undef
  * reference — those keep the raw-content projection). Identity comes entirely
  * from the `system_event` params, so the projection never parses the fallback
  * `content` string.
+ *
+ * Server aggregates (non-empty `items`) are owned by
+ * {@link parseIssueAggregateSystemEvent} — this parser deliberately skips them
+ * so a single row never projects both a summary and a lone issue sentence.
  */
 export function parseIssueSystemEvent(message: ChannelMessage): IssueSystemEvent | null {
   if (message.type !== "system" || !Array.isArray(message.parts)) return null;
   for (const part of message.parts) {
     if (part.type !== "system_event" || !ISSUE_EVENT_KINDS.has(part.event)) continue;
     const params = part.event_params;
+    // Aggregate rows carry `items`; leave them to the aggregate parser.
+    if (Array.isArray(params.items)) continue;
     const issueId = optString(params, "issue_id");
     const issueIdentifier = optString(params, "issue_identifier");
     const issueStatus = optString(params, "issue_status");

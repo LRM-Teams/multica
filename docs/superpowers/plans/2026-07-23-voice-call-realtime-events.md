@@ -34,7 +34,8 @@ members.
 - [x] Ran React Doctor: 0 issues.
 - [x] Ran focused handler tests against a disposable database and relevant Go
   vet.
-- [ ] Commit, push, and open an independent ready pull request stacked on
+- [x] Committed, pushed, and opened independent ready PR
+  [#1100](https://github.com/LRM-Teams/multica/pull/1100), stacked on
   [#1095](https://github.com/LRM-Teams/multica/pull/1095).
 
 ## Boundary

@@ -37,8 +37,9 @@ Sources:
 - [x] Add failing exact-format, privilege, validation, and entropy tests.
 - [x] Implement the server-side token signer with cryptographic nonces.
 - [x] Run package tests, vet, and diff checks.
-- [ ] Commit, push, and open an independent ready PR stacked on the RTC client
-  PR.
+- [x] Commit, push, and open independent ready PR
+  [#1037](https://github.com/LRM-Teams/multica/pull/1037), stacked on RTC client
+  PR #1033.
 
 ## Verification
 

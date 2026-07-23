@@ -65,7 +65,10 @@
     --radius-4xl: calc(var(--radius) * 2.6);
 }
 
-:root {
+/* `.light` re-applies the same values so nested light scopes (e.g. theme
+ * preference WindowMockup) stay correct when the document root is dark. */
+:root,
+.light {
     /* —— Frozen product-surface palette (LRM-226) —— */
     --ink: #1d1c1d;
     --ink-2: #616061;

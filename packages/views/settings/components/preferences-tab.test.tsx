@@ -1,4 +1,7 @@
 import type { ReactNode } from "react";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, act, cleanup, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -97,6 +100,52 @@ function I18nWrapper({ children }: { children: ReactNode }) {
     </I18nProvider>
   );
 }
+
+describe("PreferencesTab — Theme preview tokens (LRM-355)", () => {
+  it("does not ship a private LIGHT_COLORS / DARK_COLORS hex table", () => {
+    const src = readFileSync(
+      resolve(dirname(fileURLToPath(import.meta.url)), "./preferences-tab.tsx"),
+      "utf8",
+    );
+    expect(src).not.toMatch(/\bLIGHT_COLORS\b/);
+    expect(src).not.toMatch(/\bDARK_COLORS\b/);
+    // Product surfaces must stay on semantic utilities, not inline hex fills
+    // (OS traffic-light dots are the only intentional hex in this file).
+    expect(src).not.toMatch(/backgroundColor:\s*colors\./);
+    expect(src).toMatch(/bg-background/);
+    expect(src).toMatch(/bg-sidebar/);
+    expect(src).toMatch(/bg-muted/);
+  });
+
+  it("scopes Light / Dark / System mockups with light|dark token roots", () => {
+    render(<PreferencesTab />, { wrapper: I18nWrapper });
+
+    const lightPreviews = document.querySelectorAll(
+      '[data-theme-preview="light"]',
+    );
+    const darkPreviews = document.querySelectorAll(
+      '[data-theme-preview="dark"]',
+    );
+    // Light card + System left half; Dark card + System right half
+    expect(lightPreviews.length).toBe(2);
+    expect(darkPreviews.length).toBe(2);
+
+    for (const el of lightPreviews) {
+      expect(el.classList.contains("light")).toBe(true);
+      expect(el.classList.contains("dark")).toBe(false);
+    }
+    for (const el of darkPreviews) {
+      expect(el.classList.contains("dark")).toBe(true);
+      expect(el.classList.contains("light")).toBe(false);
+    }
+
+    expect(
+      screen.getByRole("radio", { name: "Light" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("radio", { name: "Dark" })).toBeTruthy();
+    expect(screen.getByRole("radio", { name: "System" })).toBeTruthy();
+  });
+});
 
 describe("PreferencesTab — Language switcher", () => {
   beforeEach(() => {

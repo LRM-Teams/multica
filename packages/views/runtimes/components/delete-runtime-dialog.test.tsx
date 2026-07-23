@@ -187,20 +187,29 @@ function renderDialog(opts: {
     return { data: [], isLoading: false } as unknown as ReturnType<typeof useQuery>;
   }) as unknown as typeof useQuery);
 
-  const utils = render(
+  const tree = (runtime: AgentRuntime) => (
     <I18nProvider locale="en" resources={TEST_RESOURCES}>
       <QueryClientProvider client={qc}>
         <DeleteRuntimeDialog
           open
           onOpenChange={onOpenChange}
-          runtime={opts.runtime ?? makeRuntime()}
+          runtime={runtime}
           wsId="ws-1"
           onDeleted={onDeleted}
         />
       </QueryClientProvider>
-    </I18nProvider>,
+    </I18nProvider>
   );
-  return { ...utils, onOpenChange, onDeleted };
+
+  const initialRuntime = opts.runtime ?? makeRuntime();
+  const utils = render(tree(initialRuntime));
+  // Simulates the parent (list/detail page) re-rendering this same open
+  // dialog with a fresh `runtime` prop, as it would after the runtime-list
+  // query refetches from a poll-triggered invalidation — without remounting
+  // the dialog.
+  const rerenderWithRuntime = (next: AgentRuntime) => utils.rerender(tree(next));
+
+  return { ...utils, onOpenChange, onDeleted, qc, rerenderWithRuntime };
 }
 
 describe("DeleteRuntimeDialog", () => {
@@ -260,6 +269,66 @@ describe("DeleteRuntimeDialog", () => {
     expect(
       screen.queryByRole("button", { name: "Delete runtime" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("resolves the stop-daemon step's device label from the runtime's hostname suffix, not its provider-branded name", () => {
+    renderDialog({
+      runtime: makeRuntime({
+        runtime_mode: "local",
+        status: "online",
+        name: "Claude (build-server-01)",
+      }),
+      cachedAgents: [],
+    });
+
+    expect(screen.getByText("build-server-01")).toBeInTheDocument();
+    expect(screen.queryByText("Claude (build-server-01)")).not.toBeInTheDocument();
+  });
+
+  it("falls back to device_info's leading segment when the runtime name has no hostname suffix", () => {
+    renderDialog({
+      runtime: makeRuntime({
+        runtime_mode: "local",
+        status: "online",
+        name: "Claude",
+        device_info: "host.local · 2.1.121 (Claude Code)",
+      }),
+      cachedAgents: [],
+    });
+
+    expect(screen.getByText("host.local")).toBeInTheDocument();
+  });
+
+  it("polls for a runtime-list refresh while the stop-daemon step is showing, and auto-advances to the final confirm once the same open dialog receives an offline runtime", async () => {
+    vi.useFakeTimers();
+    try {
+      const online = makeRuntime({ runtime_mode: "local", status: "online" });
+      const { qc, rerenderWithRuntime } = renderDialog({
+        runtime: online,
+        cachedAgents: [],
+      });
+      const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+
+      expect(screen.getByText("Stop the daemon first")).toBeInTheDocument();
+      expect(invalidateSpy).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(invalidateSpy).toHaveBeenCalledWith({
+        queryKey: ["runtimes", "ws-1"],
+      });
+
+      // Simulates the poll-triggered refetch resolving to "offline" and the
+      // parent re-rendering this SAME open dialog with the fresh runtime —
+      // it must advance without the user reopening anything.
+      rerenderWithRuntime({ ...online, status: "offline" });
+
+      expect(screen.queryByText("Stop the daemon first")).not.toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Delete runtime" }),
+      ).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("prioritizes the agents-blocking step over the stop-daemon step when both apply", () => {

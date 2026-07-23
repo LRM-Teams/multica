@@ -20,6 +20,8 @@ import { cn } from "@multica/ui/lib/utils";
 import {
   AlertDialog,
   AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogTitle,
 } from "@multica/ui/components/ui/alert-dialog";
 import { Button } from "@multica/ui/components/ui/button";
 import { resolveActorIdentityPresentation } from "@multica/core/identity";
@@ -29,6 +31,21 @@ import { AppLink } from "../../navigation/app-link";
 import { availabilityConfig, workloadConfig } from "../../agents/presence";
 import { useT } from "../../i18n";
 import { isSelfHealingRuntime } from "../utils";
+import { splitRuntimeName } from "./runtime-machines";
+
+// The "device" shown in the stop-daemon step should be the actual machine
+// identity, not the runtime's (often provider-branded, e.g. "Claude")
+// display name. Prefer the resolved hostname suffix ("Claude (build-01)" →
+// "build-01"), then the daemon-reported device_info's leading segment
+// ("host.local · 2.1.121" → "host.local"), and only fall back to the raw
+// runtime name when neither is available.
+function resolveDeviceLabel(runtime: AgentRuntime): string {
+  const { hostname } = splitRuntimeName(runtime.name);
+  if (hostname) return hostname;
+  const infoHost = runtime.device_info.split(" · ")[0]?.trim();
+  if (infoHost) return infoHost;
+  return runtime.name;
+}
 
 // DeleteRuntimeDialog is the single confirmation surface for runtime
 // deletion across the list-page kebab and the detail-page Diagnostics
@@ -240,14 +257,14 @@ function AgentsBlockingBody({
   return (
     <>
       <div className="px-5 pb-4 pt-5">
-        <h2 className="text-base font-semibold">
+        <AlertDialogTitle className="text-base font-semibold">
           {t(($) => $.detail.delete_dialog.blocked_by_agents.title, { count })}
-        </h2>
-        <p className="mt-1 text-sm leading-5 text-muted-foreground">
+        </AlertDialogTitle>
+        <AlertDialogDescription className="mt-1 text-sm leading-5 text-muted-foreground">
           {t(($) => $.detail.delete_dialog.blocked_by_agents.description, {
             name: runtime.name,
           })}
-        </p>
+        </AlertDialogDescription>
 
         {notice && (
           <div
@@ -356,24 +373,25 @@ function StopDaemonBody({
 }) {
   const { t } = useT("runtimes");
   const command = "multica daemon stop";
+  const deviceLabel = resolveDeviceLabel(runtime);
 
   return (
     <>
       <div className="px-5 pb-4 pt-5">
-        <h2 className="text-base font-semibold">
+        <AlertDialogTitle className="text-base font-semibold">
           {t(($) => $.detail.delete_dialog.blocked_by_online_daemon.title)}
-        </h2>
-        <p className="mt-1 text-sm leading-5 text-muted-foreground">
+        </AlertDialogTitle>
+        <AlertDialogDescription className="mt-1 text-sm leading-5 text-muted-foreground">
           {t(($) => $.detail.delete_dialog.blocked_by_online_daemon.description, {
             name: runtime.name,
           })}
-        </p>
+        </AlertDialogDescription>
 
         <div className="mt-3">
           <p className="mb-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">
             {t(($) => $.detail.delete_dialog.blocked_by_online_daemon.device_label)}
           </p>
-          <p className="text-sm font-medium">{runtime.name}</p>
+          <p className="text-sm font-medium">{deviceLabel}</p>
         </div>
 
         <div className="mt-3">
@@ -475,14 +493,14 @@ function FinalConfirmBody({
   return (
     <>
       <div className="px-5 pb-4 pt-5">
-        <h2 className="text-base font-semibold">
+        <AlertDialogTitle className="text-base font-semibold">
           {t(($) => $.detail.delete_dialog.final.title)}
-        </h2>
-        <p className="mt-1 text-sm leading-5 text-muted-foreground">
+        </AlertDialogTitle>
+        <AlertDialogDescription className="mt-1 text-sm leading-5 text-muted-foreground">
           {t(($) => $.detail.delete_dialog.final.description, {
             name: runtime.name,
           })}
-        </p>
+        </AlertDialogDescription>
       </div>
       <div className="border-t bg-muted/25 px-5 py-3">
         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">

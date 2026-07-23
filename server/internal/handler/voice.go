@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
@@ -14,13 +13,14 @@ import (
 	"unicode/utf8"
 
 	"github.com/multica-ai/multica/server/internal/integrations/doubaospeech"
+	"github.com/multica-ai/multica/server/internal/voiceaudio"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 const (
-	maxVoiceTTSBodyBytes = 32 << 10
-	maxVoiceTextRunes    = protocol.VoiceTranscriptMaxRunes
-	maxVoicePCMBytes     = 2 << 20
+	maxVoiceTTSBodyBytes      = 32 << 10
+	maxVoiceTextRunes         = protocol.VoiceTranscriptMaxRunes
+	maxVoiceRecordingPCMBytes = 2 << 20
 )
 
 type VoiceProvider interface {
@@ -80,8 +80,8 @@ func (h *Handler) SynthesizeVoice(w http.ResponseWriter, r *http.Request) {
 		writeVoiceProviderError(w, "tts", err)
 		return
 	}
-	wav, durationMS, err := encodePCM16WAV(audio.Data, audio.SampleRate)
-	if err != nil || audio.Format != "pcm" {
+	wav, durationMS, err := encodeSynthesizedPCM16WAV(audio)
+	if err != nil {
 		writeVoiceProviderError(w, "tts", errors.New("voice provider returned invalid PCM audio"))
 		return
 	}
@@ -94,28 +94,11 @@ func (h *Handler) SynthesizeVoice(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(wav)
 }
 
-func encodePCM16WAV(pcm []byte, sampleRate int) ([]byte, int64, error) {
-	if sampleRate <= 0 || len(pcm) == 0 || len(pcm)%2 != 0 {
-		return nil, 0, errors.New("invalid PCM audio")
+func encodeSynthesizedPCM16WAV(audio doubaospeech.Audio) ([]byte, int64, error) {
+	if audio.Format != "pcm" {
+		return nil, 0, errors.New("voice provider returned non-PCM audio")
 	}
-	const headerBytes = 44
-	wav := make([]byte, headerBytes+len(pcm))
-	copy(wav[0:4], "RIFF")
-	binary.LittleEndian.PutUint32(wav[4:8], uint32(len(wav)-8))
-	copy(wav[8:12], "WAVE")
-	copy(wav[12:16], "fmt ")
-	binary.LittleEndian.PutUint32(wav[16:20], 16)
-	binary.LittleEndian.PutUint16(wav[20:22], 1)
-	binary.LittleEndian.PutUint16(wav[22:24], 1)
-	binary.LittleEndian.PutUint32(wav[24:28], uint32(sampleRate))
-	binary.LittleEndian.PutUint32(wav[28:32], uint32(sampleRate*2))
-	binary.LittleEndian.PutUint16(wav[32:34], 2)
-	binary.LittleEndian.PutUint16(wav[34:36], 16)
-	copy(wav[36:40], "data")
-	binary.LittleEndian.PutUint32(wav[40:44], uint32(len(pcm)))
-	copy(wav[44:], pcm)
-	durationMS := (int64(len(pcm)/2)*1000 + int64(sampleRate)/2) / int64(sampleRate)
-	return wav, durationMS, nil
+	return voiceaudio.EncodePCM16MonoWAV(audio.Data, audio.SampleRate)
 }
 
 // TranscribeVoice accepts signed 16-bit little-endian mono PCM at 16 kHz and
@@ -132,7 +115,7 @@ func (h *Handler) TranscribeVoice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxVoicePCMBytes)
+	r.Body = http.MaxBytesReader(w, r.Body, maxVoiceRecordingPCMBytes)
 	pcm, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeCodedError(w, http.StatusRequestEntityTooLarge, "voice_audio_too_large", "PCM audio exceeds 2 MiB")

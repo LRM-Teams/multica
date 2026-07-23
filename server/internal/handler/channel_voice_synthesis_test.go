@@ -55,6 +55,25 @@ func TestChannelMessageNeedsVoiceSynthesisRequiresPendingState(t *testing.T) {
 	}
 }
 
+func TestEncodeSynthesizedPCM16WAVAcceptsAudioAboveRecordingUploadLimit(t *testing.T) {
+	pcm := bytes.Repeat([]byte{0x00, 0x00}, maxVoiceRecordingPCMBytes/2+1)
+
+	wav, durationMS, err := encodeSynthesizedPCM16WAV(doubaospeech.Audio{
+		Data:       pcm,
+		Format:     "pcm",
+		SampleRate: 24000,
+	})
+	if err != nil {
+		t.Fatalf("encode long synthesized audio: %v", err)
+	}
+	if len(wav) != len(pcm)+44 {
+		t.Fatalf("WAV bytes = %d, want %d", len(wav), len(pcm)+44)
+	}
+	if durationMS <= 43_000 {
+		t.Fatalf("duration = %dms, want audio beyond the old recording limit", durationMS)
+	}
+}
+
 func TestAgentVoiceMessagePersistsSynthesizedAttachment(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

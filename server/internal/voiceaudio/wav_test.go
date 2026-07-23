@@ -1,6 +1,7 @@
 package voiceaudio
 
 import (
+	"bytes"
 	"encoding/binary"
 	"strings"
 	"testing"
@@ -51,5 +52,21 @@ func TestDecodePCM16MonoWAVRejectsOversizedPCM(t *testing.T) {
 	wav := testPCM16WAV([]byte{0, 0, 1, 0}, 16000)
 	if _, err := DecodePCM16MonoWAV(wav, 16000, 2); err == nil {
 		t.Fatal("expected PCM larger than the caller limit to be rejected")
+	}
+}
+
+func TestEncodePCM16MonoWAVDoesNotApplyRecordingUploadLimit(t *testing.T) {
+	const recordingUploadLimit = 2 << 20
+	pcm := bytes.Repeat([]byte{0x00, 0x00}, recordingUploadLimit/2+1)
+
+	wav, durationMS, err := EncodePCM16MonoWAV(pcm, 24000)
+	if err != nil {
+		t.Fatalf("EncodePCM16MonoWAV: %v", err)
+	}
+	if len(wav) != len(pcm)+44 {
+		t.Fatalf("WAV bytes = %d, want %d", len(wav), len(pcm)+44)
+	}
+	if durationMS <= 43_000 {
+		t.Fatalf("duration = %dms, want audio beyond the recording limit", durationMS)
 	}
 }

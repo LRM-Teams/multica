@@ -6207,6 +6207,7 @@ func TestChannelThreadContinuationPromptAllowsSilence(t *testing.T) {
 	for _, want := range []string{
 		"not a must-reply directed mention",
 		"finish without visible output",
+		"Message target for chat transport: #" + ch.Name + ":" + root.ID,
 		"Current follow-up:",
 		"never mind",
 	} {
@@ -6221,6 +6222,47 @@ func TestChannelThreadContinuationPromptAllowsSilence(t *testing.T) {
 		if strings.Contains(prompt, banned) {
 			t.Fatalf("thread continuation prompt should not contain directed must-reply text %q:\n%s", banned, prompt)
 		}
+	}
+}
+
+func TestChannelDMThreadContinuationPromptIncludesDMThreadTarget(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, channelID := createChannelCompletionTask(t, "dm")
+	agentID := agentIDForTask(t, taskID)
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("dm channel not found after seed")
+	}
+	agent, err := testHandler.Queries.GetAgent(ctx, parseUUID(agentID))
+	if err != nil {
+		t.Fatalf("load dm agent: %v", err)
+	}
+	root, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "dm root", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("dm-prompt-root"), 0)
+	if err != nil {
+		t.Fatalf("insert dm root: %v", err)
+	}
+	followup, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "dm follow up", "multica", nil, pgtype.UUID{}, parseUUID(root.ID), strPtr("dm-prompt-root"), 0)
+	if err != nil {
+		t.Fatalf("insert dm follow-up: %v", err)
+	}
+
+	prompt := testHandler.buildChannelThreadContinuationPrompt(ctx, ch, agent, followup)
+	wantTarget := "dm:@" + userHandleForTransportTest(t, testUserID) + ":" + root.ID
+	for _, want := range []string{
+		"thread inside a Multica DM",
+		"Message target for chat transport: " + wantTarget,
+		"dm follow up",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("dm thread continuation prompt missing %q:\n%s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "thread inside Multica group chat") {
+		t.Fatalf("dm thread continuation prompt mislabeled as group chat:\n%s", prompt)
 	}
 }
 

@@ -236,6 +236,7 @@
     "jump_to_parent": "Jump to original message",
     "empty_replies": "No replies yet.",
     "load_failed": "Failed to load thread.",
+    "view_in_channel_failed": "Could not open this conversation in Channels.",
     "send_failed": "Failed to send thread reply.",
     "follow": "Follow",
     "following": "Following",

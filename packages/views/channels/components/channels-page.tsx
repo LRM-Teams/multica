@@ -604,6 +604,23 @@ function TypingDots() {
 interface ChannelsPageProps {
   /** The selected channel or DM id, from the /channels/[id] route segment. */
   channelId?: string;
+  /**
+   * Activity right-pane embed (LRM-388): hide the channel/DM list, do not own
+   * `/channels` URL writes, and optionally pin the detail to thread-only or
+   * channel-stream-only (desktop dual-pane is too wide for Activity).
+   */
+  embedded?: boolean;
+  /** When `embedded`, force ThreadPanel-only or main timeline-only. */
+  embeddedSurface?: "thread" | "channel";
+  /**
+   * Secondary "open in Channels" — Activity owns leaving the inbox route.
+   * Required for embedded so View-in-channel never silently no-ops (LRM-238).
+   */
+  onOpenInChannels?: (opts: {
+    channelId: string;
+    messageId?: string;
+    threadId?: string;
+  }) => void;
 }
 
 function mobileBaseRestoreSuppressionKey(workspaceId: string) {
@@ -635,8 +652,13 @@ function setMobileBaseRestoreSuppression(workspaceId: string, suppressed: boolea
 // the count, it did not add to it. Consolidating them into useReducer is a
 // refactor of a ~2500-line component, out of scope for a URL-format change and
 // tracked separately; suppress the pre-existing warning rather than block on it.
-// react-doctor-disable-next-line react-doctor/prefer-useReducer
-export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
+export function ChannelsPage({
+  channelId,
+  embedded = false,
+  embeddedSurface,
+  onOpenInChannels,
+  // react-doctor-disable-next-line react-doctor/prefer-useReducer
+}: ChannelsPageProps = {}) {
   const { t } = useT("channels");
   const timeAgo = useTimeAgo();
   const qc = useQueryClient();
@@ -650,6 +672,8 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
     id: "multica_channels_layout",
   });
+  // Embedded Activity pane never auto-picks a neighbor channel (LRM-238).
+  const listFirstSelection = isMobile || embedded;
   // #568 — see `HEADER_ACTIONS_COMPACT_BREAKPOINT` above for the derivation.
   // `detailHeaderContainerRef` attaches to `channelConversationPane`'s
   // `<main>` below, so this reacts to viewport resize, the list↔detail
@@ -936,8 +960,10 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   }
 
   // Existing canonical navigation reacts to external URL/list readiness, not a user event.
+  // `embedded` counts as a route selection so Activity never restores a remembered
+  // /channels id into the right pane (LRM-238 / LRM-388).
   // react-doctor-disable-next-line react-doctor/no-event-handler
-  const hasRouteSelection = Boolean(channelId || activeDmId);
+  const hasRouteSelection = Boolean(channelId || activeDmId || embedded);
   const restoredBaseChannelId =
     !hasRouteSelection &&
     // Same render-time canonical-navigation reaction as above (#588 marker), kept
@@ -963,6 +989,8 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   );
   // Desktop auto-selects the first channel only when nothing else is open —
   // never override an active DM selection. Mobile is list-first (no auto-open).
+  // Embedded Activity (LRM-388) is also list-first: never fall back to #general
+  // / first channel when the requested id is missing (no silent swap).
   const active = useMemo(() => {
     if (activeDmId) return null;
     const explicit =
@@ -973,10 +1001,10 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     // an arbitrary first channel for the render-time fallback too, so the
     // very first paint (before those effects commit) doesn't briefly show
     // the wrong channel.
-    return isMobile
+    return listFirstSelection
       ? explicit
       : (explicit ?? channels.find(isImmutableSystemChannel) ?? channels[0] ?? null);
-  }, [channels, archivedChannels, activeId, activeDmId, isMobile]);
+  }, [channels, archivedChannels, activeId, activeDmId, listFirstSelection]);
   // Invite / discovery for a group must pass channel_id so channel-visibility
   // agents from OTHER homes stay out (LRM-399; mirrors ListAgents filter).
   const inviteDiscoverChannelId =
@@ -1488,6 +1516,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   // breakpoint is known.
   useEffect(() => {
     if (!viewportReady) return;
+    if (embedded) return;
     // The previous/current mobile snapshot must update on EVERY run where
     // viewportReady, regardless of whether there's an active selection —
     // otherwise it goes stale while a channel is selected (Iris: desktop
@@ -1511,15 +1540,19 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     // first channel. This is externally-driven default resolution (reacts
     // to async channel-list load / viewport becoming known), not a chain
     // of derived state — there's no event handler to move it into.
-    // react-doctor-disable-next-line react-doctor/no-chain-state-updates
+    // react-doctor-disable-next-line react-doctor/no-chain-state-updates, react-doctor/no-adjust-state-on-prop-change
     setActiveId((channels.find(isImmutableSystemChannel) ?? channels[0]).id);
-  }, [viewportReady, isMobile, activeId, activeDmId, channels]);
+  }, [viewportReady, isMobile, activeId, activeDmId, channels, embedded]);
 
   useEffect(() => {
+    // Activity embed must never rewrite the browser URL to /channels/... —
+    // that jumps the user out of Activity into the Messages main column
+    // (Frank / LRM-388 AC: 禁止跳进频道主列).
+    if (embedded) return;
     if (restoredBaseChannelId) {
       replace(wsPaths.channelDetail(restoredBaseChannelId));
     }
-  }, [replace, restoredBaseChannelId, wsPaths]);
+  }, [embedded, replace, restoredBaseChannelId, wsPaths]);
 
   // Bottom-stick on new messages and open-at-latest on switch are handled by
   // ChannelMessageList (react-virtuoso followOutput + initialTopMostItemIndex).
@@ -1590,25 +1623,27 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     return () => clearTimeout(clear);
   }, [isThreadDeepLink, openThreadRoot, highlightMessageId, threadReplies]);
 
-  // Clear search state when the active channel changes.
-  useEffect(() => {
+  // Clear search state when the active channel changes (render-time adjust —
+  // avoids a stale-search flash between the channel switch commit and an
+  // effect). Ref tracks which channel the current search UI belongs to.
+  const convSearchChannelIdRef = useRef<string | null>(null);
+  const activeSearchChannelId = active?.id ?? null;
+  if (convSearchChannelIdRef.current !== activeSearchChannelId) {
+    convSearchChannelIdRef.current = activeSearchChannelId;
     setConvSearchOpen(false);
     setConvSearchQuery("");
     setConvSearchResults([]);
     setConvSearchTotal(0);
     setConvSearchIndex(0);
-  }, [active?.id]);
+  }
 
-  // Debounced in-conversation search.
+  // Debounced in-conversation search. Empty query clears are handled where
+  // the query is written (input onChange / channel switch) — not here — so
+  // this effect only owns the async fetch.
   useEffect(() => {
     if (!convSearchOpen || !active) return;
     const q = convSearchQuery.trim();
-    if (!q) {
-      setConvSearchResults([]);
-      setConvSearchTotal(0);
-      setConvSearchIndex(0);
-      return;
-    }
+    if (!q) return;
     const timer = setTimeout(async () => {
       try {
         const res = await api.searchChannelMessages(active.id, q);
@@ -1784,13 +1819,15 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
 
   // Select a channel and reflect it in the URL so the address is shareable.
   // Clears any DM selection — the two regions are mutually exclusive.
+  // Embedded Activity owns the URL (/inbox?channel=…); never replace to
+  // /channels/[id] from an embed (LRM-388 — stay on the Activity right pane).
   const selectChannel = (id: string) => {
     resetSidePanelState();
     suppressBaseRouteRestoreRef.current = false;
     setActiveDmId(null);
     setActiveId(id);
     setLastSelectedChannelId(id);
-    replace(wsPaths.channelDetail(id));
+    if (!embedded) replace(wsPaths.channelDetail(id));
   };
 
   // Select a DM (from the DIRECT MESSAGES region). Clears the group selection
@@ -1799,7 +1836,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     resetSidePanelState();
     setActiveId(null);
     setActiveDmId(dm.id);
-    replace(wsPaths.channelDetail(dm.id));
+    if (!embedded) replace(wsPaths.channelDetail(dm.id));
   };
 
   // "Send message" entry point on a channel member row: create-or-find the DM
@@ -1824,7 +1861,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     setActiveId(null);
     setActiveDmId(null);
     setMobilePanel(null);
-    replace(wsPaths.channels());
+    if (!embedded) replace(wsPaths.channels());
   };
 
   const handleDelete = () => {
@@ -1837,7 +1874,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         // `active` memo falls back to the first remaining channel.
         if (target.id === activeId) {
           setActiveId(null);
-          replace(wsPaths.channels());
+          if (!embedded) replace(wsPaths.channels());
         }
         closeChannelDetails();
         setMobilePanel(null);
@@ -2185,12 +2222,15 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
 
   // #645 — toggles the same exclusive slot; opening it always wins over
   // thread/agent (mirrors handleOpenAgentPanel), closing just clears it.
+  // Desktop title click collapses the dock whenever it is open (any tab) —
+  // otherwise Settings → title would only switch back to About and leave
+  // keep-alive TabsContent (LRM-400) still exposing Settings controls.
   const toggleChannelDetails = (tab: ChannelDetailsTab = "about") => {
     if (isMobile) {
       openChannelDetails(tab);
       return;
     }
-    if (channelDetailsOpen && channelDetailsTab === tab) {
+    if (channelDetailsOpen) {
       closeChannelDetails();
       return;
     }
@@ -2787,7 +2827,13 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         currentUserId={currentUserId}
         currentUserName={currentUserName ?? undefined}
         isMobile={isMobile}
-        onBack={() => setOpenThreadRoot(null)}
+        onBack={() => {
+          // Activity embed pins the thread surface — dismissing to an empty
+          // right pane would resurrect the forbidden Select-a-notification
+          // gap. Leave dismissal to Activity's list / mobile Back.
+          if (embedded && embeddedSurface === "thread") return;
+          setOpenThreadRoot(null);
+        }}
         followed={threadSurfaceRoot.thread_followed === true}
         followDisabled={
           threadLoading ||
@@ -2796,6 +2842,17 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         }
         onFollowChange={handleThreadFollowChange}
         onViewParent={() => {
+          if (embedded) {
+            if (!onOpenInChannels) {
+              toast.error(t(($) => $.thread.view_in_channel_failed));
+              return;
+            }
+            onOpenInChannels({
+              channelId: threadSurfaceRoot.channel_id,
+              messageId: threadSurfaceRoot.id,
+            });
+            return;
+          }
           // LRM-389 — close the side panel so the parent main column is
           // actually opened (desktop used to only set highlight behind the
           // still-open thread, which felt like a dead Maximize click).
@@ -3197,7 +3254,15 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                     type="search"
                     autoFocus
                     value={convSearchQuery}
-                    onChange={(e) => setConvSearchQuery(e.target.value)}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      setConvSearchQuery(next);
+                      if (!next.trim()) {
+                        setConvSearchResults([]);
+                        setConvSearchTotal(0);
+                        setConvSearchIndex(0);
+                      }
+                    }}
                     onKeyDown={(e) => {
                       if (e.key === "Escape") {
                         setConvSearchOpen(false);
@@ -3428,27 +3493,30 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
           )}
         </main>
   );
+  // Desktop detail: keep the conversation tree mounted when the side panel
+  // opens/closes (LRM-400). Swapping PanelGroup ↔ plain div remounted the
+  // chat column (lost scroll/composer + stale title-button refs in tests).
+  // Flex row + optional fixed side column still fills width with no blank
+  // half-pane (the lone ResizablePanel minSize=50% bug).
+  const desktopSidePanel = threadPanel ?? agentPanel ?? detailsPanel;
   const detailPane = !isMobile ? (
-    <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
-      <ResizablePanel id="conversation" minSize="50%" className="flex min-h-0 flex-col">
-        {channelConversationPane}
-      </ResizablePanel>
-      {threadPanel || agentPanel || detailsPanel ? (
-        <>
-          <ResizableHandle />
-          <ResizablePanel
-            id={threadPanel ? "thread" : agentPanel ? "agent-files" : "channel-details"}
-            defaultSize={360}
-            minSize={300}
-            maxSize={480}
-            groupResizeBehavior="preserve-pixel-size"
-            className="border-l border-border/30 bg-background"
-          >
-            {threadPanel ?? agentPanel ?? detailsPanel}
-          </ResizablePanel>
-        </>
+    <div className="flex min-h-0 min-w-0 flex-1">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">{channelConversationPane}</div>
+      {desktopSidePanel ? (
+        <div
+          data-testid={
+            threadPanel
+              ? "thread-side-slot"
+              : agentPanel
+                ? "agent-side-slot"
+                : "channel-details-side-slot"
+          }
+          className="flex w-[360px] max-w-[min(480px,45%)] min-w-[300px] shrink-0 flex-col border-l border-border/30 bg-background"
+        >
+          {desktopSidePanel}
+        </div>
       ) : null}
-    </ResizablePanelGroup>
+    </div>
   ) : (
     threadPanel ?? channelConversationPane
   );
@@ -3487,10 +3555,54 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   // The detail surface: a selected DM wins over a group (selections are
   // mutually exclusive, but this also covers the deep-link-before-list-loads
   // window where `activeDmId` is set but the DM row hasn't resolved yet).
-  const detailSurface = activeDmId ? dmDetailPane : detailPane;
+  //
+  // Activity embed (LRM-388 / LRM-400): pin to thread-only or channel-stream-only
+  // so the Activity right pane never mounts the desktop dual-pane (blank half +
+  // stranded Stop all). DMs keep the full DmConversation shell.
+  const detailSurface = activeDmId
+    ? dmDetailPane
+    : embedded
+      ? embeddedSurface === "thread"
+        ? (threadPanel ?? (
+            <ConversationSwitchSkeleton isMobile={isMobile} />
+          ))
+        : channelConversationPane
+      : detailPane;
+
+  // Embedded + resolved route id but channel/DM missing from lists → explicit
+  // error (no silent swap to another conversation — LRM-238).
+  const embeddedMissingTarget =
+    embedded &&
+    !!channelId &&
+    channelsLoaded &&
+    !active &&
+    !activeDm &&
+    reconciledRouteIdRef.current === channelId;
 
   if (!viewportReady) {
     return <InitialChannelsShellSkeleton />;
+  }
+
+  if (embedded) {
+    return (
+      <AgentPanelProvider onOpenAgent={handleOpenAgentPanel}>
+        <div
+          className="flex h-full min-h-0 flex-col"
+          data-testid="channels-page-embedded"
+          data-embedded-surface={embeddedSurface ?? "auto"}
+        >
+          {embeddedMissingTarget ? (
+            <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
+              <p className="text-sm text-destructive">
+                {t(($) => $.thread.view_in_channel_failed)}
+              </p>
+            </div>
+          ) : (
+            detailSurface
+          )}
+        </div>
+      </AgentPanelProvider>
+    );
   }
 
   return (
@@ -3508,6 +3620,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         // compresses (`min-h-0 flex-1 overflow-y-auto`, inside detailPane) and
         // the composer is the pinned last flex child (non-absolute). 100vh would
         // include the keyboard's area and push the composer off-screen.
+        // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop
         <MobileListDetailLayout
           className="h-[100dvh] min-h-0 min-w-0 bg-background"
           showDetail={!!(active || activeDmId)}

@@ -156,7 +156,10 @@ vi.mock("./conversation-surface", async (importOriginal) => ({
   ),
 }));
 
-function renderPage(channelId?: string) {
+function renderPage(
+  channelId?: string,
+  opts?: { embedded?: boolean; embeddedSurface?: "thread" | "channel" },
+) {
   const qc = new QueryClient({
     defaultOptions: {
       queries: { retry: false, gcTime: 0 },
@@ -166,7 +169,12 @@ function renderPage(channelId?: string) {
   return render(
     <I18nProvider locale="en" resources={{ en: { common: enCommon, channels: enChannels } }}>
       <QueryClientProvider client={qc}>
-        <ChannelsPage channelId={channelId} />
+        <ChannelsPage
+          channelId={channelId}
+          embedded={opts?.embedded}
+          embeddedSurface={opts?.embeddedSurface}
+          onOpenInChannels={opts?.embedded ? vi.fn() : undefined}
+        />
       </QueryClientProvider>
     </I18nProvider>,
   );
@@ -268,5 +276,29 @@ describe("ChannelsPage path-style selection (#309)", () => {
       expect(screen.queryByTestId("active-title")).not.toBeInTheDocument();
     });
     expect(replaceSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ChannelsPage embedded Activity (LRM-388)", () => {
+  beforeEach(() => {
+    replaceSpy.mockReset();
+    mobileViewport.value = false;
+    window.sessionStorage.clear();
+    useLastSelectedChannelStore.setState({ lastSelectedChannelId: null });
+  });
+
+  it("never rewrites the URL to /channels when embedded", async () => {
+    useLastSelectedChannelStore.setState({ lastSelectedChannelId: "chan-2" });
+    renderPage("chan-1", { embedded: true, embeddedSurface: "channel" });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("channels-page-embedded")).toBeTruthy();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("active-title")).toHaveTextContent("general");
+    });
+    // Give restore / select effects a beat — they must stay off /channels.
+    await new Promise((r) => setTimeout(r, 40));
+    expect(replaceSpy).not.toHaveBeenCalled();
   });
 });

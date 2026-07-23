@@ -640,6 +640,15 @@ describe("handleInboxNew", () => {
         ),
       ).toBe(true);
     });
+
+    it("never notifies type=system channel events (LRM-414)", () => {
+      expect(
+        shouldNotifyChannelMessage(
+          channelMessage({ type: "system", content: "Alice joined" }),
+          { myUserId: "member-1", channelMuted: false },
+        ),
+      ).toBe(false);
+    });
   });
 
   it("shows a group-channel browser banner for ordinary unmuted messages (LRM-411)", async () => {

@@ -25,22 +25,26 @@ interface DesktopAPI {
   downloadURL: (url: string) => Promise<void>;
   /** Hide macOS traffic lights for full-screen modals; restore when false. */
   setImmersiveMode: (immersive: boolean) => Promise<void>;
-  /** Show a native OS notification for a new inbox item. */
+  /** Show a native OS notification (inbox or channel/DM). */
   showNotification: (payload: {
     slug: string;
-    itemId: string;
-    issueKey: string;
+    itemId?: string;
+    issueKey?: string;
+    channelId?: string;
+    dmId?: string;
     title: string;
     body: string;
   }) => void;
   /** Update the OS dock / taskbar unread badge. Pass 0 to clear. */
   setUnreadBadge: (count: number) => void;
-  /** Listen for "open inbox row" requests from notification clicks. Returns an unsubscribe function. */
+  /** Listen for notification-click open requests. Returns an unsubscribe function. */
   onInboxOpen: (
     callback: (payload: {
       slug: string;
-      itemId: string;
-      issueKey: string;
+      itemId?: string;
+      issueKey?: string;
+      channelId?: string;
+      dmId?: string;
     }) => void,
   ) => () => void;
   /** Listen for native macOS back/forward swipe gestures. Returns an unsubscribe function. */

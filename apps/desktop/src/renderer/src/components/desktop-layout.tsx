@@ -148,10 +148,21 @@ function DesktopInboxBridge() {
   }, [push]);
 
   useEffect(() => {
-    return window.desktopAPI.onInboxOpen(({ slug, issueKey }) => {
+    // LRM-414 — channel/DM banners carry channelId/dmId; inbox banners still
+    // use issueKey. Prefer conversation routes when present (match web bridge).
+    return window.desktopAPI.onInboxOpen(({ slug, issueKey, channelId, dmId }) => {
       if (!slug) return;
-      const inboxPath = `${paths.workspace(slug).inbox()}?issue=${encodeURIComponent(issueKey)}`;
-      pushRef.current(inboxPath);
+      const wsPaths = paths.workspace(slug);
+      if (dmId) {
+        pushRef.current(wsPaths.channelDetail(dmId));
+        return;
+      }
+      if (channelId) {
+        pushRef.current(wsPaths.channelDetail(channelId));
+        return;
+      }
+      const selector = issueKey ? `?issue=${encodeURIComponent(issueKey)}` : "";
+      pushRef.current(`${wsPaths.inbox()}${selector}`);
     });
   }, []);
 

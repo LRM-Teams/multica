@@ -335,6 +335,7 @@ function notificationBody(author: string, content: string): string {
  * - Unmuted group/DM: every new message may notify (when authorized / unfocused).
  * - Muted: suppress ambient messages; still notify on @me / @all.
  * - Self-sent user messages never self-notify.
+ * - `type=system` channel events never notify (LRM-414).
  * - Issue assignment still notifies via `inbox:new` → `handleInboxNew` (not gated here).
  */
 export function shouldNotifyChannelMessage(
@@ -346,6 +347,7 @@ export function shouldNotifyChannelMessage(
   },
 ): boolean {
   if (message.edited_at || message.deleted_at) return false;
+  if (message.type === "system") return false;
   if (message.type === "user" && message.author_id === opts.myUserId) return false;
 
   const mentionsViewer =

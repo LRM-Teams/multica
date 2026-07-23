@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import type { ChannelMessage } from "@multica/core/types";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { MemoizedMarkdown } from "../../common/markdown";
@@ -13,6 +14,7 @@ import {
   resolveMessageParts,
   unwrapStructuredPreviewContent,
 } from "./message-parts-preview";
+import { areMessageBodyPropsEqual } from "./channel-message-render-equality";
 
 type MessageBodyContentMode = "all" | "transcript" | "non-transcript";
 
@@ -32,7 +34,7 @@ type MessageBodyContentMode = "all" | "transcript" | "non-transcript";
  * while sticker-free content collapses to a single clamped preview line so the
  * header stays short. Attachment zone stays light (height-capped) in compact mode.
  */
-export function MessageBody({
+function MessageBodyInner({
   content,
   parts,
   attachments,
@@ -197,3 +199,5 @@ export function MessageBody({
     </>
   );
 }
+
+export const MessageBody = memo(MessageBodyInner, areMessageBodyPropsEqual);

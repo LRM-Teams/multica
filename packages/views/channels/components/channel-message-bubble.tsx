@@ -2,6 +2,7 @@
 
 import {
   lazy,
+  memo,
   Suspense,
   useCallback,
   useEffect,
@@ -256,7 +257,9 @@ function MessageInlineEditor({
  * as an IM-style message item, while quote/attachment/code-like content keeps
  * local structure inside the shared Markdown pipeline.
  */
-export function ChannelMessageBubble({
+import { areChannelMessageBubblePropsEqual } from "./channel-message-render-equality";
+
+function ChannelMessageBubbleInner({
   message,
   currentUserId,
   ownName,
@@ -1134,3 +1137,8 @@ export function ChannelMessageBubble({
     </ContextMenu>
   );
 }
+
+export const ChannelMessageBubble = memo(
+  ChannelMessageBubbleInner,
+  areChannelMessageBubblePropsEqual,
+);

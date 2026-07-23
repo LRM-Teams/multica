@@ -67,3 +67,39 @@ func TestPriceForModelAliasCursorCurrentModels(t *testing.T) {
 		t.Fatal("generic auto must remain unpriced because routed-model rates vary")
 	}
 }
+
+func TestPriceForModelAliasGrok45CurrentAliases(t *testing.T) {
+	want := ModelPrice{Provider: "cursor", Model: "grok-4.5", InputPerM: 2, CacheReadPerM: 0.5, OutputPerM: 6}
+	for _, model := range []string{
+		"Cursor Grok 4.5 High",
+		"cursor-grok-4.5-high",
+	} {
+		got, ok := PriceForModelAlias(model)
+		if !ok {
+			t.Fatalf("PriceForModelAlias(%q) did not resolve", model)
+		}
+		if got != want {
+			t.Fatalf("PriceForModelAlias(%q) = %+v, want %+v", model, got, want)
+		}
+	}
+
+	wantFast := ModelPrice{Provider: "cursor", Model: "grok-4.5-fast", InputPerM: 4, CacheReadPerM: 1, OutputPerM: 18}
+	for _, model := range []string{
+		"Cursor Grok 4.5 High Fast",
+		"cursor-grok-4.5-high-fast",
+	} {
+		got, ok := PriceForModelAlias(model)
+		if !ok {
+			t.Fatalf("PriceForModelAlias(%q) did not resolve", model)
+		}
+		if got != wantFast {
+			t.Fatalf("PriceForModelAlias(%q) = %+v, want %+v", model, got, wantFast)
+		}
+	}
+
+	for _, model := range []string{"grok-4.5", "grok-4.5-latest", "grok-build-latest"} {
+		if _, ok := PriceForModelAlias(model); ok {
+			t.Fatalf("generic xAI alias %q must not resolve as Cursor first-party", model)
+		}
+	}
+}

@@ -39,6 +39,8 @@ var modelPrices = map[string]ModelPrice{
 	"cursor:composer-2.5":         {Provider: "cursor", Model: "composer-2.5", InputPerM: 0.50, CacheReadPerM: 0.20, CacheWritePerM: 0, OutputPerM: 2.50},
 	"cursor:composer-2.5-fast":    {Provider: "cursor", Model: "composer-2.5-fast", InputPerM: 3.00, CacheReadPerM: 0.50, CacheWritePerM: 0, OutputPerM: 15.00},
 	"cursor:auto-cost":            {Provider: "cursor", Model: "auto-cost", InputPerM: 1.25, CacheReadPerM: 0.25, CacheWritePerM: 1.25, OutputPerM: 6.00},
+	"cursor:grok-4.5":             {Provider: "cursor", Model: "grok-4.5", InputPerM: 2.00, CacheReadPerM: 0.50, CacheWritePerM: 0, OutputPerM: 6.00},
+	"cursor:grok-4.5-fast":        {Provider: "cursor", Model: "grok-4.5-fast", InputPerM: 4.00, CacheReadPerM: 1.00, CacheWritePerM: 0, OutputPerM: 18.00},
 }
 
 var modelAliasRules = []struct {
@@ -69,6 +71,8 @@ var modelAliasRules = []struct {
 	{regexp.MustCompile(`(^|/|:)composer-2[.]5$`), "cursor:composer-2.5"},
 	{regexp.MustCompile(`(^|/|:)composer-2[.]5-fast$`), "cursor:composer-2.5-fast"},
 	{regexp.MustCompile(`(^|/|:)auto-cost$`), "cursor:auto-cost"},
+	{regexp.MustCompile(`(^|[/ :])cursor[- ]grok[- ]4[.]5[- ](none|minimal|low|medium|high|xhigh|max)[- ]fast$`), "cursor:grok-4.5-fast"},
+	{regexp.MustCompile(`(^|[/ :])cursor[- ]grok[- ]4[.]5($|[- ](none|minimal|low|medium|high|xhigh|max)$)`), "cursor:grok-4.5"},
 }
 
 func PriceForModelAlias(model string) (ModelPrice, bool) {

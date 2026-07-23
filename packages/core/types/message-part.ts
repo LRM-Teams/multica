@@ -26,6 +26,8 @@ export type MessagePart =
       size_bytes?: number;
       /** Present for recorded human input; Agent TTS output may leave it unset. */
       duration_ms?: number;
+      /** Server-owned ASR state for recorded human input. */
+      transcription_status?: "pending" | "completed" | "failed";
     }
   | {
       type: "reference";

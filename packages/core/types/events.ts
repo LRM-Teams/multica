@@ -64,6 +64,7 @@ export type WSEventType =
   | "chat:session_deleted"
   | "chat:session_updated"
   | "channel:message"
+  | "channel:message_updated"
   | "channel:typing"
   | "channel_reaction:added"
   | "channel_reaction:removed"
@@ -568,6 +569,7 @@ export interface WSEventPayloadMap {
   "chat:session_deleted": ChatSessionDeletedPayload;
   "chat:session_updated": unknown;
   "channel:message": ChannelMessage;
+  "channel:message_updated": ChannelMessage;
   "channel:typing": ChannelTypingPayload;
   "channel_reaction:added": { reaction: ChannelReaction; channel_id: string; message_id: string };
   "channel_reaction:removed": { channel_id: string; message_id: string; emoji: string; actor_type: string; actor_id: string };

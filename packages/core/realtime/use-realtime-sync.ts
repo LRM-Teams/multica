@@ -1198,6 +1198,22 @@ export function useRealtimeSync(
       void handleChannelMessageNotification(qc, payload, authStore.getState().user?.id);
     });
 
+    // Server-owned enrichment replaces the existing row without generating a
+    // second message notification.
+    const unsubChannelMessageUpdated = ws.on("channel:message_updated", (p) => {
+      const payload = p as ChannelMessage;
+      if (payload.channel_id && payload.id && !payload.thread_root_message_id) {
+        upsertChannelMessageInCache(qc, payload);
+      } else if (payload.channel_id) {
+        invalidateChannelMessages(qc, payload.channel_id);
+      }
+      if (payload.thread_root_message_id) {
+        upsertChannelMessageThreadInCache(qc, payload, payload.thread_root_message_id);
+      }
+      const id = getCurrentWsId();
+      if (id) qc.invalidateQueries({ queryKey: channelKeys.list(id) });
+    });
+
     const unsubChannelReactionAdded = ws.on("channel_reaction:added", (p) => {
       const payload = p as { channel_id?: string; message_id?: string };
       if (payload.channel_id) {
@@ -1261,6 +1277,7 @@ export function useRealtimeSync(
       unsubChatSessionDeleted();
       unsubChatSessionUpdated();
       unsubChannelMessage();
+      unsubChannelMessageUpdated();
       unsubChannelReactionAdded();
       unsubChannelReactionRemoved();
       unsubChannelUpdated();

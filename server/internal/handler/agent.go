@@ -1023,9 +1023,15 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	initialMemory := cleanInitialContextMap(req.InitialMemory, allowedInitialMemorySeedPath)
 	var draftAvatar resolvedAgentAvatar
 	if hasDraftID {
-		draftSeed, found := h.loadAgentDraftSeed(r, workspaceID, ownerID, draftID)
-		if !found {
-			writeError(w, http.StatusBadRequest, "agent draft not found")
+		draftSeed, draftCode := h.loadAgentDraftForCreate(r, workspaceID, draftID)
+		switch draftCode {
+		case agentDraftLookupOK:
+			// continue
+		case agentDraftLookupAlreadyUsed:
+			writeCodedError(w, http.StatusConflict, agentDraftLookupAlreadyUsed, "agent draft already used; reopen the hiring card to create a new draft")
+			return
+		default:
+			writeCodedError(w, http.StatusNotFound, agentDraftLookupNotFound, "agent draft not found")
 			return
 		}
 		if len(draftSeed.InitialNotes) > 0 || len(draftSeed.InitialMemory) > 0 {

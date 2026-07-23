@@ -9,6 +9,7 @@ import {
   HoverCardContent,
 } from "@multica/ui/components/ui/hover-card";
 import { useActorName } from "@multica/core/workspace/hooks";
+import { isDirectoryActorMiss } from "@multica/core/workspace/resolved-actor-name";
 import {
   useAgentHealth,
   useAgentPresenceDetail,
@@ -25,6 +26,10 @@ import { useNavigation } from "../navigation";
 import { useOpenAgentPanel } from "./agent-panel-context";
 import { resolveIdentityAvatarUrl } from "./identity-avatar-cache";
 import { AgentXpBurst } from "../agents/components/agent-xp-burst";
+import {
+  mentionTypeFromActorType,
+  useResolvedActorIdentity,
+} from "./use-resolved-actor-identity";
 
 /**
  * Selects which agent hover-card payload to render when `enableHoverCard` is
@@ -132,19 +137,26 @@ export function ActorAvatar({
   showXpBurst = false,
 }: ActorAvatarProps) {
   const { getActorName, getActorInitials, getActorAvatarUrl } = useActorName();
+  // LRM-391: ListAgents hides channel/private / group-manager agents — resolve
+  // name+face via member-profile so read-only chrome never shows "Unknown Agent".
+  const mentionType = mentionTypeFromActorType(actorType);
+  const profileIdentity = useResolvedActorIdentity(actorId, mentionType);
+  const directoryName = getActorName(actorType, actorId);
+  const liveName =
+    nameOverride?.trim() ||
+    profileIdentity.displayName ||
+    (isDirectoryActorMiss(directoryName) ? actorId : directoryName);
   // LRM-224: identity-first — directory + sticky cache; message URL only seeds.
   const avatarUrl = resolveIdentityAvatarUrl({
     actorType,
     actorId,
-    avatarUrlHint,
+    avatarUrlHint: avatarUrlHint ?? profileIdentity.avatarUrl,
     directoryUrl: getActorAvatarUrl(actorType, actorId),
   });
-  const displayName = nameOverride?.trim() || getActorName(actorType, actorId);
-  const initials = nameOverride?.trim()
-    ? (/[a-z]/i.test(displayName.charAt(0))
-        ? displayName.charAt(0).toUpperCase()
-        : displayName.charAt(0))
-    : getActorInitials(actorType, actorId);
+  const displayName = liveName;
+  const initials = /[a-z]/i.test(displayName.charAt(0))
+    ? displayName.charAt(0).toUpperCase()
+    : displayName.charAt(0) || getActorInitials(actorType, actorId);
   const avatar = (
     <ActorAvatarBase
       name={displayName}

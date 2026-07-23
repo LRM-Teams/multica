@@ -212,6 +212,29 @@ vi.mock("../../common/use-reaction-actor-name", () => ({
   },
 }));
 
+// LRM-391: ActorAvatar resolves via member-profile on directory miss — stub so
+// layout tests don't require a live profile QueryClient path.
+vi.mock("../../common/use-resolved-actor-identity", () => ({
+  mentionTypeFromActorType: (type: string) =>
+    type === "agent" ? "agent" : type === "member" || type === "user" ? "member" : null,
+  useResolvedActorIdentity: (actorId: string | undefined, mentionType: string | null) => {
+    if (!actorId || !mentionType) return { displayName: null, avatarUrl: null };
+    const names: Record<string, string> = {
+      "user-1": "Alice Display",
+      "user-2": "Bob Display",
+      "user-owner": "Frank An",
+      "user-admin": "Admin User",
+      "agent-1": "Research Agent",
+      "agent-beckham": "贝克汉姆",
+    };
+    return { displayName: names[actorId] ?? null, avatarUrl: null };
+  },
+  resolvedActorLabel: (
+    identity: { displayName: string | null },
+    actorId: string | undefined,
+  ) => identity.displayName ?? actorId ?? "",
+}));
+
 vi.mock("@multica/core/agents/stores", () => ({
   useAgentPanelStore: (selector: (s: { open: (id: string) => void }) => unknown) =>
     selector({ open: vi.fn() }),

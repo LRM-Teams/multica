@@ -36,6 +36,7 @@ import type {
   ListProjectResourcesResponse,
   ListProjectsResponse,
   MemberWithUser,
+  MemberProfile,
   PinnedItem,
   PinnedItemType,
   Project,
@@ -501,6 +502,19 @@ class ApiClient {
     return parseWithFallback(raw, AgentListSchema, EMPTY_AGENT_LIST, {
       endpoint: "listAgents",
     });
+  }
+
+  // LRM-391: identity for agents/members missing from ListAgents (visibility /
+  // group-manager). Always returns name+avatar, including identity_only.
+  async getMemberProfile(
+    memberType: "user" | "agent",
+    memberId: string,
+    opts?: { signal?: AbortSignal },
+  ): Promise<MemberProfile> {
+    return this.fetch<MemberProfile>(
+      `/api/member-profiles/${memberType}/${memberId}`,
+      { signal: opts?.signal },
+    );
   }
 
   // Workspace runtimes — feeds the presence dot's availability dimension

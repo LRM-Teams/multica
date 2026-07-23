@@ -32,7 +32,7 @@ import { PriorityIcon } from "@/components/ui/priority-icon";
 import { ActorAvatar } from "@/components/ui/actor-avatar";
 import { formatActivity } from "@/lib/format-activity";
 import { timeAgo } from "@/lib/time-ago";
-import { useActorLookup } from "@/data/use-actor-name";
+import { useActorLookup, useResolvedActorName } from "@/data/use-actor-name";
 import { useColorScheme } from "@/lib/use-color-scheme";
 import { THEME } from "@/lib/theme";
 
@@ -107,6 +107,11 @@ function LeadIcon({
 }
 
 export function ActivityRow({ entry }: { entry: TimelineEntry }) {
+  // LRM-391: visibility-filtered agents must still show real names.
+  const { name: actorName } = useResolvedActorName(
+    entry.actor_type as "member" | "agent" | null | undefined,
+    entry.actor_id,
+  );
   const { getName } = useActorLookup();
   const { colorScheme } = useColorScheme();
   const mutedFg = THEME[colorScheme].mutedForeground;
@@ -115,7 +120,6 @@ export function ActivityRow({ entry }: { entry: TimelineEntry }) {
     id: string | null | undefined,
   ): string =>
     getName(type as "member" | "agent" | null | undefined, id);
-  const actorName = resolveName(entry.actor_type, entry.actor_id);
   const verb = formatActivity(entry, resolveName);
   const showCoalesceBadge =
     (entry.coalesced_count ?? 1) > 1 &&

@@ -21,7 +21,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useColorScheme } from "nativewind";
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
-import { useActorLookup, getInitials } from "@/data/use-actor-name";
+import { useActorLookup, useResolvedActorName, getInitials } from "@/data/use-actor-name";
 import { useWorkspaceStore } from "@/data/workspace-store";
 import { useAgentPresence } from "@/lib/use-agent-presence";
 import { PresenceDot } from "@/components/ui/presence-dot";
@@ -66,6 +66,11 @@ function BareAvatar({
   id: Props["id"];
   size: number;
 }) {
+  // LRM-391: member/agent resolve via member-profile when directory misses.
+  const resolved = useResolvedActorName(
+    type === "member" || type === "agent" ? type : null,
+    type === "member" || type === "agent" ? id : null,
+  );
   const { getName, getAvatarUrl } = useActorLookup();
   const { colorScheme } = useColorScheme();
   // Ionicons takes a hex string, not a className — go through THEME so the
@@ -88,7 +93,12 @@ function BareAvatar({
   // Only treat a URL as renderable if it actually looks like one — RN <Image>
   // can crash native-side on malformed sources (empty string, plain "foo",
   // etc.). Cheap regex; falsy / bad input falls through to the icon fallback.
-  const rawUrl = type && type !== "system" ? getAvatarUrl(type, id) : null;
+  const rawUrl =
+    type === "member" || type === "agent"
+      ? resolved.avatarUrl
+      : type && type !== "system"
+        ? getAvatarUrl(type, id)
+        : null;
   const url =
     rawUrl && /^(https?:|data:|file:|asset:)/.test(rawUrl) ? rawUrl : null;
 
@@ -124,7 +134,10 @@ function BareAvatar({
     );
   }
 
-  const name = getName(type, id);
+  const name =
+    type === "member" || type === "agent"
+      ? resolved.name
+      : getName(type, id);
   const isAgent = type === "agent";
   return (
     <View

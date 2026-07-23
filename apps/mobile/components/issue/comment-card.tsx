@@ -35,7 +35,7 @@ import { Ionicons } from "@expo/vector-icons";
 import type { Reaction, TimelineEntry } from "@multica/core/types";
 import { Text } from "@/components/ui/text";
 import { ActorAvatar } from "@/components/ui/actor-avatar";
-import { useActorLookup } from "@/data/use-actor-name";
+import { useActorLookup, useResolvedActorName } from "@/data/use-actor-name";
 import { timeAgo } from "@/lib/time-ago";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Markdown } from "@/lib/markdown";
@@ -278,13 +278,12 @@ function ResolvedIndicator({
   entry: TimelineEntry;
   onCollapse: () => void;
 }) {
-  const { getName } = useActorLookup();
-  const { colorScheme } = useColorScheme();
-  const mutedFg = THEME[colorScheme].mutedForeground;
-  const resolverName = getName(
+  const { name: resolverName } = useResolvedActorName(
     entry.resolved_by_type as "member" | "agent" | null | undefined,
     entry.resolved_by_id,
   );
+  const { colorScheme } = useColorScheme();
+  const mutedFg = THEME[colorScheme].mutedForeground;
 
   return (
     <Pressable
@@ -390,7 +389,11 @@ function CommentBody({
   const isSelecting = useCommentSelectStore(
     (s) => s.selectingId === entry.id,
   );
-  const { getName } = useActorLookup();
+  // LRM-391: resolve via member-profile when ListAgents omits the agent.
+  const { name } = useResolvedActorName(
+    entry.actor_type as "member" | "agent" | null | undefined,
+    entry.actor_id,
+  );
   const userId = useAuthStore((s) => s.user?.id);
   const wsId = useWorkspaceStore((s) => s.currentWorkspaceId);
   const toggle = useToggleCommentReaction(issueId);
@@ -407,10 +410,6 @@ function CommentBody({
     issueAttachmentsOptions(wsId, issueId),
   );
 
-  const name = getName(
-    entry.actor_type as "member" | "agent" | null | undefined,
-    entry.actor_id,
-  );
   const edited =
     entry.updated_at &&
     entry.created_at &&

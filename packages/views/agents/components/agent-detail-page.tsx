@@ -12,6 +12,7 @@ import { toast } from "sonner";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Agent } from "@multica/core/types";
 import {
+  agentDetailOptions,
   type AgentPresenceDetail,
   useWorkspacePresenceMap,
 } from "@multica/core/agents";
@@ -77,20 +78,23 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   // The hook owns the 30s tick so the failed-window auto-clears here too.
   const { byAgent: presenceMap } = useWorkspacePresenceMap(wsId);
 
-  const agent = agents.find((a) => a.id === agentId) ?? null;
+  const listedAgent = agents.find((a) => a.id === agentId) ?? null;
+
+  // Fallback fetch: when the agent is missing from the default directory
+  // (archived, private, etc.), GET /api/agents/{id} is authoritative
+  // (LRM-292 / LRM-410). Only fires after the list has settled.
+  const {
+    data: detailAgent,
+    error: detailError,
+    isLoading: detailLoading,
+    refetch: refetchDetail,
+  } = useQuery({
+    ...agentDetailOptions(wsId, agentId),
+    enabled: !agentsLoading && !listedAgent && !!agentId,
+  });
+  const agent = listedAgent ?? detailAgent ?? null;
   const presence: AgentPresenceDetail | null =
     agent ? presenceMap.get(agent.id) ?? null : null;
-
-  // Fallback fetch: when the agent is missing from the workspace list, hit
-  // GET /api/agents/{id} directly to disambiguate "doesn't exist" (404) from
-  // "you can't see this private agent" (403). Only fires after the list has
-  // settled, so the common path makes zero extra requests.
-  const { error: detailError } = useQuery({
-    queryKey: ["agent-detail-probe", wsId, agentId],
-    queryFn: () => api.getAgent(agentId),
-    enabled: !agentsLoading && !agent && !!agentId,
-    retry: false,
-  });
   const isForbidden =
     detailError instanceof ApiError && detailError.status === 403;
 
@@ -129,7 +133,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   };
 
   // --- Loading ---
-  if (agentsLoading && !agent) {
+  if ((agentsLoading || detailLoading) && !agent) {
     return <DetailLoadingSkeleton />;
   }
 
@@ -168,9 +172,11 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
           <div>
             <p className="text-sm font-medium">{t(($) => $.detail.not_found_title)}</p>
             <p className="mt-1 text-xs text-muted-foreground">
-              {agentsError instanceof Error
-                ? agentsError.message
-                : t(($) => $.detail.not_found_default)}
+              {detailError instanceof Error
+                ? detailError.message
+                : agentsError instanceof Error
+                  ? agentsError.message
+                  : t(($) => $.detail.not_found_default)}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -178,7 +184,10 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => refetchAgents()}
+              onClick={() => {
+                void refetchAgents();
+                void refetchDetail();
+              }}
             >
               {t(($) => $.detail.try_again)}
             </Button>

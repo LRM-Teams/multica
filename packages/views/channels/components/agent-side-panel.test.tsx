@@ -168,6 +168,7 @@ const RESOURCES = {
   },
   side_panel: {
     close_aria: "Close panel",
+    resize_aria: "Resize profile panel",
     no_description: "No description",
     created_label: "Created",
     owner_label: "Owner",
@@ -530,15 +531,17 @@ describe("AgentSidePanel", () => {
     expect(activityTab.parentElement).not.toHaveClass("w-full", "px-0");
   });
 
-  it("never renders a separate Config tab (merged into Profile Info, #565 / LRM-448)", () => {
+  it("never renders a separate Config tab; Runtime Config is its own Profile section (LRM-470)", () => {
     renderPanel("user-owner", "group_manager");
     expect(screen.queryByRole("button", { name: "Config" })).not.toBeInTheDocument();
     expect(screen.getByText("Info")).toBeInTheDocument();
-    expect(screen.queryByText("Runtime Config")).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Runtime Config" })).toBeInTheDocument();
+    expect(screen.getByTestId("agent-profile-runtime-config")).toBeInTheDocument();
     expect(screen.queryByText("Properties")).not.toBeInTheDocument();
     expect(screen.getByTestId("runtime-picker")).toBeInTheDocument();
     expect(screen.getByTestId("visibility-picker")).toBeInTheDocument();
     expect(screen.queryByTestId("concurrency-picker")).not.toBeInTheDocument();
+    expect(screen.getByText("Changes take effect on the next run")).toBeInTheDocument();
   });
 
   it("LRM-448: Actions stack + Info field labels; Usage lives on its tab", () => {

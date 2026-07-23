@@ -270,6 +270,17 @@
     "stop_all_success": "에이전트 {{count}}개를 중지했습니다",
     "stop_all_partial": "에이전트 {{total}}개 중 {{stopped}}개를 중지했습니다"
   },
+  "stop_all_agents": {
+    "tooltip": "모든 에이전트 중지",
+    "aria": "모든 에이전트 중지",
+    "empty_tooltip": "실행 중인 에이전트가 없습니다",
+    "menu_label": "모든 에이전트 중지",
+    "dialog_title": "모든 에이전트 중지",
+    "dialog_warning_before": "이렇게 하면 ",
+    "dialog_warning_after": "에서 실행 중인 모든 에이전트가 즉시 중지됩니다. 다시 시작하기 전에 새 지침을 제공할 수 있습니다.",
+    "dialog_cancel": "취소",
+    "dialog_confirm": "모두 중지"
+  },
   "composer": {
     "placeholder": "필요한 내용을 입력하세요…  @에이전트이름 으로 답장을 요청하세요.",
     "attach_aria": "첨부",

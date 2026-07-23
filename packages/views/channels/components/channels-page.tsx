@@ -202,7 +202,11 @@ import {
   ConversationHeader,
   ReadOnlyConversationBanner,
 } from "./conversation-surface";
-import { filterComposerStripTasks } from "./conversation-activity-tasks";
+import {
+  filterComposerStripTasks,
+  isTerminalChannelActiveTask,
+  listStoppableChannelTasks,
+} from "./conversation-activity-tasks";
 import { DmConversationRow, DmList, useDmRowActions } from "./dm-list";
 import { DmConversation } from "./dm-conversation";
 import { type MentionPreviewResolver } from "./message-preview";
@@ -224,6 +228,7 @@ import { AgentPanelProvider } from "../../common/agent-panel-context";
 import { ChannelMembersList, type MemberRoleLabel } from "./channel-members-list";
 import { ChannelMembersDialog } from "./channel-members-dialog";
 import { ChannelAddPeopleDialog } from "./channel-add-people-dialog";
+import { StopAllAgentsDialog } from "./stop-all-agents-dialog";
 
 export interface TypingActor {
   key: string;
@@ -584,10 +589,6 @@ function StopTaskButton({
       {t(($) => $.agent_status.stop)}
     </Button>
   );
-}
-
-function isTerminalChannelActiveTask(task: ChannelActiveTask) {
-  return typeof task.outcome === "string";
 }
 
 function TypingDots() {
@@ -1114,6 +1115,19 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const { data: channelProjectId = "" } = useQuery(channelProjectOptions(wsId, active?.id ?? ""));
   const { data: activeTasks = [] } = useQuery(activeChannelTasksOptions(active?.id ?? ""));
   const [stoppingChannelTaskId, setStoppingChannelTaskId] = useState<string | null>(null);
+  // LRM-405 — header Stop-all entry opens a confirm dialog; cancel/close
+  // must not call cancel. Confirm reuses handleStopAllChannelTasks.
+  const [stopAllConfirmOpen, setStopAllConfirmOpen] = useState(false);
+  const stoppableChannelTasks = useMemo(
+    () => listStoppableChannelTasks(activeTasks),
+    [activeTasks],
+  );
+  // "Can send messages" on the channel surface today = not archived
+  // (archived channels render a read-only banner and hide the composer).
+  // No permission → hide the entry (explicit), never a silent no-op click.
+  const canPostInChannel = !!active && !isActiveArchived;
+  const hasStoppableChannelTasks = stoppableChannelTasks.length > 0;
+  const isStoppingAllChannelTasks = stoppingChannelTaskId === STOPPING_ALL_TASKS_ID;
   const setChannelProject = useSetChannelProject(wsId, active?.id ?? "");
   const createChannel = useCreateChannel();
   const updateChannel = useUpdateChannel();
@@ -1883,7 +1897,19 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
     qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
     setStoppingChannelTaskId(null);
+    // LRM-405 — after stop, focus composer so the user can re-guide agents.
+    // Do not auto-insert @mentions.
+    editorRef.current?.focus();
   }, [active?.id, qc, t, wsId]);
+
+  const openStopAllAgentsConfirm = useCallback(() => {
+    if (!canPostInChannel || !hasStoppableChannelTasks || isStoppingAllChannelTasks) return;
+    setStopAllConfirmOpen(true);
+  }, [canPostInChannel, hasStoppableChannelTasks, isStoppingAllChannelTasks]);
+
+  const confirmStopAllAgents = useCallback(() => {
+    void handleStopAllChannelTasks(stoppableChannelTasks);
+  }, [handleStopAllChannelTasks, stoppableChannelTasks]);
 
   const handleToggleChannelPin = (channel: Channel) => {
     setChannelPin.mutate(
@@ -3030,7 +3056,42 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                 )}
               </>
             }
-            actions={isMobile || isHeaderActionsCompact ? (
+            actions={
+              <>
+                {/* LRM-405 — desktop always shows icon+tooltip in the top-right
+                    action cluster (including the #568 compact ⋯ path). Mobile
+                    uses the overflow menu row below instead. */}
+                {!isMobile && canPostInChannel ? (
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <span className="inline-flex">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className={cn(
+                              "shrink-0 text-muted-foreground",
+                              isMobile ? "size-10" : "size-8",
+                            )}
+                            aria-label={t(($) => $.stop_all_agents.aria)}
+                            disabled={!hasStoppableChannelTasks || isStoppingAllChannelTasks}
+                            onClick={openStopAllAgentsConfirm}
+                            data-testid="stop-all-agents-header"
+                          >
+                            <Square className="size-4 fill-current" />
+                          </Button>
+                        </span>
+                      }
+                    />
+                    <TooltipContent side="bottom">
+                      {hasStoppableChannelTasks
+                        ? t(($) => $.stop_all_agents.tooltip)
+                        : t(($) => $.stop_all_agents.empty_tooltip)}
+                    </TooltipContent>
+                  </Tooltip>
+                ) : null}
+                {isMobile || isHeaderActionsCompact ? (
               // Mobile, and desktop-but-too-narrow (#568): ⋯ opens a
               // tab-aligned menu (About/Members/Files/Settings). size-10
               // keeps the true-mobile tap target ≥44px; the desktop-compact
@@ -3094,6 +3155,8 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                 </div>
               </>
             )}
+              </>
+            }
           />
               {/* #562 — channel main-content tab switch: Chat (message list) and
                   Tasks (channel-scoped board), full-width in the main area. Uses
@@ -3482,6 +3545,37 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                   <DrawerTitle>{active.name}</DrawerTitle>
                 </DrawerHeader>
                 <div className="flex flex-col py-1">
+                  {isMobile && canPostInChannel ? (
+                    <button
+                      type="button"
+                      disabled={!hasStoppableChannelTasks || isStoppingAllChannelTasks}
+                      onClick={() => {
+                        if (!hasStoppableChannelTasks || isStoppingAllChannelTasks) return;
+                        setMobilePanel(null);
+                        openStopAllAgentsConfirm();
+                      }}
+                      aria-label={
+                        hasStoppableChannelTasks
+                          ? t(($) => $.stop_all_agents.aria)
+                          : t(($) => $.stop_all_agents.empty_tooltip)
+                      }
+                      className={cn(
+                        "flex min-h-[44px] items-center gap-3 px-4 py-2.5 text-left text-sm",
+                        hasStoppableChannelTasks
+                          ? "hover:bg-accent"
+                          : "cursor-not-allowed opacity-50",
+                      )}
+                      data-testid="stop-all-agents-mobile-menu"
+                    >
+                      <Square className="size-5 shrink-0 fill-current text-muted-foreground" />
+                      <span className="flex-1">{t(($) => $.stop_all_agents.menu_label)}</span>
+                      {!hasStoppableChannelTasks ? (
+                        <span className="text-xs text-muted-foreground">
+                          {t(($) => $.stop_all_agents.empty_tooltip)}
+                        </span>
+                      ) : null}
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     onClick={() => setMobilePanel("about")}
@@ -3672,6 +3766,16 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
           if (!open) setDeleteTarget(null);
         }}
       />
+
+      {active && canPostInChannel ? (
+        <StopAllAgentsDialog
+          open={stopAllConfirmOpen}
+          onOpenChange={setStopAllConfirmOpen}
+          channelName={active.name}
+          onConfirm={confirmStopAllAgents}
+          confirming={isStoppingAllChannelTasks}
+        />
+      ) : null}
 
       <AlertDialog
         open={archiveTarget !== null}

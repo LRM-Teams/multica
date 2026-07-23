@@ -270,6 +270,17 @@
     "stop_all_success": "Stopped {{count}} agents",
     "stop_all_partial": "Stopped {{stopped}} of {{total}} agents"
   },
+  "stop_all_agents": {
+    "tooltip": "Stop all agents",
+    "aria": "Stop all agents",
+    "empty_tooltip": "No agents currently running",
+    "menu_label": "Stop all agents",
+    "dialog_title": "Stop all agents",
+    "dialog_warning_before": "This will immediately stop all running agents in ",
+    "dialog_warning_after": ". You can provide new guidance before resuming them.",
+    "dialog_cancel": "Cancel",
+    "dialog_confirm": "Stop All Agents"
+  },
   "composer": {
     "placeholder": "Describe what you need…  @mention an agent to trigger its reply.",
     "attach_aria": "Attach",

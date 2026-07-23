@@ -131,9 +131,15 @@ function AgentFileEditorDialog({
   });
   const name = path ? path.slice(path.lastIndexOf("/") + 1) : "";
 
+  // DialogContent defaults to showCloseButton — that absolute ✕ stacks on top
+  // of the header's Close editor control (LRM-453 dual-X). Keep one close on
+  // the preview card; Esc / backdrop dismiss still flow through onOpenChange.
   return (
     <Dialog open={!!path} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="flex h-[85vh] w-[92vw] max-w-[1200px] sm:max-w-[1200px] flex-col gap-0 overflow-hidden p-0">
+      <DialogContent
+        showCloseButton={false}
+        className="flex h-[85vh] w-[92vw] max-w-[1200px] sm:max-w-[1200px] flex-col gap-0 overflow-hidden p-0"
+      >
         <DialogHeader className="flex-row items-center justify-between gap-3 border-b px-4 py-3">
           <DialogTitle className="truncate font-mono text-sm">{name}</DialogTitle>
           <Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="Close editor">

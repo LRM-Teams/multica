@@ -87,6 +87,26 @@ describe("adaptUpcomingRow", () => {
     expect(adaptUpcomingRow(makeDefinition({ status: "some_future_status" }))).toBeNull();
   });
 
+  it("prefers server display_name over the legacy display alias", () => {
+    const row = adaptUpcomingRow(
+      makeDefinition({
+        anchor: {
+          available: true,
+          kind: "channel",
+          display_name: "# LRM2.0开发群",
+          display: "# legacy",
+          href: "/w/channels/c",
+        },
+      }),
+    );
+    expect(row?.anchor).toEqual({
+      available: true,
+      kind: "channel",
+      label: "# LRM2.0开发群",
+      href: "/w/channels/c",
+    });
+  });
+
   it("keeps the row but degrades the anchor to unavailable for an unrecognized anchor kind", () => {
     const row = adaptUpcomingRow(
       makeDefinition({

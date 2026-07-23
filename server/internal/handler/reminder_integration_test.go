@@ -1289,6 +1289,10 @@ func TestListAgentRemindersReturnsLayeredSafeProjection(t *testing.T) {
 	if !definition.Anchor.Available || definition.Anchor.Href == nil || *definition.Anchor.Href != wantHref {
 		t.Fatalf("missing safe anchor href: got=%+v want=%s", definition.Anchor, wantHref)
 	}
+	wantDisplay := "#" + fixture.channel.Name
+	if definition.Anchor.DisplayName == nil || *definition.Anchor.DisplayName != wantDisplay || definition.Anchor.Display == nil || *definition.Anchor.Display != wantDisplay {
+		t.Fatalf("anchor display name = display_name:%v display:%v, want %q", definition.Anchor.DisplayName, definition.Anchor.Display, wantDisplay)
+	}
 	encoded, err := json.Marshal(definition.Anchor)
 	if err != nil {
 		t.Fatal(err)
@@ -1323,6 +1327,20 @@ func TestListAgentRemindersReturnsLayeredSafeProjection(t *testing.T) {
 	if !threadAnchor.Available || threadAnchor.Kind == nil || *threadAnchor.Kind != "thread" || threadAnchor.Href == nil || *threadAnchor.Href != wantThreadHref {
 		t.Fatalf("thread anchor did not deep-link to authorized root: %+v", threadAnchor)
 	}
+	wantThreadDisplay := "Thread in #" + fixture.channel.Name
+	if threadAnchor.DisplayName == nil || *threadAnchor.DisplayName != wantThreadDisplay || threadAnchor.Display == nil || *threadAnchor.Display != wantThreadDisplay {
+		t.Fatalf("thread anchor display name = display_name:%v display:%v, want %q", threadAnchor.DisplayName, threadAnchor.Display, wantThreadDisplay)
+	}
+	if _, err := testPool.Exec(context.Background(), `UPDATE channel SET name = '' WHERE id = $1`, fixture.channel.ID); err != nil {
+		t.Fatal(err)
+	}
+	unnamedAnchor := fixture.handler.safeHumanReminderAnchor(request, testUserID, reminder)
+	if unnamedAnchor.DisplayName == nil || *unnamedAnchor.DisplayName != "Thread in # Unnamed channel" {
+		t.Fatalf("unnamed channel anchor display name = %+v, want explicit placeholder", unnamedAnchor)
+	}
+	if _, err := testPool.Exec(context.Background(), `UPDATE channel SET name = $2 WHERE id = $1`, fixture.channel.ID, fixture.channel.Name); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := testPool.Exec(context.Background(), `UPDATE channel SET kind = 'dm' WHERE id = $1`, fixture.channel.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -1331,8 +1349,8 @@ func TestListAgentRemindersReturnsLayeredSafeProjection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if dmAnchor.Display == nil || *dmAnchor.Display != "Thread in direct message" || strings.Contains(string(dmEncoded), fixture.channel.Name) {
-		t.Fatalf("DM anchor leaked canonical channel name: %s", dmEncoded)
+	if dmAnchor.DisplayName == nil || !strings.HasPrefix(*dmAnchor.DisplayName, "Thread in ") || strings.Contains(*dmAnchor.DisplayName, "direct message") || strings.Contains(string(dmEncoded), fixture.channel.Name) {
+		t.Fatalf("DM anchor did not expose a readable conversation name without leaking canonical channel name: %s", dmEncoded)
 	}
 }
 

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -14,10 +15,11 @@ import (
 )
 
 type humanReminderAnchor struct {
-	Available bool    `json:"available"`
-	Kind      *string `json:"kind,omitempty"`
-	Display   *string `json:"display,omitempty"`
-	Href      *string `json:"href,omitempty"`
+	Available   bool    `json:"available"`
+	Kind        *string `json:"kind,omitempty"`
+	Display     *string `json:"display,omitempty"`
+	DisplayName *string `json:"display_name,omitempty"`
+	Href        *string `json:"href,omitempty"`
 }
 
 type humanReminderDefinition struct {
@@ -238,27 +240,46 @@ func (h *Handler) safeHumanReminderAnchor(r *http.Request, userID string, remind
 		return unavailable
 	}
 	kind := "channel"
-	display := "#" + channelName
-	if channelKind == "dm" {
-		display = "Direct message"
+	display := h.reminderAnchorDisplayName(r.Context(), reminder.WorkspaceID, reminder.AnchorChannelID, channelKind, channelName, parseUUID(userID))
+	if reminder.AnchorThreadRootMessageID.Valid {
+		kind = "thread"
+		display = "Thread in " + display
 	}
 	messageID := reminder.AnchorMessageID
 	query := "message=" + url.QueryEscape(uuidToString(messageID))
 	if reminder.AnchorThreadRootMessageID.Valid {
-		kind = "thread"
-		if channelKind == "dm" {
-			display = "Thread in direct message"
-		} else {
-			display = "Thread in #" + channelName
-		}
 		query = "thread=" + url.QueryEscape(uuidToString(reminder.AnchorThreadRootMessageID)) +
 			"&message=" + url.QueryEscape(uuidToString(reminder.AnchorMessageID))
 	}
 	href := fmt.Sprintf("/%s/channels/%s?%s", url.PathEscape(workspaceSlug),
 		url.PathEscape(uuidToString(reminder.AnchorChannelID)), query)
 	return humanReminderAnchor{
-		Available: true, Kind: &kind, Display: &display, Href: &href,
+		Available: true, Kind: &kind, Display: &display, DisplayName: &display, Href: &href,
 	}
+}
+
+func (h *Handler) reminderAnchorDisplayName(ctx context.Context, workspaceID, channelID pgtype.UUID, channelKind, channelName string, userID pgtype.UUID) string {
+	if channelKind != "dm" {
+		if name := strings.TrimSpace(channelName); name != "" {
+			return "#" + name
+		}
+		return "# Unnamed channel"
+	}
+	var peerName string
+	if err := h.DB.QueryRow(ctx, `
+		SELECT COALESCE(NULLIF(u.display_name, ''), u.name, u.email, NULLIF(a.display_name, ''), a.name, '')
+		FROM channel_member peer
+		LEFT JOIN "user" u ON peer.member_type = 'user' AND u.id = peer.member_id
+		LEFT JOIN agent a ON peer.member_type = 'agent' AND a.id = peer.member_id
+		WHERE peer.channel_id = $1 AND peer.workspace_id = $2
+		  AND NOT (peer.member_type = 'user' AND peer.member_id = $3)
+		ORDER BY peer.created_at ASC
+		LIMIT 1`, channelID, workspaceID, userID).Scan(&peerName); err == nil {
+		if name := strings.TrimSpace(peerName); name != "" {
+			return name
+		}
+	}
+	return "Unnamed direct message"
 }
 
 func encodeHumanReminderCursor(cursor humanReminderCursor) *string {

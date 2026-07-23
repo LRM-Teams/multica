@@ -33,6 +33,7 @@ import { CloudRuntimeDialog } from "./cloud-runtime-dialog";
 import { ProviderLogo } from "./provider-logo";
 import { formatRuntimeUpdateError } from "./update-error";
 import { RuntimeList, buildWorkloadIndex } from "./runtime-list";
+import { MachineDeleteControl } from "./delete-computer-dialog";
 import {
   buildRuntimeMachines,
   filterRuntimeMachines,
@@ -228,9 +229,11 @@ export function RuntimesPage({
             updatableIds={updatableIds}
             now={now}
             bootstrapping={bootstrapping}
+            wsId={wsId}
             actions={
               selectedMachine?.isCurrent ? localMachineActions : undefined
             }
+            onComputerDeleted={() => setSelectedMachineId(null)}
           />
         </div>
       ) : (
@@ -268,9 +271,11 @@ export function RuntimesPage({
                 updatableIds={updatableIds}
                 now={now}
                 bootstrapping={bootstrapping}
+                wsId={wsId}
                 actions={
                   selectedMachine?.isCurrent ? localMachineActions : undefined
                 }
+                onComputerDeleted={() => setSelectedMachineId(null)}
               />
             </ResizablePanel>
           </ResizablePanelGroup>
@@ -594,12 +599,16 @@ function MachineDetail({
   now,
   bootstrapping,
   actions,
+  wsId,
+  onComputerDeleted,
 }: {
   machine: RuntimeMachine | null;
   updatableIds: Set<string>;
   now: number;
   bootstrapping?: boolean;
   actions?: React.ReactNode;
+  wsId: string;
+  onComputerDeleted?: () => void;
 }) {
   const { t } = useT("runtimes");
   const healthLabel = useHealthLabel();
@@ -628,6 +637,18 @@ function MachineDetail({
       </main>
     );
   }
+
+  const headerActions =
+    actions || machine.daemonId ? (
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        {actions}
+        <MachineDeleteControl
+          machine={machine}
+          wsId={wsId}
+          onDeleted={onComputerDeleted}
+        />
+      </div>
+    ) : null;
 
   const runtimeTotal = machine.runtimes.length;
   const busyCount = machine.runningCount + machine.queuedCount;
@@ -716,7 +737,7 @@ function MachineDetail({
               </p>
             )}
           </div>
-          {actions && <div className="shrink-0">{actions}</div>}
+          {headerActions && <div className="shrink-0">{headerActions}</div>}
         </div>
       </div>
 

@@ -57,6 +57,39 @@
       "cli": "CLI",
       "cloud_worker": "云端 worker",
       "local_daemon": "本地守护进程"
+    },
+    "delete_computer": {
+      "button": "删除整机",
+      "toast_deleted_one": "已删除该主机上的 {{count}} 个 Runtime",
+      "toast_deleted_other": "已删除该主机上的 {{count}} 个 Runtime",
+      "delete_failed_toast": "删除整机失败",
+      "close": "关闭",
+      "confirm": {
+        "title": "删除这台电脑？",
+        "description_one": "将永久删除「{{name}}」上的全部 {{count}} 个 Runtime，该机将从 Remote 列表消失。此操作无法撤销。",
+        "description_other": "将永久删除「{{name}}」上的全部 {{count}} 个 Runtime，该机将从 Remote 列表消失。此操作无法撤销。",
+        "cancel": "取消",
+        "confirm": "删除整机",
+        "submitting": "删除中…"
+      },
+      "blocked_online": {
+        "title": "主机仍在线",
+        "description": "「{{name}}」上仍有在线 Runtime。请等整机离线后再试。"
+      },
+      "blocked_by_agents": {
+        "title_one": "这台电脑上仍有 {{count}} 个 Agent",
+        "title_other": "这台电脑上仍有 {{count}} 个 Agent",
+        "description": "请先归档或改绑下列 Agent，才能删除「{{name}}」。",
+        "view_agent": "查看 Agent"
+      },
+      "blocked_squads": {
+        "title": "仍有活跃小队占用此机",
+        "description": "「{{name}}」上仍有由已归档 Agent 领导的活跃小队。请先归档这些小队或更换 leader。"
+      },
+      "blocked_tasks": {
+        "title": "仍有活跃任务",
+        "description": "「{{name}}」上仍有进行中的任务。请取消或等待完成后再试。"
+      }
     }
   },
   "health": {

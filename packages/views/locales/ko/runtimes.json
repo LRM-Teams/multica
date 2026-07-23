@@ -61,6 +61,39 @@
       "cli": "CLI",
       "cloud_worker": "클라우드 워커",
       "local_daemon": "로컬 데몬"
+    },
+    "delete_computer": {
+      "button": "컴퓨터 삭제",
+      "toast_deleted_one": "이 컴퓨터에서 런타임 {{count}}개를 삭제했습니다",
+      "toast_deleted_other": "이 컴퓨터에서 런타임 {{count}}개를 삭제했습니다",
+      "delete_failed_toast": "컴퓨터 삭제에 실패했습니다",
+      "close": "닫기",
+      "confirm": {
+        "title": "이 컴퓨터를 삭제할까요?",
+        "description_one": "「{{name}}」의 런타임 {{count}}개를 모두 영구 삭제합니다. Remote 목록에서 사라지며 되돌릴 수 없습니다.",
+        "description_other": "「{{name}}」의 런타임 {{count}}개를 모두 영구 삭제합니다. Remote 목록에서 사라지며 되돌릴 수 없습니다.",
+        "cancel": "취소",
+        "confirm": "컴퓨터 삭제",
+        "submitting": "삭제 중…"
+      },
+      "blocked_online": {
+        "title": "컴퓨터가 아직 온라인입니다",
+        "description": "「{{name}}」에 아직 온라인 런타임이 있습니다. 오프라인이 된 후 다시 시도하세요."
+      },
+      "blocked_by_agents": {
+        "title_one": "이 컴퓨터에 에이전트 {{count}}개가 남아 있습니다",
+        "title_other": "이 컴퓨터에 에이전트 {{count}}개가 남아 있습니다",
+        "description": "「{{name}}」을(를) 삭제하려면 아래 에이전트를 먼저 보관하거나 재할당하세요.",
+        "view_agent": "에이전트 보기"
+      },
+      "blocked_squads": {
+        "title": "활성 스쿼드가 남아 있습니다",
+        "description": "「{{name}}」에 보관된 리더의 활성 스쿼드가 있습니다. 스쿼드를 보관하거나 리더를 바꾸세요."
+      },
+      "blocked_tasks": {
+        "title": "활성 작업이 남아 있습니다",
+        "description": "「{{name}}」에 아직 활성 작업이 있습니다. 취소하거나 완료될 때까지 기다린 후 다시 시도하세요."
+      }
     }
   },
   "health": {

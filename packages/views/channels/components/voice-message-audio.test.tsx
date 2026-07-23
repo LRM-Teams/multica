@@ -36,6 +36,8 @@ vi.mock("../../i18n/use-t", () => ({
           voice_transcript_label: "Voice transcript",
           voice_transcribing: "Transcribing",
           voice_transcription_unavailable: "Transcript unavailable",
+          voice_synthesizing: "Generating voice",
+          voice_synthesis_unavailable: "Voice unavailable",
         },
       }),
   }),
@@ -97,6 +99,48 @@ function humanRecordingMessage(
       },
     ],
     attachments: [attachment],
+  });
+}
+
+function agentSynthesisMessage(
+  synthesisStatus: "pending" | "completed" | "failed",
+): ChannelMessage {
+  const attachment: Attachment = {
+    id: "agent-voice-status",
+    workspace_id: "workspace-1",
+    issue_id: null,
+    comment_id: null,
+    chat_session_id: null,
+    chat_message_id: null,
+    uploader_type: "agent",
+    uploader_id: "agent-1",
+    filename: "voice-message-1.wav",
+    url: "/uploads/voice-message-1.wav",
+    download_url: "/api/attachments/agent-voice-status/download",
+    markdown_url: "/api/attachments/agent-voice-status/download",
+    content_type: "audio/wav",
+    size_bytes: 4844,
+    created_at: "2026-07-23T10:00:00.000Z",
+  };
+  const completed = synthesisStatus === "completed";
+  return agentVoiceMessage({
+    parts: [
+      { type: "text", text: "Spoken answer" },
+      {
+        type: "voice",
+        synthesis_status: synthesisStatus,
+        ...(completed
+          ? {
+              attachment_id: attachment.id,
+              filename: attachment.filename,
+              content_type: attachment.content_type,
+              size_bytes: attachment.size_bytes,
+              duration_ms: 100,
+            }
+          : {}),
+      },
+    ],
+    attachments: completed ? [attachment] : [],
   });
 }
 
@@ -277,6 +321,43 @@ describe("VoiceMessageAudio", () => {
 
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Show transcript" })).toBeEnabled();
+  });
+
+  it("waits for server-owned Agent synthesis without calling browser TTS", () => {
+    render(<VoiceMessageAudio message={agentSynthesisMessage("pending")} />);
+
+    expect(screen.getByRole("button", { name: "Generating voice" })).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("Generating voice");
+    expect(screen.getByRole("button", { name: "Show transcript" })).toBeEnabled();
+    expect(playbackMocks.prepareVoiceAudio).not.toHaveBeenCalled();
+    expect(playbackMocks.claimVoiceAutoplay).not.toHaveBeenCalled();
+  });
+
+  it("shows terminal server synthesis failure without retrying in the browser", () => {
+    render(<VoiceMessageAudio message={agentSynthesisMessage("failed")} />);
+
+    expect(screen.getByRole("button", { name: "Voice unavailable" })).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("Voice unavailable");
+    expect(screen.getByRole("button", { name: "Show transcript" })).toBeEnabled();
+    expect(playbackMocks.prepareVoiceAudio).not.toHaveBeenCalled();
+    expect(playbackMocks.claimVoiceAutoplay).not.toHaveBeenCalled();
+  });
+
+  it("autoplays the persisted Agent WAV only after synthesis completes", async () => {
+    const rendered = render(
+      <VoiceMessageAudio message={agentSynthesisMessage("pending")} />,
+    );
+
+    expect(playbackMocks.claimVoiceAutoplay).not.toHaveBeenCalled();
+    rendered.rerender(
+      <VoiceMessageAudio message={agentSynthesisMessage("completed")} />,
+    );
+
+    await waitFor(() => {
+      expect(playbackMocks.claimVoiceAutoplay).toHaveBeenCalledOnce();
+      expect(mediaPlay).toHaveBeenCalledOnce();
+    });
+    expect(playbackMocks.prepareVoiceAudio).not.toHaveBeenCalled();
   });
 
   it("does not synthesize a human recording when its media URL is unavailable", async () => {

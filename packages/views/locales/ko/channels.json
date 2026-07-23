@@ -336,6 +336,8 @@
     "voice_transcript_label": "음성 텍스트",
     "voice_transcribing": "텍스트 변환 중",
     "voice_transcription_unavailable": "텍스트 변환을 사용할 수 없음",
+    "voice_synthesizing": "음성 생성 중",
+    "voice_synthesis_unavailable": "음성 생성 실패",
     "voice_preview": "음성 메시지",
     "voice_preview_duration": "음성 메시지 · {{seconds}}초",
     "agent_badge": "Agent",

@@ -336,6 +336,8 @@
     "voice_transcript_label": "Voice transcript",
     "voice_transcribing": "Transcribing",
     "voice_transcription_unavailable": "Transcript unavailable",
+    "voice_synthesizing": "Generating voice",
+    "voice_synthesis_unavailable": "Voice unavailable",
     "voice_preview": "Voice message",
     "voice_preview_duration": "Voice message · {{seconds}}s",
     "agent_badge": "Agent",

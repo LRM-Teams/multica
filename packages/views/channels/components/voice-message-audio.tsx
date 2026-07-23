@@ -10,6 +10,7 @@ import {
   Play,
   RotateCcw,
   Square,
+  VolumeX,
 } from "lucide-react";
 import type { ChannelMessage } from "@multica/core/types";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
@@ -46,6 +47,7 @@ export function VoiceMessageAudio({
     : presentation;
   const voicePart = resolvedPresentation?.voicePart;
   const transcriptionStatus = voicePart?.transcription_status;
+  const synthesisStatus = voicePart?.synthesis_status;
   const transcriptAvailable =
     Boolean(message.content.trim()) &&
     transcriptionStatus !== "pending" &&
@@ -57,6 +59,17 @@ export function VoiceMessageAudio({
   const recordingURL = recordingAttachment
     ? resolvePublicFileUrl(recordingAttachment.download_url) ?? recordingAttachment.download_url
     : null;
+  const serverSynthesisOwned =
+    message.type === "agent" && synthesisStatus !== undefined;
+  const synthesisPending =
+    serverSynthesisOwned &&
+    synthesisStatus === "pending" &&
+    !recordingAttachment;
+  const synthesisUnavailable =
+    serverSynthesisOwned &&
+    synthesisStatus !== "pending" &&
+    !recordingAttachment;
+  const synthesisBlocked = synthesisPending || synthesisUnavailable;
   const [state, setState] = useState<PlaybackState>("idle");
   const [durationSeconds, setDurationSeconds] = useState<number | null>(() =>
     voicePart?.duration_ms ? Math.max(1, Math.round(voicePart.duration_ms / 1000)) : null,
@@ -70,6 +83,7 @@ export function VoiceMessageAudio({
   const start = useCallback(async () => {
     if (
       !hasVoicePart ||
+      synthesisBlocked ||
       (!recordingAttachment && !message.content.trim()) ||
       state === "loading" ||
       state === "playing"
@@ -121,11 +135,24 @@ export function VoiceMessageAudio({
       playbackRef.current = null;
       if (mountedRef.current) setState("error");
     }
-  }, [hasVoicePart, message.content, recordingAttachment, recordingURL, state]);
+  }, [
+    hasVoicePart,
+    message.content,
+    recordingAttachment,
+    recordingURL,
+    state,
+    synthesisBlocked,
+  ]);
   startRef.current = start;
 
   useEffect(() => {
-    if (!hasVoicePart || recordingAttachment || message.type !== "agent" || !message.content.trim()) return;
+    if (
+      !hasVoicePart ||
+      recordingAttachment ||
+      serverSynthesisOwned ||
+      message.type !== "agent" ||
+      !message.content.trim()
+    ) return;
     let current = true;
     void prepareVoiceAudio(message.content)
       .then((prepared) => {
@@ -139,12 +166,19 @@ export function VoiceMessageAudio({
     return () => {
       current = false;
     };
-  }, [hasVoicePart, message.content, message.type, recordingAttachment]);
+  }, [
+    hasVoicePart,
+    message.content,
+    message.type,
+    recordingAttachment,
+    serverSynthesisOwned,
+  ]);
 
   useEffect(() => {
     mountedRef.current = true;
     if (
       message.type === "agent" &&
+      !synthesisBlocked &&
       claimVoiceAutoplay(
         message.id,
         voicePlaybackScope(message.channel_id, message.thread_root_message_id),
@@ -166,7 +200,15 @@ export function VoiceMessageAudio({
         recording.ondurationchange = null;
       }
     };
-  }, [hasVoicePart, message.channel_id, message.created_at, message.id, message.thread_root_message_id, message.type]);
+  }, [
+    hasVoicePart,
+    message.channel_id,
+    message.created_at,
+    message.id,
+    message.thread_root_message_id,
+    message.type,
+    synthesisBlocked,
+  ]);
 
   if (!voicePart) return null;
   if (message.type !== "agent" && !recordingAttachment) {
@@ -191,13 +233,17 @@ export function VoiceMessageAudio({
     }
     playbackRef.current?.stop();
   };
-  const label = state === "loading"
-    ? t(($) => $.message.voice_loading)
-    : state === "playing"
-      ? t(($) => $.message.voice_stop)
-      : state === "error"
-        ? t(($) => $.message.voice_retry)
-        : t(($) => $.message.voice_play);
+  const label = synthesisPending
+    ? t(($) => $.message.voice_synthesizing)
+    : synthesisUnavailable
+      ? t(($) => $.message.voice_synthesis_unavailable)
+      : state === "loading"
+        ? t(($) => $.message.voice_loading)
+        : state === "playing"
+          ? t(($) => $.message.voice_stop)
+          : state === "error"
+            ? t(($) => $.message.voice_retry)
+            : t(($) => $.message.voice_play);
   const transcriptToggleLabel = transcriptExpanded
     ? t(($) => $.message.voice_hide_transcript)
     : t(($) => $.message.voice_show_transcript);
@@ -214,19 +260,21 @@ export function VoiceMessageAudio({
             state === "error" && "border-destructive/30 bg-destructive/5 text-destructive hover:bg-destructive/10",
           )}
           onClick={state === "playing" ? stop : () => void start()}
-          disabled={state === "loading"}
+          disabled={state === "loading" || synthesisBlocked}
           aria-label={label}
-          aria-live="polite"
-          aria-busy={state === "loading"}
+          aria-live={synthesisBlocked ? undefined : "polite"}
+          aria-busy={state === "loading" || synthesisPending}
           data-testid="voice-reply-control"
           data-voice-bubble="true"
           style={{ width: voiceBubbleWidthPx(durationSeconds) }}
         >
-          {state === "loading" ? (
+          {state === "loading" || synthesisPending ? (
             <LoaderCircle
               className="size-3.5 animate-spin motion-reduce:animate-none"
               aria-hidden="true"
             />
+          ) : synthesisUnavailable ? (
+            <VolumeX className="size-3.5" aria-hidden="true" />
           ) : state === "playing" ? (
             <Square className="size-3 fill-current" aria-hidden="true" />
           ) : state === "error" ? (
@@ -245,6 +293,26 @@ export function VoiceMessageAudio({
             {durationSeconds ? `${durationSeconds}″` : "…"}
           </span>
         </button>
+        {synthesisPending ? (
+          <output
+            className="inline-flex min-h-9 shrink-0 items-center gap-1.5 px-2 text-[11px] font-medium text-muted-foreground"
+            aria-live="polite"
+          >
+            <LoaderCircle
+              className="size-3.5 animate-spin motion-reduce:animate-none"
+              aria-hidden="true"
+            />
+            {t(($) => $.message.voice_synthesizing)}
+          </output>
+        ) : synthesisUnavailable ? (
+          <output
+            className="inline-flex min-h-9 shrink-0 items-center gap-1.5 px-2 text-[11px] font-medium text-muted-foreground"
+            aria-live="polite"
+          >
+            <VolumeX className="size-3.5" aria-hidden="true" />
+            {t(($) => $.message.voice_synthesis_unavailable)}
+          </output>
+        ) : null}
         {transcriptionStatus === "pending" ? (
           <output
             className="inline-flex min-h-9 shrink-0 items-center gap-1.5 px-2 text-[11px] font-medium text-muted-foreground"

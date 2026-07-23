@@ -336,6 +336,8 @@
     "voice_transcript_label": "音声の文字起こし",
     "voice_transcribing": "文字起こし中",
     "voice_transcription_unavailable": "文字起こしを利用できません",
+    "voice_synthesizing": "音声を生成中",
+    "voice_synthesis_unavailable": "音声を生成できません",
     "voice_preview": "音声メッセージ",
     "voice_preview_duration": "音声メッセージ · {{seconds}}秒",
     "agent_badge": "Agent",

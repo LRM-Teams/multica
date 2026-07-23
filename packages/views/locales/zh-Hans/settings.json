@@ -100,10 +100,10 @@
       "ios_pwa_hint": "允许这个主屏幕 Web App 为收件箱、DM 和群 @ 提醒显示系统通知横幅。",
       "ios_requires_pwa": "在 iOS 上，请先将 Multica 添加到主屏幕，然后从主屏幕打开它以启用后台推送。",
       "prompt": {
-        "title": "开启消息通知",
-        "description": "当 Multica 在后台时，为私信和群 @ 提醒显示系统通知横幅，类似微信 / 移动 Chrome 提醒。",
-        "enable": "允许通知",
-        "later": "暂不",
+        "title": "开启通知",
+        "description": "有人给你发私信或 @你时，即使 Multica 在后台也第一时间提醒你。",
+        "enable": "开启通知",
+        "later": "以后再说",
         "dismiss": "不再提示"
       }
     }

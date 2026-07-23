@@ -100,10 +100,10 @@
       "ios_pwa_hint": "Allow this Home Screen web app to show notification banners for inbox, DMs, and group @mentions.",
       "ios_requires_pwa": "On iOS, add Multica to your Home Screen first, then open it from the Home Screen to enable background push.",
       "prompt": {
-        "title": "Turn on message notifications",
-        "description": "Get a system banner for direct messages and group @mentions when Multica is in the background — similar to WeChat / mobile Chrome alerts.",
-        "enable": "Allow notifications",
-        "later": "Not now",
+        "title": "Turn on notifications",
+        "description": "Get notified right away when someone DMs you or @mentions you — even when Multica is in the background.",
+        "enable": "Turn on notifications",
+        "later": "Maybe later",
         "dismiss": "Don't ask again"
       }
     }

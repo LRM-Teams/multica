@@ -100,10 +100,10 @@
       "ios_pwa_hint": "このホーム画面 Web アプリで inbox、DM、グループ @ メンションの通知バナーを許可します。",
       "ios_requires_pwa": "iOS では、先に Multica をホーム画面に追加し、ホーム画面から開いてバックグラウンド Push を有効にしてください。",
       "prompt": {
-        "title": "メッセージ通知を有効にする",
-        "description": "Multica がバックグラウンドのときに、DM とグループ @ メンションのシステム通知バナーを表示します（WeChat / モバイル Chrome の通知のように）。",
-        "enable": "通知を許可",
-        "later": "後で",
+        "title": "通知をオンにする",
+        "description": "DM や @メンションがあったとき、Multica がバックグラウンドでもすぐに知らせます。",
+        "enable": "通知をオンにする",
+        "later": "あとで",
         "dismiss": "今後表示しない"
       }
     }

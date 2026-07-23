@@ -10,11 +10,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   return (
     <DashboardLayout
       loadingIndicator={<MulticaIcon className="size-6" />}
+      banner={<BrowserNotificationPrompt />}
       extra={
         <>
           <SearchCommand />
           <WebNotificationBridge />
-          <BrowserNotificationPrompt />
         </>
       }
     >

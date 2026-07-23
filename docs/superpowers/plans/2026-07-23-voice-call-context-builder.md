@@ -41,7 +41,7 @@ contents, and raw audio are not included.
 - [x] Run the voice-call and adjacent context regressions in a fresh fully
   migrated PostgreSQL database.
 - [x] Run voice-call service tests, handler/service vet, and diff checks.
-- [ ] Commit, push, and open an independent ready PR stacked on #1053.
+- [x] Commit, push, and open independent ready PR [#1079](https://github.com/LRM-Teams/multica/pull/1079), stacked on #1053.
 
 ## Verification
 

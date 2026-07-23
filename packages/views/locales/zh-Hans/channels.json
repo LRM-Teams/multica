@@ -270,6 +270,17 @@
     "stop_all_success": "已停止 {{count}} 个 Agent",
     "stop_all_partial": "已停止 {{stopped}}/{{total}} 个 Agent"
   },
+  "stop_all_agents": {
+    "tooltip": "停止全部 Agent",
+    "aria": "停止全部 Agent",
+    "empty_tooltip": "当前没有运行中的 Agent",
+    "menu_label": "停止全部 Agent",
+    "dialog_title": "停止全部 Agent",
+    "dialog_warning_before": "这将立即停止 ",
+    "dialog_warning_after": " 中所有正在运行的 Agent。你可以在它们恢复前给出新的指引。",
+    "dialog_cancel": "取消",
+    "dialog_confirm": "停止全部 Agent"
+  },
   "composer": {
     "placeholder": "描述你需要什么帮助...  @ 智能体名称会触发它回复。",
     "attach_aria": "附件",

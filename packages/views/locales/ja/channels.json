@@ -270,6 +270,17 @@
     "stop_all_success": "{{count}} 件のエージェントを停止しました",
     "stop_all_partial": "{{total}} 件中 {{stopped}} 件のエージェントを停止しました"
   },
+  "stop_all_agents": {
+    "tooltip": "すべてのエージェントを停止",
+    "aria": "すべてのエージェントを停止",
+    "empty_tooltip": "実行中のエージェントはありません",
+    "menu_label": "すべてのエージェントを停止",
+    "dialog_title": "すべてのエージェントを停止",
+    "dialog_warning_before": "これにより ",
+    "dialog_warning_after": " で実行中のすべてのエージェントが直ちに停止します。再開する前に新しい指示を出せます。",
+    "dialog_cancel": "キャンセル",
+    "dialog_confirm": "すべて停止"
+  },
   "composer": {
     "placeholder": "必要なことを入力してください…  @エージェント名 で返信を促します。",
     "attach_aria": "添付",

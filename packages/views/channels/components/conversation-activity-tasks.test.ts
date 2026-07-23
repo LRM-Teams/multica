@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { ChannelActiveTask } from "@multica/core/types";
-import { filterComposerStripTasks, isComposerStripReplyTask } from "./conversation-activity-tasks";
+import {
+  filterComposerStripTasks,
+  isComposerStripReplyTask,
+  listStoppableChannelTasks,
+} from "./conversation-activity-tasks";
 
 function task(over: Partial<ChannelActiveTask>): ChannelActiveTask {
   return {
@@ -39,5 +43,19 @@ describe("filterComposerStripTasks (LRM-287)", () => {
   it("drops ambient / channel_onboarding inbox wakes", () => {
     expect(isComposerStripReplyTask(task({ reason: "ambient" }))).toBe(false);
     expect(isComposerStripReplyTask(task({ reason: "channel_onboarding" }))).toBe(false);
+  });
+});
+
+describe("listStoppableChannelTasks (LRM-405)", () => {
+  it("keeps every non-terminal running task, including issue-create kinds", () => {
+    const running = [
+      task({ kind: "quick_create", task_id: "qc-1", agent_name: "Wendy" }),
+      task({ kind: "reply", reason: "mention", task_id: "t1", agent_name: "Aria" }),
+      task({ outcome: "failed", task_id: "done-1", agent_name: "Bo" }),
+    ];
+    expect(listStoppableChannelTasks(running).map((row) => row.task_id)).toEqual([
+      "qc-1",
+      "t1",
+    ]);
   });
 });

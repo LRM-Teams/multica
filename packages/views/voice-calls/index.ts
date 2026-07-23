@@ -6,3 +6,13 @@ export {
   type VoiceCallMediaEvents,
   type VoiceCallMediaState,
 } from "./volcengine-media-session";
+export {
+  useVoiceCallController,
+  type UseVoiceCallControllerOptions,
+  type VoiceCallController,
+  type VoiceCallControllerError,
+  type VoiceCallControllerErrorSource,
+  type VoiceCallControllerPhase,
+  type VoiceCallMediaSession,
+  type VoiceCallMediaSessionFactory,
+} from "./use-voice-call-controller";

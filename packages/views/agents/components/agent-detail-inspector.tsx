@@ -157,8 +157,14 @@ export function AgentDetailInspector({
         <PropRow label={t(($) => $.inspector.prop_visibility)} interactive={false}>
           <VisibilityPicker
             value={agent.visibility}
+            homeChannelId={agent.home_channel_id ?? null}
             canEdit={canEdit}
-            onChange={(v) => update({ visibility: v })}
+            onChange={(next) =>
+              update({
+                visibility: next.visibility,
+                home_channel_id: next.home_channel_id,
+              })
+            }
           />
         </PropRow>
         <PropRow label={t(($) => $.inspector.prop_concurrency)} interactive={false}>

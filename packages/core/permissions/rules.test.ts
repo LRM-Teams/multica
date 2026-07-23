@@ -181,6 +181,12 @@ describe("canAssignAgentToIssue", () => {
     expect(d.allowed).toBe(false);
     expect(d.reason).toBe("not_authenticated");
   });
+  it("allows any member to assign channel-visibility agents already in view", () => {
+    const a = makeAgent({ visibility: "channel", owner_id: ALICE });
+    expect(
+      canAssignAgentToIssue(a, { userId: BOB, role: "member" }).allowed,
+    ).toBe(true);
+  });
 });
 
 describe("canEditSkill / canDeleteSkill", () => {

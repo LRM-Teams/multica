@@ -109,6 +109,7 @@ func (m *mockStorage) PresignGet(_ context.Context, key string, _ time.Duration)
 	m.presignCalls = append(m.presignCalls, key)
 	return "https://signed.example.com/" + key + "?X-Amz-Signature=mock", nil
 }
+
 func (m *mockStorage) PresignGetWithContentDisposition(_ context.Context, key string, _ time.Duration, contentDisposition string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -134,6 +135,20 @@ func (m *mockStorage) put(key string, data []byte) {
 		m.files = map[string][]byte{}
 	}
 	m.files[key] = append([]byte(nil), data...)
+}
+
+func TestCanonicalUploadContentTypeNormalizesWAV(t *testing.T) {
+	wav := testPCM16MonoWAV([]byte{0x00, 0x00, 0xff, 0x7f}, 16000)
+	detected := http.DetectContentType(wav)
+	if detected != "audio/wave" {
+		t.Fatalf("Go detected WAV content type = %q, want audio/wave", detected)
+	}
+	if got := canonicalUploadContentType(detected, "recording.wav"); got != "audio/wav" {
+		t.Fatalf("content type = %q, want audio/wav", got)
+	}
+	if got := canonicalUploadContentType("image/png", "avatar.png"); got != "image/png" {
+		t.Fatalf("unrelated content type = %q, want image/png", got)
+	}
 }
 
 func TestUploadFileForeignWorkspace(t *testing.T) {

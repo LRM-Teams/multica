@@ -62,6 +62,26 @@ func TestChannelPartsAllowEmptyContentForPendingRecordingOnly(t *testing.T) {
 	}
 }
 
+func TestReadChannelVoicePCMAcceptsGoDetectedWAVMediaType(t *testing.T) {
+	pcm := []byte{0x00, 0x00, 0xff, 0x7f}
+	wav := testPCM16MonoWAV(pcm, 16000)
+	h := &Handler{Storage: &mockStorage{files: map[string][]byte{
+		"recording.wav": wav,
+	}}}
+
+	got, err := h.readChannelVoicePCM(context.Background(), channelVoiceRecording{
+		URL:         "recording.wav",
+		ContentType: "audio/wave",
+		SizeBytes:   int64(len(wav)),
+	})
+	if err != nil {
+		t.Fatalf("read Go-detected WAV: %v", err)
+	}
+	if !bytes.Equal(got, pcm) {
+		t.Fatalf("PCM = %v, want %v", got, pcm)
+	}
+}
+
 func TestCreateUserChannelMessagePersistsVoiceTranscriptionJob(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

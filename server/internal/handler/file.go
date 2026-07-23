@@ -28,6 +28,7 @@ var extContentTypes = map[string]string{
 	".mjs":  "application/javascript",
 	".json": "application/json",
 	".wasm": "application/wasm",
+	".wav":  "audio/wav",
 }
 
 const maxUploadSize = 100 << 20 // 100 MB
@@ -381,11 +382,7 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "failed to read file")
 		return
 	}
-	contentType := http.DetectContentType(buf[:n])
-	// Override with extension-based type when the sniffer gets it wrong.
-	if ct, ok := extContentTypes[strings.ToLower(path.Ext(header.Filename))]; ok {
-		contentType = ct
-	}
+	contentType := canonicalUploadContentType(http.DetectContentType(buf[:n]), header.Filename)
 	// Seek back so the full file is uploaded.
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to read file")
@@ -524,6 +521,13 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 		"url":      link,
 		"filename": header.Filename,
 	})
+}
+
+func canonicalUploadContentType(detectedContentType, filename string) string {
+	if contentType, ok := extContentTypes[strings.ToLower(path.Ext(filename))]; ok {
+		return contentType
+	}
+	return detectedContentType
 }
 
 // ---------------------------------------------------------------------------

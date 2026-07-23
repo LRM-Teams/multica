@@ -97,14 +97,18 @@ export function DeleteRuntimeDialog({
   );
 
   // Reset transient state every time the dialog opens so a previous
-  // attempt's notice/override doesn't leak into the next one.
-  useEffect(() => {
+  // attempt's notice/override doesn't leak into the next one. Adjusted
+  // inline during render (prev-prop comparison) rather than in an effect,
+  // so there's no extra render with stale state between open and reset.
+  const [prevOpen, setPrevOpen] = useState(open);
+  if (open !== prevOpen) {
+    setPrevOpen(open);
     if (open) {
       setServerActiveAgents(null);
       setSubmitting(false);
       setPlanChangedNotice(null);
     }
-  }, [open]);
+  }
 
   const hasActiveAgents = planAgents.length > 0;
   const selfHealing = !hasActiveAgents && isSelfHealingRuntime(runtime);

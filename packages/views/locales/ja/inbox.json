@@ -82,6 +82,10 @@
     "retry": "再試行",
     "open_thread_failed": "このスレッドを開けませんでした",
     "open_item_failed": "このアクティビティを開けませんでした",
+    "open_channel_failed": "このチャンネルを開けませんでした",
+    "open_dm_failed": "このダイレクトメッセージを開けませんでした",
+    "open_in_main": "メッセージで開く",
+    "channel_fallback": "チャンネル",
     "empty": {
       "all": {
         "title": "アクティビティはまだありません",

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useCallback, useRef } from "react";
+import { useEffect, useCallback, useRef, useMemo } from "react";
 import { useDefaultLayout } from "react-resizable-panels";
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -17,7 +17,7 @@ import {
   useArchiveInbox,
 } from "@multica/core/inbox/mutations";
 import { useMarkChannelThreadRead } from "@multica/core/channels/mutations";
-import type { InboxItem, UserActivityItem, UserActivityTab } from "@multica/core/types";
+import type { InboxItem, UserActivityItem } from "@multica/core/types";
 
 import { IssueDetail } from "../../issues/components";
 import { ErrorBoundary } from "@multica/ui/components/common/error-boundary";
@@ -38,6 +38,17 @@ import { useTypeLabels } from "./inbox-detail-label";
 import { getInboxDisplayTitle } from "./inbox-display";
 import { ActivityListRow } from "./activity-list-row";
 import { ActivityTabs, ActivityEmptyState } from "./activity-tabs";
+import { ActivityChannelPane } from "./activity-channel-pane";
+import { ActivityDmPane } from "./activity-dm-pane";
+import { ActivityThreadPane } from "./activity-thread-pane";
+import {
+  activityItemMatchesSelection,
+  inboxActivityUrl,
+  parseActivitySelection,
+  parseActivityTab,
+  selectionFromActivityItem,
+  type ActivitySelection,
+} from "./activity-selection";
 import { useT } from "../../i18n";
 import { MobileListDetailLayout } from "../../common/mobile-list-detail-layout";
 
@@ -45,40 +56,18 @@ function inboxItemFromActivity(item: UserActivityItem): InboxItem | null {
   return item.kind === "inbox" ? item.inbox ?? null : null;
 }
 
-function activitySelectionKey(item: UserActivityItem): string {
-  if (item.kind === "inbox") {
-    const inbox = item.inbox;
-    return inbox?.issue_id ?? inbox?.id ?? item.id;
-  }
-  return item.id;
-}
-
-function parseActivityTab(raw: string | null): UserActivityTab {
-  if (raw === "unread" || raw === "mentions") return raw;
-  return "all";
-}
-
-function inboxActivityUrl(
-  inboxPath: string,
-  params: { tab?: UserActivityTab; issue?: string },
-): string {
-  const search = new URLSearchParams();
-  if (params.tab && params.tab !== "all") search.set("tab", params.tab);
-  if (params.issue) search.set("issue", params.issue);
-  const qs = search.toString();
-  return qs ? `${inboxPath}?${qs}` : inboxPath;
-}
-
 export function InboxPage() {
   const { t } = useT("inbox");
   const { searchParams, replace, push } = useNavigation();
-  const urlIssue = searchParams.get("issue") ?? "";
   const tab = parseActivityTab(searchParams.get("tab"));
-  const selectedKey = urlIssue;
+  const selection = useMemo(
+    () => parseActivitySelection(searchParams),
+    [searchParams],
+  );
   const wsPaths = useWorkspacePaths();
   const inboxPath = wsPaths.inbox();
-
   const wsId = useWorkspaceId();
+
   const {
     data: activityData,
     isLoading: loading,
@@ -89,38 +78,50 @@ export function InboxPage() {
   const items = activityData?.items ?? [];
 
   const selectedItem =
-    items.find((item) => activitySelectionKey(item) === selectedKey) ?? null;
+    items.find((item) => activityItemMatchesSelection(item, selection)) ?? null;
   const selectedInbox = selectedItem ? inboxItemFromActivity(selectedItem) : null;
 
-  const lastResolvedKeyRef = useRef<string>("");
+  const lastResolvedSelectionKeyRef = useRef<string>("");
   useEffect(() => {
-    if (selectedInbox) lastResolvedKeyRef.current = selectedKey;
-  }, [selectedInbox, selectedKey]);
+    if (!selection) return;
+    if (selection.kind === "inbox") {
+      if (selectedInbox) {
+        lastResolvedSelectionKeyRef.current = selection.key;
+      }
+      return;
+    }
+    // Conversation panes resolve from URL + channel/DM queries; keep the
+    // selection sticky even when the row scrolls out of the current tab list.
+    lastResolvedSelectionKeyRef.current = `${selection.kind}:${selection.channelId}`;
+  }, [selection, selectedInbox]);
 
-  const setSelectedKey = useCallback(
-    (key: string) => {
-      replace(inboxActivityUrl(inboxPath, { tab, issue: key || undefined }));
+  const setSelection = useCallback(
+    (next: ActivitySelection | null) => {
+      replace(inboxActivityUrl(inboxPath, { tab, selection: next }));
     },
     [replace, inboxPath, tab],
   );
 
   const setTab = useCallback(
-    (next: UserActivityTab) => {
-      replace(inboxActivityUrl(inboxPath, { tab: next, issue: urlIssue || undefined }));
+    (nextTab: typeof tab) => {
+      replace(inboxActivityUrl(inboxPath, { tab: nextTab, selection }));
     },
-    [replace, inboxPath, urlIssue],
+    [replace, inboxPath, selection],
   );
 
+  // Stale inbox issue deep-links: if the issue key never resolves in the feed
+  // after load, fall through to the issue page (legacy share URLs). Conversation
+  // selections stay on Activity even when the row leaves the current tab.
   useEffect(() => {
     if (loading) return;
-    if (!selectedKey) return;
+    if (!selection || selection.kind !== "inbox") return;
     if (selectedInbox) return;
-    if (lastResolvedKeyRef.current === selectedKey) {
-      setSelectedKey("");
+    if (lastResolvedSelectionKeyRef.current === selection.key) {
+      setSelection(null);
       return;
     }
-    replace(wsPaths.issueDetail(selectedKey));
-  }, [loading, selectedKey, selectedInbox, replace, wsPaths, setSelectedKey]);
+    replace(wsPaths.issueDetail(selection.key));
+  }, [loading, selection, selectedInbox, replace, wsPaths, setSelection]);
 
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
     id: "multica_inbox_layout",
@@ -155,17 +156,22 @@ export function InboxPage() {
   const handleSelect = (item: UserActivityItem) => {
     if (item.access_denied) return;
 
-    if (item.kind === "thread") {
+    const next = selectionFromActivityItem(item);
+    if (!next) {
+      toast.error(
+        item.kind === "thread"
+          ? t(($) => $.activity.open_thread_failed)
+          : t(($) => $.activity.open_item_failed),
+      );
+      return;
+    }
+
+    // Mark read on click (LRM-379): keep optimistic Activity unread flip when
+    // opening conversation panes in-place (no longer navigate away first).
+    if (item.kind === "thread" && item.unread_count > 0) {
       const channelId = item.channel_id;
       const rootId = item.thread_root_message_id ?? item.id;
-      if (!channelId) {
-        toast.error(t(($) => $.activity.open_thread_failed));
-        return;
-      }
-      // Mark read on click (LRM-379): do not rely solely on ThreadPanel open —
-      // deep-link may miss the root in the loaded message window, and Activity
-      // cache was previously never invalidated after thread/read.
-      if (item.unread_count > 0) {
+      if (channelId) {
         markThreadReadMutate(
           { channelId, messageId: rootId },
           {
@@ -178,21 +184,14 @@ export function InboxPage() {
           },
         );
       }
-      push(`${wsPaths.channelDetail(channelId)}?thread=${encodeURIComponent(rootId)}`);
-      return;
     }
 
-    const inbox = inboxItemFromActivity(item);
-    if (!inbox) {
-      toast.error(t(($) => $.activity.open_item_failed));
-      return;
-    }
-    setSelectedKey(inbox.issue_id ?? inbox.id);
+    setSelection(next);
   };
 
   const handleArchive = (id: string) => {
     if (selectedInbox && selectedInbox.id === id) {
-      setSelectedKey("");
+      setSelection(null);
     }
     archiveMutation.mutate(id, {
       onError: (err) =>
@@ -214,6 +213,21 @@ export function InboxPage() {
         ),
     });
   };
+
+  const openChannelInMain = useCallback(
+    (channelId: string, opts?: { thread?: string; message?: string }) => {
+      const search = new URLSearchParams();
+      if (opts?.thread) search.set("thread", opts.thread);
+      if (opts?.message) search.set("message", opts.message);
+      const qs = search.toString();
+      push(
+        qs
+          ? `${wsPaths.channelDetail(channelId)}?${qs}`
+          : wsPaths.channelDetail(channelId),
+      );
+    },
+    [push, wsPaths],
+  );
 
   const listHeader = (
     <>
@@ -257,7 +271,7 @@ export function InboxPage() {
         <ActivityListRow
           key={`${item.kind}-${item.id}`}
           item={item}
-          isSelected={activitySelectionKey(item) === selectedKey}
+          isSelected={activityItemMatchesSelection(item, selection)}
           onClick={() => handleSelect(item)}
           timeAgo={timeAgo}
         />
@@ -265,7 +279,44 @@ export function InboxPage() {
     </div>
   );
 
-  const detailContent = selectedInbox?.issue_id ? (
+  const conversationDetail =
+    selection?.kind === "thread" ? (
+      <ActivityThreadPane
+        key={`thread:${selection.channelId}:${selection.threadRootId}`}
+        channelId={selection.channelId}
+        threadRootId={selection.threadRootId}
+        workspaceId={wsId}
+        onBack={() => setSelection(null)}
+        onViewInChannel={() =>
+          openChannelInMain(selection.channelId, {
+            message: selection.threadRootId,
+          })
+        }
+      />
+    ) : selection?.kind === "channel" ? (
+      <ActivityChannelPane
+        key={`channel:${selection.channelId}:${selection.messageId}`}
+        channelId={selection.channelId}
+        highlightMessageId={selection.messageId}
+        channelNameFallback={selectedItem?.channel_name}
+        onBack={() => setSelection(null)}
+        onOpenInMain={() =>
+          openChannelInMain(selection.channelId, {
+            message: selection.messageId,
+          })
+        }
+      />
+    ) : selection?.kind === "dm" ? (
+      <ActivityDmPane
+        key={`dm:${selection.channelId}`}
+        channelId={selection.channelId}
+        deepLinkMessageId={selection.messageId}
+        threadDeepLinkId={selection.threadRootId}
+        onBack={() => setSelection(null)}
+      />
+    ) : null;
+
+  const inboxDetail = selectedInbox?.issue_id ? (
     <ErrorBoundary resetKeys={[selectedInbox.issue_id]}>
       <IssueDetail
         key={selectedInbox.issue_id}
@@ -274,7 +325,7 @@ export function InboxPage() {
         layoutId="multica_inbox_issue_detail_layout"
         highlightCommentId={selectedInbox.details?.comment_id ?? undefined}
         onDelete={() => {
-          setSelectedKey("");
+          setSelection(null);
         }}
         onDone={() => {
           if (selectedInbox) handleArchive(selectedInbox.id);
@@ -334,6 +385,25 @@ export function InboxPage() {
     </div>
   ) : null;
 
+  const detailContent =
+    selection?.kind === "inbox"
+      ? inboxDetail
+      : conversationDetail;
+
+  // Selected but inbox row not in the current feed yet (tab filter / loading) —
+  // never fall back to the long "Select a notification" empty state (LRM-388).
+  const detailOrPending =
+    detailContent ??
+    (selection?.kind === "inbox" ? (
+      <div className="flex h-full flex-col gap-3 p-6">
+        <Skeleton className="h-6 w-48" />
+        <Skeleton className="h-4 w-32" />
+        <Skeleton className="mt-4 h-24 w-full" />
+      </div>
+    ) : null);
+
+  const showDetail = selection != null;
+
   if (isMobile) {
     if (loading) {
       return (
@@ -358,7 +428,7 @@ export function InboxPage() {
 
     return (
       <MobileListDetailLayout
-        showDetail={!!selectedInbox}
+        showDetail={showDetail}
         list={
           <>
             {listHeader}
@@ -366,20 +436,24 @@ export function InboxPage() {
           </>
         }
         detail={
-          <>
-            <div className="flex h-12 shrink-0 items-center border-b px-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setSelectedKey("")}
-                className="gap-1.5 text-muted-foreground"
-              >
-                <ArrowLeft className="h-4 w-4" />
-                {t(($) => $.page.back)}
-              </Button>
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto">{detailContent}</div>
-          </>
+          selection?.kind === "inbox" ? (
+            <>
+              <div className="flex h-12 shrink-0 items-center border-b px-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setSelection(null)}
+                  className="gap-1.5 text-muted-foreground"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  {t(($) => $.page.back)}
+                </Button>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto">{detailOrPending}</div>
+            </>
+          ) : (
+            <div className="flex h-full min-h-0 flex-col">{detailOrPending}</div>
+          )
         }
       />
     );
@@ -450,7 +524,7 @@ export function InboxPage() {
       <ResizableHandle />
       <ResizablePanel id="detail" minSize="40%">
         <div className="flex h-full min-h-0 flex-col">
-          {detailContent ?? (
+          {detailOrPending ?? (
             <div className="flex h-full flex-col items-center justify-center text-muted-foreground">
               <Activity className="mb-3 h-10 w-10 text-muted-foreground/30" />
               <p className="text-sm">

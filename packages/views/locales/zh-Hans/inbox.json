@@ -82,6 +82,10 @@
     "retry": "重试",
     "open_thread_failed": "无法打开该讨论串",
     "open_item_failed": "无法打开该活动项",
+    "open_channel_failed": "无法打开该频道",
+    "open_dm_failed": "无法打开该私聊",
+    "open_in_main": "在频道查看",
+    "channel_fallback": "频道",
     "empty": {
       "all": {
         "title": "暂无相关活动",

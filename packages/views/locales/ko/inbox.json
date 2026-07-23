@@ -82,6 +82,10 @@
     "retry": "다시 시도",
     "open_thread_failed": "이 스레드를 열 수 없습니다",
     "open_item_failed": "이 활동 항목을 열 수 없습니다",
+    "open_channel_failed": "이 채널을 열 수 없습니다",
+    "open_dm_failed": "이 다이렉트 메시지를 열 수 없습니다",
+    "open_in_main": "메시지에서 열기",
+    "channel_fallback": "채널",
     "empty": {
       "all": {
         "title": "아직 활동이 없습니다",

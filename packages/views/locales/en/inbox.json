@@ -82,6 +82,10 @@
     "retry": "Retry",
     "open_thread_failed": "Could not open this thread",
     "open_item_failed": "Could not open this activity item",
+    "open_channel_failed": "Could not open this channel",
+    "open_dm_failed": "Could not open this direct message",
+    "open_in_main": "Open in Messages",
+    "channel_fallback": "channel",
     "empty": {
       "all": {
         "title": "No activity yet",

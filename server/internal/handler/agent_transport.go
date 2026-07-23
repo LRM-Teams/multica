@@ -181,6 +181,17 @@ type agentTransportSource struct {
 	inboxEventID pgtype.UUID
 }
 
+func (h *Handler) agentTransportInitiatorUserID(r *http.Request, source agentTransportSource) (pgtype.UUID, bool) {
+	switch r.Header.Get("X-Actor-Source") {
+	case "task_token":
+		return h.agentTaskInitiatorUserID(r, source.origin.workspaceID)
+	case "agent_inbox_token", "agent_credential":
+		return h.agentInboxInitiatorUserID(r, source.origin.workspaceID)
+	default:
+		return pgtype.UUID{}, false
+	}
+}
+
 func (h *Handler) requireAgentTransportPublicResponseMode(ctx context.Context, source agentTransportSource) error {
 	if !source.inboxEventID.Valid {
 		return nil

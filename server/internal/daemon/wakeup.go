@@ -506,14 +506,17 @@ func (d *Daemon) handleDaemonAgentStop(payload protocol.DaemonAgentStopPayload) 
 }
 
 func (d *Daemon) handleDaemonAgentStart(payload protocol.DaemonAgentStartPayload) error {
-	if d == nil || d.reminderAgents == nil || !d.workspaceReminderCapabilityEnabled(payload.WorkspaceID) {
+	if d == nil || d.reminderAgents == nil {
 		return nil
 	}
+	// A server-originated owner frame is the capability proof. The registration
+	// response may predate a server upgrade, so only local runtime/workspace and
+	// placement-generation checks may reject this frame.
 	d.mu.Lock()
-	_, runtimeKnown := d.runtimeIndex[payload.RuntimeID]
+	runtime, runtimeKnown := d.runtimeIndex[payload.RuntimeID]
 	d.mu.Unlock()
-	if !runtimeKnown {
-		d.logger.Warn("daemon agent start rejected unknown local runtime", "agent_id", payload.AgentID, "runtime_id", payload.RuntimeID)
+	if !runtimeKnown || runtime.WorkspaceID != payload.WorkspaceID {
+		d.logger.Warn("daemon agent start rejected outside local runtime", "agent_id", payload.AgentID, "runtime_id", payload.RuntimeID, "workspace_id", payload.WorkspaceID)
 		return nil
 	}
 	changed, accepted, err := d.reminderAgents.applyStart(payload.AgentID, payload.RuntimeID, payload.WorkspaceID, payload.PlacementGeneration)
@@ -622,7 +625,7 @@ func (d *Daemon) queueReminderFrame(eventType string, payload any) bool {
 }
 
 func (d *Daemon) requestReminderSnapshot(agentID string) {
-	if strings.TrimSpace(agentID) == "" || !d.reminderCapabilityEnabled() {
+	if strings.TrimSpace(agentID) == "" {
 		return
 	}
 	owner, ok := d.reminderAgents.get(agentID)
@@ -655,9 +658,9 @@ func (d *Daemon) requestReminderSnapshotNow(agentID string, owner reminderAgentR
 }
 
 func (d *Daemon) requestAgentLifecycleReplay() bool {
-	if !d.reminderCapabilityEnabled() {
-		return true
-	}
+	// This is an attach-time protocol probe. Old servers intentionally ignore
+	// unknown application frames, while upgraded servers can recover a daemon
+	// whose cached registration capabilities are stale.
 	d.reminderGateMu.Lock()
 	if d.reminderLifecycleReplayInFlight || d.reminderProjectionReplayInFlight {
 		d.reminderGateMu.Unlock()
@@ -685,7 +688,7 @@ func (d *Daemon) requestAgentLifecycleReplay() bool {
 }
 
 func (d *Daemon) requestReminderSnapshots() {
-	if d.reminderAgents == nil || !d.reminderCapabilityEnabled() {
+	if d.reminderAgents == nil {
 		return
 	}
 	for _, agentID := range d.reminderAgents.residentAgentIDs() {
@@ -917,34 +920,6 @@ func (d *Daemon) onReminderTimer(job protocol.ReminderTimerJob) {
 		Version:             job.Version,
 		FiredAtClient:       time.Now().UTC().Format(time.RFC3339Nano),
 	})
-}
-
-func (d *Daemon) reminderCapabilityEnabled() bool {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	for _, ws := range d.workspaces {
-		for _, capability := range ws.serverCapabilities {
-			if capability == protocol.DaemonCapabilityReminderVersionedCache {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func (d *Daemon) workspaceReminderCapabilityEnabled(workspaceID string) bool {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	ws := d.workspaces[workspaceID]
-	if ws == nil {
-		return false
-	}
-	for _, capability := range ws.serverCapabilities {
-		if capability == protocol.DaemonCapabilityReminderVersionedCache {
-			return true
-		}
-	}
-	return false
 }
 
 func signalTaskWakeup(taskWakeups chan<- taskWakeup, runtimeID string) {

@@ -1355,7 +1355,7 @@ func TestReminderLifecyclePersistFailureRollsBackAndSendsNoAckOrSnapshot(t *test
 	}
 }
 
-func TestRestoredOwnerStartFromZeroResidentsRequestsSnapshotAndSchedulesTimer(t *testing.T) {
+func TestServerOriginatedOwnerStartBypassesStaleCapabilityCacheAndSchedulesTimer(t *testing.T) {
 	clock := &fakeReminderClock{now: time.Date(2026, 7, 22, 8, 0, 0, 0, time.UTC)}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	writes := make(chan []byte, 1)
@@ -1363,7 +1363,7 @@ func TestRestoredOwnerStartFromZeroResidentsRequestsSnapshotAndSchedulesTimer(t 
 	d := &Daemon{
 		logger: logger,
 		workspaces: map[string]*workspaceState{
-			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a"}, "", nil, nil, protocol.DaemonCapabilityReminderVersionedCache),
+			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a"}, "", nil, nil),
 		},
 		runtimeIndex:   map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
 		reminderAgents: newReminderAgentManager(t.TempDir(), logger),
@@ -1431,17 +1431,13 @@ func TestReminderGenZeroOwnerRecoversAckedProjectionsThroughLifecycleCheckpointS
 	d = &Daemon{
 		logger: logger,
 		workspaces: map[string]*workspaceState{
-			config.WorkspaceID: newWorkspaceState(config.WorkspaceID, []string{config.RuntimeID}, "", nil, nil, protocol.DaemonCapabilityReminderVersionedCache),
+			config.WorkspaceID: newWorkspaceState(config.WorkspaceID, []string{config.RuntimeID}, "", nil, nil),
 		},
 		runtimeIndex:   map[string]Runtime{config.RuntimeID: {ID: config.RuntimeID, WorkspaceID: config.WorkspaceID}},
 		reminderAgents: mgr,
 		reminderCache:  cache,
 	}
 	d.setReminderWS(writes, make(chan struct{}), func() error { return nil })
-	d.reminderGateMu.Lock()
-	d.reminderReplayComplete = true
-	d.reminderGateMu.Unlock()
-	cache.resume()
 
 	jobs := make([]protocol.ReminderTimerJob, 0, 6)
 	for seq := int64(1); seq <= 6; seq++ {
@@ -1473,6 +1469,19 @@ func TestReminderGenZeroOwnerRecoversAckedProjectionsThroughLifecycleCheckpointS
 	d.clearReminderWS(writes)
 	writes = make(chan []byte, 32)
 	d.setReminderWS(writes, make(chan struct{}), func() error { return nil })
+	if !d.requestAgentLifecycleReplay() {
+		t.Fatal("queue lifecycle protocol probe")
+	}
+	var lifecycleRequest protocol.Message
+	if err := json.Unmarshal(<-writes, &lifecycleRequest); err != nil {
+		t.Fatal(err)
+	}
+	var lifecycleReq protocol.DaemonAgentLifecycleRequestPayload
+	if lifecycleRequest.Type != protocol.EventDaemonAgentLifecycleReq ||
+		json.Unmarshal(lifecycleRequest.Payload, &lifecycleReq) != nil ||
+		lifecycleReq.RuntimeCursors[config.RuntimeID] != 0 {
+		t.Fatalf("lifecycle protocol probe=%+v payload=%s", lifecycleRequest, lifecycleRequest.Payload)
+	}
 	if err := d.handleDaemonAgentStart(protocol.DaemonAgentStartPayload{
 		AgentID: config.AgentID, RuntimeID: config.RuntimeID, WorkspaceID: config.WorkspaceID,
 		PlacementGeneration: 1, LifecycleSeq: 6, Replay: true,
@@ -1580,6 +1589,61 @@ func TestReminderGenZeroOwnerRecoversAckedProjectionsThroughLifecycleCheckpointS
 	}
 	if len(clock.timers) != 6 || len(writes) != 0 {
 		t.Fatalf("duplicate recovery timers/extra_frames=%d/%d", len(clock.timers), len(writes))
+	}
+}
+
+func TestReminderLifecycleProbeAgainstOldServerStaysFailClosedWithoutReconnect(t *testing.T) {
+	now := time.Date(2026, 7, 23, 10, 0, 0, 0, time.UTC)
+	clock := &fakeReminderClock{now: now}
+	var fired []protocol.ReminderTimerJob
+	cache := newReminderCache(clock, nil, func(job protocol.ReminderTimerJob) { fired = append(fired, job) })
+	if !cache.upsert(reminderJob("pre-connect", "agent-a", 1, now.Add(time.Minute))) {
+		t.Fatal("seed pre-connect timer")
+	}
+	writes := make(chan []byte, 4)
+	closed := 0
+	d := &Daemon{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		workspaces: map[string]*workspaceState{
+			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a"}, "", nil, nil),
+		},
+		runtimeIndex:   map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
+		reminderAgents: newReminderAgentManager(t.TempDir(), nil),
+		reminderCache:  cache,
+	}
+	d.setReminderWS(writes, make(chan struct{}), func() error { closed++; return nil })
+	if !d.requestAgentLifecycleReplay() {
+		t.Fatal("queue lifecycle protocol probe")
+	}
+	var probe protocol.Message
+	if err := json.Unmarshal(<-writes, &probe); err != nil {
+		t.Fatal(err)
+	}
+	if probe.Type != protocol.EventDaemonAgentLifecycleReq {
+		t.Fatalf("old-server protocol probe=%q", probe.Type)
+	}
+
+	// An old server ignores the unknown application frame. A later heartbeat
+	// must not queue duplicate probes while this connection remains attached,
+	// and the cache stays suspended with no timer or fire side effect.
+	d.requestAgentLifecycleReplay()
+	clock.fire(0)
+	if len(writes) != 0 || closed != 0 || len(fired) != 0 {
+		t.Fatalf("old-server probe frames/reconnects/fires=%d/%d/%d", len(writes), closed, len(fired))
+	}
+	cache.mu.Lock()
+	suspended := cache.suspended
+	entries := len(cache.entries)
+	cache.mu.Unlock()
+	if !suspended || entries != 0 {
+		t.Fatalf("old-server cache suspended=%v entries=%d", suspended, entries)
+	}
+	d.reminderGateMu.Lock()
+	inFlight := d.reminderLifecycleReplayInFlight
+	replayComplete := d.reminderReplayComplete
+	d.reminderGateMu.Unlock()
+	if !inFlight || replayComplete {
+		t.Fatalf("old-server lifecycle in_flight=%v replay_complete=%v", inFlight, replayComplete)
 	}
 }
 

@@ -1,6 +1,7 @@
 package turntransport
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -295,6 +296,40 @@ func TestBindRejectsEnvironmentOutsideExplicitAllowlist(t *testing.T) {
 	}
 	if _, err := os.Stat(transport.CurrentEnvelopePath()); !os.IsNotExist(err) {
 		t.Fatalf("current envelope after rejected bind error = %v, want not exist", err)
+	}
+}
+
+func TestApplyRejectsEnvelopeWhoseTaskDoesNotMatchTurn(t *testing.T) {
+	transport := mustPrepare(t)
+	binding, err := transport.Bind("turn-a", "token-a", map[string]string{
+		"MULTICA_TASK_ID": "turn-a",
+	})
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	current, err := readEnvelope(transport.CurrentEnvelopePath())
+	if err != nil {
+		t.Fatalf("readEnvelope: %v", err)
+	}
+	current.TurnID = "turn-b"
+	raw, err := json.Marshal(current)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if err := writeFileAtomic(transport.CurrentEnvelopePath(), raw, 0o600); err != nil {
+		t.Fatalf("write tampered envelope: %v", err)
+	}
+
+	t.Setenv(EnvelopePathEnv, transport.CurrentEnvelopePath())
+	t.Setenv("MULTICA_TASK_ID", "stale-task")
+	if err := ApplyFromEnvironment(); err == nil {
+		t.Fatal("ApplyFromEnvironment accepted mismatched turn/task identity")
+	}
+	if got := os.Getenv("MULTICA_TASK_ID"); got != "stale-task" {
+		t.Fatalf("failed apply mutated task id to %q", got)
+	}
+	if _, err := os.Stat(binding.TokenFile); err != nil {
+		t.Fatalf("token unexpectedly removed: %v", err)
 	}
 }
 

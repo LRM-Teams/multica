@@ -346,6 +346,9 @@ func ApplyFromEnvironment() error {
 	if err != nil {
 		return err
 	}
+	if turnEnv["MULTICA_TASK_ID"] != current.TurnID {
+		return fmt.Errorf("current-turn MULTICA_TASK_ID does not match turn_id")
+	}
 
 	for key := range turnEnvironmentKeys {
 		_ = os.Unsetenv(key)

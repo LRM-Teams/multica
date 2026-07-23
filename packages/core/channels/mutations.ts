@@ -66,9 +66,15 @@ export function useDeleteChannel() {
   const wsId = useWorkspaceId();
   return useMutation({
     mutationFn: (channelId: string) => api.deleteChannel(channelId),
-    // LRM-485 — hard delete must drop the row from Archived too (archived-list
-    // is a separate query key under channelKeys.all).
-    onSuccess: () => qc.invalidateQueries({ queryKey: channelKeys.all(wsId) }),
+    // LRM-485: hard-delete removes the row — drop active + archived caches
+    // immediately, then invalidate. Invalidate-only left ghosts until refetch.
+    onSuccess: (_data, channelId) => {
+      const drop = <T extends { id: string }>(prev: T[] | undefined) =>
+        prev ? prev.filter((c) => c.id !== channelId) : prev;
+      qc.setQueryData(channelKeys.list(wsId), drop);
+      qc.setQueryData(channelKeys.archivedList(wsId), drop);
+      qc.invalidateQueries({ queryKey: channelKeys.all(wsId) });
+    },
   });
 }
 

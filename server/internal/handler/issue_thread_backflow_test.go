@@ -275,6 +275,18 @@ func assertIssueThreadBackflowReference(t *testing.T, got issueThreadBackflowEve
 	}
 }
 
+func TestIssueThreadParamsFromPartsRejectsAggregatedItemsWithoutTitle(t *testing.T) {
+	raw := json.RawMessage(`{"issue_id":"i1","issue_identifier":"LRM-1","issue_status":"done","items":[{"issue_id":"i1","issue_identifier":"LRM-1","issue_status":"done"}]}`)
+	_, ok := issueThreadParamsFromParts([]protocol.MessagePart{{
+		Type:        protocol.MessagePartTypeSystemEvent,
+		Event:       issueThreadCompletedEvent,
+		EventParams: raw,
+	}}, issueThreadCompletedEvent)
+	if ok {
+		t.Fatal("aggregated event without issue_title was accepted; want rejected so new rows do not silently merge into legacy payloads")
+	}
+}
+
 func TestMergeIssueThreadAggregationParamsKeepsAllIssues(t *testing.T) {
 	existing := issueThreadSystemEventParams{
 		IssueID:         "a",
@@ -283,7 +295,7 @@ func TestMergeIssueThreadAggregationParamsKeepsAllIssues(t *testing.T) {
 		ActorID:         "actor-1",
 		ActorType:       "agent",
 		Items: []issueThreadSystemEventItem{{
-			IssueID: "a", IssueIdentifier: "LRM-1", IssueStatus: "done",
+			IssueID: "a", IssueIdentifier: "LRM-1", IssueTitle: "First issue", IssueStatus: "done",
 		}},
 	}
 	incoming := issueThreadSystemEventParams{
@@ -293,15 +305,15 @@ func TestMergeIssueThreadAggregationParamsKeepsAllIssues(t *testing.T) {
 		ActorID:         "actor-1",
 		ActorType:       "agent",
 		Items: []issueThreadSystemEventItem{{
-			IssueID: "b", IssueIdentifier: "LRM-2", IssueStatus: "done", PreviousStatus: "in_review",
+			IssueID: "b", IssueIdentifier: "LRM-2", IssueTitle: "Second issue", IssueStatus: "done", PreviousStatus: "in_review",
 		}},
 	}
 	merged := mergeIssueThreadAggregationParams(existing, incoming)
 	if len(merged.Items) != 2 {
 		t.Fatalf("items = %+v, want 2", merged.Items)
 	}
-	if merged.IssueID != "b" || merged.IssueIdentifier != "LRM-2" {
-		t.Fatalf("top-level = %#v, want latest issue b/LRM-2", merged)
+	if merged.IssueID != "b" || merged.IssueIdentifier != "LRM-2" || merged.IssueTitle != "Second issue" {
+		t.Fatalf("top-level = %#v, want latest issue b/LRM-2 with title", merged)
 	}
 	if merged.Items[0].IssueID != "a" || merged.Items[1].IssueID != "b" {
 		t.Fatalf("item order = %+v, want a then b", merged.Items)
@@ -310,7 +322,7 @@ func TestMergeIssueThreadAggregationParamsKeepsAllIssues(t *testing.T) {
 	// Same issue_id replaces in place (no silent duplicate / drop).
 	again := mergeIssueThreadAggregationParams(merged, issueThreadSystemEventParams{
 		Items: []issueThreadSystemEventItem{{
-			IssueID: "a", IssueIdentifier: "LRM-1", IssueStatus: "done", PreviousStatus: "todo",
+			IssueID: "a", IssueIdentifier: "LRM-1", IssueTitle: "First issue", IssueStatus: "done", PreviousStatus: "todo",
 		}},
 	})
 	if len(again.Items) != 2 {
@@ -371,8 +383,8 @@ func TestIssueThreadBackflowAggregatesCrossIssueCompletedWithinWindow(t *testing
 	seen := map[string]bool{}
 	for _, item := range got.Params.Items {
 		seen[item.IssueID] = true
-		if item.IssueStatus != "done" || item.IssueIdentifier == "" {
-			t.Fatalf("item = %+v, want done + identifier", item)
+		if item.IssueStatus != "done" || item.IssueIdentifier == "" || item.IssueTitle == "" {
+			t.Fatalf("item = %+v, want done + identifier + title", item)
 		}
 		if item.OccurredAt == "" {
 			t.Fatalf("item = %+v, want occurred_at for FE expansion contract", item)
@@ -387,8 +399,8 @@ func TestIssueThreadBackflowAggregatesCrossIssueCompletedWithinWindow(t *testing
 	if got.Params.IssueID != issueC {
 		t.Fatalf("top-level issue_id = %s, want latest %s", got.Params.IssueID, issueC)
 	}
-	if !strings.Contains(got.Content, "completed") {
-		t.Fatalf("content = %q, want completed summary", got.Content)
+	if !strings.Contains(got.Content, "agg A") || !strings.Contains(got.Content, "completed") {
+		t.Fatalf("content = %q, want title-first completed summary", got.Content)
 	}
 }
 
@@ -499,5 +511,10 @@ func TestIssueThreadBackflowAggregatesAssigneeAcrossIssues(t *testing.T) {
 	}
 	if len(assigned[0].Params.Items) != 2 {
 		t.Fatalf("assigned items = %+v, want 2", assigned[0].Params.Items)
+	}
+	for _, item := range assigned[0].Params.Items {
+		if item.IssueTitle == "" {
+			t.Fatalf("assigned item = %+v, want issue_title", item)
+		}
 	}
 }

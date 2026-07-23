@@ -20,10 +20,11 @@ import { useMarkChannelThreadRead } from "@multica/core/channels/mutations";
 import type { InboxItem, UserActivityItem, UserActivityTab } from "@multica/core/types";
 
 import { IssueDetail } from "../../issues/components";
+import { ChannelsPage } from "../../channels";
 import { ErrorBoundary } from "@multica/ui/components/common/error-boundary";
 import { useNavigation } from "../../navigation";
 import { toast } from "sonner";
-import { Activity, Archive, ArrowLeft } from "lucide-react";
+import { Activity, Archive, ArrowLeft, ExternalLink } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   ResizablePanelGroup,
@@ -38,6 +39,12 @@ import { useTypeLabels } from "./inbox-detail-label";
 import { getInboxDisplayTitle } from "./inbox-display";
 import { ActivityListRow } from "./activity-list-row";
 import { ActivityTabs, ActivityEmptyState } from "./activity-tabs";
+import {
+  activitySelectionKey,
+  activitySessionParams,
+  activitySessionUrl,
+  resolveActivitySessionSurface,
+} from "./activity-session";
 import { useT } from "../../i18n";
 import { MobileListDetailLayout } from "../../common/mobile-list-detail-layout";
 
@@ -45,36 +52,19 @@ function inboxItemFromActivity(item: UserActivityItem): InboxItem | null {
   return item.kind === "inbox" ? item.inbox ?? null : null;
 }
 
-function activitySelectionKey(item: UserActivityItem): string {
-  if (item.kind === "inbox") {
-    const inbox = item.inbox;
-    return inbox?.issue_id ?? inbox?.id ?? item.id;
-  }
-  return item.id;
-}
-
 function parseActivityTab(raw: string | null): UserActivityTab {
   if (raw === "unread" || raw === "mentions") return raw;
   return "all";
-}
-
-function inboxActivityUrl(
-  inboxPath: string,
-  params: { tab?: UserActivityTab; issue?: string },
-): string {
-  const search = new URLSearchParams();
-  if (params.tab && params.tab !== "all") search.set("tab", params.tab);
-  if (params.issue) search.set("issue", params.issue);
-  const qs = search.toString();
-  return qs ? `${inboxPath}?${qs}` : inboxPath;
 }
 
 export function InboxPage() {
   const { t } = useT("inbox");
   const { searchParams, replace, push } = useNavigation();
   const urlIssue = searchParams.get("issue") ?? "";
+  const urlChannel = searchParams.get("channel") ?? "";
+  const urlThread = searchParams.get("thread") ?? "";
+  const urlMessage = searchParams.get("message") ?? "";
   const tab = parseActivityTab(searchParams.get("tab"));
-  const selectedKey = urlIssue;
   const wsPaths = useWorkspacePaths();
   const inboxPath = wsPaths.inbox();
 
@@ -88,39 +78,74 @@ export function InboxPage() {
   } = useQuery(userActivityListOptions(wsId, tab));
   const items = activityData?.items ?? [];
 
-  const selectedItem =
-    items.find((item) => activitySelectionKey(item) === selectedKey) ?? null;
+  const selectedKey = urlIssue || urlThread || urlMessage;
+  const selectedItem = selectedKey
+    ? (items.find((item) => activitySelectionKey(item) === selectedKey) ?? null)
+    : null;
   const selectedInbox = selectedItem ? inboxItemFromActivity(selectedItem) : null;
+  const selectedThread =
+    selectedItem?.kind === "thread" ? selectedItem : null;
+  const sessionSurface = selectedThread
+    ? resolveActivitySessionSurface(selectedThread)
+    : null;
 
   const lastResolvedKeyRef = useRef<string>("");
   useEffect(() => {
-    if (selectedInbox) lastResolvedKeyRef.current = selectedKey;
-  }, [selectedInbox, selectedKey]);
+    if (selectedInbox || selectedThread) lastResolvedKeyRef.current = selectedKey;
+  }, [selectedInbox, selectedThread, selectedKey]);
 
-  const setSelectedKey = useCallback(
-    (key: string) => {
-      replace(inboxActivityUrl(inboxPath, { tab, issue: key || undefined }));
+  const replaceActivityUrl = useCallback(
+    (params: Parameters<typeof activitySessionUrl>[1]) => {
+      replace(activitySessionUrl(inboxPath, { ...params, tab }));
     },
     [replace, inboxPath, tab],
   );
 
+  const clearSelection = useCallback(() => {
+    replaceActivityUrl(tab !== "all" ? { tab } : {});
+  }, [replaceActivityUrl, tab]);
+
   const setTab = useCallback(
     (next: UserActivityTab) => {
-      replace(inboxActivityUrl(inboxPath, { tab: next, issue: urlIssue || undefined }));
+      replace(
+        activitySessionUrl(inboxPath, {
+          tab: next,
+          issue: urlIssue || undefined,
+          channel: urlChannel || undefined,
+          thread: urlThread || undefined,
+          message: urlMessage || undefined,
+        }),
+      );
     },
-    [replace, inboxPath, urlIssue],
+    [replace, inboxPath, urlIssue, urlChannel, urlThread, urlMessage],
   );
 
   useEffect(() => {
     if (loading) return;
     if (!selectedKey) return;
-    if (selectedInbox) return;
+    if (selectedInbox || selectedThread) return;
     if (lastResolvedKeyRef.current === selectedKey) {
-      setSelectedKey("");
+      clearSelection();
       return;
     }
-    replace(wsPaths.issueDetail(selectedKey));
-  }, [loading, selectedKey, selectedInbox, replace, wsPaths, setSelectedKey]);
+    // Legacy deep-link: bare issue id that is not in the Activity feed →
+    // open the issue route. Do not silently invent a session pane (LRM-238).
+    if (urlIssue && !urlChannel) {
+      replace(wsPaths.issueDetail(urlIssue));
+      return;
+    }
+    clearSelection();
+  }, [
+    loading,
+    selectedKey,
+    selectedInbox,
+    selectedThread,
+    clearSelection,
+    replace,
+    wsPaths,
+    urlIssue,
+    urlChannel,
+  ]);
 
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
     id: "multica_inbox_layout",
@@ -178,7 +203,7 @@ export function InboxPage() {
           },
         );
       }
-      push(`${wsPaths.channelDetail(channelId)}?thread=${encodeURIComponent(rootId)}`);
+      replaceActivityUrl(activitySessionParams(item, tab));
       return;
     }
 
@@ -187,12 +212,12 @@ export function InboxPage() {
       toast.error(t(($) => $.activity.open_item_failed));
       return;
     }
-    setSelectedKey(inbox.issue_id ?? inbox.id);
+    replaceActivityUrl(activitySessionParams(item, tab));
   };
 
   const handleArchive = (id: string) => {
     if (selectedInbox && selectedInbox.id === id) {
-      setSelectedKey("");
+      clearSelection();
     }
     archiveMutation.mutate(id, {
       onError: (err) =>
@@ -214,6 +239,21 @@ export function InboxPage() {
         ),
     });
   };
+
+  const openInChannels = useCallback(
+    (opts: { channelId: string; messageId?: string; threadId?: string }) => {
+      const search = new URLSearchParams();
+      if (opts.threadId) search.set("thread", opts.threadId);
+      if (opts.messageId) search.set("message", opts.messageId);
+      const qs = search.toString();
+      push(
+        qs
+          ? `${wsPaths.channelDetail(opts.channelId)}?${qs}`
+          : wsPaths.channelDetail(opts.channelId),
+      );
+    },
+    [push, wsPaths],
+  );
 
   const listHeader = (
     <>
@@ -265,7 +305,56 @@ export function InboxPage() {
     </div>
   );
 
-  const detailContent = selectedInbox?.issue_id ? (
+  const sessionChannelId =
+    selectedThread?.channel_id ?? (urlChannel || null);
+
+  const sessionDetail =
+    selectedThread && sessionChannelId && sessionSurface ? (
+      <ErrorBoundary
+        resetKeys={[sessionChannelId, urlThread, urlMessage, sessionSurface]}
+      >
+        <div className="flex h-full min-h-0 flex-col" data-testid="activity-session-pane">
+          {sessionSurface === "channel" ? (
+            <div className="flex h-10 shrink-0 items-center justify-between gap-2 border-b px-3">
+              <span className="truncate text-sm font-semibold">
+                {selectedThread.channel_name
+                  ? `#${selectedThread.channel_name}`
+                  : t(($) => $.page.title)}
+              </span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-8 shrink-0 gap-1.5 px-2 text-xs text-brand hover:text-brand"
+                onClick={() =>
+                  openInChannels({
+                    channelId: sessionChannelId,
+                    messageId: urlMessage || selectedThread.id,
+                  })
+                }
+              >
+                <ExternalLink className="size-3.5" aria-hidden />
+                {t(($) => $.activity.open_in_channels)}
+              </Button>
+            </div>
+          ) : null}
+          <div className="min-h-0 flex-1">
+            <ChannelsPage
+              channelId={sessionChannelId}
+              embedded
+              embeddedSurface={
+                sessionSurface === "dm" ? undefined : sessionSurface
+              }
+              onOpenInChannels={openInChannels}
+            />
+          </div>
+        </div>
+      </ErrorBoundary>
+    ) : null;
+
+  const detailContent = sessionDetail ? (
+    sessionDetail
+  ) : selectedInbox?.issue_id ? (
     <ErrorBoundary resetKeys={[selectedInbox.issue_id]}>
       <IssueDetail
         key={selectedInbox.issue_id}
@@ -274,7 +363,7 @@ export function InboxPage() {
         layoutId="multica_inbox_issue_detail_layout"
         highlightCommentId={selectedInbox.details?.comment_id ?? undefined}
         onDelete={() => {
-          setSelectedKey("");
+          clearSelection();
         }}
         onDone={() => {
           if (selectedInbox) handleArchive(selectedInbox.id);
@@ -334,6 +423,8 @@ export function InboxPage() {
     </div>
   ) : null;
 
+  const hasDetail = !!(selectedInbox || selectedThread);
+
   if (isMobile) {
     if (loading) {
       return (
@@ -358,7 +449,7 @@ export function InboxPage() {
 
     return (
       <MobileListDetailLayout
-        showDetail={!!selectedInbox}
+        showDetail={hasDetail}
         list={
           <>
             {listHeader}
@@ -371,14 +462,14 @@ export function InboxPage() {
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => setSelectedKey("")}
+                onClick={clearSelection}
                 className="gap-1.5 text-muted-foreground"
               >
                 <ArrowLeft className="h-4 w-4" />
                 {t(($) => $.page.back)}
               </Button>
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto">{detailContent}</div>
+            <div className="min-h-0 flex-1 overflow-hidden">{detailContent}</div>
           </>
         }
       />

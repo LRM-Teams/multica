@@ -21,7 +21,7 @@
     }
   },
   "detail": {
-    "select_prompt": "詳細を表示する通知を選択してください",
+    "select_prompt": "左からアクティビティを選択",
     "empty": "インボックスは空です",
     "original_input": "元の入力",
     "edit_advanced": "詳細フォームで編集",
@@ -82,6 +82,7 @@
     "retry": "再試行",
     "open_thread_failed": "このスレッドを開けませんでした",
     "open_item_failed": "このアクティビティを開けませんでした",
+    "open_in_channels": "チャンネルで開く",
     "empty": {
       "all": {
         "title": "アクティビティはまだありません",

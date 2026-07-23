@@ -23,6 +23,8 @@ only through the transcript control.
 - [x] Ran the full `@multica/views` Vitest suite: 246 files passed, 2414 tests
   passed, and 5 tests were skipped by their existing conditions.
 - [x] Ran `pnpm --filter @multica/views typecheck` and `git diff --check`.
+- [x] Pushed `fix/voice-thread-root-preview` and opened ready-for-review PR #967
+  into `dev`: <https://github.com/LRM-Teams/multica/pull/967>.
 
 ## Boundaries
 

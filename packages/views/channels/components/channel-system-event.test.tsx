@@ -19,11 +19,23 @@ import {
   ReminderSystemEventContent,
 } from "./channel-system-event-content";
 
-const mockAgents = [{ id: "agent-9", handle: "nova" }];
-const mockMembers = [
-  { user_id: "user-1", handle: "frank" },
-  { user_id: "user-2", handle: "wendy" },
+const mockAgents = [
+  { id: "agent-9", handle: "nova", display_name: "nova" },
+  { id: "agent-be", handle: "hou-duan", display_name: "后端工程师" },
+  { id: "agent-fe", handle: "qian-duan", display_name: "前端工程师" },
 ];
+const mockMembers = [
+  { user_id: "user-1", handle: "frank", display_name: "frank" },
+  { user_id: "user-2", handle: "wendy", display_name: "wendy" },
+];
+const mockProfiles: Record<string, { display_name: string; name: string; member_type: string; member_id: string }> = {
+  "agent-beckham": {
+    member_type: "agent",
+    member_id: "agent-beckham",
+    name: "bei-ke-han-mu-11",
+    display_name: "贝克汉姆",
+  },
+};
 
 const openPanelMock = vi.fn<(id: string) => void>();
 
@@ -32,12 +44,30 @@ vi.mock("@multica/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
 vi.mock("@multica/core/workspace/queries", () => ({
   agentListOptions: () => ({ queryKey: ["agents"] }),
   memberListOptions: () => ({ queryKey: ["members"] }),
+  memberProfileOptions: (_wsId: string, type: string, id: string) => ({
+    queryKey: ["workspaces", "ws-1", "member-profiles", type, id],
+    enabled: !!id,
+  }),
 }));
 
 vi.mock("@tanstack/react-query", () => ({
-  useQuery: (opts: { queryKey: string[] }) => ({
-    data: opts.queryKey[0] === "agents" ? mockAgents : mockMembers,
-  }),
+  useQuery: (opts: { queryKey: readonly unknown[] }) => {
+    const key = opts.queryKey as string[];
+    // workspaceKeys.* → ["workspaces", wsId, "agents"|"members"|...]
+    if (key[0] === "agents" || key[2] === "agents") {
+      return { data: mockAgents, isPending: false, isError: false };
+    }
+    if (key[0] === "members" || key[2] === "members") {
+      return { data: mockMembers, isPending: false, isError: false };
+    }
+    if (key[2] === "member-profiles") {
+      const id = key[4];
+      if (!id) return { data: undefined, isPending: false, isError: false };
+      const profile = mockProfiles[id];
+      return { data: profile, isPending: false, isError: !profile };
+    }
+    return { data: undefined, isPending: false, isError: false };
+  },
 }));
 
 vi.mock("@multica/core/identity", () => ({
@@ -55,6 +85,8 @@ vi.mock("../../common/agent-panel-context", () => ({
 vi.mock("@multica/core/agents/stores", () => ({
   useAgentPanelStore: (selector: (s: { open: (id: string) => void }) => unknown) =>
     selector({ open: openPanelMock }),
+  useAgentXpBurstStore: (selector: (s: { bursts: Record<string, never> }) => unknown) =>
+    selector({ bursts: {} }),
 }));
 
 // System rows render actors through the ordinary @mention component (#603),
@@ -119,21 +151,24 @@ vi.mock("../../navigation/context", () => ({
   useOptionalNavigation: () => ({ pathname: "/ws/channels", searchParams: new URLSearchParams() }),
 }));
 
-// Issue rows resolve the actor/assignee display name from the identity cache.
+// Issue rows resolve the actor/assignee display name from the identity cache
+// or member-profile API (LRM-281) — never emit-time name fallbacks.
 vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({
-    // Mirrors the real resolver's priority: a cache hit (by id, across both
-    // agents and members) wins over whatever display-name fallback the
-    // caller passed in; "agent-be" is an Issue-test-only fixture that's
-    // deliberately absent from mockAgents so it always falls through to the
-    // caller-supplied fallback.
-    getActorName: (_type: string, id: string, fallback?: string) => {
-      if (id === "agent-be") return "后端工程师";
-      const agent = mockAgents.find((a) => a.id === id);
-      if (agent) return agent.handle;
-      const member = mockMembers.find((m) => m.user_id === id);
-      if (member) return member.handle;
-      return fallback ?? "Someone";
+    getActorName: (type: string, id: string, fallback?: string) => {
+      // Respect type the same way production getActorName does — a member probe
+      // must not resolve an agent id (and vice versa), or untyped rows mis-tag.
+      if (type === "agent") {
+        const agent = mockAgents.find((a) => a.id === id);
+        if (agent) return agent.display_name || agent.handle;
+        return fallback ?? "Unknown Agent";
+      }
+      if (type === "member") {
+        const member = mockMembers.find((m) => m.user_id === id);
+        if (member) return member.display_name || member.handle;
+        return fallback ?? "Unknown";
+      }
+      return fallback ?? "Unknown";
     },
   }),
 }));
@@ -145,12 +180,14 @@ vi.mock("../../i18n/use-t", () => ({
         message: {
           system_event: {
             member_added: "{target} was added to this channel by {actor}",
+            member_added_no_actor: "{target} joined this channel",
             member_removed: "{target} was removed from this channel by {actor}",
+            member_removed_no_actor: "{target} was removed from this channel",
             member_left: "{target} left this channel",
             issue: {
               actor_system: "Multica",
               created: "{actor} 创建了 Issue {issue}",
-              assigned: "{actor} 将 Issue {issue} 指派给 {{target}}",
+              assigned: "{actor} 将 Issue {issue} 指派给 {target}",
               assigned_unknown: "{actor} 重新指派了 Issue {issue}",
               in_progress: "{actor} 将 Issue {issue} 标记为处理中",
               in_review: "{actor} 将 Issue {issue} 提交审核",
@@ -287,6 +324,26 @@ describe("parseMemberSystemEvent", () => {
       parseMemberSystemEvent(systemMessage({ event: "channel_member_added", params: { actor_id: "user-1" } })),
     ).toBeNull();
   });
+
+  it("extracts `source` for an actor-less system-maintained row (#661)", () => {
+    const event = parseMemberSystemEvent(
+      systemMessage({
+        event: "channel_member_added",
+        params: { target_id: "user-2", source: "system_invariant" },
+      }),
+    );
+    expect(event).toMatchObject({ source: "system_invariant", actorId: undefined });
+  });
+
+  it("leaves `source` undefined for an older row that predates the field", () => {
+    const event = parseMemberSystemEvent(
+      systemMessage({
+        event: "channel_member_added",
+        params: { actor_id: "user-1", target_id: "user-2" },
+      }),
+    );
+    expect(event).toMatchObject({ source: undefined });
+  });
 });
 
 describe("MemberSystemEventContent", () => {
@@ -324,12 +381,13 @@ describe("MemberSystemEventContent", () => {
   });
 
   it("degrades an unresolved actor to plain, non-interactive text", () => {
+    // No type + not in directory/profile → honest id label, never emit-time name (LRM-281).
     render(
       <MemberSystemEventContent
         event={{ event: "channel_member_left", targetId: "ghost-x", targetName: "Ghost" }}
       />,
     );
-    expect(document.body.textContent).toBe("@Ghost left this channel");
+    expect(document.body.textContent).toBe("@ghost-x left this channel");
     expect(screen.queryByTestId("actor-token")).toBeNull();
   });
 
@@ -341,10 +399,9 @@ describe("MemberSystemEventContent", () => {
     expect(screen.getAllByTestId("actor-token")).toHaveLength(1);
   });
 
-  it("uses the #456 fact layer so a removed member no longer in the cache stays clickable", () => {
-    // ghost-x is NOT in mockAgents/mockMembers — the bridge path would degrade it
-    // to plain text. With target_type/handle from the fact layer it stays a
-    // clickable member token.
+  it("keeps typed fact-layer members clickable when directory/profile miss (no name fallback)", () => {
+    // ghost-x is NOT in mockAgents/mockMembers/profiles. Typed fact keeps the
+    // mention clickable; display uses the id until profile resolves (LRM-281).
     render(
       <MemberSystemEventContent
         event={{
@@ -356,7 +413,8 @@ describe("MemberSystemEventContent", () => {
         }}
       />,
     );
-    expect(document.body.textContent).toBe("@ghost left this channel");
+    expect(document.body.textContent).toBe("@ghost-x left this channel");
+    expect(document.body.textContent).not.toContain("Ghost");
     const token = screen.getByTestId("actor-token");
     expect(token).toHaveAttribute("data-member-type", "member");
     expect(token).toHaveAttribute("data-member-id", "ghost-x");
@@ -377,6 +435,47 @@ describe("MemberSystemEventContent", () => {
     expect(token).toHaveAttribute("data-member-type", "agent");
     fireEvent.click(token);
     expect(openPanelMock).toHaveBeenCalledWith("agent-x");
+  });
+
+  it("drops the dangling 'by' clause for an actor-less system-maintained add (#661)", () => {
+    render(
+      <MemberSystemEventContent
+        event={{
+          event: "channel_member_added",
+          targetId: "user-2",
+          source: "system_invariant",
+        }}
+      />,
+    );
+    expect(document.body.textContent).toBe("@wendy joined this channel");
+    expect(screen.getAllByTestId("actor-token")).toHaveLength(1);
+  });
+
+  it("drops the dangling 'by' clause for an actor-less removal, and never says 'left' (#661)", () => {
+    render(
+      <MemberSystemEventContent
+        event={{
+          event: "channel_member_removed",
+          targetId: "user-2",
+          source: "system_invariant",
+        }}
+      />,
+    );
+    expect(document.body.textContent).toBe("@wendy was removed from this channel");
+    expect(document.body.textContent).not.toContain("left");
+  });
+
+  it("still uses the manual template when a real actor is present, even without `source` (old rows)", () => {
+    render(
+      <MemberSystemEventContent
+        event={{
+          event: "channel_member_added",
+          actorId: "user-1",
+          targetId: "user-2",
+        }}
+      />,
+    );
+    expect(document.body.textContent).toBe("@wendy was added to this channel by @frank");
   });
 });
 
@@ -399,6 +498,8 @@ describe("parseIssueSystemEvent", () => {
         previous_status: "todo",
         actor_id: "agent-be",
         actor_type: "agent",
+        actor_handle: "bei-duan",
+        actor_name: "后端工程师",
       }),
     );
     expect(event).toMatchObject({
@@ -409,6 +510,8 @@ describe("parseIssueSystemEvent", () => {
       previousStatus: "todo",
       actorId: "agent-be",
       actorType: "agent",
+      actorHandle: "bei-duan",
+      actorName: "后端工程师",
     });
   });
 
@@ -628,6 +731,8 @@ describe("foldedIssueEventIds", () => {
 });
 
 describe("IssueSystemEventContent", () => {
+  beforeEach(() => openPanelMock.mockClear());
+
   const inProgressEvent: IssueSystemEvent = {
     event: "issue_status_changed",
     issueId: "issue-uuid",
@@ -685,7 +790,7 @@ describe("IssueSystemEventContent", () => {
     expect(text).not.toContain("triaging_v2");
   });
 
-  it("names the assignee for an assignment, still with only the ref linked", () => {
+  it("renders assignee as a clickable @mention, with issue ref still its own link (LRM-306)", () => {
     render(
       <IssueSystemEventContent
         event={{
@@ -701,10 +806,102 @@ describe("IssueSystemEventContent", () => {
         }}
       />,
     );
-    expect(document.body.textContent).toBe("@后端工程师 将 Issue LRM-137 指派给 wendy");
+    expect(document.body.textContent).toBe("@后端工程师 将 Issue LRM-137 指派给 @wendy");
+    // Issue ref stays its own <a>; actor + assignee are ActorMention tokens.
     const links = document.querySelectorAll("a");
     expect(links).toHaveLength(1);
     expect(links[0]).toHaveTextContent("LRM-137");
+    expect(links[0]).toHaveAttribute("data-issue-ref", "");
+    const tokens = screen.getAllByTestId("actor-token");
+    expect(tokens).toHaveLength(2);
+    expect(tokens[0]).toHaveAttribute("data-member-type", "agent");
+    expect(tokens[0]).toHaveAttribute("data-member-id", "agent-be");
+    expect(tokens[0]).toHaveTextContent("@后端工程师");
+    expect(tokens[1]).toHaveAttribute("data-member-type", "member");
+    expect(tokens[1]).toHaveAttribute("data-member-id", "user-2");
+    expect(tokens[1]).toHaveTextContent("@wendy");
+  });
+
+  it("resolves group-manager actors via member-profile (DB), not emit-time actor_name", () => {
+    // 贝克汉姆 is a group manager — ListAgents hides them (LRM-233). LRM-281 /
+    // LRM-238 forbid actor_name fallback; the FE must fetch /member-profiles.
+    render(
+      <IssueSystemEventContent
+        event={{
+          event: "issue_assigned",
+          issueId: "issue-uuid",
+          issueIdentifier: "LRM-268",
+          issueStatus: "todo",
+          actorId: "agent-beckham",
+          actorType: "agent",
+          // Deliberately wrong emit-time names — must not be used.
+          actorName: "SHOULD_NOT_APPEAR",
+          actorHandle: "should-not-appear",
+          targetId: "agent-fe",
+          targetType: "agent",
+          targetName: "ALSO_WRONG",
+        }}
+      />,
+    );
+    expect(document.body.textContent).toBe("@贝克汉姆 将 Issue LRM-268 指派给 @前端工程师");
+    expect(document.body.textContent).not.toContain("Unknown Agent");
+    expect(document.body.textContent).not.toContain("SHOULD_NOT_APPEAR");
+    expect(document.body.textContent).not.toContain("ALSO_WRONG");
+    const tokens = screen.getAllByTestId("actor-token");
+    expect(tokens).toHaveLength(2);
+    const assigneeToken = tokens[1]!;
+    expect(assigneeToken).toHaveAttribute("data-member-type", "agent");
+    expect(assigneeToken).toHaveAttribute("data-member-id", "agent-fe");
+    fireEvent.click(assigneeToken);
+    expect(openPanelMock).toHaveBeenCalledWith("agent-fe");
+  });
+
+  it("uses assigned_unknown when typed target facts are missing (LRM-306 / LRM-238)", () => {
+    render(
+      <IssueSystemEventContent
+        event={{
+          event: "issue_assigned",
+          issueId: "issue-uuid",
+          issueIdentifier: "LRM-137",
+          issueStatus: "todo",
+          actorId: "agent-be",
+          actorType: "agent",
+          // No targetId / targetType — never invent a clickable identity.
+          targetName: "Wendy",
+        }}
+      />,
+    );
+    expect(document.body.textContent).toBe("@后端工程师 重新指派了 Issue LRM-137");
+    expect(document.body.textContent).not.toContain("Wendy");
+    expect(document.body.textContent).not.toContain("@wendy");
+    const tokens = screen.getAllByTestId("actor-token");
+    expect(tokens).toHaveLength(1);
+    expect(tokens[0]).toHaveAttribute("data-member-id", "agent-be");
+  });
+
+  it("keeps a typed assignee clickable when directory/profile miss (no name fallback)", () => {
+    render(
+      <IssueSystemEventContent
+        event={{
+          event: "issue_assigned",
+          issueId: "issue-uuid",
+          issueIdentifier: "LRM-137",
+          issueStatus: "todo",
+          actorId: "agent-be",
+          actorType: "agent",
+          targetId: "ghost-x",
+          targetType: "human",
+          targetHandle: "ghost",
+          targetName: "Ghost",
+        }}
+      />,
+    );
+    expect(document.body.textContent).toBe("@后端工程师 将 Issue LRM-137 指派给 @ghost-x");
+    expect(document.body.textContent).not.toContain("Ghost");
+    const tokens = screen.getAllByTestId("actor-token");
+    expect(tokens).toHaveLength(2);
+    expect(tokens[1]).toHaveAttribute("data-member-type", "member");
+    expect(tokens[1]).toHaveAttribute("data-member-id", "ghost-x");
   });
 
   it("renders issue_created as a fixed verb with the ref as the SOLE link (#610)", () => {
@@ -801,7 +998,7 @@ describe("ProjectSystemEventContent", () => {
     expect(document.querySelectorAll("a")).toHaveLength(0);
   });
 
-  it("uses the backend actor display name on a cache miss — no bare handle leak", () => {
+  it("does not use emit-time actor_name on directory/profile miss (LRM-281)", () => {
     render(
       <ProjectSystemEventContent
         event={{
@@ -814,7 +1011,8 @@ describe("ProjectSystemEventContent", () => {
         }}
       />,
     );
-    expect(document.body.textContent).toBe("@Lin 把本群关联到项目「Q3 Roadmap」");
+    expect(document.body.textContent).toBe("@ghost-x 把本群关联到项目「Q3 Roadmap」");
+    expect(document.body.textContent).not.toContain("Lin");
   });
 });
 

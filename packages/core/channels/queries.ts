@@ -64,7 +64,13 @@ export function archivedChannelsOptions(wsId: string) {
 export function channelMessagesOptions(channelId: string) {
   return queryOptions({
     queryKey: channelKeys.messages(channelId),
-    queryFn: () => api.listChannelMessages(channelId),
+    queryFn: async ({ client, queryKey }) => {
+      const incoming = await api.listChannelMessages(channelId);
+      // Refetch must not wipe in-flight / failed optimistic bubbles (LRM-280).
+      if (!client) return incoming;
+      const previous = client.getQueryData<ChannelMessage[]>(queryKey);
+      return preserveLocalSendMessages(previous, incoming);
+    },
     enabled: !!channelId,
   });
 }
@@ -94,13 +100,23 @@ export function channelMessagesPageOptions(
   const aroundSeq = options.aroundSeq ?? null;
   return infiniteQueryOptions({
     queryKey: channelKeys.messagesPage(channelId),
-    queryFn: ({ pageParam }) =>
-      api.listChannelMessagesPage(
+    queryFn: async ({ pageParam, client, queryKey }) => {
+      const page = await api.listChannelMessagesPage(
         channelId,
         isAroundPageParam(pageParam)
           ? { around: pageParam.around, limit }
           : { before: pageParam, limit },
-      ),
+      );
+      // Optimistic sends live on the latest window (page 0). Older-history pages
+      // must not re-attach them (LRM-280).
+      const isLatestWindow = pageParam == null || isAroundPageParam(pageParam);
+      if (!isLatestWindow || !client) return page;
+      const previous = client.getQueryData<InfiniteData<ChannelMessagesPage>>(queryKey);
+      return {
+        ...page,
+        messages: preserveLocalSendMessages(previous?.pages[0]?.messages, page.messages),
+      };
+    },
     // `around_seq` anchors ONLY the cold first fetch: `initialPageParam` is used
     // only when there is no cached data, so reopening a channel (a cache hit
     // under staleTime:Infinity) reuses the existing window and never
@@ -121,7 +137,38 @@ export function channelMessagesPageOptions(
 }
 
 export function flattenChannelMessagePages(data?: InfiniteData<ChannelMessagesPage>): ChannelMessage[] {
-  return data ? [...data.pages].reverse().flatMap((page) => page.messages) : [];
+  const flat = data
+    ? [...data.pages].reverse().flatMap((page) => page.messages ?? []).filter(Boolean)
+    : [];
+  return enrichChannelMessagesPreservingAvatars(flat);
+}
+
+/**
+ * Backfill `author_avatar_url` across a read-model list (API refetch / flatten)
+ * using the same preserve/sibling rules as WS upserts. Refetches and list
+ * payloads that omit avatars must not regress bubbles to glyph placeholders
+ * when an earlier row or optimistic ACK already had the face (LRM-218).
+ *
+ * Soft-deleted tombstones (`deleted_at` set) MUST stay in the list — do not
+ * reuse WS upsert's shouldRender filter, which drops them.
+ */
+export function enrichChannelMessagesPreservingAvatars(
+  messages: readonly ChannelMessage[],
+): ChannelMessage[] {
+  const out: ChannelMessage[] = [];
+  for (const message of messages) {
+    // List/refetch pages (and some test fixtures) can include sparse holes.
+    if (!message) continue;
+    const existing = out.find((m) => matchesChannelMessage(m, message));
+    const enriched = withPreservedAuthorAvatar(message, existing, out);
+    if (existing) {
+      const idx = out.findIndex((m) => matchesChannelMessage(m, message));
+      out[idx] = enriched;
+    } else {
+      out.push(enriched);
+    }
+  }
+  return out;
 }
 
 // Virtuoso needs a stable, monotonically-decreasing `firstItemIndex` to prepend
@@ -138,9 +185,43 @@ export function channelMessagesFirstItemIndex(data: InfiniteData<ChannelMessages
   return CHANNEL_MESSAGES_VIRTUOSO_BASE_INDEX - olderCount;
 }
 
+function isLocalSendRow(message: ChannelMessage): boolean {
+  return message.local_send_status === "pending" || message.local_send_status === "failed";
+}
+
+/**
+ * Keep client-only pending/failed bubbles across list/thread refetches.
+ *
+ * `invalidateChannelMessages` / reaction / thread-send side effects replace the
+ * cache with server pages. Without this merge, an in-flight send disappears; if
+ * HTTP then errors, `markOptimisticChannelMessageFailed` has no row to patch and
+ * the message is silently lost (LRM-280).
+ */
+export function preserveLocalSendMessages(
+  previous: readonly ChannelMessage[] | undefined,
+  incoming: ChannelMessage[],
+): ChannelMessage[] {
+  if (!previous?.length) return incoming;
+  const orphans: ChannelMessage[] = [];
+  for (const row of previous) {
+    if (!isLocalSendRow(row)) continue;
+    const clientId = row.client_message_id;
+    const onServer = incoming.some(
+      (m) =>
+        m.id === row.id ||
+        (!!clientId && (m.client_message_id === clientId || m.id === clientId)),
+    );
+    if (!onServer) orphans.push(row);
+  }
+  if (!orphans.length) return incoming;
+  return [...incoming, ...orphans];
+}
+
 /**
  * Match an existing cache row to an incoming message: same `id`, OR same
  * non-empty `client_message_id` (temp optimistic id → authoritative ACK / WS).
+ * If the ACK/WS omits `client_message_id`, fall back to the pending/failed
+ * optimistic bubble with the same author + content + thread root (LRM-271/273).
  */
 export function findChannelMessageMatchIndex(
   messages: readonly ChannelMessage[],
@@ -149,14 +230,31 @@ export function findChannelMessageMatchIndex(
   const byId = messages.findIndex((m) => m.id === message.id);
   if (byId >= 0) return byId;
   const clientId = message.client_message_id;
-  if (!clientId) return -1;
-  return messages.findIndex((m) => m.client_message_id === clientId);
+  if (clientId) {
+    // Optimistic rows use `client_message_id` as temp `id`; ACK/WS may only carry
+    // the client id on the incoming payload.
+    const byClient = messages.findIndex(
+      (m) => m.client_message_id === clientId || m.id === clientId,
+    );
+    if (byClient >= 0) return byClient;
+  }
+  // Authoritative rows use a server-issued id (not `id === client_message_id`).
+  // Do not require `local_send_status` to be absent — a buggy ACK merge may
+  // leak it, and we still need to retire the temp bubble (LRM-273).
+  const isTempOptimistic =
+    !!message.client_message_id && message.id === message.client_message_id;
+  if (isTempOptimistic || !message.author_id) return -1;
+  return messages.findIndex(
+    (m) =>
+      isLocalSendRow(m) &&
+      m.author_id === message.author_id &&
+      m.content === message.content &&
+      (m.thread_root_message_id ?? null) === (message.thread_root_message_id ?? null),
+  );
 }
 
 function matchesChannelMessage(existing: ChannelMessage, incoming: ChannelMessage): boolean {
-  if (existing.id === incoming.id) return true;
-  const clientId = incoming.client_message_id;
-  return !!clientId && existing.client_message_id === clientId;
+  return findChannelMessageMatchIndex([existing], incoming) === 0;
 }
 
 export function upsertChannelMessageInCache(qc: QueryClient, message: ChannelMessage) {
@@ -180,7 +278,7 @@ export function upsertChannelMessageInCache(qc: QueryClient, message: ChannelMes
     const siblings = flattenChannelMessagePages(old);
     const matchIndex = findChannelMessageMatchIndex(siblings, message);
     const existing = matchIndex >= 0 ? siblings[matchIndex] : undefined;
-    const enriched = withPreservedAuthorAvatar(message, existing, siblings);
+    const enriched = asCacheMessage(message, existing, siblings);
     const existingPageIndex = old.pages.findIndex((page: ChannelMessagesPage) =>
       page.messages.some((m: ChannelMessage) => matchesChannelMessage(m, enriched)),
     );
@@ -216,7 +314,8 @@ export function invalidateChannelMessages(qc: QueryClient, channelId: string) {
   qc.invalidateQueries({ queryKey: channelKeys.messagesPage(channelId) });
 }
 
-function shouldRenderChannelMessage(message: ChannelMessage): boolean {
+function shouldRenderChannelMessage(message: ChannelMessage | null | undefined): boolean {
+  if (!message) return false;
   return !message.deleted_at || (message.thread_reply_count ?? 0) > 0;
 }
 
@@ -238,7 +337,7 @@ export function withPreservedAuthorAvatar(
   if (!incoming.author_id || !siblings?.length) return incoming;
   const fromSibling = siblings.find(
     (m) =>
-      m.id !== incoming.id &&
+      !matchesChannelMessage(m, incoming) &&
       m.author_id === incoming.author_id &&
       m.type === incoming.type &&
       !!m.author_avatar_url,
@@ -247,14 +346,39 @@ export function withPreservedAuthorAvatar(
   return { ...incoming, author_avatar_url: fromSibling };
 }
 
+/**
+ * Normalize an API/WS row for the cache: preserve avatar + client_message_id from
+ * the optimistic row, and never keep client-only pending/failed state on an
+ * authoritative server id (LRM-271/273/280).
+ */
+function asCacheMessage(
+  incoming: ChannelMessage,
+  existing: ChannelMessage | undefined,
+  siblings: readonly ChannelMessage[] | undefined,
+): ChannelMessage {
+  let enriched = withPreservedAuthorAvatar(incoming, existing, siblings);
+  // Keep client_message_id so list identity / keys / retry stay stable when ACK omits it.
+  if (!enriched.client_message_id && existing?.client_message_id) {
+    enriched = { ...enriched, client_message_id: existing.client_message_id };
+  }
+  // Temp optimistic rows use `id === client_message_id` and may carry
+  // `local_send_status`. Authoritative HTTP ACK / WS rows use a server id and
+  // must never keep a client-only pending/failed badge (LRM-271/273).
+  const clientId = enriched.client_message_id;
+  if (clientId && enriched.id === clientId) return enriched;
+  if (enriched.local_send_status == null) return enriched;
+  const { local_send_status: _drop, ...rest } = enriched;
+  return rest;
+}
+
 function upsertChannelMessage(old: ChannelMessage[] | undefined, message: ChannelMessage) {
   if (!shouldRenderChannelMessage(message)) {
     return old?.filter((existing) => !matchesChannelMessage(existing, message));
   }
-  if (!old) return [message];
+  if (!old) return [asCacheMessage(message, undefined, undefined)];
   const index = findChannelMessageMatchIndex(old, message);
   const existing = index >= 0 ? old[index] : undefined;
-  const enriched = withPreservedAuthorAvatar(message, existing, old);
+  const enriched = asCacheMessage(message, existing, old);
   if (index >= 0) {
     return old.map((m, i) => (i === index ? enriched : m));
   }
@@ -274,7 +398,15 @@ export function channelMessageThreadOptions(
       options?.before,
       options?.beforeId,
     ] as const,
-    queryFn: () => api.listChannelMessageThread(channelId, messageId, options),
+    queryFn: async ({ client, queryKey }) => {
+      const page = await api.listChannelMessageThread(channelId, messageId, options);
+      if (!client) return page;
+      const previous = client.getQueryData<ChannelThreadMessagesPage>(queryKey);
+      return {
+        ...page,
+        messages: preserveLocalSendMessages(previous?.messages, page.messages),
+      };
+    },
     enabled: !!channelId && !!messageId,
   });
 }

@@ -41,11 +41,13 @@ const channelThreadDefaultLimit = 50
 const channelThreadMaxLimit = 100
 const channelClientMessageIDMaxLen = 128
 const channelOutputContractInstruction = "Channel output contract: use the runtime brief as the source of truth for visible output. Never print JSON envelopes, action objects, no_reply/stay_silent tokens, tool intent, analysis, missing-tool diagnostics, or described commands as the final answer."
-const channelDirectedReplyInstruction = "This run is directly addressed to you. Human DMs, human @mentions, direct questions, assigned tasks, and DM-style continuations require a visible result. Agent-to-agent channel @mentions are weak notifications unless they ask for an immediate deliverable, review, decision, or direct answer; weak notifications should finish without visible output. Reply only to the Message target for chat transport supplied below: it is the current message's source location. A top-level group message stays in the main channel, a thread message stays in that thread, and a DM stays in that DM. Never create or switch to a thread based on message content or tone. Pure greetings (hi/你好/在吗) get a greeting sticker only. Substantive requests get a helpful text answer (no acknowledgement sticker first). Never return no_reply, stay_silent, JSON, or other protocol text."
+const channelDirectedReplyInstruction = "This run is directly addressed to you. Human DMs, human @mentions, direct questions, assigned tasks, and DM-style continuations require a visible result. Agent-to-agent channel @mentions are weak notifications unless they ask for an immediate deliverable, review, decision, or direct answer; weak notifications should finish without visible output. Reply only to the Message target for chat transport supplied below: it is the current message's source location. A top-level group message stays in the main channel, a thread message stays in that thread, and a DM stays in that DM. Never create or switch to a thread based on message content or tone. Pure greetings (hi/你好/在吗) get a greeting sticker only. Substantive requests get a helpful answer using the requested supported delivery modality (no acknowledgement sticker first). Never return no_reply, stay_silent, JSON, or other protocol text."
 const channelAmbientNoReplyInstruction = "If you should not reply, finish without a visible reply. Do not use the visible-output path, and do not print no_reply, stay_silent, JSON, or CLI/protocol text."
 const channelAmbientGreetingReactionInstruction = "If the current channel message or unread bundle is only a casual greeting or small talk (for example hi, hello, hey, 你好, 在吗) with no @-mention, no question, and no task request, respond with a 👋 reaction to the reaction target only and do not create a text reply. This also applies when you are the only agent in the channel: treat the greeting as directed to you, but keep the action reaction-only unless the user includes a question or request. If reactions are unavailable, finish without visible output rather than explaining that no reply is needed."
-const channelStickerReplyInstruction = "Sticker replies: for directed short social beats (hi/你好, ok/好的, 收到/明白, 谢谢, 赞), use a sticker OR a short text reply — not both. For substantive answers, send text only (no acknowledgement sticker first). For ambient/unaddressed runs, use stickers only when explicitly requested or genuinely welcoming someone; otherwise react or stay silent. Follow the runtime output path and never print protocol text."
+const channelStickerReplyInstruction = "Sticker replies: for directed short social beats (hi/你好, ok/好的, 收到/明白, 谢谢, 赞), use a sticker OR a short reply — not both. For substantive answers, do not add an acknowledgement sticker; preserve the requested supported delivery modality. For ambient/unaddressed runs, use stickers only when explicitly requested or genuinely welcoming someone; otherwise react or stay silent. Follow the runtime output path and never print protocol text."
 const channelContinuationInstruction = "Collaborative discussion rule: reply only when you move the topic toward a decision, owner, or completed action. For a requested completion/blocker summary in a group chat, you may @-mention the responsible human once. Use @-mentions only for concrete actions, unresolved questions, human escalation, or requested completion/blocker delivery; never for thanks, generic status, future handoffs, or generic opinion invites. If the topic already has an owner and you add nothing immediate, finish without visible output."
+const channelVoiceInputReplyInstruction = "Voice delivery: the current human message came from voice input. If you send a visible answer, use `multica message send --voice` and include the complete answer text as its accessible transcript."
+const channelTypedVoiceReplyInstruction = "Voice delivery is supported: if the current human message explicitly asks for a spoken/voice reply, follow the runtime brief's voice-delivery path and include the complete answer text as its accessible transcript. Otherwise preserve the requested non-voice modality. Never claim that Multica group chat lacks voice delivery."
 const channelMessageWakeReason = "channel_message"
 const channelMessageWakePriority int32 = 1
 const channelThreadReplyPriority int32 = 1
@@ -829,6 +831,11 @@ func (h *Handler) UpdateChannel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ch)
 }
 
+// DeleteChannel permanently removes a group channel and its cascaded rows
+// (messages, members, attachments, …). Unlike ArchiveChannel this is
+// unrecoverable. Only workspace owner/admin may delete; system #general and
+// DMs are rejected with explicit errors. Archived channels may still be
+// deleted (Slack-aligned).
 func (h *Handler) DeleteChannel(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {
@@ -839,15 +846,57 @@ func (h *Handler) DeleteChannel(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !h.requireChannelManager(w, r, workspaceID, channelID, parseUUID(userID)) {
+
+	var kind string
+	var systemKey pgtype.Text
+	err := h.DB.QueryRow(r.Context(), `
+		SELECT kind, system_key
+		FROM channel
+		WHERE id = $1 AND workspace_id = $2`, channelID, parseUUID(workspaceID)).Scan(&kind, &systemKey)
+	if err != nil {
+		if errorsIsNoRows(err) {
+			writeError(w, http.StatusNotFound, "channel not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load channel")
 		return
 	}
-	if !h.requireChannelNotSystem(w, r.Context(), workspaceID, channelID) {
+	if systemKey.Valid && systemKey.String == "general" {
+		writeSystemChannelProtected(w)
 		return
 	}
-	if _, ok := h.archiveChannel(w, r, workspaceID, channelID, parseUUID(userID)); !ok {
+	if kind == "dm" {
+		writeError(w, http.StatusForbidden, "direct messages cannot be permanently deleted")
 		return
 	}
+	if kind != "group" {
+		writeError(w, http.StatusForbidden, "only group channels can be permanently deleted")
+		return
+	}
+	// Permanent delete is stricter than archive: workspace owner/admin only
+	// (channel creator who is a plain member cannot delete).
+	if _, ok := h.requireWorkspaceRole(w, r, workspaceID, "workspace not found", "owner", "admin"); !ok {
+		return
+	}
+
+	tag, err := h.DB.Exec(r.Context(), `
+		DELETE FROM channel
+		WHERE id = $1 AND workspace_id = $2 AND kind = 'group'`,
+		channelID, parseUUID(workspaceID))
+	if err != nil {
+		if isSystemGeneralGuardError(err) {
+			writeSystemChannelProtected(w)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to delete channel")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "channel not found")
+		return
+	}
+
+	h.publish(protocol.EventChannelDeleted, workspaceID, "member", userID, map[string]any{"id": uuidToString(channelID)})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -1026,24 +1075,25 @@ func (h *Handler) AddChannelMember(w http.ResponseWriter, r *http.Request) {
 	if !h.validateChannelMemberTarget(w, r, workspaceID, req.MemberType, memberID) {
 		return
 	}
-	tag, err := h.DB.Exec(r.Context(), `
-		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
-		VALUES ($1, $2, $3, $4)
-		ON CONFLICT DO NOTHING`, channelID, parseUUID(workspaceID), req.MemberType, memberID)
+	var membershipGenerationID pgtype.UUID
+	err := h.DB.QueryRow(r.Context(), `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, added_by, join_source)
+		VALUES ($1, $2, $3, $4, $5, 'manual')
+		ON CONFLICT DO NOTHING
+		RETURNING generation_id`, channelID, parseUUID(workspaceID), req.MemberType, memberID, parseUUID(userID)).Scan(&membershipGenerationID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to add channel member")
-		return
+		if !errorsIsNoRows(err) {
+			writeError(w, http.StatusInternalServerError, "failed to add channel member")
+			return
+		}
 	}
 	h.publish(protocol.EventChannelUpdated, workspaceID, "member", userID, map[string]any{"id": uuidToString(channelID)})
-	if tag.RowsAffected() > 0 {
+	if membershipGenerationID.Valid && req.MemberType == "user" {
 		h.emitChannelMemberSystemEvent(r.Context(), workspaceID, channelID, channelMemberAddedEvent, parseUUID(userID), req.MemberType, memberID)
-	}
-	// When a NEW human joins, every agent member greets them briefly.
-	// Guarded on RowsAffected so a duplicate re-add never re-welcomes, and on
-	// member_type so adding an agent member (or the creator at channel creation,
-	// which never routes through here) stays silent.
-	if req.MemberType == "user" && tag.RowsAffected() > 0 {
-		h.dispatchChannelMemberWelcome(r.Context(), workspaceID, channelID, memberID, parseUUID(userID))
+	} else if membershipGenerationID.Valid && req.MemberType == "agent" {
+		if err := h.publishChannelOnboardingSystemMessageForGeneration(r.Context(), membershipGenerationID); err != nil {
+			slog.Warn("channel member add: publish agent membership system event failed", "channel", uuidToString(channelID), "agent", uuidToString(memberID), "generation", uuidToString(membershipGenerationID), "error", err)
+		}
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{"status": "ok"})
 }
@@ -1600,7 +1650,7 @@ func (h *Handler) attachChannelMessageAttachments(ctx context.Context, workspace
 			have[att.ID] = struct{}{}
 		}
 		for _, part := range msg.Parts {
-			if part.Type != protocol.MessagePartTypeAttachment {
+			if part.Type != protocol.MessagePartTypeAttachment && part.Type != protocol.MessagePartTypeVoice {
 				continue
 			}
 			id := strings.TrimSpace(part.AttachmentID)
@@ -1661,7 +1711,7 @@ func (h *Handler) attachChannelMessageAttachments(ctx context.Context, workspace
 			have[att.ID] = struct{}{}
 		}
 		for _, part := range messages[i].Parts {
-			if part.Type != protocol.MessagePartTypeAttachment {
+			if part.Type != protocol.MessagePartTypeAttachment && part.Type != protocol.MessagePartTypeVoice {
 				continue
 			}
 			id := strings.TrimSpace(part.AttachmentID)
@@ -2787,19 +2837,30 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 	if root.Type == "agent" && root.AuthorID != nil {
 		h.followChannelThreadAgentUnlessExplicitlyUnfollowed(r.Context(), channelID, rootID, parseUUID(*root.AuthorID))
 	}
+	if ch.Kind == "dm" && root.Type == "user" {
+		// A one-to-one agent DM remains addressed to its agent peer even when
+		// the human opens a thread on an earlier human-authored message. Keep an
+		// explicit agent unfollow sticky, matching mention/thread semantics.
+		for _, agent := range h.channelAgentMembers(r.Context(), ch.WorkspaceID, ch.ID) {
+			h.followChannelThreadAgentUnlessExplicitlyUnfollowed(r.Context(), channelID, rootID, agent.ID)
+		}
+	}
 	h.followChannelThreadMentionedUsers(r.Context(), ch, msg)
 	_, _ = h.DB.Exec(r.Context(), `UPDATE channel SET updated_at = now() WHERE id = $1`, channelID)
 	if ch.Kind == "dm" {
 		h.clearDMHiddenForChannelMembers(r.Context(), workspaceID, channelID)
 	}
 	h.publishChannelToMembers(r.Context(), protocol.EventChannelMessage, workspaceID, "member", userID, channelID, msg)
-	if ch.Kind == "dm" {
-		h.dispatchDMThreadReply(r.Context(), ch, msg, parseUUID(userID))
-	} else {
-		h.dispatchChannelThreadReplyMentions(r.Context(), ch, msg, parseUUID(userID))
-	}
-	h.sendChannelMessageToFeishu(r.Context(), ch, authorName, content)
+	// Ack first — see SendChannelMessage: wake/Feishu must not block send RTT.
 	writeJSON(w, http.StatusCreated, msg)
+	h.runAfterChannelMessageAck(r.Context(), func(ctx context.Context) {
+		if ch.Kind == "dm" {
+			h.dispatchDMThreadReply(ctx, ch, msg, parseUUID(userID))
+		} else {
+			h.dispatchChannelThreadReplyMentions(ctx, ch, msg, parseUUID(userID))
+		}
+		h.sendChannelMessageToFeishu(ctx, ch, authorName, content)
+	})
 }
 
 func (h *Handler) MarkChannelThreadRead(w http.ResponseWriter, r *http.Request) {
@@ -3494,16 +3555,20 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 		h.clearDMHiddenForChannelMembers(r.Context(), workspaceID, channelID)
 	}
 	h.publishChannelToMembers(r.Context(), protocol.EventChannelMessage, workspaceID, "member", userID, channelID, msg)
-	if ch.Kind == "dm" {
-		// 1-on-1 DM: the agent peer (if any) replies to every user message
-		// without an @-mention. Human↔human DMs have no agent member → no-op.
-		h.dispatchDMAgentReply(r.Context(), ch, msg, parseUUID(userID))
-	} else {
-		h.ingestWendyHumanGroupMessage(r.Context(), ch, msg)
-		h.dispatchChannelMessageToAgents(r.Context(), ch, msg, parseUUID(userID))
-	}
-	h.sendChannelMessageToFeishu(r.Context(), ch, authorName, content)
+	// Ack first: agent wake fanout (and Feishu sync) are O(agents)/network and
+	// must not inflate the client's send latency / Sending... state.
 	writeJSON(w, http.StatusCreated, msg)
+	h.runAfterChannelMessageAck(r.Context(), func(ctx context.Context) {
+		if ch.Kind == "dm" {
+			// 1-on-1 DM: the agent peer (if any) replies to every user message
+			// without an @-mention. Human↔human DMs have no agent member → no-op.
+			h.dispatchDMAgentReply(ctx, ch, msg, parseUUID(userID))
+		} else {
+			h.ingestWendyHumanGroupMessage(ctx, ch, msg)
+			h.dispatchChannelMessageToAgents(ctx, ch, msg, parseUUID(userID))
+		}
+		h.sendChannelMessageToFeishu(ctx, ch, authorName, content)
+	})
 }
 
 func (h *Handler) ingestWendyHumanGroupMessage(ctx context.Context, ch ChannelResponse, msg ChannelMessageResponse) {
@@ -3652,8 +3717,10 @@ func (h *Handler) ImportLarkChannelMessage(w http.ResponseWriter, r *http.Reques
 	msg = h.attachSingleChannelMessageDetails(r.Context(), workspaceID, parseUUID(userID), msg)
 	_, _ = h.DB.Exec(r.Context(), `UPDATE channel SET updated_at = now() WHERE id = $1`, parseUUID(msg.ChannelID))
 	h.publishChannelToMembers(r.Context(), protocol.EventChannelMessage, workspaceID, "member", userID, parseUUID(ch.ID), msg)
-	h.dispatchChannelMessageToAgents(r.Context(), ch, msg, parseUUID(userID))
 	writeJSON(w, http.StatusCreated, msg)
+	h.runAfterChannelMessageAck(r.Context(), func(ctx context.Context) {
+		h.dispatchChannelMessageToAgents(ctx, ch, msg, parseUUID(userID))
+	})
 }
 
 func (h *Handler) validateChannelMemberTarget(w http.ResponseWriter, r *http.Request, workspaceID, memberType string, memberID pgtype.UUID) bool {
@@ -4409,94 +4476,6 @@ func (h *Handler) recordChannelAgentPromptWake(ctx context.Context, ch ChannelRe
 	)
 }
 
-// dispatchChannelMemberWelcome makes every agent member of a channel post a
-// short plain-text welcome when a new human joins. Each welcome is an
-// independent one-off agent run on its own fresh thread, driven by a static
-// prompt (no channel history) that forbids @-mentions — so welcomes never react
-// to each other and never chain into the automatic agent-reply discussion loop.
-func (h *Handler) dispatchChannelMemberWelcome(ctx context.Context, workspaceID string, channelID, joinedUserID, initiatorUserID pgtype.UUID) {
-	agents := h.channelAgentMembers(ctx, workspaceID, uuidToString(channelID))
-	if len(agents) == 0 {
-		return
-	}
-	var channelName string
-	if err := h.DB.QueryRow(ctx, `SELECT name FROM channel WHERE id = $1`, channelID).Scan(&channelName); err != nil {
-		slog.Warn("channel welcome: load channel name failed", "channel", uuidToString(channelID), "error", err)
-		return
-	}
-	ch := ChannelResponse{ID: uuidToString(channelID), WorkspaceID: workspaceID, Name: channelName}
-	joinedName := h.channelMemberDisplayName(ctx, joinedUserID)
-	if joinedName == "" {
-		joinedName = "新成员"
-	}
-	prompt := buildChannelWelcomePrompt(ch.Name, joinedName, uuidToString(channelID), uuidToString(joinedUserID))
-	// Synthetic trigger: fresh thread (nil ThreadID) at depth 0, so each welcome
-	// is its own short run rather than a reply within an existing thread.
-	synthetic := ChannelMessageResponse{TriggerDepth: 0}
-	for _, agent := range agents {
-		h.publishChannelAgentTyping(ctx, ch, agent, true)
-		session, err := h.ensureChannelAgentSession(ctx, ch, agent.ID, initiatorUserID)
-		if err != nil {
-			h.publishChannelAgentTyping(ctx, ch, agent, false)
-			slog.Warn("channel welcome: ensure session failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
-			continue
-		}
-		promptMsg, err := h.createChannelAgentPromptMessage(ctx, session.ID, prompt, synthetic)
-		if err != nil {
-			h.publishChannelAgentTyping(ctx, ch, agent, false)
-			slog.Warn("channel welcome: create prompt failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
-			continue
-		}
-		task, err := h.TaskService.EnqueueChatTask(ctx, session, initiatorUserID)
-		if err != nil {
-			h.publishChannelAgentTyping(ctx, ch, agent, false)
-			slog.Warn("channel welcome: enqueue task failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
-			continue
-		}
-		if _, err := h.DB.Exec(ctx, `UPDATE chat_message SET task_id = $1 WHERE id = $2`, task.ID, promptMsg.ID); err != nil {
-			slog.Warn("channel welcome: tag prompt with task failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "task", uuidToString(task.ID), "error", err)
-		}
-	}
-}
-
-// channelMemberDisplayName resolves the name needed for a channel welcome.
-// Keep this lookup with the channel feature: direct-message transport may be
-// removed independently, and channel welcomes must not depend on it.
-func (h *Handler) channelMemberDisplayName(ctx context.Context, userID pgtype.UUID) string {
-	var name string
-	if err := h.DB.QueryRow(ctx, `
-		SELECT COALESCE(NULLIF(to_jsonb(u)->>'display_name', ''), NULLIF(u.name, ''), u.email, '')
-		FROM "user" u
-		WHERE u.id = $1`, userID).Scan(&name); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(name)
-}
-
-// buildChannelWelcomePrompt is a self-contained one-off greeting prompt. Unlike
-// buildChannelMentionPrompt it includes NO channel history and explicitly bans
-// @-mentions and follow-up, so a wall of welcomes never turns into a loop.
-// Visible chat stays a one-line welcome; durable relationship memory is a
-// silent file write using the supplied member/channel UUIDs (never invent IDs).
-func buildChannelWelcomePrompt(channelName, joinedName, channelID, joinedMemberID string) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "A new member just joined the Multica group chat #%s: %s.\n", channelName, joinedName)
-	b.WriteString("Greet them as yourself with a warm, friendly welcome.\n\n")
-	b.WriteString("Rules — follow all of them:\n")
-	b.WriteString("- ")
-	b.WriteString(channelOutputContractInstruction)
-	b.WriteString("\n")
-	b.WriteString("- Keep it to ONE short line, in the language the channel uses (Chinese if the member's name is Chinese).\n")
-	fmt.Fprintf(&b, "- If a sticker-style welcome for %s would be natural, send a greeting sticker via the runtime brief's chat output path; keep any added words to one short line.\n", joinedName)
-	b.WriteString("- Do NOT @-mention anyone — not the new member, not other agents. This is a one-off greeting, not a discussion.\n")
-	b.WriteString("- Do not ask questions, assign work, or start a conversation. Just welcome them in one line and stop.\n")
-	b.WriteString("- After the visible welcome, silently record the new human teammate in local memory (no chat about remembering):\n")
-	fmt.Fprintf(&b, "  - Append a short note to `$MULTICA_AGENT_ROOT/users/%s/RELATIONSHIP.md` that %s (member id `%s`) joined channel `#%s` (channel id `%s`) and is someone you may collaborate with here.\n", joinedMemberID, joinedName, joinedMemberID, channelName, channelID)
-	fmt.Fprintf(&b, "  - If useful for routing, also note their membership in `$MULTICA_CHANNEL_MEMORY_DIR/CONTEXT.md` or `$MULTICA_AGENT_ROOT/channels/%s/CONTEXT.md` (non-secret only).\n", channelID)
-	b.WriteString("  - Prefer updating an existing entry over duplicating. Do not invent other member/agent IDs. Do not write chat transcripts.\n")
-	return b.String()
-}
-
 // notifyChannelMemberMentions creates a "mentioned" inbox item for every human
 // channel member @-mentioned in a channel message (by an agent, another member,
 // or another member), so the mention surfaces in the recipient's overview "for me"
@@ -4621,6 +4600,45 @@ func (h *Handler) channelHumanMemberIDs(ctx context.Context, workspaceID, channe
 func (h *Handler) publishChannelToMembers(ctx context.Context, eventType, workspaceID, actorType, actorID string, channelID pgtype.UUID, payload any) {
 	recipientIDs := recipientUserIDsFromSet(h.channelHumanMemberIDs(ctx, workspaceID, uuidToString(channelID)))
 	h.publishToUsers(eventType, workspaceID, actorType, actorID, recipientIDs, payload)
+}
+
+// runAfterChannelMessageAck runs send side effects that must not block the HTTP
+// create acknowledgment (agent wake fanout, Feishu sync). Used by human
+// SendChannelMessage* (LRM-272) and agent transport / chat-output inserts
+// (LRM-297). Production detaches the request context and runs asynchronously;
+// tests set SyncChannelMessageSideEffects so assertions after the handler
+// still observe inbox/session rows.
+func (h *Handler) runAfterChannelMessageAck(ctx context.Context, fn func(context.Context)) {
+	if fn == nil {
+		return
+	}
+	bg := context.WithoutCancel(ctx)
+	run := fn
+	if h != nil && h.channelMessagePostAckTestHook != nil {
+		hook := h.channelMessagePostAckTestHook
+		userFn := fn
+		run = func(ctx context.Context) {
+			hook(ctx)
+			userFn(ctx)
+		}
+	}
+	if h != nil && h.SyncChannelMessageSideEffects {
+		run(bg)
+		return
+	}
+	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("channel message post-ack side effect panicked", "recover", rec)
+			}
+		}()
+		run(bg)
+	}()
+}
+
+func (h *Handler) publishChannelToMembersWithID(ctx context.Context, eventType, workspaceID, actorType, actorID string, channelID pgtype.UUID, payload any, realtimeEventID string) error {
+	recipientIDs := recipientUserIDsFromSet(h.channelHumanMemberIDs(ctx, workspaceID, uuidToString(channelID)))
+	return h.publishToUsersWithID(eventType, workspaceID, actorType, actorID, recipientIDs, payload, realtimeEventID)
 }
 
 func (h *Handler) publishChannelAgentTyping(ctx context.Context, ch ChannelResponse, agent db.Agent, isTyping bool) {
@@ -5020,12 +5038,16 @@ func buildChannelAmbientObservationPrompt(ch ChannelResponse, agent db.Agent, tr
 	b.WriteString(channelAmbientGreetingReactionInstruction)
 	b.WriteString("\n")
 	b.WriteString("Decide whether your own role/profile makes a response useful. If it is not clearly relevant to you, finish without visible output; do not print no_reply or protocol text.\n")
-	b.WriteString("If the message directly addresses your agent name, role, description, instructions, or an unmistakable task for you, treat it as directed to you: write a visible plain-text reply or acknowledgement, and do not return no_reply.\n")
+	b.WriteString("If the message directly addresses your agent name, role, description, instructions, or an unmistakable task for you, treat it as directed to you: write a visible reply or acknowledgement using the requested supported delivery modality, and do not return no_reply.\n")
 	b.WriteString("If the message asks a category of members to react (for example directors, reviewers, designers, backend engineers), respond only if your agent name/description/instructions match that category.\n")
 	b.WriteString("If a lightweight acknowledgement is enough outside an all-hands welcome/greeting request, use a reaction when the runtime brief supports reactions and a reaction is sufficient; otherwise send a short acknowledgement.\n")
 	b.WriteString(channelStickerReplyInstruction)
 	b.WriteString("\n")
 	b.WriteString(channelContinuationInstruction)
+	if instruction := channelVoiceReplyInstruction(trigger); instruction != "" {
+		b.WriteString("\n")
+		b.WriteString(instruction)
+	}
 	b.WriteString("\nDo not @-mention anyone from this ambient observation.\n\n")
 	fmt.Fprintf(&b, "Reaction target message id: %s\n", trigger.ID)
 	fmt.Fprintf(&b, "Your agent name: %s\n", agentDisplayName(agent))
@@ -5049,7 +5071,11 @@ func (h *Handler) buildChannelThreadContinuationPrompt(ctx context.Context, ch C
 	messages = channelContextMessagesExcludingTrigger(messages, trigger.ID)
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "You are a participant in a thread inside Multica group chat #%s. A follow-up arrived without @-mentioning you.\n", ch.Name)
+	if ch.Kind == "dm" {
+		b.WriteString("You are a participant in a thread inside a Multica DM. A follow-up arrived without @-mentioning you.\n")
+	} else {
+		fmt.Fprintf(&b, "You are a participant in a thread inside Multica group chat #%s. A follow-up arrived without @-mentioning you.\n", ch.Name)
+	}
 	b.WriteString("This is participant delivery, not a must-reply directed mention: reply only when you add a concrete decision, owner, answer, or completed action; otherwise finish without visible output.\n")
 	b.WriteString("Use ONLY the thread context below for this decision. Do not assume older channel context unless you explicitly fetch/search it.\n")
 	b.WriteString(channelOutputContractInstruction)
@@ -5059,8 +5085,15 @@ func (h *Handler) buildChannelThreadContinuationPrompt(ctx context.Context, ch C
 	b.WriteString(channelStickerReplyInstruction)
 	b.WriteString("\n")
 	b.WriteString(channelContinuationInstruction)
+	if instruction := channelVoiceReplyInstruction(trigger); instruction != "" {
+		b.WriteString("\n")
+		b.WriteString(instruction)
+	}
 	b.WriteString("\nDo not @-mention anyone unless a concrete action or human escalation is required.\n\n")
 	fmt.Fprintf(&b, "Reaction target message id: %s\n", trigger.ID)
+	if target := h.agentMessageTargetForPrompt(ctx, ch, trigger); target != "" {
+		fmt.Fprintf(&b, "Message target for chat transport: %s\n", target)
+	}
 	fmt.Fprintf(&b, "Your agent name: %s\n", agentDisplayName(agent))
 	if strings.TrimSpace(agent.Description) != "" {
 		fmt.Fprintf(&b, "Your agent description: %s\n", strings.TrimSpace(agent.Description))
@@ -5113,6 +5146,10 @@ func (h *Handler) buildChannelMentionPrompt(ctx context.Context, ch ChannelRespo
 	b.WriteString("\n")
 	b.WriteString(channelContinuationInstruction)
 	b.WriteString("\n")
+	if instruction := channelVoiceReplyInstruction(trigger); instruction != "" {
+		b.WriteString(instruction)
+		b.WriteString("\n")
+	}
 	appendChannelFacilitatorPromptSection(&b, facilitatorState)
 	// A @mention from the channel's group manager (贝克汉姆/Beckham) is an
 	// authoritative coordination directive, not a weak agent-to-agent ping: the
@@ -5702,12 +5739,13 @@ func normalizeChannelClientMessageID(w http.ResponseWriter, raw *string) (*strin
 	return &value, true
 }
 
-// attachmentIDsFromParts collects attachment_id values from attachment parts
+// attachmentIDsFromParts collects attachment_id values from file and recorded
+// voice parts
 // in order. This is the sole bind source for channel/DM/thread message sends.
 func attachmentIDsFromParts(parts []protocol.MessagePart) []string {
 	var ids []string
 	for _, p := range parts {
-		if p.Type == protocol.MessagePartTypeAttachment && p.AttachmentID != "" {
+		if (p.Type == protocol.MessagePartTypeAttachment || p.Type == protocol.MessagePartTypeVoice) && p.AttachmentID != "" {
 			ids = append(ids, p.AttachmentID)
 		}
 	}
@@ -5724,6 +5762,25 @@ func channelPartsAllowEmptyContent(parts []protocol.MessagePart) bool {
 		}
 	}
 	return false
+}
+
+func channelMessageHasVoicePart(parts []protocol.MessagePart) bool {
+	for _, part := range parts {
+		if part.Type == protocol.MessagePartTypeVoice {
+			return true
+		}
+	}
+	return false
+}
+
+func channelVoiceReplyInstruction(trigger ChannelMessageResponse) string {
+	if !channelMessageIsHumanAuthored(trigger.Type) {
+		return ""
+	}
+	if channelMessageHasVoicePart(trigger.Parts) {
+		return channelVoiceInputReplyInstruction
+	}
+	return channelTypedVoiceReplyInstruction
 }
 
 func (h *Handler) createUserChannelMessageWithIdempotency(ctx context.Context, in channelMessageInsertInput, attachmentIDs []pgtype.UUID) (channelMessageCreateResult, error) {

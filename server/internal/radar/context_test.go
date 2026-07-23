@@ -485,6 +485,13 @@ func TestContextBuilderRotatesPastFirstPageOnlyAfterSuccessfulScheduledReview(t 
 			t.Fatal(err)
 		}
 	}
+	if _, err := pool.Exec(t.Context(), `
+		INSERT INTO channel_message (
+			channel_id, workspace_id, author_type, author_name, content
+		) VALUES ($1, $2, 'system', 'system', 'Ordinary system work update')
+	`, channelIDs[0], workspaceID); err != nil {
+		t.Fatal(err)
+	}
 	var overflowMessageID string
 	if err := pool.QueryRow(t.Context(), `
 		INSERT INTO channel_message (
@@ -493,6 +500,19 @@ func TestContextBuilderRotatesPastFirstPageOnlyAfterSuccessfulScheduledReview(t 
 		RETURNING id
 	`, channelIDs[1], workspaceID, workerID).Scan(&overflowMessageID); err != nil {
 		t.Fatal(err)
+	}
+	var canonicalMembershipRows int
+	if err := pool.QueryRow(t.Context(), `
+		SELECT count(*)
+		FROM channel_message
+		WHERE workspace_id = $1
+		  AND membership_generation_id IS NOT NULL
+		  AND deleted_at IS NULL
+	`, workspaceID).Scan(&canonicalMembershipRows); err != nil {
+		t.Fatal(err)
+	}
+	if canonicalMembershipRows == 0 {
+		t.Fatal("expected canonical membership rows to remain persisted and channel-visible")
 	}
 
 	builder := NewContextBuilder(pool, "")
@@ -520,6 +540,17 @@ func TestContextBuilderRotatesPastFirstPageOnlyAfterSuccessfulScheduledReview(t 
 		if strings.Contains(section, "omitted_count=") {
 			t.Fatalf("%s first selected page was byte-truncated:\n%s", tc.title, section)
 		}
+	}
+	groupChannelsSection := markdownSection(t, first.Markdown, "Group Channels")
+	if !strings.Contains(groupChannelsSection, "latest_message_content=Ordinary system work update") {
+		t.Fatalf("ordinary system work event was excluded from group latest projection:\n%s", groupChannelsSection)
+	}
+	messageSection := markdownSection(t, first.Markdown, "Recent Group Messages")
+	if !strings.Contains(messageSection, "content=Ordinary system work update") {
+		t.Fatalf("ordinary system work event was excluded from recent message projection:\n%s", messageSection)
+	}
+	if strings.Contains(groupChannelsSection, "joined this channel") || strings.Contains(messageSection, "joined this channel") {
+		t.Fatalf("canonical membership rows leaked into Radar work narrative:\n%s\n%s", groupChannelsSection, messageSection)
 	}
 
 	if _, err := pool.Exec(t.Context(), `
@@ -580,7 +611,7 @@ func TestContextBuilderRotatesPastFirstPageOnlyAfterSuccessfulScheduledReview(t 
 			t.Fatalf("%s second selected page was byte-truncated:\n%s", tc.title, section)
 		}
 	}
-	messageSection := markdownSection(t, second.Markdown, "Recent Group Messages")
+	messageSection = markdownSection(t, second.Markdown, "Recent Group Messages")
 	for _, want := range []string{"channel_name=rotation-group-" + suffix + "-2", "agent_members=" + workerID + ":Rotation Agent 1"} {
 		if !strings.Contains(messageSection, want) {
 			t.Fatalf("rotated message lacks channel targeting context %q:\n%s", want, messageSection)

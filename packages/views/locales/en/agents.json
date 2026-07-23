@@ -503,6 +503,11 @@
     "username_error_too_long": "Username is too long",
     "username_taken": "That @handle is already taken"
   },
+  "memory_growth": {
+    "label": "Memory growth",
+    "next_tier": "Next · {{tier}}",
+    "writes_progress": "{{current}} / {{required}} writes"
+  },
   "execution_config": {
     "applies_next_run": "Changes take effect on the next run — the current run is unaffected."
   },
@@ -524,7 +529,9 @@
     "usage_tokens": "Tokens",
     "reasoning_default": "Default",
     "runtime_section": "Runtime Config",
-    "config_shared_hint": "Any workspace member can adjust this group manager's runtime settings."
+    "config_shared_hint": "Any workspace member can adjust this group manager's runtime settings.",
+    "message_button": "Message",
+    "message_opening": "Opening…"
   },
   "live_peek": {
     "current_issue_label": "Now on",

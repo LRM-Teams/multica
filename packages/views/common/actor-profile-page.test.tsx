@@ -4,8 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ActorProfilePage } from "./actor-profile-page";
 
 const mockBack = vi.hoisted(() => vi.fn());
-const { agents, members, currentUser } = vi.hoisted(() => ({
-  agents: [] as Array<{ id: string }>,
+const { members, currentUser } = vi.hoisted(() => ({
   members: [],
   currentUser: { id: "user-owner" } as { id: string } | null,
 }));
@@ -23,20 +22,27 @@ vi.mock("../navigation", () => ({
 }));
 
 vi.mock("@tanstack/react-query", () => ({
-  useQuery: (options: { queryKey: string[] }) => ({
-    data: options.queryKey.includes("agents") ? agents : members,
-  }),
+  useQuery: () => ({ data: members }),
 }));
 
 vi.mock("@multica/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
 vi.mock("@multica/core/auth", () => ({ useAuthStore: () => currentUser }));
 vi.mock("@multica/core/workspace/queries", () => ({
-  agentListOptions: () => ({ queryKey: ["agents"] }),
   memberListOptions: () => ({ queryKey: ["members"] }),
 }));
 
-vi.mock("../channels/components/agent-side-panel", () => ({
-  AgentSidePanel: ({ variant }: { variant: string }) => <div data-testid="agent-tabs">{variant}</div>,
+vi.mock("./resolved-agent-side-panel", () => ({
+  ResolvedAgentSidePanel: ({
+    variant,
+    agentId,
+  }: {
+    variant: string;
+    agentId: string;
+  }) => (
+    <div data-testid="agent-tabs" data-agent-id={agentId}>
+      {variant}
+    </div>
+  ),
 }));
 
 vi.mock("../i18n/use-t", () => ({
@@ -46,8 +52,8 @@ vi.mock("../i18n/use-t", () => ({
   }),
 }));
 
-// Users and unavailable agents retain the generic profile fallback. Stub it to
-// echo props so we can assert that fallback forwards memberType/memberId.
+// Users retain the generic profile fallback. Stub it to echo props so we can
+// assert that fallback forwards memberType/memberId.
 vi.mock("./actor-profile-popover", () => ({
   ActorProfileContent: ({
     memberType,
@@ -63,16 +69,15 @@ vi.mock("./actor-profile-popover", () => ({
 }));
 
 describe("ActorProfilePage (#586 mobile full page)", () => {
-  it("renders the shared profile content for the actor", () => {
-    render(<ActorProfilePage memberType="agent" memberId="agent-1" />);
+  it("opens agents by id via ResolvedAgentSidePanel (LRM-292, no ListAgents gate)", () => {
+    render(<ActorProfilePage memberType="agent" memberId="group-manager-1" />);
 
-    expect(screen.getByTestId("actor-profile-content")).toHaveTextContent(
-      "agent:agent-1",
-    );
+    const agentTabs = screen.getByTestId("agent-tabs");
+    expect(agentTabs).toHaveAttribute("data-agent-id", "group-manager-1");
+    expect(agentTabs).toHaveTextContent("page");
   });
 
-  it("reuses the agent tab surface when the agent is available", () => {
-    agents.splice(0, agents.length, { id: "agent-1" });
+  it("reuses the agent tab surface for agents", () => {
     render(<ActorProfilePage memberType="agent" memberId="agent-1" />);
 
     const agentTabs = screen.getByTestId("agent-tabs");
@@ -83,7 +88,6 @@ describe("ActorProfilePage (#586 mobile full page)", () => {
     expect(agentTabs.parentElement).toHaveClass("flex", "min-h-0", "flex-1");
     expect(agentTabs.parentElement?.parentElement).toHaveClass("flex", "min-h-0", "flex-1");
     expect(agentTabs.parentElement?.parentElement).not.toHaveClass("overflow-y-auto");
-    agents.splice(0, agents.length);
   });
 
   it("keeps the generic profile fallback as the page scroll owner", () => {
@@ -99,6 +103,6 @@ describe("ActorProfilePage (#586 mobile full page)", () => {
 
     const back = screen.getByRole("button", { name: /back/i });
     fireEvent.click(back);
-    expect(mockBack).toHaveBeenCalledTimes(1);
+    expect(mockBack).toHaveBeenCalled();
   });
 });

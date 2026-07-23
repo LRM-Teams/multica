@@ -59,6 +59,7 @@ type memoryCurationRunResponse struct {
 	TargetAgents        []memoryCurationTargetAgent      `json:"target_agents"`
 	Timeline            []memoryCurationRunTimelineItem  `json:"timeline"`
 	AgentResults        []memoryCurationAgentRunResponse `json:"agent_results"`
+	ChildRuns           []memoryCurationChildRunResponse `json:"child_runs"`
 	Artifacts           []memoryCurationRunArtifact      `json:"artifacts"`
 	CreatedAt           string                           `json:"created_at"`
 	StartedAt           *string                          `json:"started_at,omitempty"`
@@ -99,6 +100,29 @@ type memoryCurationAgentRunResponse struct {
 	ConflictsFound        int    `json:"conflicts_found"`
 	Error                 string `json:"error,omitempty"`
 	CuratorOutputExcerpt  string `json:"curator_output_excerpt,omitempty"`
+}
+
+type memoryCurationChildRunResponse struct {
+	ID                    string  `json:"id"`
+	ParentRunID           string  `json:"parent_run_id"`
+	WorkspaceID           string  `json:"workspace_id"`
+	AgentID               string  `json:"agent_id"`
+	AgentName             string  `json:"agent_name,omitempty"`
+	RuntimeID             string  `json:"runtime_id,omitempty"`
+	RuntimeName           string  `json:"runtime_name,omitempty"`
+	Stage                 string  `json:"stage"`
+	Status                string  `json:"status"`
+	Attempt               int     `json:"attempt"`
+	StartedAt             *string `json:"started_at,omitempty"`
+	FinishedAt            *string `json:"finished_at,omitempty"`
+	Error                 string  `json:"error,omitempty"`
+	Changed               bool    `json:"changed"`
+	DailyFilesWritten     int     `json:"daily_files_written"`
+	ReviewCandidatesAdded int     `json:"review_candidates_added"`
+	SkillCandidatesAdded  int     `json:"skill_candidates_added"`
+	EvidenceCollected     int     `json:"evidence_collected"`
+	ConflictsFound        int     `json:"conflicts_found"`
+	OutputExcerpt         string  `json:"output_excerpt,omitempty"`
 }
 
 type memoryCurationRunArtifact struct {
@@ -500,7 +524,53 @@ func (h *Handler) loadMemoryCurationRun(r *http.Request, workspaceID string, run
 	resp.Diagnostics = memoryCurationDiagnostics(resp.Error)
 	resp.Timeline = buildMemoryCurationTimeline(resp, stats, createdAt, startedAt, finishedAt)
 	resp.AgentResults, resp.Artifacts = buildMemoryCurationArtifacts(stats, agentNames)
+	resp.ChildRuns = []memoryCurationChildRunResponse{}
+	if childRuns, err := h.loadMemoryCurationChildRuns(r.Context(), workspaceID, resp.ID); err == nil {
+		resp.ChildRuns = childRuns
+	}
 	return resp, nil
+}
+
+func (h *Handler) loadMemoryCurationChildRuns(ctx context.Context, workspaceID, parentRunID string) ([]memoryCurationChildRunResponse, error) {
+	rows, err := h.DB.Query(ctx, `
+		SELECT cr.id::text, cr.parent_run_id::text, cr.workspace_id::text, cr.agent_id::text,
+		       COALESCE(a.name, ''), COALESCE(cr.runtime_id::text, ''), COALESCE(rt.name, ''),
+		       cr.stage, cr.status, cr.attempt, cr.started_at, cr.finished_at, cr.error,
+		       COALESCE((cr.stats->>'changed')::boolean, false),
+		       COALESCE((cr.stats->>'daily_files_written')::int, 0),
+		       COALESCE((cr.stats->>'review_candidates_added')::int, 0),
+		       COALESCE((cr.stats->>'skill_candidates_added')::int, 0),
+		       COALESCE((cr.stats->>'evidence_collected')::int, 0),
+		       COALESCE((cr.stats->>'conflicts_found')::int, 0),
+		       left(COALESCE(cr.output->>'curator_output', ''), 1200)
+		  FROM memory_curation_agent_run cr
+		  LEFT JOIN agent a ON a.id = cr.agent_id
+		  LEFT JOIN agent_runtime rt ON rt.id = cr.runtime_id
+		 WHERE cr.workspace_id = $1::uuid AND cr.parent_run_id = $2::uuid
+		 ORDER BY cr.created_at, cr.agent_id
+	`, workspaceID, parentRunID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []memoryCurationChildRunResponse{}
+	for rows.Next() {
+		var item memoryCurationChildRunResponse
+		var startedAt, finishedAt *time.Time
+		if err := rows.Scan(&item.ID, &item.ParentRunID, &item.WorkspaceID, &item.AgentID, &item.AgentName, &item.RuntimeID, &item.RuntimeName, &item.Stage, &item.Status, &item.Attempt, &startedAt, &finishedAt, &item.Error, &item.Changed, &item.DailyFilesWritten, &item.ReviewCandidatesAdded, &item.SkillCandidatesAdded, &item.EvidenceCollected, &item.ConflictsFound, &item.OutputExcerpt); err != nil {
+			return nil, err
+		}
+		if startedAt != nil {
+			value := startedAt.UTC().Format(time.RFC3339)
+			item.StartedAt = &value
+		}
+		if finishedAt != nil {
+			value := finishedAt.UTC().Format(time.RFC3339)
+			item.FinishedAt = &value
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
 }
 
 func (h *Handler) memoryCurationAgentNames(ctx context.Context, workspaceID string, agentIDs []string) (map[string]string, error) {

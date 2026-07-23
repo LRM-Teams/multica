@@ -485,6 +485,11 @@
     "username_error_too_long": "ユーザー名が長すぎます",
     "username_taken": "その @handle はすでに使用されています"
   },
+  "memory_growth": {
+    "label": "Memory growth",
+    "next_tier": "Next · {{tier}}",
+    "writes_progress": "{{current}} / {{required}} writes"
+  },
   "execution_config": {
     "applies_next_run": "変更は次回の実行から反映されます。実行中のセッションには影響しません。"
   },
@@ -506,7 +511,9 @@
     "usage_tokens": "トークン",
     "reasoning_default": "デフォルト",
     "runtime_section": "ランタイム設定",
-    "config_shared_hint": "ワークスペースのどのメンバーもこのグループマネージャーのランタイム設定を変更できます。"
+    "config_shared_hint": "ワークスペースのどのメンバーもこのグループマネージャーのランタイム設定を変更できます。",
+    "message_button": "メッセージ",
+    "message_opening": "開いています…"
   },
   "live_peek": {
     "current_issue_label": "現在の作業",

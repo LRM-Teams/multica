@@ -3,23 +3,20 @@
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { ApiError } from "@multica/core/api";
-import { validateAgentUsername } from "@multica/core/agents";
-import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
-import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
-import { resolveActorDisplayName } from "@multica/core/identity";
+import { agentDetailOptions, memberProfileOptions, validateAgentUsername } from "@multica/core/agents";
+import { memberListOptions } from "@multica/core/workspace/queries";
 import { useAgentPermissions } from "@multica/core/permissions";
 import { useAuthStore } from "@multica/core/auth";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { runtimeListOptions } from "@multica/core/runtimes/queries";
 import { useWorkspacePaths } from "@multica/core/paths";
-import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
+import { ActorAvatar } from "../../common/actor-avatar";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { MessageSquare, Pencil } from "lucide-react";
 import { AppLink } from "../../navigation/app-link";
 import { useOpenDM } from "../../common/use-open-dm";
 import { PropRow } from "../../common/prop-row";
 import { VisibilityBadge } from "./visibility-badge";
-import { AgentPresenceStatusLine } from "./agent-presence-status-line";
 import { runtimeHealthState } from "@multica/core/runtimes";
 import { useRuntimeHealthStateLabel } from "../../runtimes/components/shared";
 import { RuntimePicker } from "./inspector/runtime-picker";
@@ -28,6 +25,8 @@ import { ThinkingPropRow } from "./inspector/thinking-prop-row";
 import { InlineEditPopover } from "./inline-edit-popover";
 import { useUpdateAgent } from "../hooks/use-update-agent";
 import { useT } from "../../i18n/use-t";
+import { ActorProfileContentLoaded } from "../../common/actor-profile-popover";
+import { MemoryGrowthField } from "./memory-growth-field";
 
 interface AgentProfileCardProps {
   agentId: string;
@@ -38,20 +37,42 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
   const wsId = useWorkspaceId();
   const p = useWorkspacePaths();
   const { openDM, isPending: openingDM } = useOpenDM();
-  const { data: agents = [], isLoading: agentsLoading } = useQuery(agentListOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
   const handleUpdate = useUpdateAgent(wsId);
   const currentUser = useAuthStore((s) => s.user);
   const runtimeHealthLabel = useRuntimeHealthStateLabel();
 
-  const agent = agents.find((a) => a.id === agentId);
+  // LRM-292: panel/card body always from GetAgent — ListAgents is directory only.
+  const {
+    data: agent,
+    isPending: detailPending,
+    isError: detailIsError,
+    error: detailError,
+  } = useQuery({
+    ...agentDetailOptions(wsId, agentId),
+    enabled: !!agentId,
+  });
+  const detailForbidden =
+    detailIsError &&
+    detailError instanceof ApiError &&
+    detailError.status === 403;
+  const {
+    data: identityProfile,
+    isPending: identityPending,
+  } = useQuery({
+    ...memberProfileOptions(wsId, "agent", agentId),
+    enabled: !!agentId && detailForbidden,
+  });
   // Same permission gate as the detail inspector — owner/admin only. Called
   // unconditionally (its `agent | null` signature handles the loading case)
   // so the early returns below don't violate the rules of hooks.
   const { canEdit } = useAgentPermissions(agent ?? null, wsId);
 
-  if (agentsLoading && !agent) {
+  const isLoading =
+    detailPending || (detailForbidden && identityPending);
+
+  if (isLoading) {
     return (
       <div className="flex items-center gap-3">
         <Skeleton className="h-10 w-10 rounded-full" />
@@ -64,6 +85,9 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
   }
 
   if (!agent) {
+    if (identityProfile) {
+      return <ActorProfileContentLoaded profile={identityProfile} />;
+    }
     return (
       <div className="text-xs text-muted-foreground">{t(($) => $.profile_card.unavailable)}</div>
     );
@@ -96,13 +120,6 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
     agent.runtime_mode !== "cloud" && runtime
       ? runtimeHealthState(runtime)
       : "ok";
-  const displayName = resolveActorDisplayName(agent, agent.id);
-  const initials = displayName
-    .split(" ")
-    .map((w) => w[0])
-    .join("")
-    .toUpperCase()
-    .slice(0, 2);
 
   return (
     // `group` enables the hover-only Detail link on the top-right —
@@ -114,25 +131,33 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
           availability dot is surfaced here; last-task state lives in the
           agents list and the agent detail page. */}
       <div className="flex items-start gap-3">
-        <ActorAvatarBase
-          name={displayName}
-          initials={initials}
-          avatarUrl={resolvePublicFileUrl(agent.avatar_url)}
-          isAgent
+        <ActorAvatar
+          actorType="agent"
+          actorId={agentId}
           size={40}
+          avatarUrlHint={agent.avatar_url}
+          showStatusDot={!isArchived}
+          showXpBurst
+          profileLink={false}
+          className={isArchived ? "opacity-50 grayscale" : undefined}
         />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
-            <ActorIdentityRow identity={agent} primaryClassName="truncate text-sm font-semibold" className="min-w-0 shrink" />
+            <ActorIdentityRow
+              identity={agent}
+              primaryClassName={`truncate text-sm font-semibold ${
+                isArchived ? "text-muted-foreground" : ""
+              }`}
+              className="min-w-0 shrink"
+            />
             {!isArchived && <VisibilityBadge value={agent.visibility} compact />}
-            {isArchived && (
-              <span className="rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                {t(($) => $.row.archived)}
-              </span>
-            )}
           </div>
-          {!isArchived && <AgentAvailabilityLine agentId={agent.id} />}
-
+          {/* LRM-248: archived is muted secondary copy; live presence is avatar badge only. */}
+          {isArchived ? (
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {t(($) => $.row.archived)}
+            </p>
+          ) : null}
         </div>
         {!isArchived && (
           <div className="mr-1 mt-0.5 flex shrink-0 items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100">
@@ -161,6 +186,9 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
           {agent.description}
         </p>
       )}
+
+      {/* LRM-304: Memory growth — profile/card only; omitted when zero writes. */}
+      <MemoryGrowthField growth={agent.memory_growth} />
 
       {/* Meta rows. Runtime / model / thinking are the SAME inline pickers
           the detail inspector uses (reused, not reimplemented): editable for
@@ -261,17 +289,6 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
           <SkillsRow skills={agent.skills.map((s) => s.name)} />
         )}
       </div>
-    </div>
-  );
-}
-
-// Live name-row status under the agent name — same mark as the profile
-// hover card / DM header (dot + word via useAgentLiveStatus). Coarse when
-// idle; stage-detail when a task is active.
-function AgentAvailabilityLine({ agentId }: { agentId: string }) {
-  return (
-    <div className="mt-0.5">
-      <AgentPresenceStatusLine agentId={agentId} className="max-w-[12rem]" />
     </div>
   );
 }

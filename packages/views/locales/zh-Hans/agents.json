@@ -493,6 +493,11 @@
     "username_error_too_long": "用户名过长",
     "username_taken": "该 @handle 已被占用"
   },
+  "memory_growth": {
+    "label": "Memory growth",
+    "next_tier": "Next · {{tier}}",
+    "writes_progress": "{{current}} / {{required}} writes"
+  },
   "execution_config": {
     "applies_next_run": "改动将在下次运行生效，不影响当前正在运行的会话"
   },
@@ -514,7 +519,9 @@
     "usage_tokens": "Token",
     "reasoning_default": "默认",
     "runtime_section": "运行配置",
-    "config_shared_hint": "任何工作区成员都可以修改该群管理（贝克汉姆）的运行时设置。"
+    "config_shared_hint": "任何工作区成员都可以修改该群管理（贝克汉姆）的运行时设置。",
+    "message_button": "私聊",
+    "message_opening": "打开中…"
   },
   "live_peek": {
     "current_issue_label": "正在处理",

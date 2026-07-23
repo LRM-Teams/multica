@@ -1,7 +1,6 @@
 "use client";
 
-import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
-import { useActorName } from "@multica/core/workspace/hooks";
+import { ActorAvatar } from "../../common/actor-avatar";
 import { cn } from "@multica/ui/lib/utils";
 
 interface AgentAvatarStackProps {
@@ -28,9 +27,7 @@ interface AgentAvatarStackProps {
  * (IssueAgentActivityIndicator / WorkspaceAgentWorkingChip) to surface
  * per-agent detail.
  *
- * `agentIds` is the full input list. We render up to `max` heads; if the
- * input is longer, we drop the tail and append a `+N` overflow chip styled
- * to match the avatar dimensions.
+ * LRM-224: identity-first ActorAvatar (sticky cache + directory).
  */
 export function AgentAvatarStack({
   agentIds,
@@ -39,7 +36,6 @@ export function AgentAvatarStack({
   opacity = "full",
   className,
 }: AgentAvatarStackProps) {
-  const { getActorName, getActorInitials, getActorAvatarUrl } = useActorName();
   if (agentIds.length === 0) return null;
 
   const visible = agentIds.slice(0, max);
@@ -64,12 +60,11 @@ export function AgentAvatarStack({
           style={{ marginLeft: i === 0 ? 0 : -overlap }}
           className="ring-2 ring-background rounded-full inline-flex"
         >
-          <ActorAvatarBase
-            name={getActorName("agent", id)}
-            initials={getActorInitials("agent", id)}
-            avatarUrl={getActorAvatarUrl("agent", id)}
-            isAgent
+          <ActorAvatar
+            actorType="agent"
+            actorId={id}
             size={size}
+            profileLink={false}
           />
         </span>
       ))}

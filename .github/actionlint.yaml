@@ -1,6 +1,7 @@
 # Custom labels for self-hosted runners, so actionlint doesn't flag them as
-# unknown. `s89` is the runner on the Tencent Cloud (Beijing) box that runs the
-# deploy job in deploy.yml. See docs/deploy-s89.md.
+# unknown. `s89` is the current dev deploy host. `aliyun` remains registered
+# for workflows or revisions that explicitly target the Aliyun runner.
 self-hosted-runner:
   labels:
+    - aliyun
     - s89

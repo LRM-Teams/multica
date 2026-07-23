@@ -132,6 +132,7 @@ export function formatTokens(n: number): string {
 //   DeepSeek:  https://api-docs.deepseek.com/quick_start/pricing
 //   Moonshot:  https://www.kimi.com/resources/kimi-k2-6-pricing
 //   Zhipu:     https://docs.z.ai/guides/overview/pricing
+//   Cursor:    https://cursor.com/docs/models-and-pricing
 //
 // Anthropic's cacheWrite reflects the 5-minute cache TTL (1.25x input); the
 // daemon reports cache_creation_input_tokens without TTL metadata, so 5m is
@@ -231,6 +232,21 @@ const MODEL_PRICING: Record<
   "glm-4.5-air":        { input: 0.2,  output: 1.1,  cacheRead: 0.03,   cacheWrite: 0.2 },
   "glm-4.5-airx":       { input: 1.1,  output: 4.5,  cacheRead: 0.22,   cacheWrite: 1.1 },
   "glm-4.5-flash":      { input: 0,    output: 0,    cacheRead: 0,      cacheWrite: 0 },
+
+  // -- Cursor first-party models. Cache-write rates are not published for
+  //    Composer 2.5, so keep that dimension at 0 instead of inventing spend.
+  //    Auto Cost explicitly prices cache writes at the input rate. Generic
+  //    `auto` is intentionally not mapped because Auto Balance/Intelligence
+  //    are billed at the routed model's rate. --
+  "composer-2.5":       { input: 0.5,  output: 2.5,  cacheRead: 0.2,  cacheWrite: 0 },
+  "composer-2.5-fast":  { input: 3,    output: 15,   cacheRead: 0.5,  cacheWrite: 0 },
+  "auto-cost":          { input: 1.25, output: 6,    cacheRead: 0.25, cacheWrite: 1.25 },
+
+  // -- Cursor first-party Grok 4.5. `High` is a reasoning-effort label,
+  //    not the Fast serving tier. Cursor does not publish a cache-write rate,
+  //    so keep that dimension at 0 rather than borrowing the xAI API rate. --
+  "cursor-grok-4.5":      { input: 2, output: 6,  cacheRead: 0.5, cacheWrite: 0 },
+  "cursor-grok-4.5-fast": { input: 4, output: 18, cacheRead: 1,   cacheWrite: 0 },
 };
 
 // Resolve a model string to its pricing tier. Exact match, with four
@@ -292,6 +308,18 @@ function canonicalCandidates(model: string): string[] {
   // semantic, so we leave `gpt-5.4` etc. alone.
   const canonAnthropic = (s: string) =>
     s.startsWith("claude-") ? s.replace(/\./g, "-") : s;
+  // Cursor's init event uses a display label such as
+  // "Cursor Grok 4.5 High". Current and previous CLI slugs place `fast`
+  // either after the effort or directly after the model name.
+  const canonCursorGrok = (s: string) => {
+    const slug = s.trim().toLowerCase().replace(/\s+/g, "-");
+    if (!/^cursor-grok-4[.]5(?:-|$)/.test(slug)) return s;
+    if (/(?:^|-)fast(?:-|$)/.test(slug)) return "cursor-grok-4.5-fast";
+    if (/^cursor-grok-4[.]5(?:-(?:none|minimal|low|medium|high|xhigh|max))?$/.test(slug)) {
+      return "cursor-grok-4.5";
+    }
+    return s;
+  };
   // Trailing context-window tag (`claude-opus-4-7[1m]`). Same family,
   // same price tier — see resolver comment above for the 1M-context
   // pricing trade-off.
@@ -301,11 +329,13 @@ function canonicalCandidates(model: string): string[] {
   const noProvider = stripProvider(raw);
   const dashed = canonAnthropic(noProvider);
   const noTag = stripContextTag(dashed);
+  const cursorGrok = canonCursorGrok(noProvider);
 
   push(raw);
   push(noProvider);
   push(dashed);
   push(noTag);
+  push(cursorGrok);
   push(stripDate(raw));
   push(stripDate(noProvider));
   push(stripDate(dashed));

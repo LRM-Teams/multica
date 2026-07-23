@@ -15,7 +15,7 @@
     "send_message": "メッセージを送信"
   },
   "pages": {
-    "inbox": "インボックス",
+    "inbox": "アクティビティ",
     "my_issues": "マイイシュー",
     "issues": "イシュー",
     "projects": "プロジェクト",

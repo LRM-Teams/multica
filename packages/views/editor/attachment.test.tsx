@@ -10,6 +10,9 @@ const {
   downloadMock,
   openExternalMock,
   openByUrlMock,
+  openInNewTabMock,
+  getShareableUrlMock,
+  isMobileMock,
 } = vi.hoisted(() => ({
   getAttachmentTextContentMock: vi.fn(),
   // Default: empty base URL so existing tests render site-relative URLs
@@ -20,6 +23,9 @@ const {
   downloadMock: vi.fn(),
   openExternalMock: vi.fn(),
   openByUrlMock: vi.fn(),
+  openInNewTabMock: vi.fn(),
+  getShareableUrlMock: vi.fn((p: string) => `https://app.example${p}`),
+  isMobileMock: vi.fn(() => false),
 }));
 
 vi.mock("@multica/core/api", () => ({
@@ -36,7 +42,7 @@ vi.mock("./use-download-attachment", () => ({
 }));
 
 vi.mock("@multica/ui/hooks/use-mobile", () => ({
-  useIsMobile: () => false,
+  useIsMobile: () => isMobileMock(),
 }));
 
 vi.mock("../platform", () => ({
@@ -68,6 +74,10 @@ vi.mock("../i18n", () => ({
           open_in_new_tab: "Open in new tab",
           close: "Close",
           open_file: "Open {{filename}}",
+          back: "Back",
+          preview_unavailable: "Can't preview this file",
+          preview_unavailable_hint:
+            "Download it, then open with your browser or another app.",
           file_type: {
             image: "Image",
             video: "Video",
@@ -94,8 +104,8 @@ vi.mock("../navigation", () => ({
     back: vi.fn(),
     pathname: "/acme/issues",
     searchParams: new URLSearchParams(),
-    openInNewTab: vi.fn(),
-    getShareableUrl: (p: string) => `https://app.example${p}`,
+    openInNewTab: openInNewTabMock,
+    getShareableUrl: getShareableUrlMock,
   }),
 }));
 
@@ -427,6 +437,76 @@ describe("Attachment — html dispatch", () => {
     // show the chrome instead of the iframe.
     expect(screen.getByText("report.html")).toBeTruthy();
     expect(document.querySelector("iframe")).toBeNull();
+  });
+
+  // LRM-285 — channel/thread message stream: no in-bubble HTML iframe.
+  it("inlineHtmlPreview=false renders file-card chrome (filename, no iframe)", () => {
+    getAttachmentTextContentMock.mockResolvedValueOnce({
+      text: "<p>design</p>",
+      originalContentType: "text/html",
+    });
+    const att = makeRecord({
+      filename: "design-agent-card-dm.html",
+      content_type: "text/html",
+      url: "https://cdn.example.test/design-agent-card-dm.html",
+    });
+    renderWithQuery(
+      <Attachment
+        attachment={{ kind: "record", attachment: att }}
+        inlineHtmlPreview={false}
+      />,
+    );
+    expect(screen.getByText("design-agent-card-dm.html")).toBeTruthy();
+    expect(document.querySelector("iframe")).toBeNull();
+    expect(screen.queryByTitle("Preview")).toBeNull();
+    expect(screen.getByTitle("Download")).toBeTruthy();
+  });
+
+  it("inlineHtmlPreview=false file-card open routes to new tab (not modal)", () => {
+    const att = makeRecord({
+      filename: "design-agent-card-dm.html",
+      content_type: "text/html",
+      url: "https://cdn.example.test/design-agent-card-dm.html",
+    });
+    renderWithQuery(
+      <Attachment
+        attachment={{ kind: "record", attachment: att }}
+        inlineHtmlPreview={false}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Open \{\{filename\}\}/ }));
+    expect(openInNewTabMock).toHaveBeenCalledTimes(1);
+    expect(openInNewTabMock).toHaveBeenCalledWith(
+      expect.stringContaining(`/acme/attachments/${att.id}/preview`),
+      "design-agent-card-dm.html",
+      { activate: true },
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("inlineHtmlPreview=false on mobile opens fullscreen HTML preview (not can't preview)", () => {
+    isMobileMock.mockReturnValue(true);
+    getAttachmentTextContentMock.mockResolvedValue({
+      text: "<p>design</p>",
+      originalContentType: "text/html",
+    });
+    const att = makeRecord({
+      filename: "design-agent-card-dm.html",
+      content_type: "text/html",
+      url: "https://cdn.example.test/design-agent-card-dm.html",
+    });
+    renderWithQuery(
+      <Attachment
+        attachment={{ kind: "record", attachment: att }}
+        inlineHtmlPreview={false}
+      />,
+    );
+    expect(screen.getByTestId("mobile-file-entry")).toBeTruthy();
+    expect(document.querySelector("iframe")).toBeNull();
+    fireEvent.click(screen.getByTestId("mobile-file-entry"));
+    expect(screen.getByTestId("mobile-file-preview-html-body")).toBeTruthy();
+    expect(screen.queryByText("Can't preview this file")).toBeNull();
+    isMobileMock.mockReturnValue(false);
   });
 });
 

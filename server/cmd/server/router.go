@@ -22,6 +22,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/handler"
+	"github.com/multica-ai/multica/server/internal/integrations/doubaospeech"
 	"github.com/multica-ai/multica/server/internal/integrations/lark"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/middleware"
@@ -170,6 +171,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		EvolutionReviewEnabled:                evolutionReviewEnabled,
 	}
 	h := handler.New(queries, pool, hub, bus, emailSvc, store, cfSigner, analyticsClient, signupConfig, daemonHub)
+	h.VoiceProvider = doubaospeech.New(doubaospeech.Config{
+		APIKey:    os.Getenv("DOUBAO_SPEECH_API_KEY"),
+		SpeakerID: os.Getenv("DOUBAO_TTS_SPEAKER_ID"),
+	})
 	h.SandboxHub = sandboxHub
 	handler.ConfigureEphemeralSandboxManager(h)
 	h.StartChannelBridge()
@@ -406,6 +411,16 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	// Wire WS heartbeat after stores are finalized so the WS path uses the
 	// same (possibly Redis-backed) stores as the HTTP path.
 	daemonHub.SetHeartbeatHandler(h.HandleDaemonWSHeartbeat)
+	daemonHub.SetReminderHandlers(
+		h.HandleDaemonReminderSnapshot,
+		h.HandleDaemonReminderFireAttempt,
+		h.HandleDaemonReminderOwnerLifecycle,
+		h.HandleDaemonReminderOwnerLifecycleAck,
+	)
+	daemonHub.SetReminderProjectionHandlers(
+		h.HandleDaemonReminderProjection,
+		h.HandleDaemonReminderProjectionAck,
+	)
 	health := newServerHealth(pool)
 
 	r := chi.NewRouter()
@@ -533,6 +548,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/runtimes/{runtimeId}/shared-skills/sync", h.SyncRuntimeSharedSkills)
 		r.Post("/runtimes/{runtimeId}/evolution/submissions", h.SyncEvolutionSubmissions)
 		r.Post("/runtimes/{runtimeId}/memory-curation/{runId}/result", h.ReportMemoryCurationRunResult)
+		r.Post("/agent-memory-writes", h.ReportAgentMemoryWrites)
 
 		r.Get("/tasks/{taskId}/status", h.GetTaskStatus)
 		r.Post("/tasks/{taskId}/start", h.StartTask)
@@ -763,6 +779,16 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RequireWorkspaceMember(queries))
 
+			// Voice synthesis and recognition consume account-level provider
+			// quota. Workspace membership scopes the request; the human-actor
+			// guard prevents task and infrastructure credentials from spending
+			// that quota through this user-facing surface.
+			r.Route("/api/voice", func(r chi.Router) {
+				r.Use(handler.RequireHumanActor)
+				r.Post("/tts", h.SynthesizeVoice)
+				r.Post("/asr", h.TranscribeVoice)
+			})
+
 			// Assignee frequency
 			r.Get("/api/assignee-frequency", h.GetAssigneeFrequency)
 			r.Get("/api/member-profiles/{memberType}/{memberId}", h.GetMemberProfile)
@@ -988,6 +1014,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/activity/{activityId}/steps", h.ListAgentActivitySteps)
 					r.Get("/activity/{activityId}/diagnostic", h.GetAgentActivityDiagnostic)
 					r.Get("/tasks", h.ListAgentTasks)
+					r.Get("/reminders", h.ListAgentReminders)
 					r.Get("/skills", h.ListAgentSkills)
 					r.Put("/skills", h.SetAgentSkills)
 					r.Get("/skill-suggestions", h.ListAgentSkillSuggestions)
@@ -1157,6 +1184,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Post("/api/agent/reminders/snooze", h.AgentTransportSnoozeReminder)
 			r.Post("/api/agent/reminders/update", h.AgentTransportUpdateReminder)
 			r.Post("/api/agent/reminders/cancel", h.AgentTransportCancelReminder)
+			r.Post("/api/agent/reminders/log", h.AgentTransportReminderLog)
 
 			// Unified 1-on-1 DM list (kind='dm' channels ∪ legacy unbound chat
 			// sessions) plus idempotent create-or-find. Sole data source for the
@@ -1222,6 +1250,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/read", h.MarkChannelRead)
 					r.Post("/typing", h.SetChannelTyping)
 				})
+			})
+
+			// Activity (member feed: related threads + inbox)
+			r.Route("/api/activity", func(r chi.Router) {
+				r.Get("/", h.ListUserActivity)
+				r.Post("/mark-all-read", h.MarkAllUserActivityRead)
 			})
 
 			// Inbox

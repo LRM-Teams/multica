@@ -29,8 +29,8 @@ import {
   resolveActorIdentityPresentation,
   shouldShowActorHandleLabel,
 } from "@multica/core/identity";
-import { AgentLiveStatusMark } from "../agents/components/agent-live-status-mark";
-import { useAgentLiveStatus } from "../agents/use-agent-live-status";
+import { MemoryGrowthField } from "../agents/components/memory-growth-field";
+import { AgentPresenceOverlay } from "./actor-avatar";
 import { ActivityTimeline } from "../agents/components/tabs/activity-timeline";
 import { useAgentActivityEvents } from "../agents/components/tabs/use-agent-activity-events";
 import { useNavigation } from "../navigation";
@@ -224,7 +224,6 @@ export function ActorProfileContent({
 // react-doctor-disable-next-line react-doctor/no-multi-comp -- cohesive actor-profile cluster (see file header)
 export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile }) {
   const { t } = useT("channels");
-  const wsId = useWorkspaceId();
   // #2 identity-only card: when the server returns just basic identity
   // (`profile_access=identity_only` — a private agent surfaced via a message you
   // can read, or a removed/deactivated one), render name/handle/avatar/description
@@ -232,15 +231,6 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
   // panels the BE still gates (`canAccessPrivateAgent`). `full` keeps everything.
   // Never a blank "Agent unavailable" card again.
   const isIdentityOnly = profile.profile_access === "identity_only";
-  // Agents (full access only): stage-detail live status (Thinking / Running
-  // command… / …) when a task is active; coarse presence word (Idle / Offline)
-  // when idle. Same snapshot + activity caches as the chat status pill / avatar
-  // presence dot, so the three surfaces stay in lockstep via WS. Passing
-  // `undefined` for identity_only skips the fetch entirely (no access anyway).
-  const liveStatus = useAgentLiveStatus(
-    wsId,
-    profile.member_type === "agent" && !isIdentityOnly ? profile.member_id : undefined,
-  );
   const identity = {
     name: profile.name,
     display_name: profile.display_name,
@@ -248,8 +238,7 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
   const presentation = resolveActorIdentityPresentation(identity, "");
   const displayName = presentation.displayName || presentation.handle || t(($) => $.profile_popover.unknown);
   const description = profile.description?.trim() || "";
-  // Members: role text on the name row. Agents: live status immediately
-  // after the name (dot + word) — not a far-right filler and not a pill.
+  // Members: role text on the name row. Agents: avatar badge only (LRM-248).
   const memberRole =
     profile.member_type === "user"
       ? roleLabel(profile.role, t)
@@ -258,23 +247,33 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
   const handleLabel = formatActorHandleLabel(handle);
   const showHandle =
     handleLabel !== null && shouldShowActorHandleLabel(displayName, handle);
+  const isAgent = profile.member_type === "agent";
+  const avatar = (
+    <ActorAvatarBase
+      name={displayName}
+      initials={avatarGlyph(displayName)}
+      avatarUrl={resolvePublicFileUrl(profile.avatar_url)}
+      isAgent={isAgent}
+      size={48}
+      toneSeed={`${profile.member_type}:${profile.member_id}`}
+    />
+  );
 
   return (
     <div className="text-left">
       <div
         className={cn(
           "flex items-start gap-3 p-3",
-          (description || profile.member_type === "agent") && "border-b",
+          (description || isAgent) && "border-b",
         )}
       >
-        <ActorAvatarBase
-          name={displayName}
-          initials={avatarGlyph(displayName)}
-          avatarUrl={resolvePublicFileUrl(profile.avatar_url)}
-          isAgent={profile.member_type === "agent"}
-          size={48}
-          toneSeed={`${profile.member_type}:${profile.member_id}`}
-        />
+        {isAgent && !isIdentityOnly ? (
+          <AgentPresenceOverlay agentId={profile.member_id} size={48}>
+            {avatar}
+          </AgentPresenceOverlay>
+        ) : (
+          avatar
+        )}
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-1.5">
             {/* No flex-1 on the name — status must sit right after the name
@@ -282,9 +281,6 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
             <span className="min-w-0 truncate text-sm font-semibold text-foreground">
               {displayName}
             </span>
-            {isIdentityOnly ? null : (
-              <AgentLiveStatusMark status={liveStatus} className="shrink-0" />
-            )}
             {memberRole ? (
               <span className="shrink-0 text-xs text-muted-foreground">
                 {memberRole}
@@ -308,11 +304,47 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
           </p>
         </section>
       ) : null}
-      {profile.member_type === "agent" && !isIdentityOnly ? (
-        <ProfileSection title={t(($) => $.profile_popover.recent_activity)}>
-          <AgentRecentActivity agentId={profile.member_id} />
-        </ProfileSection>
+      {/* LRM-304: agent member card — growth only on full-access profiles. */}
+      {isAgent && !isIdentityOnly && profile.memory_growth ? (
+        <section className="border-b p-3 last:border-b-0">
+          <MemoryGrowthField growth={profile.memory_growth} />
+        </section>
       ) : null}
+      {profile.member_type === "agent" ? (
+        isIdentityOnly ? (
+          <RestrictedProfileBlocks />
+        ) : (
+          <ProfileSection title={t(($) => $.profile_popover.recent_activity)}>
+            <AgentRecentActivity agentId={profile.member_id} />
+          </ProfileSection>
+        )
+      ) : null}
+    </div>
+  );
+}
+
+/** LRM-288: sensitive panels are explicit, never silently omitted (LRM-238). */
+// react-doctor-disable-next-line react-doctor/no-multi-comp -- cohesive actor-profile cluster (see file header)
+function RestrictedProfileBlocks() {
+  const { t } = useT("channels");
+  const labels = [
+    t(($) => $.profile_popover.restricted.runtime),
+    t(($) => $.profile_popover.restricted.usage),
+    t(($) => $.profile_popover.restricted.activity),
+  ];
+  return (
+    <div className="border-t">
+      {labels.map((label) => (
+        <div
+          key={label}
+          className="flex items-center justify-between gap-3 border-b px-3 py-2.5 last:border-b-0"
+        >
+          <span className="text-xs text-muted-foreground/70">{label}</span>
+          <span className="shrink-0 text-[11px] text-muted-foreground/60">
+            {t(($) => $.profile_popover.restricted.channel_only)}
+          </span>
+        </div>
+      ))}
     </div>
   );
 }

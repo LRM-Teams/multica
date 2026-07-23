@@ -370,6 +370,13 @@ func TestMemoryCuratorProfileQueuesAndCompletesDaemonRun(t *testing.T) {
 	if created.Status != "queued" || created.ID == "" {
 		t.Fatalf("created run = %+v", created)
 	}
+	var childCount int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM memory_curation_agent_run WHERE parent_run_id = $1 AND agent_id = $2 AND status = 'queued'`, created.ID, targetAgentID).Scan(&childCount); err != nil {
+		t.Fatal(err)
+	}
+	if childCount != 1 {
+		t.Fatalf("child run count = %d, want 1", childCount)
+	}
 
 	w = httptest.NewRecorder()
 	heartbeatReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/heartbeat", map[string]any{
@@ -385,8 +392,11 @@ func TestMemoryCuratorProfileQueuesAndCompletesDaemonRun(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&heartbeat); err != nil {
 		t.Fatal(err)
 	}
-	if heartbeat.Pending == nil || heartbeat.Pending.ID != created.ID || heartbeat.Pending.ClaimToken == "" {
+	if heartbeat.Pending == nil || heartbeat.Pending.ParentRunID != created.ID || heartbeat.Pending.AgentRunID == "" || heartbeat.Pending.ID != heartbeat.Pending.AgentRunID || heartbeat.Pending.ClaimToken == "" {
 		t.Fatalf("pending = %+v", heartbeat.Pending)
+	}
+	if len(heartbeat.Pending.AgentIDs) != 1 || heartbeat.Pending.AgentIDs[0] != targetAgentID || heartbeat.Pending.CuratorAgentID != targetAgentID {
+		t.Fatalf("pending target identity = %+v", heartbeat.Pending)
 	}
 	if heartbeat.Pending.Mode != "auto_safe" || heartbeat.Pending.ConfidenceThreshold != 0.9 {
 		t.Fatalf("pending policy = %+v", heartbeat.Pending)
@@ -394,9 +404,9 @@ func TestMemoryCuratorProfileQueuesAndCompletesDaemonRun(t *testing.T) {
 
 	w = httptest.NewRecorder()
 	staleResultReq := withURLParams(newDaemonTokenRequest(http.MethodPost,
-		"/api/daemon/runtimes/"+runtimeID+"/memory-curation/"+created.ID+"/result",
+		"/api/daemon/runtimes/"+runtimeID+"/memory-curation/"+heartbeat.Pending.ID+"/result",
 		map[string]any{"status": "succeeded", "claim_token": "00000000-0000-0000-0000-000000000001", "result": map[string]any{}},
-		testWorkspaceID, "memory-curator-test-daemon"), "runtimeId", runtimeID, "runId", created.ID)
+		testWorkspaceID, "memory-curator-test-daemon"), "runtimeId", runtimeID, "runId", heartbeat.Pending.ID)
 	testHandler.ReportMemoryCurationRunResult(w, staleResultReq)
 	if w.Code != http.StatusConflict {
 		t.Fatalf("stale ReportMemoryCurationRunResult: status=%d body=%s", w.Code, w.Body.String())
@@ -404,7 +414,7 @@ func TestMemoryCuratorProfileQueuesAndCompletesDaemonRun(t *testing.T) {
 
 	w = httptest.NewRecorder()
 	resultReq := withURLParams(newDaemonTokenRequest(http.MethodPost,
-		"/api/daemon/runtimes/"+runtimeID+"/memory-curation/"+created.ID+"/result",
+		"/api/daemon/runtimes/"+runtimeID+"/memory-curation/"+heartbeat.Pending.ID+"/result",
 		map[string]any{"status": "succeeded", "claim_token": heartbeat.Pending.ClaimToken, "result": map[string]any{
 			"agents_scanned": 1,
 			"agent_results": []map[string]any{{
@@ -412,7 +422,7 @@ func TestMemoryCuratorProfileQueuesAndCompletesDaemonRun(t *testing.T) {
 				"curator_output": `{"candidates":[{"type":"memory","scope":"agent","title":"dry run only","content":"must not persist","confidence":0.9}]}`,
 			}},
 		}},
-		testWorkspaceID, "memory-curator-test-daemon"), "runtimeId", runtimeID, "runId", created.ID)
+		testWorkspaceID, "memory-curator-test-daemon"), "runtimeId", runtimeID, "runId", heartbeat.Pending.ID)
 	testHandler.ReportMemoryCurationRunResult(w, resultReq)
 	if w.Code != http.StatusOK {
 		t.Fatalf("ReportMemoryCurationRunResult: status=%d body=%s", w.Code, w.Body.String())
@@ -430,6 +440,13 @@ func TestMemoryCuratorProfileQueuesAndCompletesDaemonRun(t *testing.T) {
 	}
 	if dryRunCandidates != 0 {
 		t.Fatalf("dry-run persisted %d candidates, want 0", dryRunCandidates)
+	}
+	var childStatus, childOutput string
+	if err := testPool.QueryRow(ctx, `SELECT status, output->>'curator_output' FROM memory_curation_agent_run WHERE parent_run_id = $1 AND agent_id = $2`, created.ID, targetAgentID).Scan(&childStatus, &childOutput); err != nil {
+		t.Fatal(err)
+	}
+	if childStatus != "succeeded" || !strings.Contains(childOutput, "dry run only") {
+		t.Fatalf("child run = status %q output %q, want succeeded with dry-run output", childStatus, childOutput)
 	}
 }
 
@@ -529,31 +546,44 @@ func TestTeamCurationPersistsKnowledgeAndAppliesDecisionAtomically(t *testing.T)
 	}
 
 	rollbackTitle := "Rollback verification " + suffix
-	invalidOutput, _ := json.Marshal(map[string]any{
+	// Non-UUID decision ids (file-slug style) and unknown candidates must not
+	// fail the whole team curation persist — otherwise runs stay stuck running.
+	slugOutput, _ := json.Marshal(map[string]any{
 		"team_knowledge": []map[string]any{{
-			"kind": "policy", "title": rollbackTitle, "content": "This insert must roll back.",
-			"source_candidate_ids": []string{},
+			"kind": "policy", "title": rollbackTitle, "content": "Slug ids should not abort persist.",
+			"source_candidate_ids": []string{"1864763b:2026-07-08:slack-mobile-message-ux", candidateID},
 		}},
-		"decisions": []map[string]any{{"candidate_id": "not-a-uuid", "status": "promoted"}},
+		"decisions": []map[string]any{
+			{"candidate_id": "not-a-uuid", "status": "promoted"},
+			{"candidate_id": "00000000-0000-4000-8000-000000000099", "status": "promoted", "reason": "missing"},
+		},
 	})
 	tx, err = testPool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := testHandler.persistTeamCurationOutput(ctx, tx, runID, testWorkspaceID, string(invalidOutput)); err == nil {
+	if err := testHandler.persistTeamCurationOutput(ctx, tx, runID, testWorkspaceID, string(slugOutput)); err != nil {
 		_ = tx.Rollback(ctx)
-		t.Fatal("invalid decision unexpectedly succeeded")
+		t.Fatalf("slug decision should be skipped, got %v", err)
 	}
-	if err := tx.Rollback(ctx); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	var rollbackCount int
-	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM team_knowledge_item WHERE workspace_id=$1 AND title=$2`, testWorkspaceID, rollbackTitle).Scan(&rollbackCount); err != nil {
+	var slugKnowledgeCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM team_knowledge_item
+		 WHERE workspace_id=$1 AND title=$2
+		   AND $3::uuid = ANY(source_candidate_ids)
+		   AND metadata ? 'source_candidate_refs'
+	`, testWorkspaceID, rollbackTitle, candidateID).Scan(&slugKnowledgeCount); err != nil {
 		t.Fatal(err)
 	}
-	if rollbackCount != 0 {
-		t.Fatalf("failed transaction left %d team knowledge rows", rollbackCount)
+	if slugKnowledgeCount != 1 {
+		t.Fatalf("slug-tolerant team knowledge count = %d, want 1", slugKnowledgeCount)
 	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM team_knowledge_item WHERE workspace_id=$1 AND title=$2`, testWorkspaceID, rollbackTitle)
+	})
 }
 
 func TestDeleteRuntimeFailsIncompleteMemoryCurationRuns(t *testing.T) {

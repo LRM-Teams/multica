@@ -11,11 +11,11 @@ import (
 )
 
 // markGroupManagerForTest flags an agent as a per-group Beckham and makes it
-// workspace-visible (mirrors how Beckham is actually provisioned).
+// private (mirrors how Beckham is actually provisioned — LRM-233).
 func markGroupManagerForTest(t *testing.T, agentID string) {
 	t.Helper()
 	if _, err := testPool.Exec(context.Background(),
-		`UPDATE agent SET managed_role = 'group_manager', visibility = 'workspace' WHERE id = $1`, agentID,
+		`UPDATE agent SET managed_role = 'group_manager', visibility = 'private' WHERE id = $1`, agentID,
 	); err != nil {
 		t.Fatalf("mark group manager: %v", err)
 	}
@@ -75,7 +75,6 @@ func TestCanUpdateAgent_GroupManagerAllowsRuntimePayloadFields(t *testing.T) {
 		"model":                    json.RawMessage(`"model-id"`),
 		"model_catalog_request_id": json.RawMessage(`"catalog-proof"`),
 		"thinking_level":           json.RawMessage(`"high"`),
-		"visibility":               json.RawMessage(`"workspace"`),
 		"max_concurrent_tasks":     json.RawMessage(`3`),
 	}
 	w := httptest.NewRecorder()

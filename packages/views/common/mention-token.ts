@@ -3,24 +3,24 @@ import { cn } from "@multica/ui/lib/utils";
 /**
  * Semantic mention kinds for body @mentions.
  *
- * Mentions are prose emphasis ("someone was addressed"), not chips/tags.
- * Baseline (Linear / GitHub / restrained Slack): brand-ink text in the flow.
- * Permanent fill is reserved for the *message row* when the viewer is
- * addressed — not every token. Per-actor rainbow colors (`agentColor`) stay
- * on avatars only.
+ * Mentions are Slack-style soft-background emphasis links — not heavy
+ * capsules and not bare brand ink. Person / agent / squad / @all share one
+ * token; only @self uses a warm yellow wash. Per-actor rainbow colors
+ * (`agentColor`) stay on avatars only.
  *
- * Visual language:
- * - default / agent / squad → brand ink, medium weight, no rest fill
- * - @all / self → same ink, semibold only (no permanent wash)
- * - hover / focus → soft brand wash (progressive)
- * - self-mentioned row → cool brand row wash (the real "you" signal)
+ * Visual language (design-mention-slack-token.html / LRM-269 / LRM-350):
+ * - default / all → brand ink + bold + soft brand rest fill, radius ≤4px, px ≤2px
+ * - self (light) → warm yellow fill (#faf0c8) + ink text
+ * - self (dark) → brand tint fill + brand ink (never cream yellow on light text)
+ * - hover / focus → slightly stronger wash
+ * - self-mentioned row → light warm wash (#fef9e8); dark cool brand tint + left bar
  */
 export type MentionTokenKind = "default" | "all" | "self";
 
 /**
  * Resolve the visual kind for a mention:// token.
- * - `all` → broadcast emphasis (weight only at token level)
- * - member id matching the viewer → self emphasis (weight; row wash elsewhere)
+ * - `all` → same token as default (broadcast uses weight+fill already shared)
+ * - member id matching the viewer → self emphasis (yellow token + row wash)
  * - everything else (member/agent/squad/…) → default
  */
 export function resolveMentionTokenKind(
@@ -35,27 +35,92 @@ export function resolveMentionTokenKind(
 
 /**
  * Shared class string for body/editor mention text.
- * Reads as inline brand-ink prose — no chip padding, no rest-state fill.
+ * Slack soft-bg token — brand ink + light rest fill; self is warm yellow in
+ * light mode and brand tint + brand ink in dark (LRM-350).
+ * Keep padding thin (≤2px) and radius small (≤4px); never `rounded-full`.
  */
 export function mentionTokenClassName(
   kind: MentionTokenKind = "default",
   className?: string,
 ): string {
+  const isSelf = kind === "self";
   return cn(
-    "mention not-prose inline rounded-sm",
-    "font-medium text-brand",
+    "mention not-prose inline rounded-sm px-0.5",
+    "font-bold box-decoration-clone",
     "transition-colors duration-100",
-    "hover:bg-brand/[0.08]",
-    "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-brand/30 focus-visible:bg-brand/[0.08]",
-    // @all / self: weight step only — the row wash carries "you were addressed".
-    (kind === "all" || kind === "self") && "font-semibold",
+    "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-brand/30",
+    isSelf
+      ? [
+          "bg-[#faf0c8] text-foreground hover:bg-[#f5e8a8] focus-visible:bg-[#f5e8a8]",
+          "dark:bg-brand/[0.14] dark:text-brand dark:hover:bg-brand/[0.18] dark:focus-visible:bg-brand/[0.18]",
+        ]
+      : "bg-brand/[0.10] text-brand hover:bg-brand/[0.14] focus-visible:bg-brand/[0.14]",
     className,
   );
 }
 
 /**
  * Message-row wash when the body addresses the viewer (@me / @all).
- * Cool brand tint — product family. Deep-link highlight layers above via cn order.
+ * Light: warm tint (#fef9e8). Dark: 2px brand bar + cool brand tint (not
+ * the light wash). Deep-link highlight layers above via cn order.
  */
 export const SELF_MENTION_ROW_CLASS =
-  "bg-brand/[0.04] hover:bg-brand/[0.07] focus-within:bg-brand/[0.07]";
+  "bg-[#fef9e8] hover:bg-[#fdf3d0] focus-within:bg-[#fdf3d0] dark:border-l-2 dark:border-brand dark:bg-brand/[0.06] dark:hover:bg-brand/[0.08] dark:focus-within:bg-brand/[0.08]";
+
+/**
+ * On dark self-mention rows, inline @mentions drop pill fill for contrast;
+ * hover/focus only adds a light brand wash.
+ */
+export const SELF_MENTION_ROW_MENTION_CLASS =
+  "[&_.mention]:dark:bg-transparent [&_.mention]:dark:hover:bg-brand/[0.08] [&_.mention]:dark:focus-visible:bg-brand/[0.08]";
+
+export type MessageCollapseFadeVariant =
+  | "default"
+  | "self-mention"
+  | "highlighted"
+  | "search";
+
+export function resolveMessageCollapseFadeVariant(options: {
+  selfMentioned: boolean;
+  highlighted: boolean;
+  searchHighlighted: boolean;
+}): MessageCollapseFadeVariant {
+  if (options.searchHighlighted) return "search";
+  if (options.highlighted) return "highlighted";
+  if (options.selfMentioned) return "self-mention";
+  return "default";
+}
+
+/**
+ * Bottom fade for collapsed long messages (LRM-302 / LRM-368). Must match the
+ * visible message-row background — never hard-bind `background` on rows that
+ * use a different wash (self-mention cream, deep-link ring, search tint).
+ */
+export function messageCollapseFadeClassName(
+  variant: MessageCollapseFadeVariant,
+): string {
+  const layout =
+    "pointer-events-none absolute inset-x-0 bottom-0 flex justify-start pb-0.5 pt-10";
+  switch (variant) {
+    case "search":
+      return cn(
+        layout,
+        "bg-gradient-to-t from-primary/5 via-primary/5/95 to-transparent",
+      );
+    case "highlighted":
+      return cn(
+        layout,
+        "bg-gradient-to-t from-primary/10 via-primary/10/95 to-transparent",
+      );
+    case "self-mention":
+      return cn(
+        layout,
+        "bg-gradient-to-t from-[#fef9e8] via-[#fef9e8]/95 to-transparent dark:from-brand/[0.06] dark:via-brand/[0.06]/95",
+      );
+    default:
+      return cn(
+        layout,
+        "bg-gradient-to-t from-background via-background/95 to-transparent",
+      );
+  }
+}

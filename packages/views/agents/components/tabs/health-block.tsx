@@ -124,10 +124,16 @@ function HealthHead({
   const duration = formatHealthDuration(summary.state_since, now ?? Date.now());
   const lastSeen = formatClockTime(summary.last_seen_at);
 
+  // LRM-248: live Health head is Online / Offline only — fold
+  // recovered / suspected_disconnect / reconnecting → Online. Timeline
+  // history rows below keep their event-state chips as diagnostic records.
+  const liveState =
+    summary.state === "offline" ? ("offline" as const) : ("online" as const);
+
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
       <div className="flex flex-wrap items-center gap-2">
-        <StateChip state={summary.state} size="lg" />
+        <StateChip state={liveState} size="lg" />
         {duration && (
           <span className="text-sm text-muted-foreground tabular-nums">
             {duration}

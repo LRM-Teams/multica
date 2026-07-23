@@ -67,6 +67,14 @@
 - 迁移 forward-only、不留兼容层（precedent：migration 178/179）；**兼容的是路径，不是外观**（§2.3）。
 - **候选物**：PR 模板"生效层：server / daemon / both"检查项（task #320，待落）。在模板/CI 真能拦截且见过它红之前，不能把“流程门禁”当作已经存在。
 
+### 1.4 Agent 加群引导是 membership generation 协议 — `可执行`（⑤，owner: @Barry ✅ 已签；task #651）
+- **唯一事实边界**：未来每次 active group channel 的 agent membership generation 都在同一 DB 事务里创建 membership、结构化 `channel_member_added` system row 与 durable onboarding record；system general 使用 system invariant actor/source，普通手动加群保留真实 actor/source。DM、archived channel、human membership 不创建 onboarding；迁移既有 roster 不回填、不唤醒。
+- **先让人看见，再让 agent 决策**：system row 必须先以其 message UUID 作为稳定 realtime event id 发布成功，publication fence 才允许生成 target-only onboarding inbox lease。system row 本身不唤醒 agent；除新加入的目标 agent 外，其他 agent inbox 必须为 0。在线路径的可见顺序固定为 `joined system event → Agent intro`。
+- **generation 是隔离单位**：remove 立即令旧 generation 过期，re-add 创建新 generation；drain、send、complete 三处都重验 membership + generation。失效 generation 只能 terminal `expired`，可见 agent message 为 0。
+- **显式终态**：只有 canonical send 或 typed receipt `channel_onboarding_skipped` 能完成决策；空输出、final prose、timeout、同字符串的普通事件都不能伪装 skip，必须让同一 event retry。send 使用 `channel-onboarding:<inbox_event_id>` deterministic client id，保证 crash/retry 后可见消息 1、transport audit 1。
+- **物**：migration `207_channel_agent_onboarding` 的 generation/trigger/check constraints；`server/internal/handler/channel_onboarding.go` 的 publication fence、target-only materialization、三段 revalidation 与 terminal transaction；`channel_onboarding_publisher.go` 的 crash-replay publisher；daemon/protocol typed decision；`channel_onboarding_test.go`、agent transport/daemon/realtime listener regressions。
+- **已见红**：首轮 crash retry 回归暴露 duplicate transport audit（2，修成复用原 audit 后为 1）；publication gate 在 system row 尚未发布时拒绝 lease；旧 handler tests 因把 channel 当成“只有业务消息”而被新增 canonical membership row 打红，消费者改为按目标消息/语义断言；draft freshness 回归也证明 joined row 会进入真实 recent context，不能继续沿用旧消息数量假设。
+
 ## 2. 引用与渲染（FE）
 
 （详细规范与验收清单见 Iris 设计稿；此处为契约要点。）
@@ -124,6 +132,7 @@
 
 ### 4.0 s89 双部署环境（2026-07-16 当天进档——此前是隐性知识，烧过一小时考古）
 - **`:8090` = dev 自动部署**（`/data/multica`，APP_ENV=dev；`deploy.yml` on push→dev，已验证）：**测试/验收/日常一律用这套**；lrm-team 等真实工作区在这套的 `multica-postgres-1`。
+- **浏览器麦克风例外**（2026-07-22 实测，2026-07-23 修复）：`:8090` 是 HTTP，Chrome/Edge 必须隐藏 `getUserMedia`，所以它不能用于录音验收。现有 `leagent.me` 在腾讯云公网入口被转到 `dnspod.qcloud.com/static/webblock.html`，HTTPS 握手被关闭；Caddy 本机证书和反代正常也改变不了这个外部拦截。s89 现由仓库内 `deploy/s89/Caddyfile` 管理 `https://82.157.184.89`，使用 Let's Encrypt `shortlived` profile 自动签发/续期公网 IPv4 证书；`:8090` 只为 daemon 兼容与回滚验收保留。客户端只报告真实的 secure-context 错误，不尝试绕过浏览器安全策略。
 - **`:18090` = main 分支部署**（`/data/multica-main`，APP_ENV=production，独立 PostgreSQL/卷/端口，独立用户/工作区宇宙——同邮箱在两套里是两个人；海鹏搭建）。**触发机制已确认（Nash 三方对账）**：`.github/workflows/deploy-main.yml` + `docs/deploy-s89-main.md` **只存在于 `main` 分支**——dev→main PR 合并触发部署（最近 run 29302499173，7/14 成功，s89 镜像=origin/main 一致；无 cron/watchtower，CI/CD 唯一入口）。"停在 7/14"只是因为 main 自那以后没再合并过。
 - **⚠️ 元教训**：workflow 文件可以只活在别的分支上——只扫 `origin/dev` 会把存在的机制误报为"缺失"（deploy-main.yml 留在 main 是 trigger 设计的一部分）。更深一层（Felix 自拆）：**"永远读 X"式规矩本身就是待爆假设**——他上午栽在"读了陈旧 main"后给自己立了"一律读 origin/dev"，两小时后这条规矩让他在"什么部署 main"的问题上扫错了树。正确形态是**读对这个问题有权威性的那棵树**（产品代码→dev；"什么部署 main"→main；"线上跑什么"→部署的那个 SHA）——把依赖上下文的判断压成常量默认值，和 `[a-z0-9]`/终止符表是同一个病：一条规矩能修好上一次的错，同时制造下一次的错。
 - **两条铁则（Frank）**：不要手改 :18090；一切变更走 CI/CD 部署。
@@ -164,6 +173,23 @@
 - **现实边界**：Cursor 已定义通用 `preToolUse/postToolUse/postToolUseFailure`，但 Multica 使用的是 local `cursor-agent --print` 路径；不得拿 IDE/Cloud 的支持面推定某个已装 CLI 版本。每个目标版本必须用 Shell/Read/Write/MCP × success/failure/rejection 探针证明实际覆盖。Cursor 不替 Multica 保证本地持久化/重试/幂等/崩溃恢复；官方 `stream-json` 当前明确提供通用 `tool_call started/completed`，所以在 hook 探针未全绿前它仍是交付权威。
 - **切换门**：相关工具覆盖率完整 + 本地落盘/重试 + 幂等去重 + crash resume + shadow 无丢失五门全部通过，才把 hook 切为单一权威；随后删除 native 权威。Shadow 永不写第二份用户事实，不允许永久双真相。
 - **待升档的物**：provider-neutral hook source contract、原子 outbox/spool、ACK/checkpoint、重启恢复、source-selection/cutover 配置与双源差异指标。上述代码和见红测试未落前，本节不得改标 `可执行`。
+
+### 4.7 语音供应商只在 server 边界出现 — `可执行`（③单一 transport + ⑤协议/真实往返测试；owner: @Codex）
+- 豆包 Speech API Key 只进入 backend 环境和 WebSocket header，不进入前端配置、API 响应、日志、fixture 或 Git。ASR/TTS 失败返回明确错误，不换浏览器语音、旧版资源或其他供应商制造假成功。
+- 当前已验证合同固定为 TTS 2.0 `seed-tts-2.0` 和 ASR 2.0 小时版 `volc.seedasr.sauc.duration`；ASR 输入固定为 16 kHz、单声道、signed 16-bit little-endian PCM。切换资源版本或输入格式必须改显式合同和测试，不能在 transport 里试探。
+- HTTP 面必须同时经过登录、workspace membership 和 human-actor guard。语音额度不能由 task token、agent credential 或 cloud PAT 消耗。
+- **物**：`server/internal/integrations/doubaospeech`；`POST /api/voice/asr`、`POST /api/voice/tts`；协议 frame、header、错误脱敏、handler 输入边界测试；可选 live test 用 TTS 生成 PCM 再送 ASR，已用实际账号见过完整往返成功。
+
+### 4.8 消息语音形态由结构化 part 决定 — `可执行`（②协议类型 + ③共享 Composer/播放组件 + ⑤消息链回归；owner: @Codex）
+- 人类录音落库为可读 transcript text + `{type:"voice", duration_ms, attachment_id}`，附件保存与 ASR 相同波形的 16 kHz 单声道 PCM WAV；Agent 语音回复落库为完整 transcript text + `{type:"voice"}`。`voice` part 没有非空 text part 时服务端拒绝，不能靠正文关键词猜消息形态。
+- 人类语音消息要求 Agent 通过现有 `multica message send --voice` 输出；普通文字仍走文字，文字明确要求语音时由 Agent 语义判断后加 `--voice`。前端不维护“语音回复”关键词表。
+- 所有人类发言的频道执行提示都必须保留用户请求的交付形式，不得另外注入 `text only` / `plain-text reply` 之类相互冲突的规则。普通文字消息只注入语义意图与能力说明，具体 CLI 语法继续以 runtime brief 为单一权威源；结构化语音输入可以在当轮强化已有的 `--voice` 路径。
+- 语音回复依赖支持 `message send --voice` 的运行时版本。服务端与前端已支持语音不代表旧 daemon 自动获得该命令；发布后必须确认目标智能体重新注册的 `cli_version` 已包含语音合同。
+- 自动播放资格只来自本机当前会话的一次发送手势，并由第一条新 Agent 回复消费；文字回复也会消费，防止稍后的无关语音突然播放。所有 Agent 语音消息始终提供手动播放/停止/重试。
+- Agent 语音回复与新的人类录音默认只显示同一种语音气泡；canonical transcript 仍保留在消息中用于 Agent 上下文、可访问性、复制和 Agent TTS，但正文需由气泡旁的显式“转文字”操作展开。展开区必须与对应气泡同组并有可感知的“语音转写”标识。历史人类语音 part 没有 `attachment_id` 时继续显示不可播放标记，不能用 TTS 冒充用户原声。
+- 人类录音先解码为同一份 PCM，ASR 与 WAV 附件上传并行执行；ASR 失败或发送前被拒绝时删除未绑定附件。录音附件沿用频道附件的 membership、写权限、消息绑定、下载和删除合同，不另造公开音频地址。这里保存的是重采样后的真实语音波形，不是浏览器原始 WebM/MP4 容器；实时通话仍需另立媒体传输合同。
+- Agent 语音的播放源只能是 server 根据 canonical transcript 生成的 TTS。旧运行时曾把“文本 + 单个自有音频附件”当语音回复发送；agent transport 将这个精确边界形状补成 `voice` part，显示层同时识别已落库的同形消息、隐藏该附件且不播放其字节。普通用户音频、多个附件和混合文件消息不参与此规则；当前运行时明确禁止自行合成/上传语音附件。
+- **物**：`protocol.MessagePartTypeVoice`、`messageparts.Normalize`、CLI `message send --voice`、共享 `VoiceInputButton`/`VoiceMessageAudio`、channel/DM/thread 发送与渲染回归；语音基础实现见 `docs/superpowers/plans/2026-07-22-beckham-voice-poc.md`，人类原声附件实现见 `docs/superpowers/plans/2026-07-23-human-voice-recording.md`。
 
 ## 5. 验证方法论 — `仅文档`（诚实标注：拦不住人，只能让"猜"显式化）
 

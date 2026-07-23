@@ -67,6 +67,65 @@ func TestFinalizeAgentChannelMessageDMDropsUnanchoredReferences(t *testing.T) {
 	}
 }
 
+func TestChannelVoiceReplyInstructionUsesStructuredVoicePart(t *testing.T) {
+	voice := ChannelMessageResponse{
+		Type:  "user",
+		Parts: []protocol.MessagePart{{Type: protocol.MessagePartTypeVoice}},
+	}
+	if got := channelVoiceReplyInstruction(voice); !strings.Contains(got, "multica message send --voice") {
+		t.Fatalf("voice instruction = %q", got)
+	}
+	typed := channelVoiceReplyInstruction(ChannelMessageResponse{Type: "user", Content: "请语音回复"})
+	if !strings.Contains(typed, "explicitly asks") || !strings.Contains(typed, "runtime brief's voice-delivery path") {
+		t.Fatalf("typed human message instruction = %q, want semantic voice-request guidance", typed)
+	}
+	if got := channelVoiceReplyInstruction(ChannelMessageResponse{Type: "agent", Parts: voice.Parts}); got != "" {
+		t.Fatalf("agent-authored voice output must not force another voice reply, got %q", got)
+	}
+}
+
+func TestChannelDirectedReplyInstructionDoesNotForceTextModality(t *testing.T) {
+	if strings.Contains(channelDirectedReplyInstruction, "text answer") {
+		t.Fatalf("directed reply instruction forces text and conflicts with voice requests: %q", channelDirectedReplyInstruction)
+	}
+	if strings.Contains(channelStickerReplyInstruction, "send text only") {
+		t.Fatalf("sticker instruction forces text and conflicts with voice requests: %q", channelStickerReplyInstruction)
+	}
+	if !strings.Contains(channelDirectedReplyInstruction, "requested supported delivery modality") {
+		t.Fatalf("directed reply instruction = %q, want requested-modality guidance", channelDirectedReplyInstruction)
+	}
+	prompt := buildChannelAmbientObservationPrompt(
+		ChannelResponse{Name: "voice-test"},
+		db.Agent{},
+		ChannelMessageResponse{ID: "message-1", Type: "user", Content: "请用语音回复"},
+	)
+	if strings.Contains(prompt, "plain-text reply") || !strings.Contains(prompt, "runtime brief's voice-delivery path") {
+		t.Fatalf("ambient prompt has conflicting voice delivery guidance: %q", prompt)
+	}
+}
+
+func TestFormatChannelMessageLineLabelsVoiceDirection(t *testing.T) {
+	voicePart := []protocol.MessagePart{{Type: protocol.MessagePartTypeVoice}}
+	human := formatChannelMessageLine(ChannelMessageResponse{
+		AuthorName: "Frank",
+		Type:       "user",
+		Content:    "question",
+		Parts:      voicePart,
+	})
+	if !strings.Contains(human, "user, voice input") {
+		t.Fatalf("human line = %q, want voice input label", human)
+	}
+	agent := formatChannelMessageLine(ChannelMessageResponse{
+		AuthorName: "Beckham",
+		Type:       "agent",
+		Content:    "answer",
+		Parts:      voicePart,
+	})
+	if !strings.Contains(agent, "agent, voice reply") {
+		t.Fatalf("agent line = %q, want voice reply label", agent)
+	}
+}
+
 func TestCreateChannelDuplicateNameReturnsCodedConflict(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -160,8 +219,8 @@ func TestChannelMentionStoresThreadContextAndBridgesAgentReply(t *testing.T) {
 	if threadID != "debate-thread" || promptRoot.Valid || depth != 2 {
 		t.Fatalf("prompt thread/root/depth = %q/%+v/%d, want debate-thread/no-root/2", threadID, promptRoot, depth)
 	}
-	if strings.Contains(prompt, "Recent channel messages from this channel only (bounded window):") {
-		t.Fatalf("prompt should not repeat the trigger in recent channel context:\n%s", prompt)
+	if !strings.Contains(prompt, agentHandle+" joined this channel") {
+		t.Fatalf("prompt should retain the canonical membership context before the trigger:\n%s", prompt)
 	}
 	if count := strings.Count(prompt, triggerContent); count != 1 {
 		t.Fatalf("current trigger should appear exactly once, got %d:\n%s", count, prompt)
@@ -435,7 +494,8 @@ func TestChannelChatDoneSuppressedDaemonOutdatedDoesNotWriteSystemMessage(t *tes
 	var messageCount int
 	if err := testPool.QueryRow(ctx, `
 		SELECT count(*) FROM channel_message
-		WHERE channel_id = $1 AND author_type IN ('agent', 'system')
+		WHERE channel_id = $1
+		  AND (author_type = 'agent' OR (author_type = 'system' AND membership_generation_id IS NULL))
 	`, channelID).Scan(&messageCount); err != nil {
 		t.Fatalf("count visible output messages: %v", err)
 	}
@@ -483,7 +543,8 @@ func TestChannelChatDoneSuppressedTraceOnlyDoesNotWriteSystemMessage(t *testing.
 	var messageCount int
 	if err := testPool.QueryRow(ctx, `
 		SELECT count(*) FROM channel_message
-		WHERE channel_id = $1 AND author_type IN ('agent', 'system')
+		WHERE channel_id = $1
+		  AND (author_type = 'agent' OR (author_type = 'system' AND membership_generation_id IS NULL))
 	`, channelID).Scan(&messageCount); err != nil {
 		t.Fatalf("count visible output messages: %v", err)
 	}
@@ -2155,8 +2216,8 @@ func TestChannelAgentInboxDrainAckAmbientAdvancesSessionCursor(t *testing.T) {
 	if got.AgentID != agentID || got.Reason != "ambient" || got.RequiresWake || got.SeqTo != first.Seq {
 		t.Fatalf("drained ambient event = %+v, want ambient context for agent %s seq %d", got, agentID, first.Seq)
 	}
-	if len(got.Messages) != 1 || got.Messages[0].Content != "ordinary ambient one" {
-		t.Fatalf("ambient drain messages = %+v, want first ambient message only", got.Messages)
+	if len(got.Messages) != 2 || got.Messages[0].Type != "system" || got.Messages[1].Content != "ordinary ambient one" {
+		t.Fatalf("ambient drain messages = %+v, want membership row followed by first ambient message", got.Messages)
 	}
 
 	ackReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+got.ID+"/ack", AckAgentInboxEventRequest{
@@ -4392,6 +4453,101 @@ func TestSendChannelMessageStoresStickerParts(t *testing.T) {
 	}
 }
 
+func TestSendChannelMessageStoresVoiceTranscriptPart(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	channelID := seedChannelForTest(t, "voice-parts-"+uuid.NewString(), testUserID)
+	req := newRequest(http.MethodPost, "/api/channels/"+channelID+"/messages", map[string]any{
+		"content": "spoken question",
+		"parts": []protocol.MessagePart{
+			{Type: protocol.MessagePartTypeText, Text: "spoken question"},
+			{Type: protocol.MessagePartTypeVoice, DurationMS: 2400},
+		},
+	})
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.SendChannelMessage(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("send voice parts: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var created ChannelMessageResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode created message: %v", err)
+	}
+	if created.Content != "spoken question" || len(created.Parts) != 2 ||
+		created.Parts[1].Type != protocol.MessagePartTypeVoice || created.Parts[1].DurationMS != 2400 {
+		t.Fatalf("created message = %+v, want transcript plus voice part", created)
+	}
+}
+
+func TestSendChannelMessageBindsVoiceRecordingAttachment(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "voice-recording-"+uuid.NewString(), testUserID)
+	var attachmentID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO attachment (workspace_id, channel_id, uploader_type, uploader_id, filename, url, content_type, size_bytes)
+		VALUES ($1, $2, 'member', $3, 'voice-recording.wav', 's3://voice-recording.wav', 'audio/wav', 48)
+		RETURNING id`, testWorkspaceID, channelID, testUserID).Scan(&attachmentID); err != nil {
+		t.Fatalf("seed voice recording: %v", err)
+	}
+
+	rec := sendChannelMessageForTest(t, channelID, testUserID, map[string]any{
+		"content": "spoken question",
+		"parts": []protocol.MessagePart{
+			{Type: protocol.MessagePartTypeText, Text: "spoken question"},
+			{
+				Type:         protocol.MessagePartTypeVoice,
+				DurationMS:   1800,
+				AttachmentID: attachmentID,
+				Filename:     "voice-recording.wav",
+				ContentType:  "audio/wav",
+				SizeBytes:    48,
+			},
+		},
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("send recorded voice: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var created ChannelMessageResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode created message: %v", err)
+	}
+	if len(created.Parts) != 2 || created.Parts[1].AttachmentID != attachmentID {
+		t.Fatalf("created parts = %+v, want voice attachment %s", created.Parts, attachmentID)
+	}
+	if len(created.Attachments) != 1 || created.Attachments[0].ID != attachmentID {
+		t.Fatalf("created attachments = %+v, want recording %s", created.Attachments, attachmentID)
+	}
+
+	var boundMessageID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT channel_message_id::text FROM attachment WHERE id = $1`, attachmentID).Scan(&boundMessageID); err != nil {
+		t.Fatalf("load recording binding: %v", err)
+	}
+	if boundMessageID != created.ID {
+		t.Fatalf("recording bound to %q, want %q", boundMessageID, created.ID)
+	}
+}
+
+func TestAttachmentIDsFromPartsIncludesVoiceRecording(t *testing.T) {
+	ids := attachmentIDsFromParts([]protocol.MessagePart{
+		{Type: protocol.MessagePartTypeText, Text: "transcript"},
+		{Type: protocol.MessagePartTypeVoice, AttachmentID: "recording-id"},
+	})
+	if len(ids) != 1 || ids[0] != "recording-id" {
+		t.Fatalf("attachmentIDsFromParts = %v, want voice recording id", ids)
+	}
+}
+
 func TestSendChannelMessageRejectsUnknownStickerPart(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -4624,11 +4780,14 @@ func TestChannelMessageEditDeleteOwnOnlyKeepsTombstoneNoWake(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
 		t.Fatalf("decode messages after delete: %v", err)
 	}
-	if len(page.Messages) != 1 {
-		t.Fatalf("messages after delete = %#v, want one tombstone", page.Messages)
+	var tombstone *ChannelMessageResponse
+	for i := range page.Messages {
+		if page.Messages[i].ID == msg.ID {
+			tombstone = &page.Messages[i]
+			break
+		}
 	}
-	tombstone := page.Messages[0]
-	if tombstone.ID != msg.ID || tombstone.Content != "" || len(tombstone.Parts) != 0 || tombstone.EditedAt == nil || tombstone.DeletedAt == nil {
+	if tombstone == nil || tombstone.Content != "" || len(tombstone.Parts) != 0 || tombstone.EditedAt == nil || tombstone.DeletedAt == nil {
 		t.Fatalf("tombstone message = %#v, want empty content/parts with edited_at and deleted_at", tombstone)
 	}
 	if len(tombstone.Reactions) != 0 {
@@ -4907,6 +5066,212 @@ func TestChannelArchivePlainMemberForbidden(t *testing.T) {
 	}
 	if archived {
 		t.Fatal("plain member archived the channel")
+	}
+}
+
+func TestChannelPermanentDeleteRemovesChannelAndMessages(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "perm-delete-"+uuid.NewString(), testUserID)
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "bye forever", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
+		t.Fatalf("seed message: %v", err)
+	}
+
+	req := newRequest(http.MethodDelete, "/api/channels/"+channelID, nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.DeleteChannel(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete channel: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var exists bool
+	if err := testPool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM channel WHERE id = $1)`, channelID).Scan(&exists); err != nil {
+		t.Fatalf("check channel exists: %v", err)
+	}
+	if exists {
+		t.Fatal("channel row still present after permanent delete")
+	}
+	var messageCount int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM channel_message WHERE channel_id = $1`, channelID).Scan(&messageCount); err != nil {
+		t.Fatalf("count messages: %v", err)
+	}
+	if messageCount != 0 {
+		t.Fatalf("messages remaining after delete: %d", messageCount)
+	}
+	if ch := listedChannelForTest(t, channelID); ch != nil {
+		t.Fatalf("deleted channel still listed: %+v", *ch)
+	}
+	if ch := archivedListedChannelForTest(t, channelID); ch != nil {
+		t.Fatalf("deleted channel still in archived list: %+v", *ch)
+	}
+
+	req = newRequest(http.MethodGet, "/api/channels/"+channelID+"/messages", nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec = httptest.NewRecorder()
+	testHandler.ListChannelMessages(rec, req)
+	if rec.Code != http.StatusNotFound && rec.Code != http.StatusForbidden {
+		t.Fatalf("enter deleted channel: status=%d body=%s, want 404/403", rec.Code, rec.Body.String())
+	}
+}
+
+func TestChannelPermanentDeleteWorksOnArchivedChannel(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	channelID := seedChannelForTest(t, "perm-delete-archived-"+uuid.NewString(), testUserID)
+	req := newRequest(http.MethodPost, "/api/channels/"+channelID+"/archive", nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.ArchiveChannel(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("archive channel: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = newRequest(http.MethodDelete, "/api/channels/"+channelID, nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec = httptest.NewRecorder()
+	testHandler.DeleteChannel(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete archived channel: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var exists bool
+	if err := testPool.QueryRow(context.Background(), `SELECT EXISTS(SELECT 1 FROM channel WHERE id = $1)`, channelID).Scan(&exists); err != nil {
+		t.Fatalf("check channel exists: %v", err)
+	}
+	if exists {
+		t.Fatal("archived channel still present after permanent delete")
+	}
+}
+
+func TestChannelPermanentDeletePlainMemberForbidden(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	memberID := createChannelPlainMember(t)
+	channelID := seedChannelForTest(t, "perm-delete-member-"+uuid.NewString(), testUserID, memberID)
+
+	req := newRequestAs(memberID, http.MethodDelete, "/api/channels/"+channelID, nil)
+	req = withChannelTestWorkspaceCtx(t, req, memberID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.DeleteChannel(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("plain member delete: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var exists bool
+	if err := testPool.QueryRow(context.Background(), `SELECT EXISTS(SELECT 1 FROM channel WHERE id = $1)`, channelID).Scan(&exists); err != nil {
+		t.Fatalf("check channel exists: %v", err)
+	}
+	if !exists {
+		t.Fatal("plain member permanently deleted the channel")
+	}
+}
+
+func TestChannelPermanentDeleteCreatorOnlyForbidden(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	// Channel creator who is only a workspace member may archive, but must not
+	// permanently delete (owner/admin only).
+	creatorID := createChannelPlainMember(t)
+	ctx := context.Background()
+	var channelID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO channel (workspace_id, name, created_by)
+		VALUES ($1, $2, $3)
+		RETURNING id`, testWorkspaceID, "perm-delete-creator-"+uuid.NewString(), creatorID).Scan(&channelID); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, channelID) })
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'user', $3)`, channelID, testWorkspaceID, creatorID); err != nil {
+		t.Fatalf("seed creator membership: %v", err)
+	}
+
+	req := newRequestAs(creatorID, http.MethodDelete, "/api/channels/"+channelID, nil)
+	req = withChannelTestWorkspaceCtx(t, req, creatorID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.DeleteChannel(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("creator-only delete: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var exists bool
+	if err := testPool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM channel WHERE id = $1)`, channelID).Scan(&exists); err != nil {
+		t.Fatalf("check channel exists: %v", err)
+	}
+	if !exists {
+		t.Fatal("creator-only permanently deleted the channel")
+	}
+}
+
+func TestChannelPermanentDeleteAdminAllowed(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	adminID := createChannelWorkspaceAdmin(t)
+	channelID := seedChannelForTest(t, "perm-delete-admin-"+uuid.NewString(), testUserID, adminID)
+
+	req := newRequestAs(adminID, http.MethodDelete, "/api/channels/"+channelID, nil)
+	req = withChannelTestWorkspaceCtx(t, req, adminID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.DeleteChannel(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("admin delete: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var exists bool
+	if err := testPool.QueryRow(context.Background(), `SELECT EXISTS(SELECT 1 FROM channel WHERE id = $1)`, channelID).Scan(&exists); err != nil {
+		t.Fatalf("check channel exists: %v", err)
+	}
+	if exists {
+		t.Fatal("admin delete left channel row")
+	}
+}
+
+func TestChannelPermanentDeleteRejectsDM(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	agentID := createHandlerTestAgent(t, "Perm Delete DM Bot", []byte("[]"))
+	channelID := seedAgentDMChannel(t, agentID)
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, channelID) })
+
+	req := newRequest(http.MethodDelete, "/api/channels/"+channelID, nil)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	req = withURLParam(req, "channelId", channelID)
+	rec := httptest.NewRecorder()
+	testHandler.DeleteChannel(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("delete DM: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if body["error"] != "direct messages cannot be permanently deleted" {
+		t.Fatalf("error = %q, want DM rejection message", body["error"])
+	}
+	var exists bool
+	if err := testPool.QueryRow(context.Background(), `SELECT EXISTS(SELECT 1 FROM channel WHERE id = $1)`, channelID).Scan(&exists); err != nil {
+		t.Fatalf("check channel exists: %v", err)
+	}
+	if !exists {
+		t.Fatal("DM channel was deleted")
 	}
 }
 
@@ -5279,7 +5644,14 @@ func TestChannelThreadReadModelExposesParticipantsAndPendingWake(t *testing.T) {
 	}
 	gotRoot := page.Messages[0]
 	timeline := listedMessagesForUser(t, channelID, testUserID)
-	if len(timeline) != 1 || len(timeline[0].ThreadParticipants) == 0 || len(timeline[0].ThreadWakeAnnotations) == 0 {
+	var timelineRoot *ChannelMessageResponse
+	for i := range timeline {
+		if timeline[i].ID == root.ID {
+			timelineRoot = &timeline[i]
+			break
+		}
+	}
+	if timelineRoot == nil || len(timelineRoot.ThreadParticipants) == 0 || len(timelineRoot.ThreadWakeAnnotations) == 0 {
 		t.Fatalf("main timeline root missing thread read-model fields: %+v", timeline)
 	}
 	if len(gotRoot.ThreadParticipants) != 2 {
@@ -5835,6 +6207,7 @@ func TestChannelThreadContinuationPromptAllowsSilence(t *testing.T) {
 	for _, want := range []string{
 		"not a must-reply directed mention",
 		"finish without visible output",
+		"Message target for chat transport: #" + ch.Name + ":" + root.ID,
 		"Current follow-up:",
 		"never mind",
 	} {
@@ -5849,6 +6222,47 @@ func TestChannelThreadContinuationPromptAllowsSilence(t *testing.T) {
 		if strings.Contains(prompt, banned) {
 			t.Fatalf("thread continuation prompt should not contain directed must-reply text %q:\n%s", banned, prompt)
 		}
+	}
+}
+
+func TestChannelDMThreadContinuationPromptIncludesDMThreadTarget(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, channelID := createChannelCompletionTask(t, "dm")
+	agentID := agentIDForTask(t, taskID)
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("dm channel not found after seed")
+	}
+	agent, err := testHandler.Queries.GetAgent(ctx, parseUUID(agentID))
+	if err != nil {
+		t.Fatalf("load dm agent: %v", err)
+	}
+	root, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "dm root", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("dm-prompt-root"), 0)
+	if err != nil {
+		t.Fatalf("insert dm root: %v", err)
+	}
+	followup, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "dm follow up", "multica", nil, pgtype.UUID{}, parseUUID(root.ID), strPtr("dm-prompt-root"), 0)
+	if err != nil {
+		t.Fatalf("insert dm follow-up: %v", err)
+	}
+
+	prompt := testHandler.buildChannelThreadContinuationPrompt(ctx, ch, agent, followup)
+	wantTarget := "dm:@" + userHandleForTransportTest(t, testUserID) + ":" + root.ID
+	for _, want := range []string{
+		"thread inside a Multica DM",
+		"Message target for chat transport: " + wantTarget,
+		"dm follow up",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("dm thread continuation prompt missing %q:\n%s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "thread inside Multica group chat") {
+		t.Fatalf("dm thread continuation prompt mislabeled as group chat:\n%s", prompt)
 	}
 }
 
@@ -7100,21 +7514,31 @@ func assertNoThreadRepliesForRoot(t *testing.T, channelID, rootID string) {
 
 func createChannelPlainMember(t *testing.T) string {
 	t.Helper()
+	return createChannelWorkspaceMemberWithRole(t, "member")
+}
+
+func createChannelWorkspaceAdmin(t *testing.T) string {
+	t.Helper()
+	return createChannelWorkspaceMemberWithRole(t, "admin")
+}
+
+func createChannelWorkspaceMemberWithRole(t *testing.T, role string) string {
+	t.Helper()
 	ctx := context.Background()
 	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")
-	name := "channel_plain_" + suffix
-	email := "channel-plain-" + suffix + "@multica.test"
+	name := "channel_" + role + "_" + suffix
+	email := "channel-" + role + "-" + suffix + "@multica.test"
 	var userID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO "user" (name, email)
 		VALUES ($1, $2)
 		RETURNING id`, name, email).Scan(&userID); err != nil {
-		t.Fatalf("create plain member user: %v", err)
+		t.Fatalf("create %s user: %v", role, err)
 	}
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO member (workspace_id, user_id, role)
-		VALUES ($1, $2, 'member')`, testWorkspaceID, userID); err != nil {
-		t.Fatalf("add plain member: %v", err)
+		VALUES ($1, $2, $3)`, testWorkspaceID, userID, role); err != nil {
+		t.Fatalf("add %s member: %v", role, err)
 	}
 	t.Cleanup(func() {
 		testPool.Exec(context.Background(), `DELETE FROM member WHERE workspace_id = $1 AND user_id = $2`, testWorkspaceID, userID)

@@ -79,19 +79,21 @@ export const healthStateConfig: Record<AgentHealthState, HealthStateVisual> = {
   },
 };
 
-// Resolve the presence-dot COLOR class from the connectivity health summary —
-// the SOLE color source once the BE health API is live (Iris §1). Transitional
-// safety: while the summary is unavailable (query loading, or the endpoint not
-// yet deployed / 404), return `fallbackDotClass` so the dot degrades to its
-// prior color instead of blanking or crashing.
-// TODO(#266): drop `fallbackDotClass` and make health_summary.state the
-// unconditional color source once the BE API ships.
+// Resolve the presence-dot COLOR class from the connectivity health summary.
+// LRM-248: live badge is Online (green) or Offline (gray) only —
+// suspected_disconnect / reconnecting fold to Online green; offline stays gray.
+// When the summary is unavailable, return `fallbackDotClass` (already folded
+// through toLiveAvailability at the call site).
 export function resolveHealthDotClass(
   summary: AgentHealthSummary | undefined,
   fallbackDotClass: string,
 ): string {
   if (!summary) return fallbackDotClass;
-  return healthStateConfig[summary.state].dotClass;
+  if (summary.state === "offline") {
+    return healthStateConfig.offline.dotClass;
+  }
+  // online | recovered | suspected_disconnect | reconnecting → Online green
+  return healthStateConfig.online.dotClass;
 }
 
 // Compact elapsed-duration formatter for the "在线 3h" / "疑似掉线 2m" head

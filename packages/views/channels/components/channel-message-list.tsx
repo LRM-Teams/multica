@@ -11,18 +11,25 @@ import {
   type Ref,
   type ReactNode,
 } from "react";
+// react-doctor-disable-next-line react-doctor/no-flush-sync -- intentional: sync Virtuoso scroll parent before paint (LRM-273).
+import { flushSync } from "react-dom";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { ChannelMessage } from "@multica/core/types";
+import type { OpenAgentPanelFn } from "@multica/core/agents";
+import { channelMessageListItemKey } from "@multica/core/channels";
+
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { cn } from "@multica/ui/lib/utils";
 import { ChannelMessageBubble } from "./channel-message-bubble";
 import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
 import { foldedIssueEventIds } from "./channel-system-event";
 import { useMessageDayDividers } from "../../i18n/use-message-time";
+import { useViewingTimezone } from "../../common/use-viewing-timezone";
 import { useT } from "../../i18n/use-t";
 import { useNewMessagesDivider } from "../hooks/use-new-messages-divider";
 import { useNewMessagesPill } from "../hooks/use-new-arrivals-pill";
 import { useUnreadAnchorScroll } from "../hooks/use-unread-anchor-scroll";
+import { buildMessageGroupCompactMap } from "./message-group-compact";
 
 // Small centered date pill (Iris #303 A) — the inline date divider at each local
 // day boundary.
@@ -151,8 +158,9 @@ type MessageViewportProps = {
   onDeleteMessage?: (message: ChannelMessage) => void;
   /** Retry a failed optimistic send (reuses the bubble's `client_message_id`). */
   onRetrySend?: (message: ChannelMessage) => void;
-  /** Opens the side agent file/public-info panel for an agent-authored message. */
-  onOpenAgent?: (agentId: string) => void;
+  /** Opens the side agent file/public-info panel for an agent-authored message
+   *  (LRM-292: agentId + optional row identity snapshot). */
+  onOpenAgent?: OpenAgentPanelFn;
   /** Search hit ids - all matching messages get inline keyword marks while search is open. */
   searchHitIds?: Set<string>;
   /** Conversation search phrase used for inline keyword marks within search hits. */
@@ -240,12 +248,22 @@ function MessageViewport({
   const [scrollContainerEl, setScrollContainerEl] = useState<HTMLDivElement | null>(null);
   const channelId = messages[0]?.channel_id;
   const canLoadOlder = !!hasOlder && !loadingOlder && !!onLoadOlder;
+  const tz = useViewingTimezone();
   const dayDividers = useMessageDayDividers(messages);
   // Fold redundant consecutive issue-lifecycle rows (item #7): a same-source
   // completed/status→done pair, or an exact repeat, renders once. Derived as a
   // Set (never a filtered array) so Virtuoso's data/indices — and thus the
   // anchor/pagination math — stay identical; a folded row simply renders null.
   const foldedIssueIds = useMemo(() => foldedIssueEventIds(messages), [messages]);
+  const messageGroupCompact = useMemo(
+    () =>
+      buildMessageGroupCompactMap(messages, {
+        foldedIds: foldedIssueIds,
+        dateDividerIds: new Set(dayDividers.keys()),
+        tz,
+      }),
+    [messages, foldedIssueIds, dayDividers, tz],
+  );
   const newMessagesDivider = useNewMessagesDivider(
     channelId,
     messages,
@@ -267,9 +285,19 @@ function MessageViewport({
   // `initialTopMostItemIndex` land correctly; giving Virtuoso its own flex
   // scroller regressed cold-load positioning), and (c) backs the fallback
   // scroll-position preservation + the render-detection probe via `scrollRef`.
+  //
+  // `flushSync` attaches Virtuoso in the same commit (before paint) so the list
+  // never flashes an empty scroller between skeleton/loading and messages
+  // (LRM-273).
   const setScrollContainerRef = useCallback((node: HTMLDivElement | null) => {
     scrollRef.current = node;
-    setScrollContainerEl(node);
+    if (node) {
+      flushSync(() => {
+        setScrollContainerEl(node);
+      });
+    } else {
+      setScrollContainerEl(null);
+    }
   }, []);
 
   const highlightIndex = useMemo(() => {
@@ -380,7 +408,7 @@ function MessageViewport({
     );
   }
 
-  if (loading) {
+  if (loading && messages.length === 0) {
     return (
       <StaticMessageScroller
         header={header}
@@ -391,11 +419,16 @@ function MessageViewport({
     );
   }
 
-  // Empty thread: render the placeholder directly (no message rows).
+  // Empty thread: primary empty copy uses foreground (LRM-357), not muted.
   if (messages.length === 0) {
     return (
       <StaticMessageScroller header={header}>
-        {emptyLabel}
+        <p
+          data-slot="message-list-empty"
+          className="text-sm text-foreground"
+        >
+          {emptyLabel}
+        </p>
       </StaticMessageScroller>
     );
   }
@@ -405,12 +438,15 @@ function MessageViewport({
     // fact). Return null rather than dropping it from `messages` so the list's
     // virtualization/anchoring is untouched.
     if (foldedIssueIds.has(msg.id)) return null;
+    // Stable across optimistic temp id → server ACK so rows do not remount
+    // (LRM-273 secondary flash).
+    const rowKey = channelMessageListItemKey(msg);
     const searchHighlighted = searchHitIds?.has(msg.id) ?? false;
     const dividerLabel = dayDividers.get(msg.id);
     const isUnreadAnchor = newMessagesDivider?.anchorMessageId === msg.id;
-    const collapseLongContent = lastReadSeq != null && msg.seq <= lastReadSeq;
+    const compact = messageGroupCompact.get(rowKey) ?? messageGroupCompact.get(msg.id) ?? false;
     return (
-      <Fragment key={msg.id}>
+      <Fragment key={rowKey}>
         {dividerLabel && <DateDivider label={dividerLabel} />}
         {isUnreadAnchor && (
           // #340: real unread total frozen at entry (sidebar-same source); the
@@ -420,13 +456,17 @@ function MessageViewport({
         <div
           ref={(node) => {
             if (node) {
-              messageRefMap.set(msg.id, node);
+              messageRefMap.set(rowKey, node);
+              // Highlight/scroll may still look up by server id after ACK.
+              if (rowKey !== msg.id) messageRefMap.set(msg.id, node);
             } else {
-              messageRefMap.delete(msg.id);
+              messageRefMap.delete(rowKey);
+              if (rowKey !== msg.id) messageRefMap.delete(msg.id);
             }
           }}
-          className="px-5 pt-1.5"
+          className={cn("px-5", compact ? "pt-px" : "pt-1.5")}
           data-testid="message-row"
+          data-message-group={compact ? "compact" : "lead"}
         >
           <ChannelMessageBubble
             message={msg}
@@ -443,7 +483,7 @@ function MessageViewport({
             onOpenAgent={onOpenAgent}
             searchHighlighted={searchHighlighted}
             searchQuery={searchHighlighted ? searchQuery : undefined}
-            collapseLongContent={collapseLongContent}
+            compact={compact}
           />
         </div>
       </Fragment>
@@ -552,7 +592,7 @@ function MessageViewport({
           startReached={() => {
             if (canLoadOlder) onLoadOlder?.();
           }}
-          computeItemKey={(_, msg) => msg.id}
+          computeItemKey={(_, msg) => channelMessageListItemKey(msg)}
           components={{
             List: VirtuosoItemList,
             Header: () => (
@@ -667,11 +707,11 @@ function MessageRowsSkeleton() {
     ["w-24", "w-60", "w-36"],
   ];
   return (
-    <div className="space-y-5" aria-hidden="true">
-      {rows.map((widths, index) => (
-        <div key={index} className="flex gap-3">
-          <Skeleton className="mt-1 size-8 shrink-0 rounded-full opacity-60" />
-          <div className="min-w-0 flex-1 space-y-2">
+    <div className="space-y-1.5" aria-hidden="true" data-testid="message-rows-skeleton">
+      {rows.map((widths) => (
+        <div key={widths.join("-")} className="grid grid-cols-[28px_minmax(0,1fr)] gap-2.5 px-2 py-1.5 md:px-5">
+          <Skeleton className="size-8 shrink-0 rounded-full opacity-60" />
+          <div className="min-w-0 space-y-2">
             <Skeleton className={`${widths[0]} h-3 max-w-full opacity-50`} />
             <Skeleton className={`${widths[1]} h-3 max-w-full opacity-40`} />
             <Skeleton className={`${widths[2]} h-3 max-w-full opacity-30`} />

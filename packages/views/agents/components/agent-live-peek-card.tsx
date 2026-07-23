@@ -9,14 +9,13 @@ import { agentListOptions } from "@multica/core/workspace/queries";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
+import { AgentPresenceOverlay } from "../../common/actor-avatar";
 import { agentTaskSnapshotOptions } from "@multica/core/agents";
 import { issueDetailOptions } from "@multica/core/issues";
 import type { AgentTask } from "@multica/core/types";
 import { AlertTriangle } from "lucide-react";
 import { AppLink } from "../../navigation";
 import { useT, useTimeAgo } from "../../i18n";
-import { AgentPresenceStatusLine } from "./agent-presence-status-line";
-
 interface AgentLivePeekCardProps {
   agentId: string;
 }
@@ -74,16 +73,17 @@ export function AgentLivePeekCard({ agentId }: AgentLivePeekCardProps) {
 
   return (
     <div className="flex flex-col gap-3 text-left">
-      {/* Header — avatar + name + live status (dot + word, same mark as
-          the profile hover card / DM header). */}
+      {/* Header — avatar badge + plain Online/Offline text (LRM-248). */}
       <div className="flex items-start gap-3">
-        <ActorAvatarBase
-          name={displayName}
-          initials={initials}
-          avatarUrl={resolvePublicFileUrl(agent.avatar_url)}
-          isAgent
-          size={40}
-        />
+        <AgentPresenceOverlay agentId={agentId} size={40}>
+          <ActorAvatarBase
+            name={displayName}
+            initials={initials}
+            avatarUrl={resolvePublicFileUrl(agent.avatar_url)}
+            isAgent
+            size={40}
+          />
+        </AgentPresenceOverlay>
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-1.5">
             <ActorIdentityRow
@@ -91,7 +91,6 @@ export function AgentLivePeekCard({ agentId }: AgentLivePeekCardProps) {
               primaryClassName="truncate text-sm font-semibold"
               className="min-w-0 shrink"
             />
-            <AgentPresenceStatusLine agentId={agentId} className="max-w-[9rem] shrink-0" />
           </div>
         </div>
       </div>

@@ -30,10 +30,26 @@ describe("resolvePublicFileUrlWithBase", () => {
     );
   });
 
-  it("keeps bundled agent avatars on the web origin", () => {
+  it("prefixes agent presets when an API base is set (desktop / remote API)", () => {
     expect(resolvePublicFileUrlWithBase("/agent-avatars/human-11.jpg", "http://127.0.0.1:8080")).toBe(
-      "/agent-avatars/human-11.jpg",
+      "http://127.0.0.1:8080/agent-avatars/human-11.jpg?v=lrm218",
     );
+  });
+
+  it("keeps root-relative agent presets on same-origin web with cache-bust", () => {
+    expect(resolvePublicFileUrlWithBase("/agent-avatars/human-11.jpg", "")).toBe(
+      "/agent-avatars/human-11.jpg?v=lrm218",
+    );
+    expect(resolvePublicFileUrlWithBase("/uploads/a.png", "")).toBe("/uploads/a.png");
+  });
+
+  it("does not double-append the agent-avatar cache-bust token", () => {
+    expect(
+      resolvePublicFileUrlWithBase("/agent-avatars/human-11.jpg?v=lrm218", "http://127.0.0.1:8080"),
+    ).toBe("http://127.0.0.1:8080/agent-avatars/human-11.jpg?v=lrm218");
+    expect(
+      resolvePublicFileUrlWithBase("/agent-avatars/human-11.jpg?v=lrm218", ""),
+    ).toBe("/agent-avatars/human-11.jpg?v=lrm218");
   });
 
   it("returns null for empty values", () => {

@@ -22,6 +22,11 @@ const (
 // issueThreadSystemEventParams is deliberately factual: the event identifies
 // the issue and transition, while the optional target is the only agent that
 // may be woken. Clients can render it without parsing the fallback content.
+// Actor/target ids are the resolvable identity (GET /api/member-profiles/…).
+// Optional handle/name fields may still be emitted for diagnostics, but the FE
+// must not use them as a silent display fallback (LRM-281 / LRM-238) — group
+// managers are hidden from ListAgents (LRM-233) and must be looked up via the
+// profile API instead.
 type issueThreadSystemEventParams struct {
 	IssueID         string `json:"issue_id"`
 	IssueIdentifier string `json:"issue_identifier"`
@@ -29,6 +34,8 @@ type issueThreadSystemEventParams struct {
 	PreviousStatus  string `json:"previous_status,omitempty"`
 	ActorID         string `json:"actor_id,omitempty"`
 	ActorType       string `json:"actor_type,omitempty"`
+	ActorHandle     string `json:"actor_handle,omitempty"`
+	ActorName       string `json:"actor_name,omitempty"`
 	TargetID        string `json:"target_id,omitempty"`
 	TargetType      string `json:"target_type,omitempty"`
 	TargetHandle    string `json:"target_handle,omitempty"`
@@ -143,6 +150,18 @@ func (h *Handler) emitIssueThreadBackflowToScope(ctx context.Context, issue db.I
 		PreviousStatus:  previousStatus,
 		ActorID:         actorID,
 		ActorType:       channelMemberSystemEventPublicType(actorType),
+	}
+	if actorID != "" {
+		// Still stamp handle/name for diagnostics / older clients, but display
+		// must resolve via member-profile (LRM-281) because group managers are
+		// omitted from ListAgents (LRM-233).
+		refMemberType := "user"
+		if actorType == "agent" {
+			refMemberType = "agent"
+		}
+		ref := h.channelMemberSystemEventActorRef(ctx, uuidToString(issue.WorkspaceID), refMemberType, parseUUID(actorID))
+		params.ActorHandle = ref.Handle
+		params.ActorName = ref.DisplayName
 	}
 
 	var targetAgent db.Agent

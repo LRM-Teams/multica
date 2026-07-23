@@ -733,6 +733,12 @@ func buildPiArgs(prompt, sessionPath string, opts ExecOptions, logger *slog.Logg
 			"--no-approve",
 			"--tools", "",
 		)
+			// Load explicitly trusted extensions (application-generated only).
+			if len(opts.TrustedExtensionPaths) > 0 {
+				for _, p := range opts.TrustedExtensionPaths {
+					args = append(args, "--extension", p)
+				}
+			}
 	}
 	if opts.piOutputLimitExtension != "" {
 		// --no-extensions disables discovery only; Pi still loads an explicit
@@ -915,4 +921,45 @@ func ensurePiSessionFile(path string) error {
 // PiSessionDir exposes piSessionDir to other packages in this module.
 func PiSessionDir() (string, error) {
 	return piSessionDir()
+}
+
+// validateTrustedExtensionPaths checks that every path in TrustedExtensionPaths
+// is an absolute regular file within the trusted root. DisableTools must be
+// true. Duplicates are silently deduplicated. Returns cleaned absolute paths.
+func validateTrustedExtensionPaths(paths []string, root string, disableTools bool) ([]string, error) {
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	if !disableTools {
+		return nil, fmt.Errorf("TrustedExtensionPaths is only accepted when DisableTools is true")
+	}
+	root = filepath.Clean(root)
+	seen := make(map[string]struct{}, len(paths))
+	cleaned := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if !filepath.IsAbs(p) {
+			return nil, fmt.Errorf("trusted extension path %q must be absolute", p)
+		}
+		resolved, err := filepath.EvalSymlinks(p)
+		if err != nil {
+			return nil, fmt.Errorf("trusted extension path %q: %w", p, err)
+		}
+		info, err := os.Stat(resolved)
+		if err != nil {
+			return nil, fmt.Errorf("trusted extension path %q: %w", p, err)
+		}
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("trusted extension path %q is not a regular file", p)
+		}
+		rel, err := filepath.Rel(root, resolved)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			return nil, fmt.Errorf("trusted extension path %q is outside trusted root %q", p, root)
+		}
+		if _, ok := seen[resolved]; ok {
+			continue
+		}
+		seen[resolved] = struct{}{}
+		cleaned = append(cleaned, resolved)
+	}
+	return cleaned, nil
 }

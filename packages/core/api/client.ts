@@ -59,6 +59,8 @@ import type {
   AgentRunCount,
   AgentRuntime,
   InboxItem,
+  UserActivityListResponse,
+  UserActivityTab,
   IssueSubscriber,
   Comment,
   CommentTriggerPreview,
@@ -309,6 +311,8 @@ import {
   SandboxNodeTemplatesResponseSchema,
   SandboxSnapshotSchema,
   SandboxSnapshotListSchema,
+  VoiceTranscriptResponseSchema,
+  EMPTY_VOICE_TRANSCRIPT_RESPONSE,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -1673,6 +1677,23 @@ export class ApiClient {
     return this.fetch("/api/inbox/archive-completed", { method: "POST" });
   }
 
+  // Member Activity feed (threads + inbox)
+  async listUserActivity(params: {
+    tab: UserActivityTab;
+    cursor?: string;
+    limit?: number;
+  }): Promise<UserActivityListResponse> {
+    const search = new URLSearchParams({ tab: params.tab });
+    if (params.cursor) search.set("cursor", params.cursor);
+    if (params.limit != null) search.set("limit", String(params.limit));
+    const suffix = search.toString();
+    return this.fetch(`/api/activity${suffix ? `?${suffix}` : ""}`);
+  }
+
+  async markAllUserActivityRead(): Promise<{ thread_count: number; inbox_count: number }> {
+    return this.fetch("/api/activity/mark-all-read", { method: "POST" });
+  }
+
   // Notification preferences
   //
   // `workspaceSlug` overrides the default `X-Workspace-Slug` header (which
@@ -2422,7 +2443,7 @@ export class ApiClient {
     return this.fetch(options?.archived ? "/api/channels?archived=true" : "/api/channels");
   }
 
-  async createChannel(data: { name: string; description?: string; lark_chat_id?: string }): Promise<Channel> {
+  async createChannel(data: { name: string; description?: string; lark_chat_id?: string; project_id?: string | null }): Promise<Channel> {
     return this.fetch("/api/channels", {
       method: "POST",
       body: JSON.stringify(data),
@@ -2589,6 +2610,53 @@ export class ApiClient {
     return parseWithFallback(raw, ChannelMessageSearchResponseSchema, EMPTY_CHANNEL_MESSAGE_SEARCH_RESPONSE, {
       endpoint: "GET /api/channels/{channelId}/messages/search",
     });
+  }
+
+  async transcribeVoice(pcm: ArrayBuffer): Promise<string> {
+    const res = await this.fetchRaw("/api/voice/asr", {
+      method: "POST",
+      body: pcm,
+      extraHeaders: { "Content-Type": "audio/pcm; rate=16000" },
+    });
+    let raw: unknown;
+    try {
+      raw = await res.json() as unknown;
+    } catch {
+      raw = undefined;
+    }
+    const parsed = parseWithFallback(
+      raw,
+      VoiceTranscriptResponseSchema,
+      EMPTY_VOICE_TRANSCRIPT_RESPONSE,
+      { endpoint: "POST /api/voice/asr" },
+    );
+    if (parsed === EMPTY_VOICE_TRANSCRIPT_RESPONSE) {
+      throw new ApiError("voice service returned an invalid transcript response", 502, "Bad Gateway");
+    }
+    return parsed.text.trim();
+  }
+
+  async synthesizeVoice(text: string): Promise<{
+    audio: ArrayBuffer;
+    durationMs: number | null;
+  }> {
+    const res = await this.fetchRaw("/api/voice/tts", {
+      method: "POST",
+      body: JSON.stringify({ text }),
+      extraHeaders: { "Content-Type": "application/json" },
+    });
+    const contentType = res.headers.get("Content-Type")?.split(";", 1)[0]?.trim().toLowerCase();
+    if (contentType !== "audio/wav") {
+      throw new ApiError("voice service returned an invalid audio response", 502, "Bad Gateway");
+    }
+    const rawDuration = res.headers.get("X-Voice-Duration-Ms")?.trim() ?? "";
+    const parsedDuration = Number.parseInt(rawDuration, 10);
+    return {
+      audio: await res.arrayBuffer(),
+      durationMs: Number.isFinite(parsedDuration) && parsedDuration > 0
+        ? parsedDuration
+        : null,
+    };
   }
 
   async sendChannelMessage(

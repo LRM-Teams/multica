@@ -20,6 +20,178 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
+func TestAgentTransportVoiceReplyPartsRequireSameTimeline(t *testing.T) {
+	channelID := uuid.NewString()
+	otherChannelID := uuid.NewString()
+	rootID := uuid.NewString()
+	otherRootID := uuid.NewString()
+	threadRootID := rootID
+	voiceTrigger := ChannelMessageResponse{
+		ID:        rootID,
+		Type:      "user",
+		ChannelID: channelID,
+		Parts: []protocol.MessagePart{
+			{Type: protocol.MessagePartTypeText, Text: "语音问题"},
+			{Type: protocol.MessagePartTypeVoice, DurationMS: 1000},
+		},
+	}
+	threadTrigger := voiceTrigger
+	threadTrigger.ThreadRootMessageID = &threadRootID
+	agentTrigger := voiceTrigger
+	agentTrigger.Type = "agent"
+	textTrigger := voiceTrigger
+	textTrigger.Parts = []protocol.MessagePart{{Type: protocol.MessagePartTypeText, Text: "文字问题"}}
+
+	tests := []struct {
+		name    string
+		trigger ChannelMessageResponse
+		target  agentTransportTarget
+		want    bool
+	}{
+		{
+			name:    "channel main reply",
+			trigger: voiceTrigger,
+			target:  agentTransportTarget{kind: chatOutputTargetChannel, channel: ChannelResponse{ID: channelID}},
+			want:    true,
+		},
+		{
+			name:    "dm main reply",
+			trigger: voiceTrigger,
+			target:  agentTransportTarget{kind: chatOutputTargetDM, channel: ChannelResponse{ID: channelID}},
+			want:    true,
+		},
+		{
+			name:    "matching thread reply",
+			trigger: threadTrigger,
+			target:  agentTransportTarget{kind: chatOutputTargetThread, channel: ChannelResponse{ID: channelID}, threadRootMessageID: parseUUID(rootID)},
+			want:    true,
+		},
+		{
+			name:    "proactive other channel",
+			trigger: voiceTrigger,
+			target:  agentTransportTarget{kind: chatOutputTargetChannel, channel: ChannelResponse{ID: otherChannelID}},
+		},
+		{
+			name:    "different thread",
+			trigger: threadTrigger,
+			target:  agentTransportTarget{kind: chatOutputTargetThread, channel: ChannelResponse{ID: channelID}, threadRootMessageID: parseUUID(otherRootID)},
+		},
+		{
+			name:    "main trigger to its own thread",
+			trigger: voiceTrigger,
+			target:  agentTransportTarget{kind: chatOutputTargetThread, channel: ChannelResponse{ID: channelID}, threadRootMessageID: parseUUID(rootID)},
+			want:    true,
+		},
+		{
+			name:    "main trigger to unrelated thread",
+			trigger: voiceTrigger,
+			target:  agentTransportTarget{kind: chatOutputTargetThread, channel: ChannelResponse{ID: channelID}, threadRootMessageID: parseUUID(otherRootID)},
+		},
+		{
+			name:    "agent voice does not force response",
+			trigger: agentTrigger,
+			target:  agentTransportTarget{kind: chatOutputTargetChannel, channel: ChannelResponse{ID: channelID}},
+		},
+		{
+			name:    "human text does not force voice",
+			trigger: textTrigger,
+			target:  agentTransportTarget{kind: chatOutputTargetChannel, channel: ChannelResponse{ID: channelID}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := agentTransportVoiceReplyParts(tt.trigger, tt.target, "完整回答", nil)
+			if channelMessageHasVoicePart(got) != tt.want {
+				t.Fatalf("voice part=%v, want %v: %+v", channelMessageHasVoicePart(got), tt.want, got)
+			}
+			if tt.want && !agentTransportPartsHaveText(got) {
+				t.Fatalf("enforced voice reply lacks transcript text part: %+v", got)
+			}
+		})
+	}
+
+	sameTimeline := agentTransportTarget{kind: chatOutputTargetChannel, channel: ChannelResponse{ID: channelID}}
+	sticker := []protocol.MessagePart{{Type: protocol.MessagePartTypeSticker, Alt: "打招呼"}}
+	if got := agentTransportVoiceReplyParts(voiceTrigger, sameTimeline, "打招呼", sticker); channelMessageHasVoicePart(got) {
+		t.Fatalf("sticker fallback was converted to speech: %+v", got)
+	}
+	if got := agentTransportVoiceReplyParts(voiceTrigger, sameTimeline, "这是文字回答", sticker); !channelMessageHasVoicePart(got) {
+		t.Fatalf("explicit text with sticker did not preserve voice modality: %+v", got)
+	}
+	alreadyVoice := []protocol.MessagePart{
+		{Type: protocol.MessagePartTypeText, Text: "已有语音"},
+		{Type: protocol.MessagePartTypeVoice},
+	}
+	if got := agentTransportVoiceReplyParts(voiceTrigger, sameTimeline, "已有语音", alreadyVoice); len(got) != len(alreadyVoice) {
+		t.Fatalf("existing voice part duplicated: %+v", got)
+	}
+}
+
+func TestAgentTransportSendMessageEnforcesVoiceReplyForVoiceTrigger(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	trigger, err := testHandler.insertChannelMessageWithParts(
+		ctx,
+		parseUUID(channelID),
+		parseUUID(testWorkspaceID),
+		"user",
+		parseUUID(testUserID),
+		"Tester",
+		"请回答这个语音问题",
+		[]protocol.MessagePart{
+			{Type: protocol.MessagePartTypeText, Text: "请回答这个语音问题"},
+			{Type: protocol.MessagePartTypeVoice, DurationMS: 1200},
+		},
+		"multica",
+		nil,
+		pgtype.UUID{},
+		pgtype.UUID{},
+		nil,
+		0,
+	)
+	if err != nil {
+		t.Fatalf("seed voice trigger: %v", err)
+	}
+	var chatSessionID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT chat_session_id
+		FROM agent_task_queue
+		WHERE id = $1`, taskID).Scan(&chatSessionID); err != nil {
+		t.Fatalf("load task chat session: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO chat_message (chat_session_id, role, content, task_id)
+		VALUES ($1, 'user', $2, $3)`, chatSessionID, "Reaction target message id: "+trigger.ID, taskID); err != nil {
+		t.Fatalf("seed task source prompt: %v", err)
+	}
+
+	content := "这是智能体的完整回答"
+	rec := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":            "#" + channelNameForTransportTest(t, channelID),
+		"content":           content,
+		"client_message_id": "voice-enforced-" + uuid.NewString(),
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("transport send: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body AgentTransportSendResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode transport response: %v", err)
+	}
+	if !channelMessageHasVoicePart(body.Message.Parts) || !agentTransportPartsHaveText(body.Message.Parts) {
+		t.Fatalf("message parts=%+v, want accessible voice reply", body.Message.Parts)
+	}
+	if body.Message.Content != content {
+		t.Fatalf("message content=%q, want %q", body.Message.Content, content)
+	}
+}
+
 func TestAgentTransportSendMessageIdempotentAndSuppressesFinalOutput(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -914,6 +1086,22 @@ func TestAgentTransportSendDraftRebuildsMentionForCurrentDestinationMembers(t *t
 		"send_draft":     true,
 		"seen_up_to_seq": heldBody.LatestSeq,
 	})
+	// Adding the replacement destination agent commits a canonical membership
+	// system row. That is genuinely newer context, so the first retry must hold
+	// again; the next retry consumes the refreshed draft and sends it once.
+	if sent.Code == http.StatusOK {
+		var refreshed AgentTransportSendHeldResponse
+		if err := json.Unmarshal(sent.Body.Bytes(), &refreshed); err != nil {
+			t.Fatalf("decode refreshed held draft: %v", err)
+		}
+		if refreshed.Subtype != "freshness" || len(refreshed.HeldMessages) != 1 || refreshed.HeldMessages[0].Type != "system" {
+			t.Fatalf("membership change hold = %+v, want one system membership row", refreshed)
+		}
+		sent = agentTransportSendForTest(t, taskID, senderID, map[string]any{
+			"target":     target,
+			"send_draft": true,
+		})
+	}
 	if sent.Code != http.StatusCreated {
 		t.Fatalf("send held destination draft: status=%d body=%s", sent.Code, sent.Body.String())
 	}
@@ -1059,6 +1247,50 @@ func TestAgentTransportSendMessageLinksOwnedAttachmentsOnly(t *testing.T) {
 	}
 }
 
+func TestAgentTransportSendMessageNormalizesLegacyOwnedAudioAsVoice(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	target := "#" + channelNameForTransportTest(t, channelID)
+	attachmentID := seedUnboundAgentAttachmentForTest(t, agentID, "nihao.mp3")
+	if _, err := testPool.Exec(ctx, `
+		UPDATE attachment
+		SET content_type = 'audio/mpeg'
+		WHERE id = $1`, attachmentID); err != nil {
+		t.Fatalf("mark attachment as audio: %v", err)
+	}
+
+	response := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":  target,
+		"content": "你好～",
+		"parts": []protocol.MessagePart{
+			{Type: protocol.MessagePartTypeText, Text: "你好～"},
+			{Type: protocol.MessagePartTypeAttachment, AttachmentID: attachmentID},
+		},
+		"client_message_id": "transport-legacy-audio-" + uuid.NewString(),
+	})
+	if response.Code != http.StatusCreated {
+		t.Fatalf("legacy audio transport send: status=%d body=%s", response.Code, response.Body.String())
+	}
+	var body AgentTransportSendResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode legacy audio send: %v", err)
+	}
+	var voiceParts int
+	for _, part := range body.Message.Parts {
+		if part.Type == protocol.MessagePartTypeVoice {
+			voiceParts++
+		}
+	}
+	if voiceParts != 1 {
+		t.Fatalf("voice parts=%d in %+v, want one normalized marker", voiceParts, body.Message.Parts)
+	}
+}
+
 // Regression: `multica attachment upload --target '#channel'` sets channel_id
 // before send. LinkOwned used to require channel_id IS NULL, so the send kept
 // attachment parts but never bound channel_message_id → "Attachment unavailable".
@@ -1092,6 +1324,11 @@ func TestAgentTransportSendMessageLinksChannelPreboundOwnedAttachments(t *testin
 	}
 	if len(body.Message.Attachments) != 1 || body.Message.Attachments[0].ID != preboundID {
 		t.Fatalf("message attachments = %+v, want prebound attachment %s", body.Message.Attachments, preboundID)
+	}
+	for _, part := range body.Message.Parts {
+		if part.Type == protocol.MessagePartTypeVoice {
+			t.Fatalf("image attachment was reclassified as voice: %+v", body.Message.Parts)
+		}
 	}
 
 	var gotChannelID, gotMessageID string
@@ -1637,6 +1874,88 @@ func TestDMThreadDeliveryHonorsFollowUnfollowMentionAndAgentPost(t *testing.T) {
 	assertFollowState(true, "active")
 }
 
+func TestDMHumanRootThreadReplyWakesAgentUnlessExplicitlyUnfollowed(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	taskID, _ := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	humanHandle := userHandleForTransportTest(t, testUserID)
+	dmChannel, ok := testHandler.ensureAgentHumanDMChannel(ctx, parseUUID(testWorkspaceID), parseUUID(agentID), parseUUID(testUserID))
+	if !ok {
+		t.Fatal("create agent-human DM channel")
+	}
+	root, err := testHandler.insertChannelMessage(ctx, parseUUID(dmChannel.ID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), humanHandle, "human-authored dm root "+uuid.NewString(), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("insert human-authored dm root: %v", err)
+	}
+
+	sendReply := func(content string) ChannelMessageResponse {
+		t.Helper()
+		req := newRequest(http.MethodPost, "/api/channels/"+dmChannel.ID+"/messages/"+root.ID+"/thread", map[string]any{"content": content})
+		req = withChannelTestWorkspaceCtx(t, req, testUserID)
+		req = withURLParams(req, "channelId", dmChannel.ID, "messageId", root.ID)
+		rec := httptest.NewRecorder()
+		testHandler.SendChannelMessageThreadReply(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("send human-root dm thread reply: status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		var message ChannelMessageResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &message); err != nil {
+			t.Fatalf("decode human-root dm thread reply: %v", err)
+		}
+		return message
+	}
+	assertWakeCount := func(messageID string, want int) {
+		t.Helper()
+		var got int
+		if err := testPool.QueryRow(ctx, `
+			SELECT count(*)
+			FROM agent_inbox_event
+			WHERE channel_id = $1 AND agent_id = $2 AND source_message_id = $3 AND requires_wake`,
+			dmChannel.ID, agentID, messageID).Scan(&got); err != nil {
+			t.Fatalf("count human-root dm thread wakes: %v", err)
+		}
+		if got != want {
+			t.Fatalf("human-root dm thread wakes for %s = %d, want %d", messageID, got, want)
+		}
+	}
+	assertFollowState := func(wantFollowed bool, wantWakeState string) {
+		t.Helper()
+		var followed bool
+		var wakeState string
+		if err := testPool.QueryRow(ctx, `
+			SELECT followed_at IS NOT NULL, wake_state
+			FROM thread_participant
+			WHERE root_message_id = $1 AND member_type = 'agent' AND member_id = $2`,
+			root.ID, agentID).Scan(&followed, &wakeState); err != nil {
+			t.Fatalf("load human-root dm agent participant: %v", err)
+		}
+		if followed != wantFollowed || wakeState != wantWakeState {
+			t.Fatalf("human-root dm participant = followed:%v wake_state:%q, want %v/%q", followed, wakeState, wantFollowed, wantWakeState)
+		}
+	}
+
+	first := sendReply("ordinary reply to my own dm root " + uuid.NewString())
+	assertWakeCount(first.ID, 1)
+	assertChannelAgentWakeReasonPriority(t, dmChannel.ID, agentID, first.ID, "thread_reply", channelThreadReplyPriority)
+	assertFollowState(true, "active")
+
+	unfollow := agentTransportUnfollowThreadForTest(t, taskID, agentID, map[string]any{
+		"target": "dm:@" + humanHandle + ":" + root.ID,
+	})
+	if unfollow.Code != http.StatusOK {
+		t.Fatalf("unfollow human-root dm thread: status=%d body=%s", unfollow.Code, unfollow.Body.String())
+	}
+	assertFollowState(false, "unfollowed")
+
+	second := sendReply("ordinary reply after agent unfollow " + uuid.NewString())
+	assertWakeCount(second.ID, 0)
+	assertFollowState(false, "unfollowed")
+}
+
 func TestAgentTransportRejectsNonRaftTargetForms(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -2179,4 +2498,106 @@ func transportSearchResultsContain(results []ChannelMessageSearchResult, id, con
 		}
 	}
 	return false
+}
+
+// TestRunAfterChannelMessageAckAsyncDoesNotBlock documents the LRM-272/297
+// contract: when SyncChannelMessageSideEffects is false, the caller proceeds
+// while post-ack fanout is still blocked.
+func TestRunAfterChannelMessageAckAsyncDoesNotBlock(t *testing.T) {
+	h := &Handler{SyncChannelMessageSideEffects: false}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	finished := make(chan struct{})
+
+	start := time.Now()
+	h.runAfterChannelMessageAck(context.Background(), func(context.Context) {
+		close(entered)
+		<-release
+		close(finished)
+	})
+	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
+		t.Fatalf("runAfterChannelMessageAck blocked for %v", elapsed)
+	}
+
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("async post-ack side effect did not start")
+	}
+
+	select {
+	case <-finished:
+		t.Fatal("async post-ack finished before release")
+	default:
+	}
+
+	close(release)
+	select {
+	case <-finished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("async post-ack did not finish after release")
+	}
+}
+
+func TestRunAfterChannelMessageAckSyncRunsInline(t *testing.T) {
+	h := &Handler{SyncChannelMessageSideEffects: true}
+	order := make([]string, 0, 2)
+	h.runAfterChannelMessageAck(context.Background(), func(context.Context) {
+		order = append(order, "side")
+	})
+	order = append(order, "after")
+	if len(order) != 2 || order[0] != "side" || order[1] != "after" {
+		t.Fatalf("order = %v, want [side after]", order)
+	}
+}
+
+func TestAgentTransportSendReturnsWhilePostAckBlocked(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	prevSync := testHandler.SyncChannelMessageSideEffects
+	testHandler.SyncChannelMessageSideEffects = false
+	defer func() { testHandler.SyncChannelMessageSideEffects = prevSync }()
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	prevHook := testHandler.channelMessagePostAckTestHook
+	testHandler.channelMessagePostAckTestHook = func(context.Context) {
+		once.Do(func() { close(entered) })
+		<-release
+	}
+	defer func() {
+		testHandler.channelMessagePostAckTestHook = prevHook
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	target := "#" + channelNameForTransportTest(t, channelID)
+
+	start := time.Now()
+	rec := agentTransportSendForTest(t, taskID, agentID, map[string]any{
+		"target":            target,
+		"content":           "lrm-297 ack-before-fanout " + uuid.NewString(),
+		"client_message_id": "lrm297-" + uuid.NewString(),
+	})
+	elapsed := time.Since(start)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("transport send: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("agent transport send blocked on post-ack for %v (channel=%s)", elapsed, channelID)
+	}
+
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("post-ack side effect did not start after agent send")
+	}
 }

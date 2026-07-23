@@ -41,6 +41,13 @@ for obsolete in \
   fi
 done
 
+deploy_workflow="$(<.github/workflows/deploy.yml)"
+require_config "$deploy_workflow" 'db-bridge-stub-multica'
+if grep -Fq 'db-bridge-executor-multica' <<<"$deploy_workflow"; then
+  echo "Deploy workflow still manages the removed Multica-side bridge executor."
+  exit 1
+fi
+
 areal_env_example="$(<db_bridge/.env.areal.example)"
 require_config "$areal_env_example" 'MULTICA_BASE_URL=https://multica.example.com'
 require_config "$areal_env_example" 'MULTICA_API_KEY=mul_your-multica-personal-access-token'
@@ -83,6 +90,56 @@ require_config "$config" 'published: "9100"'
 require_config "$config" 'FRONTEND_ORIGIN: http://localhost:3100'
 require_config "$config" 'GOOGLE_REDIRECT_URI: http://localhost:3100/auth/callback'
 require_config "$config" 'MULTICA_APP_URL: http://localhost:3100'
+
+s89_config="$(
+  docker compose \
+    --project-directory "$ROOT_DIR" \
+    --env-file .env.example \
+    -f docker-compose.selfhost.yml \
+    -f docker-compose.s89.yml \
+    config
+)"
+s89_backend_config="$(
+  docker compose \
+    --project-directory "$ROOT_DIR" \
+    --env-file .env.example \
+    -f docker-compose.selfhost.yml \
+    -f docker-compose.s89.yml \
+    config backend
+)"
+
+require_config "$s89_config" 'container_name: multica-caddy'
+require_config "$s89_config" 'image: caddy:2.11.3@sha256:ec18ee54aab3315c22e25f3b2babda73ff8007d39b13b3bd1bfffa2f0444c7d9'
+require_config "$s89_config" 'FRONTEND_ORIGIN: https://82.157.184.89'
+require_config "$s89_config" 'GOOGLE_CLIENT_ID: ""'
+require_config "$s89_config" 'GOOGLE_CLIENT_SECRET: ""'
+require_config "$s89_config" 'GOOGLE_REDIRECT_URI: ""'
+require_config "$s89_config" 'MULTICA_APP_URL: https://82.157.184.89'
+require_config "$s89_config" 'MULTICA_PUBLIC_URL: https://82.157.184.89'
+require_config "$s89_config" 'target: /etc/caddy/Caddyfile'
+require_config "$s89_backend_config" 'host_ip: 127.0.0.1'
+if grep -Fq 'host_ip: 0.0.0.0' <<<"$s89_backend_config"; then
+  echo "s89 backend must not publish its raw API port on all interfaces."
+  exit 1
+fi
+require_config "$s89_config" 'published: "80"'
+require_config "$s89_config" 'published: "443"'
+require_config "$s89_config" 'published: "8090"'
+
+s89_caddyfile="$(<deploy/s89/Caddyfile)"
+require_config "$s89_caddyfile" 'profile shortlived'
+require_config "$s89_caddyfile" 'disable_tlsalpn_challenge'
+require_config "$s89_caddyfile" '@browser_navigation header Accept *text/html*'
+require_config "$s89_caddyfile" 'redir @browser_navigation https://82.157.184.89{uri} 308'
+require_config "$s89_caddyfile" '/api/daemon/ws'
+require_config "$s89_caddyfile" '/api/sandbox/node/ws'
+
+deploy_workflow="$(<.github/workflows/deploy.yml)"
+require_config "$deploy_workflow" 'compose up -d --no-deps --force-recreate caddy'
+if grep -Fq 'compose exec -T caddy caddy reload' <<<"$deploy_workflow"; then
+  echo "Caddy reload cannot observe an atomically replaced single-file bind mount."
+  exit 1
+fi
 
 for script in scripts/dev.sh scripts/check.sh; do
   if ! grep -Fq '. scripts/local-env.sh' "$script"; then

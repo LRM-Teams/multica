@@ -35,6 +35,14 @@ export interface MemberSystemEvent {
   /** #456: canonical @handle (username). Absent on older messages. */
   targetHandle?: string;
   targetName?: string;
+  /**
+   * #661: why the membership row changed — "manual" for an authenticated
+   * actor's own action, "system_invariant" for rows the backend maintains on
+   * its own (e.g. the immutable #general roster sync). Absent on rows older
+   * than this field; the content projection falls back to `actorId` presence
+   * either way so no row can render a dangling "by" with no actor.
+   */
+  source?: string;
 }
 
 /**
@@ -72,6 +80,10 @@ export interface IssueSystemEvent {
   actorId?: string;
   /** Public actor type: "human" | "agent" (see channelMemberSystemEventPublicType). */
   actorType?: string;
+  /** Canonical @handle (username). Present on new backflow rows. */
+  actorHandle?: string;
+  /** Optional emit-time display name (diagnostics only — FE must not fallback; LRM-281). */
+  actorName?: string;
   targetId?: string;
   targetType?: string;
   targetHandle?: string;
@@ -114,6 +126,8 @@ export function parseIssueSystemEvent(message: ChannelMessage): IssueSystemEvent
       previousStatus: optString(params, "previous_status"),
       actorId: optString(params, "actor_id"),
       actorType: optString(params, "actor_type"),
+      actorHandle: optString(params, "actor_handle"),
+      actorName: optString(params, "actor_name"),
       targetId: optString(params, "target_id"),
       targetType: optString(params, "target_type"),
       targetHandle: optString(params, "target_handle"),
@@ -197,6 +211,7 @@ export function parseMemberSystemEvent(message: ChannelMessage): MemberSystemEve
       targetType: optString(params, "target_type"),
       targetHandle: optString(params, "target_handle"),
       targetName: optString(params, "target_name"),
+      source: optString(params, "source"),
     };
   }
   return null;

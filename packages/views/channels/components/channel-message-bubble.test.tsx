@@ -11,6 +11,21 @@ import { ChannelMessageBubble } from "./channel-message-bubble";
 
 const copyTextMock = vi.fn();
 
+vi.mock("../lib/voice-playback", () => ({
+  claimVoiceAutoplay: () => false,
+  prepareVoiceAudio: () => Promise.resolve({
+    audio: new ArrayBuffer(4),
+    durationMs: 3200,
+  }),
+  startPreparedVoicePlayback: () => Promise.resolve({
+    durationMs: 3200,
+    finished: Promise.resolve(),
+    stop: vi.fn(),
+  }),
+  voicePlaybackScope: (channelId: string, threadRootMessageId?: string | null) =>
+    `${channelId}:${threadRootMessageId ?? "main"}`,
+}));
+
 // The author avatar renders an ActorProfileTrigger; on mobile it navigates to
 // the full-page profile (#586), which reads useNavigation. Stub the navigation
 // context (the barrel re-exports it) so these layout/interaction tests don't
@@ -110,6 +125,9 @@ vi.mock("@multica/core/paths", () => ({
     issueDetail: (issueId: string) => `/acme/issues/${issueId}`,
     actorProfile: (memberType: string, memberId: string) =>
       `/acme/profile/${memberType}/${memberId}`,
+    agentDetail: (id: string) => `/acme/agents/${id}`,
+    memberDetail: (id: string) => `/acme/members/${id}`,
+    squadDetail: (id: string) => `/acme/squads/${id}`,
   }),
 }));
 
@@ -138,17 +156,71 @@ vi.mock("../../navigation/app-link", () => ({
 }));
 
 // The bubble may fall back to the members/agents directory (profile-card source)
-// when the message payload omits author_avatar_url (LRM-218 / LRM-221). Stub the
-// hook so layout tests don't need a QueryClient/workspace; override per-case.
+// when the message payload omits author_avatar_url (LRM-218). Stub the hook so
+// layout tests don't need a QueryClient/workspace; override per-case when needed.
 const getActorAvatarUrlMock = vi.fn(
   (_type: string, _id: string): string | null => null,
 );
+// LRM-281 system rows may call useWorkspaceId + useQuery(member-profiles).
+// Layout tests stub the actor directory; give them a stable workspace id so
+// profile resolution does not throw outside a workspace route.
+vi.mock("@multica/core/hooks", () => ({
+  useWorkspaceId: () => "ws-1",
+}));
+
 vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({
     getActorAvatarUrl: getActorAvatarUrlMock,
-    getActorName: (_type: string, id: string, fallback?: string) =>
-      id === "user-1" ? "Alice Display" : id === "user-2" ? "Bob Display" : fallback,
+    getActorInitials: (_type: string, id: string) => {
+      if (id === "user-1") return "A";
+      if (id === "user-2") return "B";
+      if (id === "user-owner") return "F";
+      if (id === "user-admin") return "Ad";
+      if (id === "agent-1") return "R";
+      return "?";
+    },
+    getActorName: (_type: string, id: string, fallback?: string) => {
+      if (id === "user-1") return "Alice Display";
+      if (id === "user-2") return "Bob Display";
+      if (id === "user-owner") return "Frank An";
+      if (id === "user-admin") return "Admin User";
+      if (id === "agent-1") return "Research Agent";
+      return fallback ?? id;
+    },
+    getMemberRole: (id: string) =>
+      id === "user-owner"
+        ? ("owner" as const)
+        : id === "user-admin"
+          ? ("admin" as const)
+          : id === "user-1" || id === "user-2"
+            ? ("member" as const)
+            : null,
   }),
+}));
+
+// LRM-364: layout tests stub the reaction resolver so they don't need a live
+// member-profile QueryClient path. Dedicated hook tests cover profile fetch.
+vi.mock("../../common/use-reaction-actor-name", () => ({
+  useReactionActorName: () => (_type: string, id: string, fallback?: string) => {
+    if (id === "user-1") return "Alice Display";
+    if (id === "user-2") return "Bob Display";
+    if (id === "user-owner") return "Frank An";
+    if (id === "user-admin") return "Admin User";
+    if (id === "agent-1") return "Research Agent";
+    if (id === "agent-beckham") return "贝克汉姆";
+    return fallback ?? id;
+  },
+}));
+
+vi.mock("@multica/core/agents/stores", () => ({
+  useAgentPanelStore: (selector: (s: { open: (id: string) => void }) => unknown) =>
+    selector({ open: vi.fn() }),
+  useAgentXpBurstStore: (selector: (s: { bursts: Record<string, never> }) => unknown) =>
+    selector({ bursts: {} }),
+}));
+
+vi.mock("../../common/agent-panel-context", () => ({
+  useOpenAgentPanel: () => null,
 }));
 
 // The bubble reads the author avatar straight from the payload (#453/#574) via
@@ -175,6 +247,7 @@ vi.mock("../../i18n/use-t", () => ({
           feishu_badge: string;
           copy_action: string;
           expand_action: string;
+          collapse_action: string;
           copied_toast: string;
           copy_failed_toast: string;
           sticker_alt: string;
@@ -185,6 +258,15 @@ vi.mock("../../i18n/use-t", () => ({
           send_failed: string;
           retry_send: string;
           sending: string;
+          voice_input: string;
+          voice_input_duration: string;
+          voice_play: string;
+          voice_loading: string;
+          voice_stop: string;
+          voice_retry: string;
+          voice_show_transcript: string;
+          voice_hide_transcript: string;
+          voice_transcript_label: string;
           edit_action: string;
           actions_menu: string;
           delete_action: string;
@@ -234,6 +316,9 @@ vi.mock("../../i18n/use-t", () => ({
         };
         thread: { reply: string; reply_count: string };
         time: { today: string; yesterday: string };
+        profile_popover: {
+          role: { owner: string; admin: string; member: string; agent: string };
+        };
       }) => string,
       options?: Record<string, unknown>,
     ) => {
@@ -247,7 +332,8 @@ vi.mock("../../i18n/use-t", () => ({
           feishu_badge: "Feishu",
           actions_menu: "Message actions",
           copy_action: "Copy",
-          expand_action: "Show full message",
+          expand_action: "See more",
+          collapse_action: "See less",
           copied_toast: "Copied",
           copy_failed_toast: "Copy failed",
           sticker_alt: "Sticker",
@@ -258,6 +344,15 @@ vi.mock("../../i18n/use-t", () => ({
           send_failed: "Couldn't send",
           retry_send: "Retry",
           sending: "Sending…",
+          voice_input: "Voice input",
+          voice_input_duration: "Voice input · {{seconds}}s",
+          voice_play: "Play voice reply",
+          voice_loading: "Preparing voice reply…",
+          voice_stop: "Stop voice reply",
+          voice_retry: "Voice playback failed · Retry",
+          voice_show_transcript: "Show transcript",
+          voice_hide_transcript: "Hide transcript",
+          voice_transcript_label: "Voice transcript",
           edit_action: "Edit",
           delete_action: "Delete",
           edited_label: "(edited)",
@@ -268,7 +363,7 @@ vi.mock("../../i18n/use-t", () => ({
             issue: {
               actor_system: "Multica",
               created: "{actor} created {issue}",
-              assigned: "{actor} assigned {issue} to {{target}}",
+              assigned: "{actor} assigned {issue} to {target}",
               assigned_unknown: "{actor} changed the assignee of {issue}",
               in_progress: "{actor} started {issue}",
               in_review: "{actor} sent {issue} for review",
@@ -309,6 +404,9 @@ vi.mock("../../i18n/use-t", () => ({
           reply_count: "2 replies",
         },
         time: { today: "Today", yesterday: "Yesterday" },
+        profile_popover: {
+          role: { owner: "Owner", admin: "Admin", member: "Member", agent: "Agent" },
+        },
       });
       return options
         ? raw.replace(/\{\{(\w+)\}\}/g, (_, key: string) => String(options[key] ?? ""))
@@ -411,13 +509,83 @@ describe("ChannelMessageBubble", () => {
     });
   });
 
-  it("renders an agent message left-aligned with an Agent pill, name and body", () => {
+  it("renders an agent message with name and body but no Agent pill (LRM-232)", () => {
     render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
 
     expect(screen.getByText("Research Agent")).toBeInTheDocument();
-    expect(screen.getByText("Agent")).toBeInTheDocument();
+    expect(screen.queryByText("Agent")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("message-author-role")).not.toBeInTheDocument();
     expect(screen.getByText("Here is the data.")).toBeInTheDocument();
     expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-own", "false");
+  });
+
+  it("renders compact continuations without author chrome but keeps body and gutter time (LRM-255)", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          type: "user",
+          author_id: "user-a",
+          author_name: "Alice",
+          content: "follow-up",
+          created_at: "2026-06-17T09:16:00Z",
+        })}
+        currentUserId="user-1"
+        compact
+      />,
+    );
+
+    expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-message-group", "compact");
+    expect(screen.queryByText("Alice")).not.toBeInTheDocument();
+    expect(screen.getByTestId("message-gutter-time")).toHaveTextContent("09:16");
+    expect(screen.getByText("follow-up")).toBeInTheDocument();
+    expect(screen.getByTestId("message-action-bar")).toBeInTheDocument();
+  });
+
+  it("does not show Owner/Admin chrome on message author rows (LRM-270)", () => {
+    const { rerender } = render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          type: "user",
+          author_id: "user-owner",
+          author_name: "frank",
+          content: "hello from owner",
+        })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.getByText("Frank An")).toBeInTheDocument();
+    expect(screen.queryByTestId("message-author-role")).not.toBeInTheDocument();
+    expect(screen.queryByText("Owner")).not.toBeInTheDocument();
+
+    rerender(
+      <ChannelMessageBubble
+        message={makeMessage({
+          type: "user",
+          author_id: "user-admin",
+          author_name: "admin",
+          content: "admin note",
+        })}
+        currentUserId="user-1"
+      />,
+    );
+    expect(screen.getByText("Admin User")).toBeInTheDocument();
+    expect(screen.queryByTestId("message-author-role")).not.toBeInTheDocument();
+    expect(screen.queryByText("Admin")).not.toBeInTheDocument();
+
+    rerender(
+      <ChannelMessageBubble
+        message={makeMessage({
+          type: "user",
+          author_id: "user-2",
+          author_name: "bob",
+          content: "member note",
+        })}
+        currentUserId="user-1"
+      />,
+    );
+    expect(screen.getByText("Bob Display")).toBeInTheDocument();
+    expect(screen.queryByTestId("message-author-role")).not.toBeInTheDocument();
   });
 
   it("renders the author avatar straight from the message payload (#453), not a viewer-scoped lookup", () => {
@@ -427,8 +595,9 @@ describe("ChannelMessageBubble", () => {
         currentUserId="user-1"
       />,
     );
-    // Prefer payload `author_avatar_url` (BE-aggregated for every viewer, #574).
-    // Directory fallback is only used when payload + sticky cache both miss.
+    // The avatar image comes from the payload's `author_avatar_url` (aggregated
+    // by the BE for every viewer, #574). Directory fallback is only used when
+    // payload + sticky cache both miss.
     const img = screen.getByRole("img", { name: /Research Agent/i });
     expect(img).toHaveAttribute("src", "/uploads/agent-avatar.png");
   });
@@ -465,7 +634,7 @@ describe("ChannelMessageBubble", () => {
     );
   });
 
-  it("LRM-221: falls back to actor-directory avatar (profile card source) when payload omits URL", () => {
+  it("LRM-218: falls back to actor-directory avatar when payload omits URL", () => {
     getActorAvatarUrlMock.mockImplementation((type, id) =>
       type === "agent" && id === "agent-1" ? "/agent-avatars/human-02.jpg" : null,
     );
@@ -485,7 +654,7 @@ describe("ChannelMessageBubble", () => {
     );
   });
 
-  it("LRM-221: directory fallback seeds sticky cache for consecutive same-author bubbles", () => {
+  it("LRM-218: directory fallback seeds sticky cache for consecutive same-author bubbles", () => {
     getActorAvatarUrlMock.mockImplementation((type, id) =>
       type === "agent" && id === "agent-1" ? "/agent-avatars/human-02.jpg" : null,
     );
@@ -505,8 +674,6 @@ describe("ChannelMessageBubble", () => {
       "/agent-avatars/human-02.jpg",
     );
 
-    // Directory goes empty (e.g. agents list not hydrated on a remount path) —
-    // sticky cache from the first bubble must still keep the real face.
     getActorAvatarUrlMock.mockReturnValue(null);
     rerender(
       <ChannelMessageBubble
@@ -576,7 +743,23 @@ describe("ChannelMessageBubble", () => {
 
     const bubble = screen.getByTestId("message-bubble");
     expect(bubble).toHaveAttribute("data-self-mentioned", "true");
-    expect(bubble.className).toContain("bg-brand/[0.04]");
+    expect(bubble.className).toContain("bg-[#fef9e8]");
+  });
+
+  it("applies dark self-mention row tokens for agent @-mentions of the viewer", () => {
+    const msg = makeMessage({
+      type: "agent",
+      author_id: "agent-1",
+      author_name: "Bot",
+      content: "ping [@Alice](mention://member/user-1) check this",
+    });
+    render(<ChannelMessageBubble message={msg} currentUserId="user-1" />);
+
+    const bubble = screen.getByTestId("message-bubble");
+    expect(bubble).toHaveAttribute("data-self-mentioned", "true");
+    expect(bubble.className).toContain("dark:border-brand");
+    expect(bubble.className).toContain("dark:bg-brand/[0.06]");
+    expect(bubble.className).toContain("[&_.mention]:dark:bg-transparent");
   });
 
   it("applies the self-mention wash for @all from another author", () => {
@@ -608,7 +791,7 @@ describe("ChannelMessageBubble", () => {
       "data-self-mentioned",
     );
     expect(screen.getByTestId("message-bubble").className).not.toContain(
-      "bg-brand/[0.04]",
+      "bg-[#fef9e8]",
     );
 
     const ownAll = makeMessage({
@@ -634,7 +817,7 @@ describe("ChannelMessageBubble", () => {
 
     const bubble = screen.getByTestId("message-bubble");
     expect(bubble).not.toHaveAttribute("data-self-mentioned");
-    expect(bubble.className).not.toContain("bg-brand/[0.04]");
+    expect(bubble.className).not.toContain("bg-[#fef9e8]");
   });
 
   it("lets deep-link highlight take visual priority over the self-mention wash", () => {
@@ -654,15 +837,13 @@ describe("ChannelMessageBubble", () => {
     expect(bubble.className).toContain("ring-primary/25");
   });
 
-  it("never shows a live presence dot on message avatars (presence 不进消息历史, #477)", () => {
-    // A message is history — pinning "online right now" onto a historical row is
-    // both the noisiest column in the view and semantically wrong. Presence now
-    // lives only on directory surfaces (sidebar / member list) and the header
-    // status word, never the message stream (Parker/Iris final principle).
+  it("LRM-224: agent message avatars show status dots; member bubbles do not", () => {
+    // LRM-223 option B supersedes #477 for chat bubbles: agent status dots are
+    // in-scope on the frozen long-term avatar. Members still have no presence.
     const { rerender } = render(
       <ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />,
     );
-    expect(screen.queryByLabelText(/^Status:/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/^Status:/)).toBeInTheDocument();
 
     rerender(
       <ChannelMessageBubble
@@ -825,37 +1006,95 @@ describe("ChannelMessageBubble", () => {
     expect(body).toHaveClass("select-text");
   });
 
-  it("keeps long history as full DOM content behind a readable collapsed preview", async () => {
+  it("keeps long messages as full DOM content behind a Slack-height collapsed preview", async () => {
     render(
       <ChannelMessageBubble
-        message={makeMessage({ content: Array.from({ length: 13 }, (_, index) => `Line ${index}`).join("\n") })}
+        message={makeMessage({ content: Array.from({ length: 20 }, (_, index) => `Line ${index}`).join("\n") })}
         currentUserId="user-1"
-        collapseLongContent
       />,
     );
 
     const body = screen.getByTestId("message-body");
-    expect(body).toHaveAttribute("data-collapsed", "true");
-    expect(body).toHaveClass("max-h-[min(260px,55vh)]");
-    expect(body).toHaveTextContent("Line 12");
+    Object.defineProperties(body, {
+      scrollHeight: { configurable: true, value: 420 },
+      clientHeight: { configurable: true, value: 160 },
+    });
+    fireEvent(window, new Event("resize"));
 
-    await userEvent.click(screen.getByRole("button", { name: "Show full message" }));
+    await waitFor(() => {
+      expect(body).toHaveAttribute("data-collapsed", "true");
+    });
+    expect(body).toHaveClass("max-h-[160px]");
+    expect(body).toHaveTextContent("Line 19");
+    expect(screen.getByTestId("message-collapse-fade")).toBeInTheDocument();
+
+    const expand = screen.getByRole("button", { name: "See more" });
+    // LRM-302: text link, not centered pill covering the body.
+    expect(expand.className).toMatch(/text-sm/);
+    expect(expand.className).not.toMatch(/rounded-full/);
+    expect(expand.className).not.toMatch(/min-h-11/);
+    expect(expand.className).not.toMatch(/shadow-sm/);
+    expect(screen.getByTestId("message-collapse-fade").className).toMatch(
+      /justify-start/,
+    );
+    expect(screen.getByTestId("message-collapse-fade").className).toMatch(
+      /via-background\/95/,
+    );
+
+    await userEvent.click(expand);
 
     expect(body).not.toHaveAttribute("data-collapsed");
-    expect(screen.queryByRole("button", { name: "Show full message" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "See more" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "See less" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "See less" }));
+    expect(body).toHaveAttribute("data-collapsed", "true");
+    expect(screen.getByRole("button", { name: "See more" })).toBeInTheDocument();
   });
 
-  it("does not show the history collapse affordance for short messages", () => {
+  it("uses self-mention row tokens on the collapse fade (LRM-368)", async () => {
+    const longBody = Array.from({ length: 20 }, (_, index) => `Line ${index}`).join("\n");
+    const msg = makeMessage({
+      type: "user",
+      author_id: "user-2",
+      author_name: "bob",
+      content: `hey [@Alice](mention://member/user-1)\n${longBody}`,
+    });
+    render(<ChannelMessageBubble message={msg} currentUserId="user-1" />);
+
+    const body = screen.getByTestId("message-body");
+    Object.defineProperties(body, {
+      scrollHeight: { configurable: true, value: 420 },
+      clientHeight: { configurable: true, value: 160 },
+    });
+    fireEvent(window, new Event("resize"));
+
+    await waitFor(() => {
+      expect(body).toHaveAttribute("data-collapsed", "true");
+    });
+
+    const fade = screen.getByTestId("message-collapse-fade");
+    expect(fade.className).toContain("from-[#fef9e8]");
+    expect(fade.className).not.toContain("from-background");
+  });
+
+  it("does not show the collapse affordance for short messages", () => {
     render(
       <ChannelMessageBubble
         message={makeMessage({ content: "Short historical answer" })}
         currentUserId="user-1"
-        collapseLongContent
       />,
     );
 
-    expect(screen.getByTestId("message-body")).not.toHaveAttribute("data-collapsed");
-    expect(screen.queryByRole("button", { name: "Show full message" })).not.toBeInTheDocument();
+    const body = screen.getByTestId("message-body");
+    Object.defineProperties(body, {
+      scrollHeight: { configurable: true, value: 48 },
+      clientHeight: { configurable: true, value: 48 },
+    });
+    fireEvent(window, new Event("resize"));
+
+    expect(body).not.toHaveAttribute("data-collapsed");
+    expect(screen.queryByRole("button", { name: "See more" })).not.toBeInTheDocument();
   });
 
   it("copies the message content from the visible action button", async () => {
@@ -1212,6 +1451,34 @@ describe("ChannelMessageBubble", () => {
     expect(await screen.findByText("You, Bob Display")).toBeInTheDocument();
   });
 
+  it("LRM-364: reaction hover shows group-manager display name, never Unknown Agent", async () => {
+    const user = userEvent.setup();
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          reactions: [
+            {
+              id: "reaction-beckham",
+              channel_id: "c1",
+              message_id: "m1",
+              actor_type: "agent",
+              actor_id: "agent-beckham",
+              emoji: "👍",
+              created_at: "2026-06-17T09:16:00Z",
+            },
+          ],
+        })}
+        currentUserId="user-1"
+        onReact={vi.fn()}
+      />,
+    );
+
+    const pill = screen.getByRole("button", { name: "👍1" });
+    await user.hover(pill);
+    expect(await screen.findByText("贝克汉姆")).toBeInTheDocument();
+    expect(screen.queryByText("Unknown Agent")).not.toBeInTheDocument();
+  });
+
   // B4 (#242) — reaction 4-carrier consistency. Channel / dm_channel / thread
   // all render their reactions through this same bubble, so its picker→pill
   // aggregate (emoji + count, self-highlight) is the shared contract the issue
@@ -1444,7 +1711,10 @@ describe("ChannelMessageBubble", () => {
   });
 
   it("projects an issue-lifecycle status change into the item #7 row with a simple inline time (#497)", () => {
-    render(
+    // QueryClient required: LRM-281 may enable member-profiles useQuery when
+    // the directory misses; Alice is in the stubbed directory so the query
+    // stays disabled, but useQuery still needs a provider.
+    renderWithStickerCatalog(
       <ChannelMessageBubble
         message={makeMessage({
           type: "system",
@@ -1757,7 +2027,7 @@ describe("ChannelMessageBubble", () => {
     expect(onReact).not.toHaveBeenCalled();
   });
 
-  it("shows pending status on an optimistic bubble and hides the action bar", () => {
+  it("renders an optimistic pending bubble silently (no Sending…)", () => {
     render(
       <ChannelMessageBubble
         message={makeMessage({
@@ -1778,7 +2048,10 @@ describe("ChannelMessageBubble", () => {
     );
 
     expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-local-send", "pending");
-    expect(screen.getByTestId("message-send-pending")).toHaveTextContent("Sending…");
+    expect(screen.getByText("optimistic pending")).toBeInTheDocument();
+    // Slack / LRM-271/273/280: no Sending… chrome on pending optimistic rows.
+    expect(screen.queryByTestId("message-send-pending")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Sending/i)).not.toBeInTheDocument();
     expect(screen.queryByTestId("message-action-bar")).not.toBeInTheDocument();
   });
 
@@ -1806,5 +2079,126 @@ describe("ChannelMessageBubble", () => {
     expect(screen.getByTestId("message-send-failed")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(onRetrySend).toHaveBeenCalledWith(message);
+  });
+
+  it("labels transcribed human voice input without inventing stored audio", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          type: "user",
+          author_id: "user-1",
+          author_name: "Alice",
+          content: "spoken question",
+          parts: [
+            { type: "text", text: "spoken question" },
+            { type: "voice", duration_ms: 2400 },
+          ],
+        })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.getByTestId("voice-input-label")).toHaveTextContent("Voice input · 2s");
+    expect(screen.queryByTestId("voice-reply-control")).not.toBeInTheDocument();
+  });
+
+  it("hides a recorded human voice transcript until the user asks for it", async () => {
+    const transcript = "question spoken by Alice";
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          type: "user",
+          author_id: "user-1",
+          author_name: "Alice",
+          content: transcript,
+          parts: [
+            { type: "text", text: transcript },
+            {
+              type: "voice",
+              duration_ms: 2400,
+              attachment_id: "recording-1",
+              filename: "voice-recording.wav",
+              content_type: "audio/wav",
+              size_bytes: 48,
+            },
+          ],
+          attachments: [{
+            id: "recording-1",
+            workspace_id: "workspace-1",
+            issue_id: null,
+            comment_id: null,
+            chat_session_id: null,
+            chat_message_id: null,
+            uploader_type: "member",
+            uploader_id: "user-1",
+            filename: "voice-recording.wav",
+            url: "/uploads/voice-recording.wav",
+            download_url: "/api/attachments/recording-1/download",
+            markdown_url: "/api/attachments/recording-1/download",
+            content_type: "audio/wav",
+            size_bytes: 48,
+            created_at: "2026-07-23T00:00:00Z",
+          }],
+        })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.queryByText(transcript)).not.toBeInTheDocument();
+    expect(screen.getByTestId("voice-reply-control")).toHaveTextContent('2″');
+    await userEvent.click(screen.getByRole("button", { name: "Show transcript" }));
+    expect(screen.getByTestId("voice-reply-transcript")).toHaveTextContent(transcript);
+  });
+
+  it("hides an Agent voice transcript until its attached text control is opened", async () => {
+    const transcript = "One day, the teacher asked what echo means.";
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          content: transcript,
+          parts: [
+            { type: "text", text: transcript },
+            { type: "voice" },
+          ],
+        })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.queryByText(transcript)).not.toBeInTheDocument();
+    const toggle = screen.getByRole("button", { name: "Show transcript" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    await userEvent.click(toggle);
+
+    const panel = screen.getByTestId("voice-reply-transcript");
+    expect(screen.getByRole("region", { name: "Voice transcript" })).toBe(panel);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(toggle).toHaveAttribute("aria-controls", panel.id);
+    expect(within(panel).getByText("Voice transcript")).toBeInTheDocument();
+    expect(within(panel).getByText(transcript)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Hide transcript" }));
+    expect(screen.queryByTestId("voice-reply-transcript")).not.toBeInTheDocument();
+  });
+
+  it("keeps the Agent voice replay control in a compact message group", async () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          content: "spoken answer",
+          parts: [
+            { type: "text", text: "spoken answer" },
+            { type: "voice" },
+          ],
+        })}
+        currentUserId="user-1"
+        compact
+      />,
+    );
+
+    expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-message-group", "compact");
+    expect(screen.getByRole("button", { name: "Play voice reply" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("voice-reply-control")).toHaveTextContent('3″'));
   });
 });

@@ -83,7 +83,6 @@ function renderOverview(task: AgentTask) {
       <AgentDetailOverview
         agent={agent}
         runtime={null}
-        availability={null}
         metric={{ runCount: 1, successRate: null, cost: null }}
         canManage={false}
         onEdit={vi.fn()}

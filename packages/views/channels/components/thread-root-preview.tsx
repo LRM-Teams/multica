@@ -4,6 +4,7 @@ import { Bot } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { useActorName } from "@multica/core/workspace/hooks";
 import type { ChannelMessage } from "@multica/core/types";
+import type { OpenAgentPanelFn } from "@multica/core/agents";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { initialsOf } from "../../common/initials";
@@ -11,6 +12,7 @@ import { useT } from "../../i18n/use-t";
 import { useMessageTime } from "../../i18n/use-message-time";
 import { resolveChannelAuthorDisplayName } from "./message-preview";
 import { MessageBody } from "./message-body";
+import { resolveVoiceMessagePresentation } from "../lib/voice-message-presentation";
 
 export function ThreadRootPreview({
   message,
@@ -23,17 +25,20 @@ export function ThreadRootPreview({
   currentUserId: string | null;
   ownName?: string;
   onViewParent?: () => void;
-  onOpenAgent?: (agentId: string) => void;
+  onOpenAgent?: OpenAgentPanelFn;
 }) {
   const { t } = useT("channels");
   const messageTime = useMessageTime();
   const { getActorName } = useActorName();
   const isAgent = message.type === "agent";
+  const voicePresentation = resolveVoiceMessagePresentation(message);
   const displayName = resolveChannelAuthorDisplayName(message, {
     currentUserId,
     ownName,
     getActorName,
   });
+  // LRM-270 (Slack align): thread author row — name + time only; no Owner/Admin
+  // chrome; no Agent pill. Member-list muted role is unchanged.
   const profileActorType =
     message.type === "agent"
       ? "agent"
@@ -42,10 +47,14 @@ export function ThreadRootPreview({
         : null;
   const profileActorId = message.author_id ?? null;
   // Agent author → clicking the avatar/name opens the agent side panel, same as
-  // the main channel bubble. Members keep the hover card only. (#488)
+  // the main channel bubble. Members keep the hover card only. (#488 / LRM-292)
   const handleOpenAgentCapture =
     isAgent && onOpenAgent && profileActorId
-      ? () => onOpenAgent(profileActorId)
+      ? () =>
+          onOpenAgent(profileActorId, {
+            display_name: message.author_name,
+            avatar_url: message.author_avatar_url ?? null,
+          })
       : undefined;
   const avatarActorType = isAgent ? "agent" : "member";
   const avatar = profileActorId ? (
@@ -100,11 +109,6 @@ export function ThreadRootPreview({
             ) : (
               nameNode
             )}
-            {isAgent && (
-              <span className="shrink-0 rounded-full border border-primary/20 bg-primary/[0.08] px-1.5 py-0.5 text-[10px] font-normal leading-none text-primary">
-                {t(($) => $.message.agent_badge)}
-              </span>
-            )}
             <span
               className="text-[11px] text-muted-foreground"
               title={messageTime.full(message.created_at)}
@@ -119,6 +123,7 @@ export function ThreadRootPreview({
               attachments={message.attachments}
               compact
               sourceMessageId={message.id}
+              consumedAttachmentIds={voicePresentation?.consumedAttachmentIds}
             />
           </div>
           {onViewParent && (

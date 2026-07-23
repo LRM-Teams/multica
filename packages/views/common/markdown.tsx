@@ -60,7 +60,7 @@ function ProjectMentionCard({ projectId }: { projectId: string }): React.ReactNo
 }
 
 /**
- * Member / agent / @all / squad mention — brand-ink prose token (not a chip
+ * Member / agent / @all / squad mention — Slack soft-bg token (not a capsule
  * and not a per-actor identity color). Avatars keep `agentColor`; tokens share
  * one hue family via `mentionTokenClassName`.
  *
@@ -68,12 +68,12 @@ function ProjectMentionCard({ projectId }: { projectId: string }): React.ReactNo
  * avatars/names). @all is a broadcast keyword: token only, no profile card.
  */
 /**
- * Member / agent / @all / squad mention token — brand-ink prose text, with the
- * hover profile card + click-to-open for person mentions. Exported so the shared
- * inline-reference projector (#463) renders structured `reference` mentions the
- * SAME way as legacy `mention://` markdown links — one mention look + one hover
- * card everywhere, no second implementation (restores the hover the bare-`@Label`
- * migration window dropped).
+ * Member / agent / @all / squad mention token — Slack soft-bg emphasis link,
+ * with the hover profile card + click-to-open for person mentions. Exported so
+ * the shared inline-reference projector (#463) renders structured `reference`
+ * mentions the SAME way as legacy `mention://` markdown links — one mention
+ * look + one hover card everywhere, no second implementation (restores the
+ * hover the bare-`@Label` migration window dropped).
  */
 export function ActorMention({
   type,

@@ -6,6 +6,90 @@ afterEach(() => {
 });
 
 describe("ApiClient", () => {
+  it("transcribes PCM through the authenticated voice endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ text: " 你好 " }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+    const pcm = new ArrayBuffer(4);
+
+    await expect(client.transcribeVoice(pcm)).resolves.toBe("你好");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.test/api/voice/asr",
+      expect.objectContaining({
+        method: "POST",
+        body: pcm,
+        headers: expect.objectContaining({ "Content-Type": "audio/pcm; rate=16000" }),
+      }),
+    );
+  });
+
+  it("rejects a non-audio TTS response", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("not audio", { status: 200, headers: { "Content-Type": "text/plain" } }),
+    ));
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.synthesizeVoice("hello")).rejects.toMatchObject({ status: 502 });
+  });
+
+  it("accepts the self-describing WAV returned by TTS", async () => {
+    const wav = new Uint8Array([0x52, 0x49, 0x46, 0x46]).buffer;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(wav, {
+        status: 200,
+        headers: {
+          "Content-Type": "audio/wav",
+          "X-Voice-Duration-Ms": "2040",
+        },
+      }),
+    ));
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.synthesizeVoice("hello")).resolves.toEqual({
+      audio: wav,
+      durationMs: 2040,
+    });
+  });
+
+  it("keeps TTS audio usable when an older server omits the duration header", async () => {
+    const wav = new Uint8Array([0x52, 0x49, 0x46, 0x46]).buffer;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(wav, { status: 200, headers: { "Content-Type": "audio/wav" } }),
+    ));
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.synthesizeVoice("hello")).resolves.toEqual({
+      audio: wav,
+      durationMs: null,
+    });
+  });
+
+  it("rejects a malformed ASR response instead of reporting no speech", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("not-json", { status: 200, headers: { "Content-Type": "application/json" } }),
+    ));
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.transcribeVoice(new ArrayBuffer(2))).rejects.toMatchObject({ status: 502 });
+  });
+
+  it("keeps a valid empty ASR transcript as no speech", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ text: "" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    ));
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.transcribeVoice(new ArrayBuffer(2))).resolves.toBe("");
+  });
+
   it("parses the sticker catalog endpoint through the typed client", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({

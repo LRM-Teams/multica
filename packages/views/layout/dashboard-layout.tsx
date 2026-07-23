@@ -9,6 +9,7 @@ import { DashboardGuard } from "./dashboard-guard";
 import { NavigationProgress } from "./navigation-progress";
 import { WorkspacePresencePrefetch } from "./workspace-presence-prefetch";
 import { GlobalAgentPanel } from "./global-agent-panel";
+import { AgentMemoryXpListener } from "../agents/components/agent-memory-xp-listener";
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -33,6 +34,7 @@ export function DashboardLayout({
     >
       <SidebarProvider className="h-svh">
         <WorkspacePresencePrefetch />
+        <AgentMemoryXpListener />
         <AppSidebar />
         <SidebarInset className="relative overflow-hidden">
           <NavigationProgress />

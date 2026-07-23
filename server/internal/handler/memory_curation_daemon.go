@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -27,10 +28,6 @@ const (
 )
 
 func (h *Handler) claimPendingMemoryCurationRun(ctx context.Context, rt db.AgentRuntime, activeRunID string) (*protocol.DaemonHeartbeatPendingMemoryCuration, error) {
-	var pending protocol.DaemonHeartbeatPendingMemoryCuration
-	var targetAgentIDs []string
-	var instructions string
-	var customArgsRaw, mcpConfigRaw []byte
 	if err := h.failExpiredMemoryCurationRuns(ctx, rt.ID, rt.WorkspaceID); err != nil {
 		return nil, err
 	}
@@ -42,8 +39,103 @@ func (h *Handler) claimPendingMemoryCurationRun(ctx context.Context, rt db.Agent
 		`, strings.TrimSpace(activeRunID), rt.ID); err != nil {
 			return nil, err
 		}
+		if _, err := h.DB.Exec(ctx, `
+			UPDATE memory_curation_agent_run
+			   SET claimed_at = now(), updated_at = now()
+			 WHERE id::text = $1 AND runtime_id = $2 AND status = 'running'
+		`, strings.TrimSpace(activeRunID), rt.ID); err != nil {
+			return nil, err
+		}
 		return nil, nil
 	}
+	if pending, err := h.claimPendingMemoryCurationAgentRun(ctx, rt); err != nil || pending != nil {
+		return pending, err
+	}
+	return h.claimPendingMemoryCurationParentRun(ctx, rt)
+}
+
+func (h *Handler) claimPendingMemoryCurationAgentRun(ctx context.Context, rt db.AgentRuntime) (*protocol.DaemonHeartbeatPendingMemoryCuration, error) {
+	var pending protocol.DaemonHeartbeatPendingMemoryCuration
+	var targetAgentIDs []string
+	var instructions string
+	var customArgsRaw, mcpConfigRaw []byte
+	err := h.DB.QueryRow(ctx, `
+		WITH guard AS MATERIALIZED (
+		  SELECT pg_advisory_xact_lock(hashtextextended($1::text || ':agent-memory-curation-child', 0))
+		), candidate AS (
+		  SELECT cr.id
+		    FROM memory_curation_agent_run cr
+		    JOIN memory_curation_run r ON r.id = cr.parent_run_id
+		    CROSS JOIN guard
+		   WHERE cr.runtime_id = $1::uuid
+		     AND cr.workspace_id = $2
+		     AND cr.stage = 'agent_self_review'
+		     AND r.execution_owner = 'daemon'
+		     AND r.stage IN ('agent_self_review', 'all')
+		     AND r.status IN ('queued', 'waiting_runtime', 'running')
+		     AND (
+		       (cr.status IN ('queued', 'waiting_runtime') AND NOT EXISTS (
+		         SELECT 1 FROM memory_curation_agent_run active
+		          WHERE active.runtime_id = cr.runtime_id AND active.status = 'running'
+		            AND active.claimed_at >= now() - make_interval(secs => $3::double precision)
+		       ))
+		       OR (cr.status = 'running' AND cr.claimed_at < now() - make_interval(secs => $3::double precision)
+		           AND cr.attempt < $4
+		           AND (cr.started_at IS NULL OR cr.started_at >= now() - make_interval(secs => $5::double precision)))
+		     )
+		   ORDER BY (cr.status = 'running') DESC, cr.created_at
+		   FOR UPDATE SKIP LOCKED
+		   LIMIT 1
+		), claimed AS (
+		  UPDATE memory_curation_agent_run cr
+		     SET status = 'running', claimed_at = now(), claim_token = gen_random_uuid(),
+		         started_at = COALESCE(started_at, now()), attempt = attempt + 1, error = '', updated_at = now()
+		    FROM candidate c
+		   WHERE cr.id = c.id
+		  RETURNING cr.*
+		)
+		SELECT c.id::text, c.parent_run_id::text, c.workspace_id::text, c.stage,
+		       COALESCE(r.date_from::text, ''), COALESCE(r.date_to::text, ''),
+		       ARRAY[c.agent_id::text], c.agent_id::text,
+		       COALESCE(NULLIF(r.curator_model, ''), a.model, ''), COALESCE(a.thinking_level, ''),
+		       COALESCE(a.custom_args, '[]'::jsonb), COALESCE(a.mcp_config, 'null'::jsonb),
+		       COALESCE(a.instructions, ''),
+		       COALESCE(p.timezone, 'Asia/Shanghai'),
+		       r.trigger_kind = 'backfill', r.dry_run, r.force,
+		       c.claim_token::text, r.curator_mode, r.confidence_threshold
+		  FROM claimed c
+		  JOIN memory_curation_run r ON r.id = c.parent_run_id
+		  LEFT JOIN memory_curator_profile p ON p.id = r.profile_id
+		  LEFT JOIN agent a ON a.id = c.agent_id
+	`, rt.ID, rt.WorkspaceID, memoryCurationReclaimTimeout.Seconds(), memoryCurationMaxAttempts, memoryCurationMaxRunAge.Seconds()).Scan(
+		&pending.ID, &pending.ParentRunID, &pending.WorkspaceID, &pending.Stage, &pending.DateFrom, &pending.DateTo,
+		&targetAgentIDs, &pending.CuratorAgentID, &pending.CuratorModel, &pending.CuratorThinkingLevel,
+		&customArgsRaw, &mcpConfigRaw, &instructions,
+		&pending.Timezone, &pending.IncludeHistory, &pending.DryRun, &pending.Force,
+		&pending.ClaimToken, &pending.Mode, &pending.ConfidenceThreshold,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	pending.AgentRunID = pending.ID
+	pending.AgentIDs = targetAgentIDs
+	pending.CuratorInstructions = strings.TrimSpace(instructions)
+	_ = json.Unmarshal(customArgsRaw, &pending.CuratorCustomArgs)
+	if string(mcpConfigRaw) != "null" {
+		pending.CuratorMcpConfig = append([]byte(nil), mcpConfigRaw...)
+	}
+	pending.DBEvidence = h.memoryCurationEvidenceBundles(ctx, pending.WorkspaceID, pending.AgentIDs, pending.DateFrom, pending.DateTo, false)
+	return &pending, nil
+}
+
+func (h *Handler) claimPendingMemoryCurationParentRun(ctx context.Context, rt db.AgentRuntime) (*protocol.DaemonHeartbeatPendingMemoryCuration, error) {
+	var pending protocol.DaemonHeartbeatPendingMemoryCuration
+	var targetAgentIDs []string
+	var instructions string
+	var customArgsRaw, mcpConfigRaw []byte
 	err := h.DB.QueryRow(ctx, `
 		WITH guard AS MATERIALIZED (
 		  SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
@@ -54,6 +146,17 @@ func (h *Handler) claimPendingMemoryCurationRun(ctx context.Context, rt db.Agent
 		   WHERE r.runtime_id = $1::uuid
 		     AND r.workspace_id = $2
 		     AND r.execution_owner = 'daemon'
+		     AND (
+		       r.stage = 'team_curation'
+		       OR (r.stage = 'agent_self_review' AND NOT EXISTS (SELECT 1 FROM memory_curation_agent_run cr WHERE cr.parent_run_id = r.id))
+		       OR (r.stage = 'all' AND (
+		         NOT EXISTS (SELECT 1 FROM memory_curation_agent_run cr WHERE cr.parent_run_id = r.id)
+		         OR (
+		           NOT EXISTS (SELECT 1 FROM memory_curation_agent_run cr WHERE cr.parent_run_id = r.id AND cr.status IN ('queued','waiting_runtime','running'))
+		           AND EXISTS (SELECT 1 FROM memory_curation_agent_run cr WHERE cr.parent_run_id = r.id AND cr.status = 'succeeded')
+		         )
+		       ))
+		     )
 		     AND (
 		       (r.status IN ('queued', 'waiting_runtime') AND NOT EXISTS (
 		         SELECT 1 FROM memory_curation_run active
@@ -75,7 +178,8 @@ func (h *Handler) claimPendingMemoryCurationRun(ctx context.Context, rt db.Agent
 		   WHERE r.id = c.id
 		  RETURNING r.*
 		)
-		SELECT c.id::text, c.workspace_id::text, c.stage,
+		SELECT c.id::text, c.workspace_id::text,
+		       CASE WHEN c.stage = 'all' THEN 'team_curation' ELSE c.stage END,
 		       COALESCE(c.date_from::text, ''), COALESCE(c.date_to::text, ''),
 		       c.target_agent_ids::text[], COALESCE(c.curator_agent_id::text, ''),
 		       COALESCE(NULLIF(c.curator_model, ''), a.model, ''), COALESCE(a.thinking_level, ''),
@@ -111,7 +215,7 @@ func (h *Handler) claimPendingMemoryCurationRun(ctx context.Context, rt db.Agent
 }
 
 func (h *Handler) failExpiredMemoryCurationRuns(ctx context.Context, runtimeID, workspaceID pgtype.UUID) error {
-	_, err := h.DB.Exec(ctx, `
+	if _, err := h.DB.Exec(ctx, `
 		UPDATE memory_curation_run
 		   SET status = 'failed', finished_at = now(),
 		       error = CASE
@@ -127,6 +231,24 @@ func (h *Handler) failExpiredMemoryCurationRuns(ctx context.Context, runtimeID, 
 		     (started_at IS NOT NULL AND started_at < now() - make_interval(secs => $3::double precision))
 		     OR (claimed_at < now() - make_interval(secs => $4::double precision) AND attempt >= $5)
 		   )
+	`, runtimeID, workspaceID, memoryCurationMaxRunAge.Seconds(), memoryCurationReclaimTimeout.Seconds(), memoryCurationMaxAttempts); err != nil {
+		return err
+	}
+	_, err := h.DB.Exec(ctx, `
+		UPDATE memory_curation_agent_run
+		   SET status = 'failed', finished_at = now(), updated_at = now(),
+		       error = CASE
+		         WHEN started_at IS NOT NULL AND started_at < now() - make_interval(secs => $3::double precision)
+		           THEN 'memory curation agent self-review exceeded server max runtime'
+		         ELSE 'memory curation agent self-review exceeded max daemon claim attempts'
+		       END
+		 WHERE runtime_id = $1
+		   AND workspace_id = $2
+		   AND status = 'running'
+		   AND (
+		     (started_at IS NOT NULL AND started_at < now() - make_interval(secs => $3::double precision))
+		     OR (claimed_at < now() - make_interval(secs => $4::double precision) AND attempt >= $5)
+		   )
 	`, runtimeID, workspaceID, memoryCurationMaxRunAge.Seconds(), memoryCurationReclaimTimeout.Seconds(), memoryCurationMaxAttempts)
 	return err
 }
@@ -135,7 +257,7 @@ func (h *Handler) failExpiredMemoryCurationRuns(ctx context.Context, runtimeID, 
 // entire workspace. Used by status polling so the evolution UI does not stay
 // spinning when daemon heartbeats skip the claim/fail path.
 func (h *Handler) failExpiredMemoryCurationRunsForWorkspace(ctx context.Context, workspaceID string) error {
-	_, err := h.DB.Exec(ctx, `
+	if _, err := h.DB.Exec(ctx, `
 		UPDATE memory_curation_run
 		   SET status = 'failed', finished_at = now(),
 		       error = CASE
@@ -145,6 +267,23 @@ func (h *Handler) failExpiredMemoryCurationRunsForWorkspace(ctx context.Context,
 		       END
 		 WHERE workspace_id = $1::uuid
 		   AND execution_owner = 'daemon'
+		   AND status = 'running'
+		   AND (
+		     (started_at IS NOT NULL AND started_at < now() - make_interval(secs => $2::double precision))
+		     OR (claimed_at < now() - make_interval(secs => $3::double precision) AND attempt >= $4)
+		   )
+	`, workspaceID, memoryCurationMaxRunAge.Seconds(), memoryCurationReclaimTimeout.Seconds(), memoryCurationMaxAttempts); err != nil {
+		return err
+	}
+	_, err := h.DB.Exec(ctx, `
+		UPDATE memory_curation_agent_run
+		   SET status = 'failed', finished_at = now(), updated_at = now(),
+		       error = CASE
+		         WHEN started_at IS NOT NULL AND started_at < now() - make_interval(secs => $2::double precision)
+		           THEN 'memory curation agent self-review exceeded server max runtime'
+		         ELSE 'memory curation agent self-review exceeded max daemon claim attempts'
+		       END
+		 WHERE workspace_id = $1::uuid
 		   AND status = 'running'
 		   AND (
 		     (started_at IS NOT NULL AND started_at < now() - make_interval(secs => $2::double precision))
@@ -265,6 +404,44 @@ func (h *Handler) ReportMemoryCurationRunResult(w http.ResponseWriter, r *http.R
 		return
 	}
 	defer tx.Rollback(r.Context())
+	var childDryRun bool
+	var childWorkspaceID, childParentStage, childParentRunID string
+	err = tx.QueryRow(r.Context(), `
+		UPDATE memory_curation_agent_run cr
+		   SET status = $4, stats = $5::jsonb, output = $5::jsonb, error = $6,
+		       finished_at = now(), updated_at = now()
+		  FROM memory_curation_run r
+		 WHERE cr.id = $1 AND cr.runtime_id = $2 AND cr.claim_token = $3 AND cr.status = 'running'
+		   AND r.id = cr.parent_run_id
+		 RETURNING r.dry_run, r.workspace_id::text, r.stage, r.id::text
+	`, runUUID, runtimeUUID, claimToken, status, result, strings.TrimSpace(req.Error)).Scan(&childDryRun, &childWorkspaceID, &childParentStage, &childParentRunID)
+	if err == nil {
+		if err := h.persistMemoryCurationAgentRunOutputsFromRaw(r.Context(), tx, childParentRunID, childWorkspaceID, childParentStage, result); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to persist agent curation run output")
+			return
+		}
+		if status == "succeeded" && !childDryRun && !reported.DryRun {
+			if err := h.persistAgenticCurationOutputs(r.Context(), tx, childParentRunID, childWorkspaceID, "agent_self_review", result); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to persist self-review outputs")
+				return
+			}
+		}
+		if err := finalizeMemoryCurationParentFromAgentRuns(r.Context(), tx, childParentRunID); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to aggregate parent curation run")
+			return
+		}
+		if err := tx.Commit(r.Context()); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to commit curation result")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"id": runID, "parent_run_id": childParentRunID, "status": status})
+		return
+	}
+	if err != pgx.ErrNoRows {
+		writeError(w, http.StatusInternalServerError, "failed to report agent curation result")
+		return
+	}
+
 	var dryRun bool
 	var workspaceID, stage string
 	err = tx.QueryRow(r.Context(), `
@@ -281,11 +458,26 @@ func (h *Handler) ReportMemoryCurationRunResult(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusInternalServerError, "failed to report curation result")
 		return
 	}
+	if err := h.persistMemoryCurationAgentRunOutputsFromRaw(r.Context(), tx, runID, workspaceID, stage, result); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to persist agent curation runs")
+		return
+	}
 	if status == "succeeded" && !dryRun && !reported.DryRun {
 		if err := h.persistAgenticCurationOutputs(r.Context(), tx, runID, workspaceID, stage, result); err != nil {
+			slog.Error("failed to persist curation outputs", "run_id", runID, "runtime_id", runtimeID, "stage", stage, "error", err)
 			writeError(w, http.StatusInternalServerError, "failed to persist curation outputs")
 			return
 		}
+	}
+	if stage == "all" {
+		if err := mergeMemoryCurationParentStatsWithAgentRuns(r.Context(), tx, runID); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to merge agent curation stats")
+			return
+		}
+	}
+	if err := finishUnreportedMemoryCurationAgentRuns(r.Context(), tx, runID, status, req.Error); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to finalize agent curation runs")
+		return
 	}
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit curation result")

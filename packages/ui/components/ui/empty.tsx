@@ -2,6 +2,21 @@ import { cva, type VariantProps } from "class-variance-authority"
 
 import { cn } from "@multica/ui/lib/utils"
 
+/**
+ * LRM-357 — empty-state chrome uses semantic tokens only.
+ * Title = foreground; description = muted-foreground; icon fill = muted +
+ * muted-foreground (never a hardcoded light-gray hex). Surfaces stay on
+ * background / muted / card via callers.
+ */
+export const EMPTY_TITLE_CLASSNAME =
+  "font-heading text-sm font-medium tracking-tight text-foreground"
+
+export const EMPTY_DESCRIPTION_CLASSNAME =
+  "text-sm/relaxed text-muted-foreground [&>a]:underline [&>a]:underline-offset-4 [&>a:hover]:text-primary"
+
+export const EMPTY_MEDIA_ICON_CLASSNAME =
+  "flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground [&_svg:not([class*='size-'])]:size-4"
+
 function Empty({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
@@ -31,7 +46,7 @@ const emptyMediaVariants = cva(
     variants: {
       variant: {
         default: "bg-transparent",
-        icon: "flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-foreground [&_svg:not([class*='size-'])]:size-4",
+        icon: EMPTY_MEDIA_ICON_CLASSNAME,
       },
     },
     defaultVariants: {
@@ -59,10 +74,7 @@ function EmptyTitle({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="empty-title"
-      className={cn(
-        "font-heading text-sm font-medium tracking-tight",
-        className
-      )}
+      className={cn(EMPTY_TITLE_CLASSNAME, className)}
       {...props}
     />
   )
@@ -72,10 +84,7 @@ function EmptyDescription({ className, ...props }: React.ComponentProps<"p">) {
   return (
     <div
       data-slot="empty-description"
-      className={cn(
-        "text-sm/relaxed text-muted-foreground [&>a]:underline [&>a]:underline-offset-4 [&>a:hover]:text-primary",
-        className
-      )}
+      className={cn(EMPTY_DESCRIPTION_CLASSNAME, className)}
       {...props}
     />
   )

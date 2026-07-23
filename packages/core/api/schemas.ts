@@ -617,6 +617,29 @@ const MemoryCurationAgentRunSchema = z.object({
   curator_output_excerpt: z.string().optional(),
 }).loose();
 
+const MemoryCurationChildRunSchema = z.object({
+  id: z.string().default(""),
+  parent_run_id: z.string().default(""),
+  workspace_id: z.string().default(""),
+  agent_id: z.string().default(""),
+  agent_name: z.string().optional(),
+  runtime_id: z.string().optional(),
+  runtime_name: z.string().optional(),
+  stage: z.string().default(""),
+  status: z.string().default(""),
+  attempt: z.number().default(0),
+  started_at: z.string().nullable().optional(),
+  finished_at: z.string().nullable().optional(),
+  error: z.string().optional(),
+  changed: z.boolean().default(false),
+  daily_files_written: z.number().default(0),
+  review_candidates_added: z.number().default(0),
+  skill_candidates_added: z.number().default(0),
+  evidence_collected: z.number().default(0),
+  conflicts_found: z.number().default(0),
+  output_excerpt: z.string().optional(),
+}).loose();
+
 const MemoryCurationRunArtifactSchema = z.object({
   kind: z.string().default(""),
   title: z.string().default(""),
@@ -650,6 +673,7 @@ export const MemoryCurationRunDetailSchema: z.ZodType<MemoryCurationRunDetail> =
   target_agents: z.array(MemoryCurationTargetAgentSchema).default([]),
   timeline: z.array(MemoryCurationRunTimelineItemSchema).default([]),
   agent_results: z.array(MemoryCurationAgentRunSchema).default([]),
+  child_runs: z.array(MemoryCurationChildRunSchema).default([]),
   artifacts: z.array(MemoryCurationRunArtifactSchema).default([]),
 }).loose();
 
@@ -669,6 +693,7 @@ export const EMPTY_MEMORY_CURATION_RUN_DETAIL: MemoryCurationRunDetail = {
   target_agents: [],
   timeline: [],
   agent_results: [],
+  child_runs: [],
   artifacts: [],
 };
 
@@ -1916,6 +1941,14 @@ export const SandboxSnapshotSchema = z.object({
 }).loose();
 
 export const SandboxSnapshotListSchema = z.array(SandboxSnapshotSchema);
+
+export const VoiceTranscriptResponseSchema = z.object({
+  text: z.string(),
+}).loose();
+
+export const EMPTY_VOICE_TRANSCRIPT_RESPONSE = {
+  text: "",
+};
 
 export const EMPTY_SANDBOX_SNAPSHOT: SandboxSnapshot = {
   id: "",

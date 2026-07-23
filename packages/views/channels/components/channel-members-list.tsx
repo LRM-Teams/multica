@@ -5,13 +5,12 @@ import {
   type ActorIdentityPresentation,
 } from "@multica/core/identity";
 import type { ChannelMember } from "@multica/core/types";
-import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
-import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
+import type { OpenAgentPanelFn } from "@multica/core/agents";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { cn } from "@multica/ui/lib/utils";
 import { MessageSquare } from "lucide-react";
-import { ActorIdentityRow } from "../../common/actor-identity-row";
-import { avatarGlyph, avatarToneClass } from "../../common/initials";
+import { ActorAvatar } from "../../common/actor-avatar";
+import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { useT } from "../../i18n";
 
 export type MemberRoleLabel = "owner" | "admin" | "member" | "agent";
@@ -21,6 +20,12 @@ export type MemberRoleLabel = "owner" | "admin" | "member" | "agent";
  * Channel details 「成员」Tab so there is one list IA, not two.
  * LRM-225 — scroll via flex-1 min-h-0 (dialog) or parent overflow (details);
  * drop the old fixed max-h that clipped the roster on mobile.
+ *
+ * Avatars are identity-first (LRM-224 Option B): actor id → shared Avatar;
+ * agents show the presence status dot on this directory surface.
+ * LRM-288 — row identity is clickable: agents open the agent panel (including
+ * channel-only / group-manager agents absent from ListAgents); humans open
+ * the shared profile trigger.
  */
 export function ChannelMembersList({
   members,
@@ -32,6 +37,7 @@ export function ChannelMembersList({
   isMobile,
   currentUserId,
   onOpenDm,
+  onOpenAgent,
   onRemove,
   dmPending,
   className,
@@ -45,6 +51,7 @@ export function ChannelMembersList({
   isMobile: boolean;
   currentUserId: string;
   onOpenDm?: (member: ChannelMember) => void;
+  onOpenAgent?: OpenAgentPanelFn;
   onRemove?: (member: ChannelMember) => void;
   dmPending?: boolean;
   className?: string;
@@ -67,7 +74,6 @@ export function ChannelMembersList({
               <Skeleton className="h-3.5 w-28" />
               <Skeleton className="h-3 w-20" />
             </div>
-            <Skeleton className="h-5 w-14 rounded-full" />
           </div>
         ))}
       </div>
@@ -78,7 +84,7 @@ export function ChannelMembersList({
     return (
       <p
         className={cn(
-          "min-h-0 px-5 py-10 text-center text-sm text-muted-foreground",
+          "min-h-0 px-5 py-10 text-center text-sm text-foreground",
           className,
         )}
       >
@@ -102,33 +108,66 @@ export function ChannelMembersList({
           isAgent ? t(($) => $.message.agent_badge) : t(($) => $.members.title),
         );
         const roleKey = roleForMember(m);
-        const roleLabel = t(($) => $.profile_popover.role[roleKey]);
+        const showMutedRole = !isAgent && (roleKey === "owner" || roleKey === "admin");
+        const mutedRoleLabel = showMutedRole
+          ? t(($) => $.profile_popover.role[roleKey])
+          : null;
         const canDm = Boolean(onOpenDm) && (isAgent || m.member_id !== currentUserId);
+        const actorType = isAgent ? "agent" : "member";
+        const profileMemberType = isAgent ? "agent" : "user";
+        const openAgentCapture =
+          isAgent && onOpenAgent
+            ? () => {
+                onOpenAgent(m.member_id, {
+                  name: m.name,
+                  display_name: m.display_name,
+                  avatar_url: m.avatar_url ?? null,
+                });
+              }
+            : undefined;
 
         return (
           <div
             key={`${m.member_type}:${m.member_id}`}
             className="group flex min-h-[52px] items-center gap-3 border-b border-border px-5 py-2.5 last:border-b-0 hover:bg-hover"
           >
-            <ActorAvatar
-              name={presentation.displayName}
-              initials={avatarGlyph(presentation.displayName || "?")}
-              avatarUrl={resolvePublicFileUrl(m.avatar_url)}
-              isAgent={isAgent}
-              size={36}
-              className={avatarToneClass(`${m.member_type}:${m.member_id}`)}
-            />
-            <ActorIdentityRow
-              displayName={presentation.displayName}
-              handle={presentation.handle}
-              showHandle
-              className="min-w-0 flex-1"
-              primaryClassName="truncate text-sm font-semibold text-ink"
-              secondaryClassName="truncate text-xs text-ink-2"
-            />
-            <span className="shrink-0 rounded-full border border-border bg-card px-2 py-0.5 text-[11px] text-ink-3">
-              {roleLabel}
-            </span>
+            <ActorProfileTrigger
+              memberType={profileMemberType}
+              memberId={m.member_id}
+              side="left"
+              sideOffset={8}
+              className="min-w-0 flex-1 items-center gap-3"
+              onClickCapture={openAgentCapture}
+            >
+              <ActorAvatar
+                actorType={actorType}
+                actorId={m.member_id}
+                avatarUrlHint={m.avatar_url}
+                size={36}
+                showStatusDot={isAgent}
+                profileLink={false}
+              />
+              <div className="min-w-0 flex-1">
+                <div className="flex min-w-0 items-baseline gap-1.5">
+                  <span className="truncate text-sm font-semibold text-ink">
+                    {presentation.displayName}
+                  </span>
+                  {presentation.showHandleLabel && presentation.handleLabel ? (
+                    <span className="truncate text-xs font-normal text-ink-2">
+                      {presentation.handleLabel}
+                    </span>
+                  ) : null}
+                  {mutedRoleLabel ? (
+                    <span
+                      data-testid="member-role-label"
+                      className="shrink-0 text-[11px] font-normal leading-none text-muted-foreground"
+                    >
+                      {mutedRoleLabel}
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+            </ActorProfileTrigger>
             {canDm && (
               <button
                 type="button"

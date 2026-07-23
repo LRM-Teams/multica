@@ -1,7 +1,7 @@
 {
   "page": {
-    "title": "收件箱",
-    "back": "收件箱"
+    "title": "活动",
+    "back": "活动"
   },
   "menu": {
     "mark_all_read": "全部标为已读",
@@ -67,6 +67,35 @@
     "archive_all_failed": "归档全部失败",
     "archive_all_read_failed": "归档已读失败",
     "archive_completed_failed": "归档已完成失败"
+  },
+  "activity": {
+    "tabs_label": "活动筛选",
+    "tabs": {
+      "all": "全部",
+      "unread": "未读",
+      "mentions": "提及"
+    },
+    "new_count": "{{count}} 条新消息",
+    "replies": "{{count}} 条回复",
+    "access_denied": "你已无法访问该频道",
+    "load_failed": "加载活动失败",
+    "retry": "重试",
+    "open_thread_failed": "无法打开该讨论串",
+    "open_item_failed": "无法打开该活动项",
+    "empty": {
+      "all": {
+        "title": "暂无相关活动",
+        "description": "参与 thread、被 @ 或跟进 issue 后，会出现在这里。"
+      },
+      "unread": {
+        "title": "已全部读完",
+        "description": "没有未读 thread 或 issue 更新。切换到「全部」可查看历史。"
+      },
+      "mentions": {
+        "title": "暂无提及",
+        "description": "频道或 issue 中 @你 的消息会出现在这里。"
+      }
+    }
   },
   "mention_popup": {
     "title": "有人@了你",

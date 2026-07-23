@@ -14,8 +14,10 @@ vi.mock("@multica/core/workspace/hooks", () => ({
 vi.mock("../../editor", () => ({
   Attachment: ({
     attachment,
+    inlineHtmlPreview,
   }: {
     attachment: { kind: string; attachment?: { id: string; filename: string; content_type: string } };
+    inlineHtmlPreview?: boolean;
   }) => {
     if (attachment.kind === "record" && attachment.attachment) {
       const a = attachment.attachment;
@@ -24,6 +26,7 @@ vi.mock("../../editor", () => ({
         <div
           data-testid={isImage ? "attachment-image" : "attachment-file"}
           data-attachment-id={a.id}
+          data-inline-html-preview={inlineHtmlPreview === false ? "false" : "true"}
         >
           {a.filename}
         </div>
@@ -133,6 +136,26 @@ describe("MessageAttachmentZone", () => {
     expect(screen.queryByTestId("attachment-image")).not.toBeInTheDocument();
   });
 
+  // LRM-285 — message stream opts out of in-bubble HTML iframe preview.
+  it("passes inlineHtmlPreview=false for HTML attachments", () => {
+    const parts: MessagePart[] = [
+      { type: "attachment", attachment_id: "html-1" },
+    ];
+    const attachments = [
+      makeAttachment({
+        id: "html-1",
+        filename: "design-agent-card-dm.html",
+        content_type: "text/html",
+      }),
+    ];
+
+    render(<MessageAttachmentZone parts={parts} attachments={attachments} />);
+
+    const tile = screen.getByTestId("attachment-file");
+    expect(tile).toHaveTextContent("design-agent-card-dm.html");
+    expect(tile).toHaveAttribute("data-inline-html-preview", "false");
+  });
+
   it("renders a safe placeholder when hydration is missing", () => {
     const parts: MessagePart[] = [
       {
@@ -159,6 +182,65 @@ describe("MessageAttachmentZone", () => {
       />,
     );
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("omits an attachment consumed by the voice-message presentation", () => {
+    const attachment = makeAttachment({
+      id: "agent-audio",
+      filename: "nihao.mp3",
+      content_type: "audio/mpeg",
+    });
+    const { container } = render(
+      <MessageBody
+        content="你好～"
+        parts={[
+          { type: "text", text: "你好～" },
+          { type: "attachment", attachment_id: attachment.id },
+        ]}
+        attachments={[attachment]}
+        consumedAttachmentIds={[attachment.id]}
+      />,
+    );
+
+    expect(screen.getByTestId("body-text")).toHaveTextContent("你好～");
+    expect(screen.queryByTestId("message-attachment-zone")).not.toBeInTheDocument();
+    expect(container).not.toHaveTextContent("nihao.mp3");
+  });
+
+  it("separates a voice transcript from a real attachment without dropping either", () => {
+    const attachment = makeAttachment({
+      id: "supporting-file",
+      filename: "details.pdf",
+      content_type: "application/pdf",
+    });
+    const parts: MessagePart[] = [
+      { type: "text", text: "spoken answer" },
+      { type: "voice" },
+      { type: "attachment", attachment_id: attachment.id },
+    ];
+    const { rerender } = render(
+      <MessageBody
+        content="spoken answer"
+        parts={parts}
+        attachments={[attachment]}
+        contentMode="non-transcript"
+      />,
+    );
+
+    expect(screen.queryByText("spoken answer")).not.toBeInTheDocument();
+    expect(screen.getByTestId("attachment-file")).toHaveTextContent("details.pdf");
+
+    rerender(
+      <MessageBody
+        content="spoken answer"
+        parts={parts}
+        attachments={[attachment]}
+        contentMode="transcript"
+      />,
+    );
+
+    expect(screen.getByTestId("body-text")).toHaveTextContent("spoken answer");
+    expect(screen.queryByTestId("message-attachment-zone")).not.toBeInTheDocument();
   });
 
   it("preserves mixed image/file order from attachment parts", () => {

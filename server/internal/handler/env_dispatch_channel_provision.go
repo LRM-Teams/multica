@@ -279,20 +279,22 @@ func (h *Handler) provisionEnvDispatchAgent(ctx context.Context, in ProvisionEnv
 	if err != nil {
 		return cleanup(fmt.Errorf("clone derived agent: %w", err))
 	}
-	var sessionID string
-	if err := h.DB.QueryRow(ctx, `
-		INSERT INTO chat_session (workspace_id, project_id, agent_id, creator_id, title, runtime_id)
-		VALUES ($1, $2, $3, $4, 'env-dispatch', $5) RETURNING id::text`,
-		in.WorkspaceID, in.ProjectID, derivedID, in.UserID, runtimeRef.ID).Scan(&sessionID); err != nil {
-		return cleanup(fmt.Errorf("create env-dispatch chat session: %w", err))
-	}
-	if _, err := h.DB.Exec(ctx, `INSERT INTO channel_agent_session (channel_id, agent_id, chat_session_id) VALUES ($1, $2, $3)`, in.ChannelID, derivedID, sessionID); err != nil {
-		_, _ = h.DB.Exec(context.WithoutCancel(ctx), `DELETE FROM chat_session WHERE id = $1`, sessionID)
-		return cleanup(fmt.Errorf("create env-dispatch channel session: %w", err))
+	sessionID, sessionCreated, err := h.ensureEnvDispatchChannelSession(ctx, envDispatchChannelSessionInput{
+		WorkspaceID: in.WorkspaceID,
+		ProjectID:   in.ProjectID,
+		ChannelID:   in.ChannelID,
+		AgentID:     derivedID,
+		CreatorID:   in.UserID,
+		RuntimeID:   runtimeRef.ID,
+	})
+	if err != nil {
+		return cleanup(fmt.Errorf("ensure env-dispatch channel session: %w", err))
 	}
 	if err := store.markReady(ctx, h.DB, in.EnvID, in.AgentID, ref.InstanceID, runtimeRef.ID, ref.DaemonID); err != nil {
-		_, _ = h.DB.Exec(context.WithoutCancel(ctx), `DELETE FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`, in.ChannelID, derivedID)
-		_, _ = h.DB.Exec(context.WithoutCancel(ctx), `DELETE FROM chat_session WHERE id = $1`, sessionID)
+		if sessionCreated {
+			_, _ = h.DB.Exec(context.WithoutCancel(ctx), `DELETE FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`, in.ChannelID, derivedID)
+			_, _ = h.DB.Exec(context.WithoutCancel(ctx), `DELETE FROM chat_session WHERE id = $1`, sessionID)
+		}
 		return cleanup(fmt.Errorf("mark env-dispatch binding ready: %w", err))
 	}
 	return ProvisionEnvDispatchAgentResult{AgentID: derivedID, SandboxInstanceID: ref.InstanceID, RuntimeID: runtimeRef.ID, DaemonID: ref.DaemonID, ChatSessionID: sessionID}, nil
@@ -482,20 +484,22 @@ func (h *Handler) provisionEnvDispatchAgentTraining(ctx context.Context, in Prov
 	if err != nil {
 		return cleanup(fmt.Errorf("clone derived agent: %w", err))
 	}
-	var sessionID string
-	if err := h.DB.QueryRow(ctx, `
-		INSERT INTO chat_session (workspace_id, project_id, agent_id, creator_id, title, runtime_id)
-		VALUES ($1, $2, $3, $4, 'env-dispatch', $5) RETURNING id::text`,
-		in.WorkspaceID, in.ProjectID, derivedID, in.UserID, runtimeRef.ID).Scan(&sessionID); err != nil {
-		return cleanup(fmt.Errorf("create env-dispatch chat session: %w", err))
-	}
-	if _, err := h.DB.Exec(ctx, `INSERT INTO channel_agent_session (channel_id, agent_id, chat_session_id) VALUES ($1, $2, $3)`, in.ChannelID, derivedID, sessionID); err != nil {
-		_, _ = h.DB.Exec(context.WithoutCancel(ctx), `DELETE FROM chat_session WHERE id = $1`, sessionID)
-		return cleanup(fmt.Errorf("create env-dispatch channel session: %w", err))
+	sessionID, sessionCreated, err := h.ensureEnvDispatchChannelSession(ctx, envDispatchChannelSessionInput{
+		WorkspaceID: in.WorkspaceID,
+		ProjectID:   in.ProjectID,
+		ChannelID:   in.ChannelID,
+		AgentID:     derivedID,
+		CreatorID:   in.UserID,
+		RuntimeID:   runtimeRef.ID,
+	})
+	if err != nil {
+		return cleanup(fmt.Errorf("ensure env-dispatch channel session: %w", err))
 	}
 	if err := store.markReady(ctx, h.DB, in.EnvID, in.AgentID, ref.InstanceID, runtimeRef.ID, ref.DaemonID); err != nil {
-		_, _ = h.DB.Exec(context.WithoutCancel(ctx), `DELETE FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`, in.ChannelID, derivedID)
-		_, _ = h.DB.Exec(context.WithoutCancel(ctx), `DELETE FROM chat_session WHERE id = $1`, sessionID)
+		if sessionCreated {
+			_, _ = h.DB.Exec(context.WithoutCancel(ctx), `DELETE FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`, in.ChannelID, derivedID)
+			_, _ = h.DB.Exec(context.WithoutCancel(ctx), `DELETE FROM chat_session WHERE id = $1`, sessionID)
+		}
 		return cleanup(fmt.Errorf("mark env-dispatch binding ready: %w", err))
 	}
 	return ProvisionEnvDispatchAgentResult{AgentID: derivedID, SandboxInstanceID: ref.InstanceID, RuntimeID: runtimeRef.ID, DaemonID: ref.DaemonID, ChatSessionID: sessionID}, nil

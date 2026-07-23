@@ -9,6 +9,7 @@ import {
   channelMessageThreadOptions,
   channelMessagesPageOptions,
   flattenChannelMessagePages,
+  enrichChannelMessagesPreservingAvatars,
   channelMessagesFirstItemIndex,
   useEnsureMessageLoaded,
   useMarkChannelThreadRead,
@@ -28,7 +29,11 @@ import { useAuthStore } from "@multica/core/auth";
 import { api } from "@multica/core/api";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
+import { memberListOptions } from "@multica/core/workspace/queries";
+import type {
+  AgentPanelIdentitySnapshot,
+  OpenAgentPanelFn,
+} from "@multica/core/agents";
 import { useWSEvent } from "@multica/core/realtime";
 import type { ChannelActiveTask, ChannelMessage, ChannelMessageSearchResult, ChannelTypingPayload } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
@@ -47,7 +52,6 @@ import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
 import { ContentEditor, type ContentEditorRef } from "../../editor/content-editor";
 import { ActorAvatar } from "../../common/actor-avatar";
-import { AgentCoarsePresenceLine } from "../../agents/components/agent-coarse-presence-line";
 import { ConversationAgentActivityLine } from "../../agents/components/conversation-agent-activity-line";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { AgentPanelProvider, useOpenAgentPanel } from "../../common/agent-panel-context";
@@ -60,9 +64,14 @@ import {
 } from "../hooks/use-composer-pending-attachments";
 import { useEntryReadCursor } from "../hooks/use-entry-read-cursor";
 import { useEntryAnchor } from "../hooks/use-entry-around-seq";
+import {
+  buildVoiceMessageParts,
+  type VoiceRecordingAttachment,
+} from "../lib/voice-audio";
+import { prepareVoicePlayback, voicePlaybackScope } from "../lib/voice-playback";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
-import { AgentSidePanel } from "./agent-side-panel";
+import { ResolvedAgentSidePanel } from "../../common/resolved-agent-side-panel";
 import { Composer, ConversationHeader } from "./conversation-surface";
 import { ComposerAttachmentTray } from "./composer-attachment-tray";
 import { ThreadRootPreview } from "./thread-root-preview";
@@ -285,27 +294,8 @@ function DmHeader({
   const actorType = peerType === "agent" ? "agent" : "member";
   const memberType = peerType === "agent" ? "agent" : "user";
   const isAgentPeer = peerType === "agent";
-  // #371: agent peers show COARSE presence (Online / Working / Queued /
-  // Offline…) — "is the agent around", NOT the fine live action verb. The fine
-  // verb (Running command… / Reading…) lives on exactly one surface, the
-  // ConversationAgentActivityLine above the composer, so the header and that
-  // line don't echo the same word twice (Iris split-semantics 2026-07-17):
-  // header = presence granularity, composer line = live-action granularity.
-  // Tight after the name (Slack/IM style), never under it. Human peers keep the
-  // static "Human" meta under the name (no runtime presence). Memoized so the
-  // `status` prop is a stable element (react-doctor jsx-no-jsx-as-prop).
-  const agentStatus = useMemo(
-    () =>
-      isAgentPeer ? (
-        <AgentCoarsePresenceLine
-          agentId={peerId}
-          // Cap width so long localized presence words don't shove the title
-          // (or the search/files cluster) off a narrow header.
-          className="max-w-[9rem]"
-        />
-      ) : null,
-    [isAgentPeer, peerId],
-  );
+  // LRM-248: agent peers use avatar badge only; activity verbs live on
+  // ConversationAgentActivityLine above the composer.
   const meta = isAgentPeer ? undefined : t(($) => $.dm.human_meta);
   const mutedBadge = useMemo(
     () => (isMuted ? <MutedIndicator label={t(($) => $.dm.muted_label)} /> : null),
@@ -318,12 +308,9 @@ function DmHeader({
       // 28px matches the message-row avatar so the header avatar and every
       // message avatar share one size + left edge (see ConversationHeader).
       size={28}
-      // Presence lives in the header's status word (● Online / Idle …) for an
-      // agent peer, so the avatar's own presence dot would double-encode the
-      // same state on one line. Drop it here ("presence 冗余合并": show presence
-      // once per view — Frank/Iris/Miles 2026-07-15); the avatar dot stays on
-      // message rows / member lists, where there is no status word.
-      showStatusDot={false}
+      // LRM-248: avatar badge is the round live indicator; the name-row word
+      // is plain Online/Offline text (no second dot).
+      showStatusDot={isAgentPeer}
       profileLink={false}
     />
   );
@@ -367,7 +354,6 @@ function DmHeader({
       }
       title={wrapPeerTrigger(<span className="truncate">{dm.peer.name}</span>)}
       meta={meta}
-      status={agentStatus}
       badges={mutedBadge}
       actions={
         <>
@@ -437,21 +423,17 @@ function DmChannelConversation({
   // exclusive), matching channels-page.tsx's inline-panel pattern per
   // Frank's direction (replace the slot, don't route away).
   const [selectedAgentPanelId, setSelectedAgentPanelId] = useState<string | null>(null);
-  const handleOpenAgentPanel = useCallback((agentId: string) => {
+  const [selectedAgentPanelSnapshot, setSelectedAgentPanelSnapshot] =
+    useState<AgentPanelIdentitySnapshot | null>(null);
+  const handleOpenAgentPanel = useCallback<OpenAgentPanelFn>((agentId, snapshot) => {
     dispatch({ type: "closeThread" });
     setSelectedAgentPanelId(agentId);
+    setSelectedAgentPanelSnapshot(snapshot ?? null);
   }, []);
-  const { data: dmAgents = [] } = useQuery({
-    ...agentListOptions(wsId),
-    enabled: !!selectedAgentPanelId,
-  });
   const { data: dmMembers = [] } = useQuery({
     ...memberListOptions(wsId),
     enabled: !!selectedAgentPanelId,
   });
-  const selectedAgentPanel = selectedAgentPanelId
-    ? dmAgents.find((a) => a.id === selectedAgentPanelId) ?? null
-    : null;
   const setQuoteTarget = useCallback((message: QuoteTarget | null) => {
     dispatch({ type: "setQuote", message });
   }, []);
@@ -539,7 +521,8 @@ function DmChannelConversation({
   const threadReplies = useMemo(
     () => {
       const messages = threadPage?.messages ?? [];
-      return threadRoot ? messages.filter((msg) => msg.id !== threadRoot.id) : messages;
+      const filtered = threadRoot ? messages.filter((msg) => msg.id !== threadRoot.id) : messages;
+      return enrichChannelMessagesPreservingAvatars(filtered);
     },
     [threadPage?.messages, threadRoot],
   );
@@ -876,6 +859,7 @@ function DmChannelConversation({
       },
     });
     if (dispatched) {
+      prepareVoicePlayback(voicePlaybackScope(channelId));
       editorRef.current?.clearContent();
       dmPending.clear();
       setQuoteTarget(null);
@@ -885,6 +869,40 @@ function DmChannelConversation({
         publishTyping(false);
       }
     }
+  };
+
+  const handleVoiceSend = (
+    content: string,
+    durationMs: number,
+    attachment: VoiceRecordingAttachment,
+  ): boolean => {
+    if (!draftEmpty || dmPending.pending.length > 0) return false;
+    const parts = buildVoiceMessageParts(content, durationMs, attachment);
+    if (parts.length === 0) return false;
+    const dispatched = dmSend.send({
+      payloadKey: composePayloadKey(content, [attachment.id], `voice:${quoteTarget?.id ?? ""}`),
+      buildVars: (clientMessageId) => ({
+        channelId,
+        content,
+        parts,
+        quoteMessageId: quoteTarget?.id ?? undefined,
+        clientMessageId,
+      }),
+      mutate: sendMessage.mutate,
+      onCommitted: () => {},
+      onVisibleError: (kind) => {
+        if (kind === "conflict") toast.error(t(($) => $.composer.send_failed));
+      },
+    });
+    if (dispatched) {
+      setQuoteTarget(null);
+      onDraftClear?.();
+      if (typingStartedRef.current) {
+        typingStartedRef.current = false;
+        publishTyping(false);
+      }
+    }
+    return dispatched;
   };
 
   const handleThreadSend = () => {
@@ -915,11 +933,47 @@ function DmChannelConversation({
       },
     });
     if (dispatched) {
+      prepareVoicePlayback(voicePlaybackScope(channelId, threadRoot.id));
       threadEditorRef.current?.clearContent();
       threadPending.clear();
       setThreadQuoteTarget(null);
       dispatch({ type: "setThreadDraftEmpty", empty: true });
     }
+  };
+
+  const handleThreadVoiceSend = (
+    content: string,
+    durationMs: number,
+    attachment: VoiceRecordingAttachment,
+  ): boolean => {
+    if (!threadRoot || !threadDraftEmpty || threadPending.pending.length > 0) return false;
+    const parts = buildVoiceMessageParts(content, durationMs, attachment);
+    if (parts.length === 0) return false;
+    const dispatched = threadSend.send({
+      payloadKey: composePayloadKey(
+        content,
+        [attachment.id],
+        `${threadRoot.id}:voice:${threadQuoteTarget?.id ?? ""}`,
+      ),
+      buildVars: (clientMessageId) => ({
+        channelId,
+        messageId: threadRoot.id,
+        content,
+        parts,
+        quoteMessageId: threadQuoteTarget?.id ?? undefined,
+        clientMessageId,
+      }),
+      mutate: sendThreadMessage.mutate,
+      onCommitted: () => {},
+      onVisibleError: (kind) => {
+        if (kind === "conflict") toast.error(t(($) => $.thread.send_failed));
+      },
+    });
+    if (dispatched) {
+      setThreadQuoteTarget(null);
+      dispatch({ type: "setThreadDraftEmpty", empty: true });
+    }
+    return dispatched;
   };
 
   const handleRetrySend = useCallback(
@@ -1009,7 +1063,7 @@ function DmChannelConversation({
           }
         />
         <ChannelMessageList
-          key={`dm-thread:${threadSurfaceRoot.id}:${threadLoading ? "loading" : "ready"}`}
+          key={`thread:${threadSurfaceRoot.id}`}
           messages={threadReplies}
           currentUserId={currentUserId}
           ownName={currentUserName ?? undefined}
@@ -1050,6 +1104,10 @@ function DmChannelConversation({
           }
           sending={sendThreadMessage.isPending}
           onSend={handleThreadSend}
+          voiceChannelId={channelId}
+          voicePlaybackScope={voicePlaybackScope(channelId, threadSurfaceRoot.id)}
+          voiceDisabled={!threadDraftEmpty || threadPending.pending.length > 0}
+          onVoiceSend={handleThreadVoiceSend}
           isMobile={isMobile}
           prefix={threadQuoteTarget ? (
             <ComposerQuotePreview
@@ -1245,6 +1303,10 @@ function DmChannelConversation({
         }
         sending={sendMessage.isPending}
         onSend={handleSend}
+        voiceChannelId={channelId}
+        voicePlaybackScope={voicePlaybackScope(channelId)}
+        voiceDisabled={!draftEmpty || dmPending.pending.length > 0}
+        onVoiceSend={handleVoiceSend}
         isMobile={isMobile}
         prefix={quoteTarget ? (
           <ComposerQuotePreview
@@ -1313,12 +1375,16 @@ function DmChannelConversation({
   // #349: the agent side panel shares the thread-panel slot (opening one
   // closes the other — see handleOpenThread / handleOpenAgentPanel).
   const agentPanel =
-    selectedAgentPanel ? (
-      <AgentSidePanel
-        agent={selectedAgentPanel}
+    selectedAgentPanelId ? (
+      <ResolvedAgentSidePanel
+        agentId={selectedAgentPanelId}
+        identitySnapshot={selectedAgentPanelSnapshot}
         currentUserId={currentUserId}
         members={dmMembers}
-        onClose={() => setSelectedAgentPanelId(null)}
+        onClose={() => {
+          setSelectedAgentPanelId(null);
+          setSelectedAgentPanelSnapshot(null);
+        }}
       />
     ) : null;
   const detailPanel = threadPanel ?? agentPanel;

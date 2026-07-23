@@ -8,7 +8,9 @@
  *
  *   - image  → ImageAttachmentView (figure + hover toolbar + lightbox via
  *              the shared AttachmentPreviewModal)
- *   - html   → HtmlAttachmentPreview (inline iframe + hover toolbar)
+ *   - html   → HtmlAttachmentPreview (inline iframe + hover toolbar), unless
+ *              `inlineHtmlPreview={false}` (channel/thread message stream —
+ *              LRM-285: Slack file-card in the stream; click still previews)
  *   - others → AttachmentCard (icon + filename + Eye/Download row)
  *
  * Call sites:
@@ -23,6 +25,7 @@
  * hints (selected, editable, onDelete).
  */
 
+import type { CSSProperties } from "react";
 import {
   Download,
   Link as LinkIcon,
@@ -34,8 +37,10 @@ import { cn } from "@multica/ui/lib/utils";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { api } from "@multica/core/api";
 import { useConfigStore } from "@multica/core/config";
+import { paths, useWorkspaceSlug } from "@multica/core/paths";
 import type { Attachment as AttachmentRecord } from "@multica/core/types";
 import { useT } from "../i18n";
+import { useNavigation } from "../navigation";
 import { useAttachmentDownloadResolver } from "./attachment-download-context";
 import { useAttachmentPreview } from "./attachment-preview-modal";
 import { useDownloadAttachment } from "./use-download-attachment";
@@ -92,6 +97,13 @@ export interface AttachmentProps {
   selected?: boolean;
   /** Editor hint — wired to Tiptap deleteNode(). */
   onDelete?: () => void;
+  /**
+   * When false, HTML attachments render as a Slack-style file card in the
+   * message stream (no in-bubble iframe). Click-to-preview (fullscreen on
+   * mobile, attachment preview route on desktop) is unchanged. Channel /
+   * thread message streams pass false (LRM-285).
+   */
+  inlineHtmlPreview?: boolean;
   className?: string;
 }
 
@@ -299,6 +311,7 @@ export function Attachment({
   editable,
   selected,
   onDelete,
+  inlineHtmlPreview = true,
   className,
 }: AttachmentProps) {
   const { resolveAttachment, openByUrl } = useAttachmentDownloadResolver();
@@ -306,6 +319,8 @@ export function Attachment({
   const download = useDownloadAttachment();
   const preview = useAttachmentPreview();
   const isMobile = useIsMobile();
+  const slug = useWorkspaceSlug();
+  const navigation = useNavigation();
 
   const state = normalize(attachment, resolveAttachment, cdnDomain);
   const forceKind =
@@ -330,6 +345,29 @@ export function Attachment({
     }
   };
 
+  // LRM-285 — message-stream HTML: open in an independent tab (or download),
+  // never launch the in-app preview modal from the file card body.
+  const openHtmlInNewTabOrDownload = () => {
+    if (slug && state.attachmentId) {
+      const nameQuery = state.filename
+        ? `?name=${encodeURIComponent(state.filename)}`
+        : "";
+      const path = `${paths.workspace(slug).attachmentPreview(state.attachmentId)}${nameQuery}`;
+      if (navigation.openInNewTab) {
+        navigation.openInNewTab(path, state.filename, { activate: true });
+        return;
+      }
+      const url = navigation.getShareableUrl(path);
+      window.open(url, "_blank", "noopener,noreferrer");
+      return;
+    }
+    if (state.attachmentId) {
+      download(state.attachmentId);
+      return;
+    }
+    if (state.url) openByUrl(state.url);
+  };
+
   const handleDownload = () => {
     if (state.attachmentId) {
       download(state.attachmentId);
@@ -346,14 +384,19 @@ export function Attachment({
     handleDownload();
   };
 
-  // LRM-216 / LRM-219 / LRM-230 — narrow/mobile:
+  // LRM-216 / LRM-219 / LRM-230 / LRM-285 — narrow/mobile:
   //   image → stream thumb → fullscreen big image
-  //   html  → compact card → fullscreen sandboxed HTML preview (restored)
+  //   html  → compact card in message stream → fullscreen sandboxed HTML on tap
+  //           (`inlineHtmlPreview` only gates the in-stream iframe, not tap preview)
   //   else  → compact card → fullscreen download guidance (never blank)
   if (isMobile) {
     const canOpen = !!state.url || !!state.attachmentId;
     const previewMode =
-      kind === "image" ? "image" : kind === "html" ? "html" : "none";
+      kind === "image"
+        ? "image"
+        : kind === "html" && state.attachmentId
+          ? "html"
+          : "none";
     return (
       <MobileFileAttachment
         filename={state.filename}
@@ -366,7 +409,11 @@ export function Attachment({
         attachmentId={state.attachmentId}
         previewMode={previewMode}
         onDownload={handleDownload}
-        onOpen={handleOpenElsewhere}
+        onOpen={
+          kind === "html" && !inlineHtmlPreview
+            ? openHtmlInNewTabOrDownload
+            : handleOpenElsewhere
+        }
         className={className}
       />
     );
@@ -393,7 +440,12 @@ export function Attachment({
     );
   }
 
-  if (kind === "html" && state.attachmentId && !state.uploading) {
+  if (
+    kind === "html" &&
+    inlineHtmlPreview &&
+    state.attachmentId &&
+    !state.uploading
+  ) {
     return (
       <>
         <HtmlAttachmentPreview
@@ -408,6 +460,11 @@ export function Attachment({
     );
   }
 
+  const cardOpen =
+    kind === "html" && !inlineHtmlPreview
+      ? openHtmlInNewTabOrDownload
+      : openPreview;
+
   return (
     <>
       <AttachmentCard
@@ -417,7 +474,7 @@ export function Attachment({
         attachmentId={state.attachmentId}
         href={state.url || undefined}
         uploading={state.uploading}
-        onPreview={openPreview}
+        onPreview={cardOpen}
         onDownload={handleDownload}
         onDelete={editable ? onDelete : undefined}
       />
@@ -480,6 +537,11 @@ function ImageAttachmentView({
   // cursor: zoom-in }` keys off this same flag for the cursor affordance.
   const clickable = !editable && !uploading;
 
+  const aspectRatioStyle =
+    width && height && width > 0 && height > 0
+      ? ({ aspectRatio: `${width} / ${height}` } as CSSProperties)
+      : undefined;
+
   // DOM mirrors the original ReadonlyImage (span-only chain so it stays
   // valid HTML5 when rendered inside a markdown <p>). In editor surfaces
   // the NodeViewWrapper still emits its own outer .image-node div around
@@ -492,6 +554,7 @@ function ImageAttachmentView({
           selected && editable && "image-selected",
           className,
         )}
+        style={aspectRatioStyle}
         data-clickable={clickable || undefined}
         contentEditable={false}
         onClick={clickable ? onView : undefined}

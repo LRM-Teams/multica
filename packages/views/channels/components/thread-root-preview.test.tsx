@@ -57,7 +57,13 @@ vi.mock("../../common/actor-profile-popover", () => ({
 vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({
     getActorName: (_type: string, id: string, fallback?: string) =>
-      id === "user-1" ? "Frank An" : fallback,
+      id === "user-1"
+        ? "Frank An"
+        : id === "user-owner"
+          ? "Frank An"
+          : fallback,
+    getMemberRole: (id: string) =>
+      id === "user-owner" || id === "user-1" ? ("owner" as const) : null,
   }),
 }));
 
@@ -70,12 +76,18 @@ vi.mock("../../i18n/use-t", () => ({
     t: (
       selector: (resources: {
         message: { agent_badge: string };
+        profile_popover: {
+          role: { owner: string; admin: string; member: string; agent: string };
+        };
         thread: { collapse_message: string; show_full_message: string; view_parent: string };
         time: { today: string; yesterday: string };
       }) => string,
     ) =>
       selector({
         message: { agent_badge: "Agent" },
+        profile_popover: {
+          role: { owner: "Owner", admin: "Admin", member: "Member", agent: "Agent" },
+        },
         time: { today: "Today", yesterday: "Yesterday" },
         thread: {
           collapse_message: "Collapse message",
@@ -150,7 +162,10 @@ describe("ThreadRootPreview", () => {
     // fires the capture handler with the agent id (parity with the channel bubble).
     const [firstTrigger] = screen.getAllByTestId("actor-profile-trigger");
     fireEvent.click(firstTrigger!);
-    expect(onOpenAgent).toHaveBeenCalledWith("agent-1");
+    expect(onOpenAgent).toHaveBeenCalledWith("agent-1", {
+      display_name: "Research Agent",
+      avatar_url: null,
+    });
   });
 
   it("does NOT open a panel for a human (member) root author — hover card only (#488)", () => {
@@ -165,6 +180,29 @@ describe("ThreadRootPreview", () => {
 
     screen.getAllByTestId("actor-profile-trigger").forEach((el) => fireEvent.click(el));
     expect(onOpenAgent).not.toHaveBeenCalled();
+  });
+
+  it("omits Agent pill and Owner/Admin chrome on author rows (LRM-270)", () => {
+    const { rerender } = render(
+      <ThreadRootPreview message={makeMessage()} currentUserId="user-1" />,
+    );
+    expect(screen.getByText("Research Agent")).toBeInTheDocument();
+    expect(screen.queryByText("Agent")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("message-author-role")).not.toBeInTheDocument();
+
+    rerender(
+      <ThreadRootPreview
+        message={makeMessage({
+          type: "user",
+          author_id: "user-owner",
+          author_name: "frank",
+        })}
+        currentUserId="user-2"
+      />,
+    );
+    expect(screen.getByText("Frank An")).toBeInTheDocument();
+    expect(screen.queryByTestId("message-author-role")).not.toBeInTheDocument();
+    expect(screen.queryByText("Owner")).not.toBeInTheDocument();
   });
 
   it("uses the live display name for the root author label", () => {

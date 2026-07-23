@@ -156,7 +156,7 @@ func TestEnvDispatchChannelStoreClaimProvisioningRetainsRuntimePolicy(t *testing
 	require.Equal(t, "default", in.Template)
 	require.True(t, in.DaemonEnabled)
 	require.Equal(t, "daemon-1", in.RuntimeEnv["MULTICA_DAEMON_ID"])
-	require.JSONEq(t, `{"base_url":"https://provider.invalid/v1","api_key":"synthetic-secret-for-tests","model":"model-a"}`, string(in.Runtime))
+	require.JSONEq(t, `{"provider":"openai","base_url":"https://provider.invalid/v1","api_key":"synthetic-secret-for-tests","model":"model-a"}`, string(in.Runtime))
 }
 
 // TestEnvDispatchAdapter_CreateChannelPersistsCanonicalPolicy verifies the
@@ -211,6 +211,48 @@ func TestEnvDispatchAdapter_CreateChannelPersistsCanonicalPolicy(t *testing.T) {
 	require.Nil(t, otherDecoded.Runtime)
 }
 
+func TestEnvDispatchChannelJoinSourceIsSynthetic(t *testing.T) {
+	require.Equal(t, "env_dispatch", envDispatchChannelJoinSource)
+}
+
+func TestEnvDispatchAdapter_CreateChannelSuppressesSourceAgentOnboarding(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx, _, envID, _, agentID := setupEnvDispatchChannelStoreFixture(t)
+	projectID := projectIDForEnvDispatchStoreFixture(t, ctx, envID)
+	adapter := &envDispatchDepsAdapter{h: testHandler}
+
+	channelID, err := adapter.CreateEnvDispatchChannel(
+		ctx, testWorkspaceID, testUserID, projectID, envID,
+		service.MessageRoster{LeaderID: agentID, AgentIDs: []string{agentID}}, nil,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, channelID)
+	})
+
+	var joinSource string
+	require.NoError(t, testPool.QueryRow(ctx, `
+		SELECT join_source FROM channel_member
+		WHERE channel_id = $1 AND member_type = 'agent' AND member_id = $2`,
+		channelID, agentID).Scan(&joinSource))
+	require.Equal(t, envDispatchChannelJoinSource, joinSource)
+
+	for name, query := range map[string]string{
+		"onboarding": `SELECT count(*) FROM channel_agent_onboarding WHERE channel_id = $1 AND agent_id = $2`,
+		"join message": `SELECT count(*) FROM channel_message message
+			JOIN channel_member member
+			  ON member.generation_id = message.membership_generation_id
+			WHERE message.channel_id = $1 AND member.member_id = $2`,
+		"channel session": `SELECT count(*) FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`,
+	} {
+		var count int
+		require.NoError(t, testPool.QueryRow(ctx, query, channelID, agentID).Scan(&count), name)
+		require.Zero(t, count, name)
+	}
+}
+
 // TestEnvDispatchBindingIdentityAndRetryState verifies the expanded binding
 // identity (id, source_agent_id, model_config_owner_agent_id) is persisted and
 // that the single-flight claim transitions a pending binding to
@@ -225,7 +267,7 @@ func TestEnvDispatchBindingIdentityAndRetryState(t *testing.T) {
 		ID: uuid.NewString(), EnvID: envID, ChannelID: channelID,
 		SourceAgentID: sourceID, Status: "pending",
 		ModelConfigOwnerAgentID: sourceID,
-		SandboxConfig: json.RawMessage(`{"template":"default"}`),
+		SandboxConfig:           json.RawMessage(`{"template":"default"}`),
 	}
 	require.NoError(t, store.insertBinding(ctx, testPool, b))
 	won, claimed, err := store.claimProvisioning(ctx, testPool, envID, sourceID)
@@ -255,7 +297,9 @@ func TestAgentLineageRejectsCrossWorkspaceSource(t *testing.T) {
 		INSERT INTO agent_runtime (workspace_id, name, runtime_mode, provider, status)
 		VALUES ($1, $2, 'cloud', 'multica_agent', 'offline') RETURNING id`,
 		foreignWS, "lineage-foreign-runtime-"+uuid.NewString()).Scan(&foreignRuntimeID))
-	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, foreignRuntimeID) })
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, foreignRuntimeID)
+	})
 
 	_, err := testPool.Exec(ctx, `
 		INSERT INTO agent (

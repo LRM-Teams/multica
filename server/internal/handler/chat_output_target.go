@@ -315,14 +315,19 @@ func (h *Handler) insertAgentChatOutputMessage(ctx context.Context, ch ChannelRe
 	_, _ = h.DB.Exec(ctx, `UPDATE channel SET updated_at = now() WHERE id = $1`, channelID)
 	h.clearDMHiddenForChannelMembers(ctx, ch.WorkspaceID, channelID)
 	h.publishChannelToMembers(ctx, protocol.EventChannelMessage, ch.WorkspaceID, "agent", uuidToString(agentID), channelID, msg)
+	// Same LRM-272 / LRM-297 contract as agent transport send: publish first,
+	// then wake/Feishu off the critical path so channel visibility is not gated
+	// on O(agents) fanout.
 	if ch.Kind == "group" {
-		h.ingestWendyAgentGroupMessage(ctx, ch, msg, agentID)
-		if threadRootMessageID.Valid {
-			h.dispatchChannelThreadReplyMentions(ctx, ch, msg, initiatorID)
-		} else {
-			h.dispatchChannelMentions(ctx, ch, msg, initiatorID)
-		}
-		h.sendChannelMessageToFeishu(ctx, ch, agentName, content)
+		h.runAfterChannelMessageAck(ctx, func(ctx context.Context) {
+			h.ingestWendyAgentGroupMessage(ctx, ch, msg, agentID)
+			if threadRootMessageID.Valid {
+				h.dispatchChannelThreadReplyMentions(ctx, ch, msg, initiatorID)
+			} else {
+				h.dispatchChannelMentions(ctx, ch, msg, initiatorID)
+			}
+			h.sendChannelMessageToFeishu(ctx, ch, agentName, content)
+		})
 	}
 	return msg, true
 }

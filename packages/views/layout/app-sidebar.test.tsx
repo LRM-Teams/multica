@@ -16,7 +16,7 @@ function renderSidebar() {
   );
 }
 
-const { detail, deletePin, pins } = vi.hoisted(() => ({
+const { detail, deletePin, pins, unreadActivity } = vi.hoisted(() => ({
   detail: { current: { isPending: false, isError: false, data: null as unknown, error: null as unknown } },
   deletePin: vi.fn(),
   pins: {
@@ -32,6 +32,7 @@ const { detail, deletePin, pins } = vi.hoisted(() => ({
       },
     ],
   },
+  unreadActivity: { current: 0 },
 }));
 
 vi.mock("@dnd-kit/core", () => ({
@@ -130,7 +131,9 @@ vi.mock("@multica/core/api", async (importOriginal) => {
     },
   };
 });
-vi.mock("@multica/core/inbox/queries", () => ({ deduplicateInboxItems: (items: unknown[]) => items, inboxKeys: { list: () => ["inbox"] } }));
+vi.mock("@multica/core/user-activity/queries", () => ({
+  useUserActivityUnreadCount: () => unreadActivity.current,
+}));
 vi.mock("@multica/core/issues/queries", () => ({ issueDetailOptions: () => ({ queryKey: ["issue"] }) }));
 vi.mock("@multica/core/issues/stores/create-mode-store", () => ({
   useCreateModeStore: { getState: () => ({ lastMode: "agent" }) },
@@ -186,19 +189,20 @@ describe("PinRow", () => {
 describe("AppSidebar navigation", () => {
   beforeEach(() => {
     detail.current = { isPending: false, isError: false, data: null, error: null };
+    unreadActivity.current = 0;
   });
 
-  it("renders one personal Messages entry directly below Inbox", () => {
+  it("renders one personal Messages entry directly below Activity", () => {
     renderSidebar();
-    const inbox = screen.getByText("Inbox");
+    const activity = screen.getByText("Activity");
     const messages = screen.getByText("Messages");
     const overview = screen.getByText("Overview");
 
     expect(screen.getAllByText("Messages")).toHaveLength(1);
     expect(messages.closest("a")).toHaveAttribute("href", "/acme/channels");
-    // Personal entry order stays Inbox → Messages → Workspace / Overview.
+    // Personal entry order stays Activity → Messages → Workspace / Overview.
     expect(
-      inbox.compareDocumentPosition(messages) & Node.DOCUMENT_POSITION_FOLLOWING,
+      activity.compareDocumentPosition(messages) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(
       messages.compareDocumentPosition(overview) & Node.DOCUMENT_POSITION_FOLLOWING,
@@ -213,7 +217,15 @@ describe("AppSidebar navigation", () => {
   it("does not render the My Issues shortcut row (removed; app leads with Messages)", () => {
     renderSidebar();
     expect(screen.queryByText("My Issues")).toBeNull();
-    // Inbox stays in the top personal section.
-    expect(screen.getByText("Inbox")).toBeInTheDocument();
+    // Activity stays in the top personal section.
+    expect(screen.getByText("Activity")).toBeInTheDocument();
+  });
+
+  it("renders Activity unread as a brand pill (LRM-354 contrast)", () => {
+    unreadActivity.current = 3;
+    const { container } = renderSidebar();
+    const badge = container.querySelector("span.bg-brand-solid.text-brand-solid-foreground");
+    expect(badge).not.toBeNull();
+    expect(badge).toHaveTextContent("3");
   });
 });

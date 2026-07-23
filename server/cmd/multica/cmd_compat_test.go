@@ -53,7 +53,7 @@ func TestMessageGroupedSendReactCommands(t *testing.T) {
 	})
 
 	t.Run("message send exposes sticker and attachment flags", func(t *testing.T) {
-		for _, name := range []string{"message", "message-stdin", "message-file", "sticker", "attachment-id", "target", "client-message-id"} {
+		for _, name := range []string{"message", "message-stdin", "message-file", "sticker", "voice", "attachment-id", "target", "client-message-id"} {
 			if messageSendCmd.Flags().Lookup(name) == nil {
 				t.Fatalf("message send missing --%s", name)
 			}

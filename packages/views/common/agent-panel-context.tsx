@@ -1,10 +1,9 @@
 "use client";
 
 import { createContext, use } from "react";
+import type { OpenAgentPanelFn } from "@multica/core/agents";
 
-type OpenAgentPanel = (agentId: string) => void;
-
-const AgentPanelContext = createContext<OpenAgentPanel | null>(null);
+const AgentPanelContext = createContext<OpenAgentPanelFn | null>(null);
 
 /**
  * Makes "open this agent's side panel" reachable from anywhere an agent
@@ -13,12 +12,15 @@ const AgentPanelContext = createContext<OpenAgentPanel | null>(null);
  * `MentionView` (a TipTap NodeView several layers removed from
  * channels-page.tsx's own agent-panel state) to open the same panel on
  * @mention click.
+ *
+ * LRM-292: callers pass agentId (optional identity snapshot). Hosts resolve
+ * via GET /api/agents/:id — never ListAgents.find.
  */
 export function AgentPanelProvider({
   onOpenAgent,
   children,
 }: {
-  onOpenAgent: OpenAgentPanel;
+  onOpenAgent: OpenAgentPanelFn;
   children: React.ReactNode;
 }) {
   return (
@@ -29,6 +31,6 @@ export function AgentPanelProvider({
 }
 
 /** Returns null outside a provider (e.g. issue/task editors) — callers must handle that. */
-export function useOpenAgentPanel(): OpenAgentPanel | null {
+export function useOpenAgentPanel(): OpenAgentPanelFn | null {
   return use(AgentPanelContext);
 }

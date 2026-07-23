@@ -117,6 +117,7 @@ type Handler struct {
 	TxStarter             txStarter
 	Hub                   *realtime.Hub
 	DaemonHub             *daemonws.Hub
+	ReminderNotifier      daemonws.ReminderNotifier
 	SandboxHub            *sandboxws.Hub
 	Bus                   *events.Bus
 	TaskService           *service.TaskService
@@ -171,6 +172,10 @@ type Handler struct {
 	// UI consults IsConfigured() to decide whether to surface install
 	// entry points.
 	LarkAPIClient lark.APIClient
+	// VoiceProvider owns Doubao Speech credentials and transport. It is nil
+	// only in focused unit tests; the router always wires a client whose
+	// IsConfigured result reflects deployment environment variables.
+	VoiceProvider VoiceProvider
 	// LarkHub owns the per-installation supervisor goroutines that
 	// hold the §4.4 WS lease and run the EventConnector. Nil only
 	// when the master at-rest key (MULTICA_LARK_SECRET_KEY) is unset.
@@ -182,7 +187,18 @@ type Handler struct {
 	// process exit indefinitely if the pool is frozen — at worst the
 	// next replica waits the full TTL.
 	LarkHub *lark.Hub
-	cfg     Config
+	// SyncChannelMessageSideEffects forces agent-wake / Feishu work that
+	// normally runs after the HTTP send ack to execute inline. Tests set
+	// this so assertions immediately after SendChannelMessage* /
+	// AgentTransportSendMessage still see inbox events; production leaves
+	// it false so O(agents) fanout does not inflate human or agent send
+	// latency (LRM-272 / LRM-297).
+	SyncChannelMessageSideEffects bool
+	// channelMessagePostAckTestHook runs at the start of every post-ack
+	// callback when set. Tests use it to prove send returns while fanout
+	// is still blocked (LRM-297).
+	channelMessagePostAckTestHook func(context.Context)
+	cfg                           Config
 }
 
 func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *events.Bus, emailService *service.EmailService, store storage.Storage, cfSigner *auth.CloudFrontSigner, analyticsClient analytics.Client, cfg Config, daemonHubs ...*daemonws.Hub) *Handler {
@@ -379,6 +395,31 @@ func (h *Handler) publishToUsers(eventType, workspaceID, actorType, actorID stri
 		RecipientUserIDs: uniqueRecipientUserIDs(recipientUserIDs),
 		Payload:          payload,
 	})
+}
+
+func (h *Handler) publishToUsersWithID(eventType, workspaceID, actorType, actorID string, recipientUserIDs []string, payload any, realtimeEventID string) error {
+	ack := make(chan error, 1)
+	h.Bus.Publish(events.Event{
+		Type:             eventType,
+		WorkspaceID:      workspaceID,
+		ActorType:        actorType,
+		ActorID:          actorID,
+		RecipientUserIDs: uniqueRecipientUserIDs(recipientUserIDs),
+		Payload:          payload,
+		RealtimeEventID:  realtimeEventID,
+		RealtimeDeliveryAck: func(err error) {
+			select {
+			case ack <- err:
+			default:
+			}
+		},
+	})
+	select {
+	case err := <-ack:
+		return err
+	default:
+		return errors.New("realtime publication listener did not acknowledge delivery")
+	}
 }
 
 func (h *Handler) publishChatToCreator(eventType, workspaceID, actorType, actorID, chatSessionID, creatorUserID string, payload any) {

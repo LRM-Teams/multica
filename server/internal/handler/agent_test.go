@@ -16,7 +16,22 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
+
+type recordingReminderNotifier struct {
+	starts []protocol.DaemonAgentStartPayload
+	stops  []protocol.DaemonAgentStopPayload
+}
+
+func (*recordingReminderNotifier) NotifyReminderProjection(string, protocol.ReminderProjectionEvent) {
+}
+func (n *recordingReminderNotifier) NotifyReminderOwnerAdded(_ string, payload protocol.DaemonAgentStartPayload) {
+	n.starts = append(n.starts, payload)
+}
+func (n *recordingReminderNotifier) NotifyReminderOwnerRemoved(_ string, payload protocol.DaemonAgentStopPayload) {
+	n.stops = append(n.stops, payload)
+}
 
 // TestListWorkspaceAgentTaskSnapshot covers the agent presence snapshot endpoint:
 // every active task (queued/dispatched/running) PLUS each agent's most recent
@@ -473,6 +488,61 @@ func TestGetMemberProfile_AgentReturnsSafeRecentActivity(t *testing.T) {
 	}
 	if items[0].OccurredAt == "" || items[1].OccurredAt == "" {
 		t.Fatalf("expected occurred_at on every item: %#v", items)
+	}
+}
+
+func TestGetMemberProfile_GroupManagerReturnsDisplayName(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "beckham-profile-"+uuid.NewString()[:8], []byte(`{}`))
+	displayName := "贝克汉姆"
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent
+		SET managed_role = 'group_manager', display_name = $2, visibility = 'private'
+		WHERE id = $1
+	`, agentID, displayName); err != nil {
+		t.Fatalf("mark group manager: %v", err)
+	}
+
+	// ListAgents must hide the manager (LRM-233).
+	listRec := httptest.NewRecorder()
+	listReq := newRequest(http.MethodGet, "/api/agents", nil)
+	listReq = withChannelTestWorkspaceCtx(t, listReq, testUserID)
+	testHandler.ListAgents(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("ListAgents: status=%d body=%s", listRec.Code, listRec.Body.String())
+	}
+	var listed []AgentResponse
+	if err := json.Unmarshal(listRec.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("decode ListAgents: %v", err)
+	}
+	for _, a := range listed {
+		if a.ID == agentID {
+			t.Fatalf("group manager %s leaked into ListAgents", agentID)
+		}
+	}
+
+	// Member profile must still resolve the display name from DB (LRM-281).
+	w := httptest.NewRecorder()
+	req := withRouteParams(
+		newRequest(http.MethodGet, "/api/member-profiles/agent/"+agentID, nil),
+		"memberType", "agent",
+		"memberId", agentID,
+	)
+	req = withChannelTestWorkspaceCtx(t, req, testUserID)
+	testHandler.GetMemberProfile(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetMemberProfile: status=%d body=%s", w.Code, w.Body.String())
+	}
+	var profile MemberProfileResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &profile); err != nil {
+		t.Fatalf("decode profile: %v", err)
+	}
+	if profile.DisplayName != displayName {
+		t.Fatalf("profile display_name = %q, want %q (body=%s)", profile.DisplayName, displayName, w.Body.String())
 	}
 }
 
@@ -998,6 +1068,12 @@ func TestAgentResponseIncludesRuntimeName(t *testing.T) {
 	if getResp.RuntimeName != runtimeName {
 		t.Fatalf("GetAgent runtime_name = %q, want %q", getResp.RuntimeName, runtimeName)
 	}
+	if getResp.RuntimeStatus != "online" {
+		t.Fatalf("GetAgent runtime_status = %q, want online", getResp.RuntimeStatus)
+	}
+	if getResp.RuntimeLastSeenAt == nil || *getResp.RuntimeLastSeenAt == "" {
+		t.Fatalf("GetAgent runtime_last_seen_at missing")
+	}
 
 	listW := httptest.NewRecorder()
 	testHandler.ListAgents(listW, newRequest(http.MethodGet, "/api/agents", nil))
@@ -1012,6 +1088,12 @@ func TestAgentResponseIncludesRuntimeName(t *testing.T) {
 		if agent.ID == agentID {
 			if agent.RuntimeName != runtimeName {
 				t.Fatalf("ListAgents runtime_name = %q, want %q", agent.RuntimeName, runtimeName)
+			}
+			if agent.RuntimeStatus != "online" {
+				t.Fatalf("ListAgents runtime_status = %q, want online", agent.RuntimeStatus)
+			}
+			if agent.RuntimeLastSeenAt == nil || *agent.RuntimeLastSeenAt == "" {
+				t.Fatalf("ListAgents runtime_last_seen_at missing")
 			}
 			return
 		}
@@ -1562,6 +1644,10 @@ func TestArchiveRestoreAgent_PreservesSkillsInResponse(t *testing.T) {
 		t.Skip("database not available")
 	}
 	ctx := context.Background()
+	previousNotifier := testHandler.ReminderNotifier
+	notifier := &recordingReminderNotifier{}
+	testHandler.ReminderNotifier = notifier
+	t.Cleanup(func() { testHandler.ReminderNotifier = previousNotifier })
 
 	agentID := createHandlerTestAgent(t, "archive-preserves-skills-agent", nil)
 	skillID := insertHandlerTestSkill(t, "archive-preserve", "body")
@@ -1600,6 +1686,9 @@ func TestArchiveRestoreAgent_PreservesSkillsInResponse(t *testing.T) {
 	}
 	if len(restored.Skills) != 1 || restored.Skills[0].ID != skillID {
 		t.Errorf("RestoreAgent: expected 1 skill %s, got %+v", skillID, restored.Skills)
+	}
+	if len(notifier.starts) != 1 || notifier.starts[0].AgentID != agentID || notifier.starts[0].LifecycleSeq < 1 || notifier.starts[0].PlacementGeneration < 1 {
+		t.Fatalf("RestoreAgent owner start projection = %+v", notifier.starts)
 	}
 }
 

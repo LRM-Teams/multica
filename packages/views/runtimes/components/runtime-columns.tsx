@@ -41,7 +41,6 @@ import { formatRuntimeUpdateError } from "./update-error";
 import {
   computeCostInWindow,
   formatLastSeen,
-  isSelfHealingRuntime,
   pctChange,
 } from "../utils";
 import { splitRuntimeName } from "./runtime-machines";
@@ -463,11 +462,10 @@ function RowMenu({
   const [deleteOpen, setDeleteOpen] = useState(false);
   // Delete is currently the only row action; if the row can't run it, drop
   // the kebab entirely so the column doesn't render an empty popover. The
-  // self-healing case (local + online) is the runtime-detail parity fix —
-  // see isSelfHealingRuntime for the rationale.
-  const selfHealing = isSelfHealingRuntime(runtime);
-
-  if (!canDelete || selfHealing) {
+  // self-healing case (local + online daemon) no longer hides this — #666:
+  // hiding it made the feature look broken. DeleteRuntimeDialog guides the
+  // user through stopping the daemon instead.
+  if (!canDelete) {
     return <span aria-hidden />;
   }
 

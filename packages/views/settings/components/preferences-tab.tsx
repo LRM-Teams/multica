@@ -22,22 +22,16 @@ import { api } from "@multica/core/api";
 import { browserTimezone, timezoneOptions } from "../../common/timezone-select";
 import { useT } from "../../i18n";
 
-const LIGHT_COLORS = {
-  titleBar: "#e8e8e8",
-  content: "#ffffff",
-  sidebar: "#f4f4f5",
-  bar: "#e4e4e7",
-  barMuted: "#d4d4d8",
-};
-
-const DARK_COLORS = {
-  titleBar: "#333338",
-  content: "#27272a",
-  sidebar: "#1e1e21",
-  bar: "#3f3f46",
-  barMuted: "#52525b",
-};
-
+/**
+ * Theme preview chrome. Colors come only from semantic tokens
+ * (`--background` / `--sidebar` / `--muted` / …) via utility classes.
+ * Scope with `.light` / `.dark` so System (split) stays correct even when
+ * the document root is the opposite theme — do not use `dark:` variants
+ * here (`@custom-variant dark (&:is(.dark *))` would still match under
+ * a dark html root).
+ *
+ * Traffic-light dots are OS window chrome, not product palette.
+ */
 function WindowMockup({
   variant,
   className,
@@ -45,52 +39,34 @@ function WindowMockup({
   variant: "light" | "dark";
   className?: string;
 }) {
-  const colors = variant === "light" ? LIGHT_COLORS : DARK_COLORS;
-
   return (
-    <div className={cn("flex h-full w-full flex-col", className)}>
-      {/* Title bar */}
-      <div
-        className="flex items-center gap-[3px] px-2 py-1.5"
-        style={{ backgroundColor: colors.titleBar }}
-      >
+    <div
+      className={cn(
+        variant === "dark" ? "dark" : "light",
+        "flex h-full w-full flex-col",
+        className,
+      )}
+      style={{ colorScheme: variant }}
+      data-theme-preview={variant}
+    >
+      {/* Title bar — muted elevates above pane in dark; border separates in light */}
+      <div className="flex items-center gap-[3px] border-b border-border bg-muted px-2 py-1.5">
         <span className="size-[6px] rounded-full bg-[#ff5f57]" />
         <span className="size-[6px] rounded-full bg-[#febc2e]" />
         <span className="size-[6px] rounded-full bg-[#28c840]" />
       </div>
       {/* Content area */}
-      <div
-        className="flex flex-1"
-        style={{ backgroundColor: colors.content }}
-      >
+      <div className="flex flex-1 bg-background">
         {/* Sidebar */}
-        <div
-          className="w-[30%] space-y-1 p-2"
-          style={{ backgroundColor: colors.sidebar }}
-        >
-          <div
-            className="h-1 w-3/4 rounded-full"
-            style={{ backgroundColor: colors.bar }}
-          />
-          <div
-            className="h-1 w-1/2 rounded-full"
-            style={{ backgroundColor: colors.bar }}
-          />
+        <div className="w-[30%] space-y-1 bg-sidebar p-2">
+          <div className="h-1 w-3/4 rounded-full bg-foreground/20" />
+          <div className="h-1 w-1/2 rounded-full bg-foreground/20" />
         </div>
         {/* Main */}
         <div className="flex-1 space-y-1.5 p-2">
-          <div
-            className="h-1.5 w-4/5 rounded-full"
-            style={{ backgroundColor: colors.bar }}
-          />
-          <div
-            className="h-1 w-full rounded-full"
-            style={{ backgroundColor: colors.barMuted }}
-          />
-          <div
-            className="h-1 w-3/5 rounded-full"
-            style={{ backgroundColor: colors.barMuted }}
-          />
+          <div className="h-1.5 w-4/5 rounded-full bg-foreground/20" />
+          <div className="h-1 w-full rounded-full bg-muted-foreground/40" />
+          <div className="h-1 w-3/5 rounded-full bg-muted-foreground/40" />
         </div>
       </div>
     </div>

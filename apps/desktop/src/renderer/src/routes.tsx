@@ -206,7 +206,7 @@ export const appRoutes: RouteObject[] = [
             element: <SquadDetailPageView />,
             handle: { title: "Squad" },
           },
-          { path: "inbox", element: <InboxPage />, handle: { title: "Inbox" } },
+          { path: "inbox", element: <InboxPage />, handle: { title: "Activity" } },
           {
             path: "attachments/:id/preview",
             element: <AttachmentPreviewRoute />,

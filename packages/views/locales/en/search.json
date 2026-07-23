@@ -15,7 +15,7 @@
     "send_message": "Send message"
   },
   "pages": {
-    "inbox": "Inbox",
+    "inbox": "Activity",
     "my_issues": "My Issues",
     "issues": "Issues",
     "projects": "Projects",

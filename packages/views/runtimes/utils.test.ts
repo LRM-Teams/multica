@@ -87,6 +87,57 @@ describe("isSelfHealingRuntime", () => {
 });
 
 describe("estimateCost", () => {
+  it("prices current Cursor Composer and Auto Cost models", () => {
+    const usage = {
+      ...zeroUsage,
+      input_tokens: 1_000_000,
+      output_tokens: 1_000_000,
+      cache_read_tokens: 1_000_000,
+      cache_write_tokens: 1_000_000,
+    };
+
+    expect(estimateCost({ ...usage, model: "composer-2.5" })).toBeCloseTo(
+      0.5 + 2.5 + 0.2,
+      5,
+    );
+    expect(
+      estimateCost({ ...usage, model: "composer-2.5-fast" }),
+    ).toBeCloseTo(3 + 15 + 0.5, 5);
+    expect(estimateCost({ ...usage, model: "auto-cost" })).toBeCloseTo(
+      1.25 + 6 + 0.25 + 1.25,
+      5,
+    );
+    expect(isModelPriced("auto")).toBe(false);
+  });
+
+  it("prices Cursor first-party Grok 4.5 standard and Fast aliases", () => {
+    const usage = {
+      ...zeroUsage,
+      input_tokens: 1_000_000,
+      output_tokens: 1_000_000,
+      cache_read_tokens: 1_000_000,
+      cache_write_tokens: 1_000_000,
+    };
+
+    for (const model of ["Cursor Grok 4.5 High", "cursor-grok-4.5-high"]) {
+      expect(estimateCost({ ...usage, model })).toBeCloseTo(
+        2 + 6 + 0.5,
+        5,
+      );
+    }
+
+    for (const model of [
+      "Cursor Grok 4.5 High Fast",
+      "cursor-grok-4.5-high-fast",
+    ]) {
+      expect(estimateCost({ ...usage, model })).toBeCloseTo(4 + 18 + 1, 5);
+    }
+
+    for (const model of ["grok-4.5", "grok-4.5-latest", "grok-build-latest"]) {
+      expect(isModelPriced(model)).toBe(false);
+    }
+  });
+
   it("prices the canonical Anthropic Sonnet 4.6 SKU", () => {
     const cost = estimateCost({
       ...zeroUsage,

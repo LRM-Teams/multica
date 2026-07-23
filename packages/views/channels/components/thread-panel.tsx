@@ -4,6 +4,7 @@ import { useMemo, type ReactNode } from "react";
 import { ArrowLeft, MessageSquare, X } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import type { ChannelMessage } from "@multica/core/types";
+import type { OpenAgentPanelFn } from "@multica/core/agents";
 import { useT } from "../../i18n/use-t";
 import { ChannelMessageList } from "./channel-message-list";
 import { ComposerQuotePreview } from "./message-quote";
@@ -13,6 +14,7 @@ import { Composer } from "./composer";
 import { ReadOnlyConversationBanner } from "./read-only-conversation-banner";
 import { ConversationHeader } from "./conversation-surface";
 import { ThreadFollowButton } from "./thread-follow-button";
+import type { VoiceRecordingAttachment } from "../lib/voice-audio";
 
 export interface ThreadPanelProps {
   root: ChannelMessage;
@@ -37,8 +39,9 @@ export interface ThreadPanelProps {
   onRetrySend?: (message: ChannelMessage) => void;
   /** Click an agent author's avatar/name → open the agent side panel (parity
    *  with the main channel list, which passes the same handler). Without it,
-   *  thread avatars only show the hover card, never open the panel (#488). */
-  onOpenAgent?: (agentId: string) => void;
+   *  thread avatars only show the hover card, never open the panel (#488).
+   *  LRM-292: id + optional identity snapshot from the message row. */
+  onOpenAgent?: OpenAgentPanelFn;
   quoteTarget?: QuoteTarget | null;
   onClearQuote?: () => void;
   // Composer (surface="thread") wiring — the surface owns the editor + send.
@@ -46,6 +49,13 @@ export interface ThreadPanelProps {
   onSend: () => void;
   sendDisabled: boolean;
   sending?: boolean;
+  voicePlaybackScope?: string;
+  voiceDisabled?: boolean;
+  onVoiceSend?: (
+    transcript: string,
+    durationMs: number,
+    attachment: VoiceRecordingAttachment,
+  ) => boolean;
   composerLeadingActions?: ReactNode;
   /** Slack-style attachment tray above the editor (Composer `tray` slot). */
   composerTray?: ReactNode;
@@ -89,6 +99,9 @@ export function ThreadPanel({
   onSend,
   sendDisabled,
   sending,
+  voicePlaybackScope,
+  voiceDisabled,
+  onVoiceSend,
   composerLeadingActions,
   composerTray,
   readOnly = false,
@@ -160,7 +173,7 @@ export function ThreadPanel({
       />
 
       <ChannelMessageList
-        key={`thread:${root.id}:${loading ? "loading" : "ready"}`}
+        key={`thread:${root.id}`}
         messages={replies}
         currentUserId={currentUserId}
         ownName={currentUserName}
@@ -197,6 +210,10 @@ export function ThreadPanel({
             sendDisabled={sendDisabled}
             sending={sending}
             onSend={onSend}
+            voiceChannelId={root.channel_id}
+            voicePlaybackScope={voicePlaybackScope}
+            voiceDisabled={voiceDisabled}
+            onVoiceSend={onVoiceSend}
             isMobile={isMobile}
             prefix={quoteTarget ? (
               <ComposerQuotePreview

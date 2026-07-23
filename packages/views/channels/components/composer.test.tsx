@@ -1,7 +1,10 @@
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { CSSProperties, ReactNode } from "react";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { Composer } from "./composer";
+import { COMPOSER_SHELL_CLASSNAME, Composer } from "./composer";
 
 vi.mock("@multica/ui/components/ui/drawer", () => ({
   DrawerContent: ({ children, style }: { children: ReactNode; style?: CSSProperties }) => (
@@ -9,6 +12,26 @@ vi.mock("@multica/ui/components/ui/drawer", () => ({
       {children}
     </div>
   ),
+}));
+
+vi.mock("../../i18n/use-t", () => ({
+  useT: () => ({
+    t: (selector: (resources: {
+      composer: {
+        voice_start: string;
+        voice_stop: string;
+        voice_processing: string;
+        voice_blocked: string;
+      };
+    }) => string) => selector({
+      composer: {
+        voice_start: "Record voice message",
+        voice_stop: "Stop recording",
+        voice_processing: "Processing voice message",
+        voice_blocked: "Finish the current draft first",
+      },
+    }),
+  }),
 }));
 
 describe("Composer", () => {
@@ -32,6 +55,27 @@ describe("Composer", () => {
     expect(editorScroll).not.toBeNull();
     expect(shell).toHaveAttribute("data-composer-surface", "channel");
     expect(screen.getByRole("button", { name: /send/i })).toBeInTheDocument();
+  });
+
+  it("renders the shared microphone immediately beside Send", () => {
+    render(
+      <Composer
+        surface="channel"
+        {...baseProps}
+        sendDisabled
+        voiceChannelId="channel-1"
+        voicePlaybackScope="channel-1:main"
+        onVoiceSend={vi.fn(() => true)}
+      />,
+    );
+
+    const microphone = screen.getByRole("button", { name: "Record voice message" });
+    const send = screen.getByRole("button", { name: /send/i });
+    const submitActions = send.closest('[data-slot="composer-submit-actions"]');
+    expect(microphone).toBeInTheDocument();
+    expect(submitActions).not.toBeNull();
+    expect(submitActions).toContainElement(microphone);
+    expect(microphone.nextElementSibling).toBe(send);
   });
 
   it("tags each of the 4 surfaces so the same shell renders everywhere", () => {
@@ -131,5 +175,61 @@ describe("Composer", () => {
     expect(row).not.toBeNull();
     expect(screen.queryByRole("button", { name: /reference issue|#|警/i })).toBeNull();
     expect(screen.getByRole("button", { name: /send/i })).toBeInTheDocument();
+  });
+
+  describe("LRM-353 semantic tokens", () => {
+    it("shell uses border-input + bg-card + brand focus ring (no light-only hex)", () => {
+      expect(COMPOSER_SHELL_CLASSNAME).toContain("border-input");
+      expect(COMPOSER_SHELL_CLASSNAME).toContain("bg-card");
+      expect(COMPOSER_SHELL_CLASSNAME).toContain("focus-within:ring-brand/30");
+      expect(COMPOSER_SHELL_CLASSNAME).not.toMatch(/#f4f4f4/);
+      expect(COMPOSER_SHELL_CLASSNAME).not.toMatch(/rgba\(29/);
+
+      render(<Composer surface="channel" {...baseProps} sendDisabled={false} />);
+      const shell = screen
+        .getByTestId("composer-editor")
+        .closest('[data-slot="composer-shell"]');
+      expect(shell?.className).toContain("border-input");
+      expect(shell?.className).toContain("bg-card");
+      expect(shell?.className).toContain("focus-within:ring-brand/30");
+    });
+
+    it("composer source and placeholder CSS stay on semantic tokens", () => {
+      const here = dirname(fileURLToPath(import.meta.url));
+      const composerSrc = readFileSync(resolve(here, "composer.tsx"), "utf8");
+      expect(composerSrc).not.toMatch(/#f4f4f4/);
+      expect(composerSrc).not.toMatch(/hover:bg-\[#/);
+      expect(composerSrc).toContain("border-input");
+      expect(composerSrc).toContain("bg-card");
+
+      const placeholderCss = readFileSync(
+        resolve(here, "../../editor/styles/shell.css"),
+        "utf8",
+      );
+      expect(placeholderCss).toMatch(/color:\s*var\(--muted-foreground\)/);
+    });
+
+    it("leading actions inherit muted-foreground for attach/mic icons", () => {
+      render(
+        <Composer
+          surface="thread"
+          {...baseProps}
+          sendDisabled={false}
+          leadingActions={<button type="button" aria-label="Attach">📎</button>}
+          voiceChannelId="thread-1"
+          voicePlaybackScope="thread-1"
+          onVoiceSend={vi.fn(() => true)}
+        />,
+      );
+      const leading = screen
+        .getByRole("button", { name: /attach/i })
+        .closest('[data-slot="composer-leading-actions"]');
+      expect(leading?.className).toContain("text-muted-foreground");
+      const submit = screen
+        .getByRole("button", { name: "Record voice message" })
+        .closest('[data-slot="composer-submit-actions"]');
+      expect(submit?.className).toContain("text-muted-foreground");
+      expect(screen.getByRole("button", { name: /send/i })).toBeInTheDocument();
+    });
   });
 });

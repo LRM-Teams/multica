@@ -335,16 +335,24 @@ func TestChatRuntimeBriefIsLeanButKeepsFastChatPaths(t *testing.T) {
 		"--message-stdin",
 		"--message-file <path>",
 		"--sticker <id>",
+		"--voice",
+		"explicitly asks for a spoken/voice reply",
+		"`--voice` is the only supported voice-reply path",
+		"do not synthesize, encode, upload, or attach an audio file",
 		"Common sticker fast path",
 		"greeting `hi`",
 		"multica sticker search <query>",
 		"do not list the whole sticker catalog",
 		"Freshness holds:",
 		"Message held by freshness check",
+		"CLI also exits non-zero",
+		"same turn",
+		"Do not end the turn after only a held send",
 		"`heldMessages`",
 		"multica message send --send-draft --target <target>",
 		"normal `multica message send --target <target> ...` with revised content",
 		"overwrites the saved draft",
+		"a freshness `held` result exits non-zero",
 		"multica message react --message-id <id>",
 		"multica message read [--target ...] [--limit N] --output json",
 		"multica message search \"query\" [--target ...] --output json",
@@ -424,6 +432,44 @@ func TestChatRuntimeBriefPinsRaftThreadUnfollowDecisionBoundary(t *testing.T) {
 	}
 }
 
+func TestChatRuntimeBriefPinsReminderDecisionBoundary(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name     string
+		directed bool
+	}{
+		{name: "ambient", directed: false},
+		{name: "directed", directed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			out := buildMetaSkillContent("codex", TaskContextForEnv{
+				ChatSessionID: "chat-1",
+				Directed:      tc.directed,
+			})
+
+			for _, want := range []string{
+				"cannot close the work now because it depends on a future time or external state",
+				"CI or deployment completion",
+				"a human reply",
+				"a daemon reconnect",
+				"a scheduled recheck",
+				"a periodic report",
+				"can finish in the current run",
+				"within about one minute",
+				"briefly poll instead",
+				"anchored to the current message or thread",
+				"owned by this agent",
+			} {
+				if !strings.Contains(out, want) {
+					t.Errorf("%s chat brief missing reminder decision boundary %q\n---\n%s", tc.name, want, out)
+				}
+			}
+		})
+	}
+}
+
 func TestChatRuntimeBriefRendersReplyRequirementForDirectedRun(t *testing.T) {
 	t.Parallel()
 	ctx := TaskContextForEnv{
@@ -457,7 +503,7 @@ func TestChatRuntimeBriefRendersReplyRequirementForDirectedRun(t *testing.T) {
 	if !strings.Contains(out, "multica message send") {
 		t.Errorf("directed brief should contain CLI send instruction")
 	}
-	for _, want := range []string{"multica reminder schedule", "future self-wake", "reminder list|snooze|update|cancel"} {
+	for _, want := range []string{"multica reminder schedule", "durable self-wake", "--repeat RULE", "--message-id <id>", "does not infer one from task text", "weekly:days@HH:MM", "reminder schedule|list|snooze|update|cancel|log"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("directed brief missing reminder capability %q", want)
 		}
@@ -520,6 +566,8 @@ func TestChatRuntimeBriefAlwaysAdvertisesTaskScopedCLITransport(t *testing.T) {
 		"--sticker",
 		"Freshness holds:",
 		"Message held by freshness check",
+		"CLI also exits non-zero",
+		"same turn",
 		"--send-draft",
 		"multica reminder schedule",
 		"multica-stickers",
@@ -851,13 +899,18 @@ func TestMemoryOperatingGuidePrioritizesExplicitUserPreferences(t *testing.T) {
 	out := buildMetaSkillContent("codex", ctx)
 
 	for _, want := range []string{
-		"### Memory Operating Guide (v0.5)",
+		"### Memory Operating Guide (v0.7)",
 		"Use high-strength auto-write for human preferences and durable work arrangements",
 		"treat human speech as high-signal by default",
 		"A verbal acknowledgment such as \"got it\" does not count as remembering",
 		"current user's isolated `USER.md`",
 		"likely to matter in a future run",
+		"Write target map",
+		"MULTICA_AGENT_MEMORY_DIR/daily/YYYY-MM-DD.md",
+		"only the most important long-lived cross-project rules",
 		"memory/MEMORY.md",
+		"should follow this agent into unrelated DMs, channels, and projects",
+		"If no project directory is present, do not create or infer one",
 		"MULTICA_USER_MEMORY_DIR",
 		"current member's durable preferences and standing working style",
 		"Relationships, handoffs, and work arrangements",
@@ -865,6 +918,14 @@ func TestMemoryOperatingGuidePrioritizesExplicitUserPreferences(t *testing.T) {
 		"notes/relationship-map.md",
 		"not only at welcome/introduction",
 		"Pure social greetings",
+		"Human feedback first",
+		"corrections, rework requests, confirmations, and explicit dissatisfaction",
+		"Daily journal (hot path) vs self-review/curator (cold path)",
+		"memory/daily/YYYY-MM-DD.md",
+		"Do **not** run a full self-review or curator-style promotion inside every chat/task turn",
+		"Only promote the most durable, broadly reusable facts out of Daily into `MEMORY.md`",
+		"project-specific durable facts belong in project files, not agent-global memory",
+		"must not block chat latency",
 		"Source is not scope",
 		"who said a memory is provenance",
 		"agents addressed by the current message",
@@ -936,7 +997,7 @@ func TestMemoryOperatingGuideRequiresAgentLocalScope(t *testing.T) {
 		ChatSessionID: "chat-1",
 		AgentRoot:     "/tmp/multica/workspace-1/.multica/agents/agent-1",
 	})
-	if !strings.Contains(withRoot, "### Memory Operating Guide (v0.5)") {
+	if !strings.Contains(withRoot, "### Memory Operating Guide (v0.7)") {
 		t.Fatalf("memory operating guide missing when an agent-local root exists:\n%s", withRoot)
 	}
 

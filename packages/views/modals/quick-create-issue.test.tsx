@@ -449,6 +449,7 @@ describe("AgentCreatePanel", () => {
         },
       });
     });
+    expect(mockToastSuccess).not.toHaveBeenCalled();
   });
 
   // Picking a squad routes the submission through `squad_id` (not

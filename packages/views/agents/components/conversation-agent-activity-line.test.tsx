@@ -15,7 +15,7 @@ vi.mock("@tanstack/react-query", () => ({
   useQuery: () => ({ data: snapshotMock() }),
 }));
 vi.mock("../use-agent-live-status", () => ({
-  useAgentLiveStatus: () => liveStatusMock(),
+  useAgentActivityProjection: () => liveStatusMock(),
 }));
 
 function runningTask(agentId: string): AgentTask {

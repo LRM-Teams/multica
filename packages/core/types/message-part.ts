@@ -17,6 +17,17 @@ export type MessagePart =
       size_bytes?: number;
     }
   | {
+      /** The visible text is a speech transcript and should be rendered with voice controls. */
+      type: "voice";
+      /** Present when the sender supplied a playable recording; Agent TTS output leaves it unset. */
+      attachment_id?: string;
+      filename?: string;
+      content_type?: string;
+      size_bytes?: number;
+      /** Present for recorded human input; Agent TTS output may leave it unset. */
+      duration_ms?: number;
+    }
+  | {
       type: "reference";
       ref_type: "mention";
       ref_subtype: "member" | "agent" | "squad";

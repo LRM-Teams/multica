@@ -357,9 +357,10 @@
   text-decoration: none;
 }
 
-/* Mentions — layout/typography fallback. Visual color + wash come from the
-   shared `mentionTokenClassName` utilities (brand semantic, not per-actor
-   identity colors). Keep this block style-light so it does not fight Tailwind. */
+/* Mentions — layout/typography fallback. Visual color + soft rest fill come
+   from the shared `mentionTokenClassName` utilities (Slack soft-bg token, not
+   per-actor identity colors). Keep this block style-light so it does not
+   fight Tailwind. */
 .rich-text-editor .mention {
   text-decoration: none;
 }

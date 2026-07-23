@@ -96,6 +96,8 @@ const openAgentPanelMock = vi.fn<(id: string) => void>();
 vi.mock("@multica/core/agents/stores", () => ({
   useAgentPanelStore: (selector: (s: { open: (id: string) => void }) => unknown) =>
     selector({ open: openAgentPanelMock }),
+  useAgentXpBurstStore: (selector: (s: { bursts: Record<string, never> }) => unknown) =>
+    selector({ bursts: {} }),
 }));
 vi.mock("./agent-panel-context", () => ({
   useOpenAgentPanel: () => null,
@@ -276,13 +278,16 @@ describe("Markdown", () => {
     expect(agent).toHaveAttribute("data-mention-kind", "default");
     expect(all).toHaveAttribute("data-mention-kind", "all");
 
-    // Brand-ink prose — no per-id inline style rainbow, no chip fill/padding.
+    // Slack soft-bg tokens — same fill for person/agent/@all; no per-id rainbow.
     for (const el of [member, agent, all]) {
       expect(el).toHaveClass("text-brand");
+      expect(el).toHaveClass("font-bold");
+      expect(el).toHaveClass("bg-brand/[0.10]");
+      expect(el).toHaveClass("rounded-sm");
+      expect(el).toHaveClass("px-0.5");
+      expect(el).not.toHaveClass("rounded-full");
       expect(el).not.toHaveAttribute("style");
     }
-    expect(member).toHaveClass("font-medium");
-    expect(all).toHaveClass("font-semibold");
   });
 
   it("marks a mention of the current viewer as self kind", () => {
@@ -292,7 +297,12 @@ describe("Markdown", () => {
 
     const self = container.querySelector('[data-mention-type="member"]');
     expect(self).toHaveAttribute("data-mention-kind", "self");
-    expect(self).toHaveClass("font-semibold");
+    expect(self).toHaveClass("font-bold");
+    expect(self).toHaveClass("bg-[#faf0c8]");
+    expect(self).toHaveClass("text-foreground");
+    expect(self).toHaveClass("dark:bg-brand/[0.14]");
+    expect(self).toHaveClass("dark:text-brand");
+    expect(self).not.toHaveClass("text-brand");
   });
 
   it("does not highlight inline code text", () => {

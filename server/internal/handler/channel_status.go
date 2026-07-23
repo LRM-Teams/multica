@@ -16,6 +16,11 @@ type ChannelActiveTask struct {
 	AgentName           string  `json:"agent_name"`
 	TaskID              string  `json:"task_id"`
 	Status              string  `json:"status"`
+	// Kind discriminates composer-strip rows (LRM-287). Only `reply` rows are
+	// meant to render above the composer; quick_create / issue_create are
+	// filtered client-side (and omitted server-side when sourced here).
+	Kind                string  `json:"kind,omitempty"`
+	Reason              string  `json:"reason,omitempty"`
 	Outcome             *string `json:"outcome,omitempty"`
 	Retryable           *bool   `json:"retryable,omitempty"`
 	InboxEventID        *string `json:"inbox_event_id,omitempty"`
@@ -30,6 +35,25 @@ type ChannelActiveTask struct {
 
 type ChannelActiveTasksResponse struct {
 	Tasks []ChannelActiveTask `json:"tasks"`
+}
+
+var channelComposerStripExcludedInboxReasons = map[string]struct{}{
+	"ambient":             {},
+	"channel_onboarding":  {},
+}
+
+func channelComposerStripExcludedKind(kind string) bool {
+	switch kind {
+	case "quick_create", "issue_create":
+		return true
+	default:
+		return false
+	}
+}
+
+func channelComposerStripExcludedInboxReason(reason string) bool {
+	_, excluded := channelComposerStripExcludedInboxReasons[reason]
+	return excluded
 }
 
 // ListChannelActiveTasks returns the latest inbox read-model row per agent in
@@ -57,6 +81,7 @@ func (h *Handler) ListChannelActiveTasks(w http.ResponseWriter, r *http.Request)
 				       COALESCE(NULLIF(a.display_name, ''), a.name, '') AS agent_name,
 				       e.id AS task_id,
 				       e.status AS inbox_status,
+				       e.reason,
 				       CASE
 				         WHEN e.terminal_outcome IS NOT NULL THEN e.terminal_outcome
 				         WHEN COALESCE(latest_delivery.status, '') IN ('leased', 'processing') OR e.status = 'draining' THEN 'running'
@@ -89,14 +114,14 @@ func (h *Handler) ListChannelActiveTasks(w http.ResponseWriter, r *http.Request)
 				ORDER BY e.agent_id, e.created_at DESC, e.id DESC
 			),
 			active_tasks AS (
-				SELECT *
+				SELECT *, 'reply'::text AS kind
 				FROM latest_inbox li
 				WHERE li.terminal_outcome = ''
 				  AND li.inbox_status IN ('pending', 'draining', 'failed')
 				  AND li.status IN ('queued', 'running')
 			),
 			terminal_tasks AS (
-				SELECT *
+				SELECT *, 'reply'::text AS kind
 				FROM latest_inbox li
 				WHERE (
 				    li.terminal_outcome = 'failed'
@@ -105,12 +130,12 @@ func (h *Handler) ListChannelActiveTasks(w http.ResponseWriter, r *http.Request)
 			)
 			SELECT agent_id, agent_name, task_id, status, terminal_outcome, retryable,
 			       inbox_event_id, delivery_id, conversation_id, channel_id, chat_session_id,
-			       thread_root_message_id, source_message_id, terminal_at
+			       thread_root_message_id, source_message_id, terminal_at, kind, reason
 			FROM active_tasks
 			UNION ALL
 			SELECT agent_id, agent_name, task_id, status, terminal_outcome, retryable,
 			       inbox_event_id, delivery_id, conversation_id, channel_id, chat_session_id,
-			       thread_root_message_id, source_message_id, terminal_at
+			       thread_root_message_id, source_message_id, terminal_at, kind, reason
 			FROM terminal_tasks
 			ORDER BY agent_name ASC, task_id ASC`, channelID)
 	if err != nil {
@@ -124,9 +149,12 @@ func (h *Handler) ListChannelActiveTasks(w http.ResponseWriter, r *http.Request)
 		var agentID, taskID pgtype.UUID
 		var inboxEventID, deliveryID, conversationID, rowChannelID, chatSessionID, threadRootMessageID, sourceMessageID pgtype.UUID
 		var terminalAt pgtype.Timestamptz
-		var name, status, terminalOutcome string
+		var name, status, terminalOutcome, kind, reason string
 		var retryable bool
-		if err := rows.Scan(&agentID, &name, &taskID, &status, &terminalOutcome, &retryable, &inboxEventID, &deliveryID, &conversationID, &rowChannelID, &chatSessionID, &threadRootMessageID, &sourceMessageID, &terminalAt); err != nil {
+		if err := rows.Scan(&agentID, &name, &taskID, &status, &terminalOutcome, &retryable, &inboxEventID, &deliveryID, &conversationID, &rowChannelID, &chatSessionID, &threadRootMessageID, &sourceMessageID, &terminalAt, &kind, &reason); err != nil {
+			continue
+		}
+		if channelComposerStripExcludedKind(kind) || channelComposerStripExcludedInboxReason(reason) {
 			continue
 		}
 		task := ChannelActiveTask{
@@ -134,6 +162,8 @@ func (h *Handler) ListChannelActiveTasks(w http.ResponseWriter, r *http.Request)
 			AgentName:           name,
 			TaskID:              uuidToString(taskID),
 			Status:              status,
+			Kind:                kind,
+			Reason:              reason,
 			InboxEventID:        uuidStringPtr(inboxEventID),
 			DeliveryID:          uuidStringPtr(deliveryID),
 			ConversationID:      uuidStringPtr(conversationID),

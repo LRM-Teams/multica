@@ -7,14 +7,11 @@ import { GlobalAgentPanel } from "./global-agent-panel";
 // the zustand `useAgentPanelStore` and renders the SAME AgentSidePanel as the
 // docked channels/DM path, so it reads as one panel (Iris #447 parity).
 
-const mockAgents = [
-  { id: "agent-1", name: "Nova" },
-  { id: "agent-2", name: "Atlas" },
-];
-
 let selectedAgentId: string | null = null;
+let identitySnapshot: { display_name?: string } | null = null;
 const closeMock = vi.fn(() => {
   selectedAgentId = null;
+  identitySnapshot = null;
 });
 
 vi.mock("@multica/core/hooks", () => ({
@@ -27,30 +24,48 @@ vi.mock("@multica/core/auth", () => ({
 }));
 
 vi.mock("@multica/core/workspace/queries", () => ({
-  agentListOptions: () => ({ queryKey: ["agents"] }),
   memberListOptions: () => ({ queryKey: ["members"] }),
 }));
 
 vi.mock("@tanstack/react-query", () => ({
-  // Both the agent and member queries resolve to a stable list. The member
-  // list only feeds the (mocked) AgentSidePanel, so returning the agent list
-  // for both is harmless and keeps the mock trivial.
-  useQuery: () => ({ data: mockAgents }),
+  useQuery: () => ({ data: [] }),
 }));
 
 vi.mock("@multica/core/agents/stores", () => ({
-  useAgentPanelStore: (selector: (s: { selectedAgentId: string | null; close: () => void }) => unknown) =>
-    selector({ selectedAgentId, close: closeMock }),
+  useAgentPanelStore: (
+    selector: (s: {
+      selectedAgentId: string | null;
+      identitySnapshot: { display_name?: string } | null;
+      close: () => void;
+    }) => unknown,
+  ) =>
+    selector({
+      selectedAgentId,
+      identitySnapshot,
+      close: closeMock,
+    }),
+  useAgentXpBurstStore: (selector: (s: { bursts: Record<string, never> }) => unknown) =>
+    selector({ bursts: {} }),
 }));
 
 vi.mock("../navigation", () => ({
   useNavigation: () => ({ pathname: "/agents" }),
 }));
 
-vi.mock("../channels/components/agent-side-panel", () => ({
-  AgentSidePanel: ({ agent }: { agent: { id: string; name: string } }) => (
-    <div data-testid="agent-side-panel" data-agent-id={agent.id}>
-      {agent.name}
+vi.mock("../common/resolved-agent-side-panel", () => ({
+  ResolvedAgentSidePanel: ({
+    agentId,
+    identitySnapshot: snap,
+  }: {
+    agentId: string;
+    identitySnapshot?: { display_name?: string } | null;
+  }) => (
+    <div
+      data-testid="agent-side-panel"
+      data-agent-id={agentId}
+      data-snapshot={snap?.display_name ?? ""}
+    >
+      {snap?.display_name ?? agentId}
     </div>
   ),
 }));
@@ -58,6 +73,7 @@ vi.mock("../channels/components/agent-side-panel", () => ({
 describe("GlobalAgentPanel", () => {
   beforeEach(() => {
     selectedAgentId = null;
+    identitySnapshot = null;
     closeMock.mockClear();
   });
 
@@ -68,11 +84,20 @@ describe("GlobalAgentPanel", () => {
 
   it("renders the selected agent's side panel when the store has a selection", () => {
     selectedAgentId = "agent-2";
+    identitySnapshot = { display_name: "Atlas" };
     render(<GlobalAgentPanel />);
 
     const panel = screen.getByTestId("agent-side-panel");
     expect(panel).toHaveAttribute("data-agent-id", "agent-2");
     expect(panel).toHaveTextContent("Atlas");
+  });
+
+  it("opens even when the agent is absent from ListAgents (channel-only)", () => {
+    selectedAgentId = "group-manager-1";
+    render(<GlobalAgentPanel />);
+
+    const panel = screen.getByTestId("agent-side-panel");
+    expect(panel).toHaveAttribute("data-agent-id", "group-manager-1");
   });
 
   it("keeps the panel at the docked panel width (440px) for one-panel parity", () => {

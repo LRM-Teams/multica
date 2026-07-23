@@ -150,6 +150,28 @@ type AgentMemory struct {
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
+type AgentMemoryWriteDaily struct {
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	AgentID     pgtype.UUID        `json:"agent_id"`
+	WriteDate   pgtype.Date        `json:"write_date"`
+	WriteCount  int32              `json:"write_count"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type AgentMemoryWriteEvent struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	AgentID     pgtype.UUID        `json:"agent_id"`
+	RuntimeID   pgtype.UUID        `json:"runtime_id"`
+	TaskID      pgtype.UUID        `json:"task_id"`
+	RelPath     string             `json:"rel_path"`
+	ScopeType   string             `json:"scope_type"`
+	FileKey     string             `json:"file_key"`
+	ContentHash string             `json:"content_hash"`
+	DeltaChars  int32              `json:"delta_chars"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
 type AgentRadarAction struct {
 	ID          pgtype.UUID        `json:"id"`
 	RadarRunID  pgtype.UUID        `json:"radar_run_id"`
@@ -527,6 +549,14 @@ type EnvDispatchRequest struct {
 	IdempotencyKey pgtype.UUID        `json:"idempotency_key"`
 	Response       []byte             `json:"response"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+type EnvDispatchRun struct {
+	ProjectID    pgtype.UUID        `json:"project_id"`
+	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
+	TrainingMode bool               `json:"training_mode"`
+	RootTaskID   pgtype.UUID        `json:"root_task_id"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 }
 
 type Environment struct {

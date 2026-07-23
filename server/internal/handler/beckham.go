@@ -104,10 +104,13 @@ var errGroupManagerNoRuntime = errors.New("no runtime available to run the group
 const beckhamInstructionsMarker = "规格错还是实现错"
 
 // refreshGroupManagerIfStale updates an existing Beckham's instructions,
-// description, and avatar to the current values when they are out of date.
+// description, avatar, and visibility to the current values when they are out
+// of date. Visibility must stay private so Beckham is not workspace-discoverable
+// or invite-picker listed (LRM-233).
 func (h *Handler) refreshGroupManagerIfStale(ctx context.Context, agent db.Agent) db.Agent {
 	fresh := strings.Contains(agent.Instructions, beckhamInstructionsMarker) &&
-		agent.AvatarUrl.Valid && agent.AvatarUrl.String == beckhamAvatarURL
+		agent.AvatarUrl.Valid && agent.AvatarUrl.String == beckhamAvatarURL &&
+		agent.Visibility == "private"
 	if fresh {
 		return agent
 	}
@@ -115,6 +118,7 @@ func (h *Handler) refreshGroupManagerIfStale(ctx context.Context, agent db.Agent
 		ID:                 agent.ID,
 		Instructions:       pgtype.Text{String: beckhamInstructions, Valid: true},
 		Description:        pgtype.Text{String: beckhamDescription, Valid: true},
+		Visibility:         pgtype.Text{String: "private", Valid: true},
 		AvatarSelectionSet: true,
 		AvatarUrl:          pgtype.Text{String: beckhamAvatarURL, Valid: true},
 		AvatarSource:       agentAvatarSourceAssigned,
@@ -228,7 +232,7 @@ func (h *Handler) EnsureGroupManagerForChannel(ctx context.Context, workspaceID,
 		RuntimeMode:        runtime.RuntimeMode,
 		RuntimeConfig:      []byte("{}"),
 		RuntimeID:          runtime.ID,
-		Visibility:         "workspace",
+		Visibility:         "private",
 		MaxConcurrentTasks: 6,
 		OwnerID:            creatorUserID,
 		CustomEnv:          []byte("{}"),

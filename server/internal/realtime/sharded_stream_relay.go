@@ -150,11 +150,15 @@ func (r *ShardedStreamRelay) BroadcastToWorkspace(workspaceID string, message []
 }
 
 func (r *ShardedStreamRelay) SendToUser(userID string, message []byte, excludeWorkspace ...string) {
+	r.SendToUserWithID(userID, message, ulid.Make().String(), excludeWorkspace...)
+}
+
+func (r *ShardedStreamRelay) SendToUserWithID(userID string, message []byte, eventID string, excludeWorkspace ...string) error {
 	exclude := ""
 	if len(excludeWorkspace) > 0 {
 		exclude = excludeWorkspace[0]
 	}
-	_ = r.PublishWithID(ScopeUser, userID, exclude, message, ulid.Make().String())
+	return r.PublishWithID(ScopeUser, userID, exclude, message, eventID)
 }
 
 func (r *ShardedStreamRelay) Broadcast(message []byte) {

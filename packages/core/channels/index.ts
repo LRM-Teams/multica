@@ -5,9 +5,11 @@ export {
   channelMessagesOptions,
   channelMessagesPageOptions,
   flattenChannelMessagePages,
+  enrichChannelMessagesPreservingAvatars,
   channelMessagesFirstItemIndex,
   upsertChannelMessageInCache,
   invalidateChannelMessages,
+  preserveLocalSendMessages,
   channelMessageThreadOptions,
   channelMessageSearchOptions,
   channelMembersOptions,
@@ -21,6 +23,7 @@ export {
 } from "./queries";
 export {
   buildOptimisticChannelMessage,
+  channelMessageListItemKey,
   isOptimisticChannelMessage,
   markOptimisticChannelMessageFailed,
   removeOptimisticChannelMessage,

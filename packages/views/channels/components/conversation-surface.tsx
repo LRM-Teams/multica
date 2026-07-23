@@ -36,27 +36,39 @@ export function ConversationHeader({
   return (
     <header
       className={cn(
-        "flex min-h-14 shrink-0 items-center justify-between gap-3 border-b border-border/25 bg-background/95 py-1.5",
+        "flex min-h-14 shrink-0 items-center gap-3 border-b border-border/25 bg-background/95 py-1.5",
         isMobile ? "px-2" : "px-5",
       )}
     >
       {/* Desktop `pl-2` aligns the header avatar + title with the message
           column (message rows sit at px-5 + the bubble's px-2 = a matching
           left edge), so the header avatar and every message avatar share one
-          vertical line. Mobile keeps its tighter gutter. */}
+          vertical line. Mobile keeps its tighter gutter.
+          LRM-279 — title column flex:1 min-w-0 so the name eats space before
+          the shrink-0 action cluster; no justify-between gutter. */}
       <div
         className={cn(
-          "flex min-w-0 items-center",
+          "flex min-w-0 flex-1 items-center",
           isMobile ? "gap-2" : "gap-2.5 pl-2",
         )}
       >
         {leading}
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           {/* Name + badges share the semibold cluster; status sits outside so
               it keeps its own weight/color and can shrink on narrow widths. */}
           <div className="flex min-w-0 items-center gap-2">
-            <div className="flex min-w-0 items-center gap-1.5 text-sm font-semibold leading-5">
-              <span className="truncate">{title}</span>
+            <div className="flex min-w-0 flex-1 items-center gap-1.5 text-sm font-semibold leading-5">
+              {/* Plain-string titles (thread) keep truncate here; compound
+                  titles (channel name + ▾) own their own truncate so the
+                  chevron is never clipped. */}
+              <div
+                className={cn(
+                  "min-w-0 flex-1",
+                  typeof title === "string" && "truncate",
+                )}
+              >
+                {title}
+              </div>
               {badges}
             </div>
             {status}

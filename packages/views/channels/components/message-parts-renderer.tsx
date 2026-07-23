@@ -103,6 +103,8 @@ function createMessagePartKey(part: MessagePart, counts: Map<string, number>): s
     base = `reference-${part.ref_type}-${part.ref_subtype ?? "none"}-${part.ref_id}`;
   } else if (part.type === "system_event") {
     base = `system-event-${part.event}-${hashString(JSON.stringify(part.event_params))}`;
+  } else if (part.type === "voice") {
+    base = `voice-${part.duration_ms ?? 0}`;
   } else {
     base = `attachment-${part.attachment_id}`;
   }

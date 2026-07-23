@@ -1289,6 +1289,9 @@ func TestHandleTask_InboxUsageStartsExecutionBeforeProvider(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 		case "/api/daemon/agent-inbox/events/event-usage/complete":
 			w.WriteHeader(http.StatusOK)
+		case "/api/daemon/agent-memory-writes":
+			// Memory write telemetry is reported after a successful inbox task.
+			w.WriteHeader(http.StatusOK)
 		default:
 			t.Fatalf("unexpected inbox path: %s", r.URL.Path)
 		}
@@ -3178,6 +3181,37 @@ func TestReportTaskResult_CompletedHitsCompleteEndpoint(t *testing.T) {
 	}
 	if part["type"] != "sticker" || part["sticker_id"] != "hi" || part["pack_id"] != "builtin" {
 		t.Errorf("parts[0]: got %#v, want builtin hi sticker", part)
+	}
+}
+
+func TestIsChannelOnboardingSkipReceipt(t *testing.T) {
+	onboarding := Task{InboxEvent: &AgentInboxLease{Reason: protocol.ChannelOnboardingReason}}
+	ordinary := Task{InboxEvent: &AgentInboxLease{Reason: "mention"}}
+	withoutInbox := Task{}
+
+	for _, output := range []string{
+		protocol.ChannelOnboardingSkipReceipt,
+		"  \n" + protocol.ChannelOnboardingSkipReceipt + "\t",
+	} {
+		if !isChannelOnboardingSkipReceipt(onboarding, output) {
+			t.Fatalf("onboarding exact receipt %q was not consumed", output)
+		}
+	}
+	for _, tc := range []struct {
+		name   string
+		task   Task
+		output string
+	}{
+		{name: "ordinary event", task: ordinary, output: protocol.ChannelOnboardingSkipReceipt},
+		{name: "no inbox event", task: withoutInbox, output: protocol.ChannelOnboardingSkipReceipt},
+		{name: "prose around receipt", task: onboarding, output: "I will skip: " + protocol.ChannelOnboardingSkipReceipt},
+		{name: "empty", task: onboarding, output: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if isChannelOnboardingSkipReceipt(tc.task, tc.output) {
+				t.Fatalf("unexpected typed skip for output %q", tc.output)
+			}
+		})
 	}
 }
 

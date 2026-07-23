@@ -35,6 +35,7 @@ import {
   channelMessagesPageOptions,
   channelMessagesFirstItemIndex,
   flattenChannelMessagePages,
+  enrichChannelMessagesPreservingAvatars,
   useEnsureMessageLoaded,
   channelsOptions,
   archivedChannelsOptions,
@@ -76,6 +77,11 @@ import { useWorkspacePaths } from "@multica/core/paths";
 import { useWSEvent } from "@multica/core/realtime";
 import { toast } from "sonner";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
+import { projectListOptions } from "@multica/core/projects/queries";
+import type {
+  AgentPanelIdentitySnapshot,
+  OpenAgentPanelFn,
+} from "@multica/core/agents";
 import {
   matchesActorIdentitySearch,
   resolveActorDisplayName,
@@ -92,7 +98,7 @@ import type {
   ChannelMessageSearchResult,
   ChannelTypingPayload,
 } from "@multica/core/types";
-import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
+import { ActorAvatar } from "../../common/actor-avatar";
 import { UnicodeSpinner } from "@multica/ui/components/common/unicode-spinner";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
@@ -159,10 +165,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@multica/ui/components
 import { MobileListDetailLayout } from "../../common/mobile-list-detail-layout";
 import { ContentEditor, type ContentEditorRef, type ContentEditorProps } from "../../editor/content-editor";
 import { useNavigation } from "../../navigation/context";
-import { avatarGlyph, avatarToneClass } from "../../common/initials";
 import { useT } from "../../i18n/use-t";
 import { useTimeAgo } from "../../i18n/use-time-ago";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
+import { ProjectPickerButton } from "../../common/project-picker-button";
+import { PropRow } from "../../common/prop-row";
 import { composePayloadKey } from "../hooks/use-compose-send-intent";
 import { useComposerSend } from "../hooks/use-composer-send";
 import {
@@ -171,15 +178,20 @@ import {
 } from "../hooks/use-composer-pending-attachments";
 import { useEntryReadCursor } from "../hooks/use-entry-read-cursor";
 import { useEntryAnchor } from "../hooks/use-entry-around-seq";
+import {
+  buildVoiceMessageParts,
+  type VoiceRecordingAttachment,
+} from "../lib/voice-audio";
+import { prepareVoicePlayback, voicePlaybackScope } from "../lib/voice-playback";
 import { isChannelNameTakenError } from "../channel-create-error";
 import { ChannelMessageList } from "./channel-message-list";
 import {
   ChannelDetailsPanel,
   type ChannelDetailsTab,
 } from "./channel-details-panel";
+import { DeleteChannelDialog } from "./delete-channel-dialog";
 import { ChannelTasksBoard } from "./channel-tasks-board";
-import { ChannelGroupAvatar } from "./channel-group-avatar";
-import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
+import { ChannelHashLandmark } from "./channel-hash-landmark";
 import { ThreadPanel } from "./thread-panel";
 import { ComposerAttachmentTray } from "./composer-attachment-tray";
 import { ComposerQuotePreview } from "./message-quote";
@@ -189,22 +201,24 @@ import {
   ConversationHeader,
   ReadOnlyConversationBanner,
 } from "./conversation-surface";
+import { filterComposerStripTasks } from "./conversation-activity-tasks";
 import { DmConversationRow, DmList, useDmRowActions } from "./dm-list";
 import { DmConversation } from "./dm-conversation";
-import {
-  formatChannelMessagePreview,
-  resolveChannelAuthorDisplayName,
-  type MentionPreviewResolver,
-} from "./message-preview";
+import { type MentionPreviewResolver } from "./message-preview";
 import {
   ConversationUnreadAffordance,
   isConversationMuted,
   MutedIndicator,
   sumUnmutedUnreadCounts,
 } from "./conversation-muted";
+import {
+  CONVERSATION_SIDEBAR_ROW_ACTIVE,
+  CONVERSATION_SIDEBAR_ROW_IDLE,
+  CONVERSATION_SIDEBAR_UNREAD_BADGE,
+} from "./conversation-sidebar-styles";
 import { buildPinnedConversationEntries } from "./pinned-conversations";
 import { PinnedConversationsSection } from "./pinned-conversations-section";
-import { AgentSidePanel } from "./agent-side-panel";
+import { ResolvedAgentSidePanel } from "../../common/resolved-agent-side-panel";
 import { AgentPanelProvider } from "../../common/agent-panel-context";
 import { ChannelMembersList, type MemberRoleLabel } from "./channel-members-list";
 import { ChannelMembersDialog } from "./channel-members-dialog";
@@ -280,29 +294,22 @@ function MemberPresenceStack({
   const overlap = Math.round(size * 0.28);
   return (
     <span className="inline-flex items-center">
-      {visible.map((m, i) => {
-        const name = resolveActorDisplayName(
-          m,
-          m.member_type === "agent" ? "Agent" : "Member",
-        );
-        const seed = `${m.member_type}:${m.member_id}:${name}`;
-        return (
-          <span
-            key={`${m.member_type}:${m.member_id}`}
-            style={{ marginLeft: i === 0 ? 0 : -overlap }}
-            className="inline-flex rounded-full ring-2 ring-background"
-          >
-            <ActorAvatar
-              name={name}
-              initials={avatarGlyph(name || "?")}
-              avatarUrl={resolvePublicFileUrl(m.avatar_url)}
-              isAgent={m.member_type === "agent"}
-              size={size}
-              className={avatarToneClass(seed)}
-            />
-          </span>
-        );
-      })}
+      {visible.map((m, i) => (
+        <span
+          key={`${m.member_type}:${m.member_id}`}
+          style={{ marginLeft: i === 0 ? 0 : -overlap }}
+          className="inline-flex rounded-full ring-2 ring-background"
+        >
+          <ActorAvatar
+            actorType={m.member_type === "agent" ? "agent" : "member"}
+            actorId={m.member_id}
+            size={size}
+            avatarUrlHint={m.avatar_url}
+            showStatusDot={m.member_type === "agent"}
+            profileLink={false}
+          />
+        </span>
+      ))}
     </span>
   );
 }
@@ -310,12 +317,14 @@ function MemberPresenceStack({
 function EmptyState({ onCreate }: { onCreate: () => void }) {
   const { t } = useT("channels");
   return (
-    <div className="flex h-full items-center justify-center p-8">
-      <div className="max-w-md rounded-3xl border bg-card p-8 text-center shadow-sm">
-        <div className="mx-auto flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+    <div className="flex h-full items-center justify-center bg-background p-8">
+      <div className="max-w-md rounded-3xl border border-border bg-card p-8 text-center shadow-sm">
+        <div className="mx-auto flex size-12 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
           <MessageCircle className="size-6" />
         </div>
-        <h2 className="mt-5 text-xl font-semibold">{t(($) => $.empty_state.title)}</h2>
+        <h2 className="mt-5 text-xl font-semibold text-foreground">
+          {t(($) => $.empty_state.title)}
+        </h2>
         <p className="mt-2 text-sm leading-6 text-muted-foreground">
           {t(($) => $.empty_state.description)}
         </p>
@@ -443,7 +452,7 @@ export function ConversationActivityStrip({
   // collapse behind a single count + chevron.
   const stoppableTasks = useMemo(() => {
     const next: ChannelActiveTask[] = [];
-    for (const task of tasks) {
+    for (const task of filterComposerStripTasks(tasks)) {
       if (isTerminalChannelActiveTask(task)) continue;
       next.push(task);
     }
@@ -707,9 +716,10 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   );
   // ?thread=<rootId> deep-links straight into ThreadPanel (e.g. a Reminder
   // anchor whose target reply lives inside a thread, not on the main
-  // timeline) — ?message= then names which reply inside it to highlight,
-  // reusing the same highlightMessageId above but routed to the thread
-  // surface instead of the main list (see effectiveHighlightId below).
+  // timeline, or an Activity-page deep-link) — ?message= then names which
+  // reply inside it to highlight, reusing the same highlightMessageId above
+  // but routed to the thread surface instead of the main list (see
+  // effectiveHighlightId below).
   const [threadDeepLinkId, setThreadDeepLinkId] = useState<string | null>(
     () => searchParams.get("thread"),
   );
@@ -753,6 +763,10 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const [typingActors, setTypingActors] = useState<Record<string, TypingActor>>({});
   const [newName, setNewName] = useState("");
   const [newLarkChatId, setNewLarkChatId] = useState("");
+  // #576 — optional project binding, set at creation time via the same
+  // ProjectPickerButton the group-settings panel uses (channel-project-settings-panel.tsx).
+  // `null` means unbound, which is the pre-existing default create behavior.
+  const [newProjectId, setNewProjectId] = useState<string | null>(null);
   // Inline "name required" hint for the create popover. Empty names used to
   // silently default to "general", which collided with an existing general
   // channel and surfaced as an opaque failure (#216).
@@ -790,12 +804,18 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const [sidePanel, setSidePanel] = useState<
     | { kind: "none" }
     | { kind: "thread"; message: ChannelMessage }
-    | { kind: "agent"; agentId: string }
+    | {
+        kind: "agent";
+        agentId: string;
+        snapshot?: AgentPanelIdentitySnapshot;
+      }
     | { kind: "channel-details"; tab: ChannelDetailsTab }
   >({ kind: "none" });
   const [threadDraftEmpty, setThreadDraftEmpty] = useState(true);
   const openThreadRoot = sidePanel.kind === "thread" ? sidePanel.message : null;
   const selectedAgentPanelId = sidePanel.kind === "agent" ? sidePanel.agentId : null;
+  const selectedAgentPanelSnapshot =
+    sidePanel.kind === "agent" ? (sidePanel.snapshot ?? null) : null;
   const channelDetailsOpen = sidePanel.kind === "channel-details";
   const channelDetailsTab =
     sidePanel.kind === "channel-details" ? sidePanel.tab : "about";
@@ -845,6 +865,15 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const { data: archivedChannels = [] } = useQuery(archivedChannelsOptions(wsId));
   const { data: workspaceMembers = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  // #576 — resolves the create-popover's selected project title, same query the
+  // group-settings Project section (ChannelProjectSettingsPanel) uses. Keep it
+  // dormant while the popover is closed: the project list is not rendered or
+  // needed then, and ChannelsPage should not add a background request merely
+  // because the optional create field exists.
+  const { data: workspaceProjects = [] } = useQuery({
+    ...projectListOptions(wsId),
+    enabled: createOpen,
+  });
   const resolveMentionPreview = useMemo<MentionPreviewResolver>(
     () => (type, id, fallbackLabel) => {
       if (type === "agent") {
@@ -946,10 +975,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       ? explicit
       : (explicit ?? channels.find(isImmutableSystemChannel) ?? channels[0] ?? null);
   }, [channels, archivedChannels, activeId, activeDmId, isMobile]);
-  const selectedAgentPanel = useMemo(
-    () => (selectedAgentPanelId ? agents.find((agent) => agent.id === selectedAgentPanelId) ?? null : null),
-    [agents, selectedAgentPanelId],
-  );
   const isActiveArchived = !!active?.archived_at;
   // #642 — the workspace's system #general channel: immutable, auto-managed
   // roster (all human members + active workspace-visible agents, synced
@@ -1035,7 +1060,8 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const threadReplies = useMemo(
     () => {
       const messages = threadPage?.messages ?? [];
-      return threadRoot ? messages.filter((msg) => msg.id !== threadRoot.id) : messages;
+      const filtered = threadRoot ? messages.filter((msg) => msg.id !== threadRoot.id) : messages;
+      return enrichChannelMessagesPreservingAvatars(filtered);
     },
     [threadPage?.messages, threadRoot],
   );
@@ -1332,6 +1358,15 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         currentUserRole === "owner" ||
         currentUserRole === "admin"),
     [currentUserId, currentUserRole],
+  );
+  // LRM-239 / LRM-235 — permanent delete is stricter than archive: workspace
+  // owner/admin only (channel creator who is a plain member cannot delete).
+  // System channels never get a Settings tab, so this gate is defense-in-depth.
+  const canDeleteChannel = useCallback(
+    (channel: Channel) =>
+      !isImmutableSystemChannel(channel) &&
+      (currentUserRole === "owner" || currentUserRole === "admin"),
+    [currentUserRole],
   );
   // #576 blocker (Iris) — the group-settings Project picker must be gated by
   // the same creator/admin permission as archiving, plus archived-channel and
@@ -1675,12 +1710,20 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       return;
     }
     createChannel.mutate(
-      { name, lark_chat_id: newLarkChatId.trim() || undefined },
+      {
+        name,
+        lark_chat_id: newLarkChatId.trim() || undefined,
+        // Omit entirely (not null) when unset, so the request body doesn't
+        // carry a `project_id` key at all — matching the pre-existing create
+        // flow exactly when no project is picked.
+        project_id: newProjectId ?? undefined,
+      },
       {
         onSuccess: (channel: Channel) => {
           selectChannel(channel.id);
           setNewName("");
           setNewLarkChatId("");
+          setNewProjectId(null);
           setCreateNameError(false);
           setCreateOpen(false);
         },
@@ -1750,7 +1793,12 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         toast.success(t(($) => $.delete_dialog.toast_success));
         // If the open channel was the one removed, drop the selection so the
         // `active` memo falls back to the first remaining channel.
-        if (target.id === activeId) setActiveId(null);
+        if (target.id === activeId) {
+          setActiveId(null);
+          replace(wsPaths.channels());
+        }
+        closeChannelDetails();
+        setMobilePanel(null);
         setDeleteTarget(null);
       },
       onError: () => toast.error(t(($) => $.delete_dialog.toast_failed)),
@@ -1932,6 +1980,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       },
     });
     if (dispatched) {
+      prepareVoicePlayback(voicePlaybackScope(active.id));
       editorRef.current?.clearContent();
       channelPending.clear();
       setQuoteTarget(null);
@@ -1941,6 +1990,40 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         publishTyping(false);
       }
     }
+  };
+
+  const handleVoiceSend = (
+    content: string,
+    durationMs: number,
+    attachment: VoiceRecordingAttachment,
+  ): boolean => {
+    if (!active || !activeDraftEmpty || channelPending.pending.length > 0) return false;
+    const parts = buildVoiceMessageParts(content, durationMs, attachment);
+    if (parts.length === 0) return false;
+    const dispatched = channelSend.send({
+      payloadKey: composePayloadKey(content, [attachment.id], `voice:${quoteTarget?.id ?? ""}`),
+      buildVars: (clientMessageId) => ({
+        channelId: active.id,
+        content,
+        parts,
+        quoteMessageId: quoteTarget?.id ?? undefined,
+        clientMessageId,
+      }),
+      mutate: sendMessage.mutate,
+      onCommitted: () => {},
+      onVisibleError: (kind) => {
+        if (kind === "conflict") toast.error(t(($) => $.composer.send_failed));
+      },
+    });
+    if (dispatched) {
+      setQuoteTarget(null);
+      if (activeDraftKey) storeClearComposerDraft(activeDraftKey);
+      if (typingStartedRef.current) {
+        typingStartedRef.current = false;
+        publishTyping(false);
+      }
+    }
+    return dispatched;
   };
 
   const handleThreadSend = () => {
@@ -1971,11 +2054,47 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       },
     });
     if (dispatched) {
+      prepareVoicePlayback(voicePlaybackScope(active.id, threadRoot.id));
       threadEditorRef.current?.clearContent();
       threadPending.clear();
       setThreadQuoteTarget(null);
       setThreadDraftEmpty(true);
     }
+  };
+
+  const handleThreadVoiceSend = (
+    content: string,
+    durationMs: number,
+    attachment: VoiceRecordingAttachment,
+  ): boolean => {
+    if (!active || !threadRoot || !threadDraftEmpty || threadPending.pending.length > 0) return false;
+    const parts = buildVoiceMessageParts(content, durationMs, attachment);
+    if (parts.length === 0) return false;
+    const dispatched = threadSend.send({
+      payloadKey: composePayloadKey(
+        content,
+        [attachment.id],
+        `${threadRoot.id}:voice:${threadQuoteTarget?.id ?? ""}`,
+      ),
+      buildVars: (clientMessageId) => ({
+        channelId: active.id,
+        messageId: threadRoot.id,
+        content,
+        parts,
+        quoteMessageId: threadQuoteTarget?.id ?? undefined,
+        clientMessageId,
+      }),
+      mutate: sendThreadMessage.mutate,
+      onCommitted: () => {},
+      onVisibleError: (kind) => {
+        if (kind === "conflict") toast.error(t(($) => $.thread.send_failed));
+      },
+    });
+    if (dispatched) {
+      setThreadQuoteTarget(null);
+      setThreadDraftEmpty(true);
+    }
+    return dispatched;
   };
 
   const handleRetrySend = useCallback(
@@ -2008,8 +2127,8 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     setSidePanel({ kind: "thread", message });
   };
 
-  const handleOpenAgentPanel = (agentId: string) => {
-    setSidePanel({ kind: "agent", agentId });
+  const handleOpenAgentPanel: OpenAgentPanelFn = (agentId, snapshot) => {
+    setSidePanel({ kind: "agent", agentId, snapshot });
   };
 
   // #645 — toggles the same exclusive slot; opening it always wins over
@@ -2133,6 +2252,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         isMobile={isMobile}
         currentUserId={currentUserId ?? ""}
         onOpenDm={openDmWithMember}
+        onOpenAgent={handleOpenAgentPanel}
         onRemove={handleRemoveMemberClick}
         dmPending={createOrFindDm.isPending}
         className="min-h-0 flex-1"
@@ -2146,18 +2266,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
     const realUnread = channel.real_unread_count ?? channel.unread_count ?? 0;
     const isManualDot = !!channel.manually_unread && realUnread === 0;
     const isMuted = isConversationMuted(channel);
-    const last = channel.last_message;
-    const preview = last
-      ? formatChannelMessagePreview(
-          resolveChannelAuthorDisplayName(last, {
-            members: workspaceMembers,
-            agents,
-          }),
-          last.content,
-          resolveMentionPreview,
-          last.parts,
-        )
-      : "";
     const pinned = !!channel.pinned_at;
     const archiveAllowed = canArchive(channel);
     const isSystemChannel = isImmutableSystemChannel(channel);
@@ -2216,7 +2324,9 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
               data-pinned={pinned ? "true" : undefined}
               className={cn(
                 "group/row relative mb-0.5 rounded-lg transition-colors",
-                active?.id === channel.id ? "bg-primary/[0.08]" : "hover:bg-accent",
+                active?.id === channel.id
+                  ? CONVERSATION_SIDEBAR_ROW_ACTIVE
+                  : CONVERSATION_SIDEBAR_ROW_IDLE,
               )}
             />
           }
@@ -2226,7 +2336,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
             onClick={() => selectChannel(channel.id)}
             className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 pr-7 text-left"
           >
-            <ChannelGroupAvatar members={channel.members ?? []} size={40} />
             <div className="min-w-0 flex-1">
               <div className="flex items-center justify-between gap-2">
                 <span
@@ -2240,6 +2349,8 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                   {pinned && (
                     <Pin className="size-3 shrink-0 -rotate-45 fill-muted-foreground/70 text-muted-foreground/70" />
                   )}
+                  {/* LRM-254 A1 — text-level # landmark; no member collage. */}
+                  <ChannelHashLandmark size="sm" />
                   <span className="truncate">{channel.name}</span>
                   {isMuted && (
                     <MutedIndicator label={t(($) => $.sidebar.muted_label)} />
@@ -2248,14 +2359,6 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                     <Smartphone className="size-3 shrink-0 text-emerald-600" />
                   )}
                 </span>
-                {last && (
-                  <span className="shrink-0 text-[11px] text-muted-foreground">
-                    {timeAgo(last.created_at)}
-                  </span>
-                )}
-              </div>
-              <div className="mt-0.5 flex items-center justify-between gap-2">
-                <span className="truncate text-xs text-muted-foreground">{preview}</span>
                 <ConversationUnreadAffordance
                   realUnread={realUnread}
                   isManualDot={isManualDot}
@@ -2338,7 +2441,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
   const listPane = (
     <aside
       className={cn(
-        "flex flex-1 min-h-0 flex-col bg-muted/20",
+        "flex flex-1 min-h-0 flex-col bg-sidebar",
         isMobile ? "min-w-0" : "border-r",
       )}
     >
@@ -2408,7 +2511,7 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                   )}
                   <span className="flex-1 text-left">{t(($) => $.sidebar.groups)}</span>
                   {channelsCollapsed && aggregateChannelUnread > 0 && (
-                    <span className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
+                    <span className={CONVERSATION_SIDEBAR_UNREAD_BADGE}>
                       {aggregateChannelUnread > 99 ? "99+" : aggregateChannelUnread}
                     </span>
                   )}
@@ -2453,6 +2556,29 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                       value={newLarkChatId}
                       onChange={(e) => setNewLarkChatId(e.target.value)}
                     />
+                    {/* #576 — optional project binding at creation time. Same
+                        ProjectPickerButton + PropRow pattern the group-settings
+                        Project section uses (ChannelProjectSettingsPanel);
+                        leaving it unset behaves exactly like the pre-existing
+                        create flow. */}
+                    <div className="grid min-w-0 grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+                      <PropRow label={t(($) => $.composer.project_label)} interactive={false}>
+                        <div className="flex min-w-0 items-center gap-1.5">
+                          <span className="min-w-0 truncate text-xs text-foreground">
+                            {workspaceProjects.find((p) => p.id === newProjectId)?.title ??
+                              t(($) => $.composer.project_none)}
+                          </span>
+                          <ProjectPickerButton
+                            wsId={wsId}
+                            value={newProjectId}
+                            onChange={setNewProjectId}
+                            label={t(($) => $.composer.project_label)}
+                            noneLabel={t(($) => $.composer.project_none)}
+                            tooltip={t(($) => $.composer.project_tooltip)}
+                          />
+                        </div>
+                      </PropRow>
+                    </div>
                     <Button className="w-full" onClick={handleCreate} disabled={createChannel.isPending}>
                       {t(($) => $.sidebar.create_aria)}
                     </Button>
@@ -2513,10 +2639,10 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                               onClick={() => selectChannel(channel.id)}
                               className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 pr-7 text-left opacity-60 hover:opacity-100"
                             >
-                              <ChannelGroupAvatar members={channel.members ?? []} size={40} />
                               <div className="min-w-0 flex-1">
-                                <span className="truncate text-sm font-medium text-muted-foreground">
-                                  {channel.name}
+                                <span className="flex min-w-0 items-center gap-1 truncate text-sm font-medium text-muted-foreground">
+                                  <ChannelHashLandmark size="sm" />
+                                  <span className="truncate">{channel.name}</span>
                                 </span>
                               </div>
                             </button>
@@ -2649,6 +2775,9 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
           />
         }
         onSend={handleThreadSend}
+        voicePlaybackScope={voicePlaybackScope(active.id, threadSurfaceRoot.id)}
+        voiceDisabled={!threadDraftEmpty || threadPending.pending.length > 0}
+        onVoiceSend={handleThreadVoiceSend}
         sendDisabled={
           (threadDraftEmpty && threadPending.readyAttachmentParts.length === 0) ||
           threadPending.hasUploading
@@ -2704,9 +2833,10 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
       />
     ) : null;
   const agentPanel =
-    active && selectedAgentPanel ? (
-      <AgentSidePanel
-        agent={selectedAgentPanel}
+    active && selectedAgentPanelId ? (
+      <ResolvedAgentSidePanel
+        agentId={selectedAgentPanelId}
+        identitySnapshot={selectedAgentPanelSnapshot}
         currentUserId={currentUserId}
         members={workspaceMembers}
         onClose={() => setSelectedAgentPanelId(null)}
@@ -2733,7 +2863,24 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         onShare: () => {
           void handleShare();
         },
-        onArchive: () => setArchiveTarget(active),
+        // LRM-265 — dismiss the mobile "…" Drawer before opening archive /
+        // delete AlertDialogs. Matches the Members entry (closes panel then
+        // opens its dialog). Leaving the Vaul modal open keeps
+        // `body.style.pointerEvents = "none"`; AlertDialog portals to body
+        // (sibling of DrawerContent), so checkbox / actions inherit the lock
+        // and become unclickable. Closing first also avoids stacked-modal
+        // focus traps; AlertDialog itself also sets `pointer-events-auto` as
+        // defense-in-depth while the drawer animates out.
+        onArchive: () => {
+          setMobilePanel(null);
+          setArchiveTarget(active);
+        },
+        onDelete: canDeleteChannel(active)
+          ? () => {
+              setMobilePanel(null);
+              setDeleteTarget(active);
+            }
+          : undefined,
         onRename: (name: string) => {
           updateChannel.mutate(
             { channelId: active.id, name },
@@ -2784,32 +2931,52 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
           <ConversationHeader
             isMobile={isMobile}
             leading={
-              <>
-                {isMobile && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-10 shrink-0 text-muted-foreground"
-                    aria-label={t(($) => $.header.back)}
-                    onClick={mobileBackToList}
-                  >
-                    <ArrowLeft className="size-5" />
-                  </Button>
-                )}
-                <ChannelGroupAvatar members={channelMembers} size={28} />
-              </>
+              isMobile ? (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-10 shrink-0 text-muted-foreground"
+                  aria-label={t(($) => $.header.back)}
+                  onClick={mobileBackToList}
+                >
+                  <ArrowLeft className="size-5" />
+                </Button>
+              ) : null
             }
             title={
+              // LRM-234 — Slack-like desktop title: bold name + tight ▾
+              // caret, soft rounded hover/open wash (not primary recolor).
+              // LRM-254 A1 — text-level # landmark (no member collage).
+              // Same control still opens Channel details; mobile keeps ⋯.
               <button
                 type="button"
                 onClick={() => toggleChannelDetails("about")}
                 aria-label={t(($) => $.details.open_aria)}
+                aria-expanded={channelDetailsOpen && !isMobile}
+                title={active.name}
                 className={cn(
-                  "truncate text-left hover:text-primary",
-                  channelDetailsOpen && !isMobile && "text-primary",
+                  "-ml-1.5 flex min-w-0 flex-1 items-center gap-0.5 rounded-md px-1.5 py-0.5 text-left text-foreground transition-colors",
+                  "hover:bg-black/[0.04] dark:hover:bg-white/[0.06]",
+                  channelDetailsOpen &&
+                    !isMobile &&
+                    "bg-black/[0.06] dark:bg-white/[0.08]",
                 )}
               >
-                {active.name}
+                <ChannelHashLandmark size="lg" />
+                <span className="min-w-0 flex-1 truncate font-bold tracking-tight">
+                  {active.name}
+                </span>
+                {!isMobile && (
+                  <ChevronDown
+                    data-testid="channel-title-chevron"
+                    strokeWidth={2.5}
+                    className={cn(
+                      "size-3 shrink-0 opacity-50 transition-transform duration-150",
+                      channelDetailsOpen && "rotate-180 opacity-70",
+                    )}
+                    aria-hidden="true"
+                  />
+                )}
               </button>
             }
             meta={
@@ -3093,6 +3260,10 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
                     }
                     sending={sendMessage.isPending}
                     onSend={handleSend}
+                    voiceChannelId={active.id}
+                    voicePlaybackScope={voicePlaybackScope(active.id)}
+                    voiceDisabled={!activeDraftEmpty || channelPending.pending.length > 0}
+                    onVoiceSend={handleVoiceSend}
                     isMobile={isMobile}
                     prefix={quoteTarget ? (
                       <ComposerQuotePreview
@@ -3369,6 +3540,10 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
             openAddPeopleDialog();
           }}
           onOpenDm={openDmWithMember}
+          onOpenAgent={(agentId, snapshot) => {
+            setMembersDialogOpen(false);
+            handleOpenAgentPanel(agentId, snapshot);
+          }}
           onRemove={handleRemoveMemberClick}
           dmPending={createOrFindDm.isPending}
         />
@@ -3459,31 +3634,15 @@ export function ChannelsPage({ channelId }: ChannelsPageProps = {}) {
         </SheetContent>
       </Sheet>
 
-      <AlertDialog
+      <DeleteChannelDialog
         open={deleteTarget !== null}
+        channelName={deleteTarget?.name ?? ""}
+        pending={deleteChannel.isPending}
+        onConfirm={handleDelete}
         onOpenChange={(open) => {
           if (!open) setDeleteTarget(null);
         }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t(($) => $.delete_dialog.title)}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {t(($) => $.delete_dialog.description, { name: deleteTarget?.name ?? "" })}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t(($) => $.delete_dialog.cancel)}</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              onClick={handleDelete}
-              disabled={deleteChannel.isPending}
-            >
-              {t(($) => $.delete_dialog.confirm)}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      />
 
       <AlertDialog
         open={archiveTarget !== null}

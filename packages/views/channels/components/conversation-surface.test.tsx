@@ -3,6 +3,7 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
   Composer,
+  ConversationHeader,
   getMobileVisualViewportStyle,
   MobileThreadDrawerContent,
 } from "./conversation-surface";
@@ -29,6 +30,28 @@ describe("mobile thread drawer viewport sizing", () => {
     render(<MobileThreadDrawerContent open={false}>Thread</MobileThreadDrawerContent>);
 
     expect(screen.getByTestId("drawer-content")).not.toHaveStyle({ height: "512px" });
+  });
+});
+
+describe("ConversationHeader — title column flex (LRM-279)", () => {
+  it("gives the title cluster flex-1 min-w-0 so it fills space before actions", () => {
+    const { container } = render(
+      <ConversationHeader
+        isMobile={false}
+        leading={<span data-testid="leading">←</span>}
+        title={<button type="button"># long-channel-name</button>}
+        actions={<button type="button">Search</button>}
+      />,
+    );
+
+    const header = container.querySelector("header");
+    expect(header).not.toHaveClass("justify-between");
+
+    const titleColumn = screen.getByTestId("leading").parentElement;
+    expect(titleColumn).toHaveClass("flex-1", "min-w-0");
+
+    const titleWrapper = screen.getByRole("button", { name: "# long-channel-name" }).parentElement;
+    expect(titleWrapper).toHaveClass("flex-1", "min-w-0");
   });
 });
 

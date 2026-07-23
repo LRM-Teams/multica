@@ -22,8 +22,13 @@ vi.mock("@multica/core/api", () => ({
 }));
 
 vi.mock("@multica/core/paths", () => ({
+  useCurrentWorkspace: () => ({ id: "ws-1", slug: "test" }),
+  useWorkspaceSlug: () => "test",
+  useRequiredWorkspaceSlug: () => "test",
   useWorkspacePaths: () => ({
     agentDetail: (id: string) => `/test/agents/${id}`,
+    memberDetail: (id: string) => `/test/members/${id}`,
+    squadDetail: (id: string) => `/test/squads/${id}`,
   }),
 }));
 
@@ -84,7 +89,7 @@ vi.mock("./agent-presence-status-line", () => ({
   AgentPresenceStatusLine: () => <span data-testid="presence-line" />,
 }));
 
-const mockAgents = vi.hoisted(() => ({ current: [] as unknown[] }));
+const mockAgent = vi.hoisted(() => ({ current: null as unknown }));
 const mockMembers = vi.hoisted(() => ({ current: [] as unknown[] }));
 const mockRuntimes = vi.hoisted(() => ({ current: [] as unknown[] }));
 
@@ -94,20 +99,30 @@ vi.mock("@tanstack/react-query", async () => {
   );
   return {
     ...actual,
-    useQuery: (opts: { queryKey: readonly unknown[] }) => {
+    useQuery: (opts: { queryKey: readonly unknown[]; enabled?: boolean }) => {
+      if (opts.enabled === false) {
+        return { data: undefined, isLoading: false, isPending: false, isError: false };
+      }
       const key = opts.queryKey;
       const root = key[0];
       const marker = key[2];
-      if (root === "workspaces" && marker === "agents") {
-        return { data: mockAgents.current, isLoading: false };
+      // LRM-292: card body from GetAgent (`…/agent/:id`), not ListAgents.
+      if (root === "workspaces" && marker === "agent") {
+        return {
+          data: mockAgent.current,
+          isLoading: false,
+          isPending: false,
+          isError: false,
+          error: null,
+        };
       }
       if (root === "workspaces" && marker === "members") {
-        return { data: mockMembers.current, isLoading: false };
+        return { data: mockMembers.current, isLoading: false, isPending: false };
       }
       if (root === "runtimes") {
-        return { data: mockRuntimes.current, isLoading: false };
+        return { data: mockRuntimes.current, isLoading: false, isPending: false };
       }
-      return { data: undefined, isLoading: false };
+      return { data: undefined, isLoading: false, isPending: false, isError: false };
     },
   };
 });
@@ -153,7 +168,7 @@ function renderCard() {
 beforeEach(() => {
   vi.clearAllMocks();
   cleanup();
-  mockAgents.current = [makeAgent()];
+  mockAgent.current = makeAgent();
   mockMembers.current = [];
   mockRuntimes.current = [
     { id: "rt-1", name: "Claude (host.local)", status: "online" },
@@ -211,5 +226,33 @@ describe("AgentProfileCard username / @handle", () => {
     expect(
       screen.queryByRole("button", { name: "@Squirtle" }),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("AgentProfileCard Memory growth (LRM-304)", () => {
+  it("shows Memory growth when GetAgent returns memory_growth", () => {
+    mockAgent.current = makeAgent({
+      memory_growth: {
+        total_writes: 5,
+        tier: "silver",
+        tier_label: "Silver",
+        segments: [
+          { tier: "bronze", tier_label: "Bronze", status: "complete" },
+          { tier: "silver", tier_label: "Silver", status: "current" },
+          { tier: "gold", tier_label: "Gold", status: "upcoming" },
+          { tier: "platinum", tier_label: "Platinum", status: "upcoming" },
+        ],
+        next: { tier: "gold", tier_label: "Gold", current: 5, required: 6 },
+      },
+    });
+    renderCard();
+    expect(screen.getByTestId("memory-growth-field")).toBeInTheDocument();
+    expect(screen.getByTestId("memory-growth-tier")).toHaveTextContent("Silver");
+  });
+
+  it("hides Memory growth when memory_growth is omitted (zero writes)", () => {
+    mockAgent.current = makeAgent({ memory_growth: undefined });
+    renderCard();
+    expect(screen.queryByTestId("memory-growth-field")).not.toBeInTheDocument();
   });
 });

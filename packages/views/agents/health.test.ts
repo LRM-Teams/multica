@@ -52,14 +52,20 @@ describe("healthStateConfig — dot color source (Iris §1)", () => {
   });
 });
 
-describe("resolveHealthDotClass — health_summary is the color source", () => {
-  it("derives the dot color from health_summary.state, not the fallback", () => {
+describe("resolveHealthDotClass — LRM-248 Online/Offline live badge", () => {
+  it("folds non-offline health states to Online green", () => {
     expect(resolveHealthDotClass(summary("online"), "bg-fallback")).toBe(
       "bg-success",
     );
     expect(
       resolveHealthDotClass(summary("suspected_disconnect"), "bg-fallback"),
-    ).toBe("bg-warning");
+    ).toBe("bg-success");
+    expect(
+      resolveHealthDotClass(summary("reconnecting"), "bg-fallback"),
+    ).toBe("bg-success");
+    expect(resolveHealthDotClass(summary("recovered"), "bg-fallback")).toBe(
+      "bg-success",
+    );
     expect(resolveHealthDotClass(summary("offline"), "bg-fallback")).toBe(
       "bg-muted-foreground/40",
     );

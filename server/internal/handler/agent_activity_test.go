@@ -507,6 +507,29 @@ func TestAgentActivityEvents_DefaultPageSkipsDiagnosticNoise(t *testing.T) {
 	if !ok {
 		t.Fatal("insert no_action Radar activity event")
 	}
+	reminderEvents := []struct {
+		eventType string
+		message   string
+	}{
+		{eventType: "reminder_scheduled", message: "Agent scheduled a future self-wake"},
+		{eventType: "reminder_snoozed", message: "Agent snoozed a reminder"},
+		{eventType: "reminder_updated", message: "Agent updated a reminder"},
+		{eventType: "reminder_cancelled", message: "Agent cancelled a reminder"},
+		{eventType: "reminder_fired", message: "Reminder fired and woke the agent"},
+	}
+	reminderEventIDs := make(map[string]pgtype.UUID, len(reminderEvents))
+	for _, reminderEvent := range reminderEvents {
+		id, inserted := insertAgentActivityEvent(
+			ctx, testPool, parseUUID(testWorkspaceID), parseUUID(agentID), pgtype.UUID{}, pgtype.UUID{},
+			activityKindCustom, reminderEvent.eventType, "info",
+			"agent", parseUUID(agentID), "", "", reminderEvent.message,
+			map[string]any{"reminder_id": "test-reminder"},
+		)
+		if !inserted {
+			t.Fatalf("insert %s activity event", reminderEvent.eventType)
+		}
+		reminderEventIDs[reminderEvent.eventType] = id
+	}
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO agent_activity_event (
 			workspace_id, agent_id, event_kind, event_type, severity,
@@ -537,6 +560,15 @@ func TestAgentActivityEvents_DefaultPageSkipsDiagnosticNoise(t *testing.T) {
 	}
 	if got := findActivityTimelineEvent(events, uuidToString(noActionID)); got != nil {
 		t.Fatalf("no_action Radar event leaked into user narrative: %+v", *got)
+	}
+	for _, reminderEvent := range reminderEvents {
+		event := requireActivityTimelineEvent(t, events, uuidToString(reminderEventIDs[reminderEvent.eventType]))
+		if event.ActivityKind != activityKindCustom || event.DetailKind != reminderEvent.eventType {
+			t.Fatalf("%s activity/detail kind = %q/%q", reminderEvent.eventType, event.ActivityKind, event.DetailKind)
+		}
+		if event.Text == nil || *event.Text != reminderEvent.message {
+			t.Fatalf("%s text = %+v, want %q", reminderEvent.eventType, event.Text, reminderEvent.message)
+		}
 	}
 	for _, event := range events.resp.Events {
 		if event.ActivityKind == activityKindTransport {
@@ -604,6 +636,24 @@ func TestActivityVisibilityFor_SourceBackedLifecycle(t *testing.T) {
 	}
 	for _, eventType := range []string{"radar_action_executed", "radar_action_failed"} {
 		if got := activityVisibilityFor(activityKindCustom, eventType, "info", "create_issue"); got != "user_facing" {
+			t.Fatalf("%s visibility = %q, want user_facing", eventType, got)
+		}
+		row := agentActivityRawRow{
+			Kind:      activityKindCustom,
+			EventType: pgtype.Text{String: eventType, Valid: true},
+		}
+		if !agentActivityTimelineRowIsNarrative(row) {
+			t.Fatalf("%s must be included in the activity narrative", eventType)
+		}
+	}
+	for _, eventType := range []string{
+		"reminder_scheduled",
+		"reminder_snoozed",
+		"reminder_updated",
+		"reminder_cancelled",
+		"reminder_fired",
+	} {
+		if got := activityVisibilityFor(activityKindCustom, eventType, "info", ""); got != "user_facing" {
 			t.Fatalf("%s visibility = %q, want user_facing", eventType, got)
 		}
 		row := agentActivityRawRow{
@@ -793,7 +843,10 @@ func TestResolveRaftCLIInvocation_MapsStableActivityActions(t *testing.T) {
 		{command: "raft task unclaim --target '#multica' --number 601", tool: "unclaim_task", toolTarget: "#multica", summaryKind: "message_target"},
 		{command: "raft channel add-member --target '#multica' --member @Barry", tool: "add_channel_member", toolTarget: "#multica", summaryKind: "message_target"},
 		{command: "raft reminder list", tool: "list_reminders", summaryKind: "none"},
+		{command: "raft reminder snooze --id abc123 --delay-seconds 60", tool: "snooze_reminder", summaryKind: "none"},
+		{command: "raft reminder update --id abc123 --cadence every:2h", tool: "update_reminder", summaryKind: "none"},
 		{command: "raft reminder cancel --id abc123", tool: "cancel_reminder", summaryKind: "none"},
+		{command: "raft reminder log --id abc123", tool: "log_reminder", summaryKind: "none"},
 		{command: "multica issue list --mine --output json", tool: "list_issues", summaryKind: "none"},
 		{command: "multica issue get MUL-601 --output json", tool: "get_issue", toolTarget: "MUL-601", summaryKind: "issue"},
 		{command: `multica issue search "activity fallback" --output json`, tool: "search_issues", toolTarget: "activity fallback", summaryKind: "query"},

@@ -296,6 +296,7 @@ type AgentInboxEvent struct {
 	LeaseToken       string `json:"lease_token"`
 	LeaseExpiresAt   string `json:"lease_expires_at"`
 	SeqTo            int64  `json:"seq_to"`
+	Reason           string `json:"reason"`
 	DeliveryMode     string `json:"delivery_mode"`
 	ResponseMode     string `json:"response_mode"`
 	ExecutionProfile string `json:"execution_profile"`
@@ -469,6 +470,9 @@ func (c *Client) CompleteAgentInboxEvent(ctx context.Context, lease AgentInboxLe
 	}
 	if result.OutputSuppressedReason != "" {
 		body["output_suppressed_reason"] = result.OutputSuppressedReason
+	}
+	if result.ChannelOnboardingDecision != "" {
+		body["channel_onboarding_decision"] = result.ChannelOnboardingDecision
 	}
 	if result.RuntimeStats != nil {
 		body["runtime_stats"] = result.RuntimeStats
@@ -792,6 +796,7 @@ type RegisterResponse struct {
 	Settings             json.RawMessage `json:"settings,omitempty"`
 	DaemonToken          string          `json:"daemon_token,omitempty"`
 	DaemonTokenExpiresAt string          `json:"daemon_token_expires_at,omitempty"`
+	ServerCapabilities   []string        `json:"server_capabilities,omitempty"`
 }
 
 func (c *Client) Register(ctx context.Context, req map[string]any) (*RegisterResponse, error) {

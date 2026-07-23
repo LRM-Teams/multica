@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -13,6 +14,11 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
+// errAgentMessageHeld is returned after a successful HTTP freshness hold so the
+// process exits non-zero. Agents must treat held as "not delivered" and decide
+// --send-draft or revise in the same turn; the JSON body is still printed first.
+var errAgentMessageHeld = errors.New("message held by freshness check (not delivered); review heldMessages, then either `multica message send --send-draft --target <target>` or a revised normal send")
+
 func newMessageSendCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "send",
@@ -23,6 +29,9 @@ func newMessageSendCmd() *cobra.Command {
 			"reply, or combine --sticker with --message for an acknowledgement sticker " +
 			"followed by explanatory text in one message. Attach files with " +
 			"--attachment-id from `multica attachment upload` (repeatable). If the " +
+			"human used voice input or explicitly requested spoken output, add --voice; " +
+			"the message text remains the accessible transcript. Do not generate or " +
+			"attach an audio file for a voice reply; Multica synthesizes the transcript. If the " +
 			"server holds a send because newer messages arrived, review the bounded " +
 			"context and use --send-draft to send the saved draft unchanged.",
 		RunE: runAgentMessageSend,
@@ -32,6 +41,7 @@ func newMessageSendCmd() *cobra.Command {
 	cmd.Flags().Bool("message-stdin", false, "Read the message from stdin (preserves multi-line content verbatim)")
 	cmd.Flags().String("message-file", "", "Read the message from a UTF-8 file")
 	cmd.Flags().String("sticker", "", "Builtin sticker id (see `multica sticker list`); sticker-only when --message is omitted")
+	cmd.Flags().Bool("voice", false, "Deliver the message text as synthesized speech and an accessible transcript")
 	cmd.Flags().StringSlice("attachment-id", nil, "Attachment id to link (repeatable). Get one from `multica attachment upload`")
 	cmd.Flags().String("client-message-id", "", "Idempotency key; generated automatically when omitted")
 	cmd.Flags().Bool("send-draft", false, "Send the current server-saved draft for --target unchanged")
@@ -135,7 +145,7 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 	sendDraft, _ := cmd.Flags().GetBool("send-draft")
 	if sendDraft {
 		if cmd.Flags().Changed("message") || cmd.Flags().Changed("message-stdin") || cmd.Flags().Changed("message-file") ||
-			cmd.Flags().Changed("sticker") || cmd.Flags().Changed("attachment-id") || cmd.Flags().Changed("client-message-id") ||
+			cmd.Flags().Changed("sticker") || cmd.Flags().Changed("voice") || cmd.Flags().Changed("attachment-id") || cmd.Flags().Changed("client-message-id") ||
 			cmd.Flags().Changed("seen-up-to-seq") {
 			return fmt.Errorf("--send-draft cannot be combined with message, sticker, attachment, or client-message-id options")
 		}
@@ -159,12 +169,16 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	stickerID := strings.TrimSpace(flagString(cmd, "sticker"))
+	voice, _ := cmd.Flags().GetBool("voice")
 	text := ""
 	if contentOK {
 		text = strings.TrimSpace(content)
 	}
 	attachmentIDs, _ := cmd.Flags().GetStringSlice("attachment-id")
 	attachmentIDs = appendUniqueStrings(nil, attachmentIDs...)
+	if voice && text == "" {
+		return fmt.Errorf("--voice requires message text; pass --message, --message-stdin, or --message-file")
+	}
 	if stickerID == "" && text == "" && len(attachmentIDs) == 0 {
 		return fmt.Errorf("message, sticker, or attachment is required; pass --message, --message-stdin, --message-file, --sticker, and/or --attachment-id")
 	}
@@ -190,7 +204,7 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 	// Chat attachments are structured parts only. --attachment-id is sugar that
 	// becomes {type:attachment, attachment_id} before POST; do not send a
 	// sidecar attachment_ids field (server binds from parts).
-	if parts := buildAgentSendParts(stickerID, text, attachmentIDs); len(parts) > 0 {
+	if parts := buildAgentSendParts(stickerID, text, attachmentIDs, voice); len(parts) > 0 {
 		body["parts"] = parts
 	}
 	var out map[string]any
@@ -208,16 +222,20 @@ func seenUpToSeqForMessageSend(cmd *cobra.Command, client *cli.APIClient) int64 
 }
 
 func agentMessageSendTextFallback(out map[string]any) string {
-	if strings.EqualFold(fmt.Sprint(out["state"]), "held") || strings.EqualFold(fmt.Sprint(out["outcome"]), "held") {
-		return "Message held by freshness check. Review heldMessages, then rerun with --send-draft to send the saved draft unchanged."
+	if agentTransportOutputIsHeld(out) {
+		return "Message held by freshness check (not delivered; CLI exits non-zero). Review heldMessages, then in this same turn either rerun with --send-draft to send the saved draft unchanged, or send revised content with a normal message send."
 	}
 	return "Message sent."
+}
+
+func agentTransportOutputIsHeld(out map[string]any) bool {
+	return strings.EqualFold(fmt.Sprint(out["state"]), "held") || strings.EqualFold(fmt.Sprint(out["outcome"]), "held")
 }
 
 // buildAgentSendParts assembles the structured chat message body for agent
 // transport send. Order: sticker (if any), text (if any), then attachment parts
 // in --attachment-id order. Attachments are never encoded as markdown embeds.
-func buildAgentSendParts(stickerID, text string, attachmentIDs []string) []protocol.MessagePart {
+func buildAgentSendParts(stickerID, text string, attachmentIDs []string, voice bool) []protocol.MessagePart {
 	var parts []protocol.MessagePart
 	if stickerID != "" {
 		parts = append(parts, protocol.MessagePart{
@@ -230,6 +248,9 @@ func buildAgentSendParts(stickerID, text string, attachmentIDs []string) []proto
 			Type: protocol.MessagePartTypeText,
 			Text: text,
 		})
+	}
+	if voice {
+		parts = append(parts, protocol.MessagePart{Type: protocol.MessagePartTypeVoice})
 	}
 	for _, id := range attachmentIDs {
 		id = strings.TrimSpace(id)
@@ -320,15 +341,22 @@ func clientMessageIDFlag(cmd *cobra.Command) string {
 
 func printAgentTransportOutput(cmd *cobra.Command, out map[string]any, textFallback string) error {
 	output := strings.ToLower(strings.TrimSpace(flagString(cmd, "output")))
-	if output == "" || output == "json" {
-		return cli.PrintJSON(os.Stdout, out)
-	}
-	if output != "text" {
+	switch {
+	case output == "" || output == "json":
+		if err := cli.PrintJSON(os.Stdout, out); err != nil {
+			return err
+		}
+	case output == "text":
+		if textFallback != "" {
+			fmt.Fprintln(os.Stdout, textFallback)
+		} else if err := cli.PrintJSON(os.Stdout, out); err != nil {
+			return err
+		}
+	default:
 		return fmt.Errorf("unsupported output format %q; use json or text", output)
 	}
-	if textFallback != "" {
-		fmt.Fprintln(os.Stdout, textFallback)
-		return nil
+	if agentTransportOutputIsHeld(out) {
+		return errAgentMessageHeld
 	}
-	return cli.PrintJSON(os.Stdout, out)
+	return nil
 }

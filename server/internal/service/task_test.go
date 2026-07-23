@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -242,6 +244,21 @@ func TestCleanupCancelledTaskUsesEphemeralManager(t *testing.T) {
 	assert.Equal(t, 1, manager.cleanups)
 }
 
+func TestMaybeCleanupEphemeralSandbox_PersistentMarkerSkipsManager(t *testing.T) {
+	manager := &fakeEphemeralSandboxManager{}
+	svc := &TaskService{EphemeralSandboxManager: manager}
+	task := db.AgentTaskQueue{Context: json.RawMessage(`{
+		"ephemeral_sandbox": {
+			"sandbox_instance_id": "sandbox-env-dispatch",
+			"cleanup_on_terminal": false
+		}
+	}`)}
+
+	svc.maybeCleanupEphemeralSandbox(context.Background(), task)
+
+	assert.Equal(t, 0, manager.cleanups, "explicitly persistent sandbox must await env-dispatch cleanup")
+}
+
 func TestMaybeRetryOfflineEphemeralTaskUsesFreshResources(t *testing.T) {
 	env := setupRetryTestDB(t, "runtime_offline")
 	ctx := context.Background()
@@ -417,6 +434,43 @@ type cleanerCall struct {
 	SandboxInstanceID string
 }
 
+func createEphemeralSandboxTestIssue(
+	t *testing.T,
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, agentID, projectID pgtype.UUID,
+	title string,
+) pgtype.UUID {
+	t.Helper()
+	suffix := uuid.NewString()
+	var creatorID pgtype.UUID
+	err := tx.QueryRow(ctx, `
+		INSERT INTO "user" (name, email)
+		VALUES ($1, $2)
+		RETURNING id
+	`, "Ephemeral sandbox test user "+suffix, "ephemeral-sandbox-"+suffix+"@multica.test").Scan(&creatorID)
+	require.NoError(t, err)
+
+	var issueID pgtype.UUID
+	err = tx.QueryRow(ctx, `
+		WITH bumped AS (
+			UPDATE workspace
+			SET issue_counter = issue_counter + 1
+			WHERE id = $1
+			RETURNING issue_counter
+		)
+		INSERT INTO issue (
+			workspace_id, title, status, priority, creator_type, creator_id,
+			assignee_type, assignee_id, project_id, number
+		)
+		SELECT $1, $2, 'in_progress', 'none', 'member', $3,
+		       'agent', $4, $5, (SELECT issue_counter FROM bumped)
+		RETURNING id
+	`, workspaceID, title, creatorID, agentID, projectID).Scan(&issueID)
+	require.NoError(t, err)
+	return issueID
+}
+
 func (f *fakeEphemeralSandboxCleaner) DeleteSandboxInstance(_ context.Context, workspaceID, instanceID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -461,13 +515,7 @@ func TestMaybeCleanupEphemeralSandbox(t *testing.T) {
 	).Scan(&projectID)
 	require.NoError(t, err)
 
-	withBump := `WITH bumped AS (UPDATE workspace SET issue_counter = issue_counter + 1 WHERE id = $1 RETURNING issue_counter)
-	INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id, assignee_type, assignee_id, project_id, number)
-	SELECT $1, $2, 'in_progress', 'none', 'member', u.id, 'agent', $3, $4, (SELECT issue_counter FROM bumped)
-	FROM "user" u LIMIT 1 RETURNING id`
-	var issueID pgtype.UUID
-	err = tx.QueryRow(ctx, withBump, ws.ID, "Eph Issue", agentID, projectID).Scan(&issueID)
-	require.NoError(t, err)
+	issueID := createEphemeralSandboxTestIssue(t, ctx, tx, ws.ID, agentID, projectID, "Eph Issue")
 
 	marker, _ := json.Marshal(map[string]any{
 		"ephemeral_sandbox": map[string]string{"sandbox_instance_id": "inst-99"},
@@ -540,13 +588,7 @@ func TestMaybeCleanupEphemeralSandbox_NoOpWithoutMarker(t *testing.T) {
 	).Scan(&projectID)
 	require.NoError(t, err)
 
-	withBump := `WITH bumped AS (UPDATE workspace SET issue_counter = issue_counter + 1 WHERE id = $1 RETURNING issue_counter)
-	INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id, assignee_type, assignee_id, project_id, number)
-	SELECT $1, $2, 'in_progress', 'none', 'member', u.id, 'agent', $3, $4, (SELECT issue_counter FROM bumped)
-	FROM "user" u LIMIT 1 RETURNING id`
-	var issueID pgtype.UUID
-	err = tx.QueryRow(ctx, withBump, ws.ID, "NM Issue", agentID, projectID).Scan(&issueID)
-	require.NoError(t, err)
+	issueID := createEphemeralSandboxTestIssue(t, ctx, tx, ws.ID, agentID, projectID, "NM Issue")
 
 	task, err := q.CreateAgentTask(ctx, db.CreateAgentTaskParams{
 		AgentID: agentID, RuntimeID: rtID, IssueID: issueID, Priority: 0,
@@ -603,16 +645,8 @@ func TestMaybeCleanupEphemeralSandbox_SkipsWhenSiblingActive(t *testing.T) {
 	).Scan(&projectID)
 	require.NoError(t, err)
 
-	withBump := `WITH bumped AS (UPDATE workspace SET issue_counter = issue_counter + 1 WHERE id = $1 RETURNING issue_counter)
-	INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id, assignee_type, assignee_id, project_id, number)
-	SELECT $1, $2, 'in_progress', 'none', 'member', u.id, 'agent', $3, $4, (SELECT issue_counter FROM bumped)
-	FROM "user" u LIMIT 1 RETURNING id`
-	var issue1ID pgtype.UUID
-	err = tx.QueryRow(ctx, withBump, ws.ID, "Sib Issue 1", agentID, projectID).Scan(&issue1ID)
-	require.NoError(t, err)
-	var issue2ID pgtype.UUID
-	err = tx.QueryRow(ctx, withBump, ws.ID, "Sib Issue 2", agentID, projectID).Scan(&issue2ID)
-	require.NoError(t, err)
+	issue1ID := createEphemeralSandboxTestIssue(t, ctx, tx, ws.ID, agentID, projectID, "Sib Issue 1")
+	issue2ID := createEphemeralSandboxTestIssue(t, ctx, tx, ws.ID, agentID, projectID, "Sib Issue 2")
 
 	marker, _ := json.Marshal(map[string]any{
 		"ephemeral_sandbox": map[string]string{"sandbox_instance_id": "inst-1"},

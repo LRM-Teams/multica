@@ -61,7 +61,10 @@ func newChannelAgentRuntimeFixture(t *testing.T, specs []channelAgentRuntimeSpec
 		if provider == "" {
 			provider = "pi"
 		}
-		capabilities := []string{protocol.DaemonCapabilityRestrictedExecution}
+		capabilities := []string{
+			protocol.DaemonCapabilityRestrictedExecution,
+			protocol.DaemonCapabilityReminderVersionedCache,
+		}
 		if spec.omitCapability {
 			capabilities = []string{}
 		}

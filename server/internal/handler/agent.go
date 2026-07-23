@@ -34,20 +34,25 @@ import (
 const maxAgentDescriptionLength = 255
 
 type AgentResponse struct {
-	ID            string          `json:"id"`
-	WorkspaceID   string          `json:"workspace_id"`
-	RuntimeID     string          `json:"runtime_id"`
-	Name          string          `json:"name"`
-	DisplayName   string          `json:"display_name"`
-	Description   string          `json:"description"`
-	Instructions  string          `json:"instructions"`
-	AvatarURL     *string         `json:"avatar_url"`
-	AvatarSource  string          `json:"avatar_source"`
-	RuntimeMode   string          `json:"runtime_mode"`
-	RuntimeName   string          `json:"runtime_name"`
-	RuntimeConfig any             `json:"runtime_config"`
-	CustomArgs    []string        `json:"custom_args"`
-	McpConfig     json.RawMessage `json:"mcp_config"`
+	ID           string  `json:"id"`
+	WorkspaceID  string  `json:"workspace_id"`
+	RuntimeID    string  `json:"runtime_id"`
+	Name         string  `json:"name"`
+	DisplayName  string  `json:"display_name"`
+	Description  string  `json:"description"`
+	Instructions string  `json:"instructions"`
+	AvatarURL    *string `json:"avatar_url"`
+	AvatarSource string  `json:"avatar_source"`
+	RuntimeMode  string  `json:"runtime_mode"`
+	RuntimeName  string  `json:"runtime_name"`
+	// Presence-safe projection of the bound runtime. Always filled when the
+	// runtime row exists — even if ListVisibleAgentRuntimes would hide the
+	// private runtime details from this viewer (LRM-248 AC5).
+	RuntimeStatus     string          `json:"runtime_status,omitempty"`
+	RuntimeLastSeenAt *string         `json:"runtime_last_seen_at,omitempty"`
+	RuntimeConfig     any             `json:"runtime_config"`
+	CustomArgs        []string        `json:"custom_args"`
+	McpConfig         json.RawMessage `json:"mcp_config"`
 	// custom_env is intentionally NOT serialized on agent resources. The
 	// agent_list/get/create/update/archive/restore responses and WS events
 	// only expose coarse metadata (has_custom_env, custom_env_key_count) so
@@ -76,6 +81,9 @@ type AgentResponse struct {
 	UpdatedAt     string              `json:"updated_at"`
 	ArchivedAt    *string             `json:"archived_at"`
 	ArchivedBy    *string             `json:"archived_by"`
+	// Memory growth tier/progress for profile & agent card (LRM-303). Null when
+	// the agent has zero valid Phase① memory writes.
+	MemoryGrowth *AgentMemoryGrowthResponse `json:"memory_growth,omitempty"`
 }
 
 func agentToResponse(a db.Agent) AgentResponse {
@@ -188,7 +196,10 @@ func (h *Handler) attachAgentRuntimeNames(ctx context.Context, resps []AgentResp
 	}
 
 	rows, err := h.DB.Query(ctx, `
-		SELECT id, COALESCE(NULLIF(name, ''), CASE WHEN runtime_mode = 'cloud' THEN 'Cloud' ELSE '' END)
+		SELECT id,
+		       COALESCE(NULLIF(name, ''), CASE WHEN runtime_mode = 'cloud' THEN 'Cloud' ELSE '' END),
+		       status,
+		       last_seen_at
 		FROM agent_runtime
 		WHERE id = ANY($1::uuid[])`, runtimeIDs)
 	if err != nil {
@@ -199,12 +210,18 @@ func (h *Handler) attachAgentRuntimeNames(ctx context.Context, resps []AgentResp
 	for rows.Next() {
 		var id pgtype.UUID
 		var name string
-		if err := rows.Scan(&id, &name); err != nil {
+		var status string
+		var lastSeen pgtype.Timestamptz
+		if err := rows.Scan(&id, &name, &status, &lastSeen); err != nil {
 			slog.Warn("failed to scan agent runtime name", "error", err)
 			continue
 		}
 		for _, idx := range byRuntimeID[uuidToString(id)] {
 			resps[idx].RuntimeName = name
+			// Always project connectivity onto the agent so private-runtime
+			// filtering on the runtimes list cannot blank live presence.
+			resps[idx].RuntimeStatus = status
+			resps[idx].RuntimeLastSeenAt = timestampToPtr(lastSeen)
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -709,8 +726,20 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 	// to preserve A2A collaboration; members must be in allowed_principals
 	// (agent owner or workspace owner/admin) to see private agents.
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	// Group managers (贝克汉姆) are channel-bound infrastructure: hide them from
+	// the workspace agent directory / invite picker even for owner/admin, who
+	// would otherwise still see private agents (LRM-233). Channel membership and
+	// GetAgent remain available via their own paths.
+	groupManagers, gmErr := h.groupManagerAgentIDs(r.Context(), parseUUID(workspaceID))
+	if gmErr != nil {
+		slog.Warn("failed to load group-manager ids for ListAgents", "workspace_id", workspaceID, "error", gmErr)
+		groupManagers = map[string]bool{}
+	}
 	visible := make([]AgentResponse, 0, len(agents))
 	for _, a := range agents {
+		if groupManagers[uuidToString(a.ID)] {
+			continue
+		}
 		if actorType == "member" && (a.Visibility == "private" || privateAgentOwnerOnly(a)) {
 			if !memberAllowedForPrivateAgent(a, actorID, member.Role) {
 				continue
@@ -761,6 +790,13 @@ func (h *Handler) GetAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.attachAgentRuntimeName(r.Context(), &resp)
+
+	if growth, err := h.loadAgentMemoryGrowth(r.Context(), agent.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load agent memory growth")
+		return
+	} else {
+		resp.MemoryGrowth = growth
+	}
 
 	// mcp_config redaction (custom_env was removed from this response shape
 	// in MUL-2600; secrets are now fetched via GET /api/agents/{id}/env).
@@ -1038,6 +1074,9 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	h.attachAgentRuntimeName(r.Context(), &resp)
 	actorType, actorID := h.resolveActor(r, ownerID, workspaceID)
 	h.publishAgentVisibilityEvent(protocol.EventAgentCreated, workspaceID, actorType, actorID, created, map[string]any{"agent": broadcastAgentResponse(resp)})
+	if created.RuntimeID.Valid {
+		h.projectReminderOwnerStart(r.Context(), uuidToString(created.ID), uuidToString(created.RuntimeID))
+	}
 
 	obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.AgentCreated(
 		ownerID,
@@ -1237,7 +1276,6 @@ func (h *Handler) canUpdateAgent(w http.ResponseWriter, r *http.Request, agent d
 		// tuple, not an independently editable agent property.
 		"model_catalog_request_id": {},
 		"thinking_level":           {},
-		"visibility":               {},
 		"max_concurrent_tasks":     {},
 	}
 	for field := range rawFields {
@@ -1382,11 +1420,30 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, "this runtime is private; only its owner or a workspace admin can move agents onto it")
 			return
 		}
+		if runtime.ID != existing.RuntimeID && !agentRuntimeHasCapability(runtime, protocol.DaemonCapabilityReminderVersionedCache) {
+			var hasActiveReminders bool
+			if err := h.DB.QueryRow(r.Context(), `
+				SELECT EXISTS (
+				  SELECT 1 FROM agent_reminder
+				  WHERE agent_id = $1 AND status IN ('scheduled', 'firing')
+				)`, existing.ID).Scan(&hasActiveReminders); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to validate reminder runtime capability")
+				return
+			}
+			if hasActiveReminders {
+				writeCodedError(w, http.StatusConflict, "daemon_outdated", "target runtime must upgrade before moving an agent with active reminders")
+				return
+			}
+		}
 		params.RuntimeID = runtime.ID
 		params.RuntimeMode = pgtype.Text{String: runtime.RuntimeMode, Valid: true}
 		targetRuntimeID = runtime.ID
 	}
 	if req.Visibility != nil {
+		if h.isGroupManagerAgent(r.Context(), existing.ID) && *req.Visibility != "private" {
+			writeError(w, http.StatusBadRequest, "group manager (贝克汉姆) visibility must stay private")
+			return
+		}
 		params.Visibility = pgtype.Text{String: *req.Visibility, Valid: true}
 	}
 	if req.Status != nil {
@@ -1477,6 +1534,10 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 
 	updated, err := h.Queries.UpdateAgent(r.Context(), params)
 	if err != nil {
+		if isReminderDaemonOutdatedError(err) {
+			writeCodedError(w, http.StatusConflict, "daemon_outdated", "target runtime must upgrade before moving an agent with active reminders")
+			return
+		}
 		if identityUniqueViolation(err, "agent_workspace_name_unique") {
 			writeError(w, http.StatusConflict, "username is already in use")
 			return
@@ -1529,6 +1590,10 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	userID := requestUserID(r)
 	actorType, actorID := h.resolveActor(r, userID, uuidToString(updated.WorkspaceID))
 	h.publishAgentVisibilityEvent(protocol.EventAgentStatus, uuidToString(updated.WorkspaceID), actorType, actorID, updated, map[string]any{"agent": broadcastAgentResponse(resp)})
+	if existing.RuntimeID.Valid && updated.RuntimeID.Valid && existing.RuntimeID != updated.RuntimeID && h.ReminderNotifier != nil {
+		h.projectReminderOwnerStop(r.Context(), uuidToString(updated.ID), uuidToString(existing.RuntimeID))
+		h.projectReminderOwnerStart(r.Context(), uuidToString(updated.ID), uuidToString(updated.RuntimeID))
+	}
 	redactAgentResponseForActor(&resp, actorType)
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -1709,6 +1774,9 @@ func (h *Handler) ArchiveAgent(w http.ResponseWriter, r *http.Request) {
 	h.attachAgentRuntimeName(r.Context(), &resp)
 	actorType, actorID := h.resolveActor(r, userID, wsID)
 	h.publish(protocol.EventAgentArchived, wsID, actorType, actorID, map[string]any{"agent": broadcastAgentResponse(resp)})
+	if archived.RuntimeID.Valid {
+		h.projectReminderOwnerStop(r.Context(), uuidToString(archived.ID), uuidToString(archived.RuntimeID))
+	}
 	redactAgentResponseForActor(&resp, actorType)
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -1746,6 +1814,9 @@ func (h *Handler) RestoreAgent(w http.ResponseWriter, r *http.Request) {
 	userID := requestUserID(r)
 	actorType, actorID := h.resolveActor(r, userID, wsID)
 	h.publish(protocol.EventAgentRestored, wsID, actorType, actorID, map[string]any{"agent": broadcastAgentResponse(resp)})
+	if restored.RuntimeID.Valid {
+		h.projectReminderOwnerStart(r.Context(), uuidToString(restored.ID), uuidToString(restored.RuntimeID))
+	}
 	redactAgentResponseForActor(&resp, actorType)
 	writeJSON(w, http.StatusOK, resp)
 }

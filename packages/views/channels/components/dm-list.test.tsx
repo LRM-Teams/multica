@@ -129,6 +129,7 @@ vi.mock("@multica/ui/components/ui/drawer", () => ({
 }));
 
 import { DmList } from "./dm-list";
+import { CONVERSATION_SIDEBAR_ROW_ACTIVE } from "./conversation-sidebar-styles";
 
 function makeDm(overrides: Partial<DMItem> = {}): DMItem {
   return {
@@ -366,5 +367,105 @@ describe("DmList unread affordance (read-model)", () => {
     expect(screen.queryByText("1")).not.toBeInTheDocument();
     const dot = container.querySelector("span.size-2.rounded-full");
     expect(dot).not.toBeNull();
+  });
+});
+
+describe("DmList no Ask Wendy promo card (LRM-294)", () => {
+  beforeEach(() => {
+    mockViewport.isMobile = false;
+    mockQueryData.dms = [];
+    mockQueryData.agents = [];
+    mockQueryData.members = [];
+    mockQueryData.squads = [];
+  });
+
+  it("does not render the promo card in the empty DM list", () => {
+    mockQueryData.agents = [
+      {
+        id: "wendy-1",
+        name: "wendy",
+        display_name: "Wendy",
+        archived_at: null,
+        runtime_id: "rt-1",
+      },
+    ];
+
+    renderDmList();
+
+    expect(screen.queryByText("Ask Wendy")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Wendy can help you turn real work into useful agents."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps Wendy as a normal DM row when a conversation exists", () => {
+    mockQueryData.dms = [
+      makeDm({
+        id: "dm-wendy",
+        peer: { type: "agent", id: "wendy-1", name: "Wendy" },
+      }),
+    ];
+
+    renderDmList();
+
+    expect(screen.getByRole("button", { name: /Wendy/i })).toBeInTheDocument();
+    expect(screen.queryByText("Ask Wendy")).not.toBeInTheDocument();
+  });
+
+  it("lists Wendy in the new-DM picker", () => {
+    mockQueryData.agents = [
+      {
+        id: "wendy-1",
+        name: "wendy",
+        display_name: "Wendy",
+        archived_at: null,
+      },
+    ];
+
+    renderDmList();
+    openDesktopPicker();
+
+    expect(screen.getByText("Wendy")).toBeInTheDocument();
+    expect(screen.getByText("Agent")).toBeInTheDocument();
+  });
+});
+
+describe("DmList sidebar contrast (LRM-354)", () => {
+  beforeEach(() => {
+    mockViewport.isMobile = false;
+    mockQueryData.dms = [];
+    mockQueryData.agents = [];
+    mockQueryData.members = [];
+    mockQueryData.squads = [];
+  });
+
+  it("marks the active DM row with sidebar-accent (not primary wash)", () => {
+    mockQueryData.dms = [
+      makeDm({
+        id: "dm-active",
+        peer: { type: "user", id: "peer-1", name: "Active Peer" },
+      }),
+    ];
+
+    const { container } = renderDmList({ activeId: "dm-active" });
+    const activeRow = container.querySelector(`.${CONVERSATION_SIDEBAR_ROW_ACTIVE}`);
+    expect(activeRow).not.toBeNull();
+    expect(container.querySelector(".bg-primary\\/\\[0\\.08\\]")).toBeNull();
+  });
+
+  it("shows collapsed section unread as a brand pill", () => {
+    mockQueryData.dms = [
+      makeDm({
+        unread: 5,
+        real_unread: 5,
+        peer: { type: "user", id: "peer-1", name: "Unread Peer" },
+      }),
+    ];
+
+    const { container } = renderDmList();
+    fireEvent.click(screen.getByRole("button", { name: /Direct messages/i }));
+    const badge = container.querySelector("span.bg-brand-solid.text-brand-solid-foreground");
+    expect(badge).not.toBeNull();
+    expect(badge).toHaveTextContent("5");
   });
 });

@@ -8,36 +8,20 @@ import {
   type ActivityEvent,
 } from "./components/tabs/activity-event";
 import {
-  availabilityConfig,
   formatPresenceStatus,
   presenceStatusDotClass,
   presenceStatusVisual,
+  toLiveAvailability,
 } from "./presence";
 
-// The header projects the SAME latest Activity row as the timeline, so it reads
-// the dot colour from the SAME shared table (ACTIVITY_TONE_DOT_CLASS) — one
-// source, no drift. Post-reduction every tone is neutral gray except failure
-// (destructive); "is it live" reads via the avatar pulse, not the dot colour.
+// Activity projection tones — kind colour on the DOT only; label text stays
+// neutral (mirrors the Activity timeline row).
 const TONE_DOT_CLASS = ACTIVITY_TONE_DOT_CLASS;
-
-// The kind colour lives on the DOT only. The timeline paints every label —
-// whatever the tone — in neutral foreground (activity-timeline.tsx renders the
-// label as `text-foreground` for all rows). The header mirrors that row, so its
-// label text is neutral too; the kind colour never bleeds onto the word. (Iris:
-// "kind 色只上 dot、label 文字恒中性、header == 时间线同款" — a command label
-// tinted amber, or Working tinted blue, would diverge from the very timeline the
-// header is meant to match.)
 const ACTIVITY_LABEL_TEXT = "text-foreground";
 
 /**
- * Name-row live status for agent profile peeks.
- *
- * When the agent has an active task, project the latest Activity row verbatim
- * (Thinking / Running a command / …) — the SAME label the timeline shows, kind
- * colour on the dot only. Fall back to the coarse presence word (Idle / Offline
- * / …) when nothing is on the plate, so the header never says bare "Working"
- * while a tool is visibly running. Never an invented word — no "Queued": the
- * Activity timeline has no such row.
+ * Live Online/Offline view for profile / DM / side-panel headers (LRM-248).
+ * Never carries Unstable / Reconnecting / Working / Idle / activity verbs.
  */
 export type AgentLiveStatusView = {
   label: string;
@@ -83,72 +67,73 @@ export function pickPrimaryActiveTask(
   return best;
 }
 
+/**
+ * Live presence for headers / profile cards — Online or Offline only.
+ * `unstable` folds to Online. Archived returns null (caller shows gray avatar
+ * + muted Archived secondary line; not a third live state).
+ */
 export function resolveAgentLiveStatus(args: {
   presence: AgentPresenceDetail | "loading" | null | undefined;
-  activeTask: AgentTask | null;
-  latestActivity: ActivityEvent | null;
+  /** @deprecated Ignored — live status no longer projects activity (LRM-248). */
+  activeTask?: AgentTask | null;
+  /** @deprecated Ignored — live status no longer projects activity (LRM-248). */
+  latestActivity?: ActivityEvent | null;
   tAgents: TFunction<"agents">;
-  tChat: TFunction<"chat">;
+  /** @deprecated Unused for live Online/Offline. */
+  tChat?: TFunction<"chat">;
 }): AgentLiveStatusView | null {
-  const { presence, activeTask, latestActivity, tAgents, tChat } = args;
+  const { presence, tAgents } = args;
   if (!presence || presence === "loading") return null;
-  const availability =
-    presence.availability === "archived" ? "offline" : presence.availability;
+  if (toLiveAvailability(presence.availability) === null) return null;
 
-  if (activeTask) {
-    // Connection state wins over any (possibly stale) activity row: a task queued
-    // on an offline/unstable runtime reads Offline / Unstable, not a projected
-    // stage.
-    if (availability === "offline") {
-      return {
-        label: tChat(($) => $.status_pill.stages.offline),
-        textClass: availabilityConfig.offline.textClass,
-        dotClass: availabilityConfig.offline.dotClass,
-      };
-    }
-    if (availability === "unstable") {
-      return {
-        label: tChat(($) => $.status_pill.stages.reconnecting),
-        textClass: availabilityConfig.unstable.textClass,
-        dotClass: availabilityConfig.unstable.dotClass,
-      };
-    }
-    // Working with a live Activity row → project it VERBATIM: the same word the
-    // Activity timeline shows, with the kind colour on the dot only and the label
-    // in neutral text (Parker: header = Activity latest-row projection; Iris:
-    // kind 色只上 dot、文字恒中性). No separate chat-pill stage vocabulary or
-    // stage palette — word and colour can never disagree with the timeline.
-    if (latestActivity) {
-      const p = activityPresentation(latestActivity);
-      // Activity is English-only (Frank 2026-07-14) — canonical map, not i18n.
-      const rawLabel = ACTIVITY_LABEL_EN[p.labelKey];
-      // Match the timeline's in-progress "…" on an active tool row.
-      const label =
-        latestActivity.activity_kind === "tool_call" && p.tone === "active"
-          ? `${rawLabel}…`
-          : rawLabel;
-      return {
-        label,
-        textClass: ACTIVITY_LABEL_TEXT,
-        dotClass: TONE_DOT_CLASS[p.tone],
-      };
-    }
-    // Task on the plate but no Activity row streamed yet → read Thinking, the
-    // neutral word the timeline opens a round with (activityPresentation maps
-    // the thinking kind to the neutral tone). NOT "Queued": the timeline has no
-    // queued row, so the header must never invent one from the task's snapshot
-    // status (Frank: header = Activity projection only, Activity 里没有 queued).
-    return {
-      label: ACTIVITY_LABEL_EN.thinking,
-      textClass: ACTIVITY_LABEL_TEXT,
-      dotClass: TONE_DOT_CLASS.neutral,
-    };
-  }
-
-  // Idle plate — #288 presence word (Idle / Offline / Unstable / Archived).
   const label = formatPresenceStatus(presence, tAgents);
   const visual = presenceStatusVisual(presence);
   const dotClass = presenceStatusDotClass(presence);
   if (!label || !visual || !dotClass) return null;
   return { label, textClass: visual.textClass, dotClass };
+}
+
+/**
+ * Activity-timeline projection for the composer strip (non-live event verbs:
+ * Thinking / Running command…). Not a live presence label — Idle/Working/
+ * Queued/Unstable/Reconnecting never appear here as presence words.
+ *
+ * Connection down (offline) suppresses activity verbs so a stale task cannot
+ * paint "Running command" on an unreachable agent.
+ */
+export function resolveAgentActivityProjection(args: {
+  presence: AgentPresenceDetail | "loading" | null | undefined;
+  activeTask: AgentTask | null;
+  latestActivity: ActivityEvent | null;
+}): AgentLiveStatusView | null {
+  const { presence, activeTask, latestActivity } = args;
+  if (!presence || presence === "loading") return null;
+  if (!activeTask) return null;
+
+  const live = toLiveAvailability(presence.availability);
+  // Archived / unknown — no activity strip.
+  if (live === null) return null;
+  // Offline — hide activity verbs (connection wins).
+  if (live === "offline") return null;
+
+  if (latestActivity) {
+    const p = activityPresentation(latestActivity);
+    const rawLabel = ACTIVITY_LABEL_EN[p.labelKey];
+    const label =
+      latestActivity.activity_kind === "tool_call" && p.tone === "active"
+        ? `${rawLabel}…`
+        : rawLabel;
+    return {
+      label,
+      textClass: ACTIVITY_LABEL_TEXT,
+      dotClass: TONE_DOT_CLASS[p.tone],
+    };
+  }
+
+  // Task on the plate but nothing streamed yet → Thinking (timeline opener).
+  return {
+    label: ACTIVITY_LABEL_EN.thinking,
+    textClass: ACTIVITY_LABEL_TEXT,
+    dotClass: TONE_DOT_CLASS.neutral,
+  };
 }

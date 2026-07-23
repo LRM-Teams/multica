@@ -209,3 +209,75 @@ func (q *Queries) MessagesForTaskInRange(ctx context.Context, taskID string, sta
 	}
 	return items, nil
 }
+
+const pageTaskMessagesInRange = `-- name: PageTaskMessagesInRange :many
+SELECT id, task_id, seq, type, tool, content, input, output, created_at, visibility FROM task_message
+WHERE task_id::text = $1::text AND seq BETWEEN $2 AND $3 AND (seq > $4 OR (seq = $4 AND id > $5))
+ORDER BY seq ASC, id ASC
+LIMIT $6
+`
+
+type PageTaskMessagesInRangeParams struct {
+	TaskID   string
+	StartSeq int32
+	EndSeq   int32
+	LastSeq  int32
+	LastID   pgtype.UUID
+	Limit    int32
+}
+
+func (q *Queries) PageTaskMessagesInRange(ctx context.Context, arg PageTaskMessagesInRangeParams) ([]TaskMessage, error) {
+	rows, err := q.db.Query(ctx, pageTaskMessagesInRange,
+		arg.TaskID,
+		arg.StartSeq,
+		arg.EndSeq,
+		arg.LastSeq,
+		arg.LastID,
+		arg.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []TaskMessage{}
+	for rows.Next() {
+		var i TaskMessage
+		if err := rows.Scan(
+			&i.ID,
+			&i.TaskID,
+			&i.Seq,
+			&i.Type,
+			&i.Tool,
+			&i.Content,
+			&i.Input,
+			&i.Output,
+			&i.CreatedAt,
+			&i.Visibility,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const countTaskMessagesInRange = `-- name: CountTaskMessagesInRange :one
+SELECT COUNT(*)::integer AS count FROM task_message
+WHERE task_id::text = $1::text AND seq BETWEEN $2 AND $3
+`
+
+type CountTaskMessagesInRangeParams struct {
+	TaskID   string
+	StartSeq int32
+	EndSeq   int32
+}
+
+func (q *Queries) CountTaskMessagesInRange(ctx context.Context, arg CountTaskMessagesInRangeParams) (int32, error) {
+	row := q.db.QueryRow(ctx, countTaskMessagesInRange, arg.TaskID, arg.StartSeq, arg.EndSeq)
+	var count int32
+	err := row.Scan(&count)
+	return count, err
+}

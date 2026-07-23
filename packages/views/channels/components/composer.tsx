@@ -5,6 +5,8 @@ import { Send } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import { ReadOnlyConversationBanner } from "./read-only-conversation-banner";
+import { VoiceInputButton } from "./voice-input-button";
+import type { VoiceRecordingAttachment } from "../lib/voice-audio";
 
 /**
  * The conversation surface a composer belongs to. The composer shell is
@@ -29,6 +31,15 @@ export interface ComposerProps {
   prefix?: ReactNode;
   /** Action-row controls left of Send (attach, mention, issue-ref, project). */
   leadingActions?: ReactNode;
+  /** Optional speech input shared by channel, DM, and thread composers. */
+  voiceChannelId?: string;
+  voicePlaybackScope?: string;
+  voiceDisabled?: boolean;
+  onVoiceSend?: (
+    transcript: string,
+    durationMs: number,
+    attachment: VoiceRecordingAttachment,
+  ) => boolean;
   /**
    * Attachment tray mount point (#151/#154). Rendered above the input and never
    * over the Send control, so touch targets stay reachable; the Attachment lane
@@ -39,6 +50,16 @@ export interface ComposerProps {
   readOnly?: boolean;
   readOnlyContent?: ReactNode;
 }
+
+/**
+ * LRM-353 — composer chrome uses semantic tokens only (no light-only hex fills).
+ * Light: border = `--input` (line-strong); surface = `--card` (slightly raised).
+ * Dark: same classes; hover/focus stay on muted / brand — never a light gray hex wash.
+ * Focus ring: brand/30 so both themes keep a readable focus cue.
+ */
+export const COMPOSER_SHELL_CLASSNAME =
+  "composer-shell min-w-0 rounded-lg border border-input bg-card text-foreground shadow-none " +
+  "focus-within:border-ring focus-within:ring-1 focus-within:ring-brand/30";
 
 /**
  * The one composer shell reused across channel / dm_channel / legacy_dm /
@@ -57,6 +78,10 @@ export function Composer({
   isMobile,
   prefix,
   leadingActions,
+  voiceChannelId,
+  voicePlaybackScope,
+  voiceDisabled = false,
+  onVoiceSend,
   tray,
   readOnly = false,
   readOnlyContent,
@@ -72,7 +97,7 @@ export function Composer({
       )}
     >
       <div
-        className="composer-shell min-w-0 rounded-lg border border-input bg-card shadow-none"
+        className={COMPOSER_SHELL_CLASSNAME}
         data-slot="composer-shell"
         data-composer-surface={surface}
       >
@@ -97,17 +122,35 @@ export function Composer({
           className={cn("flex items-center justify-between px-2 pb-2", isMobile && "gap-2")}
           data-slot="composer-action-row"
         >
-          <div className="flex min-h-8 min-w-0 flex-1 items-center gap-0.5 overflow-x-auto text-muted-foreground">
+          <div
+            className="flex min-h-8 min-w-0 flex-1 items-center gap-0.5 overflow-x-auto text-muted-foreground [&_svg]:text-current"
+            data-slot="composer-leading-actions"
+          >
             {leadingActions}
           </div>
-          <Button
-            onClick={onSend}
-            disabled={sendDisabled || sending}
-            size="sm"
-            className={cn("shrink-0", isMobile && "min-h-10 px-4")}
+          <div
+            className="flex shrink-0 items-center gap-1.5 text-muted-foreground"
+            data-slot="composer-submit-actions"
           >
-            <Send className="size-4" /> {sendLabel}
-          </Button>
+            {voiceChannelId && voicePlaybackScope && onVoiceSend ? (
+              <VoiceInputButton
+                channelId={voiceChannelId}
+                disabled={voiceDisabled || sending}
+                isMobile={isMobile}
+                playbackScope={voicePlaybackScope}
+                onVoiceSend={onVoiceSend}
+              />
+            ) : null}
+            {/* Primary Send owns primary-foreground; parent muted only tints mic chrome. */}
+            <Button
+              onClick={onSend}
+              disabled={sendDisabled || sending}
+              size="sm"
+              className={cn("shrink-0", isMobile && "min-h-10 px-4")}
+            >
+              <Send className="size-4" /> {sendLabel}
+            </Button>
+          </div>
         </div>
       </div>
     </div>

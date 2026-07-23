@@ -102,6 +102,76 @@ func TestNormalizeAttachmentRequiresID(t *testing.T) {
 	}
 }
 
+func TestNormalizeVoicePart(t *testing.T) {
+	content, parts, err := Normalize("spoken question", []protocol.MessagePart{
+		{Type: protocol.MessagePartTypeText, Text: "spoken question"},
+		{
+			Type:         protocol.MessagePartTypeVoice,
+			DurationMS:   1234,
+			Text:         "must clear",
+			AttachmentID: "11111111-1111-1111-1111-111111111111",
+			Filename:     " recording.wav ",
+			ContentType:  " audio/wav ",
+			SizeBytes:    48,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+	if content != "spoken question" || len(parts) != 2 {
+		t.Fatalf("Normalize = %q %+v, want transcript and two parts", content, parts)
+	}
+	voice := parts[1]
+	if voice.Type != protocol.MessagePartTypeVoice || voice.DurationMS != 1234 {
+		t.Fatalf("voice part = %+v", voice)
+	}
+	if voice.Text != "" || voice.AttachmentID != "11111111-1111-1111-1111-111111111111" ||
+		voice.Filename != "recording.wav" || voice.ContentType != "audio/wav" || voice.SizeBytes != 48 {
+		t.Fatalf("voice part did not preserve recording metadata: %+v", voice)
+	}
+}
+
+func TestNormalizeAgentVoicePartWithoutAttachment(t *testing.T) {
+	_, parts, err := Normalize("spoken answer", []protocol.MessagePart{
+		{Type: protocol.MessagePartTypeText, Text: "spoken answer"},
+		{Type: protocol.MessagePartTypeVoice},
+	})
+	if err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+	if len(parts) != 2 || parts[1].AttachmentID != "" {
+		t.Fatalf("parts = %+v, want attachment-free Agent voice", parts)
+	}
+}
+
+func TestNormalizeVoicePartRejectsDurationAboveRecordingLimit(t *testing.T) {
+	_, _, err := Normalize("spoken question", []protocol.MessagePart{
+		{Type: protocol.MessagePartTypeText, Text: "spoken question"},
+		{Type: protocol.MessagePartTypeVoice, DurationMS: 60_001},
+	})
+	if err == nil || !strings.Contains(err.Error(), "duration_ms") {
+		t.Fatalf("error = %v, want duration_ms validation", err)
+	}
+}
+
+func TestNormalizeVoicePartRequiresAccessibleTranscript(t *testing.T) {
+	_, _, err := Normalize("", []protocol.MessagePart{{Type: protocol.MessagePartTypeVoice}})
+	if err == nil || !strings.Contains(err.Error(), "voice transcript text part") {
+		t.Fatalf("error = %v, want accessible transcript validation", err)
+	}
+}
+
+func TestNormalizeVoicePartRejectsTranscriptAboveTTSLimit(t *testing.T) {
+	transcript := strings.Repeat("声", protocol.VoiceTranscriptMaxRunes+1)
+	_, _, err := Normalize(transcript, []protocol.MessagePart{
+		{Type: protocol.MessagePartTypeText, Text: transcript},
+		{Type: protocol.MessagePartTypeVoice},
+	})
+	if err == nil || !strings.Contains(err.Error(), "voice transcript") {
+		t.Fatalf("error = %v, want voice transcript limit", err)
+	}
+}
+
 func TestNormalizeTextPlusAttachments(t *testing.T) {
 	a := "11111111-1111-1111-1111-111111111111"
 	b := "22222222-2222-2222-2222-222222222222"

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Bell, BellOff, Bot, ChevronDown, ChevronRight, Loader2, Mail, MoreHorizontal, Pin, PinOff, Plus, Search, X } from "lucide-react";
+import { Bell, BellOff, ChevronDown, ChevronRight, Loader2, Mail, MoreHorizontal, Pin, PinOff, Plus, Search, X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -58,7 +58,6 @@ import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 import { useT } from "../../i18n/use-t";
 import { useTimeAgo } from "../../i18n/use-time-ago";
 import { useOpenDM } from "../../common/use-open-dm";
-import { useWindyEntryAction } from "../../workspace/use-wendy-entry-action";
 import {
   formatChannelMessagePreview,
   resolveChannelAuthorDisplayName,
@@ -70,6 +69,11 @@ import {
   MutedIndicator,
   sumUnmutedUnreadCounts,
 } from "./conversation-muted";
+import {
+  CONVERSATION_SIDEBAR_ROW_ACTIVE,
+  CONVERSATION_SIDEBAR_ROW_IDLE,
+  CONVERSATION_SIDEBAR_UNREAD_BADGE,
+} from "./conversation-sidebar-styles";
 
 const identitySearchOptions = { extendedMatch: matchesPinyin };
 
@@ -110,8 +114,6 @@ export function DmList({
   const [collapsed, setCollapsed] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
 
-  const windyEntry = useWindyEntryAction(wsId, agents);
-
   const dmActions = useDmRowActions();
 
   // Pinned DMs belong in the unified PINNED section (parent), not here.
@@ -146,31 +148,12 @@ export function DmList({
     return unpinnedDms.filter((dm) => dm.peer.name.toLowerCase().includes(q));
   }, [searchQuery, unpinnedDms]);
   const hasSearchQuery = searchQuery.trim().length > 0;
-  // Wendy presence checks all DMs (including pinned) so we don't re-nudge after pin.
-  const hasWindyDM = !!windyEntry.windyAgent && dms.some((dm) => dm.peer.type === "agent" && dm.peer.id === windyEntry.windyAgent?.id);
-  const showWindyNudge = windyEntry.hasConfiguredWendy && !hasWindyDM && !hasSearchQuery;
 
   // Header "+" still available when the only DMs are pinned (they live above).
-  const showHeaderTrigger = isLoading || dms.length > 0 || showWindyNudge;
+  // LRM-294: no Ask Wendy promo card — Wendy stays a normal DM row / picker entry.
+  const showHeaderTrigger = isLoading || dms.length > 0;
   const openPicker = () => setPickerOpen(true);
   const closePicker = () => setPickerOpen(false);
-
-  const windyNudge = showWindyNudge ? (
-    <button
-      type="button"
-      disabled={windyEntry.isPending}
-      onClick={() => void windyEntry.openWindy()}
-      className="mx-2 mb-2 flex w-[calc(100%-1rem)] items-start gap-2 rounded-xl border bg-muted/25 p-2.5 text-left transition-colors hover:bg-muted/45 disabled:opacity-60"
-    >
-      <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-        {windyEntry.isPending ? <Loader2 className="size-4 animate-spin" /> : <Bot className="size-4" />}
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-medium text-foreground">{t(($) => $.dm.wendy_title)}</span>
-        <span className="mt-0.5 block text-xs leading-4 text-muted-foreground">{t(($) => $.dm.wendy_description)}</span>
-      </span>
-    </button>
-  ) : null;
 
   const listBody =
     !collapsed &&
@@ -188,8 +171,7 @@ export function DmList({
       </div>
     ) : dms.length === 0 ? (
       <div className="flex flex-col items-center gap-2 px-3 py-3">
-        {windyNudge}
-        <p className="text-xs text-muted-foreground">{t(($) => $.dm.empty)}</p>
+        <p className="text-xs text-foreground">{t(($) => $.dm.empty)}</p>
         {isMobile ? (
           <Button
             type="button"
@@ -214,7 +196,6 @@ export function DmList({
       </div>
     ) : (
       <>
-        {windyNudge}
         {filteredDms.map((dm) => (
         <DmConversationRow
           key={`${dm.source}:${dm.id}`}
@@ -256,7 +237,7 @@ export function DmList({
             )}
             <span className="flex-1 text-left">{t(($) => $.dm.heading)}</span>
             {collapsed && aggregateUnread > 0 && (
-              <span className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
+              <span className={CONVERSATION_SIDEBAR_UNREAD_BADGE}>
                 {aggregateUnread > 99 ? "99+" : aggregateUnread}
               </span>
             )}
@@ -494,7 +475,7 @@ export function DmConversationRow({
             data-pinned={pinned ? "true" : undefined}
             className={cn(
               "group/row relative mb-0.5 rounded-lg transition-colors",
-              active ? "bg-primary/[0.08]" : "hover:bg-accent",
+              active ? CONVERSATION_SIDEBAR_ROW_ACTIVE : CONVERSATION_SIDEBAR_ROW_IDLE,
             )}
           />
         }

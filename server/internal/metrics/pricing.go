@@ -36,6 +36,11 @@ var modelPrices = map[string]ModelPrice{
 	"google:gemini-3.1-pro":       {Provider: "google", Model: "gemini-3.1-pro", InputPerM: 2.00, CacheReadPerM: 0.20, CacheWritePerM: 2.00, OutputPerM: 12.00},
 	"google:gemini-2.5-pro":       {Provider: "google", Model: "gemini-2.5-pro", InputPerM: 1.25, CacheReadPerM: 0.31, CacheWritePerM: 1.25, OutputPerM: 10.00},
 	"google:gemini-2.5-flash":     {Provider: "google", Model: "gemini-2.5-flash", InputPerM: 0.30, CacheReadPerM: 0.03, CacheWritePerM: 0.30, OutputPerM: 2.50},
+	"cursor:composer-2.5":         {Provider: "cursor", Model: "composer-2.5", InputPerM: 0.50, CacheReadPerM: 0.20, CacheWritePerM: 0, OutputPerM: 2.50},
+	"cursor:composer-2.5-fast":    {Provider: "cursor", Model: "composer-2.5-fast", InputPerM: 3.00, CacheReadPerM: 0.50, CacheWritePerM: 0, OutputPerM: 15.00},
+	"cursor:auto-cost":            {Provider: "cursor", Model: "auto-cost", InputPerM: 1.25, CacheReadPerM: 0.25, CacheWritePerM: 1.25, OutputPerM: 6.00},
+	"cursor:grok-4.5":             {Provider: "cursor", Model: "grok-4.5", InputPerM: 2.00, CacheReadPerM: 0.50, CacheWritePerM: 0, OutputPerM: 6.00},
+	"cursor:grok-4.5-fast":        {Provider: "cursor", Model: "grok-4.5-fast", InputPerM: 4.00, CacheReadPerM: 1.00, CacheWritePerM: 0, OutputPerM: 18.00},
 }
 
 var modelAliasRules = []struct {
@@ -63,6 +68,11 @@ var modelAliasRules = []struct {
 	{regexp.MustCompile(`gemini-3[.]1-pro`), "google:gemini-3.1-pro"},
 	{regexp.MustCompile(`gemini-2[.]5-pro`), "google:gemini-2.5-pro"},
 	{regexp.MustCompile(`gemini-2[.]5-flash`), "google:gemini-2.5-flash"},
+	{regexp.MustCompile(`(^|/|:)composer-2[.]5$`), "cursor:composer-2.5"},
+	{regexp.MustCompile(`(^|/|:)composer-2[.]5-fast$`), "cursor:composer-2.5-fast"},
+	{regexp.MustCompile(`(^|/|:)auto-cost$`), "cursor:auto-cost"},
+	{regexp.MustCompile(`(^|[/ :])cursor[- ]grok[- ]4[.]5[- ](none|minimal|low|medium|high|xhigh|max)[- ]fast$`), "cursor:grok-4.5-fast"},
+	{regexp.MustCompile(`(^|[/ :])cursor[- ]grok[- ]4[.]5($|[- ](none|minimal|low|medium|high|xhigh|max)$)`), "cursor:grok-4.5"},
 }
 
 func PriceForModelAlias(model string) (ModelPrice, bool) {

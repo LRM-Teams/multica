@@ -8,6 +8,7 @@ import { agentTaskSnapshotOptions } from "./queries";
 import {
   buildPresenceMap,
   deriveAgentPresenceDetail,
+  runtimeReachabilityFromAgent,
 } from "./derive-presence";
 import type { AgentPresenceDetail } from "./types";
 
@@ -151,9 +152,12 @@ export function useAgentPresenceDetail(
     // archived assignee on an old issue). Render a gray-offline fallback
     // instead of looping in "loading".
     if (!agent) return MISSING_AGENT_DETAIL;
-    // Missing runtime is a legitimate state (offline) — pass null and let
-    // derive handle it.
-    const runtime = safeRuntimes.find((r) => r.id === agent.runtime_id) ?? null;
+    // Missing from the visible runtime list is NOT the same as offline when
+    // the agent carries a presence-safe status projection (private runtime
+    // filtered by ListVisibleAgentRuntimes — LRM-248 AC5).
+    const runtime =
+      safeRuntimes.find((r) => r.id === agent.runtime_id) ??
+      runtimeReachabilityFromAgent(agent);
 
     const tasks = safeSnapshot.filter((t) => t.agent_id === agentId);
     return deriveAgentPresenceDetail({ agent, runtime, tasks, now: Date.now() });

@@ -67,7 +67,7 @@ func decodeEnvDispatchSandboxConfig(raw json.RawMessage) (envDispatchSandboxConf
 
 // createInput builds the sandbox_instance creation input from a decoded binding
 // policy: the template, a daemon-enabled flag, the MULTICA_DAEMON_ID runtime
-// env, and the runtime marshalled to its three-key JSON object. When the policy
+// env, and the runtime marshalled with its provider selection. When the policy
 // has no runtime, the Runtime field is nil. The marshalled runtime carries the
 // API key into the sandbox lifecycle only; it never reaches SandboxInstanceRef,
 // responses, errors, or logs.

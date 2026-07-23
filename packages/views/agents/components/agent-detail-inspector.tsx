@@ -37,7 +37,6 @@ import {
 } from "@multica/ui/components/ui/dialog";
 import { PropRow } from "../../common/prop-row";
 import { InlineEditPopover } from "./inline-edit-popover";
-import { availabilityConfig } from "../presence";
 import { CharCounter } from "./char-counter";
 import { useT } from "../../i18n";
 import { ConcurrencyPicker } from "./inspector/concurrency-picker";
@@ -115,7 +114,13 @@ export function AgentDetailInspector({
           canEdit={canEdit}
           onUpdate={update}
         />
-        <PresenceBadge presence={presence} />
+        {/* LRM-248: live Online/Offline is avatar-badge only — no name-row text.
+            Archived stays muted secondary copy under the identity. */}
+        {agent.archived_at || presence?.availability === "archived" ? (
+          <span className="text-xs text-muted-foreground">
+            {t(($) => $.row.archived)}
+          </span>
+        ) : null}
       </div>
 
       {/* Properties — editable when canEdit. When the current user lacks
@@ -290,6 +295,7 @@ function AvatarEditor({
           actorId={agent.id}
           size={56}
           className="rounded-none"
+          showStatusDot={!agent.archived_at}
         />
       </div>
     );
@@ -325,6 +331,7 @@ function AvatarEditor({
           actorId={agent.id}
           size={56}
           className="rounded-none"
+          showStatusDot={!agent.archived_at}
         />
         <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity group-hover:opacity-100">
           {uploading ? (
@@ -544,34 +551,4 @@ function DescriptionEditorBody({
 
 
 
-// ---------------------------------------------------------------------------
-// Presence badge — unchanged from the previous version
-// ---------------------------------------------------------------------------
 
-function PresenceBadge({
-  presence,
-}: {
-  presence: AgentPresenceDetail | null | undefined;
-}) {
-  const { t } = useT("agents");
-  // Archived is carried by the unified presence (deriveAgentPresenceDetail
-  // sets availability="archived" before any runtime/task scan), so the
-  // normal path below renders the gray "Archived" badge with no special
-  // case here — same single source of truth as every other status surface.
-  if (!presence) {
-    return (
-      <span className="inline-flex h-5 w-20 animate-pulse rounded-md bg-muted" />
-    );
-  }
-  const av = availabilityConfig[presence.availability];
-  return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      <span
-        className={`inline-flex items-center gap-1.5 rounded-md border px-1.5 py-0.5 text-xs ${av.textClass}`}
-      >
-        <span className={`h-1.5 w-1.5 rounded-full ${av.dotClass}`} />
-        {t(($) => $.availability[presence.availability])}
-      </span>
-    </div>
-  );
-}

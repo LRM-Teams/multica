@@ -1,27 +1,23 @@
 name: Deploy
 
-# Continuous deployment to s89 (Tencent Cloud, Beijing — behind the GFW).
-#
-# Why this shape: inbound SSH from GitHub-hosted runners into a mainland-China
-# box is the throttled/blocked direction across the Great Firewall, so we never
-# connect *into* s89. Instead:
-#
-#   1. Images build on GitHub-hosted runners (outside China), pushed to GHCR.
-#   2. A self-hosted runner *on s89* — which long-polls GitHub outbound through
-#      the box's existing proxy (127.0.0.1:7893) — pulls the images and
-#      restarts the stack locally. Outbound is the only reliable direction.
+# Continuous deployment to s89 (82.157.184.89, runner label `s89`). Images
+# build on GitHub-hosted runners and push to GHCR; the self-hosted runner on
+# s89 pulls images and restarts Compose locally.
 #
 # Test gate: the CI workflow runs on every PR into `dev`. The team's workflow is
 # feature branch → PR → merge to `dev`, which builds images and deploys to s89.
-# `main` is left as the upstream-tracking branch and never deploys.
+# `main` is left as the upstream-tracking branch and never deploys via this
+# workflow.
 #
-# One-time server + repo setup is documented in docs/deploy-s89.md.
+# Host layout: stack under `/data/multica`. GitHub Environment `s89` stores
+# POSTGRES_PASSWORD and the optional voice key.
 
 on:
   # Deploy only from the `dev` integration branch, after a PR has already been
-  # merged. PR events must not deploy to the shared s89 environment; they can
-  # build/test in CI, but s89 must always represent dev or an explicit manual
-  # dispatch from dev. Rollback dispatches must name an existing image tag.
+  # merged. PR events must not deploy to the shared s89/dev environment; they
+  # can build/test in CI, but s89 must always represent `dev` or an explicit
+  # manual dispatch from `dev`. Rollback dispatches must name an existing image
+  # tag.
   # Docs-only changes (#354 bug) are excluded — they don't change any code, so
   # triggering a backend rebuild/restart would disconnect all WS connections
   # for zero benefit.
@@ -47,7 +43,7 @@ jobs:
   build:
     # Only build/deploy from the team fork — never upstream or other forks.
     # On manual dispatch with an image_tag we skip building and redeploy that tag.
-    # Empty-tag manual builds must also target dev; s89 never builds a feature ref.
+    # Empty-tag manual builds must also target dev; this lane never builds a feature ref.
     if: >-
       github.repository_owner == 'LRM-Teams' &&
       ((github.event_name == 'push' && github.ref == 'refs/heads/dev') ||
@@ -93,7 +89,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # s89 is x86_64, so amd64-only — no QEMU, no multi-arch manifest merge.
+      # Deploy host is x86_64, so amd64-only — no QEMU, no multi-arch manifest merge.
       - name: Build & push backend
         uses: docker/build-push-action@v6
         with:
@@ -185,6 +181,7 @@ jobs:
           sparse-checkout: |
             docker-compose.selfhost.yml
             docker-compose.s89.yml
+            deploy/s89/Caddyfile
           sparse-checkout-cone-mode: false
 
       - name: Log in to GHCR
@@ -193,7 +190,7 @@ jobs:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 
-      - name: Pull & restart backend + frontend
+      - name: Pull & restart backend + frontend + Caddy
         # POSTGRES_PASSWORD comes from the s89 Environment secret and is the
         # single source of truth for the DB password. Docker Compose gives shell
         # env vars precedence over --env-file, so this value overrides the one in
@@ -203,6 +200,9 @@ jobs:
         # verbatim inside postgres://user:PASSWORD@host, which is not URL-encoded.
         env:
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          # Optional s89 Environment secret. Empty keeps voice endpoints
+          # disabled; the value is passed directly to Compose and never echoed.
+          DOUBAO_SPEECH_API_KEY: ${{ secrets.DOUBAO_SPEECH_API_KEY }}
         run: |
           set -euo pipefail
           owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
@@ -210,8 +210,8 @@ jobs:
           export MULTICA_WEB_IMAGE="ghcr.io/${owner_lc}/multica-web"
           export MULTICA_DB_BRIDGE_IMAGE="ghcr.io/${owner_lc}/multica-db-bridge"
           export MULTICA_IMAGE_TAG="${IMAGE_TAG}"
-          # s89 is the shared dev environment; keep this off by default in
-          # docker-compose.selfhost.yml and opt in only for this deploy lane.
+          # s89/dev is the shared integration environment; keep this off by
+          # default in docker-compose.selfhost.yml and opt in only for this lane.
           export MULTICA_DEV_AGENT_PROFILE_ACCESS=true
           if [ -z "${POSTGRES_PASSWORD:-}" ]; then
             echo "::error::POSTGRES_PASSWORD secret is empty — s89 Environment secret not wired. Aborting to avoid deploying with the wrong DB password."
@@ -225,7 +225,16 @@ jobs:
               -f "${GITHUB_WORKSPACE}/docker-compose.selfhost.yml" \
               -f "${GITHUB_WORKSPACE}/docker-compose.s89.yml" "$@"
           }
-          # postgres + caddy are left running; only the app services roll.
+          # Validate the immutable checkout source before touching the runtime
+          # file. A bad config must not be left behind for the next host restart.
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}/deploy/s89/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2.11.3@sha256:ec18ee54aab3315c22e25f3b2babda73ff8007d39b13b3bd1bfffa2f0444c7d9 \
+            caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          # The runtime path is stable; the Actions checkout is ephemeral.
+          # Install through a sibling file and rename it atomically.
+          install -m 0644 "${GITHUB_WORKSPACE}/deploy/s89/Caddyfile" "${DEPLOY_DIR}/Caddyfile.next"
+          mv -f "${DEPLOY_DIR}/Caddyfile.next" "${DEPLOY_DIR}/Caddyfile"
           # The backend container runs `migrate up` on start (entrypoint.sh).
           compose pull frontend backend
           # Start frontend before backend so Caddy can resolve the frontend DNS name
@@ -233,31 +242,38 @@ jobs:
           # DNS race that caused intermittent 'no such host' errors (#324).
           compose up -d frontend
           compose up -d backend
-          # db-bridge-stub-multica + db-bridge-executor-multica are profile-gated
-          # in the compose file, so naming them explicitly is what starts them.
-          # They share the multica-db-bridge image (the public run_multica server
-          # was dropped - no external LLM relay is needed; only the internal stub
-          # + executor remain). The pull is best-effort: a rollback dispatch that
-          # names a tag predating the db-bridge image must NOT abort the
-          # backend/frontend roll, so warn and leave any existing containers
-          # running.
-          if compose pull db-bridge-stub-multica db-bridge-executor-multica; then
+          # Adopt the one legacy proxy container created before Caddy became a
+          # Compose service. Resolve both its exact name and ownership label
+          # before removal; certificate/config volumes are preserved.
+          if docker container inspect multica-caddy >/dev/null 2>&1; then
+            caddy_service="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' multica-caddy 2>/dev/null || true)"
+            if [ "${caddy_service}" != "caddy" ]; then
+              docker rm -f multica-caddy
+            fi
+          fi
+          # The Caddyfile is a single-file bind mount. Atomic rename changes its
+          # inode, so recreate only Caddy to remount the new file; reload alone
+          # would keep reading the old inode.
+          compose up -d --no-deps --force-recreate caddy
+          # The retained multica-side bridge stub is profile-gated, so naming it
+          # explicitly starts it. AReaL calls Multica directly; the obsolete
+          # multica-side executor was removed in 501dc2861. The pull remains
+          # best-effort so rollback tags predating the bridge image do not abort
+          # an otherwise healthy backend/frontend roll.
+          if compose pull db-bridge-stub-multica; then
             # Gateway stub for multica -> AReaL RL calls (start_session /
             # set_reward / close_segment / chat_completions); run_stub --side
             # multica. Best-effort: a stub failure must not roll back the
             # backend/frontend that already succeeded - warn and leave any
             # existing stub container running.
             compose up -d db-bridge-stub-multica || echo "::warning::db-bridge-stub-multica failed to start; multica -> AReaL RL calls will fail until it runs."
-            # Executor for areal -> multica env-dispatch / DAG fetch;
-            # run_executor --side multica. Best-effort, same as above.
-            compose up -d db-bridge-executor-multica || echo "::warning::db-bridge-executor-multica failed to start; areal -> multica DAG fetch will not be drained."
           else
             echo "::warning::db-bridge image not found at tag ${MULTICA_IMAGE_TAG}; skipping bridge roll (existing containers, if any, keep running). Use a tag built with the db-bridge CD change for a full bridge rollback."
           fi
           # Prune unused Docker images to prevent disk from filling up (#327).
           docker image prune -af
 
-      - name: Verify app containers + Caddy proxy
+      - name: Verify app containers + Caddy HTTP and HTTPS proxies
         run: |
           set -euo pipefail
 
@@ -272,26 +288,32 @@ jobs:
           # Caddy reaches both app services only through their Docker service
           # names. These probes therefore validate the running container,
           # Compose DNS, Caddy upstream routing, and the externally served dev
-          # listener as one boundary. /healthz is served by the frontend itself;
-          # /health is proxied to the backend. Both must be 200.
-          for i in $(seq 1 30); do
+          # listeners as one boundary. The HTTPS probe connects to loopback
+          # while retaining the public IP as the certificate identity, avoiding
+          # dependence on provider NAT hairpin behavior.
+          for i in $(seq 1 45); do
             frontend_id="$(compose ps -q frontend)"
             backend_id="$(compose ps -q backend)"
+            caddy_id="$(compose ps -q caddy)"
             frontend_status="$(docker inspect --format '{{.State.Status}}' "$frontend_id" 2>/dev/null || true)"
             frontend_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$frontend_id" 2>/dev/null || true)"
             backend_status="$(docker inspect --format '{{.State.Status}}' "$backend_id" 2>/dev/null || true)"
-            if [ "$frontend_status" = running ] && [ "$frontend_health" = healthy ] && [ "$backend_status" = running ] && \
+            caddy_status="$(docker inspect --format '{{.State.Status}}' "$caddy_id" 2>/dev/null || true)"
+            if [ "$frontend_status" = running ] && [ "$frontend_health" = healthy ] && [ "$backend_status" = running ] && [ "$caddy_status" = running ] && \
               curl -fsS --max-time 5 http://127.0.0.1:8090/ >/dev/null 2>&1 && \
               curl -fsS --max-time 5 http://127.0.0.1:8090/healthz >/dev/null 2>&1 && \
-              curl -fsS --max-time 5 http://127.0.0.1:8090/health >/dev/null 2>&1; then
-              echo "Frontend healthcheck, backend, and Caddy proxy healthy after $((i * 2))s."
+              curl -fsS --max-time 5 http://127.0.0.1:8090/health >/dev/null 2>&1 && \
+              [ "$(curl -fsS -o /dev/null -w '%{redirect_url}' --max-time 5 -H 'Accept: text/html' http://127.0.0.1:8090/)" = "https://82.157.184.89/" ] && \
+              curl --connect-to 82.157.184.89:443:127.0.0.1:443 -fsS --max-time 5 https://82.157.184.89/healthz >/dev/null 2>&1 && \
+              curl --connect-to 82.157.184.89:443:127.0.0.1:443 -fsS --max-time 5 https://82.157.184.89/health >/dev/null 2>&1; then
+              echo "Frontend, backend, Caddy HTTP, and trusted IP HTTPS healthy after $((i * 2))s."
               exit 0
             fi
-            echo "waiting for frontend health/backend/Caddy proxy readiness... ($i/30) frontend=${frontend_status}/${frontend_health:-none} backend=${backend_status:-none}"
+            echo "waiting for frontend/backend/Caddy/HTTPS readiness... ($i/45) frontend=${frontend_status}/${frontend_health:-none} backend=${backend_status:-none} caddy=${caddy_status:-none}"
             sleep 2
           done
-          echo "::error::frontend healthcheck/Caddy proxy did not pass root + /healthz + /health within 60s."
-          compose ps frontend backend || true
+          echo "::error::frontend/backend/Caddy HTTP redirect + trusted IP HTTPS did not pass within 90s."
+          compose ps frontend backend caddy || true
           docker logs --tail 100 multica-caddy || true
           docker logs --tail 80 multica-frontend-1 || true
           docker logs --tail 80 multica-backend-1 || true
@@ -337,29 +359,3 @@ jobs:
           done
           echo "::warning::db-bridge-stub-multica did not pass /healthz within 60s - investigate the stub container."
           docker logs --tail 80 multica-db-bridge-stub-multica-1 || true
-
-      - name: Health check (db-bridge-executor-multica)
-        # The multica-side executor (areal -> multica env-dispatch / DAG
-        # direction). It is a DB-polling worker with NO HTTP listener, so the
-        # check confirms the container is running and logged "executor ready"
-        # rather than curling a port. Warning-not-error, like the other bridge
-        # services. Skipped when no container is running.
-        if: always()
-        run: |
-          set -uo pipefail
-          name='multica-db-bridge-executor-multica-1'
-          if ! docker ps --format '{{.Names}}' | grep -q "^${name}$"; then
-            echo "::warning::db-bridge-executor-multica container not running - areal -> multica env-dispatch/DAG fetch will not be drained."
-            docker logs --tail 40 "$name" 2>/dev/null || true
-            exit 0
-          fi
-          for i in $(seq 1 15); do
-            if docker logs --tail 50 "$name" 2>&1 | grep -q "executor ready"; then
-              echo "db-bridge-executor-multica ready after $((i * 2))s."
-              exit 0
-            fi
-            echo "waiting for executor readiness... ($i/15)"
-            sleep 2
-          done
-          echo "::warning::db-bridge-executor-multica did not log 'executor ready' within 30s - investigate the executor container (check SUPABASE_URL / BRIDGE_MULTICA_UPSTREAM_URL)."
-          docker logs --tail 80 "$name" || true

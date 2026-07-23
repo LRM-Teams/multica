@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelMessage } from "@multica/core/types";
@@ -88,7 +88,9 @@ vi.mock("../../common/markdown", () => ({
 vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({
     getActorAvatarUrl: () => null,
-    getActorName: () => null,
+    getActorName: () => "Test Actor",
+    getActorInitials: () => "TA",
+    getMemberRole: () => null,
   }),
 }));
 
@@ -114,8 +116,22 @@ vi.mock("@multica/core/agents", () => ({
   }),
 }));
 
+// LRM-364: bubble reaction hover resolves names via member-profile queries.
+// Viewport tests are not about reactor attribution — stub the hook so we stay
+// free of QueryClientProvider (same rationale as agents/paths stubs above).
+vi.mock("../../common/use-reaction-actor-name", () => ({
+  useReactionActorName: () => (type: string, id: string) => id || type,
+}));
+
 vi.mock("@multica/core/paths", () => ({
-  useCurrentWorkspace: () => ({ id: "ws-1" }),
+  useCurrentWorkspace: () => ({ id: "ws-1", slug: "test" }),
+  useWorkspaceSlug: () => "test",
+  useRequiredWorkspaceSlug: () => "test",
+  useWorkspacePaths: () => ({
+    memberDetail: (id: string) => `/test/members/${id}`,
+    squadDetail: (id: string) => `/test/squads/${id}`,
+    agentDetail: (id: string) => `/test/agents/${id}`,
+  }),
 }));
 
 vi.mock("../../i18n", () => ({
@@ -165,7 +181,8 @@ vi.mock("../../i18n/use-t", () => ({
           agent_badge: "Agent",
           feishu_badge: "Feishu",
           copy_action: "Copy",
-          expand_action: "Show full message",
+          expand_action: "See more",
+          collapse_action: "See less",
           copied_toast: "Copied",
           copy_failed_toast: "Copy failed",
           edit_action: "Edit",
@@ -278,6 +295,28 @@ describe("MessageViewport", () => {
     expect(screen.queryByText("daemon_outdated")).not.toBeInTheDocument();
   });
 
+  it("groups consecutive same-author messages into lead + compact rows (LRM-255)", () => {
+    render(
+      <MessageViewport
+        messages={[
+          makeMessage("m1", "First in group"),
+          {
+            ...makeMessage("m2", "Second in group"),
+            created_at: "2026-06-17T09:16:00Z",
+          },
+        ]}
+        currentUserId="user-1"
+        emptyLabel="No messages"
+      />,
+    );
+
+    const rows = screen.getAllByTestId("message-row");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveAttribute("data-message-group", "lead");
+    expect(rows[1]).toHaveAttribute("data-message-group", "compact");
+    expect(screen.getByTestId("message-gutter-time")).toHaveTextContent("09:16");
+  });
+
   it("opens thread lists at the root context when requested", () => {
     render(
       <MessageViewport
@@ -362,8 +401,8 @@ describe("MessageViewport", () => {
     expect(screen.getByTestId("unread-divider")).toHaveTextContent("2 new");
   });
 
-  it("only collapses already-read history messages, never unread messages", () => {
-    const longText = Array.from({ length: 13 }, (_, index) => `History line ${index}`).join("\n");
+  it("collapses long messages for both already-read and unread (Slack parity)", async () => {
+    const longText = Array.from({ length: 20 }, (_, index) => `History line ${index}`).join("\n");
     const messages = [
       { ...makeMessage("m1", longText), seq: 1 },
       { ...makeMessage("m2", longText), seq: 2 },
@@ -378,10 +417,20 @@ describe("MessageViewport", () => {
     );
 
     const bodies = screen.getAllByTestId("message-body");
-    expect(bodies[0]).toHaveTextContent("History line 12");
-    expect(bodies[0]).toHaveAttribute("data-collapsed", "true");
-    expect(bodies[1]).toHaveTextContent("History line 12");
-    expect(bodies[1]).not.toHaveAttribute("data-collapsed");
+    for (const body of bodies) {
+      Object.defineProperties(body, {
+        scrollHeight: { configurable: true, value: 420 },
+        clientHeight: { configurable: true, value: 160 },
+      });
+    }
+    fireEvent(window, new Event("resize"));
+
+    await waitFor(() => {
+      expect(bodies[0]).toHaveAttribute("data-collapsed", "true");
+      expect(bodies[1]).toHaveAttribute("data-collapsed", "true");
+    });
+    expect(bodies[0]).toHaveTextContent("History line 19");
+    expect(bodies[1]).toHaveTextContent("History line 19");
   });
 
   it("renders no divider when the cursor is unknown (BE field absent)", () => {
@@ -600,6 +649,43 @@ describe("ChannelMessageList message edit / delete wiring", () => {
     expect(onEditMessage).toHaveBeenCalledWith(message, "Corrected");
     expect(onReact).not.toHaveBeenCalled();
     expect(onOpenThread).not.toHaveBeenCalled();
+  });
+
+  it("shows skeleton only on cold load (loading with no cached rows)", () => {
+    const { rerender } = render(
+      <ChannelMessageList
+        messages={[]}
+        currentUserId="user-1"
+        emptyLabel="No messages"
+        loading
+      />,
+    );
+    expect(screen.getByTestId("message-rows-skeleton")).toBeInTheDocument();
+
+    rerender(
+      <ChannelMessageList
+        messages={[makeMessage("m1", "Cached while refetching")]}
+        currentUserId="user-1"
+        emptyLabel="No messages"
+        loading
+      />,
+    );
+    expect(screen.queryByTestId("message-rows-skeleton")).not.toBeInTheDocument();
+    expect(screen.getByTestId("message-bubble")).toBeInTheDocument();
+  });
+
+  it("LRM-357: empty thread primary copy uses text-foreground", () => {
+    render(
+      <MessageViewport
+        messages={[]}
+        currentUserId="user-1"
+        emptyLabel="No messages"
+      />,
+    );
+    const empty = screen.getByText("No messages");
+    expect(empty.getAttribute("data-slot")).toBe("message-list-empty");
+    expect(empty.className).toContain("text-foreground");
+    expect(empty.className).not.toContain("text-muted-foreground");
   });
 
   it("deletes through onDeleteMessage and renders a tombstone (non-empty row) for a deleted message", async () => {

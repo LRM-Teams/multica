@@ -19,6 +19,14 @@ func TestNewReturnsCursorBackend(t *testing.T) {
 	}
 }
 
+func TestCursorArgsSize(t *testing.T) {
+	t.Parallel()
+
+	if got := cursorArgsSize([]string{"-p", "hello"}); got != len("-p")+1+len("hello")+1 {
+		t.Fatalf("cursorArgsSize = %d", got)
+	}
+}
+
 func TestBuildCursorArgs(t *testing.T) {
 	t.Parallel()
 
@@ -432,6 +440,28 @@ func TestCursorAccumulateResultUsage(t *testing.T) {
 	}
 }
 
+func TestCursorCurrentResultUsageAndModelAttribution(t *testing.T) {
+	t.Parallel()
+
+	raw := `{"type":"result","subtype":"success","usage":{"inputTokens":26640,"outputTokens":40,"cacheReadTokens":467,"cacheWriteTokens":12}}`
+	var evt cursorStreamEvent
+	if err := json.Unmarshal([]byte(raw), &evt); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	b := &cursorBackend{cfg: Config{Logger: slog.Default()}}
+	usage := make(map[string]TokenUsage)
+	b.accumulateResultUsage(usage, &evt, "composer-2.5-fast", "auto")
+	got := usage["composer-2.5-fast"]
+	want := TokenUsage{InputTokens: 26640, OutputTokens: 40, CacheReadTokens: 467, CacheWriteTokens: 12}
+	if got != want {
+		t.Fatalf("usage = %+v, want %+v", got, want)
+	}
+	if _, ok := usage["cursor"]; ok {
+		t.Fatalf("usage must not fall into the unpriced cursor bucket: %+v", usage)
+	}
+}
+
 func TestCursorUsageOnlyFromResult(t *testing.T) {
 	t.Parallel()
 
@@ -554,7 +584,7 @@ func TestCursorUsageNoDoubleCount(t *testing.T) {
 				switch evt.Type {
 				case "result":
 					b.accumulateResultUsage(resultUsage, &evt)
-					if evt.Usage != nil {
+					if evt.hasResultUsage() {
 						hasResultUsage = true
 					}
 				case "step_finish":

@@ -15,6 +15,11 @@ import {
 import { dmKeys } from "../dm/queries";
 import type { DMItem } from "../dm/types";
 import type { ChannelThreadMessagesPage, MessagePart } from "../types";
+import { userActivityKeys } from "../user-activity/queries";
+import {
+  optimisticallyMarkActivityThreadRead,
+  restoreActivityQueries,
+} from "../user-activity/mutations";
 
 function isConflictError(err: unknown): boolean {
   return err instanceof ApiError && err.status === 409;
@@ -33,7 +38,8 @@ export function useCreateChannel() {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
   return useMutation({
-    mutationFn: (data: { name: string; description?: string; lark_chat_id?: string }) => api.createChannel(data),
+    mutationFn: (data: { name: string; description?: string; lark_chat_id?: string; project_id?: string | null }) =>
+      api.createChannel(data),
     onSuccess: () => qc.invalidateQueries({ queryKey: channelKeys.list(wsId) }),
   });
 }
@@ -157,6 +163,8 @@ export function useSendChannelMessage() {
         removeOptimisticChannelMessage(qc, vars.channelId, vars.clientMessageId);
         return;
       }
+      // Real transport / server failure only — never auto-fail while the request
+      // is still in flight (LRM-280; API abort budget is SEND_TIMEOUT_MS).
       markOptimisticChannelMessageFailed(qc, vars.channelId, vars.clientMessageId);
     },
     onSuccess: (msg) => {
@@ -278,12 +286,17 @@ export function useSendChannelThreadMessage() {
       }
       markOptimisticChannelMessageFailed(qc, vars.channelId, vars.clientMessageId, vars.messageId);
     },
-    onSuccess: (msg) => {
-      const rootId = msg.thread_root_message_id;
-      if (rootId) {
-        upsertChannelMessageThreadInCache(qc, msg, rootId);
-        qc.invalidateQueries({ queryKey: channelKeys.messageThread(msg.channel_id, rootId) });
-      }
+    onSuccess: (msg, vars) => {
+      // Prefer the mutation's thread root — ACK payloads occasionally omit
+      // `thread_root_message_id`, which previously left the optimistic row pending forever.
+      const rootId = msg.thread_root_message_id ?? vars.messageId;
+      const authoritative = msg.thread_root_message_id
+        ? msg
+        : { ...msg, thread_root_message_id: vars.messageId };
+      upsertChannelMessageThreadInCache(qc, authoritative, rootId);
+      // Upsert is authoritative for this send; avoid an immediate thread refetch
+      // that can race the ACK / flash the list (LRM-271/273). Channel-list
+      // invalidate preserves still-in-flight local sends (LRM-280).
       invalidateChannelMessages(qc, msg.channel_id);
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
       qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
@@ -326,11 +339,25 @@ export function useMarkChannelThreadRead() {
   return useMutation({
     mutationFn: ({ channelId, messageId }: { channelId: string; messageId: string }) =>
       api.markChannelThreadRead(channelId, messageId),
-    onSuccess: (_result, vars) => {
+    onMutate: async (vars) => {
+      // Activity Unread must clear when a thread is opened (LRM-379) — do not
+      // wait for the channel ThreadPanel path alone; optimistic patch first.
+      const prevActivity = await optimisticallyMarkActivityThreadRead(
+        qc,
+        wsId,
+        vars.messageId,
+      );
+      return { prevActivity };
+    },
+    onError: (_err, _vars, ctx) => {
+      restoreActivityQueries(qc, ctx?.prevActivity);
+    },
+    onSettled: (_result, _error, vars) => {
       qc.invalidateQueries({ queryKey: channelKeys.messageThread(vars.channelId, vars.messageId) });
       invalidateChannelMessages(qc, vars.channelId);
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
       qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
+      qc.invalidateQueries({ queryKey: userActivityKeys.all(wsId) });
     },
   });
 }
@@ -392,7 +419,7 @@ export function useAddChannelMember() {
       api.addChannelMember(channelId, { member_type: memberType, member_id: memberId }),
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: channelKeys.members(vars.channelId) });
-      // Refresh the list so the composite group avatar reflects the new roster.
+      // Refresh the list so channel member briefs stay current after roster changes.
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
     },
   });

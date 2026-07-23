@@ -221,6 +221,31 @@ export const agentTasksKeys = {
     [...agentTasksKeys.all(wsId), agentId] as const,
 };
 
+export const agentDetailKeys = {
+  all: (wsId: string) => ["workspaces", wsId, "agent"] as const,
+  detail: (wsId: string, agentId: string) =>
+    [...agentDetailKeys.all(wsId), agentId] as const,
+};
+
+/**
+ * Authoritative single-agent fetch by id (LRM-292).
+ *
+ * Panel hosts always use this for body data. ListAgents remains the
+ * workspace directory / invite discovery surface only (LRM-233 still hides
+ * group managers / channel-only agents from that list) — never the open gate.
+ */
+export function agentDetailOptions(wsId: string, agentId: string) {
+  return queryOptions({
+    queryKey: agentDetailKeys.detail(wsId, agentId),
+    queryFn: () => api.getAgent(agentId),
+    enabled: !!wsId && !!agentId,
+    staleTime: 30 * 1000,
+    gcTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: true,
+    retry: false,
+  });
+}
+
 export const memberProfileKeys = {
   all: (wsId: string) => ["workspaces", wsId, "member-profile"] as const,
   detail: (wsId: string, memberType: "user" | "agent", memberId: string) =>

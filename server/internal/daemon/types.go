@@ -157,6 +157,7 @@ type AgentInboxLease struct {
 	LeaseExpiresAt string `json:"lease_expires_at"`
 	SeqTo          int64  `json:"seq_to"`
 	RequiresWake   bool   `json:"requires_wake"`
+	Reason         string `json:"reason,omitempty"`
 	RuntimeID      string `json:"-"`
 }
 
@@ -326,6 +327,7 @@ type TaskResult struct {
 	// InternalOutput is the validated structured result for a restricted
 	// execution. It is deliberately excluded from legacy task completion JSON;
 	// protocol turn persistence consumes it through its own internal contract.
-	InternalOutput         json.RawMessage `json:"-"`
-	OutputSuppressedReason string          `json:"-"`
+	InternalOutput            json.RawMessage `json:"-"`
+	OutputSuppressedReason    string          `json:"-"`
+	ChannelOnboardingDecision string          `json:"-"`
 }

@@ -14,6 +14,15 @@ export function isOptimisticChannelMessage(message: ChannelMessage): boolean {
   return message.local_send_status === "pending" || message.local_send_status === "failed";
 }
 
+/**
+ * Stable list identity across optimistic temp id → server ACK (LRM-273).
+ * Prefer `client_message_id` so Virtuoso / React keys do not remount the row
+ * when the authoritative id lands.
+ */
+export function channelMessageListItemKey(message: ChannelMessage): string {
+  return message.client_message_id || message.id;
+}
+
 function nextOptimisticSeq(messages: readonly ChannelMessage[] | undefined): number {
   if (!messages?.length) return 1;
   let max = 0;
@@ -32,7 +41,7 @@ function stubAttachmentsFromParts(
   if (!parts?.length) return undefined;
   const stubs: Attachment[] = [];
   for (const part of parts) {
-    if (part.type !== "attachment" || !part.attachment_id) continue;
+    if ((part.type !== "attachment" && part.type !== "voice") || !part.attachment_id) continue;
     const download = `/api/attachments/${part.attachment_id}/download`;
     stubs.push({
       id: part.attachment_id,

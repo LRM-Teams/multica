@@ -74,14 +74,15 @@ var (
 // possibly other typed sources later) — those don't show up in
 // GetWorkspaceRepos, so they would be wiped on refresh if we shared one map.
 type workspaceState struct {
-	workspaceID     string
-	runtimeIDs      []string
-	reposVersion    string // stored for future use: skip refresh when version unchanged
-	allowedRepoURLs map[string]struct{}
-	taskRepoURLs    map[string]struct{}
-	settings        json.RawMessage // workspace settings (JSONB)
-	lastRepoSyncErr string
-	repoRefreshMu   sync.Mutex
+	workspaceID        string
+	runtimeIDs         []string
+	reposVersion       string // stored for future use: skip refresh when version unchanged
+	allowedRepoURLs    map[string]struct{}
+	taskRepoURLs       map[string]struct{}
+	settings           json.RawMessage // workspace settings (JSONB)
+	serverCapabilities []string
+	lastRepoSyncErr    string
+	repoRefreshMu      sync.Mutex
 }
 
 type repoCacheBackend interface {
@@ -109,6 +110,19 @@ type Daemon struct {
 
 	wsHBMu      sync.RWMutex         // guards wsHBLastAck
 	wsHBLastAck map[string]time.Time // runtime_id -> last successful WS heartbeat ack timestamp
+
+	reminderCache                    *reminderCache
+	reminderAgents                   *reminderAgentManager
+	reminderWSMu                     sync.RWMutex
+	reminderWrites                   chan<- []byte
+	reminderWSDone                   <-chan struct{}
+	reminderClose                    func() error
+	reminderGateMu                   sync.Mutex
+	reminderLifecycleReplayInFlight  bool
+	reminderReplayComplete           bool
+	reminderProjectionReplayInFlight bool
+	reminderProjectionReplayPending  bool
+	reminderPendingSnapshots         map[string]struct{}
 
 	// runtimeGoneMu guards runtimeGoneInflight, reregisterNextAttempt, and
 	// reregisterLastCompletedAt. The state lets heartbeat / poller / WS-ack
@@ -229,6 +243,9 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		piPersistentRuntimes:      newPiPersistentPool(),
 	}
 	d.runner = taskRunnerFunc(d.runTask)
+	d.reminderCache = newReminderCache(nil, logger, d.onReminderTimer)
+	d.reminderCache.setPersistence(cfg.WorkspacesRoot)
+	d.reminderAgents = newReminderAgentManager(cfg.WorkspacesRoot, logger)
 	d.runUpdateFn = d.runUpdate
 	d.verifyUpdatedBinaryFn = d.verifyUpdatedBinary
 	return d
@@ -252,6 +269,28 @@ func (d *Daemon) agentVersion(provider string) string {
 
 func (d *Daemon) notifyRuntimeSetChanged() {
 	d.runtimeSet.notify()
+}
+
+func (d *Daemon) removeReminderAgent(agentID, runtimeID string, generation int64) error {
+	removed := false
+	if d.reminderAgents != nil {
+		var err error
+		removed, _, err = d.reminderAgents.applyStop(agentID, runtimeID, generation)
+		if err != nil {
+			return err
+		}
+	}
+	if removed && d.reminderCache != nil {
+		if err := d.reminderCache.removeOwner(agentID); err != nil {
+			return err
+		}
+	}
+	if removed {
+		d.reminderGateMu.Lock()
+		delete(d.reminderPendingSnapshots, agentID)
+		d.reminderGateMu.Unlock()
+	}
+	return nil
 }
 
 // reregisterCoalesceWindow caps how often the daemon re-registers a workspace
@@ -450,6 +489,9 @@ func (d *Daemon) removeStaleRuntime(runtimeID string) (string, bool) {
 	d.wsHBMu.Lock()
 	delete(d.wsHBLastAck, runtimeID)
 	d.wsHBMu.Unlock()
+	if d.reminderCache != nil {
+		d.reminderCache.suspend()
+	}
 
 	return workspaceID, true
 }
@@ -523,6 +565,7 @@ func (d *Daemon) reregisterWorkspaceAfterRuntimeGone(ctx context.Context, worksp
 	if len(resp.Settings) > 0 {
 		ws.settings = resp.Settings
 	}
+	ws.serverCapabilities = append([]string(nil), resp.ServerCapabilities...)
 	d.mu.Unlock()
 
 	for _, rid := range newIDs {
@@ -669,6 +712,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 		"auto_update", d.cfg.AutoUpdateEnabled,
 		"launched_by", d.cfg.LaunchedBy,
 	)
+	if err := d.reminderCache.stateError(); err != nil {
+		return fmt.Errorf("reminder cache is not recoverable: %w", err)
+	}
 
 	// Load auth token from CLI config.
 	if err := d.resolveAuth(); err != nil {
@@ -793,6 +839,7 @@ func daemonRegistrationCapabilities(includeCredentialTransport bool) []string {
 		protocol.DaemonCapabilityAgentCLITransport,
 		protocol.DaemonCapabilityMemoryCuration,
 		protocol.DaemonCapabilityRestrictedExecution,
+		protocol.DaemonCapabilityReminderVersionedCache,
 	}
 	if includeCredentialTransport {
 		capabilities = append(capabilities, protocol.DaemonCapabilityAgentCredentialTransport)
@@ -913,13 +960,14 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 	return resp, nil
 }
 
-func newWorkspaceState(workspaceID string, runtimeIDs []string, reposVersion string, repos []RepoData, settings json.RawMessage) *workspaceState {
+func newWorkspaceState(workspaceID string, runtimeIDs []string, reposVersion string, repos []RepoData, settings json.RawMessage, serverCapabilities ...string) *workspaceState {
 	return &workspaceState{
-		workspaceID:     workspaceID,
-		runtimeIDs:      runtimeIDs,
-		reposVersion:    reposVersion,
-		allowedRepoURLs: repoAllowlist(repos),
-		settings:        settings,
+		workspaceID:        workspaceID,
+		runtimeIDs:         runtimeIDs,
+		reposVersion:       reposVersion,
+		allowedRepoURLs:    repoAllowlist(repos),
+		settings:           settings,
+		serverCapabilities: append([]string(nil), serverCapabilities...),
 	}
 }
 
@@ -1351,7 +1399,7 @@ func (d *Daemon) syncWorkspacesFromAPI(ctx context.Context) error {
 			d.logger.Info("registered runtime", "workspace_id", id, "runtime_id", rt.ID, "provider", rt.Provider)
 		}
 		d.mu.Lock()
-		d.workspaces[id] = newWorkspaceState(id, runtimeIDs, resp.ReposVersion, resp.Repos, resp.Settings)
+		d.workspaces[id] = newWorkspaceState(id, runtimeIDs, resp.ReposVersion, resp.Repos, resp.Settings, resp.ServerCapabilities...)
 		for _, rt := range resp.Runtimes {
 			d.runtimeIndex[rt.ID] = rt
 		}
@@ -1393,6 +1441,9 @@ func (d *Daemon) syncWorkspacesFromAPI(ctx context.Context) error {
 		}
 	}
 	if registered > 0 || removed > 0 {
+		if removed > 0 && d.reminderCache != nil {
+			d.reminderCache.suspend()
+		}
 		d.notifyRuntimeSetChanged()
 	}
 
@@ -2424,6 +2475,7 @@ func (d *Daemon) drainInboxTask(ctx context.Context, runtimeID string) (*Task, e
 				LeaseExpiresAt: event.LeaseExpiresAt,
 				SeqTo:          event.SeqTo,
 				RequiresWake:   event.RequiresWake,
+				Reason:         event.Reason,
 				RuntimeID:      runtimeID,
 			}
 			if err := d.client.AckAgentInboxEvent(ctx, lease); err != nil {
@@ -2439,6 +2491,7 @@ func (d *Daemon) drainInboxTask(ctx context.Context, runtimeID string) (*Task, e
 			LeaseExpiresAt: event.LeaseExpiresAt,
 			SeqTo:          event.SeqTo,
 			RequiresWake:   event.RequiresWake,
+			Reason:         event.Reason,
 			RuntimeID:      runtimeID,
 		}
 		return event.Task, nil
@@ -2609,6 +2662,12 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 		return
 	}
 	task = restrictTaskForExecutionProfile(task, profile)
+	if d.reminderAgents != nil {
+		if d.reminderAgents.markRunning(task.AgentID, task.RuntimeID, task.WorkspaceID) {
+			d.requestReminderSnapshot(task.AgentID)
+		}
+		defer d.reminderAgents.markIdle(task.AgentID)
+	}
 
 	// Task-scoped logger with short ID for readable concurrent logs.
 	taskLog := d.logger.With("task", shortID(task.ID), "execution_profile", profile)
@@ -3042,6 +3101,10 @@ func (d *Daemon) reportTaskResultForTask(ctx context.Context, task Task, result 
 			err = d.client.CompleteTask(ctx, taskID, result.Comment, result.BranchName, result.Action, result.Target, result.Type, result.SessionID, result.WorkDir, result.OutputSuppressedReason, result.Parts, result.Reaction, result.RuntimeStats)
 		}
 		if err == nil {
+			if result.Status == "completed" {
+				d.maybeAppendDailyCloseoutStub(task, result)
+				d.reportAgentMemoryWrites(ctx, task)
+			}
 			return
 		}
 		// CompleteTask retries transient errors internally. A transient
@@ -3057,6 +3120,12 @@ func (d *Daemon) reportTaskResultForTask(ctx context.Context, task Task, result 
 		// left is a concrete failure.
 		if isTransientError(err) {
 			taskLog.Error("complete task failed after retries; leaving task in running rather than falling back to fail", "error", err)
+			return
+		}
+		if task.InboxEvent != nil &&
+			task.InboxEvent.Reason == protocol.ChannelOnboardingReason &&
+			result.ChannelOnboardingDecision == "" {
+			taskLog.Error("channel onboarding completion rejected without send or typed skip; leaving delivery for lease retry", "error", err)
 			return
 		}
 		taskLog.Error("complete task rejected by server, falling back to fail", "error", err)
@@ -3228,6 +3297,12 @@ func gateResumeToReusedWorkdir(task *Task, taskCtx *execenv.TaskContextForEnv, e
 		taskCtx.PriorSessionResumed = false
 	}
 	return reused
+}
+
+func isChannelOnboardingSkipReceipt(task Task, output string) bool {
+	return task.InboxEvent != nil &&
+		task.InboxEvent.Reason == protocol.ChannelOnboardingReason &&
+		strings.TrimSpace(output) == protocol.ChannelOnboardingSkipReceipt
 }
 
 func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot int, taskLog *slog.Logger) (TaskResult, error) {
@@ -3974,6 +4049,21 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 
 	switch result.Status {
 	case "completed":
+		if isChannelOnboardingSkipReceipt(task, output) {
+			taskLog.Info("agent produced typed channel onboarding skip receipt")
+			return TaskResult{
+				Status:                    "completed",
+				Comment:                   "",
+				Action:                    protocol.ChatOutputActionNoReply,
+				Type:                      protocol.ChatOutputKindNoReply,
+				ChannelOnboardingDecision: protocol.ChannelOnboardingDecisionSkipped,
+				SessionID:                 result.SessionID,
+				WorkDir:                   env.WorkDir,
+				EnvRoot:                   env.RootDir,
+				Usage:                     usageEntries,
+				RuntimeStats:              runtimeStats,
+			}, nil
+		}
 		if output == "" && len(parts) == 0 && reaction == nil {
 			// The agent completed successfully but produced no text output.
 			// This is valid — the agent may have done all its work via tool

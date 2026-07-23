@@ -52,12 +52,22 @@ vi.mock("@multica/core/identity", async (importOriginal) => {
     resolveActorIdentityPresentation: (m: ChannelMember) => ({
       displayName: m.display_name || m.name || m.member_id,
       handle: `@${m.member_id.slice(0, 8)}`,
+      handleLabel: `@${m.member_id.slice(0, 8)}`,
+      showHandleLabel: true,
     }),
   };
 });
 
 vi.mock("@multica/core/workspace/avatar-url", () => ({
   resolvePublicFileUrl: (url: string | null | undefined) => url ?? null,
+}));
+
+// LRM-224: ChannelMembersList renders identity ActorAvatar (useActorName /
+// QueryClient). Layout tests only care about scroll/chrome classes.
+vi.mock("../../common/actor-avatar", () => ({
+  ActorAvatar: ({ actorId }: { actorId: string }) => (
+    <span data-testid="actor-avatar">{actorId}</span>
+  ),
 }));
 
 function member(
@@ -165,6 +175,34 @@ describe("ChannelMembersDialog (LRM-225)", () => {
 });
 
 describe("ChannelMembersList (LRM-225)", () => {
+  it("shows muted owner/admin role inline and drops bordered role pills (LRM-232)", () => {
+    render(
+      <ChannelMembersList
+        members={[
+          member("u-owner", "Frank", "user"),
+          member("u-member", "Bob", "user"),
+          member("a1", "Agent One", "agent"),
+        ]}
+        emptyLabel="empty"
+        noResultsLabel="none"
+        roleForMember={(m) => {
+          if (m.member_id === "u-owner") return "owner";
+          if (m.member_type === "agent") return "agent";
+          return "member";
+        }}
+        canRemove={false}
+        isMobile={false}
+        currentUserId="me"
+      />,
+    );
+
+    expect(screen.getByTestId("member-role-label")).toHaveTextContent("Owner");
+    expect(screen.queryAllByTestId("member-role-label")).toHaveLength(1);
+    expect(document.querySelector(".rounded-full.border")).toBeNull();
+    expect(screen.queryByText("Agent")).not.toBeInTheDocument();
+    expect(screen.queryByText("Member")).not.toBeInTheDocument();
+  });
+
   it("always shows Remove at ≥44px hit target on mobile", () => {
     render(
       <ChannelMembersList

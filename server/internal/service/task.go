@@ -83,6 +83,14 @@ type TaskService struct {
 	// for this deployment; the hook is then a no-op. Wired in Task 8 (config).
 	Training *TrainingSessionDeps
 
+	// EnvDispatchCheck, when non-nil, checks whether a project was created via
+	// env-dispatch. The interaction-dag seams use this to decide between AReaL
+	// bridge recording (training mode, areal_proxy present) and local
+	// task_messages recording (non-training mode, env-dispatch project without
+	// proxy). Nil = no env-dispatch awareness (no-op for non-proxy tasks).
+	// Wired by the handler in env_dispatch.go (newEnvDispatchDepsAdapter).
+	EnvDispatchCheck EnvDispatchRunChecker
+
 	// EphemeralSandboxCleaner, when non-nil, enables the Phase 5 sandbox
 	// cleanup hook at task terminal. Nil = no-op (sandbox cleanup not
 	// configured). Wired by the handler to the env-sandbox-lifecycle adapter.
@@ -1215,6 +1223,14 @@ func (s *TaskService) CreateAmbientChatTaskRow(ctx context.Context, q *db.Querie
 	return s.createChatTaskRow(ctx, q, chatSession, initiatorUserID, true, 1)
 }
 
+// CreateFreshChatTaskRow inserts a normal-priority fresh-session chat task
+// using the supplied query handle without publishing realtime or daemon wake
+// side effects. Transactional callers must call PublishChatTaskQueued only
+// after the transaction commits successfully.
+func (s *TaskService) CreateFreshChatTaskRow(ctx context.Context, q *db.Queries, chatSession db.ChatSession, initiatorUserID pgtype.UUID) (db.AgentTaskQueue, error) {
+	return s.createChatTaskRow(ctx, q, chatSession, initiatorUserID, true, 2)
+}
+
 func (s *TaskService) enqueueChatTask(ctx context.Context, chatSession db.ChatSession, initiatorUserID pgtype.UUID, forceFreshSession bool, priority int32, interruptFollowup bool) (db.AgentTaskQueue, error) {
 	task, err := s.createChatTaskRow(ctx, s.Queries, chatSession, initiatorUserID, forceFreshSession, priority)
 	if err != nil {
@@ -1893,10 +1909,13 @@ func (s *TaskService) completeTask(ctx context.Context, taskID pgtype.UUID, resu
 	// RouteTerminalTrainingTask ends the RL session (CloseSegmentForEvent exports
 	// the just-closed trajectory over the live session). One-segment-per-task;
 	// the delegation edge to the parent is recorded here at the child's close.
-	if task.IssueID.Valid {
-		if issue, err := s.Queries.GetIssue(ctx, task.IssueID); err == nil {
-			s.closeSegmentForTerminal(ctx, task, util.UUIDToString(issue.ProjectID), s.leanEnvSnapshot(ctx, issue.ProjectID))
-		}
+	// Message dispatch roots carry their project through chat_session rather
+	// than issue_id, so resolve both task shapes before recording.
+	if projectID, err := s.terminalTaskProjectID(ctx, task); err != nil {
+		slog.Warn("interaction_dag: terminal task project lookup failed",
+			"task_id", util.UUIDToString(task.ID), "error", err)
+	} else if projectID.Valid {
+		s.closeSegmentForTerminal(ctx, task, util.UUIDToString(projectID), s.leanEnvSnapshot(ctx, projectID))
 	}
 	s.RouteTerminalTrainingTask(ctx, task)
 	s.maybeCleanupEphemeralSandbox(ctx, task)
@@ -2048,6 +2067,24 @@ func (s *TaskService) completeTask(ctx context.Context, taskID pgtype.UUID, resu
 		CompletedNow: true,
 		RadarRun:     radarRun,
 	}, nil
+}
+
+func (s *TaskService) terminalTaskProjectID(ctx context.Context, task db.AgentTaskQueue) (pgtype.UUID, error) {
+	if task.IssueID.Valid {
+		issue, err := s.Queries.GetIssue(ctx, task.IssueID)
+		if err != nil {
+			return pgtype.UUID{}, err
+		}
+		return issue.ProjectID, nil
+	}
+	if task.ChatSessionID.Valid {
+		session, err := s.Queries.GetChatSession(ctx, task.ChatSessionID)
+		if err != nil {
+			return pgtype.UUID{}, err
+		}
+		return session.ProjectID, nil
+	}
+	return pgtype.UUID{}, nil
 }
 
 func isTerminalAgentTaskStatus(status string) bool {
@@ -2604,6 +2641,10 @@ const ephemeralSandboxContextKey = "ephemeral_sandbox"
 type EphemeralSandboxMarker struct {
 	SandboxInstanceID string `json:"sandbox_instance_id"`
 	ActorUserID       string `json:"actor_user_id"`
+	// CleanupOnTerminal defaults to true when omitted for compatibility with
+	// existing ephemeral rollout tasks. Env-dispatch channels set it false so
+	// their sandbox remains available until the channel cleanup endpoint runs.
+	CleanupOnTerminal *bool `json:"cleanup_on_terminal,omitempty"`
 }
 
 // ExtractEphemeralSandbox reads the Phase 5 ephemeral_sandbox marker from a
@@ -2635,6 +2676,13 @@ func extractEphemeralSandbox(raw []byte) (*EphemeralSandboxMarker, bool) {
 // instance (stop+delete via sandboxd) and mark R' offline. Best-effort — errors
 // are logged but never fail the terminal flow.
 func (s *TaskService) maybeCleanupEphemeralSandbox(ctx context.Context, task db.AgentTaskQueue) {
+	marker, ok := extractEphemeralSandbox(task.Context)
+	if !ok {
+		return // not an ephemeral rollout
+	}
+	if marker.CleanupOnTerminal != nil && !*marker.CleanupOnTerminal {
+		return // lifecycle is owned by an explicit cleanup endpoint
+	}
 	if s.EphemeralSandboxManager != nil {
 		if err := s.EphemeralSandboxManager.Cleanup(ctx, task); err != nil {
 			slog.Warn("ephemeral sandbox cleanup failed",
@@ -2646,10 +2694,6 @@ func (s *TaskService) maybeCleanupEphemeralSandbox(ctx context.Context, task db.
 	}
 	if s.EphemeralSandboxCleaner == nil {
 		return
-	}
-	marker, ok := extractEphemeralSandbox(task.Context)
-	if !ok {
-		return // not an ephemeral rollout
 	}
 
 	// Guard: skip if another active task is still on R' (e.g. a retry child

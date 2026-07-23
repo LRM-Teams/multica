@@ -134,6 +134,11 @@ export function useMessageTime() {
       const prevMs = prev === null ? null : parse(prev);
       return startsNewLocalDay(ms, prevMs, tz);
     },
+    /** HH:mm clock for compact group gutter hover (same-day continuations). */
+    clock: (value: string): string => {
+      const ms = parse(value);
+      return ms === null ? "" : localTime(ms, tz);
+    },
   };
 }
 

@@ -66,6 +66,11 @@ func TestMain(m *testing.M) {
 	hub := realtime.NewHub()
 	go hub.Run()
 	bus := events.New()
+	bus.SubscribeAll(func(event events.Event) {
+		if event.RealtimeDeliveryAck != nil {
+			event.RealtimeDeliveryAck(nil)
+		}
+	})
 	emailSvc := service.NewEmailService()
 	testHandler = New(queries, pool, hub, bus, emailSvc, nil, nil, analytics.NoopClient{}, Config{AllowSignup: true})
 	// httptest.NewRequest defaults RemoteAddr to 192.0.2.1, so every webhook
@@ -78,6 +83,9 @@ func TestMain(m *testing.M) {
 	testHandler.WebhookRateLimiter = NewMemoryWebhookRateLimiter(WebhookRateLimit{Limit: 1_000_000, Window: time.Minute})
 	testHandler.WebhookIPRateLimiter = NewMemoryWebhookIPRateLimiter(WebhookRateLimit{Limit: 1_000_000, Window: time.Minute})
 	testHandler.RuntimeReleaseSource = nil
+	// Keep post-ack agent wake/Feishu work synchronous in tests so
+	// SendChannelMessage* handlers still finish side effects before return.
+	testHandler.SyncChannelMessageSideEffects = true
 	testPool = pool
 
 	testUserID, testWorkspaceID, err = setupHandlerTestFixture(ctx, pool)

@@ -60,7 +60,8 @@ import {
 } from "../../issues/components/pickers/property-picker";
 import { ChevronDown, UserPlus } from "lucide-react";
 import { toast } from "sonner";
-import type { Squad, SquadMember, SquadMemberStatus, SquadMemberStatusValue, Agent, CreateAgentRequest, MemberWithUser } from "@multica/core/types";
+import { cn } from "@multica/ui/lib/utils";
+import type { Squad, SquadMember, SquadMemberStatus, Agent, CreateAgentRequest, MemberWithUser } from "@multica/core/types";
 import { useT } from "../../i18n";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 
@@ -1122,19 +1123,6 @@ function SquadOverviewPane({
 }
 
 // Visual config for the five squad member status buckets. Mirrors
-// availabilityConfig + workloadConfig in packages/views/agents/presence.ts —
-// same semantic tokens so a status dot here matches the agent page's dot.
-// Unknown / null statuses (human members, server-side enum drift) render as
-// a neutral muted pill; this is the "downgrade, don't crash" defense from
-// CLAUDE.md > API Response Compatibility.
-const SQUAD_STATUS_DOT_CLASS: Record<SquadMemberStatusValue, string> = {
-  working: "bg-success",
-  idle: "bg-muted-foreground/40",
-  offline: "bg-muted-foreground/40",
-  unstable: "bg-warning",
-  archived: "bg-muted-foreground/40",
-};
-
 // Members tab body — re-uses the existing list/role editing patterns.
 function SquadMembersTab({
   members,
@@ -1192,38 +1180,38 @@ function SquadMembersTab({
         {members.map((m) => {
           const status = memberStatusById.get(m.member_id);
           const statusValue = status?.status ?? null;
-          const dotClass =
-            statusValue && statusValue in SQUAD_STATUS_DOT_CLASS
-              ? SQUAD_STATUS_DOT_CLASS[statusValue as keyof typeof SQUAD_STATUS_DOT_CLASS]
-              : null;
-          const statusLabel =
-            statusValue === "working" ? t(($) => $.members_tab.status_working)
-              : statusValue === "idle" ? t(($) => $.members_tab.status_idle)
-              : statusValue === "offline" ? t(($) => $.members_tab.status_offline)
-              : statusValue === "unstable" ? t(($) => $.members_tab.status_unstable)
-              : statusValue === "archived" ? t(($) => $.members_tab.status_archived)
-              : null;
+          const archivedMember = statusValue === "archived" || isArchived(m);
           const activeIssues = status?.active_issues ?? [];
           const primaryIssue = activeIssues[0];
           const extraIssueCount = Math.max(0, activeIssues.length - 1);
-          // Show last_active only when the agent isn't currently working —
-          // a "working" pill already implies the agent is live, and a
-          // "last active 2s ago" line next to it is just noise.
+          // LRM-248: list rows use avatar badge only — no name-row Working /
+          // Idle / Unstable word. Last-active stays as secondary meta.
           const showLastActive =
-            m.member_type === "agent" && statusValue && statusValue !== "working" && status?.last_active_at;
+            m.member_type === "agent" &&
+            !archivedMember &&
+            statusValue !== "working" &&
+            !!status?.last_active_at;
           return (
             <div key={m.id} className="group flex items-start gap-3 rounded-lg border p-3">
               <ActorAvatar
                 actorType={m.member_type}
                 actorId={m.member_id}
                 size={32}
-                showStatusDot
+                showStatusDot={m.member_type === "agent" && !archivedMember}
                 enableHoverCard={m.member_type === "agent"}
                 hoverCardVariant="live"
+                className={archivedMember ? "opacity-50 grayscale" : undefined}
               />
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium">{getEntityName(m.member_type, m.member_id)}</span>
+                  <span
+                    className={cn(
+                      "text-sm font-medium",
+                      archivedMember && "text-muted-foreground",
+                    )}
+                  >
+                    {getEntityName(m.member_type, m.member_id)}
+                  </span>
                   <span className="text-xs text-muted-foreground capitalize">{m.member_type}</span>
                   {isLeader(m) && (
                     <span className="inline-flex items-center gap-0.5 text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 px-1.5 py-0.5 rounded">
@@ -1231,10 +1219,9 @@ function SquadMembersTab({
                       {t(($) => $.members_tab.leader_chip)}
                     </span>
                   )}
-                  {m.member_type === "agent" && statusLabel && (
-                    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                      <span className={`h-1.5 w-1.5 rounded-full ${dotClass ?? "bg-muted-foreground/40"}`} />
-                      {statusLabel}
+                  {archivedMember && m.member_type === "agent" && (
+                    <span className="text-xs text-muted-foreground">
+                      {t(($) => $.members_tab.status_archived)}
                     </span>
                   )}
                 </div>

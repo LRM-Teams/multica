@@ -386,6 +386,10 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 			OwnerID:     ownerID,
 		})
 		if err != nil {
+			if isReminderDaemonOutdatedError(err) {
+				writeCodedError(w, http.StatusConflict, "daemon_outdated", "runtime must keep reminder support while active reminders exist")
+				return
+			}
 			obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.RuntimeFailed(
 				uuidToString(ownerID),
 				req.WorkspaceID,
@@ -473,7 +477,17 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		"settings":                repoResp.Settings,
 		"daemon_token":            daemonToken,
 		"daemon_token_expires_at": daemonTokenExpiresAt.UTC().Format(time.RFC3339Nano),
+		"server_capabilities":     negotiatedDaemonCapabilities(capabilities),
 	})
+}
+
+func negotiatedDaemonCapabilities(capabilities []string) []string {
+	for _, capability := range capabilities {
+		if capability == protocol.DaemonCapabilityReminderVersionedCache {
+			return []string{protocol.DaemonCapabilityReminderVersionedCache}
+		}
+	}
+	return []string{}
 }
 
 func (h *Handler) completeRuntimeUpdateOnTargetRegister(r *http.Request, rt db.AgentRuntime, cliVersion string) {
@@ -2304,19 +2318,20 @@ func (h *Handler) ReportTaskProgress(w http.ResponseWriter, r *http.Request) {
 
 // CompleteTask marks a running task as completed.
 type TaskCompleteRequest struct {
-	PRURL                  string                        `json:"pr_url"`
-	Output                 string                        `json:"output"`
-	Action                 string                        `json:"action"`
-	Target                 string                        `json:"target"`
-	Type                   string                        `json:"type"`
-	Parts                  []protocol.MessagePart        `json:"parts"`
-	Reaction               *protocol.ChatReactionPayload `json:"reaction"`
-	OutputSuppressedReason string                        `json:"output_suppressed_reason,omitempty"`
-	MustReplyFailure       bool                          `json:"must_reply_failure,omitempty"`
-	SessionID              string                        `json:"session_id"` // Claude session ID for future resumption
-	WorkDir                string                        `json:"work_dir"`   // working directory used during execution
-	RuntimeStats           *protocol.RuntimeTokenStats   `json:"runtime_stats,omitempty"`
-	InternalOutput         json.RawMessage               `json:"internal_output,omitempty"`
+	PRURL                     string                        `json:"pr_url"`
+	Output                    string                        `json:"output"`
+	Action                    string                        `json:"action"`
+	Target                    string                        `json:"target"`
+	Type                      string                        `json:"type"`
+	Parts                     []protocol.MessagePart        `json:"parts"`
+	Reaction                  *protocol.ChatReactionPayload `json:"reaction"`
+	OutputSuppressedReason    string                        `json:"output_suppressed_reason,omitempty"`
+	MustReplyFailure          bool                          `json:"must_reply_failure,omitempty"`
+	SessionID                 string                        `json:"session_id"` // Claude session ID for future resumption
+	WorkDir                   string                        `json:"work_dir"`   // working directory used during execution
+	RuntimeStats              *protocol.RuntimeTokenStats   `json:"runtime_stats,omitempty"`
+	InternalOutput            json.RawMessage               `json:"internal_output,omitempty"`
+	ChannelOnboardingDecision string                        `json:"channel_onboarding_decision,omitempty"`
 }
 
 func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {

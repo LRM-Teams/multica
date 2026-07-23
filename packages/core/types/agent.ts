@@ -280,6 +280,14 @@ export interface Agent {
   runtime_mode: AgentRuntimeMode;
   /** Display name for the bound runtime, denormalized by the API. */
   runtime_name?: string | null;
+  /**
+   * Presence-safe projection of the bound runtime's connectivity. Always
+   * attached when the runtime row exists — even if ListVisibleAgentRuntimes
+   * hides private runtime *details* from this viewer (LRM-248 AC5).
+   */
+  runtime_status?: "online" | "offline" | null;
+  /** ISO heartbeat from the bound runtime; pairs with `runtime_status`. */
+  runtime_last_seen_at?: string | null;
   runtime_config: Record<string, unknown>;
   custom_args: string[];
   /**
@@ -351,6 +359,47 @@ export interface Agent {
   updated_at: string;
   archived_at: string | null;
   archived_by: string | null;
+  /**
+   * Phase② Memory growth (LRM-303 / LRM-304). Present only on GetAgent when
+   * the agent has ≥1 valid memory write. Omitted for zero writes — FE hides
+   * the growth block. Never attach to message rows.
+   */
+  memory_growth?: AgentMemoryGrowth | null;
+}
+
+/** Tier id for Memory growth (LRM-274 Phase② / LRM-303). */
+export type AgentMemoryGrowthTier = "bronze" | "silver" | "gold" | "platinum";
+
+/** Four-segment bar slot status (LRM-303). */
+export type AgentMemoryGrowthSegmentStatus =
+  | "complete"
+  | "current"
+  | "upcoming";
+
+export interface AgentMemoryGrowthSegment {
+  tier: AgentMemoryGrowthTier | string;
+  tier_label: string;
+  status: AgentMemoryGrowthSegmentStatus | string;
+}
+
+/** Fine progress toward the next tier (`Next · n/m writes`). */
+export interface AgentMemoryGrowthNext {
+  tier: AgentMemoryGrowthTier | string;
+  tier_label: string;
+  current: number;
+  required: number;
+}
+
+/**
+ * Profile/card Memory growth payload from LRM-303
+ * (`GET /api/agents/:id` / full member profile).
+ */
+export interface AgentMemoryGrowth {
+  total_writes: number;
+  tier: AgentMemoryGrowthTier | string;
+  tier_label: string;
+  segments: AgentMemoryGrowthSegment[];
+  next?: AgentMemoryGrowthNext | null;
 }
 
 /**

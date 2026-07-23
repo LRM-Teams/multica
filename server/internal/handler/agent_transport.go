@@ -282,7 +282,26 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	onboarding, isChannelOnboarding, err := channelOnboardingForTransport(r.Context(), h.DB, source)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to validate channel onboarding send")
+		return
+	}
+	if isChannelOnboarding {
+		if err := h.requireActiveChannelOnboardingBeforeTarget(r.Context(), onboarding, source.inboxEventID); err != nil {
+			if errors.Is(err, errChannelOnboardingExpired) {
+				writeError(w, http.StatusConflict, errChannelOnboardingExpired.Error())
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "failed to validate channel onboarding membership generation")
+			return
+		}
+	}
 	if req.SendDraft {
+		if isChannelOnboarding {
+			writeError(w, http.StatusBadRequest, "channel onboarding cannot send a saved draft")
+			return
+		}
 		h.agentTransportSendDraft(w, r, source, req)
 		return
 	}
@@ -298,6 +317,17 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
+	parts, err = h.normalizeLegacyAgentAudioVoiceReply(r.Context(), source, content, parts)
+	if err != nil {
+		slog.Warn("agent transport audio modality inspection failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to validate message attachments")
+		return
+	}
+	content, parts, err = messageparts.Normalize(content, parts)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid message parts: "+err.Error())
+		return
+	}
 	if strings.TrimSpace(content) == "" && len(parts) == 0 {
 		writeError(w, http.StatusBadRequest, "content, sticker, or attachment is required")
 		return
@@ -307,6 +337,9 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	clientMessageID := strings.TrimSpace(req.ClientMessageID)
+	if isChannelOnboarding {
+		clientMessageID = channelOnboardingClientMessageID(source.inboxEventID)
+	}
 	if clientMessageID == "" {
 		writeError(w, http.StatusBadRequest, "client_message_id is required")
 		return
@@ -320,6 +353,21 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid target; use #channel, #channel:<threadId>, or `dm:@<human-handle>` (for a proactive DM: `multica message send --target dm:@<human-handle> --message-stdin`)")
 		return
 	}
+	if isChannelOnboarding && !channelOnboardingTargetMatches(onboarding, target) {
+		writeError(w, http.StatusBadRequest, "channel onboarding must send to the joined channel main timeline")
+		return
+	}
+	parts, err = h.enforceAgentTransportVoiceReply(r.Context(), source, target, content, parts)
+	if err != nil {
+		slog.Warn("agent transport voice modality inspection failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to preserve reply modality")
+		return
+	}
+	content, parts, err = messageparts.Normalize(content, parts)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid message parts: "+err.Error())
+		return
+	}
 	_, err = h.finalizedAgentTransportInsertInput(r.Context(), source, target, content, parts, clientMessageID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -330,11 +378,14 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusForbidden, err.Error())
 		return
 	}
-	seenUpToSeq, err := h.agentTransportSeenUpToSeq(r.Context(), source, target.raw, req.SeenUpToSeq)
-	if err != nil {
-		slog.Warn("agent transport freshness check failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to send message")
-		return
+	seenUpToSeq := int64(-1)
+	if !isChannelOnboarding {
+		seenUpToSeq, err = h.agentTransportSeenUpToSeq(r.Context(), source, target.raw, req.SeenUpToSeq)
+		if err != nil {
+			slog.Warn("agent transport freshness check failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to send message")
+			return
+		}
 	}
 	result, err := h.createAgentTransportMessage(r.Context(), source, target, content, parts, attachmentIDs, clientMessageID, seenUpToSeq, initiatorID, false)
 	if err != nil {
@@ -345,6 +396,10 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		}
 		if errors.Is(err, errChannelClientMessageConflict) {
 			writeError(w, http.StatusConflict, "client_message_id conflicts with an existing channel message")
+			return
+		}
+		if errors.Is(err, errChannelOnboardingExpired) {
+			writeError(w, http.StatusConflict, errChannelOnboardingExpired.Error())
 			return
 		}
 		slog.Warn("agent transport send failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
@@ -372,6 +427,59 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 			"created":    result.Created,
 		},
 	)
+}
+
+// normalizeLegacyAgentAudioVoiceReply upgrades the one message shape emitted
+// by runtimes that predate `message send --voice`. The attachment is inspected
+// only as an owned modality signal; clients synthesize playback from content.
+func (h *Handler) normalizeLegacyAgentAudioVoiceReply(
+	ctx context.Context,
+	source agentTransportSource,
+	content string,
+	parts []protocol.MessagePart,
+) ([]protocol.MessagePart, error) {
+	if strings.TrimSpace(content) == "" || len(parts) != 2 {
+		return parts, nil
+	}
+	var attachmentID string
+	textParts := 0
+	for _, part := range parts {
+		switch part.Type {
+		case protocol.MessagePartTypeText:
+			if strings.TrimSpace(part.Text) != "" {
+				textParts++
+			}
+		case protocol.MessagePartTypeAttachment:
+			attachmentID = strings.TrimSpace(part.AttachmentID)
+		default:
+			return parts, nil
+		}
+	}
+	if textParts != 1 || attachmentID == "" {
+		return parts, nil
+	}
+
+	var contentType string
+	err := h.DB.QueryRow(ctx, `
+		SELECT content_type
+		FROM attachment
+		WHERE id = $1
+		  AND workspace_id = $2
+		  AND uploader_type = 'agent'
+		  AND uploader_id = $3`,
+		parseUUID(attachmentID), source.origin.workspaceID, source.origin.agentID,
+	).Scan(&contentType)
+	if errorsIsNoRows(err) {
+		return parts, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("inspect legacy agent audio attachment: %w", err)
+	}
+	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(contentType)), "audio/") {
+		return parts, nil
+	}
+
+	return append(parts, protocol.MessagePart{Type: protocol.MessagePartTypeVoice}), nil
 }
 
 func (h *Handler) AgentTransportReactMessage(w http.ResponseWriter, r *http.Request) {
@@ -527,6 +635,17 @@ func (h *Handler) agentTransportSendDraft(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "invalid saved draft: "+err.Error())
 		return
 	}
+	parts, err = h.enforceAgentTransportVoiceReply(r.Context(), source, target, content, parts)
+	if err != nil {
+		slog.Warn("agent transport draft voice modality inspection failed", "agent_id", uuidToString(source.task.AgentID), "target", draft.Target, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to preserve reply modality")
+		return
+	}
+	content, parts, err = messageparts.Normalize(content, parts)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid saved draft: "+err.Error())
+		return
+	}
 	if _, err := h.finalizedAgentTransportInsertInput(r.Context(), source, target, content, parts, draft.ClientMessageID); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -592,6 +711,103 @@ func (h *Handler) agentTransportSendDraft(w http.ResponseWriter, r *http.Request
 			"decision_fact_id": sentDraft.DecisionFactID,
 		},
 	)
+}
+
+// enforceAgentTransportVoiceReply preserves the delivery modality selected by
+// a human voice message at the final visible-message boundary. Prompt guidance
+// remains useful for the model, but it cannot be the only guarantee: runtimes
+// may omit --voice while still producing a valid text send.
+//
+// The source and destination must be the same timeline. This prevents a voice
+// trigger from changing proactive output to another channel or thread.
+func (h *Handler) enforceAgentTransportVoiceReply(
+	ctx context.Context,
+	source agentTransportSource,
+	target agentTransportTarget,
+	content string,
+	parts []protocol.MessagePart,
+) ([]protocol.MessagePart, error) {
+	if strings.TrimSpace(content) == "" || channelMessageHasVoicePart(parts) {
+		return parts, nil
+	}
+
+	sourceMessageID, err := h.agentTransportSourceMessageID(ctx, source)
+	if err != nil {
+		return nil, err
+	}
+	if !sourceMessageID.Valid {
+		return parts, nil
+	}
+	trigger, found := h.channelMessageByID(
+		ctx,
+		uuidToString(source.origin.workspaceID),
+		uuidToString(source.origin.channelID),
+		uuidToString(sourceMessageID),
+	)
+	if !found {
+		return nil, fmt.Errorf("source channel message %s not found", uuidToString(sourceMessageID))
+	}
+	return agentTransportVoiceReplyParts(trigger, target, content, parts), nil
+}
+
+func (h *Handler) agentTransportSourceMessageID(ctx context.Context, source agentTransportSource) (pgtype.UUID, error) {
+	if !source.inboxEventID.Valid {
+		return h.channelReactionTargetFromPrompt(ctx, source.task.ChatSessionID, source.task.ID), nil
+	}
+	var sourceMessageID pgtype.UUID
+	if err := h.DB.QueryRow(ctx, `
+		SELECT source_message_id
+		FROM agent_inbox_event
+		WHERE id = $1`, source.inboxEventID).Scan(&sourceMessageID); err != nil {
+		return pgtype.UUID{}, fmt.Errorf("load inbox source message: %w", err)
+	}
+	return sourceMessageID, nil
+}
+
+func agentTransportVoiceReplyTargetMatches(trigger ChannelMessageResponse, target agentTransportTarget) bool {
+	if !channelMessageIsHumanAuthored(trigger.Type) || !channelMessageHasVoicePart(trigger.Parts) || trigger.ChannelID != target.channel.ID {
+		return false
+	}
+	if trigger.ThreadRootMessageID == nil {
+		if target.kind != chatOutputTargetThread {
+			return true
+		}
+		return trigger.ID != "" && trigger.ID == uuidToString(target.threadRootMessageID)
+	}
+	return target.kind == chatOutputTargetThread && *trigger.ThreadRootMessageID == uuidToString(target.threadRootMessageID)
+}
+
+func agentTransportVoiceReplyParts(trigger ChannelMessageResponse, target agentTransportTarget, content string, parts []protocol.MessagePart) []protocol.MessagePart {
+	if !agentTransportHasReplyText(content, parts) || channelMessageHasVoicePart(parts) || !agentTransportVoiceReplyTargetMatches(trigger, target) {
+		return parts
+	}
+	out := append([]protocol.MessagePart(nil), parts...)
+	if !agentTransportPartsHaveText(out) {
+		out = append(out, protocol.MessagePart{Type: protocol.MessagePartTypeText, Text: content})
+	}
+	return append(out, protocol.MessagePart{Type: protocol.MessagePartTypeVoice})
+}
+
+func agentTransportHasReplyText(content string, parts []protocol.MessagePart) bool {
+	if strings.TrimSpace(content) == "" {
+		return false
+	}
+	if agentTransportPartsHaveText(parts) {
+		return true
+	}
+	// Normalize derives content from sticker alt text for sticker-only sends.
+	// That label is not an answer transcript and must not be synthesized as
+	// speech. Explicit text alongside a sticker differs from the fallback.
+	return strings.TrimSpace(content) != messageparts.FallbackContent(parts)
+}
+
+func agentTransportPartsHaveText(parts []protocol.MessagePart) bool {
+	for _, part := range parts {
+		if part.Type == protocol.MessagePartTypeText && strings.TrimSpace(part.Text) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *Handler) AgentTransportSearchMessages(w http.ResponseWriter, r *http.Request) {
@@ -916,7 +1132,7 @@ func (h *Handler) createAgentTransportMessage(ctx context.Context, source agentT
 	if err != nil {
 		return agentTransportMessageResult{}, err
 	}
-	if seenUpToSeq <= 0 {
+	if seenUpToSeq == 0 {
 		var err error
 		seenUpToSeq, err = h.agentTransportSeenUpToSeq(ctx, source, target.raw, 0)
 		if err != nil {
@@ -942,14 +1158,24 @@ func (h *Handler) createAgentTransportMessage(ctx context.Context, source agentT
 			h.clearDMHiddenForChannelMembers(ctx, target.channel.WorkspaceID, input.ChannelID)
 		}
 		h.publishChannelToMembers(ctx, protocol.EventChannelMessage, target.channel.WorkspaceID, "agent", uuidToString(source.origin.agentID), input.ChannelID, result.Message)
+		// Ack path: WS already published so the channel can render immediately.
+		// Mention wake / ambient delivery / Feishu are O(agents)/network — same
+		// LRM-272 contract as human SendChannelMessage; do not inflate
+		// `multica message send` RTT (Activity "Running command").
 		if target.channel.Kind == "group" {
-			h.ingestWendyAgentGroupMessage(ctx, target.channel, result.Message, source.origin.agentID)
-			if target.threadRootMessageID.Valid {
-				h.dispatchChannelThreadReplyMentions(ctx, target.channel, result.Message, initiatorID)
-			} else {
-				h.dispatchChannelMentions(ctx, target.channel, result.Message, initiatorID)
-			}
-			h.sendChannelMessageToFeishu(ctx, target.channel, result.Message.AuthorName, result.Message.Content)
+			ch := target.channel
+			msg := result.Message
+			agentID := source.origin.agentID
+			threadRoot := target.threadRootMessageID
+			h.runAfterChannelMessageAck(ctx, func(ctx context.Context) {
+				h.ingestWendyAgentGroupMessage(ctx, ch, msg, agentID)
+				if threadRoot.Valid {
+					h.dispatchChannelThreadReplyMentions(ctx, ch, msg, initiatorID)
+				} else {
+					h.dispatchChannelMentions(ctx, ch, msg, initiatorID)
+				}
+				h.sendChannelMessageToFeishu(ctx, ch, msg.AuthorName, msg.Content)
+			})
 		}
 	}
 	return result, nil
@@ -990,6 +1216,32 @@ func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, sour
 	if err := h.lockAgentTransportDraftSource(ctx, tx, source, target); err != nil {
 		_ = tx.Rollback(ctx)
 		return agentTransportMessageResult{}, err
+	}
+	onboarding, isChannelOnboarding, err := channelOnboardingForTransport(ctx, tx, source)
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		return agentTransportMessageResult{}, err
+	}
+	if isChannelOnboarding {
+		if !channelOnboardingTargetMatches(onboarding, target) {
+			_ = tx.Rollback(ctx)
+			return agentTransportMessageResult{}, errors.New("channel onboarding target changed before send")
+		}
+		active, err := channelOnboardingGenerationActiveTx(ctx, tx, onboarding.ID, onboarding.ChannelID, onboarding.AgentID, true)
+		if err != nil {
+			_ = tx.Rollback(ctx)
+			return agentTransportMessageResult{}, err
+		}
+		if !active {
+			if err := expireChannelOnboardingForInboxEventTx(ctx, tx, onboarding, source.inboxEventID); err != nil {
+				_ = tx.Rollback(ctx)
+				return agentTransportMessageResult{}, err
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return agentTransportMessageResult{}, err
+			}
+			return agentTransportMessageResult{}, errChannelOnboardingExpired
+		}
 	}
 	var sentDraft *agentTransportDraft
 	if sendSavedDraft {
@@ -1113,6 +1365,31 @@ func (h *Handler) lockAgentTransportDraftSource(ctx context.Context, exec dbExec
 }
 
 func (h *Handler) completeDuplicateAgentTransportMessageWithExec(ctx context.Context, exec dbExecutor, source agentTransportSource, target agentTransportTarget, input channelMessageInsertInput, attachmentIDs []pgtype.UUID, existing ChannelMessageResponse, clientMessageID string, sentDraft *agentTransportDraft) (agentTransportMessageResult, error) {
+	_, isChannelOnboarding, err := channelOnboardingForTransport(ctx, exec, source)
+	if err != nil {
+		return agentTransportMessageResult{}, err
+	}
+	if isChannelOnboarding {
+		// The deterministic onboarding client id represents one canonical
+		// visible decision. A retry after the first transaction committed must
+		// reuse both the message and its audit evidence; recording another audit
+		// would make one decision look like multiple sends.
+		var transportID pgtype.UUID
+		if err := exec.QueryRow(ctx, `
+			SELECT id
+			FROM agent_task_transport_audit
+			WHERE inbox_event_id = $1
+			  AND action = 'message_send'
+			  AND channel_message_id = $2
+			ORDER BY created_at, id
+			LIMIT 1`, source.inboxEventID, parseUUID(existing.ID)).Scan(&transportID); err != nil {
+			return agentTransportMessageResult{}, err
+		}
+		if err := h.deleteAgentTransportDraftWithExec(ctx, exec, source, target.raw); err != nil {
+			return agentTransportMessageResult{}, err
+		}
+		return agentTransportMessageResult{Message: existing, Created: false, TransportID: uuidToString(transportID), SentDraft: sentDraft}, nil
+	}
 	ok, err := h.matchesChannelMessageIdempotencyPayload(ctx, existing, input, attachmentIDs)
 	if err != nil {
 		return agentTransportMessageResult{}, err
@@ -1484,7 +1761,7 @@ func writeAgentTransportHeldResponse(w http.ResponseWriter, target agentTranspor
 		Reason:              "newer_messages_available",
 		Decision:            "local_hold",
 		ProducerFactID:      decision.ProducerID,
-		AvailableActions:    []string{"send_draft"},
+		AvailableActions:    []string{"send_draft", "revise_message"},
 		HeldMessages:        decision.Messages,
 		NewMessageCount:     decision.TotalNewer,
 		ShownMessageCount:   int64(len(decision.Messages)),
@@ -1814,6 +2091,19 @@ func (h *Handler) inboxEventHasAgentTransportVisibleOutput(ctx context.Context, 
 			SELECT 1
 			FROM agent_task_transport_audit
 			WHERE inbox_event_id = $1 AND action IN ('message_send', 'message_react')
+			  AND channel_message_id IS NOT NULL
+		)`, eventID).Scan(&exists)
+	return err == nil && exists
+}
+
+func (h *Handler) inboxEventHasAgentTransportMessageOutput(ctx context.Context, eventID pgtype.UUID) bool {
+	var exists bool
+	err := h.DB.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM agent_task_transport_audit
+			WHERE inbox_event_id = $1
+			  AND action = 'message_send'
 			  AND channel_message_id IS NOT NULL
 		)`, eventID).Scan(&exists)
 	return err == nil && exists

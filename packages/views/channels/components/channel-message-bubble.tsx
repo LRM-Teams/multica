@@ -2,9 +2,11 @@
 
 import {
   lazy,
+  memo,
   Suspense,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type PointerEvent,
@@ -13,7 +15,6 @@ import { Copy, MessageSquare, MoreHorizontal, Pencil, Quote, Trash2, SmilePlus }
 import { toast } from "sonner";
 import { ReactionBar } from "@multica/ui/components/common/reaction-bar";
 import { QuickEmojiPicker } from "@multica/ui/components/common/quick-emoji-picker";
-import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { cn } from "@multica/ui/lib/utils";
 import {
@@ -23,16 +24,14 @@ import {
   ContextMenuTrigger,
 } from "@multica/ui/components/ui/context-menu";
 import { useActorName } from "@multica/core/workspace/hooks";
+import { useReactionActorName } from "../../common/use-reaction-actor-name";
 import type { ChannelMessage } from "@multica/core/types";
+import type { OpenAgentPanelFn } from "@multica/core/agents";
+import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
-import { avatarGlyph } from "../../common/initials";
 import { InlineReferenceContent } from "../../common/inline-reference-content";
 import { useT } from "../../i18n/use-t";
 import { useMessageTime } from "../../i18n/use-message-time";
-import {
-  authorAvatarCacheKey,
-  resolveCachedAuthorAvatarUrl,
-} from "./author-avatar-cache";
 import {
   mentionResolverFrom,
   projectReferencesToText,
@@ -44,6 +43,8 @@ import {
   unwrapStructuredPreviewContent,
 } from "./message-parts-preview";
 import { MessageBody } from "./message-body";
+import { MessageInlineEditor } from "./message-inline-editor";
+import { areChannelMessageBubblePropsEqual } from "./channel-message-render-equality";
 import { MessageQuoteCard } from "./message-quote";
 import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
 import {
@@ -59,7 +60,14 @@ import {
   ReminderSystemEventContent,
 } from "./channel-system-event-content";
 import { messageMentionsViewer } from "../../common/content-mentions-viewer";
-import { SELF_MENTION_ROW_CLASS } from "../../common/mention-token";
+import {
+  messageCollapseFadeClassName,
+  resolveMessageCollapseFadeVariant,
+  SELF_MENTION_ROW_CLASS,
+  SELF_MENTION_ROW_MENTION_CLASS,
+} from "../../common/mention-token";
+import { VoiceMessageAudio } from "./voice-message-audio";
+import { resolveVoiceMessagePresentation } from "../lib/voice-message-presentation";
 
 const FullEmojiPicker = lazy(() =>
   import("@multica/ui/components/common/emoji-picker").then((m) => ({
@@ -70,9 +78,12 @@ const FullEmojiPicker = lazy(() =>
 const LONG_PRESS_MS = 450;
 const TOUCH_MOVE_CANCEL_PX = 8;
 const MOBILE_THREAD_TAP_FEEDBACK_MS = 120;
-const HISTORY_MESSAGE_COLLAPSE_HEIGHT_CLASS = "max-h-[min(260px,55vh)] md:max-h-[360px]";
-const HISTORY_MESSAGE_COLLAPSE_MIN_CHARS = 800;
-const HISTORY_MESSAGE_COLLAPSE_MIN_LINES = 12;
+/** LRM-268 / design-long-message-slack-vs-multica.html — Slack collapsed body height. */
+export const MESSAGE_COLLAPSE_MAX_HEIGHT_PX = 160;
+/** Fade overlay height — light bottom wash only (LRM-302); must not center-cover text. */
+export const MESSAGE_COLLAPSE_FADE_HEIGHT_PX = 40;
+const MESSAGE_COLLAPSE_HEIGHT_CLASS = "max-h-[160px]";
+const MESSAGE_COLLAPSE_OVERFLOW_EPSILON_PX = 2;
 
 function isInteractiveMessageTarget(target: EventTarget | null) {
   if (!(target instanceof Element)) return false;
@@ -94,13 +105,6 @@ function isMobileActionViewport() {
     window.innerWidth < 768 ||
     window.matchMedia?.("(max-width: 767px)").matches ||
     window.matchMedia?.("(pointer: coarse)").matches
-  );
-}
-
-function isLongHistoryMessageText(text: string) {
-  return (
-    text.length >= HISTORY_MESSAGE_COLLAPSE_MIN_CHARS ||
-    text.split(/\r?\n/).length >= HISTORY_MESSAGE_COLLAPSE_MIN_LINES
   );
 }
 
@@ -195,78 +199,11 @@ function ChannelSystemMessageRow({
 }
 
 /**
- * Inline single-message editor. Enter (without Shift) saves, Escape cancels —
- * a save calls back into the bubble's onEdit (a PATCH), never a re-send, so an
- * edit can never produce a new agent wake (H5).
- */
-function MessageInlineEditor({
-  value,
-  onChange,
-  onSave,
-  onCancel,
-  editLabel,
-  saveLabel,
-  cancelLabel,
-}: {
-  value: string;
-  onChange: (next: string) => void;
-  onSave: () => void;
-  onCancel: () => void;
-  editLabel: string;
-  saveLabel: string;
-  cancelLabel: string;
-}) {
-  // Move focus into the editor the user just opened (the Edit trigger it
-  // replaced has unmounted). A stable ref callback focuses once on mount —
-  // no autoFocus prop, no effect.
-  const focusOnMount = useCallback((node: HTMLTextAreaElement | null) => {
-    node?.focus();
-  }, []);
-  return (
-    <div data-testid="message-editor" className="mt-0.5">
-      <textarea
-        ref={focusOnMount}
-        aria-label={editLabel}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" && !event.shiftKey) {
-            event.preventDefault();
-            onSave();
-          } else if (event.key === "Escape") {
-            event.preventDefault();
-            onCancel();
-          }
-        }}
-        rows={2}
-        className="w-full resize-none rounded-md border border-input bg-card px-2 py-1.5 text-sm leading-6 text-ink outline-none focus-visible:ring-1 focus-visible:ring-ring"
-      />
-      <div className="mt-1.5 flex items-center gap-2">
-        <button
-          type="button"
-          onClick={onSave}
-          className="inline-flex h-7 items-center rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        >
-          {saveLabel}
-        </button>
-        <button
-          type="button"
-          onClick={onCancel}
-          className="inline-flex h-7 items-center rounded-md px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        >
-          {cancelLabel}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-/**
  * One message in the shared Channel/DM/Thread timeline. Ordinary text renders
  * as an IM-style message item, while quote/attachment/code-like content keeps
  * local structure inside the shared Markdown pipeline.
  */
-export function ChannelMessageBubble({
+export const ChannelMessageBubble = memo(function ChannelMessageBubble({
   message,
   currentUserId,
   ownName,
@@ -281,7 +218,13 @@ export function ChannelMessageBubble({
   onRetrySend,
   searchHighlighted = false,
   searchQuery,
-  collapseLongContent = false,
+  /**
+   * Slack parity (LRM-268): long bodies clamp for every message (read + unread).
+   * Pass false only in tests that need an uncapped body.
+   */
+  collapseLongContent = true,
+  /** Slack-style continuation: no avatar/name row; gutter shows HH:mm on hover. */
+  compact = false,
 }: {
   message: ChannelMessage;
   currentUserId: string | null;
@@ -304,19 +247,29 @@ export function ChannelMessageBubble({
   onEdit?: (message: ChannelMessage, content: string) => void;
   /** Soft-delete the viewer's own message; the bubble then renders a tombstone. */
   onDelete?: (message: ChannelMessage) => void;
-  /** Opens the side agent file/public-info panel for agent-authored messages. */
-  onOpenAgent?: (agentId: string) => void;
+  /** Opens the side agent file/public-info panel for agent-authored messages
+   *  (LRM-292: agentId + optional row identity snapshot). */
+  onOpenAgent?: OpenAgentPanelFn;
   /** One-click retry for a failed optimistic send (reuses `client_message_id`). */
   onRetrySend?: (message: ChannelMessage) => void;
   /** Search hit: marks matching visible text while search is open. */
   searchHighlighted?: boolean;
   /** Trimmed conversation search phrase to mark inside this hit's visible text. */
   searchQuery?: string;
-  /** Visually clamp already-read long history while keeping the full DOM/copy payload intact. */
+  /** When true (default), clamp overflowing bodies to Slack's collapsed height. */
   collapseLongContent?: boolean;
+  /** When true, render as a same-author continuation (avatar/name hidden). */
+  compact?: boolean;
+// LRM-268 adds contentExpanded/contentOverflows; mobileOverlay already uses a
+// union instead of three booleans (#568). Full useReducer consolidation is a
+// separate refactor of this ~1100-line component — suppress to unblock CI.
+// react-doctor-disable-next-line react-doctor/prefer-useReducer
 }) {
   const { t } = useT("channels");
-  const { getActorName, getActorAvatarUrl } = useActorName();
+  const { getActorName } = useActorName();
+  // LRM-364: group managers miss ListAgents → resolve via member-profile, never
+  // surface "Unknown Agent" in the reaction hover card.
+  const getReactionActorName = useReactionActorName(message.reactions ?? []);
   const resolveMentionPreview = mentionResolverFrom(getActorName);
   const messageTime = useMessageTime();
   const [editDraft, setEditDraft] = useState<string | null>(null);
@@ -330,12 +283,19 @@ export function ChannelMessageBubble({
   const mobileActionsOpen = mobileOverlay === "actions";
   const mobileReactionOpen = mobileOverlay === "reaction" || mobileOverlay === "reaction-full";
   const mobileReactionShowFull = mobileOverlay === "reaction-full";
-  const [expandedContentKey, setExpandedContentKey] = useState<string | null>(null);
+  // Key expansion to the message identity so a recycled row cannot keep another
+  // bubble's See-more choice (no prop→state effect; LRM-268 / react-doctor).
+  const collapseIdentity = `${message.id}\0${message.content ?? ""}\0${message.parts?.length ?? 0}\0${message.attachments?.length ?? 0}`;
+  const [expandedForIdentity, setExpandedForIdentity] = useState<string | null>(null);
+  const contentExpanded = expandedForIdentity === collapseIdentity;
+  const [contentOverflows, setContentOverflows] = useState(false);
   const [mobileThreadTapActive, setMobileThreadTapActive] = useState(false);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tapFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mobileActionsDialogRef = useRef<HTMLDialogElement | null>(null);
   const mobileReactionDialogRef = useRef<HTMLDialogElement | null>(null);
+  const messageBodyRef = useRef<HTMLDivElement | null>(null);
+  const measureContentOverflowRef = useRef<() => void>(() => {});
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const touchCancelledRef = useRef(false);
 
@@ -361,6 +321,53 @@ export function ChannelMessageBubble({
     if (typeof dialog.showModal === "function") dialog.showModal();
     else dialog.setAttribute("open", "");
   }, []);
+
+  const measureContentOverflow = useCallback(() => {
+    const body = messageBodyRef.current;
+    if (!body || !collapseLongContent) {
+      setContentOverflows(false);
+      return;
+    }
+    // scrollHeight stays the full content height even while max-height clips.
+    const overflows =
+      body.scrollHeight > MESSAGE_COLLAPSE_MAX_HEIGHT_PX + MESSAGE_COLLAPSE_OVERFLOW_EPSILON_PX;
+    setContentOverflows((previous) => (previous === overflows ? previous : overflows));
+  }, [collapseLongContent]);
+  measureContentOverflowRef.current = measureContentOverflow;
+
+  useLayoutEffect(() => {
+    if (!collapseLongContent || message.deleted_at || message.type === "system") {
+      setContentOverflows(false);
+      return;
+    }
+    measureContentOverflowRef.current();
+  }, [
+    collapseLongContent,
+    contentExpanded,
+    message.id,
+    message.content,
+    message.parts,
+    message.attachments,
+    message.deleted_at,
+    message.type,
+    editDraft,
+  ]);
+
+  useEffect(() => {
+    if (!collapseLongContent || message.deleted_at || message.type === "system") return;
+    const body = messageBodyRef.current;
+    if (!body) return;
+
+    const handleOverflow = () => measureContentOverflowRef.current();
+    const resizeObserver =
+      typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(handleOverflow);
+    resizeObserver?.observe(body);
+    window.addEventListener("resize", handleOverflow);
+    return () => {
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", handleOverflow);
+    };
+  }, [collapseLongContent, message.id, message.deleted_at, message.type]);
 
   if (message.deleted_at) {
     return (
@@ -400,18 +407,9 @@ export function ChannelMessageBubble({
     message.author_id === currentUserId;
   const isAgent = message.type === "agent";
   const isExternal = message.source === "lark";
-  // Avatar resolution (LRM-202 / LRM-218 / LRM-221): payload → sticky
-  // same-author cache → actor directory (same source as the profile card).
-  // WS upserts also preserve URLs in `withPreservedAuthorAvatar` so consecutive
-  // bubbles don't regress to glyph placeholders when a publish path omits
-  // `author_avatar_url` (Frank: realtime payloads need not include the face).
-  const directoryActorType =
-    message.type === "agent" ? "agent" : message.type === "user" ? "member" : null;
-  const directoryAvatarUrl =
-    directoryActorType && message.author_id
-      ? getActorAvatarUrl(directoryActorType, message.author_id)
-      : null;
-  const avatarUrl = resolveCachedAuthorAvatarUrl(message, directoryAvatarUrl);
+  // LRM-270 (Slack align): message author row — name + time only.
+  // No Owner/Admin chrome (Slack has none); no Agent/APP type pill.
+  // Radar / Feishu functional badges stay. Member-list muted role is unchanged.
   const displayName = resolveChannelAuthorDisplayName(message, {
     currentUserId,
     ownName,
@@ -425,29 +423,37 @@ export function ChannelMessageBubble({
         ? "user"
         : null;
   const profileActorId = profileActorType ? message.author_id : null;
+  // LRM-224 / LRM-223 option B: identity-first Avatar. Message `author_avatar_url`
+  // only seeds the sticky cache (via avatarUrlHint); null must not clear a known
+  // face. Chat `user` → directory `member`. Agent status dots are in-scope for
+  // bubbles per the frozen long-term design (supersedes #477 for this epic).
+  const identityActorType =
+    message.type === "agent"
+      ? "agent"
+      : message.type === "user"
+        ? "member"
+        : null;
   // The 2px baseline nudge (`mt-0.5`) lives on the outer wrapper, not the
   // avatar itself, so that when the avatar sits inside the fixed-size presence
   // box the box hugs the avatar exactly (a margin on the inner avatar would
   // overflow the box and lift the dot off the avatar's bottom edge).
-  const avatarSeed = authorAvatarCacheKey(message) ?? displayName;
-  const avatarNode = (
-    <ActorAvatar
-      name={displayName}
-      initials={avatarGlyph(displayName)}
-      avatarUrl={avatarUrl}
-      isAgent={isAgent}
-      isSystem={false}
-      size={28}
-      toneSeed={avatarSeed}
-      className="select-none"
-    />
-  );
-  // Message rows carry NO live presence dot. A message is history, so pinning
-  // "online right now" onto a historical row is both the noisiest column in the
-  // view (Frank's screenshot) and semantically wrong (#477 principle: "presence
-  // 每视图只一次、且不进消息历史" — Parker/Iris). Live presence lives on directory
-  // surfaces (sidebar / member list) and the header status word, not the stream.
-  const avatar = <span className="mt-0.5 inline-flex shrink-0">{avatarNode}</span>;
+  const avatarNode =
+    identityActorType && message.author_id ? (
+      <ActorAvatar
+        actorType={identityActorType}
+        actorId={message.author_id}
+        size={28}
+        className="select-none"
+        name={displayName}
+        avatarUrlHint={message.author_avatar_url}
+        showStatusDot={isAgent}
+        showXpBurst={isAgent}
+        profileLink={false}
+      />
+    ) : null;
+  const avatar = avatarNode ? (
+    <span className="mt-0.5 inline-flex shrink-0">{avatarNode}</span>
+  ) : null;
   const nameLabel = (
     <span className="truncate font-bold text-ink">{displayName}</span>
   );
@@ -466,6 +472,10 @@ export function ChannelMessageBubble({
   // the body (see resolveMessageParts for the envelope-unwrap rationale).
   // Non-null for real parts / historical envelopes, null for ordinary content.
   const effectiveParts = resolveMessageParts(message.content, message.parts);
+  const voicePresentation = resolveVoiceMessagePresentation(message);
+  const isAgentVoiceReply = message.type === "agent" && voicePresentation !== null;
+  const hidesVoiceTranscript =
+    isAgentVoiceReply || voicePresentation?.source === "recording";
   const handleCopy = async () => {
     // Copy = take away what I can see (#530, Iris's ruling). The screen says
     // `@小雅`; a clipboard holding `@actor_14` disagrees with it, and that is its
@@ -499,14 +509,8 @@ export function ChannelMessageBubble({
   const canEdit = false;
   const canDelete = isOwn && !!onDelete && !isLocalSend;
   const isEdited = !!message.edited_at;
-  const collapseText =
-    projectReferencesToText(message.content, message.parts, resolveMentionPreview) ??
-    formatMessagePartsCopyText(effectiveParts) ??
-    unwrapStructuredPreviewContent(message.content) ??
-    message.content;
-  const contentCollapseKey = `${message.id}:${collapseLongContent ? "collapsed" : "open"}`;
-  const canCollapseContent = collapseLongContent && isLongHistoryMessageText(collapseText);
-  const isContentCollapsed = canCollapseContent && expandedContentKey !== contentCollapseKey;
+  const canCollapseContent = collapseLongContent && contentOverflows;
+  const isContentCollapsed = canCollapseContent && !contentExpanded;
   const handleStartEdit = () => setEditDraft(message.content);
   const handleCancelEdit = () => setEditDraft(null);
   const handleSaveEdit = () => {
@@ -519,7 +523,10 @@ export function ChannelMessageBubble({
   const handleDelete = () => onDelete?.(message);
   const handleOpenAgent = () => {
     if (isAgent && message.author_id) {
-      onOpenAgent?.(message.author_id);
+      onOpenAgent?.(message.author_id, {
+        display_name: message.author_name,
+        avatar_url: message.author_avatar_url ?? null,
+      });
     }
   };
   const handleOpenAgentCapture = isAgent && onOpenAgent ? handleOpenAgent : undefined;
@@ -618,11 +625,18 @@ export function ChannelMessageBubble({
     message.parts,
   );
   const selfMentioned = addressedToViewer && !isOwn;
+  const collapseFadeVariant = resolveMessageCollapseFadeVariant({
+    selfMentioned,
+    highlighted: Boolean(highlighted),
+    searchHighlighted: Boolean(searchHighlighted),
+  });
+  const showAuthor = !compact;
 
   const bubble = (
     <div
       id={`message-${message.id}`}
       data-testid="message-bubble"
+      data-message-group={compact ? "compact" : "lead"}
       data-own={isOwn}
       data-self-mentioned={selfMentioned ? "true" : undefined}
       data-local-send={localSendStatus ?? undefined}
@@ -632,11 +646,13 @@ export function ChannelMessageBubble({
         // was a layout hack that still clipped link/mention/attachment
         // hitboxes in the first line) — content stays in its own track so
         // nothing overlaps regardless of grouped-message author-row state.
-        "group relative grid grid-cols-[28px_minmax(0,1fr)] gap-2.5 rounded-lg px-2 py-1.5 outline-none transition-colors duration-1000 hover:bg-muted/35 focus-within:bg-muted/35 [@media(pointer:coarse)]:grid-cols-[28px_minmax(0,1fr)_44px]",
+        "group relative grid grid-cols-[28px_minmax(0,1fr)] gap-2.5 rounded-lg px-2 outline-none transition-colors duration-1000 hover:bg-muted/35 focus-within:bg-muted/35 [@media(pointer:coarse)]:grid-cols-[28px_minmax(0,1fr)_44px]",
+        compact ? "py-0.5" : "py-1.5",
         selfMentioned && SELF_MENTION_ROW_CLASS,
+        selfMentioned && SELF_MENTION_ROW_MENTION_CLASS,
         highlighted && "bg-primary/10 ring-1 ring-primary/25 duration-0 hover:bg-primary/10 focus-within:bg-primary/10",
         mobileThreadTapActive && "bg-primary/[0.04] ring-1 ring-primary/45 duration-75",
-        isLocalPending && "opacity-70",
+        // Pending is silent (Slack / LRM-271/273): no opacity flash on ACK.
         isLocalFailed && "opacity-90",
       )}
       onPointerDown={handlePointerDown}
@@ -645,7 +661,16 @@ export function ChannelMessageBubble({
       onPointerCancel={cancelTouchGesture}
       onPointerLeave={cancelTouchGesture}
     >
-      {profileActorType && profileActorId ? (
+      {compact ? (
+        <span
+          data-testid="message-gutter-time"
+          className="mt-0.5 select-none self-start justify-self-end pt-0.5 text-[10px] tabular-nums text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100"
+          title={messageTime.full(message.created_at)}
+          aria-hidden
+        >
+          {messageTime.clock(message.created_at)}
+        </span>
+      ) : profileActorType && profileActorId ? (
         <ActorProfileTrigger
           memberType={profileActorType}
           memberId={profileActorId}
@@ -659,55 +684,55 @@ export function ChannelMessageBubble({
         avatar
       )}
       <div className="min-w-0 max-w-[min(760px,100%)]">
-        <div className="mb-0.5 flex select-none items-baseline gap-2 pr-40 text-sm md:pr-24">
-          {profileActorType && profileActorId ? (
-            <ActorProfileTrigger
-              memberType={profileActorType}
-              memberId={profileActorId}
-              side="top"
-              sideOffset={8}
-              onClickCapture={handleOpenAgentCapture}
-            >
-              {nameLabel}
-            </ActorProfileTrigger>
-          ) : (
-            nameLabel
-          )}
-          {isAgent && (
-            <span className="shrink-0 rounded-full border border-primary/20 bg-primary/[0.08] px-2 py-0.5 text-[11px] font-normal leading-none text-primary">
-              {t(($) => $.message.agent_badge)}
-            </span>
-          )}
-          {isRadarMessage && (
-            <span className="shrink-0 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-normal leading-none text-amber-700 dark:text-amber-300">
-              {t(($) => $.message.radar_badge)}
-            </span>
-          )}
-          {isExternal && (
-            <span className="shrink-0 rounded-full border bg-muted px-2 py-0.5 text-[11px] leading-none text-muted-foreground">
-              {t(($) => $.message.feishu_badge)}
-            </span>
-          )}
-          <span
-            className="shrink-0 text-[11px] text-ink-3"
-            title={messageTime.full(message.created_at)}
-          >
-            {messageTime.format(message.created_at)}
-          </span>
-          {isEdited && (
+        {showAuthor && (
+          <div className="mb-0.5 flex select-none items-baseline gap-2 pr-40 text-sm md:pr-24">
+            {profileActorType && profileActorId ? (
+              <ActorProfileTrigger
+                memberType={profileActorType}
+                memberId={profileActorId}
+                side="top"
+                sideOffset={8}
+                onClickCapture={handleOpenAgentCapture}
+              >
+                {nameLabel}
+              </ActorProfileTrigger>
+            ) : (
+              nameLabel
+            )}
+            {isRadarMessage && (
+              <span className="shrink-0 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-normal leading-none text-amber-700 dark:text-amber-300">
+                {t(($) => $.message.radar_badge)}
+              </span>
+            )}
+            {isExternal && (
+              <span className="shrink-0 rounded-full border bg-muted px-2 py-0.5 text-[11px] leading-none text-muted-foreground">
+                {t(($) => $.message.feishu_badge)}
+              </span>
+            )}
             <span
-              data-testid="message-edited"
-              className="shrink-0 text-[11px] text-ink-3/70"
+              className="shrink-0 text-[11px] text-ink-3"
+              title={messageTime.full(message.created_at)}
             >
-              {t(($) => $.message.edited_label)}
+              {messageTime.format(message.created_at)}
             </span>
-          )}
-        </div>
+            {isEdited && (
+              <span
+                data-testid="message-edited"
+                className="shrink-0 text-[11px] text-ink-3/70"
+              >
+                {t(($) => $.message.edited_label)}
+              </span>
+            )}
+          </div>
+        )}
         {!isEditing && !isLocalSend && (
           <div
             data-testid="message-action-bar"
             data-message-action-surface="true"
-            className="pointer-events-none absolute right-3 top-2 z-10 hidden items-center gap-0.5 text-muted-foreground opacity-0 transition-opacity [@media(pointer:fine)]:flex [@media(pointer:fine)]:group-hover:pointer-events-auto [@media(pointer:fine)]:group-hover:opacity-100 [@media(pointer:fine)]:group-focus-within:pointer-events-auto [@media(pointer:fine)]:group-focus-within:opacity-100"
+            className={cn(
+              "pointer-events-none absolute right-3 z-10 hidden items-center gap-0.5 text-muted-foreground opacity-0 transition-opacity [@media(pointer:fine)]:flex [@media(pointer:fine)]:group-hover:pointer-events-auto [@media(pointer:fine)]:group-hover:opacity-100 [@media(pointer:fine)]:group-focus-within:pointer-events-auto [@media(pointer:fine)]:group-focus-within:opacity-100",
+              compact ? "top-0.5" : "top-2",
+            )}
           >
             {onReact && (
               <QuickEmojiPicker
@@ -789,10 +814,11 @@ export function ChannelMessageBubble({
           />
         ) : (
           <div
+            ref={messageBodyRef}
             className={cn(
               "message-surface relative min-w-0 max-w-full select-text break-words [overflow-wrap:anywhere] text-sm leading-6 text-ink",
               isContentCollapsed && "overflow-hidden",
-              isContentCollapsed ? HISTORY_MESSAGE_COLLAPSE_HEIGHT_CLASS : "overflow-visible",
+              isContentCollapsed ? MESSAGE_COLLAPSE_HEIGHT_CLASS : "overflow-visible",
               searchHighlighted && "rounded-md bg-primary/5",
             )}
             data-testid="message-body"
@@ -814,6 +840,13 @@ export function ChannelMessageBubble({
               attachments={message.attachments}
               highlightQuery={searchHighlighted ? searchQuery : undefined}
               sourceMessageId={message.id}
+              consumedAttachmentIds={voicePresentation?.consumedAttachmentIds}
+              contentMode={hidesVoiceTranscript ? "non-transcript" : "all"}
+            />
+            <VoiceMessageAudio
+              message={message}
+              presentation={voicePresentation}
+              highlightQuery={searchHighlighted ? searchQuery : undefined}
             />
             {isLocalFailed && onRetrySend && (
               <div
@@ -830,25 +863,29 @@ export function ChannelMessageBubble({
                 </button>
               </div>
             )}
-            {isLocalPending && (
-              <div
-                data-testid="message-send-pending"
-                className="mt-1 text-[11px] text-muted-foreground"
-              >
-                {t(($) => $.message.sending)}
-              </div>
-            )}
             {isContentCollapsed && (
               <div
-                className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center bg-gradient-to-t from-background via-background/95 to-transparent pb-1.5 pt-12"
+                className={messageCollapseFadeClassName(collapseFadeVariant)}
                 data-testid="message-collapse-fade"
               >
+                {/* LRM-302: text link, not centered pill — must not cover body. */}
                 <button
                   type="button"
-                  className="pointer-events-auto inline-flex min-h-11 items-center rounded-full border border-border bg-background px-3 text-xs font-medium text-foreground shadow-sm transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring md:min-h-8"
-                  onClick={() => setExpandedContentKey(contentCollapseKey)}
+                  className="pointer-events-auto inline-flex min-h-8 items-center px-0 text-sm font-normal text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  onClick={() => setExpandedForIdentity(collapseIdentity)}
                 >
                   {t(($) => $.message.expand_action)}
+                </button>
+              </div>
+            )}
+            {canCollapseContent && !isContentCollapsed && (
+              <div className="mt-1 flex justify-start" data-testid="message-collapse-less">
+                <button
+                  type="button"
+                  className="inline-flex min-h-8 items-center px-0 text-sm font-normal text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  onClick={() => setExpandedForIdentity(null)}
+                >
+                  {t(($) => $.message.collapse_action)}
                 </button>
               </div>
             )}
@@ -1016,7 +1053,7 @@ export function ChannelMessageBubble({
                 reactions={message.reactions ?? []}
                 currentUserId={currentUserId ?? undefined}
                 onToggle={(emoji) => onReact(message, emoji)}
-                getActorName={getActorName}
+                getActorName={getReactionActorName}
                 hideAddButton
                 showQuickReactions={false}
               />
@@ -1053,4 +1090,4 @@ export function ChannelMessageBubble({
       </ContextMenuContent>
     </ContextMenu>
   );
-}
+}, areChannelMessageBubblePropsEqual);

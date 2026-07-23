@@ -53,7 +53,8 @@ resource.
   passed, and 5 were skipped.
 - [x] Verified the workspace lockfile with `--frozen-lockfile`.
 - [x] Ran React Doctor: 0 issues.
-- [ ] Commit, push, and open an independent ready pull request stacked on
+- [x] Committed, pushed, and opened independent ready PR
+  [#1102](https://github.com/LRM-Teams/multica/pull/1102), stacked on
   [#1100](https://github.com/LRM-Teams/multica/pull/1100).
 
 ## Boundary

@@ -457,6 +457,11 @@ func main() {
 	} else {
 		schedulerRegistered = true
 	}
+	if err := schedulerMgr.Register(scheduler.ChannelVoiceTranscriptionJob(h)); err != nil {
+		slog.Warn("scheduler: failed to register channel voice transcription job", "error", err)
+	} else {
+		schedulerRegistered = true
+	}
 	if schedulerRegistered {
 		go func() {
 			_ = schedulerMgr.Run(sweepCtx)

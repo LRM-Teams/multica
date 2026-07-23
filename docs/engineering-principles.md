@@ -182,13 +182,13 @@
 - **物**：`server/internal/integrations/doubaospeech`；`POST /api/voice/asr`、`POST /api/voice/tts`；协议 frame、header、错误脱敏、handler 输入边界测试；可选 live test 用 TTS 生成 PCM 再送 ASR，已用实际账号见过完整往返成功。
 
 ### 4.8 消息语音形态由结构化 part 决定 — `可执行`（②协议类型 + ③共享 Composer/播放组件 + ⑤消息链回归；owner: @Codex）
-- 人类录音落库为可读 transcript text + `{type:"voice", duration_ms, attachment_id}`，附件保存与 ASR 相同波形的 16 kHz 单声道 PCM WAV；Agent 语音回复落库为完整 transcript text + `{type:"voice"}`。`voice` part 没有非空 text part 时服务端拒绝，不能靠正文关键词猜消息形态。
+- 人类录音先以空正文 + `{type:"voice", duration_ms, attachment_id, transcription_status:"pending"}` 原子落库，附件是 16 kHz 单声道 PCM WAV。server 在持久队列中完成 ASR 后，把同一消息更新为 transcript text + `transcription_status:"completed"`，再触发 Agent；永久失败标为 `failed`，原声仍可播放。客户端不得在发送前调用 ASR，避免 provider 短暂故障使录音本身无法发送。Agent 语音回复落库为完整 transcript text + `{type:"voice"}`。除这一个带附件的 pending 人类录音形状外，`voice` part 没有非空 text part 时服务端拒绝；消息形态不能靠正文关键词猜。
 - 人类语音消息要求 Agent 通过现有 `multica message send --voice` 输出；普通文字仍走文字，文字明确要求语音时由 Agent 语义判断后加 `--voice`。前端不维护“语音回复”关键词表。
 - 所有人类发言的频道执行提示都必须保留用户请求的交付形式，不得另外注入 `text only` / `plain-text reply` 之类相互冲突的规则。普通文字消息只注入语义意图与能力说明，具体 CLI 语法继续以 runtime brief 为单一权威源；结构化语音输入可以在当轮强化已有的 `--voice` 路径。
 - 语音回复依赖支持 `message send --voice` 的运行时版本。服务端与前端已支持语音不代表旧 daemon 自动获得该命令；发布后必须确认目标智能体重新注册的 `cli_version` 已包含语音合同。
 - 自动播放资格只来自本机当前会话的一次发送手势，并由第一条新 Agent 回复消费；文字回复也会消费，防止稍后的无关语音突然播放。所有 Agent 语音消息始终提供手动播放/停止/重试。
 - Agent 语音回复与新的人类录音默认只显示同一种语音气泡；canonical transcript 仍保留在消息中用于 Agent 上下文、可访问性、复制和 Agent TTS，但正文需由气泡旁的显式“转文字”操作展开。展开区必须与对应气泡同组并有可感知的“语音转写”标识。历史人类语音 part 没有 `attachment_id` 时继续显示不可播放标记，不能用 TTS 冒充用户原声。
-- 人类录音先解码为同一份 PCM，ASR 与 WAV 附件上传并行执行；ASR 失败或发送前被拒绝时删除未绑定附件。录音附件沿用频道附件的 membership、写权限、消息绑定、下载和删除合同，不另造公开音频地址。这里保存的是重采样后的真实语音波形，不是浏览器原始 WebM/MP4 容器；实时通话仍需另立媒体传输合同。
+- 人类录音在浏览器解码、重采样并上传 WAV 后立即发送；server 只从已经绑定到该消息、频道和工作区的私有附件读取音频并异步 ASR。录音附件沿用频道附件的 membership、写权限、消息绑定、下载和删除合同，不另造公开音频地址。这里保存的是重采样后的真实语音波形，不是浏览器原始 WebM/MP4 容器；实时通话仍需另立媒体传输合同。
 - Agent 语音的播放源只能是 server 根据 canonical transcript 生成的 TTS。旧运行时曾把“文本 + 单个自有音频附件”当语音回复发送；agent transport 将这个精确边界形状补成 `voice` part，显示层同时识别已落库的同形消息、隐藏该附件且不播放其字节。普通用户音频、多个附件和混合文件消息不参与此规则；当前运行时明确禁止自行合成/上传语音附件。
 - **物**：`protocol.MessagePartTypeVoice`、`messageparts.Normalize`、CLI `message send --voice`、共享 `VoiceInputButton`/`VoiceMessageAudio`、channel/DM/thread 发送与渲染回归；语音基础实现见 `docs/superpowers/plans/2026-07-22-beckham-voice-poc.md`，人类原声附件实现见 `docs/superpowers/plans/2026-07-23-human-voice-recording.md`。
 

@@ -17,6 +17,12 @@ const (
 
 const VoiceTranscriptMaxRunes = 4096
 
+const (
+	VoiceTranscriptionPending   = "pending"
+	VoiceTranscriptionCompleted = "completed"
+	VoiceTranscriptionFailed    = "failed"
+)
+
 type MessagePart struct {
 	Type       string `json:"type"`
 	Text       string `json:"text,omitempty"`
@@ -39,6 +45,9 @@ type MessagePart struct {
 	ContentType       string          `json:"content_type,omitempty"`
 	SizeBytes         int64           `json:"size_bytes,omitempty"`
 	DurationMS        int64           `json:"duration_ms,omitempty"`
+	// TranscriptionStatus is exposed only for recorded human voice messages.
+	// Agent TTS parts have no attachment and leave it empty.
+	TranscriptionStatus string `json:"transcription_status,omitempty"`
 }
 
 // Message is the envelope for all WebSocket messages.

@@ -129,6 +129,9 @@ func TestNormalizeVoicePart(t *testing.T) {
 		voice.Filename != "recording.wav" || voice.ContentType != "audio/wav" || voice.SizeBytes != 48 {
 		t.Fatalf("voice part did not preserve recording metadata: %+v", voice)
 	}
+	if voice.TranscriptionStatus != protocol.VoiceTranscriptionCompleted {
+		t.Fatalf("voice transcription status = %q, want completed", voice.TranscriptionStatus)
+	}
 }
 
 func TestNormalizeAgentVoicePartWithoutAttachment(t *testing.T) {
@@ -154,10 +157,38 @@ func TestNormalizeVoicePartRejectsDurationAboveRecordingLimit(t *testing.T) {
 	}
 }
 
-func TestNormalizeVoicePartRequiresAccessibleTranscript(t *testing.T) {
+func TestNormalizeRecordedVoiceWithoutTranscriptQueuesServerTranscription(t *testing.T) {
+	content, parts, err := Normalize("", []protocol.MessagePart{{
+		Type:                protocol.MessagePartTypeVoice,
+		AttachmentID:        "11111111-1111-1111-1111-111111111111",
+		DurationMS:          1234,
+		TranscriptionStatus: protocol.VoiceTranscriptionFailed,
+	}})
+	if err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+	if content != "" || len(parts) != 1 {
+		t.Fatalf("Normalize = %q %+v, want one pending recorded voice", content, parts)
+	}
+	if parts[0].TranscriptionStatus != protocol.VoiceTranscriptionPending {
+		t.Fatalf("transcription status = %q, want pending", parts[0].TranscriptionStatus)
+	}
+}
+
+func TestNormalizeVoiceWithoutTranscriptRejectsMissingAttachment(t *testing.T) {
 	_, _, err := Normalize("", []protocol.MessagePart{{Type: protocol.MessagePartTypeVoice}})
-	if err == nil || !strings.Contains(err.Error(), "voice transcript text part") {
-		t.Fatalf("error = %v, want accessible transcript validation", err)
+	if err == nil || !strings.Contains(err.Error(), "recorded voice attachment") {
+		t.Fatalf("error = %v, want recorded attachment validation", err)
+	}
+}
+
+func TestNormalizeVoiceWithoutTextPartRejectsAmbiguousTopLevelContent(t *testing.T) {
+	_, _, err := Normalize("caller claims this is a transcript", []protocol.MessagePart{{
+		Type:         protocol.MessagePartTypeVoice,
+		AttachmentID: "11111111-1111-1111-1111-111111111111",
+	}})
+	if err == nil || !strings.Contains(err.Error(), "transcript text part") {
+		t.Fatalf("error = %v, want text-part requirement for supplied transcript", err)
 	}
 }
 

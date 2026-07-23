@@ -24,6 +24,8 @@ still showing who sent the latest message and how long the recording is.
   passed.
 - [x] Ran `pnpm --filter @multica/views typecheck` and `git diff --check`.
 - [x] Ran ESLint on the three changed TypeScript/React files.
+- [x] Pushed `fix/dm-voice-summary` and opened ready-for-review PR #968 into
+  `dev`: <https://github.com/LRM-Teams/multica/pull/968>.
 
 ## Boundaries
 

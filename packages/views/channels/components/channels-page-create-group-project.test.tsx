@@ -234,4 +234,26 @@ describe("ChannelsPage create-group popover — optional project field (#576)", 
     // drops an `undefined` value), matching the pre-#576 create request shape.
     expect(payload.project_id).toBeUndefined();
   });
+
+  it("create-group UI has no auto-Beckham / group_manager affordance (LRM-399)", async () => {
+    renderPage();
+    openCreatePopover();
+    const popover = await screen.findByPlaceholderText("Channel name");
+    const root = popover.closest("[data-slot='popover-content'], [role='dialog'], div") ?? document.body;
+    const text = (root.textContent ?? "").toLowerCase();
+    expect(text).not.toMatch(/beckham|贝克汉姆|group[_\s-]?manager|自动.*群管|auto.?provision/);
+    // Create payload stays name/project only — no manager flag.
+    fireEvent.change(popover, { target: { value: "No Manager Group" } });
+    fireEvent.keyDown(popover, { key: "Enter" });
+    await waitFor(() => expect(apiMock.createChannel).toHaveBeenCalledTimes(1));
+    expect(Object.keys(apiMock.createChannel.mock.calls[0]?.[0] ?? {})).toEqual(
+      expect.arrayContaining(["name"]),
+    );
+    expect(apiMock.createChannel.mock.calls[0]?.[0]).not.toHaveProperty(
+      "group_manager_agent_id",
+    );
+    expect(apiMock.createChannel.mock.calls[0]?.[0]).not.toHaveProperty(
+      "provision_group_manager",
+    );
+  });
 });

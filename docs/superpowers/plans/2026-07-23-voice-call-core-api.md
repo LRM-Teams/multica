@@ -35,7 +35,8 @@ leakage.
 - [x] Ran the full `@multica/core` test suite: 85 files and 825 tests passed.
 - [x] Ran core typecheck and lint.
 - [x] Ran React Doctor: 0 issues.
-- [ ] Commit, push, and open an independent ready PR stacked on
+- [x] Committed, pushed, and opened independent ready PR
+  [#1093](https://github.com/LRM-Teams/multica/pull/1093), stacked on
   [#1091](https://github.com/LRM-Teams/multica/pull/1091).
 
 ## Boundary

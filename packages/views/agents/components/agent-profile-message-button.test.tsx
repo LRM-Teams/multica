@@ -26,17 +26,22 @@ const RESOURCES = {
   },
 };
 
-describe("AgentProfileMessageButton (LRM-283)", () => {
+describe("AgentProfileMessageButton (LRM-283 / LRM-351)", () => {
   beforeEach(() => {
     openDMMocks.openDM.mockReset();
     openDMMocks.isPending = false;
   });
 
-  it("renders full-width outlined message button with send icon", () => {
+  it("renders full-width primary message button with send icon", () => {
     render(<AgentProfileMessageButton agentId="agent-1" />);
     const btn = screen.getByTestId("agent-profile-message-button");
     expect(btn).toHaveTextContent("Message");
     expect(btn).not.toBeDisabled();
+    // LRM-351: theme primary tokens — not Slack light-only hex fills.
+    expect(btn.className).toMatch(/bg-primary/);
+    expect(btn.className).toMatch(/text-primary-foreground/);
+    expect(btn.className).not.toMatch(/#f4f4f4/);
+    expect(btn.className).not.toMatch(/rgba\(29,\s*28,\s*29/);
   });
 
   it("opens or creates DM for the agent on click", () => {

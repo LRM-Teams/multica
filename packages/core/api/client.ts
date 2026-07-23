@@ -2828,6 +2828,36 @@ export class ApiClient {
     );
   }
 
+  /**
+   * LRM-425 — single channel stop. Authority is `inbox_event_id` from
+   * active-tasks; do not call `/api/tasks/{id}/cancel` for channel wakes.
+   */
+  async cancelChannelInboxEvent(
+    channelId: string,
+    inboxEventId: string,
+  ): Promise<{ ok: boolean; inbox_event_id: string; agent_id: string; status: string }> {
+    return this.fetch(
+      `/api/channels/${channelId}/agent-inbox/events/${inboxEventId}/cancel`,
+      { method: "POST" },
+    );
+  }
+
+  /**
+   * LRM-425 — Stop All for one channel in a single request.
+   * Frontend must not fan out N× cancel calls (Frank: too slow).
+   */
+  async cancelChannelActiveInboxEvents(
+    channelId: string,
+  ): Promise<{
+    ok: boolean;
+    cancelled_count: number;
+    cancelled_inbox_event_ids: string[];
+  }> {
+    return this.fetch(`/api/channels/${channelId}/agent-inbox/cancel-active`, {
+      method: "POST",
+    });
+  }
+
   async markChannelRead(channelId: string): Promise<MarkChannelReadResult> {
     return this.fetch<MarkChannelReadResult>(`/api/channels/${channelId}/read`, {
       method: "POST",

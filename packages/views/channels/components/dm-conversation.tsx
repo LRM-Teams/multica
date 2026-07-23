@@ -815,9 +815,15 @@ function DmChannelConversation({
   };
 
   const handleStopTask = useCallback(async (task: ChannelActiveTask) => {
+    // LRM-425 / LRM-238 — channel/DM wakes cancel via inbox event id only.
+    const inboxEventId = task.inbox_event_id?.trim();
+    if (!inboxEventId) {
+      toast.error(t(($) => $.agent_status.stop_failed));
+      return;
+    }
     setStoppingTaskId(task.task_id);
     try {
-      await api.cancelTaskById(task.task_id);
+      await api.cancelChannelInboxEvent(channelId, inboxEventId);
       toast.success(t(($) => $.agent_status.stop_success, { name: task.agent_name }));
       qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(channelId) });
       qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });

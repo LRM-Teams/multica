@@ -1235,6 +1235,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/messages", h.ListChannelMessages)
 					r.Get("/messages/search", h.SearchChannelMessages)
 					r.Post("/messages", h.SendChannelMessage)
+					// LRM-425 — channel inbox cancel (single + Stop All bulk).
+					r.Post("/agent-inbox/cancel-active", h.CancelChannelActiveAgentInboxEvents)
+					r.Post("/agent-inbox/events/{eventId}/cancel", h.CancelChannelAgentInboxEvent)
 					r.Post("/agent-inbox/events/{eventId}/retry", h.RetryChannelAgentInboxEvent)
 					r.Patch("/messages/{messageId}", h.UpdateChannelMessage)
 					r.Delete("/messages/{messageId}", h.DeleteChannelMessage)

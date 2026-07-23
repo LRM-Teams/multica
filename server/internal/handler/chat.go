@@ -1153,61 +1153,14 @@ func (h *Handler) cancelAgentInboxEventByUser(w http.ResponseWriter, r *http.Req
 		return true
 	}
 
-	var id, rowAgentID, runtimeID, rowChatSessionID pgtype.UUID
-	var priority int32
-	var createdAt, terminalAt pgtype.Timestamptz
-	if err := h.DB.QueryRow(ctx, `
-		WITH latest_delivery AS (
-			SELECT d.id, d.runtime_id
-			FROM agent_event_delivery d
-			WHERE d.inbox_event_id = $1
-			ORDER BY d.created_at DESC, d.id DESC
-			LIMIT 1
-		),
-		cancelled_delivery AS (
-			UPDATE agent_event_delivery d
-			SET status = 'failed',
-			    last_error = 'cancelled by user',
-			    updated_at = now()
-			WHERE d.inbox_event_id = $1
-			  AND d.status IN ('leased', 'processing')
-			RETURNING d.id, d.runtime_id
-		),
-		chosen_delivery AS (
-			SELECT id, runtime_id FROM cancelled_delivery
-			UNION ALL
-			SELECT id, runtime_id FROM latest_delivery
-			LIMIT 1
-		),
-		cancelled_event AS (
-			UPDATE agent_inbox_event e
-			SET status = 'suppressed',
-			    terminal_outcome = 'no_reply',
-			    terminal_delivery_id = (SELECT id FROM chosen_delivery LIMIT 1),
-			    retryable = false,
-			    terminal_at = now(),
-			    acked_at = now(),
-			    last_error = 'cancelled by user',
-			    updated_at = now()
-			WHERE e.id = $1
-			  AND e.workspace_id = $2
-			  AND e.requires_wake
-			  AND e.status IN ('pending', 'draining', 'failed')
-			  AND e.terminal_outcome IS NULL
-			RETURNING e.id, e.agent_id, e.agent_session_id, e.priority, e.created_at, e.terminal_at, e.chat_session_id
-		)
-		SELECT e.id,
-		       e.agent_id,
-		       COALESCE((SELECT runtime_id FROM chosen_delivery LIMIT 1), s.runtime_id),
-		       e.priority,
-		       e.created_at,
-		       e.terminal_at,
-		       e.chat_session_id
-		FROM cancelled_event e
-		LEFT JOIN agent_session s ON s.id = e.agent_session_id`, inboxEventID, workspaceUUID).Scan(&id, &rowAgentID, &runtimeID, &priority, &createdAt, &terminalAt, &rowChatSessionID); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+	cancelled, err := h.cancelAgentInboxEventRow(ctx, workspaceUUID, inboxEventID)
+	if err != nil {
+		if errors.Is(err, errAgentInboxEventNotCancellable) {
 			writeError(w, http.StatusBadRequest, "task is not cancellable")
 			return true
+		}
+		if errors.Is(err, errAgentInboxEventNotFound) {
+			return false
 		}
 		writeError(w, http.StatusInternalServerError, "failed to cancel agent inbox task")
 		return true
@@ -1215,22 +1168,21 @@ func (h *Handler) cancelAgentInboxEventByUser(w http.ResponseWriter, r *http.Req
 
 	resp := CancelTaskByUserResponse{
 		AgentTaskResponse: AgentTaskResponse{
-			ID:            uuidToString(id),
-			AgentID:       uuidToString(rowAgentID),
-			RuntimeID:     uuidToString(runtimeID),
+			ID:            uuidToString(cancelled.ID),
+			AgentID:       uuidToString(cancelled.AgentID),
+			RuntimeID:     uuidToString(cancelled.RuntimeID),
 			WorkspaceID:   workspaceID,
 			Status:        "cancelled",
-			Priority:      priority,
-			CompletedAt:   timestampToPtr(terminalAt),
+			Priority:      cancelled.Priority,
+			CompletedAt:   timestampToPtr(cancelled.TerminalAt),
 			Attempt:       1,
 			MaxAttempts:   1,
-			CreatedAt:     timestampToString(createdAt),
-			ChatSessionID: uuidToString(rowChatSessionID),
+			CreatedAt:     timestampToString(cancelled.CreatedAt),
+			ChatSessionID: uuidToString(cancelled.ChatSessionID),
 			Kind:          "chat",
 		},
 	}
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	h.publishTask(protocol.EventTaskCancelled, workspaceID, actorType, actorID, uuidToString(id), resp.AgentTaskResponse)
+	h.publishCancelledAgentInboxEvent(r, workspaceID, userID, cancelled)
 	writeJSON(w, http.StatusOK, resp)
 	return true
 }

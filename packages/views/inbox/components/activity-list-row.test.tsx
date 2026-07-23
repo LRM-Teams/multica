@@ -53,17 +53,17 @@ describe("ActivityListRow", () => {
     expect(screen.getByText("#general")).toBeInTheDocument();
   });
 
-  it("disables access-denied rows", () => {
+  it("hides unread chrome when unread_count is 0 (LRM-379)", () => {
     render(
       <ActivityListRow
-        item={{ ...baseThread, access_denied: true }}
+        item={{ ...baseThread, unread_count: 0 }}
         isSelected={false}
         onClick={() => {}}
         timeAgo={() => "5m"}
       />,
     );
 
-    expect(screen.getByRole("button")).toBeDisabled();
-    expect(screen.getByText("No access")).toBeInTheDocument();
+    expect(screen.queryByText(/new$/)).not.toBeInTheDocument();
+    expect(screen.getByText("3 replies")).toBeInTheDocument();
   });
 });

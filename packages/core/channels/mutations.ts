@@ -15,6 +15,11 @@ import {
 import { dmKeys } from "../dm/queries";
 import type { DMItem } from "../dm/types";
 import type { ChannelThreadMessagesPage, MessagePart } from "../types";
+import { userActivityKeys } from "../user-activity/queries";
+import {
+  optimisticallyMarkActivityThreadRead,
+  restoreActivityQueries,
+} from "../user-activity/mutations";
 
 function isConflictError(err: unknown): boolean {
   return err instanceof ApiError && err.status === 409;
@@ -334,11 +339,25 @@ export function useMarkChannelThreadRead() {
   return useMutation({
     mutationFn: ({ channelId, messageId }: { channelId: string; messageId: string }) =>
       api.markChannelThreadRead(channelId, messageId),
-    onSuccess: (_result, vars) => {
+    onMutate: async (vars) => {
+      // Activity Unread must clear when a thread is opened (LRM-379) — do not
+      // wait for the channel ThreadPanel path alone; optimistic patch first.
+      const prevActivity = await optimisticallyMarkActivityThreadRead(
+        qc,
+        wsId,
+        vars.messageId,
+      );
+      return { prevActivity };
+    },
+    onError: (_err, _vars, ctx) => {
+      restoreActivityQueries(qc, ctx?.prevActivity);
+    },
+    onSettled: (_result, _error, vars) => {
       qc.invalidateQueries({ queryKey: channelKeys.messageThread(vars.channelId, vars.messageId) });
       invalidateChannelMessages(qc, vars.channelId);
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
       qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
+      qc.invalidateQueries({ queryKey: userActivityKeys.all(wsId) });
     },
   });
 }

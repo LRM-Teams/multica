@@ -84,6 +84,32 @@ require_config "$config" 'FRONTEND_ORIGIN: http://localhost:3100'
 require_config "$config" 'GOOGLE_REDIRECT_URI: http://localhost:3100/auth/callback'
 require_config "$config" 'MULTICA_APP_URL: http://localhost:3100'
 
+s89_config="$(
+  docker compose \
+    --project-directory "$ROOT_DIR" \
+    --env-file .env.example \
+    -f docker-compose.selfhost.yml \
+    -f docker-compose.s89.yml \
+    config
+)"
+
+require_config "$s89_config" 'container_name: multica-caddy'
+require_config "$s89_config" 'image: caddy:2.11.3@sha256:ec18ee54aab3315c22e25f3b2babda73ff8007d39b13b3bd1bfffa2f0444c7d9'
+require_config "$s89_config" 'FRONTEND_ORIGIN: https://82.157.184.89'
+require_config "$s89_config" 'GOOGLE_REDIRECT_URI: https://82.157.184.89/auth/callback'
+require_config "$s89_config" 'MULTICA_APP_URL: https://82.157.184.89'
+require_config "$s89_config" 'MULTICA_PUBLIC_URL: https://82.157.184.89'
+require_config "$s89_config" 'target: /etc/caddy/Caddyfile'
+require_config "$s89_config" 'published: "80"'
+require_config "$s89_config" 'published: "443"'
+require_config "$s89_config" 'published: "8090"'
+
+s89_caddyfile="$(<deploy/s89/Caddyfile)"
+require_config "$s89_caddyfile" 'profile shortlived'
+require_config "$s89_caddyfile" 'disable_tlsalpn_challenge'
+require_config "$s89_caddyfile" '/api/daemon/ws'
+require_config "$s89_caddyfile" '/api/sandbox/node/ws'
+
 for script in scripts/dev.sh scripts/check.sh; do
   if ! grep -Fq '. scripts/local-env.sh' "$script"; then
     echo "$script must source scripts/local-env.sh for shared local env derivation."

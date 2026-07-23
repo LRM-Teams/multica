@@ -132,7 +132,7 @@
 
 ### 4.0 s89 双部署环境（2026-07-16 当天进档——此前是隐性知识，烧过一小时考古）
 - **`:8090` = dev 自动部署**（`/data/multica`，APP_ENV=dev；`deploy.yml` on push→dev，已验证）：**测试/验收/日常一律用这套**；lrm-team 等真实工作区在这套的 `multica-postgres-1`。
-- **浏览器麦克风例外**（2026-07-22 实测）：`:8090` 是 HTTP，Chrome/Edge 必须隐藏 `getUserMedia`，所以它不能用于录音验收。现有 `leagent.me` 在腾讯云公网入口被转到 `dnspod.qcloud.com/static/webblock.html`，HTTPS 握手被关闭；Caddy 本机证书和反代正常也改变不了这个外部拦截。语音录入上线前必须提供浏览器信任的 HTTPS（已备案域名，或自动续期的公网 IP 证书），客户端只报告真实的 secure-context 错误，不尝试绕过浏览器安全策略。
+- **浏览器麦克风例外**（2026-07-22 实测，2026-07-23 修复）：`:8090` 是 HTTP，Chrome/Edge 必须隐藏 `getUserMedia`，所以它不能用于录音验收。现有 `leagent.me` 在腾讯云公网入口被转到 `dnspod.qcloud.com/static/webblock.html`，HTTPS 握手被关闭；Caddy 本机证书和反代正常也改变不了这个外部拦截。s89 现由仓库内 `deploy/s89/Caddyfile` 管理 `https://82.157.184.89`，使用 Let's Encrypt `shortlived` profile 自动签发/续期公网 IPv4 证书；`:8090` 只为 daemon 兼容与回滚验收保留。客户端只报告真实的 secure-context 错误，不尝试绕过浏览器安全策略。
 - **`:18090` = main 分支部署**（`/data/multica-main`，APP_ENV=production，独立 PostgreSQL/卷/端口，独立用户/工作区宇宙——同邮箱在两套里是两个人；海鹏搭建）。**触发机制已确认（Nash 三方对账）**：`.github/workflows/deploy-main.yml` + `docs/deploy-s89-main.md` **只存在于 `main` 分支**——dev→main PR 合并触发部署（最近 run 29302499173，7/14 成功，s89 镜像=origin/main 一致；无 cron/watchtower，CI/CD 唯一入口）。"停在 7/14"只是因为 main 自那以后没再合并过。
 - **⚠️ 元教训**：workflow 文件可以只活在别的分支上——只扫 `origin/dev` 会把存在的机制误报为"缺失"（deploy-main.yml 留在 main 是 trigger 设计的一部分）。更深一层（Felix 自拆）：**"永远读 X"式规矩本身就是待爆假设**——他上午栽在"读了陈旧 main"后给自己立了"一律读 origin/dev"，两小时后这条规矩让他在"什么部署 main"的问题上扫错了树。正确形态是**读对这个问题有权威性的那棵树**（产品代码→dev；"什么部署 main"→main；"线上跑什么"→部署的那个 SHA）——把依赖上下文的判断压成常量默认值，和 `[a-z0-9]`/终止符表是同一个病：一条规矩能修好上一次的错，同时制造下一次的错。
 - **两条铁则（Frank）**：不要手改 :18090；一切变更走 CI/CD 部署。

@@ -181,6 +181,7 @@ jobs:
           sparse-checkout: |
             docker-compose.selfhost.yml
             docker-compose.s89.yml
+            deploy/s89/Caddyfile
           sparse-checkout-cone-mode: false
 
       - name: Log in to GHCR
@@ -189,7 +190,7 @@ jobs:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 
-      - name: Pull & restart backend + frontend
+      - name: Pull & restart backend + frontend + Caddy
         # POSTGRES_PASSWORD comes from the s89 Environment secret and is the
         # single source of truth for the DB password. Docker Compose gives shell
         # env vars precedence over --env-file, so this value overrides the one in
@@ -216,6 +217,9 @@ jobs:
             echo "::error::POSTGRES_PASSWORD secret is empty — s89 Environment secret not wired. Aborting to avoid deploying with the wrong DB password."
             exit 1
           fi
+          # The runtime path is stable; the Actions checkout is ephemeral.
+          # Install the reviewed proxy config before Compose recreates Caddy.
+          install -m 0644 "${GITHUB_WORKSPACE}/deploy/s89/Caddyfile" "${DEPLOY_DIR}/Caddyfile"
           echo "Deploying ${MULTICA_BACKEND_IMAGE}:${MULTICA_IMAGE_TAG} (+ web) on $(hostname)"
           compose() {
             docker compose \
@@ -224,7 +228,12 @@ jobs:
               -f "${GITHUB_WORKSPACE}/docker-compose.selfhost.yml" \
               -f "${GITHUB_WORKSPACE}/docker-compose.s89.yml" "$@"
           }
-          # postgres + caddy are left running; only the app services roll.
+          # Validate the installed runtime file with the exact pinned Caddy
+          # build before replacing the legacy proxy container.
+          docker run --rm \
+            -v "${DEPLOY_DIR}/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2.11.3@sha256:ec18ee54aab3315c22e25f3b2babda73ff8007d39b13b3bd1bfffa2f0444c7d9 \
+            caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
           # The backend container runs `migrate up` on start (entrypoint.sh).
           compose pull frontend backend
           # Start frontend before backend so Caddy can resolve the frontend DNS name
@@ -232,16 +241,19 @@ jobs:
           # DNS race that caused intermittent 'no such host' errors (#324).
           compose up -d frontend
           compose up -d backend
-          # Caddy is intentionally managed outside these Compose files on s89,
-          # but the deploy health boundary depends on it. Start the exact
-          # pre-provisioned container instead of assuming it survived previous
-          # host maintenance.
+          # Adopt the one legacy proxy container created before Caddy became a
+          # Compose service. Resolve both its exact name and ownership label
+          # before removal; certificate/config volumes are preserved.
           if docker container inspect multica-caddy >/dev/null 2>&1; then
-            docker start multica-caddy >/dev/null
-          else
-            echo "::error::Required s89 proxy container multica-caddy does not exist."
-            exit 1
+            caddy_service="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' multica-caddy 2>/dev/null || true)"
+            if [ "${caddy_service}" != "caddy" ]; then
+              docker rm -f multica-caddy
+            fi
           fi
+          compose up -d caddy
+          # A bind-mounted file changing does not make Compose recreate the
+          # container. Reload explicitly so later proxy edits take effect.
+          compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
           # db-bridge-stub-multica + db-bridge-executor-multica are profile-gated
           # in the compose file, so naming them explicitly is what starts them.
           # They share the multica-db-bridge image (the public run_multica server
@@ -266,7 +278,7 @@ jobs:
           # Prune unused Docker images to prevent disk from filling up (#327).
           docker image prune -af
 
-      - name: Verify app containers + Caddy proxy
+      - name: Verify app containers + Caddy HTTP and HTTPS proxies
         run: |
           set -euo pipefail
 
@@ -281,26 +293,31 @@ jobs:
           # Caddy reaches both app services only through their Docker service
           # names. These probes therefore validate the running container,
           # Compose DNS, Caddy upstream routing, and the externally served dev
-          # listener as one boundary. /healthz is served by the frontend itself;
-          # /health is proxied to the backend. Both must be 200.
-          for i in $(seq 1 30); do
+          # listeners as one boundary. The HTTPS probe connects to loopback
+          # while retaining the public IP as the certificate identity, avoiding
+          # dependence on provider NAT hairpin behavior.
+          for i in $(seq 1 45); do
             frontend_id="$(compose ps -q frontend)"
             backend_id="$(compose ps -q backend)"
+            caddy_id="$(compose ps -q caddy)"
             frontend_status="$(docker inspect --format '{{.State.Status}}' "$frontend_id" 2>/dev/null || true)"
             frontend_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$frontend_id" 2>/dev/null || true)"
             backend_status="$(docker inspect --format '{{.State.Status}}' "$backend_id" 2>/dev/null || true)"
-            if [ "$frontend_status" = running ] && [ "$frontend_health" = healthy ] && [ "$backend_status" = running ] && \
+            caddy_status="$(docker inspect --format '{{.State.Status}}' "$caddy_id" 2>/dev/null || true)"
+            if [ "$frontend_status" = running ] && [ "$frontend_health" = healthy ] && [ "$backend_status" = running ] && [ "$caddy_status" = running ] && \
               curl -fsS --max-time 5 http://127.0.0.1:8090/ >/dev/null 2>&1 && \
               curl -fsS --max-time 5 http://127.0.0.1:8090/healthz >/dev/null 2>&1 && \
-              curl -fsS --max-time 5 http://127.0.0.1:8090/health >/dev/null 2>&1; then
-              echo "Frontend healthcheck, backend, and Caddy proxy healthy after $((i * 2))s."
+              curl -fsS --max-time 5 http://127.0.0.1:8090/health >/dev/null 2>&1 && \
+              curl --connect-to 82.157.184.89:443:127.0.0.1:443 -fsS --max-time 5 https://82.157.184.89/healthz >/dev/null 2>&1 && \
+              curl --connect-to 82.157.184.89:443:127.0.0.1:443 -fsS --max-time 5 https://82.157.184.89/health >/dev/null 2>&1; then
+              echo "Frontend, backend, Caddy HTTP, and trusted IP HTTPS healthy after $((i * 2))s."
               exit 0
             fi
-            echo "waiting for frontend health/backend/Caddy proxy readiness... ($i/30) frontend=${frontend_status}/${frontend_health:-none} backend=${backend_status:-none}"
+            echo "waiting for frontend/backend/Caddy/HTTPS readiness... ($i/45) frontend=${frontend_status}/${frontend_health:-none} backend=${backend_status:-none} caddy=${caddy_status:-none}"
             sleep 2
           done
-          echo "::error::frontend healthcheck/Caddy proxy did not pass root + /healthz + /health within 60s."
-          compose ps frontend backend || true
+          echo "::error::frontend/backend/Caddy HTTP + trusted IP HTTPS did not pass within 90s."
+          compose ps frontend backend caddy || true
           docker logs --tail 100 multica-caddy || true
           docker logs --tail 80 multica-frontend-1 || true
           docker logs --tail 80 multica-backend-1 || true

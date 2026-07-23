@@ -1,0 +1,31 @@
+(multica_app) {
+	@multica_ws path /ws /ws/* /api/daemon/ws /api/sandbox/node/ws
+	reverse_proxy @multica_ws backend:8080 {
+		flush_interval -1
+	}
+
+	@multica_health path /health
+	reverse_proxy @multica_health backend:8080
+
+	reverse_proxy frontend:3000
+}
+
+# Let's Encrypt IP certificates use the short-lived profile and renew
+# automatically. HTTP-01 is selected explicitly because it is supported for
+# public IPv4 addresses and does not compete with the HTTPS listener.
+82.157.184.89 {
+	tls {
+		issuer acme {
+			profile shortlived
+			disable_tlsalpn_challenge
+		}
+	}
+
+	import multica_app
+}
+
+# Preserve the existing HTTP entrypoint for daemon compatibility and rollout
+# verification. Browser microphone capture must use the HTTPS address above.
+:8090 {
+	import multica_app
+}

@@ -73,10 +73,10 @@ Evidence so far:
 
 ### Step 5 — Publish PR and verify CI
 
-Status: in progress
+Status: complete
 
 Evidence:
 
 - Branch `fix/voice-transcript-toggle` was rebased onto the latest `origin/dev` and pushed.
 - Ready-for-review PR: https://github.com/LRM-Teams/multica/pull/918 targeting `dev`; GitHub reports it mergeable and not a draft.
-- CI is running. Installer checks for Ubuntu and macOS passed on the initial PR head; frontend and backend were still in progress when this entry was written.
+- CI run `29910704430` passed on PR head `5d79296a2`: frontend, backend, Ubuntu installer, and macOS installer all completed successfully.

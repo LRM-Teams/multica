@@ -531,6 +531,7 @@
   },
   "side_panel": {
     "close_aria": "Close agent panel",
+    "resize_aria": "Resize profile panel",
     "no_description": "No description yet",
     "model_label": "Model",
     "runtime_label": "Runtime",

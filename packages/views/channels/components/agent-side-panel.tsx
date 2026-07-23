@@ -63,8 +63,9 @@ interface AgentSidePanelProps {
  *
  * LRM-448 Profile v4 (locked A): Computer IA + Multica tokens.
  * Header is Close-only (no Message+⋯). Identity sits under the chrome.
- * Profile tab: editable Display name / Description, Info, vertical Actions.
- * Usage is its own tab — never stacked in Profile.
+ * Profile tab: editable Display name / Description, Info, Runtime Config
+ * section (LRM-470), vertical Actions. Usage is its own tab — never stacked
+ * in Profile.
  */
 export function AgentSidePanel({
   agent,
@@ -351,6 +352,19 @@ function AgentProfileTabContent({
             <span className="truncate" title={ownerName(agent, members)}>
               {ownerName(agent, members)}
             </span>
+          </div>
+        </div>
+
+        {/* LRM-470 — Runtime Config is its own section (not Info misc rows). */}
+        <section
+          className="border-t border-border pt-3"
+          aria-label={t(($) => $.side_panel.runtime_section)}
+          data-testid="agent-profile-runtime-config"
+        >
+          <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            {t(($) => $.side_panel.runtime_section)}
+          </h3>
+          <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-3 gap-y-2 text-[13px]">
             <span className="pt-0.5 text-muted-foreground">
               {t(($) => $.inspector.prop_runtime)}
             </span>
@@ -403,7 +417,7 @@ function AgentProfileTabContent({
               {t(($) => $.execution_config.applies_next_run)}
             </p>
           ) : null}
-        </div>
+        </section>
 
         {agent.memory_growth ? <MemoryGrowthField growth={agent.memory_growth} /> : null}
 

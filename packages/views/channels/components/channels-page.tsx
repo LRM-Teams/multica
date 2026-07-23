@@ -661,6 +661,13 @@ export function ChannelsPage({
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
     id: "multica_channels_layout",
   });
+  // LRM-481 — Profile / thread / channel-details dock width persists across refresh.
+  const {
+    defaultLayout: detailSideDefaultLayout,
+    onLayoutChanged: onDetailSideLayoutChanged,
+  } = useDefaultLayout({
+    id: "multica_channel_detail_side_layout",
+  });
   // Embedded Activity pane never auto-picks a neighbor channel (LRM-238).
   const listFirstSelection = isMobile || embedded;
   // #568 — see `HEADER_ACTIONS_COMPACT_BREAKPOINT` above for the derivation.
@@ -3486,30 +3493,52 @@ export function ChannelsPage({
           )}
         </main>
   );
-  // Desktop detail: keep the conversation tree mounted when the side panel
-  // opens/closes (LRM-400). Swapping PanelGroup ↔ plain div remounted the
-  // chat column (lost scroll/composer + stale title-button refs in tests).
-  // Flex row + optional fixed side column still fills width with no blank
-  // half-pane (the lone ResizablePanel minSize=50% bug).
+  // Desktop detail (LRM-400 + LRM-481): always keep ResizablePanelGroup so
+  // opening/closing the side dock does not remount the conversation tree
+  // (scroll/composer + title-button refs). A lone conversation panel fills
+  // full width — no blank half-pane. When a dock is open, drag the handle
+  // (min 360 / default 440 / max 640 px; layout id persists across refresh).
+  // Mobile: no drag — full-screen profile/page route instead.
   const desktopSidePanel = threadPanel ?? agentPanel ?? detailsPanel;
   const detailPane = !isMobile ? (
-    <div className="flex min-h-0 min-w-0 flex-1">
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">{channelConversationPane}</div>
+    <ResizablePanelGroup
+      orientation="horizontal"
+      className="min-h-0 flex-1"
+      defaultLayout={detailSideDefaultLayout}
+      onLayoutChanged={onDetailSideLayoutChanged}
+    >
+      <ResizablePanel
+        id="conversation"
+        minSize={desktopSidePanel ? "50%" : undefined}
+        className="flex min-h-0 min-w-0 flex-col"
+      >
+        {channelConversationPane}
+      </ResizablePanel>
       {desktopSidePanel ? (
-        <div
-          data-testid={
-            threadPanel
-              ? "thread-side-slot"
-              : agentPanel
-                ? "agent-side-slot"
-                : "channel-details-side-slot"
-          }
-          className="flex w-[360px] max-w-[min(480px,45%)] min-w-[300px] shrink-0 flex-col border-l border-border/30 bg-background"
-        >
-          {desktopSidePanel}
-        </div>
+        <>
+          <ResizableHandle />
+          <ResizablePanel
+            id={
+              threadPanel ? "thread" : agentPanel ? "agent-files" : "channel-details"
+            }
+            defaultSize={440}
+            minSize={360}
+            maxSize={640}
+            groupResizeBehavior="preserve-pixel-size"
+            data-testid={
+              threadPanel
+                ? "thread-side-slot"
+                : agentPanel
+                  ? "agent-side-slot"
+                  : "channel-details-side-slot"
+            }
+            className="border-l border-border/30 bg-background"
+          >
+            {desktopSidePanel}
+          </ResizablePanel>
+        </>
       ) : null}
-    </div>
+    </ResizablePanelGroup>
   ) : (
     threadPanel ?? channelConversationPane
   );

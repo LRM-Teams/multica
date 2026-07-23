@@ -12,6 +12,8 @@ import {
 import type { AgentPanelIdentitySnapshot } from "@multica/core/agents";
 import { ResolvedAgentSidePanel } from "../common/resolved-agent-side-panel";
 import { useNavigation } from "../navigation";
+import { useProfilePanelWidth } from "./use-profile-panel-width";
+import { useT } from "../i18n/use-t";
 
 /**
  * Fallback host for the #349 agent side panel (see agent-panel-context.tsx
@@ -31,16 +33,21 @@ import { useNavigation } from "../navigation";
  * header+tabs, and uses a TRANSPARENT backdrop (click-outside dismiss, no
  * dimming scrim) so the "overlay vs push" difference stays invisible.
  *
+ * LRM-481: left-edge drag resizes (360–640, default 440); width persists in
+ * localStorage. Mobile profile uses the page route — no drag here.
+ *
  * LRM-292: opens on selectedAgentId; panel body always from GetAgent via
  * ResolvedAgentSidePanel — ListAgents is not consulted.
  */
 export function GlobalAgentPanel() {
+  const { t } = useT("agents");
   const wsId = useWorkspaceId();
   const { pathname } = useNavigation();
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const selectedAgentId = useAgentPanelStore((s) => s.selectedAgentId);
   const identitySnapshot = useAgentPanelStore((s) => s.identitySnapshot);
   const close = useAgentPanelStore((s) => s.close);
+  const { width, onResizePointerDown } = useProfilePanelWidth();
   const { data: members = [] } = useQuery({
     ...memberListOptions(wsId),
     enabled: !!selectedAgentId,
@@ -86,7 +93,18 @@ export function GlobalAgentPanel() {
             data-starting-style / data-ending-style drive the enter/exit
             translate on real mount/unmount, so it animates without a manual
             rAF two-frame dance. */}
-        <Dialog.Popup className="fixed inset-y-0 right-0 z-50 w-[440px] max-w-[90vw] border-l border-border/30 bg-background shadow-2xl transition-transform duration-200 ease-in-out data-starting-style:translate-x-full data-ending-style:translate-x-full">
+        <Dialog.Popup
+          className="fixed inset-y-0 right-0 z-50 max-w-[90vw] border-l border-border/30 bg-background shadow-2xl transition-transform duration-200 ease-in-out data-starting-style:translate-x-full data-ending-style:translate-x-full"
+          style={{ width }}
+          data-testid="global-agent-panel"
+        >
+          <button
+            type="button"
+            data-testid="global-agent-panel-resize"
+            aria-label={t(($) => $.side_panel.resize_aria)}
+            className="absolute inset-y-0 left-0 z-10 w-1.5 cursor-col-resize border-0 bg-transparent p-0 hover:bg-foreground/10 data-[separator=active]:bg-foreground/15"
+            onPointerDown={onResizePointerDown}
+          />
           {panelAgentId ? (
             <ResolvedAgentSidePanel
               agentId={panelAgentId}

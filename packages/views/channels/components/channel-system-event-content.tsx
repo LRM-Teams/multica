@@ -1,11 +1,8 @@
 "use client";
 
 import { Fragment, type ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { useWorkspaceId } from "@multica/core/hooks";
-import { memberProfileOptions } from "@multica/core/workspace/queries";
-import { useActorName } from "@multica/core/workspace/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
+import { useResolvedActorDisplayName } from "../../common/use-resolved-actor-display-name";
 import { ActorMention } from "../../common/markdown";
 import { useT } from "../../i18n/use-t";
 import { AppLink } from "../../navigation/app-link";
@@ -186,47 +183,6 @@ const ISSUE_STATUS_KEYS = new Set<string>([
 function toActorMentionType(type: string | undefined): "agent" | "member" | null {
   if (type === "agent") return "agent";
   if (type === "human") return "member";
-  return null;
-}
-
-/**
- * LRM-281 / LRM-238: resolve display names from the live actor directory
- * (`useActorName` / ListAgents+members) or a dedicated member-profile fetch
- * (DB). Never use emit-time actor_name / target_name as a silent fallback —
- * ListAgents hides group managers (LRM-233), so denormalized params would
- * paper over an incomplete directory.
- *
- * Prefer `getActorName` (same cache the rest of chat uses). Only when that
- * returns the honest unknown sentinel do we hit `GET /member-profiles`.
- */
-function useResolvedActorDisplayName(
-  actorId: string | undefined,
-  mentionType: "agent" | "member" | null,
-): string | null {
-  const { getActorName } = useActorName();
-  const fromDirectory =
-    actorId && mentionType
-      ? (() => {
-          // No fallback arg — a miss must not invent a display name.
-          const name = getActorName(mentionType, actorId).trim();
-          return name && name !== "Unknown Agent" && name !== "Unknown" ? name : null;
-        })()
-      : null;
-
-  const wsId = useWorkspaceId();
-  const profileType = mentionType === "member" ? "user" : "agent";
-  const { data: profile } = useQuery({
-    ...memberProfileOptions(wsId, profileType, actorId ?? ""),
-    enabled: !!wsId && !!actorId && mentionType != null && !fromDirectory,
-  });
-
-  if (!actorId || !mentionType) return null;
-  if (fromDirectory) return fromDirectory;
-  if (profile) {
-    const name = (profile.display_name || profile.name || "").trim();
-    return name || null;
-  }
-  // Pending / error: do not invent display copy from emit-time params.
   return null;
 }
 

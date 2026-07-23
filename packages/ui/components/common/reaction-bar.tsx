@@ -34,13 +34,20 @@ function groupReactions(reactions: ReactionItem[], currentUserId?: string): Grou
   return Array.from(map.values());
 }
 
+/** Directory-miss sentinels from useActorName — never show these in the hover card (LRM-364). */
+const DIRECTORY_MISS_SENTINELS = new Set(["Unknown Agent", "Unknown"]);
+
 function actorDisplayName(
   actor: { type: string; id: string },
   currentUserId: string | undefined,
   getActorName: (type: string, id: string) => string,
 ): string {
   if (actor.type === "member" && actor.id === currentUserId) return "You";
-  return getActorName(actor.type, actor.id) || actor.id;
+  const name = (getActorName(actor.type, actor.id) || "").trim();
+  // Honest id placeholder while profile resolves / for deleted actors — never
+  // the ListAgents miss sentinel (LRM-238 / LRM-364).
+  if (!name || DIRECTORY_MISS_SENTINELS.has(name)) return actor.id;
+  return name;
 }
 
 interface ReactionBarProps {

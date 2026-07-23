@@ -30,6 +30,7 @@ import { QuickEmojiPicker } from "@multica/ui/components/common/quick-emoji-pick
 import { cn } from "@multica/ui/lib/utils";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { useActorName } from "@multica/core/workspace/hooks";
+import { useReactionActorName } from "../../common/use-reaction-actor-name";
 import { useTimeAgo } from "../../i18n";
 import { ContentEditor, type ContentEditorRef, ReadonlyContent, useFileDropZone, FileDropOverlay, Attachment as AttachmentRenderer, AttachmentDownloadProvider } from "../../editor";
 import { FileUploadButton } from "@multica/ui/components/common/file-upload-button";
@@ -400,6 +401,7 @@ function CommentRow({
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const reactions = entry.reactions ?? [];
+  const getReactionActorName = useReactionActorName(reactions);
   const contentText = entry.content ?? "";
   const isLongContent = contentText.length > 500 || contentText.split("\n").length > 8;
 
@@ -562,7 +564,7 @@ function CommentRow({
             reactions={reactions}
             currentUserId={currentUserId}
             onToggle={(emoji) => onToggleReaction(entry.id, emoji)}
-            getActorName={getActorName}
+            getActorName={getReactionActorName}
             hideAddButton={!isLongContent}
             className="mt-1.5 pl-12 pr-4"
           />
@@ -612,6 +614,7 @@ function CommentCardImpl({
   const replyCount = allNestedReplies.length;
   const contentPreview = (entry.content ?? "").replace(/\n/g, " ").slice(0, 80);
   const reactions = entry.reactions ?? [];
+  const getReactionActorName = useReactionActorName(reactions);
   const contentText = entry.content ?? "";
   const isLongContent = contentText.length > 500 || contentText.split("\n").length > 8;
 
@@ -843,7 +846,7 @@ function CommentCardImpl({
                   reactions={reactions}
                   currentUserId={currentUserId}
                   onToggle={(emoji) => onToggleReaction(entry.id, emoji)}
-                  getActorName={getActorName}
+                  getActorName={getReactionActorName}
                   hideAddButton={!isLongContent}
                   className="mt-1.5 pl-10"
                 />

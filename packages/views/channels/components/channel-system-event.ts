@@ -151,6 +151,15 @@ function parseIssueAggregateItems(
       occurredAt: optString(row, "occurred_at"),
     });
   }
+  // LRM-422 stamps occurred_at per item — expand list stays chronological.
+  items.sort((a, b) => {
+    if (a.occurredAt && b.occurredAt && a.occurredAt !== b.occurredAt) {
+      return a.occurredAt < b.occurredAt ? -1 : 1;
+    }
+    if (a.occurredAt && !b.occurredAt) return -1;
+    if (!a.occurredAt && b.occurredAt) return 1;
+    return a.issueId < b.issueId ? -1 : a.issueId > b.issueId ? 1 : 0;
+  });
   return items;
 }
 

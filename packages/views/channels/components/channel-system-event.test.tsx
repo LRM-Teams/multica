@@ -643,6 +643,40 @@ describe("parseIssueAggregateSystemEvent", () => {
       ),
     ).toBeNull();
   });
+
+  it("orders items by occurred_at then issue_id (LRM-422 stamp)", () => {
+    const event = parseIssueAggregateSystemEvent(
+      issueMsg("m1", "issue_completed", {
+        actor_id: "agent-fe",
+        actor_type: "agent",
+        items: [
+          {
+            issue_id: "i2",
+            issue_identifier: "LRM-357",
+            issue_status: "done",
+            occurred_at: "2026-07-23T08:02:00Z",
+          },
+          {
+            issue_id: "i1",
+            issue_identifier: "LRM-360",
+            issue_status: "done",
+            occurred_at: "2026-07-23T08:00:00Z",
+          },
+          {
+            issue_id: "i3",
+            issue_identifier: "LRM-361",
+            issue_status: "done",
+            occurred_at: "2026-07-23T08:01:00Z",
+          },
+        ],
+      }),
+    );
+    expect(event?.items.map((item) => item.issueIdentifier)).toEqual([
+      "LRM-360",
+      "LRM-361",
+      "LRM-357",
+    ]);
+  });
 });
 
 describe("IssueAggregateSystemEventContent", () => {

@@ -17,8 +17,9 @@ import (
 
 // 贝克汉姆 (Beckham) is the per-group manager agent: one and only one per group,
 // a brand-new agent independent of Wendy. It owns proactive group behavior
-// (ambient review, coordination handoffs). New groups auto-provision one; old
-// groups can invite one on demand (no bulk backfill).
+// (ambient review, coordination handoffs). Groups do not auto-provision one on
+// create (LRM-397/398); members hire/invite via InviteGroupManager (or Agent
+// create with visibility=channel + home_channel_id). No bulk backfill.
 const (
 	beckhamAgentName        = "贝克汉姆"
 	managedRoleGroupManager = "group_manager"
@@ -332,30 +333,9 @@ func (h *Handler) ensureChannelAgentMember(ctx context.Context, workspaceID, cha
 	}
 }
 
-// provisionGroupManagerForNewChannel is the fire-and-forget hook for new group
-// channels. Never fails channel creation; logs and moves on (e.g. no runtime).
-func (h *Handler) provisionGroupManagerForNewChannel(ctx context.Context, workspaceID string, channelID, creatorUserID pgtype.UUID) {
-	wsUUID := parseUUID(workspaceID)
-	agent, created, err := h.EnsureGroupManagerForChannel(ctx, wsUUID, channelID, creatorUserID)
-	if err != nil {
-		if errors.Is(err, errGroupManagerNoRuntime) {
-			slog.Info("group manager not provisioned: no runtime yet", "channel_id", uuidToString(channelID), "workspace_id", workspaceID)
-			return
-		}
-		slog.Warn("provision group manager for new channel failed", "channel_id", uuidToString(channelID), "workspace_id", workspaceID, "error", err)
-		return
-	}
-	if created {
-		resp := agentToResponse(agent)
-		h.publishAgentVisibilityEvent(protocol.EventAgentCreated, workspaceID, "member", uuidToString(creatorUserID), agent, map[string]any{"agent": broadcastAgentResponse(resp)})
-		if h.TaskService != nil {
-			h.TaskService.ReconcileAgentStatus(ctx, agent.ID)
-		}
-	}
-}
-
-// InviteGroupManager is the manual entrypoint for existing groups: a member asks
-// to add Beckham to a group that predates auto-provisioning.
+// InviteGroupManager is the on-demand hire/invite entrypoint: create (or reuse)
+// the single Beckham for a group. Channel create no longer calls this path
+// automatically (LRM-397/398).
 func (h *Handler) InviteGroupManager(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {

@@ -166,6 +166,66 @@ func TestCreateChannelDuplicateNameReturnsCodedConflict(t *testing.T) {
 	}
 }
 
+// LRM-398: CreateChannel must not auto-provision 贝克汉姆 / group_manager.
+func TestCreateChannelDoesNotAutoProvisionGroupManager(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+
+	// Seed a runtime so a latent auto-provision path would succeed if still wired.
+	var rtID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (workspace_id, owner_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
+		VALUES ($1, $2, $3, 'cloud', 'lrm398_create', 'online', '', '{}'::jsonb, now())
+		RETURNING id
+	`, testWorkspaceID, testUserID, "lrm398-rt-"+uuid.NewString()).Scan(&rtID); err != nil {
+		t.Fatalf("seed runtime: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, rtID) })
+
+	name := "no-auto-gm-" + uuid.NewString()
+	rec := httptest.NewRecorder()
+	req := withChannelTestWorkspaceCtx(t, newRequest(http.MethodPost, "/api/channels", map[string]any{"name": name}), testUserID)
+	testHandler.CreateChannel(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("CreateChannel: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var created ChannelResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM channel_member WHERE channel_id = $1`, created.ID)
+		testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, created.ID)
+	})
+
+	var managerID pgtype.UUID
+	var kind string
+	if err := testPool.QueryRow(ctx, `
+		SELECT kind, group_manager_agent_id FROM channel WHERE id = $1
+	`, created.ID).Scan(&kind, &managerID); err != nil {
+		t.Fatalf("load channel: %v", err)
+	}
+	if kind != "group" {
+		t.Fatalf("kind=%q, want group", kind)
+	}
+	if managerID.Valid {
+		t.Fatalf("group_manager_agent_id=%s, want NULL (no auto-provision)", uuidToString(managerID))
+	}
+
+	var agentMembers int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM channel_member
+		WHERE channel_id = $1 AND member_type = 'agent'
+	`, created.ID).Scan(&agentMembers); err != nil {
+		t.Fatalf("count agent members: %v", err)
+	}
+	if agentMembers != 0 {
+		t.Fatalf("agent members=%d, want 0 after create", agentMembers)
+	}
+}
+
 func TestChannelMentionStoresThreadContextAndBridgesAgentReply(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

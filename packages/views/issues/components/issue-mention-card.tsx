@@ -12,6 +12,27 @@ interface IssueMentionCardProps {
 }
 
 /**
+ * Prefer the author's link text / live identifier over a bare UUID.
+ *
+ * LRM-493 / LRM-238: never silently paint a truncated UUID (`fe57cec6-…`) when
+ * we have (or can resolve) an LRM-id. Author label wins when it is already a
+ * human identifier; otherwise the live `issue.identifier` wins once resolved.
+ */
+export function resolveIssueMentionDisplayText(
+  issueId: string,
+  fallbackLabel: string | undefined,
+  identifier: string | undefined,
+): string | null {
+  const label = fallbackLabel?.trim();
+  if (label && !isIssueUuid(label)) return label;
+  if (identifier) return identifier;
+  if (!isIssueUuid(issueId)) return issueId;
+  // Explicit UUID mention with no author label and no resolve yet — refuse to
+  // paint the UUID rather than truncate it as a fake identifier.
+  return null;
+}
+
+/**
  * An issue reference in a message body that the server did NOT anchor — the legacy
  * client-side path: `preprocessIssueRefs` rewrites a bare `MUL-123` in prose into
  * `mention://issue/MUL-123`, and this renders it.
@@ -37,10 +58,21 @@ interface IssueMentionCardProps {
 export function IssueMentionCard({ issueId, fallbackLabel, sourceMessageId }: IssueMentionCardProps) {
   const isUuid = isIssueUuid(issueId);
   const issue = useResolvedIssue(issueId);
+  const displayText = resolveIssueMentionDisplayText(
+    issueId,
+    fallbackLabel,
+    issue?.identifier,
+  );
 
   if (!isUuid && !issue) {
     // Auto-linked identifier that doesn't resolve — keep it as plain text.
     return <span className="not-prose">{fallbackLabel ?? issueId}</span>;
+  }
+
+  // UUID mention still loading / deleted with no human label — do not flash UUID
+  // ink (LRM-493). Once `useResolvedIssue` lands, we re-render with the identifier.
+  if (!displayText) {
+    return null;
   }
 
   // `source="fallback"` is invisible to the reader, deliberately: it exists only so a
@@ -52,7 +84,7 @@ export function IssueMentionCard({ issueId, fallbackLabel, sourceMessageId }: Is
   return (
     <IssueRefLink
       issueId={issueId}
-      text={fallbackLabel ?? issueId}
+      text={displayText}
       source="fallback"
       sourceMessageId={sourceMessageId}
     />

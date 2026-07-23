@@ -143,7 +143,16 @@ function defaultRenderMention(
   sourceMessageId?: string,
 ): React.ReactNode {
   if (type === "issue") {
-    return <IssueMentionCard issueId={id} sourceMessageId={sourceMessageId} />;
+    // Link text is the author's label (e.g. `[LRM-487](mention://issue/<uuid>)`).
+    // Dropping it forced IssueMentionCard to paint the raw UUID — on mobile that
+    // truncates to `fe57cec6-…` (LRM-493). Pass it through as fallbackLabel.
+    return (
+      <IssueMentionCard
+        issueId={id}
+        fallbackLabel={label}
+        sourceMessageId={sourceMessageId}
+      />
+    );
   }
   if (type === "project") {
     return <ProjectMentionCard projectId={id} />;

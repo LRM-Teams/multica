@@ -1,10 +1,13 @@
 import { render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { IssueMentionCard } from "./issue-mention-card";
+import {
+  IssueMentionCard,
+  resolveIssueMentionDisplayText,
+} from "./issue-mention-card";
 
 let resolvedIssue:
-  | { id: string; title: string; status?: string; priority?: string }
+  | { id: string; identifier: string; title: string; status?: string; priority?: string }
   | undefined;
 
 vi.mock("./issue-chip", () => ({
@@ -73,7 +76,12 @@ describe("IssueMentionCard (#520 — the unanchored fallback)", () => {
     // Frank caught one message rendering LRM-126 three times in two looks: two
     // anchored (plain link) and one unanchored (a bordered chip). A compat path may
     // survive; it may not grow a second face.
-    resolvedIssue = { id: "issue-uuid", title: "Fix the login bug", status: "todo" };
+    resolvedIssue = {
+      id: "issue-uuid",
+      identifier: "LRM-126",
+      title: "Fix the login bug",
+      status: "todo",
+    };
     const { container } = render(<IssueMentionCard issueId="LRM-126" fallbackLabel="LRM-126" />);
 
     // The identifier appears twice — the link and the peek's eyebrow — so select
@@ -95,7 +103,12 @@ describe("IssueMentionCard (#520 — the unanchored fallback)", () => {
     // Frank: hovering LRM-127 popped the peek AND a URL preview. The suppression is
     // an attribute — it says what the link IS, so a restyle cannot silently take the
     // behaviour with it (see link-hover-card.test.tsx for the other half).
-    resolvedIssue = { id: "issue-uuid", title: "Fix the login bug", status: "todo" };
+    resolvedIssue = {
+      id: "issue-uuid",
+      identifier: "LRM-126",
+      title: "Fix the login bug",
+      status: "todo",
+    };
     const { container } = render(<IssueMentionCard issueId="LRM-126" fallbackLabel="LRM-126" />);
 
     expect(container.querySelector("a[data-issue-ref]")).not.toBeNull();
@@ -105,7 +118,12 @@ describe("IssueMentionCard (#520 — the unanchored fallback)", () => {
     // Parker's ruling: don't use a degraded UX as a bug detector. The fallback holds
     // only an identifier, but useResolvedIssue accepts identifiers — which is exactly
     // how the old chip showed a title for mention://issue/LRM-126.
-    resolvedIssue = { id: "issue-uuid", title: "Fix the login bug", status: "todo" };
+    resolvedIssue = {
+      id: "issue-uuid",
+      identifier: "LRM-126",
+      title: "Fix the login bug",
+      status: "todo",
+    };
     render(<IssueMentionCard issueId="LRM-126" fallbackLabel="LRM-126" />);
 
     expect(screen.getByTestId("issue-hover-content")).toHaveTextContent("Fix the login bug");
@@ -115,7 +133,12 @@ describe("IssueMentionCard (#520 — the unanchored fallback)", () => {
     // Invisible to readers, visible to assertions. Iris's acceptance: N occurrences
     // of one identifier in a message must ALL be `anchor`; a `fallback` = the parser
     // skipped one (#521). Scaffolding — deleted with this path once #521 lands.
-    resolvedIssue = { id: "issue-uuid", title: "Fix the login bug", status: "todo" };
+    resolvedIssue = {
+      id: "issue-uuid",
+      identifier: "LRM-126",
+      title: "Fix the login bug",
+      status: "todo",
+    };
     const { container } = render(<IssueMentionCard issueId="LRM-126" fallbackLabel="LRM-126" />);
 
     expect(container.querySelector("a[data-ref-source]")).toHaveAttribute(
@@ -131,5 +154,72 @@ describe("IssueMentionCard (#520 — the unanchored fallback)", () => {
     const text = screen.getByText("LRM-999");
     expect(text.tagName).toBe("SPAN");
     expect(text).not.toHaveAttribute("href");
+  });
+
+  it("paints the author link label for mention://issue/<uuid> — never the UUID (LRM-493)", () => {
+    // Morgan: `[LRM-487](mention://issue/fe57cec6-…)` must read LRM-487 on mobile,
+    // not a truncated UUID. Label comes from markdown link text.
+    resolvedIssue = undefined;
+    const { container } = render(
+      <IssueMentionCard
+        issueId="fe57cec6-0a45-4d90-9ef6-6571f429c047"
+        fallbackLabel="LRM-487"
+      />,
+    );
+    const link = container.querySelector("a[data-ref-source]");
+    expect(link).toHaveTextContent("LRM-487");
+    expect(link).not.toHaveTextContent("fe57cec6");
+  });
+
+  it("prefers live identifier over a UUID-shaped label once resolved (LRM-238)", () => {
+    resolvedIssue = {
+      id: "fe57cec6-0a45-4d90-9ef6-6571f429c047",
+      identifier: "LRM-487",
+      title: "Soft-ask design",
+      status: "todo",
+    };
+    const { container } = render(
+      <IssueMentionCard
+        issueId="fe57cec6-0a45-4d90-9ef6-6571f429c047"
+        fallbackLabel="fe57cec6-0a45-4d90-9ef6-6571f429c047"
+      />,
+    );
+    expect(container.querySelector("a[data-ref-source]")).toHaveTextContent("LRM-487");
+  });
+
+  it("renders nothing rather than a bare UUID while unresolved (LRM-493)", () => {
+    resolvedIssue = undefined;
+    const { container } = render(
+      <IssueMentionCard issueId="fe57cec6-0a45-4d90-9ef6-6571f429c047" />,
+    );
+    expect(container.querySelector("a[data-ref-source]")).toBeNull();
+    expect(container.textContent).toBe("");
+  });
+});
+
+describe("resolveIssueMentionDisplayText", () => {
+  it("prefers non-UUID author label, then identifier, never UUID", () => {
+    expect(
+      resolveIssueMentionDisplayText(
+        "fe57cec6-0a45-4d90-9ef6-6571f429c047",
+        "LRM-487",
+        "LRM-487",
+      ),
+    ).toBe("LRM-487");
+    expect(
+      resolveIssueMentionDisplayText(
+        "fe57cec6-0a45-4d90-9ef6-6571f429c047",
+        undefined,
+        "LRM-487",
+      ),
+    ).toBe("LRM-487");
+    expect(
+      resolveIssueMentionDisplayText(
+        "fe57cec6-0a45-4d90-9ef6-6571f429c047",
+        "fe57cec6-0a45-4d90-9ef6-6571f429c047",
+        undefined,
+      ),
+    ).toBeNull();
+    expect(resolveIssueMentionDisplayText("LRM-126", undefined, undefined)).toBe("LRM-126");
   });
 });

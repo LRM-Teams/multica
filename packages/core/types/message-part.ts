@@ -28,6 +28,8 @@ export type MessagePart =
       duration_ms?: number;
       /** Server-owned ASR state for recorded human input. */
       transcription_status?: "pending" | "completed" | "failed";
+      /** Server-owned TTS state for Agent voice output. */
+      synthesis_status?: "pending" | "completed" | "failed";
     }
   | {
       type: "reference";

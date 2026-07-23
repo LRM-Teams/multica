@@ -23,6 +23,7 @@ import {
   Settings,
   Smartphone,
   Square,
+  Trash2,
   Users,
   UserPlus,
   X,
@@ -1737,11 +1738,13 @@ export function ChannelsPage({
     qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
   });
 
-  // Another client deleted a channel — drop it from the list. If it was the
-  // open one, `active` falls back to the first remaining channel via the memo.
+  // Another client hard-deleted a channel — drop it from active + Archived.
+  // If it was the open one, `active` falls back via the memo.
   useWSEvent("channel:deleted", (payload) => {
     const e = payload as { id?: string };
-    qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
+    // LRM-485 — archived-list is separate from list; invalidating only list
+    // left permanently-deleted channels stuck under Archived (N).
+    qc.invalidateQueries({ queryKey: channelKeys.all(wsId) });
     if (e.id && e.id === activeId) setActiveId(null);
   });
 
@@ -2704,6 +2707,25 @@ export function ChannelsPage({
                   {archivedOpen &&
                     archivedChannels.map((channel) => {
                       const restoreAllowed = canArchive(channel);
+                      const deleteAllowed = canDeleteChannel(channel);
+                      const archivedDeleteItem = deleteAllowed ? (
+                        <DropdownMenuItem
+                          variant="destructive"
+                          onClick={() => setDeleteTarget(channel)}
+                        >
+                          <Trash2 className="size-4" />
+                          {t(($) => $.sidebar.delete)}
+                        </DropdownMenuItem>
+                      ) : null;
+                      const archivedDeleteContextItem = deleteAllowed ? (
+                        <ContextMenuItem
+                          variant="destructive"
+                          onClick={() => setDeleteTarget(channel)}
+                        >
+                          <Trash2 className="size-4" />
+                          {t(($) => $.sidebar.delete)}
+                        </ContextMenuItem>
+                      ) : null;
                       return (
                         <ContextMenu key={channel.id}>
                           <ContextMenuTrigger
@@ -2758,6 +2780,7 @@ export function ChannelsPage({
                                     </TooltipContent>
                                   </Tooltip>
                                 )}
+                                {archivedDeleteItem}
                               </DropdownMenuContent>
                             </DropdownMenu>
                           </ContextMenuTrigger>
@@ -2784,6 +2807,7 @@ export function ChannelsPage({
                                 </TooltipContent>
                               </Tooltip>
                             )}
+                            {archivedDeleteContextItem}
                           </ContextMenuContent>
                         </ContextMenu>
                       );

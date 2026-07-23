@@ -1286,7 +1286,8 @@ export function useRealtimeSync(
 
     const unsubChannelUpdated = ws.on("channel:updated", () => {
       const id = getCurrentWsId();
-      if (id) qc.invalidateQueries({ queryKey: channelKeys.list(id) });
+      // Include archived-list (archive/restore) — list alone leaves Archived stale.
+      if (id) qc.invalidateQueries({ queryKey: channelKeys.all(id) });
     });
 
     return () => {

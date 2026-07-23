@@ -33,7 +33,8 @@ implementations in the orchestration logic.
 - [x] Preserve the original session identity when the connecting transition
   fails so compensation can update the correct row.
 - [x] Run package tests, vet, and diff checks.
-- [ ] Commit, push, and open an independent ready PR stacked on #1040.
+- [x] Commit, push, and open independent ready PR
+  [#1041](https://github.com/LRM-Teams/multica/pull/1041), stacked on #1040.
 
 ## Verification
 

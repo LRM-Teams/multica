@@ -114,7 +114,9 @@ func (h *Handler) channelMentionCandidates(ctx context.Context, workspaceID, cha
 	rows, err := h.DB.Query(ctx, `
 		SELECT cm.member_type, cm.member_id,
 		       COALESCE(u.name, a.name, ''),
-		       COALESCE(NULLIF(u.display_name, ''), NULLIF(a.display_name, ''), '')
+		       COALESCE(NULLIF(u.display_name, ''), NULLIF(a.display_name, ''), ''),
+		       COALESCE(a.visibility, ''),
+		       a.home_channel_id
 		FROM channel_member cm
 		LEFT JOIN "user" u ON cm.member_type = 'user' AND u.id = cm.member_id
 		LEFT JOIN agent a ON cm.member_type = 'agent' AND a.id = cm.member_id
@@ -129,14 +131,19 @@ func (h *Handler) channelMentionCandidates(ctx context.Context, workspaceID, cha
 	candidates := map[string]channelMentionCandidate{}
 	ambiguous := map[string]bool{}
 	for rows.Next() {
-		var memberType, name, displayName string
-		var memberID pgtype.UUID
-		if err := rows.Scan(&memberType, &memberID, &name, &displayName); err != nil {
+		var memberType, name, displayName, visibility string
+		var memberID, homeChannelID pgtype.UUID
+		if err := rows.Scan(&memberType, &memberID, &name, &displayName, &visibility, &homeChannelID); err != nil {
 			continue
 		}
 		mentionType := "member"
 		if memberType == "agent" {
 			mentionType = "agent"
+			if !channelVisibilityAllowsMention(visibility, uuidToString(homeChannelID), channelID) {
+				// LRM-240: channel-visibility agents stay out of @ candidates
+				// outside their home channel (存量席位保留，但不出现在候选).
+				continue
+			}
 		}
 		handle := strings.TrimSpace(name)
 		if mentionType == "agent" && validateIdentityHandle(handle) != nil {

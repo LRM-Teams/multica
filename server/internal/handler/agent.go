@@ -64,7 +64,10 @@ type AgentResponse struct {
 	CustomEnvKeyCount int    `json:"custom_env_key_count"`
 	McpConfigRedacted bool   `json:"mcp_config_redacted"`
 	Visibility        string `json:"visibility"`
-	Status            string `json:"status"`
+	// HomeChannelID is set iff visibility=channel (LRM-370 / LRM-240). Null
+	// for workspace/private agents — pairing is enforced on write.
+	HomeChannelID *string `json:"home_channel_id,omitempty"`
+	Status        string  `json:"status"`
 	// ManagedRole marks agents the platform manages specially. Empty for
 	// ordinary agents; "group_manager" for a per-group Beckham. The UI keys
 	// the channel-panel config tab (and its any-member editability) off this.
@@ -228,6 +231,7 @@ func (h *Handler) attachAgentRuntimeNames(ctx context.Context, resps []AgentResp
 		slog.Warn("failed to iterate agent runtime names", "error", err)
 	}
 	h.attachAgentManagedRoles(ctx, resps)
+	h.attachAgentHomeChannels(ctx, resps)
 }
 
 // attachAgentManagedRoles stamps ManagedRole="group_manager" onto the
@@ -735,17 +739,33 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("failed to load group-manager ids for ListAgents", "workspace_id", workspaceID, "error", gmErr)
 		groupManagers = map[string]bool{}
 	}
+	// Optional channel context for invite/discovery (LRM-370): channel-visibility
+	// agents appear only when channel_id matches their home_channel_id.
+	listChannelID := strings.TrimSpace(r.URL.Query().Get("channel_id"))
+	if listChannelID != "" {
+		if _, ok := parseUUIDOrBadRequest(w, listChannelID, "channel_id"); !ok {
+			return
+		}
+	}
+	agentIDs := make([]pgtype.UUID, 0, len(agents))
+	for _, a := range agents {
+		agentIDs = append(agentIDs, a.ID)
+	}
+	homes, homeErr := h.agentHomeChannelIDs(r.Context(), agentIDs)
+	if homeErr != nil {
+		slog.Warn("failed to load home_channel_id for ListAgents", "workspace_id", workspaceID, "error", homeErr)
+		homes = map[string]string{}
+	}
 	visible := make([]AgentResponse, 0, len(agents))
 	for _, a := range agents {
-		if groupManagers[uuidToString(a.ID)] {
+		homeID := homes[uuidToString(a.ID)]
+		if !agentVisibleInList(a, homeID, listChannelID, actorType, actorID, member.Role, groupManagers) {
 			continue
 		}
-		if actorType == "member" && (a.Visibility == "private" || privateAgentOwnerOnly(a)) {
-			if !memberAllowedForPrivateAgent(a, actorID, member.Role) {
-				continue
-			}
-		}
 		resp := agentToResponse(a)
+		if homeID != "" {
+			resp.HomeChannelID = &homeID
+		}
 		if skills, ok := skillMap[resp.ID]; ok {
 			resp.Skills = skills
 		}
@@ -835,6 +855,8 @@ type CreateAgentRequest struct {
 	CustomArgs         []string              `json:"custom_args"`
 	McpConfig          json.RawMessage       `json:"mcp_config"`
 	Visibility         string                `json:"visibility"`
+	// HomeChannelID is required when visibility=channel (LRM-370).
+	HomeChannelID      *string               `json:"home_channel_id"`
 	MaxConcurrentTasks int32                 `json:"max_concurrent_tasks"`
 	Model              string                `json:"model"`
 	ThinkingLevel      string                `json:"thinking_level"`
@@ -905,9 +927,11 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "runtime_id is required")
 		return
 	}
-	if req.Visibility == "" {
-		req.Visibility = "private"
+	visibility, homeChannelID, ok := validateAgentVisibilityCombo(w, req.Visibility, req.HomeChannelID)
+	if !ok {
+		return
 	}
+	req.Visibility = visibility
 	if req.MaxConcurrentTasks == 0 {
 		req.MaxConcurrentTasks = 6
 	}
@@ -918,6 +942,9 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
 	if !ok {
+		return
+	}
+	if homeChannelID.Valid && !h.validateHomeChannelInWorkspace(w, r, workspaceID, homeChannelID) {
 		return
 	}
 
@@ -1008,6 +1035,13 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		avatar = draftAvatar
 	}
 
+	createVisibility := req.Visibility
+	if createVisibility == agentVisibilityChannel {
+		// Insert without home first (CHECK pairs channel↔home); flip both in one
+		// UPDATE immediately after create (LRM-238: no silent fallback on the
+		// public API — the request already validated the combo).
+		createVisibility = agentVisibilityPrivate
+	}
 	createParams := db.CreateAgentParams{
 		WorkspaceID:        wsUUID,
 		Description:        req.Description,
@@ -1015,7 +1049,7 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		RuntimeMode:        runtime.RuntimeMode,
 		RuntimeConfig:      rc,
 		RuntimeID:          runtime.ID,
-		Visibility:         req.Visibility,
+		Visibility:         createVisibility,
 		MaxConcurrentTasks: req.MaxConcurrentTasks,
 		OwnerID:            parseUUID(ownerID),
 		CustomEnv:          ce,
@@ -1056,6 +1090,14 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("agent created", append(logger.RequestAttrs(r), "agent_id", uuidToString(created.ID), "name", created.Name, "workspace_id", workspaceID)...)
+	if req.Visibility == agentVisibilityChannel {
+		if err := h.setAgentVisibilityAndHome(r.Context(), created.ID, agentVisibilityChannel, homeChannelID); err != nil {
+			slog.Warn("set agent channel visibility failed", append(logger.RequestAttrs(r), "error", err, "agent_id", uuidToString(created.ID))...)
+			writeError(w, http.StatusInternalServerError, "failed to set channel visibility")
+			return
+		}
+		created.Visibility = agentVisibilityChannel
+	}
 	if hasDraftID {
 		h.MarkAgentDraftUsed(r, workspaceID, ownerID, draftID, created.ID)
 	}
@@ -1135,6 +1177,10 @@ type UpdateAgentRequest struct {
 	CustomArgs         *[]string        `json:"custom_args"`
 	McpConfig          *json.RawMessage `json:"mcp_config"`
 	Visibility         *string          `json:"visibility"`
+	// HomeChannelID pairs with Visibility for channel agents (LRM-370).
+	// Omitted → leave home alone when visibility unchanged; when switching
+	// to/from channel the combo is validated against the resulting state.
+	HomeChannelID      *string          `json:"home_channel_id"`
 	Status             *string          `json:"status"`
 	MaxConcurrentTasks *int32           `json:"max_concurrent_tasks"`
 	Model              *string          `json:"model"`
@@ -1439,12 +1485,52 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		params.RuntimeMode = pgtype.Text{String: runtime.RuntimeMode, Valid: true}
 		targetRuntimeID = runtime.ID
 	}
-	if req.Visibility != nil {
-		if h.isGroupManagerAgent(r.Context(), existing.ID) && *req.Visibility != "private" {
-			writeError(w, http.StatusBadRequest, "group manager (贝克汉姆) visibility must stay private")
+	existingHomes, homeLoadErr := h.agentHomeChannelIDs(r.Context(), []pgtype.UUID{existing.ID})
+	if homeLoadErr != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load home_channel_id")
+		return
+	}
+	existingHome := existingHomes[uuidToString(existing.ID)]
+	_, homeFieldSent := rawFields["home_channel_id"]
+	_, visibilityFieldSent := rawFields["visibility"]
+
+	applyVisibilityHome := false
+	targetVisibility := existing.Visibility
+	var targetHomeUUID pgtype.UUID
+	if visibilityFieldSent || homeFieldSent {
+		if req.Visibility != nil {
+			targetVisibility = strings.TrimSpace(*req.Visibility)
+		}
+		var targetHomePtr *string
+		switch {
+		case homeFieldSent:
+			targetHomePtr = req.HomeChannelID
+			if targetHomePtr == nil {
+				empty := ""
+				targetHomePtr = &empty
+			}
+		case targetVisibility == agentVisibilityChannel && existingHome != "":
+			targetHomePtr = &existingHome
+		case targetVisibility == agentVisibilityChannel:
+			empty := ""
+			targetHomePtr = &empty
+		default:
+			targetHomePtr = nil
+		}
+		normalized, homeUUID, ok := validateAgentVisibilityCombo(w, targetVisibility, targetHomePtr)
+		if !ok {
 			return
 		}
-		params.Visibility = pgtype.Text{String: *req.Visibility, Valid: true}
+		targetVisibility = normalized
+		targetHomeUUID = homeUUID
+		if h.isGroupManagerAgent(r.Context(), existing.ID) && targetVisibility != agentVisibilityChannel {
+			writeError(w, http.StatusBadRequest, "group manager (贝克汉姆) visibility must stay channel")
+			return
+		}
+		if homeUUID.Valid && !h.validateHomeChannelInWorkspace(w, r, uuidToString(existing.WorkspaceID), homeUUID) {
+			return
+		}
+		applyVisibilityHome = true
 	}
 	if req.Status != nil {
 		params.Status = pgtype.Text{String: *req.Status, Valid: true}
@@ -1569,6 +1655,14 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to clear thinking_level: "+err.Error())
 			return
 		}
+	}
+	if applyVisibilityHome {
+		if err := h.setAgentVisibilityAndHome(r.Context(), updated.ID, targetVisibility, targetHomeUUID); err != nil {
+			slog.Warn("set agent visibility/home failed", append(logger.RequestAttrs(r), "error", err, "agent_id", id)...)
+			writeError(w, http.StatusInternalServerError, "failed to update visibility")
+			return
+		}
+		updated.Visibility = targetVisibility
 	}
 
 	resp := agentToResponse(updated)

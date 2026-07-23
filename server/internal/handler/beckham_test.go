@@ -56,8 +56,15 @@ func TestEnsureGroupManagerForChannelProvisionsOne(t *testing.T) {
 	if managedRole != managedRoleGroupManager {
 		t.Fatalf("managed_role = %q, want %q", managedRole, managedRoleGroupManager)
 	}
-	if visibility != "private" {
-		t.Fatalf("visibility = %q, want private", visibility)
+	if visibility != "channel" {
+		t.Fatalf("visibility = %q, want channel", visibility)
+	}
+	var homeChannelID pgtype.UUID
+	if err := testPool.QueryRow(ctx, `SELECT home_channel_id FROM agent WHERE id = $1`, agent.ID).Scan(&homeChannelID); err != nil {
+		t.Fatalf("load home_channel_id: %v", err)
+	}
+	if uuidToString(homeChannelID) != channelID {
+		t.Fatalf("home_channel_id = %s, want %s", uuidToString(homeChannelID), channelID)
 	}
 	if err := testPool.QueryRow(ctx, `
 		SELECT member_id FROM channel_member

@@ -501,9 +501,9 @@ func TestGetMemberProfile_GroupManagerReturnsDisplayName(t *testing.T) {
 	displayName := "贝克汉姆"
 	if _, err := testPool.Exec(ctx, `
 		UPDATE agent
-		SET managed_role = 'group_manager', display_name = $2, visibility = 'private'
+		SET managed_role = 'group_manager', display_name = $2, visibility = 'channel', home_channel_id = $3
 		WHERE id = $1
-	`, agentID, displayName); err != nil {
+	`, agentID, displayName, seedChannelForTest(t, "beckham-profile-ch-"+uuid.NewString()[:8], testUserID)); err != nil {
 		t.Fatalf("mark group manager: %v", err)
 	}
 

@@ -3743,6 +3743,16 @@ func (h *Handler) validateChannelMemberTarget(w http.ResponseWriter, r *http.Req
 			writeError(w, http.StatusBadRequest, "群管理（贝克汉姆）由系统按群自动管理，不能手动加入频道")
 			return false
 		}
+		homes, homeErr := h.agentHomeChannelIDs(r.Context(), []pgtype.UUID{memberID})
+		if homeErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load agent home_channel_id")
+			return false
+		}
+		channelID := chi.URLParam(r, "channelId")
+		if err := canInviteAgentToChannel(agent, homes[uuidToString(memberID)], channelID); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return false
+		}
 		return true
 	default:
 		writeError(w, http.StatusBadRequest, "member_type must be user or agent")

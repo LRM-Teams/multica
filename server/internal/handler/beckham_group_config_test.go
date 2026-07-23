@@ -10,12 +10,13 @@ import (
 	"github.com/google/uuid"
 )
 
-// markGroupManagerForTest flags an agent as a per-group Beckham and makes it
-// private (mirrors how Beckham is actually provisioned — LRM-233).
-func markGroupManagerForTest(t *testing.T, agentID string) {
+// markGroupManagerForTest flags an agent as a per-group Beckham bound to a
+// channel (LRM-370 / LRM-240 channel visibility).
+func markGroupManagerForTest(t *testing.T, agentID, homeChannelID string) {
 	t.Helper()
 	if _, err := testPool.Exec(context.Background(),
-		`UPDATE agent SET managed_role = 'group_manager', visibility = 'private' WHERE id = $1`, agentID,
+		`UPDATE agent SET managed_role = 'group_manager', visibility = 'channel', home_channel_id = $2 WHERE id = $1`,
+		agentID, homeChannelID,
 	); err != nil {
 		t.Fatalf("mark group manager: %v", err)
 	}
@@ -29,7 +30,8 @@ func TestUpdateAgent_GroupManagerEditableByPlainMember(t *testing.T) {
 		t.Skip("database not available")
 	}
 	agentID := createHandlerTestAgent(t, "beckham-config-"+uuid.NewString(), nil)
-	markGroupManagerForTest(t, agentID)
+	channelID := seedChannelForTest(t, "beckham-cfg-"+uuid.NewString(), testUserID)
+	markGroupManagerForTest(t, agentID, channelID)
 	memberID := createWorkspaceMemberUser(t, "cfg-member", "cfg-member-"+uuid.NewString()+"@example.com")
 
 	req := newRequestAs(memberID, http.MethodPut, "/api/agents/"+agentID, map[string]any{
@@ -63,7 +65,8 @@ func TestCanUpdateAgent_GroupManagerAllowsRuntimePayloadFields(t *testing.T) {
 		t.Skip("database not available")
 	}
 	agentID := createHandlerTestAgent(t, "beckham-payload-"+uuid.NewString(), nil)
-	markGroupManagerForTest(t, agentID)
+	channelID := seedChannelForTest(t, "beckham-payload-ch-"+uuid.NewString(), testUserID)
+	markGroupManagerForTest(t, agentID, channelID)
 	memberID := createWorkspaceMemberUser(t, "payload-member", "payload-member-"+uuid.NewString()+"@example.com")
 	agent, err := testHandler.Queries.GetAgent(context.Background(), parseUUID(agentID))
 	if err != nil {
@@ -88,7 +91,8 @@ func TestUpdateAgent_GroupManagerForbidsPlainMemberIdentityChanges(t *testing.T)
 		t.Skip("database not available")
 	}
 	agentID := createHandlerTestAgent(t, "beckham-identity-"+uuid.NewString(), nil)
-	markGroupManagerForTest(t, agentID)
+	channelID := seedChannelForTest(t, "beckham-identity-ch-"+uuid.NewString(), testUserID)
+	markGroupManagerForTest(t, agentID, channelID)
 	memberID := createWorkspaceMemberUser(t, "identity-member", "identity-member-"+uuid.NewString()+"@example.com")
 
 	for _, body := range []map[string]any{
@@ -111,7 +115,8 @@ func TestArchiveAgent_GroupManagerForbidsPlainMember(t *testing.T) {
 		t.Skip("database not available")
 	}
 	agentID := createHandlerTestAgent(t, "beckham-archive-"+uuid.NewString(), nil)
-	markGroupManagerForTest(t, agentID)
+	channelID := seedChannelForTest(t, "beckham-archive-ch-"+uuid.NewString(), testUserID)
+	markGroupManagerForTest(t, agentID, channelID)
 	memberID := createWorkspaceMemberUser(t, "archive-member", "archive-member-"+uuid.NewString()+"@example.com")
 
 	req := newRequestAs(memberID, http.MethodPost, "/api/agents/"+agentID+"/archive", nil)
@@ -152,7 +157,8 @@ func TestGetAgent_ManagedRoleOnlyForGroupManager(t *testing.T) {
 	}
 	normalID := createHandlerTestAgent(t, "plain-"+uuid.NewString(), nil)
 	beckhamID := createHandlerTestAgent(t, "beckham-"+uuid.NewString(), nil)
-	markGroupManagerForTest(t, beckhamID)
+	channelID := seedChannelForTest(t, "beckham-role-ch-"+uuid.NewString(), testUserID)
+	markGroupManagerForTest(t, beckhamID, channelID)
 
 	for _, tc := range []struct {
 		id   string

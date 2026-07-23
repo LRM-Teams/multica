@@ -1320,6 +1320,29 @@ export class ApiClient {
     await this.fetch(`/api/runtimes/${runtimeId}`, { method: "DELETE" });
   }
 
+  // Computer / host one-click delete (LRM-438). Deletes every runtime under
+  // the given daemon_id in the current workspace in one request. All-or-nothing:
+  // structured 409 with `code` when any runtime is online, has active agents,
+  // active tasks, or blocking squads — FE must surface the reason (LRM-238),
+  // not fall back to per-row DELETE.
+  async deleteRuntimesByDaemon(
+    daemonId: string,
+    opts?: { runtimeMode?: string },
+  ): Promise<{
+    status: string;
+    daemon_id: string;
+    deleted_count: number;
+    deleted_runtime_ids: string[];
+  }> {
+    const search = new URLSearchParams();
+    if (opts?.runtimeMode) search.set("runtime_mode", opts.runtimeMode);
+    const qs = search.toString();
+    return this.fetch(
+      `/api/runtimes/by-daemon/${encodeURIComponent(daemonId)}${qs ? `?${qs}` : ""}`,
+      { method: "DELETE" },
+    );
+  }
+
   // Cascade variant of deleteRuntime. The strict DELETE refuses with
   // structured 409 (`code: "runtime_has_active_agents"`, body carries the
   // blocking agents) when active agents are bound; the front-end then opens

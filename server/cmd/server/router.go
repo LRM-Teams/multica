@@ -1075,6 +1075,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Runtimes
 			r.Route("/api/runtimes", func(r chi.Router) {
 				r.Get("/", h.ListAgentRuntimes)
+				// Computer / host one-click delete (LRM-438). Must be
+				// registered before /{runtimeId} so "by-daemon" is not
+				// captured as a runtime UUID.
+				r.Delete("/by-daemon/{daemonId}", h.DeleteRuntimesByDaemon)
 				r.Route("/{runtimeId}", func(r chi.Router) {
 					r.Patch("/", h.UpdateAgentRuntime)
 					r.Get("/usage", h.GetRuntimeUsage)

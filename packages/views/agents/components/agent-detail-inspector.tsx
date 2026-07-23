@@ -158,8 +158,7 @@ export function AgentDetailInspector({
           <VisibilityPicker
             value={agent.visibility}
             homeChannelId={agent.home_channel_id ?? null}
-            // Group managers (贝克汉姆) are server-locked to visibility=channel.
-            canEdit={canEdit && agent.managed_role !== "group_manager"}
+            canEdit={canEdit}
             onChange={(next) =>
               update({
                 visibility: next.visibility,

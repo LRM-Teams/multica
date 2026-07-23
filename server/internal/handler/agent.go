@@ -1502,10 +1502,9 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		if req.Visibility != nil {
 			targetVisibility = *req.Visibility
 		}
-		if h.isGroupManagerAgent(r.Context(), existing.ID) && targetVisibility != agentVisibilityChannel {
-			writeError(w, http.StatusBadRequest, "group manager (贝克汉姆) visibility must stay channel")
-			return
-		}
+		// Group managers (贝克汉姆) may change visibility like any other agent
+		// (Frank / LRM-387): the previous "must stay channel" gate made the
+		// profile picker look broken. Default create still binds channel+home.
 		_, homeProvided := rawFields["home_channel_id"]
 		var homePtr *string
 		if homeProvided {

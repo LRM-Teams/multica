@@ -53,9 +53,9 @@ type issueThreadSystemEventItem struct {
 // managers are hidden from ListAgents (LRM-233) and must be looked up via the
 // profile API instead.
 //
-// For aggregatable events (completed / assigned), `items` always carries every
-// merged transition (N>=1). Top-level issue_* / target_* mirror the latest item
-// so older single-issue readers keep working.
+// For aggregatable events, `items` always carries every merged transition
+// (N>=1). Top-level issue_* / target_* mirror the latest item so older
+// single-issue readers keep working.
 type issueThreadSystemEventParams struct {
 	IssueID         string                       `json:"issue_id"`
 	IssueIdentifier string                       `json:"issue_identifier"`
@@ -287,7 +287,8 @@ func (h *Handler) tryMergeIssueThreadBackflow(ctx context.Context, ch ChannelRes
 	}
 	defer tx.Rollback(ctx)
 
-	lockKey := issueThreadAggregationLockKey(scope, incoming.ActorType, incoming.ActorID, event)
+	aggregationKind := issueThreadAggregationKind(event, incoming)
+	lockKey := issueThreadAggregationLockKey(scope, incoming.ActorType, incoming.ActorID, aggregationKind)
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))`, lockKey); err != nil {
 		slog.Warn("issue thread backflow: aggregation lock", "issue", incoming.IssueIdentifier, "event", event, "error", err)
 		return false
@@ -316,6 +317,10 @@ func (h *Handler) tryMergeIssueThreadBackflow(ctx context.Context, ch ChannelRes
 		          AND part->>'event' = $5
 		          AND COALESCE(part->'event_params'->>'actor_id', '') = $6
 		          AND COALESCE(part->'event_params'->>'actor_type', '') = $7
+		          AND (
+		                $8 = ''
+		             OR COALESCE(part->'event_params'->>'issue_status', '') = $8
+		          )
 		  )
 		ORDER BY created_at DESC
 		LIMIT 1
@@ -327,6 +332,7 @@ func (h *Handler) tryMergeIssueThreadBackflow(ctx context.Context, ch ChannelRes
 		event,
 		incoming.ActorID,
 		incoming.ActorType,
+		issueThreadAggregationStatus(event, incoming),
 	).Scan(&msgID, &rawParts)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -377,11 +383,25 @@ func (h *Handler) tryMergeIssueThreadBackflow(ctx context.Context, ch ChannelRes
 
 func issueThreadEventAggregatable(event string) bool {
 	switch event {
-	case issueThreadCompletedEvent, issueThreadAssignedEvent:
+	case issueThreadCreatedEvent, issueThreadAssignedEvent, issueThreadStatusChangedEvent, issueThreadCompletedEvent:
 		return true
 	default:
 		return false
 	}
+}
+
+func issueThreadAggregationStatus(event string, params issueThreadSystemEventParams) string {
+	if event != issueThreadStatusChangedEvent {
+		return ""
+	}
+	return strings.TrimSpace(params.IssueStatus)
+}
+
+func issueThreadAggregationKind(event string, params issueThreadSystemEventParams) string {
+	if status := issueThreadAggregationStatus(event, params); status != "" {
+		return event + ":" + status
+	}
+	return event
 }
 
 func issueThreadAggregationLockKey(scope issueThreadBackflowScope, actorType, actorID, event string) string {
@@ -505,6 +525,8 @@ func issueThreadBackflowContentFromParams(event string, params issueThreadSystem
 	}
 	list := strings.Join(labels, ", ")
 	switch event {
+	case issueThreadCreatedEvent:
+		return fmt.Sprintf("%s created", list)
 	case issueThreadAssignedEvent:
 		return fmt.Sprintf("%s assignment changed", list)
 	case issueThreadCompletedEvent:

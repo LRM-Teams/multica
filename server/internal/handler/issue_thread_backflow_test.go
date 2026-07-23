@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -457,10 +458,137 @@ func TestIssueThreadBackflowDoesNotAggregateDifferentActorsOrTypes(t *testing.T)
 		}
 	}
 	if statusChanged != 1 {
-		t.Fatalf("status_changed rows = %d, want 1 (non-done stays unaggregated)", statusChanged)
+		t.Fatalf("status_changed rows = %d, want 1 (same status type aggregates separately from completed)", statusChanged)
 	}
 	if completed != 2 {
 		t.Fatalf("completed rows = %d, want 2 (different actors)", completed)
+	}
+}
+
+func TestIssueThreadBackflowAggregatesCreatedAcrossIssues(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "issue-backflow-created-agg-"+uuid.NewString(), testUserID)
+	var projectID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO project (workspace_id, title) VALUES ($1, $2) RETURNING id`,
+		testWorkspaceID, "Issue Backflow Created Project "+uuid.NewString(),
+	).Scan(&projectID); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM project WHERE id = $1`, projectID) })
+	if _, err := testPool.Exec(ctx, `
+		UPDATE channel
+		SET project_id = $2
+		WHERE id = $1`, channelID, projectID); err != nil {
+		t.Fatalf("bind channel project: %v", err)
+	}
+
+	createIssue := func(title string) db.Issue {
+		t.Helper()
+		w := httptest.NewRecorder()
+		req := newRequestAs(testUserID, http.MethodPost, "/api/issues?workspace_id="+testWorkspaceID, map[string]any{
+			"title":      title,
+			"status":     "todo",
+			"priority":   "none",
+			"project_id": projectID,
+		})
+		testHandler.CreateIssue(w, req)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("CreateIssue %q = %d: %s", title, w.Code, w.Body.String())
+		}
+		var resp IssueResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode create issue %q: %v", title, err)
+		}
+		issue, err := testHandler.Queries.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{
+			ID:          parseUUID(resp.ID),
+			WorkspaceID: parseUUID(testWorkspaceID),
+		})
+		if err != nil {
+			t.Fatalf("load issue %s: %v", resp.ID, err)
+		}
+		return issue
+	}
+
+	issueA := createIssue("created agg A")
+	issueB := createIssue("created agg B")
+	testHandler.emitIssueThreadBackflow(ctx, issueA, "member", testUserID, issueThreadCreatedEvent, "", issueThreadBackflowTarget{})
+	testHandler.emitIssueThreadBackflow(ctx, issueB, "member", testUserID, issueThreadCreatedEvent, "", issueThreadBackflowTarget{})
+
+	var created []issueThreadBackflowEventForTest
+	for _, event := range loadIssueChannelBackflowEvents(t, channelID) {
+		if event.Event == issueThreadCreatedEvent {
+			created = append(created, event)
+		}
+	}
+	if len(created) != 1 {
+		t.Fatalf("created system rows = %d, want 1 aggregated bubble", len(created))
+	}
+	if len(created[0].Params.Items) != 2 {
+		t.Fatalf("created items = %+v, want 2", created[0].Params.Items)
+	}
+	if !strings.Contains(created[0].Content, "created agg A") || !strings.Contains(created[0].Content, "created") {
+		t.Fatalf("content = %q, want title-first created summary", created[0].Content)
+	}
+	assertIssueThreadBackflowReference(t, created[0], uuidToString(issueA.ID))
+	assertIssueThreadBackflowReference(t, created[0], uuidToString(issueB.ID))
+}
+
+func TestIssueThreadBackflowAggregatesStatusChangedByStatusAcrossIssues(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	channelID := seedChannelForTest(t, "issue-backflow-status-agg-"+uuid.NewString(), testUserID)
+
+	createAnchoredIssue := func(title string) string {
+		t.Helper()
+		var issueID string
+		if err := testPool.QueryRow(ctx, `
+			INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id, number, position)
+			VALUES ($1, $2, 'todo', 'none', 'member', $3, $4, 0)
+			RETURNING id`, testWorkspaceID, title, testUserID, 900000+int(uuid.New().ID()%100000)).Scan(&issueID); err != nil {
+			t.Fatalf("create issue %q: %v", title, err)
+		}
+		t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID) })
+		if _, err := testPool.Exec(ctx, `
+			INSERT INTO issue_source_message (issue_id, workspace_id, channel_id, message_id)
+			VALUES ($1, $2, $3, NULL)`, issueID, testWorkspaceID, channelID); err != nil {
+			t.Fatalf("anchor issue %s: %v", issueID, err)
+		}
+		return issueID
+	}
+
+	issueA := createAnchoredIssue("status agg A")
+	issueB := createAnchoredIssue("status agg B")
+	issueC := createAnchoredIssue("status agg C")
+	updateIssueForBackflowTest(t, issueA, map[string]any{"status": "in_progress"})
+	updateIssueForBackflowTest(t, issueB, map[string]any{"status": "in_progress"})
+	updateIssueForBackflowTest(t, issueC, map[string]any{"status": "in_review"})
+
+	var moved []issueThreadBackflowEventForTest
+	for _, event := range loadIssueChannelBackflowEvents(t, channelID) {
+		if event.Event == issueThreadStatusChangedEvent {
+			moved = append(moved, event)
+		}
+	}
+	if len(moved) != 2 {
+		t.Fatalf("status_changed system rows = %d, want 2 status-specific bubbles", len(moved))
+	}
+	var inProgress issueThreadBackflowEventForTest
+	for _, event := range moved {
+		if event.Params.IssueStatus == "in_progress" {
+			inProgress = event
+		}
+	}
+	if len(inProgress.Params.Items) != 2 {
+		t.Fatalf("in_progress items = %+v, want 2", inProgress.Params.Items)
+	}
+	if !strings.Contains(inProgress.Content, "status agg A") || !strings.Contains(inProgress.Content, "moved") {
+		t.Fatalf("content = %q, want title-first moved summary", inProgress.Content)
 	}
 }
 

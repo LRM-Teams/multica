@@ -34,6 +34,10 @@ export type ActorNameResolver = (
   fallbackLabel: string,
 ) => string;
 
+export interface ChannelMessagePreviewOptions {
+  formatVoice?: (durationSeconds: number | null) => string;
+}
+
 export interface ChannelAuthorIdentity {
   type: ChannelAuthorType;
   author_id?: string | null;
@@ -132,7 +136,19 @@ export function formatChannelMessagePreview(
   content: string,
   resolveMention: MentionPreviewResolver,
   parts?: MessagePart[] | null,
+  options: ChannelMessagePreviewOptions = {},
 ) {
+  const voicePart = parts?.find(
+    (part): part is Extract<MessagePart, { type: "voice" }> => part.type === "voice",
+  );
+  if (voicePart) {
+    const durationSeconds = voicePart.duration_ms
+      ? Math.max(1, Math.round(voicePart.duration_ms / 1000))
+      : null;
+    const voiceSummary = options.formatVoice?.(durationSeconds)
+      ?? (durationSeconds ? `Voice message · ${durationSeconds}s` : "Voice message");
+    return `${authorName}: ${voiceSummary}`.replace(/\s+/g, " ");
+  }
   const source =
     projectReferencesToText(content, parts, resolveMention) ??
     formatMessagePartsPreview(parts) ??

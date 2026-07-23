@@ -322,6 +322,8 @@
     "voice_show_transcript": "转文字",
     "voice_hide_transcript": "收起文字",
     "voice_transcript_label": "语音转写",
+    "voice_preview": "语音消息",
+    "voice_preview_duration": "语音消息 · {{seconds}} 秒",
     "agent_badge": "Agent",
     "radar_badge": "主动发现",
     "feishu_badge": "飞书",

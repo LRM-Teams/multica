@@ -364,9 +364,7 @@ function SectionHeader({
 function EmptyState({ message }: { message: string }) {
   return (
     <View className="flex-1 items-center justify-center px-6">
-      <Text className="text-sm text-muted-foreground text-center">
-        {message}
-      </Text>
+      <Text className="text-sm text-foreground text-center">{message}</Text>
     </View>
   );
 }

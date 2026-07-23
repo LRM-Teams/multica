@@ -419,11 +419,16 @@ function MessageViewport({
     );
   }
 
-  // Empty thread: render the placeholder directly (no message rows).
+  // Empty thread: primary empty copy uses foreground (LRM-357), not muted.
   if (messages.length === 0) {
     return (
       <StaticMessageScroller header={header}>
-        {emptyLabel}
+        <p
+          data-slot="message-list-empty"
+          className="text-sm text-foreground"
+        >
+          {emptyLabel}
+        </p>
       </StaticMessageScroller>
     );
   }

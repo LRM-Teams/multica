@@ -317,12 +317,14 @@ function MemberPresenceStack({
 function EmptyState({ onCreate }: { onCreate: () => void }) {
   const { t } = useT("channels");
   return (
-    <div className="flex h-full items-center justify-center p-8">
-      <div className="max-w-md rounded-3xl border bg-card p-8 text-center shadow-sm">
-        <div className="mx-auto flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+    <div className="flex h-full items-center justify-center bg-background p-8">
+      <div className="max-w-md rounded-3xl border border-border bg-card p-8 text-center shadow-sm">
+        <div className="mx-auto flex size-12 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
           <MessageCircle className="size-6" />
         </div>
-        <h2 className="mt-5 text-xl font-semibold">{t(($) => $.empty_state.title)}</h2>
+        <h2 className="mt-5 text-xl font-semibold text-foreground">
+          {t(($) => $.empty_state.title)}
+        </h2>
         <p className="mt-2 text-sm leading-6 text-muted-foreground">
           {t(($) => $.empty_state.description)}
         </p>

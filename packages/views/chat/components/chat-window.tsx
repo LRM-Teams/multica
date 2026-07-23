@@ -1586,7 +1586,7 @@ function EmptyState({
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-8">
         <div className="text-center space-y-3">
-          <h3 className="text-base font-semibold">
+          <h3 className="text-base font-semibold text-foreground">
             {t(($) => $.empty_state.first_time_title)}
           </h3>
           <p className="text-sm text-muted-foreground">
@@ -1608,7 +1608,7 @@ function EmptyState({
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-5 px-6 py-8">
       <div className="text-center space-y-1">
-        <h3 className="text-base font-semibold">
+        <h3 className="text-base font-semibold text-foreground">
           {agentName
             ? t(($) => $.empty_state.returning_title_named, { name: agentName })
             : t(($) => $.empty_state.returning_title_default)}

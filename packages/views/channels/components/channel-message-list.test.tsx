@@ -667,6 +667,20 @@ describe("ChannelMessageList message edit / delete wiring", () => {
     expect(screen.getByTestId("message-bubble")).toBeInTheDocument();
   });
 
+  it("LRM-357: empty thread primary copy uses text-foreground", () => {
+    render(
+      <MessageViewport
+        messages={[]}
+        currentUserId="user-1"
+        emptyLabel="No messages"
+      />,
+    );
+    const empty = screen.getByText("No messages");
+    expect(empty.getAttribute("data-slot")).toBe("message-list-empty");
+    expect(empty.className).toContain("text-foreground");
+    expect(empty.className).not.toContain("text-muted-foreground");
+  });
+
   it("deletes through onDeleteMessage and renders a tombstone (non-empty row) for a deleted message", async () => {
     const onDeleteMessage = vi.fn();
     const message = makeOwnUserMessage();

@@ -84,7 +84,7 @@ export function ChannelMembersList({
     return (
       <p
         className={cn(
-          "min-h-0 px-5 py-10 text-center text-sm text-muted-foreground",
+          "min-h-0 px-5 py-10 text-center text-sm text-foreground",
           className,
         )}
       >

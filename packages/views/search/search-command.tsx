@@ -711,7 +711,10 @@ export function SearchCommand() {
               !hasResults &&
               filteredPages.length === 0 &&
               filteredCommands.length === 0 && (
-                <CommandPrimitive.Empty className="py-10 text-center text-sm text-muted-foreground">
+                <CommandPrimitive.Empty
+                  data-slot="search-empty"
+                  className="py-10 text-center text-sm text-muted-foreground"
+                >
                   {t(($) => $.empty.no_results)}
                 </CommandPrimitive.Empty>
               )}

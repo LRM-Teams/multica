@@ -30,7 +30,8 @@ startup while keeping deployments that have not opted in operational.
   object graph.
 - [x] Ran targeted server, provider, deployment configuration, vet, and diff
   checks.
-- [ ] Commit, push, and open an independent ready PR stacked on
+- [x] Commit, push, and open independent ready PR
+  [#1084](https://github.com/LRM-Teams/multica/pull/1084), stacked on
   [#1082](https://github.com/LRM-Teams/multica/pull/1082).
 
 ## Deployment boundary
@@ -43,3 +44,10 @@ repository or host dotenv.
 The callback URL is configured now because the provider rejects calls without
 it. The authenticated callback handler itself is the next independent PR, so
 no frontend call entry is exposed by this change.
+
+The repository's shared local database stopped at migration 204, so the full
+router suite initially failed when an existing Agent detail test queried the
+memory table added by migration 207. The same Agent test and the new runtime
+wiring tests passed together against a disposable database migrated through
+215; that database was then dropped. No product code was changed for the stale
+local database.

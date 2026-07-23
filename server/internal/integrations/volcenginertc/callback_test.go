@@ -101,6 +101,103 @@ func TestDecodeConversationStatusCallbackAcceptsProviderErrorDetails(t *testing.
 	}
 }
 
+func TestDecodeServerCallbackUsesDocumentedSubtitleTLV(t *testing.T) {
+	encoded := encodeCallbackTLVForTest(
+		"subv",
+		`{"type":"subtitle","data":[{"text":"你好。","language":"zh-CN","userId":"voice-member-nonce-1","sequence":2,"definite":true,"paragraph":true,"roundId":3,"firstCharPos":4,"lastCharPos":6}]}`,
+	)
+
+	callback, err := DecodeServerCallback(encoded)
+	if err != nil {
+		t.Fatalf("decode server callback: %v", err)
+	}
+	if callback.Kind != ServerCallbackSubtitle ||
+		callback.ConversationStatus != nil ||
+		callback.Subtitle == nil ||
+		len(callback.Subtitle.Data) != 1 {
+		t.Fatalf("callback = %#v", callback)
+	}
+	segment := callback.Subtitle.Data[0]
+	if callback.Subtitle.Type != "subtitle" ||
+		segment.Text != "你好。" ||
+		segment.Language != "zh-CN" ||
+		segment.UserID != "voice-member-nonce-1" ||
+		segment.Sequence != 2 ||
+		!segment.Definite ||
+		!segment.Paragraph ||
+		segment.RoundID != 3 ||
+		segment.FirstCharPos != 4 ||
+		segment.LastCharPos != 6 {
+		t.Fatalf("subtitle = %#v", callback.Subtitle)
+	}
+}
+
+func TestDecodeConversationSubtitleCallbackAcceptsEmptyFinalMarker(t *testing.T) {
+	encoded := encodeCallbackTLVForTest(
+		"subv",
+		`{"type":"subtitle","data":[{"text":"","language":"","userId":"voice-agent-nonce-1","sequence":0,"definite":true,"paragraph":true,"roundId":0}]}`,
+	)
+
+	subtitle, err := DecodeConversationSubtitleCallback(encoded)
+	if err != nil {
+		t.Fatalf("decode empty final marker: %v", err)
+	}
+	if len(subtitle.Data) != 1 || subtitle.Data[0].Text != "" {
+		t.Fatalf("subtitle = %#v", subtitle)
+	}
+}
+
+func TestDecodeConversationSubtitleCallbackValidatesPayload(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		want    string
+	}{
+		{
+			name:    "wrong type",
+			payload: `{"type":"function","data":[{"userId":"voice-agent-1"}]}`,
+			want:    "type",
+		},
+		{
+			name:    "empty data",
+			payload: `{"type":"subtitle","data":[]}`,
+			want:    "data",
+		},
+		{
+			name:    "blank user",
+			payload: `{"type":"subtitle","data":[{"userId":" ","sequence":0,"roundId":0}]}`,
+			want:    "userId",
+		},
+		{
+			name:    "negative sequence",
+			payload: `{"type":"subtitle","data":[{"userId":"voice-agent-1","sequence":-1,"roundId":0}]}`,
+			want:    "sequence",
+		},
+		{
+			name:    "negative round",
+			payload: `{"type":"subtitle","data":[{"userId":"voice-agent-1","sequence":0,"roundId":-1}]}`,
+			want:    "roundId",
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := DecodeConversationSubtitleCallback(
+				encodeCallbackTLVForTest("subv", testCase.payload),
+			)
+			if err == nil || !strings.Contains(err.Error(), testCase.want) {
+				t.Fatalf("error = %v, want %q", err, testCase.want)
+			}
+		})
+	}
+}
+
+func TestDecodeServerCallbackRejectsUnsupportedMagic(t *testing.T) {
+	_, err := DecodeServerCallback(encodeCallbackTLVForTest("ctrl", `{}`))
+	if err == nil || !strings.Contains(err.Error(), "magic") {
+		t.Fatalf("error = %v, want unsupported magic", err)
+	}
+}
+
 func encodeCallbackTLVForTest(magic, payload string) string {
 	data := make([]byte, 8+len(payload))
 	copy(data[:4], magic)

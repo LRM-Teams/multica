@@ -10,11 +10,25 @@ import (
 )
 
 const (
-	conversationStatusMagic           = "conv"
-	conversationStatusHeaderBytes     = 8
-	maxConversationStatusEncodedBytes = 128 << 10
-	maxConversationStatusPayloadBytes = 64 << 10
+	conversationStatusMagic   = "conv"
+	conversationSubtitleMagic = "subv"
+	callbackHeaderBytes       = 8
+	maxCallbackEncodedBytes   = 128 << 10
+	maxCallbackPayloadBytes   = 64 << 10
 )
+
+type ServerCallbackKind string
+
+const (
+	ServerCallbackConversationStatus ServerCallbackKind = "conversation_status"
+	ServerCallbackSubtitle           ServerCallbackKind = "subtitle"
+)
+
+type ServerCallback struct {
+	Kind               ServerCallbackKind
+	ConversationStatus *ConversationStatus
+	Subtitle           *ConversationSubtitle
+}
 
 type ConversationStageCode int
 
@@ -46,40 +60,112 @@ type ConversationError struct {
 	Reason    string `json:"Reason"`
 }
 
+type ConversationSubtitle struct {
+	Type string                        `json:"type"`
+	Data []ConversationSubtitleSegment `json:"data"`
+}
+
+type ConversationSubtitleSegment struct {
+	Definite     bool   `json:"definite"`
+	Paragraph    bool   `json:"paragraph"`
+	Language     string `json:"language"`
+	Sequence     int64  `json:"sequence"`
+	Text         string `json:"text"`
+	UserID       string `json:"userId"`
+	RoundID      int64  `json:"roundId"`
+	FirstCharPos int64  `json:"firstCharPos"`
+	LastCharPos  int64  `json:"lastCharPos"`
+}
+
+func DecodeServerCallback(encoded string) (ServerCallback, error) {
+	magic, payload, err := decodeCallbackFrame(encoded)
+	if err != nil {
+		return ServerCallback{}, err
+	}
+	switch magic {
+	case conversationStatusMagic:
+		status, err := decodeConversationStatus(payload)
+		if err != nil {
+			return ServerCallback{}, err
+		}
+		return ServerCallback{
+			Kind:               ServerCallbackConversationStatus,
+			ConversationStatus: &status,
+		}, nil
+	case conversationSubtitleMagic:
+		subtitle, err := decodeConversationSubtitle(payload)
+		if err != nil {
+			return ServerCallback{}, err
+		}
+		return ServerCallback{
+			Kind:     ServerCallbackSubtitle,
+			Subtitle: &subtitle,
+		}, nil
+	default:
+		return ServerCallback{}, fmt.Errorf(
+			"Volcengine RTC callback magic %q is unsupported",
+			magic,
+		)
+	}
+}
+
 func DecodeConversationStatusCallback(encoded string) (ConversationStatus, error) {
+	callback, err := DecodeServerCallback(encoded)
+	if err != nil {
+		return ConversationStatus{}, err
+	}
+	if callback.Kind != ServerCallbackConversationStatus ||
+		callback.ConversationStatus == nil {
+		return ConversationStatus{}, errors.New("Volcengine RTC callback magic is not conv")
+	}
+	return *callback.ConversationStatus, nil
+}
+
+func DecodeConversationSubtitleCallback(encoded string) (ConversationSubtitle, error) {
+	callback, err := DecodeServerCallback(encoded)
+	if err != nil {
+		return ConversationSubtitle{}, err
+	}
+	if callback.Kind != ServerCallbackSubtitle || callback.Subtitle == nil {
+		return ConversationSubtitle{}, errors.New("Volcengine RTC callback magic is not subv")
+	}
+	return *callback.Subtitle, nil
+}
+
+func decodeCallbackFrame(encoded string) (string, []byte, error) {
 	encoded = strings.TrimSpace(encoded)
 	if encoded == "" {
-		return ConversationStatus{}, errors.New("Volcengine RTC callback message is required")
+		return "", nil, errors.New("Volcengine RTC callback message is required")
 	}
-	if len(encoded) > maxConversationStatusEncodedBytes {
-		return ConversationStatus{}, fmt.Errorf(
+	if len(encoded) > maxCallbackEncodedBytes {
+		return "", nil, fmt.Errorf(
 			"Volcengine RTC callback base64 exceeds %d bytes",
-			maxConversationStatusEncodedBytes,
+			maxCallbackEncodedBytes,
 		)
 	}
 	data, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
-		return ConversationStatus{}, fmt.Errorf("decode Volcengine RTC callback base64: %w", err)
+		return "", nil, fmt.Errorf("decode Volcengine RTC callback base64: %w", err)
 	}
-	if len(data) < conversationStatusHeaderBytes {
-		return ConversationStatus{}, errors.New("Volcengine RTC callback is shorter than its TLV header")
-	}
-	if string(data[:4]) != conversationStatusMagic {
-		return ConversationStatus{}, errors.New("Volcengine RTC callback magic is not conv")
+	if len(data) < callbackHeaderBytes {
+		return "", nil, errors.New("Volcengine RTC callback is shorter than its TLV header")
 	}
 	payloadLength := binary.BigEndian.Uint32(data[4:8])
-	if payloadLength > maxConversationStatusPayloadBytes {
-		return ConversationStatus{}, fmt.Errorf(
+	if payloadLength > maxCallbackPayloadBytes {
+		return "", nil, fmt.Errorf(
 			"Volcengine RTC callback payload exceeds %d bytes",
-			maxConversationStatusPayloadBytes,
+			maxCallbackPayloadBytes,
 		)
 	}
-	if uint64(payloadLength)+conversationStatusHeaderBytes != uint64(len(data)) {
-		return ConversationStatus{}, errors.New("Volcengine RTC callback TLV length does not match payload")
+	if uint64(payloadLength)+callbackHeaderBytes != uint64(len(data)) {
+		return "", nil, errors.New("Volcengine RTC callback TLV length does not match payload")
 	}
+	return string(data[:4]), data[callbackHeaderBytes:], nil
+}
 
+func decodeConversationStatus(payload []byte) (ConversationStatus, error) {
 	var status ConversationStatus
-	if err := json.Unmarshal(data[conversationStatusHeaderBytes:], &status); err != nil {
+	if err := json.Unmarshal(payload, &status); err != nil {
 		return ConversationStatus{}, fmt.Errorf("decode Volcengine RTC conversation status: %w", err)
 	}
 	status.TaskID = strings.TrimSpace(status.TaskID)
@@ -92,6 +178,25 @@ func DecodeConversationStatusCallback(encoded string) (ConversationStatus, error
 		return ConversationStatus{}, err
 	}
 	return status, nil
+}
+
+func decodeConversationSubtitle(payload []byte) (ConversationSubtitle, error) {
+	var subtitle ConversationSubtitle
+	if err := json.Unmarshal(payload, &subtitle); err != nil {
+		return ConversationSubtitle{}, fmt.Errorf(
+			"decode Volcengine RTC conversation subtitle: %w",
+			err,
+		)
+	}
+	subtitle.Type = strings.TrimSpace(subtitle.Type)
+	for index := range subtitle.Data {
+		subtitle.Data[index].Language = strings.TrimSpace(subtitle.Data[index].Language)
+		subtitle.Data[index].UserID = strings.TrimSpace(subtitle.Data[index].UserID)
+	}
+	if err := validateConversationSubtitle(subtitle); err != nil {
+		return ConversationSubtitle{}, err
+	}
+	return subtitle, nil
 }
 
 func validateConversationStatus(status ConversationStatus) error {
@@ -123,6 +228,36 @@ func validateConversationStatus(status ConversationStatus) error {
 		}
 		if status.ErrorInfo.Reason == "" {
 			return errors.New("Volcengine RTC callback ErrorInfo.Reason is required")
+		}
+	}
+	return nil
+}
+
+func validateConversationSubtitle(subtitle ConversationSubtitle) error {
+	if subtitle.Type != "subtitle" {
+		return errors.New("Volcengine RTC subtitle callback type must be subtitle")
+	}
+	if len(subtitle.Data) == 0 {
+		return errors.New("Volcengine RTC subtitle callback data is required")
+	}
+	for index, segment := range subtitle.Data {
+		if segment.UserID == "" {
+			return fmt.Errorf(
+				"Volcengine RTC subtitle callback data[%d].userId is required",
+				index,
+			)
+		}
+		if segment.Sequence < 0 {
+			return fmt.Errorf(
+				"Volcengine RTC subtitle callback data[%d].sequence must not be negative",
+				index,
+			)
+		}
+		if segment.RoundID < 0 {
+			return fmt.Errorf(
+				"Volcengine RTC subtitle callback data[%d].roundId must not be negative",
+				index,
+			)
 		}
 	}
 	return nil

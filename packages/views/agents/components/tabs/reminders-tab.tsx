@@ -215,7 +215,7 @@ function ErrorState({
 }
 
 /** Wire `daily@09:00` / `weekly:mon,fri@10:30` / `every:30m` → readable chip text. */
-export function formatCadenceChipLabel(cadence: Extract<ReminderCadence, { kind: "recurring" }>): string {
+function formatCadenceChipLabel(cadence: Extract<ReminderCadence, { kind: "recurring" }>): string {
   const raw = cadence.description;
   let body = raw;
   const daily = /^daily@(\d{2}:\d{2})$/i.exec(raw);
@@ -284,30 +284,33 @@ function AnchorLink({ anchor }: { anchor: UpcomingReminderRow["anchor"] }) {
   );
 }
 
-function formatAbsoluteInstant(iso: string, locale = "en"): string {
+// Hoisted once — rebuilding Intl.* on every row render fails react-doctor
+// (js-hoist-intl). English-first per LRM-504; full locale wiring follows site i18n.
+const absoluteDateFormatter = new Intl.DateTimeFormat("en", { month: "short", day: "numeric" });
+const absoluteTimeFormatter = new Intl.DateTimeFormat("en", {
+  hour: "numeric",
+  minute: "2-digit",
+});
+const relativeTimeFormatter = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
+
+function formatAbsoluteInstant(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
-  const datePart = date.toLocaleDateString(locale, { month: "short", day: "numeric" });
-  const timePart = date.toLocaleTimeString(locale, {
-    hour: "numeric",
-    minute: "2-digit",
-  });
-  return `${datePart} at ${timePart}`;
+  return `${absoluteDateFormatter.format(date)} at ${absoluteTimeFormatter.format(date)}`;
 }
 
-function formatRelativeInstant(iso: string, nowMs = Date.now(), locale = "en"): string {
+function formatRelativeInstant(iso: string, nowMs = Date.now()): string {
   const target = new Date(iso).getTime();
   if (Number.isNaN(target)) return iso;
   const diffSec = Math.round((target - nowMs) / 1000);
   const abs = Math.abs(diffSec);
-  const rtf = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
-  if (abs < 60) return rtf.format(diffSec, "second");
+  if (abs < 60) return relativeTimeFormatter.format(diffSec, "second");
   const diffMin = Math.round(diffSec / 60);
-  if (Math.abs(diffMin) < 60) return rtf.format(diffMin, "minute");
+  if (Math.abs(diffMin) < 60) return relativeTimeFormatter.format(diffMin, "minute");
   const diffHour = Math.round(diffSec / 3600);
-  if (Math.abs(diffHour) < 48) return rtf.format(diffHour, "hour");
+  if (Math.abs(diffHour) < 48) return relativeTimeFormatter.format(diffHour, "hour");
   const diffDay = Math.round(diffSec / 86400);
-  return rtf.format(diffDay, "day");
+  return relativeTimeFormatter.format(diffDay, "day");
 }
 
 function TimeRow({ iso }: { iso: string }) {

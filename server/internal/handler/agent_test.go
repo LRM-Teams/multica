@@ -20,17 +20,23 @@ import (
 )
 
 type recordingReminderNotifier struct {
-	starts []protocol.DaemonAgentStartPayload
-	stops  []protocol.DaemonAgentStopPayload
+	starts      []protocol.DaemonAgentStartPayload
+	stops       []protocol.DaemonAgentStopPayload
+	projections []protocol.ReminderProjectionEvent
+	order       []string
 }
 
-func (*recordingReminderNotifier) NotifyReminderProjection(string, protocol.ReminderProjectionEvent) {
+func (n *recordingReminderNotifier) NotifyReminderProjection(_ string, payload protocol.ReminderProjectionEvent) {
+	n.projections = append(n.projections, payload)
+	n.order = append(n.order, "projection")
 }
 func (n *recordingReminderNotifier) NotifyReminderOwnerAdded(_ string, payload protocol.DaemonAgentStartPayload) {
 	n.starts = append(n.starts, payload)
+	n.order = append(n.order, "start")
 }
 func (n *recordingReminderNotifier) NotifyReminderOwnerRemoved(_ string, payload protocol.DaemonAgentStopPayload) {
 	n.stops = append(n.stops, payload)
+	n.order = append(n.order, "stop")
 }
 
 // TestListWorkspaceAgentTaskSnapshot covers the agent presence snapshot endpoint:

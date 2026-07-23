@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -1392,6 +1393,193 @@ func TestRestoredOwnerStartFromZeroResidentsRequestsSnapshotAndSchedulesTimer(t 
 	_, present := d.reminderCache.get("restored-reminder")
 	if !present || len(clock.timers) != 1 {
 		t.Fatalf("restored owner snapshot did not install timer: present=%v timers=%d", present, len(clock.timers))
+	}
+}
+
+func TestReminderGenZeroOwnerRecoversAckedProjectionsThroughLifecycleCheckpointSnapshotAndFire(t *testing.T) {
+	now := time.Date(2026, 7, 23, 10, 0, 0, 0, time.UTC)
+	clock := &fakeReminderClock{now: now}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	root := t.TempDir()
+	config := cachedAgentCredential{
+		AgentID:     "agent-a",
+		RuntimeID:   "runtime-a",
+		WorkspaceID: "workspace-a",
+	}
+	raw, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(root, config.WorkspaceID, ".multica", "agents", config.AgentID, "runtime", "credentials", "current.json")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr := newReminderAgentManager(root, logger)
+	owner, ok := mgr.get(config.AgentID)
+	if !ok || owner.PlacementGeneration != 0 {
+		t.Fatalf("bootstrapped owner=%+v present=%v, want generation zero", owner, ok)
+	}
+	cache := newReminderCache(clock, logger, nil)
+	cache.setPersistence(root)
+	writes := make(chan []byte, 32)
+	var d *Daemon
+	cache.onFire = func(job protocol.ReminderTimerJob) { d.onReminderTimer(job) }
+	d = &Daemon{
+		logger: logger,
+		workspaces: map[string]*workspaceState{
+			config.WorkspaceID: newWorkspaceState(config.WorkspaceID, []string{config.RuntimeID}, "", nil, nil, protocol.DaemonCapabilityReminderVersionedCache),
+		},
+		runtimeIndex:   map[string]Runtime{config.RuntimeID: {ID: config.RuntimeID, WorkspaceID: config.WorkspaceID}},
+		reminderAgents: mgr,
+		reminderCache:  cache,
+	}
+	d.setReminderWS(writes, make(chan struct{}), func() error { return nil })
+	d.reminderGateMu.Lock()
+	d.reminderReplayComplete = true
+	d.reminderGateMu.Unlock()
+	cache.resume()
+
+	jobs := make([]protocol.ReminderTimerJob, 0, 6)
+	for seq := int64(1); seq <= 6; seq++ {
+		job := reminderJob(fmt.Sprintf("reminder-%d", seq), config.AgentID, 1, now.Add(-time.Duration(seq)*time.Minute))
+		jobs = append(jobs, job)
+		event := reminderProjection(seq, config.RuntimeID, "upsert", job, false)
+		if err := d.handleReminderProjection(event); err != nil {
+			t.Fatal(err)
+		}
+		var ack protocol.Message
+		if err := json.Unmarshal(<-writes, &ack); err != nil {
+			t.Fatal(err)
+		}
+		if ack.Type != protocol.EventReminderProjectionAck {
+			t.Fatalf("discarded projection %d frame=%q", seq, ack.Type)
+		}
+	}
+	if got := cache.projectionCursors()[config.RuntimeID]; got != 6 {
+		t.Fatalf("discarded projection cursor=%d, want 6", got)
+	}
+	if len(cache.fences) != 0 || len(clock.timers) != 0 {
+		t.Fatalf("generation-zero discard leaked fences/timers=%d/%d", len(cache.fences), len(clock.timers))
+	}
+
+	// Model reconnect/heartbeat recovery after the server has already garbage
+	// collected the ACKed projection rows. The authoritative current-owner
+	// checkpoint must repair generation zero before projection replay, and the
+	// pending snapshot must restore the definitions without another upsert.
+	d.clearReminderWS(writes)
+	writes = make(chan []byte, 32)
+	d.setReminderWS(writes, make(chan struct{}), func() error { return nil })
+	if err := d.handleDaemonAgentStart(protocol.DaemonAgentStartPayload{
+		AgentID: config.AgentID, RuntimeID: config.RuntimeID, WorkspaceID: config.WorkspaceID,
+		PlacementGeneration: 1, LifecycleSeq: 6, Replay: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	owner, ok = mgr.get(config.AgentID)
+	if !ok || owner.PlacementGeneration != 1 {
+		t.Fatalf("authoritative checkpoint owner=%+v present=%v", owner, ok)
+	}
+	if err := d.handleDaemonAgentLifecycleReplayEnd(protocol.DaemonAgentLifecycleReplayEndPayload{
+		RuntimeCursors: map[string]int64{config.RuntimeID: 6},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var lifecycleAck, projectionRequest protocol.Message
+	if err := json.Unmarshal(<-writes, &lifecycleAck); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(<-writes, &projectionRequest); err != nil {
+		t.Fatal(err)
+	}
+	var replay protocol.ReminderProjectionRequestPayload
+	if lifecycleAck.Type != protocol.EventDaemonAgentLifecycleAck ||
+		projectionRequest.Type != protocol.EventReminderProjectionReq ||
+		json.Unmarshal(projectionRequest.Payload, &replay) != nil {
+		t.Fatalf("recovery frames=%q/%q", lifecycleAck.Type, projectionRequest.Type)
+	}
+	residencies := replay.RuntimeResidencies[config.RuntimeID]
+	if replay.RuntimeCursors[config.RuntimeID] != 6 || len(residencies) != 1 ||
+		residencies[0].AgentID != config.AgentID || residencies[0].PlacementGeneration != 1 {
+		t.Fatalf("recovery projection request=%+v", replay)
+	}
+	if err := d.handleReminderProjectionReplayEnd(protocol.ReminderProjectionReplayEndPayload{
+		RuntimeCursors: map[string]int64{config.RuntimeID: 6},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var projectionAck, snapshotRequest protocol.Message
+	if err := json.Unmarshal(<-writes, &projectionAck); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(<-writes, &snapshotRequest); err != nil {
+		t.Fatal(err)
+	}
+	var snapshotReq protocol.ReminderSnapshotRequestPayload
+	if projectionAck.Type != protocol.EventReminderProjectionAck ||
+		snapshotRequest.Type != protocol.EventReminderSnapshotRequest ||
+		json.Unmarshal(snapshotRequest.Payload, &snapshotReq) != nil {
+		t.Fatalf("post-replay recovery frames=%q/%q", projectionAck.Type, snapshotRequest.Type)
+	}
+	if snapshotReq.AgentID != config.AgentID || snapshotReq.RuntimeID != config.RuntimeID || snapshotReq.PlacementGeneration != 1 {
+		t.Fatalf("recovery snapshot request=%+v", snapshotReq)
+	}
+	if err := d.handleReminderSnapshot(protocol.ReminderSnapshotPayload{
+		AgentID: config.AgentID, RuntimeID: config.RuntimeID, PlacementGeneration: 1,
+		ProjectionWatermark: 6, Reminders: jobs,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(cache.fences) != 6 || len(clock.timers) != 6 {
+		t.Fatalf("recovered fences/timers=%d/%d, want 6/6", len(cache.fences), len(clock.timers))
+	}
+	for i, delay := range clock.delays {
+		if delay != 0 {
+			t.Fatalf("recovered overdue timer %d delay=%s, want 0", i, delay)
+		}
+	}
+
+	clock.fire(0)
+	var fireAttempt protocol.Message
+	if err := json.Unmarshal(<-writes, &fireAttempt); err != nil {
+		t.Fatal(err)
+	}
+	var attempt protocol.ReminderFireAttemptPayload
+	if fireAttempt.Type != protocol.EventReminderFireAttempt || json.Unmarshal(fireAttempt.Payload, &attempt) != nil {
+		t.Fatalf("recovered overdue fire frame=%q payload=%s", fireAttempt.Type, fireAttempt.Payload)
+	}
+	recoveredJob := false
+	for _, job := range jobs {
+		if attempt.ReminderID == job.ReminderID && attempt.Version == job.Version {
+			recoveredJob = true
+			break
+		}
+	}
+	if attempt.AgentID != config.AgentID || attempt.RuntimeID != config.RuntimeID ||
+		attempt.PlacementGeneration != 1 || !recoveredJob {
+		t.Fatalf("recovered overdue fire attempt=%+v", attempt)
+	}
+
+	// Exact duplicates stay idempotent after recovery.
+	if err := d.handleDaemonAgentStart(protocol.DaemonAgentStartPayload{
+		AgentID: config.AgentID, RuntimeID: config.RuntimeID, WorkspaceID: config.WorkspaceID,
+		PlacementGeneration: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	duplicate := reminderProjection(6, config.RuntimeID, "upsert", jobs[5], false)
+	if err := d.handleReminderProjection(duplicate); err != nil {
+		t.Fatal(err)
+	}
+	var duplicateAck protocol.Message
+	if err := json.Unmarshal(<-writes, &duplicateAck); err != nil || duplicateAck.Type != protocol.EventReminderProjectionAck {
+		t.Fatalf("duplicate projection ack=%q err=%v", duplicateAck.Type, err)
+	}
+	if len(clock.timers) != 6 || len(writes) != 0 {
+		t.Fatalf("duplicate recovery timers/extra_frames=%d/%d", len(clock.timers), len(writes))
 	}
 }
 

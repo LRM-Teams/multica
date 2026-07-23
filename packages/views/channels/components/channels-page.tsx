@@ -210,6 +210,10 @@ import {
 } from "./conversation-activity-tasks";
 import { DmConversationRow, DmList, useDmRowActions } from "./dm-list";
 import { DmConversation } from "./dm-conversation";
+import {
+  ChannelListSkeleton,
+  InitialChannelsShellSkeleton,
+} from "./conversation-sidebar-list-skeleton";
 import { type MentionPreviewResolver } from "./message-preview";
 import {
   ConversationUnreadAffordance,
@@ -407,23 +411,6 @@ function MobileSidebarTrigger() {
   const sidebar = useSidebarSafe();
   if (!sidebar) return null;
   return <SidebarTrigger className="mr-2 md:hidden" />;
-}
-
-function InitialChannelsShellSkeleton() {
-  return (
-    <div className="flex h-full min-h-0 bg-background">
-      <aside className="hidden w-72 shrink-0 flex-col border-r bg-muted/20 md:flex">
-        <div className="space-y-3 p-4">
-          <Skeleton className="h-6 w-28" />
-          <Skeleton className="h-9 w-full rounded-md" />
-          <Skeleton className="h-12 w-full rounded-lg" />
-          <Skeleton className="h-12 w-full rounded-lg" />
-          <Skeleton className="h-12 w-full rounded-lg" />
-        </div>
-      </aside>
-      <ConversationSwitchSkeleton isMobile={false} />
-    </div>
-  );
 }
 
 export function ConversationActivityStrip({
@@ -886,7 +873,7 @@ export function ChannelsPage({
 
   const {
     data: channels = [],
-    isLoading,
+    isPending: channelsPending,
     isSuccess: channelsLoaded,
   } = useQuery(channelsOptions(wsId));
   const { data: archivedChannels = [] } = useQuery(archivedChannelsOptions(wsId));
@@ -2678,11 +2665,10 @@ export function ChannelsPage({
               </div>
 
               {!channelsCollapsed && (
-                isLoading ? (
-                  <div className="space-y-2 p-2">
-                    <Skeleton className="h-12" />
-                    <Skeleton className="h-12" />
-                  </div>
+                // LRM-459: isPending (not isLoading) — avoids empty-state flash
+                // when the query is enabled:false or idle before first fetch.
+                channelsPending ? (
+                  <ChannelListSkeleton />
                 ) : hasSidebarSearch && filteredChannels.length === 0 && unpinnedChannels.length > 0 ? (
                   <div className="space-y-1 px-3 py-4 text-xs text-muted-foreground">
                     <p className="font-medium text-foreground">
@@ -2813,7 +2799,7 @@ export function ChannelsPage({
   // takes the full width and grows a Back button into the header so the user
   // can return to the list.
   const showChannelDetailSkeleton =
-    isLoading || (!!activeId && !activeDmId && !active);
+    channelsPending || (!!activeId && !activeDmId && !active);
   // The thread surface is the shared <ThreadPanel> (pinned root + flat replies +
   // participant chips + wake strip), fed the #251 read-model off the root
   // message. also-send is CUT this round (#256), so no also-send props are

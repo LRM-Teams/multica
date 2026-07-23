@@ -17,6 +17,9 @@ traffic at `http://82.157.184.89:8090`.
   cutover verification remained unchecked when the workflow target changed.
 - [x] Restored the deploy job label and concurrency group to `s89` and updated
   the workflow comments to name the actual user-facing target.
+- [x] Confirmed the independently managed `multica-caddy` container exists on
+  s89 but is stopped; the deploy now starts that exact proxy container and
+  fails explicitly if the provisioned dependency is missing.
 - [x] Validated workflow syntax with actionlint v1.7.7; `git diff --check`
   also passed and the diff is limited to deploy target metadata plus this log.
 - [x] Pushed `fix/deploy-dev-s89` and opened ready-for-review PR #948 into

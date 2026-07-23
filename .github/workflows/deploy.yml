@@ -232,6 +232,16 @@ jobs:
           # DNS race that caused intermittent 'no such host' errors (#324).
           compose up -d frontend
           compose up -d backend
+          # Caddy is intentionally managed outside these Compose files on s89,
+          # but the deploy health boundary depends on it. Start the exact
+          # pre-provisioned container instead of assuming it survived previous
+          # host maintenance.
+          if docker container inspect multica-caddy >/dev/null 2>&1; then
+            docker start multica-caddy >/dev/null
+          else
+            echo "::error::Required s89 proxy container multica-caddy does not exist."
+            exit 1
+          fi
           # db-bridge-stub-multica + db-bridge-executor-multica are profile-gated
           # in the compose file, so naming them explicitly is what starts them.
           # They share the multica-db-bridge image (the public run_multica server

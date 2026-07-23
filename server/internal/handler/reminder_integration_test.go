@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"reflect"
 	"strings"
 	"sync"
@@ -99,8 +98,9 @@ func reminderFireCounts(t *testing.T, reminderID string) (occurrences, receipts,
 	if err := testPool.QueryRow(context.Background(), `
 		SELECT
 		  (SELECT count(*) FROM agent_reminder_occurrence WHERE reminder_id = $1),
-		  (SELECT count(*) FROM channel_message WHERE external_message_id LIKE 'reminder_occurrence:%' AND id IN (
-		     SELECT receipt_message_id FROM agent_reminder_occurrence WHERE reminder_id = $1
+		  (SELECT count(*) FROM channel_message WHERE external_message_id IN (
+		     SELECT 'reminder_occurrence:' || id::text
+		     FROM agent_reminder_occurrence WHERE reminder_id = $1
 		  )),
 		  (SELECT count(*) FROM agent_task_queue WHERE id IN (
 		     SELECT fired_task_id FROM agent_reminder_occurrence WHERE reminder_id = $1
@@ -167,14 +167,23 @@ func TestDaemonReminderFireAttemptIsIdempotentAcrossConnections(t *testing.T) {
 	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{status: "offline"}, {}})
 	anchor := fixture.insertMessage(t, "user", testUserID, "anchor", nil)
 	reminderID := seedDueReminder(t, fixture.agentIDs[0], fixture.channel.ID, anchor.ID, "", "")
-	readReq := newRequest(http.MethodPost, "/api/channels/"+fixture.channel.ID+"/read", nil)
-	readReq = withChannelTestWorkspaceCtx(t, readReq, testUserID)
-	readReq = withURLParam(readReq, "channelId", fixture.channel.ID)
-	readRec := httptest.NewRecorder()
-	fixture.handler.MarkChannelRead(readRec, readReq)
-	if readRec.Code != http.StatusOK {
-		t.Fatalf("mark reminder channel read: status=%d body=%s", readRec.Code, readRec.Body.String())
+	var channelMessagesBefore int
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT count(*) FROM channel_message WHERE channel_id = $1`,
+		fixture.channel.ID).Scan(&channelMessagesBefore); err != nil {
+		t.Fatal(err)
 	}
+	var publishedMu sync.Mutex
+	publishedChannelMessages := 0
+	fixture.handler.Bus.Subscribe(protocol.EventChannelMessage, func(event events.Event) {
+		message, ok := event.Payload.(ChannelMessageResponse)
+		if !ok || message.ChannelID != fixture.channel.ID {
+			return
+		}
+		publishedMu.Lock()
+		publishedChannelMessages++
+		publishedMu.Unlock()
+	})
 
 	start := make(chan struct{})
 	errCh := make(chan error, 2)
@@ -197,43 +206,51 @@ func TestDaemonReminderFireAttemptIsIdempotentAcrossConnections(t *testing.T) {
 	}
 
 	occurrences, receipts, tasks, firedEvents := reminderFireCounts(t, reminderID)
-	if occurrences != 1 || receipts != 1 || tasks != 1 || firedEvents != 1 {
-		t.Fatalf("fire counts = occurrence:%d receipt:%d task:%d event:%d, want 1 each", occurrences, receipts, tasks, firedEvents)
+	if occurrences != 1 || receipts != 0 || tasks != 1 || firedEvents != 1 {
+		t.Fatalf("fire counts = occurrence:%d receipt:%d task:%d event:%d, want 1/0/1/1", occurrences, receipts, tasks, firedEvents)
 	}
-	var otherTasks, receiptInboxEvents int
-	var receiptAuthorType string
+	var channelMessagesAfter, otherTasks int
 	if err := testPool.QueryRow(context.Background(), `
 		SELECT
-		  (SELECT count(*) FROM agent_task_queue WHERE agent_id = $1),
-		  (SELECT count(*) FROM agent_inbox_event WHERE source_message_id IN (
-		     SELECT receipt_message_id FROM agent_reminder_occurrence WHERE reminder_id = $2
-		  )),
-		  (SELECT author_type FROM channel_message WHERE id = (
-		     SELECT receipt_message_id FROM agent_reminder_occurrence WHERE reminder_id = $2
-		  ))`, fixture.agentIDs[1], reminderID).Scan(&otherTasks, &receiptInboxEvents, &receiptAuthorType); err != nil {
+		  (SELECT count(*) FROM channel_message WHERE channel_id = $1),
+		  (SELECT count(*) FROM agent_task_queue WHERE agent_id = $2)`,
+		fixture.channel.ID, fixture.agentIDs[1]).Scan(&channelMessagesAfter, &otherTasks); err != nil {
 		t.Fatal(err)
 	}
-	if otherTasks != 0 || receiptInboxEvents != 0 || receiptAuthorType != "system" {
-		t.Fatalf("receipt projection author=%q other_tasks=%d inbox_events=%d, want system/0/0", receiptAuthorType, otherTasks, receiptInboxEvents)
+	publishedMu.Lock()
+	gotPublishedChannelMessages := publishedChannelMessages
+	publishedMu.Unlock()
+	if channelMessagesAfter != channelMessagesBefore || gotPublishedChannelMessages != 0 || otherTasks != 0 {
+		t.Fatalf("receipt suppression channel_messages=%d→%d broadcasts=%d other_tasks=%d, want zero deltas",
+			channelMessagesBefore, channelMessagesAfter, gotPublishedChannelMessages, otherTasks)
 	}
-	listed := listedChannelForUser(t, fixture.channel.ID, testUserID)
-	if listed == nil || listed.RealUnreadCount != 0 || listed.UnreadCount != 0 {
-		t.Fatalf("system reminder receipt counted as unread: %+v", listed)
-	}
-	searchReq := newRequest(http.MethodGet, "/api/channels/"+fixture.channel.ID+"/messages/search?q="+url.QueryEscape("check reminder")+"&limit=10", nil)
-	searchReq = withChannelTestWorkspaceCtx(t, searchReq, testUserID)
-	searchReq = withURLParam(searchReq, "channelId", fixture.channel.ID)
-	searchRec := httptest.NewRecorder()
-	fixture.handler.SearchChannelMessages(searchRec, searchReq)
-	if searchRec.Code != http.StatusOK {
-		t.Fatalf("search reminder receipt: status=%d body=%s", searchRec.Code, searchRec.Body.String())
-	}
-	var searchBody ChannelMessageSearchResponse
-	if err := json.NewDecoder(searchRec.Body).Decode(&searchBody); err != nil {
+	var receiptNull, taskPresent, anchorAvailable bool
+	var occurrenceID, title, prompt string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT occurrence.receipt_message_id IS NULL, occurrence.fired_task_id IS NOT NULL,
+		       occurrence.anchor_available, occurrence.id::text, occurrence.title_snapshot,
+		       prompt.content
+		FROM agent_reminder_occurrence occurrence
+		JOIN chat_message prompt ON prompt.task_id = occurrence.fired_task_id
+		WHERE occurrence.reminder_id = $1`,
+		reminderID).Scan(&receiptNull, &taskPresent, &anchorAvailable, &occurrenceID, &title, &prompt); err != nil {
 		t.Fatal(err)
 	}
-	if searchBody.Total != 0 || len(searchBody.Results) != 0 {
-		t.Fatalf("system reminder receipt leaked into search: %+v", searchBody)
+	if !receiptNull || !taskPresent || !anchorAvailable {
+		t.Fatalf("fired occurrence receipt_null=%v task_present=%v anchor_available=%v, want true/true/true",
+			receiptNull, taskPresent, anchorAvailable)
+	}
+	for _, want := range []string{
+		"A self-scheduled reminder is due.",
+		"Reminder id: " + reminderID,
+		"Occurrence id: " + occurrenceID,
+		"Reminder title: " + title,
+		"Current message id: " + anchor.ID,
+		"Anchor message excerpt: anchor",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("directed wake prompt missing %q: %q", want, prompt)
+		}
 	}
 	var status string
 	if err := testPool.QueryRow(context.Background(), `SELECT status FROM agent_reminder WHERE id = $1`, reminderID).Scan(&status); err != nil || status != "fired" {
@@ -245,6 +262,23 @@ func TestDaemonReminderFireAttemptIsIdempotentAcrossConnections(t *testing.T) {
 	gotOccurrences, gotReceipts, gotTasks, gotEvents := reminderFireCounts(t, reminderID)
 	if gotOccurrences != occurrences || gotReceipts != receipts || gotTasks != tasks || gotEvents != firedEvents {
 		t.Fatalf("retry duplicated fire: before=%d/%d/%d/%d after=%d/%d/%d/%d", occurrences, receipts, tasks, firedEvents, gotOccurrences, gotReceipts, gotTasks, gotEvents)
+	}
+	historyReq := withChannelTestWorkspaceCtx(t,
+		newRequest(http.MethodGet, "/api/agents/"+fixture.agentIDs[0]+"/reminders?status=fired", nil),
+		testUserID)
+	historyReq = withURLParam(historyReq, "id", fixture.agentIDs[0])
+	historyRec := httptest.NewRecorder()
+	fixture.handler.ListAgentReminders(historyRec, historyReq)
+	if historyRec.Code != http.StatusOK {
+		t.Fatalf("list fired reminder history: status=%d body=%s", historyRec.Code, historyRec.Body.String())
+	}
+	var history humanReminderPage
+	if err := json.NewDecoder(historyRec.Body).Decode(&history); err != nil {
+		t.Fatal(err)
+	}
+	if len(history.Occurrences) != 1 || history.Occurrences[0].ReminderID != reminderID ||
+		history.Occurrences[0].Status != "fired" {
+		t.Fatalf("fired reminder history = %+v, want one fired occurrence", history.Occurrences)
 	}
 }
 
@@ -467,8 +501,8 @@ func TestReminderCurrentOwnerCheckpointRecoversAckedDefinitionToOccurrenceHistor
 		t.Fatal(err)
 	}
 	occurrences, receipts, tasks, firedEvents := reminderFireCounts(t, reminderID)
-	if occurrences != 1 || receipts != 1 || tasks != 1 || firedEvents != 1 {
-		t.Fatalf("recovered reminder history=%d/%d/%d/%d, want one each", occurrences, receipts, tasks, firedEvents)
+	if occurrences != 1 || receipts != 0 || tasks != 1 || firedEvents != 1 {
+		t.Fatalf("recovered reminder history=%d/%d/%d/%d, want 1/0/1/1", occurrences, receipts, tasks, firedEvents)
 	}
 }
 
@@ -936,8 +970,8 @@ func TestReminderFireFirstSerializesAgainstActiveChannelOnboarding(t *testing.T)
 	}
 
 	occurrences, receipts, tasks, firedEvents := reminderFireCounts(t, reminderID)
-	if occurrences != 1 || receipts != 1 || tasks != 1 || firedEvents != 1 {
-		t.Fatalf("fire counts = occurrence:%d receipt:%d task:%d event:%d, want one serialized winner each", occurrences, receipts, tasks, firedEvents)
+	if occurrences != 1 || receipts != 0 || tasks != 1 || firedEvents != 1 {
+		t.Fatalf("fire counts = occurrence:%d receipt:%d task:%d event:%d, want 1/0/1/1 serialized winner", occurrences, receipts, tasks, firedEvents)
 	}
 }
 
@@ -1001,8 +1035,8 @@ func TestActiveChannelOnboardingFirstSerializesAgainstReminderFire(t *testing.T)
 	}
 
 	occurrences, receipts, tasks, firedEvents := reminderFireCounts(t, reminderID)
-	if occurrences != 1 || receipts != 1 || tasks != 1 || firedEvents != 1 {
-		t.Fatalf("fire counts = occurrence:%d receipt:%d task:%d event:%d, want one serialized winner each", occurrences, receipts, tasks, firedEvents)
+	if occurrences != 1 || receipts != 0 || tasks != 1 || firedEvents != 1 {
+		t.Fatalf("fire counts = occurrence:%d receipt:%d task:%d event:%d, want 1/0/1/1 serialized winner", occurrences, receipts, tasks, firedEvents)
 	}
 }
 
@@ -1084,18 +1118,47 @@ func TestDeletedReminderAnchorFiresWithUnavailableMarker(t *testing.T) {
 	if err := fireReminderAttempt(fixture.handler, reminderID); err != nil {
 		t.Fatalf("fire deleted anchor reminder: %v", err)
 	}
-	var available bool
-	var prompt, receipt string
+	var available, receiptNull bool
+	var occurrenceID, title, prompt string
 	if err := testPool.QueryRow(context.Background(), `
-		SELECT occurrence.anchor_available, prompt.content, receipt.content
+		SELECT occurrence.anchor_available, occurrence.receipt_message_id IS NULL,
+		       occurrence.id::text, occurrence.title_snapshot, prompt.content
 		FROM agent_reminder_occurrence occurrence
 		JOIN chat_message prompt ON prompt.task_id = occurrence.fired_task_id
-		JOIN channel_message receipt ON receipt.id = occurrence.receipt_message_id
-		WHERE occurrence.reminder_id = $1`, reminderID).Scan(&available, &prompt, &receipt); err != nil {
+		WHERE occurrence.reminder_id = $1`,
+		reminderID).Scan(&available, &receiptNull, &occurrenceID, &title, &prompt); err != nil {
 		t.Fatal(err)
 	}
-	if available || !strings.Contains(prompt, "Anchor message: unavailable") || !strings.HasSuffix(receipt, " · Anchor unavailable") {
-		t.Fatalf("deleted anchor available=%v prompt=%q receipt=%q", available, prompt, receipt)
+	for _, want := range []string{
+		"Reminder id: " + reminderID,
+		"Occurrence id: " + occurrenceID,
+		"Reminder title: " + title,
+		"Anchor message: unavailable (deleted).",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("deleted-anchor directed wake prompt missing %q: %q", want, prompt)
+		}
+	}
+	if available || !receiptNull {
+		t.Fatalf("deleted anchor available=%v receipt_null=%v prompt=%q", available, receiptNull, prompt)
+	}
+	historyReq := withChannelTestWorkspaceCtx(t,
+		newRequest(http.MethodGet, "/api/agents/"+fixture.agentIDs[0]+"/reminders?status=fired", nil),
+		testUserID)
+	historyReq = withURLParam(historyReq, "id", fixture.agentIDs[0])
+	historyRec := httptest.NewRecorder()
+	fixture.handler.ListAgentReminders(historyRec, historyReq)
+	if historyRec.Code != http.StatusOK {
+		t.Fatalf("list deleted-anchor history: status=%d body=%s", historyRec.Code, historyRec.Body.String())
+	}
+	var history humanReminderPage
+	if err := json.NewDecoder(historyRec.Body).Decode(&history); err != nil {
+		t.Fatal(err)
+	}
+	if len(history.Occurrences) != 1 || history.Occurrences[0].Anchor.Available ||
+		history.Occurrences[0].Anchor.Kind != nil || history.Occurrences[0].Anchor.Display != nil ||
+		history.Occurrences[0].Anchor.Href != nil {
+		t.Fatalf("deleted-anchor history = %+v, want unavailable without metadata", history.Occurrences)
 	}
 }
 
@@ -1119,25 +1182,22 @@ func TestDeletedReminderThreadRootHidesAnchorEverywhere(t *testing.T) {
 	if err := fireReminderAttempt(fixture.handler, reminderID); err != nil {
 		t.Fatalf("fire deleted-root reminder: %v", err)
 	}
-	var available bool
-	var prompt, receipt, parts string
-	var receiptThreadRoot *string
+	var available, receiptNull bool
+	var prompt string
 	if err := testPool.QueryRow(context.Background(), `
-		SELECT occurrence.anchor_available, prompt.content, receipt.content,
-		       receipt.parts::text, receipt.thread_root_message_id::text
+		SELECT occurrence.anchor_available, occurrence.receipt_message_id IS NULL, prompt.content
 		FROM agent_reminder_occurrence occurrence
 		JOIN chat_message prompt ON prompt.task_id = occurrence.fired_task_id
-		JOIN channel_message receipt ON receipt.id = occurrence.receipt_message_id
-		WHERE occurrence.reminder_id = $1`, reminderID).Scan(&available, &prompt, &receipt, &parts, &receiptThreadRoot); err != nil {
+		WHERE occurrence.reminder_id = $1`, reminderID).Scan(&available, &receiptNull, &prompt); err != nil {
 		t.Fatal(err)
 	}
 	for _, leaked := range []string{root.ID, reply.ID, fixture.channel.Name, "root secret anchor", "reply secret anchor"} {
-		if strings.Contains(prompt, leaked) || strings.Contains(parts, leaked) {
-			t.Fatalf("deleted root leaked %q in prompt=%q parts=%s", leaked, prompt, parts)
+		if strings.Contains(prompt, leaked) {
+			t.Fatalf("deleted root leaked %q in prompt=%q", leaked, prompt)
 		}
 	}
-	if available || receiptThreadRoot != nil || !strings.Contains(prompt, "Anchor message: unavailable") || !strings.HasSuffix(receipt, " · Anchor unavailable") || !strings.Contains(parts, `"anchor_available": false`) {
-		t.Fatalf("deleted root projection available=%v thread_root=%v prompt=%q receipt=%q parts=%s", available, receiptThreadRoot, prompt, receipt, parts)
+	if available || !receiptNull || !strings.Contains(prompt, "Anchor message: unavailable") {
+		t.Fatalf("deleted root projection available=%v receipt_null=%v prompt=%q", available, receiptNull, prompt)
 	}
 	reminder, err := scanAgentReminder(testPool.QueryRow(context.Background(), `SELECT `+reminderSelectColumns()+` FROM agent_reminder WHERE id = $1`, reminderID))
 	if err != nil {
@@ -1185,8 +1245,8 @@ func TestReminderFireFallsBackToCurrentAgentOwnerWhenInitiatorIsGone(t *testing.
 				t.Fatalf("fire after initiator removal: %v", err)
 			}
 			occurrences, receipts, tasks, firedEvents := reminderFireCounts(t, reminderID)
-			if occurrences != 1 || receipts != 1 || tasks != 1 || firedEvents != 1 {
-				t.Fatalf("fire counts = occurrence:%d receipt:%d task:%d event:%d, want 1 each", occurrences, receipts, tasks, firedEvents)
+			if occurrences != 1 || receipts != 0 || tasks != 1 || firedEvents != 1 {
+				t.Fatalf("fire counts = occurrence:%d receipt:%d task:%d event:%d, want 1/0/1/1", occurrences, receipts, tasks, firedEvents)
 			}
 			var taskInitiatorID, sessionCreatorID string
 			if err := testPool.QueryRow(context.Background(), `
@@ -1995,8 +2055,8 @@ func TestAgentReminderExplicitTimeUpdateConvertsRecurrenceToOneShotAndRetainsTim
 	}
 	before := [4]int{}
 	before[0], before[1], before[2], before[3] = reminderFireCounts(t, scheduled.ID)
-	if before != [4]int{1, 1, 1, 1} {
-		t.Fatalf("converted one-shot fire counts=%v, want [1 1 1 1]", before)
+	if before != [4]int{1, 0, 1, 1} {
+		t.Fatalf("converted one-shot fire counts=%v, want [1 0 1 1]", before)
 	}
 	if err := fireReminderAttempt(testHandler, scheduled.ID); err != nil {
 		t.Fatalf("retry converted one-shot: %v", err)

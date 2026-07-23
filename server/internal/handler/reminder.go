@@ -1653,12 +1653,12 @@ func (h *Handler) fireReminderOccurrenceWithTx(ctx context.Context, tx pgx.Tx, r
 		return h.terminalizeReminderOccurrence(ctx, tx, reminder, occurrenceID, "agent_runtime_unavailable")
 	}
 	// Lock eligibility in the fixed channel -> agent -> membership order and hold
-	// every row through the same transaction that creates the receipt and wake.
+	// every row through the same transaction that creates the occurrence and wake.
 	// Non-SKIP channel-onboarding eligibility uses the same prefix before locking
 	// onboarding, while the membership DELETE trigger uses the compatible
 	// membership -> onboarding suffix. Either fire commits the complete occurrence
 	// first, or an eligibility write wins and this transaction terminalizes with
-	// no receipt, task, or wake.
+	// no task or wake.
 	var memberID pgtype.UUID
 	if err := tx.QueryRow(ctx, `
 		SELECT member_id
@@ -1680,38 +1680,11 @@ func (h *Handler) fireReminderOccurrenceWithTx(ctx context.Context, tx pgx.Tx, r
 	anchorExcerpt := anchor.Excerpt
 	anchorAvailable := anchor.Available
 
-	eventParams, err := json.Marshal(map[string]any{
-		"reminder_id": uuidToString(reminder.ID), "occurrence_id": uuidToString(occurrenceID),
-		"title": reminder.Title, "anchor_available": anchorAvailable,
-		"cadence": nullableText(reminder.Cadence), "schedule_timezone": reminderTimezoneValue(reminder.Cadence, reminder.ScheduleTimezone),
-	})
-	if err != nil {
-		return err
-	}
-	receiptThreadRootID := pgtype.UUID{}
 	var threadID *string
 	if anchorAvailable {
-		receiptThreadRootID = reminder.AnchorThreadRootMessageID
 		threadID = reminderThreadID(ctx, tx, reminder.AnchorThreadRootMessageID)
 	}
-	externalID := "reminder_occurrence:" + uuidToString(occurrenceID)
-	receiptContent := "Reminder fired: " + reminder.Title
-	if !anchorAvailable {
-		receiptContent += " · Anchor unavailable"
-	}
-	receipt, err := insertChannelMessageWithPartsExec(ctx, tx, reminder.AnchorChannelID, reminder.WorkspaceID,
-		"system", pgtype.UUID{}, "system", receiptContent,
-		[]protocol.MessagePart{{Type: protocol.MessagePartTypeSystemEvent, Event: "reminder_fired", EventParams: eventParams}},
-		"multica", &externalID, nil, pgtype.UUID{}, pgtype.UUID{}, nil,
-		receiptThreadRootID, threadID, 0)
-	if err != nil {
-		return err
-	}
 	trigger := ChannelMessageResponse{
-		ID:           receipt.ID,
-		AuthorName:   "Reminder",
-		Type:         "system",
-		Content:      reminder.Title,
 		TriggerDepth: 1,
 	}
 	if anchorAvailable {
@@ -1744,9 +1717,9 @@ func (h *Handler) fireReminderOccurrenceWithTx(ctx context.Context, tx pgx.Tx, r
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE agent_reminder_occurrence
-		SET status = 'fired', receipt_message_id = $2, fired_task_id = $3,
-		    anchor_available = $4, fired_at = now(), updated_at = now()
-		WHERE id = $1 AND status IN ('pending', 'claimed')`, occurrenceID, parseUUID(receipt.ID), task.ID, anchorAvailable); err != nil {
+		SET status = 'fired', fired_task_id = $2, anchor_available = $3,
+		    fired_at = now(), updated_at = now()
+		WHERE id = $1 AND status IN ('pending', 'claimed')`, occurrenceID, task.ID, anchorAvailable); err != nil {
 		return err
 	}
 
@@ -1804,7 +1777,6 @@ func (h *Handler) fireReminderOccurrenceWithTx(ctx context.Context, tx pgx.Tx, r
 		reminder.Status = "fired"
 		h.projectReminderCancel(ctx, reminder)
 	}
-	h.publishChannelToMembers(ctx, protocol.EventChannelMessage, uuidToString(reminder.WorkspaceID), "system", "", reminder.AnchorChannelID, receipt)
 	h.TaskService.PublishChatTaskQueued(ctx, task, false)
 	targetKind, targetID, targetSlug := reminderActivityTarget(reminder, anchorAvailable)
 	h.recordAgentActivityEvent(ctx, h.DB,

@@ -144,7 +144,9 @@ func (d *Daemon) handleMemoryCuration(ctx context.Context, rt Runtime, pending P
 	if runErr != nil {
 		payload["error"] = runErr.Error()
 	} else if len(res.Errors) > 0 {
-		payload["error"] = "one or more agents failed"
+		// Prefer the first concrete curator/agent error so Evolution Center shows
+		// "argument list too long" (etc.) instead of a generic blanket failure.
+		payload["error"] = firstMemoryCurationError(res.Errors)
 	} else if stage == memorycuration.StageL3 && shouldRetryLocalL3(res) {
 		payload["error"] = "L3 reviewer deferred retryable candidates"
 	} else {
@@ -191,4 +193,16 @@ func (d *Daemon) activeMemoryCurationRun(runtimeID string) string {
 	d.memoryCurationMu.Lock()
 	defer d.memoryCurationMu.Unlock()
 	return d.activeCurationRuns[runtimeID]
+}
+
+func firstMemoryCurationError(errs []memorycuration.AgentError) string {
+	for _, item := range errs {
+		if msg := strings.TrimSpace(item.Error); msg != "" {
+			if item.AgentID != "" {
+				return item.AgentID + ": " + msg
+			}
+			return msg
+		}
+	}
+	return "one or more agents failed"
 }

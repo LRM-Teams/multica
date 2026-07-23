@@ -27,6 +27,22 @@ func TestCursorArgsSize(t *testing.T) {
 	}
 }
 
+func TestShouldSpillCursorPrompt(t *testing.T) {
+	t.Parallel()
+
+	if shouldSpillCursorPrompt("small", []string{"-p", "small"}) {
+		t.Fatal("small prompt should not spill")
+	}
+	bigPrompt := strings.Repeat("x", maxCursorPromptBytes+1)
+	if !shouldSpillCursorPrompt(bigPrompt, []string{"-p", bigPrompt}) {
+		t.Fatal("prompt over maxCursorPromptBytes should spill")
+	}
+	bigArg := strings.Repeat("y", maxCursorArgvBytes)
+	if !shouldSpillCursorPrompt("ok", []string{"-p", bigArg}) {
+		t.Fatal("argv over maxCursorArgvBytes should spill")
+	}
+}
+
 func TestBuildCursorArgs(t *testing.T) {
 	t.Parallel()
 

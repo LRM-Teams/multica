@@ -293,59 +293,65 @@ func (h *Handler) failExpiredMemoryCurationRunsForWorkspace(ctx context.Context,
 	return err
 }
 
-func (h *Handler) memoryCurationEvidenceBundles(ctx context.Context, workspaceID string, agentIDs []string, dateFrom, dateTo string, includePendingCandidates bool) []protocol.DaemonMemoryCurationEvidenceBundle {
-	since, err := time.Parse("2006-01-02", dateFrom)
-	if err != nil {
-		return nil
-	}
-	until, err := time.Parse("2006-01-02", dateTo)
-	if err != nil {
-		return nil
-	}
+func (h *Handler) memoryCurationEvidenceBundles(ctx context.Context, workspaceID string, agentIDs []string, dateFrom, dateTo string, teamCurationOnly bool) []protocol.DaemonMemoryCurationEvidenceBundle {
 	bundles := make([]protocol.DaemonMemoryCurationEvidenceBundle, 0, len(agentIDs))
 	bundleIndexes := make(map[string]int, len(agentIDs))
-	for _, agentID := range agentIDs {
-		items, err := memorycuration.CollectDBEvidence(ctx, h.DB, workspaceID, agentID, since, until)
-		if err != nil || len(items) == 0 {
+
+	// Team curation consumes self-review outputs + pending candidates. Do not
+	// re-send raw same-day chat/session evidence (that already fed agent_self_review).
+	if !teamCurationOnly {
+		since, err := time.Parse("2006-01-02", dateFrom)
+		if err != nil {
+			return nil
+		}
+		until, err := time.Parse("2006-01-02", dateTo)
+		if err != nil {
+			return nil
+		}
+		for _, agentID := range agentIDs {
+			items, err := memorycuration.CollectDBEvidence(ctx, h.DB, workspaceID, agentID, since, until)
+			if err != nil || len(items) == 0 {
+				continue
+			}
+			bundle := protocol.DaemonMemoryCurationEvidenceBundle{AgentID: agentID, Items: make([]protocol.DaemonMemoryCurationEvidenceItem, 0, len(items))}
+			for _, item := range items {
+				bundle.Items = append(bundle.Items, protocol.DaemonMemoryCurationEvidenceItem{Kind: item.Kind, ID: item.ID, Title: item.Title, Snippet: item.Snippet, CreatedAt: item.CreatedAt.UTC().Format(time.RFC3339)})
+			}
+			bundleIndexes[agentID] = len(bundles)
+			bundles = append(bundles, bundle)
+		}
+		return bundles
+	}
+
+	rows, err := h.DB.Query(ctx, `
+		SELECT id::text, COALESCE(source_agent_id::text,''), title,
+		       left(content, 2000), created_at
+		  FROM agent_memory_curation_candidate
+		 WHERE workspace_id = $1 AND status = 'pending'
+		   AND (source_agent_id = ANY($2::uuid[]) OR source_agent_id IS NULL)
+		 ORDER BY created_at, id
+		 LIMIT 200
+	`, workspaceID, agentIDs)
+	if err != nil {
+		return bundles
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var candidateID, agentID, title, snippet string
+		var createdAt time.Time
+		if rows.Scan(&candidateID, &agentID, &title, &snippet, &createdAt) != nil {
 			continue
 		}
-		bundle := protocol.DaemonMemoryCurationEvidenceBundle{AgentID: agentID, Items: make([]protocol.DaemonMemoryCurationEvidenceItem, 0, len(items))}
-		for _, item := range items {
-			bundle.Items = append(bundle.Items, protocol.DaemonMemoryCurationEvidenceItem{Kind: item.Kind, ID: item.ID, Title: item.Title, Snippet: item.Snippet, CreatedAt: item.CreatedAt.UTC().Format(time.RFC3339)})
+		idx, ok := bundleIndexes[agentID]
+		if !ok {
+			idx = len(bundles)
+			bundleIndexes[agentID] = idx
+			bundles = append(bundles, protocol.DaemonMemoryCurationEvidenceBundle{AgentID: agentID})
 		}
-		bundleIndexes[agentID] = len(bundles)
-		bundles = append(bundles, bundle)
-	}
-	if includePendingCandidates {
-		rows, err := h.DB.Query(ctx, `
-			SELECT id::text, COALESCE(source_agent_id::text,''), title,
-			       left(content, 2000), created_at
-			  FROM agent_memory_curation_candidate
-			 WHERE workspace_id = $1 AND status = 'pending'
-			   AND (source_agent_id = ANY($2::uuid[]) OR source_agent_id IS NULL)
-			 ORDER BY created_at, id
-			 LIMIT 200
-		`, workspaceID, agentIDs)
-		if err == nil {
-			defer rows.Close()
-			for rows.Next() {
-				var candidateID, agentID, title, snippet string
-				var createdAt time.Time
-				if rows.Scan(&candidateID, &agentID, &title, &snippet, &createdAt) != nil {
-					continue
-				}
-				idx, ok := bundleIndexes[agentID]
-				if !ok {
-					idx = len(bundles)
-					bundleIndexes[agentID] = idx
-					bundles = append(bundles, protocol.DaemonMemoryCurationEvidenceBundle{AgentID: agentID})
-				}
-				bundles[idx].Items = append(bundles[idx].Items, protocol.DaemonMemoryCurationEvidenceItem{
-					Kind: "curation_candidate", ID: candidateID, Title: title, Snippet: snippet,
-					CreatedAt: createdAt.UTC().Format(time.RFC3339),
-				})
-			}
-		}
+		bundles[idx].Items = append(bundles[idx].Items, protocol.DaemonMemoryCurationEvidenceItem{
+			Kind: "curation_candidate", ID: candidateID, Title: title, Snippet: snippet,
+			CreatedAt: createdAt.UTC().Format(time.RFC3339),
+		})
 	}
 	return bundles
 }

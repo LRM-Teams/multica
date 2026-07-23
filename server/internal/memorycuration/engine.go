@@ -373,20 +373,48 @@ func (e *Engine) runTeamCuration(roots []agentRoot, opts Options) (AgentRunResul
 	if opts.StageAgent == nil {
 		return ar, fmt.Errorf("team curation requires a selected curator runtime and agent")
 	}
+	// Team curation must NOT re-ingest raw same-day chat/session evidence.
+	// Per-agent self-review already distilled sessions into MEMORY/USER/REVIEW/
+	// notes/sync_queue/skills. The curator only reads those artifacts (+ optional
+	// DB pending candidates attached by the server) to dedupe and promote.
 	localFiles := make(map[string]string)
-	var evidence []EvidenceItem
 	for _, root := range roots {
-		files := stageFilesWithScoped(root.Root, "memory/REVIEW.md", "memory/MEMORY.md", "memory/USER.md", "memory/STATE.md", "sync_queue/memory-candidates.jsonl", "sync_queue/skill-candidates.jsonl")
+		files := stageFilesWithScoped(root.Root,
+			"memory/REVIEW.md",
+			"memory/MEMORY.md",
+			"memory/USER.md",
+			"memory/STATE.md",
+			"notes/relationship-map.md",
+			"notes/decisions.md",
+			"notes/work-log.md",
+			"notes/role-playbook.md",
+			"sync_queue/memory-candidates.jsonl",
+			"sync_queue/skill-candidates.jsonl",
+		)
 		for name, content := range files {
 			localFiles[root.AgentID+"/"+name] = content
 		}
-		items, err := evidenceForAgent(opts, root.WorkspaceID, root.AgentID, opts.Since, opts.Until)
-		if err != nil {
-			return ar, err
+		for name, content := range collectSkillDraftFiles(root.Root, 6, 24*1024) {
+			localFiles[root.AgentID+"/"+name] = content
 		}
-		evidence = append(evidence, items...)
 	}
-	ar.EvidenceCollected = len(evidence)
+	var evidence []EvidenceItem
+	if opts.DBEvidence != nil {
+		// Server may attach pending curation_candidate rows only. Ignore any raw
+		// chat/session kinds that leak through (e.g. StageAll reuse of the map).
+		appendPending := func(items []EvidenceItem) {
+			for _, item := range items {
+				if item.Kind == "curation_candidate" {
+					evidence = append(evidence, item)
+				}
+			}
+		}
+		for _, root := range roots {
+			appendPending(opts.DBEvidence[root.AgentID])
+		}
+		appendPending(opts.DBEvidence[""])
+	}
+	ar.EvidenceCollected = len(localFiles) + len(evidence)
 	out, err := opts.StageAgent.RunStage(opts.Context, StageAgentInput{
 		Stage: StageTeamCuration, WorkspaceID: opts.WorkspaceID, AgentID: "team", AgentRoot: ar.Root,
 		DateFrom: formatDate(opts.Since), DateTo: formatDate(opts.Until), Timezone: opts.Timezone,
@@ -401,6 +429,41 @@ func (e *Engine) runTeamCuration(roots []agentRoot, opts Options) (AgentRunResul
 		ar.ConflictsFound = strings.Count(out.Content, "conflict")
 	}
 	return ar, nil
+}
+
+// collectSkillDraftFiles loads a bounded set of skill drafts so team curation can
+// promote shareable skills without re-reading raw chat.
+func collectSkillDraftFiles(root string, maxFiles, maxBytes int) map[string]string {
+	if maxFiles <= 0 || maxBytes <= 0 {
+		return nil
+	}
+	draftRoot := filepath.Join(root, "skills", "drafts")
+	entries, err := os.ReadDir(draftRoot)
+	if err != nil {
+		return nil
+	}
+	out := make(map[string]string)
+	used := 0
+	for _, entry := range entries {
+		if len(out) >= maxFiles || used >= maxBytes {
+			break
+		}
+		if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		rel := filepath.ToSlash(filepath.Join("skills", "drafts", entry.Name(), "SKILL.md"))
+		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			continue
+		}
+		content := truncateUTF8(string(data), min(maxL3ReviewInputBodyBytes, maxBytes-used))
+		if strings.TrimSpace(content) == "" {
+			continue
+		}
+		out[rel] = content
+		used += len(content)
+	}
+	return out
 }
 
 type l2AgentEnvelope struct {

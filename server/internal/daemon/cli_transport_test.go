@@ -75,6 +75,50 @@ func TestPrepareTaskCLITransportWritesPerRunWrapperAndTokenFile(t *testing.T) {
 	}
 }
 
+func TestPrepareStableAgentCLITransportUsesAgentScopedFixedPath(t *testing.T) {
+	root := t.TempDir()
+	bin := filepath.Join(root, "bin", "multica-real")
+	transport, err := prepareStableAgentCLITransport(
+		Config{WorkspacesRoot: root},
+		"workspace-1",
+		"agent-1",
+		bin,
+	)
+	if err != nil {
+		t.Fatalf("prepareStableAgentCLITransport: %v", err)
+	}
+
+	wantRoot := filepath.Join(root, "workspace-1", ".multica", "agents", "agent-1", "runtime", "cli-transport")
+	if transport.Root() != wantRoot {
+		t.Fatalf("transport root = %q, want %q", transport.Root(), wantRoot)
+	}
+	if got, want := transport.WrapperPath(), filepath.Join(wantRoot, "bin", "multica"); got != want {
+		t.Fatalf("wrapper path = %q, want %q", got, want)
+	}
+}
+
+func TestSplitAgentProcessEnvironmentRemovesTurnIdentity(t *testing.T) {
+	stable, current, err := splitAgentProcessEnvironment(map[string]string{
+		"MULTICA_AGENT_ID":                       "agent-1",
+		"MULTICA_WORKSPACE_ID":                   "workspace-1",
+		"MULTICA_TASK_ID":                        "task-1",
+		"MULTICA_AGENT_INBOX_LEASE_TOKEN":        "lease-1",
+		"MULTICA_QUICK_CREATE_SOURCE_MESSAGE_ID": "message-1",
+	})
+	if err != nil {
+		t.Fatalf("splitAgentProcessEnvironment: %v", err)
+	}
+	if stable["MULTICA_AGENT_ID"] != "agent-1" || stable["MULTICA_WORKSPACE_ID"] != "workspace-1" {
+		t.Fatalf("stable environment = %#v", stable)
+	}
+	if _, ok := stable["MULTICA_TASK_ID"]; ok {
+		t.Fatal("stable environment contains task id")
+	}
+	if current["MULTICA_TASK_ID"] != "task-1" || current["MULTICA_AGENT_INBOX_LEASE_TOKEN"] != "lease-1" {
+		t.Fatalf("current-turn environment = %#v", current)
+	}
+}
+
 func mustStatMode(t *testing.T, path string) os.FileMode {
 	t.Helper()
 	info, err := os.Stat(path)

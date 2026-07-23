@@ -5,7 +5,28 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/multica-ai/multica/server/internal/turntransport"
 )
+
+// prepareStableAgentCLITransport returns the fixed agent-scoped transport that
+// D4/D6 consume once one-active-turn-per-agent serialization is live. D3 keeps
+// the existing per-run path below in production: publishing a single current
+// envelope before the serialization gate would cross-bind concurrent turns.
+func prepareStableAgentCLITransport(cfg Config, workspaceID, agentID, multicaBin string) (*turntransport.Transport, error) {
+	if workspaceID == "" || agentID == "" {
+		return nil, fmt.Errorf("workspace_id and agent_id are required")
+	}
+	root := filepath.Join(multicaAgentRoot(cfg, workspaceID, agentID), "runtime", "cli-transport")
+	return turntransport.Prepare(root, multicaBin)
+}
+
+// splitAgentProcessEnvironment is the stable-process/current-turn contract for
+// persistent runtimes. It is intentionally a daemon seam so D4 does not grow a
+// second, provider-specific classification.
+func splitAgentProcessEnvironment(environment map[string]string) (stable, currentTurn map[string]string, err error) {
+	return turntransport.SplitEnvironment(environment)
+}
 
 func prepareTaskCLITransport(cfg Config, workspaceID, agentID, runID, multicaBin, token string) (string, string, error) {
 	if workspaceID == "" || agentID == "" || runID == "" {

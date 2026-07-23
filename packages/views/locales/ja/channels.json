@@ -364,7 +364,12 @@
         "in_review": "{actor} がイシュー {issue} をレビューに提出しました",
         "done": "{actor} がイシュー {issue} を完了しました",
         "updated": "{actor} がイシュー {issue} を更新しました",
-        "status": "{actor} がイシュー {issue} を{{status}}にしました"
+        "status": "{actor} がイシュー {issue} を{{status}}にしました",
+        "aggregate_done": "{actor} が {count} 件のイシューを完了しました",
+        "aggregate_assigned": "{actor} が {count} 件のイシューを再割り当てしました",
+        "aggregate_updated": "{actor} が {count} 件のイシューを更新しました",
+        "aggregate_expand": "イシュー一覧を表示",
+        "aggregate_collapse": "イシュー一覧を隠す"
       },
       "issue_status": {
         "backlog": "バックログ",

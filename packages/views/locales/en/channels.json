@@ -364,7 +364,12 @@
         "in_review": "{actor} sent {issue} for review",
         "done": "{actor} completed {issue}",
         "updated": "{actor} updated {issue}",
-        "status": "{actor} marked {issue} as {{status}}"
+        "status": "{actor} marked {issue} as {{status}}",
+        "aggregate_done": "{actor} completed {count} issues",
+        "aggregate_assigned": "{actor} reassigned {count} issues",
+        "aggregate_updated": "{actor} updated {count} issues",
+        "aggregate_expand": "Show issues",
+        "aggregate_collapse": "Hide issues"
       },
       "issue_status": {
         "backlog": "Backlog",

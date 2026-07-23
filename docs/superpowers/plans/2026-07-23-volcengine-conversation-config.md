@@ -40,7 +40,8 @@ Source:
 - [x] Add failing exact-payload and validation tests.
 - [x] Implement the typed configuration builder.
 - [x] Run package tests, vet, and diff checks.
-- [ ] Commit, push, and open an independent ready PR stacked on #1037.
+- [x] Commit, push, and open independent ready PR
+  [#1040](https://github.com/LRM-Teams/multica/pull/1040), stacked on #1037.
 
 ## Verification
 

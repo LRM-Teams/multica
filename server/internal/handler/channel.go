@@ -716,12 +716,9 @@ func (h *Handler) CreateChannel(w http.ResponseWriter, r *http.Request) {
 		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
 		VALUES ($1, $2, 'user', $3)
 		ON CONFLICT DO NOTHING`, parseUUID(ch.ID), parseUUID(workspaceID), parseUUID(userID))
-	// New groups automatically get their single 贝克汉姆 (Beckham) group manager.
-	// Old groups are untouched (users invite one on demand). Best-effort: never
-	// fail channel creation if provisioning is not possible (e.g. no runtime).
-	if ch.Kind == "group" {
-		h.provisionGroupManagerForNewChannel(r.Context(), workspaceID, parseUUID(ch.ID), parseUUID(userID))
-	}
+	// LRM-397/398: do NOT auto-provision 贝克汉姆 / group_manager on channel create.
+	// Group managers enter via Wendy hire or POST .../group-manager (InviteGroupManager),
+	// with visibility=channel + home_channel_id bound to that group.
 	if projectID.Valid {
 		// Creating an already-bound group is still a project/channel association.
 		// Record the same typed system fact as a later settings change so the

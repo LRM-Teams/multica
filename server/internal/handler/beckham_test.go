@@ -269,3 +269,82 @@ func TestAddChannelMemberRejectsGroupManager(t *testing.T) {
 		t.Fatalf("group manager was added to channel B (%d rows), want 0", n)
 	}
 }
+
+// LRM-398: CreateChannel must not auto-create/bind 贝克汉姆. Hire is explicit
+// via InviteGroupManager (or CreateAgent with visibility=channel).
+func TestCreateChannelDoesNotAutoProvisionGroupManager(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	var rtID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (workspace_id, owner_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
+		VALUES ($1, $2, $3, 'cloud', 'beckham_test', 'online', '', '{}'::jsonb, now())
+		RETURNING id
+	`, testWorkspaceID, testUserID, "beckham-rt-noauto-"+uuid.NewString()).Scan(&rtID); err != nil {
+		t.Fatalf("seed runtime: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, rtID) })
+
+	name := "no-auto-beckham-" + uuid.NewString()
+	createRec := httptest.NewRecorder()
+	req := withChannelTestWorkspaceCtx(t, newRequest(http.MethodPost, "/api/channels", map[string]any{"name": name}), testUserID)
+	testHandler.CreateChannel(createRec, req)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("CreateChannel: status=%d body=%s", createRec.Code, createRec.Body.String())
+	}
+	var ch ChannelResponse
+	if err := json.Unmarshal(createRec.Body.Bytes(), &ch); err != nil {
+		t.Fatalf("decode channel: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, ch.ID) })
+
+	var managerID pgtype.UUID
+	if err := testPool.QueryRow(ctx, `
+		SELECT group_manager_agent_id FROM channel WHERE id = $1
+	`, ch.ID).Scan(&managerID); err != nil {
+		t.Fatalf("load group_manager_agent_id: %v", err)
+	}
+	if managerID.Valid {
+		t.Fatalf("CreateChannel auto-bound group manager %s; want NULL (LRM-398)", uuidToString(managerID))
+	}
+
+	var agentMembers int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM channel_member
+		WHERE channel_id = $1 AND member_type = 'agent'
+	`, ch.ID).Scan(&agentMembers); err != nil {
+		t.Fatalf("count agent members: %v", err)
+	}
+	if agentMembers != 0 {
+		t.Fatalf("CreateChannel added %d agent members; want 0", agentMembers)
+	}
+
+	// Hire path still works: POST .../group-manager creates channel-scoped Beckham.
+	inviteRec := httptest.NewRecorder()
+	inviteReq := withChannelTestWorkspaceCtx(t,
+		newRequest(http.MethodPost, "/api/channels/"+ch.ID+"/group-manager", nil), testUserID)
+	inviteReq = withURLParam(inviteReq, "channelId", ch.ID)
+	testHandler.InviteGroupManager(inviteRec, inviteReq)
+	if inviteRec.Code != http.StatusOK {
+		t.Fatalf("InviteGroupManager: status=%d body=%s", inviteRec.Code, inviteRec.Body.String())
+	}
+	var inviteBody struct {
+		Agent   AgentResponse `json:"agent"`
+		Created bool          `json:"created"`
+	}
+	if err := json.Unmarshal(inviteRec.Body.Bytes(), &inviteBody); err != nil {
+		t.Fatalf("decode invite: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, inviteBody.Agent.ID) })
+	if !inviteBody.Created {
+		t.Fatal("expected InviteGroupManager to create a new group manager")
+	}
+	if inviteBody.Agent.Visibility != agentVisibilityChannel {
+		t.Fatalf("hired visibility=%q want channel", inviteBody.Agent.Visibility)
+	}
+	if inviteBody.Agent.HomeChannelID == nil || *inviteBody.Agent.HomeChannelID != ch.ID {
+		t.Fatalf("hired home_channel_id=%v want %s", inviteBody.Agent.HomeChannelID, ch.ID)
+	}
+}

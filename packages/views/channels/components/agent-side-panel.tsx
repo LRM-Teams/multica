@@ -1,7 +1,7 @@
 "use client";
 
 import { type ReactNode, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Activity, BarChart3, Bell, FileText, Pencil, User } from "lucide-react";
+import { Activity, BarChart3, Bell, FileText, User } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useConfigStore } from "@multica/core/config";
 import { AGENT_DESCRIPTION_MAX_LENGTH } from "@multica/core/agents";
@@ -16,16 +16,7 @@ import {
 } from "@multica/core/identity";
 import { dashboardUsageByAgentOptions } from "@multica/core/dashboard/queries";
 import { useCustomPricingStore } from "@multica/core/runtimes/custom-pricing-store";
-import { isImeComposing } from "@multica/core/utils";
 import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
-import { Button } from "@multica/ui/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@multica/ui/components/ui/dialog";
 import { cn } from "@multica/ui/lib/utils";
 import { ActivityTab } from "../../agents/components/tabs/activity-tab";
 import { RemindersTab } from "../../agents/components/tabs/reminders-tab";
@@ -36,8 +27,7 @@ import { ThinkingPropRow } from "../../agents/components/inspector/thinking-prop
 import { VisibilityPicker } from "../../agents/components/inspector/visibility-picker";
 import { MemoryGrowthField } from "../../agents/components/memory-growth-field";
 import { AgentProfileActions } from "../../agents/components/agent-profile-actions";
-import { InlineEditPopover } from "../../agents/components/inline-edit-popover";
-import { CharCounter } from "../../agents/components/char-counter";
+import { InlineFieldEditor } from "../../agents/components/inline-field-editor";
 import { useUpdateAgent } from "../../agents/hooks/use-update-agent";
 import { useRuntimeHealthStateLabel } from "../../runtimes/components/shared";
 import { initialsOf } from "../../common/initials";
@@ -305,29 +295,18 @@ function AgentProfileTabContent({
       <div className="space-y-4 p-3 md:p-4">
         <ProfileField label={t(($) => $.side_panel.display_name_label)}>
           {canEditIdentity ? (
-            <InlineEditPopover
+            <InlineFieldEditor
               value={displayName}
               kind="input"
-              title={t(($) => $.inspector.display_name_title)}
+              label={t(($) => $.inspector.display_name_title)}
               placeholder={t(($) => $.inspector.display_name_placeholder)}
               validate={(v) =>
                 v.trim().length > 0 ? null : t(($) => $.inspector.display_name_required)
               }
               onSave={(v) => update({ display_name: v.trim() })}
-            >
-              {(triggerProps) => (
-                <button
-                  type="button"
-                  {...triggerProps}
-                  className="group -mx-1 inline-flex w-full min-w-0 items-start gap-1.5 rounded px-1 text-left text-[13px] leading-5 transition-colors hover:bg-accent/50"
-                >
-                  <span className="min-w-0 flex-1 whitespace-pre-wrap break-words">
-                    {displayName}
-                  </span>
-                  <Pencil className="mt-0.5 size-3.5 shrink-0 text-muted-foreground/70 group-hover:text-foreground" />
-                </button>
-              )}
-            </InlineEditPopover>
+              displayClassName="text-[13px] leading-5"
+              testId="agent-profile-display-name"
+            />
           ) : (
             <p className="text-[13px] leading-5">{displayName}</p>
           )}
@@ -335,10 +314,16 @@ function AgentProfileTabContent({
 
         <ProfileField label={t(($) => $.side_panel.description_label)}>
           {canEditIdentity ? (
-            <ProfileDescriptionEditor
+            <InlineFieldEditor
               value={agent.description ?? ""}
-              onSave={(v) => update({ description: v })}
+              kind="textarea"
+              label={t(($) => $.side_panel.description_label)}
+              placeholder={t(($) => $.inspector.description_placeholder)}
               emptyLabel={t(($) => $.side_panel.no_description)}
+              maxLength={AGENT_DESCRIPTION_MAX_LENGTH}
+              onSave={(v) => update({ description: v })}
+              displayClassName="text-[13px] leading-5 text-foreground/85"
+              testId="agent-profile-description"
             />
           ) : (
             <p className="text-[13px] leading-5 text-foreground/85">
@@ -425,8 +410,6 @@ function AgentProfileTabContent({
         <div className="border-t border-border pt-3">
           <AgentProfileActions
             agent={agent}
-            runtime={selectedRuntime}
-            members={members}
             canManage={canEdit.allowed}
           />
         </div>
@@ -443,109 +426,6 @@ function ProfileField({ label, children }: { label: string; children: ReactNode 
       </div>
       {children}
     </div>
-  );
-}
-
-function ProfileDescriptionEditor({
-  value,
-  onSave,
-  emptyLabel,
-}: {
-  value: string;
-  onSave: (next: string) => Promise<void>;
-  emptyLabel: string;
-}) {
-  const [open, setOpen] = useState(false);
-
-  return (
-    <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="group -mx-1 inline-flex w-full min-w-0 items-start gap-1.5 rounded px-1 text-left text-[13px] leading-5 transition-colors hover:bg-accent/50"
-      >
-        {value ? (
-          <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-foreground/85">
-            {value}
-          </span>
-        ) : (
-          <span className="min-w-0 flex-1 italic text-muted-foreground/60">{emptyLabel}</span>
-        )}
-        <Pencil className="mt-0.5 size-3.5 shrink-0 text-muted-foreground/70 group-hover:text-foreground" />
-      </button>
-
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="sm:max-w-lg">
-          {open ? (
-            <ProfileDescriptionEditorBody
-              initialValue={value}
-              onSave={onSave}
-              onClose={() => setOpen(false)}
-            />
-          ) : null}
-        </DialogContent>
-      </Dialog>
-    </>
-  );
-}
-
-function ProfileDescriptionEditorBody({
-  initialValue,
-  onSave,
-  onClose,
-}: {
-  initialValue: string;
-  onSave: (next: string) => Promise<void>;
-  onClose: () => void;
-}) {
-  const { t } = useT("agents");
-  const [draft, setDraft] = useState(initialValue);
-  const [saving, setSaving] = useState(false);
-  const length = draft.length;
-  const overLimit = length > AGENT_DESCRIPTION_MAX_LENGTH;
-
-  const commit = async () => {
-    if (overLimit) return;
-    setSaving(true);
-    try {
-      await onSave(draft);
-      onClose();
-    } catch {
-      // useUpdateAgent already toasts + rolls back (LRM-238 — not silent).
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <>
-      <DialogHeader>
-        <DialogTitle>{t(($) => $.side_panel.description_label)}</DialogTitle>
-      </DialogHeader>
-      <textarea
-        value={draft}
-        aria-label={t(($) => $.side_panel.description_label)}
-        onChange={(e) => setDraft(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") onClose();
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !isImeComposing(e)) {
-            e.preventDefault();
-            void commit();
-          }
-        }}
-        rows={5}
-        className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      />
-      <CharCounter length={length} max={AGENT_DESCRIPTION_MAX_LENGTH} />
-      <DialogFooter>
-        <Button type="button" variant="ghost" onClick={onClose} disabled={saving}>
-          {t(($) => $.inspector.cancel)}
-        </Button>
-        <Button type="button" onClick={() => void commit()} disabled={saving || overLimit}>
-          {t(($) => $.inspector.save)}
-        </Button>
-      </DialogFooter>
-    </>
   );
 }
 

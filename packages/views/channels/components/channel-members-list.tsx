@@ -144,7 +144,7 @@ export function ChannelMembersList({
                 actorId={m.member_id}
                 avatarUrlHint={m.avatar_url}
                 size={36}
-                showStatusDot={isAgent}
+                showStatusDot
                 profileLink={false}
               />
               <div className="min-w-0 flex-1">

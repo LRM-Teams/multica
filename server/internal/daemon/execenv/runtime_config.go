@@ -1026,21 +1026,18 @@ func renderSkillIndex(b *strings.Builder, provider string, skills []SkillContext
 	}
 	{
 		b.WriteString("## Skills\n\n")
-		b.WriteString("Skill context is injected as a lightweight index only: name, description, and location. Do not assume the full `SKILL.md` is already in prompt context; load the complete skill file only when needed.\n\n")
+		b.WriteString("Skill context is injected as a lightweight index only: name, description, and location. Do not assume the full `SKILL.md` is already in prompt context.\n\n")
+		b.WriteString("Progressive loading is required: when a skill's name or description matches the current task, open that `SKILL.md` and follow it before answering. Native runtime discovery (when available) is a convenience only — never skip reading the file just because the skill appears in this index.\n\n")
 		switch provider {
 		case "claude", "codebuddy":
-			// Claude/CodeBuddy discovers skills natively from .claude/skills/ — just list names.
-			b.WriteString("You have the following skills installed (discovered automatically):\n\n")
+			// Claude/CodeBuddy can also discover skills from .claude/skills/.
+			b.WriteString("Installed skills (also under `.claude/skills/`):\n\n")
 		case "codex", "copilot", "opencode", "openclaw", "pi", "cursor", "kimi", "kiro", "antigravity", "grok":
-			// Codex, Copilot, OpenCode, OpenClaw, Pi, Cursor, Kimi, Kiro,
-			// Antigravity, and Grok discover skills natively from their
-			// respective paths. For OpenClaw, the daemon also writes a per-task
-			// openclaw-config.json (exported via OPENCLAW_CONFIG_PATH) that pins
-			// agents.defaults.workspace to the task workdir so the CLI's scanner
-			// picks up {workDir}/skills/. Antigravity inherits Gemini CLI's
-			// workspace skill layout — {workDir}/.agents/skills/ — see
-			// resolveSkillsDir. Grok scans {workDir}/.grok/skills/.
-			b.WriteString("You have the following skills installed (discovered automatically):\n\n")
+			// These providers also write provider-native skill dirs (see
+			// resolveSkillsDir / hydrateCodexSkills). Still require the agent
+			// to open SKILL.md when the index matches — native discovery is
+			// unreliable across CLI versions and session reuse.
+			b.WriteString("Installed skills (files are on disk at the listed locations):\n\n")
 		case "gemini", "hermes":
 			// Gemini reads GEMINI.md directly. Hermes has no native skill
 			// discovery path wired up in resolveSkillsDir; both fall back to

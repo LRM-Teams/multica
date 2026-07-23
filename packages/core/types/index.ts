@@ -142,6 +142,8 @@ export type {
   MemberRole,
   User,
   MemberWithUser,
+  MemberPresenceEntry,
+  MemberPresenceResponse,
   MemberProfile,
   MemberProfileActivityItem,
   Invitation,
@@ -154,6 +156,7 @@ export type {
   UserActivityListResponse,
 } from "./user-activity";
 export type { NotificationGroupKey, NotificationGroupValue, NotificationPreferences, NotificationPreferenceResponse } from "./notification-preference";
+export type { WebPushPublicKeyResponse, WebPushSubscriptionPayload, WebPushSubscriptionResponse } from "./web-push";
 export type { Comment, CommentType, CommentAuthorType, CommentTriggerPreview, CommentTriggerPreviewAgent, CommentTriggerSource, Reaction } from "./comment";
 export type { Label, CreateLabelRequest, UpdateLabelRequest, ListLabelsResponse, IssueLabelsResponse } from "./label";
 export type {

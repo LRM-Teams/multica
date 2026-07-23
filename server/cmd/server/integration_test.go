@@ -864,7 +864,9 @@ func TestWebSocketIntegration(t *testing.T) {
 	}
 	conn.SetReadDeadline(time.Time{})
 
-	// Allow Hub goroutine to process the register and add client to room
+	// Allow Hub goroutine to process the register and add client to room.
+	// LRM-462 may also publish member:presence on connect — drain until the
+	// expected issue lifecycle events below.
 	time.Sleep(100 * time.Millisecond)
 
 	// Create an issue — this should trigger a WebSocket broadcast
@@ -876,21 +878,8 @@ func TestWebSocketIntegration(t *testing.T) {
 	readJSON(t, resp, &issue)
 	issueID := issue["id"].(string)
 
-	// Read the WebSocket message
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
-	_, msg, err := conn.ReadMessage()
-	if err != nil {
-		t.Fatalf("WebSocket read error: %v", err)
-	}
-
-	// Verify the message contains the issue event
-	var wsMsg map[string]any
-	if err := json.Unmarshal(msg, &wsMsg); err != nil {
-		t.Fatalf("failed to parse WebSocket message: %v", err)
-	}
-	if wsMsg["type"] != "issue:created" {
-		t.Fatalf("expected type 'issue:created', got '%s'", wsMsg["type"])
-	}
+	wsMsg := readWSEventOfType(t, conn, "issue:created")
+	_ = wsMsg
 
 	// Update the issue — should trigger another broadcast
 	resp = authRequest(t, "PUT", "/api/issues/"+issueID, map[string]any{
@@ -898,29 +887,37 @@ func TestWebSocketIntegration(t *testing.T) {
 	})
 	resp.Body.Close()
 
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
-	_, msg, err = conn.ReadMessage()
-	if err != nil {
-		t.Fatalf("WebSocket read error on update: %v", err)
-	}
-	var updateMsg map[string]any
-	json.Unmarshal(msg, &updateMsg)
-	if updateMsg["type"] != "issue:updated" {
-		t.Fatalf("expected type 'issue:updated', got '%s'", updateMsg["type"])
-	}
+	updateMsg := readWSEventOfType(t, conn, "issue:updated")
+	_ = updateMsg
 
 	// Delete the issue — should trigger another broadcast
 	resp = authRequest(t, "DELETE", "/api/issues/"+issueID, nil)
 	resp.Body.Close()
 
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
-	_, msg, err = conn.ReadMessage()
-	if err != nil {
-		t.Fatalf("WebSocket read error on delete: %v", err)
+	deleteMsg := readWSEventOfType(t, conn, "issue:deleted")
+	_ = deleteMsg
+}
+
+// readWSEventOfType drains the WS until it sees wantType (or deadline).
+// Presence noise (member:presence) and other interleaved events are skipped.
+func readWSEventOfType(t *testing.T, conn *websocket.Conn, wantType string) map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		conn.SetReadDeadline(deadline)
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("WebSocket read error waiting for %q: %v", wantType, err)
+		}
+		var wsMsg map[string]any
+		if err := json.Unmarshal(msg, &wsMsg); err != nil {
+			t.Fatalf("failed to parse WebSocket message: %v", err)
+		}
+		got, _ := wsMsg["type"].(string)
+		if got == wantType {
+			return wsMsg
+		}
 	}
-	var deleteMsg map[string]any
-	json.Unmarshal(msg, &deleteMsg)
-	if deleteMsg["type"] != "issue:deleted" {
-		t.Fatalf("expected type 'issue:deleted', got '%s'", deleteMsg["type"])
-	}
+	t.Fatalf("timed out waiting for WebSocket type %q", wantType)
+	return nil
 }

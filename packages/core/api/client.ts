@@ -69,6 +69,7 @@ import type {
   Workspace,
   WorkspaceRepo,
   MemberWithUser,
+  MemberPresenceResponse,
   MemberProfile,
   User,
   Skill,
@@ -154,6 +155,9 @@ import type {
   WebhookDelivery,
   NotificationPreferenceResponse,
   NotificationPreferences,
+  WebPushPublicKeyResponse,
+  WebPushSubscriptionPayload,
+  WebPushSubscriptionResponse,
   GitHubPullRequest,
   ListGitHubInstallationsResponse,
   GitHubConnectResponse,
@@ -315,6 +319,10 @@ import {
   EMPTY_VOICE_TRANSCRIPT_RESPONSE,
   RawReminderPageSchema,
   EMPTY_REMINDER_PAGE,
+  EMPTY_WEB_PUSH_PUBLIC_KEY,
+  EMPTY_WEB_PUSH_SUBSCRIPTION,
+  WebPushPublicKeySchema,
+  WebPushSubscriptionSchema,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -1748,6 +1756,30 @@ export class ApiClient {
     });
   }
 
+  async getWebPushPublicKey(): Promise<WebPushPublicKeyResponse> {
+    const raw = await this.fetch<unknown>("/api/web-push/public-key");
+    return parseWithFallback<WebPushPublicKeyResponse>(raw, WebPushPublicKeySchema, EMPTY_WEB_PUSH_PUBLIC_KEY, {
+      endpoint: "GET /api/web-push/public-key",
+    });
+  }
+
+  async bindWebPushSubscription(subscription: WebPushSubscriptionPayload): Promise<WebPushSubscriptionResponse> {
+    const raw = await this.fetch<unknown>("/api/web-push/subscriptions", {
+      method: "POST",
+      body: JSON.stringify({ subscription }),
+    });
+    return parseWithFallback<WebPushSubscriptionResponse>(raw, WebPushSubscriptionSchema, EMPTY_WEB_PUSH_SUBSCRIPTION, {
+      endpoint: "POST /api/web-push/subscriptions",
+    });
+  }
+
+  async unbindWebPushSubscription(endpoint: string): Promise<{ ok: boolean }> {
+    return this.fetch("/api/web-push/subscriptions", {
+      method: "DELETE",
+      body: JSON.stringify({ endpoint }),
+    });
+  }
+
   // App Config
   async getConfig(): Promise<AppConfigResponse> {
     const raw = await this.fetch<unknown>("/api/config");
@@ -1907,6 +1939,11 @@ export class ApiClient {
   // Members
   async listMembers(workspaceId: string): Promise<MemberWithUser[]> {
     return this.fetch(`/api/workspaces/${workspaceId}/members`);
+  }
+
+  /** LRM-462: currently-online human members (offline omitted). */
+  async listMemberPresence(workspaceId: string): Promise<MemberPresenceResponse> {
+    return this.fetch(`/api/workspaces/${workspaceId}/member-presence`);
   }
 
   async getMemberProfile(memberType: "user" | "agent", memberId: string): Promise<MemberProfile> {

@@ -85,6 +85,10 @@ vi.mock("../../common/markdown", () => ({
 }));
 
 
+vi.mock("@multica/core/workspace/use-member-presence", () => ({
+  useMemberOnline: () => false,
+}));
+
 vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({
     getActorAvatarUrl: () => null,

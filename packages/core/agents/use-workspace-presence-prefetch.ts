@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { agentListOptions, squadListOptions } from "../workspace/queries";
+import { agentListOptions, squadListOptions, memberPresenceOptions } from "../workspace/queries";
 import { runtimeListOptions } from "../runtimes/queries";
 import { agentTaskSnapshotOptions } from "./queries";
 
@@ -26,4 +26,6 @@ export function useWorkspacePresencePrefetch(wsId: string | undefined): void {
   useQuery({ ...runtimeListOptions(wsId ?? ""), enabled: !!wsId });
   useQuery({ ...agentTaskSnapshotOptions(wsId ?? ""), enabled: !!wsId });
   useQuery({ ...squadListOptions(wsId ?? ""), enabled: !!wsId });
+  // LRM-462: warm human member online set for avatar dots.
+  useQuery({ ...memberPresenceOptions(wsId ?? ""), enabled: !!wsId });
 }

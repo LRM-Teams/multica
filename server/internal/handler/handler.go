@@ -104,6 +104,12 @@ type Config struct {
 	ChannelAmbientGateMaxRecentPerRuntime int
 	EvolutionReviewer                     service.EvolutionReviewer
 	EvolutionReviewEnabled                bool
+	// WebPushVAPIDPublicKey is safe to expose to browsers so they can create
+	// PushSubscription objects. The private key stays environment-only.
+	WebPushVAPIDPublicKey  string
+	WebPushVAPIDPrivateKey string
+	WebPushVAPIDSubject    string
+	WebPushAppURL          string
 }
 
 type cloudRuntimeProxy interface {
@@ -131,6 +137,9 @@ type Handler struct {
 	LocalSkillListStore   LocalSkillListStore
 	LocalSkillImportStore LocalSkillImportStore
 	LivenessStore         LivenessStore
+	// MemberPresenceStore tracks human online/offline from realtime WS
+	// sessions (LRM-462). Distinct from LivenessStore (daemon heartbeats).
+	MemberPresenceStore   MemberPresenceStore
 	HeartbeatScheduler    HeartbeatScheduler
 	Storage               storage.Storage
 	CFSigner              *auth.CloudFrontSigner
@@ -264,6 +273,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		LocalSkillListStore:   NewInMemoryLocalSkillListStore(),
 		LocalSkillImportStore: NewInMemoryLocalSkillImportStore(),
 		LivenessStore:         NewNoopLivenessStore(),
+		MemberPresenceStore:   NewMemoryMemberPresenceStore(),
 		HeartbeatScheduler:    NewPassthroughHeartbeatScheduler(queries),
 		Storage:               store,
 		CFSigner:              cfSigner,

@@ -1011,7 +1011,7 @@ func buildEnvDispatchChannelPrompt(channelName, rawContent string) string {
 	fmt.Fprintf(&b, "You are participating in the Multica group chat #%s. Respond only as yourself.\n", channelName)
 	b.WriteString(channelOutputContractInstruction)
 	b.WriteString("\n")
-	b.WriteString("Reply to the message below directly in THIS channel as your normal final answer. Do NOT send a direct message (dm:@...) to anyone, do NOT open a new thread, and do NOT switch to a different channel or target — your final answer is delivered to this channel automatically.\n\n")
+	b.WriteString("Reply to the message below directly in THIS channel as your normal final answer. Do NOT send a direct message (DM) to anyone, do NOT open a new thread, and do NOT switch to a different channel or target — your final answer is delivered to this channel automatically.\n\n")
 	b.WriteString("Current message to respond to:\n")
 	fmt.Fprintf(&b, "Env Dispatch (user): %s", rawContent)
 	return b.String()

@@ -12,6 +12,7 @@ const TEST_RESOURCES = { en: { channels: enChannels } };
 const mockViewport = vi.hoisted(() => ({ isMobile: false }));
 const mockQueryData = vi.hoisted(() => ({
   dms: [] as DMItem[],
+  dmsPending: false,
   agents: [] as Array<Record<string, unknown>>,
   members: [] as Array<Record<string, unknown>>,
   squads: [] as Array<Record<string, unknown>>,
@@ -72,17 +73,20 @@ vi.mock("@tanstack/react-query", async () => {
   );
   return {
     ...actual,
-    useQuery: (opts: { kind?: string }) => ({
-      data:
-        opts?.kind === "dms"
+    useQuery: (opts: { kind?: string }) => {
+      const isDms = opts?.kind === "dms";
+      return {
+        data: isDms
           ? mockQueryData.dms
           : opts?.kind === "agents"
             ? mockQueryData.agents
             : opts?.kind === "squads"
               ? mockQueryData.squads
               : mockQueryData.members,
-      isLoading: false,
-    }),
+        isLoading: isDms ? mockQueryData.dmsPending : false,
+        isPending: isDms ? mockQueryData.dmsPending : false,
+      };
+    },
   };
 });
 
@@ -188,6 +192,7 @@ describe("DmList new-DM picker", () => {
   beforeEach(() => {
     mockViewport.isMobile = false;
     mockQueryData.dms = [];
+    mockQueryData.dmsPending = false;
     mockQueryData.agents = [];
     mockQueryData.members = [];
     mockQueryData.squads = [];
@@ -434,6 +439,7 @@ describe("DmList sidebar contrast (LRM-354)", () => {
   beforeEach(() => {
     mockViewport.isMobile = false;
     mockQueryData.dms = [];
+    mockQueryData.dmsPending = false;
     mockQueryData.agents = [];
     mockQueryData.members = [];
     mockQueryData.squads = [];
@@ -467,5 +473,48 @@ describe("DmList sidebar contrast (LRM-354)", () => {
     const badge = container.querySelector("span.bg-brand-solid.text-brand-solid-foreground");
     expect(badge).not.toBeNull();
     expect(badge).toHaveTextContent("5");
+  });
+});
+
+describe("DmList loading skeleton (LRM-459)", () => {
+  beforeEach(() => {
+    mockViewport.isMobile = false;
+    mockQueryData.dms = [];
+    mockQueryData.dmsPending = false;
+    mockQueryData.agents = [];
+    mockQueryData.members = [];
+    mockQueryData.squads = [];
+  });
+
+  it("shows row skeleton while DM list is pending (not empty CTA)", () => {
+    mockQueryData.dmsPending = true;
+    renderDmList();
+
+    expect(screen.getByTestId("dm-list-skeleton")).toBeInTheDocument();
+    expect(screen.queryByText("Start a chat")).not.toBeInTheDocument();
+  });
+
+  it("replaces skeleton with rows once loaded", () => {
+    mockQueryData.dmsPending = false;
+    mockQueryData.dms = [
+      makeDm({
+        id: "dm-1",
+        peer: { type: "user", id: "peer-1", name: "Loaded Peer" },
+      }),
+    ];
+    renderDmList();
+
+    expect(screen.queryByTestId("dm-list-skeleton")).not.toBeInTheDocument();
+    expect(screen.getByText("Loaded Peer")).toBeInTheDocument();
+  });
+
+  it("does not flash empty CTA when pending with empty default data", () => {
+    // Regression: isLoading=false while isPending=true used to paint empty state.
+    mockQueryData.dmsPending = true;
+    mockQueryData.dms = [];
+    renderDmList();
+
+    expect(screen.getByTestId("dm-list-skeleton")).toBeInTheDocument();
+    expect(screen.queryByText("No direct messages yet.")).not.toBeInTheDocument();
   });
 });

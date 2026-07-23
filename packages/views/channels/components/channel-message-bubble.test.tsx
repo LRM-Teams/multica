@@ -168,6 +168,10 @@ vi.mock("@multica/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
 }));
 
+vi.mock("@multica/core/workspace/use-member-presence", () => ({
+  useMemberOnline: () => false,
+}));
+
 vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({
     getActorAvatarUrl: getActorAvatarUrlMock,
@@ -860,9 +864,9 @@ describe("ChannelMessageBubble", () => {
     expect(bubble.className).toContain("ring-primary/25");
   });
 
-  it("LRM-224: agent message avatars show status dots; member bubbles do not", () => {
-    // LRM-223 option B supersedes #477 for chat bubbles: agent status dots are
-    // in-scope on the frozen long-term avatar. Members still have no presence.
+  it("LRM-224/LRM-462: agent and member message avatars show status dots", () => {
+    // LRM-223 option B keeps agent dots; LRM-462 adds human-member presence
+    // dots backed by workspace WS sessions.
     const { rerender } = render(
       <ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />,
     );
@@ -874,7 +878,7 @@ describe("ChannelMessageBubble", () => {
         currentUserId="user-1"
       />,
     );
-    expect(screen.queryByLabelText(/^Status:/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/^Status:/)).toBeInTheDocument();
   });
 
   it("resolves quoted snapshot author names through live identity", () => {

@@ -39,6 +39,8 @@ import {
   notificationPreferenceKeys,
 } from "../notification-preferences/queries";
 import { workspaceKeys, workspaceListOptions } from "../workspace/queries";
+import { applyMemberPresenceEvent } from "../workspace/use-member-presence";
+import type { MemberPresencePayload } from "../types/events";
 import {
   showWebNotification,
   type SystemNotificationPayload,
@@ -684,6 +686,8 @@ export function useRealtimeSync(
       "issue_reaction:added", "issue_reaction:removed",
       "subscriber:added", "subscriber:removed",
       "daemon:heartbeat",
+      // LRM-462: patched into member-presence cache below; do not invalidate members list.
+      "member:presence",
       // Chat events are handled explicitly below; do not double-invalidate.
       "chat:message", "chat:done", "chat:session_read", "chat:session_deleted",
       "chat:session_updated",
@@ -912,6 +916,18 @@ export function useRealtimeSync(
           "info",
         );
       }
+    });
+
+    // LRM-462: patch online set without refetching the members directory.
+    const unsubMemberPresence = ws.on("member:presence", (p) => {
+      const payload = p as MemberPresencePayload;
+      const wsId = payload.workspace_id || getCurrentWsId();
+      if (!wsId || !payload.user_id || !payload.status) return;
+      applyMemberPresenceEvent(qc, wsId, {
+        user_id: payload.user_id,
+        status: payload.status,
+        observed_at: payload.observed_at,
+      });
     });
 
     // invitation:created — notify the invitee of a new pending invitation
@@ -1297,6 +1313,7 @@ export function useRealtimeSync(
       unsubWsDeleted();
       unsubMemberRemoved();
       unsubMemberAdded();
+      unsubMemberPresence();
       unsubInvitationCreated();
       unsubInvitationAccepted();
       unsubInvitationDeclined();

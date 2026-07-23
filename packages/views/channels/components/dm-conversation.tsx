@@ -315,7 +315,7 @@ function DmHeader({
       size={28}
       // LRM-248: avatar badge is the round live indicator; the name-row word
       // is plain Online/Offline text (no second dot).
-      showStatusDot={isAgentPeer}
+      showStatusDot
       profileLink={false}
     />
   );

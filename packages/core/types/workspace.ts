@@ -138,3 +138,14 @@ export interface Invitation {
   inviter_email?: string;
   workspace_name?: string;
 }
+
+/** LRM-462: human member online snapshot / WS payload. */
+export interface MemberPresenceEntry {
+  user_id: string;
+  status: "online" | "offline";
+  observed_at?: string;
+}
+
+export interface MemberPresenceResponse {
+  members: MemberPresenceEntry[];
+}

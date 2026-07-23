@@ -122,6 +122,12 @@ services:
       # DB to the AReaL gateway. Only read by RL training/interaction flows;
       # override in /data/multica/.env if the stub runs elsewhere.
       AREAL_BRIDGE_STUB_URL: ${AREAL_BRIDGE_STUB_URL:-http://db-bridge-stub-multica:${BRIDGE_GATEWAY_STUB_PORT:-9100}}
+      # AReaL LLM proxy base_url injected into env-dispatch training sandboxes
+      # (service/training_config.go: AREAL_PROXY_URL). Must be reachable from
+      # inside the sandbox: typically the db_bridge chat_completions stub
+      # running on the sandbox host (BRIDGE_GATEWAY_STUB_PORT). Empty disables
+      # the override and falls back to the in-code default http://db_bridge_stub:9100/v1.
+      AREAL_PROXY_URL: ${AREAL_PROXY_URL:-http://10.110.158.143:9100/v1}
     restart: unless-stopped
 
   frontend:

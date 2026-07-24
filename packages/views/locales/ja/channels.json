@@ -77,11 +77,12 @@
     "agents_live": "エージェント {{agents}} 体 · {{working}} 処理中",
     "agents_attention": "エージェント {{agents}} 体 · 要確認",
     "working_list_title": "処理中 · {{count}}",
-    "working_failed": "返信できませんでした · もう一度 @",
-    "working_no_reply": "返信なし · もう一度 @",
+    "working_failed": "応答できません · 再度 @",
+    "working_no_reply": "返信なし · 再度 @",
     "working_dismiss": "閉じる",
     "working_dismiss_aria": "{{name}} の状態を閉じる",
-    "settings_aria": "グループ設定"
+    "settings_aria": "グループ設定",
+    "working_processing": "処理中…"
   },
   "members": {
     "select_user": "メンバーを選択",

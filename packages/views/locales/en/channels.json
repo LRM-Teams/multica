@@ -81,7 +81,8 @@
     "working_no_reply": "No reply · try @ again",
     "working_dismiss": "Dismiss",
     "working_dismiss_aria": "Dismiss {{name}}'s status",
-    "settings_aria": "Group settings"
+    "settings_aria": "Group settings",
+    "working_processing": "Processing…"
   },
   "members": {
     "select_user": "Select a member",

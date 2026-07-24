@@ -26,6 +26,10 @@ import {
 
 const STOPPING_ALL_TASKS_ID = "__all__";
 
+function taskRowKey(task: ChannelActiveTask): string {
+  return task.inbox_event_id?.trim() || task.task_id;
+}
+
 export interface ChannelAgentsLiveCueProps {
   agentCount: number;
   tasks: readonly ChannelActiveTask[];
@@ -34,7 +38,10 @@ export interface ChannelAgentsLiveCueProps {
   onStopTask?: (task: ChannelActiveTask) => void;
   /** Opens the existing Stop-all confirm dialog (LRM-405). */
   onStopAll?: () => void;
-  /** When true, render only the agents cue (no leading members text). */
+  /**
+   * When true, render only the agents cue (no leading members text).
+   * Used by DM header next to the peer name.
+   */
   agentsOnly?: boolean;
   memberCount?: number;
   className?: string;
@@ -44,9 +51,11 @@ export interface ChannelAgentsLiveCueProps {
  * LRM-581 / lock E — channel header `N agents` live cue + Working list.
  *
  * Idle: plain "N agents" (no chrome). With active/terminal tasks: cue changes
- * ("N agents · K processing" + shimmer when running); Stop / Stop all stay
+ * ("N agents · K processing" + shimmer when running); ghost Stop / Stop all stay
  * visible next to the cue (not hover-only). Desktop hover / mobile tap opens
  * the Working list (avatar + dot + verb + per-row Stop / dismiss).
+ *
+ * Visual: plain text meta — no outline/brand chip (Frank 2026-07-24).
  */
 export function ChannelAgentsLiveCue({
   agentCount,
@@ -62,6 +71,9 @@ export function ChannelAgentsLiveCue({
   const { t } = useT("channels");
   const isMobile = useIsMobile();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [dismissedKeys, setDismissedKeys] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const { getActorName, getActorInitials, getActorAvatarUrl } = useActorName();
 
   const { stoppable, terminal, listTasks, runningCount } = useMemo(() => {
@@ -73,7 +85,9 @@ export function ChannelAgentsLiveCue({
       if (isTerminalChannelActiveTask(task)) {
         const outcome = task.outcome?.trim();
         if (outcome === "failed" || outcome === "no_reply") {
-          term.push(task);
+          if (!dismissedKeys.has(taskRowKey(task))) {
+            term.push(task);
+          }
         }
         continue;
       }
@@ -86,7 +100,7 @@ export function ChannelAgentsLiveCue({
       listTasks: [...stop, ...term],
       runningCount: running,
     };
-  }, [tasks]);
+  }, [tasks, dismissedKeys]);
 
   if (agentCount <= 0 && listTasks.length === 0) {
     if (agentsOnly) return null;
@@ -98,8 +112,7 @@ export function ChannelAgentsLiveCue({
     );
   }
 
-  // DM peer cue (agentsOnly): idle = no chrome under the name (peer already
-  // identified). Channel roster still shows the idle "N agents" label.
+  // DM idle: no chrome beside the peer name.
   if (agentsOnly && listTasks.length === 0) {
     return null;
   }
@@ -124,9 +137,24 @@ export function ChannelAgentsLiveCue({
     "inline-flex min-h-8 min-w-0 items-center rounded-sm px-0.5 text-left",
     isLive && "outline-none focus-visible:ring-2 focus-visible:ring-ring",
     isLive && runningCount > 0 && "animate-chat-text-shimmer font-semibold text-foreground",
-    isLive && runningCount === 0 && terminal.length > 0 && "font-semibold text-destructive",
-    isLive && runningCount === 0 && terminal.length === 0 && "font-semibold text-foreground",
+    isLive &&
+      runningCount === 0 &&
+      terminal.length > 0 &&
+      "font-semibold text-destructive",
+    isLive &&
+      runningCount === 0 &&
+      terminal.length === 0 &&
+      "font-semibold text-foreground",
   );
+
+  const dismissTerminal = (task: ChannelActiveTask) => {
+    const key = taskRowKey(task);
+    setDismissedKeys((prev) => {
+      const next = new Set(prev);
+      next.add(key);
+      return next;
+    });
+  };
 
   const listBody = (
     <div className="flex flex-col gap-2" data-testid="channel-agents-working-list">
@@ -145,19 +173,20 @@ export function ChannelAgentsLiveCue({
             : isNoReply
               ? t(($) => $.header.working_no_reply)
               : isRunning
-                ? t(($) => $.agent_status.running)
+                ? t(($) => $.header.working_processing)
                 : t(($) => $.agent_status.queued);
-          const dotClass = isFailed || isNoReply
-            ? "bg-destructive"
-            : isRunning
-              ? "bg-brand"
-              : "bg-muted-foreground/40";
+          const dotClass =
+            isFailed || isNoReply
+              ? "bg-destructive"
+              : isRunning
+                ? "bg-brand"
+                : "bg-muted-foreground/40";
           const verbClass =
             isFailed || isNoReply ? "text-destructive" : "text-muted-foreground";
           const actionLabel = isTerminal
             ? t(($) => $.header.working_dismiss)
             : t(($) => $.agent_status.stop);
-          const rowKey = task.inbox_event_id ?? task.task_id;
+          const rowKey = taskRowKey(task);
 
           return (
             <div
@@ -179,31 +208,40 @@ export function ChannelAgentsLiveCue({
                 </div>
                 <div className={cn("truncate", verbClass)}>{verb}</div>
               </div>
-              {canStop && onStopTask ? (
+              {(isTerminal || (canStop && onStopTask)) && (
                 <Button
                   type="button"
                   variant="ghost"
                   size="sm"
                   className="h-8 shrink-0 px-2 text-[11px] text-muted-foreground hover:text-foreground"
                   disabled={
-                    stoppingTaskId === task.task_id ||
-                    stoppingTaskId === STOPPING_ALL_TASKS_ID
+                    !isTerminal &&
+                    (stoppingTaskId === task.task_id ||
+                      stoppingTaskId === STOPPING_ALL_TASKS_ID)
                   }
                   onClick={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
-                    onStopTask(task);
+                    if (isTerminal) {
+                      dismissTerminal(task);
+                      return;
+                    }
+                    onStopTask?.(task);
                   }}
                   aria-label={
                     isTerminal
-                      ? t(($) => $.header.working_dismiss_aria, { name: task.agent_name })
-                      : t(($) => $.agent_status.stop_aria, { name: task.agent_name })
+                      ? t(($) => $.header.working_dismiss_aria, {
+                          name: task.agent_name,
+                        })
+                      : t(($) => $.agent_status.stop_aria, {
+                          name: task.agent_name,
+                        })
                   }
                 >
                   {!isTerminal ? <Square className="size-2.5 fill-current" /> : null}
                   {actionLabel}
                 </Button>
-              ) : null}
+              )}
             </div>
           );
         })}

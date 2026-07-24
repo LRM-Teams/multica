@@ -77,11 +77,12 @@
     "agents_live": "{{agents}} 个智能体 · {{working}} 处理中",
     "agents_attention": "{{agents}} 个智能体 · 需关注",
     "working_list_title": "正在处理 · {{count}}",
-    "working_failed": "无法回复 · 可再 @",
-    "working_no_reply": "未回复 · 可再 @",
+    "working_failed": "处理出错 · 可再 @",
+    "working_no_reply": "无法回复 · 可再 @",
     "working_dismiss": "关闭",
     "working_dismiss_aria": "关闭 {{name}} 的状态",
-    "settings_aria": "群设置"
+    "settings_aria": "群设置",
+    "working_processing": "正在处理…"
   },
   "members": {
     "select_user": "选择人类成员",

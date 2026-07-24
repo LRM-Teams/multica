@@ -1929,6 +1929,9 @@ export function ChannelsPage({
 
   const handleStopChannelTask = useCallback(async (task: ChannelActiveTask) => {
     if (!active?.id) return;
+    // Terminal failed/no_reply rows dismiss locally in ChannelAgentsLiveCue —
+    // never call inbox cancel for an already-terminal wake.
+    if (isTerminalChannelActiveTask(task)) return;
     // LRM-425 / LRM-238 — authoritative id is inbox_event_id; never fall back
     // to /api/tasks/{id}/cancel for channel wakes (that path returns 409).
     const inboxEventId = task.inbox_event_id?.trim();
@@ -1939,11 +1942,7 @@ export function ChannelsPage({
     setStoppingChannelTaskId(task.task_id);
     try {
       await api.cancelChannelInboxEvent(active.id, inboxEventId);
-      toast.success(
-        isTerminalChannelActiveTask(task)
-          ? t(($) => $.header.working_dismiss)
-          : t(($) => $.agent_status.stop_success, { name: task.agent_name }),
-      );
+      toast.success(t(($) => $.agent_status.stop_success, { name: task.agent_name }));
       qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(active.id) });
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
       qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });

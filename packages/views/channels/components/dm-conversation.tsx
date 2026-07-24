@@ -289,6 +289,8 @@ function DmHeader({
   const handleStopTask = useCallback(
     async (task: ChannelActiveTask) => {
       if (!channelIdForTasks) return;
+      // Terminal failed/no_reply dismiss is local in ChannelAgentsLiveCue.
+      if (isTerminalChannelActiveTask(task)) return;
       const inboxEventId = task.inbox_event_id?.trim();
       if (!inboxEventId) {
         toast.error(t(($) => $.agent_status.stop_failed));
@@ -297,11 +299,7 @@ function DmHeader({
       setStoppingTaskId(task.task_id);
       try {
         await api.cancelChannelInboxEvent(channelIdForTasks, inboxEventId);
-        toast.success(
-          isTerminalChannelActiveTask(task)
-            ? t(($) => $.header.working_dismiss)
-            : t(($) => $.agent_status.stop_success, { name: task.agent_name }),
-        );
+        toast.success(t(($) => $.agent_status.stop_success, { name: task.agent_name }));
         qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(channelIdForTasks) });
         qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
         qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });

@@ -103,4 +103,27 @@ describe("ChannelAgentsLiveCue (LRM-581)", () => {
     );
     expect(container).toBeEmptyDOMElement();
   });
+
+  it("terminal-only cue uses attention copy without adjacent Stop", () => {
+    renderCue(
+      <ChannelAgentsLiveCue
+        memberCount={2}
+        agentCount={3}
+        tasks={[
+          task({
+            task_id: "done-1",
+            agent_id: "a2",
+            agent_name: "Wendy",
+            status: "no_reply",
+            outcome: "no_reply",
+          }),
+        ]}
+        onStopTask={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("channel-agents-live-cue")).toHaveTextContent(
+      "needs attention",
+    );
+    expect(screen.queryByTestId("channel-agents-cue-stop")).toBeNull();
+  });
 });

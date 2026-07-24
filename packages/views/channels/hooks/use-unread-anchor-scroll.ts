@@ -54,6 +54,16 @@ export function scrollToIndexUntilSettled(
     // so a long gesture can't exhaust the settle budget) and keep polling
     // hasReached/gesture-state until the user lets go, then resume settling
     // from wherever the anchor row actually is.
+    //
+    // Two known boundaries (Wren's #1146 review, accepted as-is): touchend
+    // fires the instant a mobile flick lifts, so the settle loop can resume
+    // scrollToIndex while native momentum scrolling is still animating —
+    // the two briefly compete rather than handing off cleanly. And skipped
+    // frames not counting toward maxFrames means a gesture that never
+    // reports inactive (touchend/touchcancel/wheel-idle all missing —
+    // no known path, but not provably impossible) removes the #365 timeout
+    // backstop for as long as that lasts; the disposer + unmount cleanup is
+    // the real safety net in that case, not the frame cap.
     if (options?.isGestureActive?.()) {
       raf = requestAnimationFrame(tick);
       return;

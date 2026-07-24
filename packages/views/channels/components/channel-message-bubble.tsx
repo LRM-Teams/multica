@@ -388,19 +388,31 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
     editDraft,
   ]);
 
-  // #689: no per-row ResizeObserver here. It used to exist to catch an
-  // attachment image finishing its async download and growing the body past
-  // the collapse threshold after the useLayoutEffect above (which only
-  // depends on message.attachments — the metadata list, not the image
-  // bytes) already ran. That growth no longer happens: image attachments
-  // reserve their box via `aspect-ratio` from upload-time width/height
-  // metadata (attachment.tsx ImageAttachmentView) and stickers render into a
-  // fixed size-32/40 box (message-parts-renderer.tsx StickerImage, #689
-  // item 6) — both paint at final size before the image loads. Re-adding
-  // this observer re-introduces a live source of mid-scroll row-height
-  // churn (Virtuoso's own per-item ResizeObserver has to re-settle
-  // everything below on every fire) for a growth case that no longer occurs
-  // on the common path.
+  // #689: no per-row ResizeObserver here. It used to exist to catch content
+  // growing the body past the collapse threshold after the useLayoutEffect
+  // above (which only depends on message.attachments/parts — metadata, not
+  // asset bytes) already ran, and re-apply the 160px cap. Two real late-
+  // growth paths still exist (Wren's #1146 review, not eliminated, accepted
+  // as a tradeoff): a markdown inline `![]()` image resolves through the
+  // `kind: "url"` AttachmentInput (markdown.tsx renderImage →
+  // attachment.tsx), which never forwards a resolved record's width/height
+  // into the aspect-ratio box even when one exists, so it can grow on load;
+  // and a sticker's placeholder (`min-h-20`, message-parts-renderer.tsx
+  // StickerPlaceholder) sits at a different height than its loaded fixed
+  // `size-32/40` box (StickerImage) — the swap depends on the sticker-
+  // catalog query settling, which isn't in this effect's deps either. Both
+  // are UPLOADED-attachment-only reservations (attachment.tsx
+  // ImageAttachmentView aspect-ratio from record width/height): a normal
+  // record-backed image/attachment paints at final size and never needed
+  // this observer to begin with. The accepted cost of removing it is
+  // cosmetic-only for the two paths above — a message may render slightly
+  // taller than 160px without the "see more" affordance until the next
+  // window resize or content-prop change re-measures it — never a wrong
+  // clipped height or a stuck state. Virtuoso's own per-item ResizeObserver
+  // still re-settles the surrounding rows regardless of what this component
+  // does; keeping this observer double-fires that re-settle on every one of
+  // these late-growth events, and doing so while the row is on/near screen
+  // during a scroll is exactly the mid-scroll jank #689 reported.
   useEffect(() => {
     const handleOverflow = () => measureContentOverflowRef.current();
     window.addEventListener("resize", handleOverflow);

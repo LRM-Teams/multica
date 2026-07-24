@@ -32,7 +32,7 @@ func TestCompleteDaemonTaskAtomicallyClaimsRadarAndIgnoresRetryOutput(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(t.Context(), `UPDATE agent_inbox_event SET status = 'dispatched' WHERE id = $1`, task.ID); err != nil {
+	if _, err := pool.Exec(t.Context(), `UPDATE agent_inbox_event SET status = 'draining', claimed_at = now() WHERE id = $1`, task.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := taskSvc.StartTask(t.Context(), task.ID); err != nil {
@@ -107,7 +107,7 @@ func TestCompleteDaemonTaskAfterCancellationHasNoRadarExecutionAuthority(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(t.Context(), `UPDATE agent_inbox_event SET status = 'dispatched' WHERE id = $1`, task.ID); err != nil {
+	if _, err := pool.Exec(t.Context(), `UPDATE agent_inbox_event SET status = 'draining', claimed_at = now() WHERE id = $1`, task.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := taskSvc.StartTask(t.Context(), task.ID); err != nil {
@@ -133,7 +133,7 @@ func TestCompleteDaemonTaskAfterCancellationHasNoRadarExecutionAuthority(t *test
 	`, run.ID).Scan(&taskStatus, &runStatus); err != nil {
 		t.Fatal(err)
 	}
-	if taskStatus != "cancelled" || runStatus != "cancelled" {
+	if taskStatus != "suppressed" || runStatus != "cancelled" {
 		t.Fatalf("cancelled pair = task:%q run:%q", taskStatus, runStatus)
 	}
 }
@@ -158,7 +158,10 @@ func TestReconcileLeavesFreshCompletedUnclaimedRadarForCompatibilityWindow(t *te
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(t.Context(), `
-		UPDATE agent_inbox_event SET status = 'completed', completed_at = now() WHERE id = $1
+		UPDATE agent_inbox_event
+		SET status = 'acked', terminal_outcome = 'completed',
+		    completed_at = now(), terminal_at = now(), acked_at = now()
+		WHERE id = $1
 	`, task.ID); err != nil {
 		t.Fatal(err)
 	}

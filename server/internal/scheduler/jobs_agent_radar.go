@@ -355,7 +355,7 @@ func cancelUnauthorizedWorkspaceRadar(ctx context.Context, pool *pgxpool.Pool) (
 		    AND task.agent_id = victims.agent_id
 		    AND task.context->>'type' = 'agent_radar'
 		    AND task.context->>'radar_run_id' = victims.id::text
-		    AND task.status IN ('pending', 'draining', 'failed')
+		    AND task.status IN ('pending', 'draining')
 		  RETURNING task.id
 		), cancelled_runs AS MATERIALIZED (
 		  UPDATE agent_radar_run run
@@ -450,7 +450,8 @@ func recoverStaleCompletedRadarRunsWithStats(ctx context.Context, pool *pgxpool.
 		   AND owner_member.role = 'owner'
 		  WHERE run.trigger_kind = 'scheduled'
 		    AND run.cooldown_key = 'workspace_supervisor_radar'
-		    AND task.status = 'completed'
+		    AND task.status = 'acked'
+		    AND task.terminal_outcome = 'completed'
 		    AND (
 		      (run.status = 'executing' AND run.updated_at < now() - ($2 * interval '1 second'))
 		      OR

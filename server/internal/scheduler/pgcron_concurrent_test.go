@@ -220,7 +220,7 @@ func seedRollupFixture(t *testing.T, pool *pgxpool.Pool) (string, string, string
 			id, source_kind, source_event_id, source, workspace_id, runtime_id,
 			agent_id, started_at, created_at
 		)
-		VALUES ($1, 'queue', $1, 'issue', $2, $3, $4, now(), now())
+		VALUES ($1, 'inbox', $1, 'issue', $2, $3, $4, now(), now())
 		RETURNING id
 	`, queueID, wsID, runtimeID, agentID).Scan(&executionID); err != nil {
 		t.Fatalf("seed agent_execution: %v", err)

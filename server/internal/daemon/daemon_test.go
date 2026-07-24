@@ -2624,7 +2624,7 @@ func TestExecuteAndDrain_CodexInactivityReportsToolResultTranscript(t *testing.T
 	var mu sync.Mutex
 	var reported []TaskMessageData
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/daemon/tasks/task-stale/messages" {
+		if r.URL.Path != "/api/daemon/agent-inbox/events/task-stale/messages" {
 			http.NotFound(w, r)
 			return
 		}
@@ -3613,10 +3613,9 @@ func TestReportTaskResult_CompletedHitsCompleteEndpoint(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	d := &Daemon{client: NewClient(srv.URL), logger: slog.Default()}
-	d.reportTaskResult(context.Background(), "task-1", TaskResult{
-		Status:     "completed",
-		Comment:    "all good",
-		BranchName: "agent/foo",
+	d.reportTaskResultForTask(context.Background(), canonicalInboxTaskForTest(Task{ID: "task-1"}), TaskResult{
+		Status:  "completed",
+		Comment: "all good",
 		Parts: []protocol.MessagePart{{
 			Type:      protocol.MessagePartTypeSticker,
 			PackID:    "builtin",
@@ -3629,14 +3628,11 @@ func TestReportTaskResult_CompletedHitsCompleteEndpoint(t *testing.T) {
 
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
-	if rec.path != "/api/daemon/tasks/task-1/complete" {
+	if rec.path != "/api/daemon/agent-inbox/events/task-1/complete" {
 		t.Fatalf("expected /complete endpoint, got %s", rec.path)
 	}
 	if rec.payload["output"] != "all good" {
 		t.Errorf("output: got %v", rec.payload["output"])
-	}
-	if rec.payload["branch_name"] != "agent/foo" {
-		t.Errorf("branch_name: got %v", rec.payload["branch_name"])
 	}
 	if rec.payload["session_id"] != "ses-1" {
 		t.Errorf("session_id: got %v", rec.payload["session_id"])
@@ -3749,7 +3745,7 @@ func TestReportTaskResult_NonCompletedHitsFailEndpoint(t *testing.T) {
 			t.Cleanup(srv.Close)
 
 			d := &Daemon{client: NewClient(srv.URL), logger: slog.Default()}
-			d.reportTaskResult(context.Background(), "task-x", TaskResult{
+			d.reportTaskResultForTask(context.Background(), canonicalInboxTaskForTest(Task{ID: "task-x"}), TaskResult{
 				Status:        tc.status,
 				Comment:       tc.comment,
 				SessionID:     "ses-x",
@@ -3759,7 +3755,7 @@ func TestReportTaskResult_NonCompletedHitsFailEndpoint(t *testing.T) {
 
 			rec.mu.Lock()
 			defer rec.mu.Unlock()
-			if rec.path != "/api/daemon/tasks/task-x/fail" {
+			if rec.path != "/api/daemon/agent-inbox/events/task-x/fail" {
 				t.Fatalf("expected /fail endpoint for status=%q, got %s", tc.status, rec.path)
 			}
 			if rec.payload["error"] != tc.comment {
@@ -3803,7 +3799,7 @@ func TestReportTaskResult_RetriesTransientCompleteThenSucceeds(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	d := &Daemon{client: NewClient(srv.URL), logger: slog.Default()}
-	d.reportTaskResult(context.Background(), "task-retry", TaskResult{
+	d.reportTaskResultForTask(context.Background(), canonicalInboxTaskForTest(Task{ID: "task-retry"}), TaskResult{
 		Status:  "completed",
 		Comment: "ok",
 	}, slog.Default())
@@ -3844,7 +3840,7 @@ func TestReportTaskResult_TransientCompleteExhaustedDoesNotFallback(t *testing.T
 	t.Cleanup(srv.Close)
 
 	d := &Daemon{client: NewClient(srv.URL), logger: slog.Default()}
-	d.reportTaskResult(context.Background(), "task-stuck", TaskResult{
+	d.reportTaskResultForTask(context.Background(), canonicalInboxTaskForTest(Task{ID: "task-stuck"}), TaskResult{
 		Status:  "completed",
 		Comment: "ok",
 	}, slog.Default())
@@ -3879,7 +3875,7 @@ func TestReportTaskResult_PermanentCompleteFallsBackToFail(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	d := &Daemon{client: NewClient(srv.URL), logger: slog.Default()}
-	d.reportTaskResult(context.Background(), "task-bad", TaskResult{
+	d.reportTaskResultForTask(context.Background(), canonicalInboxTaskForTest(Task{ID: "task-bad"}), TaskResult{
 		Status:  "completed",
 		Comment: "ok",
 	}, slog.Default())
@@ -3892,11 +3888,9 @@ func TestReportTaskResult_PermanentCompleteFallsBackToFail(t *testing.T) {
 	}
 }
 
-// TestHandleTask_ReportsUsageBeforeCancel verifies that ReportTaskUsage is called
-// even when the server marks the task as cancelled during the post-run status
-// check. Regression test for the ordering bug where the cancel check ran before
-// usage was reported, silently discarding accumulated tokens.
-func TestHandleTask_ReportsUsageBeforeCancel(t *testing.T) {
+// TestHandleTask_ReportsInboxUsageBeforeCompletion pins the canonical
+// execution-ledger order: usage is persisted before the terminal callback.
+func TestHandleTask_ReportsInboxUsageBeforeCompletion(t *testing.T) {
 	t.Parallel()
 
 	var callOrder []string
@@ -3909,19 +3903,12 @@ func TestHandleTask_ReportsUsageBeforeCancel(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case strings.HasSuffix(r.URL.Path, "/start"):
-			recordCall("start")
-			w.WriteHeader(http.StatusOK)
-		case strings.HasSuffix(r.URL.Path, "/progress"):
-			w.WriteHeader(http.StatusOK)
 		case strings.HasSuffix(r.URL.Path, "/usage"):
 			recordCall("usage")
 			w.WriteHeader(http.StatusOK)
-		case strings.HasSuffix(r.URL.Path, "/status"):
-			recordCall("status")
-			w.Header().Set("Content-Type", "application/json")
+		case strings.HasSuffix(r.URL.Path, "/complete"):
+			recordCall("complete")
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"status":"cancelled"}`))
 		default:
 			w.WriteHeader(http.StatusOK)
 		}
@@ -3933,7 +3920,7 @@ func TestHandleTask_ReportsUsageBeforeCancel(t *testing.T) {
 		logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
 		workspaces:         make(map[string]*workspaceState),
 		runtimeIndex:       map[string]Runtime{"rt-1": {ID: "rt-1", Provider: "claude"}},
-		cancelPollInterval: time.Hour, // effectively disable poll-cancel path; we want the post-run status check
+		cancelPollInterval: time.Hour,
 	}
 
 	// Inject a fake runner that returns a result with usage tokens, bypassing
@@ -3947,12 +3934,12 @@ func TestHandleTask_ReportsUsageBeforeCancel(t *testing.T) {
 		}, nil
 	})
 
-	task := Task{
+	task := canonicalInboxTaskForTest(Task{
 		ID:        "task-abc",
 		RuntimeID: "rt-1",
 		IssueID:   "issue-xyz",
 		Agent:     &AgentData{Name: "test-agent"},
-	}
+	})
 
 	d.handleTask(context.Background(), task, 0)
 
@@ -3961,33 +3948,31 @@ func TestHandleTask_ReportsUsageBeforeCancel(t *testing.T) {
 	copy(order, callOrder)
 	mu.Unlock()
 
-	// usage must appear before status in the call order.
-	usageIdx, statusIdx := -1, -1
+	usageIdx, completeIdx := -1, -1
 	for i, name := range order {
 		switch name {
 		case "usage":
 			usageIdx = i
-		case "status":
-			statusIdx = i
+		case "complete":
+			completeIdx = i
 		}
 	}
 
 	if usageIdx == -1 {
-		t.Fatal("ReportTaskUsage was never called — usage is lost for cancelled tasks")
+		t.Fatal("canonical inbox usage endpoint was never called")
 	}
-	if statusIdx == -1 {
-		t.Fatal("GetTaskStatus was never called")
+	if completeIdx == -1 {
+		t.Fatal("canonical inbox complete endpoint was never called")
 	}
-	if usageIdx > statusIdx {
-		t.Fatalf("usage was reported AFTER status check (order: %v) — regression", order)
+	if usageIdx > completeIdx {
+		t.Fatalf("usage was reported after completion (order: %v)", order)
 	}
 }
 
-// TestHandleTask_ReportsUsageWhenCancelledByPoll verifies that ReportTaskUsage is
-// called even when the task is cancelled mid-execution by the poll goroutine.
-// Regression test for the cancelledByPoll early-return path that previously
-// discarded accumulated usage before calling ReportTaskUsage.
-func TestHandleTask_ReportsUsageWhenCancelledByPoll(t *testing.T) {
+// TestHandleTask_ReportsUsageWhenInboxLeaseIsLost verifies that usage from the
+// immutable provider execution is retained even when the delivery lease is
+// lost and the stale result itself is discarded.
+func TestHandleTask_ReportsUsageWhenInboxLeaseIsLost(t *testing.T) {
 	t.Parallel()
 
 	var callOrder []string
@@ -3998,31 +3983,19 @@ func TestHandleTask_ReportsUsageWhenCancelledByPoll(t *testing.T) {
 		mu.Unlock()
 	}
 
-	// statusCallCount lets the poll goroutine return "cancelled" on first call
-	// while still handling later calls from the post-run status check.
-	var statusCallCount atomic.Int64
+	var renewCalls atomic.Int64
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case strings.HasSuffix(r.URL.Path, "/start"):
-			w.WriteHeader(http.StatusOK)
-		case strings.HasSuffix(r.URL.Path, "/progress"):
-			w.WriteHeader(http.StatusOK)
 		case strings.HasSuffix(r.URL.Path, "/usage"):
 			recordCall("usage")
 			w.WriteHeader(http.StatusOK)
-		case strings.HasSuffix(r.URL.Path, "/status"):
-			// First call is from the poll goroutine — return "cancelled" to
-			// trigger runCancel() and close(cancelledByPoll).
-			if statusCallCount.Add(1) == 1 {
-				recordCall("poll-status")
-				w.Header().Set("Content-Type", "application/json")
+		case strings.HasSuffix(r.URL.Path, "/renew"):
+			if renewCalls.Add(1) == 1 {
 				w.WriteHeader(http.StatusOK)
-				_, _ = w.Write([]byte(`{"status":"cancelled"}`))
 			} else {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusOK)
-				_, _ = w.Write([]byte(`{"status":"running"}`))
+				recordCall("lease-lost")
+				http.Error(w, "lease lost", http.StatusConflict)
 			}
 		default:
 			w.WriteHeader(http.StatusOK)
@@ -4038,8 +4011,8 @@ func TestHandleTask_ReportsUsageWhenCancelledByPoll(t *testing.T) {
 		cancelPollInterval: 10 * time.Millisecond, // fire quickly so test is fast
 	}
 
-	// Inject a runner that blocks until runCtx is cancelled (simulating a real
-	// agent being interrupted), then returns usage tokens as claude.go does.
+	// Block until lease loss cancels the provider context, then return the
+	// usage already accumulated by the provider.
 	d.runner = taskRunnerFunc(func(runCtx context.Context, _ Task, _ string, _ int, _ *slog.Logger) (TaskResult, error) {
 		<-runCtx.Done()
 		return TaskResult{
@@ -4050,12 +4023,12 @@ func TestHandleTask_ReportsUsageWhenCancelledByPoll(t *testing.T) {
 		}, nil
 	})
 
-	task := Task{
+	task := canonicalInboxTaskForTest(Task{
 		ID:        "task-poll",
 		RuntimeID: "rt-1",
 		IssueID:   "issue-poll",
 		Agent:     &AgentData{Name: "test-agent"},
-	}
+	})
 
 	d.handleTask(context.Background(), task, 0)
 
@@ -4064,29 +4037,23 @@ func TestHandleTask_ReportsUsageWhenCancelledByPoll(t *testing.T) {
 	copy(order, callOrder)
 	mu.Unlock()
 
-	// Verify the poll goroutine actually fired — without this assertion the test
-	// could pass via the post-run GetTaskStatus check without ever taking the
-	// cancelledByPoll path, making it a vacuous regression guard.
-	pollStatusIdx := -1
+	leaseLostIdx := -1
 	usageIdx := -1
 	for i, name := range order {
 		switch name {
-		case "poll-status":
-			pollStatusIdx = i
+		case "lease-lost":
+			leaseLostIdx = i
 		case "usage":
 			usageIdx = i
 		}
 	}
-	if pollStatusIdx == -1 {
-		t.Fatalf("poll goroutine never fired (order: %v) — cancelledByPoll path not exercised", order)
+	if leaseLostIdx == -1 {
+		t.Fatalf("lease renewal was never rejected (order: %v)", order)
 	}
 	if usageIdx == -1 {
-		t.Fatalf("ReportTaskUsage was never called on poll-cancelled path (order: %v) — tokens lost", order)
+		t.Fatalf("usage was not recorded after lease loss (order: %v)", order)
 	}
-	// poll-status must precede usage: poll fires → runCtx cancelled → runner unblocks → usage flushed.
-	// If usage comes first, usage was reported before the runner was interrupted, which is impossible
-	// given that the runner blocks on runCtx.Done().
-	if usageIdx < pollStatusIdx {
-		t.Fatalf("usage reported before poll-status (order: %v) — poll-status must come first", order)
+	if usageIdx < leaseLostIdx {
+		t.Fatalf("usage reported before lease loss (order: %v)", order)
 	}
 }

@@ -50,7 +50,11 @@ func TestRecoverStaleCompletedRadarRunReplaysPersistedResultWithoutNewTask(t *te
 	persisted := []byte(`{"output":"{\"actions\":[{\"type\":\"no_action\"}]}"}`)
 	if _, err := pool.Exec(t.Context(), `
 		UPDATE agent_inbox_event
-		SET status = 'completed', completed_at = now() - interval '6 minutes', result = $2
+		SET status = 'acked', terminal_outcome = 'completed',
+		    completed_at = now() - interval '6 minutes',
+		    terminal_at = now() - interval '6 minutes',
+		    acked_at = now() - interval '6 minutes',
+		    result = $2
 		WHERE id = $1
 	`, task.ID, persisted); err != nil {
 		t.Fatal(err)
@@ -127,7 +131,11 @@ func TestRecoverStaleCompletedRadarRunSkipsReboundSupervisor(t *testing.T) {
 	}
 	if _, err := pool.Exec(t.Context(), `
 		UPDATE agent_inbox_event
-		SET status = 'completed', completed_at = now() - interval '6 minutes', result = '{"output":"stale"}'::jsonb
+		SET status = 'acked', terminal_outcome = 'completed',
+		    completed_at = now() - interval '6 minutes',
+		    terminal_at = now() - interval '6 minutes',
+		    acked_at = now() - interval '6 minutes',
+		    result = '{"output":"stale"}'::jsonb
 		WHERE id = $1
 	`, task.ID); err != nil {
 		t.Fatal(err)

@@ -82,13 +82,13 @@ func TestRunRuntimePollerClaimsImmediatelyBeforeInitialOffset(t *testing.T) {
 
 	firstClaim := make(chan struct{}, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/runtimes/"+runtimeID+"/tasks/claim") {
+		if strings.HasSuffix(r.URL.Path, "/runtimes/"+runtimeID+"/agent-inbox/drain") {
 			select {
 			case firstClaim <- struct{}{}:
 			default:
 			}
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"task":null}`))
+			w.Write([]byte(`{"events":[]}`))
 			return
 		}
 		http.Error(w, "unexpected path: "+r.URL.Path, http.StatusNotFound)
@@ -136,7 +136,7 @@ func TestRunRuntimePollerIsolatesSlowRuntime(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		switch {
-		case strings.HasSuffix(path, "/runtimes/runtime-slow/tasks/claim"):
+		case strings.HasSuffix(path, "/runtimes/runtime-slow/agent-inbox/drain"):
 			select {
 			case slowEntered <- struct{}{}:
 			default:
@@ -146,11 +146,11 @@ func TestRunRuntimePollerIsolatesSlowRuntime(t *testing.T) {
 			case <-r.Context().Done():
 			}
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"task":null}`))
-		case strings.HasSuffix(path, "/runtimes/runtime-fast/tasks/claim"):
+			w.Write([]byte(`{"events":[]}`))
+		case strings.HasSuffix(path, "/runtimes/runtime-fast/agent-inbox/drain"):
 			fastClaims.Add(1)
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"task":null}`))
+			w.Write([]byte(`{"events":[]}`))
 		default:
 			http.Error(w, "unexpected path: "+path, http.StatusNotFound)
 		}
@@ -211,11 +211,11 @@ func TestRunRuntimePollerSkipsClaimWhenAtCapacity(t *testing.T) {
 	var claimAttempts atomic.Int64
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, "/tasks/claim") {
+		if strings.Contains(r.URL.Path, "/agent-inbox/drain") {
 			claimAttempts.Add(1)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"task":null}`))
+		w.Write([]byte(`{"events":[]}`))
 	}))
 	defer srv.Close()
 
@@ -253,11 +253,11 @@ func TestRunRuntimePollerClaimsWhenSlotBecomesAvailable(t *testing.T) {
 	var claimAttempts atomic.Int64
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, "/tasks/claim") {
+		if strings.Contains(r.URL.Path, "/agent-inbox/drain") {
 			claimAttempts.Add(1)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"task":null}`))
+		w.Write([]byte(`{"events":[]}`))
 	}))
 	defer srv.Close()
 
@@ -312,17 +312,17 @@ func TestPollLoopShutdownWaitsForPollersBeforeTaskWG(t *testing.T) {
 		path := r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case strings.HasSuffix(path, "/tasks/claim"):
+		case strings.HasSuffix(path, "/agent-inbox/drain"):
 			// Block until the test releases. When released, return a real task
 			// so the poller proceeds into the slot/dispatch path — exactly the
 			// window where taskWG.Add(1) races with shutdown's taskWG.Wait.
 			select {
 			case <-releaseClaim:
 			case <-r.Context().Done():
-				w.Write([]byte(`{"task":null}`))
+				w.Write([]byte(`{"events":[]}`))
 				return
 			}
-			w.Write([]byte(`{"task":{"id":"` + taskID + `","runtime_id":"runtime-1","issue_id":"issue-1","agent":{"name":"test"}}}`))
+			w.Write([]byte(`{"events":[{"id":"` + taskID + `","delivery_id":"delivery-1","lease_token":"lease-1","requires_wake":true,"task":{"id":"` + taskID + `","runtime_id":"runtime-1","issue_id":"issue-1","agent":{"name":"test"}}}]}`))
 		case strings.HasSuffix(path, "/start"):
 			w.Write([]byte(`{}`))
 		case strings.HasSuffix(path, "/fail"):
@@ -382,13 +382,13 @@ func TestPollLoopTargetsRuntimeWakeup(t *testing.T) {
 		path := r.URL.Path
 		targeted := phase.Load() >= 1
 		switch {
-		case strings.HasSuffix(path, "/runtimes/runtime-fast/tasks/claim"):
+		case strings.HasSuffix(path, "/runtimes/runtime-fast/agent-inbox/drain"):
 			if targeted {
 				fastClaims.Add(1)
 			} else {
 				warmFast.Add(1)
 			}
-		case strings.HasSuffix(path, "/runtimes/runtime-slow/tasks/claim"):
+		case strings.HasSuffix(path, "/runtimes/runtime-slow/agent-inbox/drain"):
 			if targeted {
 				slowClaims.Add(1)
 			} else {
@@ -399,7 +399,7 @@ func TestPollLoopTargetsRuntimeWakeup(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"task":null}`))
+		w.Write([]byte(`{"events":[]}`))
 	}))
 	defer srv.Close()
 

@@ -3173,10 +3173,6 @@ func (d *Daemon) ensureTaskAgentCredential(ctx context.Context, task Task, taskL
 // the agent may have built a real session before getting stuck, and we want
 // the next chat turn to resume there rather than start over and "forget"
 // the conversation.
-func (d *Daemon) reportTaskResult(ctx context.Context, taskID string, result TaskResult, taskLog *slog.Logger) {
-	d.reportTaskResultForTask(ctx, Task{ID: taskID}, result, taskLog)
-}
-
 func (d *Daemon) reportTaskResultForTask(ctx context.Context, task Task, result TaskResult, taskLog *slog.Logger) {
 	switch result.Status {
 	case "completed":
@@ -4405,12 +4401,6 @@ func classifyAgentRunFailureReason(provider, errMsg string, taskLog *slog.Logger
 	// the canonical refined taxonomy at write time instead of waiting on the
 	// MUL-1949 offline backfill to re-classify after the fact.
 	return taskfailure.Classify(errMsg).String()
-}
-
-// executeAndDrain runs a backend, drains its message stream (forwarding to the
-// server), and waits for the final result.
-func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, prompt string, opts agent.ExecOptions, taskLog *slog.Logger, taskID string) (agent.Result, int32, error) {
-	return d.executeAndDrainForTask(ctx, backend, prompt, opts, taskLog, Task{ID: taskID})
 }
 
 func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backend, prompt string, opts agent.ExecOptions, taskLog *slog.Logger, task Task) (agent.Result, int32, error) {

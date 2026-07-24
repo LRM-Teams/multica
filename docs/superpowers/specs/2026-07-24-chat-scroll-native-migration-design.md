@@ -54,23 +54,35 @@ Iris's full "must-preserve behaviors" checklist is the acceptance bar
 | 5 | User gesture takes priority over auto-scroll | Semi-custom (#1146) | Already shipped: gesture-yield in the settle loop + kept |
 | 6 | Return-to-position + highlight source message from issue/thread deep link | Fully custom (#592/#588) | Must stay — no library equivalent, this is app-specific navigation |
 
-**Caveat on #4 / the #883 settle loop**: this is NOT simply "our code fighting
-the library." `scrollToIndexUntilSettled` exists because of a real, long-lived
-upstream bug — [petyosi/react-virtuoso#883](https://github.com/petyosi/react-virtuoso/issues/883)
-("Setting initial scrolling position is racy") — where `initialTopMostItemIndex`
-can silently no-op on a cold, unmeasured list. This is still referenced in the
-library's own changelog as recently as v4.18.8/4.18.9 (index/scroll-target
-clamping fixes, still not a full fix for the underlying race). We're currently
-pinned to **4.18.7** — one to two patch versions behind the latest relevant
-fixes. Before deciding whether the custom settle loop can be deleted:
-1. Upgrade to latest 4.x and re-run the existing #883 regression test (the
-   14k-px DM far-jump case) against the bare library, no settle loop.
-2. If the library alone now converges reliably, delete
-   `scrollToIndexUntilSettled` and depend on `initialTopMostItemIndex` +
-   `restoreStateFrom`/`getState()` (a native API we don't currently use at
-   all) for any position-preservation needs.
-3. If it still races, keep the settle loop but only for the genuine far-jump
-   case — it's a documented upstream limitation, not tech debt.
+**Caveat on #4 / the #883 settle loop — UPDATED after checking upstream directly**:
+[petyosi/react-virtuoso#883](https://github.com/petyosi/react-virtuoso/issues/883)
+("Setting initial scrolling position is racy") was **closed in April 2023**
+by a real merged fix ("initialScrollTop not working w/o initialItemCount"),
+years before our comments were written and long before any version we've run
+(4.14–4.18). So our settle loop isn't guarding a *currently open* upstream
+bug by that exact issue number — either we hit a distinct-but-similar race
+that got mis-attributed to #883 when the comment was written, or the
+workaround has been defensive/redundant for a while. **I cannot determine
+which from this environment**: verifying "does bare `initialTopMostItemIndex`
+converge reliably on a real large unmeasured list" requires a real browser —
+jsdom has no real layout engine, so any test here would only be checking our
+own mocked geometry, not genuine timing behavior. This is exactly the
+`no-browser-automation-gap` limitation.
+
+Given the history here (#365: a well-intentioned scroll change shipped without
+this kind of verification took down all chats), I am NOT removing the settle
+loop in this pass on documentation-only grounds. Options, in order of
+preference:
+1. **Ship this PR without touching the settle loop**, corrected comments only
+   (its cited justification was inaccurate, but its behavior is unchanged and
+   still correct) — defer actual removal to a follow-up once real-device/
+   browser tooling exists to verify convergence empirically.
+2. If the team wants to attempt removal in this same PR despite the
+   verification gap: gate it as a fully reversible, isolated change (e.g.
+   behind an easy revert point) and require Frank's real-device pass on a
+   genuinely large/far-scroll conversation specifically (not just the happy
+   path) before merge — never ship "probably fine" on this file without that
+   check, per the incident history.
 
 ## Plan (sequenced, each step independently verifiable)
 

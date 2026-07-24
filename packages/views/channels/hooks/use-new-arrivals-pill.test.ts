@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import type { VirtuosoHandle } from "react-virtuoso";
 import type { ChannelMessage } from "@multica/core/types";
 import { computeNewArrivals, useNewMessagesPill } from "./use-new-arrivals-pill";
@@ -80,7 +80,9 @@ describe("useNewMessagesPill onPillClick (#1194 index-contract regression)", () 
     rerender({ messages: withArrival });
     expect(result.current.pill).toEqual({ count: 1, firstMessageId: "m3" });
 
-    result.current.onPillClick();
+    act(() => {
+      result.current.onPillClick();
+    });
 
     // m3 is at local index 2 in `withArrival` — never `firstItemIndex + 2`.
     expect(scrollToIndex).toHaveBeenCalledWith({ index: 2, align: "start", behavior: "smooth" });
@@ -101,7 +103,9 @@ describe("useNewMessagesPill onPillClick (#1194 index-contract regression)", () 
     rerender({ messages: withArrival });
     expect(result.current.pill).not.toBeNull();
 
-    result.current.onPillClick();
+    act(() => {
+      result.current.onPillClick();
+    });
     rerender({ messages: withArrival });
     expect(result.current.pill).toBeNull();
   });

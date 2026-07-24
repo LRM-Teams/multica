@@ -23,7 +23,7 @@ import (
 // runtime is launched with: `pi --provider areal --model areal-default`. The
 // api_key and base_url are per-session (mint + deployment config).
 const (
-	arealProxyProvider = "areal"
+	arealProxyProvider = "openai"
 	arealProxyModel    = "areal-default"
 	// arealProxyContextKey is the top-level key under which the RL proxy config
 	// is merged into agent_task_queue.context.

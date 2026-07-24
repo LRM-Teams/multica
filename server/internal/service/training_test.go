@@ -136,8 +136,8 @@ func TestMaybeOpenTrainingSession_TrainedTarget_OpensAndPersists(t *testing.T) {
 	if err := json.Unmarshal(store.merged[0].ArealProxy, &cfg); err != nil {
 		t.Fatalf("unmarshal persisted areal_proxy: %v", err)
 	}
-	if cfg.Provider != "areal" || cfg.Model != "areal-default" {
-		t.Fatalf("provider/model = %q/%q, want areal/areal-default", cfg.Provider, cfg.Model)
+	if cfg.Provider != "openai" || cfg.Model != "areal-default" {
+		t.Fatalf("provider/model = %q/%q, want openai/areal-default", cfg.Provider, cfg.Model)
 	}
 	if cfg.APIKey != "pk-xyz" {
 		t.Fatalf("api_key = %q, want pk-xyz", cfg.APIKey)

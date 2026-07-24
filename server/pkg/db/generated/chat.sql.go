@@ -414,16 +414,28 @@ func (q *Queries) GetMostRecentUserChatMessage(ctx context.Context, chatSessionI
 }
 
 const getPendingChatTask = `-- name: GetPendingChatTask :one
-SELECT id, status, created_at FROM agent_task_queue
-WHERE chat_session_id = $1 AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
-ORDER BY created_at DESC
+SELECT atq.id, atq.status, atq.created_at, aie.id AS inbox_event_id
+FROM agent_task_queue atq
+LEFT JOIN LATERAL (
+  SELECT e.id
+  FROM agent_inbox_event e
+  WHERE e.chat_session_id = atq.chat_session_id
+    AND e.requires_wake
+    AND e.terminal_outcome IS NULL
+    AND e.status NOT IN ('acked', 'suppressed')
+  ORDER BY e.created_at DESC, e.id DESC
+  LIMIT 1
+) aie ON true
+WHERE atq.chat_session_id = $1 AND atq.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+ORDER BY atq.created_at DESC
 LIMIT 1
 `
 
 type GetPendingChatTaskRow struct {
-	ID        pgtype.UUID        `json:"id"`
-	Status    string             `json:"status"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	ID           pgtype.UUID        `json:"id"`
+	Status       string             `json:"status"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	InboxEventID pgtype.UUID        `json:"inbox_event_id"`
 }
 
 // Returns the most recent in-flight task for a chat session, if any.
@@ -434,7 +446,7 @@ type GetPendingChatTaskRow struct {
 func (q *Queries) GetPendingChatTask(ctx context.Context, chatSessionID pgtype.UUID) (GetPendingChatTaskRow, error) {
 	row := q.db.QueryRow(ctx, getPendingChatTask, chatSessionID)
 	var i GetPendingChatTaskRow
-	err := row.Scan(&i.ID, &i.Status, &i.CreatedAt)
+	err := row.Scan(&i.ID, &i.Status, &i.CreatedAt, &i.InboxEventID)
 	return i, err
 }
 

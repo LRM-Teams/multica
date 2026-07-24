@@ -385,7 +385,6 @@ func TestCreateChatSession_NotChannelBound(t *testing.T) {
 	}
 }
 
-
 // TestSendChatMessage_InvalidAttachmentIDs rejects malformed UUIDs in
 // attachment_ids with 400 before any side effects (no message row created).
 func TestSendChatMessage_InvalidAttachmentIDs(t *testing.T) {
@@ -574,6 +573,120 @@ func TestListChatMessagesPage_RejectsInvalidLimit(t *testing.T) {
 	testHandler.ListChatMessagesPage(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("ListChatMessagesPage invalid limit: expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestGetPendingChatTaskIncludesInboxEventID(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "pending-chat-inbox-"+uuid.NewString(), []byte(`{}`))
+	sessionID := createHandlerTestChatSession(t, agentID)
+
+	var taskID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, issue_id, chat_session_id, created_at)
+		VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'running', 0, NULL, $2, now() - interval '5 seconds')
+		RETURNING id
+	`, agentID, sessionID).Scan(&taskID); err != nil {
+		t.Fatalf("insert pending chat task: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+
+	var eventID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_inbox_event (
+			workspace_id, agent_id, chat_session_id, reason, requires_wake, status,
+			priority, seq_from, seq_to
+		)
+		VALUES ($1, $2, $3, 'dm', true, 'draining', 100, 1, 1)
+		RETURNING id
+	`, testWorkspaceID, agentID, sessionID).Scan(&eventID); err != nil {
+		t.Fatalf("insert inbox event: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, eventID) })
+
+	req := newRequest(http.MethodGet, "/api/chat/sessions/"+sessionID+"/pending-task", nil)
+	req = withRouteParams(req, "sessionId", sessionID)
+	req = withChatTestWorkspaceCtx(t, req)
+	w := httptest.NewRecorder()
+
+	testHandler.GetPendingChatTask(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp PendingChatTaskResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.TaskID != taskID || resp.Status != "running" || resp.InboxEventID == nil || *resp.InboxEventID != eventID {
+		t.Fatalf("pending task response = %+v, want task %s inbox %s", resp, taskID, eventID)
+	}
+}
+
+func TestCancelChatAgentInboxEventCancelsPendingChatTask(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "cancel-chat-inbox-"+uuid.NewString(), []byte(`{}`))
+	sessionID := createHandlerTestChatSession(t, agentID)
+
+	var taskID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, issue_id, chat_session_id, created_at)
+		VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'running', 0, NULL, $2, now() - interval '5 seconds')
+		RETURNING id
+	`, agentID, sessionID).Scan(&taskID); err != nil {
+		t.Fatalf("insert pending chat task: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+
+	var eventID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_inbox_event (
+			workspace_id, agent_id, chat_session_id, reason, requires_wake, status,
+			priority, seq_from, seq_to
+		)
+		VALUES ($1, $2, $3, 'dm', true, 'draining', 100, 1, 1)
+		RETURNING id
+	`, testWorkspaceID, agentID, sessionID).Scan(&eventID); err != nil {
+		t.Fatalf("insert inbox event: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, eventID) })
+
+	req := newRequest(http.MethodPost, "/api/chat/sessions/"+sessionID+"/agent-inbox/events/"+eventID+"/cancel", nil)
+	req = withRouteParams(req, "sessionId", sessionID, "eventId", eventID)
+	req = withChatTestWorkspaceCtx(t, req)
+	w := httptest.NewRecorder()
+
+	testHandler.CancelChatAgentInboxEvent(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp ChannelCancelAgentInboxEventResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !resp.OK || resp.InboxEventID != eventID || resp.AgentID != agentID || resp.Status != "cancelled" {
+		t.Fatalf("cancel response = %+v", resp)
+	}
+
+	var status, outcome string
+	if err := testPool.QueryRow(ctx, `
+		SELECT status, COALESCE(terminal_outcome, '')
+		FROM agent_inbox_event
+		WHERE id = $1
+	`, eventID).Scan(&status, &outcome); err != nil {
+		t.Fatalf("load cancelled inbox event: %v", err)
+	}
+	if status != "suppressed" || outcome != "no_reply" {
+		t.Fatalf("cancelled inbox event status=%q outcome=%q", status, outcome)
 	}
 }
 

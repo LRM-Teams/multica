@@ -315,7 +315,7 @@ function DmHeader({
     isAgentPeer && openAgentPanel ? (
       <button
         type="button"
-        className="inline-flex min-w-0 items-center rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="inline-flex min-w-0 max-w-full items-center overflow-hidden rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         onClick={() => openAgentPanel(peerId)}
       >
         {child}
@@ -325,6 +325,14 @@ function DmHeader({
         {child}
       </ActorProfileTrigger>
     );
+
+  // Mobile: put Working under the name (meta line) — long agent names +
+  // back/avatar/actions leave too little room for same-row "处理中".
+  // Desktop: keep Slack-style cue beside the name (status slot).
+  const headerStatus = isMobile ? undefined : agentLiveStatus;
+  const headerMeta = isMobile
+    ? (agentLiveStatus ?? meta)
+    : meta;
 
   return (
     <ConversationHeader
@@ -345,10 +353,12 @@ function DmHeader({
           {wrapPeerTrigger(peerAvatar)}
         </>
       }
-      title={wrapPeerTrigger(<span className="truncate">{dm.peer.name}</span>)}
-      meta={meta}
+      title={wrapPeerTrigger(
+        <span className="block truncate">{dm.peer.name}</span>,
+      )}
+      meta={headerMeta}
       // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- ConversationHeader status slot; live cue is not memo-sensitive
-      status={agentLiveStatus}
+      status={headerStatus}
       badges={mutedBadge}
       actions={
         <>

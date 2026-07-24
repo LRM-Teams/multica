@@ -17,7 +17,7 @@ services:
     build: .
     image: db-bridge:local
     container_name: db_bridge_gateway_stub
-    command: ["python", "-m", "db_bridge.run_stub", "--side", "leagent"]
+    command: ["python", "-m", "db_bridge.run_stub", "--side", "multica"]
     env_file:
       - path: .env.docker
         required: true

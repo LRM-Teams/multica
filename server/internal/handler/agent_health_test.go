@@ -243,7 +243,11 @@ func TestGetAgentHealth_FreshOnlineRuntimeStaysOnline(t *testing.T) {
 	}
 }
 
-func TestGetAgentHealth_PrivateRuntimeOwnedByAnotherMemberCountsMissing(t *testing.T) {
+func TestGetAgentHealth_PrivateRuntimeBoundToAgentFollowsHeartbeat(t *testing.T) {
+	// LRM-548 — channel/workspace agents often bind the owner's private
+	// runtime (e.g. Grok). Presence must mirror heartbeat, not the claim
+	// "runnable" predicate that still excludes private runtimes as shared
+	// capacity.
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -266,14 +270,11 @@ func TestGetAgentHealth_PrivateRuntimeOwnedByAnotherMemberCountsMissing(t *testi
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if resp.Summary.State != agentHealthStateOffline || resp.Summary.ReasonCode != "runtime_missing" {
-		t.Fatalf("summary = %+v, want offline runtime_missing for non-runnable private runtime %s", resp.Summary, runtimeID)
+	if resp.Summary.State != agentHealthStateOnline {
+		t.Fatalf("summary = %+v, want online for fresh private runtime %s bound to agent", resp.Summary, runtimeID)
 	}
-	if resp.Summary.RuntimeID != nil {
-		t.Fatalf("non-runnable private runtime should be hidden as missing, got runtime_id=%q", *resp.Summary.RuntimeID)
-	}
-	if len(resp.Events) != 0 {
-		t.Fatalf("non-runnable private runtime should not expose health events, got %+v", resp.Events)
+	if resp.Summary.RuntimeID == nil || *resp.Summary.RuntimeID != runtimeID {
+		t.Fatalf("runtime_id = %v, want %s", resp.Summary.RuntimeID, runtimeID)
 	}
 }
 

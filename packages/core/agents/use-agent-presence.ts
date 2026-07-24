@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { agentListOptions } from "../workspace/queries";
 import { runtimeListOptions } from "../runtimes/queries";
-import { agentTaskSnapshotOptions } from "./queries";
+import { agentDetailOptions, agentTaskSnapshotOptions } from "./queries";
 import {
   buildPresenceMap,
   deriveAgentPresenceDetail,
@@ -133,6 +133,19 @@ export function useAgentPresenceDetail(
     ...agentTaskSnapshotOptions(wsId ?? ""),
     enabled: !!wsId,
   });
+  // LRM-548 / LRM-292: ListAgents hides channel / group-manager agents
+  // (LRM-233). Profile still opens via GetAgent — when the directory misses,
+  // derive presence from the detail cache instead of a hard offline stub.
+  const listMiss =
+    !!wsId &&
+    !!agentId &&
+    !!agents &&
+    !agentsErr &&
+    !agents.some((a) => a.id === agentId);
+  const { data: detailAgent, isPending: detailPending, isError: detailErr } = useQuery({
+    ...agentDetailOptions(wsId ?? "", agentId ?? ""),
+    enabled: listMiss,
+  });
   const tick = usePresenceTick();
 
   return useMemo<AgentPresenceDetail | "loading">(() => {
@@ -147,10 +160,11 @@ export function useAgentPresenceDetail(
     const safeSnapshot = snapshot ?? (snapshotErr ? [] : null);
     if (!safeAgents || !safeRuntimes || !safeSnapshot) return "loading";
 
-    const agent = safeAgents.find((a) => a.id === agentId);
-    // Agent referenced but not in the workspace's active list (most often:
-    // archived assignee on an old issue). Render a gray-offline fallback
-    // instead of looping in "loading".
+    const agentFromList = safeAgents.find((a) => a.id === agentId);
+    const agent = agentFromList ?? (listMiss && !detailErr ? detailAgent : undefined);
+    if (listMiss && detailPending && !detailAgent) return "loading";
+    // Agent referenced but not in the workspace's active list and detail
+    // miss/forbidden (archived assignee, deleted, …). Gray-offline fallback.
     if (!agent) return MISSING_AGENT_DETAIL;
     // Missing from the visible runtime list is NOT the same as offline when
     // the agent carries a presence-safe status projection (private runtime
@@ -162,5 +176,19 @@ export function useAgentPresenceDetail(
     const tasks = safeSnapshot.filter((t) => t.agent_id === agentId);
     return deriveAgentPresenceDetail({ agent, runtime, tasks, now: Date.now() });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wsId, agentId, agents, runtimes, snapshot, agentsErr, runtimesErr, snapshotErr, tick]);
+  }, [
+    wsId,
+    agentId,
+    agents,
+    runtimes,
+    snapshot,
+    agentsErr,
+    runtimesErr,
+    snapshotErr,
+    listMiss,
+    detailAgent,
+    detailPending,
+    detailErr,
+    tick,
+  ]);
 }

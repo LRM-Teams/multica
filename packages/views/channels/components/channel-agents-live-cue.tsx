@@ -431,23 +431,23 @@ export function ChannelPresenceCluster({
 
   const countText = (
     <span
-      className="inline-flex items-center gap-1 text-xs font-semibold text-muted-foreground"
+      className="inline-flex items-center gap-1.5 text-xs font-semibold text-muted-foreground"
       data-testid="channel-presence-counts"
     >
+      {/* Idle roster only — never chain `N · M · K working` as one middot row
+          (UI Designer lock 2026-07-24: faces · N · M + independent K working). */}
       <span>{countsIdle}</span>
       {workingLabel ? (
-        <>
-          <span aria-hidden>·</span>
-          <span
-            className={cn(
-              runningCount > 0 && "animate-chat-text-shimmer font-semibold",
-              runningCount === 0 && "font-semibold text-foreground",
-            )}
-            data-testid="channel-presence-working"
-          >
-            {workingLabel}
-          </span>
-        </>
+        <span
+          className={cn(
+            "min-w-0",
+            runningCount > 0 && "animate-chat-text-shimmer font-semibold",
+            runningCount === 0 && "font-semibold text-foreground",
+          )}
+          data-testid="channel-presence-working"
+        >
+          {workingLabel}
+        </span>
       ) : null}
     </span>
   );
